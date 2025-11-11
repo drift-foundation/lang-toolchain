@@ -1,5 +1,6 @@
 let greeting: str = "hello"
 
-fn main() -> unit !throws:
+fn main() -> unit !throws {
     let target: str = "playground"
     print(greeting + ", " + target)
+}

@@ -93,6 +93,13 @@ class Name(Expr):
 
 
 @dataclass
+class Attr(Expr):
+    loc: Located
+    value: Expr
+    attr: str
+
+
+@dataclass
 class KwArg:
     name: str
     value: Expr
@@ -131,3 +138,9 @@ class Move(Expr):
 class Program:
     functions: List[FunctionDef]
     statements: List[Stmt]
+
+
+@dataclass
+class ImportStmt(Stmt):
+    loc: Located
+    path: List[str]

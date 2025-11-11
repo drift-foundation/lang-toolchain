@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set
 from . import ast
 from .types import (
     BOOL,
+    CONSOLE_OUT,
     ERROR,
     F64,
     FunctionSignature,
@@ -83,6 +84,7 @@ class Checker:
     def check(self, program: ast.Program) -> CheckedProgram:
         self._register_functions(program.functions)
         global_scope = Scope()
+        global_scope.define("out", VarInfo(type=CONSOLE_OUT, mutable=False), ast.Located(line=0, column=0))
         module_ctx = FunctionContext(
             name="<module>",
             signature=FunctionSignature(
@@ -177,6 +179,8 @@ class Checker:
         if isinstance(stmt, ast.ExprStmt):
             self._check_expr(stmt.value, ctx)
             return
+        if isinstance(stmt, ast.ImportStmt):
+            return
         raise CheckError(f"{stmt.loc.line}:{stmt.loc.column}: Unsupported statement {stmt}")
 
     def _check_expr(self, expr: ast.Expr, ctx: FunctionContext) -> Type:
@@ -196,6 +200,10 @@ class Checker:
             return info.type
         if isinstance(expr, ast.Call):
             return self._check_call(expr, ctx)
+        if isinstance(expr, ast.Attr):
+            raise CheckError(
+                f"{expr.loc.line}:{expr.loc.column}: attribute access is only supported as part of a call"
+            )
         if isinstance(expr, ast.Move):
             return self._check_expr(expr.value, ctx)
         if isinstance(expr, ast.Unary):
@@ -212,21 +220,19 @@ class Checker:
         raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unsupported expression {expr}")
 
     def _check_call(self, expr: ast.Call, ctx: FunctionContext) -> Type:
-        if not isinstance(expr.func, ast.Name):
-            raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unsupported callee")
-        name = expr.func.ident
-        if name not in self.function_infos:
-            raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown function '{name}'")
-        info = self.function_infos[name]
+        callee_name = self._resolve_callee(expr.func, ctx)
+        if callee_name not in self.function_infos:
+            raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown function '{callee_name}'")
+        info = self.function_infos[callee_name]
         sig = info.signature
         if len(expr.args) != len(sig.params):
             raise CheckError(
-                f"{expr.loc.line}:{expr.loc.column}: '{name}' expects {len(sig.params)} args, got {len(expr.args)}"
+                f"{expr.loc.line}:{expr.loc.column}: '{callee_name}' expects {len(sig.params)} args, got {len(expr.args)}"
             )
         for kw in expr.kwargs:
             if kw.name not in sig.allowed_kwargs:
                 raise CheckError(
-                    f"{kw.value.loc.line}:{kw.value.loc.column}: '{name}' does not accept keyword '{kw.name}'"
+                    f"{kw.value.loc.line}:{kw.value.loc.column}: '{callee_name}' does not accept keyword '{kw.name}'"
                 )
             self._check_expr(kw.value, ctx)
         for arg_expr, expected in zip(expr.args, sig.params):
@@ -263,6 +269,20 @@ class Checker:
                 f"{expr.loc.line}:{expr.loc.column}: pipeline operator is not supported yet"
             )
         raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unsupported operator '{op}'")
+
+    def _resolve_callee(self, func_expr: ast.Expr, ctx: FunctionContext) -> str:
+        if isinstance(func_expr, ast.Name):
+            return func_expr.ident
+        if isinstance(func_expr, ast.Attr):
+            base_type = self._check_expr(func_expr.value, ctx)
+            if base_type == CONSOLE_OUT and func_expr.attr == "writeln":
+                return "out.writeln"
+            raise CheckError(
+                f"{func_expr.loc.line}:{func_expr.loc.column}: Unknown attribute '{func_expr.attr}'"
+            )
+        raise CheckError(
+            f"{func_expr.loc.line}:{func_expr.loc.column}: Unsupported callee expression"
+        )
 
     def _expect_number(self, actual: Type, loc: ast.Located) -> None:
         if actual not in (I64, F64):

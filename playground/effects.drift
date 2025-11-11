@@ -1,5 +1,7 @@
-fn fail() -> unit throws{fs}:
-    raise domain fs error("boom", code="ENOENT")
+fn fail() -> unit throws{fs} {
+    throw error("boom", code="ENOENT")
+}
 
-fn main() -> unit throws{fs}:
+fn main() -> unit throws{fs} {
     fail()
+}

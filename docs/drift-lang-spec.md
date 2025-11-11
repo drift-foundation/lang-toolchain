@@ -1,5 +1,5 @@
 # Drift Language Specification
-### Revision 2025-11 (Rev 2) — Ownership, Mutability, Exceptions, and Deterministic Resource Management
+### Revision 2025-11 (Rev 4) — Ownership, Mutability, Exceptions, and Deterministic Resource Management
 
 ---
 
@@ -17,6 +17,7 @@ Drift provides predictable lifetimes, explicit control of mutability and ownersh
 - **Explicit mutability (`mut`, `ref`, `ref mut`)**
 - **Structured exceptions with contextual capture (`^`)**
 - **Memory-safe access primitives (`Volatile`, `Mutable`)**
+- **Imports and system I/O (`import sys.console.out`)**
 - **C-family block syntax with predictable scopes and lifetimes**
 
 ---
@@ -159,6 +160,76 @@ take(jobs)      // ❌ jobs invalid after move
 - No garbage collection — **destruction is deterministic** (RAII).
 
 ---
+## 4. Imports and Standard I/O
+
+Drift uses explicit imports — no global or magic identifiers.  
+Console output is available through the `std.console` module.
+
+### 4.1 Import syntax (modules and symbols)
+
+```drift
+import std.console.out        // bind the exported `out` stream
+import std.console.err        // bind the exported `err` stream
+import std.io                 // bind the module
+import std.console.out as print // optional alias
+```
+
+**Grammar**
+
+```ebnf
+ImportDecl    ::= 'import' ImportItem (',' ImportItem)* NEWLINE
+ImportItem    ::= QualifiedName (' ' 'as' ' ' Ident)?
+QualifiedName ::= Ident ('.' Ident)*
+```
+
+**Name‑resolution semantics**
+
+- `QualifiedName` is resolved left‑to‑right.  
+- If it resolves to a **module**, the import binds that module under its last segment (or the `as` alias).  
+- If it resolves to an **exported symbol** inside a module (e.g., `std.console.out`), the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
+- Ambiguities between module and symbol names must be disambiguated with `as` or avoided.
+
+## 5 Standard I/O Design
+
+### `std.io` module
+
+```drift
+module std.io
+
+interface OutputStream {
+    fn write(self: ref OutputStream, bytes: Bytes) : Void
+    fn writeln(self: ref OutputStream, text: String) : Void
+    fn flush(self: ref OutputStream) : Void
+}
+
+interface InputStream {
+    fn read(self: ref InputStream, buffer: ref mut Bytes) : Int
+}
+```
+
+### `std.console` module
+
+```
+// initialized before main is called
+val out : OutputStream = ... 
+val err : OutputStream = ...
+val in  : InputStream = ...
+```
+
+These built-in instances represent the system console streams. Now you can write simple console programs without additional setup:
+
+```drift
+import std.console.out as out
+
+fn main() : Void {
+    val name: String = "Drift"
+    out.writeln("Hello, " + name)
+}
+```
+
+This model allows concise I/O while keeping imports explicit and predictable.  
+The objects `out`, `err`, and `in` are references to standard I/O stream instances.
+
 
 ## 11. Exceptions and Context Capture
 
@@ -286,3 +357,49 @@ Finalizers are **optional** unless early release, explicit error handling, or sh
 ```
 
 In both cases, the file handle is safely released exactly once.
+
+## 13. Grammar (EBNF excerpt)
+
+```ebnf
+Program     ::= ImportDecl* TopDecl*
+ImportDecl  ::= "import" ImportItem ("," ImportItem)* NEWLINE
+ImportItem  ::= ModulePath ("as" Ident)?
+ModulePath  ::= Ident ("." Ident)*
+
+TopDecl     ::= FnDef | TypeDef | StructDef | EnumDef
+
+FnDef       ::= "fn" Ident "(" Params? ")" (":" Type)? Block
+Params      ::= Param ("," Param)*
+Param       ::= Ident ":" Ty | "^" Ident ":" Ty
+
+Block       ::= "{" Stmt* "}"
+Stmt        ::= ValDecl | VarDecl | ExprStmt | IfStmt | WhileStmt | ForStmt
+              | ReturnStmt | BreakStmt | ContinueStmt | TryStmt | ThrowStmt
+
+ValDecl     ::= "val" Ident ":" Ty "=" Expr NEWLINE
+VarDecl     ::= "var" Ident ":" Ty "=" Expr NEWLINE
+ExprStmt    ::= Expr NEWLINE
+```
+
+---
+
+## Appendix A — Ownership Examples
+
+```drift
+struct Job { id: Int }
+
+fn process(job: Job) : Void {
+    import std.console.out
+    out.writeln("processing job " + job.id.to_string())
+}
+
+var j = Job(id = 1)
+
+process(j)    // copy
+process(j->)  // move
+process(j)    // error: use of moved value
+```
+
+---
+
+### End of Drift Language Specification

@@ -1,11 +1,14 @@
-fn greet(name: str) -> str !throws:
+fn greet(name: str) -> str !throws {
     return "hi " + name
+}
 
-fn call_twice(name: str) -> str !throws:
+fn call_twice(name: str) -> str !throws {
     let first: str = greet(name)
     let second: str = greet("Drift")
     return first + " & " + second
+}
 
-fn main() -> unit !throws:
+fn main() -> unit !throws {
     let message: str = call_twice("Ada")
     print(message)
+}

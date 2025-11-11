@@ -1,6 +1,8 @@
-fn is_voter(age: i64) -> bool !throws:
+fn is_voter(age: i64) -> bool !throws {
     return (age >= 18 and age < 130) or age == 0
+}
 
-fn main() -> unit !throws:
+fn main() -> unit !throws {
     let statement: str = "boolean expressions short-circuit"
     print(statement)
+}

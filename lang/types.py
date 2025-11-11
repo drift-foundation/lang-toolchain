@@ -14,17 +14,29 @@ class Type:
         return self.name
 
 
-I64 = Type("i64")
-F64 = Type("f64")
-BOOL = Type("bool")
-STR = Type("str")
-UNIT = Type("unit")
-ERROR = Type("error")
+I64 = Type("Int64")
+F64 = Type("Float64")
+BOOL = Type("Bool")
+STR = Type("String")
+UNIT = Type("Void")
+ERROR = Type("Error")
+CONSOLE_OUT = Type("ConsoleOut")
 BOTTOM = Type("⊥")
 
 _PRIMITIVES: Dict[str, Type] = {
-    t.name: t
-    for t in (I64, F64, BOOL, STR, UNIT, ERROR)
+    "Int64": I64,
+    "i64": I64,
+    "Float64": F64,
+    "f64": F64,
+    "Bool": BOOL,
+    "bool": BOOL,
+    "String": STR,
+    "str": STR,
+    "Void": UNIT,
+    "unit": UNIT,
+    "Error": ERROR,
+    "error": ERROR,
+    "ConsoleOut": CONSOLE_OUT,
 }
 
 

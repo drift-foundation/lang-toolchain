@@ -1,4 +1,6 @@
-let greeting: str = "hello"
+import sys.console.out
 
-fn main() -> unit !throws:
-    print(greeting + ", drift")
+fn main() : Void {
+    val greeting: String = "hello"
+    out.writeln(greeting + ", drift")
+}

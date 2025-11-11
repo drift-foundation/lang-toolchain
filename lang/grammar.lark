@@ -3,24 +3,35 @@
 %import common.SIGNED_FLOAT
 %import common.ESCAPED_STRING -> STRING
 %import common.WS_INLINE
-%declare _INDENT _DEDENT
-_NEWLINE: /(\r?\n[ \t]*)+/
+
+TERMINATOR: /(;|(\r?\n[ \t]*))+/
 
 VAL: "val"
 VAR: "var"
 THROW: "throw"
 PIPE: ">>"
+AND: "and"
+OR: "or"
+EQEQ: "=="
+NOTEQ: "!="
+LTE: "<="
+GTE: ">="
+LT: "<"
+GT: ">"
+PLUS: "+"
+MINUS: "-"
+STAR: "*"
+SLASH: "/"
+DOT: "."
 
 %ignore WS_INLINE
 
-newline: _NEWLINE
-
-program: (newline | item)*
+program: (item | TERMINATOR)*
 
 ?item: func_def
      | stmt
 
-func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? ":" block
+func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? block
 return_sig: ("->" | ":") type_expr
 
 throws_clause: "throws" "{" domain_list? "}"     -> throws_list
@@ -34,14 +45,15 @@ param: NAME ":" type_expr
 type_expr: NAME type_args?
 type_args: "[" type_expr ("," type_expr)* "]"
 
-block: newline _INDENT stmt+ _DEDENT
+block: "{" (stmt | TERMINATOR)* "}"
 
-stmt: simple_stmt newline
+stmt: simple_stmt TERMINATOR
 
 simple_stmt: let_stmt
            | return_stmt
            | raise_stmt
            | expr_stmt
+           | import_stmt
 
 let_stmt: binder NAME ":" type_expr "=" expr
 binder: "let" mut_clause?
@@ -56,29 +68,48 @@ raise_stmt: ("raise" domain_clause? expr)
 
 expr_stmt: expr
 
+import_stmt: "import" import_path
+import_path: NAME (DOT NAME)*
+
 domain_clause: "domain" NAME
 
 ?expr: pipeline
 
 ?pipeline: logic_or (PIPE logic_or)*
 
-?logic_or: logic_and ("or" logic_and)*
-?logic_and: equality ("and" equality)*
-?equality: comparison (("==" | "!=") comparison)*
-?comparison: sum (("<" | "<=" | ">" | ">=") sum)*
-?sum: term (("+" | "-") term)*
-?term: factor (("*" | "/") factor)*
+?logic_or: logic_and logic_or_tail*
+logic_or_tail: OR logic_and
+
+?logic_and: equality logic_and_tail*
+logic_and_tail: AND equality
+
+?equality: comparison equality_tail*
+equality_tail: (EQEQ | NOTEQ) comparison
+
+?comparison: sum comparison_tail*
+comparison_tail: (LT | LTE | GT | GTE) sum
+
+?sum: term sum_tail*
+sum_tail: (PLUS | MINUS) term
+
+?term: factor term_tail*
+term_tail: (STAR | SLASH) factor
 ?factor: postfix
        | "-" factor -> neg
        | "not" factor -> not_op
 
-postfix: atom move_chain*
-move_chain: "->"
+postfix: primary postfix_suffix*
+postfix_suffix: call_suffix
+              | attr_suffix
+              | move_suffix
 
-?atom: literal
-     | NAME "(" [call_args] ")" -> call
-     | NAME -> var
-     | "(" expr ")"
+call_suffix: "(" [call_args] ")"
+attr_suffix: DOT NAME
+move_suffix: "->"
+
+primary: literal
+       | NAME -> var
+       | "(" expr ")"
 
 call_args: call_arg ("," call_arg)*
 call_arg: NAME "=" expr -> kwarg
