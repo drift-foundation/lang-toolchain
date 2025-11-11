@@ -38,6 +38,8 @@ class LetStmt(Stmt):
     type_expr: Optional[TypeExpr]
     value: "Expr"
     mutable: bool = False
+    capture: bool = False
+    capture_alias: Optional[str] = None
 
 
 @dataclass

@@ -16,12 +16,12 @@ Drift source files use the `.drift` extension; the driver happily reads stdin to
 
 ## Language surface supported
 
-- `let` bindings with optional `mut` (no re-assignment yet).
-- Functions with typed parameters/returns, optional `throws{domain}` or `!throws` declarations.
+- `val` / `var` bindings with optional `mut` (no re-assignment yet).
+- Functions with typed parameters/returns, optional `throws{domain}` declarations.
 - Expressions with literals (`i64`, `f64`, `str`, `bool`), arithmetic/logic operators, and function calls.
 - `return`, `raise domain ...`, and expression statements.
-- Builtins: `print(str)` and `error(message: str, domain=?, code=?, attrs=?)`.
-- Effect checking: functions declared `!throws` or `throws{...}` are validated against `raise` statements and callee declarations.
+- Builtins: `sys.console.out.writeln(str)` plus legacy `print(str)`, and `error(message: String, domain=?, code=?, attrs=?)`.
+- Effect checking: functions declared `throws{...}` are validated against `raise` statements and callee declarations.
 
 ## Examples
 

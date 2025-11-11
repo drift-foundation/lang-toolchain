@@ -165,16 +165,51 @@ def _build_let_stmt(tree: Tree) -> LetStmt:
     children = list(tree.children)
     binder_node = children[0]
     mutable = _binder_is_mutable(binder_node)
-    name_token = children[1]
-    type_expr = _build_type_expr(children[2])
-    value_expr = _build_expr(children[3])
+    name_token, capture = _parse_binding_name(children[1])
+    idx = 2
+    type_expr = _build_type_expr(children[idx])
+    idx += 1
+    capture_alias = None
+    if idx < len(children) - 1 and _name(children[idx]) == "alias_clause":
+        capture_alias = _parse_alias(children[idx])
+        idx += 1
+    value_expr = _build_expr(children[idx])
     return LetStmt(
         loc=loc,
         name=name_token.value,
         type_expr=type_expr,
         value=value_expr,
         mutable=mutable,
+        capture=capture,
+        capture_alias=capture_alias,
     )
+
+
+def _parse_binding_name(tree: Tree) -> tuple[Token, bool]:
+    capture = False
+    name_token: Optional[Token] = None
+    for child in tree.children:
+        if isinstance(child, Token):
+            if child.type == "NAME":
+                name_token = child
+        elif isinstance(child, Tree):
+            if _name(child) == "capture_marker":
+                capture = True
+            else:
+                # capture_marker child holds the caret token; ignore
+                for grand in child.children:
+                    if isinstance(grand, Token) and grand.type == "CARET":
+                        capture = True
+    if name_token is None:
+        raise ValueError("binding name missing identifier")
+    return name_token, capture
+
+
+def _parse_alias(tree: Tree) -> str:
+    string_token = next(
+        child for child in tree.children if isinstance(child, Token) and child.type == "STRING"
+    )
+    return ast.literal_eval(string_token.value)
 
 
 def _binder_is_mutable(node: Tree) -> bool:

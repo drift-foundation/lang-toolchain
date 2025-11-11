@@ -23,6 +23,7 @@ MINUS: "-"
 STAR: "*"
 SLASH: "/"
 DOT: "."
+CARET: "^"
 
 %ignore WS_INLINE
 
@@ -55,11 +56,14 @@ simple_stmt: let_stmt
            | expr_stmt
            | import_stmt
 
-let_stmt: binder NAME ":" type_expr "=" expr
+let_stmt: binder binding_name ":" type_expr alias_clause? "=" expr
 binder: "let" mut_clause?
       | VAL
       | VAR
 mut_clause: "mut"
+binding_name: capture_marker? NAME
+capture_marker: CARET
+alias_clause: "as" STRING
 
 return_stmt: "return" expr?
 

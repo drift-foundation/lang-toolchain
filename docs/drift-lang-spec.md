@@ -250,13 +250,13 @@ struct Error {
 }
 ```
 
-Each function frame can contribute contextual data via the `^` capture syntax.
+Each function frame can contribute contextual data via the `^` capture syntax. If you omit the `as "alias"` clause, the compiler derives a key from the enclosing scope (e.g., `parse_date.input`). Duplicate keys inside the same lexical scope are rejected at compile time (`E3510`).
 
 ### 11.2 Capturing local context
 
 ```drift
-let ^input: String as "record.field" note "start date" = msg["startDate"]
-fn parse_date(^s: String) : Date {
+val ^input: String as "record.field" = msg["startDate"]
+fn parse_date(s: String) : Date {
     if !is_iso_date(s) {
         throw Error("invalid date", code="parse.date.invalid")
     }
@@ -278,7 +278,7 @@ Captured context frames appear in order from the throw site outward, e.g.:
 
 ### 11.3 Runtime behavior
 
-- Each captured variable (`^x`) adds its name, optional alias, note, and sample size to the current frame context.
+- Each captured variable (`^x`) adds its name and optional alias to the current frame context.
 - Context maps are stacked per function frame.
 - The runtime merges and serializes this information into the `Error` object when unwinding.
 
@@ -403,3 +403,128 @@ process(j)    // error: use of moved value
 ---
 
 ### End of Drift Language Specification
+
+
+---
+
+## 13. Null Safety & Optional Values
+
+Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
+
+### 13.1 Types
+
+| Type | Meaning |
+|------|---------|
+| `T` | Non-optional; always initialized. |
+| `Optional<T>` | Possibly empty; either a value or nothing. |
+
+### 13.2 Construction
+
+```drift
+val present: Optional<Int64> = Optional.of(42)
+val empty: Optional<Int64> = Optional.none()
+```
+
+### 13.3 Interface
+
+```drift
+interface Optional<T> {
+    fn present(self) : Bool
+    fn none(self) : Bool
+    fn unwrap(self) : T
+    fn unwrap_or(self, default: T) : T
+    fn map<U>(self, f: fn(T) : U) : Optional<U>
+    fn if_present(self, f: fn(ref T) : Void) : Void
+    fn if_none(self, f: fn() : Void) : Void
+}
+
+module Optional {
+    fn of<T>(value: T) : Optional<T>
+    fn none<T>() : Optional<T>
+}
+```
+
+- `present()` is true when a value exists.
+- `none()` is true when empty.
+- `unwrap()` throws `Error("option.none_unwrapped")` if empty (discouraged in production).
+- `map` transforms when present; otherwise stays empty.
+- `if_present` calls the block with a borrow (`ref T`) to avoid moving.
+- `if_none` runs a block when empty.
+
+### 13.4 Control flow
+
+```drift
+if qty.present() {
+    out.writeln("qty=" + qty.unwrap().toString())
+}
+
+if qty.none() {
+    out.writeln("no qty")
+}
+
+qty.if_present(ref q: {
+    out.writeln("qty=" + q.toString())
+})
+```
+
+There is no safe-navigation operator (`?.`). Access requires explicit helpers.
+
+### 13.5 Parameters & returns
+
+- A parameter of type `T` cannot receive `Optional.none()`.
+- Use `Optional<T>` for “maybe” values.
+- Returning `none()` from a function declared `: T` is a compile error.
+
+```drift
+fn find_sku(id: Int64) : Optional<String> { /* ... */ }
+
+val sku = find_sku(42)
+sku.if_present(ref s: { out.writeln("sku=" + s) })
+if sku.none() {
+    out.writeln("missing")
+}
+```
+
+### 13.6 Ownership
+
+`if_present` borrows (`ref T`) by default. No move occurs unless you explicitly consume `T` inside the block.
+
+### 13.7 Diagnostics (illustrative)
+
+- **E2400**: cannot assign `Optional.none()` to non-optional type `T`.
+- **E2401**: attempted member/method use on `Optional<T>` without `map`/`unwrap`/`if_present`.
+- **E2402**: `unwrap()` on empty optional.
+- **E2403**: attempted implicit conversion `Optional<T>` → `T`.
+
+### 13.8 End-to-end example
+
+```drift
+import sys.console.out
+
+struct Order {
+    id: Int64,
+    sku: String,
+    quantity: Int64
+}
+
+fn find_order(id: Int64) : Optional<Order> {
+    if id == 42 { return Optional.of(Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
+    return Optional.none()
+}
+
+fn ship(o: Order) : Void {
+    out.writeln("shipping " + o.sku + " id=" + o.id)
+}
+
+fn main() : Void {
+    val maybe_order = find_order(42)
+
+    maybe_order.if_present(ref o: {
+        ship(o)
+    })
+
+    if maybe_order.none() {
+        out.writeln("order not found")
+    }
+}
+```

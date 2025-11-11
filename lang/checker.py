@@ -23,6 +23,7 @@ from .types import (
 class VarInfo:
     type: Type
     mutable: bool
+    capture_key: Optional[str] = None
 
 
 @dataclass
@@ -47,10 +48,18 @@ class Scope:
     def __init__(self, parent: Optional[Scope] = None) -> None:
         self.parent = parent
         self.vars: Dict[str, VarInfo] = {}
+        self.capture_keys: Set[str] = set()
 
-    def define(self, name: str, info: VarInfo, loc: ast.Located) -> None:
+    def define(self, name: str, info: VarInfo, loc: ast.Located, capture_key: Optional[str] = None) -> None:
         if name in self.vars:
             raise CheckError(f"{loc.line}:{loc.column}: '{name}' already defined in this scope")
+        if capture_key:
+            if capture_key in self.capture_keys:
+                raise CheckError(
+                    f"{loc.line}:{loc.column}: duplicate context key '{capture_key}' [E3510]"
+                )
+            self.capture_keys.add(capture_key)
+            info.capture_key = capture_key
         self.vars[name] = info
 
     def lookup(self, name: str, loc: ast.Located) -> VarInfo:
@@ -159,7 +168,15 @@ class Checker:
                 raise CheckError(f"{stmt.loc.line}:{stmt.loc.column}: {exc}") from exc
             value_type = self._check_expr(stmt.value, ctx)
             self._expect_type(value_type, decl_type, stmt.loc)
-            ctx.scope.define(stmt.name, VarInfo(type=decl_type, mutable=stmt.mutable), stmt.loc)
+            capture_key = None
+            if stmt.capture:
+                capture_key = stmt.capture_alias or stmt.name
+            ctx.scope.define(
+                stmt.name,
+                VarInfo(type=decl_type, mutable=stmt.mutable),
+                stmt.loc,
+                capture_key=capture_key,
+            )
             return
         if isinstance(stmt, ast.ReturnStmt):
             if not ctx.allow_returns:

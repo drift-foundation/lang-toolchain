@@ -1,0 +1,26 @@
+import sys.console.out
+
+struct Order {
+	id: Int64,
+	sku: String,
+	quantity: Int64
+}
+
+fn verify(order: ref Order) : Bool {
+	return order.quantity > 0 and order.sku.len() > 0
+}
+
+fn ship(order: Order) : Void {
+	if !verify(order) {
+		throw Error("invalid-order", code="order.invalid")
+	}
+
+	val shipping_id: String = "Trk#"+order.sku
+	val ^order_id: Int64 as "order.id" = order.id
+	out.writeln("order tracking# " + shipping_id + ", order ID: " + order_id)
+}
+
+fn main() : Void {
+	var order = Order(id = 42, sku = "DRIFT-1", quantity = 1)
+	ship(order->)
+}
