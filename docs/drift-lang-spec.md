@@ -20,6 +20,12 @@ Drift provides predictable lifetimes, explicit control of mutability and ownersh
 - **Imports and system I/O (`import sys.console.out`)**
 - **C-family block syntax with predictable scopes and lifetimes**
 
+**Struct design at a glance:**
+- Drift exposes only `struct` for user-defined data; no record/class split.
+- Tuple-struct header sugar: `struct Point(x: Int64, y: Int64)` — compact syntax with named fields.
+- Anonymous tuple types: `(T1, T2, ...)` for ad-hoc, methodless bundles.
+- Dot access always applies, even for tuple-struct sugar.
+
 ---
 
 ## 2. Variable and Reference Qualifiers
@@ -35,7 +41,21 @@ Drift provides predictable lifetimes, explicit control of mutability and ownersh
 | Volatile access | `Volatile<T>` | Explicit MMIO load/store operations |
 | **Blocks & scopes** | `{ ... }` | Define scope boundaries for RAII and deterministic lifetimes |
 
+#### Struct syntax variants
+
+```drift
+struct Point {
+    x: Int64,
+    y: Int64
+}
+
+struct Point(x: Int64, y: Int64)  // header form; identical type
+```
+
+The tuple-style header desugars to the block form. Field names remain available for dot access while the constructor supports positional and named invocation. The resulting type follows standard Drift value semantics: fields determine copy- vs move-behavior, and ownership transfer still uses `foo->` as usual.
+
 ---
+
 
 ## 3. Ownership and Move Semantics (`x->`)
 
@@ -64,7 +84,7 @@ PostfixExpr ::= PrimaryExpr
 ```drift
 struct Job { id: Int }
 
-fn process(job: Job) : Void {
+fn process(job: Job) returns Void {
     print("processing job ", job.id)
 }
 
@@ -82,7 +102,7 @@ process(j)    // ❌ error: j was moved
 ```drift
 struct File { /* non-copyable handle */ }
 
-fn upload(f: File) : Void {
+fn upload(f: File) returns Void {
     print("sending file")
 }
 
@@ -96,7 +116,7 @@ upload(f)     // ❌ cannot copy non-copyable type
 ### 3.5 Example — Borrowing instead of moving
 
 ```drift
-fn inspect(f: ref File) : Void {
+fn inspect(f: ref File) returns Void {
     print("just reading header")
 }
 
@@ -110,7 +130,7 @@ upload(f->)       // later move ownership away
 ### 3.6 Example — Mut borrow vs move
 
 ```drift
-fn fill(f: ref mut File) : Void { /* writes data */ }
+fn fill(f: ref mut File) returns Void { /* writes data */ }
 
 var f = File()
 fill(ref mut f)   // exclusive mutable borrow
@@ -124,12 +144,12 @@ Borrow lifetimes are scoped to braces; once the borrow ends, moving is allowed a
 ### 3.7 Example — Move return values
 
 ```drift
-fn open(name: String) : File {
-    let f = File()
+fn open(name: String) returns File {
+    val f = File()
     return f->        // move to caller
 }
 
-fn main() : Void {
+fn main() returns Void {
     var f = open("log.txt")
 }
 ```
@@ -141,7 +161,7 @@ Ownership flows *out* of the function; RAII ensures destruction if not returned.
 ### 3.8 Example — Composition of moves
 
 ```drift
-fn take(a: Array<Job>) : Void { /* consumes array */ }
+fn take(a: Array<Job>) returns Void { /* consumes array */ }
 
 var jobs = Array<Job>()
 jobs.push(Job(id = 1))
@@ -197,13 +217,13 @@ QualifiedName ::= Ident ('.' Ident)*
 module std.io
 
 interface OutputStream {
-    fn write(self: ref OutputStream, bytes: Bytes) : Void
-    fn writeln(self: ref OutputStream, text: String) : Void
-    fn flush(self: ref OutputStream) : Void
+    fn write(self: ref OutputStream, bytes: Bytes) returns Void
+    fn writeln(self: ref OutputStream, text: String) returns Void
+    fn flush(self: ref OutputStream) returns Void
 }
 
 interface InputStream {
-    fn read(self: ref InputStream, buffer: ref mut Bytes) : Int
+    fn read(self: ref InputStream, buffer: ref mut Bytes) returns Int
 }
 ```
 
@@ -221,7 +241,7 @@ These built-in instances represent the system console streams. Now you can write
 ```drift
 import std.console.out as out
 
-fn main() : Void {
+fn main() returns Void {
     val name: String = "Drift"
     out.writeln("Hello, " + name)
 }
@@ -256,7 +276,7 @@ Each function frame can contribute contextual data via the `^` capture syntax. I
 
 ```drift
 val ^input: String as "record.field" = msg["startDate"]
-fn parse_date(s: String) : Date {
+fn parse_date(s: String) returns Date {
     if !is_iso_date(s) {
         throw Error("invalid date", code="parse.date.invalid")
     }
@@ -310,9 +330,9 @@ The pipeline operator `>>` is **ownership-aware**.
 It automatically determines how each stage interacts based on the callee’s parameter type:
 
 ```drift
-fn fill(f: ref mut File) : Void { /* mutate */ }
-fn tune(f: ref mut File) : Void { /* mutate */ }
-fn finalize(f: File) : Void { /* consume */ }
+fn fill(f: ref mut File) returns Void { /* mutate */ }
+fn tune(f: ref mut File) returns Void { /* mutate */ }
+fn finalize(f: File) returns Void { /* consume */ }
 
 open("x")
   >> fill      // borrows mutably; File stays alive
@@ -360,6 +380,9 @@ In both cases, the file handle is safely released exactly once.
 
 ## 13. Grammar (EBNF excerpt)
 
+*(Trait/`implement`/`where` grammar is summarized in Appendix B.)*
+
+
 ```ebnf
 Program     ::= ImportDecl* TopDecl*
 ImportDecl  ::= "import" ImportItem ("," ImportItem)* NEWLINE
@@ -388,7 +411,7 @@ ExprStmt    ::= Expr NEWLINE
 ```drift
 struct Job { id: Int }
 
-fn process(job: Job) : Void {
+fn process(job: Job) returns Void {
     import std.console.out
     out.writeln("processing job " + job.id.to_string())
 }
@@ -424,18 +447,18 @@ val empty: Optional<Int64> = Optional.none()
 
 ```drift
 interface Optional<T> {
-    fn present(self) : Bool
-    fn none(self) : Bool
-    fn unwrap(self) : T
-    fn unwrap_or(self, default: T) : T
-    fn map<U>(self, f: fn(T) : U) : Optional<U>
-    fn if_present(self, f: fn(ref T) : Void) : Void
-    fn if_none(self, f: fn() : Void) : Void
+    fn present(self) returns Bool
+    fn none(self) returns Bool
+    fn unwrap(self) returns T
+    fn unwrap_or(self, default: T) returns T
+    fn map<U>(self, f: fn(T) returns U) returns Optional<U>
+    fn if_present(self, f: fn(ref T) returns Void) returns Void
+    fn if_none(self, f: fn() returns Void) returns Void
 }
 
 module Optional {
-    fn of<T>(value: T) : Optional<T>
-    fn none<T>() : Optional<T>
+    fn of<T>(value: T) returns Optional<T>
+    fn none<T>() returns Optional<T>
 }
 ```
 
@@ -471,7 +494,7 @@ There is no safe-navigation operator (`?.`). Access requires explicit helpers.
 - Returning `none()` from a function declared `: T` is a compile error.
 
 ```drift
-fn find_sku(id: Int64) : Optional<String> { /* ... */ }
+fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
 
 val sku = find_sku(42)
 sku.if_present(ref s: { out.writeln("sku=" + s) })
@@ -494,6 +517,13 @@ if sku.none() {
 ### 13.8 End-to-end example
 
 ```drift
+
+### 13.9 Tuple structs & tuple returns
+
+- **Tuple structs:** `struct Point(x: Int64, y: Int64)` is a compact header that desugars to the standard block struct. Construction may be positional (`Point(10, 20)`) or named (`Point(x = 10, y = 20)`), dot access remains (`point.x`).
+
+- **Anonymous tuple types:** use parentheses for ad-hoc results, e.g. `fn bounds() returns (Int64, Int64, Int64, Int64)` and destructure with `(x1, y1, x2, y2) = bounds()`.
+
 import sys.console.out
 
 struct Order {
@@ -502,16 +532,16 @@ struct Order {
     quantity: Int64
 }
 
-fn find_order(id: Int64) : Optional<Order> {
+fn find_order(id: Int64) returns Optional<Order> {
     if id == 42 { return Optional.of(Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
     return Optional.none()
 }
 
-fn ship(o: Order) : Void {
+fn ship(o: Order) returns Void {
     out.writeln("shipping " + o.sku + " id=" + o.id)
 }
 
-fn main() : Void {
+fn main() returns Void {
     val maybe_order = find_order(42)
 
     maybe_order.if_present(ref o: {
@@ -537,19 +567,19 @@ Traits declare required functions but no data:
 
 ```drift
 trait Display {
-    fn fmt(self, ref f: Formatter) : Void
+    fn fmt(self, ref f: Formatter) returns Void
 }
 
 trait Debug {
-    fn fmt(self, ref f: Formatter) : Void
+    fn fmt(self, ref f: Formatter) returns Void
 }
 ```
 
 
 
-### 14.1a Trait bounds on traits
+### 14.1.1 Trait bounds on traits
 
-Traits may depend on other traits through `where` clauses, just like functions or impls. The implicit type parameter is `Self` — the type that will implement the trait.
+Traits may depend on other traits through `where` clauses, just like functions or impls. `Self` is the implicit type parameter that refers to the implementing type.
 
 ```drift
 trait Printable
@@ -567,7 +597,7 @@ You can also extend behavior:
 trait Summarizable
     where Self has Display
 {
-    fn summary(self, ref f: Formatter) : Void
+    fn summary(self, ref f: Formatter) returns Void
 }
 ```
 
@@ -581,7 +611,7 @@ A type implementing a dependent trait uses the same `where` syntax:
 implement Printable for Point
     where Point has Display and Debug
 {
-    fn fmt(self, ref f: Formatter) : Void {
+    fn fmt(self, ref f: Formatter) returns Void {
         f.write("Printable(" + self.x.to_string() + ", " + self.y.to_string() + ")")
     }
 }
@@ -594,13 +624,13 @@ Implementations attach behavior to concrete types—even those defined elsewhere
 struct Point { x: Int64, y: Int64 }
 
 implement Display for Point {
-    fn fmt(self, ref f: Formatter) : Void {
+    fn fmt(self, ref f: Formatter) returns Void {
         f.write("(" + self.x.to_string() + ", " + self.y.to_string() + ")")
     }
 }
 
 implement Debug for Point {
-    fn fmt(self, ref f: Formatter) : Void {
+    fn fmt(self, ref f: Formatter) returns Void {
         f.write("Point{x=" + self.x.to_string() + ", y=" + self.y.to_string() + "}")
     }
 }
@@ -614,7 +644,7 @@ struct Box<T> { inner: T }
 implement Display for Box<T>
     where T has Display
 {
-    fn fmt(self, ref f: Formatter) : Void {
+    fn fmt(self, ref f: Formatter) returns Void {
         self.inner.fmt(ref f)
     }
 }
@@ -626,7 +656,7 @@ implement Display for Box<T>
 
 | Context | Example |
 |---------|---------|
-| Function | `fn save<T>(x: T) : Void where T has Serializable` |
+| Function | `fn save<T>(x: T) returns Void where T has Serializable` |
 | Struct   | `struct Box<T> where T has Display { inner: T }` |
 | Trait    | `trait Printable where Self has Display and Debug { ... }` |
 | Implement | `implement Display for Box<T> where T has Display { ... }` |
@@ -636,7 +666,7 @@ implement Display for Box<T>
 Generic declarations attach trait constraints with a trailing `where` clause:
 
 ```drift
-fn save<T, U>(t: ref T, u: ref U) : Void
+fn save<T, U>(t: ref T, u: ref U) returns Void
     where T has Serializable and Hashable,
           U has Display
 {
@@ -664,7 +694,7 @@ Aliases capture common patterns:
 ```drift
 traitexpr Printable = Display or Debug
 
-fn show<T>(value: ref T) : Void
+fn show<T>(value: ref T) returns Void
     where T has Printable
 { ... }
 ```
@@ -674,7 +704,7 @@ fn show<T>(value: ref T) : Void
 Within a `where`-constrained function you can branch on traits statically:
 
 ```drift
-fn log<T>(value: ref T, verbose: Bool) : Void
+fn log<T>(value: ref T, verbose: Bool) returns Void
     where T has (Display or Debug)
 {
     val fmt = Formatter()
@@ -693,22 +723,20 @@ fn log<T>(value: ref T, verbose: Bool) : Void
 }
 ```
 
-### End of Drift Language Specification
-
 Only reachable branches remain after monomorphization; the compiler guarantees the calls inside a branch are valid for the trait being tested.
 
-### 14.6 Specialization via `where`
+ Specialization via `where`
 
 Overloads may differ solely by trait constraints:
 
 ```drift
-fn serialize<T>(x: ref T) : Bytes
+fn serialize<T>(x: ref T) returns Bytes
     where T has Serializable
 {
     return x.serialize()
 }
 
-fn serialize<T>(x: ref T) : Bytes
+fn serialize<T>(x: ref T) returns Bytes
     where T has not Serializable
 {
     return reflect::dump(x)
@@ -722,7 +750,7 @@ Ambiguous matches cause a compile-time error; missing matches produce diagnostic
 Trait expressions compose freely:
 
 ```drift
-fn clone_if_possible<T>(x: ref T) : T {
+fn clone_if_possible<T>(x: ref T) returns T {
     if trait T has Copy {
         return x
     }
@@ -740,7 +768,7 @@ fn clone_if_possible<T>(x: ref T) : T {
 Trait logic honors Drift’s borrowing rules. Returning a `ref` is only legal if it aliases data passed in by reference:
 
 ```drift
-fn first_item<T>(list: ref List<T>) : ref T
+fn first_item<T>(list: ref List<T>) returns ref T
     where T has Display
 {
     return ref list.items[0]
@@ -760,24 +788,24 @@ Returning a reference to a local is compile-time illegal.
 ### 14.10 Complete example
 
 ```drift
-trait Display { fn fmt(self, ref f: Formatter) : Void }
-trait Debug   { fn fmt(self, ref f: Formatter) : Void }
+trait Display { fn fmt(self, ref f: Formatter) returns Void }
+trait Debug   { fn fmt(self, ref f: Formatter) returns Void }
 
 struct Box<T> { inner: T }
 
 implement Display for Box<T>
     where T has Display
 {
-    fn fmt(self, ref f: Formatter) : Void { self.inner.fmt(ref f) }
+    fn fmt(self, ref f: Formatter) returns Void { self.inner.fmt(ref f) }
 }
 
 implement Debug for Box<T>
     where T has Debug
 {
-    fn fmt(self, ref f: Formatter) : Void { Debug::fmt(self.inner, ref f) }
+    fn fmt(self, ref f: Formatter) returns Void { Debug::fmt(self.inner, ref f) }
 }
 
-fn log<T>(value: ref T, verbose: Bool) : Void
+fn log<T>(value: ref T, verbose: Bool) returns Void
     where T has (Display or Debug)
 {
     val fmt = Formatter()
@@ -793,3 +821,26 @@ fn log<T>(value: ref T, verbose: Bool) : Void
     out.writeln(fmt.to_string())
 }
 ```
+
+Only reachable branches remain after monomorphization; the compiler guarantees the calls inside a branch are valid for the trait being tested.
+
+---
+
+## Appendix B — Trait Grammar Notes
+
+Traits and implementations use the same `where` syntax as functions. Grammar sketch:
+
+```ebnf
+TraitDef   ::= "trait" Ident TraitParams? TraitWhere? TraitBody
+TraitWhere ::= "where" TraitClause ("," TraitClause)*
+TraitClause ::= "Self" "has" TraitExpr
+
+Implement  ::= "implement" Ty "for" Ty TraitWhere? TraitBody
+
+TraitExpr  ::= TraitTerm ( ("and" | "or") TraitTerm )*
+TraitTerm  ::= "not"? Ident | "(" TraitExpr ")"
+```
+
+These forms defer to the existing `where` machinery described in Section 14.
+
+### End of Drift Language Specification

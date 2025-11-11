@@ -6,11 +6,11 @@ struct Order {
 	quantity: Int64
 }
 
-fn verify(order: ref Order) : Bool {
+fn verify(order: ref Order) returns Bool {
 	return order.quantity > 0 and order.sku.len() > 0
 }
 
-fn ship(order: Order) : Void {
+fn ship(order: Order) returns Void {
 	if !verify(order) {
 		throw Error("invalid-order", code="order.invalid")
 	}
@@ -20,7 +20,7 @@ fn ship(order: Order) : Void {
 	out.writeln("order tracking# " + shipping_id + ", order ID: " + order_id)
 }
 
-fn main() : Void {
+fn main() returns Void {
 	var order = Order(id = 42, sku = "DRIFT-1", quantity = 1)
 	ship(order->)
 }

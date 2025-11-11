@@ -24,6 +24,7 @@ STAR: "*"
 SLASH: "/"
 DOT: "."
 CARET: "^"
+RETURNS: "returns"
 
 %ignore WS_INLINE
 
@@ -33,7 +34,7 @@ program: (item | TERMINATOR)*
      | stmt
 
 func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? block
-return_sig: ("->" | ":") type_expr
+return_sig: ("->" | ":" | RETURNS) type_expr
 
 throws_clause: "throws" "{" domain_list? "}"     -> throws_list
              | "!throws"                           -> no_throws
