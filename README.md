@@ -5,10 +5,10 @@
 
 ## 1. Overview
 
+<img src="assets/drift.png" alt="Drift" width="240" align="right" />
+
 **Drift** is a statically typed, compiled systems language designed for clarity, safety, and mechanical predictability.  
 It merges **C++ ownership semantics** (RAII, deterministic destruction, const-correctness) with the **type safety and borrowing model of Rust**, within a concise, modern syntax.
-
-<img src="assets/drift.png" alt="Drift" width="240" align="right" />
 
 This specification defines the **core semantics, syntax, and safety model** of the Drift programming language.  
 It describes how values are owned, borrowed, and destroyed; how exceptions propagate structured diagnostic data; and how deterministic resource management (RAII) interacts with the type system and scoping rules.  
