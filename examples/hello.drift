@@ -1,0 +1,4 @@
+let greeting: str = "hello"
+
+fn main() -> unit !throws:
+    print(greeting + ", drift")

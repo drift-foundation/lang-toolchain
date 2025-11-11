@@ -1,0 +1,5 @@
+fn fail() -> unit throws{fs}:
+    raise domain fs error("disk error", code="ENOENT")
+
+fn main() -> unit throws{fs}:
+    fail()

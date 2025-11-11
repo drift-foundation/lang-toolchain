@@ -1,0 +1,8 @@
+let mut global_counter: i64 = 0
+
+fn banner() -> str !throws:
+    let base: str = "mut bindings exist even before assignment semantics"
+    return base
+
+fn main() -> unit !throws:
+    print(banner())

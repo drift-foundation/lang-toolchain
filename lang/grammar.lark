@@ -1,0 +1,91 @@
+%import common.CNAME -> NAME
+%import common.SIGNED_INT
+%import common.SIGNED_FLOAT
+%import common.ESCAPED_STRING -> STRING
+%import common.WS_INLINE
+%declare _INDENT _DEDENT
+_NEWLINE: /(\r?\n[ \t]*)+/
+
+VAL: "val"
+VAR: "var"
+THROW: "throw"
+PIPE: ">>"
+
+%ignore WS_INLINE
+
+newline: _NEWLINE
+
+program: (newline | item)*
+
+?item: func_def
+     | stmt
+
+func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? ":" block
+return_sig: ("->" | ":") type_expr
+
+throws_clause: "throws" "{" domain_list? "}"     -> throws_list
+             | "!throws"                           -> no_throws
+
+domain_list: NAME ("," NAME)*
+
+params: param ("," param)*
+param: NAME ":" type_expr
+
+type_expr: NAME type_args?
+type_args: "[" type_expr ("," type_expr)* "]"
+
+block: newline _INDENT stmt+ _DEDENT
+
+stmt: simple_stmt newline
+
+simple_stmt: let_stmt
+           | return_stmt
+           | raise_stmt
+           | expr_stmt
+
+let_stmt: binder NAME ":" type_expr "=" expr
+binder: "let" mut_clause?
+      | VAL
+      | VAR
+mut_clause: "mut"
+
+return_stmt: "return" expr?
+
+raise_stmt: ("raise" domain_clause? expr)
+          | (THROW expr)
+
+expr_stmt: expr
+
+domain_clause: "domain" NAME
+
+?expr: pipeline
+
+?pipeline: logic_or (PIPE logic_or)*
+
+?logic_or: logic_and ("or" logic_and)*
+?logic_and: equality ("and" equality)*
+?equality: comparison (("==" | "!=") comparison)*
+?comparison: sum (("<" | "<=" | ">" | ">=") sum)*
+?sum: term (("+" | "-") term)*
+?term: factor (("*" | "/") factor)*
+?factor: postfix
+       | "-" factor -> neg
+       | "not" factor -> not_op
+
+postfix: atom move_chain*
+move_chain: "->"
+
+?atom: literal
+     | NAME "(" [call_args] ")" -> call
+     | NAME -> var
+     | "(" expr ")"
+
+call_args: call_arg ("," call_arg)*
+call_arg: NAME "=" expr -> kwarg
+        | expr
+
+literal: SIGNED_FLOAT -> float_lit
+       | SIGNED_INT   -> int_lit
+       | STRING       -> str_lit
+       | "true"      -> true_lit
+       | "false"     -> false_lit
