@@ -402,11 +402,6 @@ process(j)    // error: use of moved value
 
 ---
 
-### End of Drift Language Specification
-
-
----
-
 ## 13. Null Safety & Optional Values
 
 Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
@@ -526,5 +521,275 @@ fn main() : Void {
     if maybe_order.none() {
         out.writeln("order not found")
     }
+}
+```
+
+
+---
+
+## 14. Traits, `where` Specifiers, and Compile-time Trait Logic
+
+Traits describe **capabilities** a type may possess. They are compile-time contracts, not base classes or inheritance hierarchies. A type “has” a trait when it satisfies every function declared by that trait. Traits enable expressive, composable, type-safe polymorphism without runtime dispatch.
+
+### 14.1 Defining traits
+
+Traits declare required functions but no data:
+
+```drift
+trait Display {
+    fn fmt(self, ref f: Formatter) : Void
+}
+
+trait Debug {
+    fn fmt(self, ref f: Formatter) : Void
+}
+```
+
+
+
+### 14.1a Trait bounds on traits
+
+Traits may depend on other traits through `where` clauses, just like functions or impls. The implicit type parameter is `Self` — the type that will implement the trait.
+
+```drift
+trait Printable
+    where Self has Display and Debug
+{
+    // helper methods could be added here
+}
+```
+
+Read this as “Printable is a trait where Self has Display and Debug.”
+
+You can also extend behavior:
+
+```drift
+trait Summarizable
+    where Self has Display
+{
+    fn summary(self, ref f: Formatter) : Void
+}
+```
+
+Using `Self` keeps trait bounds uniform with generic bounds elsewhere.
+
+### 14.2 Implementing traits
+
+A type implementing a dependent trait uses the same `where` syntax:
+
+```drift
+implement Printable for Point
+    where Point has Display and Debug
+{
+    fn fmt(self, ref f: Formatter) : Void {
+        f.write("Printable(" + self.x.to_string() + ", " + self.y.to_string() + ")")
+    }
+}
+```
+
+
+Implementations attach behavior to concrete types—even those defined elsewhere:
+
+```drift
+struct Point { x: Int64, y: Int64 }
+
+implement Display for Point {
+    fn fmt(self, ref f: Formatter) : Void {
+        f.write("(" + self.x.to_string() + ", " + self.y.to_string() + ")")
+    }
+}
+
+implement Debug for Point {
+    fn fmt(self, ref f: Formatter) : Void {
+        f.write("Point{x=" + self.x.to_string() + ", y=" + self.y.to_string() + "}")
+    }
+}
+```
+
+Implementations can be conditional:
+
+```drift
+struct Box<T> { inner: T }
+
+implement Display for Box<T>
+    where T has Display
+{
+    fn fmt(self, ref f: Formatter) : Void {
+        self.inner.fmt(ref f)
+    }
+}
+```
+
+
+
+**Consistency overview**
+
+| Context | Example |
+|---------|---------|
+| Function | `fn save<T>(x: T) : Void where T has Serializable` |
+| Struct   | `struct Box<T> where T has Display { inner: T }` |
+| Trait    | `trait Printable where Self has Display and Debug { ... }` |
+| Implement | `implement Display for Box<T> where T has Display { ... }` |
+
+### 14.3 `where` specifiers
+
+Generic declarations attach trait constraints with a trailing `where` clause:
+
+```drift
+fn save<T, U>(t: ref T, u: ref U) : Void
+    where T has Serializable and Hashable,
+          U has Display
+{
+    t.serialize()
+    val fmt = Formatter()
+    u.fmt(ref fmt)
+}
+```
+
+The clause reads like English: “T has Serializable and Hashable; U has Display.”
+
+### 14.4 Trait expressions and boolean algebra
+
+Constraints support boolean operators:
+
+| Expression | Meaning |
+|------------|---------|
+| `T has Display and Debug` | T must satisfy both traits. |
+| `T has Display or Debug`  | T must satisfy at least one. |
+| `T has not Copy`          | T must not implement Copy. |
+| `T has (Display and Debug) or Serializable` | Group with parentheses. |
+
+Aliases capture common patterns:
+
+```drift
+traitexpr Printable = Display or Debug
+
+fn show<T>(value: ref T) : Void
+    where T has Printable
+{ ... }
+```
+
+### 14.5 Compile-time trait tests inside code
+
+Within a `where`-constrained function you can branch on traits statically:
+
+```drift
+fn log<T>(value: ref T, verbose: Bool) : Void
+    where T has (Display or Debug)
+{
+    val fmt = Formatter()
+
+    if verbose and trait T has Debug {
+        Debug::fmt(value, ref fmt)
+    }
+    else if trait T has Display {
+        Display::fmt(value, ref fmt)
+    }
+    else {
+        fmt.write("<unprintable>")
+    }
+
+    out.writeln(fmt.to_string())
+}
+```
+
+### End of Drift Language Specification
+
+Only reachable branches remain after monomorphization; the compiler guarantees the calls inside a branch are valid for the trait being tested.
+
+### 14.6 Specialization via `where`
+
+Overloads may differ solely by trait constraints:
+
+```drift
+fn serialize<T>(x: ref T) : Bytes
+    where T has Serializable
+{
+    return x.serialize()
+}
+
+fn serialize<T>(x: ref T) : Bytes
+    where T has not Serializable
+{
+    return reflect::dump(x)
+}
+```
+
+Ambiguous matches cause a compile-time error; missing matches produce diagnostics like “Type Foo must have Serializable.”
+
+### 14.7 Nested / negated trait tests
+
+Trait expressions compose freely:
+
+```drift
+fn clone_if_possible<T>(x: ref T) : T {
+    if trait T has Copy {
+        return x
+    }
+    else if trait T has Clone {
+        return x.clone()
+    }
+    else {
+        panic("Type not clonable")
+    }
+}
+```
+
+### 14.8 Lifetimes and references
+
+Trait logic honors Drift’s borrowing rules. Returning a `ref` is only legal if it aliases data passed in by reference:
+
+```drift
+fn first_item<T>(list: ref List<T>) : ref T
+    where T has Display
+{
+    return ref list.items[0]
+}
+```
+
+Returning a reference to a local is compile-time illegal.
+
+### 14.9 Design philosophy
+
+- Traits are capabilities, not inheritance hierarchies.
+- `implement` attaches behavior retroactively without altering the original type.
+- `where` clauses read as declarative capability statements.
+- Trait tests in code blocks branch with zero runtime overhead.
+- Boolean trait algebra gives precise control over specialization.
+
+### 14.10 Complete example
+
+```drift
+trait Display { fn fmt(self, ref f: Formatter) : Void }
+trait Debug   { fn fmt(self, ref f: Formatter) : Void }
+
+struct Box<T> { inner: T }
+
+implement Display for Box<T>
+    where T has Display
+{
+    fn fmt(self, ref f: Formatter) : Void { self.inner.fmt(ref f) }
+}
+
+implement Debug for Box<T>
+    where T has Debug
+{
+    fn fmt(self, ref f: Formatter) : Void { Debug::fmt(self.inner, ref f) }
+}
+
+fn log<T>(value: ref T, verbose: Bool) : Void
+    where T has (Display or Debug)
+{
+    val fmt = Formatter()
+    if verbose and trait T has Debug {
+        Debug::fmt(value, ref fmt)
+    }
+    else if trait T has Display {
+        Display::fmt(value, ref fmt)
+    }
+    else {
+        fmt.write("<unprintable>")
+    }
+    out.writeln(fmt.to_string())
 }
 ```
