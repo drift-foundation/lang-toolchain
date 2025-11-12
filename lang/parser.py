@@ -13,6 +13,7 @@ from .ast import (
     Call,
     Expr,
     ExprStmt,
+    IfStmt,
     FunctionDef,
     ImportStmt,
     KwArg,
@@ -25,6 +26,8 @@ from .ast import (
     Program,
     RaiseStmt,
     ReturnStmt,
+    StructDef,
+    StructField,
     TypeExpr,
     Unary,
 )
@@ -33,12 +36,104 @@ _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
 _GRAMMAR_SRC = _GRAMMAR_PATH.read_text()
 
 
+class TerminatorInserter:
+    always_accept = ("NEWLINE", "SEMI")
+
+    TERMINABLE = {
+        "NAME",
+        "SIGNED_INT",
+        "SIGNED_FLOAT",
+        "STRING",
+        "TRUE",
+        "FALSE",
+        "RPAR",
+        "RSQB",
+        "RBRACE",
+        "RETURN",
+        "THROW",
+        "BREAK",
+        "CONTINUE",
+        "MOVE",
+    }
+
+    SUPPRESS = {
+        "DOT",
+        "PLUS",
+        "MINUS",
+        "STAR",
+        "SLASH",
+        "PIPE",
+        "AND",
+        "OR",
+        "EQEQ",
+        "NOTEQ",
+        "LTE",
+        "GTE",
+        "LT",
+        "GT",
+        "COLON",
+        "COMMA",
+        "EQUAL",
+        "IF",
+        "ELSE",
+    }
+
+    def __init__(self) -> None:
+        self._reset()
+
+    def _reset(self) -> None:
+        self.paren_depth = 0
+        self.bracket_depth = 0
+        self.can_terminate = False
+
+    def process(self, stream):
+        self._reset()
+        for token in stream:
+            ttype = token.type
+            if ttype == "NEWLINE":
+                if self._should_emit_terminator():
+                    yield Token.new_borrow_pos("TERMINATOR", token.value, token)
+                    self.can_terminate = False
+                continue
+            if ttype == "SEMI":
+                yield Token.new_borrow_pos("TERMINATOR", token.value, token)
+                self.can_terminate = False
+                continue
+            yield token
+            self._update_depth(ttype)
+            self.can_terminate = self._is_terminable(ttype)
+
+    def _update_depth(self, ttype: str) -> None:
+        if ttype == "LPAR":
+            self.paren_depth += 1
+        elif ttype == "RPAR" and self.paren_depth:
+            self.paren_depth -= 1
+        elif ttype == "LSQB":
+            self.bracket_depth += 1
+        elif ttype == "RSQB" and self.bracket_depth:
+            self.bracket_depth -= 1
+
+    def _is_terminable(self, ttype: str) -> bool:
+        if ttype in self.SUPPRESS:
+            return False
+        return ttype in self.TERMINABLE
+
+    def _should_emit_terminator(self) -> bool:
+        return (
+            self.paren_depth == 0
+            and self.bracket_depth == 0
+            and self.can_terminate
+        )
+
+
+
 _PARSER = Lark(
     _GRAMMAR_SRC,
     parser="lalr",
     start="program",
     propagate_positions=True,
     maybe_placeholders=False,
+    postlex=TerminatorInserter(),
 )
 
 
@@ -50,6 +145,7 @@ def parse_program(source: str) -> Program:
 def _build_program(tree: Tree) -> Program:
     functions: List[FunctionDef] = []
     statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt | ImportStmt] = []
+    structs: List[StructDef] = []
     for child in tree.children:
         if not isinstance(child, Tree):
             continue
@@ -57,12 +153,12 @@ def _build_program(tree: Tree) -> Program:
         if kind == "func_def":
             functions.append(_build_function(child))
         elif kind == "struct_def":
-            continue  # struct definitions parsed but not yet compiled
+            structs.append(_build_struct_def(child))
         else:
             stmt = _build_stmt(child)
             if stmt is not None:
                 statements.append(stmt)
-    return Program(functions=functions, statements=statements)
+    return Program(functions=functions, statements=statements, structs=structs)
 
 
 def _build_function(tree: Tree) -> FunctionDef:
@@ -107,8 +203,9 @@ def _build_block(tree: Tree) -> Block:
 
 
 def _build_param(tree: Tree) -> Param:
-    name_token = tree.children[0]
-    type_expr = _build_type_expr(tree.children[1])
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    type_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr")
+    type_expr = _build_type_expr(type_node)
     return Param(name=name_token.value, type_expr=type_expr)
 
 
@@ -145,8 +242,10 @@ def _build_stmt(tree: Tree):
     kind = _name(tree)
     if kind == "stmt":
         for child in tree.children:
-            if isinstance(child, Tree) and _name(child) == "simple_stmt":
-                return _build_stmt(child)
+            if isinstance(child, Tree):
+                inner_kind = _name(child)
+                if inner_kind == "simple_stmt" or inner_kind == "if_stmt":
+                    return _build_stmt(child)
         return None
     if kind == "simple_stmt":
         target = tree.children[0]
@@ -162,6 +261,8 @@ def _build_stmt(tree: Tree):
         if stmt_kind == "import_stmt":
             return _build_import_stmt(target)
         return None
+    if kind == "if_stmt":
+        return _build_if_stmt(tree)
     if kind == "let_stmt":
         return _build_let_stmt(tree)
     if kind == "return_stmt":
@@ -175,18 +276,16 @@ def _build_stmt(tree: Tree):
 
 def _build_let_stmt(tree: Tree) -> LetStmt:
     loc = _loc(tree)
-    children = list(tree.children)
-    binder_node = children[0]
+    child_nodes = [child for child in tree.children if isinstance(child, Tree)]
+    binder_node = child_nodes.pop(0)
     mutable = _binder_is_mutable(binder_node)
-    name_token, capture = _parse_binding_name(children[1])
-    idx = 2
-    type_expr = _build_type_expr(children[idx])
-    idx += 1
+    binding_node = child_nodes.pop(0)
+    name_token, capture = _parse_binding_name(binding_node)
+    type_expr = _build_type_expr(child_nodes.pop(0))
     capture_alias = None
-    if idx < len(children) - 1 and _name(children[idx]) == "alias_clause":
-        capture_alias = _parse_alias(children[idx])
-        idx += 1
-    value_expr = _build_expr(children[idx])
+    if child_nodes and _name(child_nodes[0]) == "alias_clause":
+        capture_alias = _parse_alias(child_nodes.pop(0))
+    value_expr = _build_expr(child_nodes[0])
     return LetStmt(
         loc=loc,
         name=name_token.value,
@@ -264,11 +363,66 @@ def _build_expr_stmt(tree: Tree) -> ExprStmt:
     return ExprStmt(loc=loc, value=expr)
 
 
+def _build_struct_def(tree: Tree) -> StructDef:
+    loc = _loc(tree)
+    name_token = tree.children[0]
+    body = tree.children[1]
+    field_nodes = _collect_struct_fields(body)
+    fields = [_build_struct_field(node) for node in field_nodes]
+    return StructDef(name=name_token.value, fields=fields, loc=loc)
+
+
+def _collect_struct_fields(tree: Tree) -> List[Tree]:
+    result: List[Tree] = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, Tree):
+            continue
+        if _name(node) == "struct_field":
+            result.append(node)
+            continue
+        stack.extend(node.children)
+    return result
+
+
+def _build_struct_field(tree: Tree) -> StructField:
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    type_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr")
+    return StructField(name=name_token.value, type_expr=_build_type_expr(type_node))
+
+
 def _build_import_stmt(tree: Tree) -> ImportStmt:
     loc = _loc(tree)
     path_node = tree.children[0]
     parts = [child.value for child in path_node.children if isinstance(child, Token) and child.type == "NAME"]
     return ImportStmt(loc=loc, path=parts)
+
+
+def _build_if_stmt(tree: Tree) -> IfStmt:
+    loc = _loc(tree)
+    condition_node = None
+    then_block_node = None
+    else_block_node = None
+    for child in tree.children:
+        if not isinstance(child, Tree):
+            continue
+        name = _name(child)
+        if condition_node is None and name != "terminator_opt":
+            condition_node = child
+            continue
+        if then_block_node is None and name == "block":
+            then_block_node = child
+            continue
+        if name == "block":
+            else_block_node = child
+            break
+    if condition_node is None or then_block_node is None:
+        raise ValueError("malformed if statement")
+    condition = _build_expr(condition_node)
+    then_block = _build_block(then_block_node)
+    else_block = _build_block(else_block_node) if else_block_node else None
+    return IfStmt(loc=loc, condition=condition, then_block=then_block, else_block=else_block)
 
 
 def _build_expr(node) -> Expr:
@@ -392,6 +546,8 @@ def _build_call_args(node: Tree | None) -> tuple[List[Expr], List[KwArg]]:
         return args, kwargs
     positional_done = False
     for arg in node.children:
+        if not isinstance(arg, Tree):
+            continue
         kind = _name(arg)
         if kind == "kwarg":
             positional_done = True
@@ -404,8 +560,9 @@ def _build_call_args(node: Tree | None) -> tuple[List[Expr], List[KwArg]]:
 
 
 def _build_kwarg(tree: Tree) -> KwArg:
-    name_token = tree.children[0]
-    value = _build_expr(tree.children[1])
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    value_node = next(child for child in tree.children if isinstance(child, Tree))
+    value = _build_expr(value_node)
     return KwArg(name=name_token.value, value=value)
 
 

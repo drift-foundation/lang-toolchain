@@ -4,6 +4,19 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 
+@dataclass
+class StructField:
+    name: str
+    type_expr: "TypeExpr"
+
+
+@dataclass
+class StructDef:
+    name: str
+    fields: List[StructField]
+    loc: "Located"
+
+
 @dataclass(frozen=True)
 class Located:
     line: int
@@ -47,6 +60,14 @@ class AssignStmt(Stmt):
     loc: Located
     name: str
     value: "Expr"
+
+
+@dataclass
+class IfStmt(Stmt):
+    loc: Located
+    condition: "Expr"
+    then_block: "Block"
+    else_block: Optional["Block"] = None
 
 
 @dataclass
@@ -140,6 +161,7 @@ class Move(Expr):
 class Program:
     functions: List[FunctionDef]
     statements: List[Stmt]
+    structs: List[StructDef]
 
 
 @dataclass

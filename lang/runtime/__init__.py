@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Mapping, Sequence
 
-from ..types import ERROR, STR, UNIT, FunctionSignature
+from ..types import DISPLAYABLE, ERROR, STR, UNIT, FunctionSignature
 
 OUT_WRITELN_SIGNATURE = FunctionSignature(
-    "out.writeln", (STR,), UNIT, effects=None
+    "out.writeln", (DISPLAYABLE,), UNIT, effects=None
 )
 
 
@@ -76,7 +76,7 @@ def _builtin_error(ctx: RuntimeContext, args: Sequence[object], kwargs: Dict[str
 
 BUILTINS: Mapping[str, BuiltinFunction] = {
     "print": BuiltinFunction(
-        signature=FunctionSignature("print", (STR,), UNIT, effects=None),
+        signature=FunctionSignature("print", (DISPLAYABLE,), UNIT, effects=None),
         impl=_builtin_print,
     ),
     "error": BuiltinFunction(

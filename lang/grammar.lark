@@ -4,7 +4,10 @@
 %import common.ESCAPED_STRING -> STRING
 %import common.WS_INLINE
 
-TERMINATOR: /(;|(\r?\n[ \t]*))+/
+%declare TERMINATOR
+
+SEMI: ";"
+NEWLINE: /(\r?\n[ \t]*)/
 
 VAL: "val"
 VAR: "var"
@@ -23,9 +26,15 @@ MINUS: "-"
 STAR: "*"
 SLASH: "/"
 DOT: "."
+COLON: ":"
+COMMA: ","
+EQUAL: "="
 CARET: "^"
 RETURNS: "returns"
 BANG: "!"
+IF: "if"
+ELSE: "else"
+MOVE: "->"
 
 %ignore WS_INLINE
 
@@ -36,24 +45,25 @@ program: (item | TERMINATOR)*
      | stmt
 
 func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? block
-return_sig: ("->" | ":" | RETURNS) type_expr
+return_sig: (MOVE | COLON | RETURNS) type_expr
 
 throws_clause: "throws" "{" domain_list? "}"     -> throws_list
              | "!throws"                           -> no_throws
 
-domain_list: NAME ("," NAME)*
+domain_list: NAME (COMMA NAME)*
 
-params: param ("," param)*
-param: NAME ":" type_expr
+params: param (COMMA param)*
+param: NAME COLON type_expr
 
 type_expr: ref_prefix? base_type
 ref_prefix: "ref" ["mut"]
 base_type: NAME type_args?
-type_args: "[" type_expr ("," type_expr)* "]"
+type_args: "[" type_expr (COMMA type_expr)* "]"
 
 block: "{" (stmt | TERMINATOR)* "}"
 
-stmt: simple_stmt TERMINATOR
+stmt: if_stmt
+    | simple_stmt TERMINATOR
 
 simple_stmt: let_stmt
            | return_stmt
@@ -61,7 +71,10 @@ simple_stmt: let_stmt
            | expr_stmt
            | import_stmt
 
-let_stmt: binder binding_name ":" type_expr alias_clause? "=" expr
+if_stmt: IF expr terminator_opt block (terminator_opt ELSE terminator_opt block)?
+terminator_opt: TERMINATOR*
+
+let_stmt: binder binding_name COLON type_expr alias_clause? EQUAL expr
 binder: "let" mut_clause?
       | VAL
       | VAR
@@ -83,10 +96,10 @@ import_path: NAME (DOT NAME)*
 struct_def: "struct" NAME struct_body
 struct_body: tuple_struct | block_struct
 tuple_struct: "(" struct_field_list? ")"
-struct_field_list: struct_field ("," struct_field)*
-struct_field: NAME ":" type_expr
+struct_field_list: struct_field (COMMA struct_field)*
+struct_field: NAME COLON type_expr
 block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
-block_field: struct_field [","]
+block_field: struct_field [COMMA]
 
 domain_clause: "domain" NAME
 
@@ -123,14 +136,14 @@ postfix_suffix: call_suffix
 
 call_suffix: "(" [call_args] ")"
 attr_suffix: DOT NAME
-move_suffix: "->"
+move_suffix: MOVE
 
 primary: literal
        | NAME -> var
        | "(" expr ")"
 
-call_args: call_arg ("," call_arg)*
-call_arg: NAME "=" expr -> kwarg
+call_args: call_arg (COMMA call_arg)*
+call_arg: NAME EQUAL expr -> kwarg
         | expr
 
 literal: SIGNED_FLOAT -> float_lit

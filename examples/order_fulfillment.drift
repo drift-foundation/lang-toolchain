@@ -6,14 +6,21 @@ struct Order {
 	quantity: Int64
 }
 
-fn verify(order: ref Order) returns Bool {
-	return order.quantity > 0 and order.sku.len() > 0
+fn verify(order: Order) returns Bool {
+	return order.quantity > 0 and order.sku != ""
 }
 
 fn ship(order: Order) returns Void {
-	val shipping_id: String = "Trk#" + order.sku
-	val ^order_id: Int64 as "order.id" = order.id
-	out.writeln("order tracking# " + shipping_id + ", order ID: " + order_id)
+	out.writeln("debug-start")
+	out.writeln(verify(order))
+	if verify(order) {
+		val shipping_id: String = "Trk:" + order.sku
+		val ^order_id: Int64 as "order.id" = order.id
+		out.writeln("order tracking# " + shipping_id)
+	}
+	else {
+		throw error("invalid-order", code="order.invalid")
+	}
 }
 
 fn main() returns Void {

@@ -21,6 +21,7 @@ STR = Type("String")
 UNIT = Type("Void")
 ERROR = Type("Error")
 CONSOLE_OUT = Type("ConsoleOut")
+DISPLAYABLE = Type("<Displayable>")
 BOTTOM = Type("⊥")
 
 _PRIMITIVES: Dict[str, Type] = {
@@ -39,16 +40,23 @@ _PRIMITIVES: Dict[str, Type] = {
     "ConsoleOut": CONSOLE_OUT,
 }
 
+_DISPLAYABLE_PRIMITIVES = frozenset({I64, F64, BOOL, STR, ERROR})
+
+
+def is_displayable(ty: Type) -> bool:
+    return ty in _DISPLAYABLE_PRIMITIVES
+
 
 def resolve_type(type_expr: TypeExpr) -> Type:
     if type_expr.args:
-        raise TypeSystemError(
-            f"Generic type '{type_expr.name}' is not supported yet."
-        )
-    try:
-        return _PRIMITIVES[type_expr.name]
-    except KeyError as exc:  # pragma: no cover - defensive
-        raise TypeSystemError(f"Unknown type '{type_expr.name}'") from exc
+        # Generics flow through as symbolic names for now
+        inner = ", ".join(arg.name for arg in type_expr.args)
+        name = f"{type_expr.name}[{inner}]"
+        return Type(name)
+    builtin = _PRIMITIVES.get(type_expr.name)
+    if builtin:
+        return builtin
+    return Type(type_expr.name)
 
 
 @dataclass(frozen=True)

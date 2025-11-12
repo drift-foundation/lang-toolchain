@@ -7,6 +7,7 @@ from . import ast
 from .types import (
     BOOL,
     CONSOLE_OUT,
+    DISPLAYABLE,
     ERROR,
     F64,
     FunctionSignature,
@@ -15,6 +16,7 @@ from .types import (
     Type,
     TypeSystemError,
     UNIT,
+    is_displayable,
     resolve_type,
 )
 
@@ -38,6 +40,14 @@ class CheckedProgram:
     program: ast.Program
     functions: Dict[str, FunctionInfo]
     globals: Dict[str, VarInfo]
+    structs: Dict[str, "StructInfo"]
+
+
+@dataclass
+class StructInfo:
+    name: str
+    field_order: List[str]
+    field_types: Dict[str, Type]
 
 
 class CheckError(Exception):
@@ -89,8 +99,10 @@ class Checker:
             name: FunctionInfo(signature=sig, node=None, effects=sig.effects or frozenset())
             for name, sig in builtin_functions.items()
         }
+        self.struct_infos: Dict[str, StructInfo] = {}
 
     def check(self, program: ast.Program) -> CheckedProgram:
+        self._register_structs(program.structs)
         self._register_functions(program.functions)
         global_scope = Scope()
         global_scope.define("out", VarInfo(type=CONSOLE_OUT, mutable=False), ast.Located(line=0, column=0))
@@ -111,6 +123,7 @@ class Checker:
             program=program,
             functions=self.function_infos,
             globals=global_scope.vars.copy(),
+            structs=self.struct_infos,
         )
 
     def _register_functions(self, functions: List[ast.FunctionDef]) -> None:
@@ -132,6 +145,35 @@ class Checker:
                 effects=effects,
             )
             self.function_infos[fn.name] = FunctionInfo(signature=signature, node=fn, effects=frozenset())
+
+    def _register_structs(self, structs: List[ast.StructDef]) -> None:
+        for struct in structs:
+            if struct.name in self.struct_infos:
+                raise CheckError(
+                    f"{struct.loc.line}:{struct.loc.column}: Struct '{struct.name}' already defined"
+                )
+            field_order: List[str] = []
+            field_types: Dict[str, Type] = {}
+            for field in struct.fields:
+                try:
+                    ty = resolve_type(field.type_expr)
+                except TypeSystemError as exc:
+                    raise CheckError(f"{field.type_expr.name}: {exc}") from exc
+                if field.name in field_types:
+                    raise CheckError(
+                        f"{struct.loc.line}:{struct.loc.column}: duplicate field '{field.name}'"
+                    )
+                field_order.append(field.name)
+                field_types[field.name] = ty
+            struct_info = StructInfo(name=struct.name, field_order=field_order, field_types=field_types)
+            self.struct_infos[struct.name] = struct_info
+            signature = FunctionSignature(
+                name=struct.name,
+                params=tuple(field_types[name] for name in field_order),
+                return_type=Type(struct.name),
+                effects=None,
+            )
+            self.function_infos[struct.name] = FunctionInfo(signature=signature, node=None, effects=frozenset())
 
     def _check_function(self, fn: ast.FunctionDef, global_scope: Scope) -> None:
         info = self.function_infos[fn.name]
@@ -198,6 +240,15 @@ class Checker:
             return
         if isinstance(stmt, ast.ImportStmt):
             return
+        if isinstance(stmt, ast.IfStmt):
+            cond_type = self._check_expr(stmt.condition, ctx)
+            self._expect_type(cond_type, BOOL, stmt.loc)
+            for inner in stmt.then_block.statements:
+                self._check_stmt(inner, ctx)
+            if stmt.else_block:
+                for inner in stmt.else_block.statements:
+                    self._check_stmt(inner, ctx)
+            return
         raise CheckError(f"{stmt.loc.line}:{stmt.loc.column}: Unsupported statement {stmt}")
 
     def _check_expr(self, expr: ast.Expr, ctx: FunctionContext) -> Type:
@@ -218,9 +269,8 @@ class Checker:
         if isinstance(expr, ast.Call):
             return self._check_call(expr, ctx)
         if isinstance(expr, ast.Attr):
-            raise CheckError(
-                f"{expr.loc.line}:{expr.loc.column}: attribute access is only supported as part of a call"
-            )
+            base_type = self._check_expr(expr.value, ctx)
+            return self._resolve_attr_type(base_type, expr)
         if isinstance(expr, ast.Move):
             return self._check_expr(expr.value, ctx)
         if isinstance(expr, ast.Unary):
@@ -238,6 +288,10 @@ class Checker:
 
     def _check_call(self, expr: ast.Call, ctx: FunctionContext) -> Type:
         callee_name = self._resolve_callee(expr.func, ctx)
+        struct_info = self.struct_infos.get(callee_name)
+        if struct_info:
+            self._check_struct_constructor(expr, struct_info, ctx)
+            return Type(callee_name)
         if callee_name not in self.function_infos:
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown function '{callee_name}'")
         info = self.function_infos[callee_name]
@@ -258,6 +312,34 @@ class Checker:
         if sig.effects is not None:
             ctx.effects.update(sig.effects)
         return sig.return_type
+
+    def _check_struct_constructor(self, expr: ast.Call, info: StructInfo, ctx: FunctionContext) -> None:
+        if len(expr.args) > len(info.field_order):
+            raise CheckError(
+                f"{expr.loc.line}:{expr.loc.column}: '{info.name}' expects {len(info.field_order)} args, got {len(expr.args)}"
+            )
+        used = []
+        for arg_expr, field_name in zip(expr.args, info.field_order):
+            actual = self._check_expr(arg_expr, ctx)
+            self._expect_type(actual, info.field_types[field_name], arg_expr.loc)
+            used.append(field_name)
+        for kw in expr.kwargs:
+            if kw.name not in info.field_types:
+                raise CheckError(
+                    f"{kw.value.loc.line}:{kw.value.loc.column}: Struct '{info.name}' has no field '{kw.name}'"
+                )
+            if kw.name in used:
+                raise CheckError(
+                    f"{kw.value.loc.line}:{kw.value.loc.column}: Field '{kw.name}' initialized twice"
+                )
+            actual = self._check_expr(kw.value, ctx)
+            self._expect_type(actual, info.field_types[kw.name], kw.value.loc)
+            used.append(kw.name)
+        missing = [name for name in info.field_order if name not in used]
+        if missing:
+            raise CheckError(
+                f"{expr.loc.line}:{expr.loc.column}: Missing fields for '{info.name}': {', '.join(missing)}"
+            )
 
     def _check_binary(self, expr: ast.Binary, ctx: FunctionContext) -> Type:
         left = self._check_expr(expr.left, ctx)
@@ -301,11 +383,31 @@ class Checker:
             f"{func_expr.loc.line}:{func_expr.loc.column}: Unsupported callee expression"
         )
 
+    def _resolve_attr_type(self, base_type: Type, attr: ast.Attr) -> Type:
+        struct_info = self.struct_infos.get(base_type.name)
+        if struct_info:
+            if attr.attr not in struct_info.field_types:
+                raise CheckError(
+                    f"{attr.loc.line}:{attr.loc.column}: Struct '{struct_info.name}' has no field '{attr.attr}'"
+                )
+            return struct_info.field_types[attr.attr]
+        if base_type == CONSOLE_OUT and attr.attr == "writeln":
+            return UNIT
+        raise CheckError(
+            f"{attr.loc.line}:{attr.loc.column}: Unknown attribute '{attr.attr}' on type '{base_type}'"
+        )
+
     def _expect_number(self, actual: Type, loc: ast.Located) -> None:
         if actual not in (I64, F64):
             raise CheckError(f"{loc.line}:{loc.column}: Expected numeric type, got {actual}")
 
     def _expect_type(self, actual: Type, expected: Type, loc: ast.Located) -> None:
+        if expected == DISPLAYABLE:
+            if not is_displayable(actual):
+                raise CheckError(
+                    f"{loc.line}:{loc.column}: Expected type implementing Display, got {actual}"
+                )
+            return
         if actual != expected:
             raise CheckError(
                 f"{loc.line}:{loc.column}: Expected type {expected}, got {actual}"

@@ -249,6 +249,8 @@ fn main() returns Void {
 }
 ```
 
+`out.writeln` accepts any value whose type implements the `Display` trait. All builtin primitives (`Int64`, `Float64`, `Bool`, `String`, `Error`) implement `Display`, so diagnostics like `out.writeln(verify(order))` type-check without manual string conversions.
+
 This model allows concise I/O while keeping imports explicit and predictable.  
 The objects `out`, `err`, and `in` are references to standard I/O stream instances.
 
@@ -645,6 +647,10 @@ implement Debug for Point {
     }
 }
 ```
+
+### 14.2.1 Built-in `Display` implementations
+
+Primitive language types already satisfy `Display`. `Int64`, `Float64`, `Bool`, `String`, and `Error` (with its diagnostic metadata) can be formatted without extra trait impls, which keeps console logging (`out.writeln(flag)`) terse while remaining type-checked.
 
 Implementations can be conditional:
 

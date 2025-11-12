@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Sequence
 
 from . import ast
-from .checker import CheckedProgram
+from .checker import CheckedProgram, StructInfo
 from .runtime import BUILTINS, BuiltinFunction, ConsoleOut, ErrorValue, RuntimeContext
 
 
@@ -77,11 +77,13 @@ class Interpreter:
     ) -> None:
         self.program = checked.program
         self.function_infos = checked.functions
+        self.struct_infos = checked.structs
         self.stdout = stdout or sys.stdout
         self.runtime_ctx = RuntimeContext(self.stdout)
         self.builtins = builtins or BUILTINS
         self.global_env = Environment()
         self._register_builtins()
+        self._register_struct_constructors()
         self._install_console()
         self._register_functions()
         self._execute_block(self.program.statements, self.global_env)
@@ -94,6 +96,10 @@ class Interpreter:
         console = ConsoleOut(self.runtime_ctx)
         self.global_env.define("out", console)
         self.console_out = console
+
+    def _register_struct_constructors(self) -> None:
+        for name, info in self.struct_infos.items():
+            self.global_env.define(name, StructConstructor(info))
 
     def _register_functions(self) -> None:
         for name, info in self.function_infos.items():
@@ -126,6 +132,12 @@ class Interpreter:
             self._eval_expr(stmt.value, env)
             return
         if isinstance(stmt, ast.ImportStmt):
+            return
+        if isinstance(stmt, ast.IfStmt):
+            condition = bool(self._eval_expr(stmt.condition, env))
+            branch = stmt.then_block if condition else stmt.else_block
+            if branch:
+                self._execute_block(branch.statements, env)
             return
         raise RuntimeError(f"Unsupported statement {stmt}")
 
@@ -194,6 +206,10 @@ class Interpreter:
         raise RuntimeError(f"Unsupported operator {op}")
 
     def _resolve_attr(self, base: object, attr: str) -> object:
+        if isinstance(base, StructInstance):
+            if attr not in base.fields:
+                raise RuntimeError(f"Struct '{base.type_name}' has no field '{attr}'")
+            return base.fields[attr]
         if hasattr(base, "get_attr"):
             return base.get_attr(attr)
         raise RuntimeError(f"Object {base!r} has no attribute '{attr}'")
@@ -203,8 +219,40 @@ class Interpreter:
             return func.impl(self.runtime_ctx, args, kwargs)
         if isinstance(func, UserFunction):
             return func(args, kwargs)
+        if isinstance(func, StructConstructor):
+            return func(args, kwargs)
         raise RuntimeError(f"Object {func} is not callable")
 
 
 def run_program(checked: CheckedProgram, stdout=None) -> Interpreter:
     return Interpreter(checked, BUILTINS, stdout=stdout)
+@dataclass
+class StructInstance:
+    type_name: str
+    fields: Dict[str, object]
+
+
+class StructConstructor:
+    def __init__(self, info: StructInfo) -> None:
+        self.info = info
+
+    def __call__(self, args: Sequence[object], kwargs: Dict[str, object]) -> StructInstance:
+        if len(args) > len(self.info.field_order):
+            raise RuntimeError(
+                f"{self.info.name} expects {len(self.info.field_order)} args, got {len(args)}"
+            )
+        values: Dict[str, object] = {}
+        for field_name, value in zip(self.info.field_order, args):
+            values[field_name] = value
+        for key, value in kwargs.items():
+            if key not in self.info.field_order:
+                raise RuntimeError(f"{self.info.name} has no field '{key}'")
+            if key in values:
+                raise RuntimeError(f"Field '{key}' initialized twice in {self.info.name}")
+            values[key] = value
+        missing = [name for name in self.info.field_order if name not in values]
+        if missing:
+            raise RuntimeError(
+                f"Missing fields for {self.info.name}: {', '.join(missing)}"
+            )
+        return StructInstance(type_name=self.info.name, fields=values)
