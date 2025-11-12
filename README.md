@@ -406,6 +406,14 @@ VarDecl     ::= "var" Ident ":" Ty "=" Expr NEWLINE
 ExprStmt    ::= Expr NEWLINE
 ```
 
+**Terminators and newlines.** The lexer emits a `TERMINATOR` whenever it encounters a newline (`\n`) and *all* of the following hold:
+
+1. The current parenthesis/brace/bracket depth is zero (i.e., we are not inside `()`, `[]`, or `{}`).
+2. The previous token is “terminable” — identifiers, literals, `)`, `]`, `}`, `return`, `break`, etc.
+3. The previous token is **not** a binary operator (`+`, `*`, `>>`, ...), dot, comma, or colon that requires a follower.
+
+Parsers may treat `TERMINATOR` exactly like a semicolon. Conversely, an explicit `;` is legal anywhere a `TERMINATOR` could appear, which allows compact one-liners or multi-statement lines when desired. This rule keeps Drift source tidy without forcing mandatory semicolons.
+
 ---
 
 ## Appendix A — Ownership Examples

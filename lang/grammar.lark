@@ -25,12 +25,14 @@ SLASH: "/"
 DOT: "."
 CARET: "^"
 RETURNS: "returns"
+BANG: "!"
 
 %ignore WS_INLINE
 
 program: (item | TERMINATOR)*
 
 ?item: func_def
+     | struct_def
      | stmt
 
 func_def: "fn" NAME "(" [params] ")" return_sig throws_clause? block
@@ -44,7 +46,9 @@ domain_list: NAME ("," NAME)*
 params: param ("," param)*
 param: NAME ":" type_expr
 
-type_expr: NAME type_args?
+type_expr: ref_prefix? base_type
+ref_prefix: "ref" ["mut"]
+base_type: NAME type_args?
 type_args: "[" type_expr ("," type_expr)* "]"
 
 block: "{" (stmt | TERMINATOR)* "}"
@@ -76,6 +80,14 @@ expr_stmt: expr
 import_stmt: "import" import_path
 import_path: NAME (DOT NAME)*
 
+struct_def: "struct" NAME struct_body
+struct_body: tuple_struct | block_struct
+tuple_struct: "(" struct_field_list? ")"
+struct_field_list: struct_field ("," struct_field)*
+struct_field: NAME ":" type_expr
+block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
+block_field: struct_field [","]
+
 domain_clause: "domain" NAME
 
 ?expr: pipeline
@@ -102,6 +114,7 @@ term_tail: (STAR | SLASH) factor
 ?factor: postfix
        | "-" factor -> neg
        | "not" factor -> not_op
+       | BANG factor -> not_op
 
 postfix: primary postfix_suffix*
 postfix_suffix: call_suffix

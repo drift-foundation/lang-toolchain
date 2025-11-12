@@ -56,6 +56,8 @@ def _build_program(tree: Tree) -> Program:
         kind = _name(child)
         if kind == "func_def":
             functions.append(_build_function(child))
+        elif kind == "struct_def":
+            continue  # struct definitions parsed but not yet compiled
         else:
             stmt = _build_stmt(child)
             if stmt is not None:
@@ -111,12 +113,23 @@ def _build_param(tree: Tree) -> Param:
 
 
 def _build_type_expr(tree: Tree) -> TypeExpr:
-    name_token = tree.children[0]
-    args: List[TypeExpr] = []
-    if len(tree.children) > 1:
-        type_args = tree.children[1]
-        args = [_build_type_expr(arg) for arg in type_args.children]
-    return TypeExpr(name=name_token.value, args=args)
+    name = _name(tree)
+    if name == "type_expr":
+        for child in tree.children:
+            if isinstance(child, Tree) and _name(child) in {"base_type", "type_expr"}:
+                return _build_type_expr(child)
+        return TypeExpr(name="<unknown>")
+    if name == "base_type":
+        name_token = tree.children[0]
+        args: List[TypeExpr] = []
+        if len(tree.children) > 1:
+            type_args = tree.children[1]
+            args = [_build_type_expr(arg) for arg in type_args.children]
+        return TypeExpr(name=name_token.value, args=args)
+    # fallback for other wrappers
+    if tree.children:
+        return _build_type_expr(tree.children[-1])
+    return TypeExpr(name="<unknown>")
 
 
 def _build_throws(tree: Tree) -> List[str]:
