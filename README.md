@@ -755,279 +755,392 @@ fn main() returns Void {
 }
 ```
 
+---
+## 14 Traits and Compile-Time Capabilities
+
+(*Conforms to Drift Spec Rev. 2025-11 (Rev 4)*)  
+(*Fully consistent with the `require` + `is` syntax finalized in design discussions.*)
 
 ---
 
-## 14. Traits, `where` Specifiers, and Compile-time Trait Logic
+### 14.1. Overview
 
-Traits describe **capabilities** a type may possess. They are compile-time contracts, not base classes or inheritance hierarchies. A type “has” a trait when it satisfies every function declared by that trait. Traits enable expressive, composable, type-safe polymorphism without runtime dispatch.
+Traits in Drift describe **capabilities** a type *is capable of*.  
+They are compile-time contracts, not inheritance hierarchies and not runtime polymorphism.
 
-### 14.1 Defining traits
+Traits provide:
+- **Adjective-like descriptions** of capabilities (“Clonable”, “Destructible”, “Debuggable”).
+- **Static dispatch** — no vtables, zero runtime cost.
+- **Injectable implementations** — implementations can be attached from any module.
+- **Type completeness checks** — types may *require* certain traits to exist.
+- **Trait-guarded code paths** — functions may adapt their behavior based on whether a type implements a trait.
 
-Traits declare required functions but no data:
+Traits unify:
+- RAII/destruction
+- formatting and debugging
+- serialization
+- copying, hashing, comparison
+- algorithmic constraints
+- type-safe generic specialization
+
+---
+
+### 14.2. Defining Traits
+
+A trait defines a set of functions that a type must provide to be considered capable of that trait.
 
 ```drift
-trait Display {
-    fn fmt(self, ref f: Formatter) returns Void
+trait Clonable {
+    fn clone(self) returns Self
 }
 
-trait Debug {
-    fn fmt(self, ref f: Formatter) returns Void
+trait Debuggable {
+    fn fmt(self) returns String
+}
+
+trait Destructible {
+    fn destroy(self) returns Void
 }
 ```
 
+Rules:
 
+- Traits declare **behavior only** (no fields).
+- `Self` refers to the implementing type.
+- Traits can depend on other traits (via `require Self is TraitX`).
+- Trait names should be **adjectives** describing the capability.
 
-### 14.1.1 Trait bounds on traits
+---
 
-Traits may depend on other traits through `where` clauses, just like functions or impls. `Self` is the implicit type parameter that refers to the implementing type.
+### 14.3. Implementing Traits
 
-```drift
-trait Printable
-    where Self has Display and Debug
-{
-    // helper methods could be added here
-}
-```
-
-Read this as “Printable is a trait where Self has Display and Debug.”
-
-You can also extend behavior:
-
-```drift
-trait Summarizable
-    where Self has Display
-{
-    fn summary(self, ref f: Formatter) returns Void
-}
-```
-
-Using `Self` keeps trait bounds uniform with generic bounds elsewhere.
-
-### 14.2 Implementing traits
-
-A type implementing a dependent trait uses the same `where` syntax:
-
-```drift
-implement Printable for Point
-    where Point has Display and Debug
-{
-    fn fmt(self, ref f: Formatter) returns Void {
-        f.write("Printable(" + self.x.to_string() + ", " + self.y.to_string() + ")")
-    }
-}
-```
-
-
-Implementations attach behavior to concrete types—even those defined elsewhere:
+An implementation attaches the capability to a type.
 
 ```drift
 struct Point { x: Int64, y: Int64 }
 
-implement Display for Point {
-    fn fmt(self, ref f: Formatter) returns Void {
-        f.write("(" + self.x.to_string() + ", " + self.y.to_string() + ")")
-    }
-}
-
-implement Debug for Point {
-    fn fmt(self, ref f: Formatter) returns Void {
-        f.write("Point{x=" + self.x.to_string() + ", y=" + self.y.to_string() + "}")
+implement Debuggable for Point {
+    fn fmt(self) returns String {
+        return "(" + self.x.to_string() + ", " + self.y.to_string() + ")"
     }
 }
 ```
 
-### 14.2.1 Built-in `Display` implementations
-
-Primitive language types already satisfy `Display`. `Int64`, `Float64`, `Bool`, `String`, and `Error` (with its diagnostic metadata) can be formatted without extra trait impls, which keeps console logging (`out.writeln(flag)`) terse while remaining type-checked.
-
-Implementations can be conditional:
+#### Generic trait implementations
 
 ```drift
-struct Box<T> { inner: T }
+struct Box<T> { value: T }
 
-implement Display for Box<T>
-    where T has Display
+implement Debuggable for Box<T>
+    require T is Debuggable
 {
-    fn fmt(self, ref f: Formatter) returns Void {
-        self.inner.fmt(ref f)
+    fn fmt(self) returns String {
+        return self.value.fmt()
     }
 }
 ```
 
+- The `require` clause limits this implementation to types where `T is Debuggable`.
+- If the requirement does not hold, the implementation is ignored for that specialization.
 
+---
 
-**Consistency overview**
+### 14.4. Type-Level Trait Requirements (`require`)
 
-| Context | Example |
-|---------|---------|
-| Function | `fn save<T>(x: T) returns Void where T has Serializable` |
-| Struct   | `struct Box<T> where T has Display { inner: T }` |
-| Trait    | `trait Printable where Self has Display and Debug { ... }` |
-| Implement | `implement Display for Box<T> where T has Display { ... }` |
-
-### 14.3 `where` specifiers
-
-Generic declarations attach trait constraints with a trailing `where` clause:
+A type may declare that it cannot exist unless certain traits are implemented.
 
 ```drift
-fn save<T, U>(t: ref T, u: ref U) returns Void
-    where T has Serializable and Hashable,
-          U has Display
+struct File
+    require Self is Destructible, Self is Debuggable
 {
-    t.serialize()
-    val fmt = Formatter()
-    u.fmt(ref fmt)
+    fd: Int64
 }
 ```
 
-The clause reads like English: “T has Serializable and Hashable; U has Display.”
+Meaning:
 
-### 14.4 Trait expressions and boolean algebra
+- The program is **ill-formed** unless implementations exist:
 
-Constraints support boolean operators:
+  ```drift
+  implement Destructible for File { ... }
+  implement Debuggable  for File { ... }
+  ```
 
-| Expression | Meaning |
-|------------|---------|
-| `T has Display and Debug` | T must satisfy both traits. |
-| `T has Display or Debug`  | T must satisfy at least one. |
-| `T has not Copy`          | T must not implement Copy. |
-| `T has (Display and Debug) or Serializable` | Group with parentheses. |
+Compiler errors if missing:
 
-Aliases capture common patterns:
+```
+E-REQUIRE-SELF: Type File requires trait Destructible but no implementation was found.
+E-REQUIRE-SELF: Type File requires trait Debuggable but no implementation was found.
+```
+
+#### Requiring traits of parameters
 
 ```drift
-traitexpr Printable = Display or Debug
-
-fn show<T>(value: ref T) returns Void
-    where T has Printable
-{ ... }
+struct Box<T>
+    require T is Clonable,
+            Self is Destructible
+{
+    value: T
+}
 ```
 
-### 14.5 Compile-time trait tests inside code
+Constraints:
 
-Within a `where`-constrained function you can branch on traits statically:
+- `Box<T>` can only be instantiated when `T is Clonable`.
+- `Box<T>` is considered incomplete unless a `Destructible` implementation for `Box<T>` exists.
+
+---
+
+### 14.5. Function-Level Trait Requirements
+
+Functions may restrict their usage to specific capabilities:
 
 ```drift
-fn log<T>(value: ref T, verbose: Bool) returns Void
-    where T has (Display or Debug)
-{
-    val fmt = Formatter()
-
-    if verbose and trait T has Debug {
-        Debug::fmt(value, ref fmt)
-    }
-    else if trait T has Display {
-        Display::fmt(value, ref fmt)
-    }
-    else {
-        fmt.write("<unprintable>")
-    }
-
-    out.writeln(fmt.to_string())
+fn clone_twice<T>
+    require T is Clonable
+(value: T) returns (T, T) {
+    val a = value.clone()
+    val b = value.clone()
+    return (a, b)
 }
 ```
 
-Only reachable branches remain after monomorphization; the compiler guarantees the calls inside a branch are valid for the trait being tested.
-
- Specialization via `where`
-
-Overloads may differ solely by trait constraints:
+More than one requirement may be listed:
 
 ```drift
-fn serialize<T>(x: ref T) returns Bytes
-    where T has Serializable
-{
-    return x.serialize()
-}
-
-fn serialize<T>(x: ref T) returns Bytes
-    where T has not Serializable
-{
-    return reflect::dump(x)
+fn print_both<T, U>
+    require T is Debuggable,
+            U is Debuggable
+(t: T, u: U) returns Void {
+    out.writeln(t.fmt())
+    out.writeln(u.fmt())
 }
 ```
 
-Ambiguous matches cause a compile-time error; missing matches produce diagnostics like “Type Foo must have Serializable.”
+Using a function with unmet trait requirements triggers a compile-time error.
 
-### 14.7 Nested / negated trait tests
+---
 
-Trait expressions compose freely:
+### 14.6. Trait Guards (`if T is TraitName`)
+
+Trait guards allow functions to adapt behavior based on whether a type implements a trait.
 
 ```drift
-fn clone_if_possible<T>(x: ref T) returns T {
-    if trait T has Copy {
-        return x
-    }
-    else if trait T has Clone {
-        return x.clone()
-    }
-    else {
-        panic("Type not clonable")
+fn log_value<T>(value: T) returns Void {
+    if T is Debuggable {
+        out.writeln("[dbg] " + value.fmt())
+    } else {
+        out.writeln("<value>")
     }
 }
 ```
 
-### 14.8 Lifetimes and references
+Semantics:
 
-Trait logic honors Drift’s borrowing rules. Returning a `ref` is only legal if it aliases data passed in by reference:
+- `if T is Debuggable` is a **compile-time condition**.
+- Only the active branch must type-check for the given `T`.
+- Inside the guarded block, methods from the trait become valid (`value.fmt()` here).
+
+### Multiple trait conditions
 
 ```drift
-fn first_item<T>(list: ref List<T>) returns ref T
-    where T has Display
-{
-    return ref list.items[0]
+fn log_value<T>(value: T) returns Void {
+    if T is Debuggable and T is Serializable {
+        ...
+    } else if T is Debuggable {
+        ...
+    } else if T is Serializable {
+        ...
+    } else {
+        ...
+    }
 }
 ```
 
-Returning a reference to a local is compile-time illegal.
+Trait guards prevent combinatorial explosion of overloaded functions.
 
-### 14.9 Design philosophy
+---
 
-- Traits are capabilities, not inheritance hierarchies.
-- `implement` attaches behavior retroactively without altering the original type.
-- `where` clauses read as declarative capability statements.
-- Trait tests in code blocks branch with zero runtime overhead.
-- Boolean trait algebra gives precise control over specialization.
+### 14.7. Trait Expressions (Boolean Logic)
 
-### 14.10 Complete example
+Trait requirements and guards allow boolean trait expressions:
+
+- `T is A and T is B` — must implement both traits
+- `T is A or T is B` — must implement at least one
+- `not (T is Copyable)` — must *not* implement the trait
+- Parentheses allowed for grouping
+
+Example:
 
 ```drift
-trait Display { fn fmt(self, ref f: Formatter) returns Void }
-trait Debug   { fn fmt(self, ref f: Formatter) returns Void }
-
-struct Box<T> { inner: T }
-
-implement Display for Box<T>
-    where T has Display
-{
-    fn fmt(self, ref f: Formatter) returns Void { self.inner.fmt(ref f) }
-}
-
-implement Debug for Box<T>
-    where T has Debug
-{
-    fn fmt(self, ref f: Formatter) returns Void { Debug::fmt(self.inner, ref f) }
-}
-
-fn log<T>(value: ref T, verbose: Bool) returns Void
-    where T has (Display or Debug)
-{
-    val fmt = Formatter()
-    if verbose and trait T has Debug {
-        Debug::fmt(value, ref fmt)
+fn clone_if_possible<T>(value: T) returns T {
+    if T is Copyable {
+        return value            // implicit copy
+    } else if T is Clonable {
+        return value.clone()
+    } else {
+        panic("Type cannot be cloned")
     }
-    else if trait T has Display {
-        Display::fmt(value, ref fmt)
-    }
-    else {
-        fmt.write("<unprintable>")
-    }
-    out.writeln(fmt.to_string())
 }
 ```
 
-Only reachable branches remain after monomorphization; the compiler guarantees the calls inside a branch are valid for the trait being tested.
+Traits become composable *properties* of types.
+
+---
+
+### 14.8. Trait Dependencies (Traits requiring Traits)
+
+Traits themselves may declare capabilities they depend upon:
+
+```drift
+trait Printable
+    require Self is Debuggable, Self is Displayable
+{
+    fn print(self) returns String {
+        return self.fmt()
+    }
+}
+```
+
+Any type that implements `Printable` must also implement `Debuggable` and `Displayable`.
+
+---
+
+### 14.9. RAII and the `Destructible` Trait
+
+Destruction is expressed as a trait:
+
+```drift
+trait Destructible {
+    fn destroy(self) returns Void
+}
+```
+
+Types with owned resources demand this trait:
+
+```drift
+struct OwnedMySql
+    require Self is Destructible
+{
+    handle: MySqlPtr
+}
+
+implement Destructible for OwnedMySql {
+    fn destroy(self) returns Void {
+        if !self.handle.is_null() {
+            mysql_close(self.handle)
+        }
+    }
+}
+```
+
+RAII semantics:
+
+- Automatic cleanup at scope exit calls `destroy(self)` exactly once.
+- Manual early destruction is allowed via `value.destroy()`, which consumes `self`.
+
+This integrates seamlessly with move semantics and deterministic lifetimes.
+
+---
+
+### 14.10. Overloading and Specialization by Trait
+
+Functions may overload based on trait requirements:
+
+```drift
+fn save<T>
+    require T is Serializable
+(value: T) returns Bytes {
+    return value.serialize()
+}
+
+fn save<T>(value: T) returns Bytes {
+    return reflect::dump(value)
+}
+```
+
+Rules:
+
+- The compiler picks the most specific applicable overload.
+- Ambiguity is a compile‑time error.
+- If no overload applies, the compiler reports a missing capability.
+
+---
+
+### 14.11. Complete Syntax Summary
+
+#### Defining a trait
+
+```drift
+trait Debuggable {
+    fn fmt(self) returns String
+}
+```
+
+#### Implementing a trait
+
+```drift
+implement Debuggable for File {
+    fn fmt(self) returns String { ... }
+}
+```
+
+#### Requiring traits in a type (type completeness)
+
+```drift
+struct Cache<K, V>
+    require K is Hashable,
+            Self is Destructible
+{
+    ...
+}
+```
+
+#### Requiring traits in a function
+
+```drift
+fn print<T>
+    require T is Debuggable
+(v: T) returns Void { ... }
+```
+
+#### Trait-guarded logic
+
+```drift
+if T is Debuggable { ... }
+if not (T is Serializable) { ... }
+```
+
+#### Boolean trait expressions
+
+```drift
+require T is (Debuggable or Displayable)
+require T is Clonable and not Destructible
+```
+
+---
+
+### 14.12. Design Rationale
+
+Traits are designed to:
+
+- Express **capabilities**, not inheritance.
+- Enable rich, generic programming without runtime cost.
+- Allow types to declare their **necessary capabilities** via `require`.
+- Allow algorithms to adapt to available capabilities via **trait guards**.
+- Provide a unified abstraction for:
+  - RAII (`Destructible`)
+  - formatting (`Debuggable`, `Displayable`)
+  - serialization, hashing, comparison
+  - “marker” traits for POD or special behaviors
+
+The trio of:
+
+1. **Traits**  
+2. **`require` clauses**  
+3. **Trait guards (`if T is Trait`)**
+
+forms a coherent, expressive, zero‑overhead system.
 
 ---
 
