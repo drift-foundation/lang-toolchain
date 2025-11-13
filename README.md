@@ -1143,6 +1143,331 @@ The trio of:
 forms a coherent, expressive, zero‑overhead system.
 
 ---
+# 15. Interfaces & Dynamic Dispatch
+
+Drift supports **runtime polymorphism** through *interfaces*.  
+Interfaces allow multiple **different concrete types** to be treated as one unified abstract type at runtime.  
+This is the dynamic counterpart to compile‑time polymorphism provided by *traits*.
+
+**In short:**
+
+- **Traits** describe *capabilities* and enable *compile‑time specialization*.
+- **Interfaces** describe *runtime object shapes* and enable *dynamic dispatch*.
+
+Traits are *not* types; interfaces *are* types.  
+Both systems integrate cleanly with Drift’s ownership, RAII, and borrowing rules.
+
+---
+
+# 15.1 Interface Definitions
+
+Interfaces define a set of functions callable on any implementing type.
+
+```drift
+interface OutputStream {
+    fn write(self: ref OutputStream, bytes: Bytes) returns Void
+    fn writeln(self: ref OutputStream, text: String) returns Void
+    fn flush(self: ref OutputStream) returns Void
+}
+```
+
+### Rules
+
+- Interfaces may not define fields — pure behavior only.
+- Interfaces are **first‑class types** (unlike traits).
+- A function that receives an `OutputStream` may be passed any object that implements that interface.
+
+---
+
+# 15.2 Implementing Interfaces
+
+A concrete type implements an interface through an `implement` block:
+
+```drift
+struct File {
+    fd: Int64
+}
+
+implement OutputStream for File {
+    fn write(self: ref File, bytes: Bytes) returns Void {
+        sys_write(self.fd, bytes)
+    }
+
+    fn writeln(self: ref File, text: String) returns Void {
+        self.write((text + "\n").to_bytes())
+    }
+
+    fn flush(self: ref File) returns Void {
+        sys_flush(self.fd)
+    }
+}
+```
+
+Rules:
+
+1. All interface functions must be provided.
+2. Methods receive a reference to the **concrete type** (`ref File`), not the interface.
+3. A type may implement multiple interfaces.
+4. Implementations may appear in any module.
+
+---
+
+# 15.3 Using Interface Values
+
+Interfaces may be used anywhere that types may appear.
+
+### As parameters
+
+```drift
+fn write_header(out: OutputStream) returns Void {
+    out.writeln("=== header ===")
+}
+```
+
+### As return values
+
+```drift
+fn open_log(path: String) returns OutputStream {
+    var f = File.open(path)
+    return f      // implicit upcast: File → OutputStream
+}
+```
+
+### As locals
+
+```drift
+var out: OutputStream = std.console.out
+out.writeln("ready")
+```
+
+### In heterogeneous arrays
+
+```drift
+var sinks: Array<OutputStream> = []
+sinks.push(open_log("app.log"))
+sinks.push(std.console.out)
+```
+
+Each element may be a different type implementing the same interface.
+
+---
+
+# 15.4 Dynamic Dispatch Semantics
+
+A value of interface type is represented as a **fat pointer**, containing:
+
+1. A pointer to the concrete object.
+2. A pointer to the interface’s vtable for that concrete type.
+
+When calling:
+
+```drift
+out.write(buf)
+```
+
+the compiler emits:
+
+- load vtable for OutputStream
+- resolve the `write` slot
+- indirect call to the concrete implementation
+
+This ensures fully dynamic runtime dispatch with minimal overhead.
+
+---
+
+# 15.5 Interfaces vs Traits
+
+Characteristic | **Trait** | **Interface**
+---------------|-----------|-------------
+Purpose | static capability | dynamic behavior
+Type? | **No** | **Yes**
+Dispatch | static (zero cost) | dynamic (vtable)
+Heterogeneous containers | impossible | supported
+Retroactive extension | always | always
+Requires `Self`? | yes | no
+Use in generics | required (`T is Trait`) | invalid (`T is Interface`)
+
+Traits = static logic  
+Interfaces = runtime logic  
+The two systems are orthogonal by design.
+
+---
+
+# 15.6 Shape Example
+
+### Define the interface
+
+```drift
+interface Shape {
+    fn area(self: ref Shape) returns Float64
+}
+```
+
+### Implementations
+
+```drift
+struct Circle { radius: Float64 }
+struct Rect   { w: Float64, h: Float64 }
+
+implement Shape for Circle {
+    fn area(self: ref Circle) returns Float64 {
+        return 3.14159265 * self.radius * self.radius
+    }
+}
+
+implement Shape for Rect {
+    fn area(self: ref Rect) returns Float64 {
+        return self.w * self.h
+    }
+}
+```
+
+### Usage
+
+```drift
+fn total_area(shapes: Array<Shape>) returns Float64 {
+    var acc: Float64 = 0.0
+    var i = 0
+    while i < shapes.len() {
+        acc = acc + shapes[i].area()
+        i = i + 1
+    }
+    return acc
+}
+```
+
+Heterogeneous containers work naturally:
+
+```drift
+var all: Array<Shape> = []
+all.push(Circle(radius = 4.0))
+all.push(Rect(w = 3.0, h = 5.0))
+```
+
+---
+
+# 15.7 Ownership & RAII for Interface Values
+
+Interface values follow Drift ownership and move semantics.
+
+### Moving
+
+```drift
+fn consume(out: OutputStream) returns Void {
+    out.writeln("consumed")
+}
+```
+
+Passing `out` moves the *interface wrapper* and transfers ownership of the underlying concrete value.
+
+### Destruction
+
+At scope exit:
+
+- If underlying type implements `Destructible`, its `destroy(self)` runs.
+- Otherwise, nothing is done.
+
+```drift
+{
+    var log = open_log("a.log")    // OutputStream
+    log.writeln("start")
+}   // log.destroy() runs if File is Destructible
+```
+
+No double‑destroy is possible because `destroy(self)` consumes the value.
+
+---
+
+# 15.8 Multiple Interfaces
+
+A type may implement several interfaces:
+
+```drift
+interface Readable  { fn read(self: ref Readable) returns Bytes }
+interface Writable  { fn write(self: ref Writable, b: Bytes) returns Void }
+interface Duplex    { fn close(self: ref Duplex) returns Void }
+
+struct Stream { ... }
+
+implement Readable for Stream { ... }
+implement Writable for Stream { ... }
+implement Duplex   for Stream { ... }
+```
+
+Each interface gets its own vtable.  
+There is no conflict unless the implementing type violates signature constraints.
+
+---
+
+# 15.9 Interfaces + Traits Together
+
+These systems complement each other:
+
+```drift
+trait Debuggable { fn fmt(self) returns String }
+
+interface DebugSink {
+    fn write_debug(self: ref DebugSink, msg: String) returns Void
+}
+
+fn log_value<T>
+    require T is Debuggable
+(val: T, sink: DebugSink) returns Void {
+    sink.write_debug(val.fmt())
+}
+```
+
+- `T is Debuggable`: compile‑time capability  
+- `sink: DebugSink`: runtime dynamic behavior  
+
+This pattern is central to building logging, serialization, and plugin systems.
+
+---
+
+# 15.10 Error Handling Across Interfaces
+
+Interface method calls participate in normal exception propagation:
+
+```drift
+fn dump(src: InputStream, dst: OutputStream) returns Void {
+    var buf = Bytes(4096)
+    loop {
+        val n = src.read(ref buf)
+        if n == 0 { break }
+        dst.write(buf.slice(0, n))
+    }
+}
+```
+
+Thrown errors travel unchanged across interface boundaries, preserving `^`-captured context.
+
+---
+
+# 15.11 Summary
+
+Interfaces provide:
+
+- true dynamic dispatch
+- heterogeneous collections
+- seamless integration with RAII and ownership
+- retroactive modeling
+- uniform, predictable runtime behavior
+
+Traits provide:
+
+- static capabilities
+- compile‑time specialization
+- no runtime overhead
+- fine-grained constraints and guards
+
+Drift separates these two forms of polymorphism to preserve clarity, predictability, and performance.
+
+Together they form a flexible dual system:
+
+- **Traits for compile‑time adaptability**
+- **Interfaces for runtime flexibility**
+
+---
 
 ## Appendix B — Trait Grammar Notes
 
