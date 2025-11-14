@@ -82,7 +82,73 @@ PostfixExpr ::= PrimaryExpr
 
 ---
 
-### 3.3 Example — Copy vs Move
+### 3.3 Default: move-only types
+
+Every type is **move-only by default**. If you define a struct and do nothing else, the compiler will refuse to copy it; the only way to pass or assign it by value is to move with `x->`.
+
+```drift
+// Move-only by default
+struct File {
+    fd: Int
+}
+
+var f = open("log.txt")
+
+var g = f        // ❌ cannot copy move-only type; use a move
+var h = f->      // ✅ move ownership
+
+fn use_file(x: File) returns Void { ... }
+
+use_file(f)      // ❌ copy required
+use_file(f->)    // ✅ move into the call
+```
+
+This design keeps ownership explicit: you opt *out* of move-only semantics only when cheap copies are well-defined.
+
+### 3.4 Opting into copying
+
+Types that want implicit copies implement the `Copy` trait (provided by the standard library). The trait is only available when **every field is copyable**. Primitives already implement it; your structs may do the same:
+
+```drift
+trait Copy {
+    fn copy(ref self) returns Self
+}
+
+implement Copy for Int {}
+implement Copy for Bool {}
+
+struct Job { id: Int }
+implement Copy for Job {}
+
+var a = Job(id = 1)
+var b = a      // ✅ copies `a` by calling `copy`
+```
+
+Copying still respects ownership rules: `ref self` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
+
+### 3.5 Explicit deep copies (`clone`-style)
+
+If a move-only type wants to offer a deliberate, potentially expensive duplicate, it can expose an explicit method (e.g., `clone`). Assignment still will not copy—callers must opt in:
+
+```drift
+struct Buffer { data: Bytes }   // move-only
+
+implement Buffer {
+    fn clone(ref self) returns Buffer {
+        return Buffer(data = self.data.copy())
+    }
+}
+
+var b1 = Buffer(...)
+var b2 = b1.clone()   // ✅ explicit deep copy
+var b3 = b1           // ❌ still not allowed; Buffer is not `Copy`
+```
+
+This pattern distinguishes cheap, implicit copies (`Copy`) from explicit, potentially heavy duplication.
+
+---
+
+### 3.6 Example — Copy vs Move
 
 ```drift
 struct Job { id: Int }
@@ -100,7 +166,7 @@ process(j)    // ❌ error: j was moved
 
 ---
 
-### 3.4 Example — Non-copyable type
+### 3.7 Example — Non-copyable type
 
 ```drift
 struct File { /* non-copyable handle */ }
@@ -116,7 +182,7 @@ upload(f)     // ❌ cannot copy non-copyable type
 
 ---
 
-### 3.5 Example — Borrowing instead of moving
+### 3.8 Example — Borrowing instead of moving
 
 ```drift
 fn inspect(f: ref File) returns Void {
@@ -130,7 +196,7 @@ upload(f->)       // later move ownership away
 
 ---
 
-### 3.6 Example — Mut borrow vs move
+### 3.9 Example — Mut borrow vs move
 
 ```drift
 fn fill(f: ref mut File) returns Void { /* writes data */ }
@@ -144,7 +210,7 @@ Borrow lifetimes are scoped to braces; once the borrow ends, moving is allowed a
 
 ---
 
-### 3.7 Example — Move return values
+### 3.10 Example — Move return values
 
 ```drift
 fn open(name: String) returns File {
@@ -161,7 +227,7 @@ Ownership flows *out* of the function; RAII ensures destruction if not returned.
 
 ---
 
-### 3.8 Example — Composition of moves
+### 3.11 Example — Composition of moves
 
 ```drift
 fn take(a: Array<Job>) returns Void { /* consumes array */ }
@@ -176,7 +242,7 @@ take(jobs)      // ❌ jobs invalid after move
 
 ---
 
-### 3.9 Lifetime and destruction rules
+### 3.12 Lifetime and destruction rules
 - Locals are destroyed **in reverse declaration order** when a block closes.  
 - Moving (`x->`) transfers destruction responsibility to the receiver.  
 - Borrowed references are automatically invalidated at scope exit.  
