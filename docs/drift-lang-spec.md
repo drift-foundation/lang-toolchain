@@ -107,13 +107,9 @@ This design keeps ownership explicit: you opt *out* of move-only semantics only 
 
 ### 3.4 Opting into copying
 
-Types that want implicit copies implement the `Copy` trait (provided by the standard library). The trait is only available when **every field is copyable**. Primitives already implement it; your structs may do the same:
+Types that want implicit copies implement the `Copy` trait (see Section 13.3 for the trait definition). The trait is only available when **every field is copyable**. Primitives already implement it; your structs may do the same:
 
 ```drift
-trait Copy {
-    fn copy(ref self) returns Self
-}
-
 implement Copy for Int {}
 implement Copy for Bool {}
 
