@@ -817,25 +817,6 @@ Parsers may treat `TERMINATOR` exactly like a semicolon. Conversely, an explicit
 
 ---
 
-## Appendix A — Ownership Examples
-
-```drift
-struct Job { id: Int }
-
-fn process(job: Job) returns Void {
-    import std.console.out
-    out.writeln("processing job " + job.id.to_string())
-}
-
-var j = Job(id = 1)
-
-process(j)    // copy
-process(j->)  // move
-process(j)    // error: use of moved value
-```
-
----
-
 ## 12. Null Safety & Optional Values
 
 Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
@@ -2032,6 +2013,26 @@ This pattern mirrors `try/finally`: if any child throws, the scope cancels the r
 - Only a handful of `lang.thread` intrinsics underpin the model; user-facing code resides in `std.concurrent`.
 
 ---
+
+## Appendix A — Ownership Examples
+
+```drift
+struct Job { id: Int }
+
+fn process(job: Job) returns Void {
+    import std.console.out
+    out.writeln("processing job " + job.id.to_string())
+}
+
+var j = Job(id = 1)
+
+process(j)    // copy
+process(j->)  // move
+process(j)    // error: use of moved value
+```
+
+---
+
 
 ## Appendix B — Trait Grammar Notes
 
