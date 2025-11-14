@@ -1803,6 +1803,172 @@ These rules scale to arrays, strings, maps, trait objects, and future higher-lev
 
 ---
 
+## 16. Concurrency & Virtual Threads
+
+Drift offers structured, scalable concurrency via **virtual threads**: lightweight, stackful execution contexts scheduled on a pool of operating-system carrier threads. Programmers write synchronous-looking code without explicit `async`/`await`, yet the runtime multiplexes potentially millions of virtual threads.
+
+### 16.1 Virtual threads vs carrier threads
+
+| Layer | Meaning | Created by | Cost | Intended users |
+|-------|---------|------------|------|----------------|
+| Virtual thread | Drift-level lightweight thread | `std.concurrent.spawn` | Very cheap | User code |
+| Carrier thread | OS thread executing many virtual threads | Executors | Expensive | Runtime |
+
+Virtual threads borrow a carrier thread while running, but yield it whenever they perform a blocking operation (I/O, timer wait, join, etc.).
+
+### 16.2 `std.concurrent` API surface
+
+Drift’s standard concurrency module exposes ergonomic helpers:
+
+```drift
+import std.concurrent as conc
+
+val t = conc.spawn(fn() returns Int {
+    return compute_answer()
+})
+
+val ans = t.join()
+```
+
+Spawn operations return a handle whose `join()` parks the caller until completion. Joining a failed thread returns a `JoinError` encapsulating the thrown `Error`.
+
+#### 16.2.1 Custom executors
+
+Developers may target a specific executor policy:
+
+```drift
+val exec = ExecutorPolicy.builder()
+    .min_threads(4)
+    .max_threads(32)
+    .queue_limit(5000)
+    .timeout(2.seconds)
+    .on_saturation(Policy.RETURN_BUSY)
+    .build_executor()
+
+val t = conc.spawn_on(exec, fn() returns Void {
+    handle_connection()
+})
+```
+
+#### 16.2.2 Structured concurrency
+
+`conc.scope` groups spawned threads so they finish before the scope exits:
+
+```drift
+conc.scope(fn(scope: conc.Scope) returns Void {
+    val u = scope.spawn(fn() returns User { load_user(42) })
+    val d = scope.spawn(fn() returns Data { fetch_data() })
+
+    val user = u.join()
+    val data = d.join()
+
+    render(user, data)
+})
+```
+
+If any child fails, the scope cancels the remaining children and propagates the error, ensuring deterministic cleanup.
+
+### 16.3 Executors and policies
+
+Carrier threads are managed by executors configured via a fluent `ExecutorPolicy` builder:
+
+```drift
+val exec = ExecutorPolicy.builder()
+    .min_threads(2)
+    .max_threads(64)
+    .queue_limit(10000)
+    .timeout(250.millis)
+    .on_saturation(Policy.BLOCK)
+    .build_executor()
+```
+
+Policy fields:
+
+| Field | Meaning |
+|-------|---------|
+| `min_threads(N)` | Minimum carrier threads kept alive |
+| `max_threads(N)` | Maximum carrier threads allowed |
+| `queue_limit(N)` | Cap on runnable virtual threads awaiting carriers |
+| `timeout(Duration)` | Upper bound for blocking waits |
+| `on_saturation(action)` | Behavior when the queue is full (`BLOCK`, `RETURN_BUSY`, or `THROW`) |
+
+Timeouts apply uniformly to blocking ops backed by the executor.
+
+### 16.4 Blocking semantics
+
+Virtual threads behave as though they block, but the runtime parks them and frees the carrier thread:
+
+- I/O operations register interest with the reactor and park the virtual thread.
+- Timers park until their deadline elapses.
+- `join()` parks the caller until the child completes.
+- When the event loop signals readiness, the reactor unparks the waiting virtual thread onto a carrier.
+
+### 16.5 Reactors
+
+Drift ships with a shared default reactor (epoll/kqueue/IOCP depending on platform). Advanced users may supply custom reactors or inject them into executors for specialized workloads.
+
+### 16.6 Virtual thread lifecycle
+
+- Each virtual thread owns an independent call stack; RAII semantics run normally when the thread exits.
+- `join()` returns either the thread’s result or a `JoinError` capturing the propagated `Error`.
+- Parking/unparking is transparent to user code.
+- `Send`/`Sync` trait bounds govern which values may move across threads or be shared by reference.
+
+### 16.7 Intrinsics: `lang.thread`
+
+At the bottom layer the runtime exposes a minimal intrinsic surface to the standard library:
+
+```drift
+module lang.thread
+
+@intrinsic fn vt_spawn(entry: fn() returns Void, exec: ExecutorHandle)
+@intrinsic fn vt_park() returns Void
+@intrinsic fn vt_unpark(thread: VirtualThreadHandle) returns Void
+@intrinsic fn current_executor() returns ExecutorHandle
+
+@intrinsic fn register_io(fd: Int, interest: IOEvent, thread: VirtualThreadHandle)
+@intrinsic fn register_timer(when: Timestamp, thread: VirtualThreadHandle)
+```
+
+Library code such as `std.concurrent` is responsible for presenting ergonomic APIs; user programs never touch these intrinsics directly.
+
+### 16.8 Scoped virtual threads
+
+Structured scopes ensure children finish (or are cancelled) before scope exit:
+
+```drift
+conc.scope(fn(scope: conc.Scope) returns Void {
+    val a = scope.spawn(fn() returns Int { slow_calc() })
+    val b = scope.spawn(fn() returns Int { slow_calc() })
+    val c = scope.spawn(fn() returns Int { slow_calc() })
+
+    val ra = a.join()
+    val rb = b.join()
+    val rc = c.join()
+
+    out.writeln(ra + rb + rc)
+})
+```
+
+This pattern mirrors `try/finally`: if any child throws, the scope cancels the rest and rethrows after all joins complete.
+
+### 16.9 Interaction with ownership & memory
+
+- Moves between threads require `Send`; shared borrows require `Sync`.
+- Destructors run deterministically when each virtual thread ends, preserving RAII guarantees.
+- Containers backed by `RawBuffer` (`Array`, `Map`, etc.) behave identically on all threads.
+
+### 16.10 Summary
+
+- Virtual threads deliver the ergonomics of synchronous code with the scalability of event-driven runtimes.
+- Executors configure carrier thread pools, queues, and timeout policies.
+- Blocking APIs park virtual threads instead of OS threads.
+- Reactors wake parked threads when I/O or timers fire.
+- Structured concurrency scopes offer deterministic cancellation and cleanup.
+- Only a handful of `lang.thread` intrinsics underpin the model; user-facing code resides in `std.concurrent`.
+
+---
+
 ## Appendix B — Trait Grammar Notes
 
 Traits and implementations use the same `where` syntax as functions. Grammar sketch:
