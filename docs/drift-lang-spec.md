@@ -781,42 +781,6 @@ Finalizers are **optional** unless early release, explicit error handling, or sh
 
 In both cases, the file handle is safely released exactly once.
 
-## 11. Grammar (EBNF excerpt)
-
-*(Trait/`implement`/`where` grammar is summarized in Appendix B.)*
-
-
-```ebnf
-Program     ::= ImportDecl* TopDecl*
-ImportDecl  ::= "import" ImportItem ("," ImportItem)* NEWLINE
-ImportItem  ::= ModulePath ("as" Ident)?
-ModulePath  ::= Ident ("." Ident)*
-
-TopDecl     ::= FnDef | TypeDef | StructDef | EnumDef
-
-FnDef       ::= "fn" Ident "(" Params? ")" (":" Type)? Block
-Params      ::= Param ("," Param)*
-Param       ::= Ident ":" Ty | "^" Ident ":" Ty
-
-Block       ::= "{" Stmt* "}"
-Stmt        ::= ValDecl | VarDecl | ExprStmt | IfStmt | WhileStmt | ForStmt
-              | ReturnStmt | BreakStmt | ContinueStmt | TryStmt | ThrowStmt
-
-ValDecl     ::= "val" Ident ":" Ty "=" Expr NEWLINE
-VarDecl     ::= "var" Ident ":" Ty "=" Expr NEWLINE
-ExprStmt    ::= Expr NEWLINE
-```
-
-**Terminators and newlines.** The lexer emits a `TERMINATOR` whenever it encounters a newline (`\n`) and *all* of the following hold:
-
-1. The current parenthesis/brace/bracket depth is zero (i.e., we are not inside `()`, `[]`, or `{}`).
-2. The previous token is “terminable” — identifiers, literals, `)`, `]`, `}`, `return`, `break`, etc.
-3. The previous token is **not** a binary operator (`+`, `*`, `>>`, ...), dot, comma, or colon that requires a follower.
-
-Parsers may treat `TERMINATOR` exactly like a semicolon. Conversely, an explicit `;` is legal anywhere a `TERMINATOR` could appear, which allows compact one-liners or multi-statement lines when desired. This rule keeps Drift source tidy without forcing mandatory semicolons.
-
----
-
 ## 12. Null Safety & Optional Values
 
 Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
@@ -2034,7 +1998,44 @@ process(j)    // error: use of moved value
 ---
 
 
-## Appendix B — Trait Grammar Notes
+## Appendix B — Grammar (EBNF excerpt)
+
+*(Trait/`implement`/`where` grammar is summarized in Appendix C.)*
+
+
+```ebnf
+Program     ::= ImportDecl* TopDecl*
+ImportDecl  ::= "import" ImportItem ("," ImportItem)* NEWLINE
+ImportItem  ::= ModulePath ("as" Ident)?
+ModulePath  ::= Ident ("." Ident)*
+
+TopDecl     ::= FnDef | TypeDef | StructDef | EnumDef
+
+FnDef       ::= "fn" Ident "(" Params? ")" (":" Type)? Block
+Params      ::= Param ("," Param)*
+Param       ::= Ident ":" Ty | "^" Ident ":" Ty
+
+Block       ::= "{" Stmt* "}"
+Stmt        ::= ValDecl | VarDecl | ExprStmt | IfStmt | WhileStmt | ForStmt
+              | ReturnStmt | BreakStmt | ContinueStmt | TryStmt | ThrowStmt
+
+ValDecl     ::= "val" Ident ":" Ty "=" Expr NEWLINE
+VarDecl     ::= "var" Ident ":" Ty "=" Expr NEWLINE
+ExprStmt    ::= Expr NEWLINE
+```
+
+**Terminators and newlines.** The lexer emits a `TERMINATOR` whenever it encounters a newline (`\n`) and *all* of the following hold:
+
+1. The current parenthesis/brace/bracket depth is zero (i.e., we are not inside `()`, `[]`, or `{}`).
+2. The previous token is “terminable” — identifiers, literals, `)`, `]`, `}`, `return`, `break`, etc.
+3. The previous token is **not** a binary operator (`+`, `*`, `>>`, ...), dot, comma, or colon that requires a follower.
+
+Parsers may treat `TERMINATOR` exactly like a semicolon. Conversely, an explicit `;` is legal anywhere a `TERMINATOR` could appear, which allows compact one-liners or multi-statement lines when desired. This rule keeps Drift source tidy without forcing mandatory semicolons.
+
+---
+
+
+## Appendix C — Trait Grammar Notes
 
 Traits and implementations use the same `where` syntax as functions. Grammar sketch:
 
