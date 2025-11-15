@@ -1271,7 +1271,28 @@ require T is Clonable and not Destructible
 
 ---
 
-### 13.12. Design Rationale
+### 13.13. Thread-Safety Marker Traits (`Send`, `Sync`)
+
+Certain libraries (notably `std.concurrent`) rely on two marker traits that express thread-safety:
+
+- **`Send`** — values of a type implementing `Send` may be moved from one thread to another.
+- **`Sync`** — shared references (`ref T`) to a type implementing `Sync` may be shared across threads simultaneously.
+
+All primitives and standard library containers implement these traits when safe.
+
+```drift
+trait Send { }
+trait Sync { }
+```
+
+Implementing `Send` means a value may be moved to another thread. Implementing `Sync` means shared references may be used concurrently. A struct may opt into `Send` if all of its fields are `Send`; similarly for `Sync`. Types that manage thread-affine resources (e.g., OS handles that must stay on one thread) simply omit these traits and remain single-threaded.
+
+The concurrency chapter (Section 16.6) references these bounds when describing virtual-thread movement and sharing.
+
+---
+
+
+### 13.14. Design Rationale
 
 Traits are designed to:
 
