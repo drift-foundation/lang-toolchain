@@ -1,6 +1,4 @@
 # Drift Language Specification
-### Revision 2025-11 (Rev 4) — Ownership, Mutability, Exceptions, and Deterministic Resource Management
-
 ---
 
 ## 1. Overview
