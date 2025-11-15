@@ -9,6 +9,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - **Zero-cost abstractions** – traits, interfaces, and concurrency compile down to what you’d hand-write.
 - **Virtual-thread concurrency** – synchronous-looking code scales via lightweight threads and structured scopes.
 - **Interop without foot-guns** – precise binary layouts and opaque ABI handles keep FFI predictable.
+- **Signed modules** – compiled modules are cryptographically signed so imports can be verified everywhere.
 
 📖 **Full specification:** [docs/drift-lang-spec.md](docs/drift-lang-spec.md)
 

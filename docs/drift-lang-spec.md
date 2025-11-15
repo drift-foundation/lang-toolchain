@@ -55,6 +55,10 @@ Write clear code first. When you profile a hotspot, the language gives you the t
 
 Drift emphasizes predictability, clarity, and strong guarantees so humans can reason about programs—and so tooling can help without guesswork.
 
+### 1.10 Signed modules and portable distribution
+
+All modules compile down to a canonical Drift Module IR (DMIR) that can be cryptographically signed and shipped as a Drift Module Package (DMP). Imports are verified before execution, so every machine sees the same typed semantics and can reject tampered artifacts.
+
 ---
 
 ## 2. Variable and reference qualifiers
@@ -2149,6 +2153,89 @@ fn transmit(bytes: Array<U8>) returns Int32 {
 ---
 
 ---
+
+## 18. Signed modules and DMIR
+
+Drift distributes code as **digitally signed module packages (DMPs)** built around a canonical, target-independent representation called **DMIR** (Drift Module Intermediate Representation). Signing DMIR rather than backend objects guarantees that every user receives the same typed semantics, regardless of platform or compiler optimizations.
+
+### 18.1 Position in the pipeline
+
+```
+source → AST → HIR → DMIR (canonical) → [sign] → MIR/backend → object/JIT
+```
+
+DMIR is the authoritative checkpoint. Later transformations (optimizations, codegen) do not affect the signature.
+
+### 18.2 Canonical DMIR contents
+
+DMIR stores the typed, desugared module with all names resolved:
+
+- Top-level declarations (functions, structs, interfaces, traits, constants).
+- Canonical function bodies (control flow normalized, metadata stripped).
+- Canonical literal encodings (UTF-8 strings, LEB128 integers, IEEE-754 floats).
+- Deterministic ordering by fully-qualified name.
+- No timestamps, file paths, environment data, or formatting trivia.
+
+Each DMIR block carries an independent version number (`dmir_version`).
+
+### 18.3 Module package layout
+
+```
++------------------+
+| HEADER           |
++------------------+
+| METADATA         |  ← signed
++------------------+
+| DMIR             |  ← signed
++------------------+
+| SIGNATURE_BLOCK  |  ← not signed
++------------------+
+| OPTIONAL_SOURCE  |  ← not signed
++------------------+
+```
+
+- **Header**: magic (`"DRIFTDMP"`), format version, offsets/sizes for each section.
+- **Metadata**: deterministic map (name, version, dependency digests, minimum compiler). Encoded with canonical key ordering.
+- **DMIR**: list of canonical items `{kind, fully-qualified name, canonical body}`.
+- **Signature block**: one or more signature entries (e.g., Ed25519). The signature covers `HEADER .. DMIR`.
+- **Optional source**: raw UTF-8 source for auditing; not part of verification.
+
+### 18.4 Signatures and verification
+
+1. Compute `payload = bytes[header_start .. dmir_end]`.
+2. Hash with SHA-256.
+3. Verify at least one signature in the signature block against the trusted key store.
+4. If a dependency manifest pins a digest or signer, those must match.
+5. Reject if `dmir_version` is unsupported.
+
+Keys live in a simple TOML trust store:
+
+```toml
+[[trusted_keys]]
+id   = "drift-stdlib"
+algo = "ed25519"
+pub  = "base64..."
+```
+
+Projects may additionally pin dependency digests or require specific signers.
+
+### 18.5 Security properties
+
+- Repository compromises cannot forge modules without the private key.
+- Canonicalization ensures reproducible builds and stable signatures.
+- DMIR versioning decouples language evolution from compiler releases.
+- Optional source does not influence verification, so audits cannot poison signatures.
+
+### 18.6 Future extensions
+
+Potential enhancements include transparency logs, certificate-based hierarchies, revocation lists, and dual-signature modes.
+
+Signed DMIR gives Drift a portable, semantically precise unit of distribution while keeping authenticity verifiable on every machine.
+
+*Note:* The exact signing/verification scheme (PGP vs Ed25519, cert hierarchies, revocation policies) is still under design and will be finalized before the DMP format is stabilized. The structure here captures intent; cryptographic options may evolve.
+
+---
+
 
 ## Appendix A — Ownership Examples
 
