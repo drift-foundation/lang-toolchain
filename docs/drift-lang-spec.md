@@ -3,27 +3,57 @@
 
 ## 1. Overview
 
-**Drift** is a statically typed, compiled systems language designed for clarity, safety, and mechanical predictability.  
-It merges **C++ ownership semantics** (RAII, deterministic destruction, const-correctness) with the **type safety and borrowing model of Rust**, within a concise, modern syntax.
+Drift is a modern systems language built on a simple premise: programming should be pleasant, expressive, and safe by default — without giving up the ability to write efficient, low-level code when you actually need it.
 
-This specification defines the **core semantics, syntax, and safety model** of the Drift programming language.  
-It describes how values are owned, borrowed, and destroyed; how exceptions propagate structured diagnostic data; and how deterministic resource management (RAII) interacts with the type system and scoping rules.  
-Drift provides predictable lifetimes, explicit control of mutability and ownership, and strong compile-time guarantees — all without a garbage collector.
+Most languages pick a side:
 
-**Focus areas:**
-- **Deterministic ownership & move semantics (`x->`)**
-- **Explicit mutability (`mut`, `ref`, `ref mut`)**
-- **Structured exceptions with contextual capture (`^`)**
-- **Memory-safe access primitives (`Volatile`, `Mutable`)**
-- **Imports and system I/O (`import sys.console.out`)**
-- **C-family block syntax with predictable scopes and lifetimes**
-- **Generic arrays via `lang.array.Array<T>` with literal syntax `[a, b, ...]`**
+- High-level and ergonomic, but slow when you push the limits.
+- Low-level and risky, but fast if you fight the compiler hard enough.
 
-**Struct design at a glance:**
-- Drift exposes only `struct` for user-defined data; no record/class split.
-- Tuple-struct header sugar: `struct Point(x: Int64, y: Int64)` — compact syntax with named fields.
-- Anonymous tuple types: `(T1, T2, ...)` for ad-hoc, methodless bundles.
-- Dot access always applies, even for tuple-struct sugar.
+Drift rejects that binary. You get a single language that works across the entire performance spectrum.
+
+### 1.1 Safety first, without sacrificing power
+
+Drift avoids the foot-guns that plague many systems languages:
+
+- No raw pointers in userland.
+- No pointer arithmetic.
+- Clear ownership and deterministic destruction (RAII).
+- Explicit moves instead of silent copies.
+
+Yet it doesn’t enforce safety by making everything slow or hiding costs behind a garbage collector.
+
+### 1.2 Escape hatches when you ask for them
+
+High-level code stays high-level by default. Low-level control appears only when you deliberately reach for the tooling (`lang.abi`, `lang.internals`, `@unsafe`).
+
+### 1.3 Move semantics everywhere
+
+Passing a value by value moves it—no deep copies unless you opt in. Moves are cheap; cloning is explicit.
+
+### 1.4 Zero-cost abstractions
+
+Drift’s abstractions compile down to what you would hand-write. Ownership, traits, interfaces, and concurrency are “pay for what you use.”
+
+### 1.5 Ready out of the box, no hidden machinery
+
+The language ships meaningful tools (structured errors, virtual threads, collection literals) without magic or implicit globals. Everything is imported explicitly.
+
+### 1.6 Predictable interop
+
+Precise binary layouts, opaque ABI types, and sealed unsafe modules keep foreign calls predictable without exposing raw pointers.
+
+### 1.7 Representation transparency only when requested
+
+Everyday Drift code treats core types as opaque. When you need to see the layout, you opt in via `extern "C"` or `lang.abi` helpers.
+
+### 1.8 Performance without fear
+
+Write clear code first. When you profile a hotspot, the language gives you the tools to optimize surgically without rewriting everything in C.
+
+### 1.9 A language for both humans and machines
+
+Drift emphasizes predictability, clarity, and strong guarantees so humans can reason about programs—and so tooling can help without guesswork.
 
 ---
 

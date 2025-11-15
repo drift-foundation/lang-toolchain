@@ -1,12 +1,14 @@
 # Drift
 
-<img src="assets/drift-dark.png" alt="Drift" width="240" align="right" />
+<img src="assets/drift.svg" alt="Drift" width="240" align="right" />
 
 Drift is a systems programming language focused on deterministic resource management, explicit ownership, and ergonomic concurrency. It combines C++-style RAII with Rust-like borrowing rules, while keeping the syntax compact and readable.
 
-- **Predictable lifetimes** – values are dropped exactly once; `val` and `var` communicate ownership.
-- **No hidden runtime** – everything is explicit: imports, errors, effects, memory.
+- **Safety-first design** – deterministic ownership, explicit moves, and no raw pointers in userland.
+- **Escape hatches on demand** – you opt into `lang.abi` / `@unsafe` only when you really need low-level control.
+- **Zero-cost abstractions** – traits, interfaces, and concurrency compile down to what you’d hand-write.
 - **Virtual-thread concurrency** – synchronous-looking code scales via lightweight threads and structured scopes.
+- **Interop without foot-guns** – precise binary layouts and opaque ABI handles keep FFI predictable.
 
 📖 **Full specification:** [docs/drift-lang-spec.md](docs/drift-lang-spec.md)
 
