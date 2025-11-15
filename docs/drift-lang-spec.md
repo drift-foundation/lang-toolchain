@@ -2156,7 +2156,11 @@ fn transmit(bytes: Array<U8>) returns Int32 {
 
 ## 18. Signed modules and DMIR
 
-Drift distributes code as **digitally signed module packages (DMPs)** built around a canonical, target-independent representation called **DMIR** (Drift Module Intermediate Representation). Signing DMIR rather than backend objects guarantees that every user receives the same typed semantics, regardless of platform or compiler optimizations.
+Drift distributes code as **digitally signed module packages (DMPs)** built around a canonical, target-independent representation called **DMIR** (Drift Module Intermediate Representation). Signing DMIR rather than backend objects guarantees that every user receives the same typed semantics, regardless of platform or compiler optimizations. This matters because:
+
+- modules often travel through untrusted mirrors, caches, or registries; signatures ensure they weren’t tampered with en route.
+- reproducible canonical IR decouples semantic identity from backend artifacts, so verification survives compiler/platform differences.
+- dependency manifests can pin digests/signers to prevent supply-chain attacks.
 
 ### 18.1 Position in the pipeline
 
