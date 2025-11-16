@@ -682,65 +682,190 @@ Variants follow Drift’s value semantics: they are copied/moved by value, and t
 Variants underpin key library types such as `Result<T, E>` and `Option<T>`, enabling safe, expressive modeling of operations with multiple outcomes.
 
 
-## 9. Exceptions and context capture
+## 9. Exceptions and error context
 
-Drift provides structured exception handling through a unified `Error` type and the `^` capture modifier.  
-This enables precise contextual diagnostics without boilerplate logging or manual tracing.
+Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
+Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
 
-### 9.1 Exception model
+### 9.1 Goals
+Drift’s exception system is designed to:
 
-All exceptions share a single type:
+- Use **one concrete error type** (`Error`) for all thrown failures.
+- Represent failures as **event names plus arguments**, not free-form text.
+- Capture **call-site context** (locals per frame + backtrace) automatically.
+- Preserve a **precise, frozen ABI layout** so exceptions can propagate across Drift modules and plugins.
+- Fit cleanly over a conceptual `Result<T, Error>` model for internal lowering and ABI design.
+- Respect **move semantics**: `Error` is move-only and is always transferred with `e->`.
+
+---
+
+### 9.2 Error type and layout
 
 ```drift
 struct Error {
-    message: String,
-    code: String,
-    cause: Option<Error>,
+    event: String,
+    args: Map<String, String>,
     ctx_frames: Array<CtxFrame>,
-    stack: Backtrace
+    stack: BacktraceHandle
 }
 ```
 
-Each function frame can contribute contextual data via the `^` capture syntax. If you omit the `as "alias"` clause, the compiler derives a key from the enclosing scope (e.g., `parse_date.input`). Duplicate keys inside the same lexical scope are rejected at compile time (`E3510`).
+#### 9.2.1 event
+Event name of the exception (`"BadArgument"`).
 
-### 9.2 Capturing local context
+#### 9.2.2 args
+Only event arguments, stringified via `Display.to_string()`.
+
+#### 9.2.3 ctx_frames
+Per-frame captured locals:
 
 ```drift
-val ^input: String as "record.field" = msg["startDate"]
-fn parse_date(s: String) returns Date {
-    if !is_iso_date(s) {
-        throw Error("invalid date", code="parse.date.invalid")
-    }
-    return decode_iso(s)
+struct CtxFrame {
+    fn_name: String,
+    locals: Map<String, String>
 }
 ```
 
-Captured context frames appear in order from the throw site outward, e.g.:
+Event args never appear here.
+
+#### 9.2.4 stack
+Opaque captured backtrace.
+
+---
+
+### 9.3 Exception events
+
+#### 9.3.1 Declaring events
+```drift
+exception InvalidOrder(order_id: Int64, code: String)
+exception Timeout(operation: String, millis: Int64)
+```
+
+Each parameter type must implement `Display`.
+
+#### 9.3.2 Throwing
+```drift
+throw InvalidOrder(order_id = order.id, code = "order.invalid")
+```
+
+Runtime builds an `Error` with:
+- event name
+- args (stringified)
+- empty ctx_frames (filled during unwind)
+- backtrace
+
+#### 9.3.3 Display requirement
+Each exception argument type must implement:
+
+```drift
+trait Display {
+    fn to_string(self) returns String
+}
+```
+
+---
+
+### 9.4 Capturing local context with ^
+
+Locals can be captured:
+
+```drift
+val ^input: String as "record.field" = s
+```
+
+A frame is added when unwinding past the function:
 
 ```json
 {
-  "error": "invalid date",
-  "ctx_frames": [
-    { "fn": "parse_date", "data": { "record.field": "2025-13-40" } },
-    { "fn": "ingest_record", "data": { "record.id": "abc-123" } }
-  ]
+  "fn_name": "parse_date",
+  "locals": { "record.field": "2025-13-40" }
 }
 ```
 
-### 9.3 Runtime behavior
-
-- Each captured variable (`^x`) adds its name and optional alias to the current frame context.
-- Context maps are stacked per function frame.
-- The runtime merges and serializes this information into the `Error` object when unwinding.
-
-### 9.4 Design goals
-
-- **Automatic context:** No need for explicit `try/catch` scaffolding.
-- **Deterministic structure:** The captured state is reproducible and bounded.
-- **Safe preview:** Large or sensitive values can be truncated or redacted.
-- **Human-readable JSON form:** Ideal for logs, telemetry, or debugging.
+Rules:
+- Only `^`-annotated locals captured.
+- Values must implement `Display`.
+- Capture happens once per frame.
 
 ---
+
+### 9.5 Throwing, catching, rethrowing
+
+`Error` is move-only.
+
+#### 9.5.1 Catch by event
+```drift
+try {
+    ship(order)
+} catch InvalidOrder(e) {
+    log(ref e)
+}
+```
+
+Matches by `error.event`.
+
+#### 9.5.2 Catch-all + rethrow
+```drift
+catch e {
+    log(ref e)
+    throw e->
+}
+```
+
+Ownership moves back to unwinder.
+
+---
+
+### 9.6 Internal Result<T, Error> semantics
+
+Conceptual form:
+
+```drift
+variant Result<T, E> {
+    Ok(value: T)
+    Err(error: E)
+}
+```
+
+Every function behaves as if returning `Result<T, Error>`; ABI lowers accordingly.
+
+---
+
+### 9.7 Drift–Drift propagation (plugins)
+
+Unwinding is allowed across Drift modules/plugins as long as:
+- The `Error` layout is identical.
+- Same runtime/unwinder is used.
+
+Event name + args + ctx_frames + stack fully capture portable state.
+
+---
+
+### 9.8 Logging and serialization
+JSON example:
+
+```json
+{
+  "event": "InvalidOrder",
+  "args": { "order_id": "42", "code": "order.invalid" },
+  "ctx_frames": [
+    { "fn_name": "ship", "locals": { "record.id": "42" }},
+    { "fn_name": "ingest_order", "locals": { "batch": "B1" }}
+  ],
+  "stack": "opaque"
+}
+```
+
+---
+
+### 9.9 Summary
+
+- Single `Error` type.
+- Event-based exceptions.
+- Arguments + captured locals normalized to strings.
+- Move-only errors with deterministic ownership.
+- Precisely defined layout for plugin-safe unwinding.
+- Semantically equivalent to `Result<T, Error>` internally.
 
 ## 10. Mutators, transformers, and finalizers
 
