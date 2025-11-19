@@ -1,5 +1,7 @@
+exception Boom(code: String)
+
 fn fail() returns Void {
-    throw error("boom", code="ENOENT")
+    throw Boom(code = "ENOENT")
 }
 
 fn main() returns Void {
