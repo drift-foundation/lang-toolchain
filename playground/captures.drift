@@ -3,16 +3,16 @@ import sys.console.out
 exception InvalidPayload(payload: String)
 
 fn ingest(line: String) returns Void {
-    val ^raw: String as "ingest.payload" = line
+	val ^raw: String as "ingest.payload" = line
 
-    if line == "" {
-        throw InvalidPayload(payload = line)
-    }
+	if line == "" {
+		throw InvalidPayload(payload = line)
+	}
 
-    out.writeln("accepted: " + line)
+	out.writeln("accepted: " + line)
 }
 
 fn main() returns Void {
-    ingest("alpha")
-    ingest("")
+	ingest("alpha")
+	ingest("")
 }

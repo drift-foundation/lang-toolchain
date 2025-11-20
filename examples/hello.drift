@@ -1,6 +1,6 @@
 import sys.console.out
 
 fn main() returns Void {
-    val greeting: String = "hello"
-    out.writeln(greeting + ", drift")
+	val greeting: String = "hello"
+	out.writeln(greeting + ", drift")
 }

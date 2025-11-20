@@ -1,16 +1,16 @@
 import sys.console.out
 
 fn greet(name: String) returns String {
-    return "hi " + name
+	return "hi " + name
 }
 
 fn call_twice(name: String) returns String {
-    val first: String = greet(name)
-    val second: String = greet("Drift")
-    return first + " & " + second
+	val first: String = greet(name)
+	val second: String = greet("Drift")
+	return first + " & " + second
 }
 
 fn main() returns Void {
-    val message: String = call_twice("Ada")
-    out.writeln(message)
+	val message: String = call_twice("Ada")
+	out.writeln(message)
 }

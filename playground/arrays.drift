@@ -1,17 +1,17 @@
 import sys.console.out
 
 fn main() returns Void {
-    val nums = [1, 2, 3]
-    val names = ["Bob", "Alice"]
+	val nums = [1, 2, 3]
+	val names = ["Bob", "Alice"]
 
-    val explicit_scores: Array<Int64> = [10, 20, 30]
+	val explicit_scores: Array<Int64> = [10, 20, 30]
 
-    val first = nums[0]
+	val first = nums[0]
 
-    var mutable_values: Array<Int64> = [5, 10, 15]
-    mutable_values[1] = 42
+	var mutable_values: Array<Int64> = [5, 10, 15]
+	mutable_values[1] = 42
 
-    out.writeln("inferred arrays ready")
-    out.writeln("explicit array ready")
-    out.writeln("indexing works (first=" + first.to_string() + ")")
+	out.writeln("inferred arrays ready")
+	out.writeln("explicit array ready")
+	out.writeln("indexing works (first=" + first.to_string() + ")")
 }

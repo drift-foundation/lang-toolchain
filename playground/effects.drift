@@ -1,9 +1,9 @@
 exception Boom(code: String)
 
 fn fail() returns Void {
-    throw Boom(code = "ENOENT")
+	throw Boom(code = "ENOENT")
 }
 
 fn main() returns Void {
-    fail()
+	fail()
 }

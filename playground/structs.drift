@@ -1,22 +1,22 @@
 import sys.console.out
 
 struct Point {
-    x: Int64,
-    y: Int64
+	x: Int64,
+	y: Int64
 }
 
 fn translate(p: Point, dx: Int64, dy: Int64) returns Point {
-    return Point(x = p.x + dx, y = p.y + dy)
+	return Point(x = p.x + dx, y = p.y + dy)
 }
 
 fn describe(p: Point) returns String {
-    return "Point(" + p.x.to_string() + ", " + p.y.to_string() + ")"
+	return "Point(" + p.x.to_string() + ", " + p.y.to_string() + ")"
 }
 
 fn main() returns Void {
-    val origin: Point = Point(x = 0, y = 0)
-    val moved: Point = translate(origin, 5, 3)
+	val origin: Point = Point(x = 0, y = 0)
+	val moved: Point = translate(origin, 5, 3)
 
-    out.writeln(describe(origin))
-    out.writeln(describe(moved))
+	out.writeln(describe(origin))
+	out.writeln(describe(moved))
 }
