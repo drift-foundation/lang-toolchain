@@ -14,19 +14,27 @@ from lang import parser
 
 
 def main() -> int:
-    files = sorted(Path("playground").glob("*.drift"))
-    if not files:
-        print("no playground files found", file=sys.stderr)
-        return 1
-
+    roots = sys.argv[1:] or ["playground"]
     failed = False
-    for path in files:
-        try:
-            parser.parse_program(path.read_text())
-            print(f"[ok] {path}")
-        except UnexpectedInput as exc:
-            failed = True
-            print(f"[parse error] {path}: {exc}", file=sys.stderr)
+    any_files = False
+
+    for root in roots:
+        files = sorted(Path(root).glob("*.drift"))
+        if not files:
+            print(f"[warn] no .drift files under {root}", file=sys.stderr)
+            continue
+        any_files = True
+        for path in files:
+            try:
+                parser.parse_program(path.read_text())
+                print(f"[ok] {path}")
+            except UnexpectedInput as exc:
+                failed = True
+                print(f"[parse error] {path}: {exc}", file=sys.stderr)
+
+    if not any_files:
+        print("no drift files found in provided roots", file=sys.stderr)
+        return 1
 
     return 1 if failed else 0
 
