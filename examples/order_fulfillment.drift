@@ -3,29 +3,29 @@ import sys.console.out
 exception InvalidOrder(order_id: Int64, code: String)
 
 struct Order {
-	id: Int64,
-	sku: String,
-	quantity: Int64
+    id: Int64,
+    sku: String,
+    quantity: Int64
 }
 
 fn verify(order: Order) returns Bool {
-	return order.quantity > 0 and order.sku != ""
+    return order.quantity > 0 and order.sku != ""
 }
 
 fn ship(order: Order) returns Void {
-	out.writeln("debug-start")
-	out.writeln(verify(order))
-	if verify(order) {
-		val shipping_id: String = "Trk:" + order.sku
-		val ^order_id: Int64 as "order.id" = order.id
-		out.writeln("order tracking# " + shipping_id)
-	}
-	else {
-		throw InvalidOrder(order_id = order.id, code = "order.invalid")
-	}
+    out.writeln("debug-start")
+    out.writeln(verify(order))
+    if verify(order) {
+        val shipping_id: String = "Trk:" + order.sku
+        val ^order_id: Int64 as "order.id" = order.id
+        out.writeln("order tracking# " + shipping_id)
+    }
+    else {
+        throw InvalidOrder(order_id = order.id, code = "order.invalid")
+    }
 }
 
 fn main() returns Void {
-	var order: Order = Order(id = 42, sku = "DRIFT-1", quantity = 1)
-	ship(order->)
+    var order: Order = Order(id = 42, sku = "DRIFT-1", quantity = 1)
+    ship(order->)
 }

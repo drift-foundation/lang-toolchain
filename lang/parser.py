@@ -207,7 +207,7 @@ def _build_function(tree: Tree) -> FunctionDef:
     idx += 1
     params: List[Param] = []
     if idx < len(children) and _name(children[idx]) == "params":
-        params = [_build_param(p) for p in children[idx].children]
+        params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
         idx += 1
     return_sig = children[idx]
     type_child = next(child for child in return_sig.children if isinstance(child, Tree))
