@@ -13,11 +13,14 @@ from .ast import (
     Binary,
     Block,
     Call,
+    ExceptionArg,
+    ExceptionDef,
     Expr,
     ExprStmt,
-    IfStmt,
     FunctionDef,
+    IfStmt,
     ImportStmt,
+    Index,
     KwArg,
     LetStmt,
     Literal,
@@ -26,7 +29,6 @@ from .ast import (
     Name,
     Param,
     Program,
-    Index,
     RaiseStmt,
     ReturnStmt,
     StructDef,
@@ -149,6 +151,7 @@ def _build_program(tree: Tree) -> Program:
     functions: List[FunctionDef] = []
     statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt | ImportStmt] = []
     structs: List[StructDef] = []
+    exceptions: List[ExceptionDef] = []
     for child in tree.children:
         if not isinstance(child, Tree):
             continue
@@ -157,11 +160,43 @@ def _build_program(tree: Tree) -> Program:
             functions.append(_build_function(child))
         elif kind == "struct_def":
             structs.append(_build_struct_def(child))
+        elif kind == "exception_def":
+            exceptions.append(_build_exception_def(child))
         else:
             stmt = _build_stmt(child)
             if stmt is not None:
                 statements.append(stmt)
-    return Program(functions=functions, statements=statements, structs=structs)
+    return Program(
+        functions=functions,
+        statements=statements,
+        structs=structs,
+        exceptions=exceptions,
+    )
+
+
+def _build_exception_def(tree: Tree) -> ExceptionDef:
+    loc = _loc(tree)
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    args: List[ExceptionArg] = []
+    params_node = next(
+        (child for child in tree.children if isinstance(child, Tree) and _name(child) == "exception_params"),
+        None,
+    )
+    if params_node:
+        args = [
+            _build_exception_arg(arg)
+            for arg in params_node.children
+            if isinstance(arg, Tree) and _name(arg) == "exception_param"
+        ]
+    return ExceptionDef(name=name_token.value, args=args, loc=loc)
+
+
+def _build_exception_arg(tree: Tree) -> ExceptionArg:
+    if _name(tree) != "exception_param":
+        raise ValueError("expected exception_param")
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    type_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr")
+    return ExceptionArg(name=name_token.value, type_expr=_build_type_expr(type_node))
 
 
 def _build_function(tree: Tree) -> FunctionDef:

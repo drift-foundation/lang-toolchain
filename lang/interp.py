@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Sequence
 
 from . import ast
-from .checker import CheckedProgram, StructInfo
+from .checker import CheckedProgram, StructInfo, ExceptionInfo
 from .runtime import BUILTINS, BuiltinFunction, ConsoleOut, ErrorValue, RuntimeContext
 
 
@@ -78,12 +78,14 @@ class Interpreter:
         self.program = checked.program
         self.function_infos = checked.functions
         self.struct_infos = checked.structs
+        self.exception_infos = checked.exceptions
         self.stdout = stdout or sys.stdout
         self.runtime_ctx = RuntimeContext(self.stdout)
         self.builtins = builtins or BUILTINS
         self.global_env = Environment()
         self._register_builtins()
         self._register_struct_constructors()
+        self._register_exception_constructors()
         self._install_console()
         self._register_functions()
         self._execute_block(self.program.statements, self.global_env)
@@ -100,6 +102,10 @@ class Interpreter:
     def _register_struct_constructors(self) -> None:
         for name, info in self.struct_infos.items():
             self.global_env.define(name, StructConstructor(info))
+
+    def _register_exception_constructors(self) -> None:
+        for name, info in self.exception_infos.items():
+            self.global_env.define(name, ExceptionConstructor(info))
 
     def _register_functions(self) -> None:
         for name, info in self.function_infos.items():
@@ -231,6 +237,8 @@ class Interpreter:
             return func(args, kwargs)
         if isinstance(func, StructConstructor):
             return func(args, kwargs)
+        if isinstance(func, ExceptionConstructor):
+            return func(args, kwargs)
         raise RuntimeError(f"Object {func} is not callable")
 
     def _assign(self, target: ast.Expr, value: object, env: Environment) -> None:
@@ -279,3 +287,29 @@ class StructConstructor:
                 f"Missing fields for {self.info.name}: {', '.join(missing)}"
             )
         return StructInstance(type_name=self.info.name, fields=values)
+
+
+class ExceptionConstructor:
+    def __init__(self, info: ExceptionInfo) -> None:
+        self.info = info
+
+    def __call__(self, args: Sequence[object], kwargs: Dict[str, object]) -> ErrorValue:
+        if len(args) > len(self.info.arg_order):
+            raise RuntimeError(
+                f"{self.info.name} expects {len(self.info.arg_order)} args, got {len(args)}"
+            )
+        values: Dict[str, object] = {}
+        for arg_name, value in zip(self.info.arg_order, args):
+            values[arg_name] = value
+        for key, value in kwargs.items():
+            if key not in self.info.arg_types:
+                raise RuntimeError(f"{self.info.name} has no field '{key}'")
+            if key in values:
+                raise RuntimeError(f"Argument '{key}' provided multiple times")
+            values[key] = value
+        missing = [name for name in self.info.arg_order if name not in values]
+        if missing:
+            raise RuntimeError(
+                f"Missing arguments for {self.info.name}: {', '.join(missing)}"
+            )
+        return ErrorValue(message=self.info.name, attrs=values)

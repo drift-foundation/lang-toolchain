@@ -8,8 +8,9 @@ fn ingest(line: String) returns Void {
 	if line == "" {
 		throw InvalidPayload(payload = line)
 	}
-
-	out.writeln("accepted: " + line)
+	else {
+		out.writeln("accepted: " + line)
+	}
 }
 
 fn main() returns Void {

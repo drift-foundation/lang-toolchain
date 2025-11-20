@@ -42,6 +42,7 @@ class CheckedProgram:
     functions: Dict[str, FunctionInfo]
     globals: Dict[str, VarInfo]
     structs: Dict[str, "StructInfo"]
+    exceptions: Dict[str, "ExceptionInfo"]
 
 
 @dataclass
@@ -49,6 +50,13 @@ class StructInfo:
     name: str
     field_order: List[str]
     field_types: Dict[str, Type]
+
+
+@dataclass
+class ExceptionInfo:
+    name: str
+    arg_order: List[str]
+    arg_types: Dict[str, Type]
 
 
 class CheckError(Exception):
@@ -96,8 +104,10 @@ class Checker:
             for name, sig in builtin_functions.items()
         }
         self.struct_infos: Dict[str, StructInfo] = {}
+        self.exception_infos: Dict[str, ExceptionInfo] = {}
 
     def check(self, program: ast.Program) -> CheckedProgram:
+        self._register_exceptions(program.exceptions)
         self._register_structs(program.structs)
         self._register_functions(program.functions)
         global_scope = Scope()
@@ -119,7 +129,29 @@ class Checker:
             functions=self.function_infos,
             globals=global_scope.vars.copy(),
             structs=self.struct_infos,
+            exceptions=self.exception_infos,
         )
+
+    def _register_exceptions(self, exceptions: List[ast.ExceptionDef]) -> None:
+        for exc in exceptions:
+            if exc.name in self.exception_infos:
+                raise CheckError(f"{exc.loc.line}:{exc.loc.column}: Exception '{exc.name}' already defined")
+            arg_order: List[str] = []
+            arg_types: Dict[str, Type] = {}
+            for arg in exc.args:
+                try:
+                    ty = resolve_type(arg.type_expr)
+                except TypeSystemError as exc_err:
+                    raise CheckError(f"{arg.type_expr.name}: {exc_err}") from exc_err
+                if arg.name in arg_types:
+                    raise CheckError(f"{exc.loc.line}:{exc.loc.column}: duplicate arg '{arg.name}'")
+                arg_order.append(arg.name)
+                arg_types[arg.name] = ty
+            self.exception_infos[exc.name] = ExceptionInfo(
+                name=exc.name,
+                arg_order=arg_order,
+                arg_types=arg_types,
+            )
 
     def _register_functions(self, functions: List[ast.FunctionDef]) -> None:
         for fn in functions:
@@ -305,6 +337,10 @@ class Checker:
 
     def _check_call(self, expr: ast.Call, ctx: FunctionContext) -> Type:
         callee_name = self._resolve_callee(expr.func, ctx)
+        exc_info = self.exception_infos.get(callee_name)
+        if exc_info:
+            self._check_exception_constructor(expr, exc_info, ctx)
+            return ERROR
         struct_info = self.struct_infos.get(callee_name)
         if struct_info:
             self._check_struct_constructor(expr, struct_info, ctx)
@@ -354,6 +390,36 @@ class Checker:
         if missing:
             raise CheckError(
                 f"{expr.loc.line}:{expr.loc.column}: Missing fields for '{info.name}': {', '.join(missing)}"
+            )
+
+    def _check_exception_constructor(
+        self, expr: ast.Call, info: ExceptionInfo, ctx: FunctionContext
+    ) -> None:
+        used: List[str] = []
+        if len(expr.args) > len(info.arg_order):
+            raise CheckError(
+                f"{expr.loc.line}:{expr.loc.column}: '{info.name}' expects {len(info.arg_order)} args, got {len(expr.args)}"
+            )
+        for arg_expr, arg_name in zip(expr.args, info.arg_order):
+            actual = self._check_expr(arg_expr, ctx)
+            self._expect_type(actual, info.arg_types[arg_name], arg_expr.loc)
+            used.append(arg_name)
+        for kw in expr.kwargs:
+            if kw.name not in info.arg_types:
+                raise CheckError(
+                    f"{kw.value.loc.line}:{kw.value.loc.column}: Exception '{info.name}' has no field '{kw.name}'"
+                )
+            if kw.name in used:
+                raise CheckError(
+                    f"{kw.value.loc.line}:{kw.value.loc.column}: Argument '{kw.name}' provided multiple times"
+                )
+            actual = self._check_expr(kw.value, ctx)
+            self._expect_type(actual, info.arg_types[kw.name], kw.value.loc)
+            used.append(kw.name)
+        missing = [name for name in info.arg_order if name not in used]
+        if missing:
+            raise CheckError(
+                f"{expr.loc.line}:{expr.loc.column}: Missing arguments for '{info.name}': {', '.join(missing)}"
             )
 
     def _check_binary(self, expr: ast.Binary, ctx: FunctionContext) -> Type:

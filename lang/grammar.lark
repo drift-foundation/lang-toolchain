@@ -35,6 +35,7 @@ BANG: "!"
 IF: "if"
 ELSE: "else"
 MOVE: "->"
+EXCEPTION: "exception"
 
 %ignore WS_INLINE
 
@@ -42,6 +43,7 @@ program: (item | TERMINATOR)*
 
 ?item: func_def
      | struct_def
+     | exception_def
      | stmt
 
 func_def: "fn" NAME "(" [params] ")" return_sig block
@@ -101,6 +103,10 @@ struct_field_list: struct_field (COMMA struct_field)*
 struct_field: NAME COLON type_expr
 block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
 block_field: struct_field [COMMA]
+
+exception_def: EXCEPTION NAME "(" [exception_params] ")"
+exception_params: exception_param (COMMA exception_param)*
+exception_param: NAME COLON type_expr
 
 domain_clause: "domain" NAME
 

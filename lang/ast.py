@@ -17,6 +17,19 @@ class StructDef:
     loc: "Located"
 
 
+@dataclass
+class ExceptionArg:
+    name: str
+    type_expr: "TypeExpr"
+
+
+@dataclass
+class ExceptionDef:
+    name: str
+    args: List[ExceptionArg]
+    loc: "Located"
+
+
 @dataclass(frozen=True)
 class Located:
     line: int
@@ -174,6 +187,7 @@ class Program:
     functions: List[FunctionDef]
     statements: List[Stmt]
     structs: List[StructDef]
+    exceptions: List[ExceptionDef]
 
 
 @dataclass
