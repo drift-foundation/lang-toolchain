@@ -103,11 +103,13 @@ fn main() returns Void { ... }
 
 Block comments may span multiple lines but do not nest. Comments are ignored by the parser, so indentation/terminator rules treat them as whitespace.
 
-#### Source location helper
+#### Source location helper (`lang.core`)
 
-Diagnostics frequently need to record where they were emitted. Drift exposes a standard helper:
+Diagnostics frequently need to record where they were emitted. The `lang.core` module exposes a standard helper:
 
 ```drift
+import lang.core.source_location
+
 fn source_location() returns SourceLocation
 
 struct SourceLocation {
