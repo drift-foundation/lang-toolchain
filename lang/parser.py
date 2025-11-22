@@ -35,6 +35,7 @@ from .ast import (
     StructDef,
     StructField,
     TypeExpr,
+    Ternary,
     TryExpr,
     TryStmt,
     Unary,
@@ -546,6 +547,8 @@ def _build_expr(node) -> Expr:
         return _fold_chain(node, "logic_or_tail")
     if name == "try_expr":
         return _build_try_expr(node)
+    if name == "ternary":
+        return _build_ternary(node)
     if name == "pipeline":
         return _build_pipeline(node)
     if name == "logic_and":
@@ -647,6 +650,16 @@ def _build_try_expr(tree: Tree) -> TryExpr:
     expr = _build_expr(children[0])
     fallback = _build_expr(children[1])
     return TryExpr(loc=_loc(tree), expr=expr, fallback=fallback)
+
+
+def _build_ternary(tree: Tree) -> Ternary:
+    parts = [child for child in tree.children if isinstance(child, Tree)]
+    if len(parts) != 3:
+        raise ValueError("ternary expects condition, then, else expressions")
+    cond = _build_expr(parts[0])
+    then_expr = _build_expr(parts[1])
+    else_expr = _build_expr(parts[2])
+    return Ternary(loc=_loc(tree), condition=cond, then_value=then_expr, else_value=else_expr)
 
 
 def _build_postfix(tree: Tree) -> Expr:

@@ -194,6 +194,10 @@ class Interpreter:
                 return self._eval_expr(expr.expr, env)
             except RaiseSignal:
                 return self._eval_expr(expr.fallback, env)
+        if isinstance(expr, ast.Ternary):
+            cond = bool(self._eval_expr(expr.condition, env))
+            branch = expr.then_value if cond else expr.else_value
+            return self._eval_expr(branch, env)
         if isinstance(expr, ast.Unary):
             value = self._eval_expr(expr.operand, env)
             if expr.op == "-":

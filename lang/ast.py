@@ -215,3 +215,11 @@ class TryExpr(Expr):
     loc: Located
     expr: Expr
     fallback: Expr
+
+
+@dataclass
+class Ternary(Expr):
+    loc: Located
+    condition: Expr
+    then_value: Expr
+    else_value: Expr

@@ -146,6 +146,10 @@ def _lint_expr(path: Path, expr: ast.Expr, errors: List[str]) -> None:
     elif isinstance(expr, ast.TryExpr):
         _lint_expr(path, expr.expr, errors)
         _lint_expr(path, expr.fallback, errors)
+    elif isinstance(expr, ast.Ternary):
+        _lint_expr(path, expr.condition, errors)
+        _lint_expr(path, expr.then_value, errors)
+        _lint_expr(path, expr.else_value, errors)
     elif isinstance(expr, ast.ArrayLiteral):
         for element in expr.elements:
             _lint_expr(path, element, errors)

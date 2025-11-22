@@ -323,6 +323,8 @@ class Checker:
             return self._check_index_expr(expr, ctx)
         if isinstance(expr, ast.TryExpr):
             return self._check_try_expr(expr, ctx)
+        if isinstance(expr, ast.Ternary):
+            return self._check_ternary(expr, ctx)
         if isinstance(expr, ast.Unary):
             operand_type = self._check_expr(expr.operand, ctx)
             if expr.op == "-":
@@ -341,6 +343,14 @@ class Checker:
         fallback_type = self._check_expr(expr.fallback, ctx)
         self._expect_type(fallback_type, attempt_type, expr.fallback.loc)
         return attempt_type
+
+    def _check_ternary(self, expr: ast.Ternary, ctx: FunctionContext) -> Type:
+        cond_type = self._check_expr(expr.condition, ctx)
+        self._expect_type(cond_type, BOOL, expr.condition.loc)
+        then_type = self._check_expr(expr.then_value, ctx)
+        else_type = self._check_expr(expr.else_value, ctx)
+        self._expect_type(else_type, then_type, expr.else_value.loc)
+        return then_type
 
     def _check_array_literal(self, expr: ast.ArrayLiteral, ctx: FunctionContext) -> Type:
         if not expr.elements:

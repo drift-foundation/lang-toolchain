@@ -1,0 +1,10 @@
+import sys.console.out
+
+fn main() returns Void {
+	val small = "lt"
+	val big = "ge"
+	val x = 3
+	val y = 10
+	out.writeln( (x < y) ? small : big )
+	out.writeln( (y < x) ? small : big )
+}

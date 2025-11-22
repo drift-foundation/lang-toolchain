@@ -38,6 +38,8 @@ MOVE: "->"
 EXCEPTION: "exception"
 TRY: "try"
 CATCH: "catch"
+QMARK: "?"
+TERNARY_COLON: ":"
 LINE_COMMENT: /\/\/[^\n]*/
 BLOCK_COMMENT: /\/\*([^*]|\*(?!\/))*\*\//
 
@@ -124,9 +126,11 @@ exception_param: NAME COLON type_expr
 domain_clause: "domain" NAME
 
 ?expr: try_expr
+     | ternary
      | pipeline
 
 try_expr: TRY expr ELSE expr
+ternary: pipeline QMARK expr TERNARY_COLON expr
 
 ?pipeline: logic_or (PIPE logic_or)*
 
