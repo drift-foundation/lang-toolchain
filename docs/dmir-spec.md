@@ -170,6 +170,13 @@ raise Invalid
   - Ownership: no use-after-move; `copy` only on copyable types; `drop` at most once per owned value.
   - Control flow: every block ends in `br`/`condbr`/`return`/`raise`; functions have at least one `return` or `raise` path.
 
+## MIR verifier (what it checks)
+- SSA/dominance: every use is dominated by its definition; block parameters align with incoming arguments.
+- Type correctness: instruction result types match operand types; call arg/return types match signatures; terminators target existing blocks with correct arg counts/types.
+- Ownership: track value states to catch use-after-move, copy of non-copyable types, and double-drop/move; `drop` at most once per owned value.
+- Control flow: each block has a terminator; all paths end in `return` or `raise`; no edges to missing blocks.
+- Error edges: calls’ normal/error successors are well-typed; error edges carry an `Error` value.
+
 ## Signing
 - The canonical serialized DMIR is hashed and signed.
 - Signature scope includes: DMIR version, module metadata, and full DMIR body.

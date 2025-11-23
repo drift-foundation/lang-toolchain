@@ -1,7 +1,6 @@
 # Drift TODO
 
 ## Frontend and IR
-- Build the MIR data structures
 - Implement the verifier checks (SSA dominance, types, ownership/use-after-move, drop rules, terminators).
 - Choose a serialization format. 
 - Add tests/lowering from DMIR.
