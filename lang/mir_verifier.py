@@ -175,6 +175,10 @@ def _verify_cfg(
                     raise VerificationError(
                         f"{fn.name}:{block_name}: arg {idx} type mismatch from predecessor"
                     )
+        # Ensure block params are defined before use in the block
+        for param in block.params:
+            if param.name not in defs.get(block_name, set()):
+                raise VerificationError(f"{fn.name}:{block_name}: param '{param.name}' not available at block entry")
     for block in fn.blocks.values():
         if isinstance(block.terminator, mir.Br):
             _ensure_edge(fn, block.terminator.target, block)
@@ -183,7 +187,7 @@ def _verify_cfg(
             _ensure_edge(fn, block.terminator.els, block)
 
 
-def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program | None = None) -> None:
+def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program | None = None, incoming: Dict[str, List[tuple[List[str], List[Type]]]] | None = None) -> None:
     state = State()
     for param in block.params:
         state.define(param.name)
@@ -209,8 +213,8 @@ def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program 
                 _ensure_not_moved_or_dropped(state, arg, block, "call")
             _ensure_not_defined(state, instr.dest, block, "call")
             state.define(instr.dest)
-            _ensure_edge(fn, instr.normal, block, defs={}, types={}, source_block=block.name, error=False)
-            _ensure_edge(fn, instr.error, block, defs={}, types={}, source_block=block.name, error=True)
+            _ensure_edge(fn, instr.normal, block, {}, {}, block.name, error=False)
+            _ensure_edge(fn, instr.error, block, {}, {}, block.name, error=True)
         elif isinstance(instr, mir.StructInit):
             for arg in instr.args:
                 _ensure_defined(state, arg, block, "struct_init")
@@ -263,12 +267,12 @@ def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program 
 
     term = block.terminator
     if isinstance(term, mir.Br):
-        _ensure_edge(fn, term.target, block, defs={}, types={}, source_block=block.name)
+        _ensure_edge(fn, term.target, block, {}, {}, block.name)
     elif isinstance(term, mir.CondBr):
         _ensure_defined(state, term.cond, block, "condbr", term.loc)
         _ensure_not_moved_or_dropped(state, term.cond, block, "condbr", term.loc)
-        _ensure_edge(fn, term.then, block, defs={}, types={}, source_block=block.name)
-        _ensure_edge(fn, term.els, block, defs={}, types={}, source_block=block.name)
+        _ensure_edge(fn, term.then, block, {}, {}, block.name)
+        _ensure_edge(fn, term.els, block, {}, {}, block.name)
     elif isinstance(term, mir.Return):
         if term.value is not None:
             _ensure_defined(state, term.value, block, "return", term.loc)
