@@ -160,6 +160,7 @@ raise Invalid
 ## SSA MIR terminology / conventions
 - Block labels: use a simple `bb` prefix (e.g., `bb0`, `bb_then`, `bb_err`). Block parameters are listed in parentheses and act as φ-nodes.
 - Instructions are SSA: each defines exactly one value; uses must be dominated by defs.
+- Dominance: a definition dominates a use if every path from the entry to the use goes through the definition (i.e., all paths reaching the use have seen the def).
 - Calls list both successors: `normal bbX(args)` and `error bbE(err)`.
 - Types are concrete, monomorphized; `Error` is a concrete type on error edges.
 - Ownership: `move` consumes, `copy` only for copyable types, `drop` explicit.
@@ -176,6 +177,11 @@ raise Invalid
 - Ownership: track value states to catch use-after-move, copy of non-copyable types, and double-drop/move; `drop` at most once per owned value.
 - Control flow: each block has a terminator; all paths end in `return` or `raise`; no edges to missing blocks.
 - Error edges: calls’ normal/error successors are well-typed; error edges carry an `Error` value.
+- Implementation sketch (prototype verifier):
+  - Input: a `mir.Program` built from `lang/mir.py`.
+  - Per block: mark params as defined; check instructions for def/use, move/drop state, and edge targets/arity (calls validate normal/error edges; error edges’ first param must be `Error`).
+  - Terminators: validate branch targets/args, defined conditions for `condbr`, defined values for `return`/`raise`.
+  - Output: raises `VerificationError` on invariant violations; otherwise returns `None`. (Type checks are shallow today; dominance is approximated by def-before-use within blocks.)
 
 ## Signing
 - The canonical serialized DMIR is hashed and signed.

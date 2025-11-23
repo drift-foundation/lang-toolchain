@@ -19,4 +19,8 @@
 - Added verifier expectations to the SSA MIR terminology section (SSA dominance, types, ownership, drops, terminators).
 - Added a MIR verifier checklist to the DMIR spec so readers know the invariants to enforce before optimizations/codegen.
 - Added initial MIR data structures (`lang/mir.py`) to model SSA blocks, instructions, edges, and programs; tests still pass.
+- Added a skeleton MIR verifier (`lang/mir_verifier.py`) covering SSA def/use, ownership moves/drops, edge/param arity, and basic terminator checks.
+- Clarified dominance in the SSA terminology (defs must appear on every path to their uses).
+- Documented the verifier implementation sketch (input, steps, output) in the DMIR spec.
+- Enriched MIR nodes with source locations and wired the verifier to report locations on errors.
 - Added initial MIR data structures (`lang/mir.py`) to model SSA blocks, instructions, edges, and programs; tests still pass.
