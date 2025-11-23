@@ -16,6 +16,10 @@ Drift is a systems programming language focused on deterministic resource manage
 ## References
 
 - Error handling comparison for Rustaceans: [docs/drift_vs_rust_error_handling.md](docs/drift_vs_rust_error_handling.md)
+- DMIR/SSA design: [docs/design-first-afm-then-ssa.md](docs/design-first-afm-then-ssa.md)
+- DMIR specification: [docs/dmir-spec.md](docs/dmir-spec.md)
+- Development history: [docs/history.md](docs/history.md)
+- Project TODO/roadmap: [docs/TODO.md](docs/TODO.md)
 
 ## Quick Tour
 
