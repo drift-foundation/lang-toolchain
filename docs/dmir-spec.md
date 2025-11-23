@@ -157,7 +157,110 @@ raise Invalid
 - Rationale: explicit error edges mirror the implicit `Result<T, Error>` model while keeping the CFG explicit for optimizations and verification.
 - All control paths end in `return` or `raise`; no implicit fallthrough.
 
+## SSA MIR terminology / conventions
+- Block labels: use a simple `bb` prefix (e.g., `bb0`, `bb_then`, `bb_err`). Block parameters are listed in parentheses and act as φ-nodes.
+- Instructions are SSA: each defines exactly one value; uses must be dominated by defs.
+- Calls list both successors: `normal bbX(args)` and `error bbE(err)`.
+- Types are concrete, monomorphized; `Error` is a concrete type on error edges.
+- Ownership: `move` consumes, `copy` only for copyable types, `drop` explicit.
+- No implicit fallthrough; every block ends in a terminator.
+
 ## Signing
 - The canonical serialized DMIR is hashed and signed.
 - Signature scope includes: DMIR version, module metadata, and full DMIR body.
 - SSA/backends are not signed artifacts; they must verify against the signed DMIR.
+
+## Surface → DMIR → SSA MIR examples (annotated)
+
+### Example 1: ternary call
+Surface:
+```drift
+fn pick(cond: Bool) returns Int64 {
+    return cond ? a() : b()
+}
+```
+DMIR:
+```
+let _t1 = cond
+let _t2 = a()
+let _t3 = b()
+return if _t1 { _t2 } else { _t3 }
+```
+SSA MIR (blocks, params as φ):
+```
+bb0(cond: Bool):       // block labels use a `bb` prefix; block params = φ
+  br bb1(cond)
+
+bb1(c: Bool):
+  condbr c, bb_then(), bb_else()
+
+bb_then():
+  a_res = call a()
+  br bb_join(a_res)                   // forward the call result on the normal edge
+
+bb_else():
+  b_res = call b()
+  br bb_join(b_res)                   // same pattern
+
+bb_join(val: Int64):
+  return val
+
+bb_err(err: Error):
+  raise err
+```
+(Calls have normal/error edges; join block models the ternary merge; block params act as φ.)
+
+CFG (block notation):
+```
+bb0(cond) -> bb1(cond)
+bb1(c)  -true-> bb_then()
+        -false-> bb_else()
+bb_then() -> bb_join(a_res)
+bb_else() -> bb_join(b_res)
+bb_join(val) -> return val
+bb_err(err) -> raise err
+```
+
+### Example 2: try/else with struct init and error edge
+Surface:
+```drift
+exception Invalid(kind: String)
+struct Point { x: Int64, y: Int64 }
+
+fn make(cond: Bool) returns Point {
+    val p = try build(cond) else Point(x = 0, y = 0)
+    return p
+}
+```
+DMIR:
+```
+let _t1 = build(cond) try_else Point(0, 0)
+let p = _t1
+return p
+```
+SSA MIR:
+```
+bb0(cond: Bool):
+  br bb1(cond)
+
+bb1(c: Bool):
+  v_build = call build(c) normal bb_ok(val) error bb_err(err)
+
+bb_ok(val: Point):
+  return val
+
+bb_err(err: Error):
+  // try-else fallback
+  v_fallback = Point(0, 0)
+  return v_fallback
+```
+(The inline try/else becomes a call with an error edge into a fallback block; struct init is positional; no drops shown here—those are inserted after liveness.)
+
+CFG (block notation):
+```
+bb0(cond) -> bb1(cond)
+bb1(c) -> bb_ok(val) on success
+       -> bb_err(err) on error
+bb_ok(val) -> return val
+bb_err(err) -> return Point(0, 0)
+```
