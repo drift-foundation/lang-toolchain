@@ -1,8 +1,33 @@
 # Drift TODO
 
-## Runtime and semantics
-
 ## Frontend and IR
+- Pre-req:
+	- Decide the SSA MIR instruction set and control-flow shape (blocks, φ, call, raise/return, drop, alloc?).
+		- Structure: Functions as CFGs with basic blocks; each block has params (phi edges), a sequence of instructions, and a terminator (branch, cond branch, return, raise).
+		- SSA values: Every instruction defines a value (single assignment). Block params serve as φ nodes.
+		- Core instructions (typed):
+			- const (ints/floats/bools/strings)
+			- move (ownership transfer)
+			- copy (for copyable types)
+			- call (direct), with explicit normal target block and error target block or a returned Error edge
+			- struct_init, field_get, field_set (if mutable)
+			- array_init, array_get, array_set (with bounds checking policy)
+			- alloc/stack_alloc for locals if needed (or treat all as values)
+			- drop (inserted by ownership/liveness analysis)
+			- unary/binary ops
+		- Terminators:
+			- br target(args) (unconditional)
+			- condbr cond, then(args), else(args)
+			- return value
+			- raise error
+		- Error handling: Decide if calls/ops have implicit error edges (two successors) or if raise is explicit and calls are pure unless they themselves raise. Given Drift’s model, a call should be able to raise; represent as an explicit error successor block carrying Error.
+		- Ownership: Track types as move-only by default; move consumes a value; copy only allowed for copyable types. drop to release owned values at end of liveness.
+		- Types: Monomorphized concrete types, plus Error.
+		- Modules/interop: For now, intra-module; cross-module later.
+		- Verifier: Check SSA form (definitions dominate uses), type consistency, correct block params arity, no use-after-move, drop rules, and that all control-flow paths end in return or raise.
+	- Nail how errors are represented (explicit error edges vs. sum type) and how ownership/move is encoded.
+	- Decide on monomorphization policy (already settled: monomorphize) and whether SSA MIR is monomorphic only.
+	- Sketch one or two end-to-end examples (surface → DMIR → SSA MIR) to validate the design.
 - Define a minimal typed IR (ownership, moves, error edges) with a verifier.
 - Lower the current AST/typechecker output into the IR; add golden tests for the lowering.
 - Prototype simple IR passes (dead code, copy elision/move tightening).
