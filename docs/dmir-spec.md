@@ -68,8 +68,15 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - `try/catch` is retained structurally; lowering to SSA will turn it into explicit control-flow edges carrying the `Error`.
 
 ## Ownership & drops
-- Values move by default; `move` nodes mark ownership transfer.
-- DMIR does not insert drops; those are added during SSA lowering when liveness is known.
+- Values move by default; `move` nodes mark ownership transfer. Using a moved-from value is a verifier error in MIR (same intent as Rust’s move semantics: once moved, the source is invalid).
+- DMIR does not insert drops; those are added during SSA/MIR lowering when liveness is known. (Rationale: keep DMIR stable/signable and let the optimizer compute exact drop points.)
+- `copy` is only permitted for types marked copyable (primitives and structs implementing `Copy`); otherwise moves are required.
+
+## SSA MIR value/ownership model
+- Monomorphized types only: all generics are specialized before MIR (like C++/Rust template/monomorphization; no shared generic bodies at MIR time).
+- Move-only by default; `move` consumes the value. MIR verifier enforces no use-after-move.
+- Drops are explicit MIR instructions; inserted post-liveness; verifier enforces at-most-once drop per owned value.
+- Calls/ops can raise; error edges carry the `Error` value. `raise` terminates the function with the error path.
 
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
@@ -133,6 +140,7 @@ raise Invalid
 - Calls:
   - Direct calls; each call has two successors: a normal edge and an error edge (both receive block params). The error edge carries the `Error` value and aligns with the `raise` path.
   - Builtins/constructors follow the same call shape for uniformity.
+- Rationale: explicit error edges mirror the implicit `Result<T, Error>` model while keeping the CFG explicit for optimizations and verification.
 - All control paths end in `return` or `raise`; no implicit fallthrough.
 
 ## Signing
