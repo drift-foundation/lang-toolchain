@@ -10,7 +10,6 @@
   - DMIR (ANF-like, structured) serializer for signing (canonical, deterministic).
   - SSA MIR printer/serializer for debugging and golden tests (internal use, not signed).
 - Start DMIR→MIR→LLVM integration (incremental):
-  - Refactor MIR call/error edge model to make lowering straightforward (current Call carries embedded normal/error edges but does not return an error value; consider simplifying calls or adjusting error representation before lowering).
   - Straight-line lowering:
     - Implement minimal AST/DMIR → MIR lowering for params, literals, moves, calls, struct/exception/array init, return (no control flow).
     - Add MIR golden tests via the MIR printer (e.g., simple add function).
