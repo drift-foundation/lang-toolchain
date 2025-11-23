@@ -13,4 +13,8 @@
 
 ## Docs
 - Add short “how to read IR” note once the IR spec is drafted.
-- Expand DMIR spec with canonicalization rules (naming, ordering) and examples.
+- Expand DMIR spec with canonicalization rules (naming, ordering) and examples, including:
+  - Naming/canonicalization rules: how temporaries are named (e.g., _t1, _t2), how to α-rename to avoid collisions, deterministic ordering of declarations/fields/params, and how to reorder keyword args into positional form.
+  - Ordering: consistent ordering of module items, let bindings, catch clauses, etc., so the serialized DMIR is stable across compiler runs.
+  - Examples: concrete DMIR snippets showing surface code → DMIR (including ternary, try/else, struct/exception constructors), so implementers/verifiers have reference inputs/outputs.
+
