@@ -33,7 +33,12 @@ def format_instr(instr: mir.Instruction) -> str:
         return f"  {instr.dest} = copy {instr.source}"
     if isinstance(instr, mir.Call):
         args = ", ".join(instr.args)
-        return f"  {instr.dest} = call {instr.callee}({args}) normal {format_edge(instr.normal)} error {format_edge(instr.error)}"
+        suffix = ""
+        if instr.normal or instr.error:
+            n = format_edge(instr.normal) if instr.normal else "<none>"
+            e = format_edge(instr.error) if instr.error else "<none>"
+            suffix = f" normal {n} error {e}"
+        return f"  {instr.dest} = call {instr.callee}({args}){suffix}"
     if isinstance(instr, mir.StructInit):
         args = ", ".join(instr.args)
         return f"  {instr.dest} = struct_init {instr.type}({args})"

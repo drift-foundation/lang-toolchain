@@ -60,8 +60,8 @@ class Call(Instruction):
     dest: Value
     callee: str
     args: List[Value]
-    normal: Edge
-    error: Edge
+    normal: Optional[Edge] = None
+    error: Optional[Edge] = None
     loc: Location = Location()
 
 

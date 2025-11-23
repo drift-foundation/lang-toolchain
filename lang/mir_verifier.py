@@ -213,8 +213,10 @@ def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program 
                 _ensure_not_moved_or_dropped(state, arg, block, "call")
             _ensure_not_defined(state, instr.dest, block, "call")
             state.define(instr.dest)
-            _ensure_edge(fn, instr.normal, block, {}, {}, block.name, error=False)
-            _ensure_edge(fn, instr.error, block, {}, {}, block.name, error=True)
+            if instr.normal:
+                _ensure_edge(fn, instr.normal, block, {}, {}, block.name, error=False)
+            if instr.error:
+                _ensure_edge(fn, instr.error, block, {}, {}, block.name, error=True)
         elif isinstance(instr, mir.StructInit):
             for arg in instr.args:
                 _ensure_defined(state, arg, block, "struct_init")
