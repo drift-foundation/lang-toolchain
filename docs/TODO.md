@@ -9,7 +9,9 @@
   - DMIR (ANF-like, structured) serializer for signing (canonical, deterministic).
   - SSA MIR printer/serializer for debugging and golden tests (internal use, not signed).
 - Start DMIR→MIR→LLVM integration (incremental):
-  - Lower straight-line functions (params, literals, moves, calls, struct/exception/array init, return) with no control flow; add MIR golden tests (via MIR printer).
+  - Straight-line lowering:
+    - Implement minimal AST/DMIR → MIR lowering for params, literals, moves, calls, struct/exception/array init, return (no control flow).
+    - Add MIR golden tests via the MIR printer (e.g., simple add function).
   - Add a minimal MIR→LLVM emitter stub for that subset (ints, calls, return, basic error edge handling) to prove end-to-end.
   - Extend lowering to conditionals/ternary and try/else once the verifier is richer.
   - Add lowering for array/field get/set, raises, and try/catch.
