@@ -5,6 +5,7 @@
   - Add cross-block dominance/phi validation (propagate defs/types across CFG; ensure block params align with predecessor args and uses are dominated by defs). [partially done: edge arg/param validation; still need full dominance/dataflow]
   - Add deeper type checks: enforce operand/result types for all instructions, and verify copy only on Copy types (you may need a type environment or Copy-trait info).
 	To enforce it properly we need a small dataflow pass: compute in/out def/type sets per block via the params, iterate to a fixed point across predecessors, and then validate that every use is either defined in the block or comes through its params (and that all predecessors supply matching args for each param).
+  - Revisit Call shape once error plumbing exists: require normal+error edges on calls to reflect Drift’s implicit `Result<T, Error>` model.
 - Serialization:
   - DMIR (ANF-like, structured) serializer for signing (canonical, deterministic).
   - SSA MIR printer/serializer for debugging and golden tests (internal use, not signed).
