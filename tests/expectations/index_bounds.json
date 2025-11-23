@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "",
+  "stderr": "==[ IndexError ]==\nAttrs:\n container: nums\n index: 5\nCaptured:\n <none>\nBacktrace:\n index_bounds.drift:main:3\n"
+}

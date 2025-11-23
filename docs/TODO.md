@@ -2,7 +2,7 @@
 
 ## Runtime and semantics
 - Wire `^` capture so unwinding records per-frame locals and backtrace handles in `Error`.
-- Add bounds checks for arrays that throw `IndexError(container = "Array", index = i)`.
+- Replace the simple call-name stack capture with proper backtrace handles once the runtime grows them.
 - Support `source_location()` intrinsic returning `SourceLocation` (file, line).
 - Add runtime tests for event-specific catches, rethrow, and inline `try expr else` type/behaviour checks; include negative cases (parse/type/runtime failures).
 

@@ -1,5 +1,5 @@
 {
   "exit": 1,
   "stdout": "",
-  "stderr": "runtime error[unknown]: Boom\n"
+  "stderr": "==[ Boom ]==\nAttrs:\n code: ENOENT\nCaptured:\n <none>\nBacktrace:\n effects.drift:main:7\n effects.drift:fail:4\n"
 }

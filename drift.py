@@ -13,10 +13,10 @@ from lang.interp import Interpreter, RaiseSignal
 from lang.runtime import BUILTINS, builtin_signatures
 
 
-def load_source(path: Path | None) -> str:
+def load_source(path: Path | None) -> tuple[str, str]:
     if path is None:
-        return sys.stdin.read()
-    return path.read_text()
+        return sys.stdin.read(), "<stdin>"
+    return path.read_text(), str(path)
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
 
     source_path = Path(args.source) if args.source else None
     try:
-        source = load_source(source_path)
+        source, source_label = load_source(source_path)
     except OSError as exc:
         print(f"error: unable to read source: {exc}", file=sys.stderr)
         return 1
@@ -46,15 +46,31 @@ def main() -> int:
         return 1
 
     try:
-        interpreter = Interpreter(checked, builtins=BUILTINS)
+        interpreter = Interpreter(checked, builtins=BUILTINS, source_label=source_label)
         if args.entry:
             result = interpreter.call(args.entry)
             if result is not None:
                 print(result)
     except RaiseSignal as exc:
         err = exc.error
-        domain = err.domain or "unknown"
-        print(f"runtime error[{domain}]: {err.message}", file=sys.stderr)
+        lines = []
+        lines.append(f"==[ {err.message} ]==")
+        lines.append("Attrs:")
+        if err.attrs:
+            for key in sorted(err.attrs):
+                lines.append(f" {key}: {err.attrs[key]}")
+        else:
+            lines.append(" <none>")
+        lines.append("Captured:")
+        lines.append(" <none>")  # context capture not yet implemented
+        lines.append("Backtrace:")
+        stack_lines = err.stack or []
+        if stack_lines:
+            for frame in stack_lines:
+                lines.append(f" {frame}")
+        else:
+            lines.append(" <none>")
+        print("\n".join(lines), file=sys.stderr)
         return 1
     except RuntimeError as exc:
         print(f"runtime error: {exc}", file=sys.stderr)
@@ -65,4 +81,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

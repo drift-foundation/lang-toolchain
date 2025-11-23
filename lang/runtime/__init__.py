@@ -16,6 +16,7 @@ class ErrorValue:
     domain: str | None = None
     code: str = ""
     attrs: Dict[str, object] = field(default_factory=dict)
+    stack: list[str] | None = None
 
     def __str__(self) -> str:  # pragma: no cover - debugging helper
         return f"error[{self.domain or 'unknown'}]: {self.message}"
@@ -69,9 +70,10 @@ def _builtin_error(ctx: RuntimeContext, args: Sequence[object], kwargs: Dict[str
     domain = kwargs.get("domain")
     code = kwargs.get("code", "")
     attrs = kwargs.get("attrs", {})
+    location = kwargs.get("location")
     if not isinstance(message, str):
         raise TypeError("error(message) requires a string message")
-    return ErrorValue(message=message, domain=domain, code=code, attrs=dict(attrs))
+    return ErrorValue(message=message, domain=domain, code=code, attrs=dict(attrs), stack=location)
 
 
 BUILTINS: Mapping[str, BuiltinFunction] = {

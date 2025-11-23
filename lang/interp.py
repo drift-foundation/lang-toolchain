@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Sequence
 
@@ -74,6 +75,7 @@ class Interpreter:
         checked: CheckedProgram,
         builtins: Mapping[str, BuiltinFunction] | None = None,
         stdout=None,
+        source_label: str = "<unknown>",
     ) -> None:
         self.program = checked.program
         self.function_infos = checked.functions
@@ -83,12 +85,16 @@ class Interpreter:
         self.runtime_ctx = RuntimeContext(self.stdout)
         self.builtins = builtins or BUILTINS
         self.global_env = Environment()
+        self._current_source = source_label
+        self._call_stack: list[tuple[str, ast.Located, str]] = []
         self._register_builtins()
         self._register_struct_constructors()
         self._register_exception_constructors()
         self._install_console()
         self._register_functions()
+        self._push_frame("<module>", ast.Located(line=0, column=0), "<module>")
         self._execute_block(self.program.statements, self.global_env)
+        self._pop_frame()
 
     def _register_builtins(self) -> None:
         for name, builtin in self.builtins.items():
@@ -115,7 +121,10 @@ class Interpreter:
 
     def call(self, name: str, *args: object) -> object:
         func = self.global_env.get(name)
-        return self._invoke(func, list(args), {})
+        call_loc = ast.Located(line=0, column=0)
+        if isinstance(func, UserFunction):
+            call_loc = func.definition.loc
+        return self._invoke(func, list(args), {}, call_loc)
 
     def _execute_block(self, statements: List[ast.Stmt], env: Environment) -> None:
         for stmt in statements:
@@ -137,7 +146,7 @@ class Interpreter:
             value = self._eval_expr(stmt.value, env)
             if not isinstance(value, ErrorValue):
                 raise RuntimeError("raise expects an error value")
-            raise RaiseSignal(value)
+            raise RaiseSignal(self._attach_stack(value, stmt.loc))
         if isinstance(stmt, ast.ExprStmt):
             self._eval_expr(stmt.value, env)
             return
@@ -177,7 +186,7 @@ class Interpreter:
             func = self._eval_expr(expr.func, env)
             args = [self._eval_expr(arg, env) for arg in expr.args]
             kwargs = {kw.name: self._eval_expr(kw.value, env) for kw in expr.kwargs}
-            return self._invoke(func, args, kwargs)
+            return self._invoke(func, args, kwargs, expr.loc)
         if isinstance(expr, ast.Attr):
             base = self._eval_expr(expr.value, env)
             return self._resolve_attr(base, expr.attr)
@@ -188,6 +197,8 @@ class Interpreter:
         if isinstance(expr, ast.Index):
             base = self._eval_expr(expr.value, env)
             index = self._eval_expr(expr.index, env)
+            label = self._describe_container(expr.value)
+            self._check_bounds(base, index, label, expr.loc)
             return base[index]
         if isinstance(expr, ast.TryExpr):
             try:
@@ -256,11 +267,19 @@ class Interpreter:
             return base.get_attr(attr)
         raise RuntimeError(f"Object {base!r} has no attribute '{attr}'")
 
-    def _invoke(self, func: object, args: Sequence[object], kwargs: Dict[str, object]) -> object:
+    def _invoke(self, func: object, args: Sequence[object], kwargs: Dict[str, object], call_loc: ast.Located) -> object:
         if isinstance(func, BuiltinFunction):
-            return func.impl(self.runtime_ctx, args, kwargs)
+            self._push_frame(func.signature.name, call_loc, self._current_source)
+            try:
+                return func.impl(self.runtime_ctx, args, kwargs)
+            finally:
+                self._pop_frame()
         if isinstance(func, UserFunction):
-            return func(args, kwargs)
+            self._push_frame(func.definition.name, call_loc, self._current_source)
+            try:
+                return func(args, kwargs)
+            finally:
+                self._pop_frame()
         if isinstance(func, StructConstructor):
             return func(args, kwargs)
         if isinstance(func, ExceptionConstructor):
@@ -276,9 +295,50 @@ class Interpreter:
             index = self._eval_expr(target.index, env)
             if not hasattr(base, "__setitem__"):
                 raise RuntimeError("Object is not indexable")
+            label = self._describe_container(target.value)
+            self._check_bounds(base, index, label, target.loc)
             base[index] = value
             return
         raise RuntimeError("Unsupported assignment target")
+
+    def _describe_container(self, expr: ast.Expr) -> str:
+        if isinstance(expr, ast.Name):
+            return expr.ident
+        if isinstance(expr, ast.Attr):
+            return expr.attr
+        return "Array"
+
+    def _check_bounds(self, base: object, index: object, label: str, loc: ast.Located) -> None:
+        if not hasattr(base, "__len__"):
+            return
+        if not isinstance(index, int):
+            raise RuntimeError("Index must be an integer")
+        length = len(base)
+        if index < 0 or index >= length:
+            raise RaiseSignal(
+                self._attach_stack(
+                    ErrorValue(message="IndexError", attrs={"container": label, "index": index}),
+                    loc,
+                )
+            )
+
+    def _attach_stack(self, err: ErrorValue, loc: ast.Located | None = None) -> ErrorValue:
+        if err.stack is None:
+            frames = []
+            for name, frame_loc, source in self._call_stack:
+                frames.append(f"{Path(source).name}:{name}:{frame_loc.line}")
+            if loc is not None and self._call_stack:
+                caller_name, _, source = self._call_stack[-1]
+                frames[-1] = f"{Path(source).name}:{caller_name}:{loc.line}"
+            err.stack = frames
+        return err
+
+    def _push_frame(self, name: str, loc: ast.Located, source: str) -> None:
+        self._call_stack.append((name, loc, source))
+
+    def _pop_frame(self) -> None:
+        if self._call_stack:
+            self._call_stack.pop()
 
 
 def run_program(checked: CheckedProgram, stdout=None) -> Interpreter:
