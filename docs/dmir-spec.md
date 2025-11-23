@@ -57,6 +57,8 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
   - Declarations (structs, exceptions, functions) serialized in source order after imports.
   - Fields/params listed in declared order.
   - Catch clauses serialized in source order.
+- `let` bindings appear in evaluation order (ANF sequence); do not reorder or DCE in DMIR.
+- Module-level statements are serialized in source order.
 - Keyword arguments are reordered to positional order based on the callee’s parameter list; duplicate/missing args are already rejected by the typechecker.
 - Dead-code removal is not part of canonicalization; keep all user-visible semantics intact.
 
@@ -72,6 +74,46 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
 - Includes DMIR version in the header so verifiers can enforce compatibility.
+
+## Examples (surface → DMIR sketch)
+
+Surface ternary:
+```drift
+val x = cond ? a() : b()
+```
+DMIR (ANF-ish):
+```
+let _t1 = cond
+let _t2 = a()
+let _t3 = b()
+let x = if _t1 { _t2 } else { _t3 }
+```
+
+Surface try/else:
+```drift
+val fallback = try parse(input) else default_value
+```
+DMIR:
+```
+let _t1 = parse(input) try_else default_value
+let fallback = _t1
+```
+(`try_else` desugars to the structured try/catch form with a catch-all that yields `default_value`.)
+
+Surface struct/exception constructors:
+```drift
+struct Point { x: Int64, y: Int64 }
+exception Invalid(kind: String)
+
+val p = Point(x = 1, y = 2)
+throw Invalid(kind = "bad")
+```
+DMIR:
+```
+let p = Point(1, 2)
+raise Invalid
+```
+(Args are reordered to positional order; `raise` wraps the event into `Error` as part of DMIR lowering.)
 
 ## Lowering to SSA MIR
 - DMIR is the input to the SSA builder:
