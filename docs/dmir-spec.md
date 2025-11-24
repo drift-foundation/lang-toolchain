@@ -92,6 +92,19 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - `drop <v>` — explicit destructor/drop; inserted after liveness.
 - Terminators (`br`, `condbr`, `return`, `raise`) and block params act as φ-nodes; no separate φ instruction.
 
+## Interface values, fat pointers, and vtables (owned vs borrowed)
+- Representation: an interface value lowers to a fat pointer `{ data: ptr, vtable: ptr }`. The vtable is per (concrete type, interface) pair.
+- Owned interface values:
+  - Require `Destructible`; their vtable always includes a `drop(data_ptr)` slot (and may include size/align/dealloc entries once the ABI is frozen).
+  - Dropping an owned interface value dispatches via `vtable.drop(data_ptr)`. SSA MIR can lower this to an indirect call; concrete (non-interface) values use static drop calls.
+  - Move-only semantics prevent double-drop; moving the fat pointer transfers ownership of both `data` and the obligation to call `drop`.
+- Borrowed interface views:
+  - Omit the drop requirement/slot; `drop` on a borrowed view is a no-op.
+  - Fat pointer shape may be identical but the vtable lacks destructor entries; verifying/aliasing rules prevent treating a borrowed view as owned.
+- Inheritance/layout: if interface inheritance is used, vtable entries are ordered with base-interface entries first so derived interfaces keep a stable offset for `drop`.
+- Multiple interfaces: each interface a type implements has its own vtable (per-type, per-interface). There is no shared or merged vtable across interfaces; each fat pointer carries the vtable for its specific interface type. Layout stability applies within each vtable (base entries first under inheritance, with the drop slot fixed by the base interface).
+- Single concrete destructor: a concrete type emits one destructor; every owned interface vtable for that type (IFoo, IBar, …) points its drop slot to the same destructor, so dropping through any interface fat pointer invokes the identical concrete drop.
+
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
 - Includes DMIR version in the header so verifiers can enforce compatibility.

@@ -217,6 +217,10 @@ implement Copy for Job {}
 
 var a = Job(id = 1)
 var b = a      // ✅ copies `a` by calling `copy`
+
+### 3.5 Explicit copy expression
+
+Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. This works anywhere an expression is allowed (call arguments, closure captures, `let` bindings) and leaves the original binding usable. Default by-value passing still **moves** non-`Copy` values; `copy` is how you make the intent to duplicate explicit.
 ```
 
 Copying still respects ownership rules: `ref self` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
@@ -1101,6 +1105,12 @@ Finalizers are **optional** unless early release, explicit error handling, or sh
 
 In both cases, the file handle is safely released exactly once.
 
+### 10.5 Destructors and moves
+
+- Deterministic RAII: owned values run their destructor at end of liveness—scope exit, early return, or after being consumed by a finalizer. No deferred GC-style cleanup.
+- Move-only by default: moving a value consumes it; the source binding becomes invalid and is not dropped there. Drop runs exactly once on the final owner.
+- Copyable types opt in: only `Copy` types may be implicitly copied; they either have trivial/no destructor or a well-defined copy+drop story.
+
 ## 12. Null safety & optional values
 
 Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
@@ -1645,6 +1655,14 @@ Drift supports **runtime polymorphism** through *interfaces*.
 Interfaces allow multiple **different concrete types** to be treated as one unified abstract type at runtime.  
 This is the dynamic counterpart to compile‑time polymorphism provided by *traits*.
 
+**No class/struct inheritance:** Drift has no concrete type inheritance. Data and behavior compose via structs + traits (static) and interfaces (dynamic). This avoids fragile base classes, hidden layout coupling, and diamond/virtual-base complexity while keeping ABI/layout predictable; interfaces supply dynamic dispatch without inheriting state.
+
+**Closures/lambdas (surface preview):**
+- Syntax: `|params| => expr` for expression-bodied closures (result is the expression; no `return`). A block form may be added; block-bodied closures follow normal function rules (explicit `return`).
+- Capture modes are explicit per name to keep ownership obvious: default is by-value **move** (`x`), which consumes the binding; use the `copy x` expression to duplicate a `Copy` value and keep using the original. Borrow captures (`ref x`, `ref mut x`) are planned once borrow/lifetime checking is available; initial closures may ship without borrow captures to keep lifetimes simple. Non-capturing closures are just thin function pointers.
+- Runtime shape: capturing closures lower to a fat object `{ env_ptr, call_ptr }` with an env box holding captured values under their capture modes; the env has a single destructor. Non-capturing closures lower to thin function pointers.
+- Interfaces: closures can automatically implement callable interfaces (`Fn`/`FnMut`/`FnOnce` style) based on their capture mutability/consumption so they can be passed where a callable interface is expected.
+
 **In short:**
 
 - **Traits** describe *capabilities* and enable *compile‑time specialization*.
@@ -1897,7 +1915,7 @@ Passing `out` moves the *interface wrapper* and transfers ownership of the under
 
 At scope exit:
 
-- If underlying type implements `Destructible`, its `destroy(self)` runs.
+- If underlying type implements `Destructible`, its `destroy(self)` runs. Owned interface types should **require** `Destructible` so their vtables always carry a drop slot; borrowed interface views omit this and perform no destruction.
 - Otherwise, nothing is done.
 
 ```drift
@@ -1929,6 +1947,7 @@ implement Duplex   for Stream { ... }
 
 Each interface gets its own vtable.  
 There is no conflict unless the implementing type violates signature constraints.
+Layout stability: if interface inheritance is used, parent entries (including the drop slot for owned interfaces) stay at fixed offsets. Separate interfaces never share a vtable; each interface value carries the vtable for that interface only.
 
 ---
 
