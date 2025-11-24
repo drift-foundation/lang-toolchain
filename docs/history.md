@@ -13,6 +13,7 @@
 - Stated explicitly in the spec: no class/struct inheritance; composition + traits + interfaces replace it to keep layout/ABI stable and avoid fragile-base/diamond issues.
 - Added a closure preview to the spec: `|params| => expr` syntax with implicit return for expressions and explicit return for block form; explicit capture modes (default move consumes binding; `copy x` keeps a `Copy` value usable; borrow captures planned later alongside borrow/lifetime checking) to keep ownership clear; capturing closures lower to `{env_ptr, call_ptr}` with a single env destructor; non-capturing are thin function pointers; callable interfaces (`Fn`/`FnMut`/`FnOnce` style) can be auto-implemented based on capture mutability.
 - Added an explicit `copy <expr>` expression to force duplication of `Copy` values (errors on non-`Copy`), usable in call args, closure captures, or bindings.
+- Added a DMIR note for closures: capturing closures are fat `{env_ptr, call_ptr}` with a single env drop; non-capturing are thin pointers; callable interfaces can target the closure thunk/env.
 
 ## 2025-11-20
 - Captured the `lang.core.source_location` helper in the spec as a zero-cost intrinsic that lowers to the current file/line. Kept the data shape explicit (`SourceLocation` struct) so callsites can choose when to capture site metadata, thread it through `^` context bindings, or pass it into exceptions; avoided auto-injecting locations in the runtime to keep logging/telemetry opt-in. (Prototype interpreter still needs the intrinsic wired in.)

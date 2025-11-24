@@ -105,6 +105,11 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - Multiple interfaces: each interface a type implements has its own vtable (per-type, per-interface). There is no shared or merged vtable across interfaces; each fat pointer carries the vtable for its specific interface type. Layout stability applies within each vtable (base entries first under inheritance, with the drop slot fixed by the base interface).
 - Single concrete destructor: a concrete type emits one destructor; every owned interface vtable for that type (IFoo, IBar, …) points its drop slot to the same destructor, so dropping through any interface fat pointer invokes the identical concrete drop.
 
+## Closures (planned representation)
+- Non-capturing closures lower to thin function pointers (code pointer only; no env box).
+- Capturing closures lower to a fat object `{ env_ptr, call_ptr }`. The env is a heap box holding captured values according to their capture modes (move by default; explicit `copy` for `Copy` values; borrow captures once borrow/lifetime checking is present).
+- Drop runs exactly once on the env; the closure object is move-only by default. Callable interfaces (e.g., `Fn`/`FnMut`/`FnOnce` equivalents) can be implemented by pointing their vtables at the closure’s call thunk and env drop.
+
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
 - Includes DMIR version in the header so verifiers can enforce compatibility.
