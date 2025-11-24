@@ -1,5 +1,10 @@
 # Drift development history
 
+## 2025-11-24
+- Fixed the parser’s `if` builder to grab the nested `else_clause` block, so conditional statements with an else arm are preserved through parsing and lowering.
+- Extended straight-line MIR lowering to handle `if/else` control flow (joins only when needed) and to reject functions that fall off without a return. Added a MIR golden for `if_else` in `tests/mir_lowering/` to cover the path.
+- Aligned ternary lowering with a typed phi param at the join and updated the expected MIR formatting to match the printer/block ordering.
+
 ## 2025-11-20
 - Captured the `lang.core.source_location` helper in the spec as a zero-cost intrinsic that lowers to the current file/line. Kept the data shape explicit (`SourceLocation` struct) so callsites can choose when to capture site metadata, thread it through `^` context bindings, or pass it into exceptions; avoided auto-injecting locations in the runtime to keep logging/telemetry opt-in. (Prototype interpreter still needs the intrinsic wired in.)
 - Hardened comment and error conventions: grammar now allows both `//` line comments and `/* ... */` block comments (non-nesting) so we can annotate examples without fighting terminator insertion. Documented a standard `IndexError(container, index)` event for out-of-bounds accesses to make future bounds checks report consistent payloads instead of ad-hoc errors.
