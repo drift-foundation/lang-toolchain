@@ -2,3 +2,4 @@ lang/__pycache__/
 .codex-session
 .venv
 tools/test-llvm/out
+tests/mir_lowering/out

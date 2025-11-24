@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import mir
 from .types import ERROR, array_of, Type
@@ -60,9 +60,10 @@ def verify_function(fn: mir.Function, program: mir.Program | None = None) -> Non
             raise VerificationError(f"{fn.name}:{name}: missing terminator")
     defs, types = _compute_defs_and_types(fn, program)
     incoming = _compute_incoming_args(fn, defs, types)
+    in_state, out_state = _dataflow_defs_types(fn, defs, types, incoming)
     _verify_cfg(fn, defs, types, incoming)
     for block in fn.blocks.values():
-        _verify_block(fn, block, program, incoming)
+        _verify_block(fn, block, program, incoming, in_state)
 
 
 def _compute_defs_and_types(fn: mir.Function, program: mir.Program | None) -> tuple[Dict[str, Set[str]], Dict[str, Dict[str, Type]]]:
@@ -127,6 +128,47 @@ def _compute_incoming_args(
     return incoming
 
 
+def _dataflow_defs_types(
+    fn: mir.Function,
+    defs: Dict[str, Set[str]],
+    types: Dict[str, Dict[str, Type]],
+    incoming: Dict[str, List[tuple[List[str], List[Type]]]],
+) -> tuple[Dict[str, Tuple[Set[str], Dict[str, Type]]], Dict[str, Tuple[Set[str], Dict[str, Type]]]]:
+    in_state: Dict[str, Tuple[Set[str], Dict[str, Type]]] = {}
+    out_state: Dict[str, Tuple[Set[str], Dict[str, Type]]] = {}
+    # initialize with params as in_state
+    for name, block in fn.blocks.items():
+        in_state[name] = (set(p.name for p in block.params), {p.name: p.type for p in block.params})
+        out_state[name] = (defs.get(name, set()).copy(), types.get(name, {}).copy())
+
+    changed = True
+    while changed:
+        changed = False
+        for name, block in fn.blocks.items():
+            in_defs, in_types = in_state[name]
+            out_defs, out_types = out_state[name]
+            # merge predecessor out to this block via incoming args
+            pred_args = incoming.get(name, [])
+            if pred_args:
+                merged_defs: Set[str] = set()
+                merged_types: Dict[str, Type] = {}
+                for args, arg_types in pred_args:
+                    merged_defs.update(args)
+                    for a, t in zip(args, arg_types):
+                        if t:
+                            merged_types[a] = t
+                new_in_defs = set(block_param for block_param in in_defs) | merged_defs
+                new_in_types = dict(in_types)
+                new_in_types.update(merged_types)
+                if new_in_defs != in_defs or new_in_types != in_types:
+                    in_state[name] = (new_in_defs, new_in_types)
+                    changed = True
+            # propagate defs/types within block to out_state
+            if out_defs != defs.get(name, set()) or out_types != types.get(name, {}):
+                out_state[name] = (defs.get(name, set()).copy(), types.get(name, {}).copy())
+    return in_state, out_state
+
+
 def _verify_cfg(
     fn: mir.Function,
     defs: Dict[str, Set[str]],
@@ -187,11 +229,22 @@ def _verify_cfg(
             _ensure_edge(fn, block.terminator.els, block)
 
 
-def _verify_block(fn: mir.Function, block: mir.BasicBlock, program: mir.Program | None = None, incoming: Dict[str, List[tuple[List[str], List[Type]]]] | None = None) -> None:
+def _verify_block(
+    fn: mir.Function,
+    block: mir.BasicBlock,
+    program: mir.Program | None = None,
+    incoming: Dict[str, List[tuple[List[str], List[Type]]]] | None = None,
+    in_state: Dict[str, Tuple[Set[str], Dict[str, Type]]] | None = None,
+) -> None:
     state = State()
-    for param in block.params:
-        state.define(param.name)
-        state.set_type(param.name, param.type)
+    if in_state and block.name in in_state:
+        defs_in, types_in = in_state[block.name]
+        state.defined = set(defs_in)
+        state.types = dict(types_in)
+    else:
+        for param in block.params:
+            state.define(param.name)
+            state.set_type(param.name, param.type)
     for instr in block.instructions:
         if isinstance(instr, mir.Const):
             _ensure_not_defined(state, instr.dest, block, "const")
