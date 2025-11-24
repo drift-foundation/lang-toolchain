@@ -1,2 +1,4 @@
 lang/__pycache__/
 .codex-session
+.venv
+tools/test-llvm/out
