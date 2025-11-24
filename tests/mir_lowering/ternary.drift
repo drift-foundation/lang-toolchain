@@ -1,0 +1,3 @@
+fn pick(cond: Bool, x: Int64, y: Int64) returns Int64 {
+    return cond ? x : y
+}

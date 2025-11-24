@@ -9,20 +9,13 @@ from .types import BOOL, ERROR, F64, I64, STR, Type
 
 def lower_function(fn: mir.Function) -> tuple[str, bytes]:
     """
-    Minimal MIR → LLVM lowering for straight-line functions (single block, no control flow):
-    - params (Int64, Bool, Float64, String as i8*; others default to i8*)
-    - const/move/copy
-    - binary ops (+, -, *, /) on Int64
-    - return
+    MIR → LLVM lowering (supports branches/phi via block params; no raise/try yet).
     """
     llvm.initialize()
     llvm.initialize_native_target()
     llvm.initialize_native_asmprinter()
     target = llvm.Target.from_default_triple()
     tm = target.create_target_machine()
-    if len(fn.blocks) != 1:
-        raise ValueError("minimal lowering only supports single-block functions")
-    block = fn.blocks[fn.entry]
 
     llvm_module = ir.Module(name=f"{fn.name}_module")
     llvm_module.triple = llvm.get_default_triple()
@@ -31,29 +24,66 @@ def lower_function(fn: mir.Function) -> tuple[str, bytes]:
     param_types = [_llvm_type(p.type) for p in fn.params]
     func_ty = ir.FunctionType(_llvm_type(fn.return_type), param_types)
     llvm_fn = ir.Function(llvm_module, func_ty, name=fn.name)
-    entry = llvm_fn.append_basic_block(name="entry")
-    builder = ir.IRBuilder(entry)
 
-    env: dict[str, ir.Value] = {p.name: arg for p, arg in zip(fn.params, llvm_fn.args)}
+    llvm_blocks = {name: llvm_fn.append_basic_block(name=name) for name in fn.blocks}
+    phi_nodes: dict[str, dict[str, ir.PhiInstr]] = {}
 
-    for instr in block.instructions:
-        if isinstance(instr, mir.Const):
-            env[instr.dest] = _const(builder, instr.type, instr.value)
-        elif isinstance(instr, mir.Move):
-            env[instr.dest] = env[instr.source]
-        elif isinstance(instr, mir.Copy):
-            env[instr.dest] = env[instr.source]
-        elif isinstance(instr, mir.Binary):
-            env[instr.dest] = _lower_binary(builder, instr, env)
+    # Create phi nodes for block params
+    for name, block in fn.blocks.items():
+        builder = ir.IRBuilder(llvm_blocks[name])
+        phi_nodes[name] = {}
+        for param in block.params:
+            phi = builder.phi(_llvm_type(param.type), name=param.name)
+            phi_nodes[name][param.name] = phi
+
+    envs: dict[str, dict[str, ir.Value]] = {}
+    worklist = [fn.entry]
+    visited = set()
+
+    while worklist:
+        bname = worklist.pop()
+        if bname in visited:
+            continue
+        visited.add(bname)
+        block = fn.blocks[bname]
+        builder = ir.IRBuilder(llvm_blocks[bname])
+        env: dict[str, ir.Value] = {}
+        # params via phi
+        for param in block.params:
+            env[param.name] = phi_nodes[bname][param.name]
+        # function params in entry block
+        if bname == fn.entry:
+            for p, arg in zip(fn.params, llvm_fn.args):
+                env[p.name] = arg
+        for instr in block.instructions:
+            if isinstance(instr, mir.Const):
+                env[instr.dest] = _const(builder, instr.type, instr.value)
+            elif isinstance(instr, mir.Move):
+                env[instr.dest] = env[instr.source]
+            elif isinstance(instr, mir.Copy):
+                env[instr.dest] = env[instr.source]
+            elif isinstance(instr, mir.Binary):
+                env[instr.dest] = _lower_binary(builder, instr, env)
+            else:
+                raise NotImplementedError(f"unsupported instruction: {instr}")
+        term = block.terminator
+        if isinstance(term, mir.Br):
+            _add_phi_incoming(phi_nodes, term.target, env, llvm_blocks[bname])
+            builder.branch(llvm_blocks[term.target.target])
+            worklist.append(term.target.target)
+        elif isinstance(term, mir.CondBr):
+            _add_phi_incoming(phi_nodes, term.then, env, llvm_blocks[bname])
+            _add_phi_incoming(phi_nodes, term.els, env, llvm_blocks[bname])
+            builder.cbranch(env[term.cond], llvm_blocks[term.then.target], llvm_blocks[term.els.target])
+            worklist.extend([term.then.target, term.els.target])
+        elif isinstance(term, mir.Return):
+            retval = env[term.value] if term.value else None
+            builder.ret(retval)
+        elif isinstance(term, mir.Raise):
+            raise NotImplementedError("raise not supported in MIR→LLVM yet")
         else:
-            raise NotImplementedError(f"unsupported instruction in minimal lowering: {instr}")
-
-    term = block.terminator
-    if isinstance(term, mir.Return):
-        retval = env[term.value] if term.value else None
-        builder.ret(retval)
-    else:
-        raise NotImplementedError("only return is supported in minimal lowering")
+            raise NotImplementedError("missing terminator")
+        envs[bname] = env
 
     llvm_mod = llvm.parse_assembly(str(llvm_module))
     llvm_mod.verify()
@@ -106,3 +136,11 @@ def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Va
     if op == "/":
         return builder.sdiv(lhs, rhs, name=instr.dest)
     raise NotImplementedError(f"binary op {op}")
+
+
+def _add_phi_incoming(phi_nodes: dict[str, dict[str, ir.PhiInstr]], edge: mir.Edge, env: dict[str, ir.Value], pred_block: ir.Block) -> None:
+    if not edge.args:
+        return
+    target = edge.target
+    for arg_val, (param_name, phi) in zip(edge.args, phi_nodes[target].items()):
+        phi.add_incoming(env[arg_val], pred_block)

@@ -483,6 +483,12 @@ def _build_if_stmt(tree: Tree) -> IfStmt:
         if then_block_node is None and name == "block":
             then_block_node = child
             continue
+        if name == "else_clause":
+            for grand in child.children:
+                if isinstance(grand, Tree) and _name(grand) == "block":
+                    else_block_node = grand
+                    break
+            continue
         if name == "block":
             else_block_node = child
             break

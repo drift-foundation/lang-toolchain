@@ -1,0 +1,7 @@
+fn choose(cond: Bool, x: Int64, y: Int64) returns Int64 {
+    if cond {
+        return x
+    } else {
+        return y
+    }
+}

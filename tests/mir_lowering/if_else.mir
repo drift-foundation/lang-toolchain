@@ -1,0 +1,7 @@
+fn choose(cond: Bool, x: Int64, y: Int64) -> Int64 { entry = bb0 }
+bb0(cond: Bool, x: Int64, y: Int64):
+  condbr cond, then bb_then1, else bb_else2
+bb_else2:
+  return y
+bb_then1:
+  return x
