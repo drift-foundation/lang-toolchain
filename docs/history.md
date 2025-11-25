@@ -1,5 +1,11 @@
 # Drift development history
 
+## 2025-11-26
+- Lowered `throw` of an exception constructor into a real `Error*`: pick `msg` kwarg/first positional or fall back to the exception name, call builtin `error_new`, and raise that pointer. Added an `error_new` builtin signature/stub for interpreter parity.
+- MIR→LLVM now seeds successor environments correctly and treats helper calls (`error_new`/`error`) as returning bare `Error*` while other calls with error edges expect `{T, Error*}`. This fixed undefined-SSA issues in the emitter.
+- Switched codegen to PIC/PIE: LLVM target machine uses `reloc="pic"`, C stubs/harness are built with `-fPIC`, and we link with `-pie` so we no longer need `-no-pie` or see text-relocation warnings.
+- Unskipped the error-path codegen test and added a success-path sibling (`tests/mir_codegen/error_path_ok`) so both error and non-error return flows are exercised end-to-end.
+
 ## 2025-11-24
 - Fixed the parser’s `if` builder to grab the nested `else_clause` block, so conditional statements with an else arm are preserved through parsing and lowering.
 - Extended straight-line MIR lowering to handle `if/else` control flow (joins only when needed) and to reject functions that fall off without a return. Added a MIR golden for `if_else` in `tests/mir_lowering/` to cover the path.
