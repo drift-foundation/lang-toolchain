@@ -72,16 +72,22 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
             elif isinstance(instr, mir.Binary):
                 env[instr.dest] = _lower_binary(builder, instr, env)
             elif isinstance(instr, mir.ArrayInit):
-                if instr.element_type != STR:
-                    raise NotImplementedError("ArrayInit currently supports String elements only")
-                ptrs = [env[e] for e in instr.elements]
-                arr_ty = ir.ArrayType(ir.IntType(8).as_pointer(), len(ptrs))
+                if instr.element_type == STR:
+                    elements = [env[e] for e in instr.elements]
+                    arr_ty = ir.ArrayType(ir.IntType(8).as_pointer(), len(elements))
+                    gv_ty = ir.IntType(8).as_pointer()
+                elif instr.element_type == I64:
+                    elements = [env[e] for e in instr.elements]
+                    arr_ty = ir.ArrayType(ir.IntType(64), len(elements))
+                    gv_ty = ir.IntType(64)
+                else:
+                    raise NotImplementedError("ArrayInit currently supports String or Int64 elements only")
                 unique_id = len(builder.module.globals)
                 gv = ir.GlobalVariable(builder.module, arr_ty, name=f".arr{unique_id}")
                 gv.linkage = "internal"
                 gv.global_constant = True
-                gv.initializer = ir.Constant(arr_ty, ptrs)
-                env[instr.dest] = gv.bitcast(ir.IntType(8).as_pointer())
+                gv.initializer = ir.Constant(arr_ty, elements)
+                env[instr.dest] = gv.bitcast(gv_ty.as_pointer())
             elif isinstance(instr, mir.Call):
                 arg_vals = [env[a] for a in instr.args]
                 if instr.normal or instr.error:

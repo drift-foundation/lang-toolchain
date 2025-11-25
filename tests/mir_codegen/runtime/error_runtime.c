@@ -3,7 +3,16 @@
 #include <stdio.h>
 #include "error_runtime.h"
 
-struct Error* drift_error_new(DriftStr* keys, DriftStr* values, size_t attr_count, DriftStr event, DriftStr domain) {
+struct Error* drift_error_new(
+    DriftStr* keys,
+    DriftStr* values,
+    size_t attr_count,
+    DriftStr event,
+    DriftStr domain,
+    DriftStr* frame_files,
+    DriftStr* frame_funcs,
+    int64_t* frame_lines,
+    size_t frame_count) {
     struct Error* err = (struct Error*)calloc(1, sizeof(struct Error));
     if (!err) return NULL;
     err->event = event ? event : "unknown";
@@ -11,6 +20,10 @@ struct Error* drift_error_new(DriftStr* keys, DriftStr* values, size_t attr_coun
     err->attr_count = attr_count;
     err->keys = keys;
     err->values = values;
+    err->frame_files = frame_files;
+    err->frame_funcs = frame_funcs;
+    err->frame_lines = frame_lines;
+    err->frame_count = frame_count;
     /* Build a diagnostic string including all attrs. */
     size_t total = 2; // {}
     for (size_t i = 0; i < attr_count; i++) {
@@ -56,5 +69,5 @@ struct Error* error_new(const char* msg) {
     const char* vals_arr[1];
     vals_arr[0] = msg ? msg : "unknown";
     /* Casting away const for simplicity; in real runtime we'd copy or enforce const. */
-    return drift_error_new((DriftStr*)keys, (DriftStr*)vals_arr, 1, "Error", "main");
+    return drift_error_new((DriftStr*)keys, (DriftStr*)vals_arr, 1, "Error", "main", NULL, NULL, NULL, 0);
 }

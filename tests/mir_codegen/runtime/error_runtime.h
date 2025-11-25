@@ -9,6 +9,10 @@ struct Error {
     DriftStr* keys;
     DriftStr* values;
     size_t attr_count;
+    DriftStr* frame_files;
+    DriftStr* frame_funcs;
+    int64_t* frame_lines;
+    size_t frame_count;
     char* diag;
 };
 
@@ -18,6 +22,15 @@ struct Pair {
 };
 
 struct Error* error_new(const char* msg); /* legacy helper for tests */
-struct Error* drift_error_new(DriftStr* keys, DriftStr* values, size_t attr_count, DriftStr event, DriftStr domain);
+struct Error* drift_error_new(
+    DriftStr* keys,
+    DriftStr* values,
+    size_t attr_count,
+    DriftStr event,
+    DriftStr domain,
+    DriftStr* frame_files,
+    DriftStr* frame_funcs,
+    int64_t* frame_lines,
+    size_t frame_count);
 const char* error_to_cstr(struct Error*);
 void error_free(struct Error*);

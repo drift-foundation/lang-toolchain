@@ -185,6 +185,16 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
                     # Build attrs array from kwargs/positional (pos mapped to declared args).
                     msg_expr = None
                     domain_expr = None
+                    # Add current function name and line for frames
+                    frame_file = fresh_val()
+                    frame_func = fresh_val()
+                    frame_line = fresh_val()
+                    current_block.instructions.append(mir.Const(dest=frame_file, type=STR, value="<unknown>"))
+                    current_block.instructions.append(mir.Const(dest=frame_func, type=STR, value=fn_def.name))
+                    current_block.instructions.append(mir.Const(dest=frame_line, type=I64, value=stmt.loc.line))
+                    temp_types[frame_file] = STR
+                    temp_types[frame_func] = STR
+                    temp_types[frame_line] = I64
                     for kw in stmt.value.kwargs:
                         if kw.name == "msg" and msg_expr is None:
                             msg_expr = kw.value
@@ -223,6 +233,19 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
                     attr_count_val = fresh_val()
                     current_block.instructions.append(mir.Const(dest=attr_count_val, type=I64, value=len(sorted_items)))
                     temp_types[attr_count_val] = I64
+                    # frame arrays
+                    frame_files_arr = fresh_val()
+                    frame_funcs_arr = fresh_val()
+                    frame_lines_arr = fresh_val()
+                    frame_count = fresh_val()
+                    current_block.instructions.append(mir.ArrayInit(dest=frame_files_arr, elements=[frame_file], element_type=STR))
+                    current_block.instructions.append(mir.ArrayInit(dest=frame_funcs_arr, elements=[frame_func], element_type=STR))
+                    current_block.instructions.append(mir.ArrayInit(dest=frame_lines_arr, elements=[frame_line], element_type=I64))
+                    current_block.instructions.append(mir.Const(dest=frame_count, type=I64, value=1))
+                    temp_types[frame_files_arr] = STR
+                    temp_types[frame_funcs_arr] = STR
+                    temp_types[frame_lines_arr] = I64
+                    temp_types[frame_count] = I64
                     evt_val = msg_val
                     dom_val = fresh_val()
                     exc_domain = checked.exceptions[exc_name].domain if exc_name in checked.exceptions else None
@@ -238,7 +261,7 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
                         mir.Call(
                             dest=err_tmp,
                             callee="drift_error_new",
-                            args=[keys_arr, vals_arr, attr_count_val, evt_val, dom_val],
+                            args=[keys_arr, vals_arr, attr_count_val, evt_val, dom_val, frame_files_arr, frame_funcs_arr, frame_lines_arr, frame_count],
                         )
                     )
                     temp_types[err_tmp] = ERROR
