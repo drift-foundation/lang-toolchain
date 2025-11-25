@@ -27,11 +27,14 @@ def lower_function(fn: mir.Function) -> tuple[str, bytes]:
 
     llvm_blocks = {name: llvm_fn.append_basic_block(name=name) for name in fn.blocks}
     phi_nodes: dict[str, dict[str, ir.PhiInstr]] = {}
+    entry_name = fn.entry
 
     # Create phi nodes for block params
     for name, block in fn.blocks.items():
         builder = ir.IRBuilder(llvm_blocks[name])
         phi_nodes[name] = {}
+        if name == entry_name:
+            continue  # entry params come from function args directly
         for param in block.params:
             phi = builder.phi(_llvm_type(param.type), name=param.name)
             phi_nodes[name][param.name] = phi
@@ -48,13 +51,13 @@ def lower_function(fn: mir.Function) -> tuple[str, bytes]:
         block = fn.blocks[bname]
         builder = ir.IRBuilder(llvm_blocks[bname])
         env: dict[str, ir.Value] = {}
-        # params via phi
-        for param in block.params:
-            env[param.name] = phi_nodes[bname][param.name]
-        # function params in entry block
-        if bname == fn.entry:
+        # params
+        if bname == entry_name:
             for p, arg in zip(fn.params, llvm_fn.args):
                 env[p.name] = arg
+        else:
+            for param in block.params:
+                env[param.name] = phi_nodes[bname][param.name]
         for instr in block.instructions:
             if isinstance(instr, mir.Const):
                 env[instr.dest] = _const(builder, instr.type, instr.value)
