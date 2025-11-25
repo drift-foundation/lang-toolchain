@@ -110,6 +110,13 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - Capturing closures lower to a fat object `{ env_ptr, call_ptr }`. The env is a heap box holding captured values according to their capture modes (move by default; explicit `copy` for `Copy` values; borrow captures once borrow/lifetime checking is present).
 - Drop runs exactly once on the env; the closure object is move-only by default. Callable interfaces (e.g., `Fn`/`FnMut`/`FnOnce` equivalents) can be implemented by pointing their vtables at the closure’s call thunk and env drop.
 
+## Error ABI (calls and raise)
+- Error representation: `Error` lowers to an opaque heap-allocated object referenced as `Error*` at MIR/LLVM time. Constructors/raises allocate the `Error`; ownership is transferred to the caller/error edge. The ultimate handler frees it via a runtime `error_free(err)`.
+- Call convention with errors: functions that can raise return a pair `{ T, Error* }`, where `Error* == null` means success. For functions whose result type is `Error`, the return is just `Error*`.
+- Calls with error edges: MIR calls carry `normal`/`error` edges. Codegen splits the pair and branches on `err == null` to the normal successor (passing `T`) or the error successor (passing `Error*`). Callers propagate the `Error*` on the error edge without freeing; the handler frees it.
+- `raise` lowers to returning `{ undef<T>, err_ptr }` along the error path (or `err_ptr` if the function’s return type is `Error`). There is no unwinding; propagation is explicit via error edges.
+- Top-level handlers (e.g., runtime entry) are responsible for displaying/freeing uncaught errors.
+
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
 - Includes DMIR version in the header so verifiers can enforce compatibility.
