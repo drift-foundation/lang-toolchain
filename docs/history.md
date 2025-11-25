@@ -16,6 +16,7 @@
 - Added a DMIR note for closures: capturing closures are fat `{env_ptr, call_ptr}` with a single env drop; non-capturing are thin pointers; callable interfaces can target the closure thunk/env.
 - Added callable-usage examples: a single `Callable<Args, R>` interface with usage determined by how it’s passed—`ref` for pure reuse, `ref mut` for stateful reuse, by value to consume (single-use for move-only callables, duplicating `Copy` ones).
 - Added a TODO track for closure implementation: lower closure literals to `{env_ptr, call_ptr}`, generate thunks, represent thin/fat closures in MIR/LLVM with env drops, wire callable invocation/desugaring, and add borrow captures once borrow checking is available.
+- Clarified DMP threat model and verification: signatures are checked only at import/compile time (not at runtime), and DMP guards against supply-chain tampering, not against attackers who already control the compiler/linker/runtime.
 
 ## 2025-11-20
 - Captured the `lang.core.source_location` helper in the spec as a zero-cost intrinsic that lowers to the current file/line. Kept the data shape explicit (`SourceLocation` struct) so callsites can choose when to capture site metadata, thread it through `^` context bindings, or pass it into exceptions; avoided auto-injecting locations in the runtime to keep logging/telemetry opt-in. (Prototype interpreter still needs the intrinsic wired in.)

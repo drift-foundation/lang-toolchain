@@ -2502,6 +2502,7 @@ Drift distributes code as **digitally signed module packages (DMPs)** built arou
 - modules often travel through untrusted mirrors, caches, or registries; signatures ensure they weren’t tampered with en route.
 - reproducible canonical IR decouples semantic identity from backend artifacts, so verification survives compiler/platform differences.
 - dependency manifests can pin digests/signers to prevent supply-chain attacks.
+- Threat model: DMP protects against supply-chain and dependency tampering (swapped module artifacts). It does not protect against attackers who can already modify the compiler, linker, or the running process itself.
 
 ### 18.1 Position in the pipeline
 
@@ -2563,6 +2564,8 @@ pub  = "base64..."
 ```
 
 Projects may additionally pin dependency digests or require specific signers.
+
+**Verification point.** DMP signatures are verified only at module import / compilation time by the Drift toolchain. No runtime signature verification is performed by the generated program, and DMP is not a runtime tamper-resistance mechanism.
 
 ### 18.5 Security properties
 
