@@ -107,6 +107,18 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     val = builder.extract_value(call_val, 0, name=instr.dest)
                     err = builder.extract_value(call_val, 1, name=f"{instr.dest}_err")
                     env[instr.dest] = val
+                    # Append caller frame to error before branching on the error edge.
+                    file_gv = _const(builder, STR, "<unknown>")
+                    func_gv = _const(builder, STR, fn.name)
+                    line_const = _const(builder, I64, 0)
+                    push_fn = llvm_module.globals.get("error_push_frame")
+                    if push_fn is None or not isinstance(push_fn, ir.Function):
+                        push_fn = ir.Function(
+                            llvm_module,
+                            ir.FunctionType(_llvm_type(ERROR), [_llvm_type(ERROR), _llvm_type(STR), _llvm_type(STR), _llvm_type(I64)]),
+                            name="error_push_frame",
+                        )
+                    err = builder.call(push_fn, [err, file_gv, func_gv, line_const])
                     if instr.err_dest:
                         env[instr.err_dest] = err
                     is_ok = builder.icmp_signed("==", err, ir.Constant(err.type, None))
