@@ -19,6 +19,9 @@
   - Add borrow-capture support once borrow/lifetime checking is in place.
 - MIR verifier:
   - Finish dominance/dataflow: ensure uses are dominated by defs across CFG, tighten block param/arg checks, and enforce type consistency with propagated info.
+- Codegen coverage:
+  - Add runtime/codegen tests that exercise call normal/error edges (try/else, try/catch) once error edges/raise have a real lowering in MIR→LLVM.
+  - Increase MIR→LLVM codegen cases beyond the current sum_int64s to cover more ops/branches/returns.
 - Modules/interop: Cross-module support adds a few complexities. It’s an ABI and tooling problem: agreeing on data layouts (field layout/alignment/ownership), calling conventions, and error/backtrace representation so modules built separately can interoperate safely. That’s why it’s deferred until we’ve locked the single-module MIR.
 		- Error propagation ABI: errors need a stable, module-independent representation (layout, ownership rules) so they can cross boundaries without being interpreted incorrectly.
 		- Backtrace/handles: stack info must survive module hops—either as an opaque handle or normalized form that can be merged/symbolicated later.

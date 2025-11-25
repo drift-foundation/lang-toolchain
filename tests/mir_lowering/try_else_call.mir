@@ -1,0 +1,10 @@
+fn try_call(a: Int64) -> Int64 { entry = bb0 }
+bb0(a: Int64):
+  _t2 = call foo(a) normal bb_norm1(_t2) error bb_err2
+bb_err2:
+  _t3 = const Int64 7
+  br bb_join3(_t3)
+bb_join3(phi1: Int64):
+  return phi1
+bb_norm1(_t1: Int64):
+  br bb_join3(_t1)

@@ -1,0 +1,7 @@
+fn try_call(a: Int64) returns Int64 {
+    return try foo(a) else 7
+}
+
+fn foo(a: Int64) returns Int64 {
+    return a
+}
