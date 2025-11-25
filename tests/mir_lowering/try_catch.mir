@@ -2,9 +2,14 @@ fn main() -> Int64 { entry = bb0 }
 bb0:
   br bb_try_body1
 bb_catch2(err: Error):
-  _t3 = const Int64 7
-  return _t3
+  _t10 = const Int64 7
+  return _t10
 bb_try_body1:
-  _t1 = const String bad
-  _t2 = call error_new(_t1)
-  br bb_catch2(_t2)
+  _t3 = const String bad
+  _t4 = const String None
+  _t5 = const String None
+  _t6 = const Int64 0
+  _t7 = const String None
+  _t8 = const Int64 0
+  _t9 = call drift_error_new(_t3, _t4, _t5, _t6, _t7, _t8)
+  br bb_catch2(_t9)

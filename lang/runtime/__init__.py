@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Mapping, Sequence
 
-from ..types import DISPLAYABLE, ERROR, STR, UNIT, FunctionSignature
+from ..types import DISPLAYABLE, ERROR, STR, UNIT, I64, FunctionSignature
 
 OUT_WRITELN_SIGNATURE = FunctionSignature(
     "out.writeln", (DISPLAYABLE,), UNIT, effects=None
 )
 ERROR_NEW_SIGNATURE = FunctionSignature("error_new", (STR,), ERROR, effects=None)
+DRIFT_ERROR_NEW_SIGNATURE = FunctionSignature(
+    "drift_error_new",
+    (STR, STR, DISPLAYABLE, I64, DISPLAYABLE, I64),
+    ERROR,
+    effects=None,
+)
 
 
 @dataclass
@@ -102,6 +108,10 @@ BUILTINS: Mapping[str, BuiltinFunction] = {
     ),
     "error_new": BuiltinFunction(
         signature=ERROR_NEW_SIGNATURE,
+        impl=_builtin_error_new,
+    ),
+    "drift_error_new": BuiltinFunction(
+        signature=DRIFT_ERROR_NEW_SIGNATURE,
         impl=_builtin_error_new,
     ),
 }

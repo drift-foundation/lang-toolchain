@@ -79,10 +79,14 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                         if func_map and instr.callee in func_map:
                             callee = func_map[instr.callee]
                         else:
-                            ret_ty = _llvm_type(fn.return_type)
-                            pair_ty = ir.LiteralStructType([ret_ty, _llvm_type(ERROR)])
-                            arg_tys = [val.type for val in arg_vals]
-                            callee_ty = ir.FunctionType(pair_ty, arg_tys)
+                            if instr.callee == "drift_error_new":
+                                ret_ty = _llvm_type(ERROR)
+                                callee_ty = ir.FunctionType(ret_ty, [val.type for val in arg_vals])
+                            else:
+                                ret_ty = _llvm_type(fn.return_type)
+                                pair_ty = ir.LiteralStructType([ret_ty, _llvm_type(ERROR)])
+                                arg_tys = [val.type for val in arg_vals]
+                                callee_ty = ir.FunctionType(pair_ty, arg_tys)
                             callee = ir.Function(llvm_module, callee_ty, name=instr.callee)
                     call_val = builder.call(callee, arg_vals, name=instr.dest)
                     if not isinstance(call_val.type, ir.LiteralStructType):
@@ -116,7 +120,7 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                         if func_map and instr.callee in func_map:
                             callee = func_map[instr.callee]
                         else:
-                            ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else fn.return_type)
+                            ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "drift_error_new", "error"} else fn.return_type)
                             arg_tys = [val.type for val in arg_vals]
                             callee_ty = ir.FunctionType(ret_ty, arg_tys)
                             callee = ir.Function(llvm_module, callee_ty, name=instr.callee)
@@ -188,9 +192,12 @@ def _const(builder: ir.IRBuilder, ty: Type, val: object) -> ir.Value:
     if ty == F64:
         return ir.Constant(ir.DoubleType(), float(val))
     if ty == STR:
+        if val is None:
+            return ir.Constant(ir.IntType(8).as_pointer(), None)
         data = bytearray(str(val).encode("utf-8"))
         data.append(0)
-        gv = ir.GlobalVariable(builder.module, ir.ArrayType(ir.IntType(8), len(data)), name=f".str{len(data)}")
+        unique_id = len(builder.module.globals)
+        gv = ir.GlobalVariable(builder.module, ir.ArrayType(ir.IntType(8), len(data)), name=f".str{unique_id}")
         gv.linkage = "internal"
         gv.global_constant = True
         gv.initializer = ir.Constant(gv.type.pointee, data)

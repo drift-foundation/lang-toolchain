@@ -65,6 +65,23 @@ struct Error* drift_error_new(const char* event, const char* domain, const struc
                 derr->attrs[i].value_json = vcpy;
             }
         }
+    } else {
+        /* Synthesize a single msg attr from the event text if none provided. */
+        derr->attrs = (struct DriftErrorAttr*)calloc(1, sizeof(struct DriftErrorAttr));
+        if (!derr->attrs) { drift_error_free(derr); free(wrapper); return NULL; }
+        derr->attr_count = 1;
+        derr->attrs[0].key = "msg";
+        if (derr->event) {
+            size_t vl = strlen(derr->event);
+            /* store as {"msg":"..."} */
+            size_t buf_len = vl + 10;
+            char* vcpy = (char*)malloc(buf_len + 1);
+            if (!vcpy) { drift_error_free(derr); free(wrapper); return NULL; }
+            snprintf(vcpy, buf_len + 1, "{\"msg\":\"%s\"}", derr->event);
+            derr->attrs[0].value_json = vcpy;
+        } else {
+            derr->attrs[0].value_json = "{\"msg\":\"unknown\"}";
+        }
     }
     if (frame_count > 0 && frames) {
         derr->frames = (struct DriftFrame*)calloc(frame_count, sizeof(struct DriftFrame));
@@ -74,34 +91,7 @@ struct Error* drift_error_new(const char* event, const char* domain, const struc
             derr->frames[i] = frames[i];
         }
     }
-    /* Build a diagnostic string: prefer first attr key/value, else event/domain. */
-    if (attr_count > 0 && attrs && attrs[0].key && attrs[0].value_json) {
-        snprintf(diag_buf, sizeof(diag_buf), "{\"%s\":\"%s\"}", attrs[0].key, attrs[0].value_json);
-    } else if (attr_count > 0 && attrs && attrs[0].value_json) {
-        /* if no key, emit a msg wrapper */
-        snprintf(diag_buf, sizeof(diag_buf), "{\"msg\":\"%s\"}", attrs[0].value_json);
-    } else if (event) {
-        snprintf(diag_buf, sizeof(diag_buf), "%s", event);
-    } else {
-        snprintf(diag_buf, sizeof(diag_buf), "<unknown>");
-    }
-    size_t dl = strlen(diag_buf);
-    char* dcpy = (char*)malloc(dl + 1);
-    if (!dcpy) { drift_error_free(derr); free(wrapper); return NULL; }
-    memcpy(dcpy, diag_buf, dl + 1);
-    /* Store as a synthetic attr value_json for reuse. */
     derr->free_fn = drift_error_free;
-    if (!derr->attrs) {
-        struct DriftErrorAttr* diag_attr = (struct DriftErrorAttr*)calloc(1, sizeof(struct DriftErrorAttr));
-        if (diag_attr) {
-            diag_attr[0].key = "diag";
-            diag_attr[0].value_json = dcpy;
-            derr->attrs = diag_attr;
-            derr->attr_count = 1;
-            dcpy = NULL;
-        }
-    }
-    if (dcpy) free(dcpy);
     derr->free_fn = drift_error_free;
     wrapper->inner = derr;
     return wrapper;
@@ -120,13 +110,6 @@ const char* error_to_cstr(struct Error* err) {
 void error_free(struct Error* err) {
     if (!err) return;
     if (err->inner) {
-        /* Free any diagnostic attr we injected */
-        if (err->inner->attr_count == 1 && err->inner->attrs && err->inner->attrs[0].key && strcmp(err->inner->attrs[0].key, "diag") == 0) {
-            free((void*)err->inner->attrs[0].value_json);
-            free(err->inner->attrs);
-            err->inner->attrs = NULL;
-            err->inner->attr_count = 0;
-        }
         drift_error_free(err->inner);
     }
     free(err);

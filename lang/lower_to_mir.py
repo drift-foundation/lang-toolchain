@@ -175,15 +175,18 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
             if isinstance(stmt, ast.TryStmt):
                 return _lower_try(stmt, current_block, temp_types, err_target)
             if isinstance(stmt, ast.RaiseStmt):
-                # Special-case raising an exception constructor: build an Error* via error_new.
+                # Special-case raising an exception constructor: build an Error* via drift_error_new.
                 if (
                     isinstance(stmt.value, ast.Call)
                     and isinstance(stmt.value.func, ast.Name)
                     and stmt.value.func.ident in checked.exceptions
                 ):
                     exc_name = stmt.value.func.ident
+                    # Build attrs array from kwargs/positional (pos mapped to declared args).
+                    attr_json_val = fresh_val()
+                    attr_count_val = fresh_val()
+                    # For now, serialize only the first msg kwarg/arg into {"msg":"..."}.
                     msg_expr = None
-                    # Prefer a kwarg named msg if present, else first positional.
                     for kw in stmt.value.kwargs:
                         if kw.name == "msg":
                             msg_expr = kw.value
@@ -191,17 +194,32 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
                     if msg_expr is None and stmt.value.args:
                         msg_expr = stmt.value.args[0]
                     if msg_expr is None:
-                        # Fallback to a constant with the exception name.
-                        msg_val = fresh_val()
-                        current_block.instructions.append(
-                            mir.Const(dest=msg_val, type=STR, value=exc_name)
-                        )
-                        temp_types[msg_val] = STR
-                    else:
-                        msg_val, _, current_block = lower_expr(msg_expr, current_block, temp_types)
+                        msg_expr = ast.Literal(loc=stmt.loc, value=exc_name)
+                    msg_val, _, current_block = lower_expr(msg_expr, current_block, temp_types)
+                    # For now, treat event=msg, no domain, and empty attrs/frames (runtime will synthesize msg attr).
+                    evt_val = msg_val
+                    dom_val = fresh_val()
+                    current_block.instructions.append(mir.Const(dest=dom_val, type=STR, value=None))
+                    temp_types[dom_val] = STR
+                    attr_json_val = fresh_val()
+                    attr_count_val = fresh_val()
+                    frames_val = fresh_val()
+                    frame_count_val = fresh_val()
+                    current_block.instructions.append(mir.Const(dest=attr_json_val, type=STR, value=None))
+                    current_block.instructions.append(mir.Const(dest=attr_count_val, type=I64, value=0))
+                    current_block.instructions.append(mir.Const(dest=frames_val, type=STR, value=None))
+                    current_block.instructions.append(mir.Const(dest=frame_count_val, type=I64, value=0))
+                    temp_types[attr_json_val] = STR
+                    temp_types[attr_count_val] = I64
+                    temp_types[frames_val] = STR
+                    temp_types[frame_count_val] = I64
                     err_tmp = fresh_val()
                     current_block.instructions.append(
-                        mir.Call(dest=err_tmp, callee="error_new", args=[msg_val])
+                        mir.Call(
+                            dest=err_tmp,
+                            callee="drift_error_new",
+                            args=[evt_val, dom_val, attr_json_val, attr_count_val, frames_val, frame_count_val],
+                        )
                     )
                     temp_types[err_tmp] = ERROR
                     if err_target:
