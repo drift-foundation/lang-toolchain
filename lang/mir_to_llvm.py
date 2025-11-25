@@ -96,10 +96,10 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     if instr.normal:
                         _add_phi_incoming(phi_nodes, instr.normal, env, llvm_blocks[bname])
                     if instr.error:
-                        # On error edge, pass the Error*; create a temp binding for clarity.
-                        env["_err"] = err
-                        instr.error.args = [ "_err" ]
-                        _add_phi_incoming(phi_nodes, instr.error, env, llvm_blocks[bname])
+                        # On error edge, pass the Error* using a temporary SSA name.
+                        err_name = f"{instr.dest}_errptr"
+                        env[err_name] = err
+                        _add_phi_incoming(phi_nodes, mir.Edge(target=instr.error.target, args=[err_name]), env, llvm_blocks[bname])
                     then_bb = llvm_blocks[instr.normal.target] if instr.normal else llvm_blocks[bname]
                     else_bb = llvm_blocks[instr.error.target] if instr.error else llvm_blocks[bname]
                     builder.cbranch(is_ok, then_bb, else_bb)
@@ -191,6 +191,18 @@ def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Va
         return builder.mul(lhs, rhs, name=instr.dest)
     if op == "/":
         return builder.sdiv(lhs, rhs, name=instr.dest)
+    if op == "==":
+        return builder.icmp_signed("==", lhs, rhs, name=instr.dest)
+    if op == "!=":
+        return builder.icmp_signed("!=", lhs, rhs, name=instr.dest)
+    if op == "<":
+        return builder.icmp_signed("<", lhs, rhs, name=instr.dest)
+    if op == "<=":
+        return builder.icmp_signed("<=", lhs, rhs, name=instr.dest)
+    if op == ">":
+        return builder.icmp_signed(">", lhs, rhs, name=instr.dest)
+    if op == ">=":
+        return builder.icmp_signed(">=", lhs, rhs, name=instr.dest)
     raise NotImplementedError(f"binary op {op}")
 
 

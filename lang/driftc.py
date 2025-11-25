@@ -23,12 +23,12 @@ def compile_file(source_path: Path, output_path: Path, emit_ir: bool) -> int:
     checked = checker.Checker(builtin_signatures()).check(prog)
     mir_prog = lower_straightline(checked)
     verify_program(mir_prog)
-    fn = next(iter(mir_prog.functions.values()))
-    llvm_ir, obj_bytes = lower_function(fn)
-    if emit_ir:
-        print(llvm_ir)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(obj_bytes)
+    for fn in mir_prog.functions.values():
+        llvm_ir, obj_bytes = lower_function(fn)
+        if emit_ir:
+            print(llvm_ir)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(obj_bytes)
     return 0
 
 

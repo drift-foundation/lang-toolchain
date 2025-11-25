@@ -141,8 +141,7 @@ def _run_codegen_tests() -> int:
         if not case_dir.is_dir():
             continue
         if case_dir.name == "error_path":
-            # Placeholder until error ABI/runtime helpers are implemented.
-            print(f"[skip] codegen {case_dir.name}: error path codegen pending runtime error helpers", file=sys.stderr)
+            print(f"[skip] codegen {case_dir.name}: pending runtime error helpers", file=sys.stderr)
             continue
         drift_path = case_dir / "input.drift"
         expect_path = case_dir / "expect.json"
