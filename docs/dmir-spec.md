@@ -117,14 +117,17 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - `raise` lowers to returning `{ undef<T>, err_ptr }` along the error path (or `err_ptr` if the function’s return type is `Error`). There is no unwinding; propagation is explicit via error edges.
 - Top-level handlers (e.g., runtime entry) are responsible for displaying/freeing uncaught errors.
 
-### Error object layout (opaque to user code, stable for ABI)
-- Stored/returned as `Error*` (heap-allocated). User code treats it as opaque; runtime/helper APIs can introspect/format it.
-- Fields (conceptual):
-  - `event_id` or name (string/interned id)
-  - `args`: array of `{name: String, value: String}` (preformatted for display)
-  - `ctx_frames`: array of `{fn_name: String, locals: Map<String, String>}`
-  - `backtrace`: opaque handle or array of `{file: String, line: Int}` frames
-- Ownership: created by constructors/`raise`, transferred to caller; caller either frees via `error_free(err)` or propagates by passing along the error edge. Handlers must free when done; uncaught errors freed at top-level entry after reporting.
+### Error object layout (C ABI; user code sees an opaque handle)
+- Stored/returned as `Error*` (heap-allocated). User code treats it as opaque; the runtime exposes a stable C ABI so modules/tools can interoperate and so the signed DMIR has a deterministic backing layout.
+- Stable C structs (layout frozen once blessed):
+  - `struct DriftErrorAttr { const char* key; const char* value_json; };` — keys/values are UTF-8, values are deterministically encoded (e.g., JSON scalars/objects), attrs sorted by key for canonicalization.
+  - `struct DriftFrame { const char* file; uint32_t line; const char* func; };` — optional backtrace frames captured at raise sites.
+  - `struct DriftError { const char* event; const char* domain; struct DriftErrorAttr* attrs; size_t attr_count; struct DriftFrame* frames; size_t frame_count; void* ctx; void (*free_fn)(struct DriftError*); };`
+- `domain` is an optional namespace for the event (e.g., `net`, `net.ip6`, `io.fs`); if absent, it may be `NULL`. Exception definitions can supply a default domain; throw sites may override via a `domain` kwarg; builtin/runtime errors use a fixed domain (e.g., `runtime`).
+- Ownership: constructors/`raise` allocate `DriftError` on the heap; ownership passes to the caller/handler. Handlers either propagate the pointer along an error edge or free exactly once via `free_fn(err)` (or a standard `error_free(err)` entry point). Uncaught errors are freed at the top-level entry after reporting.
+- Canonicalization: attrs are stored in deterministic order; strings are null-terminated; the struct alignment/layout is fixed for signing/backcompat. No external C libraries are required; the header is self-contained and C-ABI safe.
+- Helper APIs (C ABI): `error_new(event, domain, attrs, attr_count, frames, frame_count) -> Error*`, `error_to_cstr(Error*) -> const char*` (preformatted diagnostic), `error_free(Error*)`.
+- `throw Event(args...)` lowers to construction of this `Error*`; `try/catch` moves the pointer along error edges; calls/ops can raise; `raise` terminates the function with the error path. Error edges carry the `Error*` value; handlers decide whether to free or propagate.
 
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
