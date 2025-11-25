@@ -95,12 +95,13 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                         args=arg_vals,
                         normal=mir.Edge(target=norm_name, args=[dest]),
                         error=mir.Edge(target=err_name, args=[err_dest]),
+                        loc=expr.loc,
                     )
                 )
                 temp_types[dest] = call_ty
                 temp_types[err_dest] = ERROR
                 norm_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[norm_param.name]))
-                err_block.terminator = mir.Raise(error=err_param.name)
+                err_block.terminator = mir.Br(target=mir.Edge(target=err_target or err_name, args=[err_param.name]))
                 temp_types[join_param.name] = call_ty
                 return join_param.name, call_ty, join_block
             if isinstance(expr, ast.Ternary):
@@ -273,7 +274,9 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                     temp_types[frame_funcs_arr] = STR
                     temp_types[frame_lines_arr] = I64
                     temp_types[frame_count] = I64
-                    evt_val = msg_val
+                    evt_val = fresh_val()
+                    current_block.instructions.append(mir.Const(dest=evt_val, type=STR, value=exc_name))
+                    temp_types[evt_val] = STR
                     dom_val = fresh_val()
                     exc_domain = checked.exceptions[exc_name].domain if exc_name in checked.exceptions else None
                     if domain_expr is not None:
