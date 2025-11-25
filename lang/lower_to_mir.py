@@ -386,6 +386,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
             params=[mir.Param(name=p.name, type=fn_info.signature.params[idx]) for idx, p in enumerate(fn_def.params)],
             return_type=fn_info.signature.return_type,
             entry=entry.name,
+            source=source_name,
             blocks=blocks,
         )
         functions[fn.name] = fn

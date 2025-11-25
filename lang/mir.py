@@ -185,6 +185,7 @@ class Function:
     params: List[Param]
     return_type: Type
     entry: str
+    source: Optional[str] = None
     blocks: Dict[str, BasicBlock] = field(default_factory=dict)
 
 
