@@ -117,6 +117,15 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - `raise` lowers to returning `{ undef<T>, err_ptr }` along the error path (or `err_ptr` if the function’s return type is `Error`). There is no unwinding; propagation is explicit via error edges.
 - Top-level handlers (e.g., runtime entry) are responsible for displaying/freeing uncaught errors.
 
+### Error object layout (opaque to user code, stable for ABI)
+- Stored/returned as `Error*` (heap-allocated). User code treats it as opaque; runtime/helper APIs can introspect/format it.
+- Fields (conceptual):
+  - `event_id` or name (string/interned id)
+  - `args`: array of `{name: String, value: String}` (preformatted for display)
+  - `ctx_frames`: array of `{fn_name: String, locals: Map<String, String>}`
+  - `backtrace`: opaque handle or array of `{file: String, line: Int}` frames
+- Ownership: created by constructors/`raise`, transferred to caller; caller either frees via `error_free(err)` or propagates by passing along the error edge. Handlers must free when done; uncaught errors freed at top-level entry after reporting.
+
 ## Serialization
 - Textual, deterministic format (one binding/stmt per line, ordered declarations). Binary envelope may wrap it for signing, but the textual form is canonical for hashing.
 - Includes DMIR version in the header so verifiers can enforce compatibility.

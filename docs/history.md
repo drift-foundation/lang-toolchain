@@ -32,6 +32,7 @@
 - Added an end-to-end MIR→LLVM→clang codegen test harness (`tests/mir_codegen/`), with a sample add case; harness is skipped when llvmlite/clang-15 are unavailable.
 - Restored call normal/error edges and treated call-with-edges as terminators in the verifier/CFG/dataflow; MIR→LLVM now branches to call successors (placeholder success check; error payload TBD).
 - Documented the Error ABI: errors are heap-allocated `Error*` owned by the caller; calls return `{T, Error*}` (or `Error*` for Error returns), branch on `err == null`, and propagate the pointer along error edges; handlers/freeing happen at catch/top-level.
+- Defined the Error object layout for the ABI: `Error*` heap object with event id/name, preformatted args, ctx frames, backtrace handle; opaque to user code; caller frees via `error_free` unless propagating.
 
 ## 2025-11-20
 - Captured the `lang.core.source_location` helper in the spec as a zero-cost intrinsic that lowers to the current file/line. Kept the data shape explicit (`SourceLocation` struct) so callsites can choose when to capture site metadata, thread it through `^` context bindings, or pass it into exceptions; avoided auto-injecting locations in the runtime to keep logging/telemetry opt-in. (Prototype interpreter still needs the intrinsic wired in.)
