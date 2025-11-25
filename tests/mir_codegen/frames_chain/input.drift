@@ -1,0 +1,13 @@
+exception Boom(msg: String)
+
+fn level3() returns Int64 {
+    throw Boom(msg = "L3")
+}
+
+fn level2() returns Int64 {
+    return level3()
+}
+
+fn level1() returns Int64 {
+    return level2()
+}

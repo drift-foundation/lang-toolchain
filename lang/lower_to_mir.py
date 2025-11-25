@@ -73,13 +73,36 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                 for a in expr.args:
                     v, _, current_block = lower_expr(a, current_block, temp_types)
                     arg_vals.append(v)
-                current_block.instructions.append(
-                    mir.Call(dest=dest, err_dest=err_dest, callee=expr.func.ident, args=arg_vals)
-                )
+                # Build normal/error continuations and a join.
+                norm_name = fresh_block("bb_norm")
+                err_name = fresh_block("bb_err")
+                join_name = fresh_block("bb_join")
                 call_ty = _lookup_type(expr.func.ident, block_params, temp_types, checked)
+                norm_param = mir.Param(name=fresh_val(), type=call_ty)
+                err_param = mir.Param(name=fresh_val(), type=ERROR)
+                join_param = mir.Param(name=fresh_val(), type=call_ty)
+                norm_block = mir.BasicBlock(name=norm_name, params=[norm_param])
+                err_block = mir.BasicBlock(name=err_name, params=[err_param])
+                join_block = mir.BasicBlock(name=join_name, params=[join_param])
+                blocks[norm_name] = norm_block
+                blocks[err_name] = err_block
+                blocks[join_name] = join_block
+                current_block.instructions.append(
+                    mir.Call(
+                        dest=dest,
+                        err_dest=err_dest,
+                        callee=expr.func.ident,
+                        args=arg_vals,
+                        normal=mir.Edge(target=norm_name, args=[dest]),
+                        error=mir.Edge(target=err_name, args=[err_dest]),
+                    )
+                )
                 temp_types[dest] = call_ty
                 temp_types[err_dest] = ERROR
-                return dest, call_ty, current_block
+                norm_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[norm_param.name]))
+                err_block.terminator = mir.Raise(error=err_param.name)
+                temp_types[join_param.name] = call_ty
+                return join_param.name, call_ty, join_block
             if isinstance(expr, ast.Ternary):
                 cond_val, _, current_block = lower_expr(expr.condition, current_block, temp_types)
 

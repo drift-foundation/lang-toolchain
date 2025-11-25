@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "",
+  "stderr": "{\"msg\":\"L3\"}\nframes=3\ninput.drift:level3:4\n/home/slmobile/src/drift-lang/tests/mir_codegen/frames_chain/input.drift:level2:0\n/home/slmobile/src/drift-lang/tests/mir_codegen/frames_chain/input.drift:level1:0\n"
+}
