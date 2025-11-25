@@ -11,7 +11,7 @@ class LoweringError(Exception):
     pass
 
 
-def lower_straightline(checked: CheckedProgram) -> mir.Program:
+def lower_straightline(checked: CheckedProgram, source_name: str | None = None) -> mir.Program:
     """
     Minimal lowering supporting:
     - params/literals/names/binary ops
@@ -189,7 +189,9 @@ def lower_straightline(checked: CheckedProgram) -> mir.Program:
                     frame_file = fresh_val()
                     frame_func = fresh_val()
                     frame_line = fresh_val()
-                    current_block.instructions.append(mir.Const(dest=frame_file, type=STR, value="<unknown>"))
+                    from pathlib import Path
+                    file_label = Path(source_name).name if source_name else "<unknown>"
+                    current_block.instructions.append(mir.Const(dest=frame_file, type=STR, value=file_label))
                     current_block.instructions.append(mir.Const(dest=frame_func, type=STR, value=fn_def.name))
                     current_block.instructions.append(mir.Const(dest=frame_line, type=I64, value=stmt.loc.line))
                     temp_types[frame_file] = STR

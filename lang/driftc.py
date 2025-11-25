@@ -21,7 +21,7 @@ def compile_file(source_path: Path, output_path: Path, emit_ir: bool) -> int:
     source = source_path.read_text()
     prog = parser.parse_program(source)
     checked = checker.Checker(builtin_signatures()).check(prog)
-    mir_prog = lower_straightline(checked)
+    mir_prog = lower_straightline(checked, source_name=str(source_path))
     verify_program(mir_prog)
     # TODO: handle multiple functions; currently only the first is emitted.
     fn = next(iter(mir_prog.functions.values()))

@@ -5,7 +5,7 @@ bb_catch2(err: Error):
   _t16 = const Int64 7
   return _t16
 bb_try_body1:
-  _t1 = const String <unknown>
+  _t1 = const String try_catch.drift
   _t2 = const String main
   _t3 = const Int64 5
   _t4 = const String bad
