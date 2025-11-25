@@ -201,20 +201,21 @@ def _build_and_link(drift_path: Path, harness_path: Path, out_dir: Path, case: s
     # Write generated object
     obj_path = out_dir / f"{case}.o"
     obj_path.write_bytes(obj_bytes)
-    # Compile shared runtime stubs
+    # Compile shared runtime stubs (PIC for PIE linking)
     runtime_dir = CODEGEN_DIR / "runtime"
     c_objects = []
     for c_path in sorted(runtime_dir.glob("*.c")):
         c_obj = out_dir / f"{case}_{c_path.stem}_rt.o"
-        subprocess.run(["clang-15", "-c", str(c_path), "-o", str(c_obj)], check=True)
+        subprocess.run(["clang-15", "-fPIC", "-c", str(c_path), "-o", str(c_obj)], check=True)
         c_objects.append(str(c_obj))
     # Compile all .c files in the case directory
     for c_path in sorted(drift_path.parent.glob("*.c")):
         c_obj = out_dir / f"{case}_{c_path.stem}.o"
-        subprocess.run(["clang-15", "-c", str(c_path), "-o", str(c_obj)], check=True)
+        subprocess.run(["clang-15", "-fPIC", "-c", str(c_path), "-o", str(c_obj)], check=True)
         c_objects.append(str(c_obj))
     exe_path = out_dir / f"{case}_exe"
-    subprocess.run(["clang-15", *c_objects, str(obj_path), "-o", str(exe_path)], check=True)
+    # Link as PIE now that objects are PIC.
+    subprocess.run(["clang-15", "-pie", *c_objects, str(obj_path), "-o", str(exe_path)], check=True)
     return llvm_ir, exe_path
 
 

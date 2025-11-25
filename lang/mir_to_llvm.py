@@ -15,7 +15,7 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
     llvm.initialize_native_target()
     llvm.initialize_native_asmprinter()
     target = llvm.Target.from_default_triple()
-    tm = target.create_target_machine()
+    tm = target.create_target_machine(reloc="pic", codemodel="small")
 
     llvm_module = ir.Module(name=f"{fn.name}_module")
     llvm_module.triple = llvm.get_default_triple()
