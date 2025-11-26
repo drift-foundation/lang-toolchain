@@ -203,7 +203,7 @@ This design keeps ownership explicit: you opt *out* of move-only semantics only 
 
 ### Opting into copying
 
-Types that want implicit copies implement the `Copy` trait (see Section 13.3 for the trait definition). The trait is only available when **every field is copyable**. Primitives already implement it; your structs may do the same:
+Types that want implicit copies implement the `Copy` trait (see Chapter 5 for the trait definition). The trait is only available when **every field is copyable**. Primitives already implement it; your structs may do the same:
 
 ```drift
 implement Copy for Int {}
@@ -731,7 +731,7 @@ trait Sync { }
 
 Implementing `Send` means a value may be moved to another thread. Implementing `Sync` means shared references may be used concurrently. A struct may opt into `Send` if all of its fields are `Send`; similarly for `Sync`. Types that manage thread-affine resources (e.g., OS handles that must stay on one thread) simply omit these traits and remain single-threaded.
 
-The concurrency chapter (Section 16.6) references these bounds when describing virtual-thread movement and sharing.
+The concurrency chapter (Chapter 19) references these bounds when describing virtual-thread movement and sharing.
 
 ---
 
@@ -1565,7 +1565,7 @@ val explicit: Array<Int64> = [1, 2, 3]  // annotation still allowed when desired
 - A `MutByteSlice` (`ref MutByteSlice`) is an exclusive view: while it exists, no other references (mutable or shared) to the same range are allowed.
 - Views never own memory. They rely on the original owner (often a `ByteBuffer` or foreign allocation) to outlive the slice’s scope. Moving the owner invalidates outstanding slices, just like any other borrow.
 
-These rules integrate with `Send`/`Sync` (Section 13.13): a `ByteSlice` is `Send`/`Sync` because it is immutable metadata; a `MutByteSlice` is neither, so you cannot share a mutable view across threads without additional synchronization.
+These rules integrate with `Send`/`Sync` (see Chapter 5, thread-safety marker traits): a `ByteSlice` is `Send`/`Sync` because it is immutable metadata; a `MutByteSlice` is neither, so you cannot share a mutable view across threads without additional synchronization.
 
 This design yields zero-copy interop: host code can wrap foreign `(ptr, len)` pairs in `ByteSlice`, pass them through Drift APIs, and guarantee the callee sees the original bytes without copying. Likewise, `ByteBuffer.as_mut_slice()` hands a shared library a raw view to fill without reallocations. Lifetimes stay explicit and deterministic, avoiding GC-style surprises.
 
@@ -1959,6 +1959,8 @@ The `else` expression must produce the same type as the `try` expression. Except
 
 ### Internal Result<T, Error> semantics
 
+(See Chapter 10 for the `variant` definition and `Result<T, E>` basics.)
+
 Conceptual form:
 
 ```drift
@@ -2244,7 +2246,7 @@ Drift deliberately keeps raw pointer syntax out of the language surface. Low-lev
 
 ### Slots and uninitialized handles
 
-To enable placement construction without exposing addresses, the runtime uses opaque helpers (see Section 15.1.2):
+To enable placement construction without exposing addresses, the runtime uses opaque helpers (see Chapter 16, Memory model):
 
 - `Slot<T>` — a typed storage location capable of holding one `T`.
 - `Uninit<T>` — a marker denoting “not constructed yet.”
@@ -2712,7 +2714,7 @@ which lowers to:
 fn foo(...) returns Result<T, Error>
 ```
 
-using the variant described in Chapter 9:
+using the variant described in Chapter 10:
 
 ```drift
 variant Result<T, E> {
@@ -2871,7 +2873,7 @@ Errors crossing the boundary must always be represented as:
 Result<T, Error>.Err(error)
 ```
 
-where `Error` is the Chapter 9 layout:
+where `Error` is the Chapter 14 layout:
 
 ```drift
 struct Error {
@@ -2941,7 +2943,7 @@ process(j)    // error: use of moved value
 
 ## Appendix B — Grammar (EBNF excerpt)
 
-*(Trait/`implement`/`where` grammar is summarized in Appendix C.)*
+*(Traits/`implement` grammar is summarized in Appendix C.)*
 
 
 ```ebnf
