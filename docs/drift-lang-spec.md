@@ -1154,7 +1154,7 @@ Together they form a flexible dual system:
 ## 7. Imports and standard I/O
 
 Drift uses explicit imports — no global or magic identifiers.  
-Console output is available through the `std.console` module.
+For console I/O details, see Chapter 18. This chapter focuses on import mechanics.
 
 ### Import syntax (modules and symbols)
 
@@ -1180,6 +1180,7 @@ QualifiedName ::= Ident ('.' Ident)*
 - If it resolves to an **exported symbol** inside a module (e.g., `std.console.out`), the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
 - Ambiguities between module and symbol names must be disambiguated with `as` or avoided.
 - Aliases affect only the local binding; frames and module metadata always record the original module ID, not the alias.
+- For console streams and other standard I/O primitives, refer to Chapter 18.
 
 **Module identifiers**
 

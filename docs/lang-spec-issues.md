@@ -1,24 +1,3 @@
-## 7. Pipeline operator formal spec (Chapter 15)
-
-### Tasks:
-
-1. Add `>>` to operator table in **Chapter 9**.
-2. Add precedence/associativity notes.
-3. Add grammar entry in Appendix B:
-
-   ```
-   PipeExpr ::= PipeExpr ">>" PipeStage | PrimaryExpr
-   PipeStage ::= Ident | CallExpr | ...
-   ```
-4. Add desugaring rules in Chapter 15:
-
-   * Mutator: `|ref mut T|` → borrow
-   * Transformer: `|T|` → move
-   * Finalizer: `|T| returns Void` → consume
-   * Associativity: left-associative
-
----
-
 ## 8. Imports vs Standard I/O (Chapters 7 and 18)
 
 ### Tasks:
@@ -31,9 +10,7 @@
 ## 9. Closure / Callable section (Chapter 6)
 
 * Clarify whether `Callable<Args, R>` is a real interface defined somewhere.
-* Either:
-  ✔ Move closures to a dedicated chapter and fully specify `Callable`
-  ✔ OR mark the closure section as **preview** and non-normative.
+* Move closures to a dedicated chapter and fully specify `Callable`
 
 ---
 
