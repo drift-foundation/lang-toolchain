@@ -13,6 +13,7 @@
 - Error diagnostics now emit valid JSON with event/domain/attrs and a `frames` array of `{module,file,func,line}` objects; the runtime builds the string lazily in `error_to_cstr`. Exception `domain` parsing now unquotes string literals so domains print without double quotes. Updated the codegen expectations for attr arrays, error paths, and frame tests to the new JSON shape.
 - Added per-frame captured locals to the error payload: runtime ABI now carries `cap_keys/values` and per-frame counts, lowering threads `^` bindings into throw/call error paths, and `error_to_cstr` emits `captured:{...}` per frame. Added a multi-level codegen test (`tests/mir_codegen/frames_captures`) to assert captured locals across the stack; updated frame expectations accordingly.
 - Enforced canonical module IDs at compile time (lowercase alnum with dots/underscores, no leading/trailing/consecutive separators, ≤254 UTF-8 bytes, reserved prefixes blocked); frames record declared module IDs only. Added negative tests for invalid/reserved module IDs and documented import aliasing (aliases do not affect frame metadata). Fixed linter spacing in the new module tests.
+- Added `while` loops end-to-end (grammar, parser, checker, interpreter, MIR lowering), plus runtime tests for simple, nested, and nested-with-try/catch loops. Import alias support was added to the grammar/spec.
 
 ## 2025-11-24
 - Fixed the parser’s `if` builder to grab the nested `else_clause` block, so conditional statements with an else arm are preserved through parsing and lowering.

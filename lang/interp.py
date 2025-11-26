@@ -158,6 +158,11 @@ class Interpreter:
             if branch:
                 self._execute_block(branch.statements, env)
             return
+        if isinstance(stmt, ast.WhileStmt):
+            while bool(self._eval_expr(stmt.condition, env)):
+                body_env = Environment(parent=env)
+                self._execute_block(stmt.body.statements, body_env)
+            return
         if isinstance(stmt, ast.TryStmt):
             try:
                 self._execute_block(stmt.body.statements, env)

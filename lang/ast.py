@@ -212,6 +212,12 @@ class TryStmt(Stmt):
     body: Block
     catches: List[CatchClause]
 
+@dataclass
+class WhileStmt(Stmt):
+    loc: Located
+    condition: "Expr"
+    body: Block
+
 
 @dataclass
 class TryExpr(Expr):

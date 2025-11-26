@@ -1,0 +1,8 @@
+fn main() returns Int64 {
+	var i: Int64 = 0
+	while i < 3 {
+		i = i + 1
+	}
+	out.writeln(i)
+	return i
+}

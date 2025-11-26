@@ -1,0 +1,14 @@
+fn main() returns Int64 {
+	var i: Int64 = 0
+	var acc: Int64 = 0
+	while i < 3 {
+		var j: Int64 = 0
+		while j < 2 {
+			acc = acc + (i * 10 + j)
+			j = j + 1
+		}
+		i = i + 1
+	}
+	out.writeln(acc)
+	return acc
+}

@@ -38,6 +38,7 @@ from .ast import (
     Ternary,
     TryExpr,
     TryStmt,
+    WhileStmt,
     Unary,
 )
 
@@ -316,9 +317,13 @@ def _build_stmt(tree: Tree):
             return _build_expr_stmt(target)
         if stmt_kind == "import_stmt":
             return _build_import_stmt(target)
+        if stmt_kind == "while_stmt":
+            return _build_while_stmt(target)
         return None
     if kind == "if_stmt":
         return _build_if_stmt(tree)
+    if kind == "while_stmt":
+        return _build_while_stmt(tree)
     if kind == "try_stmt":
         return _build_try_stmt(tree)
     if kind == "let_stmt":
@@ -529,6 +534,26 @@ def _build_if_stmt(tree: Tree) -> IfStmt:
     then_block = _build_block(then_block_node)
     else_block = _build_block(else_block_node) if else_block_node else None
     return IfStmt(loc=loc, condition=condition, then_block=then_block, else_block=else_block)
+
+
+def _build_while_stmt(tree: Tree) -> ast.WhileStmt:
+    loc = _loc(tree)
+    condition_node = None
+    body_node = None
+    for child in tree.children:
+        if isinstance(child, Tree) and _name(child) == "terminator_opt":
+            continue
+        if condition_node is None and isinstance(child, Tree):
+            condition_node = child
+            continue
+        if isinstance(child, Tree) and _name(child) == "block":
+            body_node = child
+            break
+    if condition_node is None or body_node is None:
+        raise ValueError("malformed while statement")
+    condition = _build_expr(condition_node)
+    body = _build_block(body_node)
+    return WhileStmt(loc=loc, condition=condition, body=body)
 
 
 def _build_try_stmt(tree: Tree) -> TryStmt:

@@ -288,6 +288,12 @@ class Checker:
                 for inner in stmt.else_block.statements:
                     self._check_stmt(inner, ctx)
             return
+        if isinstance(stmt, ast.WhileStmt):
+            cond_type = self._check_expr(stmt.condition, ctx)
+            self._expect_type(cond_type, BOOL, stmt.loc)
+            for inner in stmt.body.statements:
+                self._check_stmt(inner, ctx)
+            return
         if isinstance(stmt, ast.TryStmt):
             for inner in stmt.body.statements:
                 self._check_stmt(inner, ctx)

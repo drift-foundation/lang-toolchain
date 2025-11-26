@@ -1,0 +1,23 @@
+exception StopInner(msg: String)
+
+fn main() returns Int64 {
+	var i: Int64 = 0
+	var acc: Int64 = 0
+	while i < 3 {
+		var j: Int64 = 0
+		try {
+			while j < 3 {
+				if j == 2 {
+					throw StopInner(msg = "hit")
+				}
+				acc = acc + (i * 10 + j)
+				j = j + 1
+			}
+		} catch StopInner(err) {
+			// swallow and continue outer loop
+		}
+		i = i + 1
+	}
+	out.writeln(acc)
+	return acc
+}

@@ -244,6 +244,8 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 return None
             if isinstance(stmt, ast.IfStmt):
                 return _lower_if(stmt, current_block, temp_types, capture_env, err_target)
+            if isinstance(stmt, ast.WhileStmt):
+                return _lower_while(stmt, current_block, temp_types, capture_env, err_target)
             if isinstance(stmt, ast.TryStmt):
                 return _lower_try(stmt, current_block, temp_types, capture_env, err_target)
             if isinstance(stmt, ast.RaiseStmt):
@@ -426,6 +428,34 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
             if end_else is not None:
                 end_else.terminator = mir.Br(target=mir.Edge(target=join_name))
             return join_block
+
+        def _lower_while(
+            stmt: ast.WhileStmt,
+            current_block: mir.BasicBlock,
+            temp_types: Dict[str, Type],
+            capture_env: Dict[str, str],
+            err_target: str | None = None,
+        ) -> Optional[mir.BasicBlock]:
+            cond_name = fresh_block("bb_while_cond")
+            body_name = fresh_block("bb_while_body")
+            after_name = fresh_block("bb_while_after")
+            cond_block = mir.BasicBlock(name=cond_name)
+            body_block = mir.BasicBlock(name=body_name)
+            after_block = mir.BasicBlock(name=after_name)
+            blocks[cond_name] = cond_block
+            blocks[body_name] = body_block
+            blocks[after_name] = after_block
+            current_block.terminator = mir.Br(target=mir.Edge(target=cond_name))
+            cond_val, _, cond_block = lower_expr(stmt.condition, cond_block, temp_types, capture_env, err_target=err_target)
+            cond_block.terminator = mir.CondBr(
+                cond=cond_val,
+                then=mir.Edge(target=body_name),
+                els=mir.Edge(target=after_name),
+            )
+            end_body = lower_block(stmt.body.statements, body_block, temp_types.copy(), capture_env.copy(), err_target=err_target)
+            if end_body is not None and end_body.terminator is None:
+                end_body.terminator = mir.Br(target=mir.Edge(target=cond_name))
+            return after_block
 
         def _lower_try(
             stmt: ast.TryStmt,
