@@ -100,7 +100,9 @@ def _run_mir_tests() -> int:
         source = source_path.read_text()
         prog = parser.parse_program(source)
         checked = checker.Checker(builtin_signatures()).check(prog)
-        mir_prog = lower_straightline(checked, source_name=str(source_path))
+        mir_prog = lower_straightline(
+            checked, source_name=str(source_path), module_name=checked.module or prog.module
+        )
         try:
             verify_program(mir_prog)
         except Exception as exc:
@@ -197,7 +199,9 @@ def _build_and_link(drift_path: Path, harness_path: Path, out_dir: Path, case: s
     src = entry_path.read_text()
     prog = parser.parse_program(src)
     checked = checker.Checker(builtin_signatures()).check(prog)
-    mir_prog = lower_straightline(checked, source_name=str(drift_path))
+    mir_prog = lower_straightline(
+        checked, source_name=str(drift_path), module_name=checked.module or prog.module
+    )
     verify_program(mir_prog)
     llvm_ir = ""
     obj_paths: list[Path] = []

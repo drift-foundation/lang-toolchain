@@ -1,3 +1,5 @@
+module tests.frames_chain
+
 exception Boom(msg: String)
 
 fn level3() returns Int64 {

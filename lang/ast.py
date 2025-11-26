@@ -189,6 +189,7 @@ class Program:
     statements: List[Stmt]
     structs: List[StructDef]
     exceptions: List[ExceptionDef]
+    module: Optional[str] = None
 
 
 @dataclass

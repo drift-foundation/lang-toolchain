@@ -11,7 +11,7 @@ class LoweringError(Exception):
     pass
 
 
-def lower_straightline(checked: CheckedProgram, source_name: str | None = None) -> mir.Program:
+def lower_straightline(checked: CheckedProgram, source_name: str | None = None, module_name: str | None = None) -> mir.Program:
     """
     Minimal lowering supporting:
     - params/literals/names/binary ops
@@ -23,6 +23,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
     if not checked.program.functions:
         raise LoweringError("no functions to lower")
 
+    module_label = module_name or checked.module or checked.program.module or "main"
     functions: Dict[str, mir.Function] = {}
 
     for fn_def in checked.program.functions:
@@ -219,17 +220,20 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                     # Build attrs array from kwargs/positional (pos mapped to declared args).
                     msg_expr = None
                     domain_expr = None
-                    # Add current function name and line for frames
+                    # Add current function name, module, and line for frames
                     frame_file = fresh_val()
                     frame_func = fresh_val()
+                    frame_module = fresh_val()
                     frame_line = fresh_val()
                     from pathlib import Path
                     file_label = Path(source_name).name if source_name else "<unknown>"
                     current_block.instructions.append(mir.Const(dest=frame_file, type=STR, value=file_label))
                     current_block.instructions.append(mir.Const(dest=frame_func, type=STR, value=fn_def.name))
+                    current_block.instructions.append(mir.Const(dest=frame_module, type=STR, value=module_label))
                     current_block.instructions.append(mir.Const(dest=frame_line, type=I64, value=stmt.loc.line))
                     temp_types[frame_file] = STR
                     temp_types[frame_func] = STR
+                    temp_types[frame_module] = STR
                     temp_types[frame_line] = I64
                     for kw in stmt.value.kwargs:
                         if kw.name == "msg" and msg_expr is None:
@@ -272,14 +276,17 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                     # frame arrays
                     frame_files_arr = fresh_val()
                     frame_funcs_arr = fresh_val()
+                    frame_modules_arr = fresh_val()
                     frame_lines_arr = fresh_val()
                     frame_count = fresh_val()
                     current_block.instructions.append(mir.ArrayInit(dest=frame_files_arr, elements=[frame_file], element_type=STR))
                     current_block.instructions.append(mir.ArrayInit(dest=frame_funcs_arr, elements=[frame_func], element_type=STR))
+                    current_block.instructions.append(mir.ArrayInit(dest=frame_modules_arr, elements=[frame_module], element_type=STR))
                     current_block.instructions.append(mir.ArrayInit(dest=frame_lines_arr, elements=[frame_line], element_type=I64))
                     current_block.instructions.append(mir.Const(dest=frame_count, type=I64, value=1))
                     temp_types[frame_files_arr] = STR
                     temp_types[frame_funcs_arr] = STR
+                    temp_types[frame_modules_arr] = STR
                     temp_types[frame_lines_arr] = I64
                     temp_types[frame_count] = I64
                     evt_val = fresh_val()
@@ -299,7 +306,18 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
                         mir.Call(
                             dest=err_tmp,
                             callee="drift_error_new",
-                            args=[keys_arr, vals_arr, attr_count_val, evt_val, dom_val, frame_files_arr, frame_funcs_arr, frame_lines_arr, frame_count],
+                            args=[
+                                keys_arr,
+                                vals_arr,
+                                attr_count_val,
+                                evt_val,
+                                dom_val,
+                                frame_modules_arr,
+                                frame_files_arr,
+                                frame_funcs_arr,
+                                frame_lines_arr,
+                                frame_count,
+                            ],
                         )
                     )
                     temp_types[err_tmp] = ERROR
@@ -420,6 +438,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None) 
             params=[mir.Param(name=p.name, type=fn_info.signature.params[idx]) for idx, p in enumerate(fn_def.params)],
             return_type=fn_info.signature.return_type,
             entry=entry.name,
+            module=module_label,
             source=source_name,
             blocks=blocks,
         )

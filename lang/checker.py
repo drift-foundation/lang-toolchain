@@ -43,6 +43,7 @@ class CheckedProgram:
     globals: Dict[str, VarInfo]
     structs: Dict[str, "StructInfo"]
     exceptions: Dict[str, "ExceptionInfo"]
+    module: Optional[str] = None
 
 
 @dataclass
@@ -131,6 +132,7 @@ class Checker:
             globals=global_scope.vars.copy(),
             structs=self.struct_infos,
             exceptions=self.exception_infos,
+            module=program.module,
         )
 
     def _register_exceptions(self, exceptions: List[ast.ExceptionDef]) -> None:

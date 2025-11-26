@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from llvmlite import binding as llvm  # type: ignore
 from llvmlite import ir  # type: ignore
 
@@ -20,6 +22,8 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
     llvm_module = ir.Module(name=f"{fn.name}_module")
     llvm_module.triple = llvm.get_default_triple()
     llvm_module.data_layout = tm.target_data
+    module_label = fn.module or "main"
+    file_label = Path(fn.source).name if fn.source else "<unknown>"
 
     param_types = [_llvm_type(p.type) for p in fn.params]
     ret_ty = _llvm_type(fn.return_type)
@@ -108,18 +112,21 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     err = builder.extract_value(call_val, 1, name=f"{instr.dest}_err")
                     env[instr.dest] = val
                     # Append caller frame to error before branching on the error edge.
-                    file_label = fn.source if fn.source else "<unknown>"
                     file_gv = _const(builder, STR, file_label)
                     func_gv = _const(builder, STR, fn.name)
+                    module_gv = _const(builder, STR, module_label)
                     line_const = _const(builder, I64, 0)
                     push_fn = llvm_module.globals.get("error_push_frame")
                     if push_fn is None or not isinstance(push_fn, ir.Function):
                         push_fn = ir.Function(
                             llvm_module,
-                            ir.FunctionType(_llvm_type(ERROR), [_llvm_type(ERROR), _llvm_type(STR), _llvm_type(STR), _llvm_type(I64)]),
+                            ir.FunctionType(
+                                _llvm_type(ERROR),
+                                [_llvm_type(ERROR), _llvm_type(STR), _llvm_type(STR), _llvm_type(STR), _llvm_type(I64)],
+                            ),
                             name="error_push_frame",
                         )
-                    err = builder.call(push_fn, [err, file_gv, func_gv, line_const])
+                    err = builder.call(push_fn, [err, module_gv, file_gv, func_gv, line_const])
                     if instr.err_dest:
                         env[instr.err_dest] = err
                     is_ok = builder.icmp_signed("==", err, ir.Constant(err.type, None))

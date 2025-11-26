@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Mapping, Sequence
 
-from ..types import DISPLAYABLE, ERROR, STR, UNIT, I64, FunctionSignature
+from ..types import DISPLAYABLE, ERROR, STR, UNIT, I64, FunctionSignature, array_of
 
 OUT_WRITELN_SIGNATURE = FunctionSignature(
     "out.writeln", (DISPLAYABLE,), UNIT, effects=None
@@ -11,7 +11,18 @@ OUT_WRITELN_SIGNATURE = FunctionSignature(
 ERROR_NEW_SIGNATURE = FunctionSignature("error_new", (STR,), ERROR, effects=None)
 DRIFT_ERROR_NEW_SIGNATURE = FunctionSignature(
     "drift_error_new",
-    (DISPLAYABLE, DISPLAYABLE, I64, STR, STR),
+    (
+        array_of(STR),
+        array_of(STR),
+        I64,
+        STR,
+        STR,
+        array_of(STR),
+        array_of(STR),
+        array_of(STR),
+        array_of(I64),
+        I64,
+    ),
     ERROR,
     effects=None,
 )

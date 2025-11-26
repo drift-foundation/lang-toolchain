@@ -185,6 +185,7 @@ class Function:
     params: List[Param]
     return_type: Type
     entry: str
+    module: Optional[str] = None
     source: Optional[str] = None
     blocks: Dict[str, BasicBlock] = field(default_factory=dict)
 
@@ -192,8 +193,3 @@ class Function:
 @dataclass
 class Program:
     functions: Dict[str, Function]
-@dataclass(frozen=True)
-class Location:
-    file: str = "<unknown>"
-    line: int = 0
-    column: int = 0

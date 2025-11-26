@@ -1,3 +1,5 @@
+module tests.frames_two
+
 exception Boom(msg: String)
 
 fn level2() returns Int64 {

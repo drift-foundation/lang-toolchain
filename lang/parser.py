@@ -156,10 +156,14 @@ def _build_program(tree: Tree) -> Program:
     statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt | ImportStmt] = []
     structs: List[StructDef] = []
     exceptions: List[ExceptionDef] = []
+    module_name: Optional[str] = None
     for child in tree.children:
         if not isinstance(child, Tree):
             continue
         kind = _name(child)
+        if kind == "module_decl":
+            module_name = _build_module_decl(child)
+            continue
         if kind == "func_def":
             functions.append(_build_function(child))
         elif kind == "struct_def":
@@ -175,7 +179,16 @@ def _build_program(tree: Tree) -> Program:
         statements=statements,
         structs=structs,
         exceptions=exceptions,
+        module=module_name,
     )
+
+
+def _build_module_decl(tree: Tree) -> str:
+    path_node = next((child for child in tree.children if isinstance(child, Tree) and _name(child) == "import_path"), None)
+    if path_node is None:
+        return "main"
+    parts = [child.value for child in path_node.children if isinstance(child, Token) and child.type == "NAME"]
+    return ".".join(parts) if parts else "main"
 
 
 def _build_exception_def(tree: Tree) -> ExceptionDef:
