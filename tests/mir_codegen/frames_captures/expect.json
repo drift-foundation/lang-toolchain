@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "",
+  "stderr": "{\"event\":\"Boom\",\"domain\":\"main\",\"attrs\":{\"msg\":\"boom\"},\"frames\":[{\"module\":\"tests.frames_captures\",\"file\":\"input.drift\",\"func\":\"level3\",\"line\":7,\"captured\":{\"c\":\"c3\"}},{\"module\":\"tests.frames_captures\",\"file\":\"input.drift\",\"func\":\"level2\",\"line\":12,\"captured\":{\"b\":\"b2\"}},{\"module\":\"tests.frames_captures\",\"file\":\"input.drift\",\"func\":\"level1\",\"line\":17,\"captured\":{\"a\":\"a1\"}}]}\n"
+}

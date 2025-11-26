@@ -2,8 +2,8 @@ fn main() -> Int64 { entry = bb0 }
 bb0:
   br bb_try_body1
 bb_catch2(err: Error):
-  _t19 = const Int64 7
-  return _t19
+  _t23 = const Int64 7
+  return _t23
 bb_try_body1:
   _t1 = const String try_catch.drift
   _t2 = const String main
@@ -22,5 +22,9 @@ bb_try_body1:
   _t15 = const Int64 1
   _t16 = const String Oops
   _t17 = const String main
-  _t18 = call drift_error_new(_t8, _t9, _t10, _t16, _t17, _t13, _t11, _t12, _t14, _t15)
-  br bb_catch2(_t18)
+  _t18 = array_init []
+  _t19 = array_init []
+  _t20 = array_init []
+  _t21 = const Int64 0
+  _t22 = call drift_error_new(_t8, _t9, _t10, _t16, _t17, _t13, _t11, _t12, _t14, _t15, _t18, _t19, _t20, _t21)
+  br bb_catch2(_t22)

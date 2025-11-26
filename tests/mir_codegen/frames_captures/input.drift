@@ -1,0 +1,18 @@
+module tests.frames_captures
+
+exception Boom(msg: String)
+
+fn level3() returns Int64 {
+    val ^c = "c3"
+    throw Boom(msg = "boom")
+}
+
+fn level2() returns Int64 {
+    val ^b = "b2"
+    return level3()
+}
+
+fn level1() returns Int64 {
+    val ^a = "a1"
+    return level2()
+}

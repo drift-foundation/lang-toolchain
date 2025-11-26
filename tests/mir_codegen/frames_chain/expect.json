@@ -1,5 +1,5 @@
 {
   "exit": 1,
   "stdout": "",
-  "stderr": "{\"event\":\"Boom\",\"domain\":\"main\",\"attrs\":{\"msg\":\"L3\"},\"frames\":[{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level3\",\"line\":6},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level2\",\"line\":0},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level1\",\"line\":0}]}\n"
+  "stderr": "{\"event\":\"Boom\",\"domain\":\"main\",\"attrs\":{\"msg\":\"L3\"},\"frames\":[{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level3\",\"line\":6,\"captured\":{}},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level2\",\"line\":10,\"captured\":{}},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level1\",\"line\":14,\"captured\":{}}]}\n"
 }
