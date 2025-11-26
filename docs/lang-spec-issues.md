@@ -1,22 +1,3 @@
-## 4. Keyword consistency: remove `let`
-
-* Replace all `let` usages with `val` or `var`.
-* Confirm `let` is **not** listed in Chapter 9 keywords.
-* Do a global pass.
-
----
-
-## 5. Method naming consistency
-
-Replace camelCase `.toString()` with snake_case `.to_string()` everywhere:
-
-* Null-safety examples
-* Exceptions chapter
-* Variant examples
-* ByteBuffer examples
-
----
-
 ## 6. Trait grammar cleanup (Chapter 5 + Appendix C)
 
 ### Tasks:

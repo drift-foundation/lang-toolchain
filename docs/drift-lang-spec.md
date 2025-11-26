@@ -2911,7 +2911,7 @@ ModulePath  ::= Ident ("." Ident)*
 
 TopDecl     ::= FnDef | TypeDef | StructDef | EnumDef
 
-FnDef       ::= "fn" Ident "(" Params? ")" (":" Type)? Block
+FnDef       ::= "fn" Ident "(" Params? ")" (":" Type)? FnRequire? Block
 Params      ::= Param ("," Param)*
 Param       ::= Ident ":" Ty | "^" Ident ":" Ty
 
@@ -2937,19 +2937,22 @@ Parsers may treat `TERMINATOR` exactly like a semicolon. Conversely, an explicit
 
 ## Appendix C — Trait Grammar Notes
 
-Traits and implementations use the same `where` syntax as functions. Grammar sketch:
+Traits and implementations use `require … is …` clauses for constraints and allow boolean trait expressions.
 
 ```ebnf
-TraitDef   ::= "trait" Ident TraitParams? TraitWhere? TraitBody
-TraitWhere ::= "where" TraitClause ("," TraitClause)*
-TraitClause ::= "Self" "has" TraitExpr
+TraitDef    ::= "trait" Ident TraitParams? TraitBody
+TraitParams ::= "<" Ident ("," Ident)* ">"                // optional generics
+TraitReq    ::= "require" TraitReqClause ("," TraitReqClause)*
+TraitReqClause ::= ("Self" | Ident) "is" TraitExpr
 
-Implement  ::= "implement" Ty "for" Ty TraitWhere? TraitBody
+Implement   ::= "implement" Ty ("for" Ty)? TraitReq? TraitBody
 
-TraitExpr  ::= TraitTerm ( ("and" | "or") TraitTerm )*
-TraitTerm  ::= "not"? Ident | "(" TraitExpr ")"
+TraitExpr   ::= TraitTerm ( ("and" | "or") TraitTerm )*
+TraitTerm   ::= "not"? Ident | "(" TraitExpr ")"
+
+FnRequire   ::= "require" TraitReqClause ("," TraitReqClause)*
 ```
 
-These forms defer to the existing `where` machinery described in Section 13.
+`require` clauses appear on traits, implementations, and functions; they use the same `is`/`and`/`or`/`not` expressions and must reference either `Self` or generic parameters in scope.
 
 ### End of Drift Language Specification
