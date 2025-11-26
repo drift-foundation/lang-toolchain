@@ -1,6 +1,3 @@
-# Drift Language Specification
----
-
 ## 1. Overview
 
 Drift is a modern systems language built on a simple premise: programming should be pleasant, expressive, and safe by default — without giving up the ability to write efficient, low-level code when you actually need it.
@@ -348,982 +345,7 @@ take(jobs)      // ❌ jobs invalid after move
 - No garbage collection — **destruction is deterministic** (RAII).
 
 ---
-## 5. Imports and standard I/O
-
-Drift uses explicit imports — no global or magic identifiers.  
-Console output is available through the `std.console` module.
-
-### Import syntax (modules and symbols)
-
-```drift
-import std.console.out        // bind the exported `out` stream
-import std.console.err        // bind the exported `err` stream
-import std.io                 // bind the module
-import std.console.out as print // optional alias
-```
-
-**Grammar**
-
-```ebnf
-ImportDecl    ::= 'import' ImportItem (',' ImportItem)* NEWLINE
-ImportItem    ::= QualifiedName (' ' 'as' ' ' Ident)?
-QualifiedName ::= Ident ('.' Ident)*
-```
-
-**Name‑resolution semantics**
-
-- `QualifiedName` is resolved left‑to‑right.  
-- If it resolves to a **module**, the import binds that module under its last segment (or the `as` alias).  
-- If it resolves to an **exported symbol** inside a module (e.g., `std.console.out`), the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
-- Ambiguities between module and symbol names must be disambiguated with `as` or avoided.
-- Aliases affect only the local binding; frames and module metadata always record the original module ID, not the alias.
-
-**Module identifiers**
-
-- Declared with `module <id>` once per file; multiple files may share the same `<id>`, but a single-module build fails if any file is missing or mismatches the ID. A standalone file with no declaration defaults to `main`.
-- `<id>` must be lowercase alnum segments separated by dots, with optional underscores inside segments; no leading/trailing/consecutive dots/underscores; length ≤ 254 UTF-8 bytes.
-- Reserved prefixes are rejected: `lang.`, `abi.`, `std.`, `core.`, `lib.`.
-- Frames/backtraces record the declared module ID (not filenames), so cross-module stacks are unambiguous.
-
-## 6. Control flow
-
-Drift uses structured control flow; all loops and conditionals are block-based.
-
-### If/else
-
-```drift
-if cond {
-    do_true()
-} else {
-    do_false()
-}
-```
-
-- `if <cond> { ... } else { ... }` selects a branch based on a `Bool` condition.
-- The condition must type-check as `Bool`; the two branches need not return the same type unless used as an expression (e.g., in a ternary).
-- Each branch has its own scope for locals; names inside a branch shadow outer names.
-
-### While loops
-
-```drift
-var i: Int64 = 0
-while i < 3 {
-    i = i + 1
-}
-```
-
-- `while <cond> { <stmts> }` evaluates `<cond>` each iteration and runs the body while it is `true`.
-- `<cond>` must be `Bool`; type errors are reported at compile time.
-- The body forms its own scope for local bindings; fresh bindings inside the loop shadow outer names and are re-created per iteration.
-- `break` exits the nearest enclosing loop; `continue` jumps to the next iteration (re-evaluating the condition).
-
-### Ternary (`? :`) operator
-
-```drift
-val label = is_error ? "error" : "ok"
-```
-
-- `cond ? then_expr : else_expr` is an expression-form conditional; `cond` must be `Bool`.
-- `then_expr` and `else_expr` must have the same type (checked at compile time).
-- Useful for concise branching without introducing additional block nesting; when control flow is complex, prefer a full `if/else`.
-
-### Try/else (expression) and Try/catch (statement)
-
-**Expression form (`try/else`):**
-
-```drift
-val result = try parse_int(input) else 0
-```
-
-- Evaluates the expression; on success, yields its value; on error, evaluates the `else` expression.
-- The attempt and fallback must have the same type.
-- Only simple call attempts are supported for the expression form today.
-
-**Statement form (`try/catch`):**
-
-```drift
-try {
-    risky()
-} catch MyError(err) {
-    handle(err)
-}
-```
-
-- Executes the body; on error, transfers control to the first matching catch (no pattern guards yet; event match or catch-all).
-- Catch binder (if present) has type `Error`.
-- Matching is by exception/event name only; omitting the name makes the clause a catch-all. Domains/attributes are not matched (yet).
-- Control falls through after the try/catch unless all branches return/raise.
-
-## 7. Reserved keywords and operators
-
-Keywords and literals are reserved and cannot be used as identifiers (functions, variables, modules, structs, exceptions, etc.):  
-`fn`, `val`, `var`, `returns`, `if`, `else`, `while`, `break`, `continue`, `try`, `catch`, `throw`, `raise`, `return`, `exception`, `import`, `module`, `true`, `false`, `not`, `and`, `or`, plus language/FFI/legacy keywords (`auto`, `pragma`, `bool`, `int`, `float`, `string`, `void`, `abstract`, `assert`, `boolean`, `byte`, `case`, `char`, `class`, `const`, `default`, `do`, `double`, `enum`, `extends`, `final`, `finally`, `for`, `goto`, `implements`, `instanceof`, `interface`, `long`, `native`, `new`, `package`, `private`, `protected`, `public`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`, `this`, `throws`, `transient`, `volatile`).
-
-## 8. Standard I/O design
-
-### `std.io` module
-
-```drift
-module std.io
-
-interface OutputStream {
-    fn write(self: ref OutputStream, bytes: ByteSlice) returns Void
-    fn writeln(self: ref OutputStream, text: String) returns Void
-    fn flush(self: ref OutputStream) returns Void
-}
-
-interface InputStream {
-    fn read(self: ref InputStream, buffer: MutByteSlice) returns Int64
-}
-```
-
-### `std.console` module
-
-```
-// initialized before main is called
-val out : OutputStream = ... 
-val err : OutputStream = ...
-val in  : InputStream = ...
-```
-
-These built-in instances represent the system console streams. Now you can write simple console programs without additional setup:
-
-```drift
-import std.console.out as out
-
-fn main() returns Void {
-    val name: String = "Drift"
-    out.writeln("Hello, " + name)
-}
-```
-
-`out.writeln` accepts any value whose type implements the `Display` trait. All builtin primitives (`Int64`, `Float64`, `Bool`, `String`, `Error`) implement `Display`, so diagnostics like `out.writeln(verify(order))` type-check without manual string conversions.
-
-This model allows concise I/O while keeping imports explicit and predictable.  
-The objects `out`, `err`, and `in` are references to standard I/O stream instances.
-
-
-## 9. `lang.array`, `ByteBuffer`, and array literals
-
-`lang.array` is the standard module for homogeneous sequences. It exposes the generic type `Array<T>` plus builder helpers and the binary-centric `ByteBuffer`. `Array` is always in scope for type annotations, so you can write:
-
-```drift
-import sys.console.out
-
-fn main() returns Void {
-    val names: Array<String> = ["Bob", "Alice", "Ada"]
-    out.writeln("names ready")
-}
-```
-
-Array literals follow the same ownership and typing rules as other expressions:
-
-```drift
-val nums = [1, 2, 3]            // infers Array<Int64>
-val names = ["Bob", "Alice"]     // infers Array<String>
-
-val explicit: Array<Int64> = [1, 2, 3]  // annotation still allowed when desired
-```
-
-- `[expr1, expr2, ...]` constructs an `Array<T>` where every element shares the same type `T`. The compiler infers `T` from the elements.
-- Mixed-type literals (`[1, "two"]`) are rejected at parse-time.
-- Empty literals are reserved for a future constructor; for now, call the stdlib helper once it lands.
-
-`Array<T>` integrates with the broader language design — it moves with `->`, can be captured with `^`, and will participate in trait implementations like `Display` once the stdlib grows. The literal syntax keeps sample programs succinct while we flesh out higher-level APIs.
-
-### ByteBuffer, ByteSlice, and MutByteSlice
-
-#### Borrowing rules and zero-copy interop
-
-`ByteSlice`/`MutByteSlice` behave like other Drift borrows:
-
-- A `ByteSlice` (`ref ByteSlice`) is a shared view: multiple readers may coexist, but none may mutate.
-- A `MutByteSlice` (`ref MutByteSlice`) is an exclusive view: while it exists, no other references (mutable or shared) to the same range are allowed.
-- Views never own memory. They rely on the original owner (often a `ByteBuffer` or foreign allocation) to outlive the slice’s scope. Moving the owner invalidates outstanding slices, just like any other borrow.
-
-These rules integrate with `Send`/`Sync` (Section 13.13): a `ByteSlice` is `Send`/`Sync` because it is immutable metadata; a `MutByteSlice` is neither, so you cannot share a mutable view across threads without additional synchronization.
-
-This design yields zero-copy interop: host code can wrap foreign `(ptr, len)` pairs in `ByteSlice`, pass them through Drift APIs, and guarantee the callee sees the original bytes without copying. Likewise, `ByteBuffer.as_mut_slice()` hands a shared library a raw view to fill without reallocations. Lifetimes stay explicit and deterministic, avoiding GC-style surprises.
-
-
-Binary APIs use three closely related stdlib types:
-
-| Type | Role |
-|------|------|
-| `ByteBuffer` | Owning, growable buffer of contiguous `Byte` values (move-only). |
-| `ByteSlice` | Immutable borrowed view into existing bytes (`len`, `data_ptr`). |
-| `MutByteSlice` | Exclusive borrowed view for writing bytes in place. |
-
-`ByteBuffer` lives in `lang.array.byte` and follows the same ownership rules as other containers. Constructors include:
-
-```drift
-var buf = ByteBuffer.with_capacity(4096)
-val literal = ByteBuffer.from_array([0x48, 0x69])
-val from_utf8 = ByteBuffer.from_string("drift")
-```
-
-Core operations:
-
-- `fn len(self: ref ByteBuffer) returns Int64` — number of initialized bytes.
-- `fn capacity(self: ref ByteBuffer) returns Int64` — reserved storage.
-- `fn clear(self: ref mut ByteBuffer) returns Void` — resets `len` to zero without freeing.
-- `fn push(self: ref mut ByteBuffer, b: Byte) returns Void`
-- `fn extend(self: ref mut ByteBuffer, slice: ByteSlice) returns Void`
-- `fn as_slice(self: ref ByteBuffer) returns ByteSlice`
-- `fn slice(self: ref ByteBuffer, start: Int64, len: Int64) returns ByteSlice`
-- `fn as_mut_slice(self: ref mut ByteBuffer) returns MutByteSlice`
-- `fn reserve(self: ref mut ByteBuffer, additional: Int64) returns Void`
-
-`ByteSlice`/`MutByteSlice` are lightweight descriptors (`{ ptr, len }`). They do not own memory; borrow rules ensure the referenced storage stays alive for the duration of the borrow. `MutByteSlice` provides exclusive access, so you cannot obtain a second mutable slice while one is active.
-
-Typical I/O pattern:
-
-```drift
-fn copy_stream(src: InputStream, dst: OutputStream) returns Void {
-    var scratch = ByteBuffer.with_capacity(4096)
-
-    loop {
-        scratch.clear()
-        let filled = src.read(scratch.as_mut_slice())
-        if filled == 0 { break }
-
-        let chunk = scratch.slice(0, filled)
-        dst.write(chunk)
-    }
-}
-```
-
-`read` writes into the provided mutable slice and returns the number of bytes initialized; `slice` then produces a read-only view of that prefix without copying. FFI helpers in `lang.abi` can also manufacture `ByteSlice`/`MutByteSlice` wrappers around raw pointers for zero-copy interop.
-
-
-### Indexing, mutation, and borrowing
-#### Borrowed element references
-
-To avoid copying and let other APIs operate on a specific slot, `Array<T>` exposes helper methods:
-
-```drift
-fn ref_at(self: ref Array<T>, index: Int64) returns ref T
-fn ref_mut_at(self: ref mut Array<T>, index: Int64) returns ref mut T
-```
-
-- `ref_at` borrows the array immutably and returns an immutable `ref T` to element `index`. Multiple `ref_at` calls may coexist, and the array remains usable for other reads while the borrow lives.
-- `ref_mut_at` requires an exclusive `ref mut Array<T>` borrow and yields an exclusive `ref mut T`. While the returned reference lives, no other borrows of the same element (or the array) are allowed; this enforces the usual aliasing rules.
-
-Bounds checks mirror simple indexing: out-of-range indices raise `IndexError(container = "Array", index = i)`. These APIs make it easy to hand a callee a view of part of the array—e.g., pass `ref_mut_at` into a mutator function that expects `ref mut T`—without copying the element or exposing the entire container.
-
-
-Use square brackets to read an element:
-
-```drift
-val nums = [1, 2, 3]
-val first = nums[0]
-```
-
-Assignments through an index require the binding to be mutable:
-
-```drift
-var mutable_values: Array<Int64> = [5, 10, 15]
-mutable_values[1] = 42      // ok
-
-val frozen = [7, 8, 9]
-frozen[0] = 1               // compile error: cannot assign through immutable binding
-```
-
-Nested indexing works as expected (e.g., `matrix[row][col]`) as long as the root binding is declared with `var`.
-
-
-## 10. Collection literals (arrays and maps)
-
-Drift includes literal syntax for homogeneous arrays (`[a, b, ...]`) and maps (`{ key: value, ... }`).
-The syntax is part of the language grammar, but **literals never hard-wire a concrete container type**.
-Instead, they are desugared through capability interfaces so projects can pick any backing collection.
-
-### Goals
-
-1. **Ergonomics** — trivial programs should be able to write `val xs = [1, 2, 3]` without ceremony.
-2. **Flexibility** — large systems must be free to route literals into custom containers, including
-   arena-backed vectors, small-capacity stacks, or persistent maps.
-
-### Syntax
-
-#### Array literal
-
-```
-ArrayLiteral ::= "[" (Expr ("," Expr)*)? "]"
-```
-
-Example: `val xs = [1, 2, 3]`.
-
-#### Map literal
-
-```
-MapLiteral ::= "{" (MapEntry ("," MapEntry)*)? "}"
-MapEntry   ::= Expr ":" Expr
-```
-
-Example: `val user = { "name": "Ada", "age": 38 }`.
-
-Duplicate keys are allowed syntactically; the target type decides whether to keep the first value, last
-value, or reject duplicates.
-
-### Type resolution
-
-A literal `[exprs...]` or `{k: v, ...}` requires a *target* type `C`. Resolution happens in two phases:
-
-1. Infer the element type(s) from the literal body. Array literals require all expressions to unify to a
-   single element type `T`. Map literals infer key type `K` and value type `V` from their entries.
-2. Determine the target container type `C` from context. If no context constrains the literal, the
-   compiler falls back to the standard prelude types (`Array<T>` and `Map<K, V>`).
-
-#### `FromArrayLiteral`
-
-A type `C` may accept array literals by implementing:
-
-```drift
-interface FromArrayLiteral<Element> {
-    static fn from_array_literal(items: Array<Element>) returns Self
-}
-```
-
-Desugaring of `[e1, e2, ...]` becomes:
-
-```drift
-C.from_array_literal(tmp_array)
-```
-
-Where `tmp_array` is an ephemeral `Array<T>` built by the compiler. If `C` does not implement the
-interface, the literal fails to type-check.
-
-#### `FromMapLiteral`
-
-Map literals use a similar interface:
-
-```drift
-interface FromMapLiteral<Key, Value> {
-    static fn from_map_literal(entries: Array<(Key, Value)>) returns Self
-}
-```
-
-The compiler converts `{k1: v1, ...}` into `C.from_map_literal(tmp_entries)` where `tmp_entries` is an
-`Array<(K, V)>`.
-
-### Standard implementations
-
-The prelude wires literals to the default collections:
-
-```drift
-implement<T> FromArrayLiteral<T> for Array<T> {
-    static fn from_array_literal(items: Array<T>) returns Array<T> {
-        return items
-    }
-}
-
-implement<K, V> FromMapLiteral<K, V> for Map<K, V> {
-    static fn from_map_literal(entries: Array<(K, V)>) returns Map<K, V> {
-        val m = Map<K, V>()
-        for (k, v) in entries {
-            m.insert(k, v)
-        }
-        return m
-    }
-}
-```
-
-This keeps “hello world” code terse:
-
-```drift
-fn main() returns Void {
-    val xs = [1, 2, 3]
-    val cfg = { "mode": "debug" }
-}
-```
-
-### Strict mode and overrides
-
-Projects may opt into a strict mode that disables implicit prelude imports. In that configuration:
-
-- Literal syntax still parses.
-- You must import the concrete collection types you want to accept literals.
-- If no suitable `FromArrayLiteral`/`FromMapLiteral` implementation is in scope, the literal fails.
-
-Custom containers can opt in by providing their own implementations:
-
-```drift
-struct SmallVec<T> { /* ... */ }
-
-implement<T> FromArrayLiteral<T> for SmallVec<T> {
-    static fn from_array_literal(items: Array<T>) returns SmallVec<T> {
-        var sv = SmallVec<T>()
-        for v in items { sv.push(v) }
-        return sv
-    }
-}
-
-val fast: SmallVec<Int> = [1, 2, 3]
-```
-
-The same pattern applies to alternative map implementations.
-
-### Diagnostics
-
-- `[1, "two"]` → error: element types do not unify.
-- `{}` without a target type → error when no default map is in scope.
-- `val s: SortedSet<Int> = [1, 2, 3]` → error unless `SortedSet<Int>` implements `FromArrayLiteral<Int>`.
-
-### Summary
-
-- Literal syntax is fixed in the language, but its meaning is delegated to interfaces.
-- The prelude provides ready-to-use defaults (`Array`, `Map`).
-- Strict mode and custom containers can override the target type.
-- Errors are clear when element types disagree or no implementation is available.
-
-
-## 11. Variant types (`variant`)
-
-Drift’s `variant` keyword defines **tagged unions**: a value that is exactly one of several named alternatives (variants). Each alternative may carry its own fields, and the compiler enforces exhaustive handling when you `match` on the value.
-
-### Syntax
-
-```drift
-variant Result<T, E> {
-    Ok(value: T)
-    Err(error: E)
-}
-```
-
-- `variant` introduces a top-level type definition.
-- The type name uses UpperCamel case and may declare generic parameters (`<T, E>`).
-- Each variant uses UpperCamel case and may include a field list `(field: Type, ...)`.
-- At least one variant must be declared, and names must be unique within the type.
-
-### Semantics and representation
-
-A `variant` value stores:
-
-1. A hidden **tag** indicating which alternative is active.
-2. The **payload** for that variant’s fields.
-
-Only the active variant’s fields may be accessed. This is enforced statically by pattern matching.
-
-### Construction
-
-Each variant behaves like a constructor:
-
-```drift
-val success: Result<Int64, String> = Ok(value = 42)
-val failure = Err(error = "oops")            // type inference fills in `<Int64, String>`
-```
-
-Named arguments are required when a variant has multiple fields; single-field variants may support positional construction, though the explicit form is always accepted.
-
-### Pattern matching and exhaustiveness
-
-`match` is used to consume a variant. All variants must be covered (or you must use future catch-all syntax once it exists).
-
-```drift
-fn describe(result: Result<Int64, String>) returns String {
-    match result {
-        Ok(value) => {
-            return "ok: " + value.to_string()
-        }
-        Err(error) => {
-            return "error: " + error
-        }
-    }
-}
-```
-
-Matches can be nested or composed with other `variant` types:
-
-```drift
-variant Option<T> {
-    Some(value: T)
-    None
-}
-
-variant DbError {
-    ConnectionLost
-    QueryFailed(message: String)
-}
-
-variant LookupResult<T> {
-    Found(value: T)
-    Missing
-    Error(err: DbError)
-}
-
-fn describe_lookup(id: Int64, r: LookupResult<String>) returns String {
-    match r {
-        Found(value) => "Record " + id.to_string() + ": " + value
-        Missing      => "No record for id " + id.to_string()
-        Error(err)   => match err {
-            ConnectionLost       => "Database connection lost"
-            QueryFailed(message) => "Query failed: " + message
-        }
-    }
-}
-```
-
-### Recursive data
-
-Variants are ideal for ASTs and other recursive shapes:
-
-```drift
-variant Expr {
-    Literal(value: Int64)
-    Add(lhs: ref Expr, rhs: ref Expr)
-    Neg(inner: ref Expr)
-}
-
-fn eval(expr: ref Expr) returns Int64 {
-    match expr {
-        Literal(value) => value
-        Add(lhs, rhs) => eval(lhs) + eval(rhs)
-        Neg(inner) => -eval(inner)
-    }
-}
-```
-
-### Generics
-
-Variants support type parameters exactly like `struct` or `fn` declarations:
-
-```drift
-variant PairOrError<T, E> {
-    Pair(first: T, second: T)
-    Error(error: E)
-}
-
-fn make_pair<T>(x: T, y: T) returns PairOrError<T, String> {
-    if x == y {
-        return Error(error = "values must differ")
-    }
-    return Pair(first = x, second = y)
-}
-```
-
-### Value semantics and equality
-
-Variants follow Drift’s value semantics: they are copied/moved by value, and their equality/ordering derive from their payloads. Two `Result` values are equal only if they hold the same variant *and* the corresponding fields are equal.
-
-### Evolution considerations
-
-- Adding a new variant is a **breaking change** because every `match` must handle it explicitly.
-- Library authors should document variant additions clearly or provide fallback variants when forward compatibility matters.
-
-Variants underpin key library types such as `Result<T, E>` and `Option<T>`, enabling safe, expressive modeling of operations with multiple outcomes.
-
-
-## 12. Exceptions and error context
-
-Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
-Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
-
-### Goals
-Drift’s exception system is designed to:
-
-- Use **one concrete error type** (`Error`) for all thrown failures.
-- Represent failures as **event names plus arguments**, not free-form text.
-- Capture **call-site context** (locals per frame + backtrace) automatically.
-- Preserve a **precise, frozen ABI layout** so exceptions can propagate across Drift modules and plugins.
-- Fit cleanly over a conceptual `Result<T, Error>` model for internal lowering and ABI design.
-- Respect **move semantics**: `Error` is move-only and is always transferred with `e->`.
-
----
-
-### Error type and layout
-
-```drift
-struct Error {
-    event: String,
-    args: Map<String, String>,
-    ctx_frames: Array<CtxFrame>,
-    stack: BacktraceHandle
-}
-
-exception IndexError(container: String, index: Int64)
-```
-
-#### event
-Event name of the exception (`"BadArgument"`).
-
-#### args
-Only event arguments, stringified via `Display.to_string()`.
-
-#### ctx_frames
-Per-frame captured locals:
-
-```drift
-struct CtxFrame {
-    fn_name: String,
-    locals: Map<String, String>
-}
-```
-
-Event args never appear here.
-
-#### stack
-Opaque captured backtrace.
-
----
-
-### Exception events
-
-#### Declaring events
-```drift
-exception InvalidOrder(order_id: Int64, code: String)
-exception Timeout(operation: String, millis: Int64)
-```
-
-Each parameter type must implement `Display`.
-
-#### Throwing
-```drift
-throw InvalidOrder(order_id = order.id, code = "order.invalid")
-```
-
-Runtime builds an `Error` with:
-- event name
-- args (stringified)
-- empty ctx_frames (filled during unwind)
-- backtrace
-
-#### Display requirement
-Each exception argument type must implement:
-
-```drift
-trait Display {
-    fn to_string(self) returns String
-}
-```
-
----
-
-### Capturing local context with ^
-
-Locals can be captured:
-
-```drift
-val ^input: String as "record.field" = s
-```
-
-A frame is added when unwinding past the function:
-
-```json
-{
-  "fn_name": "parse_date",
-  "locals": { "record.field": "2025-13-40" }
-}
-```
-
-Rules:
-- Only `^`-annotated locals captured.
-- Values must implement `Display`.
-- Capture happens once per frame.
-
----
-
-### Throwing, catching, rethrowing
-
-`Error` is move-only.
-
-#### Catch by event
-```drift
-try {
-    ship(order)
-} catch InvalidOrder(e) {
-    log(ref e)
-}
-```
-
-Matches by `error.event`.
-
-#### Catch-all + rethrow
-```drift
-catch e {
-    log(ref e)
-    throw e->
-}
-```
-
-Ownership moves back to unwinder.
-
-#### Inline catch-all shorthand
-
-For a single call where you just want a fallback value, use the one-liner form:
-
-```drift
-val date = try parse_date(input) else default_date
-```
-
-This is sugar for a catch-all handler:
-
-```drift
-val date = {
-    try { parse_date(input) }
-    catch _ { default_date }
-}
-```
-
-The `else` expression must produce the same type as the `try` expression. Exception context (`event`, args, captured locals, stack) is still recorded before control flows into the `else` arm.
-
----
-
-### Internal Result<T, Error> semantics
-
-Conceptual form:
-
-```drift
-variant Result<T, E> {
-    Ok(value: T)
-    Err(error: E)
-}
-```
-
-Every function behaves as if returning `Result<T, Error>`; ABI lowers accordingly.
-
----
-
-### Drift–Drift propagation (plugins)
-
-Unwinding is allowed across Drift modules/plugins as long as:
-- The `Error` layout is identical.
-- Same runtime/unwinder is used.
-
-Event name + args + ctx_frames + stack fully capture portable state.
-
----
-
-### Logging and serialization
-JSON example:
-
-```json
-{
-  "event": "InvalidOrder",
-  "args": { "order_id": "42", "code": "order.invalid" },
-  "ctx_frames": [
-    { "fn_name": "ship", "locals": { "record.id": "42" }},
-    { "fn_name": "ingest_order", "locals": { "batch": "B1" }}
-  ],
-  "stack": "opaque"
-}
-```
-
----
-
-### Summary
-
-- Single `Error` type.
-- Event-based exceptions.
-- Arguments + captured locals normalized to strings.
-- Move-only errors with deterministic ownership.
-- Precisely defined layout for plugin-safe unwinding.
-- Semantically equivalent to `Result<T, Error>` internally.
-
-## 13. Mutators, transformers, and finalizers
-
-In Drift, a function’s **parameter ownership mode** communicates its **lifecycle role** in a data flow.  
-This distinction becomes especially clear in pipelines (`>>`), where each stage expresses how it interacts with its input.
-
-### Function roles
-
-| Role | Parameter type | Return type | Ownership semantics | Typical usage |
-|------|----------------|--------------|---------------------|----------------|
-| **Mutator** | `ref mut T` | `Void` or `T` | Borrows an existing `T` mutably and optionally returns it. Ownership stays with the caller. | In-place modification, e.g. `fill`, `tune`. |
-| **Transformer** | `T` | `U` (often `T`) | Consumes its input and returns a new owned value. Ownership transfers into the call and out again. | `compress`, `clone`, `serialize`. |
-| **Finalizer / Sink** | `T` | `Void` | Consumes the value completely. Ownership ends here; the resource is destroyed or released at function return. | `finalize`, `close`, `free`, `commit`. |
-
-### Pipeline behavior
-
-The pipeline operator `>>` is **ownership-aware**.  
-It automatically determines how each stage interacts based on the callee’s parameter type:
-
-```drift
-fn fill(f: ref mut File) returns Void { /* mutate */ }
-fn tune(f: ref mut File) returns Void { /* mutate */ }
-fn finalize(f: File) returns Void { /* consume */ }
-
-open("x")
-  >> fill      // borrows mutably; File stays alive
-  >> tune      // borrows mutably again
-  >> finalize; // consumes; File is now invalid
-```
-
-- **Mutator stages** borrow temporarily and return the same owner.
-- **Transformer stages** consume and return new ownership.
-- **Finalizer stages** consume and end the pipeline.
-
-At the end of scope, if the value is still owned (not consumed by a finalizer), RAII automatically calls its destructor.
-
-### Rationale
-
-This mirrors real-world resource lifecycles:
-1. Creation — ownership established.  
-2. Mutation — zero or more `ref mut` edits.  
-3. Transformation — optional `T → U`.  
-4. Finalization — release or destruction.
-
-Explicit parameter types make these transitions visible and verifiable at compile time.
-
-### RAII interaction
-
-All owned resources obey RAII: their destructors run automatically at scope end.  
-Finalizers are **optional** unless early release, explicit error handling, or shared-handle semantics require them.
-
-```drift
-{
-    open("x")
-      >> fill
-      >> tune;      // RAII closes automatically here
-}
-
-{
-    open("x")
-      >> fill
-      >> tune
-      >> finalize;  // explicit end-of-life
-}
-```
-
-In both cases, the file handle is safely released exactly once.
-
-### Destructors and moves
-
-- Deterministic RAII: owned values run their destructor at end of liveness—scope exit, early return, or after being consumed by a finalizer. No deferred GC-style cleanup.
-- Move-only by default: moving a value consumes it; the source binding becomes invalid and is not dropped there. Drop runs exactly once on the final owner.
-- Copyable types opt in: only `Copy` types may be implicitly copied; they either have trivial/no destructor or a well-defined copy+drop story.
-
-## 14. Null safety & optional values
-
-Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
-
-### Types
-
-| Type | Meaning |
-|------|---------|
-| `T` | Non-optional; always initialized. |
-| `Optional<T>` | Possibly empty; either a value or nothing. |
-
-### Construction
-
-```drift
-val present: Optional<Int64> = Optional.of(42)
-val empty: Optional<Int64> = Optional.none()
-```
-
-### Interface
-
-```drift
-interface Optional<T> {
-    fn present(self) returns Bool
-    fn none(self) returns Bool
-    fn unwrap(self) returns T
-    fn unwrap_or(self, default: T) returns T
-    fn map<U>(self, f: fn(T) returns U) returns Optional<U>
-    fn if_present(self, f: fn(ref T) returns Void) returns Void
-    fn if_none(self, f: fn() returns Void) returns Void
-}
-
-module Optional {
-    fn of<T>(value: T) returns Optional<T>
-    fn none<T>() returns Optional<T>
-}
-```
-
-- `present()` is true when a value exists.
-- `none()` is true when empty.
-- `unwrap()` throws `Error("option.none_unwrapped")` if empty (discouraged in production).
-- `map` transforms when present; otherwise stays empty.
-- `if_present` calls the block with a borrow (`ref T`) to avoid moving.
-- `if_none` runs a block when empty.
-
-### Control flow
-
-```drift
-if qty.present() {
-    out.writeln("qty=" + qty.unwrap().toString())
-}
-
-if qty.none() {
-    out.writeln("no qty")
-}
-
-qty.if_present(ref q: {
-    out.writeln("qty=" + q.toString())
-})
-```
-
-There is no safe-navigation operator (`?.`). Access requires explicit helpers.
-
-### Parameters & returns
-
-- A parameter of type `T` cannot receive `Optional.none()`.
-- Use `Optional<T>` for “maybe” values.
-- Returning `none()` from a function declared `: T` is a compile error.
-
-```drift
-fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
-
-val sku = find_sku(42)
-sku.if_present(ref s: { out.writeln("sku=" + s) })
-if sku.none() {
-    out.writeln("missing")
-}
-```
-
-### Ownership
-
-`if_present` borrows (`ref T`) by default. No move occurs unless you explicitly consume `T` inside the block.
-
-### Diagnostics (illustrative)
-
-- **E2400**: cannot assign `Optional.none()` to non-optional type `T`.
-- **E2401**: attempted member/method use on `Optional<T>` without `map`/`unwrap`/`if_present`.
-- **E2402**: `unwrap()` on empty optional.
-- **E2403**: attempted implicit conversion `Optional<T>` → `T`.
-
-### End-to-end example
-
-```drift
-
-### Tuple structs & tuple returns
-
-- **Tuple structs:** `struct Point(x: Int64, y: Int64)` is a compact header that desugars to the standard block struct. Construction may be positional (`Point(10, 20)`) or named (`Point(x = 10, y = 20)`), dot access remains (`point.x`).
-
-- **Anonymous tuple types:** use parentheses for ad-hoc results, e.g. `fn bounds() returns (Int64, Int64, Int64, Int64)` and destructure with `(x1, y1, x2, y2) = bounds()`.
-
-import sys.console.out
-
-struct Order {
-    id: Int64,
-    sku: String,
-    quantity: Int64
-}
-
-fn find_order(id: Int64) returns Optional<Order> {
-    if id == 42 { return Optional.of(Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
-    return Optional.none()
-}
-
-fn ship(o: Order) returns Void {
-    out.writeln("shipping " + o.sku + " id=" + o.id)
-}
-
-fn main() returns Void {
-    val maybe_order = find_order(42)
-
-    maybe_order.if_present(ref o: {
-        ship(o)
-    })
-
-    if maybe_order.none() {
-        out.writeln("order not found")
-    }
-}
-```
-
----
-## 15. Traits and compile-time capabilities
+## 5. Traits and compile-time capabilities
 
 ### Traits vs. interfaces
 
@@ -1737,7 +759,7 @@ The trio of:
 forms a coherent, expressive, zero‑overhead system.
 
 ---
-## 16. Interfaces & dynamic dispatch
+## 6. Interfaces & dynamic dispatch
 
 Drift supports **runtime polymorphism** through *interfaces*.  
 Interfaces allow multiple **different concrete types** to be treated as one unified abstract type at runtime.  
@@ -2128,7 +1150,938 @@ Together they form a flexible dual system:
 
 ---
 
-## 17. Memory model
+## 7. Imports and standard I/O
+
+Drift uses explicit imports — no global or magic identifiers.  
+Console output is available through the `std.console` module.
+
+### Import syntax (modules and symbols)
+
+```drift
+import std.console.out        // bind the exported `out` stream
+import std.console.err        // bind the exported `err` stream
+import std.io                 // bind the module
+import std.console.out as print // optional alias
+```
+
+**Grammar**
+
+```ebnf
+ImportDecl    ::= 'import' ImportItem (',' ImportItem)* NEWLINE
+ImportItem    ::= QualifiedName (' ' 'as' ' ' Ident)?
+QualifiedName ::= Ident ('.' Ident)*
+```
+
+**Name‑resolution semantics**
+
+- `QualifiedName` is resolved left‑to‑right.  
+- If it resolves to a **module**, the import binds that module under its last segment (or the `as` alias).  
+- If it resolves to an **exported symbol** inside a module (e.g., `std.console.out`), the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
+- Ambiguities between module and symbol names must be disambiguated with `as` or avoided.
+- Aliases affect only the local binding; frames and module metadata always record the original module ID, not the alias.
+
+**Module identifiers**
+
+- Declared with `module <id>` once per file; multiple files may share the same `<id>`, but a single-module build fails if any file is missing or mismatches the ID. A standalone file with no declaration defaults to `main`.
+- `<id>` must be lowercase alnum segments separated by dots, with optional underscores inside segments; no leading/trailing/consecutive dots/underscores; length ≤ 254 UTF-8 bytes.
+- Reserved prefixes are rejected: `lang.`, `abi.`, `std.`, `core.`, `lib.`.
+- Frames/backtraces record the declared module ID (not filenames), so cross-module stacks are unambiguous.
+
+## 8. Control flow
+
+Drift uses structured control flow; all loops and conditionals are block-based.
+
+### If/else
+
+```drift
+if cond {
+    do_true()
+} else {
+    do_false()
+}
+```
+
+- `if <cond> { ... } else { ... }` selects a branch based on a `Bool` condition.
+- The condition must type-check as `Bool`; the two branches need not return the same type unless used as an expression (e.g., in a ternary).
+- Each branch has its own scope for locals; names inside a branch shadow outer names.
+
+### While loops
+
+```drift
+var i: Int64 = 0
+while i < 3 {
+    i = i + 1
+}
+```
+
+- `while <cond> { <stmts> }` evaluates `<cond>` each iteration and runs the body while it is `true`.
+- `<cond>` must be `Bool`; type errors are reported at compile time.
+- The body forms its own scope for local bindings; fresh bindings inside the loop shadow outer names and are re-created per iteration.
+- `break` exits the nearest enclosing loop; `continue` jumps to the next iteration (re-evaluating the condition).
+
+### Ternary (`? :`) operator
+
+```drift
+val label = is_error ? "error" : "ok"
+```
+
+- `cond ? then_expr : else_expr` is an expression-form conditional; `cond` must be `Bool`.
+- `then_expr` and `else_expr` must have the same type (checked at compile time).
+- Useful for concise branching without introducing additional block nesting; when control flow is complex, prefer a full `if/else`.
+
+### Try/else (expression) and Try/catch (statement)
+
+**Expression form (`try/else`):**
+
+```drift
+val result = try parse_int(input) else 0
+```
+
+- Evaluates the expression; on success, yields its value; on error, evaluates the `else` expression.
+- The attempt and fallback must have the same type.
+- Only simple call attempts are supported for the expression form today.
+
+**Statement form (`try/catch`):**
+
+```drift
+try {
+    risky()
+} catch MyError(err) {
+    handle(err)
+}
+```
+
+- Executes the body; on error, transfers control to the first matching catch (no pattern guards yet; event match or catch-all).
+- Catch binder (if present) has type `Error`.
+- Matching is by exception/event name only; omitting the name makes the clause a catch-all. Domains/attributes are not matched (yet).
+- Control falls through after the try/catch unless all branches return/raise.
+
+## 9. Reserved keywords and operators
+
+Keywords and literals are reserved and cannot be used as identifiers (functions, variables, modules, structs, exceptions, etc.):  
+`fn`, `val`, `var`, `returns`, `if`, `else`, `while`, `break`, `continue`, `try`, `catch`, `throw`, `raise`, `return`, `exception`, `import`, `module`, `true`, `false`, `not`, `and`, `or`, plus language/FFI/legacy keywords (`auto`, `pragma`, `bool`, `int`, `float`, `string`, `void`, `abstract`, `assert`, `boolean`, `byte`, `case`, `char`, `class`, `const`, `default`, `do`, `double`, `enum`, `extends`, `final`, `finally`, `for`, `goto`, `implements`, `instanceof`, `interface`, `long`, `native`, `new`, `package`, `private`, `protected`, `public`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`, `this`, `throws`, `transient`, `volatile`).
+
+## 10. Variant types (`variant`)
+
+Drift’s `variant` keyword defines **tagged unions**: a value that is exactly one of several named alternatives (variants). Each alternative may carry its own fields, and the compiler enforces exhaustive handling when you `match` on the value.
+
+### Syntax
+
+```drift
+variant Result<T, E> {
+    Ok(value: T)
+    Err(error: E)
+}
+```
+
+- `variant` introduces a top-level type definition.
+- The type name uses UpperCamel case and may declare generic parameters (`<T, E>`).
+- Each variant uses UpperCamel case and may include a field list `(field: Type, ...)`.
+- At least one variant must be declared, and names must be unique within the type.
+
+### Semantics and representation
+
+A `variant` value stores:
+
+1. A hidden **tag** indicating which alternative is active.
+2. The **payload** for that variant’s fields.
+
+Only the active variant’s fields may be accessed. This is enforced statically by pattern matching.
+
+### Construction
+
+Each variant behaves like a constructor:
+
+```drift
+val success: Result<Int64, String> = Ok(value = 42)
+val failure = Err(error = "oops")            // type inference fills in `<Int64, String>`
+```
+
+Named arguments are required when a variant has multiple fields; single-field variants may support positional construction, though the explicit form is always accepted.
+
+### Pattern matching and exhaustiveness
+
+`match` is used to consume a variant. All variants must be covered (or you must use future catch-all syntax once it exists).
+
+```drift
+fn describe(result: Result<Int64, String>) returns String {
+    match result {
+        Ok(value) => {
+            return "ok: " + value.to_string()
+        }
+        Err(error) => {
+            return "error: " + error
+        }
+    }
+}
+```
+
+Matches can be nested or composed with other `variant` types:
+
+```drift
+variant Option<T> {
+    Some(value: T)
+    None
+}
+
+variant DbError {
+    ConnectionLost
+    QueryFailed(message: String)
+}
+
+variant LookupResult<T> {
+    Found(value: T)
+    Missing
+    Error(err: DbError)
+}
+
+fn describe_lookup(id: Int64, r: LookupResult<String>) returns String {
+    match r {
+        Found(value) => "Record " + id.to_string() + ": " + value
+        Missing      => "No record for id " + id.to_string()
+        Error(err)   => match err {
+            ConnectionLost       => "Database connection lost"
+            QueryFailed(message) => "Query failed: " + message
+        }
+    }
+}
+```
+
+### Recursive data
+
+Variants are ideal for ASTs and other recursive shapes:
+
+```drift
+variant Expr {
+    Literal(value: Int64)
+    Add(lhs: ref Expr, rhs: ref Expr)
+    Neg(inner: ref Expr)
+}
+
+fn eval(expr: ref Expr) returns Int64 {
+    match expr {
+        Literal(value) => value
+        Add(lhs, rhs) => eval(lhs) + eval(rhs)
+        Neg(inner) => -eval(inner)
+    }
+}
+```
+
+### Generics
+
+Variants support type parameters exactly like `struct` or `fn` declarations:
+
+```drift
+variant PairOrError<T, E> {
+    Pair(first: T, second: T)
+    Error(error: E)
+}
+
+fn make_pair<T>(x: T, y: T) returns PairOrError<T, String> {
+    if x == y {
+        return Error(error = "values must differ")
+    }
+    return Pair(first = x, second = y)
+}
+```
+
+### Value semantics and equality
+
+Variants follow Drift’s value semantics: they are copied/moved by value, and their equality/ordering derive from their payloads. Two `Result` values are equal only if they hold the same variant *and* the corresponding fields are equal.
+
+### Evolution considerations
+
+- Adding a new variant is a **breaking change** because every `match` must handle it explicitly.
+- Library authors should document variant additions clearly or provide fallback variants when forward compatibility matters.
+
+Variants underpin key library types such as `Result<T, E>` and `Option<T>`, enabling safe, expressive modeling of operations with multiple outcomes.
+
+
+## 11. Null safety & optional values
+
+Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
+
+### Types
+
+| Type | Meaning |
+|------|---------|
+| `T` | Non-optional; always initialized. |
+| `Optional<T>` | Possibly empty; either a value or nothing. |
+
+### Construction
+
+```drift
+val present: Optional<Int64> = Optional.of(42)
+val empty: Optional<Int64> = Optional.none()
+```
+
+### Interface
+
+```drift
+interface Optional<T> {
+    fn present(self) returns Bool
+    fn none(self) returns Bool
+    fn unwrap(self) returns T
+    fn unwrap_or(self, default: T) returns T
+    fn map<U>(self, f: fn(T) returns U) returns Optional<U>
+    fn if_present(self, f: fn(ref T) returns Void) returns Void
+    fn if_none(self, f: fn() returns Void) returns Void
+}
+
+module Optional {
+    fn of<T>(value: T) returns Optional<T>
+    fn none<T>() returns Optional<T>
+}
+```
+
+- `present()` is true when a value exists.
+- `none()` is true when empty.
+- `unwrap()` throws `Error("option.none_unwrapped")` if empty (discouraged in production).
+- `map` transforms when present; otherwise stays empty.
+- `if_present` calls the block with a borrow (`ref T`) to avoid moving.
+- `if_none` runs a block when empty.
+
+### Control flow
+
+```drift
+if qty.present() {
+    out.writeln("qty=" + qty.unwrap().toString())
+}
+
+if qty.none() {
+    out.writeln("no qty")
+}
+
+qty.if_present(ref q: {
+    out.writeln("qty=" + q.toString())
+})
+```
+
+There is no safe-navigation operator (`?.`). Access requires explicit helpers.
+
+### Parameters & returns
+
+- A parameter of type `T` cannot receive `Optional.none()`.
+- Use `Optional<T>` for “maybe” values.
+- Returning `none()` from a function declared `: T` is a compile error.
+
+```drift
+fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
+
+val sku = find_sku(42)
+sku.if_present(ref s: { out.writeln("sku=" + s) })
+if sku.none() {
+    out.writeln("missing")
+}
+```
+
+### Ownership
+
+`if_present` borrows (`ref T`) by default. No move occurs unless you explicitly consume `T` inside the block.
+
+### Diagnostics (illustrative)
+
+- **E2400**: cannot assign `Optional.none()` to non-optional type `T`.
+- **E2401**: attempted member/method use on `Optional<T>` without `map`/`unwrap`/`if_present`.
+- **E2402**: `unwrap()` on empty optional.
+- **E2403**: attempted implicit conversion `Optional<T>` → `T`.
+
+### End-to-end example
+
+```drift
+
+### Tuple structs & tuple returns
+
+- **Tuple structs:** `struct Point(x: Int64, y: Int64)` is a compact header that desugars to the standard block struct. Construction may be positional (`Point(10, 20)`) or named (`Point(x = 10, y = 20)`), dot access remains (`point.x`).
+
+- **Anonymous tuple types:** use parentheses for ad-hoc results, e.g. `fn bounds() returns (Int64, Int64, Int64, Int64)` and destructure with `(x1, y1, x2, y2) = bounds()`.
+
+import sys.console.out
+
+struct Order {
+    id: Int64,
+    sku: String,
+    quantity: Int64
+}
+
+fn find_order(id: Int64) returns Optional<Order> {
+    if id == 42 { return Optional.of(Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
+    return Optional.none()
+}
+
+fn ship(o: Order) returns Void {
+    out.writeln("shipping " + o.sku + " id=" + o.id)
+}
+
+fn main() returns Void {
+    val maybe_order = find_order(42)
+
+    maybe_order.if_present(ref o: {
+        ship(o)
+    })
+
+    if maybe_order.none() {
+        out.writeln("order not found")
+    }
+}
+```
+
+---
+## 12. `lang.array`, `ByteBuffer`, and array literals
+
+`lang.array` is the standard module for homogeneous sequences. It exposes the generic type `Array<T>` plus builder helpers and the binary-centric `ByteBuffer`. `Array` is always in scope for type annotations, so you can write:
+
+```drift
+import sys.console.out
+
+fn main() returns Void {
+    val names: Array<String> = ["Bob", "Alice", "Ada"]
+    out.writeln("names ready")
+}
+```
+
+Array literals follow the same ownership and typing rules as other expressions:
+
+```drift
+val nums = [1, 2, 3]            // infers Array<Int64>
+val names = ["Bob", "Alice"]     // infers Array<String>
+
+val explicit: Array<Int64> = [1, 2, 3]  // annotation still allowed when desired
+```
+
+- `[expr1, expr2, ...]` constructs an `Array<T>` where every element shares the same type `T`. The compiler infers `T` from the elements.
+- Mixed-type literals (`[1, "two"]`) are rejected at parse-time.
+- Empty literals are reserved for a future constructor; for now, call the stdlib helper once it lands.
+
+`Array<T>` integrates with the broader language design — it moves with `->`, can be captured with `^`, and will participate in trait implementations like `Display` once the stdlib grows. The literal syntax keeps sample programs succinct while we flesh out higher-level APIs.
+
+### ByteBuffer, ByteSlice, and MutByteSlice
+
+#### Borrowing rules and zero-copy interop
+
+`ByteSlice`/`MutByteSlice` behave like other Drift borrows:
+
+- A `ByteSlice` (`ref ByteSlice`) is a shared view: multiple readers may coexist, but none may mutate.
+- A `MutByteSlice` (`ref MutByteSlice`) is an exclusive view: while it exists, no other references (mutable or shared) to the same range are allowed.
+- Views never own memory. They rely on the original owner (often a `ByteBuffer` or foreign allocation) to outlive the slice’s scope. Moving the owner invalidates outstanding slices, just like any other borrow.
+
+These rules integrate with `Send`/`Sync` (Section 13.13): a `ByteSlice` is `Send`/`Sync` because it is immutable metadata; a `MutByteSlice` is neither, so you cannot share a mutable view across threads without additional synchronization.
+
+This design yields zero-copy interop: host code can wrap foreign `(ptr, len)` pairs in `ByteSlice`, pass them through Drift APIs, and guarantee the callee sees the original bytes without copying. Likewise, `ByteBuffer.as_mut_slice()` hands a shared library a raw view to fill without reallocations. Lifetimes stay explicit and deterministic, avoiding GC-style surprises.
+
+
+Binary APIs use three closely related stdlib types:
+
+| Type | Role |
+|------|------|
+| `ByteBuffer` | Owning, growable buffer of contiguous `Byte` values (move-only). |
+| `ByteSlice` | Immutable borrowed view into existing bytes (`len`, `data_ptr`). |
+| `MutByteSlice` | Exclusive borrowed view for writing bytes in place. |
+
+`ByteBuffer` lives in `lang.array.byte` and follows the same ownership rules as other containers. Constructors include:
+
+```drift
+var buf = ByteBuffer.with_capacity(4096)
+val literal = ByteBuffer.from_array([0x48, 0x69])
+val from_utf8 = ByteBuffer.from_string("drift")
+```
+
+Core operations:
+
+- `fn len(self: ref ByteBuffer) returns Int64` — number of initialized bytes.
+- `fn capacity(self: ref ByteBuffer) returns Int64` — reserved storage.
+- `fn clear(self: ref mut ByteBuffer) returns Void` — resets `len` to zero without freeing.
+- `fn push(self: ref mut ByteBuffer, b: Byte) returns Void`
+- `fn extend(self: ref mut ByteBuffer, slice: ByteSlice) returns Void`
+- `fn as_slice(self: ref ByteBuffer) returns ByteSlice`
+- `fn slice(self: ref ByteBuffer, start: Int64, len: Int64) returns ByteSlice`
+- `fn as_mut_slice(self: ref mut ByteBuffer) returns MutByteSlice`
+- `fn reserve(self: ref mut ByteBuffer, additional: Int64) returns Void`
+
+`ByteSlice`/`MutByteSlice` are lightweight descriptors (`{ ptr, len }`). They do not own memory; borrow rules ensure the referenced storage stays alive for the duration of the borrow. `MutByteSlice` provides exclusive access, so you cannot obtain a second mutable slice while one is active.
+
+Typical I/O pattern:
+
+```drift
+fn copy_stream(src: InputStream, dst: OutputStream) returns Void {
+    var scratch = ByteBuffer.with_capacity(4096)
+
+    loop {
+        scratch.clear()
+        let filled = src.read(scratch.as_mut_slice())
+        if filled == 0 { break }
+
+        let chunk = scratch.slice(0, filled)
+        dst.write(chunk)
+    }
+}
+```
+
+`read` writes into the provided mutable slice and returns the number of bytes initialized; `slice` then produces a read-only view of that prefix without copying. FFI helpers in `lang.abi` can also manufacture `ByteSlice`/`MutByteSlice` wrappers around raw pointers for zero-copy interop.
+
+
+### Indexing, mutation, and borrowing
+#### Borrowed element references
+
+To avoid copying and let other APIs operate on a specific slot, `Array<T>` exposes helper methods:
+
+```drift
+fn ref_at(self: ref Array<T>, index: Int64) returns ref T
+fn ref_mut_at(self: ref mut Array<T>, index: Int64) returns ref mut T
+```
+
+- `ref_at` borrows the array immutably and returns an immutable `ref T` to element `index`. Multiple `ref_at` calls may coexist, and the array remains usable for other reads while the borrow lives.
+- `ref_mut_at` requires an exclusive `ref mut Array<T>` borrow and yields an exclusive `ref mut T`. While the returned reference lives, no other borrows of the same element (or the array) are allowed; this enforces the usual aliasing rules.
+
+Bounds checks mirror simple indexing: out-of-range indices raise `IndexError(container = "Array", index = i)`. These APIs make it easy to hand a callee a view of part of the array—e.g., pass `ref_mut_at` into a mutator function that expects `ref mut T`—without copying the element or exposing the entire container.
+
+
+Use square brackets to read an element:
+
+```drift
+val nums = [1, 2, 3]
+val first = nums[0]
+```
+
+Assignments through an index require the binding to be mutable:
+
+```drift
+var mutable_values: Array<Int64> = [5, 10, 15]
+mutable_values[1] = 42      // ok
+
+val frozen = [7, 8, 9]
+frozen[0] = 1               // compile error: cannot assign through immutable binding
+```
+
+Nested indexing works as expected (e.g., `matrix[row][col]`) as long as the root binding is declared with `var`.
+
+
+## 13. Collection literals (arrays and maps)
+
+Drift includes literal syntax for homogeneous arrays (`[a, b, ...]`) and maps (`{ key: value, ... }`).
+The syntax is part of the language grammar, but **literals never hard-wire a concrete container type**.
+Instead, they are desugared through capability interfaces so projects can pick any backing collection.
+
+### Goals
+
+1. **Ergonomics** — trivial programs should be able to write `val xs = [1, 2, 3]` without ceremony.
+2. **Flexibility** — large systems must be free to route literals into custom containers, including
+   arena-backed vectors, small-capacity stacks, or persistent maps.
+
+### Syntax
+
+#### Array literal
+
+```
+ArrayLiteral ::= "[" (Expr ("," Expr)*)? "]"
+```
+
+Example: `val xs = [1, 2, 3]`.
+
+#### Map literal
+
+```
+MapLiteral ::= "{" (MapEntry ("," MapEntry)*)? "}"
+MapEntry   ::= Expr ":" Expr
+```
+
+Example: `val user = { "name": "Ada", "age": 38 }`.
+
+Duplicate keys are allowed syntactically; the target type decides whether to keep the first value, last
+value, or reject duplicates.
+
+### Type resolution
+
+A literal `[exprs...]` or `{k: v, ...}` requires a *target* type `C`. Resolution happens in two phases:
+
+1. Infer the element type(s) from the literal body. Array literals require all expressions to unify to a
+   single element type `T`. Map literals infer key type `K` and value type `V` from their entries.
+2. Determine the target container type `C` from context. If no context constrains the literal, the
+   compiler falls back to the standard prelude types (`Array<T>` and `Map<K, V>`).
+
+#### `FromArrayLiteral`
+
+A type `C` may accept array literals by implementing:
+
+```drift
+interface FromArrayLiteral<Element> {
+    static fn from_array_literal(items: Array<Element>) returns Self
+}
+```
+
+Desugaring of `[e1, e2, ...]` becomes:
+
+```drift
+C.from_array_literal(tmp_array)
+```
+
+Where `tmp_array` is an ephemeral `Array<T>` built by the compiler. If `C` does not implement the
+interface, the literal fails to type-check.
+
+#### `FromMapLiteral`
+
+Map literals use a similar interface:
+
+```drift
+interface FromMapLiteral<Key, Value> {
+    static fn from_map_literal(entries: Array<(Key, Value)>) returns Self
+}
+```
+
+The compiler converts `{k1: v1, ...}` into `C.from_map_literal(tmp_entries)` where `tmp_entries` is an
+`Array<(K, V)>`.
+
+### Standard implementations
+
+The prelude wires literals to the default collections:
+
+```drift
+implement<T> FromArrayLiteral<T> for Array<T> {
+    static fn from_array_literal(items: Array<T>) returns Array<T> {
+        return items
+    }
+}
+
+implement<K, V> FromMapLiteral<K, V> for Map<K, V> {
+    static fn from_map_literal(entries: Array<(K, V)>) returns Map<K, V> {
+        val m = Map<K, V>()
+        for (k, v) in entries {
+            m.insert(k, v)
+        }
+        return m
+    }
+}
+```
+
+This keeps “hello world” code terse:
+
+```drift
+fn main() returns Void {
+    val xs = [1, 2, 3]
+    val cfg = { "mode": "debug" }
+}
+```
+
+### Strict mode and overrides
+
+Projects may opt into a strict mode that disables implicit prelude imports. In that configuration:
+
+- Literal syntax still parses.
+- You must import the concrete collection types you want to accept literals.
+- If no suitable `FromArrayLiteral`/`FromMapLiteral` implementation is in scope, the literal fails.
+
+Custom containers can opt in by providing their own implementations:
+
+```drift
+struct SmallVec<T> { /* ... */ }
+
+implement<T> FromArrayLiteral<T> for SmallVec<T> {
+    static fn from_array_literal(items: Array<T>) returns SmallVec<T> {
+        var sv = SmallVec<T>()
+        for v in items { sv.push(v) }
+        return sv
+    }
+}
+
+val fast: SmallVec<Int> = [1, 2, 3]
+```
+
+The same pattern applies to alternative map implementations.
+
+### Diagnostics
+
+- `[1, "two"]` → error: element types do not unify.
+- `{}` without a target type → error when no default map is in scope.
+- `val s: SortedSet<Int> = [1, 2, 3]` → error unless `SortedSet<Int>` implements `FromArrayLiteral<Int>`.
+
+### Summary
+
+- Literal syntax is fixed in the language, but its meaning is delegated to interfaces.
+- The prelude provides ready-to-use defaults (`Array`, `Map`).
+- Strict mode and custom containers can override the target type.
+- Errors are clear when element types disagree or no implementation is available.
+
+
+## 14. Exceptions and error context
+
+Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
+Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
+
+### Goals
+Drift’s exception system is designed to:
+
+- Use **one concrete error type** (`Error`) for all thrown failures.
+- Represent failures as **event names plus arguments**, not free-form text.
+- Capture **call-site context** (locals per frame + backtrace) automatically.
+- Preserve a **precise, frozen ABI layout** so exceptions can propagate across Drift modules and plugins.
+- Fit cleanly over a conceptual `Result<T, Error>` model for internal lowering and ABI design.
+- Respect **move semantics**: `Error` is move-only and is always transferred with `e->`.
+
+---
+
+### Error type and layout
+
+```drift
+struct Error {
+    event: String,
+    args: Map<String, String>,
+    ctx_frames: Array<CtxFrame>,
+    stack: BacktraceHandle
+}
+
+exception IndexError(container: String, index: Int64)
+```
+
+#### event
+Event name of the exception (`"BadArgument"`).
+
+#### args
+Only event arguments, stringified via `Display.to_string()`.
+
+#### ctx_frames
+Per-frame captured locals:
+
+```drift
+struct CtxFrame {
+    fn_name: String,
+    locals: Map<String, String>
+}
+```
+
+Event args never appear here.
+
+#### stack
+Opaque captured backtrace.
+
+---
+
+### Exception events
+
+#### Declaring events
+```drift
+exception InvalidOrder(order_id: Int64, code: String)
+exception Timeout(operation: String, millis: Int64)
+```
+
+Each parameter type must implement `Display`.
+
+#### Throwing
+```drift
+throw InvalidOrder(order_id = order.id, code = "order.invalid")
+```
+
+Runtime builds an `Error` with:
+- event name
+- args (stringified)
+- empty ctx_frames (filled during unwind)
+- backtrace
+
+#### Display requirement
+Each exception argument type must implement:
+
+```drift
+trait Display {
+    fn to_string(self) returns String
+}
+```
+
+---
+
+### Capturing local context with ^
+
+Locals can be captured:
+
+```drift
+val ^input: String as "record.field" = s
+```
+
+A frame is added when unwinding past the function:
+
+```json
+{
+  "fn_name": "parse_date",
+  "locals": { "record.field": "2025-13-40" }
+}
+```
+
+Rules:
+- Only `^`-annotated locals captured.
+- Values must implement `Display`.
+- Capture happens once per frame.
+
+---
+
+### Throwing, catching, rethrowing
+
+`Error` is move-only.
+
+#### Catch by event
+```drift
+try {
+    ship(order)
+} catch InvalidOrder(e) {
+    log(ref e)
+}
+```
+
+Matches by `error.event`.
+
+#### Catch-all + rethrow
+```drift
+catch e {
+    log(ref e)
+    throw e->
+}
+```
+
+Ownership moves back to unwinder.
+
+#### Inline catch-all shorthand
+
+For a single call where you just want a fallback value, use the one-liner form:
+
+```drift
+val date = try parse_date(input) else default_date
+```
+
+This is sugar for a catch-all handler:
+
+```drift
+val date = {
+    try { parse_date(input) }
+    catch _ { default_date }
+}
+```
+
+The `else` expression must produce the same type as the `try` expression. Exception context (`event`, args, captured locals, stack) is still recorded before control flows into the `else` arm.
+
+---
+
+### Internal Result<T, Error> semantics
+
+Conceptual form:
+
+```drift
+variant Result<T, E> {
+    Ok(value: T)
+    Err(error: E)
+}
+```
+
+Every function behaves as if returning `Result<T, Error>`; ABI lowers accordingly.
+
+---
+
+### Drift–Drift propagation (plugins)
+
+Unwinding is allowed across Drift modules/plugins as long as:
+- The `Error` layout is identical.
+- Same runtime/unwinder is used.
+
+Event name + args + ctx_frames + stack fully capture portable state.
+
+---
+
+### Logging and serialization
+JSON example:
+
+```json
+{
+  "event": "InvalidOrder",
+  "args": { "order_id": "42", "code": "order.invalid" },
+  "ctx_frames": [
+    { "fn_name": "ship", "locals": { "record.id": "42" }},
+    { "fn_name": "ingest_order", "locals": { "batch": "B1" }}
+  ],
+  "stack": "opaque"
+}
+```
+
+---
+
+### Summary
+
+- Single `Error` type.
+- Event-based exceptions.
+- Arguments + captured locals normalized to strings.
+- Move-only errors with deterministic ownership.
+- Precisely defined layout for plugin-safe unwinding.
+- Semantically equivalent to `Result<T, Error>` internally.
+
+## 15. Mutators, transformers, and finalizers
+
+In Drift, a function’s **parameter ownership mode** communicates its **lifecycle role** in a data flow.  
+This distinction becomes especially clear in pipelines (`>>`), where each stage expresses how it interacts with its input.
+
+### Function roles
+
+| Role | Parameter type | Return type | Ownership semantics | Typical usage |
+|------|----------------|--------------|---------------------|----------------|
+| **Mutator** | `ref mut T` | `Void` or `T` | Borrows an existing `T` mutably and optionally returns it. Ownership stays with the caller. | In-place modification, e.g. `fill`, `tune`. |
+| **Transformer** | `T` | `U` (often `T`) | Consumes its input and returns a new owned value. Ownership transfers into the call and out again. | `compress`, `clone`, `serialize`. |
+| **Finalizer / Sink** | `T` | `Void` | Consumes the value completely. Ownership ends here; the resource is destroyed or released at function return. | `finalize`, `close`, `free`, `commit`. |
+
+### Pipeline behavior
+
+The pipeline operator `>>` is **ownership-aware**.  
+It automatically determines how each stage interacts based on the callee’s parameter type:
+
+```drift
+fn fill(f: ref mut File) returns Void { /* mutate */ }
+fn tune(f: ref mut File) returns Void { /* mutate */ }
+fn finalize(f: File) returns Void { /* consume */ }
+
+open("x")
+  >> fill      // borrows mutably; File stays alive
+  >> tune      // borrows mutably again
+  >> finalize; // consumes; File is now invalid
+```
+
+- **Mutator stages** borrow temporarily and return the same owner.
+- **Transformer stages** consume and return new ownership.
+- **Finalizer stages** consume and end the pipeline.
+
+At the end of scope, if the value is still owned (not consumed by a finalizer), RAII automatically calls its destructor.
+
+### Rationale
+
+This mirrors real-world resource lifecycles:
+1. Creation — ownership established.  
+2. Mutation — zero or more `ref mut` edits.  
+3. Transformation — optional `T → U`.  
+4. Finalization — release or destruction.
+
+Explicit parameter types make these transitions visible and verifiable at compile time.
+
+### RAII interaction
+
+All owned resources obey RAII: their destructors run automatically at scope end.  
+Finalizers are **optional** unless early release, explicit error handling, or shared-handle semantics require them.
+
+```drift
+{
+    open("x")
+      >> fill
+      >> tune;      // RAII closes automatically here
+}
+
+{
+    open("x")
+      >> fill
+      >> tune
+      >> finalize;  // explicit end-of-life
+}
+```
+
+In both cases, the file handle is safely released exactly once.
+
+### Destructors and moves
+
+- Deterministic RAII: owned values run their destructor at end of liveness—scope exit, early return, or after being consumed by a finalizer. No deferred GC-style cleanup.
+- Move-only by default: moving a value consumes it; the source binding becomes invalid and is not dropped there. Drop runs exactly once on the final owner.
+- Copyable types opt in: only `Copy` types may be implicitly copied; they either have trivial/no destructor or a well-defined copy+drop story.
+
+## 16. Memory model
 
 This chapter defines Drift's rules for value storage, initialization, destruction, and dynamic allocation. The goal is predictable semantics for user code while relegating low-level memory manipulation to the standard library and `lang.abi`.
 
@@ -2279,7 +2232,187 @@ These rules scale to arrays, strings, maps, trait objects, and future higher-lev
 
 ---
 
-## 18. Concurrency & virtual threads
+## 17. Pointer-free surface and ABI boundaries
+
+Drift deliberately keeps raw pointer syntax out of the language surface. Low-level memory manipulation and FFI plumbing are funneled through sealed standard-library modules so typical programs interact with typed handles rather than `*mut T` tokens.
+
+### Policy: no raw pointer tokens
+
+- No `*mut T` / `*const T` syntax exists in Drift.
+- User-visible pointer arithmetic and casts are forbidden.
+- Untyped byte operations live behind `@unsafe` internals such as `lang.abi` and `lang.internals`.
+
+### Slots and uninitialized handles
+
+To enable placement construction without exposing addresses, the runtime uses opaque helpers (see Section 15.1.2):
+
+- `Slot<T>` — a typed storage location capable of holding one `T`.
+- `Uninit<T>` — a marker denoting “not constructed yet.”
+
+Internal APIs operate on these handles:
+
+```drift
+slot.write(value: T)         // move/copy into the slot
+slot.emplace(args…)         // construct in place from arguments
+slot.assume_init() @unsafe  // produce a normal reference once initialized
+```
+
+Typical code never manipulates the underlying addresses—only these safe handles.
+
+### Guarded builders for container growth
+
+Growable containers expose builder objects instead of raw capacity math. Example:
+
+```drift
+var xs = Array<Line>()
+xs.reserve(100)
+
+var builder = xs.begin_uninit(3)
+builder.emplace(/* args for element 0 */)
+builder.emplace(/* args for element 1 */)
+builder.emplace(/* args for element 2 */)
+builder.finish()                 // commits len += 3; rollback if dropped early
+```
+
+- `UninitBuilder<T>` only exposes `emplace`, `write`, `len_built`, and `finish`.
+- Dropping the builder without `finish()` destroys partially built elements and leaves `len` unchanged.
+- No pointer arithmetic leaks outside.
+
+### `RawBuffer` internals
+
+Containers rely on `lang.abi::RawBuffer` for contiguous storage, but the public surface offers only safe operations:
+
+```drift
+struct RawBuffer<T> { /* opaque */ }
+
+fn capacity(ref self) returns Int
+fn slot_at(ref self, i: Int) returns Slot<T> @unsafe
+fn reallocate(ref mut self, new_cap: Int) @unsafe
+```
+
+`Array<T>` and similar types use these hooks internally; ordinary programs never touch the raw bytes.
+
+### FFI via `lang.abi`
+
+Interop lives in `lang.abi`, which exposes opaque pointer/slice types instead of raw addresses:
+
+- `abi.CPtr<T>` / `abi.MutCPtr<T>` — handles that represent foreign pointers; they can be passed around but not dereferenced directly.
+- `abi.Slice<T>` / `abi.MutSlice<T>` — safe views that lower to `(ptr, len)` at the ABI boundary.
+- `extern "C" struct` / `extern "C" fn` map to C layouts and calls.
+
+Only `lang.abi` knows how to construct these handles from actual addresses. Example:
+
+```drift
+import lang.abi as abi
+
+extern "C" struct Point { x: Int32, y: Int32 }
+extern "C" fn draw(points: abi.Slice<Point>) returns Int32
+
+fn render(points: Array<Point>) returns Int32 {
+    return draw(points.as_slice())     // no raw pointers in user code
+}
+```
+
+#### Callbacks (C ABI)
+
+- Only **non-capturing** functions may cross the C ABI as callbacks; they are exported/imported as thin `extern "C"` function pointers. This matches C’s model and keeps the ABI predictable.
+- Capturing closures are **not** auto-wrapped for C. If state is needed, authors must build it explicitly (e.g., a struct of state plus a manual trampoline taking `void*`), and manage allocation/freeing on the C side; the language runtime does not box captures for C callbacks.
+- Drift-side code calling into C APIs that accept only a bare function pointer must provide a non-capturing function; APIs that also accept a user-data pointer can be targeted later with an explicit `ctx`+trampoline pattern, but that is a deliberate, manual choice.
+- Callbacks returned **from** C are treated as opaque `extern "C"` function pointers (cdecl). If the C API also returns a `ctx`/userdata pointer, it is modeled as a pair `{fn_ptr, ctx_ptr}` but remains **borrowed**: Drift does not free or drop it unless the API explicitly transfers ownership. Wrappers must:
+  - enforce the C calling convention,
+  - reject null pointers (or fail fast if invoked),
+  - prevent Drift exceptions from crossing into C (catch and convert to a Drift error),
+  - assume no thread-affinity guarantees unless the API states otherwise.
+
+### Unsafe modules (`lang.internals`)
+
+Truly low-level helpers (`Slot<T>`, unchecked length changes, raw buffer manipulation) live in sealed modules such as `lang.internals`. Importing them requires explicit opt-in (feature flag + `@unsafe` annotations). Most applications never import these modules; the standard library and advanced crates do so when implementing containers or FFI shims.
+
+### Examples
+
+**Placement without pointers**
+
+```drift
+var arr = Array<UserType>.with_capacity(10)
+
+var value = UserType(...)
+arr.push(value)                      // standard path
+
+var builder = arr.begin_uninit(1)
+builder.write(value)
+builder.finish()
+```
+
+**FFI call**
+
+```drift
+import lang.abi as abi
+
+extern "C" struct Buf { data: abi.CPtr<U8>, len: Int32 }
+extern "C" fn send(buf: abi.Slice<U8>) returns Int32
+
+fn transmit(bytes: Array<U8>) returns Int32 {
+    return send(bytes.as_slice())
+}
+```
+
+### Summary
+
+- The surface language never exposes raw pointer syntax or arithmetic.
+- Constructors, builders, and slices provide placement-new semantics without revealing addresses.
+- FFI always flows through `lang.abi` with opaque handles.
+- Unsafe helpers live behind `lang.internals` and require explicit opt-in.
+- Programmers still achieve zero-cost interop and efficient container implementations while keeping the foot-guns sealed away.
+
+---
+
+---
+
+## 18. Standard I/O design
+
+### `std.io` module
+
+```drift
+module std.io
+
+interface OutputStream {
+    fn write(self: ref OutputStream, bytes: ByteSlice) returns Void
+    fn writeln(self: ref OutputStream, text: String) returns Void
+    fn flush(self: ref OutputStream) returns Void
+}
+
+interface InputStream {
+    fn read(self: ref InputStream, buffer: MutByteSlice) returns Int64
+}
+```
+
+### `std.console` module
+
+```
+// initialized before main is called
+val out : OutputStream = ... 
+val err : OutputStream = ...
+val in  : InputStream = ...
+```
+
+These built-in instances represent the system console streams. Now you can write simple console programs without additional setup:
+
+```drift
+import std.console.out as out
+
+fn main() returns Void {
+    val name: String = "Drift"
+    out.writeln("Hello, " + name)
+}
+```
+
+`out.writeln` accepts any value whose type implements the `Display` trait. All builtin primitives (`Int64`, `Float64`, `Bool`, `String`, `Error`) implement `Display`, so diagnostics like `out.writeln(verify(order))` type-check without manual string conversions.
+
+This model allows concise I/O while keeping imports explicit and predictable.  
+The objects `out`, `err`, and `in` are references to standard I/O stream instances.
+
+
+## 19. Concurrency & virtual threads
 
 Drift offers structured, scalable concurrency via **virtual threads**: lightweight, stackful execution contexts scheduled on a pool of operating-system carrier threads. Programmers write synchronous-looking code without explicit `async`/`await`, yet the runtime multiplexes potentially millions of virtual threads.
 
@@ -2446,142 +2579,6 @@ This pattern mirrors `try/finally`: if any child throws, the scope cancels the r
 - Reactors wake parked threads when I/O or timers fire.
 - Structured concurrency scopes offer deterministic cancellation and cleanup.
 - Only a handful of `lang.thread` intrinsics underpin the model; user-facing code resides in `std.concurrent`.
-
-## 19. Pointer-free surface and ABI boundaries
-
-Drift deliberately keeps raw pointer syntax out of the language surface. Low-level memory manipulation and FFI plumbing are funneled through sealed standard-library modules so typical programs interact with typed handles rather than `*mut T` tokens.
-
-### Policy: no raw pointer tokens
-
-- No `*mut T` / `*const T` syntax exists in Drift.
-- User-visible pointer arithmetic and casts are forbidden.
-- Untyped byte operations live behind `@unsafe` internals such as `lang.abi` and `lang.internals`.
-
-### Slots and uninitialized handles
-
-To enable placement construction without exposing addresses, the runtime uses opaque helpers (see Section 15.1.2):
-
-- `Slot<T>` — a typed storage location capable of holding one `T`.
-- `Uninit<T>` — a marker denoting “not constructed yet.”
-
-Internal APIs operate on these handles:
-
-```drift
-slot.write(value: T)         // move/copy into the slot
-slot.emplace(args…)         // construct in place from arguments
-slot.assume_init() @unsafe  // produce a normal reference once initialized
-```
-
-Typical code never manipulates the underlying addresses—only these safe handles.
-
-### Guarded builders for container growth
-
-Growable containers expose builder objects instead of raw capacity math. Example:
-
-```drift
-var xs = Array<Line>()
-xs.reserve(100)
-
-var builder = xs.begin_uninit(3)
-builder.emplace(/* args for element 0 */)
-builder.emplace(/* args for element 1 */)
-builder.emplace(/* args for element 2 */)
-builder.finish()                 // commits len += 3; rollback if dropped early
-```
-
-- `UninitBuilder<T>` only exposes `emplace`, `write`, `len_built`, and `finish`.
-- Dropping the builder without `finish()` destroys partially built elements and leaves `len` unchanged.
-- No pointer arithmetic leaks outside.
-
-### `RawBuffer` internals
-
-Containers rely on `lang.abi::RawBuffer` for contiguous storage, but the public surface offers only safe operations:
-
-```drift
-struct RawBuffer<T> { /* opaque */ }
-
-fn capacity(ref self) returns Int
-fn slot_at(ref self, i: Int) returns Slot<T> @unsafe
-fn reallocate(ref mut self, new_cap: Int) @unsafe
-```
-
-`Array<T>` and similar types use these hooks internally; ordinary programs never touch the raw bytes.
-
-### FFI via `lang.abi`
-
-Interop lives in `lang.abi`, which exposes opaque pointer/slice types instead of raw addresses:
-
-- `abi.CPtr<T>` / `abi.MutCPtr<T>` — handles that represent foreign pointers; they can be passed around but not dereferenced directly.
-- `abi.Slice<T>` / `abi.MutSlice<T>` — safe views that lower to `(ptr, len)` at the ABI boundary.
-- `extern "C" struct` / `extern "C" fn` map to C layouts and calls.
-
-Only `lang.abi` knows how to construct these handles from actual addresses. Example:
-
-```drift
-import lang.abi as abi
-
-extern "C" struct Point { x: Int32, y: Int32 }
-extern "C" fn draw(points: abi.Slice<Point>) returns Int32
-
-fn render(points: Array<Point>) returns Int32 {
-    return draw(points.as_slice())     // no raw pointers in user code
-}
-```
-
-#### Callbacks (C ABI)
-
-- Only **non-capturing** functions may cross the C ABI as callbacks; they are exported/imported as thin `extern "C"` function pointers. This matches C’s model and keeps the ABI predictable.
-- Capturing closures are **not** auto-wrapped for C. If state is needed, authors must build it explicitly (e.g., a struct of state plus a manual trampoline taking `void*`), and manage allocation/freeing on the C side; the language runtime does not box captures for C callbacks.
-- Drift-side code calling into C APIs that accept only a bare function pointer must provide a non-capturing function; APIs that also accept a user-data pointer can be targeted later with an explicit `ctx`+trampoline pattern, but that is a deliberate, manual choice.
-- Callbacks returned **from** C are treated as opaque `extern "C"` function pointers (cdecl). If the C API also returns a `ctx`/userdata pointer, it is modeled as a pair `{fn_ptr, ctx_ptr}` but remains **borrowed**: Drift does not free or drop it unless the API explicitly transfers ownership. Wrappers must:
-  - enforce the C calling convention,
-  - reject null pointers (or fail fast if invoked),
-  - prevent Drift exceptions from crossing into C (catch and convert to a Drift error),
-  - assume no thread-affinity guarantees unless the API states otherwise.
-
-### Unsafe modules (`lang.internals`)
-
-Truly low-level helpers (`Slot<T>`, unchecked length changes, raw buffer manipulation) live in sealed modules such as `lang.internals`. Importing them requires explicit opt-in (feature flag + `@unsafe` annotations). Most applications never import these modules; the standard library and advanced crates do so when implementing containers or FFI shims.
-
-### Examples
-
-**Placement without pointers**
-
-```drift
-var arr = Array<UserType>.with_capacity(10)
-
-var value = UserType(...)
-arr.push(value)                      // standard path
-
-var builder = arr.begin_uninit(1)
-builder.write(value)
-builder.finish()
-```
-
-**FFI call**
-
-```drift
-import lang.abi as abi
-
-extern "C" struct Buf { data: abi.CPtr<U8>, len: Int32 }
-extern "C" fn send(buf: abi.Slice<U8>) returns Int32
-
-fn transmit(bytes: Array<U8>) returns Int32 {
-    return send(bytes.as_slice())
-}
-```
-
-### Summary
-
-- The surface language never exposes raw pointer syntax or arithmetic.
-- Constructors, builders, and slices provide placement-new semantics without revealing addresses.
-- FFI always flows through `lang.abi` with opaque handles.
-- Unsafe helpers live behind `lang.internals` and require explicit opt-in.
-- Programmers still achieve zero-cost interop and efficient container implementations while keeping the foot-guns sealed away.
-
----
-
----
 
 ## 20. Signed modules and DMIR
 

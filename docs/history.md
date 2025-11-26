@@ -17,6 +17,7 @@
 - Added `break`/`continue` tokens to the grammar and loop-scoping checks in the checker; added a nested while+try/catch runtime test (`while_try_catch.drift`). Documented control-flow (if/else, ternary, while, try/else, try/catch) in the language spec.
 - Expanded reserved keywords: checker now rejects a broad set (language/FFI/legacy keywords, lowercase primitive aliases); added a negative test for using a reserved word as a function name; spec reserved-keyword list updated.
 - Clarified that `Bool` lowers to LLVM `i1`; kept `true`/`false` as lowercase literals, so constructs like `while true { ... }` parse and type-check as expected. History/spec updated to reflect the current control-flow and reserved keyword rules.
+- Reordered the language spec chapters for better definition-before-use flow (traits/interfaces early, variants before exceptions/null safety, arrays/collections grouped, standard I/O moved later) and renumbered chapters sequentially without duplicates.
 
 ## 2025-11-24
 - Fixed the parser’s `if` builder to grab the nested `else_clause` block, so conditional statements with an else arm are preserved through parsing and lowering.
