@@ -205,9 +205,10 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
     )
     domain_val = None
     if domain_node:
+        import ast as _ast
         str_node = next((c for c in domain_node.children if isinstance(c, Token) and c.type == "STRING"), None)
         if str_node:
-            domain_val = str_node.value
+            domain_val = _ast.literal_eval(str_node.value)
     if params_node:
         args = []
         for child in params_node.children:
@@ -216,7 +217,8 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
             if isinstance(child, Tree) and _name(child) == "exception_domain_param":
                 str_node = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
                 if str_node:
-                    domain_val = str_node.value
+                    import ast as _ast
+                    domain_val = _ast.literal_eval(str_node.value)
     return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val)
 
 

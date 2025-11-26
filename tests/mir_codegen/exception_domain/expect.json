@@ -1,5 +1,5 @@
 {
   "exit": 1,
   "stdout": "",
-  "stderr": "{\"msg\":\"down\"}\n"
+  "stderr": "{\"event\":\"NetError\",\"domain\":\"net\",\"attrs\":{\"msg\":\"down\"},\"frames\":[{\"module\":\"main\",\"file\":\"input.drift\",\"func\":\"raise_net\",\"line\":4}]}\n"
 }

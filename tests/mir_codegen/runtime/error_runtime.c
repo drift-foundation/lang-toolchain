@@ -32,7 +32,6 @@ struct Error* drift_error_new(
             free(err->frame_files);
             free(err->frame_funcs);
             free(err->frame_lines);
-            free(err->diag);
             free(err);
             return NULL;
         }
@@ -43,38 +42,114 @@ struct Error* drift_error_new(
             err->frame_lines[i] = frame_lines[i];
         }
     }
-    /* Build a diagnostic string including all attrs. */
-    size_t total = 2; // {}
-    for (size_t i = 0; i < attr_count; i++) {
-        const char* k = err->keys[i] ? err->keys[i] : "unknown";
-        const char* v = err->values[i] ? err->values[i] : "unknown";
-        total += strlen(k) + strlen(v) + 7; // quotes, colon, comma
-    }
-    err->diag = (char*)malloc(total + 1);
-    if (!err->diag) {
-        free(err);
-        return NULL;
-    }
-    char* p = err->diag;
-    *p++ = '{';
-    for (size_t i = 0; i < attr_count; i++) {
-        const char* k = err->keys[i] ? err->keys[i] : "unknown";
-        const char* v = err->values[i] ? err->values[i] : "unknown";
-        int n = snprintf(p, total - (p - err->diag), "\"%s\":\"%s\"", k, v);
-        p += n;
-        if (i + 1 < attr_count) {
-            *p++ = ',';
-        }
-    }
-    *p++ = '}';
-    *p = '\0';
     return err;
 }
 
 const char* error_to_cstr(struct Error* err) {
     if (!err) return NULL;
     if (err->diag) return err->diag;
-    return "{\"msg\":\"unknown\"}";
+
+    const char* event = err->event ? err->event : "unknown";
+    const char* domain = err->domain ? err->domain : "main";
+
+    /* Build attrs JSON fragment. */
+    size_t attrs_len = 0;
+    for (size_t i = 0; i < err->attr_count; i++) {
+        const char* k = err->keys && err->keys[i] ? err->keys[i] : "unknown";
+        const char* v = err->values && err->values[i] ? err->values[i] : "unknown";
+        attrs_len += (size_t)snprintf(NULL, 0, "\"%s\":\"%s\"", k, v);
+        if (i + 1 < err->attr_count) attrs_len += 1; /* comma */
+    }
+
+    /* Build frames JSON fragment. */
+    size_t frames_len = 0;
+    for (size_t i = 0; i < err->frame_count; i++) {
+        const char* module = (err->frame_modules && err->frame_modules[i]) ? err->frame_modules[i] : "<unknown>";
+        const char* file = (err->frame_files && err->frame_files[i]) ? err->frame_files[i] : "<unknown>";
+        const char* func = (err->frame_funcs && err->frame_funcs[i]) ? err->frame_funcs[i] : "<unknown>";
+        long long line = (err->frame_lines) ? (long long)err->frame_lines[i] : 0;
+        frames_len += (size_t)snprintf(NULL, 0,
+            "{\"module\":\"%s\",\"file\":\"%s\",\"func\":\"%s\",\"line\":%lld}",
+            module, file, func, line);
+        if (i + 1 < err->frame_count) frames_len += 1; /* comma */
+    }
+
+    char* attrs_buf = NULL;
+    char* frames_buf = NULL;
+    if (attrs_len > 0) {
+        attrs_buf = (char*)malloc(attrs_len + 1);
+        if (!attrs_buf) { free(err->diag); err->diag = NULL; return NULL; }
+        char* p = attrs_buf;
+        for (size_t i = 0; i < err->attr_count; i++) {
+            const char* k = err->keys && err->keys[i] ? err->keys[i] : "unknown";
+            const char* v = err->values && err->values[i] ? err->values[i] : "unknown";
+            p += snprintf(p, attrs_len - (size_t)(p - attrs_buf) + 1, "\"%s\":\"%s\"", k, v);
+            if (i + 1 < err->attr_count) *p++ = ',';
+        }
+        *p = '\0';
+    }
+    if (frames_len > 0) {
+        frames_buf = (char*)malloc(frames_len + 1);
+        if (!frames_buf) { free(err->diag); err->diag = NULL; free(attrs_buf); return NULL; }
+        char* p = frames_buf;
+        for (size_t i = 0; i < err->frame_count; i++) {
+            const char* module = (err->frame_modules && err->frame_modules[i]) ? err->frame_modules[i] : "<unknown>";
+            const char* file = (err->frame_files && err->frame_files[i]) ? err->frame_files[i] : "<unknown>";
+            const char* func = (err->frame_funcs && err->frame_funcs[i]) ? err->frame_funcs[i] : "<unknown>";
+            long long line = (err->frame_lines) ? (long long)err->frame_lines[i] : 0;
+            p += snprintf(p, frames_len - (size_t)(p - frames_buf) + 1,
+                "{\"module\":\"%s\",\"file\":\"%s\",\"func\":\"%s\",\"line\":%lld}",
+                module, file, func, line);
+            if (i + 1 < err->frame_count) *p++ = ',';
+        }
+        *p = '\0';
+    }
+
+    char* attrs_section = NULL;
+    if (attrs_len > 0 && attrs_buf) {
+        attrs_section = (char*)malloc(attrs_len + 3);
+        if (!attrs_section) { free(attrs_buf); free(frames_buf); return NULL; }
+        snprintf(attrs_section, attrs_len + 3, "{%s}", attrs_buf);
+    } else {
+        attrs_section = strdup("{}");
+    }
+
+    char* frames_section = NULL;
+    if (frames_len > 0 && frames_buf) {
+        frames_section = (char*)malloc(frames_len + 3);
+        if (!frames_section) { free(attrs_buf); free(frames_buf); free(attrs_section); return NULL; }
+        snprintf(frames_section, frames_len + 3, "[%s]", frames_buf);
+    } else {
+        frames_section = strdup("[]");
+    }
+
+    size_t total = (size_t)snprintf(
+        NULL,
+        0,
+        "{\"event\":\"%s\",\"domain\":\"%s\",\"attrs\":%s,\"frames\":%s}",
+        event,
+        domain,
+        attrs_section,
+        frames_section);
+    total += 1; /* null terminator */
+    err->diag = (char*)malloc(total);
+    if (!err->diag) {
+        free(attrs_buf);
+        free(frames_buf);
+        return NULL;
+    }
+    snprintf(err->diag, total,
+        "{\"event\":\"%s\",\"domain\":\"%s\",\"attrs\":%s,\"frames\":%s}",
+        event,
+        domain,
+        attrs_section,
+        frames_section);
+
+    free(attrs_buf);
+    free(frames_buf);
+    free(attrs_section);
+    free(frames_section);
+    return err->diag;
 }
 
 void error_free(struct Error* err) {

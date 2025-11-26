@@ -1,5 +1,5 @@
 {
   "exit": 1,
   "stdout": "",
-  "stderr": "{\"msg\":\"L3\"}\nframes=3\ntests.frames_chain:input.drift:level3:6\ntests.frames_chain:input.drift:level2:0\ntests.frames_chain:input.drift:level1:0\n"
+  "stderr": "{\"event\":\"Boom\",\"domain\":\"main\",\"attrs\":{\"msg\":\"L3\"},\"frames\":[{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level3\",\"line\":6},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level2\",\"line\":0},{\"module\":\"tests.frames_chain\",\"file\":\"input.drift\",\"func\":\"level1\",\"line\":0}]}\n"
 }
