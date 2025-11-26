@@ -385,6 +385,24 @@ QualifiedName ::= Ident ('.' Ident)*
 - Reserved prefixes are rejected: `lang.`, `abi.`, `std.`, `core.`, `lib.`.
 - Frames/backtraces record the declared module ID (not filenames), so cross-module stacks are unambiguous.
 
+## 6. Control flow
+
+Drift uses structured control flow; all loops and conditionals are block-based.
+
+### 6.1 While loops
+
+```drift
+var i: Int64 = 0
+while i < 3 {
+    i = i + 1
+}
+```
+
+- `while <cond> { <stmts> }` evaluates `<cond>` on each iteration; the body runs while it is `true`.
+- `<cond>` must be `Bool`; type errors are reported at compile time.
+- The body forms its own scope for local bindings; fresh bindings inside the loop shadow outer names and are re-created per iteration.
+- There is no implicit `break`/`continue` yet; exiting requires making the condition false.
+
 ## 5. Standard I/O design
 
 ### `std.io` module
