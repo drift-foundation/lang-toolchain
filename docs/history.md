@@ -93,3 +93,5 @@
 - Introduced `lang/driftc.py` as a minimal Drift→MIR→LLVM driver (straight-line subset) and moved the MIR codegen harness out of `tools/test-llvm/` into `tests/mir_lowering/`.
 - Fixed import shadowing (lang/types vs stdlib types) by adjusting `lang/driftc.py` sys.path handling and invoking it as a module; `just mir-codegen` now runs end-to-end producing and running a native binary.
 - Added initial MIR data structures (`lang/mir.py`) to model SSA blocks, instructions, edges, and programs; tests still pass.
+- Aligned the String ABI end-to-end: removed the obsolete `lang/_string_runtime_decls.py`, mapped Drift `String` in MIR→LLVM to the runtime struct `{drift_size_t, i8*}`, built string literals as static globals (no heap), and wired string `+` to `drift_string_concat`.
+- Made SIZE_T derive from the target data layout (fallback 64-bit) instead of hardcoding i64, and treated an empty String literal as `{0, null}` for clarity; kept forward-declared string runtime helpers ready for future FFI lowering.

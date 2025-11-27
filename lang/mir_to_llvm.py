@@ -23,8 +23,7 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
     target = llvm.Target.from_default_triple()
     tm = target.create_target_machine(reloc="pic", codemodel="small")
     global SIZE_T, STRING_LLVM_TYPE
-    # TODO: derive pointer size from target_data when available in llvmlite
-    SIZE_T = ir.IntType(64)
+    SIZE_T = ir.IntType(_pointer_size_bits(str(tm.target_data)))
     STRING_LLVM_TYPE = ir.LiteralStructType([SIZE_T, ir.IntType(8).as_pointer()])
 
     llvm_module = ir.Module(name=f"{fn.name}_module")
@@ -221,7 +220,8 @@ def _const(builder: ir.IRBuilder, ty: Type, val: object) -> ir.Value:
     if ty == STR:
         assert STRING_LLVM_TYPE is not None and SIZE_T is not None
         if val is None:
-            return ir.Constant(STRING_LLVM_TYPE, None)
+            # Explicit empty literal {0, null}
+            return ir.Constant.literal_struct([ir.Constant(SIZE_T, 0), ir.Constant(ir.IntType(8).as_pointer(), None)])
         data = bytearray(str(val).encode("utf-8"))
         data.append(0)
         unique_id = len(builder.module.globals)
@@ -237,6 +237,20 @@ def _const(builder: ir.IRBuilder, ty: Type, val: object) -> ir.Value:
         parts = [ir.Constant(SIZE_T, len(data) - 1), ptr]
         return ir.Constant.literal_struct(parts)
     raise NotImplementedError(f"const of type {ty}")
+
+
+def _pointer_size_bits(data_layout: str) -> int:
+    """
+    Derive pointer size from the target data layout string (e.g., ...-p272:64:64-...).
+    Falls back to 64 if no pointer fragment is found.
+    """
+    last_bits = None
+    for frag in data_layout.split("-"):
+        if frag.startswith("p"):
+            parts = frag.split(":")
+            if len(parts) >= 2 and parts[1].isdigit():
+                last_bits = int(parts[1])
+    return last_bits or 64
 
 
 def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Value]) -> ir.Value:
