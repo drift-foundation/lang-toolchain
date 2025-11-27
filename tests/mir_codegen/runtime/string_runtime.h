@@ -26,7 +26,7 @@ struct DriftString drift_string_from_cstr(const char* cstr);
 // Construct from raw bytes (copies data).
 struct DriftString drift_string_from_bytes(const char* data, drift_size_t len);
 
-// Construct a DriftString backed by static storage (no free needed).
+// Construct a DriftString backed by static storage (no free needed; MUST NOT be passed to drift_string_free).
 struct DriftString drift_string_literal(const char* data, drift_size_t len);
 
 // Concatenate two strings (allocates a new buffer).
@@ -47,9 +47,10 @@ static inline struct DriftString drift_string_empty(void) {
     struct DriftString s;
     s.len = 0;
     s.data = (char*)malloc(1);
-    if (s.data) {
-        s.data[0] = '\0';
+    if (!s.data) {
+        abort();
     }
+    s.data[0] = '\0';
     return s;
 }
 

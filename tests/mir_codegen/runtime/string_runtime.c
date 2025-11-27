@@ -40,6 +40,9 @@ struct DriftString drift_string_literal(const char* data, drift_size_t len) {
 }
 
 struct DriftString drift_string_concat(struct DriftString a, struct DriftString b) {
+    if (SIZE_MAX - a.len < b.len) {
+        abort();
+    }
     drift_size_t total = a.len + b.len;
     if (total == 0) {
         struct DriftString s = {0, NULL};
@@ -70,7 +73,7 @@ char* drift_string_to_cstr(struct DriftString s) {
     size_t len = (size_t)s.len;
     char* buf = (char*)malloc(len + 1);
     if (!buf) {
-        return NULL;
+        abort();
     }
     if (s.data && s.len > 0) {
         memcpy(buf, s.data, len);
