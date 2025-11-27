@@ -8,6 +8,10 @@ from llvmlite import ir  # type: ignore
 from . import mir
 from .types import BOOL, ERROR, F64, I64, STR, Type
 
+# Initialized per TargetMachine in lower_function
+STRING_LLVM_TYPE: ir.Type | None = None
+SIZE_T: ir.IntType | None = None
+
 
 def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = None) -> tuple[str, bytes]:
     """
@@ -18,6 +22,10 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
     llvm.initialize_native_asmprinter()
     target = llvm.Target.from_default_triple()
     tm = target.create_target_machine(reloc="pic", codemodel="small")
+    global SIZE_T, STRING_LLVM_TYPE
+    # TODO: derive pointer size from target_data when available in llvmlite
+    SIZE_T = ir.IntType(64)
+    STRING_LLVM_TYPE = ir.LiteralStructType([SIZE_T, ir.IntType(8).as_pointer()])
 
     llvm_module = ir.Module(name=f"{fn.name}_module")
     llvm_module.triple = llvm.get_default_triple()
@@ -77,9 +85,10 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                 env[instr.dest] = _lower_binary(builder, instr, env)
             elif isinstance(instr, mir.ArrayInit):
                 if instr.element_type == STR:
+                    assert STRING_LLVM_TYPE is not None
                     elements = [env[e] for e in instr.elements]
-                    arr_ty = ir.ArrayType(ir.IntType(8).as_pointer(), len(elements))
-                    gv_ty = ir.IntType(8).as_pointer()
+                    arr_ty = ir.ArrayType(STRING_LLVM_TYPE, len(elements))
+                    gv_ty: ir.Type = STRING_LLVM_TYPE
                 elif instr.element_type == I64:
                     elements = [env[e] for e in instr.elements]
                     arr_ty = ir.ArrayType(ir.IntType(64), len(elements))
@@ -195,7 +204,8 @@ def _llvm_type(ty: Type) -> ir.Type:
     if ty == F64:
         return ir.DoubleType()
     if ty == STR:
-        return ir.IntType(8).as_pointer()
+        assert STRING_LLVM_TYPE is not None
+        return STRING_LLVM_TYPE
     if ty == ERROR:
         return ir.IntType(8).as_pointer()
     return ir.IntType(8).as_pointer()
@@ -209,16 +219,23 @@ def _const(builder: ir.IRBuilder, ty: Type, val: object) -> ir.Value:
     if ty == F64:
         return ir.Constant(ir.DoubleType(), float(val))
     if ty == STR:
+        assert STRING_LLVM_TYPE is not None and SIZE_T is not None
         if val is None:
-            return ir.Constant(ir.IntType(8).as_pointer(), None)
+            return ir.Constant(STRING_LLVM_TYPE, None)
         data = bytearray(str(val).encode("utf-8"))
         data.append(0)
         unique_id = len(builder.module.globals)
-        gv = ir.GlobalVariable(builder.module, ir.ArrayType(ir.IntType(8), len(data)), name=f".str{unique_id}")
+        gv = ir.GlobalVariable(
+            builder.module, ir.ArrayType(ir.IntType(8), len(data)), name=f".str{unique_id}"
+        )
         gv.linkage = "internal"
         gv.global_constant = True
         gv.initializer = ir.Constant(gv.type.pointee, data)
-        return gv.bitcast(ir.IntType(8).as_pointer())
+        zero = ir.Constant(SIZE_T, 0)
+        ptr = builder.gep(gv, [zero, zero], inbounds=True)
+        # build literal struct {len, ptr}
+        parts = [ir.Constant(SIZE_T, len(data) - 1), ptr]
+        return ir.Constant.literal_struct(parts)
     raise NotImplementedError(f"const of type {ty}")
 
 
@@ -227,6 +244,9 @@ def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Va
     rhs = env[instr.right]
     op = instr.op
     if op == "+":
+        # String concatenation: if both operands are the String struct, call runtime concat.
+        if STRING_LLVM_TYPE is not None and lhs.type == STRING_LLVM_TYPE and rhs.type == STRING_LLVM_TYPE:
+            return builder.call(_string_concat_decl(builder.module), [lhs, rhs], name=instr.dest)
         return builder.add(lhs, rhs, name=instr.dest)
     if op == "-":
         return builder.sub(lhs, rhs, name=instr.dest)
@@ -255,3 +275,54 @@ def _add_phi_incoming(phi_nodes: dict[str, dict[str, ir.PhiInstr]], edge: mir.Ed
     target = edge.target
     for arg_val, (param_name, phi) in zip(edge.args, phi_nodes[target].items()):
         phi.add_incoming(env[arg_val], pred_block)
+
+
+def _string_concat_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_concat")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (STRING_LLVM_TYPE, STRING_LLVM_TYPE))
+    fn = ir.Function(module, fn_ty, name="drift_string_concat")
+    return fn
+
+
+def _string_from_cstr_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_from_cstr")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(8).as_pointer(),))
+    fn = ir.Function(module, fn_ty, name="drift_string_from_cstr")
+    return fn
+
+
+def _string_from_bytes_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_from_bytes")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None and SIZE_T is not None
+    fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(8).as_pointer(), SIZE_T))
+    fn = ir.Function(module, fn_ty, name="drift_string_from_bytes")
+    return fn
+
+
+def _string_free_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_free")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(ir.VoidType(), (STRING_LLVM_TYPE,))
+    fn = ir.Function(module, fn_ty, name="drift_string_free")
+    return fn
+
+
+def _string_to_cstr_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_to_cstr")
+    if isinstance(fn, ir.Function):
+        return fn
+    i8p = ir.IntType(8).as_pointer()
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(i8p, (STRING_LLVM_TYPE,))
+    fn = ir.Function(module, fn_ty, name="drift_string_to_cstr")
+    return fn
