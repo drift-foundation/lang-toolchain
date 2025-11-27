@@ -80,6 +80,7 @@
 - Added verifier expectations to the SSA MIR terminology section (SSA dominance, types, ownership, drops, terminators).
 - Added a MIR verifier checklist to the DMIR spec so readers know the invariants to enforce before optimizations/codegen.
 - Added initial MIR data structures (`lang/mir.py`) to model SSA blocks, instructions, edges, and programs; tests still pass.
+- Tightened the String ABI plan: compiler never calls `drift_string_literal`; literals stay as static `%drift.String` constants. Renamed the runtime constructor to `drift_string_from_utf8_bytes` to make encoding explicit and aligned LLVM decls to the new symbol.
 - Added a skeleton MIR verifier (`lang/mir_verifier.py`) covering SSA def/use, ownership moves/drops, edge/param arity, and basic terminator checks.
 - Clarified dominance in the SSA terminology (defs must appear on every path to their uses).
 - Documented the verifier implementation sketch (input, steps, output) in the DMIR spec.

@@ -19,7 +19,7 @@ struct DriftString drift_string_from_cstr(const char* cstr) {
     return s;
 }
 
-struct DriftString drift_string_from_bytes(const char* data, drift_size_t len) {
+struct DriftString drift_string_from_utf8_bytes(const char* data, drift_size_t len) {
     if (data == NULL || len == 0) {
         struct DriftString s = {0, NULL};
         return s;

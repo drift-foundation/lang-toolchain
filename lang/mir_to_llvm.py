@@ -311,13 +311,13 @@ def _string_from_cstr_decl(module: ir.Module) -> ir.Function:
     return fn
 
 
-def _string_from_bytes_decl(module: ir.Module) -> ir.Function:
-    fn = module.globals.get("drift_string_from_bytes")
+def _string_from_utf8_bytes_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_from_utf8_bytes")
     if isinstance(fn, ir.Function):
         return fn
     assert STRING_LLVM_TYPE is not None and SIZE_T is not None
     fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(8).as_pointer(), SIZE_T))
-    fn = ir.Function(module, fn_ty, name="drift_string_from_bytes")
+    fn = ir.Function(module, fn_ty, name="drift_string_from_utf8_bytes")
     return fn
 
 

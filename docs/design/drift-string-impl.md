@@ -37,7 +37,7 @@ Provide these functions in the runtime C shim:
 struct DriftString drift_string_from_cstr(const char* cstr);
 
 // Allocate a DriftString from a byte slice (ptr,len); copies the data and appends a NUL.
-struct DriftString drift_string_from_bytes(const char* data, drift_size_t len);
+struct DriftString drift_string_from_utf8_bytes(const char* data, drift_size_t len);
 
 // Concatenate two strings; returns a new owned DriftString.
 struct DriftString drift_string_concat(struct DriftString a, struct DriftString b);
