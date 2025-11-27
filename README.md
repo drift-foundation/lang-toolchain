@@ -11,14 +11,19 @@ Drift is a systems programming language focused on deterministic resource manage
 - **Interop without foot-guns** – precise binary layouts and opaque ABI handles keep FFI predictable.
 - **Signed modules** – compiled modules are cryptographically signed so imports can be verified everywhere.
 
-📖 **Full specification:** [docs/drift-lang-spec.md](docs/drift-lang-spec.md)
-📜 **Formal grammar:** [docs/drift-lang-grammar.md](docs/drift-lang-grammar.md)
+📖 **Full specification:** [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md)
+📜 **Formal grammar:** [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md)
 
 ## References
 
-- Error handling comparison for Rustaceans: [docs/drift_vs_rust_error_handling.md](docs/drift_vs_rust_error_handling.md)
-- DMIR/SSA design: [docs/design-first-afm-then-ssa.md](docs/design-first-afm-then-ssa.md)
-- DMIR specification: [docs/dmir-spec.md](docs/dmir-spec.md)
+- Error handling comparison for Rustaceans: [docs/articles/drift_vs_rust_error_handling.md](docs/articles/drift_vs_rust_error_handling.md)
+- DMIR/SSA design: [docs/articles/design-first-afm-then-ssa.md](docs/articles/design-first-afm-then-ssa.md)
+- DMIR specification: [docs/design/dmir-spec.md](docs/design/dmir-spec.md)
+- Borrowing/reference model revision: [docs/design/drift_borrowing_and_reference_model_revision.md](docs/design/drift_borrowing_and_reference_model_revision.md)
+- Iteration model: [docs/design/drift-loops-and-iterators.md](docs/design/drift-loops-and-iterators.md)
+- String runtime plan: [docs/design/drift-string-impl.md](docs/design/drift-string-impl.md)
+- Tuple destructuring notes: [docs/design/drift-tuple-destructuring.md](docs/design/drift-tuple-destructuring.md)
+- Driver/runtime notes: [docs/articles/driver-notes.md](docs/articles/driver-notes.md)
 - Development history: [docs/history.md](docs/history.md)
 - Project TODO/roadmap: [docs/TODO.md](docs/TODO.md)
 - Minimal toolchain (prototype):
@@ -90,4 +95,4 @@ Use the MIR+LLVM prototype to lower and run a sample:
 just mir-codegen
 ```
 
-See the full language specification in [docs/drift-lang-spec.md](docs/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/drift-lang-grammar.md](docs/drift-lang-grammar.md).
+See the full language specification in [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md).
