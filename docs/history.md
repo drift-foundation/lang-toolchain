@@ -1,6 +1,7 @@
 # Drift development history
 
 ## 2025-11-26
+- Revised borrowing syntax to `&T` / `&mut T` with global lvalue auto-borrowing and no borrowing from rvalues; receivers now use `self: T` / `self: &T` / `self: &mut T` throughout the spec and examples. Grammar updated to accept the new reference types and borrow expressions; lambda params now use explicit `copy` capture instead of reusing general params. Removed legacy `ref` spellings (now invalid), refreshed README examples, and aligned the iterator doc to the new syntax.
 - Lowered `throw` of an exception constructor into a real `Error*`: pick `msg` kwarg/first positional or fall back to the exception name, call builtin `error_new`, and raise that pointer. Added an `error_new` builtin signature/stub for interpreter parity.
 - MIR→LLVM now seeds successor environments correctly and treats helper calls (`error_new`/`error`) as returning bare `Error*` while other calls with error edges expect `{T, Error*}`. This fixed undefined-SSA issues in the emitter.
 - Switched codegen to PIC/PIE: LLVM target machine uses `reloc="pic"`, C stubs/harness are built with `-fPIC`, and we link with `-pie` so we no longer need `-no-pie` or see text-relocation warnings.

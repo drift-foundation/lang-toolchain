@@ -28,6 +28,7 @@ SLASH: "/"
 DOT: "."
 COLON: ":"
 COMMA: ","
+AMP: "&"
 EQUAL: "="
 CARET: "^"
 RETURNS: "returns"
@@ -67,8 +68,10 @@ return_sig: RETURNS type_expr
 params: param (COMMA param)*
 param: NAME COLON type_expr
 
-type_expr: ref_prefix? base_type
-ref_prefix: "ref" ["mut"]
+type_expr: ref_type
+         | base_type
+
+ref_type: AMP ["mut"] type_expr
 base_type: NAME type_args?
 type_args: square_type_args
          | angle_type_args

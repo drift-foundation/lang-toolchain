@@ -277,6 +277,12 @@ def _build_param(tree: Tree) -> Param:
 
 def _build_type_expr(tree: Tree) -> TypeExpr:
     name = _name(tree)
+    if name == "ref_type":
+        # '&' ['mut'] type_expr
+        inner = _build_type_expr(next(child for child in tree.children if isinstance(child, Tree)))
+        mut = any(isinstance(child, Token) and child.value == "mut" for child in tree.children)
+        ref_name = "&mut" if mut else "&"
+        return TypeExpr(name=ref_name, args=[inner])
     if name == "type_expr":
         for child in tree.children:
             if isinstance(child, Tree) and _name(child) in {"base_type", "type_expr"}:
