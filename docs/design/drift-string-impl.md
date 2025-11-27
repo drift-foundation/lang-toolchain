@@ -15,11 +15,11 @@ This document captures the runtime/ABI shape of `String` for the codegen path. I
 // `drift_size_t` is the C carrier for Drift's `Size` type.
 // Its exact definition is provided by the core runtime and must
 // match the ABI representation of `Size` on the current target.
-typedef int64_t drift_size_t;
+typedef uintptr_t drift_size_t;
 
 struct DriftString {
     drift_size_t len;  // number of bytes (UTF-8), not including terminator; Drift `Size`
-    char* data;        // heap-allocated, UTF-8; not null-terminated unless helper guarantees
+    char* data;        // heap-allocated, UTF-8; helpers keep a trailing NUL in data
 };
 ```
 
@@ -36,7 +36,7 @@ Provide these functions in the runtime C shim:
 // Allocate a DriftString from a null-terminated UTF-8 C string (copies the data).
 struct DriftString drift_string_from_cstr(const char* cstr);
 
-// Allocate a DriftString from a byte slice (ptr,len); copies the data.
+// Allocate a DriftString from a byte slice (ptr,len); copies the data and appends a NUL.
 struct DriftString drift_string_from_bytes(const char* data, drift_size_t len);
 
 // Concatenate two strings; returns a new owned DriftString.
