@@ -446,11 +446,17 @@ class Checker:
             if expr.op == "not":
                 self._expect_type(operand_type, BOOL, expr.loc)
                 return BOOL
-            if expr.op == "&":
-                return ref_of(operand_type, mutable=False)
-            if expr.op == "&mut":
-                # Mutability/aliasing not enforced yet; require operand to come from a mutable binding in future work.
-                return ref_of(operand_type, mutable=True)
+            if expr.op in ("&", "&mut"):
+                if not isinstance(expr.operand, ast.Name):
+                    raise CheckError(
+                        f"{expr.loc.line}:{expr.loc.column}: cannot borrow from a temporary or non-lvalue"
+                    )
+                var = ctx.scope.lookup(expr.operand.ident, expr.operand.loc)
+                if expr.op == "&mut" and not var.mutable:
+                    raise CheckError(
+                        f"{expr.loc.line}:{expr.loc.column}: cannot take &mut of immutable binding '{expr.operand.ident}'"
+                    )
+                return ref_of(operand_type, mutable=(expr.op == "&mut"))
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown unary operator {expr.op}")
         if isinstance(expr, ast.Binary):
             return self._check_binary(expr, ctx)
@@ -517,8 +523,39 @@ class Checker:
                 )
             self._check_expr(kw.value, ctx)
         for arg_expr, expected in zip(expr.args, sig.params):
-            actual = self._check_expr(arg_expr, ctx)
-            self._expect_type(actual, expected, arg_expr.loc)
+            if isinstance(expected, ReferenceType):
+                # Auto-borrow from lvalues only.
+                if isinstance(arg_expr, ast.Unary) and arg_expr.op in ("&", "&mut"):
+                    inner_type = self._check_expr(arg_expr.operand, ctx)
+                    if expected.mutable and arg_expr.op != "&mut":
+                        raise CheckError(
+                            f"{arg_expr.loc.line}:{arg_expr.loc.column}: expected &mut but found shared borrow"
+                        )
+                    if not expected.mutable and arg_expr.op == "&mut":
+                        raise CheckError(
+                            f"{arg_expr.loc.line}:{arg_expr.loc.column}: expected shared borrow but found &mut"
+                        )
+                    if arg_expr.op == "&mut" and isinstance(arg_expr.operand, ast.Name):
+                        var = ctx.scope.lookup(arg_expr.operand.ident, arg_expr.operand.loc)
+                        if not var.mutable:
+                            raise CheckError(
+                                f"{arg_expr.loc.line}:{arg_expr.loc.column}: cannot take &mut of immutable binding '{arg_expr.operand.ident}'"
+                            )
+                    self._expect_type(inner_type, expected.args[0], arg_expr.loc)
+                elif isinstance(arg_expr, ast.Name):
+                    var = ctx.scope.lookup(arg_expr.ident, arg_expr.loc)
+                    if expected.mutable and not var.mutable:
+                        raise CheckError(
+                            f"{arg_expr.loc.line}:{arg_expr.loc.column}: expected mutable binding for &mut parameter"
+                        )
+                    self._expect_type(var.type, expected.args[0], arg_expr.loc)
+                else:
+                    raise CheckError(
+                        f"{arg_expr.loc.line}:{arg_expr.loc.column}: cannot borrow from a temporary or moved value"
+                    )
+            else:
+                actual = self._check_expr(arg_expr, ctx)
+                self._expect_type(actual, expected, arg_expr.loc)
         return sig.return_type
 
     def _check_struct_constructor(self, expr: ast.Call, info: StructInfo, ctx: FunctionContext) -> None:

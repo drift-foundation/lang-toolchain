@@ -84,10 +84,10 @@ fn main() returns Void {
 
 ## Getting Started
 
-The repository ships with a prototype interpreter. From the repo root:
+Use the MIR+LLVM prototype to lower and run a sample:
 
 ```bash
-./drift.py examples/hello.drift
+just mir-codegen
 ```
 
 See the full language specification in [docs/drift-lang-spec.md](docs/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/drift-lang-grammar.md](docs/drift-lang-grammar.md).

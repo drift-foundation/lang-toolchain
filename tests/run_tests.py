@@ -35,52 +35,10 @@ def run_program(path: Path) -> tuple[int, str, str]:
 
 def main() -> int:
     failures = 0
-    failures += _run_runtime_tests()
     failures += _run_mir_tests()
     failures += _run_verifier_negative_tests()
     failures += _run_codegen_tests()
     return 1 if failures else 0
-
-
-def _run_runtime_tests() -> int:
-    failures = 0
-    for program in sorted(PROGRAMS_DIR.glob("*.drift")):
-        name = program.stem
-        try:
-            expected = load_expectation(name)
-        except FileNotFoundError as exc:
-            print(f"[missing] {program}: {exc}", file=sys.stderr)
-            failures += 1
-            continue
-        exit_code, stdout, stderr = run_program(program)
-        exp_exit = expected.get("exit")
-        exp_stdout = expected.get("stdout")
-        exp_stderr = expected.get("stderr")
-
-        ok = True
-        if exp_exit is not None and exit_code != exp_exit:
-            ok = False
-            print(f"[fail] {program}: exit {exit_code} != expected {exp_exit}", file=sys.stderr)
-        if exp_stdout is not None and stdout != exp_stdout:
-            ok = False
-            print(f"[fail] {program}: stdout mismatch", file=sys.stderr)
-            print("=== expected ===", file=sys.stderr)
-            print(exp_stdout, end="", file=sys.stderr)
-            print("=== got ===", file=sys.stderr)
-            print(stdout, end="", file=sys.stderr)
-        if exp_stderr is not None and stderr != exp_stderr:
-            ok = False
-            print(f"[fail] {program}: stderr mismatch", file=sys.stderr)
-            print("=== expected ===", file=sys.stderr)
-            print(exp_stderr, end="", file=sys.stderr)
-            print("=== got ===", file=sys.stderr)
-            print(stderr, end="", file=sys.stderr)
-
-        if ok:
-            print(f"[ok] {program}")
-        else:
-            failures += 1
-    return failures
 
 
 def _run_mir_tests() -> int:
