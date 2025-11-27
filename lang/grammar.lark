@@ -173,6 +173,7 @@ term_tail: (STAR | SLASH) factor
        | "-" factor -> neg
        | "not" factor -> not_op
        | BANG factor -> not_op
+       | AMP ["mut"] factor -> borrow
 
 postfix: primary postfix_suffix*
 postfix_suffix: call_suffix

@@ -13,12 +13,14 @@ from .types import (
     FunctionSignature,
     I64,
     STR,
+    ReferenceType,
     Type,
     TypeSystemError,
     UNIT,
     array_of,
     array_element_type,
     is_displayable,
+    ref_of,
     resolve_type,
 )
 
@@ -444,6 +446,11 @@ class Checker:
             if expr.op == "not":
                 self._expect_type(operand_type, BOOL, expr.loc)
                 return BOOL
+            if expr.op == "&":
+                return ref_of(operand_type, mutable=False)
+            if expr.op == "&mut":
+                # Mutability/aliasing not enforced yet; require operand to come from a mutable binding in future work.
+                return ref_of(operand_type, mutable=True)
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown unary operator {expr.op}")
         if isinstance(expr, ast.Binary):
             return self._check_binary(expr, ctx)

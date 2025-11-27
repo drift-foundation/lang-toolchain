@@ -643,6 +643,12 @@ def _build_expr(node) -> Expr:
         return _fold_chain(node, "sum_tail")
     if name == "term":
         return _fold_chain(node, "term_tail")
+    if name == "factor":
+        return _build_expr(node.children[0])
+    if name == "borrow":
+        mut = any(isinstance(child, Token) and child.value == "mut" for child in node.children)
+        target = _build_expr(next(child for child in node.children if isinstance(child, Tree)))
+        return Unary(loc=_loc(node), op="&mut" if mut else "&", operand=target)
     if name == "postfix":
         return _build_postfix(node)
     if name == "primary":
