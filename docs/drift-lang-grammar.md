@@ -7,7 +7,8 @@ This file defines the lexical rules, precedence, and productions for Drift. It i
 - **Identifiers:** `Ident ::= [A-Za-z_][A-Za-z0-9_]*`  
   Keywords (see reserved list in the main spec) are not identifiers.
 - **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (UTF-8), `BoolLiteral` (`true` / `false`).
-- **Operators/punctuation:** `+ - * / % == != < <= > >= and or not ! ? : >> << |> <| . , : ; = -> => [ ] { } ( )`.
+- **Operators/punctuation:** `+ - * / % == != < <= > >= and or not ! ? : >> << |> <| . , : ; = -> => [ ] { } ( ) &`.
+- **`mut` token:** `mut` is not reserved; it is treated as an identifier token and is meaningful after `&` in types/expressions.
 - **Newlines / terminators:** The lexer may emit a `TERMINATOR` token on newline (`\n`) when **all** hold:
   1. Parenthesis/brace/bracket depth is zero.
   2. The previous token is “terminable” (identifiers, literals, `)`, `]`, `}`, `return`, `break`, etc.).
@@ -17,7 +18,7 @@ This file defines the lexical rules, precedence, and productions for Drift. It i
 ## 2. Precedence and associativity (high → low)
 
 1. Postfix: call `()`, index `[]`, member `.`, move `->`
-2. Unary: `-`, `!`, `not`
+2. Unary: `-`, `!`, `not`, `&`
 3. Multiplicative: `*`, `/`, `%`
 4. Additive: `+`, `-`
 5. Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`
@@ -78,9 +79,9 @@ TypeDef      ::= "type" Ident "=" Ty TERMINATOR?
 Functions and types:
 ```
 FnSig        ::= "fn" Ident "(" Params? ")" Returns? TraitReq?
-Ty           ::= Ident TraitParams?
+Ty           ::= "&" "mut"? Ty
+              | Ident TraitParams?
               | Ty "[" "]"                // array type
-              | "ref" Ty | "ref" "mut" Ty
               | "(" Ty ("," Ty)+ ")"      // tuple type (n >= 2)
               | VariantType | InterfaceType | TraitType
 
@@ -128,8 +129,10 @@ AddExpr      ::= MulExpr (AddOp MulExpr)*
 AddOp        ::= "+" | "-"
 MulExpr      ::= UnaryExpr (MulOp UnaryExpr)*
 MulOp        ::= "*" | "/" | "%"
-UnaryExpr    ::= UnaryOp* PostfixExpr
-UnaryOp      ::= "-" | "!" | "not"
+UnaryExpr    ::= BorrowExpr | NormalUnary
+BorrowExpr   ::= "&" "mut"? PostfixExpr
+NormalUnary  ::= ("-" | "!" | "not")* PostfixExpr
+UnaryOp      ::= "-" | "!" | "not" | "&"
 
 PostfixExpr  ::= PrimaryExpr PostfixTail*
 PostfixTail  ::= "." Ident
@@ -160,7 +163,10 @@ MatchArm     ::= Pattern "=>" Expr TERMINATOR?
 Pattern      ::= Ident | Literal | "(" Pattern ("," Pattern)+ ")"
 TryExpr      ::= "try" Expr ("else" Expr | "catch" (Ident)? Expr)?
 LambdaExpr   ::= "|" LambdaParams? "|" "=>" (Expr | Block)
-LambdaParams ::= Param ("," Param)*
+LambdaParams ::= LambdaParam ("," LambdaParam)*
+
+LambdaParam  ::= Capture? Ident (":" Ty)?
+Capture      ::= "copy"
 Literal      ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 ```
 

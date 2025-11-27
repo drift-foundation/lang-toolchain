@@ -30,7 +30,7 @@ An iterator is simply any type that can produce a sequence of items, one at a ti
 
 ```drift
 trait Iterator<Item> {
-	fn next(ref mut self) returns Option<Item>
+	fn next(&mut self) returns Option<Item>
 }
 ```
 
@@ -59,7 +59,7 @@ trait IntoIterator<Item, Iter>
 The iterator returned by `into_iter(self)` may:
 
 * consume `self` (move by value)
-* or borrow from `self` (if `self` is a `ref` binding and you implement a borrowed form)
+* or borrow from `self` (if `self` is a `&` binding and you implement a borrowed form)
 
 This is where the container controls the ownership semantics of iteration.
 
@@ -96,19 +96,19 @@ means:
 Separately, you can allow:
 
 ```drift
-for ref x in ref xs { ... }
+for x in &xs { ... }
 ```
 
 by implementing:
 
 ```drift
-implement<T> IntoIterator<ref T, ArrayRefIter<T>> for ref Array<T>
+implement<T> IntoIterator<&T, ArrayRefIter<T>> for &Array<T>
 ```
 
 Here:
 
 * `xs` is **borrowed**, not consumed
-* each iteration yields a `ref T`
+* each iteration yields a `&T`
 * mutation rules follow standard borrowing semantics
 * `xs` remains usable after the loop
 
@@ -202,11 +202,11 @@ This uses the same pattern rules as `match` arms.
 Everything follows the ordinary ownership rules already in the spec:
 
 * If `expr` is an owned value, `into_iter(self)` consumes it.
-* If `expr` is a reference (`ref xs`), and you implement the borrowed form, the iterator borrows.
+* If `expr` is a reference (`&xs`), and you implement the borrowed form, the iterator borrows.
 * Items yielded by `next()` move or borrow according to their type:
 
   * `Option<Item>` → `Some(value = item)` moves the `item`
-  * `Option<ref T>` yields a borrow
+  * `Option<&T>` yields a borrow
 
 The iteration model requires no special-case ownership rules.
 

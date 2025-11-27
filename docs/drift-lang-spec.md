@@ -79,8 +79,8 @@ All modules compile down to a canonical Drift Module IR (DMIR) that can be crypt
 |---|---|---|
 | Immutable binding | `val` | Cannot be rebound or moved |
 | Mutable binding | `var` | Can mutate or transfer ownership |
-| Const reference | `ref T` | Shared, read-only access (C++: `T const&`) |
-| Mutable reference | `ref mut T` | Exclusive, mutable access (C++: `T&`) |
+| Const reference | `&T` | Shared, read-only access (C++: `T const&`) |
+| Mutable reference | `&mut T` | Exclusive, mutable access (C++: `T&`) |
 | Ownership transfer | `x->` | Moves value, invalidating source |
 | Interior mutability | `Mutable<T>` | Mutate specific fields inside const objects |
 | Volatile access | `Volatile<T>` | Explicit MMIO load/store operations |
@@ -187,6 +187,33 @@ Functions may return tuples or accept them as parameters, and tuple types appear
 
 ---
 
+### 3.6. Borrow expressions
+
+- `&v` produces a shared reference `&T` from an lvalue `v: T`.
+- `&mut v` produces an exclusive mutable reference `&mut T` from a mutable lvalue `v: T`.
+- Borrowing from temporaries (rvalues) is a compile-time error; bind to a local first.
+- The legacy `ref` / `ref mut` spelling is invalid.
+
+### 3.7. Call-site auto-borrowing (global rule)
+
+For parameters or receivers of type `&T` / `&mut T`, calling with an lvalue `v: T` auto-borrows:
+
+- `g(v)` ≡ `g(&v)` if the parameter is `&T`.
+- `h(v)` ≡ `h(&mut v)` if the parameter is `&mut T`.
+
+Borrowing from rvalues (temporaries, moved values) is an error. The explicit forms `&v` / `&mut v` remain legal.
+
+### 3.8. Method receivers and overloading
+
+Receivers inside an `implement` block are written as `self: T` (by value), `self: &T` (shared borrow), or `self: &mut T` (exclusive borrow):
+
+- A call on an lvalue prefers `self: &T`, then `self: &mut T`, then `self: T` (which copies if `Copy`, otherwise requires `obj->`).
+- A call on an rvalue (`obj->`, `make()`) can bind only to a `self` receiver; borrowed receivers are not allowed on rvalues.
+
+These rules keep borrowing consistent across free functions, methods, and control-flow desugarings.
+
+---
+
 
 ## 4. Ownership and move semantics (`x->`)
 
@@ -199,7 +226,7 @@ Functions may return tuples or accept them as parameters, and tuple types appear
 | **Copyable types** | `x` copies; `x->` moves. |
 | **Non-copyable types** | Must use `x->`; plain `x` is a compile error. |
 | **Immutable (`val`)** | Cannot move from immutable bindings. |
-| **Borrowed (`ref`, `ref mut`)** | Cannot move from non-owning references. |
+| **Borrowed (`&`, `&mut`)** | Cannot move from non-owning references. |
 
 ---
 
@@ -245,7 +272,7 @@ var b = a      // ✅ copies `a` by calling `copy`
 Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. This works anywhere an expression is allowed (call arguments, closure captures, `val`/`var` bindings) and leaves the original binding usable. Default by-value passing still **moves** non-`Copy` values; `copy` is how you make the intent to duplicate explicit.
 ```
 
-Copying still respects ownership rules: `ref self` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
+Copying still respects ownership rules: `self: &T` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
 
 ### 4.5. Explicit deep copies (`clone`-style)
 
@@ -255,7 +282,7 @@ If a move-only type wants to offer a deliberate, potentially expensive duplicate
 struct Buffer { data: ByteBuffer }   // move-only
 
 implement Buffer {
-    fn clone(ref self) returns Buffer {
+    fn clone(self: &Buffer) returns Buffer {
         return Buffer(data = self.data.copy())
     }
 }
@@ -306,12 +333,12 @@ upload(f)     // ❌ cannot copy non-copyable type
 ### 4.8. Example — borrowing instead of moving
 
 ```drift
-fn inspect(f: ref File) returns Void {
+fn inspect(f: &File) returns Void {
     print("just reading header")
 }
 
 var f = File()
-inspect(ref f)    // borrow read-only
+inspect(f)     // auto-borrows &f
 upload(f->)       // later move ownership away
 ```
 
@@ -320,10 +347,10 @@ upload(f->)       // later move ownership away
 ### 4.9. Example — mut borrow vs move
 
 ```drift
-fn fill(f: ref mut File) returns Void { /* writes data */ }
+fn fill(f: &mut File) returns Void { /* writes data */ }
 
 var f = File()
-fill(ref mut f)   // exclusive mutable borrow
+fill(f)        // auto-borrows &mut f
 upload(f->)       // move after borrow ends
 ```
 
@@ -745,7 +772,7 @@ require T is Clonable and not Destructible
 Certain libraries (notably `std.concurrent`) rely on two marker traits that express thread-safety:
 
 - **`Send`** — values of a type implementing `Send` may be moved from one thread to another.
-- **`Sync`** — shared references (`ref T`) to a type implementing `Sync` may be shared across threads simultaneously.
+- **`Sync`** — shared references (`&T`) to a type implementing `Sync` may be shared across threads simultaneously.
 
 All primitives and standard library containers implement these traits when safe.
 
@@ -802,9 +829,9 @@ Interfaces define a set of functions callable on any implementing type.
 
 ```drift
 interface OutputStream {
-    fn write(self: ref OutputStream, bytes: ByteSlice) returns Void
-    fn writeln(self: ref OutputStream, text: String) returns Void
-    fn flush(self: ref OutputStream) returns Void
+    fn write(self: &OutputStream, bytes: ByteSlice) returns Void
+    fn writeln(self: &OutputStream, text: String) returns Void
+    fn flush(self: &OutputStream) returns Void
 }
 ```
 
@@ -813,20 +840,20 @@ interface OutputStream {
 - Interfaces may not define fields — pure behavior only.
 - Interfaces are **first‑class types** (unlike traits).
 - A function that receives an `OutputStream` may be passed any object that implements that interface.
-- The method signatures inside an interface show the receiver type explicitly (`self: ref OutputStream`).
+- The method signatures inside an interface show the receiver type explicitly (`self: &OutputStream`).
 
 ### 6.3. Receiver rules (`self`)
 
 Drift differentiates between **methods** (eligible for dot-call syntax) and **free functions**.
 
 - **Only functions defined inside an `implement Type { ... }` block become methods.**
-- Inside such a block, the first parameter **must** be spelled `self`, with an explicit mode:
-  - `self` → pass by value
-  - `ref self` → shared borrow
-  - `ref mut self` → exclusive/mutable borrow
-  - (future) `move self` → consuming receiver
-- The receiver’s type is implied by the `implement` header, so you never annotate it (`ref self`, not `self: ref File`).
-- Outside an `implement` block every function is a free function. A free function may take any parameters (including an explicit `ref File`), but it is invoked with ordinary call syntax (`translate(ref point, 1, 2)`), not `point.translate(...)`.
+- Inside such a block, the first parameter **must** be spelled `self`, with an explicit mode and type:
+  - `self: T` → pass by value
+  - `self: &T` → shared borrow
+  - `self: &mut T` → exclusive/mutable borrow
+  - (future) `self: move T` → consuming receiver
+- The receiver’s type is implied by the `implement` header, so you write `self: &File`, not `File self`.
+- Outside an `implement` block every function is a free function. A free function may take any parameters (including an explicit `&File`), but it is invoked with ordinary call syntax (`translate(point, 1, 2)`), not `point.translate(...)`.
 
 Example:
 
@@ -834,19 +861,19 @@ Example:
 struct Point { x: Int64, y: Int64 }
 
 implement Point {
-    fn move_by(ref mut self, dx: Int64, dy: Int64) returns Void {
+    fn move_by(self: &mut Point, dx: Int64, dy: Int64) returns Void {
         self.x += dx
         self.y += dy
     }
 }
 
-fn translate(ref p: Point, dx: Int64, dy: Int64) returns Void {
+fn translate(p: &mut Point, dx: Int64, dy: Int64) returns Void {
     p.x += dx
     p.y += dy
 }
 
-point.move_by(1, 2)       // method call (inside `implement`)
-translate(ref point, 3, 4) // free function call
+point.move_by(1, 2)     // method call (auto-borrows &mut point)
+translate(point, 3, 4)  // free function call (auto-borrows &mut point)
 ```
 
 This rule set makes the receiver’s ownership mode explicit and prevents implicit, C++-style magic receivers.
@@ -863,15 +890,15 @@ struct File {
 }
 
 implement OutputStream for File {
-    fn write(ref self, bytes: ByteSlice) returns Void {
+    fn write(self: &File, bytes: ByteSlice) returns Void {
         sys_write(self.fd, bytes)
     }
 
-    fn writeln(ref self, text: String) returns Void {
+    fn writeln(self: &File, text: String) returns Void {
         self.write((text + "\n").to_bytes())
     }
 
-    fn flush(ref self) returns Void {
+    fn flush(self: &File) returns Void {
         sys_flush(self.fd)
     }
 }
@@ -880,7 +907,7 @@ implement OutputStream for File {
 Rules:
 
 1. All interface functions must be provided.
-2. Method signatures begin with an explicit receiver (`ref self` here); the type (`File`) is implied by the `implement` header.
+2. Method signatures begin with an explicit receiver (`self: &File` here); the type (`File`) is implied by the `implement` header.
 3. A type may implement multiple interfaces.
 4. Implementations may appear in any module.
 
@@ -973,7 +1000,7 @@ The two systems are orthogonal by design.
 
 ```drift
 interface Shape {
-    fn area(self: ref Shape) returns Float64
+    fn area(self: &Shape) returns Float64
 }
 ```
 
@@ -984,13 +1011,13 @@ struct Circle { radius: Float64 }
 struct Rect   { w: Float64, h: Float64 }
 
 implement Shape for Circle {
-    fn area(ref self) returns Float64 {
+    fn area(self: &Circle) returns Float64 {
         return 3.14159265 * self.radius * self.radius
     }
 }
 
 implement Shape for Rect {
-    fn area(ref self) returns Float64 {
+    fn area(self: &Rect) returns Float64 {
         return self.w * self.h
     }
 }
@@ -1057,9 +1084,9 @@ No double‑destroy is possible because `destroy(self)` consumes the value.
 A type may implement several interfaces:
 
 ```drift
-interface Readable  { fn read(self: ref Readable) returns ByteBuffer }
-interface Writable  { fn write(self: ref Writable, b: ByteSlice) returns Void }
-interface Duplex    { fn close(self: ref Duplex) returns Void }
+interface Readable  { fn read(self: &Readable) returns ByteBuffer }
+interface Writable  { fn write(self: &Writable, b: ByteSlice) returns Void }
+interface Duplex    { fn close(self: &Duplex) returns Void }
 
 struct Stream { ... }
 
@@ -1082,7 +1109,7 @@ These systems complement each other:
 trait Debuggable { fn fmt(self) returns String }
 
 interface DebugSink {
-    fn write_debug(self: ref DebugSink, msg: String) returns Void
+    fn write_debug(self: &DebugSink, msg: String) returns Void
 }
 
 fn log_value<T>
@@ -1344,11 +1371,11 @@ Variants are ideal for ASTs and other recursive shapes:
 ```drift
 variant Expr {
     Literal(value: Int64)
-    Add(lhs: ref Expr, rhs: ref Expr)
-    Neg(inner: ref Expr)
+    Add(lhs: &Expr, rhs: &Expr)
+    Neg(inner: &Expr)
 }
 
-fn eval(expr: ref Expr) returns Int64 {
+fn eval(expr: &Expr) returns Int64 {
     match expr {
         Literal(value) => value
         Add(lhs, rhs) => eval(lhs) + eval(rhs)
@@ -1508,8 +1535,8 @@ val explicit: Array<Int64> = [1, 2, 3]  // annotation still allowed when desired
 
 `ByteSlice`/`MutByteSlice` behave like other Drift borrows:
 
-- A `ByteSlice` (`ref ByteSlice`) is a shared view: multiple readers may coexist, but none may mutate.
-- A `MutByteSlice` (`ref MutByteSlice`) is an exclusive view: while it exists, no other references (mutable or shared) to the same range are allowed.
+- A `ByteSlice` (`&ByteSlice`) is a shared view: multiple readers may coexist, but none may mutate.
+- A `MutByteSlice` (`&MutByteSlice`) is an exclusive view: while it exists, no other references (mutable or shared) to the same range are allowed.
 - Views never own memory. They rely on the original owner (often a `ByteBuffer` or foreign allocation) to outlive the slice’s scope. Moving the owner invalidates outstanding slices, just like any other borrow.
 
 These rules integrate with `Send`/`Sync` (see Chapter 5, thread-safety marker traits): a `ByteSlice` is `Send`/`Sync` because it is immutable metadata; a `MutByteSlice` is neither, so you cannot share a mutable view across threads without additional synchronization.
@@ -1535,15 +1562,15 @@ val from_utf8 = ByteBuffer.from_string("drift")
 
 Core operations:
 
-- `fn len(self: ref ByteBuffer) returns Int64` — number of initialized bytes.
-- `fn capacity(self: ref ByteBuffer) returns Int64` — reserved storage.
-- `fn clear(self: ref mut ByteBuffer) returns Void` — resets `len` to zero without freeing.
-- `fn push(self: ref mut ByteBuffer, b: Byte) returns Void`
-- `fn extend(self: ref mut ByteBuffer, slice: ByteSlice) returns Void`
-- `fn as_slice(self: ref ByteBuffer) returns ByteSlice`
-- `fn slice(self: ref ByteBuffer, start: Int64, len: Int64) returns ByteSlice`
-- `fn as_mut_slice(self: ref mut ByteBuffer) returns MutByteSlice`
-- `fn reserve(self: ref mut ByteBuffer, additional: Int64) returns Void`
+- `fn len(self: &ByteBuffer) returns Int64` — number of initialized bytes.
+- `fn capacity(self: &ByteBuffer) returns Int64` — reserved storage.
+- `fn clear(self: &mut ByteBuffer) returns Void` — resets `len` to zero without freeing.
+- `fn push(self: &mut ByteBuffer, b: Byte) returns Void`
+- `fn extend(self: &mut ByteBuffer, slice: ByteSlice) returns Void`
+- `fn as_slice(self: &ByteBuffer) returns ByteSlice`
+- `fn slice(self: &ByteBuffer, start: Int64, len: Int64) returns ByteSlice`
+- `fn as_mut_slice(self: &mut ByteBuffer) returns MutByteSlice`
+- `fn reserve(self: &mut ByteBuffer, additional: Int64) returns Void`
 
 `ByteSlice`/`MutByteSlice` are lightweight descriptors (`{ ptr, len }`). They do not own memory; borrow rules ensure the referenced storage stays alive for the duration of the borrow. `MutByteSlice` provides exclusive access, so you cannot obtain a second mutable slice while one is active.
 
@@ -1573,14 +1600,14 @@ fn copy_stream(src: InputStream, dst: OutputStream) returns Void {
 To avoid copying and allow other APIs to operate on a specific slot, `Array<T>` exposes helper methods:
 
 ```drift
-fn ref_at(self: ref Array<T>, index: Int64) returns ref T
-fn ref_mut_at(self: ref mut Array<T>, index: Int64) returns ref mut T
+fn ref_at(self: &Array<T>, index: Int64) returns &T
+fn ref_mut_at(self: &mut Array<T>, index: Int64) returns &mut T
 ```
 
-- `ref_at` borrows the array immutably and returns an immutable `ref T` to element `index`. Multiple `ref_at` calls may coexist, and the array remains usable for other reads while the borrow lives.
-- `ref_mut_at` requires an exclusive `ref mut Array<T>` borrow and yields an exclusive `ref mut T`. While the returned reference lives, no other borrows of the same element (or the array) are allowed; this enforces the usual aliasing rules.
+- `ref_at` borrows the array immutably and returns an immutable `&T` to element `index`. Multiple `ref_at` calls may coexist, and the array remains usable for other reads while the borrow lives.
+- `ref_mut_at` requires an exclusive `&mut Array<T>` borrow and yields an exclusive `&mut T`. While the returned reference lives, no other borrows of the same element (or the array) are allowed; this enforces the usual aliasing rules.
 
-Bounds checks mirror simple indexing: out-of-range indices raise `IndexError(container = "Array", index = i)`. These APIs make it easy to hand a callee a view of part of the array—e.g., pass `ref_mut_at` into a mutator function that expects `ref mut T`—without copying the element or exposing the entire container.
+Bounds checks mirror simple indexing: out-of-range indices raise `IndexError(container = "Array", index = i)`. These APIs make it easy to hand a callee a view of part of the array—e.g., pass `ref_mut_at` into a mutator function that expects `&mut T`—without copying the element or exposing the entire container.
 
 
 Use square brackets to read an element:
@@ -1858,7 +1885,7 @@ Rules:
 try {
     ship(order)
 } catch InvalidOrder(e) {
-    log(ref e)
+    log(&e)
 }
 ```
 
@@ -1867,7 +1894,7 @@ Matches by `error.event`.
 #### 14.5.2. Catch-all + rethrow
 ```drift
 catch e {
-    log(ref e)
+    log(&e)
     throw e->
 }
 ```
@@ -1957,7 +1984,7 @@ This distinction becomes especially clear in pipelines (`>>`), where each stage 
 
 | Role | Parameter type | Return type | Ownership semantics | Typical usage |
 |------|----------------|--------------|---------------------|----------------|
-| **Mutator** | `ref mut T` | `Void` or `T` | Borrows an existing `T` mutably and optionally returns it. Ownership stays with the caller. | In-place modification, e.g. `fill`, `tune`. |
+| **Mutator** | `&mut T` | `Void` or `T` | Borrows an existing `T` mutably and optionally returns it. Ownership stays with the caller. | In-place modification, e.g. `fill`, `tune`. |
 | **Transformer** | `T` | `U` (often `T`) | Consumes its input and returns a new owned value. Ownership transfers into the call and out again. | `compress`, `clone`, `serialize`. |
 | **Finalizer / Sink** | `T` | `Void` | Consumes the value completely. Ownership ends here; the resource is destroyed or released at function return. | `finalize`, `close`, `free`, `commit`. |
 
@@ -1967,8 +1994,8 @@ The pipeline operator `>>` is **ownership-aware**.
 It is left-associative and automatically determines how each stage interacts based on the callee’s parameter type:
 
 ```drift
-fn fill(f: ref mut File) returns Void { /* mutate */ }
-fn tune(f: ref mut File) returns Void { /* mutate */ }
+fn fill(f: &mut File) returns Void { /* mutate */ }
+fn tune(f: &mut File) returns Void { /* mutate */ }
 fn finalize(f: File) returns Void { /* consume */ }
 
 open("x")
@@ -1988,7 +2015,7 @@ At the end of scope, if the value is still owned (not consumed by a finalizer), 
 
 This mirrors real-world resource lifecycles:
 1. Creation — ownership established.  
-2. Mutation — zero or more `ref mut` edits.  
+2. Mutation — zero or more `&mut` edits.  
 3. Transformation — optional `T → U`.  
 4. Finalization — release or destruction.
 
@@ -2112,7 +2139,7 @@ Invariant: indices `0 .. len` are initialized; `len .. cap` are uninitialized sl
 #### 16.5.3. Growth algorithm
 
 ```
-fn grow<T>(ref mut self: Array<T>) @unsafe {
+fn grow<T>(&mut self: Array<T>) @unsafe {
     old_cap = self.cap
     new_cap = max(1, old_cap * 2)
 
@@ -2213,9 +2240,9 @@ Containers rely on `lang.abi::RawBuffer` for contiguous storage, but the public 
 ```drift
 struct RawBuffer<T> { /* opaque */ }
 
-fn capacity(ref self) returns Int
-fn slot_at(ref self, i: Int) returns Slot<T> @unsafe
-fn reallocate(ref mut self, new_cap: Int) @unsafe
+fn capacity(self: &RawBuffer<T>) returns Int
+fn slot_at(self: &RawBuffer<T>, i: Int) returns Slot<T> @unsafe
+fn reallocate(self: &mut RawBuffer<T>, new_cap: Int) @unsafe
 ```
 
 `Array<T>` and similar types use these hooks internally; ordinary programs never touch the raw bytes.
@@ -2304,13 +2331,13 @@ fn transmit(bytes: Array<U8>) returns Int32 {
 module std.io
 
 interface OutputStream {
-    fn write(self: ref OutputStream, bytes: ByteSlice) returns Void
-    fn writeln(self: ref OutputStream, text: String) returns Void
-    fn flush(self: ref OutputStream) returns Void
+    fn write(self: &OutputStream, bytes: ByteSlice) returns Void
+    fn writeln(self: &OutputStream, text: String) returns Void
+    fn flush(self: &OutputStream) returns Void
 }
 
 interface InputStream {
-    fn read(self: ref InputStream, buffer: MutByteSlice) returns Int64
+    fn read(self: &InputStream, buffer: MutByteSlice) returns Int64
 }
 ```
 
@@ -2692,7 +2719,7 @@ Rules:
 Every plugin exports exactly one unmangled C-ABI function:
 
 ```drift
-extern "C" fn drift_plugin_entry(host: ref PluginHostApi)
+extern "C" fn drift_plugin_entry(host: &PluginHostApi)
     returns Result<PluginHandle, Error>
 ```
 
@@ -2719,13 +2746,13 @@ The host defines the primary plugin interface:
 
 ```drift
 interface Plugin {
-    fn name(self: ref Plugin) returns String
-    fn version(self: ref Plugin) returns String
+    fn name(self: &Plugin) returns String
+    fn version(self: &Plugin) returns String
 
-    fn initialize(self: ref Plugin, config: PluginConfig)
+    fn initialize(self: &Plugin, config: PluginConfig)
         returns Result<Void, Error>
 
-    fn shutdown(self: ref Plugin)
+    fn shutdown(self: &Plugin)
         returns Result<Void, Error>
 }
 ```
@@ -2736,11 +2763,11 @@ Plugins implement this interface with any concrete type:
 struct MyPlugin { /* fields */ }
 
 implement Plugin for MyPlugin {
-    fn name(ref self) returns String { ... }
-    fn version(ref self) returns String { ... }
-    fn initialize(ref self, config: PluginConfig)
+    fn name(self: &MyPlugin) returns String { ... }
+    fn version(self: &MyPlugin) returns String { ... }
+    fn initialize(self: &MyPlugin, config: PluginConfig)
         returns Result<Void, Error> { ... }
-    fn shutdown(ref self)
+    fn shutdown(self: &MyPlugin)
         returns Result<Void, Error> { ... }
 }
 ```
@@ -2753,16 +2780,16 @@ The host supplies services via another interface:
 
 ```drift
 interface PluginHostApi {
-    fn abi_version(self: ref PluginHostApi) returns Int32
+    fn abi_version(self: &PluginHostApi) returns Int32
 
-    fn log(self: ref PluginHostApi,
+    fn log(self: &PluginHostApi,
            level: LogLevel,
            message: String) returns Void
 
-    fn load_resource(self: ref PluginHostApi,
+    fn load_resource(self: &PluginHostApi,
                      path: String) returns Result<ByteBuffer, Error>
 
-    fn get_config(self: ref PluginHostApi,
+    fn get_config(self: &PluginHostApi,
                   key: String) returns Result<String, Error>
 }
 ```
@@ -2850,7 +2877,7 @@ This design keeps the plugin surface minimal while leveraging the language’s e
 
 ## 22. Closures and callable traits
 
-Drift treats callables as **traits first**, with an optional dynamic wrapper when you explicitly want type erasure. Capture modes are ownership-based; borrow captures (`ref`, `ref mut`) are intentionally deferred until the borrow/lifetime rules are specified.
+Drift treats callables as **traits first**, with an optional dynamic wrapper when you explicitly want type erasure. Capture modes are ownership-based; borrow captures (`&`, `&mut`) are intentionally deferred until the borrow/lifetime rules are specified.
 
 ### 22.1. Surface syntax
 
@@ -2861,7 +2888,7 @@ Drift treats callables as **traits first**, with an optional dynamic wrapper whe
 
 - `x` — **move** capture. Consumes the binding when the closure is created and stores it in the closure environment. Mutating the captured value mutates only the environment copy.
 - `copy x` — **copy** capture. Requires `x` to implement `Copy`; duplicates the value into the environment and leaves the original usable.
-- `ref x`, `ref mut x` — **not yet supported**; rejected until borrow/lifetime checking is specified.
+- `&x`, `&mut x` — **not yet supported**; rejected until borrow/lifetime checking is specified.
 
 Each captured name must be spelled explicitly; there is no implicit capture list.
 
@@ -2876,11 +2903,11 @@ Closures automatically implement one or more callable traits based on how they u
 
 ```drift
 trait Callable<Args, R> {
-    fn call(self: ref Self, args: Args) returns R
+    fn call(self: &Self, args: Args) returns R
 }
 
 trait CallableMut<Args, R> {
-    fn call(self: ref mut Self, args: Args) returns R
+    fn call(self: &mut Self, args: Args) returns R
 }
 
 trait CallableOnce<Args, R> {
@@ -2901,7 +2928,7 @@ fn apply_twice<F>(f: F, x: Int) returns Int
     return f.call(x) + f.call(x)
 }
 
-fn accumulate<F>(f: ref mut F, xs: Array<Int>) returns Void
+fn accumulate<F>(f: &mut F, xs: Array<Int>) returns Void
     require F is CallableMut<(Int), Void> {
     var i = 0
     while i < xs.len() { f.call(xs[i]); i = i + 1 }
@@ -2921,7 +2948,7 @@ When you need runtime dispatch, use an explicit interface:
 
 ```drift
 interface CallableDyn<Args, R> {
-    fn call(self: ref CallableDyn<Args, R>, args: Args) returns R
+    fn call(self: &CallableDyn<Args, R>, args: Args) returns R
 }
 
 fn erase<F, Args, R>(f: F) returns CallableDyn<Args, R>
