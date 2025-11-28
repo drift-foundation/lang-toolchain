@@ -91,19 +91,19 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     assert STRING_LLVM_TYPE is not None
                     elements = [env[e] for e in instr.elements]
                     arr_ty = ir.ArrayType(STRING_LLVM_TYPE, len(elements))
-                    gv_ty: ir.Type = STRING_LLVM_TYPE
                 elif instr.element_type == I64:
                     elements = [env[e] for e in instr.elements]
                     arr_ty = ir.ArrayType(ir.IntType(64), len(elements))
-                    gv_ty = ir.IntType(64)
                 else:
                     raise NotImplementedError("ArrayInit currently supports String or Int64 elements only")
-                unique_id = len(builder.module.globals)
-                gv = ir.GlobalVariable(builder.module, arr_ty, name=f".arr{unique_id}")
-                gv.linkage = "internal"
-                gv.global_constant = True
-                gv.initializer = ir.Constant(arr_ty, elements)
-                env[instr.dest] = gv.bitcast(gv_ty.as_pointer())
+                # Allocate on the stack and store elements (cannot be a global if elements are dynamic).
+                arr_alloca = builder.alloca(arr_ty, name=f"arr{len(elements)}")
+                zero32 = ir.Constant(ir.IntType(32), 0)
+                for idx, elem in enumerate(elements):
+                    idx_val = ir.Constant(ir.IntType(32), idx)
+                    ptr = builder.gep(arr_alloca, [zero32, idx_val], inbounds=True)
+                    builder.store(elem, ptr)
+                env[instr.dest] = builder.gep(arr_alloca, [zero32, zero32], inbounds=True)
             elif isinstance(instr, mir.Call):
                 arg_vals = [env[a] for a in instr.args]
                 if instr.normal or instr.error:
@@ -237,9 +237,11 @@ def _const(builder: ir.IRBuilder, ty: Type, val: object) -> ir.Value:
         gv.initializer = ir.Constant(gv.type.pointee, data)
         zero = ir.Constant(SIZE_T, 0)
         ptr = builder.gep(gv, [zero, zero], inbounds=True)
-        # build literal struct {len, ptr}
-        parts = [ir.Constant(SIZE_T, len(data) - 1), ptr]
-        return ir.Constant.literal_struct(parts)
+        # build struct {len, ptr} via inserts so we can include non-constant GEP
+        s = ir.Constant(STRING_LLVM_TYPE, None)
+        s = builder.insert_value(s, ir.Constant(SIZE_T, len(data) - 1), 0)
+        s = builder.insert_value(s, ptr, 1)
+        return s
     raise NotImplementedError(f"const of type {ty}")
 
 
@@ -289,14 +291,16 @@ def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Va
 
 def _lower_console_write(builder: ir.IRBuilder, value: ir.Value) -> None:
     assert STRING_LLVM_TYPE is not None
-    assert value.type == STRING_LLVM_TYPE
+    if value.type != STRING_LLVM_TYPE:
+        value = _coerce_to_string(builder, value)
     fn = _console_write_decl(builder.module)
     builder.call(fn, [value])
 
 
 def _lower_console_writeln(builder: ir.IRBuilder, value: ir.Value) -> None:
     assert STRING_LLVM_TYPE is not None
-    assert value.type == STRING_LLVM_TYPE
+    if value.type != STRING_LLVM_TYPE:
+        value = _coerce_to_string(builder, value)
     fn = _console_writeln_decl(builder.module)
     builder.call(fn, [value])
 
@@ -337,6 +341,35 @@ def _console_writeln_decl(module: ir.Module) -> ir.Function:
     fn_ty = ir.FunctionType(ir.VoidType(), (STRING_LLVM_TYPE,))
     fn = ir.Function(module, fn_ty, name="drift_console_writeln")
     return fn
+
+
+def _string_from_int64_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_from_int64")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(64),))
+    fn = ir.Function(module, fn_ty, name="drift_string_from_int64")
+    return fn
+
+
+def _string_from_bool_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_from_bool")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(1),))
+    fn = ir.Function(module, fn_ty, name="drift_string_from_bool")
+    return fn
+
+
+def _coerce_to_string(builder: ir.IRBuilder, value: ir.Value) -> ir.Value:
+    if isinstance(value.type, ir.IntType):
+        if value.type.width == 1:
+            return builder.call(_string_from_bool_decl(builder.module), [value])
+        if value.type.width == 64:
+            return builder.call(_string_from_int64_decl(builder.module), [value])
+    raise NotImplementedError("console write expects String; automatic coercions implemented for bool and Int64")
 
 
 def _string_from_cstr_decl(module: ir.Module) -> ir.Function:

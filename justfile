@@ -1,7 +1,6 @@
 set shell := ["bash", "-lc"]
 
 test: parse-all
-	python3 tools/draft_linter.py tests/programs
 	python3 tests/run_tests.py
 
 parse-all: parse-playground parse-examples

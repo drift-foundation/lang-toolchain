@@ -243,6 +243,21 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
             capture_env: Dict[str, str],
             err_target: str | None = None,
         ) -> Optional[mir.BasicBlock]:
+            if isinstance(stmt, ast.ExprStmt):
+                # Special-case console writes (out.write/out.writeln) as intrinsics.
+                if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attr):
+                    attr = stmt.value.func
+                    if isinstance(attr.value, ast.Name) and attr.value.ident == "out" and attr.attr in ("write", "writeln"):
+                        if len(stmt.value.args) != 1:
+                            raise LoweringError("console write expects one argument")
+                        arg_val, arg_ty, current_block = lower_expr(stmt.value.args[0], current_block, temp_types, capture_env, err_target=err_target)
+                        instr = mir.ConsoleWriteln(value=arg_val) if attr.attr == "writeln" else mir.ConsoleWrite(value=arg_val)
+                        current_block.instructions.append(instr)
+                        temp_types[arg_val] = arg_ty
+                        return current_block
+                # Fallback: evaluate expression for side effects and drop result.
+                lower_expr(stmt.value, current_block, temp_types, capture_env, err_target=err_target)
+                return current_block
             if isinstance(stmt, ast.LetStmt):
                 val_name, val_ty, current_block = lower_expr(stmt.value, current_block, temp_types, capture_env, err_target=err_target)
                 dest = stmt.name

@@ -25,6 +25,8 @@ struct DriftString drift_string_from_cstr(const char* cstr);
 
 // Construct from UTF-8 bytes (copies data).
 struct DriftString drift_string_from_utf8_bytes(const char* data, drift_size_t len);
+struct DriftString drift_string_from_int64(int64_t v);
+struct DriftString drift_string_from_bool(int v);
 
 // Construct a DriftString backed by static storage (no free needed; MUST NOT be passed to drift_string_free).
 struct DriftString drift_string_literal(const char* data, drift_size_t len);

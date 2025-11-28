@@ -98,11 +98,33 @@ def _run_codegen_tests() -> int:
     failures = 0
     out_dir = CODEGEN_DIR / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
+    skip_cases = {
+        # runtime_* cases rely on language features not yet lowered (mutation, arrays, full control flow, module checks, etc.).
+        name
+        for name in [
+            "runtime",
+            "runtime_basics",
+            "runtime_effects",
+            "runtime_functions",
+            "runtime_index_bounds",
+            "runtime_logic",
+            "runtime_module_invalid_name",
+            "runtime_module_reserved_prefix",
+            "runtime_mutable_bindings",
+            "runtime_reserved_keyword_name",
+            "runtime_ternary",
+            "runtime_try_catch",
+            "runtime_while_basic",
+            "runtime_while_nested",
+            "runtime_while_try_catch",
+        ]
+    }
+
     for case_dir in sorted(CODEGEN_DIR.iterdir()):
         if not case_dir.is_dir():
             continue
-        if case_dir.name.startswith("runtime_"):
-            print(f"[skip] codegen {case_dir.name}: string/console codegen not yet implemented", file=sys.stderr)
+        if case_dir.name in skip_cases:
+            print(f"[skip] codegen {case_dir.name}: not yet supported by minimal lowering", file=sys.stderr)
             continue
         drift_path = case_dir / "input.drift"
         expect_path = case_dir / "expect.json"

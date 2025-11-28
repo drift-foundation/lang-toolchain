@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 struct DriftString drift_string_from_cstr(const char* cstr) {
     if (cstr == NULL) {
@@ -32,6 +33,24 @@ struct DriftString drift_string_from_utf8_bytes(const char* data, drift_size_t l
     buf[len] = '\0';
     struct DriftString s = {len, buf};
     return s;
+}
+
+struct DriftString drift_string_from_int64(int64_t v) {
+    /* worst-case length for int64_t in decimal, including sign */
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    if (n < 0) {
+        abort();
+    }
+    return drift_string_from_utf8_bytes(buf, (drift_size_t)n);
+}
+
+struct DriftString drift_string_from_bool(int v) {
+    if (v) {
+        return drift_string_literal("true", 4);
+    } else {
+        return drift_string_literal("false", 5);
+    }
 }
 
 struct DriftString drift_string_literal(const char* data, drift_size_t len) {
