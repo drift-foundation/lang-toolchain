@@ -72,6 +72,7 @@ class Call(Instruction):
     dest: Value
     callee: str
     args: List[Value]
+    ret_type: Type
     err_dest: Optional[Value] = None  # error result when using pair ABI
     normal: Optional[Edge] = None
     error: Optional[Edge] = None

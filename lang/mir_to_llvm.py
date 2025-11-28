@@ -118,7 +118,7 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                         if func_map and instr.callee in func_map:
                             callee = func_map[instr.callee]
                         else:
-                            ret_ty = _llvm_type(fn.return_type)
+                            ret_ty = _llvm_type(instr.ret_type)
                             pair_ty = ir.LiteralStructType([ret_ty, _llvm_type(ERROR)])
                             arg_tys = [val.type for val in arg_vals]
                             callee_ty = ir.FunctionType(pair_ty, arg_tys)
@@ -168,7 +168,7 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                                 arg_vals[2] = _as_string_ptr(builder, arg_vals[2])
                                 arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
                             else:
-                                ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else fn.return_type)
+                                ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else instr.ret_type)
                                 arg_tys = [val.type for val in arg_vals]
                                 callee_ty = ir.FunctionType(ret_ty, arg_tys)
                                 callee = ir.Function(llvm_module, callee_ty, name=instr.callee)

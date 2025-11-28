@@ -126,9 +126,11 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 blocks[join_name] = join_block
                 call_dest = fresh_val()
                 call_err = fresh_val()
+                call_type = _lookup_type(try_expr.expr.func.ident, block_params, types, checked)
                 block.instructions.append(
                     mir.Call(
                         dest=call_dest,
+                        ret_type=call_type,
                         err_dest=call_err,
                         callee=try_expr.expr.func.ident,
                         args=call_args,
@@ -136,7 +138,6 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                         error=mir.Edge(target=err_name, args=[call_err]),
                     )
                 )
-                call_type = _lookup_type(try_expr.expr.func.ident, block_params, types, checked)
                 types[call_dest] = call_type
                 types[call_err] = ERROR
                 norm_block.params[0] = mir.Param(name=norm_param.name, type=call_type)
@@ -157,10 +158,47 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 ty = _lookup_type(expr.ident, block_params, temp_types, checked)
                 return expr.ident, ty, current_block
             if isinstance(expr, ast.Binary):
+                if expr.op in {"and", "or"}:
+                    # Short-circuit boolean ops.
+                    lhs, lhs_ty, current_block = lower_expr(expr.left, current_block, temp_types, capture_env, err_target=err_target)
+                    if lhs_ty != BOOL:
+                        raise LoweringError("logical and/or requires Bool operands")
+                    join_name = fresh_block("bb_bool_join")
+                    join_block = mir.BasicBlock(name=join_name)
+                    blocks[join_name] = join_block
+                    if expr.op == "and":
+                        then_name = fresh_block("bb_bool_then")
+                        else_name = fresh_block("bb_bool_else")
+                        then_block = mir.BasicBlock(name=then_name)
+                        else_block = mir.BasicBlock(name=else_name)
+                        blocks[then_name] = then_block
+                        blocks[else_name] = else_block
+                        current_block.terminator = mir.CondBr(cond=lhs, then=mir.Edge(target=then_name), els=mir.Edge(target=else_name))
+                        else_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[lhs]))
+                        rhs, rhs_ty, then_block = lower_expr(expr.right, then_block, temp_types.copy(), capture_env.copy(), err_target=err_target)
+                        if rhs_ty != BOOL:
+                            raise LoweringError("logical and/or requires Bool operands")
+                        then_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[rhs]))
+                    else:  # or
+                        then_name = fresh_block("bb_bool_then")
+                        then_block = mir.BasicBlock(name=then_name)
+                        blocks[then_name] = then_block
+                        current_block.terminator = mir.CondBr(cond=lhs, then=mir.Edge(target=join_name, args=[lhs]), els=mir.Edge(target=then_name))
+                        rhs, rhs_ty, then_block = lower_expr(expr.right, then_block, temp_types.copy(), capture_env.copy(), err_target=err_target)
+                        if rhs_ty != BOOL:
+                            raise LoweringError("logical and/or requires Bool operands")
+                        then_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[rhs]))
+                    phi_name = fresh_val()
+                    join_block.params = [mir.Param(name=phi_name, type=BOOL)]
+                    temp_types[phi_name] = BOOL
+                    return phi_name, BOOL, join_block
                 lhs, lhs_ty, current_block = lower_expr(expr.left, current_block, temp_types, capture_env, err_target=err_target)
                 rhs, rhs_ty, current_block = lower_expr(expr.right, current_block, temp_types, capture_env, err_target=err_target)
                 dest = fresh_val()
                 current_block.instructions.append(mir.Binary(dest=dest, op=expr.op, left=lhs, right=rhs))
+                if expr.op in {"==", "!=", "<", "<=", ">", ">="}:
+                    temp_types[dest] = BOOL
+                    return dest, BOOL, current_block
                 temp_types[dest] = lhs_ty
                 return dest, lhs_ty, current_block
             if isinstance(expr, ast.Call):
@@ -189,6 +227,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 current_block.instructions.append(
                     mir.Call(
                         dest=dest,
+                        ret_type=call_ty,
                         err_dest=err_dest,
                         callee=expr.func.ident,
                         args=arg_vals,
@@ -211,6 +250,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 err_block.instructions.append(
                     mir.Call(
                         dest=err_push_dest,
+                        ret_type=ERROR,
                         callee="error_push_frame",
                         args=[
                             push_err,
@@ -382,6 +422,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                     current_block.instructions.append(
                         mir.Call(
                             dest=err_tmp,
+                            ret_type=ERROR,
                             callee="drift_error_new",
                             args=[
                                 keys_arr,

@@ -106,7 +106,6 @@ def _run_codegen_tests() -> int:
             "runtime_effects",
             "runtime_functions",
             "runtime_index_bounds",
-            "runtime_logic",
             "runtime_module_invalid_name",
             "runtime_module_reserved_prefix",
             "runtime_mutable_bindings",
