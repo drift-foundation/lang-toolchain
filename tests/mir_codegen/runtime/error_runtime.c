@@ -156,7 +156,7 @@ const char* error_to_cstr(struct Error* err) {
             const char* module = (err->frame_modules && err->frame_modules[i]) ? err->frame_modules[i] : "<unknown>";
             const char* file = (err->frame_files && err->frame_files[i]) ? err->frame_files[i] : "<unknown>";
             const char* func = (err->frame_funcs && err->frame_funcs[i]) ? err->frame_funcs[i] : "<unknown>";
-            long long line = (err->frame_lines) ? (long long)err->frame_lines[i] : 0;
+            unsigned long long line = (err->frame_lines) ? (unsigned long long)err->frame_lines[i] : 0;
             size_t cap_count = (err->cap_counts && i < err->frame_count) ? err->cap_counts[i] : 0;
             /* Build captured fragment inline. */
             size_t cap_len = 0;
@@ -264,7 +264,7 @@ struct Error* error_push_frame(struct Error* err, DriftStr module, DriftStr file
     DriftStr* new_modules = (DriftStr*)realloc(err->frame_modules, new_count * sizeof(DriftStr));
     DriftStr* new_files = (DriftStr*)realloc(err->frame_files, new_count * sizeof(DriftStr));
     DriftStr* new_funcs = (DriftStr*)realloc(err->frame_funcs, new_count * sizeof(DriftStr));
-    int64_t* new_lines = (int64_t*)realloc(err->frame_lines, new_count * sizeof(int64_t));
+    size_t* new_lines = (size_t*)realloc(err->frame_lines, new_count * sizeof(size_t));
     if (!new_modules || !new_files || !new_funcs || !new_lines) {
         return err; // best-effort; leave unchanged on alloc failure
     }
@@ -275,7 +275,7 @@ struct Error* error_push_frame(struct Error* err, DriftStr module, DriftStr file
     err->frame_modules[err->frame_count] = module ? module : "<unknown>";
     err->frame_files[err->frame_count] = file ? file : "<unknown>";
     err->frame_funcs[err->frame_count] = func ? func : "<unknown>";
-    err->frame_lines[err->frame_count] = line;
+    err->frame_lines[err->frame_count] = (size_t)line;
     err->frame_count = new_count;
 
     /* Always extend the cap_counts array to match frame_count, even if cap_count == 0. */
