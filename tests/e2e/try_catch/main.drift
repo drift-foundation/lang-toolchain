@@ -1,0 +1,15 @@
+import std.console.out
+
+fn might_fail(x: Int64) returns Int64 {
+  return x
+}
+
+fn main() returns Int64 {
+  try {
+    out.writeln("before")
+    might_fail(1)
+  } catch err {
+    out.writeln("caught")
+  }
+  return 0
+}

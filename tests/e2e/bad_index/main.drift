@@ -1,0 +1,5 @@
+fn main() returns Int64 {
+  val xs = [1, 2, 3]
+  val y = xs[true]
+  return y
+}

@@ -1,0 +1,11 @@
+import std.console.out
+
+fn foo(x: Int64) returns Int64 {
+  return x
+}
+
+fn main() returns Int64 {
+  val y: Int64 = try foo(1) else 42
+  out.writeln("y computed")
+  return 0
+}

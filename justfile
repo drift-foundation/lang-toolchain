@@ -5,6 +5,9 @@ test: test-ssa
 legacy-test: parse-all
 	./.venv/bin/python3 tests/run_tests.py
 
+test-e2e:
+	./.venv/bin/python3 tests/e2e_runner.py
+
 test-ssa:
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.mir_ssa_tests
 	./.venv/bin/python3 tests/ssa_check_smoke.py

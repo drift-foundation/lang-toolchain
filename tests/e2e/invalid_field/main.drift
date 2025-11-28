@@ -1,0 +1,10 @@
+struct Point {
+  x: Int64
+  y: Int64
+}
+
+fn main() returns Int64 {
+  var p: Point = Point(x = 1, y = 2)
+  p.z = 3
+  return 0
+}

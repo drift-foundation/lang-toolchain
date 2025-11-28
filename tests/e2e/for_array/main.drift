@@ -1,0 +1,11 @@
+import std.console.out
+
+fn main() returns Int64 {
+  val xs = [1, 2, 3]
+  var sum: Int64 = 0
+  for x in xs {
+    sum = sum + x
+  }
+  out.writeln("for loop done")
+  return 0
+}
