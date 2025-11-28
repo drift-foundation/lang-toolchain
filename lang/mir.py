@@ -104,6 +104,14 @@ class ArrayInit(Instruction):
 
 
 @dataclass(frozen=True)
+class ArrayLiteral(Instruction):
+    dest: Value
+    elem_type: Type
+    elements: List[Value]
+    loc: Location = Location()
+
+
+@dataclass(frozen=True)
 class ArrayGet(Instruction):
     dest: Value
     base: Value

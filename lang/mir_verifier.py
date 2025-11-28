@@ -74,7 +74,7 @@ def verify_function(fn: mir.Function, program: mir.Program | None = None) -> Non
         for p in block.params:
             def_blocks.setdefault(p.name, set()).add(name)
         for instr in block.instructions:
-            if isinstance(instr, (mir.Const, mir.Move, mir.Copy, mir.Call, mir.CallWithCtx, mir.StructInit, mir.FieldGet, mir.ArrayInit, mir.ArrayGet, mir.Unary, mir.Binary, mir.ConsoleWrite, mir.ConsoleWriteln)):
+            if isinstance(instr, (mir.Const, mir.Move, mir.Copy, mir.Call, mir.CallWithCtx, mir.StructInit, mir.FieldGet, mir.ArrayInit, mir.ArrayLiteral, mir.ArrayGet, mir.Unary, mir.Binary, mir.ConsoleWrite, mir.ConsoleWriteln)):
                 def_blocks.setdefault(getattr(instr, "dest", None), set()).add(name) if getattr(instr, "dest", None) else None
     in_state, out_state = _dataflow_defs_types(fn, program)
     incoming = _compute_incoming_args(fn, out_state)
@@ -187,6 +187,9 @@ def _dataflow_defs_types(
                 elif isinstance(instr, mir.ArrayInit):
                     cur_defs.add(instr.dest)
                     cur_types[instr.dest] = array_of(instr.element_type)
+                elif isinstance(instr, mir.ArrayLiteral):
+                    cur_defs.add(instr.dest)
+                    cur_types[instr.dest] = array_of(instr.elem_type)
                 elif isinstance(instr, mir.ArrayGet):
                     cur_defs.add(instr.dest)
                 elif isinstance(instr, mir.Unary):
@@ -350,6 +353,12 @@ def _verify_block(
                 _ensure_defined(state, elem, block, "array_init", None, dominators, def_blocks)
                 _ensure_not_moved_or_dropped(state, elem, block, "array_init")
             _ensure_not_defined(state, instr.dest, block, "array_init")
+            state.define(instr.dest)
+        elif isinstance(instr, mir.ArrayLiteral):
+            for elem in instr.elements:
+                _ensure_defined(state, elem, block, "array_literal", None, dominators, def_blocks)
+                _ensure_not_moved_or_dropped(state, elem, block, "array_literal")
+            _ensure_not_defined(state, instr.dest, block, "array_literal")
             state.define(instr.dest)
         elif isinstance(instr, mir.ArrayGet):
             _ensure_defined(state, instr.base, block, "array_get", None, dominators, def_blocks)

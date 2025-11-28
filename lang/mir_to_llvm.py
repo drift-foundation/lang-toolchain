@@ -6,7 +6,7 @@ from llvmlite import binding as llvm  # type: ignore
 from llvmlite import ir  # type: ignore
 
 from . import mir
-from .types import BOOL, ERROR, F64, I64, STR, Type
+from .types import BOOL, ERROR, F64, I64, STR, UNIT, Type, array_element_type
 
 # Initialized per TargetMachine in lower_function
 STRING_LLVM_TYPE: ir.Type | None = None
@@ -110,6 +110,46 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     ptr = builder.gep(arr_alloca, [zero32, idx_val], inbounds=True)
                     builder.store(elem, ptr)
                 env[instr.dest] = builder.gep(arr_alloca, [zero32, zero32], inbounds=True)
+            elif isinstance(instr, mir.ArrayLiteral):
+                assert SIZE_T is not None
+                elem_ty = _llvm_type(instr.elem_type)
+                if not isinstance(elem_ty, ir.IntType):
+                    raise NotImplementedError("array literals currently support Int64 elements only")
+                elem_size = ir.Constant(SIZE_T, elem_ty.width // 8)
+                elem_align = elem_size
+                arr_ty = ir.LiteralStructType([SIZE_T, SIZE_T, elem_ty.as_pointer()])
+                length = ir.Constant(SIZE_T, len(instr.elements))
+                cap = length
+                raw = builder.call(_alloc_array_decl(llvm_module), [elem_size, elem_align, length, cap])
+                data_ptr = builder.bitcast(raw, elem_ty.as_pointer())
+                for idx, val_name in enumerate(instr.elements):
+                    val = env[val_name]
+                    idx_const = ir.Constant(SIZE_T, idx)
+                    ptr = builder.gep(data_ptr, [idx_const], inbounds=True)
+                    builder.store(val, ptr)
+                tmp0 = builder.insert_value(ir.Constant(arr_ty, None), length, 0)
+                tmp1 = builder.insert_value(tmp0, cap, 1)
+                arr_val = builder.insert_value(tmp1, data_ptr, 2)
+                env[instr.dest] = arr_val
+            elif isinstance(instr, mir.ArrayGet):
+                assert SIZE_T is not None
+                arr_val = env[instr.base]
+                idx_val = env[instr.index]
+                len_val = builder.extract_value(arr_val, 0, name=f"{instr.dest}_len")
+                data_ptr = builder.extract_value(arr_val, 2, name=f"{instr.dest}_data")
+                is_neg = builder.icmp_signed("<", idx_val, ir.Constant(idx_val.type, 0), name=f"{instr.dest}_isneg")
+                idx_size = builder.zext(idx_val, SIZE_T, name=f"{instr.dest}_idx_size")
+                too_big = builder.icmp_unsigned(">=", idx_size, len_val, name=f"{instr.dest}_toobig")
+                oob = builder.or_(is_neg, too_big, name=f"{instr.dest}_oob")
+                ok_bb = llvm_fn.append_basic_block(name=f"{bname}_ok_{instr.dest}")
+                oob_bb = llvm_fn.append_basic_block(name=f"{bname}_oob_{instr.dest}")
+                builder.cbranch(oob, oob_bb, ok_bb)
+                with builder.goto_block(oob_bb):
+                    builder.call(_bounds_check_fail_decl(llvm_module), [idx_size, len_val])
+                    builder.unreachable()
+                builder.position_at_end(ok_bb)
+                elem_ptr = builder.gep(data_ptr, [idx_size], inbounds=True)
+                env[instr.dest] = builder.load(elem_ptr, name=instr.dest)
             elif isinstance(instr, mir.Call):
                 arg_vals = [env[a] for a in instr.args]
                 if instr.normal or instr.error:
@@ -241,6 +281,11 @@ def _llvm_type(ty: Type) -> ir.Type:
         return STRING_LLVM_TYPE
     if ty == ERROR:
         return ir.IntType(8).as_pointer()
+    inner = array_element_type(ty)
+    if inner is not None:
+        assert SIZE_T is not None
+        elem_ty = _llvm_type(inner)
+        return ir.LiteralStructType([SIZE_T, SIZE_T, elem_ty.as_pointer()])
     return ir.IntType(8).as_pointer()
 
 
@@ -421,6 +466,24 @@ def _console_writeln_decl(module: ir.Module) -> ir.Function:
     fn_ty = ir.FunctionType(ir.VoidType(), (STRING_LLVM_TYPE,))
     fn = ir.Function(module, fn_ty, name="drift_console_writeln")
     return fn
+
+
+def _alloc_array_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_alloc_array")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert SIZE_T is not None
+    fn_ty = ir.FunctionType(ir.IntType(8).as_pointer(), (SIZE_T, SIZE_T, SIZE_T, SIZE_T))
+    return ir.Function(module, fn_ty, name="drift_alloc_array")
+
+
+def _bounds_check_fail_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_bounds_check_fail")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert SIZE_T is not None
+    fn_ty = ir.FunctionType(ir.VoidType(), (SIZE_T, SIZE_T))
+    return ir.Function(module, fn_ty, name="drift_bounds_check_fail")
 
 
 def _string_from_int64_decl(module: ir.Module) -> ir.Function:

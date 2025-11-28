@@ -4,7 +4,7 @@ from typing import Dict, Tuple, List, Optional
 
 from . import ast, mir
 from .checker import CheckedProgram
-from .types import BOOL, F64, I64, STR, ERROR, UNIT, Type
+from .types import BOOL, F64, I64, STR, ERROR, UNIT, Type, array_of, array_element_type
 from ._lower_to_mir_utils import build_frame_consts
 
 
@@ -156,6 +156,24 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 current_block.instructions.append(mir.Const(dest=dest, type=lit_type, value=lit_val))
                 temp_types[dest] = lit_type
                 return dest, lit_type, current_block
+            if isinstance(expr, ast.ArrayLiteral):
+                # Lower each element and emit a value-level array literal.
+                if not expr.elements:
+                    raise LoweringError("cannot lower empty array literal")
+                elem_vals: List[str] = []
+                elem_ty: Type | None = None
+                for e in expr.elements:
+                    v, ty, current_block = lower_expr(e, current_block, temp_types, capture_env, err_target=err_target)
+                    elem_vals.append(v)
+                    elem_ty = elem_ty or ty
+                assert elem_ty is not None
+                dest = fresh_val()
+                current_block.instructions.append(
+                    mir.ArrayLiteral(dest=dest, elem_type=elem_ty, elements=elem_vals, loc=expr.loc)
+                )
+                arr_ty = array_of(elem_ty)
+                temp_types[dest] = arr_ty
+                return dest, arr_ty, current_block
             if isinstance(expr, ast.Name):
                 ty = _lookup_type(expr.ident, block_params, temp_types, checked)
                 return expr.ident, ty, current_block
@@ -203,6 +221,18 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                     return dest, BOOL, current_block
                 temp_types[dest] = lhs_ty
                 return dest, lhs_ty, current_block
+            if isinstance(expr, ast.Index):
+                base, base_ty, current_block = lower_expr(expr.value, current_block, temp_types, capture_env, err_target=err_target)
+                elem_ty = array_element_type(base_ty)
+                if elem_ty is None:
+                    raise LoweringError("indexing requires an array type")
+                idx, idx_ty, current_block = lower_expr(expr.index, current_block, temp_types, capture_env, err_target=err_target)
+                if idx_ty != I64:
+                    raise LoweringError("index must be Int64")
+                dest = fresh_val()
+                current_block.instructions.append(mir.ArrayGet(dest=dest, base=base, index=idx, loc=expr.loc))
+                temp_types[dest] = elem_ty
+                return dest, elem_ty, current_block
             if isinstance(expr, ast.Call):
                 if not isinstance(expr.func, ast.Name):
                     raise LoweringError("only simple name calls supported in minimal lowering")
