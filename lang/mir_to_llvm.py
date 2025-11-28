@@ -343,6 +343,9 @@ def _lower_binary(builder: ir.IRBuilder, instr: mir.Binary, env: dict[str, ir.Va
         if STRING_LLVM_TYPE is not None and lhs.type == STRING_LLVM_TYPE and rhs.type == STRING_LLVM_TYPE:
             return builder.call(_string_concat_decl(builder.module), [lhs, rhs], name=instr.dest)
         return builder.add(lhs, rhs, name=instr.dest)
+    if op in {"==", "!="} and STRING_LLVM_TYPE is not None and lhs.type == STRING_LLVM_TYPE and rhs.type == STRING_LLVM_TYPE:
+        eq = builder.call(_string_eq_decl(builder.module), [lhs, rhs], name=f"{instr.dest}_eq")
+        return eq if op == "==" else builder.not_(eq, name=instr.dest)
     if op == "-":
         return builder.sub(lhs, rhs, name=instr.dest)
     if op == "*":
@@ -395,6 +398,16 @@ def _string_concat_decl(module: ir.Module) -> ir.Function:
     assert STRING_LLVM_TYPE is not None
     fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (STRING_LLVM_TYPE, STRING_LLVM_TYPE))
     fn = ir.Function(module, fn_ty, name="drift_string_concat")
+    return fn
+
+
+def _string_eq_decl(module: ir.Module) -> ir.Function:
+    fn = module.globals.get("drift_string_eq")
+    if isinstance(fn, ir.Function):
+        return fn
+    assert STRING_LLVM_TYPE is not None
+    fn_ty = ir.FunctionType(ir.IntType(1), (STRING_LLVM_TYPE, STRING_LLVM_TYPE))
+    fn = ir.Function(module, fn_ty, name="drift_string_eq")
     return fn
 
 

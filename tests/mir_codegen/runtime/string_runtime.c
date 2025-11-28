@@ -100,3 +100,16 @@ char* drift_string_to_cstr(struct DriftString s) {
     buf[len] = '\0';
     return buf;
 }
+
+int drift_string_eq(struct DriftString a, struct DriftString b) {
+    if (a.len != b.len) {
+        return 0;
+    }
+    if (a.len == 0) {
+        return 1;
+    }
+    if (!a.data || !b.data) {
+        return 0;
+    }
+    return memcmp(a.data, b.data, (size_t)a.len) == 0;
+}

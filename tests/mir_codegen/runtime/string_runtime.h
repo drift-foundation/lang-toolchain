@@ -44,6 +44,9 @@ char* drift_string_to_cstr(struct DriftString s);
 static inline uintptr_t drift_string_len(struct DriftString s) { return s.len; }
 static inline const char* drift_string_ptr(struct DriftString s) { return s.data; }
 
+// Equality (bytewise) check.
+int drift_string_eq(struct DriftString a, struct DriftString b);
+
 // Empty string helper.
 static inline struct DriftString drift_string_empty(void) {
     struct DriftString s;
