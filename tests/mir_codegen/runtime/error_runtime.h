@@ -31,8 +31,8 @@ struct Error* drift_error_new(
     struct DriftString* keys,
     struct DriftString* values,
     size_t attr_count,
-    struct DriftString event,
-    struct DriftString domain,
+    const struct DriftString* event,
+    const struct DriftString* domain,
     struct DriftString* frame_modules,
     struct DriftString* frame_files,
     struct DriftString* frame_funcs,
@@ -42,6 +42,6 @@ struct Error* drift_error_new(
     struct DriftString* cap_values,
     size_t* cap_counts,
     size_t cap_total);
-struct Error* error_push_frame(struct Error* err, struct DriftString module, struct DriftString file, struct DriftString func, int64_t line, struct DriftString* cap_keys, struct DriftString* cap_values, size_t cap_count);
+struct Error* error_push_frame(struct Error* err, const struct DriftString* module, const struct DriftString* file, const struct DriftString* func, int64_t line, struct DriftString* cap_keys, struct DriftString* cap_values, size_t cap_count);
 const char* error_to_cstr(struct Error*);
 void error_free(struct Error*);

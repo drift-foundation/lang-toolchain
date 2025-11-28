@@ -11,6 +11,14 @@ static struct DriftString clone_string(struct DriftString s) {
     return drift_string_from_utf8_bytes(s.data, s.len);
 }
 
+static struct DriftString sanitize_string(struct DriftString s, const char* fallback) {
+    const size_t MAX_LEN = (size_t)1 << 30; /* 1GiB guard */
+    if (s.data == NULL || s.len == 0 || s.len > MAX_LEN) {
+        return drift_string_from_cstr(fallback ? fallback : "unknown");
+    }
+    return clone_string(s);
+}
+
 static struct DriftString make_literal(const char* s) {
     if (!s) {
         return drift_string_empty();
@@ -41,8 +49,8 @@ struct Error* drift_error_new(
     struct DriftString* keys,
     struct DriftString* values,
     size_t attr_count,
-    struct DriftString event,
-    struct DriftString domain,
+    const struct DriftString* event,
+    const struct DriftString* domain,
     struct DriftString* frame_modules,
     struct DriftString* frame_files,
     struct DriftString* frame_funcs,
@@ -54,8 +62,8 @@ struct Error* drift_error_new(
     size_t cap_total) {
     struct Error* err = (struct Error*)calloc(1, sizeof(struct Error));
     if (!err) return NULL;
-    err->event = clone_string(event.len ? event : make_literal("unknown"));
-    err->domain = clone_string(domain.len ? domain : make_literal("main"));
+    err->event = sanitize_string(event ? *event : drift_string_empty(), "unknown");
+    err->domain = sanitize_string(domain ? *domain : drift_string_empty(), "main");
     err->attr_count = attr_count;
     if (attr_count > 0 && keys && values) {
         err->keys = clone_string_array(keys, attr_count);
@@ -330,7 +338,7 @@ struct Error* error_new(const char* msg) {
     struct DriftString vals_arr[1] = {val};
     struct DriftString ev = drift_string_from_cstr("Error");
     struct DriftString dom = drift_string_from_cstr("main");
-    struct Error* err = drift_error_new(keys, vals_arr, 1, ev, dom, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, 0);
+    struct Error* err = drift_error_new(keys, vals_arr, 1, &ev, &dom, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, 0);
     drift_string_free(key);
     drift_string_free(val);
     drift_string_free(ev);
@@ -338,7 +346,7 @@ struct Error* error_new(const char* msg) {
     return err;
 }
 
-struct Error* error_push_frame(struct Error* err, struct DriftString module, struct DriftString file, struct DriftString func, int64_t line, struct DriftString* cap_keys, struct DriftString* cap_values, size_t cap_count) {
+struct Error* error_push_frame(struct Error* err, const struct DriftString* module, const struct DriftString* file, const struct DriftString* func, int64_t line, struct DriftString* cap_keys, struct DriftString* cap_values, size_t cap_count) {
     if (!err) return NULL;
     size_t new_count = err->frame_count + 1;
     struct DriftString* new_modules = (struct DriftString*)realloc(err->frame_modules, new_count * sizeof(struct DriftString));
@@ -357,9 +365,9 @@ struct Error* error_push_frame(struct Error* err, struct DriftString module, str
     err->frame_files = new_files;
     err->frame_funcs = new_funcs;
     err->frame_lines = new_lines;
-    err->frame_modules[err->frame_count] = clone_string(module.len ? module : make_literal("<unknown>"));
-    err->frame_files[err->frame_count] = clone_string(file.len ? file : make_literal("<unknown>"));
-    err->frame_funcs[err->frame_count] = clone_string(func.len ? func : make_literal("<unknown>"));
+    err->frame_modules[err->frame_count] = sanitize_string(module ? *module : drift_string_empty(), "<unknown>");
+    err->frame_files[err->frame_count] = sanitize_string(file ? *file : drift_string_empty(), "<unknown>");
+    err->frame_funcs[err->frame_count] = sanitize_string(func ? *func : drift_string_empty(), "<unknown>");
     err->frame_lines[err->frame_count] = (size_t)line;
     err->frame_count = new_count;
 

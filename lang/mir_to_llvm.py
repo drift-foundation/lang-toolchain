@@ -90,9 +90,15 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                 if instr.element_type == STR:
                     assert STRING_LLVM_TYPE is not None
                     elements = [env[e] for e in instr.elements]
+                    if not elements:
+                        env[instr.dest] = ir.Constant(STRING_LLVM_TYPE.as_pointer(), None)
+                        continue
                     arr_ty = ir.ArrayType(STRING_LLVM_TYPE, len(elements))
                 elif instr.element_type == I64:
                     elements = [env[e] for e in instr.elements]
+                    if not elements:
+                        env[instr.dest] = ir.Constant(ir.IntType(64).as_pointer(), None)
+                        continue
                     arr_ty = ir.ArrayType(ir.IntType(64), len(elements))
                 else:
                     raise NotImplementedError("ArrayInit currently supports String or Int64 elements only")
@@ -151,8 +157,16 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                         else:
                             if instr.callee == "drift_error_new":
                                 callee = _error_new_decl(llvm_module)
+                                # drift_error_new expects event/domain as pointers to String structs.
+                                arg_vals = list(arg_vals)
+                                arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
+                                arg_vals[4] = _as_string_ptr(builder, arg_vals[4])
                             elif instr.callee == "error_push_frame":
                                 callee = _error_push_frame_decl(llvm_module)
+                                arg_vals = list(arg_vals)
+                                arg_vals[1] = _as_string_ptr(builder, arg_vals[1])
+                                arg_vals[2] = _as_string_ptr(builder, arg_vals[2])
+                                arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
                             else:
                                 ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else fn.return_type)
                                 arg_tys = [val.type for val in arg_vals]
@@ -340,8 +354,8 @@ def _error_new_decl(module: ir.Module) -> ir.Function:
             str_ptr,  # keys
             str_ptr,  # values
             SIZE_T,   # attr_count
-            STRING_LLVM_TYPE,  # event
-            STRING_LLVM_TYPE,  # domain
+            str_ptr,  # event*
+            str_ptr,  # domain*
             str_ptr,  # frame_modules
             str_ptr,  # frame_files
             str_ptr,  # frame_funcs
@@ -366,9 +380,9 @@ def _error_push_frame_decl(module: ir.Module) -> ir.Function:
         ir.IntType(8).as_pointer(),  # Error*
         (
             ir.IntType(8).as_pointer(),  # Error* incoming
-            STRING_LLVM_TYPE,  # module
-            STRING_LLVM_TYPE,  # file
-            STRING_LLVM_TYPE,  # func
+            str_ptr,  # module*
+            str_ptr,  # file*
+            str_ptr,  # func*
             ir.IntType(64),    # line (still i64 in MIR)
             str_ptr,           # cap_keys
             str_ptr,           # cap_values
@@ -416,6 +430,16 @@ def _string_from_bool_decl(module: ir.Module) -> ir.Function:
     fn_ty = ir.FunctionType(STRING_LLVM_TYPE, (ir.IntType(1),))
     fn = ir.Function(module, fn_ty, name="drift_string_from_bool")
     return fn
+
+
+def _as_string_ptr(builder: ir.IRBuilder, value: ir.Value) -> ir.Value:
+    assert STRING_LLVM_TYPE is not None
+    if isinstance(value.type, ir.PointerType) and value.type.pointee == STRING_LLVM_TYPE:
+        return value
+    # Allocate a slot and store the struct to get a pointer.
+    ptr = builder.alloca(STRING_LLVM_TYPE)
+    builder.store(value, ptr)
+    return ptr
 
 
 def _coerce_to_string(builder: ir.IRBuilder, value: ir.Value) -> ir.Value:
