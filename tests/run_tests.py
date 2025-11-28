@@ -103,7 +103,6 @@ def _run_codegen_tests() -> int:
         name
         for name in [
             "runtime",
-            "runtime_functions",
             "runtime_index_bounds",
             "runtime_module_invalid_name",
             "runtime_module_reserved_prefix",

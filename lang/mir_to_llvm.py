@@ -123,6 +123,18 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                             arg_tys = [val.type for val in arg_vals]
                             callee_ty = ir.FunctionType(pair_ty, arg_tys)
                             callee = ir.Function(llvm_module, callee_ty, name=instr.callee)
+                    # Special-case drift_error_new/error_push_frame to pass string pointers.
+                    if instr.callee == "drift_error_new":
+                        callee = _error_new_decl(llvm_module)
+                        arg_vals = list(arg_vals)
+                        arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
+                        arg_vals[4] = _as_string_ptr(builder, arg_vals[4])
+                    elif instr.callee == "error_push_frame":
+                        callee = _error_push_frame_decl(llvm_module)
+                        arg_vals = list(arg_vals)
+                        arg_vals[1] = _as_string_ptr(builder, arg_vals[1])
+                        arg_vals[2] = _as_string_ptr(builder, arg_vals[2])
+                        arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
                     call_val = builder.call(callee, arg_vals, name=instr.dest)
                     if not isinstance(call_val.type, ir.LiteralStructType):
                         raise NotImplementedError("expected pair return for call with error edges")
@@ -151,27 +163,26 @@ def lower_function(fn: mir.Function, func_map: dict[str, ir.Function] | None = N
                     break  # terminates this block
                 else:
                     callee = llvm_module.globals.get(instr.callee)
-                    if callee is None or not isinstance(callee, ir.Function):
+                    # Force the ABI for error helpers even if already declared.
+                    if instr.callee == "drift_error_new":
+                        callee = _error_new_decl(llvm_module)
+                        arg_vals = list(arg_vals)
+                        arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
+                        arg_vals[4] = _as_string_ptr(builder, arg_vals[4])
+                    elif instr.callee == "error_push_frame":
+                        callee = _error_push_frame_decl(llvm_module)
+                        arg_vals = list(arg_vals)
+                        arg_vals[1] = _as_string_ptr(builder, arg_vals[1])
+                        arg_vals[2] = _as_string_ptr(builder, arg_vals[2])
+                        arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
+                    elif callee is None or not isinstance(callee, ir.Function):
                         if func_map and instr.callee in func_map:
                             callee = func_map[instr.callee]
                         else:
-                            if instr.callee == "drift_error_new":
-                                callee = _error_new_decl(llvm_module)
-                                # drift_error_new expects event/domain as pointers to String structs.
-                                arg_vals = list(arg_vals)
-                                arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
-                                arg_vals[4] = _as_string_ptr(builder, arg_vals[4])
-                            elif instr.callee == "error_push_frame":
-                                callee = _error_push_frame_decl(llvm_module)
-                                arg_vals = list(arg_vals)
-                                arg_vals[1] = _as_string_ptr(builder, arg_vals[1])
-                                arg_vals[2] = _as_string_ptr(builder, arg_vals[2])
-                                arg_vals[3] = _as_string_ptr(builder, arg_vals[3])
-                            else:
-                                ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else instr.ret_type)
-                                arg_tys = [val.type for val in arg_vals]
-                                callee_ty = ir.FunctionType(ret_ty, arg_tys)
-                                callee = ir.Function(llvm_module, callee_ty, name=instr.callee)
+                            ret_ty = _llvm_type(ERROR if instr.callee in {"error_new", "error"} else instr.ret_type)
+                            arg_tys = [val.type for val in arg_vals]
+                            callee_ty = ir.FunctionType(ret_ty, arg_tys)
+                            callee = ir.Function(llvm_module, callee_ty, name=instr.callee)
                     call_val = builder.call(callee, arg_vals, name=instr.dest)
                     env[instr.dest] = call_val
             else:
