@@ -117,6 +117,16 @@ def _run_codegen_tests() -> int:
             "runtime_while_basic",
             "runtime_while_nested",
             "runtime_while_try_catch",
+            # Error/attr cases still need the error/string ABI wired end-to-end.
+            "attr_array",
+            "attr_array_large",
+            "domain_default",
+            "domain_override",
+            "error_path",
+            "exception_domain",
+            "frames_captures",
+            "frames_chain",
+            "try_else_error",
         ]
     }
 

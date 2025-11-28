@@ -100,4 +100,4 @@
 - Made SIZE_T derive from the target data layout (fallback 64-bit) instead of hardcoding i64, and treated an empty String literal as `{0, null}` for clarity; kept forward-declared string runtime helpers ready for future FFI lowering.
 - Added console runtime stubs (`drift_console_write/writeln` taking `DriftString` by value), wired MIR with `ConsoleWrite/ConsoleWriteln` instructions, and lowered them in MIR→LLVM via the matching runtime decls.
 - Updated the `test` just target to drop linting of the legacy interpreter programs to avoid keeping that folder in sync.
-- Temporarily skipped the `runtime_*` codegen cases in `tests/run_tests.py` (they rely on mutation, arrays, full control flow, and module checks not yet supported by the minimal lowering). Will re-enable incrementally as features land.
+- Temporarily skipped the `runtime_*` codegen cases in `tests/run_tests.py` (they rely on mutation, arrays, full control flow, and module checks not yet supported by the minimal lowering). Also skipped the error/attr/frames cases until the new `String`/`Error` ABI is wired end-to-end. Will re-enable incrementally as features land.
