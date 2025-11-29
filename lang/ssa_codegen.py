@@ -116,6 +116,25 @@ def emit_module_object(
                 work.append(term.error.target)
         return seen
 
+    def _reachable(f: mir.Function) -> set[str]:
+        seen: set[str] = set()
+        work = [f.entry]
+        while work:
+            b = work.pop()
+            if b in seen or b not in f.blocks:
+                continue
+            seen.add(b)
+            term = f.blocks[b].terminator
+            if isinstance(term, mir.Br):
+                work.append(term.target.target)
+            elif isinstance(term, mir.CondBr):
+                work.append(term.then.target)
+                work.append(term.els.target)
+            elif isinstance(term, mir.Call) and term.normal and term.error:
+                work.append(term.normal.target)
+                work.append(term.error.target)
+        return seen
+
     def llvm_struct_type(name: str) -> ir.Type:
         if name in struct_type_cache:
             return struct_type_cache[name]
@@ -162,26 +181,6 @@ def emit_module_object(
         for bname in f.blocks:
             if bname in reachable:
                 blocks_map[(f.name, bname)] = llvm_fn.append_basic_block(bname)
-
-    # Second pass: PHIs for params + body emission (reachable blocks only).
-    def _reachable(f: mir.Function) -> set[str]:
-        seen: set[str] = set()
-        work = [f.entry]
-        while work:
-            b = work.pop()
-            if b in seen or b not in f.blocks:
-                continue
-            seen.add(b)
-            term = f.blocks[b].terminator
-            if isinstance(term, mir.Br):
-                work.append(term.target.target)
-            elif isinstance(term, mir.CondBr):
-                work.append(term.then.target)
-                work.append(term.els.target)
-            elif isinstance(term, mir.Call) and term.normal and term.error:
-                work.append(term.normal.target)
-                work.append(term.error.target)
-        return seen
 
     for f in funcs:
         reachable = _reachable(f)
