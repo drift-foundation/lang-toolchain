@@ -38,3 +38,8 @@ mir-codegen:
 	clang-15 -c tests/mir_lowering/main.c -o tests/mir_lowering/out/main.o
 	clang-15 tests/mir_lowering/out/main.o tests/mir_lowering/add.o -o tests/mir_lowering/out/add_mir_test
 	./tests/mir_lowering/out/add_mir_test
+
+stage-for-review:
+	rm -rf staged
+	mkdir staged
+	git ls-files -m -o --exclude-standard | while read f; do mkdir -p "staged/$(dirname "$f")"; cp "$f" "staged/$f"; done 

@@ -1,0 +1,11 @@
+import std.console.out
+
+fn always_ok(x: Int) returns Int {
+  return x + 1
+}
+
+fn main() returns Int {
+  val y: Int = try always_ok(41) else 0
+  out.writeln("ok")
+  return y
+}

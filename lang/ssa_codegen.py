@@ -17,6 +17,7 @@ WORD_INT = ir.IntType(WORD_BITS)
 I64_TY = ir.IntType(64)
 I32_TY = ir.IntType(32)
 I1_TY = ir.IntType(1)
+ERROR_PTR_TY = ir.IntType(8).as_pointer()
 I8P = ir.IntType(8).as_pointer()
 
 
@@ -372,6 +373,40 @@ def emit_module_object(
                     if term.value not in values:
                         raise RuntimeError(f"return value {term.value} undefined")
                     builder.ret(values[term.value])
+            elif isinstance(term, mir.Call):
+                if not (term.normal and term.error):
+                    raise RuntimeError("call terminator without normal/error edges not supported")
+                callee = fn_map.get(term.callee)
+                if callee is None:
+                    raise RuntimeError(f"unknown callee {term.callee}")
+                if isinstance(callee.function_type.return_type, ir.VoidType):
+                    if term.dest is not None:
+                        # SSA lowering should not attach a value dest for void returns.
+                        raise RuntimeError("call with edges to void callee is not supported yet")
+                    builder.call(callee, [values[a] for a in term.args])
+                    call_val = None
+                else:
+                    call_val = builder.call(callee, [values[a] for a in term.args], name=term.dest)
+                    values[term.dest] = call_val
+                    ssa_types[term.dest] = term.ret_type
+                # For now assume normal path only; branch on a constant false (err == null).
+                cond_val = ir.Constant(I1_TY, 0)
+                # Wire incoming args for successors.
+                norm_tgt = term.normal.target
+                err_tgt = term.error.target
+                if norm_tgt not in f.blocks or err_tgt not in f.blocks:
+                    raise RuntimeError("call edge targets unknown block")
+                norm_block = f.blocks[norm_tgt]
+                err_block = f.blocks[err_tgt]
+                if len(term.normal.args) != len(norm_block.params):
+                    raise RuntimeError(f"edge to {norm_tgt} has arity {len(term.normal.args)} expected {len(norm_block.params)}")
+                if len(term.error.args) != len(err_block.params):
+                    raise RuntimeError(f"edge to {err_tgt} has arity {len(term.error.args)} expected {len(err_block.params)}")
+                for param, arg in zip(norm_block.params, term.normal.args):
+                    phis[(norm_tgt, param.name)].add_incoming(values[arg], blocks_map[(f.name, bname)])
+                for param, arg in zip(err_block.params, term.error.args):
+                    phis[(err_tgt, param.name)].add_incoming(values[arg], blocks_map[(f.name, bname)])
+                builder.cbranch(cond_val, blocks_map[(f.name, err_tgt)], blocks_map[(f.name, norm_tgt)])
             elif isinstance(term, mir.Br):
                 tgt = term.target.target
                 tblock = f.blocks[tgt]
