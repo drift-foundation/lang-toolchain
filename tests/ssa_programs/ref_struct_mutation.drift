@@ -1,8 +1,8 @@
 import std.console.out
 
 struct Point {
-  x: Int64
-  y: Int64
+  x: Int
+  y: Int
 }
 
 fn bump_x(p: &mut Point) returns Void {
@@ -10,7 +10,7 @@ fn bump_x(p: &mut Point) returns Void {
   return
 }
 
-fn main() returns Int64 {
+fn main() returns Int {
   var p: Point = Point(x = 0, y = 0)
   bump_x(&mut p)
   out.writeln("x bumped")

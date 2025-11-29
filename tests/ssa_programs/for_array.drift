@@ -1,8 +1,8 @@
 import std.console.out
 
-fn main() returns Int64 {
+fn main() returns Int {
   val xs = [1, 2, 3]
-  var sum: Int64 = 0
+  var sum: Int = 0
   for x in xs {
     sum = sum + x
   }

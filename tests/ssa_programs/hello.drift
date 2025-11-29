@@ -1,7 +1,7 @@
 import std.console.out
 
-fn main() returns Int64 {
+fn main() returns Int {
   out.writeln("hi from ssa")
-  val rc: Int64 = 0
+  val rc: Int = 0
   return rc
 }

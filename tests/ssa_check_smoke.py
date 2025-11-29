@@ -55,9 +55,9 @@ def test_ssa_check_smoke(tmp_path: Path) -> None:
         tmp_path,
         "main.drift",
         "import std.console.out\n"
-        "fn main() returns Int64 {\n"
+        "fn main() returns Int {\n"
         "  out.writeln(\"hi from ssa\")\n"
-        "  val rc: Int64 = 0\n"
+        "  val rc: Int = 0\n"
         "  return rc\n"
         "}\n",
     )
@@ -68,15 +68,15 @@ def test_ssa_check_control_flow(tmp_path: Path) -> None:
         tmp_path,
         "control.drift",
         "import std.console.out\n"
-        "fn main() returns Int64 {\n"
-        "  var i: Int64 = 0\n"
+        "fn main() returns Int {\n"
+        "  var i: Int = 0\n"
         "  while i < 3 {\n"
         "    if i == 1 {\n"
         "      out.writeln(\"mid\")\n"
         "    }\n"
         "    i = i + 1\n"
         "  }\n"
-        "  val rc: Int64 = 0\n"
+        "  val rc: Int = 0\n"
         "  return rc\n"
         "}\n",
     )
@@ -87,13 +87,13 @@ def test_ssa_check_try_else(tmp_path: Path) -> None:
         tmp_path,
         "try_else.drift",
         "import std.console.out\n"
-        "fn foo(x: Int64) returns Int64 {\n"
+        "fn foo(x: Int) returns Int {\n"
         "  return x\n"
         "}\n"
-        "fn main() returns Int64 {\n"
-        "  val y: Int64 = try foo(1) else 42\n"
+        "fn main() returns Int {\n"
+        "  val y: Int = try foo(1) else 42\n"
         "  out.writeln(\"y computed\")\n"
-        "  val rc: Int64 = 0\n"
+        "  val rc: Int = 0\n"
         "  return rc\n"
         "}\n",
     )
@@ -104,17 +104,17 @@ def test_ssa_check_try_catch(tmp_path: Path) -> None:
         tmp_path,
         "try_catch.drift",
         "import std.console.out\n"
-        "fn might_fail(x: Int64) returns Int64 {\n"
+        "fn might_fail(x: Int) returns Int {\n"
         "  return x\n"
         "}\n"
-        "fn main() returns Int64 {\n"
+        "fn main() returns Int {\n"
         "  try {\n"
         "    out.writeln(\"before\")\n"
         "    might_fail(1)\n"
         "  } catch err {\n"
         "    out.writeln(\"caught\")\n"
         "  }\n"
-        "  val rc: Int64 = 0\n"
+        "  val rc: Int = 0\n"
         "  return rc\n"
         "}\n",
     )

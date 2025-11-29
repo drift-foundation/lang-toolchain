@@ -1,13 +1,13 @@
 import std.console.out
 
-fn main() returns Int64 {
-  var i: Int64 = 0
+fn main() returns Int {
+  var i: Int = 0
   while i < 3 {
     if i == 1 {
       out.writeln("mid")
     }
     i = i + 1
   }
-  val rc: Int64 = 0
+  val rc: Int = 0
   return rc
 }

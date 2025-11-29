@@ -1,14 +1,14 @@
 import std.console.out
 
 struct Counter {
-  count: Int64
+  count: Int
 }
 
-fn main() returns Int64 {
+fn main() returns Int {
   var c: Counter = Counter(count = 0)
   c.count = c.count + 1
   c.count = c.count + 1
   out.writeln("bumped")
-  val rc: Int64 = 0
+  val rc: Int = 0
   return rc
 }

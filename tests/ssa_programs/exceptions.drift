@@ -1,15 +1,15 @@
 import std.console.out
 
-fn foo(x: Int64) returns Int64 {
+fn foo(x: Int) returns Int {
   return x
 }
 
-fn might_fail(x: Int64) returns Int64 {
+fn might_fail(x: Int) returns Int {
   return x
 }
 
-fn main() returns Int64 {
-  val y: Int64 = try foo(1) else 42
+fn main() returns Int {
+  val y: Int = try foo(1) else 42
   out.writeln("computed y")
 
   try {
@@ -19,6 +19,6 @@ fn main() returns Int64 {
     out.writeln("caught")
   }
 
-  val rc: Int64 = 0
+  val rc: Int = 0
   return rc
 }

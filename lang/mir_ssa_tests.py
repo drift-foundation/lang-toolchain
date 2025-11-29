@@ -7,7 +7,7 @@ from lang import mir
 from lang.mir_verifier_ssa_v2 import SSAVerifierV2
 from lang.mir_simplify_ssa import simplify_function
 from lang.lower_to_mir_ssa import lower_function_ssa, LoweringError
-from lang.types import BOOL, I64, STR, FunctionSignature
+from lang.types import BOOL, I64, INT, STR, FunctionSignature
 from lang.checker import CheckedProgram, FunctionInfo
 from lang.ast import (
     Block,
@@ -164,19 +164,19 @@ def test_lowering_try_else_integration():
 
 
 def test_lowering_try_else_multi_locals_integration():
-    # fn qux(x: Int64) -> Int64 { let a = x; let b = 5; let y = try foo(a) else b; return y }
+    # fn qux(x: Int) -> Int { let a = x; let b = 5; let y = try foo(a) else b; return y }
     loc = mir.Location()
     foo_def = FunctionDef(
         name="foo",
-        params=[AstParam(name="a", type_expr=TypeExpr(name="Int64"))],
-        return_type=TypeExpr(name="Int64"),
+        params=[AstParam(name="a", type_expr=TypeExpr(name="Int"))],
+        return_type=TypeExpr(name="Int"),
         body=Block(statements=[ReturnStmt(loc=loc, value=Name(loc=loc, ident="a"))]),
         loc=loc,
     )
     fn_def = FunctionDef(
         name="qux",
-        params=[AstParam(name="x", type_expr=TypeExpr(name="Int64"))],
-        return_type=TypeExpr(name="Int64"),
+        params=[AstParam(name="x", type_expr=TypeExpr(name="Int"))],
+        return_type=TypeExpr(name="Int"),
         body=Block(
             statements=[
                 LetStmt(loc=loc, name="a", type_expr=None, value=Name(loc=loc, ident="x")),
@@ -196,8 +196,8 @@ def test_lowering_try_else_multi_locals_integration():
         ),
         loc=loc,
     )
-    foo_sig = FunctionSignature(name="foo", params=(I64,), return_type=I64, effects=None)
-    qux_sig = FunctionSignature(name="qux", params=(I64,), return_type=I64, effects=None)
+    foo_sig = FunctionSignature(name="foo", params=(INT,), return_type=INT, effects=None)
+    qux_sig = FunctionSignature(name="qux", params=(INT,), return_type=INT, effects=None)
     checked = CheckedProgram(
         program=ast.Program(functions=[foo_def, fn_def], statements=[], structs=[], exceptions=[]),
         functions={

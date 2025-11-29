@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
 from llvmlite import ir, binding as llvm  # type: ignore
 
 from . import mir
 from .ir_layout import StructLayout
-from .types import BOOL, I64, STR, UNIT, Type
+from .types import BOOL, I64, STR, UNIT, Type, array_element_type, array_of
 
 # Architecture word size: target x86_64 for now.
 WORD_BITS = 64
@@ -108,6 +109,9 @@ def emit_module_object(
         except NotImplementedError:
             if ty.name in struct_layouts:
                 return llvm_struct_type(ty.name)
+            elem_ty = array_element_type(ty)
+            if elem_ty is not None:
+                return ir.LiteralStructType([WORD_INT, _llvm_type_with_structs(elem_ty).as_pointer()])
             raise
     for f in funcs:
         ret_ty = _llvm_type_with_structs(f.return_type)
@@ -129,6 +133,7 @@ def emit_module_object(
         struct_slots: dict[str, ir.Instruction] = {}
         entry_block = blocks_map[(f.name, f.entry)]
         entry_builder = ir.IRBuilder(entry_block)
+        entry_builder.position_at_start(entry_block)
 
         # Map function params.
         for param, llvm_param in zip(f.params, llvm_fn.args):
@@ -209,10 +214,17 @@ def emit_module_object(
                         values[instr.dest] = builder.sub(lhs, rhs, name=instr.dest)
                     elif instr.op == "*":
                         values[instr.dest] = builder.mul(lhs, rhs, name=instr.dest)
-                    elif instr.op in {"==", "!="}:
-                        cmp = builder.icmp_unsigned("==", lhs, rhs, name=f"cmp_{instr.dest}")
-                        if instr.op == "!=":
-                            cmp = builder.not_(cmp, name=instr.dest)
+                    elif instr.op in {"==", "!=", "<", "<=", ">", ">="}:
+                        pred_map = {
+                            "==": "==",
+                            "!=": "!=",
+                            "<": "<",
+                            "<=": "<=",
+                            ">": ">",
+                            ">=": ">=",
+                        }
+                        pred = pred_map[instr.op]
+                        cmp = builder.icmp_signed(pred, lhs, rhs, name=f"cmp_{instr.dest}")
                         values[instr.dest] = cmp
                     else:
                         raise RuntimeError(f"unsupported binary op {instr.op}")
@@ -285,6 +297,67 @@ def emit_module_object(
                     loaded = builder.load(field_ptr, name=instr.dest)
                     values[instr.dest] = loaded
                     ssa_types[instr.dest] = layout.field_types[idx]
+                elif isinstance(instr, mir.ArrayLen):
+                    arr_ty = ssa_types.get(instr.base)
+                    if arr_ty is None or array_element_type(arr_ty) is None:
+                        raise RuntimeError(f"base {instr.base} is not an array for len")
+                    arr_val = values[instr.base]
+                    # If array is a value struct {len, data*}
+                    if isinstance(arr_val.type, ir.LiteralStructType):
+                        len_val = builder.extract_value(arr_val, 0, name=instr.dest)
+                    else:
+                        # assume pointer to struct
+                        field_ptr = builder.gep(arr_val, [I32_TY(0), I32_TY(0)], inbounds=True)
+                        len_val = builder.load(field_ptr, name=instr.dest)
+                    values[instr.dest] = len_val
+                    ssa_types[instr.dest] = WORD_INT
+                elif isinstance(instr, mir.ArrayGet):
+                    arr_ty = ssa_types.get(instr.base)
+                    elem_ty = array_element_type(arr_ty) if arr_ty else None
+                    if elem_ty is None:
+                        raise RuntimeError(f"base {instr.base} is not an array for get")
+                    arr_val = values[instr.base]
+                    # obtain data pointer
+                    if isinstance(arr_val.type, ir.LiteralStructType):
+                        data_ptr = builder.extract_value(arr_val, 1)
+                    else:
+                        field_ptr = builder.gep(arr_val, [I32_TY(0), I32_TY(1)], inbounds=True)
+                        data_ptr = builder.load(field_ptr)
+                    idx_val = values[instr.index]
+                    elem_ptr = builder.gep(data_ptr, [idx_val], inbounds=True)
+                    loaded = builder.load(elem_ptr, name=instr.dest)
+                    values[instr.dest] = loaded
+                    ssa_types[instr.dest] = elem_ty
+                elif isinstance(instr, mir.ArraySet):
+                    arr_ty = ssa_types.get(instr.base)
+                    elem_ty = array_element_type(arr_ty) if arr_ty else None
+                    if elem_ty is None:
+                        raise RuntimeError(f"base {instr.base} is not an array for set")
+                    arr_val = values[instr.base]
+                    if isinstance(arr_val.type, ir.LiteralStructType):
+                        data_ptr = builder.extract_value(arr_val, 1)
+                    else:
+                        field_ptr = builder.gep(arr_val, [I32_TY(0), I32_TY(1)], inbounds=True)
+                        data_ptr = builder.load(field_ptr)
+                    idx_val = values[instr.index]
+                    elem_ptr = builder.gep(data_ptr, [idx_val], inbounds=True)
+                    builder.store(values[instr.value], elem_ptr)
+                elif isinstance(instr, mir.ArrayLiteral):
+                    # Stack-allocate array elements and build a {len, data*} struct.
+                    elem_ty = instr.elem_type
+                    if elem_ty.name not in {"Int", "Int64", "Int32"}:
+                        raise RuntimeError("array literal supports int elements only for now")
+                    elem_ir_ty = _llvm_type_with_structs(elem_ty)
+                    count = len(instr.elements)
+                    data_buf = builder.alloca(elem_ir_ty, ir.Constant(I32_TY, count), name=f"{instr.dest}.data")
+                    for idx, arg in enumerate(instr.elements):
+                        builder.store(values[arg], builder.gep(data_buf, [ir.Constant(I32_TY, idx)], inbounds=True))
+                    arr_ty = _llvm_type_with_structs(array_of(elem_ty))
+                    arr_zero = ir.Constant.literal_struct([ir.Constant(WORD_INT, 0), ir.Constant(elem_ir_ty.as_pointer(), None)])
+                    arr_tmp = builder.insert_value(arr_zero, ir.Constant(WORD_INT, count), 0)
+                    arr_val = builder.insert_value(arr_tmp, data_buf, 1)
+                    values[instr.dest] = arr_val
+                    ssa_types[instr.dest] = array_of(elem_ty)
                 else:
                     raise RuntimeError(f"unsupported instruction {instr}")
 
@@ -328,7 +401,12 @@ def emit_module_object(
     # Debugging aid: print module if LLVM rejects it.
     target = llvm.Target.from_default_triple()
     tm = target.create_target_machine()
-    llvm_mod = llvm.parse_assembly(str(mod))
+    try:
+        llvm_mod = llvm.parse_assembly(str(mod))
+    except RuntimeError as e:
+        # Debug aid: dump module on parse failure.
+        print(mod, file=sys.stderr)
+        raise
     obj = tm.emit_object(llvm_mod)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(obj)

@@ -1,6 +1,9 @@
 {
-  "mode": "compile",
+  "mode": "run",
   "compile_error": null,
+  "exit_code": 0,
+  "stdout": "for loop done\n",
+  "stderr": "",
   "args": [],
   "env": {}
 }
