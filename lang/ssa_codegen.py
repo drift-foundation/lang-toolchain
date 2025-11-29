@@ -7,11 +7,21 @@ from pathlib import Path
 from llvmlite import ir, binding as llvm  # type: ignore
 
 from . import mir
-from .types import BOOL, I64, UNIT, Type
+from .ir_layout import StructLayout
+from .types import BOOL, I64, STR, UNIT, Type
 
 # Architecture word size: target x86_64 for now.
 WORD_BITS = 64
 WORD_INT = ir.IntType(WORD_BITS)
+I64_TY = ir.IntType(64)
+I32_TY = ir.IntType(32)
+I1_TY = ir.IntType(1)
+I8P = ir.IntType(8).as_pointer()
+
+
+def _drift_string_type() -> ir.LiteralStructType:
+    # { len: i64, ptr: i8* }
+    return ir.LiteralStructType([I64_TY, I8P])
 
 
 def emit_dummy_main_object(out_path: Path) -> None:
@@ -47,13 +57,15 @@ def _llvm_type(ty: Type) -> ir.Type:
     if ty.name == "Int":
         return WORD_INT
     if ty.name == "Int64":
-        return ir.IntType(64)
+        return I64_TY
     if ty.name == "Int32":
-        return ir.IntType(32)
+        return I32_TY
     if ty == BOOL or ty.name == "Bool":
-        return ir.IntType(1)
+        return I1_TY
     if ty == UNIT or ty.name == "Void":
         return ir.VoidType()
+    if ty == STR or ty.name == "String":
+        return _drift_string_type()
     raise NotImplementedError(f"unsupported type {ty}")
 
 
@@ -62,7 +74,12 @@ def emit_simple_main_object(fn: mir.Function, out_path: Path) -> None:
     emit_module_object([fn], fn.name, out_path)
 
 
-def emit_module_object(funcs: list[mir.Function], entry: str, out_path: Path) -> None:
+def emit_module_object(
+    funcs: list[mir.Function],
+    struct_layouts: dict[str, StructLayout],
+    entry: str,
+    out_path: Path,
+) -> None:
     """Lower a small set of SSA functions (ints + branches + calls) into LLVM."""
     llvm.initialize()
     llvm.initialize_native_target()
@@ -85,6 +102,7 @@ def emit_module_object(funcs: list[mir.Function], entry: str, out_path: Path) ->
         llvm_fn = fn_map[f.name]
         phis: dict[tuple[str, str], ir.Instruction] = {}
         values: dict[str, ir.Value] = {}
+        module = llvm_fn.module
 
         # Map function params.
         for param, llvm_param in zip(f.params, llvm_fn.args):
@@ -110,10 +128,33 @@ def emit_module_object(funcs: list[mir.Function], entry: str, out_path: Path) ->
             builder = ir.IRBuilder(blocks_map[(f.name, bname)])
             for instr in block.instructions:
                 if isinstance(instr, mir.Const):
-                    if not isinstance(instr.value, (int, bool)):
-                        raise RuntimeError("simple backend supports int/bool const only")
-                    ir_ty = _llvm_type(instr.type)
-                    values[instr.dest] = ir_ty(int(instr.value))
+                    if isinstance(instr.value, (int, bool)):
+                        ir_ty = _llvm_type(instr.type)
+                        values[instr.dest] = ir_ty(int(instr.value))
+                    elif isinstance(instr.value, str):
+                        # Materialize a global string constant.
+                        data = bytearray(instr.value.encode("utf-8"))
+                        data.append(0)
+                        gv = ir.GlobalVariable(
+                            module, ir.ArrayType(ir.IntType(8), len(data)), name=f".str{len(module.globals)}"
+                        )
+                        gv.linkage = "internal"
+                        gv.global_constant = True
+                        gv.initializer = ir.Constant(gv.type.pointee, data)
+                        ptr = builder.gep(
+                            gv,
+                            [ir.Constant(I32_TY, 0), ir.Constant(I32_TY, 0)],
+                            inbounds=True,
+                            name=f"strptr{len(module.globals)}",
+                        )
+                        strlen = ir.Constant(I64_TY, len(data) - 1)
+                        str_ty = _drift_string_type()
+                        zero_struct = ir.Constant.literal_struct([ir.Constant(I64_TY, 0), ir.Constant(I8P, None)])
+                        tmp = builder.insert_value(zero_struct, strlen, 0)
+                        str_val = builder.insert_value(tmp, ptr, 1)
+                        values[instr.dest] = str_val
+                    else:
+                        raise RuntimeError("simple backend supports int/bool/string const only")
                 elif isinstance(instr, mir.Move):
                     values[instr.dest] = values[instr.source]
                 elif isinstance(instr, mir.Binary):
@@ -135,12 +176,27 @@ def emit_module_object(funcs: list[mir.Function], entry: str, out_path: Path) ->
                 elif isinstance(instr, mir.Call):
                     if instr.normal or instr.error:
                         raise RuntimeError("call with edges not yet supported in SSA backend")
-                    callee = fn_map.get(instr.callee)
-                    if callee is None:
-                        raise RuntimeError(f"unknown callee {instr.callee}")
-                    args = [values[a] for a in instr.args]
-                    call_val = builder.call(callee, args, name=instr.dest)
-                    values[instr.dest] = call_val
+                    # Console builtin: special-case out.writeln
+                    if instr.callee == "out.writeln":
+                        if len(instr.args) != 1:
+                            raise RuntimeError("out.writeln expects one arg")
+                        arg_val = values[instr.args[0]]
+                        console_fn = module.globals.get("drift_console_writeln")
+                        if not isinstance(console_fn, ir.Function):
+                            console_fn = ir.Function(
+                                module, ir.FunctionType(ir.VoidType(), (_drift_string_type(),)), name="drift_console_writeln"
+                            )
+                        builder.call(console_fn, [arg_val])
+                        if not isinstance(_llvm_type(instr.ret_type), ir.VoidType):
+                            # map dest to undef to keep SSA map consistent
+                            values[instr.dest] = ir.Constant.undef(_llvm_type(instr.ret_type))
+                    else:
+                        callee = fn_map.get(instr.callee)
+                        if callee is None:
+                            raise RuntimeError(f"unknown callee {instr.callee}")
+                        args = [values[a] for a in instr.args]
+                        call_val = builder.call(callee, args, name=instr.dest)
+                        values[instr.dest] = call_val
                 else:
                     raise RuntimeError(f"unsupported instruction {instr}")
 

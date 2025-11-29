@@ -1,0 +1,6 @@
+import std.console.out
+
+fn main() returns Int {
+  out.writeln("ok")
+  return 0
+}

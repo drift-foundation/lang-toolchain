@@ -11,3 +11,4 @@ staged.zip
 staged
 .pytest_cache/
 a.out
+staged.tar.gz

@@ -72,13 +72,12 @@ def _run_case(case_dir: Path) -> str:
     if not clang:
         return "skipped (clang not found)"
     exe_path = case_dir / "a.out"
-    link = subprocess.run(
-        [clang, str(case_dir / "a.o"), "-o", str(exe_path)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    runtime_sources = [
+        ROOT / "tests" / "mir_codegen" / "runtime" / "string_runtime.c",
+        ROOT / "tests" / "mir_codegen" / "runtime" / "console_runtime.c",
+    ]
+    link_cmd = [clang, str(case_dir / "a.o")] + [str(p) for p in runtime_sources] + ["-o", str(exe_path)]
+    link = subprocess.run(link_cmd, cwd=ROOT, capture_output=True, text=True, env=env)
     if link.returncode != 0:
         return f"FAIL (link failed: {link.stderr})"
 

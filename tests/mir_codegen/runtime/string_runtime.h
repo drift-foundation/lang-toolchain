@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 // Drift size carrier for ABI (must match Drift Size).
-typedef uintptr_t drift_size_t;
+typedef size_t drift_size_t;
 
 // Simple heap-allocated UTF-8 string representation.
 // Ownership: callers own DriftString values and must call drift_string_free
@@ -41,7 +41,7 @@ void drift_string_free(struct DriftString s);
 char* drift_string_to_cstr(struct DriftString s);
 
 // Accessors for length and data pointer.
-static inline uintptr_t drift_string_len(struct DriftString s) { return s.len; }
+static inline drift_size_t drift_string_len(struct DriftString s) { return s.len; }
 static inline const char* drift_string_ptr(struct DriftString s) { return s.data; }
 
 // Equality (bytewise) check.

@@ -16,7 +16,7 @@ struct DriftString drift_string_from_cstr(const char* cstr) {
     }
     memcpy(buf, cstr, len);
     buf[len] = '\0';
-    struct DriftString s = {(uintptr_t)len, buf};
+    struct DriftString s = {len, buf};
     return s;
 }
 

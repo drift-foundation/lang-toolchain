@@ -20,6 +20,7 @@ from lang.mir_verifier import verify_program
 from lang.mir_verifier_ssa_v2 import SSAVerifierV2
 from lang.mir_simplify_ssa import simplify_function
 from lang.ssa_codegen import emit_dummy_main_object, emit_module_object
+from lang.ir_layout import StructLayout
 
 
 def _dump_ssa(fn_name: str, blocks: dict[str, mir.BasicBlock], file=None) -> None:
@@ -87,6 +88,11 @@ def compile_file(
             else:
                 raise
         ssa_fns: list[mir.Function] = []
+        struct_layouts: dict[str, StructLayout] = {}
+        for sname, sinfo in checked.structs.items():
+            field_names = list(sinfo.field_order)
+            field_types = [sinfo.field_types[name] for name in field_names]
+            struct_layouts[sname] = StructLayout(name=sname, field_names=field_names, field_types=field_types)
         for fn_def in checked.program.functions:
             if fn_def.name not in checked.functions:
                 continue
@@ -105,7 +111,7 @@ def compile_file(
             )
             simplified = simplify_function(ssa_fn)
             ssa_fns.append(simplified)
-        emit_module_object(ssa_fns, entry="main", out_path=output_path)
+        emit_module_object(ssa_fns, struct_layouts, entry="main", out_path=output_path)
         return 0
     else:
         if ssa_check:

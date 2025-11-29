@@ -13,9 +13,8 @@ This document captures the runtime/ABI shape of `String` for the codegen path. I
 
 ```c
 // `drift_size_t` is the C carrier for Drift's `Size` type.
-// Its exact definition is provided by the core runtime and must
-// match the ABI representation of `Size` on the current target.
-typedef uintptr_t drift_size_t;
+// It must match the ABI representation of `Size` on the current target.
+typedef size_t drift_size_t;
 
 struct DriftString {
     drift_size_t len;  // number of bytes (UTF-8), not including terminator; Drift `Size`
