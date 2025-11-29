@@ -39,45 +39,91 @@ def _llvm_int(ty: Type) -> ir.IntType:
 
 
 def emit_simple_main_object(fn: mir.Function, out_path: Path) -> None:
-    """Lower a single-block SSA function with consts/moves + return into LLVM."""
+    """Lower a small SSA function with ints + branches into LLVM main.
+
+    Supported subset:
+    - integer const/move/binary ops
+    - multiple blocks with block params
+    - Br / CondBr / Return terminators
+    - no calls/arrays/structs yet
+    """
     llvm.initialize()
     llvm.initialize_native_target()
     llvm.initialize_native_asmprinter()
 
-    if len(fn.blocks) != 1:
-        raise RuntimeError("simple backend supports single-block functions only")
-    entry_block = next(iter(fn.blocks.values()))
-    if entry_block.params:
-        raise RuntimeError("simple backend does not support params yet")
-
     mod = ir.Module(name="ssa_main")
     ret_ir_ty = _llvm_int(fn.return_type)
     llvm_main = ir.Function(mod, ir.FunctionType(ret_ir_ty, []), name="main")
-    llvm_bb = llvm_main.append_basic_block("entry")
-    builder = ir.IRBuilder(llvm_bb)
 
+    # Pre-create LLVM basic blocks for each SSA block.
+    llvm_blocks: dict[str, ir.Block] = {}
+    for name in fn.blocks:
+        llvm_blocks[name] = llvm_main.append_basic_block(name)
+
+    # PHIs for block params.
+    phis: dict[tuple[str, str], ir.Instruction] = {}
     values: dict[str, ir.Value] = {}
 
-    for instr in entry_block.instructions:
-        if isinstance(instr, mir.Const):
-            if not isinstance(instr.value, int):
-                raise RuntimeError("simple backend supports int const only")
-            ir_ty = _llvm_int(instr.type)
-            values[instr.dest] = ir_ty(instr.value)
-        elif isinstance(instr, mir.Move):
-            values[instr.dest] = values[instr.source]
-        else:
-            raise RuntimeError(f"unsupported instruction {instr}")
+    for bname, block in fn.blocks.items():
+        builder = ir.IRBuilder(llvm_blocks[bname])
+        for param in block.params:
+            phi = builder.phi(_llvm_int(param.type), name=param.name)
+            phis[(bname, param.name)] = phi
+            values[param.name] = phi
 
-    term = entry_block.terminator
-    if not isinstance(term, mir.Return):
-        raise RuntimeError("simple backend supports only return terminator")
-    if term.value is None:
-        builder.ret(ret_ir_ty(0))
-    else:
-        if term.value not in values:
-            raise RuntimeError(f"return value {term.value} undefined")
-        builder.ret(values[term.value])
+    # Emit instructions per block.
+    for bname, block in fn.blocks.items():
+        builder = ir.IRBuilder(llvm_blocks[bname])
+        for instr in block.instructions:
+            if isinstance(instr, mir.Const):
+                if not isinstance(instr.value, int):
+                    raise RuntimeError("simple backend supports int const only")
+                ir_ty = _llvm_int(instr.type)
+                values[instr.dest] = ir_ty(instr.value)
+            elif isinstance(instr, mir.Move):
+                values[instr.dest] = values[instr.source]
+            elif isinstance(instr, mir.Binary):
+                lhs = values[instr.left]
+                rhs = values[instr.right]
+                if instr.op == "+":
+                    values[instr.dest] = builder.add(lhs, rhs, name=instr.dest)
+                elif instr.op == "-":
+                    values[instr.dest] = builder.sub(lhs, rhs, name=instr.dest)
+                elif instr.op == "*":
+                    values[instr.dest] = builder.mul(lhs, rhs, name=instr.dest)
+                elif instr.op in {"==", "!="}:
+                    cmp = builder.icmp_unsigned("==", lhs, rhs, name=f"cmp_{instr.dest}")
+                    if instr.op == "!=":
+                        cmp = builder.not_(cmp, name=instr.dest)
+                    values[instr.dest] = cmp
+                else:
+                    raise RuntimeError(f"unsupported binary op {instr.op}")
+            else:
+                raise RuntimeError(f"unsupported instruction {instr}")
+
+        # Terminators
+        term = block.terminator
+        if isinstance(term, mir.Return):
+            if term.value is None:
+                builder.ret(ret_ir_ty(0))
+            else:
+                builder.ret(values[term.value])
+        elif isinstance(term, mir.Br):
+            tgt = term.target.target
+            tblock = fn.blocks[tgt]
+            for param, arg in zip(tblock.params, term.target.args):
+                phis[(tgt, param.name)].add_incoming(values[arg], llvm_blocks[bname])
+            builder.branch(llvm_blocks[tgt])
+        elif isinstance(term, mir.CondBr):
+            cond = values[term.cond]
+            for edge in (term.then, term.els):
+                tgt = edge.target
+                tblock = fn.blocks[tgt]
+                for param, arg in zip(tblock.params, edge.args):
+                    phis[(tgt, param.name)].add_incoming(values[arg], llvm_blocks[bname])
+            builder.cbranch(cond, llvm_blocks[term.then.target], llvm_blocks[term.els.target])
+        else:
+            raise RuntimeError(f"unsupported terminator {term}")
 
     target = llvm.Target.from_default_triple()
     tm = target.create_target_machine()
