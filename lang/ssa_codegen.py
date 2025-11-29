@@ -94,6 +94,27 @@ def emit_module_object(
     struct_type_cache: dict[str, ir.Type] = {}
     # Track which functions are invoked with error edges; they use the {T, Error*} ABI.
     can_error_funcs: set[str] = set()
+    # Cached runtime decls
+    rt_error_dummy: Optional[ir.Function] = None
+
+    def _reachable(f: mir.Function) -> set[str]:
+        seen: set[str] = set()
+        work = [f.entry]
+        while work:
+            b = work.pop()
+            if b in seen or b not in f.blocks:
+                continue
+            seen.add(b)
+            term = f.blocks[b].terminator
+            if isinstance(term, mir.Br):
+                work.append(term.target.target)
+            elif isinstance(term, mir.CondBr):
+                work.append(term.then.target)
+                work.append(term.els.target)
+            elif isinstance(term, mir.Call) and term.normal and term.error:
+                work.append(term.normal.target)
+                work.append(term.error.target)
+        return seen
 
     def llvm_struct_type(name: str) -> ir.Type:
         if name in struct_type_cache:
@@ -130,6 +151,7 @@ def emit_module_object(
                 can_error_funcs.add(block.terminator.callee)
 
     for f in funcs:
+        reachable = _reachable(f)
         if f.name in can_error_funcs:
             ret_ty = llvm_ret_with_error(f.return_type)
         else:
@@ -138,10 +160,31 @@ def emit_module_object(
         llvm_fn = ir.Function(mod, ir.FunctionType(ret_ty, param_tys), name=f.name)
         fn_map[f.name] = llvm_fn
         for bname in f.blocks:
-            blocks_map[(f.name, bname)] = llvm_fn.append_basic_block(bname)
+            if bname in reachable:
+                blocks_map[(f.name, bname)] = llvm_fn.append_basic_block(bname)
 
-    # Second pass: PHIs for params + body emission.
+    # Second pass: PHIs for params + body emission (reachable blocks only).
+    def _reachable(f: mir.Function) -> set[str]:
+        seen: set[str] = set()
+        work = [f.entry]
+        while work:
+            b = work.pop()
+            if b in seen or b not in f.blocks:
+                continue
+            seen.add(b)
+            term = f.blocks[b].terminator
+            if isinstance(term, mir.Br):
+                work.append(term.target.target)
+            elif isinstance(term, mir.CondBr):
+                work.append(term.then.target)
+                work.append(term.els.target)
+            elif isinstance(term, mir.Call) and term.normal and term.error:
+                work.append(term.normal.target)
+                work.append(term.error.target)
+        return seen
+
     for f in funcs:
+        reachable = _reachable(f)
         llvm_fn = fn_map[f.name]
         phis: dict[tuple[str, str], ir.Instruction] = {}
         values: dict[str, ir.Value] = {}
@@ -168,6 +211,8 @@ def emit_module_object(
 
         # Block params: entry params map to function args; others get PHIs.
         for bname, block in f.blocks.items():
+            if bname not in reachable:
+                continue
             builder = ir.IRBuilder(blocks_map[(f.name, bname)])
             if bname == f.entry and block.params:
                 if len(block.params) != len(f.params):
@@ -186,6 +231,8 @@ def emit_module_object(
 
         # Emit instructions and terminators.
         for bname, block in f.blocks.items():
+            if bname not in reachable:
+                continue
             builder = ir.IRBuilder(blocks_map[(f.name, bname)])
             for instr in block.instructions:
                 if isinstance(instr, mir.Const):
@@ -267,7 +314,17 @@ def emit_module_object(
                     else:
                         callee = fn_map.get(instr.callee)
                         if callee is None:
-                            raise RuntimeError(f"unknown callee {instr.callee}")
+                            # Try runtime dummy error helper.
+                            if instr.callee == "drift_error_new_dummy":
+                                if rt_error_dummy is None:
+                                    rt_error_dummy = ir.Function(
+                                        module,
+                                        ir.FunctionType(ERROR_PTR_TY, [WORD_INT]),
+                                        name="drift_error_new_dummy",
+                                    )
+                                callee = rt_error_dummy
+                            else:
+                                raise RuntimeError(f"unknown callee {instr.callee}")
                         args = [values[a] for a in instr.args]
                         call_val = builder.call(callee, args, name=instr.dest)
                         values[instr.dest] = call_val
@@ -384,22 +441,29 @@ def emit_module_object(
             term = block.terminator
             if isinstance(term, mir.Return):
                 if f.name in can_error_funcs:
-                    err_null = ir.Constant(ERROR_PTR_TY, None)
-                    if isinstance(_llvm_type_with_structs(f.return_type), ir.VoidType):
-                        builder.ret(err_null)
+                    ret_ll_ty = _llvm_type_with_structs(f.return_type)
+                    # Determine err pointer: use explicit term.error if present, else null.
+                    if term.error is not None:
+                        if term.error not in values:
+                            raise RuntimeError(f"error value {term.error} undefined in {f.name}")
+                        err_val = values[term.error]
+                    else:
+                        err_val = ir.Constant(ERROR_PTR_TY, None)
+                    if isinstance(ret_ll_ty, ir.VoidType):
+                        builder.ret(err_val)
                     else:
                         if term.value is None:
                             raise RuntimeError(f"missing return value for non-void function {f.name}")
                         if term.value not in values:
                             raise RuntimeError(f"return value {term.value} undefined")
+                        val_ll = values[term.value]
                         pair_ty = llvm_ret_with_error(f.return_type)
-                        undef_pair = builder.alloca(pair_ty, name=f"{f.name}_ret_pair")
-                        # store value and err into the alloca then load as a struct
-                        val_ptr = builder.gep(undef_pair, [I32_TY(0), I32_TY(0)], inbounds=True)
-                        builder.store(values[term.value], val_ptr)
-                        err_ptr = builder.gep(undef_pair, [I32_TY(0), I32_TY(1)], inbounds=True)
-                        builder.store(err_null, err_ptr)
-                        pair_loaded = builder.load(undef_pair)
+                        pair_ptr = builder.alloca(pair_ty, name=f"{f.name}_ret_pair")
+                        val_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)
+                        builder.store(val_ll, val_ptr)
+                        err_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(1)], inbounds=True)
+                        builder.store(err_val, err_ptr)
+                        pair_loaded = builder.load(pair_ptr)
                         builder.ret(pair_loaded)
                 else:
                     if isinstance(_llvm_type(f.return_type), ir.VoidType):
@@ -418,7 +482,8 @@ def emit_module_object(
                     raise RuntimeError(f"unknown callee {term.callee}")
                 if callee.name not in can_error_funcs:
                     raise RuntimeError(f"call with edges to non-error function {callee.name}")
-                call_pair = builder.call(callee, [values[a] for a in term.args], name=term.dest or "call_pair")
+                call_args = [values[a] for a in term.args]
+                call_pair = builder.call(callee, call_args, name=term.dest or "call_pair")
                 ret_ty = callee.function_type.return_type
                 if isinstance(ret_ty, ir.LiteralStructType):
                     val_component = builder.extract_value(call_pair, 0)
@@ -473,6 +538,8 @@ def emit_module_object(
                     for param, arg in zip(tblock.params, edge.args):
                         phis[(tgt, param.name)].add_incoming(values[arg], blocks_map[(f.name, bname)])
                 builder.cbranch(cond_val, blocks_map[(f.name, term.then.target)], blocks_map[(f.name, term.els.target)])
+            elif term is None:
+                builder.unreachable()
             else:
                 raise RuntimeError(f"unsupported terminator {term}")
 

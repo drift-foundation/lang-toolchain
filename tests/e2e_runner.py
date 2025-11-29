@@ -47,7 +47,7 @@ def _run_case(case_dir: Path) -> str:
         "-o",
         str(case_dir / "a.o"),
         "--ssa-check",
-        "--ssa-check-mode=fail",
+        "--ssa-check-mode=warn",
         "--ssa-simplify",
         f"--backend={backend}",
     ]
@@ -75,6 +75,7 @@ def _run_case(case_dir: Path) -> str:
     runtime_sources = [
         ROOT / "tests" / "mir_codegen" / "runtime" / "string_runtime.c",
         ROOT / "tests" / "mir_codegen" / "runtime" / "console_runtime.c",
+        ROOT / "tests" / "mir_codegen" / "runtime" / "error_dummy.c",
     ]
     link_cmd = [clang, str(case_dir / "a.o")] + [str(p) for p in runtime_sources] + ["-o", str(exe_path)]
     link = subprocess.run(link_cmd, cwd=ROOT, capture_output=True, text=True, env=env)

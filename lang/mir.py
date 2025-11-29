@@ -200,6 +200,7 @@ class CondBr(Terminator):
 @dataclass(frozen=True)
 class Return(Terminator):
     value: Optional[Value] = None
+    error: Optional[Value] = None
     loc: Location = Location()
 
 

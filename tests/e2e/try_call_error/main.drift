@@ -1,0 +1,18 @@
+import std.console.out
+
+fn may_fail_error(flag: Int) returns Int {
+  if flag == 0 {
+    return 0
+  } else {
+    return 1
+  }
+}
+
+fn main() returns Int {
+  try {
+    may_fail_error(0)
+  } catch err {
+    return 1
+  }
+  return 42
+}

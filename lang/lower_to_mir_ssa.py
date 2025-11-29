@@ -615,6 +615,9 @@ def _lower_try_expr(
     current.terminator = mir.Br(
         target=mir.Edge(target=join_name, args=[val_ssa] + [env.lookup_user(u) for u in live_users])
     )
+    # Ensure join has a terminator if nothing else branches there.
+    if join_block.terminator is None:
+        join_block.terminator = mir.Return(value=res_param.name)
     return res_param.name, val_ty, join_block, join_env
 
 
@@ -673,6 +676,9 @@ def lower_try_stmt(
         catch_block.terminator = mir.Br(
             target=mir.Edge(target=join_name, args=[catch_env.lookup_user(u) for u in live_users])
         )
+    # Ensure join has a terminator.
+    if join_block.terminator is None:
+        join_block.terminator = mir.Return()
     # Lower call args and emit call terminator with edges.
     call_args: List[str] = []
     for a in try_expr.args:
