@@ -37,7 +37,8 @@ from .ast import (
     StructField,
     TypeExpr,
     Ternary,
-    TryExpr,
+    TryCatchExpr,
+    CatchExprArm,
     TryStmt,
     WhileStmt,
     BreakStmt,
@@ -638,8 +639,8 @@ def _build_expr(node) -> Expr:
 
     if name == "logic_or":
         return _fold_chain(node, "logic_or_tail")
-    if name == "try_expr":
-        return _build_try_expr(node)
+    if name == "try_catch_expr":
+        return _build_try_catch_expr(node)
     if name == "ternary":
         return _build_ternary(node)
     if name == "pipeline":
@@ -742,13 +743,28 @@ def _build_pipeline(tree: Tree) -> Expr:
     return result
 
 
-def _build_try_expr(tree: Tree) -> TryExpr:
-    children = [child for child in tree.children if isinstance(child, Tree)]
-    if len(children) != 2:
-        raise ValueError("try_expr expects expression and fallback")
-    expr = _build_expr(children[0])
-    fallback = _build_expr(children[1])
-    return TryExpr(loc=_loc(tree), expr=expr, fallback=fallback)
+def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
+    parts = [child for child in tree.children if isinstance(child, Tree)]
+    if len(parts) != 2:
+        raise ValueError("try_catch_expr expects attempt and catch arm")
+    attempt = _build_expr(parts[0])
+    arm_node = parts[1]
+    arm_name = _name(arm_node)
+    if arm_name == "catch_expr_event":
+        event_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
+        binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME" and t is not event_token)
+        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+        arm = CatchExprArm(event=event_token.value, binder=binder_token.value, block=_build_block(block_node))
+    elif arm_name == "catch_expr_binder":
+        binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
+        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+        arm = CatchExprArm(event=None, binder=binder_token.value, block=_build_block(block_node))
+    elif arm_name == "catch_expr_block":
+        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+        arm = CatchExprArm(event=None, binder=None, block=_build_block(block_node))
+    else:
+        raise ValueError(f"unexpected catch expr arm {arm_name}")
+    return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arm=arm)
 
 
 def _build_ternary(tree: Tree) -> Ternary:

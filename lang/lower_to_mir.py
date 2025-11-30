@@ -110,18 +110,23 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 return phi_name, ty_then, join_block
 
             def lower_try_expr_expr(
-                try_expr: ast.TryExpr,
+                try_expr: ast.TryCatchExpr,
                 block: mir.BasicBlock,
                 types: Dict[str, Type],
                 caps: Dict[str, str],
                 err_tgt: str | None,
             ) -> Tuple[str, Type, mir.BasicBlock]:
-                if not isinstance(try_expr.expr, ast.Call):
-                    raise LoweringError("try/else lowering currently supports call attempts only")
-                if not isinstance(try_expr.expr.func, ast.Name):
-                    raise LoweringError("try/else lowering supports simple name callees only")
+                if not isinstance(try_expr.attempt, ast.Call):
+                    raise LoweringError("try/catch expression lowering currently supports call attempts only")
+                if not isinstance(try_expr.attempt.func, ast.Name):
+                    raise LoweringError("try/catch expression lowering supports simple name callees only")
+                if (
+                    not try_expr.catch_arm.block.statements
+                    or not isinstance(try_expr.catch_arm.block.statements[-1], ast.ExprStmt)
+                ):
+                    raise LoweringError("catch block must end with an expression")
                 call_args: List[str] = []
-                for a in try_expr.expr.args:
+                for a in try_expr.attempt.args:
                     v, _, block = lower_expr(a, block, types, caps)
                     call_args.append(v)
                 norm_name = fresh_block("bb_norm")
@@ -138,13 +143,13 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 blocks[join_name] = join_block
                 call_dest = fresh_val()
                 call_err = fresh_val()
-                call_type = _lookup_type(try_expr.expr.func.ident, block_params, types, checked)
+                call_type = _lookup_type(try_expr.attempt.func.ident, block_params, types, checked)
                 block.instructions.append(
                     mir.Call(
                         dest=call_dest,
                         ret_type=call_type,
                         err_dest=call_err,
-                        callee=try_expr.expr.func.ident,
+                        callee=try_expr.attempt.func.ident,
                         args=call_args,
                         normal=mir.Edge(target=norm_name, args=[call_dest]),
                         error=mir.Edge(target=err_name, args=[call_err]),
@@ -156,7 +161,9 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 norm_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[norm_param.name]))
                 join_block.params[0] = mir.Param(name=join_param.name, type=call_type)
                 types[join_param.name] = call_type
-                fb_val, fb_ty, err_block = lower_expr(try_expr.fallback, err_block, types.copy(), caps.copy(), err_target=err_tgt)
+                fb_val, fb_ty, err_block = lower_expr(
+                    try_expr.catch_arm.block.statements[-1].value, err_block, types.copy(), caps.copy(), err_target=err_tgt
+                )
                 err_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[fb_val]))
                 if call_type == UNIT and join_block.terminator is None:
                     join_block.terminator = mir.Return()
@@ -319,7 +326,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 return join_param.name, call_ty, join_block
             if isinstance(expr, ast.Ternary):
                 return lower_ternary_expr(expr, current_block, temp_types, capture_env, err_target)
-            if isinstance(expr, ast.TryExpr):
+            if isinstance(expr, ast.TryCatchExpr):
                 return lower_try_expr_expr(expr, current_block, temp_types, capture_env, err_target)
             raise LoweringError(f"unsupported expression: {expr}")
 
@@ -787,18 +794,20 @@ def _lower_ternary_expr(
 
 
 def _lower_try_expr_expr(
-    expr: ast.TryExpr,
+    expr: ast.TryCatchExpr,
     current_block: mir.BasicBlock,
     temp_types: Dict[str, Type],
     capture_env: Dict[str, str],
     err_target: str | None,
 ) -> Tuple[str, Type, mir.BasicBlock]:
-    if not isinstance(expr.expr, ast.Call):
-        raise LoweringError("try/else lowering currently supports call attempts only")
-    if not isinstance(expr.expr.func, ast.Name):
-        raise LoweringError("try/else lowering supports simple name callees only")
+    if not isinstance(expr.attempt, ast.Call):
+        raise LoweringError("try/catch expression lowering currently supports call attempts only")
+    if not isinstance(expr.attempt.func, ast.Name):
+        raise LoweringError("try/catch expression lowering supports simple name callees only")
+    if not expr.catch_arm.block.statements or not isinstance(expr.catch_arm.block.statements[-1], ast.ExprStmt):
+        raise LoweringError("catch block must end with an expression")
     call_args: List[str] = []
-    for a in expr.expr.args:
+    for a in expr.attempt.args:
         v, _, current_block = lower_expr(a, current_block, temp_types, capture_env)
         call_args.append(v)
     norm_name = fresh_block("bb_norm")
@@ -819,19 +828,21 @@ def _lower_try_expr_expr(
         mir.Call(
             dest=call_dest,
             err_dest=call_err,
-            callee=expr.expr.func.ident,
+            callee=expr.attempt.func.ident,
             args=call_args,
             normal=mir.Edge(target=norm_name, args=[call_dest]),
             error=mir.Edge(target=err_name, args=[call_err]),
         )
     )
-    call_type = _lookup_type(expr.expr.func.ident, block_params, temp_types, checked)
+    call_type = _lookup_type(expr.attempt.func.ident, block_params, temp_types, checked)
     temp_types[call_dest] = call_type
     temp_types[call_err] = ERROR
     norm_block.params[0] = mir.Param(name=norm_param.name, type=call_type)
     norm_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[norm_param.name]))
     join_block.params[0] = mir.Param(name=join_param.name, type=call_type)
     temp_types[join_param.name] = call_type
-    fb_val, fb_ty, err_block = lower_expr(expr.fallback, err_block, temp_types.copy(), capture_env.copy(), err_target=err_target)
+    fb_val, fb_ty, err_block = lower_expr(
+        expr.catch_arm.block.statements[-1].value, err_block, temp_types.copy(), capture_env.copy(), err_target=err_target
+    )
     err_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[fb_val]))
     return join_param.name, temp_types[call_dest], join_block

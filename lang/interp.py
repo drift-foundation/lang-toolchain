@@ -205,11 +205,17 @@ class Interpreter:
             label = self._describe_container(expr.value)
             self._check_bounds(base, index, label, expr.loc)
             return base[index]
-        if isinstance(expr, ast.TryExpr):
+        if isinstance(expr, ast.TryCatchExpr):
             try:
-                return self._eval_expr(expr.expr, env)
-            except RaiseSignal:
-                return self._eval_expr(expr.fallback, env)
+                return self._eval_expr(expr.attempt, env)
+            except RaiseSignal as exc:
+                arm = expr.catch_arm
+                if arm.event is not None and arm.event != exc.error.message:
+                    raise
+                catch_env = Environment(parent=env)
+                if arm.binder:
+                    catch_env.define(arm.binder, exc.error)
+                return self._eval_block_result(arm.block, catch_env)
         if isinstance(expr, ast.Ternary):
             cond = bool(self._eval_expr(expr.condition, env))
             branch = expr.then_value if cond else expr.else_value
@@ -224,6 +230,21 @@ class Interpreter:
         if isinstance(expr, ast.Binary):
             return self._eval_binary(expr, env)
         raise RuntimeError(f"Unsupported expression {expr}")
+
+    def _eval_block_result(self, block: ast.Block, env: Environment) -> object:
+        if not block.statements:
+            return None
+        for stmt in block.statements[:-1]:
+            self._execute_block([stmt], env)
+        last = block.statements[-1]
+        if isinstance(last, ast.ExprStmt):
+            return self._eval_expr(last.value, env)
+        if isinstance(last, ast.ReturnStmt):
+            if last.value is None:
+                return None
+            return self._eval_expr(last.value, env)
+        self._execute_block([last], env)
+        return None
 
     def _eval_binary(self, expr: ast.Binary, env: Environment) -> object:
         op = expr.op

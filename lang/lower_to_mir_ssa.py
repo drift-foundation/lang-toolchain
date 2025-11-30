@@ -514,10 +514,10 @@ def lower_expr_to_ssa(
         current.instructions.append(mir.FieldGet(dest=dest, base=base_ssa, field=expr.attr, loc=getattr(expr, "loc", None)))
         env.ctx.ssa_types[dest] = field_ty
         return dest, field_ty, current, env
-    if isinstance(expr, ast.TryExpr):
+    if isinstance(expr, ast.TryCatchExpr):
         if blocks is None or fresh_block is None:
-            raise LoweringError("try/else lowering requires block context")
-        return _lower_try_expr(expr, env, current, checked, blocks, fresh_block)
+            raise LoweringError("try/catch expression lowering requires block context")
+        return _lower_try_catch_expr(expr, env, current, checked, blocks, fresh_block)
     raise LoweringError(f"lower_expr_to_ssa scaffold does not handle {expr}")
 
 
@@ -558,15 +558,15 @@ def _lookup_field_type(base_ty: Type, field: str, checked: CheckedProgram) -> Ty
     raise LoweringError(f"type {base_ty} has no fields")
 
 
-def _lower_try_expr(
-    expr: ast.TryExpr,
+def _lower_try_catch_expr(
+    expr: ast.TryCatchExpr,
     env: SSAEnv,
     current: mir.BasicBlock,
     checked: CheckedProgram,
     blocks: Dict[str, mir.BasicBlock],
     fresh_block: callable,
 ) -> Tuple[str, Type, mir.BasicBlock, SSAEnv]:
-    """Lower try/catch-like expression: try <expr> catch/else <fallback>."""
+    """Lower try/catch expression to SSA using error edges."""
     # Live users to thread through.
     live_users = list(env.snapshot_live_user_names())
     # Error block params: optional error value plus threaded locals.
@@ -578,10 +578,23 @@ def _lower_try_expr(
     err_block = mir.BasicBlock(name=err_name, params=err_params)
     blocks[err_name] = err_block
     err_env = env.clone_for_block({u: p.name for u, p in zip(live_users, err_params)})
-    # Lower fallback in error block.
-    fallback_ssa, fallback_ty, err_block, err_env = lower_expr_to_ssa(
-        expr.fallback, err_env, err_block, checked, blocks, fresh_block
-    )
+    # Lower catch block in error block; expect last statement to yield a value.
+    if not expr.catch_arm.block.statements:
+        raise LoweringError("catch block must produce a value")
+    catch_stmts = expr.catch_arm.block.statements
+    for stmt in catch_stmts[:-1]:
+        err_block, err_env = lower_block_in_env([stmt], err_env, blocks, err_block, checked, fresh_block)
+    last_stmt = catch_stmts[-1]
+    if isinstance(last_stmt, ast.ExprStmt):
+        fallback_ssa, fallback_ty, err_block, err_env = lower_expr_to_ssa(
+            last_stmt.value, err_env, err_block, checked, blocks, fresh_block
+        )
+    elif isinstance(last_stmt, ast.ReturnStmt) and last_stmt.value is not None:
+        fallback_ssa, fallback_ty, err_block, err_env = lower_expr_to_ssa(
+            last_stmt.value, err_env, err_block, checked, blocks, fresh_block
+        )
+    else:
+        raise LoweringError("catch block must end with an expression to yield a value")
     # Join block: result + live users
     join_name = fresh_block("bb_try_join")
     res_param = mir.Param(name=env.fresh_ssa("try_res", ty=fallback_ty), type=fallback_ty)
@@ -597,15 +610,15 @@ def _lower_try_expr(
         target=mir.Edge(target=join_name, args=[fallback_ssa] + [err_env.lookup_user(u) for u in live_users])
     )
     # Lower the try expr itself; if it lowers to a Call we emit a call terminator with edges.
-    if isinstance(expr.expr, ast.Call) and isinstance(expr.expr.func, ast.Name):
-        callee = expr.expr.func.ident
+    if isinstance(expr.attempt, ast.Call) and isinstance(expr.attempt.func, ast.Name):
+        callee = expr.attempt.func.ident
         if callee not in checked.functions:
             raise LoweringError(f"unknown function '{callee}' in try")
         ret_ty = checked.functions[callee].signature.return_type
         if ret_ty != fallback_ty:
             raise LoweringError("try/catch result type mismatch")
         call_args: List[str] = []
-        for a in expr.expr.args:
+        for a in expr.attempt.args:
             v, _, current, env = lower_expr_to_ssa(a, env, current, checked, blocks, fresh_block)
             call_args.append(v)
         call_dest = env.fresh_ssa(callee, ret_ty)
@@ -622,7 +635,7 @@ def _lower_try_expr(
         )
         return res_param.name, ret_ty, join_block, join_env
     # Fallback: treat try expr as pure; lower and br to join directly.
-    val_ssa, val_ty, current, env = lower_expr_to_ssa(expr.expr, env, current, checked, blocks, fresh_block)
+    val_ssa, val_ty, current, env = lower_expr_to_ssa(expr.attempt, env, current, checked, blocks, fresh_block)
     if val_ty != fallback_ty:
         raise LoweringError("try/catch result type mismatch")
     current.terminator = mir.Br(

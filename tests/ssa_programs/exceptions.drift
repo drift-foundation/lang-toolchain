@@ -9,7 +9,7 @@ fn might_fail(x: Int) returns Int {
 }
 
 fn main() returns Int {
-  val y: Int = try foo(1) else 42
+  val y: Int = try foo(1) catch { 42; }
   out.writeln("computed y")
 
   try {

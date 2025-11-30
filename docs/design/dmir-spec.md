@@ -41,7 +41,7 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 
 ## Control flow (structured)
 - `if <cond> { ... } else { ... }` with explicit blocks.
-- `try { ... } catch <Event>(e) { ... } ...` (one or more catches). Catch-all uses `_` or a binder without event. Inline `try expr else fallback` is desugared to the structured form.
+- `try { ... } catch <Event>(e) { ... } ...` (one or more catches). Catch-all uses `_` or a binder without event. Inline `try expr catch { fallback }` is desugared to the structured form.
 - `match`/loops not present yet; add when the surface language gains them.
 - No φ functions; DMIR stays structured.
 
@@ -152,7 +152,7 @@ let x = if _t1 { _t2 } else { _t3 }
 
 Surface try/else:
 ```drift
-val fallback = try parse(input) else default_value
+val fallback = try parse(input) catch { default_value }
 ```
 DMIR:
 ```
@@ -286,7 +286,7 @@ exception Invalid(kind: String)
 struct Point { x: Int64, y: Int64 }
 
 fn make(cond: Bool) returns Point {
-    val p = try build(cond) else Point(x = 0, y = 0)
+    val p = try build(cond) catch { Point(x = 0, y = 0) }
     return p
 }
 ```

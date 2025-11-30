@@ -1,0 +1,9 @@
+fn foo(x: Int) returns Int {
+  return x + 1
+}
+
+fn main() returns Int {
+  // foo is not can-error, but try/catch forces error edges.
+  val y: Int = try foo(1) catch { 0; }
+  return y
+}

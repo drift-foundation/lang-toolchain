@@ -18,7 +18,8 @@ from lang.ast import (
     Name,
     ReturnStmt,
     ExprStmt,
-    TryExpr,
+    TryCatchExpr,
+    CatchExprArm,
     Literal,
     Call,
     Param as AstParam,
@@ -136,10 +137,14 @@ def test_lowering_try_else_integration():
                     loc=loc,
                     name="y",
                     type_expr=None,
-                    value=TryExpr(
+                    value=TryCatchExpr(
                         loc=loc,
-                        expr=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
-                        fallback=Literal(loc=loc, value=7),
+                        attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
+                        catch_arm=CatchExprArm(
+                            event=None,
+                            binder=None,
+                            block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value=7))]),
+                        ),
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),
@@ -185,10 +190,14 @@ def test_lowering_try_else_multi_locals_integration():
                     loc=loc,
                     name="y",
                     type_expr=None,
-                    value=TryExpr(
+                    value=TryCatchExpr(
                         loc=loc,
-                        expr=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="a")], kwargs=[]),
-                        fallback=Name(loc=loc, ident="b"),
+                        attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="a")], kwargs=[]),
+                        catch_arm=CatchExprArm(
+                            event=None,
+                            binder=None,
+                            block=Block(statements=[ExprStmt(loc=loc, value=Name(loc=loc, ident="b"))]),
+                        ),
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),
@@ -309,10 +318,14 @@ def test_lowering_try_else_type_mismatch_fails():
                     loc=loc,
                     name="y",
                     type_expr=None,
-                    value=TryExpr(
+                    value=TryCatchExpr(
                         loc=loc,
-                        expr=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
-                        fallback=Literal(loc=loc, value="oops"),
+                        attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
+                        catch_arm=CatchExprArm(
+                            event=None,
+                            binder=None,
+                            block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value="oops"))]),
+                        ),
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),

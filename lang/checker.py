@@ -447,8 +447,8 @@ class Checker:
             return self._check_array_literal(expr, ctx)
         if isinstance(expr, ast.Index):
             return self._check_index_expr(expr, ctx)
-        if isinstance(expr, ast.TryExpr):
-            return self._check_try_expr(expr, ctx)
+        if isinstance(expr, ast.TryCatchExpr):
+            return self._check_try_catch_expr(expr, ctx)
         if isinstance(expr, ast.Ternary):
             return self._check_ternary(expr, ctx)
         if isinstance(expr, ast.Unary):
@@ -475,11 +475,37 @@ class Checker:
             return self._check_binary(expr, ctx)
         raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unsupported expression {expr}")
 
-    def _check_try_expr(self, expr: ast.TryExpr, ctx: FunctionContext) -> Type:
-        attempt_type = self._check_expr(expr.expr, ctx)
-        fallback_type = self._check_expr(expr.fallback, ctx)
-        self._expect_type(fallback_type, attempt_type, expr.fallback.loc)
+    def _check_try_catch_expr(self, expr: ast.TryCatchExpr, ctx: FunctionContext) -> Type:
+        attempt_type = self._check_expr(expr.attempt, ctx)
+        catch_scope = Scope(parent=ctx.scope)
+        catch_ctx = FunctionContext(
+            name=ctx.name,
+            signature=ctx.signature,
+            scope=catch_scope,
+            allow_returns=ctx.allow_returns,
+        )
+        if expr.catch_arm.binder:
+            catch_scope.define(expr.catch_arm.binder, VarInfo(type=ERROR, mutable=False), expr.loc)
+        # TODO: event-specific matching not yet enforced in checker for expressions.
+        catch_type = self._check_block_result(expr.catch_arm.block, catch_ctx)
+        self._expect_type(catch_type, attempt_type, expr.loc)
         return attempt_type
+
+    def _check_block_result(self, block: ast.Block, ctx: FunctionContext) -> Type:
+        if not block.statements:
+            raise CheckError("empty catch block")
+        for stmt in block.statements[:-1]:
+            self._check_stmt(stmt, ctx)
+        last = block.statements[-1]
+        if isinstance(last, ast.ExprStmt):
+            return self._check_expr(last.value, ctx)
+        if isinstance(last, ast.ReturnStmt):
+            if last.value is None:
+                return UNIT
+            return self._check_expr(last.value, ctx)
+        # If the last statement is not an expression/return, still check it and default to Void.
+        self._check_stmt(last, ctx)
+        return UNIT
 
     def _check_ternary(self, expr: ast.Ternary, ctx: FunctionContext) -> Type:
         cond_type = self._check_expr(expr.condition, ctx)

@@ -10,7 +10,7 @@ fn may_fail_error(flag: Int) returns Int {
 
 fn main() returns Int {
   // Success path: call does not produce an error.
-  val y: Int = try may_fail_error(0) else 0
+  val y: Int = try may_fail_error(0) catch { 0; }
   out.writeln("ok")
   return 42
 }

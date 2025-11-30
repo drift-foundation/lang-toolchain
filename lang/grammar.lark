@@ -145,11 +145,14 @@ exception_param: NAME COLON type_expr
 
 domain_clause: "domain" NAME
 
-?expr: try_expr
+?expr: try_catch_expr
      | ternary
      | pipeline
 
-try_expr: TRY expr ELSE expr
+try_catch_expr: TRY expr CATCH catch_expr_arm
+catch_expr_arm: NAME "(" NAME ")" block   -> catch_expr_event
+              | NAME block                -> catch_expr_binder
+              | block                     -> catch_expr_block
 ternary: pipeline QMARK expr TERNARY_COLON expr
 
 ?pipeline: logic_or (PIPE logic_or)*

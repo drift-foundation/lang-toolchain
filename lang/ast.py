@@ -241,10 +241,17 @@ class ThrowStmt(Stmt):
 
 
 @dataclass
-class TryExpr(Expr):
+class CatchExprArm:
+    event: Optional[str]
+    binder: Optional[str]
+    block: Block
+
+
+@dataclass
+class TryCatchExpr(Expr):
     loc: Located
-    expr: Expr
-    fallback: Expr
+    attempt: Expr
+    catch_arm: CatchExprArm
 
 
 @dataclass

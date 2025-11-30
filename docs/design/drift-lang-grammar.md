@@ -151,7 +151,7 @@ PrimaryExpr  ::= Literal
               | ArrayLiteral
               | MapLiteral
               | MatchExpr
-              | TryExpr
+              | TryCatchExpr
               | LambdaExpr
 
 TupleExpr    ::= "(" Expr ("," Expr)+ ")"
@@ -161,7 +161,10 @@ MapEntry     ::= Expr ":" Expr
 MatchExpr    ::= "match" Expr "{" MatchArm+ "}"
 MatchArm     ::= Pattern "=>" Expr TERMINATOR?
 Pattern      ::= Ident | Literal | "(" Pattern ("," Pattern)+ ")"
-TryExpr      ::= "try" Expr ("else" Expr | "catch" (Ident)? Expr)?
+TryCatchExpr ::= "try" Expr "catch" CatchExprArm
+CatchExprArm ::= Ident "(" Ident ")" Block
+               | Ident Block
+               | Block
 LambdaExpr   ::= "|" LambdaParams? "|" "=>" (Expr | Block)
 LambdaParams ::= LambdaParam ("," LambdaParam)*
 

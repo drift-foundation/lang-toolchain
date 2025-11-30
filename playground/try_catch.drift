@@ -16,6 +16,6 @@ fn main() returns Void {
 	} catch InvalidDate(e) {
 		out.writeln("caught InvalidDate")
 	}
-	val fallback = try parse_date("") else "1970-01-01"
+	val fallback = try parse_date("") catch { "1970-01-01"; }
 	out.writeln(fallback)
 }

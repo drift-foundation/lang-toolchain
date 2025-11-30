@@ -1289,17 +1289,23 @@ val label = is_error ? "error" : "ok"
 - `then_expr` and `else_expr` must have the same type (checked at compile time).
 - Useful for concise branching without introducing additional block nesting; when control flow is complex, prefer a full `if/else`.
 
-### 8.4. Try/else (expression) and Try/catch (statement)
+### 8.4. Try/catch (expression and statement)
 
-**Expression form (`try/else`):**
+**Expression form (`try expr catch …`):**
 
 ```drift
-val result = try parse_int(input) else 0
+val result = try parse_int(input) catch { 0 }
+val logged = try parse_int(input) catch err { log(err); 0 }
+val parsed = try parse_amount(input) catch BadFormat(e) { 0 }
 ```
 
-- Evaluates the expression; on success, yields its value; on error, evaluates the `else` expression.
-- The attempt and fallback must have the same type.
-- Only simple call attempts are supported for the expression form today.
+- Evaluates the attempt expression; on success, yields its value.
+- On error, evaluates the `catch` arm; the arm’s block must produce a value of the same type as the attempt.
+- Catch forms:
+  - `catch { block }` — catch-all, no binder.
+  - `catch e { block }` — catch-all, binder `e: Error`.
+  - `catch EventName(e) { block }` — match specific event, binder `e: Error`.
+- This is sugar for a block-wrapped statement `try/catch` that returns the block’s value.
 
 **Statement form (`try/catch`):**
 
@@ -1311,7 +1317,7 @@ try {
 }
 ```
 
-- Executes the body; on error, transfers control to the first matching catch (no pattern guards yet; event match or catch-all).
+- Executes the body; on error, transfers control to the first matching catch (event match or catch-all).
 - Catch binder (if present) has type `Error`.
 - Matching is by exception/event name only; omitting the name makes the clause a catch-all. Domains/attributes are not matched (yet).
 - Control falls through after the try/catch unless all branches return/raise.
@@ -1960,7 +1966,7 @@ Ownership moves back to unwinder.
 For a single call where you just want a fallback value, use the one-liner form:
 
 ```drift
-val date = try parse_date(input) else default_date
+val date = try parse_date(input) catch { default_date }
 ```
 
 This is sugar for a catch-all handler:

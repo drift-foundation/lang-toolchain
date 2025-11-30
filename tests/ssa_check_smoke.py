@@ -91,7 +91,7 @@ def test_ssa_check_try_else(tmp_path: Path) -> None:
         "  return x\n"
         "}\n"
         "fn main() returns Int {\n"
-        "  val y: Int = try foo(1) else 42\n"
+        "  val y: Int = try foo(1) catch { 42; }\n"
         "  out.writeln(\"y computed\")\n"
         "  val rc: Int = 0\n"
         "  return rc\n"
