@@ -95,7 +95,7 @@ def emit_module_object(
     blocks_map: dict[tuple[str, str], ir.Block] = {}
     struct_type_cache: dict[str, ir.Type] = {}
     # Track which functions are invoked with error edges; they use the {T, Error*} ABI.
-    can_error_funcs: set[str] = set()
+    can_error_funcs: set[str] = {f.name for f in funcs if getattr(f, "can_error", False)}
     # Cached runtime decls
     rt_error_dummy: Optional[ir.Function] = None
 
@@ -146,12 +146,12 @@ def emit_module_object(
             if elem_ty is not None:
                 return ir.LiteralStructType([WORD_INT, _llvm_type_with_structs(elem_ty).as_pointer()])
             raise
-    # Scan for can-error callees (call terminators with edges) and functions that throw.
+    # Also pick up callees from call-with-edges and functions containing Throw in case flags were not set.
     for f in funcs:
         for block in f.blocks.values():
             term = block.terminator
             if isinstance(term, mir.Call) and term.normal and term.error:
-                can_error_funcs.add(block.terminator.callee)
+                can_error_funcs.add(term.callee)
             elif isinstance(term, mir.Throw):
                 can_error_funcs.add(f.name)
 
@@ -315,6 +315,8 @@ def emit_module_object(
                                 callee = rt_error_dummy
                             else:
                                 raise RuntimeError(f"unknown callee {instr.callee}")
+                        if callee.name in can_error_funcs:
+                            raise RuntimeError(f"call to can-error function {callee.name} without error edges")
                         args = [values[a] for a in instr.args]
                         call_val = builder.call(callee, args, name=instr.dest)
                         values[instr.dest] = call_val
@@ -431,12 +433,13 @@ def emit_module_object(
             term = block.terminator
             if isinstance(term, mir.Return):
                 if f.name in can_error_funcs:
-                    if term.error is None:
-                        raise RuntimeError(f"can-error function {f.name} returned without error operand")
                     ret_ll_ty = _llvm_type_with_structs(f.return_type)
-                    if term.error not in values:
-                        raise RuntimeError(f"error value {term.error} undefined in {f.name}")
-                    err_val = values[term.error]
+                    if term.error is None:
+                        err_val = ir.Constant(ERROR_PTR_TY, None)
+                    else:
+                        if term.error not in values:
+                            raise RuntimeError(f"error value {term.error} undefined in {f.name}")
+                        err_val = values[term.error]
                     if isinstance(ret_ll_ty, ir.VoidType):
                         builder.ret(err_val)
                     else:
@@ -536,10 +539,14 @@ def emit_module_object(
                 if isinstance(ret_ll_ty, ir.VoidType):
                     builder.ret(err_val)
                 else:
+                    if isinstance(ret_ll_ty, ir.IntType):
+                        zero_val = ret_ll_ty(0)
+                    else:
+                        zero_val = ir.Constant(ret_ll_ty, None)
                     pair_ty = llvm_ret_with_error(f.return_type)
                     pair_ptr = builder.alloca(pair_ty, name=f"{f.name}_throw_pair")
                     val_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)
-                    builder.store(ir.Constant(_llvm_type_with_structs(f.return_type), None), val_ptr)
+                    builder.store(zero_val, val_ptr)
                     err_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(1)], inbounds=True)
                     builder.store(err_val, err_ptr)
                     pair_loaded = builder.load(pair_ptr)

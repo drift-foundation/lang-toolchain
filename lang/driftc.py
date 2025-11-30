@@ -23,6 +23,40 @@ from lang.ssa_codegen import emit_dummy_main_object, emit_module_object
 from lang.ir_layout import StructLayout
 
 
+def _annotate_can_error(funcs: list[mir.Function]) -> None:
+    """Mark functions that can produce errors and enforce basic invariants."""
+    name_to_fn = {f.name: f for f in funcs}
+    changed = True
+    # Initial seed: any function containing a Throw is can-error.
+    for f in funcs:
+        if any(isinstance(b.terminator, mir.Throw) for b in f.blocks.values()):
+            f.can_error = True
+    # Propagate from call-with-edges.
+    while changed:
+        changed = False
+        for f in funcs:
+            for block in f.blocks.values():
+                term = block.terminator
+                if isinstance(term, mir.Call) and term.normal and term.error:
+                    callee = name_to_fn.get(term.callee)
+                    if callee and not callee.can_error:
+                        callee.can_error = True
+                        changed = True
+    # Enforce: Throw only in can-error functions.
+    for f in funcs:
+        for block in f.blocks.values():
+            if isinstance(block.terminator, mir.Throw) and not f.can_error:
+                raise RuntimeError(f"throw in non-can-error function {f.name}")
+    # Enforce: call-with-edges only to can-error functions.
+    for f in funcs:
+        for block in f.blocks.values():
+            term = block.terminator
+            if isinstance(term, mir.Call) and term.normal and term.error:
+                callee = name_to_fn.get(term.callee)
+                if callee and not callee.can_error:
+                    raise RuntimeError(f"call with error edges to non-can-error function {term.callee}")
+
+
 def _dump_ssa(fn_name: str, blocks: dict[str, mir.BasicBlock], file=None) -> None:
     if file is None:
         file = sys.stderr
@@ -111,6 +145,7 @@ def compile_file(
             )
             simplified = simplify_function(ssa_fn)
             ssa_fns.append(simplified)
+        _annotate_can_error(ssa_fns)
         emit_module_object(ssa_fns, struct_layouts, entry="main", out_path=output_path)
         return 0
     else:

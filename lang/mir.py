@@ -233,6 +233,7 @@ class Function:
     module: Optional[str] = None
     source: Optional[str] = None
     blocks: Dict[str, BasicBlock] = field(default_factory=dict)
+    can_error: bool = False
 
 
 @dataclass
