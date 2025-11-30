@@ -1,0 +1,4 @@
+{
+  "mode": "compile",
+  "compile_error": "unknown function 'InvalidPayload'"
+}

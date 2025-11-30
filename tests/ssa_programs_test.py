@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).parent.parent
 DRIFTC = ROOT / "lang" / "driftc.py"
@@ -42,8 +43,14 @@ def _run_program(path: Path) -> None:
     if proc.returncode != 0 and "GenericAlias" in proc.stderr:
         print("types shadowing detected; skipping SSA program tests", file=sys.stderr)
         return
-    if path.name.startswith("negative_"):
+    expected_failures_path = path.parent / "expected_failures.json"
+    expected_failures = {}
+    if expected_failures_path.exists():
+        expected_failures = json.loads(expected_failures_path.read_text())
+    expected_err = expected_failures.get(path.name)
+    if expected_err:
         assert proc.returncode != 0, f"expected failure for {path.name}"
+        assert expected_err in proc.stderr, f"expected error containing {expected_err!r}, got {proc.stderr!r}"
         return
     assert proc.returncode == 0, f"SSA check failed for {path.name}: {proc.stderr}"
     assert out_obj.exists(), f"expected output object for {path.name}"

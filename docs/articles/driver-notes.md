@@ -1,18 +1,10 @@
 # Drift Language Prototype Driver
 
-This repository now includes a minimal Python implementation of the Drift language described in `docs/drift-draft.md`. It provides parsing (via Lark), static type-checking with basic effect tracking, and an interpreter with a small builtin runtime so you can experiment with the syntax and semantics quickly.
+This repository originally included a minimal tree-walk interpreter. The compiler has since moved fully to SSA + LLVM; the interpreter has been removed. These notes remain as historical background only.
 
 ## Running code
 
-```
-./drift.py examples/hello.drift
-```
-
-Drift source files use the `.drift` extension; the driver happily reads stdin too, but sticking to that suffix keeps playground/examples organized and makes future tooling easier.
-
-- The driver parses the source file, performs static analysis, and then runs the program through the interpreter.
-- By default it invokes the `main` function after executing module-level statements. Use `--entry name` to call a different function.
-- Errors are reported with location information for parse/type failures and with the domain/message for runtime `error` values.
+The old `drift.py` entrypoint has been deleted. To run programs, use the SSA/LLVM toolchain via `lang/driftc.py` or the e2e runner (`tests/e2e_runner.py`), both of which target the compiled backend.
 
 ## Language surface supported
 
@@ -26,20 +18,13 @@ Drift source files use the `.drift` extension; the driver happily reads stdin to
 
 ## Examples
 
-`examples/hello.drift` demonstrates simple console output inside `main`. `examples/fail.drift` shows throwing/propagating an `error`. For focused syntax samples you can live-edit, check `playground/`, e.g.
-
-- `playground/basics.drift` – local `val` bindings and console output
-- `playground/functions.drift` – functions calling functions
-- `playground/effects.drift` – throwing `error(...)` values
-- `playground/mutable_bindings.drift` – `var` declarations (mutation semantics will land later)
-- `playground/logic.drift` – boolean expressions
-- `playground/arrays.drift` – array literals backing `Array<T>` bindings
+`examples/hello.drift` demonstrates simple console output inside `main`. `examples/fail.drift` shows throwing/propagating an `error`. For more samples, see the `examples/` directory or the e2e programs under `tests/e2e/`.
 
 ## Limitations / next steps
 
 - No assignments or mutation semantics beyond the initial binding.
 - Only primitive types are implemented; structs/enums/ownership markers are stubs for future work.
 - Keyword arguments are only honored by builtin functions.
-- The interpreter uses a straightforward tree walk and raises on the first runtime error.
+- The removed interpreter used a straightforward tree walk and raised on the first runtime error; current execution goes through SSA + LLVM instead.
 
 See `docs/drift-draft.md` for the broader design goals.

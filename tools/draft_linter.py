@@ -45,12 +45,7 @@ def main() -> int:
 
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Draft linter for Drift snippets")
-    ap.add_argument(
-        "paths",
-        nargs="*",
-        default=["playground", "examples", "tests/programs"],
-        help="files or directories to lint",
-    )
+    ap.add_argument("paths", nargs="*", default=["examples", "tests/e2e"], help="files or directories to lint/parse")
     ap.add_argument(
         "--indent",
         choices=("tabs", "spaces"),

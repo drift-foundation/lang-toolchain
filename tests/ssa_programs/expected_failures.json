@@ -1,0 +1,5 @@
+{
+  "binder_out_of_scope_error.drift": "Unknown identifier",
+  "negative_field_missing.drift": "has no field",
+  "negative_field_type.drift": "Expected type"
+}

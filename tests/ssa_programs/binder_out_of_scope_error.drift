@@ -1,0 +1,11 @@
+exception MyError(msg: String)
+
+fn main() returns Int {
+  try {
+    throw MyError("boom")
+  } catch e {
+    // e scoped here only
+  }
+  // e is out of scope here -> compile error expected
+  return e.hash_code()
+}

@@ -117,7 +117,7 @@ def test_lowering_if_phi_integration():
     SSAVerifierV2(type("F", (), {"blocks": lowered.blocks, "entry": lowered.entry})()).verify()
 
 
-def test_lowering_try_else_integration():
+def test_lowering_try_catch_expr_integration():
     # fn baz(x: Int64) -> Int64 { let y = try foo(x) else 7; return y }
     loc = mir.Location()
     foo_def = FunctionDef(
@@ -170,7 +170,7 @@ def test_lowering_try_else_integration():
     SSAVerifierV2(type("F", (), {"blocks": lowered.blocks, "entry": lowered.entry})()).verify()
 
 
-def test_lowering_try_else_multi_locals_integration():
+def test_lowering_try_catch_expr_multi_locals_integration():
     # fn qux(x: Int) -> Int { let a = x; let b = 5; let y = try foo(a) else b; return y }
     loc = mir.Location()
     foo_def = FunctionDef(
@@ -302,7 +302,7 @@ def test_lowering_invalid_field_fails():
     raise AssertionError("expected invalid field access to fail lowering/checking")
 
 
-def test_lowering_try_else_type_mismatch_fails():
+def test_lowering_try_catch_expr_type_mismatch_fails():
     # try foo(x) else "oops" where foo: Int64 -> Int64 should fail cleanly.
     loc = mir.Location()
     foo_def = FunctionDef(
@@ -527,7 +527,7 @@ def test_edge_args_to_paramless_block_fail():
     raise AssertionError("expected verifier to fail on edge args to paramless block")
 
 
-def test_try_else_shape():
+def test_try_catch_shape():
     # Models: entry(param x) -> call dest=_res normal->join(res,x) error->err(x)
     # err(x_err): fallback=42; br join(fallback, x_err)
     # join(res_phi, x_phi): return res_phi
@@ -550,6 +550,45 @@ def test_try_else_shape():
     )
 
     fn = make_fn([bb_entry, bb_err, bb_join])
+    SSAVerifierV2(fn).verify()
+
+
+def test_try_catch_err_dest_dispatch_shape():
+    # Canonical shape: call with dest+err_dest, error edge to dispatch that reads ErrorEvent and routes.
+    bb_entry = mir.BasicBlock(name="bb_entry", params=[mir.Param("_x0", I64)])
+    bb_dispatch = mir.BasicBlock(name="bb_dispatch", params=[mir.Param("_err_disp", ERROR), mir.Param("_x_disp", I64)])
+    bb_match = mir.BasicBlock(name="bb_catch_match", params=[mir.Param("_err_match", ERROR), mir.Param("_x_match", I64)])
+    bb_fallback = mir.BasicBlock(name="bb_catch_fallback", params=[mir.Param("_err_fb", ERROR), mir.Param("_x_fb", I64)])
+    bb_join = mir.BasicBlock(name="bb_join", params=[mir.Param("_res_phi", I64), mir.Param("_x_phi", I64)])
+
+    # Dispatch: project event, compare, branch.
+    bb_dispatch.instructions.append(mir.ErrorEvent(dest="_evt_code", error="_err_disp"))
+    bb_dispatch.instructions.append(mir.Const(dest="_evt_expected", type=INT, value=1))
+    bb_dispatch.instructions.append(mir.Binary(dest="_evt_cmp", op="==", left="_evt_code", right="_evt_expected"))
+    bb_dispatch.terminator = mir.CondBr(
+        cond="_evt_cmp",
+        then=mir.Edge(target="bb_catch_match", args=["_err_disp", "_x_disp"]),
+        els=mir.Edge(target="bb_catch_fallback", args=["_err_disp", "_x_disp"]),
+    )
+
+    bb_match.instructions.append(mir.Const(dest="_fallback_match", type=I64, value=7))
+    bb_match.terminator = mir.Br(target=mir.Edge(target="bb_join", args=["_fallback_match", "_x_match"]))
+
+    bb_fallback.terminator = mir.Throw(error="_err_fb")
+
+    bb_join.terminator = mir.Return(value="_res_phi")
+
+    bb_entry.terminator = mir.Call(
+        dest="_call_res",
+        err_dest="_call_err",
+        callee="foo",
+        args=["_x0"],
+        ret_type=I64,
+        normal=mir.Edge(target="bb_join", args=["_call_res", "_x0"]),
+        error=mir.Edge(target="bb_dispatch", args=["_call_err", "_x0"]),
+    )
+
+    fn = make_fn([bb_entry, bb_dispatch, bb_match, bb_fallback, bb_join])
     SSAVerifierV2(fn).verify()
 
 
@@ -962,13 +1001,13 @@ if __name__ == "__main__":
     test_field_get()
     test_call_with_edges()
     test_edge_args_to_paramless_block_fail()
-    test_try_else_shape()
+    test_try_catch_shape()
     test_throw_shape()
     test_fieldset_arrayset_shapes()
     test_try_catch_stmt_shape()
     test_lowering_integration()
-    test_lowering_try_else_multi_locals_integration()
-    test_lowering_try_else_type_mismatch_fails()
+    test_lowering_try_catch_expr_multi_locals_integration()
+    test_lowering_try_catch_expr_type_mismatch_fails()
     test_lowering_bad_index_type_fails()
     test_lowering_invalid_field_fails()
     test_lowering_try_catch_integration()
