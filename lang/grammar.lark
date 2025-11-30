@@ -149,7 +149,7 @@ domain_clause: "domain" NAME
      | ternary
      | pipeline
 
-try_catch_expr: TRY expr CATCH catch_expr_arm
+try_catch_expr: TRY expr (CATCH catch_expr_arm)+
 catch_expr_arm: NAME "(" NAME ")" block   -> catch_expr_event
               | NAME block                -> catch_expr_binder
               | block                     -> catch_expr_block

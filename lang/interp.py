@@ -209,13 +209,14 @@ class Interpreter:
             try:
                 return self._eval_expr(expr.attempt, env)
             except RaiseSignal as exc:
-                arm = expr.catch_arm
-                if arm.event is not None and arm.event != exc.error.message:
-                    raise
-                catch_env = Environment(parent=env)
-                if arm.binder:
-                    catch_env.define(arm.binder, exc.error)
-                return self._eval_block_result(arm.block, catch_env)
+                for arm in expr.catch_arms:
+                    if arm.event is not None and arm.event != exc.error.message:
+                        continue
+                    catch_env = Environment(parent=env)
+                    if arm.binder:
+                        catch_env.define(arm.binder, exc.error)
+                    return self._eval_block_result(arm.block, catch_env)
+                raise
         if isinstance(expr, ast.Ternary):
             cond = bool(self._eval_expr(expr.condition, env))
             branch = expr.then_value if cond else expr.else_value

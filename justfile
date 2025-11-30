@@ -15,7 +15,7 @@ test-ssa:
 	./.venv/bin/python3 tests/ssa_programs_test.py
 
 test-e2e-ssa-subset:
-	PYTHONPATH=. ./.venv/bin/python3 tests/e2e_runner.py --backend=ssa-llvm hello throw_try
+	PYTHONPATH=. ./.venv/bin/python3 tests/e2e_runner.py --backend=ssa-llvm hello throw_try try_catch try_call_error try_event_catch_stmt try_event_catch_expr
 
 parse-all: parse-playground parse-examples
 	@echo "Parsing successful."

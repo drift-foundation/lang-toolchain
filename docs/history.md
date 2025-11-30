@@ -1,5 +1,11 @@
 # Drift development history
 
+## 2025-11-30
+- Added deterministic event codes to exception definitions and wired SSA try/catch dispatch (stmt + expr) to project `ErrorEvent` and branch to matching catches with catch-all fallback/rethrow semantics; both stmt and expr event-catch tests now run end-to-end.
+- Introduced a first-class `ErrorEvent` MIR instruction, SSA helper, and LLVM lowering that calls `drift_error_get_code`; the dummy runtime and a new SSA test (`mir_ssa_error_event_test`) prove the projection end-to-end.
+- SSA backend now asserts MIR-provided can-error markings and uses `{T, Error*}` / `Error*` ABI for throws and call edges; SSA/e2e runners link against `error_dummy` by default for error-edge coverage. SSA e2e subset now covers hello/throw + try/catch + event dispatch via `test-e2e-ssa-subset`.
+- try/catch work-progress document refreshed to mark Phase 1 (event dispatch) complete and capture current SSA e2e subset coverage.
+
 ## 2025-11-29
 - SSA-first pipeline is now the only maintained path: `driftc` lowers every function to SSA, runs the simplifier and strict verifier, and the e2e runner uses the new SSA→LLVM backend to compile, link, and run real programs (hello, pure calls, console writes, structs by ref, arrays/for loops). Legacy lowering/codegen is deprecated.
 - SSA→LLVM backend now handles multi-function modules, control flow with PHIs from block params, pure calls, string literals, console runtime calls, struct init/field get/set using checker-provided layouts, array len/get/set and stack array literals, and word-sized `Int` mapping (Int/Int64 → i64, Int32 → i32, Bool → i1, String → `DriftString`).

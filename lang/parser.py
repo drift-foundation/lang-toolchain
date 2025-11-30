@@ -745,26 +745,29 @@ def _build_pipeline(tree: Tree) -> Expr:
 
 def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
     parts = [child for child in tree.children if isinstance(child, Tree)]
-    if len(parts) != 2:
-        raise ValueError("try_catch_expr expects attempt and catch arm")
+    if len(parts) < 2:
+        raise ValueError("try_catch_expr expects attempt and at least one catch arm")
     attempt = _build_expr(parts[0])
-    arm_node = parts[1]
-    arm_name = _name(arm_node)
-    if arm_name == "catch_expr_event":
-        event_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
-        binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME" and t is not event_token)
-        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-        arm = CatchExprArm(event=event_token.value, binder=binder_token.value, block=_build_block(block_node))
-    elif arm_name == "catch_expr_binder":
-        binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
-        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-        arm = CatchExprArm(event=None, binder=binder_token.value, block=_build_block(block_node))
-    elif arm_name == "catch_expr_block":
-        block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-        arm = CatchExprArm(event=None, binder=None, block=_build_block(block_node))
-    else:
-        raise ValueError(f"unexpected catch expr arm {arm_name}")
-    return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arm=arm)
+    arms: List[CatchExprArm] = []
+    for arm_node in parts[1:]:
+        arm_name = _name(arm_node)
+        if arm_name == "catch_expr_event":
+            tokens = [t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME"]
+            if len(tokens) < 2:
+                raise ValueError("event catch arm requires event and binder")
+            event_token, binder_token = tokens[0], tokens[1]
+            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+            arms.append(CatchExprArm(event=event_token.value, binder=binder_token.value, block=_build_block(block_node)))
+        elif arm_name == "catch_expr_binder":
+            binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
+            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+            arms.append(CatchExprArm(event=None, binder=binder_token.value, block=_build_block(block_node)))
+        elif arm_name == "catch_expr_block":
+            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+            arms.append(CatchExprArm(event=None, binder=None, block=_build_block(block_node)))
+        else:
+            raise ValueError(f"unexpected catch expr arm {arm_name}")
+    return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arms=arms)
 
 
 def _build_ternary(tree: Tree) -> Ternary:

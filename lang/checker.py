@@ -133,6 +133,7 @@ class ExceptionInfo:
     arg_order: List[str]
     arg_types: Dict[str, Type]
     domain: str | None = None
+    event_code: int = 0
 
 
 class CheckError(Exception):
@@ -224,7 +225,7 @@ class Checker:
             raise CheckError(f"0:0: module name '{name}' uses a reserved prefix {reserved_prefixes}")
 
     def _register_exceptions(self, exceptions: List[ast.ExceptionDef]) -> None:
-        for exc in exceptions:
+        for idx, exc in enumerate(exceptions):
             if exc.name in RESERVED_IDENTIFIERS:
                 raise CheckError(f"{exc.loc.line}:{exc.loc.column}: '{exc.name}' is a reserved keyword")
             if exc.name in self.exception_infos:
@@ -245,6 +246,7 @@ class Checker:
                 arg_order=arg_order,
                 arg_types=arg_types,
                 domain=exc.domain,
+                event_code=idx + 1,  # deterministic code for event dispatch
             )
 
     def _register_functions(self, functions: List[ast.FunctionDef]) -> None:
@@ -477,18 +479,28 @@ class Checker:
 
     def _check_try_catch_expr(self, expr: ast.TryCatchExpr, ctx: FunctionContext) -> Type:
         attempt_type = self._check_expr(expr.attempt, ctx)
-        catch_scope = Scope(parent=ctx.scope)
-        catch_ctx = FunctionContext(
-            name=ctx.name,
-            signature=ctx.signature,
-            scope=catch_scope,
-            allow_returns=ctx.allow_returns,
-        )
-        if expr.catch_arm.binder:
-            catch_scope.define(expr.catch_arm.binder, VarInfo(type=ERROR, mutable=False), expr.loc)
-        # TODO: event-specific matching not yet enforced in checker for expressions.
-        catch_type = self._check_block_result(expr.catch_arm.block, catch_ctx)
-        self._expect_type(catch_type, attempt_type, expr.loc)
+        if not expr.catch_arms:
+            raise CheckError(f"{expr.loc.line}:{expr.loc.column}: try/catch expression needs at least one catch arm")
+        seen_catch_all = False
+        for arm in expr.catch_arms:
+            if arm.event:
+                if arm.event not in self.exception_infos:
+                    raise CheckError(f"{expr.loc.line}:{expr.loc.column}: unknown event '{arm.event}' in catch")
+            else:
+                if seen_catch_all:
+                    raise CheckError(f"{expr.loc.line}:{expr.loc.column}: multiple catch-all arms in try expression")
+                seen_catch_all = True
+            catch_scope = Scope(parent=ctx.scope)
+            catch_ctx = FunctionContext(
+                name=ctx.name,
+                signature=ctx.signature,
+                scope=catch_scope,
+                allow_returns=ctx.allow_returns,
+            )
+            if arm.binder:
+                catch_scope.define(arm.binder, VarInfo(type=ERROR, mutable=False), expr.loc)
+            catch_type = self._check_block_result(arm.block, catch_ctx)
+            self._expect_type(catch_type, attempt_type, expr.loc)
         return attempt_type
 
     def _check_block_result(self, block: ast.Block, ctx: FunctionContext) -> Type:

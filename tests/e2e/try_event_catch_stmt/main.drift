@@ -1,14 +1,23 @@
 exception MyErr(msg: String)
 
-fn foo() returns Int {
-  throw drift_error_new_dummy(1)
+fn foo(flag: Int) returns Int {
+  throw drift_error_new_dummy(flag)
 }
 
 fn main() returns Int {
   try {
-    foo()
+    foo(1)
   } catch MyErr(e) {
-    return 0
+    out.writeln("event")
+  } catch err1 {
+    out.writeln("fallback")
   }
-  return 1
+  try {
+    foo(2)
+  } catch MyErr(e) {
+    out.writeln("event")
+  } catch err2 {
+    out.writeln("fallback")
+  }
+  return 0
 }

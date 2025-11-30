@@ -1,6 +1,9 @@
 import std.console.out
 
 fn might_fail(x: Int) returns Int {
+  if x != 0 {
+    throw drift_error_new_dummy(x)
+  }
   return x
 }
 

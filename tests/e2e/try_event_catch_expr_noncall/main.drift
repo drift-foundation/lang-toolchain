@@ -1,0 +1,7 @@
+exception MyErr(msg: String)
+
+fn main() returns Int {
+  // Non-call attempt should be rejected in SSA lowering.
+  val x: Int = try 1 + 2 catch MyErr(e) { 0; }
+  return x
+}

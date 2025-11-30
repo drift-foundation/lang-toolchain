@@ -78,7 +78,7 @@ def _run_case(case_dir: Path, backend_override: str | None = None) -> str:
     runtime_sources = [
         ROOT / "tests" / "mir_codegen" / "runtime" / "string_runtime.c",
         ROOT / "tests" / "mir_codegen" / "runtime" / "console_runtime.c",
-        ROOT / "tests" / "mir_codegen" / "runtime" / "error_dummy.c",
+        ROOT / "lang" / "runtime" / "error_dummy.c",
     ]
     link_cmd = [clang, str(case_dir / "a.o")] + [str(p) for p in runtime_sources] + ["-o", str(exe_path)]
     link = subprocess.run(link_cmd, cwd=ROOT, capture_output=True, text=True, env=env)

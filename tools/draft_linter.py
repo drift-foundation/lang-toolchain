@@ -145,9 +145,10 @@ def _lint_expr(path: Path, expr: ast.Expr, errors: List[str]) -> None:
             _lint_expr(path, kw.value, errors)
     elif isinstance(expr, ast.TryCatchExpr):
         _lint_expr(path, expr.attempt, errors)
-        for stmt in expr.catch_arm.block.statements:
-            if isinstance(stmt, ast.ExprStmt):
-                _lint_expr(path, stmt.value, errors)
+        for arm in expr.catch_arms:
+            for stmt in arm.block.statements:
+                if isinstance(stmt, ast.ExprStmt):
+                    _lint_expr(path, stmt.value, errors)
     elif isinstance(expr, ast.Ternary):
         _lint_expr(path, expr.condition, errors)
         _lint_expr(path, expr.then_value, errors)

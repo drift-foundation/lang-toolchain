@@ -140,11 +140,13 @@ def test_lowering_try_else_integration():
                     value=TryCatchExpr(
                         loc=loc,
                         attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
-                        catch_arm=CatchExprArm(
-                            event=None,
-                            binder=None,
-                            block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value=7))]),
-                        ),
+                        catch_arms=[
+                            CatchExprArm(
+                                event=None,
+                                binder=None,
+                                block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value=7))]),
+                            )
+                        ],
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),
@@ -193,11 +195,13 @@ def test_lowering_try_else_multi_locals_integration():
                     value=TryCatchExpr(
                         loc=loc,
                         attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="a")], kwargs=[]),
-                        catch_arm=CatchExprArm(
-                            event=None,
-                            binder=None,
-                            block=Block(statements=[ExprStmt(loc=loc, value=Name(loc=loc, ident="b"))]),
-                        ),
+                        catch_arms=[
+                            CatchExprArm(
+                                event=None,
+                                binder=None,
+                                block=Block(statements=[ExprStmt(loc=loc, value=Name(loc=loc, ident="b"))]),
+                            )
+                        ],
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),
@@ -321,11 +325,13 @@ def test_lowering_try_else_type_mismatch_fails():
                     value=TryCatchExpr(
                         loc=loc,
                         attempt=Call(loc=loc, func=Name(loc=loc, ident="foo"), args=[Name(loc=loc, ident="x")], kwargs=[]),
-                        catch_arm=CatchExprArm(
-                            event=None,
-                            binder=None,
-                            block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value="oops"))]),
-                        ),
+                        catch_arms=[
+                            CatchExprArm(
+                                event=None,
+                                binder=None,
+                                block=Block(statements=[ExprStmt(loc=loc, value=Literal(loc=loc, value="oops"))]),
+                            )
+                        ],
                     ),
                 ),
                 ReturnStmt(loc=loc, value=Name(loc=loc, ident="y")),

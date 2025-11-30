@@ -9,7 +9,7 @@ from llvmlite import ir, binding as llvm  # type: ignore
 
 from . import mir
 from .ir_layout import StructLayout
-from .types import BOOL, ERROR, I64, STR, UNIT, Type, array_element_type, array_of
+from .types import BOOL, ERROR, I64, INT, STR, UNIT, Type, array_element_type, array_of
 
 # Architecture word size: target x86_64 for now.
 WORD_BITS = 64

@@ -1,0 +1,6 @@
+{
+  "mode": "run",
+  "compile_error": "supports call attempts only",
+  "args": [],
+  "env": {}
+}

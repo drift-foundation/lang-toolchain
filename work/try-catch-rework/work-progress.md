@@ -29,15 +29,16 @@ It also defines the **next phases** so this feature lands without semantic or ba
 * Both expression and statement forms carry the error into the catch blocks.
 * Catch binders are wired to the SSA error parameter.
 * Expression-form lowering:
-  * Only supports **call attempts** (honest semantics).
-  * Accepts simple `Name` and `Name.Attr` callees (e.g., `foo()`, `obj.method()`).
+  * Only supports **call attempts** (honest semantics) with simple `Name` / `Name.Attr` callees.
+  * Supports multiple catch arms (event-specific + catch-all) with event dispatch via `ErrorEvent`; still call-only.
 * Statement try/catch:
   * Requires the final statement of the try body to be a `Call(...)` expression (name or name.attr).
-  * Supports **multiple catch-all clauses**; each lowered to its own SSA block with `Error` + locals threaded.
-  * Error dispatch still always routes to the **first** catch-all; **no event discrimination yet**.
+  * Supports **multiple catch clauses** (event-specific + catch-all); each lowered to its own SSA block with `Error` + locals threaded.
+  * Error dispatch goes through a dedicated dispatch block that reads the error event/code (`ErrorEvent`) and picks the matching event catch in source order, then falls back to the first catch-all (or rethrows if none).
 * SSA verifier understands `err_dest` on call terminators.
 * SSA codegen trusts MIR’s `can_error` flags and asserts invariants; no backend rescanning.
 * Throw lowering uses an explicit placeholder pair (no backend undef issues).
+* `ErrorEvent` projection is available for dispatch and is lowered via the dummy runtime helper `drift_error_get_code`.
 
 ### Tests
 
@@ -51,11 +52,13 @@ New/updated e2e coverage:
   * `try_call_error`
   * `try_catch`
   * `try_multi_catch`  (multi catch-all statement form)
+  * `try_event_catch_stmt` (event dispatch in stmt form)
   * `try_expr_binder`  (expr try/catch with binder)
-* Negative event-specific catches (intentionally rejected in SSA lowering):
-  * `try_event_catch_stmt`
-  * `try_event_catch_expr`  
-    → these assert **compile-time errors** and will remain negative until proper event projection & dispatch exist.
+  * `try_event_catch_expr` (expr event dispatch)
+* Projection primitive:
+  * `mir_ssa_error_event_test` (ErrorEvent → drift_error_get_code end-to-end)
+* Negative (intentional limitations):
+  * `try_event_catch_expr_noncall` (expr attempt must be a call)
 
 All SSA tests (`mir_ssa_tests`, `ssa_check_smoke`, `ssa_programs_test`) and e2e runner cases are passing.
 
@@ -66,8 +69,8 @@ All SSA tests (`mir_ssa_tests`, `ssa_check_smoke`, `ssa_programs_test`) and e2e 
 * Try/catch expression added to language spec.
 * This work log tracks phase-by-phase changes.
 * Docs now explicitly state:
-  * Event-specific catches are **intentionally unsupported** in SSA until there is a real Error→event projection.
-  * No fake event matching or disguised catch-all behavior will be introduced.
+  * Statement and expression try/catch support event-specific dispatch via the projected event/code.
+  * Expression-form try/catch is still call-only; non-call attempts are rejected.
 
 ---
 
@@ -79,13 +82,11 @@ Current `_lower_try_catch_expr`:
 
 * Snapshots live user vars.
 * Builds:
-  * error block (receives the `Error` value + locals)
+  * catch blocks (one per arm) with params `(Error, live locals...)`
+  * dispatch block that reads `ErrorEvent` and selects matching event arms in order (fallback to catch-all or rethrow)
   * join block (result + locals)
-* Emits a `Call` terminator with:
-  * `dest` (value)
-  * `err_dest` (Error)
-  * `normal` / `error` edges
-* Wires catch binder (if present) to the `Error` parameter in the error block.
+* Emits a `Call` terminator with `normal` / `error` edges to the join/dispatch blocks.
+* Wires catch binders to the `Error` parameter in each catch block.
 * Only supports attempts that are calls with:
   * `Name` callee, e.g., `foo(x)`
   * `Name.Attr` callee, e.g., `obj.method(x)`
@@ -93,10 +94,9 @@ Current `_lower_try_catch_expr`:
 
 **Limitations**
 
-* No event-specific catch arms; any `catch (MyEvent e)` or `catch(MyEvent)` currently yields `LoweringError`.  
-  This is **intentional** until SSA can project the event from `Error`; no fake matching or catch-all fallback will be introduced.
-* Only a single catch arm is supported in the expression form (no multi-catch dispatch yet).
-* Runtime/SSA now exposes a placeholder `ErrorEvent` projection (via `drift_error_get_code`) to unblock future event dispatch work; semantics still to be defined.
+* Attempts must remain call-shaped (Name / Name.Attr); broader attempts are deferred to Phase 2.
+* At most one catch-all is allowed in the expression form.
+* Runtime/SSA exposes an `ErrorEvent` projection (via `drift_error_get_code`) that returns the error’s event/code as an integer.
 
 ## Statement form
 
@@ -114,9 +114,10 @@ Current `_lower_try_catch_expr`:
   * Threads live locals after the try/catch.
   * All fallthrough paths from catch blocks branch to this join with updated locals.
 * Error dispatch:
-  * If any clause is event-specific (`event != None`), SSA lowering currently **rejects** the construct.
-  * For the remaining catch-all clauses, the call terminator’s `error` edge currently always targets the **first** catch-all block.
-  * There is no event discrimination tree yet.
+  * Error edge now targets a **dispatch block**.
+  * The dispatch block reads the event/code via `ErrorEvent`, compares against event-specific catch clauses in source order, and routes to the matching catch.
+  * Falls back to the first catch-all if nothing matches; rethrows if there is no catch-all.
+  * Event identifiers are currently encoded as deterministic integer codes assigned per exception definition and exposed via the dummy runtime’s `drift_error_get_code`.
 
 ---
 
@@ -153,136 +154,18 @@ These phases describe the remaining work to fully finish the try/catch redesign.
 
 *(multi-catch + event matching + binder correctness)*
 
-We break Phase 1 into two subphases:
+Status:
 
-- **Phase 1a:** Error event projection in MIR/SSA (plumbing only).  
-- **Phase 1b:** Event-based dispatch using that projection.
+* **Phase 1a — Error event projection:** ✔ done. Added `ErrorEvent` MIR instruction, `_ssa_read_error_event` helper, SSA codegen lowering via `drift_error_get_code`, dummy runtime support, and SSA test coverage.
+* **Phase 1b — Event dispatch:**
+  * Statement form: ✔ done. Error edge now flows into a dispatch block that compares the projected event/code against event-specific catch clauses in order, with catch-all fallback (or rethrow if none). Event identifiers are deterministic integer codes assigned per exception definition.
+  * Expression form: ✔ done. Call-only attempts dispatch through an expr-level dispatch block using `ErrorEvent`, support multiple catch arms (event-specific + catch-all), and rethrow if no arm matches.
+  * Tests flipped to positive: `try_event_catch_stmt` and `try_event_catch_expr` now prove event dispatch and catch-all fallback; non-call attempts remain a compile error (`try_event_catch_expr_noncall`).
 
-### DONE (Phase 1 so far)
+Remaining work:
 
-* SSA stmt try/catch:
-  * Lowers all catch clauses.
-  * Threads `Error` and locals into each catch block.
-  * Supports multiple catch-all blocks.
-* SSA expr try/catch:
-  * Threads `Error` and binder.
-  * Supports call attempts with `Name` or `Name.Attr` callees.
-* Verifier recognizes `err_dest` and enforces call-with-edges invariants.
-* New SSA/e2e tests:
-  * `try_multi_catch`
-  * `try_expr_binder`
-  * `try_event_catch_stmt` (negative)
-  * `try_event_catch_expr` (negative)
-* Event-specific catches are **explicitly documented** as unsupported (compile-time error) until we have a real Error→event projection.
-
----
-
-### Phase 1a — Error event projection in MIR/SSA (subphase)
-
-**Goal:** introduce a real, first-class way for MIR/SSA to **read the event** from an `Error` value, without changing language surface or try/catch semantics yet.
-
-#### Tasks
-
-1. **Define the projection primitive in MIR**
-
-   * Decide the minimal surface:
-
-     * Either a dedicated instruction, e.g.:
-
-       ```python
-       @dataclass(frozen=True)
-       class ErrorGetEvent(Instruction):
-           dest: Value
-           error: Value
-           loc: Location = Location()
-       ```
-
-     * Or a well-defined use of existing machinery (e.g., `FieldGet` on an `Error` struct’s `event` field) if `Error` is already a known struct in MIR.
-
-   * Update `lang/mir.py` with this primitive and ensure it’s wired into any visitors/printers you have.
-
-2. **Teach SSA lowering to emit the projection**
-
-   * Add a small helper in `lower_to_mir_ssa.py`:
-
-     ```python
-     def ssa_read_error_event(err_ssa: str, env: SSAEnv, loc: Location) -> str:
-         # produce a new SSA name that holds the event value (probably a String)
-         ...
-     ```
-
-   * This helper should emit the new `ErrorGetEvent` (or equivalent FieldGet chain) into the current block and return the dest SSA name.
-
-   * For now, this helper is **not** used by try/catch lowering; it just exists and is testable.
-
-3. **Backend support for the projection**
-
-   * Extend `ssa_codegen.py` to lower `ErrorGetEvent` (or your chosen representation) to LLVM IR:
-
-     * Map it to whatever representation your runtime uses for `Error`:
-       * If `Error` is a struct with an `event` field, generate a GEP + load.
-       * If it’s an opaque pointer, call a small C helper like `error_get_event(Error* err)`.
-
-   * Update / create a C runtime stub (e.g., in `tests/mir_codegen/runtime/error_dummy.c`) to provide the function or struct definition needed.
-
-4. **Tests for the projection primitive itself**
-
-   * Add a minimal SSA/MIR unit test that:
-     * Builds an `Error` with a known event (or uses a dummy), calls `ErrorGetEvent`, and checks that the value is plumbed through correctly in LLVM IR (at least structurally).
-   * At this stage you can still avoid wiring it into try/catch; the point is to validate IR and codegen behavior for the primitive.
-
-5. **Docs / progress**
-
-   * Update this doc:
-     * Mark Phase 1a as “in progress” or “done” as you complete the above.
-     * Keep event-specific catches negative; this subphase only enables *reading* the event, not dispatch.
-
-**Important:**  
-Phase 1a does **not** flip any event-catch tests. `try_event_catch_stmt` and `try_event_catch_expr` remain negative. No catch behavior changes yet.
-
----
-
-### Phase 1b — Event-based dispatch in SSA
-
-**Goal:** once Phase 1a is done, use the new Error→event projection to implement **real event-based dispatch** in stmt/expr try/catch.
-
-#### Tasks
-
-1. **Statement form (priority)**
-
-   * In `lower_try_stmt`:
-     * Partition `stmt.catches` into event-specific vs catch-all.
-     * Introduce a dispatch block that:
-       * Takes `(err, locals…)` as params.
-       * Uses `ssa_read_error_event(err, ...)` to read the event.
-       * Compares against each event-specific catch in source order.
-       * Branches to the matching catch block (with `[err, locals]`).
-       * Falls back to the first catch-all if no event matches.
-       * Optionally rethrows if there is no catch-all and no event matches.
-
-   * Wire the call’s `error` edge to the dispatch block instead of a catch block.
-
-   * Turn `try_event_catch_stmt` into a **positive** test:
-     * Check that `catch(MyEvent e)` is taken when event == `MyEvent`.
-     * Check that catch-all handles mismatched events.
-
-2. **Expression form**
-
-   * Once stmt dispatch is stable:
-     * Decide whether expression try/catch supports multiple arms or stays single-arm-only.
-     * If multiple:
-       * Mirror the stmt dispatch logic via a similar dispatch block feeding expression catch blocks that each produce a value.
-     * If single:
-       * Either:
-         * Allow only event-less catch (catch-all), or
-         * Allow a single event-specific catch and use `ErrorGetEvent` to assert the event, rethrow otherwise.
-
-   * Turn `try_event_catch_expr` into a **positive** test.
-
-3. **Finalize Phase 1 status**
-
-   * When both stmt and expr forms have working event-based dispatch and positive tests, mark Phase 1 as complete.
-   * Docs: update to say event-specific catches are now supported under SSA.
+* Broaden attempt surface for expressions beyond call shapes (Phase 2).
+* Keep documenting that expressions remain call-only and allow a single catch-all.
 
 ---
 
@@ -341,7 +224,7 @@ Phase 1a does **not** flip any event-catch tests. `try_event_catch_stmt` and `tr
 ### Progress
 
 * `tests/e2e_runner.py` accepts `--backend` and case filters. :contentReference[oaicite:1]{index=1}  
-* Justfile includes `test-e2e-ssa-subset` that runs `hello` and `throw_try` via SSA backend.
+* Justfile includes `test-e2e-ssa-subset` that runs `hello`, `throw_try`, `try_catch`, `try_call_error`, `try_event_catch_stmt`, `try_event_catch_expr` via SSA backend.
 * Added `ErrorEvent` projection wired to `drift_error_get_code` and a dedicated SSA test to ensure it codegens end-to-end.
 
 ---
@@ -365,15 +248,15 @@ These are reserved for after the 3 phases are complete.
 | Parser/AST                         | ✓ done                                              |
 | Interpreter                        | ✓ done                                              |
 | Checker                            | ✓ done                                              |
-| SSA expression T/C                 | ✓ done (call-only, name/attr callees)               |
-| SSA stmt T/C                       | ✓ multi catch-all, no event dispatch yet            |
+| SSA expression T/C                 | ✓ call-only (name/attr), multi-catch with event dispatch |
+| SSA stmt T/C                       | ✓ multi-catch with event dispatch + catch-all fallback |
 | Error-edge threading               | ✓ done                                              |
 | SSA verifier                       | ✓ updated                                           |
 | Backend                            | ✓ invariant-driven                                  |
-| Phase 1a: Error event projection   | ◔ planned (next concrete coding step)              |
-| Phase 1b: Event-based dispatch     | ✗ blocked on Phase 1a                               |
-| Multi-catch                        | ✓ catch-all only; event dispatch TODO               |
-| Event-matching                     | ✗ Phase 1b                                          |
+| Phase 1a: Error event projection   | ✓ done (ErrorEvent + runtime + SSA test)           |
+| Phase 1b: Event-based dispatch     | ✓ stmt+expr done (expr call-only)                   |
+| Multi-catch                        | ✓ stmt/expr multi-catch with event dispatch         |
+| Event-matching                     | ✓ stmt/expr via event codes                         |
 | Full attempt generalization        | ✗ Phase 2                                           |
 | SSA-driven e2e                     | ◔ subset wired (`hello`, `throw_try`)               |
 | Cleanup (docs, duplicate lowering) | pending                                             |

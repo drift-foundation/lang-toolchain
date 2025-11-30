@@ -251,7 +251,7 @@ class CatchExprArm:
 class TryCatchExpr(Expr):
     loc: Located
     attempt: Expr
-    catch_arm: CatchExprArm
+    catch_arms: List[CatchExprArm]
 
 
 @dataclass

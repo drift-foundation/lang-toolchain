@@ -1,10 +1,11 @@
 exception MyErr(msg: String)
 
-fn foo() returns Int {
-  throw drift_error_new_dummy(1)
+fn foo(flag: Int) returns Int {
+  throw drift_error_new_dummy(flag)
 }
 
 fn main() returns Int {
-  val x: Int = try foo() catch MyErr(e) { 0; }
-  return x
+  val x: Int = try foo(1) catch MyErr(e) { 10; } catch err { 20; }
+  val y: Int = try foo(2) catch MyErr(e) { 10; } catch err { 20; }
+  return x + y
 }

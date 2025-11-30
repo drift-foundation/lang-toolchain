@@ -1,6 +1,9 @@
 {
   "mode": "run",
-  "compile_error": "event-specific catches",
+  "compile_error": null,
+  "exit_code": 0,
+  "stdout": "event\nfallback\n",
+  "stderr": "",
   "args": [],
   "env": {}
 }

@@ -120,9 +120,10 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                     raise LoweringError("try/catch expression lowering currently supports call attempts only")
                 if not isinstance(try_expr.attempt.func, ast.Name):
                     raise LoweringError("try/catch expression lowering supports simple name callees only")
+                arm = try_expr.catch_arms[0]
                 if (
-                    not try_expr.catch_arm.block.statements
-                    or not isinstance(try_expr.catch_arm.block.statements[-1], ast.ExprStmt)
+                    not arm.block.statements
+                    or not isinstance(arm.block.statements[-1], ast.ExprStmt)
                 ):
                     raise LoweringError("catch block must end with an expression")
                 call_args: List[str] = []
@@ -161,9 +162,7 @@ def lower_straightline(checked: CheckedProgram, source_name: str | None = None, 
                 norm_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[norm_param.name]))
                 join_block.params[0] = mir.Param(name=join_param.name, type=call_type)
                 types[join_param.name] = call_type
-                fb_val, fb_ty, err_block = lower_expr(
-                    try_expr.catch_arm.block.statements[-1].value, err_block, types.copy(), caps.copy(), err_target=err_tgt
-                )
+                fb_val, fb_ty, err_block = lower_expr(arm.block.statements[-1].value, err_block, types.copy(), caps.copy(), err_target=err_tgt)
                 err_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[fb_val]))
                 if call_type == UNIT and join_block.terminator is None:
                     join_block.terminator = mir.Return()
@@ -804,7 +803,8 @@ def _lower_try_expr_expr(
         raise LoweringError("try/catch expression lowering currently supports call attempts only")
     if not isinstance(expr.attempt.func, ast.Name):
         raise LoweringError("try/catch expression lowering supports simple name callees only")
-    if not expr.catch_arm.block.statements or not isinstance(expr.catch_arm.block.statements[-1], ast.ExprStmt):
+    arm = expr.catch_arms[0]
+    if not arm.block.statements or not isinstance(arm.block.statements[-1], ast.ExprStmt):
         raise LoweringError("catch block must end with an expression")
     call_args: List[str] = []
     for a in expr.attempt.args:
@@ -842,7 +842,7 @@ def _lower_try_expr_expr(
     join_block.params[0] = mir.Param(name=join_param.name, type=call_type)
     temp_types[join_param.name] = call_type
     fb_val, fb_ty, err_block = lower_expr(
-        expr.catch_arm.block.statements[-1].value, err_block, temp_types.copy(), capture_env.copy(), err_target=err_target
+        arm.block.statements[-1].value, err_block, temp_types.copy(), capture_env.copy(), err_target=err_target
     )
     err_block.terminator = mir.Br(target=mir.Edge(target=join_name, args=[fb_val]))
     return join_param.name, temp_types[call_dest], join_block
