@@ -95,6 +95,9 @@ class SSAVerifierV2:
             dest = getattr(term, "dest", None)
             if dest:
                 self._define(dest, where=f"terminator {block.name}", block_name=block.name)
+            err_dest = getattr(term, "err_dest", None)
+            if err_dest:
+                self._define(err_dest, where=f"terminator {block.name}", block_name=block.name)
         else:
             # Reject any other terminator that carries a dest.
             if getattr(term, "dest", None):
@@ -189,6 +192,8 @@ class SSAVerifierV2:
         if isinstance(term, mir.Call) and (term.normal or term.error):
             if term.dest:
                 local_defs.add(term.dest)
+            if term.err_dest:
+                local_defs.add(term.err_dest)
             for arg in term.args:
                 self._use(arg, where, block_name, local_defs)
             for edge in (term.normal, term.error):

@@ -1,0 +1,17 @@
+import std.console.out
+
+fn may_fail_error(flag: Int) returns Int {
+  if flag == 0 {
+    return 0
+  } else {
+    throw drift_error_new_dummy(flag)
+  }
+}
+
+fn main() returns Int {
+  val x: Int = try may_fail_error(1) catch err {
+    out.writeln("caught")
+    42
+  }
+  return x
+}

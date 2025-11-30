@@ -1,0 +1,23 @@
+import std.console.out
+
+fn may_throw(flag: Int) returns Int {
+  if flag == 0 {
+    return 0
+  } else {
+    throw drift_error_new_dummy(flag)
+  }
+}
+
+fn main() returns Int {
+  try {
+    may_throw(1)
+  } catch err {
+    out.writeln("first")
+    return 1
+  } catch err2 {
+    out.writeln("second")
+    return 2
+  }
+  out.writeln("ok")
+  return 0
+}

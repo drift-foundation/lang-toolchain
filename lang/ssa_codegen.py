@@ -484,10 +484,16 @@ def emit_module_object(
                     if term.dest is not None:
                         values[term.dest] = val_component
                         ssa_types[term.dest] = term.ret_type
+                    if term.err_dest is not None:
+                        values[term.err_dest] = err_component
+                        ssa_types[term.err_dest] = ERROR
                 else:
                     # void-with-error* case
                     val_component = None
                     err_component = call_pair
+                    if term.err_dest is not None:
+                        values[term.err_dest] = err_component
+                        ssa_types[term.err_dest] = ERROR
                 cond_val = builder.icmp_unsigned(
                     "!=", err_component, ir.Constant(ERROR_PTR_TY, None), name=f"errchk_{bname}"
                 )

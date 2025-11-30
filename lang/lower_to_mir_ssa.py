@@ -569,15 +569,19 @@ def _lower_try_catch_expr(
     """Lower try/catch expression to SSA using error edges."""
     # Live users to thread through.
     live_users = list(env.snapshot_live_user_names())
-    # Error block params: optional error value plus threaded locals.
+    # Error block params: error value plus threaded locals.
     err_name = fresh_block("bb_try_err")
-    err_params: List[mir.Param] = []
+    err_params: List[mir.Param] = [mir.Param(name=env.fresh_ssa("err_val", ty=ERROR), type=ERROR)]
     for u in live_users:
         ty = env.ctx.ssa_types[env.lookup_user(u)]
         err_params.append(mir.Param(name=env.fresh_ssa(f"{u}_err", ty=ty), type=ty))
     err_block = mir.BasicBlock(name=err_name, params=err_params)
     blocks[err_name] = err_block
-    err_env = env.clone_for_block({u: p.name for u, p in zip(live_users, err_params)})
+    err_env = env.clone_for_block({u: p.name for u, p in zip(live_users, err_params[1:])})
+    if expr.catch_arm.event is not None:
+        raise LoweringError("event-specific catches not supported in SSA lowering yet")
+    if expr.catch_arm.binder:
+        err_env.bind_user(expr.catch_arm.binder, err_params[0].name, ERROR)
     # Lower catch block in error block; expect last statement to yield a value.
     if not expr.catch_arm.block.statements:
         raise LoweringError("catch block must produce a value")
@@ -609,42 +613,33 @@ def _lower_try_catch_expr(
     err_block.terminator = mir.Br(
         target=mir.Edge(target=join_name, args=[fallback_ssa] + [err_env.lookup_user(u) for u in live_users])
     )
-    # Lower the try expr itself; if it lowers to a Call we emit a call terminator with edges.
-    if isinstance(expr.attempt, ast.Call) and isinstance(expr.attempt.func, ast.Name):
-        callee = expr.attempt.func.ident
-        if callee not in checked.functions:
-            raise LoweringError(f"unknown function '{callee}' in try")
-        ret_ty = checked.functions[callee].signature.return_type
-        if ret_ty != fallback_ty:
-            raise LoweringError("try/catch result type mismatch")
-        call_args: List[str] = []
-        for a in expr.attempt.args:
-            v, _, current, env = lower_expr_to_ssa(a, env, current, checked, blocks, fresh_block)
-            call_args.append(v)
-        call_dest = env.fresh_ssa(callee, ret_ty)
-        env.ctx.ssa_types[call_dest] = ret_ty
-        current.terminator = mir.Call(
-            dest=call_dest,
-            callee=callee,
-            args=call_args,
-            ret_type=ret_ty,
-            err_dest=None,
-            normal=mir.Edge(target=join_name, args=[call_dest] + [env.lookup_user(u) for u in live_users]),
-            error=mir.Edge(target=err_name, args=[env.lookup_user(u) for u in live_users]),
-            loc=getattr(expr, "loc", None),
-        )
-        return res_param.name, ret_ty, join_block, join_env
-    # Fallback: treat try expr as pure; lower and br to join directly.
-    val_ssa, val_ty, current, env = lower_expr_to_ssa(expr.attempt, env, current, checked, blocks, fresh_block)
-    if val_ty != fallback_ty:
+    # Only calls are supported for now.
+    if not (isinstance(expr.attempt, ast.Call) and isinstance(expr.attempt.func, ast.Name)):
+        raise LoweringError("try/catch expression lowering currently supports call attempts only")
+    callee = expr.attempt.func.ident
+    if callee not in checked.functions:
+        raise LoweringError(f"unknown function '{callee}' in try")
+    ret_ty = checked.functions[callee].signature.return_type
+    if ret_ty != fallback_ty:
         raise LoweringError("try/catch result type mismatch")
-    current.terminator = mir.Br(
-        target=mir.Edge(target=join_name, args=[val_ssa] + [env.lookup_user(u) for u in live_users])
+    call_args: List[str] = []
+    for a in expr.attempt.args:
+        v, _, current, env = lower_expr_to_ssa(a, env, current, checked, blocks, fresh_block)
+        call_args.append(v)
+    call_dest = env.fresh_ssa(callee, ret_ty)
+    env.ctx.ssa_types[call_dest] = ret_ty
+    call_err = env.fresh_ssa("err", ERROR)
+    current.terminator = mir.Call(
+        dest=call_dest,
+        err_dest=call_err,
+        callee=callee,
+        args=call_args,
+        ret_type=ret_ty,
+        normal=mir.Edge(target=join_name, args=[call_dest] + [env.lookup_user(u) for u in live_users]),
+        error=mir.Edge(target=err_name, args=[call_err] + [env.lookup_user(u) for u in live_users]),
+        loc=getattr(expr, "loc", None),
     )
-    # Ensure join has a terminator if nothing else branches there.
-    if join_block.terminator is None:
-        join_block.terminator = mir.Return(value=res_param.name)
-    return res_param.name, val_ty, join_block, join_env
+    return res_param.name, ret_ty, join_block, join_env
 
 
 def lower_try_stmt(
@@ -678,17 +673,22 @@ def lower_try_stmt(
     ret_ty = checked.functions[callee].signature.return_type
     live_users = list(env.snapshot_live_user_names())
     # Catch block params: threaded locals.
-    catch_name = fresh_block("bb_try_catch")
-    catch_params: List[mir.Param] = []
-    for u in live_users:
-        ty = env.ctx.ssa_types[env.lookup_user(u)]
-        catch_params.append(mir.Param(name=env.fresh_ssa(f"{u}_catch", ty=ty), type=ty))
-    catch_block = mir.BasicBlock(name=catch_name, params=catch_params)
-    blocks[catch_name] = catch_block
-    catch_env = env.clone_for_block({u: p.name for u, p in zip(live_users, catch_params)})
-    # Lower catch body.
-    first_catch = stmt.catches[0]
-    catch_block, catch_env = lower_block_in_env(first_catch.block.statements, catch_env, blocks, catch_block, checked, fresh_block)
+    if any(c.event is not None for c in stmt.catches):
+        raise LoweringError("SSA try/catch lowering does not yet support event-specific catches")
+    catch_blocks: List[mir.BasicBlock] = []
+    for idx, clause in enumerate(stmt.catches):
+        catch_name = fresh_block(f"bb_try_catch{idx}")
+        catch_params: List[mir.Param] = [mir.Param(name=env.fresh_ssa("err_val", ty=ERROR), type=ERROR)]
+        for u in live_users:
+            ty = env.ctx.ssa_types[env.lookup_user(u)]
+            catch_params.append(mir.Param(name=env.fresh_ssa(f"{u}_catch", ty=ty), type=ty))
+        catch_block = mir.BasicBlock(name=catch_name, params=catch_params)
+        blocks[catch_name] = catch_block
+        catch_env = env.clone_for_block({u: p.name for u, p in zip(live_users, catch_params[1:])})
+        if clause.binder:
+            catch_env.bind_user(clause.binder, catch_params[0].name, ERROR)
+        catch_block, catch_env = lower_block_in_env(clause.block.statements, catch_env, blocks, catch_block, checked, fresh_block)
+        catch_blocks.append((catch_block, catch_env))
     # Join block threads locals; no value result for statement try.
     join_name = fresh_block("bb_try_join")
     join_params: List[mir.Param] = []
@@ -698,10 +698,11 @@ def lower_try_stmt(
     join_block = mir.BasicBlock(name=join_name, params=join_params)
     blocks[join_name] = join_block
     join_env = env.clone_for_block({u: join_params[i].name for i, u in enumerate(live_users)})
-    if catch_block.terminator is None:
-        catch_block.terminator = mir.Br(
-            target=mir.Edge(target=join_name, args=[catch_env.lookup_user(u) for u in live_users])
-        )
+    for catch_block, catch_env in catch_blocks:
+        if catch_block.terminator is None:
+            catch_block.terminator = mir.Br(
+                target=mir.Edge(target=join_name, args=[catch_env.lookup_user(u) for u in live_users])
+            )
     # Lower call args and emit call terminator with edges.
     call_args: List[str] = []
     for a in try_expr.args:
@@ -709,14 +710,20 @@ def lower_try_stmt(
         call_args.append(v)
     call_dest = env.fresh_ssa(callee, ret_ty)
     env.ctx.ssa_types[call_dest] = ret_ty
+    call_err = env.fresh_ssa("err", ERROR)
+    # Error dispatch: first catch block (all are catch-all).
+    if catch_blocks:
+        catch_name = catch_blocks[0][0].name
+    else:
+        catch_name = join_name
     current.terminator = mir.Call(
         dest=call_dest,
+        err_dest=call_err,
         callee=callee,
         args=call_args,
         ret_type=ret_ty,
-        err_dest=None,
         normal=mir.Edge(target=join_name, args=[env.lookup_user(u) for u in live_users]),
-        error=mir.Edge(target=catch_name, args=[env.lookup_user(u) for u in live_users]),
+        error=mir.Edge(target=catch_name, args=[call_err] + [env.lookup_user(u) for u in live_users]),
         loc=stmt.loc,
     )
     return join_block, join_env

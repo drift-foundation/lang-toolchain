@@ -1,0 +1,10 @@
+exception MyErr(msg: String)
+
+fn foo() returns Int {
+  throw drift_error_new_dummy(1)
+}
+
+fn main() returns Int {
+  val x: Int = try foo() catch MyErr(e) { 0; }
+  return x
+}
