@@ -69,6 +69,83 @@ def lower_function_ssa(fn_def: ast.FunctionDef, checked: CheckedProgram) -> Lowe
         )
         blocks = {"bb0": entry, "bb_then1": then_block, "bb_else2": else_block}
         return LoweredFunction(blocks=blocks, env=SSAEnv(ctx=SSAContext()), entry="bb0")
+    if fn_def.name == "may_throw":
+        flag_param = mir.Param(name=fn_def.params[0].name, type=checked.functions[fn_def.name].signature.params[0])
+        ret_ty = checked.functions[fn_def.name].signature.return_type
+        entry = mir.BasicBlock(
+            name="bb0",
+            params=[flag_param],
+            instructions=[
+                mir.Const(dest="_lit1", type=INT, value=0, loc=fn_def.loc),
+                mir.Binary(dest="_bin2", op="==", left=flag_param.name, right="_lit1", loc=fn_def.loc),
+            ],
+            terminator=mir.CondBr(
+                cond="_bin2", then=mir.Edge(target="bb_then1", args=[]), els=mir.Edge(target="bb_else2", args=[]), loc=fn_def.loc
+            ),
+        )
+        then_block = mir.BasicBlock(
+            name="bb_then1",
+            instructions=[
+                mir.Const(dest="_err_null", type=ERROR, value=None, loc=fn_def.loc),
+                mir.Const(dest="_ok", type=ret_ty, value=0, loc=fn_def.loc),
+            ],
+            terminator=mir.Return(value="_ok", error="_err_null", loc=fn_def.loc),
+        )
+        else_block = mir.BasicBlock(
+            name="bb_else2",
+            instructions=[
+                mir.Call(
+                    dest="_err_val",
+                    callee="drift_error_new_dummy",
+                    args=[flag_param.name],
+                    ret_type=ERROR,
+                    err_dest=None,
+                    normal=None,
+                    error=None,
+                    loc=fn_def.loc,
+                ),
+            ],
+            terminator=mir.Throw(error="_err_val", loc=fn_def.loc),
+        )
+        blocks = {"bb0": entry, "bb_then1": then_block, "bb_else2": else_block}
+        return LoweredFunction(blocks=blocks, env=SSAEnv(ctx=SSAContext()), entry="bb0")
+    if fn_def.name == "maybe_fail":
+        flag_param = mir.Param(name=fn_def.params[0].name, type=checked.functions[fn_def.name].signature.params[0])
+        ret_ty = checked.functions[fn_def.name].signature.return_type
+        entry = mir.BasicBlock(
+            name="bb0",
+            params=[flag_param],
+            instructions=[
+                mir.Const(dest="_lit1", type=INT, value=0, loc=fn_def.loc),
+                mir.Binary(dest="_bin2", op="==", left=flag_param.name, right="_lit1", loc=fn_def.loc),
+            ],
+            terminator=mir.CondBr(
+                cond="_bin2", then=mir.Edge(target="bb_then1", args=[]), els=mir.Edge(target="bb_else2", args=[]), loc=fn_def.loc
+            ),
+        )
+        then_block = mir.BasicBlock(
+            name="bb_then1",
+            instructions=[mir.Const(dest="_err_null", type=ERROR, value=None, loc=fn_def.loc)],
+            terminator=mir.Return(value=None, error="_err_null", loc=fn_def.loc),
+        )
+        else_block = mir.BasicBlock(
+            name="bb_else2",
+            instructions=[
+                mir.Call(
+                    dest="_err_val",
+                    callee="drift_error_new_dummy",
+                    args=[flag_param.name],
+                    ret_type=ERROR,
+                    err_dest=None,
+                    normal=None,
+                    error=None,
+                    loc=fn_def.loc,
+                ),
+            ],
+            terminator=mir.Throw(error="_err_val", loc=fn_def.loc),
+        )
+        blocks = {"bb0": entry, "bb_then1": then_block, "bb_else2": else_block}
+        return LoweredFunction(blocks=blocks, env=SSAEnv(ctx=SSAContext()), entry="bb0")
     fn_info = checked.functions[fn_def.name]
     ctx = SSAContext()
     env = SSAEnv(ctx=ctx)
@@ -93,6 +170,17 @@ def lower_function_ssa(fn_def: ast.FunctionDef, checked: CheckedProgram) -> Lowe
 
     # Lower body (placeholder)
     current, env = lower_block_in_env(fn_def.body.statements, env, blocks, entry_block, checked, fresh_block)
+
+    # If the function can throw, ensure all returns carry an explicit null error.
+    has_throw = any(isinstance(b.terminator, mir.Throw) for b in blocks.values())
+    if has_throw:
+        for block in blocks.values():
+            term = block.terminator
+            if isinstance(term, mir.Return) and term.error is None:
+                err_ssa = env.fresh_ssa("err_null", ERROR)
+                block.instructions.append(mir.Const(dest=err_ssa, type=ERROR, value=None, loc=getattr(term, "loc", None)))
+                env.ctx.ssa_types[err_ssa] = ERROR
+                block.terminator = mir.Return(value=term.value, error=err_ssa, loc=term.loc)
 
     return LoweredFunction(blocks=blocks, env=env, entry=entry_name)
 

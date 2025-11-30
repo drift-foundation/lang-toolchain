@@ -1,0 +1,31 @@
+import std.console.out
+
+fn maybe_fail(flag: Int) returns Void {
+  if flag == 0 {
+    return
+  } else {
+    throw drift_error_new_dummy(flag)
+  }
+}
+
+fn main() returns Int {
+  // Success path (err = null).
+  try {
+    maybe_fail(0)
+  } catch err {
+    out.writeln("unexpected")
+    return 2
+  }
+  out.writeln("ok")
+
+  // Error path (Error* only ABI).
+  try {
+    maybe_fail(1)
+  } catch err {
+    out.writeln("err")
+    return 1
+  }
+
+  out.writeln("should-not-reach")
+  return 0
+}

@@ -10,7 +10,7 @@ pytest.importorskip("llvmlite")
 
 from lang import mir
 from lang.ssa_codegen import emit_module_object
-from lang.types import ERROR, INT
+from lang.types import ERROR, INT, UNIT
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -106,17 +106,57 @@ def _build_throwing_callee() -> mir.Function:
     )
 
 
-def _build_main(flag_value: int) -> mir.Function:
+def _build_void_callee() -> mir.Function:
+    """maybe_fail_void(flag): return (err = null) or throw err (Error* ABI only)."""
+    entry = mir.BasicBlock(name="bb_entry", params=[mir.Param("_flag", INT)])
+    entry.instructions.append(mir.Const(dest="_zero", type=INT, value=0))
+    entry.instructions.append(mir.Binary(dest="_is_zero", op="==", left="_flag", right="_zero"))
+    entry.terminator = mir.CondBr(
+        cond="_is_zero",
+        then=mir.Edge(target="bb_ok", args=[]),
+        els=mir.Edge(target="bb_err", args=[]),
+    )
+
+    ok = mir.BasicBlock(name="bb_ok", params=[])
+    ok.instructions.append(mir.Const(dest="_err_null", type=ERROR, value=None))
+    ok.terminator = mir.Return(value=None, error="_err_null")
+
+    err = mir.BasicBlock(name="bb_err", params=[])
+    err.instructions.append(
+        mir.Call(
+            dest="_err_ptr",
+            callee="drift_error_new_dummy",
+            args=["_flag"],
+            ret_type=ERROR,
+            err_dest=None,
+            normal=None,
+            error=None,
+        )
+    )
+    err.terminator = mir.Throw(error="_err_ptr")
+
+    return mir.Function(
+        name="maybe_fail_void",
+        params=[mir.Param("_flag", INT)],
+        return_type=UNIT,
+        entry="bb_entry",
+        module="<tests>",
+        source=None,
+        blocks={"bb_entry": entry, "bb_ok": ok, "bb_err": err},
+    )
+
+
+def _build_main(flag_value: int, expect_value: bool = True) -> mir.Function:
     entry = mir.BasicBlock(name="bb0", params=[])
     ok = mir.BasicBlock(name="bb_ok", params=[])
     err = mir.BasicBlock(name="bb_err", params=[])
 
     entry.instructions.append(mir.Const(dest="_flag", type=INT, value=flag_value))
     entry.terminator = mir.Call(
-        dest="_call_res",
+        dest="_call_res" if expect_value else None,
         callee="callee",
         args=["_flag"],
-        ret_type=INT,
+        ret_type=INT if expect_value else UNIT,
         err_dest=None,
         normal=mir.Edge(target="bb_ok", args=[]),
         error=mir.Edge(target="bb_err", args=[]),
@@ -172,11 +212,13 @@ def _build_main_for_callee(callee_name: str, flag_value: int) -> mir.Function:
     )
 
 
-def _compile_and_run(callee_fn: mir.Function, flag_value: int, tmp_path: Path, clang: str) -> int:
-    main_fn = _build_main_for_callee(callee_fn.name, flag_value)
-    obj_path = tmp_path / f"call_edges_{flag_value}.o"
+def _compile_and_run(
+    callee_fn: mir.Function, flag_value: int, tmp_path: Path, clang: str, expect_value: bool = True, label: str = "call_edges"
+) -> int:
+    main_fn = _build_main(flag_value, expect_value=expect_value)
+    obj_path = tmp_path / f"{label}_{flag_value}.o"
     emit_module_object([callee_fn, main_fn], struct_layouts={}, entry="main", out_path=obj_path)
-    exe_path = tmp_path / f"call_edges_{flag_value}"
+    exe_path = tmp_path / f"{label}_{flag_value}"
     runtime_sources = [ROOT / "tests" / "mir_codegen" / "runtime" / "error_dummy.c"]
     link_cmd = [clang, str(obj_path)] + [str(src) for src in runtime_sources] + ["-o", str(exe_path)]
     subprocess.run(link_cmd, check=True, capture_output=True, text=True)
@@ -205,6 +247,19 @@ def test_call_with_edges_handles_throw(tmp_path: Path) -> None:
 
     ok_exit = _compile_and_run(_build_throwing_callee(), 0, tmp_path, clang)
     err_exit = _compile_and_run(_build_throwing_callee(), 1, tmp_path, clang)
+
+    assert ok_exit == 0
+    assert err_exit == 1
+
+
+def test_call_with_edges_void_error_ptr_only(tmp_path: Path) -> None:
+    pytest.importorskip("llvmlite")
+    clang = _find_clang()
+    if not clang:
+        pytest.skip("clang not found")
+
+    ok_exit = _compile_and_run(_build_void_callee(), 0, tmp_path, clang, expect_value=False, label="call_edges_void")
+    err_exit = _compile_and_run(_build_void_callee(), 1, tmp_path, clang, expect_value=False, label="call_edges_void")
 
     assert ok_exit == 0
     assert err_exit == 1

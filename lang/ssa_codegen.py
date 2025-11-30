@@ -539,7 +539,7 @@ def emit_module_object(
                     pair_ty = llvm_ret_with_error(f.return_type)
                     pair_ptr = builder.alloca(pair_ty, name=f"{f.name}_throw_pair")
                     val_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)
-                    builder.store(ir.Constant.undef(_llvm_type_with_structs(f.return_type)), val_ptr)
+                    builder.store(ir.Constant(_llvm_type_with_structs(f.return_type), None), val_ptr)
                     err_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(1)], inbounds=True)
                     builder.store(err_val, err_ptr)
                     pair_loaded = builder.load(pair_ptr)
