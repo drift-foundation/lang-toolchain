@@ -1,0 +1,13 @@
+exception MyExc(msg: String)
+
+fn boom(x: Int) returns Int {
+  if x == 0 {
+    throw MyExc(msg = "zero")
+  }
+  return x
+}
+
+fn main() returns Int {
+  val v: Int = try boom(0) catch MyExc(e) { 42; }
+  return v
+}

@@ -7,9 +7,7 @@ struct DriftError* drift_error_new_dummy(int64_t code, struct DriftString payloa
     if (!err) {
         abort();
     }
-    uint64_t payload60 = ((uint64_t)code) & DRIFT_EVENT_PAYLOAD_MASK;
-    uint64_t event_code = (((uint64_t)DRIFT_EVENT_KIND_TEST) << 60) | payload60;
-    err->code = (int64_t)event_code;
+    err->code = code;
     err->payload = payload;
     return err;
 }

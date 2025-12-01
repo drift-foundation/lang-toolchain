@@ -710,9 +710,9 @@ def _lower_try_catch_expr(
     for idx, (event_code_val, catch_name) in enumerate(event_catches):
         cmp_dest = env.fresh_ssa(f"err_evt_cmp_expr{idx}", BOOL)
         env.ctx.ssa_types[cmp_dest] = BOOL
-        const_name = env.fresh_ssa(f"err_evt_const_expr{idx}", INT)
-        cursor_block.instructions.append(mir.Const(dest=const_name, type=INT, value=event_code_val))
-        env.ctx.ssa_types[const_name] = INT
+        const_name = env.fresh_ssa(f"err_evt_const_expr{idx}", I64)
+        cursor_block.instructions.append(mir.Const(dest=const_name, type=I64, value=event_code_val))
+        env.ctx.ssa_types[const_name] = I64
         cursor_block.instructions.append(
             mir.Binary(dest=cmp_dest, op="==", left=event_code, right=const_name, loc=expr.loc)
         )
