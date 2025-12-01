@@ -805,10 +805,14 @@ def lower_try_stmt(
         catch_blocks.append(catch_block)
         catch_envs[catch_name] = catch_env
         if clause.event:
-            exc_info = checked.exceptions.get(clause.event)
-            if exc_info is None:
-                raise LoweringError(f"unknown event '{clause.event}' in catch")
-            event_catches.append((exc_info.event_code, clause, catch_name))
+            if clause.event_code is None:
+                exc_info = checked.exceptions.get(clause.event)
+                if exc_info is None:
+                    raise LoweringError(f"unknown event '{clause.event}' in catch")
+                clause_event_code = exc_info.event_code
+            else:
+                clause_event_code = clause.event_code
+            event_catches.append((clause_event_code, clause, catch_name))
         else:
             catch_alls.append((clause, catch_name))
     # Join block threads locals; no value result for statement try.

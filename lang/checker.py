@@ -119,6 +119,7 @@ class CheckedProgram:
     structs: Dict[str, "StructInfo"]
     exceptions: Dict[str, "ExceptionInfo"]
     module: Optional[str] = None
+    exception_metadata: List["ExceptionMeta"] = None
 
 
 @dataclass
@@ -135,6 +136,14 @@ class ExceptionInfo:
     arg_types: Dict[str, Type]
     domain: str | None = None
     event_code: int = 0
+
+
+@dataclass
+class ExceptionMeta:
+    fqn: str
+    kind: int
+    payload60: int
+    event_code: int
 
 
 class CheckError(Exception):
@@ -186,6 +195,7 @@ class Checker:
         self.struct_infos: Dict[str, StructInfo] = {}
         self.exception_infos: Dict[str, ExceptionInfo] = {}
         self.module_name: str = ""
+        self.exception_metadata: List[ExceptionMeta] = []
 
     def check(self, program: ast.Program) -> CheckedProgram:
         if program.module:
@@ -215,6 +225,7 @@ class Checker:
             structs=self.struct_infos,
             exceptions=self.exception_infos,
             module=program.module,
+            exception_metadata=self.exception_metadata,
         )
 
     def _validate_module_name(self, name: str) -> None:
@@ -247,7 +258,6 @@ class Checker:
                 arg_types[arg.name] = ty
             fqn = f"{self.module_name}:{exc.name}"
             payload60 = hash64(fqn.encode("utf-8")) & ((1 << 60) - 1)
-            fqn = f"{self.module_name}:{exc.name}"
             if payload60 in payload_seen and payload_seen[payload60] != fqn:
                 raise CheckError(
                     f"{exc.loc.line}:{exc.loc.column}: exception code collision in module '{self.module_name}' "
@@ -261,6 +271,9 @@ class Checker:
                 arg_types=arg_types,
                 domain=exc.domain,
                 event_code=event_code,
+            )
+            self.exception_metadata.append(
+                ExceptionMeta(fqn=fqn, kind=0b0001, payload60=payload60, event_code=event_code)
             )
 
     def _register_functions(self, functions: List[ast.FunctionDef]) -> None:
@@ -441,6 +454,10 @@ class Checker:
                         VarInfo(type=ERROR, mutable=False),
                         stmt.loc,
                     )
+                if clause.event:
+                    exc_info = self.exception_infos.get(clause.event)
+                    if exc_info:
+                        clause.event_code = exc_info.event_code
                 for inner in clause.block.statements:
                     self._check_stmt(inner, catch_ctx, in_loop=in_loop)
             return
@@ -533,6 +550,10 @@ class Checker:
             )
             if arm.binder:
                 catch_scope.define(arm.binder, VarInfo(type=ERROR, mutable=False), expr.loc)
+            if arm.event:
+                exc_info = self.exception_infos.get(arm.event)
+                if exc_info:
+                    arm.event_code = exc_info.event_code
             catch_type = self._check_block_result(arm.block, catch_ctx)
             self._expect_type(catch_type, attempt_type, expr.loc)
         return attempt_type

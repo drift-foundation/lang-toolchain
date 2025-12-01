@@ -19,6 +19,7 @@ The goal is to move from ad-hoc/index-based exception codes to ABI-stable 64-bit
 - [ ] Decide on an ABI version tag that “includes exception-code v1” (if you want a formal ABI version bump).
 - [ ] Document “mixing modules compiled under different exception-code schemes is forbidden”.
 - [x] ABI note on xxHash64 implementation/seed added in code.
+- [x] ABI note on xxHash64 implementation/seed added in code.
 
 ### 0.2 Runtime representation (Error struct & helpers)
 
