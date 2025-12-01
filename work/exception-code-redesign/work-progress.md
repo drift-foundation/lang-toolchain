@@ -18,6 +18,7 @@ The goal is to move from ad-hoc/index-based exception codes to ABI-stable 64-bit
 - [x] Write and freeze the exception code spec (`drift-exception-code-spec.md`).
 - [ ] Decide on an ABI version tag that “includes exception-code v1” (if you want a formal ABI version bump).
 - [ ] Document “mixing modules compiled under different exception-code schemes is forbidden”.
+- [x] ABI note on xxHash64 implementation/seed added in code.
 
 ### 0.2 Runtime representation (Error struct & helpers)
 
@@ -38,45 +39,45 @@ The goal is to move from ad-hoc/index-based exception codes to ABI-stable 64-bit
 
 ### 0.3 Compiler: FQN construction & hashing
 
-- [ ] Implement a single canonical FQN builder for exceptions:
+- [x] Implement a single canonical FQN builder for exceptions:
 
   ```text
   <module-name>:<exception-name>
 ````
 
-* [ ] Ensure exactly one `:` separator.
+* [x] Ensure exactly one `:` separator.
 
-* [ ] Ensure no package/path elements sneak in.
+* [x] Ensure no package/path elements sneak in.
 
-* [ ] Ensure generics never appear in the FQN (`MyErr<T>` → `"mymodule:MyErr"`).
+* [x] Ensure generics never appear in the FQN (`MyErr<T>` → `"mymodule:MyErr"`).
 
-* [ ] Integrate xxHash64 in the compiler:
+* [x] Integrate xxHash64 in the compiler:
 
-  * [ ] Vendor / depend on a stable xxHash64 implementation.
-  * [ ] Lock the seed and configuration in one place (ABI-visible comment + code).
-  * [ ] Expose `hash60(string) -> uint64` utility: `xxhash64(fqn) & ((1uLL << 60) - 1)`.
+  * [x] Vendor / depend on a stable xxHash64 implementation.
+  * [x] Lock the seed and configuration in one place (ABI-visible comment + code).
+  * [x] Expose `hash60(string) -> uint64` utility: `xxhash64(fqn) & ((1uLL << 60) - 1)` (guarded by a unit test).
 
-* [ ] At exception declaration time:
+* [x] At exception declaration time:
 
-  * [ ] Build FQN.
-  * [ ] Compute 60-bit payload via `hash60`.
-  * [ ] Build full `event_code` with kind = `USER`.
-  * [ ] Attach event_code to the exception symbol in the compiler’s symbol table.
+  * [x] Build FQN.
+  * [x] Compute 60-bit payload via `hash60`.
+  * [x] Build full `event_code` with kind = `USER`.
+  * [x] Attach event_code to the exception symbol in the compiler’s symbol table.
 
 ### 0.4 Compiler: per-module collision table
 
-* [ ] Maintain a per-module `Map<payload60, ExceptionSymbol>` while registering exceptions.
+* [x] Maintain a per-module `Map<payload60, ExceptionSymbol>` while registering exceptions.
 
-* [ ] On collision of payload60 with a *different* FQN in the same module:
+* [x] On collision of payload60 with a *different* FQN in the same module:
 
-  * [ ] Emit the specified compile-time error:
+  * [x] Emit the specified compile-time error:
 
     ```text
     error: exception code collision in module '<module-name>'
-           '<existing-exception>' and '<new-exception>' mapped to the same code
+           '<existing-fqn>' and '<new-fqn>' mapped to the same code
     ```
 
-  * [ ] Abort compilation.
+  * [x] Abort compilation.
 
 * [ ] Add negative tests:
 

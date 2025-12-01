@@ -247,12 +247,13 @@ class Checker:
                 arg_types[arg.name] = ty
             fqn = f"{self.module_name}:{exc.name}"
             payload60 = hash64(fqn.encode("utf-8")) & ((1 << 60) - 1)
-            if payload60 in payload_seen and payload_seen[payload60] != exc.name:
+            fqn = f"{self.module_name}:{exc.name}"
+            if payload60 in payload_seen and payload_seen[payload60] != fqn:
                 raise CheckError(
                     f"{exc.loc.line}:{exc.loc.column}: exception code collision in module '{self.module_name}' "
-                    f"between '{payload_seen[payload60]}' and '{exc.name}'"
+                    f"between '{payload_seen[payload60]}' and '{fqn}'"
                 )
-            payload_seen[payload60] = exc.name
+            payload_seen[payload60] = fqn
             event_code = (0b0001 << 60) | payload60
             self.exception_infos[exc.name] = ExceptionInfo(
                 name=exc.name,
@@ -765,7 +766,7 @@ class Checker:
             if attr.attr == "payload":
                 return STR
             if attr.attr == "code":
-                return INT
+                return I64
             raise CheckError(
                 f"{attr.loc.line}:{attr.loc.column}: Error has no field '{attr.attr}'"
             )

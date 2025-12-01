@@ -3,6 +3,9 @@
 This is a minimal implementation sufficient for hashing small strings in the
 compiler. It follows the reference xxhash64 algorithm with 64-bit modular
 arithmetic.
+
+ABI NOTE: This implementation and seed are part of the Drift ABI for exception
+codes. Do not change without an ABI version bump.
 """
 
 from __future__ import annotations
