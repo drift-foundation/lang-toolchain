@@ -384,6 +384,8 @@ def lower_expr_to_ssa(
     Returns (ssa_name, type, current_block, env) where current_block/env reflect any
     control-flow split (e.g., try/else lowering).
     """
+    if isinstance(expr, ast.ExceptionCtor):
+        raise LoweringError("exception constructor lowering not implemented yet")
     # Names
     if isinstance(expr, ast.Name):
         ssa = env.lookup_user(expr.ident)

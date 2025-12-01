@@ -1,4 +1,4 @@
 {
   "mode": "compile",
-  "compile_error": "unknown function 'InvalidPayload'"
+  "compile_error": "exception constructor lowering not implemented"
 }

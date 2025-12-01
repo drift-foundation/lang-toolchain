@@ -241,6 +241,16 @@ class ThrowStmt(Stmt):
 
 
 @dataclass
+class ExceptionCtor(Expr):
+    """Semantic node representing an exception constructor application."""
+
+    loc: Located
+    name: str
+    event_code: int
+    fields: Dict[str, Expr]
+
+
+@dataclass
 class CatchExprArm:
     event: Optional[str]
     binder: Optional[str]

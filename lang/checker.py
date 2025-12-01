@@ -360,6 +360,23 @@ class Checker:
                 self._expect_type(value_type, ctx.signature.return_type, stmt.loc)
             return
         if isinstance(stmt, ast.RaiseStmt):
+            # Special-case exception constructors in throw/raise.
+            if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, (ast.Name, ast.Attr)):
+                callee_name = self._resolve_callee(stmt.value.func, ctx)
+                exc_info = self.exception_infos.get(callee_name)
+                if exc_info:
+                    fields = self._check_exception_constructor(stmt.value, exc_info, ctx, collect=True)
+                    stmt.value = ast.ExceptionCtor(
+                        loc=stmt.loc,
+                        name=exc_info.name,
+                        event_code=exc_info.event_code,
+                        fields=fields,
+                    )
+                    return
+                # If it isn't an exception and also not a known callable, report as unknown exception.
+                is_known_callable = callee_name in self.function_infos or callee_name in self.struct_infos
+                if not is_known_callable and isinstance(stmt.value.func, ast.Name):
+                    raise CheckError(f"{stmt.loc.line}:{stmt.loc.column}: Unknown exception '{callee_name}'")
             value_type = self._check_expr(stmt.value, ctx)
             self._expect_type(value_type, ERROR, stmt.loc)
             return
@@ -440,6 +457,9 @@ class Checker:
             return info.type
         if isinstance(expr, ast.Call):
             return self._check_call(expr, ctx)
+        if isinstance(expr, ast.ExceptionCtor):
+            # Already type-checked; constructors yield Error.
+            return ERROR
         if isinstance(expr, ast.Attr):
             base_type = self._check_expr(expr.value, ctx)
             return self._resolve_attr_type(base_type, expr)
@@ -638,9 +658,10 @@ class Checker:
             )
 
     def _check_exception_constructor(
-        self, expr: ast.Call, info: ExceptionInfo, ctx: FunctionContext
-    ) -> None:
+        self, expr: ast.Call, info: ExceptionInfo, ctx: FunctionContext, collect: bool = False
+    ) -> Dict[str, ast.Expr] | None:
         used: List[str] = []
+        fields: Dict[str, ast.Expr] = {}
         if len(expr.args) > len(info.arg_order):
             raise CheckError(
                 f"{expr.loc.line}:{expr.loc.column}: '{info.name}' expects {len(info.arg_order)} args, got {len(expr.args)}"
@@ -649,6 +670,7 @@ class Checker:
             actual = self._check_expr(arg_expr, ctx)
             self._expect_type(actual, info.arg_types[arg_name], arg_expr.loc)
             used.append(arg_name)
+            fields[arg_name] = arg_expr
         for kw in expr.kwargs:
             if kw.name == "domain":
                 # Allow domain override even if not a declared field.
@@ -666,11 +688,13 @@ class Checker:
             actual = self._check_expr(kw.value, ctx)
             self._expect_type(actual, info.arg_types[kw.name], kw.value.loc)
             used.append(kw.name)
+            fields[kw.name] = kw.value
         missing = [name for name in info.arg_order if name not in used]
         if missing:
             raise CheckError(
                 f"{expr.loc.line}:{expr.loc.column}: Missing arguments for '{info.name}': {', '.join(missing)}"
             )
+        return fields if collect else None
 
     def _check_binary(self, expr: ast.Binary, ctx: FunctionContext) -> Type:
         left = self._check_expr(expr.left, ctx)

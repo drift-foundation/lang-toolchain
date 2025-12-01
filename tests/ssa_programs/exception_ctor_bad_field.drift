@@ -1,0 +1,6 @@
+exception E(a: Int)
+
+fn main() returns Int {
+  throw E(x = 1)
+  return 0
+}

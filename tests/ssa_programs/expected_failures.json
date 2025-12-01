@@ -1,5 +1,9 @@
 {
   "binder_out_of_scope_error.drift": "Unknown identifier",
   "negative_field_missing.drift": "has no field",
-  "negative_field_type.drift": "Expected type"
+  "negative_field_type.drift": "Expected type",
+  "exception_ctor_ok.drift": "exception constructor lowering not implemented",
+  "exception_ctor_unknown.drift": "Unknown exception",
+  "exception_ctor_bad_field.drift": "has no field",
+  "exception_ctor_wrong_type.drift": "Expected type"
 }
