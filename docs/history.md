@@ -1,5 +1,11 @@
 # Drift development history
 
+## 2025-12-01
+- Hardened exception event codes: `Error.code` is `I64` with a 4+60 bit layout (kinds + payload), user exceptions hash their FQN via xxHash64, per-module collisions are rejected, and metadata now records FQN/kind/payload/event_code for future export.
+- Updated runtime dummy helper to carry code + first payload; added C runtime tests to validate kind/payload packing across multiple inputs. `test-runtime-c` runs via `CLANG_BIN` (default clang-15).
+- Try/catch expression dispatch fixed to use `I64` constants; added SSA programs for expr event dispatch (single and multi catch) to pin the lowering.
+- Extended `drift-abi-exceptions.md` with the explicit kind/payload bit layout and reserved kinds, aligning checker/runtime/backend to the ABI.
+
 ## 2025-11-30
 - Added deterministic event codes to exception definitions and wired SSA try/catch dispatch (stmt + expr) to project `ErrorEvent` and branch to matching catches with catch-all fallback/rethrow semantics; both stmt and expr event-catch tests now run end-to-end.
 - Introduced a first-class `ErrorEvent` MIR instruction, SSA helper, and LLVM lowering that calls `drift_error_get_code`; the dummy runtime and a new SSA test (`mir_ssa_error_event_test`) prove the projection end-to-end.
@@ -131,3 +137,8 @@
 - Hardened the array runtime: introduced a `drift_size` alias for array metadata, added an overflow/oom guard in `drift_alloc_array`, marked `drift_bounds_check_fail` as `noreturn`, and kept bounds failures returning a structured `IndexError` with exit code 1.
 - Added string equality support in the runtime (`drift_string_eq`) and wired MIR→LLVM to lower `String ==/!=` via that helper. This fixes the invalid `icmp` on structs and enables the `runtime_try_catch` codegen test; it now passes and remains unskipped.
 - Threaded loop-carried variables through while-block params/edges and relaxed the verifier to allow mutation, eliminating SSA redefinition errors. Unskipped and passed the `runtime_while_basic` codegen test.
+- Removed the legacy interpreter and playground artifacts; SSA+LLVM is now the only supported backend. `drift.py` was replaced with a stub error, and runtime files moved under `lang/runtime/`.
+- Completed try/catch rework: expression and statement forms support multi-catch and event-based dispatch; binders are scoped correctly; SSA lowering uses a dispatch block with `ErrorEvent` projection. Added e2e and SSA tests for stmt/expr, multi-catch, and event dispatch.
+- Implemented reference semantics in SSA: `ReferenceType` mapped to pointers, FieldGet/Set unwrap references, and e2e `ref_struct_mutation` proves mutation through `&mut` across calls.
+- Added event-code hashing for exceptions: FQN-based xxHash64 payload, kind/payload layout (4+60 bits), per-module collision checks, and metadata capture. `Error.code` is `I64`; runtime `drift_error_new_dummy` threads code+payload. New SSA/e2e tests cover exception constructors and expr dispatch.
+- Introduced runtime C tests for error packing; `just test-runtime-c` builds/runs `runtime_error_dummy_raw` (via `CLANG_BIN`, default clang-15) to assert kind/payload masking over multiple inputs.
