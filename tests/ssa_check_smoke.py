@@ -88,7 +88,7 @@ def test_ssa_check_try_catch(tmp_path: Path) -> None:
         "try_catch.drift",
         "import std.console.out\n"
         "fn might_fail(x: Int) returns Int {\n"
-        "  if x != 0 { throw drift_error_new_dummy(x); }\n"
+        "  if x != 0 { throw drift_error_new_dummy(x, \"\"); }\n"
         "  return x\n"
         "}\n"
         "fn main() returns Int {\n"

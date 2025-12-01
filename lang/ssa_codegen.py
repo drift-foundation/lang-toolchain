@@ -348,7 +348,7 @@ def emit_module_object(
                                 if rt_error_dummy is None:
                                     rt_error_dummy = ir.Function(
                                         module,
-                                        ir.FunctionType(ERROR_PTR_TY, [WORD_INT]),
+                                        ir.FunctionType(ERROR_PTR_TY, [WORD_INT, _drift_string_type()]),
                                         name="drift_error_new_dummy",
                                     )
                                 callee = rt_error_dummy
@@ -398,6 +398,23 @@ def emit_module_object(
                     builder.store(values[instr.value], field_ptr)
                 elif isinstance(instr, mir.FieldGet):
                     base_ty = ssa_types.get(instr.base)
+                    if base_ty == ERROR:
+                        base_ptr = values[instr.base]
+                        err_ty = ir.LiteralStructType([WORD_INT, _drift_string_type()])
+                        cast_ptr = builder.bitcast(base_ptr, err_ty.as_pointer())
+                        if instr.field == "code":
+                            field_ptr = builder.gep(cast_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)
+                            loaded = builder.load(field_ptr, name=instr.dest)
+                            values[instr.dest] = loaded
+                            ssa_types[instr.dest] = INT
+                            continue
+                        if instr.field == "payload":
+                            field_ptr = builder.gep(cast_ptr, [I32_TY(0), I32_TY(1)], inbounds=True)
+                            loaded = builder.load(field_ptr, name=instr.dest)
+                            values[instr.dest] = loaded
+                            ssa_types[instr.dest] = STR
+                            continue
+                        raise RuntimeError(f"Error has no field {instr.field}")
                     inner_ty = base_ty.args[0] if isinstance(base_ty, ReferenceType) else base_ty
                     if inner_ty is None or inner_ty.name not in struct_layouts:
                         raise RuntimeError(f"base {instr.base} is not a struct for field get")

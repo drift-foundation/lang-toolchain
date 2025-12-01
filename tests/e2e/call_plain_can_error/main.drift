@@ -1,6 +1,6 @@
 fn may_fail(flag: Int) returns Int {
   if flag != 0 {
-    throw drift_error_new_dummy(flag)
+    throw drift_error_new_dummy(flag, "")
   }
   return 0
 }

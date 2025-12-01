@@ -1,5 +1,5 @@
-exception E(a: Int)
+exception E(a: String)
 
 fn main() returns Int {
-  throw E(a = 1)
+  throw E(a = "x")
 }

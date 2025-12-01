@@ -1,0 +1,13 @@
+fn make_error() returns Error {
+  // code=7, payload="p".
+  return drift_error_new_dummy(7, "p")
+}
+
+fn main() returns Int {
+  val err = make_error()
+  // Access Error.code and Error.payload; return code plus payload length literal.
+  val code = err.code
+  // payload is a String; load it but don't call methods (SSA scaffold).
+  val payload = err.payload
+  return code
+}

@@ -387,22 +387,33 @@ def lower_expr_to_ssa(
     if isinstance(expr, ast.ExceptionCtor):
         # Materialize event code.
         code_ssa = env.fresh_ssa("exc_code", INT)
-        current.instructions.append(
-            mir.Const(dest=code_ssa, type=INT, value=expr.event_code, loc=getattr(expr, "loc", None))
-        )
+        loc = getattr(expr, "loc", None)
+        current.instructions.append(mir.Const(dest=code_ssa, type=INT, value=expr.event_code, loc=loc))
         env.ctx.ssa_types[code_ssa] = INT
-        # TODO: lower expr.fields payloads once runtime supports them.
+        # Thread first payload field if present; otherwise use empty string literal.
+        payload_ssa: Optional[str] = None
+        if expr.fields:
+            first_expr = next(iter(expr.fields.values()))
+            payload_ssa, payload_ty, current, env = lower_expr_to_ssa(
+                first_expr, env, current, checked, blocks, fresh_block
+            )
+            if payload_ty != STR:
+                raise LoweringError("exception payload lowering currently supports String only")
+        if payload_ssa is None:
+            payload_ssa = env.fresh_ssa("exc_payload", STR)
+            current.instructions.append(mir.Const(dest=payload_ssa, type=STR, value="", loc=loc))
+            env.ctx.ssa_types[payload_ssa] = STR
         dest_err = env.fresh_ssa("exc", ERROR)
         current.instructions.append(
             mir.Call(
                 dest=dest_err,
                 callee="drift_error_new_dummy",
-                args=[code_ssa],
+                args=[code_ssa, payload_ssa],
                 ret_type=ERROR,
                 err_dest=None,
                 normal=None,
                 error=None,
-                loc=getattr(expr, "loc", None),
+                loc=loc,
             )
         )
         env.ctx.ssa_types[dest_err] = ERROR
@@ -571,6 +582,12 @@ class LoweringError(Exception):
 def _lookup_field_type(base_ty: Type, field: str, checked: CheckedProgram) -> Type:
     if isinstance(base_ty, ReferenceType) and base_ty.args:
         base_ty = base_ty.args[0]
+    if base_ty == ERROR:
+        if field == "code":
+            return INT
+        if field == "payload":
+            return STR
+        raise LoweringError(f"Error has no field '{field}'")
     struct_info = checked.structs.get(base_ty.name)
     if struct_info:
         if field not in struct_info.field_types:

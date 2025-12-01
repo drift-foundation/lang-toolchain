@@ -13,6 +13,7 @@ fn ingest(line: String) returns Int {
 fn might_throw(line: String) returns Int {
   val rc = try ingest(line) catch InvalidPayload(e) {
     out.writeln("expr caught");
+    out.writeln(e.payload);
     1
   };
   return rc

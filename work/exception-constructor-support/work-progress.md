@@ -186,11 +186,11 @@ Because lowering will produce real event_codes and Error payload, the existing t
 | -------------------------------- | --------------------- |
 | Exception decl in checker        | ✓ registered with event codes |
 | Exception constructor resolution | ✓ checker builds ExceptionCtor nodes |
-| Exception constructor lowering   | ◔ SSA calls `drift_error_new_dummy` (fields ignored for now) |
-| Runtime support for constructors | ◔ `drift_error_new_dummy` stores event_code (payload ignored) |
-| SSA dispatch compatibility       | ◔ basic catch e2e added |
-| e2e coverage                     | ◔ exception_ctor_catch runs throw/catch via SSA |
-| Spec updates                     | pending               |
+| Exception constructor lowering   | ✓ SSA calls `drift_error_new_dummy`; event_code + first payload threaded |
+| Runtime support for constructors | ✓ `drift_error_new_dummy` stores event_code and payload |
+| SSA dispatch compatibility       | ✓ verified via ctor_catch/expr/multi e2e |
+| e2e coverage                     | ✓ stmt/expr/multi throw/catch for user exceptions |
+| Spec updates                     | ✓ constructor semantics & payload note documented |
 
 ---
 

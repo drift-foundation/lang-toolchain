@@ -1,5 +1,5 @@
 fn foo() returns Int {
-  throw drift_error_new_dummy(1)
+  throw drift_error_new_dummy(1, "")
 }
 
 fn main() returns Int {

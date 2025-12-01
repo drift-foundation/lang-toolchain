@@ -748,6 +748,21 @@ class Checker:
                     f"{attr.loc.line}:{attr.loc.column}: Struct '{struct_info.name}' has no field '{attr.attr}'"
                 )
             return struct_info.field_types[attr.attr]
+        if base_type == ERROR:
+            if attr.attr == "payload":
+                return STR
+            if attr.attr == "code":
+                return INT
+            raise CheckError(
+                f"{attr.loc.line}:{attr.loc.column}: Error has no field '{attr.attr}'"
+            )
+        exc_info = self.exception_infos.get(base_type.name)
+        if exc_info:
+            if attr.attr not in exc_info.arg_types:
+                raise CheckError(
+                    f"{attr.loc.line}:{attr.loc.column}: Exception '{exc_info.name}' has no field '{attr.attr}'"
+                )
+            return exc_info.arg_types[attr.attr]
         if base_type == CONSOLE_OUT and attr.attr == "writeln":
             return UNIT
         raise CheckError(
