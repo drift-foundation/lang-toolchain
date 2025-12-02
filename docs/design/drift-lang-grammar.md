@@ -136,13 +136,16 @@ UnaryOp      ::= "-" | "!" | "not" | "&"
 
 PostfixExpr  ::= PrimaryExpr PostfixTail*
 PostfixTail  ::= "." Ident
-              | "[" Expr "]"
-              | "(" Args? ")"
+              | "[" ExprOrLeadingDot "]"
+              | "(" ArgsOrLeadingDot? ")"
               | "->"
 
 CallExpr     ::= PostfixExpr  // for pipeline staging clarity
 
 Args         ::= Expr ("," Expr)*
+ArgsOrLeadingDot ::= ExprOrLeadingDot ("," ExprOrLeadingDot)*
+ExprOrLeadingDot ::= Expr | LeadingDotExpr
+LeadingDotExpr ::= "." Ident ("(" Args? ")")?
 
 PrimaryExpr  ::= Literal
               | Ident
@@ -180,3 +183,4 @@ Literal      ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 - Zero-argument callables use `Void` as their argument type and are called with `f.call()`.
 - This grammar is a reference for parsers; semantic rules (ownership, moves, errors) are defined in `drift-lang-spec.md`.
 - In blocks, a bare expression must appear as a statement (`ExprStmt`) with a terminator (`;` or newline), e.g., `catch { 0; }` or `catch { return 0; }`. A future ergonomics pass may allow `{ 0 }` in expression contexts, but it is not supported today.
+- Leading-dot expressions (`.foo`, `.foo(...)`) are only valid inside indexing brackets or argument lists; they desugar to member access on the receiver value (see `drift-lang-spec.md` for semantics).

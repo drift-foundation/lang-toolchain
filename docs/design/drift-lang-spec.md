@@ -749,6 +749,8 @@ trait Debuggable {
 }
 ```
 
+**Legacy note:** `Debuggable` was historically used for diagnostics. For exceptions and captured locals, use the `Diagnostic` trait defined in §5.13.7.
+
 #### 5.13.2. Implementing a trait
 
 ```drift
@@ -790,9 +792,29 @@ require T is (Debuggable or Displayable)
 require T is Clonable and not Destructible
 ```
 
-#### 5.13.7. Diagnostic formatting for exceptions (forward-looking)
+#### 5.13.7. Diagnostic formatting for exceptions
 
-Exception arguments and `^`-captured locals rely on a diagnostic formatting trait. Today this role is served by the same string-formatting traits used elsewhere, but the intent is to converge on a dedicated diagnostic trait that can produce stable, structured diagnostics without forcing user-facing text. Chapters 14.3 and 14.4 refer to this diagnostic requirement instead of inlining a specific trait definition.
+Exceptions and `^`-captured locals rely on a dedicated diagnostic formatting trait:
+
+```drift
+trait Diagnostic {
+    fn write_diagnostic(self, ctx: &mut DiagnosticCtx)
+}
+
+trait DiagnosticCtx {
+    fn emit_current(self, value: String)
+    fn field(self, name: String, value: String)
+    fn field_fmt(self, name: String, value: impl Display)
+    fn nested(self, prefix: String, f: fn(&mut DiagnosticCtx))
+}
+```
+
+Guidance:
+
+- `emit_current` uses the caller-provided key (exception field name or `^` capture label).
+- `field` / `field_fmt` add additional diagnostic key/value pairs.
+- `nested` flattens nested data into dotted keys like `"conn.state"`.
+- The standard library may provide a blanket implementation for types that implement `Display`, emitting a single field via `emit_current(self.to_string())`. Large or complex types should implement `Diagnostic` explicitly to provide concise, meaningful diagnostics instead of deep dumps.
 
 ---
 
@@ -1871,7 +1893,7 @@ exception IndexError(container: String, index: Int64)
 Event name of the exception (`"BadArgument"`).
 
 #### 14.2.2. args
-All exception arguments, normalized into diagnostic strings via the language’s diagnostic formatting trait (see §5.13.7).
+All exception arguments, normalized into diagnostic strings via the `Diagnostic` trait (see §5.13.7).
 
 #### 14.2.3. ctx_frames
 Per-frame captured locals:
@@ -1898,7 +1920,7 @@ exception InvalidOrder(order_id: Int64, code: String)
 exception Timeout(operation: String, millis: Int64)
 ```
 
-Each parameter type must implement the diagnostic formatting trait used for exceptions (see §5.13.7).
+Each parameter type must implement `Diagnostic` (see §5.13.7).
 
 #### 14.3.2. Throwing
 ```drift
@@ -1912,7 +1934,7 @@ Runtime builds an `Error` with:
 - backtrace
 
 #### 14.3.3. Diagnostic formatting requirement
-Each exception argument type must satisfy the diagnostic formatting requirement described in §5.13.7 so the runtime can capture a string form for `Error.args`.
+Each exception argument type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a string form for `Error.args`.
 
 ---
 
@@ -1935,7 +1957,7 @@ A frame is added when unwinding past the function:
 
 Rules:
 - Only `^`-annotated locals captured.
-- Values must implement the same diagnostic formatting trait used for exception arguments (see §5.13.7).
+- Values must implement `Diagnostic` (see §5.13.7).
 - Capture happens once per frame.
 
 ---
@@ -1983,6 +2005,48 @@ val date = {
 ```
 
 The `else` expression must produce the same type as the `try` expression. Exception context (`event`, args, captured locals, stack) is still recorded before control flows into the `else` arm.
+
+---
+
+#### 14.5.4. Args-view and typed key access
+
+Each exception type `E` gets a compiler-generated *args-view* value:
+
+```drift
+struct EArgsView { /* opaque view into Error.args */ }
+
+implement E {
+    fn args(self: &E) returns EArgsView
+}
+```
+
+The args-view exposes keys and lookup:
+
+```drift
+struct EArgKey { name: String }
+
+implement EArgsView {
+    fn operator[](self: &EArgsView, key: EArgKey) returns Option<String>
+
+    // one generated key per declared field, e.g.:
+    fn sql_code(self: &EArgsView) returns EArgKey
+    fn payload(self: &EArgsView) returns EArgKey
+}
+```
+
+`Option<String>` holds the diagnostic string for the attribute if present. In a typed catch, `e.args[.sql_code()]` yields `Option<String>` and can be combined with `unwrap_or`, pattern matches, etc.
+
+**Dot-shortcut sugar:** inside indexing brackets or argument lists, a leading dot is sugar for invoking the member on the receiver:
+
+```drift
+e.args[.sql_code]    // desugars to e.args[ e.args.sql_code ]
+e.args[.sql_code()]  // desugars to e.args[ e.args.sql_code() ]
+view.filter(.is_admin) // desugars to view.filter(view.is_admin)
+```
+
+Resolution is value-based (uses the receiver value); if the member does not exist, normal name-resolution errors apply.
+
+`EArgsView` carries an internal reference to the underlying `Error` instance; it is never materialized independently. Dot-shortcut does not “nest”: `.foo.bar` is only valid if `.foo` itself produces a member with `bar`; otherwise normal member-resolution errors apply.
 
 ---
 
