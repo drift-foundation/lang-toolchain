@@ -385,24 +385,6 @@ def emit_module_object(
                                         name="__exc_args_get",
                                     )
                                 callee = rt_exc_args_get
-                            elif "." in instr.callee:
-                                # synthetic method like MyErrorArgsView.a
-                                # treat as a tiny helper that returns an ArgKey struct {name: String}
-                                parts = instr.callee.split(".")
-                                if len(parts) == 2 and parts[0] in struct_layouts:
-                                    struct_name = parts[0]
-                                    if struct_name not in struct_slots:
-                                        eb = ir.IRBuilder(entry_block)
-                                        eb.position_at_start(entry_block)
-                                        struct_slots[struct_name] = eb.alloca(
-                                            _llvm_type_with_structs(Type(struct_name)), name=f"{struct_name}.slot"
-                                        )
-                                    # synthesizing as a function: return type is ArgKey struct
-                                    callee = ir.Function(
-                                        module,
-                                        ir.FunctionType(_llvm_type_with_structs(Type(struct_name.replace("ArgsView", "ArgKey"))), []),
-                                        name=instr.callee,
-                                    )
                             else:
                                 raise RuntimeError(f"unknown callee {instr.callee}")
                         if callee.name in can_error_funcs:
