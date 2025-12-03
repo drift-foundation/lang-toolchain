@@ -1,0 +1,19 @@
+exception MyError(a: String, b: String)
+
+fn make_error() returns Error {
+  throw MyError(a = "A", b = "B")
+}
+
+fn main() returns Int {
+  var sum: Int = 0
+  try {
+    make_error()
+  } catch MyError(e) {
+    val a_opt = e.args["a"]
+    val b_opt = e.args["b"]
+    // The Option<String> values should both be Some("A"), Some("B").
+    // Use simple length checks to force SSA to read them.
+    sum = a_opt.unwrap().len() + b_opt.unwrap().len()
+  }
+  return sum
+}

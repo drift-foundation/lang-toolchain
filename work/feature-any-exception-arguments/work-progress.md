@@ -157,6 +157,8 @@ Compiler/runtime work remains.
 
 **SSA/runtime plumbing:** args-view indexing lowers to `__exc_args_get` returning an `Option<String>` wrapper over `drift_error_get_arg`; `Option<String>` has a concrete LLVM/C shape (`{i8 is_some, DriftString}`). `ExceptionCtor` now seeds all declared args: first field via `drift_error_new_dummy(code, key, payload)`, remaining fields via `drift_error_add_arg(err, key, value)`. Dot-shortcut rewrite is still pending.
 
+**Tests:** Added SSA-level cases for args lookup (`exception_args_lookup`, `exception_args_dot_lookup`) and a C runtime test (`runtime_error_args_none.c`) to cover the `None` branch of `__exc_args_get`. Justfile `test-runtime-c` compiles/execs both runtime tests.
+
 ### 3B.1 Front-end: exception metadata & synthetic types
 
 **Tasks:**

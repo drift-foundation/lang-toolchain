@@ -19,7 +19,7 @@ test-runtime-c:
 	  echo "{{CLANG_BIN}} is missing"
 	  exit 1
 	fi
-	{{CLANG_BIN}} -Ilang -Ilang/runtime -o /tmp/runtime_error_dummy_raw tests/runtime_error_dummy_raw.c lang/runtime/error_dummy.c lang/runtime/string_runtime.c && /tmp/runtime_error_dummy_raw;
+	{{CLANG_BIN}} -Ilang -Ilang/runtime -o /tmp/runtime_error_dummy_raw tests/runtime_error_dummy_raw.c tests/runtime_error_args_none.c lang/runtime/error_dummy.c lang/runtime/string_runtime.c && /tmp/runtime_error_dummy_raw && /tmp/runtime_error_args_none
 	echo "test-runtime-c OK"
 
 test-e2e-ssa-subset:

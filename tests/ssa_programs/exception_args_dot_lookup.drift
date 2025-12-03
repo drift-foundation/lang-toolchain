@@ -1,0 +1,16 @@
+exception MyError(a: String, b: String)
+
+fn make_error() returns Error {
+  throw MyError(a = "AA", b = "BBB")
+}
+
+fn main() returns Int {
+  try {
+    make_error()
+  } catch MyError(e) {
+    val la: Int = e.args[.a].unwrap().len()
+    val lb: Int = e.args[.b].unwrap().len()
+    return la + lb
+  }
+  return 0
+}
