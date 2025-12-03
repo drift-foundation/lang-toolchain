@@ -1,4 +1,4 @@
 {
   "mode": "compile",
-  "compile_error": "used before definition"
+  "compile_error": "call to can-error function ingest without error edges"
 }

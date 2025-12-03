@@ -45,21 +45,15 @@ def _fold_binary(op: str, lhs_val, rhs_val):
 
 def simplify_function(fn: mir.Function) -> mir.Function:
     """Return a simplified copy of the MIR function."""
-    blocks: Dict[str, mir.BasicBlock] = {}
-    for name, block in fn.blocks.items():
-        const_values: Dict[str, object] = {}
-        const_types: Dict[str, Type] = {}
-        uses: Dict[str, int] = {}
+    # Global use-count so we don't drop defs that are only used across blocks (e.g., args threaded into joins).
+    global_uses: Dict[str, int] = {}
 
-        def note_use(val: str) -> None:
-            uses[val] = uses.get(val, 0) + 1
+    def note_use(val: str) -> None:
+        global_uses[val] = global_uses.get(val, 0) + 1
 
-        # First pass: collect const values and uses.
+    # First pass: collect uses across the whole function.
+    for block in fn.blocks.values():
         for instr in block.instructions:
-            if isinstance(instr, mir.Const):
-                const_values[instr.dest] = instr.value
-                const_types[instr.dest] = instr.type
-            # track uses for pure defs; side-effecting ops are barriers, but still record operand uses.
             if isinstance(instr, mir.Move):
                 note_use(instr.source)
             elif isinstance(instr, mir.Binary):
@@ -108,8 +102,8 @@ def simplify_function(fn: mir.Function) -> mir.Function:
             elif isinstance(instr, mir.Drop):
                 note_use(instr.value)
 
-        if block.terminator:
-            term = block.terminator
+        term = block.terminator
+        if term:
             if isinstance(term, mir.CondBr):
                 note_use(term.cond)
                 for edge in (term.then, term.els):
@@ -132,6 +126,11 @@ def simplify_function(fn: mir.Function) -> mir.Function:
                             note_use(a)
             elif isinstance(term, mir.Throw):
                 note_use(term.error)
+
+    blocks: Dict[str, mir.BasicBlock] = {}
+    for name, block in fn.blocks.items():
+        const_values: Dict[str, object] = {}
+        const_types: Dict[str, Type] = {}
 
         new_instrs: list[mir.Instruction] = []
         for instr in block.instructions:
@@ -156,11 +155,14 @@ def simplify_function(fn: mir.Function) -> mir.Function:
                     const_values[instr.dest] = folded
                     const_types[instr.dest] = result_ty
                     continue
-            # Dead pure defs: drop if never used.
+            # Dead pure defs: drop if never used anywhere in the function.
             if isinstance(instr, (mir.Const, mir.Copy, mir.Binary, mir.Unary, mir.Move, mir.ArrayLen)):
                 dest = getattr(instr, "dest", None)
-                if dest and uses.get(dest, 0) == 0:
+                if dest and global_uses.get(dest, 0) == 0:
                     continue
+            if isinstance(instr, mir.Const):
+                const_values[instr.dest] = instr.value
+                const_types[instr.dest] = instr.type
             new_instrs.append(instr)
         new_block = mir.BasicBlock(name=block.name, params=list(block.params), instructions=new_instrs, terminator=block.terminator)
         blocks[name] = new_block

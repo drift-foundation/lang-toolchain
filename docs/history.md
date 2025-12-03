@@ -153,3 +153,6 @@
 
 ## 2025-12-03
 - Spec clarifications for struct `val` fields: they are type-level constants with compile-time initializers, excluded from layout/`size_of`, and disallow `Destructible`/non-const types; structs with only `val` fields are ZSTs. Added notes on required vs optional exception-args lookups and renamed `Option` to `Optional` (with a minimal `is_some`/`is_none`/`unwrap_or` API) in the spec.
+- Fixed the `__exc_args_get` ABI to use an explicit sret out-param (matching the C runtime) and adjusted SSA codegen to allocate/load the Optional result; this stopped the Optional-path segfaults in `exception_args_optional`.
+- SSA simplifier now counts uses across blocks so it no longer drops defs that are only threaded via edges/joins; try/catch lowered programs verify and run again.
+- Updated the `captures` e2e expected compile error to the current can-error invariant (“call to can-error function … without error edges”); all e2e/SSA suites are green again.

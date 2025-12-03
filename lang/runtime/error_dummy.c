@@ -45,25 +45,17 @@ int64_t drift_error_get_code(struct DriftError* err) {
     return err->code;
 }
 
-static void debug_opt(const char* label, struct DriftOptionalString opt) {
-    fprintf(stderr, "%s: is_some=%u len=%lld ptr=%p\n",
-            label, (unsigned)opt.is_some, (long long)opt.value.len, (void*)opt.value.data);
-}
-
 struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key) {
     struct DriftOptionalString out = OPTIONAL_STRING_NONE;
     if (!err) {
-        debug_opt("__exc_args_get err=NULL", out);
         return out;
     }
     const struct DriftString* val = drift_error_get_arg(err, &key);
     if (!val) {
-        debug_opt("__exc_args_get missing", out);
         return out;
     }
     out.is_some = 1;
     out.value = *val;
-    debug_opt("__exc_args_get hit", out);
     return out;
 }
 

@@ -31,6 +31,7 @@ Pick a concrete layout and write it down once (ABI + internal notes):
 * [ ] Add a short ABI note (e.g. `docs/design/drift-abi-optional.md` or a section in your existing ABI doc) describing this layout.
 * [ ] Add a tiny C helper struct typedef for tests (even if you handle everything in codegen).
 * **Status:** Renamed runtime/helper to `DriftOptionalString` and compiler type to `Optional<T>`.
+* **Recent:** Fixed the `__exc_args_get` ABI to use an explicit sret out-param and updated SSA codegen to allocate/load `Optional<String>` results; the args-view Optional e2e now passes without crashes.
 
 ---
 

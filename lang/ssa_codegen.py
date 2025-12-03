@@ -162,6 +162,8 @@ def emit_module_object(
             if elem_ty is not None:
                 return ir.LiteralStructType([WORD_INT, _llvm_type_with_structs(elem_ty).as_pointer()])
             raise
+
+    opt_string_ty = _llvm_type_with_structs(Type("Optional", (STR,)))
     # Assert MIR can_error markings cover all throw/call-with-edges sites.
     for f in funcs:
         for block in f.blocks.values():
@@ -384,12 +386,16 @@ def emit_module_object(
                                 )
                             elif instr.callee == "__exc_args_get":
                                 if rt_exc_args_get is None:
-                                    opt_ty = _llvm_type_with_structs(Type("Optional", (STR,)))
                                     rt_exc_args_get = ir.Function(
                                         module,
-                                        ir.FunctionType(opt_ty, [ERROR_PTR_TY, _drift_string_type()]),
+                                        ir.FunctionType(
+                                            ir.VoidType(),
+                                            [opt_string_ty.as_pointer(), ERROR_PTR_TY, _drift_string_type()],
+                                        ),
                                         name="__exc_args_get",
                                     )
+                                    # first param is sret out-param
+                                    rt_exc_args_get.args[0].attributes.add("sret")
                                 callee = rt_exc_args_get
                             elif instr.callee == "__exc_args_get_required":
                                 callee = module.globals.get("__exc_args_get_required")
@@ -405,7 +411,9 @@ def emit_module_object(
                             raise RuntimeError(f"call to can-error function {callee.name} without error edges")
                         args = [values[a] for a in instr.args]
                         if callee is rt_exc_args_get:
-                            call_val = builder.call(callee, args, name=instr.dest)
+                            out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
+                            builder.call(callee, [out_slot] + args)
+                            call_val = builder.load(out_slot, name=instr.dest)
                             values[instr.dest] = call_val
                         elif callee.name == "__exc_args_get_required":
                             call_val = builder.call(callee, args, name=instr.dest)
