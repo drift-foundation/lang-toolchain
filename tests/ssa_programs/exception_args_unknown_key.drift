@@ -1,0 +1,11 @@
+exception MyError(a: String)
+
+fn main() returns Int {
+  try {
+    throw MyError(a = "AA")
+  } catch MyError(e) {
+    val bad = e.args[.c]()  // expect compile-time error: unknown key
+    return 0
+  }
+  return 0
+}

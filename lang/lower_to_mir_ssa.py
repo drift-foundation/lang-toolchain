@@ -989,14 +989,22 @@ def _maybe_lower_args_view_index(
     struct_info = checked.structs[base_ty.name]
     if "error" not in struct_info.field_types or struct_info.field_types["error"] != ERROR:
         return None
-    # Lower index (ArgKey) to SSA and get its name field.
-    key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, None, None)
-    key_struct = checked.structs.get(key_ty.name)
-    if key_struct is None or "name" not in key_struct.field_types:
-        return None
-    key_name_ssa = env.fresh_ssa("exc_key_name", STR)
-    current.instructions.append(mir.FieldGet(dest=key_name_ssa, base=key_ssa, field="name"))
-    env.ctx.ssa_types[key_name_ssa] = STR
+    # Derive key name without re-evaluating the base when using leading-dot sugar.
+    key_name_ssa: Optional[str] = None
+    if isinstance(expr.index, ast.Attr) and expr.index.value is expr.value:
+        # Leading-dot case: index is Attr on the same base; use the attr name directly.
+        key_name_ssa = env.fresh_ssa("exc_key_name", STR)
+        current.instructions.append(mir.Const(dest=key_name_ssa, type=STR, value=expr.index.attr))
+        env.ctx.ssa_types[key_name_ssa] = STR
+    else:
+        # Lower index (ArgKey) to SSA and get its name field.
+        key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, None, None)
+        key_struct = checked.structs.get(key_ty.name)
+        if key_struct is None or "name" not in key_struct.field_types:
+            return None
+        key_name_ssa = env.fresh_ssa("exc_key_name", STR)
+        current.instructions.append(mir.FieldGet(dest=key_name_ssa, base=key_ssa, field="name"))
+        env.ctx.ssa_types[key_name_ssa] = STR
     # Lower: tmp_error = base.error; call __exc_args_get(tmp_error, key_name).
     err_ssa = env.fresh_ssa("exc_err", ERROR)
     current.instructions.append(mir.FieldGet(dest=err_ssa, base=base_ssa, field="error"))
