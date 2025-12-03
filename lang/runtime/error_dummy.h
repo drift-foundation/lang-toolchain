@@ -17,6 +17,8 @@ struct DriftOptionString {
     uint8_t is_some;
     struct DriftString value;
 };
+#define OPTION_STRING_NONE \
+    (struct DriftOptionString){.is_some = 0, .value = (struct DriftString){0, NULL}}
 
 struct DriftError {
     int64_t code;               // matches Drift Int (word-sized)
