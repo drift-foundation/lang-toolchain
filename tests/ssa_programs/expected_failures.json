@@ -1,9 +1,11 @@
 {
-  "exception_args_unknown_key.drift": "Struct 'MyErrorArgsView' has no field '.'",
+  "exception_args_unknown_key.drift": "Exception 'MyError' has no field 'c'",
   "binder_out_of_scope_error.drift": "Unknown identifier 'e'",
   "exception_ctor_bad_field.drift": "Exception 'E' has no field 'x'",
   "exception_ctor_unknown.drift": "Unknown exception 'E'",
   "exception_ctor_wrong_type.drift": "Expected type Int, got String",
   "negative_field_missing.drift": "Struct 'Point' has no field 'z'",
-  "negative_field_type.drift": "Expected type Int, got String"
+  "negative_field_type.drift": "Expected type Int, got String",
+  "returns_error_not_allowed.drift": "Functions may not return Error",
+  "error_code_payload.drift": "Expected type Int64, got Int"
 }

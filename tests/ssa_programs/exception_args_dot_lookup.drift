@@ -1,6 +1,6 @@
 exception MyError(a: String, b: String)
 
-fn make_error() returns Error {
+fn make_error() returns Void {
   throw MyError(a = "AA", b = "BBB")
 }
 

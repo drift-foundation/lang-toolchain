@@ -1863,6 +1863,7 @@ The same pattern applies to alternative map implementations.
 Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
 Exception declarations create constructor names in the value namespace. `throw ExcName(field = expr, ...)` is valid syntax: fields must match the declared names/types, produce an `Error` value with the exception’s deterministic `event_code`, and integrate with the existing `try/catch` event dispatch. Every exception argument is recorded in `Error.args` as a diagnostic string, and any `^`-captured locals are recorded in `ctx_frames` the same way; both are diagnostics, not user-facing payloads.
 Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
+`Error` itself is a catch-all handler type: user functions do not return `Error` or throw `Error` directly; they throw concrete exception events, and catch blocks may bind either a specific exception type or `Error` as a generic binder.
 
 ### 14.1. Goals
 Drift’s exception system is designed to:

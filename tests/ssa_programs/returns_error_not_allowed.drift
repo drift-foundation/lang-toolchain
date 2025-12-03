@@ -1,0 +1,3 @@
+fn bad() returns Error {
+  return drift_error_new_dummy(1, "", "")
+}

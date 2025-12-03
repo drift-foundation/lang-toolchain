@@ -1,0 +1,21 @@
+import std.console.out
+
+exception DotErr(a: String, b: String)
+
+fn raise_dot() returns Void {
+    throw DotErr(a = "alpha", b = "beta")
+}
+
+fn main() returns Int {
+    try {
+        raise_dot()
+    } catch DotErr(e) {
+        val view = e.args
+        val _a = view[view.a()]
+        val _b = view[view.b()]
+        out.writeln("caught")
+        return 0
+    }
+    out.writeln("no error")
+    return 1
+}

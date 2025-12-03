@@ -322,6 +322,8 @@ class Checker:
                 return_type = resolve_type(fn.return_type)
             except TypeSystemError as exc:
                 raise CheckError(str(exc)) from exc
+            if return_type == ERROR:
+                raise CheckError(f"{fn.loc.line}:{fn.loc.column}: Functions may not return Error")
             signature = FunctionSignature(
                 name=fn.name,
                 params=param_types,
@@ -646,8 +648,15 @@ class Checker:
             # Special-case exception args-view: key type must match the view's key type.
             for exc in self.exception_infos.values():
                 if container_type.name == exc.args_view_type:
-                    index_type = self._check_expr(expr.index, ctx)
                     expected_key_ty = Type(exc.arg_key_type)
+                    if isinstance(expr.index, ast.Attr) and expr.index.value is expr.value:
+                        if expr.index.attr not in exc.arg_types:
+                            raise CheckError(
+                                f"{expr.index.loc.line}:{expr.index.loc.column}: Exception '{exc.name}' has no field '{expr.index.attr}'"
+                            )
+                        # leading-dot sugar: treat `.field` as the ArgKey for that field
+                        return Type("Option", (STR,))
+                    index_type = self._check_expr(expr.index, ctx)
                     self._expect_type(index_type, expected_key_ty, expr.index.loc)
                     return Type("Option", (STR,))
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Type {container_type} is not indexable")

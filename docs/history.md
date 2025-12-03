@@ -149,3 +149,4 @@
 - Clarified the exception model in the language spec: all exception arguments and `^`-captured locals are recorded as diagnostic strings in `Error.args` / `ctx_frames`; removed the old “first payload string” wording.
 - Introduced a formal `Diagnostic` + `DiagnosticCtx` definition in the traits chapter and marked `Debuggable` as legacy for diagnostics; Chapter 14 now explicitly requires `Diagnostic` for exception fields and captures.
 - Updated the exceptions/diagnostics work tracker with a spec-only Step 2 plan; implementation/runtime changes remain out of scope for this pass.
+- Hardened dot-shortcut args access: parser now captures `.field` correctly, checker handles `e.args[.foo]` sugar and rejects unknown keys, and the SSA backend fixes the `__exc_args_get` ABI (sret) to stop crashes; added an e2e `exception_args_dot` covering the feature. Added a checker guard that functions may not `return Error`, with a negative SSA test.
