@@ -14,7 +14,19 @@ from . import ast, mir
 from .checker import CheckedProgram
 from .ssa_env import SSAEnv, SSAContext
 from .types import ERROR, INT
-from .types import Type, ReferenceType, BOOL, I64, INT, F64, STR, array_element_type, array_of, ref_of
+from .types import (
+    Type,
+    ReferenceType,
+    BOOL,
+    I64,
+    INT,
+    F64,
+    STR,
+    UNIT,
+    array_element_type,
+    array_of,
+    ref_of,
+)
 
 
 @dataclass
@@ -535,8 +547,27 @@ def lower_expr_to_ssa(
         if isinstance(expr.func, ast.Name):
             callee = expr.func.ident
         elif isinstance(expr.func, ast.Attr) and isinstance(expr.func.value, ast.Name):
-            # Method-style call on a resolved value; treat as direct call to attr.
-            callee = f"{expr.func.value.ident}.{expr.func.attr}"
+            # Method-style call on a resolved value; use the base type if known.
+            base_ssa = env.lookup_user(expr.func.value.ident) if env.has_user(expr.func.value.ident) else None
+            base_ty = env.ctx.ssa_types.get(base_ssa) if base_ssa else None
+            method_callee = None
+            if base_ty and base_ty.name in checked.structs:
+                struct_info = checked.structs[base_ty.name]
+                if struct_info.methods and expr.func.attr in struct_info.methods:
+                    method_callee = f"{base_ty.name}.{expr.func.attr}"
+                    # If this is an args-view key helper (no args), synthesize ArgKey directly.
+                    if not expr.args and base_ty.name.endswith("ArgsView"):
+                        key_ty = Type(base_ty.name.replace("ArgsView", "ArgKey"))
+                        key_const = env.fresh_ssa(f"{expr.func.attr}_key", STR)
+                        current.instructions.append(
+                            mir.Const(dest=key_const, type=STR, value=expr.func.attr, loc=getattr(expr, "loc", None))
+                        )
+                        env.ctx.ssa_types[key_const] = STR
+                        dest = env.fresh_ssa(expr.func.attr, key_ty)
+                        current.instructions.append(mir.StructInit(dest=dest, type=key_ty, args=[key_const]))
+                        env.ctx.ssa_types[dest] = key_ty
+                        return dest, key_ty, current, env
+            callee = method_callee or f"{expr.func.value.ident}.{expr.func.attr}"
         else:
             raise LoweringError("unsupported call callee shape in SSA lowering")
         if callee not in checked.functions:
@@ -589,6 +620,13 @@ def lower_expr_to_ssa(
         return dest, out_ty, current, env
     if isinstance(expr, ast.Attr):
         base_ssa, base_ty, current, env = lower_expr_to_ssa(expr.value, env, current, checked, blocks, fresh_block)
+        exc_info = checked.exceptions.get(base_ty.name)
+        if exc_info and expr.attr == "args":
+            view_ty = Type(exc_info.args_view_type)
+            dest = env.fresh_ssa("args_view", view_ty)
+            current.instructions.append(mir.StructInit(dest=dest, type=view_ty, args=[base_ssa]))
+            env.ctx.ssa_types[dest] = view_ty
+            return dest, view_ty, current, env
         field_ty = _lookup_field_type(base_ty, expr.attr, checked)
         dest = env.fresh_ssa(expr.attr, field_ty)
         current.instructions.append(mir.FieldGet(dest=dest, base=base_ssa, field=expr.attr, loc=getattr(expr, "loc", None)))
@@ -705,7 +743,10 @@ def _lower_try_catch_expr(
         blocks[catch_name] = catch_block
         catch_env = env.clone_for_block({u: p.name for u, p in zip(live_users, catch_params[1:])})
         if arm.binder:
-            catch_env.bind_user(arm.binder, catch_params[0].name, ERROR)
+            binder_ty = ERROR
+            if arm.event and arm.event in checked.exceptions:
+                binder_ty = Type(arm.event)
+            catch_env.bind_user(arm.binder, catch_params[0].name, binder_ty)
         if not arm.block.statements:
             raise LoweringError("catch block must produce a value")
         catch_stmts = arm.block.statements
@@ -843,7 +884,10 @@ def lower_try_stmt(
         blocks[catch_name] = catch_block
         catch_env = env.clone_for_block({u: p.name for u, p in zip(live_users, catch_params[1:])})
         if clause.binder:
-            catch_env.bind_user(clause.binder, catch_params[0].name, ERROR)
+            binder_ty = ERROR
+            if clause.event and clause.event in checked.exceptions:
+                binder_ty = Type(clause.event)
+            catch_env.bind_user(clause.binder, catch_params[0].name, binder_ty)
         catch_block, catch_env = lower_block_in_env(clause.block.statements, catch_env, blocks, catch_block, checked, fresh_block)
         catch_blocks.append(catch_block)
         catch_envs[catch_name] = catch_env

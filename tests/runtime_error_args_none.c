@@ -1,4 +1,4 @@
-#include "lang/runtime/error_dummy.h"
+#include "runtime/error_dummy.h"
 #include <assert.h>
 
 int main(void) {

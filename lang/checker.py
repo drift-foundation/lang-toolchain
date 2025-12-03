@@ -297,11 +297,13 @@ class Checker:
             for arg_name in arg_order:
                 view_methods[arg_name] = FunctionSignature(
                     name=f"{exc.name}ArgsView.{arg_name}",
-                    params=(Type(exc_info.args_view_type),),
+                    params=(),
                     return_type=Type(exc_info.arg_key_type),
                     effects=None,
                 )
             view_struct.methods.update(view_methods)
+            for sig in view_methods.values():
+                self.function_infos[sig.name] = FunctionInfo(signature=sig, node=None)
             exc_info.arg_key_struct = key_struct
             exc_info.args_view_struct = view_struct
             self.exception_infos[exc.name] = exc_info
@@ -480,6 +482,11 @@ class Checker:
             for clause in stmt.catches:
                 catch_scope = Scope(parent=ctx.scope)
                 binder_name = clause.binder
+                binder_type = ERROR
+                if clause.event:
+                    exc_info = self.exception_infos.get(clause.event)
+                    if exc_info:
+                        binder_type = Type(exc_info.name)
                 catch_ctx = FunctionContext(
                     name=ctx.name,
                     signature=ctx.signature,
@@ -489,7 +496,7 @@ class Checker:
                 if binder_name:
                     catch_scope.define(
                         binder_name,
-                        VarInfo(type=ERROR, mutable=False),
+                        VarInfo(type=binder_type, mutable=False),
                         stmt.loc,
                     )
                 if clause.event:
@@ -810,6 +817,13 @@ class Checker:
             base_type = self._check_expr(func_expr.value, ctx)
             if base_type == CONSOLE_OUT and func_expr.attr == "writeln":
                 return "out.writeln"
+            struct_info = self.struct_infos.get(base_type.name)
+            if struct_info:
+                if struct_info.methods and func_expr.attr in struct_info.methods:
+                    return f"{base_type.name}.{func_expr.attr}"
+                # Fallback for synthetic args-view helpers: allow method name even if not pre-registered.
+                if base_type.name.endswith("ArgsView"):
+                    return f"{base_type.name}.{func_expr.attr}"
             raise CheckError(
                 f"{func_expr.loc.line}:{func_expr.loc.column}: Unknown attribute '{func_expr.attr}'"
             )

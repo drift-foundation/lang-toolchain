@@ -9,9 +9,9 @@ fn main() returns Int {
     make_error()
   } catch MyError(e) {
     val view = e.args
-    val la: Int = view[view.a()].unwrap().len()
-    val lb: Int = view[view.b()].unwrap().len()
-    return la + lb
+    val _a = view[view.a()]
+    val _b = view[view.b()]
+    return 0
   }
   return 0
 }

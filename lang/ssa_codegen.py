@@ -103,6 +103,8 @@ def emit_module_object(
     can_error_funcs: set[str] = {f.name for f in funcs if getattr(f, "can_error", False)}
     # Cached runtime decls
     rt_error_dummy: Optional[ir.Function] = None
+    rt_error_add_arg: Optional[ir.Function] = None
+    rt_exc_args_get: Optional[ir.Function] = None
 
     def _reachable(f: mir.Function) -> set[str]:
         seen: set[str] = set()
@@ -361,6 +363,14 @@ def emit_module_object(
                                         name="drift_error_new_dummy",
                                     )
                                 callee = rt_error_dummy
+                            elif instr.callee == "drift_error_add_arg":
+                                if rt_error_add_arg is None:
+                                    rt_error_add_arg = ir.Function(
+                                        module,
+                                        ir.FunctionType(ir.VoidType(), [ERROR_PTR_TY, _drift_string_type(), _drift_string_type()]),
+                                        name="drift_error_add_arg",
+                                    )
+                                callee = rt_error_add_arg
                             elif instr.callee == "drift_string_eq":
                                 callee = ir.Function(
                                     module,
@@ -368,11 +378,31 @@ def emit_module_object(
                                     name="drift_string_eq",
                                 )
                             elif instr.callee == "__exc_args_get":
-                                callee = ir.Function(
-                                    module,
-                                    ir.FunctionType(_llvm_type_with_structs(Type("Option", (STR,))), [ERROR_PTR_TY, _drift_string_type()]),
-                                    name="__exc_args_get",
-                                )
+                                if rt_exc_args_get is None:
+                                    rt_exc_args_get = ir.Function(
+                                        module,
+                                        ir.FunctionType(_llvm_type_with_structs(Type("Option", (STR,))), [ERROR_PTR_TY, _drift_string_type()]),
+                                        name="__exc_args_get",
+                                    )
+                                callee = rt_exc_args_get
+                            elif "." in instr.callee:
+                                # synthetic method like MyErrorArgsView.a
+                                # treat as a tiny helper that returns an ArgKey struct {name: String}
+                                parts = instr.callee.split(".")
+                                if len(parts) == 2 and parts[0] in struct_layouts:
+                                    struct_name = parts[0]
+                                    if struct_name not in struct_slots:
+                                        eb = ir.IRBuilder(entry_block)
+                                        eb.position_at_start(entry_block)
+                                        struct_slots[struct_name] = eb.alloca(
+                                            _llvm_type_with_structs(Type(struct_name)), name=f"{struct_name}.slot"
+                                        )
+                                    # synthesizing as a function: return type is ArgKey struct
+                                    callee = ir.Function(
+                                        module,
+                                        ir.FunctionType(_llvm_type_with_structs(Type(struct_name.replace("ArgsView", "ArgKey"))), []),
+                                        name=instr.callee,
+                                    )
                             else:
                                 raise RuntimeError(f"unknown callee {instr.callee}")
                         if callee.name in can_error_funcs:

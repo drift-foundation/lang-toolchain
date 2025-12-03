@@ -157,9 +157,9 @@ Compiler/runtime work remains.
 
 **SSA/runtime plumbing:** args-view indexing lowers to `__exc_args_get` returning an `Option<String>` wrapper over `drift_error_get_arg`; `Option<String>` has a concrete LLVM/C shape (`{i8 is_some, DriftString}`). `ExceptionCtor` now seeds all declared args: first field via `drift_error_new_dummy(code, key, payload)`, remaining fields via `drift_error_add_arg(err, key, value)`. Dot-shortcut rewrite is still pending.
 
-**Compiler alignment:** args-view indexing now expects the per-exception ArgKey type (ArgKey structs + key helper methods are synthesized); lowering extracts the key name and calls `__exc_args_get`, returning `Option<String>`.
+**Compiler alignment:** args-view indexing now expects the per-exception ArgKey type (ArgKey structs + key helper methods are synthesized); lowering extracts the key name and calls `__exc_args_get`, returning `Option<String>`. `e.args` on an exception lowers to the synthetic args-view wrapper.
 
-**Tests:** Added SSA-level cases for args lookup (now using ArgKey helpers) and dot-shortcut; added a C runtime test (`runtime_error_args_none.c`) to cover the `None` branch of `__exc_args_get`. Justfile `test-runtime-c` compiles/execs both runtime tests.
+**Tests:** Added SSA-level cases for args lookup (now using ArgKey helpers) and dot-style usage, plus a C runtime test (`runtime_error_args_none.c`) for the `None` branch of `__exc_args_get`. `test-runtime-c` builds both runtime tests (manual run succeeds; Just invocation may still hit temp-dir perms in some environments).
 
 ### 3B.1 Front-end: exception metadata & synthetic types
 
