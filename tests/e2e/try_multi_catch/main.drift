@@ -4,7 +4,7 @@ fn may_throw(flag: Int) returns Int {
   if flag == 0 {
     return 0
   } else {
-    throw drift_error_new_dummy(flag, "")
+    throw drift_error_new_dummy(flag, "payload", "")
   }
 }
 

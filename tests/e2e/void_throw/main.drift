@@ -4,7 +4,7 @@ fn maybe_fail(flag: Int) returns Void {
   if flag == 0 {
     return
   } else {
-    throw drift_error_new_dummy(flag, "")
+    throw drift_error_new_dummy(flag, "payload", "")
   }
 }
 

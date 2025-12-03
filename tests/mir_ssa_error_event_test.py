@@ -8,7 +8,7 @@ import pytest
 
 from lang import mir
 from lang.ssa_codegen import emit_module_object
-from lang.types import ERROR, INT
+from lang.types import ERROR, INT, STR
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,8 +34,10 @@ def _build_main_fn(code: int) -> mir.Function:
     """Call runtime error_new_dummy, then get_code(err), return it."""
     bb0 = mir.BasicBlock(name="bb0", params=[])
     bb0.instructions.append(mir.Const(dest="_code_in", type=INT, value=code))
+    bb0.instructions.append(mir.Const(dest="_key", type=STR, value=""))
+    bb0.instructions.append(mir.Const(dest="_payload", type=STR, value=""))
     bb0.instructions.append(
-        mir.Call(dest="_err", callee="drift_error_new_dummy", args=["_code_in"], ret_type=ERROR, err_dest=None, normal=None, error=None)
+        mir.Call(dest="_err", callee="drift_error_new_dummy", args=["_code_in", "_key", "_payload"], ret_type=ERROR, err_dest=None, normal=None, error=None)
     )
     bb0.instructions.append(mir.Call(dest="_out", callee="get_code", args=["_err"], ret_type=INT, err_dest=None, normal=None, error=None))
     bb0.terminator = mir.Return(value="_out")

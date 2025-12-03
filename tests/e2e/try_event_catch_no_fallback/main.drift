@@ -5,7 +5,7 @@ exception MyEventB(msg: String)
 
 fn throw_b() returns Int {
   // Event code 2 (second exception) will not match the first catch arm.
-  throw drift_error_new_dummy(2, "")
+  throw drift_error_new_dummy(2, "payload", "")
 }
 
 fn do_inner() returns Int {

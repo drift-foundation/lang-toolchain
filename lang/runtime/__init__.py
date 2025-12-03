@@ -129,7 +129,7 @@ BUILTINS: Mapping[str, BuiltinFunction] = {
 
 SPECIAL_SIGNATURES: Mapping[str, FunctionSignature] = {
     "out.writeln": OUT_WRITELN_SIGNATURE,
-    "drift_error_new_dummy": FunctionSignature("drift_error_new_dummy", (INT, STR), ERROR, effects=None),
+    "drift_error_new_dummy": FunctionSignature("drift_error_new_dummy", (INT, STR, STR), ERROR, effects=None),
     "drift_error_get_code": FunctionSignature("drift_error_get_code", (ERROR,), INT, effects=None),
 }
 

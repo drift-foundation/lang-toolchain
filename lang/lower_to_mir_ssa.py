@@ -392,8 +392,12 @@ def lower_expr_to_ssa(
         env.ctx.ssa_types[code_ssa] = I64
         # Thread first payload field if present; otherwise use empty string literal.
         payload_ssa: Optional[str] = None
+        key_ssa: Optional[str] = None
         if expr.fields:
-            first_expr = next(iter(expr.fields.values()))
+            first_name, first_expr = next(iter(expr.fields.items()))
+            key_ssa = env.fresh_ssa("exc_key", STR)
+            current.instructions.append(mir.Const(dest=key_ssa, type=STR, value=first_name, loc=loc))
+            env.ctx.ssa_types[key_ssa] = STR
             payload_ssa, payload_ty, current, env = lower_expr_to_ssa(
                 first_expr, env, current, checked, blocks, fresh_block
             )
@@ -403,12 +407,16 @@ def lower_expr_to_ssa(
             payload_ssa = env.fresh_ssa("exc_payload", STR)
             current.instructions.append(mir.Const(dest=payload_ssa, type=STR, value="", loc=loc))
             env.ctx.ssa_types[payload_ssa] = STR
+        if key_ssa is None:
+            key_ssa = env.fresh_ssa("exc_key", STR)
+            current.instructions.append(mir.Const(dest=key_ssa, type=STR, value="", loc=loc))
+            env.ctx.ssa_types[key_ssa] = STR
         dest_err = env.fresh_ssa("exc", ERROR)
         current.instructions.append(
             mir.Call(
                 dest=dest_err,
                 callee="drift_error_new_dummy",
-                args=[code_ssa, payload_ssa],
+                args=[code_ssa, key_ssa, payload_ssa],
                 ret_type=ERROR,
                 err_dest=None,
                 normal=None,

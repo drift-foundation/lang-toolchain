@@ -18,12 +18,17 @@ I64_TY = ir.IntType(64)
 I32_TY = ir.IntType(32)
 I1_TY = ir.IntType(1)
 ERROR_PTR_TY = ir.IntType(8).as_pointer()
+DRIFT_ERROR_ARG_PTR_TY = None  # initialized lazily after _drift_string_type is defined
 I8P = ir.IntType(8).as_pointer()
 
 
 def _drift_string_type() -> ir.LiteralStructType:
     # { len: i64, ptr: i8* }
     return ir.LiteralStructType([I64_TY, I8P])
+
+
+# initialize the arg pointer type after string type is defined
+DRIFT_ERROR_ARG_PTR_TY = ir.LiteralStructType([_drift_string_type(), _drift_string_type()]).as_pointer()
 
 
 def emit_dummy_main_object(out_path: Path) -> None:
@@ -348,7 +353,9 @@ def emit_module_object(
                                 if rt_error_dummy is None:
                                     rt_error_dummy = ir.Function(
                                         module,
-                                        ir.FunctionType(ERROR_PTR_TY, [WORD_INT, _drift_string_type()]),
+                                        ir.FunctionType(
+                                            ERROR_PTR_TY, [WORD_INT, _drift_string_type(), _drift_string_type()]
+                                        ),
                                         name="drift_error_new_dummy",
                                     )
                                 callee = rt_error_dummy
@@ -400,7 +407,9 @@ def emit_module_object(
                     base_ty = ssa_types.get(instr.base)
                     if base_ty == ERROR:
                         base_ptr = values[instr.base]
-                        err_ty = ir.LiteralStructType([ir.IntType(64), _drift_string_type()])
+                        err_ty = ir.LiteralStructType(
+                            [ir.IntType(64), _drift_string_type(), DRIFT_ERROR_ARG_PTR_TY, WORD_INT]
+                        )
                         cast_ptr = builder.bitcast(base_ptr, err_ty.as_pointer())
                         if instr.field == "code":
                             field_ptr = builder.gep(cast_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)

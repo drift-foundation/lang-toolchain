@@ -3,7 +3,7 @@
 
 static void check(uint64_t raw_in) {
     struct DriftString empty = (struct DriftString){0, NULL};
-    struct DriftError* err = drift_error_new_dummy((int64_t)raw_in, empty);
+    struct DriftError* err = drift_error_new_dummy((int64_t)raw_in, empty, empty);
     uint64_t raw = (uint64_t)err->code;
     uint64_t kind = raw >> 60;
     uint64_t payload = raw & DRIFT_EVENT_PAYLOAD_MASK;

@@ -1,6 +1,6 @@
 fn make_error() returns Error {
   // code=7, payload="p".
-  return drift_error_new_dummy(7, "p")
+  return drift_error_new_dummy(7, "payload", "p")
 }
 
 fn main() returns Int64 {

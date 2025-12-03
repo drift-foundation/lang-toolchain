@@ -3,7 +3,7 @@
 
 int main(void) {
     struct DriftString empty = {0, NULL};
-    struct DriftError* err = drift_error_new_dummy((int64_t)0xFFFFFFFFFFFFFFFFULL, empty);
+    struct DriftError* err = drift_error_new_dummy((int64_t)0xFFFFFFFFFFFFFFFFULL, empty, empty);
     uint64_t code = (uint64_t)err->code;
     uint64_t kind = code >> 60;
     uint64_t payload = code & DRIFT_EVENT_PAYLOAD_MASK;

@@ -1,7 +1,7 @@
 exception MyError(msg: String)
 
 fn may_fail() returns Int {
-  throw drift_error_new_dummy(1, "")
+  throw drift_error_new_dummy(1, "msg", "")
 }
 
 fn main() returns Int {

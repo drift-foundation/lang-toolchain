@@ -10,7 +10,7 @@ pytest.importorskip("llvmlite")
 
 from lang import mir
 from lang.ssa_codegen import emit_module_object
-from lang.types import ERROR, INT, UNIT
+from lang.types import ERROR, INT, STR, UNIT
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,11 +40,13 @@ def _build_callee() -> mir.Function:
     ok.terminator = mir.Return(value="_ok_val", error="_err_null")
 
     err = mir.BasicBlock(name="bb_err", params=[])
+    err.instructions.append(mir.Const(dest="_empty_key", type=STR, value=""))
+    err.instructions.append(mir.Const(dest="_empty_payload", type=STR, value=""))
     err.instructions.append(
         mir.Call(
             dest="_err_ptr",
             callee="drift_error_new_dummy",
-            args=["_flag"],
+            args=["_flag", "_empty_key", "_empty_payload"],
             ret_type=ERROR,
             err_dest=None,
             normal=None,
@@ -82,11 +84,13 @@ def _build_throwing_callee() -> mir.Function:
     ok.terminator = mir.Return(value="_ok_val", error="_err_null")
 
     err = mir.BasicBlock(name="bb_err", params=[])
+    err.instructions.append(mir.Const(dest="_empty_key", type=STR, value=""))
+    err.instructions.append(mir.Const(dest="_empty_payload", type=STR, value=""))
     err.instructions.append(
         mir.Call(
             dest="_err_ptr",
             callee="drift_error_new_dummy",
-            args=["_flag"],
+            args=["_flag", "_empty_key", "_empty_payload"],
             ret_type=ERROR,
             err_dest=None,
             normal=None,
@@ -122,11 +126,13 @@ def _build_void_callee() -> mir.Function:
     ok.terminator = mir.Return(value=None, error="_err_null")
 
     err = mir.BasicBlock(name="bb_err", params=[])
+    err.instructions.append(mir.Const(dest="_empty_key", type=STR, value=""))
+    err.instructions.append(mir.Const(dest="_empty_payload", type=STR, value=""))
     err.instructions.append(
         mir.Call(
             dest="_err_ptr",
             callee="drift_error_new_dummy",
-            args=["_flag"],
+            args=["_flag", "_empty_key", "_empty_payload"],
             ret_type=ERROR,
             err_dest=None,
             normal=None,

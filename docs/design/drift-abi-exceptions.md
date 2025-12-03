@@ -87,7 +87,8 @@ The compiler enforces:
 The runtime provides a helper for tests and non-ABI dummy errors:
 
 ```c
-Error* drift_error_new_dummy(uint64_t raw_payload60, DriftString payload);
+// test helper: constructs an Error with code + single (key, payload) arg
+Error* drift_error_new_dummy(uint64_t raw_payload60, DriftString key, DriftString payload);
 ```
 
 Semantics:

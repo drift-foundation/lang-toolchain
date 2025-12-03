@@ -4,7 +4,7 @@ fn foo(flag: Int) returns Int {
   if flag == 1 {
     throw MyErr(msg = "one")
   }
-  throw drift_error_new_dummy(flag, "")
+  throw drift_error_new_dummy(flag, "payload", "")
 }
 
 fn main() returns Int {
