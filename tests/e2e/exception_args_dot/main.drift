@@ -11,9 +11,11 @@ fn main() returns Int {
         raise_dot()
     } catch DotErr(e) {
         val view = e.args
-        val _a = view[view.a()]
-        val _b = view[view.b()]
+        val _a = view[.a]
+        val _b = view[.b]
         out.writeln("caught")
+        out.writeln(_a)
+        out.writeln(_b)
         return 0
     }
     out.writeln("no error")

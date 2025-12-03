@@ -654,8 +654,8 @@ class Checker:
                             raise CheckError(
                                 f"{expr.index.loc.line}:{expr.index.loc.column}: Exception '{exc.name}' has no field '{expr.index.attr}'"
                             )
-                        # leading-dot sugar: treat `.field` as the ArgKey for that field
-                        return Type("Option", (STR,))
+                        # leading-dot sugar: treat `.field` as the key; field is guaranteed to exist
+                        return STR
                     index_type = self._check_expr(expr.index, ctx)
                     self._expect_type(index_type, expected_key_ty, expr.index.loc)
                     return Type("Option", (STR,))

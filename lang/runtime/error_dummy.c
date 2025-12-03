@@ -68,3 +68,11 @@ const struct DriftString* drift_error_get_arg(const struct DriftError* err, cons
     }
     return NULL;
 }
+
+struct DriftString __exc_args_get_required(const struct DriftError* err, struct DriftString key) {
+    struct DriftString empty = {0, NULL};
+    if (!err) return empty;
+    const struct DriftString* val = drift_error_get_arg(err, &key);
+    if (!val) return empty;
+    return *val;
+}

@@ -1,5 +1,5 @@
 {
   "mode": "run",
   "exit_code": 0,
-  "stdout": "caught\n"
+  "stdout": "caught\nalpha\nbeta\n"
 }

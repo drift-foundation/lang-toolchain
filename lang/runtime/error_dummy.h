@@ -34,3 +34,5 @@ const struct DriftString* drift_error_get_arg(const struct DriftError* err, cons
 void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct DriftString value);
 // Option<String> return for exception arg lookup.
 struct DriftOptionString __exc_args_get(const struct DriftError* err, struct DriftString key);
+// Required arg lookup: returns empty string if missing (used for typed catches where the field is guaranteed).
+struct DriftString __exc_args_get_required(const struct DriftError* err, struct DriftString key);

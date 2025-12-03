@@ -382,22 +382,29 @@ def emit_module_object(
                                     opt_ty = _llvm_type_with_structs(Type("Option", (STR,)))
                                     rt_exc_args_get = ir.Function(
                                         module,
-                                        ir.FunctionType(ir.VoidType(), [opt_ty.as_pointer(), ERROR_PTR_TY, _drift_string_type()]),
+                                        ir.FunctionType(opt_ty, [ERROR_PTR_TY, _drift_string_type()]),
                                         name="__exc_args_get",
                                     )
-                                    rt_exc_args_get.args[0].attributes.add("sret")
                                 callee = rt_exc_args_get
+                            elif instr.callee == "__exc_args_get_required":
+                                callee = module.globals.get("__exc_args_get_required")
+                                if callee is None:
+                                    callee = ir.Function(
+                                        module,
+                                        ir.FunctionType(_drift_string_type(), [ERROR_PTR_TY, _drift_string_type()]),
+                                        name="__exc_args_get_required",
+                                    )
                             else:
                                 raise RuntimeError(f"unknown callee {instr.callee}")
                         if callee.name in can_error_funcs:
                             raise RuntimeError(f"call to can-error function {callee.name} without error edges")
                         args = [values[a] for a in instr.args]
                         if callee is rt_exc_args_get:
-                            opt_ty = _llvm_type_with_structs(instr.ret_type)
-                            sret_slot = builder.alloca(opt_ty, name=f"{instr.dest}.sret")
-                            builder.call(callee, [sret_slot] + args, name=f"{instr.dest}_call")
-                            loaded = builder.load(sret_slot, name=instr.dest)
-                            values[instr.dest] = loaded
+                            call_val = builder.call(callee, args, name=instr.dest)
+                            values[instr.dest] = call_val
+                        elif callee.name == "__exc_args_get_required":
+                            call_val = builder.call(callee, args, name=instr.dest)
+                            values[instr.dest] = call_val
                         else:
                             call_val = builder.call(callee, args, name=instr.dest)
                             values[instr.dest] = call_val

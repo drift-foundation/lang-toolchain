@@ -991,11 +991,13 @@ def _maybe_lower_args_view_index(
         return None
     # Derive key name without re-evaluating the base when using leading-dot sugar.
     key_name_ssa: Optional[str] = None
+    direct_value = False
     if isinstance(expr.index, ast.Attr) and expr.index.value is expr.value:
-        # Leading-dot case: index is Attr on the same base; use the attr name directly.
+        # Leading-dot case: index is Attr on the same base; use the attr name directly and return String.
         key_name_ssa = env.fresh_ssa("exc_key_name", STR)
         current.instructions.append(mir.Const(dest=key_name_ssa, type=STR, value=expr.index.attr))
         env.ctx.ssa_types[key_name_ssa] = STR
+        direct_value = True
     else:
         # Lower index (ArgKey) to SSA and get its name field.
         key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, None, None)
@@ -1005,10 +1007,17 @@ def _maybe_lower_args_view_index(
         key_name_ssa = env.fresh_ssa("exc_key_name", STR)
         current.instructions.append(mir.FieldGet(dest=key_name_ssa, base=key_ssa, field="name"))
         env.ctx.ssa_types[key_name_ssa] = STR
-    # Lower: tmp_error = base.error; call __exc_args_get(tmp_error, key_name).
+    # Lower: tmp_error = base.error; call the appropriate helper.
     err_ssa = env.fresh_ssa("exc_err", ERROR)
     current.instructions.append(mir.FieldGet(dest=err_ssa, base=base_ssa, field="error"))
     env.ctx.ssa_types[err_ssa] = ERROR
+    if direct_value:
+        dest = env.fresh_ssa("exc_arg_val", STR)
+        current.instructions.append(
+            mir.Call(dest=dest, callee="__exc_args_get_required", args=[err_ssa, key_name_ssa], ret_type=STR)
+        )
+        env.ctx.ssa_types[dest] = STR
+        return dest, STR, current, env
     dest = env.fresh_ssa("exc_arg", Type("Option", (STR,)))
     current.instructions.append(
         mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_name_ssa], ret_type=Type("Option", (STR,)))
