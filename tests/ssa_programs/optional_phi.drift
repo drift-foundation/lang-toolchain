@@ -1,0 +1,9 @@
+fn choose(flag: Bool) returns Int {
+    var opt: Optional[Int] = drift_optional_int_none()
+    if flag {
+        opt = drift_optional_int_some(1)
+    } else {
+        opt = drift_optional_int_some(41)
+    }
+    return opt.unwrap_or(0)
+}
