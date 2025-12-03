@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 
 @dataclass
@@ -250,6 +250,7 @@ class ExceptionCtor(Expr):
     name: str
     event_code: int
     fields: Dict[str, Expr]
+    arg_order: Optional[list[str]] = None
 
 
 @dataclass

@@ -136,6 +136,11 @@ class ExceptionInfo:
     arg_types: Dict[str, Type]
     domain: str | None = None
     event_code: int = 0
+    arg_key_type: Optional[str] = None
+    args_view_type: Optional[str] = None
+    # placeholder for future synthetic struct defs
+    arg_key_struct: Optional["StructInfo"] = None
+    args_view_struct: Optional["StructInfo"] = None
 
 
 @dataclass
@@ -144,6 +149,7 @@ class ExceptionMeta:
     kind: int
     payload60: int
     event_code: int
+    arg_order: Optional[List[str]] = None
 
 
 class CheckError(Exception):
@@ -271,9 +277,11 @@ class Checker:
                 arg_types=arg_types,
                 domain=exc.domain,
                 event_code=event_code,
+                arg_key_type=f"{exc.name}ArgKey",
+                args_view_type=f"{exc.name}ArgsView",
             )
             self.exception_metadata.append(
-                ExceptionMeta(fqn=fqn, kind=0b0001, payload60=payload60, event_code=event_code)
+                ExceptionMeta(fqn=fqn, kind=0b0001, payload60=payload60, event_code=event_code, arg_order=arg_order.copy())
             )
 
     def _register_functions(self, functions: List[ast.FunctionDef]) -> None:
@@ -398,6 +406,7 @@ class Checker:
                         name=exc_info.name,
                         event_code=exc_info.event_code,
                         fields=fields,
+                        arg_order=exc_info.arg_order.copy(),
                     )
                     return
                 # If it isn't an exception and also not a known callable, report as unknown exception.

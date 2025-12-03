@@ -153,6 +153,8 @@ Compiler/runtime work remains.
 
 **Runtime progress:** `DriftError` now carries an args array (`(key,value)*` + count), `drift_error_new_dummy(code, key, payload)` seeds one entry when `key` is non-empty, and `drift_error_get_arg` provides lookup. Compiler wiring to populate multiple fields and synthesize args-views/keys remains.
 
+**Compiler progress:** checker metadata now carries `arg_order` plus synthesized arg-key/args-view type names for each exception; `ExceptionCtor` nodes retain `arg_order` for lowering.
+
 ### 3B.1 Front-end: exception metadata & synthetic types
 
 **Tasks:**
