@@ -586,7 +586,8 @@ def lower_expr_to_ssa(
                     else_param = mir.Param(name=env.fresh_ssa("opt_default_param", ty=inner_ty), type=inner_ty)
                     then_block = mir.BasicBlock(name=then_name, params=[then_param])
                     else_block = mir.BasicBlock(name=else_name, params=[else_param])
-                    join_block = mir.BasicBlock(name=join_name, params=[mir.Param(name="opt_res", type=inner_ty)])
+                    join_param = mir.Param(name=env.fresh_ssa("opt_res", ty=inner_ty), type=inner_ty)
+                    join_block = mir.BasicBlock(name=join_name, params=[join_param])
                     blocks[then_name] = then_block
                     blocks[else_name] = else_block
                     blocks[join_name] = join_block
@@ -598,8 +599,8 @@ def lower_expr_to_ssa(
                         els=mir.Edge(target=else_name, args=[default_ssa]),
                     )
                     join_env = env.clone_for_block(env.user_env)
-                    env.ctx.ssa_types["opt_res"] = inner_ty
-                    return "opt_res", inner_ty, join_block, join_env
+                    env.ctx.ssa_types[join_param.name] = inner_ty
+                    return join_param.name, inner_ty, join_block, join_env
         # Bare name call
         if isinstance(expr.func, ast.Name):
             callee = expr.func.ident

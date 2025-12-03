@@ -20,6 +20,12 @@ struct DriftOptionalString {
 #define OPTIONAL_STRING_NONE \
     (struct DriftOptionalString){.is_some = 0, .value = (struct DriftString){0, NULL}}
 
+struct DriftOptionalInt {
+    uint8_t is_some;
+    int64_t value;
+};
+#define OPTIONAL_INT_NONE (struct DriftOptionalInt){.is_some = 0, .value = 0}
+
 struct DriftError {
     int64_t code;               // matches Drift Int (word-sized)
     struct DriftString payload; // legacy first payload field (if provided)
@@ -38,3 +44,7 @@ void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct 
 struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key);
 // Required arg lookup: returns empty string if missing (used for typed catches where the field is guaranteed).
 struct DriftString __exc_args_get_required(const struct DriftError* err, struct DriftString key);
+
+// Optional<Int> helpers for generic Optional coverage.
+struct DriftOptionalInt drift_optional_int_some(int64_t value);
+struct DriftOptionalInt drift_optional_int_none(void);

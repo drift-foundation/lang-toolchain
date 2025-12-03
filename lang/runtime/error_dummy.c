@@ -77,3 +77,14 @@ struct DriftString __exc_args_get_required(const struct DriftError* err, struct 
     if (!val) return empty;
     return *val;
 }
+
+struct DriftOptionalInt drift_optional_int_some(int64_t value) {
+    struct DriftOptionalInt out;
+    out.is_some = 1;
+    out.value = value;
+    return out;
+}
+
+struct DriftOptionalInt drift_optional_int_none(void) {
+    return OPTIONAL_INT_NONE;
+}

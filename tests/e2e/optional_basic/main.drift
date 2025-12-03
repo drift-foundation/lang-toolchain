@@ -1,0 +1,29 @@
+import std.console.out
+
+fn main() returns Int {
+    val some = drift_optional_int_some(41)
+    val none = drift_optional_int_none()
+
+    if some.is_some() {
+        val v = some.unwrap_or(0)
+        if v == 41 {
+            out.writeln("some ok")
+        } else {
+            out.writeln("some bad")
+        }
+    } else {
+        out.writeln("some none")
+    }
+
+    if none.is_none() {
+        val v2 = none.unwrap_or(5)
+        if v2 == 5 {
+            out.writeln("none ok")
+        } else {
+            out.writeln("none bad")
+        }
+    } else {
+        out.writeln("none some")
+    }
+    return 0
+}

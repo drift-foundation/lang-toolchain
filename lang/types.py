@@ -74,10 +74,8 @@ def resolve_type(type_expr: TypeExpr) -> Type:
         inner = resolve_type(type_expr.args[0])
         return ReferenceType(name="&mut", args=(inner,), mutable=True)
     if type_expr.args:
-        # Generics flow through as symbolic names for now
-        inner = ", ".join(str(arg) for arg in type_expr.args)
-        name = f"{type_expr.name}[{inner}]"
-        return Type(name)
+        resolved_args = tuple(resolve_type(arg) for arg in type_expr.args)
+        return Type(type_expr.name, resolved_args)
     alias_hint = _ALIAS_HINTS.get(type_expr.name)
     if alias_hint:
         raise TypeSystemError(
@@ -103,10 +101,12 @@ class TypeSystemError(Exception):
 
 
 def array_of(inner: Type) -> Type:
-    return Type(f"Array[{inner}]")
+    return Type("Array", (inner,))
 
 
 def array_element_type(array_type: Type) -> Optional[Type]:
+    if array_type.args and array_type.name == "Array":
+        return array_type.args[0]
     name = array_type.name
     prefix = "Array["
     if name.startswith(prefix) and name.endswith("]"):

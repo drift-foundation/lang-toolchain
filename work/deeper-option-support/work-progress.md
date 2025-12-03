@@ -29,9 +29,9 @@ Pick a concrete layout and write it down once (ABI + internal notes):
 **Action items:**
 
 * [ ] Add a short ABI note (e.g. `docs/design/drift-abi-optional.md` or a section in your existing ABI doc) describing this layout.
-* [ ] Add a tiny C helper struct typedef for tests (even if you handle everything in codegen).
+* [x] Add a tiny C helper struct typedef for tests (even if you handle everything in codegen).
 * **Status:** Renamed runtime/helper to `DriftOptionalString` and compiler type to `Optional<T>`.
-* **Recent:** Fixed the `__exc_args_get` ABI to use an explicit sret out-param and updated SSA codegen to allocate/load `Optional<String>` results; the args-view Optional e2e now passes without crashes.
+* **Recent:** Fixed the `__exc_args_get` ABI to use an explicit sret out-param and updated SSA codegen to allocate/load `Optional<String>` results; the args-view Optional e2e now passes without crashes. Added `DriftOptionalInt` helpers (`drift_optional_int_some/none`) so Optionals can be built outside the exception path.
 
 ---
 
@@ -218,7 +218,7 @@ fn main() returns Int {
 **Action items:**
 
 * [ ] Update the EArgsView API to return `Optional<String>`.
-* [ ] Add SSA/e2e test that:
+* [x] Add SSA/e2e test that:
 
   * Constructs an exception with known args.
   * Builds an `EArgKey` at runtime.
@@ -237,6 +237,16 @@ Once the above works and is stable, then you can consider:
 * `?.` / safe-navigation operators.
 
 But they are *optional* for now (pun inflicted).
+
+---
+
+### Current status snapshot
+
+* Checker knows `Optional<T>.is_some/is_none/unwrap_or` with proper type checks; `optional_negative.drift` asserts the wrong-type default is rejected.
+* SSA lowering implements these methods directly (field projections + join) and now uses unique join params to avoid SSA name clashes.
+* Runtime provides `DriftOptionalString` for args-view and new `DriftOptionalInt` helpers (`drift_optional_int_some/none`) so Optional can be exercised outside exceptions.
+* E2E `optional_basic` exercises Optional in normal code and passes SSA→LLVM.
+* Remaining: write the Optional ABI note and reflect Optional as a first-class generic in the spec.
 
 For now, just make sure the `Optional<T>` ABI and method set are “match-ready,” i.e., compatible with how you’ll later lower pattern matching (tag test + field extraction).
 

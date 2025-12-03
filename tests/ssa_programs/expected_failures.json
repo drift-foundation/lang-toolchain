@@ -7,5 +7,6 @@
   "negative_field_missing.drift": "Struct 'Point' has no field 'z'",
   "negative_field_type.drift": "Expected type Int, got String",
   "returns_error_not_allowed.drift": "Functions may not return Error",
-  "error_code_payload.drift": "Expected type Int64, got Int"
+  "error_code_payload.drift": "Expected type Int64, got Int",
+  "optional_negative.drift": "Expected type Int, got String"
 }

@@ -397,6 +397,24 @@ def emit_module_object(
                                     # first param is sret out-param
                                     rt_exc_args_get.args[0].attributes.add("sret")
                                 callee = rt_exc_args_get
+                            elif instr.callee == "drift_optional_int_some":
+                                callee = module.globals.get("drift_optional_int_some")
+                                if callee is None:
+                                    callee = ir.Function(
+                                        module,
+                                        ir.FunctionType(
+                                            ir.LiteralStructType([ir.IntType(8), WORD_INT]), [WORD_INT]
+                                        ),
+                                        name="drift_optional_int_some",
+                                    )
+                            elif instr.callee == "drift_optional_int_none":
+                                callee = module.globals.get("drift_optional_int_none")
+                                if callee is None:
+                                    callee = ir.Function(
+                                        module,
+                                        ir.FunctionType(ir.LiteralStructType([ir.IntType(8), WORD_INT]), []),
+                                        name="drift_optional_int_none",
+                                    )
                             elif instr.callee == "__exc_args_get_required":
                                 callee = module.globals.get("__exc_args_get_required")
                                 if callee is None:
@@ -414,6 +432,9 @@ def emit_module_object(
                             out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
                             builder.call(callee, [out_slot] + args)
                             call_val = builder.load(out_slot, name=instr.dest)
+                            values[instr.dest] = call_val
+                        elif instr.callee in ("drift_optional_int_some", "drift_optional_int_none"):
+                            call_val = builder.call(callee, args, name=instr.dest)
                             values[instr.dest] = call_val
                         elif callee.name == "__exc_args_get_required":
                             call_val = builder.call(callee, args, name=instr.dest)

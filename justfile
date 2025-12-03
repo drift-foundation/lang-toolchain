@@ -1,8 +1,9 @@
 set shell := ["bash", "-lc"]
+set quiet
 CLANG_BIN := "clang-15"
 
 test: test-ssa test-e2e
-	@echo "Success."
+	@echo "test-ssa test-e2e: Success."
 
 test-e2e:
 	./.venv/bin/python3 tests/e2e_runner.py
@@ -32,7 +33,7 @@ test-e2e-ssa-subset:
 	PYTHONPATH=. ./.venv/bin/python3 tests/e2e_runner.py hello throw_try try_catch try_call_error try_event_catch_stmt try_event_catch_expr try_event_catch_no_fallback array_string for_array console_hello ref_struct_mutation
 
 parse-all: parse-examples
-	@echo "Parsing successful."
+	@echo "parse-examples: Success."
 
 # Parse every Drift example under examples/
 parse-examples:
