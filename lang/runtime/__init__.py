@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Mapping, Sequence
 
-from ..types import DISPLAYABLE, ERROR, STR, UNIT, I64, FunctionSignature, array_of, INT
+from ..types import DISPLAYABLE, ERROR, STR, UNIT, I64, FunctionSignature, array_of, INT, Type
 
 OUT_WRITELN_SIGNATURE = FunctionSignature(
     "out.writeln", (DISPLAYABLE,), UNIT, effects=None
@@ -131,6 +131,7 @@ SPECIAL_SIGNATURES: Mapping[str, FunctionSignature] = {
     "out.writeln": OUT_WRITELN_SIGNATURE,
     "drift_error_new_dummy": FunctionSignature("drift_error_new_dummy", (INT, STR, STR), ERROR, effects=None),
     "drift_error_get_code": FunctionSignature("drift_error_get_code", (ERROR,), INT, effects=None),
+    "__exc_args_get": FunctionSignature("__exc_args_get", (ERROR, STR), Type("Option", args=(STR,)), effects=None),
 }
 
 

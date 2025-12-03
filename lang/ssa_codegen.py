@@ -145,6 +145,8 @@ def emit_module_object(
         try:
             return _llvm_type(ty)
         except NotImplementedError:
+            if ty.name == "Option" and ty.args and ty.args[0] == STR:
+                return ir.LiteralStructType([ir.IntType(1), _drift_string_type()])
             if isinstance(ty, ReferenceType):
                 return _llvm_type_with_structs(ty.args[0]).as_pointer()
             if ty.name in struct_layouts:
@@ -364,6 +366,12 @@ def emit_module_object(
                                     module,
                                     ir.FunctionType(WORD_INT, [_drift_string_type(), _drift_string_type()]),
                                     name="drift_string_eq",
+                                )
+                            elif instr.callee == "__exc_args_get":
+                                callee = ir.Function(
+                                    module,
+                                    ir.FunctionType(_llvm_type_with_structs(Type("Option", (STR,))), [ERROR_PTR_TY, _drift_string_type()]),
+                                    name="__exc_args_get",
                                 )
                             else:
                                 raise RuntimeError(f"unknown callee {instr.callee}")

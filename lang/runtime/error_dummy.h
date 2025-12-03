@@ -13,6 +13,11 @@ struct DriftErrorArg {
     struct DriftString value;
 };
 
+struct DriftOptionString {
+    uint8_t is_some;
+    struct DriftString value;
+};
+
 struct DriftError {
     int64_t code;               // matches Drift Int (word-sized)
     struct DriftString payload; // legacy first payload field (if provided)
@@ -25,3 +30,5 @@ struct DriftError* drift_error_new_dummy(int64_t code, struct DriftString key, s
 int64_t drift_error_get_code(struct DriftError* err);
 // Returns pointer to value if found, NULL otherwise. No ownership transfer.
 const struct DriftString* drift_error_get_arg(const struct DriftError* err, const struct DriftString* key);
+// Option<String> return for exception arg lookup.
+struct DriftOptionString __exc_args_get(const struct DriftError* err, struct DriftString key);

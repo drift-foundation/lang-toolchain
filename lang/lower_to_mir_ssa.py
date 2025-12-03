@@ -8,7 +8,7 @@ while legacy lowering still drives codegen.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import ast, mir
 from .checker import CheckedProgram
@@ -384,6 +384,10 @@ def lower_expr_to_ssa(
     Returns (ssa_name, type, current_block, env) where current_block/env reflect any
     control-flow split (e.g., try/else lowering).
     """
+    lowered_idx = _maybe_lower_args_view_index(expr, env, current, checked)
+    if lowered_idx is not None:
+        result_ssa, result_ty, current, env = lowered_idx
+        return result_ssa, result_ty, current, env
     if isinstance(expr, ast.ExceptionCtor):
         # Materialize event code.
         code_ssa = env.fresh_ssa("exc_code", I64)
@@ -524,6 +528,11 @@ def lower_expr_to_ssa(
         return dest, ret_ty, current, env
     # Array indexing
     if isinstance(expr, ast.Index):
+        # Try args-view special-case first.
+        lowered_idx = _maybe_lower_args_view_index(expr, env, current, checked)
+        if lowered_idx is not None:
+            dest, dest_ty, current, env = lowered_idx
+            return dest, dest_ty, current, env
         base_ssa, base_ty, current, env = lower_expr_to_ssa(expr.value, env, current, checked, blocks, fresh_block)
         idx_ssa, idx_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, blocks, fresh_block)
         elem_ty = array_element_type(base_ty)
@@ -897,3 +906,33 @@ def lower_try_stmt(
         loc=stmt.loc,
     )
     return join_block, join_env
+def _maybe_lower_args_view_index(
+    expr: ast.Expr, env: SSAEnv, current: mir.BasicBlock, checked: CheckedProgram
+) -> Optional[Tuple[str, Type, mir.BasicBlock, SSAEnv]]:
+    """Lower args-view indexing to __exc_args_get(Error, String) returning Option<String>."""
+    if not isinstance(expr, ast.Index):
+        return None
+    # Lower base to SSA and get its type.
+    base_ssa, base_ty, current, env = lower_expr_to_ssa(expr.value, env, current, checked, None, None)
+    if base_ty.name not in checked.structs:
+        return None
+    struct_info = checked.structs[base_ty.name]
+    if "error" not in struct_info.field_types or struct_info.field_types["error"] != ERROR:
+        return None
+    # key must be a literal string (already enforced by checker).
+    if not isinstance(expr.index, ast.Literal) or not isinstance(expr.index.value, str):
+        return None
+    # Lower: tmp_error = base.error; key const; call __exc_args_get(tmp_error, key).
+    # field get
+    err_ssa = env.fresh_ssa("exc_err", ERROR)
+    current.instructions.append(mir.FieldGet(dest=err_ssa, base=base_ssa, field="error"))
+    env.ctx.ssa_types[err_ssa] = ERROR
+    key_ssa = env.fresh_ssa("exc_key", STR)
+    current.instructions.append(mir.Const(dest=key_ssa, type=STR, value=expr.index.value))
+    env.ctx.ssa_types[key_ssa] = STR
+    dest = env.fresh_ssa("exc_arg", Type("Option", (STR,)))
+    current.instructions.append(
+        mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_ssa], ret_type=Type("Option", (STR,)))
+    )
+    env.ctx.ssa_types[dest] = Type("Option", (STR,))
+    return dest, Type("Option", (STR,)), current, env

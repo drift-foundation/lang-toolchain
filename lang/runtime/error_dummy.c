@@ -29,6 +29,20 @@ int64_t drift_error_get_code(struct DriftError* err) {
     return err->code;
 }
 
+struct DriftOptionString __exc_args_get(const struct DriftError* err, struct DriftString key) {
+    struct DriftOptionString out = {0, {0, NULL}};
+    if (!err) {
+        return out;
+    }
+    const struct DriftString* val = drift_error_get_arg(err, &key);
+    if (!val) {
+        return out;
+    }
+    out.is_some = 1;
+    out.value = *val;
+    return out;
+}
+
 const struct DriftString* drift_error_get_arg(const struct DriftError* err, const struct DriftString* key) {
     if (!err || !key) return NULL;
     for (size_t i = 0; i < err->arg_count; i++) {
