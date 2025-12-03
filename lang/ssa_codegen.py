@@ -147,7 +147,7 @@ def emit_module_object(
         try:
             return _llvm_type(ty)
         except NotImplementedError:
-            if ty.name == "Option" and ty.args and ty.args[0] == STR:
+            if ty.name == "Optional" and ty.args and ty.args[0] == STR:
                 return ir.LiteralStructType([ir.IntType(8), _drift_string_type()])
             if isinstance(ty, ReferenceType):
                 return _llvm_type_with_structs(ty.args[0]).as_pointer()
@@ -379,7 +379,7 @@ def emit_module_object(
                                 )
                             elif instr.callee == "__exc_args_get":
                                 if rt_exc_args_get is None:
-                                    opt_ty = _llvm_type_with_structs(Type("Option", (STR,)))
+                                    opt_ty = _llvm_type_with_structs(Type("Optional", (STR,)))
                                     rt_exc_args_get = ir.Function(
                                         module,
                                         ir.FunctionType(opt_ty, [ERROR_PTR_TY, _drift_string_type()]),

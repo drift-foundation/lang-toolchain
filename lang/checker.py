@@ -672,7 +672,7 @@ class Checker:
                         return STR
                     index_type = self._check_expr(expr.index, ctx)
                     self._expect_type(index_type, expected_key_ty, expr.index.loc)
-                    return Type("Option", (STR,))
+                    return Type("Optional", (STR,))
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Type {container_type} is not indexable")
         index_type = self._check_expr(expr.index, ctx)
         self._expect_type(index_type, INT, expr.index.loc)

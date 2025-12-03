@@ -13,12 +13,12 @@ struct DriftErrorArg {
     struct DriftString value;
 };
 
-struct DriftOptionString {
+struct DriftOptionalString {
     uint8_t is_some;
     struct DriftString value;
 };
-#define OPTION_STRING_NONE \
-    (struct DriftOptionString){.is_some = 0, .value = (struct DriftString){0, NULL}}
+#define OPTIONAL_STRING_NONE \
+    (struct DriftOptionalString){.is_some = 0, .value = (struct DriftString){0, NULL}}
 
 struct DriftError {
     int64_t code;               // matches Drift Int (word-sized)
@@ -34,7 +34,7 @@ int64_t drift_error_get_code(struct DriftError* err);
 const struct DriftString* drift_error_get_arg(const struct DriftError* err, const struct DriftString* key);
 // Append an arg (key,value) to an existing error.
 void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct DriftString value);
-// Option<String> return for exception arg lookup.
-struct DriftOptionString __exc_args_get(const struct DriftError* err, struct DriftString key);
+// Optional<String> return for exception arg lookup.
+struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key);
 // Required arg lookup: returns empty string if missing (used for typed catches where the field is guaranteed).
 struct DriftString __exc_args_get_required(const struct DriftError* err, struct DriftString key);

@@ -979,7 +979,7 @@ def lower_try_stmt(
 def _maybe_lower_args_view_index(
     expr: ast.Expr, env: SSAEnv, current: mir.BasicBlock, checked: CheckedProgram
 ) -> Optional[Tuple[str, Type, mir.BasicBlock, SSAEnv]]:
-    """Lower args-view indexing to __exc_args_get(Error, String) returning Option<String>."""
+    """Lower args-view indexing to __exc_args_get(Error, String) returning Optional<String>."""
     if not isinstance(expr, ast.Index):
         return None
     # Lower base to SSA and get its type.
@@ -1029,9 +1029,9 @@ def _maybe_lower_args_view_index(
         )
         env.ctx.ssa_types[dest] = STR
         return dest, STR, current, env
-    dest = env.fresh_ssa("exc_arg", Type("Option", (STR,)))
+    dest = env.fresh_ssa("exc_arg", Type("Optional", (STR,)))
     current.instructions.append(
-        mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_name_ssa], ret_type=Type("Option", (STR,)))
+        mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_name_ssa], ret_type=Type("Optional", (STR,)))
     )
-    env.ctx.ssa_types[dest] = Type("Option", (STR,))
-    return dest, Type("Option", (STR,)), current, env
+    env.ctx.ssa_types[dest] = Type("Optional", (STR,))
+    return dest, Type("Optional", (STR,)), current, env

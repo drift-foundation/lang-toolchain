@@ -75,7 +75,7 @@ Pattern semantics:
 A `variant` defines alternatives:
 
 ```
-variant Option<T> {
+variant Optional<T> {
     Some(value: T)
     None
 }
@@ -282,4 +282,3 @@ Drift adopts a flexible, powerful, and ML-consistent destructuring model:
 - Grammar and spec changes are straightforward and well-contained.
 
 This document serves as the rationale + implementation target for updating the main spec and grammar.
-

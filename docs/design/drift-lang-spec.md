@@ -1418,7 +1418,7 @@ fn describe(result: Result<Int64, String>) returns String {
 Matches can be nested or composed with other `variant` types:
 
 ```drift
-variant Option<T> {
+variant Optional<T> {
     Some(value: T)
     None
 }
@@ -1493,25 +1493,25 @@ Variants follow Drift’s value semantics: they are copied/moved by value, and t
 - Adding a new variant is a **breaking change** because every `match` must handle it explicitly.
 - Library authors should document variant additions clearly or provide fallback variants when forward compatibility matters.
 
-Variants underpin key library types such as `Result<T, E>` and `Option<T>`, enabling safe, expressive modeling of operations with multiple outcomes.
+Variants underpin key library types such as `Result<T, E>` and `Optional<T>`, enabling safe, expressive modeling of operations with multiple outcomes.
 
 
 ## 11. Null safety & optional values
 
-Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Option<T>`). The compiler never promotes `Option<T>` to `T` implicitly.
+Drift is **null-free**. There is no `null` literal. A value is either present (`T`) or explicitly optional (`Optional<T>`). The compiler never promotes `Optional<T>` to `T` implicitly.
 
 ### 11.1. Types
 
 | Type | Meaning |
 |------|---------|
 | `T` | Non-optional; always initialized. |
-| `Option<T>` | Possibly empty; either a value or nothing. |
+| `Optional<T>` | Possibly empty; either a value or nothing. |
 
 ### 11.2. Construction
 
 ```drift
-val present: Option<Int64> = Some(value = 42)
-val empty: Option<Int64> = None
+val present: Optional<Int64> = Some(value = 42)
+val empty: Optional<Int64> = None
 ```
 
 ### 11.3. Control flow
@@ -1523,16 +1523,16 @@ match qty {
 }
 ```
 
-There is no safe-navigation operator (`?.`). Access requires explicit pattern matching or helper combinators built atop `Option<T>`.
+There is no safe-navigation operator (`?.`). Access requires explicit pattern matching or helper combinators built atop `Optional<T>`.
 
 ### 11.4. Parameters & returns
 
 - A parameter of type `T` cannot receive `None`.
-- Use `Option<T>` for “maybe” values.
+- Use `Optional<T>` for “maybe” values.
 - Returning `None` from a function declared `: T` is a compile error.
 
 ```drift
-fn find_sku(id: Int64) returns Option<String> { /* ... */ }
+fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
 
 val sku = find_sku(42)
 match sku {
@@ -1543,14 +1543,14 @@ match sku {
 
 ### 11.5. Ownership
 
-Pattern matching moves the bound value by default. If you need to borrow instead, destructure a reference to the `Option` and match on that (planned once borrow-patterns are added).
+Pattern matching moves the bound value by default. If you need to borrow instead, destructure a reference to the `Optional` and match on that (planned once borrow-patterns are added).
 
 ### 11.6. Diagnostics (illustrative)
 
 - **E2400**: cannot assign `None` to non-optional type `T`.
-- **E2401**: attempted member/method use on `Option<T>` without pattern matching / combinators.
+- **E2401**: attempted member/method use on `Optional<T>` without pattern matching / combinators.
 - **E2402**: attempted unwrap of `None` (discouraged pattern).
-- **E2403**: attempted implicit conversion `Option<T>` → `T`.
+- **E2403**: attempted implicit conversion `Optional<T>` → `T`.
 
 ### 11.7. End-to-end example
 
@@ -1563,7 +1563,7 @@ struct Order {
     quantity: Int64
 }
 
-fn find_order(id: Int64) returns Option<Order> {
+fn find_order(id: Int64) returns Optional<Order> {
     if id == 42 { return Some(value = Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
     return None
 }

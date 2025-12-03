@@ -30,7 +30,7 @@ Iteration traits live in the standard library:
 module std.iter
 
 trait Iterator<Item> {
-    fn next(self: &mut Self) returns Option<Item>
+    fn next(self: &mut Self) returns Optional<Item>
 }
 
 trait Iterable<Item, Iter>
@@ -67,7 +67,7 @@ The main spec (Chapter 8) will state explicitly:
 
 ```drift
 trait Iterator<Item> {
-    fn next(self: &mut Self) returns Option<T>
+    fn next(self: &mut Self) returns Optional<T>
 }
 ```
 
@@ -252,7 +252,7 @@ struct ArrayRefIter<T> {
 }
 
 implement<T> Iterator<&T> for ArrayRefIter<T> {
-    fn next(self: &mut self) returns Option<&T> {
+    fn next(self: &mut self) returns Optional<&T> {
         if self.index >= self.data.len() { return None }
         val r = &self.data[self.index]
         self.index += 1
@@ -276,7 +276,7 @@ implement<T> Iterator<&T> for ArrayRefIter<T> {
 For a single-field variant like:
 
 ```drift
-variant Option<T> {
+variant Optional<T> {
     Some(value: T)
     None
 }
@@ -328,7 +328,7 @@ struct ArrayRefIter<T> {
 }
 
 implement<T> Iterator<&T> for ArrayRefIter<T> {
-    fn next(self: &mut self) returns Option<&T> {
+    fn next(self: &mut self) returns Optional<&T> {
         if self.index >= self.data.len() {
             return None
         }

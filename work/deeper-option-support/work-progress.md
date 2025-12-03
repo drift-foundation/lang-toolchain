@@ -1,4 +1,4 @@
-## 1. Step-by-step plan to make Option/Optional usable
+## 1. Step-by-step plan to make Optional usable
 
 ### Step 0 – Lock the representation
 
@@ -30,6 +30,7 @@ Pick a concrete layout and write it down once (ABI + internal notes):
 
 * [ ] Add a short ABI note (e.g. `docs/design/drift-abi-optional.md` or a section in your existing ABI doc) describing this layout.
 * [ ] Add a tiny C helper struct typedef for tests (even if you handle everything in codegen).
+* **Status:** Renamed the runtime helper struct to `DriftOptionalString` and updated `__exc_args_get` to return it. Type name in the compiler is now `Optional<T>` instead of `Option<T>`.
 
 ---
 
@@ -76,7 +77,7 @@ Don’t add `map` / `and_then` / `unwrap_or_else` yet; they’re sugar, not a pr
 
 ### Step 2 – Teach the checker about Optional<T> methods
 
-Currently the checker treats `Option<T>` as opaque and rejects attribute lookups. You need a small special-case for this *one* builtin generic.
+Currently the checker treats `Optional<T>` as opaque and rejects attribute lookups. You need a small special-case for this *one* builtin generic.
 
 **Implementation outline:**
 

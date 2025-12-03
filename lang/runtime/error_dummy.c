@@ -44,8 +44,8 @@ int64_t drift_error_get_code(struct DriftError* err) {
     return err->code;
 }
 
-struct DriftOptionString __exc_args_get(const struct DriftError* err, struct DriftString key) {
-    struct DriftOptionString out = OPTION_STRING_NONE;
+struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key) {
+    struct DriftOptionalString out = OPTIONAL_STRING_NONE;
     if (!err) {
         return out;
     }
