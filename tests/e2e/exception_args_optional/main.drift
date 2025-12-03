@@ -8,16 +8,18 @@ fn raise_opt() returns Void {
 
 fn main() returns Int {
     try {
-    raise_opt()
-  } catch OptErr(e) {
-    val view = e.args
-    // Optional lookup via ArgKey variable (without dot-sugar).
-    val key_a = view.a()
-    val opt_a = view[key_a]
-    val a_val = opt_a.unwrap_or("none")
-    out.writeln(a_val)
-    return 0
-  }
+        raise_opt()
+    } catch OptErr(e) {
+        val view = e.args
+        val key_a = view.a()
+        val opt_a = view[key_a]
+        if opt_a.is_some() {
+            out.writeln("SOME")
+        } else {
+            out.writeln("NONE")
+        }
+        return 0
+    }
     out.writeln("no error")
     return 1
 }
