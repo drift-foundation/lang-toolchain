@@ -945,20 +945,21 @@ def _maybe_lower_args_view_index(
     struct_info = checked.structs[base_ty.name]
     if "error" not in struct_info.field_types or struct_info.field_types["error"] != ERROR:
         return None
-    # key must be a literal string (already enforced by checker).
-    if not isinstance(expr.index, ast.Literal) or not isinstance(expr.index.value, str):
+    # Lower index (ArgKey) to SSA and get its name field.
+    key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, None, None)
+    key_struct = checked.structs.get(key_ty.name)
+    if key_struct is None or "name" not in key_struct.field_types:
         return None
-    # Lower: tmp_error = base.error; key const; call __exc_args_get(tmp_error, key).
-    # field get
+    key_name_ssa = env.fresh_ssa("exc_key_name", STR)
+    current.instructions.append(mir.FieldGet(dest=key_name_ssa, base=key_ssa, field="name"))
+    env.ctx.ssa_types[key_name_ssa] = STR
+    # Lower: tmp_error = base.error; call __exc_args_get(tmp_error, key_name).
     err_ssa = env.fresh_ssa("exc_err", ERROR)
     current.instructions.append(mir.FieldGet(dest=err_ssa, base=base_ssa, field="error"))
     env.ctx.ssa_types[err_ssa] = ERROR
-    key_ssa = env.fresh_ssa("exc_key", STR)
-    current.instructions.append(mir.Const(dest=key_ssa, type=STR, value=expr.index.value))
-    env.ctx.ssa_types[key_ssa] = STR
     dest = env.fresh_ssa("exc_arg", Type("Option", (STR,)))
     current.instructions.append(
-        mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_ssa], ret_type=Type("Option", (STR,)))
+        mir.Call(dest=dest, callee="__exc_args_get", args=[err_ssa, key_name_ssa], ret_type=Type("Option", (STR,)))
     )
     env.ctx.ssa_types[dest] = Type("Option", (STR,))
     return dest, Type("Option", (STR,)), current, env

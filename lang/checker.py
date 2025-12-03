@@ -128,6 +128,7 @@ class StructInfo:
     field_order: List[str]
     field_types: Dict[str, Type]
     is_synthetic: bool = False
+    methods: Dict[str, FunctionSignature] = None
 
 
 @dataclass
@@ -279,7 +280,7 @@ class Checker:
             view_struct_fields = [
                 ast.StructField(name="error", type_expr=ast.TypeExpr(name="Error")),
             ]
-            self.exception_infos[exc.name] = ExceptionInfo(
+            exc_info = ExceptionInfo(
                 name=exc.name,
                 arg_order=arg_order,
                 arg_types=arg_types,
@@ -291,8 +292,19 @@ class Checker:
             # Register synthetic structs for arg key / args view.
             key_struct = self._define_struct(f"{exc.name}ArgKey", key_struct_fields, exc.loc, is_synthetic=True)
             view_struct = self._define_struct(f"{exc.name}ArgsView", view_struct_fields, exc.loc, is_synthetic=True)
-            self.exception_infos[exc.name].arg_key_struct = key_struct
-            self.exception_infos[exc.name].args_view_struct = view_struct
+            # Generate per-field key helpers on the args-view (methods returning ArgKey).
+            view_methods: Dict[str, FunctionSignature] = {}
+            for arg_name in arg_order:
+                view_methods[arg_name] = FunctionSignature(
+                    name=f"{exc.name}ArgsView.{arg_name}",
+                    params=(Type(exc_info.args_view_type),),
+                    return_type=Type(exc_info.arg_key_type),
+                    effects=None,
+                )
+            view_struct.methods.update(view_methods)
+            exc_info.arg_key_struct = key_struct
+            exc_info.args_view_struct = view_struct
+            self.exception_infos[exc.name] = exc_info
             self.exception_metadata.append(
                 ExceptionMeta(fqn=fqn, kind=0b0001, payload60=payload60, event_code=event_code, arg_order=arg_order.copy())
             )
@@ -340,7 +352,9 @@ class Checker:
                 raise CheckError(f"{loc.line}:{loc.column}: duplicate field '{field.name}'")
             field_order.append(field.name)
             field_types[field.name] = ty
-        struct_info = StructInfo(name=name, field_order=field_order, field_types=field_types, is_synthetic=is_synthetic)
+        struct_info = StructInfo(
+            name=name, field_order=field_order, field_types=field_types, is_synthetic=is_synthetic, methods={}
+        )
         self.struct_infos[name] = struct_info
         signature = FunctionSignature(
             name=name,
@@ -622,18 +636,12 @@ class Checker:
         container_type = self._check_expr(expr.value, ctx)
         element_type = array_element_type(container_type)
         if element_type is None:
-            # Special-case exception args-view: string literal keys only.
+            # Special-case exception args-view: key type must match the view's key type.
             for exc in self.exception_infos.values():
                 if container_type.name == exc.args_view_type:
-                    if not isinstance(expr.index, ast.Literal) or not isinstance(expr.index.value, str):
-                        raise CheckError(
-                            f"{expr.index.loc.line}:{expr.index.loc.column}: exception args index must be a string literal"
-                        )
-                    key = expr.index.value
-                    if key not in exc.arg_types:
-                        raise CheckError(
-                            f"{expr.index.loc.line}:{expr.index.loc.column}: Exception '{exc.name}' has no arg '{key}'"
-                        )
+                    index_type = self._check_expr(expr.index, ctx)
+                    expected_key_ty = Type(exc.arg_key_type)
+                    self._expect_type(index_type, expected_key_ty, expr.index.loc)
                     return Type("Option", (STR,))
             raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Type {container_type} is not indexable")
         index_type = self._check_expr(expr.index, ctx)
@@ -814,6 +822,9 @@ class Checker:
             base_type = base_type.args[0]
         struct_info = self.struct_infos.get(base_type.name)
         if struct_info:
+            # Synthetic method lookup for args-view key helpers.
+            if attr.attr in struct_info.methods:
+                return struct_info.methods[attr.attr].return_type
             if attr.attr not in struct_info.field_types:
                 raise CheckError(
                     f"{attr.loc.line}:{attr.loc.column}: Struct '{struct_info.name}' has no field '{attr.attr}'"

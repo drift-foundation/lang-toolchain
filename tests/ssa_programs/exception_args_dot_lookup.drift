@@ -8,8 +8,9 @@ fn main() returns Int {
   try {
     make_error()
   } catch MyError(e) {
-    val la: Int = e.args[.a].unwrap().len()
-    val lb: Int = e.args[.b].unwrap().len()
+    val view = e.args
+    val la: Int = view[view.a()].unwrap().len()
+    val lb: Int = view[view.b()].unwrap().len()
     return la + lb
   }
   return 0
