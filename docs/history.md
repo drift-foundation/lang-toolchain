@@ -160,3 +160,7 @@
 - Implemented typed diagnostics plumbing: runtime `DriftError` now owns typed attrs and context frames of `DiagnosticValue` locals; added `drift_error_add_local_dv` and frame/local structs. SSA lowering now tracks `^` captures, wraps captured primitives/strings into `DiagnosticValue`, and emits calls to the typed local helper during exception construction. SSA codegen can call the new helper, and both SSA and e2e suites remain green.
 - Removed legacy args/payload: `DriftError` no longer stores them, arg-view helpers and `__exc_args_get*` are gone, compiler/tests consume typed `attrs` + `DiagnosticValue` exclusively.
 - Restored the receiver placeholder (“dot-shortcut”) feature: grammar/AST include `.` placeholders, SSA lowering evaluates the method receiver once and threads that SSA through argument/sub-expression lowering (including `.field`, `.method(...)`, and `.[idx]` forms). Added placeholder-aware lowering while keeping SSA/e2e suites green.
+
+## 2025-12-04
+- E2E runner builds into `build/tests/e2e/<case>/` instead of test dirs; `just test-e2e`/subset wipes that build dir first to avoid stale artifacts. All e2e tests green.
+- Error-edge hardening: can-error inference is locked to MIR; negative tests cover plain call dropping error and edges to non-can-error; Throw returns now use deterministic zero/null placeholders for non-void `{T, Error*}` pairs. Try/catch generalization remains open.
