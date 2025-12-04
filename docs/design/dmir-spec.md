@@ -129,6 +129,7 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 - `domain` is an optional namespace for the event (e.g., `net`, `net.ip6`, `io.fs`); if absent, it may be `NULL`. Exception definitions can supply a default domain; throw sites may override via a `domain` kwarg; builtin/runtime errors use a fixed domain (e.g., `runtime`).
 - Ownership: constructors/`raise` allocate `DriftError` on the heap; ownership passes to the caller/handler. Handlers either propagate the pointer along an error edge or free exactly once via `free_fn(err)` (or a standard `error_free(err)` entry point). Uncaught errors are freed at the top-level entry after reporting.
 - Canonicalization: attrs may be stored in deterministic order; strings are null-terminated; the struct alignment/layout is fixed for signing/backcompat. No external C libraries are required; the header is self-contained and C-ABI safe. Logging/serialization is implementation-defined and not part of the ABI.
+- `Missing` is a lookup sentinel in the language; attrs/locals stored in `DriftError` should be `Null` or concrete values, not `Missing`.
 - Helper APIs (C ABI): `error_new(event, domain, attrs, attr_count, frames, frame_count) -> Error*`, `error_to_cstr(Error*) -> const char*` (preformatted diagnostic stored in the error), `error_free(Error*)`. The `error_to_cstr` result is owned by the error object, valid until `error_free`, and must not be freed by callers (thread-safe to read; no static buffer).
 - Encoding: all strings in `DriftError` (event, domain, attr keys/values, frame modules/files/funcs) are UTF-8, null-terminated. Callers must not assume any other encoding.
 - ABI separation: internal Drift→Drift calls may carry an extra context/error handle for frame capture, but external `extern "C"` exports keep the stable C ABI (`{T, Error*}` or `T`). The hidden ctx must never alter the published C interface.
@@ -168,10 +169,10 @@ let fallback = _t1          // normal edge
 Surface struct/exception constructors:
 ```drift
 struct Point { x: Int64, y: Int64 }
-exception Invalid(kind: String)
+exception Invalid { kind: String }
 
 val p = Point(x = 1, y = 2)
-throw Invalid(kind = "bad")
+throw Invalid { kind: "bad" }
 ```
 DMIR:
 ```

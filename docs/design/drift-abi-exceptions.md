@@ -94,8 +94,7 @@ Error* drift_error_new_dummy(uint64_t event_code, DriftString key, DriftString p
 Semantics:
 
 - `event_code` is used verbatim (kind/payload preserved).
-- If `key.len > 0`, the runtime seeds a one-element attrs map with `(key, payload)` (encoded as a DiagnosticValue::String).
-- `payload` is also stored in the legacy `Error.payload` field.
+- If `key.len > 0`, the runtime seeds a one-element attrs map with `(key, payload)` (as a DiagnosticValue::String).
 - These errors are **not** part of any stable ABI; consumers must not rely on particular codes across versions.
 
 ---
