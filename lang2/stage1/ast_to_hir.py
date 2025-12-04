@@ -8,9 +8,9 @@ Pipeline placement:
 
 This pass takes the parsed AST and produces the sugar-free HIR defined in
 `lang2/stage1/hir_nodes.py`. It currently lowers basic expressions/statements
-(literals, vars, unary/binary ops, field/index, let/assign/if/return/break/continue/expr-stmt);
-calls/control-flow sugar and other complex constructs still fail loudly so
-they can be filled in incrementally.
+(literals, vars, unary/binary ops, field/index, let/assign/if/return/break/continue/expr-stmt,
+plain/method calls); control-flow sugar and other complex constructs still fail
+loudly so they can be filled in incrementally.
 
 Entry points (stage API):
   - lower_expr: lower a single expression to HIR
@@ -98,7 +98,22 @@ class AstToHIR:
 	# --- stubs for remaining nodes ---
 
 	def _visit_expr_Call(self, expr: ast.Call) -> H.HExpr:
-		raise NotImplementedError("Call lowering not implemented yet")
+		"""
+		Lower calls:
+		  - method sugar: Call(func=Attr(receiver, name), args=...) → HMethodCall
+		  - otherwise: plain HCall(fn_expr, args)
+		DV-specific constructors are handled in _visit_expr_ExceptionCtor.
+		"""
+		# Method call sugar: receiver.method(args)
+		if isinstance(expr.func, ast.Attr):
+			receiver = self.lower_expr(expr.func.value)
+			args = [self.lower_expr(a) for a in expr.args]
+			return H.HMethodCall(receiver=receiver, method_name=expr.func.attr, args=args)
+
+		# Plain function call.
+		fn_expr = self.lower_expr(expr.func)
+		args = [self.lower_expr(a) for a in expr.args]
+		return H.HCall(fn=fn_expr, args=args)
 
 	def _visit_expr_Attr(self, expr: ast.Attr) -> H.HExpr:
 		"""Field access: subject.name (no method/placeholder sugar here)."""
@@ -164,7 +179,13 @@ class AstToHIR:
 		raise NotImplementedError("Array literal lowering not implemented yet")
 
 	def _visit_expr_ExceptionCtor(self, expr: ast.ExceptionCtor) -> H.HExpr:
-		raise NotImplementedError("Exception ctor lowering not implemented yet")
+		"""
+		Exception/diagnostic constructor → HDVInit placeholder.
+
+		Fields are a mapping name -> expression; ordering is not enforced yet.
+		"""
+		arg_exprs = [self.lower_expr(v) for _, v in expr.fields.items()]
+		return H.HDVInit(dv_type_name=expr.name, args=arg_exprs)
 
 	def _visit_expr_Ternary(self, expr: ast.Ternary) -> H.HExpr:
 		raise NotImplementedError("Ternary lowering not implemented yet")

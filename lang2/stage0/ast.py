@@ -97,8 +97,12 @@ class ArrayLiteral(Expr):
 
 @dataclass
 class ExceptionCtor(Expr):
+	"""
+	Exception constructor application. Fields map parameter name -> expression.
+	arg_order is omitted for now; HIR lowering can impose ordering if needed.
+	"""
 	name: str
-	fields: List[object]  # placeholder; HIR lowering will handle later
+	fields: dict  # mapping str -> Expr; kept loose for the rewrite
 	loc: Optional[object] = None
 
 

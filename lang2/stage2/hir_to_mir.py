@@ -12,7 +12,9 @@ Currently supported:
   - let/assign/expr/return statements
   - `if` with then/else/join blocks
   - `loop` with break/continue
-Calls/DV lowering remain TODO and will be added incrementally.
+  - plain calls, method calls, DV construction
+Remaining TODO: try/ternary/exception sugar and any complex call shapes beyond
+direct names/receivers.
 """
 
 from __future__ import annotations
@@ -166,13 +168,31 @@ class HIRToMIR:
 
 	# Stubs for unhandled expressions
 	def _visit_expr_HCall(self, expr: H.HCall) -> M.ValueId:
-		raise NotImplementedError("Call lowering not implemented yet")
+		"""
+		Plain function call. For now only direct function names are supported;
+		indirect/function-valued calls will be added later if needed.
+		"""
+		if not isinstance(expr.fn, H.HVar):
+			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
+		arg_vals = [self.lower_expr(a) for a in expr.args]
+		dest = self.b.new_temp()
+		self.b.emit(M.Call(dest=dest, fn=expr.fn.name, args=arg_vals))
+		return dest
 
 	def _visit_expr_HMethodCall(self, expr: H.HMethodCall) -> M.ValueId:
-		raise NotImplementedError("Method call lowering not implemented yet")
+		receiver = self.lower_expr(expr.receiver)
+		arg_vals = [self.lower_expr(a) for a in expr.args]
+		dest = self.b.new_temp()
+		self.b.emit(
+			M.MethodCall(dest=dest, receiver=receiver, method_name=expr.method_name, args=arg_vals)
+		)
+		return dest
 
 	def _visit_expr_HDVInit(self, expr: H.HDVInit) -> M.ValueId:
-		raise NotImplementedError("DV init lowering not implemented yet")
+		arg_vals = [self.lower_expr(a) for a in expr.args]
+		dest = self.b.new_temp()
+		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals))
+		return dest
 
 	# --- Statement lowering ---
 
