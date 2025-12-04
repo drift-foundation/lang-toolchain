@@ -91,10 +91,10 @@ struct DriftDiagnosticValue drift_dv_index(struct DriftDiagnosticValue dv, size_
 uint8_t drift_dv_kind(struct DriftDiagnosticValue dv);
 
 // Conversions
-struct DriftOptionalInt drift_dv_as_int(struct DriftDiagnosticValue dv);
-struct DriftOptionalBool drift_dv_as_bool(struct DriftDiagnosticValue dv);
-struct DriftOptionalFloat drift_dv_as_float(struct DriftDiagnosticValue dv);
-struct DriftOptionalString drift_dv_as_string(struct DriftDiagnosticValue dv);
+struct DriftOptionalInt drift_dv_as_int(const struct DriftDiagnosticValue* dv);
+struct DriftOptionalBool drift_dv_as_bool(const struct DriftDiagnosticValue* dv);
+struct DriftOptionalFloat drift_dv_as_float(const struct DriftDiagnosticValue* dv);
+struct DriftOptionalString drift_dv_as_string(const struct DriftDiagnosticValue* dv);
 
 // Primitive to_diag helpers (runtime equivalents of Diagnostic for primitives)
 struct DriftDiagnosticValue drift_diag_from_bool(uint8_t value);

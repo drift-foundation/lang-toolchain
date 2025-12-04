@@ -677,6 +677,116 @@ def lower_expr_to_ssa(
         if isinstance(expr.func, ast.Attr) and isinstance(expr.func.value, ast.Name) and env.has_user(expr.func.value.ident):
             base_ssa = env.lookup_user(expr.func.value.ident)
             base_ty = env.ctx.ssa_types.get(base_ssa)
+            # DiagnosticValue methods
+            if base_ty and base_ty.name == "DiagnosticValue":
+                loc = getattr(expr, "loc", None)
+                method = expr.func.attr
+                if method == "get":
+                    if len(expr.args) != 1:
+                        raise LoweringError("DiagnosticValue.get expects one argument")
+                    key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.args[0], env, current, checked, blocks, fresh_block)
+                    if key_ty != STR:
+                        raise LoweringError("DiagnosticValue.get expects String key")
+                    dest = env.fresh_ssa("dv_get", Type("DiagnosticValue"))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_get",
+                            args=[base_ssa, key_ssa],
+                            ret_type=Type("DiagnosticValue"),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("DiagnosticValue")
+                    return dest, Type("DiagnosticValue"), current, env
+                if method == "index":
+                    if len(expr.args) != 1:
+                        raise LoweringError("DiagnosticValue.index expects one argument")
+                    idx_ssa, idx_ty, current, env = lower_expr_to_ssa(expr.args[0], env, current, checked, blocks, fresh_block)
+                    if idx_ty not in (INT, I64):
+                        raise LoweringError("DiagnosticValue.index expects Int index")
+                    dest = env.fresh_ssa("dv_index", Type("DiagnosticValue"))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_index",
+                            args=[base_ssa, idx_ssa],
+                            ret_type=Type("DiagnosticValue"),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("DiagnosticValue")
+                    return dest, Type("DiagnosticValue"), current, env
+                if method == "as_int":
+                    dest = env.fresh_ssa("dv_as_int", Type("Optional", (INT,)))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_as_int",
+                            args=[base_ssa],
+                            ret_type=Type("Optional", (INT,)),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("Optional", (INT,))
+                    return dest, Type("Optional", (INT,)), current, env
+                if method == "as_bool":
+                    dest = env.fresh_ssa("dv_as_bool", Type("Optional", (BOOL,)))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_as_bool",
+                            args=[base_ssa],
+                            ret_type=Type("Optional", (BOOL,)),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("Optional", (BOOL,))
+                    return dest, Type("Optional", (BOOL,)), current, env
+                if method == "as_float":
+                    dest = env.fresh_ssa("dv_as_float", Type("Optional", (Type("Float64"),)))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_as_float",
+                            args=[base_ssa],
+                            ret_type=Type("Optional", (Type("Float64"),)),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("Optional", (Type("Float64"),))
+                    return dest, Type("Optional", (Type("Float64"),)), current, env
+                if method == "as_string":
+                    dest = env.fresh_ssa("dv_as_string", Type("Optional", (STR,)))
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dest,
+                            callee="drift_dv_as_string",
+                            args=[base_ssa],
+                            ret_type=Type("Optional", (STR,)),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                    env.ctx.ssa_types[dest] = Type("Optional", (STR,))
+                    return dest, Type("Optional", (STR,)), current, env
             if base_ty and base_ty.name == "Optional" and base_ty.args:
                 inner_ty = base_ty.args[0]
                 loc = getattr(expr, "loc", None)

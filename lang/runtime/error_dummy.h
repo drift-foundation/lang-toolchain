@@ -49,7 +49,7 @@ const struct DriftString* drift_error_get_arg(const struct DriftError* err, cons
 const struct DriftDiagnosticValue* drift_error_get_attr(const struct DriftError* err, const struct DriftString* key);
 // Append an attr (key,value) to an existing error (value stored as DiagnosticValue::String).
 void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct DriftString value);
-void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, struct DriftDiagnosticValue value);
+void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, const struct DriftDiagnosticValue* value);
 // Attach a captured local (typed DiagnosticValue) to a named frame.
 void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, struct DriftString key, struct DriftDiagnosticValue value);
 // Typed attr lookup (full DiagnosticValue). Writes Missing when absent.

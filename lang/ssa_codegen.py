@@ -67,6 +67,7 @@ def _llvm_type(ty: Type) -> ir.Type:
     - Int       → word-sized int (currently i64)
     - Int64     → i64
     - Int32     → i32
+    - Float64   → double
     - Bool      → i1
     - Void      → void
     """
@@ -76,6 +77,8 @@ def _llvm_type(ty: Type) -> ir.Type:
         return I64_TY
     if ty.name == "Int32":
         return I32_TY
+    if ty.name == "Float64" or ty.name == "Float":
+        return ir.DoubleType()
     if ty == BOOL or ty.name == "Bool":
         return I1_TY
     if ty == ERROR or ty.name == "Error":
@@ -125,6 +128,12 @@ def emit_module_object(
     rt_dv_string: Optional[ir.Function] = None
     rt_dv_bool: Optional[ir.Function] = None
     rt_dv_null: Optional[ir.Function] = None
+    rt_dv_get: Optional[ir.Function] = None
+    rt_dv_index: Optional[ir.Function] = None
+    rt_dv_as_int: Optional[ir.Function] = None
+    rt_dv_as_bool: Optional[ir.Function] = None
+    rt_dv_as_float: Optional[ir.Function] = None
+    rt_dv_as_string: Optional[ir.Function] = None
 
     def _reachable(f: mir.Function) -> set[str]:
         seen: set[str] = set()
@@ -172,7 +181,11 @@ def emit_module_object(
             if ty.name in exception_names:
                 return ERROR_PTR_TY
             if ty.name == "Optional" and ty.args:
-                return ir.LiteralStructType([ir.IntType(8), _llvm_type_with_structs(ty.args[0])])
+                inner = _llvm_type_with_structs(ty.args[0])
+                # Optional<Bool> runtime uses i8 tag + i8 value; coerce accordingly.
+                if ty.args[0] == BOOL:
+                    inner = ir.IntType(8)
+                return ir.LiteralStructType([ir.IntType(8), inner])
             if isinstance(ty, ReferenceType):
                 return _llvm_type_with_structs(ty.args[0]).as_pointer()
             if ty.name in struct_layouts:
@@ -358,7 +371,7 @@ def emit_module_object(
                         builder.call(console_fn, [arg_val])
                         if not isinstance(_llvm_type(instr.ret_type), ir.VoidType):
                             # map dest to undef to keep SSA map consistent
-                            values[instr.dest] = ir.Constant.undef(_llvm_type(instr.ret_type))
+                            values[instr.dest] = ir.Constant(_llvm_type(instr.ret_type), None)
                         continue
                     elif instr.callee in struct_layouts:
                         layout = struct_layouts[instr.callee]
@@ -407,7 +420,7 @@ def emit_module_object(
                                 if rt_error_add_attr_dv is None:
                                     rt_error_add_attr_dv = ir.Function(
                                         module,
-                                        ir.FunctionType(ir.VoidType(), [ERROR_PTR_TY, _drift_string_type(), DV_TY]),
+                                        ir.FunctionType(ir.VoidType(), [ERROR_PTR_TY, _drift_string_type(), DV_TY.as_pointer()]),
                                         name="drift_error_add_attr_dv",
                                     )
                                 callee = rt_error_add_attr_dv
@@ -454,6 +467,57 @@ def emit_module_object(
                                         name="drift_dv_null",
                                     )
                                 callee = rt_dv_null
+                            elif instr.callee == "drift_dv_get":
+                                if rt_dv_get is None:
+                                    rt_dv_get = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, [DV_TY, _drift_string_type()]),
+                                        name="drift_dv_get",
+                                    )
+                                callee = rt_dv_get
+                            elif instr.callee == "drift_dv_index":
+                                if rt_dv_index is None:
+                                    rt_dv_index = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, [DV_TY, I64_TY]),
+                                        name="drift_dv_index",
+                                    )
+                                callee = rt_dv_index
+                            elif instr.callee == "drift_dv_as_int":
+                                if rt_dv_as_int is None:
+                                    rt_dv_as_int = ir.Function(
+                                        module,
+                                        ir.FunctionType(_llvm_type_with_structs(Type("Optional", (INT,))), [DV_TY.as_pointer()]),
+                                        name="drift_dv_as_int",
+                                    )
+                                callee = rt_dv_as_int
+                            elif instr.callee == "drift_dv_as_bool":
+                                if rt_dv_as_bool is None:
+                                    opt_bool_ty = ir.LiteralStructType([ir.IntType(8), ir.IntType(8)])
+                                    rt_dv_as_bool = ir.Function(
+                                        module,
+                                        ir.FunctionType(opt_bool_ty, [DV_TY.as_pointer()]),
+                                        name="drift_dv_as_bool",
+                                    )
+                                callee = rt_dv_as_bool
+                            elif instr.callee == "drift_dv_as_float":
+                                if rt_dv_as_float is None:
+                                    opt_f_ty = _llvm_type_with_structs(Type("Optional", (Type("Float64"),)))
+                                    rt_dv_as_float = ir.Function(
+                                        module,
+                                        ir.FunctionType(opt_f_ty, [DV_TY.as_pointer()]),
+                                        name="drift_dv_as_float",
+                                    )
+                                callee = rt_dv_as_float
+                            elif instr.callee == "drift_dv_as_string":
+                                if rt_dv_as_string is None:
+                                    opt_s_ty = _llvm_type_with_structs(Type("Optional", (STR,)))
+                                    rt_dv_as_string = ir.Function(
+                                        module,
+                                        ir.FunctionType(opt_s_ty, [DV_TY.as_pointer()]),
+                                        name="drift_dv_as_string",
+                                    )
+                                callee = rt_dv_as_string
                             elif instr.callee == "drift_string_eq":
                                 callee = ir.Function(
                                     module,
@@ -555,6 +619,23 @@ def emit_module_object(
                         values[instr.dest] = call_val
                     elif callee.name == "__exc_args_get_required":
                         call_val = builder.call(callee, args, name=instr.dest)
+                        values[instr.dest] = call_val
+                    elif callee is rt_error_add_attr_dv:
+                        # ensure DiagnosticValue is passed by pointer
+                        dv_arg = args[2]
+                        if not isinstance(dv_arg.type, ir.PointerType):
+                            slot = builder.alloca(DV_TY, name=f"{instr.dest}.dvslot")
+                            builder.store(dv_arg, slot)
+                            dv_arg = slot
+                        builder.call(callee, [args[0], args[1], dv_arg])
+                        # void return; no SSA value
+                    elif callee in (rt_dv_as_int, rt_dv_as_bool, rt_dv_as_float, rt_dv_as_string):
+                        dv_arg = args[0]
+                        if not isinstance(dv_arg.type, ir.PointerType):
+                            slot = builder.alloca(DV_TY, name=f"{instr.dest}.dvslot")
+                            builder.store(dv_arg, slot)
+                            dv_arg = slot
+                        call_val = builder.call(callee, [dv_arg], name=instr.dest)
                         values[instr.dest] = call_val
                     else:
                         call_val = builder.call(callee, args, name=instr.dest)

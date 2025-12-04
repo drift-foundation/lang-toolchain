@@ -45,12 +45,13 @@ void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct 
         abort();
     }
     new_attrs[new_acount - 1].key = key;
-    new_attrs[new_acount - 1].value = drift_dv_string(value);
+    struct DriftDiagnosticValue dv = drift_dv_string(value);
+    new_attrs[new_acount - 1].value = dv;
     err->attrs = new_attrs;
     err->attr_count = new_acount;
 }
 
-void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, struct DriftDiagnosticValue value) {
+void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, const struct DriftDiagnosticValue* value) {
     if (!err) {
         return;
     }
@@ -60,7 +61,7 @@ void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, str
         abort();
     }
     new_attrs[new_acount - 1].key = key;
-    new_attrs[new_acount - 1].value = value;
+    new_attrs[new_acount - 1].value = *value;
     err->attrs = new_attrs;
     err->attr_count = new_acount;
 }
@@ -166,6 +167,7 @@ void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftErro
         *out = drift_dv_missing();
         return;
     }
+    // Typed attrs lookup.
     const struct DriftDiagnosticValue* val = drift_error_get_attr(err, &key);
     if (!val) {
         *out = drift_dv_missing();

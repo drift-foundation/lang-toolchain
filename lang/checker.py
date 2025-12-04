@@ -707,7 +707,7 @@ class Checker:
                 if method == "as_int":
                     if expr.args:
                         raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_int takes no arguments")
-                    return Type("Optional", (I64,))
+                    return Type("Optional", (INT,))
                 if method == "as_bool":
                     if expr.args:
                         raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_bool takes no arguments")

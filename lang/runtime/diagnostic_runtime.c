@@ -1,6 +1,7 @@
 // DiagnosticValue runtime support (SSA backend)
 
 #include "diagnostic_runtime.h"
+#include <stdio.h>
 
 struct DriftDiagnosticValue drift_dv_missing(void) {
     struct DriftDiagnosticValue dv = {.tag = DV_MISSING};
@@ -77,35 +78,35 @@ uint8_t drift_dv_kind(struct DriftDiagnosticValue dv) {
     return dv.tag;
 }
 
-struct DriftOptionalInt drift_dv_as_int(struct DriftDiagnosticValue dv) {
-    if (dv.tag != DV_INT) {
+struct DriftOptionalInt drift_dv_as_int(const struct DriftDiagnosticValue* dv) {
+    if (!dv || dv->tag != DV_INT) {
         return OPTIONAL_INT_NONE;
     }
-    struct DriftOptionalInt out = {1, dv.data.int_value};
+    struct DriftOptionalInt out = {1, dv->data.int_value};
     return out;
 }
 
-struct DriftOptionalBool drift_dv_as_bool(struct DriftDiagnosticValue dv) {
-    if (dv.tag != DV_BOOL) {
+struct DriftOptionalBool drift_dv_as_bool(const struct DriftDiagnosticValue* dv) {
+    if (!dv || dv->tag != DV_BOOL) {
         return DRIFT_OPTIONAL_BOOL_NONE;
     }
-    struct DriftOptionalBool out = {1, (uint8_t)(dv.data.bool_value ? 1 : 0)};
+    struct DriftOptionalBool out = {1, (uint8_t)(dv->data.bool_value ? 1 : 0)};
     return out;
 }
 
-struct DriftOptionalFloat drift_dv_as_float(struct DriftDiagnosticValue dv) {
-    if (dv.tag != DV_FLOAT) {
+struct DriftOptionalFloat drift_dv_as_float(const struct DriftDiagnosticValue* dv) {
+    if (!dv || dv->tag != DV_FLOAT) {
         return DRIFT_OPTIONAL_FLOAT_NONE;
     }
-    struct DriftOptionalFloat out = {1, dv.data.float_value};
+    struct DriftOptionalFloat out = {1, dv->data.float_value};
     return out;
 }
 
-struct DriftOptionalString drift_dv_as_string(struct DriftDiagnosticValue dv) {
-    if (dv.tag != DV_STRING) {
+struct DriftOptionalString drift_dv_as_string(const struct DriftDiagnosticValue* dv) {
+    if (!dv || dv->tag != DV_STRING) {
         return OPTIONAL_STRING_NONE;
     }
-    struct DriftOptionalString out = {1, dv.data.string_value};
+    struct DriftOptionalString out = {1, dv->data.string_value};
     return out;
 }
 
