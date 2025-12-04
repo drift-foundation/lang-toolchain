@@ -62,7 +62,7 @@ lang2-stage1-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest lang2/stage1/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage1/tests
 
 lang2-stage2-test:
 	# Ensure pytest is available in the venv
@@ -70,7 +70,15 @@ lang2-stage2-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest lang2/stage2/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage2/tests
+
+lang2-stage3-test:
+	# Ensure pytest is available in the venv
+	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
+	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
+	  exit 1; \
+	fi
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage3/tests
 
 stage-for-review:
 	rm -rf staged

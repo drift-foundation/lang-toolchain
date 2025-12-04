@@ -209,7 +209,22 @@ class AstToHIR:
 		raise NotImplementedError("Try lowering not implemented yet")
 
 	def _visit_stmt_WhileStmt(self, stmt: ast.WhileStmt) -> H.HStmt:
-		raise NotImplementedError("While lowering not implemented yet")
+		"""
+		Desugar:
+		  while cond { body }
+
+		into:
+		  loop {
+		    if cond { body } else { break }
+		  }
+		so HIR only needs HLoop/HIf/HBreak, and MIR reuses existing lowering.
+		"""
+		cond_hir = self.lower_expr(stmt.cond)
+		then_block = self.lower_block(stmt.body)
+		else_block = H.HBlock(statements=[H.HBreak()])
+		if_stmt = H.HIf(cond=cond_hir, then_block=then_block, else_block=else_block)
+		loop_body = H.HBlock(statements=[if_stmt])
+		return H.HLoop(body=loop_body)
 
 	def _visit_stmt_ForStmt(self, stmt: ast.ForStmt) -> H.HStmt:
 		raise NotImplementedError("For lowering not implemented yet")

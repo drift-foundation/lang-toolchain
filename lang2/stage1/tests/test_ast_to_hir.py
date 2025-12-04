@@ -36,6 +36,8 @@ from lang2.stage1 import (
 	HBreak,
 	HContinue,
 	HExprStmt,
+	HLoop,
+	HBlock,
 )
 
 
@@ -112,6 +114,19 @@ def test_basic_statements_and_if():
 	assert isinstance(cont_hir, HContinue)
 	expr_stmt_hir = l.lower_stmt(ast.ExprStmt(expr=ast.Literal("x")))
 	assert isinstance(expr_stmt_hir, HExprStmt)
+
+
+def test_while_desugars_to_loop_if_break():
+	l = AstToHIR()
+	ast_while = ast.WhileStmt(cond=ast.Name("x"), body=[ast.ExprStmt(expr=ast.Literal(1))])
+	hir = l.lower_stmt(ast_while)
+	assert isinstance(hir, HLoop)
+	assert len(hir.body.statements) == 1
+	if_stmt = hir.body.statements[0]
+	assert isinstance(if_stmt, HIf)
+	assert isinstance(if_stmt.then_block, HBlock)
+	assert isinstance(if_stmt.else_block, HBlock)
+	assert isinstance(if_stmt.else_block.statements[0], HBreak)
 
 
 def test_fail_loud_on_unhandled_nodes():
