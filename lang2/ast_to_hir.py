@@ -3,6 +3,9 @@
 """
 AST → HIR lowering (sugar removal entry point).
 
+Pipeline placement:
+  AST (lang2/ast.py) → HIR (lang2/hir_nodes.py) → MIR → SSA → LLVM/obj
+
 This pass takes the parsed AST and produces the sugar-free HIR defined in
 `lang2/hir_nodes.py`. It currently lowers basic expressions/statements
 (literals, vars, unary/binary ops, field/index, let/assign/if/return/break/continue/expr-stmt);

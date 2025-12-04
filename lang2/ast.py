@@ -5,6 +5,9 @@ Local AST definitions for the lang2 refactor.
 
 This mirrors the current parser AST but is colocated with the HIR/MIR rewrite
 so we can evolve it without touching the production pipeline.
+
+Pipeline placement:
+  Surface syntax (AST, this file) → HIR → MIR → SSA → LLVM/obj
 """
 
 from __future__ import annotations

@@ -3,6 +3,9 @@
 """
 Middle Intermediate Representation (MIR).
 
+Pipeline placement:
+  AST → HIR → MIR (this file) → SSA → LLVM/obj
+
 This MIR sits between HIR (sugar-free AST) and SSA construction. It is explicit:
 - No surface sugar.
 - Explicit locals, loads/stores, calls, and control flow.
