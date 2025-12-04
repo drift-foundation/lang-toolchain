@@ -261,6 +261,17 @@ def emit_module_object(
                 struct_slots[param.name] = slot
                 values[param.name] = slot  # treat struct SSA as pointer to its slot
 
+        # Pre-emit allocas for explicit Alloc instructions so they are always
+        # defined in the entry block before any use.
+        for block in f.blocks.values():
+            for instr in block.instructions:
+                if isinstance(instr, mir.Alloc):
+                    ll_ty = _llvm_type_with_structs(instr.type)
+                    entry_builder.position_at_start(entry_block)
+                    slot = entry_builder.alloca(ll_ty, name=f"{instr.dest}.slot")
+                    values[instr.dest] = slot
+                    ssa_types[instr.dest] = ReferenceType(instr.type)
+
         # Block params: entry params map to function args; others get PHIs.
         for bname, block in f.blocks.items():
             if bname not in reachable:
@@ -329,11 +340,8 @@ def emit_module_object(
                         # propagate pointer mapping if applicable
                         values[instr.dest] = values[instr.source]
                 elif isinstance(instr, mir.Alloc):
-                    # Allocate a slot for the given type; treat result as a reference.
-                    ll_ty = _llvm_type_with_structs(instr.type)
-                    slot = entry_builder.alloca(ll_ty, name=f"{instr.dest}.slot")
-                    values[instr.dest] = slot
-                    ssa_types[instr.dest] = ReferenceType(instr.type)
+                    # Already emitted in the pre-pass above.
+                    continue
                 elif isinstance(instr, mir.Store):
                     base_val = values.get(instr.base)
                     if base_val is None:
@@ -844,6 +852,9 @@ def emit_module_object(
                         if term.value not in values:
                             raise RuntimeError(f"return value {term.value} undefined")
                         val_ll = values[term.value]
+                        # Unwrap references for return values.
+                        if isinstance(ssa_types.get(term.value), ReferenceType) and isinstance(val_ll.type, ir.PointerType):
+                            val_ll = builder.load(val_ll)
                         pair_ty = llvm_ret_with_error(f.return_type)
                         pair_ptr = builder.alloca(pair_ty, name=f"{f.name}_ret_pair")
                         val_ptr = builder.gep(pair_ptr, [I32_TY(0), I32_TY(0)], inbounds=True)
@@ -861,6 +872,8 @@ def emit_module_object(
                         if term.value not in values:
                             raise RuntimeError(f"return value {term.value} undefined")
                         ret_val = values[term.value]
+                        if isinstance(ssa_types.get(term.value), ReferenceType) and isinstance(ret_val.type, ir.PointerType):
+                            ret_val = builder.load(ret_val)
                         ret_ll_ty = _llvm_type_with_structs(f.return_type)
                         if isinstance(ret_ll_ty, ir.LiteralStructType) and isinstance(ret_val.type, ir.PointerType):
                             if ret_val.type.pointee == ret_ll_ty:

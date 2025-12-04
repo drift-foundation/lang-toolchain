@@ -1,0 +1,32 @@
+import std.console.out
+
+fn bump(x: &mut Int) returns Void {
+  x = x + 1
+}
+
+fn bump_if(cond: Bool, x: &mut Int) returns Void {
+  if cond {
+    x = x + 1
+  }
+}
+
+fn main() returns Int {
+  var c: Int = 0
+
+  // Unconditional bumps should both be visible through the same slot.
+  bump(&mut c)
+  bump(&mut c)
+
+  // Only the true branch mutates.
+  bump_if(true, &mut c)
+  bump_if(false, &mut c)
+
+  // Loop-based mutation through the same reference.
+  var i: Int = 0
+  while i < 3 {
+    bump(&mut c)
+    i = i + 1
+  }
+
+  return c  // expect 6
+}

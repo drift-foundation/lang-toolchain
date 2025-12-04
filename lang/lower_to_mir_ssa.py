@@ -146,12 +146,13 @@ def lower_let(
     if addr_taken:
         # For structs, reuse the existing addressable value.
         if val_ty.name in checked.structs:
-            env.bind_user(stmt.name, val_ssa, ReferenceType(val_ty), capture_key=capture_key)
+            env.bind_user(stmt.name, val_ssa, ref_of(val_ty, mutable=stmt.mutable), capture_key=capture_key)
         else:
-            slot_ssa = env.fresh_ssa(f"{stmt.name}_slot", ReferenceType(val_ty))
+            ref_ty = ref_of(val_ty, mutable=stmt.mutable)
+            slot_ssa = env.fresh_ssa(f"{stmt.name}_slot", ref_ty)
             current.instructions.append(mir.Alloc(dest=slot_ssa, type=val_ty))
             current.instructions.append(mir.Store(base=slot_ssa, value=val_ssa))
-            env.bind_user(stmt.name, slot_ssa, ReferenceType(val_ty), capture_key=capture_key)
+            env.bind_user(stmt.name, slot_ssa, ref_ty, capture_key=capture_key)
     else:
         dest_ssa = env.fresh_ssa(stmt.name, val_ty)
         current.instructions.append(mir.Move(dest=dest_ssa, source=val_ssa))
@@ -1019,19 +1020,21 @@ def lower_expr_to_ssa(
             name = expr.operand.ident
             bound_ssa = env.lookup_user(name)
             bound_ty = env.ctx.ssa_types.get(bound_ssa)
+            if isinstance(bound_ty, ReferenceType):
+                return bound_ssa, bound_ty, current, env
             # If not already a reference, create/reuse a slot and rebind.
-            if not isinstance(bound_ty, ReferenceType):
-                # If the bound value is a struct, reuse its existing address.
-                if bound_ty and bound_ty.name in checked.structs:
-                    ref_ty = ref_of(bound_ty, mutable=(expr.op == "&mut"))
-                    env.bind_user(name, bound_ssa, ref_ty)
-                    return bound_ssa, ref_ty, current, env
-                slot_ssa = env.fresh_ssa(f"{name}_slot", ReferenceType(bound_ty))
-                current.instructions.append(mir.Alloc(dest=slot_ssa, type=bound_ty))
-                current.instructions.append(mir.Store(base=slot_ssa, value=bound_ssa))
-                env.bind_user(name, slot_ssa, ReferenceType(bound_ty))
-                bound_ssa = slot_ssa
-                bound_ty = ReferenceType(bound_ty)
+            # If the bound value is a struct, reuse its existing address.
+            if bound_ty and bound_ty.name in checked.structs:
+                ref_ty = ref_of(bound_ty, mutable=(expr.op == "&mut"))
+                env.bind_user(name, bound_ssa, ref_ty)
+                return bound_ssa, ref_ty, current, env
+            ref_ty = ref_of(bound_ty, mutable=(expr.op == "&mut")) if bound_ty else ref_of(Type("⊥"), mutable=(expr.op == "&mut"))
+            slot_ssa = env.fresh_ssa(f"{name}_slot", ref_ty)
+            current.instructions.append(mir.Alloc(dest=slot_ssa, type=bound_ty))
+            current.instructions.append(mir.Store(base=slot_ssa, value=bound_ssa))
+            env.bind_user(name, slot_ssa, ref_ty)
+            bound_ssa = slot_ssa
+            bound_ty = ref_ty
             return bound_ssa, bound_ty, current, env
         operand_ssa, operand_ty, current, env = lower_expr_to_ssa(expr.operand, env, current, checked, blocks, fresh_block)
         ref_ty = ref_of(operand_ty, mutable=(expr.op == "&mut"))
