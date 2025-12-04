@@ -36,10 +36,13 @@ const struct DriftString* drift_error_get_arg(const struct DriftError* err, cons
 const struct DriftDiagnosticValue* drift_error_get_attr(const struct DriftError* err, const struct DriftString* key);
 // Append an attr (key,value) to an existing error (value stored as DiagnosticValue::String).
 void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct DriftString value);
+void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, struct DriftDiagnosticValue value);
 // Optional<String> return for exception attr lookup (string-valued only).
 struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key);
 // Required attr lookup (string-valued only): returns empty string if missing.
 struct DriftString __exc_args_get_required(const struct DriftError* err, struct DriftString key);
+// Optional attr lookup via attrs (string-valued only for now).
+struct DriftOptionalString __exc_attrs_get(const struct DriftError* err, struct DriftString key);
 
 // Optional<Int> helpers for generic Optional coverage.
 struct DriftOptionalInt drift_optional_int_some(int64_t value);

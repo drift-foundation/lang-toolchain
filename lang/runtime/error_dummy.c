@@ -48,6 +48,21 @@ void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct 
     err->attr_count = new_acount;
 }
 
+void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, struct DriftDiagnosticValue value) {
+    if (!err) {
+        return;
+    }
+    size_t new_acount = err->attr_count + 1;
+    struct DriftErrorAttr* new_attrs = realloc(err->attrs, new_acount * sizeof(struct DriftErrorAttr));
+    if (!new_attrs) {
+        abort();
+    }
+    new_attrs[new_acount - 1].key = key;
+    new_attrs[new_acount - 1].value = value;
+    err->attrs = new_attrs;
+    err->attr_count = new_acount;
+}
+
 int64_t drift_error_get_code(struct DriftError* err) {
     if (!err) return 0;
     return err->code;
@@ -95,6 +110,21 @@ struct DriftString __exc_args_get_required(const struct DriftError* err, struct 
     const struct DriftString* val = drift_error_get_arg(err, &key);
     if (!val) return empty;
     return *val;
+}
+
+// Typed attrs path (string-only for now).
+struct DriftOptionalString __exc_attrs_get(const struct DriftError* err, struct DriftString key) {
+    struct DriftOptionalString out = OPTIONAL_STRING_NONE;
+    if (!err) {
+        return out;
+    }
+    const struct DriftDiagnosticValue* val = drift_error_get_attr(err, &key);
+    if (!val || val->tag != DV_STRING) {
+        return out;
+    }
+    out.is_some = 1;
+    out.value = val->data.string_value;
+    return out;
 }
 
 struct DriftOptionalInt drift_optional_int_some(int64_t value) {

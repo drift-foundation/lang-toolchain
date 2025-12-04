@@ -400,40 +400,45 @@ def lower_expr_to_ssa(
     if lowered_idx is not None:
         result_ssa, result_ty, current, env = lowered_idx
         return result_ssa, result_ty, current, env
+    # Error.attrs indexing -> __exc_attrs_get (string Optional for now).
+    if isinstance(expr, ast.Index) and isinstance(expr.value, ast.Attr) and expr.value.attr == "attrs":
+        base_ssa, base_ty, current, env = lower_expr_to_ssa(expr.value.value, env, current, checked, blocks, fresh_block)
+        if base_ty != ERROR and base_ty.name not in checked.exceptions:
+            raise LoweringError("attrs access only supported on Error values")
+        key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, blocks, fresh_block)
+        if key_ty != STR:
+            raise LoweringError("attrs index expects String key")
+        dest = env.fresh_ssa("exc_attr_opt", Type("Optional", (STR,)))
+        current.instructions.append(
+            mir.Call(
+                dest=dest,
+                callee="__exc_attrs_get",
+                args=[base_ssa, key_ssa],
+                ret_type=Type("Optional", (STR,)),
+                err_dest=None,
+                normal=None,
+                error=None,
+                loc=getattr(expr, "loc", None),
+            )
+        )
+        env.ctx.ssa_types[dest] = Type("Optional", (STR,))
+        return dest, Type("Optional", (STR,)), current, env
     if isinstance(expr, ast.ExceptionCtor):
         # Materialize event code.
         code_ssa = env.fresh_ssa("exc_code", I64)
         loc = getattr(expr, "loc", None)
         current.instructions.append(mir.Const(dest=code_ssa, type=I64, value=expr.event_code, loc=loc))
         env.ctx.ssa_types[code_ssa] = I64
-        # Thread first payload field if present; otherwise use empty string literal.
-        payload_ssa: Optional[str] = None
-        key_ssa: Optional[str] = None
-        if expr.fields and expr.arg_order:
-            first_name = expr.arg_order[0]
-            first_expr = expr.fields[first_name]
-            key_ssa = env.fresh_ssa("exc_key", STR)
-            current.instructions.append(mir.Const(dest=key_ssa, type=STR, value=first_name, loc=loc))
-            env.ctx.ssa_types[key_ssa] = STR
-            payload_ssa, payload_ty, current, env = lower_expr_to_ssa(
-                first_expr, env, current, checked, blocks, fresh_block
-            )
-            if payload_ty != STR:
-                raise LoweringError("exception payload lowering currently supports String only")
-        if payload_ssa is None:
-            payload_ssa = env.fresh_ssa("exc_payload", STR)
-            current.instructions.append(mir.Const(dest=payload_ssa, type=STR, value="", loc=loc))
-            env.ctx.ssa_types[payload_ssa] = STR
-        if key_ssa is None:
-            key_ssa = env.fresh_ssa("exc_key", STR)
-            current.instructions.append(mir.Const(dest=key_ssa, type=STR, value="", loc=loc))
-            env.ctx.ssa_types[key_ssa] = STR
+        # Create the base Error (seeded with empty key/payload for now).
+        empty_str = env.fresh_ssa("exc_empty", STR)
+        current.instructions.append(mir.Const(dest=empty_str, type=STR, value="", loc=loc))
+        env.ctx.ssa_types[empty_str] = STR
         dest_err = env.fresh_ssa("exc", ERROR)
         current.instructions.append(
             mir.Call(
                 dest=dest_err,
                 callee="drift_error_new_dummy",
-                args=[code_ssa, key_ssa, payload_ssa],
+                args=[code_ssa, empty_str, empty_str],
                 ret_type=ERROR,
                 err_dest=None,
                 normal=None,
@@ -442,9 +447,9 @@ def lower_expr_to_ssa(
             )
         )
         env.ctx.ssa_types[dest_err] = ERROR
-        # Add remaining args (if any) via drift_error_add_arg.
+        # Add attrs via typed helper.
         if expr.fields and expr.arg_order:
-            for name in expr.arg_order[1:]:
+            for name in expr.arg_order:
                 if name not in expr.fields:
                     continue
                 key_const = env.fresh_ssa(f"{name}_key", STR)
@@ -453,13 +458,56 @@ def lower_expr_to_ssa(
                 val_ssa, val_ty, current, env = lower_expr_to_ssa(
                     expr.fields[name], env, current, checked, blocks, fresh_block
                 )
-                if val_ty != STR:
-                    raise LoweringError("exception arg lowering currently supports String only")
+                # Wrap field into DiagnosticValue via runtime helpers for primitives.
+                dv_dest = env.fresh_ssa(f"{name}_dv", Type("DiagnosticValue"))
+                if val_ty in (INT, I64):
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dv_dest,
+                            callee="drift_dv_int",
+                            args=[val_ssa],
+                            ret_type=Type("DiagnosticValue"),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                elif val_ty == BOOL:
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dv_dest,
+                            callee="drift_dv_bool",
+                            args=[val_ssa],
+                            ret_type=Type("DiagnosticValue"),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                elif val_ty == STR:
+                    current.instructions.append(
+                        mir.Call(
+                            dest=dv_dest,
+                            callee="drift_dv_string",
+                            args=[val_ssa],
+                            ret_type=Type("DiagnosticValue"),
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
+                else:
+                    raise LoweringError(f"exception field '{name}' type {val_ty} not yet supported for attrs")
+                env.ctx.ssa_types[dv_dest] = Type("DiagnosticValue")
+                # Add typed attr.
                 current.instructions.append(
                     mir.Call(
                         dest=env.fresh_ssa(f"{name}_add", UNIT),
-                        callee="drift_error_add_arg",
-                        args=[dest_err, key_const, val_ssa],
+                        callee="drift_error_add_attr_dv",
+                        args=[dest_err, key_const, dv_dest],
                         ret_type=UNIT,
                         err_dest=None,
                         normal=None,
@@ -467,6 +515,20 @@ def lower_expr_to_ssa(
                         loc=loc,
                     )
                 )
+                # Legacy string arg for backward compatibility (string only).
+                if val_ty == STR:
+                    current.instructions.append(
+                        mir.Call(
+                            dest=env.fresh_ssa(f"{name}_add_arg", UNIT),
+                            callee="drift_error_add_arg",
+                            args=[dest_err, key_const, val_ssa],
+                            ret_type=UNIT,
+                            err_dest=None,
+                            normal=None,
+                            error=None,
+                            loc=loc,
+                        )
+                    )
         return dest_err, ERROR, current, env
     # Names
     if isinstance(expr, ast.Name):
@@ -711,6 +773,11 @@ def lower_expr_to_ssa(
             current.instructions.append(mir.StructInit(dest=dest, type=view_ty, args=[base_ssa]))
             env.ctx.ssa_types[dest] = view_ty
             return dest, view_ty, current, env
+        if expr.attr == "attrs":
+            dest = env.fresh_ssa("attrs_view", Type("ErrorAttrs"))
+            current.instructions.append(mir.Move(dest=dest, source=base_ssa))
+            env.ctx.ssa_types[dest] = Type("ErrorAttrs")
+            return dest, Type("ErrorAttrs"), current, env
         field_ty = _lookup_field_type(base_ty, expr.attr, checked)
         dest = env.fresh_ssa(expr.attr, field_ty)
         current.instructions.append(mir.FieldGet(dest=dest, base=base_ssa, field=expr.attr, loc=getattr(expr, "loc", None)))

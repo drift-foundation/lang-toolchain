@@ -645,6 +645,10 @@ class Checker:
         container_type = self._check_expr(expr.value, ctx)
         element_type = array_element_type(container_type)
         if element_type is None:
+            if container_type.name == "ErrorAttrs":
+                index_type = self._check_expr(expr.index, ctx)
+                self._expect_type(index_type, STR, expr.index.loc)
+                return Type("Optional", (STR,))
             # Special-case exception args-view: key type must match the view's key type.
             for exc in self.exception_infos.values():
                 if container_type.name == exc.args_view_type:
@@ -684,6 +688,39 @@ class Checker:
             base_type = self._check_expr(expr.func.value, ctx)
             if base_type.name == "Optional":
                 return self._check_optional_call(expr, base_type, ctx)
+            if base_type.name == "DiagnosticValue":
+                method = expr.func.attr
+                if expr.kwargs:
+                    raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.{method} does not accept keyword args")
+                if method == "get":
+                    if len(expr.args) != 1:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.get expects 1 argument")
+                    arg_ty = self._check_expr(expr.args[0], ctx)
+                    self._expect_type(arg_ty, STR, expr.args[0].loc)
+                    return Type("DiagnosticValue")
+                if method == "index":
+                    if len(expr.args) != 1:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.index expects 1 argument")
+                    arg_ty = self._check_expr(expr.args[0], ctx)
+                    self._expect_type(arg_ty, INT, expr.args[0].loc)
+                    return Type("DiagnosticValue")
+                if method == "as_int":
+                    if expr.args:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_int takes no arguments")
+                    return Type("Optional", (I64,))
+                if method == "as_bool":
+                    if expr.args:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_bool takes no arguments")
+                    return Type("Optional", (BOOL,))
+                if method == "as_float":
+                    if expr.args:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_float takes no arguments")
+                    return Type("Optional", (Type("Float64"),))
+                if method == "as_string":
+                    if expr.args:
+                        raise CheckError(f"{expr.loc.line}:{expr.loc.column}: DiagnosticValue.as_string takes no arguments")
+                    return Type("Optional", (STR,))
+                raise CheckError(f"{expr.loc.line}:{expr.loc.column}: Unknown DiagnosticValue method '{method}'")
         callee_name = self._resolve_callee(expr.func, ctx)
         exc_info = self.exception_infos.get(callee_name)
         if exc_info:
@@ -877,6 +914,8 @@ class Checker:
                 return STR
             if attr.attr == "code":
                 return I64
+            if attr.attr == "attrs":
+                return Type("ErrorAttrs")
             raise CheckError(
                 f"{attr.loc.line}:{attr.loc.column}: Error has no field '{attr.attr}'"
             )
@@ -884,6 +923,8 @@ class Checker:
         if exc_info:
             if attr.attr == "args":
                 return Type(exc_info.args_view_type)
+            if attr.attr == "attrs":
+                return Type("ErrorAttrs")
             if attr.attr not in exc_info.arg_types:
                 raise CheckError(
                     f"{attr.loc.line}:{attr.loc.column}: Exception '{exc_info.name}' has no field '{attr.attr}'"

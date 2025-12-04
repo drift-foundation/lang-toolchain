@@ -18,7 +18,8 @@ I64_TY = ir.IntType(64)
 I32_TY = ir.IntType(32)
 I1_TY = ir.IntType(1)
 ERROR_PTR_TY = ir.IntType(8).as_pointer()
-DRIFT_ERROR_ARG_PTR_TY = None  # initialized lazily after _drift_string_type is defined
+DRIFT_ERROR_ARG_PTR_TY = None  # legacy args; initialized lazily after _drift_string_type is defined
+DV_TY = None  # initialized lazily
 I8P = ir.IntType(8).as_pointer()
 
 
@@ -29,6 +30,14 @@ def _drift_string_type() -> ir.LiteralStructType:
 
 # initialize the arg pointer type after string type is defined
 DRIFT_ERROR_ARG_PTR_TY = ir.LiteralStructType([_drift_string_type(), _drift_string_type()]).as_pointer()
+# DiagnosticValue ABI (tag + union). Union is modeled as a byte array big enough for the largest primitive/string case.
+DV_TY = ir.LiteralStructType(
+    [
+        ir.IntType(8),                         # tag
+        ir.ArrayType(ir.IntType(8), 7),        # padding
+        ir.ArrayType(ir.IntType(8), 16),       # union storage (covers string/int/float/bool payloads)
+    ]
+)
 
 
 def emit_dummy_main_object(out_path: Path) -> None:
@@ -75,6 +84,8 @@ def _llvm_type(ty: Type) -> ir.Type:
         return ir.VoidType()
     if ty == STR or ty.name == "String":
         return _drift_string_type()
+    if ty.name == "DiagnosticValue":
+        return DV_TY
     raise NotImplementedError(f"unsupported type {ty}")
 
 
@@ -105,7 +116,13 @@ def emit_module_object(
     # Cached runtime decls
     rt_error_dummy: Optional[ir.Function] = None
     rt_error_add_arg: Optional[ir.Function] = None
+    rt_error_add_attr_dv: Optional[ir.Function] = None
     rt_exc_args_get: Optional[ir.Function] = None
+    rt_exc_attrs_get: Optional[ir.Function] = None
+    rt_dv_int: Optional[ir.Function] = None
+    rt_dv_string: Optional[ir.Function] = None
+    rt_dv_bool: Optional[ir.Function] = None
+    rt_dv_null: Optional[ir.Function] = None
 
     def _reachable(f: mir.Function) -> set[str]:
         seen: set[str] = set()
@@ -378,6 +395,46 @@ def emit_module_object(
                                         name="drift_error_add_arg",
                                     )
                                 callee = rt_error_add_arg
+                            elif instr.callee == "drift_error_add_attr_dv":
+                                if rt_error_add_attr_dv is None:
+                                    rt_error_add_attr_dv = ir.Function(
+                                        module,
+                                        ir.FunctionType(ir.VoidType(), [ERROR_PTR_TY, _drift_string_type(), DV_TY]),
+                                        name="drift_error_add_attr_dv",
+                                    )
+                                callee = rt_error_add_attr_dv
+                            elif instr.callee == "drift_dv_int":
+                                if rt_dv_int is None:
+                                    rt_dv_int = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, [I64_TY]),
+                                        name="drift_dv_int",
+                                    )
+                                callee = rt_dv_int
+                            elif instr.callee == "drift_dv_string":
+                                if rt_dv_string is None:
+                                    rt_dv_string = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, [_drift_string_type()]),
+                                        name="drift_dv_string",
+                                    )
+                                callee = rt_dv_string
+                            elif instr.callee == "drift_dv_bool":
+                                if rt_dv_bool is None:
+                                    rt_dv_bool = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, [ir.IntType(8)]),
+                                        name="drift_dv_bool",
+                                    )
+                                callee = rt_dv_bool
+                            elif instr.callee == "drift_dv_null":
+                                if rt_dv_null is None:
+                                    rt_dv_null = ir.Function(
+                                        module,
+                                        ir.FunctionType(DV_TY, []),
+                                        name="drift_dv_null",
+                                    )
+                                callee = rt_dv_null
                             elif instr.callee == "drift_string_eq":
                                 callee = ir.Function(
                                     module,
@@ -397,6 +454,18 @@ def emit_module_object(
                                     # first param is sret out-param
                                     rt_exc_args_get.args[0].attributes.add("sret")
                                 callee = rt_exc_args_get
+                            elif instr.callee == "__exc_attrs_get":
+                                if rt_exc_attrs_get is None:
+                                    rt_exc_attrs_get = ir.Function(
+                                        module,
+                                        ir.FunctionType(
+                                            ir.VoidType(),
+                                            [opt_string_ty.as_pointer(), ERROR_PTR_TY, _drift_string_type()],
+                                        ),
+                                        name="__exc_attrs_get",
+                                    )
+                                    rt_exc_attrs_get.args[0].attributes.add("sret")
+                                callee = rt_exc_attrs_get
                             elif instr.callee == "drift_optional_int_some":
                                 callee = module.globals.get("drift_optional_int_some")
                                 if callee is None:
