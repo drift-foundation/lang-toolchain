@@ -673,10 +673,23 @@ def lower_expr_to_ssa(
         return dest, res_ty, current, env
     # Calls (simple name callee, no error edges in scaffold)
     if isinstance(expr, ast.Call):
-        # Optional<T> builtin methods.
-        if isinstance(expr.func, ast.Attr) and isinstance(expr.func.value, ast.Name) and env.has_user(expr.func.value.ident):
-            base_ssa = env.lookup_user(expr.func.value.ident)
+        # Lower callee base if it's an attribute; use its SSA name/type for method dispatch.
+        base_ssa = None
+        base_ty = None
+        if isinstance(expr.func, ast.Attr):
+            # Only lower the base if it's already bound; otherwise treat as external.
+            if isinstance(expr.func.value, ast.Name) and not env.has_user(expr.func.value.ident):
+                base_ssa = None
+                base_ty = None
+            else:
+                base_ssa, base_ty, current, env = lower_expr_to_ssa(
+                    expr.func.value, env, current, checked, blocks, fresh_block
+                )
+        elif isinstance(expr.func, ast.Name) and env.has_user(expr.func.ident):
+            base_ssa = env.lookup_user(expr.func.ident)
             base_ty = env.ctx.ssa_types.get(base_ssa)
+        # Optional<T> builtin methods.
+        if isinstance(expr.func, ast.Attr) and base_ssa is not None and base_ty is not None:
             # DiagnosticValue methods
             if base_ty and base_ty.name == "DiagnosticValue":
                 loc = getattr(expr, "loc", None)
@@ -893,8 +906,21 @@ def lower_expr_to_ssa(
                         return dest, key_ty, current, env
             callee = method_callee or f"{expr.func.value.ident}.{expr.func.attr}"
         else:
-            raise LoweringError("unsupported call callee shape in SSA lowering")
+            raise LoweringError(f"unsupported call callee shape in SSA lowering (func={expr.func})")
         if callee not in checked.functions:
+            # Allow console builtin to bypass checker lookups for SSA scaffold.
+            if callee == "out.writeln":
+                ret_ty = UNIT
+                dest = env.fresh_ssa(callee, ret_ty)
+                arg_ssa = []
+                for a in expr.args:
+                    v, _, current, env = lower_expr_to_ssa(a, env, current, checked, blocks, fresh_block)
+                    arg_ssa.append(v)
+                current.instructions.append(
+                    mir.Call(dest=dest, callee=callee, args=arg_ssa, ret_type=ret_ty, err_dest=None, normal=None, error=None, loc=getattr(expr, "loc", None))
+                )
+                env.ctx.ssa_types[dest] = ret_ty
+                return dest, ret_ty, current, env
             raise LoweringError(f"unknown function '{callee}' in SSA lowering")
         arg_ssa: List[str] = []
         for a in expr.args:
