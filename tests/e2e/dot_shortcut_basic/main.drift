@@ -18,8 +18,8 @@ fn use_box(self: Box, a: Int, b: Int) returns Int {
 fn main() returns Int {
     var counter: Counter = Counter(value = 0)
     val result = new_box(&mut counter).use_box(.id, .id)
-    if counter.value != 1 {
-        return 99
+    if counter.value == 1 {
+        return result
     }
-    return result
+    return 99
 }

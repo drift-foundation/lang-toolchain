@@ -328,6 +328,12 @@ def emit_module_object(
                     if instr.dest in struct_slots and instr.source in values:
                         # propagate pointer mapping if applicable
                         values[instr.dest] = values[instr.source]
+                elif isinstance(instr, mir.Alloc):
+                    # Allocate a slot for the given type; treat result as a reference.
+                    ll_ty = _llvm_type_with_structs(instr.type)
+                    slot = entry_builder.alloca(ll_ty, name=f"{instr.dest}.slot")
+                    values[instr.dest] = slot
+                    ssa_types[instr.dest] = ReferenceType(instr.type)
                 elif isinstance(instr, mir.Store):
                     base_val = values.get(instr.base)
                     if base_val is None:
@@ -345,6 +351,15 @@ def emit_module_object(
                     if isinstance(val.type, ir.LiteralStructType) and isinstance(base_val.type, ir.PointerType):
                         if base_val.type.pointee != val.type:
                             base_val = builder.bitcast(base_val, val.type.as_pointer())
+                    # If the source is a pointer to a struct value, load it before storing.
+                    expected_ty = base_val.type.pointee if isinstance(base_val.type, ir.PointerType) else None
+                    val_ssa_ty = ssa_types.get(instr.value)
+                    if (
+                        isinstance(val.type, ir.PointerType)
+                        and isinstance(expected_ty, ir.LiteralStructType)
+                        and (val_ssa_ty and not isinstance(val_ssa_ty, ReferenceType))
+                    ):
+                        val = builder.load(val)
                     builder.store(val, base_val)
                 elif isinstance(instr, mir.Binary):
                     def _load_if_ref(name: str):
@@ -957,7 +972,8 @@ def emit_module_object(
                         incoming_val = values[arg]
                         phi = phis[(tgt, param.name)]
                         expected_ty = phi.type.pointee if isinstance(phi.type, ir.PointerType) else phi.type
-                        if isinstance(expected_ty, ir.LiteralStructType) and isinstance(incoming_val.type, ir.PointerType):
+                        # Only load pointers for value params; reference params expect the pointer.
+                        if not isinstance(param.type, ReferenceType) and isinstance(expected_ty, ir.LiteralStructType) and isinstance(incoming_val.type, ir.PointerType):
                             incoming_val = builder.load(incoming_val)
                         phis[(tgt, param.name)].add_incoming(incoming_val, blocks_map[(f.name, bname)])
                 builder.cbranch(cond_val, blocks_map[(f.name, term.then.target)], blocks_map[(f.name, term.els.target)])

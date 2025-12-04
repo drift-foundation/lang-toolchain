@@ -19,6 +19,8 @@ class SSAContext:
 
     counter: int = 0
     ssa_types: Dict[str, Type] = field(default_factory=dict)
+    # Track user variables that have an addressable slot (created on first &/&mut).
+    addr_slots: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -58,6 +60,8 @@ class SSAEnv:
         self.user_env[user_name] = ssa_name
         if ty is not None:
             self.ctx.ssa_types[ssa_name] = ty
+        if isinstance(ty, Type) and ty.name in {"&", "&mut"}:
+            self.ctx.addr_slots.add(user_name)
         # Preserve existing capture key if present and not explicitly overridden.
         if capture_key is None and user_name in self.capture_keys_by_user:
             capture_key = self.capture_keys_by_user[user_name]

@@ -138,12 +138,24 @@ def lower_let(
     fresh_block: callable,
 ) -> Tuple[mir.BasicBlock, SSAEnv]:
     val_ssa, val_ty, current, env = lower_expr_to_ssa(stmt.value, env, current, checked, blocks, fresh_block)
-    dest_ssa = env.fresh_ssa(stmt.name, val_ty)
-    current.instructions.append(mir.Move(dest=dest_ssa, source=val_ssa))
     capture_key = None
     if getattr(stmt, "capture", False):
         capture_key = stmt.capture_alias or stmt.name
-    env.bind_user(stmt.name, dest_ssa, val_ty, capture_key=capture_key)
+    # If this local will have its address taken, allocate a slot and store into it.
+    addr_taken = stmt.name in env.ctx.addr_slots if hasattr(env.ctx, "addr_slots") else False
+    if addr_taken:
+        # For structs, reuse the existing addressable value.
+        if val_ty.name in checked.structs:
+            env.bind_user(stmt.name, val_ssa, ReferenceType(val_ty), capture_key=capture_key)
+        else:
+            slot_ssa = env.fresh_ssa(f"{stmt.name}_slot", ReferenceType(val_ty))
+            current.instructions.append(mir.Alloc(dest=slot_ssa, type=val_ty))
+            current.instructions.append(mir.Store(base=slot_ssa, value=val_ssa))
+            env.bind_user(stmt.name, slot_ssa, ReferenceType(val_ty), capture_key=capture_key)
+    else:
+        dest_ssa = env.fresh_ssa(stmt.name, val_ty)
+        current.instructions.append(mir.Move(dest=dest_ssa, source=val_ssa))
+        env.bind_user(stmt.name, dest_ssa, val_ty, capture_key=capture_key)
     return current, env
 
 
@@ -310,31 +322,49 @@ def lower_if(
 
     then_block, then_env = lower_block_in_env(stmt.then_block.statements, then_env, blocks, then_block, checked, fresh_block)
     join_referenced = False
+    then_to_join = False
     if then_block.terminator is None:
         then_block.terminator = mir.Br(
             target=mir.Edge(target=join_name, args=[then_env.lookup_user(u) for u in live_users])
         )
         join_referenced = True
+        then_to_join = True
 
     if stmt.else_block:
         else_block, else_env = lower_block_in_env(
             stmt.else_block.statements, else_env, blocks, else_block, checked, fresh_block
         )
+        else_to_join = False
         if else_block.terminator is None:
             else_block.terminator = mir.Br(
                 target=mir.Edge(target=join_name, args=[else_env.lookup_user(u) for u in live_users])
             )
             join_referenced = True
+            else_to_join = True
     else:
         # No else: jump to join with current env values.
         else_block.terminator = mir.Br(
             target=mir.Edge(target=join_name, args=[env.lookup_user(u) for u in live_users])
         )
         join_referenced = True
+        else_to_join = True
 
     if not join_referenced:
         # Both branches terminate; no join needed.
         blocks.pop(join_name, None)
+        return then_block, then_env
+    preds_to_join = int(then_to_join) + int(else_to_join)
+    if preds_to_join <= 1:
+        # Single predecessor flows through; drop the synthetic join.
+        blocks.pop(join_name, None)
+        if then_to_join and isinstance(then_block.terminator, mir.Br):
+            then_block.terminator = None
+            return then_block, then_env
+        if else_to_join and isinstance(else_block.terminator, mir.Br):
+            else_block.terminator = None
+            return else_block, else_env
+        # If neither branch falls through, we should already have returned via
+        # `join_referenced` above.
         return then_block, then_env
     join_env_map = {u: join_params[i].name for i, u in enumerate(live_users)}
     join_env = env.clone_for_block(join_env_map)
@@ -984,6 +1014,25 @@ def lower_expr_to_ssa(
         return dest, elem_ty, current, env
     # Borrow/addr-of: create a new SSA name with ref type, move from the base.
     if isinstance(expr, ast.Unary) and expr.op in {"&", "&mut"}:
+        # If taking the address of a named local, ensure it has a slot.
+        if isinstance(expr.operand, ast.Name) and env.has_user(expr.operand.ident):
+            name = expr.operand.ident
+            bound_ssa = env.lookup_user(name)
+            bound_ty = env.ctx.ssa_types.get(bound_ssa)
+            # If not already a reference, create/reuse a slot and rebind.
+            if not isinstance(bound_ty, ReferenceType):
+                # If the bound value is a struct, reuse its existing address.
+                if bound_ty and bound_ty.name in checked.structs:
+                    ref_ty = ref_of(bound_ty, mutable=(expr.op == "&mut"))
+                    env.bind_user(name, bound_ssa, ref_ty)
+                    return bound_ssa, ref_ty, current, env
+                slot_ssa = env.fresh_ssa(f"{name}_slot", ReferenceType(bound_ty))
+                current.instructions.append(mir.Alloc(dest=slot_ssa, type=bound_ty))
+                current.instructions.append(mir.Store(base=slot_ssa, value=bound_ssa))
+                env.bind_user(name, slot_ssa, ReferenceType(bound_ty))
+                bound_ssa = slot_ssa
+                bound_ty = ReferenceType(bound_ty)
+            return bound_ssa, bound_ty, current, env
         operand_ssa, operand_ty, current, env = lower_expr_to_ssa(expr.operand, env, current, checked, blocks, fresh_block)
         ref_ty = ref_of(operand_ty, mutable=(expr.op == "&mut"))
         dest = env.fresh_ssa("ref", ref_ty)

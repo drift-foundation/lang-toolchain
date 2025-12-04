@@ -136,6 +136,15 @@ class FieldSet(Instruction):
 
 
 @dataclass(frozen=True)
+class Alloc(Instruction):
+    """Allocate a stack slot for a value of type `type`."""
+
+    dest: Value
+    type: Type
+    loc: Location = Location()
+
+
+@dataclass(frozen=True)
 class Store(Instruction):
     base: Value
     value: Value
