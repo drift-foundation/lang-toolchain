@@ -86,8 +86,8 @@ MIR should be explicit and simple enough that lowering is mostly a mechanical ma
 ## Status
 
 - Plan written (this file).  
-- HIR/MIR schemas to be finalized as above before coding.  
-- No code changes yet.
+- HIR skeleton added in `lang/hir_nodes.py` with base classes, operator enums, expressions, statements, and `HBlock`.  
+- MIR schema still to finalize; no lowering code yet.
 
 ## Next steps (strict order)
 
