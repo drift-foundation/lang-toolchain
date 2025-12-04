@@ -4,7 +4,7 @@
 Middle Intermediate Representation (MIR).
 
 Pipeline placement:
-  AST → HIR → MIR (this file) → SSA → LLVM/obj
+  AST (lang2/stage0/ast.py) → HIR (lang2/stage1/hir_nodes.py) → MIR (this file) → SSA → LLVM/obj
 
 This MIR sits between HIR (sugar-free AST) and SSA construction. It is explicit:
 - No surface sugar.
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Optional, Union
 
-from .hir_nodes import UnaryOp, BinaryOp
+from ..stage1.hir_nodes import UnaryOp, BinaryOp
 
 
 class MNode:

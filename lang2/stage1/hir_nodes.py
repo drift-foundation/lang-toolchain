@@ -4,7 +4,7 @@
 High-level Intermediate Representation (HIR).
 
 Pipeline placement:
-  Surface syntax (AST) → HIR (this file) → MIR → SSA → LLVM/obj
+  AST (lang2/stage0/ast.py) → HIR (this file) → MIR → SSA → LLVM/obj
 
 The HIR is a *sugar-free* tree that sits between the parsed AST and MIR.
 All surface sugar (dot placeholders, method-call sugar, index sugar, DV ctor

@@ -4,25 +4,39 @@
 AST → HIR lowering (sugar removal entry point).
 
 Pipeline placement:
-  AST (lang2/ast.py) → HIR (lang2/hir_nodes.py) → MIR → SSA → LLVM/obj
+  AST (lang2/stage0/ast.py) → HIR (lang2/stage1/hir_nodes.py) → MIR → SSA → LLVM/obj
 
 This pass takes the parsed AST and produces the sugar-free HIR defined in
-`lang2/hir_nodes.py`. It currently lowers basic expressions/statements
+`lang2/stage1/hir_nodes.py`. It currently lowers basic expressions/statements
 (literals, vars, unary/binary ops, field/index, let/assign/if/return/break/continue/expr-stmt);
 calls/control-flow sugar and other complex constructs still fail loudly so
 they can be filled in incrementally.
+
+Entry points (stage API):
+  - lower_expr: lower a single expression to HIR
+  - lower_stmt: lower a single statement to HIR
+  - lower_block: lower a list of statements into an HBlock
 """
 
 from __future__ import annotations
 
 from typing import List
 
-from . import ast  # local copy of AST node definitions for the refactor
+from ..stage0 import ast  # local copy of AST node definitions for the refactor
 from . import hir_nodes as H
 
 
 class AstToHIR:
-	"""AST → HIR lowering (sugar removal happens here)."""
+	"""
+	AST → HIR lowering (sugar removal happens here).
+
+	Entry points (stage API):
+	  - lower_expr: lower a single expression to HIR
+	  - lower_stmt: lower a single statement to HIR
+	  - lower_block: lower a list of statements into an HBlock
+	Helper visitors are prefixed with an underscore; anything without a leading
+	underscore is intended for callers of this stage.
+	"""
 
 	def lower_expr(self, expr: ast.Expr) -> H.HExpr:
 		"""
@@ -31,7 +45,7 @@ class AstToHIR:
 		Fail-loud behavior is intentional: new AST node types should add
 		a visitor rather than being silently ignored.
 		"""
-		method = getattr(self, f"visit_expr_{type(expr).__name__}", None)
+		method = getattr(self, f"_visit_expr_{type(expr).__name__}", None)
 		if method is None:
 			raise NotImplementedError(f"No HIR lowering for expr type {type(expr).__name__}")
 		return method(expr)
@@ -43,7 +57,7 @@ class AstToHIR:
 		Fail-loud behavior is intentional: new AST node types should add
 		a visitor rather than being silently ignored.
 		"""
-		method = getattr(self, f"visit_stmt_{type(stmt).__name__}", None)
+		method = getattr(self, f"_visit_stmt_{type(stmt).__name__}", None)
 		if method is None:
 			raise NotImplementedError(f"No HIR lowering for stmt type {type(stmt).__name__}")
 		return method(stmt)
@@ -54,11 +68,11 @@ class AstToHIR:
 
 	# --- minimal implemented handlers (trivial cases only) ---
 
-	def visit_expr_Name(self, expr: ast.Name) -> H.HExpr:
+	def _visit_expr_Name(self, expr: ast.Name) -> H.HExpr:
 		"""Names become HVar; binding resolution happens later."""
 		return H.HVar(name=expr.ident)
 
-	def visit_expr_Literal(self, expr: ast.Literal) -> H.HExpr:
+	def _visit_expr_Literal(self, expr: ast.Literal) -> H.HExpr:
 		"""Map literal to the appropriate HIR literal node."""
 		if isinstance(expr.value, bool):
 			return H.HLiteralBool(value=bool(expr.value))
@@ -68,36 +82,36 @@ class AstToHIR:
 			return H.HLiteralString(value=str(expr.value))
 		raise NotImplementedError(f"Literal of unsupported type: {type(expr.value).__name__}")
 
-	def visit_stmt_LetStmt(self, stmt: ast.LetStmt) -> H.HStmt:
+	def _visit_stmt_LetStmt(self, stmt: ast.LetStmt) -> H.HStmt:
 		"""Immutable binding introduction."""
 		return H.HLet(name=stmt.name, value=self.lower_expr(stmt.value))
 
-	def visit_stmt_ReturnStmt(self, stmt: ast.ReturnStmt) -> H.HStmt:
+	def _visit_stmt_ReturnStmt(self, stmt: ast.ReturnStmt) -> H.HStmt:
 		"""Return with optional value."""
 		val = self.lower_expr(stmt.value) if stmt.value is not None else None
 		return H.HReturn(value=val)
 
-	def visit_stmt_ExprStmt(self, stmt: ast.ExprStmt) -> H.HStmt:
+	def _visit_stmt_ExprStmt(self, stmt: ast.ExprStmt) -> H.HStmt:
 		"""Expression as statement (value discarded)."""
 		return H.HExprStmt(expr=self.lower_expr(stmt.expr))
 
 	# --- stubs for remaining nodes ---
 
-	def visit_expr_Call(self, expr: ast.Call) -> H.HExpr:
+	def _visit_expr_Call(self, expr: ast.Call) -> H.HExpr:
 		raise NotImplementedError("Call lowering not implemented yet")
 
-	def visit_expr_Attr(self, expr: ast.Attr) -> H.HExpr:
+	def _visit_expr_Attr(self, expr: ast.Attr) -> H.HExpr:
 		"""Field access: subject.name (no method/placeholder sugar here)."""
 		subject = self.lower_expr(expr.value)
 		return H.HField(subject=subject, name=expr.attr)
 
-	def visit_expr_Index(self, expr: ast.Index) -> H.HExpr:
+	def _visit_expr_Index(self, expr: ast.Index) -> H.HExpr:
 		"""Indexing: subject[index] (no placeholder/index sugar here)."""
 		subject = self.lower_expr(expr.value)
 		index = self.lower_expr(expr.index)
 		return H.HIndex(subject=subject, index=index)
 
-	def visit_expr_Unary(self, expr: ast.Unary) -> H.HExpr:
+	def _visit_expr_Unary(self, expr: ast.Unary) -> H.HExpr:
 		"""
 		Unary op lowering. Only maps the simple ops; more exotic ops can be
 		added later with explicit enum entries.
@@ -113,7 +127,7 @@ class AstToHIR:
 			raise NotImplementedError(f"Unsupported unary op: {expr.op}")
 		return H.HUnary(op=op, expr=self.lower_expr(expr.operand))
 
-	def visit_expr_Binary(self, expr: ast.Binary) -> H.HExpr:
+	def _visit_expr_Binary(self, expr: ast.Binary) -> H.HExpr:
 		"""
 		Binary op lowering. Short-circuit behavior for &&/|| is NOT lowered
 		here; that can be desugared later if needed.
@@ -146,48 +160,48 @@ class AstToHIR:
 		right = self.lower_expr(expr.right)
 		return H.HBinary(op=op, left=left, right=right)
 
-	def visit_expr_ArrayLiteral(self, expr: ast.ArrayLiteral) -> H.HExpr:
+	def _visit_expr_ArrayLiteral(self, expr: ast.ArrayLiteral) -> H.HExpr:
 		raise NotImplementedError("Array literal lowering not implemented yet")
 
-	def visit_expr_ExceptionCtor(self, expr: ast.ExceptionCtor) -> H.HExpr:
+	def _visit_expr_ExceptionCtor(self, expr: ast.ExceptionCtor) -> H.HExpr:
 		raise NotImplementedError("Exception ctor lowering not implemented yet")
 
-	def visit_expr_Ternary(self, expr: ast.Ternary) -> H.HExpr:
+	def _visit_expr_Ternary(self, expr: ast.Ternary) -> H.HExpr:
 		raise NotImplementedError("Ternary lowering not implemented yet")
 
-	def visit_expr_TryCatchExpr(self, expr: ast.TryCatchExpr) -> H.HExpr:
+	def _visit_expr_TryCatchExpr(self, expr: ast.TryCatchExpr) -> H.HExpr:
 		raise NotImplementedError("Try/catch expr lowering not implemented yet")
 
-	def visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
+	def _visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
 		target = self.lower_expr(stmt.target)
 		value = self.lower_expr(stmt.value)
 		return H.HAssign(target=target, value=value)
 
-	def visit_stmt_IfStmt(self, stmt: ast.IfStmt) -> H.HStmt:
+	def _visit_stmt_IfStmt(self, stmt: ast.IfStmt) -> H.HStmt:
 		cond = self.lower_expr(stmt.cond)
 		then_block = self.lower_block(stmt.then_block)
 		else_block = self.lower_block(stmt.else_block) if stmt.else_block else None
 		return H.HIf(cond=cond, then_block=then_block, else_block=else_block)
 
-	def visit_stmt_TryStmt(self, stmt: ast.TryStmt) -> H.HStmt:
+	def _visit_stmt_TryStmt(self, stmt: ast.TryStmt) -> H.HStmt:
 		raise NotImplementedError("Try lowering not implemented yet")
 
-	def visit_stmt_WhileStmt(self, stmt: ast.WhileStmt) -> H.HStmt:
+	def _visit_stmt_WhileStmt(self, stmt: ast.WhileStmt) -> H.HStmt:
 		raise NotImplementedError("While lowering not implemented yet")
 
-	def visit_stmt_ForStmt(self, stmt: ast.ForStmt) -> H.HStmt:
+	def _visit_stmt_ForStmt(self, stmt: ast.ForStmt) -> H.HStmt:
 		raise NotImplementedError("For lowering not implemented yet")
 
-	def visit_stmt_BreakStmt(self, stmt: ast.BreakStmt) -> H.HStmt:
+	def _visit_stmt_BreakStmt(self, stmt: ast.BreakStmt) -> H.HStmt:
 		return H.HBreak()
 
-	def visit_stmt_ContinueStmt(self, stmt: ast.ContinueStmt) -> H.HStmt:
+	def _visit_stmt_ContinueStmt(self, stmt: ast.ContinueStmt) -> H.HStmt:
 		return H.HContinue()
 
-	def visit_stmt_ThrowStmt(self, stmt: ast.ThrowStmt) -> H.HStmt:
+	def _visit_stmt_ThrowStmt(self, stmt: ast.ThrowStmt) -> H.HStmt:
 		raise NotImplementedError("Throw lowering not implemented yet")
 
-	def visit_stmt_RaiseStmt(self, stmt: ast.RaiseStmt) -> H.HStmt:
+	def _visit_stmt_RaiseStmt(self, stmt: ast.RaiseStmt) -> H.HStmt:
 		raise NotImplementedError("Raise lowering not implemented yet")
 
 
