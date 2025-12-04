@@ -53,7 +53,7 @@ parse-examples:
 	./.venv/bin/python3 tools/draft_linter.py examples
 
 # Lang2 staged compiler tests
-lang2-test: lang2-stage1-test lang2-stage2-test
+lang2-test: lang2-stage1-test lang2-stage2-test lang2-stage3-test
 	@echo "lang2 tests: Success."
 
 lang2-stage1-test:
