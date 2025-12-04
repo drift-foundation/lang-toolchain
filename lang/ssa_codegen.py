@@ -120,6 +120,7 @@ def emit_module_object(
     rt_error_add_local_dv: Optional[ir.Function] = None
     rt_exc_args_get: Optional[ir.Function] = None
     rt_exc_attrs_get: Optional[ir.Function] = None
+    rt_exc_attrs_get_dv: Optional[ir.Function] = None
     rt_dv_int: Optional[ir.Function] = None
     rt_dv_string: Optional[ir.Function] = None
     rt_dv_bool: Optional[ir.Function] = None
@@ -484,6 +485,15 @@ def emit_module_object(
                                     )
                                     rt_exc_attrs_get.args[0].attributes.add("sret")
                                 callee = rt_exc_attrs_get
+                            elif instr.callee == "__exc_attrs_get_dv":
+                                if rt_exc_attrs_get_dv is None:
+                                    rt_exc_attrs_get_dv = ir.Function(
+                                        module,
+                                        ir.FunctionType(ir.VoidType(), [DV_TY.as_pointer(), ERROR_PTR_TY, _drift_string_type()]),
+                                        name="__exc_attrs_get_dv",
+                                    )
+                                    rt_exc_attrs_get_dv.args[0].attributes.add("sret")
+                                callee = rt_exc_attrs_get_dv
                             elif instr.callee == "drift_optional_int_some":
                                 callee = module.globals.get("drift_optional_int_some")
                                 if callee is None:
@@ -532,6 +542,11 @@ def emit_module_object(
                         values[instr.dest] = call_val
                     elif callee is rt_exc_attrs_get:
                         out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
+                        builder.call(callee, [out_slot] + args)
+                        call_val = builder.load(out_slot, name=instr.dest)
+                        values[instr.dest] = call_val
+                    elif callee is rt_exc_attrs_get_dv:
+                        out_slot = builder.alloca(DV_TY, name=f"{instr.dest}.dv")
                         builder.call(callee, [out_slot] + args)
                         call_val = builder.load(out_slot, name=instr.dest)
                         values[instr.dest] = call_val

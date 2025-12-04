@@ -403,7 +403,7 @@ def lower_expr_to_ssa(
     if lowered_idx is not None:
         result_ssa, result_ty, current, env = lowered_idx
         return result_ssa, result_ty, current, env
-    # Error.attrs indexing -> __exc_attrs_get (string Optional for now).
+    # Error.attrs indexing -> __exc_attrs_get_dv (DiagnosticValue).
     if isinstance(expr, ast.Index) and isinstance(expr.value, ast.Attr) and expr.value.attr == "attrs":
         base_ssa, base_ty, current, env = lower_expr_to_ssa(expr.value.value, env, current, checked, blocks, fresh_block)
         if base_ty != ERROR and base_ty.name not in checked.exceptions:
@@ -411,21 +411,21 @@ def lower_expr_to_ssa(
         key_ssa, key_ty, current, env = lower_expr_to_ssa(expr.index, env, current, checked, blocks, fresh_block)
         if key_ty != STR:
             raise LoweringError("attrs index expects String key")
-        dest = env.fresh_ssa("exc_attr_opt", Type("Optional", (STR,)))
+        dest = env.fresh_ssa("exc_attr_dv", Type("DiagnosticValue"))
         current.instructions.append(
             mir.Call(
                 dest=dest,
-                callee="__exc_attrs_get",
+                callee="__exc_attrs_get_dv",
                 args=[base_ssa, key_ssa],
-                ret_type=Type("Optional", (STR,)),
+                ret_type=Type("DiagnosticValue"),
                 err_dest=None,
                 normal=None,
                 error=None,
                 loc=getattr(expr, "loc", None),
             )
         )
-        env.ctx.ssa_types[dest] = Type("Optional", (STR,))
-        return dest, Type("Optional", (STR,)), current, env
+        env.ctx.ssa_types[dest] = Type("DiagnosticValue")
+        return dest, Type("DiagnosticValue"), current, env
     if isinstance(expr, ast.ExceptionCtor):
         # Materialize event code.
         code_ssa = env.fresh_ssa("exc_code", I64)

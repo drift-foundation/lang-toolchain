@@ -52,6 +52,8 @@ void drift_error_add_arg(struct DriftError* err, struct DriftString key, struct 
 void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, struct DriftDiagnosticValue value);
 // Attach a captured local (typed DiagnosticValue) to a named frame.
 void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, struct DriftString key, struct DriftDiagnosticValue value);
+// Typed attr lookup (full DiagnosticValue). Writes Missing when absent.
+void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString key);
 // Optional<String> return for exception attr lookup (string-valued only).
 struct DriftOptionalString __exc_args_get(const struct DriftError* err, struct DriftString key);
 // Required attr lookup (string-valued only): returns empty string if missing.

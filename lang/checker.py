@@ -648,7 +648,7 @@ class Checker:
             if container_type.name == "ErrorAttrs":
                 index_type = self._check_expr(expr.index, ctx)
                 self._expect_type(index_type, STR, expr.index.loc)
-                return Type("Optional", (STR,))
+                return Type("DiagnosticValue")
             # Special-case exception args-view: key type must match the view's key type.
             for exc in self.exception_infos.values():
                 if container_type.name == exc.args_view_type:

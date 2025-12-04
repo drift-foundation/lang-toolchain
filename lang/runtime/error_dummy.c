@@ -159,6 +159,21 @@ struct DriftOptionalString __exc_attrs_get(const struct DriftError* err, struct 
     return out;
 }
 
+// Typed DiagnosticValue lookup; writes Missing if absent.
+void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString key) {
+    if (!out) return;
+    if (!err) {
+        *out = drift_dv_missing();
+        return;
+    }
+    const struct DriftDiagnosticValue* val = drift_error_get_attr(err, &key);
+    if (!val) {
+        *out = drift_dv_missing();
+        return;
+    }
+    *out = *val;
+}
+
 struct DriftOptionalInt drift_optional_int_some(int64_t value) {
     struct DriftOptionalInt out;
     out.is_some = 1;
