@@ -15,6 +15,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent.parent
 DRIFTC = ROOT / ".venv" / "bin" / "python3"
 DRIFTC_MODULE = "lang.driftc"
+BUILD_ROOT = ROOT / "build" / "tests" / "e2e"
 
 
 def _have_llvmlite() -> bool:
@@ -39,6 +40,10 @@ def _run_case(case_dir: Path) -> str:
     requires_llvmlite = expected.get("skip_if", {}).get("requires_llvmlite", False)
     if (mode == "run" or requires_llvmlite) and not _have_llvmlite():
         return "skipped (llvmlite missing)"
+    build_dir = BUILD_ROOT / case_dir.name
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+    build_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT)
     cmd = [
@@ -47,7 +52,7 @@ def _run_case(case_dir: Path) -> str:
         DRIFTC_MODULE,
         str(case_dir / "main.drift"),
         "-o",
-        str(case_dir / "a.o"),
+        str(build_dir / "a.o"),
         "--ssa-check",
         "--ssa-simplify",
     ]
@@ -71,7 +76,7 @@ def _run_case(case_dir: Path) -> str:
     clang = _find_clang()
     if not clang:
         return "skipped (clang not found)"
-    exe_path = case_dir / "a.out"
+    exe_path = build_dir / "a.out"
     runtime_sources = [
         ROOT / "lang" / "runtime" / "string_runtime.c",
         ROOT / "lang" / "runtime" / "console_runtime.c",

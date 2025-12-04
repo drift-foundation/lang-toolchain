@@ -6,6 +6,7 @@ test: test-ssa test-e2e
 	@echo "test-ssa test-e2e: Success."
 
 test-e2e:
+	rm -rf build/tests/e2e
 	./.venv/bin/python3 tests/e2e_runner.py
 
 test-ssa:
@@ -31,6 +32,7 @@ test-runtime-c:
 	echo "test-runtime-c OK"
 
 test-e2e-ssa-subset:
+	rm -rf build/tests/e2e
 	PYTHONPATH=. ./.venv/bin/python3 tests/e2e_runner.py hello throw_try try_catch try_call_error try_event_catch_stmt try_event_catch_expr try_event_catch_no_fallback array_string for_array console_hello ref_struct_mutation
 
 parse-all: parse-examples
