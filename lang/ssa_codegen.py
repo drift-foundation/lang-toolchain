@@ -340,6 +340,7 @@ def emit_module_object(
                     else:
                         raise RuntimeError(f"unsupported binary op {instr.op}")
                 elif isinstance(instr, mir.Call):
+                    callee: Optional[ir.Function] = None
                     if instr.normal or instr.error:
                         raise RuntimeError("call with edges not yet supported in SSA backend")
                     # Console builtin: special-case out.writeln
@@ -356,6 +357,7 @@ def emit_module_object(
                         if not isinstance(_llvm_type(instr.ret_type), ir.VoidType):
                             # map dest to undef to keep SSA map consistent
                             values[instr.dest] = ir.Constant.undef(_llvm_type(instr.ret_type))
+                        continue
                     elif instr.callee in struct_layouts:
                         layout = struct_layouts[instr.callee]
                         if instr.args and len(instr.args) != len(layout.field_names):
@@ -375,6 +377,10 @@ def emit_module_object(
                         ssa_types[instr.dest] = Type(instr.callee)
                     else:
                         callee = fn_map.get(instr.callee)
+                        if callee is None:
+                            mod_fn = module.globals.get(instr.callee)
+                            if isinstance(mod_fn, ir.Function):
+                                callee = mod_fn
                         if callee is None:
                             # Try runtime helpers.
                             if instr.callee == "drift_error_new_dummy":
@@ -492,26 +498,41 @@ def emit_module_object(
                                         ir.FunctionType(_drift_string_type(), [ERROR_PTR_TY, _drift_string_type()]),
                                         name="__exc_args_get_required",
                                     )
-                            else:
-                                raise RuntimeError(f"unknown callee {instr.callee}")
-                        if callee.name in can_error_funcs:
-                            raise RuntimeError(f"call to can-error function {callee.name} without error edges")
-                        args = [values[a] for a in instr.args]
-                        if callee is rt_exc_args_get:
-                            out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
-                            builder.call(callee, [out_slot] + args)
-                            call_val = builder.load(out_slot, name=instr.dest)
-                            values[instr.dest] = call_val
-                        elif instr.callee in ("drift_optional_int_some", "drift_optional_int_none"):
-                            call_val = builder.call(callee, args, name=instr.dest)
-                            values[instr.dest] = call_val
-                        elif callee.name == "__exc_args_get_required":
-                            call_val = builder.call(callee, args, name=instr.dest)
-                            values[instr.dest] = call_val
-                        else:
-                            call_val = builder.call(callee, args, name=instr.dest)
-                            values[instr.dest] = call_val
-                        ssa_types[instr.dest] = instr.ret_type
+                            # If still unknown, declare an external with a best-effort signature.
+                            if callee is None:
+                                ret_ty = _llvm_type_with_structs(instr.ret_type)
+                                param_tys = [_llvm_type_with_structs(ssa_types[a]) for a in instr.args]
+                                callee = ir.Function(module, ir.FunctionType(ret_ty, param_tys), name=instr.callee)
+                                module.globals[callee.name] = callee
+                                fn_map[instr.callee] = callee
+                    if callee is None:
+                        raise RuntimeError(f"unknown callee {instr.callee}")
+                    if callee.name in can_error_funcs:
+                        raise RuntimeError(f"call to can-error function {callee.name} without error edges")
+                    args = [values[a] for a in instr.args]
+                    # Adjust bool arg to match runtime signature (i8).
+                    if callee is rt_dv_bool and args and isinstance(args[0].type, ir.IntType) and args[0].type.width == 1:
+                        args[0] = builder.zext(args[0], ir.IntType(8), name=f"{instr.dest}_bext")
+                    if callee is rt_exc_args_get:
+                        out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
+                        builder.call(callee, [out_slot] + args)
+                        call_val = builder.load(out_slot, name=instr.dest)
+                        values[instr.dest] = call_val
+                    elif callee is rt_exc_attrs_get:
+                        out_slot = builder.alloca(opt_string_ty, name=f"{instr.dest}.opt")
+                        builder.call(callee, [out_slot] + args)
+                        call_val = builder.load(out_slot, name=instr.dest)
+                        values[instr.dest] = call_val
+                    elif instr.callee in ("drift_optional_int_some", "drift_optional_int_none"):
+                        call_val = builder.call(callee, args, name=instr.dest)
+                        values[instr.dest] = call_val
+                    elif callee.name == "__exc_args_get_required":
+                        call_val = builder.call(callee, args, name=instr.dest)
+                        values[instr.dest] = call_val
+                    else:
+                        call_val = builder.call(callee, args, name=instr.dest)
+                        values[instr.dest] = call_val
+                    ssa_types[instr.dest] = instr.ret_type
                 elif isinstance(instr, mir.StructInit):
                     if instr.type.name not in struct_layouts:
                         raise RuntimeError(f"unknown struct type {instr.type}")
