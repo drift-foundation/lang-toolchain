@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 # author: Sławomir Liszniański; created: 2025-12-04
 """
-HIR → MIR lowering (straight-line subset).
+HIR → MIR lowering (expressions/statements, if/loop).
 
 Pipeline placement:
   AST (lang2/stage0/ast.py) → HIR (lang2/stage1/hir_nodes.py) → MIR (this file) → SSA → LLVM/obj
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import List, Set
 
-from ..stage1 import hir_nodes as H
+from .. import stage1 as H
 from . import mir_nodes as M
 
 
