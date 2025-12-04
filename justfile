@@ -37,13 +37,13 @@ test-e2e-ssa-subset:
 
 # Loop a built e2e binary repeatedly to catch flakiness.
 run-e2e-loop CASE="exception_args_dot" RUNS="1000":
-	exe="build/tests/e2e/{{CASE}}/a.out"
+	exe="build/tests/e2e/{{CASE}}/a.out"; \
 	if [ ! -x "$exe" ]; then \
 	  echo "missing $exe; build the case first (e.g., just test-e2e {{CASE}})" >&2; \
 	  exit 1; \
-	fi
-	expect="tests/e2e/{{CASE}}/expected.json"
-	./.venv/bin/python3 tools/run_loop.py --exe "$$exe" --runs {{RUNS}} --expect-file "$$expect"
+	fi; \
+	expect="tests/e2e/{{CASE}}/expected.json"; \
+	./.venv/bin/python3 tools/run_loop.py --exe "$exe" --runs {{RUNS}} --expect-file "$expect"
 
 parse-all: parse-examples
 	@echo "parse-examples: Success."
