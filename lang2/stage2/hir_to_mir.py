@@ -107,10 +107,18 @@ class MirBuilder:
 
 class HIRToMIR:
 	"""
-	Lower sugar-free HIR into MIR.
+	Lower sugar-free HIR into MIR using per-node visitors.
 
-	For now, straight-line constructs and `if` are handled. Loops, break/continue,
-	and calls will be added in later steps.
+	Supported constructs:
+	  - literals, vars, unary/binary ops, field/index reads
+	  - let/assign/expr/return
+	  - `if` with then/else/join
+	  - `loop` with break/continue
+	  - plain calls, method calls, DV construction
+	  - ternary expressions (diamond CFG + hidden temp)
+	  - `throw` → ConstructError + ResultErr + Return, with try-stack routing
+	  - `try` with multiple catch arms (dispatch via ErrorEvent codes, catch-all,
+	    rethrow as FnResult.Err when no arm matches)
 
 	Entry points (stage API):
 	  - lower_expr: lower a single HIR expression to a MIR ValueId
@@ -450,8 +458,9 @@ class HIRToMIR:
 		  each catch arm -> try_cont (if it falls through)
 
 		Notes/assumptions:
-		  - We expect well-formed arms (at most one catch-all, catch-all last);
-		    the checker should enforce this.
+		  - We expect well-formed arms (at most one catch-all, catch-all last).
+		    Until the checker enforces this, we defensively reject multiple
+		    catch-alls here.
 		  - Rethrow currently means “propagate as FnResult.Err out of this function,”
 		    not unwinding to an outer try in the same function.
 		"""
@@ -475,6 +484,8 @@ class HIRToMIR:
 			cb = self.b.new_block(f"try_catch_{idx}")
 			catch_blocks.append((arm, cb))
 			if arm.event_name is None:
+				if catch_all_block is not None:
+					raise RuntimeError("multiple catch-all arms are not supported")
 				catch_all_block = cb
 
 		# Entry: jump into body and register try context so throws can target dispatch.
@@ -524,10 +535,8 @@ class HIRToMIR:
 		if catch_all_block is not None:
 			self.b.set_terminator(M.Goto(target=catch_all_block.name))
 		else:
-			rethrow_err = self.b.new_temp()
-			self.b.emit(M.Move(dest=rethrow_err, source=err_tmp))
 			res_val = self.b.new_temp()
-			self.b.emit(M.ConstructResultErr(dest=res_val, error=rethrow_err))
+			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_tmp))
 			self.b.set_terminator(M.Return(value=res_val))
 
 		# Lower each catch arm: bind error if requested, emit ErrorEvent for handler logic, then body.
