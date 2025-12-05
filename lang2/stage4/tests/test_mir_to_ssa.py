@@ -30,6 +30,24 @@ def test_straight_line_ssa_passes():
 	ssa_func = MirToSSA().run(func)
 	assert ssa_func.func is func
 	assert ssa_func.func.blocks["entry"].instructions[0].local == "x"
+	assert ssa_func.local_versions["x"] == 1
+	assert ssa_func.current_value["x"] == "x_1"
+
+
+def test_multiple_stores_version_increments():
+	entry = BasicBlock(
+		name="entry",
+		instructions=[
+			StoreLocal(local="x", value="v0"),
+			StoreLocal(local="x", value="v1"),
+			LoadLocal(dest="t0", local="x"),
+		],
+		terminator=Return(value="t0"),
+	)
+	func = MirFunc(name="f", params=[], locals=["x"], blocks={"entry": entry}, entry="entry")
+	ssa_func = MirToSSA().run(func)
+	assert ssa_func.local_versions["x"] == 2
+	assert ssa_func.current_value["x"] == "x_2"
 
 
 def test_ssa_load_before_store_raises():

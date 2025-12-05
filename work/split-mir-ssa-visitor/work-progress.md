@@ -92,7 +92,7 @@ MIR should be explicit and simple enough that lowering is mostly a mechanical ma
 - MIR schema defined under `lang2/stage2/mir_nodes.py` (explicit ops, blocks, functions).  
 - HIR→MIR builder/skeleton under `lang2/stage2/hir_to_mir.py` lowers straight-line HIR (literals/vars/unary/binary/field/index + let/assign/expr/return), `if` with branches/join, `loop`/break/continue, and basic calls/DV construction into MIR blocks; remaining sugar (try/ternary/etc.) still TODO. Unit tests in `lang2/stage2/tests/test_hir_to_mir.py` cover these paths.  
 - MIR pre-analysis skeleton added under `lang2/stage3/pre_analysis.py` with address-taken analysis; unit test in `lang2/stage3/tests/test_pre_analysis.py`.  
-- MIR→SSA skeleton added under `lang2/stage4/ssa.py` (single-block straight-line SSA with load/store version checks and multi-block rejection guards); unit tests in `lang2/stage4/tests/test_mir_to_ssa.py`.  
+- MIR→SSA skeleton added under `lang2/stage4/ssa.py` (single-block straight-line SSA with load/store version checks, local version tables, and multi-block rejection guards); unit tests in `lang2/stage4/tests/test_mir_to_ssa.py`.  
 - Stage-specific test dirs added (`lang2/stageN/tests/`); runtime artifacts for stage tests should go under `build/tests/stageN/`.
 
 ## Next steps (strict order)

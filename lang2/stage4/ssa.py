@@ -25,11 +25,15 @@ class SsaFunc:
 	"""
 	Wrapper for an SSA-ified MIR function.
 
-	Currently just holds the MirFunc; later can carry version tables or SSA-only
-	metadata if needed.
+	Tracks:
+	  - func: the underlying MIR function
+	  - local_versions: how many SSA definitions each local has (x -> n)
+	  - current_value: the latest SSA name for each local (x -> "x_n")
 	"""
 
 	func: MirFunc
+	local_versions: Dict[str, int]
+	current_value: Dict[str, str]
 
 
 class MirToSSA:
@@ -48,12 +52,14 @@ class MirToSSA:
 
 		block = func.blocks[func.entry]
 		version: Dict[str, int] = {}
+		current_value: Dict[str, str] = {}
 		new_instrs: list[MInstr] = []
 
 		for instr in block.instructions:
 			if isinstance(instr, StoreLocal):
 				idx = version.get(instr.local, 0) + 1
 				version[instr.local] = idx
+				current_value[instr.local] = f"{instr.local}_{idx}"
 				# For now, we do not rewrite the instruction; we just record versions.
 				# Later, stores/loads will be rewritten to SSA temps.
 				new_instrs.append(instr)
@@ -65,4 +71,4 @@ class MirToSSA:
 				new_instrs.append(instr)
 
 		block.instructions = new_instrs
-		return SsaFunc(func=func)
+		return SsaFunc(func=func, local_versions=version, current_value=current_value)
