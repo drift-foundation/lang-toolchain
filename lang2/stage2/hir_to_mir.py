@@ -17,8 +17,9 @@ Currently supported:
 	- `throw` lowered to Error/ResultErr + return, with try-stack routing to the
     nearest catch block (event codes from optional exception metadata)
 	- `try` with multiple catch arms: dispatch block compares `ErrorEvent` codes
-    against per-arm constants, jumps to matching catch/catch-all, rethrows as
-    FnResult.Err when nothing matches
+    against per-arm constants (from the optional exception env; fallback 0),
+    jumps to matching catch/catch-all, rethrows as FnResult.Err when nothing
+    matches
  Remaining TODO: rethrow/result-driven try sugar and any complex call
  names/receivers.
 """
@@ -439,14 +440,20 @@ class HIRToMIR:
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
 		"""
-		Lower try/catch with multiple arms into explicit blocks with a dispatch.
+		Lower a try/catch with multiple arms into explicit blocks with a dispatch:
 
 		  entry -> try_body
 		  try_body -> try_cont (falls through)
 		  throw in try_body -> try_dispatch
-		  try_dispatch: ErrorEvent + event code chain -> matching catch arm or catch-all
+		  try_dispatch: ErrorEvent + event-code chain -> matching catch arm or catch-all
 		  unmatched + no catch-all -> rethrow as FnResult.Err
 		  each catch arm -> try_cont (if it falls through)
+
+		Notes/assumptions:
+		  - We expect well-formed arms (at most one catch-all, catch-all last);
+		    the checker should enforce this.
+		  - Rethrow currently means “propagate as FnResult.Err out of this function,”
+		    not unwinding to an outer try in the same function.
 		"""
 		if self.b.block.terminator is not None:
 			return
@@ -506,12 +513,14 @@ class HIRToMIR:
 			cmp_tmp = self.b.new_temp()
 			self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=code_tmp, right=arm_code_const))
 
+			# Chain to the next dispatch block; the final "else" is resolved after the loop.
 			else_block = self.b.new_block("try_dispatch_next")
 			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=cb.name, else_target=else_block.name))
 			current_block = else_block
 			self.b.set_block(current_block)
 
-		# After chaining event arms, either go to catch-all or rethrow.
+		# Final dispatch resolution: either a catch-all or propagate as Err.
+		self.b.set_block(current_block)
 		if catch_all_block is not None:
 			self.b.set_terminator(M.Goto(target=catch_all_block.name))
 		else:
@@ -520,11 +529,6 @@ class HIRToMIR:
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=rethrow_err))
 			self.b.set_terminator(M.Return(value=res_val))
-
-		# If there are no event-specific arms and a catch-all exists, jump directly.
-		if not event_arms and catch_all_block is not None:
-			self.b.set_block(dispatch_block)
-			self.b.set_terminator(M.Goto(target=catch_all_block.name))
 
 		# Lower each catch arm: bind error if requested, emit ErrorEvent for handler logic, then body.
 		for arm, cb in catch_blocks:
@@ -573,7 +577,13 @@ __all__ = ["MirBuilder", "HIRToMIR"]
 
 @dataclass
 class _TryCtx:
-	"""Internal try/catch context to route throws to the correct catch block."""
+	"""
+	Internal try/catch context to route throws to the correct catch block.
+
+	error_local: hidden local where the thrown Error is stored.
+	dispatch_block_name: block that projects the event code and dispatches to arms.
+	cont_block_name: continuation block after the try/catch completes.
+	"""
 
 	error_local: str
 	dispatch_block_name: str

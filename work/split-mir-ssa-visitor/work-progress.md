@@ -33,10 +33,11 @@ Goal: Replace the monolithic `if isinstance` lowering in `lower_to_mir_ssa.py` w
    - Helpers for common cases (`lower_method_call`, `lower_index`, `lower_dv_ctor`, `lower_short_circuit`).  
    - Registry/visitor enforces exhaustiveness: unhandled node types fail loudly.
 
-### Near-term follow-ups
-- Wire `declared_can_throw` from the checker (FnResult return types / throws clauses) into stage4 throw checks; keep the “no ConstructError in non-can-throw fns” and “no bare return in can-throw fns” invariants hard. Driver should call `run_throw_checks(funcs, summaries, declared_can_throw)` after stage3.
-- Replace the structural FnResult check (`enforce_fnresult_returns_for_can_throw`, which rejects forwarding/aliasing) with a type-aware `enforce_fnresult_returns_typeaware` once SSA/type_env are threaded into stage4.
-- Keep the multi-arm try/catch lowering exercised; extend dispatch as needed (rethrow path, tighter CFG) but keep `ErrorEvent` + event-code comparisons as the mechanism.
+- (Checker/driver) Wire `declared_can_throw` from the checker (FnResult return types / throws clauses) into stage4 throw checks; keep the “no ConstructError in non-can-throw fns” and “no bare return in can-throw fns” invariants hard. Driver should call `run_throw_checks(funcs, summaries, declared_can_throw)` after stage3.
+- (Stage4) Replace the structural FnResult check (`enforce_fnresult_returns_for_can_throw`, which rejects forwarding/aliasing) with a type-aware `enforce_fnresult_returns_typeaware` once SSA/type_env are threaded into stage4; keep the TODO stub in code to make this explicit.
+- (Checker) Add catch-arm validation: at most one catch-all, catch-all must be last, and (optionally) warn/error on duplicate event arms. Lowering will then assume arms are well-formed.
+- (Stage2) Simplify the try dispatch else-chain and rethrow semantics; test the “unmatched event + no catch-all rethrows as FnResult.Err” case.
+- (Stage2) Decide and document rethrow semantics: currently rethrow = propagate out as FnResult.Err, not unwind to an outer try in the same function; revisit when cross-function unwinding is added.
 
 ## HIR node set (finalize before coding)
 
