@@ -138,18 +138,33 @@ class HThrow(HStmt):
 @dataclass
 class HTry(HStmt):
 	"""
-	Statement-level try/catch:
+	Statement-level try/catch with multiple arms.
 
-	  try { body } catch name { handler }
+	  try { body }
+	  catch EventName(e) { handler_for_event }
+	  catch (e) { catch_all_with_binder }
+	  catch { catch_all_no_binder }
 
-	For the first iteration:
-	  - single catch only
-	  - no finally
-	  - no multi-catch variants
+	Arms are evaluated in source order; the first matching event_name (or the
+	catch-all) is taken. If no arm matches, the error is rethrown.
 	"""
 	body: "HBlock"
-	catch_name: str
-	catch_block: "HBlock"
+	catches: List["HCatchArm"]
+
+
+@dataclass
+class HCatchArm(HStmt):
+	"""
+	Single catch arm inside an HTry.
+
+	event_name: name of the exception/event to match (None = catch-all)
+	binder: local name to bind the Error to inside the arm (None = no binder)
+	block: handler body
+	"""
+
+	event_name: Optional[str]
+	binder: Optional[str]
+	block: "HBlock"
 
 
 @dataclass
@@ -251,5 +266,5 @@ __all__ = [
 	"HCall", "HMethodCall", "HTernary", "HField", "HIndex", "HDVInit",
 	"HUnary", "HBinary",
 	"HBlock", "HExprStmt", "HLet", "HAssign", "HIf", "HLoop",
-	"HBreak", "HContinue", "HReturn", "HThrow", "HTry",
+	"HBreak", "HContinue", "HReturn", "HThrow", "HTry", "HCatchArm",
 ]

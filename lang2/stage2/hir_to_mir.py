@@ -15,8 +15,11 @@ Currently supported:
 	- plain calls, method calls, DV construction
 	- ternary expressions (diamond CFG + hidden temp)
 	- `throw` lowered to Error/ResultErr + return, with try-stack routing to the
-    nearest catch block (event codes come from optional exception metadata)
- Remaining TODO: rethrow/multi-catch/result-driven try sugar and any complex call
+    nearest catch block (event codes from optional exception metadata)
+	- `try` with multiple catch arms: dispatch block compares `ErrorEvent` codes
+    against per-arm constants, jumps to matching catch/catch-all, rethrows as
+    FnResult.Err when nothing matches
+ Remaining TODO: rethrow/result-driven try sugar and any complex call
  names/receivers.
 """
 
@@ -426,7 +429,7 @@ class HIRToMIR:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
-			self.b.set_terminator(M.Goto(target=ctx.catch_block_name))
+			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 			return
 
 		# Otherwise, wrap into FnResult.Err and return.
@@ -436,34 +439,46 @@ class HIRToMIR:
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
 		"""
-		Lower a minimal try/catch:
+		Lower try/catch with multiple arms into explicit blocks with a dispatch.
 
-		  try { body } catch name { handler }
-
-		into explicit blocks:
 		  entry -> try_body
-		  try_body: body (falls through) -> try_cont
-		  try_catch: handler (falls through) -> try_cont
-		  try_cont: continuation
-
-		Any `throw` encountered in try_body will store the Error into the
-		catch binder local and jump to the catch block (via the try stack).
+		  try_body -> try_cont (falls through)
+		  throw in try_body -> try_dispatch
+		  try_dispatch: ErrorEvent + event code chain -> matching catch arm or catch-all
+		  unmatched + no catch-all -> rethrow as FnResult.Err
+		  each catch arm -> try_cont (if it falls through)
 		"""
 		if self.b.block.terminator is not None:
 			return
+		if not stmt.catches:
+			raise RuntimeError("HTry lowering requires at least one catch arm")
 
-		# Create blocks
 		body_block = self.b.new_block("try_body")
-		catch_block = self.b.new_block("try_catch")
+		dispatch_block = self.b.new_block("try_dispatch")
 		cont_block = self.b.new_block("try_cont")
 
-		# Entry: jump into body.
-		self.b.set_terminator(M.Goto(target=body_block.name))
+		# Hidden local to carry the Error into the dispatch/catch blocks.
+		error_local = f"__try_err{self.b.new_temp()}"
+		self.b.ensure_local(error_local)
 
-		# Register try context so inner throws can target the catch.
-		catch_name = stmt.catch_name or "__err"
-		self.b.ensure_local(catch_name)
-		self._try_stack.append(_TryCtx(error_local=catch_name, catch_block_name=catch_block.name, cont_block_name=cont_block.name))
+		# Create catch blocks for each arm.
+		catch_blocks: list[tuple[H.HCatchArm, M.BasicBlock]] = []
+		catch_all_block: M.BasicBlock | None = None
+		for idx, arm in enumerate(stmt.catches):
+			cb = self.b.new_block(f"try_catch_{idx}")
+			catch_blocks.append((arm, cb))
+			if arm.event_name is None:
+				catch_all_block = cb
+
+		# Entry: jump into body and register try context so throws can target dispatch.
+		self.b.set_terminator(M.Goto(target=body_block.name))
+		self._try_stack.append(
+			_TryCtx(
+				error_local=error_local,
+				dispatch_block_name=dispatch_block.name,
+				cont_block_name=cont_block.name,
+			)
+		)
 
 		# Lower try body.
 		self.b.set_block(body_block)
@@ -471,19 +486,59 @@ class HIRToMIR:
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=cont_block.name))
 
-		# Pop context before lowering catch so throws inside catch go to outer try.
+		# Pop context before lowering dispatch/catches so throws inside catch go to outer try.
 		self._try_stack.pop()
 
-		# Lower catch. Make the caught Error available + project event code.
-		self.b.set_block(catch_block)
+		# Dispatch: load error, project event code, branch to arms.
+		self.b.set_block(dispatch_block)
 		err_tmp = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=err_tmp, local=catch_name))
+		self.b.emit(M.LoadLocal(dest=err_tmp, local=error_local))
 		code_tmp = self.b.new_temp()
 		self.b.emit(M.ErrorEvent(dest=code_tmp, error=err_tmp))
 
-		self.lower_block(stmt.catch_block)
-		if self.b.block.terminator is None:
-			self.b.set_terminator(M.Goto(target=cont_block.name))
+		# Chain event-specific arms with IfTerminator, else falling through.
+		event_arms = [(arm, cb) for arm, cb in catch_blocks if arm.event_name is not None]
+		current_block = dispatch_block
+		for idx, (arm, cb) in enumerate(event_arms):
+			arm_code = self._lookup_catch_event_code(arm.event_name)
+			arm_code_const = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=arm_code_const, value=arm_code))
+			cmp_tmp = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=code_tmp, right=arm_code_const))
+
+			else_block = self.b.new_block("try_dispatch_next")
+			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=cb.name, else_target=else_block.name))
+			current_block = else_block
+			self.b.set_block(current_block)
+
+		# After chaining event arms, either go to catch-all or rethrow.
+		if catch_all_block is not None:
+			self.b.set_terminator(M.Goto(target=catch_all_block.name))
+		else:
+			rethrow_err = self.b.new_temp()
+			self.b.emit(M.Move(dest=rethrow_err, source=err_tmp))
+			res_val = self.b.new_temp()
+			self.b.emit(M.ConstructResultErr(dest=res_val, error=rethrow_err))
+			self.b.set_terminator(M.Return(value=res_val))
+
+		# If there are no event-specific arms and a catch-all exists, jump directly.
+		if not event_arms and catch_all_block is not None:
+			self.b.set_block(dispatch_block)
+			self.b.set_terminator(M.Goto(target=catch_all_block.name))
+
+		# Lower each catch arm: bind error if requested, emit ErrorEvent for handler logic, then body.
+		for arm, cb in catch_blocks:
+			self.b.set_block(cb)
+			err_again = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
+			if arm.binder:
+				self.b.ensure_local(arm.binder)
+				self.b.emit(M.StoreLocal(local=arm.binder, value=err_again))
+			code_again = self.b.new_temp()
+			self.b.emit(M.ErrorEvent(dest=code_again, error=err_again))
+			self.lower_block(arm.block)
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=cont_block.name))
 
 		# Continue in cont.
 		self.b.set_block(cont_block)
@@ -501,6 +556,17 @@ class HIRToMIR:
 			return self._exc_env.get(payload_expr.dv_type_name, 0)
 		return 0
 
+	def _lookup_catch_event_code(self, event_name: str) -> int:
+		"""
+		Lookup event code for a catch arm by exception/event name.
+
+		Uses the same exception env mapping (name -> code) as throw lowering;
+		fallback to 0 if unknown.
+		"""
+		if self._exc_env is not None:
+			return self._exc_env.get(event_name, 0)
+		return 0
+
 
 __all__ = ["MirBuilder", "HIRToMIR"]
 
@@ -510,5 +576,5 @@ class _TryCtx:
 	"""Internal try/catch context to route throws to the correct catch block."""
 
 	error_local: str
-	catch_block_name: str
+	dispatch_block_name: str
 	cont_block_name: str

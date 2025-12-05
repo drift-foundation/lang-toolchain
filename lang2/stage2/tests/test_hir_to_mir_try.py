@@ -13,6 +13,7 @@ from lang2.stage2 import (
 	ConstructError,
 	Goto,
 	ErrorEvent,
+	IfTerminator,
 )
 
 
@@ -23,8 +24,9 @@ def test_try_routes_throw_to_catch_block():
 
 	Shape expectations:
 	  - entry branches to try_body
-	  - try_body constructs the Error, stores into catch binder, then Goto catch
-	  - catch falls through to cont
+	  - try_body constructs the Error, stores into hidden error_local, then Goto dispatch
+	  - dispatch jumps to catch-all arm
+	  - catch arm projects ErrorEvent and falls through to cont
 	"""
 	builder = MirBuilder(name="try_fn")
 	lower = HIRToMIR(builder)
@@ -33,8 +35,9 @@ def test_try_routes_throw_to_catch_block():
 		statements=[
 			H.HTry(
 				body=H.HBlock(statements=[H.HThrow(value=H.HLiteralString("boom"))]),
-				catch_name="e",
-				catch_block=H.HBlock(statements=[]),
+				catches=[
+					H.HCatchArm(event_name=None, binder="e", block=H.HBlock(statements=[]))
+				],
 			)
 		]
 	)
@@ -47,18 +50,53 @@ def test_try_routes_throw_to_catch_block():
 	assert isinstance(blocks["entry"].terminator, Goto)
 	assert blocks["entry"].terminator.target.startswith("try_body")
 
-	# Try body should build error and jump to catch
+	# Try body should build error and jump to dispatch
 	try_body = blocks[blocks["entry"].terminator.target]
 	instrs = try_body.instructions
 	assert isinstance(instrs[0], ConstString)
 	assert isinstance(instrs[1], ConstInt)
 	assert isinstance(instrs[2], ConstructError)
 	assert isinstance(try_body.terminator, Goto)
-	assert try_body.terminator.target.startswith("try_catch")
+	assert try_body.terminator.target.startswith("try_dispatch")
+
+	# Dispatch should jump to the catch-all arm.
+	dispatch = blocks[try_body.terminator.target]
+	assert isinstance(dispatch.terminator, Goto)
+	catch_name = dispatch.terminator.target
 
 	# Catch block should start by projecting event code and end with Goto to cont
-	catch_block = blocks[try_body.terminator.target]
+	catch_block = blocks[catch_name]
 	# Catch block should have an ErrorEvent (projecting code from the stored Error).
 	assert any(isinstance(ins, ErrorEvent) for ins in catch_block.instructions)
 	assert isinstance(catch_block.terminator, Goto)
 	assert catch_block.terminator.target.startswith("try_cont")
+
+
+def test_try_dispatches_on_event_codes():
+	"""
+	Multi-arm try/catch should dispatch on ErrorEvent codes.
+	"""
+	builder = MirBuilder(name="try_evt")
+	lower = HIRToMIR(builder, exc_env={"EvtA": 123})
+
+	hir = H.HBlock(
+		statements=[
+			H.HTry(
+				body=H.HBlock(statements=[H.HThrow(value=H.HLiteralString("boom"))]),
+				catches=[
+					H.HCatchArm(event_name="EvtA", binder="a", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
+				],
+			)
+		]
+	)
+	lower.lower_block(hir)
+
+	blocks = builder.func.blocks
+	body = blocks[blocks["entry"].terminator.target]
+	dispatch = blocks[body.terminator.target]
+	assert isinstance(dispatch.terminator, IfTerminator)
+	then_target = dispatch.terminator.then_target
+	# then-target should be first catch arm block
+	catch_arm_block = blocks[then_target]
+	assert any(isinstance(ins, ErrorEvent) for ins in catch_arm_block.instructions)

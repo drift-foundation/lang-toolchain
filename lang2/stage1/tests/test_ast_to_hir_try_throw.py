@@ -7,7 +7,7 @@ AST→HIR lowering tests for try/throw.
 import pytest
 
 from lang2.stage0 import ast
-from lang2.stage1 import AstToHIR, HThrow, HTry, HBlock, HExprStmt, HVar
+from lang2.stage1 import AstToHIR, HThrow, HTry, HBlock, HExprStmt, HVar, HCatchArm
 
 
 def test_throw_stmt_to_hthrow():
@@ -29,11 +29,15 @@ def test_try_stmt_to_htry():
 	)
 	hir = l.lower_stmt(stmt)
 	assert isinstance(hir, HTry)
-	assert hir.catch_name == "e"
+	assert isinstance(hir.catches, list) and len(hir.catches) == 1
+	catch_arm = hir.catches[0]
+	assert isinstance(catch_arm, HCatchArm)
+	assert catch_arm.event_name is None
+	assert catch_arm.binder == "e"
 	assert isinstance(hir.body, HBlock)
-	assert isinstance(hir.catch_block, HBlock)
 	assert isinstance(hir.body.statements[0], HExprStmt)
-	assert isinstance(hir.catch_block.statements[0], HExprStmt)
+	assert isinstance(catch_arm.block, HBlock)
+	assert isinstance(catch_arm.block.statements[0], HExprStmt)
 
 
 def test_raise_stmt_still_not_supported():
@@ -41,3 +45,20 @@ def test_raise_stmt_still_not_supported():
 	stmt = ast.RaiseStmt(value=ast.Name("x"))
 	with pytest.raises(NotImplementedError):
 		l.lower_stmt(stmt)
+
+
+def test_try_stmt_multiple_catches_to_htry():
+	l = AstToHIR()
+	stmt = ast.TryStmt(
+		body=[ast.ExprStmt(expr=ast.Name("body"))],
+		catches=[
+			ast.CatchExprArm(event="EvtA", binder="a", block=[ast.ExprStmt(expr=ast.Name("h1"))]),
+			ast.CatchExprArm(event=None, binder=None, block=[ast.ExprStmt(expr=ast.Name("h2"))]),
+		],
+	)
+	hir = l.lower_stmt(stmt)
+	assert isinstance(hir, HTry)
+	assert len(hir.catches) == 2
+	first, second = hir.catches
+	assert first.event_name == "EvtA" and first.binder == "a"
+	assert second.event_name is None and second.binder is None

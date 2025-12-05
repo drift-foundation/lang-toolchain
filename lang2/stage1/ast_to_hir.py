@@ -228,20 +228,27 @@ class AstToHIR:
 
 	def _visit_stmt_TryStmt(self, stmt: ast.TryStmt) -> H.HStmt:
 		"""
-		Lower statement-form try/catch:
+		Lower statement-form try/catch with multiple arms into HTry + HCatchArm.
 
-		  try { body } catch name { handler }
+		  try { body }
+		  catch EventName(e) { handler }
+		  catch (e) { handler }
+		  catch { handler }
 
-		into HTry with a single catch. Rethrow/finally are not handled yet.
+		Arms are preserved in source order.
 		"""
 		body_block = self.lower_block(stmt.body)
-		# AST currently carries catches as a list of CatchExprArm; assume single catch for now.
 		if not stmt.catches:
-			raise NotImplementedError("Try lowering requires a catch arm")
-		catch_arm = stmt.catches[0]
-		catch_block = self.lower_block(catch_arm.block)
-		catch_name = catch_arm.binder or "e"
-		return H.HTry(body=body_block, catch_name=catch_name, catch_block=catch_block)
+			raise NotImplementedError("Try lowering requires at least one catch arm")
+
+		catch_arms: list[H.HCatchArm] = []
+		for arm in stmt.catches:
+			event_name = arm.event
+			binder = arm.binder
+			handler_block = self.lower_block(arm.block)
+			catch_arms.append(H.HCatchArm(event_name=event_name, binder=binder, block=handler_block))
+
+		return H.HTry(body=body_block, catches=catch_arms)
 
 	def _visit_stmt_WhileStmt(self, stmt: ast.WhileStmt) -> H.HStmt:
 		"""
