@@ -24,6 +24,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - String runtime plan: [docs/design/drift-string-impl.md](docs/design/drift-string-impl.md)
 - Tuple destructuring notes: [docs/design/drift-tuple-destructuring.md](docs/design/drift-tuple-destructuring.md)
 - Driver/runtime notes: [docs/articles/driver-notes.md](docs/articles/driver-notes.md)
+- Compiler architecture overview: [docs/articles/drift-compiler-architecture.md](docs/articles/drift-compiler-architecture.md)
 - Development history: [docs/history.md](docs/history.md)
 - Project TODO/roadmap: [docs/TODO.md](docs/TODO.md)
 - Toolchain:
