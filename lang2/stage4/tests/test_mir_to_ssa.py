@@ -84,14 +84,9 @@ def test_ssa_load_before_store_raises():
 
 
 def test_ssa_rejects_multi_block_funcs():
-	entry = BasicBlock(
-		name="entry",
-		instructions=[],
-		terminator=Goto(target="exit"),
-	)
-	exit_block = BasicBlock(name="exit", instructions=[], terminator=None)
-	func = MirFunc(
-		name="f", params=[], locals=["x"], blocks={"entry": entry, "exit": exit_block}, entry="entry"
-	)
+	# CFG with a backedge (loop) should still be rejected.
+	entry = BasicBlock(name="entry", instructions=[], terminator=Goto(target="loop"))
+	loop = BasicBlock(name="loop", instructions=[], terminator=Goto(target="loop"))
+	func = MirFunc(name="f", params=[], locals=["x"], blocks={"entry": entry, "loop": loop}, entry="entry")
 	with pytest.raises(NotImplementedError):
 		MirToSSA().run(func)

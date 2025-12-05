@@ -62,18 +62,28 @@ class MirToSSA:
 		Entry point for the SSA stage.
 
 		Contract for this skeleton:
-		  - Only single-block MIR functions are supported (no branches/φ).
-		  - Enforces load-after-store for locals.
-		  - Records SSA-style version info for locals (x -> x_1, x_2, ...).
+		  - Straight-line MIR is fully rewritten into SSA (AssignSSA) with
+		    version tracking and load-after-store checks.
+		  - Multi-block MIR support is being brought up incrementally; loops
+		    (backedges) are still rejected, and only acyclic CFGs are allowed.
 
 		Returns an SsaFunc wrapper carrying the original MirFunc plus version
-		tables. Later iterations will rewrite instructions and handle multi-block
-		SSA with φ nodes.
+		tables. Multi-block SSA will be expanded gradually (φ placement and
+		renaming) using the CFG utilities in stage4/dom.py.
 		"""
-		# Guardrails: keep the first iteration simple and explicit.
-		if len(func.blocks) != 1:
-			raise NotImplementedError("SSA: only single-block functions are supported in this skeleton")
+		# Guardrail: reject loops/backedges until loop SSA is implemented.
+		if self._has_backedge(func):
+			raise NotImplementedError("SSA: loops/backedges not supported yet")
 
+		# Single-block fast path: rewrite loads/stores to AssignSSA with versions.
+		if len(func.blocks) == 1:
+			return self._run_single_block(func)
+
+		# Multi-block acyclic SSA (if/else CFGs, no loops) with φ placement + renaming.
+		return self._run_multi_block_acyclic(func)
+
+	def _run_single_block(self, func: MirFunc) -> SsaFunc:
+		"""Rewrite a single-block MIR function into SSA using AssignSSA moves."""
 		block = func.blocks[func.entry]
 		version: Dict[str, int] = {}
 		current_value: Dict[str, str] = {}
@@ -156,11 +166,168 @@ class MirToSSA:
 					phi = Phi(dest=f"{local}_phi", incoming=incoming)
 					func.blocks[y].instructions.insert(0, phi)
 					placed.add((local, y))
-		# For now we do not iterate further for newly added φ blocks; this is enough for simple diamonds.
+					# For now we do not iterate further for newly added φ blocks; this is enough for simple diamonds.
 
 		return SsaFunc(
 			func=func,
 			local_versions={},
 			current_value={},
 			value_for_instr={},
+		)
+
+	# --- helpers ---
+
+	def _has_backedge(self, func: MirFunc) -> bool:
+		"""Detect backedges (cycles) via DFS; used to reject loops for now."""
+		succs: Dict[str, set[str]] = {b: set() for b in func.blocks}
+		for bname, block in func.blocks.items():
+			term = block.terminator
+			if isinstance(term, Goto):
+				succs[bname].add(term.target)
+			elif isinstance(term, IfTerminator):
+				succs[bname].add(term.then_target)
+				succs[bname].add(term.else_target)
+
+		visited: set[str] = set()
+		stack: set[str] = set()
+
+		def dfs(node: str) -> bool:
+			visited.add(node)
+			stack.add(node)
+			for s in succs.get(node, ()):
+				if s not in visited:
+					if dfs(s):
+						return True
+				elif s in stack:
+					return True
+			stack.remove(node)
+			return False
+
+		return dfs(func.entry)
+
+	def _run_multi_block_acyclic(self, func: MirFunc) -> SsaFunc:
+		"""
+		SSA for acyclic CFGs (if/else diamonds). Places φ nodes and rewrites
+		LoadLocal/StoreLocal to AssignSSA using a dominator-tree renaming pass.
+		Loops are still rejected by the caller.
+		"""
+		dom_info = DominatorAnalysis().compute(func)
+		df_info = DominanceFrontierAnalysis().compute(func, dom_info)
+
+		# CFG maps
+		preds: Dict[str, set[str]] = {b: set() for b in func.blocks}
+		succs: Dict[str, set[str]] = {b: set() for b in func.blocks}
+		for bname, block in func.blocks.items():
+			term = block.terminator
+			if isinstance(term, Goto):
+				preds[term.target].add(bname)
+				succs[bname].add(term.target)
+			elif isinstance(term, IfTerminator):
+				preds[term.then_target].add(bname)
+				preds[term.else_target].add(bname)
+				succs[bname].add(term.then_target)
+				succs[bname].add(term.else_target)
+
+		# Definition sites and values per local.
+		def_sites: Dict[str, set[str]] = {}
+		def_values: Dict[str, Dict[str, str]] = {}
+		for bname, block in func.blocks.items():
+			for instr in block.instructions:
+				if isinstance(instr, StoreLocal):
+					def_sites.setdefault(instr.local, set()).add(bname)
+					def_values.setdefault(instr.local, {})[bname] = instr.value
+
+		# Place φ nodes using dominance frontiers (simple Cytron iteration).
+		placed: set[tuple[str, str]] = set()
+		for local, def_blocks in def_sites.items():
+			if len(def_blocks) < 2:
+				continue
+			worklist = list(def_blocks)
+			while worklist:
+				b = worklist.pop()
+				for y in df_info.df.get(b, set()):
+					if (local, y) in placed:
+						continue
+					phi = Phi(dest=local, incoming={})
+					setattr(phi, "local", local)  # remember the logical local name
+					func.blocks[y].instructions.insert(0, phi)
+					placed.add((local, y))
+					if y not in def_blocks:
+						def_blocks.add(y)
+						worklist.append(y)
+
+		# Dominator-tree children.
+		children: Dict[str, set[str]] = {b: set() for b in func.blocks}
+		for b, i in dom_info.idom.items():
+			if i is not None:
+				children[i].add(b)
+
+		# SSA renaming stacks/counters.
+		counters: Dict[str, int] = {}
+		stacks: Dict[str, list[str]] = {}
+		value_for_instr: Dict[tuple[str, int], str] = {}
+
+		def new_name(local: str) -> str:
+			counters[local] = counters.get(local, 0) + 1
+			name = f"{local}_{counters[local]}"
+			stacks.setdefault(local, []).append(name)
+			return name
+
+		def current(local: str) -> str:
+			if local not in stacks or not stacks[local]:
+				raise RuntimeError(f"SSA: load before store for local '{local}' in multi-block rename")
+			return stacks[local][-1]
+
+		def rename_block(block_name: str) -> None:
+			block = func.blocks[block_name]
+			locals_defined: list[str] = []
+			new_instrs: list[MInstr] = []
+
+			for idx, instr in enumerate(block.instructions):
+				if isinstance(instr, Phi):
+					local = getattr(instr, "local", instr.dest)
+					dest_name = new_name(local)
+					instr.dest = dest_name
+					value_for_instr[(block_name, len(new_instrs))] = dest_name
+					new_instrs.append(instr)
+					locals_defined.append(local)
+				elif isinstance(instr, StoreLocal):
+					local = instr.local
+					dest_name = new_name(local)
+					value_for_instr[(block_name, len(new_instrs))] = dest_name
+					new_instrs.append(AssignSSA(dest=dest_name, src=instr.value))
+					locals_defined.append(local)
+				elif isinstance(instr, LoadLocal):
+					local = instr.local
+					src_name = current(local)
+					value_for_instr[(block_name, len(new_instrs))] = src_name
+					new_instrs.append(AssignSSA(dest=instr.dest, src=src_name))
+				else:
+					new_instrs.append(instr)
+
+			block.instructions = new_instrs
+
+			# Patch phi incoming values in successors using current stacks.
+			for succ in succs.get(block_name, ()):
+				for succ_instr in func.blocks[succ].instructions:
+					if isinstance(succ_instr, Phi):
+						local = getattr(succ_instr, "local", succ_instr.dest)
+						if local in stacks and stacks[local]:
+							succ_instr.incoming[block_name] = stacks[local][-1]
+
+			# Recurse dominator-tree children.
+			for child in children[block_name]:
+				rename_block(child)
+
+			# Pop locals defined in this block to restore stacks.
+			for local in reversed(locals_defined):
+				stacks[local].pop()
+
+		rename_block(func.entry)
+
+		return SsaFunc(
+			func=func,
+			local_versions=counters,
+			current_value={k: v[-1] for k, v in stacks.items() if v},
+			value_for_instr=value_for_instr,
 		)

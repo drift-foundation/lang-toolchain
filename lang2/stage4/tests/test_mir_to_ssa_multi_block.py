@@ -51,7 +51,7 @@ def test_phi_placed_in_join_for_local_defined_in_branches():
 		entry="entry",
 	)
 
-	s = MirToSSA().run_experimental_multi_block(func)
+	s = MirToSSA().run(func)
 
 	join_block = s.func.blocks["join"]
 	assert join_block.instructions
@@ -59,6 +59,12 @@ def test_phi_placed_in_join_for_local_defined_in_branches():
 	# Should have inserted a Phi for x at the top of join.
 	from lang2.stage2 import Phi  # local import to keep test narrow
 	assert isinstance(phi, Phi)
-	assert phi.dest == "x_phi"
-	assert phi.incoming.get("then") == "v_then"
-	assert phi.incoming.get("else") == "v_else"
+	assert phi.dest.startswith("x_")
+	# Incoming should reference SSA names from each branch.
+	assert phi.incoming.get("then", "").startswith("x_")
+	assert phi.incoming.get("else", "").startswith("x_")
+	# LoadLocal rewritten to AssignSSA consuming the phi value.
+	from lang2.stage2 import AssignSSA
+	assign = join_block.instructions[1]
+	assert isinstance(assign, AssignSSA)
+	assert assign.src == phi.dest
