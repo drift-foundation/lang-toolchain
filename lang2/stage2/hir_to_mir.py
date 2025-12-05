@@ -22,7 +22,7 @@ names/receivers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Set
+from typing import List, Set, Mapping
 
 from lang2 import stage1 as H
 from . import mir_nodes as M
@@ -115,12 +115,14 @@ class HIRToMIR:
 	lower_* methods above.
 	"""
 
-	def __init__(self, builder: MirBuilder):
+	def __init__(self, builder: MirBuilder, exc_env: Mapping[str, int] | None = None):
 		self.b = builder
 		# Stack of (continue_target, break_target) block names for nested loops.
 		self._loop_stack: list[tuple[str, str]] = []
 		# Stack of try contexts for nested try/catch (innermost on top).
 		self._try_stack: list["_TryCtx"] = []
+		# Optional exception environment: maps DV/exception type name -> event code.
+		self._exc_env = exc_env
 
 	# --- Expression lowering ---
 
@@ -404,9 +406,10 @@ class HIRToMIR:
 		# Payload of the error (already a DiagnosticValue expression in HIR).
 		payload_val = self.lower_expr(stmt.value)
 
-		# Placeholder event code (per ABI this will be a real code later).
+		# Event code from exception metadata if available; otherwise 0.
+		code_const = self._lookup_error_code(stmt.value)
 		code_val = self.b.new_temp()
-		self.b.emit(M.ConstInt(dest=code_val, value=0))
+		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 
 		# Build the Error value.
 		err_val = self.b.new_temp()
@@ -473,6 +476,19 @@ class HIRToMIR:
 
 		# Continue in cont.
 		self.b.set_block(cont_block)
+
+	# --- Helpers ---
+
+	def _lookup_error_code(self, payload_expr: H.HExpr) -> int:
+		"""
+		Best-effort event code lookup from exception metadata.
+
+		If the payload is an HDVInit with a known DV/exception name and an
+		exception env was provided, return that code; otherwise return 0.
+		"""
+		if isinstance(payload_expr, H.HDVInit) and self._exc_env is not None:
+			return self._exc_env.get(payload_expr.dv_type_name, 0)
+		return 0
 
 
 __all__ = ["MirBuilder", "HIRToMIR"]

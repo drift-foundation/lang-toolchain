@@ -174,6 +174,19 @@ class ConstructResultErr(MInstr):
 
 
 @dataclass
+class ErrorEvent(MInstr):
+	"""
+	Project the event code from an Error value.
+
+	Used by catch/dispatch logic to decide which handler to take based on the
+	error's event identifier (runtime-dependent layout).
+	"""
+
+	dest: ValueId
+	error: ValueId
+
+
+@dataclass
 class UnaryOpInstr(MInstr):
 	"""dest = op operand (unary numeric/logical/bit ops)."""
 	dest: ValueId
@@ -270,6 +283,7 @@ __all__ = [
 	"Call", "MethodCall",
 	"ConstructDV",
 	"ConstructError", "ConstructResultOk", "ConstructResultErr",
+	"ErrorEvent",
 	"UnaryOpInstr", "BinaryOpInstr",
 	"Phi",
 	"Goto", "IfTerminator", "Return",
