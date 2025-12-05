@@ -33,6 +33,11 @@ Goal: Replace the monolithic `if isinstance` lowering in `lower_to_mir_ssa.py` w
    - Helpers for common cases (`lower_method_call`, `lower_index`, `lower_dv_ctor`, `lower_short_circuit`).  
    - Registry/visitor enforces exhaustiveness: unhandled node types fail loudly.
 
+### Near-term follow-ups
+- Wire `declared_can_throw` from the checker (FnResult return types / throws clauses) into stage4 throw checks; keep the “no ConstructError in non-can-throw fns” and “no bare return in can-throw fns” invariants hard.
+- Add a type-aware check that returns in can-throw functions actually yield `FnResult<_, Error>` (not just any value).
+- Generalize `HTry` to multi-arm/event-specific catches by dispatching on `ErrorEvent` codes and rethrowing when no arm matches.
+
 ## HIR node set (finalize before coding)
 
 **Expressions**
@@ -95,7 +100,7 @@ MIR should be explicit and simple enough that lowering is mostly a mechanical ma
 - MIR dominator analysis added under `lang2/stage4/dom.py`, computing immediate dominators for MIR CFGs; unit tests in `lang2/stage4/tests/test_dominators.py`.  
 - MIR dominance frontier analysis added under `lang2/stage4/dom.py` for SSA φ placement; unit tests in `lang2/stage4/tests/test_dominance_frontiers.py` cover straight-line, diamond, and loop shapes.  
 - MIR→SSA now rewrites single-block straight-line MIR into SSA by replacing local load/store with `AssignSSA` moves, recording SSA versions per local and per-instruction (`value_for_instr`). Multi-block SSA is now supported for acyclic if/else CFGs (diamonds): backedges/loops are rejected; φ nodes are placed using dominators + dominance frontiers and renamed via a dominator-tree pass. Covered by `lang2/stage4/tests/test_mir_to_ssa.py` (single-block) and `lang2/stage4/tests/test_mir_to_ssa_multi_block.py` (diamond CFG).  
-- Throw summaries are aggregated in stage3 (`ThrowSummaryBuilder`) and consumed in stage4 (`throw_checks`) to build function-level `FuncThrowInfo` and enforce can-throw invariants: (1) a function not declared can-throw must not construct an Error; (2) a can-throw function must not contain a bare `return` with no value. Tests live in `lang2/stage4/tests/test_throw_checks.py`.  
+- Throw summaries are aggregated in stage3 (`ThrowSummaryBuilder`) and consumed in stage4 (`throw_checks`) to build function-level `FuncThrowInfo` and enforce can-throw invariants: (1) a function not declared can-throw must not construct an Error; (2) a can-throw function must not contain a bare `return` with no value; (3) a can-throw function must return a value produced by `ConstructResultOk/Err` (FnResult shape). Tests live in `lang2/stage4/tests/test_throw_checks.py`.  
 - Stage-specific test dirs added (`lang2/stageN/tests/`); runtime artifacts for stage tests should go under `build/tests/stageN/`.
 - Documentation tightened: all public AST nodes in stage0 carry docstrings; stage4 dominator/frontier comments corrected to match implementation/tests.
 

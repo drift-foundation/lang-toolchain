@@ -25,6 +25,7 @@ from .throw_checks import (
 	build_func_throw_info,
 	enforce_can_throw_invariants,
 	enforce_return_shape_for_can_throw,
+	enforce_fnresult_returns_for_can_throw,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
 	"build_func_throw_info",
 	"enforce_can_throw_invariants",
 	"enforce_return_shape_for_can_throw",
+	"enforce_fnresult_returns_for_can_throw",
 ]

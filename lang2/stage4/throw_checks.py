@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Dict, Set
 
 from lang2.stage3 import ThrowSummary
-from lang2.stage2 import MirFunc, Return
+from lang2.stage2 import MirFunc, Return, ConstructResultOk, ConstructResultErr
 
 
 @dataclass
@@ -93,4 +93,45 @@ def enforce_return_shape_for_can_throw(
 			if isinstance(term, Return) and term.value is None:
 				raise RuntimeError(
 					f"function {fname} is declared can-throw but has a bare return in block {block.name}"
+				)
+
+
+def enforce_fnresult_returns_for_can_throw(
+	func_infos: Dict[str, FuncThrowInfo],
+	funcs: Dict[str, MirFunc],
+) -> None:
+	"""
+	Stronger return-shape invariant for can-throw functions:
+	  - Every Return value in a can-throw function must come from a ConstructResultOk/Err.
+
+	This is a conservative structural check (not type-driven): it scans the MIR
+	instructions for ConstructResultOk/Err with dest matching the returned ValueId.
+	If none is found anywhere in the function, we flag it. This keeps us honest
+	that can-throw functions actually produce a FnResult on all return paths.
+	"""
+	for fname, info in func_infos.items():
+		if not info.declared_can_throw:
+			continue
+		fn = funcs.get(fname)
+		if fn is None:
+			continue
+		for block in fn.blocks.values():
+			term = block.terminator
+			if not isinstance(term, Return) or term.value is None:
+				continue
+
+			return_val = term.value
+			found = False
+			for b in fn.blocks.values():
+				for instr in b.instructions:
+					if isinstance(instr, (ConstructResultOk, ConstructResultErr)):
+						if getattr(instr, "dest", None) == return_val:
+							found = True
+							break
+				if found:
+					break
+			if not found:
+				raise RuntimeError(
+					f"function {fname} is declared can-throw but return in block {block.name} "
+					f"does not return a FnResult (no ConstructResultOk/Err defines {return_val})"
 				)
