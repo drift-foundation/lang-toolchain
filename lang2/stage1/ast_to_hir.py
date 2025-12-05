@@ -39,6 +39,15 @@ class AstToHIR:
 	underscore is intended for callers of this stage.
 	"""
 
+	def __init__(self):
+		# Simple counter for internal temporaries (e.g., for-loop bindings).
+		self._temp_counter = 0
+
+	def _fresh_temp(self, prefix: str = "__tmp") -> str:
+		"""Allocate a unique temporary name with a given prefix."""
+		self._temp_counter += 1
+		return f"{prefix}{self._temp_counter}"
+
 	def lower_expr(self, expr: ast.Expr) -> H.HExpr:
 		"""
 		Dispatch an AST expression to a per-type visitor.
@@ -234,34 +243,59 @@ class AstToHIR:
 
 	def _visit_stmt_ForStmt(self, stmt: ast.ForStmt) -> H.HStmt:
 		"""
-		Desugar a simple for-each style loop:
+		Desugar:
 		  for iter_var in iterable { body }
 
-		into:
-		  var __iter = iterable
+		into the iterator protocol using Optional:
+		  let __for_iterable = iterable
+		  let __for_iter = __for_iterable.iter()
 		  loop {
-		    if __iter.has_next() {
-		      var iter_var = __iter.next()
+		    let __for_next = __for_iter.next()
+		    if __for_next.is_some() {
+		      let iter_var = __for_next.unwrap()
 		      body
 		    } else {
 		      break
 		    }
 		  }
 
-		This is a placeholder desugaring; the actual iteration protocol will
-		be defined later. For now we keep it simple and reuse loop/if/break.
+		Notes:
+		  - iter_var is currently an identifier (pattern support can be added later).
+		  - iterable expression is evaluated exactly once.
 		"""
-		# TODO: Replace with a real iterator protocol; for now, synthesize a trivial
-		# pattern: if iterable { body } else break. This keeps HIR legal without
-		# committing to iteration semantics.
-		iter_hir = self.lower_expr(stmt.iterable)
-		# Fake condition: iterable itself (truthy) – placeholder.
-		cond_hir = iter_hir
-		then_block = self.lower_block(stmt.body)
+		# 1) Evaluate iterable once and bind.
+		iterable_expr = self.lower_expr(stmt.iterable)
+		iterable_name = self._fresh_temp("__for_iterable")
+		iterable_let = H.HLet(name=iterable_name, value=iterable_expr)
+
+		# 2) Build iterator: __for_iter = __for_iterable.iter()
+		iter_name = self._fresh_temp("__for_iter")
+		iter_call = H.HMethodCall(receiver=H.HVar(iterable_name), method_name="iter", args=[])
+		iter_let = H.HLet(name=iter_name, value=iter_call)
+
+		# 3) In loop: __for_next = __for_iter.next()
+		next_name = self._fresh_temp("__for_next")
+		next_call = H.HMethodCall(receiver=H.HVar(iter_name), method_name="next", args=[])
+		next_let = H.HLet(name=next_name, value=next_call)
+
+		# 4) Condition: __for_next.is_some()
+		cond = H.HMethodCall(receiver=H.HVar(next_name), method_name="is_some", args=[])
+
+		# 5) Then: let iter_var = __for_next.unwrap(); body...
+		unwrap_call = H.HMethodCall(receiver=H.HVar(next_name), method_name="unwrap", args=[])
+		bind_iter = H.HLet(name=stmt.iter_var, value=unwrap_call)
+		body_block = self.lower_block(stmt.body)
+		then_block = H.HBlock(statements=[bind_iter] + body_block.statements)
+
+		# 6) Else: break
 		else_block = H.HBlock(statements=[H.HBreak()])
-		if_stmt = H.HIf(cond=cond_hir, then_block=then_block, else_block=else_block)
-		loop_stmt = H.HLoop(body=H.HBlock(statements=[if_stmt]))
-		return loop_stmt
+
+		if_stmt = H.HIf(cond=cond, then_block=then_block, else_block=else_block)
+		loop_body = H.HBlock(statements=[next_let, if_stmt])
+		loop_stmt = H.HLoop(body=loop_body)
+
+		# 7) Wrap iterable/iter bindings in a block to scope them.
+		return H.HBlock(statements=[iterable_let, iter_let, loop_stmt])
 
 	def _visit_stmt_BreakStmt(self, stmt: ast.BreakStmt) -> H.HStmt:
 		return H.HBreak()

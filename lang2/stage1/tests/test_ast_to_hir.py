@@ -133,19 +133,37 @@ def test_for_desugars_to_init_loop_if_break():
 	l = AstToHIR()
 	for_ast = ast.ForStmt(iter_var="i", iterable=ast.Name("items"), body=[ast.ExprStmt(expr=ast.Name("i"))])
 	hir = l.lower_stmt(for_ast)
-	assert isinstance(hir, HLoop)
-	if_stmt = hir.body.statements[0]
+	assert isinstance(hir, HBlock)
+	assert len(hir.statements) == 3  # iterable let, iter let, loop
+	iterable_let, iter_let, loop = hir.statements
+	assert isinstance(iterable_let, HLet)
+	assert iterable_let.name.startswith("__for_iterable")
+	assert isinstance(iterable_let.value, HVar)
+	assert iterable_let.value.name == "items"
+	assert isinstance(iter_let, HLet)
+	assert iter_let.name.startswith("__for_iter")
+	assert isinstance(iter_let.value, HMethodCall)
+	assert iter_let.value.method_name == "iter"
+	assert isinstance(loop, HLoop)
+	next_let, if_stmt = loop.body.statements
+	assert isinstance(next_let, HLet)
+	assert next_let.name.startswith("__for_next")
+	assert isinstance(next_let.value, HMethodCall)
+	assert next_let.value.method_name == "next"
 	assert isinstance(if_stmt, HIf)
 	assert isinstance(if_stmt.else_block.statements[0], HBreak)
+	then = if_stmt.then_block
+	assert isinstance(then.statements[0], HLet)
+	assert then.statements[0].name == "i"
+	assert isinstance(then.statements[1], HExprStmt)
 
 
 def test_for_with_missing_cond_step_defaults():
 	l = AstToHIR()
 	for_ast = ast.ForStmt(iter_var="x", iterable=ast.Name("it"), body=[ast.ExprStmt(expr=ast.Literal(1))])
 	hir = l.lower_stmt(for_ast)
-	assert isinstance(hir, HLoop)
-	if_stmt = hir.body.statements[0]
-	assert isinstance(if_stmt, HIf)
+	assert isinstance(hir, HBlock)
+	assert isinstance(hir.statements[2], HLoop)
 
 
 def test_fail_loud_on_unhandled_nodes():
