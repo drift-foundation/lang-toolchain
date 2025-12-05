@@ -14,12 +14,12 @@ Currently supported:
 	- `loop` with break/continue
 	- plain calls, method calls, DV construction
 	- ternary expressions (diamond CFG + hidden temp)
-	- `throw` lowered to Error/ResultErr + return, with try-stack routing to the
+  - `throw` lowered to Error/ResultErr + return, with try-stack routing to the
     nearest catch block (event codes from optional exception metadata)
-	- `try` with multiple catch arms: dispatch block compares `ErrorEvent` codes
+  - `try` with multiple catch arms: dispatch compares `ErrorEvent` codes
     against per-arm constants (from the optional exception env; fallback 0),
-    jumps to matching catch/catch-all, rethrows as FnResult.Err when nothing
-    matches
+    jumps to matching catch/catch-all, and unwinds to an outer try when no arm
+    matches (returning FnResult.Err only when there is no outer try)
  Remaining TODO: rethrow/result-driven try sugar and any complex call
  names/receivers.
 """
@@ -118,7 +118,8 @@ class HIRToMIR:
 	  - ternary expressions (diamond CFG + hidden temp)
 	  - `throw` → ConstructError + ResultErr + Return, with try-stack routing
 	  - `try` with multiple catch arms (dispatch via ErrorEvent codes, catch-all,
-	    rethrow as FnResult.Err when no arm matches)
+	    unwind to outer try on no match; return FnResult.Err only when no outer
+	    try exists)
 
 	Entry points (stage API):
 	  - lower_expr: lower a single HIR expression to a MIR ValueId
@@ -441,10 +442,26 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 			return
 
-		# Otherwise, wrap into FnResult.Err and return.
-		res_val = self.b.new_temp()
-		self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
-		self.b.set_terminator(M.Return(value=res_val))
+		# Otherwise, propagate to an outer try if present, or return Err.
+		self._propagate_error(err_val)
+
+	def _propagate_error(self, err_val: M.ValueId) -> None:
+		"""
+		Propagate an Error value according to current try context:
+
+		  - If there is an outer try on the stack, store into its error_local and
+		    jump to its dispatch block (unwind to nearest outer try).
+		  - If there is no outer try, wrap into FnResult.Err and return.
+		"""
+		if self._try_stack:
+			ctx = self._try_stack[-1]
+			self.b.ensure_local(ctx.error_local)
+			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
+		else:
+			res_val = self.b.new_temp()
+			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
+			self.b.set_terminator(M.Return(value=res_val))
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
 		"""
@@ -454,15 +471,16 @@ class HIRToMIR:
 		  try_body -> try_cont (falls through)
 		  throw in try_body -> try_dispatch
 		  try_dispatch: ErrorEvent + event-code chain -> matching catch arm or catch-all
-		  unmatched + no catch-all -> rethrow as FnResult.Err
+		  unmatched + no catch-all -> unwind to outer try if present, else return Err
 		  each catch arm -> try_cont (if it falls through)
 
 		Notes/assumptions:
 		  - We expect well-formed arms (at most one catch-all, catch-all last).
 		    Until the checker enforces this, we defensively reject multiple
 		    catch-alls here.
-		  - Rethrow currently means “propagate as FnResult.Err out of this function,”
-		    not unwinding to an outer try in the same function.
+		  - Unmatched errors first unwind to an outer try (if any) using the
+		    same try-stack machinery as throw; only when there is no outer try
+		    do we propagate Err out of this function.
 		"""
 		if self.b.block.terminator is not None:
 			return
@@ -516,9 +534,11 @@ class HIRToMIR:
 
 		# Chain event-specific arms with IfTerminator, else falling through.
 		event_arms = [(arm, cb) for arm, cb in catch_blocks if arm.event_name is not None]
-		current_block = dispatch_block
 		if event_arms:
+			# We build a chain of Ifs; the final else falls through to the final resolution.
+			current_block = dispatch_block
 			for arm, cb in event_arms:
+				self.b.set_block(current_block)
 				arm_code = self._lookup_catch_event_code(arm.event_name)
 				arm_code_const = self.b.new_temp()
 				self.b.emit(M.ConstInt(dest=arm_code_const, value=arm_code))
@@ -528,24 +548,20 @@ class HIRToMIR:
 				else_block = self.b.new_block("try_dispatch_next")
 				self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=cb.name, else_target=else_block.name))
 				current_block = else_block
-				self.b.set_block(current_block)
 
-			# Final dispatch resolution: either a catch-all or propagate as Err.
+			# Resolve final else: either catch-all or propagate via try stack/Err.
 			self.b.set_block(current_block)
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				res_val = self.b.new_temp()
-				self.b.emit(M.ConstructResultErr(dest=res_val, error=err_tmp))
-				self.b.set_terminator(M.Return(value=res_val))
+				self._propagate_error(err_tmp)
 		else:
-			# No event-specific arms: either jump to catch-all or rethrow immediately.
+			# No event-specific arms: either jump to catch-all or propagate.
+			self.b.set_block(dispatch_block)
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				res_val = self.b.new_temp()
-				self.b.emit(M.ConstructResultErr(dest=res_val, error=err_tmp))
-				self.b.set_terminator(M.Return(value=res_val))
+				self._propagate_error(err_tmp)
 
 		# Lower each catch arm: bind error if requested, emit ErrorEvent for handler logic, then body.
 		for arm, cb in catch_blocks:
