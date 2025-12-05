@@ -48,6 +48,9 @@ def test_multiple_stores_version_increments():
 	ssa_func = MirToSSA().run(func)
 	assert ssa_func.local_versions["x"] == 2
 	assert ssa_func.current_value["x"] == "x_2"
+	assert ssa_func.value_for_instr[("entry", 0)] == "x_1"
+	assert ssa_func.value_for_instr[("entry", 1)] == "x_2"
+	assert ssa_func.value_for_instr[("entry", 2)] == "x_2"
 
 
 def test_ssa_load_before_store_raises():

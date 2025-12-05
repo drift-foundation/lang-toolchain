@@ -38,11 +38,13 @@ class SsaFunc:
 	  - func: the underlying MIR function
 	  - local_versions: how many SSA definitions each local has (x -> n)
 	  - current_value: the latest SSA name for each local (x -> "x_n")
+	  - value_for_instr: SSA name defined/used by each instruction (by (block, idx))
 	"""
 
 	func: MirFunc
 	local_versions: Dict[str, int]
 	current_value: Dict[str, str]
+	value_for_instr: Dict[tuple[str, int], str]
 
 
 class MirToSSA:
@@ -75,24 +77,34 @@ class MirToSSA:
 		version: Dict[str, int] = {}
 		current_value: Dict[str, str] = {}
 		new_instrs: list[MInstr] = []
+		value_for_instr: Dict[tuple[str, int], str] = {}
 
-		for instr in block.instructions:
+		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, StoreLocal):
-				idx = version.get(instr.local, 0) + 1
-				version[instr.local] = idx
-				current_value[instr.local] = f"{instr.local}_{idx}"
+				version_idx = version.get(instr.local, 0) + 1
+				version[instr.local] = version_idx
+				ssa_name = f"{instr.local}_{version_idx}"
+				current_value[instr.local] = ssa_name
+				value_for_instr[(block.name, idx)] = ssa_name
 				# For now, we do not rewrite the instruction; we just record versions.
 				# Later, stores/loads will be rewritten to SSA temps.
 				new_instrs.append(instr)
 			elif isinstance(instr, LoadLocal):
 				if instr.local not in version:
 					raise RuntimeError(f"SSA: load before store for local '{instr.local}'")
+				# Load sees the current SSA value for the local.
+				value_for_instr[(block.name, idx)] = current_value[instr.local]
 				new_instrs.append(instr)
 			else:
 				new_instrs.append(instr)
 
 		block.instructions = new_instrs
-		return SsaFunc(func=func, local_versions=version, current_value=current_value)
+		return SsaFunc(
+			func=func,
+			local_versions=version,
+			current_value=current_value,
+			value_for_instr=value_for_instr,
+		)
 
 	def run_experimental_multi_block(self, func: MirFunc) -> SsaFunc:
 		"""
@@ -145,6 +157,11 @@ class MirToSSA:
 					phi = Phi(dest=f"{local}_phi", incoming=incoming)
 					func.blocks[y].instructions.insert(0, phi)
 					placed.add((local, y))
-					# For now we do not iterate further for newly added φ blocks; this is enough for simple diamonds.
+		# For now we do not iterate further for newly added φ blocks; this is enough for simple diamonds.
 
-		return SsaFunc(func=func, local_versions={}, current_value={})
+		return SsaFunc(
+			func=func,
+			local_versions={},
+			current_value={},
+			value_for_instr={},
+		)
