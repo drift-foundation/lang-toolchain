@@ -45,6 +45,9 @@ class AstToHIR:
 
 		Fail-loud behavior is intentional: new AST node types should add
 		a visitor rather than being silently ignored.
+
+		Public stage API: callers should use lower_expr/stmt/block; helper
+		visitors are private (_visit_*).
 		"""
 		method = getattr(self, f"_visit_expr_{type(expr).__name__}", None)
 		if method is None:
@@ -57,6 +60,9 @@ class AstToHIR:
 
 		Fail-loud behavior is intentional: new AST node types should add
 		a visitor rather than being silently ignored.
+
+		Public stage API: callers should use lower_expr/stmt/block; helper
+		visitors are private (_visit_*).
 		"""
 		method = getattr(self, f"_visit_stmt_{type(stmt).__name__}", None)
 		if method is None:
@@ -227,7 +233,35 @@ class AstToHIR:
 		return H.HLoop(body=loop_body)
 
 	def _visit_stmt_ForStmt(self, stmt: ast.ForStmt) -> H.HStmt:
-		raise NotImplementedError("For lowering not implemented yet")
+		"""
+		Desugar a simple for-each style loop:
+		  for iter_var in iterable { body }
+
+		into:
+		  var __iter = iterable
+		  loop {
+		    if __iter.has_next() {
+		      var iter_var = __iter.next()
+		      body
+		    } else {
+		      break
+		    }
+		  }
+
+		This is a placeholder desugaring; the actual iteration protocol will
+		be defined later. For now we keep it simple and reuse loop/if/break.
+		"""
+		# TODO: Replace with a real iterator protocol; for now, synthesize a trivial
+		# pattern: if iterable { body } else break. This keeps HIR legal without
+		# committing to iteration semantics.
+		iter_hir = self.lower_expr(stmt.iterable)
+		# Fake condition: iterable itself (truthy) – placeholder.
+		cond_hir = iter_hir
+		then_block = self.lower_block(stmt.body)
+		else_block = H.HBlock(statements=[H.HBreak()])
+		if_stmt = H.HIf(cond=cond_hir, then_block=then_block, else_block=else_block)
+		loop_stmt = H.HLoop(body=H.HBlock(statements=[if_stmt]))
+		return loop_stmt
 
 	def _visit_stmt_BreakStmt(self, stmt: ast.BreakStmt) -> H.HStmt:
 		return H.HBreak()

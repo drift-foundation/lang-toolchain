@@ -114,6 +114,12 @@ class HIRToMIR:
 	# --- Expression lowering ---
 
 	def lower_expr(self, expr: H.HExpr) -> M.ValueId:
+		"""
+		Entry point: lower a single HIR expression to a MIR ValueId.
+
+		Dispatches to a private _visit_expr_* helper. Public stage API: callers
+		should only invoke lower_expr/stmt/block; helpers stay private.
+		"""
 		method = getattr(self, f"_visit_expr_{type(expr).__name__}", None)
 		if method is None:
 			raise NotImplementedError(f"No MIR lowering for expr {type(expr).__name__}")
@@ -197,12 +203,19 @@ class HIRToMIR:
 	# --- Statement lowering ---
 
 	def lower_stmt(self, stmt: H.HStmt) -> None:
+		"""
+		Entry point: lower a single HIR statement into MIR (appends to builder).
+
+		Dispatches to a private _visit_stmt_* helper. Public stage API: callers
+		should only invoke lower_expr/stmt/block; helpers stay private.
+		"""
 		method = getattr(self, f"_visit_stmt_{type(stmt).__name__}", None)
 		if method is None:
 			raise NotImplementedError(f"No MIR lowering for stmt {type(stmt).__name__}")
 		method(stmt)
 
 	def lower_block(self, block: H.HBlock) -> None:
+		"""Entry point: lower an HIR block (list of statements) into MIR."""
 		for stmt in block.statements:
 			self.lower_stmt(stmt)
 

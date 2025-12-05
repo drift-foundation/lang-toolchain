@@ -46,6 +46,18 @@ class MirToSSA:
 	"""
 
 	def run(self, func: MirFunc) -> SsaFunc:
+		"""
+		Entry point for the SSA stage.
+
+		Contract for this skeleton:
+		  - Only single-block MIR functions are supported (no branches/φ).
+		  - Enforces load-after-store for locals.
+		  - Records SSA-style version info for locals (x -> x_1, x_2, ...).
+
+		Returns an SsaFunc wrapper carrying the original MirFunc plus version
+		tables. Later iterations will rewrite instructions and handle multi-block
+		SSA with φ nodes.
+		"""
 		# Guardrails: keep the first iteration simple and explicit.
 		if len(func.blocks) != 1:
 			raise NotImplementedError("SSA: only single-block functions are supported in this skeleton")

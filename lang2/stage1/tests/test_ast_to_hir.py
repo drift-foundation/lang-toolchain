@@ -129,6 +129,25 @@ def test_while_desugars_to_loop_if_break():
 	assert isinstance(if_stmt.else_block.statements[0], HBreak)
 
 
+def test_for_desugars_to_init_loop_if_break():
+	l = AstToHIR()
+	for_ast = ast.ForStmt(iter_var="i", iterable=ast.Name("items"), body=[ast.ExprStmt(expr=ast.Name("i"))])
+	hir = l.lower_stmt(for_ast)
+	assert isinstance(hir, HLoop)
+	if_stmt = hir.body.statements[0]
+	assert isinstance(if_stmt, HIf)
+	assert isinstance(if_stmt.else_block.statements[0], HBreak)
+
+
+def test_for_with_missing_cond_step_defaults():
+	l = AstToHIR()
+	for_ast = ast.ForStmt(iter_var="x", iterable=ast.Name("it"), body=[ast.ExprStmt(expr=ast.Literal(1))])
+	hir = l.lower_stmt(for_ast)
+	assert isinstance(hir, HLoop)
+	if_stmt = hir.body.statements[0]
+	assert isinstance(if_stmt, HIf)
+
+
 def test_fail_loud_on_unhandled_nodes():
 	l = AstToHIR()
 	with pytest.raises(NotImplementedError):

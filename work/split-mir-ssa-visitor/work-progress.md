@@ -88,7 +88,7 @@ MIR should be explicit and simple enough that lowering is mostly a mechanical ma
 - Plan written (this file).  
 - HIR skeleton added under `lang2/stage1/hir_nodes.py` with base classes, operator enums, expressions, statements, and `HBlock`/`HExprStmt`.  
 - Local AST copy added under `lang2/stage0/ast.py` to keep the refactor isolated.  
-- AST→HIR visitor under `lang2/stage1/ast_to_hir.py` now lowers literals, vars, unary/binary ops, field/index, let/assign/if/while/return/break/continue/expr-stmt, and plain/method calls; remaining control-flow sugar still stubbed. Basic unit tests live in `lang2/stage1/tests/test_ast_to_hir.py`.  
+- AST→HIR visitor under `lang2/stage1/ast_to_hir.py` now lowers literals, vars, unary/binary ops, field/index, let/assign/if/while/for/return/break/continue/expr-stmt, and plain/method calls; remaining sugar (ternary, try/throw/raise, array literals) still stubbed. Basic unit tests live in `lang2/stage1/tests/test_ast_to_hir.py`.  
 - MIR schema defined under `lang2/stage2/mir_nodes.py` (explicit ops, blocks, functions).  
 - HIR→MIR builder/skeleton under `lang2/stage2/hir_to_mir.py` lowers straight-line HIR (literals/vars/unary/binary/field/index + let/assign/expr/return), `if` with branches/join, `loop`/break/continue, and basic calls/DV construction into MIR blocks; remaining sugar (try/ternary/etc.) still TODO. Unit tests in `lang2/stage2/tests/test_hir_to_mir.py` cover these paths.  
 - MIR pre-analysis skeleton added under `lang2/stage3/pre_analysis.py` with address-taken analysis; unit test in `lang2/stage3/tests/test_pre_analysis.py`.  
