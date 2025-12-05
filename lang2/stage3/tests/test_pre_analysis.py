@@ -58,7 +58,8 @@ def test_calls_marked_may_fail():
 			Call(dest="t0", fn="foo", args=[]),
 			MethodCall(dest="t1", receiver="obj", method_name="bar", args=[]),
 			ConstructDV(dest="t2", dv_type_name="Err", args=[]),
-			ConstructError(dest="t3", code="c", payload="p"),
+			ConstInt(dest="c0", value=1234),
+			ConstructError(dest="t3", code="c0", payload="p"),
 		],
 		terminator=Goto(target="exit"),
 	)
@@ -70,12 +71,13 @@ def test_calls_marked_may_fail():
 		blocks={"entry": entry, "exit": exit_block},
 		entry="entry",
 	)
-	result = MirPreAnalysis().analyze(func)
+	result = MirPreAnalysis(code_to_exc={1234: "MyException"}).analyze(func)
 	assert ("entry", 0) in result.may_fail
 	assert ("entry", 1) in result.may_fail
 	assert ("entry", 2) in result.may_fail
-	assert ("entry", 3) in result.may_fail
-	assert ("entry", 3) in result.construct_error_sites
+	assert ("entry", 4) in result.may_fail
+	assert ("entry", 4) in result.construct_error_sites
+	assert result.exception_types == {"MyException"}
 
 
 def test_pure_ops_not_marked():
