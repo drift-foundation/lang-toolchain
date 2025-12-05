@@ -17,7 +17,7 @@ from lang2.stage4 import (
 	enforce_fnresult_returns_for_can_throw,
 	run_throw_checks,
 )
-from lang2.stage2 import BasicBlock, MirFunc, Return
+from lang2.stage2 import BasicBlock, MirFunc, Return, StoreLocal
 from lang2.stage2 import ConstructResultErr
 from lang2.stage3 import ThrowSummaryBuilder
 import pytest
@@ -180,15 +180,16 @@ def test_structural_fnresult_check_flags_forwarding_cases():
 	with pytest.raises(RuntimeError):
 		enforce_fnresult_returns_for_can_throw(func_infos, funcs_param)
 
-	# Case 2: returning a local that aliases a FnResult
+	# Case 2: returning a local that aliases a FnResult (via StoreLocal)
 	entry_alias = BasicBlock(
 		name="entry",
 		instructions=[
-			# local_x := param_res (aliasing a FnResult)
 			ConstructResultErr(dest="r0", error="e0"),
-			# In a real alias scenario this would be a Move/StoreLocal; we keep it simple.
+			# Alias r0 through a local; structural check still fails because it only
+			# recognizes ConstructResultOk/Err destinations, not aliases.
+			StoreLocal(local="x", value="r0"),
 		],
-		terminator=Return(value="alias_res"),
+		terminator=Return(value="x"),
 	)
 	funcs_alias = {
 		"alias_local": MirFunc(name="alias_local", params=[], locals=[], blocks={"entry": entry_alias}, entry="entry")
