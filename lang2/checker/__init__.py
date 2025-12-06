@@ -18,9 +18,10 @@ For now we only thread a boolean throw intent per function through to the driver
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, FrozenSet
 
+from lang2.diagnostics import Diagnostic
 from lang2.types_protocol import TypeEnv
 
 
@@ -57,7 +58,7 @@ class CheckedProgram:
 	fn_infos: Dict[str, FnInfo]
 	type_env: Optional[TypeEnv] = None
 	exception_catalog: Optional[Dict[str, int]] = None
-	diagnostics: List[Any] = None  # placeholder until Diagnostic is defined
+	diagnostics: List[Diagnostic] = field(default_factory=list)
 
 
 class Checker:

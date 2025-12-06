@@ -27,6 +27,7 @@ from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
 from lang2.checker import Checker
+from lang2.diagnostics import Diagnostic
 
 
 def compile_stubbed_funcs(
