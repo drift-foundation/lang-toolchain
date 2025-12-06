@@ -2,7 +2,7 @@
 # author: Sławomir Liszniański; created: 2025-12-04
 """
 Integration: stage2 → stage3 → stage4 throw checks.
-Ensures the throw summary plus declared_can_throw map drive the invariants.
+Ensures the throw summary plus checker-inferred declared_can_throw map drive the invariants.
 """
 
 from __future__ import annotations
@@ -14,12 +14,18 @@ from lang2.stage1 import normalize_hir
 from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
+from lang2.checker import Checker, FnSignature
 
 
 def _lower_fn(name: str, hir_block: H.HBlock) -> tuple[str, object]:
 	builder = MirBuilder(name=name)
 	HIRToMIR(builder).lower_block(hir_block)
 	return name, builder.func
+
+
+def _declared_from_signatures(signatures: dict[str, FnSignature]) -> dict[str, bool]:
+	checked = Checker(signatures=signatures).check(signatures.keys())
+	return {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 
 
 def test_can_throw_function_passes_checks():
@@ -30,7 +36,9 @@ def test_can_throw_function_passes_checks():
 	)
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {fn_name: True}
+	declared_can_throw = _declared_from_signatures(
+		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
+	)
 
 	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
 	assert fn_name in infos
@@ -45,7 +53,9 @@ def test_non_can_throw_function_violates_invariant():
 	)
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {fn_name: False}
+	declared_can_throw = _declared_from_signatures(
+		{fn_name: FnSignature(name=fn_name, return_type="Int")}
+	)
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(mir_funcs, summaries, declared_can_throw)
@@ -84,7 +94,9 @@ def test_can_throw_try_catch_and_return_ok_shape():
 
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={"Evt": 1})
-	declared_can_throw = {fn_name: True}
+	declared_can_throw = _declared_from_signatures(
+		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
+	)
 
 	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
 	assert fn_name in infos
@@ -108,7 +120,9 @@ def test_can_throw_fnresult_forwarding_currently_rejected():
 	)
 	mir_funcs = {"f_forward": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {"f_forward": True}
+	declared_can_throw = _declared_from_signatures(
+		{"f_forward": FnSignature(name="f_forward", return_type=("FnResult", "Ok", "Err"))}
+	)
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(mir_funcs, summaries, declared_can_throw)
@@ -136,7 +150,9 @@ def test_can_throw_without_throw_and_ok_return_passes():
 	)
 	mir_funcs = {"f_ok_only": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {"f_ok_only": True}
+	declared_can_throw = _declared_from_signatures(
+		{"f_ok_only": FnSignature(name="f_ok_only", return_type="FnResult<Int, Error>")}
+	)
 
 	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
 	assert "f_ok_only" in infos
@@ -167,7 +183,9 @@ def test_fnresult_forwarding_aliasing_expected_fail():
 	)
 	mir_funcs = {"f_alias": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {"f_alias": True}
+	declared_can_throw = _declared_from_signatures(
+		{"f_alias": FnSignature(name="f_alias", return_type="FnResult<Int, Error>")}
+	)
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(mir_funcs, summaries, declared_can_throw)
@@ -212,7 +230,9 @@ def test_try_result_sugar_with_try_catch_clears_throw_checks():
 
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = {fn_name: True}
+	declared_can_throw = _declared_from_signatures(
+		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
+	)
 
 	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
 	assert fn_name in infos

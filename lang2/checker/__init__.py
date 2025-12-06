@@ -13,16 +13,18 @@ When the real checker lands, this package will:
 * validate catch-arm event names against the exception catalog, and
 * populate a concrete `TypeEnv` for stage4 type-aware checks.
 
-For now we only thread a boolean throw intent per function through to the driver.
+For now we only thread a boolean throw intent per function through to the driver
+and validate catch-arm shapes when provided.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, FrozenSet, Mapping, Tuple
+from typing import Any, Dict, Iterable, List, Optional, FrozenSet, Mapping, Sequence, Set, Tuple
 
 from lang2.diagnostics import Diagnostic
 from lang2.types_protocol import TypeEnv
+from lang2.checker.catch_arms import CatchArmInfo, validate_catch_arms
 
 
 @dataclass
@@ -90,6 +92,8 @@ class Checker:
 		self,
 		declared_can_throw: Mapping[str, bool] | None = None,
 		signatures: Mapping[str, FnSignature] | None = None,
+		catch_arms: Mapping[str, Sequence[CatchArmInfo]] | None = None,
+		exception_catalog: Mapping[str, int] | None = None,
 	) -> None:
 		# Until a real type checker exists we support two testing shims:
 		# 1) an explicit name -> bool map, or
@@ -97,22 +101,43 @@ class Checker:
 		#    on the return type resembling FnResult.
 		self._declared_map = declared_can_throw or {}
 		self._signatures = signatures or {}
+		self._catch_arms = catch_arms or {}
+		self._exception_catalog = dict(exception_catalog) if exception_catalog else None
 
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
 		"""
 		Produce a CheckedProgram with FnInfo for each fn name in `fn_decls`.
 		"""
 		fn_infos: Dict[str, FnInfo] = {}
+		diagnostics: List[Diagnostic] = []
+		known_events: Set[str] = set(self._exception_catalog.keys()) if self._exception_catalog else set()
+
 		for name in fn_decls:
 			declared_can_throw = self._declared_map.get(name)
+			sig = self._signatures.get(name)
+			declared_events: Optional[FrozenSet[str]] = None
+			return_type = None
+
+			if sig is not None:
+				declared_events = frozenset(sig.throws_events) if sig.throws_events else None
+				return_type = sig.return_type
+
 			if declared_can_throw is None:
-				sig = self._signatures.get(name)
 				if sig is not None:
 					declared_can_throw = self._is_fnresult_return(sig.return_type)
 				else:
 					declared_can_throw = False
 
-			fn_infos[name] = FnInfo(name=name, declared_can_throw=declared_can_throw)
+			catch_arms = self._catch_arms.get(name)
+			if catch_arms is not None:
+				validate_catch_arms(catch_arms, known_events, diagnostics)
+
+			fn_infos[name] = FnInfo(
+				name=name,
+				declared_can_throw=declared_can_throw,
+				declared_events=declared_events,
+				return_type=return_type,
+			)
 
 		# TODO: real checker will:
 		#   - resolve signatures (FnResult/throws),
@@ -122,8 +147,8 @@ class Checker:
 		return CheckedProgram(
 			fn_infos=fn_infos,
 			type_env=None,
-			exception_catalog=None,
-			diagnostics=[],
+			exception_catalog=self._exception_catalog,
+			diagnostics=diagnostics,
 		)
 
 	def _is_fnresult_return(self, return_type: Any) -> bool:

@@ -60,7 +60,11 @@ def compile_stubbed_funcs(
 	"""
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.
-	checker = Checker(declared_can_throw=declared_can_throw, signatures=signatures)
+	checker = Checker(
+		declared_can_throw=declared_can_throw,
+		signatures=signatures,
+		exception_catalog=exc_env,
+	)
 	checked = checker.check(func_hirs.keys())
 	declared = {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 	mir_funcs: Dict[str, M.MirFunc] = {}
