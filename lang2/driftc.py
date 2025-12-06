@@ -19,23 +19,26 @@ handling and diagnostics. For now it exposes a single helper
 
 from __future__ import annotations
 
-from typing import Dict, Mapping
+from typing import Dict, Mapping, List, Tuple
 
 from lang2 import stage1 as H
 from lang2.stage1 import normalize_hir
+from lang2.stage1.hir_utils import collect_catch_arms_from_block
 from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
-from lang2.checker import Checker
+from lang2.checker import Checker, CheckedProgram, FnSignature
+from lang2.checker.catch_arms import CatchArmInfo
 from lang2.diagnostics import Diagnostic
 
 
 def compile_stubbed_funcs(
 	func_hirs: Mapping[str, H.HBlock],
 	declared_can_throw: Mapping[str, bool] | None = None,
-	signatures: Mapping[str, "FnSignature"] | None = None,
+	signatures: Mapping[str, FnSignature] | None = None,
 	exc_env: Mapping[str, int] | None = None,
-) -> Dict[str, M.MirFunc]:
+	return_checked: bool = False,
+) -> Dict[str, M.MirFunc] | tuple[Dict[str, M.MirFunc], CheckedProgram]:
 	"""
 	Lower a set of HIR function bodies through the lang2 pipeline and run throw checks.
 
@@ -47,9 +50,12 @@ def compile_stubbed_funcs(
 	    use parsed/type-checked signatures to derive throw intent; this parameter
 	    lets tests mimic that shape without a full parser/type checker.
 	  exc_env: optional exception environment (event name -> code) passed to HIRToMIR.
+	  return_checked: when True, also return the CheckedProgram produced by the
+	    checker so diagnostics can be inspected in tests.
 
 	Returns:
-	  dict of function name -> lowered MIR function.
+	  dict of function name -> lowered MIR function. When `return_checked` is
+	  True, returns a `(mir_funcs, checked_program)` tuple.
 
 	Notes:
 	  In the driver path, throw-check violations are appended to
@@ -58,20 +64,29 @@ def compile_stubbed_funcs(
 	  for tests/prototypes; a real CLI will build signatures and diagnostics
 	  from parsed sources instead of the shims here.
 	"""
+	# Normalize upfront so catch-arm collection and lowering share the same HIR.
+	catch_arms_map: Dict[str, List[CatchArmInfo]] = {}
+	normalized_hirs: Dict[str, H.HBlock] = {}
+	for name, hir_block in func_hirs.items():
+		hir_norm = normalize_hir(hir_block)
+		normalized_hirs[name] = hir_norm
+		arms = collect_catch_arms_from_block(hir_norm)
+		if arms:
+			catch_arms_map[name] = arms
+
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.
 	checker = Checker(
 		declared_can_throw=declared_can_throw,
 		signatures=signatures,
 		exception_catalog=exc_env,
+		catch_arms=catch_arms_map,
 	)
 	checked = checker.check(func_hirs.keys())
 	declared = {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 	mir_funcs: Dict[str, M.MirFunc] = {}
 
-	for name, hir_block in func_hirs.items():
-		# Normalize sugar (HTryResult) before lowering.
-		hir_norm = normalize_hir(hir_block)
+	for name, hir_norm in normalized_hirs.items():
 		builder = MirBuilder(name=name)
 		HIRToMIR(builder, exc_env=exc_env).lower_block(hir_norm)
 		mir_funcs[name] = builder.func
@@ -89,6 +104,8 @@ def compile_stubbed_funcs(
 		diagnostics=checked.diagnostics,
 	)
 
+	if return_checked:
+		return mir_funcs, checked
 	return mir_funcs
 
 

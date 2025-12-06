@@ -21,9 +21,17 @@ from lang2.stage2 import BasicBlock, MirFunc, Return, StoreLocal
 from lang2.stage2 import ConstructResultErr
 from lang2.stage3 import ThrowSummaryBuilder
 import pytest
+from lang2.checker import Checker, FnSignature
+
+
+def _declared_from_signatures(signatures: dict[str, FnSignature]) -> dict[str, bool]:
+	"""Derive declared_can_throw from FnSignature inputs via the checker stub."""
+	checked = Checker(signatures=signatures).check(signatures.keys())
+	return {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 
 
 def test_build_func_throw_info_combines_summary_and_decl():
+	"""build_func_throw_info should merge summaries with checker-declared throw intent."""
 	summaries = {
 		"f": ThrowSummary(
 			constructs_error=True,
@@ -31,7 +39,12 @@ def test_build_func_throw_info_combines_summary_and_decl():
 			may_fail_sites={("entry", 0)},
 		)
 	}
-	func_infos = build_func_throw_info(summaries, declared_can_throw={"f": True})
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw=_declared_from_signatures(
+			{"f": FnSignature(name="f", return_type="FnResult<Int, Error>")}
+		),
+	)
 	assert "f" in func_infos
 	info = func_infos["f"]
 	assert isinstance(info, FuncThrowInfo)
@@ -42,6 +55,7 @@ def test_build_func_throw_info_combines_summary_and_decl():
 
 
 def test_enforce_can_throw_invariants_raises_for_non_declared_thrower():
+	"""Non-can-throw functions constructing errors should fail invariants."""
 	summaries = {
 		"g": ThrowSummary(
 			constructs_error=True,
@@ -49,7 +63,10 @@ def test_enforce_can_throw_invariants_raises_for_non_declared_thrower():
 			may_fail_sites=set(),
 		)
 	}
-	func_infos = build_func_throw_info(summaries, declared_can_throw={"g": False})
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw=_declared_from_signatures({"g": FnSignature(name="g", return_type="Int")}),
+	)
 	try:
 		enforce_can_throw_invariants(func_infos)
 		raised = False
@@ -59,6 +76,7 @@ def test_enforce_can_throw_invariants_raises_for_non_declared_thrower():
 
 
 def test_enforce_can_throw_invariants_allows_declared_thrower():
+	"""Declared can-throw functions should pass invariant checks."""
 	summaries = {
 		"h": ThrowSummary(
 			constructs_error=True,
@@ -66,13 +84,18 @@ def test_enforce_can_throw_invariants_allows_declared_thrower():
 			may_fail_sites=set(),
 		)
 	}
-	func_infos = build_func_throw_info(summaries, declared_can_throw={"h": True})
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw=_declared_from_signatures(
+			{"h": FnSignature(name="h", return_type="FnResult<Int, Error>")}
+		),
+	)
 	# Should not raise
 	enforce_can_throw_invariants(func_infos)
 
 
 def test_return_shape_enforced_for_can_throw():
-	# Function h is declared can-throw but has a bare return -> should fail.
+	"""Can-throw function with bare return should fail; value-bearing return should pass."""
 	summaries = {
 		"h": ThrowSummary(
 			constructs_error=False,
@@ -80,7 +103,12 @@ def test_return_shape_enforced_for_can_throw():
 			may_fail_sites=set(),
 		)
 	}
-	func_infos = build_func_throw_info(summaries, declared_can_throw={"h": True})
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw=_declared_from_signatures(
+			{"h": FnSignature(name="h", return_type="FnResult<Int, Error>")}
+		),
+	)
 	# MIR with a bare return
 	entry = BasicBlock(name="entry", instructions=[], terminator=Return(value=None))
 	funcs = {"h": MirFunc(name="h", params=[], locals=[], blocks={"entry": entry}, entry="entry")}
@@ -98,7 +126,7 @@ def test_return_shape_enforced_for_can_throw():
 
 
 def test_fnresult_return_shape_enforced_for_can_throw():
-	# Function k is declared can-throw but returns a value with no ConstructResultOk/Err -> should fail.
+	"""FnResult invariant should reject returns not produced by ConstructResultOk/Err."""
 	summaries = {
 		"k": ThrowSummary(
 			constructs_error=False,
@@ -106,7 +134,12 @@ def test_fnresult_return_shape_enforced_for_can_throw():
 			may_fail_sites=set(),
 		)
 	}
-	func_infos = build_func_throw_info(summaries, declared_can_throw={"k": True})
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw=_declared_from_signatures(
+			{"k": FnSignature(name="k", return_type="FnResult<Int, Error>")}
+		),
+	)
 	entry = BasicBlock(name="entry", instructions=[], terminator=Return(value="v0"))
 	funcs = {"k": MirFunc(name="k", params=[], locals=[], blocks={"entry": entry}, entry="entry")}
 	try:
@@ -129,7 +162,7 @@ def test_fnresult_return_shape_enforced_for_can_throw():
 
 
 def test_run_throw_checks_wrapper_executes_all_invariants():
-	# Build MIR + summary for a can-throw function that returns FnResult
+	"""run_throw_checks should wire summaries + declared intent through all invariants."""
 	entry = BasicBlock(
 		name="entry",
 		instructions=[ConstructResultErr(dest="r0", error="e0")],
@@ -144,7 +177,9 @@ def test_run_throw_checks_wrapper_executes_all_invariants():
 	func_infos = run_throw_checks(
 		funcs=funcs,
 		summaries={"w": summary},
-		declared_can_throw={"w": True},
+		declared_can_throw=_declared_from_signatures(
+			{"w": FnSignature(name="w", return_type="FnResult<Int, Error>")}
+		),
 	)
 	assert "w" in func_infos
 	assert func_infos["w"].declared_can_throw is True
