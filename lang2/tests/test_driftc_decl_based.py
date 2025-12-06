@@ -56,10 +56,12 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 	f_info = checked.fn_infos["f_can"]
 	assert f_info.declared_can_throw is True
 	assert f_info.declared_events == frozenset({"EvtA"})
+	assert f_info.return_type_id is not None
 
 	g_info = checked.fn_infos["g_plain"]
 	assert g_info.declared_can_throw is False
 	assert g_info.declared_events is None
+	assert g_info.return_type_id is not None
 
 
 def test_driver_reports_decl_based_mismatch_diagnostics():

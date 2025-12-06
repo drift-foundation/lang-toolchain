@@ -79,6 +79,7 @@ class CheckedProgram:
 	"""
 
 	fn_infos: Dict[str, FnInfo]
+	type_table: Optional["TypeTable"] = None
 	type_env: Optional[TypeEnv] = None
 	exception_catalog: Optional[Dict[str, int]] = None
 	diagnostics: List[Diagnostic] = field(default_factory=list)
@@ -173,6 +174,7 @@ class Checker:
 		# The real checker will attach type_env, diagnostics, and exception_catalog.
 		return CheckedProgram(
 			fn_infos=fn_infos,
+			type_table=self._type_table,
 			type_env=None,
 			exception_catalog=self._exception_catalog,
 			diagnostics=diagnostics,

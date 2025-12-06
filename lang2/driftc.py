@@ -27,10 +27,10 @@ from lang2.stage1.hir_utils import collect_catch_arms_from_block
 from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
-	from lang2.checker import Checker, CheckedProgram, FnSignature
-	from lang2.checker.catch_arms import CatchArmInfo
-	from lang2.diagnostics import Diagnostic
-	from lang2.types_env_impl import build_type_env_from_ssa
+from lang2.checker import Checker, CheckedProgram, FnSignature
+from lang2.checker.catch_arms import CatchArmInfo
+from lang2.diagnostics import Diagnostic
+from lang2.types_env_impl import build_type_env_from_ssa
 
 
 def compile_stubbed_funcs(
@@ -107,8 +107,13 @@ def compile_stubbed_funcs(
 		from lang2.stage4 import MirToSSA  # local import to avoid unused deps
 		from lang2.types_env_impl import build_type_env_from_ssa
 		from lang2.checker.type_env_bridge import build_checker_type_env_from_inferred
+		from lang2.checker.type_env_builder import build_minimal_checker_type_env
 
 		ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
+		# Prefer a checker-owned TypeEnv (even minimal) when possible.
+		if type_env is None and signatures is not None:
+			type_env = build_minimal_checker_type_env(checked, ssa_funcs, signatures, table=checked.type_table)
+			checked.type_env = type_env
 		if type_env is None:
 			# Bridge: infer types from SSA/signatures and wrap into a checker-owned TypeEnv
 			inferred = build_type_env_from_ssa(ssa_funcs, signatures=signatures)

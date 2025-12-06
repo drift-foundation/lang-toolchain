@@ -19,6 +19,9 @@ def test_checker_infers_fnresult_and_declared_events_from_signature():
 	assert info.declared_can_throw is True
 	assert info.declared_events == frozenset({"EvtA", "EvtB"})
 	assert info.return_type == ("FnResult", "Ok", "Err")
+	# TypeIds should be assigned for FnResult/err side.
+	assert info.return_type_id is not None
+	assert info.error_type_id is not None
 	assert checked.diagnostics == []
 
 
