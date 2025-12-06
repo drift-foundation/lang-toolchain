@@ -1,3 +1,7 @@
+"""
+Exercises the checker stub's signature inference and catch-arm validation.
+"""
+
 from __future__ import annotations
 
 from lang2.checker import Checker, FnSignature
@@ -5,6 +9,7 @@ from lang2.checker.catch_arms import CatchArmInfo
 
 
 def test_checker_infers_fnresult_and_declared_events_from_signature():
+	"""Checker should infer can-throw + declared events from FnSignature."""
 	signatures = {
 		"f": FnSignature(name="f", return_type=("FnResult", "Ok", "Err"), throws_events=("EvtA", "EvtB")),
 	}
@@ -18,6 +23,7 @@ def test_checker_infers_fnresult_and_declared_events_from_signature():
 
 
 def test_checker_validates_catch_arms_and_accumulates_diagnostics():
+	"""Checker should run catch-arm validation and accumulate diagnostics."""
 	signatures = {"f": FnSignature(name="f", return_type="Int")}
 	catch_arms = {
 		"f": [

@@ -85,7 +85,7 @@ class Checker:
 	Accepts a sequence of function declarations and an optional declared_can_throw
 	map (defaults to False for all). This input is strictly a testing shim; a real
 	checker will compute declared_can_throw from signatures (FnResult/throws) and
-	the type system.
+	the type system, and validate catch arms against an exception catalog.
 	"""
 
 	def __init__(
@@ -107,6 +107,10 @@ class Checker:
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
 		"""
 		Produce a CheckedProgram with FnInfo for each fn name in `fn_decls`.
+
+		This stub also validates any provided catch arms against the
+		exception catalog when available, accumulating diagnostics instead
+		of raising.
 		"""
 		fn_infos: Dict[str, FnInfo] = {}
 		diagnostics: List[Diagnostic] = []

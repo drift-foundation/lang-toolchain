@@ -24,6 +24,7 @@ def _lower_fn(name: str, hir_block: H.HBlock) -> tuple[str, object]:
 
 
 def _declared_from_signatures(signatures: dict[str, FnSignature]) -> dict[str, bool]:
+	"""Run the checker stub to derive declared_can_throw from FnSignature inputs."""
 	checked = Checker(signatures=signatures).check(signatures.keys())
 	return {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 
