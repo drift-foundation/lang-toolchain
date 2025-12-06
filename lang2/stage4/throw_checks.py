@@ -195,25 +195,20 @@ def run_throw_checks(
 	  1. build FuncThrowInfo,
 	  2. enforce can-throw invariants,
 	  3. enforce return-shape invariants for can-throw functions (structural),
-	  4. optionally enforce type-aware FnResult returns if SSA + TypeEnv are provided,
+	  4. enforce FnResult shape:
+	     - structural guard for untyped/unit tests,
+	     - type-aware FnResult check when SSA + TypeEnv are provided (structural
+	       guard is skipped in that case to allow forwarding/aliasing),
 	  5. return the FuncThrowInfo map for further stages to consume.
 	"""
 	func_infos = build_func_throw_info(summaries, declared_can_throw)
 	enforce_can_throw_invariants(func_infos)
 	enforce_return_shape_for_can_throw(func_infos, funcs)
-	enforce_fnresult_returns_for_can_throw(func_infos, funcs)
-	# When SSA + type environment are available, a type-aware check should
-	# supersede the structural FnResult guard. Leave it optional to keep
-	# untyped/unit tests lightweight.
+	# FnResult shape: run either the structural guard (untyped/unit tests) or
+	# the type-aware guard (typed pipeline). Avoid double-errors so that typed
+	# paths can return/forward FnResult values freely.
 	if ssa_funcs is not None and type_env is not None:
-		for fname, info in func_infos.items():
-			fn = funcs.get(fname)
-			ssa_fn = ssa_funcs.get(fname) if ssa_funcs else None
-			if fn is None or ssa_fn is None:
-				continue
-			enforce_fnresult_returns_typeaware(
-				func_infos={fname: info},  # type: ignore[arg-type]
-				ssa_funcs={fname: ssa_fn},  # type: ignore[arg-type]
-				type_env=type_env,
-			)
+		enforce_fnresult_returns_typeaware(func_infos, ssa_funcs, type_env)
+	else:
+		enforce_fnresult_returns_for_can_throw(func_infos, funcs)
 	return func_infos

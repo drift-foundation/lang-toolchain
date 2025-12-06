@@ -16,7 +16,7 @@ from typing import Protocol, Tuple, Any
 
 class TypeEnv(Protocol):
 	"""
-	Protocol for querying SSA value types (placeholder until real type env exists).
+	Protocol for querying SSA value types.
 
 	TypeEnv deliberately avoids committing to a concrete type representation:
 	callers should treat the returned objects as opaque `TypeId`-like handles and
