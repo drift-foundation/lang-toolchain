@@ -27,10 +27,10 @@ from lang2.stage1.hir_utils import collect_catch_arms_from_block
 from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
-from lang2.checker import Checker, CheckedProgram, FnSignature
-from lang2.checker.catch_arms import CatchArmInfo
-from lang2.diagnostics import Diagnostic
-from lang2.types_env_impl import build_type_env_from_ssa
+	from lang2.checker import Checker, CheckedProgram, FnSignature
+	from lang2.checker.catch_arms import CatchArmInfo
+	from lang2.diagnostics import Diagnostic
+	from lang2.types_env_impl import build_type_env_from_ssa
 
 
 def compile_stubbed_funcs(
@@ -56,7 +56,8 @@ def compile_stubbed_funcs(
 	    checker so diagnostics/fn_infos can be asserted in integration tests.
 	  build_ssa: when True, also run MIR→SSA and derive a TypeEnv from SSA +
 	    signatures so the type-aware throw check path is exercised. Loops/backedges
-	    are still rejected by the SSA pass.
+	    are still rejected by the SSA pass. The preferred path is for the checker
+	    to supply `checked.type_env`; the SSA-based bridge is a temporary fallback.
 
 	Returns:
 	  dict of function name -> lowered MIR function. When `return_checked` is
@@ -101,13 +102,18 @@ def compile_stubbed_funcs(
 
 	# Optional SSA/type-env for typed throw checks
 	ssa_funcs = None
-	type_env = None
+	type_env = checked.type_env
 	if build_ssa:
 		from lang2.stage4 import MirToSSA  # local import to avoid unused deps
+		from lang2.types_env_impl import build_type_env_from_ssa
+		from lang2.checker.type_env_bridge import build_checker_type_env_from_inferred
 
 		ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
-		type_env = build_type_env_from_ssa(ssa_funcs, signatures=signatures)
-		checked.type_env = type_env
+		if type_env is None:
+			# Bridge: infer types from SSA/signatures and wrap into a checker-owned TypeEnv
+			inferred = build_type_env_from_ssa(ssa_funcs, signatures=signatures)
+			type_env = build_checker_type_env_from_inferred(inferred, ssa_funcs, signatures or {})
+			checked.type_env = type_env
 
 	# Stage4: throw checks
 	run_throw_checks(

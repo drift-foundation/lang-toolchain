@@ -27,7 +27,7 @@ class FakeDecl:
 def test_driver_accepts_decl_based_signatures_and_catalog():
 	"""
 	Build signatures/exception catalog from decl-like objects and ensure the
-	driver threads them through the checker/throw checks.
+	driver threads them through the checker/throw checks (happy path).
 	"""
 	decls = [
 		FakeDecl(name="f_can", return_type="FnResult<Int, Error>", throws=("EvtA",)),
@@ -60,3 +60,31 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 	g_info = checked.fn_infos["g_plain"]
 	assert g_info.declared_can_throw is False
 	assert g_info.declared_events is None
+
+
+def test_driver_reports_decl_based_mismatch_diagnostics():
+	"""
+	Decl says g_plain does not throw, but HIR throws an unknown event: expect diagnostics.
+	"""
+	decls = [
+		FakeDecl(name="g_plain", return_type="Int", throws=None),
+	]
+	signatures = signatures_from_decl_nodes(decls)
+	exc_catalog = exception_catalog_from_decls(decls)  # empty catalog
+
+	hirs = {
+		"g_plain": H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtX", args=[]))]),
+	}
+
+	mir_funcs, checked = compile_stubbed_funcs(
+		func_hirs=hirs,
+		signatures=signatures,
+		exc_env=exc_catalog,
+		build_ssa=True,
+		return_checked=True,
+	)
+
+	assert "g_plain" in mir_funcs
+	assert checked.diagnostics, "expected diagnostics for throw mismatch"
+	msgs = [d.message for d in checked.diagnostics]
+	assert any("non-can-throw" in m or "can-throw" in m for m in msgs)

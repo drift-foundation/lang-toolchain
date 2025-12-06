@@ -25,6 +25,7 @@ from lang2.stage2 import (
 	Phi,
 )
 from lang2.checker import FnSignature
+# InferredTypeEnv uses opaque types; a bridge converts to checker-owned TypeIds.
 
 
 class SimpleTypeEnv(TypeEnv):

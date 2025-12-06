@@ -25,6 +25,8 @@ from typing import Any, Dict, Iterable, List, Optional, FrozenSet, Mapping, Sequ
 from lang2.diagnostics import Diagnostic
 from lang2.types_protocol import TypeEnv
 from lang2.checker.catch_arms import CatchArmInfo, validate_catch_arms
+from lang2.types_core import TypeTable, TypeId, TypeKind
+from lang2.types_core import TypeTable, TypeId, TypeKind
 
 
 @dataclass
@@ -40,6 +42,8 @@ class FnSignature:
 	name: str
 	return_type: Any
 	throws_events: Tuple[str, ...] = ()
+	return_type_id: Optional[TypeId] = None  # resolved TypeId (checker-owned)
+	error_type_id: Optional[TypeId] = None   # resolved error TypeId
 
 
 @dataclass
@@ -58,8 +62,10 @@ class FnInfo:
 	# Optional fields reserved for the real checker; left as None here.
 	declared_events: Optional[FrozenSet[str]] = None
 	span: Optional[Any] = None  # typically a Span/Location
-	return_type: Optional[Any] = None
-	error_type: Optional[Any] = None
+	return_type: Optional[Any] = None  # legacy placeholder (to be TypeId)
+	error_type: Optional[Any] = None   # legacy placeholder (to be TypeId)
+	return_type_id: Optional[TypeId] = None
+	error_type_id: Optional[TypeId] = None
 
 
 @dataclass
@@ -87,7 +93,8 @@ class Checker:
 	callers should prefer `signatures` and treat `declared_can_throw` as a
 	deprecated convenience. A real checker will compute declared_can_throw from
 	signatures (FnResult/throws) and the type system, and validate catch arms
-	against an exception catalog.
+	against an exception catalog. The `declared_can_throw` map is a legacy path
+	and slated for removal once real signatures land.
 	"""
 
 	def __init__(
@@ -105,6 +112,11 @@ class Checker:
 		self._signatures = signatures or {}
 		self._catch_arms = catch_arms or {}
 		self._exception_catalog = dict(exception_catalog) if exception_catalog else None
+		# Naive type table for return type resolution; real checker will own this.
+		self._type_table = TypeTable()
+		self._int_type = self._type_table.new_scalar("Int")
+		self._bool_type = self._type_table.new_scalar("Bool")
+		self._error_type = self._type_table.new_error("Error")
 
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
 		"""
@@ -123,10 +135,17 @@ class Checker:
 			sig = self._signatures.get(name)
 			declared_events: Optional[FrozenSet[str]] = None
 			return_type = None
+			return_type_id: Optional[TypeId] = None
+			error_type_id: Optional[TypeId] = None
 
 			if sig is not None:
 				declared_events = frozenset(sig.throws_events) if sig.throws_events else None
 				return_type = sig.return_type
+				return_type_id, error_type_id = self._resolve_signature_types(sig)
+				sig.return_type_id = return_type_id
+				sig.error_type_id = error_type_id
+				if declared_events is None and sig.throws_events:
+					declared_events = frozenset(sig.throws_events)
 
 			if declared_can_throw is None:
 				if sig is not None:
@@ -143,6 +162,8 @@ class Checker:
 				declared_can_throw=declared_can_throw,
 				declared_events=declared_events,
 				return_type=return_type,
+				return_type_id=return_type_id,
+				error_type_id=error_type_id,
 			)
 
 		# TODO: real checker will:
@@ -172,3 +193,56 @@ class Checker:
 		if isinstance(return_type, tuple) and return_type and return_type[0] == "FnResult":
 			return True
 		return False
+
+	def _resolve_signature_types(self, sig: FnSignature) -> tuple[Optional[TypeId], Optional[TypeId]]:
+		"""
+		Naively map a signature's return type into TypeIds using the TypeTable.
+
+		This is a stopgap until real type resolution exists; it recognizes:
+		- strings containing 'FnResult' -> FnResult<Int, Error>
+		- tuple ('FnResult', ok, err) -> FnResult of naive ok/err mapping
+		- strings 'Int'/'Bool' -> scalar types
+		- fallback: Unknown
+		"""
+		rt = sig.return_type
+		if isinstance(rt, str):
+			if "FnResult" in rt:
+				return self._type_table.new_fnresult(self._int_type, self._error_type), self._error_type
+			if rt == "Int":
+				return self._int_type, None
+			if rt == "Bool":
+				return self._bool_type, None
+			# Unknown string maps to a scalar placeholder
+			return self._type_table.new_scalar(rt), None
+		if isinstance(rt, tuple):
+			if len(rt) == 3 and rt[0] == "FnResult":
+				ok = self._map_opaque(rt[1])
+				err = self._map_opaque(rt[2])
+				return self._type_table.new_fnresult(ok, err), err
+			if len(rt) == 2:
+				ok = self._map_opaque(rt[0])
+				err = self._map_opaque(rt[1])
+				return self._type_table.new_fnresult(ok, err), err
+		# Fallback unknown
+		return self._type_table.new_unknown("UnknownReturn"), None
+
+	def _map_opaque(self, val: Any) -> TypeId:
+		"""Naively map an opaque return component into a TypeId."""
+		if isinstance(val, str):
+			if val == "Int":
+				return self._int_type
+			if val == "Bool":
+				return self._bool_type
+			if "Error" in val:
+				return self._error_type
+			return self._type_table.new_scalar(val)
+		if isinstance(val, tuple):
+			if len(val) == 2:
+				ok = self._map_opaque(val[0])
+				err = self._map_opaque(val[1])
+				return self._type_table.new_fnresult(ok, err)
+			if len(val) >= 3 and val[0] == "FnResult":
+				ok = self._map_opaque(val[1])
+				err = self._map_opaque(val[2])
+				return self._type_table.new_fnresult(ok, err)
+		return self._type_table.new_unknown(str(val))

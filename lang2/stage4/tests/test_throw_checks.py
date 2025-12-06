@@ -192,13 +192,13 @@ def test_structural_fnresult_check_flags_forwarding_cases():
 			constructs_error=False,
 			exception_types=set(),
 			may_fail_sites=set(),
-			declared_can_throw=True,
+			declared_can_throw=True,  # local fixture; ok to keep literal here
 		),
 		"alias_local": FuncThrowInfo(
 			constructs_error=False,
 			exception_types=set(),
 			may_fail_sites=set(),
-			declared_can_throw=True,
+			declared_can_throw=True,  # local fixture; ok to keep literal here
 		),
 	}
 
