@@ -74,6 +74,7 @@ def compile_stubbed_funcs(
 		declared_can_throw=declared,
 		type_env=checked.type_env,
 		ssa_funcs=None,
+		diagnostics=checked.diagnostics,
 	)
 
 	return mir_funcs

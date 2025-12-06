@@ -15,8 +15,9 @@ lowering/SSA so those passes stay structural.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Set
+from typing import Dict, List, Optional, Set
 
+from lang2.diagnostics import Diagnostic
 from lang2.stage3 import ThrowSummary
 from lang2.stage2 import MirFunc, Return, ConstructResultOk, ConstructResultErr
 from lang2.types_protocol import TypeEnv
@@ -37,6 +38,19 @@ class FuncThrowInfo:
 	exception_types: Set[str]
 	may_fail_sites: Set[tuple[str, int]]
 	declared_can_throw: bool
+
+
+def _report(msg: str, diagnostics: Optional[List[Diagnostic]]) -> None:
+	"""
+	Either append a Diagnostic to the provided list or raise RuntimeError.
+
+	Stage4 currently uses RuntimeError as a stand-in in tests; the real driver
+	will pass a diagnostics sink so we do not throw here.
+	"""
+	if diagnostics is not None:
+		diagnostics.append(Diagnostic(message=msg, severity="error", span=None))
+	else:
+		raise RuntimeError(msg)
 
 
 def build_func_throw_info(
@@ -60,7 +74,10 @@ def build_func_throw_info(
 	return out
 
 
-def enforce_can_throw_invariants(func_infos: Dict[str, FuncThrowInfo]) -> None:
+def enforce_can_throw_invariants(
+	func_infos: Dict[str, FuncThrowInfo],
+	diagnostics: Optional[List[Diagnostic]] = None,
+) -> None:
 	"""
 	Basic invariants:
 	  - If a function is not declared can-throw, it must not construct errors.
@@ -68,12 +85,16 @@ def enforce_can_throw_invariants(func_infos: Dict[str, FuncThrowInfo]) -> None:
 	"""
 	for fname, info in func_infos.items():
 		if info.constructs_error and not info.declared_can_throw:
-			raise RuntimeError(f"function {fname} constructs an Error but is not declared can-throw")
+			_report(
+				msg=f"function {fname} constructs an Error but is not declared can-throw",
+				diagnostics=diagnostics,
+			)
 
 
 def enforce_return_shape_for_can_throw(
 	func_infos: Dict[str, FuncThrowInfo],
 	funcs: Dict[str, MirFunc],
+	diagnostics: Optional[List[Diagnostic]] = None,
 ) -> None:
 	"""
 	Additional invariant:
@@ -92,14 +113,19 @@ def enforce_return_shape_for_can_throw(
 		for block in fn.blocks.values():
 			term = block.terminator
 			if isinstance(term, Return) and term.value is None:
-				raise RuntimeError(
-					f"function {fname} is declared can-throw but has a bare return in block {block.name}"
+				_report(
+					msg=(
+						f"function {fname} is declared can-throw but has a bare return in block "
+						f"{block.name}"
+					),
+					diagnostics=diagnostics,
 				)
 
 
 def enforce_fnresult_returns_for_can_throw(
 	func_infos: Dict[str, FuncThrowInfo],
 	funcs: Dict[str, MirFunc],
+	diagnostics: Optional[List[Diagnostic]] = None,
 ) -> None:
 	"""
 	Stronger return-shape invariant for can-throw functions:
@@ -137,9 +163,12 @@ def enforce_fnresult_returns_for_can_throw(
 				if found:
 					break
 			if not found:
-				raise RuntimeError(
-					f"function {fname} is declared can-throw but return in block {block.name} "
-					f"does not return a FnResult (no ConstructResultOk/Err defines {return_val})"
+				_report(
+					msg=(
+						f"function {fname} is declared can-throw but return in block {block.name} "
+						f"does not return a FnResult (no ConstructResultOk/Err defines {return_val})"
+					),
+					diagnostics=diagnostics,
 				)
 
 
@@ -147,6 +176,7 @@ def enforce_fnresult_returns_typeaware(
 	func_infos: Dict[str, FuncThrowInfo],
 	ssa_funcs: Dict[str, "SsaFunc"],  # type: ignore[name-defined]
 	type_env: TypeEnv,
+	diagnostics: Optional[List[Diagnostic]] = None,
 ) -> None:
 	"""
 	Minimal type-aware FnResult return check.
@@ -177,7 +207,7 @@ def enforce_fnresult_returns_typeaware(
 					)
 					break
 		if fn_type_error is not None:
-			raise RuntimeError(fn_type_error)
+			_report(msg=fn_type_error, diagnostics=diagnostics)
 
 
 def run_throw_checks(
@@ -186,6 +216,7 @@ def run_throw_checks(
 	declared_can_throw: Dict[str, bool],
 	ssa_funcs: Dict[str, "SsaFunc"] | None = None,  # type: ignore[name-defined]
 	type_env: TypeEnv | None = None,
+	diagnostics: Optional[List[Diagnostic]] = None,
 ) -> Dict[str, FuncThrowInfo]:
 	"""
 	Convenience wrapper to build FuncThrowInfo and run all stage4 throw invariants.
@@ -202,13 +233,22 @@ def run_throw_checks(
 	  5. return the FuncThrowInfo map for further stages to consume.
 	"""
 	func_infos = build_func_throw_info(summaries, declared_can_throw)
-	enforce_can_throw_invariants(func_infos)
-	enforce_return_shape_for_can_throw(func_infos, funcs)
+	enforce_can_throw_invariants(func_infos, diagnostics=diagnostics)
+	enforce_return_shape_for_can_throw(func_infos, funcs, diagnostics=diagnostics)
 	# FnResult shape: run either the structural guard (untyped/unit tests) or
 	# the type-aware guard (typed pipeline). Avoid double-errors so that typed
 	# paths can return/forward FnResult values freely.
 	if ssa_funcs is not None and type_env is not None:
-		enforce_fnresult_returns_typeaware(func_infos, ssa_funcs, type_env)
+		enforce_fnresult_returns_typeaware(
+			func_infos,
+			ssa_funcs,
+			type_env,
+			diagnostics=diagnostics,
+		)
 	else:
-		enforce_fnresult_returns_for_can_throw(func_infos, funcs)
+		enforce_fnresult_returns_for_can_throw(
+			func_infos,
+			funcs,
+			diagnostics=diagnostics,
+		)
 	return func_infos

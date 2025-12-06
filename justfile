@@ -57,7 +57,7 @@ parse-examples:
 	./.venv/bin/python3 tools/draft_linter.py examples
 
 # Lang2 staged compiler tests
-lang2-test: lang2-stage1-test lang2-stage2-test lang2-stage3-test lang2-stage4-test
+lang2-test: lang2-stage1-test lang2-stage2-test lang2-stage3-test lang2-stage4-test lang2-llvm-test
 	@echo "lang2 tests: Success."
 
 lang2-stage1-test:
@@ -91,6 +91,10 @@ lang2-stage4-test:
 	  exit 1; \
 	fi
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage4/tests
+
+# Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
+lang2-llvm-test:
+	./.venv/bin/python3 tools/test-llvm/test_codegen.py /tmp/lang2_test_codegen.o
 
 stage-for-review:
 	rm -rf staged

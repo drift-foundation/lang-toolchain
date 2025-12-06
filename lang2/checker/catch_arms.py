@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence, Set
 
+from lang2.diagnostics import Diagnostic
+
 
 @dataclass
 class CatchArmInfo:
@@ -23,7 +25,19 @@ class CatchArmInfo:
 	span: Optional[str] = None  # placeholder for a real Span/Loc type
 
 
-def validate_catch_arms(arms: Sequence[CatchArmInfo], known_events: Set[str]) -> None:
+def _report(msg: str, diagnostics: Optional[list[Diagnostic]]) -> None:
+	"""Append a diagnostic if provided, otherwise raise RuntimeError."""
+	if diagnostics is not None:
+		diagnostics.append(Diagnostic(message=msg, severity="error", span=None))
+	else:
+		raise RuntimeError(msg)
+
+
+def validate_catch_arms(
+	arms: Sequence[CatchArmInfo],
+	known_events: Set[str],
+	diagnostics: Optional[list[Diagnostic]] = None,
+) -> None:
 	"""
 	Validate a list of catch arms:
 
@@ -40,15 +54,14 @@ def validate_catch_arms(arms: Sequence[CatchArmInfo], known_events: Set[str]) ->
 	for idx, arm in enumerate(arms):
 		if arm.event_name is None:
 			if catch_all_seen:
-				raise RuntimeError("multiple catch-all arms are not allowed")
+				_report("multiple catch-all arms are not allowed", diagnostics)
 			catch_all_seen = True
 		else:
 			if arm.event_name in seen_events:
-				raise RuntimeError(f"duplicate catch arm for event {arm.event_name}")
+				_report(f"duplicate catch arm for event {arm.event_name}", diagnostics)
 			if arm.event_name not in known_events:
-				raise RuntimeError(f"unknown catch event {arm.event_name}")
+				_report(f"unknown catch event {arm.event_name}", diagnostics)
 			seen_events.add(arm.event_name)
 		# catch-all must be last
 		if catch_all_seen and idx != len(arms) - 1:
-			raise RuntimeError("catch-all must be the last catch arm")
-
+			_report("catch-all must be the last catch arm", diagnostics)

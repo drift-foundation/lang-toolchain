@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 # author: Sławomir Liszniański; created: 2025-12-04
-"""
+r"""
 Experimental SSA: ensure Φ placement on a simple diamond CFG.
 
 This exercises `MirToSSA.run_experimental_multi_block` using a classic diamond:
