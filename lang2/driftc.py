@@ -58,6 +58,7 @@ def compile_stubbed_funcs(
 	    are still rejected by the SSA pass. The preferred path is for the checker
 	    to supply `checked.type_env`; when absent we ask the checker to infer one
 	    from SSA using its TypeTable/signatures.
+	  # TODO: drop declared_can_throw once all callers provide signatures/parsing.
 
 	Returns:
 	  dict of function name -> lowered MIR function. When `return_checked` is

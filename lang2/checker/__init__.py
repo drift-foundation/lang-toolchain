@@ -123,6 +123,7 @@ class Checker:
 		self._bool_type = self._type_table.new_scalar("Bool")
 		self._error_type = self._type_table.new_error("Error")
 		self._unknown_type = self._type_table.new_unknown("Unknown")
+		# TODO: remove declared_can_throw shim once real parser/type checker supplies signatures.
 
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
 		"""

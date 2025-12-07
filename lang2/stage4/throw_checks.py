@@ -240,6 +240,12 @@ def enforce_fnresult_returns_typeaware(
 							f"in block {block.name}; declare FnResult/throws or adjust the signature"
 						)
 						break
+					if info.return_type_id is not None and ty != info.return_type_id:
+						fn_type_error = (
+							f"function {fname} returns value of type {ty!r} in block {block.name} "
+							f"but signature return type is {info.return_type_id!r}"
+						)
+						break
 		if fn_type_error is not None:
 			_report(msg=fn_type_error, diagnostics=diagnostics)
 
