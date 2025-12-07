@@ -5,6 +5,7 @@
 - LLVM backend tests relocated to `lang2/codegen/llvm/tests/`; `just lang2-codegen-test` now runs them there, still cleaning `build/tests/lang2` and running IR/e2e runners.
 - Drift-source e2e runner documents current simple_return case; codegen path remains SSA-first with wrapper helpers (`compile_to_llvm_ir_for_tests`) reusing the same SSA as throw checks.
 - Work-progress notes updated accordingly; refactor considered complete, ready to tackle FnSignature enrichment and additional e2e coverage next.
+- FnSignature/FnInfo enrichment: TypeId fields are now primary (param_type_ids/return_type_id/declared_can_throw/flags/error_type_id); FnInfo owns the signature and inferred_may_throw. The checker prefers pre-resolved TypeIds in signatures, falls back to legacy raw resolution only when missing, defaults declared_can_throw from throws_events, and uses TypeKind.FNRESULT for try-sugar checks. A shallow HIR walk marks inferred_may_throw and diagnoses missing throws. All tests remain green.
 
 ## 2025-12-01
 - Hardened exception event codes: `Error.code` is `I64` with a 4+60 bit layout (kinds + payload), user exceptions hash their FQN via xxHash64, per-module collisions are rejected, and metadata now records FQN/kind/payload/event_code for future export.
