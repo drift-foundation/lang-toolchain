@@ -80,6 +80,27 @@ def lower_ssa_func_to_llvm(
 	return builder.lower()
 
 
+def lower_module_to_llvm(
+	funcs: Mapping[str, MirFunc],
+	ssa_funcs: Mapping[str, SsaFunc],
+	fn_infos: Mapping[str, FnInfo],
+) -> LlvmModuleBuilder:
+	"""
+	Lower a set of SSA functions to an LLVM module.
+
+	Args:
+	  funcs: name -> MIR function
+	  ssa_funcs: name -> SSA wrapper (must align with funcs)
+	  fn_infos: name -> FnInfo for each function
+	"""
+	mod = LlvmModuleBuilder()
+	for name, func in funcs.items():
+		ssa = ssa_funcs[name]
+		fn_info = fn_infos[name]
+		mod.emit_func(lower_ssa_func_to_llvm(func, ssa, fn_info, fn_infos))
+	return mod
+
+
 # Internal helpers -------------------------------------------------------------
 
 
@@ -100,6 +121,29 @@ class LlvmModuleBuilder:
 
 	def emit_func(self, text: str) -> None:
 		self.funcs.append(text)
+
+	def emit_entry_wrapper(self, drift_main: str = "drift_main") -> None:
+		"""
+		Emit a tiny OS entrypoint wrapper that calls `@drift_main` and truncs to i32.
+
+		This keeps the Drift ABI (i64 Int, FnResult later) distinct from the
+		process ABI. Err-mapping is not yet implemented; the wrapper simply
+		truncates the i64 return to i32 for exit.
+		"""
+		self.funcs.append(
+			"\n".join(
+				[
+					f"declare i64 @{drift_main}()",
+					"",
+					"define i32 @main() {",
+					"entry:",
+					f"  %ret = call i64 @{drift_main}()",
+					"  %trunc = trunc i64 %ret to i32",
+					"  ret i32 %trunc",
+					"}",
+				]
+			)
+		)
 
 	def render(self) -> str:
 		lines: List[str] = []
@@ -216,7 +260,9 @@ class _FuncBuilder:
 			tmp1 = self._fresh("err1")
 			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef i1 1, 0")
 			self.lines.append(f"  {tmp1} = insertvalue {FNRESULT_INT_ERROR} {tmp0} i64 0, 1")
-			self.lines.append(f"  {dest} = insertvalue {FNRESULT_INT_ERROR} {tmp1} {DRIFT_ERROR_TYPE} {err_val}, 2")
+			self.lines.append(
+				f"  {dest} = insertvalue {FNRESULT_INT_ERROR} {tmp1}, {DRIFT_ERROR_TYPE} {err_val}, 2"
+			)
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
@@ -272,7 +318,7 @@ class _FuncBuilder:
 				self.lines.append(f"  ret {FNRESULT_INT_ERROR} {val}")
 			else:
 				# Enforce scalar return shape for non-can-throw.
-				if self.value_types.get(val) not in (None, "i64"):
+				if self.value_types.get(val) != "i64":
 					raise NotImplementedError("LLVM codegen v1: non-can-throw return must be Int")
 				self.lines.append(f"  ret i64 {val}")
 		else:
