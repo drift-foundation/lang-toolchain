@@ -27,9 +27,11 @@ from lang2.stage1.hir_utils import collect_catch_arms_from_block
 from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
+from lang2.stage4 import MirToSSA
 from lang2.checker import Checker, CheckedProgram, FnSignature
 from lang2.checker.catch_arms import CatchArmInfo
 from lang2.diagnostics import Diagnostic
+from lang2.codegen.llvm import lower_module_to_llvm
 
 
 def compile_stubbed_funcs(
@@ -138,4 +140,35 @@ def compile_stubbed_funcs(
 	return mir_funcs
 
 
-__all__ = ["compile_stubbed_funcs"]
+def compile_to_llvm_ir_for_tests(
+	func_hirs: Mapping[str, H.HBlock],
+	signatures: Mapping[str, FnSignature],
+	exc_env: Mapping[str, int] | None = None,
+	entry: str = "drift_main",
+) -> str:
+	"""
+	End-to-end helper: HIR -> MIR -> throw checks -> SSA -> LLVM IR for tests.
+
+	This mirrors the stub driver pipeline and finishes by lowering SSA to LLVM IR.
+	It is intentionally narrow: assumes a single Drift entry `drift_main` (or
+	`entry`) returning `Int` or `FnResult<Int, Error>` and uses the v1 ABI.
+	"""
+	# First, run the normal pipeline to get MIR + FnInfos (and diagnostics if any).
+	mir_funcs, checked = compile_stubbed_funcs(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exc_env,
+		return_checked=True,
+		build_ssa=False,
+	)
+
+	# Build SSA for each function; loops/backedges are rejected by MirToSSA.
+	ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
+
+	# Lower module to LLVM IR and append the OS entry wrapper.
+	module = lower_module_to_llvm(mir_funcs, ssa_funcs, checked.fn_infos)
+	module.emit_entry_wrapper(entry)
+	return module.render()
+
+
+__all__ = ["compile_stubbed_funcs", "compile_to_llvm_ir_for_tests"]
