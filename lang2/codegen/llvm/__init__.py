@@ -10,6 +10,6 @@ functions. Additional types and calling conventions will be added
 incrementally as the backend grows.
 """
 
-from .llvm_codegen import LlvmModuleBuilder, lower_mir_func_to_llvm
+from .llvm_codegen import LlvmModuleBuilder, lower_ssa_func_to_llvm
 
-__all__ = ["LlvmModuleBuilder", "lower_mir_func_to_llvm"]
+__all__ = ["LlvmModuleBuilder", "lower_ssa_func_to_llvm"]

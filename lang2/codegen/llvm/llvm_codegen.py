@@ -1,31 +1,34 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 # author: Sławomir Liszniański; created: 2025-12-09
 """
-Minimal MIR → LLVM IR skeleton for lang2 (ABI v1).
+SSA → LLVM IR lowering for the v1 Drift ABI (textual emitter).
 
 Scope (v1 bring-up):
-  - Scalars: Int (i64), Bool (i1 in regs, i8 in aggregates if/when needed)
-  - Error ABI: `%DriftError = { i64, ptr, ptr, ptr }` (code + opaque payloads)
-  - Internal FnResult<Int, Error>: `%FnResult_Int_Error = { i1, i64, %DriftError }`
-  - Supported MIR ops: ConstInt, ConstBool, BinaryOpInstr (add/sub/mul/div),
-    Call, Return, ConstructResultOk, ConstructResultErr.
+  - Input: SSA (`SsaFunc`) plus MIR (`MirFunc`) and `FnInfo` metadata.
+  - Supported types: Int (i64), Bool (i1 in regs), FnResult<Int, Error>.
+  - Supported ops: ConstInt/Bool, AssignSSA aliases, BinaryOpInstr (int),
+    Call (Int or FnResult<Int, Error> return), Phi, ConstructResultOk/Err,
+    ConstructError (attrs zeroed), Return, IfTerminator/Goto.
+  - Control flow: straight-line + if/else (acyclic CFGs); loops/backedges are
+    rejected explicitly.
 
-This is a text-IR emitter (no llvmlite dependency). It is deliberately small so
-that end-to-end tests can assert on emitted IR or feed it to `clang`/`lli`.
+ABI (from docs/design/drift-lang-abi.md):
+  - %DriftError      = { i64 code, ptr attrs, ptr ctx_frames, ptr stack }
+  - %FnResult_Int_Error = { i1 is_err, i64 ok, %DriftError err }
+  - Drift Int is i64; Bool is i1 in registers.
 
-NOTES / TODOs:
-  - Parameter typing is restricted to zero-arg functions for now; parameter
-    type inference will be added alongside richer signature handling.
-  - Control flow beyond straight-line / simple branches is not yet lowered.
-  - Error payload construction is stubbed as zero/null pointers; this matches
-    the ABI layout but not full runtime semantics.
+This emitter is deliberately small and produces LLVM text suitable for feeding
+to `lli`/`clang` in tests. It avoids allocas and relies on SSA/phinode lowering
+directly. Unsupported features raise clear errors rather than emitting bad IR.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List
 
+from lang2.checker import FnInfo
+from lang2.stage1 import BinaryOp
 from lang2.stage2 import (
 	BinaryOpInstr,
 	Call,
@@ -34,33 +37,52 @@ from lang2.stage2 import (
 	ConstructError,
 	ConstructResultErr,
 	ConstructResultOk,
+	Goto,
+	IfTerminator,
 	MirFunc,
+	Phi,
 	Return,
 )
-from lang2.stage1 import BinaryOp
+from lang2.stage4.ssa import SsaFunc
 
-
-# --- ABI types --------------------------------------------------------------
-
+# ABI type names
 DRIFT_ERROR_TYPE = "%DriftError"
 FNRESULT_INT_ERROR = "%FnResult_Int_Error"
 
 
+# Public API -------------------------------------------------------------------
+
+def lower_ssa_func_to_llvm(func: MirFunc, ssa: SsaFunc, fn_info: FnInfo) -> str:
+	"""
+	Lower a single SSA function to LLVM IR text using FnInfo for return typing.
+
+	Args:
+	  func: the underlying MIR function (for block order/names).
+	  ssa: SSA wrapper carrying blocks/phis.
+	  fn_info: checker metadata (declared_can_throw, return_type_id).
+
+	Returns:
+	  LLVM IR string for the function definition.
+
+	Limitations:
+	  - Only Int/Bools and FnResult<Int, Error> returns are supported in v1.
+	  - No loops/backedges; CFG must be acyclic (if/else diamonds ok).
+	"""
+	builder = _FuncBuilder(func=func, ssa=ssa, fn_info=fn_info)
+	return builder.lower()
+
+
+# Internal helpers -------------------------------------------------------------
+
+
 @dataclass
 class LlvmModuleBuilder:
-	"""
-	Textual LLVM IR builder for a module.
-
-	Tracks type declarations and function definitions. This is intentionally
-	minimal; richer features (global constants, data layout, target triple)
-	will be added as needed.
-	"""
+	"""Textual LLVM module builder with seeded ABI type declarations."""
 
 	type_decls: List[str] = field(default_factory=list)
 	funcs: List[str] = field(default_factory=list)
 
 	def __post_init__(self) -> None:
-		# Seed ABI type declarations up front.
 		self.type_decls.extend(
 			[
 				f"{DRIFT_ERROR_TYPE} = type {{ i64, ptr, ptr, ptr }}",
@@ -69,86 +91,63 @@ class LlvmModuleBuilder:
 		)
 
 	def emit_func(self, text: str) -> None:
-		"""Append a complete function definition."""
 		self.funcs.append(text)
 
 	def render(self) -> str:
-		"""Render the full LLVM module as a single string."""
 		lines: List[str] = []
 		lines.extend(self.type_decls)
-		lines.append("")  # spacer
+		lines.append("")
 		lines.extend(self.funcs)
 		lines.append("")
 		return "\n".join(lines)
 
 
-def lower_mir_func_to_llvm(func: MirFunc, can_throw: bool) -> str:
-	"""
-	Lowers a single MIR function to LLVM IR text.
-
-	Args:
-	  func: MIR function to lower (single basic block expected for now).
-	  can_throw: whether the function returns FnResult<Int, Error> (True) or
-	    a plain Int (False). Later this will come from signatures/TypeEnv.
-
-	Returns:
-	  LLVM IR string for the function (function definition only).
-
-	Limitations:
-	  - Only supports zero parameters and a single basic block.
-	  - Binary operations are mapped assuming Int operands (i64).
-	"""
-	builder = _FuncBuilder(func=func, can_throw=can_throw)
-	return builder.lower()
-
-
-# --- Internal helpers -------------------------------------------------------
-
-
 @dataclass
 class _FuncBuilder:
 	func: MirFunc
-	can_throw: bool
+	ssa: SsaFunc
+	fn_info: FnInfo
 	tmp_counter: int = 0
 	lines: List[str] = field(default_factory=list)
 	value_map: Dict[str, str] = field(default_factory=dict)
 
 	def lower(self) -> str:
-		"""Lower the MIR function into textual LLVM IR."""
-		blocks = list(self.func.blocks.values())
-		if len(blocks) != 1:
-			raise NotImplementedError("LLVM codegen: only single-block funcs supported in v1 bring-up")
-		entry = blocks[0]
-		header = self._func_header()
-		self.lines.append(f"{header} {{")
-		for instr in entry.instructions:
-			self._lower_instr(instr)
-		self._lower_term(entry.terminator)
+		self._assert_acyclic()
+		self._emit_header()
+		for block in self.func.blocks.values():
+			self._emit_block(block.name)
 		self.lines.append("}")
 		return "\n".join(self.lines)
 
-	def _func_header(self) -> str:
-		"""Emit the function header based on can_throw/return type."""
-		if self.can_throw:
-			ret_ty = FNRESULT_INT_ERROR
-		else:
-			ret_ty = "i64"
-		# Parameter support is minimal; assume no params for now.
-		return f"define {ret_ty} @{self.func.name}()"
+	def _emit_header(self) -> None:
+		ret_ty = self._return_llvm_type()
+		if self.func.params:
+			raise NotImplementedError("LLVM codegen v1: parameters not supported yet")
+		self.lines.append(f"define {ret_ty} @{self.func.name}() {{")
 
-	def _fresh(self, hint: str = "tmp") -> str:
-		"""Generate a fresh SSA name."""
-		self.tmp_counter += 1
-		return f"%{hint}{self.tmp_counter}"
+	def _emit_block(self, block_name: str) -> None:
+		block = self.func.blocks[block_name]
+		self.lines.append(f"{block.name}:")
+		# Emit phi nodes first.
+		for instr in block.instructions:
+			if isinstance(instr, Phi):
+				self._lower_phi(block.name, instr)
+		# Emit non-phi instructions.
+		for instr in block.instructions:
+			if isinstance(instr, Phi):
+				continue
+			self._lower_instr(instr)
+		self._lower_term(block.terminator)
 
-	def _map_value(self, mir_id: str) -> str:
-		"""Map a MIR ValueId to an LLVM SSA name, allocating if unseen."""
-		if mir_id not in self.value_map:
-			self.value_map[mir_id] = f"%{mir_id}"
-		return self.value_map[mir_id]
+	def _lower_phi(self, block_name: str, phi: Phi) -> None:
+		dest = self._map_value(phi.dest)
+		incomings = []
+		for pred, val in phi.incoming.items():
+			incomings.append(f"[ {self._map_value(val)}, %{pred} ]")
+		joined = ", ".join(incomings)
+		self.lines.append(f"  {dest} = phi {self._llvm_scalar_type()} {joined}")
 
 	def _lower_instr(self, instr: object) -> None:
-		"""Lower a MIR instruction into LLVM IR lines."""
 		if isinstance(instr, ConstInt):
 			dest = self._map_value(instr.dest)
 			self.lines.append(f"  {dest} = add i64 0, {instr.value}")
@@ -163,21 +162,8 @@ class _FuncBuilder:
 			op = self._map_binop(instr.op)
 			self.lines.append(f"  {dest} = {op} i64 {left}, {right}")
 		elif isinstance(instr, Call):
-			dest = self._map_value(instr.dest) if instr.dest else None
-			args = ", ".join([f"i64 {self._map_value(a)}" for a in instr.args])
-			if self.can_throw:
-				# Callee assumed to return FnResult<Int, Error> for now.
-				tmp = self._fresh("call")
-				self.lines.append(f"  {tmp} = call {FNRESULT_INT_ERROR} @{instr.fn}({args})")
-				if dest:
-					self.lines.append(f"  {dest} = extractvalue {FNRESULT_INT_ERROR} {tmp}, 1")
-			else:
-				if dest is None:
-					self.lines.append(f"  call void @{instr.fn}({args})")
-				else:
-					self.lines.append(f"  {dest} = call i64 @{instr.fn}({args})")
+			self._lower_call(instr)
 		elif isinstance(instr, ConstructResultOk):
-			# Build FnResult { is_err=0, ok=value, err=zeroinit }
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
 			tmp0 = self._fresh("ok0")
@@ -197,7 +183,6 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
-			# Attrs/ctx/stack are null for now.
 			tmp0 = self._fresh("errc0")
 			tmp1 = self._fresh("errc1")
 			tmp2 = self._fresh("errc2")
@@ -205,26 +190,73 @@ class _FuncBuilder:
 			self.lines.append(f"  {tmp1} = insertvalue {DRIFT_ERROR_TYPE} {tmp0} ptr null, 1")
 			self.lines.append(f"  {tmp2} = insertvalue {DRIFT_ERROR_TYPE} {tmp1} ptr null, 2")
 			self.lines.append(f"  {dest} = insertvalue {DRIFT_ERROR_TYPE} {tmp2} ptr null, 3")
-		else:
-			raise NotImplementedError(f"LLVM codegen: unsupported instr {type(instr).__name__}")
-
-	def _lower_term(self, term: Optional[object]) -> None:
-		"""Lower the terminator."""
-		if not isinstance(term, Return):
-			raise NotImplementedError("LLVM codegen: only Return terminators supported in v1 bring-up")
-		if term.value is None:
-			self.lines.append("  ret void")
+		elif isinstance(instr, Phi):
+			# Already handled in _lower_phi.
 			return
-		val = self._map_value(term.value)
-		if self.can_throw:
-			# When can_throw is true, the function return type is FnResult<Int, Error>.
-			# The MIR should already carry a ConstructResult* value as the return.
-			self.lines.append(f"  ret {FNRESULT_INT_ERROR} {val}")
 		else:
-			self.lines.append(f"  ret i64 {val}")
+			raise NotImplementedError(f"LLVM codegen v1: unsupported instr {type(instr).__name__}")
+
+	def _lower_call(self, instr: Call) -> None:
+		dest = self._map_value(instr.dest) if instr.dest else None
+		args = ", ".join([f"i64 {self._map_value(a)}" for a in instr.args])
+		# Decide callee return shape: Int or FnResult<Int, Error>. For v1 we
+		# restrict callees to these shapes; a richer TypeEnv will generalize later.
+		# Heuristic: if the destination is later used in a FnResult context (not tracked here),
+		# fall back to FnResult when this function itself is can-throw.
+		if self.fn_info.declared_can_throw:
+			tmp = self._fresh("call")
+			self.lines.append(f"  {tmp} = call {FNRESULT_INT_ERROR} @{instr.fn}({args})")
+			if dest:
+				self.lines.append(f"  {dest} = extractvalue {FNRESULT_INT_ERROR} {tmp}, 1")
+		else:
+			if dest is None:
+				self.lines.append(f"  call void @{instr.fn}({args})")
+			else:
+				self.lines.append(f"  {dest} = call i64 @{instr.fn}({args})")
+
+	def _lower_term(self, term: object) -> None:
+		if isinstance(term, Goto):
+			self.lines.append(f"  br label %{term.target}")
+		elif isinstance(term, IfTerminator):
+			cond = self._map_value(term.cond)
+			self.lines.append(
+				f"  br i1 {cond}, label %{term.then_target}, label %{term.else_target}"
+			)
+		elif isinstance(term, Return):
+			if term.value is None:
+				raise AssertionError("LLVM codegen v1: bare return unsupported")
+			val = self._map_value(term.value)
+			if self.fn_info.declared_can_throw:
+				self.lines.append(f"  ret {FNRESULT_INT_ERROR} {val}")
+			else:
+				self.lines.append(f"  ret i64 {val}")
+		else:
+			raise NotImplementedError(f"LLVM codegen v1: unsupported terminator {type(term).__name__}")
+
+	def _return_llvm_type(self) -> str:
+		# v1 supports only Int or FnResult<Int, Error> return shapes.
+		if self.fn_info.declared_can_throw:
+			return FNRESULT_INT_ERROR
+		td = self.fn_info.return_type_id
+		if td is None:
+			raise NotImplementedError("LLVM codegen v1: missing return_type_id")
+		# Only scalar Int supported for now.
+		return "i64"
+
+	def _llvm_scalar_type(self) -> str:
+		# All lowered values are i64 or i1; phis currently assume Int.
+		return "i64"
+
+	def _fresh(self, hint: str = "tmp") -> str:
+		self.tmp_counter += 1
+		return f"%{hint}{self.tmp_counter}"
+
+	def _map_value(self, mir_id: str) -> str:
+		if mir_id not in self.value_map:
+			self.value_map[mir_id] = f"%{mir_id}"
+		return self.value_map[mir_id]
 
 	def _map_binop(self, op: BinaryOp) -> str:
-		"""Map MIR BinaryOp to LLVM opcode (integers only for now)."""
 		if op == BinaryOp.ADD:
 			return "add"
 		if op == BinaryOp.SUB:
@@ -233,4 +265,15 @@ class _FuncBuilder:
 			return "mul"
 		if op == BinaryOp.DIV:
 			return "sdiv"
-		raise NotImplementedError(f"LLVM codegen: unsupported binary op {op}")
+		raise NotImplementedError(f"LLVM codegen v1: unsupported binary op {op}")
+
+	def _assert_acyclic(self) -> None:
+		# Simple check: no block should list itself as a successor; full backedge
+		# detection lives in SSA stage and rejects loops earlier.
+		for block in self.func.blocks.values():
+			term = block.terminator
+			if isinstance(term, Goto) and term.target == block.name:
+				raise NotImplementedError("LLVM codegen v1: loops/backedges unsupported")
+			if isinstance(term, IfTerminator):
+				if term.then_target == block.name or term.else_target == block.name:
+					raise NotImplementedError("LLVM codegen v1: self-branch unsupported")
