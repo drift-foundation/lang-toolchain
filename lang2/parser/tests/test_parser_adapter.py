@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 from lang2 import stage1 as H
 from lang2.parser import parse_drift_to_hir
@@ -69,3 +70,30 @@ fn drift_main() returns FnResult<Int, Error> {
 	assert sigs["drift_main"].return_type.startswith("FnResult")
 	main = func_hirs["drift_main"]
 	assert isinstance(main.statements[0], H.HThrow)
+
+
+def test_parse_raise_expr_maps_to_throw(tmp_path: Path):
+	src = tmp_path / "main.drift"
+	src.write_text("""
+fn drift_main() returns FnResult<Int, Error> {
+    raise err_val;
+}
+""")
+	func_hirs, sigs = parse_drift_to_hir(src)
+	assert sigs["drift_main"].return_type.startswith("FnResult")
+	main = func_hirs["drift_main"]
+	assert len(main.statements) == 1
+	assert isinstance(main.statements[0], H.HThrow)
+
+
+def test_parse_unsupported_stmt_fails_loudly(tmp_path: Path):
+	src = tmp_path / "main.drift"
+	src.write_text("""
+fn drift_main() returns Int {
+    while true {
+        return 1;
+    }
+}
+""")
+	with pytest.raises(NotImplementedError):
+		parse_drift_to_hir(src)
