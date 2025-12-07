@@ -99,7 +99,8 @@ def compile_stubbed_funcs(
 		mir_funcs[name] = builder.func
 
 	# Stage3: summaries
-	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc=exc_env or {})
+	code_to_exc = {code: name for name, code in (exc_env or {}).items()}
+	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc=code_to_exc)
 
 	# Optional SSA/type-env for typed throw checks
 	ssa_funcs = None

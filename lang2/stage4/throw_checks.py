@@ -40,6 +40,7 @@ class FuncThrowInfo:
 	may_fail_sites: Set[tuple[str, int]]
 	declared_can_throw: bool
 	return_type_id: Optional[TypeId] = None
+	declared_events: Optional[Set[str]] = None
 
 
 def _report(msg: str, diagnostics: Optional[List[Diagnostic]]) -> None:
@@ -70,16 +71,20 @@ def build_func_throw_info(
 	out: Dict[str, FuncThrowInfo] = {}
 	for fname, summary in summaries.items():
 		return_ty: Optional[TypeId] = None
+		decl_events: Optional[Set[str]] = None
 		if fn_infos is not None:
 			fn_info = fn_infos.get(fname)
 			if fn_info is not None:
 				return_ty = fn_info.return_type_id
+				if getattr(fn_info, "declared_events", None) is not None:
+					decl_events = set(fn_info.declared_events)  # type: ignore[arg-type]
 		out[fname] = FuncThrowInfo(
 			constructs_error=summary.constructs_error,
 			exception_types=set(summary.exception_types),
 			may_fail_sites=set(summary.may_fail_sites),
 			declared_can_throw=declared_can_throw.get(fname, False),
 			return_type_id=return_ty,
+			declared_events=decl_events,
 		)
 	return out
 
@@ -233,6 +238,27 @@ def enforce_fnresult_returns_typeaware(
 			_report(msg=fn_type_error, diagnostics=diagnostics)
 
 
+def enforce_declared_events_superset(
+	func_infos: Dict[str, FuncThrowInfo],
+	diagnostics: Optional[List[Diagnostic]] = None,
+) -> None:
+	"""
+	Ensure thrown events are a subset of the declared event set (when provided).
+	"""
+	for fname, info in func_infos.items():
+		if info.declared_events is None:
+			continue
+		extra = info.exception_types - info.declared_events
+		if extra:
+			_report(
+				msg=(
+					f"function {fname} declares throws {sorted(info.declared_events)!r} "
+					f"but throws additional events {sorted(extra)!r}"
+				),
+				diagnostics=diagnostics,
+			)
+
+
 def run_throw_checks(
 	funcs: Dict[str, MirFunc],
 	summaries: Dict[str, ThrowSummary],
@@ -259,6 +285,7 @@ def run_throw_checks(
 	func_infos = build_func_throw_info(summaries, declared_can_throw, fn_infos=fn_infos)
 	enforce_can_throw_invariants(func_infos, diagnostics=diagnostics)
 	enforce_return_shape_for_can_throw(func_infos, funcs, diagnostics=diagnostics)
+	enforce_declared_events_superset(func_infos, diagnostics=diagnostics)
 	# FnResult shape: run either the structural guard (untyped/unit tests) or
 	# the type-aware guard (typed pipeline). Avoid double-errors so that typed
 	# paths can return/forward FnResult values freely.
