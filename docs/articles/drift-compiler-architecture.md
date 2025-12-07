@@ -1,75 +1,277 @@
-# Drift Compiler Architecture (lang2/)
-The current compiler pipeline is intentionally split into clear stages so each layer stays small and testable. This document is a guided tour for senior engineers who want a high-level map plus pointers to the hairy bits: error propagation, type safety, and where the invariants live.
+# Drift Compiler Architecture (lang2)
 
-## Acronyms
-- **AST**: Abstract Syntax Tree (stage0)
-- **DF**: Dominance Frontier
-- **CFG**: Control-Flow Graph
-- **DV**: DiagnosticValue (error payload)
-- **FnResult**: Result-like return type `<T, Error>` used for can-throw functions
-- **HIR**: High-level IR (sugar-free, stage1)
-- **IR**: Intermediate Representation (generic term for HIR/MIR/SSA)
-- **MIR**: Mid-level IR (explicit ops/CFG, stage2)
-- **SSA**: Static Single Assignment (stage4)
+The Drift compiler is a **pipeline of explicit, isolated stages**.
+Each stage has one responsibility and transforms the program into a simpler, more structured form.
 
-## Big-picture pipeline
-At a high level the compiler is a conveyor belt. Each stage owns one concern and hands a simpler, more explicit representation to the next.
+**Full end-to-end pipeline:**
+
+> **Drift source → AST → HIR → MIR → SSA → TypeEnv → Throw-checks → LLVM → clang → machine code**
+
+Every stage is testable on its own and contributes specific invariants that later stages rely on.
+
+---
+
+# 1. Drift Source → AST (Stage 0)
+
+### Purpose
+
+Turn raw source text into a syntactic tree with no sugar removed and no semantics applied.
+
+### Responsibilities
+
+* Lexing & parsing.
+* Structural representation of the program exactly as written.
+* Nodes correspond 1:1 to syntax constructs.
+* No type information, no desugaring, no CFG.
+
+### Output
+
+**AST** — Syntax-tree only; a direct mirror of the source.
+
+---
+
+# 2. AST → HIR (Stage 1)
+
+### Purpose
+
+Normalize the language into a **sugar-free, explicit** representation.
+
+### Responsibilities
+
+* Convert surface constructs into canonical forms:
+
+  * Method sugar → `HMethodCall`
+  * Indexing/field sugar → `HIndex` / `HField`
+  * DV constructors → explicit `HDVInit`
+  * Loop/if expressions → `HLoop`, `HIf`
+  * Try/throw → `HTry`, `HThrow`
+* Eliminate placeholders and implicit receivers.
+* Maintain structure but eliminate ambiguity.
+
+### Output
+
+**HIR** — A clean, sugarless representation ready for CFG construction.
+
+---
+
+# 3. HIR → MIR (Stage 2)
+
+### Purpose
+
+Lower HIR to a **control-flow-explicit intermediate representation** with clear operational semantics.
+
+### Responsibilities
+
+* Emit MIR instructions:
+
+  * `LoadLocal`, `StoreLocal`, `Call`, `MethodCall`
+  * `ConstructDV`, `ConstructError`, `ConstructResultOk/Err`
+  * `ErrorEvent`, `AssignSSA` (pre-SSA helper), `Phi`
+* Build explicit **basic blocks** and CFG with terminators:
+
+  * `Goto`, `IfTerminator`, `Return`
+* Lower try/throw into runtime-accurate dispatch:
+
+  * Throws produce `Error`
+  * Dispatch compares event codes
+  * Catch blocks bind error or fall back to catch-all
+  * Unmatched errors unwind to the nearest outer try
+  * Only at function top-level do errors become `FnResult.Err`
+* Validate catch-arm structure:
+
+  * At most one catch-all
+  * Catch-all must be last
+
+### Output
+
+**MIR** — Concrete operations + explicit CFG, but still untyped and without SSA normalization.
+
+---
+
+# 4. MIR → Pre-analysis (Stage 3)
+
+### Purpose
+
+Extract facts required by type-aware and throw-safety stages.
+
+### Responsibilities
+
+* Determine:
+
+  * Address-taken locals
+  * May-fail sites (calls, DV construction, errors)
+  * Error-construction sites (event codes, DV payloads)
+* Build **ThrowSummary** per function:
+
+  * Builds error-propagation metadata
+  * Tracks whether any error is constructed
+
+### Output
+
+**ThrowSummary** + **MIR annotations** feeding stage4.
+
+---
+
+# 5. MIR → SSA (Stage 4A)
+
+### Purpose
+
+Normalize MIR into **Static Single Assignment** form with deterministic block ordering.
+
+### Responsibilities
+
+* Compute dominators and dominance frontiers.
+* Insert φ-nodes for multi-block locals.
+* Rewrite locals into SSA variables via renaming.
+* Reject loops/backedges unless SSA supports them (current v1 accepts straight-line + if/else).
+* Produce a deterministic reverse-postorder `block_order`.
+
+### Output
+
+**SSA** — Each variable assigned exactly once; CFG ready for type checking and codegen.
+
+---
+
+# 6. Build TypeEnv (Stage 4B)
+
+### Purpose
+
+Provide type information for functions and SSA values.
+
+### Responsibilities
+
+* Checker creates canonical **FnSignature** for each function.
+* TypeEnv resolves:
+
+  * Scalar types (Int, Bool)
+  * FnResult types (`Result<T, Error>`)
+  * Error payload structure
+* Integrates with SSA:
+
+  * Tags each SSA value with a type
+  * Exposes queries (`is_fnresult`, `fnresult_parts`)
+
+### Output
+
+**TypeEnv** — complete typing needed for semantic enforcement.
+
+---
+
+# 7. Throw-checks (Stage 4C)
+
+### Purpose
+
+Enforce correctness rules about error construction and FnResult usage.
+
+### Responsibilities
+
+Using **ThrowSummary** + **TypeEnv** + **FnSignature**, the checker enforces:
+
+1. **Non–can-throw functions**
+
+   * Must not construct errors.
+   * Must not return FnResult.
+2. **Can-throw functions**
+
+   * Must not contain bare `return;` (value required).
+   * Must return a value of type `FnResult<T, Error>`.
+3. **Type-aware FnResult validation**
+
+   * Structural checks replaced by type-driven checks when TypeEnv is present.
+4. **Catch-arm validation**
+
+   * Unknown events and duplicates flagged.
+   * Invariants established for codegen.
+
+### Output
+
+Either a clean program with invariants satisfied,
+or a **CheckedProgram** containing diagnostics.
+
+---
+
+# 8. SSA → LLVM IR (Codegen)
+
+### Purpose
+
+Lower well-typed SSA to LLVM IR using the v1 Drift ABI.
+
+### Responsibilities
+
+* Emit `%DriftError` and `%FnResult_Int_Error` types.
+* Lower ops:
+
+  * Scalars → `i64` / `i1`
+  * FnResult → struct `{ i1 is_err, i64 ok, %DriftError err }`
+  * Calls: choose correct ABI based on callee signature
+  * Extractors for FnResult fields
+  * Branches and φ-nodes using SSA metadata
+* Reject unsupported patterns (e.g., loops in v1).
+* Preserve deterministic block order from SSA.
+
+### Output
+
+**LLVM IR text** suitable for:
+
+* `lli` execution
+* `clang -x ir` compilation
+* Integration in larger modules / linking
+
+---
+
+# 9. LLVM IR → clang → Machine Code
+
+### Purpose
+
+Produce actual executable machine code.
+
+### Responsibilities
+
+* Wrap Drift entry function (`drift_main`) in a C-ABI `main()`:
+
+  * Call `@drift_main`
+  * Truncate the result to `i32`
+  * Return as process exit code
+* Invoke:
+
+  ```bash
+  clang -x ir ir.ll -o a.out
+  ```
+* Run the resulting binary and observe:
+
+  * Exit code
+  * Stdout/stderr
+
+### Output
+
+**Machine code**, with behavior proven to match the semantics of the Drift program.
+
+---
+
+# Summary: The Unified Pipeline
 
 ```
-Surface AST (stage0) ──> HIR (stage1) ──> MIR (stage2) ──> SSA (stage4) ──> LLVM/obj
-                           ^ pre-analysis (stage3) feeds invariants into stage4 ^
+Drift source
+    ↓ parse
+AST (syntax only)
+    ↓ desugar
+HIR (sugar-free)
+    ↓ explicit CFG + ops
+MIR
+    ↓ pre-analysis
+Throw summaries
+    ↓ CFG→SSA
+SSA
+    ↓ typing
+TypeEnv
+    ↓ invariants
+Throw-checks
+    ↓ lowering
+LLVM IR
+    ↓ clang
+Machine code (native executable)
 ```
 
-**Stage0 (AST)** is just parsed syntax. No sugar is removed and the tree mirrors the source closely.
+Each stage builds on the previous one and enforces strict invariants, guaranteeing that by the time LLVM sees the program, **all semantic correctness has already been proven**.
 
-**Stage1 (HIR)** removes all surface sugar but stays purely syntactic. Receiver placeholders and method sugar become explicit `HMethodCall`s, indexing/field sugar become `HIndex`/`HField`, and diagnostic/exception constructors become `HDVInit`. Control-flow sugar like `while`, `for`, ternary, and try/throw are expressed in terms of explicit `HLoop`, `HIf`, `HTry`, and `HThrow`. A try uses a list of `HCatchArm` so multiple catch arms and catch-alls can be represented without semantics baked in.
-
-**Stage2 (MIR)** is the explicit, semantic-free IR of operations and blocks. It has ops for loads/stores, calls/method calls, `ConstructDV`, `ConstructError`, `ConstructResultOk/Err`, `ErrorEvent` (project event code from an Error), `AssignSSA` (SSA helper), `Phi`, etc., and only structured terminators (`Goto`, `IfTerminator`, `Return`). HIR→MIR is a visitor (no `isinstance` ladders) and rejects malformed catch arms (multiple catch-all, catch-all not last). Ternary lowers to a diamond CFG storing into a hidden local. `throw` builds an `Error` (event code from `exc_env` when known, else 0); inside a try it routes to the current try’s dispatch, otherwise wraps in `FnResult.Err` and returns. `try` lowers to explicit blocks: dispatch uses `ErrorEvent` + per-arm constants; catch blocks bind the error (binder optional) and emit another `ErrorEvent`. Unmatched errors unwind to the nearest outer try via the try stack and only return `FnResult.Err` when no outer try exists. Unknown/duplicate catch arms are rejected in lowering. Tests under `lang2/stage2/tests` cover straight-line, ternary, multi-arm try (unmatched, nested unwind, binder/no-binder, unknown events, catch-all), and legacy scenarios.
-
-**Stage3 (pre-analysis + throw summaries)** records facts about MIR: address-taken locals; may-fail sites (calls/method calls/ConstructDV/ConstructError); throw sites and exception DV names (decoded from `ConstructError` event codes via `code_to_exc` + `ConstInt` tracking). `ThrowSummaryBuilder` aggregates per-function: `constructs_error`, `exception_types`, `may_fail_sites`.
-
-**Stage4 (SSA/dom + throw checks)** provides CFG utilities and enforces invariants. Dominators + dominance frontiers support SSA rewrite (single-block and simple acyclic CFGs) with `AssignSSA`. Throw checks (`run_throw_checks`) consume `ThrowSummary` + checker intent (`declared_can_throw`) and enforce: (1) no `ConstructError` in non–can-throw fns, (2) can-throw fns must not have bare `return;`, (3) can-throw fns must return a value produced by `ConstructResultOk/Err` (structural stopgap; type-aware check is stubbed as `enforce_fnresult_returns_typeaware`). Tests under `lang2/stage4/tests` cover dom/DF, SSA skeleton, throw checks, and integration with stage2/3 summaries.
-
-## Error propagation & exceptions
-* Exceptions carry an event code (from exception metadata) + DV payload.
-* `ErrorEvent` is the MIR op that projects an event code from an Error; dispatch blocks compare this against per-arm constants.
-* Try/throw semantics:
-  * Throw inside innermost try → error stored in that try’s hidden local → jump to its dispatch.
-  * Dispatch walks arms in order, compares codes, jumps to catch or catch-all.
-  * Unmatched errors: unwind to the nearest outer try (same function) via the try stack; only return `FnResult.Err` when no outer try exists.
-* Catch-arm validation:
-  * Lowering rejects malformed shapes (multiple catch-all, catch-all not last).
-  * Checker-side helpers (`lang2/checker/catch_arms.py`) currently enforce duplicate/unknown event arms; the driver collects HIR catch arms after normalization and feeds them into the checker along with an exception catalog. Future work is to attach real spans and a richer catalog from the front-end.
-* Unknown event names fall back to code `0`; throw/catch of the same unknown name still match, but the checker should eventually forbid unknown events.
-
-## Invariants & type safety (current vs planned)
-* Enforced now:
-  * Non–can-throw fns must not construct errors.
-  * Can-throw fns must not have bare `return;`.
-  * FnResult returns are enforced in two modes:
-    * **Structural (untyped/unit tests):** return value must be produced by `ConstructResultOk/Err` in the same function; aliasing/forwarding is rejected.
-* **Type-aware (typed paths):** when SSA + `TypeEnv` are provided, only the returned SSA value’s type matters (`is_fnresult`/`fnresult_parts`); structural guard is skipped. See `lang2/core/types_protocol.py`, `lang2/core/types_env_impl.py`, and `lang2/stage4/tests/test_throw_checks_typeaware*.py`.
-* Planned/remaining work:
-  * Make typed paths the default once a real `TypeEnv` is available everywhere (structural guard becomes a fallback/debug check).
-  * Checker-provided `declared_can_throw` map (derived from signatures / throws clauses) fed into `run_throw_checks` in the real driver. Tests use `FnSignature` + checker helpers (see `lang2/test_support`) rather than hard-coded bool maps.
-  * Checker-side catch-arm validation is present in the stub; future work is to attach real spans and a front-end exception catalog.
-
-## Known challenges / design choices
-* **Layering over monoliths:** Each stage has a clear public API; policy (throw checks) sits in stage4, not tangled with lowering.
-* **Exception event codes:** Forward-mapped via `exc_env` during throw/catch lowering; reverse-mapped in pre-analysis via `ConstInt` + `code_to_exc` to recover DV names.
-* **Unwinding vs return Err:** Current semantics keep unwinding within a function using the try stack; only top-level returns Err. Cross-function unwinding is a future design decision.
-* **Unknown events:** Mapped to code 0; acceptable for now but slated for checker rejection.
-* **Result-driven try sugar:** To be introduced as a desugaring pattern (`let tmp = fallible(); if tmp.is_err() { throw tmp.unwrap_err(); } let x = tmp.unwrap();`) in a checker/HIR rewrite when `?`/try-expression sugar arrives.
-* **Testing guidance:** Integration tests that need checker output/diagnostics should prefer the driver harness (`compile_stubbed_funcs(..., return_checked=True)`) and assert on the `CheckedProgram` (fn_infos, diagnostics, exception catalog). Direct `run_throw_checks(...)` calls are reserved for stage4 unit tests.
-* **TypeEnv shims:** `SimpleTypeEnv` (manual tagging) and `InferredTypeEnv/build_type_env_from_ssa` (infer FnResult types from SSA + signatures) exist for tests; a real checker/type system will eventually provide the canonical `TypeEnv`.
-
-## How to run the staged tests
-* Default Just target: `just lang2-test` (runs `pytest` on stage2 + stage4 suites).
-* Stage-specific: `pytest lang2/stage2/tests` or `pytest lang2/stage4/tests`.
-
-## Where to look next
-* `lang2/stage1/ast_to_hir.py` — sugar removal, HIR nodes.
-* `lang2/stage2/hir_to_mir.py` — MIR lowering, try/throw dispatch.
-* `lang2/stage3/pre_analysis.py` + `throw_summary.py` — MIR facts/aggregation.
-* `lang2/stage4/throw_checks.py` — can-throw invariants.
-* `work/split-mir-ssa-visitor/work-progress.md` — running progress doc + future tasks.
+---
