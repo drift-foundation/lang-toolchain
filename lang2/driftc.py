@@ -41,7 +41,12 @@ def compile_stubbed_funcs(
 	exc_env: Mapping[str, int] | None = None,
 	return_checked: bool = False,
 	build_ssa: bool = False,
-) -> Dict[str, M.MirFunc] | tuple[Dict[str, M.MirFunc], CheckedProgram]:
+	return_ssa: bool = False,
+) -> (
+	Dict[str, M.MirFunc]
+	| tuple[Dict[str, M.MirFunc], CheckedProgram]
+	| tuple[Dict[str, M.MirFunc], CheckedProgram, Dict[str, "MirToSSA.SsaFunc"] | None]
+):
 	"""
 	Lower a set of HIR function bodies through the lang2 pipeline and run throw checks.
 
@@ -60,6 +65,10 @@ def compile_stubbed_funcs(
 	    are still rejected by the SSA pass. The preferred path is for the checker
 	    to supply `checked.type_env`; when absent we ask the checker to infer one
 	    from SSA using its TypeTable/signatures.
+	  return_ssa: when True (and return_checked=True), also return the SSA funcs
+	    computed here. This keeps downstream helpers (e.g., LLVM codegen tests)
+	    from re-running MIR→SSA and ensures they share the same SSA graph used
+	    in throw checks.
 	  # TODO: drop declared_can_throw once all callers provide signatures/parsing.
 
 	Returns:
@@ -109,9 +118,6 @@ def compile_stubbed_funcs(
 	ssa_funcs = None
 	type_env = checked.type_env
 	if build_ssa:
-		from lang2.stage4 import MirToSSA  # local import to avoid unused deps
-		from lang2.checker.type_env_builder import build_minimal_checker_type_env
-
 		ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
 		if type_env is None:
 			# First preference: checker-owned SSA typing using TypeIds + signatures.
@@ -135,6 +141,8 @@ def compile_stubbed_funcs(
 		diagnostics=checked.diagnostics,
 	)
 
+	if return_checked and return_ssa:
+		return mir_funcs, checked, ssa_funcs
 	if return_checked:
 		return mir_funcs, checked
 	return mir_funcs
@@ -153,17 +161,15 @@ def compile_to_llvm_ir_for_tests(
 	It is intentionally narrow: assumes a single Drift entry `drift_main` (or
 	`entry`) returning `Int` or `FnResult<Int, Error>` and uses the v1 ABI.
 	"""
-	# First, run the normal pipeline to get MIR + FnInfos (and diagnostics if any).
-	mir_funcs, checked = compile_stubbed_funcs(
+	# First, run the normal pipeline to get MIR + FnInfos + SSA (and diagnostics).
+	mir_funcs, checked, ssa_funcs = compile_stubbed_funcs(
 		func_hirs=func_hirs,
 		signatures=signatures,
 		exc_env=exc_env,
 		return_checked=True,
-		build_ssa=False,
+		build_ssa=True,
+		return_ssa=True,
 	)
-
-	# Build SSA for each function; loops/backedges are rejected by MirToSSA.
-	ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
 
 	# Lower module to LLVM IR and append the OS entry wrapper.
 	module = lower_module_to_llvm(mir_funcs, ssa_funcs, checked.fn_infos)

@@ -58,3 +58,26 @@ def test_driftc_codegen_scalar_main():
 	ir = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 42
+
+
+def test_driftc_codegen_fnresult_callee_ok():
+	"""
+	Full pipeline smoke with can-throw callee returning FnResult.Ok(1); drift_main
+	non-can-throw returns the ok value. Exercises FnResult ABI from the top surface.
+	"""
+	func_hirs = {
+		"callee": H.HBlock(
+			statements=[H.HReturn(value=H.HResultOk(value=H.HLiteralInt(value=1)))]
+		),
+		"drift_main": H.HBlock(
+			statements=[H.HReturn(value=H.HCall(fn=H.HVar(name="callee"), args=[]))]
+		),
+	}
+	signatures = {
+		"callee": FnSignature(name="callee", return_type="FnResult<Int, Error>"),
+		"drift_main": FnSignature(name="drift_main", return_type="Int"),
+	}
+
+	ir = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
+	exit_code = _run_ir_with_clang(ir)
+	assert exit_code == 1
