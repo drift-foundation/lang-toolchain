@@ -118,6 +118,7 @@ class Checker:
 		self._int_type = self._type_table.new_scalar("Int")
 		self._bool_type = self._type_table.new_scalar("Bool")
 		self._error_type = self._type_table.new_error("Error")
+		self._unknown_type = self._type_table.new_unknown("Unknown")
 
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
 		"""
@@ -248,3 +249,121 @@ class Checker:
 				err = self._map_opaque(val[2])
 				return self._type_table.new_fnresult(ok, err)
 		return self._type_table.new_unknown(str(val))
+
+	def build_type_env_from_ssa(
+		self,
+		ssa_funcs: Mapping[str, "SsaFunc"],
+		signatures: Mapping[str, FnSignature],
+	) -> Optional["CheckerTypeEnv"]:
+		"""
+		Assign TypeIds to SSA values using checker signatures and simple heuristics.
+
+		This is a minimal pass: it handles constants, ConstructResultOk/Err, Call/
+		MethodCall, AssignSSA copies, and Phi when incoming types agree. Unknowns
+		default to `Unknown` TypeId. Returns None if no types were assigned.
+		"""
+		from lang2.checker.type_env_impl import CheckerTypeEnv
+		from lang2.stage2 import ConstructResultOk, ConstructResultErr, Call, MethodCall, ConstInt, ConstBool, ConstString, AssignSSA, Phi
+		value_types: Dict[tuple[str, str], TypeId] = {}
+
+		# Helper to fetch a mapped type with Unknown fallback.
+		def ty_for(fn: str, val: str) -> TypeId:
+			return value_types.get((fn, val), self._unknown_type)
+
+		changed = True
+		# Fixed-point with a small iteration cap.
+		for _ in range(5):
+			if not changed:
+				break
+			changed = False
+			for fn_name, ssa in ssa_funcs.items():
+				sig = signatures.get(fn_name)
+				fn_return_parts: tuple[TypeId, TypeId] | None = None
+				if sig and sig.return_type_id is not None:
+					td = self._type_table.get(sig.return_type_id)
+					if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
+						fn_return_parts = (td.param_types[0], td.param_types[1])
+
+				for block in ssa.func.blocks.values():
+					for instr in block.instructions:
+						dest = getattr(instr, "dest", None)
+						if isinstance(instr, ConstInt) and dest is not None:
+							if (fn_name, dest) not in value_types:
+								value_types[(fn_name, dest)] = self._int_type
+								changed = True
+						elif isinstance(instr, ConstBool) and dest is not None:
+							if (fn_name, dest) not in value_types:
+								value_types[(fn_name, dest)] = self._bool_type
+								changed = True
+						elif isinstance(instr, ConstString) and dest is not None:
+							if (fn_name, dest) not in value_types:
+								value_types[(fn_name, dest)] = self._type_table.new_scalar("String")
+								changed = True
+						elif isinstance(instr, ConstructResultOk):
+							if dest is None:
+								continue
+							ok_ty = ty_for(fn_name, instr.value)
+							err_ty = fn_return_parts[1] if fn_return_parts else self._error_type
+							dest_ty = self._type_table.new_fnresult(ok_ty, err_ty)
+							if value_types.get((fn_name, dest)) != dest_ty:
+								value_types[(fn_name, dest)] = dest_ty
+								changed = True
+						elif isinstance(instr, ConstructResultErr):
+							if dest is None:
+								continue
+							err_ty = ty_for(fn_name, instr.error)
+							ok_ty = fn_return_parts[0] if fn_return_parts else self._unknown_type
+							dest_ty = self._type_table.new_fnresult(ok_ty, err_ty)
+							if value_types.get((fn_name, dest)) != dest_ty:
+								value_types[(fn_name, dest)] = dest_ty
+								changed = True
+						elif isinstance(instr, Call) and dest is not None:
+							callee_sig = signatures.get(instr.fn)
+							if callee_sig and callee_sig.return_type_id is not None:
+								dest_ty = callee_sig.return_type_id
+							else:
+								dest_ty = self._unknown_type
+							if value_types.get((fn_name, dest)) != dest_ty:
+								value_types[(fn_name, dest)] = dest_ty
+								changed = True
+						elif isinstance(instr, MethodCall) and dest is not None:
+							callee_sig = signatures.get(instr.method_name)
+							if callee_sig and callee_sig.return_type_id is not None:
+								dest_ty = callee_sig.return_type_id
+							else:
+								dest_ty = self._unknown_type
+							if value_types.get((fn_name, dest)) != dest_ty:
+								value_types[(fn_name, dest)] = dest_ty
+								changed = True
+						elif isinstance(instr, AssignSSA):
+							if dest is None:
+								continue
+							src_ty = value_types.get((fn_name, instr.src))
+							if src_ty is not None and value_types.get((fn_name, dest)) != src_ty:
+								value_types[(fn_name, dest)] = src_ty
+								changed = True
+						elif isinstance(instr, Phi):
+							if dest is None:
+								continue
+							incoming = [value_types.get((fn_name, v)) for v in instr.incoming.values()]
+							incoming = [t for t in incoming if t is not None]
+							if incoming and all(t == incoming[0] for t in incoming):
+								ty = incoming[0]
+								if value_types.get((fn_name, dest)) != ty:
+									value_types[(fn_name, dest)] = ty
+									changed = True
+
+					term = block.terminator
+					if hasattr(term, "value") and getattr(term, "value") is not None:
+						val = term.value
+						if fn_return_parts is not None:
+							ty = self._type_table.new_fnresult(fn_return_parts[0], fn_return_parts[1])
+						else:
+							ty = value_types.get((fn_name, val), self._unknown_type)
+						if value_types.get((fn_name, val)) != ty:
+							value_types[(fn_name, val)] = ty
+							changed = True
+
+		if not value_types:
+			return None
+		return CheckerTypeEnv(self._type_table, value_types)

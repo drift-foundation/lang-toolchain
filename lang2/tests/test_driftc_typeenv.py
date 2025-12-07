@@ -31,3 +31,4 @@ def test_compile_stubbed_funcs_builds_ssa_and_type_env():
 
 	assert "f" in mir_funcs
 	assert not checked.diagnostics, f"unexpected diagnostics: {checked.diagnostics}"
+	assert checked.type_env is not None
