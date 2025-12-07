@@ -1,0 +1,133 @@
+# vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+"""
+Minimal type resolver for lang2.
+
+Given a module-like object (or any iterable of function decls) with declared
+parameter/return types and throws clauses, build:
+  - a shared TypeTable
+  - a mapping of function name -> FnSignature with TypeIds populated
+
+This is intentionally shallow: it only resolves declared types (Int/Bool/String/
+Error/FnResult<...>) and does not perform expression-level type checking. It
+exists to feed real TypeIds into the checker pipeline so legacy string/tuple
+type shims can be retired.
+"""
+
+from __future__ import annotations
+
+from typing import Iterable, Tuple
+
+from lang2.checker import FnSignature
+from lang2.core.types_core import TypeId, TypeKind, TypeTable
+
+
+def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable, dict[str, FnSignature]]:
+	"""
+	Resolve declared types on function declarations into TypeIds.
+
+	Each decl is expected to expose:
+	  - name: str
+	  - params: iterable with a .type annotation (string/tuple/etc.)
+	  - return_type: declared return type
+	  - throws or throws_events: optional iterable of event names
+	  - loc (optional): carried into FnSignature.loc
+	  - is_extern / is_intrinsic (optional): flags
+	"""
+	table = TypeTable()
+
+	# Seed some common scalars; unknowns/new scalars are created on demand.
+	int_ty = table.new_scalar("Int")
+	bool_ty = table.new_scalar("Bool")
+	str_ty = table.new_scalar("String")
+	err_ty = table.new_error("Error")
+
+	signatures: dict[str, FnSignature] = {}
+
+	for decl in func_decls:
+		name = getattr(decl, "name")
+		decl_loc = getattr(decl, "loc", None)
+		is_extern = bool(getattr(decl, "is_extern", False))
+		is_intrinsic = bool(getattr(decl, "is_intrinsic", False))
+
+		# Params
+		raw_params = []
+		param_type_ids: list[TypeId] = []
+		for p in getattr(decl, "params", []):
+			raw_ty = getattr(p, "type", None)
+			raw_params.append(raw_ty)
+			param_type_ids.append(_resolve_type(raw_ty, table, int_ty, bool_ty, str_ty, err_ty))
+
+		# Return
+		raw_ret = getattr(decl, "return_type", None)
+		return_type_id = _resolve_type(raw_ret, table, int_ty, bool_ty, str_ty, err_ty)
+
+		throws = _throws_from_decl(decl)
+		declared_can_throw = True if throws else None
+
+		signatures[name] = FnSignature(
+			name=name,
+			loc=decl_loc,
+			param_type_ids=param_type_ids,
+			return_type_id=return_type_id,
+			declared_can_throw=declared_can_throw,
+			is_extern=is_extern,
+			is_intrinsic=is_intrinsic,
+			# Legacy/raw fields for compatibility
+			param_types=raw_params,
+			return_type=raw_ret,
+			throws_events=throws,
+		)
+
+	return table, signatures
+
+
+def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId, str_ty: TypeId, err_ty: TypeId) -> TypeId:
+	"""
+	Map a raw type annotation into a TypeId using the provided TypeTable.
+
+	Supported shapes:
+	  - "Int", "Bool", "String", "Error" (strings)
+	  - tuples of the form ("FnResult", ok, err) or (ok, err)
+	  - strings containing "FnResult" (treated as FnResult<Int, Error>)
+	Unknown shapes are registered as scalar/unknown to keep resolution total.
+	"""
+	if raw is None:
+		return table.new_unknown("Unknown")
+	if isinstance(raw, TypeId):
+		return raw
+	if isinstance(raw, str):
+		if raw == "Int":
+			return int_ty
+		if raw == "Bool":
+			return bool_ty
+		if raw == "String":
+			return str_ty
+		if raw == "Error":
+			return err_ty
+		if "FnResult" in raw:
+			return table.new_fnresult(int_ty, err_ty)
+		return table.new_scalar(raw)
+	if isinstance(raw, tuple):
+		# Tuple forms: ('FnResult', ok, err) or (ok, err)
+		if len(raw) >= 3 and raw[0] == "FnResult":
+			ok = _resolve_type(raw[1], table, int_ty, bool_ty, str_ty, err_ty)
+			err = _resolve_type(raw[2], table, int_ty, bool_ty, str_ty, err_ty)
+			return table.new_fnresult(ok, err)
+		if len(raw) == 2:
+			ok = _resolve_type(raw[0], table, int_ty, bool_ty, str_ty, err_ty)
+			err = _resolve_type(raw[1], table, int_ty, bool_ty, str_ty, err_ty)
+			return table.new_fnresult(ok, err)
+		return table.new_unknown(str(raw))
+	return table.new_unknown(str(raw))
+
+
+def _throws_from_decl(decl: object) -> Tuple[str, ...]:
+	throws = getattr(decl, "throws", None)
+	if throws is None:
+		throws = getattr(decl, "throws_events", None)
+	if throws is None:
+		return ()
+	return tuple(throws)
+
+
+__all__ = ["resolve_program_signatures"]

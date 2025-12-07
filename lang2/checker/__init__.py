@@ -375,6 +375,56 @@ class Checker:
 		walk_block(block)
 		return may_throw
 
+	def check_call_signature(
+		self,
+		callee: FnInfo | FnSignature,
+		arg_type_ids: list[Optional[TypeId]],
+		diagnostics: List[Diagnostic],
+		loc: Optional[Any] = None,
+	) -> Optional[TypeId]:
+		"""
+		Best-effort call signature check using FnInfo/FnSignature + TypeIds.
+
+		- Enforces arity when param_type_ids are available.
+		- Performs simple TypeId equality checks for args when both sides are known.
+		- Returns the callee return_type_id (may be None if unknown).
+
+		This is a helper for future call/type-checking passes; it is not invoked
+		in the current stub pipeline.
+		"""
+		sig = callee.signature if isinstance(callee, FnInfo) else callee
+		if sig.param_type_ids is None or sig.return_type_id is None:
+			return sig.return_type_id
+
+		if len(arg_type_ids) != len(sig.param_type_ids):
+			diagnostics.append(
+				Diagnostic(
+					message=(
+						f"call to {sig.name} has {len(arg_type_ids)} arguments, "
+						f"expected {len(sig.param_type_ids)}"
+					),
+					severity="error",
+					span=loc,
+				)
+			)
+			return sig.return_type_id
+
+		for idx, (arg_ty, param_ty) in enumerate(zip(arg_type_ids, sig.param_type_ids)):
+			if arg_ty is None or param_ty is None:
+				continue
+			if arg_ty != param_ty:
+				diagnostics.append(
+					Diagnostic(
+						message=(
+							f"argument {idx} to {sig.name} has type {arg_ty!r}, "
+							f"expected {param_ty!r}"
+						),
+						severity="error",
+						span=loc,
+					)
+				)
+		return sig.return_type_id
+
 	def _is_fnresult_return(self, return_type: Any) -> bool:
 		"""
 		Best-effort predicate to decide if a return type resembles FnResult<_, Error>.

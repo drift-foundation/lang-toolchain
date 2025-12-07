@@ -32,6 +32,7 @@ from lang2.checker import Checker, CheckedProgram, FnSignature
 from lang2.checker.catch_arms import CatchArmInfo
 from lang2.core.diagnostics import Diagnostic
 from lang2.codegen.llvm import lower_module_to_llvm
+from lang2.type_resolver import resolve_program_signatures
 
 
 def compile_stubbed_funcs(
@@ -91,6 +92,10 @@ def compile_stubbed_funcs(
 		arms = collect_catch_arms_from_block(hir_norm)
 		if arms:
 			catch_arms_map[name] = arms
+
+	# If no signatures were supplied, resolve basic signatures from normalized HIR.
+	if signatures is None:
+		_, signatures = resolve_program_signatures(_fake_decls_from_hirs(normalized_hirs))
 
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.
@@ -176,6 +181,32 @@ def compile_to_llvm_ir_for_tests(
 	module = lower_module_to_llvm(mir_funcs, ssa_funcs, checked.fn_infos)
 	module.emit_entry_wrapper(entry)
 	return module.render(), checked
+
+
+def _fake_decls_from_hirs(hirs: Mapping[str, H.HBlock]) -> list[object]:
+	"""
+	Shim: build decl-like objects from HIR blocks so the type resolver can
+	construct FnSignatures when real decls are not available.
+
+	This exists only for the stub pipeline; a real front end will provide
+	declarations with parsed types and throws clauses.
+	"""
+	class _FakeParam:
+		def __init__(self, name: str, typ: str = "Int") -> None:
+			self.name = name
+			self.type = typ
+
+	class _FakeDecl:
+		def __init__(self, name: str) -> None:
+			self.name = name
+			self.params: list[_FakeParam] = []
+			self.return_type = "Int"
+			self.throws = ()
+			self.loc = None
+			self.is_extern = False
+			self.is_intrinsic = False
+
+	return [_FakeDecl(name) for name in hirs.keys()]
 
 
 __all__ = ["compile_stubbed_funcs", "compile_to_llvm_ir_for_tests"]
