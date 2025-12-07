@@ -103,7 +103,11 @@ lang2-codegen-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
+	# Clean codegen artifacts to keep cases isolated between runs.
+	rm -rf build/tests/lang2
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/codegen/tests
+	# Run clang-based e2e cases (per-case dirs under lang2/tests/codegen).
+	PYTHONPATH=. ./.venv/bin/python3 lang2/tests/codegen/e2e_runner.py
 
 stage-for-review:
 	rm -rf staged

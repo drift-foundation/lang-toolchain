@@ -12,3 +12,4 @@ staged
 .pytest_cache/
 a.out
 staged.tar.gz
+build/

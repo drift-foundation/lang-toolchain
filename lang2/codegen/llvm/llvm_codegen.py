@@ -133,8 +133,6 @@ class LlvmModuleBuilder:
 		self.funcs.append(
 			"\n".join(
 				[
-					f"declare i64 @{drift_main}()",
-					"",
 					"define i32 @main() {",
 					"entry:",
 					f"  %ret = call i64 @{drift_main}()",
@@ -249,17 +247,17 @@ class _FuncBuilder:
 			tmp0 = self._fresh("ok0")
 			tmp1 = self._fresh("ok1")
 			err_zero = f"{DRIFT_ERROR_TYPE} zeroinitializer"
-			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef i1 0, 0")
-			self.lines.append(f"  {tmp1} = insertvalue {FNRESULT_INT_ERROR} {tmp0} i64 {val}, 1")
-			self.lines.append(f"  {dest} = insertvalue {FNRESULT_INT_ERROR} {tmp1} {err_zero}, 2")
+			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef, i1 0, 0")
+			self.lines.append(f"  {tmp1} = insertvalue {FNRESULT_INT_ERROR} {tmp0}, i64 {val}, 1")
+			self.lines.append(f"  {dest} = insertvalue {FNRESULT_INT_ERROR} {tmp1}, {err_zero}, 2")
 		elif isinstance(instr, ConstructResultErr):
 			dest = self._map_value(instr.dest)
 			err_val = self._map_value(instr.error)
 			self.value_types[dest] = FNRESULT_INT_ERROR
 			tmp0 = self._fresh("err0")
 			tmp1 = self._fresh("err1")
-			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef i1 1, 0")
-			self.lines.append(f"  {tmp1} = insertvalue {FNRESULT_INT_ERROR} {tmp0} i64 0, 1")
+			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef, i1 1, 0")
+			self.lines.append(f"  {tmp1} = insertvalue {FNRESULT_INT_ERROR} {tmp0}, i64 0, 1")
 			self.lines.append(
 				f"  {dest} = insertvalue {FNRESULT_INT_ERROR} {tmp1}, {DRIFT_ERROR_TYPE} {err_val}, 2"
 			)
@@ -371,7 +369,9 @@ class _FuncBuilder:
 
 	def _assert_cfg_supported(self) -> None:
 		cfg_kind = self.ssa.cfg_kind or CfgKind.STRAIGHT_LINE
-		if cfg_kind is CfgKind.GENERAL:
+		# Backend v1 only supports straight-line/acyclic SSA; anything else must bail
+		# loudly so we never emit IR for loops/backedges until explicitly supported.
+		if cfg_kind not in (CfgKind.STRAIGHT_LINE, CfgKind.ACYCLIC):
 			raise NotImplementedError("LLVM codegen v1: loops/backedges are not supported yet")
 
 	def _type_of(self, value_id: str) -> str | None:
