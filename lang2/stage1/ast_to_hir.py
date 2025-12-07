@@ -119,9 +119,14 @@ class AstToHIR:
 		"""
 		Lower calls:
 		  - method sugar: Call(func=Attr(receiver, name), args=...) → HMethodCall
+		  - Result.Ok(...) sugar -> HResultOk
 		  - otherwise: plain HCall(fn_expr, args)
 		DV-specific constructors are handled in _visit_expr_ExceptionCtor.
 		"""
+		# Recognize Result.Ok constructor in source -> HResultOk for FnResult.
+		if isinstance(expr.func, ast.Name) and expr.func.ident == "Ok" and len(expr.args) == 1:
+			return H.HResultOk(value=self.lower_expr(expr.args[0]))
+
 		# Method call sugar: receiver.method(args)
 		if isinstance(expr.func, ast.Attr):
 			receiver = self.lower_expr(expr.func.value)

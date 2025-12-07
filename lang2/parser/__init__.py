@@ -13,6 +13,7 @@ from . import parser as _parser
 from . import ast as parser_ast
 from lang2.stage0 import ast as s0
 from lang2.stage1 import AstToHIR
+from lang2 import stage1 as H
 from lang2.checker import FnSignature
 
 
@@ -48,13 +49,13 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 def _convert_stmt(stmt: parser_ast.Stmt) -> s0.Stmt:
 	"""Convert parser AST statements into lang2.stage0 AST statements."""
 	if isinstance(stmt, parser_ast.ReturnStmt):
-		return s0.ReturnStmt(value=_convert_expr(stmt.value) if stmt.value is not None else None)
+		return s0.ReturnStmt(value=_convert_expr(stmt.value) if stmt.value is not None else None, loc=stmt.loc)
 	if isinstance(stmt, parser_ast.ExprStmt):
-		return s0.ExprStmt(expr=_convert_expr(stmt.value))
+		return s0.ExprStmt(expr=_convert_expr(stmt.value), loc=stmt.loc)
 	if isinstance(stmt, parser_ast.LetStmt):
-		return s0.LetStmt(name=stmt.name, value=_convert_expr(stmt.value))
+		return s0.LetStmt(name=stmt.name, value=_convert_expr(stmt.value), loc=stmt.loc)
 	if isinstance(stmt, parser_ast.AssignStmt):
-		return s0.AssignStmt(target=_convert_expr(stmt.target), value=_convert_expr(stmt.value))
+		return s0.AssignStmt(target=_convert_expr(stmt.target), value=_convert_expr(stmt.value), loc=stmt.loc)
 	if isinstance(stmt, parser_ast.IfStmt):
 		return s0.IfStmt(
 			cond=_convert_expr(stmt.condition),
@@ -62,11 +63,11 @@ def _convert_stmt(stmt: parser_ast.Stmt) -> s0.Stmt:
 			else_block=_convert_block(stmt.else_block) if stmt.else_block else [],
 		)
 	if isinstance(stmt, parser_ast.BreakStmt):
-		return s0.BreakStmt()
+		return s0.BreakStmt(loc=stmt.loc)
 	if isinstance(stmt, parser_ast.ContinueStmt):
-		return s0.ContinueStmt()
+		return s0.ContinueStmt(loc=stmt.loc)
 	if isinstance(stmt, parser_ast.ThrowStmt):
-		return s0.ThrowStmt(value=_convert_expr(stmt.value))
+		return s0.ThrowStmt(expr=_convert_expr(stmt.expr), loc=stmt.loc)
 	# While/For/Try not yet needed for current e2e cases.
 	raise NotImplementedError(f"Unsupported statement in adapter: {stmt!r}")
 
@@ -75,11 +76,11 @@ def _convert_block(block: parser_ast.Block) -> list[s0.Stmt]:
 	return [_convert_stmt(s) for s in block.statements]
 
 
-def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, s0.HBlock], Dict[str, FnSignature]]:
+def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSignature]]:
 	"""Parse a Drift source file into lang2 HIR blocks + FnSignatures."""
 	source = path.read_text()
 	prog = _parser.parse_program(source)
-	func_hirs: Dict[str, s0.HBlock] = {}
+	func_hirs: Dict[str, H.HBlock] = {}
 	signatures: Dict[str, FnSignature] = {}
 	lowerer = AstToHIR()
 	for fn in prog.functions:
