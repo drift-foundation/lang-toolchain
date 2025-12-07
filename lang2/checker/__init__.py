@@ -259,11 +259,24 @@ class Checker:
 		Assign TypeIds to SSA values using checker signatures and simple heuristics.
 
 		This is a minimal pass: it handles constants, ConstructResultOk/Err, Call/
-		MethodCall, AssignSSA copies, and Phi when incoming types agree. Unknowns
-		default to `Unknown` TypeId. Returns None if no types were assigned.
+		MethodCall, AssignSSA copies, UnaryOp/BinaryOp propagation, and Phi when
+		incoming types agree. Unknowns default to `Unknown` TypeId. Returns None if
+		no types were assigned.
 		"""
 		from lang2.checker.type_env_impl import CheckerTypeEnv
-		from lang2.stage2 import ConstructResultOk, ConstructResultErr, Call, MethodCall, ConstInt, ConstBool, ConstString, AssignSSA, Phi
+		from lang2.stage2 import (
+			ConstructResultOk,
+			ConstructResultErr,
+			Call,
+			MethodCall,
+			ConstInt,
+			ConstBool,
+			ConstString,
+			AssignSSA,
+			Phi,
+			UnaryOpInstr,
+			BinaryOpInstr,
+		)
 		value_types: Dict[tuple[str, str], TypeId] = {}
 
 		# Helper to fetch a mapped type with Unknown fallback.
@@ -342,6 +355,23 @@ class Checker:
 							if src_ty is not None and value_types.get((fn_name, dest)) != src_ty:
 								value_types[(fn_name, dest)] = src_ty
 								changed = True
+						elif isinstance(instr, UnaryOpInstr):
+							if dest is None:
+								continue
+							operand_ty = ty_for(fn_name, instr.operand)
+							if value_types.get((fn_name, dest)) != operand_ty:
+								value_types[(fn_name, dest)] = operand_ty
+								changed = True
+						elif isinstance(instr, BinaryOpInstr):
+							if dest is None:
+								continue
+							left_ty = ty_for(fn_name, instr.left)
+							right_ty = ty_for(fn_name, instr.right)
+							# If both operands agree, propagate that type; otherwise fall back to Unknown.
+							dest_ty = left_ty if left_ty == right_ty else self._unknown_type
+							if value_types.get((fn_name, dest)) != dest_ty:
+								value_types[(fn_name, dest)] = dest_ty
+								changed = True
 						elif isinstance(instr, Phi):
 							if dest is None:
 								continue
@@ -356,11 +386,13 @@ class Checker:
 					term = block.terminator
 					if hasattr(term, "value") and getattr(term, "value") is not None:
 						val = term.value
-						if fn_return_parts is not None:
-							ty = self._type_table.new_fnresult(fn_return_parts[0], fn_return_parts[1])
-						else:
-							ty = value_types.get((fn_name, val), self._unknown_type)
-						if value_types.get((fn_name, val)) != ty:
+						# Do not overwrite an existing concrete type; only seed a type for
+						# returns that have not been seen yet.
+						if (fn_name, val) not in value_types:
+							if fn_return_parts is not None:
+								ty = self._type_table.new_fnresult(fn_return_parts[0], fn_return_parts[1])
+							else:
+								ty = self._unknown_type
 							value_types[(fn_name, val)] = ty
 							changed = True
 

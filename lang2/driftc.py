@@ -56,7 +56,8 @@ def compile_stubbed_funcs(
 	  build_ssa: when True, also run MIR→SSA and derive a TypeEnv from SSA +
 	    signatures so the type-aware throw check path is exercised. Loops/backedges
 	    are still rejected by the SSA pass. The preferred path is for the checker
-	    to supply `checked.type_env`; the SSA-based bridge is a temporary fallback.
+	    to supply `checked.type_env`; when absent we ask the checker to infer one
+	    from SSA using its TypeTable/signatures.
 
 	Returns:
 	  dict of function name -> lowered MIR function. When `return_checked` is
@@ -107,13 +108,15 @@ def compile_stubbed_funcs(
 		from lang2.checker.type_env_builder import build_minimal_checker_type_env
 
 		ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
-		# Prefer a checker-owned TypeEnv (even minimal) when possible.
-		if type_env is None and signatures is not None:
-			type_env = build_minimal_checker_type_env(checked, ssa_funcs, signatures, table=checked.type_table)
-			checked.type_env = type_env
 		if type_env is None:
-			# Ask the checker to build an SSA-based TypeEnv using its TypeTable/signatures.
+			# First preference: checker-owned SSA typing using TypeIds + signatures.
 			type_env = checker.build_type_env_from_ssa(ssa_funcs, signatures or {})
+			checked.type_env = type_env
+		if type_env is None and signatures is not None:
+			# Fallback: minimal checker TypeEnv that tags return SSA values with the
+			# signature return TypeId. This keeps type-aware checks usable even when
+			# the fuller SSA typing could not derive any facts.
+			type_env = build_minimal_checker_type_env(checked, ssa_funcs, signatures, table=checked.type_table)
 			checked.type_env = type_env
 
 	# Stage4: throw checks

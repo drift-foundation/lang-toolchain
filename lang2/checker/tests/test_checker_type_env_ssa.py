@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from lang2.stage2 import BasicBlock, ConstructResultOk, MirFunc, Return
+from lang2.stage2 import (
+	BasicBlock,
+	BinaryOpInstr,
+	ConstructResultOk,
+	ConstInt,
+	MirFunc,
+	Return,
+)
 from lang2.stage4 import MirToSSA
 from lang2.checker import Checker, FnSignature
 
@@ -31,3 +38,39 @@ def test_checker_builds_type_env_from_ssa():
 	assert type_env is not None
 	ty = type_env.type_of_ssa_value("f", "r0")
 	assert type_env.is_fnresult(ty)
+
+
+def test_checker_types_basic_numeric_ops():
+	"""
+	Checker SSA typing should propagate scalar types through simple ops.
+	"""
+	entry = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstInt(dest="a", value=1),
+			ConstInt(dest="b", value=2),
+			BinaryOpInstr(dest="sum", op=None, left="a", right="b"),
+		],
+		terminator=Return(value="sum"),
+	)
+	mir_func = MirFunc(
+		name="add",
+		params=[],
+		locals=[],
+		blocks={"entry": entry},
+		entry="entry",
+	)
+	ssa = MirToSSA().run(mir_func)
+
+	signatures = {"add": FnSignature(name="add", return_type="Int")}
+	checker = Checker(signatures=signatures)
+	checker.check(["add"])
+
+	type_env = checker.build_type_env_from_ssa({"add": ssa}, signatures)
+	assert type_env is not None
+	sum_ty = type_env.type_of_ssa_value("add", "sum")
+	# Sum should carry the scalar Int TypeId; this also proves BinaryOpInstr is handled.
+	int_td = checker._type_table.get(checker._int_type)
+	sum_td = checker._type_table.get(sum_ty)
+	assert sum_td.kind == int_td.kind
+	assert sum_td.name == int_td.name
