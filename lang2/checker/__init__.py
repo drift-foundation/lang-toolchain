@@ -22,10 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, FrozenSet, Mapping, Sequence, Set, Tuple, TYPE_CHECKING
 
-from lang2.diagnostics import Diagnostic
-from lang2.types_protocol import TypeEnv
+from lang2.core.diagnostics import Diagnostic
+from lang2.core.types_protocol import TypeEnv
 from lang2.checker.catch_arms import CatchArmInfo, validate_catch_arms
-from lang2.types_core import TypeTable, TypeId, TypeKind
+from lang2.core.types_core import TypeTable, TypeId, TypeKind
 
 if TYPE_CHECKING:
 	from lang2 import stage1 as H

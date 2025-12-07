@@ -4,10 +4,10 @@ Type-aware invariant: non-can-throw functions must not return FnResult.
 
 from __future__ import annotations
 
-from lang2.diagnostics import Diagnostic
+from lang2.core.diagnostics import Diagnostic
 from lang2.stage2 import MirFunc, BasicBlock, Return
 from lang2.stage4.throw_checks import FuncThrowInfo, enforce_fnresult_returns_typeaware
-from lang2.types_env_impl import SimpleTypeEnv
+from lang2.core.types_env_impl import SimpleTypeEnv
 
 
 def test_non_can_throw_returning_fnresult_is_rejected():

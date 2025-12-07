@@ -48,7 +48,7 @@ Surface AST (stage0) ──> HIR (stage1) ──> MIR (stage2) ──> SSA (stag
   * Can-throw fns must not have bare `return;`.
   * FnResult returns are enforced in two modes:
     * **Structural (untyped/unit tests):** return value must be produced by `ConstructResultOk/Err` in the same function; aliasing/forwarding is rejected.
-    * **Type-aware (typed paths):** when SSA + `TypeEnv` are provided, only the returned SSA value’s type matters (`is_fnresult`/`fnresult_parts`); structural guard is skipped. See `lang2/types_protocol.py`, `lang2/types_env_impl.py`, and `lang2/stage4/tests/test_throw_checks_typeaware*.py`.
+* **Type-aware (typed paths):** when SSA + `TypeEnv` are provided, only the returned SSA value’s type matters (`is_fnresult`/`fnresult_parts`); structural guard is skipped. See `lang2/core/types_protocol.py`, `lang2/core/types_env_impl.py`, and `lang2/stage4/tests/test_throw_checks_typeaware*.py`.
 * Planned/remaining work:
   * Make typed paths the default once a real `TypeEnv` is available everywhere (structural guard becomes a fallback/debug check).
   * Checker-provided `declared_can_throw` map (derived from signatures / throws clauses) fed into `run_throw_checks` in the real driver. Tests use `FnSignature` + checker helpers (see `lang2/test_support`) rather than hard-coded bool maps.

@@ -15,7 +15,7 @@ from typing import Dict, Mapping
 from lang2.checker import CheckedProgram, FnSignature
 from lang2.checker.type_env_impl import CheckerTypeEnv
 from lang2.stage4 import SsaFunc
-from lang2.types_core import TypeTable, TypeId
+from lang2.core.types_core import TypeTable, TypeId
 
 
 def build_minimal_checker_type_env(

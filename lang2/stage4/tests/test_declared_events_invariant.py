@@ -4,7 +4,7 @@ Stage4: declared events should cover all thrown events.
 
 from __future__ import annotations
 
-from lang2.diagnostics import Diagnostic
+from lang2.core.diagnostics import Diagnostic
 from lang2.stage3.throw_summary import ThrowSummary
 from lang2.stage4.throw_checks import FuncThrowInfo, enforce_declared_events_superset
 

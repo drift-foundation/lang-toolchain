@@ -18,7 +18,7 @@ from lang2.stage2 import (
 	StoreLocal,
 )
 from lang2.stage4 import MirToSSA
-from lang2.types_core import TypeTable
+from lang2.core.types_core import TypeTable
 
 
 def _int_fn_info(name: str, can_throw: bool, table: TypeTable) -> FnInfo:

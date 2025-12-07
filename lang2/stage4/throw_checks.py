@@ -17,11 +17,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Set
 
-from lang2.diagnostics import Diagnostic
+from lang2.core.diagnostics import Diagnostic
 from lang2.stage3 import ThrowSummary
 from lang2.stage2 import MirFunc, Return, ConstructResultOk, ConstructResultErr
-from lang2.types_core import TypeId
-from lang2.types_protocol import TypeEnv
+from lang2.core.types_core import TypeId
+from lang2.core.types_protocol import TypeEnv
 
 
 @dataclass

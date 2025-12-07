@@ -15,8 +15,8 @@ from typing import Dict, Mapping
 from lang2.checker import FnSignature
 from lang2.checker.type_env_impl import CheckerTypeEnv
 from lang2.stage4 import SsaFunc
-from lang2.types_core import TypeId, TypeTable
-from lang2.types_env_impl import InferredTypeEnv
+from lang2.core.types_core import TypeId, TypeTable
+from lang2.core.types_env_impl import InferredTypeEnv
 
 
 def build_checker_type_env_from_inferred(

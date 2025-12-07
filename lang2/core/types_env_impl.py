@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Tuple
 
-from lang2.types_protocol import TypeEnv
+from lang2.core.types_protocol import TypeEnv
 from lang2.stage4.ssa import SsaFunc
 from lang2.stage2 import (
 	AssignSSA,

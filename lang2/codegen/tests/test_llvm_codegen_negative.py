@@ -17,7 +17,7 @@ from lang2.stage2 import (
 	Return,
 )
 from lang2.stage4 import MirToSSA
-from lang2.types_core import TypeTable
+from lang2.core.types_core import TypeTable
 
 
 def test_branch_condition_must_be_bool():

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lang2.types_core import TypeTable, TypeKind
+from lang2.core.types_core import TypeTable, TypeKind
 from lang2.checker.type_env_impl import CheckerTypeEnv
 
 

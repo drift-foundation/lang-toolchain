@@ -17,7 +17,7 @@ from lang2.stage4 import MirToSSA, run_throw_checks
 from lang2.stage3 import ThrowSummaryBuilder
 from lang2.checker import FnSignature
 from lang2.test_support import declared_from_signatures, make_signatures
-from lang2.types_env_impl import build_type_env_from_ssa, SimpleTypeEnv
+from lang2.core.types_env_impl import build_type_env_from_ssa, SimpleTypeEnv
 
 
 def _ssa_for_func(func: MirFunc):

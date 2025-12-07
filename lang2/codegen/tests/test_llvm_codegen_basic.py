@@ -8,7 +8,7 @@ from lang2.codegen.llvm import LlvmModuleBuilder, lower_ssa_func_to_llvm
 from lang2.checker import FnInfo
 from lang2.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk
 from lang2.stage4 import MirToSSA
-from lang2.types_core import TypeTable
+from lang2.core.types_core import TypeTable
 
 
 def _fn_info(name: str, can_throw: bool, return_ty: int) -> FnInfo:

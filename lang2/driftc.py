@@ -30,7 +30,7 @@ from lang2.stage4 import run_throw_checks
 from lang2.stage4 import MirToSSA
 from lang2.checker import Checker, CheckedProgram, FnSignature
 from lang2.checker.catch_arms import CatchArmInfo
-from lang2.diagnostics import Diagnostic
+from lang2.core.diagnostics import Diagnostic
 from lang2.codegen.llvm import lower_module_to_llvm
 
 

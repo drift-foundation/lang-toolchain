@@ -4,15 +4,15 @@
 Checker-owned TypeEnv backed by the TypeTable.
 
 This is the "real" TypeEnv front-end code should provide to stage4. It wraps
-TypeIds from `lang2/types_core.py` and an SSA value -> TypeId map.
+TypeIds from `lang2/core/types_core.py` and an SSA value -> TypeId map.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Tuple
 
-from lang2.types_protocol import TypeEnv
-from lang2.types_core import TypeId, TypeKind, TypeTable
+from lang2.core.types_protocol import TypeEnv
+from lang2.core.types_core import TypeId, TypeKind, TypeTable
 
 
 class CheckerTypeEnv(TypeEnv):

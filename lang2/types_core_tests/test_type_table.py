@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lang2.types_core import TypeTable, TypeKind
+from lang2.core.types_core import TypeTable, TypeKind
 
 
 def test_type_table_registers_basic_kinds():

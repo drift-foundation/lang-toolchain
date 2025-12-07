@@ -16,7 +16,7 @@ from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.checker import FnInfo
 from lang2.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk, Call
 from lang2.stage4 import MirToSSA
-from lang2.types_core import TypeTable
+from lang2.core.types_core import TypeTable
 
 
 BUILD_ROOT = Path("build/tests/lang2")

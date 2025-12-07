@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence, Set
 
-from lang2.diagnostics import Diagnostic
+from lang2.core.diagnostics import Diagnostic
 
 
 @dataclass
