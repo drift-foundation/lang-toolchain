@@ -55,7 +55,7 @@ def test_driftc_codegen_scalar_main():
 	}
 	signatures = {"drift_main": FnSignature(name="drift_main", return_type="Int")}
 
-	ir = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
+	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 42
 
@@ -78,6 +78,6 @@ def test_driftc_codegen_fnresult_callee_ok():
 		"drift_main": FnSignature(name="drift_main", return_type="Int"),
 	}
 
-	ir = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
+	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 1

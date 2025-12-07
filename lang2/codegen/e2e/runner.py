@@ -2,70 +2,35 @@
 Drift-source end-to-end runner (clang-based).
 
 Each case lives under `lang2/codegen/e2e/<case>/` and must provide:
-  - main.drift   (currently a very small subset: single fn returning a literal)
+  - main.drift   (parsed with the copied lang2 parser)
   - expected.json with exit_code/stdout/stderr fields
 
 The runner:
-  1) Reads and minimally parses main.drift (fn name, return type, return literal).
-  2) Builds an AST block -> HIR via AstToHIR.
+  1) Parses main.drift with the lang2 parser copy.
+  2) Lowers to HIR via AstToHIR.
   3) Runs the full stubbed pipeline to LLVM IR (`compile_to_llvm_ir_for_tests`).
   4) Compiles IR with clang and executes the binary.
-  5) Compares exit/stdout/stderr to expected.json.
+  5) Asserts diagnostics are empty and compares exit/stdout/stderr to expected.json.
 
 Artifacts are written to `build/tests/lang2/codegen/e2e/<case>/`.
-
-Notes:
-  - Parsing is intentionally minimal and only supports the simple shapes used in
-    these smoke tests until a full parser is wired.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from lang2.stage0 import ast
-from lang2.stage1 import AstToHIR
-from lang2.checker import FnSignature
+from lang2.parser import parse_drift_to_hir
 from lang2.driftc import compile_to_llvm_ir_for_tests
 
 
 ROOT = Path(__file__).resolve().parents[3]
 BUILD_ROOT = ROOT / "build" / "tests" / "lang2" / "codegen" / "e2e"
-
-
-def _parse_main_drift(text: str) -> tuple[str, str, ast.ReturnStmt]:
-	"""
-	Minimal parser for the first smoke cases: expects
-
-	fn <name>() returns <RetTy> { return <int_literal>; }
-
-	Returns (fn_name, return_type_str, ReturnStmt).
-	"""
-	fn_match = re.search(r"fn\s+([A-Za-z_][A-Za-z0-9_]*)", text)
-	name = fn_match.group(1) if fn_match else "drift_main"
-
-	ret_match = re.search(r"returns\s+([A-Za-z0-9_<>,\s]+)", text)
-	return_type = ret_match.group(1).strip() if ret_match else "Int"
-
-	ret_lit = re.search(r"return\s+(-?\d+)\s*;", text)
-	if not ret_lit:
-		raise ValueError("Unsupported main.drift shape: expected `return <int>;`")
-	value = int(ret_lit.group(1))
-	return name, return_type, ast.ReturnStmt(value=ast.Literal(value=value))
-
-
-def _build_hir_block(ret_stmt: ast.ReturnStmt) -> object:
-	"""Lower a simple AST block with a single return into HIR."""
-	ast_block = [ret_stmt]
-	return AstToHIR().lower_block(ast_block)
 
 
 def _run_ir_with_clang(ir: str, build_dir: Path) -> tuple[int, str, str]:
@@ -104,26 +69,23 @@ def _run_case(case_dir: Path) -> str:
 		return "skipped (missing expected.json or main.drift)"
 
 	expected = json.loads(expected_path.read_text())
-	source_text = source_path.read_text()
+	func_hirs, signatures = parse_drift_to_hir(source_path)
+	# For now assume entry is drift_main when present, else first function.
+	entry = "drift_main" if "drift_main" in func_hirs else next(iter(func_hirs))
 
-	try:
-		fn_name, ret_type, ret_stmt = _parse_main_drift(source_text)
-	except ValueError as e:
-		return f"FAIL (parse error: {e})"
-
-	hir_block = _build_hir_block(ret_stmt)
-	signatures = {fn_name: FnSignature(name=fn_name, return_type=ret_type)}
-
-	ir = compile_to_llvm_ir_for_tests(
-		func_hirs={fn_name: hir_block},
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
 		signatures=signatures,
-		entry=fn_name,
+		entry=entry,
 	)
 
 	build_dir = BUILD_ROOT / case_dir.name
 	exit_code, stdout, stderr = _run_ir_with_clang(ir, build_dir)
 	if exit_code == -999:
 		return "skipped (clang not available)"
+
+	if checked.diagnostics:
+		return f"FAIL (diagnostics: {[d.message for d in checked.diagnostics]})"
 
 	if exit_code != expected.get("exit_code", 0):
 		return f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
@@ -144,7 +106,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 	args = ap.parse_args(argv)
 
 	case_root = ROOT / "lang2" / "codegen" / "e2e"
-	case_dirs = sorted(case_root.iterdir()) if case_root.exists() else []
+	case_dirs = sorted(d for d in case_root.iterdir() if d.is_dir()) if case_root.exists() else []
 	if args.cases:
 		names = set(args.cases)
 		case_dirs = [d for d in case_dirs if d.name in names]

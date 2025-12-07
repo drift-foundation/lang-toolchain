@@ -153,13 +153,14 @@ def compile_to_llvm_ir_for_tests(
 	signatures: Mapping[str, FnSignature],
 	exc_env: Mapping[str, int] | None = None,
 	entry: str = "drift_main",
-) -> str:
+) -> tuple[str, CheckedProgram]:
 	"""
 	End-to-end helper: HIR -> MIR -> throw checks -> SSA -> LLVM IR for tests.
 
 	This mirrors the stub driver pipeline and finishes by lowering SSA to LLVM IR.
 	It is intentionally narrow: assumes a single Drift entry `drift_main` (or
 	`entry`) returning `Int` or `FnResult<Int, Error>` and uses the v1 ABI.
+	Returns IR text and the CheckedProgram so callers can assert diagnostics.
 	"""
 	# First, run the normal pipeline to get MIR + FnInfos + SSA (and diagnostics).
 	mir_funcs, checked, ssa_funcs = compile_stubbed_funcs(
@@ -174,7 +175,7 @@ def compile_to_llvm_ir_for_tests(
 	# Lower module to LLVM IR and append the OS entry wrapper.
 	module = lower_module_to_llvm(mir_funcs, ssa_funcs, checked.fn_infos)
 	module.emit_entry_wrapper(entry)
-	return module.render()
+	return module.render(), checked
 
 
 __all__ = ["compile_stubbed_funcs", "compile_to_llvm_ir_for_tests"]

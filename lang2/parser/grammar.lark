@@ -1,0 +1,216 @@
+%import common.CNAME -> NAME
+%import common.SIGNED_INT
+%import common.SIGNED_FLOAT
+%import common.ESCAPED_STRING -> STRING
+%import common.WS_INLINE
+
+%declare TERMINATOR
+
+SEMI: ";"
+NEWLINE: /(\r?\n[ \t]*)/
+
+VAL: "val"
+VAR: "var"
+THROW: "throw"
+PIPE: ">>"
+AND: "and"
+OR: "or"
+EQEQ: "=="
+NOTEQ: "!="
+LTE: "<="
+GTE: ">="
+LT: "<"
+GT: ">"
+PLUS: "+"
+MINUS: "-"
+STAR: "*"
+SLASH: "/"
+DOT: "."
+COLON: ":"
+COMMA: ","
+AMP: "&"
+EQUAL: "="
+CARET: "^"
+RETURNS: "returns"
+BANG: "!"
+IF: "if"
+ELSE: "else"
+WHILE: "while"
+BREAK: "break"
+CONTINUE: "continue"
+MOVE: "->"
+EXCEPTION: "exception"
+TRY: "try"
+CATCH: "catch"
+QMARK: "?"
+TERNARY_COLON: ":"
+MODULE: "module"
+LINE_COMMENT: /\/\/[^\n]*/
+BLOCK_COMMENT: /\/\*([^*]|\*(?!\/))*\*\//
+
+%ignore WS_INLINE
+%ignore LINE_COMMENT
+%ignore BLOCK_COMMENT
+
+program: module_decl? (item | TERMINATOR)*
+
+module_decl: MODULE module_path
+module_path: NAME (DOT NAME)*
+
+?item: func_def
+     | struct_def
+     | exception_def
+     | stmt
+
+func_def: "fn" NAME "(" [params] ")" return_sig block
+return_sig: RETURNS type_expr
+
+params: param (COMMA param)*
+param: NAME COLON type_expr
+
+type_expr: ref_type
+         | base_type
+
+ref_type: AMP ["mut"] type_expr
+base_type: NAME type_args?
+type_args: square_type_args
+         | angle_type_args
+square_type_args: "[" type_expr (COMMA type_expr)* "]"
+angle_type_args: "<" type_expr (COMMA type_expr)* ">"
+
+block: "{" (stmt | TERMINATOR)* "}"
+
+stmt: if_stmt
+    | try_stmt
+    | simple_stmt TERMINATOR
+
+simple_stmt: let_stmt
+           | return_stmt
+           | raise_stmt
+           | import_stmt
+           | break_stmt
+           | continue_stmt
+           | while_stmt
+           | for_stmt
+           | assign_stmt
+           | expr_stmt
+
+try_stmt: TRY block terminator_opt catch_clause (terminator_opt catch_clause)* terminator_opt
+catch_clause: CATCH catch_pattern block
+catch_pattern: NAME "(" NAME ")"   -> catch_event
+             | NAME                -> catch_all
+
+assign_stmt: expr EQUAL expr
+
+for_stmt: "for" NAME "in" expr terminator_opt block
+
+if_stmt: IF expr terminator_opt block else_clause? terminator_opt
+else_clause: terminator_opt ELSE terminator_opt block
+break_stmt: BREAK
+continue_stmt: CONTINUE
+while_stmt: WHILE expr terminator_opt block
+terminator_opt: TERMINATOR*
+
+let_stmt: binder binding_name type_spec? alias_clause? EQUAL expr
+binder: VAL
+      | VAR
+binding_name: capture_marker? NAME
+capture_marker: CARET
+alias_clause: "as" STRING
+type_spec: COLON type_expr
+
+return_stmt: "return" expr?
+
+raise_stmt: ("raise" domain_clause? expr)
+          | (THROW expr)
+
+expr_stmt: expr
+
+import_stmt: "import" import_path import_alias?
+import_path: NAME (DOT NAME)*
+import_alias: "as" NAME
+
+struct_def: "struct" NAME struct_body
+struct_body: tuple_struct | block_struct
+tuple_struct: "(" struct_field_list? ")"
+struct_field_list: struct_field (COMMA struct_field)*
+struct_field: NAME COLON type_expr
+block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
+block_field: struct_field [COMMA]
+
+exception_def: EXCEPTION NAME "(" [exception_params] ")"
+exception_params: exception_param (COMMA exception_param)*
+exception_param: NAME COLON type_expr
+                | "domain" EQUAL STRING -> exception_domain_param
+
+domain_clause: "domain" NAME
+
+?expr: try_catch_expr
+     | ternary
+     | pipeline
+
+try_catch_expr: TRY expr (CATCH catch_expr_arm)+
+catch_expr_arm: NAME "(" NAME ")" block   -> catch_expr_event
+              | NAME block                -> catch_expr_binder
+              | block                     -> catch_expr_block
+ternary: pipeline QMARK expr TERNARY_COLON expr
+
+?pipeline: logic_or (PIPE logic_or)*
+
+?logic_or: logic_and logic_or_tail*
+logic_or_tail: OR logic_and
+
+?logic_and: equality logic_and_tail*
+logic_and_tail: AND equality
+
+?equality: comparison equality_tail*
+equality_tail: (EQEQ | NOTEQ) comparison
+
+?comparison: sum comparison_tail*
+comparison_tail: (LT | LTE | GT | GTE) sum
+
+?sum: term sum_tail*
+sum_tail: (PLUS | MINUS) term
+
+?term: factor term_tail*
+term_tail: (STAR | SLASH) factor
+?factor: postfix
+       | "-" factor -> neg
+       | "not" factor -> not_op
+       | BANG factor -> not_op
+       | AMP ["mut"] factor -> borrow
+
+postfix: primary postfix_suffix*
+postfix_suffix: call_suffix
+              | attr_suffix
+              | move_suffix
+              | index_suffix
+
+call_suffix: "(" [call_args] ")"
+attr_suffix: DOT NAME
+move_suffix: MOVE
+index_suffix: "[" (leading_dot | expr) "]"
+
+primary: literal
+       | NAME -> var
+       | leading_dot
+       | "(" expr ")"
+       | array_literal
+
+leading_dot: DOT NAME leading_suffix*
+leading_suffix: call_suffix
+              | attr_suffix
+              | move_suffix
+              | index_suffix
+
+array_literal: "[" [expr (COMMA expr)*] "]"
+
+call_args: call_arg (COMMA call_arg)*
+call_arg: NAME EQUAL expr -> kwarg
+        | expr
+
+literal: SIGNED_FLOAT -> float_lit
+       | SIGNED_INT   -> int_lit
+       | STRING       -> str_lit
+       | "true"      -> true_lit
+       | "false"     -> false_lit
