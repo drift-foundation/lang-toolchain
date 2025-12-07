@@ -132,7 +132,7 @@ lang2-codegen-test:
 	fi
 	# Clean codegen artifacts to keep cases isolated between runs.
 	rm -rf build/tests/lang2
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/codegen/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/codegen/llvm/tests
 	# Run clang-based IR cases (per-case dirs under lang2/codegen/ir_cases).
 	PYTHONPATH=. ./.venv/bin/python3 lang2/codegen/ir_cases/e2e_runner.py
 	# Run Drift-source e2e cases (per-case dirs under lang2/codegen/e2e).
