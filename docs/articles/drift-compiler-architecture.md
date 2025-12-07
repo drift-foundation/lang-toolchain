@@ -3,6 +3,18 @@
 The Drift compiler is a **pipeline of explicit, isolated stages**.
 Each stage has one responsibility and transforms the program into a simpler, more structured form.
 
+## Acronyms used in this doc
+- **AST**: Abstract Syntax Tree (stage0, surface syntax)
+- **HIR**: High-level IR (stage1, sugar-free, still expression-structured)
+- **MIR**: Mid-level IR (stage2, explicit ops + CFG)
+- **SSA**: Static Single Assignment form (stage4)
+- **CFG**: Control-Flow Graph
+- **DF**: Dominance Frontier
+- **DV**: DiagnosticValue (error payload)
+- **FnResult**: Result-like return type `<T, Error>` used for can-throw functions
+- **TypeEnv**: Type environment protocol used by typed throw checks (is_fnresult/fnresult_parts)
+- **IR**: Intermediate Representation (generic term; refers to HIR/MIR/SSA in this doc)
+
 **Full end-to-end pipeline:**
 
 > **Drift source → AST → HIR → MIR → SSA → TypeEnv → Throw-checks → LLVM → clang → machine code**
