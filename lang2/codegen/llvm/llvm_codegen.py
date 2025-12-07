@@ -25,12 +25,13 @@ directly. Unsupported features raise clear errors rather than emitting bad IR.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Mapping
 
 from lang2.checker import FnInfo
 from lang2.stage1 import BinaryOp
 from lang2.stage2 import (
 	BinaryOpInstr,
+	AssignSSA,
 	Call,
 	ConstBool,
 	ConstInt,
@@ -44,6 +45,7 @@ from lang2.stage2 import (
 	Return,
 )
 from lang2.stage4.ssa import SsaFunc
+from lang2.stage4.ssa import CfgKind
 
 # ABI type names
 DRIFT_ERROR_TYPE = "%DriftError"
@@ -52,7 +54,12 @@ FNRESULT_INT_ERROR = "%FnResult_Int_Error"
 
 # Public API -------------------------------------------------------------------
 
-def lower_ssa_func_to_llvm(func: MirFunc, ssa: SsaFunc, fn_info: FnInfo) -> str:
+def lower_ssa_func_to_llvm(
+	func: MirFunc,
+	ssa: SsaFunc,
+	fn_info: FnInfo,
+	fn_infos: Mapping[str, FnInfo] | None = None,
+) -> str:
 	"""
 	Lower a single SSA function to LLVM IR text using FnInfo for return typing.
 
@@ -68,7 +75,8 @@ def lower_ssa_func_to_llvm(func: MirFunc, ssa: SsaFunc, fn_info: FnInfo) -> str:
 	  - Only Int/Bools and FnResult<Int, Error> returns are supported in v1.
 	  - No loops/backedges; CFG must be acyclic (if/else diamonds ok).
 	"""
-	builder = _FuncBuilder(func=func, ssa=ssa, fn_info=fn_info)
+	all_infos = dict(fn_infos) if fn_infos is not None else {fn_info.name: fn_info}
+	builder = _FuncBuilder(func=func, ssa=ssa, fn_info=fn_info, fn_infos=all_infos)
 	return builder.lower()
 
 
@@ -107,15 +115,19 @@ class _FuncBuilder:
 	func: MirFunc
 	ssa: SsaFunc
 	fn_info: FnInfo
+	fn_infos: Mapping[str, FnInfo]
 	tmp_counter: int = 0
 	lines: List[str] = field(default_factory=list)
 	value_map: Dict[str, str] = field(default_factory=dict)
+	value_types: Dict[str, str] = field(default_factory=dict)
+	aliases: Dict[str, str] = field(default_factory=dict)
 
 	def lower(self) -> str:
-		self._assert_acyclic()
+		self._assert_cfg_supported()
 		self._emit_header()
-		for block in self.func.blocks.values():
-			self._emit_block(block.name)
+		order = self.ssa.block_order or list(self.func.blocks.keys())
+		for block_name in order:
+			self._emit_block(block_name)
 		self.lines.append("}")
 		return "\n".join(self.lines)
 
@@ -142,30 +154,54 @@ class _FuncBuilder:
 	def _lower_phi(self, block_name: str, phi: Phi) -> None:
 		dest = self._map_value(phi.dest)
 		incomings = []
+		incoming_types: set[str] = set()
 		for pred, val in phi.incoming.items():
 			incomings.append(f"[ {self._map_value(val)}, %{pred} ]")
+			ty = self._type_of(val)
+			if ty is not None:
+				incoming_types.add(ty)
 		joined = ", ".join(incomings)
-		self.lines.append(f"  {dest} = phi {self._llvm_scalar_type()} {joined}")
+		if not incoming_types:
+			phi_ty = self._llvm_scalar_type()
+		elif len(incoming_types) == 1:
+			phi_ty = next(iter(incoming_types))
+		else:
+			raise NotImplementedError(
+				f"LLVM codegen v1: phi with mixed incoming types {incoming_types}"
+			)
+		self.value_types[dest] = phi_ty
+		self.lines.append(f"  {dest} = phi {phi_ty} {joined}")
 
 	def _lower_instr(self, instr: object) -> None:
 		if isinstance(instr, ConstInt):
 			dest = self._map_value(instr.dest)
+			self.value_types[dest] = "i64"
 			self.lines.append(f"  {dest} = add i64 0, {instr.value}")
 		elif isinstance(instr, ConstBool):
 			dest = self._map_value(instr.dest)
 			val = 1 if instr.value else 0
+			self.value_types[dest] = "i1"
 			self.lines.append(f"  {dest} = add i1 0, {val}")
+		elif isinstance(instr, AssignSSA):
+			# Alias dest to src; no IR emission needed beyond name/type propagation.
+			src = self._map_value(instr.src)
+			dest = self._map_value(instr.dest)
+			self.aliases[instr.dest] = instr.src
+			if src in self.value_types:
+				self.value_types[dest] = self.value_types[src]
 		elif isinstance(instr, BinaryOpInstr):
 			dest = self._map_value(instr.dest)
 			left = self._map_value(instr.left)
 			right = self._map_value(instr.right)
 			op = self._map_binop(instr.op)
+			self.value_types[dest] = "i64"
 			self.lines.append(f"  {dest} = {op} i64 {left}, {right}")
 		elif isinstance(instr, Call):
 			self._lower_call(instr)
 		elif isinstance(instr, ConstructResultOk):
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
+			self.value_types[dest] = FNRESULT_INT_ERROR
 			tmp0 = self._fresh("ok0")
 			tmp1 = self._fresh("ok1")
 			err_zero = f"{DRIFT_ERROR_TYPE} zeroinitializer"
@@ -175,6 +211,7 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructResultErr):
 			dest = self._map_value(instr.dest)
 			err_val = self._map_value(instr.error)
+			self.value_types[dest] = FNRESULT_INT_ERROR
 			tmp0 = self._fresh("err0")
 			tmp1 = self._fresh("err1")
 			self.lines.append(f"  {tmp0} = insertvalue {FNRESULT_INT_ERROR} undef i1 1, 0")
@@ -183,6 +220,7 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
+			self.value_types[dest] = DRIFT_ERROR_TYPE
 			tmp0 = self._fresh("errc0")
 			tmp1 = self._fresh("errc1")
 			tmp2 = self._fresh("errc2")
@@ -199,26 +237,30 @@ class _FuncBuilder:
 	def _lower_call(self, instr: Call) -> None:
 		dest = self._map_value(instr.dest) if instr.dest else None
 		args = ", ".join([f"i64 {self._map_value(a)}" for a in instr.args])
-		# Decide callee return shape: Int or FnResult<Int, Error>. For v1 we
-		# restrict callees to these shapes; a richer TypeEnv will generalize later.
-		# Heuristic: if the destination is later used in a FnResult context (not tracked here),
-		# fall back to FnResult when this function itself is can-throw.
-		if self.fn_info.declared_can_throw:
+		callee_info = self.fn_infos.get(instr.fn)
+		if callee_info is None:
+			raise NotImplementedError(f"LLVM codegen v1: missing FnInfo for callee {instr.fn}")
+		if callee_info.declared_can_throw:
 			tmp = self._fresh("call")
 			self.lines.append(f"  {tmp} = call {FNRESULT_INT_ERROR} @{instr.fn}({args})")
 			if dest:
 				self.lines.append(f"  {dest} = extractvalue {FNRESULT_INT_ERROR} {tmp}, 1")
+				self.value_types[dest] = "i64"
 		else:
 			if dest is None:
 				self.lines.append(f"  call void @{instr.fn}({args})")
 			else:
 				self.lines.append(f"  {dest} = call i64 @{instr.fn}({args})")
+				self.value_types[dest] = "i64"
 
 	def _lower_term(self, term: object) -> None:
 		if isinstance(term, Goto):
 			self.lines.append(f"  br label %{term.target}")
 		elif isinstance(term, IfTerminator):
 			cond = self._map_value(term.cond)
+			cond_ty = self.value_types.get(cond, "i1")
+			if cond_ty != "i1":
+				raise NotImplementedError("LLVM codegen v1: branch condition must be bool (i1)")
 			self.lines.append(
 				f"  br i1 {cond}, label %{term.then_target}, label %{term.else_target}"
 			)
@@ -229,6 +271,9 @@ class _FuncBuilder:
 			if self.fn_info.declared_can_throw:
 				self.lines.append(f"  ret {FNRESULT_INT_ERROR} {val}")
 			else:
+				# Enforce scalar return shape for non-can-throw.
+				if self.value_types.get(val) not in (None, "i64"):
+					raise NotImplementedError("LLVM codegen v1: non-can-throw return must be Int")
 				self.lines.append(f"  ret i64 {val}")
 		else:
 			raise NotImplementedError(f"LLVM codegen v1: unsupported terminator {type(term).__name__}")
@@ -252,8 +297,16 @@ class _FuncBuilder:
 		return f"%{hint}{self.tmp_counter}"
 
 	def _map_value(self, mir_id: str) -> str:
+		# Resolve aliases (AssignSSA) before mapping to an LLVM name.
+		root = mir_id
+		seen: set[str] = set()
+		while root in self.aliases and root not in seen:
+			seen.add(root)
+			root = self.aliases[root]
+		if root not in self.value_map:
+			self.value_map[root] = f"%{root}"
 		if mir_id not in self.value_map:
-			self.value_map[mir_id] = f"%{mir_id}"
+			self.value_map[mir_id] = self.value_map[root]
 		return self.value_map[mir_id]
 
 	def _map_binop(self, op: BinaryOp) -> str:
@@ -268,12 +321,14 @@ class _FuncBuilder:
 		raise NotImplementedError(f"LLVM codegen v1: unsupported binary op {op}")
 
 	def _assert_acyclic(self) -> None:
-		# Simple check: no block should list itself as a successor; full backedge
-		# detection lives in SSA stage and rejects loops earlier.
-		for block in self.func.blocks.values():
-			term = block.terminator
-			if isinstance(term, Goto) and term.target == block.name:
-				raise NotImplementedError("LLVM codegen v1: loops/backedges unsupported")
-			if isinstance(term, IfTerminator):
-				if term.then_target == block.name or term.else_target == block.name:
-					raise NotImplementedError("LLVM codegen v1: self-branch unsupported")
+		pass
+
+	def _assert_cfg_supported(self) -> None:
+		cfg_kind = self.ssa.cfg_kind or CfgKind.STRAIGHT_LINE
+		if cfg_kind is CfgKind.GENERAL:
+			raise NotImplementedError("LLVM codegen v1: loops/backedges are not supported yet")
+
+	def _type_of(self, value_id: str) -> str | None:
+		"""Best-effort lookup of an LLVM type string for a value id."""
+		name = self._map_value(value_id)
+		return self.value_types.get(name)

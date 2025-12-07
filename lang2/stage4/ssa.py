@@ -14,8 +14,9 @@ will be extended to full SSA (dominators, φ insertion, renaming) later.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Dict, List
 
 from lang2.stage2 import (
 	MirFunc,
@@ -46,6 +47,16 @@ class SsaFunc:
 	local_versions: Dict[str, int]
 	current_value: Dict[str, str]
 	value_for_instr: Dict[tuple[str, int], str]
+	block_order: List[str] = field(default_factory=list)
+	cfg_kind: "CfgKind" | None = None
+
+
+class CfgKind(Enum):
+	"""Shape of the CFG as seen by SSA/codegen."""
+
+	STRAIGHT_LINE = auto()
+	ACYCLIC = auto()
+	GENERAL = auto()
 
 
 class MirToSSA:
@@ -113,6 +124,8 @@ class MirToSSA:
 			local_versions=version,
 			current_value=current_value,
 			value_for_instr=value_for_instr,
+			block_order=[func.entry],
+			cfg_kind=CfgKind.STRAIGHT_LINE,
 		)
 
 	def run_experimental_multi_block(self, func: MirFunc) -> SsaFunc:
@@ -330,4 +343,37 @@ class MirToSSA:
 			local_versions=counters,
 			current_value={k: v[-1] for k, v in stacks.items() if v},
 			value_for_instr=value_for_instr,
+			block_order=self._compute_block_order(func),
+			cfg_kind=CfgKind.ACYCLIC,
 		)
+
+	def _compute_block_order(self, func: MirFunc) -> list[str]:
+		"""
+		Compute a deterministic reverse-postorder block order from entry.
+
+		Unreachable blocks (if any) are appended after reachable blocks.
+		"""
+		succs: Dict[str, list[str]] = {}
+		for name, block in func.blocks.items():
+			targets: list[str] = []
+			if isinstance(block.terminator, Goto):
+				targets.append(block.terminator.target)
+			elif isinstance(block.terminator, IfTerminator):
+				targets.extend([block.terminator.then_target, block.terminator.else_target])
+			succs[name] = targets
+
+		visited: set[str] = set()
+		post: list[str] = []
+
+		def dfs(b: str) -> None:
+			if b in visited:
+				return
+			visited.add(b)
+			for succ in succs.get(b, []):
+				dfs(succ)
+			post.append(b)
+
+		dfs(func.entry)
+		rpo = list(reversed(post))
+		unreachable = [name for name in func.blocks if name not in visited]
+		return rpo + unreachable
