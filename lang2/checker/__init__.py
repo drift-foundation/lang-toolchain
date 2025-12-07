@@ -122,6 +122,7 @@ class Checker:
 		catch_arms: Mapping[str, Sequence[CatchArmInfo]] | None = None,
 		exception_catalog: Mapping[str, int] | None = None,
 		hir_blocks: Mapping[str, "H.HBlock"] | None = None,  # type: ignore[name-defined]
+		type_table: "TypeTable" | None = None,
 	) -> None:
 		# Until a real type checker exists we support two testing shims:
 		# 1) an explicit name -> bool map, or
@@ -132,12 +133,18 @@ class Checker:
 		self._catch_arms = catch_arms or {}
 		self._exception_catalog = dict(exception_catalog) if exception_catalog else None
 		self._hir_blocks = hir_blocks or {}
-		# Naive type table for return type resolution; real checker will own this.
-		self._type_table = TypeTable()
-		self._int_type = self._type_table.new_scalar("Int")
-		self._bool_type = self._type_table.new_scalar("Bool")
-		self._error_type = self._type_table.new_error("Error")
-		self._unknown_type = self._type_table.new_unknown("Unknown")
+		# Use shared TypeTable when supplied; otherwise create a local one.
+		self._type_table = type_table or TypeTable()
+		# Seed common scalars only when creating a fresh table.
+		self._int_type = getattr(self._type_table, "_int_type", None) or self._type_table.new_scalar("Int")
+		self._bool_type = getattr(self._type_table, "_bool_type", None) or self._type_table.new_scalar("Bool")
+		self._error_type = getattr(self._type_table, "_error_type", None) or self._type_table.new_error("Error")
+		self._unknown_type = getattr(self._type_table, "_unknown_type", None) or self._type_table.new_unknown("Unknown")
+		# Cache seeds on the table so downstream reuse sees the same ids.
+		self._type_table._int_type = self._int_type  # type: ignore[attr-defined]
+		self._type_table._bool_type = self._bool_type  # type: ignore[attr-defined]
+		self._type_table._error_type = self._error_type  # type: ignore[attr-defined]
+		self._type_table._unknown_type = self._unknown_type  # type: ignore[attr-defined]
 		# TODO: remove declared_can_throw shim once real parser/type checker supplies signatures.
 
 	def check(self, fn_decls: Iterable[str]) -> CheckedProgram:
@@ -272,6 +279,15 @@ class Checker:
 						)
 					)
 
+		# Best-effort call arity/type checks based on FnSignature TypeIds. This
+		# only visits HCall with a plain HVar callee; arg types are unknown here
+		# so only arity is enforced.
+		for fn_name, hir_block in self._hir_blocks.items():
+			info = fn_infos.get(fn_name)
+			if info is None:
+				continue
+			self._validate_calls(hir_block, fn_infos, diagnostics)
+
 		return CheckedProgram(
 			fn_infos=fn_infos,
 			type_table=self._type_table,
@@ -374,6 +390,88 @@ class Checker:
 
 		walk_block(block)
 		return may_throw
+
+	def _validate_calls(
+		self,
+		block: "H.HBlock",
+		fn_infos: Mapping[str, FnInfo],
+		diagnostics: List[Diagnostic],
+	) -> None:
+		"""
+		Conservatively validate calls in a HIR block using FnSignature TypeIds.
+
+		Currently enforces arity for HCall with HVar callee; type checking of
+		arguments is deferred until expression typing is available.
+		"""
+		from lang2 import stage1 as H
+
+		def walk_expr(expr: H.HExpr) -> None:
+			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+				callee_info = fn_infos.get(expr.fn.name)
+				if callee_info is None:
+					return
+				# Arg types unknown here -> arity check only.
+				self.check_call_signature(callee_info, [None] * len(expr.args), diagnostics, loc=None)
+				for arg in expr.args:
+					walk_expr(arg)
+			elif isinstance(expr, H.HMethodCall):
+				walk_expr(expr.receiver)
+				for arg in expr.args:
+					walk_expr(arg)
+			elif isinstance(expr, H.HTryResult):
+				walk_expr(expr.expr)
+			elif isinstance(expr, H.HResultOk):
+				walk_expr(expr.value)
+			elif isinstance(expr, H.HBinary):
+				walk_expr(expr.left)
+				walk_expr(expr.right)
+			elif isinstance(expr, H.HUnary):
+				walk_expr(expr.expr)
+			elif isinstance(expr, H.HTernary):
+				walk_expr(expr.cond)
+				walk_expr(expr.then_expr)
+				walk_expr(expr.else_expr)
+			elif isinstance(expr, H.HField):
+				walk_expr(expr.subject)
+			elif isinstance(expr, H.HIndex):
+				walk_expr(expr.subject)
+				walk_expr(expr.index)
+			elif isinstance(expr, H.HDVInit):
+				for a in expr.args:
+					walk_expr(a)
+			# literals/vars are leaf nodes
+
+		def walk_block(b: H.HBlock) -> None:
+			for stmt in b.statements:
+				if isinstance(stmt, H.HReturn) and stmt.value is not None:
+					walk_expr(stmt.value)
+					continue
+				if isinstance(stmt, H.HLet):
+					walk_expr(stmt.value)
+					continue
+				if isinstance(stmt, H.HAssign):
+					walk_expr(stmt.value)
+					continue
+				if isinstance(stmt, H.HIf):
+					walk_expr(stmt.cond)
+					walk_block(stmt.then_block)
+					if stmt.else_block:
+						walk_block(stmt.else_block)
+					continue
+				if isinstance(stmt, H.HLoop):
+					walk_block(stmt.body)
+					continue
+				if isinstance(stmt, H.HTry):
+					walk_block(stmt.body)
+					for arm in stmt.catches:
+						walk_block(arm.block)
+					continue
+				if isinstance(stmt, H.HExprStmt):
+					walk_expr(stmt.value)
+					continue
+				# other statements: continue
+
+		walk_block(block)
 
 	def check_call_signature(
 		self,

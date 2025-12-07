@@ -94,8 +94,9 @@ def compile_stubbed_funcs(
 			catch_arms_map[name] = arms
 
 	# If no signatures were supplied, resolve basic signatures from normalized HIR.
+	type_table = None
 	if signatures is None:
-		_, signatures = resolve_program_signatures(_fake_decls_from_hirs(normalized_hirs))
+		type_table, signatures = resolve_program_signatures(_fake_decls_from_hirs(normalized_hirs))
 
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.
@@ -105,6 +106,7 @@ def compile_stubbed_funcs(
 		exception_catalog=exc_env,
 		catch_arms=catch_arms_map,
 		hir_blocks=func_hirs,
+		type_table=type_table,
 	)
 	checked = checker.check(func_hirs.keys())
 	declared = {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
