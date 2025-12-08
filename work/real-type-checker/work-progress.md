@@ -19,7 +19,7 @@ Replace the legacy string/tuple/type-guess shims with a real front-end type chec
 
 3. **Checker consumption** ✅ (core plumbing)
    - Prefers TypeIds in signatures; falls back only when missing. Try-sugar checks use TypeIds. `_is_fnresult_return` still exists as a legacy fallback until all callers supply TypeIds.
-   - Helper `check_call_signature` added; HIR walk enforces call arity for plain calls via `FnInfo.signature`. Arg type checks are deferred until expression typing exists.
+   - Helper `check_call_signature` added; HIR walk enforces call arity and basic param-type equality for plain calls via `FnInfo.signature` using shallow arg type inference (literals/simple calls/Result.Ok). Full expression typing still deferred.
    - `parse_drift_to_hir` now returns the shared `TypeTable` so Drift-source paths can thread it into `Checker`, keeping TypeId/TypeKind coherent.
 
 4. **Call/arity/type checks**
