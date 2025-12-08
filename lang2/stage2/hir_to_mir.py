@@ -213,6 +213,15 @@ class HIRToMIR:
 
 	def _visit_expr_HField(self, expr: H.HField) -> M.ValueId:
 		subject = self.lower_expr(expr.subject)
+		# Array len/capacity sugar: field access on an array produces ArrayLen/ArrayCap.
+		if expr.name == "len":
+			dest = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=dest, array=subject))
+			return dest
+		if expr.name in ("cap", "capacity"):
+			dest = self.b.new_temp()
+			self.b.emit(M.ArrayCap(dest=dest, array=subject))
+			return dest
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadField(dest=dest, subject=subject, field=expr.name))
 		return dest

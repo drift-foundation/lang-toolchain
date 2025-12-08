@@ -149,6 +149,20 @@ class ArrayIndexStore(MInstr):
 
 
 @dataclass
+class ArrayLen(MInstr):
+	"""dest = len(array) in Size units."""
+	dest: ValueId
+	array: ValueId
+
+
+@dataclass
+class ArrayCap(MInstr):
+	"""dest = cap(array) in Size units."""
+	dest: ValueId
+	array: ValueId
+
+
+@dataclass
 class Call(MInstr):
 	"""dest = fn(args...) (plain function call; dest may be None for void)."""
 	dest: Optional[ValueId]  # None for void calls
@@ -320,6 +334,8 @@ __all__ = [
 	"ArrayLit",
 	"ArrayIndexLoad",
 	"ArrayIndexStore",
+	"ArrayLen",
+	"ArrayCap",
 	"Call",
 	"MethodCall",
 	"ConstructDV",

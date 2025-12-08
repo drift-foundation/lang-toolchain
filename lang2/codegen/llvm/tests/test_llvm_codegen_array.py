@@ -10,6 +10,7 @@ from lang2.stage2 import (
 	ArrayIndexLoad,
 	ArrayIndexStore,
 	ArrayLit,
+	ArrayLen,
 	BasicBlock,
 	ConstInt,
 	MirFunc,
@@ -36,6 +37,7 @@ def test_array_literal_and_index_ir_contains_alloc_and_load():
 			ConstInt(dest="t2", value=2),
 			ArrayLit(dest="t3", elem_ty=int_ty, elements=["t1", "t2"]),
 			ArrayIndexLoad(dest="t4", elem_ty=int_ty, array="t3", index="t1"),
+			ArrayLen(dest="t5", array="t3"),
 		],
 		terminator=Return(value="t4"),
 	)
@@ -51,6 +53,7 @@ def test_array_literal_and_index_ir_contains_alloc_and_load():
 	assert "unreachable" in ir
 	assert "sext" not in ir
 	assert "getelementptr inbounds i64" in ir
+	assert "extractvalue { %drift.size, %drift.size, i64* } %t3, 0" in ir
 
 
 def test_array_index_store_ir_contains_store():

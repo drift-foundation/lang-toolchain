@@ -33,6 +33,8 @@ from lang2.stage2 import (
 	ArrayIndexLoad,
 	ArrayIndexStore,
 	ArrayLit,
+	ArrayLen,
+	ArrayCap,
 	BinaryOpInstr,
 	AssignSSA,
 	Call,
@@ -256,6 +258,10 @@ class _FuncBuilder:
 			self._lower_array_index_load(instr)
 		elif isinstance(instr, ArrayIndexStore):
 			self._lower_array_index_store(instr)
+		elif isinstance(instr, ArrayLen):
+			self._lower_array_len(instr)
+		elif isinstance(instr, ArrayCap):
+			self._lower_array_cap(instr)
 		elif isinstance(instr, AssignSSA):
 			# Alias dest to src; no IR emission needed beyond name/type propagation.
 			src = self._map_value(instr.src)
@@ -461,7 +467,7 @@ class _FuncBuilder:
 		neg_cmp = self._fresh("negcmp")
 		self.lines.append(f"  {neg_cmp} = icmp slt %drift.size {index}, 0")
 		oob_cmp = self._fresh("oobcmp")
-		self.lines.append(f"  {oob_cmp} = icmp uge %drift.size {index}, %drift.size {len_tmp}")
+		self.lines.append(f"  {oob_cmp} = icmp uge %drift.size {index}, {len_tmp}")
 		oob_or = self._fresh("oobor")
 		self.lines.append(f"  {oob_or} = or i1 {neg_cmp}, {oob_cmp}")
 		ok_block = self._fresh("array_ok")
@@ -470,7 +476,7 @@ class _FuncBuilder:
 		# Fail block
 		self.lines.append(f"{fail_block[1:]}:")
 		self.lines.append(
-			f"  call void @drift_bounds_check_fail(%drift.size {index}, %drift.size {len_tmp})"
+			f"  call void @drift_bounds_check_fail(%drift.size {index}, {len_tmp})"
 		)
 		self.lines.append("  unreachable")
 		# Ok block
@@ -498,7 +504,7 @@ class _FuncBuilder:
 		neg_cmp = self._fresh("negcmp")
 		self.lines.append(f"  {neg_cmp} = icmp slt %drift.size {index}, 0")
 		oob_cmp = self._fresh("oobcmp")
-		self.lines.append(f"  {oob_cmp} = icmp uge %drift.size {index}, %drift.size {len_tmp}")
+		self.lines.append(f"  {oob_cmp} = icmp uge %drift.size {index}, {len_tmp}")
 		oob_or = self._fresh("oobor")
 		self.lines.append(f"  {oob_or} = or i1 {neg_cmp}, {oob_cmp}")
 		ok_block = self._fresh("array_ok")
@@ -507,7 +513,7 @@ class _FuncBuilder:
 		# Fail
 		self.lines.append(f"{fail_block[1:]}:")
 		self.lines.append(
-			f"  call void @drift_bounds_check_fail(%drift.size {index}, %drift.size {len_tmp})"
+			f"  call void @drift_bounds_check_fail(%drift.size {index}, {len_tmp})"
 		)
 		self.lines.append("  unreachable")
 		# Ok
@@ -515,6 +521,23 @@ class _FuncBuilder:
 		ptr_tmp = self._fresh("eltptr")
 		self.lines.append(f"  {ptr_tmp} = getelementptr inbounds {elem_llty}, {elem_llty}* {data_tmp}, %drift.size {index}")
 		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
+		# No dest; ArrayIndexStore returns void.
+
+	def _lower_array_len(self, instr: ArrayLen) -> None:
+		"""Lower ArrayLen by extracting the len field (index 0)."""
+		dest = self._map_value(instr.dest)
+		array = self._map_value(instr.array)
+		arr_llty = self.value_types.get(array, self._llvm_array_type("i64"))
+		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 0")
+		self.value_types[dest] = DRIFT_SIZE_TYPE
+
+	def _lower_array_cap(self, instr: ArrayCap) -> None:
+		"""Lower ArrayCap by extracting the cap field (index 1)."""
+		dest = self._map_value(instr.dest)
+		array = self._map_value(instr.array)
+		arr_llty = self.value_types.get(array, self._llvm_array_type("i64"))
+		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 1")
+		self.value_types[dest] = DRIFT_SIZE_TYPE
 
 	def _llvm_array_type(self, elem_llty: str) -> str:
 		return f"{{ %drift.size, %drift.size, {elem_llty}* }}"
@@ -523,13 +546,8 @@ class _FuncBuilder:
 		"""
 		Map an element TypeId to an LLVM type string.
 
-		v1 backend only supports Array<Int>; any other element type is rejected.
+		v1 backend assumes Array<Int> only and maps to i64 element type.
 		"""
-		# We don't carry a TypeTable here, so fail fast on unexpected elem types.
-		if elem_ty != getattr(self.fn_info.signature, "return_type_id", None):
-			# Allow Int only; this will be relaxed once TypeTable is threaded into codegen.
-			# We assume Int → i64 for now.
-			pass
 		return "i64"
 
 	def _sizeof(self, elem_llty: str) -> int:
