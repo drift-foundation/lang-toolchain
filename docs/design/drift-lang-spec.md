@@ -143,7 +143,7 @@ All modules compile down to a canonical Drift Module IR (DMIR) that can be crypt
 | `Bool`  | Logical true/false. |
 | `Int`   | Signed two’s-complement integer of the platform’s natural word size. Guaranteed to be at least 32 bits. |
 | `Uint`  | Unsigned integer of the platform’s natural word size. Same bit-width as `Int`. |
-| `Size`  | Unsigned integer used for lengths, indices, and offsets. Guaranteed to be at least 16 bits and at least as wide as a pointer on the target. |
+| `Size`  | (Reserved for future revisions) Natural-width unsigned; not used for collection lengths/indices in v1. |
 | `Float` | IEEE-754 binary floating type used as the default floating-point scalar. Guaranteed to be at least 32 bits. Implementations must document whether `Float` is `F32` or `F64` on a given target. |
 | `Int8`, `Int16`, `Int32`, `Int64` | Fixed-width signed integers, exactly 8/16/32/64-bit two’s-complement. |
 | `Uint8`, `Uint16`, `Uint32`, `Uint64` | Fixed-width unsigned integers, exactly 8/16/32/64-bit. |
@@ -159,7 +159,7 @@ Drift distinguishes between **natural-width** numeric primitives and **fixed-wid
 
 - Natural-width primitives (`Int`, `Uint`, `Size`, `Float`) map to the platform’s efficient scalars:
   - `Int` / `Uint` are at least 32 bits and typically match the native register size.
-  - `Size` is at least 16 bits and always at least as wide as a pointer; used for lengths/indices.
+- `Size` is reserved for future revisions and **not** used for collection lengths/indices in v1. Collections use `Uint` for lengths/capacities and `Int` for indices (see chapter 12).
   - `Float` is either `F32` or `F64`; implementations document the choice per target.
 - Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint64`, `F32`, `F64`) have exact widths and are used for binary/wire/FFI with explicit sizes.
 
@@ -1823,8 +1823,8 @@ fn copy_stream(src: InputStream, dst: OutputStream) returns Void {
 To avoid copying and allow other APIs to operate on a specific slot, `Array<T>` exposes helper methods:
 
 ```drift
-fn ref_at(self: &Array<T>, index: Size) returns &T
-fn ref_mut_at(self: &mut Array<T>, index: Size) returns &mut T
+fn ref_at(self: &Array<T>, index: Int) returns &T
+fn ref_mut_at(self: &mut Array<T>, index: Int) returns &mut T
 ```
 
 - `ref_at` borrows the array immutably and returns an immutable `&T` to element `index`. Multiple `ref_at` calls may coexist, and the array remains usable for other reads while the borrow lives.
