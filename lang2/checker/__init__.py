@@ -291,6 +291,14 @@ class Checker:
 				continue
 			self._validate_calls(hir_block, fn_infos, diagnostics, current_fn=info)
 
+		# Array checks: enforce literal element consistency, indexing rules, and
+		# basic assignment compatibility when indexes are used.
+		for fn_name, hir_block in self._hir_blocks.items():
+			info = fn_infos.get(fn_name)
+			if info is None:
+				continue
+			self._validate_array_exprs(hir_block, fn_infos, diagnostics, current_fn=info)
+
 		return CheckedProgram(
 			fn_infos=fn_infos,
 			type_table=self._type_table,
@@ -399,6 +407,7 @@ class Checker:
 		expr: "H.HExpr",
 		fn_infos: Mapping[str, FnInfo],
 		current_fn: Optional[FnInfo],
+		diagnostics: Optional[List[Diagnostic]] = None,
 	) -> Optional[TypeId]:
 		"""
 		Very shallow expression type inference for call-arg checking.
@@ -427,13 +436,69 @@ class Checker:
 				return current_fn.signature.return_type_id
 			return self._type_table.new_fnresult(self._unknown_type, self._error_type)
 		if isinstance(expr, H.HBinary):
-			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn)
-			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn)
+			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn, diagnostics)
+			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn, diagnostics)
 			if left_ty == self._int_type and right_ty == self._int_type:
 				return self._int_type
 			return None
 		if isinstance(expr, H.HUnary):
-			return self._infer_hir_expr_type(expr.expr, fn_infos, current_fn)
+			return self._infer_hir_expr_type(expr.expr, fn_infos, current_fn, diagnostics)
+		if isinstance(expr, H.HArrayLiteral):
+			if not expr.elements:
+				if diagnostics is not None:
+					diagnostics.append(
+						Diagnostic(
+							message="empty array literal requires explicit type",
+							severity="error",
+							span=None,
+						)
+					)
+				return None
+			elem_types: list[TypeId] = []
+			for el in expr.elements:
+				el_ty = self._infer_hir_expr_type(el, fn_infos, current_fn, diagnostics)
+				if el_ty is not None:
+					elem_types.append(el_ty)
+			if not elem_types:
+				return None
+			first = elem_types[0]
+			for el_ty in elem_types[1:]:
+				if el_ty != first:
+					if diagnostics is not None:
+						diagnostics.append(
+							Diagnostic(
+								message="array literal elements do not have a consistent type",
+								severity="error",
+								span=None,
+							)
+						)
+					return self._type_table.new_array(self._unknown_type)
+			return self._type_table.new_array(first)
+		if isinstance(expr, H.HIndex):
+			subject_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics)
+			idx_ty = self._infer_hir_expr_type(expr.index, fn_infos, current_fn, diagnostics)
+			if idx_ty is not None and idx_ty != self._int_type and diagnostics is not None:
+				diagnostics.append(
+					Diagnostic(
+						message="array index must be Int",
+						severity="error",
+						span=None,
+					)
+				)
+			if subject_ty is None:
+				return None
+			td = self._type_table.get(subject_ty)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return td.param_types[0]
+			if diagnostics is not None:
+				diagnostics.append(
+					Diagnostic(
+						message="indexing requires an Array value",
+						severity="error",
+						span=None,
+					)
+				)
+			return None
 		return None
 
 	def _validate_calls(
@@ -458,7 +523,7 @@ class Checker:
 				callee_info = fn_infos.get(expr.fn.name)
 				if callee_info is None:
 					return
-				arg_type_ids = [self._infer_hir_expr_type(a, fn_infos, current_fn) for a in expr.args]
+				arg_type_ids = [self._infer_hir_expr_type(a, fn_infos, current_fn, diagnostics) for a in expr.args]
 				self.check_call_signature(callee_info, arg_type_ids, diagnostics, loc=None)
 				for arg in expr.args:
 					walk_expr(arg)
@@ -744,6 +809,61 @@ class Checker:
 					for arm in stmt.catches:
 						walk_block(arm.block)
 				# HBreak/HContinue carry no expressions.
+
+		walk_block(block)
+
+	def _validate_array_exprs(
+		self,
+		block: "H.HBlock",
+		fn_infos: Mapping[str, FnInfo],
+		diagnostics: List[Diagnostic],
+		current_fn: Optional[FnInfo] = None,
+	) -> None:
+		"""
+		Validate array literals/indexing/assignments with shallow type inference.
+
+		This relies on `_infer_hir_expr_type` to derive element/index types for
+		literals, simple calls, and Result.Ok expressions. It is intentionally
+		conservative: when types are unknown it emits no diagnostics.
+		"""
+		from lang2 import stage1 as H
+
+		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
+			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics)
+
+		def walk_block(hb: H.HBlock) -> None:
+			for stmt in hb.statements:
+				if isinstance(stmt, H.HExprStmt):
+					walk_expr(stmt.value)
+				elif isinstance(stmt, H.HLet):
+					walk_expr(stmt.value)
+				elif isinstance(stmt, H.HAssign):
+					target_ty = None
+					if isinstance(stmt.target, H.HIndex):
+						target_ty = walk_expr(stmt.target)
+					value_ty = walk_expr(stmt.value)
+					if target_ty is not None and value_ty is not None and target_ty != value_ty:
+						diagnostics.append(
+							Diagnostic(
+								message="assignment type mismatch for indexed array element",
+								severity="error",
+								span=None,
+							)
+						)
+				elif isinstance(stmt, H.HIf):
+					walk_expr(stmt.cond)
+					walk_block(stmt.then_block)
+					if stmt.else_block:
+						walk_block(stmt.else_block)
+				elif isinstance(stmt, H.HLoop):
+					walk_block(stmt.body)
+				elif isinstance(stmt, H.HTry):
+					walk_block(stmt.body)
+					for arm in stmt.catches:
+						walk_block(arm.block)
+				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+					walk_expr(stmt.value)
+				# other statements: continue
 
 		walk_block(block)
 

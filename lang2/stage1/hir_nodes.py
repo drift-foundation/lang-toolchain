@@ -228,6 +228,12 @@ class HBinary(HExpr):
 	right: HExpr
 
 
+@dataclass
+class HArrayLiteral(HExpr):
+	"""Array literal with element expressions."""
+	elements: List[HExpr]
+
+
 # Statements
 
 @dataclass

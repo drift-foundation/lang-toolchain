@@ -24,6 +24,7 @@ class TypeKind(Enum):
 	ERROR = auto()
 	FNRESULT = auto()
 	FUNCTION = auto()
+	ARRAY = auto()
 	UNKNOWN = auto()
 
 
@@ -63,6 +64,10 @@ class TypeTable:
 	def new_function(self, name: str, param_types: List[TypeId], return_type: TypeId) -> TypeId:
 		"""Register a function type (name + params + return)."""
 		return self._add(TypeKind.FUNCTION, name, [*param_types, return_type])
+
+	def new_array(self, elem: TypeId) -> TypeId:
+		"""Register an Array<elem> type."""
+		return self._add(TypeKind.ARRAY, "Array", [elem])
 
 	def new_unknown(self, name: str = "Unknown") -> TypeId:
 		"""Register an unknown type (debug/fallback)."""

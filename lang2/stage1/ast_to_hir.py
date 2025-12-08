@@ -199,7 +199,8 @@ class AstToHIR:
 		return H.HBinary(op=op, left=left, right=right)
 
 	def _visit_expr_ArrayLiteral(self, expr: ast.ArrayLiteral) -> H.HExpr:
-		raise NotImplementedError("Array literal lowering not implemented yet")
+		"""Lower array literal by lowering each element expression."""
+		return H.HArrayLiteral(elements=[self.lower_expr(e) for e in expr.elements])
 
 	def _visit_expr_ExceptionCtor(self, expr: ast.ExceptionCtor) -> H.HExpr:
 		"""

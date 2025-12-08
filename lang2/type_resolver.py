@@ -89,12 +89,34 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 	  - "Int", "Bool", "String", "Error" (strings)
 	  - tuples of the form ("FnResult", ok, err) or (ok, err)
 	  - strings containing "FnResult" (treated as FnResult<Int, Error>)
+	  - strings containing "Array<...>" (treated as Array<inner>)
 	Unknown shapes are registered as scalar/unknown to keep resolution total.
 	"""
 	if raw is None:
 		return table.new_unknown("Unknown")
 	if isinstance(raw, TypeId):
 		return raw
+	# Accept duck-typed TypeExpr from the parser adapter.
+	if hasattr(raw, "name") and hasattr(raw, "args"):
+		name = getattr(raw, "name")
+		args = getattr(raw, "args")
+		if name == "FnResult":
+			ok = _resolve_type(args[0] if args else None, table, int_ty, bool_ty, str_ty, err_ty)
+			err = _resolve_type(args[1] if len(args) > 1 else err_ty, table, int_ty, bool_ty, str_ty, err_ty)
+			return table.new_fnresult(ok, err)
+		if name == "Array":
+			elem = _resolve_type(args[0] if args else None, table, int_ty, bool_ty, str_ty, err_ty)
+			return table.new_array(elem)
+		if name == "Int":
+			return int_ty
+		if name == "Bool":
+			return bool_ty
+		if name == "String":
+			return str_ty
+		if name == "Error":
+			return err_ty
+		# Generic with unknown name: register as scalar to keep total.
+		return table.new_scalar(str(name))
 	if isinstance(raw, str):
 		if raw == "Int":
 			return int_ty
@@ -106,6 +128,10 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 			return err_ty
 		if "FnResult" in raw:
 			return table.new_fnresult(int_ty, err_ty)
+		if raw.startswith("Array<") and raw.endswith(">"):
+			inner = raw[len("Array<"):-1]
+			elem_ty = _resolve_type(inner, table, int_ty, bool_ty, str_ty, err_ty)
+			return table.new_array(elem_ty)
 		return table.new_scalar(raw)
 	if isinstance(raw, tuple):
 		# Tuple forms: ('FnResult', ok, err) or (ok, err)
