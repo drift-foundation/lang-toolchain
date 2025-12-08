@@ -43,9 +43,10 @@ From the blueprint:
 Everything else is plumbing to make the above true in lang2.
 
 ### Progress so far (lang2)
-- Type core: added `TypeKind.ARRAY` and `TypeTable.new_array`.
-- Parser/AST/HIR: grammar already had array literals/indexing; AstToHIR now lowers array literals to `HArrayLiteral`.
-- Checker: shallow inference/validation for array literals, indexing, and indexed assignments; diagnostics for mixed element types, empty literal without type, non-Int index, non-array indexing, and assignment type mismatch. New checker tests cover these cases.
+- Type core: added `TypeKind.ARRAY` and `TypeTable.new_array`; resolver maps `Array<T>` (string or AST) to array `TypeId`s on the shared `TypeTable`.
+- Parser/AST/HIR: grammar already had array literals/indexing; AstToHIR now lowers array literals to `HArrayLiteral`. Stage1 docs/exports are in sync.
+- Checker: shallow inference/validation for array literals, indexing, and indexed assignments; diagnostics for mixed element types, empty literal without type, non-Int index, non-array indexing, and assignment type mismatch. Fixed HIR field bugs (`HExprStmt.expr`, `HLoop.body`). Added positive/negative checker tests for arrays.
+- Pipeline plumbing: shared `TypeTable` passed from resolver into Checker; guard added so TypeId-carrying signatures must bring the matching table. SSA typing reuses the shared String `TypeId` to keep HIR/SSA consistent.
 
 ---
 

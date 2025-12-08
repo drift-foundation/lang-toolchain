@@ -32,7 +32,6 @@ from .hir_nodes import (
 	HUnary,
 	HBinary,
 	HArrayLiteral,
-	HArrayLiteral,
 	HResultOk,
 	HBlock,
 	HExprStmt,

@@ -294,8 +294,9 @@ __all__ = [
 	"HNode", "HExpr", "HStmt",
 	"UnaryOp", "BinaryOp",
 	"HVar", "HLiteralInt", "HLiteralString", "HLiteralBool",
-	"HCall", "HMethodCall", "HTernary", "HTryResult", "HField", "HIndex", "HDVInit",
-	"HUnary", "HBinary",
+	"HCall", "HMethodCall", "HTernary", "HTryResult", "HResultOk",
+	"HField", "HIndex", "HDVInit",
+	"HUnary", "HBinary", "HArrayLiteral",
 	"HBlock", "HExprStmt", "HLet", "HAssign", "HIf", "HLoop",
 	"HBreak", "HContinue", "HReturn", "HThrow", "HTry", "HCatchArm",
 ]

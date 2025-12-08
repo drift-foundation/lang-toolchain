@@ -57,3 +57,43 @@ def test_array_index_assignment_type_mismatch():
 	)
 	diagnostics = _run_checker(hir)
 	assert any("assignment type mismatch" in d.message for d in diagnostics)
+
+
+def test_array_literal_and_index_ok_produces_no_diagnostic():
+	hir = H.HBlock(
+		statements=[
+			H.HLet(
+				name="xs",
+				value=H.HArrayLiteral(elements=[H.HLiteralInt(value=1), H.HLiteralInt(value=2)]),
+			),
+			H.HExprStmt(expr=H.HIndex(subject=H.HVar(name="xs"), index=H.HLiteralInt(value=0))),
+		]
+	)
+	diagnostics = _run_checker(hir)
+	assert diagnostics == []
+
+
+def test_array_index_store_ok_produces_no_diagnostic():
+	hir = H.HBlock(
+		statements=[
+			H.HAssign(
+				target=H.HIndex(
+					subject=H.HArrayLiteral(elements=[H.HLiteralInt(value=1), H.HLiteralInt(value=2)]),
+					index=H.HLiteralInt(value=1),
+				),
+				value=H.HLiteralInt(value=42),
+			)
+		]
+	)
+	diagnostics = _run_checker(hir)
+	assert diagnostics == []
+
+
+def test_indexing_non_array_reports_diagnostic():
+	hir = H.HBlock(
+		statements=[
+			H.HExprStmt(expr=H.HIndex(subject=H.HLiteralInt(value=1), index=H.HLiteralInt(value=0))),
+		]
+	)
+	diagnostics = _run_checker(hir)
+	assert any("indexing requires an Array value" in d.message for d in diagnostics)

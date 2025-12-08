@@ -11,8 +11,8 @@ This pass takes the parsed AST and produces the sugar-free HIR defined in
   - literals, vars, unary/binary ops, field/index
   - let/assign/if/while/for/return/break/continue/expr-stmt
   - plain/method calls, exception ctors, ternary, try/throw
-Remaining sugar (raise/rethrow, TryCatchExpr, array literals) still fails loudly
-so it can be filled in incrementally.
+Remaining sugar (raise/rethrow, TryCatchExpr) still fails loudly so it can be
+filled in incrementally.
 
 Entry points (stage API):
   - lower_expr: lower a single expression to HIR

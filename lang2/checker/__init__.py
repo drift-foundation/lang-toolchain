@@ -395,7 +395,7 @@ class Checker:
 					walk_block(stmt.body)
 					continue
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.value)
+					walk_expr(stmt.expr)
 					continue
 				# other statements: continue
 
@@ -580,7 +580,7 @@ class Checker:
 						walk_block(arm.block)
 					continue
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.value)
+					walk_expr(stmt.expr)
 					continue
 				# other statements: continue
 
@@ -787,7 +787,7 @@ class Checker:
 		def walk_block(hb: H.HBlock) -> None:
 			for stmt in hb.statements:
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.value)
+					walk_expr(stmt.expr)
 				elif isinstance(stmt, H.HLet):
 					walk_expr(stmt.value)
 				elif isinstance(stmt, H.HAssign):
@@ -798,7 +798,7 @@ class Checker:
 					if stmt.else_block is not None:
 						walk_block(stmt.else_block)
 				elif isinstance(stmt, H.HLoop):
-					walk_block(stmt.block)
+					walk_block(stmt.body)
 				elif isinstance(stmt, H.HReturn):
 					if stmt.value is not None:
 						walk_expr(stmt.value)
@@ -834,7 +834,7 @@ class Checker:
 		def walk_block(hb: H.HBlock) -> None:
 			for stmt in hb.statements:
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.value)
+					walk_expr(stmt.expr)
 				elif isinstance(stmt, H.HLet):
 					walk_expr(stmt.value)
 				elif isinstance(stmt, H.HAssign):
