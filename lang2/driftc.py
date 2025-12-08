@@ -85,6 +85,13 @@ def compile_stubbed_funcs(
 	  for tests/prototypes; a real CLI will build signatures and diagnostics
 	  from parsed sources instead of the shims here.
 	"""
+	# Guard: signatures with TypeIds must come with a shared TypeTable so TypeKind
+	# queries stay coherent end-to-end.
+	if signatures is not None and type_table is None:
+		for sig in signatures.values():
+			if sig.return_type_id is not None or sig.param_type_ids is not None:
+				raise ValueError("signatures with TypeIds require a shared type_table")
+
 	# Normalize upfront so catch-arm collection and lowering share the same HIR.
 	catch_arms_map: Dict[str, List[CatchArmInfo]] = {}
 	normalized_hirs: Dict[str, H.HBlock] = {}

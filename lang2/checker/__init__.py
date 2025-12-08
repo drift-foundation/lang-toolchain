@@ -135,14 +135,17 @@ class Checker:
 		self._hir_blocks = hir_blocks or {}
 		# Use shared TypeTable when supplied; otherwise create a local one.
 		self._type_table = type_table or TypeTable()
-		# Seed common scalars only when creating a fresh table.
+		# Seed common scalars only when creating a fresh table. Cache them on
+		# the table so shared instances keep consistent ids.
 		self._int_type = getattr(self._type_table, "_int_type", None) or self._type_table.new_scalar("Int")
 		self._bool_type = getattr(self._type_table, "_bool_type", None) or self._type_table.new_scalar("Bool")
+		self._string_type = getattr(self._type_table, "_string_type", None) or self._type_table.new_scalar("String")
 		self._error_type = getattr(self._type_table, "_error_type", None) or self._type_table.new_error("Error")
 		self._unknown_type = getattr(self._type_table, "_unknown_type", None) or self._type_table.new_unknown("Unknown")
 		# Cache seeds on the table so downstream reuse sees the same ids.
 		self._type_table._int_type = self._int_type  # type: ignore[attr-defined]
 		self._type_table._bool_type = self._bool_type  # type: ignore[attr-defined]
+		self._type_table._string_type = self._string_type  # type: ignore[attr-defined]
 		self._type_table._error_type = self._error_type  # type: ignore[attr-defined]
 		self._type_table._unknown_type = self._unknown_type  # type: ignore[attr-defined]
 		# TODO: remove declared_can_throw shim once real parser/type checker supplies signatures.
@@ -286,7 +289,7 @@ class Checker:
 			info = fn_infos.get(fn_name)
 			if info is None:
 				continue
-			self._validate_calls(hir_block, fn_infos, diagnostics)
+			self._validate_calls(hir_block, fn_infos, diagnostics, current_fn=info)
 
 		return CheckedProgram(
 			fn_infos=fn_infos,
@@ -391,17 +394,62 @@ class Checker:
 		walk_block(block)
 		return may_throw
 
+	def _infer_hir_expr_type(
+		self,
+		expr: "H.HExpr",
+		fn_infos: Mapping[str, FnInfo],
+		current_fn: Optional[FnInfo],
+	) -> Optional[TypeId]:
+		"""
+		Very shallow expression type inference for call-arg checking.
+
+		Handles literals, simple calls with HVar callees (using FnSignature),
+		and Result.Ok in a function declared to return FnResult. Everything
+		else returns None to avoid guessing.
+		"""
+		from lang2 import stage1 as H
+
+		if isinstance(expr, H.HLiteralInt):
+			return self._int_type
+		if isinstance(expr, H.HLiteralBool):
+			return self._bool_type
+		if hasattr(H, "HLiteralString") and isinstance(expr, getattr(H, "HLiteralString")):
+			return self._string_type
+		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+			callee = fn_infos.get(expr.fn.name)
+			if callee is not None and callee.signature and callee.signature.return_type_id is not None:
+				return callee.signature.return_type_id
+			return None
+		if isinstance(expr, H.HResultOk):
+			# If the enclosing function has a FnResult return type, reuse it; otherwise
+			# synthesize a generic FnResult<Unknown, Error>.
+			if current_fn and current_fn.signature and current_fn.signature.return_type_id is not None:
+				return current_fn.signature.return_type_id
+			return self._type_table.new_fnresult(self._unknown_type, self._error_type)
+		if isinstance(expr, H.HBinary):
+			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn)
+			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn)
+			if left_ty == self._int_type and right_ty == self._int_type:
+				return self._int_type
+			return None
+		if isinstance(expr, H.HUnary):
+			return self._infer_hir_expr_type(expr.expr, fn_infos, current_fn)
+		return None
+
 	def _validate_calls(
 		self,
 		block: "H.HBlock",
 		fn_infos: Mapping[str, FnInfo],
 		diagnostics: List[Diagnostic],
+		current_fn: Optional[FnInfo] = None,
 	) -> None:
 		"""
 		Conservatively validate calls in a HIR block using FnSignature TypeIds.
 
-		Currently enforces arity for HCall with HVar callee; type checking of
-		arguments is deferred until expression typing is available.
+		Currently enforces arity for HCall with HVar callee and attempts basic
+		param-type equality when argument types are inferable (literals, simple
+		calls, Result.Ok in a FnResult-returning function). Full expression
+		typing is still deferred.
 		"""
 		from lang2 import stage1 as H
 
@@ -410,8 +458,8 @@ class Checker:
 				callee_info = fn_infos.get(expr.fn.name)
 				if callee_info is None:
 					return
-				# Arg types unknown here -> arity check only.
-				self.check_call_signature(callee_info, [None] * len(expr.args), diagnostics, loc=None)
+				arg_type_ids = [self._infer_hir_expr_type(a, fn_infos, current_fn) for a in expr.args]
+				self.check_call_signature(callee_info, arg_type_ids, diagnostics, loc=None)
 				for arg in expr.args:
 					walk_expr(arg)
 			elif isinstance(expr, H.HMethodCall):
