@@ -535,8 +535,7 @@ class Checker:
 		- Performs simple TypeId equality checks for args when both sides are known.
 		- Returns the callee return_type_id (may be None if unknown).
 
-		This is a helper for future call/type-checking passes; it is not invoked
-		in the current stub pipeline.
+		Used by `_validate_calls` over HIR for shallow call checking.
 		"""
 		sig = callee.signature if isinstance(callee, FnInfo) else callee
 		if sig.param_type_ids is None or sig.return_type_id is None:
@@ -723,7 +722,7 @@ class Checker:
 		def walk_block(hb: H.HBlock) -> None:
 			for stmt in hb.statements:
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.expr)
+					walk_expr(stmt.value)
 				elif isinstance(stmt, H.HLet):
 					walk_expr(stmt.value)
 				elif isinstance(stmt, H.HAssign):
@@ -808,8 +807,8 @@ class Checker:
 								value_types[(fn_name, dest)] = self._bool_type
 								changed = True
 						elif isinstance(instr, ConstString) and dest is not None:
-							if (fn_name, dest) not in value_types:
-								value_types[(fn_name, dest)] = self._type_table.new_scalar("String")
+							if value_types.get((fn_name, dest)) != self._string_type:
+								value_types[(fn_name, dest)] = self._string_type
 								changed = True
 						elif isinstance(instr, ConstructResultOk):
 							if dest is None:

@@ -4,7 +4,7 @@
 Replace the legacy string/tuple/type-guess shims with a real front-end type checker that produces TypeIds and `FnSignature`s, and drives call/type/throw checks off that single source of truth.
 
 ### Baseline (current)
-- Checker stub prefers TypeIds in `FnSignature` (`param_type_ids`, `return_type_id`, `declared_can_throw`, flags) and falls back to legacy raw shapes only when ids are missing. Guard prevents TypeId-carrying signatures without the matching shared `TypeTable`.
+- Checker stub prefers TypeIds in `FnSignature` (`param_type_ids`, `return_type_id`, `declared_can_throw`, flags) and falls back to legacy raw shapes only when ids are missing. Guard prevents TypeId-carrying signatures without the matching shared `TypeTable`; string TypeId is shared across HIR/SSA now.
 - `FnInfo` owns `signature` and an `inferred_may_throw` flag; checker does a shallow HIR walk to mark may-throw and emit missing-throws diagnostics.
 - Try-sugar validation uses `TypeKind.FNRESULT` against `signature.return_type_id`.
 - Minimal resolver supplies TypeIds for declared param/return types via `TypeTable`; legacy string/tuple paths remain only for old shims.
