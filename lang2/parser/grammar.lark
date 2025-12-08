@@ -1,4 +1,5 @@
-%import common.CNAME -> NAME
+// Identifiers: allow leading underscore, but reserve double-underscore (compiler use).
+NAME: /[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 %import common.SIGNED_INT
 %import common.SIGNED_FLOAT
 %import common.ESCAPED_STRING -> STRING

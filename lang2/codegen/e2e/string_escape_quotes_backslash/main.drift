@@ -1,0 +1,4 @@
+fn drift_main() returns Int {
+    val s0 = "a\"b\\c";
+    return 0;
+}

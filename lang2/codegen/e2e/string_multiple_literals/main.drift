@@ -1,0 +1,6 @@
+fn drift_main() returns Int {
+    val a = "foo";
+    val b = "bar";
+    val c = "baz";
+    return 0;
+}
