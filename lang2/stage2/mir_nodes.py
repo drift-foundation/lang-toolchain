@@ -163,6 +163,29 @@ class ArrayCap(MInstr):
 
 
 @dataclass
+class StringLen(MInstr):
+	"""dest = len(string) in Uint/size units."""
+	dest: ValueId
+	value: ValueId
+
+
+@dataclass
+class StringEq(MInstr):
+	"""dest = (left == right) for strings; result is Bool."""
+	dest: ValueId
+	left: ValueId
+	right: ValueId
+
+
+@dataclass
+class StringConcat(MInstr):
+	"""dest = left + right for strings."""
+	dest: ValueId
+	left: ValueId
+	right: ValueId
+
+
+@dataclass
 class Call(MInstr):
 	"""dest = fn(args...) (plain function call; dest may be None for void)."""
 	dest: Optional[ValueId]  # None for void calls

@@ -1,0 +1,6 @@
+fn main() returns Int {
+    if "a" == "a" && !("a" == "b") {
+        return 0;
+    }
+    return 1;
+}

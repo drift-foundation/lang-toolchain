@@ -45,7 +45,16 @@ def _run_ir_with_clang(ir: str, build_dir: Path) -> tuple[int, str, str]:
 	ir_path.write_text(ir)
 
 	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		[
+			clang,
+			"-x",
+			"ir",
+			str(ir_path),
+			# Link the string runtime for String helpers used in codegen.
+			str(ROOT / "lang2" / "codegen" / "runtime" / "string_runtime.c"),
+			"-o",
+			str(bin_path),
+		],
 		capture_output=True,
 		text=True,
 		cwd=ROOT,

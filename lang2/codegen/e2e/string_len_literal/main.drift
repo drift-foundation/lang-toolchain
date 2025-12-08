@@ -1,0 +1,4 @@
+fn main() returns Int {
+    val s = "abc"
+    return s.len
+}

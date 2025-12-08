@@ -12,12 +12,15 @@ from lang2.stage2 import (
 	BasicBlock,
 	ConstructResultOk,
 	ConstInt,
+	ConstString,
+	BinaryOpInstr,
 	IfTerminator,
 	MirFunc,
 	Return,
 )
 from lang2.stage4 import MirToSSA
 from lang2.core.types_core import TypeTable
+from lang2.stage1 import BinaryOp
 
 
 def test_branch_condition_must_be_bool():
@@ -69,3 +72,25 @@ def test_non_can_throw_returning_fnresult_rejected():
 
 	with pytest.raises(NotImplementedError, match="non-can-throw return must be Int"):
 		lower_ssa_func_to_llvm(mir, ssa, fn_info, {"f": fn_info})
+
+
+def test_string_binaryop_unsupported():
+	"""String binary ops other than ==/+ should raise, not emit garbage IR."""
+	entry = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="t0", value="a"),
+			ConstString(dest="t1", value="b"),
+			BinaryOpInstr(dest="t2", op=BinaryOp.NE, left="t0", right="t1"),
+		],
+		terminator=Return(value="t2"),
+	)
+	mir = MirFunc(name="f", params=[], locals=["t0", "t1", "t2"], blocks={"entry": entry}, entry="entry")
+	ssa = MirToSSA().run(mir)
+
+	table = TypeTable()
+	int_ty = table.new_scalar("Int")
+	fn_info = FnInfo(name="f", declared_can_throw=False, return_type_id=int_ty)
+
+	with pytest.raises(NotImplementedError, match="string binary op"):
+		lower_ssa_func_to_llvm(mir, ssa, fn_info, {"f": fn_info}, type_table=table)

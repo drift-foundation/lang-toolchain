@@ -153,6 +153,8 @@ class LlvmModuleBuilder:
 	consts: List[str] = field(default_factory=list)
 	funcs: List[str] = field(default_factory=list)
 	needs_array_helpers: bool = False
+	needs_string_eq: bool = False
+	needs_string_concat: bool = False
 
 	def __post_init__(self) -> None:
 		self.type_decls.extend(
@@ -203,6 +205,12 @@ class LlvmModuleBuilder:
 					"",
 				]
 			)
+		if self.needs_string_eq:
+			lines.append(f"declare i1 @drift_string_eq({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
+		if self.needs_string_concat:
+			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_concat({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
+		if self.needs_string_eq or self.needs_string_concat:
+			lines.append("")
 		lines.extend(self.funcs)
 		lines.append("")
 		return "\n".join(lines)
@@ -343,9 +351,30 @@ class _FuncBuilder:
 			dest = self._map_value(instr.dest)
 			left = self._map_value(instr.left)
 			right = self._map_value(instr.right)
-			op = self._map_binop(instr.op)
-			self.value_types[dest] = "i64"
-			self.lines.append(f"  {dest} = {op} i64 {left}, {right}")
+			left_ty = self.value_types.get(left)
+			right_ty = self.value_types.get(right)
+			if left_ty == DRIFT_STRING_TYPE and right_ty == DRIFT_STRING_TYPE:
+				if instr.op is BinaryOp.ADD:
+					self.module.needs_string_concat = True
+					self.lines.append(
+						f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_concat("
+						f"{DRIFT_STRING_TYPE} {left}, {DRIFT_STRING_TYPE} {right})"
+					)
+					self.value_types[dest] = DRIFT_STRING_TYPE
+				elif instr.op is BinaryOp.EQ:
+					self.module.needs_string_eq = True
+					self.lines.append(
+						f"  {dest} = call i1 @drift_string_eq({DRIFT_STRING_TYPE} {left}, {DRIFT_STRING_TYPE} {right})"
+					)
+					self.value_types[dest] = "i1"
+				else:
+					raise NotImplementedError(
+						f"LLVM codegen v1: string binary op {instr.op} not supported"
+					)
+			else:
+				op = self._map_binop(instr.op)
+				self.value_types[dest] = "i64"
+				self.lines.append(f"  {dest} = {op} i64 {left}, {right}")
 		elif isinstance(instr, Call):
 			self._lower_call(instr)
 		elif isinstance(instr, ConstructResultOk):
@@ -477,7 +506,7 @@ class _FuncBuilder:
 				ty = self.value_types.get(val)
 				if ty == DRIFT_STRING_TYPE:
 					self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
-				elif ty == "i64":
+				elif ty in ("i64", DRIFT_SIZE_TYPE):
 					self.lines.append(f"  ret i64 {val}")
 				else:
 					raise NotImplementedError(
@@ -542,6 +571,10 @@ class _FuncBuilder:
 			return "mul"
 		if op == BinaryOp.DIV:
 			return "sdiv"
+		if op == BinaryOp.EQ:
+			return "icmp eq"
+		if op == BinaryOp.NE:
+			return "icmp ne"
 		raise NotImplementedError(f"LLVM codegen v1: unsupported binary op {op}")
 
 	def _assert_acyclic(self) -> None:
@@ -670,7 +703,12 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
 		arr_llty = self.value_types.get(array, self._llvm_array_type("i64"))
-		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 0")
+		# Strings reuse ArrayLen in the HIR; if the operand is a DriftString,
+		# read its len field instead of the array header.
+		if arr_llty == DRIFT_STRING_TYPE:
+			self.lines.append(f"  {dest} = extractvalue {DRIFT_STRING_TYPE} {array}, 0")
+		else:
+			self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 0")
 		self.value_types[dest] = DRIFT_SIZE_TYPE
 
 	def _lower_array_cap(self, instr: ArrayCap) -> None:

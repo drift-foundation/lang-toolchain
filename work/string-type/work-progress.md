@@ -104,10 +104,21 @@ Do this in two steps: **literals + pass-through** first; **concat/print** second
 * LLVM module seeds `%DriftString = { %drift.size, i8* }`.
 * ConstString lowering emits a private UTF-8 global with escaped bytes and builds the struct inline (len/data); no runtime call.
 * Return/call lowering now understands `%DriftString` when a shared TypeTable is provided (headers and arguments use `%DriftString`; return types are `%DriftString`); Int remains the default fallback.
-* IR tests cover a literal return and a pass-through call `id("abc")`.
+* String binary ops are partially lowered:
+  * `==` on strings → call `drift_string_eq`.
+  * `+` on strings → call `drift_string_concat`.
+  * `len` on strings is handled by reusing `ArrayLen` lowering: if the operand is `%DriftString`, lowering emits `extractvalue %DriftString, 0` (Uint/i64).
+  * Module-level declares for `drift_string_eq`/`drift_string_concat` are emitted once when needed.
+* IR tests now cover a literal return, pass-through call, string eq/concat lowering, and string len via `ArrayLen` on a string operand.
+
+Status:
+- String params/returns are supported in LLVM (headers/calls/returns typed).
+- String len/eq/concat are lowered in LLVM from BinaryOp/StringLen patterns; runtime linked in e2e runner.
+- E2E runner now links `string_runtime.c` and has cases for string len/eq/concat using `s.len`, `==`, and `+`.
 
 TODO in this phase:
 * Tighten literal escaping if we start using non-ASCII or embedded quotes (currently emits `\XX` hex escapes, quotes/backslashes escaped).
+* Push the surface syntax down from HIR to MIR instead of detecting string ops in LLVM (currently BinaryOp String detection happens in LLVM).
 
 ### 3B. Then: concat and print
 
