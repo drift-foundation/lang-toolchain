@@ -152,6 +152,7 @@ class LlvmModuleBuilder:
 	type_decls: List[str] = field(default_factory=list)
 	consts: List[str] = field(default_factory=list)
 	funcs: List[str] = field(default_factory=list)
+	needs_array_helpers: bool = False
 
 	def __post_init__(self) -> None:
 		self.type_decls.extend(
@@ -194,6 +195,14 @@ class LlvmModuleBuilder:
 		if self.consts:
 			lines.extend(self.consts)
 			lines.append("")
+		if self.needs_array_helpers:
+			lines.extend(
+				[
+					"declare ptr @drift_alloc_array(i64, i64, %drift.size, %drift.size)",
+					"declare void @drift_bounds_check_fail(%drift.size, %drift.size)",
+					"",
+				]
+			)
 		lines.extend(self.funcs)
 		lines.append("")
 		return "\n".join(lines)
@@ -237,12 +246,26 @@ class _FuncBuilder:
 
 	def _emit_header(self) -> None:
 		ret_ty = self._return_llvm_type()
-		if self.func.params:
-			raise NotImplementedError("LLVM codegen v1: parameters not supported yet")
-		self.lines.append(f"define {ret_ty} @{self.func.name}() {{")
+		params = self.func.params
+		sig = self.fn_info.signature
+		if params and (sig is None or sig.param_type_ids is None or len(sig.param_type_ids) != len(params)):
+			raise NotImplementedError(
+				f"LLVM codegen v1: param count/signature mismatch for {self.func.name}: "
+				f"MIR has {len(params)}, signature has "
+				f"{0 if sig is None or sig.param_type_ids is None else len(sig.param_type_ids)}"
+			)
+		param_parts: list[str] = []
+		if params and sig and sig.param_type_ids is not None:
+			for name, ty_id in zip(params, sig.param_type_ids):
+				llty = self._llvm_type_for_typeid(ty_id)
+				llvm_name = self._map_value(name)
+				self.value_types[llvm_name] = llty
+				param_parts.append(f"{llty} {llvm_name}")
+		params_str = ", ".join(param_parts)
+		self.lines.append(f"define {ret_ty} @{self.func.name}({params_str}) {{")
 
 	def _declare_array_helpers_if_needed(self) -> None:
-		"""Emit extern decls for array helpers if any array ops are present."""
+		"""Mark the module to emit array helper decls if any array ops are present."""
 		has_array = any(
 			isinstance(instr, (ArrayLit, ArrayIndexLoad, ArrayIndexStore))
 			for block in self.func.blocks.values()
@@ -250,16 +273,7 @@ class _FuncBuilder:
 		)
 		if not has_array:
 			return
-		self.lines.insert(
-			0,
-			"\n".join(
-				[
-					"declare ptr @drift_alloc_array(i64, i64, %drift.size, %drift.size)",
-					"declare void @drift_bounds_check_fail(%drift.size, %drift.size)",
-					"",
-				]
-			),
-		)
+		self.module.needs_array_helpers = True
 
 	def _emit_block(self, block_name: str) -> None:
 		block = self.func.blocks[block_name]
@@ -400,10 +414,26 @@ class _FuncBuilder:
 
 	def _lower_call(self, instr: Call) -> None:
 		dest = self._map_value(instr.dest) if instr.dest else None
-		args = ", ".join([f"i64 {self._map_value(a)}" for a in instr.args])
 		callee_info = self.fn_infos.get(instr.fn)
 		if callee_info is None:
 			raise NotImplementedError(f"LLVM codegen v1: missing FnInfo for callee {instr.fn}")
+
+		arg_parts: list[str] = []
+		if callee_info.signature and callee_info.signature.param_type_ids is not None:
+			sig = callee_info.signature
+			if len(sig.param_type_ids) != len(instr.args):
+				raise NotImplementedError(
+					f"LLVM codegen v1: arg count mismatch for {instr.fn}: "
+					f"MIR has {len(instr.args)}, signature has {len(sig.param_type_ids)}"
+				)
+			for ty_id, arg in zip(sig.param_type_ids, instr.args):
+				llty = self._llvm_type_for_typeid(ty_id)
+				arg_parts.append(f"{llty} {self._map_value(arg)}")
+		else:
+			# Legacy fallback: assume all args are Ints.
+			arg_parts = [f"i64 {self._map_value(a)}" for a in instr.args]
+		args = ", ".join(arg_parts)
+
 		if callee_info.declared_can_throw:
 			tmp = self._fresh("call")
 			self.lines.append(f"  {tmp} = call {FNRESULT_INT_ERROR} @{instr.fn}({args})")
@@ -467,6 +497,20 @@ class _FuncBuilder:
 			return DRIFT_STRING_TYPE
 		# Default to Int
 		return "i64"
+
+	def _llvm_type_for_typeid(self, ty_id: TypeId) -> str:
+		"""
+		Map a TypeId to an LLVM type string for parameters/arguments.
+
+		v1 supports only Int (i64) and String (%DriftString) in params.
+		"""
+		if self.int_type_id is not None and ty_id == self.int_type_id:
+			return "i64"
+		if self.string_type_id is not None and ty_id == self.string_type_id:
+			return DRIFT_STRING_TYPE
+		raise NotImplementedError(
+			f"LLVM codegen v1: unsupported param type id {ty_id!r} for function {self.func.name}"
+		)
 
 	def _llvm_scalar_type(self) -> str:
 		# All lowered values are i64 or i1; phis currently assume Int.

@@ -176,7 +176,8 @@ def compile_to_llvm_ir_for_tests(
 
 	This mirrors the stub driver pipeline and finishes by lowering SSA to LLVM IR.
 	It is intentionally narrow: assumes a single Drift entry `drift_main` (or
-	`entry`) returning `Int` or `FnResult<Int, Error>` and uses the v1 ABI.
+	`entry`) returning `Int`, `String`, or `FnResult<Int, Error>` and uses the
+	v1 ABI.
 	Returns IR text and the CheckedProgram so callers can assert diagnostics.
 	"""
 	# First, run the normal pipeline to get MIR + FnInfos + SSA (and diagnostics).

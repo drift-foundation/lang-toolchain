@@ -103,11 +103,10 @@ Do this in two steps: **literals + pass-through** first; **concat/print** second
 
 * LLVM module seeds `%DriftString = { %drift.size, i8* }`.
 * ConstString lowering emits a private UTF-8 global with escaped bytes and builds the struct inline (len/data); no runtime call.
-* Return/call lowering understands `%DriftString` when a shared TypeTable is provided; Int remains the default fallback.
-* IR test added for a function returning a string literal.
+* Return/call lowering now understands `%DriftString` when a shared TypeTable is provided (headers and arguments use `%DriftString`; return types are `%DriftString`); Int remains the default fallback.
+* IR tests cover a literal return and a pass-through call `id("abc")`.
 
 TODO in this phase:
-* Add more IR tests (pass-through call returning String) once param lowering exists.
 * Tighten literal escaping if we start using non-ASCII or embedded quotes (currently emits `\XX` hex escapes, quotes/backslashes escaped).
 
 ### 3B. Then: concat and print
