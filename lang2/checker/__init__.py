@@ -799,8 +799,9 @@ class Checker:
 		"""
 		Map a parser TypeExpr-like object (name/args) or simple string/tuple into a
 		TypeId using the shared TypeTable. This mirrors the resolver and is used for
-		declared local types.
-		"""
+		declared local types. The len/cap rule (Array/String → Uint) is centralized
+		in the type resolver; this helper simply resolves declared type names.
+	"""
 		if raw is None:
 			return self._unknown_type
 		if isinstance(raw, TypeId):
@@ -815,20 +816,20 @@ class Checker:
 			if name == "Array":
 				elem = self._resolve_typeexpr(args[0] if args else None)
 				return self._type_table.new_array(elem)
-			if name == "Int":
-				return self._int_type
 			if name == "Uint":
-				return self._uint_type
+				return self._type_table.ensure_uint()
+			if name == "Int":
+				return self._type_table.ensure_int()
 			if name == "Bool":
-				return self._bool_type
+				return self._type_table.ensure_bool()
 			if name == "String":
-				return self._string_type
+				return self._type_table.ensure_string()
 			if name == "Error":
 				return self._error_type
 			return self._type_table.new_scalar(str(name))
 		if isinstance(raw, str):
 			if raw == "Uint":
-				return self._uint_type
+				return self._type_table.ensure_uint()
 			return self._map_opaque(raw)
 		if isinstance(raw, tuple):
 			return self._map_opaque(raw)

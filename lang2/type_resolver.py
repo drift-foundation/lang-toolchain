@@ -119,9 +119,7 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 			elem = _resolve_type(args[0] if args else None, table, int_ty, bool_ty, str_ty, err_ty)
 			return table.new_array(elem)
 		if name == "Uint":
-			ty = table.ensure_uint()
-			table._uint_type = ty  # type: ignore[attr-defined]
-			return ty
+			return table.ensure_uint()
 		if name == "Int":
 			return int_ty
 		if name == "Bool":
@@ -142,9 +140,7 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 		if raw == "Error":
 			return err_ty
 		if raw == "Uint":
-			ty = table.ensure_uint()
-			table._uint_type = ty  # type: ignore[attr-defined]
-			return ty
+			return table.ensure_uint()
 		if "FnResult" in raw:
 			return table.new_fnresult(int_ty, err_ty)
 		if raw.startswith("Array<") and raw.endswith(">"):
