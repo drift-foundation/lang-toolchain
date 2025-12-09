@@ -248,7 +248,7 @@ Prevent use-after-move and conflicting borrows before codegen. Runs on typed HIR
 
 ### Planned integration (no flags, full enforcement)
 
-* Replace the stub checker with a typed checker that emits TypedFnHIR + TypeEnv, with ParamId/LocalId and TypeIds on every binding/expr; extend TypeKind to include reference types.
+* Replace the stub checker with a typed checker that emits TypedFnHIR + TypeEnv, with ParamId/LocalId and TypeIds on every binding/expr; extend TypeKind to include reference types. TypedFnHIR shape: name, params, locals, HIR body, expr_types map, binding map.
 * Thread binding IDs into HIR and base_lookup so borrow checker uses identities, not names.
 * Driver pipeline becomes: parse → type check → **borrow check (mandatory)** → lowering/codegen; single diagnostics sink, any error aborts.
 * Auto-borrow becomes signature-driven (param/receiver `&T` / `&mut T`) once ref types exist.
