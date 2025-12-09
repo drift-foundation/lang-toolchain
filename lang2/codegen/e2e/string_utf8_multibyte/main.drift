@@ -1,4 +1,10 @@
-fn drift_main() returns Int {
+fn main() returns Int {
     val s0 = "ążć";
-    return 0;
+    val s1 = "żół";
+    val n = byte_length(s0);
+    val expected = byte_length(s1);  // both are 6-byte UTF-8 strings
+    if n == expected {
+        return 0;
+    }
+    return 1;
 }

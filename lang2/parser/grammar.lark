@@ -2,7 +2,8 @@
 NAME: /[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 %import common.SIGNED_INT
 %import common.SIGNED_FLOAT
-%import common.ESCAPED_STRING -> STRING
+// String literal with basic escapes plus \xHH hex byte escapes (UTF-8).
+STRING: /"(?:[^"\\]|\\["\\ntbrf]|\\x[0-9A-Fa-f]{2})*"/
 %import common.WS_INLINE
 
 %declare TERMINATOR

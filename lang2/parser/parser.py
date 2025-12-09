@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import codecs
 from pathlib import Path
 from typing import List, Optional
 
@@ -49,6 +50,19 @@ from .ast import (
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
 _GRAMMAR_SRC = _GRAMMAR_PATH.read_text()
+
+
+def _decode_string_token(tok: Token) -> str:
+	"""
+	Decode STRING tokens, including \\xHH hex byte escapes. We first interpret
+	Python-style escapes (unicode_escape), then reinterpret the resulting code
+	points as raw bytes (latin-1) and decode as UTF-8 to recover the intended
+	byte sequence.
+	"""
+	content = tok.value[1:-1]  # strip quotes
+	unescaped = codecs.decode(content, "unicode_escape")
+	raw_bytes = unescaped.encode("latin-1")
+	return raw_bytes.decode("utf-8")
 
 
 class TerminatorInserter:
@@ -210,10 +224,9 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
     )
     domain_val = None
     if domain_node:
-        import ast as _ast
         str_node = next((c for c in domain_node.children if isinstance(c, Token) and c.type == "STRING"), None)
         if str_node:
-            domain_val = _ast.literal_eval(str_node.value)
+            domain_val = _decode_string_token(str_node)
     if params_node:
         args = []
         for child in params_node.children:
@@ -222,8 +235,7 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
             if isinstance(child, Tree) and _name(child) == "exception_domain_param":
                 str_node = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
                 if str_node:
-                    import ast as _ast
-                    domain_val = _ast.literal_eval(str_node.value)
+                    domain_val = _decode_string_token(str_node)
     return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val)
 
 
@@ -445,10 +457,10 @@ def _parse_binding_name(tree: Tree) -> tuple[Token, bool]:
 
 
 def _parse_alias(tree: Tree) -> str:
-    string_token = next(
-        child for child in tree.children if isinstance(child, Token) and child.type == "STRING"
-    )
-    return ast.literal_eval(string_token.value)
+	string_token = next(
+		child for child in tree.children if isinstance(child, Token) and child.type == "STRING"
+	)
+	return _decode_string_token(string_token)
 
 
 def _binder_is_mutable(node: Tree) -> bool:
@@ -703,8 +715,8 @@ def _build_expr(node) -> Expr:
     if name == "float_lit":
         return Literal(loc=_loc(node), value=float(node.children[0].value))
     if name == "str_lit":
-        raw = node.children[0].value
-        return Literal(loc=_loc(node), value=ast.literal_eval(raw))
+        raw_tok = node.children[0]
+        return Literal(loc=_loc(node), value=_decode_string_token(raw_tok))
     if name == "true_lit":
         return Literal(loc=_loc(node), value=True)
     if name == "false_lit":

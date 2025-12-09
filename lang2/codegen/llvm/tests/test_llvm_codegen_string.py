@@ -42,6 +42,32 @@ def test_string_literal_return_ir():
 	assert "ret %DriftString" in ir
 
 
+def test_string_utf8_literal_ir():
+	"""UTF-8 literals should be escaped byte-wise in the LLVM global."""
+	table = TypeTable()
+	str_ty = _string_type(table)
+
+	block = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="t0", value="Solidarność"),
+		],
+		terminator=Return(value="t0"),
+	)
+	func = MirFunc(name="f", params=[], locals=[], blocks={"entry": block}, entry="entry")
+	ssa = MirToSSA().run(func)
+	sig = FnSignature(name="f", return_type_id=str_ty, param_type_ids=[])
+	fn_info = FnInfo(name="f", declared_can_throw=False, signature=sig, return_type_id=str_ty)
+
+	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {"f": fn_info}, type_table=table)
+
+	assert "%drift.size = type i64" in ir
+	assert "%DriftString = type { %drift.size, i8*" in ir
+	assert '@.str0 = private unnamed_addr constant [14 x i8] c"Solidarno\\C5\\9B\\C4\\87\\00"' in ir
+	assert "define %DriftString @f()" in ir
+	assert "ret %DriftString" in ir
+
+
 def test_string_pass_through_call_ir():
 	table = TypeTable()
 	str_ty = _string_type(table)
