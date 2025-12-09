@@ -1708,26 +1708,6 @@ Semantics:
 - `unwrap_or` returns the inner value if present, otherwise `default`.
 
 This API is sufficient to inspect `Optional<T>` without pattern matching; richer combinators can be added later.
-```
-
-### 11.8. Optional API (minimal)
-
-The standard library exposes a minimal API on `Optional<T>`:
-
-```drift
-struct Optional<T> {
-    fn is_some(self) returns Bool
-    fn is_none(self) returns Bool
-    fn unwrap_or(self, default: T) returns T
-}
-```
-
-Semantics:
-- `is_some` tests the tag.
-- `is_none` is `!is_some`.
-- `unwrap_or` returns the inner value if present, otherwise `default`.
-
-This API is sufficient to inspect `Optional<T>` without pattern matching; richer combinators can be added later.
 
 ---
 ## 12. `lang.array`, `ByteBuffer`, and array literals
@@ -1753,7 +1733,7 @@ val explicit: Array<Int64> = [1, 2, 3]  // annotation still allowed when desired
 ```
 
 - `[expr1, expr2, ...]` constructs an `Array<T>` where every element shares the same type `T`. The compiler infers `T` from the elements.
-- Mixed-type literals (`[1, "two"]`) are rejected at parse-time.
+ - Mixed-type literals (`[1, "two"]`) are rejected during type checking (compile-time error).
 - Empty literals are reserved for a future constructor; for now, call the stdlib helper once it lands.
 
 `Array<T>` integrates with the broader language design — it moves with `->`, can be captured with `^`, and will participate in trait implementations like `Display` once the stdlib grows. The literal syntax keeps sample programs succinct while we flesh out higher-level APIs.

@@ -950,6 +950,11 @@ class Checker:
 		from lang2 import stage1 as H
 
 		locals: Dict[str, TypeId] = {}
+		# Seed locals with parameter types when available so param usages are typed.
+		if current_fn and current_fn.signature and current_fn.signature.param_type_ids:
+			for name, ty in zip(getattr(self._hir_blocks.get(current_fn.name), "params", []) or [], current_fn.signature.param_type_ids):
+				if ty is not None:
+					locals[name] = ty
 
 		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
 			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics, locals=locals)
@@ -1019,6 +1024,11 @@ class Checker:
 		from lang2 import stage1 as H
 
 		locals: Dict[str, TypeId] = {}
+		# Seed locals with parameter types if available to type-check conditions on params.
+		if current_fn and current_fn.signature and current_fn.signature.param_type_ids:
+			for name, ty in zip(getattr(self._hir_blocks.get(current_fn.name), "params", []) or [], current_fn.signature.param_type_ids):
+				if ty is not None:
+					locals[name] = ty
 
 		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
 			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics, locals=locals)
