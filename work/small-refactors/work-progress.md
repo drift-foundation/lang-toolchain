@@ -1,15 +1,13 @@
 ## Rough edges / potential bugs
 
-- Type inference logic is duplicated across _infer_hir_expr_type, _validate_array_exprs, and _validate_bool_conditions; they each
-  maintain their own locals maps. This is brittle (now less urgent since params are seeded, but still a refactor target).
+- DONE: Type inference now lives in a shared _TypingContext + _walk_hir; array/bool validators share the same locals/diagnostics.
 - Error reporting: duplicate-function rejection uses a thrown ValueError instead of a diagnostic; also span info is generally None in
   checker diags (known limitation, but worth noting).
 
   ## Proposed cleanup plan
 
-1. Centralize expression typing helper
-    - Factor out a single _infer_hir_expr_type-style helper that both array validation and bool-condition validation can use, seeded
-      with the same locals. Avoid maintaining separate locals maps per pass.
+1. Centralize expression typing helper (DONE)
+    - _TypingContext wraps infer logic and feeds a shared _walk_hir for array/bool validation with a single locals map.
 2. Change duplicate-function handling to a diagnostic
     - Instead of raising ValueError in the parser adapter, surface a structured diagnostic (with a span when available).
 3. Add/adjust tests after cleanup

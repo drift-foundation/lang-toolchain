@@ -20,7 +20,7 @@ and validate catch-arm shapes when provided.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, FrozenSet, Mapping, Sequence, Set, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Callable, FrozenSet, Mapping, Sequence, Set, Tuple, TYPE_CHECKING
 
 from lang2.core.diagnostics import Diagnostic
 from lang2.core.types_protocol import TypeEnv
@@ -303,20 +303,31 @@ class Checker:
 				continue
 			self._validate_calls(hir_block, fn_infos, diagnostics, current_fn=info)
 
-		# Array checks: enforce literal element consistency, indexing rules, and
-		# basic assignment compatibility when indexes are used.
+		# Array/boolean checks share a typing context per function to keep locals
+		# consistent across validations.
 		for fn_name, hir_block in self._hir_blocks.items():
 			info = fn_infos.get(fn_name)
 			if info is None:
 				continue
-			self._validate_array_exprs(hir_block, fn_infos, diagnostics, current_fn=info)
+			# Each function gets its own typing context so locals/diagnostics are
+			# isolated while reusing the shared traversal logic.
+			ctx = self._TypingContext(
+				checker=self,
+				table=self._type_table,
+				fn_infos=fn_infos,
+				current_fn=info,
+				locals={},
+				diagnostics=diagnostics,
+			)
+			self._seed_locals_from_signature(ctx)
 
-		# Boolean conditions: ensure known conditions are Bool.
-		for fn_name, hir_block in self._hir_blocks.items():
-			info = fn_infos.get(fn_name)
-			if info is None:
-				continue
-			self._validate_bool_conditions(hir_block, fn_infos, diagnostics, current_fn=info)
+			def combined_on_expr(expr: "H.HExpr", typing_ctx: Checker._TypingContext = ctx) -> None:
+				self._array_validator_on_expr(expr, typing_ctx)
+
+			def combined_on_stmt(stmt: "H.HStmt", typing_ctx: Checker._TypingContext = ctx) -> None:
+				self._bool_validator_on_stmt(stmt, typing_ctx)
+
+			self._walk_hir(hir_block, ctx, on_expr=combined_on_expr, on_stmt=combined_on_stmt)
 
 		return CheckedProgram(
 			fn_infos=fn_infos,
@@ -420,6 +431,209 @@ class Checker:
 		walk_block(block)
 		return may_throw
 
+	@dataclass
+	class _TypingContext:
+		"""Shared typing state reused across validation passes for a function."""
+
+		checker: "Checker"
+		table: TypeTable
+		fn_infos: Mapping[str, FnInfo]
+		current_fn: Optional[FnInfo]
+		locals: Dict[str, TypeId]
+		diagnostics: Optional[List[Diagnostic]]
+		cache: Dict[int, Optional[TypeId]] = field(default_factory=dict)
+
+		def infer(self, expr: "H.HExpr") -> Optional[TypeId]:
+			"""
+			Best-effort expression typing with shallow recursion.
+
+			This memoizes per object-id so repeated visits (multiple validators or
+			re-entrance through nested expressions) do not recompute or re-emit
+			diagnostics for the same node.
+			"""
+			expr_id = id(expr)
+			if expr_id in self.cache:
+				return self.cache[expr_id]
+			result = self._infer_expr_type(expr)
+			self.cache[expr_id] = result
+			return result
+
+		def report_index_not_int(self) -> None:
+			self._append_diag(
+				Diagnostic(
+					message="array index must be Int",
+					severity="error",
+					span=None,
+				)
+			)
+
+		def report_index_subject_not_array(self) -> None:
+			self._append_diag(
+				Diagnostic(
+					message="indexing requires an Array value",
+					severity="error",
+					span=None,
+				)
+			)
+
+		def report_empty_array_literal(self) -> None:
+			self._append_diag(
+				Diagnostic(
+					message="empty array literal requires explicit type",
+					severity="error",
+					span=None,
+				)
+			)
+
+		def report_mixed_array_literal(self) -> None:
+			self._append_diag(
+				Diagnostic(
+					message="array literal elements do not have a consistent type",
+					severity="error",
+					span=None,
+				)
+			)
+
+		def _append_diag(self, diag: Diagnostic) -> None:
+			if self.diagnostics is not None:
+				self.diagnostics.append(diag)
+
+		def _infer_expr_type(self, expr: "H.HExpr") -> Optional[TypeId]:
+			"""
+			Very shallow expression type inference for call-arg checking.
+
+			Handles literals, simple calls with HVar callees (using FnSignature),
+			and Result.Ok in a function declared to return FnResult. Everything
+			else returns None to avoid guessing.
+
+			Diagnostics emitted here are intentionally conservative: they only
+			trigger when both sides of an operation are known (string/binop,
+			bitwise ops) or when array indexing rules are clearly violated.
+			"""
+			from lang2 import stage1 as H
+
+			checker = self.checker
+			bitwise_ops = {
+				H.BinaryOp.BIT_AND,
+				H.BinaryOp.BIT_OR,
+				H.BinaryOp.BIT_XOR,
+				H.BinaryOp.SHL,
+				H.BinaryOp.SHR,
+			}
+			string_binops = {H.BinaryOp.ADD, H.BinaryOp.EQ}
+
+			if isinstance(expr, H.HLiteralInt):
+				return checker._int_type
+			if isinstance(expr, H.HLiteralBool):
+				return checker._bool_type
+			if hasattr(H, "HLiteralString") and isinstance(expr, getattr(H, "HLiteralString")):
+				return checker._string_type
+			if isinstance(expr, H.HVar):
+				if expr.name == "String.EMPTY":
+					return checker._string_type
+				if expr.name in self.locals:
+					return self.locals[expr.name]
+			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+				callee = self.fn_infos.get(expr.fn.name)
+				if callee is not None and callee.signature and callee.signature.return_type_id is not None:
+					return callee.signature.return_type_id
+				return None
+			if isinstance(expr, H.HResultOk):
+				# If the enclosing function has a FnResult return type, reuse it; otherwise
+				# synthesize a generic FnResult<Unknown, Error>.
+				if self.current_fn and self.current_fn.signature and self.current_fn.signature.return_type_id is not None:
+					return self.current_fn.signature.return_type_id
+				return self.table.new_fnresult(checker._unknown_type, checker._error_type)
+			if isinstance(expr, H.HBinary):
+				left_ty = self._infer_expr_type(expr.left)
+				right_ty = self._infer_expr_type(expr.right)
+				string_left = left_ty == checker._string_type
+				string_right = right_ty == checker._string_type
+				if string_left or string_right:
+					# Only + and == are valid string binops when both operands are
+					# String. Mixed known types produce a diagnostic; unknowns stay
+					# silent to avoid guessing.
+					if string_left and string_right and expr.op in string_binops:
+						if expr.op is H.BinaryOp.ADD:
+							return checker._string_type
+						if expr.op is H.BinaryOp.EQ:
+							return checker._bool_type
+					# Only emit a diagnostic when the non-string side is known to be a different type.
+					non_string_known = (string_left and right_ty is not None and right_ty != checker._string_type) or (
+						string_right and left_ty is not None and left_ty != checker._string_type
+					)
+					if non_string_known:
+						self._append_diag(
+							Diagnostic(
+								message="string binary ops require String operands and support only + or ==",
+								severity="error",
+								span=None,
+							)
+						)
+					return None
+				if expr.op in bitwise_ops:
+					if left_ty == checker._uint_type and right_ty == checker._uint_type:
+						return checker._uint_type
+					self._append_diag(
+						Diagnostic(
+							message="bitwise ops require Uint operands",
+							severity="error",
+							span=None,
+						)
+					)
+					return None
+				if left_ty == checker._int_type and right_ty == checker._int_type:
+					return checker._int_type
+				return None
+			if isinstance(expr, H.HUnary):
+				return self._infer_expr_type(expr.expr)
+			if isinstance(expr, H.HArrayLiteral):
+				if not expr.elements:
+					self.report_empty_array_literal()
+					return None
+				elem_types: list[TypeId] = []
+				for el in expr.elements:
+					el_ty = self._infer_expr_type(el)
+					if el_ty is not None:
+						elem_types.append(el_ty)
+				if not elem_types:
+					return None
+				first = elem_types[0]
+				for el_ty in elem_types[1:]:
+					if el_ty != first:
+						self.report_mixed_array_literal()
+						return self.table.new_array(checker._unknown_type)
+				return self.table.new_array(first)
+			if isinstance(expr, H.HField):
+				subj_ty = None
+				if expr.name in ("len", "cap", "capacity"):
+					subj_ty = self._infer_expr_type(expr.subject)
+				if subj_ty is None:
+					return None
+				return checker._len_cap_result_type(subj_ty)
+			if isinstance(expr, H.HIndex):
+				subject_ty = self._infer_expr_type(expr.subject)
+				idx_ty = self._infer_expr_type(expr.index)
+				if idx_ty is not None and idx_ty != checker._int_type:
+					self.report_index_not_int()
+				if subject_ty is None:
+					return None
+				td = self.table.get(subject_ty)
+				if td.kind is TypeKind.ARRAY and td.param_types:
+					return td.param_types[0]
+				self.report_index_subject_not_array()
+				return None
+			return None
+
+	def _seed_locals_from_signature(self, ctx: "_TypingContext") -> None:
+		"""Populate ctx.locals with parameter types when available."""
+		sig = ctx.current_fn.signature if ctx and ctx.current_fn else None
+		if not sig or not sig.param_type_ids or not sig.param_names:
+			return
+		for name, ty in zip(sig.param_names, sig.param_type_ids):
+			if ty is not None:
+				ctx.locals[name] = ty
+
 	def _infer_hir_expr_type(
 		self,
 		expr: "H.HExpr",
@@ -428,149 +642,15 @@ class Checker:
 		diagnostics: Optional[List[Diagnostic]] = None,
 		locals: Optional[Dict[str, TypeId]] = None,
 	) -> Optional[TypeId]:
-		"""
-		Very shallow expression type inference for call-arg checking.
-
-		Handles literals, simple calls with HVar callees (using FnSignature),
-		and Result.Ok in a function declared to return FnResult. Everything
-		else returns None to avoid guessing.
-		"""
-		from lang2 import stage1 as H
-		bitwise_ops = {
-			H.BinaryOp.BIT_AND,
-			H.BinaryOp.BIT_OR,
-			H.BinaryOp.BIT_XOR,
-			H.BinaryOp.SHL,
-			H.BinaryOp.SHR,
-		}
-		string_binops = {H.BinaryOp.ADD, H.BinaryOp.EQ}
-
-		if isinstance(expr, H.HLiteralInt):
-			return self._int_type
-		if isinstance(expr, H.HLiteralBool):
-			return self._bool_type
-		if hasattr(H, "HLiteralString") and isinstance(expr, getattr(H, "HLiteralString")):
-			return self._string_type
-		if isinstance(expr, H.HVar):
-			if expr.name == "String.EMPTY":
-				return self._string_type
-			if locals is not None and expr.name in locals:
-				return locals[expr.name]
-		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
-			callee = fn_infos.get(expr.fn.name)
-			if callee is not None and callee.signature and callee.signature.return_type_id is not None:
-				return callee.signature.return_type_id
-			return None
-		if isinstance(expr, H.HResultOk):
-			# If the enclosing function has a FnResult return type, reuse it; otherwise
-			# synthesize a generic FnResult<Unknown, Error>.
-			if current_fn and current_fn.signature and current_fn.signature.return_type_id is not None:
-				return current_fn.signature.return_type_id
-			return self._type_table.new_fnresult(self._unknown_type, self._error_type)
-		if isinstance(expr, H.HBinary):
-			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn, diagnostics, locals=locals)
-			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn, diagnostics, locals=locals)
-			string_left = left_ty == self._string_type
-			string_right = right_ty == self._string_type
-			if string_left or string_right:
-				if string_left and string_right and expr.op in string_binops:
-					if expr.op is H.BinaryOp.ADD:
-						return self._string_type
-					if expr.op is H.BinaryOp.EQ:
-						return self._bool_type
-				# Only emit a diagnostic when the non-string side is known to be a different type.
-				non_string_known = (string_left and right_ty is not None and right_ty != self._string_type) or (
-					string_right and left_ty is not None and left_ty != self._string_type
-				)
-				if diagnostics is not None and non_string_known:
-					diagnostics.append(
-						Diagnostic(
-							message="string binary ops require String operands and support only + or ==",
-							severity="error",
-							span=None,
-						)
-					)
-				return None
-			if expr.op in bitwise_ops:
-				if left_ty == self._uint_type and right_ty == self._uint_type:
-					return self._uint_type
-				if diagnostics is not None:
-					diagnostics.append(
-						Diagnostic(
-							message="bitwise ops require Uint operands",
-							severity="error",
-							span=None,
-						)
-					)
-				return None
-			if left_ty == self._int_type and right_ty == self._int_type:
-				return self._int_type
-			return None
-		if isinstance(expr, H.HUnary):
-			return self._infer_hir_expr_type(expr.expr, fn_infos, current_fn, diagnostics, locals=locals)
-		if isinstance(expr, H.HArrayLiteral):
-			if not expr.elements:
-				if diagnostics is not None:
-					diagnostics.append(
-						Diagnostic(
-							message="empty array literal requires explicit type",
-							severity="error",
-							span=None,
-						)
-					)
-				return None
-			elem_types: list[TypeId] = []
-			for el in expr.elements:
-				el_ty = self._infer_hir_expr_type(el, fn_infos, current_fn, diagnostics, locals=locals)
-				if el_ty is not None:
-					elem_types.append(el_ty)
-			if not elem_types:
-				return None
-			first = elem_types[0]
-			for el_ty in elem_types[1:]:
-				if el_ty != first:
-					if diagnostics is not None:
-						diagnostics.append(
-							Diagnostic(
-								message="array literal elements do not have a consistent type",
-								severity="error",
-								span=None,
-							)
-						)
-					return self._type_table.new_array(self._unknown_type)
-			return self._type_table.new_array(first)
-		if isinstance(expr, H.HField):
-			if expr.name in ("len", "cap", "capacity"):
-				subj_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
-			if subj_ty is None:
-				return None
-			return self._len_cap_result_type(subj_ty)
-		if isinstance(expr, H.HIndex):
-			subject_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
-			idx_ty = self._infer_hir_expr_type(expr.index, fn_infos, current_fn, diagnostics, locals=locals)
-			if idx_ty is not None and idx_ty != self._int_type and diagnostics is not None:
-				diagnostics.append(
-					Diagnostic(
-						message="array index must be Int",
-						severity="error",
-						span=None,
-					)
-				)
-			if subject_ty is None:
-				return None
-			td = self._type_table.get(subject_ty)
-			if td.kind is TypeKind.ARRAY and td.param_types:
-				return td.param_types[0]
-			if diagnostics is not None:
-				diagnostics.append(
-					Diagnostic(
-						message="indexing requires an Array value",
-						severity="error",
-						span=None,
-					)
-				)
-			return None
-		return None
+		ctx = self._TypingContext(
+			checker=self,
+			table=self._type_table,
+			fn_infos=fn_infos,
+			current_fn=current_fn,
+			locals=locals if locals is not None else {},
+			diagnostics=diagnostics,
+		)
+		return ctx.infer(expr)
 
 	def _validate_calls(
 		self,
@@ -932,153 +1012,154 @@ class Checker:
 
 		walk_block(block)
 
-	def _validate_array_exprs(
+	def _walk_hir(
 		self,
 		block: "H.HBlock",
-		fn_infos: Mapping[str, FnInfo],
-		diagnostics: List[Diagnostic],
-		current_fn: Optional[FnInfo] = None,
+		ctx: "_TypingContext",
+		on_expr: Optional[Callable[["H.HExpr", "_TypingContext"], None]] = None,
+		on_stmt: Optional[Callable[["H.HStmt", "_TypingContext"], None]] = None,
 	) -> None:
 		"""
-		Validate array literals/indexing/assignments with shallow type inference.
+		Walk a HIR block, invoking callbacks and maintaining locals.
 
-		This relies on `_infer_hir_expr_type` to derive element/index types for
-		literals, simple calls, and Result.Ok expressions. It is intentionally
-		conservative: when types are unknown it emits no diagnostics.
+		This is the shared traversal used by all validators so that locals
+		mutations (let/assign) are centralized and every validation sees a
+		consistent environment.
 		"""
 		from lang2 import stage1 as H
 
-		locals: Dict[str, TypeId] = {}
-		# Seed locals with parameter types when available so param usages are typed.
-		if (
-			current_fn
-			and current_fn.signature
-			and current_fn.signature.param_type_ids
-			and current_fn.signature.param_names
-		):
-			for name, ty in zip(current_fn.signature.param_names, current_fn.signature.param_type_ids):
-				if ty is not None:
-					locals[name] = ty
+		def walk_expr(expr: H.HExpr) -> None:
+			if on_expr:
+				on_expr(expr, ctx)
+			if isinstance(expr, H.HCall):
+				walk_expr(expr.fn)
+				for arg in expr.args:
+					walk_expr(arg)
+			elif isinstance(expr, H.HMethodCall):
+				walk_expr(expr.receiver)
+				for arg in expr.args:
+					walk_expr(arg)
+			elif isinstance(expr, H.HTernary):
+				walk_expr(expr.cond)
+				walk_expr(expr.then_expr)
+				walk_expr(expr.else_expr)
+			elif isinstance(expr, H.HUnary):
+				walk_expr(expr.expr)
+			elif isinstance(expr, H.HBinary):
+				walk_expr(expr.left)
+				walk_expr(expr.right)
+			elif isinstance(expr, H.HTryResult):
+				walk_expr(expr.expr)
+			elif isinstance(expr, H.HResultOk):
+				walk_expr(expr.value)
+			elif isinstance(expr, H.HField):
+				walk_expr(expr.subject)
+			elif isinstance(expr, H.HIndex):
+				walk_expr(expr.subject)
+				walk_expr(expr.index)
+			elif isinstance(expr, H.HArrayLiteral):
+				for el in expr.elements:
+					walk_expr(el)
+			elif isinstance(expr, H.HDVInit):
+				for a in expr.args:
+					walk_expr(a)
+			# literals/vars are leaf nodes
 
-		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
-			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics, locals=locals)
-
-		def walk_block(hb: H.HBlock) -> None:
-			for stmt in hb.statements:
-				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.expr)
-				elif isinstance(stmt, H.HLet):
-					decl_ty: Optional[TypeId] = None
-					if getattr(stmt, "declared_type_expr", None) is not None:
-						decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
-					value_ty = walk_expr(stmt.value)
-					if decl_ty is not None and value_ty is not None and decl_ty != value_ty:
-						diagnostics.append(
-							Diagnostic(
-								message="let-binding type does not match declared type",
-								severity="error",
-								span=None,
-							)
+		def walk_stmt(stmt: H.HStmt) -> None:
+			if on_stmt:
+				on_stmt(stmt, ctx)
+			if isinstance(stmt, H.HExprStmt):
+				walk_expr(stmt.expr)
+			elif isinstance(stmt, H.HLet):
+				walk_expr(stmt.value)
+				decl_ty: Optional[TypeId] = None
+				if getattr(stmt, "declared_type_expr", None) is not None:
+					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
+				value_ty = ctx.infer(stmt.value)
+				# Let-binding type consistency lives here so every validator shares
+				# the same rule and locals update.
+				if decl_ty is not None and value_ty is not None and decl_ty != value_ty:
+					ctx._append_diag(
+						Diagnostic(
+							message="let-binding type does not match declared type",
+							severity="error",
+							span=None,
 						)
-					locals[stmt.name] = decl_ty or value_ty or self._unknown_type
-				elif isinstance(stmt, H.HAssign):
-					target_ty = None
-					if isinstance(stmt.target, H.HIndex):
-						target_ty = walk_expr(stmt.target)
-						# Ensure the subject is an array; walk_expr already emits the
-						# "indexing requires an Array value" diagnostic, but keep locals in sync.
-					value_ty = walk_expr(stmt.value)
-					if (
-						isinstance(stmt.target, H.HIndex)
-						and target_ty is not None
-						and value_ty is not None
-						and target_ty != value_ty
-					):
-						diagnostics.append(
+					)
+				ctx.locals[stmt.name] = decl_ty or value_ty or self._unknown_type
+			elif isinstance(stmt, H.HAssign):
+				walk_expr(stmt.value)
+				value_ty = ctx.infer(stmt.value)
+				walk_expr(stmt.target)
+				if isinstance(stmt.target, H.HIndex):
+					target_ty = ctx.infer(stmt.target)
+					if target_ty is not None and value_ty is not None and target_ty != value_ty:
+						ctx._append_diag(
 							Diagnostic(
 								message="assignment type mismatch for indexed array element",
 								severity="error",
 								span=None,
 							)
 						)
-				elif isinstance(stmt, H.HIf):
-					walk_expr(stmt.cond)
-					walk_block(stmt.then_block)
-					if stmt.else_block:
-						walk_block(stmt.else_block)
-				elif isinstance(stmt, H.HLoop):
-					walk_block(stmt.body)
-				elif isinstance(stmt, H.HTry):
-					walk_block(stmt.body)
-					for arm in stmt.catches:
-						walk_block(arm.block)
-				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+				elif isinstance(stmt.target, H.HVar) and value_ty is not None:
+					# Simple var assignment updates locals so downstream expressions
+					# see the new type.
+					ctx.locals[stmt.target.name] = value_ty
+			elif isinstance(stmt, H.HIf):
+				walk_expr(stmt.cond)
+				walk_block(stmt.then_block)
+				if stmt.else_block:
+					walk_block(stmt.else_block)
+			elif isinstance(stmt, H.HLoop):
+				walk_block(stmt.body)
+			elif isinstance(stmt, H.HReturn):
+				if stmt.value is not None:
 					walk_expr(stmt.value)
-				# other statements: continue
-
-		walk_block(block)
-
-	def _validate_bool_conditions(
-		self,
-		block: "H.HBlock",
-		fn_infos: Mapping[str, FnInfo],
-		diagnostics: List[Diagnostic],
-		current_fn: Optional[FnInfo] = None,
-	) -> None:
-		"""Require Boolean conditions for if/loop when types are known."""
-		from lang2 import stage1 as H
-
-		locals: Dict[str, TypeId] = {}
-		# Seed locals with parameter types if available to type-check conditions on params.
-		if (
-			current_fn
-			and current_fn.signature
-			and current_fn.signature.param_type_ids
-			and current_fn.signature.param_names
-		):
-			for name, ty in zip(current_fn.signature.param_names, current_fn.signature.param_type_ids):
-				if ty is not None:
-					locals[name] = ty
-
-		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
-			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics, locals=locals)
+			elif isinstance(stmt, H.HThrow):
+				walk_expr(stmt.value)
+			elif isinstance(stmt, H.HTry):
+				walk_block(stmt.body)
+				for arm in stmt.catches:
+					walk_block(arm.block)
+			# HBreak/HContinue carry no expressions.
 
 		def walk_block(hb: H.HBlock) -> None:
 			for stmt in hb.statements:
-				if isinstance(stmt, H.HLet):
-					decl_ty: Optional[TypeId] = None
-					if getattr(stmt, "declared_type_expr", None) is not None:
-						decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
-					val_ty = walk_expr(stmt.value)
-					locals[stmt.name] = decl_ty or val_ty or self._unknown_type
-				elif isinstance(stmt, H.HIf):
-					cond_ty = walk_expr(stmt.cond)
-					if cond_ty is not None and cond_ty != self._bool_type:
-						diagnostics.append(
-							Diagnostic(
-								message="if condition must be Bool",
-								severity="error",
-								span=None,
-							)
-						)
-					walk_block(stmt.then_block)
-					if stmt.else_block:
-						walk_block(stmt.else_block)
-				elif isinstance(stmt, H.HLoop):
-					walk_block(stmt.body)
-				elif isinstance(stmt, H.HAssign):
-					walk_expr(stmt.value)
-				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
-					walk_expr(stmt.value)
-				elif isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.expr)
-				elif isinstance(stmt, H.HTry):
-					walk_block(stmt.body)
-					for arm in stmt.catches:
-						walk_block(arm.block)
-				# other statements: continue
+				walk_stmt(stmt)
 
 		walk_block(block)
+
+	def _array_validator_on_expr(self, expr: "H.HExpr", ctx: "_TypingContext") -> None:
+		"""Trigger array literal/index inference to surface diagnostics."""
+		from lang2 import stage1 as H
+
+		if isinstance(expr, (H.HArrayLiteral, H.HIndex)):
+			# Reuse shared infer to emit array-specific diagnostics without extra
+			# traversal logic here.
+			ctx.infer(expr)
+
+	def _bool_validator_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:
+		"""Require Boolean conditions when the type is known."""
+		from lang2 import stage1 as H
+
+		if isinstance(stmt, H.HIf):
+			cond_ty = ctx.infer(stmt.cond)
+			if cond_ty is not None and cond_ty != self._bool_type:
+				ctx._append_diag(
+					Diagnostic(
+						message="if condition must be Bool",
+						severity="error",
+						span=None,
+					)
+				)
+
+	def _validate_array_exprs(self, block: "H.HBlock", ctx: "_TypingContext") -> None:
+		"""Validate array literals/indexing/assignments over a HIR block."""
+		self._walk_hir(block, ctx, on_expr=self._array_validator_on_expr)
+
+	def _validate_bool_conditions(self, block: "H.HBlock", ctx: "_TypingContext") -> None:
+		"""Require Boolean conditions for if/loop when types are known."""
+		self._walk_hir(block, ctx, on_stmt=self._bool_validator_on_stmt)
 
 	def build_type_env_from_ssa(
 		self,

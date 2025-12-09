@@ -11,8 +11,27 @@ def _checker_for_hir(block: H.HBlock) -> tuple[Checker, dict[str, FnInfo], list[
 	sig = FnSignature(name="main", return_type_id=None, param_type_ids=[], declared_can_throw=False)
 	checker = Checker(signatures={"main": sig}, hir_blocks={"main": block}, type_table=None)
 	diagnostics: list[Diagnostic] = []
-	fn_infos = checker.check(["main"])
-	return checker, fn_infos, diagnostics
+	checked = checker.check(["main"])
+	return checker, checked.fn_infos, diagnostics
+
+
+def _typing_ctx(
+	checker: Checker,
+	fn_infos: dict[str, FnInfo],
+	diagnostics: list[Diagnostic],
+) -> Checker._TypingContext:
+	# Build the shared typing context the checker now expects: threaded fn_infos,
+	# locals, diagnostics, and a seeded parameter environment.
+	ctx = checker._TypingContext(
+		checker=checker,
+		table=checker._type_table,
+		fn_infos=fn_infos,
+		current_fn=fn_infos["main"],
+		locals={},
+		diagnostics=diagnostics,
+	)
+	checker._seed_locals_from_signature(ctx)
+	return ctx
 
 
 def test_array_index_with_string_index_reports_diagnostic():
@@ -34,10 +53,10 @@ def test_array_index_with_string_index_reports_diagnostic():
 			),
 		]
 	)
-	checker, _, _ = _checker_for_hir(block)
-	diagnostics: list[Diagnostic] = []
+	checker, fn_infos, diagnostics = _checker_for_hir(block)
+	ctx = _typing_ctx(checker, fn_infos, diagnostics)
 	# Run validation passes
-	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	checker._validate_array_exprs(block, ctx)
 	assert any("array index must be Int" in d.message for d in diagnostics)
 
 
@@ -52,9 +71,9 @@ def test_array_literal_mixed_element_types_reports_diagnostic():
 			H.HReturn(value=H.HLiteralInt(0)),
 		]
 	)
-	checker, _, _ = _checker_for_hir(block)
-	diagnostics: list[Diagnostic] = []
-	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	checker, fn_infos, diagnostics = _checker_for_hir(block)
+	ctx = _typing_ctx(checker, fn_infos, diagnostics)
+	checker._validate_array_exprs(block, ctx)
 	assert any("array literal elements do not have a consistent type" in d.message for d in diagnostics)
 
 
@@ -72,7 +91,7 @@ def test_array_index_store_type_mismatch_reports_diagnostic():
 			),
 		]
 	)
-	checker, _, _ = _checker_for_hir(block)
-	diagnostics: list[Diagnostic] = []
-	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	checker, fn_infos, diagnostics = _checker_for_hir(block)
+	ctx = _typing_ctx(checker, fn_infos, diagnostics)
+	checker._validate_array_exprs(block, ctx)
 	assert any("assignment type mismatch for indexed array element" in d.message for d in diagnostics)
