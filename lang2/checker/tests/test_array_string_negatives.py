@@ -1,0 +1,78 @@
+from lang2 import stage1 as H
+from lang2.core.diagnostics import Diagnostic
+from lang2.checker import Checker
+from lang2.checker import FnInfo
+from lang2.checker import FnSignature
+from lang2.stage2 import mir_nodes as M
+
+
+def _checker_for_hir(block: H.HBlock) -> tuple[Checker, dict[str, FnInfo], list[Diagnostic]]:
+	# Minimal checker setup: a single function "main" with inferred signature.
+	sig = FnSignature(name="main", return_type_id=None, param_type_ids=[], declared_can_throw=False)
+	checker = Checker(signatures={"main": sig}, hir_blocks={"main": block}, type_table=None)
+	diagnostics: list[Diagnostic] = []
+	fn_infos = checker.check(["main"])
+	return checker, fn_infos, diagnostics
+
+
+def test_array_index_with_string_index_reports_diagnostic():
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="xs",
+				value=H.HArrayLiteral(elements=[H.HLiteralString("a"), H.HLiteralString("b")]),
+				declared_type_expr=None,
+			),
+			H.HReturn(
+				value=H.HField(
+					subject=H.HIndex(
+						subject=H.HVar(name="xs"),
+						index=H.HLiteralString("0"),
+					),
+					name="len",
+				)
+			),
+		]
+	)
+	checker, _, _ = _checker_for_hir(block)
+	diagnostics: list[Diagnostic] = []
+	# Run validation passes
+	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	assert any("array index must be Int" in d.message for d in diagnostics)
+
+
+def test_array_literal_mixed_element_types_reports_diagnostic():
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="xs",
+				value=H.HArrayLiteral(elements=[H.HLiteralString("a"), H.HLiteralInt(1)]),
+				declared_type_expr=None,
+			),
+			H.HReturn(value=H.HLiteralInt(0)),
+		]
+	)
+	checker, _, _ = _checker_for_hir(block)
+	diagnostics: list[Diagnostic] = []
+	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	assert any("array literal elements do not have a consistent type" in d.message for d in diagnostics)
+
+
+def test_array_index_store_type_mismatch_reports_diagnostic():
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="xs",
+				value=H.HArrayLiteral(elements=[H.HLiteralString("a"), H.HLiteralString("b")]),
+				declared_type_expr=None,
+			),
+			H.HAssign(
+				target=H.HIndex(subject=H.HVar(name="xs"), index=H.HLiteralInt(0)),
+				value=H.HLiteralBool(True),
+			),
+		]
+	)
+	checker, _, _ = _checker_for_hir(block)
+	diagnostics: list[Diagnostic] = []
+	checker._validate_array_exprs(block, checker.fn_infos, diagnostics, current_fn=checker.fn_infos["main"])
+	assert any("assignment type mismatch for indexed array element" in d.message for d in diagnostics)
