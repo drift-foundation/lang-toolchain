@@ -171,6 +171,11 @@
 - Removed legacy args/payload: `DriftError` no longer stores them, arg-view helpers and `__exc_args_get*` are gone, compiler/tests consume typed `attrs` + `DiagnosticValue` exclusively.
 - Restored the receiver placeholder (“dot-shortcut”) feature: grammar/AST include `.` placeholders, SSA lowering evaluates the method receiver once and threads that SSA through argument/sub-expression lowering (including `.field`, `.method(...)`, and `.[idx]` forms). Added placeholder-aware lowering while keeping SSA/e2e suites green.
 
+## 2025-12-08
+- String/Array surface and backend aligned: `byte_length` documented as byte-count returning `Uint`, `String.EMPTY`/`is_empty` captured in the spec, and program entry clarified to a single `main` returning `Int` (either zero-arg or `Array<String>` argv) with no `drift_main` indirection.
+- Checker hardening: string binops only allow `String +`/`==`; added diagnostics/tests for string misuses (String+Int, String in `if`). Boolean conditions are now validated when types are known. Array checks emit errors for non-Array indexing and mismatched index stores; array element inference for locals was strengthened to keep Array<String> element types flowing.
+- Array<String> runtime/codegen: `_llvm_array_elem_type` maps String elements to `%DriftString` with correct size/align; IR tests cover Array<String> literals, loads, and stores. New e2e cases write/read Array<String> and sum byte lengths.
+- argv entry implemented: C runtime builds `Array<String>` from `argc/argv`, LLVM emits an sret wrapper when `main(argv: Array<String>) returns Int`; runner enforces a single main and requires explicit argv in `expected.json`. Added e2e `main_argv_len`/`content`.
 ## 2025-12-04
 - E2E runner builds into `build/tests/e2e/<case>/` instead of test dirs; `just test-e2e`/subset wipes that build dir first to avoid stale artifacts. All e2e tests green.
 - Error-edge hardening: can-error inference is locked to MIR; negative tests cover plain call dropping error and edges to non-can-error; Throw returns now use deterministic zero/null placeholders for non-void `{T, Error*}` pairs. Try/catch generalization remains open.

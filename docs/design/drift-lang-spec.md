@@ -53,6 +53,9 @@ Drift expressions largely follow a C-style surface with explicit ownership rules
 - String concatenation uses `+`
 - String byte length is exposed via `byte_length(s: String) -> Uint` (UTF‑8 code units, not characters); a future `char_length` may count user-visible characters.
 - Empty strings may be written as `""` or `String.EMPTY`. A convenience helper `is_empty(s: String) -> Bool` checks `byte_length(s) == 0`.
+- Program entry (v1): exactly one `main` function, returning `Int`, with one of two signatures:
+  - `fn main() returns Int`
+  - `fn main(argv: Array<String>) returns Int` (argv includes the program name at index 0). The runtime builds `argv` and calls this `main`; no drift_main indirection in user code.
 
 ### 2.x. Receiver placeholder (`.foo`, `.foo(...)`)
 
@@ -155,6 +158,15 @@ All modules compile down to a canonical Drift Module IR (DMIR) that can be crypt
 | `String` | UTF-8 immutable rope. |
 
 `Byte` gives Drift APIs a canonical scalar for binary data. Use `Array<Byte>` (or the dedicated buffer types described in Chapters 6–7) when passing contiguous byte ranges.
+
+#### 3.1.2. String semantics (v1)
+
+- Storage is UTF-8; **bytewise** semantics:
+  - `byte_length(s: String) -> Uint` returns the number of UTF-8 code units (bytes), not graphemes. A future `char_length` may count user-visible characters.
+  - Equality (`==`) is bytewise; no normalization or case folding.
+- Empty strings: `""` or `String.EMPTY`; `is_empty(s: String) -> Bool` checks `byte_length(s) == 0`.
+- Concatenation uses `+` and produces a new `String`.
+- `Array<String>` is supported; each element is a `%DriftString` header `{%drift.size, i8*}` at the ABI.
 
 #### 3.1.1. Integer and float semantics
 

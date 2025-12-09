@@ -316,6 +316,13 @@ class Checker:
 				continue
 			self._validate_array_exprs(hir_block, fn_infos, diagnostics, current_fn=info)
 
+		# Boolean conditions: ensure known conditions are Bool.
+		for fn_name, hir_block in self._hir_blocks.items():
+			info = fn_infos.get(fn_name)
+			if info is None:
+				continue
+			self._validate_bool_conditions(hir_block, fn_infos, diagnostics, current_fn=info)
+
 		return CheckedProgram(
 			fn_infos=fn_infos,
 			type_table=self._type_table,
@@ -342,14 +349,6 @@ class Checker:
 		context-insensitive: try/catch coverage is ignored in this stub.
 		"""
 		from lang2 import stage1 as H
-		bitwise_ops = {
-			H.BinaryOp.BIT_AND,
-			H.BinaryOp.BIT_OR,
-			H.BinaryOp.BIT_XOR,
-			H.BinaryOp.SHL,
-			H.BinaryOp.SHR,
-		}
-
 		may_throw = False
 
 		def walk_expr(expr: H.HExpr) -> None:
@@ -449,6 +448,7 @@ class Checker:
 			H.BinaryOp.SHL,
 			H.BinaryOp.SHR,
 		}
+		string_binops = {H.BinaryOp.ADD, H.BinaryOp.EQ}
 
 		if isinstance(expr, H.HLiteralInt):
 			return self._int_type
@@ -475,6 +475,27 @@ class Checker:
 		if isinstance(expr, H.HBinary):
 			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn, diagnostics, locals=locals)
 			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn, diagnostics, locals=locals)
+			string_left = left_ty == self._string_type
+			string_right = right_ty == self._string_type
+			if string_left or string_right:
+				if string_left and string_right and expr.op in string_binops:
+					if expr.op is H.BinaryOp.ADD:
+						return self._string_type
+					if expr.op is H.BinaryOp.EQ:
+						return self._bool_type
+				# Only emit a diagnostic when the non-string side is known to be a different type.
+				non_string_known = (string_left and right_ty is not None and right_ty != self._string_type) or (
+					string_right and left_ty is not None and left_ty != self._string_type
+				)
+				if diagnostics is not None and non_string_known:
+					diagnostics.append(
+						Diagnostic(
+							message="string binary ops require String operands and support only + or ==",
+							severity="error",
+							span=None,
+						)
+					)
+				return None
 			if expr.op in bitwise_ops:
 				if left_ty == self._uint_type and right_ty == self._uint_type:
 					return self._uint_type
@@ -983,6 +1004,58 @@ class Checker:
 						walk_block(arm.block)
 				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
 					walk_expr(stmt.value)
+				# other statements: continue
+
+		walk_block(block)
+
+	def _validate_bool_conditions(
+		self,
+		block: "H.HBlock",
+		fn_infos: Mapping[str, FnInfo],
+		diagnostics: List[Diagnostic],
+		current_fn: Optional[FnInfo] = None,
+	) -> None:
+		"""Require Boolean conditions for if/loop when types are known."""
+		from lang2 import stage1 as H
+
+		locals: Dict[str, TypeId] = {}
+
+		def walk_expr(expr: H.HExpr) -> Optional[TypeId]:
+			return self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics, locals=locals)
+
+		def walk_block(hb: H.HBlock) -> None:
+			for stmt in hb.statements:
+				if isinstance(stmt, H.HLet):
+					decl_ty: Optional[TypeId] = None
+					if getattr(stmt, "declared_type_expr", None) is not None:
+						decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
+					val_ty = walk_expr(stmt.value)
+					locals[stmt.name] = decl_ty or val_ty or self._unknown_type
+				elif isinstance(stmt, H.HIf):
+					cond_ty = walk_expr(stmt.cond)
+					if cond_ty is not None and cond_ty != self._bool_type:
+						diagnostics.append(
+							Diagnostic(
+								message="if condition must be Bool",
+								severity="error",
+								span=None,
+							)
+						)
+					walk_block(stmt.then_block)
+					if stmt.else_block:
+						walk_block(stmt.else_block)
+				elif isinstance(stmt, H.HLoop):
+					walk_block(stmt.body)
+				elif isinstance(stmt, H.HAssign):
+					walk_expr(stmt.value)
+				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+					walk_expr(stmt.value)
+				elif isinstance(stmt, H.HExprStmt):
+					walk_expr(stmt.expr)
+				elif isinstance(stmt, H.HTry):
+					walk_block(stmt.body)
+					for arm in stmt.catches:
+						walk_block(arm.block)
 				# other statements: continue
 
 		walk_block(block)

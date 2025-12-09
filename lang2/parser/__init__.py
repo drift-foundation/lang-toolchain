@@ -166,7 +166,11 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	func_hirs: Dict[str, H.HBlock] = {}
 	signatures: Dict[str, FnSignature] = {}
 	lowerer = AstToHIR()
+	seen: set[str] = set()
 	for fn in prog.functions:
+		if fn.name in seen:
+			raise ValueError(f"duplicate function definition for '{fn.name}'")
+		seen.add(fn.name)
 		stmt_block = _convert_block(fn.body)
 		hir_block = lowerer.lower_block(stmt_block)
 		func_hirs[fn.name] = hir_block

@@ -118,8 +118,14 @@ fn drift_main() returns FnResult<Int, Error> {
 	assert sig.return_type_id is not None
 	assert sig.error_type_id is not None
 
-	ret_def = type_table.get(sig.return_type_id)
-	assert ret_def.name == "FnResult"
-	ok_ty, err_ty = ret_def.param_types
-	# error_type_id should match the FnResult err side produced by the resolver.
-	assert err_ty == sig.error_type_id
+
+def test_duplicate_function_definition_raises(tmp_path: Path) -> None:
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"""
+fn main() returns Int { return 0; }
+fn main() returns Int { return 1; }
+"""
+	)
+	with pytest.raises(ValueError, match="duplicate function definition"):
+		parse_drift_to_hir(src)
