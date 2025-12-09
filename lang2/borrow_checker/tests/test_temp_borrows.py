@@ -57,8 +57,8 @@ def test_auto_borrow_at_call_is_call_scoped_when_enabled():
 	"""
 	table = TypeTable()
 	type_ids = {"x": table.ensure_int(), "f": table.ensure_unknown()}
-	base_lookup = lambda hv: PlaceBase(PlaceKind.LOCAL, 0, hv.name if hasattr(hv, "name") else str(hv))
-	fn_types = {PlaceBase(PlaceKind.LOCAL, 0, name): ty for name, ty in type_ids.items()}
+	base_lookup = lambda hv: PlaceBase(PlaceKind.LOCAL, getattr(hv, "binding_id", 0) or 0, hv.name if hasattr(hv, "name") else str(hv))
+	fn_types = {PlaceBase(PlaceKind.LOCAL, getattr(None, "binding_id", 0) or 0, name): ty for name, ty in type_ids.items()}
 	bc = BorrowChecker(type_table=table, fn_types=fn_types, base_lookup=base_lookup, enable_auto_borrow=True)
 
 	block = H.HBlock(
@@ -79,8 +79,8 @@ def test_auto_borrow_method_receiver_still_evaluated():
 	"""
 	table = TypeTable()
 	type_ids = {"x": table.ensure_int(), "make_obj": table.ensure_unknown()}
-	base_lookup = lambda hv: PlaceBase(PlaceKind.LOCAL, 0, hv.name if hasattr(hv, "name") else str(hv))
-	fn_types = {PlaceBase(PlaceKind.LOCAL, 0, name): ty for name, ty in type_ids.items()}
+	base_lookup = lambda hv: PlaceBase(PlaceKind.LOCAL, getattr(hv, "binding_id", 0) or 0, hv.name if hasattr(hv, "name") else str(hv))
+	fn_types = {PlaceBase(PlaceKind.LOCAL, getattr(None, "binding_id", 0) or 0, name): ty for name, ty in type_ids.items()}
 	bc = BorrowChecker(type_table=table, fn_types=fn_types, base_lookup=base_lookup, enable_auto_borrow=True)
 
 	block = H.HBlock(

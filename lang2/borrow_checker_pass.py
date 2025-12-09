@@ -60,6 +60,7 @@ class Loan:
 	region_id: int
 	temporary: bool = False
 	live_blocks: Optional[Set[int]] = None
+	ref_binding: Optional[int] = None
 
 
 @dataclass
@@ -198,9 +199,25 @@ class BorrowChecker:
 				self._diagnostic(f"cannot take mutable borrow while borrow active on '{place.base.name}'")
 				return
 		live_blocks = None
-		if hasattr(self, "_ref_use_blocks") and place.base.local_id in getattr(self, "_ref_use_blocks", {}):
-			live_blocks = getattr(self, "_ref_use_blocks")[place.base.local_id]
-		state.loans.add(Loan(place=place, kind=kind, region_id=self._new_region(), temporary=temporary, live_blocks=live_blocks))
+		ref_bid = None
+		if hasattr(self, "_ref_to_target"):
+			for ref_bid_candidate, target_bid in getattr(self, "_ref_to_target").items():
+				if target_bid == place.base.local_id:
+					ref_bid = ref_bid_candidate
+					break
+		if hasattr(self, "_ref_use_blocks"):
+			if ref_bid is not None and ref_bid in getattr(self, "_ref_use_blocks"):
+				live_blocks = getattr(self, "_ref_use_blocks")[ref_bid]
+		state.loans.add(
+			Loan(
+				place=place,
+				kind=kind,
+				region_id=self._new_region(),
+				temporary=temporary,
+				live_blocks=live_blocks,
+				ref_binding=ref_bid,
+			)
+		)
 
 	def _drop_overlapping_loans(self, state: _FlowState, place: Place) -> None:
 		"""Remove any loans that overlap the given place (assignment invalidates borrows)."""
@@ -298,6 +315,25 @@ class BorrowChecker:
 				walk_expr(term.value, blk.id)
 
 		return use_map
+
+	def _collect_ref_to_target(self, blocks: List[BasicBlock]) -> Dict[int, int]:
+		"""
+		Collect mapping of ref binding_id -> target binding_id for HBorrow in lets.
+
+		This is conservative: only HLet with HBorrow RHS are considered.
+		"""
+		ref_map: Dict[int, int] = {}
+		for blk in blocks:
+			for stmt in blk.statements:
+				if isinstance(stmt, H.HLet) and isinstance(stmt.value, H.HBorrow):
+					ref_bid = getattr(stmt, "binding_id", None)
+					if ref_bid is None:
+						continue
+					subject_place = place_from_expr(stmt.value.subject, base_lookup=self.base_lookup)
+					if subject_place is None:
+						continue
+					ref_map[ref_bid] = subject_place.base.local_id
+		return ref_map
 
 	def _visit_expr(self, state: _FlowState, expr: H.HExpr, *, as_value: bool = True) -> None:
 		"""
@@ -433,14 +469,14 @@ class BorrowChecker:
 		blocks, entry_id = self._build_cfg(block)
 		local_types: Dict[int, TypeId] = {pb.local_id: ty for pb, ty in self.fn_types.items()}
 		ref_use_blocks = self._collect_ref_use_blocks(blocks, local_types)
+		self._ref_use_blocks = ref_use_blocks
+		self._ref_to_target = self._collect_ref_to_target(blocks)
 		in_states: Dict[int, _FlowState] = {b.id: _FlowState() for b in blocks}
 		worklist = [entry_id]
 		while worklist:
 			bid = worklist.pop()
 			blk = blocks[bid]
 			in_state = in_states[bid]
-			# attach uses map for borrow creation
-			self._ref_use_blocks = ref_use_blocks
 			out_state = self._transfer_block(blk, in_state)
 			succs = blk.terminator.targets if blk.terminator else []
 			for succ in succs:
