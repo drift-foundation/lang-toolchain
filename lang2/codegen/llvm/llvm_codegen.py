@@ -800,12 +800,8 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
 		arr_llty = self.value_types.get(array, self._llvm_array_type("i64"))
-		# Strings reuse ArrayLen in the HIR; if the operand is a DriftString,
-		# read its len field instead of the array header.
-		if arr_llty == DRIFT_STRING_TYPE:
-			self.lines.append(f"  {dest} = extractvalue {DRIFT_STRING_TYPE} {array}, 0")
-		else:
-			self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 0")
+		# ArrayLen now applies only to array values; strings use StringLen MIR.
+		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, 0")
 		self.value_types[dest] = DRIFT_SIZE_TYPE
 
 	def _lower_array_cap(self, instr: ArrayCap) -> None:

@@ -111,6 +111,7 @@ Goal: ensure `String` is already a first-class type in the compiler’s TypeTabl
 * Added canonical empty string support: HIR→MIR injects `String.EMPTY` as a zero-length literal; runtime uses `{len=0, data=NULL}` for empties (no heap alloc). 
 * `%drift.size` alias reinstated in IR (Uint carrier); tests updated accordingly. Checker now maps `"Uint"` in declared/opaque types to the canonical Uint TypeId so `.len`-typed values and annotations match.
 * Parser now accepts `\xHH` hex escapes in string literals; e2e `string_utf8_escape_eq` compares a UTF-8 literal against its escaped form (both parse to the same bytes).
+* Bitwise ops enforced as Uint-only in the checker (cleaner bitwise op set); ArrayLen lowering comment corrected (strings use StringLen MIR).
 
 TODOs:
 * Keep literal escaping robust for more non-ASCII cases.

@@ -342,6 +342,13 @@ class Checker:
 		context-insensitive: try/catch coverage is ignored in this stub.
 		"""
 		from lang2 import stage1 as H
+		bitwise_ops = {
+			H.BinaryOp.BIT_AND,
+			H.BinaryOp.BIT_OR,
+			H.BinaryOp.BIT_XOR,
+			H.BinaryOp.SHL,
+			H.BinaryOp.SHR,
+		}
 
 		may_throw = False
 
@@ -435,6 +442,13 @@ class Checker:
 		else returns None to avoid guessing.
 		"""
 		from lang2 import stage1 as H
+		bitwise_ops = {
+			H.BinaryOp.BIT_AND,
+			H.BinaryOp.BIT_OR,
+			H.BinaryOp.BIT_XOR,
+			H.BinaryOp.SHL,
+			H.BinaryOp.SHR,
+		}
 
 		if isinstance(expr, H.HLiteralInt):
 			return self._int_type
@@ -443,12 +457,10 @@ class Checker:
 		if hasattr(H, "HLiteralString") and isinstance(expr, getattr(H, "HLiteralString")):
 			return self._string_type
 		if isinstance(expr, H.HVar):
-			if locals is not None and expr.name in locals:
-				return locals[expr.name]
 			if expr.name == "String.EMPTY":
 				return self._string_type
-		if isinstance(expr, H.HVar) and locals is not None and expr.name in locals:
-			return locals[expr.name]
+			if locals is not None and expr.name in locals:
+				return locals[expr.name]
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			callee = fn_infos.get(expr.fn.name)
 			if callee is not None and callee.signature and callee.signature.return_type_id is not None:
@@ -463,6 +475,18 @@ class Checker:
 		if isinstance(expr, H.HBinary):
 			left_ty = self._infer_hir_expr_type(expr.left, fn_infos, current_fn, diagnostics, locals=locals)
 			right_ty = self._infer_hir_expr_type(expr.right, fn_infos, current_fn, diagnostics, locals=locals)
+			if expr.op in bitwise_ops:
+				if left_ty == self._uint_type and right_ty == self._uint_type:
+					return self._uint_type
+				if diagnostics is not None:
+					diagnostics.append(
+						Diagnostic(
+							message="bitwise ops require Uint operands",
+							severity="error",
+							span=None,
+						)
+					)
+				return None
 			if left_ty == self._int_type and right_ty == self._int_type:
 				return self._int_type
 			return None
