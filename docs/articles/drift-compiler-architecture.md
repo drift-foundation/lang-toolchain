@@ -17,7 +17,7 @@ Each stage has one responsibility and transforms the program into a simpler, mor
 
 **Full end-to-end pipeline:**
 
-> **Drift source → AST → HIR → MIR → SSA → TypeEnv → Throw-checks → LLVM → clang → machine code**
+> **Drift source → AST → HIR → (Signatures + Checker) → MIR → SSA → TypeEnv → Throw-checks → LLVM → clang → machine code**
 
 Every stage is testable on its own and contributes specific invariants that later stages rely on.
 
@@ -66,7 +66,31 @@ Normalize the language into a **sugar-free, explicit** representation.
 
 ---
 
-# 3. HIR → MIR (Stage 2)
+# 3. HIR → Signatures + Checker (Stage 1.5)
+
+### Purpose
+
+Resolve declared types into TypeIds, build canonical function signatures, and perform shallow HIR validation.
+
+### Responsibilities
+
+* **Type resolution**: convert declared param/return types into `TypeId`s on a shared `TypeTable` (scalars, `Array<T>`, `FnResult<T,Error>`, `String`).
+* Build `FnSignature`/`FnInfo` maps (name, param types, return type, throws intent).
+* Shallow HIR checks:
+  * Catch-arm shape/unknown events (when catalog provided).
+  * Array/indexing rules (index must be Int, subject must be Array).
+  * `.len/.cap` typing (Array/String → Uint).
+  * Uint-only bitwise ops; Bool-only conditions.
+  * Duplicate function definitions rejected.
+* Produce a `CheckedProgram` with signatures, shared `TypeTable`, diagnostics; no full type checking yet.
+
+### Output
+
+**Signatures + CheckedProgram** — canonical types per function, diagnostics, shared TypeTable for downstream stages.
+
+---
+
+# 4. HIR → MIR (Stage 2)
 
 ### Purpose
 
@@ -100,7 +124,7 @@ Lower HIR to a **control-flow-explicit intermediate representation** with clear 
 
 ---
 
-# 4. MIR → Pre-analysis (Stage 3)
+# 5. MIR → Pre-analysis (Stage 3)
 
 ### Purpose
 
@@ -124,7 +148,7 @@ Extract facts required by type-aware and throw-safety stages.
 
 ---
 
-# 5. MIR → SSA (Stage 4A)
+# 6. MIR → SSA (Stage 4A)
 
 ### Purpose
 
@@ -144,7 +168,7 @@ Normalize MIR into **Static Single Assignment** form with deterministic block or
 
 ---
 
-# 6. Build TypeEnv (Stage 4B)
+# 7. Build TypeEnv (Stage 4B)
 
 ### Purpose
 
@@ -169,7 +193,7 @@ Provide type information for functions and SSA values.
 
 ---
 
-# 7. Throw-checks (Stage 4C)
+# 8. Throw-checks (Stage 4C)
 
 ### Purpose
 
@@ -202,7 +226,7 @@ or a **CheckedProgram** containing diagnostics.
 
 ---
 
-# 8. SSA → LLVM IR (Codegen)
+# 9. SSA → LLVM IR (Codegen)
 
 ### Purpose
 
@@ -268,7 +292,9 @@ Drift source
 AST (syntax only)
     ↓ desugar
 HIR (sugar-free)
-    ↓ explicit CFG + ops
+    ↓ signatures + shallow checks
+Signatures + CheckedProgram
+    ↓ explicit CFG + ops (shared TypeTable)
 MIR
     ↓ pre-analysis
 Throw summaries

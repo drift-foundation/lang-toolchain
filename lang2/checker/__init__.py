@@ -542,13 +542,9 @@ class Checker:
 		if isinstance(expr, H.HField):
 			if expr.name in ("len", "cap", "capacity"):
 				subj_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
-				if subj_ty is None:
-					return None
-				td = self._type_table.get(subj_ty)
-				if td.kind is TypeKind.ARRAY or (td.kind is TypeKind.SCALAR and td.name == "String"):
-					# Length/capacity are Uint in v1.
-					return self._type_table.ensure_uint()
+			if subj_ty is None:
 				return None
+			return self._len_cap_result_type(subj_ty)
 		if isinstance(expr, H.HIndex):
 			subject_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
 			idx_ty = self._infer_hir_expr_type(expr.index, fn_infos, current_fn, diagnostics, locals=locals)
@@ -834,6 +830,13 @@ class Checker:
 		if isinstance(raw, tuple):
 			return self._map_opaque(raw)
 		return self._unknown_type
+
+	def _len_cap_result_type(self, subj_ty: TypeId) -> Optional[TypeId]:
+		"""Return Uint when length/capacity is requested on Array or String; otherwise None."""
+		td = self._type_table.get(subj_ty)
+		if td.kind is TypeKind.ARRAY or (td.kind is TypeKind.SCALAR and td.name == "String"):
+			return self._type_table.ensure_uint()
+		return None
 
 	def _validate_try_results(
 		self,
