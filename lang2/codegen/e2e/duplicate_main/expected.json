@@ -1,0 +1,6 @@
+{
+  "phase": "parser",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "duplicate function definition for 'main'"
+}

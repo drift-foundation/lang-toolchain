@@ -7,7 +7,7 @@ lang2 pipeline.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, Tuple, Optional
+from typing import Callable, Dict, Tuple, Optional, List
 
 from . import parser as _parser
 from . import ast as parser_ast
@@ -15,6 +15,7 @@ from lang2.stage0 import ast as s0
 from lang2.stage1 import AstToHIR
 from lang2 import stage1 as H
 from lang2.checker import FnSignature
+from lang2.core.diagnostics import Diagnostic
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
@@ -158,8 +159,13 @@ def _decls_from_parser_program(prog: parser_ast.Module) -> list[object]:
 	return decls
 
 
-def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSignature], "TypeTable"]:
-	"""Parse a Drift source file into lang2 HIR blocks + FnSignatures + TypeTable."""
+def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSignature], "TypeTable", List[Diagnostic]]:
+	"""
+	Parse a Drift source file into lang2 HIR blocks + FnSignatures + TypeTable.
+
+	Collects parser/adapter diagnostics (e.g., duplicate functions) instead of
+	throwing, so callers can report them alongside later pipeline checks.
+	"""
 	source = path.read_text()
 	prog = _parser.parse_program(source)
 	decls = _decls_from_parser_program(prog)
@@ -167,9 +173,18 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	signatures: Dict[str, FnSignature] = {}
 	lowerer = AstToHIR()
 	seen: set[str] = set()
+	diagnostics: list[Diagnostic] = []
 	for fn in prog.functions:
 		if fn.name in seen:
-			raise ValueError(f"duplicate function definition for '{fn.name}'")
+			diagnostics.append(
+				Diagnostic(
+					message=f"duplicate function definition for '{fn.name}'",
+					severity="error",
+					span=getattr(fn, "loc", None),
+				)
+			)
+			# Skip adding a duplicate; keep the first definition.
+			continue
 		seen.add(fn.name)
 		stmt_block = _convert_block(fn.body)
 		hir_block = lowerer.lower_block(stmt_block)
@@ -179,7 +194,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 
 	type_table, sigs = resolve_program_signatures(decls)
 	signatures.update(sigs)
-	return func_hirs, signatures, type_table
+	return func_hirs, signatures, type_table, diagnostics
 
 
 __all__ = ["parse_drift_to_hir"]

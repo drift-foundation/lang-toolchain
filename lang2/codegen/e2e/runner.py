@@ -82,7 +82,23 @@ def _run_case(case_dir: Path) -> str:
 		return "skipped (missing expected.json or main.drift)"
 
 	expected = json.loads(expected_path.read_text())
-	func_hirs, signatures, type_table = parse_drift_to_hir(source_path)
+	func_hirs, signatures, type_table, parse_diags = parse_drift_to_hir(source_path)
+	expected_phase = expected.get("phase")
+
+	if parse_diags:
+		actual_exit = 1  # Parsing produced diagnostics; treat as compile failure.
+		expected_exit = expected.get("exit_code", actual_exit)
+		actual_stdout = ""
+		actual_stderr = "\n".join(d.message for d in parse_diags)
+		if expected_phase not in (None, "parser"):
+			return f"FAIL (expected phase {expected_phase}, but diagnostics occurred during parser phase)"
+		if expected_exit != actual_exit:
+			return f"FAIL (parser phase exit {actual_exit}, expected {expected_exit})"
+		if expected.get("stdout", actual_stdout) != actual_stdout:
+			return "FAIL (parser phase stdout mismatch)"
+		if expected.get("stderr", actual_stderr) != actual_stderr:
+			return "FAIL (parser phase stderr mismatch)"
+		return "ok"
 	# Require exactly one user-facing main. Prefer a zero-arg Int main; if a single
 	# param main exists, assume it's Array<String> and let the backend emit the
 	# argv wrapper.
@@ -116,7 +132,19 @@ def _run_case(case_dir: Path) -> str:
 		return "skipped (clang not available)"
 
 	if checked.diagnostics:
-		return f"FAIL (diagnostics: {[d.message for d in checked.diagnostics]})"
+		actual_exit = 1
+		actual_stdout = ""
+		actual_stderr = "\n".join(d.message for d in checked.diagnostics)
+		expected_exit = expected.get("exit_code", actual_exit)
+		if expected_phase not in (None, "checker", "codegen"):
+			return f"FAIL (expected phase {expected_phase}, but diagnostics occurred during checker/codegen phase)"
+		if expected_exit != actual_exit:
+			return f"FAIL (checker/codegen phase exit {actual_exit}, expected {expected_exit})"
+		if expected.get("stdout", actual_stdout) != actual_stdout:
+			return "FAIL (checker/codegen phase stdout mismatch)"
+		if expected.get("stderr", actual_stderr) != actual_stderr:
+			return "FAIL (checker/codegen phase stderr mismatch)"
+		return "ok"
 
 	if exit_code != expected.get("exit_code", 0):
 		return f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"

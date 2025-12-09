@@ -8,8 +8,8 @@
 
 1. Centralize expression typing helper (DONE)
     - _TypingContext wraps infer logic and feeds a shared _walk_hir for array/bool validation with a single locals map.
-2. Change duplicate-function handling to a diagnostic
-    - Instead of raising ValueError in the parser adapter, surface a structured diagnostic (with a span when available).
+2. Change duplicate-function handling to a diagnostic (DONE)
+    - Parser adapter now emits a diagnostic (with span when available) instead of raising on duplicate functions.
 3. Add/adjust tests after cleanup (DONE)
     - Added checker tests for param-indexed arrays and param-based if conditions to ensure shared locals seeding is exercised.
 

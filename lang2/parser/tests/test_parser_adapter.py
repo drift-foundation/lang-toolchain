@@ -7,12 +7,15 @@ from lang2.parser import parse_drift_to_hir
 
 def test_parse_simple_return(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn main() returns Int {
     return 42;
 }
-""")
-	func_hirs, sigs, _type_table = parse_drift_to_hir(src)
+"""
+	)
+	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"main"}
 	assert sigs["main"].return_type.name == "Int"
 	block = func_hirs["main"]
@@ -23,15 +26,18 @@ fn main() returns Int {
 
 def test_parse_fnresult_ok(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn callee() returns FnResult<Int, Error> {
     return Ok(1);
 }
 fn main() returns Int {
     return callee();
 }
-""")
-	func_hirs, sigs, _type_table = parse_drift_to_hir(src)
+"""
+	)
+	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"callee", "main"}
 	assert sigs["callee"].return_type.name == "FnResult"
 	assert sigs["main"].return_type.name == "Int"
@@ -45,12 +51,15 @@ fn main() returns Int {
 
 def test_parse_ok_as_attr_stays_call(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn main() returns Int {
     return ns.Ok(1);
 }
-""")
-	func_hirs, sigs, _type_table = parse_drift_to_hir(src)
+"""
+	)
+	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"main"}
 	assert sigs["main"].return_type.name == "Int"
 	main = func_hirs["main"]
@@ -61,12 +70,15 @@ fn main() returns Int {
 
 def test_parse_throw_stmt(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn main() returns FnResult<Int, Error> {
     throw err_val;
 }
-""")
-	func_hirs, sigs, _type_table = parse_drift_to_hir(src)
+"""
+	)
+	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert sigs["main"].return_type.name == "FnResult"
 	main = func_hirs["main"]
 	assert isinstance(main.statements[0], H.HThrow)
@@ -74,12 +86,15 @@ fn main() returns FnResult<Int, Error> {
 
 def test_parse_raise_expr_maps_to_throw(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn main() returns FnResult<Int, Error> {
     raise err_val;
 }
-""")
-	func_hirs, sigs, _type_table = parse_drift_to_hir(src)
+"""
+	)
+	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert sigs["main"].return_type.name == "FnResult"
 	main = func_hirs["main"]
 	assert len(main.statements) == 1
@@ -88,13 +103,15 @@ fn main() returns FnResult<Int, Error> {
 
 def test_parse_unsupported_stmt_fails_loudly(tmp_path: Path):
 	src = tmp_path / "main.drift"
-	src.write_text("""
+	src.write_text(
+		"""
 fn main() returns Int {
     while true {
         return 1;
     }
 }
-""")
+"""
+	)
 	with pytest.raises(NotImplementedError):
 		parse_drift_to_hir(src)
 
@@ -113,13 +130,14 @@ fn drift_main() returns FnResult<Int, Error> {
 }
 """
 	)
-	_, sigs, type_table = parse_drift_to_hir(src)
+	_, sigs, type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	sig = sigs.get("drift_main") or sigs["main"]
 	assert sig.return_type_id is not None
 	assert sig.error_type_id is not None
 
 
-def test_duplicate_function_definition_raises(tmp_path: Path) -> None:
+def test_duplicate_function_definition_reports_diagnostic(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
@@ -127,5 +145,6 @@ fn main() returns Int { return 0; }
 fn main() returns Int { return 1; }
 """
 	)
-	with pytest.raises(ValueError, match="duplicate function definition"):
-		parse_drift_to_hir(src)
+	_, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	assert any("duplicate function definition" in d.message for d in diagnostics)
+	assert "main" in sigs

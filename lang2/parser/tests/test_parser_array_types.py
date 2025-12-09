@@ -18,12 +18,13 @@ fn takes(xs: Array<Int>) returns Int {
     return xs[0];
 }
 
-fn returns_array() returns Array<Int> {
+	fn returns_array() returns Array<Int> {
     return [1, 2, 3];
 }
 """
 	)
-	func_hirs, sigs, type_table = parse_drift_to_hir(src)
+	func_hirs, sigs, type_table, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
 	assert "takes" in sigs and "returns_array" in sigs
 
 	int_ty = type_table.new_scalar("Int")  # will get a fresh id; compare by name instead

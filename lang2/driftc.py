@@ -19,7 +19,15 @@ handling and diagnostics. For now it exposes a single helper
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
+from pathlib import Path
 from typing import Dict, Mapping, List, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+	sys.path.insert(0, str(ROOT))
 
 from lang2 import stage1 as H
 from lang2.stage1 import normalize_hir
@@ -33,6 +41,7 @@ from lang2.checker.catch_arms import CatchArmInfo
 from lang2.core.diagnostics import Diagnostic
 from lang2.core.types_core import TypeTable
 from lang2.codegen.llvm import lower_module_to_llvm
+from lang2.parser import parse_drift_to_hir
 from lang2.type_resolver import resolve_program_signatures
 
 
@@ -271,3 +280,60 @@ def _fake_decls_from_hirs(hirs: Mapping[str, H.HBlock]) -> list[object]:
 
 
 __all__ = ["compile_stubbed_funcs", "compile_to_llvm_ir_for_tests"]
+
+
+def _diag_to_json(diag: Diagnostic, phase: str, source: Path) -> dict:
+	"""Render a Diagnostic to a structured JSON-friendly dict."""
+	line = getattr(diag.span, "line", None) if diag.span is not None else None
+	column = getattr(diag.span, "column", None) if diag.span is not None else None
+	return {
+		"phase": phase,
+		"message": diag.message,
+		"severity": diag.severity,
+		"file": str(source),
+		"line": line,
+		"column": column,
+	}
+
+
+def main(argv: list[str] | None = None) -> int:
+	"""
+	Minimal CLI: parses a Drift file and emits diagnostics.
+
+	With --json, prints structured diagnostics (phase/message/severity/file/line/column)
+	and an exit_code; otherwise prints human-readable messages to stderr.
+	"""
+	parser = argparse.ArgumentParser(description="lang2 driftc stub")
+	parser.add_argument("source", type=Path, help="Path to Drift source file")
+	parser.add_argument(
+		"--json",
+		action="store_true",
+		help="Emit diagnostics as JSON (phase/message/severity/file/line/column)",
+	)
+	args = parser.parse_args(argv)
+
+	source_path: Path = args.source
+	func_hirs, signatures, type_table, parse_diags = parse_drift_to_hir(source_path)
+
+	if parse_diags:
+		if args.json:
+			payload = {
+				"exit_code": 1,
+				"diagnostics": [_diag_to_json(d, "parser", source_path) for d in parse_diags],
+			}
+			print(json.dumps(payload))
+		else:
+			for d in parse_diags:
+				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				print(f"{source_path}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+		return 1
+
+	# No diagnostics produced in this stub. A real implementation would continue
+	# through checker/codegen; for now just acknowledge success.
+	if args.json:
+		print(json.dumps({"exit_code": 0, "diagnostics": []}))
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

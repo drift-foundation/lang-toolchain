@@ -1,0 +1,2 @@
+fn main() returns Int { return 0; }
+fn main() returns Int { return 1; }
