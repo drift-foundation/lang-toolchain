@@ -118,12 +118,20 @@ def compile_stubbed_funcs(
 		type_table=shared_type_table,
 	)
 	checked = checker.check(func_hirs.keys())
+	# Ensure declared_can_throw is a bool for downstream stages; guard against
+	# accidental truthy objects sneaking in from legacy shims.
+	for info in checked.fn_infos.values():
+		if not isinstance(info.declared_can_throw, bool):
+			info.declared_can_throw = bool(info.declared_can_throw)
 	declared = {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
 	mir_funcs: Dict[str, M.MirFunc] = {}
 
 	for name, hir_norm in normalized_hirs.items():
 		builder = MirBuilder(name=name)
 		HIRToMIR(builder, type_table=shared_type_table, exc_env=exc_env).lower_block(hir_norm)
+		sig = signatures.get(name)
+		if sig is not None and sig.param_names is not None:
+			builder.func.params = list(sig.param_names)
 		mir_funcs[name] = builder.func
 
 	# Stage3: summaries
@@ -168,7 +176,7 @@ def compile_to_llvm_ir_for_tests(
 	func_hirs: Mapping[str, H.HBlock],
 	signatures: Mapping[str, FnSignature],
 	exc_env: Mapping[str, int] | None = None,
-	entry: str = "drift_main",
+	entry: str = "main",
 	type_table: "TypeTable | None" = None,
 ) -> tuple[str, CheckedProgram]:
 	"""
@@ -191,9 +199,12 @@ def compile_to_llvm_ir_for_tests(
 		type_table=type_table,
 	)
 
-	# Lower module to LLVM IR and append the OS entry wrapper.
+	# Lower module to LLVM IR and append the OS entry wrapper when needed.
 	module = lower_module_to_llvm(mir_funcs, ssa_funcs, checked.fn_infos, type_table=checked.type_table)
-	module.emit_entry_wrapper(entry)
+	# If the entry is already called "main", do not emit a wrapper that would
+	# call itself; otherwise emit a thin OS wrapper that calls the entry.
+	if entry != "main":
+		module.emit_entry_wrapper(entry)
 	return module.render(), checked
 
 

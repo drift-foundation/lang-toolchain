@@ -33,13 +33,17 @@ def test_throw_lowers_to_error_and_result_err_return():
 	entry = builder.func.blocks["entry"]
 	instrs = entry.instructions
 
-	# Expect: payload literal, event-code const, ConstructError, ConstructResultErr
-	assert len(instrs) == 4
-	assert isinstance(instrs[0], ConstString)
-	assert isinstance(instrs[1], ConstInt)
-	assert isinstance(instrs[2], ConstructError)
-	assert isinstance(instrs[3], ConstructResultErr)
+	# Expect: payload literal, event-code const, ConstructError, ConstructResultErr.
+	# HIRToMIR now injects a ConstString for String.EMPTY; filter out any leading
+	# injected empty-string literal when asserting.
+	payload_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "boom")
+	const_int = next(i for i in instrs if isinstance(i, ConstInt))
+	err = next(i for i in instrs if isinstance(i, ConstructError))
+	err_result = next(i for i in instrs if isinstance(i, ConstructResultErr))
+	assert err.payload == payload_const.dest
+	assert err.code == const_int.dest
+	assert err_result.error == err.dest
 
 	term = entry.terminator
 	assert isinstance(term, Return)
-	assert term.value == instrs[3].dest
+	assert term.value == err_result.dest

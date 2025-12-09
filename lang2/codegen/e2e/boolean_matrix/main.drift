@@ -1,0 +1,43 @@
+fn main() returns Int {
+    // Basic literals
+    if true and true {
+        // ok
+    } else {
+        return 1;
+    }
+
+    if false or false {
+        return 2;
+    }
+
+    // Not on literal
+    if not false {
+        // ok
+    } else {
+        return 3;
+    }
+
+    // Mixed and/or with variables
+    val a = true;
+    val b = false;
+    val c = true;
+
+    if a and (b or not c) {
+        return 4;
+    }
+
+    if (a and c) or b {
+        // ok
+    } else {
+        return 5;
+    }
+
+    // Equality on bools
+    if a == c and a != b {
+        // ok
+    } else {
+        return 6;
+    }
+
+    return 0;
+}

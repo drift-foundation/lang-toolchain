@@ -1,0 +1,5 @@
+fn main() returns Uint {
+    val xs: Array<String> = ["a", "bb", "ccc"]
+    // len(a)=1, len(bb)=2, len(ccc)=3 -> 6
+    return xs[0].len + xs[1].len + xs[2].len
+}

@@ -62,6 +62,7 @@ DriftString drift_string_concat(DriftString a, DriftString b) {
 		abort();
 	}
 	drift_size_t total = a.len + b.len;
+	/* For empty result, canonicalize to len=0, data=NULL to avoid heap allocs. */
 	if (total == 0) {
 		DriftString s = {0, NULL};
 		return s;

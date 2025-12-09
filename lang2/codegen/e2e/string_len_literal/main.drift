@@ -1,4 +1,4 @@
-fn main() returns Int {
-    val s = "abc"
-    return s.len
+fn main() returns Uint {
+	val s = "abc"
+	return s.len
 }

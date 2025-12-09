@@ -160,6 +160,12 @@ class HIRToMIR:
 		self._type_table._bool_type = self._bool_type  # type: ignore[attr-defined]
 		self._string_type = getattr(self._type_table, "_string_type", None) or self._type_table.new_scalar("String")
 		self._type_table._string_type = self._string_type  # type: ignore[attr-defined]
+		self._string_empty_const = self.b.new_temp()
+		# Inject a private empty string literal for String.EMPTY; this is a
+		# zero-length, null-data string produced at MIR lowering time.
+		self.b.emit(M.ConstString(dest=self._string_empty_const, value=""))
+		self._uint_type = getattr(self._type_table, "_uint_type", None) or self._type_table.ensure_uint()
+		self._type_table._uint_type = self._uint_type  # type: ignore[attr-defined]
 		self._unknown_type = getattr(self._type_table, "_unknown_type", None) or self._type_table.new_unknown("Unknown")
 		self._type_table._unknown_type = self._unknown_type  # type: ignore[attr-defined]
 
@@ -194,6 +200,9 @@ class HIRToMIR:
 
 	def _visit_expr_HVar(self, expr: H.HVar) -> M.ValueId:
 		self.b.ensure_local(expr.name)
+		# Treat String.EMPTY as a builtin zero-length string literal.
+		if expr.name == "String.EMPTY":
+			return self._string_empty_const
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=dest, local=expr.name))
 		return dest
@@ -209,8 +218,8 @@ class HIRToMIR:
 		right = self.lower_expr(expr.right)
 		dest = self.b.new_temp()
 		# String-aware lowering: redirect +/== on strings to dedicated MIR ops.
-		left_ty = self._local_types.get(getattr(expr.left, "name", ""))
-		right_ty = self._local_types.get(getattr(expr.right, "name", ""))
+		left_ty = self._infer_expr_type(expr.left)
+		right_ty = self._infer_expr_type(expr.right)
 		if expr.op in (H.BinaryOp.ADD, H.BinaryOp.EQ) and left_ty == self._string_type and right_ty == self._string_type:
 			if expr.op is H.BinaryOp.ADD:
 				self.b.emit(M.StringConcat(dest=dest, left=left, right=right))
@@ -262,6 +271,47 @@ class HIRToMIR:
 		Plain function call. For now only direct function names are supported;
 		indirect/function-valued calls will be added later if needed.
 		"""
+		if isinstance(expr.fn, H.HVar):
+			name = expr.fn.name
+			# Builtin byte_length/len(x) for String/Array.
+			if name in ("len", "byte_length") and len(expr.args) == 1:
+				arg_expr = expr.args[0]
+				arg_val = self.lower_expr(arg_expr)
+				arg_ty = self._infer_expr_type(arg_expr)
+				if arg_ty is None:
+					raise NotImplementedError(f"{name}(x): unable to infer argument type")
+				td = self._type_table.get(arg_ty)
+				dest = self.b.new_temp()
+				if td.kind is TypeKind.ARRAY:
+					self.b.emit(M.ArrayLen(dest=dest, array=arg_val))
+				elif arg_ty == self._string_type:
+					self.b.emit(M.StringLen(dest=dest, value=arg_val))
+				else:
+					raise NotImplementedError(f"{name}(x): unsupported argument type")
+				self._local_types[dest] = self._uint_type
+				return dest
+			# string_eq(a,b)
+			if name == "string_eq" and len(expr.args) == 2:
+				l_expr, r_expr = expr.args
+				l_val = self.lower_expr(l_expr)
+				r_val = self.lower_expr(r_expr)
+				if self._infer_expr_type(l_expr) != self._string_type or self._infer_expr_type(r_expr) != self._string_type:
+					raise NotImplementedError("string_eq requires String operands")
+				dest = self.b.new_temp()
+				self.b.emit(M.StringEq(dest=dest, left=l_val, right=r_val))
+				self._local_types[dest] = self._bool_type
+				return dest
+			# string_concat(a,b)
+			if name == "string_concat" and len(expr.args) == 2:
+				l_expr, r_expr = expr.args
+				l_val = self.lower_expr(l_expr)
+				r_val = self.lower_expr(r_expr)
+				if self._infer_expr_type(l_expr) != self._string_type or self._infer_expr_type(r_expr) != self._string_type:
+					raise NotImplementedError("string_concat requires String operands")
+				dest = self.b.new_temp()
+				self.b.emit(M.StringConcat(dest=dest, left=l_val, right=r_val))
+				self._local_types[dest] = self._string_type
+				return dest
 		if not isinstance(expr.fn, H.HVar):
 			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
 		arg_vals = [self.lower_expr(a) for a in expr.args]
@@ -670,6 +720,9 @@ class HIRToMIR:
 		ty_def = self._type_table.get(subj_ty)
 		if ty_def.kind is TypeKind.ARRAY and ty_def.param_types:
 			return ty_def.param_types[0]
+		# Strings are not arrays; bail out to Unknown so later passes can diagnose.
+		if ty_def.kind is TypeKind.SCALAR and ty_def.name == "String":
+			return self._unknown_type
 		return self._unknown_type
 
 	def _infer_array_literal_elem_type(self, expr: H.HArrayLiteral) -> TypeId:
@@ -695,6 +748,25 @@ class HIRToMIR:
 			return self._bool_type
 		if isinstance(expr, H.HLiteralString):
 			return self._string_type
+		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+			name = expr.fn.name
+			if name == "string_concat":
+				return self._string_type
+			if name == "string_eq":
+				return self._bool_type
+			if name == "len" and expr.args:
+				arg_ty = self._infer_expr_type(expr.args[0])
+				if arg_ty is not None:
+					td = self._type_table.get(arg_ty)
+					if td.kind is TypeKind.ARRAY or (td.kind is TypeKind.SCALAR and td.name == "String"):
+						return self._uint_type
+		if isinstance(expr, H.HField) and expr.name in ("len", "cap", "capacity"):
+			subj_ty = self._infer_expr_type(expr.subject)
+			if subj_ty is None:
+				return None
+			ty_def = self._type_table.get(subj_ty)
+			if ty_def.kind is TypeKind.ARRAY or (ty_def.kind is TypeKind.SCALAR and ty_def.name == "String"):
+				return self._uint_type
 		if isinstance(expr, H.HArrayLiteral):
 			elem_ty = self._infer_array_literal_elem_type(expr)
 			return self._type_table.new_array(elem_ty)

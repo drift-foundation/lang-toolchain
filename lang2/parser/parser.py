@@ -634,9 +634,20 @@ def _build_catch_clause(tree: Tree) -> CatchClause:
 
 def _build_expr(node) -> Expr:
     if isinstance(node, Tree):
-        name = _name(node)
+        # Some grammar nodes carry a Token as .data (e.g., *_tail); unwrap selected
+        # cases, otherwise treat the token value as the rule name.
+        if isinstance(node.data, Token):
+            name = node.data.value
+        else:
+            name = _name(node)
     else:
         raise TypeError(f"Unexpected node type: {type(node)}")
+
+    if name in {"logic_and_tail", "logic_or_tail"}:
+        rhs = next((c for c in node.children if isinstance(c, Tree)), None)
+        if rhs is None:
+            raise TypeError(f"Unexpected tail shape: {node.children!r}")
+        return _build_expr(rhs)
 
     if name == "logic_or":
         return _fold_chain(node, "logic_or_tail")
@@ -669,10 +680,18 @@ def _build_expr(node) -> Expr:
     if name == "primary":
         return _build_expr(node.children[0])
     if name == "neg":
-        expr = _build_expr(node.children[0])
+        # Unary minus: children include the '-' token and the operand expression.
+        target = next((c for c in node.children if isinstance(c, Tree)), None)
+        if target is None:
+            raise TypeError(f"neg expects an operand, got {node.children!r}")
+        expr = _build_expr(target)
         return Unary(loc=_loc(node), op="-", operand=expr)
     if name == "not_op":
-        expr = _build_expr(node.children[0])
+        # Logical negation: children include the '!' token (or 'not') and the operand.
+        target = next((c for c in node.children if isinstance(c, Tree)), None)
+        if target is None:
+            raise TypeError(f"not_op expects an operand, got {node.children!r}")
+        expr = _build_expr(target)
         return Unary(loc=_loc(node), op="not", operand=expr)
     if name == "var":
         token = node.children[0]

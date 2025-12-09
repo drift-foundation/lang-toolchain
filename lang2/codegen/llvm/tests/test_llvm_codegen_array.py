@@ -53,7 +53,7 @@ def test_array_literal_and_index_ir_contains_alloc_and_load():
 	assert "unreachable" in ir
 	assert "sext" not in ir
 	assert "getelementptr inbounds i64" in ir
-	assert "extractvalue { %drift.size, %drift.size, i64* } %t3, 0" in ir
+	assert "extractvalue { i64, i64, i64* } %t3, 0" in ir
 
 
 def test_array_index_store_ir_contains_store():

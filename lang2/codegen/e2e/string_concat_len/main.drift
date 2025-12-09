@@ -1,4 +1,4 @@
-fn main() returns Int {
+fn main() returns Uint {
     val s = "foo" + "bar"
     return s.len
 }

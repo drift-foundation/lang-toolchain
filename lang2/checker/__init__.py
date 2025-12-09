@@ -52,6 +52,7 @@ class FnSignature:
 	declared_can_throw: Optional[bool] = None
 	is_extern: bool = False
 	is_intrinsic: bool = False
+	param_names: Optional[list[str]] = None
 	error_type_id: Optional[TypeId] = None  # resolved error TypeId
 
 	# Legacy/raw fields (to be removed once real type checker is wired).
@@ -149,12 +150,14 @@ class Checker:
 		self._int_type = getattr(self._type_table, "_int_type", None) or _find_named(TypeKind.SCALAR, "Int") or self._type_table.new_scalar("Int")
 		self._bool_type = getattr(self._type_table, "_bool_type", None) or _find_named(TypeKind.SCALAR, "Bool") or self._type_table.new_scalar("Bool")
 		self._string_type = getattr(self._type_table, "_string_type", None) or _find_named(TypeKind.SCALAR, "String") or self._type_table.new_scalar("String")
+		self._uint_type = getattr(self._type_table, "_uint_type", None) or _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
 		self._error_type = getattr(self._type_table, "_error_type", None) or _find_named(TypeKind.ERROR, "Error") or self._type_table.new_error("Error")
 		self._unknown_type = getattr(self._type_table, "_unknown_type", None) or _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.new_unknown("Unknown")
 		# Cache seeds on the table so downstream reuse sees the same ids.
 		self._type_table._int_type = self._int_type  # type: ignore[attr-defined]
 		self._type_table._bool_type = self._bool_type  # type: ignore[attr-defined]
 		self._type_table._string_type = self._string_type  # type: ignore[attr-defined]
+		self._type_table._uint_type = self._uint_type  # type: ignore[attr-defined]
 		self._type_table._error_type = self._error_type  # type: ignore[attr-defined]
 		self._type_table._unknown_type = self._unknown_type  # type: ignore[attr-defined]
 		# TODO: remove declared_can_throw shim once real parser/type checker supplies signatures.
@@ -491,6 +494,16 @@ class Checker:
 						)
 					return self._type_table.new_array(self._unknown_type)
 			return self._type_table.new_array(first)
+		if isinstance(expr, H.HField):
+			if expr.name in ("len", "cap", "capacity"):
+				subj_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
+				if subj_ty is None:
+					return None
+				td = self._type_table.get(subj_ty)
+				if td.kind is TypeKind.ARRAY or (td.kind is TypeKind.SCALAR and td.name == "String"):
+					# Length/capacity are Uint in v1.
+					return getattr(self._type_table, "_uint_type", None) or self._type_table.ensure_uint()
+				return None
 		if isinstance(expr, H.HIndex):
 			subject_ty = self._infer_hir_expr_type(expr.subject, fn_infos, current_fn, diagnostics, locals=locals)
 			idx_ty = self._infer_hir_expr_type(expr.index, fn_infos, current_fn, diagnostics, locals=locals)
@@ -960,12 +973,26 @@ class Checker:
 			Phi,
 			UnaryOpInstr,
 			BinaryOpInstr,
+			ArrayLit,
+			ArrayIndexLoad,
+			ArrayLen,
+			ArrayCap,
+			StringLen,
 		)
 		value_types: Dict[tuple[str, str], TypeId] = {}
 
 		# Helper to fetch a mapped type with Unknown fallback.
 		def ty_for(fn: str, val: str) -> TypeId:
 			return value_types.get((fn, val), self._unknown_type)
+
+		# Seed parameter types from signatures when available so callers and returns
+		# see concrete types for params immediately.
+		for fn_name, ssa in ssa_funcs.items():
+			sig = signatures.get(fn_name)
+			if sig and sig.param_type_ids and ssa.func.params:
+				for param_name, ty_id in zip(ssa.func.params, sig.param_type_ids):
+					if ty_id is not None:
+						value_types[(fn_name, param_name)] = ty_id
 
 		changed = True
 		# Fixed-point with a small iteration cap.
@@ -995,6 +1022,27 @@ class Checker:
 						elif isinstance(instr, ConstString) and dest is not None:
 							if value_types.get((fn_name, dest)) != self._string_type:
 								value_types[(fn_name, dest)] = self._string_type
+								changed = True
+						elif isinstance(instr, StringLen) and dest is not None:
+							if value_types.get((fn_name, dest)) != self._uint_type:
+								value_types[(fn_name, dest)] = self._uint_type
+								changed = True
+						elif isinstance(instr, ArrayLen) and dest is not None:
+							if value_types.get((fn_name, dest)) != self._uint_type:
+								value_types[(fn_name, dest)] = self._uint_type
+								changed = True
+						elif isinstance(instr, ArrayCap) and dest is not None:
+							if value_types.get((fn_name, dest)) != self._uint_type:
+								value_types[(fn_name, dest)] = self._uint_type
+								changed = True
+						elif isinstance(instr, ArrayIndexLoad) and dest is not None:
+							if instr.elem_ty is not None and value_types.get((fn_name, dest)) != instr.elem_ty:
+								value_types[(fn_name, dest)] = instr.elem_ty
+								changed = True
+						elif isinstance(instr, ArrayLit) and dest is not None:
+							arr_ty = self._type_table.new_array(instr.elem_ty)
+							if value_types.get((fn_name, dest)) != arr_ty:
+								value_types[(fn_name, dest)] = arr_ty
 								changed = True
 						elif isinstance(instr, ConstructResultOk):
 							if dest is None:

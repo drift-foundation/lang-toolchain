@@ -156,7 +156,7 @@ class AstToHIR:
 		"""
 		op_map = {
 			"-": H.UnaryOp.NEG,
-			"!": H.UnaryOp.NOT,
+			"not": H.UnaryOp.NOT,
 			"~": H.UnaryOp.BIT_NOT,
 		}
 		try:
@@ -187,8 +187,8 @@ class AstToHIR:
 			"<=": H.BinaryOp.LE,
 			">": H.BinaryOp.GT,
 			">=": H.BinaryOp.GE,
-			"&&": H.BinaryOp.AND,
-			"||": H.BinaryOp.OR,
+			"and": H.BinaryOp.AND,
+			"or": H.BinaryOp.OR,
 		}
 		try:
 			op = op_map[expr.op]

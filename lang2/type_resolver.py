@@ -40,6 +40,7 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 	bool_ty = table.new_scalar("Bool")
 	str_ty = table.new_scalar("String")
 	err_ty = table.new_error("Error")
+	uint_ty = table.ensure_uint()
 
 	signatures: dict[str, FnSignature] = {}
 
@@ -51,10 +52,12 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 
 		# Params
 		raw_params = []
+		param_names: list[str] = []
 		param_type_ids: list[TypeId] = []
 		for p in getattr(decl, "params", []):
 			raw_ty = getattr(p, "type", None)
 			raw_params.append(raw_ty)
+			param_names.append(getattr(p, "name", f"p{len(param_names)}"))
 			param_type_ids.append(_resolve_type(raw_ty, table, int_ty, bool_ty, str_ty, err_ty))
 
 		# Return
@@ -83,6 +86,7 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 			param_types=raw_params,
 			return_type=raw_ret,
 			throws_events=throws,
+			param_names=param_names if param_names else None,
 		)
 
 	return table, signatures
@@ -114,6 +118,10 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 		if name == "Array":
 			elem = _resolve_type(args[0] if args else None, table, int_ty, bool_ty, str_ty, err_ty)
 			return table.new_array(elem)
+		if name == "Uint":
+			ty = table.ensure_uint()
+			table._uint_type = ty  # type: ignore[attr-defined]
+			return ty
 		if name == "Int":
 			return int_ty
 		if name == "Bool":
@@ -133,6 +141,10 @@ def _resolve_type(raw: object, table: TypeTable, int_ty: TypeId, bool_ty: TypeId
 			return str_ty
 		if raw == "Error":
 			return err_ty
+		if raw == "Uint":
+			ty = table.ensure_uint()
+			table._uint_type = ty  # type: ignore[attr-defined]
+			return ty
 		if "FnResult" in raw:
 			return table.new_fnresult(int_ty, err_ty)
 		if raw.startswith("Array<") and raw.endswith(">"):

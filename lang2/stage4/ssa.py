@@ -98,6 +98,10 @@ class MirToSSA:
 		block = func.blocks[func.entry]
 		version: Dict[str, int] = {}
 		current_value: Dict[str, str] = {}
+		# Seed parameter locals so loads are valid without an explicit store.
+		for param in func.params:
+			version[param] = 1
+			current_value[param] = param
 		new_instrs: list[MInstr] = []
 		value_for_instr: Dict[tuple[str, int], str] = {}
 

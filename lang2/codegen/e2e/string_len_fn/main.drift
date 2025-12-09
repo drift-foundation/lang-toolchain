@@ -1,0 +1,3 @@
+fn main() returns Uint {
+    return byte_length("abc");
+}

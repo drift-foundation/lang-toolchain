@@ -97,125 +97,47 @@ Goal: ensure `String` is already a first-class type in the compiler’s TypeTabl
 
 ## Phase 3 – LLVM lowering for String
 
-Do this in two steps: **literals + pass-through** first; **concat/print** second.
+**Status: complete for literals, params/returns, len/eq/concat.**
 
-### 3A. Minimal: literals and pass-through (in progress)
+* `%DriftString = { %drift.size/i64, i8* }` seeded; literals emit private UTF-8 globals (with escaping) and inline struct builds.
+* Calls/params/returns respect `%DriftString` when a shared `TypeTable` is provided; non-void calls without dest now assert instead of emitting `call void`.
+* HIR→MIR emits `StringLen`/`StringEq`/`StringConcat` for `s.len`, `s == t`, `s + t` (including non-trivial expressions via `_infer_expr_type`). Builtins `byte_length(x)`/`len(x)`, `string_eq(a,b)`, `string_concat(a,b)` are routed through these MIR ops. LLVM lowers:
+  * `StringLen` → `extractvalue %DriftString %v, 0` (Uint carrier).
+  * `StringEq` / `StringConcat` → runtime calls, with module-level `declare` once.
+* Array lowering understands `Array<String>`: element type maps to `%DriftString`, `_sizeof/_alignof` handle the struct (16/8), bounds checks stay on `i64`.
+* Type system: `Uint` is real; `.len` on `String`/`Array` returns Uint end-to-end. E2E Drift files updated accordingly.
+* Entry wrapper: skipped when entry is `main`; e2e runner now prefers `main` over `drift_main`.
+* Tests: LLVM IR tests cover string literals/params/ops and Array<String>; e2e covers byte_length/eq/concat and Array<String> length sums (all green under `just lang2-codegen-test`).
+* Added canonical empty string support: HIR→MIR injects `String.EMPTY` as a zero-length literal; runtime uses `{len=0, data=NULL}` for empties (no heap alloc). 
 
-* LLVM module seeds `%DriftString = { %drift.size, i8* }`.
-* ConstString lowering emits a private UTF-8 global with escaped bytes and builds the struct inline (len/data); no runtime call.
-* Return/call lowering now understands `%DriftString` when a shared TypeTable is provided (headers and arguments use `%DriftString`; return types are `%DriftString`); Int remains the default fallback.
-* String ops moved out of ad-hoc LLVM magic into explicit MIR lowering:
-  * HIR→MIR emits `StringLen`, `StringEq`, `StringConcat` for `len(s)`, `s == t`, and `s + t` on strings; `BinaryOpInstr` on strings should no longer appear.
-  * LLVM lowers these MIR ops to `extractvalue %DriftString, 0` (len) or runtime calls (`drift_string_eq` / `drift_string_concat`), with module-level declares emitted once.
-* IR tests now cover literal return, pass-through call, string eq/concat lowering, and string len on a string operand. Negative test ensures unsupported string binops raise.
-* E2E runner links `string_runtime.c`; new e2e cases exercise string len/concat/eq and are passing.
-
-Status:
-- String params/returns are supported in LLVM (headers/calls/returns typed).
-- String len/eq/concat are lowered in LLVM from BinaryOp/StringLen patterns; runtime linked in e2e runner.
-- E2E runner now links `string_runtime.c` and has cases for string len/eq/concat using `s.len`, `==`, and `+`.
-
-TODO in this phase:
-* Tighten literal escaping if we start using non-ASCII or embedded quotes (currently emits `\XX` hex escapes, quotes/backslashes escaped).
-* Push the surface syntax down from HIR to MIR instead of detecting string ops in LLVM (currently BinaryOp String detection happens in LLVM).
-
-### 3B. Then: concat and print
-
-4. **Concat**
-
-   * In the expression lowering:
-
-     * For `String + String`, emit:
-
-       ```llvm
-       %res = call %DriftString @drift_string_concat(%DriftString %a, %DriftString %b)
-       ```
-     * `%a` and `%b` are the lowered operands.
-
-5. **Print**
-
-   * If you bring over a `drift_print_string` helper:
-
-     * Lower whatever print primitive you have to:
-
-       ```llvm
-       call void @drift_print_string(%DriftString %s)
-       ```
-   * If lang2 doesn’t have a print builtin yet, you can skip this and just keep `concat` and “return string” working.
-
-6. **No frees**
-
-   * For v1, do not insert any `drift_string_free` calls from the compiler. That avoids accidental frees of literals or copies.
-   * The helpers remain available for hand-written C/runtime usage and future language intrinsics.
+TODOs:
+* Keep literal escaping robust for more non-ASCII cases.
+* Move more string op detection into HIR→MIR (remaining BinaryOp string fallback is minimal now).
+* Future: `char_length` helper for user-visible characters; argv shim for `main(argv: Array<String>)`; more negative type-error tests (String misuse, etc.).
 
 ---
 
 ## Phase 4 – Array<String> readiness
 
-Goal: make `Array<String>` work with the new struct representation.
+**Status: initial support done.**
 
-1. **Element type**
+* `_llvm_array_elem_type` maps String TypeIds to `%DriftString`; size/align for `%DriftString` are hard-coded 16/8 for v1.
+* Bounds checks remain on `i64` (`%drift.size`); `.len`/`.cap` return Uint.
+* IR test covers Array<String> literal + index; e2e sums element lengths successfully.
+* Checker enforces index `Int` and element type consistency; `.len` returns Uint.
 
-   * In `_llvm_array_elem_type(type_id)`:
-
-     * When `type_id` is `String`, return `%DriftString` type, just like for regular scalars.
-   * Ensure your array storage uses the element type directly, so `Array<String>` becomes a buffer of `{len, data}` structs.
-
-2. **Checker**
-
-   * Arrays should already be generic over element type. Confirm there’s no “only numeric/scalar” assertion that breaks when the element is a struct.
-
-3. **Tests**
-
-   * Add tests:
-
-     ```drift
-     fn first(xs: Array<String>) returns String {
-         return xs[0];
-     }
-
-     fn make() returns Array<String> {
-         return ["a", "b"];
-     }
-     ```
+Next: add more e2e/IR cases for stores into Array<String> and richer indexing.
 
 ---
 
 ## Phase 5 – entrypoint groundwork
 
-Goal: once `String` and `Array<String>` lower, design the `main(argv: Array<String>)` shim.
+Goal: allow `fn main(argv: Array<String>) returns Int` with a C-visible shim.
 
-1. **C entry shim**
-
-   * In runtime C:
-
-     ```c
-     int drift_entry(int argc, char **argv);
-     ```
-   * `main`:
-
-     ```c
-     int main(int argc, char **argv) {
-         return drift_entry(argc, argv);
-     }
-     ```
-
-2. **Inside `drift_entry`**
-
-   * Build an `Array<String>` of length `argc` by:
-
-     * Calling `drift_string_from_cstr(argv[i])` for each arg.
-   * Call the Drift `fn main(argv: Array<String>) returns Int`.
-   * Return result as `int` (truncate/extend as needed from the Drift `Int` ABI carrier).
-
-3. **Wire in the backend**
-
-   * Teach lang2’s codegen to:
-
-     * Find the user `main(argv: Array<String>) returns Int` symbol.
-     * Export a C-visible `drift_entry` wrapper that calls it.
-
-(If you’re not ready to expose `main(argv: Array<String>)` yet, you can defer this until after literals and concat are stable.)
+Plan (not started):
+* Runtime: add `drift_entry(argc, argv)` that builds `Array<String>` via string/array runtimes and calls the Drift `main`.
+* Backend: when user `main` has the `Array<String>` signature, emit the shim; otherwise, if entry is plain `main()`, use it directly (no wrapper).
+* E2E: argv length/content tests once shim exists.
 
 ---
 

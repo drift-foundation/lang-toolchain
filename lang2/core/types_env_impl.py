@@ -111,6 +111,14 @@ def build_type_env_from_ssa(
 	sig_map = signatures or {}
 
 	for fname, ssa in ssa_funcs.items():
+		# Seed parameter types from signatures when available so downstream
+		# instructions (AssignSSA, Return) see concrete types for params.
+		sig = sig_map.get(fname)
+		if sig and sig.param_type_ids and ssa.func.params:
+			for param_name, ty_id in zip(ssa.func.params, sig.param_type_ids):
+				if ty_id is not None:
+					types[(fname, param_name)] = ty_id
+
 		# First pass: recognize direct FnResult constructions, call results from
 		# known signatures, and propagate via AssignSSA/Phi when obvious.
 		for block in ssa.func.blocks.values():
@@ -120,11 +128,13 @@ def build_type_env_from_ssa(
 				elif isinstance(instr, Call) and instr.dest is not None:
 					sig = sig_map.get(instr.fn)
 					if sig is not None:
-						types[(fname, instr.dest)] = sig.return_type
+						ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
+						types[(fname, instr.dest)] = ret_ty
 				elif isinstance(instr, MethodCall) and instr.dest is not None:
 					sig = sig_map.get(instr.method_name)
 					if sig is not None:
-						types[(fname, instr.dest)] = sig.return_type
+						ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
+						types[(fname, instr.dest)] = ret_ty
 				elif isinstance(instr, AssignSSA):
 					src_ty = types.get((fname, instr.src))
 					if src_ty is not None:
@@ -139,13 +149,17 @@ def build_type_env_from_ssa(
 		# value is missing a type, seed it from the signature so type-aware throw
 		# checks have something to work with even when inference failed.
 		fn_sig = sig_map.get(fname)
-		if fn_sig and _is_fnresult_type(fn_sig.return_type):
+		if fn_sig:
+			ret_ty = fn_sig.return_type_id if fn_sig.return_type_id is not None else fn_sig.return_type
+		else:
+			ret_ty = None
+		if ret_ty and _is_fnresult_type(ret_ty):
 			for block in ssa.func.blocks.values():
 				term = block.terminator
 				if hasattr(term, "value") and getattr(term, "value") is not None:
 					val = term.value
 					if (fname, val) not in types:
-						types[(fname, val)] = fn_sig.return_type
+						types[(fname, val)] = ret_ty
 
 	return InferredTypeEnv(types)
 

@@ -1,0 +1,10 @@
+fn main() returns Int {
+    val a = true and not false;
+    val b = false or true;
+
+    if a and b {
+        return 0;
+    }
+
+    return 1;
+}

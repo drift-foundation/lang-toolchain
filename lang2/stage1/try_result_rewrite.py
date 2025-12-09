@@ -174,6 +174,14 @@ class TryResultRewriter:
 				pfx.extend(arg_pfx)
 				new_args.append(arg)
 			return pfx, H.HDVInit(dv_type_name=expr.dv_type_name, args=new_args)
+		if isinstance(expr, H.HArrayLiteral):
+			elem_pfx: List[H.HStmt] = []
+			new_elems: List[H.HExpr] = []
+			for e in expr.elements:
+				pfx, el = self._rewrite_expr(e)
+				elem_pfx.extend(pfx)
+				new_elems.append(el)
+			return elem_pfx, H.HArrayLiteral(elements=new_elems)
 		raise NotImplementedError(f"TryResultRewriter does not handle expr {type(expr).__name__}")
 
 	def _expand_try_result(self, expr: H.HTryResult) -> Tuple[List[H.HStmt], H.HExpr]:

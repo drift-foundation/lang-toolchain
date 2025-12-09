@@ -45,11 +45,14 @@ Drift expressions largely follow a C-style surface with explicit ownership rules
 - Indexing: `arr[0]`
 - Unary operators: `-x`, `not x`, `!x`
 - Binary operators: `+`, `-`, `*`, `/`, comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`), boolean (`and`, `or`)
+- Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>` — **require `Uint` operands**; using any other type (including `Int`, `Bool`, `String`, or arrays) is a type error.
 - Ternary conditional: `cond ? then_expr : else_expr` (lower precedence than `or`; `cond` must be `Bool`, and both arms must have the same type)
 - Pipeline: `lhs >> stage` (left-associative; lower precedence than ternary/`or`; stages are calls/idents)
 - Move operator: `x->` moves ownership
 - Array literals: `[1, 2, 3]`
 - String concatenation uses `+`
+- String byte length is exposed via `byte_length(s: String) -> Uint` (UTF‑8 code units, not characters); a future `char_length` may count user-visible characters.
+- Empty strings may be written as `""` or `String.EMPTY`. A convenience helper `is_empty(s: String) -> Bool` checks `byte_length(s) == 0`.
 
 ### 2.x. Receiver placeholder (`.foo`, `.foo(...)`)
 

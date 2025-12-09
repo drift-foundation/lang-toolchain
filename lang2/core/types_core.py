@@ -48,10 +48,21 @@ class TypeTable:
 	def __init__(self) -> None:
 		self._defs: Dict[TypeId, TypeDef] = {}
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"
+		# Seed well-known scalars if callers stash them here.
+		self._uint_type: TypeId | None = None  # type: ignore[var-annotated]
+		self._int_type: TypeId | None = None  # type: ignore[var-annotated]
+		self._bool_type: TypeId | None = None  # type: ignore[var-annotated]
+		self._string_type: TypeId | None = None  # type: ignore[var-annotated]
 
 	def new_scalar(self, name: str) -> TypeId:
 		"""Register a scalar type (e.g., Int, Bool) and return its TypeId."""
 		return self._add(TypeKind.SCALAR, name, [])
+
+	def ensure_uint(self) -> TypeId:
+		"""Return a stable Uint TypeId, creating it once."""
+		if getattr(self, "_uint_type", None) is None:
+			self._uint_type = self.new_scalar("Uint")  # type: ignore[attr-defined]
+		return self._uint_type  # type: ignore[attr-defined]
 
 	def new_error(self, name: str = "Error") -> TypeId:
 		"""Register the canonical error/event type."""
@@ -67,6 +78,10 @@ class TypeTable:
 
 	def new_array(self, elem: TypeId) -> TypeId:
 		"""Register an Array<elem> type."""
+		# Reuse existing Array<elem> if present to keep TypeIds stable.
+		for ty_id, ty_def in self._defs.items():
+			if ty_def.kind is TypeKind.ARRAY and ty_def.param_types and ty_def.param_types[0] == elem:
+				return ty_id
 		return self._add(TypeKind.ARRAY, "Array", [elem])
 
 	def new_unknown(self, name: str = "Unknown") -> TypeId:

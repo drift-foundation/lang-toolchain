@@ -50,7 +50,10 @@ def _run_ir_with_clang(ir: str, build_dir: Path) -> tuple[int, str, str]:
 			"-x",
 			"ir",
 			str(ir_path),
-			# Link the string runtime for String helpers used in codegen.
+			"-x",
+			"c",
+			# Link the runtimes for String/Array helpers used in codegen.
+			str(ROOT / "lang2" / "codegen" / "runtime" / "array_runtime.c"),
 			str(ROOT / "lang2" / "codegen" / "runtime" / "string_runtime.c"),
 			"-o",
 			str(bin_path),
@@ -79,8 +82,14 @@ def _run_case(case_dir: Path) -> str:
 
 	expected = json.loads(expected_path.read_text())
 	func_hirs, signatures, type_table = parse_drift_to_hir(source_path)
-	# For now assume entry is drift_main when present, else first function.
-	entry = "drift_main" if "drift_main" in func_hirs else next(iter(func_hirs))
+	# Prefer a user-facing `main` entry when present; fall back to `drift_main`
+	# or the first function as a last resort.
+	if "main" in func_hirs:
+		entry = "main"
+	elif "drift_main" in func_hirs:
+		entry = "drift_main"
+	else:
+		entry = next(iter(func_hirs))
 
 	ir, checked = compile_to_llvm_ir_for_tests(
 		func_hirs=func_hirs,

@@ -1,6 +1,8 @@
+fn id(s: String) returns String { return s; }
+
 fn main() returns Int {
-    if "a" == "a" {
-        if "a" == "b" {
+    if id("x") == id("x") {
+        if id("x") == id("y") {
             return 1;
         } else {
             return 0;

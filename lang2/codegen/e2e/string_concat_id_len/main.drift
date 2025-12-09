@@ -1,0 +1,6 @@
+fn id(s: String) returns String { return s; }
+
+fn main() returns Uint {
+    val s = id("a") + id("b")
+    return s.len
+}
