@@ -45,6 +45,7 @@ from lang2.core.types_core import TypeTable
 from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.parser import parse_drift_to_hir
 from lang2.type_resolver import resolve_program_signatures
+from lang2.type_checker import TypeChecker
 
 
 def compile_stubbed_funcs(
@@ -333,8 +334,32 @@ def main(argv: list[str] | None = None) -> int:
 				print(f"{source_path}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 		return 1
 
-	# No diagnostics produced in this stub. A real implementation would continue
-	# through checker/codegen; for now just acknowledge success.
+	# Type check each function with the shared TypeTable/signatures.
+	type_checker = TypeChecker(type_table=type_table)
+	type_diags: list[Diagnostic] = []
+	for fn_name, hir_block in func_hirs.items():
+		# Build param type map from signatures when available.
+		param_types: dict[str, "TypeId"] = {}
+		sig = signatures.get(fn_name) if signatures else None
+		if sig and sig.param_names and sig.param_type_ids:
+			param_types = {pname: pty for pname, pty in zip(sig.param_names, sig.param_type_ids) if pty is not None}
+		result = type_checker.check_function(fn_name, hir_block, param_types=param_types)
+		type_diags.extend(result.diagnostics)
+
+	if type_diags:
+		if args.json:
+			payload = {
+				"exit_code": 1,
+				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in type_diags],
+			}
+			print(json.dumps(payload))
+		else:
+			for d in type_diags:
+				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				print(f"{source_path}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+		return 1
+
+	# No diagnostics produced. Borrow checker/codegen not yet wired; acknowledge success.
 	if args.json:
 		print(json.dumps({"exit_code": 0, "diagnostics": []}))
 	return 0

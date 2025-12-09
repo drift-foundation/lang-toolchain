@@ -51,3 +51,24 @@ def test_borrow_types():
 	vals = list(res.typed_fn.expr_types.values())
 	assert tc.type_table.ensure_ref(tc.type_table.ensure_int()) in vals
 	assert tc.type_table.ensure_ref_mut(tc.type_table.ensure_int()) in vals
+
+
+def test_shadowing_respects_lexical_scope():
+	tc = _checker()
+	outer_let = H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None)
+	then_block = H.HBlock(statements=[H.HLet(name="x", value=H.HLiteralBool(True), declared_type_expr=None)])
+	block = H.HBlock(
+		statements=[
+			outer_let,
+			H.HIf(cond=H.HLiteralBool(True), then_block=then_block, else_block=H.HBlock(statements=[])),
+			H.HExprStmt(expr=H.HVar("x")),
+		]
+	)
+	res = tc.check_function("shadow", block)
+	assert res.diagnostics == []
+	var_expr = block.statements[2].expr
+	assert isinstance(var_expr, H.HVar)
+	outer_bid = outer_let.binding_id
+	assert outer_bid is not None
+	assert res.typed_fn.binding_for_var[id(var_expr)] == outer_bid
+	assert tc.type_table.ensure_int() in res.typed_fn.expr_types.values()
