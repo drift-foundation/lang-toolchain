@@ -21,28 +21,29 @@ def _types():
 
 
 def test_array_string_literal_and_index_ir():
-    table, int_ty, str_ty = _types()
+	table, int_ty, str_ty = _types()
 
-    block = BasicBlock(
-        name="entry",
-        instructions=[
-            ConstString(dest="t0", value="a"),
-            ConstString(dest="t1", value="bb"),
-            ArrayLit(dest="t2", elem_ty=str_ty, elements=["t0", "t1"]),
-            ConstInt(dest="idx", value=1),
-            ArrayIndexLoad(dest="t3", elem_ty=str_ty, array="t2", index="idx"),
-        ],
-        terminator=Return(value="t3"),
-    )
-    func = MirFunc(name="main", params=[], locals=["t0", "t1", "t2", "t3", "idx"], blocks={"entry": block}, entry="entry")
-    ssa = MirToSSA().run(func)
-    sig = FnSignature(name="main", param_type_ids=[], return_type_id=str_ty)
-    info = FnInfo(name="main", declared_can_throw=False, signature=sig, return_type_id=str_ty)
+	block = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="t0", value="a"),
+			ConstString(dest="t1", value="bb"),
+			ArrayLit(dest="t2", elem_ty=str_ty, elements=["t0", "t1"]),
+			ConstInt(dest="idx", value=1),
+			ArrayIndexLoad(dest="t3", elem_ty=str_ty, array="t2", index="idx"),
+		],
+		terminator=Return(value="t3"),
+	)
+	func = MirFunc(name="main", params=[], locals=["t0", "t1", "t2", "t3", "idx"], blocks={"entry": block}, entry="entry")
+	ssa = MirToSSA().run(func)
+	sig = FnSignature(name="main", param_type_ids=[], return_type_id=str_ty)
+	info = FnInfo(name="main", declared_can_throw=False, signature=sig, return_type_id=str_ty)
 
-    mod = lower_module_to_llvm({"main": func}, {"main": ssa}, {"main": info}, type_table=table)
-    ir = mod.render()
+	mod = lower_module_to_llvm({"main": func}, {"main": ssa}, {"main": info}, type_table=table)
+	ir = mod.render()
 
-    assert "declare ptr @drift_alloc_array" in ir
-    assert "%DriftString = type { i64, i8*" in ir
-    assert "getelementptr inbounds %DriftString" in ir
-    assert "call void @drift_bounds_check_fail" in ir
+	assert "declare ptr @drift_alloc_array" in ir
+	assert "%drift.size = type i64" in ir
+	assert "%DriftString = type { %drift.size, i8*" in ir
+	assert "getelementptr inbounds %DriftString" in ir
+	assert "call void @drift_bounds_check_fail" in ir

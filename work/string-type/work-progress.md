@@ -109,6 +109,7 @@ Goal: ensure `String` is already a first-class type in the compiler’s TypeTabl
 * Entry wrapper: skipped when entry is `main`; e2e runner now prefers `main` over `drift_main`.
 * Tests: LLVM IR tests cover string literals/params/ops and Array<String>; e2e covers byte_length/eq/concat and Array<String> length sums (all green under `just lang2-codegen-test`).
 * Added canonical empty string support: HIR→MIR injects `String.EMPTY` as a zero-length literal; runtime uses `{len=0, data=NULL}` for empties (no heap alloc). 
+* `%drift.size` alias reinstated in IR (Uint carrier); tests updated accordingly. Checker now maps `"Uint"` in declared/opaque types to the canonical Uint TypeId so `.len`-typed values and annotations match.
 
 TODOs:
 * Keep literal escaping robust for more non-ASCII cases.

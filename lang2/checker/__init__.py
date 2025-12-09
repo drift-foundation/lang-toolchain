@@ -442,6 +442,11 @@ class Checker:
 			return self._bool_type
 		if hasattr(H, "HLiteralString") and isinstance(expr, getattr(H, "HLiteralString")):
 			return self._string_type
+		if isinstance(expr, H.HVar):
+			if locals is not None and expr.name in locals:
+				return locals[expr.name]
+			if expr.name == "String.EMPTY":
+				return self._string_type
 		if isinstance(expr, H.HVar) and locals is not None and expr.name in locals:
 			return locals[expr.name]
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
@@ -732,6 +737,8 @@ class Checker:
 		if isinstance(val, str):
 			if val == "Int":
 				return self._int_type
+			if val == "Uint":
+				return self._uint_type
 			if val == "Bool":
 				return self._bool_type
 			if "Error" in val:
@@ -770,6 +777,8 @@ class Checker:
 				return self._type_table.new_array(elem)
 			if name == "Int":
 				return self._int_type
+			if name == "Uint":
+				return self._uint_type
 			if name == "Bool":
 				return self._bool_type
 			if name == "String":
@@ -778,6 +787,8 @@ class Checker:
 				return self._error_type
 			return self._type_table.new_scalar(str(name))
 		if isinstance(raw, str):
+			if raw == "Uint":
+				return self._uint_type
 			return self._map_opaque(raw)
 		if isinstance(raw, tuple):
 			return self._map_opaque(raw)

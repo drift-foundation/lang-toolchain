@@ -35,7 +35,8 @@ def test_string_literal_return_ir():
 
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {"f": fn_info}, type_table=table)
 
-	assert "%DriftString = type { i64, i8*" in ir
+	assert "%drift.size = type i64" in ir
+	assert "%DriftString = type { %drift.size, i8*" in ir
 	assert '@.str0 = private unnamed_addr constant [4 x i8] c"abc\\00"' in ir
 	assert "define %DriftString @f()" in ir
 	assert "ret %DriftString" in ir
@@ -79,7 +80,8 @@ def test_string_pass_through_call_ir():
 	)
 	ir = mod.render()
 
-	assert "%DriftString = type { i64, i8*" in ir
+	assert "%drift.size = type i64" in ir
+	assert "%DriftString = type { %drift.size, i8*" in ir
 	assert '@.str0 = private unnamed_addr constant [4 x i8] c"abc\\00"' in ir
 	assert "define %DriftString @id(%DriftString %s)" in ir
 	assert "define %DriftString @main()" in ir

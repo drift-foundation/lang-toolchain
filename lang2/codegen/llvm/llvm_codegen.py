@@ -72,7 +72,7 @@ calls.
 # ABI type names
 DRIFT_ERROR_TYPE = "%DriftError"
 FNRESULT_INT_ERROR = "%FnResult_Int_Error"
-DRIFT_SIZE_TYPE = "i64"
+DRIFT_SIZE_TYPE = "%drift.size"
 DRIFT_STRING_TYPE = "%DriftString"
 
 
