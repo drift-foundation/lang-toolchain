@@ -9,7 +9,8 @@ Scope:
 - Tracks place states (UNINIT/VALID/MOVED) and flags use-after-move.
 - Handles implicit moves for non-Copy values used by value.
 - Adds explicit borrow handling (& / &mut) with shared-vs-mut conflicts, with
-  coarse function-long regions (no NLL yet).
+  coarse function-long regions and temporary-borrow dropping as an NLL
+  approximation (full region analysis still TODO).
 """
 
 from __future__ import annotations
@@ -273,15 +274,6 @@ class BorrowChecker:
 				self._eval_temporary(state, stmt.expr)
 			elif isinstance(stmt, H.HThrow):
 				self._eval_temporary(state, stmt.value)
-			elif isinstance(stmt, H.HIf):
-				# Handled via CFG; still visit condition.
-				self._eval_temporary(state, stmt.cond)
-			elif isinstance(stmt, H.HLoop):
-				# Loop structure handled in CFG; body handled in child blocks.
-				pass
-			elif isinstance(stmt, H.HTry):
-				# Structure handled in CFG; body/catches handled in child blocks.
-				pass
 			# other stmts: continue
 
 		# Terminator expressions
