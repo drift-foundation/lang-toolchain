@@ -951,8 +951,13 @@ class Checker:
 
 		locals: Dict[str, TypeId] = {}
 		# Seed locals with parameter types when available so param usages are typed.
-		if current_fn and current_fn.signature and current_fn.signature.param_type_ids:
-			for name, ty in zip(getattr(self._hir_blocks.get(current_fn.name), "params", []) or [], current_fn.signature.param_type_ids):
+		if (
+			current_fn
+			and current_fn.signature
+			and current_fn.signature.param_type_ids
+			and current_fn.signature.param_names
+		):
+			for name, ty in zip(current_fn.signature.param_names, current_fn.signature.param_type_ids):
 				if ty is not None:
 					locals[name] = ty
 
@@ -985,10 +990,11 @@ class Checker:
 						# "indexing requires an Array value" diagnostic, but keep locals in sync.
 					value_ty = walk_expr(stmt.value)
 					if (
-						target_ty is None
-						or value_ty is None
-						or target_ty != value_ty
-					) and isinstance(stmt.target, H.HIndex):
+						isinstance(stmt.target, H.HIndex)
+						and target_ty is not None
+						and value_ty is not None
+						and target_ty != value_ty
+					):
 						diagnostics.append(
 							Diagnostic(
 								message="assignment type mismatch for indexed array element",
@@ -1025,8 +1031,13 @@ class Checker:
 
 		locals: Dict[str, TypeId] = {}
 		# Seed locals with parameter types if available to type-check conditions on params.
-		if current_fn and current_fn.signature and current_fn.signature.param_type_ids:
-			for name, ty in zip(getattr(self._hir_blocks.get(current_fn.name), "params", []) or [], current_fn.signature.param_type_ids):
+		if (
+			current_fn
+			and current_fn.signature
+			and current_fn.signature.param_type_ids
+			and current_fn.signature.param_names
+		):
+			for name, ty in zip(current_fn.signature.param_names, current_fn.signature.param_type_ids):
 				if ty is not None:
 					locals[name] = ty
 
