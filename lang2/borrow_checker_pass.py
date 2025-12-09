@@ -76,14 +76,14 @@ class BorrowChecker:
 
 	Inputs:
 	- type_table: to answer Copy vs move-only.
-	- fn_types: mapping var names to TypeId (params/locals as available).
+	- fn_types: mapping var identities to TypeId (params/locals as available).
 	"""
 
 	type_table: TypeTable
 	fn_types: Mapping[PlaceBase, TypeId]
 	base_lookup: Callable[[object], Optional[PlaceBase]] = lambda hv: PlaceBase(
 		PlaceKind.LOCAL,
-		getattr(hv, "binding_id", 0) if getattr(hv, "binding_id", None) is not None else 0,
+		getattr(hv, "binding_id", -1) if getattr(hv, "binding_id", None) is not None else -1,
 		hv.name if hasattr(hv, "name") else str(hv),
 	)
 	diagnostics: List[Diagnostic] = field(default_factory=list)
@@ -271,7 +271,10 @@ class BorrowChecker:
 		for stmt in block.statements:
 			if isinstance(stmt, H.HLet):
 				self._visit_expr(state, stmt.value, as_value=True)
-				base = self.base_lookup(H.HVar(stmt.name))
+				if getattr(stmt, "binding_id", None) is not None:
+					base = PlaceBase(PlaceKind.LOCAL, stmt.binding_id, stmt.name)
+				else:
+					base = self.base_lookup(H.HVar(stmt.name))
 				if base is not None:
 					self._set_state(state, Place(base), PlaceState.VALID)
 			elif isinstance(stmt, H.HAssign):

@@ -69,10 +69,9 @@ class TypeChecker:
 		body: H.HBlock,
 		param_types: Mapping[str, TypeId] | None = None,
 	) -> TypeCheckResult:
-		env: Dict[str, TypeId] = {}
-		binding_ids: Dict[str, int] = {}
+		scope_env: List[Dict[str, TypeId]] = [dict()]
+		scope_bindings: List[Dict[str, int]] = [dict()]
 		expr_types: Dict[int, TypeId] = {}
-		expr_id_for: Dict[int, int] = {}
 		binding_for_var: Dict[int, int] = {}
 		diagnostics: List[Diagnostic] = []
 
@@ -83,12 +82,11 @@ class TypeChecker:
 		for pname, pty in (param_types or {}).items():
 			pid = self._alloc_param_id()
 			params.append(pid)
-			env[pname] = pty
-			binding_ids[pname] = pid
+			scope_env[-1][pname] = pty
+			scope_bindings[-1][pname] = pid
 
 		def record_expr(expr: H.HExpr, ty: TypeId) -> TypeId:
 			expr_id = id(expr)
-			expr_id_for[expr_id] = expr_id
 			expr_types[expr_id] = ty
 			return ty
 
@@ -101,11 +99,15 @@ class TypeChecker:
 				# String is treated as unknown for now.
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HVar):
-				if expr.binding_id is None and expr.name in binding_ids:
-					expr.binding_id = binding_ids[expr.name]
-				if expr.name in env:
-					binding_for_var[id(expr)] = expr.binding_id or 0
-					return record_expr(expr, env[expr.name])
+				if expr.binding_id is None:
+					for scope in reversed(scope_bindings):
+						if expr.name in scope:
+							expr.binding_id = scope[expr.name]
+							break
+				for scope in reversed(scope_env):
+					if expr.name in scope:
+						binding_for_var[id(expr)] = expr.binding_id or 0
+						return record_expr(expr, scope[expr.name])
 				diagnostics.append(Diagnostic(message=f"unknown variable '{expr.name}'", severity="error", span=None))
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HBorrow):
@@ -164,8 +166,8 @@ class TypeChecker:
 					stmt.binding_id = self._alloc_local_id()
 				locals.append(stmt.binding_id)
 				val_ty = type_expr(stmt.value)
-				env[stmt.name] = val_ty
-				binding_ids[stmt.name] = stmt.binding_id
+				scope_env[-1][stmt.name] = val_ty
+				scope_bindings[-1][stmt.name] = stmt.binding_id
 			elif isinstance(stmt, H.HAssign):
 				type_expr(stmt.value)
 				type_expr(stmt.target)
@@ -190,8 +192,14 @@ class TypeChecker:
 			# HBreak/HContinue are typeless here.
 
 		def type_block(block: H.HBlock) -> None:
-			for s in block.statements:
-				type_stmt(s)
+			scope_env.append(dict())
+			scope_bindings.append(dict())
+			try:
+				for s in block.statements:
+					type_stmt(s)
+			finally:
+				scope_env.pop()
+				scope_bindings.pop()
 
 		type_block(body)
 

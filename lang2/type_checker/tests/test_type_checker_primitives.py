@@ -26,8 +26,11 @@ def test_literal_and_var_types():
 	result2 = tc.check_function("g", block2)
 	var_expr = block2.statements[1].expr
 	assert isinstance(var_expr, H.HVar)
-	etypes = {k: v for k, v in result2.typed_fn.expr_types.items()}
-	assert tc.type_table.ensure_int() in etypes.values()
+	assert tc.type_table.ensure_int() in result2.typed_fn.expr_types.values()
+	# binding_for_var should map this HVar to the same binding id as its let.
+	let_binding = block2.statements[0].binding_id
+	assert let_binding is not None
+	assert result2.typed_fn.binding_for_var[id(var_expr)] == let_binding
 
 
 def test_borrow_types():
