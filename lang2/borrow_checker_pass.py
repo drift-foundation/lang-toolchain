@@ -253,12 +253,7 @@ class BorrowChecker:
 		return None
 
 	def _param_types_for_method_call(self, expr: H.HMethodCall) -> Optional[List[TypeId]]:
-		"""Return param TypeIds for a method if a signature is available; otherwise None."""
-		if not self.signatures:
-			return None
-		sig = self.signatures.get(expr.method_name)
-		if sig and sig.param_type_ids:
-			return sig.param_type_ids
+		"""Method param heuristics removed: registry/resolver metadata is required."""
 		return None
 
 	def _build_regions(self, blocks: List[BasicBlock]) -> Optional[Dict[int, Set[int]]]:
@@ -461,8 +456,7 @@ class BorrowChecker:
 			if isinstance(resolution, MethodResolution):
 				param_types = list(resolution.decl.signature.param_types)
 				receiver_autoborrow = resolution.receiver_autoborrow
-			elif self.enable_auto_borrow:
-				param_types = self._param_types_for_method_call(expr)
+			# No legacy fallback; method resolution metadata is expected when auto-borrowing.
 
 			if param_types:
 				recv_kind: Optional[LoanKind] = None
@@ -508,7 +502,7 @@ class BorrowChecker:
 				new_loans = state.loans - pre_loans
 				state.loans -= {ln for ln in new_loans if ln.temporary}
 				return
-			# No signature-driven info; fall back to value evaluation.
+			# No signature-driven info; fall back to value evaluation only (no heuristic auto-borrow).
 			self._visit_expr(state, expr.receiver, as_value=True)
 			for arg in expr.args:
 				self._visit_expr(state, arg, as_value=True)

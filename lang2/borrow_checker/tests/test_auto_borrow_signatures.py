@@ -8,9 +8,11 @@ from lang2.borrow_checker_pass import BorrowChecker
 from lang2.borrow_checker import PlaceBase, PlaceKind
 from lang2.checker import FnSignature
 from lang2.core.types_core import TypeTable, TypeId
+from lang2.method_registry import CallableDecl, CallableSignature, CallableKind, Visibility, SelfMode
+from lang2.method_resolver import MethodResolution
 
 
-def _bc_with_sig(table: TypeTable, sig: FnSignature):
+def _bc_with_sig(table: TypeTable, sig: FnSignature, call_resolutions=None):
 	unk: TypeId = table.ensure_unknown()
 	fn_types = {PlaceBase(PlaceKind.LOCAL, 1, "x"): unk}
 	base_lookup = lambda hv: PlaceBase(
@@ -25,6 +27,7 @@ def _bc_with_sig(table: TypeTable, sig: FnSignature):
 		base_lookup=base_lookup,
 		enable_auto_borrow=True,
 		signatures={sig.name: sig},
+		call_resolutions=call_resolutions,
 	)
 
 
@@ -44,14 +47,28 @@ def test_hcall_signature_driven_auto_borrow_prevents_move():
 
 
 def test_hmethod_signature_driven_auto_borrow_prevents_move():
+	table = TypeTable()
+	recv_ref = table.ensure_ref(table.ensure_unknown())
+	ref_sig = FnSignature(name="m", param_type_ids=[recv_ref])
+	call_expr = H.HMethodCall(receiver=H.HVar("x", binding_id=1), method_name="m", args=[])
 	block = H.HBlock(
 		statements=[
 			H.HLet(name="x", value=H.HLiteralString("s"), declared_type_expr=None, binding_id=1),
-			H.HExprStmt(expr=H.HMethodCall(receiver=H.HVar("x", binding_id=1), method_name="m", args=[])),
+			H.HExprStmt(expr=call_expr),
 			H.HExprStmt(expr=H.HVar("x", binding_id=1)),
 		]
 	)
-	table = TypeTable()
-	ref_sig = FnSignature(name="m", param_type_ids=[table.ensure_ref(table.ensure_unknown())])
-	diags = _bc_with_sig(table, ref_sig).check_block(block)
+	decl = CallableDecl(
+		callable_id=1,
+		name="m",
+		kind=CallableKind.METHOD_INHERENT,
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(recv_ref,), result_type=table.ensure_unknown()),
+		impl_id=1,
+		impl_target_type_id=table.ensure_unknown(),
+		self_mode=SelfMode.SELF_BY_REF,
+	)
+	call_resolutions = {id(call_expr): MethodResolution(decl=decl, receiver_autoborrow=SelfMode.SELF_BY_REF)}
+	diags = _bc_with_sig(table, ref_sig, call_resolutions=call_resolutions).check_block(block)
 	assert diags == []

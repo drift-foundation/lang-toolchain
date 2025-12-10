@@ -46,7 +46,7 @@ from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.parser import parse_drift_to_hir
 from lang2.type_resolver import resolve_program_signatures
 from lang2.type_checker import TypeChecker
-from lang2.method_registry import CallableRegistry, CallableSignature, Visibility
+from lang2.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
 
 
 def compile_stubbed_funcs(
@@ -340,19 +340,46 @@ def main(argv: list[str] | None = None) -> int:
 	type_checker = TypeChecker(type_table=type_table)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
+
+	def _unwrap_ref(ty: "TypeId") -> "TypeId":
+		td = type_table.get(ty)
+		if td.kind is TypeKind.REF and td.param_types:
+			return td.param_types[0]
+		return ty
+
 	if signatures:
 		for sig_name, sig in signatures.items():
 			if sig.param_type_ids is None or sig.return_type_id is None:
 				continue
-			callable_registry.register_free_function(
-				callable_id=next_callable_id,
-				name=sig_name,
-				module_id=0,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=tuple(sig.param_type_ids), result_type=sig.return_type_id),
-				is_generic=False,
-			)
-			next_callable_id += 1
+			param_types_tuple = tuple(sig.param_type_ids)
+			if sig.is_method and sig.impl_target_type_id is not None and sig.self_mode is not None:
+				self_mode = {
+					"value": SelfMode.SELF_BY_VALUE,
+					"ref": SelfMode.SELF_BY_REF,
+					"ref_mut": SelfMode.SELF_BY_REF_MUT,
+				}.get(sig.self_mode, SelfMode.SELF_BY_VALUE)
+				callable_registry.register_inherent_method(
+					callable_id=next_callable_id,
+					name=sig_name,
+					module_id=0,
+					visibility=Visibility.public(),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					impl_id=next_callable_id,
+					impl_target_type_id=sig.impl_target_type_id,
+					self_mode=self_mode,
+					is_generic=False,
+				)
+				next_callable_id += 1
+			else:
+				callable_registry.register_free_function(
+					callable_id=next_callable_id,
+					name=sig_name,
+					module_id=0,
+					visibility=Visibility.public(),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					is_generic=False,
+				)
+				next_callable_id += 1
 	type_diags: list[Diagnostic] = []
 	typed_fns: dict[str, object] = {}
 	for fn_name, hir_block in func_hirs.items():

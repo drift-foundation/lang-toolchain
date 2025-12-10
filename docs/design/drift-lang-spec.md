@@ -1006,13 +1006,14 @@ interface OutputStream {
 
 Drift differentiates between **methods** (eligible for dot-call syntax) and **free functions**.
 
-- **Only functions defined inside an `implement Type { ... }` block become methods.**
-- Inside such a block, the first parameter **must** be spelled `self`, with an explicit mode and type:
-  - `self: T` → pass by value
-  - `self: &T` → shared borrow
-  - `self: &mut T` → exclusive/mutable borrow
-  - (future) `self: move T` → consuming receiver
-- The receiver’s type is implied by the `implement` header, so you write `self: &File`, not `File self`.
+- Methods are declared inside an `implement Type { ... }` block; they do **not** implicitly create free-function aliases.
+- The **first parameter** in a method declaration is the receiver; its mode is determined by its type:
+  - `T`: pass by value
+  - `&T`: shared borrow
+  - `&mut T`: exclusive/mutable borrow
+  - (future) `move T`: consuming receiver
+  `self` remains the idiomatic name for the receiver, but the role comes from position/mode, not spelling.
+- The receiver’s nominal type is implied by the `implement` header, so you write `self: &File`, not `File self`.
 - Outside an `implement` block every function is a free function. A free function may take any parameters (including an explicit `&File`), but it is invoked with ordinary call syntax (`translate(point, 1, 2)`), not `point.translate(...)`.
 
 Example:

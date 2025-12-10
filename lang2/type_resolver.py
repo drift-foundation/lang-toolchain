@@ -32,6 +32,9 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 	  - throws or throws_events: optional iterable of event names
 	  - loc (optional): carried into FnSignature.loc
 	  - is_extern / is_intrinsic (optional): flags
+	  - is_method: bool (True when declared inside an `implement Type` block)
+	  - self_mode: optional str ("value", "ref", "ref_mut") for methods
+	  - impl_target_type_id: optional TypeId for the nominal type the impl targets
 	"""
 	table = TypeTable()
 
@@ -73,6 +76,10 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 		if declared_can_throw is None and ret_def.kind is TypeKind.FNRESULT:
 			declared_can_throw = True
 
+		is_method = bool(getattr(decl, "is_method", False))
+		self_mode = getattr(decl, "self_mode", None)
+		impl_target_type_id = getattr(decl, "impl_target_type_id", None)
+
 		signatures[name] = FnSignature(
 			name=name,
 			loc=decl_loc,
@@ -87,6 +94,9 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 			return_type=raw_ret,
 			throws_events=throws,
 			param_names=param_names if param_names else None,
+			is_method=is_method,
+			self_mode=self_mode,
+			impl_target_type_id=impl_target_type_id,
 		)
 
 	return table, signatures

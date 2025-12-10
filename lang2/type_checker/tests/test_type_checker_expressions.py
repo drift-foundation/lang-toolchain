@@ -7,7 +7,7 @@ from lang2 import stage1 as H
 from lang2.type_checker import TypeChecker
 from lang2.core.types_core import TypeTable, TypeKind
 from lang2.checker import FnSignature
-from lang2.method_registry import CallableRegistry, CallableSignature, Visibility
+from lang2.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
 
 
 def _tc() -> TypeChecker:
@@ -139,6 +139,41 @@ def test_call_resolution_uses_registry_and_types():
 	)
 	assert res.diagnostics == []
 	assert ret_ty in res.typed_fn.expr_types.values()
+
+
+def test_method_resolution_uses_registry_and_types():
+	table = TypeTable()
+	tc = TypeChecker(table)
+	int_ty = table.ensure_int()
+	str_ty = table.ensure_string()
+	registry = CallableRegistry()
+	recv_ty = table.ensure_ref(int_ty)
+	registry.register_inherent_method(
+		callable_id=1,
+		name="m",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(recv_ty,), result_type=str_ty),
+		impl_id=1,
+		impl_target_type_id=int_ty,
+		self_mode=SelfMode.SELF_BY_REF,
+	)
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HExprStmt(expr=H.HMethodCall(receiver=H.HVar("x", binding_id=1), method_name="m", args=[])),
+		]
+	)
+	res = tc.check_function(
+		"mcall",
+		block,
+		param_types={"x": int_ty},
+		callable_registry=registry,
+		visible_modules=(0,),
+		current_module=0,
+	)
+	assert res.diagnostics == []
+	assert str_ty in res.typed_fn.expr_types.values()
 
 
 def test_result_ok_uses_fnresult_type():

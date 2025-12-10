@@ -41,6 +41,10 @@ class MethodResolution:
 
 
 def _unwrap_ref(type_table: TypeTable, ty: TypeId) -> TypeId:
+	"""
+	Peel a single &T or &mut T layer. V1 assumes at most one ref layer on the
+	receiver; nested refs (&&T) are not supported yet.
+	"""
 	td = type_table.get(ty)
 	if td.kind is TypeKind.REF and td.param_types:
 		return td.param_types[0]

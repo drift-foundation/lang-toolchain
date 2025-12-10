@@ -54,6 +54,10 @@ class FnSignature:
 	is_intrinsic: bool = False
 	param_names: Optional[list[str]] = None
 	error_type_id: Optional[TypeId] = None  # resolved error TypeId
+	# Method metadata (set when the declaration comes from an `implement Type` block).
+	is_method: bool = False
+	self_mode: Optional[str] = None  # "value", "ref", "ref_mut" for now; parser maps to this
+	impl_target_type_id: Optional[TypeId] = None
 
 	# Legacy/raw fields (to be removed once real type checker is wired).
 	return_type: Any = None
