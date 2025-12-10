@@ -24,6 +24,7 @@ from lang2 import stage1 as H
 from lang2.borrow_checker import Place, PlaceBase, PlaceKind, PlaceState, place_from_expr, merge_place_state
 from lang2.core.diagnostics import Diagnostic
 from lang2.core.types_core import TypeKind, TypeTable, TypeId
+from lang2.checker import FnSignature
 from collections import deque
 
 
@@ -84,6 +85,7 @@ class BorrowChecker:
 	type_table: TypeTable
 	fn_types: Mapping[PlaceBase, TypeId]
 	binding_types: Optional[Dict[int, TypeId]] = None
+	signatures: Optional[Mapping[str, FnSignature]] = None
 	base_lookup: Callable[[object], Optional[PlaceBase]] = lambda hv: PlaceBase(
 		PlaceKind.LOCAL,
 		getattr(hv, "binding_id", -1) if getattr(hv, "binding_id", None) is not None else -1,
@@ -93,7 +95,9 @@ class BorrowChecker:
 	enable_auto_borrow: bool = False
 
 	@classmethod
-	def from_typed_fn(cls, typed_fn, type_table: TypeTable, *, enable_auto_borrow: bool = False) -> "BorrowChecker":
+	def from_typed_fn(
+		cls, typed_fn, type_table: TypeTable, *, signatures: Optional[Mapping[str, FnSignature]] = None, enable_auto_borrow: bool = False
+	) -> "BorrowChecker":
 		"""
 		Build a BorrowChecker from a TypedFn (binding-aware).
 
@@ -118,6 +122,7 @@ class BorrowChecker:
 			type_table=type_table,
 			fn_types=fn_types,
 			binding_types=dict(typed_fn.binding_types),
+			signatures=signatures,
 			base_lookup=base_lookup,
 			enable_auto_borrow=enable_auto_borrow,
 		)
@@ -227,6 +232,25 @@ class BorrowChecker:
 	def _filter_live_loans(self, loans: Set[Loan], block_id: int) -> Set[Loan]:
 		"""Filter a loan set to those live at the given block."""
 		return {ln for ln in loans if self._loan_live_here(ln, block_id)}
+
+	def _param_types_for_call(self, expr: H.HCall) -> Optional[List[TypeId]]:
+		"""Return param TypeIds for a call if a signature is available; otherwise None."""
+		if not self.signatures:
+			return None
+		if isinstance(expr.fn, H.HVar):
+			sig = self.signatures.get(expr.fn.name)
+			if sig and sig.param_type_ids:
+				return sig.param_type_ids
+		return None
+
+	def _param_types_for_method_call(self, expr: H.HMethodCall) -> Optional[List[TypeId]]:
+		"""Return param TypeIds for a method if a signature is available; otherwise None."""
+		if not self.signatures:
+			return None
+		sig = self.signatures.get(expr.method_name)
+		if sig and sig.param_type_ids:
+			return sig.param_type_ids
+		return None
 
 	def _build_regions(self, blocks: List[BasicBlock]) -> Optional[Dict[int, Set[int]]]:
 		"""
@@ -404,37 +428,75 @@ class BorrowChecker:
 		if isinstance(expr, H.HCall):
 			pre_loans = set(state.loans)
 			self._visit_expr(state, expr.fn, as_value=True)
-			for arg in expr.args:
-				if self.enable_auto_borrow:
+			param_types = self._param_types_for_call(expr) if self.enable_auto_borrow else None
+			for idx, arg in enumerate(expr.args):
+				kind_for_arg: Optional[LoanKind] = None
+				if param_types and idx < len(param_types):
+					pty = param_types[idx]
+					if pty is not None:
+						td = self.type_table.get(pty)
+						if td.kind is TypeKind.REF:
+							if td.ref_mut is True:
+								kind_for_arg = LoanKind.MUT
+							elif td.ref_mut is False:
+								kind_for_arg = LoanKind.SHARED
+				if kind_for_arg is not None:
 					place = place_from_expr(arg, base_lookup=self.base_lookup)
 					if place is not None:
-						self._borrow_place(state, place, LoanKind.SHARED, temporary=True)
+						self._borrow_place(state, place, kind_for_arg, temporary=True)
 						continue
 				self._visit_expr(state, arg, as_value=True)
-			if self.enable_auto_borrow:
+			if param_types is not None:
 				new_loans = state.loans - pre_loans
 				state.loans -= {ln for ln in new_loans if ln.temporary}
 			return
 		if isinstance(expr, H.HMethodCall):
 			pre_loans = set(state.loans)
-			if self.enable_auto_borrow:
-				recv_place = place_from_expr(expr.receiver, base_lookup=self.base_lookup)
-				if recv_place is not None:
-					self._borrow_place(state, recv_place, LoanKind.SHARED, temporary=True)
+			param_types = self._param_types_for_method_call(expr) if self.enable_auto_borrow else None
+			if param_types:
+				recv_kind: Optional[LoanKind] = None
+				if param_types:
+					pty = param_types[0]
+					if pty is not None:
+						td = self.type_table.get(pty)
+						if td.kind is TypeKind.REF:
+							if td.ref_mut is True:
+								recv_kind = LoanKind.MUT
+							elif td.ref_mut is False:
+								recv_kind = LoanKind.SHARED
+				if recv_kind is not None:
+					recv_place = place_from_expr(expr.receiver, base_lookup=self.base_lookup)
+					if recv_place is not None:
+						self._borrow_place(state, recv_place, recv_kind, temporary=True)
+					else:
+						self._visit_expr(state, expr.receiver, as_value=True)
 				else:
 					self._visit_expr(state, expr.receiver, as_value=True)
-			else:
-				self._visit_expr(state, expr.receiver, as_value=True)
-			for arg in expr.args:
-				if self.enable_auto_borrow:
-					place = place_from_expr(arg, base_lookup=self.base_lookup)
-					if place is not None:
-						self._borrow_place(state, place, LoanKind.SHARED, temporary=True)
-						continue
-				self._visit_expr(state, arg, as_value=True)
-			if self.enable_auto_borrow:
+				for idx, arg in enumerate(expr.args):
+					kind_for_arg = None
+					param_idx = idx + 1
+					if param_idx < len(param_types):
+						pty = param_types[param_idx]
+						if pty is not None:
+							td = self.type_table.get(pty)
+							if td.kind is TypeKind.REF:
+								if td.ref_mut is True:
+									kind_for_arg = LoanKind.MUT
+								elif td.ref_mut is False:
+									kind_for_arg = LoanKind.SHARED
+					if kind_for_arg is not None:
+						place = place_from_expr(arg, base_lookup=self.base_lookup)
+						if place is not None:
+							self._borrow_place(state, place, kind_for_arg, temporary=True)
+							continue
+					self._visit_expr(state, arg, as_value=True)
 				new_loans = state.loans - pre_loans
 				state.loans -= {ln for ln in new_loans if ln.temporary}
+				return
+			# No signature-driven info; fall back to value evaluation.
+			self._visit_expr(state, expr.receiver, as_value=True)
+			for arg in expr.args:
+				self._visit_expr(state, arg, as_value=True)
 			return
 		if isinstance(expr, H.HBinary):
 			self._visit_expr(state, expr.left, as_value=True)

@@ -36,6 +36,7 @@ class TypeDef:
 	kind: TypeKind
 	name: str
 	param_types: List[TypeId]
+	ref_mut: bool | None = None  # only meaningful for TypeKind.REF
 
 
 class TypeTable:
@@ -130,21 +131,21 @@ class TypeTable:
 		return self._add(TypeKind.ARRAY, "Array", [elem])
 
 	def new_ref(self, inner: TypeId, is_mut: bool) -> TypeId:
-		"""Register a reference type to `inner` (mutable vs shared encoded in the name)."""
+		"""Register a reference type to `inner` (mutable vs shared encoded in ref_mut/name)."""
 		name = "RefMut" if is_mut else "Ref"
 		for ty_id, ty_def in self._defs.items():
-			if ty_def.kind is TypeKind.REF and ty_def.param_types and ty_def.param_types[0] == inner and ty_def.name == name:
+			if ty_def.kind is TypeKind.REF and ty_def.param_types and ty_def.param_types[0] == inner and ty_def.ref_mut == is_mut:
 				return ty_id
-		return self._add(TypeKind.REF, name, [inner])
+		return self._add(TypeKind.REF, name, [inner], ref_mut=is_mut)
 
 	def new_unknown(self, name: str = "Unknown") -> TypeId:
 		"""Register an unknown type (debug/fallback)."""
 		return self._add(TypeKind.UNKNOWN, name, [])
 
-	def _add(self, kind: TypeKind, name: str, params: List[TypeId]) -> TypeId:
+	def _add(self, kind: TypeKind, name: str, params: List[TypeId], ref_mut: bool | None = None) -> TypeId:
 		ty_id = self._next_id
 		self._next_id += 1
-		self._defs[ty_id] = TypeDef(kind=kind, name=name, param_types=list(params))
+		self._defs[ty_id] = TypeDef(kind=kind, name=name, param_types=list(params), ref_mut=ref_mut if kind is TypeKind.REF else None)
 		return ty_id
 
 	def get(self, ty: TypeId) -> TypeDef:

@@ -365,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
 	# Borrow check each typed function (mandatory stage).
 	borrow_diags: list[Diagnostic] = []
 	for fn_name, typed_fn in typed_fns.items():
-		bc = BorrowChecker.from_typed_fn(typed_fn, type_table=type_table)
+		bc = BorrowChecker.from_typed_fn(typed_fn, type_table=type_table, signatures=signatures, enable_auto_borrow=True)
 		borrow_diags.extend(bc.check_block(typed_fn.body))
 
 	if borrow_diags:
