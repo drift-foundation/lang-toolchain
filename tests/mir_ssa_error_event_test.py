@@ -56,8 +56,12 @@ def test_error_event_executes(tmp_path: Path) -> None:
     emit_module_object([get_code_fn, main_fn], struct_layouts={}, entry="main", out_path=obj_path)
 
     exe_path = tmp_path / "err_evt"
-    runtime_sources = [ROOT / "lang" / "runtime" / "error_dummy.c"]
-    link_cmd = [clang, str(obj_path)] + [str(src) for src in runtime_sources] + ["-o", str(exe_path)]
+    runtime_sources = [
+        ROOT / "lang" / "runtime" / "error_dummy.c",
+        ROOT / "lang" / "runtime" / "string_runtime.c",
+        ROOT / "lang" / "runtime" / "diagnostic_runtime.c",
+    ]
+    link_cmd = [clang, "-no-pie", str(obj_path)] + [str(src) for src in runtime_sources] + ["-o", str(exe_path)]
     subprocess.run(link_cmd, check=True, capture_output=True, text=True)
 
     res = subprocess.run([str(exe_path)], capture_output=True, text=True)

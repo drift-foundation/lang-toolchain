@@ -64,6 +64,7 @@ def _build_callee() -> mir.Function:
         module="<tests>",
         source=None,
         blocks={"bb_entry": entry, "bb_ok": ok, "bb_err": err},
+        can_error=True,
     )
 
 
@@ -107,6 +108,7 @@ def _build_throwing_callee() -> mir.Function:
         module="<tests>",
         source=None,
         blocks={"bb_entry": entry, "bb_ok": ok, "bb_err": err},
+        can_error=True,
     )
 
 
@@ -149,84 +151,89 @@ def _build_void_callee() -> mir.Function:
         module="<tests>",
         source=None,
         blocks={"bb_entry": entry, "bb_ok": ok, "bb_err": err},
+        can_error=True,
     )
 
 
-def _build_main(flag_value: int, expect_value: bool = True) -> mir.Function:
-    entry = mir.BasicBlock(name="bb0", params=[])
-    ok = mir.BasicBlock(name="bb_ok", params=[])
-    err = mir.BasicBlock(name="bb_err", params=[])
+def _build_main(flag_value: int, expect_value: bool = True, callee_name: str = "callee") -> mir.Function:
+	entry = mir.BasicBlock(name="bb0", params=[])
+	ok = mir.BasicBlock(name="bb_ok", params=[])
+	err = mir.BasicBlock(name="bb_err", params=[])
 
-    entry.instructions.append(mir.Const(dest="_flag", type=INT, value=flag_value))
-    entry.terminator = mir.Call(
-        dest="_call_res" if expect_value else None,
-        callee="callee",
-        args=["_flag"],
-        ret_type=INT if expect_value else UNIT,
-        err_dest=None,
-        normal=mir.Edge(target="bb_ok", args=[]),
-        error=mir.Edge(target="bb_err", args=[]),
-    )
+	entry.instructions.append(mir.Const(dest="_flag", type=INT, value=flag_value))
+	entry.terminator = mir.Call(
+		dest="_call_res" if expect_value else None,
+		callee=callee_name,
+		args=["_flag"],
+		ret_type=INT if expect_value else UNIT,
+		err_dest=None,
+		normal=mir.Edge(target="bb_ok", args=[]),
+		error=mir.Edge(target="bb_err", args=[]),
+	)
 
-    ok.instructions.append(mir.Const(dest="_ok_exit", type=INT, value=0))
-    ok.terminator = mir.Return(value="_ok_exit")
+	ok.instructions.append(mir.Const(dest="_ok_exit", type=INT, value=0))
+	ok.terminator = mir.Return(value="_ok_exit")
 
-    err.instructions.append(mir.Const(dest="_err_exit", type=INT, value=1))
-    err.terminator = mir.Return(value="_err_exit")
+	err.instructions.append(mir.Const(dest="_err_exit", type=INT, value=1))
+	err.terminator = mir.Return(value="_err_exit")
 
-    return mir.Function(
-        name="main",
-        params=[],
-        return_type=INT,
-        entry="bb0",
-        module="<tests>",
-        source=None,
-        blocks={"bb0": entry, "bb_ok": ok, "bb_err": err},
-    )
+	return mir.Function(
+		name="main",
+		params=[],
+		return_type=INT,
+		entry="bb0",
+		module="<tests>",
+		source=None,
+		blocks={"bb0": entry, "bb_ok": ok, "bb_err": err},
+	)
 
 
 def _build_main_for_callee(callee_name: str, flag_value: int) -> mir.Function:
-    entry = mir.BasicBlock(name="bb0", params=[])
-    ok = mir.BasicBlock(name="bb_ok", params=[])
-    err = mir.BasicBlock(name="bb_err", params=[])
+	entry = mir.BasicBlock(name="bb0", params=[])
+	ok = mir.BasicBlock(name="bb_ok", params=[])
+	err = mir.BasicBlock(name="bb_err", params=[])
 
-    entry.instructions.append(mir.Const(dest="_flag", type=INT, value=flag_value))
-    entry.terminator = mir.Call(
-        dest="_call_res",
-        callee=callee_name,
-        args=["_flag"],
-        ret_type=INT,
-        err_dest=None,
-        normal=mir.Edge(target="bb_ok", args=[]),
-        error=mir.Edge(target="bb_err", args=[]),
-    )
+	entry.instructions.append(mir.Const(dest="_flag", type=INT, value=flag_value))
+	entry.terminator = mir.Call(
+		dest="_call_res",
+		callee=callee_name,
+		args=["_flag"],
+		ret_type=INT,
+		err_dest=None,
+		normal=mir.Edge(target="bb_ok", args=[]),
+		error=mir.Edge(target="bb_err", args=[]),
+	)
 
-    ok.instructions.append(mir.Const(dest="_ok_exit", type=INT, value=0))
-    ok.terminator = mir.Return(value="_ok_exit")
+	ok.instructions.append(mir.Const(dest="_ok_exit", type=INT, value=0))
+	ok.terminator = mir.Return(value="_ok_exit")
 
-    err.instructions.append(mir.Const(dest="_err_exit", type=INT, value=1))
-    err.terminator = mir.Return(value="_err_exit")
+	err.instructions.append(mir.Const(dest="_err_exit", type=INT, value=1))
+	err.terminator = mir.Return(value="_err_exit")
 
-    return mir.Function(
-        name="main",
-        params=[],
-        return_type=INT,
-        entry="bb0",
-        module="<tests>",
-        source=None,
-        blocks={"bb0": entry, "bb_ok": ok, "bb_err": err},
-    )
+	return mir.Function(
+		name="main",
+		params=[],
+		return_type=INT,
+		entry="bb0",
+		module="<tests>",
+		source=None,
+		blocks={"bb0": entry, "bb_ok": ok, "bb_err": err},
+	)
 
 
 def _compile_and_run(
     callee_fn: mir.Function, flag_value: int, tmp_path: Path, clang: str, expect_value: bool = True, label: str = "call_edges"
 ) -> int:
-    main_fn = _build_main(flag_value, expect_value=expect_value)
+    main_fn = _build_main(flag_value, expect_value=expect_value, callee_name=callee_fn.name)
     obj_path = tmp_path / f"{label}_{flag_value}.o"
     emit_module_object([callee_fn, main_fn], struct_layouts={}, entry="main", out_path=obj_path)
     exe_path = tmp_path / f"{label}_{flag_value}"
-    runtime_sources = [ROOT / "tests" / "mir_codegen" / "runtime" / "error_dummy.c"]
-    link_cmd = [clang, str(obj_path)] + [str(src) for src in runtime_sources] + ["-o", str(exe_path)]
+    runtime_sources = [
+        ROOT / "lang" / "runtime" / "error_dummy.c",
+        ROOT / "lang" / "runtime" / "string_runtime.c",
+        ROOT / "lang" / "runtime" / "diagnostic_runtime.c",
+    ]
+    link_cmd = [clang, "-no-pie", str(obj_path)] + [str(src) for src in runtime_sources] + ["-o", str(exe_path)]
     subprocess.run(link_cmd, check=True, capture_output=True, text=True)
     res = subprocess.run([str(exe_path)], capture_output=True, text=True)
     return res.returncode

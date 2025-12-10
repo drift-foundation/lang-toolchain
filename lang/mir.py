@@ -251,16 +251,16 @@ class BasicBlock:
 
 @dataclass
 class Function:
-    name: str
-    params: List[Param]
-    return_type: Type
-    entry: str
-    module: Optional[str] = None
-    source: Optional[str] = None
-    blocks: Dict[str, BasicBlock] = field(default_factory=dict)
-    can_error: bool = False
+	name: str
+	params: List[Param]
+	return_type: Type
+	entry: str
+	module: Optional[str] = None
+	source: Optional[str] = None
+	blocks: Dict[str, BasicBlock] = field(default_factory=dict)
+	can_error: bool = False
 
 
 @dataclass
 class Program:
-    functions: Dict[str, Function]
+	functions: Dict[str, Function]
