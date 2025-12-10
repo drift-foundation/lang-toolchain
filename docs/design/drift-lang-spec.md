@@ -1035,6 +1035,8 @@ fn translate(p: &mut Point, dx: Int64, dy: Int64) returns Void {
 
 point.move_by(1, 2)     // method call (auto-borrows &mut point)
 translate(point, 3, 4)  // free function call (auto-borrows &mut point)
+
+// Free function and method names may not collide within the same module.
 ```
 
 This rule set makes the receiver’s ownership mode explicit and prevents implicit, C++-style magic receivers.

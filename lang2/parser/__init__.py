@@ -173,6 +173,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	signatures: Dict[str, FnSignature] = {}
 	lowerer = AstToHIR()
 	seen: set[str] = set()
+	method_names: set[str] = set()
 	diagnostics: list[Diagnostic] = []
 	for fn in prog.functions:
 		if fn.name in seen:
@@ -219,6 +220,25 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 				)
 				continue
 			params = [_FrontendParam(p.name, p.type_expr, getattr(p, "loc", None)) for p in fn.params]
+			if fn.name in seen:
+				diagnostics.append(
+					Diagnostic(
+						message=f"method '{fn.name}' conflicts with existing free function of the same name",
+						severity="error",
+						span=getattr(fn, "loc", None),
+					)
+				)
+				continue
+			if fn.name in method_names:
+				diagnostics.append(
+					Diagnostic(
+						message=f"duplicate method definition for '{fn.name}'",
+						severity="error",
+						span=getattr(fn, "loc", None),
+					)
+				)
+				continue
+			method_names.add(fn.name)
 			decls.append(
 				_FrontendDecl(
 					fn.name,

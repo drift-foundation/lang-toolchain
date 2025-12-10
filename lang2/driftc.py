@@ -340,12 +340,7 @@ def main(argv: list[str] | None = None) -> int:
 	type_checker = TypeChecker(type_table=type_table)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
-
-	def _unwrap_ref(ty: "TypeId") -> "TypeId":
-		td = type_table.get(ty)
-		if td.kind is TypeKind.REF and td.param_types:
-			return td.param_types[0]
-		return ty
+	type_diags: list[Diagnostic] = []
 
 	if signatures:
 		for sig_name, sig in signatures.items():
@@ -398,7 +393,6 @@ def main(argv: list[str] | None = None) -> int:
 					is_generic=False,
 				)
 				next_callable_id += 1
-	type_diags: list[Diagnostic] = []
 	typed_fns: dict[str, object] = {}
 	for fn_name, hir_block in func_hirs.items():
 		# Build param type map from signatures when available.
