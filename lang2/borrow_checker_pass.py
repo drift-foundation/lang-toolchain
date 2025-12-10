@@ -2,15 +2,16 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 # author: Sławomir Liszniański; created: 2025-12-09
 """
-Borrow-check pass (Phase 1/2): track moves per Place and coarse-grained loans.
+Borrow-check pass (Phase 1/2): track moves per Place and loans.
 
 Scope:
 - Operates as a forward dataflow over a CFG derived from HIR.
 - Tracks place states (UNINIT/VALID/MOVED) and flags use-after-move.
 - Handles implicit moves for non-Copy values used by value.
-- Adds explicit borrow handling (& / &mut) with shared-vs-mut conflicts, with
-  coarse function-long regions and temporary-borrow dropping as an NLL
-  approximation (full region analysis still TODO).
+- Adds explicit borrow handling (& / &mut) with shared-vs-mut conflicts.
+- Loan lifetimes: function-wide for most forms, block-liveness regions for
+  explicit HLet+HBorrow, and temporary-borrow dropping for expr/cond/call
+  scopes. Full general region analysis for all borrow forms is still TODO.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from lang2 import stage1 as H
 from lang2.borrow_checker import Place, PlaceBase, PlaceKind, PlaceState, place_from_expr, merge_place_state
 from lang2.core.diagnostics import Diagnostic
 from lang2.core.types_core import TypeKind, TypeTable, TypeId
+from collections import deque
 
 
 @dataclass
@@ -59,7 +61,7 @@ class Loan:
 	kind: LoanKind
 	region_id: int
 	temporary: bool = False
-	live_blocks: Optional[Set[int]] = None
+	live_blocks: Optional[frozenset[int]] = None  # None = function-wide; set filled by RegionBuilder once implemented.
 	ref_binding: Optional[int] = None
 
 
@@ -83,6 +85,7 @@ class BorrowChecker:
 
 	type_table: TypeTable
 	fn_types: Mapping[PlaceBase, TypeId]
+	binding_types: Optional[Dict[int, TypeId]] = None
 	base_lookup: Callable[[object], Optional[PlaceBase]] = lambda hv: PlaceBase(
 		PlaceKind.LOCAL,
 		getattr(hv, "binding_id", -1) if getattr(hv, "binding_id", None) is not None else -1,
@@ -101,8 +104,7 @@ class BorrowChecker:
 		  - binding_names: mapping binding_id -> name
 		"""
 		fn_types = {
-			PlaceBase(PlaceKind.LOCAL, bid, getattr(typed_fn.binding_names, "get", lambda _id, _default=None: None)(bid) or "_b")
-			: ty
+			PlaceBase(PlaceKind.LOCAL, bid, typed_fn.binding_names.get(bid, "_b")): ty
 			for bid, ty in typed_fn.binding_types.items()
 		}
 
@@ -114,7 +116,13 @@ class BorrowChecker:
 			local_id = bid if isinstance(bid, int) else -1
 			return PlaceBase(PlaceKind.LOCAL, local_id, name)
 
-		return cls(type_table=type_table, fn_types=fn_types, base_lookup=base_lookup, enable_auto_borrow=enable_auto_borrow)
+		return cls(
+			type_table=type_table,
+			fn_types=fn_types,
+			binding_types=dict(typed_fn.binding_types),
+			base_lookup=base_lookup,
+			enable_auto_borrow=enable_auto_borrow,
+		)
 
 	def _is_copy(self, ty: Optional[TypeId]) -> bool:
 		"""Return True if the type is Copy per the core type table."""
@@ -199,15 +207,10 @@ class BorrowChecker:
 				self._diagnostic(f"cannot take mutable borrow while borrow active on '{place.base.name}'")
 				return
 		live_blocks = None
-		ref_bid = None
-		if hasattr(self, "_ref_to_target"):
-			for ref_bid_candidate, target_bid in getattr(self, "_ref_to_target").items():
-				if target_bid == place.base.local_id:
-					ref_bid = ref_bid_candidate
-					break
-		if hasattr(self, "_ref_use_blocks"):
-			if ref_bid is not None and ref_bid in getattr(self, "_ref_use_blocks"):
-				live_blocks = getattr(self, "_ref_use_blocks")[ref_bid]
+		if not temporary and hasattr(self, "_target_live_blocks") and self._target_live_blocks is not None:
+			lbs = self._target_live_blocks.get(place.base.local_id)
+			if lbs is not None:
+				live_blocks = frozenset(lbs)
 		state.loans.add(
 			Loan(
 				place=place,
@@ -215,7 +218,7 @@ class BorrowChecker:
 				region_id=self._new_region(),
 				temporary=temporary,
 				live_blocks=live_blocks,
-				ref_binding=ref_bid,
+				ref_binding=None,
 			)
 		)
 
@@ -236,6 +239,157 @@ class BorrowChecker:
 	def _filter_live_loans(self, loans: Set[Loan], block_id: int) -> Set[Loan]:
 		"""Filter a loan set to those live at the given block."""
 		return {ln for ln in loans if self._loan_live_here(ln, block_id)}
+
+	def _build_regions(self, blocks: List[BasicBlock]) -> Optional[Dict[int, Set[int]]]:
+		"""
+		Compute per-target live block sets based on ref def/use reachability.
+
+		Returns mapping target_binding_id -> set(block_ids) or None if no ref info.
+		"""
+		succs: Dict[int, List[int]] = {}
+		preds: Dict[int, List[int]] = {}
+		for blk in blocks:
+			targets = blk.terminator.targets if blk.terminator else []
+			succs[blk.id] = list(targets)
+			for t in targets:
+				preds.setdefault(t, []).append(blk.id)
+
+		ref_defs: Dict[int, int] = {}  # ref_binding_id -> def block
+		ref_uses: Dict[int, Set[int]] = {}  # ref_binding_id -> use blocks
+		ref_to_target: Dict[int, int] = {}  # ref_binding_id -> target binding id
+
+		for blk in blocks:
+			for stmt in blk.statements:
+				if isinstance(stmt, H.HLet):
+					if isinstance(stmt.value, H.HBorrow):
+						ref_bid = getattr(stmt, "binding_id", None)
+						sub_place = place_from_expr(stmt.value.subject, base_lookup=self.base_lookup)
+						if ref_bid is not None and sub_place is not None:
+							ref_defs[ref_bid] = blk.id
+							ref_to_target[ref_bid] = sub_place.base.local_id
+					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
+				elif isinstance(stmt, H.HAssign):
+					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
+					self._collect_ref_uses_in_expr(stmt.target, blk.id, ref_uses)
+				elif isinstance(stmt, H.HExprStmt):
+					self._collect_ref_uses_in_expr(stmt.expr, blk.id, ref_uses)
+				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
+				elif isinstance(stmt, H.HIf):
+					self._collect_ref_uses_in_expr(stmt.cond, blk.id, ref_uses)
+				elif isinstance(stmt, H.HThrow):
+					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
+			term = blk.terminator
+			if term and term.kind == "branch" and term.cond is not None:
+				self._collect_ref_uses_in_expr(term.cond, blk.id, ref_uses)
+			if term and term.kind in ("return", "throw") and term.value is not None:
+				self._collect_ref_uses_in_expr(term.value, blk.id, ref_uses)
+
+		if not ref_defs:
+			return None
+
+		ref_regions: Dict[int, Set[int]] = {}
+		for rid, def_block in ref_defs.items():
+			uses = ref_uses.get(rid, set()) or {def_block}
+			forward = self._reachable_forward(def_block, succs)
+			backward = self._reachable_backward(uses, preds)
+			ref_regions[rid] = forward & backward
+
+		target_live: Dict[int, Set[int]] = {}
+		for rid, target_bid in ref_to_target.items():
+			region = ref_regions.get(rid, set())
+			if not region:
+				continue
+			target_live.setdefault(target_bid, set()).update(region)
+		return target_live
+
+	def _collect_ref_uses_in_expr(self, expr: H.HExpr, bid: int, ref_uses: Dict[int, Set[int]]) -> None:
+		if isinstance(expr, H.HVar):
+			bid_id = getattr(expr, "binding_id", None)
+			if bid_id is not None:
+				ty = None
+				if self.binding_types is not None:
+					ty = self.binding_types.get(bid_id)
+				else:
+					for pb, ty_candidate in self.fn_types.items():
+						if pb.local_id == bid_id:
+							ty = ty_candidate
+							break
+				if ty is not None and self.type_table.get(ty).kind is TypeKind.REF:
+					ref_uses.setdefault(bid_id, set()).add(bid)
+			return
+		if isinstance(expr, H.HField):
+			self._collect_ref_uses_in_expr(expr.subject, bid, ref_uses)
+			return
+		if isinstance(expr, H.HIndex):
+			self._collect_ref_uses_in_expr(expr.subject, bid, ref_uses)
+			self._collect_ref_uses_in_expr(expr.index, bid, ref_uses)
+			return
+		if isinstance(expr, H.HBorrow):
+			self._collect_ref_uses_in_expr(expr.subject, bid, ref_uses)
+			return
+		if isinstance(expr, H.HCall):
+			self._collect_ref_uses_in_expr(expr.fn, bid, ref_uses)
+			for a in expr.args:
+				self._collect_ref_uses_in_expr(a, bid, ref_uses)
+			return
+		if isinstance(expr, H.HMethodCall):
+			self._collect_ref_uses_in_expr(expr.receiver, bid, ref_uses)
+			for a in expr.args:
+				self._collect_ref_uses_in_expr(a, bid, ref_uses)
+			return
+		if isinstance(expr, H.HBinary):
+			self._collect_ref_uses_in_expr(expr.left, bid, ref_uses)
+			self._collect_ref_uses_in_expr(expr.right, bid, ref_uses)
+			return
+		if isinstance(expr, H.HUnary):
+			self._collect_ref_uses_in_expr(expr.expr, bid, ref_uses)
+			return
+		if isinstance(expr, H.HTernary):
+			self._collect_ref_uses_in_expr(expr.cond, bid, ref_uses)
+			self._collect_ref_uses_in_expr(expr.then_expr, bid, ref_uses)
+			self._collect_ref_uses_in_expr(expr.else_expr, bid, ref_uses)
+			return
+		if isinstance(expr, H.HArrayLiteral):
+			for e in expr.elements:
+				self._collect_ref_uses_in_expr(e, bid, ref_uses)
+			return
+		if isinstance(expr, H.HDVInit):
+			for a in expr.args:
+				self._collect_ref_uses_in_expr(a, bid, ref_uses)
+			return
+		if isinstance(expr, H.HResultOk):
+			self._collect_ref_uses_in_expr(expr.value, bid, ref_uses)
+			return
+		if isinstance(expr, H.HTryResult):
+			self._collect_ref_uses_in_expr(expr.expr, bid, ref_uses)
+			return
+
+	def _reachable_forward(self, start: int, succs: Dict[int, List[int]]) -> Set[int]:
+		seen: Set[int] = set()
+		q: deque[int] = deque([start])
+		while q:
+			bid = q.popleft()
+			if bid in seen:
+				continue
+			seen.add(bid)
+			for s in succs.get(bid, []):
+				if s not in seen:
+					q.append(s)
+		return seen
+
+	def _reachable_backward(self, starts: Set[int], preds: Dict[int, List[int]]) -> Set[int]:
+		seen: Set[int] = set()
+		q: deque[int] = deque(starts)
+		while q:
+			bid = q.popleft()
+			if bid in seen:
+				continue
+			seen.add(bid)
+			for p in preds.get(bid, []):
+				if p not in seen:
+					q.append(p)
+		return seen
 
 	def _collect_ref_use_blocks(self, blocks: List[BasicBlock], local_types: Dict[int, TypeId]) -> Dict[int, Set[int]]:
 		"""
@@ -467,10 +621,8 @@ class BorrowChecker:
 		"""Run move tracking on a HIR block by building a CFG and flowing states."""
 		self.diagnostics.clear()
 		blocks, entry_id = self._build_cfg(block)
-		local_types: Dict[int, TypeId] = {pb.local_id: ty for pb, ty in self.fn_types.items()}
-		ref_use_blocks = self._collect_ref_use_blocks(blocks, local_types)
-		self._ref_use_blocks = ref_use_blocks
-		self._ref_to_target = self._collect_ref_to_target(blocks)
+		# Build region info (def/use) for explicit borrows.
+		self._target_live_blocks = self._build_regions(blocks)
 		in_states: Dict[int, _FlowState] = {b.id: _FlowState() for b in blocks}
 		worklist = [entry_id]
 		while worklist:

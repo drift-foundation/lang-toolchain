@@ -148,6 +148,13 @@ lang2-borrow-test:
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/borrow_checker/tests
 
 stage-for-review:
-	rm -rf staged
-	mkdir staged
-	git ls-files -m -o --exclude-standard | while read f; do mkdir -p "staged/$(dirname "$f")"; cp "$f" "staged/$f"; done 
+	#!/usr/bin/env bash
+	staged_dir=staged
+	rm -rf "$staged_dir" staged.tar.gz
+	mkdir -p "$staged_dir"
+	git ls-files -m -o --exclude-standard | while IFS= read -r f; do
+		[ -f "$f" ] || continue
+		mkdir -p "$staged_dir/$(dirname "$f")"
+		cp -- "$f" "$staged_dir/$f"
+	done
+	tar -vczf staged.tar.gz -C "$staged_dir" .
