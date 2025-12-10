@@ -54,6 +54,14 @@ class LoanKind(Enum):
 	MUT = auto()
 
 
+@dataclass
+class _FlowState:
+	"""Dataflow state at a CFG point: place validity + active loans."""
+
+	place_states: Dict[Place, PlaceState] = field(default_factory=dict)
+	loans: Set["Loan"] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class Loan:
 	"""A loan of a place for the lifetime of its reference (coarse-grained for now)."""
@@ -62,14 +70,6 @@ class Loan:
 	kind: LoanKind
 	temporary: bool = False
 	live_blocks: Optional[frozenset[int]] = None  # None = function-wide; set filled by RegionBuilder once implemented.
-
-
-@dataclass
-class _FlowState:
-	"""Dataflow state at a CFG point: place validity + active loans."""
-
-	place_states: Dict[Place, PlaceState] = field(default_factory=dict)
-	loans: Set[Loan] = field(default_factory=set)
 
 
 @dataclass
@@ -93,6 +93,11 @@ class BorrowChecker:
 	)
 	diagnostics: List[Diagnostic] = field(default_factory=list)
 	enable_auto_borrow: bool = False
+
+	def __post_init__(self) -> None:
+		# Ensure we always have a binding_id -> TypeId mapping to avoid repeated scans.
+		if self.binding_types is None:
+			self.binding_types = {pb.local_id: ty for pb, ty in self.fn_types.items()}
 
 	@classmethod
 	def from_typed_fn(
@@ -285,12 +290,6 @@ class BorrowChecker:
 					self._collect_ref_uses_in_expr(stmt.target, blk.id, ref_uses)
 				elif isinstance(stmt, H.HExprStmt):
 					self._collect_ref_uses_in_expr(stmt.expr, blk.id, ref_uses)
-				elif isinstance(stmt, H.HReturn) and stmt.value is not None:
-					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
-				elif isinstance(stmt, H.HIf):
-					self._collect_ref_uses_in_expr(stmt.cond, blk.id, ref_uses)
-				elif isinstance(stmt, H.HThrow):
-					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses)
 			term = blk.terminator
 			if term and term.kind == "branch" and term.cond is not None:
 				self._collect_ref_uses_in_expr(term.cond, blk.id, ref_uses)
@@ -322,11 +321,6 @@ class BorrowChecker:
 				ty = None
 				if self.binding_types is not None:
 					ty = self.binding_types.get(bid_id)
-				else:
-					for pb, ty_candidate in self.fn_types.items():
-						if pb.local_id == bid_id:
-							ty = ty_candidate
-							break
 				if ty is not None and self.type_table.get(ty).kind is TypeKind.REF:
 					ref_uses.setdefault(bid_id, set()).add(bid)
 			return

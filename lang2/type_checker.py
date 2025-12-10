@@ -105,8 +105,7 @@ class TypeChecker:
 			if isinstance(expr, H.HLiteralBool):
 				return record_expr(expr, self._bool)
 			if isinstance(expr, H.HLiteralString):
-				# String is treated as unknown for now.
-				return record_expr(expr, self._unknown)
+				return record_expr(expr, self.type_table.ensure_string())
 			if isinstance(expr, H.HVar):
 				if expr.binding_id is None:
 					for scope in reversed(scope_bindings):

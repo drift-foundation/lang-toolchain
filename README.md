@@ -20,6 +20,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - DMIR/SSA design: [docs/articles/design-first-afm-then-ssa.md](docs/articles/design-first-afm-then-ssa.md)
 - DMIR specification: [docs/design/dmir-spec.md](docs/design/dmir-spec.md)
 - Borrowing/reference model revision: [docs/design/drift_borrowing_and_reference_model_revision.md](docs/design/drift_borrowing_and_reference_model_revision.md)
+- Virtual threads/concurrency spec change: [docs/design/spec-change-requests/virtual_threads_concurrency_spec.md](docs/design/spec-change-requests/virtual_threads_concurrency_spec.md) — proposal for lightweight threads, schedulers, and structured scopes.
 - Iteration model: [docs/design/drift-loops-and-iterators.md](docs/design/drift-loops-and-iterators.md)
 - String runtime plan: [docs/design/drift-string-impl.md](docs/design/drift-string-impl.md)
 - Tuple destructuring notes: [docs/design/drift-tuple-destructuring.md](docs/design/drift-tuple-destructuring.md)
