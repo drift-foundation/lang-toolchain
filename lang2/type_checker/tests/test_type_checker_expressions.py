@@ -5,7 +5,7 @@
 
 from lang2 import stage1 as H
 from lang2.type_checker import TypeChecker
-from lang2.core.types_core import TypeTable
+from lang2.core.types_core import TypeTable, TypeKind
 from lang2.checker import FnSignature
 
 
@@ -107,3 +107,19 @@ def test_call_return_type_uses_signature():
 	res = tc.check_function("c", block, param_types=None, call_signatures={"foo": sig})
 	assert res.diagnostics == []
 	assert ret_ty in res.typed_fn.expr_types.values()
+
+
+def test_result_ok_uses_fnresult_type():
+	tc = _tc()
+	block = H.HBlock(statements=[H.HExprStmt(expr=H.HResultOk(value=H.HLiteralInt(1)))])
+	res = tc.check_function("res", block)
+	assert res.diagnostics == []
+	assert any(tc.type_table.get(ty).kind is TypeKind.FNRESULT for ty in res.typed_fn.expr_types.values())
+
+
+def test_try_result_propagates_inner_type():
+	tc = _tc()
+	block = H.HBlock(statements=[H.HExprStmt(expr=H.HTryResult(expr=H.HLiteralInt(2)))])
+	res = tc.check_function("tr", block)
+	assert res.diagnostics == []
+	assert tc.type_table.ensure_int() in res.typed_fn.expr_types.values()

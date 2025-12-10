@@ -170,3 +170,71 @@ def test_multiple_refs_union_region_blocks_mut_until_all_dead():
 	)
 	diags = _bc({"x": (1, "Int"), "r1": (2, "RefInt"), "r2": (3, "RefInt")}).check_block(block)
 	assert diags == []
+
+
+def test_borrow_only_in_one_loop_path_keeps_mut_blocked_inside_loop():
+	# Even if the borrow is only taken in one branch inside the loop, the loop backedge keeps it live.
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HLoop(
+				body=H.HBlock(
+					statements=[
+						H.HIf(
+							cond=H.HLiteralBool(True),
+							then_block=H.HBlock(
+								statements=[
+									H.HLet(
+										name="r",
+										value=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=False),
+										declared_type_expr=None,
+										binding_id=2,
+									),
+									H.HExprStmt(expr=H.HVar("r", binding_id=2)),
+								]
+							),
+							else_block=H.HBlock(statements=[]),
+						),
+						H.HExprStmt(expr=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=True)),
+					]
+				)
+			),
+		]
+	)
+	diags = _bc({"x": (1, "Int"), "r": (2, "RefInt")}).check_block(block)
+	assert any("borrow active" in d.message for d in diags)
+
+
+def test_nested_branches_borrow_dies_when_last_use_done():
+	# Nested branch; borrow used only in inner then. After outer, mut borrow should be allowed.
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HIf(
+				cond=H.HLiteralBool(True),
+				then_block=H.HBlock(
+					statements=[
+						H.HIf(
+							cond=H.HLiteralBool(True),
+							then_block=H.HBlock(
+								statements=[
+									H.HLet(
+										name="r",
+										value=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=False),
+										declared_type_expr=None,
+										binding_id=2,
+									),
+									H.HExprStmt(expr=H.HVar("r", binding_id=2)),
+								]
+							),
+							else_block=H.HBlock(statements=[]),
+						)
+					]
+				),
+				else_block=H.HBlock(statements=[]),
+			),
+			H.HExprStmt(expr=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=True)),
+		]
+	)
+	diags = _bc({"x": (1, "Int"), "r": (2, "RefInt")}).check_block(block)
+	assert diags == []

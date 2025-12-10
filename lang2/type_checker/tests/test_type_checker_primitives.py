@@ -5,7 +5,7 @@
 
 from lang2 import stage1 as H
 from lang2.type_checker import TypeChecker
-from lang2.core.types_core import TypeTable
+from lang2.core.types_core import TypeTable, TypeKind
 
 
 def _checker():
@@ -90,3 +90,19 @@ def test_param_binding_and_type_tracked():
 	p_binding = res.typed_fn.binding_for_var[id(var_expr)]
 	assert p_binding in res.typed_fn.param_bindings
 	assert res.typed_fn.binding_types[p_binding] == int_ty
+
+
+def test_binding_types_capture_ref_mut():
+	tc = _checker()
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HLet(name="m", value=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=True), declared_type_expr=None, binding_id=2),
+		]
+	)
+	res = tc.check_function("mutref", block)
+	assert res.diagnostics == []
+	ref_ty = res.typed_fn.binding_types[2]
+	td = tc.type_table.get(ref_ty)
+	assert td.kind is TypeKind.REF
+	assert td.ref_mut is True
