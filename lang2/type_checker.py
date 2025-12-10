@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Mapping
 
 from lang2 import stage1 as H
 from lang2.core.diagnostics import Diagnostic
-from lang2.core.types_core import TypeId, TypeTable
+from lang2.core.types_core import TypeId, TypeTable, TypeKind
 
 # Identifier aliases for clarity.
 ParamId = int
@@ -137,25 +137,61 @@ class TypeChecker:
 				type_expr(expr.subject)
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HIndex):
-				type_expr(expr.subject)
+				sub_ty = type_expr(expr.subject)
 				type_expr(expr.index)
+				td = self.type_table.get(sub_ty)
+				if td.kind is TypeKind.ARRAY and td.param_types:
+					return record_expr(expr, td.param_types[0])
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HUnary):
-				type_expr(expr.expr)
+				sub_ty = type_expr(expr.expr)
+				if expr.op is H.UnaryOp.NEG:
+					return record_expr(expr, sub_ty if sub_ty == self._int else self._unknown)
+				if expr.op in (H.UnaryOp.NOT,):
+					return record_expr(expr, self._bool)
+				if expr.op is H.UnaryOp.BIT_NOT:
+					return record_expr(expr, sub_ty if sub_ty == self._int else self._unknown)
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HBinary):
-				type_expr(expr.left)
-				type_expr(expr.right)
+				left_ty = type_expr(expr.left)
+				right_ty = type_expr(expr.right)
+				if expr.op in (
+					H.BinaryOp.ADD,
+					H.BinaryOp.SUB,
+					H.BinaryOp.MUL,
+					H.BinaryOp.DIV,
+					H.BinaryOp.MOD,
+					H.BinaryOp.BIT_AND,
+					H.BinaryOp.BIT_OR,
+					H.BinaryOp.BIT_XOR,
+					H.BinaryOp.SHL,
+					H.BinaryOp.SHR,
+				):
+					if left_ty == self._int and right_ty == self._int:
+						return record_expr(expr, self._int)
+					return record_expr(expr, self._unknown)
+				if expr.op in (
+					H.BinaryOp.EQ,
+					H.BinaryOp.NE,
+					H.BinaryOp.LT,
+					H.BinaryOp.LE,
+					H.BinaryOp.GT,
+					H.BinaryOp.GE,
+				):
+					return record_expr(expr, self._bool)
+				if expr.op in (H.BinaryOp.AND, H.BinaryOp.OR):
+					return record_expr(expr, self._bool)
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HArrayLiteral):
-				for e in expr.elements:
-					type_expr(e)
+				elem_types = [type_expr(e) for e in expr.elements]
+				if elem_types and all(t == elem_types[0] for t in elem_types):
+					return record_expr(expr, self.type_table.new_array(elem_types[0]))
 				return record_expr(expr, self._unknown)
 			if isinstance(expr, H.HTernary):
 				type_expr(expr.cond)
-				type_expr(expr.then_expr)
-				type_expr(expr.else_expr)
-				return record_expr(expr, self._unknown)
+				then_ty = type_expr(expr.then_expr)
+				else_ty = type_expr(expr.else_expr)
+				return record_expr(expr, then_ty if then_ty == else_ty else self._unknown)
 			if isinstance(expr, H.HDVInit):
 				for a in expr.args:
 					type_expr(a)
