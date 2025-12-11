@@ -35,7 +35,7 @@ from lang2.driftc.stage1 import (
 	HExprStmt,
 	BinaryOp,
 )
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	MirBuilder,
 	HIRToMIR,
 	ConstInt,

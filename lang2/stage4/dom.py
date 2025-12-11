@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Set, Optional
 
-from lang2.stage2 import MirFunc, Goto, IfTerminator, MTerminator
+from lang2.driftc.stage2 import MirFunc, Goto, IfTerminator, MTerminator
 
 
 @dataclass

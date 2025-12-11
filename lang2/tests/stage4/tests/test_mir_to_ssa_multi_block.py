@@ -12,7 +12,7 @@ Each branch defines the same local `x` with different values. The join block
 should receive a Φ for `x` with incoming values from both predecessors.
 """
 
-from lang2.stage2 import BasicBlock, MirFunc, StoreLocal, LoadLocal, Return, Goto, IfTerminator
+from lang2.driftc.stage2 import BasicBlock, MirFunc, StoreLocal, LoadLocal, Return, Goto, IfTerminator
 from lang2.stage4 import MirToSSA
 
 
@@ -57,14 +57,14 @@ def test_phi_placed_in_join_for_local_defined_in_branches():
 	assert join_block.instructions
 	phi = join_block.instructions[0]
 	# Should have inserted a Phi for x at the top of join.
-	from lang2.stage2 import Phi  # local import to keep test narrow
+	from lang2.driftc.stage2 import Phi  # local import to keep test narrow
 	assert isinstance(phi, Phi)
 	assert phi.dest.startswith("x_")
 	# Incoming should reference SSA names from each branch.
 	assert phi.incoming.get("then", "").startswith("x_")
 	assert phi.incoming.get("else", "").startswith("x_")
 	# LoadLocal rewritten to AssignSSA consuming the phi value.
-	from lang2.stage2 import AssignSSA
+	from lang2.driftc.stage2 import AssignSSA
 	assign = join_block.instructions[1]
 	assert isinstance(assign, AssignSSA)
 	assert assign.src == phi.dest

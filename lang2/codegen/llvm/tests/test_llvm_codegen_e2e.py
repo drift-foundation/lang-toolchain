@@ -14,7 +14,7 @@ import pytest
 
 from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.checker import FnInfo
-from lang2.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk, Call
+from lang2.driftc.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk, Call
 from lang2.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
 

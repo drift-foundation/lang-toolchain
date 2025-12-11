@@ -7,7 +7,7 @@ Covers straight-line (no frontiers), diamond (join block in branch frontiers,
 empty DF(entry)), and loop shapes (backedge/exit in frontiers).
 """
 
-from lang2.stage2 import BasicBlock, MirFunc, Goto, IfTerminator
+from lang2.driftc.stage2 import BasicBlock, MirFunc, Goto, IfTerminator
 from lang2.stage4 import DominatorAnalysis, DominanceFrontierAnalysis
 
 

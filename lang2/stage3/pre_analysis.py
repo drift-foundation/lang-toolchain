@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Set, Dict, Mapping, Optional
 
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	MirFunc,
 	MInstr,
 	MTerminator,

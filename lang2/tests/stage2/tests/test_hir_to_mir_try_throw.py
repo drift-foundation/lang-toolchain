@@ -5,7 +5,7 @@ Stage 2 tests: HIR→MIR lowering for throw/try (throw only for now).
 """
 
 from lang2.driftc import stage1 as H
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	MirBuilder,
 	HIRToMIR,
 	ConstInt,

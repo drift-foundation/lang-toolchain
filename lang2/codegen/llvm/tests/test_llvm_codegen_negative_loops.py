@@ -8,7 +8,7 @@ import pytest
 
 from lang2.codegen.llvm import lower_ssa_func_to_llvm
 from lang2.checker import FnInfo
-from lang2.stage2 import BasicBlock, MirFunc, Goto, Return
+from lang2.driftc.stage2 import BasicBlock, MirFunc, Goto, Return
 from lang2.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
 

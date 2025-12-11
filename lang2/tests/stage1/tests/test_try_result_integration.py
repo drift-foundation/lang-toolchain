@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from lang2.driftc import stage1 as H
 from lang2.driftc.stage1 import normalize_hir
-from lang2.stage2 import HIRToMIR, MirBuilder
+from lang2.driftc.stage2 import HIRToMIR, MirBuilder
 
 
 def _contains_try_result(block: H.HBlock) -> bool:

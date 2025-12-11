@@ -4,7 +4,7 @@
 Stage3 throw summary aggregation tests.
 """
 
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	MirFunc,
 	BasicBlock,
 	ConstInt,

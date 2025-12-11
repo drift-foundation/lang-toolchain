@@ -4,7 +4,7 @@ from lang2.driftc.core.types_core import TypeTable
 from lang2.checker import Checker
 from lang2.checker import FnInfo
 from lang2.checker import FnSignature
-from lang2.stage2 import mir_nodes as M
+from lang2.driftc.stage2 import mir_nodes as M
 
 
 def _checker_for_hir(block: H.HBlock) -> tuple[Checker, dict[str, FnInfo], list[Diagnostic]]:

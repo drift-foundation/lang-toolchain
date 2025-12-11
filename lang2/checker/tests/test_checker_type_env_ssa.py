@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	BasicBlock,
 	BinaryOpInstr,
 	ConstructResultOk,

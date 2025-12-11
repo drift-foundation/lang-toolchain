@@ -11,7 +11,7 @@ Cases:
 
 from __future__ import annotations
 
-from lang2.stage2 import MirFunc, BasicBlock, Goto, IfTerminator
+from lang2.driftc.stage2 import MirFunc, BasicBlock, Goto, IfTerminator
 from lang2.stage4 import DominatorAnalysis
 
 

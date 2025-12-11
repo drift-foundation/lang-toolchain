@@ -10,7 +10,7 @@ Additional try/catch lowering coverage:
 
 from __future__ import annotations
 
-from lang2.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
+from lang2.driftc.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.driftc import stage1 as H
 
 

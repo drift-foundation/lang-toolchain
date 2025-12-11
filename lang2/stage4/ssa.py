@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, List
 
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	MirFunc,
 	LoadLocal,
 	StoreLocal,

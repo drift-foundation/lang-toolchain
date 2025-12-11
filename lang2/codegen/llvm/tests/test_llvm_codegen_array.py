@@ -6,7 +6,7 @@ LLVM lowering for array MIR ops: ArrayLit + ArrayIndexLoad/Store.
 
 from lang2.checker import FnInfo, FnSignature
 from lang2.driftc.core.types_core import TypeTable
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	ArrayIndexLoad,
 	ArrayIndexStore,
 	ArrayLit,

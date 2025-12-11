@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Dict, Set
 
 from .pre_analysis import MirAnalysisResult, MirPreAnalysis
-from lang2.stage2 import MirFunc
+from lang2.driftc.stage2 import MirFunc
 
 
 @dataclass

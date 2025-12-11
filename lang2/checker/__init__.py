@@ -1191,7 +1191,7 @@ class Checker:
 		no types were assigned.
 		"""
 		from lang2.checker.type_env_impl import CheckerTypeEnv
-		from lang2.stage2 import (
+		from lang2.driftc.stage2 import (
 			ConstructResultOk,
 			ConstructResultErr,
 			Call,

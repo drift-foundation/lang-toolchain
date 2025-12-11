@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lang2.stage2 import (
+from lang2.driftc.stage2 import (
 	BasicBlock,
 	ConstructResultOk,
 	ConstructResultErr,

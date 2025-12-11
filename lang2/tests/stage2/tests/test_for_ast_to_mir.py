@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from lang2.stage0 import ast
 from lang2.driftc.stage1 import AstToHIR, HBlock
-from lang2.stage2 import MirBuilder, HIRToMIR, MirFunc
+from lang2.driftc.stage2 import MirBuilder, HIRToMIR, MirFunc
 
 
 def test_for_ast_lowered_to_mir_cfg():

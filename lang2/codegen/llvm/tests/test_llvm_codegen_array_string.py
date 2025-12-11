@@ -6,7 +6,7 @@ LLVM lowering for Array<String> literals and indexing.
 
 from lang2.checker import FnInfo, FnSignature
 from lang2.driftc.core.types_core import TypeTable
-from lang2.stage2 import ArrayIndexLoad, ArrayIndexStore, ArrayLit, BasicBlock, ConstInt, ConstString, MirFunc, Return
+from lang2.driftc.stage2 import ArrayIndexLoad, ArrayIndexStore, ArrayLit, BasicBlock, ConstInt, ConstString, MirFunc, Return
 from lang2.stage4.ssa import MirToSSA
 from lang2.codegen.llvm import lower_module_to_llvm
 

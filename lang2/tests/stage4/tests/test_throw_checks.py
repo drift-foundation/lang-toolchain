@@ -17,8 +17,8 @@ from lang2.stage4 import (
 	enforce_fnresult_returns_for_can_throw,
 	run_throw_checks,
 )
-from lang2.stage2 import BasicBlock, MirFunc, Return, StoreLocal
-from lang2.stage2 import ConstructResultErr
+from lang2.driftc.stage2 import BasicBlock, MirFunc, Return, StoreLocal
+from lang2.driftc.stage2 import ConstructResultErr
 from lang2.stage3 import ThrowSummaryBuilder
 import pytest
 from lang2.checker import FnSignature
