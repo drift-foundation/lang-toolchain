@@ -1,0 +1,6 @@
+fn main() returns Int {
+	val msgs = ["hello", "world"]
+	val idx: Int = 1
+	println(msgs[idx])
+	return 0
+}
