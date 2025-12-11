@@ -135,7 +135,7 @@ lang2-driver-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/driver/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/driver
 
 # Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
 lang2-llvm-test:

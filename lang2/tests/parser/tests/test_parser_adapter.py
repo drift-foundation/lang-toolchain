@@ -2,7 +2,7 @@ from pathlib import Path
 import pytest
 
 from lang2.driftc import stage1 as H
-from lang2.parser import parse_drift_to_hir
+from lang2.driftc.parser import parse_drift_to_hir
 
 
 def test_parse_simple_return(tmp_path: Path):

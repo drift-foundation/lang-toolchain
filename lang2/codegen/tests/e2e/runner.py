@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from lang2.parser import parse_drift_to_hir
+from lang2.driftc.parser import parse_drift_to_hir
 from lang2.driftc.driftc import compile_to_llvm_ir_for_tests
 
 
