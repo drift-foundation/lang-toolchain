@@ -16,6 +16,7 @@ from lang2.driftc.stage1 import AstToHIR
 from lang2.driftc import stage1 as H
 from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
+from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
@@ -46,6 +47,28 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.ArrayLiteral(elements=[_convert_expr(e) for e in expr.elements], loc=getattr(expr, "loc", None))
 	if isinstance(expr, parser_ast.Move):
 		return _convert_expr(expr.value)
+	if isinstance(expr, parser_ast.Placeholder):
+		return s0.Placeholder(loc=getattr(expr, "loc", None))
+	if isinstance(expr, parser_ast.Ternary):
+		return s0.Ternary(
+			cond=_convert_expr(expr.condition),
+			then_expr=_convert_expr(expr.then_value),
+			else_expr=_convert_expr(expr.else_value),
+			loc=getattr(expr, "loc", None),
+		)
+	if isinstance(expr, parser_ast.TryCatchExpr):
+		catch_arms = [
+			s0.CatchExprArm(event=arm.event, binder=arm.binder, block=_convert_block(arm.block), loc=getattr(arm, "loc", None))
+			for arm in expr.catch_arms
+		]
+		return s0.TryCatchExpr(attempt=_convert_expr(expr.attempt), catch_arms=catch_arms, loc=getattr(expr, "loc", None))
+	if isinstance(expr, parser_ast.ExceptionCtor):
+		return s0.ExceptionCtor(
+			name=expr.name,
+			event_code=getattr(expr, "event_code", None),
+			fields={k: _convert_expr(v) for k, v in expr.fields.items()},
+			loc=getattr(expr, "loc", None),
+		)
 	raise NotImplementedError(f"Unsupported expression in adapter: {expr!r}")
 
 
@@ -86,6 +109,14 @@ def _convert_continue(stmt: parser_ast.ContinueStmt) -> s0.Stmt:
 	return s0.ContinueStmt(loc=stmt.loc)
 
 
+def _convert_while(stmt: parser_ast.WhileStmt) -> s0.Stmt:
+	return s0.WhileStmt(cond=_convert_expr(stmt.condition), body=_convert_block(stmt.body), loc=stmt.loc)
+
+
+def _convert_for(stmt: parser_ast.ForStmt) -> s0.Stmt:
+	return s0.ForStmt(iter_var=stmt.var, iterable=_convert_expr(stmt.iter_expr), body=_convert_block(stmt.body), loc=stmt.loc)
+
+
 def _convert_throw(stmt: parser_ast.ThrowStmt) -> s0.Stmt:
 	return s0.ThrowStmt(value=_convert_expr(stmt.expr), loc=stmt.loc)
 
@@ -97,6 +128,19 @@ def _convert_raise(stmt: parser_ast.RaiseStmt) -> s0.Stmt:
 	return s0.ThrowStmt(value=_convert_expr(expr), loc=stmt.loc)
 
 
+def _convert_try(stmt: parser_ast.TryStmt) -> s0.Stmt:
+	catches = [
+		s0.CatchExprArm(event=c.event, binder=c.binder, block=_convert_block(c.block), loc=getattr(c, "loc", None))
+		for c in stmt.catches
+	]
+	return s0.TryStmt(body=_convert_block(stmt.body), catches=catches, loc=stmt.loc)
+
+
+def _convert_import(stmt: parser_ast.ImportStmt) -> s0.Stmt:
+	path = ".".join(stmt.path)
+	return s0.ImportStmt(path=path, loc=stmt.loc)
+
+
 _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]] = {
 	parser_ast.ReturnStmt: _convert_return,
 	parser_ast.ExprStmt: _convert_expr_stmt,
@@ -105,8 +149,12 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.IfStmt: _convert_if,
 	parser_ast.BreakStmt: _convert_break,
 	parser_ast.ContinueStmt: _convert_continue,
+	parser_ast.WhileStmt: _convert_while,
+	parser_ast.ForStmt: _convert_for,
 	parser_ast.ThrowStmt: _convert_throw,
 	parser_ast.RaiseStmt: _convert_raise,
+	parser_ast.TryStmt: _convert_try,
+	parser_ast.ImportStmt: _convert_import,
 }
 
 
@@ -114,7 +162,6 @@ def _convert_stmt(stmt: parser_ast.Stmt) -> s0.Stmt:
 	"""Convert parser AST statements into lang2.driftc.stage0 AST statements."""
 	fn = _STMT_DISPATCH.get(type(stmt))
 	if fn is None:
-		# While/For/Try not yet needed for current e2e cases.
 		raise NotImplementedError(f"Unsupported statement in adapter: {stmt!r}")
 	return fn(stmt)
 
@@ -172,7 +219,42 @@ def _decl_from_parser_fn(fn: parser_ast.FunctionDef) -> _FrontendDecl:
 	)
 
 
-def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSignature], "TypeTable", List[Diagnostic]]:
+def _diagnostic(message: str, loc: object | None) -> Diagnostic:
+	"""Helper to create a Diagnostic from a parser location."""
+	return Diagnostic(message=message, severity="error", span=loc)
+
+
+def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_name: str | None, diagnostics: list[Diagnostic]) -> dict[str, int]:
+	"""
+	Assign deterministic event codes to exception declarations using the shared ABI hash.
+
+	Collisions on the payload bits are reported as errors and the colliding
+	exceptions are omitted from the catalog to avoid undefined dispatch.
+	"""
+	catalog: dict[str, int] = {}
+	payload_seen: dict[int, str] = {}
+	for exc in exceptions:
+		if exc.name in catalog:
+			diagnostics.append(_diagnostic(f"duplicate exception '{exc.name}'", getattr(exc, "loc", None)))
+			continue
+		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
+		code = event_code(fqn)
+		payload = code & PAYLOAD_MASK
+		if payload in payload_seen and payload_seen[payload] != fqn:
+			other = payload_seen[payload]
+			diagnostics.append(
+				_diagnostic(
+					f"exception code collision between '{other}' and '{fqn}' (payload {payload})",
+					getattr(exc, "loc", None),
+				)
+			)
+			continue
+		payload_seen[payload] = fqn
+		catalog[exc.name] = code
+	return catalog
+
+
+def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSignature], "TypeTable", Dict[str, int], List[Diagnostic]]:
 	"""
 	Parse a Drift source file into lang2 HIR blocks + FnSignatures + TypeTable.
 
@@ -189,6 +271,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	seen: set[str] = set()
 	method_keys: set[tuple[str, str]] = set()  # (impl_target_repr, method_name)
 	diagnostics: list[Diagnostic] = []
+	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_name, diagnostics)
 	for fn in prog.functions:
 		if fn.name in seen:
 			diagnostics.append(
@@ -289,7 +372,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 
 	type_table, sigs = resolve_program_signatures(decls)
 	signatures.update(sigs)
-	return func_hirs, signatures, type_table, diagnostics
+	return func_hirs, signatures, type_table, exception_catalog, diagnostics
 
 
 __all__ = ["parse_drift_to_hir"]

@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = parser.parse_args(argv)
 
 	source_path: Path = args.source
-	func_hirs, signatures, type_table, parse_diags = parse_drift_to_hir(source_path)
+	func_hirs, signatures, type_table, exception_catalog, parse_diags = parse_drift_to_hir(source_path)
 	_inject_prelude(signatures, type_table)
 
 	if parse_diags:
@@ -428,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
 	checker = Checker(
 		declared_can_throw=None,
 		signatures=signatures,
-		exception_catalog=None,
+		exception_catalog=exception_catalog,
 		catch_arms=None,
 		hir_blocks=func_hirs,
 		type_table=type_table,
@@ -585,6 +585,7 @@ def main(argv: list[str] | None = None) -> int:
 	ir, _checked = compile_to_llvm_ir_for_tests(
 		func_hirs=func_hirs,
 		signatures=signatures,
+		exc_env=exception_catalog,
 		entry="main",
 		type_table=type_table,
 	)

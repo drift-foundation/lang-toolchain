@@ -108,7 +108,7 @@ def _run_case(case_dir: Path) -> str:
 			if not match_found:
 				return "FAIL (missing expected diagnostic)"
 		return "ok"
-	func_hirs, signatures, type_table, parse_diags = parse_drift_to_hir(source_path)
+	func_hirs, signatures, type_table, exception_catalog, parse_diags = parse_drift_to_hir(source_path)
 	expected_phase = expected.get("phase")
 
 	if parse_diags:
@@ -145,6 +145,7 @@ def _run_case(case_dir: Path) -> str:
 	ir, checked = compile_to_llvm_ir_for_tests(
 		func_hirs=func_hirs,
 		signatures=signatures,
+		exc_env=exception_catalog,
 		entry=entry,
 		type_table=type_table,
 	)

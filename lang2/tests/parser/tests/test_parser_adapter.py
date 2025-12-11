@@ -14,7 +14,7 @@ fn main() returns Int {
 }
 """
 	)
-	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"main"}
 	assert sigs["main"].return_type.name == "Int"
@@ -36,7 +36,7 @@ fn main() returns Int {
 }
 """
 	)
-	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"callee", "main"}
 	assert sigs["callee"].return_type.name == "FnResult"
@@ -58,7 +58,7 @@ fn main() returns Int {
 }
 """
 	)
-	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert set(func_hirs.keys()) == {"main"}
 	assert sigs["main"].return_type.name == "Int"
@@ -77,7 +77,7 @@ fn main() returns FnResult<Int, Error> {
 }
 """
 	)
-	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert sigs["main"].return_type.name == "FnResult"
 	main = func_hirs["main"]
@@ -93,7 +93,7 @@ fn main() returns FnResult<Int, Error> {
 }
 """
 	)
-	func_hirs, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert sigs["main"].return_type.name == "FnResult"
 	main = func_hirs["main"]
@@ -110,12 +110,12 @@ implement &Point {
 }
 """
 	)
-	_, _sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	_, _sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics, "expected diagnostic for reference-qualified implement header"
 	assert "nominal type" in diagnostics[0].message
 
 
-def test_parse_unsupported_stmt_fails_loudly(tmp_path: Path):
+def test_parse_while_stmt_lowering(tmp_path: Path):
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
@@ -126,8 +126,10 @@ fn main() returns Int {
 }
 """
 	)
-	with pytest.raises(NotImplementedError):
-		parse_drift_to_hir(src)
+	func_hirs, _sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
+	block = func_hirs["main"]
+	assert isinstance(block.statements[0], H.HLoop)
 
 
 def test_fnresult_typeids_are_resolved(tmp_path: Path):
@@ -144,7 +146,7 @@ fn drift_main() returns FnResult<Int, Error> {
 }
 """
 	)
-	_, sigs, type_table, diagnostics = parse_drift_to_hir(src)
+	_, sigs, type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	sig = sigs.get("drift_main") or sigs["main"]
 	assert sig.return_type_id is not None
@@ -159,6 +161,6 @@ fn main() returns Int { return 0; }
 fn main() returns Int { return 1; }
 """
 	)
-	_, sigs, _type_table, diagnostics = parse_drift_to_hir(src)
+	_, sigs, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert any("duplicate function definition" in d.message for d in diagnostics)
 	assert "main" in sigs

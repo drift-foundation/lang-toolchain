@@ -23,7 +23,7 @@ fn takes(xs: Array<Int>) returns Int {
 }
 """
 	)
-	func_hirs, sigs, type_table, diagnostics = parse_drift_to_hir(src)
+	func_hirs, sigs, type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
 	assert "takes" in sigs and "returns_array" in sigs
 
