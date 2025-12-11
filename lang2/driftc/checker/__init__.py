@@ -1142,6 +1142,13 @@ class Checker:
 				ctx._append_diag(
 					Diagnostic(message="Void value is not allowed in a unary operation", severity="error", span=None)
 				)
+		elif isinstance(expr, H.HTernary):
+			then_ty = ctx.infer(expr.then_expr)
+			else_ty = ctx.infer(expr.else_expr)
+			if is_void(then_ty) or is_void(else_ty):
+				ctx._append_diag(
+					Diagnostic(message="Void value is not allowed in a ternary expression", severity="error", span=None)
+				)
 		elif isinstance(expr, H.HCall):
 			for arg in expr.args:
 				arg_ty = ctx.infer(arg)
@@ -1156,6 +1163,14 @@ class Checker:
 					ctx._append_diag(
 						Diagnostic(message="Void value is not allowed as a method argument", severity="error", span=None)
 					)
+		elif isinstance(expr, H.HArrayLiteral):
+			for el in expr.elements:
+				el_ty = ctx.infer(el)
+				if is_void(el_ty):
+					ctx._append_diag(
+						Diagnostic(message="Void value is not allowed in an array literal", severity="error", span=None)
+					)
+					break
 
 	def _bool_validator_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:
 		"""Require Boolean conditions when the type is known."""

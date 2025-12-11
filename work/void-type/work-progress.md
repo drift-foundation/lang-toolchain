@@ -472,5 +472,5 @@ For now, this plan gets you a correct, clean `Void` type wired end‑to‑end th
 - [x] Extend checker rules for `Void` (return statement validation, forbid use as value, expression statements ok).
 - [x] Update MIR/LLVM lowering to treat `Void` as no SSA value and emit `ret void`/void calls.
 - [x] Update prelude signatures to use `Void` where appropriate and add tests from checklist.
-- [ ] Broaden type inference/diagnostics for `Void` in more contexts (ternary, phi, other expressions) so misuse is caught uniformly.
+- [x] Broaden type inference/diagnostics for `Void` in more contexts (ternary, array literals, try operands) so misuse is caught uniformly.
 - [ ] Extend SSA/type_env to carry `Void`-aware facts to tighten codegen/assertions.
