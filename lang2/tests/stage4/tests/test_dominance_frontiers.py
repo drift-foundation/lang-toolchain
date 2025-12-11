@@ -8,7 +8,7 @@ empty DF(entry)), and loop shapes (backedge/exit in frontiers).
 """
 
 from lang2.driftc.stage2 import BasicBlock, MirFunc, Goto, IfTerminator
-from lang2.stage4 import DominatorAnalysis, DominanceFrontierAnalysis
+from lang2.driftc.stage4 import DominatorAnalysis, DominanceFrontierAnalysis
 
 
 def _run_df(func: MirFunc):

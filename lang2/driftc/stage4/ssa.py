@@ -28,7 +28,7 @@ from lang2.driftc.stage2 import (
 	Goto,
 	IfTerminator,
 )
-from lang2.stage4.dom import DominatorAnalysis, DominanceFrontierAnalysis
+from lang2.driftc.stage4.dom import DominatorAnalysis, DominanceFrontierAnalysis
 
 
 @dataclass

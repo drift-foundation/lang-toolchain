@@ -6,7 +6,7 @@ import pytest
 
 from lang2.driftc.stage2 import BasicBlock, MirFunc, Return
 from lang2.driftc.stage3 import ThrowSummaryBuilder
-from lang2.stage4 import MirToSSA, run_throw_checks
+from lang2.driftc.stage4 import MirToSSA, run_throw_checks
 from lang2.driftc.core.types_env_impl import SimpleTypeEnv
 from lang2.checker import FnSignature
 from lang2.test_support import declared_from_signatures

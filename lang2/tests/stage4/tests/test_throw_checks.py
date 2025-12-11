@@ -9,7 +9,7 @@ enforce basic invariants (no ConstructError in non-can-throw functions).
 """
 
 from lang2.driftc.stage3 import ThrowSummary
-from lang2.stage4 import (
+from lang2.driftc.stage4 import (
 	FuncThrowInfo,
 	build_func_throw_info,
 	enforce_can_throw_invariants,

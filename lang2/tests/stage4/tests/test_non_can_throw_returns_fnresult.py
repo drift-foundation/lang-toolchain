@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.stage2 import MirFunc, BasicBlock, Return
-from lang2.stage4.throw_checks import FuncThrowInfo, enforce_fnresult_returns_typeaware
+from lang2.driftc.stage4.throw_checks import FuncThrowInfo, enforce_fnresult_returns_typeaware
 from lang2.driftc.core.types_env_impl import SimpleTypeEnv
 
 

@@ -57,8 +57,8 @@ from lang2.driftc.stage2 import (
 	StringLen,
 	UnaryOpInstr,
 )
-from lang2.stage4.ssa import SsaFunc
-from lang2.stage4.ssa import CfgKind
+from lang2.driftc.stage4.ssa import SsaFunc
+from lang2.driftc.stage4.ssa import CfgKind
 from lang2.driftc.core.types_core import TypeKind, TypeTable, TypeId
 
 """LLVM codegen for lang2 SSA.

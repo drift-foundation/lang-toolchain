@@ -18,7 +18,7 @@ from lang2.driftc.stage2 import (
 	MirFunc,
 	Return,
 )
-from lang2.stage4 import MirToSSA
+from lang2.driftc.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
 from lang2.driftc.stage1 import BinaryOp
 

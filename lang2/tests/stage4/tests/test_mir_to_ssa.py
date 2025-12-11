@@ -22,7 +22,7 @@ from lang2.driftc.stage2 import (
 	Return,
 	Goto,
 )
-from lang2.stage4 import MirToSSA
+from lang2.driftc.stage4 import MirToSSA
 
 
 def test_straight_line_ssa_passes():

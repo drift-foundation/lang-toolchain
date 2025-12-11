@@ -13,7 +13,7 @@ should receive a Φ for `x` with incoming values from both predecessors.
 """
 
 from lang2.driftc.stage2 import BasicBlock, MirFunc, StoreLocal, LoadLocal, Return, Goto, IfTerminator
-from lang2.stage4 import MirToSSA
+from lang2.driftc.stage4 import MirToSSA
 
 
 def test_phi_placed_in_join_for_local_defined_in_branches():

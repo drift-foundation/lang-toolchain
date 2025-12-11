@@ -8,7 +8,7 @@ from lang2.checker import FnInfo, FnSignature
 from lang2.driftc.core.types_core import TypeTable
 from lang2.driftc.stage2 import ArrayLen, BasicBlock, BinaryOpInstr, Call, ConstString, MirFunc, Return
 from lang2.driftc.stage1 import BinaryOp
-from lang2.stage4.ssa import MirToSSA
+from lang2.driftc.stage4.ssa import MirToSSA
 from lang2.codegen.llvm import lower_module_to_llvm
 
 

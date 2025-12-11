@@ -13,7 +13,7 @@ from lang2.driftc.stage2 import (
 	Return,
 	StoreLocal,
 )
-from lang2.stage4 import MirToSSA, run_throw_checks
+from lang2.driftc.stage4 import MirToSSA, run_throw_checks
 from lang2.driftc.stage3 import ThrowSummaryBuilder
 from lang2.checker import FnSignature
 from lang2.test_support import declared_from_signatures, make_signatures

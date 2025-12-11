@@ -17,7 +17,7 @@ from lang2.driftc.stage2 import (
 	Return,
 	StoreLocal,
 )
-from lang2.stage4 import MirToSSA
+from lang2.driftc.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
 
 

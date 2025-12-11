@@ -16,7 +16,7 @@ from lang2.driftc.stage2 import (
 	MirFunc,
 	Return,
 )
-from lang2.stage4.ssa import MirToSSA
+from lang2.driftc.stage4.ssa import MirToSSA
 from lang2.codegen.llvm import lower_ssa_func_to_llvm
 
 
