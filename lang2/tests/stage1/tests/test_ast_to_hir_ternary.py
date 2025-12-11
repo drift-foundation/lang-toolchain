@@ -4,7 +4,7 @@
 AST→HIR ternary lowering tests.
 """
 
-from lang2.stage0 import ast
+from lang2.driftc.stage0 import ast
 from lang2.driftc.stage1 import AstToHIR, HTernary, HVar, HLiteralInt
 
 

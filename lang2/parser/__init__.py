@@ -1,6 +1,6 @@
 """
 lang2 parser copy (self-contained, no runtime dependency on lang/).
-Parses Drift source and adapts to lang2.stage0 AST + FnSignatures for the
+Parses Drift source and adapts to lang2.driftc.stage0 AST + FnSignatures for the
 lang2 pipeline.
 """
 
@@ -11,7 +11,7 @@ from typing import Callable, Dict, Tuple, Optional, List
 
 from . import parser as _parser
 from . import ast as parser_ast
-from lang2.stage0 import ast as s0
+from lang2.driftc.stage0 import ast as s0
 from lang2.driftc.stage1 import AstToHIR
 from lang2.driftc import stage1 as H
 from lang2.checker import FnSignature
@@ -27,7 +27,7 @@ def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 
 
 def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
-	"""Convert parser AST expressions into lang2.stage0 AST expressions."""
+	"""Convert parser AST expressions into lang2.driftc.stage0 AST expressions."""
 	if isinstance(expr, parser_ast.Literal):
 		return s0.Literal(value=expr.value, loc=getattr(expr, "loc", None))
 	if isinstance(expr, parser_ast.Name):
@@ -111,7 +111,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 
 
 def _convert_stmt(stmt: parser_ast.Stmt) -> s0.Stmt:
-	"""Convert parser AST statements into lang2.stage0 AST statements."""
+	"""Convert parser AST statements into lang2.driftc.stage0 AST statements."""
 	fn = _STMT_DISPATCH.get(type(stmt))
 	if fn is None:
 		# While/For/Try not yet needed for current e2e cases.

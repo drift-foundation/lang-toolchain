@@ -1,7 +1,7 @@
 # lang2 directory layout
 
 - `core/`: shared core shims (diagnostics, TypeTable/TypeEnv protocol, TypeEnv test impls). Tests in `core/tests/`.
-- `parser/`: self-contained copy of the Drift parser + grammar (no runtime deps on `lang/`), with adapter to `lang2.stage0` AST. Tests in `parser/tests/`.
+- `parser/`: self-contained copy of the Drift parser + grammar (no runtime deps on `lang/`), with adapter to `lang2.driftc.stage0` AST. Tests in `parser/tests/`.
 - `stage0/`: lang2 AST definitions (surface syntax mirror for the refactor).
 - `stage1/`: HIR definitions and AST→HIR lowering; try-sugar rewrite lives here. Tests in `stage1/tests/`.
 - `stage2/`: MIR definitions and HIR→MIR lowering. Tests in `stage2/tests/`.

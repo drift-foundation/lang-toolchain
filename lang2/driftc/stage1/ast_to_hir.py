@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import List
 
 # Import stage0 AST via package API to keep stage layering explicit.
-from lang2.stage0 import ast
+from lang2.driftc.stage0 import ast
 from . import hir_nodes as H
 
 

@@ -9,7 +9,7 @@ with proper terminators on all blocks.
 
 from __future__ import annotations
 
-from lang2.stage0 import ast
+from lang2.driftc.stage0 import ast
 from lang2.driftc.stage1 import AstToHIR, HBlock
 from lang2.driftc.stage2 import MirBuilder, HIRToMIR, MirFunc
 
