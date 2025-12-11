@@ -1,0 +1,11 @@
+{
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "cannot return a value from a Void function"
+    }
+  ],
+  "stdout": "",
+  "stderr": ""
+}

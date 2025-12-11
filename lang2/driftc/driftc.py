@@ -49,6 +49,7 @@ from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.drift_core.runtime import get_runtime_sources
 from lang2.driftc.parser import parse_drift_to_hir
 from lang2.driftc.type_resolver import resolve_program_signatures
+from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.type_checker import TypeChecker
 from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
 
@@ -151,6 +152,15 @@ def compile_stubbed_funcs(
 	shared_type_table = type_table
 	if signatures is None:
 		shared_type_table, signatures = resolve_program_signatures(_fake_decls_from_hirs(normalized_hirs))
+	else:
+		# Ensure TypeIds are resolved on supplied signatures using a shared table.
+		if shared_type_table is None:
+			shared_type_table = TypeTable()
+		for sig in signatures.values():
+			if sig.return_type_id is None and sig.return_type is not None:
+				sig.return_type_id = resolve_opaque_type(sig.return_type, shared_type_table)
+			if sig.param_type_ids is None and sig.param_types is not None:
+				sig.param_type_ids = [resolve_opaque_type(p, shared_type_table) for p in sig.param_types]
 
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.
@@ -317,22 +327,47 @@ def _fake_decls_from_hirs(hirs: Mapping[str, H.HBlock]) -> list[object]:
 	This exists only for the stub pipeline; a real front end will provide
 	declarations with parsed types and throws clauses.
 	"""
-	class _FakeParam:
-		def __init__(self, name: str, typ: str = "Int") -> None:
-			self.name = name
-			self.type = typ
+	def _scan_returns(block: H.HBlock) -> tuple[bool, bool]:
+		"""Return (saw_value_return, saw_void_return)."""
+		saw_val = False
+		saw_void = False
+		for stmt in block.statements:
+			if isinstance(stmt, H.HReturn):
+				if getattr(stmt, "value", None) is None:
+					saw_void = True
+				else:
+					saw_val = True
+			elif isinstance(stmt, H.HIf):
+				t_val, t_void = _scan_returns(stmt.then_block)
+				s_val = False
+				s_void = False
+				if stmt.else_block:
+					s_val, s_void = _scan_returns(stmt.else_block)
+				saw_val = saw_val or t_val or s_val
+				saw_void = saw_void or t_void or s_void
+			elif isinstance(stmt, H.HLoop):
+				b_val, b_void = _scan_returns(stmt.body)
+				saw_val = saw_val or b_val
+				saw_void = saw_void or b_void
+			elif isinstance(stmt, H.HTry):
+				b_val, b_void = _scan_returns(stmt.body)
+				saw_val = saw_val or b_val
+				saw_void = saw_void or b_void
+				for arm in stmt.catches:
+					a_val, a_void = _scan_returns(arm.block)
+					saw_val = saw_val or a_val
+					saw_void = saw_void or a_void
+		return saw_val, saw_void
 
-	class _FakeDecl:
-		def __init__(self, name: str) -> None:
-			self.name = name
-			self.params: list[_FakeParam] = []
-			self.return_type = "Int"
-			self.throws = ()
-			self.loc = None
-			self.is_extern = False
-			self.is_intrinsic = False
-
-	return [_FakeDecl(name) for name in hirs.keys()]
+	decls: list[FakeDecl] = []
+	for name, block in hirs.items():
+		ret_ty = "Int"
+		if isinstance(block, H.HBlock):
+			val_ret, void_ret = _scan_returns(block)
+			if void_ret and not val_ret:
+				ret_ty = "Void"
+		decls.append(FakeDecl(name=name, params=[], return_type=ret_ty))
+	return decls
 
 
 __all__ = ["compile_stubbed_funcs", "compile_to_llvm_ir_for_tests"]
@@ -384,6 +419,32 @@ def main(argv: list[str] | None = None) -> int:
 			print(json.dumps(payload))
 		else:
 			for d in parse_diags:
+				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				print(f"{source_path}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+		return 1
+
+	# Checker (stub) enforces language-level rules (e.g., Void returns) before the
+	# lower-level TypeChecker/BorrowChecker run.
+	checker = Checker(
+		declared_can_throw=None,
+		signatures=signatures,
+		exception_catalog=None,
+		catch_arms=None,
+		hir_blocks=func_hirs,
+		type_table=type_table,
+	)
+	checked = checker.check(func_hirs.keys())
+	if checked.type_table is not None:
+		type_table = checked.type_table
+	if checked.diagnostics:
+		if args.json:
+			payload = {
+				"exit_code": 1,
+				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in checked.diagnostics],
+			}
+			print(json.dumps(payload))
+		else:
+			for d in checked.diagnostics:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				print(f"{source_path}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 		return 1

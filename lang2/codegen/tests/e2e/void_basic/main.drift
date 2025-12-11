@@ -1,0 +1,9 @@
+fn log() returns Void {
+	println("hello");
+	return;
+}
+
+fn main() returns Int {
+	log();
+	return 7;
+}

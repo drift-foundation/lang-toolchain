@@ -2,6 +2,6 @@
   "exit_code": 1,
   "phase": "typecheck",
   "diagnostics": [
-    { "message_contains": "array index must be an integer type" }
+    { "message_contains": "array index must be Int" }
   ]
 }
