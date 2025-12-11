@@ -20,7 +20,7 @@ from lang2.driftc.stage2 import (
 	ConstructError,
 	ConstInt,
 )
-from lang2.stage3 import MirPreAnalysis
+from lang2.driftc.stage3 import MirPreAnalysis
 
 
 def test_address_taken_detected():

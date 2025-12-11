@@ -11,7 +11,7 @@ from lang2.driftc.stage2 import (
 	ConstructError,
 	Goto,
 )
-from lang2.stage3 import ThrowSummaryBuilder
+from lang2.driftc.stage3 import ThrowSummaryBuilder
 
 
 def test_throw_summary_records_construct_error_and_exc_types():

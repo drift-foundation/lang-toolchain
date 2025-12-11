@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lang2.driftc.stage2 import BasicBlock, ConstructResultOk, MirFunc, Return
-from lang2.stage3 import ThrowSummaryBuilder
+from lang2.driftc.stage3 import ThrowSummaryBuilder
 from lang2.stage4 import MirToSSA, run_throw_checks
 from lang2.driftc.core.types_env_impl import SimpleTypeEnv
 from lang2.checker import FnSignature

@@ -12,7 +12,7 @@ import pytest
 from lang2.driftc import stage1 as H
 from lang2.driftc.stage1 import normalize_hir
 from lang2.driftc.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
-from lang2.stage3.throw_summary import ThrowSummaryBuilder
+from lang2.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.stage4 import run_throw_checks
 from lang2.checker import FnSignature
 from lang2.test_support import declared_from_signatures

@@ -8,7 +8,7 @@ stage3 ThrowSummary data, combine it with a `declared_can_throw` view, and
 enforce basic invariants (no ConstructError in non-can-throw functions).
 """
 
-from lang2.stage3 import ThrowSummary
+from lang2.driftc.stage3 import ThrowSummary
 from lang2.stage4 import (
 	FuncThrowInfo,
 	build_func_throw_info,
@@ -19,7 +19,7 @@ from lang2.stage4 import (
 )
 from lang2.driftc.stage2 import BasicBlock, MirFunc, Return, StoreLocal
 from lang2.driftc.stage2 import ConstructResultErr
-from lang2.stage3 import ThrowSummaryBuilder
+from lang2.driftc.stage3 import ThrowSummaryBuilder
 import pytest
 from lang2.checker import FnSignature
 from lang2.test_support import declared_from_signatures

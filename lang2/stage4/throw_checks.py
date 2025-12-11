@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Set
 
 from lang2.driftc.core.diagnostics import Diagnostic
-from lang2.stage3 import ThrowSummary
+from lang2.driftc.stage3 import ThrowSummary
 from lang2.driftc.stage2 import MirFunc, Return, ConstructResultOk, ConstructResultErr
 from lang2.driftc.core.types_core import TypeId, TypeKind
 from lang2.driftc.core.types_protocol import TypeEnv
