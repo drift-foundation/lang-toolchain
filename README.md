@@ -40,11 +40,9 @@ Drift is a systems programming language focused on deterministic resource manage
 ### Hello Drift
 
 ```drift
-import sys.console.out
-
-fn main() returns Void {
-    val greeting = "hello, drift"
-    out.writeln(greeting)
+fn main() returns Int {
+    println("hello, drift")
+    return 0
 }
 ```
 

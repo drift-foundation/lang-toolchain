@@ -203,13 +203,28 @@ fn main() returns Void { ... }
 
 Block comments may span multiple lines but do not nest. Comments are ignored by the parser, so indentation/terminator rules treat them as whitespace.
 
-### 3.3. Source location helper (`lang.core`)
+### 3.3. `lang.core` prelude (auto-imported)
 
-Diagnostics frequently need to record where they were emitted. The `lang.core` module exposes a standard helper:
+The module `lang.core` is implicitly imported into every Drift module. Its public
+functions are always in scope without an explicit `import`. This prelude
+currently exposes:
 
 ```drift
-import lang.core.source_location
+module lang.core
 
+/// Writes UTF-8 text to the process standard output.
+/// Does not append a newline.
+fn print(text: String) returns Void
+
+/// Writes UTF-8 text to the process standard output,
+/// then appends a single '\n'.
+fn println(text: String) returns Void
+
+/// Writes UTF-8 text to the process standard error,
+/// then appends a single '\n'.
+fn eprintln(text: String) returns Void
+
+/// Intrinsic: captures the current source location at the callsite.
 fn source_location() returns SourceLocation
 
 struct SourceLocation {
@@ -218,16 +233,32 @@ struct SourceLocation {
 }
 ```
 
-`source_location()` is a pure, zero-cost intrinsic that the compiler lowers to the current file/line at the callsite. Typical usage:
+Notes:
+
+- Inputs to `print`/`println`/`eprintln` must be `String` (UTF-8). `print` writes
+  to stdout without a trailing newline; `println` writes to stdout and appends
+  exactly one `\n`; `eprintln` writes to stderr and appends exactly one `\n`.
+- In v1 these functions do not throw; if a write fails, behavior is
+  implementation-defined (abort or silent failure).
+- They perform no formatting beyond what you compose yourself.
+- `source_location()` is a pure, zero-cost intrinsic lowered to the current
+  file/line at the callsite.
+
+Typical usage:
 
 ```drift
+println("hello, world")
+
 val ^log_site: SourceLocation as "log.site" = source_location()
 logger.warn("slow write", site = log_site)
 
 throw InvalidOrder(site = source_location(), order_id = order.id)
 ```
 
-Because the helper returns a regular struct, you can store it in locals, pass it to `^` captures, or include it in exception arguments. Future logging APIs can accept `SourceLocation` explicitly, keeping site metadata opt-in instead of hard-wired into the runtime.
+Because the helper returns a regular struct, you can store it in locals, pass it
+to `^` captures, or include it in exception arguments. Future logging APIs can
+accept `SourceLocation` explicitly, keeping site metadata opt-in instead of
+hard-wired into the runtime.
 
 ### 3.4. Struct syntax variants
 
@@ -670,8 +701,8 @@ fn print_both<T, U>
     require T is Debuggable,
             U is Debuggable
 (t: T, u: U) returns Void {
-    out.writeln(t.fmt())
-    out.writeln(u.fmt())
+    println(t.fmt())
+    println(u.fmt())
 }
 ```
 
@@ -686,9 +717,9 @@ Trait guards allow functions to adapt behavior based on whether a type implement
 ```drift
 fn log_value<T>(value: T) returns Void {
     if T is Debuggable {
-        out.writeln("[dbg] " + value.fmt())
+        println("[dbg] " + value.fmt())
     } else {
-        out.writeln("<value>")
+        println("<value>")
     }
 }
 ```
@@ -1085,7 +1116,7 @@ Interfaces may be used anywhere that types may appear.
 
 ```drift
 fn write_header(out: OutputStream) returns Void {
-    out.writeln("=== header ===")
+    println("=== header ===")
 }
 ```
 
@@ -1101,8 +1132,8 @@ fn open_log(path: String) returns OutputStream {
 #### 6.5.3. Locals
 
 ```drift
-var out: OutputStream = std.console.out
-out.writeln("ready")
+var out: OutputStream = open_log("app.log")
+println("ready")
 ```
 
 #### 6.5.4. Heterogeneous arrays
@@ -1110,7 +1141,7 @@ out.writeln("ready")
 ```drift
 var sinks: Array<OutputStream> = []
 sinks.push(open_log("app.log"))
-sinks.push(std.console.out)
+sinks.push(open_log("audit.log"))
 ```
 
 Each element may be a different type implementing the same interface.
@@ -1219,7 +1250,7 @@ Interface values follow Drift ownership and move semantics.
 
 ```drift
 fn consume(out: OutputStream) returns Void {
-    out.writeln("consumed")
+    println("consumed")
 }
 ```
 
@@ -1336,28 +1367,27 @@ Together they form a flexible dual system:
 
 ---
 
-## 7. Imports and standard I/O
+## 7. Imports
 
-Drift uses explicit imports — no global or magic identifiers.  
-For console I/O details, see Chapter 18. This chapter focuses on import mechanics.
+Drift uses explicit imports — no global or magic identifiers beyond the implicit
+`lang.core` prelude (Section 3.3). This chapter focuses on import mechanics.
 
 ### 7.1. Import syntax (modules and symbols)
 
 ```drift
-import std.console.out        // bind the exported `out` stream
-import std.console.err        // bind the exported `err` stream
-import std.io                 // bind the module
-import std.console.out as print // optional alias
+import lang.array          // bind the module
+import std.concurrent as conc  // bind with alias
 ```
 
 **Name‑resolution semantics**
 
 - `QualifiedName` is resolved left‑to‑right.  
 - If it resolves to a **module**, the import binds that module under its last segment (or the `as` alias).  
-- If it resolves to an **exported symbol** inside a module (e.g., `std.console.out`), the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
+- If it resolves to an **exported symbol** inside a module, the import binds that symbol directly into the local scope under its own name (or the `as` alias).  
 - Ambiguities between module and symbol names must be disambiguated with `as` or avoided.
 - Aliases affect only the local binding; frames and module metadata always record the original module ID, not the alias.
-- For console streams and other standard I/O primitives, refer to Chapter 18.
+- For the implicit `lang.core` prelude, no import is needed; everything else
+  must be imported explicitly.
 - Only **exported** symbols may be resolved by `import`. Attempting to `import M.f` when `f` is not exported by module `M` is a compile-time error.
 
 **Module identifiers**
@@ -1631,8 +1661,8 @@ val empty: Optional<Int64> = None
 
 ```drift
 match qty {
-    Some(q) => out.writeln("qty=" + q.to_string()),
-    None => out.writeln("no qty"),
+    Some(q) => println("qty=" + q.to_string()),
+    None => println("no qty"),
 }
 ```
 
@@ -1649,8 +1679,8 @@ fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
 
 val sku = find_sku(42)
 match sku {
-    Some(s) => out.writeln("sku=" + s),
-    None => out.writeln("missing"),
+    Some(s) => println("sku=" + s),
+    None => println("missing"),
 }
 ```
 
@@ -1668,8 +1698,6 @@ Pattern matching moves the bound value by default. If you need to borrow instead
 ### 11.7. End-to-end example
 
 ```drift
-import sys.console.out
-
 struct Order {
     id: Int64,
     sku: String,
@@ -1682,7 +1710,7 @@ fn find_order(id: Int64) returns Optional<Order> {
 }
 
 fn ship(o: Order) returns Void {
-    out.writeln("shipping " + o.sku + " id=" + o.id)
+    println("shipping " + o.sku + " id=" + o.id)
 }
 
 fn main() returns Void {
@@ -1690,7 +1718,7 @@ fn main() returns Void {
 
     match maybe_order {
         Some(o) => ship(o),
-        None => out.writeln("order not found"),
+        None => println("order not found"),
     }
 }
 
@@ -1719,11 +1747,9 @@ This API is sufficient to inspect `Optional<T>` without pattern matching; richer
 `lang.array` is the standard module for homogeneous sequences. It exposes the generic type `Array<T>` plus builder helpers and the binary-centric `ByteBuffer`. `Array` is always in scope for type annotations, so you can write:
 
 ```drift
-import sys.console.out
-
 fn main() returns Void {
     val names: Array<String> = ["Bob", "Alice", "Ada"]
-    out.writeln("names ready")
+    println("names ready")
 }
 ```
 
@@ -1943,9 +1969,9 @@ implement<K, V> FromMapLiteral<K, V> for Map<K, V> {
 This keeps “hello world” code terse:
 
 ```drift
-fn main() returns Void {
-    val xs = [1, 2, 3]
-    val cfg = { "mode": "debug" }
+fn main() returns Int {
+    println("hello, world")
+    return 0
 }
 ```
 
@@ -2628,48 +2654,24 @@ fn transmit(bytes: Array<U8>) returns Int32 {
 
 ---
 
-## 18. Standard I/O design
+## 18. Standard I/O design (v1)
 
-### 18.1. `std.io` module
-
-```drift
-module std.io
-
-interface OutputStream {
-    fn write(self: &OutputStream, bytes: ByteSlice) returns Void
-    fn writeln(self: &OutputStream, text: String) returns Void
-    fn flush(self: &OutputStream) returns Void
-}
-
-interface InputStream {
-    fn read(self: &InputStream, buffer: MutByteSlice) returns Int64
-}
-```
-
-### 18.2. `std.console` module
-
-```
-// initialized before main is called
-val out : OutputStream = ... 
-val err : OutputStream = ...
-val in  : InputStream = ...
-```
-
-These built-in instances represent the system console streams. Now you can write simple console programs without additional setup:
+In this revision, Drift guarantees only a minimal console surface via `lang.core`
+(auto-imported):
 
 ```drift
-import std.console.out as out
-
-fn main() returns Void {
-    val name: String = "Drift"
-    out.writeln("Hello, " + name)
-}
+fn print(text: String) returns Void      // stdout, no trailing newline
+fn println(text: String) returns Void    // stdout, appends '\n'
+fn eprintln(text: String) returns Void   // stderr, appends '\n'
 ```
 
-`out.writeln` accepts any value whose type implements the `Display` trait. All builtin primitives (`Int64`, `Float64`, `Bool`, `String`, `Error`) implement `Display`, so diagnostics like `out.writeln(verify(order))` type-check without manual string conversions.
+These write UTF-8 text to the process standard output/error. They do not format
+arguments beyond what you concatenate yourself. They do not throw in v1; failed
+writes are implementation-defined (abort or silent failure).
 
-This model allows concise I/O while keeping imports explicit and predictable.  
-The objects `out`, `err`, and `in` are references to standard I/O stream instances.
+`std.io` / `std.console` remain reserved for richer stream-based APIs in future
+revisions. The stream-based design sketched here (with `out`/`err`/`in`) is
+non-normative for v1 and may evolve before it is stabilized.
 
 
 ## 19. Concurrency & virtual threads
@@ -2819,7 +2821,7 @@ conc.scope(fn(scope: conc.Scope) returns Void {
     val rb = b.join()
     val rc = c.join()
 
-    out.writeln(ra + rb + rc)
+    println(ra + rb + rc)
 })
 ```
 
@@ -3120,8 +3122,7 @@ Erasure is explicit; the default callable path remains trait-based static dispat
 struct Job { id: Int }
 
 fn process(job: Job) returns Void {
-    import std.console.out
-    out.writeln("processing job " + job.id.to_string())
+    println("processing job " + job.id.to_string())
 }
 
 var j = Job(id = 1)
