@@ -6,7 +6,7 @@
 from lang2.driftc import stage1 as H
 from lang2.driftc.borrow_checker_pass import BorrowChecker
 from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
-from lang2.checker import FnSignature
+from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.types_core import TypeTable, TypeId
 from lang2.driftc.method_registry import CallableDecl, CallableSignature, CallableKind, Visibility, SelfMode
 from lang2.driftc.method_resolver import MethodResolution

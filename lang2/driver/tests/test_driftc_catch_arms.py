@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from lang2.driftc import stage1 as H
 from lang2.driftc.driftc import compile_stubbed_funcs
-from lang2.checker import FnSignature
+from lang2.driftc.checker import FnSignature
 from lang2.test_support import build_exception_catalog
 
 

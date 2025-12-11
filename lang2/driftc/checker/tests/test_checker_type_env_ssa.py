@@ -9,7 +9,7 @@ from lang2.driftc.stage2 import (
 	Return,
 )
 from lang2.driftc.stage4 import MirToSSA
-from lang2.checker import Checker, FnSignature
+from lang2.driftc.checker import Checker, FnSignature
 
 
 def test_checker_builds_type_env_from_ssa():

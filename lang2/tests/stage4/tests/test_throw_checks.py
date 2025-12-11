@@ -21,7 +21,7 @@ from lang2.driftc.stage2 import BasicBlock, MirFunc, Return, StoreLocal
 from lang2.driftc.stage2 import ConstructResultErr
 from lang2.driftc.stage3 import ThrowSummaryBuilder
 import pytest
-from lang2.checker import FnSignature
+from lang2.driftc.checker import FnSignature
 from lang2.test_support import declared_from_signatures
 
 

@@ -4,7 +4,7 @@
 IR lowering for string ops: len, eq, concat.
 """
 
-from lang2.checker import FnInfo, FnSignature
+from lang2.driftc.checker import FnInfo, FnSignature
 from lang2.driftc.core.types_core import TypeTable
 from lang2.driftc.stage2 import ArrayLen, BasicBlock, BinaryOpInstr, Call, ConstString, MirFunc, Return
 from lang2.driftc.stage1 import BinaryOp

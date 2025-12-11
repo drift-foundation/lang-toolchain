@@ -9,7 +9,7 @@ def _build_func(body_instrs):
 	func = MirFunc(name="f", params=[], locals=["s"], blocks={"entry": block}, entry="entry")
 	ssa = MirToSSA().run(func)
 	# Minimal FnInfo: returning Int for now because lower_ssa_func_to_llvm is test-only
-	from lang2.checker import FnInfo
+	from lang2.driftc.checker import FnInfo
 	finfo = FnInfo(name="f", declared_can_throw=False)
 	mod = lower_module_to_llvm({"f": func}, {"f": ssa}, fn_infos={"f": finfo}, type_table=None)
 	return mod.render()

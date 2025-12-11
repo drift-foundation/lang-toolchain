@@ -5,7 +5,7 @@ SSA-first LLVM codegen smoke tests.
 from __future__ import annotations
 
 from lang2.codegen.llvm import LlvmModuleBuilder, lower_ssa_func_to_llvm
-from lang2.checker import FnInfo
+from lang2.driftc.checker import FnInfo
 from lang2.driftc.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk
 from lang2.driftc.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable

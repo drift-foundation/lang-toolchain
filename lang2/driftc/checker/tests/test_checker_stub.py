@@ -4,8 +4,8 @@ Exercises the checker stub's signature inference and catch-arm validation.
 
 from __future__ import annotations
 
-from lang2.checker import Checker, FnSignature
-from lang2.checker.catch_arms import CatchArmInfo
+from lang2.driftc.checker import Checker, FnSignature
+from lang2.driftc.checker.catch_arms import CatchArmInfo
 
 
 def test_checker_infers_fnresult_and_declared_events_from_signature():

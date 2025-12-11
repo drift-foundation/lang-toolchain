@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lang2.checker.catch_arms import CatchArmInfo, validate_catch_arms
+from lang2.driftc.checker.catch_arms import CatchArmInfo, validate_catch_arms
 
 
 def test_valid_arms_pass():

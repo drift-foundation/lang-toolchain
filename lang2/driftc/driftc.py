@@ -39,8 +39,8 @@ from lang2.driftc.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.driftc.stage4 import run_throw_checks
 from lang2.driftc.stage4 import MirToSSA
-from lang2.checker import Checker, CheckedProgram, FnSignature
-from lang2.checker.catch_arms import CatchArmInfo
+from lang2.driftc.checker import Checker, CheckedProgram, FnSignature
+from lang2.driftc.checker.catch_arms import CatchArmInfo
 from lang2.driftc.borrow_checker_pass import BorrowChecker
 from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
 from lang2.driftc.core.diagnostics import Diagnostic

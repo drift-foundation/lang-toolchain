@@ -1,5 +1,5 @@
 from lang2.driftc import stage1 as H
-from lang2.checker import Checker, FnSignature
+from lang2.driftc.checker import Checker, FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.types_core import TypeTable
 

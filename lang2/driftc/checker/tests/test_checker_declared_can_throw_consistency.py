@@ -4,7 +4,7 @@ Checker should flag mismatches between declared_can_throw and the resolved retur
 
 from __future__ import annotations
 
-from lang2.checker import Checker, FnSignature
+from lang2.driftc.checker import Checker, FnSignature
 
 
 def test_can_throw_true_non_fnresult_return_flags_diagnostic():

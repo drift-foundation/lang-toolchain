@@ -5,7 +5,7 @@ Control-flow lowering smoke tests (diamonds).
 from __future__ import annotations
 
 from lang2.codegen.llvm import lower_ssa_func_to_llvm
-from lang2.checker import FnInfo
+from lang2.driftc.checker import FnInfo
 from lang2.driftc.stage2 import (
 	BasicBlock,
 	ConstBool,

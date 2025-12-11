@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Mapping, Tuple
 from lang2.driftc import stage1 as H
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.types_core import TypeId, TypeTable, TypeKind
-from lang2.checker import FnSignature
+from lang2.driftc.checker import FnSignature
 from lang2.driftc.method_registry import CallableDecl, CallableRegistry, ModuleId
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_function_call, resolve_method_call
 

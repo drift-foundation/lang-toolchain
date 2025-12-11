@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
-from lang2.checker import FnInfo
+from lang2.driftc.checker import FnInfo
 from lang2.driftc.stage1 import BinaryOp, UnaryOp
 from lang2.driftc.stage2 import (
 	ArrayCap,

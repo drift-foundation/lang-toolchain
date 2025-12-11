@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterable, List, Optional, Callable, FrozenSet, Map
 
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.types_protocol import TypeEnv
-from lang2.checker.catch_arms import CatchArmInfo, validate_catch_arms
+from lang2.driftc.checker.catch_arms import CatchArmInfo, validate_catch_arms
 from lang2.driftc.core.types_core import TypeTable, TypeId, TypeKind
 
 if TYPE_CHECKING:
@@ -1190,7 +1190,7 @@ class Checker:
 		incoming types agree. Unknowns default to `Unknown` TypeId. Returns None if
 		no types were assigned.
 		"""
-		from lang2.checker.type_env_impl import CheckerTypeEnv
+		from lang2.driftc.checker.type_env_impl import CheckerTypeEnv
 		from lang2.driftc.stage2 import (
 			ConstructResultOk,
 			ConstructResultErr,

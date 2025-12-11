@@ -24,7 +24,7 @@ from lang2.driftc.stage2 import (
 	MethodCall,
 	Phi,
 )
-from lang2.checker import FnSignature
+from lang2.driftc.checker import FnSignature
 # InferredTypeEnv uses opaque types; a bridge converts to checker-owned TypeIds.
 
 

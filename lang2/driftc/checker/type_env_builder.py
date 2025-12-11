@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
-from lang2.checker import CheckedProgram, FnSignature
-from lang2.checker.type_env_impl import CheckerTypeEnv
+from lang2.driftc.checker import CheckedProgram, FnSignature
+from lang2.driftc.checker.type_env_impl import CheckerTypeEnv
 from lang2.driftc.stage4 import SsaFunc
 from lang2.driftc.core.types_core import TypeTable, TypeId
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
-from lang2.checker import Checker, FnSignature
+from lang2.driftc.checker import Checker, FnSignature
 
 
 def make_signatures(
