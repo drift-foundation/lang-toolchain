@@ -4,11 +4,11 @@
 """Expression typing coverage: unary/binary/index/array/ternary."""
 
 from lang2 import stage1 as H
-from lang2.type_checker import TypeChecker
+from lang2.driftc.type_checker import TypeChecker
 from lang2.core.types_core import TypeTable, TypeKind
 from lang2.checker import FnSignature
-from lang2.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
-from lang2.method_resolver import MethodResolution
+from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
+from lang2.driftc.method_resolver import MethodResolution
 
 
 def _tc() -> TypeChecker:

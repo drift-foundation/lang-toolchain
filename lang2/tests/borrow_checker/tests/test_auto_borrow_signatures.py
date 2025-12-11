@@ -4,12 +4,12 @@
 """Signature-driven auto-borrow tests."""
 
 from lang2 import stage1 as H
-from lang2.borrow_checker_pass import BorrowChecker
-from lang2.borrow_checker import PlaceBase, PlaceKind
+from lang2.driftc.borrow_checker_pass import BorrowChecker
+from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
 from lang2.checker import FnSignature
 from lang2.core.types_core import TypeTable, TypeId
-from lang2.method_registry import CallableDecl, CallableSignature, CallableKind, Visibility, SelfMode
-from lang2.method_resolver import MethodResolution
+from lang2.driftc.method_registry import CallableDecl, CallableSignature, CallableKind, Visibility, SelfMode
+from lang2.driftc.method_resolver import MethodResolution
 
 
 def _bc_with_sig(table: TypeTable, sig: FnSignature, call_resolutions=None):

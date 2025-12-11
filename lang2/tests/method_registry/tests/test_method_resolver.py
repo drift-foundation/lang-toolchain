@@ -6,7 +6,7 @@
 import pytest
 
 from lang2.core.types_core import TypeTable
-from lang2.method_registry import (
+from lang2.driftc.method_registry import (
 	CallableRegistry,
 	CallableSignature,
 	Visibility,
@@ -14,7 +14,7 @@ from lang2.method_registry import (
 	CallableId,
 	ModuleId,
 )
-from lang2.method_resolver import resolve_function_call, resolve_method_call, ResolutionError
+from lang2.driftc.method_resolver import resolve_function_call, resolve_method_call, ResolutionError
 
 
 def test_resolve_function_by_exact_types():

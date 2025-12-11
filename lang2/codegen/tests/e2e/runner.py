@@ -12,7 +12,7 @@ The runner:
   4) Compiles IR with clang and executes the binary.
   5) Asserts diagnostics are empty and compares exit/stdout/stderr to expected.json.
 
-Artifacts are written to `build/tests/lang2/codegen/e2e/<case>/`.
+Artifacts are written to `build/tests/lang2/codegen/tests/e2e/<case>/`.
 """
 
 from __future__ import annotations

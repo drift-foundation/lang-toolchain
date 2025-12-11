@@ -40,15 +40,15 @@ from lang2.stage4 import run_throw_checks
 from lang2.stage4 import MirToSSA
 from lang2.checker import Checker, CheckedProgram, FnSignature
 from lang2.checker.catch_arms import CatchArmInfo
-from lang2.borrow_checker_pass import BorrowChecker
-from lang2.borrow_checker import PlaceBase, PlaceKind
+from lang2.driftc.borrow_checker_pass import BorrowChecker
+from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
 from lang2.core.diagnostics import Diagnostic
 from lang2.core.types_core import TypeTable
 from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.parser import parse_drift_to_hir
-from lang2.type_resolver import resolve_program_signatures
-from lang2.type_checker import TypeChecker
-from lang2.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
+from lang2.driftc.type_resolver import resolve_program_signatures
+from lang2.driftc.type_checker import TypeChecker
+from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
 
 
 def _inject_prelude(signatures: dict[str, FnSignature], type_table: TypeTable) -> None:

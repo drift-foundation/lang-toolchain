@@ -66,7 +66,7 @@ lang2-stage1-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage1/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage1
 
 lang2-stage2-test:
 	# Ensure pytest is available in the venv
@@ -74,7 +74,7 @@ lang2-stage2-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage2/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage2
 
 lang2-stage3-test:
 	# Ensure pytest is available in the venv
@@ -82,7 +82,7 @@ lang2-stage3-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage3/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage3
 
 lang2-stage4-test:
 	# Ensure pytest is available in the venv
@@ -90,7 +90,7 @@ lang2-stage4-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/stage4/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage4
 
 # Parser tests (lang2 parser copy + adapter).
 lang2-parser-test:
@@ -99,7 +99,7 @@ lang2-parser-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/parser/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/parser
 
 # Core TypeEnv/TypeTable tests.
 lang2-core-test:
@@ -117,7 +117,7 @@ lang2-type-checker-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/type_checker/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/type_checker
 
 # Method registry/resolver tests.
 lang2-method-registry-test:
@@ -126,7 +126,7 @@ lang2-method-registry-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/method_registry/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/method_registry
 
 # Driver/integration tests (driftc pipeline, try sugar, declared events).
 lang2-driver-test:
@@ -167,7 +167,7 @@ lang2-borrow-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/borrow_checker/tests
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/borrow_checker
 
 stage-for-review:
 	#!/usr/bin/env bash

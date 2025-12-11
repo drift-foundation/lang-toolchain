@@ -4,8 +4,8 @@
 """Ensure reference types are treated as Copy by the borrow checker."""
 
 from lang2 import stage1 as H
-from lang2.borrow_checker_pass import BorrowChecker
-from lang2.borrow_checker import PlaceBase, PlaceKind
+from lang2.driftc.borrow_checker_pass import BorrowChecker
+from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
 from lang2.core.types_core import TypeTable
 
 

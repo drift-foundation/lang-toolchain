@@ -285,7 +285,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 			hir_block = lowerer.lower_block(stmt_block)
 			func_hirs[symbol_name] = hir_block
 	# Build signatures with resolved TypeIds from parser decls.
-	from lang2.type_resolver import resolve_program_signatures
+	from lang2.driftc.type_resolver import resolve_program_signatures
 
 	type_table, sigs = resolve_program_signatures(decls)
 	signatures.update(sigs)

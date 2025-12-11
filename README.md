@@ -33,7 +33,7 @@ Drift is a systems programming language focused on deterministic resource manage
   - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM 15).
   - `just test-e2e` — runs e2e programs through the SSA backend and compares outputs.
   - `just mir-codegen` — lowers simple MIR samples to an object, links with clang-15, and runs the binary.
-  - `lang2/e2e/runner.py` — lang2-only e2e runner using `lang2.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/e2e`.
+  - `lang2/codegen/codegen_runner.py` — lang2-only e2e runner using `lang2.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/lang2-e2e` by default (configurable with `--root`).
 
 ## Quick Tour
 

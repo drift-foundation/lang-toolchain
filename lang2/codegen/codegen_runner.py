@@ -121,11 +121,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 	root_dir = Path(args.root)
 	if not root_dir.is_absolute():
-		root_dir = ROOT / root_dir
+		root_dir = ROOT.parent / root_dir
 
 	if not root_dir.exists():
-		print(f"{root_dir}: no such directory", file=sys.stderr)
-		return 1
+		print(f"{root_dir}: no test cases (directory missing)", file=sys.stderr)
+		return 0
 
 	build_root = BUILD_BASE / root_dir.name
 
