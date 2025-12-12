@@ -33,12 +33,12 @@ def test_inner_unmatched_unwinds_to_outer_try():
 	#   inner try { throw Inner } catch Other { }
 	# } catch Outer { }
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="Inner", field_names=[], field_values=[]))]),
-		catches=[H.HCatchArm(event_fqn="Other", binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:Inner", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn="m:Other", binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_fqn="Outer", binder="e", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="m:Outer", binder="e", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 
@@ -73,12 +73,12 @@ def test_inner_and_outer_unmatched_rethrow_err():
 	lower = HIRToMIR(builder, exc_env={})
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="X", field_names=[], field_values=[]))]),
-		catches=[H.HCatchArm(event_fqn="EvtA", binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:X", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn="m:EvtA", binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_fqn="EvtB", binder=None, block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="m:EvtB", binder=None, block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 

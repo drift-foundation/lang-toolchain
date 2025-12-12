@@ -52,7 +52,7 @@ def test_try_stmt_multiple_catches_to_htry():
 	stmt = ast.TryStmt(
 		body=[ast.ExprStmt(expr=ast.Name("body"))],
 		catches=[
-			ast.CatchExprArm(event="EvtA", binder="a", block=[ast.ExprStmt(expr=ast.Name("h1"))]),
+			ast.CatchExprArm(event="m:EvtA", binder="a", block=[ast.ExprStmt(expr=ast.Name("h1"))]),
 			ast.CatchExprArm(event=None, binder=None, block=[ast.ExprStmt(expr=ast.Name("h2"))]),
 		],
 	)
@@ -60,5 +60,5 @@ def test_try_stmt_multiple_catches_to_htry():
 	assert isinstance(hir, HTry)
 	assert len(hir.catches) == 2
 	first, second = hir.catches
-	assert first.event_fqn == "EvtA" and first.binder == "a"
+	assert first.event_fqn == "m:EvtA" and first.binder == "a"
 	assert second.event_fqn is None and second.binder is None

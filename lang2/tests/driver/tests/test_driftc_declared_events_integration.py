@@ -17,13 +17,13 @@ def test_declared_events_subset_enforced_by_driver():
 	hir = H.HBlock(
 		statements=[
 			H.HThrow(
-				value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]),
+				value=H.HExceptionInit(event_fqn="m:EvtB", field_names=[], field_values=[]),
 			),
 		]
 	)
 
-	signatures = make_signatures({fn_name: "FnResult<Int, Error>"}, throws_events={"f_decl": ("EvtA",)})
-	exc_env = build_exception_catalog({"EvtA": 1, "EvtB": 2})
+	signatures = make_signatures({fn_name: "FnResult<Int, Error>"}, throws_events={"f_decl": ("m:EvtA",)})
+	exc_env = build_exception_catalog({"m:EvtA": 1, "m:EvtB": 2})
 
 	_, checked = compile_stubbed_funcs(
 		func_hirs={fn_name: hir},
@@ -33,6 +33,6 @@ def test_declared_events_subset_enforced_by_driver():
 		return_checked=True,
 	)
 
-	assert checked.fn_infos[fn_name].declared_events == frozenset({"EvtA"})
+	assert checked.fn_infos[fn_name].declared_events == frozenset({"m:EvtA"})
 	msgs = [d.message for d in checked.diagnostics]
-	assert any("throws ['EvtA'] but throws additional events ['EvtB']" in m for m in msgs)
+	assert any("throws ['m:EvtA'] but throws additional events ['m:EvtB']" in m for m in msgs)

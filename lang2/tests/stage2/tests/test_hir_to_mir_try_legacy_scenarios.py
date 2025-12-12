@@ -25,17 +25,17 @@ def test_throw_b_skips_inner_catch_a_hits_outer_catch_b():
 	Inner try catches EvtA, outer catches EvtB.
 	Throw EvtB in inner body should skip inner catch and land in outer catch.
 	"""
-	exc_env = {"EvtA": 1, "EvtB": 2}
+	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_inner_outer_events")
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
-		catches=[H.HCatchArm(event_fqn="EvtA", binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtB", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn="m:EvtA", binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="m:EvtB", binder="b", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -69,17 +69,17 @@ def test_multi_event_with_catch_all_matches_specific_arm():
 	Multi-arm try with two events followed by catch-all; thrown event matches
 	the correct event-specific arm, not the catch-all.
 	"""
-	exc_env = {"EvtA": 1, "EvtB": 2}
+	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_multi_event")
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtB", field_names=[], field_values=[]))]),
 				catches=[
-					H.HCatchArm(event_fqn="EvtA", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:EvtA", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:EvtB", binder="b", block=H.HBlock(statements=[])),
 					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
 				],
 			)
@@ -112,23 +112,23 @@ def test_throw_inside_catch_rethrows_to_outer_try():
 	Throw from inside an inner catch should unwind to the outer try, not back into
 	the inner. Inner catch handles EvtA, outer handles EvtB; inner handler throws B.
 	"""
-	exc_env = {"EvtA": 1, "EvtB": 2}
+	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_throw_in_catch")
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtA", field_names=[], field_values=[]))]),
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtA", field_names=[], field_values=[]))]),
 		catches=[
 			H.HCatchArm(
-				event_fqn="EvtA",
+				event_fqn="m:EvtA",
 				binder=None,
-				block=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
+				block=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtB", field_names=[], field_values=[]))]),
 			)
 		],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="m:EvtB", binder="b", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -162,17 +162,17 @@ def test_inner_catch_all_handles_error_before_outer_specific_arm():
 	Inner try has a catch-all; outer has an event-specific arm for the same event.
 	The inner catch-all must handle the thrown error, so outer dispatch is never used.
 	"""
-	exc_env = {"EvtX": 7}
+	exc_env = {"m:EvtX": 7}
 	builder = MirBuilder(name="legacy_inner_catchall_outer_specific")
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtX", field_names=[], field_values=[]))]),
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtX", field_names=[], field_values=[]))]),
 		catches=[H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_fqn="EvtX", binder="x", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="m:EvtX", binder="x", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -196,7 +196,7 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 	Inner try has an event-specific arm for the thrown event; outer has a different arm.
 	The thrown event must be caught by the inner arm and not propagate to the outer dispatch.
 	"""
-	exc_env = {"EvtInner": 11, "EvtOuter": 22}
+	exc_env = {"m:EvtInner": 11, "m:EvtOuter": 22}
 	builder = MirBuilder(name="legacy_inner_matches")
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
@@ -207,11 +207,11 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 					statements=[
 						H.HTry(
 							body=H.HBlock(
-								statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtInner", field_names=[], field_values=[]))]
+								statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtInner", field_names=[], field_values=[]))]
 							),
 							catches=[
 								H.HCatchArm(
-									event_fqn="EvtInner",
+									event_fqn="m:EvtInner",
 									binder="inner",
 									block=H.HBlock(statements=[]),
 								)
@@ -221,7 +221,7 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 				),
 				catches=[
 					H.HCatchArm(
-						event_fqn="EvtOuter",
+						event_fqn="m:EvtOuter",
 						binder="outer",
 						block=H.HBlock(statements=[]),
 					)

@@ -40,7 +40,7 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 	hirs = {
 		"f_can": H.HBlock(
 			statements=[
-				H.HThrow(value=H.HExceptionInit(event_fqn="EvtA", field_names=[], field_values=[]))
+				H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtA", field_names=[], field_values=[]))
 			]
 		),
 		"g_plain": H.HBlock(statements=[H.HReturn(value=H.HLiteralInt(value=1))]),
@@ -81,7 +81,7 @@ def test_driver_reports_decl_based_mismatch_diagnostics():
 	hirs = {
 		"g_plain": H.HBlock(
 			statements=[
-				H.HThrow(value=H.HExceptionInit(event_fqn="EvtX", field_names=[], field_values=[]))
+				H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtX", field_names=[], field_values=[]))
 			]
 		),
 	}

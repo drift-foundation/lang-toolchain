@@ -20,9 +20,9 @@ def test_driver_collects_catch_arms_and_reports_diagnostics():
 			H.HTry(
 				body=H.HBlock(statements=[]),
 				catches=[
-					H.HCatchArm(event_fqn="Evt", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_fqn="Evt", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_fqn="UnknownEvt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:Evt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:Evt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:UnknownEvt", binder=None, block=H.HBlock(statements=[])),
 				],
 			),
 			H.HReturn(value=H.HLiteralInt(value=0)),
@@ -33,12 +33,12 @@ def test_driver_collects_catch_arms_and_reports_diagnostics():
 	mir_funcs, checked = compile_stubbed_funcs(
 		func_hirs={"f": hir_block},
 		signatures=signatures,
-		exc_env=build_exception_catalog({"Evt": 1}),
+		exc_env=build_exception_catalog({"m:Evt": 1}),
 		return_checked=True,
 	)
 
 	assert "f" in mir_funcs
 	assert checked.diagnostics, "expected diagnostics for invalid catch arms"
 	msgs = [diag.message for diag in checked.diagnostics]
-	assert any("duplicate catch arm for event Evt" in msg for msg in msgs)
-	assert any("unknown catch event UnknownEvt" in msg for msg in msgs)
+	assert any("duplicate catch arm for event m:Evt" in msg for msg in msgs)
+	assert any("unknown catch event m:UnknownEvt" in msg for msg in msgs)

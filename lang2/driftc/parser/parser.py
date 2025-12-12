@@ -644,6 +644,16 @@ def _build_try_stmt(tree: Tree) -> TryStmt:
     return TryStmt(loc=loc, body=try_block, catches=catches)
 
 
+def _fqn_from_tree(tree: Tree) -> str:
+    parts: list[str] = []
+    for child in tree.children:
+        if isinstance(child, Token):
+            parts.append(child.value)
+        elif isinstance(child, Tree):
+            parts.append(_fqn_from_tree(child))
+    return "".join(parts)
+
+
 def _build_catch_clause(tree: Tree) -> CatchClause:
     event: str | None = None
     binder: str | None = None
@@ -652,14 +662,12 @@ def _build_catch_clause(tree: Tree) -> CatchClause:
         if isinstance(child, Tree):
             name = _name(child)
             if name in {"catch_pattern", "catch_event", "catch_all"}:
-                tokens = [tok for tok in child.children if isinstance(tok, Token) and tok.type == "NAME"]
-                if len(tokens) == 2:
-                    event = tokens[0].value
-                    binder = tokens[1].value
-                elif len(tokens) == 1:
-                    binder = tokens[0].value
-                else:
-                    raise ValueError("invalid catch pattern")
+                event_node = next((c for c in child.children if isinstance(c, Tree) and _name(c) == "event_fqn"), None)
+                if event_node is not None:
+                    event = _fqn_from_tree(event_node)
+                binder_tok = next((tok for tok in child.children if isinstance(tok, Token) and tok.type == "NAME"), None)
+                if binder_tok is not None:
+                    binder = binder_tok.value
             elif name == "block":
                 block_node = child
     if block_node is None:
@@ -809,12 +817,16 @@ def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
     for arm_node in parts[1:]:
         arm_name = _name(arm_node)
         if arm_name == "catch_expr_event":
-            tokens = [t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME"]
-            if len(tokens) < 2:
-                raise ValueError("event catch arm requires event and binder")
-            event_token, binder_token = tokens[0], tokens[1]
+            event_node = next((c for c in arm_node.children if isinstance(c, Tree) and _name(c) == "event_fqn"), None)
+            if event_node is None:
+                raise ValueError("event catch arm requires event")
+            binder_token = next((t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME"), None)
+            if binder_token is None:
+                raise ValueError("event catch arm requires binder")
             block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-            arms.append(CatchExprArm(event=event_token.value, binder=binder_token.value, block=_build_block(block_node)))
+            arms.append(
+                CatchExprArm(event=_fqn_from_tree(event_node), binder=binder_token.value, block=_build_block(block_node))
+            )
         elif arm_name == "catch_expr_binder":
             binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
             block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")

@@ -24,10 +24,12 @@ def _compile_source(src: str, tmp_path: Path):
 def test_catch_unknown_event_reports_diagnostic(tmp_path: Path) -> None:
 	_, checked = _compile_source(
 		"""
+module m
+
 fn main() returns FnResult<Int, Error> {
     try {
         throw "boom";
-    } catch Unknown(e) {
+    } catch m:Unknown(e) {
     }
     return Ok(1);
 }
@@ -41,12 +43,14 @@ fn main() returns FnResult<Int, Error> {
 def test_declared_exception_enables_catch(tmp_path: Path) -> None:
 	mir_funcs, checked = _compile_source(
 		"""
+module m
+
 exception Boom(msg: String)
 
 fn main() returns FnResult<Int, Error> {
     try {
         throw Boom(msg = "boom");
-    } catch Boom(e) {
+    } catch m:Boom(e) {
         return Ok(0);
     }
     return Ok(1);

@@ -305,14 +305,11 @@ class AstToHIR:
 		catch_arms: list[H.HCatchArm] = []
 		for arm in stmt.catches:
 			event_name = arm.event
-			event_fqn = None
-			if event_name is not None:
-				if ":" in event_name:
-					event_fqn = event_name
-				elif self._module_name:
-					event_fqn = f"{self._module_name}:{event_name}"
-				else:
-					event_fqn = event_name
+			event_fqn = event_name if event_name is not None else None
+			if event_fqn is not None and ":" not in event_fqn:
+				raise NotImplementedError(
+					"catch event must be a fully-qualified name (<module>:<Event>)"
+				)
 			binder = arm.binder
 			handler_block = self.lower_block(arm.block)
 			catch_loc = Span.from_loc(arm.loc)
