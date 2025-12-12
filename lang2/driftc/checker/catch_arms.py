@@ -25,9 +25,7 @@ class CatchArmInfo:
 	span: Span = field(default_factory=Span)
 
 
-def _format_span(span: Span | None) -> str:
-	if span is None:
-		return "<unknown location>"
+def _format_span(span: Span) -> str:
 	parts = []
 	if span.file:
 		parts.append(span.file)
@@ -40,7 +38,7 @@ def _format_span(span: Span | None) -> str:
 def _report(
 	msg: str,
 	diagnostics: Optional[list[Diagnostic]],
-	span: Span | None,
+	span: Span,
 	notes: Optional[list[str]] = None,
 ) -> None:
 	"""Append a diagnostic if provided, otherwise raise RuntimeError."""
@@ -68,7 +66,7 @@ def validate_catch_arms(
 	seen_events: Set[str] = set()
 	catch_all_seen = False
 	catch_all_idx: int | None = None
-	catch_all_span: Span | None = None
+	catch_all_span: Span = Span()
 	event_spans: dict[str, Span] = {}
 	for idx, arm in enumerate(arms):
 		if arm.event_name is None:
