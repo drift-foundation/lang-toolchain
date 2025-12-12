@@ -31,31 +31,49 @@ def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 	"""Convert parser AST expressions into lang2.driftc.stage0 AST expressions."""
 	if isinstance(expr, parser_ast.Literal):
-		return s0.Literal(value=expr.value, loc=getattr(expr, "loc", None))
+		return s0.Literal(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Name):
-		return s0.Name(ident=expr.ident, loc=getattr(expr, "loc", None))
+		return s0.Name(ident=expr.ident, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Call):
-		return s0.Call(func=_convert_expr(expr.func), args=[_convert_expr(a) for a in expr.args], kwargs=[], loc=getattr(expr, "loc", None))
+		return s0.Call(
+			func=_convert_expr(expr.func),
+			args=[_convert_expr(a) for a in expr.args],
+			kwargs=[],
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Attr):
-		return s0.Attr(value=_convert_expr(expr.value), attr=expr.attr, loc=getattr(expr, "loc", None))
+		return s0.Attr(
+			value=_convert_expr(expr.value),
+			attr=expr.attr,
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Index):
-		return s0.Index(value=_convert_expr(expr.value), index=_convert_expr(expr.index), loc=getattr(expr, "loc", None))
+		return s0.Index(
+			value=_convert_expr(expr.value),
+			index=_convert_expr(expr.index),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Binary):
-		return s0.Binary(op=expr.op, left=_convert_expr(expr.left), right=_convert_expr(expr.right), loc=getattr(expr, "loc", None))
+		return s0.Binary(
+			op=expr.op,
+			left=_convert_expr(expr.left),
+			right=_convert_expr(expr.right),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Unary):
-		return s0.Unary(op=expr.op, operand=_convert_expr(expr.operand), loc=getattr(expr, "loc", None))
+		return s0.Unary(op=expr.op, operand=_convert_expr(expr.operand), loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.ArrayLiteral):
-		return s0.ArrayLiteral(elements=[_convert_expr(e) for e in expr.elements], loc=getattr(expr, "loc", None))
+		return s0.ArrayLiteral(elements=[_convert_expr(e) for e in expr.elements], loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Move):
 		return _convert_expr(expr.value)
 	if isinstance(expr, parser_ast.Placeholder):
-		return s0.Placeholder(loc=getattr(expr, "loc", None))
+		return s0.Placeholder(loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Ternary):
 		return s0.Ternary(
 			cond=_convert_expr(expr.condition),
 			then_expr=_convert_expr(expr.then_value),
 			else_expr=_convert_expr(expr.else_value),
-			loc=getattr(expr, "loc", None),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	if isinstance(expr, parser_ast.TryCatchExpr):
 		catch_arms = [
@@ -77,17 +95,17 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			name=expr.name,
 			event_code=getattr(expr, "event_code", None),
 			fields={k: _convert_expr(v) for k, v in expr.fields.items()},
-			loc=getattr(expr, "loc", None),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	raise NotImplementedError(f"Unsupported expression in adapter: {expr!r}")
 
 
 def _convert_return(stmt: parser_ast.ReturnStmt) -> s0.Stmt:
-	return s0.ReturnStmt(value=_convert_expr(stmt.value) if stmt.value is not None else None, loc=stmt.loc)
+	return s0.ReturnStmt(value=_convert_expr(stmt.value) if stmt.value is not None else None, loc=Span.from_loc(stmt.loc))
 
 
 def _convert_expr_stmt(stmt: parser_ast.ExprStmt) -> s0.Stmt:
-	return s0.ExprStmt(expr=_convert_expr(stmt.value), loc=stmt.loc)
+	return s0.ExprStmt(expr=_convert_expr(stmt.value), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_let(stmt: parser_ast.LetStmt) -> s0.Stmt:
@@ -95,12 +113,12 @@ def _convert_let(stmt: parser_ast.LetStmt) -> s0.Stmt:
 		name=stmt.name,
 		value=_convert_expr(stmt.value),
 		type_expr=getattr(stmt, "type_expr", None),
-		loc=stmt.loc,
+		loc=Span.from_loc(stmt.loc),
 	)
 
 
 def _convert_assign(stmt: parser_ast.AssignStmt) -> s0.Stmt:
-	return s0.AssignStmt(target=_convert_expr(stmt.target), value=_convert_expr(stmt.value), loc=stmt.loc)
+	return s0.AssignStmt(target=_convert_expr(stmt.target), value=_convert_expr(stmt.value), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_if(stmt: parser_ast.IfStmt) -> s0.Stmt:
@@ -108,43 +126,48 @@ def _convert_if(stmt: parser_ast.IfStmt) -> s0.Stmt:
 		cond=_convert_expr(stmt.condition),
 		then_block=_convert_block(stmt.then_block),
 		else_block=_convert_block(stmt.else_block) if stmt.else_block else [],
-		loc=stmt.loc,
+		loc=Span.from_loc(stmt.loc),
 	)
 
 
 def _convert_break(stmt: parser_ast.BreakStmt) -> s0.Stmt:
-	return s0.BreakStmt(loc=stmt.loc)
+	return s0.BreakStmt(loc=Span.from_loc(stmt.loc))
 
 
 def _convert_continue(stmt: parser_ast.ContinueStmt) -> s0.Stmt:
-	return s0.ContinueStmt(loc=stmt.loc)
+	return s0.ContinueStmt(loc=Span.from_loc(stmt.loc))
 
 
 def _convert_while(stmt: parser_ast.WhileStmt) -> s0.Stmt:
-	return s0.WhileStmt(cond=_convert_expr(stmt.condition), body=_convert_block(stmt.body), loc=stmt.loc)
+	return s0.WhileStmt(cond=_convert_expr(stmt.condition), body=_convert_block(stmt.body), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_for(stmt: parser_ast.ForStmt) -> s0.Stmt:
-	return s0.ForStmt(iter_var=stmt.var, iterable=_convert_expr(stmt.iter_expr), body=_convert_block(stmt.body), loc=stmt.loc)
+	return s0.ForStmt(iter_var=stmt.var, iterable=_convert_expr(stmt.iter_expr), body=_convert_block(stmt.body), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_throw(stmt: parser_ast.ThrowStmt) -> s0.Stmt:
-	return s0.ThrowStmt(value=_convert_expr(stmt.expr), loc=stmt.loc)
+	return s0.ThrowStmt(value=_convert_expr(stmt.expr), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_raise(stmt: parser_ast.RaiseStmt) -> s0.Stmt:
 	# TODO: when rethrow semantics are defined, map RaiseStmt appropriately.
 	# For now, treat parser RaiseStmt as a plain throw of the expression.
 	expr = getattr(stmt, "expr", None) or getattr(stmt, "value")
-	return s0.ThrowStmt(value=_convert_expr(expr), loc=stmt.loc)
+	return s0.ThrowStmt(value=_convert_expr(expr), loc=Span.from_loc(stmt.loc))
 
 
 def _convert_try(stmt: parser_ast.TryStmt) -> s0.Stmt:
 	catches = [
-		s0.CatchExprArm(event=c.event, binder=c.binder, block=_convert_block(c.block), loc=getattr(c, "loc", None))
+		s0.CatchExprArm(
+			event=c.event,
+			binder=c.binder,
+			block=_convert_block(c.block),
+			loc=Span.from_loc(getattr(c, "loc", None)),
+		)
 		for c in stmt.catches
 	]
-	return s0.TryStmt(body=_convert_block(stmt.body), catches=catches, loc=stmt.loc)
+	return s0.TryStmt(body=_convert_block(stmt.body), catches=catches, loc=Span.from_loc(stmt.loc))
 
 
 def _convert_import(stmt: parser_ast.ImportStmt) -> s0.Stmt:
