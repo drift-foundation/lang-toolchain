@@ -40,7 +40,7 @@ const struct DriftDiagnosticValue* drift_error_get_attr(const struct DriftError*
 // Typed attrs accessors used by lowered code.
 struct DriftOptionalString __exc_attrs_get(const struct DriftError* err, struct DriftString key);
 void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString key);
-struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftDiagnosticValue payload);
+struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftString key, struct DriftDiagnosticValue payload);
 
 #ifdef __cplusplus
 }

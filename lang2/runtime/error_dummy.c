@@ -117,12 +117,11 @@ void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftErro
     *out = *val;
 }
 
-struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftDiagnosticValue payload) {
+struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftString key, struct DriftDiagnosticValue payload) {
     struct DriftError* err = drift_error_new_dummy(code, (struct DriftString){0, NULL}, (struct DriftString){0, NULL});
     if (!err) {
         return NULL;
     }
-    struct DriftString key = {7, "payload"};
     drift_error_add_attr_dv(err, key, &payload);
     return err;
 }

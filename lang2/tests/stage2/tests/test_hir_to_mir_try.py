@@ -53,9 +53,11 @@ def test_try_routes_throw_to_catch_block():
 	# Try body should build error and jump to dispatch
 	try_body = blocks[blocks["entry"].terminator.target]
 	instrs = try_body.instructions
-	assert isinstance(instrs[0], ConstString)
-	assert isinstance(instrs[1], ConstInt)
-	assert isinstance(instrs[2], ConstructError)
+	consts = [i for i in instrs if isinstance(i, ConstString)]
+	assert any(c.value == "boom" for c in consts)
+	assert any(c.value == "payload" for c in consts)
+	assert any(isinstance(i, ConstInt) for i in instrs)
+	assert any(isinstance(i, ConstructError) for i in instrs)
 	assert isinstance(try_body.terminator, Goto)
 	assert try_body.terminator.target.startswith("try_dispatch")
 

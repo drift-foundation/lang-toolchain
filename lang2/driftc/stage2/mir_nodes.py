@@ -219,10 +219,12 @@ class ConstructError(MInstr):
 
 	`code` is the 64-bit event code (as per drift-abi-exceptions).
 	`payload` is a DiagnosticValue representing structured attrs.
+	`attr_key` is the attr name under which to store the payload.
 	"""
 	dest: ValueId
 	code: ValueId
 	payload: ValueId
+	attr_key: ValueId
 
 
 @dataclass

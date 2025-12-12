@@ -625,9 +625,16 @@ class HIRToMIR:
 		code_val = self.b.new_temp()
 		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 
+		# Attr key: use the DV ctor name if available, else "payload".
+		key_val = self.b.new_temp()
+		key_literal = "payload"
+		if isinstance(stmt.value, H.HDVInit):
+			key_literal = stmt.value.dv_type_name
+		self.b.emit(M.ConstString(dest=key_val, value=key_literal))
+
 		# Build the Error value.
 		err_val = self.b.new_temp()
-		self.b.emit(M.ConstructError(dest=err_val, code=code_val, payload=payload_val))
+		self.b.emit(M.ConstructError(dest=err_val, code=code_val, payload=payload_val, attr_key=key_val))
 
 		# If we are inside a try, route to the catch block instead of returning.
 		if self._try_stack and self.b.block.terminator is None:

@@ -8,6 +8,8 @@ from lang2.driftc.stage2 import (
 	MirFunc,
 	BasicBlock,
 	ConstInt,
+	ConstString,
+	ConstructDV,
 	ConstructError,
 	Goto,
 )
@@ -19,7 +21,9 @@ def test_throw_summary_records_construct_error_and_exc_types():
 		name="entry",
 		instructions=[
 			ConstInt(dest="c0", value=7),
-			ConstructError(dest="e0", code="c0", payload="p"),
+			ConstructDV(dest="p", dv_type_name="Err", args=[]),
+			ConstString(dest="pkey", value="payload"),
+			ConstructError(dest="e0", code="c0", payload="p", attr_key="pkey"),
 		],
 		terminator=Goto(target="exit"),
 	)

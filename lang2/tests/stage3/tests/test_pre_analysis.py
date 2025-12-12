@@ -19,6 +19,7 @@ from lang2.driftc.stage2 import (
 	ConstructDV,
 	ConstructError,
 	ConstInt,
+	ConstString,
 )
 from lang2.driftc.stage3 import MirPreAnalysis
 
@@ -59,7 +60,8 @@ def test_calls_tracked_separately_from_may_fail():
 			MethodCall(dest="t1", receiver="obj", method_name="bar", args=[]),
 			ConstructDV(dest="t2", dv_type_name="Err", args=[]),
 			ConstInt(dest="c0", value=1234),
-			ConstructError(dest="t3", code="c0", payload="p"),
+			ConstString(dest="pkey", value="payload"),
+			ConstructError(dest="t3", code="c0", payload="t2", attr_key="pkey"),
 		],
 		terminator=Goto(target="exit"),
 	)
@@ -76,8 +78,8 @@ def test_calls_tracked_separately_from_may_fail():
 	assert ("entry", 0) in result.call_sites
 	assert ("entry", 1) in result.call_sites
 	assert ("entry", 2) in result.may_fail
-	assert ("entry", 4) in result.may_fail
-	assert ("entry", 4) in result.construct_error_sites
+	assert ("entry", 5) in result.may_fail
+	assert ("entry", 5) in result.construct_error_sites
 	assert result.exception_types == {"MyException"}
 
 

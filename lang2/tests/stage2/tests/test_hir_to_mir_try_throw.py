@@ -38,10 +38,12 @@ def test_throw_lowers_to_error_and_result_err_return():
 	# injected empty-string literal when asserting.
 	payload_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "boom")
 	const_int = next(i for i in instrs if isinstance(i, ConstInt))
+	key_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "payload")
 	err = next(i for i in instrs if isinstance(i, ConstructError))
 	err_result = next(i for i in instrs if isinstance(i, ConstructResultErr))
 	assert err.payload == payload_const.dest
 	assert err.code == const_int.dest
+	assert err.attr_key == key_const.dest
 	assert err_result.error == err.dest
 
 	term = entry.terminator

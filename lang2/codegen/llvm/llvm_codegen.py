@@ -333,6 +333,9 @@ class LlvmModuleBuilder:
 				[
 					f"declare void @__exc_attrs_get_dv({DRIFT_DV_TYPE}*, {DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_missing()",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_int(i64)",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i1)",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_OPT_INT_TYPE} @drift_dv_as_int({DRIFT_DV_TYPE}*)",
 					f"declare {DRIFT_OPT_BOOL_TYPE} @drift_dv_as_bool({DRIFT_DV_TYPE}*)",
 					f"declare {DRIFT_OPT_STRING_TYPE} @drift_dv_as_string({DRIFT_DV_TYPE}*)",
@@ -342,7 +345,7 @@ class LlvmModuleBuilder:
 		if self.needs_error_runtime:
 			lines.extend(
 				[
-					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64, {DRIFT_DV_TYPE})",
+					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE})",
 					"",
 				]
 			)
@@ -582,18 +585,39 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructDV):
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = DRIFT_DV_TYPE
-			if instr.args:
+			if not instr.args:
+				self.module.needs_dv_runtime = True
+				# DV_MISSING is a runtime-defined constant (tag=0); call helper to avoid
+				# baking layout assumptions here.
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_missing()")
+				return
+			if len(instr.args) != 1:
 				raise NotImplementedError(
-					"LLVM codegen v1: ConstructDV with arguments not yet supported; expected zero-arg DV constructor"
+					"LLVM codegen v1: ConstructDV currently supports zero args (missing) or a single primitive arg"
 				)
 			self.module.needs_dv_runtime = True
-			# DV_MISSING is a runtime-defined constant (tag=0); call helper to avoid
-			# baking layout assumptions here.
-			self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_missing()")
+			arg_val = self._map_value(instr.args[0])
+			arg_ty = self.value_types.get(arg_val)
+			if arg_ty == "i64":
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_int(i64 {arg_val})")
+				return
+			if arg_ty == "i1":
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i1 {arg_val})")
+				return
+			if arg_ty == DRIFT_STRING_TYPE:
+				self.lines.append(
+					f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})"
+				)
+				return
+			self.module.needs_dv_runtime = True
+			raise NotImplementedError(
+				f"LLVM codegen v1: ConstructDV arg type {arg_ty} not supported (expected Int/Bool/String)"
+			)
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
 			payload = self._map_value(instr.payload)
+			attr_key = self._map_value(instr.attr_key)
 			self.value_types[dest] = DRIFT_ERROR_PTR
 			self.module.needs_error_runtime = True
 			code_ty = self.value_types.get(code)
@@ -603,7 +627,7 @@ class _FuncBuilder:
 				)
 			# Attach payload via runtime helper; payload is expected to be a DiagnosticValue.
 			self.lines.append(
-				f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64 {code}, {DRIFT_DV_TYPE} {payload})"
+				f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64 {code}, {DRIFT_STRING_TYPE} {attr_key}, {DRIFT_DV_TYPE} {payload})"
 			)
 		elif isinstance(instr, ErrorAttrsGetDV):
 			self.module.needs_dv_runtime = True
@@ -633,23 +657,25 @@ class _FuncBuilder:
 			opt_val = self._map_value(instr.opt)
 			opt_ty = self.value_types.get(opt_val)
 			if opt_ty == DRIFT_OPT_INT_TYPE:
-				inner_ty = "i64"
+				dest = self._map_value(instr.dest)
+				self.lines.append(f"  {dest} = extractvalue {opt_ty} {opt_val}, 1")
+				self.value_types[dest] = "i64"
+				return
 			elif opt_ty == DRIFT_OPT_BOOL_TYPE:
-				inner_ty = "i1"
-			elif opt_ty == DRIFT_OPT_STRING_TYPE:
-				inner_ty = DRIFT_STRING_TYPE
-			else:
-				raise NotImplementedError(
-					f"LLVM codegen v1: OptionalValue requires Optional<Int|Bool|String>, got {opt_ty}"
-				)
-			dest = self._map_value(instr.dest)
-			raw = self._fresh("opt_val")
-			self.lines.append(f"  {raw} = extractvalue {opt_ty} {opt_val}, 1")
-			if inner_ty == "i1":
+				dest = self._map_value(instr.dest)
+				raw = self._fresh("opt_val")
+				self.lines.append(f"  {raw} = extractvalue {opt_ty} {opt_val}, 1")
 				self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
-			else:
-				self.lines.append(f"  {dest} = add {inner_ty} {raw}, 0")
-			self.value_types[dest] = inner_ty
+				self.value_types[dest] = "i1"
+				return
+			elif opt_ty == DRIFT_OPT_STRING_TYPE:
+				dest = self._map_value(instr.dest)
+				self.lines.append(f"  {dest} = extractvalue {opt_ty} {opt_val}, 1")
+				self.value_types[dest] = DRIFT_STRING_TYPE
+				return
+			raise NotImplementedError(
+				f"LLVM codegen v1: OptionalValue requires Optional<Int|Bool|String>, got {opt_ty}"
+			)
 		elif isinstance(instr, (DVAsInt, DVAsBool, DVAsString)):
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)

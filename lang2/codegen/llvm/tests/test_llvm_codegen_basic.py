@@ -15,6 +15,7 @@ from lang2.driftc.stage2 import (
 	ConstructDV,
 	MirFunc,
 	Return,
+	ConstString,
 )
 from lang2.driftc.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
@@ -118,7 +119,8 @@ def test_codegen_fnresult_ref_err_zero_ok_slot():
 		instructions=[
 			ConstInt(dest="code", value=1),
 			ConstructDV(dest="dv", dv_type_name="Missing", args=[]),
-			ConstructError(dest="err", code="code", payload="dv"),
+			ConstString(dest="key", value="payload"),
+			ConstructError(dest="err", code="code", payload="dv", attr_key="key"),
 			ConstructResultErr(dest="res", error="err"),
 		],
 		terminator=Return(value="res"),
