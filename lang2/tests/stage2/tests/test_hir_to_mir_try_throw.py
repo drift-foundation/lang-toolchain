@@ -11,6 +11,7 @@ from lang2.driftc.stage2 import (
 	ConstInt,
 	ConstString,
 	ConstructError,
+	ErrorAddAttrDV,
 	ConstructResultErr,
 	Return,
 )
@@ -49,3 +50,33 @@ def test_throw_lowers_to_error_and_result_err_return():
 	term = entry.terminator
 	assert isinstance(term, Return)
 	assert term.value == err_result.dest
+
+
+def test_exception_init_throw_attaches_all_fields():
+	"""
+	throw ExceptionInit{a, b} should store:
+	  - payload under \"payload\"
+	  - field 'a' under its declared name
+	  - field 'b' under its declared name
+	"""
+	builder = MirBuilder(name="throw_exc")
+	lower = HIRToMIR(builder)
+
+	exc = H.HExceptionInit(
+		event_name="Evt",
+		field_names=["a", "b"],
+		field_values=[
+			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(1)]),
+			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(2)]),
+		],
+	)
+	hir_block = H.HBlock(statements=[H.HThrow(value=exc)])
+	lower.lower_block(hir_block)
+
+	entry = builder.func.blocks["entry"]
+	add_attr_instrs = [i for i in entry.instructions if isinstance(i, ErrorAddAttrDV)]
+	# Expect attrs for both fields (first field is stored under its name in addition to payload).
+	assert len(add_attr_instrs) == 2
+	# Keys come from ConstString instructions; verify the literal values.
+	key_literals = [i.value for i in entry.instructions if isinstance(i, ConstString)]
+	assert "a" in key_literals and "b" in key_literals

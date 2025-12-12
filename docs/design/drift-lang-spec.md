@@ -2102,7 +2102,7 @@ throw InvalidOrder { order_id: order.id, code: "order.invalid" }
 
 Runtime builds an `Error` with:
 - event name
-- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`, primary payload stored under the fixed `"payload"` key; additional named fields stay under their declared names)
+- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name, and the primary field is also stored under the fixed `"payload"` key)
 - empty ctx_frames (filled during unwind)
 - backtrace
 

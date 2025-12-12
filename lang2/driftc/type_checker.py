@@ -115,7 +115,7 @@ class TypeChecker:
 			expr_types[expr_id] = ty
 			return ty
 
-		def type_expr(expr: H.HExpr) -> TypeId:
+		def type_expr(expr: H.HExpr, *, allow_exception_init: bool = False) -> TypeId:
 			if isinstance(expr, H.HLiteralInt):
 				return record_expr(expr, self._int)
 			if isinstance(expr, H.HLiteralBool):
@@ -347,6 +347,15 @@ class TypeChecker:
 				else_ty = type_expr(expr.else_expr)
 				return record_expr(expr, then_ty if then_ty == else_ty else self._unknown)
 			if isinstance(expr, H.HExceptionInit):
+				if not allow_exception_init:
+					diagnostics.append(
+						Diagnostic(
+							message="exception constructors are only valid as throw payloads",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				if len(expr.field_names) != len(expr.field_values):
 					diagnostics.append(
 						Diagnostic(
@@ -430,7 +439,7 @@ class TypeChecker:
 				for arm in stmt.catches:
 					type_block(arm.block)
 			elif isinstance(stmt, H.HThrow):
-				val_ty = type_expr(stmt.value)
+				val_ty = type_expr(stmt.value, allow_exception_init=True)
 				if val_ty != self._dv:
 					diagnostics.append(
 						Diagnostic(

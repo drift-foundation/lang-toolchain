@@ -49,3 +49,15 @@ def test_dv_ctor_rejects_unsupported_arg_type():
 	block = H.HBlock(statements=[H.HExprStmt(expr=dv_with_array)])
 	res = tc.check_function("f", block)
 	assert any("unsupported DiagnosticValue constructor argument type" in d.message for d in res.diagnostics)
+
+
+def test_exception_ctor_outside_throw_is_rejected():
+	tc = _tc()
+	exc_init = H.HExceptionInit(
+		event_name="Exc",
+		field_names=["detail"],
+		field_values=[H.HDVInit(dv_type_name="D", args=[H.HLiteralInt(1)])],
+	)
+	block = H.HBlock(statements=[H.HLet(name="x", value=exc_init)])
+	res = tc.check_function("f", block)
+	assert any("exception constructors are only valid as throw payloads" in d.message for d in res.diagnostics)

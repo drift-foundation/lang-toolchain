@@ -647,10 +647,15 @@ class HIRToMIR:
 					field_dvs.append((name, val))
 				payload_key = self.b.new_temp()
 				self.b.emit(M.ConstString(dest=payload_key, value="payload"))
-				first_dv = field_dvs[0][1]
+				first_name, first_dv = field_dvs[0]
 				self.b.emit(
 					M.ConstructError(dest=err_val, code=code_val, payload=first_dv, attr_key=payload_key)
 				)
+				# Also store the first field under its declared name if it is not literally "payload".
+				if first_name != "payload":
+					first_key = self.b.new_temp()
+					self.b.emit(M.ConstString(dest=first_key, value=first_name))
+					self.b.emit(M.ErrorAddAttrDV(error=err_val, key=first_key, value=first_dv))
 				for name, dv in field_dvs[1:]:
 					key = self.b.new_temp()
 					self.b.emit(M.ConstString(dest=key, value=name))
