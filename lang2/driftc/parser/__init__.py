@@ -59,10 +59,19 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		)
 	if isinstance(expr, parser_ast.TryCatchExpr):
 		catch_arms = [
-			s0.CatchExprArm(event=arm.event, binder=arm.binder, block=_convert_block(arm.block), loc=getattr(arm, "loc", None))
+			s0.CatchExprArm(
+				event=arm.event,
+				binder=arm.binder,
+				block=_convert_block(arm.block),
+				loc=Span.from_loc(getattr(arm, "loc", None)),
+			)
 			for arm in expr.catch_arms
 		]
-		return s0.TryCatchExpr(attempt=_convert_expr(expr.attempt), catch_arms=catch_arms, loc=getattr(expr, "loc", None))
+		return s0.TryCatchExpr(
+			attempt=_convert_expr(expr.attempt),
+			catch_arms=catch_arms,
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.ExceptionCtor):
 		return s0.ExceptionCtor(
 			name=expr.name,
