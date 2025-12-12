@@ -2042,9 +2042,10 @@ Drift’s exception system is designed to:
 
 ### 14.1.1. Source identity vs. runtime identity
 
-- **Source identity** of an exception event is its fully-qualified name `"<module_name>.<submodule...>:<event_name>"` (canonical, no aliases).
+- **Source identity** of an exception event is its fully-qualified name `"<module_name>.<submodule...>:<event_name>"` (canonical, no aliases). Catch clauses must spell this FQN explicitly; the compiler does not add an implicit module prefix. Non-canonical/ambiguous names are rejected.
 - **Runtime identity** is a deterministic 64-bit `event_code = hash_v1(fqn_utf8_bytes)` (UTF-8 of the canonical FQN); users never type or see codes.
-- `catch M.E` lowers to `if err.event_code == hash_v1(fqn)`; matching is by code, derived from the resolved FQN with the `:` delimiter.
+- `catch m:Evt` lowers to `if err.event_code == hash_v1(fqn)`; matching is by code, derived from the resolved FQN with the `:` delimiter.
+- `event_code == 0` is reserved for **unknown/unmapped** events (e.g., absent catalog entry); user-defined events must never deliberately use code 0.
 - Collisions detected during compilation are fatal within the build; if/when multi-module linking is introduced, collision handling must remain deterministic.
 - `event_name()` returns the stored canonical FQN string for logging/telemetry; it is never used for control flow or matching.
 
@@ -2068,7 +2069,7 @@ exception IndexError {
 ```
 
 #### 14.2.1. event_code
-Deterministic 64-bit code derived from the exception’s fully-qualified name (`Module.ExceptionName`) using the frozen hash (§14.1.1). This is the **only** runtime routing key.
+Deterministic 64-bit code derived from the exception’s fully-qualified name (`Module.ExceptionName`) using the frozen hash (§14.1.1). This is the **only** runtime routing key. `0` is reserved for unknown/unmapped events and must not be produced by user-declared exceptions.
 
 #### 14.2.2. attrs
 All exception attributes as typed `DiagnosticValue` entries (see §5.13.8). Values are produced via `Diagnostic.to_diag()`; no stringification is implied. Any value recorded in `Error.attrs` (exception fields or later-added attrs) must implement `Diagnostic`; attempting to attach a non-Diagnostic value is a compile-time error.
@@ -2164,12 +2165,13 @@ Rules:
 ```drift
 try {
     ship(order)
-} catch InvalidOrder(e) {
+} catch shop.orders:InvalidOrder(e) {
     log(&e)
 }
 ```
 
 Matches by `error.event_code` derived from the resolved fully-qualified event name (§14.1.1); the source uses the event name, runtime compares the deterministic code.
+Catch clauses must use the canonical FQN form `<module>.<submodules>:<Event>`; no implicit module-prefixing is performed.
 
 #### 14.5.2. Catch-all + rethrow
 ```drift
