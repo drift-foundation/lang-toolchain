@@ -581,9 +581,7 @@ class _FuncBuilder:
 			ok_zero = self._zero_value_for_ok(ok_llty)
 			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} undef, i1 1, 0")
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
-			self.lines.append(
-				f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2"
-			)
+			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2")
 		elif isinstance(instr, ConstructDV):
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = DRIFT_DV_TYPE
@@ -595,7 +593,7 @@ class _FuncBuilder:
 				return
 			if len(instr.args) != 1:
 				raise NotImplementedError(
-					"LLVM codegen v1: ConstructDV currently supports zero args (missing) or a single primitive arg"
+					"LLVM codegen v1: DiagnosticValue constructors support at most one argument (Int/Bool/String)"
 				)
 			self.module.needs_dv_runtime = True
 			arg_val = self._map_value(instr.args[0])
@@ -607,11 +605,8 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i1 {arg_val})")
 				return
 			if arg_ty == DRIFT_STRING_TYPE:
-				self.lines.append(
-					f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})"
-				)
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
 				return
-			self.module.needs_dv_runtime = True
 			raise NotImplementedError(
 				f"LLVM codegen v1: ConstructDV arg type {arg_ty} not supported (expected Int/Bool/String)"
 			)

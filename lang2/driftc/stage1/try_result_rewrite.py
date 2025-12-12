@@ -171,6 +171,19 @@ class TryResultRewriter:
 		if isinstance(expr, H.HResultOk):
 			pfx, inner = self._rewrite_expr(expr.value)
 			return pfx, H.HResultOk(value=inner)
+		if isinstance(expr, H.HExceptionInit):
+			field_pfx: List[H.HStmt] = []
+			new_fields: List[H.HExpr] = []
+			for fv in expr.field_values:
+				pfx, new_fv = self._rewrite_expr(fv)
+				field_pfx.extend(pfx)
+				new_fields.append(new_fv)
+			return field_pfx, H.HExceptionInit(
+				event_name=expr.event_name,
+				field_names=list(expr.field_names),
+				field_values=new_fields,
+				loc=expr.loc,
+			)
 		if isinstance(expr, H.HDVInit):
 			new_args: List[H.HExpr] = []
 			pfx: List[H.HStmt] = []
@@ -181,7 +194,6 @@ class TryResultRewriter:
 			return pfx, H.HDVInit(
 				dv_type_name=expr.dv_type_name,
 				args=new_args,
-				attr_names=expr.attr_names,
 			)
 		if isinstance(expr, H.HArrayLiteral):
 			elem_pfx: List[H.HStmt] = []

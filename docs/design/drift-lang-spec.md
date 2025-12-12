@@ -827,6 +827,7 @@ RAII semantics:
 
 - Automatic cleanup at scope exit calls `destroy(self)` exactly once.
 - Manual early destruction is allowed via `value.destroy()`, which consumes `self`.
+- `destroy(self)` is **non-throwing**: it must not unwind or return `FnResult`. Any cleanup failure must be handled internally (log, best-effort) so resource release cannot itself trigger further unwinding.
 
 This integrates seamlessly with move semantics and deterministic lifetimes.
 
@@ -2022,6 +2023,11 @@ Exception declarations create constructor names in the value namespace. `throw E
 Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
 `Error` itself is a catch-all handler type: user functions do not return `Error` or throw `Error` directly; they throw concrete exception events, and catch blocks may bind either a specific exception type or `Error` as a generic binder.
 
+**Exceptions and `Result<T, Error>` coexist, with distinct roles.**
+- **Exceptions** are for unwinding control flow: they move ownership of an `Error` up the stack via `throw` / `try` / `catch`. They are used when the caller is not expected to see the failure as part of a normal result type.
+- **`Result<T, Error>`** is the value-level encoding of a potentially failing computation. It is explicit in signatures and ideal for “expected” failures where the caller stays in-band (`match`/pattern matching, pipelines, etc.).
+- Drift’s ABI unifies the two: a can-throw function is *lowered as if* it returned `Result<T, Error>`, and `try`/`catch` is sugar over that model. Use `Result` directly when you want the failure handled in-band; use exceptions when you want stack unwinding with context capture.
+
 ### 14.1. Goals
 Drift’s exception system is designed to:
 
@@ -2096,7 +2102,7 @@ throw InvalidOrder { order_id: order.id, code: "order.invalid" }
 
 Runtime builds an `Error` with:
 - event name
-- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`)
+- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`, primary payload stored under the fixed `"payload"` key; additional named fields stay under their declared names)
 - empty ctx_frames (filled during unwind)
 - backtrace
 
@@ -2208,6 +2214,19 @@ When a function is part of a module’s exported interface (Chapter 7.2), the `R
 - Exported functions always use the `Result<T, Error>` calling convention on the wire, encoded as `{T, Error*}` or `Error*` at the ABI.
 - Callers in other modules must treat every exported function as potentially failing, even if its implementation never actually throws.
 - Internal, non-exported functions may be lowered more aggressively (for example, eliding the error channel when analysis proves “no throw”), but such optimizations must not change the behavior of exported entry points as seen through the module interface.
+
+---
+
+#### 14.6.1. Can-throw vs non-throw functions (nothrow rules)
+
+Drift distinguishes **can-throw** functions from **non-throwing** ones and enforces the contract statically:
+
+- **Declaring can-throw.** A function is can-throw when its signature returns `FnResult<Ok, Error>` or it is explicitly marked as can-throw (exports are always can-throw entry points; future annotations may mark others). Functions without `FnResult<_, Error>` are treated as non-throwing unless declared otherwise.
+- **Non-throwing invariants.** A non-throwing function must not use `throw`/`raise`, must not construct an `Error`, and must not return `FnResult<_, Error>`. It may call can-throw functions only if it handles their failures locally (e.g., via `try/catch`) and returns a plain `Ok` type. Violations are compile-time errors tied to the source span of the offending throw/return.
+- **Can-throw invariants.** A can-throw function’s signature must use `FnResult<Ok, Error>`, and every `return` must supply a value built as `Result.Ok` or `Result.Err`. The `Error` slot in `FnResult` is always the canonical `Error` type; no other error type is permitted.
+- **ABI clarity.** Can-throw functions use the `Result<T, Error>` calling convention; non-throwing functions use plain returns. Mixing the two is rejected rather than silently coerced.
+
+These rules keep the error model explicit, prevent accidental unwinding from non-throwing code, and make cross-module ABIs predictable.
 
 ---
 

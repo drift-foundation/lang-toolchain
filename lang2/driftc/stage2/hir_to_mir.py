@@ -390,6 +390,13 @@ class HIRToMIR:
 		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals))
 		return dest
 
+	def _visit_expr_HExceptionInit(self, expr: H.HExceptionInit) -> M.ValueId:
+		"""
+		Exception init is only valid as a throw payload in v1; fail loudly if it
+		reaches expression position.
+		"""
+		raise NotImplementedError("ExceptionInit is only valid as a throw payload")
+
 	def _visit_expr_HResultOk(self, expr: H.HResultOk) -> M.ValueId:
 		"""
 		Lower FnResult.Ok(value) into ConstructResultOk(dest, value).
@@ -623,30 +630,31 @@ class HIRToMIR:
 		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 
 		err_val = self.b.new_temp()
-		# If payload is an HDVInit with named fields, attach each as an attr and
-		# store the primary payload under a fixed "payload" key (not field-order
-		# dependent).
-		if isinstance(stmt.value, H.HDVInit) and stmt.value.attr_names:
-			field_dvs: list[tuple[str, M.ValueId]] = []
-			for name, arg_expr in zip(stmt.value.attr_names, stmt.value.args):
-				val = self.lower_expr(arg_expr)
-				dv_dest = self.b.new_temp()
+		if isinstance(stmt.value, H.HExceptionInit):
+			field_count = len(stmt.value.field_values)
+			if field_count == 0:
+				payload_val = self.b.new_temp()
+				self.b.emit(M.ConstructDV(dest=payload_val, dv_type_name=stmt.value.event_name, args=[]))
+				payload_key = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=payload_key, value="payload"))
 				self.b.emit(
-					M.ConstructDV(dest=dv_dest, dv_type_name=stmt.value.dv_type_name, args=[val])
+					M.ConstructError(dest=err_val, code=code_val, payload=payload_val, attr_key=payload_key)
 				)
-				field_dvs.append((name, dv_dest))
-			if not field_dvs:
-				raise NotImplementedError("HDVInit with attr_names must contain at least one field")
-			payload_key = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=payload_key, value="payload"))
-			first_dv = field_dvs[0][1]
-			self.b.emit(
-				M.ConstructError(dest=err_val, code=code_val, payload=first_dv, attr_key=payload_key)
-			)
-			for name, dv in field_dvs[1:]:
-				key = self.b.new_temp()
-				self.b.emit(M.ConstString(dest=key, value=name))
-				self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key, value=dv))
+			else:
+				field_dvs: list[tuple[str, M.ValueId]] = []
+				for name, field_expr in zip(stmt.value.field_names, stmt.value.field_values):
+					val = self.lower_expr(field_expr)
+					field_dvs.append((name, val))
+				payload_key = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=payload_key, value="payload"))
+				first_dv = field_dvs[0][1]
+				self.b.emit(
+					M.ConstructError(dest=err_val, code=code_val, payload=first_dv, attr_key=payload_key)
+				)
+				for name, dv in field_dvs[1:]:
+					key = self.b.new_temp()
+					self.b.emit(M.ConstString(dest=key, value=name))
+					self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key, value=dv))
 		else:
 			# Payload of the error (already a DiagnosticValue expression in HIR).
 			payload_val = self.lower_expr(stmt.value)
@@ -964,9 +972,11 @@ class HIRToMIR:
 		"""
 		Best-effort event code lookup from exception metadata.
 
-		If the payload is an HDVInit with a known DV/exception name and an
-		exception env was provided, return that code; otherwise return 0.
+		If the payload is an exception init or an HDVInit with a known DV/exception
+		name and an exception env was provided, return that code; otherwise return 0.
 		"""
+		if isinstance(payload_expr, H.HExceptionInit) and self._exc_env is not None:
+			return self._exc_env.get(payload_expr.event_name, 0)
 		if isinstance(payload_expr, H.HDVInit) and self._exc_env is not None:
 			return self._exc_env.get(payload_expr.dv_type_name, 0)
 		return 0

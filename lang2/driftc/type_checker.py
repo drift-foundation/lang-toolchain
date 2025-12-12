@@ -346,27 +346,50 @@ class TypeChecker:
 				then_ty = type_expr(expr.then_expr)
 				else_ty = type_expr(expr.else_expr)
 				return record_expr(expr, then_ty if then_ty == else_ty else self._unknown)
-			if isinstance(expr, H.HDVInit):
-				arg_types = [type_expr(a) for a in expr.args]
-				if expr.attr_names:
-					if len(expr.attr_names) != len(expr.args):
+			if isinstance(expr, H.HExceptionInit):
+				if len(expr.field_names) != len(expr.field_values):
+					diagnostics.append(
+						Diagnostic(
+							message="attribute names/values mismatch in exception constructor",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._dv)
+				for name, val_expr in zip(expr.field_names, expr.field_values):
+					val_ty = type_expr(val_expr)
+					if val_ty != self._dv:
 						diagnostics.append(
 							Diagnostic(
-								message="attribute names/values mismatch in diagnostic constructor",
+								message=f"attribute '{name}' value must be DiagnosticValue",
+								severity="error",
+								span=getattr(val_expr, "loc", Span()),
+							)
+						)
+				return record_expr(expr, self._dv)
+			if isinstance(expr, H.HDVInit):
+				arg_types = [type_expr(a) for a in expr.args]
+				if expr.args:
+					# Only zero-arg (missing) or single-arg primitive DV ctors are supported in v1.
+					if len(expr.args) > 1:
+						diagnostics.append(
+							Diagnostic(
+								message="DiagnosticValue constructors support at most one argument in v1",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
 						)
-						return record_expr(expr, self._dv)
-					for name, arg_ty, arg_expr in zip(expr.attr_names, arg_types, expr.args):
-						if arg_ty is not self._dv:
-							diagnostics.append(
-								Diagnostic(
-									message=f"attribute '{name}' value must be DiagnosticValue",
-									severity="error",
-									span=getattr(arg_expr, "loc", Span()),
-								)
+						return record_expr(expr, self._unknown)
+					inner_ty = arg_types[0]
+					if inner_ty not in (self._int, self._bool, self._string):
+						diagnostics.append(
+							Diagnostic(
+								message="unsupported DiagnosticValue constructor argument type",
+								severity="error",
+								span=getattr(expr.args[0], "loc", Span()),
 							)
+						)
+						return record_expr(expr, self._unknown)
 				return record_expr(expr, self._dv)
 			if isinstance(expr, H.HResultOk):
 				ok_ty = type_expr(expr.value)
@@ -408,7 +431,7 @@ class TypeChecker:
 					type_block(arm.block)
 			elif isinstance(stmt, H.HThrow):
 				val_ty = type_expr(stmt.value)
-				if val_ty is not self._dv:
+				if val_ty != self._dv:
 					diagnostics.append(
 						Diagnostic(
 							message="throw payload must be DiagnosticValue",

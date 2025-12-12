@@ -227,7 +227,21 @@ class HDVInit(HExpr):
 	"""Desugared DiagnosticValue constructor call."""
 	dv_type_name: str
 	args: List[HExpr]
-	attr_names: List[str] | None = None
+
+
+@dataclass
+class HExceptionInit(HExpr):
+	"""
+	Structured exception/event constructor.
+
+	event_name: exception/event identifier
+	field_names/field_values: ordered lists of declared field names and
+	  their expressions (already desugared to HIR)
+	"""
+	event_name: str
+	field_names: List[str]
+	field_values: List[HExpr]
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass

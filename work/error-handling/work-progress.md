@@ -213,9 +213,10 @@ Your last open question asks about staging. My recommendation:
 
 ### Next steps (attr/DV correctness focus)
 
-- Checker (surface-level): require throw payloads and any attr/value constructs to be `DiagnosticValue`; emit span-carrying diagnostics on the source nodes for unsupported payload types. Keep checker rules independent of MIR op names (e.g., no coupling to `ErrorAddAttrDV`).
-- Spans: extend structured spans to remaining exception diagnostics (duplicate/unknown exception declarations/catches) for UX parity.
-- Tests: (1) checker-level negative for non-DV attr payload rejected with span, (2) LLVM/codegen round-trip for a multi-attr error using DV payloads only to exercise runtime/ABI.
+- Checker (surface-level): require throw payloads and any attr/value constructs to be `DiagnosticValue`; emit span-carrying diagnostics on the source nodes for unsupported payload types. Keep checker rules independent of MIR op names (e.g., no coupling to `ErrorAddAttrDV`). (Done)
+- Spans: extend structured spans to remaining exception diagnostics (duplicate/unknown exception declarations/catches) for UX parity. (Done)
+- Tests: (1) checker-level negative for non-DV attr payload rejected with span, (2) LLVM/codegen round-trip for a multi-attr error using DV payloads only to exercise runtime/ABI. (Done)
+- Deferred: opaque/object/array attrs until a stable runtime handle/ownership model exists; current attrs remain limited to existing DV kinds (Int/Bool/String/Missing), no implicit coercions.
 ---
 
 ## 7. Answering your open questions directly

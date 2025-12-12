@@ -239,13 +239,19 @@ class AstToHIR:
 
 	def _visit_expr_ExceptionCtor(self, expr: ast.ExceptionCtor) -> H.HExpr:
 		"""
-		Exception/diagnostic constructor → HDVInit placeholder.
+		Exception constructor → structured exception init node.
 
-		Fields are a mapping name -> expression; ordering is not enforced yet.
+		Fields are a mapping name -> expression; ordering follows parser arg_order
+		if present, otherwise the dict order.
 		"""
 		ordered_names = getattr(expr, "arg_order", None) or list(expr.fields.keys())
-		arg_exprs = [self.lower_expr(expr.fields[name]) for name in ordered_names]
-		return H.HDVInit(dv_type_name=expr.name, args=arg_exprs, attr_names=ordered_names)
+		field_exprs = [self.lower_expr(expr.fields[name]) for name in ordered_names]
+		return H.HExceptionInit(
+			event_name=expr.name,
+			field_names=ordered_names,
+			field_values=field_exprs,
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 
 	def _visit_expr_Ternary(self, expr: ast.Ternary) -> H.HExpr:
 		"""Lower ternary expression: cond ? then_expr : else_expr."""

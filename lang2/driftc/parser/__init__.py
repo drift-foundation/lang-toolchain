@@ -172,7 +172,7 @@ def _convert_try(stmt: parser_ast.TryStmt) -> s0.Stmt:
 
 def _convert_import(stmt: parser_ast.ImportStmt) -> s0.Stmt:
 	path = ".".join(stmt.path)
-	return s0.ImportStmt(path=path, loc=stmt.loc)
+	return s0.ImportStmt(path=path, loc=Span.from_loc(stmt.loc))
 
 
 _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]] = {

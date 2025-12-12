@@ -7,7 +7,7 @@ These tests exercise the currently supported lowering:
   - literals, names, unary/binary ops
   - field/index
   - plain calls, method calls
-  - exception ctor → HDVInit
+  - exception ctor → HExceptionInit
   - let/assign/if/return/break/continue/expr-stmt
 They run purely in-memory; no parser or codegen required.
 """
@@ -28,7 +28,7 @@ from lang2.driftc.stage1 import (
 	HIndex,
 	HCall,
 	HMethodCall,
-	HDVInit,
+	HExceptionInit,
 	HLet,
 	HAssign,
 	HIf,
@@ -83,10 +83,11 @@ def test_exception_ctor_to_dvinit():
 	l = AstToHIR()
 	ctor = ast.ExceptionCtor(name="MyErr", fields={"x": ast.Literal(1), "y": ast.Literal(2)})
 	hir = l.lower_expr(ctor)
-	assert isinstance(hir, HDVInit)
-	assert hir.dv_type_name == "MyErr"
-	assert len(hir.args) == 2
-	assert all(isinstance(a, HLiteralInt) for a in hir.args)
+	assert isinstance(hir, HExceptionInit)
+	assert hir.event_name == "MyErr"
+	assert hir.field_names == ["x", "y"]
+	assert len(hir.field_values) == 2
+	assert all(isinstance(a, HLiteralInt) for a in hir.field_values)
 
 
 def test_basic_statements_and_if():
