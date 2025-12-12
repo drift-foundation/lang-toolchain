@@ -280,7 +280,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 				Diagnostic(
 					message=f"duplicate function definition for '{fn.name}'",
 					severity="error",
-					span=getattr(fn, "loc", None),
+					span=Span.from_loc(getattr(fn, "loc", None)),
 				)
 			)
 			# Skip adding a duplicate; keep the first definition.
@@ -300,7 +300,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 				Diagnostic(
 					message="implement header must use a nominal type, not a reference type",
 					severity="error",
-					span=getattr(impl, "loc", None),
+					span=Span.from_loc(getattr(impl, "loc", None)),
 				)
 			)
 			continue
@@ -310,7 +310,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					Diagnostic(
 						message=f"method '{fn.name}' must have a receiver parameter",
 						severity="error",
-						span=getattr(fn, "loc", None),
+						span=Span.from_loc(getattr(fn, "loc", None)),
 					)
 				)
 				continue
@@ -326,7 +326,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					Diagnostic(
 						message=f"unsupported receiver type for method '{fn.name}'",
 						severity="error",
-						span=getattr(fn, "loc", None),
+						span=Span.from_loc(getattr(fn, "loc", None)),
 					)
 				)
 				continue
@@ -336,7 +336,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					Diagnostic(
 						message=f"method '{fn.name}' conflicts with existing free function of the same name",
 						severity="error",
-						span=getattr(fn, "loc", None),
+						span=Span.from_loc(getattr(fn, "loc", None)),
 					)
 				)
 				continue
@@ -347,7 +347,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					Diagnostic(
 						message=f"duplicate method definition '{fn.name}' for type '{target_str}'",
 						severity="error",
-						span=getattr(fn, "loc", None),
+						span=Span.from_loc(getattr(fn, "loc", None)),
 					)
 				)
 				continue

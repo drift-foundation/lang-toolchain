@@ -349,6 +349,15 @@ class TypeChecker:
 			if isinstance(expr, H.HDVInit):
 				arg_types = [type_expr(a) for a in expr.args]
 				if expr.attr_names:
+					if len(expr.attr_names) != len(expr.args):
+						diagnostics.append(
+							Diagnostic(
+								message="attribute names/values mismatch in diagnostic constructor",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._dv)
 					for name, arg_ty, arg_expr in zip(expr.attr_names, arg_types, expr.args):
 						if arg_ty is not self._dv:
 							diagnostics.append(
