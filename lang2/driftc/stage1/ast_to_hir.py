@@ -248,8 +248,11 @@ class AstToHIR:
 		"""
 		ordered_names = getattr(expr, "arg_order", None) or list(expr.fields.keys())
 		field_exprs = [self.lower_expr(expr.fields[name]) for name in ordered_names]
-		# Build canonical FQN if module is known; otherwise fall back to short name.
-		fqn = f"{self._module_name}:{expr.name}" if self._module_name else expr.name
+		if not self._module_name:
+			raise NotImplementedError(
+				"Exception constructor lowering requires a module name to build an event FQN"
+			)
+		fqn = f"{self._module_name}:{expr.name}"
 		return H.HExceptionInit(
 			event_fqn=fqn,
 			field_names=ordered_names,

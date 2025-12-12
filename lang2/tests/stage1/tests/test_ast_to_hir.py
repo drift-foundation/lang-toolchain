@@ -81,10 +81,11 @@ def test_plain_and_method_calls():
 
 def test_exception_ctor_to_dvinit():
 	l = AstToHIR()
+	l._module_name = "m"
 	ctor = ast.ExceptionCtor(name="MyErr", fields={"x": ast.Literal(1), "y": ast.Literal(2)})
 	hir = l.lower_expr(ctor)
 	assert isinstance(hir, HExceptionInit)
-	assert hir.event_fqn.endswith(":MyErr") or hir.event_fqn == "MyErr"
+	assert hir.event_fqn == "m:MyErr"
 	assert hir.field_names == ["x", "y"]
 	assert len(hir.field_values) == 2
 	assert all(isinstance(a, HLiteralInt) for a in hir.field_values)
