@@ -198,6 +198,12 @@ Your last open question asks about staging. My recommendation:
 - Multi-attr throw lowering is now deterministic: payload is always stored under the fixed "payload" key, all named fields are attached via `ErrorAddAttrDV`, and DV construction uses the exception/ctor name (not the attr key) to keep semantics stable.
 - Parser adapter now handles try/catch/while/for/import/exception ctors/ternary/placeholder, so lang2 front end accepts the same surface constructs as lang/.
 - Exception declarations emit event codes via the shared xxhash64 ABI helper (`event_code`), with diagnostics for duplicates/payload collisions; catalog is threaded through driver/e2e runner, checker, and HIR→MIR lowering (`exc_env`).
+
+## 2025-XX-XX progress update
+
+- Throw payloads are now **exception constructors only** (or existing `Error` handles); DV-as-payload throws are rejected in the checker. Stage2 lowering uses the event name for the first attr and attaches all declared fields under their names; no implicit `"payload"` slot remains.
+- Stage0 adapter now wraps all locations in structured `Span`, closing the last raw/None leaks (imports/catch arms/etc.), and the checker emits spans for resolution errors.
+- Driver/stage4 integration tests updated to use exception ctors as throw payloads; full `just` suite is passing after the throw-payload model change.
 - Added parser + driver tests covering event-code generation, duplicate exception diagnostics, and checker rejection of unknown catch events when no exception is declared.
 - HIR→MIR now enforces can-throw semantics when known (asserts on throw/try in known non-can-throw functions; allows when undecided) to keep invariants tight without breaking legacy tests.
 - LLVM DV/attrs path now has an end-to-end round-trip test that constructs an Error, attaches an additional attr, retrieves it via `Error.attrs[...]`, converts with `dv.as_int`, unwraps Optional, and returns the value to lock the ABI.
@@ -208,7 +214,7 @@ Your last open question asks about staging. My recommendation:
 - Fixed FnResult<Ref<T>> Err lowering to zero the ptr ok slot correctly (opaque pointer literal) and added coverage; headers now call out that arrays are supported as values but not yet as FnResult ok payloads.
 - Phase 2 scaffolding started: TypeTable/resolve support for DiagnosticValue and Optional<T>; checker knows Error.attrs[String] returns DiagnosticValue and dv.as_{int,bool,string} return Optional<T>; HIR→MIR lowers Error.attrs[...] to ErrorAttrsGetDV and dv.as_* to dedicated DVAs* MIR ops with new tests. LLVM backend still fails fast on DV ops (to be implemented next).
 - Catch-arm spans are now threaded end-to-end: HIR nodes carry a `Span`, normalization preserves it, collection asserts it, and `validate_catch_arms` attaches it (with notes pointing to first occurrences for duplicates/catch-alls).
-- Exception constructors are now a dedicated HIR node (`HExceptionInit`) that is only valid as a throw payload; DV ctor (`HDVInit`) is primitive-only. HIR→MIR throw lowering stores the first field under both `"payload"` and its declared name, and all fields must already be DiagnosticValues; type checker rejects exception ctors outside `throw` with span diagnostics.
+- Exception constructors are now a dedicated HIR node (`HExceptionInit`) that is only valid as a throw payload; DV ctor (`HDVInit`) is primitive-only. HIR→MIR throw lowering treats the thrown value as an Error: fields become attrs under their declared names (no special “payload” key); type checker rejects exception ctors outside `throw` and any non-exception throw payloads with span diagnostics.
 - DV helper methods (`as_int` / `as_bool` / `as_string`) now short-circuit before registry/signature resolution; misuse on non-DiagnosticValue receivers emits a span-carrying diagnostic rather than falling through.
 - Checker now enforces DiagnosticValue-only throw payloads and attr field values (with span diagnostics), and parser exception diagnostics wrap parser locs in structured `Span`.
 

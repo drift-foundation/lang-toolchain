@@ -94,7 +94,17 @@ def test_try_dispatches_on_event_codes():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HLiteralString("boom"))]),
+				body=H.HBlock(
+					statements=[
+						H.HThrow(
+							value=H.HExceptionInit(
+								event_name="EvtA",
+								field_names=["msg"],
+								field_values=[H.HDVInit(dv_type_name="EvtA", args=[H.HLiteralString("boom")])],
+							)
+						)
+					]
+				),
 				catches=[
 					H.HCatchArm(event_name="EvtA", binder="a", block=H.HBlock(statements=[])),
 					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),

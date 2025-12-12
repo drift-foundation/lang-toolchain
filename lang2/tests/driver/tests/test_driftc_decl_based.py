@@ -38,7 +38,11 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 
 	# HIR bodies: can-throw function throws; plain function returns an int.
 	hirs = {
-		"f_can": H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtA", args=[]))]),
+		"f_can": H.HBlock(
+			statements=[
+				H.HThrow(value=H.HExceptionInit(event_name="EvtA", field_names=[], field_values=[]))
+			]
+		),
 		"g_plain": H.HBlock(statements=[H.HReturn(value=H.HLiteralInt(value=1))]),
 	}
 
@@ -75,7 +79,11 @@ def test_driver_reports_decl_based_mismatch_diagnostics():
 	exc_catalog = exception_catalog_from_decls(decls)  # empty catalog
 
 	hirs = {
-		"g_plain": H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtX", args=[]))]),
+		"g_plain": H.HBlock(
+			statements=[
+				H.HThrow(value=H.HExceptionInit(event_name="EvtX", field_names=[], field_values=[]))
+			]
+		),
 	}
 
 	mir_funcs, checked = compile_stubbed_funcs(

@@ -451,15 +451,7 @@ class TypeChecker:
 					)
 					type_expr(stmt.value)
 				else:
-					val_ty = type_expr(stmt.value, allow_exception_init=True)
-					if val_ty != self._dv:
-						diagnostics.append(
-							Diagnostic(
-								message="throw payload must be DiagnosticValue",
-								severity="error",
-								span=getattr(stmt, "loc", Span()),
-							)
-						)
+					type_expr(stmt.value, allow_exception_init=True)
 			# HBreak/HContinue are typeless here.
 
 		def type_block(block: H.HBlock) -> None:

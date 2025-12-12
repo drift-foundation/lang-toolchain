@@ -16,7 +16,7 @@ def test_compile_stubbed_funcs_builds_ssa_and_type_env():
 	"""
 	hir_block = H.HBlock(
 		statements=[
-			H.HThrow(value=H.HDVInit(dv_type_name="Evt", args=[])),
+			H.HThrow(value=H.HExceptionInit(event_name="Evt", field_names=[], field_values=[])),
 		]
 	)
 

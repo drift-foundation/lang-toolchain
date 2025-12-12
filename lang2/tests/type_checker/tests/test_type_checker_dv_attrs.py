@@ -10,16 +10,11 @@ def _tc() -> TypeChecker:
 	return TypeChecker(TypeTable())
 
 
-def test_throw_payload_must_be_diagnostic_value():
+def test_throw_payload_must_be_exception_constructor():
 	tc = _tc()
-	exc = H.HExceptionInit(
-		event_name="Exc",
-		field_names=["detail"],
-		field_values=[H.HLiteralInt(1)],
-	)
-	block = H.HBlock(statements=[H.HThrow(value=exc)])
+	block = H.HBlock(statements=[H.HThrow(value=H.HLiteralInt(1))])
 	res = tc.check_function("f", block)
-	assert any("throw payload must be DiagnosticValue" in d.message for d in res.diagnostics)
+	assert any("throw payload must be an exception constructor" in d.message for d in res.diagnostics)
 
 
 def test_attr_payload_must_be_diagnostic_value():

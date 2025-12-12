@@ -28,7 +28,13 @@ def test_can_throw_function_passes_checks():
 	"""A declared can-throw function that throws should pass all invariants."""
 	fn_name, mir_fn = _lower_fn(
 		"f_can",
-		H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="X", args=[]))]),
+		H.HBlock(
+			statements=[
+				H.HThrow(
+					value=H.HExceptionInit(event_name="EvtX", field_names=[], field_values=[]),
+				)
+			]
+		),
 	)
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
@@ -45,7 +51,13 @@ def test_non_can_throw_function_violates_invariant():
 	"""A function that throws but is not declared can-throw should fail checks."""
 	fn_name, mir_fn = _lower_fn(
 		"f_non_can",
-		H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="X", args=[]))]),
+		H.HBlock(
+			statements=[
+				H.HThrow(
+					value=H.HExceptionInit(event_name="EvtX", field_names=[], field_values=[]),
+				)
+			]
+		),
 	)
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
@@ -67,7 +79,13 @@ def test_can_throw_try_catch_and_return_ok_shape():
 		H.HBlock(
 			statements=[
 				H.HTry(
-					body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="Evt", args=[]))]),
+					body=H.HBlock(
+						statements=[
+							H.HThrow(
+								value=H.HExceptionInit(event_name="Evt", field_names=[], field_values=[]),
+							)
+						]
+					),
 					catches=[H.HCatchArm(event_name="Evt", binder="e", block=H.HBlock(statements=[]))],
 				)
 			]

@@ -1477,7 +1477,7 @@ val routed = try parse(input) catch BadFormat(e) { 0 } catch { 1 }
   - `catch e { block }` — catch-all, binder `e: Error`.
   - `catch EventName(e) { block }` — match specific event, binder `e: Error`.
 - Multiple catch arms are allowed; event arms are tested in source order, then catch-all; if no arm matches and there is no catch-all, the error is rethrown.
-- Event identity is by event name; the implementation assigns each exception a deterministic integer `event_code` for dispatch, but that encoding is an implementation detail.
+- Event identity is by event name in source; lowering compares deterministic `event_code` constants derived from the fully-qualified event name (§14.1.1). The runtime never matches on strings.
 - The **attempt must be a function call** (`Name` or `Name.Attr`); non-call attempts are a compile-time error in the current revision.
 - This is sugar for a block-wrapped statement `try/catch` that returns the block’s value.
 
@@ -2040,14 +2040,24 @@ Drift’s exception system is designed to:
 
 ---
 
+### 14.1.1. Source identity vs. runtime identity
+
+- **Source identity** of an exception event is its fully-qualified name `Module.ExceptionName` (canonical, no aliases).
+- **Runtime identity** is a deterministic 64-bit `event_code = hash_v1(fqn_utf8_bytes)`; users never type or see codes.
+- `catch M.E` lowers to `if err.event_code == hash(fqn)`; matching is by code, derived from the resolved FQN.
+- Collisions detected during compilation are fatal within the build; if/when multi-module linking is introduced, collision handling must remain deterministic.
+
+---
+
 ### 14.2. Error type and layout
 
 ```drift
 struct Error {
-    event: String,
-    attrs: Map<String, DiagnosticValue>,
-    ctx_frames: Array<CtxFrame>,
-    stack: BacktraceHandle
+    event_code: Uint64,                        // stable, required
+    attrs: Map<String, DiagnosticValue>,       // see §5.13.7, §14.3
+    ctx_frames: Array<CtxFrame>,               // captured locals per frame
+    stack: BacktraceHandle,                    // opaque backtrace
+    debug_event: Optional<String>              // optional, non-normative name
 }
 
 exception IndexError {
@@ -2056,8 +2066,8 @@ exception IndexError {
 }
 ```
 
-#### 14.2.1. event
-Event name of the exception (`"BadArgument"`).
+#### 14.2.1. event_code
+Deterministic 64-bit code derived from the exception’s fully-qualified name (`Module.ExceptionName`) using the frozen hash (§14.1.1). This is the **only** runtime routing key.
 
 #### 14.2.2. attrs
 All exception attributes as typed `DiagnosticValue` entries (see §5.13.8). Values are produced via `Diagnostic.to_diag()`; no stringification is implied. Any value recorded in `Error.attrs` (exception fields or later-added attrs) must implement `Diagnostic`; attempting to attach a non-Diagnostic value is a compile-time error.
@@ -2076,6 +2086,9 @@ Event attrs never appear here.
 
 #### 14.2.4. stack
 Opaque captured backtrace.
+
+#### 14.2.5. debug_event
+Optional best-effort event name for tooling/logging. It is **not** used for matching or ABI; if present, it is derived from metadata tables (§14.6).
 
 ---
 
@@ -2101,13 +2114,20 @@ throw InvalidOrder { order_id: order.id, code: "order.invalid" }
 ```
 
 Runtime builds an `Error` with:
-- event name
+- `event_code = hash(fqn)` (see §14.1.1)
 - attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name—there is no special “primary payload” field; every value must implement the `Diagnostic` trait (§5.13.7))
 - empty ctx_frames (filled during unwind)
 - backtrace
 
 #### 14.3.3. Diagnostic requirement
 Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a typed `DiagnosticValue`.
+
+#### 14.3.4. Event code derivation and collision policy
+- Canonical FQN string: `Module.ExceptionName` with UTF-8 encoding, no aliases or whitespace.
+- Hash algorithm: `hash_v1(fqn_utf8_bytes)` (frozen; currently xxhash64, truncated/encoded as unsigned 64-bit).
+- Runtime routing key: `event_code = hash_v1(fqn_utf8_bytes)`.
+- Collision policy: any collision detected within a build is a **compile-time error**. If cross-module linking is introduced, collision handling must remain deterministic; with FQN input the practical risk is negligible.
+- Tooling/debug mapping: see §14.6.5 for the code→name table carried in DMIR/metadata.
 
 ---
 
@@ -2148,7 +2168,7 @@ try {
 }
 ```
 
-Matches by `error.event`.
+Matches by `error.event_code` derived from the resolved fully-qualified event name (§14.1.1); the source uses the event name, runtime compares the deterministic code.
 
 #### 14.5.2. Catch-all + rethrow
 ```drift
@@ -2227,6 +2247,12 @@ Drift distinguishes **can-throw** functions from **non-throwing** ones and enfor
 - **ABI clarity.** Can-throw functions use the `Result<T, Error>` calling convention; non-throwing functions use plain returns. Mixing the two is rejected rather than silently coerced.
 
 These rules keep the error model explicit, prevent accidental unwinding from non-throwing code, and make cross-module ABIs predictable.
+
+---
+
+#### 14.6.2. Event-code metadata for tooling
+- DMIR carries a table `{ event_code -> fully-qualified event name }` (and may include declared field schemas) for diagnostics, logging, and tooling.
+- Runtime/host APIs may expose a resolver to turn `event_code` into a name for display. This mapping is **not** required for correctness or routing; matching always uses codes (§14.1.1).
 
 ---
 
