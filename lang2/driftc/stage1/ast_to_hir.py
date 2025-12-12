@@ -48,6 +48,8 @@ class AstToHIR:
 		# Binding id allocator and scope stack for locals/params.
 		self._next_binding_id = 1
 		self._scope_stack: list[dict[str, H.BindingId]] = [dict()]
+		# Current module name for building canonical FQNs; set by parser adapter.
+		self._module_name: str | None = None
 
 	def _fresh_temp(self, prefix: str = "__tmp") -> str:
 		"""Allocate a unique temporary name with a given prefix."""
@@ -246,8 +248,10 @@ class AstToHIR:
 		"""
 		ordered_names = getattr(expr, "arg_order", None) or list(expr.fields.keys())
 		field_exprs = [self.lower_expr(expr.fields[name]) for name in ordered_names]
+		# Build canonical FQN if module is known; otherwise fall back to short name.
+		fqn = f"{self._module_name}:{expr.name}" if self._module_name else expr.name
 		return H.HExceptionInit(
-			event_name=expr.name,
+			event_fqn=fqn,
 			field_names=ordered_names,
 			field_values=field_exprs,
 			loc=Span.from_loc(getattr(expr, "loc", None)),

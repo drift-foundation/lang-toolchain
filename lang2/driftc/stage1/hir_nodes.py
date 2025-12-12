@@ -234,11 +234,11 @@ class HExceptionInit(HExpr):
 	"""
 	Structured exception/event constructor.
 
-	event_name: exception/event identifier
+	event_fqn: str  # canonical fully-qualified name (<module>.<submodules>:<event>)
 	field_names/field_values: ordered lists of declared field names and
 	  their expressions (already desugared to HIR)
 	"""
-	event_name: str
+	event_fqn: str
 	field_names: List[str]
 	field_values: List[HExpr]
 	loc: Span = field(default_factory=Span)

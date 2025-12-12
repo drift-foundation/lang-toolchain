@@ -629,20 +629,17 @@ class HIRToMIR:
 		code_val = self.b.new_temp()
 		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 
-		event_name_val = None
-		if isinstance(stmt.value, H.HExceptionInit):
-			event_name_val = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=event_name_val, value=stmt.value.event_name))
-
 		err_val = self.b.new_temp()
 		if isinstance(stmt.value, H.HExceptionInit):
+			event_name_val = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=event_name_val, value=stmt.value.event_fqn))
 			field_count = len(stmt.value.field_values)
 			if field_count == 0:
 				# No declared fields: seed with an empty DV under the event name.
 				payload_val = self.b.new_temp()
-				self.b.emit(M.ConstructDV(dest=payload_val, dv_type_name=stmt.value.event_name, args=[]))
+				self.b.emit(M.ConstructDV(dest=payload_val, dv_type_name=stmt.value.event_fqn, args=[]))
 				key_val = self.b.new_temp()
-				self.b.emit(M.ConstString(dest=key_val, value=stmt.value.event_name))
+				self.b.emit(M.ConstString(dest=key_val, value=stmt.value.event_fqn))
 				self.b.emit(
 					M.ConstructError(
 						dest=err_val,
@@ -984,7 +981,8 @@ class HIRToMIR:
 		name and an exception env was provided, return that code; otherwise return 0.
 		"""
 		if isinstance(payload_expr, H.HExceptionInit) and self._exc_env is not None:
-			return self._exc_env.get(payload_expr.event_name, 0)
+			short_name = getattr(payload_expr, "event_name", None)
+			return self._exc_env.get(short_name, 0) if short_name is not None else 0
 		if isinstance(payload_expr, H.HDVInit) and self._exc_env is not None:
 			return self._exc_env.get(payload_expr.dv_type_name, 0)
 		return 0

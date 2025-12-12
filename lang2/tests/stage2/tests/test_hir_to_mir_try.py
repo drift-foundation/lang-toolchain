@@ -38,7 +38,7 @@ def test_try_routes_throw_to_catch_block():
 					statements=[
 						H.HThrow(
 							value=H.HExceptionInit(
-								event_name="Evt",
+								event_fqn="m:Evt",
 								field_names=["msg"],
 								field_values=[H.HDVInit(dv_type_name="Evt", args=[H.HLiteralString("boom")])],
 							)
@@ -98,7 +98,7 @@ def test_try_dispatches_on_event_codes():
 					statements=[
 						H.HThrow(
 							value=H.HExceptionInit(
-								event_name="EvtA",
+								event_fqn="m:EvtA",
 								field_names=["msg"],
 								field_values=[H.HDVInit(dv_type_name="EvtA", args=[H.HLiteralString("boom")])],
 							)

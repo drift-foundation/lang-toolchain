@@ -30,7 +30,7 @@ def test_throw_lowers_to_error_and_result_err_return():
 	lower = HIRToMIR(builder)
 
 	exc = H.HExceptionInit(
-		event_name="Boom",
+		event_fqn="m:Boom",
 		field_names=["msg"],
 		field_values=[H.HDVInit(dv_type_name="Boom", args=[H.HLiteralString("boom")])],
 	)
@@ -45,7 +45,7 @@ def test_throw_lowers_to_error_and_result_err_return():
 	payload_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "boom")
 	const_int = next(i for i in instrs if isinstance(i, ConstInt))
 	key_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "msg")
-	event_name_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "Boom")
+	event_name_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "m:Boom")
 	err = next(i for i in instrs if isinstance(i, ConstructError))
 	err_result = next(i for i in instrs if isinstance(i, ConstructResultErr))
 	assert err.payload == dv_ctor.dest
@@ -70,8 +70,8 @@ def test_exception_init_throw_attaches_all_fields():
 	lower = HIRToMIR(builder)
 
 	exc = H.HExceptionInit(
-		event_name="Evt",
-		field_names=["a", "b"],
+	event_fqn="m:Evt",
+	field_names=["a", "b"],
 		field_values=[
 			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(1)]),
 			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(2)]),
@@ -86,5 +86,5 @@ def test_exception_init_throw_attaches_all_fields():
 	assert len(add_attr_instrs) == 1
 	# Keys come from ConstString instructions; verify the literal values.
 	key_literals = [i.value for i in entry.instructions if isinstance(i, ConstString)]
-	assert "Evt" in key_literals  # event name
+	assert "m:Evt" in key_literals  # event FQN used for name/payload
 	assert "a" in key_literals and "b" in key_literals

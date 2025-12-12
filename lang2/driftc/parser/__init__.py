@@ -302,6 +302,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	decls: list[_FrontendDecl] = []
 	signatures: Dict[str, FnSignature] = {}
 	lowerer = AstToHIR()
+	lowerer._module_name = module_name
 	seen: set[str] = set()
 	method_keys: set[tuple[str, str]] = set()  # (impl_target_repr, method_name)
 	diagnostics: list[Diagnostic] = []
@@ -321,7 +322,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 		decl_decl = _decl_from_parser_fn(fn)
 		decl_decl.module = module_name
 		decls.append(decl_decl)
-		stmt_block = _convert_block(fn.body)
+		stmt_block = _convert_block(fn.body, module_name=module_name)
 		hir_block = lowerer.lower_block(stmt_block)
 		func_hirs[fn.name] = hir_block
 	# Methods inside implement blocks.
