@@ -46,8 +46,8 @@ def test_array_literal_and_index_ir_contains_alloc_and_load():
 	sig = FnSignature(name="f", return_type_id=int_ty, param_type_ids=[])
 	fn_info = FnInfo(name="f", declared_can_throw=False, signature=sig, return_type_id=int_ty)
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {"f": fn_info})
-	assert "declare ptr @drift_alloc_array" in ir
-	assert "call ptr @drift_alloc_array" in ir
+	assert "declare i8* @drift_alloc_array" in ir
+	assert "call i8* @drift_alloc_array" in ir
 	assert "drift_bounds_check_fail" in ir
 	assert "br i1" in ir
 	assert "unreachable" in ir

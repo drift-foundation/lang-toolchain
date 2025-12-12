@@ -196,14 +196,14 @@ class LlvmModuleBuilder:
 			self.type_decls.append(f"{DRIFT_SIZE_TYPE} = type i64")
 		self.type_decls.extend(
 			[
-				f"{DRIFT_ERROR_TYPE} = type {{ i64, ptr, {DRIFT_SIZE_TYPE}, ptr, {DRIFT_SIZE_TYPE} }}",
-				f"{FNRESULT_INT_ERROR} = type {{ i1, i64, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_STRING_TYPE} = type {{ {DRIFT_SIZE_TYPE}, i8* }}",
+				f"{DRIFT_ERROR_TYPE} = type {{ i64, {DRIFT_STRING_TYPE}, i8*, {DRIFT_SIZE_TYPE}, i8*, {DRIFT_SIZE_TYPE} }}",
+				f"{FNRESULT_INT_ERROR} = type {{ i1, i64, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
 				f"{DRIFT_OPT_INT_TYPE} = type {{ i8, i64 }}",
 				f"{DRIFT_OPT_BOOL_TYPE} = type {{ i8, i8 }}",
 				f"{DRIFT_OPT_STRING_TYPE} = type {{ i8, {DRIFT_STRING_TYPE} }}",
-				"%DriftArrayHeader = type { i64, i64, ptr }",
+				"%DriftArrayHeader = type { i64, i64, i8* }",
 			]
 		)
 		# Seed the canonical FnResult types for supported ok payloads.
@@ -284,7 +284,7 @@ class LlvmModuleBuilder:
 			"  %len = extractvalue %DriftArrayHeader %arr, 0",
 			"  %cap = extractvalue %DriftArrayHeader %arr, 1",
 			"  %data_raw = extractvalue %DriftArrayHeader %arr, 2",
-			"  %data = bitcast ptr %data_raw to %DriftString*",
+			"  %data = bitcast i8* %data_raw to %DriftString*",
 			f"  %tmp0 = insertvalue {array_type} undef, {DRIFT_SIZE_TYPE} %len, 0",
 			f"  %tmp1 = insertvalue {array_type} %tmp0, {DRIFT_SIZE_TYPE} %cap, 1",
 			f"  %argv_typed = insertvalue {array_type} %tmp1, %DriftString* %data, 2",
@@ -309,7 +309,7 @@ class LlvmModuleBuilder:
 		if self.needs_array_helpers:
 			lines.extend(
 				[
-					f"declare ptr @drift_alloc_array(i64, i64, {DRIFT_SIZE_TYPE}, {DRIFT_SIZE_TYPE})",
+					f"declare i8* @drift_alloc_array(i64, i64, {DRIFT_SIZE_TYPE}, {DRIFT_SIZE_TYPE})",
 					f"declare void @drift_bounds_check_fail({DRIFT_SIZE_TYPE}, {DRIFT_SIZE_TYPE})",
 					"",
 				]
@@ -346,7 +346,7 @@ class LlvmModuleBuilder:
 		if self.needs_error_runtime:
 			lines.extend(
 				[
-					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE})",
+					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE})",
 					f"declare void @drift_error_add_attr_dv({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
 					"",
 				]
@@ -613,6 +613,7 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
+			event_name = self._map_value(instr.event_name)
 			payload = self._map_value(instr.payload)
 			attr_key = self._map_value(instr.attr_key)
 			self.value_types[dest] = DRIFT_ERROR_PTR
@@ -622,9 +623,14 @@ class _FuncBuilder:
 				raise NotImplementedError(
 					f"LLVM codegen v1: error code must be Int (i64), got {code_ty}"
 				)
+			event_name_ty = self.value_types.get(event_name)
+			if event_name_ty != DRIFT_STRING_TYPE:
+				raise NotImplementedError(
+					f"LLVM codegen v1: event_name must be String ({DRIFT_STRING_TYPE}), got {event_name_ty}"
+				)
 			# Attach payload via runtime helper; payload is expected to be a DiagnosticValue.
 			self.lines.append(
-				f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64 {code}, {DRIFT_STRING_TYPE} {attr_key}, {DRIFT_DV_TYPE} {payload})"
+				f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload(i64 {code}, {DRIFT_STRING_TYPE} {event_name}, {DRIFT_STRING_TYPE} {attr_key}, {DRIFT_DV_TYPE} {payload})"
 			)
 		elif isinstance(instr, ErrorAttrsGetDV):
 			self.module.needs_dv_runtime = True
@@ -1171,11 +1177,11 @@ class _FuncBuilder:
 		cap_const = count
 		tmp_alloc = self._fresh("arr")
 		self.lines.append(
-			f"  {tmp_alloc} = call ptr @drift_alloc_array(i64 {elem_size}, i64 {elem_align}, {DRIFT_SIZE_TYPE} {len_const}, {DRIFT_SIZE_TYPE} {cap_const})"
+			f"  {tmp_alloc} = call i8* @drift_alloc_array(i64 {elem_size}, i64 {elem_align}, {DRIFT_SIZE_TYPE} {len_const}, {DRIFT_SIZE_TYPE} {cap_const})"
 		)
 		# Bitcast to elem*
 		tmp_data = self._fresh("data")
-		self.lines.append(f"  {tmp_data} = bitcast ptr {tmp_alloc} to {elem_llty}*")
+		self.lines.append(f"  {tmp_data} = bitcast i8* {tmp_alloc} to {elem_llty}*")
 		# Store elements
 		for idx, elem in enumerate(instr.elements):
 			elem_val = self._map_value(elem)

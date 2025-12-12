@@ -3,12 +3,13 @@
 #include <stdio.h>
 #include <string.h>
 
-struct DriftError* drift_error_new_dummy(int64_t code, struct DriftString key, struct DriftString payload) {
+struct DriftError* drift_error_new_dummy(int64_t code, struct DriftString event_name, struct DriftString key, struct DriftString payload) {
     struct DriftError* err = malloc(sizeof(struct DriftError));
     if (!err) {
         abort();
     }
     err->code = code;
+    err->event_name = event_name;
     err->attrs = NULL;
     err->attr_count = 0;
     err->frames = NULL;
@@ -78,6 +79,14 @@ int64_t drift_error_get_code(struct DriftError* err) {
     return err->code;
 }
 
+struct DriftString drift_error_get_event_name(const struct DriftError* err) {
+    if (!err) {
+        struct DriftString empty = {0, NULL};
+        return empty;
+    }
+    return err->event_name;
+}
+
 const struct DriftDiagnosticValue* drift_error_get_attr(const struct DriftError* err, const struct DriftString* key) {
     if (!err || !key) return NULL;
     for (size_t i = 0; i < err->attr_count; i++) {
@@ -117,8 +126,8 @@ void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftErro
     *out = *val;
 }
 
-struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftString key, struct DriftDiagnosticValue payload) {
-    struct DriftError* err = drift_error_new_dummy(code, (struct DriftString){0, NULL}, (struct DriftString){0, NULL});
+struct DriftError* drift_error_new_with_payload(int64_t code, struct DriftString event_name, struct DriftString key, struct DriftDiagnosticValue payload) {
+    struct DriftError* err = drift_error_new_dummy(code, event_name, (struct DriftString){0, NULL}, (struct DriftString){0, NULL});
     if (!err) {
         return NULL;
     }

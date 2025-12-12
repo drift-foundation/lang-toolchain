@@ -629,6 +629,11 @@ class HIRToMIR:
 		code_val = self.b.new_temp()
 		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 
+		event_name_val = None
+		if isinstance(stmt.value, H.HExceptionInit):
+			event_name_val = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=event_name_val, value=stmt.value.event_name))
+
 		err_val = self.b.new_temp()
 		if isinstance(stmt.value, H.HExceptionInit):
 			field_count = len(stmt.value.field_values)
@@ -638,7 +643,15 @@ class HIRToMIR:
 				self.b.emit(M.ConstructDV(dest=payload_val, dv_type_name=stmt.value.event_name, args=[]))
 				key_val = self.b.new_temp()
 				self.b.emit(M.ConstString(dest=key_val, value=stmt.value.event_name))
-				self.b.emit(M.ConstructError(dest=err_val, code=code_val, payload=payload_val, attr_key=key_val))
+				self.b.emit(
+					M.ConstructError(
+						dest=err_val,
+						code=code_val,
+						event_name=event_name_val,
+						payload=payload_val,
+						attr_key=key_val,
+					)
+				)
 			else:
 				field_dvs: list[tuple[str, M.ValueId]] = []
 				for name, field_expr in zip(stmt.value.field_names, stmt.value.field_values):
@@ -648,7 +661,13 @@ class HIRToMIR:
 				first_key = self.b.new_temp()
 				self.b.emit(M.ConstString(dest=first_key, value=first_name))
 				self.b.emit(
-					M.ConstructError(dest=err_val, code=code_val, payload=first_dv, attr_key=first_key)
+					M.ConstructError(
+						dest=err_val,
+						code=code_val,
+						event_name=event_name_val,
+						payload=first_dv,
+						attr_key=first_key,
+					)
 				)
 				for name, dv in field_dvs[1:]:
 					key = self.b.new_temp()

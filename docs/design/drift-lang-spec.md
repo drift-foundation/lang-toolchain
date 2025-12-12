@@ -2042,10 +2042,11 @@ Drift’s exception system is designed to:
 
 ### 14.1.1. Source identity vs. runtime identity
 
-- **Source identity** of an exception event is its fully-qualified name `Module.ExceptionName` (canonical, no aliases).
-- **Runtime identity** is a deterministic 64-bit `event_code = hash_v1(fqn_utf8_bytes)`; users never type or see codes.
-- `catch M.E` lowers to `if err.event_code == hash(fqn)`; matching is by code, derived from the resolved FQN.
+- **Source identity** of an exception event is its fully-qualified name `"<module_name>.<submodule...>:<event_name>"` (canonical, no aliases).
+- **Runtime identity** is a deterministic 64-bit `event_code = hash_v1(fqn_utf8_bytes)` (UTF-8 of the canonical FQN); users never type or see codes.
+- `catch M.E` lowers to `if err.event_code == hash_v1(fqn)`; matching is by code, derived from the resolved FQN with the `:` delimiter.
 - Collisions detected during compilation are fatal within the build; if/when multi-module linking is introduced, collision handling must remain deterministic.
+- `event_name()` returns the stored canonical FQN string for logging/telemetry; it is never used for control flow or matching.
 
 ---
 
@@ -2054,10 +2055,10 @@ Drift’s exception system is designed to:
 ```drift
 struct Error {
     event_code: Uint64,                        // stable, required
+    event_name: String,                        // canonical FQN label (for logging/telemetry only)
     attrs: Map<String, DiagnosticValue>,       // see §5.13.7, §14.3
     ctx_frames: Array<CtxFrame>,               // captured locals per frame
-    stack: BacktraceHandle,                    // opaque backtrace
-    debug_event: Optional<String>              // optional, non-normative name
+    stack: BacktraceHandle                     // opaque backtrace
 }
 
 exception IndexError {
@@ -2087,8 +2088,8 @@ Event attrs never appear here.
 #### 14.2.4. stack
 Opaque captured backtrace.
 
-#### 14.2.5. debug_event
-Optional best-effort event name for tooling/logging. It is **not** used for matching or ABI; if present, it is derived from metadata tables (§14.6).
+#### 14.2.5. event_name
+Canonical FQN string label (`"<module>.<submodules>:<event>"`) stored with the error. It is **not** used for matching or ABI; matching is by `event_code`. Exposed via `event_name()` for logging/telemetry.
 
 ---
 
@@ -2123,7 +2124,7 @@ Runtime builds an `Error` with:
 Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a typed `DiagnosticValue`.
 
 #### 14.3.4. Event code derivation and collision policy
-- Canonical FQN string: `Module.ExceptionName` with UTF-8 encoding, no aliases or whitespace.
+- Canonical FQN string: `"<module_name>.<submodule...>:<event_name>"` with UTF-8 encoding, no aliases or whitespace.
 - Hash algorithm: `hash_v1(fqn_utf8_bytes)` (frozen; currently xxhash64, truncated/encoded as unsigned 64-bit).
 - Runtime routing key: `event_code = hash_v1(fqn_utf8_bytes)`.
 - Collision policy: any collision detected within a build is a **compile-time error**. If cross-module linking is introduced, collision handling must remain deterministic; with FQN input the practical risk is negligible.

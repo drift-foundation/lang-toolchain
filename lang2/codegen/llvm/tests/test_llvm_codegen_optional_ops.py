@@ -37,7 +37,7 @@ def test_optional_ops_round_trip_payload():
 	# Runtime helper signature for error constructor
 	sig_err_new = FnSignature(
 		name="drift_error_new_with_payload",
-		param_type_ids=[int_ty, table.ensure_string(), dv_ty],
+		param_type_ids=[int_ty, table.ensure_string(), table.ensure_string(), dv_ty],
 		return_type_id=err_ty,
 		declared_can_throw=False,
 	)
@@ -54,8 +54,9 @@ def test_optional_ops_round_trip_payload():
 			ConstInt(dest="code", value=1),
 			ConstInt(dest="payload_int", value=7),
 			ConstructDV(dest="dv", dv_type_name="Payload", args=["payload_int"]),
+			ConstString(dest="ename", value="Evt"),
 			ConstString(dest="key", value="payload"),
-			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "key", "dv"]),
+			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
 			ErrorAttrsGetDV(dest="dv2", error="err", key="key"),
 			DVAsInt(dest="opt", dv="dv2"),
 			OptionalIsSome(dest="some", opt="opt"),
@@ -110,7 +111,7 @@ def test_optional_ops_round_trip_string_payload():
 
 	sig_err_new = FnSignature(
 		name="drift_error_new_with_payload",
-		param_type_ids=[int_ty, string_ty, dv_ty],
+		param_type_ids=[int_ty, string_ty, string_ty, dv_ty],
 		return_type_id=err_ty,
 		declared_can_throw=False,
 	)
@@ -127,8 +128,9 @@ def test_optional_ops_round_trip_string_payload():
 			ConstInt(dest="code", value=1),
 			ConstString(dest="payload_str", value="hello"),
 			ConstructDV(dest="dv", dv_type_name="Payload", args=["payload_str"]),
+			ConstString(dest="ename", value="Evt"),
 			ConstString(dest="key", value="payload"),
-			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "key", "dv"]),
+			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
 			ErrorAttrsGetDV(dest="dv2", error="err", key="key"),
 			DVAsString(dest="opt", dv="dv2"),
 			OptionalIsSome(dest="some", opt="opt"),

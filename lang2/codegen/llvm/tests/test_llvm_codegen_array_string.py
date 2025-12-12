@@ -42,7 +42,7 @@ def test_array_string_literal_and_index_ir():
 	mod = lower_module_to_llvm({"main": func}, {"main": ssa}, {"main": info}, type_table=table)
 	ir = mod.render()
 
-	assert "declare ptr @drift_alloc_array" in ir
+	assert "declare i8* @drift_alloc_array" in ir
 	assert "%drift.size = type i64" in ir
 	assert "%DriftString = type { %drift.size, i8*" in ir
 	assert "getelementptr inbounds %DriftString" in ir
@@ -74,8 +74,8 @@ def test_array_string_store_ir():
 
 	assert "%drift.size = type i64" in ir
 	assert "%DriftString = type { %drift.size, i8*" in ir
-	assert "declare ptr @drift_alloc_array" in ir
-	assert "call ptr @drift_alloc_array" in ir
+	assert "declare i8* @drift_alloc_array" in ir
+	assert "call i8* @drift_alloc_array" in ir
 	assert "getelementptr inbounds %DriftString" in ir
 	assert "store %DriftString %t3" in ir or "store %DriftString" in ir
 	assert "call void @drift_bounds_check_fail" in ir

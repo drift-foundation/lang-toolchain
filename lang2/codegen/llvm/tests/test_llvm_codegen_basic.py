@@ -118,9 +118,10 @@ def test_codegen_fnresult_ref_err_zero_ok_slot():
 		name="entry",
 		instructions=[
 			ConstInt(dest="code", value=1),
+			ConstString(dest="ename", value="Evt"),
 			ConstructDV(dest="dv", dv_type_name="Missing", args=[]),
 			ConstString(dest="key", value="payload"),
-			ConstructError(dest="err", code="code", payload="dv", attr_key="key"),
+			ConstructError(dest="err", code="code", event_name="ename", payload="dv", attr_key="key"),
 			ConstructResultErr(dest="res", error="err"),
 		],
 		terminator=Return(value="res"),

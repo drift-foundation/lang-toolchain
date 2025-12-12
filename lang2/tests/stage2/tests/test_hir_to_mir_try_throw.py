@@ -45,10 +45,12 @@ def test_throw_lowers_to_error_and_result_err_return():
 	payload_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "boom")
 	const_int = next(i for i in instrs if isinstance(i, ConstInt))
 	key_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "msg")
+	event_name_const = next(i for i in instrs if isinstance(i, ConstString) and i.value == "Boom")
 	err = next(i for i in instrs if isinstance(i, ConstructError))
 	err_result = next(i for i in instrs if isinstance(i, ConstructResultErr))
 	assert err.payload == dv_ctor.dest
 	assert err.code == const_int.dest
+	assert err.event_name == event_name_const.dest
 	assert err.attr_key == key_const.dest
 	assert err_result.error == err.dest
 
@@ -84,4 +86,5 @@ def test_exception_init_throw_attaches_all_fields():
 	assert len(add_attr_instrs) == 1
 	# Keys come from ConstString instructions; verify the literal values.
 	key_literals = [i.value for i in entry.instructions if isinstance(i, ConstString)]
+	assert "Evt" in key_literals  # event name
 	assert "a" in key_literals and "b" in key_literals
