@@ -108,7 +108,7 @@ class TryResultRewriter:
 			body = self.rewrite_block(stmt.body)
 			catches = [
 				H.HCatchArm(
-					event_name=arm.event_name,
+					event_fqn=arm.event_fqn,
 					binder=arm.binder,
 					block=self.rewrite_block(arm.block),
 					loc=arm.loc,
@@ -179,7 +179,7 @@ class TryResultRewriter:
 				field_pfx.extend(pfx)
 				new_fields.append(new_fv)
 			return field_pfx, H.HExceptionInit(
-				event_name=expr.event_name,
+				event_fqn=expr.event_fqn,
 				field_names=list(expr.field_names),
 				field_values=new_fields,
 				loc=expr.loc,

@@ -32,7 +32,7 @@ def test_try_stmt_to_htry():
 	assert isinstance(hir.catches, list) and len(hir.catches) == 1
 	catch_arm = hir.catches[0]
 	assert isinstance(catch_arm, HCatchArm)
-	assert catch_arm.event_name is None
+	assert catch_arm.event_fqn is None
 	assert catch_arm.binder == "e"
 	assert isinstance(hir.body, HBlock)
 	assert isinstance(hir.body.statements[0], HExprStmt)
@@ -60,5 +60,5 @@ def test_try_stmt_multiple_catches_to_htry():
 	assert isinstance(hir, HTry)
 	assert len(hir.catches) == 2
 	first, second = hir.catches
-	assert first.event_name == "EvtA" and first.binder == "a"
-	assert second.event_name is None and second.binder is None
+	assert first.event_fqn == "EvtA" and first.binder == "a"
+	assert second.event_fqn is None and second.binder is None

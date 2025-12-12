@@ -86,7 +86,7 @@ def test_can_throw_try_catch_and_return_ok_shape():
 							)
 						]
 					),
-					catches=[H.HCatchArm(event_name="Evt", binder="e", block=H.HBlock(statements=[]))],
+					catches=[H.HCatchArm(event_fqn="m:Evt", binder="e", block=H.HBlock(statements=[]))],
 				)
 			]
 		),
@@ -107,7 +107,7 @@ def test_can_throw_try_catch_and_return_ok_shape():
 	cont.terminator = M.Return(value=ok_res)
 
 	mir_funcs = {fn_name: mir_fn}
-	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={"Evt": 1})
+	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={"m:Evt": 1})
 	declared_can_throw = declared_from_signatures(
 		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
 	)
@@ -216,7 +216,7 @@ def test_try_result_sugar_with_try_catch_clears_throw_checks():
 			H.HTry(
 				body=H.HBlock(statements=[H.HExprStmt(expr=H.HTryResult(expr=H.HVar(name="res")))]),
 				catches=[
-					H.HCatchArm(event_name="Evt", binder="e", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="Evt", binder="e", block=H.HBlock(statements=[])),
 				],
 			),
 		]

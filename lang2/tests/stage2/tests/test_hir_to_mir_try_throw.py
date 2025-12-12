@@ -70,8 +70,8 @@ def test_exception_init_throw_attaches_all_fields():
 	lower = HIRToMIR(builder)
 
 	exc = H.HExceptionInit(
-	event_fqn="m:Evt",
-	field_names=["a", "b"],
+		event_fqn="m:Evt",
+		field_names=["a", "b"],
 		field_values=[
 			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(1)]),
 			H.HDVInit(dv_type_name="Evt", args=[H.HLiteralInt(2)]),
@@ -82,9 +82,16 @@ def test_exception_init_throw_attaches_all_fields():
 
 	entry = builder.func.blocks["entry"]
 	add_attr_instrs = [i for i in entry.instructions if isinstance(i, ErrorAddAttrDV)]
+	construct_err = next(i for i in entry.instructions if isinstance(i, ConstructError))
 	# First field is seeded via ConstructError; remaining fields are added via ErrorAddAttrDV.
 	assert len(add_attr_instrs) == 1
 	# Keys come from ConstString instructions; verify the literal values.
 	key_literals = [i.value for i in entry.instructions if isinstance(i, ConstString)]
-	assert "m:Evt" in key_literals  # event FQN used for name/payload
+	assert "m:Evt" in key_literals  # event FQN label
 	assert "a" in key_literals and "b" in key_literals
+	# The ConstructError seeds under the first declared field name.
+	first_key_const = next(i for i in entry.instructions if isinstance(i, ConstString) and i.value == "a")
+	assert construct_err.attr_key == first_key_const.dest
+	# The appended ErrorAddAttrDV should use the remaining field name.
+	add_key_const = next(i for i in entry.instructions if isinstance(i, ConstString) and i.value == "b")
+	assert add_attr_instrs[0].key == add_key_const.dest

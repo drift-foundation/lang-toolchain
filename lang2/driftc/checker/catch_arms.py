@@ -19,9 +19,9 @@ from lang2.driftc.core.span import Span
 
 @dataclass
 class CatchArmInfo:
-	"""Syntactic info about a catch arm (event name and optional source loc)."""
+	"""Syntactic info about a catch arm (event FQN and optional source loc)."""
 
-	event_name: Optional[str]  # None = catch-all
+	event_fqn: Optional[str]  # None = catch-all
 	span: Span = field(default_factory=Span)
 
 
@@ -56,7 +56,7 @@ def validate_catch_arms(
 	"""
 	Validate a list of catch arms:
 
-	- at most one catch-all arm (event_name is None)
+	- at most one catch-all arm (event_fqn is None)
 	- catch-all must be the last arm if present
 	- no duplicate specific event arms
 	- specific event names must be in the known_events set
@@ -69,7 +69,7 @@ def validate_catch_arms(
 	catch_all_span: Span = Span()
 	event_spans: dict[str, Span] = {}
 	for idx, arm in enumerate(arms):
-		if arm.event_name is None:
+		if arm.event_fqn is None:
 			if catch_all_seen:
 				notes = [f"first catch-all is here: {_format_span(catch_all_span)}"] if catch_all_span else None
 				_report("multiple catch-all arms are not allowed", diagnostics, arm.span, notes=notes)
@@ -77,14 +77,14 @@ def validate_catch_arms(
 			catch_all_idx = idx
 			catch_all_span = arm.span
 		else:
-			if arm.event_name in seen_events:
-				prev_span = event_spans.get(arm.event_name)
-				notes = [f"previous catch for '{arm.event_name}' is here: {_format_span(prev_span)}"] if prev_span else None
-				_report(f"duplicate catch arm for event {arm.event_name}", diagnostics, arm.span, notes=notes)
-			if arm.event_name not in known_events:
-				_report(f"unknown catch event {arm.event_name}", diagnostics, arm.span)
-			seen_events.add(arm.event_name)
-			event_spans.setdefault(arm.event_name, arm.span)
+			if arm.event_fqn in seen_events:
+				prev_span = event_spans.get(arm.event_fqn)
+				notes = [f"previous catch for '{arm.event_fqn}' is here: {_format_span(prev_span)}"] if prev_span else None
+				_report(f"duplicate catch arm for event {arm.event_fqn}", diagnostics, arm.span, notes=notes)
+			if arm.event_fqn not in known_events:
+				_report(f"unknown catch event {arm.event_fqn}", diagnostics, arm.span)
+			seen_events.add(arm.event_fqn)
+			event_spans.setdefault(arm.event_fqn, arm.span)
 	# catch-all must be last
 	if catch_all_seen and catch_all_idx is not None and catch_all_idx != len(arms) - 1:
 		_report("catch-all must be the last catch arm", diagnostics, catch_all_span)

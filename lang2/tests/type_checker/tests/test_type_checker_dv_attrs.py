@@ -20,7 +20,7 @@ def test_throw_payload_must_be_exception_constructor():
 def test_attr_payload_must_be_diagnostic_value():
 	tc = _tc()
 	exc = H.HExceptionInit(
-		event_name="Exc",
+		event_fqn="Exc",
 		field_names=["detail"],
 		field_values=[H.HLiteralInt(7)],
 	)
@@ -33,7 +33,7 @@ def test_attr_names_values_length_mismatch_is_reported():
 	tc = _tc()
 	# Two names, one value: should be diagnosed rather than silently truncated.
 	exc = H.HExceptionInit(
-		event_name="Exc",
+		event_fqn="Exc",
 		field_names=["a", "b"],
 		field_values=[H.HLiteralString("x")],
 	)
@@ -54,7 +54,7 @@ def test_dv_ctor_rejects_unsupported_arg_type():
 def test_exception_ctor_outside_throw_is_rejected():
 	tc = _tc()
 	exc_init = H.HExceptionInit(
-		event_name="Exc",
+		event_fqn="Exc",
 		field_names=["detail"],
 		field_values=[H.HDVInit(dv_type_name="D", args=[H.HLiteralInt(1)])],
 	)

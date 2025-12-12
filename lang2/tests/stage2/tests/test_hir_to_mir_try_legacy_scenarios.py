@@ -30,12 +30,12 @@ def test_throw_b_skips_inner_catch_a_hits_outer_catch_b():
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtB", args=[]))]),
-		catches=[H.HCatchArm(event_name="EvtA", binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn="EvtA", binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_name="EvtB", binder="b", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -76,11 +76,11 @@ def test_multi_event_with_catch_all_matches_specific_arm():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtB", args=[]))]),
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
 				catches=[
-					H.HCatchArm(event_name="EvtA", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name="EvtB", binder="b", block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtA", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
 				],
 			)
 		]
@@ -117,18 +117,18 @@ def test_throw_inside_catch_rethrows_to_outer_try():
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtA", args=[]))]),
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtA", field_names=[], field_values=[]))]),
 		catches=[
 			H.HCatchArm(
-				event_name="EvtA",
+				event_fqn="EvtA",
 				binder=None,
-				block=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtB", args=[]))]),
+				block=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]))]),
 			)
 		],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_name="EvtB", binder="b", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="EvtB", binder="b", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -167,12 +167,12 @@ def test_inner_catch_all_handles_error_before_outer_specific_arm():
 	lower = HIRToMIR(builder, exc_env=exc_env)
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtX", args=[]))]),
-		catches=[H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtX", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_name="EvtX", binder="x", block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn="EvtX", binder="x", block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 	func = builder.func
@@ -207,11 +207,11 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 					statements=[
 						H.HTry(
 							body=H.HBlock(
-								statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtInner", args=[]))]
+								statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtInner", field_names=[], field_values=[]))]
 							),
 							catches=[
 								H.HCatchArm(
-									event_name="EvtInner",
+									event_fqn="EvtInner",
 									binder="inner",
 									block=H.HBlock(statements=[]),
 								)
@@ -221,7 +221,7 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 				),
 				catches=[
 					H.HCatchArm(
-						event_name="EvtOuter",
+						event_fqn="EvtOuter",
 						binder="outer",
 						block=H.HBlock(statements=[]),
 					)

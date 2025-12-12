@@ -280,12 +280,12 @@ def test_borrow_used_in_catch_blocks_mut_until_catch_done():
 			H.HTry(
 				body=H.HBlock(
 					statements=[
-						H.HThrow(value=H.HLiteralString("err")),
+						H.HThrow(value=H.HExceptionInit(event_fqn="Evt", field_names=[], field_values=[])),
 					]
 				),
 				catches=[
 					H.HCatchArm(
-						event_name=None,
+						event_fqn=None,
 						binder=None,
 						block=H.HBlock(statements=[H.HExprStmt(expr=H.HVar("r", binding_id=2))]),
 					)

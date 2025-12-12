@@ -31,16 +31,16 @@ def test_optional_ops_round_trip_payload():
 	dv_ty = table.ensure_diagnostic_value()
 	opt_int_ty = table.new_optional(int_ty)
 
-fnres_main = FnSignature(name="drift_main", return_type_id=int_ty, declared_can_throw=False)
-fn_info_main = FnInfo(name="drift_main", declared_can_throw=False, return_type_id=int_ty, signature=fnres_main)
+	fnres_main = FnSignature(name="drift_main", return_type_id=int_ty, declared_can_throw=False)
+	fn_info_main = FnInfo(name="drift_main", declared_can_throw=False, return_type_id=int_ty, signature=fnres_main)
 
-# Runtime helper signature for error constructor
-sig_err_new = FnSignature(
-	name="drift_error_new_with_payload",
-	param_type_ids=[int_ty, table.ensure_string(), table.ensure_string(), dv_ty],
-	return_type_id=err_ty,
-	declared_can_throw=False,
-)
+	# Runtime helper signature for error constructor
+	sig_err_new = FnSignature(
+		name="drift_error_new_with_payload",
+		param_type_ids=[int_ty, table.ensure_string(), table.ensure_string(), dv_ty],
+		return_type_id=err_ty,
+		declared_can_throw=False,
+	)
 	fn_err_new = FnInfo(
 		name="drift_error_new_with_payload",
 		declared_can_throw=False,
@@ -54,10 +54,10 @@ sig_err_new = FnSignature(
 			ConstInt(dest="code", value=1),
 			ConstInt(dest="payload_int", value=7),
 			ConstructDV(dest="dv", dv_type_name="Payload", args=["payload_int"]),
-			ConstString(dest="ename", value="Evt"),
-			ConstString(dest="key", value="payload"),
-			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
-			ErrorAttrsGetDV(dest="dv2", error="err", key="key"),
+		ConstString(dest="ename", value="m:Evt"),
+		ConstString(dest="key", value="k"),
+		Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
+		ErrorAttrsGetDV(dest="dv2", error="err", key="key"),
 			DVAsInt(dest="opt", dv="dv2"),
 			OptionalIsSome(dest="some", opt="opt"),
 		],
@@ -128,9 +128,9 @@ def test_optional_ops_round_trip_string_payload():
 			ConstInt(dest="code", value=1),
 			ConstString(dest="payload_str", value="hello"),
 			ConstructDV(dest="dv", dv_type_name="Payload", args=["payload_str"]),
-			ConstString(dest="ename", value="Evt"),
-			ConstString(dest="key", value="payload"),
-			Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
+		ConstString(dest="ename", value="m:Evt"),
+		ConstString(dest="key", value="k"),
+		Call(dest="err", fn="drift_error_new_with_payload", args=["code", "ename", "key", "dv"]),
 			ErrorAttrsGetDV(dest="dv2", error="err", key="key"),
 			DVAsString(dest="opt", dv="dv2"),
 			OptionalIsSome(dest="some", opt="opt"),

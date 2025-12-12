@@ -305,10 +305,18 @@ class AstToHIR:
 		catch_arms: list[H.HCatchArm] = []
 		for arm in stmt.catches:
 			event_name = arm.event
+			event_fqn = None
+			if event_name is not None:
+				if ":" in event_name:
+					event_fqn = event_name
+				elif self._module_name:
+					event_fqn = f"{self._module_name}:{event_name}"
+				else:
+					event_fqn = event_name
 			binder = arm.binder
 			handler_block = self.lower_block(arm.block)
 			catch_loc = Span.from_loc(arm.loc)
-			catch_arms.append(H.HCatchArm(event_name=event_name, binder=binder, block=handler_block, loc=catch_loc))
+			catch_arms.append(H.HCatchArm(event_fqn=event_fqn, binder=binder, block=handler_block, loc=catch_loc))
 
 		return H.HTry(body=body_block, catches=catch_arms)
 

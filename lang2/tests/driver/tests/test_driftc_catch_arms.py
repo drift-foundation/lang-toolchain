@@ -20,9 +20,9 @@ def test_driver_collects_catch_arms_and_reports_diagnostics():
 			H.HTry(
 				body=H.HBlock(statements=[]),
 				catches=[
-					H.HCatchArm(event_name="Evt", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name="Evt", binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name="UnknownEvt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="Evt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="Evt", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="UnknownEvt", binder=None, block=H.HBlock(statements=[])),
 				],
 			),
 			H.HReturn(value=H.HLiteralInt(value=0)),

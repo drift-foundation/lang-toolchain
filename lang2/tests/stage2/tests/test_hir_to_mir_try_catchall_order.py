@@ -20,8 +20,8 @@ def test_multiple_catch_all_rejected():
 			H.HTry(
 				body=H.HBlock(statements=[]),
 				catches=[
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
 				],
 			)
 		]
@@ -38,10 +38,10 @@ def test_catch_all_not_last_is_rejected():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="X", args=[]))]),
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="X", field_names=[], field_values=[]))]),
 				catches=[
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name="EvtA", binder="a", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtA", binder="a", block=H.HBlock(statements=[])),
 				],
 			)
 		]

@@ -24,9 +24,9 @@ def test_try_unmatched_event_rethrows_as_err():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="Other", args=[]))]),
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="Other", field_names=[], field_values=[]))]),
 				catches=[
-					H.HCatchArm(event_name="EvtA", binder="a", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtA", binder="a", block=H.HBlock(statements=[])),
 				],
 			)
 		]

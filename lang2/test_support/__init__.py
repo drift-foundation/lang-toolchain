@@ -44,7 +44,7 @@ def declared_from_signatures(signatures: Mapping[str, FnSignature]) -> Dict[str,
 
 def build_exception_catalog(events: Iterable[str] | Mapping[str, int]) -> Dict[str, int]:
 	"""
-	Construct a simple exception catalog (event name -> code) for tests.
+	Construct a simple exception catalog (event FQN -> code) for tests.
 
 	Accepts either an explicit mapping or an iterable of names (assigned 1..N).
 	"""
@@ -73,7 +73,7 @@ def signatures_from_decl_nodes(func_decls: Iterable[object]) -> Dict[str, FnSign
 
 def exception_catalog_from_decls(func_decls: Iterable[object], base: Mapping[str, int] | None = None) -> Dict[str, int]:
 	"""
-	Build an exception catalog (event name -> code) from throws clauses on decls.
+	Build an exception catalog (event FQN -> code) from throws clauses on decls.
 
 	If `base` is provided, it is copied and augmented; new events are assigned
 	sequentially after the highest existing code.

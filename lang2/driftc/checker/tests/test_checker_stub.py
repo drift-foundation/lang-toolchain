@@ -36,13 +36,13 @@ def test_checker_validates_catch_arms_and_accumulates_diagnostics():
 			H.HTry(
 				body=H.HBlock(statements=[]),
 				catches=[
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
 				],
 			)
 		]
 	)
-	checker = Checker(signatures=signatures, exception_catalog={"Evt": 1}, hir_blocks={"f": hir})
+	checker = Checker(signatures=signatures, exception_catalog={"m:Evt": 1}, hir_blocks={"f": hir})
 
 	checked = checker.check(["f"])
 

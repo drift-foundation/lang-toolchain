@@ -22,10 +22,10 @@ def test_catch_binder_and_no_binder():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="EvtA", args=[]))]),
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="EvtA", field_names=[], field_values=[]))]),
 				catches=[
-					H.HCatchArm(event_name="EvtA", binder="e", block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name="EvtB", binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtA", binder="e", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="EvtB", binder=None, block=H.HBlock(statements=[])),
 				],
 			)
 		]
@@ -53,8 +53,8 @@ def test_unknown_event_name_matches_via_code_zero():
 	hir = H.HBlock(
 		statements=[
 			H.HTry(
-				body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="Unknown", args=[]))]),
-				catches=[H.HCatchArm(event_name="Unknown", binder=None, block=H.HBlock(statements=[]))],
+				body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="Unknown", field_names=[], field_values=[]))]),
+				catches=[H.HCatchArm(event_fqn="Unknown", binder=None, block=H.HBlock(statements=[]))],
 			)
 		]
 	)
@@ -77,12 +77,12 @@ def test_outer_catch_all_catches_unmatched_inner():
 	lower = HIRToMIR(builder, exc_env={"Inner": 1})
 
 	inner_try = H.HTry(
-		body=H.HBlock(statements=[H.HThrow(value=H.HDVInit(dv_type_name="Inner", args=[]))]),
-		catches=[H.HCatchArm(event_name="Other", binder=None, block=H.HBlock(statements=[]))],
+		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="Inner", field_names=[], field_values=[]))]),
+		catches=[H.HCatchArm(event_fqn="Other", binder=None, block=H.HBlock(statements=[]))],
 	)
 	outer_try = H.HTry(
 		body=H.HBlock(statements=[inner_try]),
-		catches=[H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[]))],
+		catches=[H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[]))],
 	)
 	lower.lower_block(H.HBlock(statements=[outer_try]))
 

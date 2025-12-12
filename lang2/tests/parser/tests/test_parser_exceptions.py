@@ -21,8 +21,8 @@ fn main() returns Int { return 0; }
 	)
 	_, _, _type_table, exc_catalog, diagnostics = parse_drift_to_hir(src)
 	assert diagnostics == []
-	assert "EvtA" in exc_catalog
-	assert exc_catalog["EvtA"] == event_code("foo.bar:EvtA")
+	assert "foo.bar:EvtA" in exc_catalog
+	assert exc_catalog["foo.bar:EvtA"] == event_code("foo.bar:EvtA")
 
 
 def test_duplicate_exception_reports_diagnostic(tmp_path: Path) -> None:

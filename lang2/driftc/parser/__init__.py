@@ -267,10 +267,12 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 	"""
 	catalog: dict[str, int] = {}
 	payload_seen: dict[int, str] = {}
+	seen_names: set[str] = set()
 	for exc in exceptions:
-		if exc.name in catalog:
+		if exc.name in seen_names:
 			diagnostics.append(_diagnostic(f"duplicate exception '{exc.name}'", getattr(exc, "loc", None)))
 			continue
+		seen_names.add(exc.name)
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
 		code = event_code(fqn)
 		payload = code & PAYLOAD_MASK
@@ -284,7 +286,7 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 			)
 			continue
 		payload_seen[payload] = fqn
-		catalog[exc.name] = code
+		catalog[fqn] = code
 	return catalog
 
 

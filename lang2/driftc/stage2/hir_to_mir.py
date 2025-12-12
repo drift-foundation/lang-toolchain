@@ -143,7 +143,7 @@ class HIRToMIR:
 		"""
 		Create a lowering context.
 
-		`exc_env` (optional) maps DV/exception type names to event codes so
+		`exc_env` (optional) maps exception FQNs to event codes so
 		throw lowering can emit real codes instead of placeholders.
 		"""
 		self.b = builder
@@ -151,7 +151,7 @@ class HIRToMIR:
 		self._loop_stack: list[tuple[str, str]] = []
 		# Stack of try contexts for nested try/catch (innermost on top).
 		self._try_stack: list["_TryCtx"] = []
-		# Optional exception environment: maps DV/exception type name -> event code.
+		# Optional exception environment: maps exception FQN -> event code.
 		self._exc_env = exc_env
 		# Track best-effort local types (TypeId) to tag typed MIR nodes.
 		self._local_types: dict[str, TypeId] = dict(param_types) if param_types else {}
@@ -740,7 +740,7 @@ class HIRToMIR:
 		for idx, arm in enumerate(stmt.catches):
 			cb = self.b.new_block(f"try_catch_{idx}")
 			catch_blocks.append((arm, cb))
-			if arm.event_name is None:
+			if arm.event_fqn is None:
 				if catch_all_block is not None:
 					raise RuntimeError("multiple catch-all arms are not supported")
 				catch_all_block = cb
@@ -779,13 +779,13 @@ class HIRToMIR:
 		self.b.emit(M.ErrorEvent(dest=code_tmp, error=err_tmp))
 
 		# Chain event-specific arms with IfTerminator, else falling through.
-		event_arms = [(arm, cb) for arm, cb in catch_blocks if arm.event_name is not None]
+		event_arms = [(arm, cb) for arm, cb in catch_blocks if arm.event_fqn is not None]
 		if event_arms:
 			# We build a chain of Ifs; the final else falls through to the final resolution.
 			current_block = dispatch_block
 			for arm, cb in event_arms:
 				self.b.set_block(current_block)
-				arm_code = self._lookup_catch_event_code(arm.event_name)
+				arm_code = self._lookup_catch_event_code(arm.event_fqn)
 				arm_code_const = self.b.new_temp()
 				self.b.emit(M.ConstInt(dest=arm_code_const, value=arm_code))
 				cmp_tmp = self.b.new_temp()
@@ -973,31 +973,26 @@ class HIRToMIR:
 		"""
 		Best-effort event code lookup from exception metadata.
 
-		If the payload is an exception init or an HDVInit with a known DV/exception
-		name and an exception env was provided, return that code; otherwise return 0.
+		If the payload is an exception init and an exception env was provided,
+		return that code; otherwise return 0.
 		"""
-		if isinstance(payload_expr, H.HExceptionInit) and self._exc_env is not None:
-			short_name = getattr(payload_expr, "event_name", None)
-			return self._exc_env.get(short_name, 0) if short_name is not None else 0
-		if isinstance(payload_expr, H.HExceptionInit) and self._exc_env is not None:
-			# Fall back to short name derived from FQN if catalog uses short keys.
+		if self._exc_env is None:
+			return 0
+		if isinstance(payload_expr, H.HExceptionInit):
 			fqn = getattr(payload_expr, "event_fqn", None)
 			if fqn:
-				short = fqn.split(":")[-1]
-				return self._exc_env.get(fqn, self._exc_env.get(short, 0))
-		if isinstance(payload_expr, H.HDVInit) and self._exc_env is not None:
-			return self._exc_env.get(payload_expr.dv_type_name, 0)
+				return self._exc_env.get(fqn, 0)
 		return 0
 
-	def _lookup_catch_event_code(self, event_name: str) -> int:
+	def _lookup_catch_event_code(self, event_fqn: str) -> int:
 		"""
-		Lookup event code for a catch arm by exception/event name.
+		Lookup event code for a catch arm by canonical exception/event FQN.
 
 		Uses the same exception env mapping (name -> code) as throw lowering;
 		fallback to 0 if unknown.
 		"""
 		if self._exc_env is not None:
-			return self._exc_env.get(event_name, 0)
+			return self._exc_env.get(event_fqn, 0)
 		return 0
 
 

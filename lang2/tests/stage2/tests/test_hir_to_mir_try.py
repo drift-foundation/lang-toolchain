@@ -46,7 +46,7 @@ def test_try_routes_throw_to_catch_block():
 					]
 				),
 				catches=[
-					H.HCatchArm(event_name=None, binder="e", block=H.HBlock(statements=[]))
+					H.HCatchArm(event_fqn=None, binder="e", block=H.HBlock(statements=[]))
 				],
 			)
 		]
@@ -89,7 +89,7 @@ def test_try_dispatches_on_event_codes():
 	Multi-arm try/catch should dispatch on ErrorEvent codes.
 	"""
 	builder = MirBuilder(name="try_evt")
-	lower = HIRToMIR(builder, exc_env={"EvtA": 123})
+	lower = HIRToMIR(builder, exc_env={"m:EvtA": 123})
 
 	hir = H.HBlock(
 		statements=[
@@ -106,8 +106,8 @@ def test_try_dispatches_on_event_codes():
 					]
 				),
 				catches=[
-					H.HCatchArm(event_name="EvtA", binder="a", block=H.HBlock(statements=[])),
-					H.HCatchArm(event_name=None, binder=None, block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:EvtA", binder="a", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn=None, binder=None, block=H.HBlock(statements=[])),
 				],
 			)
 		]

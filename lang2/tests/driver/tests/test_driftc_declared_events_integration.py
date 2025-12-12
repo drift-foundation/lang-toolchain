@@ -17,7 +17,7 @@ def test_declared_events_subset_enforced_by_driver():
 	hir = H.HBlock(
 		statements=[
 			H.HThrow(
-				value=H.HExceptionInit(event_name="EvtB", field_names=[], field_values=[]),
+				value=H.HExceptionInit(event_fqn="EvtB", field_names=[], field_values=[]),
 			),
 		]
 	)

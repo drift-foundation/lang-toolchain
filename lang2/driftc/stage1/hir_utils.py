@@ -21,7 +21,7 @@ def collect_catch_arms_from_block(block: H.HBlock) -> List[CatchArmInfo]:
 	Walk an HIR block and collect all catch arms (including nested try/catch).
 
 	This keeps the checker aware of catch-arm shapes when validating against
-	the exception catalog. Only syntactic info (event name) is gathered here.
+	the exception catalog. Only syntactic info (event FQN) is gathered here.
 	"""
 	arms: List[CatchArmInfo] = []
 
@@ -33,7 +33,7 @@ def collect_catch_arms_from_block(block: H.HBlock) -> List[CatchArmInfo]:
 		if isinstance(stmt, H.HTry):
 			for arm in stmt.catches:
 				assert isinstance(arm.loc, Span)
-				arms.append(CatchArmInfo(event_name=arm.event_name, span=arm.loc))
+				arms.append(CatchArmInfo(event_fqn=arm.event_fqn, span=arm.loc))
 				collect_block(arm.block)
 			collect_block(stmt.body)
 		elif isinstance(stmt, H.HIf):
