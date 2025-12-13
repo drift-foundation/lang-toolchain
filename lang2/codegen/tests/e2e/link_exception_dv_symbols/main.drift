@@ -1,6 +1,6 @@
 module m
 
-exception E()
+exception E(n: Int, s: String, b: Bool)
 
 fn main() returns Int {
     try {

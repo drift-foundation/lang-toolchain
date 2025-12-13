@@ -313,7 +313,14 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	seen: set[str] = set()
 	method_keys: set[tuple[str, str]] = set()  # (impl_target_repr, method_name)
 	diagnostics: list[Diagnostic] = []
+	exception_schemas: dict[str, tuple[str, list[str]]] = {}
 	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_name, diagnostics)
+	for exc in prog.exceptions:
+		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
+		field_names = [arg.name for arg in getattr(exc, "args", [])]
+		exception_schemas[fqn] = (fqn, field_names)
+		if module_name:
+			exception_schemas[exc.name] = (fqn, field_names)
 	for fn in prog.functions:
 		if fn.name in seen:
 			diagnostics.append(
@@ -414,6 +421,8 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 
 	type_table, sigs = resolve_program_signatures(decls)
 	signatures.update(sigs)
+	# Thread exception schemas through the shared type table for downstream validators.
+	type_table.exception_schemas = exception_schemas
 	return func_hirs, signatures, type_table, exception_catalog, diagnostics
 
 

@@ -1,0 +1,7 @@
+module m
+
+exception Timeout()
+
+fn main() returns Int {
+    throw Timeout { x = 1 }
+}

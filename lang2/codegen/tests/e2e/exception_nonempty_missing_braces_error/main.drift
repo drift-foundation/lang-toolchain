@@ -1,0 +1,7 @@
+module m
+
+exception InvalidOrder(code: String)
+
+fn main() returns Int {
+    throw InvalidOrder
+}

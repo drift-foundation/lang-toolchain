@@ -363,6 +363,7 @@ class Checker:
 			def combined_on_stmt(stmt: "H.HStmt", typing_ctx: Checker._TypingContext = ctx) -> None:
 				self._bool_validator_on_stmt(stmt, typing_ctx)
 				self._void_rules_on_stmt(stmt, typing_ctx)
+				self._exception_init_rules_on_stmt(stmt, typing_ctx)
 
 			self._walk_hir(hir_block, ctx, on_expr=combined_on_expr, on_stmt=combined_on_stmt)
 
@@ -1287,6 +1288,77 @@ class Checker:
 				ctx._append_diag(
 					Diagnostic(message="cannot assign a Void value", severity="error", span=None)
 				)
+
+	def _exception_init_rules_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:
+		"""
+		Enforce exception field/braces rules:
+		- Zero-field exceptions: allow `throw E` and `throw E {}` but reject provided fields.
+		- Non-empty exceptions: require braces and exact field set.
+		"""
+		from lang2.driftc import stage1 as H
+
+		schemas: dict[str, tuple[str, list[str]]] = getattr(self._type_table, "exception_schemas", {})
+
+		def _schema(name: str) -> tuple[str, list[str]] | None:
+			return schemas.get(name)
+
+		if not isinstance(stmt, H.HThrow):
+			return
+
+		# Exception init with braces present.
+		if isinstance(stmt.value, H.HExceptionInit):
+			schema = _schema(stmt.value.event_fqn)
+			if schema is None:
+				return
+			_decl_fqn, decl_fields = schema
+			provided = list(stmt.value.field_names)
+			if not decl_fields:
+				if provided:
+					ctx._append_diag(
+						Diagnostic(
+							message=f"exception '{stmt.value.event_fqn}' declares no fields; cannot provide initializer fields",
+							severity="error",
+							span=getattr(stmt.value, "loc", Span()),
+						)
+					)
+				return
+			decl_set = set(decl_fields)
+			provided_set = set(provided)
+			unknown = provided_set - decl_set
+			missing = decl_set - provided_set
+			if unknown:
+				ctx._append_diag(
+					Diagnostic(
+						message=f"unknown exception field(s): {', '.join(sorted(unknown))}",
+						severity="error",
+						span=getattr(stmt.value, "loc", Span()),
+					)
+				)
+			if missing:
+				ctx._append_diag(
+					Diagnostic(
+						message=f"missing exception field(s): {', '.join(sorted(missing))}",
+						severity="error",
+						span=getattr(stmt.value, "loc", Span()),
+					)
+				)
+			return
+
+		# Bare throw of an exception name without braces.
+		if isinstance(stmt.value, H.HVar):
+			schema = _schema(stmt.value.name)
+			if schema is None:
+				return
+			_decl_fqn, decl_fields = schema
+			if decl_fields:
+				ctx._append_diag(
+					Diagnostic(
+						message=f"exception '{stmt.value.name}' requires fields; use `throw {stmt.value.name} {{ ... }}`",
+						severity="error",
+						span=getattr(stmt.value, "loc", Span()),
+					)
+				)
+			return
 
 	def _validate_array_exprs(self, block: "H.HBlock", ctx: "_TypingContext") -> None:
 		"""Validate array literals/indexing/assignments over a HIR block."""

@@ -1904,6 +1904,16 @@ Instead, they are desugared through capability interfaces so projects can pick a
 Duplicate keys are allowed in the literal; the target type decides whether to keep the first value, last
 value, or reject duplicates.
 
+#### 13.2.3. Brace forms are disjoint
+
+Drift uses braces for two distinct constructs with disjoint syntax:
+
+- **Map literal:** `{ expr_key: expr_value, ... }` — keys and values are arbitrary expressions; desugars via `FromMapLiteral` (§13.3.2). Map literals **only** use `:`.
+- **Struct initializer:** `TypeName { field = expr, ... }` — `TypeName` resolves to a declared struct; fields are identifiers checked against the struct declaration; uses `=`.
+- **Exception initializer:** `ExcName { field = expr, ... }` — `ExcName` resolves to a declared exception event; fields are identifiers checked against the exception declaration; uses `=`.
+
+There is no ambiguous brace form: `{k: v}` is always a map literal; `Type { f = v }` is always a struct/exception initializer (a “named field initializer”).
+
 ### 13.3. Type resolution
 
 A literal `[exprs...]` or `{k: v, ...}` requires a *target* type `C`. Resolution happens in two phases:
@@ -2019,7 +2029,7 @@ The same pattern applies to alternative map implementations.
 ## 14. Exceptions and error context
 
 Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
-Exception declarations create constructor names in the value namespace. `throw ExcName { field: expr, ... }` is valid syntax: fields must match the declared names/types, produce an `Error` value with the exception’s deterministic `event_code`, and integrate with the existing `try/catch` event dispatch. Every exception attribute is recorded in `Error.attrs` as a typed `DiagnosticValue`, and any `^`-captured locals are recorded in `ctx_frames` the same way; both are diagnostics, not user-facing payloads.
+Exception declarations create constructor names in the value namespace. `throw ExcName { field = expr, ... }` is valid syntax: fields must match the declared names/types, produce an `Error` value with the exception’s deterministic `event_code`, and integrate with the existing `try/catch` event dispatch. Every exception attribute is recorded in `Error.attrs` as a typed `DiagnosticValue`, and any `^`-captured locals are recorded in `ctx_frames` the same way; both are diagnostics, not user-facing payloads.
 Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
 `Error` itself is a catch-all handler type: user functions do not return `Error` or throw `Error` directly; they throw concrete exception events, and catch blocks may bind either a specific exception type or `Error` as a generic binder.
 
@@ -2112,7 +2122,7 @@ Each field type must implement the `Diagnostic` trait (see §5.13.7).
 
 #### 14.3.2. Throwing
 ```drift
-throw InvalidOrder { order_id: order.id, code: "order.invalid" }
+throw InvalidOrder { order_id = order.id, code = "order.invalid" }
 ```
 
 Runtime builds an `Error` with:
@@ -2120,6 +2130,10 @@ Runtime builds an `Error` with:
 - attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name—there is no special “primary payload” field; every value must implement the `Diagnostic` trait (§5.13.7))
 - empty ctx_frames (filled during unwind)
 - backtrace
+
+Field syntax uses `=` and identifiers only; `{ key: value }` remains a map literal (§13.2.2) and cannot be used to initialize exceptions or structs.
+
+**Zero-field throw shorthand.** If an exception declares **zero fields**, it may be thrown as either `throw E` or `throw E {}`. If it declares **one or more fields**, braces are **required** and the initializer must supply **exactly** the declared fields. Omitting braces for a non-empty exception, or supplying any fields for a zero-field exception, is a compile-time error.
 
 #### 14.3.3. Diagnostic requirement
 Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a typed `DiagnosticValue`.
@@ -2177,7 +2191,7 @@ Catch clauses must use the canonical FQN form `<module>.<submodules>:<Event>`; n
 ```drift
 catch e {
     log(&e)
-    throw e->
+    rethrow
 }
 ```
 

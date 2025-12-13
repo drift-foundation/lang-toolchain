@@ -159,6 +159,7 @@ class HIRToMIR:
 		self._local_types: dict[str, TypeId] = dict(param_types) if param_types else {}
 		# Optional shared TypeTable for typed MIR nodes (arrays, etc.).
 		self._type_table = type_table or TypeTable()
+		self._exception_schemas: dict[str, tuple[str, list[str]]] = getattr(self._type_table, "exception_schemas", {}) or {}
 		# Cache some common types for reuse when shared.
 		self._int_type = self._type_table.ensure_int()
 		self._bool_type = self._type_table.ensure_bool()
@@ -626,13 +627,40 @@ class HIRToMIR:
 			# checker/pipeline bug.
 			raise AssertionError("throw in non-can-throw function (checker bug)")
 
-		# Event code from exception metadata if available; otherwise 0.
-		code_const = self._lookup_error_code(stmt.value)
-		code_val = self.b.new_temp()
-		self.b.emit(M.ConstInt(dest=code_val, value=code_const))
+		# Zero-field shorthand: throw E (no braces) when E declares no fields.
+		if isinstance(stmt.value, H.HVar):
+			schema = self._exception_schemas.get(stmt.value.name)
+			if schema and not schema[1]:
+				event_fqn = schema[0]
+				code_const = self._lookup_error_code(event_fqn=event_fqn)
+				code_val = self.b.new_temp()
+				self.b.emit(M.ConstInt(dest=code_val, value=code_const))
+				event_name_val = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=event_name_val, value=event_fqn))
+				err_val = self.b.new_temp()
+				self.b.emit(
+					M.ConstructError(
+						dest=err_val,
+						code=code_val,
+						event_fqn=event_name_val,
+						payload=None,
+						attr_key=None,
+					)
+				)
+				if self._try_stack and self.b.block.terminator is None:
+					ctx = self._try_stack[-1]
+					self.b.ensure_local(ctx.error_local)
+					self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+					self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
+					return
+				self._propagate_error(err_val)
+				return
 
 		err_val = self.b.new_temp()
 		if isinstance(stmt.value, H.HExceptionInit):
+			code_const = self._lookup_error_code(event_fqn=getattr(stmt.value, "event_fqn", None))
+			code_val = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=code_val, value=code_const))
 			event_name_val = self.b.new_temp()
 			self.b.emit(M.ConstString(dest=event_name_val, value=stmt.value.event_fqn))
 			field_count = len(stmt.value.field_values)
@@ -1019,7 +1047,7 @@ class HIRToMIR:
 		# Unknown for other expressions (vars, calls, etc.)
 		return None
 
-	def _lookup_error_code(self, payload_expr: H.HExpr) -> int:
+	def _lookup_error_code(self, payload_expr: H.HExpr | None = None, *, event_fqn: str | None = None) -> int:
 		"""
 		Best-effort event code lookup from exception metadata.
 
@@ -1028,6 +1056,8 @@ class HIRToMIR:
 		"""
 		if self._exc_env is None:
 			return 0
+		if event_fqn:
+			return self._exc_env.get(event_fqn, 0)
 		if isinstance(payload_expr, H.HExceptionInit):
 			fqn = getattr(payload_expr, "event_fqn", None)
 			if fqn:

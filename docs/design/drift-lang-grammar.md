@@ -109,7 +109,8 @@ ContinueStmt ::= "continue" TERMINATOR
 TryStmt      ::= "try" Block (TryElse | TryCatch)?
 TryElse      ::= "else" Block
 TryCatch     ::= "catch" (Ident)? Block
-ThrowStmt    ::= "throw" Expr TERMINATOR
+ThrowStmt    ::= "throw" ExceptionInit TERMINATOR
+ExceptionInit::= Ident ("{" FieldAssignList? "}")?
 ```
 
 Expressions:
@@ -153,6 +154,7 @@ PrimaryExpr  ::= Literal
               | TupleExpr
               | ArrayLiteral
               | MapLiteral
+              | TypeInitExpr
               | MatchExpr
               | TryCatchExpr
               | LambdaExpr
@@ -161,6 +163,9 @@ TupleExpr    ::= "(" Expr ("," Expr)+ ")"
 ArrayLiteral ::= "[" (Expr ("," Expr)*)? "]"
 MapLiteral   ::= "{" (MapEntry ("," MapEntry)*)? "}"
 MapEntry     ::= Expr ":" Expr
+TypeInitExpr ::= Ident "{" FieldAssignList? "}"
+FieldAssignList ::= FieldAssign ("," FieldAssign)* (",")?
+FieldAssign     ::= Ident "=" Expr
 MatchExpr    ::= "match" Expr "{" MatchArm+ "}"
 MatchArm     ::= Pattern "=>" Expr TERMINATOR?
 Pattern      ::= Ident | Literal | "(" Pattern ("," Pattern)+ ")"

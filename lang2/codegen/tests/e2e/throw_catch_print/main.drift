@@ -1,6 +1,6 @@
 module m
 
-exception E()
+exception E(msg: String)
 
 fn main() returns Int {
     try {

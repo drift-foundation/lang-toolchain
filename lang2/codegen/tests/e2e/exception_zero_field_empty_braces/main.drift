@@ -1,0 +1,12 @@
+module m
+
+exception Timeout()
+
+fn main() returns Int {
+    try {
+        throw Timeout {};
+    } catch err {
+        // handled
+    }
+    return 0;
+}
