@@ -157,6 +157,10 @@ def _convert_raise(stmt: parser_ast.RaiseStmt) -> s0.Stmt:
 	return s0.ThrowStmt(value=_convert_expr(expr), loc=Span.from_loc(stmt.loc))
 
 
+def _convert_rethrow(stmt: parser_ast.RethrowStmt) -> s0.Stmt:
+	return s0.RethrowStmt(loc=Span.from_loc(stmt.loc))
+
+
 def _convert_try(stmt: parser_ast.TryStmt) -> s0.Stmt:
 	catches = [
 		s0.CatchExprArm(
@@ -187,6 +191,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.ForStmt: _convert_for,
 	parser_ast.ThrowStmt: _convert_throw,
 	parser_ast.RaiseStmt: _convert_raise,
+	parser_ast.RethrowStmt: _convert_rethrow,
 	parser_ast.TryStmt: _convert_try,
 	parser_ast.ImportStmt: _convert_import,
 }

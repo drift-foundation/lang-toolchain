@@ -8,46 +8,47 @@ from typing import List, Optional
 from lark import Lark, Token, Tree
 
 from .ast import (
-	ArrayLiteral,
-	AssignStmt,
-	Attr,
-	Binary,
-	Block,
-	Call,
-	CatchClause,
-	ExceptionArg,
-	ExceptionDef,
-	Expr,
-	ExprStmt,
-	ForStmt,
-	FunctionDef,
-	IfStmt,
-	ImportStmt,
-	ImplementDef,
-	Index,
-	KwArg,
-	LetStmt,
-	Literal,
-	Located,
-	Move,
-	Name,
-	Placeholder,
-	Param,
-	Program,
-	RaiseStmt,
-	ReturnStmt,
-	StructDef,
-	StructField,
-	TypeExpr,
-	Ternary,
-	TryCatchExpr,
+    ArrayLiteral,
+    AssignStmt,
+    Attr,
+    Binary,
+    Block,
+    Call,
+    CatchClause,
+    ExceptionArg,
+    ExceptionDef,
+    Expr,
+    ExprStmt,
+    ForStmt,
+    FunctionDef,
+    IfStmt,
+    ImportStmt,
+    ImplementDef,
+    Index,
+    KwArg,
+    LetStmt,
+    Literal,
+    Located,
+    Move,
+    Name,
+    Placeholder,
+    Param,
+    Program,
+    RaiseStmt,
+    RethrowStmt,
+    ReturnStmt,
+    StructDef,
+    StructField,
+    TypeExpr,
+    Ternary,
+    TryCatchExpr,
     CatchExprArm,
     ExceptionCtor,
-	TryStmt,
-	WhileStmt,
-	BreakStmt,
-	ContinueStmt,
-	Unary,
+    TryStmt,
+    WhileStmt,
+    BreakStmt,
+    ContinueStmt,
+    Unary,
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
@@ -82,6 +83,7 @@ class TerminatorInserter:
         "RBRACE",
         "RETURN",
         "THROW",
+        "RETHROW",
         "BREAK",
         "CONTINUE",
         "MOVE",
@@ -345,55 +347,59 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 		return _build_type_expr(tree.children[-1])
 	return TypeExpr(name="<unknown>")
 def _build_stmt(tree: Tree):
-    kind = _name(tree)
-    if kind == "stmt":
-        for child in tree.children:
-            if isinstance(child, Tree):
-                inner_kind = _name(child)
-                if inner_kind == "simple_stmt" or inner_kind == "if_stmt" or inner_kind == "try_stmt":
-                    return _build_stmt(child)
-        return None
-    if kind == "simple_stmt":
-        target = tree.children[0]
-        stmt_kind = _name(target)
-        if stmt_kind == "let_stmt":
-            return _build_let_stmt(target)
-        if stmt_kind == "for_stmt":
-            return _build_for_stmt(target)
-        if stmt_kind == "assign_stmt":
-            return _build_assign_stmt(target)
-        if stmt_kind == "return_stmt":
-            return _build_return_stmt(target)
-        if stmt_kind == "raise_stmt":
-            return _build_raise_stmt(target)
-        if stmt_kind == "expr_stmt":
-            return _build_expr_stmt(target)
-        if stmt_kind == "import_stmt":
-            return _build_import_stmt(target)
-        if stmt_kind == "while_stmt":
-            return _build_while_stmt(target)
-        if stmt_kind == "break_stmt":
-            return _build_break_stmt(target)
-        if stmt_kind == "continue_stmt":
-            return _build_continue_stmt(target)
-        return None
-    if kind == "if_stmt":
-        return _build_if_stmt(tree)
-    if kind == "while_stmt":
-        return _build_while_stmt(tree)
-    if kind == "try_stmt":
-        return _build_try_stmt(tree)
-    if kind == "let_stmt":
-        return _build_let_stmt(tree)
-    if kind == "assign_stmt":
-        return _build_assign_stmt(tree)
-    if kind == "return_stmt":
-        return _build_return_stmt(tree)
-    if kind == "raise_stmt":
-        return _build_raise_stmt(tree)
-    if kind == "expr_stmt":
-        return _build_expr_stmt(tree)
-    return None
+	kind = _name(tree)
+	if kind == "stmt":
+		for child in tree.children:
+			if isinstance(child, Tree):
+				inner_kind = _name(child)
+				if inner_kind in {"simple_stmt", "if_stmt", "try_stmt"}:
+					return _build_stmt(child)
+		return None
+	if kind == "simple_stmt":
+		target = tree.children[0]
+		stmt_kind = _name(target)
+		if stmt_kind == "let_stmt":
+			return _build_let_stmt(target)
+		if stmt_kind == "for_stmt":
+			return _build_for_stmt(target)
+		if stmt_kind == "assign_stmt":
+			return _build_assign_stmt(target)
+		if stmt_kind == "return_stmt":
+			return _build_return_stmt(target)
+		if stmt_kind == "rethrow_stmt":
+			return _build_rethrow_stmt(target)
+		if stmt_kind == "raise_stmt":
+			return _build_raise_stmt(target)
+		if stmt_kind == "expr_stmt":
+			return _build_expr_stmt(target)
+		if stmt_kind == "import_stmt":
+			return _build_import_stmt(target)
+		if stmt_kind == "while_stmt":
+			return _build_while_stmt(target)
+		if stmt_kind == "break_stmt":
+			return _build_break_stmt(target)
+		if stmt_kind == "continue_stmt":
+			return _build_continue_stmt(target)
+		return None
+	if kind == "if_stmt":
+		return _build_if_stmt(tree)
+	if kind == "while_stmt":
+		return _build_while_stmt(tree)
+	if kind == "try_stmt":
+		return _build_try_stmt(tree)
+	if kind == "let_stmt":
+		return _build_let_stmt(tree)
+	if kind == "assign_stmt":
+		return _build_assign_stmt(tree)
+	if kind == "return_stmt":
+		return _build_return_stmt(tree)
+	if kind == "rethrow_stmt":
+		return _build_rethrow_stmt(tree)
+	if kind == "raise_stmt":
+		return _build_raise_stmt(tree)
+	if kind == "expr_stmt":
+		return _build_expr_stmt(tree)
+	return None
 
 
 def _build_let_stmt(tree: Tree) -> LetStmt:
@@ -500,10 +506,15 @@ def _binder_is_mutable(node: Tree) -> bool:
 
 
 def _build_return_stmt(tree: Tree) -> ReturnStmt:
-    loc = _loc(tree)
-    children = [child for child in tree.children if not isinstance(child, Token) or child.type != "RETURN"]
-    value = _build_expr(children[0]) if children else None
-    return ReturnStmt(loc=loc, value=value)
+	loc = _loc(tree)
+	children = [child for child in tree.children if not isinstance(child, Token) or child.type != "RETURN"]
+	value = _build_expr(children[0]) if children else None
+	return ReturnStmt(loc=loc, value=value)
+
+
+def _build_rethrow_stmt(tree: Tree) -> RethrowStmt:
+	loc = _loc(tree)
+	return RethrowStmt(loc=loc)
 
 
 def _build_raise_stmt(tree: Tree) -> RaiseStmt:

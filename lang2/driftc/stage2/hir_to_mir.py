@@ -725,6 +725,22 @@ class HIRToMIR:
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
 			self.b.set_terminator(M.Return(value=res_val))
 
+	def _visit_stmt_HRethrow(self, stmt: H.HRethrow) -> None:
+		"""
+		Rethrow the currently caught Error; only valid inside a catch arm.
+
+		This reuses the same propagation path as a throw of an existing Error,
+		using the current try context's hidden error_local.
+		"""
+		if self.b.block.terminator is not None:
+			return
+		if not self._try_stack:
+			raise AssertionError("rethrow outside catch (checker bug)")
+		ctx = self._try_stack[-1]
+		err_val = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=err_val, local=ctx.error_local))
+		self._propagate_error(err_val)
+
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
 		"""
 		Lower a try/catch with multiple arms into explicit blocks with a dispatch:
@@ -796,8 +812,9 @@ class HIRToMIR:
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=cont_block.name))
 
-		# Pop context before lowering dispatch/catches so throws inside catch go to outer try.
-		self._try_stack.pop()
+		# Pop context before lowering dispatch so throws in catch bodies route to outer try,
+		# but keep a reference to the current try context so rethrow can load the caught error.
+		try_ctx = self._try_stack.pop()
 
 		# Dispatch: load error, project event code, branch to arms.
 		self.b.set_block(dispatch_block)
@@ -847,7 +864,16 @@ class HIRToMIR:
 				self.b.emit(M.StoreLocal(local=arm.binder, value=err_again))
 			code_again = self.b.new_temp()
 			self.b.emit(M.ErrorEvent(dest=code_again, error=err_again))
+			# Make the caught error available to `rethrow` inside this catch arm.
+			self._try_stack.append(
+				_TryCtx(
+					error_local=try_ctx.error_local,
+					dispatch_block_name=try_ctx.dispatch_block_name,
+					cont_block_name=try_ctx.cont_block_name,
+				)
+			)
 			self.lower_block(arm.block)
+			self._try_stack.pop()
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=cont_block.name))
 

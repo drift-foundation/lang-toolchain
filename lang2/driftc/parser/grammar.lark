@@ -40,6 +40,7 @@ ELSE: "else"
 WHILE: "while"
 BREAK: "break"
 CONTINUE: "continue"
+RETHROW: "rethrow"
 MOVE: "->"
 EXCEPTION: "exception"
 TRY: "try"
@@ -94,6 +95,7 @@ stmt: if_stmt
 
 simple_stmt: let_stmt
            | return_stmt
+           | rethrow_stmt
            | raise_stmt
            | import_stmt
            | break_stmt
@@ -128,6 +130,7 @@ alias_clause: "as" STRING
 type_spec: COLON type_expr
 
 return_stmt: "return" expr?
+rethrow_stmt: RETHROW
 
 raise_stmt: ("raise" domain_clause? expr)
           | (THROW exception_ctor)

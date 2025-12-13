@@ -168,6 +168,12 @@ class HThrow(HStmt):
 
 
 @dataclass
+class HRethrow(HStmt):
+	"""Rethrow the currently caught Error; only valid inside a catch arm."""
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HTry(HStmt):
 	"""
 	Statement-level try/catch with multiple arms.

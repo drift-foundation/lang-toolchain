@@ -408,5 +408,8 @@ class AstToHIR:
 	def _visit_stmt_RaiseStmt(self, stmt: ast.RaiseStmt) -> H.HStmt:
 		raise NotImplementedError("Raise lowering not implemented yet")
 
+	def _visit_stmt_RethrowStmt(self, stmt: ast.RethrowStmt) -> H.HStmt:
+		return H.HRethrow(loc=getattr(stmt, "loc", Span()))
+
 
 __all__ = ["AstToHIR"]

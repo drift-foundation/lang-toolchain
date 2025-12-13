@@ -12,8 +12,10 @@ Pipeline placement:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Union
+
+from lang2.driftc.core.span import Span
 
 
 # Base classes
@@ -254,10 +256,16 @@ class ThrowStmt(Stmt):
 	loc: Optional[object] = None
 
 
+@dataclass
+class RethrowStmt(Stmt):
+	"""Rethrow the currently caught error; only valid inside a catch."""
+	loc: Span = field(default_factory=Span)
+
+
 __all__ = [
 	"Node", "Expr", "Stmt",
 	"Literal", "Name", "Placeholder", "Attr", "Call", "Binary", "Unary",
 	"Index", "ArrayLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "TryExpr",
 	"LetStmt", "AssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
-	"TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "ThrowStmt",
+	"TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "ThrowStmt", "RethrowStmt",
 ]

@@ -420,7 +420,10 @@ class TypeChecker:
 			# Fallback: unknown type.
 			return record_expr(expr, self._unknown)
 
+		catch_depth = 0
+
 		def type_stmt(stmt: H.HStmt) -> None:
+			nonlocal catch_depth
 			if isinstance(stmt, H.HLet):
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()
@@ -448,7 +451,9 @@ class TypeChecker:
 			elif isinstance(stmt, H.HTry):
 				type_block(stmt.body)
 				for arm in stmt.catches:
+					catch_depth += 1
 					type_block(arm.block)
+					catch_depth -= 1
 			elif isinstance(stmt, H.HThrow):
 				if isinstance(stmt.value, H.HMethodCall) and stmt.value.method_name == "unwrap_err":
 					type_expr(stmt.value)
@@ -463,6 +468,16 @@ class TypeChecker:
 					type_expr(stmt.value)
 				else:
 					type_expr(stmt.value, allow_exception_init=True)
+			elif isinstance(stmt, H.HRethrow):
+				# Valid only inside a catch; outside catches it is reported here.
+				if catch_depth == 0:
+					diagnostics.append(
+						Diagnostic(
+							message="rethrow is only valid inside a catch block",
+							severity="error",
+							span=getattr(stmt, "loc", Span()),
+						)
+					)
 			# HBreak/HContinue are typeless here.
 
 		def type_block(block: H.HBlock) -> None:

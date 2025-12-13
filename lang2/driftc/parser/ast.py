@@ -91,6 +91,11 @@ class ReturnStmt(Stmt):
 
 
 @dataclass
+class RethrowStmt(Stmt):
+    loc: Located
+
+
+@dataclass
 class RaiseStmt(Stmt):
     loc: Located
     value: "Expr"
