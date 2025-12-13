@@ -228,6 +228,33 @@ class MirToSSA:
 		LoadLocal/StoreLocal to AssignSSA using a dominator-tree renaming pass.
 		Loops are still rejected by the caller.
 		"""
+		# Prune unreachable blocks so we do not create φ nodes or CFG edges for
+		# dead code produced by earlier lowering (e.g., unreachable try-cont
+		# blocks after an always-throwing try). This keeps the predecessor lists
+		# and φ incomings consistent for LLVM.
+		def _reachable(entry: str) -> set[str]:
+			succs: Dict[str, list[str]] = {}
+			for name, block in func.blocks.items():
+				targets: list[str] = []
+				if isinstance(block.terminator, Goto):
+					targets.append(block.terminator.target)
+				elif isinstance(block.terminator, IfTerminator):
+					targets.extend([block.terminator.then_target, block.terminator.else_target])
+				succs[name] = targets
+			seen: set[str] = set()
+			stack: list[str] = [entry]
+			while stack:
+				b = stack.pop()
+				if b in seen:
+					continue
+				seen.add(b)
+				stack.extend(succs.get(b, ()))
+			return seen
+
+		reachable = _reachable(func.entry)
+		if len(reachable) != len(func.blocks):
+			func.blocks = {name: block for name, block in func.blocks.items() if name in reachable}
+
 		dom_info = DominatorAnalysis().compute(func)
 		df_info = DominanceFrontierAnalysis().compute(func, dom_info)
 

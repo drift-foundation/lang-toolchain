@@ -1,0 +1,15 @@
+module m
+
+exception A()
+exception B()
+
+fn main() returns Int {
+    try {
+        throw A {};
+    } catch m:A(e) {
+        print("a");
+    } catch {
+        print("all");
+    }
+    return 0;
+}

@@ -458,7 +458,10 @@ class Checker:
 					caught_events = {arm.event_fqn for arm in stmt.catches if arm.event_fqn is not None}
 					walk_block(stmt.body, caught_events, catch_all_local)
 					for arm in stmt.catches:
-						walk_block(arm.block)
+						# Catch blocks still live within the outer try context (if any),
+						# so propagate the current caught/catch_all flags rather than
+						# resetting them.
+						walk_block(arm.block, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HReturn) and stmt.value is not None:
 					walk_expr(stmt.value)
