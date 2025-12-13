@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Callable, FrozenSet, Mapping, Sequence, Set, Tuple, TYPE_CHECKING
 
 from lang2.driftc.core.diagnostics import Diagnostic
+from lang2.driftc.core.span import Span
 from lang2.driftc.core.types_protocol import TypeEnv
 from lang2.driftc.checker.catch_arms import CatchArmInfo, validate_catch_arms
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
@@ -317,9 +318,12 @@ class Checker:
 				if not info.declared_can_throw:
 					diagnostics.append(
 						Diagnostic(
-							message=f"function {fn_name} may throw but is not declared throws",
+							message=(
+								f"function {fn_name} may throw but is not declared can-throw; "
+								f"declare a FnResult return type or mark it can-throw explicitly"
+							),
 							severity="error",
-							span=None,
+							span=Span(),
 						)
 					)
 
@@ -383,7 +387,8 @@ class Checker:
 		Walk a HIR block and conservatively decide if it may throw.
 
 		Any `HThrow` or call to a function marked can-throw sets the flag. This is
-		context-insensitive: try/catch coverage is ignored in this stub.
+		still conservative but now accounts for try/catch coverage when the thrown
+		exception is an `HExceptionInit` that matches a catch arm (or a catch-all).
 		"""
 		from lang2.driftc import stage1 as H
 		may_throw = False
@@ -425,14 +430,23 @@ class Checker:
 					walk_expr(a)
 			# literals/vars are leaf nodes
 
-		def walk_block(b: H.HBlock) -> None:
+		def walk_block(b: H.HBlock, caught: set[str] | None = None, catch_all: bool = False) -> None:
 			nonlocal may_throw
 			for stmt in b.statements:
 				if isinstance(stmt, H.HThrow):
+					# If we know this throw's event is caught locally, do not mark may_throw.
+					if isinstance(stmt.value, H.HExceptionInit):
+						event_fqn = stmt.value.event_fqn
+						if catch_all or (caught is not None and event_fqn in caught):
+							continue
+					elif catch_all:
+						continue
 					may_throw = True
 					continue
 				if isinstance(stmt, H.HTry):
-					walk_block(stmt.body)
+					catch_all_local = any(arm.event_fqn is None for arm in stmt.catches)
+					caught_events = {arm.event_fqn for arm in stmt.catches if arm.event_fqn is not None}
+					walk_block(stmt.body, caught_events, catch_all_local)
 					for arm in stmt.catches:
 						walk_block(arm.block)
 					continue
@@ -452,7 +466,7 @@ class Checker:
 						walk_block(stmt.else_block)
 					continue
 				if isinstance(stmt, H.HLoop):
-					walk_block(stmt.body)
+					walk_block(stmt.body, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HExprStmt):
 					walk_expr(stmt.expr)
@@ -643,6 +657,19 @@ class Checker:
 					return None
 				return checker._len_cap_result_type(subj_ty)
 			if isinstance(expr, H.HIndex):
+				# Special-case Error.attrs[...] to accept string keys and return DiagnosticValue.
+				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
+					err_ty = self._infer_expr_type(expr.subject.subject)
+					if err_ty is None:
+						return None
+					err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.ERROR:
+						idx_ty = self._infer_expr_type(expr.index)
+						if idx_ty is not None:
+							idx_def = self.table.get(idx_ty)
+							if idx_def.name != "String":
+								self.report_index_not_int()
+						return checker._dv
 				subject_ty = self._infer_expr_type(expr.subject)
 				idx_ty = self._infer_expr_type(expr.index)
 				if idx_ty is not None and idx_ty != checker._int_type:

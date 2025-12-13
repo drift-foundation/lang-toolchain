@@ -689,12 +689,24 @@ class HIRToMIR:
 		    jump to its dispatch block (unwind to nearest outer try).
 		  - If there is no outer try, wrap into FnResult.Err and return.
 		"""
+		can_throw = self._fn_can_throw()
 		if self._try_stack:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
+			if can_throw is False:
+				raise AssertionError("propagating error from non-can-throw function (checker bug)")
+			# Non-FnResult return types have no structured Err to construct; return
+			# a zero literal to keep the block well-formed.
+			if self._ret_type is not None:
+				ret_def = self._type_table.get(self._ret_type)
+				if ret_def.kind is not TypeKind.FNRESULT:
+					tmp = self.b.new_temp()
+					self.b.emit(M.ConstInt(dest=tmp, value=0))
+					self.b.set_terminator(M.Return(value=tmp))
+					return
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
 			self.b.set_terminator(M.Return(value=res_val))
@@ -732,6 +744,8 @@ class HIRToMIR:
 		# Hidden local to carry the Error into the dispatch/catch blocks.
 		error_local = f"__try_err{self.b.new_temp()}"
 		self.b.ensure_local(error_local)
+		# Track the hidden error slot type so downstream inference/codegen has a concrete type.
+		self._local_types[error_local] = self._type_table.ensure_error()
 
 		# Create catch blocks for each arm.
 		catch_blocks: list[tuple[H.HCatchArm, M.BasicBlock]] = []

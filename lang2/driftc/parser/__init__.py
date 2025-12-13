@@ -93,8 +93,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 	if isinstance(expr, parser_ast.ExceptionCtor):
 		return s0.ExceptionCtor(
 			name=expr.name,
-			event_code=getattr(expr, "event_code", None),
 			fields={k: _convert_expr(v) for k, v in expr.fields.items()},
+			arg_order=getattr(expr, "arg_order", None),
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	raise NotImplementedError(f"Unsupported expression in adapter: {expr!r}")

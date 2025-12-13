@@ -41,7 +41,8 @@ from .ast import (
 	TypeExpr,
 	Ternary,
 	TryCatchExpr,
-	CatchExprArm,
+    CatchExprArm,
+    ExceptionCtor,
 	TryStmt,
 	WhileStmt,
 	BreakStmt,
@@ -315,31 +316,34 @@ def _build_param(tree: Tree) -> Param:
 
 
 def _build_type_expr(tree: Tree) -> TypeExpr:
-    name = _name(tree)
-    if name == "ref_type":
-        # '&' ['mut'] type_expr
-        inner = _build_type_expr(next(child for child in tree.children if isinstance(child, Tree)))
-        mut = any(isinstance(child, Token) and child.value == "mut" for child in tree.children)
-        ref_name = "&mut" if mut else "&"
-        return TypeExpr(name=ref_name, args=[inner])
-    if name == "type_expr":
-        for child in tree.children:
-            if isinstance(child, Tree) and _name(child) in {"base_type", "type_expr", "ref_type"}:
-                return _build_type_expr(child)
-        return TypeExpr(name="<unknown>")
-    if name == "base_type":
-        name_token = tree.children[0]
-        args: List[TypeExpr] = []
-        if len(tree.children) > 1:
-            type_args = tree.children[1]
-            args = [
-                _build_type_expr(arg) for arg in type_args.children if isinstance(arg, Tree)
-            ]
-        return TypeExpr(name=name_token.value, args=args)
-    # fallback for other wrappers
-    if tree.children:
-        return _build_type_expr(tree.children[-1])
-    return TypeExpr(name="<unknown>")
+	name = _name(tree)
+	if name == "ref_type":
+		# '&' ['mut'] type_expr
+		inner = _build_type_expr(next(child for child in tree.children if isinstance(child, Tree)))
+		mut = any(isinstance(child, Token) and child.value == "mut" for child in tree.children)
+		ref_name = "&mut" if mut else "&"
+		return TypeExpr(name=ref_name, args=[inner])
+	if name == "type_expr":
+		for child in tree.children:
+			if isinstance(child, Tree) and _name(child) in {"base_type", "type_expr", "ref_type"}:
+				return _build_type_expr(child)
+		return TypeExpr(name="<unknown>")
+	if name == "base_type":
+		name_token = tree.children[0]
+		args: List[TypeExpr] = []
+		if len(tree.children) > 1:
+			type_args = tree.children[1]
+			if isinstance(type_args, Tree):
+				children = [arg for arg in type_args.children if isinstance(arg, Tree)]
+				# Unwrap type_args wrappers that nest the real angle/square args.
+				if len(children) == 1 and _name(children[0]) in {"angle_type_args", "square_type_args"}:
+					children = [arg for arg in children[0].children if isinstance(arg, Tree)]
+				args = [_build_type_expr(arg) for arg in children]
+		return TypeExpr(name=name_token.value, args=args)
+	# fallback for other wrappers
+	if tree.children:
+		return _build_type_expr(tree.children[-1])
+	return TypeExpr(name="<unknown>")
 def _build_stmt(tree: Tree):
     kind = _name(tree)
     if kind == "stmt":
@@ -701,6 +705,8 @@ def _build_expr(node) -> Expr:
         return _build_ternary(node)
     if name == "pipeline":
         return _build_pipeline(node)
+    if name == "exception_ctor":
+        return _build_exception_ctor(node)
     if name == "logic_and":
         return _fold_chain(node, "logic_and_tail")
     if name == "equality":
@@ -847,6 +853,27 @@ def _build_ternary(tree: Tree) -> Ternary:
     then_expr = _build_expr(parts[1])
     else_expr = _build_expr(parts[2])
     return Ternary(loc=_loc(tree), condition=cond, then_value=then_expr, else_value=else_expr)
+
+
+def _build_exception_ctor(tree: Tree) -> ExceptionCtor:
+    """
+    Exception constructor expression: Name { field = expr, ... }
+    """
+    name_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
+    if name_tok is None:
+        raise ValueError("exception_ctor missing name")
+    fields: dict[str, Expr] = {}
+    order: list[str] = []
+    for child in tree.children:
+        if isinstance(child, Tree) and _name(child) == "exception_ctor_field":
+            field_name_tok = next((t for t in child.children if isinstance(t, Token) and t.type == "NAME"), None)
+            value_node = next((c for c in child.children if isinstance(c, Tree)), None)
+            if field_name_tok is None or value_node is None:
+                raise ValueError("malformed exception_ctor_field")
+            fname = field_name_tok.value
+            fields[fname] = _build_expr(value_node)
+            order.append(fname)
+    return ExceptionCtor(name=name_tok.value, event_code=None, fields=fields, arg_order=order, loc=_loc(tree))
 
 
 def _build_postfix(tree: Tree) -> Expr:

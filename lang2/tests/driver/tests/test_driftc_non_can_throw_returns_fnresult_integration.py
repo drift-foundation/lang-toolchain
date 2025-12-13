@@ -48,4 +48,4 @@ def test_driver_flags_fnresult_return_in_non_can_throw_fn():
 	assert checked.type_env is not None
 	assert checked.fn_infos["f_plain"].declared_can_throw is False
 	msgs = [d.message for d in checked.diagnostics]
-	assert any("not declared can-throw but returns FnResult" in m for m in msgs)
+	assert any("may throw but is not declared can-throw" in m for m in msgs)

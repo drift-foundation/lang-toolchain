@@ -53,12 +53,14 @@ from lang2.driftc.stage2 import (
 	ConstString,
 	ConstructError,
 	ErrorAddAttrDV,
+	ErrorEvent,
 	ConstructResultErr,
 	ConstructResultOk,
 	DVAsBool,
 	DVAsInt,
 	DVAsString,
 	ErrorAttrsGetDV,
+	LoadLocal,
 	OptionalIsSome,
 	OptionalValue,
 	Goto,
@@ -69,6 +71,7 @@ from lang2.driftc.stage2 import (
 	StringConcat,
 	StringEq,
 	StringLen,
+	StoreLocal,
 	UnaryOpInstr,
 )
 from lang2.driftc.stage4.ssa import SsaFunc
@@ -447,6 +450,8 @@ class _FuncBuilder:
 		self.module.needs_array_helpers = True
 
 	def _emit_block(self, block_name: str) -> None:
+		# Track current block name so instruction-level helpers can consult SSA maps.
+		self._current_block_name = block_name
 		block = self.func.blocks[block_name]
 		self.lines.append(f"{block.name}:")
 		# Emit phi nodes first.
@@ -454,11 +459,13 @@ class _FuncBuilder:
 			if isinstance(instr, Phi):
 				self._lower_phi(block.name, instr)
 		# Emit non-phi instructions.
-		for instr in block.instructions:
+		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, Phi):
 				continue
-			self._lower_instr(instr)
+			self._lower_instr(instr, instr_index=idx)
 		self._lower_term(block.terminator)
+		# Best-effort cleanup; not strictly necessary.
+		self._current_block_name = None
 
 	def _lower_phi(self, block_name: str, phi: Phi) -> None:
 		dest = self._map_value(phi.dest)
@@ -481,7 +488,7 @@ class _FuncBuilder:
 		self.value_types[dest] = phi_ty
 		self.lines.append(f"  {dest} = phi {phi_ty} {joined}")
 
-	def _lower_instr(self, instr: object) -> None:
+	def _lower_instr(self, instr: object, instr_index: int | None = None) -> None:
 		if isinstance(instr, ConstInt):
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = "i64"
@@ -537,6 +544,39 @@ class _FuncBuilder:
 			self.aliases[instr.dest] = instr.src
 			if src in self.value_types:
 				self.value_types[dest] = self.value_types[src]
+		elif isinstance(instr, LoadLocal):
+			# SSA pass already assigned a versioned name; treat this as an alias.
+			dest = self._map_value(instr.dest)
+			block_name = getattr(self, "_current_block_name", None)
+			if instr_index is not None and block_name is not None:
+				ssa_name = self.ssa.value_for_instr.get((block_name, instr_index))
+			else:
+				ssa_name = None
+			if ssa_name:
+				self.aliases[instr.dest] = ssa_name
+				self.value_map.setdefault(ssa_name, f"%{ssa_name}")
+				if ssa_name in self.value_types:
+					self.value_types[dest] = self.value_types[ssa_name]
+			else:
+				# Fallback to a simple alias on the local name.
+				self.aliases[instr.dest] = instr.local
+				src_mapped = self._map_value(instr.local)
+				if src_mapped in self.value_types:
+					self.value_types[dest] = self.value_types[src_mapped]
+		elif isinstance(instr, StoreLocal):
+			# SSA maps locals to versioned names; no IR emission required here.
+			block_name = getattr(self, "_current_block_name", None)
+			if instr_index is not None and block_name is not None:
+				ssa_name = self.ssa.value_for_instr.get((block_name, instr_index))
+			else:
+				ssa_name = None
+			val = self._map_value(instr.value)
+			if ssa_name:
+				self.aliases[ssa_name] = instr.value
+				if val in self.value_types:
+					self.value_types[ssa_name] = self.value_types[val]
+			if instr.local in self.value_types and val in self.value_types:
+				self.value_types[instr.local] = self.value_types[val]
 		elif isinstance(instr, BinaryOpInstr):
 			self._lower_binary(instr)
 		elif isinstance(instr, Call):
@@ -662,6 +702,23 @@ class _FuncBuilder:
 			self.lines.append(
 				f"  call void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val}, {DRIFT_DV_TYPE}* {tmp_ptr})"
 			)
+		elif isinstance(instr, ErrorEvent):
+			dest = self._map_value(instr.dest)
+			err_val = self._map_value(instr.error)
+			err_ty = self.value_types.get(err_val)
+			if err_ty is None:
+				# Unreachable dispatch paths may still reference the synthetic try
+				# error slot; default it to the canonical error pointer type.
+				err_ty = DRIFT_ERROR_PTR
+				self.value_types[err_val] = err_ty
+			if err_ty != DRIFT_ERROR_PTR:
+				raise NotImplementedError(
+					f"LLVM codegen v1: ErrorEvent expects {DRIFT_ERROR_PTR}, got {err_ty}"
+				)
+			loaded = self._fresh("err_val")
+			self.lines.append(f"  {loaded} = load {DRIFT_ERROR_TYPE}, {DRIFT_ERROR_PTR} {err_val}")
+			self.lines.append(f"  {dest} = extractvalue {DRIFT_ERROR_TYPE} {loaded}, 0")
+			self.value_types[dest] = "i64"
 		elif isinstance(instr, OptionalIsSome):
 			opt_val = self._map_value(instr.opt)
 			opt_ty = self.value_types.get(opt_val)

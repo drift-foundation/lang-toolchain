@@ -112,6 +112,7 @@ class ExceptionCtor(Expr):
 	"""
 	name: str
 	fields: dict  # mapping str -> Expr; kept loose for the rewrite
+	arg_order: Optional[list[str]] = None
 	loc: Optional[object] = None
 
 

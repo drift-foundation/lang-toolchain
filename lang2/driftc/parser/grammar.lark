@@ -130,6 +130,7 @@ type_spec: COLON type_expr
 return_stmt: "return" expr?
 
 raise_stmt: ("raise" domain_clause? expr)
+          | (THROW exception_ctor)
           | (THROW expr)
 
 expr_stmt: expr
@@ -214,6 +215,9 @@ leading_suffix: call_suffix
               | index_suffix
 
 array_literal: "[" [expr (COMMA expr)*] "]"
+
+exception_ctor: NAME "{" [exception_ctor_field (COMMA exception_ctor_field)*] "}"
+exception_ctor_field: NAME EQUAL expr
 
 call_args: call_arg (COMMA call_arg)*
 call_arg: NAME EQUAL expr -> kwarg

@@ -1,0 +1,27 @@
+module m
+
+exception Boom(a: Int, b: String)
+
+fn handle() returns Int {
+    try {
+        throw Boom { a = 7, b = "hi" };
+    } catch m:Boom(e) {
+        // Exercise attrs retrieval and DV helpers end-to-end; results are ignored.
+        val dv_a = e.attrs["a"];
+        val _opt_a = dv_a.as_int();
+        val dv_b = e.attrs["b"];
+        val _opt_b = dv_b.as_string();
+        return 0;
+    }
+    // Unreachable in the current control flow, but keeps the MIR fallthrough
+    // well-formed if the try body ever stops throwing.
+    return 1;
+}
+
+fn main() returns Int {
+    // The handler throws and catches internally; this call should stay on the
+    // happy path. A real program could inspect the FnResult, but for this
+    // smoke test we only care that codegen succeeds end-to-end.
+    val _res = handle();
+    return 0;
+}
