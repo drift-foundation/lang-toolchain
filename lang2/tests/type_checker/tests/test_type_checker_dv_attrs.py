@@ -26,7 +26,8 @@ def test_attr_payload_must_be_diagnostic_value():
 	)
 	block = H.HBlock(statements=[H.HThrow(value=exc)])
 	res = tc.check_function("f", block)
-	assert any("attribute 'detail' value must be DiagnosticValue" in d.message for d in res.diagnostics)
+	# Primitive literals are allowed and auto-wrapped into DiagnosticValue during lowering.
+	assert not res.diagnostics
 
 
 def test_attr_names_values_length_mismatch_is_reported():

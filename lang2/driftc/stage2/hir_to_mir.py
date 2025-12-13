@@ -650,12 +650,19 @@ class HIRToMIR:
 				for name, field_expr in zip(stmt.value.field_names, stmt.value.field_values):
 					if isinstance(field_expr, H.HDVInit):
 						dv_val = self.lower_expr(field_expr)
-					else:
+					elif isinstance(field_expr, (H.HLiteralInt, H.HLiteralBool)) or (
+						hasattr(H, "HLiteralString") and isinstance(field_expr, getattr(H, "HLiteralString"))
+					):
 						inner_val = self.lower_expr(field_expr)
 						dv_val = self.b.new_temp()
-						# Wrap non-DV field values into a DiagnosticValue via the generic
-						# constructor. `dv_type_name` is informational only here.
+						# Only primitive literals are auto-wrapped into DiagnosticValue. This
+						# keeps exception field attrs aligned with the DV ABI and avoids
+						# silently accepting unsupported payload shapes.
 						self.b.emit(M.ConstructDV(dest=dv_val, dv_type_name=name, args=[inner_val]))
+					else:
+						raise NotImplementedError(
+							f"exception field {name!r} must be a DiagnosticValue or primitive literal"
+						)
 					field_dvs.append((name, dv_val))
 				first_name, first_dv = field_dvs[0]
 				first_key = self.b.new_temp()

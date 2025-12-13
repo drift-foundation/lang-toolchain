@@ -195,7 +195,7 @@ Your last open question asks about staging. My recommendation:
 
 ## Phase 1 progress (in-flight)
 
-- Multi-attr throw lowering is now deterministic: payload is always stored under the fixed "payload" key, all named fields are attached via `ErrorAddAttrDV`, and DV construction uses the exception/ctor name (not the attr key) to keep semantics stable.
+- Multi-attr throw lowering is now deterministic: all declared fields are attached under their names via `ErrorAddAttrDV`; there is no implicit “payload” key.
 - Parser adapter now handles try/catch/while/for/import/exception ctors/ternary/placeholder, so lang2 front end accepts the same surface constructs as lang/.
 - Exception declarations emit event codes via the shared xxhash64 ABI helper (`event_code`), with diagnostics for duplicates/payload collisions; catalog is threaded through driver/e2e runner, checker, and HIR→MIR lowering (`exc_env`).
 
@@ -217,13 +217,14 @@ Your last open question asks about staging. My recommendation:
 - Exception constructors are now a dedicated HIR node (`HExceptionInit`) that is only valid as a throw payload; DV ctor (`HDVInit`) is primitive-only. HIR→MIR throw lowering treats the thrown value as an Error: fields become attrs under their declared names (no special “payload” key); type checker rejects exception ctors outside `throw` and any non-exception throw payloads with span diagnostics.
 - DV helper methods (`as_int` / `as_bool` / `as_string`) now short-circuit before registry/signature resolution; misuse on non-DiagnosticValue receivers emits a span-carrying diagnostic rather than falling through.
 - Checker now enforces DiagnosticValue-only throw payloads and attr field values (with span diagnostics), and parser exception diagnostics wrap parser locs in structured `Span`.
+- Exception attrs remain **primitives-only** (Int/Bool/String/Missing wrapped as DV). Opaque/object/array attrs are explicitly deferred until a stable runtime handle/ownership model exists; no implicit coercions or reserved keys.
 
 ### Next steps (attr/DV correctness focus)
 
 - Checker (surface-level): require throw payloads and any attr/value constructs to be `DiagnosticValue`; emit span-carrying diagnostics on the source nodes for unsupported payload types. Keep checker rules independent of MIR op names (e.g., no coupling to `ErrorAddAttrDV`). (Done)
 - Spans: extend structured spans to remaining exception diagnostics (duplicate/unknown exception declarations/catches) for UX parity. (Done)
 - Tests: (1) checker-level negative for non-DV attr payload rejected with span, (2) LLVM/codegen round-trip for a multi-attr error using DV payloads only to exercise runtime/ABI. (Done)
-- Deferred: opaque/object/array attrs until a stable runtime handle/ownership model exists; current attrs remain limited to existing DV kinds (Int/Bool/String/Missing), no implicit coercions.
+- Deferred: opaque/object/array attrs until a stable runtime handle/ownership model exists; current attrs remain limited to existing DV kinds (Int/Bool/String/Missing), no implicit coercions or reserved keys.
 ---
 
 ## 7. Answering your open questions directly

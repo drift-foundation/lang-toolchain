@@ -367,10 +367,21 @@ class TypeChecker:
 					return record_expr(expr, self._dv)
 				for name, val_expr in zip(expr.field_names, expr.field_values):
 					val_ty = type_expr(val_expr)
-					if val_ty != self._dv:
+					is_primitive_literal = isinstance(
+						val_expr,
+						(
+							H.HLiteralInt,
+							H.HLiteralBool,
+							getattr(H, "HLiteralString", tuple()),
+						),
+					)
+					if val_ty != self._dv and not is_primitive_literal:
 						diagnostics.append(
 							Diagnostic(
-								message=f"attribute '{name}' value must be DiagnosticValue",
+								message=(
+									f"attribute '{name}' value must be a DiagnosticValue or a primitive literal "
+									f"(Int/Bool/String)"
+								),
 								severity="error",
 								span=getattr(val_expr, "loc", Span()),
 							)
