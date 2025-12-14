@@ -199,6 +199,29 @@ Your last open question asks about staging. My recommendation:
 - Parser adapter now handles try/catch/while/for/import/exception ctors/ternary/placeholder, so lang2 front end accepts the same surface constructs as lang/.
 - Exception declarations emit event codes via the shared xxhash64 ABI helper (`event_code`), with diagnostics for duplicates/payload collisions; catalog is threaded through driver/e2e runner, checker, and HIR→MIR lowering (`exc_env`).
 
+## TODO — Try/Catch expressions as real value expressions
+
+Target semantics (matching spec intent):
+
+- `try foo() catch { 0 }` is an expression.
+- Attempt must be a **call**; type = `T = type(foo())`.
+- Every catch arm must produce the **same type T**; mismatches are diagnostics on the arm expr.
+- Works in any expression position (let binding, return, arg, nested).
+- Statement `try` stays as-is.
+
+Plan:
+
+1) HIR: add `HTryExpr` (+ arms) instead of rejecting `TryCatchExpr` in expression position; stop the “ExprStmt-only” special-case.
+2) Checker: type-check `HTryExpr`: enforce “attempt is call”, per-arm type matching to attempt type, result type = attempt type; emit span-carrying diag on mismatched arm types.
+3) Lowering (HIR→MIR): lower `HTryExpr` to CFG with a temp local (or phi) join:
+   - try path assigns attempt value to temp → goto join
+   - each catch arm evaluates expr, assigns to temp → goto join
+   - join loads temp as the expression value
+4) Keep catch binders/catch-all rules identical to statement try.
+5) Tests: add e2e/unit cases for `try foo() catch { ... }` in let/return/arg contexts; negative case where arm type ≠ attempt type; attempt not a call → diagnostic.
+
+Open question to track with the user: whether to relax the “attempt must be a call” restriction in v1.
+
 ## 2025-XX-XX progress update
 
 - Throw payloads are now **exception constructors only** (or existing `Error` handles); DV-as-payload throws are rejected in the checker. Stage2 lowering uses the event name for the first attr and attaches all declared fields under their names; no implicit `"payload"` slot remains.
@@ -218,6 +241,19 @@ Your last open question asks about staging. My recommendation:
 - DV helper methods (`as_int` / `as_bool` / `as_string`) now short-circuit before registry/signature resolution; misuse on non-DiagnosticValue receivers emits a span-carrying diagnostic rather than falling through.
 - Checker now enforces DiagnosticValue-only throw payloads and attr field values (with span diagnostics), and parser exception diagnostics wrap parser locs in structured `Span`.
 - Exception attrs remain **primitives-only** (Int/Bool/String/Missing wrapped as DV). Opaque/object/array attrs are explicitly deferred until a stable runtime handle/ownership model exists; no implicit coercions or reserved keys.
+- Try/catch is now fully wired end-to-end for both statement and expression forms:
+  - `try foo() catch { ... }` (inline statement form) parses without requiring an explicit terminator before `catch`.
+  - `val k = try foo() catch { 0 }` is a real expression and type-checks as `T` (catch arms must produce `T`), works in `let`/`return`/argument contexts.
+  - `rethrow` is a dedicated terminator statement; it is only valid in catch bodies and rethrows the currently caught `Error` (no binder required). Nested catches correctly rethrow to the outer try.
+- SSA TypeEnv construction is now aligned with the checker’s **effective** can-throw inference (instead of mutating/overloading signature flags), so stage4 type-aware checks and LLVM lowering see consistent `FnResult<T, Error>` internal ABI types.
+- Driver pipeline now includes signature-only callees when building `FnInfo` metadata, so can-throw typing and call lowering remain correct even when a callee has no HIR body in the current compilation unit.
+- E2E suite is now fully green and the runner ignores `__pycache__`/dot-directories so we don’t accumulate “skipped” noise from Python artifacts.
+- Spec/ABI docs updated to match the implementation contract:
+  - can-throw is an effect (surface signatures stay `returns T`; compiler lowers to internal `Result<T, Error>`),
+  - event identity uses canonical FQN (`module.sub:Event`) + `event_code`,
+  - `Error` label accessor is `event_fqn()` (canonical FQN string); matching is by `event_code` only,
+  - internal `%FnResult_*_Error` carries a `%DriftError*` handle, not an inline struct.
+  - Runtime C API naming aligned with this: `struct DriftError` stores `event_fqn` and exports `drift_error_get_event_fqn(...)`.
 
 ### Next steps (attr/DV correctness focus)
 

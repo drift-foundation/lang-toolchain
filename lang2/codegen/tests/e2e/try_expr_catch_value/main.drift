@@ -1,0 +1,12 @@
+module m
+
+exception Boom()
+
+fn foo() returns Int {
+	throw Boom {};
+}
+
+fn main() returns Int {
+	val k = try foo() catch { 0 };
+	return k;
+}

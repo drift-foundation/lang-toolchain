@@ -1,0 +1,14 @@
+module m
+
+exception Boom()
+
+fn foo() returns Int {
+	throw Boom {};
+}
+
+fn main() returns Int {
+	try foo() catch {
+		print("caught");
+	}
+	return 0;
+}

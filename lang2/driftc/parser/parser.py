@@ -120,21 +120,57 @@ class TerminatorInserter:
         self.can_terminate = False
 
     def process(self, stream):
+        """
+        Insert `TERMINATOR` tokens for statement boundaries.
+
+        We treat explicit `;` as an unconditional terminator, and we treat
+        newline as a terminator *only* when the previous token can terminate a
+        statement and we're not inside parentheses/brackets.
+
+        One additional rule keeps `try ... catch ...` readable across lines:
+
+            try foo()
+                catch { ... }
+
+        The newline between the attempt and the `catch` keyword must not create
+        a statement terminator. To support that without complicating the
+        grammar, we suppress newline-terminator insertion when the next
+        significant token is `CATCH`.
+        """
+
         self._reset()
+        pending_newline: Token | None = None
+
         for token in stream:
             ttype = token.type
+
             if ttype == "NEWLINE":
-                if self._should_emit_terminator():
-                    yield Token.new_borrow_pos("TERMINATOR", token.value, token)
-                    self.can_terminate = False
+                # Defer the decision until we see the next non-newline token so
+                # we can suppress terminators before `catch`.
+                pending_newline = token
                 continue
+
             if ttype == "SEMI":
+                # An explicit semicolon always terminates the current statement.
+                pending_newline = None
                 yield Token.new_borrow_pos("TERMINATOR", token.value, token)
                 self.can_terminate = False
                 continue
+
+            if pending_newline is not None:
+                if self._should_emit_terminator() and ttype != "CATCH":
+                    yield Token.new_borrow_pos("TERMINATOR", pending_newline.value, pending_newline)
+                    self.can_terminate = False
+                pending_newline = None
+
             yield token
             self._update_depth(ttype)
             self.can_terminate = self._is_terminable(ttype)
+
+        if pending_newline is not None:
+            if self._should_emit_terminator():
+                yield Token.new_borrow_pos("TERMINATOR", pending_newline.value, pending_newline)
+                self.can_terminate = False
 
     def _update_depth(self, ttype: str) -> None:
         if ttype == "LPAR":
@@ -163,6 +199,7 @@ class TerminatorInserter:
 _PARSER = Lark(
     _GRAMMAR_SRC,
     parser="lalr",
+    lexer="basic",
     start="program",
     propagate_positions=True,
     maybe_placeholders=False,
@@ -307,6 +344,43 @@ def _build_block(tree: Tree) -> Block:
             stmt = _build_stmt(child)
             if stmt is not None:
                 statements.append(stmt)
+    return Block(statements=statements)
+
+
+def _build_value_block(tree: Tree) -> Block:
+    """
+    Build a "value block": a braced block that ends with a trailing expression
+    that does not require a terminator (though one may be present).
+
+    Grammar:
+        value_block: "{" (stmt | TERMINATOR)* expr terminator_opt "}"
+
+    We represent the trailing expression as a final `ExprStmt` in the block.
+    Downstream stages (AstToHIR / checker) are responsible for enforcing any
+    "yields a value" rules (e.g. try/catch expression catch arms).
+    """
+
+    statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt] = []
+    result_expr_node: Tree | None = None
+
+    for child in tree.children:
+        if not isinstance(child, Tree):
+            continue
+        name = _name(child)
+        if name == "stmt":
+            stmt = _build_stmt(child)
+            if stmt is not None:
+                statements.append(stmt)
+            continue
+        if name == "terminator_opt":
+            continue
+        result_expr_node = child
+
+    if result_expr_node is None:
+        raise ValueError("value_block missing trailing expression")
+
+    result_expr = _build_expr(result_expr_node)
+    statements.append(ExprStmt(loc=result_expr.loc, value=result_expr))
     return Block(statements=statements)
 
 
@@ -648,8 +722,19 @@ def _build_try_stmt(tree: Tree) -> TryStmt:
         if not isinstance(child, Tree):
             continue
         name = _name(child)
-        if name == "block" and try_block is None:
-            try_block = _build_block(child)
+        if try_block is None and name != "catch_clause":
+            # The try statement supports both block form:
+            #   try { ... } catch ...
+            # and call/expression shorthand:
+            #   try foo() catch ...
+            #
+            # For the shorthand we wrap the expression into a single ExprStmt
+            # so the rest of the pipeline continues to treat TryStmt.body as a block.
+            if name == "block":
+                try_block = _build_block(child)
+            else:
+                expr = _build_expr(child)
+                try_block = Block(statements=[ExprStmt(loc=_loc(child), value=expr)])
         elif name == "catch_clause":
             catches.append(_build_catch_clause(child))
     if try_block is None:
@@ -827,11 +912,29 @@ def _build_pipeline(tree: Tree) -> Expr:
 
 def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
     parts = [child for child in tree.children if isinstance(child, Tree)]
-    if len(parts) < 2:
+    if not parts:
         raise ValueError("try_catch_expr expects attempt and at least one catch arm")
-    attempt = _build_expr(parts[0])
+
+    attempt_node: Tree | None = None
+    arm_nodes: list[Tree] = []
+    for node in parts:
+        name = _name(node)
+        if name == "terminator_opt":
+            continue
+        if name.startswith("catch_expr_"):
+            arm_nodes.append(node)
+            continue
+        if attempt_node is None:
+            attempt_node = node
+            continue
+        raise ValueError("try_catch_expr has unexpected extra expression nodes")
+
+    if attempt_node is None or not arm_nodes:
+        raise ValueError("try_catch_expr expects attempt and at least one catch arm")
+
+    attempt = _build_expr(attempt_node)
     arms: List[CatchExprArm] = []
-    for arm_node in parts[1:]:
+    for arm_node in arm_nodes:
         arm_name = _name(arm_node)
         if arm_name == "catch_expr_event":
             event_node = next((c for c in arm_node.children if isinstance(c, Tree) and _name(c) == "event_fqn"), None)
@@ -840,17 +943,27 @@ def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
             binder_token = next((t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME"), None)
             if binder_token is None:
                 raise ValueError("event catch arm requires binder")
-            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
+            block_node = next(
+                child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "value_block"
+            )
             arms.append(
-                CatchExprArm(event=_fqn_from_tree(event_node), binder=binder_token.value, block=_build_block(block_node))
+                CatchExprArm(
+                    event=_fqn_from_tree(event_node),
+                    binder=binder_token.value,
+                    block=_build_value_block(block_node),
+                )
             )
         elif arm_name == "catch_expr_binder":
             binder_token = next(t for t in arm_node.children if isinstance(t, Token) and t.type == "NAME")
-            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-            arms.append(CatchExprArm(event=None, binder=binder_token.value, block=_build_block(block_node)))
+            block_node = next(
+                child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "value_block"
+            )
+            arms.append(CatchExprArm(event=None, binder=binder_token.value, block=_build_value_block(block_node)))
         elif arm_name == "catch_expr_block":
-            block_node = next(child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "block")
-            arms.append(CatchExprArm(event=None, binder=None, block=_build_block(block_node)))
+            block_node = next(
+                child for child in arm_node.children if isinstance(child, Tree) and _name(child) == "value_block"
+            )
+            arms.append(CatchExprArm(event=None, binder=None, block=_build_value_block(block_node)))
         else:
             raise ValueError(f"unexpected catch expr arm {arm_name}")
     return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arms=arms)

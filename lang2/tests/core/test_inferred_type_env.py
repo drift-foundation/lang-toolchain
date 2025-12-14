@@ -57,7 +57,7 @@ def test_inferred_type_env_tracks_constructresult_and_copies():
 
 	# Type-aware throw checks should pass (structural guard would fail here).
 	summaries = ThrowSummaryBuilder().build({"f_alias": mir_func}, code_to_exc={})
-	decl = declared_from_signatures(make_signatures({"f_alias": "FnResult<Int, Error>"}))
+	decl = declared_from_signatures(make_signatures({"f_alias": "Int"}, declared_can_throw={"f_alias": True}))
 	run_throw_checks(
 		{"f_alias": mir_func},
 		summaries,
@@ -84,7 +84,7 @@ def test_inferred_type_env_uses_signatures_for_call_results():
 		entry="entry",
 	)
 	ssa = _ssa_for_func(mir_func)
-	sigs = {"foo": FnSignature(name="foo", return_type="FnResult<Int, Error>")}
+	sigs = {"foo": FnSignature(name="foo", return_type="Int", declared_can_throw=True)}
 	type_env = build_type_env_from_ssa({"caller": ssa}, signatures=sigs)
 
 	ty = type_env.type_of_ssa_value("caller", "call_res")
@@ -92,7 +92,7 @@ def test_inferred_type_env_uses_signatures_for_call_results():
 
 	# Type-aware throw check should pass for caller marked as can-throw.
 	summaries = ThrowSummaryBuilder().build({"caller": mir_func}, code_to_exc={})
-	decl = declared_from_signatures(make_signatures({"caller": "FnResult<Int, Error>"}))
+	decl = declared_from_signatures(make_signatures({"caller": "Int"}, declared_can_throw={"caller": True}))
 	run_throw_checks(
 		{"caller": mir_func},
 		summaries,
@@ -128,7 +128,7 @@ def test_typeaware_check_rejects_non_fnresult_type():
 	tenv.set_ssa_type("f_bad_type", "r0", "Int")
 
 	summaries = ThrowSummaryBuilder().build({"f_bad_type": mir_func}, code_to_exc={})
-	decl = declared_from_signatures(make_signatures({"f_bad_type": "FnResult<Int, Error>"}))
+	decl = declared_from_signatures(make_signatures({"f_bad_type": "Int"}, declared_can_throw={"f_bad_type": True}))
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(

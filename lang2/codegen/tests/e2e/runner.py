@@ -243,7 +243,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 	args = ap.parse_args(argv)
 
 	case_root = ROOT / "lang2" / "codegen" / "tests" / "e2e"
-	case_dirs = sorted(d for d in case_root.iterdir() if d.is_dir()) if case_root.exists() else []
+	case_dirs = (
+		sorted(
+			d
+			for d in case_root.iterdir()
+			if d.is_dir() and not d.name.startswith(".") and not d.name.startswith("__")
+		)
+		if case_root.exists()
+		else []
+	)
 	if args.cases:
 		names = set(args.cases)
 		case_dirs = [d for d in case_dirs if d.name in names]

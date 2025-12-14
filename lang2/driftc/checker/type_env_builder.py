@@ -27,7 +27,7 @@ def build_minimal_checker_type_env(
 	"""
 	Assign the function's declared return TypeId to returned SSA values.
 
-	This only handles can-throw functions (FnResult returns) and only tags
+	This only handles can-throw functions and only tags
 	terminator return values. It uses the supplied TypeTable (or a fresh one
 	if none is provided).
 	"""
@@ -40,6 +40,9 @@ def build_minimal_checker_type_env(
 		sig = signatures.get(fn_name)
 		if sig is None or sig.return_type_id is None:
 			continue
+		# Surface return types are `T`; can-throw ABI returns `FnResult<T, Error>`.
+		err_tid = sig.error_type_id or table.ensure_error()
+		fnres_tid = table.ensure_fnresult(sig.return_type_id, err_tid)
 		ssa = ssa_funcs.get(fn_name)
 		if ssa is None:
 			continue
@@ -48,7 +51,7 @@ def build_minimal_checker_type_env(
 			val = getattr(term, "value", None)
 			if val is None:
 				continue
-			value_types[(fn_name, val)] = sig.return_type_id
+			value_types[(fn_name, val)] = fnres_tid
 
 	if not value_types:
 		return None

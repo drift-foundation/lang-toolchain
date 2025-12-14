@@ -7,18 +7,25 @@ These helpers avoid re-spelling FnSignature construction, declared_can_throw
 derivation via the checker stub, and exception catalog setup. They also provide
 lightweight builders that accept AST/HIR-ish function declarations so test data
 looks closer to what the real front-end will feed into the checker.
+
+Note on `FnResult`:
+  lang2 does not expose `FnResult` as a surface language type. The compiler may
+  still use `FnResult<T, Error>` internally as an ABI carrier for can-throw
+  functions. Tests should model can-throw intent via `FnSignature.declared_can_throw`
+  (or via `hir_blocks` inference), not by writing `FnResult<...>` return types.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
-from lang2.driftc.checker import Checker, FnSignature
+from lang2.driftc.checker import FnSignature
 
 
 def make_signatures(
 	return_types: Mapping[str, Any],
 	throws_events: Mapping[str, Sequence[str]] | None = None,
+	declared_can_throw: Mapping[str, bool] | None = None,
 ) -> Dict[str, FnSignature]:
 	"""
 	Build a name -> FnSignature map from simple return-type/throws inputs.
@@ -30,16 +37,25 @@ def make_signatures(
 	signatures: Dict[str, FnSignature] = {}
 	for name, ret_ty in return_types.items():
 		events = tuple(throws_events[name]) if throws_events and name in throws_events else ()
-		signatures[name] = FnSignature(name=name, return_type=ret_ty, throws_events=events)
+		explicit = declared_can_throw.get(name) if declared_can_throw else None
+		signatures[name] = FnSignature(
+			name=name,
+			return_type=ret_ty,
+			throws_events=events,
+			declared_can_throw=explicit,
+		)
 	return signatures
 
 
 def declared_from_signatures(signatures: Mapping[str, FnSignature]) -> Dict[str, bool]:
 	"""
-	Derive declared_can_throw via the checker stub given FnSignature inputs.
+	Derive the explicit can-throw intent from signatures.
+
+	In the current lang2 model, can-throw is not implied by the surface return
+	type. This helper therefore returns `bool(sig.declared_can_throw)` for each
+	signature, defaulting to False when unspecified.
 	"""
-	checked = Checker(signatures=signatures).check(signatures.keys())
-	return {name: info.declared_can_throw for name, info in checked.fn_infos.items()}
+	return {name: bool(sig.declared_can_throw) for name, sig in signatures.items()}
 
 
 def build_exception_catalog(events: Iterable[str] | Mapping[str, int]) -> Dict[str, int]:
@@ -61,13 +77,19 @@ def signatures_from_decl_nodes(func_decls: Iterable[object]) -> Dict[str, FnSign
 	  - name
 	  - return_type (string/tuple placeholder is fine)
 	  - throws or throws_events: iterable of event names (optional)
+	  - declared_can_throw: Optional[bool] (optional)
 	"""
 	signatures: Dict[str, FnSignature] = {}
 	for decl in func_decls:
 		name = getattr(decl, "name")
 		ret_ty = getattr(decl, "return_type", None)
 		throws = _throws_from_decl(decl)
-		signatures[name] = FnSignature(name=name, return_type=ret_ty, throws_events=throws)
+		explicit = getattr(decl, "declared_can_throw", None)
+		if explicit is None and throws:
+			# Decl-like stubs frequently use `throws_events` as the only explicit
+			# "this may throw" marker. Treat that as can-throw intent.
+			explicit = True
+		signatures[name] = FnSignature(name=name, return_type=ret_ty, throws_events=throws, declared_can_throw=explicit)
 	return signatures
 
 

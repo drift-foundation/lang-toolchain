@@ -12,6 +12,7 @@ from __future__ import annotations
 from lang2.driftc import stage1 as H
 from lang2.driftc.stage1 import normalize_hir
 from lang2.driftc.stage2 import HIRToMIR, MirBuilder
+from lang2.driftc.checker import FnSignature
 
 
 def _contains_try_result(block: H.HBlock) -> bool:
@@ -53,7 +54,12 @@ def test_try_result_rewrite_and_lowering_round_trip():
 
 	# Lower to MIR; we only care that it compiles and produces an If/throw/unwrap shape.
 	builder = MirBuilder(name="try_result_lowering")
-	HIRToMIR(builder).lower_block(rewritten)
+	# `?`-style propagation desugars to a `throw` on the Err path, so the
+	# surrounding function must be can-throw for MIR lowering to be well-formed.
+	signatures = {
+		"try_result_lowering": FnSignature(name="try_result_lowering", return_type="Int", declared_can_throw=True)
+	}
+	HIRToMIR(builder, signatures=signatures, can_throw_by_name={"try_result_lowering": True}).lower_block(rewritten)
 	func = builder.func
 
 	# There should be at least one IfTerminator from the desugared is_err check.

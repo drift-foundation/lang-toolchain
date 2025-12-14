@@ -88,15 +88,14 @@ def test_driftc_codegen_void_call_in_main():
 
 def test_driftc_codegen_void_negative_returns_value_raises():
 	"""
-	A Void function returning a value should fail before codegen; ensure the
-	pipeline raises rather than emitting IR.
+	A Void function returning a value should fail before codegen.
+
+	Compiler should surface a diagnostic and stop lowering before emitting IR.
 	"""
-	from pytest import raises
 	from lang2.driftc.core.types_core import TypeTable
 
 	table = TypeTable()
 	void_ty = table.ensure_void()
-	int_ty = table.ensure_int()
 
 	func_hirs = {
 		"log": H.HBlock(statements=[H.HReturn(value=H.HLiteralInt(value=1))]),
@@ -105,15 +104,17 @@ def test_driftc_codegen_void_negative_returns_value_raises():
 		"log": FnSignature(name="log", return_type_id=void_ty),
 	}
 
-	with raises(AssertionError):
-		compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="log", type_table=table)
+	ir, checked = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="log", type_table=table)
+	assert ir == ""
+	assert any("cannot return a value from a Void function" in d.message for d in checked.diagnostics)
 
 
 def test_driftc_codegen_nonvoid_negative_bare_return_raises():
 	"""
 	A non-Void function with a bare return should fail before codegen.
+
+	Compiler should surface a diagnostic and stop lowering before emitting IR.
 	"""
-	from pytest import raises
 	from lang2.driftc.core.types_core import TypeTable
 
 	table = TypeTable()
@@ -126,7 +127,8 @@ def test_driftc_codegen_nonvoid_negative_bare_return_raises():
 		"drift_main": FnSignature(name="drift_main", return_type_id=int_ty),
 	}
 
-	with raises(AssertionError):
-		compile_to_llvm_ir_for_tests(
-			func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table
-		)
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table
+	)
+	assert ir == ""
+	assert any("non-void function must return a value" in d.message for d in checked.diagnostics)

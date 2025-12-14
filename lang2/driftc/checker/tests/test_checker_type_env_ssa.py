@@ -30,7 +30,7 @@ def test_checker_builds_type_env_from_ssa():
 	)
 	ssa = MirToSSA().run(mir_func)
 
-	signatures = {"f": FnSignature(name="f", return_type="FnResult<Int, Error>")}
+	signatures = {"f": FnSignature(name="f", return_type="Int", declared_can_throw=True)}
 	checker = Checker(signatures=signatures)
 	checked = checker.check(["f"])
 

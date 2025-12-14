@@ -203,6 +203,32 @@ class TryResultRewriter:
 				elem_pfx.extend(pfx)
 				new_elems.append(el)
 			return elem_pfx, H.HArrayLiteral(elements=new_elems)
+		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+			# Expression-form try/catch is a control-flow expression. We rewrite
+			# nested try-result sugar inside the attempt and inside catch bodies,
+			# preserving the try-expr structure.
+			pfx_attempt, attempt = self._rewrite_expr(expr.attempt)
+			new_arms: list[H.HTryExprArm] = []
+			for arm in expr.arms:
+				arm_block = self.rewrite_block(arm.block)
+				arm_result = None
+				arm_result_pfx: list[H.HStmt] = []
+				if getattr(arm, "result", None) is not None:
+					arm_result_pfx, arm_result = self._rewrite_expr(arm.result)
+				# Prefixes produced while rewriting the arm result must execute
+				# before the result expression itself; append them to the arm block.
+				if arm_result_pfx:
+					arm_block = H.HBlock(statements=[*arm_block.statements, *arm_result_pfx])
+				new_arms.append(
+					H.HTryExprArm(
+						event_fqn=arm.event_fqn,
+						binder=arm.binder,
+						block=arm_block,
+						result=arm_result,
+						loc=arm.loc,
+					)
+				)
+			return pfx_attempt, H.HTryExpr(attempt=attempt, arms=new_arms, loc=expr.loc)
 		raise NotImplementedError(f"TryResultRewriter does not handle expr {type(expr).__name__}")
 
 	def _expand_try_result(self, expr: H.HTryResult) -> Tuple[List[H.HStmt], H.HExpr]:

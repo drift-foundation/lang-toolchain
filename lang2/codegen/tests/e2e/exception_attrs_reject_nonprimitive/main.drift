@@ -1,6 +1,6 @@
 module m
 
-exception E()
+exception E(code: Int)
 
 fn mk() returns Int { return 5; }
 

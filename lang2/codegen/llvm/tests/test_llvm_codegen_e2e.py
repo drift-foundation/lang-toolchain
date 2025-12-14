@@ -14,7 +14,7 @@ import pytest
 
 from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.driftc.checker import FnInfo
-from lang2.driftc.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk, Call
+from lang2.driftc.stage2 import BasicBlock, MirFunc, ConstInt, Return, ConstructResultOk, Call, ResultOk
 from lang2.driftc.stage4 import MirToSSA
 from lang2.driftc.core.types_core import TypeTable
 
@@ -92,10 +92,10 @@ def test_e2e_fnresult_callee_ok_path():
 	callee_mir = MirFunc(name="callee", params=[], locals=[], blocks={"entry": callee_entry}, entry="entry")
 	callee_ssa = MirToSSA().run(callee_mir)
 
-	# drift_main: call callee, return ok part (extract handled by codegen).
+	# drift_main: call callee, extract ok part, and return it.
 	main_entry = BasicBlock(
 		name="entry",
-		instructions=[Call(dest="m0", fn="callee", args=[])],
+		instructions=[Call(dest="mres", fn="callee", args=[]), ResultOk(dest="m0", result="mres")],
 		terminator=Return(value="m0"),
 	)
 	main_mir = MirFunc(name="drift_main", params=[], locals=[], blocks={"entry": main_entry}, entry="entry")

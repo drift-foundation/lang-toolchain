@@ -138,6 +138,7 @@ class HIRToMIR:
 		exc_env: Mapping[str, int] | None = None,
 		param_types: Mapping[str, TypeId] | None = None,
 		signatures: Mapping[str, FnSignature] | None = None,
+		can_throw_by_name: Mapping[str, bool] | None = None,
 		return_type: TypeId | None = None,
 	):
 		"""
@@ -176,29 +177,35 @@ class HIRToMIR:
 		self._opt_bool = self._type_table.new_optional(self._bool_type)
 		self._opt_string = self._type_table.new_optional(self._string_type)
 		self._signatures = signatures or {}
+		# Best-effort can-throw classification for functions. This is intentionally
+		# separate from signatures: the surface language does not expose FnResult,
+		# and "can-throw" is an effect inferred from the body (or declared by a
+		# future `nothrow`/throws annotation).
+		self._can_throw_by_name: dict[str, bool] = dict(can_throw_by_name) if can_throw_by_name else {}
+		self._current_fn_can_throw: bool | None = self._can_throw_by_name.get(self.b.func.name)
 		self._ret_type = return_type
-		# Cache the current function signature for invariants (can-throw checks).
+		# Cache the current function signature for defensive fallbacks in older
+		# unit tests that bypass the checker.
 		self._fn_sig = self._signatures.get(self.b.func.name)
 
 	def _fn_can_throw(self) -> bool | None:
 		"""
 		Best-effort can-throw flag for the current function.
 
-		Preferred source is the signature's declared_can_throw; we fall back to
-		the return type being FnResult to keep invariants defensive when
-		declared_can_throw is absent.
+		Preferred source is `can_throw_by_name` computed by the checker. We keep
+		a signature-based fallback only for legacy/unit tests that bypass the
+		checker in this stage.
 		"""
+		if self._current_fn_can_throw is not None:
+			return self._current_fn_can_throw
 		if self._fn_sig is None:
 			return None
 		if self._fn_sig.declared_can_throw is not None:
-			# Only treat False as authoritative when explicitly set; inferred
-			# non-FnResult return types do not imply non-can-throw here.
 			return bool(self._fn_sig.declared_can_throw)
+		# Legacy fallback: old surface model treated FnResult returns as can-throw.
 		rt = self._fn_sig.return_type_id
-		if rt is not None:
-			td = self._type_table.get(rt)
-			if td.kind is TypeKind.FNRESULT:
-				return True
+		if rt is not None and self._type_table.get(rt).kind is TypeKind.FNRESULT:
+			return True
 		return None
 
 	# --- Expression lowering ---
@@ -362,6 +369,16 @@ class HIRToMIR:
 		result = self._lower_call(expr)
 		if result is None:
 			raise AssertionError("Void-returning call used in expression context (checker bug)")
+		# Calls to can-throw functions are always "checked": they either produce the
+		# ok payload value or propagate an Error into the nearest try (or out of the
+		# current function).
+		if self._callee_is_can_throw(expr.fn.name):
+			ok_tid = self._return_typeid_for_callee(expr.fn.name)
+			if ok_tid is None:
+				raise AssertionError("can-throw callee must have a declared return type")
+			def emit_call() -> M.ValueId:
+				return result
+			return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
 		return result
 
 	def _visit_expr_HMethodCall(self, expr: H.HMethodCall) -> M.ValueId:
@@ -385,6 +402,13 @@ class HIRToMIR:
 		result = self._lower_method_call(expr)
 		if result is None:
 			raise AssertionError("Void-returning method call used in expression context (checker bug)")
+		if self._callee_is_can_throw(expr.method_name):
+			ok_tid = self._return_typeid_for_callee(expr.method_name)
+			if ok_tid is None:
+				raise AssertionError("can-throw callee must have a declared return type")
+			def emit_call() -> M.ValueId:
+				return result
+			return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
 		return result
 
 	def _visit_expr_HDVInit(self, expr: H.HDVInit) -> M.ValueId:
@@ -454,6 +478,123 @@ class HIRToMIR:
 		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
 		return dest
 
+	def _visit_expr_HTryExpr(self, expr: H.HTryExpr) -> M.ValueId:
+		"""
+		Lower expression-form try/catch by desugaring to a try CFG that merges
+		values through a hidden local and a join block.
+		"""
+		# Hidden local for the expression result.
+		temp_local = f"__try_expr_tmp{self.b.new_temp()}"
+		self.b.ensure_local(temp_local)
+
+		# Blocks: attempt body, dispatch for errors, catch arms, join for value.
+		attempt_block = self.b.new_block("tryexpr_attempt")
+		dispatch_block = self.b.new_block("tryexpr_dispatch")
+		join_block = self.b.new_block("tryexpr_join")
+
+		# Hidden local to carry the caught Error.
+		error_local = f"__try_err{self.b.new_temp()}"
+		self.b.ensure_local(error_local)
+		self._local_types[error_local] = self._type_table.ensure_error()
+
+		# Prepare catch blocks.
+		catch_blocks: list[tuple[H.HTryExprArm, M.BasicBlock]] = []
+		catch_all_block: M.BasicBlock | None = None
+		catch_all_seen = False
+		for idx, arm in enumerate(expr.arms):
+			cb = self.b.new_block(f"tryexpr_catch_{idx}")
+			catch_blocks.append((arm, cb))
+			if arm.event_fqn is None:
+				if catch_all_block is not None:
+					raise RuntimeError("multiple catch-all arms are not supported")
+				catch_all_block = cb
+				catch_all_seen = True
+			else:
+				if catch_all_seen:
+					raise RuntimeError("catch-all must be the last catch arm")
+
+		# Enter attempt block and register try context so throws route to dispatch.
+		self.b.set_terminator(M.Goto(target=attempt_block.name))
+		self._try_stack.append(
+			_TryCtx(
+				error_local=error_local,
+				dispatch_block_name=dispatch_block.name,
+				cont_block_name=join_block.name,
+			)
+		)
+
+		# Lower attempt body.
+		self.b.set_block(attempt_block)
+		attempt_val = self.lower_expr(expr.attempt)
+		# attempt in v1 is guaranteed to produce a value (non-void) by the checker.
+		self.b.emit(M.StoreLocal(local=temp_local, value=attempt_val))
+		if self.b.block.terminator is None:
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+		# Pop try context before dispatch so throws in catches unwind to the outer try.
+		# (Rethrow uses `_current_catch_error`, not the try stack.)
+		self._try_stack.pop()
+
+		# Dispatch: load error and compare event codes.
+		self.b.set_block(dispatch_block)
+		err_tmp = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=err_tmp, local=error_local))
+		code_tmp = self.b.new_temp()
+		self.b.emit(M.ErrorEvent(dest=code_tmp, error=err_tmp))
+
+		event_arms = [(arm, cb) for arm, cb in catch_blocks if arm.event_fqn is not None]
+		if event_arms:
+			current_block = dispatch_block
+			for arm, cb in event_arms:
+				self.b.set_block(current_block)
+				arm_code = self._lookup_catch_event_code(arm.event_fqn)
+				arm_code_const = self.b.new_temp()
+				self.b.emit(M.ConstInt(dest=arm_code_const, value=arm_code))
+				cmp_tmp = self.b.new_temp()
+				self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=code_tmp, right=arm_code_const))
+
+				else_block = self.b.new_block("tryexpr_dispatch_next")
+				self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=cb.name, else_target=else_block.name))
+				current_block = else_block
+
+			self.b.set_block(current_block)
+			if catch_all_block is not None:
+				self.b.set_terminator(M.Goto(target=catch_all_block.name))
+			else:
+				self._propagate_error(err_tmp)
+		else:
+			self.b.set_block(dispatch_block)
+			if catch_all_block is not None:
+				self.b.set_terminator(M.Goto(target=catch_all_block.name))
+			else:
+				self._propagate_error(err_tmp)
+
+		# Lower catch arms: bind error if requested, evaluate body+result, jump to join.
+		for arm, cb in catch_blocks:
+			self.b.set_block(cb)
+			err_again = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
+			if arm.binder:
+				self.b.ensure_local(arm.binder)
+				self._local_types[arm.binder] = self._type_table.ensure_error()
+				self.b.emit(M.StoreLocal(local=arm.binder, value=err_again))
+			prev_catch_err = self._current_catch_error
+			self._current_catch_error = error_local
+			self.lower_block(arm.block)
+			if arm.result is None:
+				raise RuntimeError("try/catch expression arm must produce a value")
+			arm_val = self.lower_expr(arm.result)
+			self._current_catch_error = prev_catch_err
+			self.b.emit(M.StoreLocal(local=temp_local, value=arm_val))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+		# Resume at join with the merged value.
+		self.b.set_block(join_block)
+		dest = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
+		return dest
+
 	# --- Statement lowering ---
 
 	def lower_stmt(self, stmt: H.HStmt) -> None:
@@ -474,13 +615,38 @@ class HIRToMIR:
 			self.lower_stmt(stmt)
 
 	def _visit_stmt_HExprStmt(self, stmt: H.HExprStmt) -> None:
-		# Evaluate and discard; allow dropping Void-returning calls.
-		if isinstance(stmt.expr, H.HCall) and self._call_returns_void(stmt.expr):
-			self._lower_call(expr=stmt.expr)
-			return
-		if isinstance(stmt.expr, H.HMethodCall) and self._call_returns_void(stmt.expr):
-			self._lower_method_call(expr=stmt.expr)
-			return
+		# Evaluate and discard.
+		#
+		# - Non-throwing Void calls can be lowered as `Call(dest=None, ...)`.
+		# - Can-throw calls must still be checked so Err paths route into the try
+		#   dispatch (or propagate out of the function) even when the Ok value is
+		#   ignored.
+		if isinstance(stmt.expr, H.HCall) and isinstance(stmt.expr.fn, H.HVar):
+			if self._callee_is_can_throw(stmt.expr.fn.name):
+				fnres_val = self._lower_call(expr=stmt.expr)
+				assert fnres_val is not None
+
+				def emit_call() -> M.ValueId:
+					return fnres_val
+
+				self._lower_can_throw_call_stmt(emit_call=emit_call)
+				return
+			if self._call_returns_void(stmt.expr):
+				self._lower_call(expr=stmt.expr)
+				return
+		if isinstance(stmt.expr, H.HMethodCall):
+			if self._callee_is_can_throw(stmt.expr.method_name):
+				fnres_val = self._lower_method_call(expr=stmt.expr)
+				assert fnres_val is not None
+
+				def emit_call() -> M.ValueId:
+					return fnres_val
+
+				self._lower_can_throw_call_stmt(emit_call=emit_call)
+				return
+			if self._call_returns_void(stmt.expr):
+				self._lower_method_call(expr=stmt.expr)
+				return
 		self.lower_expr(stmt.expr)
 
 	def _visit_stmt_HLet(self, stmt: H.HLet) -> None:
@@ -513,16 +679,36 @@ class HIRToMIR:
 	def _visit_stmt_HReturn(self, stmt: H.HReturn) -> None:
 		if self.b.block.terminator is not None:
 			return
+		can_throw = self._fn_can_throw() is True
 		fn_is_void = self._ret_type is not None and self._type_table.is_void(self._ret_type)
+
+		if not can_throw:
+			if fn_is_void:
+				if stmt.value is not None:
+					raise AssertionError("Void function must not have a return value (checker bug)")
+				self.b.set_terminator(M.Return(value=None))
+				return
+			if stmt.value is None:
+				raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
+			val = self.lower_expr(stmt.value)
+			self.b.set_terminator(M.Return(value=val))
+			return
+
+		# Can-throw function: surface `returns T` lowers to an internal
+		# `FnResult<T, Error>` return. Wrap normal returns into Ok.
 		if fn_is_void:
 			if stmt.value is not None:
 				raise AssertionError("Void function must not have a return value (checker bug)")
-			self.b.set_terminator(M.Return(value=None))
+			res_val = self.b.new_temp()
+			self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
+			self.b.set_terminator(M.Return(value=res_val))
 			return
 		if stmt.value is None:
 			raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
 		val = self.lower_expr(stmt.value)
-		self.b.set_terminator(M.Return(value=val))
+		res_val = self.b.new_temp()
+		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
+		self.b.set_terminator(M.Return(value=res_val))
 
 	def _visit_stmt_HBreak(self, stmt: H.HBreak) -> None:
 		# Break jumps to the innermost loop's break target.
@@ -622,10 +808,6 @@ class HIRToMIR:
 		if self.b.block.terminator is not None:
 			return
 		can_throw = self._fn_can_throw()
-		if can_throw is False:
-			# Known non-can-throw functions must never reach here; this is a
-			# checker/pipeline bug.
-			raise AssertionError("throw in non-can-throw function (checker bug)")
 
 		# Zero-field shorthand: throw E (no braces) when E declares no fields.
 		if isinstance(stmt.value, H.HVar):
@@ -731,26 +913,27 @@ class HIRToMIR:
 
 		  - If there is an outer try on the stack, store into its error_local and
 		    jump to its dispatch block (unwind to nearest outer try).
-		  - If there is no outer try, wrap into FnResult.Err and return.
+		  - If there is no outer try, the error escapes the current function:
+		    wrap into FnResult.Err and return (can-throw ABI).
 		"""
-		can_throw = self._fn_can_throw()
 		if self._try_stack:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
-			if can_throw is False:
-				raise AssertionError("propagating error from non-can-throw function (checker bug)")
-			# Non-FnResult return types have no structured Err to construct; return
-			# a zero literal to keep the block well-formed.
-			if self._ret_type is not None:
-				ret_def = self._type_table.get(self._ret_type)
-				if ret_def.kind is not TypeKind.FNRESULT:
-					tmp = self.b.new_temp()
-					self.b.emit(M.ConstInt(dest=tmp, value=0))
-					self.b.set_terminator(M.Return(value=tmp))
-					return
+			if self._fn_can_throw() is not True:
+				# Defensive invariant: earlier stages guarantee that non-can-throw
+				# functions cannot let an Error escape. However, MIR lowering cannot
+				# always prove that a dispatch "else" path is unreachable (e.g., a
+				# try/catch without a catch-all in a non-throwing function).
+				#
+				# Do not crash the compiler here. Instead, encode the invariant into
+				# MIR so LLVM can emit an `unreachable` and tests can still build the
+				# full pipeline. If this path is ever taken at runtime, it's a bug in
+				# the front-end/checker.
+				self.b.set_terminator(M.Unreachable())
+				return
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
 			self.b.set_terminator(M.Return(value=res_val))
@@ -792,9 +975,6 @@ class HIRToMIR:
 			return
 		if not stmt.catches:
 			raise RuntimeError("HTry lowering requires at least one catch arm")
-		can_throw = self._fn_can_throw()
-		if can_throw is False:
-			raise AssertionError("try/catch in non-can-throw function (checker bug)")
 
 		body_block = self.b.new_block("try_body")
 		dispatch_block = self.b.new_block("try_dispatch")
@@ -841,9 +1021,9 @@ class HIRToMIR:
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=cont_block.name))
 
-		# Pop context before lowering dispatch so throws in catch bodies route to outer try,
-		# but keep a reference to the current try context so rethrow can load the caught error.
-		try_ctx = self._try_stack.pop()
+		# Pop context before lowering dispatch so throws in catch bodies route to the outer try.
+		# Rethrow reads the caught error from `_current_catch_error` (set while lowering each catch body).
+		self._try_stack.pop()
 
 		# Dispatch: load error, project event code, branch to arms.
 		self.b.set_block(dispatch_block)
@@ -956,9 +1136,15 @@ class HIRToMIR:
 
 	def _call_returns_void(self, expr: H.HExpr) -> bool:
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+			if self._callee_is_can_throw(expr.fn.name):
+				# Can-throw calls return an internal FnResult value, even when the
+				# surface ok type is Void.
+				return False
 			ret = self._return_type_for_name(expr.fn.name)
 			return ret is not None and self._type_table.is_void(ret)
 		if isinstance(expr, H.HMethodCall):
+			if self._callee_is_can_throw(expr.method_name):
+				return False
 			ret = self._return_type_for_name(expr.method_name)
 			return ret is not None and self._type_table.is_void(ret)
 		return False
@@ -967,6 +1153,12 @@ class HIRToMIR:
 		if not isinstance(expr.fn, H.HVar):
 			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
 		arg_vals = [self.lower_expr(a) for a in expr.args]
+		# Can-throw calls always return an internal FnResult value, even when the
+		# surface ok type is Void.
+		if self._callee_is_can_throw(expr.fn.name):
+			dest = self.b.new_temp()
+			self.b.emit(M.Call(dest=dest, fn=expr.fn.name, args=arg_vals))
+			return dest
 		ret_tid = self._return_type_for_name(expr.fn.name)
 		if ret_tid is not None and self._type_table.is_void(ret_tid):
 			self.b.emit(M.Call(dest=None, fn=expr.fn.name, args=arg_vals))
@@ -978,6 +1170,10 @@ class HIRToMIR:
 	def _lower_method_call(self, expr: H.HMethodCall) -> M.ValueId | None:
 		receiver = self.lower_expr(expr.receiver)
 		arg_vals = [self.lower_expr(a) for a in expr.args]
+		if self._callee_is_can_throw(expr.method_name):
+			dest = self.b.new_temp()
+			self.b.emit(M.MethodCall(dest=dest, receiver=receiver, method_name=expr.method_name, args=arg_vals))
+			return dest
 		ret_tid = self._return_type_for_name(expr.method_name)
 		if ret_tid is not None and self._type_table.is_void(ret_tid):
 			self.b.emit(M.MethodCall(dest=None, receiver=receiver, method_name=expr.method_name, args=arg_vals))
@@ -985,6 +1181,132 @@ class HIRToMIR:
 		dest = self.b.new_temp()
 		self.b.emit(M.MethodCall(dest=dest, receiver=receiver, method_name=expr.method_name, args=arg_vals))
 		return dest
+
+	def _return_typeid_for_callee(self, name: str) -> TypeId | None:
+		"""
+		Return the declared return TypeId for a callee by name when available.
+
+		This is the *surface* return type (`T` in `returns T`), not the internal
+		ABI return type. When the callee is can-throw, the compiler still treats
+		this as the ok payload type.
+		"""
+		sig = self._signatures.get(name)
+		if sig and sig.return_type_id is not None:
+			return sig.return_type_id
+		for cand in self._signatures.values():
+			if cand.method_name == name and cand.return_type_id is not None:
+				return cand.return_type_id
+		return None
+
+	def _callee_is_can_throw(self, name: str) -> bool:
+		"""
+		Best-effort can-throw classification for a callee.
+
+		In lang2 v1, "can-throw" is an effect on a function, not a surface return
+		type. The checker computes a can-throw map; we treat that as the source of
+		truth when present and fall back to signature hints in legacy tests.
+		"""
+		if name in self._can_throw_by_name:
+			return bool(self._can_throw_by_name[name])
+		sig = self._signatures.get(name)
+		if sig is None:
+			for cand in self._signatures.values():
+				if cand.method_name == name:
+					sig = cand
+					break
+		if sig is not None and sig.declared_can_throw is not None:
+			return bool(sig.declared_can_throw)
+		# Legacy fallback: old surface model treated FnResult returns as can-throw.
+		rt = self._return_typeid_for_callee(name)
+		return rt is not None and self._type_table.get(rt).kind is TypeKind.FNRESULT
+
+	def _lower_can_throw_call_value(
+		self,
+		*,
+		emit_call: callable,
+		ok_ty: TypeId,
+	) -> M.ValueId:
+		"""
+		Lower a can-throw call in a try context as an expression producing the ok payload.
+
+		We call the callee to obtain a FnResult value, branch on `is_err`, route the
+		error to the current try dispatch when err, and otherwise extract+return
+		the ok value through a hidden local + join block.
+		"""
+		# Hidden local for the ok payload.
+		ok_local = f"__call_ok{self.b.new_temp()}"
+		self.b.ensure_local(ok_local)
+		self._local_types[ok_local] = ok_ty
+
+		fnres_val = emit_call()
+		is_err = self.b.new_temp()
+		self.b.emit(M.ResultIsErr(dest=is_err, result=fnres_val))
+
+		ok_block = self.b.new_block("call_ok")
+		err_block = self.b.new_block("call_err")
+		join_block = self.b.new_block("call_join")
+
+		self.b.set_terminator(M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name))
+
+		# Err path: route the error to an active try (if any), otherwise propagate
+		# out of the current function.
+		self.b.set_block(err_block)
+		err_val = self.b.new_temp()
+		self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
+		if self._try_stack:
+			ctx = self._try_stack[-1]
+			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
+		else:
+			self._propagate_error(err_val)
+
+		# Ok path: extract ok value and continue at join.
+		self.b.set_block(ok_block)
+		ok_val = self.b.new_temp()
+		self.b.emit(M.ResultOk(dest=ok_val, result=fnres_val))
+		self.b.emit(M.StoreLocal(local=ok_local, value=ok_val))
+		self.b.set_terminator(M.Goto(target=join_block.name))
+
+		# Join: load ok from hidden local as the value of this expression.
+		self.b.set_block(join_block)
+		dest = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
+		return dest
+
+	def _lower_can_throw_call_stmt(
+		self,
+		*,
+		emit_call: callable,
+	) -> None:
+		"""
+		Lower a can-throw call in a try context as a statement (ignores ok value).
+
+		We still must check for Err and route it to the current try dispatch.
+		"""
+		fnres_val = emit_call()
+		is_err = self.b.new_temp()
+		self.b.emit(M.ResultIsErr(dest=is_err, result=fnres_val))
+
+		ok_block = self.b.new_block("call_ok")
+		err_block = self.b.new_block("call_err")
+		join_block = self.b.new_block("call_join")
+
+		self.b.set_terminator(M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name))
+
+		self.b.set_block(err_block)
+		err_val = self.b.new_temp()
+		self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
+		if self._try_stack:
+			ctx = self._try_stack[-1]
+			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
+		else:
+			self._propagate_error(err_val)
+
+		self.b.set_block(ok_block)
+		self.b.set_terminator(M.Goto(target=join_block.name))
+
+		self.b.set_block(join_block)
 
 	def _infer_expr_type(self, expr: H.HExpr) -> TypeId | None:
 		"""
@@ -1045,6 +1367,8 @@ class HIRToMIR:
 						return self._opt_bool
 					if expr.method_name == "as_string":
 						return self._opt_string
+		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+			return self._infer_expr_type(expr.attempt)
 		# Unknown for other expressions (vars, calls, etc.)
 		return None
 

@@ -25,8 +25,8 @@ def test_inner_unmatched_unwinds_to_outer_try():
 	The inner dispatch must jump to the outer dispatch, not return Err directly.
 	"""
 	builder = MirBuilder(name="try_nested_unwind")
-	exc_env = {"Inner": 10, "Outer": 20}
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	exc_env = {"m:Inner": 10, "m:Outer": 20}
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"try_nested_unwind": True})
 
 	# Structure:
 	# outer try {
@@ -70,7 +70,7 @@ def test_inner_and_outer_unmatched_rethrow_err():
 	Inner try unmatched, outer also unmatched: rethrow should ultimately return Err.
 	"""
 	builder = MirBuilder(name="try_nested_rethrow")
-	lower = HIRToMIR(builder, exc_env={})
+	lower = HIRToMIR(builder, exc_env={}, can_throw_by_name={"try_nested_rethrow": True})
 
 	inner_try = H.HTry(
 		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:X", field_names=[], field_values=[]))]),

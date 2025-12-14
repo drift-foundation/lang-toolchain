@@ -22,7 +22,7 @@ Entry points (stage API):
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 # Import stage0 AST via package API to keep stage layering explicit.
 from lang2.driftc.stage0 import ast
@@ -277,7 +277,44 @@ class AstToHIR:
 		return H.HTryResult(expr=self.lower_expr(expr.expr))
 
 	def _visit_expr_TryCatchExpr(self, expr: ast.TryCatchExpr) -> H.HExpr:
-		raise NotImplementedError("Try/catch expr lowering not implemented yet")
+		"""
+		Lower expression-form try/catch into HTryExpr.
+
+		Catch arms are lowered to HIR blocks; later phases enforce that they
+		produce a value and do not contain control-flow statements.
+		"""
+		if not expr.catch_arms:
+			raise NotImplementedError("try/catch requires at least one catch arm")
+
+		arms: list[H.HTryExprArm] = []
+		for arm in expr.catch_arms:
+			event_fqn = arm.event
+			if event_fqn is not None and ":" not in event_fqn:
+				raise NotImplementedError("catch event must be a fully-qualified name (<module>:<Event>)")
+			# Split arm body: all but last statement into the block, last expr (if any)
+			# becomes the arm result.
+			arm_result: Optional[H.HExpr] = None
+			stmts = list(arm.block)
+			if stmts and isinstance(stmts[-1], ast.ExprStmt):
+				last_expr_stmt = stmts.pop()
+				arm_result = self.lower_expr(last_expr_stmt.expr)
+			arm_block = self.lower_block(stmts)
+			catch_loc = Span.from_loc(arm.loc)
+			arms.append(
+				H.HTryExprArm(
+					event_fqn=event_fqn,
+					binder=arm.binder,
+					block=arm_block,
+					result=arm_result,
+					loc=catch_loc,
+				)
+			)
+
+		return H.HTryExpr(
+			attempt=self.lower_expr(expr.attempt),
+			arms=arms,
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 
 	def _visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
 		target = self.lower_expr(stmt.target)
@@ -313,6 +350,29 @@ class AstToHIR:
 				raise NotImplementedError(
 					"catch event must be a fully-qualified name (<module>:<Event>)"
 				)
+			binder = arm.binder
+			handler_block = self.lower_block(arm.block)
+			catch_loc = Span.from_loc(arm.loc)
+			catch_arms.append(H.HCatchArm(event_fqn=event_fqn, binder=binder, block=handler_block, loc=catch_loc))
+
+		return H.HTry(body=body_block, catches=catch_arms)
+
+	def _lower_trycatch_expr_stmt(self, expr: ast.TryCatchExpr) -> H.HStmt:
+		"""
+		Lower expression-form try/catch used as a statement into HTry.
+
+		The attempt expression is lowered as an expression statement inside the
+		try body; catch arms are lowered identically to statement-form try.
+		"""
+		body_block = H.HBlock(statements=[H.HExprStmt(expr=self.lower_expr(expr.attempt))])
+		if not expr.catch_arms:
+			raise NotImplementedError("try/catch requires at least one catch arm")
+
+		catch_arms: list[H.HCatchArm] = []
+		for arm in expr.catch_arms:
+			event_fqn = arm.event
+			if event_fqn is not None and ":" not in event_fqn:
+				raise NotImplementedError("catch event must be a fully-qualified name (<module>:<Event>)")
 			binder = arm.binder
 			handler_block = self.lower_block(arm.block)
 			catch_loc = Span.from_loc(arm.loc)

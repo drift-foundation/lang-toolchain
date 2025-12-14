@@ -60,21 +60,39 @@ def test_driftc_codegen_scalar_main():
 	assert exit_code == 42
 
 
-def test_driftc_codegen_fnresult_callee_ok():
+def test_driftc_codegen_can_throw_callee_ok():
 	"""
-	Full pipeline smoke with can-throw callee returning FnResult.Ok(1); drift_main
-	non-can-throw returns the ok value. Exercises FnResult ABI from the top surface.
+	Full pipeline smoke with a can-throw callee returning 1.
+
+	Surface language uses `returns T` even for can-throw functions; the can-throw
+	ABI carrier (FnResult) is internal. `drift_main` stays non-can-throw and
+	handles failures locally via a try/catch expression, returning the ok value
+	on success.
 	"""
 	func_hirs = {
 		"callee": H.HBlock(
-			statements=[H.HReturn(value=H.HResultOk(value=H.HLiteralInt(value=1)))]
+			statements=[H.HReturn(value=H.HLiteralInt(value=1))]
 		),
 		"drift_main": H.HBlock(
-			statements=[H.HReturn(value=H.HCall(fn=H.HVar(name="callee"), args=[]))]
+			statements=[
+				H.HReturn(
+					value=H.HTryExpr(
+						attempt=H.HCall(fn=H.HVar(name="callee"), args=[]),
+						arms=[
+							H.HTryExprArm(
+								event_fqn=None,
+								binder=None,
+								block=H.HBlock(statements=[]),
+								result=H.HLiteralInt(value=0),
+							)
+						],
+					)
+				)
+			]
 		),
 	}
 	signatures = {
-		"callee": FnSignature(name="callee", return_type="FnResult<Int, Error>"),
+		"callee": FnSignature(name="callee", return_type="Int", declared_can_throw=True),
 		"drift_main": FnSignature(name="drift_main", return_type="Int"),
 	}
 

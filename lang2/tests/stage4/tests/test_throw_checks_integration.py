@@ -14,13 +14,12 @@ from lang2.driftc.stage1 import normalize_hir
 from lang2.driftc.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.driftc.stage4 import run_throw_checks
-from lang2.driftc.checker import FnSignature
-from lang2.test_support import declared_from_signatures
 
 
-def _lower_fn(name: str, hir_block: H.HBlock) -> tuple[str, object]:
+def _lower_fn(name: str, hir_block: H.HBlock, *, can_throw: bool) -> tuple[str, object]:
 	builder = MirBuilder(name=name)
-	HIRToMIR(builder).lower_block(hir_block)
+	can_throw_map = {name: True} if can_throw else {}
+	HIRToMIR(builder, can_throw_by_name=can_throw_map).lower_block(hir_block)
 	return name, builder.func
 
 
@@ -35,38 +34,13 @@ def test_can_throw_function_passes_checks():
 				)
 			]
 		),
+		can_throw=True,
 	)
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
-	)
-
-	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
+	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw={fn_name: True})
 	assert fn_name in infos
 	assert infos[fn_name].declared_can_throw is True
-
-
-def test_non_can_throw_function_violates_invariant():
-	"""A function that throws but is not declared can-throw should fail checks."""
-	fn_name, mir_fn = _lower_fn(
-		"f_non_can",
-		H.HBlock(
-			statements=[
-				H.HThrow(
-					value=H.HExceptionInit(event_fqn="m:EvtX", field_names=[], field_values=[]),
-				)
-			]
-		),
-	)
-	mir_funcs = {fn_name: mir_fn}
-	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{fn_name: FnSignature(name=fn_name, return_type="Int")}
-	)
-
-	with pytest.raises(RuntimeError):
-		run_throw_checks(mir_funcs, summaries, declared_can_throw)
 
 
 def test_can_throw_try_catch_and_return_ok_shape():
@@ -90,6 +64,7 @@ def test_can_throw_try_catch_and_return_ok_shape():
 				)
 			]
 		),
+		can_throw=True,
 	)
 
 	# Manually append an Ok return in the try_cont block so return-shape checks pass.
@@ -108,11 +83,7 @@ def test_can_throw_try_catch_and_return_ok_shape():
 
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={"m:Evt": 1})
-	declared_can_throw = declared_from_signatures(
-		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
-	)
-
-	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
+	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw={fn_name: True})
 	assert fn_name in infos
 	assert infos[fn_name].declared_can_throw is True
 
@@ -134,9 +105,7 @@ def test_can_throw_fnresult_forwarding_currently_rejected():
 	)
 	mir_funcs = {"f_forward": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{"f_forward": FnSignature(name="f_forward", return_type=("FnResult", "Ok", "Err"))}
-	)
+	declared_can_throw = {"f_forward": True}
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(mir_funcs, summaries, declared_can_throw)
@@ -164,9 +133,7 @@ def test_can_throw_without_throw_and_ok_return_passes():
 	)
 	mir_funcs = {"f_ok_only": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{"f_ok_only": FnSignature(name="f_ok_only", return_type="FnResult<Int, Error>")}
-	)
+	declared_can_throw = {"f_ok_only": True}
 
 	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
 	assert "f_ok_only" in infos
@@ -197,9 +164,7 @@ def test_fnresult_forwarding_aliasing_expected_fail():
 	)
 	mir_funcs = {"f_alias": mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{"f_alias": FnSignature(name="f_alias", return_type="FnResult<Int, Error>")}
-	)
+	declared_can_throw = {"f_alias": True}
 
 	with pytest.raises(RuntimeError):
 		run_throw_checks(mir_funcs, summaries, declared_can_throw)
@@ -216,7 +181,7 @@ def test_try_result_sugar_with_try_catch_clears_throw_checks():
 			H.HTry(
 				body=H.HBlock(statements=[H.HExprStmt(expr=H.HTryResult(expr=H.HVar(name="res")))]),
 				catches=[
-					H.HCatchArm(event_fqn="Evt", binder="e", block=H.HBlock(statements=[])),
+					H.HCatchArm(event_fqn="m:Evt", binder="e", block=H.HBlock(statements=[])),
 				],
 			),
 		]
@@ -226,7 +191,7 @@ def test_try_result_sugar_with_try_catch_clears_throw_checks():
 	hir_norm = normalize_hir(hir)
 
 	# Lower to MIR.
-	fn_name, mir_fn = _lower_fn("f_sugar", hir_norm)
+	fn_name, mir_fn = _lower_fn("f_sugar", hir_norm, can_throw=True)
 
 	# Append an Ok return in the try_cont block so return-shape checks pass.
 	try_cont_blocks = [name for name in mir_fn.blocks if name.startswith("try_cont")]
@@ -244,10 +209,6 @@ def test_try_result_sugar_with_try_catch_clears_throw_checks():
 
 	mir_funcs = {fn_name: mir_fn}
 	summaries = ThrowSummaryBuilder().build(mir_funcs, code_to_exc={})
-	declared_can_throw = declared_from_signatures(
-		{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
-	)
-
-	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw)
+	infos = run_throw_checks(mir_funcs, summaries, declared_can_throw={fn_name: True})
 	assert fn_name in infos
 	assert infos[fn_name].declared_can_throw is True

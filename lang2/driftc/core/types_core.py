@@ -166,6 +166,22 @@ class TypeTable:
 		"""Register a FnResult<ok, err> type."""
 		return self._add(TypeKind.FNRESULT, "FnResult", [ok, err])
 
+	def ensure_fnresult(self, ok: TypeId, err: TypeId) -> TypeId:
+		"""
+		Return a stable shared FnResult<ok, err> TypeId, creating it once.
+
+		FnResult is used as an internal ABI carrier in lang2. Keeping a stable,
+		reused TypeId for a given (ok, err) pair makes type comparisons and
+		diagnostics less fragile across passes.
+		"""
+		if not hasattr(self, "_fnresult_cache"):
+			self._fnresult_cache = {}  # type: ignore[attr-defined]
+		key = (ok, err)
+		cache = getattr(self, "_fnresult_cache")  # type: ignore[attr-defined]
+		if key not in cache:
+			cache[key] = self.new_fnresult(ok, err)
+		return cache[key]
+
 	def new_function(self, name: str, param_types: List[TypeId], return_type: TypeId) -> TypeId:
 		"""Register a function type (name + params + return)."""
 		return self._add(TypeKind.FUNCTION, name, [*param_types, return_type])

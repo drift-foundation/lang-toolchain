@@ -26,12 +26,14 @@ def test_catch_unknown_event_reports_diagnostic(tmp_path: Path) -> None:
 		"""
 module m
 
-fn main() returns FnResult<Int, Error> {
+exception Boom()
+
+fn main() returns Int {
     try {
-        throw "boom";
+        throw Boom {};
     } catch m:Unknown(e) {
     }
-    return Ok(1);
+    return 1;
 }
 """,
 		tmp_path,
@@ -47,13 +49,13 @@ module m
 
 exception Boom(msg: String)
 
-fn main() returns FnResult<Int, Error> {
+fn main() returns Int {
     try {
-        throw Boom(msg = "boom");
+        throw Boom { msg = "boom" };
     } catch m:Boom(e) {
-        return Ok(0);
+        return 0;
     }
-    return Ok(1);
+    return 1;
 }
 """,
 		tmp_path,

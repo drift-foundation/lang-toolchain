@@ -57,7 +57,6 @@ Drift has two classes of scalars:
 * A canonical **event FQN string** label for logging/telemetry
 * A map of diagnostic attributes (“context fields”)
 * A list of **captured context frames**
-* A **stack snapshot token** used by the runtime
 
 The ABI defines only the **stable public layout**. Internal payload structures remain opaque.
 
@@ -72,10 +71,15 @@ struct DriftError {
     DriftErrorCode code;      // Exception event code (see next section)
     DriftString    event_fqn; // Canonical FQN label ("module.sub:Event"), for logging only
 
-    // Opaque implementation-defined runtime pointers:
-    void *attrs;       // attribute map: key -> DiagnosticValue
-    void *ctx_frames;  // captured context frames list
-    void *stack;       // unwinder-specific stack snapshot
+    // Attribute list (key -> DiagnosticValue). The element layout is runtime-defined,
+    // but the pointer+count positions are ABI-stable.
+    void  *attrs;
+    size_t attr_count;
+
+    // Captured context frames list. The element layout is runtime-defined, but the
+    // pointer+count positions are ABI-stable.
+    void  *frames;
+    size_t frame_count;
 };
 ```
 
@@ -83,9 +87,9 @@ struct DriftError {
 
 * `sizeof(DriftErrorCode) == 8`
 * `DriftError.code` uses the ABI-stable event-code format described below; `0` is reserved for “unknown/unmapped”.
-* The pointer fields have ABI-stable *positions*, but the contents behind them are **not ABI-stable** and are opaque to external callers.
+* The pointer+count fields have ABI-stable *positions*, but the contents behind them are **not ABI-stable** and are opaque to external callers.
 * `event_fqn` stores the canonical FQN string; routing/matching is always by `code`, never by string compare.
-* `Error` is passed by value in FnResult internally, but by pointer (`Error*`) at module boundaries.
+* `Error` is always represented as a pointer handle (`DriftError*`) in the v1 runtime ABI (both intra-module and at module boundaries).
 
 ---
 
@@ -144,14 +148,14 @@ typedef struct {
     uint8_t    is_err;   // 0 = Ok, 1 = Err
     // padding as needed
     T          ok;       // Only valid when is_err = 0
-    DriftError err;      // Only valid when is_err = 1
+    DriftError *err;     // Only valid when is_err = 1
 } DriftFnResult_T_Error;
 ```
 
 LLVM IR example for T = Int:
 
 ```llvm
-%FnResult_Int_Error = type { i1, i64, %DriftError }
+%FnResult_Int_Error = type { i1, i64, %DriftError* }
 ```
 
 This matches your MIR ops:
@@ -306,12 +310,14 @@ typedef double    DriftFloat;
 // Error
 typedef uint64_t DriftErrorCode;
 
-typedef struct DriftError {
-    DriftErrorCode code;
-    void *attrs;
-    void *ctx_frames;
-    void *stack;
-} DriftError;
+	typedef struct DriftError {
+	    DriftErrorCode code;
+	    DriftString    event_fqn;
+	    void          *attrs;
+	    DriftSize      attr_count;
+	    void          *frames;
+	    DriftSize      frame_count;
+	} DriftError;
 
 // Result<Int, Error> for exported functions
 typedef struct {

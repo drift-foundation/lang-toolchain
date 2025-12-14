@@ -20,11 +20,11 @@ def test_compile_stubbed_funcs_builds_ssa_and_type_env():
 		]
 	)
 
-	signatures = make_signatures({"f": "FnResult<Int, Error>"})
+	signatures = make_signatures({"f": "Int"}, declared_can_throw={"f": True})
 	mir_funcs, checked = compile_stubbed_funcs(
 		func_hirs={"f": hir_block},
 		signatures=signatures,
-		exc_env=build_exception_catalog({"Evt": 1}),
+		exc_env=build_exception_catalog({"m:Evt": 1}),
 		build_ssa=True,
 		return_checked=True,
 	)

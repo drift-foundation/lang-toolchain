@@ -1,5 +1,7 @@
 // Identifiers: allow leading underscore, but reserve double-underscore (compiler use).
-NAME: /[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
+// Give identifiers a lower priority than keyword terminals so the basic lexer
+// prefers `and`, `or`, `val`, etc. as their own tokens instead of `NAME`.
+NAME.0: /[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 %import common.SIGNED_INT
 %import common.SIGNED_FLOAT
 // String literal with basic escapes plus \xHH hex byte escapes (UTF-8).
@@ -15,8 +17,8 @@ VAL: "val"
 VAR: "var"
 THROW: "throw"
 PIPE: ">>"
-AND: "&&" | "and"
-OR: "||" | "or"
+AND.2: "&&" | "and"
+OR.2: "||" | "or"
 EQEQ: "=="
 NOTEQ: "!="
 LTE: "<="
@@ -89,6 +91,14 @@ angle_type_args: "<" type_expr (COMMA type_expr)* ">"
 
 block: "{" (stmt | TERMINATOR)* "}"
 
+// A "value block" is a braced block that evaluates to a value.
+// It allows zero or more statements, followed by a trailing expression that
+// does not require a terminator (though one may be present).
+//
+// This is used by expression-form try/catch arms:
+//   try foo() catch { log(e); 0 }
+value_block: "{" (stmt | TERMINATOR)* expr "}"
+
 stmt: if_stmt
     | try_stmt
     | simple_stmt TERMINATOR
@@ -105,13 +115,20 @@ simple_stmt: let_stmt
            | assign_stmt
            | expr_stmt
 
-try_stmt: TRY block terminator_opt catch_clause (terminator_opt catch_clause)* terminator_opt
+// Disambiguation: `try ... catch ...` is both a statement form (`try_stmt`) and
+// an expression form (`try_catch_expr`). In statement position we want the
+// parser to prefer `try_stmt` so `try foo() catch { ... }` behaves like the
+// statement construct (and does not get parsed as an expression statement).
+try_stmt.2: TRY (block | expr) terminator_opt catch_clause (terminator_opt catch_clause)* terminator_opt
 catch_clause: CATCH catch_pattern block
 catch_pattern: event_fqn "(" NAME ")"   -> catch_event
              | NAME                     -> catch_all
              |                          -> catch_all_empty
 
-assign_stmt: expr EQUAL expr
+// Assignments are restricted to lvalue-ish postfix expressions. This also
+// prevents `try ... catch ...` from being parsed as the LHS of an assignment,
+// which would otherwise interfere with statement-form `try`.
+assign_stmt: postfix EQUAL expr
 
 for_stmt: "for" NAME "in" expr terminator_opt block
 
@@ -137,7 +154,11 @@ raise_stmt: ("raise" domain_clause? expr)
           | (THROW exception_ctor)
           | (THROW expr)
 
-expr_stmt: expr
+// Expression statements are restricted to postfix expressions (calls, member
+// access, indexing, literals, names). This avoids ambiguity with statement-form
+// `try` and keeps expression-form `try ... catch ...` as a value-producing
+// expression (not a statement).
+expr_stmt: postfix
 
 import_stmt: "import" import_path import_alias?
 import_path: NAME (DOT NAME)*
@@ -158,14 +179,19 @@ exception_param: NAME COLON type_expr
 
 domain_clause: "domain" NAME
 
+// `expr` is the full expression language (including `try ... catch ...`).
 ?expr: try_catch_expr
      | ternary
      | pipeline
 
-try_catch_expr: TRY expr (CATCH catch_expr_arm)+
-catch_expr_arm: event_fqn "(" NAME ")" block   -> catch_expr_event
-              | NAME block                     -> catch_expr_binder
-              | block                          -> catch_expr_block
+// Note: expression-form `try` (`try_catch_expr`) requires catch arms that
+// produce a value (see `value_block`). Statement-form `try` (`try_stmt`) uses
+// regular blocks.
+
+try_catch_expr.1: TRY expr (CATCH catch_expr_arm)+
+catch_expr_arm: event_fqn "(" NAME ")" value_block   -> catch_expr_event
+              | NAME value_block                     -> catch_expr_binder
+              | value_block                          -> catch_expr_block
 ternary: pipeline QMARK expr TERNARY_COLON expr
 
 ?pipeline: logic_or (PIPE logic_or)*

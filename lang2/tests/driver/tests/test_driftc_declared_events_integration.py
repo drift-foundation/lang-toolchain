@@ -22,7 +22,11 @@ def test_declared_events_subset_enforced_by_driver():
 		]
 	)
 
-	signatures = make_signatures({fn_name: "FnResult<Int, Error>"}, throws_events={"f_decl": ("m:EvtA",)})
+	signatures = make_signatures(
+		{fn_name: "Int"},
+		throws_events={"f_decl": ("m:EvtA",)},
+		declared_can_throw={"f_decl": True},
+	)
 	exc_env = build_exception_catalog({"m:EvtA": 1, "m:EvtB": 2})
 
 	_, checked = compile_stubbed_funcs(

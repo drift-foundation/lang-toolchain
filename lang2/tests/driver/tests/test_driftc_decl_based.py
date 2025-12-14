@@ -22,6 +22,7 @@ class FakeDecl:
 	name: str
 	return_type: str | tuple
 	throws: tuple[str, ...] | None = None
+	declared_can_throw: bool | None = None
 
 
 def test_driver_accepts_decl_based_signatures_and_catalog():
@@ -30,7 +31,7 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 	driver threads them through the checker/throw checks (happy path).
 	"""
 	decls = [
-		FakeDecl(name="f_can", return_type="FnResult<Int, Error>", throws=("EvtA",)),
+		FakeDecl(name="f_can", return_type="Int", throws=("m:EvtA",), declared_can_throw=True),
 		FakeDecl(name="g_plain", return_type="Int", throws=None),
 	]
 	signatures = signatures_from_decl_nodes(decls)
@@ -59,7 +60,7 @@ def test_driver_accepts_decl_based_signatures_and_catalog():
 
 	f_info = checked.fn_infos["f_can"]
 	assert f_info.declared_can_throw is True
-	assert f_info.declared_events == frozenset({"EvtA"})
+	assert f_info.declared_events == frozenset({"m:EvtA"})
 	assert f_info.return_type_id is not None
 
 	g_info = checked.fn_infos["g_plain"]
@@ -73,7 +74,7 @@ def test_driver_reports_decl_based_mismatch_diagnostics():
 	Decl says g_plain does not throw, but HIR throws an unknown event: expect diagnostics.
 	"""
 	decls = [
-		FakeDecl(name="g_plain", return_type="Int", throws=None),
+		FakeDecl(name="g_plain", return_type="Int", throws=None, declared_can_throw=False),
 	]
 	signatures = signatures_from_decl_nodes(decls)
 	exc_catalog = exception_catalog_from_decls(decls)  # empty catalog

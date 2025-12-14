@@ -8,8 +8,6 @@ from lang2.driftc.stage2 import BasicBlock, MirFunc, Return
 from lang2.driftc.stage3 import ThrowSummaryBuilder
 from lang2.driftc.stage4 import MirToSSA, run_throw_checks
 from lang2.driftc.core.types_env_impl import SimpleTypeEnv
-from lang2.driftc.checker import FnSignature
-from lang2.test_support import declared_from_signatures
 
 
 def test_fnresult_forwarding_passes_with_type_env():
@@ -40,9 +38,7 @@ def test_fnresult_forwarding_passes_with_type_env():
 	run_throw_checks(
 		{fn_name: mir_func},
 		summaries,
-		declared_can_throw=declared_from_signatures(
-			{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={fn_name: True},
 		ssa_funcs={fn_name: ssa_func},
 		type_env=tenv,
 	)
@@ -68,9 +64,7 @@ def test_fnresult_forwarding_still_rejected_without_types():
 		run_throw_checks(
 			{fn_name: mir_func},
 			summaries,
-			declared_can_throw=declared_from_signatures(
-				{fn_name: FnSignature(name=fn_name, return_type="FnResult<Int, Error>")}
-			),
+			declared_can_throw={fn_name: True},
 			ssa_funcs=None,
 			type_env=None,
 		)

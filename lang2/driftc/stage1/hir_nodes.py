@@ -162,6 +162,36 @@ class HResultOk(HExpr):
 
 
 @dataclass
+class HTryExprArm:
+	"""
+	Single arm in an expression-form try/catch.
+
+	The block must ultimately produce a value (checked later); control-flow
+	statements are not allowed in expression-form catch arms.
+	"""
+
+	event_fqn: Optional[str]
+	binder: Optional[str]
+	block: "HBlock"
+	result: Optional[HExpr]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
+class HTryExpr(HExpr):
+	"""
+	Expression-form try/catch.
+
+	attempt: must be a call expression in v1.
+	arms: list of catch arms that each produce a value of the same type as the attempt.
+	"""
+
+	attempt: HExpr
+	arms: List[HTryExprArm]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HThrow(HStmt):
 	"""Throw an error/exception value. Semantically returns Err from this function."""
 	value: HExpr
@@ -337,5 +367,5 @@ __all__ = [
 	"HField", "HIndex", "HBorrow", "HDVInit",
 	"HUnary", "HBinary", "HArrayLiteral",
 	"HBlock", "HExprStmt", "HLet", "HAssign", "HIf", "HLoop",
-	"HBreak", "HContinue", "HReturn", "HThrow", "HTry", "HCatchArm",
+	"HBreak", "HContinue", "HReturn", "HThrow", "HTry", "HCatchArm", "HTryExpr", "HTryExprArm",
 ]

@@ -20,8 +20,8 @@ fn handle() returns Int {
 
 fn main() returns Int {
     // The handler throws and catches internally; this call should stay on the
-    // happy path. A real program could inspect the FnResult, but for this
-    // smoke test we only care that codegen succeeds end-to-end.
+    // happy path. For this smoke test we only care that codegen succeeds
+    // end-to-end.
     val _res = handle();
     return 0;
 }

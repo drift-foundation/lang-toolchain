@@ -21,7 +21,7 @@ from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
-	"""Render a TypeExpr into a string (e.g., FnResult<Int, Error>)."""
+	"""Render a TypeExpr into a string (e.g., Array<Int>, Result<Int, Error>)."""
 	if not typ.args:
 		return typ.name
 	args = ", ".join(_type_expr_to_str(a) for a in typ.args)
@@ -263,6 +263,38 @@ def _diagnostic(message: str, loc: object | None) -> Diagnostic:
 	return Diagnostic(message=message, severity="error", span=Span.from_loc(loc))
 
 
+def _typeexpr_uses_internal_fnresult(typ: parser_ast.TypeExpr) -> bool:
+	"""
+	Return True if a surface type annotation mentions `FnResult` anywhere.
+
+	`FnResult<T, Error>` is an internal ABI carrier used by lang2 for can-throw
+	functions. It is not a surface type in the Drift language: user code should
+	write `returns T` and use exceptions/try/catch for control flow.
+	"""
+	if typ.name == "FnResult":
+		return True
+	for arg in getattr(typ, "args", []) or []:
+		if _typeexpr_uses_internal_fnresult(arg):
+			return True
+	return False
+
+
+def _report_internal_fnresult_in_surface_type(
+	*,
+	kind: str,
+	symbol: str,
+	loc: object | None,
+	diagnostics: list[Diagnostic],
+) -> None:
+	diagnostics.append(
+		_diagnostic(
+			f"{kind} '{symbol}' uses internal-only type 'FnResult' in a surface annotation; "
+			"write `returns T` and use exceptions/try-catch instead",
+			loc,
+		)
+	)
+
+
 def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_name: str | None, diagnostics: list[Diagnostic]) -> dict[str, int]:
 	"""
 	Assign deterministic event codes to exception declarations using the shared ABI hash.
@@ -335,6 +367,23 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 		seen.add(fn.name)
 		decl_decl = _decl_from_parser_fn(fn)
 		decl_decl.module = module_name
+		# Reject FnResult in surface type annotations (return or parameter types).
+		# FnResult is an internal ABI carrier in lang2, not a user-facing type.
+		if _typeexpr_uses_internal_fnresult(decl_decl.return_type):
+			_report_internal_fnresult_in_surface_type(
+				kind="function",
+				symbol=fn.name,
+				loc=getattr(fn.return_type, "loc", getattr(fn, "loc", None)),
+				diagnostics=diagnostics,
+			)
+		for p in getattr(fn, "params", []) or []:
+			if _typeexpr_uses_internal_fnresult(p.type_expr):
+				_report_internal_fnresult_in_surface_type(
+					kind="parameter",
+					symbol=f"{fn.name}({p.name})",
+					loc=getattr(p.type_expr, "loc", getattr(p, "loc", None)),
+					diagnostics=diagnostics,
+				)
 		decls.append(decl_decl)
 		stmt_block = _convert_block(fn.body)
 		hir_block = lowerer.lower_block(stmt_block)
@@ -377,7 +426,29 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					)
 				)
 				continue
+
+			# Compute the canonical symbol for this method early so any diagnostics
+			# (including type-annotation validation) can reference it.
+			target_str = _type_expr_to_str(impl.target)
+			symbol_name = f"{target_str}::{fn.name}"
+
 			params = [_FrontendParam(p.name, p.type_expr, getattr(p, "loc", None)) for p in fn.params]
+			# Reject FnResult in method surface type annotations too.
+			if _typeexpr_uses_internal_fnresult(fn.return_type):
+				_report_internal_fnresult_in_surface_type(
+					kind="method",
+					symbol=symbol_name,
+					loc=getattr(fn.return_type, "loc", getattr(fn, "loc", None)),
+					diagnostics=diagnostics,
+				)
+			for p in getattr(fn, "params", []) or []:
+				if _typeexpr_uses_internal_fnresult(p.type_expr):
+					_report_internal_fnresult_in_surface_type(
+						kind="parameter",
+						symbol=f"{symbol_name}({p.name})",
+						loc=getattr(p.type_expr, "loc", getattr(p, "loc", None)),
+						diagnostics=diagnostics,
+					)
 			if fn.name in seen:
 				diagnostics.append(
 					Diagnostic(
@@ -387,7 +458,6 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 					)
 				)
 				continue
-			target_str = _type_expr_to_str(impl.target)
 			key = (target_str, fn.name)
 			if key in method_keys:
 				diagnostics.append(
@@ -399,7 +469,6 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 				)
 				continue
 			method_keys.add(key)
-			symbol_name = f"{target_str}::{fn.name}"
 			decls.append(
 				_FrontendDecl(
 					symbol_name,

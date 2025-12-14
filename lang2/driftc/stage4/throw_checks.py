@@ -42,6 +42,7 @@ class FuncThrowInfo:
 	return_type_id: Optional[TypeId] = None
 	declared_events: Optional[Set[str]] = None
 	inferred_may_throw: bool = False
+	has_explicit_throw_decl: bool = False
 
 
 def _report(msg: str, diagnostics: Optional[List[Diagnostic]]) -> None:
@@ -74,11 +75,21 @@ def build_func_throw_info(
 		return_ty: Optional[TypeId] = None
 		decl_events: Optional[Set[str]] = None
 		inferred: bool = summary.constructs_error or bool(summary.may_fail_sites)
+		explicit_decl = False
 		if fn_infos is not None:
 			fn_info = fn_infos.get(fname)
 			if fn_info is not None:
 				return_ty = fn_info.return_type_id
-				inferred = getattr(fn_info, "inferred_may_throw", inferred)
+				# Checker inference is best-effort metadata; stage3 summaries are the
+				# structural ground truth for "may throw" because they reflect the
+				# lowered MIR (ConstructError, may-fail sites, etc.).
+				#
+				# Therefore, never let an unset/default `inferred_may_throw=False`
+				# override a positive summary.
+				inferred = bool(getattr(fn_info, "inferred_may_throw", False)) or inferred
+				if getattr(fn_info, "signature", None) is not None:
+					sig = fn_info.signature
+					explicit_decl = bool(getattr(sig, "throws_events", ())) or getattr(sig, "declared_can_throw", None) is not None
 				if getattr(fn_info, "declared_events", None) is not None:
 					decl_events = set(fn_info.declared_events)  # type: ignore[arg-type]
 		out[fname] = FuncThrowInfo(
@@ -90,6 +101,7 @@ def build_func_throw_info(
 			return_type_id=return_ty,
 			declared_events=decl_events,
 			inferred_may_throw=inferred,
+			has_explicit_throw_decl=explicit_decl,
 		)
 	return out
 
@@ -106,6 +118,9 @@ def enforce_can_throw_invariants(
 	"""
 	for fname, info in func_infos.items():
 		if info.constructs_error and info.inferred_may_throw and not info.declared_can_throw:
+			# Stay lenient when no explicit throw intent was declared on the signature.
+			if not info.has_explicit_throw_decl:
+				continue
 			_report(
 				msg=f"function {fname} constructs an Error but is not declared can-throw",
 				diagnostics=diagnostics,
@@ -118,10 +133,13 @@ def enforce_can_throw_signature_shape(
 	diagnostics: Optional[List[Diagnostic]] = None,
 ) -> None:
 	"""
-	Ensure declared can-throw functions actually have a FnResult<_, Error> return
-	type according to the available type environment. This defends the ABI shape
-	upstream of codegen so we do not silently treat non-FnResult signatures as
-	can-throw.
+	Defend the internal can-throw ABI shape using TypeEnv when available.
+
+	lang2 surface signatures use `returns T` even for can-throw functions; the
+	internal ABI lowers can-throw functions to return `FnResult<T, Error>`.
+	This helper verifies that `FnResult` types can be constructed and that the
+	error side is the canonical `Error` type (when we have access to the shared
+	TypeTable).
 	"""
 	if type_env is None:
 		return
@@ -129,45 +147,31 @@ def enforce_can_throw_signature_shape(
 	for fname, info in func_infos.items():
 		if not info.declared_can_throw:
 			continue
-		ret_ty = info.return_type_id
-		if ret_ty is None:
+		ok_ty = info.return_type_id
+		if ok_ty is None:
 			# No type information available; stay lenient to avoid penalizing
 			# untyped/legacy tests. Typed paths should always populate a return TypeId.
 			continue
-		try:
-			is_fnres = type_env.is_fnresult(ret_ty)
-		# TypeEnv implementations are allowed to raise on unknown types; treat as non-FnResult.
-		except Exception:
-			is_fnres = False
-		if not is_fnres:
-			_report(
-				msg=(
-					f"function {fname} is declared can-throw but signature return type "
-					f"is not FnResult"
-				),
-				diagnostics=diagnostics,
-			)
-			continue
-		try:
-			ok_ty, err_ty = type_env.fnresult_parts(ret_ty)
-		except Exception:
-			_report(
-				msg=(
-					f"function {fname} is declared can-throw but FnResult parts could not "
-					f"be determined from the type environment"
-				),
-				diagnostics=diagnostics,
-			)
-			continue
+		# In the typed pipeline we should always have a shared TypeTable, but keep
+		# a defensive fallback.
 		if table is not None:
-			try:
-				err_def = table.get(err_ty)
-			except Exception:
-				err_def = None
-			if err_def is not None and err_def.kind is not TypeKind.ERROR:
+			err_ty = table.ensure_error()
+			fnres_ty = table.ensure_fnresult(ok_ty, err_ty)
+			if not type_env.is_fnresult(fnres_ty):
 				_report(
 					msg=(
-						f"function {fname} is declared can-throw but FnResult error type "
+						f"internal error: TypeEnv does not recognize FnResult type for "
+						f"can-throw function {fname}"
+					),
+					diagnostics=diagnostics,
+				)
+				continue
+			_, actual_err = type_env.fnresult_parts(fnres_ty)
+			err_def = table.get(actual_err)
+			if err_def.kind is not TypeKind.ERROR:
+				_report(
+					msg=(
+						f"function {fname} is can-throw but internal FnResult error type "
 						f"is {err_def.name}, expected Error"
 					),
 					diagnostics=diagnostics,
@@ -276,8 +280,9 @@ def enforce_fnresult_returns_typeaware(
 			continue
 		fn_type_error = None
 		decl_ok_err: tuple[TypeId, TypeId] | None = None
-		if info.return_type_id is not None and type_env.is_fnresult(info.return_type_id):
-			decl_ok_err = type_env.fnresult_parts(info.return_type_id)
+		table = getattr(type_env, "_table", None)
+		if info.declared_can_throw and info.return_type_id is not None and table is not None:
+			decl_ok_err = (info.return_type_id, table.ensure_error())
 		# We assume SSA layer can expose returns; in this skeleton we scan MIR
 		# terminators in the underlying MIR function carried by SsaFunc.
 		for block in ssa_fn.func.blocks.values():

@@ -1,5 +1,5 @@
 """
-Positive integration: try sugar + FnResult.Ok should pass end-to-end.
+Positive integration: try sugar on a can-throw call should pass end-to-end.
 """
 
 from __future__ import annotations
@@ -11,30 +11,26 @@ from lang2.test_support import make_signatures, build_exception_catalog
 
 def test_try_sugar_with_ok_return_passes():
 	"""
-	`f` calls a FnResult-returning callee via try sugar and returns Ok(x).
-	Checker should accept the try operand, lowering should desugar, and typed
-	throw checks should pass with no diagnostics.
+	`f` applies try sugar (`expr?`) to a known-ok FnResult value and returns the ok value.
+
+	This stays intentionally internal: surface signatures are `returns T`, and
+	FnResult is used only as the internal carrier that try-sugar expands over.
 	"""
 	hirs = {
-		"callee": H.HBlock(
-			statements=[
-				H.HReturn(value=H.HResultOk(value=H.HLiteralInt(value=1))),
-			]
-		),
 		"f": H.HBlock(
 			statements=[
-				H.HLet(name="tmp", value=H.HTryResult(expr=H.HCall(fn=H.HVar(name="callee"), args=[]))),
-				H.HReturn(value=H.HResultOk(value=H.HVar(name="tmp"))),
+				H.HLet(name="tmp", value=H.HTryResult(expr=H.HResultOk(value=H.HLiteralInt(value=1)))),
+				H.HReturn(value=H.HVar(name="tmp")),
 			]
 		),
 	}
 	signatures = make_signatures(
 		{
-			"callee": "FnResult<Int, Error>",
-			"f": "FnResult<Int, Error>",
-		}
+			"f": "Int",
+		},
+		declared_can_throw={"f": True},
 	)
-	exc_env = build_exception_catalog(["Evt"])
+	exc_env = build_exception_catalog([])
 
 	mir_funcs, checked = compile_stubbed_funcs(
 		func_hirs=hirs,
@@ -44,6 +40,6 @@ def test_try_sugar_with_ok_return_passes():
 		return_checked=True,
 	)
 
-	assert set(mir_funcs.keys()) == {"callee", "f"}
+	assert set(mir_funcs.keys()) == {"f"}
 	assert checked.diagnostics == []
 	assert checked.type_env is not None

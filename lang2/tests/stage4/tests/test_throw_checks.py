@@ -21,8 +21,7 @@ from lang2.driftc.stage2 import BasicBlock, MirFunc, Return, StoreLocal
 from lang2.driftc.stage2 import ConstructResultErr
 from lang2.driftc.stage3 import ThrowSummaryBuilder
 import pytest
-from lang2.driftc.checker import FnSignature
-from lang2.test_support import declared_from_signatures
+from lang2.driftc.checker import FnInfo, FnSignature
 
 
 def test_build_func_throw_info_combines_summary_and_decl():
@@ -37,9 +36,7 @@ def test_build_func_throw_info_combines_summary_and_decl():
 	}
 	func_infos = build_func_throw_info(
 		summaries,
-		declared_can_throw=declared_from_signatures(
-			{"f": FnSignature(name="f", return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={"f": True},
 	)
 	assert "f" in func_infos
 	info = func_infos["f"]
@@ -50,8 +47,13 @@ def test_build_func_throw_info_combines_summary_and_decl():
 	assert info.declared_can_throw is True
 
 
-def test_enforce_can_throw_invariants_raises_for_non_declared_thrower():
-	"""Non-can-throw functions constructing errors should fail invariants."""
+def test_enforce_can_throw_invariants_is_lenient_without_explicit_nothrow():
+	"""
+	Non-can-throw functions may still construct/catch errors locally.
+
+	Stage4 invariants are intentionally lenient unless the checker supplies an
+	explicit nothrow declaration (to avoid penalizing untyped/shim paths).
+	"""
 	summaries = {
 		"g": ThrowSummary(
 			constructs_error=True,
@@ -62,14 +64,29 @@ def test_enforce_can_throw_invariants_raises_for_non_declared_thrower():
 	}
 	func_infos = build_func_throw_info(
 		summaries,
-		declared_can_throw=declared_from_signatures({"g": FnSignature(name="g", return_type="Int")}),
+		declared_can_throw={"g": False},
 	)
-	try:
+	# Should not raise: no explicit nothrow metadata was supplied.
+	enforce_can_throw_invariants(func_infos)
+
+
+def test_enforce_can_throw_invariants_raises_for_explicit_nothrow_thrower():
+	"""Explicit nothrow + escaping error construction should fail invariants."""
+	summaries = {
+		"g": ThrowSummary(
+			constructs_error=True,
+			exception_types=set(),
+			may_fail_sites=set(),
+			call_sites=set(),
+		)
+	}
+	func_infos = build_func_throw_info(
+		summaries,
+		declared_can_throw={"g": False},
+		fn_infos={"g": FnInfo(name="g", declared_can_throw=False, signature=FnSignature(name="g", return_type="Int", declared_can_throw=False))},
+	)
+	with pytest.raises(RuntimeError):
 		enforce_can_throw_invariants(func_infos)
-		raised = False
-	except RuntimeError:
-		raised = True
-	assert raised, "expected invariant violation for non-can-throw function"
 
 
 def test_enforce_can_throw_invariants_allows_declared_thrower():
@@ -84,9 +101,7 @@ def test_enforce_can_throw_invariants_allows_declared_thrower():
 	}
 	func_infos = build_func_throw_info(
 		summaries,
-		declared_can_throw=declared_from_signatures(
-			{"h": FnSignature(name="h", return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={"h": True},
 	)
 	# Should not raise
 	enforce_can_throw_invariants(func_infos)
@@ -104,9 +119,7 @@ def test_return_shape_enforced_for_can_throw():
 	}
 	func_infos = build_func_throw_info(
 		summaries,
-		declared_can_throw=declared_from_signatures(
-			{"h": FnSignature(name="h", return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={"h": True},
 	)
 	# MIR with a bare return
 	entry = BasicBlock(name="entry", instructions=[], terminator=Return(value=None))
@@ -136,9 +149,7 @@ def test_fnresult_return_shape_enforced_for_can_throw():
 	}
 	func_infos = build_func_throw_info(
 		summaries,
-		declared_can_throw=declared_from_signatures(
-			{"k": FnSignature(name="k", return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={"k": True},
 	)
 	entry = BasicBlock(name="entry", instructions=[], terminator=Return(value="v0"))
 	funcs = {"k": MirFunc(name="k", params=[], locals=[], blocks={"entry": entry}, entry="entry")}
@@ -178,9 +189,7 @@ def test_run_throw_checks_wrapper_executes_all_invariants():
 	func_infos = run_throw_checks(
 		funcs=funcs,
 		summaries={"w": summary},
-		declared_can_throw=declared_from_signatures(
-			{"w": FnSignature(name="w", return_type="FnResult<Int, Error>")}
-		),
+		declared_can_throw={"w": True},
 	)
 	assert "w" in func_infos
 	assert func_infos["w"].declared_can_throw is True

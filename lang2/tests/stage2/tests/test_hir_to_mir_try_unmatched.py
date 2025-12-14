@@ -18,7 +18,7 @@ def test_try_unmatched_event_rethrows_as_err():
 	"""
 	builder = MirBuilder(name="try_unmatched")
 	# Only catch EvtA; exc_env maps it to 123.
-	lower = HIRToMIR(builder, exc_env={"EvtA": 123})
+	lower = HIRToMIR(builder, exc_env={"m:EvtA": 123}, can_throw_by_name={"try_unmatched": True})
 
 	# Throw a DV with a different event name (no code mapping => 0), so it won't match.
 	hir = H.HBlock(

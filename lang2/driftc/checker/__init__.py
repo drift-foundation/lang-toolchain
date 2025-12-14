@@ -232,19 +232,18 @@ class Checker:
 					declared_events = frozenset(sig.throws_events)
 				if sig.declared_can_throw is None and sig.throws_events:
 					sig.declared_can_throw = True
-				if sig.declared_can_throw is not None:
+				# Legacy shim: an explicit bool map overrides signatures in tests.
+				if declared_can_throw is None and sig.declared_can_throw is not None:
 					declared_can_throw = sig.declared_can_throw
 
 			if declared_can_throw is None:
-				if sig is not None:
-					# Prefer resolved type ids to legacy raw shapes.
-					if sig.return_type_id is not None:
-						td = self._type_table.get(sig.return_type_id)
-						declared_can_throw = td.kind is TypeKind.FNRESULT
-					else:
-						declared_can_throw = False
-				else:
-					declared_can_throw = False
+				# Unspecified throw effect: default to non-throwing here and let the
+				# inference pass below compute the actual can-throw ABI based on HIR.
+				#
+				# Note: `FnResult` is not a surface-level type in lang2; it is an
+				# internal ABI carrier. Therefore, the signature return type does not
+				# imply can-throw.
+				declared_can_throw = False
 
 			catch_arms_groups = self._catch_arms.get(name)
 			if catch_arms_groups is not None:
@@ -261,36 +260,6 @@ class Checker:
 				error_type_id=error_type_id,
 			)
 
-			# Consistency check: declared_can_throw should align with the resolved
-			# return type shape. This guards legacy bool-map overrides from drifting
-			# away from signature intent.
-			if declared_can_throw and return_type_id is not None:
-				td = self._type_table.get(return_type_id)
-				if td.kind is not TypeKind.FNRESULT:
-					diagnostics.append(
-						Diagnostic(
-							message=(
-								f"function {name} is marked can-throw but return type {td.name!r} "
-								f"is not FnResult"
-							),
-							severity="error",
-							span=None,
-						)
-					)
-			if not declared_can_throw and return_type_id is not None:
-				td = self._type_table.get(return_type_id)
-				if td.kind is TypeKind.FNRESULT:
-					diagnostics.append(
-						Diagnostic(
-							message=(
-								f"function {name} returns FnResult but is not declared can-throw; "
-								f"use FnResult return or mark throws accordingly"
-							),
-							severity="error",
-							span=None,
-						)
-					)
-
 		# Validate result-driven try sugar operands when HIR is available. This is
 		# intentionally conservative: only known FnResult-returning calls are
 		# accepted; everything else produces a diagnostic so that non-FnResult
@@ -306,28 +275,59 @@ class Checker:
 		#   - build a concrete TypeEnv and diagnostics list.
 		# The real checker will attach type_env, diagnostics, and exception_catalog.
 
-		# Best-effort inferred throw detection: walk HIR to see if any throw or
-		# call to a throwing function exists. This is deliberately shallow and
-		# treats any throw/call as making the function may-throw; context (try
-		# coverage) is not considered in this stub.
-		for fn_name, hir_block in self._hir_blocks.items():
-			info = fn_infos.get(fn_name)
-			if info is None:
+		# Can-throw inference (fixed point, intra-module).
+		#
+		# The surface language does not expose `FnResult` as a type. Instead, a
+		# function either returns normally (`returns T`) or may throw (exceptional
+		# control flow). Internally, codegen lowers can-throw functions to return
+		# `FnResult<T, Error>` as an ABI carrier.
+		#
+		# We infer can-throw from HIR, taking try/catch coverage into account:
+		# a throw (or call to a can-throw function) that is fully handled by an
+		# enclosing try/catch does not force the function itself to be can-throw.
+		#
+		# `FnSignature.declared_can_throw` is treated as an explicit annotation
+		# hook (future `nothrow`/throws syntax). If set to False, we keep the
+		# function non-throwing and emit a diagnostic when inference finds an
+		# escaping throw.
+		first_throw_span_by_fn: dict[str, Span] = {}
+		changed = True
+		while changed:
+			changed = False
+			for fn_name, hir_block in self._hir_blocks.items():
+				info = fn_infos.get(fn_name)
+				if info is None:
+					continue
+				may_throw, throw_span = self._function_may_throw(hir_block, fn_infos)
+				first_throw_span_by_fn.setdefault(fn_name, throw_span)
+				info.inferred_may_throw = may_throw
+				explicit = info.signature.declared_can_throw if info.signature is not None else None
+				# Legacy test shim: `declared_can_throw` map is treated as an explicit
+				# annotation.
+				if fn_name in self._declared_map:
+					explicit = bool(self._declared_map[fn_name])
+				if explicit is False:
+					# Explicit nothrow: keep non-throwing; diagnose below.
+					continue
+				if may_throw and not info.declared_can_throw:
+					info.declared_can_throw = True
+					changed = True
+
+		# Emit diagnostics for explicit nothrow signatures that still may throw.
+		for fn_name, info in fn_infos.items():
+			if info.signature is None:
 				continue
-			may_throw, throw_span = self._function_may_throw(hir_block, fn_infos)
-			if may_throw:
-				info.inferred_may_throw = True
-				if not info.declared_can_throw:
-					diagnostics.append(
-						Diagnostic(
-							message=(
-								f"function {fn_name} may throw but is not declared can-throw; "
-								f"declare a FnResult return type or mark it can-throw explicitly"
-							),
-							severity="error",
-							span=throw_span,
-						)
+			explicit = info.signature.declared_can_throw
+			if fn_name in self._declared_map:
+				explicit = bool(self._declared_map[fn_name])
+			if explicit is False and info.inferred_may_throw:
+				diagnostics.append(
+					Diagnostic(
+						message=f"function {fn_name} is declared nothrow but may throw",
+						severity="error",
+						span=first_throw_span_by_fn.get(fn_name, Span()),
 					)
+				)
 
 		# Best-effort call arity/type checks based on FnSignature TypeIds. This
 		# only visits HCall with a plain HVar callee; arg types are unknown here
@@ -397,50 +397,82 @@ class Checker:
 		may_throw = False
 		first_span: Span | None = None
 
-		def walk_expr(expr: H.HExpr) -> None:
+		def walk_expr(expr: H.HExpr, caught_events: set[str] | None, catch_all: bool) -> None:
 			nonlocal may_throw
 			nonlocal first_span
 			if isinstance(expr, H.HCall):
 				if isinstance(expr.fn, H.HVar):
-					if self._call_may_throw(expr.fn.name, fn_infos):
+					if catch_all:
+						# Catch-all in scope handles any propagated throw from this call.
+						pass
+					elif self._call_may_throw(expr.fn.name, fn_infos):
 						may_throw = True
 						if first_span is None:
 							first_span = Span.from_loc(getattr(expr, "loc", None))
 				for arg in expr.args:
-					walk_expr(arg)
+					walk_expr(arg, caught_events, catch_all)
 			elif isinstance(expr, H.HMethodCall):
-				# Without method resolution, treat as non-throwing unless receiver
-				# or args contain throws.
-				walk_expr(expr.receiver)
+				# Best-effort method call classification: treat `method_name` as the
+				# callee identity for throw inference. This is conservative but keeps
+				# try-expr and try-stmt effect inference coherent even before method
+				# resolution is fully wired.
+				if catch_all:
+					pass
+				elif self._call_may_throw(expr.method_name, fn_infos):
+					may_throw = True
+					if first_span is None:
+						first_span = Span.from_loc(getattr(expr, "loc", None))
+				walk_expr(expr.receiver, caught_events, catch_all)
 				for arg in expr.args:
-					walk_expr(arg)
+					walk_expr(arg, caught_events, catch_all)
+			elif hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+				# Expression-form try/catch creates a local handler scope for the
+				# attempt expression. A catch-all arm handles any propagated throw.
+				catch_all_local = any(arm.event_fqn is None for arm in expr.arms)
+				caught_local = {arm.event_fqn for arm in expr.arms if arm.event_fqn is not None}
+				walk_expr(expr.attempt, caught_local, catch_all_local)
+				for arm in expr.arms:
+					# Catch-arm bodies are *not* within the local handler scope; throws
+					# from these blocks propagate to the outer try context.
+					walk_block(arm.block, caught_events, catch_all)
+					if arm.result is not None:
+						walk_expr(arm.result, caught_events, catch_all)
 			elif isinstance(expr, H.HTryResult):
-				walk_expr(expr.expr)
+				walk_expr(expr.expr, caught_events, catch_all)
 			elif isinstance(expr, H.HResultOk):
-				walk_expr(expr.value)
+				walk_expr(expr.value, caught_events, catch_all)
 			elif isinstance(expr, H.HBinary):
-				walk_expr(expr.left)
-				walk_expr(expr.right)
+				walk_expr(expr.left, caught_events, catch_all)
+				walk_expr(expr.right, caught_events, catch_all)
 			elif isinstance(expr, H.HUnary):
-				walk_expr(expr.expr)
+				walk_expr(expr.expr, caught_events, catch_all)
 			elif isinstance(expr, H.HTernary):
-				walk_expr(expr.cond)
-				walk_expr(expr.then_expr)
-				walk_expr(expr.else_expr)
+				walk_expr(expr.cond, caught_events, catch_all)
+				walk_expr(expr.then_expr, caught_events, catch_all)
+				walk_expr(expr.else_expr, caught_events, catch_all)
 			elif isinstance(expr, H.HField):
-				walk_expr(expr.subject)
+				walk_expr(expr.subject, caught_events, catch_all)
 			elif isinstance(expr, H.HIndex):
-				walk_expr(expr.subject)
-				walk_expr(expr.index)
+				walk_expr(expr.subject, caught_events, catch_all)
+				walk_expr(expr.index, caught_events, catch_all)
 			elif isinstance(expr, H.HDVInit):
 				for a in expr.args:
-					walk_expr(a)
+					walk_expr(a, caught_events, catch_all)
 			# literals/vars are leaf nodes
 
 		def walk_block(b: H.HBlock, caught: set[str] | None = None, catch_all: bool = False) -> None:
 			nonlocal may_throw
 			nonlocal first_span
 			for stmt in b.statements:
+				if hasattr(H, "HRethrow") and isinstance(stmt, getattr(H, "HRethrow")):
+					# Rethrow re-propagates an unknown Error value. We only treat it as
+					# handled when a catch-all is in scope.
+					if catch_all:
+						continue
+					may_throw = True
+					if first_span is None:
+						first_span = Span.from_loc(getattr(stmt, "loc", None))
+					continue
 				if isinstance(stmt, H.HThrow):
 					# If we know this throw's event is caught locally, do not mark may_throw.
 					if isinstance(stmt.value, H.HExceptionInit):
@@ -464,16 +496,16 @@ class Checker:
 						walk_block(arm.block, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HReturn) and stmt.value is not None:
-					walk_expr(stmt.value)
+					walk_expr(stmt.value, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HLet):
-					walk_expr(stmt.value)
+					walk_expr(stmt.value, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HAssign):
-					walk_expr(stmt.value)
+					walk_expr(stmt.value, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HIf):
-					walk_expr(stmt.cond)
+					walk_expr(stmt.cond, caught, catch_all)
 					walk_block(stmt.then_block)
 					if stmt.else_block:
 						walk_block(stmt.else_block)
@@ -482,9 +514,9 @@ class Checker:
 					walk_block(stmt.body, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HExprStmt):
-					walk_expr(stmt.expr)
+					walk_expr(stmt.expr, caught, catch_all)
 					continue
-				# other statements: continue
+			# other statements: continue
 
 		walk_block(block)
 		return may_throw, (first_span or Span())
@@ -694,6 +726,106 @@ class Checker:
 					return td.param_types[0]
 				self.report_index_subject_not_array()
 				return None
+			if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+				# attempt must be a call (fn or method) in v1
+				if not isinstance(expr.attempt, (H.HCall, H.HMethodCall)):
+					self._append_diag(
+						Diagnostic(
+							message="try/catch attempt must be a function call",
+							severity="error",
+							span=getattr(expr, "loc", None),
+						)
+					)
+					return None
+				attempt_ty = self._infer_expr_type(expr.attempt)
+				if attempt_ty is not None and self.table.is_void(attempt_ty):
+					self._append_diag(
+						Diagnostic(
+							message="try/catch attempt must produce a value (not Void)",
+							severity="error",
+							span=getattr(expr, "loc", None),
+						)
+					)
+					return None
+				seen_events: set[str] = set()
+				catch_all_seen = False
+				attempt_type = attempt_ty
+				# Arm block must yield a value expression and may not contain control-flow statements.
+				def arm_result_type(block: "H.HBlock", result_expr: Optional["H.HExpr"], arm_span: Span) -> Optional[TypeId]:
+					for stmt in block.statements:
+						if isinstance(stmt, (H.HReturn, H.HBreak, H.HContinue, H.HRethrow)):
+							self._append_diag(
+								Diagnostic(
+									message=(
+										"control-flow statement not allowed in try-expression catch block; "
+										"use statement try { ... } catch { ... } instead"
+									),
+									severity="error",
+									span=getattr(stmt, "loc", arm_span),
+								)
+							)
+							return None
+					if result_expr is None:
+						self._append_diag(
+							Diagnostic(
+								message="catch arm must produce a value",
+								severity="error",
+								span=arm_span,
+							)
+						)
+						return None
+					return self._infer_expr_type(result_expr)
+				for arm in expr.arms:
+					if arm.event_fqn is None:
+						if catch_all_seen:
+							self._append_diag(
+								Diagnostic(
+									message="catch-all must be the last catch arm",
+									severity="error",
+									span=arm.loc,
+								)
+							)
+						catch_all_seen = True
+					else:
+						if arm.event_fqn in seen_events:
+							self._append_diag(
+								Diagnostic(
+									message=f"duplicate catch arm for event {arm.event_fqn}",
+									severity="error",
+									span=arm.loc,
+								)
+							)
+						if catch_all_seen:
+							self._append_diag(
+								Diagnostic(
+									message="catch-all before this arm makes it unreachable",
+									severity="error",
+									span=arm.loc,
+								)
+							)
+						seen_events.add(arm.event_fqn)
+					prev = None
+					if arm.binder:
+						prev = self.locals.get(arm.binder)
+						self.locals[arm.binder] = self.table.ensure_error()
+					arm_ty = arm_result_type(arm.block, getattr(arm, "result", None), arm.loc)
+					if arm.binder:
+						if prev is None:
+							self.locals.pop(arm.binder, None)
+						else:
+							self.locals[arm.binder] = prev
+					if attempt_type is not None and arm_ty is not None and arm_ty != attempt_type:
+						self._append_diag(
+							Diagnostic(
+								message=(
+									f"catch arm type {self.table.get(arm_ty).name} does not match "
+									f"attempt type {self.table.get(attempt_type).name}"
+								),
+								severity="error",
+								span=arm.loc,
+							)
+						)
+				return attempt_type
 			return None
 
 	def _seed_locals_from_signature(self, ctx: "_TypingContext") -> None:
@@ -774,6 +906,12 @@ class Checker:
 			elif isinstance(expr, H.HDVInit):
 				for a in expr.args:
 					walk_expr(a)
+			elif isinstance(expr, H.HTryExpr):
+				walk_expr(expr.attempt)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if getattr(arm, "result", None) is not None:
+						walk_expr(arm.result)
 			# literals/vars are leaf nodes
 
 		def walk_block(b: H.HBlock) -> None:
@@ -955,17 +1093,25 @@ class Checker:
 		diagnostics: List[Diagnostic],
 	) -> None:
 		"""
-		Walk a HIR block and require that every HTryResult operand is known to be a
-		FnResult-returning expression based on signatures.
+		Walk a HIR block and require that every HTryResult operand is a known
+		FnResult value based on signatures (or explicit constructors).
 
-		This is deliberately shallow for now: it accepts HCall/HMethodCall whose
-		target signature return_type_id is FnResult; everything else is flagged so
-		that try-sugar cannot wrap non-FnResult values.
+		HTryResult (`expr?`) is result-driven sugar. It is intentionally separate
+		from exception-based try/catch: it operates on an in-band result carrier
+		(FnResult in the current internal implementation) and expands to
+		`if is_err { throw unwrap_err } else { unwrap }`.
+
+		This validation is deliberately shallow for now: it accepts:
+		  - explicit HResultOk constructors (known FnResult), and
+		  - HCall/HMethodCall whose target signature return_type_id is FnResult.
+
+		Everything else is flagged so that try-sugar cannot wrap non-FnResult
+		values.
 		"""
 		from lang2.driftc import stage1 as H
 
-		def report(msg: str) -> None:
-			diagnostics.append(Diagnostic(message=msg, severity="error", span=None))
+		def report(msg: str, *, span: Span) -> None:
+			diagnostics.append(Diagnostic(message=msg, severity="error", span=span))
 
 		def is_fnresult_sig(sig: FnSignature | None) -> bool:
 			if sig is None or sig.return_type_id is None:
@@ -974,6 +1120,11 @@ class Checker:
 			return td.kind is TypeKind.FNRESULT
 
 		def validate_try_expr(expr: H.HExpr, span_descr: str) -> None:
+			span = getattr(expr, "loc", None)
+			span_obj = Span.from_loc(span) if span is not None else Span()
+			# Explicit constructor form is always a known FnResult.
+			if isinstance(expr, H.HResultOk):
+				return
 			# Only accept simple calls/method calls to signatures we know are FnResult.
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 				cands = self._sigs_by_display_name.get(expr.fn.name, [])
@@ -987,7 +1138,8 @@ class Checker:
 				msg=(
 					f"function {fn_name} uses try-expression on a non-FnResult operand "
 					f"({span_descr}); try sugar requires FnResult<_, Error>"
-				)
+				),
+				span=span_obj,
 			)
 
 		def walk_expr(expr: H.HExpr) -> None:
@@ -1312,10 +1464,14 @@ class Checker:
 		if isinstance(stmt.value, H.HExceptionInit):
 			schema = _schema(stmt.value.event_fqn)
 			if schema is None:
-				return
-			_decl_fqn, decl_fields = schema
+				# Still validate field value shapes (DV/primitive-only) even when
+				# we don't have a schema entry (e.g., undeclared exception).
+				schema_fields: list[str] | None = None
+			else:
+				_decl_fqn, schema_fields = schema
 			provided = list(stmt.value.field_names)
-			if not decl_fields:
+			decl_fields = list(schema_fields) if schema_fields is not None else None
+			if decl_fields is not None and not decl_fields:
 				if provided:
 					ctx._append_diag(
 						Diagnostic(
@@ -1324,25 +1480,54 @@ class Checker:
 							span=getattr(stmt.value, "loc", Span()),
 						)
 					)
+				# No fields are allowed; nothing more to validate.
 				return
-			decl_set = set(decl_fields)
-			provided_set = set(provided)
-			unknown = provided_set - decl_set
-			missing = decl_set - provided_set
-			if unknown:
+			if decl_fields is not None:
+				decl_set = set(decl_fields)
+				provided_set = set(provided)
+				unknown = provided_set - decl_set
+				missing = decl_set - provided_set
+				if unknown:
+					ctx._append_diag(
+						Diagnostic(
+							message=f"unknown exception field(s): {', '.join(sorted(unknown))}",
+							severity="error",
+							span=getattr(stmt.value, "loc", Span()),
+						)
+					)
+				if missing:
+					ctx._append_diag(
+						Diagnostic(
+							message=f"missing exception field(s): {', '.join(sorted(missing))}",
+							severity="error",
+							span=getattr(stmt.value, "loc", Span()),
+						)
+					)
+
+			# Field payload rule (Phase 2): each declared exception field must be
+			# either a DiagnosticValue (HDVInit) or a primitive literal that the
+			# compiler can auto-wrap into a DiagnosticValue (Int/Bool/String).
+			if len(stmt.value.field_names) != len(stmt.value.field_values):
 				ctx._append_diag(
 					Diagnostic(
-						message=f"unknown exception field(s): {', '.join(sorted(unknown))}",
+						message="internal error: exception initializer field name/value arity mismatch",
 						severity="error",
 						span=getattr(stmt.value, "loc", Span()),
 					)
 				)
-			if missing:
+				return
+			for fname, fexpr in zip(stmt.value.field_names, stmt.value.field_values):
+				if isinstance(fexpr, H.HDVInit):
+					continue
+				if isinstance(fexpr, (H.HLiteralInt, H.HLiteralBool)):
+					continue
+				if hasattr(H, "HLiteralString") and isinstance(fexpr, getattr(H, "HLiteralString")):
+					continue
 				ctx._append_diag(
 					Diagnostic(
-						message=f"missing exception field(s): {', '.join(sorted(missing))}",
+						message=f"exception field '{fname}' must be a DiagnosticValue or primitive literal",
 						severity="error",
-						span=getattr(stmt.value, "loc", Span()),
+						span=getattr(fexpr, "loc", getattr(stmt.value, "loc", Span())),
 					)
 				)
 			return
@@ -1375,19 +1560,38 @@ class Checker:
 		self,
 		ssa_funcs: Mapping[str, "SsaFunc"],
 		signatures: Mapping[str, FnSignature],
+		*,
+		can_throw_by_name: Mapping[str, bool] | None = None,
 	) -> Optional["CheckerTypeEnv"]:
 		"""
-		Assign TypeIds to SSA values using checker signatures and simple heuristics.
+			Assign TypeIds to SSA values using checker signatures and simple heuristics.
 
-		This is a minimal pass: it handles constants, ConstructResultOk/Err, Call/
-		MethodCall, AssignSSA copies, UnaryOp/BinaryOp propagation, and Phi when
-		incoming types agree. Unknowns default to `Unknown` TypeId. Returns None if
-		no types were assigned.
-		"""
+			This is a minimal pass: it handles constants, ConstructResultOk/Err,
+			Call/MethodCall, AssignSSA copies, UnaryOp/BinaryOp propagation, and Phi
+			when incoming types agree. Unknowns default to `Unknown` TypeId.
+
+			Can-throw note (important for long-term correctness):
+			- `FnSignature.declared_can_throw` is an *explicitness* signal (surface
+			  language intent), not the checker's effective "this function may throw"
+			  result.
+			- The stub checker computes the effective can-throw bit per function and
+			  stores it on `FnInfo.declared_can_throw`.
+			- Typed SSA interpretation (for throw checks and LLVM lowering) needs the
+			  *effective* can-throw bit so calls/returns are typed as the internal ABI
+			  `FnResult<T, Error>` only when a function actually can throw.
+
+			Pass `can_throw_by_name={fn_name: bool}` (usually from `FnInfo`) to keep
+			type inference aligned with the checker without mutating signatures.
+
+			Returns None if no types were assigned.
+			"""
 		from lang2.driftc.checker.type_env_impl import CheckerTypeEnv
 		from lang2.driftc.stage2 import (
 			ConstructResultOk,
 			ConstructResultErr,
+			ResultIsErr,
+			ResultOk,
+			ResultErr,
 			Call,
 			MethodCall,
 			ConstInt,
@@ -1428,171 +1632,238 @@ class Checker:
 					if ty_id is not None:
 						value_types[(fn_name, param_name)] = ty_id
 
-		changed = True
-		# Fixed-point with a small iteration cap.
-		for _ in range(5):
-			if not changed:
-				break
-			changed = False
-			for fn_name, ssa in ssa_funcs.items():
-				sig = signatures.get(fn_name)
-				fn_return_parts: tuple[TypeId, TypeId] | None = None
-				fn_is_void = False
-				if sig and sig.return_type_id is not None:
-					td = self._type_table.get(sig.return_type_id)
-					if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
-						fn_return_parts = (td.param_types[0], td.param_types[1])
-					fn_is_void = self._type_table.is_void(sig.return_type_id)
+			changed = True
+			# Fixed-point with a small iteration cap.
+			for _ in range(5):
+				if not changed:
+					break
+				changed = False
+				for fn_name, ssa in ssa_funcs.items():
+					sig = signatures.get(fn_name)
+					fn_return_parts: tuple[TypeId, TypeId] | None = None
+					fn_is_void = False
 
-				for block in ssa.func.blocks.values():
-					for instr in block.instructions:
-						dest = getattr(instr, "dest", None)
-						if isinstance(instr, ConstInt) and dest is not None:
-							if (fn_name, dest) not in value_types:
-								value_types[(fn_name, dest)] = self._int_type
-								changed = True
-						elif isinstance(instr, ConstBool) and dest is not None:
-							if (fn_name, dest) not in value_types:
-								value_types[(fn_name, dest)] = self._bool_type
-								changed = True
-						elif isinstance(instr, ConstString) and dest is not None:
-							if value_types.get((fn_name, dest)) != self._string_type:
-								value_types[(fn_name, dest)] = self._string_type
-								changed = True
-						elif isinstance(instr, StringLen) and dest is not None:
-							if value_types.get((fn_name, dest)) != self._uint_type:
-								value_types[(fn_name, dest)] = self._uint_type
-								changed = True
-						elif isinstance(instr, ArrayLen) and dest is not None:
-							if value_types.get((fn_name, dest)) != self._uint_type:
-								value_types[(fn_name, dest)] = self._uint_type
-								changed = True
-						elif isinstance(instr, ArrayCap) and dest is not None:
-							if value_types.get((fn_name, dest)) != self._uint_type:
-								value_types[(fn_name, dest)] = self._uint_type
-								changed = True
-						elif isinstance(instr, ArrayIndexLoad) and dest is not None:
-							if instr.elem_ty is not None and value_types.get((fn_name, dest)) != instr.elem_ty:
-								value_types[(fn_name, dest)] = instr.elem_ty
-								changed = True
-						elif isinstance(instr, ArrayLit) and dest is not None:
-							arr_ty = self._type_table.new_array(instr.elem_ty)
-							if value_types.get((fn_name, dest)) != arr_ty:
-								value_types[(fn_name, dest)] = arr_ty
-								changed = True
-						elif isinstance(instr, ConstructResultOk):
-							if dest is None:
-								continue
-							ok_ty = ty_for(fn_name, instr.value)
-							err_ty = fn_return_parts[1] if fn_return_parts else self._error_type
-							dest_ty = self._type_table.new_fnresult(ok_ty, err_ty)
-							if value_types.get((fn_name, dest)) != dest_ty:
-								value_types[(fn_name, dest)] = dest_ty
-								changed = True
-						elif isinstance(instr, ConstructResultErr):
-							if dest is None:
-								continue
-							err_ty = ty_for(fn_name, instr.error)
-							ok_ty = fn_return_parts[0] if fn_return_parts else self._unknown_type
-							dest_ty = self._type_table.new_fnresult(ok_ty, err_ty)
-							if value_types.get((fn_name, dest)) != dest_ty:
-								value_types[(fn_name, dest)] = dest_ty
-								changed = True
-						elif isinstance(instr, ConstructError) and dest is not None:
-							if value_types.get((fn_name, dest)) != self._error_type:
-								value_types[(fn_name, dest)] = self._error_type
-								changed = True
-						elif isinstance(instr, Call) and dest is not None:
-							callee_sig = signatures.get(instr.fn)
-							if callee_sig is not None:
-								if callee_sig.return_type_id is None:
-									rt_id, err_id = self._resolve_signature_types(callee_sig)
-									callee_sig.return_type_id = rt_id
-									callee_sig.error_type_id = err_id
-								dest_ty = callee_sig.return_type_id or self._unknown_type
-								if is_void_tid(dest_ty):
+					# Decide can-throw for typing purposes.
+					# - Prefer the checker-provided effective mapping when available.
+					# - Otherwise fall back to any explicit signature flag (legacy).
+					fn_is_can_throw = (
+						can_throw_by_name.get(fn_name, False)
+						if can_throw_by_name is not None
+						else bool(sig.declared_can_throw) if sig else False
+					)
+
+					if sig and sig.return_type_id is not None:
+						# Surface return type is `T`. If the function is can-throw, the
+						# internal ABI return is `FnResult<T, Error>`.
+						fn_is_void = self._type_table.is_void(sig.return_type_id)
+						if fn_is_can_throw:
+							fn_return_parts = (sig.return_type_id, sig.error_type_id or self._error_type)
+						else:
+							# Legacy: older tests used FnResult as a surface return type.
+							td = self._type_table.get(sig.return_type_id)
+							if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
+								fn_return_parts = (td.param_types[0], td.param_types[1])
+
+					for block in ssa.func.blocks.values():
+						for instr in block.instructions:
+							dest = getattr(instr, "dest", None)
+							if isinstance(instr, ConstInt) and dest is not None:
+								if (fn_name, dest) not in value_types:
+									value_types[(fn_name, dest)] = self._int_type
+									changed = True
+							elif isinstance(instr, ConstBool) and dest is not None:
+								if (fn_name, dest) not in value_types:
+									value_types[(fn_name, dest)] = self._bool_type
+									changed = True
+							elif isinstance(instr, ConstString) and dest is not None:
+								if value_types.get((fn_name, dest)) != self._string_type:
+									value_types[(fn_name, dest)] = self._string_type
+									changed = True
+							elif isinstance(instr, StringLen) and dest is not None:
+								if value_types.get((fn_name, dest)) != self._uint_type:
+									value_types[(fn_name, dest)] = self._uint_type
+									changed = True
+							elif isinstance(instr, ArrayLen) and dest is not None:
+								if value_types.get((fn_name, dest)) != self._uint_type:
+									value_types[(fn_name, dest)] = self._uint_type
+									changed = True
+							elif isinstance(instr, ArrayCap) and dest is not None:
+								if value_types.get((fn_name, dest)) != self._uint_type:
+									value_types[(fn_name, dest)] = self._uint_type
+									changed = True
+							elif isinstance(instr, ArrayIndexLoad) and dest is not None:
+								if instr.elem_ty is not None and value_types.get((fn_name, dest)) != instr.elem_ty:
+									value_types[(fn_name, dest)] = instr.elem_ty
+									changed = True
+							elif isinstance(instr, ArrayLit) and dest is not None:
+								arr_ty = self._type_table.new_array(instr.elem_ty)
+								if value_types.get((fn_name, dest)) != arr_ty:
+									value_types[(fn_name, dest)] = arr_ty
+									changed = True
+							elif isinstance(instr, ConstructResultOk):
+								if dest is None:
 									continue
-							else:
-								dest_ty = self._unknown_type
-							if value_types.get((fn_name, dest)) != dest_ty:
-								value_types[(fn_name, dest)] = dest_ty
-								changed = True
-						elif isinstance(instr, MethodCall) and dest is not None:
-							# Intrinsic methods on FnResult: unwrap/unwrap_err/is_err
-							recv_ty = value_types.get((fn_name, instr.receiver))
-							if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.FNRESULT:
-								ok_ty, err_ty = self._type_table.get(recv_ty).param_types
-								if instr.method_name == "unwrap":
+								ok_ty = fn_return_parts[0] if fn_return_parts else ty_for(fn_name, instr.value)
+								err_ty = fn_return_parts[1] if fn_return_parts else self._error_type
+								dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, ConstructResultErr):
+								if dest is None:
+									continue
+								err_ty = ty_for(fn_name, instr.error)
+								ok_ty = fn_return_parts[0] if fn_return_parts else self._unknown_type
+								dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, ConstructError) and dest is not None:
+								if value_types.get((fn_name, dest)) != self._error_type:
+									value_types[(fn_name, dest)] = self._error_type
+									changed = True
+							elif isinstance(instr, ResultIsErr):
+								# result.is_err() -> Bool
+								if dest is not None and value_types.get((fn_name, dest)) != self._bool_type:
+									value_types[(fn_name, dest)] = self._bool_type
+									changed = True
+							elif isinstance(instr, ResultOk):
+								if dest is None:
+									continue
+								res_ty = ty_for(fn_name, instr.result)
+								if self._type_table.get(res_ty).kind is TypeKind.FNRESULT:
+									ok_ty, _err_ty = self._type_table.get(res_ty).param_types
 									dest_ty = ok_ty
-								elif instr.method_name == "unwrap_err":
-									dest_ty = err_ty
-								elif instr.method_name == "is_err":
-									dest_ty = self._bool_type
 								else:
 									dest_ty = self._unknown_type
-							else:
-								cands = signatures_by_display_name.get(instr.method_name, [])
-								callee_sig = cands[0] if len(cands) == 1 else None
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, ResultErr):
+								if dest is None:
+									continue
+								res_ty = ty_for(fn_name, instr.result)
+								if self._type_table.get(res_ty).kind is TypeKind.FNRESULT:
+									_ok_ty, err_ty = self._type_table.get(res_ty).param_types
+									dest_ty = err_ty
+								else:
+									dest_ty = self._unknown_type
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, Call) and dest is not None:
+								callee_sig = signatures.get(instr.fn)
 								if callee_sig is not None:
 									if callee_sig.return_type_id is None:
 										rt_id, err_id = self._resolve_signature_types(callee_sig)
 										callee_sig.return_type_id = rt_id
 										callee_sig.error_type_id = err_id
-									dest_ty = callee_sig.return_type_id or self._unknown_type
-									if is_void_tid(dest_ty):
-										continue
+									callee_can_throw = (
+										can_throw_by_name.get(instr.fn, False)
+										if can_throw_by_name is not None
+										else bool(callee_sig.declared_can_throw)
+									)
+									if callee_can_throw:
+										ok_ty = callee_sig.return_type_id or self._unknown_type
+										err_ty = callee_sig.error_type_id or self._error_type
+										dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
+									else:
+										dest_ty = callee_sig.return_type_id or self._unknown_type
+										if is_void_tid(dest_ty):
+											continue
 								else:
 									dest_ty = self._unknown_type
-							if value_types.get((fn_name, dest)) != dest_ty:
-								value_types[(fn_name, dest)] = dest_ty
-								changed = True
-						elif isinstance(instr, AssignSSA):
-							if dest is None:
-								continue
-							src_ty = value_types.get((fn_name, instr.src))
-							if src_ty is not None and value_types.get((fn_name, dest)) != src_ty:
-								value_types[(fn_name, dest)] = src_ty
-								changed = True
-						elif isinstance(instr, UnaryOpInstr):
-							if dest is None:
-								continue
-							operand_ty = ty_for(fn_name, instr.operand)
-							if value_types.get((fn_name, dest)) != operand_ty:
-								value_types[(fn_name, dest)] = operand_ty
-								changed = True
-						elif isinstance(instr, BinaryOpInstr):
-							if dest is None:
-								continue
-							left_ty = ty_for(fn_name, instr.left)
-							right_ty = ty_for(fn_name, instr.right)
-							# If both operands agree, propagate that type; otherwise fall back to Unknown.
-							dest_ty = left_ty if left_ty == right_ty else self._unknown_type
-							if value_types.get((fn_name, dest)) != dest_ty:
-								value_types[(fn_name, dest)] = dest_ty
-								changed = True
-						elif isinstance(instr, Phi):
-							if dest is None:
-								continue
-							incoming = [value_types.get((fn_name, v)) for v in instr.incoming.values()]
-							incoming = [t for t in incoming if t is not None]
-							if incoming and all(t == incoming[0] for t in incoming):
-								ty = incoming[0]
-								if value_types.get((fn_name, dest)) != ty:
-									value_types[(fn_name, dest)] = ty
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
 									changed = True
+							elif isinstance(instr, MethodCall) and dest is not None:
+								# Intrinsic methods on FnResult: unwrap/unwrap_err/is_err
+								recv_ty = value_types.get((fn_name, instr.receiver))
+								if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.FNRESULT:
+									ok_ty, err_ty = self._type_table.get(recv_ty).param_types
+									if instr.method_name == "unwrap":
+										dest_ty = ok_ty
+									elif instr.method_name == "unwrap_err":
+										dest_ty = err_ty
+									elif instr.method_name == "is_err":
+										dest_ty = self._bool_type
+									else:
+										dest_ty = self._unknown_type
+								else:
+									cands = signatures_by_display_name.get(instr.method_name, [])
+									callee_sig = cands[0] if len(cands) == 1 else None
+									if callee_sig is not None:
+										if callee_sig.return_type_id is None:
+											rt_id, err_id = self._resolve_signature_types(callee_sig)
+											callee_sig.return_type_id = rt_id
+											callee_sig.error_type_id = err_id
+										# Method resolution is name-based; for can-throw typing,
+										# consult the effective mapping when available.
+										callee_can_throw = (
+											can_throw_by_name.get(callee_sig.name, False)
+											if can_throw_by_name is not None
+											else bool(callee_sig.declared_can_throw)
+										)
+										if callee_can_throw:
+											ok_ty = callee_sig.return_type_id or self._unknown_type
+											err_ty = callee_sig.error_type_id or self._error_type
+											dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
+										else:
+											dest_ty = callee_sig.return_type_id or self._unknown_type
+											if is_void_tid(dest_ty):
+												continue
+									else:
+										dest_ty = self._unknown_type
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, AssignSSA):
+								if dest is None:
+									continue
+								src_ty = value_types.get((fn_name, instr.src))
+								if src_ty is not None and value_types.get((fn_name, dest)) != src_ty:
+									value_types[(fn_name, dest)] = src_ty
+									changed = True
+							elif isinstance(instr, UnaryOpInstr):
+								if dest is None:
+									continue
+								operand_ty = ty_for(fn_name, instr.operand)
+								if value_types.get((fn_name, dest)) != operand_ty:
+									value_types[(fn_name, dest)] = operand_ty
+									changed = True
+							elif isinstance(instr, BinaryOpInstr):
+								if dest is None:
+									continue
+								left_ty = ty_for(fn_name, instr.left)
+								right_ty = ty_for(fn_name, instr.right)
+								# If both operands agree, propagate that type; otherwise fall back to Unknown.
+								dest_ty = left_ty if left_ty == right_ty else self._unknown_type
+								if value_types.get((fn_name, dest)) != dest_ty:
+									value_types[(fn_name, dest)] = dest_ty
+									changed = True
+							elif isinstance(instr, Phi):
+								if dest is None:
+									continue
+								incoming = [value_types.get((fn_name, v)) for v in instr.incoming.values()]
+								incoming = [t for t in incoming if t is not None]
+								if incoming and all(t == incoming[0] for t in incoming):
+									ty = incoming[0]
+									if value_types.get((fn_name, dest)) != ty:
+										value_types[(fn_name, dest)] = ty
+										changed = True
 
-					term = block.terminator
-					if hasattr(term, "value") and getattr(term, "value") is not None:
-						val = term.value
-						# Do not overwrite an existing concrete type; only seed a type for
-						# returns that have not been seen yet.
-						if (fn_name, val) not in value_types and not fn_is_void:
-							if fn_return_parts is not None:
-								ty = self._type_table.new_fnresult(fn_return_parts[0], fn_return_parts[1])
-							else:
-								ty = self._unknown_type
-							value_types[(fn_name, val)] = ty
-							changed = True
+						term = block.terminator
+						if hasattr(term, "value") and getattr(term, "value") is not None:
+							val = term.value
+							# Do not overwrite an existing concrete type; only seed a type for
+							# returns that have not been seen yet.
+							if (fn_name, val) not in value_types and not fn_is_void:
+								if fn_return_parts is not None:
+									ty = self._type_table.ensure_fnresult(fn_return_parts[0], fn_return_parts[1])
+								else:
+									ty = self._unknown_type
+								value_types[(fn_name, val)] = ty
+								changed = True
 
 		if not value_types:
 			return None

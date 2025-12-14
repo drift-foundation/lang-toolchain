@@ -17,7 +17,7 @@ from lang2.driftc import stage1 as H
 def test_catch_binder_and_no_binder():
 	"""First arm has a binder, second does not; binder produces a StoreLocal."""
 	builder = MirBuilder(name="try_binder_shapes")
-	lower = HIRToMIR(builder, exc_env={"EvtA": 1, "EvtB": 2})
+	lower = HIRToMIR(builder, exc_env={"m:EvtA": 1, "m:EvtB": 2}, can_throw_by_name={"try_binder_shapes": True})
 
 	hir = H.HBlock(
 		statements=[
@@ -48,7 +48,7 @@ def test_unknown_event_name_matches_via_code_zero():
 	so the dispatch still matches.
 	"""
 	builder = MirBuilder(name="try_unknown_event")
-	lower = HIRToMIR(builder, exc_env={})
+	lower = HIRToMIR(builder, exc_env={}, can_throw_by_name={"try_unknown_event": True})
 
 	hir = H.HBlock(
 		statements=[
@@ -74,7 +74,7 @@ def test_outer_catch_all_catches_unmatched_inner():
 	Inner try has no matching arm; outer catch-all should receive the propagated error.
 	"""
 	builder = MirBuilder(name="try_outer_catch_all")
-	lower = HIRToMIR(builder, exc_env={"Inner": 1})
+	lower = HIRToMIR(builder, exc_env={"m:Inner": 1})
 
 	inner_try = H.HTry(
 		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:Inner", field_names=[], field_values=[]))]),

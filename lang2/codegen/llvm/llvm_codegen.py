@@ -63,11 +63,15 @@ from lang2.driftc.stage2 import (
 	LoadLocal,
 	OptionalIsSome,
 	OptionalValue,
+	ResultErr,
+	ResultIsErr,
+	ResultOk,
 	Goto,
 	IfTerminator,
 	MirFunc,
 	Phi,
 	Return,
+	Unreachable,
 	StringConcat,
 	StringEq,
 	StringLen,
@@ -193,6 +197,7 @@ class LlvmModuleBuilder:
 	needs_error_runtime: bool = False
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
+	_fnresult_ok_llty_by_type: Dict[str, str] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if DRIFT_SIZE_TYPE.startswith("%"):
@@ -211,6 +216,7 @@ class LlvmModuleBuilder:
 		)
 		# Seed the canonical FnResult types for supported ok payloads.
 		self._fnresult_types_by_key["Int"] = FNRESULT_INT_ERROR
+		self._fnresult_ok_llty_by_type[FNRESULT_INT_ERROR] = "i64"
 		self._declare_fnresult_named_type("Void", "i8", "%FnResult_Void_Error")
 		self._declare_fnresult_named_type("String", DRIFT_STRING_TYPE, "%FnResult_String_Error")
 
@@ -243,6 +249,7 @@ class LlvmModuleBuilder:
 		type_name = name or f"%FnResult_{ok_key}_Error"
 		self.type_decls.append(f"{type_name} = type {{ i1, {ok_llty}, {DRIFT_ERROR_PTR} }}")
 		self._fnresult_types_by_key[ok_key] = type_name
+		self._fnresult_ok_llty_by_type[type_name] = ok_llty
 		return type_name
 
 	def emit_func(self, text: str) -> None:
@@ -581,27 +588,65 @@ class _FuncBuilder:
 			self._lower_binary(instr)
 		elif isinstance(instr, Call):
 			self._lower_call(instr)
+		elif isinstance(instr, ResultIsErr):
+			dest = self._map_value(instr.dest)
+			res = self._map_value(instr.result)
+			fnres_llty = self.value_types.get(res)
+			if fnres_llty is None:
+				raise NotImplementedError("LLVM codegen v1: ResultIsErr requires a typed FnResult value")
+			self.lines.append(f"  {dest} = extractvalue {fnres_llty} {res}, 0")
+			self.value_types[dest] = "i1"
+		elif isinstance(instr, ResultOk):
+			dest = self._map_value(instr.dest)
+			res = self._map_value(instr.result)
+			fnres_llty = self.value_types.get(res)
+			if fnres_llty is None:
+				raise NotImplementedError("LLVM codegen v1: ResultOk requires a typed FnResult value")
+			ok_llty = self.module._fnresult_ok_llty_by_type.get(fnres_llty)
+			if ok_llty is None:
+				raise NotImplementedError(f"LLVM codegen v1: unknown FnResult layout for {fnres_llty}")
+			self.lines.append(f"  {dest} = extractvalue {fnres_llty} {res}, 1")
+			self.value_types[dest] = ok_llty
+		elif isinstance(instr, ResultErr):
+			dest = self._map_value(instr.dest)
+			res = self._map_value(instr.result)
+			fnres_llty = self.value_types.get(res)
+			if fnres_llty is None:
+				raise NotImplementedError("LLVM codegen v1: ResultErr requires a typed FnResult value")
+			self.lines.append(f"  {dest} = extractvalue {fnres_llty} {res}, 2")
+			self.value_types[dest] = DRIFT_ERROR_PTR
 		elif isinstance(instr, ConstructResultOk):
 			if not self.fn_info.declared_can_throw:
 				raise NotImplementedError(
 					f"LLVM codegen v1: FnResult construction in non-can-throw function {self.fn_info.name} is not allowed"
 				)
 			dest = self._map_value(instr.dest)
-			val = self._map_value(instr.value)
 			ok_llty, fnres_llty = self._fnresult_types_for_current_fn()
 			self.value_types[dest] = fnres_llty
-			val_ty = self.value_types.get(val)
-			if val_ty is not None and ok_llty == "ptr":
-				if val_ty != "ptr":
+			if instr.value is None:
+				# Surface `return;` in a can-throw `returns Void` function: there is no
+				# user-level ok payload. We synthesize a dummy i8 slot value for the
+				# internal FnResult ok field.
+				if ok_llty != "i8":
+					raise NotImplementedError(
+						f"LLVM codegen v1: ConstructResultOk(None) is only valid for Void ok payloads; "
+						f"function {self.fn_info.name} has ok payload type {ok_llty}"
+					)
+				val = "0"
+			else:
+				val = self._map_value(instr.value)
+				val_ty = self.value_types.get(val)
+				if val_ty is not None and ok_llty == "ptr":
+					if val_ty != "ptr":
+						raise NotImplementedError(
+							f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
+							f"have {val_ty}, expected ptr"
+						)
+				elif val_ty is not None and val_ty != ok_llty:
 					raise NotImplementedError(
 						f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
-						f"have {val_ty}, expected ptr"
+						f"have {val_ty}, expected {ok_llty}"
 					)
-			elif val_ty is not None and val_ty != ok_llty:
-				raise NotImplementedError(
-					f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
-					f"have {val_ty}, expected {ok_llty}"
-				)
 			tmp0 = self._fresh("ok0")
 			tmp1 = self._fresh("ok1")
 			err_zero = f"{DRIFT_ERROR_PTR} null"
@@ -861,13 +906,11 @@ class _FuncBuilder:
 		args = ", ".join(arg_parts)
 
 		if callee_info.declared_can_throw:
-			ok_llty, fnres_llty = self._fnresult_types_for_fn(callee_info)
-			tmp = self._fresh("call")
-			self.lines.append(f"  {tmp} = call {fnres_llty} @{instr.fn}({args})")
-			self.value_types[tmp] = fnres_llty
-			if dest:
-				self.lines.append(f"  {dest} = extractvalue {fnres_llty} {tmp}, 1")
-				self.value_types[dest] = ok_llty
+			_, fnres_llty = self._fnresult_types_for_fn(callee_info)
+			if dest is None:
+				raise AssertionError("can-throw calls must preserve their FnResult value (MIR bug)")
+			self.lines.append(f"  {dest} = call {fnres_llty} @{instr.fn}({args})")
+			self.value_types[dest] = fnres_llty
 		else:
 			ret_tid = None
 			if callee_info.signature and callee_info.signature.return_type_id is not None:
@@ -896,6 +939,16 @@ class _FuncBuilder:
 				f"  br i1 {cond}, label %{term.then_target}, label %{term.else_target}"
 			)
 		elif isinstance(term, Return):
+			if self.fn_info.declared_can_throw:
+				# Can-throw functions always return the internal `FnResult<ok, Error>`
+				# carrier type, even when the surface ok type is `Void`.
+				if term.value is None:
+					raise AssertionError("can-throw function reached a bare return (MIR bug)")
+				val = self._map_value(term.value)
+				fnres_llty = self._fnresult_type_for_current_fn()
+				self.lines.append(f"  ret {fnres_llty} {val}")
+				return
+
 			is_void = self._is_void_return()
 			if is_void and term.value is not None:
 				raise AssertionError("Void function must not return a value (MIR bug)")
@@ -905,19 +958,17 @@ class _FuncBuilder:
 				self.lines.append("  ret void")
 				return
 			val = self._map_value(term.value)
-			if self.fn_info.declared_can_throw:
-				fnres_llty = self._fnresult_type_for_current_fn()
-				self.lines.append(f"  ret {fnres_llty} {val}")
+			ty = self.value_types.get(val)
+			if ty == DRIFT_STRING_TYPE:
+				self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
+			elif ty in ("i64", DRIFT_SIZE_TYPE):
+				self.lines.append(f"  ret i64 {val}")
 			else:
-				ty = self.value_types.get(val)
-				if ty == DRIFT_STRING_TYPE:
-					self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
-				elif ty in ("i64", DRIFT_SIZE_TYPE):
-					self.lines.append(f"  ret i64 {val}")
-				else:
-					raise NotImplementedError(
-						f"LLVM codegen v1: non-can-throw return must be Int or String, got {ty}"
-					)
+				raise NotImplementedError(
+					f"LLVM codegen v1: non-can-throw return must be Int or String, got {ty}"
+				)
+		elif isinstance(term, Unreachable):
+			self.lines.append("  unreachable")
 		else:
 			raise NotImplementedError(f"LLVM codegen v1: unsupported terminator {type(term).__name__}")
 
@@ -1038,27 +1089,45 @@ class _FuncBuilder:
 		return "i64"
 
 	def _fnresult_typeids_for_fn(self, info: FnInfo | None = None) -> tuple[TypeId, TypeId]:
-		"""Extract (ok, err) TypeIds from a FnResult return type for the given function."""
+		"""
+		Return (ok, err) TypeIds for the internal can-throw ABI of a function.
+
+		Important: `FnResult` is an *internal* carrier type in lang2. Surface
+		signatures still declare `returns T`, and can-throw is an effect tracked
+		separately (via `FnInfo.declared_can_throw`). Codegen lowers can-throw
+		functions to return `FnResult<T, Error>`, deriving `T` from the signature's
+		`return_type_id` and `Error` from the shared TypeTable.
+
+		We keep a legacy fallback: older tests may still model can-throw functions
+		as explicitly returning `FnResult<_, Error>` at the signature level. In that
+		case we extract `(ok, err)` from the signature's return type directly.
+		"""
 		fn = info or self.fn_info
-		ret_tid: TypeId | None = None
+		ok_tid: TypeId | None = None
 		if fn.signature is not None and fn.signature.return_type_id is not None:
-			ret_tid = fn.signature.return_type_id
+			ok_tid = fn.signature.return_type_id
 		elif fn.return_type_id is not None:
-			ret_tid = fn.return_type_id
-		if ret_tid is None:
+			ok_tid = fn.return_type_id
+		if ok_tid is None:
 			raise NotImplementedError(
-				f"LLVM codegen v1: missing FnResult return type for function {fn.name}"
+				f"LLVM codegen v1: missing return type for can-throw function {fn.name}"
 			)
 		if self.type_table is None:
 			raise NotImplementedError(
 				"LLVM codegen v1: FnResult lowering requires a TypeTable for can-throw functions"
 			)
-		td = self.type_table.get(ret_tid)
-		if td.kind is not TypeKind.FNRESULT or len(td.param_types) < 2:
-			raise NotImplementedError(
-				f"LLVM codegen v1: function {fn.name} return type is not FnResult<_, Error>"
-			)
-		return td.param_types[0], td.param_types[1]
+		td = self.type_table.get(ok_tid)
+		if td.kind is TypeKind.FNRESULT and len(td.param_types) >= 2:
+			# Legacy surface model: signature already carries FnResult.
+			return td.param_types[0], td.param_types[1]
+		err_tid = None
+		if fn.signature is not None and fn.signature.error_type_id is not None:
+			err_tid = fn.signature.error_type_id
+		elif fn.error_type_id is not None:
+			err_tid = fn.error_type_id
+		else:
+			err_tid = self.type_table.ensure_error()
+		return ok_tid, err_tid
 
 	def _fnresult_types_for_fn(self, info: FnInfo) -> tuple[str, str]:
 		"""Return (ok_llty, fnresult_llty) for the given FnInfo."""

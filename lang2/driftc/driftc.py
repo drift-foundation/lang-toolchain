@@ -162,7 +162,16 @@ def compile_stubbed_funcs(
 		hir_blocks=func_hirs,
 		type_table=shared_type_table,
 	)
-	checked = checker.check(func_hirs.keys())
+	# Important: the checker needs metadata for both:
+	# - functions we are compiling (have HIR bodies), and
+	# - functions we only know by signature (callees, intrinsics, externs).
+	#
+	# Several downstream phases (HIR→MIR lowering and SSA typing) consult the
+	# checker's `FnInfo` map to decide whether a callee is can-throw.
+	decl_names: set[str] = set(func_hirs.keys())
+	if signatures is not None:
+		decl_names.update(signatures.keys())
+	checked = checker.check(sorted(decl_names))
 	# Ensure declared_can_throw is a bool for downstream stages; guard against
 	# accidental truthy objects sneaking in from legacy shims.
 	for info in checked.fn_infos.values():
@@ -189,6 +198,7 @@ def compile_stubbed_funcs(
 			exc_env=exc_env,
 			param_types=param_types,
 			signatures=signatures,
+			can_throw_by_name=declared,
 			return_type=sig.return_type_id if sig is not None else None,
 		).lower_block(hir_norm)
 		if sig is not None and sig.param_names is not None:
@@ -206,7 +216,7 @@ def compile_stubbed_funcs(
 		ssa_funcs = {name: MirToSSA().run(func) for name, func in mir_funcs.items()}
 		if type_env is None:
 			# First preference: checker-owned SSA typing using TypeIds + signatures.
-			type_env = checker.build_type_env_from_ssa(ssa_funcs, signatures or {})
+			type_env = checker.build_type_env_from_ssa(ssa_funcs, signatures or {}, can_throw_by_name=declared)
 			checked.type_env = type_env
 		if type_env is None and signatures is not None:
 			# Fallback: minimal checker TypeEnv that tags return SSA values with the
@@ -252,6 +262,21 @@ def compile_to_llvm_ir_for_tests(
 	# Ensure prelude signatures are present for tests that bypass the CLI.
 	shared_type_table = type_table or TypeTable()
 	_inject_prelude(signatures, shared_type_table)
+
+	# In the real compiler, any error diagnostics stop the pipeline before
+	# lowering/codegen. Mirror that in tests so negative cases can assert on
+	# diagnostics without tripping MIR/LLVM invariants (assertions).
+	precheck = Checker(
+		declared_can_throw=None,
+		signatures=signatures,
+		exception_catalog=exc_env,
+		hir_blocks=dict(func_hirs),
+		type_table=shared_type_table,
+	)
+	prechecked = precheck.check(func_hirs.keys())
+	if any(d.severity == "error" for d in prechecked.diagnostics):
+		return "", prechecked
+
 	# First, run the normal pipeline to get MIR + FnInfos + SSA (and diagnostics).
 	mir_funcs, checked, ssa_funcs = compile_stubbed_funcs(
 		func_hirs=func_hirs,

@@ -1477,6 +1477,7 @@ val routed = try parse(input) catch BadFormat(e) { 0 } catch { 1 }
   - `catch e { block }` — catch-all, binder `e: Error`.
   - `catch EventName(e) { block }` — match specific event, binder `e: Error`.
 - Multiple catch arms are allowed; event arms are tested in source order, then catch-all; if no arm matches and there is no catch-all, the error is rethrown.
+- Catch blocks in expression form may **not** contain `return`, `break`, `continue`, or `rethrow`; they must evaluate to a value whose type matches the attempt. Violation diagnostic: **E-TRYEXPR-CONTROLFLOW** (“control-flow statement not allowed in try-expression catch block; use statement try { ... } catch { ... } instead”).
 - Event identity is by event name in source; lowering compares deterministic `event_code` constants derived from the fully-qualified event name (§14.1.1). The runtime never matches on strings.
 - The **attempt must be a function call** (`Name` or `Name.Attr`); non-call attempts are a compile-time error in the current revision.
 - This is sugar for a block-wrapped statement `try/catch` that returns the block’s value.
@@ -2052,12 +2053,12 @@ Drift’s exception system is designed to:
 
 ### 14.1.1. Source identity vs. runtime identity
 
-- **Source identity** of an exception event is its fully-qualified name `"<module_name>.<submodule...>:<event_name>"` (canonical, no aliases). Catch clauses must spell this FQN explicitly; the compiler does not add an implicit module prefix. Non-canonical/ambiguous names are rejected.
+- **Source identity** of an exception event is its fully-qualified name `"<module_name>.<submodule...>:<event>"` (canonical, no aliases). Catch clauses must spell this FQN explicitly; the compiler does not add an implicit module prefix. Non-canonical/ambiguous names are rejected.
 - **Runtime identity** is a deterministic 64-bit `event_code = hash_v1(fqn_utf8_bytes)` (UTF-8 of the canonical FQN); users never type or see codes.
 - `catch m:Evt` lowers to `if err.event_code == hash_v1(fqn)`; matching is by code, derived from the resolved FQN with the `:` delimiter.
 - `event_code == 0` is reserved for **unknown/unmapped** events (e.g., absent catalog entry); user-defined events must never deliberately use code 0.
 - Collisions detected during compilation are fatal within the build; if/when multi-module linking is introduced, collision handling must remain deterministic.
-- `event_name()` returns the stored canonical FQN string for logging/telemetry; it is never used for control flow or matching.
+- `event_fqn()` returns the stored canonical FQN string label for logging/telemetry; it is never used for control flow or matching.
 
 ---
 
@@ -2066,7 +2067,7 @@ Drift’s exception system is designed to:
 ```drift
 struct Error {
     event_code: Uint64,                        // stable, required
-    event_name: String,                        // canonical FQN label (for logging/telemetry only)
+    event_fqn: String,                         // canonical FQN label (for logging/telemetry only)
     attrs: Map<String, DiagnosticValue>,       // see §5.13.7, §14.3
     ctx_frames: Array<CtxFrame>,               // captured locals per frame
     stack: BacktraceHandle                     // opaque backtrace
@@ -2079,7 +2080,7 @@ exception IndexError {
 ```
 
 #### 14.2.1. event_code
-Deterministic 64-bit code derived from the exception’s fully-qualified name (`Module.ExceptionName`) using the frozen hash (§14.1.1). This is the **only** runtime routing key. `0` is reserved for unknown/unmapped events and must not be produced by user-declared exceptions.
+Deterministic 64-bit code derived from the exception’s fully-qualified name (`"<module>.<submodules>:<event>"`) using the frozen hash (§14.1.1). This is the **only** runtime routing key. `0` is reserved for unknown/unmapped events and must not be produced by user-declared exceptions.
 
 #### 14.2.2. attrs
 All exception attributes as typed `DiagnosticValue` entries (see §5.13.8). Values are produced via `Diagnostic.to_diag()`; no stringification is implied. Any value recorded in `Error.attrs` (exception fields or later-added attrs) must implement `Diagnostic`; attempting to attach a non-Diagnostic value is a compile-time error.
@@ -2099,8 +2100,8 @@ Event attrs never appear here.
 #### 14.2.4. stack
 Opaque captured backtrace.
 
-#### 14.2.5. event_name
-Canonical FQN string label (`"<module>.<submodules>:<event>"`) stored with the error. It is **not** used for matching or ABI; matching is by `event_code`. Exposed via `event_name()` for logging/telemetry.
+#### 14.2.5. event_fqn
+Canonical FQN string label (`"<module>.<submodules>:<event>"`) stored with the error. It is **not** used for matching; matching is by `event_code`. Exposed via `event_fqn()` for logging/telemetry.
 
 ---
 
@@ -2139,7 +2140,7 @@ Field syntax uses `=` and identifiers only; `{ key: value }` remains a map liter
 Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a typed `DiagnosticValue`.
 
 #### 14.3.4. Event code derivation and collision policy
-- Canonical FQN string: `"<module_name>.<submodule...>:<event_name>"` with UTF-8 encoding, no aliases or whitespace.
+- Canonical FQN string: `"<module_name>.<submodule...>:<event>"` with UTF-8 encoding, no aliases or whitespace.
 - Hash algorithm: `hash_v1(fqn_utf8_bytes)` (frozen; currently xxhash64, truncated/encoded as unsigned 64-bit).
 - Runtime routing key: `event_code = hash_v1(fqn_utf8_bytes)`.
 - Collision policy: any collision detected within a build is a **compile-time error**. If cross-module linking is introduced, collision handling must remain deterministic; with FQN input the practical risk is negligible.
@@ -2258,10 +2259,10 @@ When a function is part of a module’s exported interface (Chapter 7.2), the `R
 
 Drift distinguishes **can-throw** functions from **non-throwing** ones and enforces the contract statically:
 
-- **Declaring can-throw.** A function is can-throw when its signature returns `FnResult<Ok, Error>` or it is explicitly marked as can-throw (exports are always can-throw entry points; future annotations may mark others). Functions without `FnResult<_, Error>` are treated as non-throwing unless declared otherwise.
-- **Non-throwing invariants.** A non-throwing function must not use `throw`/`raise`, must not construct an `Error`, and must not return `FnResult<_, Error>`. It may call can-throw functions only if it handles their failures locally (e.g., via `try/catch`) and returns a plain `Ok` type. Violations are compile-time errors tied to the source span of the offending throw/return.
-- **Can-throw invariants.** A can-throw function’s signature must use `FnResult<Ok, Error>`, and every `return` must supply a value built as `Result.Ok` or `Result.Err`. The `Error` slot in `FnResult` is always the canonical `Error` type; no other error type is permitted.
-- **ABI clarity.** Can-throw functions use the `Result<T, Error>` calling convention; non-throwing functions use plain returns. Mixing the two is rejected rather than silently coerced.
+- **Can-throw is an effect, not a type.** Surface signatures remain `fn f(...) returns T`. A function is considered can-throw when its body may throw (via `throw`/`rethrow` or uncaught calls to other can-throw functions). Future annotations (e.g. `nothrow`) may constrain this.
+- **Non-throwing invariants.** A non-throwing function must not use `throw`/`raise`/`rethrow`, must not construct an `Error`, and must not allow an exception to escape. It may call can-throw functions only if it handles failures locally (e.g., via `try/catch`) and still returns a plain `T`. Violations are compile-time errors tied to the source span of the offending statement/expression.
+- **Can-throw invariants.** A can-throw function may throw and may call other can-throw functions without local handling; exceptions propagate to the nearest enclosing `try/catch` or to the caller.
+- **ABI clarity.** The compiler lowers can-throw functions to the internal `Result<T, Error>` calling convention for codegen/ABI purposes (not a surface-level type). Non-throwing functions use plain returns internally; exported functions always use the `Result<T, Error>` ABI at module boundaries. Mixing conventions within a single call boundary is rejected rather than silently coerced.
 
 These rules keep the error model explicit, prevent accidental unwinding from non-throwing code, and make cross-module ABIs predictable.
 
@@ -2290,7 +2291,8 @@ Serialization/logging is implementation-defined. A possible JSON shape:
 
 ```json
 {
-  "event": "InvalidOrder",
+  "event_fqn": "orders:InvalidOrder",
+  "event_code": "0x1…",
   "attrs": { "order_id": 42, "code": "order.invalid" },
   "ctx_frames": [
     { "fn_name": "ship", "locals": { "record.id": "42" }},

@@ -27,7 +27,7 @@ def test_throw_lowers_to_error_and_result_err_return():
 	  - Return that result.
 	"""
 	builder = MirBuilder(name="throw_fn")
-	lower = HIRToMIR(builder)
+	lower = HIRToMIR(builder, can_throw_by_name={"throw_fn": True})
 
 	exc = H.HExceptionInit(
 		event_fqn="m:Boom",
@@ -67,7 +67,7 @@ def test_exception_init_throw_attaches_all_fields():
 	  - field 'b' under its declared name
 	"""
 	builder = MirBuilder(name="throw_exc")
-	lower = HIRToMIR(builder)
+	lower = HIRToMIR(builder, can_throw_by_name={"throw_exc": True})
 
 	exc = H.HExceptionInit(
 		event_fqn="m:Evt",

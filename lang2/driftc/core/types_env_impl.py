@@ -71,8 +71,9 @@ class InferredTypeEnv(TypeEnv):
 	Best-effort TypeEnv built from SSA functions and (optional) signatures.
 
 	This recognizes FnResult values produced by ConstructResultOk/Err and by
-	function/method calls whose signatures return FnResult. AssignSSA copies and
-	Phi nodes propagate types when incoming values agree.
+	function/method calls whose signatures are marked can-throw (lang2 internal
+	ABI uses FnResult as the carrier). AssignSSA copies and Phi nodes propagate
+	types when incoming values agree.
 	"""
 
 	def __init__(self, types: Mapping[tuple[str, str], Any]) -> None:
@@ -106,8 +107,8 @@ def build_type_env_from_ssa(
 	Derive a TypeEnv from SSA functions and (optionally) known signatures.
 
 	Recognizes FnResult values produced by ConstructResultOk/Err and by calls
-	with FnResult return types. Propagates types through AssignSSA and simple
-	Phi nodes when incoming types agree.
+	to can-throw callees (internal ABI returns FnResult). Propagates types
+	through AssignSSA and simple Phi nodes when incoming types agree.
 	"""
 	types: Dict[tuple[str, str], Any] = {}
 	sig_map = signatures or {}
@@ -123,6 +124,18 @@ def build_type_env_from_ssa(
 		if isinstance(ty, str):
 			return ty == "Void"
 		return False
+
+	def fnresult_from_signature(sig: FnSignature) -> Any:
+		"""
+		Build an opaque FnResult type handle for a can-throw signature.
+
+		We keep this TypeEnv intentionally lightweight: the returned handle is a
+		shape that `_is_fnresult_type` recognizes and that `fnresult_parts` can
+		decompose when stage4 wants to compare ok/err parts.
+		"""
+		ok_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
+		err_ty = sig.error_type_id if sig.error_type_id is not None else None
+		return ("FnResult", ok_ty, err_ty)
 
 	for fname, ssa in ssa_funcs.items():
 		# Seed parameter types from signatures when available so downstream
@@ -142,17 +155,23 @@ def build_type_env_from_ssa(
 				elif isinstance(instr, Call) and instr.dest is not None:
 					sig = sig_map.get(instr.fn)
 					if sig is not None:
-						ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
-						if is_void(ret_ty):
-							continue
-						types[(fname, instr.dest)] = ret_ty
+						if sig.declared_can_throw:
+							types[(fname, instr.dest)] = fnresult_from_signature(sig)
+						else:
+							ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
+							if is_void(ret_ty):
+								continue
+							types[(fname, instr.dest)] = ret_ty
 				elif isinstance(instr, MethodCall) and instr.dest is not None:
 					sig = sig_map.get(instr.method_name)
 					if sig is not None:
-						ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
-						if is_void(ret_ty):
-							continue
-						types[(fname, instr.dest)] = ret_ty
+						if sig.declared_can_throw:
+							types[(fname, instr.dest)] = fnresult_from_signature(sig)
+						else:
+							ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
+							if is_void(ret_ty):
+								continue
+							types[(fname, instr.dest)] = ret_ty
 				elif isinstance(instr, AssignSSA):
 					src_ty = types.get((fname, instr.src))
 					if src_ty is not None:
@@ -163,15 +182,13 @@ def build_type_env_from_ssa(
 					if len(incoming_tys) == 1:
 						types[(fname, instr.dest)] = incoming_tys.pop()
 
-		# Second pass: if the function's own return type is FnResult and a return
-		# value is missing a type, seed it from the signature so type-aware throw
-		# checks have something to work with even when inference failed.
+		# Second pass: if the function is can-throw (internal ABI returns FnResult)
+		# and a return value is missing a type, seed it from the signature so
+		# type-aware throw checks have something to work with even when inference
+		# failed.
 		fn_sig = sig_map.get(fname)
-		if fn_sig:
-			ret_ty = fn_sig.return_type_id if fn_sig.return_type_id is not None else fn_sig.return_type
-		else:
-			ret_ty = None
-		if ret_ty and _is_fnresult_type(ret_ty):
+		if fn_sig and fn_sig.declared_can_throw:
+			ret_ty = fnresult_from_signature(fn_sig)
 			for block in ssa.func.blocks.values():
 				term = block.terminator
 				if hasattr(term, "value") and getattr(term, "value") is not None:

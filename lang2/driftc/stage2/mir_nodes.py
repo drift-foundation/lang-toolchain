@@ -240,9 +240,19 @@ class ErrorAddAttrDV(MInstr):
 
 @dataclass
 class ConstructResultOk(MInstr):
-	"""Construct FnResult.Ok(value)."""
+	"""
+	Construct FnResult.Ok(value).
+
+	In the surface language, functions may be "can-throw" (exceptional control
+	flow) while still declaring `returns T`. Internally, the compiler lowers
+	can-throw functions to return `FnResult<T, Error>`.
+
+	For `T = Void`, there is no surface value to carry. In that case `value`
+	must be `None` and codegen will synthesize a dummy ok payload in the
+	internal ABI slot.
+	"""
 	dest: ValueId
-	value: ValueId
+	value: ValueId | None
 
 
 @dataclass
@@ -250,6 +260,30 @@ class ConstructResultErr(MInstr):
 	"""Construct FnResult.Err(error)."""
 	dest: ValueId
 	error: ValueId
+
+
+@dataclass
+class ResultIsErr(MInstr):
+	"""dest = result.is_err (Bool)."""
+
+	dest: ValueId
+	result: ValueId
+
+
+@dataclass
+class ResultOk(MInstr):
+	"""dest = result.ok (undefined if result is Err)."""
+
+	dest: ValueId
+	result: ValueId
+
+
+@dataclass
+class ResultErr(MInstr):
+	"""dest = result.err (Error handle; undefined if result is Ok)."""
+
+	dest: ValueId
+	result: ValueId
 
 
 @dataclass
@@ -375,6 +409,19 @@ class Return(MTerminator):
 	value: Optional[ValueId]
 
 
+@dataclass
+class Unreachable(MTerminator):
+	"""
+	Terminator for an unreachable control-flow path.
+
+	This is used as a defensive invariant marker when earlier stages guarantee
+	that a path cannot be taken (e.g., "uncaught error reaches a non-can-throw
+	function"). Lowering should not crash the compiler in these cases; instead
+	we encode the invariant into MIR and let LLVM emit `unreachable`.
+	"""
+
+
+
 # Containers
 
 @dataclass
@@ -431,6 +478,9 @@ __all__ = [
 	"ErrorAddAttrDV",
 	"ConstructResultOk",
 	"ConstructResultErr",
+	"ResultIsErr",
+	"ResultOk",
+	"ResultErr",
 	"ErrorAttrsGetDV",
 	"OptionalIsSome",
 	"OptionalValue",
@@ -444,6 +494,7 @@ __all__ = [
 	"Goto",
 	"IfTerminator",
 	"Return",
+	"Unreachable",
 	"BasicBlock",
 	"MirFunc",
 ]

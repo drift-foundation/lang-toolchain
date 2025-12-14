@@ -27,7 +27,7 @@ def test_throw_b_skips_inner_catch_a_hits_outer_catch_b():
 	"""
 	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_inner_outer_events")
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"legacy_inner_outer_events": True})
 
 	inner_try = H.HTry(
 		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtB", field_names=[], field_values=[]))]),
@@ -71,7 +71,7 @@ def test_multi_event_with_catch_all_matches_specific_arm():
 	"""
 	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_multi_event")
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"legacy_multi_event": True})
 
 	hir = H.HBlock(
 		statements=[
@@ -114,7 +114,7 @@ def test_throw_inside_catch_rethrows_to_outer_try():
 	"""
 	exc_env = {"m:EvtA": 1, "m:EvtB": 2}
 	builder = MirBuilder(name="legacy_throw_in_catch")
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"legacy_throw_in_catch": True})
 
 	inner_try = H.HTry(
 		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtA", field_names=[], field_values=[]))]),
@@ -164,7 +164,7 @@ def test_inner_catch_all_handles_error_before_outer_specific_arm():
 	"""
 	exc_env = {"m:EvtX": 7}
 	builder = MirBuilder(name="legacy_inner_catchall_outer_specific")
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"legacy_inner_catchall_outer_specific": True})
 
 	inner_try = H.HTry(
 		body=H.HBlock(statements=[H.HThrow(value=H.HExceptionInit(event_fqn="m:EvtX", field_names=[], field_values=[]))]),
@@ -198,7 +198,7 @@ def test_inner_matching_catch_handles_and_stops_propagation():
 	"""
 	exc_env = {"m:EvtInner": 11, "m:EvtOuter": 22}
 	builder = MirBuilder(name="legacy_inner_matches")
-	lower = HIRToMIR(builder, exc_env=exc_env)
+	lower = HIRToMIR(builder, exc_env=exc_env, can_throw_by_name={"legacy_inner_matches": True})
 
 	hir = H.HBlock(
 		statements=[
