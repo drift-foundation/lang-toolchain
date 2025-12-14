@@ -49,6 +49,8 @@ from .ast import (
     BreakStmt,
     ContinueStmt,
     Unary,
+    FString,
+    FStringHole,
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
@@ -66,6 +68,217 @@ def _decode_string_token(tok: Token) -> str:
 	unescaped = codecs.decode(content, "unicode_escape")
 	raw_bytes = unescaped.encode("latin-1")
 	return raw_bytes.decode("utf-8")
+
+
+def _decode_string_fragment(raw: str) -> str:
+	"""
+	Decode the contents of a string *fragment* using the same escape rules as STRING.
+
+	This is used by the f-string parser to decode text parts that are split by holes.
+	The input must be the raw source substring *inside* the quotes (i.e., it may
+	contain backslash escapes like `\\n` or `\\xNN`).
+	"""
+	unescaped = codecs.decode(raw, "unicode_escape")
+	raw_bytes = unescaped.encode("latin-1")
+	return raw_bytes.decode("utf-8")
+
+
+_EXPR_PARSER = Lark(
+	_GRAMMAR_SRC,
+	parser="lalr",
+	lexer="basic",
+	start="expr",
+	propagate_positions=True,
+	maybe_placeholders=False,
+)
+
+
+def _parse_expr_fragment(source: str) -> Expr:
+	"""
+	Parse a Drift expression from a source fragment.
+
+	This helper is used for f-string holes. The grammar is shared with the main
+	parser, but the start rule is `expr` and no newline-terminator insertion is
+	performed (holes never contain newlines because string literals don't).
+	"""
+	tree = _EXPR_PARSER.parse(source)
+	return _build_expr(tree)
+
+
+class FStringParseError(ValueError):
+	"""
+	Error raised while parsing an f-string literal.
+
+	This is intentionally a `ValueError` subclass so existing parser plumbing can
+continue to treat it as a parse-time failure, but it carries a best-effort
+location (`loc`) so callers can convert it into a structured diagnostic instead
+of crashing the compiler.
+	"""
+
+	def __init__(self, message: str, *, loc: "Located") -> None:
+		super().__init__(message)
+		self.loc = loc
+
+
+def _parse_fstring(loc: Located, raw_string_token: Token) -> FString:
+	"""
+	Parse a raw STRING token (including braces) into an f-string AST.
+
+	The main grammar tokenizes the interior of the f-string as a normal STRING token
+	so we can reuse the existing string escape rules. This function is responsible
+	for:
+	- splitting text vs `{...}` holes,
+	- supporting brace escaping via `{{` / `}}`,
+	- extracting the hole expression and optional `:spec` substring, and
+	- producing accurate-ish hole locations (line/column within the string).
+
+	MVP limitations:
+	- spec strings are opaque and must not contain `{` or `}`.
+	- errors are reported as `FStringParseError` and converted into diagnostics.
+	"""
+	raw = raw_string_token.value[1:-1]  # strip quotes, keep escapes
+
+	parts: list[str] = []
+	holes: list[FStringHole] = []
+	text_buf: list[str] = []
+
+	base_line = getattr(raw_string_token, "line", loc.line)
+	base_col = getattr(raw_string_token, "column", loc.column)
+
+	def _flush_text() -> None:
+		fragment_raw = "".join(text_buf)
+		text_buf.clear()
+		parts.append(_decode_string_fragment(fragment_raw))
+
+	def _hole_loc(offset: int) -> Located:
+		return Located(line=base_line, column=base_col + offset)
+
+	def _unescape_hole_source(src: str) -> str:
+		out: list[str] = []
+		j = 0
+		while j < len(src):
+			c = src[j]
+			if c == "\\" and j + 1 < len(src):
+				nxt = src[j + 1]
+				if nxt in ("\\", "\""):
+					out.append(nxt)
+					j += 2
+					continue
+			out.append(c)
+			j += 1
+		return "".join(out)
+
+	i = 0
+	while i < len(raw):
+		ch = raw[i]
+		if raw.startswith("{{", i):
+			text_buf.append("{")
+			i += 2
+			continue
+		if raw.startswith("}}", i):
+			text_buf.append("}")
+			i += 2
+			continue
+		if ch == "}":
+			raise FStringParseError("E-FSTR-UNBALANCED-BRACE: unescaped '}' in f-string", loc=_hole_loc(i))
+		if ch != "{":
+			text_buf.append(ch)
+			i += 1
+			continue
+
+		hole_start = i
+		_flush_text()
+		i += 1  # consume '{'
+		if i < len(raw) and raw[i] == "}":
+			raise FStringParseError("E-FSTR-EMPTY-HOLE: '{}' is not a valid f-string hole", loc=_hole_loc(hole_start))
+
+		paren_depth = 0
+		bracket_depth = 0
+		brace_depth = 0
+		in_string = False
+		expr_buf: list[str] = []
+		spec_buf: list[str] | None = None
+
+		while i < len(raw):
+			c = raw[i]
+			if in_string:
+				expr_buf.append(c)
+				if c == "\\":
+					i += 1
+					if i < len(raw):
+						expr_buf.append(raw[i])
+					i += 1
+					continue
+				if c == "\"":
+					in_string = False
+				i += 1
+				continue
+
+			if (
+				spec_buf is None
+				and c == ":"
+				and paren_depth == 0
+				and bracket_depth == 0
+				and brace_depth == 0
+			):
+				candidate_expr = "".join(expr_buf).strip()
+				try:
+					_parse_expr_fragment(candidate_expr)
+				except Exception:
+					expr_buf.append(c)
+					i += 1
+					continue
+				spec_buf = []
+				i += 1
+				continue
+
+			if c == "\"":
+				in_string = True
+				expr_buf.append(c)
+				i += 1
+				continue
+
+			if c == "(":
+				paren_depth += 1
+			elif c == ")" and paren_depth:
+				paren_depth -= 1
+			elif c == "[":
+				bracket_depth += 1
+			elif c == "]" and bracket_depth:
+				bracket_depth -= 1
+			elif c == "{":
+				brace_depth += 1
+			elif c == "}":
+				if brace_depth:
+					brace_depth -= 1
+				elif paren_depth == 0 and bracket_depth == 0:
+					i += 1
+					break
+				else:
+					raise FStringParseError("E-FSTR-UNBALANCED-BRACE: '}' in f-string hole", loc=_hole_loc(i))
+
+			if spec_buf is None:
+				expr_buf.append(c)
+			else:
+				if c in "{}":
+					raise FStringParseError("E-FSTR-NESTED: nested braces are not allowed in :spec (MVP)", loc=_hole_loc(i))
+				spec_buf.append(c)
+			i += 1
+		else:
+			raise FStringParseError("E-FSTR-UNBALANCED-BRACE: unterminated '{' in f-string", loc=_hole_loc(hole_start))
+
+		expr_src = _unescape_hole_source("".join(expr_buf).strip())
+		if not expr_src:
+			raise FStringParseError("E-FSTR-EMPTY-HOLE: hole must contain an expression", loc=_hole_loc(hole_start))
+
+		expr_ast = _parse_expr_fragment(expr_src)
+		spec = "".join(spec_buf).strip() if spec_buf is not None else ""
+		holes.append(FStringHole(loc=_hole_loc(hole_start), expr=expr_ast, spec=spec))
+
+	_flush_text()
+	if len(parts) != len(holes) + 1:
+		raise AssertionError("f-string parser bug: parts/holes shape mismatch")
+	return FString(loc=loc, parts=parts, holes=holes)
 
 
 class TerminatorInserter:
@@ -851,6 +1064,12 @@ def _build_expr(node) -> Expr:
     if name == "str_lit":
         raw_tok = node.children[0]
         return Literal(loc=_loc(node), value=_decode_string_token(raw_tok))
+    if name == "fstr_lit":
+        # Children: FSTRING_PREFIX token and STRING token.
+        string_tok = next((c for c in node.children if isinstance(c, Token) and c.type == "STRING"), None)
+        if string_tok is None:
+            raise ValueError("f-string missing STRING token")
+        return _parse_fstring(_loc(node), string_tok)
     if name == "true_lit":
         return Literal(loc=_loc(node), value=True)
     if name == "false_lit":

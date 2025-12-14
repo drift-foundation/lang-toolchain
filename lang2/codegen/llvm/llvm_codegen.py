@@ -75,6 +75,9 @@ from lang2.driftc.stage2 import (
 	StringConcat,
 	StringEq,
 	StringLen,
+	StringFromBool,
+	StringFromInt,
+	StringFromUint,
 	StoreLocal,
 	UnaryOpInstr,
 )
@@ -191,6 +194,9 @@ class LlvmModuleBuilder:
 	needs_array_helpers: bool = False
 	needs_string_eq: bool = False
 	needs_string_concat: bool = False
+	needs_string_from_int64: bool = False
+	needs_string_from_uint64: bool = False
+	needs_string_from_bool: bool = False
 	needs_argv_helper: bool = False
 	needs_console_runtime: bool = False
 	needs_dv_runtime: bool = False
@@ -328,7 +334,20 @@ class LlvmModuleBuilder:
 			lines.append(f"declare i1 @drift_string_eq({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
 		if self.needs_string_concat:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_concat({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
-		if self.needs_string_eq or self.needs_string_concat:
+		if self.needs_string_from_int64:
+			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_int64(i64)")
+		if self.needs_string_from_uint64:
+			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_uint64(i64)")
+		if self.needs_string_from_bool:
+			# Runtime takes an `int` (i32) for portability; caller must extend i1.
+			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_bool(i32)")
+		if (
+			self.needs_string_eq
+			or self.needs_string_concat
+			or self.needs_string_from_int64
+			or self.needs_string_from_uint64
+			or self.needs_string_from_bool
+		):
 			lines.append("")
 		if self.needs_console_runtime:
 			lines.extend(
@@ -533,6 +552,47 @@ class _FuncBuilder:
 			self.lines.append(
 				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_concat("
 				f"{DRIFT_STRING_TYPE} {left}, {DRIFT_STRING_TYPE} {right})"
+			)
+			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, StringFromInt):
+			dest = self._map_value(instr.dest)
+			val = self._map_value(instr.value)
+			val_ty = self.value_types.get(val)
+			if val_ty != "i64":
+				raise NotImplementedError(
+					f"LLVM codegen v1: StringFromInt requires i64 operand (have {val_ty})"
+				)
+			self.module.needs_string_from_int64 = True
+			self.lines.append(
+				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_int64(i64 {val})"
+			)
+			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, StringFromUint):
+			dest = self._map_value(instr.dest)
+			val = self._map_value(instr.value)
+			val_ty = self.value_types.get(val)
+			if val_ty != "i64":
+				raise NotImplementedError(
+					f"LLVM codegen v1: StringFromUint requires i64 operand (have {val_ty})"
+				)
+			self.module.needs_string_from_uint64 = True
+			self.lines.append(
+				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_uint64(i64 {val})"
+			)
+			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, StringFromBool):
+			dest = self._map_value(instr.dest)
+			val = self._map_value(instr.value)
+			val_ty = self.value_types.get(val)
+			if val_ty != "i1":
+				raise NotImplementedError(
+					f"LLVM codegen v1: StringFromBool requires i1 operand (have {val_ty})"
+				)
+			self.module.needs_string_from_bool = True
+			ext = self._fresh("bext")
+			self.lines.append(f"  {ext} = zext i1 {val} to i32")
+			self.lines.append(
+				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_bool(i32 {ext})"
 			)
 			self.value_types[dest] = DRIFT_STRING_TYPE
 		elif isinstance(instr, StringEq):

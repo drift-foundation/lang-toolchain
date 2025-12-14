@@ -109,6 +109,41 @@ class HLiteralBool(HExpr):
 
 
 @dataclass
+class HFStringHole(HNode):
+	"""
+	Single `{expr[:spec]}` hole inside an f-string.
+
+	We keep the hole's expression as HIR (not preformatted) so later stages can:
+	- type-check the hole expression,
+	- validate/interpret the `spec` string, and
+	- lower the formatting operation appropriately.
+
+	MVP: `spec` is opaque text (no nested `{}`), and only a small set of hole
+	value types are supported (Bool/Int/Uint/String).
+	"""
+	expr: HExpr
+	spec: str = ""
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
+class HFString(HExpr):
+	"""
+	f-string literal: `f"..."`.
+
+	Representation matches the lowering contract: `len(parts) == len(holes) + 1`.
+	Text parts are already unescaped (normal string escape rules + `{{`/`}}`).
+
+	Lowering: stage2 expands this into explicit String concatenations and runtime
+	formatting calls. We *do not* desugar in stage1 because we want to use type
+	information to decide how each hole expression is formatted.
+	"""
+	parts: list[str]
+	holes: list[HFStringHole]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HCall(HExpr):
 	"""Plain function call: fn(args...)."""
 	fn: HExpr
@@ -363,6 +398,7 @@ __all__ = [
 	"HNode", "HExpr", "HStmt",
 	"UnaryOp", "BinaryOp",
 	"HVar", "HLiteralInt", "HLiteralString", "HLiteralBool",
+	"HFString", "HFStringHole",
 	"HCall", "HMethodCall", "HTernary", "HTryResult", "HResultOk",
 	"HField", "HIndex", "HBorrow", "HDVInit",
 	"HUnary", "HBinary", "HArrayLiteral",

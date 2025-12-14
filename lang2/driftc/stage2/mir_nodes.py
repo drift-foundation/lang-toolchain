@@ -70,6 +70,40 @@ class ConstString(MInstr):
 
 
 @dataclass
+class StringFromInt(MInstr):
+	"""
+	dest = String(value)
+
+	Converts an `Int` value to a `String` using the runtime's canonical formatting.
+	This is used by f-string interpolation and other compiler-driven formatting.
+	"""
+	dest: ValueId
+	value: ValueId
+
+
+@dataclass
+class StringFromBool(MInstr):
+	"""
+	dest = String(value)
+
+	Converts a `Bool` value to a `String` (`"true"` / `"false"`).
+	"""
+	dest: ValueId
+	value: ValueId
+
+
+@dataclass
+class StringFromUint(MInstr):
+	"""
+	dest = String(value)
+
+	Converts a `Uint` value to a decimal `String`.
+	"""
+	dest: ValueId
+	value: ValueId
+
+
+@dataclass
 class LoadLocal(MInstr):
 	"""dest = locals[local]"""
 	dest: ValueId
@@ -459,6 +493,9 @@ __all__ = [
 	"ConstInt",
 	"ConstBool",
 	"ConstString",
+	"StringFromInt",
+	"StringFromBool",
+	"StringFromUint",
 	"LoadLocal",
 	"AddrOfLocal",
 	"StoreLocal",

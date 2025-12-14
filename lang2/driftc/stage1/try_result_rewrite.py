@@ -148,7 +148,9 @@ class TryResultRewriter:
 				pfx, arg = self._rewrite_expr(a)
 				arg_prefixes.extend(pfx)
 				new_args.append(arg)
-			return prefix_recv + arg_prefixes, H.HMethodCall(receiver=recv, method_name=expr.method_name, args=new_args)
+			return prefix_recv + arg_prefixes, H.HMethodCall(
+				receiver=recv, method_name=expr.method_name, args=new_args
+			)
 		if isinstance(expr, H.HField):
 			prefix_subj, subj = self._rewrite_expr(expr.subject)
 			return prefix_subj, H.HField(subject=subj, name=expr.name)
@@ -203,20 +205,29 @@ class TryResultRewriter:
 				elem_pfx.extend(pfx)
 				new_elems.append(el)
 			return elem_pfx, H.HArrayLiteral(elements=new_elems)
+		if isinstance(expr, H.HFString):
+			# f-strings are expressions; try-result sugar may appear inside any
+			# hole expression. Any prefixes produced while rewriting a hole must
+			# execute before the f-string expression is evaluated.
+			pfx: List[H.HStmt] = []
+			new_holes: List[H.HFStringHole] = []
+			for hole in expr.holes:
+				hole_pfx, hole_expr = self._rewrite_expr(hole.expr)
+				pfx.extend(hole_pfx)
+				new_holes.append(H.HFStringHole(expr=hole_expr, spec=hole.spec, loc=hole.loc))
+			return pfx, H.HFString(parts=list(expr.parts), holes=new_holes, loc=expr.loc)
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			# Expression-form try/catch is a control-flow expression. We rewrite
 			# nested try-result sugar inside the attempt and inside catch bodies,
 			# preserving the try-expr structure.
 			pfx_attempt, attempt = self._rewrite_expr(expr.attempt)
-			new_arms: list[H.HTryExprArm] = []
+			new_arms: List[H.HTryExprArm] = []
 			for arm in expr.arms:
 				arm_block = self.rewrite_block(arm.block)
 				arm_result = None
-				arm_result_pfx: list[H.HStmt] = []
+				arm_result_pfx: List[H.HStmt] = []
 				if getattr(arm, "result", None) is not None:
 					arm_result_pfx, arm_result = self._rewrite_expr(arm.result)
-				# Prefixes produced while rewriting the arm result must execute
-				# before the result expression itself; append them to the arm block.
 				if arm_result_pfx:
 					arm_block = H.HBlock(statements=[*arm_block.statements, *arm_result_pfx])
 				new_arms.append(

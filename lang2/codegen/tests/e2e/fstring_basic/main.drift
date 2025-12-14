@@ -1,0 +1,10 @@
+module m
+
+fn main() returns Int {
+	val i = 10
+	val b = true
+	val s = "x"
+	println(f"i={i} b={b} s={s}")
+	println(f"{{}}")
+	return 0
+}

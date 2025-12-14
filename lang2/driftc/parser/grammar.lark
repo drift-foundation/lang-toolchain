@@ -6,6 +6,10 @@ NAME.0: /[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 %import common.SIGNED_FLOAT
 // String literal with basic escapes plus \xHH hex byte escapes (UTF-8).
 STRING: /"(?:[^"\\]|\\["\\ntbrf]|\\x[0-9A-Fa-f]{2})*"/
+// f-string prefix: `f` immediately followed by a quote starts an f-string literal.
+// This must not steal a standalone identifier named `f`, so we use a lookahead
+// that only matches when the next character is the quote.
+FSTRING_PREFIX.3: /f(?=\")/
 %import common.WS_INLINE
 
 %declare TERMINATOR
@@ -256,5 +260,6 @@ call_arg: NAME EQUAL expr -> kwarg
 literal: SIGNED_FLOAT -> float_lit
        | SIGNED_INT   -> int_lit
        | STRING       -> str_lit
+       | FSTRING_PREFIX STRING -> fstr_lit
        | "true"      -> true_lit
        | "false"     -> false_lit

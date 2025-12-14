@@ -18,6 +18,7 @@ from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
+from lang2.driftc.core.types_core import TypeTable
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
@@ -95,6 +96,19 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			name=expr.name,
 			fields={k: _convert_expr(v) for k, v in expr.fields.items()},
 			arg_order=getattr(expr, "arg_order", None),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
+	if isinstance(expr, parser_ast.FString):
+		return s0.FString(
+			parts=list(expr.parts),
+			holes=[
+				s0.FStringHole(
+					expr=_convert_expr(h.expr),
+					spec=h.spec,
+					loc=Span.from_loc(getattr(h, "loc", None)),
+				)
+				for h in expr.holes
+			],
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	raise NotImplementedError(f"Unsupported expression in adapter: {expr!r}")
@@ -335,7 +349,15 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	throwing, so callers can report them alongside later pipeline checks.
 	"""
 	source = path.read_text()
-	prog = _parser.parse_program(source)
+	try:
+		prog = _parser.parse_program(source)
+	except _parser.FStringParseError as err:
+		# f-string syntax errors should be reported as normal parser diagnostics,
+		# not hard crashes (they are user errors, not internal bugs).
+		diagnostics: list[Diagnostic] = [
+			Diagnostic(message=str(err), severity="error", span=Span.from_loc(err.loc))
+		]
+		return {}, {}, TypeTable(), {}, diagnostics
 	module_name = getattr(prog, "module", None)
 	func_hirs: Dict[str, H.HBlock] = {}
 	decls: list[_FrontendDecl] = []

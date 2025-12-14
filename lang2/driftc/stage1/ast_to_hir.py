@@ -128,6 +128,39 @@ class AstToHIR:
 			return H.HLiteralString(value=str(expr.value))
 		raise NotImplementedError(f"Literal of unsupported type: {type(expr.value).__name__}")
 
+	def _as_span(self, loc: object | None) -> Span:
+		"""
+		Best-effort location normalization for HIR nodes.
+
+		stage0 nodes typically carry a structured `Span`, but some unit tests and
+		legacy call sites may still provide `None` or a parser-specific location.
+		"""
+		if isinstance(loc, Span):
+			return loc
+		return Span.from_loc(loc)
+
+	def _visit_expr_FString(self, expr: ast.FString) -> H.HExpr:
+		"""
+		Lower an f-string AST node into an explicit HIR node (`HFString`).
+
+		We keep f-strings as a dedicated HIR node until stage2 so we can use type
+		information to format hole expressions (and validate format specs) while
+		still guaranteeing left-to-right evaluation order.
+		"""
+		holes = [
+			H.HFStringHole(
+				expr=self.lower_expr(h.expr),
+				spec=h.spec,
+				loc=self._as_span(getattr(h, "loc", None)),
+			)
+			for h in expr.holes
+		]
+		return H.HFString(
+			parts=list(expr.parts),
+			holes=holes,
+			loc=self._as_span(getattr(expr, "loc", None)),
+		)
+
 	def _visit_stmt_LetStmt(self, stmt: ast.LetStmt) -> H.HStmt:
 		"""Immutable binding introduction."""
 		bid = self._alloc_binding(stmt.name)

@@ -46,9 +46,14 @@ def _run_ir_with_clang(ir: str, build_dir: Path, argv: list[str] | None = None) 
 	ir_path.write_text(ir)
 
 	runtime_sources = get_runtime_sources(ROOT)
+	# The runtime sources include vendored C code (e.g. Ryu) that expects the
+	# directory containing the `ryu/` folder to be on the include path.
+	runtime_include = ROOT / "lang2" / "drift_core" / "runtime"
 	compile_res = subprocess.run(
 		[
 			clang,
+			"-I",
+			str(runtime_include),
 			"-x",
 			"ir",
 			str(ir_path),

@@ -198,6 +198,33 @@ class ArrayLiteral(Expr):
 
 
 @dataclass
+class FStringHole:
+	"""
+	Single `{expr[:spec]}` hole inside an f-string.
+
+	Notes:
+	- `expr` is a normal Drift expression AST.
+	- `spec` is a compile-time substring (MVP: opaque text, no nested `{}`).
+	- `loc` points at the start of the hole (the `{`).
+	"""
+	loc: Located
+	expr: Expr
+	spec: str = ""
+
+
+@dataclass
+class FString(Expr):
+	"""
+	f-string expression: `f"..."` with literal parts and `{...}` holes.
+
+	Representation matches the lowering contract: `parts.len == holes.len + 1`.
+	"""
+	loc: Located
+	parts: List[str]
+	holes: List[FStringHole]
+
+
+@dataclass
 class Program:
 	functions: List[FunctionDef] = field(default_factory=list)
 	implements: List["ImplementDef"] = field(default_factory=list)

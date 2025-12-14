@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ryu/ryu.h"
+
 DriftString drift_string_from_cstr(const char *cstr) {
 	if (cstr == NULL) {
 		DriftString s = {0, NULL};
@@ -41,6 +43,34 @@ DriftString drift_string_from_int64(int64_t v) {
 	char buf[32];
 	int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
 	if (n < 0) {
+		abort();
+	}
+	return drift_string_from_utf8_bytes(buf, (drift_size_t)n);
+}
+
+DriftString drift_string_from_uint64(uint64_t v) {
+	/* worst-case length for uint64_t in decimal */
+	char buf[32];
+	int n = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
+	if (n < 0) {
+		abort();
+	}
+	return drift_string_from_utf8_bytes(buf, (drift_size_t)n);
+}
+
+DriftString drift_string_from_f64(double v) {
+	/*
+	Deterministic `Float` formatting using Ryu.
+
+	We vendor Ryu into lang2 so we can format floats without relying on libc's
+	`snprintf` behavior (locale, rounding mode, and formatting edge cases differ
+	across platforms/libcs).
+
+	Ryu guarantees a shortest-roundtrip decimal representation.
+	*/
+	char buf[64];
+	int n = d2s_buffered_n(v, buf);
+	if (n <= 0) {
 		abort();
 	}
 	return drift_string_from_utf8_bytes(buf, (drift_size_t)n);

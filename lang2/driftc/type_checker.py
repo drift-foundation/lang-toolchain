@@ -122,6 +122,33 @@ class TypeChecker:
 				return record_expr(expr, self._bool)
 			if isinstance(expr, H.HLiteralString):
 				return record_expr(expr, self._string)
+			if isinstance(expr, H.HFString):
+				# f-strings are sugar that ultimately produce a String.
+				#
+				# MVP rules (from spec-change request):
+				# - Each hole expression must be one of {Bool, Int, Uint, String}.
+				# - `:spec` is supported syntactically, but only the empty spec is
+				#   accepted for now (future work will validate a richer subset).
+				for hole in expr.holes:
+					hole_ty = type_expr(hole.expr)
+					if hole.spec:
+						diagnostics.append(
+							Diagnostic(
+								message="E-FSTR-BAD-SPEC: non-empty :spec is not supported yet (MVP: empty only)",
+								severity="error",
+								span=getattr(hole, "loc", Span()),
+							)
+						)
+					if hole_ty not in (self._bool, self._int, self._uint, self._string):
+						pretty = self.type_table.get(hole_ty).name if hole_ty is not None else "Unknown"
+						diagnostics.append(
+							Diagnostic(
+								message=f"E-FSTR-UNSUPPORTED-TYPE: f-string hole value is not formattable in MVP (have {pretty})",
+								severity="error",
+								span=getattr(hole, "loc", Span()),
+							)
+						)
+				return record_expr(expr, self._string)
 			if isinstance(expr, H.HVar):
 				if expr.binding_id is None:
 					for scope in reversed(scope_bindings):

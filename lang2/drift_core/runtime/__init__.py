@@ -6,6 +6,8 @@ def get_runtime_sources(root: Path) -> List[Path]:
 	base = root / "lang2" / "drift_core" / "runtime"
 	runtime = root / "lang2" / "runtime"
 	return [
+		# Deterministic float formatting (Ryu) for Drift `Float` once supported.
+		base / "ryu_d2s.c",
 		base / "array_runtime.c",
 		base / "string_runtime.c",
 		base / "argv_runtime.c",

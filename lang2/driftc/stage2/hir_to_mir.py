@@ -237,6 +237,64 @@ class HIRToMIR:
 		self.b.emit(M.ConstString(dest=dest, value=expr.value))
 		return dest
 
+	def _visit_expr_HFString(self, expr: H.HFString) -> M.ValueId:
+		"""
+		Lower an f-string into explicit String concatenations.
+
+		We perform this lowering in stage2 (rather than stage1) so we can:
+		- use best-effort type inference for hole expressions, and
+		- translate supported hole value types into Strings via dedicated MIR ops.
+
+		MVP limitations:
+		- Only empty `:spec` is supported (non-empty specs are rejected).
+		- Supported hole value types are Bool/Int/Uint/String.
+		"""
+		if len(expr.parts) != len(expr.holes) + 1:
+			raise AssertionError("HFString invariant violated: parts.len != holes.len + 1")
+
+		def _const_part(text: str) -> M.ValueId:
+			if text == "":
+				return self._string_empty_const
+			tmp = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=tmp, value=text))
+			return tmp
+
+		acc = _const_part(expr.parts[0])
+		for idx, hole in enumerate(expr.holes):
+			if hole.spec:
+				raise AssertionError("non-empty f-string :spec reached stage2 (checker bug)")
+
+			val = self.lower_expr(hole.expr)
+			ty = self._infer_expr_type(hole.expr)
+			if ty is None:
+				raise AssertionError("f-string hole type is unknown in stage2 (checker bug)")
+
+			if ty == self._string_type:
+				val_str = val
+			elif ty == self._int_type:
+				val_str = self.b.new_temp()
+				self.b.emit(M.StringFromInt(dest=val_str, value=val))
+			elif ty == self._bool_type:
+				val_str = self.b.new_temp()
+				self.b.emit(M.StringFromBool(dest=val_str, value=val))
+			elif ty == self._uint_type:
+				val_str = self.b.new_temp()
+				self.b.emit(M.StringFromUint(dest=val_str, value=val))
+			else:
+				raise AssertionError("unsupported f-string hole type reached stage2 (checker bug)")
+
+			tmp = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=tmp, left=acc, right=val_str))
+			acc = tmp
+
+			part_text = expr.parts[idx + 1]
+			if part_text:
+				part_val = _const_part(part_text)
+				tmp2 = self.b.new_temp()
+				self.b.emit(M.StringConcat(dest=tmp2, left=acc, right=part_val))
+				acc = tmp2
+		return acc
+
 	def _visit_expr_HVar(self, expr: H.HVar) -> M.ValueId:
 		self.b.ensure_local(expr.name)
 		# Treat String.EMPTY as a builtin zero-length string literal.
@@ -473,7 +531,7 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 		# Join: load the temp as the value of the ternary and continue.
-		self.b.set_block(join_block)
+			self.b.set_block(join_block)
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
 		return dest
@@ -1246,7 +1304,9 @@ class HIRToMIR:
 		err_block = self.b.new_block("call_err")
 		join_block = self.b.new_block("call_join")
 
-		self.b.set_terminator(M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name))
+		self.b.set_terminator(
+			M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name)
+		)
 
 		# Err path: route the error to an active try (if any), otherwise propagate
 		# out of the current function.
@@ -1291,8 +1351,12 @@ class HIRToMIR:
 		err_block = self.b.new_block("call_err")
 		join_block = self.b.new_block("call_join")
 
-		self.b.set_terminator(M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name))
+		self.b.set_terminator(
+			M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name)
+		)
 
+		# Err path: route the error to an active try (if any), otherwise propagate
+		# out of the current function.
 		self.b.set_block(err_block)
 		err_val = self.b.new_temp()
 		self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
@@ -1303,20 +1367,27 @@ class HIRToMIR:
 		else:
 			self._propagate_error(err_val)
 
+		# Ok path: ignore ok payload and continue.
 		self.b.set_block(ok_block)
 		self.b.set_terminator(M.Goto(target=join_block.name))
 
+		# Join: continue lowering subsequent statements in the surrounding block.
 		self.b.set_block(join_block)
 
 	def _infer_expr_type(self, expr: H.HExpr) -> TypeId | None:
 		"""
-		Minimal expression type inference to tag array instructions with elem types.
+		Minimal expression type inference to tag typed MIR nodes.
+
+		This is intentionally conservative: it only returns a TypeId when the type
+		can be inferred locally (literals, some builtins, locals with known types).
 		"""
 		if isinstance(expr, H.HLiteralInt):
 			return self._int_type
 		if isinstance(expr, H.HLiteralBool):
 			return self._bool_type
 		if isinstance(expr, H.HLiteralString):
+			return self._string_type
+		if isinstance(expr, H.HFString):
 			return self._string_type
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
@@ -1369,7 +1440,6 @@ class HIRToMIR:
 						return self._opt_string
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			return self._infer_expr_type(expr.attempt)
-		# Unknown for other expressions (vars, calls, etc.)
 		return None
 
 	def _lookup_error_code(self, payload_expr: H.HExpr | None = None, *, event_fqn: str | None = None) -> int:

@@ -156,6 +156,31 @@ class TryExpr(Expr):
 	loc: Optional[object] = None
 
 
+@dataclass
+class FStringHole:
+	"""
+	Single hole `{expr[:spec]}` inside an f-string.
+
+	- `expr` is any expression.
+	- `spec` is a compile-time string (MVP: opaque text; no nested `{}`).
+	"""
+	expr: Expr
+	spec: str = ""
+	loc: Optional[object] = None
+
+
+@dataclass
+class FString(Expr):
+	"""
+	f-string literal `f"..."`.
+
+	Representation matches the lowering contract: `len(parts) == len(holes) + 1`.
+	"""
+	parts: list[str]
+	holes: list[FStringHole]
+	loc: Optional[object] = None
+
+
 # Statements
 
 @dataclass

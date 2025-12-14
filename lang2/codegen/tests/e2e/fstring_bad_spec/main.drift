@@ -1,0 +1,8 @@
+module m
+
+fn main() returns Int {
+	// MVP currently supports only empty `:spec`.
+	println(f"{10:03}")
+	return 0
+}
+
