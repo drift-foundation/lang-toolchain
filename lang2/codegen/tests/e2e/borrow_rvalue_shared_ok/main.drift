@@ -1,4 +1,5 @@
 fn main() returns Int {
-	val p = &mut ("abc");
+	val p = &("abc");
 	return 0;
 }
+

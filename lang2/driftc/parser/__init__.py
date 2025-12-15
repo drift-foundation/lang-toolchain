@@ -21,6 +21,7 @@ from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 from lang2.driftc.core.types_core import TypeTable
+from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
@@ -398,11 +399,27 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	method_keys: set[tuple[str, str]] = set()  # (impl_target_repr, method_name)
 	diagnostics: list[Diagnostic] = []
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
+	struct_defs = list(getattr(prog, "structs", []) or [])
 	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_name, diagnostics)
 	for exc in prog.exceptions:
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
 		field_names = [arg.name for arg in getattr(exc, "args", [])]
 		exception_schemas[fqn] = (fqn, field_names)
+	# Build a TypeTable early so we can register user-defined type names (structs)
+	# before resolving function signatures. This prevents `resolve_opaque_type`
+	# from minting unrelated placeholder TypeIds for struct names.
+	type_table = TypeTable()
+	# Declare all struct names first (placeholder field types) to support recursion.
+	for s in struct_defs:
+		field_names = [f.name for f in getattr(s, "fields", [])]
+		type_table.declare_struct(s.name, field_names)
+	# Fill field TypeIds in a second pass now that all names exist.
+	for s in struct_defs:
+		struct_id = type_table.ensure_named(s.name)
+		field_types = [resolve_opaque_type(f.type_expr, type_table) for f in getattr(s, "fields", [])]
+		type_table.define_struct_fields(struct_id, field_types)
+	# Thread struct schemas for downstream helpers (optional; TypeDefs are authoritative).
+	type_table.struct_schemas = {s.name: (s.name, [f.name for f in getattr(s, "fields", [])]) for s in struct_defs}
 	for fn in prog.functions:
 		if fn.name in seen:
 			diagnostics.append(
@@ -538,7 +555,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	# Build signatures with resolved TypeIds from parser decls.
 	from lang2.driftc.type_resolver import resolve_program_signatures
 
-	type_table, sigs = resolve_program_signatures(decls)
+	type_table, sigs = resolve_program_signatures(decls, table=type_table)
 	signatures.update(sigs)
 	# Thread exception schemas through the shared type table for downstream validators.
 	type_table.exception_schemas = exception_schemas

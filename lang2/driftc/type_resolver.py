@@ -15,14 +15,18 @@ type shims can be retired.
 
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional
 
 from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.core.types_core import TypeId, TypeKind, TypeTable
 
 
-def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable, dict[str, FnSignature]]:
+def resolve_program_signatures(
+	func_decls: Iterable[object],
+	*,
+	table: Optional[TypeTable] = None,
+) -> tuple[TypeTable, dict[str, FnSignature]]:
 	"""
 	Resolve declared types on function declarations into TypeIds.
 
@@ -38,7 +42,9 @@ def resolve_program_signatures(func_decls: Iterable[object]) -> tuple[TypeTable,
 	  - impl_target: optional TypeExpr for the nominal type the impl targets
 	  - module: optional str module name
 	"""
-	table = TypeTable()
+	# Allow callers (parser frontends) to supply a pre-populated TypeTable
+	# (e.g., with user-defined struct types already declared).
+	table = table or TypeTable()
 
 	# Seed common scalars; unknowns/new scalars are created on demand.
 	table.ensure_int()

@@ -1,0 +1,11 @@
+fn bump_first(a: &mut Array<Int>) returns Void {
+	val p = &mut (*a)[0];
+	*p = *p + 1;
+}
+
+fn main() returns Int {
+	var arr = [1, 2];
+	bump_first(&mut arr);
+	return arr[0];
+}
+

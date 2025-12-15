@@ -1,0 +1,8 @@
+struct Point(x: Int, y: Int)
+
+fn main() returns Int {
+	var p = Point(0, 0);
+	val rx = &p.x;
+	p = Point(1, 2);
+	return 0;
+}

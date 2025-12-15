@@ -21,6 +21,7 @@ class TypeKind(Enum):
 	"""Kinds of types understood by the minimal type core."""
 
 	SCALAR = auto()
+	STRUCT = auto()
 	ERROR = auto()
 	DIAGNOSTICVALUE = auto()
 	OPTIONAL = auto()
@@ -40,6 +41,7 @@ class TypeDef:
 	name: str
 	param_types: List[TypeId]
 	ref_mut: bool | None = None  # only meaningful for TypeKind.REF
+	field_names: List[str] | None = None  # only meaningful for TypeKind.STRUCT
 
 
 class TypeTable:
@@ -53,6 +55,10 @@ class TypeTable:
 	def __init__(self) -> None:
 		self._defs: Dict[TypeId, TypeDef] = {}
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"
+		# Nominal name → TypeId mapping. This ensures repeated references to the
+		# same user-defined type resolve to a single TypeId (critical for long-term
+		# correctness once structs/enums/modules are enabled).
+		self._named: Dict[str, TypeId] = {}
 		# Seed well-known scalars if callers stash them here.
 		self._uint_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._int_type: TypeId | None = None  # type: ignore[var-annotated]
@@ -68,10 +74,73 @@ class TypeTable:
 		# - enforce exact coverage (no missing/unknown/duplicates)
 		# - attach attrs deterministically in lowering.
 		self.exception_schemas: dict[str, tuple[str, list[str]]] = {}
+		# Struct schemas keyed by nominal type name. Values are (name, [field_names]).
+		# Field types live in the STRUCT TypeDef itself.
+		self.struct_schemas: dict[str, tuple[str, list[str]]] = {}
 
 	def new_scalar(self, name: str) -> TypeId:
 		"""Register a scalar type (e.g., Int, Bool) and return its TypeId."""
 		return self._add(TypeKind.SCALAR, name, [])
+
+	def ensure_named(self, name: str) -> TypeId:
+		"""
+		Return a stable TypeId for a nominal name.
+
+		This is used for user-defined type names that appear in annotations.
+		If the name has not been declared yet, we conservatively create a scalar
+		nominal type. Later, a richer kind (STRUCT/ENUM) may be declared under
+		that name; callers should prefer explicit `declare_struct` for structs.
+		"""
+		if name in self._named:
+			return self._named[name]
+		return self._add(TypeKind.SCALAR, name, [])
+
+	def declare_struct(self, name: str, field_names: List[str]) -> TypeId:
+		"""
+		Declare a struct nominal type with placeholder field types.
+
+		This supports recursive type references by first declaring all struct
+		names, then filling field types in a second pass via `define_struct_fields`.
+		"""
+		if name in self._named:
+			ty_id = self._named[name]
+			td = self.get(ty_id)
+			if td.kind is TypeKind.STRUCT:
+				return ty_id
+			raise ValueError(f"type name '{name}' already defined as {td.kind}")
+		unknown = self.ensure_unknown()
+		placeholder = [unknown for _ in field_names]
+		ty_id = self._add(TypeKind.STRUCT, name, placeholder, field_names=list(field_names))
+		self.struct_schemas[name] = (name, list(field_names))
+		return ty_id
+
+	def define_struct_fields(self, struct_id: TypeId, field_types: List[TypeId]) -> None:
+		"""Fill in the field TypeIds for a declared struct."""
+		td = self.get(struct_id)
+		if td.kind is not TypeKind.STRUCT or td.field_names is None:
+			raise ValueError("define_struct_fields requires a STRUCT TypeId")
+		if len(field_types) != len(td.field_names):
+			raise ValueError("field_types length mismatch for struct definition")
+		self._defs[struct_id] = TypeDef(
+			kind=TypeKind.STRUCT,
+			name=td.name,
+			param_types=list(field_types),
+			ref_mut=None,
+			field_names=list(td.field_names),
+		)
+
+	def struct_field(self, struct_id: TypeId, field_name: str) -> tuple[int, TypeId] | None:
+		"""Return (field_index, field_type_id) for a struct field, or None."""
+		td = self.get(struct_id)
+		if td.kind is not TypeKind.STRUCT or td.field_names is None:
+			return None
+		try:
+			idx = td.field_names.index(field_name)
+		except ValueError:
+			return None
+		if idx >= len(td.param_types):
+			return None
+		return idx, td.param_types[idx]
 
 	def ensure_uint(self) -> TypeId:
 		"""Return a stable Uint TypeId, creating it once."""
@@ -220,10 +289,25 @@ class TypeTable:
 		"""Register an unknown type (debug/fallback)."""
 		return self._add(TypeKind.UNKNOWN, name, [])
 
-	def _add(self, kind: TypeKind, name: str, params: List[TypeId], ref_mut: bool | None = None) -> TypeId:
+	def _add(
+		self,
+		kind: TypeKind,
+		name: str,
+		params: List[TypeId],
+		ref_mut: bool | None = None,
+		field_names: List[str] | None = None,
+	) -> TypeId:
 		ty_id = self._next_id
 		self._next_id += 1
-		self._defs[ty_id] = TypeDef(kind=kind, name=name, param_types=list(params), ref_mut=ref_mut if kind is TypeKind.REF else None)
+		self._defs[ty_id] = TypeDef(
+			kind=kind,
+			name=name,
+			param_types=list(params),
+			ref_mut=ref_mut if kind is TypeKind.REF else None,
+			field_names=list(field_names) if field_names is not None else None,
+		)
+		if kind in (TypeKind.SCALAR, TypeKind.STRUCT):
+			self._named.setdefault(name, ty_id)
 		return ty_id
 
 	def get(self, ty: TypeId) -> TypeDef:

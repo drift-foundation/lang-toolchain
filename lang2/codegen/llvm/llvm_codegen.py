@@ -47,6 +47,8 @@ from lang2.driftc.stage2 import (
 	AssignSSA,
 	BinaryOpInstr,
 	Call,
+	ConstructStruct,
+	StructGetField,
 	ConstructDV,
 	ConstBool,
 	ConstInt,
@@ -62,6 +64,8 @@ from lang2.driftc.stage2 import (
 	ErrorAttrsGetDV,
 	LoadLocal,
 	AddrOfLocal,
+	AddrOfArrayElem,
+	AddrOfField,
 	LoadRef,
 	StoreRef,
 	OptionalIsSome,
@@ -212,6 +216,7 @@ class LlvmModuleBuilder:
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
 	_fnresult_ok_llty_by_type: Dict[str, str] = field(default_factory=dict)
+	_struct_types_by_name: Dict[str, str] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if DRIFT_SIZE_TYPE.startswith("%"):
@@ -233,6 +238,43 @@ class LlvmModuleBuilder:
 		self._fnresult_ok_llty_by_type[FNRESULT_INT_ERROR] = "i64"
 		self._declare_fnresult_named_type("Void", "i8", "%FnResult_Void_Error")
 		self._declare_fnresult_named_type("String", DRIFT_STRING_TYPE, "%FnResult_String_Error")
+
+	def ensure_struct_type(
+		self,
+		ty_id: TypeId,
+		*,
+		type_table: TypeTable,
+		map_type: callable,
+	) -> str:
+		"""
+		Ensure a nominal struct TypeId is declared as a named LLVM type.
+
+		We declare structs lazily as they are encountered in signatures/IR, and we
+		cache by nominal type name so multiple functions share the same LLVM type.
+
+		Args:
+		  ty_id: TypeId of the struct (TypeKind.STRUCT).
+		  type_table: the shared TypeTable defining struct schemas.
+		  map_type: callback `TypeId -> llty` used to map field types.
+
+		Returns:
+		  LLVM type name (e.g. `%Struct_Point`).
+		"""
+		td = type_table.get(ty_id)
+		if td.kind is not TypeKind.STRUCT:
+			raise AssertionError("ensure_struct_type called with non-STRUCT TypeId")
+		name = td.name
+		if name in self._struct_types_by_name:
+			return self._struct_types_by_name[name]
+		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+		llvm_name = f"%Struct_{safe}"
+		# Insert into cache before mapping fields to allow self-recursive pointer
+		# shapes like `struct Node { next: &Node }` to refer to the named type.
+		self._struct_types_by_name[name] = llvm_name
+		field_lltys = [map_type(ft) for ft in td.param_types]
+		body = ", ".join(field_lltys) if field_lltys else ""
+		self.type_decls.append(f"{llvm_name} = type {{ {body} }}")
+		return llvm_name
 
 	def fnresult_type(self, ok_key: str, ok_llty: str) -> str:
 		"""
@@ -847,6 +889,75 @@ class _FuncBuilder:
 			self.aliases[instr.dest] = alloca_id
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = f"{llty}*"
+		elif isinstance(instr, AddrOfArrayElem):
+			array = self._map_value(instr.array)
+			index = self._map_value(instr.index)
+			elem_llty = self._llvm_type_for_typeid(instr.inner_ty)
+			arr_llty = self._llvm_array_type(elem_llty)
+			ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
+			# Record an alias so later uses resolve to the computed pointer.
+			self.aliases[instr.dest] = ptr_tmp[1:] if ptr_tmp.startswith("%") else ptr_tmp
+			dest = self._map_value(instr.dest)
+			self.value_types[dest] = f"{elem_llty}*"
+		elif isinstance(instr, AddrOfField):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: AddrOfField requires a TypeTable")
+			base_ptr = self._map_value(instr.base_ptr)
+			struct_llty = self._llvm_type_for_typeid(instr.struct_ty)
+			want_ptr_ty = f"{struct_llty}*"
+			have_ptr_ty = self.value_types.get(base_ptr)
+			if have_ptr_ty is not None and have_ptr_ty != want_ptr_ty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: AddrOfField base pointer type mismatch (have {have_ptr_ty}, expected {want_ptr_ty})"
+				)
+			field_llty = self._llvm_type_for_typeid(instr.field_ty)
+			dest = self._map_value(instr.dest)
+			self.lines.append(
+				f"  {dest} = getelementptr inbounds {struct_llty}, {want_ptr_ty} {base_ptr}, i32 0, i32 {instr.field_index}"
+			)
+			self.value_types[dest] = f"{field_llty}*"
+		elif isinstance(instr, ConstructStruct):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: ConstructStruct requires a TypeTable")
+			struct_def = self.type_table.get(instr.struct_ty)
+			if struct_def.kind is not TypeKind.STRUCT:
+				raise AssertionError("ConstructStruct with non-STRUCT TypeId (MIR bug)")
+			struct_llty = self._llvm_type_for_typeid(instr.struct_ty)
+			current = "undef"
+			if len(instr.args) != len(struct_def.param_types):
+				raise AssertionError("ConstructStruct arg/field length mismatch (MIR bug)")
+			if not struct_def.param_types:
+				raise NotImplementedError("LLVM codegen v1: empty struct construction not supported yet")
+			for idx, (arg, field_ty) in enumerate(zip(instr.args, struct_def.param_types)):
+				arg_val = self._map_value(arg)
+				field_llty = self._llvm_type_for_typeid(field_ty)
+				have = self.value_types.get(arg_val)
+				if have is not None and have != field_llty:
+					raise NotImplementedError(
+						f"LLVM codegen v1: struct field {idx} type mismatch (have {have}, expected {field_llty})"
+					)
+				is_last = idx == len(struct_def.param_types) - 1
+				tmp = self._map_value(instr.dest) if is_last else self._fresh("struct")
+				self.lines.append(
+					f"  {tmp} = insertvalue {struct_llty} {current}, {field_llty} {arg_val}, {idx}"
+				)
+				current = tmp
+			dest = self._map_value(instr.dest)
+			self.value_types[dest] = struct_llty
+		elif isinstance(instr, StructGetField):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: StructGetField requires a TypeTable")
+			struct_llty = self._llvm_type_for_typeid(instr.struct_ty)
+			subject = self._map_value(instr.subject)
+			have_struct = self.value_types.get(subject)
+			if have_struct is not None and have_struct != struct_llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: StructGetField subject type mismatch (have {have_struct}, expected {struct_llty})"
+				)
+			field_llty = self._llvm_type_for_typeid(instr.field_ty)
+			dest = self._map_value(instr.dest)
+			self.lines.append(f"  {dest} = extractvalue {struct_llty} {subject}, {instr.field_index}")
+			self.value_types[dest] = field_llty
 		elif isinstance(instr, LoadRef):
 			ptr = self._map_value(instr.ptr)
 			llty = self._llvm_type_for_typeid(instr.inner_ty)
@@ -1313,6 +1424,8 @@ class _FuncBuilder:
 				if td.param_types:
 					inner_llty = self._llvm_type_for_typeid(td.param_types[0])
 				return f"{inner_llty}*"
+			if td.kind is TypeKind.STRUCT:
+				return self.module.ensure_struct_type(ty_id, type_table=self.type_table, map_type=self._llvm_type_for_typeid)
 			if td.kind is TypeKind.DIAGNOSTICVALUE:
 				return DRIFT_DV_TYPE
 			if td.kind is TypeKind.ERROR:
@@ -1633,19 +1746,38 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
 		index = self._map_value(instr.index)
-		idx_ty = self.value_types.get(index)
-		if idx_ty not in (DRIFT_SIZE_TYPE, "i64"):
-			raise NotImplementedError(
-				f"LLVM codegen v1: array index must be Int/Size, got {idx_ty}"
-			)
 		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
 		arr_llty = self._llvm_array_type(elem_llty)
+		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
+		self.lines.append(f"  {dest} = load {elem_llty}, {elem_llty}* {ptr_tmp}")
+		self.value_types[dest] = elem_llty
+
+	def _lower_array_index_store(self, instr: ArrayIndexStore) -> None:
+		"""Lower ArrayIndexStore with bounds checks and a store into data[idx]."""
+		array = self._map_value(instr.array)
+		index = self._map_value(instr.index)
+		value = self._map_value(instr.value)
+		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
+		arr_llty = self._llvm_array_type(elem_llty)
+		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
+		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
+		# No dest; ArrayIndexStore returns void.
+
+	def _lower_array_index_addr(self, *, array: str, index: str, elem_llty: str, arr_llty: str) -> str:
+		"""
+		Compute `&array[index]` with bounds checks and return an `{elem_llty}*`.
+
+		This is used by:
+		- ArrayIndexLoad/Store (to avoid duplicating pointer arithmetic), and
+		- AddrOfArrayElem (borrow of array element).
+		"""
+		idx_ty = self.value_types.get(index)
+		if idx_ty not in (DRIFT_SIZE_TYPE, "i64"):
+			raise NotImplementedError(f"LLVM codegen v1: array index must be Int/Size, got {idx_ty}")
 		# Extract len and data
 		len_tmp = self._fresh("len")
-		cap_tmp = self._fresh("cap")
 		data_tmp = self._fresh("data")
 		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {array}, 0")
-		self.lines.append(f"  {cap_tmp} = extractvalue {arr_llty} {array}, 1")
 		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {array}, 2")
 		# Bounds checks: idx < 0 or idx >= len => drift_bounds_check_fail
 		neg_cmp = self._fresh("negcmp")
@@ -1666,51 +1798,10 @@ class _FuncBuilder:
 		# Ok block
 		self.lines.append(f"{ok_block[1:]}:")
 		ptr_tmp = self._fresh("eltptr")
-		self.lines.append(f"  {ptr_tmp} = getelementptr inbounds {elem_llty}, {elem_llty}* {data_tmp}, {DRIFT_SIZE_TYPE} {index}")
-		self.lines.append(f"  {dest} = load {elem_llty}, {elem_llty}* {ptr_tmp}")
-		self.value_types[dest] = elem_llty
-
-	def _lower_array_index_store(self, instr: ArrayIndexStore) -> None:
-		"""Lower ArrayIndexStore with bounds checks and a store into data[idx]."""
-		array = self._map_value(instr.array)
-		index = self._map_value(instr.index)
-		value = self._map_value(instr.value)
-		idx_ty = self.value_types.get(index)
-		if idx_ty not in (DRIFT_SIZE_TYPE, "i64"):
-			raise NotImplementedError(
-				f"LLVM codegen v1: array index must be Int/Size, got {idx_ty}"
-			)
-		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
-		arr_llty = self._llvm_array_type(elem_llty)
-		# Extract len and data
-		len_tmp = self._fresh("len")
-		cap_tmp = self._fresh("cap")
-		data_tmp = self._fresh("data")
-		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {array}, 0")
-		self.lines.append(f"  {cap_tmp} = extractvalue {arr_llty} {array}, 1")
-		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {array}, 2")
-		# Bounds checks
-		neg_cmp = self._fresh("negcmp")
-		self.lines.append(f"  {neg_cmp} = icmp slt {DRIFT_SIZE_TYPE} {index}, 0")
-		oob_cmp = self._fresh("oobcmp")
-		self.lines.append(f"  {oob_cmp} = icmp uge {DRIFT_SIZE_TYPE} {index}, {len_tmp}")
-		oob_or = self._fresh("oobor")
-		self.lines.append(f"  {oob_or} = or i1 {neg_cmp}, {oob_cmp}")
-		ok_block = self._fresh("array_ok")
-		fail_block = self._fresh("array_oob")
-		self.lines.append(f"  br i1 {oob_or}, label {fail_block}, label {ok_block}")
-		# Fail
-		self.lines.append(f"{fail_block[1:]}:")
 		self.lines.append(
-			f"  call void @drift_bounds_check_fail({DRIFT_SIZE_TYPE} {index}, {DRIFT_SIZE_TYPE} {len_tmp})"
+			f"  {ptr_tmp} = getelementptr inbounds {elem_llty}, {elem_llty}* {data_tmp}, {DRIFT_SIZE_TYPE} {index}"
 		)
-		self.lines.append("  unreachable")
-		# Ok
-		self.lines.append(f"{ok_block[1:]}:")
-		ptr_tmp = self._fresh("eltptr")
-		self.lines.append(f"  {ptr_tmp} = getelementptr inbounds {elem_llty}, {elem_llty}* {data_tmp}, {DRIFT_SIZE_TYPE} {index}")
-		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
-		# No dest; ArrayIndexStore returns void.
+		return ptr_tmp
 
 	def _lower_array_len(self, instr: ArrayLen) -> None:
 		"""Lower ArrayLen by extracting the len field (index 0)."""

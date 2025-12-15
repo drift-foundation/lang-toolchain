@@ -839,16 +839,34 @@ def _build_struct_def(tree: Tree) -> StructDef:
 
 
 def _collect_struct_fields(tree: Tree) -> List[Tree]:
+    """
+    Collect `struct_field` nodes from a struct body, preserving source order.
+
+    Struct declarations have two surface forms:
+      - tuple form: `struct S(x: Int, y: Int)`
+      - block form: `struct S { x: Int, y: Int }`
+
+    The parser needs the declared field order to be stable and predictable:
+      - it defines the positional constructor argument order (`S(1, 2)`),
+      - it defines the layout order in the TypeTable (field indices),
+      - it defines the LLVM struct layout order (GEP indices).
+
+    This walk is intentionally order-preserving (left-to-right pre-order). Avoid
+    stack-based DFS here: it reverses field ordering and silently miscompiles
+    field access/borrows.
+    """
     result: List[Tree] = []
-    stack = [tree]
-    while stack:
-        node = stack.pop()
+
+    def walk(node: object) -> None:
         if not isinstance(node, Tree):
-            continue
+            return
         if _name(node) == "struct_field":
             result.append(node)
-            continue
-        stack.extend(node.children)
+            return
+        for child in node.children:
+            walk(child)
+
+    walk(tree)
     return result
 
 

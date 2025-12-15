@@ -1,0 +1,6 @@
+{
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "borrowcheck", "message_contains": "cannot write to 'p' while it is borrowed" }
+  ]
+}

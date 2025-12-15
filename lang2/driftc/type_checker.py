@@ -23,7 +23,15 @@ from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.types_core import TypeId, TypeTable, TypeKind
-from lang2.driftc.borrow_checker import Place, PlaceBase, PlaceKind
+from lang2.driftc.borrow_checker import (
+	DerefProj,
+	FieldProj,
+	IndexProj,
+	Place,
+	PlaceBase,
+	PlaceKind,
+	place_from_expr,
+)
 from lang2.driftc.method_registry import CallableDecl, CallableRegistry, ModuleId
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_function_call, resolve_method_call
 
@@ -208,24 +216,55 @@ class TypeChecker:
 			# Borrow.
 			if isinstance(expr, H.HBorrow):
 				inner_ty = type_expr(expr.subject)
-				# MVP: borrowing is only supported from locals/params (addressable places).
-				# Borrowing rvalues (e.g. `&foo()`) is rejected until we implement
-				# temporary materialization.
-				if not isinstance(expr.subject, H.HVar) or expr.subject.binding_id is None:
+				# MVP: borrowing is only supported from addressable places.
+				#
+				# Current support:
+				# - locals/params: `&x`, `&mut x`
+				# - reborrow through a reference: `&*p`, `&mut *p`
+				#
+				# Future work: field/index borrows and temporary materialization of rvalues.
+				def _base_lookup(hv: object) -> Optional[PlaceBase]:
+					bid = getattr(hv, "binding_id", None)
+					if bid is None:
+						return None
+					kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
+					name = hv.name if hasattr(hv, "name") else str(hv)
+					return PlaceBase(kind=kind, local_id=bid, name=name)
+
+				place = place_from_expr(expr.subject, base_lookup=_base_lookup)
+				if place is None:
 					diagnostics.append(
 						Diagnostic(
-							message="borrow operand must be an addressable place (local/param) in MVP",
+							message="borrow operand must be an addressable place in MVP (local/param or deref place)",
 							severity="error",
 							span=getattr(expr, "loc", Span()),
 						)
 					)
 					return record_expr(expr, self._unknown)
 
-				bid = expr.subject.binding_id
-				place_kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
-				place = Place(PlaceBase(kind=place_kind, local_id=bid, name=expr.subject.name))
+				# MVP: we accept borrowing from nested projections (`x.field`, `arr[i]`,
+				# `(*p).field`, etc.) as long as the operand is a real place.
+				#
+				# Note: rvalues are rejected above by `place_from_expr` returning None.
+				# We intentionally do not allow autoref: callers must write `&x`.
+
 				if expr.is_mut:
-					if not binding_mutable.get(bid, False):
+					# `&mut x` requires `x` to be `var`.
+					#
+					# We enforce two invariants:
+					#  - If the borrow is from owned storage (no deref projections), the base
+					#    binding must be `var`. (Example: `&mut p.x` where `p` is a local.)
+					#  - If the borrow goes through a deref projection (reborrow), mutability
+					#    comes from the reference being dereferenced (Example: `&mut (*p).x`
+					#    where `p: &mut Point`). In that case, the base binding does not need
+					#    to be `var` (params are effectively `val`), but the dereferenced
+					#    reference must be `&mut`.
+					#  - If the place includes a deref projection, the reference being dereferenced
+					#    must itself be mutable (`&mut`), i.e. a mutable reborrow.
+					has_deref = any(isinstance(p, DerefProj) for p in place.projections)
+					if (not has_deref) and place.base.local_id is not None and not binding_mutable.get(
+						place.base.local_id, False
+					):
 						diagnostics.append(
 							Diagnostic(
 								message="cannot take &mut of an immutable binding; declare it with `var`",
@@ -233,6 +272,31 @@ class TypeChecker:
 								span=getattr(expr, "loc", Span()),
 							)
 						)
+					# Detect a deref projection anywhere in the place and validate the corresponding
+					# reference expression is `&mut`.
+					#
+					# We do a conservative check by inspecting the surface operand tree: if the borrow
+					# operand contains any unary deref, the pointer being dereferenced must type as `&mut _`.
+					def _validate_mutable_derefs(node: H.HExpr) -> None:
+						if isinstance(node, H.HUnary) and node.op is H.UnaryOp.DEREF:
+							ptr_ty = type_expr(node.expr)
+							ptr_def = self.type_table.get(ptr_ty)
+							if ptr_def.kind is not TypeKind.REF or not ptr_def.ref_mut:
+								diagnostics.append(
+									Diagnostic(
+										message="cannot take &mut through *p unless p is a mutable reference (&mut T)",
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+							_validate_mutable_derefs(node.expr)
+						elif isinstance(node, H.HField):
+							_validate_mutable_derefs(node.subject)
+						elif isinstance(node, H.HIndex):
+							_validate_mutable_derefs(node.subject)
+							_validate_mutable_derefs(node.index)
+
+					_validate_mutable_derefs(expr.subject)
 					if place in borrows_in_stmt:
 						diagnostics.append(
 							Diagnostic(
@@ -259,8 +323,21 @@ class TypeChecker:
 			# Calls.
 			if isinstance(expr, H.HCall):
 				# Always type fn and args first for side-effects/subexpressions.
+				#
+				# Special-case struct constructors: `Point(1, 2)` uses a call-like
+				# surface form but is not a function call. In that case we must *not*
+				# type-check `expr.fn` as a normal expression (`Point` is a type name,
+				# not a value), otherwise we'd emit a misleading "unknown variable"
+				# diagnostic before the constructor path has a chance to fire.
 				should_type_fn = True
 				if isinstance(expr.fn, H.HVar):
+					is_struct_ctor = (
+						expr.fn.name in self.type_table.struct_schemas
+						and callable_registry is None
+						and (call_signatures is None or expr.fn.name not in call_signatures)
+					)
+					if is_struct_ctor:
+						should_type_fn = False
 					if callable_registry is not None:
 						should_type_fn = False
 					elif call_signatures and expr.fn.name in call_signatures:
@@ -268,6 +345,53 @@ class TypeChecker:
 				if should_type_fn:
 					type_expr(expr.fn)
 				arg_types = [type_expr(a) for a in expr.args]
+
+				# Struct constructor: `Point(1, 2)` constructs a `struct Point`.
+				#
+				# In v1, struct initialization uses a call-like surface form. This is a
+				# language-level construct (not a function call) and must work even when
+				# a callable registry is present.
+				#
+				# We only treat the call as a constructor when there is no known callable
+				# signature for the same name (to avoid ambiguity if user code later
+				# allows a free function named `Point`).
+				if (
+					(call_signatures is None or not (isinstance(expr.fn, H.HVar) and expr.fn.name in call_signatures))
+					and isinstance(expr.fn, H.HVar)
+					and expr.fn.name in self.type_table.struct_schemas
+				):
+					struct_name = expr.fn.name
+					struct_id = self.type_table.ensure_named(struct_name)
+					struct_def = self.type_table.get(struct_id)
+					if struct_def.kind is not TypeKind.STRUCT:
+						diagnostics.append(
+							Diagnostic(
+								message=f"internal: struct schema '{struct_name}' is not a STRUCT TypeId",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					field_types = list(struct_def.param_types)
+					if len(arg_types) != len(field_types):
+						diagnostics.append(
+							Diagnostic(
+								message=f"struct '{struct_name}' constructor expects {len(field_types)} args, got {len(arg_types)}",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, struct_id)
+					for idx, (have, want) in enumerate(zip(arg_types, field_types)):
+						if have != want:
+							diagnostics.append(
+								Diagnostic(
+									message=f"struct '{struct_name}' constructor arg {idx} type mismatch (have {self.type_table.get(have).name}, expected {self.type_table.get(want).name})",
+									severity="error",
+									span=getattr(expr.args[idx], "loc", Span()),
+								)
+							)
+					return record_expr(expr, struct_id)
 
 				# Try registry-based resolution when available.
 				if callable_registry and isinstance(expr.fn, H.HVar):
@@ -357,8 +481,21 @@ class TypeChecker:
 						)
 					)
 					return record_expr(expr, self._unknown)
-				# Placeholder until we model structs/records.
-				_ = sub_ty
+				# Struct fields: `x.field`
+				sub_def = self.type_table.get(sub_ty)
+				if sub_def.kind is TypeKind.STRUCT:
+					info = self.type_table.struct_field(sub_ty, expr.name)
+					if info is None:
+						diagnostics.append(
+							Diagnostic(
+								message=f"unknown field '{expr.name}' on struct '{sub_def.name}'",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					_, field_ty = info
+					return record_expr(expr, field_ty)
 				return record_expr(expr, self._unknown)
 
 			if isinstance(expr, H.HIndex):

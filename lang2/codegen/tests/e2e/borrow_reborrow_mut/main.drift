@@ -1,0 +1,8 @@
+fn main() returns Int {
+	var x = 41;
+	val p = &mut x;
+	val q = &mut *p;
+	*q = *q + 1;
+	return x;
+}
+

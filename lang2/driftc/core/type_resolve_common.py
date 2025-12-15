@@ -60,7 +60,8 @@ def resolve_opaque_type(raw: object, table: TypeTable) -> TypeId:
 			return table.ensure_float()
 		if name == "Error":
 			return table.ensure_error()
-		return table.new_scalar(str(name))
+		# User-defined nominal types (e.g. structs) and unknown names.
+		return table.ensure_named(str(name))
 
 	# String forms.
 	if isinstance(raw, str):
@@ -99,7 +100,8 @@ def resolve_opaque_type(raw: object, table: TypeTable) -> TypeId:
 			inner = raw[len("Optional<"):-1]
 			inner_ty = resolve_opaque_type(inner, table)
 			return table.new_optional(inner_ty)
-		return table.new_scalar(raw)
+		# User-defined nominal types (e.g. structs) and unknown names.
+		return table.ensure_named(raw)
 
 	# Tuple forms used by legacy call sites.
 	if isinstance(raw, tuple):

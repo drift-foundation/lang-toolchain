@@ -154,6 +154,26 @@ class AddrOfLocal(MInstr):
 
 
 @dataclass
+class AddrOfArrayElem(MInstr):
+	"""
+	dest = &array[index] (address of an array element).
+
+	This is the MIR primitive backing `&arr[i]` / `&mut arr[i]`.
+
+	Lowering responsibility:
+	- Codegen must perform bounds checks when computing the element address, so
+	  subsequent `LoadRef` / `StoreRef` do not need to re-check bounds.
+	- `inner_ty` identifies the element type for typed pointer computation in
+	  LLVM IR (`T*`).
+	"""
+	dest: ValueId
+	array: ValueId
+	index: ValueId
+	inner_ty: TypeId
+	is_mut: bool = False
+
+
+@dataclass
 class LoadRef(MInstr):
 	"""
 	dest = *ptr (load through a reference).
@@ -187,6 +207,69 @@ class StoreLocal(MInstr):
 	"""locals[local] = value"""
 	local: LocalId
 	value: ValueId
+
+
+@dataclass
+class ConstructStruct(MInstr):
+	"""
+	dest = StructName(field0, field1, ...)
+
+	This instruction constructs a struct value by positional field order.
+
+	Design notes:
+	- `struct_ty` is the nominal TypeId of the struct. Field names and field
+	  types are looked up in the shared `TypeTable` downstream.
+	- This is a pure value constructor (no allocation); it maps naturally to
+	  LLVM `insertvalue` chains into an `undef` aggregate.
+	"""
+
+	dest: ValueId
+	struct_ty: TypeId
+	args: List[ValueId]
+
+
+@dataclass
+class StructGetField(MInstr):
+	"""
+	dest = subject.<field_index> (struct field read).
+
+	We encode the field selection by index (not name) so MIR is independent of
+	string-based name resolution once lowering has validated schemas.
+	"""
+
+	dest: ValueId
+	subject: ValueId
+	struct_ty: TypeId
+	field_index: int
+	field_ty: TypeId
+
+
+@dataclass
+class AddrOfField(MInstr):
+	"""
+	dest = &base_ptr.<field_index> (address of a struct field).
+
+	This is the MIR primitive backing field borrows and field assignments via
+	reference operations (`LoadRef` / `StoreRef`).
+
+	Inputs:
+	  - `base_ptr` must be a pointer to a struct value (`struct_ty*` in LLVM IR).
+	  - `struct_ty` is the nominal TypeId of that struct.
+	  - `field_index` selects the field by positional order.
+	  - `field_ty` is the TypeId of the selected field (for typed pointer
+	    computation downstream).
+
+	`is_mut` records whether the originating borrow/assignment was mutable at the
+	surface level; LLVM does not encode mutability, but the checker/borrow-checker
+	do.
+	"""
+
+	dest: ValueId
+	base_ptr: ValueId
+	struct_ty: TypeId
+	field_index: int
+	field_ty: TypeId
+	is_mut: bool = False
 
 
 @dataclass
@@ -588,9 +671,13 @@ __all__ = [
 	"StringConcat",
 	"LoadLocal",
 	"AddrOfLocal",
+	"AddrOfArrayElem",
 	"LoadRef",
 	"StoreRef",
 	"StoreLocal",
+	"ConstructStruct",
+	"StructGetField",
+	"AddrOfField",
 	"LoadField",
 	"StoreField",
 	"LoadIndex",

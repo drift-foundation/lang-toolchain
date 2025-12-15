@@ -325,15 +325,18 @@ class HIRToMIR:
 		"""
 		Lower a borrow expression (`&x` / `&mut x`).
 
-		MVP limitation: only local/param borrows are supported (HVar). Borrowing
-		rvalues requires temporary materialization and is rejected by the checker.
+		MVP: borrowing is only supported from addressable places. The checker and
+		stage1 normalization are responsible for ensuring we only see:
+		  - locals/params and nested projections (`x.field`, `arr[i]`, ...)
+		  - reborrows through deref places (`&*p` / `&mut *p`)
+		  - shared borrows of rvalues rewritten via temporary materialization
+		    (`&(expr)` becomes `val tmp = expr; &tmp`).
+
+		This lowering is intentionally place-driven: it computes the address of the
+		referenced storage and returns it as the borrow result.
 		"""
-		if not isinstance(expr.subject, H.HVar):
-			raise AssertionError("borrow of non-local reached MIR lowering (checker bug)")
-		self.b.ensure_local(expr.subject.name)
-		dest = self.b.new_temp()
-		self.b.emit(M.AddrOfLocal(dest=dest, local=expr.subject.name, is_mut=expr.is_mut))
-		return dest
+		ptr, _inner = self._lower_addr_of_place(expr.subject, is_mut=expr.is_mut)
+		return ptr
 
 	def _visit_expr_HUnary(self, expr: H.HUnary) -> M.ValueId:
 		# Dereference is modeled as an explicit MIR load.
@@ -394,8 +397,27 @@ class HIRToMIR:
 			return dest
 		if expr.name == "attrs":
 			raise NotImplementedError("attrs view must be indexed: Error.attrs[\"key\"]")
+		# Struct field access.
+		subj_ty = self._infer_expr_type(expr.subject)
+		if subj_ty is None:
+			raise AssertionError("struct field type unknown in MIR lowering (checker bug)")
+		sub_def = self._type_table.get(subj_ty)
+		if sub_def.kind is not TypeKind.STRUCT:
+			raise NotImplementedError(f"field access is only supported on structs in v1 (have {sub_def.kind})")
+		info = self._type_table.struct_field(subj_ty, expr.name)
+		if info is None:
+			raise AssertionError("unknown struct field reached MIR lowering (checker bug)")
+		field_idx, field_ty = info
 		dest = self.b.new_temp()
-		self.b.emit(M.LoadField(dest=dest, subject=subject, field=expr.name))
+		self.b.emit(
+			M.StructGetField(
+				dest=dest,
+				subject=subject,
+				struct_ty=subj_ty,
+				field_index=field_idx,
+				field_ty=field_ty,
+			)
+		)
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
@@ -451,6 +473,21 @@ class HIRToMIR:
 		"""
 		if isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
+			# Struct constructor: `Point(1, 2)` constructs a struct value.
+			#
+			# This only triggers when there is no function signature for the same
+			# name (to avoid ambiguity in older tests).
+			if name in getattr(self._type_table, "struct_schemas", {}) and name not in self._signatures:
+				struct_ty = self._type_table.ensure_named(name)
+				struct_def = self._type_table.get(struct_ty)
+				if struct_def.kind is not TypeKind.STRUCT:
+					raise AssertionError("struct schema name resolved to non-STRUCT TypeId (checker bug)")
+				arg_vals = [self.lower_expr(a) for a in expr.args]
+				if len(arg_vals) != len(struct_def.param_types):
+					raise AssertionError("struct ctor arg count mismatch reached MIR lowering (checker bug)")
+				dest = self.b.new_temp()
+				self.b.emit(M.ConstructStruct(dest=dest, struct_ty=struct_ty, args=arg_vals))
+				return dest
 			# Builtin byte_length/len(x) for String/Array.
 			if name in ("len", "byte_length") and len(expr.args) == 1:
 				arg_expr = expr.args[0]
@@ -593,7 +630,7 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 		# Join: load the temp as the value of the ternary and continue.
-			self.b.set_block(join_block)
+		self.b.set_block(join_block)
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
 		return dest
@@ -811,8 +848,10 @@ class HIRToMIR:
 				self._local_types[stmt.target.name] = val_ty
 			self.b.emit(M.StoreLocal(local=stmt.target.name, value=val))
 		elif isinstance(stmt.target, H.HField):
-			subject = self.lower_expr(stmt.target.subject)
-			self.b.emit(M.StoreField(subject=subject, field=stmt.target.name, value=val))
+			# Lower field assignment via an address computation + StoreRef so the
+			# write updates the original storage (not a temporary copy).
+			ptr, inner_ty = self._lower_addr_of_place(stmt.target, is_mut=True)
+			self.b.emit(M.StoreRef(ptr=ptr, value=val, inner_ty=inner_ty))
 		elif isinstance(stmt.target, H.HIndex):
 			subject = self.lower_expr(stmt.target.subject)
 			index = self.lower_expr(stmt.target.index)
@@ -1486,6 +1525,9 @@ class HIRToMIR:
 			return self._string_type
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
+			# Struct constructor call: result is the struct TypeId.
+			if name in getattr(self._type_table, "struct_schemas", {}):
+				return self._type_table.ensure_named(name)
 			sig_ret = self._return_type_for_name(name)
 			if sig_ret is not None:
 				return sig_ret
@@ -1508,6 +1550,17 @@ class HIRToMIR:
 				return self._uint_type
 			if expr.name == "attrs" and ty_def.kind is TypeKind.ERROR:
 				return self._dv_type
+		if isinstance(expr, H.HField):
+			subj_ty = self._infer_expr_type(expr.subject)
+			if subj_ty is None:
+				return None
+			sub_def = self._type_table.get(subj_ty)
+			if sub_def.kind is TypeKind.STRUCT:
+				info = self._type_table.struct_field(subj_ty, expr.name)
+				if info is None:
+					return None
+				_, fty = info
+				return fty
 		if isinstance(expr, H.HArrayLiteral):
 			elem_ty = self._infer_array_literal_elem_type(expr)
 			return self._type_table.new_array(elem_ty)
@@ -1548,6 +1601,87 @@ class HIRToMIR:
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			return self._infer_expr_type(expr.attempt)
 		return None
+
+	def _lower_addr_of_place(self, expr: H.HExpr, *, is_mut: bool) -> tuple[M.ValueId, TypeId]:
+		"""
+		Lower an addressable HIR "place" to a pointer and its pointee TypeId.
+
+		This is the common primitive for:
+		  - borrows (`&place` / `&mut place`)
+		  - field assignment lowering (`place.field = v`)
+
+		`is_mut` records the mutability of the originating borrow/assignment; LLVM
+		lowering uses the same pointer representation for `&T` and `&mut T`.
+
+		Invariants:
+		  - The checker (plus stage1 temporary materialization) ensures `expr` is a
+		    real place. If we see an rvalue here, it's a pipeline bug.
+		"""
+		# Locals/params: address-of storage.
+		if isinstance(expr, H.HVar):
+			self.b.ensure_local(expr.name)
+			ty = self._infer_expr_type(expr)
+			if ty is None:
+				raise AssertionError("address-of local type unknown in MIR lowering (checker bug)")
+			dest = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=dest, local=expr.name, is_mut=is_mut))
+			return dest, ty
+
+		# Deref place: `*p` as an lvalue yields the underlying pointer value.
+		if isinstance(expr, H.HUnary) and expr.op is H.UnaryOp.DEREF:
+			ptr_ty = self._infer_expr_type(expr.expr)
+			if ptr_ty is None:
+				raise AssertionError("deref place type unknown in MIR lowering (checker bug)")
+			td = self._type_table.get(ptr_ty)
+			if td.kind is not TypeKind.REF or not td.param_types:
+				raise AssertionError("deref place of non-ref reached MIR lowering (checker bug)")
+			if is_mut and not td.ref_mut:
+				raise AssertionError("mutable deref place without &mut reached MIR lowering (checker bug)")
+			inner_ty = td.param_types[0]
+			ptr_val = self.lower_expr(expr.expr)
+			return ptr_val, inner_ty
+
+		# Array index place: `arr[i]` yields the element address.
+		if isinstance(expr, H.HIndex):
+			array_val = self.lower_expr(expr.subject)
+			index_val = self.lower_expr(expr.index)
+			elem_ty = self._infer_array_elem_type(expr.subject)
+			dest = self.b.new_temp()
+			self.b.emit(
+				M.AddrOfArrayElem(
+					dest=dest,
+					array=array_val,
+					index=index_val,
+					inner_ty=elem_ty,
+					is_mut=is_mut,
+				)
+			)
+			return dest, elem_ty
+
+		# Struct field place: `base.field`.
+		if isinstance(expr, H.HField):
+			base_ptr, base_ty = self._lower_addr_of_place(expr.subject, is_mut=is_mut)
+			base_def = self._type_table.get(base_ty)
+			if base_def.kind is not TypeKind.STRUCT:
+				raise AssertionError("field place base is not a struct (checker bug)")
+			info = self._type_table.struct_field(base_ty, expr.name)
+			if info is None:
+				raise AssertionError("unknown struct field reached MIR lowering (checker bug)")
+			field_idx, field_ty = info
+			dest = self.b.new_temp()
+			self.b.emit(
+				M.AddrOfField(
+					dest=dest,
+					base_ptr=base_ptr,
+					struct_ty=base_ty,
+					field_index=field_idx,
+					field_ty=field_ty,
+					is_mut=is_mut,
+				)
+			)
+			return dest, field_ty
+
+		raise AssertionError("address-of unsupported place reached MIR lowering (checker bug)")
 
 	def _lookup_error_code(self, payload_expr: H.HExpr | None = None, *, event_fqn: str | None = None) -> int:
 		"""

@@ -1627,8 +1627,11 @@ class Checker:
 			LoadLocal,
 			StoreLocal,
 			AddrOfLocal,
+			AddrOfField,
 			LoadRef,
 			StoreRef,
+			ConstructStruct,
+			StructGetField,
 			ConstructResultOk,
 			ConstructResultErr,
 			ResultIsErr,
@@ -1733,6 +1736,16 @@ class Checker:
 									if value_types.get((fn_name, dest)) != ref_ty:
 										value_types[(fn_name, dest)] = ref_ty
 										changed = True
+							elif isinstance(instr, AddrOfField) and dest is not None:
+								# Address-of field yields a reference to the field type.
+								ref_ty = (
+									self._type_table.ensure_ref_mut(instr.field_ty)
+									if getattr(instr, "is_mut", False)
+									else self._type_table.ensure_ref(instr.field_ty)
+								)
+								if value_types.get((fn_name, dest)) != ref_ty:
+									value_types[(fn_name, dest)] = ref_ty
+									changed = True
 							elif isinstance(instr, LoadRef) and dest is not None:
 								# Deref load result type is the element TypeId carried by the MIR.
 								if value_types.get((fn_name, dest)) != instr.inner_ty:
@@ -1773,6 +1786,16 @@ class Checker:
 								arr_ty = self._type_table.new_array(instr.elem_ty)
 								if value_types.get((fn_name, dest)) != arr_ty:
 									value_types[(fn_name, dest)] = arr_ty
+									changed = True
+							elif isinstance(instr, ConstructStruct) and dest is not None:
+								# Struct construction yields the nominal struct TypeId carried by MIR.
+								if value_types.get((fn_name, dest)) != instr.struct_ty:
+									value_types[(fn_name, dest)] = instr.struct_ty
+									changed = True
+							elif isinstance(instr, StructGetField) and dest is not None:
+								# Struct field access yields the field TypeId carried by MIR.
+								if value_types.get((fn_name, dest)) != instr.field_ty:
+									value_types[(fn_name, dest)] = instr.field_ty
 									changed = True
 							elif isinstance(instr, ConstructResultOk):
 								if dest is None:

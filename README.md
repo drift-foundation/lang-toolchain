@@ -15,15 +15,17 @@ Drift is a systems programming language focused on deterministic resource manage
 📜 **Formal grammar:** [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md)
 
 ## Release-1 objectives
-
 - Modules/imports
 - Structs + enums + match
 - Generics (Vec, Map, Option, Result)
-- Error propagation (Result + sugar)
+- Error propagation (Result + exceptions)
+- Deterministic destruction (implicit nothrow destructors)
+- Green threads + reactor (epoll-based scheduler)
+- Nonblocking IO primitives (files, pipes, sockets)
+- Process spawning + capture (POSIX, pidfd-based)
 - Strings + bytes + formatting
 - File/path IO + argv/env
 - Hash map/set + sorting
-- Closures
 - RAII destruction
 - FFI to C
 

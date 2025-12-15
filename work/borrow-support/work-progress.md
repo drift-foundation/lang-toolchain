@@ -15,6 +15,8 @@ This tracker is authoritative for what we consider “done” vs “still missin
 ### Borrowable expressions (“addressable places”)
 - `&x` / `&mut x` is only valid when `x` is an **addressable place** (local, param, field, index, deref-place later).
 - `&(some_call())` is **rejected** in MVP unless we explicitly implement temporary materialization.
+ - Reborrows are supported: `&*p` / `&mut *p`.
+ - Shared borrows of rvalues are supported via temporary materialization: `&(<expr>)` becomes `val tmp = <expr>; &tmp`.
 
 ### Mutability rule (MVP)
 - `&mut x` requires `x` is declared `var` (not `val`).
@@ -104,6 +106,11 @@ Restrictions we keep explicit (reject with diagnostics):
   - Added e2e coverage:
     - `lang2/codegen/tests/e2e/borrow_string_param` (`&String` passed into a function).
     - `lang2/codegen/tests/e2e/borrow_mut_int` (`&mut Int` + `*p = *p + 1`).
+    - `lang2/codegen/tests/e2e/borrow_struct_field_local` (`&mut p.x` where `p` is a local struct).
+    - `lang2/codegen/tests/e2e/borrow_struct_field_param` (`&mut (*p).x` where `p: &mut Struct`).
+    - `lang2/codegen/tests/e2e/borrow_struct_field_disjoint_write_ok` (borrow `&p.x` then write `p.y` succeeds).
+    - `lang2/codegen/tests/e2e/borrow_struct_field_write_rejected` (borrow `&p.x` then write `p.x` is rejected).
+    - `lang2/codegen/tests/e2e/borrow_struct_overwrite_rejected` (borrow `&p.x` then overwrite `p` is rejected).
     - negative cases: `&mut` of `val`, borrow of rvalue.
   - Added unit coverage:
     - Write-while-borrowed is rejected.
@@ -116,14 +123,19 @@ Restrictions we keep explicit (reject with diagnostics):
 - Introduce a canonical “place” shape at the stage1/stage2 boundary:
   - `HPlace`: `Local(name) | Field(base, field) | Index(base, idx) | Deref(base) | …`
 - Extend borrow/deref lowering to cover:
-  - `&s.field`
-  - `&arr[i]`
-  - nested projections
-  - Extend the typed checker to accept borrowing from projections (today it only accepts locals/params as borrow operands).
+  - `&s.field` / `&mut s.field`
+  - `&arr[i]` / `&mut arr[i]`
+  - nested projections (`&p.items[i].name`, `&(*p).field`, etc.)
+
+Partial progress:
+- Reborrow via deref place is supported end-to-end: `&*p` / `&mut *p`.
+- Array element borrows are supported end-to-end: `&arr[i]` / `&mut arr[i]` (MVP: base must be a local/param array binding; bounds checked at borrow).
+- Nested array borrows through a reference are supported: `&(*p)[i]` / `&mut (*p)[i]`.
+- Struct field borrows are supported end-to-end for addressable struct places: `&p.x`, `&mut p.x`, `&(*p).x`, and combinations with indexing.
 
 #### 2) Temporary materialization
-- Keep rejecting `&(rvalue)` for MVP.
-- Optional extension: materialize rvalues into a hidden local, then borrow the temp.
+- Shared borrow of rvalues is supported via materialization (`&(expr)` becomes `val tmp = expr; &tmp`).
+- `&mut (rvalue)` remains rejected in MVP (no implicit temp materialization for mutable borrows).
 
 #### 3) Stronger tests (non-blocking)
 - Add targeted tests for:

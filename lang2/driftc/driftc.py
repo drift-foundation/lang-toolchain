@@ -440,6 +440,10 @@ def main(argv: list[str] | None = None) -> int:
 
 	# Checker (stub) enforces language-level rules (e.g., Void returns) before the
 	# lower-level TypeChecker/BorrowChecker run.
+	# Normalize HIR before any further analysis so:
+	# - sugar does not leak into later stages, and
+	# - borrow materialization runs before borrow checking.
+	func_hirs = {name: normalize_hir(block) for name, block in func_hirs.items()}
 	checker = Checker(
 		declared_can_throw=None,
 		signatures=signatures,
