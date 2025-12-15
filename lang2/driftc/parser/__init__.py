@@ -143,6 +143,7 @@ def _convert_let(stmt: parser_ast.LetStmt) -> s0.Stmt:
 		name=stmt.name,
 		value=_convert_expr(stmt.value),
 		type_expr=getattr(stmt, "type_expr", None),
+		mutable=bool(getattr(stmt, "mutable", False)),
 		loc=Span.from_loc(stmt.loc),
 	)
 

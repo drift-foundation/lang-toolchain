@@ -1,0 +1,5 @@
+fn main() returns Int {
+	val x = 1;
+	val p = &mut x;
+	return 0;
+}

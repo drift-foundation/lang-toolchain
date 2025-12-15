@@ -18,7 +18,7 @@ Scope (v1 bring-up):
     rejected explicitly.
 
 ABI (from docs/design/drift-lang-abi.md):
-  - %DriftError           = { i64 code, ptr attrs, i64 attr_count, ptr frames, i64 frame_count }
+  - %DriftError           = { i64 code, i8* attrs, i64 attr_count, i8* frames, i64 frame_count }
   - %FnResult_Int_Error   = { i1 is_err, i64 ok, %DriftError* err }
   - %FnResult_String_Error= { i1 is_err, %DriftString ok, %DriftError* err }
   - %FnResult_Void_Error  = { i1 is_err, i8 ok, %DriftError* err } (void-like ok)
@@ -61,6 +61,9 @@ from lang2.driftc.stage2 import (
 	DVAsString,
 	ErrorAttrsGetDV,
 	LoadLocal,
+	AddrOfLocal,
+	LoadRef,
+	StoreRef,
 	OptionalIsSome,
 	OptionalValue,
 	ResultErr,
@@ -237,7 +240,7 @@ class LlvmModuleBuilder:
 
 		We emit named types per ok payload for readability/ABI stability. Supported
 		ok payloads in v1: i64 (Int), %DriftString (String), i8 (void-like), and
-		ptr (Ref<T>). Error slot is always %DriftError*.
+		typed pointers `T*` (Ref<T>). Error slot is always %DriftError*.
 		"""
 		if ok_key in self._fnresult_types_by_key:
 			return self._fnresult_types_by_key[ok_key]
@@ -410,6 +413,16 @@ class _FuncBuilder:
 	value_map: Dict[str, str] = field(default_factory=dict)
 	value_types: Dict[str, str] = field(default_factory=dict)
 	aliases: Dict[str, str] = field(default_factory=dict)
+	# Locals whose address is taken via AddrOfLocal. These locals must be
+	# represented as real storage (alloca + load/store) because references
+	# require stable pointer identity.
+	addr_taken_locals: set[str] = field(default_factory=set)
+	# Local storage element type (LLVM type string) for address-taken locals.
+	local_storage_types: Dict[str, str] = field(default_factory=dict)
+	# LLVM value-id used as the alloca pointer for address-taken locals.
+	local_allocas: Dict[str, str] = field(default_factory=dict)
+	# Insertion point in `self.lines` for entry-block allocas/stores.
+	_entry_alloca_insert_index: int | None = None
 	string_type_id: Optional[TypeId] = None
 	int_type_id: Optional[TypeId] = None
 	bool_type_id: Optional[TypeId] = None
@@ -424,9 +437,21 @@ class _FuncBuilder:
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
+		self._scan_addr_taken_locals()
 		self._emit_header()
 		self._declare_array_helpers_if_needed()
+		# LLVM defines the function "entry block" as the first basic block in the
+		# function body. We rely on this invariant for memory-allocated locals:
+		# `alloca` instructions must be placed in the entry block so they dominate
+		# all uses and are eligible for canonical LLVM passes.
+		#
+		# The MIR/SSA layer already has a semantic entry (`self.func.entry`), but
+		# the textual emission order can drift (e.g. when SSA doesn't record an
+		# explicit block order). Make the invariant explicit here: always emit
+		# `self.func.entry` first.
 		order = self.ssa.block_order or list(self.func.blocks.keys())
+		if order and order[0] != self.func.entry:
+			order = [self.func.entry] + [b for b in order if b != self.func.entry]
 		for block_name in order:
 			self._emit_block(block_name)
 		self.lines.append("}")
@@ -489,6 +514,94 @@ class _FuncBuilder:
 			return
 		self.module.needs_array_helpers = True
 
+	def _scan_addr_taken_locals(self) -> None:
+		"""
+		Scan the MIR for locals whose address is taken.
+
+		SSA keeps these locals in memory form (LoadLocal/StoreLocal are not
+		rewritten to AssignSSA), and LLVM lowering allocates real storage slots
+		for them. This is required for correctness of `&T` / `&mut T`: taking the
+		address of a local must point at stable storage, not an SSA name.
+		"""
+		for block in self.func.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, AddrOfLocal):
+					self.addr_taken_locals.add(instr.local)
+
+	def _alloca_name_for_local(self, local: str) -> str:
+		"""
+		Return a stable SSA name for the alloca pointer for a local.
+
+		We keep it separate from the local name to avoid collisions with SSA
+		versioned locals (e.g. `x_1`) and to make IR easier to read.
+		"""
+		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in local)
+		return f"{safe}__addr"
+
+	def _ensure_entry_insertion_point(self) -> None:
+		"""
+		Ensure we have an insertion point for entry-block allocas/stores.
+
+		Phi nodes (if any) must appear first in a block. We insert allocas after
+		phis but before other instructions, and we only emit allocas in the entry
+		block (LLVM best practice).
+		"""
+		# This is only valid while emitting the entry block. Other code should
+		# assume the insertion point has already been established by entry-block
+		# emission, not create it opportunistically (which could place allocas in
+		# the wrong basic block if emission order changes).
+		assert self._current_block_name == self.func.entry
+		if self._entry_alloca_insert_index is None:
+			self._entry_alloca_insert_index = len(self.lines)
+
+	def _ensure_local_storage(self, local: str, llty: str) -> str:
+		"""
+		Ensure `local` has a dedicated storage slot and return the alloca value id.
+
+		The alloca itself is emitted into the entry block at the recorded insertion
+		point so it is in-scope for the whole function.
+		"""
+		existing = self.local_storage_types.get(local)
+		if existing is not None and existing != llty:
+			raise NotImplementedError(
+				f"LLVM codegen v1: local '{local}' storage type mismatch (have {existing}, expected {llty})"
+			)
+		self.local_storage_types[local] = llty
+		if local in self.local_allocas:
+			return self.local_allocas[local]
+		# Storage slots must live in the entry block to ensure the address is
+		# stable and dominates all uses. The insertion point is established when
+		# the entry block is emitted.
+		assert self._entry_alloca_insert_index is not None
+		alloca_id = self._alloca_name_for_local(local)
+		self.local_allocas[local] = alloca_id
+		self.value_map.setdefault(alloca_id, f"%{alloca_id}")
+		self.value_types[self.value_map[alloca_id]] = f"{llty}*"
+		self.lines.insert(self._entry_alloca_insert_index, f"  %{alloca_id} = alloca {llty}")
+		self._entry_alloca_insert_index += 1
+		return alloca_id
+
+	def _emit_entry_param_inits(self) -> None:
+		"""
+		Initialize storage for address-taken parameters.
+
+		When a parameter's address is taken (`&param`), we materialize a storage
+		slot and store the incoming SSA parameter value into it in the entry block.
+		"""
+		if not self.addr_taken_locals:
+			return
+		if self.fn_info.signature is None or self.fn_info.signature.param_type_ids is None:
+			return
+		for pname, ty_id in zip(self.func.params, self.fn_info.signature.param_type_ids):
+			if pname not in self.addr_taken_locals:
+				continue
+			llty = self._llvm_type_for_typeid(ty_id)
+			alloca_id = self._ensure_local_storage(pname, llty)
+			assert self._entry_alloca_insert_index is not None
+			param_val = self._map_value(pname)
+			self.lines.insert(self._entry_alloca_insert_index, f"  store {llty} {param_val}, {llty}* %{alloca_id}")
+			self._entry_alloca_insert_index += 1
+
 	def _emit_block(self, block_name: str) -> None:
 		# Track current block name so instruction-level helpers can consult SSA maps.
 		self._current_block_name = block_name
@@ -498,6 +611,10 @@ class _FuncBuilder:
 		for instr in block.instructions:
 			if isinstance(instr, Phi):
 				self._lower_phi(block.name, instr)
+		# Ensure entry-block allocas/stores are inserted after any phis.
+		if block_name == self.func.entry:
+			self._ensure_entry_insertion_point()
+			self._emit_entry_param_inits()
 		# Emit non-phi instructions.
 		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, Phi):
@@ -663,6 +780,19 @@ class _FuncBuilder:
 			if src in self.value_types:
 				self.value_types[dest] = self.value_types[src]
 		elif isinstance(instr, LoadLocal):
+			# Address-taken locals are materialized as storage. For them, LoadLocal
+			# is a real `load` from the local's alloca slot.
+			if instr.local in self.addr_taken_locals:
+				llty = self.local_storage_types.get(instr.local)
+				if llty is None:
+					raise NotImplementedError(
+						f"LLVM codegen v1: cannot load from address-taken local '{instr.local}' without a known type"
+					)
+				alloca_id = self._ensure_local_storage(instr.local, llty)
+				dest = self._map_value(instr.dest)
+				self.lines.append(f"  {dest} = load {llty}, {llty}* %{alloca_id}")
+				self.value_types[dest] = llty
+				return
 			# SSA pass already assigned a versioned name; treat this as an alias.
 			dest = self._map_value(instr.dest)
 			block_name = getattr(self, "_current_block_name", None)
@@ -682,19 +812,59 @@ class _FuncBuilder:
 				if src_mapped in self.value_types:
 					self.value_types[dest] = self.value_types[src_mapped]
 		elif isinstance(instr, StoreLocal):
+			# Address-taken locals are materialized as storage. For them, StoreLocal
+			# is a real `store` into the local's alloca slot.
+			val = self._map_value(instr.value)
+			if instr.local in self.addr_taken_locals:
+				llty = self.value_types.get(val)
+				if llty is None:
+					raise NotImplementedError(
+						f"LLVM codegen v1: cannot store into address-taken local '{instr.local}' without a typed value"
+					)
+				alloca_id = self._ensure_local_storage(instr.local, llty)
+				self.lines.append(f"  store {llty} {val}, {llty}* %{alloca_id}")
+				return
 			# SSA maps locals to versioned names; no IR emission required here.
 			block_name = getattr(self, "_current_block_name", None)
 			if instr_index is not None and block_name is not None:
 				ssa_name = self.ssa.value_for_instr.get((block_name, instr_index))
 			else:
 				ssa_name = None
-			val = self._map_value(instr.value)
 			if ssa_name:
 				self.aliases[ssa_name] = instr.value
 				if val in self.value_types:
 					self.value_types[ssa_name] = self.value_types[val]
 			if instr.local in self.value_types and val in self.value_types:
 				self.value_types[instr.local] = self.value_types[val]
+		elif isinstance(instr, AddrOfLocal):
+			# Produce a pointer to a stable local storage slot.
+			llty = self.local_storage_types.get(instr.local)
+			if llty is None:
+				raise NotImplementedError(
+					f"LLVM codegen v1: cannot take address of local '{instr.local}' without a known type"
+				)
+			alloca_id = self._ensure_local_storage(instr.local, llty)
+			self.aliases[instr.dest] = alloca_id
+			dest = self._map_value(instr.dest)
+			self.value_types[dest] = f"{llty}*"
+		elif isinstance(instr, LoadRef):
+			ptr = self._map_value(instr.ptr)
+			llty = self._llvm_type_for_typeid(instr.inner_ty)
+			ptr_ty = f"{llty}*"
+			dest = self._map_value(instr.dest)
+			self.lines.append(f"  {dest} = load {llty}, {ptr_ty} {ptr}")
+			self.value_types[dest] = llty
+		elif isinstance(instr, StoreRef):
+			ptr = self._map_value(instr.ptr)
+			llty = self._llvm_type_for_typeid(instr.inner_ty)
+			ptr_ty = f"{llty}*"
+			val = self._map_value(instr.value)
+			have = self.value_types.get(val)
+			if have is not None and have != llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: StoreRef value type mismatch (have {have}, expected {llty})"
+				)
+			self.lines.append(f"  store {llty} {val}, {ptr_ty} {ptr}")
 		elif isinstance(instr, BinaryOpInstr):
 			self._lower_binary(instr)
 		elif isinstance(instr, Call):
@@ -747,13 +917,7 @@ class _FuncBuilder:
 			else:
 				val = self._map_value(instr.value)
 				val_ty = self.value_types.get(val)
-				if val_ty is not None and ok_llty == "ptr":
-					if val_ty != "ptr":
-						raise NotImplementedError(
-							f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
-							f"have {val_ty}, expected ptr"
-						)
-				elif val_ty is not None and val_ty != ok_llty:
+				if val_ty is not None and val_ty != ok_llty:
 					raise NotImplementedError(
 						f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
 						f"have {val_ty}, expected {ok_llty}"
@@ -1145,7 +1309,10 @@ class _FuncBuilder:
 			if td.kind is TypeKind.SCALAR and td.name == "String":
 				return DRIFT_STRING_TYPE
 			if td.kind is TypeKind.REF:
-				return "ptr"
+				inner_llty = "i8"
+				if td.param_types:
+					inner_llty = self._llvm_type_for_typeid(td.param_types[0])
+				return f"{inner_llty}*"
 			if td.kind is TypeKind.DIAGNOSTICVALUE:
 				return DRIFT_DV_TYPE
 			if td.kind is TypeKind.ERROR:
@@ -1194,7 +1361,7 @@ class _FuncBuilder:
 		"""
 		Map an Ok TypeId to (ok_llty, ok_key) for FnResult payloads.
 
-		Supported in v1: Int -> i64, String -> %DriftString, Void -> i8, Ref<T> -> ptr.
+		Supported in v1: Int -> i64, String -> %DriftString, Void -> i8, Ref<T> -> T*.
 		Other kinds are rejected with a clear diagnostic.
 		"""
 		if self.type_table is None:
@@ -1208,7 +1375,10 @@ class _FuncBuilder:
 		if td.kind is TypeKind.VOID:
 			return "i8", key
 		if td.kind is TypeKind.REF:
-			return "ptr", key
+			inner_llty = "i8"
+			if td.param_types:
+				inner_llty = self._llvm_type_for_typeid(td.param_types[0])
+			return f"{inner_llty}*", key
 		supported = "Int, String, Void, Ref<T>"
 		raise NotImplementedError(
 			f"LLVM codegen v1: FnResult ok type {key} is not supported yet; supported ok payloads: {supported}"
@@ -1285,7 +1455,7 @@ class _FuncBuilder:
 			return "i64 0"
 		if ok_llty == "i1":
 			return "i1 0"
-		if ok_llty == "ptr" or ok_llty.endswith("*"):
+		if ok_llty.endswith("*"):
 			return f"{ok_llty} null"
 		# Structs/arrays and placeholder i8 can use zeroinitializer.
 		return f"{ok_llty} zeroinitializer"
@@ -1579,7 +1749,7 @@ class _FuncBuilder:
 		raise NotImplementedError(f"LLVM codegen v1: unsupported array elem type id {elem_ty!r}")
 
 	def _sizeof(self, elem_llty: str) -> int:
-		# v1: i64 → 8, i1 → 1, ptr -> 8, %DriftString -> 16 (len + ptr)
+		# v1: i64 → 8, i1 → 1, T* -> 8, %DriftString -> 16 (len + ptr)
 		if elem_llty == "i1":
 			return 1
 		if elem_llty == DRIFT_STRING_TYPE:

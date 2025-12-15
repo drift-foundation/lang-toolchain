@@ -1,0 +1,4 @@
+fn main() returns Int {
+	val p = &("abc");
+	return 0;
+}

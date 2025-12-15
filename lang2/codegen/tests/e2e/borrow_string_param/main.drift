@@ -1,0 +1,8 @@
+fn byte_len_ref(s: &String) returns Int {
+	return byte_length(s);
+}
+
+fn main() returns Int {
+	val s = "hello";
+	return byte_len_ref(&s);
+}

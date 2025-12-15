@@ -1,0 +1,9 @@
+fn inc(p: &mut Int) returns Void {
+	*p = *p + 1;
+}
+
+fn main() returns Int {
+	var x = 41;
+	inc(&mut x);
+	return x;
+}

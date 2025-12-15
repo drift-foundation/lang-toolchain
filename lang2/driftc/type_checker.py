@@ -23,6 +23,7 @@ from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.types_core import TypeId, TypeTable, TypeKind
+from lang2.driftc.borrow_checker import Place, PlaceBase, PlaceKind
 from lang2.driftc.method_registry import CallableDecl, CallableRegistry, ModuleId
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_function_call, resolve_method_call
 
@@ -95,6 +96,26 @@ class TypeChecker:
 		binding_for_var: Dict[int, int] = {}
 		binding_types: Dict[int, TypeId] = {}
 		binding_names: Dict[int, str] = {}
+		# Binding mutability (val/var) keyed by binding id.
+		#
+		# MVP borrow rules depend on this:
+		#   - `&mut x` requires `x` to be declared mutable (`var`).
+		binding_mutable: Dict[int, bool] = {}
+		# Binding identity kind (param vs local). This avoids accidental collisions:
+		# ParamId and LocalId are allocated from separate counters, so a param and
+		# local can share the same numeric id.
+		binding_place_kind: Dict[int, PlaceKind] = {}
+		# Borrow exclusivity (MVP): tracked within a single statement/expression.
+		#
+		# Key by Place (not binding id) so this mechanism naturally extends to
+		# projections once we support borrowing from `x.field`, `arr[i]`, `*p`.
+		#
+		# Value is "shared" or "mut". This is intentionally shallow (no lifetimes)
+		# but prevents the worst footguns:
+		#   - multiple `&x` in a statement is OK
+		#   - `&mut x` conflicts with any other borrow of `x` in the same statement
+		#   - `&x` conflicts with a prior `&mut x` in the same statement
+		borrows_in_stmt: Dict[Place, str] = {}
 		diagnostics: List[Diagnostic] = []
 		call_resolutions: Dict[int, CallableDecl | MethodResolution] = {}
 
@@ -111,6 +132,8 @@ class TypeChecker:
 			scope_bindings[-1][pname] = pid
 			binding_types[pid] = pty
 			binding_names[pid] = pname
+			binding_mutable[pid] = False
+			binding_place_kind[pid] = PlaceKind.PARAM
 
 		def record_expr(expr: H.HExpr, ty: TypeId) -> TypeId:
 			expr_id = id(expr)
@@ -179,6 +202,51 @@ class TypeChecker:
 			# Borrow.
 			if isinstance(expr, H.HBorrow):
 				inner_ty = type_expr(expr.subject)
+				# MVP: borrowing is only supported from locals/params (addressable places).
+				# Borrowing rvalues (e.g. `&foo()`) is rejected until we implement
+				# temporary materialization.
+				if not isinstance(expr.subject, H.HVar) or expr.subject.binding_id is None:
+					diagnostics.append(
+						Diagnostic(
+							message="borrow operand must be an addressable place (local/param) in MVP",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+
+				bid = expr.subject.binding_id
+				place_kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
+				place = Place(PlaceBase(kind=place_kind, local_id=bid, name=expr.subject.name))
+				if expr.is_mut:
+					if not binding_mutable.get(bid, False):
+						diagnostics.append(
+							Diagnostic(
+								message="cannot take &mut of an immutable binding; declare it with `var`",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+					if place in borrows_in_stmt:
+						diagnostics.append(
+							Diagnostic(
+								message="conflicting borrows in the same statement: cannot take &mut while borrowed",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+					borrows_in_stmt[place] = "mut"
+				else:
+					if borrows_in_stmt.get(place) == "mut":
+						diagnostics.append(
+							Diagnostic(
+								message="conflicting borrows in the same statement: cannot take & while mutably borrowed",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+					borrows_in_stmt.setdefault(place, "shared")
+
 				ref_ty = self.type_table.ensure_ref_mut(inner_ty) if expr.is_mut else self.type_table.ensure_ref(inner_ty)
 				return record_expr(expr, ref_ty)
 
@@ -496,6 +564,8 @@ class TypeChecker:
 
 		def type_stmt(stmt: H.HStmt) -> None:
 			nonlocal catch_depth
+			# Borrow conflicts are diagnosed within a single statement.
+			borrows_in_stmt.clear()
 			if isinstance(stmt, H.HLet):
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()
@@ -505,6 +575,8 @@ class TypeChecker:
 				scope_bindings[-1][stmt.name] = stmt.binding_id
 				binding_types[stmt.binding_id] = val_ty
 				binding_names[stmt.binding_id] = stmt.name
+				binding_mutable[stmt.binding_id] = bool(getattr(stmt, "is_mutable", False))
+				binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
 			elif isinstance(stmt, H.HAssign):
 				type_expr(stmt.value)
 				type_expr(stmt.target)

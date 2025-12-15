@@ -24,6 +24,7 @@ NEWLINE: /(\r?\n[ \t]*)/
 
 VAL: "val"
 VAR: "var"
+MUT: "mut"
 THROW: "throw"
 PIPE: ">>"
 AND.2: "&&" | "and"
@@ -91,7 +92,7 @@ implement_item: func_def   -> implement_func
 type_expr: ref_type
          | base_type
 
-ref_type: AMP ["mut"] type_expr
+ref_type: AMP MUT? type_expr
 base_type: NAME type_args?
 type_args: square_type_args
          | angle_type_args
@@ -137,7 +138,12 @@ catch_pattern: event_fqn "(" NAME ")"   -> catch_event
 // Assignments are restricted to lvalue-ish postfix expressions. This also
 // prevents `try ... catch ...` from being parsed as the LHS of an assignment,
 // which would otherwise interfere with statement-form `try`.
-assign_stmt: postfix EQUAL expr
+//
+// Borrow MVP needs `*p = ...` to support `&mut` writes, so we also allow a
+// dereference assignment target.
+assign_stmt: assign_target EQUAL expr
+assign_target: postfix
+             | STAR assign_target -> deref
 
 for_stmt: "for" NAME "in" expr terminator_opt block
 
@@ -223,10 +229,11 @@ sum_tail: (PLUS | MINUS) term
 ?term: factor term_tail*
 term_tail: (STAR | SLASH) factor
 ?factor: postfix
+       | STAR factor -> deref
        | "-" factor -> neg
        | "not" factor -> not_op
        | BANG factor -> not_op
-       | AMP ["mut"] factor -> borrow
+       | AMP MUT? factor -> borrow
 
 postfix: primary postfix_suffix*
 postfix_suffix: call_suffix

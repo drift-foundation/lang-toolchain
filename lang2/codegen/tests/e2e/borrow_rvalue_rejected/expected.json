@@ -1,0 +1,7 @@
+{
+  "exit_code": 1,
+  "phase": "typecheck",
+  "diagnostics": [
+    { "message_contains": "borrow operand must be an addressable place" }
+  ]
+}

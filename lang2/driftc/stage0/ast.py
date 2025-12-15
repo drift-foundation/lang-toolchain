@@ -203,10 +203,17 @@ class FString(Expr):
 
 @dataclass
 class LetStmt(Stmt):
-	"""Let-binding statement: let name = value."""
+	"""
+	Binding introduction (`val` / `var`).
+
+	The parser-level AST distinguishes between immutable (`val`) and mutable
+	(`var`) bindings. Stage0 preserves this as `mutable` so later phases can
+	enforce MVP borrow rules (e.g., `&mut x` requires `x` to be mutable).
+	"""
 	name: str
 	value: Expr
 	type_expr: Optional[object] = None  # preserve parsed type annotation if present
+	mutable: bool = False
 	loc: Optional[object] = None
 
 

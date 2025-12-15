@@ -54,6 +54,7 @@ class UnaryOp(Enum):
 	NEG = auto()      # numeric negation: -x
 	NOT = auto()      # logical not: !x
 	BIT_NOT = auto()  # bitwise not: ~x
+	DEREF = auto()    # pointer dereference: *p (MVP: refs only)
 
 
 class BinaryOp(Enum):
@@ -380,11 +381,18 @@ class HExprStmt(HStmt):
 
 @dataclass
 class HLet(HStmt):
-	"""Immutable binding introduction."""
+	"""
+	Binding introduction (`val` / `var`).
+
+	`is_mutable` tracks whether the binding was introduced via `var` (mutable)
+	or `val` (immutable). Borrowing/type-checking uses this to reject `&mut` of
+	immutable bindings in MVP.
+	"""
 	name: str
 	value: HExpr
 	declared_type_expr: Optional[object] = None
 	binding_id: Optional[BindingId] = None
+	is_mutable: bool = False
 
 
 @dataclass

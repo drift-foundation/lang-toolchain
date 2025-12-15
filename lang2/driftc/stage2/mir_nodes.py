@@ -140,9 +140,46 @@ class LoadLocal(MInstr):
 
 @dataclass
 class AddrOfLocal(MInstr):
-	"""dest = &locals[local] (address-taking)"""
+	"""
+	dest = &locals[local] (address-taking).
+
+	`is_mut` records whether the borrow was `&mut` at the surface level. LLVM
+	lowering uses the same pointer representation for `&T` and `&mut T` (both are
+	`ptr` in v1), but the type system and borrow checker need to preserve the
+	distinction for mutability rules.
+	"""
 	dest: ValueId
 	local: LocalId
+	is_mut: bool = False
+
+
+@dataclass
+class LoadRef(MInstr):
+	"""
+	dest = *ptr (load through a reference).
+
+	This is the MIR-level primitive for reading via `&T` / `&mut T`.
+
+	We keep `inner_ty` as a TypeId so downstream stages can:
+	  - compute the correct LLVM element type for the `load`, and
+	  - validate that dereference is only used on reference-typed values.
+	"""
+	dest: ValueId
+	ptr: ValueId
+	inner_ty: TypeId
+
+
+@dataclass
+class StoreRef(MInstr):
+	"""
+	*ptr = value (store through a mutable reference).
+
+	This is the MIR-level primitive for `*p = v` where `p: &mut T`.
+	`inner_ty` is the element TypeId for LLVM lowering and basic validation.
+	"""
+	ptr: ValueId
+	value: ValueId
+	inner_ty: TypeId
 
 
 @dataclass
@@ -551,6 +588,8 @@ __all__ = [
 	"StringConcat",
 	"LoadLocal",
 	"AddrOfLocal",
+	"LoadRef",
+	"StoreRef",
 	"StoreLocal",
 	"LoadField",
 	"StoreField",

@@ -139,39 +139,39 @@ class Checker:
 		# 1) an explicit name -> bool map, or
 		# 2) a name -> FnSignature map, from which we can infer can-throw based
 		#    on the return type resembling FnResult.
-			self._declared_map = declared_can_throw or {}
-			self._signatures = signatures or {}
-			self._catch_arms = self._normalize_and_collect_catch_arms(hir_blocks or {})
-			self._exception_catalog = dict(exception_catalog) if exception_catalog else None
-			self._hir_blocks = hir_blocks or {}
-			# Use shared TypeTable when supplied; otherwise create a local one.
-			self._type_table = type_table or TypeTable()
-			# Index signatures by display name for approximate method lookups.
-			self._sigs_by_display_name: Dict[str, list[FnSignature]] = {}
-			for sig in self._signatures.values():
-				disp = sig.method_name or sig.name
-				self._sigs_by_display_name.setdefault(disp, []).append(sig)
+		self._declared_map = declared_can_throw or {}
+		self._signatures = signatures or {}
+		self._catch_arms = self._normalize_and_collect_catch_arms(hir_blocks or {})
+		self._exception_catalog = dict(exception_catalog) if exception_catalog else None
+		self._hir_blocks = hir_blocks or {}
+		# Use shared TypeTable when supplied; otherwise create a local one.
+		self._type_table = type_table or TypeTable()
+		# Index signatures by display name for approximate method lookups.
+		self._sigs_by_display_name: Dict[str, list[FnSignature]] = {}
+		for sig in self._signatures.values():
+			disp = sig.method_name or sig.name
+			self._sigs_by_display_name.setdefault(disp, []).append(sig)
 
-			def _find_named(kind: TypeKind, name: str) -> TypeId | None:
-				"""
-				Best-effort lookup on a shared table to avoid minting duplicate TypeIds
-				when the resolver already seeded common scalars/errors.
-				"""
-				for ty_id, ty_def in getattr(self._type_table, "_defs", {}).items():  # type: ignore[attr-defined]
-					if ty_def.kind is kind and ty_def.name == name:
-						return ty_id
-				return None
+		def _find_named(kind: TypeKind, name: str) -> TypeId | None:
+			"""
+			Best-effort lookup on a shared table to avoid minting duplicate TypeIds
+			when the resolver already seeded common scalars/errors.
+			"""
+			for ty_id, ty_def in getattr(self._type_table, "_defs", {}).items():  # type: ignore[attr-defined]
+				if ty_def.kind is kind and ty_def.name == name:
+					return ty_id
+			return None
 
-			# Seed common scalars only when missing on the shared table. Cache them on
-			# the table so downstream reuse sees consistent ids.
-			self._int_type = _find_named(TypeKind.SCALAR, "Int") or self._type_table.ensure_int()
-			self._float_type = _find_named(TypeKind.SCALAR, "Float") or self._type_table.ensure_float()
-			self._bool_type = _find_named(TypeKind.SCALAR, "Bool") or self._type_table.ensure_bool()
-			self._string_type = _find_named(TypeKind.SCALAR, "String") or self._type_table.ensure_string()
-			self._uint_type = _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
-			self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
-			self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
-			self._unknown_type = _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.ensure_unknown()
+		# Seed common scalars only when missing on the shared table. Cache them on
+		# the table so downstream reuse sees consistent ids.
+		self._int_type = _find_named(TypeKind.SCALAR, "Int") or self._type_table.ensure_int()
+		self._float_type = _find_named(TypeKind.SCALAR, "Float") or self._type_table.ensure_float()
+		self._bool_type = _find_named(TypeKind.SCALAR, "Bool") or self._type_table.ensure_bool()
+		self._string_type = _find_named(TypeKind.SCALAR, "String") or self._type_table.ensure_string()
+		self._uint_type = _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
+		self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
+		self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
+		self._unknown_type = _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.ensure_unknown()
 		# TODO: remove declared_can_throw shim once real parser/type checker supplies signatures.
 
 	def _normalize_and_collect_catch_arms(self, hir_blocks: Mapping[str, "H.HBlock"]) -> dict[str, list[list[CatchArmInfo]]]:
@@ -1624,6 +1624,11 @@ class Checker:
 			"""
 		from lang2.driftc.checker.type_env_impl import CheckerTypeEnv
 		from lang2.driftc.stage2 import (
+			LoadLocal,
+			StoreLocal,
+			AddrOfLocal,
+			LoadRef,
+			StoreRef,
 			ConstructResultOk,
 			ConstructResultErr,
 			ResultIsErr,
@@ -1704,6 +1709,38 @@ class Checker:
 					for block in ssa.func.blocks.values():
 						for instr in block.instructions:
 							dest = getattr(instr, "dest", None)
+							if isinstance(instr, StoreLocal):
+								# Memory locals (address-taken) remain as StoreLocal even after SSA.
+								src_ty = ty_for(fn_name, instr.value)
+								if src_ty != self._unknown_type and value_types.get((fn_name, instr.local)) != src_ty:
+									value_types[(fn_name, instr.local)] = src_ty
+									changed = True
+							elif isinstance(instr, LoadLocal) and dest is not None:
+								# Propagate local type to the load destination.
+								local_ty = value_types.get((fn_name, instr.local))
+								if local_ty is not None and value_types.get((fn_name, dest)) != local_ty:
+									value_types[(fn_name, dest)] = local_ty
+									changed = True
+							elif isinstance(instr, AddrOfLocal) and dest is not None:
+								# Taking an address yields a reference type.
+								local_ty = value_types.get((fn_name, instr.local))
+								if local_ty is not None:
+									ref_ty = (
+										self._type_table.ensure_ref_mut(local_ty)
+										if getattr(instr, "is_mut", False)
+										else self._type_table.ensure_ref(local_ty)
+									)
+									if value_types.get((fn_name, dest)) != ref_ty:
+										value_types[(fn_name, dest)] = ref_ty
+										changed = True
+							elif isinstance(instr, LoadRef) and dest is not None:
+								# Deref load result type is the element TypeId carried by the MIR.
+								if value_types.get((fn_name, dest)) != instr.inner_ty:
+									value_types[(fn_name, dest)] = instr.inner_ty
+									changed = True
+							elif isinstance(instr, StoreRef):
+								# Stores do not define a value; no typing needed.
+								pass
 							if isinstance(instr, ConstInt) and dest is not None:
 								if (fn_name, dest) not in value_types:
 									value_types[(fn_name, dest)] = self._int_type

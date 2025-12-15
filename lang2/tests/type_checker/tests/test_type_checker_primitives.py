@@ -37,7 +37,7 @@ def test_borrow_types():
 	tc = _checker()
 	block = H.HBlock(
 		statements=[
-			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None),
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, is_mutable=True),
 			H.HLet(name="r", value=H.HBorrow(subject=H.HVar("x"), is_mut=False), declared_type_expr=None),
 			H.HLet(name="m", value=H.HBorrow(subject=H.HVar("x"), is_mut=True), declared_type_expr=None),
 		]
@@ -96,7 +96,7 @@ def test_binding_types_capture_ref_mut():
 	tc = _checker()
 	block = H.HBlock(
 		statements=[
-			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1, is_mutable=True),
 			H.HLet(name="m", value=H.HBorrow(subject=H.HVar("x", binding_id=1), is_mut=True), declared_type_expr=None, binding_id=2),
 		]
 	)
@@ -106,3 +106,15 @@ def test_binding_types_capture_ref_mut():
 	td = tc.type_table.get(ref_ty)
 	assert td.kind is TypeKind.REF
 	assert td.ref_mut is True
+
+
+def test_mut_borrow_of_val_is_rejected():
+	tc = _checker()
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, is_mutable=False),
+			H.HLet(name="m", value=H.HBorrow(subject=H.HVar("x"), is_mut=True), declared_type_expr=None),
+		]
+	)
+	res = tc.check_function("bad_mut_borrow", block)
+	assert any("cannot take &mut of an immutable binding" in d.message for d in res.diagnostics)

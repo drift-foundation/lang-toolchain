@@ -612,7 +612,7 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 	if name == "ref_type":
 		# '&' ['mut'] type_expr
 		inner = _build_type_expr(next(child for child in tree.children if isinstance(child, Tree)))
-		mut = any(isinstance(child, Token) and child.value == "mut" for child in tree.children)
+		mut = any(isinstance(child, Token) and child.type == "MUT" for child in tree.children)
 		ref_name = "&mut" if mut else "&"
 		return TypeExpr(name=ref_name, args=[inner])
 	if name == "type_expr":
@@ -1032,9 +1032,17 @@ def _build_expr(node) -> Expr:
     if name == "factor":
         return _build_expr(node.children[0])
     if name == "borrow":
-        mut = any(isinstance(child, Token) and child.value == "mut" for child in node.children)
+        mut = any(isinstance(child, Token) and child.type == "MUT" for child in node.children)
         target = _build_expr(next(child for child in node.children if isinstance(child, Tree)))
         return Unary(loc=_loc(node), op="&mut" if mut else "&", operand=target)
+    if name == "deref":
+        # Pointer dereference: `*expr`. The type checker restricts this to
+        # references, and assignment restricts it to `*place = ...` for `&mut`.
+        target = next((c for c in node.children if isinstance(c, Tree)), None)
+        if target is None:
+            raise TypeError(f"deref expects an operand, got {node.children!r}")
+        expr = _build_expr(target)
+        return Unary(loc=_loc(node), op="*", operand=expr)
     if name == "postfix":
         return _build_postfix(node)
     if name == "leading_dot":

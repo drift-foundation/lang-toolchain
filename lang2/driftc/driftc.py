@@ -200,7 +200,7 @@ def compile_stubbed_funcs(
 			signatures=signatures,
 			can_throw_by_name=declared,
 			return_type=sig.return_type_id if sig is not None else None,
-		).lower_block(hir_norm)
+		).lower_function_body(hir_norm)
 		if sig is not None and sig.param_names is not None:
 			builder.func.params = list(sig.param_names)
 		mir_funcs[name] = builder.func

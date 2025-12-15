@@ -31,6 +31,9 @@ def resolve_opaque_type(raw: object, table: TypeTable) -> TypeId:
 	if hasattr(raw, "name") and hasattr(raw, "args"):
 		name = getattr(raw, "name")
 		args = getattr(raw, "args")
+		if name in {"&", "&mut"}:
+			inner = resolve_opaque_type(args[0] if args else None, table)
+			return table.ensure_ref_mut(inner) if name == "&mut" else table.ensure_ref(inner)
 		if name == "Void":
 			return table.ensure_void()
 		if name == "FnResult":

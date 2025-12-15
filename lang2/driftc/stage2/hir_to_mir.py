@@ -321,7 +321,34 @@ class HIRToMIR:
 		self.b.emit(M.LoadLocal(dest=dest, local=expr.name))
 		return dest
 
+	def _visit_expr_HBorrow(self, expr: H.HBorrow) -> M.ValueId:
+		"""
+		Lower a borrow expression (`&x` / `&mut x`).
+
+		MVP limitation: only local/param borrows are supported (HVar). Borrowing
+		rvalues requires temporary materialization and is rejected by the checker.
+		"""
+		if not isinstance(expr.subject, H.HVar):
+			raise AssertionError("borrow of non-local reached MIR lowering (checker bug)")
+		self.b.ensure_local(expr.subject.name)
+		dest = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=dest, local=expr.subject.name, is_mut=expr.is_mut))
+		return dest
+
 	def _visit_expr_HUnary(self, expr: H.HUnary) -> M.ValueId:
+		# Dereference is modeled as an explicit MIR load.
+		if expr.op is H.UnaryOp.DEREF:
+			ptr_val = self.lower_expr(expr.expr)
+			ptr_ty = self._infer_expr_type(expr.expr)
+			if ptr_ty is None:
+				raise AssertionError("deref type unknown in MIR lowering (checker bug)")
+			td = self._type_table.get(ptr_ty)
+			if td.kind is not TypeKind.REF or not td.param_types:
+				raise AssertionError("deref of non-ref reached MIR lowering (checker bug)")
+			inner_ty = td.param_types[0]
+			dest = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=dest, ptr=ptr_val, inner_ty=inner_ty))
+			return dest
 		operand = self.lower_expr(expr.expr)
 		dest = self.b.new_temp()
 		self.b.emit(M.UnaryOpInstr(dest=dest, op=expr.op, operand=operand))
@@ -400,6 +427,15 @@ class HIRToMIR:
 			self.b.emit(M.ArrayLen(dest=dest, array=subj_val))
 			return
 		td = self._type_table.get(subj_ty)
+		if td.kind is TypeKind.REF and td.param_types:
+			# MVP convenience: allow len(&String) / len(&Array<T>) by implicit
+			# dereference at the builtin boundary. This keeps borrow support
+			# usable without introducing autoref/autoderef globally.
+			inner_ty = td.param_types[0]
+			tmp = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=tmp, ptr=subj_val, inner_ty=inner_ty))
+			self._lower_len(inner_ty, tmp, dest)
+			return
 		if td.kind is TypeKind.ARRAY:
 			self.b.emit(M.ArrayLen(dest=dest, array=subj_val))
 		elif subj_ty == self._string_type:
@@ -698,6 +734,31 @@ class HIRToMIR:
 		for stmt in block.statements:
 			self.lower_stmt(stmt)
 
+	def lower_function_body(self, block: H.HBlock) -> None:
+		"""
+		Lower a full function body block and ensure the function ends in a terminator.
+
+		MIR requires every basic block to end with a terminator. For the entry
+		function body, we also want a production-safe invariant:
+		  - `returns Void` functions may omit an explicit `return;` and will get an
+		    implicit return.
+		  - non-Void functions must end in an explicit return (checker responsibility).
+		"""
+		self.lower_block(block)
+		if self.b.block.terminator is not None:
+			return
+		can_throw = self._fn_can_throw() is True
+		fn_is_void = self._ret_type is not None and self._type_table.is_void(self._ret_type)
+		if not fn_is_void:
+			raise AssertionError("missing return reached MIR lowering (checker bug)")
+		if not can_throw:
+			self.b.set_terminator(M.Return(value=None))
+			return
+		# Can-throw `returns Void` lowers to FnResult<Void, Error>.
+		res_val = self.b.new_temp()
+		self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
+		self.b.set_terminator(M.Return(value=res_val))
+
 	def _visit_stmt_HExprStmt(self, stmt: H.HExprStmt) -> None:
 		# Evaluate and discard.
 		#
@@ -757,6 +818,17 @@ class HIRToMIR:
 			index = self.lower_expr(stmt.target.index)
 			elem_ty = self._infer_array_elem_type(stmt.target.subject)
 			self.b.emit(M.ArrayIndexStore(elem_ty=elem_ty, array=subject, index=index, value=val))
+		elif isinstance(stmt.target, H.HUnary) and stmt.target.op is H.UnaryOp.DEREF:
+			# `*p = v` assignment through a mutable reference.
+			ptr_val = self.lower_expr(stmt.target.expr)
+			ptr_ty = self._infer_expr_type(stmt.target.expr)
+			if ptr_ty is None:
+				raise AssertionError("deref assignment type unknown in MIR lowering (checker bug)")
+			td = self._type_table.get(ptr_ty)
+			if td.kind is not TypeKind.REF or not td.param_types:
+				raise AssertionError("deref assignment of non-ref reached MIR lowering (checker bug)")
+			inner_ty = td.param_types[0]
+			self.b.emit(M.StoreRef(ptr=ptr_val, value=val, inner_ty=inner_ty))
 		else:
 			raise NotImplementedError(f"Unsupported assignment target: {type(stmt.target).__name__}")
 
@@ -1441,6 +1513,18 @@ class HIRToMIR:
 			return self._type_table.new_array(elem_ty)
 		if isinstance(expr, H.HVar):
 			return self._local_types.get(expr.name)
+		if isinstance(expr, H.HBorrow):
+			inner = self._infer_expr_type(expr.subject)
+			inner = inner if inner is not None else self._unknown_type
+			return self._type_table.ensure_ref_mut(inner) if expr.is_mut else self._type_table.ensure_ref(inner)
+		if isinstance(expr, H.HUnary) and expr.op is H.UnaryOp.DEREF:
+			operand_ty = self._infer_expr_type(expr.expr)
+			if operand_ty is None:
+				return None
+			td = self._type_table.get(operand_ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				return td.param_types[0]
+			return None
 		if isinstance(expr, H.HIndex):
 			array_ty = self._infer_expr_type(expr.subject)
 			if array_ty is not None:

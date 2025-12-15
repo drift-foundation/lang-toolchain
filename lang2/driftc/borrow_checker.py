@@ -47,7 +47,20 @@ class IndexProj:
 	value: Optional[int] = None
 
 
-Projection = FieldProj | IndexProj
+@dataclass(frozen=True)
+class DerefProj:
+	"""
+	Dereference projection (`*p`).
+
+	We model deref as a projection so the place `*p` is represented as:
+	  Place(base=p, projections=[DerefProj()])
+
+	This keeps the place model composable for future extensions like `(*p).field`
+	and `p[i]` on borrowed aggregates.
+	"""
+	pass
+
+Projection = FieldProj | IndexProj | DerefProj
 
 
 class PlaceState(Enum):
@@ -146,6 +159,11 @@ def place_from_expr(expr: H.HExpr, *, base_lookup: Callable[[object], Optional[P
 				const_val = None
 		kind = IndexKind.CONST if const_val is not None else IndexKind.ANY
 		return base_place.with_projection(IndexProj(kind=kind, value=const_val))
+	if isinstance(expr, H.HUnary) and expr.op is H.UnaryOp.DEREF:
+		base_place = place_from_expr(expr.expr, base_lookup=base_lookup)
+		if base_place is None:
+			return None
+		return base_place.with_projection(DerefProj())
 	# Other expressions are rvalues: calls, literals, binops, method calls, etc.
 	return None
 

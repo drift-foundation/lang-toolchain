@@ -170,13 +170,20 @@ class AstToHIR:
 		)
 
 	def _visit_stmt_LetStmt(self, stmt: ast.LetStmt) -> H.HStmt:
-		"""Immutable binding introduction."""
+		"""
+		Binding introduction (`val` / `var`).
+
+		Stage0 preserves whether the binding is mutable so later phases can:
+		  - reject `&mut` borrows of immutable bindings, and
+		  - lower address-taken locals to real storage when needed.
+		"""
 		bid = self._alloc_binding(stmt.name)
 		return H.HLet(
 			name=stmt.name,
 			value=self.lower_expr(stmt.value),
 			declared_type_expr=getattr(stmt, "type_expr", None),
 			binding_id=bid,
+			is_mutable=bool(getattr(stmt, "mutable", False)),
 		)
 
 	def _visit_stmt_ReturnStmt(self, stmt: ast.ReturnStmt) -> H.HStmt:
@@ -236,6 +243,7 @@ class AstToHIR:
 			"-": H.UnaryOp.NEG,
 			"not": H.UnaryOp.NOT,
 			"~": H.UnaryOp.BIT_NOT,
+			"*": H.UnaryOp.DEREF,
 		}
 		try:
 			op = op_map[expr.op]

@@ -20,6 +20,7 @@ from typing import Dict, List
 
 from lang2.driftc.stage2 import (
 	MirFunc,
+	AddrOfLocal,
 	LoadLocal,
 	StoreLocal,
 	MInstr,
@@ -95,11 +96,22 @@ class MirToSSA:
 
 	def _run_single_block(self, func: MirFunc) -> SsaFunc:
 		"""Rewrite a single-block MIR function into SSA using AssignSSA moves."""
+		# Locals whose address is taken must remain as real storage (loads/stores),
+		# not SSA aliases. SSA renaming would sever pointer identity: `&x` must
+		# continue to refer to a stable storage slot for `x`.
+		addr_taken: set[str] = set()
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, AddrOfLocal):
+					addr_taken.add(instr.local)
+
 		block = func.blocks[func.entry]
 		version: Dict[str, int] = {}
 		current_value: Dict[str, str] = {}
 		# Seed parameter locals so loads are valid without an explicit store.
 		for param in func.params:
+			if param in addr_taken:
+				continue
 			version[param] = 1
 			current_value[param] = param
 		new_instrs: list[MInstr] = []
@@ -107,6 +119,9 @@ class MirToSSA:
 
 		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, StoreLocal):
+				if instr.local in addr_taken:
+					new_instrs.append(instr)
+					continue
 				version_idx = version.get(instr.local, 0) + 1
 				version[instr.local] = version_idx
 				ssa_name = f"{instr.local}_{version_idx}"
@@ -114,6 +129,9 @@ class MirToSSA:
 				value_for_instr[(block.name, idx)] = ssa_name
 				new_instrs.append(AssignSSA(dest=ssa_name, src=instr.value))
 			elif isinstance(instr, LoadLocal):
+				if instr.local in addr_taken:
+					new_instrs.append(instr)
+					continue
 				if instr.local not in version:
 					raise RuntimeError(f"SSA: load before store for local '{instr.local}'")
 				# Load sees the current SSA value for the local.
@@ -258,6 +276,14 @@ class MirToSSA:
 		dom_info = DominatorAnalysis().compute(func)
 		df_info = DominanceFrontierAnalysis().compute(func, dom_info)
 
+		# Locals whose address is taken must remain as real storage (loads/stores),
+		# not SSA aliases; see _run_single_block for rationale.
+		addr_taken: set[str] = set()
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, AddrOfLocal):
+					addr_taken.add(instr.local)
+
 		# CFG maps
 		preds: Dict[str, set[str]] = {b: set() for b in func.blocks}
 		succs: Dict[str, set[str]] = {b: set() for b in func.blocks}
@@ -279,9 +305,13 @@ class MirToSSA:
 		for bname, block in func.blocks.items():
 			for instr in block.instructions:
 				if isinstance(instr, StoreLocal):
+					if instr.local in addr_taken:
+						continue
 					def_sites.setdefault(instr.local, set()).add(bname)
 					def_values.setdefault(instr.local, {})[bname] = instr.value
 				elif isinstance(instr, LoadLocal):
+					if instr.local in addr_taken:
+						continue
 					use_sites.setdefault(instr.local, set()).add(bname)
 
 		# Place φ nodes using dominance frontiers (simple Cytron iteration).
@@ -330,11 +360,19 @@ class MirToSSA:
 			return stacks[local][-1]
 
 		# Seed parameter versions so loads in entry can read them.
+		#
+		# Address-taken params stay as stable storage locals; SSA renaming would
+		# break `&param` identity.
+		new_params: list[str] = []
 		for param in func.params:
+			if param in addr_taken:
+				new_params.append(param)
+				continue
 			new_name(param)
+			new_params.append(current(param))
 		# Update the function params to the SSA-renamed symbols so headers and
-		# body stay consistent.
-		func.params = [current(p) for p in func.params]
+		# body stay consistent for non-address-taken params.
+		func.params = new_params
 
 		def rename_block(block_name: str) -> None:
 			block = func.blocks[block_name]
@@ -351,12 +389,18 @@ class MirToSSA:
 					locals_defined.append(local)
 				elif isinstance(instr, StoreLocal):
 					local = instr.local
+					if local in addr_taken:
+						new_instrs.append(instr)
+						continue
 					dest_name = new_name(local)
 					value_for_instr[(block_name, len(new_instrs))] = dest_name
 					new_instrs.append(AssignSSA(dest=dest_name, src=instr.value))
 					locals_defined.append(local)
 				elif isinstance(instr, LoadLocal):
 					local = instr.local
+					if local in addr_taken:
+						new_instrs.append(instr)
+						continue
 					src_name = current(local)
 					value_for_instr[(block_name, len(new_instrs))] = src_name
 					new_instrs.append(AssignSSA(dest=instr.dest, src=src_name))

@@ -159,6 +159,12 @@ class TryResultRewriter:
 			pfx_subj, subj = self._rewrite_expr(expr.subject)
 			pfx_idx, idx = self._rewrite_expr(expr.index)
 			return pfx_subj + pfx_idx, H.HIndex(subject=subj, index=idx)
+		if isinstance(expr, H.HBorrow):
+			# Borrow expressions are pure (they only observe a place). We still
+			# rewrite nested try-result sugar inside the subject expression so
+			# `&try foo()?` behaves consistently once temp materialization exists.
+			pfx, subj = self._rewrite_expr(expr.subject)
+			return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
 		if isinstance(expr, H.HUnary):
 			pfx, inner = self._rewrite_expr(expr.expr)
 			return pfx, H.HUnary(op=expr.op, expr=inner)
