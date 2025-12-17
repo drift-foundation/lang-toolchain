@@ -1,0 +1,21 @@
+module m
+
+exception Boom()
+
+fn main() returns Int {
+	val xs = [1, 2, 3]
+	var sum: Int = 0
+
+	for x in xs {
+		try {
+			if x == 2 {
+				throw Boom();
+			}
+			sum = sum + x
+		} catch err {
+			sum = sum + 100
+		}
+	}
+
+	return sum
+}
