@@ -21,8 +21,13 @@ from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.types_core import TypeKind
 from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
-from lang2.driftc.core.types_core import TypeTable
+from lang2.driftc.core.types_core import (
+	TypeTable,
+	VariantArmSchema,
+	VariantFieldSchema,
+)
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
+from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 
 
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
@@ -31,6 +36,25 @@ def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 		return typ.name
 	args = ", ".join(_type_expr_to_str(a) for a in typ.args)
 	return f"{typ.name}<{args}>"
+
+
+def _generic_type_expr_from_parser(
+	typ: parser_ast.TypeExpr,
+	*,
+	type_params: list[str],
+) -> GenericTypeExpr:
+	"""
+	Convert a parser `TypeExpr` into a generic-aware core `GenericTypeExpr`.
+
+	This is used for schema-bearing declarations (variants) where field types may
+	refer to generic parameters (e.g. `Some(value: T)`).
+	"""
+	if typ.name in type_params and not typ.args:
+		return GenericTypeExpr.param(type_params.index(typ.name))
+	return GenericTypeExpr.named(
+		typ.name,
+		[_generic_type_expr_from_parser(a, type_params=type_params) for a in getattr(typ, "args", [])],
+	)
 
 
 def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
@@ -104,6 +128,21 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.TryCatchExpr(
 			attempt=_convert_expr(expr.attempt),
 			catch_arms=catch_arms,
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
+	if isinstance(expr, parser_ast.MatchExpr):
+		arms = [
+			s0.MatchArm(
+				ctor=arm.ctor,
+				binders=list(arm.binders),
+				block=_convert_block(arm.block),
+				loc=Span.from_loc(getattr(arm, "loc", None)),
+			)
+			for arm in expr.arms
+		]
+		return s0.MatchExpr(
+			scrutinee=_convert_expr(expr.scrutinee),
+			arms=arms,
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	if isinstance(expr, parser_ast.ExceptionCtor):
@@ -424,6 +463,7 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	module_function_names: set[str] = {fn.name for fn in getattr(prog, "functions", []) or []}
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
 	struct_defs = list(getattr(prog, "structs", []) or [])
+	variant_defs = list(getattr(prog, "variants", []) or [])
 	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_name, diagnostics)
 	for exc in prog.exceptions:
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
@@ -433,10 +473,49 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.
 	type_table = TypeTable()
+	# Prelude: `Optional<T>` is required for iterator-style `for` desugaring and
+	# other control-flow sugar. Until modules are supported, the compiler injects
+	# a canonical `Optional<T>` variant base into every compilation unit unless
+	# user code declares its own `variant Optional<...>`.
+	#
+	# MVP contract:
+	#   variant Optional<T> { Some(value: T), None }
+	if not any(getattr(v, "name", None) == "Optional" for v in variant_defs) and not type_table.is_variant_base_named(
+		"Optional"
+	):
+		type_table.declare_variant(
+			"Optional",
+			["T"],
+			[
+				VariantArmSchema(
+					name="Some",
+					fields=[VariantFieldSchema(name="value", type_expr=GenericTypeExpr.param(0))],
+				),
+				VariantArmSchema(name="None", fields=[]),
+			],
+		)
 	# Declare all struct names first (placeholder field types) to support recursion.
 	for s in struct_defs:
 		field_names = [f.name for f in getattr(s, "fields", [])]
 		type_table.declare_struct(s.name, field_names)
+	# Declare all variant names/schemas next so type resolution can instantiate
+	# variants (e.g., Optional<Int>) while resolving later annotations/fields.
+	for v in variant_defs:
+		arms: list[VariantArmSchema] = []
+		for arm in getattr(v, "arms", []) or []:
+			fields = [
+				VariantFieldSchema(
+					name=f.name,
+					type_expr=_generic_type_expr_from_parser(f.type_expr, type_params=list(getattr(v, "type_params", []) or [])),
+				)
+				for f in getattr(arm, "fields", []) or []
+			]
+			arms.append(VariantArmSchema(name=arm.name, fields=fields))
+		type_table.declare_variant(
+			v.name,
+			list(getattr(v, "type_params", []) or []),
+			arms,
+		)
 	# Fill field TypeIds in a second pass now that all names exist.
 	for s in struct_defs:
 		struct_id = type_table.ensure_named(s.name)
@@ -461,6 +540,9 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[str, H.HBlock], Dict[str, FnSig
 				)
 			field_types.append(ft)
 		type_table.define_struct_fields(struct_id, field_types)
+	# After all variant schemas are known and structs are declared, finalize
+	# non-generic variants so their concrete arm types are available.
+	type_table.finalize_variants()
 	# Thread struct schemas for downstream helpers (optional; TypeDefs are authoritative).
 	type_table.struct_schemas = {s.name: (s.name, [f.name for f in getattr(s, "fields", [])]) for s in struct_defs}
 	for fn in prog.functions:

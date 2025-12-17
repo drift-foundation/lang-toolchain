@@ -73,26 +73,28 @@ class MirToSSA:
 		"""
 		Entry point for the SSA stage.
 
-		Contract for this skeleton:
+		Contract for this stage:
 		  - Straight-line MIR is fully rewritten into SSA (AssignSSA) with
 		    version tracking and load-after-store checks.
-		  - Multi-block MIR support is being brought up incrementally; loops
-		    (backedges) are still rejected, and only acyclic CFGs are allowed.
+		  - Multi-block MIR is rewritten into SSA using dominators + dominance
+		    frontiers (φ placement) + renaming.
+		  - Loops/backedges are supported: the same dominance-frontier algorithm
+		    works for cyclic CFGs, and the renaming pass patches φ incomings when
+		    visiting backedge predecessors.
 
 		Returns an SsaFunc wrapper carrying the original MirFunc plus version
 		tables. Multi-block SSA will be expanded gradually (φ placement and
 		renaming) using the CFG utilities in stage4/dom.py.
 		"""
-		# Guardrail: reject loops/backedges until loop SSA is implemented.
-		if self._has_backedge(func):
-			raise NotImplementedError("SSA: loops/backedges not supported yet")
-
 		# Single-block fast path: rewrite loads/stores to AssignSSA with versions.
 		if len(func.blocks) == 1:
 			return self._run_single_block(func)
 
-		# Multi-block acyclic SSA (if/else CFGs, no loops) with φ placement + renaming.
-		return self._run_multi_block_acyclic(func)
+		# Multi-block SSA with φ placement + renaming (supports loops/backedges).
+		has_cycle = self._has_backedge(func)
+		ssa = self._run_multi_block_acyclic(func)
+		ssa.cfg_kind = CfgKind.GENERAL if has_cycle else CfgKind.ACYCLIC
+		return ssa
 
 	def _run_single_block(self, func: MirFunc) -> SsaFunc:
 		"""Rewrite a single-block MIR function into SSA using AssignSSA moves."""
@@ -319,9 +321,14 @@ class MirToSSA:
 		for local, def_blocks in def_sites.items():
 			if len(def_blocks) < 2:
 				continue
-			# If all uses are contained within the defining blocks, no merge is needed.
+			# If a local is never read, we do not need any φ nodes for it.
+			#
+			# Note: do *not* try to optimize away φ placement based on whether uses
+			# appear only inside defining blocks. That heuristic is wrong for loops:
+			# a loop-carried variable can be "used in the same block it is defined"
+			# and still require a φ at the loop header to model the backedge.
 			use_blocks = use_sites.get(local, set())
-			if not use_blocks or use_blocks.issubset(def_blocks):
+			if not use_blocks:
 				continue
 			worklist = list(def_blocks)
 			while worklist:

@@ -26,6 +26,9 @@ VAL: "val"
 VAR: "var"
 MUT: "mut"
 THROW: "throw"
+VARIANT: "variant"
+MATCH: "match"
+DEFAULT: "default"
 # Note: `>>=` must be recognized before `>>` (longest match).
 SHR_EQ: ">>="
 SHR: ">>"
@@ -75,6 +78,7 @@ BREAK: "break"
 CONTINUE: "continue"
 RETHROW: "rethrow"
 ARROW: "->"
+FATARROW: "=>"
 EXCEPTION: "exception"
 TRY: "try"
 CATCH: "catch"
@@ -97,6 +101,7 @@ ident: NAME | MOVE
 ?item: func_def
      | struct_def
      | exception_def
+     | variant_def
      | implement_def
      | stmt
 
@@ -218,10 +223,49 @@ exception_param: NAME COLON type_expr
 
 domain_clause: "domain" NAME
 
+// Variant (tagged union / sum type).
+//
+// MVP supports:
+// - positional constructor field lists (`Some(value: T, other: U)`),
+// - generic type parameters (`variant Optional<T> { ... }`).
+variant_def: VARIANT NAME type_params? variant_body
+type_params: "<" NAME (COMMA NAME)* ">"
+variant_body: "{" (variant_arm (COMMA | TERMINATOR)*)+ "}"
+variant_arm: NAME variant_fields?
+variant_fields: "(" [variant_field_list] ")"
+variant_field_list: variant_field (COMMA variant_field)*
+variant_field: NAME COLON type_expr
+
 // `expr` is the full expression language (including `try ... catch ...`).
 ?expr: try_catch_expr
+     | match_expr
      | ternary
      | pipeline
+
+// `match` expression (expression-only in MVP). Each arm body is a block:
+//   match x {
+//     Some(v) => { v + 1 }
+//     default => { 0 }
+//   }
+//
+// Arm bodies use:
+// - `value_block` when the arm produces a value, and
+// - `block` when the match result is unused (statement position).
+//
+// Type checking enforces:
+// - `default` (if present) is last and appears at most once,
+// - duplicates are rejected,
+// - without `default` matches must be exhaustive for known variants, and
+// - when the match result is used, all arms must provide `value_block`s whose
+//   result types match exactly.
+match_expr: MATCH expr "{" (match_arm (TERMINATOR | COMMA)*)+ "}"
+match_arm: match_pat FATARROW match_arm_body
+match_pat: DEFAULT              -> match_default
+         | NAME "(" [match_binders] ")"  -> match_ctor
+         | NAME                  -> match_ctor0
+match_binders: NAME (COMMA NAME)*
+match_arm_body: value_block
+              | block
 
 // Note: expression-form `try` (`try_catch_expr`) requires catch arms that
 // produce a value (see `value_block`). Statement-form `try` (`try_stmt`) uses

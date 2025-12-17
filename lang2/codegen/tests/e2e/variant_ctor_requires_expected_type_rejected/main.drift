@@ -1,0 +1,13 @@
+module m
+
+variant Optional<T> {
+	Some(value: T),
+	None,
+}
+
+fn main() returns Int {
+	// Constructor calls require an expected variant type in MVP.
+	val x = Some(1)
+	return 0
+}
+

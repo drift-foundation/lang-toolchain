@@ -18,3 +18,9 @@
   - NLL-lite: replace lexical borrow lifetimes with loan liveness ending at last use (CFG-based), so “borrow then write after last use” stops being rejected.
   - Autoref/autoderef: decide whether to introduce limited autoderef for method calls / operators (currently explicit `*p` / `(*p).field`).
   - Extra overlap tests as syntax grows: deepen projection overlap coverage once new projection forms are added.
+
+[Iteration]
+- Deferred follow-ups:
+  - Variant constructor collisions: improve diagnostics/UX when unqualified constructors are ambiguous (list candidates; add coverage).
+  - Named-field construction/patterns for variants: support `Some(value = x)` and matching on named fields once the surface design is pinned.
+  - Replace iterator intrinsics with real modules/traits: migrate `Array<T>.iter()` / `__ArrayIter_<T>.next()` from compiler intrinsics to a real `Iterator` trait + library implementation when module support lands.

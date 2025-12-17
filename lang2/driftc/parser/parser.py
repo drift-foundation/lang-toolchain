@@ -52,6 +52,11 @@ from .ast import (
     Unary,
     FString,
     FStringHole,
+    VariantDef,
+    VariantArm,
+    VariantField,
+    MatchExpr,
+    MatchArm,
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
@@ -474,6 +479,7 @@ def _build_program(tree: Tree) -> Program:
 	statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt | ImportStmt] = []
 	structs: List[StructDef] = []
 	exceptions: List[ExceptionDef] = []
+	variants: List[VariantDef] = []
 	module_name: Optional[str] = None
 	for child in tree.children:
 		if not isinstance(child, Tree):
@@ -490,6 +496,8 @@ def _build_program(tree: Tree) -> Program:
 			structs.append(_build_struct_def(child))
 		elif kind == "exception_def":
 			exceptions.append(_build_exception_def(child))
+		elif kind == "variant_def":
+			variants.append(_build_variant_def(child))
 		else:
 			stmt = _build_stmt(child)
 			if stmt is not None:
@@ -500,6 +508,7 @@ def _build_program(tree: Tree) -> Program:
 		statements=statements,
 		structs=structs,
 		exceptions=exceptions,
+		variants=variants,
 		module=module_name,
 	)
 
@@ -538,6 +547,36 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
                 if str_node:
                     domain_val = _decode_string_token(str_node)
     return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val)
+
+
+def _build_variant_def(tree: Tree) -> VariantDef:
+	"""
+	Build a variant definition.
+
+	Grammar:
+	  variant_def: VARIANT NAME type_params? variant_body
+	"""
+	loc = _loc(tree)
+	name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+	type_params_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "type_params"), None)
+	type_params: list[str] = []
+	if type_params_node is not None:
+		type_params = [tok.value for tok in type_params_node.children if isinstance(tok, Token) and tok.type == "NAME"]
+	body_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "variant_body")
+	arms: list[VariantArm] = []
+	for arm_node in (c for c in body_node.children if isinstance(c, Tree) and _name(c) == "variant_arm"):
+		arm_name_token = next(child for child in arm_node.children if isinstance(child, Token) and child.type == "NAME")
+		fields_node = next((c for c in arm_node.children if isinstance(c, Tree) and _name(c) == "variant_fields"), None)
+		fields: list[VariantField] = []
+		if fields_node is not None:
+			field_list = next((c for c in fields_node.children if isinstance(c, Tree) and _name(c) == "variant_field_list"), None)
+			if field_list is not None:
+				for field_node in (c for c in field_list.children if isinstance(c, Tree) and _name(c) == "variant_field"):
+					fname_tok = next(child for child in field_node.children if isinstance(child, Token) and child.type == "NAME")
+					ftype_node = next(child for child in field_node.children if isinstance(child, Tree) and _name(child) == "type_expr")
+					fields.append(VariantField(name=fname_tok.value, type_expr=_build_type_expr(ftype_node)))
+		arms.append(VariantArm(name=arm_name_token.value, fields=fields, loc=_loc(arm_node)))
+	return VariantDef(name=name_token.value, type_params=type_params, arms=arms, loc=loc)
 
 
 def _build_exception_arg(tree: Tree) -> ExceptionArg:
@@ -863,10 +902,17 @@ def _build_for_stmt(tree: Tree) -> ForStmt:
         or (isinstance(child, Tree) and _name(child) == "ident")
     )
     name_token = _unwrap_ident(ident_node)
+    # `for` statement shape:
+    #   for <ident> in <expr> terminator_opt <block>
+    #
+    # The parse tree includes both the loop binding `ident` and the iterable
+    # `expr` as Tree nodes. We must select the iterable expression here, not
+    # the binding identifier; otherwise we end up trying to build an expression
+    # from the `ident` node and crash on its raw Token child.
     expr_node = next(
         child
         for child in tree.children
-        if isinstance(child, Tree) and _name(child) not in {"block", "terminator_opt"}
+        if isinstance(child, Tree) and _name(child) not in {"ident", "block", "terminator_opt"}
     )
     block_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "block")
     iter_expr = _build_expr(expr_node)
@@ -1169,6 +1215,8 @@ def _build_expr(node) -> Expr:
         return _fold_chain(node, "logic_or_tail")
     if name == "try_catch_expr":
         return _build_try_catch_expr(node)
+    if name == "match_expr":
+        return _build_match_expr(node)
     if name == "ternary":
         return _build_ternary(node)
     if name == "pipeline":
@@ -1395,6 +1443,71 @@ def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
         else:
             raise ValueError(f"unexpected catch expr arm {arm_name}")
     return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arms=arms)
+
+
+def _build_match_expr(tree: Tree) -> MatchExpr:
+	"""
+	Build a match expression.
+
+	Grammar:
+	  match_expr: MATCH expr "{" (match_arm (TERMINATOR | COMMA)*)+ "}"
+	"""
+	# The scrutinee is the first expression subtree directly under `match_expr`.
+	#
+	# Note: because `expr` is an inlined rule (`?expr`), Lark does not always
+	# materialize it as a distinct `Tree("expr")`. The first child that is a
+	# `Tree` and is *not* a `match_arm` is the scrutinee expression.
+	scrutinee_node = next(
+		(c for c in tree.children if isinstance(c, Tree) and _name(c) != "match_arm"),
+		None,
+	)
+	if scrutinee_node is None:
+		raise ValueError("match_expr missing scrutinee expression")
+	scrutinee = _build_expr(scrutinee_node)
+
+	arms: list[MatchArm] = []
+	for arm_node in (c for c in tree.children if isinstance(c, Tree) and _name(c) == "match_arm"):
+		pat: Optional[Tree] = None
+		for child in (c for c in arm_node.children if isinstance(c, Tree)):
+			child_name = _name(child)
+			if child_name == "match_pat":
+				pat = next((c for c in child.children if isinstance(c, Tree)), None)
+				break
+			if child_name in ("match_default", "match_ctor", "match_ctor0"):
+				pat = child
+				break
+		if pat is None:
+			raise ValueError("match_arm missing pattern")
+
+		pat_kind = _name(pat)
+		ctor: Optional[str] = None
+		binders: list[str] = []
+		if pat_kind == "match_default":
+			ctor = None
+		elif pat_kind == "match_ctor":
+			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
+			ctor = name_tok.value
+			binders_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_binders"), None)
+			if binders_node is not None:
+				binders = [c.value for c in binders_node.children if isinstance(c, Token) and c.type == "NAME"]
+		elif pat_kind == "match_ctor0":
+			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
+			ctor = name_tok.value
+		else:
+			raise ValueError(f"Unsupported match_pat shape: {pat_kind}")
+
+		body_node = next((c for c in arm_node.children if isinstance(c, Tree) and _name(c) == "match_arm_body"), None)
+		if body_node is None:
+			raise ValueError("match_arm missing body")
+		inner = next((c for c in body_node.children if isinstance(c, Tree)), None)
+		if inner is None:
+			raise ValueError("match_arm_body missing block")
+		block = _build_value_block(inner) if _name(inner) == "value_block" else _build_block(inner)
+		arms.append(MatchArm(loc=_loc(arm_node), ctor=ctor, binders=binders, block=block))
+
+	if not arms:
+		raise ValueError("match_expr requires at least one arm")
+	return MatchExpr(loc=_loc(tree), scrutinee=scrutinee, arms=arms)
 
 
 def _build_ternary(tree: Tree) -> Ternary:

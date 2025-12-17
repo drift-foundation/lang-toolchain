@@ -312,6 +312,44 @@ class HTryExpr(HExpr):
 
 
 @dataclass
+class HMatchArm(HNode):
+	"""
+	Single arm in a `match` expression.
+
+	MVP patterns:
+	- constructor pattern: `Ctor(b1, b2, ...)`
+	- zero-field constructor: `Ctor`
+	- default arm: `default`
+
+	Arm bodies are blocks. A value-producing arm has `result` set to the final
+	expression; the remaining statements are in `block`.
+	"""
+
+	ctor: Optional[str]  # None means default arm
+	binders: list[str]
+	block: "HBlock"
+	result: Optional[HExpr]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
+class HMatchExpr(HExpr):
+	"""
+	Expression-form `match` (expression-only in MVP).
+
+	The typed checker enforces:
+	- duplicate constructors are rejected,
+	- `default` (if present) is last and appears at most once,
+	- without `default`, matches must be exhaustive for known variants, and
+	- when the match result is used, all arms must yield values of the same type.
+	"""
+
+	scrutinee: HExpr
+	arms: list[HMatchArm]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HThrow(HStmt):
 	"""Throw an error/exception value. Semantically returns Err from this function."""
 	value: HExpr
@@ -574,4 +612,5 @@ __all__ = [
 	"HThrow", "HRethrow",
 	"HTry", "HCatchArm",
 	"HTryExpr", "HTryExprArm",
+	"HMatchExpr", "HMatchArm",
 ]

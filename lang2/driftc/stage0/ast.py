@@ -171,6 +171,35 @@ class TryCatchExpr(Expr):
 
 
 @dataclass
+class MatchArm:
+	"""
+	Single `match` arm.
+
+	Patterns in MVP:
+	- constructor pattern: `Ctor(b1, b2, ...)`
+	- zero-field constructor: `Ctor`
+	- default arm: `default`
+
+	Arm bodies are blocks (statement lists). A value-producing arm is represented
+	by a trailing `ExprStmt` in the block (from `value_block` parsing).
+	"""
+
+	ctor: Optional[str]  # None means default arm
+	binders: List[str]
+	block: List[Stmt]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
+class MatchExpr(Expr):
+	"""Expression-form `match` (expression-only in MVP)."""
+
+	scrutinee: Expr
+	arms: List[MatchArm]
+	loc: Optional[object] = None
+
+
+@dataclass
 class Ternary(Expr):
 	"""Conditional expression: cond ? then_expr : else_expr."""
 	cond: Expr

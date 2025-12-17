@@ -14,8 +14,7 @@ Scope (v1 bring-up):
   - FnResult lowering requires a TypeTable so we can map ok/error TypeIds to
     LLVM payloads; we fail fast without it for can-throw functions. FnResult
     ok payloads outside {Int, String, Void-like, Ref<T>} are currently rejected.
-  - Control flow: straight-line + if/else (acyclic CFGs); loops/backedges are
-    rejected explicitly.
+  - Control flow: straight-line, if/else, and loops/backedges (general CFGs).
 
 ABI (from docs/design/drift-lang-abi.md):
   - %DriftError           = { i64 code, i8* attrs, i64 attr_count, i8* frames, i64 frame_count }
@@ -49,6 +48,9 @@ from lang2.driftc.stage2 import (
 	BinaryOpInstr,
 	Call,
 	ConstructStruct,
+	ConstructVariant,
+	VariantTag,
+	VariantGetField,
 	StructGetField,
 	ConstructDV,
 	ConstBool,
@@ -153,7 +155,7 @@ def lower_ssa_func_to_llvm(
 	Limitations:
 	  - Returns: Int, String, or FnResult<ok, Error> (ok ∈ {Int, String, Void-like, Ref<T>}) in v1;
 	    arrays are supported as values but not as FnResult ok payloads yet.
-	  - No loops/backedges; CFG must be acyclic (if/else diamonds ok).
+	  - General CFGs (including loops/backedges) are supported in v1.
 	"""
 	all_infos = dict(fn_infos) if fn_infos is not None else {fn_info.name: fn_info}
 	mod = LlvmModuleBuilder()
@@ -240,6 +242,7 @@ class LlvmModuleBuilder:
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
 	_fnresult_ok_llty_by_type: Dict[str, str] = field(default_factory=dict)
 	_struct_types_by_name: Dict[str, str] = field(default_factory=dict)
+	_variant_types_by_id: Dict[int, str] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if DRIFT_SIZE_TYPE.startswith("%"):
@@ -298,6 +301,29 @@ class LlvmModuleBuilder:
 		body = ", ".join(field_lltys) if field_lltys else ""
 		self.type_decls.append(f"{llvm_name} = type {{ {body} }}")
 		return llvm_name
+
+	def ensure_variant_type(self, ty_id: TypeId, *, payload_words: int) -> str:
+		"""
+		Ensure a concrete variant TypeId is declared as a named LLVM type.
+
+		Variant ABI is compiler-private in MVP, but we still want a stable,
+		readable named type in the emitted module for debugging and to avoid
+		repeating literal struct types everywhere.
+
+		Internal representation (v1):
+		  %Variant_<id> = type { i8 tag, [7 x i8] pad, [payload_words x i64] payload }
+
+		The 7-byte pad ensures the payload begins at an 8-byte aligned offset,
+		which is sufficient for all currently supported field types (Int/Uint,
+		Float, pointers, DriftString, and aggregates built from those).
+		"""
+		if ty_id in self._variant_types_by_id:
+			return self._variant_types_by_id[ty_id]
+		payload_words = max(1, int(payload_words))
+		name = f"%Variant_{ty_id}"
+		self._variant_types_by_id[ty_id] = name
+		self.type_decls.append(f"{name} = type {{ i8, [7 x i8], [{payload_words} x i64] }}")
+		return name
 
 	def fnresult_type(self, ok_key: str, ok_llty: str) -> str:
 		"""
@@ -465,6 +491,29 @@ class LlvmModuleBuilder:
 		return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class _VariantArmLayout:
+	"""Per-constructor payload layout for a concrete variant TypeId."""
+
+	tag: int
+	# LLVM value types for fields (used when returning values to SSA).
+	field_lltys: list[str]
+	# LLVM storage types for fields inside the payload buffer (Bool stored as i8).
+	field_storage_lltys: list[str]
+	# Literal struct type used to pack/unpack the payload for this constructor.
+	# Empty string means "no payload".
+	payload_struct_llty: str
+
+
+@dataclass(frozen=True)
+class _VariantLayout:
+	"""Concrete variant layout (compiler-private ABI) for one instantiated TypeId."""
+
+	llvm_ty: str
+	payload_words: int
+	arms: Dict[str, _VariantArmLayout]
+
+
 @dataclass
 class _FuncBuilder:
 	func: MirFunc
@@ -498,11 +547,15 @@ class _FuncBuilder:
 	opt_bool_type_id: Optional[TypeId] = None
 	opt_string_type_id: Optional[TypeId] = None
 	sym_name: Optional[str] = None
+	# Variant lowering caches (compiler-private ABI).
+	_variant_layouts: Dict[TypeId, "_VariantLayout"] = field(default_factory=dict)
+	_size_align_cache: Dict[TypeId, tuple[int, int]] = field(default_factory=dict)
 
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
 		self._scan_addr_taken_locals()
+		self._collect_assign_aliases()
 		self._emit_header()
 		self._declare_array_helpers_if_needed()
 		# LLVM defines the function "entry block" as the first basic block in the
@@ -521,6 +574,23 @@ class _FuncBuilder:
 			self._emit_block(block_name)
 		self.lines.append("}")
 		return "\n".join(self.lines)
+
+	def _collect_assign_aliases(self) -> None:
+		"""
+		Collect SSA alias relationships before emitting blocks.
+
+		The SSA stage expresses many local definitions and loads as `AssignSSA`
+		instructions. LLVM lowering treats these as *aliases* (no IR emission),
+		so we must know the alias map when emitting Φ nodes. In cyclic CFGs (loops)
+		and even in acyclic CFGs with forward references, a Φ node can refer to an
+		alias that is defined in a block that appears later in textual emission
+		order. Pre-collecting the alias map avoids producing undefined LLVM value
+		names in Φ incomings.
+		"""
+		for block in self.func.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, AssignSSA):
+					self.aliases[instr.dest] = instr.src
 
 	def _prime_type_ids(self) -> None:
 		if self.type_table is None:
@@ -843,12 +913,10 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = sext i32 {tmp} to i64")
 			self.value_types[dest] = "i64"
 		elif isinstance(instr, AssignSSA):
-			# Alias dest to src; no IR emission needed beyond name/type propagation.
-			src = self._map_value(instr.src)
-			dest = self._map_value(instr.dest)
-			self.aliases[instr.dest] = instr.src
-			if src in self.value_types:
-				self.value_types[dest] = self.value_types[src]
+			# AssignSSA is a pure SSA alias. We pre-collect aliases in
+			# `_collect_assign_aliases` so Φ lowering can resolve aliases even when
+			# the defining AssignSSA appears in a later-emitted block.
+			return
 		elif isinstance(instr, LoadLocal):
 			# Address-taken locals are materialized as storage. For them, LoadLocal
 			# is a real `load` from the local's alloca slot.
@@ -972,6 +1040,120 @@ class _FuncBuilder:
 				current = tmp
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = struct_llty
+		elif isinstance(instr, ConstructVariant):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: ConstructVariant requires a TypeTable")
+			layout = self._variant_layout(instr.variant_ty)
+			variant_llty = layout.llvm_ty
+			arm_layout = layout.arms.get(instr.ctor)
+			if arm_layout is None:
+				raise NotImplementedError(
+					f"LLVM codegen v1: unknown variant constructor '{instr.ctor}' for TypeId {instr.variant_ty}"
+				)
+			# Materialize into a stack slot so we can write into the aligned payload.
+			tmp_ptr = self._fresh("variant")
+			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+			tag_ptr = self._fresh("tagptr")
+			self.lines.append(
+				f"  {tag_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {tmp_ptr}, i32 0, i32 0"
+			)
+			self.lines.append(f"  store i8 {arm_layout.tag}, i8* {tag_ptr}")
+			if arm_layout.field_storage_lltys:
+				payload_words_ptr = self._fresh("payload_words")
+				self.lines.append(
+					f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {tmp_ptr}, i32 0, i32 2"
+				)
+				payload_i8 = self._fresh("payload_i8")
+				self.lines.append(
+					f"  {payload_i8} = bitcast [{layout.payload_words} x i64]* {payload_words_ptr} to i8*"
+				)
+				payload_struct_ptr = self._fresh("payload_struct")
+				self.lines.append(
+					f"  {payload_struct_ptr} = bitcast i8* {payload_i8} to {arm_layout.payload_struct_llty}*"
+				)
+				for idx, (arg, want_llty, store_llty) in enumerate(
+					zip(instr.args, arm_layout.field_lltys, arm_layout.field_storage_lltys)
+				):
+					arg_val = self._map_value(arg)
+					have = self.value_types.get(arg_val)
+					if have is not None and have != want_llty:
+						raise NotImplementedError(
+							f"LLVM codegen v1: ConstructVariant field {idx} type mismatch (have {have}, expected {want_llty})"
+						)
+					field_ptr = self._fresh("fieldptr")
+					self.lines.append(
+						f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {idx}"
+					)
+					if store_llty == "i8" and want_llty == "i1":
+						ext = self._fresh("bool8")
+						self.lines.append(f"  {ext} = zext i1 {arg_val} to i8")
+						self.lines.append(f"  store i8 {ext}, i8* {field_ptr}")
+					else:
+						self.lines.append(f"  store {store_llty} {arg_val}, {store_llty}* {field_ptr}")
+			dest = self._map_value(instr.dest)
+			self.lines.append(f"  {dest} = load {variant_llty}, {variant_llty}* {tmp_ptr}")
+			self.value_types[dest] = variant_llty
+		elif isinstance(instr, VariantTag):
+			layout = self._variant_layout(instr.variant_ty)
+			variant_llty = layout.llvm_ty
+			val = self._map_value(instr.variant)
+			have = self.value_types.get(val)
+			if have is not None and have != variant_llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantTag value type mismatch (have {have}, expected {variant_llty})"
+				)
+			raw = self._fresh("tag8")
+			self.lines.append(f"  {raw} = extractvalue {variant_llty} {val}, 0")
+			dest = self._map_value(instr.dest)
+			self.lines.append(f"  {dest} = zext i8 {raw} to i64")
+			self.value_types[dest] = "i64"
+		elif isinstance(instr, VariantGetField):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: VariantGetField requires a TypeTable")
+			layout = self._variant_layout(instr.variant_ty)
+			variant_llty = layout.llvm_ty
+			arm_layout = layout.arms.get(instr.ctor)
+			if arm_layout is None or not arm_layout.payload_struct_llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantGetField unsupported ctor '{instr.ctor}' for TypeId {instr.variant_ty}"
+				)
+			val = self._map_value(instr.variant)
+			have = self.value_types.get(val)
+			if have is not None and have != variant_llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantGetField value type mismatch (have {have}, expected {variant_llty})"
+				)
+			tmp_ptr = self._fresh("variant")
+			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+			self.lines.append(f"  store {variant_llty} {val}, {variant_llty}* {tmp_ptr}")
+			payload_words_ptr = self._fresh("payload_words")
+			self.lines.append(
+				f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {tmp_ptr}, i32 0, i32 2"
+			)
+			payload_i8 = self._fresh("payload_i8")
+			self.lines.append(
+				f"  {payload_i8} = bitcast [{layout.payload_words} x i64]* {payload_words_ptr} to i8*"
+			)
+			payload_struct_ptr = self._fresh("payload_struct")
+			self.lines.append(
+				f"  {payload_struct_ptr} = bitcast i8* {payload_i8} to {arm_layout.payload_struct_llty}*"
+			)
+			field_ptr = self._fresh("fieldptr")
+			self.lines.append(
+				f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {instr.field_index}"
+			)
+			store_llty = arm_layout.field_storage_lltys[instr.field_index]
+			want_llty = arm_layout.field_lltys[instr.field_index]
+			dest = self._map_value(instr.dest)
+			if store_llty == "i8" and want_llty == "i1":
+				raw = self._fresh("field8")
+				self.lines.append(f"  {raw} = load i8, i8* {field_ptr}")
+				self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
+				self.value_types[dest] = "i1"
+			else:
+				# For non-bool payload fields, storage and value types are identical.
+				self.lines.append(f"  {dest} = load {want_llty}, {want_llty}* {field_ptr}")
+				self.value_types[dest] = want_llty
 		elif isinstance(instr, StructGetField):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: StructGetField requires a TypeTable")
@@ -1388,6 +1570,11 @@ class _FuncBuilder:
 				# Non-throwing functions may return references (`&T`), lowered as
 				# typed pointers (`T*`) in v1.
 				self.lines.append(f"  ret {ty} {val}")
+			elif ty is not None and ty.startswith("%Variant_"):
+				# Variants are compiler-private aggregates in v1, but they are still
+				# valid surface return types (e.g. `Optional<Int>`). We return them by
+				# value using their named struct type.
+				self.lines.append(f"  ret {ty} {val}")
 			else:
 				raise NotImplementedError(
 					f"LLVM codegen v1: non-can-throw return must be Int, Float, String, or &T, got {ty}"
@@ -1430,6 +1617,115 @@ class _FuncBuilder:
 			return self.type_table.is_void(ty_id)
 		return self.void_type_id is not None and ty_id == self.void_type_id
 
+	def _size_align_typeid(self, ty_id: TypeId) -> tuple[int, int]:
+		"""
+		Best-effort size/alignment model for the compiler-private variant payload.
+
+		This is not a stable external ABI; it only needs to be self-consistent
+		within the emitted LLVM module. We keep it simple and assume max alignment
+		8 for all supported field types in v1.
+		"""
+		if ty_id in self._size_align_cache:
+			return self._size_align_cache[ty_id]
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: TypeTable required for variant lowering")
+		td = self.type_table.get(ty_id)
+		if td.kind is TypeKind.SCALAR:
+			if td.name in ("Int", "Uint", "Float"):
+				out = (8, 8)
+			elif td.name == "Bool":
+				out = (1, 1)
+			elif td.name == "String":
+				out = (16, 8)  # %DriftString = { i64, i8* }
+			else:
+				out = (8, 8)
+			self._size_align_cache[ty_id] = out
+			return out
+		if td.kind in (TypeKind.REF, TypeKind.ERROR):
+			out = (8, 8)
+			self._size_align_cache[ty_id] = out
+			return out
+		if td.kind is TypeKind.ARRAY:
+			# Current array value lowering is a 3-word header (len, cap, data ptr).
+			out = (24, 8)
+			self._size_align_cache[ty_id] = out
+			return out
+		if td.kind is TypeKind.STRUCT:
+			offset = 0
+			max_align = 1
+			for fty in td.param_types:
+				fsz, fal = self._size_align_typeid(fty)
+				if fal > 1:
+					offset = ((offset + fal - 1) // fal) * fal
+				offset += fsz
+				max_align = max(max_align, fal)
+			if max_align > 1:
+				offset = ((offset + max_align - 1) // max_align) * max_align
+			out = (offset, max_align)
+			self._size_align_cache[ty_id] = out
+			return out
+		if td.kind is TypeKind.VARIANT:
+			layout = self._variant_layout(ty_id)
+			out = (8 + layout.payload_words * 8, 8)
+			self._size_align_cache[ty_id] = out
+			return out
+		out = (8, 8)
+		self._size_align_cache[ty_id] = out
+		return out
+
+	def _variant_layout(self, ty_id: TypeId) -> _VariantLayout:
+		"""
+		Compute and cache the variant layout for a concrete TypeId.
+
+		The variant value type is declared as:
+		  %Variant_<id> = type { i8, [7 x i8], [payload_words x i64] }
+
+		Payload packing per constructor uses a literal struct type containing the
+		constructor's field storage types (Bool stored as i8).
+		"""
+		if ty_id in self._variant_layouts:
+			return self._variant_layouts[ty_id]
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: TypeTable required for variant lowering")
+		inst = self.type_table.get_variant_instance(ty_id)
+		if inst is None:
+			raise NotImplementedError(f"LLVM codegen v1: missing variant instance for TypeId {ty_id}")
+		max_payload_size = 0
+		arms: Dict[str, _VariantArmLayout] = {}
+		for arm in inst.arms:
+			field_lltys: list[str] = []
+			field_storage_lltys: list[str] = []
+			offset = 0
+			max_align = 1
+			for fty in arm.field_types:
+				llty = self._llvm_type_for_typeid(fty)
+				field_lltys.append(llty)
+				is_bool = self.type_table.get(fty).kind is TypeKind.SCALAR and self.type_table.get(fty).name == "Bool"
+				st_llty = "i8" if is_bool else llty
+				field_storage_lltys.append(st_llty)
+				sz, al = self._size_align_typeid(fty)
+				if al > 1:
+					offset = ((offset + al - 1) // al) * al
+				offset += sz
+				max_align = max(max_align, al)
+			if max_align > 1:
+				offset = ((offset + max_align - 1) // max_align) * max_align
+			max_payload_size = max(max_payload_size, offset)
+			payload_struct_llty = ""
+			if field_storage_lltys:
+				payload_struct_llty = "{ " + ", ".join(field_storage_lltys) + " }"
+			arms[arm.name] = _VariantArmLayout(
+				tag=arm.tag,
+				field_lltys=field_lltys,
+				field_storage_lltys=field_storage_lltys,
+				payload_struct_llty=payload_struct_llty,
+			)
+		payload_words = max(1, (max_payload_size + 7) // 8)
+		llvm_ty = self.module.ensure_variant_type(ty_id, payload_words=payload_words)
+		layout = _VariantLayout(llvm_ty=llvm_ty, payload_words=payload_words, arms=arms)
+		self._variant_layouts[ty_id] = layout
+		return layout
+
 	def _llvm_type_for_typeid(self, ty_id: TypeId, *, allow_void_ok: bool = False) -> str:
 		"""
 		Map a TypeId to an LLVM type string for parameters/arguments.
@@ -1461,6 +1757,10 @@ class _FuncBuilder:
 				return f"{inner_llty}*"
 			if td.kind is TypeKind.STRUCT:
 				return self.module.ensure_struct_type(ty_id, type_table=self.type_table, map_type=self._llvm_type_for_typeid)
+			if td.kind is TypeKind.VARIANT:
+				# Concrete variants lower to a named LLVM struct type that contains a
+				# tag byte and an aligned payload buffer.
+				return self._variant_layout(ty_id).llvm_ty
 			if td.kind is TypeKind.DIAGNOSTICVALUE:
 				return DRIFT_DV_TYPE
 			if td.kind is TypeKind.ERROR:
@@ -1839,10 +2139,9 @@ class _FuncBuilder:
 
 	def _assert_cfg_supported(self) -> None:
 		cfg_kind = self.ssa.cfg_kind or CfgKind.STRAIGHT_LINE
-		# Backend v1 only supports straight-line/acyclic SSA; anything else must bail
-		# loudly so we never emit IR for loops/backedges until explicitly supported.
-		if cfg_kind not in (CfgKind.STRAIGHT_LINE, CfgKind.ACYCLIC):
-			raise NotImplementedError("LLVM codegen v1: loops/backedges are not supported yet")
+		# Backend v1 supports general SSA CFGs, including loops/backedges.
+		if cfg_kind not in (CfgKind.STRAIGHT_LINE, CfgKind.ACYCLIC, CfgKind.GENERAL):
+			raise NotImplementedError(f"LLVM codegen v1: unsupported CFG kind {cfg_kind}")
 
 	def _type_of(self, value_id: str) -> str | None:
 		"""Best-effort lookup of an LLVM type string for a value id."""

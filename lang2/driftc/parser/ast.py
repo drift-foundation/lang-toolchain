@@ -267,7 +267,48 @@ class Program:
 	statements: List[Stmt] = field(default_factory=list)
 	structs: List[StructDef] = field(default_factory=list)
 	exceptions: List[ExceptionDef] = field(default_factory=list)
+	variants: List["VariantDef"] = field(default_factory=list)
 	module: Optional[str] = None
+
+
+@dataclass
+class VariantField:
+	"""
+	Single constructor field in a `variant` arm.
+
+	Example:
+	  Some(value: T)
+
+	`name` is the declared field name; patterns are positional-only in MVP, but
+	we keep names for clarity and future evolution.
+	"""
+
+	name: str
+	type_expr: TypeExpr
+
+
+@dataclass
+class VariantArm:
+	"""Single arm (constructor) inside a `variant` definition."""
+
+	name: str
+	fields: List[VariantField]
+	loc: Located
+
+
+@dataclass
+class VariantDef:
+	"""
+	Top-level variant (tagged union / sum type) definition.
+
+	MVP supports generic type parameters, e.g.:
+	  variant Optional<T> { Some(value: T), None }
+	"""
+
+	name: str
+	type_params: List[str]
+	arms: List[VariantArm]
+	loc: Located
 
 
 @dataclass
@@ -366,3 +407,31 @@ class Ternary(Expr):
     condition: Expr
     then_value: Expr
     else_value: Expr
+
+
+@dataclass
+class MatchArm:
+	"""
+	Single match arm.
+
+	Patterns are:
+	- constructor pattern: `Ctor(b1, b2, ...)`
+	- zero-field constructor: `Ctor`
+	- default: `default`
+
+	Arm bodies are blocks; `value_block` is represented as a trailing ExprStmt.
+	"""
+
+	loc: Located
+	ctor: Optional[str]  # None means default arm
+	binders: List[str]
+	block: Block
+
+
+@dataclass
+class MatchExpr(Expr):
+	"""Expression-form match."""
+
+	loc: Located
+	scrutinee: Expr
+	arms: List[MatchArm]

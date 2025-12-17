@@ -247,6 +247,64 @@ class ConstructStruct(MInstr):
 
 
 @dataclass
+class ConstructVariant(MInstr):
+	"""
+	dest = Ctor(args...) for a variant value.
+
+	`variant_ty` is the concrete instantiated variant TypeId (e.g. Optional<Int>).
+	`ctor` is the constructor name (e.g. "Some", "None").
+
+	Design notes:
+	- Variants are *compiler-private ABI* in MVP. Lowering/codegen treat the
+	  shared `TypeTable`'s `VariantInstance` data as authoritative for:
+	    - tag values (declaration order),
+	    - field types and arity per constructor.
+	- This instruction is pure value construction; it maps to building a struct
+	  value in LLVM with tag + payload bytes.
+	"""
+
+	dest: ValueId
+	variant_ty: TypeId
+	ctor: str
+	args: List[ValueId]
+
+
+@dataclass
+class VariantTag(MInstr):
+	"""
+	dest = tag(variant) as Uint (0..N-1).
+
+	MIR exposes the tag as a `Uint` (i64) for simplicity; LLVM lowers the stored
+	tag byte (i8) to i64 via zero-extension.
+	"""
+
+	dest: ValueId
+	variant: ValueId
+	variant_ty: TypeId
+
+
+@dataclass
+class VariantGetField(MInstr):
+	"""
+	dest = variant.<ctor>.<field_index>
+
+	Extract the value of a constructor field from a variant payload.
+
+	Contract:
+	- The caller must ensure `variant` currently holds the constructor `ctor`
+	  (typically by checking `VariantTag`).
+	- `field_ty` is carried for downstream codegen typing.
+	"""
+
+	dest: ValueId
+	variant: ValueId
+	variant_ty: TypeId
+	ctor: str
+	field_index: int
+	field_ty: TypeId
+
+
+@dataclass
 class StructGetField(MInstr):
 	"""
 	dest = subject.<field_index> (struct field read).
@@ -695,6 +753,9 @@ __all__ = [
 	"StoreRef",
 	"StoreLocal",
 	"ConstructStruct",
+	"ConstructVariant",
+	"VariantTag",
+	"VariantGetField",
 	"StructGetField",
 	"AddrOfField",
 	"LoadField",

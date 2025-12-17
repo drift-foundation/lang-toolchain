@@ -39,6 +39,7 @@ from lang2.driftc.stage1 import (
 	HExprStmt,
 	HLoop,
 	HBlock,
+	HMatchExpr,
 )
 
 
@@ -141,7 +142,7 @@ def test_while_desugars_to_loop_if_break():
 	assert isinstance(if_stmt.else_block.statements[0], HBreak)
 
 
-def test_for_desugars_to_init_loop_if_break():
+def test_for_desugars_to_iter_loop_match():
 	l = AstToHIR()
 	for_ast = ast.ForStmt(iter_var="i", iterable=ast.Name("items"), body=[ast.ExprStmt(expr=ast.Name("i"))])
 	hir = l.lower_stmt(for_ast)
@@ -157,17 +158,22 @@ def test_for_desugars_to_init_loop_if_break():
 	assert isinstance(iter_let.value, HMethodCall)
 	assert iter_let.value.method_name == "iter"
 	assert isinstance(loop, HLoop)
-	next_let, if_stmt = loop.body.statements
-	assert isinstance(next_let, HLet)
-	assert next_let.name.startswith("__for_next")
-	assert isinstance(next_let.value, HMethodCall)
-	assert next_let.value.method_name == "next"
-	assert isinstance(if_stmt, HIf)
-	assert isinstance(if_stmt.else_block.statements[0], HBreak)
-	then = if_stmt.then_block
-	assert isinstance(then.statements[0], HLet)
-	assert then.statements[0].name == "i"
-	assert isinstance(then.statements[1], HExprStmt)
+	assert len(loop.body.statements) == 1
+	stmt = loop.body.statements[0]
+	assert isinstance(stmt, HExprStmt)
+	assert isinstance(stmt.expr, HMatchExpr)
+	match = stmt.expr
+	assert isinstance(match.scrutinee, HMethodCall)
+	assert match.scrutinee.method_name == "next"
+	assert len(match.arms) == 2
+	some, default = match.arms
+	assert some.ctor == "Some"
+	assert some.binders == ["i"]
+	assert isinstance(some.block, HBlock)
+	assert isinstance(some.block.statements[0], HExprStmt)
+	assert default.ctor is None
+	assert default.binders == []
+	assert isinstance(default.block.statements[0], HBreak)
 
 
 def test_for_with_missing_cond_step_defaults():

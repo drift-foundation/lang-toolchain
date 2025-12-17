@@ -36,6 +36,12 @@ def resolve_opaque_type(raw: object, table: TypeTable) -> TypeId:
 			return table.ensure_ref_mut(inner) if name == "&mut" else table.ensure_ref(inner)
 		if name == "Void":
 			return table.ensure_void()
+		# Generic nominal instantiation (MVP: variants only).
+		# Example: Optional<Int> where `Optional` is a declared variant base.
+		if args and table.is_variant_base_named(str(name)):
+			base_id = table.ensure_named(str(name))
+			arg_ids = [resolve_opaque_type(a, table) for a in list(args)]
+			return table.ensure_instantiated(base_id, arg_ids)
 		if name == "FnResult":
 			ok = resolve_opaque_type(args[0] if args else None, table)
 			err = resolve_opaque_type(args[1] if len(args) > 1 else table.ensure_error(), table)
@@ -99,6 +105,9 @@ def resolve_opaque_type(raw: object, table: TypeTable) -> TypeId:
 		if raw.startswith("Optional<") and raw.endswith(">"):
 			inner = raw[len("Optional<"):-1]
 			inner_ty = resolve_opaque_type(inner, table)
+			if table.is_variant_base_named("Optional"):
+				base_id = table.ensure_named("Optional")
+				return table.ensure_instantiated(base_id, [inner_ty])
 			return table.new_optional(inner_ty)
 		# User-defined nominal types (e.g. structs) and unknown names.
 		return table.ensure_named(raw)

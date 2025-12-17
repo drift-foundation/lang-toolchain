@@ -23,6 +23,7 @@ from lang2.driftc.stage2 import (
 	Goto,
 )
 from lang2.driftc.stage4 import MirToSSA
+from lang2.driftc.stage4.ssa import CfgKind
 
 
 def test_straight_line_ssa_passes():
@@ -83,10 +84,10 @@ def test_ssa_load_before_store_raises():
 		MirToSSA().run(func)
 
 
-def test_ssa_rejects_multi_block_funcs():
-	# CFG with a backedge (loop) should still be rejected.
+def test_ssa_accepts_loop_cfg():
+	# A CFG with a backedge (loop) is supported by SSA now.
 	entry = BasicBlock(name="entry", instructions=[], terminator=Goto(target="loop"))
 	loop = BasicBlock(name="loop", instructions=[], terminator=Goto(target="loop"))
 	func = MirFunc(name="f", params=[], locals=["x"], blocks={"entry": entry, "loop": loop}, entry="entry")
-	with pytest.raises(NotImplementedError):
-		MirToSSA().run(func)
+	ssa = MirToSSA().run(func)
+	assert ssa.cfg_kind is CfgKind.GENERAL

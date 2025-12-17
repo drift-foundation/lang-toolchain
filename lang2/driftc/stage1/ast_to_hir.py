@@ -547,6 +547,51 @@ class AstToHIR:
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 
+	def _visit_expr_MatchExpr(self, expr: ast.MatchExpr) -> H.HExpr:
+		"""
+		Lower expression-form `match` into HIR (`HMatchExpr`).
+
+		MVP contract (enforced by the typed checker, not here):
+		  - `match` is an expression.
+		  - Arms are blocks (`{ ... }`) which may contain statements.
+		  - A value-producing arm is represented by a trailing `ExprStmt` in the
+		    arm block; the block's "result" is the lowered expression from that
+		    trailing statement.
+		  - `default` is a keyword arm (`ctor=None`) and must be last.
+		  - Patterns are positional-only constructor binders (no named fields).
+
+		This lowering is intentionally structural: it preserves the arm block
+		statements (minus an optional trailing `ExprStmt`) and stores the trailing
+		expression separately as `HMatchArm.result` so later passes can reason
+		about "arm yields a value" without re-walking the block.
+		"""
+		if not expr.arms:
+			raise NotImplementedError("match expression requires at least one arm")
+
+		arms: list[H.HMatchArm] = []
+		for arm in expr.arms:
+			arm_result: Optional[H.HExpr] = None
+			stmts = list(arm.block)
+			if stmts and isinstance(stmts[-1], ast.ExprStmt):
+				last_expr_stmt = stmts.pop()
+				arm_result = self.lower_expr(last_expr_stmt.expr)
+			arm_block = self.lower_block(stmts)
+			arms.append(
+				H.HMatchArm(
+					ctor=arm.ctor,
+					binders=list(getattr(arm, "binders", []) or []),
+					block=arm_block,
+					result=arm_result,
+					loc=self._as_span(getattr(arm, "loc", None)),
+				)
+			)
+
+		return H.HMatchExpr(
+			scrutinee=self.lower_expr(expr.scrutinee),
+			arms=arms,
+			loc=self._as_span(getattr(expr, "loc", None)),
+		)
+
 	def _visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
 		target = self.lower_expr(stmt.target)
 		value = self.lower_expr(stmt.value)
@@ -647,16 +692,13 @@ class AstToHIR:
 		Desugar:
 		  for iter_var in iterable { body }
 
-		into the iterator protocol using Optional:
+		into the iterator protocol using `match` + `Optional<T>`:
 		  let __for_iterable = iterable
-		  let __for_iter = __for_iterable.iter()
+		  var __for_iter = __for_iterable.iter()
 		  loop {
-		    let __for_next = __for_iter.next()
-		    if __for_next.is_some() {
-		      let iter_var = __for_next.unwrap()
-		      body
-		    } else {
-		      break
+		    match __for_iter.next() {
+		      Some(iter_var) => { body }
+		      default => { break }
 		    }
 		  }
 
@@ -672,27 +714,17 @@ class AstToHIR:
 		# 2) Build iterator: __for_iter = __for_iterable.iter()
 		iter_name = self._fresh_temp("__for_iter")
 		iter_call = H.HMethodCall(receiver=H.HVar(iterable_name), method_name="iter", args=[])
-		iter_let = H.HLet(name=iter_name, value=iter_call)
+		iter_let = H.HLet(name=iter_name, value=iter_call, is_mutable=True)
 
-		# 3) In loop: __for_next = __for_iter.next()
-		next_name = self._fresh_temp("__for_next")
+		# 3) In loop: match __for_iter.next() { Some(iter_var) => { body } default => { break } }
 		next_call = H.HMethodCall(receiver=H.HVar(iter_name), method_name="next", args=[])
-		next_let = H.HLet(name=next_name, value=next_call)
-
-		# 4) Condition: __for_next.is_some()
-		cond = H.HMethodCall(receiver=H.HVar(next_name), method_name="is_some", args=[])
-
-		# 5) Then: let iter_var = __for_next.unwrap(); body...
-		unwrap_call = H.HMethodCall(receiver=H.HVar(next_name), method_name="unwrap", args=[])
-		bind_iter = H.HLet(name=stmt.iter_var, value=unwrap_call)
 		body_block = self.lower_block(stmt.body)
-		then_block = H.HBlock(statements=[bind_iter] + body_block.statements)
-
-		# 6) Else: break
-		else_block = H.HBlock(statements=[H.HBreak()])
-
-		if_stmt = H.HIf(cond=cond, then_block=then_block, else_block=else_block)
-		loop_body = H.HBlock(statements=[next_let, if_stmt])
+		arms: list[H.HMatchArm] = [
+			H.HMatchArm(ctor="Some", binders=[stmt.iter_var], block=body_block, result=None),
+			H.HMatchArm(ctor=None, binders=[], block=H.HBlock(statements=[H.HBreak()]), result=None),
+		]
+		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms)
+		loop_body = H.HBlock(statements=[H.HExprStmt(expr=match_expr)])
 		loop_stmt = H.HLoop(body=loop_body)
 
 		# 7) Wrap iterable/iter bindings in a block to scope them.

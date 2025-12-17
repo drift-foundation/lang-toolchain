@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List
 
+from lang2.driftc.core.generic_type_expr import GenericTypeExpr
+
 
 TypeId = int  # opaque handle into the TypeTable
 
@@ -30,6 +32,7 @@ class TypeKind(Enum):
 	FUNCTION = auto()
 	ARRAY = auto()
 	REF = auto()
+	VARIANT = auto()
 	UNKNOWN = auto()
 
 
@@ -42,6 +45,64 @@ class TypeDef:
 	param_types: List[TypeId]
 	ref_mut: bool | None = None  # only meaningful for TypeKind.REF
 	field_names: List[str] | None = None  # only meaningful for TypeKind.STRUCT
+
+
+@dataclass(frozen=True)
+class VariantFieldSchema:
+	"""A single declared field in a variant constructor."""
+
+	name: str
+	type_expr: GenericTypeExpr
+
+
+@dataclass(frozen=True)
+class VariantArmSchema:
+	"""A single constructor arm in a variant schema."""
+
+	name: str
+	fields: list[VariantFieldSchema]
+
+
+@dataclass(frozen=True)
+class VariantSchema:
+	"""
+	Definition-time schema for a variant (generic or non-generic).
+
+	The schema is stored on the *base* variant type (declared name). Concrete
+	instantiations are created via `TypeTable.ensure_instantiated(...)` which
+	evaluates field `GenericTypeExpr`s into concrete `TypeId`s.
+	"""
+
+	name: str
+	type_params: list[str]
+	arms: list[VariantArmSchema]
+
+
+@dataclass(frozen=True)
+class VariantArmInstance:
+	"""A concrete constructor arm for an instantiated variant type."""
+
+	tag: int
+	name: str
+	field_names: list[str]
+	field_types: list[TypeId]
+
+
+@dataclass(frozen=True)
+class VariantInstance:
+	"""
+	Concrete (monomorphized) view of a variant type.
+
+	This is internal compiler data. The language ABI for variants is not frozen
+	yet, but lowering/codegen treat this as the authoritative description of:
+	- constructor tags,
+	- field names and types per constructor.
+	"""
+
+	base_id: TypeId
+	type_args: list[TypeId]
+	arms: list[VariantArmInstance]
+	arms_by_name: dict[str, VariantArmInstance]
 
 
 class TypeTable:
@@ -77,6 +138,12 @@ class TypeTable:
 		# Struct schemas keyed by nominal type name. Values are (name, [field_names]).
 		# Field types live in the STRUCT TypeDef itself.
 		self.struct_schemas: dict[str, tuple[str, list[str]]] = {}
+		# Variant schemas keyed by the *base* TypeId (declared name).
+		self.variant_schemas: dict[TypeId, VariantSchema] = {}
+		# Concrete instantiations keyed by the instantiated TypeId.
+		self.variant_instances: dict[TypeId, VariantInstance] = {}
+		# Instantiation cache: (base_id, args...) -> instantiated TypeId.
+		self._instantiation_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
 
 	def new_scalar(self, name: str) -> TypeId:
 		"""Register a scalar type (e.g., Int, Bool) and return its TypeId."""
@@ -113,6 +180,155 @@ class TypeTable:
 		ty_id = self._add(TypeKind.STRUCT, name, placeholder, field_names=list(field_names))
 		self.struct_schemas[name] = (name, list(field_names))
 		return ty_id
+
+	def declare_variant(self, name: str, type_params: list[str], arms: list[VariantArmSchema]) -> TypeId:
+		"""
+		Declare a variant nominal type (generic or non-generic).
+
+		The returned `TypeId` is the *base* type for the declared name.
+		Concrete instantiations are created via `ensure_instantiated`.
+
+		For non-generic variants (`type_params == []`), the base type is also a
+		concrete instantiation with zero type arguments, and is available via
+		`get_variant_instance(base_id)`.
+		"""
+		if name in self._named:
+			ty_id = self._named[name]
+			td = self.get(ty_id)
+			if td.kind is TypeKind.VARIANT:
+				return ty_id
+			raise ValueError(f"type name '{name}' already defined as {td.kind}")
+		# Base variant type. Note: base is named; instantiations are not.
+		base_id = self._add(TypeKind.VARIANT, name, [], register_named=True)
+		self.variant_schemas[base_id] = VariantSchema(name=name, type_params=list(type_params), arms=list(arms))
+		return base_id
+
+	def ensure_instantiated(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
+		"""
+		Return a stable TypeId for a concrete instantiation of a generic nominal.
+
+		MVP: only variants are instantiable. This is enforced by schema presence.
+		"""
+		schema = self.variant_schemas.get(base_id)
+		if schema is None:
+			raise ValueError("ensure_instantiated requires a declared generic variant base TypeId")
+		if len(type_args) != len(schema.type_params):
+			raise ValueError(
+				f"type argument count mismatch for '{schema.name}': expected {len(schema.type_params)}, got {len(type_args)}"
+			)
+		if not schema.type_params:
+			# Non-generic variants use the base id directly. Ensure its concrete
+			# instance exists (it may be created lazily after all variants are
+			# declared to support mutual references between non-generic variants).
+			if base_id not in self.variant_instances:
+				self._define_variant_instance(base_id, base_id, [])
+			return base_id
+		key = (base_id, tuple(type_args))
+		if key in self._instantiation_cache:
+			return self._instantiation_cache[key]
+		inst_id = self._add(TypeKind.VARIANT, schema.name, list(type_args), register_named=False)
+		self._instantiation_cache[key] = inst_id
+		self._define_variant_instance(base_id, inst_id, list(type_args))
+		return inst_id
+
+	def finalize_variants(self) -> None:
+		"""
+		Finalize variant declarations after all variant names/schemas are known.
+
+		This currently creates concrete instances for non-generic variants so
+		constructors and `match` can resolve arm field types without requiring an
+		explicit `ensure_instantiated(base, [])` call.
+
+		We defer this for correctness: a non-generic variant may reference another
+		variant declared later in the file, so instantiating while still parsing
+		can create placeholder types.
+		"""
+		for base_id, schema in list(self.variant_schemas.items()):
+			if schema.type_params:
+				continue
+			if base_id not in self.variant_instances:
+				self._define_variant_instance(base_id, base_id, [])
+
+	def get_variant_schema(self, ty: TypeId) -> VariantSchema | None:
+		"""Return the variant schema for a base or instantiated variant TypeId."""
+		td = self.get(ty)
+		if td.kind is not TypeKind.VARIANT:
+			return None
+		# A concrete instantiation stores no separate base id in TypeDef; we look
+		# up by (ty) first and fall back to "ty is base".
+		if ty in self.variant_schemas:
+			return self.variant_schemas[ty]
+		# If `ty` is an instantiation, find its base by searching the instances.
+		inst = self.variant_instances.get(ty)
+		if inst is not None:
+			return self.variant_schemas.get(inst.base_id)
+		return None
+
+	def get_variant_instance(self, ty: TypeId) -> VariantInstance | None:
+		"""Return the concrete variant instance for a variant TypeId, if available."""
+		return self.variant_instances.get(ty)
+
+	def is_variant_base_named(self, name: str) -> bool:
+		"""Return True if `name` refers to a declared variant base."""
+		ty = self._named.get(name)
+		return bool(ty is not None and ty in self.variant_schemas)
+
+	def _define_variant_instance(self, base_id: TypeId, inst_id: TypeId, type_args: list[TypeId]) -> None:
+		"""
+		Create and store a concrete `VariantInstance` for `inst_id`.
+
+		This evaluates arm field types by substituting generic type parameters
+		according to `type_args`.
+		"""
+		schema = self.variant_schemas[base_id]
+		arms: list[VariantArmInstance] = []
+		by_name: dict[str, VariantArmInstance] = {}
+		for tag, arm in enumerate(schema.arms):
+			field_names = [f.name for f in arm.fields]
+			field_types = [self._eval_generic_type_expr(f.type_expr, type_args) for f in arm.fields]
+			arm_inst = VariantArmInstance(tag=tag, name=arm.name, field_names=field_names, field_types=field_types)
+			arms.append(arm_inst)
+			by_name[arm.name] = arm_inst
+		self.variant_instances[inst_id] = VariantInstance(
+			base_id=base_id,
+			type_args=list(type_args),
+			arms=arms,
+			arms_by_name=by_name,
+		)
+
+	def _eval_generic_type_expr(self, expr: GenericTypeExpr, type_args: list[TypeId]) -> TypeId:
+		"""
+		Evaluate a schema-time `GenericTypeExpr` into a concrete `TypeId`.
+
+		This is used when instantiating variants.
+
+		Supported type constructors (MVP):
+		- type parameters (`T`) by index,
+		- references (`&T`, `&mut T`),
+		- `Array<T>`,
+		- nominal names (structs, variants) including instantiation `Name<A,B>`.
+		"""
+		if expr.param_index is not None:
+			idx = int(expr.param_index)
+			if idx < 0 or idx >= len(type_args):
+				return self.ensure_unknown()
+			return type_args[idx]
+		name = expr.name
+		# Reference constructors as produced by the parser (`&` / `&mut`).
+		if name in {"&", "&mut"} and expr.args:
+			inner = self._eval_generic_type_expr(expr.args[0], type_args)
+			return self.ensure_ref_mut(inner) if name == "&mut" else self.ensure_ref(inner)
+		if name == "Array" and expr.args:
+			elem = self._eval_generic_type_expr(expr.args[0], type_args)
+			return self.new_array(elem)
+		# Named nominal types: either a simple name, or a generic instantiation.
+		base_id = self.ensure_named(name)
+		if expr.args:
+			arg_ids = [self._eval_generic_type_expr(a, type_args) for a in expr.args]
+			# Only variants are instantiable in MVP.
+			if base_id in self.variant_schemas:
+				return self.ensure_instantiated(base_id, arg_ids)
+		return base_id
 
 	def define_struct_fields(self, struct_id: TypeId, field_types: List[TypeId]) -> None:
 		"""Fill in the field TypeIds for a declared struct."""
@@ -296,6 +512,8 @@ class TypeTable:
 		params: List[TypeId],
 		ref_mut: bool | None = None,
 		field_names: List[str] | None = None,
+		*,
+		register_named: bool | None = None,
 	) -> TypeId:
 		ty_id = self._next_id
 		self._next_id += 1
@@ -306,7 +524,9 @@ class TypeTable:
 			ref_mut=ref_mut if kind is TypeKind.REF else None,
 			field_names=list(field_names) if field_names is not None else None,
 		)
-		if kind in (TypeKind.SCALAR, TypeKind.STRUCT):
+		if register_named is None:
+			register_named = kind in (TypeKind.SCALAR, TypeKind.STRUCT)
+		if register_named:
 			self._named.setdefault(name, ty_id)
 		return ty_id
 
@@ -319,4 +539,14 @@ class TypeTable:
 		return self.get(ty).kind is TypeKind.VOID
 
 
-__all__ = ["TypeId", "TypeKind", "TypeDef", "TypeTable"]
+__all__ = [
+	"TypeId",
+	"TypeKind",
+	"TypeDef",
+	"TypeTable",
+	"VariantFieldSchema",
+	"VariantArmSchema",
+	"VariantSchema",
+	"VariantArmInstance",
+	"VariantInstance",
+]

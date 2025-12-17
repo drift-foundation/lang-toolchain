@@ -36,6 +36,7 @@ from lang2.driftc.borrow_checker import (
 )
 from lang2.driftc.method_registry import CallableDecl, CallableRegistry, ModuleId
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_function_call, resolve_method_call
+from lang2.driftc.core.iter_intrinsics import ensure_array_iter_struct, is_array_iter_struct
 
 # Identifier aliases for clarity.
 ParamId = int
@@ -168,7 +169,24 @@ class TypeChecker:
 			expr_types[expr_id] = ty
 			return ty
 
-		def type_expr(expr: H.HExpr, *, allow_exception_init: bool = False) -> TypeId:
+		# Precompute constructor-name visibility for diagnostics.
+		#
+		# MVP constructor resolution rule (work/variant/work-progress.md):
+		# - Constructors are unqualified identifiers.
+		# - Constructor calls in expression position require an *expected variant type*.
+		# - Without an expected type, the compiler diagnoses instead of guessing.
+		ctor_to_variant_bases: dict[str, list[TypeId]] = {}
+		for base_id, schema in getattr(self.type_table, "variant_schemas", {}).items():
+			for arm in schema.arms:
+				ctor_to_variant_bases.setdefault(arm.name, []).append(base_id)
+
+		def type_expr(
+			expr: H.HExpr,
+			*,
+			allow_exception_init: bool = False,
+			used_as_value: bool = True,
+			expected_type: TypeId | None = None,
+		) -> TypeId:
 			# Literals.
 			if isinstance(expr, H.HLiteralInt):
 				return record_expr(expr, self._int)
@@ -226,6 +244,161 @@ class TypeChecker:
 					)
 				)
 				return record_expr(expr, self._unknown)
+
+			# `match` expression (expression-only in MVP, but may appear in statement
+			# position as an ExprStmt where the result is ignored).
+			if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+				scrut_ty = type_expr(expr.scrutinee)
+				inst = None
+				if scrut_ty is not None:
+					try:
+						td_scrut = self.type_table.get(scrut_ty)
+					except Exception:
+						td_scrut = None
+					if td_scrut is not None and td_scrut.kind is not TypeKind.VARIANT:
+						diagnostics.append(
+							Diagnostic(
+								message="match scrutinee must be a variant type",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+					if td_scrut is not None and td_scrut.kind is TypeKind.VARIANT:
+						inst = self.type_table.get_variant_instance(scrut_ty)
+
+				seen_default = False
+				seen_default_span: Span | None = None
+				seen_ctors: set[str] = set()
+				result_ty: TypeId | None = None
+
+				for idx, arm in enumerate(expr.arms):
+					if arm.ctor is None:
+						# default arm
+						if seen_default:
+							diagnostics.append(
+								Diagnostic(
+									message="match default arm may appear at most once",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						seen_default = True
+						seen_default_span = getattr(arm, "loc", Span())
+					else:
+						if seen_default:
+							diagnostics.append(
+								Diagnostic(
+									message="match arms after default are unreachable",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						if arm.ctor in seen_ctors:
+							diagnostics.append(
+								Diagnostic(
+									message=f"duplicate match arm for constructor '{arm.ctor}'",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						seen_ctors.add(arm.ctor)
+
+					# Type-check arm body under a scope that includes constructor binders.
+					scope_env.append(dict())
+					scope_bindings.append(dict())
+					try:
+						if arm.ctor is not None and inst is not None:
+							arm_def = inst.arms_by_name.get(arm.ctor)
+							if arm_def is None:
+								diagnostics.append(
+									Diagnostic(
+										message=f"unknown constructor '{arm.ctor}' for this variant",
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							else:
+								if len(arm.binders) != len(arm_def.field_types):
+									diagnostics.append(
+										Diagnostic(
+											message=(
+												f"constructor pattern '{arm.ctor}' expects {len(arm_def.field_types)} binders, got {len(arm.binders)}"
+											),
+											severity="error",
+											span=getattr(arm, "loc", Span()),
+										)
+									)
+								for bname, bty in zip(arm.binders, arm_def.field_types):
+									bid = self._alloc_local_id()
+									locals.append(bid)
+									scope_env[-1][bname] = bty
+									scope_bindings[-1][bname] = bid
+									binding_types[bid] = bty
+									binding_names[bid] = bname
+									binding_mutable[bid] = False
+									binding_place_kind[bid] = PlaceKind.LOCAL
+
+						type_block(arm.block)
+
+						arm_value_ty: TypeId | None = None
+						if arm.result is not None:
+							arm_value_ty = type_expr(arm.result)
+						elif used_as_value:
+							# Allow diverging arms to omit a value in MVP. We treat a block as
+							# diverging when it ends with a terminator statement.
+							last = arm.block.statements[-1] if arm.block.statements else None
+							diverges = isinstance(last, (H.HReturn, H.HBreak, H.HContinue, H.HThrow, H.HRethrow))
+							if not diverges:
+								diagnostics.append(
+									Diagnostic(
+										message="E-MATCH-ARM-NO-VALUE: match arm must end with an expression when match result is used",
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+						if used_as_value and arm_value_ty is not None:
+							if result_ty is None:
+								result_ty = arm_value_ty
+							elif result_ty != arm_value_ty:
+								diagnostics.append(
+									Diagnostic(
+										message=(
+											"E-MATCH-ARM-TYPE: match arms must produce the same type when match result is used "
+											f"(have {self.type_table.get(arm_value_ty).name}, expected {self.type_table.get(result_ty).name})"
+										),
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+					finally:
+						scope_env.pop()
+						scope_bindings.pop()
+
+				# Non-exhaustive matches require a default arm (MVP rule).
+				if inst is not None and not seen_default:
+					all_ctors = set(inst.arms_by_name.keys())
+					if seen_ctors != all_ctors:
+						missing = ", ".join(sorted(all_ctors - seen_ctors))
+						diagnostics.append(
+							Diagnostic(
+								message=f"E-MATCH-NONEXHAUSTIVE: non-exhaustive match must include default arm (missing: {missing})",
+								severity="error",
+								span=getattr(expr, "loc", Span()) if seen_default_span is None else seen_default_span,
+							)
+						)
+
+				if not used_as_value:
+					return record_expr(expr, self._void)
+				if result_ty is None:
+					diagnostics.append(
+						Diagnostic(
+							message="E-MATCH-NO-VALUE: match result is used but no arm produces a value",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				return record_expr(expr, result_ty)
 
 			# Borrow.
 			if isinstance(expr, H.HBorrow):
@@ -487,6 +660,43 @@ class TypeChecker:
 
 			# Calls.
 			if isinstance(expr, H.HCall):
+				# Variant constructor call in expression position.
+				#
+				# MVP rule: constructor calls require an *expected* variant type from
+				# context (annotation, parameter type, return type, etc.). Without an
+				# expected type we do not guess which variant the constructor belongs to.
+				if isinstance(expr.fn, H.HVar) and expected_type is not None:
+					try:
+						exp_def = self.type_table.get(expected_type)
+					except Exception:
+						exp_def = None
+					if exp_def is not None and exp_def.kind is TypeKind.VARIANT:
+						inst = self.type_table.get_variant_instance(expected_type)
+						if inst is not None and expr.fn.name in inst.arms_by_name:
+							arm_def = inst.arms_by_name[expr.fn.name]
+							kw_pairs = getattr(expr, "kwargs", []) or []
+							if kw_pairs:
+								diagnostics.append(
+									Diagnostic(
+										message="variant constructors do not support keyword arguments in MVP",
+										severity="error",
+										span=getattr(kw_pairs[0], "loc", getattr(expr, "loc", Span())),
+									)
+								)
+							if len(expr.args) != len(arm_def.field_types):
+								diagnostics.append(
+									Diagnostic(
+										message=(
+											f"constructor '{arm_def.name}' expects {len(arm_def.field_types)} arguments, got {len(expr.args)}"
+										),
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+							for arg, want in zip(expr.args, arm_def.field_types):
+								type_expr(arg, expected_type=want)
+							return record_expr(expr, expected_type)
+
 				# Always type fn and args first for side-effects/subexpressions.
 				#
 				# Special-case struct constructors: `Point(1, 2)` uses a call-like
@@ -514,8 +724,24 @@ class TypeChecker:
 						should_type_fn = False
 				if should_type_fn:
 					type_expr(expr.fn)
-				arg_types = [type_expr(a) for a in expr.args]
 				kw_pairs = getattr(expr, "kwargs", []) or []
+				# When a call signature is known by name, use its parameter types as
+				# expected types for arguments. This enables constructor calls inside
+				# arguments, e.g. `takes_opt(Some(1))` where `takes_opt` expects
+				# `Optional<Int>`.
+				arg_types: list[TypeId] = []
+				if (
+					isinstance(expr.fn, H.HVar)
+					and call_signatures
+					and expr.fn.name in call_signatures
+					and call_signatures[expr.fn.name].param_type_ids is not None
+				):
+					expected_params = call_signatures[expr.fn.name].param_type_ids or []
+					for i, a in enumerate(expr.args):
+						want = expected_params[i] if i < len(expected_params) else None
+						arg_types.append(type_expr(a, expected_type=want))
+				else:
+					arg_types = [type_expr(a) for a in expr.args]
 				kw_types = [type_expr(k.value) for k in kw_pairs]
 
 				# Builtins: swap/replace operate on *places*.
@@ -818,6 +1044,31 @@ class TypeChecker:
 						call_resolutions[id(expr)] = decl
 						return record_expr(expr, decl.signature.result_type)
 					except ResolutionError as err:
+						# If this call looks like a variant constructor invocation (unqualified
+						# constructor name) but we have no expected variant type, prefer a
+						# targeted diagnostic over a generic "no overload" message.
+						#
+						# We only do this when there are *no* visible free-function candidates
+						# with the same name. If user code declares a real function named
+						# `Some`, we should report overload errors for that function instead.
+						if expected_type is None and expr.fn.name in ctor_to_variant_bases:
+							candidates = callable_registry.get_free_candidates(
+								name=expr.fn.name,
+								visible_modules=visible_modules or (current_module,),
+								include_private_in=current_module,
+							)
+							if not candidates:
+								diagnostics.append(
+									Diagnostic(
+										message=(
+											"E-CTOR-EXPECTED-TYPE: constructor call requires an expected variant type; "
+											"add a type annotation or call a function that expects this variant"
+										),
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+								return record_expr(expr, self._unknown)
 						diagnostics.append(
 							Diagnostic(message=str(err), severity="error", span=getattr(expr, "loc", Span()))
 						)
@@ -828,6 +1079,19 @@ class TypeChecker:
 					sig = call_signatures.get(expr.fn.name)
 					if sig and sig.return_type_id is not None:
 						return record_expr(expr, sig.return_type_id)
+				# Constructor calls without an expected variant type are rejected in MVP.
+				if isinstance(expr.fn, H.HVar) and expected_type is None:
+					if expr.fn.name in ctor_to_variant_bases:
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									"E-CTOR-EXPECTED-TYPE: constructor call requires an expected variant type; "
+									"add a type annotation or call a function that expects this variant"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
 				return record_expr(expr, self._unknown)
 
 			if isinstance(expr, H.HMethodCall):
@@ -865,6 +1129,58 @@ class TypeChecker:
 
 				recv_ty = type_expr(expr.receiver)
 				arg_types = [type_expr(a) for a in expr.args]
+
+				# Iterator protocol intrinsics for `for` desugaring (MVP).
+				#
+				# The stage1 lowering desugars:
+				#   for x in expr { body }
+				# into:
+				#   let it = expr.iter()
+				#   loop { match it.next() { Some(x) => { body } default => { break } } }
+				#
+				# Modules/traits are not implemented yet, so `.iter()` / `.next()` are
+				# compiler intrinsics on arrays.
+				if expr.method_name == "iter" and not expr.args:
+					recv_def = self.type_table.get(recv_ty)
+					if recv_def.kind is TypeKind.ARRAY:
+						iter_ty = ensure_array_iter_struct(recv_ty, self.type_table)
+						return record_expr(expr, iter_ty)
+				if expr.method_name == "next" and not expr.args:
+					if is_array_iter_struct(recv_ty, self.type_table):
+						iter_def = self.type_table.get(recv_ty)
+						if not iter_def.param_types or len(iter_def.param_types) != 2:
+							diagnostics.append(
+								Diagnostic(
+									message="internal array iterator type is malformed (compiler bug)",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						arr_ty = iter_def.param_types[0]
+						arr_def = self.type_table.get(arr_ty)
+						if arr_def.kind is not TypeKind.ARRAY or not arr_def.param_types:
+							diagnostics.append(
+								Diagnostic(
+									message="internal array iterator type does not contain Array<T> (compiler bug)",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						elem_ty = arr_def.param_types[0]
+						opt_base = self.type_table.ensure_named("Optional")
+						opt_def = self.type_table.get(opt_base)
+						if opt_def.kind is not TypeKind.VARIANT:
+							diagnostics.append(
+								Diagnostic(
+									message="Optional<T> variant base is missing (compiler bug)",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						return record_expr(expr, self.type_table.ensure_instantiated(opt_base, [elem_ty]))
 
 				if callable_registry:
 					try:
@@ -1234,13 +1550,16 @@ class TypeChecker:
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()
 				locals.append(stmt.binding_id)
-				inferred_ty = type_expr(stmt.value)
 				declared_ty: TypeId | None = None
 				if getattr(stmt, "declared_type_expr", None) is not None:
 					try:
 						declared_ty = resolve_opaque_type(stmt.declared_type_expr, self.type_table)
 					except Exception:
 						declared_ty = None
+				# If the user provides a type annotation, treat it as the expected type
+				# for the initializer. This enables constructor calls like:
+				#   val x: Optional<Int> = Some(1)
+				inferred_ty = type_expr(stmt.value, expected_type=declared_ty)
 				val_ty = inferred_ty
 				if declared_ty is not None:
 					# MVP: treat the declared type as authoritative for the binding.
@@ -1287,6 +1606,19 @@ class TypeChecker:
 						if sub_place is not None and any(isinstance(p, DerefProj) for p in sub_place.projections):
 							origin = ref_origin_param.get(sub_place.base.local_id)
 					ref_origin_param[stmt.binding_id] = origin
+			elif isinstance(stmt, H.HBlock):
+				# Block statements introduce a nested lexical scope.
+				#
+				# This is used by desugarings like `for` which need to introduce hidden
+				# temporaries without leaking them to the surrounding scope.
+				scope_env.append(dict())
+				scope_bindings.append(dict())
+				try:
+					for s in stmt.statements:
+						type_stmt(s)
+				finally:
+					scope_env.pop()
+					scope_bindings.pop()
 			elif isinstance(stmt, H.HAssign):
 				type_expr(stmt.value)
 				type_expr(stmt.target)
@@ -1438,10 +1770,10 @@ class TypeChecker:
 							)
 						)
 			elif isinstance(stmt, H.HExprStmt):
-				type_expr(stmt.expr)
+				type_expr(stmt.expr, used_as_value=False)
 			elif isinstance(stmt, H.HReturn):
 				if stmt.value is not None:
-					type_expr(stmt.value)
+					type_expr(stmt.value, expected_type=return_type)
 			elif isinstance(stmt, H.HIf):
 				type_expr(stmt.cond)
 				type_block(stmt.then_block)

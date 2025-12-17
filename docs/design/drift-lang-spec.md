@@ -981,7 +981,7 @@ trait Diagnostic {
 Rules:
 
 - Primitive types implement `to_diag` as scalars.
-- `Optional<T>` implements `to_diag` as `Null` (None) or `T.to_diag()`.
+- `Optional<T>` implements `to_diag` as `Null` (`None()`) or `T.to_diag()`.
 - Structs without a custom implementation default to an `Object` mapping each field name to `field_value.to_diag()`.
 - `to_diag` must never throw.
 
@@ -1565,7 +1565,9 @@ Keywords and literals are reserved and cannot be used as identifiers (functions,
 
 ## 10. Variant types (`variant`)
 
-Drift’s `variant` keyword defines **tagged unions**: a value that is exactly one of several named alternatives (variants). Each alternative may carry its own fields, and the compiler enforces exhaustive handling when you `match` on the value.
+Drift’s `variant` keyword defines **tagged unions**: a value that is exactly one of several named alternatives (constructors). Each constructor may carry its own fields.
+
+In v1, variants are primarily consumed via the `match` **expression** (see §10.4).
 
 ### 10.1. Syntax
 
@@ -1592,28 +1594,55 @@ Only the active variant’s fields may be accessed. This is enforced statically 
 
 ### 10.3. Construction
 
-Each variant behaves like a constructor:
+Each constructor behaves like a value constructor call:
 
 ```drift
-val success: Result<Int64, String> = Ok(value = 42)
-val failure = Err(error = "oops")            // type inference fills in `<Int64, String>`
+val success: Result<Int, String> = Ok(42)
+val failure: Result<Int, String> = Err("oops")
 ```
 
-Named arguments are required when a variant has multiple fields; single-field variants may support positional construction, though the explicit form is always accepted.
+MVP rules:
+
+- Constructors are **unqualified identifiers** (`Ok`, `Err`, `Some`, `None`).
+- **Positional arguments only** in MVP (no named-field construction).
+- A constructor call in expression position requires an **expected variant type** from context (e.g., an annotation, a parameter type, or a function return type). If there is no expected type, the compiler rejects the call rather than guessing.
+
+Examples:
+
+```drift
+val x: Optional<Int> = Some(1)   // OK: expected type is Optional<Int>
+val y = Some(1)                 // error (no expected variant type)
+```
 
 ### 10.4. Pattern matching and exhaustiveness
 
-`match` is used to consume a variant. All variants must be covered (or you must use future catch-all syntax once it exists).
+`match` is used to consume a variant. In v1, `match` is an **expression**:
 
 ```drift
-fn describe(result: Result<Int64, String>) returns String {
-    match result {
-        Ok(value) => {
-            return "ok: " + value.to_string()
-        }
-        Err(error) => {
-            return "error: " + error
-        }
+val s = match result {
+    Ok(v) => { "ok: " + v.to_string() }
+    Err(e) => { "error: " + e }
+}
+```
+
+**Arm bodies are blocks**. A block may contain statements; the match arm’s value (when needed) is the last expression in the block.
+
+**Default arm**:
+
+- Non-exhaustive matches are allowed **only** if a `default` arm is present.
+- `default` is a keyword (not a pattern) and introduces no bindings.
+- `default` may appear **at most once** and must be **last**.
+
+Exhaustiveness rules (v1):
+
+- Without `default`, the match must cover every constructor of the scrutinee variant.
+- With `default`, any subset of constructors may be listed.
+
+```drift
+fn describe(result: Result<Int, String>) returns String {
+    return match result {
+        Ok(value) => { "ok: " + value.to_string() }
+        Err(error) => { "error: " + error }
     }
 }
 ```
@@ -1639,39 +1668,25 @@ variant LookupResult<T> {
 
 fn describe_lookup(id: Int64, r: LookupResult<String>) returns String {
     match r {
-        Found(value) => "Record " + id.to_string() + ": " + value
-        Missing      => "No record for id " + id.to_string()
-        Error(err)   => match err {
-            ConnectionLost       => "Database connection lost"
-            QueryFailed(message) => "Query failed: " + message
-        }
+        Found(value) => { "Record " + id.to_string() + ": " + value }
+        Missing      => { "No record for id " + id.to_string() }
+        Error(err)   => { match err {
+            ConnectionLost       => { "Database connection lost" }
+            QueryFailed(message) => { "Query failed: " + message }
+            default              => { "Unknown db error" }
+        } }
+        default      => { "Unknown lookup result" }
     }
 }
 ```
 
 ### 10.5. Recursive data
 
-Variants are ideal for ASTs and other recursive shapes:
-
-```drift
-variant Expr {
-    Literal(value: Int64)
-    Add(lhs: &Expr, rhs: &Expr)
-    Neg(inner: &Expr)
-}
-
-fn eval(expr: &Expr) returns Int64 {
-    match expr {
-        Literal(value) => value
-        Add(lhs, rhs) => eval(lhs) + eval(rhs)
-        Neg(inner) => -eval(inner)
-    }
-}
-```
+Recursive variants require an explicit indirection strategy (e.g. references or a future owned `Box<T>` type) to break infinite size. This is deferred until the language has a stable story for recursive ownership and lifetime/escape rules.
 
 ### 10.6. Generics
 
-Variants support type parameters exactly like `struct` or `fn` declarations:
+Variants may declare type parameters. In the MVP, **generic functions** are deferred; generics are used for nominal types (e.g. `Optional<T>`, `Result<T, E>`), and codegen monomorphizes only the concrete instantiations used by the program.
 
 ```drift
 variant PairOrError<T, E> {
@@ -1679,11 +1694,11 @@ variant PairOrError<T, E> {
     Error(error: E)
 }
 
-fn make_pair<T>(x: T, y: T) returns PairOrError<T, String> {
+fn make_pair(x: Int, y: Int) returns PairOrError<Int, String> {
     if x == y {
-        return Error(error = "values must differ")
+        return Error("values must differ")
     }
-    return Pair(first = x, second = y)
+    return Pair(x, y)
 }
 ```
 
@@ -1713,16 +1728,16 @@ Drift is **null-free**. There is no `null` literal. A value is either present (`
 ### 11.2. Construction
 
 ```drift
-val present: Optional<Int64> = Some(value = 42)
-val empty: Optional<Int64> = None
+val present: Optional<Int64> = Some(42)
+val empty: Optional<Int64> = None()
 ```
 
 ### 11.3. Control flow
 
 ```drift
 match qty {
-    Some(q) => println("qty=" + q.to_string()),
-    None => println("no qty"),
+    Some(q) => { println("qty=" + q.to_string()) }
+    None => { println("no qty") }
 }
 ```
 
@@ -1730,17 +1745,17 @@ There is no safe-navigation operator (`?.`). Access requires explicit pattern ma
 
 ### 11.4. Parameters & returns
 
-- A parameter of type `T` cannot receive `None`.
+- A parameter of type `T` cannot receive `None()`.
 - Use `Optional<T>` for “maybe” values.
-- Returning `None` from a function declared `: T` is a compile error.
+- Returning `None()` from a function declared `: T` is a compile error.
 
 ```drift
 fn find_sku(id: Int64) returns Optional<String> { /* ... */ }
 
 val sku = find_sku(42)
 match sku {
-    Some(s) => println("sku=" + s),
-    None => println("missing"),
+    Some(s) => { println("sku=" + s) }
+    None => { println("missing") }
 }
 ```
 
@@ -1750,7 +1765,7 @@ Pattern matching moves the bound value by default. If you need to borrow instead
 
 ### 11.6. Diagnostics (illustrative)
 
-- **E2400**: cannot assign `None` to non-optional type `T`.
+- **E2400**: cannot assign `None()` to non-optional type `T`.
 - **E2401**: attempted member/method use on `Optional<T>` without pattern matching / combinators.
 - **E2402**: attempted unwrap of `None` (discouraged pattern).
 - **E2403**: attempted implicit conversion `Optional<T>` → `T`.
@@ -1765,8 +1780,8 @@ struct Order {
 }
 
 fn find_order(id: Int64) returns Optional<Order> {
-    if id == 42 { return Some(value = Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
-    return None
+    if id == 42 { return Some(Order(id = 42, sku = "DRIFT-1", quantity = 1)) }
+    return None()
 }
 
 fn ship(o: Order) returns Void {
@@ -1777,29 +1792,14 @@ fn main() returns Void {
     val maybe_order = find_order(42)
 
     match maybe_order {
-        Some(o) => ship(o),
-        None => println("order not found"),
+        Some(o) => { ship(o) }
+        None => { println("order not found") }
     }
 }
 
-### 11.8. Optional API (minimal)
+### 11.8. Optional API (deferred)
 
-The standard library exposes a minimal API on `Optional<T>`:
-
-```drift
-struct Optional<T> {
-    fn is_some(self) returns Bool
-    fn is_none(self) returns Bool
-    fn unwrap_or(self, default: T) returns T
-}
-```
-
-Semantics:
-- `is_some` tests the tag.
-- `is_none` is `!is_some`.
-- `unwrap_or` returns the inner value if present, otherwise `default`.
-
-This API is sufficient to inspect `Optional<T>` without pattern matching; richer combinators can be added later.
+Helper methods/combinators on `Optional<T>` (e.g. `is_some`, `unwrap_or`) are expected to exist, but are deferred until the module/trait story is finalized. MVP code should use `match`.
 
 ---
 ## 12. `lang.array`, `ByteBuffer`, and array literals

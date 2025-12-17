@@ -1,0 +1,16 @@
+module m
+
+variant Optional<T> {
+	Some(value: T),
+	None,
+}
+
+fn main() returns Int {
+	val x: Optional<Int> = None()
+	// Non-exhaustive match without `default` is rejected in MVP.
+	val y = match x {
+		Some(v) => { v }
+	}
+	return y
+}
+

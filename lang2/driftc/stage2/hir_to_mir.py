@@ -33,6 +33,8 @@ from lang2.driftc import stage1 as H
 from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.span import Span
 from lang2.driftc.core.types_core import TypeKind, TypeTable, TypeId
+from lang2.driftc.core.type_resolve_common import resolve_opaque_type
+from lang2.driftc.core.iter_intrinsics import ensure_array_iter_struct, is_array_iter_struct
 from . import mir_nodes as M
 
 
@@ -189,6 +191,14 @@ class HIRToMIR:
 		# Cache the current function signature for defensive fallbacks in older
 		# unit tests that bypass the checker.
 		self._fn_sig = self._signatures.get(self.b.func.name)
+		# Expected type hints for expression lowering.
+		#
+		# Stage2 does not consume the typed checker's per-expression type map yet;
+		# instead, it threads "expected types" from obvious contexts (typed lets,
+		# returns, known call signatures) into expression lowering. This is
+		# necessary for MVP features that require context to resolve (e.g., variant
+		# constructors as unqualified identifiers).
+		self._expected_type_stack: list[TypeId | None] = [None]
 
 	def _fn_can_throw(self) -> bool | None:
 		"""
@@ -212,17 +222,138 @@ class HIRToMIR:
 
 	# --- Expression lowering ---
 
-	def lower_expr(self, expr: H.HExpr) -> M.ValueId:
+	def _lower_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
+		"""
+		Lower `match` by building an explicit CFG dispatch on the scrutinee tag.
+
+		MVP notes:
+		- `match` is an expression in the language, but it may appear in statement
+		  position as an ExprStmt. In statement position, arm result expressions
+		  (if present) are evaluated and discarded, and arms may omit a result.
+		- Pattern support is positional-only constructor binders plus `default`.
+		"""
+		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
+		scrut_val = self.lower_expr(expr.scrutinee)
+		scrut_ty = self._infer_expr_type(expr.scrutinee)
+		if scrut_ty is None or self._type_table.get(scrut_ty).kind is not TypeKind.VARIANT:
+			raise AssertionError("match scrutinee must have a concrete variant type (checker bug)")
+		inst = self._type_table.get_variant_instance(scrut_ty)
+		if inst is None:
+			raise AssertionError("match scrutinee variant instance missing (type table bug)")
+
+		# Optional hidden local for the match result when used as a value.
+		result_local: str | None = None
+		if want_value:
+			result_local = f"__match_expr_tmp{self.b.new_temp()}"
+			self.b.ensure_local(result_local)
+			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
+			if want_ty is not None:
+				self._local_types[result_local] = want_ty
+
+		dispatch_block = self.b.new_block("match_dispatch")
+		join_block = self.b.new_block("match_join")
+		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
+			(arm, self.b.new_block(f"match_arm_{idx}")) for idx, arm in enumerate(expr.arms)
+		]
+
+		# Enter dispatch.
+		self.b.set_terminator(M.Goto(target=dispatch_block.name))
+
+		# Dispatch: tag = VariantTag(scrutinee); chain IfTerminator tests in source order.
+		self.b.set_block(dispatch_block)
+		tag_tmp = self.b.new_temp()
+		self.b.emit(M.VariantTag(dest=tag_tmp, variant=scrut_val, variant_ty=scrut_ty))
+		self._local_types[tag_tmp] = self._uint_type
+
+		# Find default arm (if any) and build dispatch chain for ctor arms.
+		default_block: M.BasicBlock | None = None
+		event_arms: list[tuple[H.HMatchArm, M.BasicBlock]] = []
+		for arm, bb in arm_blocks:
+			if arm.ctor is None:
+				default_block = bb
+			else:
+				event_arms.append((arm, bb))
+
+		current_block = dispatch_block
+		for arm, bb in event_arms:
+			assert arm.ctor is not None
+			arm_def = inst.arms_by_name.get(arm.ctor)
+			if arm_def is None:
+				raise AssertionError("unknown constructor in match reached MIR lowering (checker bug)")
+			self.b.set_block(current_block)
+			tag_const = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=tag_const, value=int(arm_def.tag)))
+			cmp_tmp = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=tag_tmp, right=tag_const))
+			else_block = self.b.new_block("match_dispatch_next")
+			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=bb.name, else_target=else_block.name))
+			current_block = else_block
+
+		self.b.set_block(current_block)
+		if default_block is not None:
+			self.b.set_terminator(M.Goto(target=default_block.name))
+		else:
+			# Exhaustive matches should ensure this path is unreachable.
+			self.b.set_terminator(M.Unreachable())
+
+		# Lower each arm block: bind pattern fields, lower statements, store optional result, jump to join.
+		for arm, bb in arm_blocks:
+			self.b.set_block(bb)
+			if arm.ctor is not None:
+				arm_def = inst.arms_by_name[arm.ctor]
+				if len(arm.binders) != len(arm_def.field_types):
+					raise AssertionError("match binder arity mismatch reached MIR lowering (checker bug)")
+				for idx, (bname, bty) in enumerate(zip(arm.binders, arm_def.field_types)):
+					field_val = self.b.new_temp()
+					self.b.emit(
+						M.VariantGetField(
+							dest=field_val,
+							variant=scrut_val,
+							variant_ty=scrut_ty,
+							ctor=arm.ctor,
+							field_index=idx,
+							field_ty=bty,
+						)
+					)
+					self._local_types[field_val] = bty
+					self.b.ensure_local(bname)
+					self._local_types[bname] = bty
+					self.b.emit(M.StoreLocal(local=bname, value=field_val))
+			self.lower_block(arm.block)
+			if want_value and arm.result is not None and result_local is not None:
+				val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
+				self.b.emit(M.StoreLocal(local=result_local, value=val))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+		# Join point.
+		self.b.set_block(join_block)
+		if not want_value:
+			return None
+		assert result_local is not None
+		dest = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		return dest
+
+	def lower_expr(self, expr: H.HExpr, *, expected_type: TypeId | None = None) -> M.ValueId:
 		"""
 		Entry point: lower a single HIR expression to a MIR ValueId.
 
 		Dispatches to a private _visit_expr_* helper. Public stage API: callers
 		should only invoke lower_expr/stmt/block; helpers stay private.
 		"""
-		method = getattr(self, f"_visit_expr_{type(expr).__name__}", None)
-		if method is None:
-			raise NotImplementedError(f"No MIR lowering for expr {type(expr).__name__}")
-		return method(expr)
+		self._expected_type_stack.append(expected_type)
+		try:
+			method = getattr(self, f"_visit_expr_{type(expr).__name__}", None)
+			if method is None:
+				raise NotImplementedError(f"No MIR lowering for expr {type(expr).__name__}")
+			return method(expr)
+		finally:
+			self._expected_type_stack.pop()
+
+	def _current_expected_type(self) -> TypeId | None:
+		"""Return the current expected type hint for expression lowering."""
+		return self._expected_type_stack[-1] if self._expected_type_stack else None
 
 	def _visit_expr_HLiteralInt(self, expr: H.HLiteralInt) -> M.ValueId:
 		dest = self.b.new_temp()
@@ -508,6 +639,30 @@ class HIRToMIR:
 		"""
 		if isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
+			# Variant constructor call in expression position.
+			#
+			# MVP rule: constructor calls require an expected variant type from
+			# context (annotation, return type, etc.). Stage2 threads that expected
+			# type hint through `lower_expr(..., expected_type=...)`.
+			expected = self._current_expected_type()
+			if expected is not None:
+				td = self._type_table.get(expected)
+				if td.kind is TypeKind.VARIANT:
+					inst = self._type_table.get_variant_instance(expected)
+					if inst is not None and name in inst.arms_by_name:
+						arm_def = inst.arms_by_name[name]
+						if getattr(expr, "kwargs", None):
+							raise AssertionError("variant constructors do not accept keyword args (checker bug)")
+						if len(expr.args) != len(arm_def.field_types):
+							raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
+						arg_vals = [
+							self.lower_expr(a, expected_type=fty)
+							for a, fty in zip(expr.args, arm_def.field_types)
+						]
+						dest = self.b.new_temp()
+						self.b.emit(M.ConstructVariant(dest=dest, variant_ty=expected, ctor=name, args=arg_vals))
+						self._local_types[dest] = expected
+						return dest
 			# swap/replace are place-manipulation builtins, not normal calls.
 			#
 			# They exist to support safe extraction/exchange without creating
@@ -627,6 +782,35 @@ class HIRToMIR:
 	def _visit_expr_HMethodCall(self, expr: H.HMethodCall) -> M.ValueId:
 		if getattr(expr, "kwargs", None):
 			raise AssertionError("keyword arguments for method calls are not supported in MIR lowering (checker bug)")
+		# Iterator protocol intrinsics for `for` desugaring (MVP).
+		#
+		# The language desugars:
+		#   for x in expr { body }
+		# into an iterator loop:
+		#   let it = expr.iter()
+		#   loop { match it.next() { Some(x) => { body } default => { break } } }
+		#
+		# Modules/traits are not implemented yet, so `.iter()` / `.next()` are
+		# treated as compiler intrinsics on arrays:
+		#   - `Array<T>.iter() -> __ArrayIter_<T>`
+		#   - `__ArrayIter_<T>.next() -> Optional<T>`
+		#
+		# This keeps the surface syntax stable while deferring trait dispatch.
+		if expr.method_name == "iter" and not expr.args:
+			recv_ty = self._infer_expr_type(expr.receiver)
+			if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.ARRAY:
+				iter_ty = self._ensure_array_iter_struct(recv_ty)
+				recv_val = self.lower_expr(expr.receiver)
+				idx0 = self.b.new_temp()
+				self.b.emit(M.ConstInt(dest=idx0, value=0))
+				dest = self.b.new_temp()
+				self.b.emit(M.ConstructStruct(dest=dest, struct_ty=iter_ty, args=[recv_val, idx0]))
+				self._local_types[dest] = iter_ty
+				return dest
+		if expr.method_name == "next" and not expr.args:
+			recv_ty = self._infer_expr_type(expr.receiver)
+			if recv_ty is not None and self._is_array_iter_struct(recv_ty):
+				return self._lower_array_iter_next(expr.receiver, recv_ty)
 		# FnResult / try-sugar intrinsic methods.
 		#
 		# `HTryResult` desugaring produces method calls like:
@@ -678,6 +862,133 @@ class HIRToMIR:
 				return result
 			return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
 		return result
+
+	def _ensure_array_iter_struct(self, array_ty: TypeId) -> TypeId:
+		"""
+		Ensure the internal `__ArrayIter_<T>` struct type exists for `Array<T>`.
+
+		Layout (compiler-private):
+		  struct __ArrayIter_<T> { arr: Array<T>, idx: Int }
+		"""
+		return ensure_array_iter_struct(array_ty, self._type_table)
+
+	def _is_array_iter_struct(self, ty_id: TypeId) -> bool:
+		"""Return True if `ty_id` is an internal array-iterator struct TypeId."""
+		return is_array_iter_struct(ty_id, self._type_table)
+
+	def _lower_array_iter_next(self, receiver: H.HExpr, iter_ty: TypeId) -> M.ValueId:
+			"""
+			Lower `__ArrayIter_<T>.next()` to a CFG that:
+			- checks `idx < arr.len`,
+			- returns `Some(arr[idx])` and increments idx on success,
+			- returns `None()` on exhaustion.
+
+			This is a compiler intrinsic (no trait dispatch yet).
+			"""
+			if not isinstance(receiver, H.HVar):
+				raise AssertionError("array iterator next() receiver must be a local variable (for-loop lowering bug)")
+			iter_name = receiver.name
+			self.b.ensure_local(iter_name)
+
+			iter_ptr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=iter_ptr, local=iter_name, is_mut=True))
+
+			iter_def = self._type_table.get(iter_ty)
+			if iter_def.kind is not TypeKind.STRUCT or not iter_def.param_types or len(iter_def.param_types) != 2:
+				raise AssertionError("array iterator type must be a 2-field struct (compiler bug)")
+			arr_ty, idx_ty = iter_def.param_types
+			if idx_ty != self._int_type:
+				raise AssertionError("array iterator idx field must be Int (compiler bug)")
+			arr_def = self._type_table.get(arr_ty)
+			if arr_def.kind is not TypeKind.ARRAY or not arr_def.param_types:
+				raise AssertionError("array iterator arr field must be Array<T> (compiler bug)")
+			elem_ty = arr_def.param_types[0]
+
+			arr_ptr = self.b.new_temp()
+			self.b.emit(M.AddrOfField(dest=arr_ptr, base_ptr=iter_ptr, struct_ty=iter_ty, field_index=0, field_ty=arr_ty))
+			idx_ptr = self.b.new_temp()
+			self.b.emit(
+				M.AddrOfField(dest=idx_ptr, base_ptr=iter_ptr, struct_ty=iter_ty, field_index=1, field_ty=idx_ty, is_mut=True)
+			)
+			arr_val = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=arr_val, ptr=arr_ptr, inner_ty=arr_ty))
+			idx_val = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=idx_val, ptr=idx_ptr, inner_ty=idx_ty))
+
+			# Ensure Optional<T> exists and instantiate Optional<elem>.
+			opt_base = self._type_table.ensure_named("Optional")
+			opt_ty = self._type_table.ensure_instantiated(opt_base, [elem_ty])
+
+			# Hidden local to merge the Optional result.
+			#
+			# Important: we intentionally merge through an address-taken local
+			# (AddrOfLocal + StoreRef/LoadRef) rather than StoreLocal/LoadLocal.
+			#
+			# `next()` lowering emits a small CFG diamond and is frequently used inside
+			# loops (`for` desugaring). If we represent the merge as a logical local,
+			# the SSA pass may conservatively place loop-header φ nodes for that local
+			# even though the value never escapes the `next()` intrinsic CFG. LLVM IR
+			# then needs correct forward-referenced φ typing. Using an address-taken
+			# local keeps the merge in memory and avoids emitting spurious φ nodes,
+			# making the intrinsic robust without depending on SSA/cfg heuristics.
+			result_local = f"__next_tmp{self.b.new_temp()}"
+			self.b.ensure_local(result_local)
+			self._local_types[result_local] = opt_ty
+			#
+			# Seed the storage with a well-typed value before taking its address.
+			#
+			# LLVM lowering needs to know the alloca element type for `AddrOfLocal`.
+			# For most address-taken locals this is inferred from an earlier StoreLocal
+			# (the first store determines the slot type). This synthetic initialization
+			# makes that inference reliable for the internal `next()` merge slot even
+			# though later writes go through `StoreRef`.
+			init_none = self.b.new_temp()
+			self.b.emit(M.ConstructVariant(dest=init_none, variant_ty=opt_ty, ctor="None", args=[]))
+			self.b.emit(M.StoreLocal(local=result_local, value=init_none))
+			self._local_types[init_none] = opt_ty
+			result_ptr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=result_ptr, local=result_local, is_mut=True))
+
+			then_block = self.b.new_block("array_next_some")
+			else_block = self.b.new_block("array_next_none")
+			join_block = self.b.new_block("array_next_join")
+
+			# Compare idx < len(arr)
+			len_val = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=len_val, array=arr_val))
+			cmp = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=cmp, op=M.BinaryOp.LT, left=idx_val, right=len_val))
+			self.b.set_terminator(M.IfTerminator(cond=cmp, then_target=then_block.name, else_target=else_block.name))
+
+			# some branch
+			self.b.set_block(then_block)
+			elem_val = self.b.new_temp()
+			self.b.emit(M.ArrayIndexLoad(dest=elem_val, elem_ty=elem_ty, array=arr_val, index=idx_val))
+			one = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=one, value=1))
+			idx_next = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=idx_next, op=M.BinaryOp.ADD, left=idx_val, right=one))
+			self.b.emit(M.StoreRef(ptr=idx_ptr, value=idx_next, inner_ty=idx_ty))
+			some_val = self.b.new_temp()
+			self.b.emit(M.ConstructVariant(dest=some_val, variant_ty=opt_ty, ctor="Some", args=[elem_val]))
+			self.b.emit(M.StoreRef(ptr=result_ptr, value=some_val, inner_ty=opt_ty))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+			# none branch
+			self.b.set_block(else_block)
+			none_val = self.b.new_temp()
+			self.b.emit(M.ConstructVariant(dest=none_val, variant_ty=opt_ty, ctor="None", args=[]))
+			self.b.emit(M.StoreRef(ptr=result_ptr, value=none_val, inner_ty=opt_ty))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+			# join: load the Optional value
+			self.b.set_block(join_block)
+			dest = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=dest, ptr=result_ptr, inner_ty=opt_ty))
+			self._local_types[dest] = opt_ty
+			return dest
 
 	def _visit_expr_HDVInit(self, expr: H.HDVInit) -> M.ValueId:
 		arg_vals = [self.lower_expr(a) for a in expr.args]
@@ -863,6 +1174,12 @@ class HIRToMIR:
 		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
 		return dest
 
+	def _visit_expr_HMatchExpr(self, expr: "H.HMatchExpr") -> M.ValueId:
+		"""Lower `match` in expression position (value required)."""
+		val = self._lower_match(expr, want_value=True)
+		assert val is not None
+		return val
+
 	# --- Statement lowering ---
 
 	def lower_stmt(self, stmt: H.HStmt) -> None:
@@ -970,12 +1287,31 @@ class HIRToMIR:
 				if ret_tid is not None and self._type_table.is_void(ret_tid):
 					self._lower_method_call(expr=stmt.expr)
 					return
+		if hasattr(H, "HMatchExpr") and isinstance(stmt.expr, getattr(H, "HMatchExpr")):
+			self._lower_match(stmt.expr, want_value=False)
+			return
 		self.lower_expr(stmt.expr)
+
+	def _visit_stmt_HBlock(self, stmt: H.HBlock) -> None:
+		"""
+		Lower a block statement by lowering its nested statements in order.
+
+		`HBlock` is used both as a container for structured control-flow bodies
+		(`if`/`loop`/`try`) and as an explicit block statement introduced by
+		desugarings (e.g., `for` introduces hidden temporaries scoped to the loop).
+		"""
+		self.lower_block(stmt)
 
 	def _visit_stmt_HLet(self, stmt: H.HLet) -> None:
 		self.b.ensure_local(stmt.name)
-		val = self.lower_expr(stmt.value)
-		val_ty = self._infer_expr_type(stmt.value)
+		declared_ty: TypeId | None = None
+		if getattr(stmt, "declared_type_expr", None) is not None:
+			try:
+				declared_ty = resolve_opaque_type(stmt.declared_type_expr, self._type_table)
+			except Exception:
+				declared_ty = None
+		val = self.lower_expr(stmt.value, expected_type=declared_ty)
+		val_ty = declared_ty or self._infer_expr_type(stmt.value)
 		if val_ty is not None:
 			self._local_types[stmt.name] = val_ty
 		self.b.emit(M.StoreLocal(local=stmt.name, value=val))
@@ -1072,7 +1408,7 @@ class HIRToMIR:
 				return
 			if stmt.value is None:
 				raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
-			val = self.lower_expr(stmt.value)
+			val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 			self.b.set_terminator(M.Return(value=val))
 			return
 
@@ -1087,7 +1423,7 @@ class HIRToMIR:
 			return
 		if stmt.value is None:
 			raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
-		val = self.lower_expr(stmt.value)
+		val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
 		self.b.set_terminator(M.Return(value=res_val))
@@ -1819,6 +2155,23 @@ class HIRToMIR:
 			return self._string_type
 		if isinstance(expr, H.HFString):
 			return self._string_type
+		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+			# Best-effort: infer match result type from arm result expressions when
+			# they are locally inferrable and identical.
+			arm_tys: list[TypeId] = []
+			for arm in expr.arms:
+				if getattr(arm, "result", None) is None:
+					return None
+				ty = self._infer_expr_type(arm.result)  # type: ignore[arg-type]
+				if ty is None:
+					return None
+				arm_tys.append(ty)
+			if not arm_tys:
+				return None
+			first = arm_tys[0]
+			if all(t == first for t in arm_tys):
+				return first
+			return None
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
 			# Struct constructor call: result is the struct TypeId.
@@ -1959,6 +2312,24 @@ class HIRToMIR:
 				if ty_def.kind is TypeKind.ARRAY and ty_def.param_types:
 					return ty_def.param_types[0]
 		if isinstance(expr, H.HMethodCall):
+			# Iterator protocol intrinsics (see `_visit_expr_HMethodCall`).
+			if expr.method_name == "iter" and not expr.args:
+				recv_ty = self._infer_expr_type(expr.receiver)
+				if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.ARRAY:
+					return self._ensure_array_iter_struct(recv_ty)
+			if expr.method_name == "next" and not expr.args:
+				recv_ty = self._infer_expr_type(expr.receiver)
+				if recv_ty is not None and self._is_array_iter_struct(recv_ty):
+					iter_def = self._type_table.get(recv_ty)
+					arr_ty = iter_def.param_types[0] if iter_def.param_types else None
+					if arr_ty is None:
+						return None
+					arr_def = self._type_table.get(arr_ty)
+					if arr_def.kind is not TypeKind.ARRAY or not arr_def.param_types:
+						return None
+					elem_ty = arr_def.param_types[0]
+					opt_base = self._type_table.ensure_named("Optional")
+					return self._type_table.ensure_instantiated(opt_base, [elem_ty])
 			ret = self._return_type_for_name(expr.method_name)
 			if ret is not None:
 				return ret

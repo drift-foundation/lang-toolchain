@@ -1756,6 +1756,9 @@ class Checker:
 			StoreRef,
 			ConstructStruct,
 			StructGetField,
+			ConstructVariant,
+			VariantTag,
+			VariantGetField,
 			ConstructResultOk,
 			ConstructResultErr,
 			ResultIsErr,
@@ -1878,6 +1881,21 @@ class Checker:
 							elif isinstance(instr, StoreRef):
 								# Stores do not define a value; no typing needed.
 								pass
+							elif isinstance(instr, ConstructVariant) and dest is not None:
+								# Constructing a variant yields the declared variant TypeId.
+								if value_types.get((fn_name, dest)) != instr.variant_ty:
+									value_types[(fn_name, dest)] = instr.variant_ty
+									changed = True
+							elif isinstance(instr, VariantTag) and dest is not None:
+								# Variant tags are compared as integers in v1; use Uint for the tag.
+								if value_types.get((fn_name, dest)) != self._uint_type:
+									value_types[(fn_name, dest)] = self._uint_type
+									changed = True
+							elif isinstance(instr, VariantGetField) and dest is not None:
+								# Extracting a field yields the field TypeId carried by the MIR.
+								if value_types.get((fn_name, dest)) != instr.field_ty:
+									value_types[(fn_name, dest)] = instr.field_ty
+									changed = True
 							if isinstance(instr, ConstInt) and dest is not None:
 								if (fn_name, dest) not in value_types:
 									value_types[(fn_name, dest)] = self._int_type

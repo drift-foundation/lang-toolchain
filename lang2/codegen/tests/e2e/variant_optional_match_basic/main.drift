@@ -1,0 +1,21 @@
+module m
+
+variant Optional<T> {
+	Some(value: T),
+	None,
+}
+
+fn foo() returns Optional<Int> {
+	// Constructor calls require an expected type; return type provides it.
+	return Some(41)
+}
+
+fn main() returns Int {
+	val x: Optional<Int> = foo()
+	val y = match x {
+		Some(v) => { v + 1 }
+		None => { 0 }
+	}
+	return y
+}
+

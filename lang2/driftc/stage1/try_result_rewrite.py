@@ -121,6 +121,11 @@ class TryResultRewriter:
 		if isinstance(stmt, H.HLoop):
 			body = self.rewrite_block(stmt.body)
 			return [H.HLoop(body=body)]
+		# Block statements introduce a nested statement scope (used by desugarings
+		# like `for` which need to introduce hidden temporaries without leaking
+		# them to the outer scope). Normalization must recurse into them.
+		if isinstance(stmt, H.HBlock):
+			return [self.rewrite_block(stmt)]
 		if isinstance(stmt, H.HTry):
 			body = self.rewrite_block(stmt.body)
 			catches = [
@@ -273,6 +278,32 @@ class TryResultRewriter:
 				pfx.extend(hole_pfx)
 				new_holes.append(H.HFStringHole(expr=hole_expr, spec=hole.spec, loc=hole.loc))
 			return pfx, H.HFString(parts=list(expr.parts), holes=new_holes, loc=expr.loc)
+		if isinstance(expr, H.HMatchExpr):
+			# `match` is an expression; try-result sugar may appear inside the
+			# scrutinee, in any arm block statement, or in the arm result
+			# expression. Prefix statements emitted while rewriting the scrutinee
+			# must execute before the match dispatch, and prefixes emitted while
+			# rewriting an arm's result must execute within that arm.
+			pfx_scrutinee, scrutinee = self._rewrite_expr(expr.scrutinee)
+			new_arms: list[H.HMatchArm] = []
+			for arm in expr.arms:
+				arm_block = self.rewrite_block(arm.block)
+				arm_result = None
+				arm_result_pfx: List[H.HStmt] = []
+				if arm.result is not None:
+					arm_result_pfx, arm_result = self._rewrite_expr(arm.result)
+				if arm_result_pfx:
+					arm_block = H.HBlock(statements=[*arm_block.statements, *arm_result_pfx])
+				new_arms.append(
+					H.HMatchArm(
+						ctor=arm.ctor,
+						binders=list(arm.binders),
+						block=arm_block,
+						result=arm_result,
+						loc=arm.loc,
+					)
+				)
+			return pfx_scrutinee, H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc)
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			# Expression-form try/catch is a control-flow expression. We rewrite
 			# nested try-result sugar inside the attempt and inside catch bodies,
