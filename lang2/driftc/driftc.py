@@ -50,7 +50,7 @@ from lang2.driftc.type_resolver import resolve_program_signatures
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.type_checker import TypeChecker
 from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
-from lang2.driftc.packages.package_v0 import PackageModuleEntry, build_unsigned_package, canonical_json_bytes, sha256_hex, write_unsigned_package
+from lang2.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
 from lang2.driftc.packages.provisional_dmir_v0 import encode_module_payload_v0, decode_mir_funcs, type_table_fingerprint
 from lang2.driftc.packages.provider_v0 import discover_package_files, load_package_v0, collect_external_exports
 
@@ -469,11 +469,28 @@ def main(argv: list[str] | None = None) -> int:
 				elif prev != pkg.path:
 					msg = f"module '{mid}' provided by multiple packages: '{prev}' and '{pkg.path}'"
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(source_path), "line": None, "column": None}]}))
+						print(
+							json.dumps(
+								{
+									"exit_code": 1,
+									"diagnostics": [
+										{
+											"phase": "package",
+											"message": msg,
+											"severity": "error",
+											"file": str(source_path),
+											"line": None,
+											"column": None,
+										}
+									],
+								}
+							)
+						)
 					else:
 						print(f"{source_path}:?:?: error: {msg}", file=sys.stderr)
 					return 1
 		external_exports = collect_external_exports(loaded_pkgs)
+
 	func_hirs, signatures, type_table, exception_catalog, parse_diags = parse_drift_workspace_to_hir(
 		source_paths,
 		module_paths=module_paths,
@@ -504,6 +521,10 @@ def main(argv: list[str] | None = None) -> int:
 	type_table.ensure_void()
 	type_table.ensure_error()
 	type_table.ensure_diagnostic_value()
+	# Keep derived Optional<T> ids stable across builds (package embedding).
+	type_table.new_optional(type_table.ensure_int())
+	type_table.new_optional(type_table.ensure_bool())
+	type_table.new_optional(type_table.ensure_string())
 
 	# Verify package TypeTable compatibility before importing signatures/IR.
 	# MVP rule: fingerprints must match exactly; TypeId remapping/linking is deferred.
@@ -649,7 +670,10 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				callable_registry.register_free_function(
 					callable_id=next_callable_id,
-					name=sig.method_name or sig_symbol,
+					# Workspace builds qualify call sites (`mod::fn`). Keep the callable
+					# registry aligned with that identity to avoid string-rewrite
+					# mismatches during resolution.
+					name=sig_symbol,
 					module_id=module_id,
 					visibility=Visibility.public(),
 					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
@@ -661,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
 	if signatures:
 		for sig in signatures.values():
 			if not sig.is_method:
-				call_sigs_by_name[sig.method_name or sig.name] = sig
+				call_sigs_by_name[sig.name] = sig
 
 	typed_fns: dict[str, object] = {}
 	for fn_name, hir_block in func_hirs.items():
@@ -752,21 +776,38 @@ def main(argv: list[str] | None = None) -> int:
 			mid = mid or "main"
 			per_module_mir.setdefault(mid, {})[name] = fn
 
-		interfaces: dict[str, bytes] = {}
-		payloads: dict[str, bytes] = {}
-		mod_entries: list[PackageModuleEntry] = []
+		blobs_by_sha: dict[str, bytes] = {}
+		blob_types: dict[str, int] = {}
+		blob_names: dict[str, str] = {}
+		manifest_modules: list[dict[str, object]] = []
+		manifest_blobs: dict[str, dict[str, object]] = {}
+
 		for mid in sorted(set(per_module_sigs.keys()) | set(per_module_mir.keys())):
-			exported_values = sorted(
-				[name for name, sig in per_module_sigs.get(mid, {}).items() if getattr(sig, "is_exported_entrypoint", False)]
-			)
-			iface_bytes = canonical_json_bytes(
-				{
-					"module_id": mid,
-					"exports": {"values": exported_values},
-				}
-			)
-			interfaces[mid] = iface_bytes
+			# MVP packaging: do not bundle the built-in prelude module. It is
+			# supplied by the toolchain and will later be distributed as its own
+			# package under the `std.*` namespace.
+			if mid == "lang.core":
+				continue
+
+			# Export surface uses module-local names (unqualified). Global names
+			# inside the compiler are qualified (`mid::name`).
+			exported_values: list[str] = []
+			for sym_name, sig in per_module_sigs.get(mid, {}).items():
+				if not getattr(sig, "is_exported_entrypoint", False):
+					continue
+				if sig.is_method:
+					continue
+				prefix = f"{mid}::"
+				exported_values.append(sym_name[len(prefix) :] if sym_name.startswith(prefix) else sym_name)
+			exported_values.sort()
+
+			iface_obj = {"module_id": mid, "exports": {"values": exported_values, "types": []}}
+			iface_bytes = canonical_json_bytes(iface_obj)
 			iface_sha = sha256_hex(iface_bytes)
+			blobs_by_sha[iface_sha] = iface_bytes
+			blob_types[iface_sha] = 2
+			blob_names[iface_sha] = f"iface:{mid}"
+			manifest_blobs[f"sha256:{iface_sha}"] = {"type": "exports", "length": len(iface_bytes)}
 
 			payload_obj = encode_module_payload_v0(
 				module_id=mid,
@@ -776,13 +817,39 @@ def main(argv: list[str] | None = None) -> int:
 				exported_values=exported_values,
 			)
 			payload_bytes = canonical_json_bytes(payload_obj)
-			payloads[mid] = payload_bytes
 			payload_sha = sha256_hex(payload_bytes)
+			blobs_by_sha[payload_sha] = payload_bytes
+			blob_types[payload_sha] = 1
+			blob_names[payload_sha] = f"dmir:{mid}"
+			manifest_blobs[f"sha256:{payload_sha}"] = {"type": "dmir", "length": len(payload_bytes)}
 
-			mod_entries.append(PackageModuleEntry(module_id=mid, interface_sha256=iface_sha, payload_sha256=payload_sha))
+			manifest_modules.append(
+				{
+					"module_id": mid,
+					"exports": {"values": exported_values, "types": []},
+					"interface_blob": f"sha256:{iface_sha}",
+					"payload_blob": f"sha256:{payload_sha}",
+				}
+			)
 
-		manifest, blobs = build_unsigned_package(modules=mod_entries, interfaces=interfaces, payloads=payloads)
-		write_unsigned_package(args.emit_package, manifest=manifest, blobs=blobs)
+		manifest_obj: dict[str, object] = {
+			"format": "dmir-pkg",
+			"format_version": 0,
+			"unsigned": True,
+			"unstable_format": True,
+			"payload_kind": "provisional-dmir",
+			"payload_version": 0,
+			"modules": manifest_modules,
+			"blobs": manifest_blobs,
+		}
+
+		write_dmir_pkg_v0(
+			args.emit_package,
+			manifest_obj=manifest_obj,
+			blobs=blobs_by_sha,
+			blob_types=blob_types,
+			blob_names=blob_names,
+		)
 
 		if args.json:
 			print(json.dumps({"exit_code": 0, "diagnostics": []}))

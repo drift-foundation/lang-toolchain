@@ -26,6 +26,7 @@ It is intentionally *hybrid*: part specification, part operational contract.
 - IDE behavior specification
 - Test runners or execution environments
 - Runtime deployment conventions
+- Rich visibility lattice (`pub(crate)` etc.)
 
 ---
 
@@ -37,7 +38,7 @@ It is intentionally *hybrid*: part specification, part operational contract.
 - Loading project and target configuration
 - Discovering targets
 - Resolving modules from **local package roots only**
-- Verifying package signatures and trust policy **before** using any package contents (**gatekeeper**)
+- Verifying package integrity (hashes) and, when present, package signatures and trust policy **before** using any package contents (**gatekeeper**)
 - Compiling sources
 - Producing final artifacts (executables or package artifacts)
 
@@ -47,14 +48,16 @@ It is intentionally *hybrid*: part specification, part operational contract.
 Even if `drift` verified a package at download time, `driftc` must re-check trust at use time because
 trust can change over time (e.g., key rotation, revocation lists, or namespace policy updates).
 
----
+`driftc` is a verifier/consumer only: it never signs packages, never publishes packages, and never compresses artifacts for distribution.
+
+**Implementation status:** package containers are hash-verified today; signature verification is planned but not implemented yet.
 
 ### 2.2 `drift` (package manager / ecosystem tool)
 
 `drift` is responsible for:
 - Fetching packages from remote **repositories** (HTTP/S3/etc.)
 - Managing a **project-local** dependency cache
-- Verifying signatures at download time (and optionally auditing later)
+- Optionally verifying signatures at download time (early rejection; `driftc` still verifies at use time)
 - Resolving dependency graphs and versions
 - Writing/updating the lockfile
 - Producing vendor snapshots for CI/offline use
@@ -583,16 +586,17 @@ Drift’s responsibility ends at **compiling explicitly declared native shims** 
 
 ## 23. Native components: threat model and trust boundary
 
-Drift signatures guarantee authenticity of:
-- Drift IR (DMIR)
-- package metadata
-- native shim **source** and the declared build recipe
+Native components (C shims) may be required by some packages.
 
-Native shims are compiled locally; the resulting compiled objects are **not signed**.
-
-Trust therefore extends to:
-- the local compiler toolchain
-- the operating system
-- system libraries linked at build time
-
-This is intentional and unavoidable for native interop. Drift does **not** attempt to secure or replace OS-level trust.
+**Threat model and trust boundary**
+- Drift signatures guarantee authenticity of:
+  - Drift IR (DMIR)
+  - package metadata
+  - native shim *source* and build recipe
+- Native shims are compiled locally; compiled objects are **not signed**
+- Trust therefore extends to:
+  - the local compiler toolchain
+  - the operating system
+  - system libraries linked at build time
+- This is intentional and unavoidable for native interop.
+- Drift does **not** attempt to secure or replace OS-level trust.

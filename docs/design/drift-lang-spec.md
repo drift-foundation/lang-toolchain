@@ -1466,7 +1466,7 @@ multiple modules under the `std.*` module-id prefix.
 
 **Tooling note — module roots vs package roots.** The compiler distinguishes:
 - **Source module roots**: directories searched for `.drift` source modules (CLI: `-M/--module-path`, repeatable).
-- **Package roots**: locations searched for signed module packages (DMP/DMIR). A package root may be either a directory containing many packages (a local repository/cache) or an individual package archive file (CLI: `-P/--package-path`, repeatable).
+- **Package roots**: locations searched for signed module packages (DMP/DMIR). A package root may be either a directory containing many packages (a local repository/cache) or an individual package archive file (CLI: `--package-root`, repeatable).
 
 This separation avoids ambiguity and makes builds reproducible: source roots are never treated as package roots and vice versa.
 
@@ -3090,54 +3090,101 @@ DMIR stores the typed, desugared module with all names resolved:
 
 Each DMIR block carries an independent version number (`dmir_version`).
 
-### 20.3. Module package layout
+### 20.3. Module package container (DMIR-PKG v0)
 
-```
-+------------------+
-| HEADER           |
-+------------------+
-| METADATA         |  ← signed
-+------------------+
-| DMIR             |  ← signed
-+------------------+
-| SIGNATURE_BLOCK  |  ← not signed
-+------------------+
-| OPTIONAL_SOURCE  |  ← not signed
-+------------------+
-```
+`driftc` emits and consumes a deterministic, hashing-friendly container format for module packages called **DMIR-PKG v0**.
+The container is designed to be:
 
-- **Header**: magic (`"DRIFTDMP"`), format version, offsets/sizes for each section.
-- **Metadata**: deterministic map (name, version, dependency digests, minimum compiler). Encoded with canonical key ordering.
-- **DMIR**: list of canonical items `{kind, fully-qualified name, canonical body}`.
-- **Signature block**: one or more signature entries (e.g., Ed25519). The signature covers `HEADER .. DMIR`.
-- **Optional source**: raw UTF-8 source for auditing; not part of verification.
+- deterministic (same inputs → identical bytes)
+- streaming-friendly for verification
+- suitable for signing (signatures are stored as a sidecar; see §20.4)
 
-The **METADATA** section includes an `exports` table describing the module interface:
+**Compression.** DMIR-PKG v0 containers are stored uncompressed. Compression, if used, is an outer transport layer (Zstandard recommended) and is not part of the container format nor the signed payload.
 
-- For each exported function: fully-qualified name, type, and a flag indicating that it uses the standard Drift `Result<T, Error>` calling convention.
-- Non-exported functions and types are omitted from this table and cannot be imported by other modules.
-- The `exports` table is the canonical source of truth for which symbols may be referenced across module boundaries.
+#### 20.3.1. Binary layout
+
+All integers are little-endian.
+
+Header (fixed size):
+
+- `magic`: 8 bytes: ASCII `DMIRPKG` followed by a single NUL byte (`b"DMIRPKG\0"`)
+- `version`: u16, value `0`
+- `flags`: u16, value `0` (reserved)
+- `header_size`: u32, fixed header size in bytes (for forward extension)
+- `manifest_len`: u64, length of manifest JSON bytes
+- `manifest_sha256`: 32 bytes, SHA-256 of the manifest JSON bytes
+- `toc_len`: u64, number of TOC entries
+- `toc_entry_size`: u32, fixed size `80` in v0
+- `toc_sha256`: 32 bytes, SHA-256 of the TOC bytes
+- `reserved`: 64 bytes, all zero in v0
+
+Immediately after the header:
+
+1. `manifest_bytes`: UTF-8 JSON (canonical encoding; see §20.3.2)
+2. `toc_bytes`: `toc_len * toc_entry_size` bytes
+3. `blob_region`: raw concatenation of blobs at offsets recorded in the TOC
+
+TOC entry (fixed 80 bytes):
+
+- `blob_sha256`: 32 bytes
+- `offset`: u64 (absolute file offset)
+- `length`: u64
+- `type`: u16 (payload type tag; toolchain-defined)
+- `flags`: u16 (reserved)
+- `name_len`: u32 (0..24)
+- `name_prefix`: 24 bytes (UTF-8 prefix, zero-padded)
+
+#### 20.3.2. Manifest JSON
+
+The manifest is canonical JSON:
+
+- UTF-8
+- stable object key ordering (lexicographic)
+- no insignificant whitespace
+
+It records (minimum required set):
+
+- `modules`: a list of module entries. Each entry is an object with:
+  - `module_id`: string
+  - `interface_blob`: string reference `sha256:<hex>`
+  - `payload_blob`: string reference `sha256:<hex>`
+- `blobs`: a mapping from blob references (`"sha256:<hex>"`) to an object `{type, length}`.
+
+It may additionally record tooling-level metadata such as:
+
+- `unsigned`: boolean (true when the package has no sidecar signature; local build outputs may be unsigned)
+- `unstable_format`: boolean (true for provisional/unstable payload kinds)
+- `payload_kind`: string (e.g. `"provisional-dmir"`)
+- `payload_version`: integer (e.g. `0`)
+- package identity fields (name/version; tooling-level)
+
+#### 20.3.3. Integrity verification (hashes)
+
+When consuming a DMIR-PKG v0 container, the toolchain verifies:
+
+1. header magic/version/entry sizes
+2. SHA-256(manifest_bytes) matches `manifest_sha256`
+3. SHA-256(toc_bytes) matches `toc_sha256`
+4. each blob’s SHA-256 matches its TOC entry
+5. blob offsets are in-range and non-overlapping
+6. manifest blob references match the TOC (strict: no missing blobs and no unreferenced blobs)
+
+Local build outputs (e.g. `build/drift/localpkgs/*.dmp`) may be unsigned; integrity verification (hashes) is still required.
 
 ### 20.4. Signatures and verification
 
-1. Compute `payload = bytes[header_start .. dmir_end]`.
-2. Hash with SHA-256.
-3. Verify at least one signature in the signature block against the trusted key store.
-4. If a dependency manifest pins a digest or signer, those must match.
-5. Reject if `dmir_version` is unsupported.
+Signature generation is performed by tooling (`drift` / `drift sign`), not by `driftc`.
 
-Keys live in a simple TOML trust store:
+Signatures are stored as a sidecar file next to the package container:
 
-```toml
-[[trusted_keys]]
-id   = "drift-stdlib"
-algo = "ed25519"
-pub  = "base64..."
-```
+- package: `pkg.dmp`
+- signature sidecar: `pkg.dmp.sig`
 
-Projects may additionally pin dependency digests or require specific signers.
+The sidecar is JSON and may contain multiple signatures (multiple keys/algorithms/rotations).
 
-**Verification point.** DMP signatures are verified only at module import / compilation time by the Drift toolchain. No runtime signature verification is performed by the generated program, and DMP is not a runtime tamper-resistance mechanism.
+Signatures cover the canonical **uncompressed** `pkg.dmp` bytes (the DMIR-PKG container bytes). Transport compression (e.g. `pkg.dmp.zst`) is outside the signed payload.
+
+**Verification point.** Package signatures (when required by policy) are verified at module import / compilation time by the Drift toolchain. No runtime signature verification is performed by the generated program.
 
 ### 20.5. Security properties
 

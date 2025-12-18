@@ -3,7 +3,7 @@
 Provisional DMIR payload (v0).
 
 This is an intentionally unstable, compiler-internal IR encoding used for
-Milestone 4 package artifacts.
+package artifacts.
 
 Goals:
 - deterministic JSON encoding (stable keys, stable ordering),
@@ -21,8 +21,9 @@ from enum import Enum
 from typing import Any, Mapping
 
 from lang2.driftc.checker import FnSignature
+from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.types_core import TypeDef, TypeId, TypeTable
-from lang2.driftc.packages.package_v0 import sha256_hex, canonical_json_bytes
+from lang2.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex
 
 
 def _float64_bits_hex(value: float) -> str:
@@ -35,11 +36,11 @@ def _to_jsonable(obj: Any) -> Any:
 	"""
 	Convert an arbitrary compiler object into JSONable structures.
 
-Rules:
-- dataclasses become dicts with a `_type` discriminator,
-- Enums are encoded by `name`,
-- floats are encoded by their IEEE754 bits (hex string),
-- dict keys are converted to strings (and callers must sort when serializing).
+	Rules:
+	- dataclasses become dicts with a `_type` discriminator,
+	- Enums are encoded by `name`,
+	- floats are encoded by their IEEE754 bits (hex string),
+	- dict keys are converted to strings (and callers must sort when serializing).
 	"""
 	if obj is None or isinstance(obj, (bool, int, str)):
 		return obj
@@ -55,10 +56,7 @@ Rules:
 	if isinstance(obj, (list, tuple)):
 		return [_to_jsonable(x) for x in obj]
 	if isinstance(obj, dict):
-		# Caller is responsible for stable ordering via canonical JSON encoder.
 		return {str(k): _to_jsonable(v) for k, v in obj.items()}
-	# Fallback: stable string repr is better than crashing, but we keep it tagged
-	# so consumers can detect unknown shapes.
 	return {"_unsupported": type(obj).__name__, "repr": repr(obj)}
 
 
@@ -74,8 +72,8 @@ def build_dataclass_registry(*modules: Any) -> dict[str, type]:
 	"""
 	Build a dataclass name -> class registry.
 
-This is used to reconstruct stage2 MIR nodes and other internal dataclasses from
-the provisional JSON encoding.
+	This is used to reconstruct stage2 MIR nodes and other internal dataclasses from
+	the provisional JSON encoding.
 	"""
 	out: dict[str, type] = {}
 	for mod in modules:
@@ -96,9 +94,7 @@ def build_enum_registry(*modules: Any) -> dict[str, type[Enum]]:
 
 
 def from_jsonable(obj: Any, *, dataclasses_by_name: Mapping[str, type], enums_by_name: Mapping[str, type[Enum]]) -> Any:
-	"""
-	Reconstruct Python objects encoded by `_to_jsonable`.
-	"""
+	"""Reconstruct Python objects encoded by `_to_jsonable`."""
 	if obj is None or isinstance(obj, (bool, int, str)):
 		return obj
 	if isinstance(obj, list):
@@ -129,6 +125,7 @@ def from_jsonable(obj: Any, *, dataclasses_by_name: Mapping[str, type], enums_by
 
 def encode_type_table(table: TypeTable) -> dict[str, Any]:
 	"""Encode the TypeTable deterministically."""
+
 	def _def_to_obj(td: TypeDef) -> dict[str, Any]:
 		return {
 			"kind": td.kind.name,
@@ -152,9 +149,9 @@ def type_table_fingerprint(table_obj: Mapping[str, Any]) -> str:
 	"""
 	Hash a TypeTable JSON object deterministically.
 
-This is a *compatibility guardrail* for Milestone 4 package consumption:
-packages produced independently must have matching fingerprints, otherwise their
-TypeIds are not comparable and embedding IR would be unsafe.
+	This is a compatibility guardrail for package consumption: packages produced
+	independently must have matching fingerprints, otherwise their TypeIds are not
+	comparable and embedding IR would be unsafe.
 	"""
 	return sha256_hex(canonical_json_bytes(dict(table_obj)))
 
@@ -189,9 +186,7 @@ def encode_module_payload_v0(
 	mir_funcs: Mapping[str, Any],
 	exported_values: list[str],
 ) -> dict[str, Any]:
-	"""
-	Build the provisional payload object (not yet canonical-JSON encoded).
-	"""
+	"""Build the provisional payload object (not yet canonical-JSON encoded)."""
 	tt_obj = encode_type_table(type_table)
 	return {
 		"payload_kind": "provisional-dmir",
@@ -210,7 +205,7 @@ def decode_mir_funcs(mir_funcs_obj: Mapping[str, Any]) -> dict[str, Any]:
 	"""
 	Decode `mir_funcs` as encoded by `encode_module_payload_v0`.
 
-This returns a dict of `name -> M.MirFunc` objects (stage2 dataclasses).
+	This returns a dict of `name -> M.MirFunc` objects (stage2 dataclasses).
 	"""
 	from lang2.driftc.stage2 import mir_nodes as M  # local import to avoid heavy import at module init
 
@@ -220,3 +215,4 @@ This returns a dict of `name -> M.MirFunc` objects (stage2 dataclasses).
 	for name, obj in mir_funcs_obj.items():
 		out[str(name)] = from_jsonable(obj, dataclasses_by_name=dc, enums_by_name=enums)
 	return out
+

@@ -32,6 +32,7 @@ Drift is a systems programming language focused on deterministic resource manage
 ## References
 
 - Error handling comparison for Rustaceans: [docs/articles/drift_vs_rust_error_handling.md](docs/articles/drift_vs_rust_error_handling.md)
+- Tooling/build/package ecosystem: [docs/design/drift-tooling-and-packages.md](docs/design/drift-tooling-and-packages.md) — compiler and tooling responsibilities, offline builds, package distribution, and trust model.
 - DMIR/SSA design: [docs/articles/design-first-afm-then-ssa.md](docs/articles/design-first-afm-then-ssa.md)
 - DMIR specification: [docs/design/dmir-spec.md](docs/design/dmir-spec.md)
 - Tooling, build system, and packages: [docs/design/drift-tooling-and-packages.md](docs/design/drift-tooling-and-packages.md) — module/package inputs, build targets, repositories, and deterministic offline builds.
@@ -49,7 +50,7 @@ Drift is a systems programming language focused on deterministic resource manage
   - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM 15).
   - `just test-e2e` — runs e2e programs through the SSA backend and compares outputs.
   - `just mir-codegen` — lowers simple MIR samples to an object, links with clang-15, and runs the binary.
-  - `lang2/codegen/codegen_runner.py` — lang2-only e2e runner using `lang2.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/lang2-e2e` by default (configurable with `--root`).
+  - `lang2/codegen/codegen_runner.py` — next compiler e2e runner using `lang2.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/lang2-e2e` by default (configurable with `--root`).
 
 ## Quick Tour
 

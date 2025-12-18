@@ -25,6 +25,7 @@ from .ast import (
     IfStmt,
     ImportStmt,
     FromImportStmt,
+    ExportStmt,
     ImplementDef,
     Index,
     KwArg,
@@ -58,7 +59,6 @@ from .ast import (
     VariantField,
     MatchExpr,
     MatchArm,
-    ExportDecl,
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
@@ -143,6 +143,20 @@ class FStringParseError(ValueError):
 continue to treat it as a parse-time failure, but it carries a best-effort
 location (`loc`) so callers can convert it into a structured diagnostic instead
 of crashing the compiler.
+	"""
+
+	def __init__(self, message: str, *, loc: "Located") -> None:
+		super().__init__(message)
+		self.loc = loc
+
+
+class ModuleDeclError(ValueError):
+	"""
+	User-facing module header error.
+
+Examples:
+- duplicate `module` declarations in one file,
+- `module` header not appearing first.
 	"""
 
 	def __init__(self, message: str, *, loc: "Located") -> None:
@@ -491,22 +505,22 @@ class ModuleDeclError(ValueError):
 def _build_program(tree: Tree) -> Program:
 	functions: List[FunctionDef] = []
 	implements: List[ImplementDef] = []
-	statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt | ImportStmt | FromImportStmt | ExportDecl] = []
 	imports: List[ImportStmt] = []
 	from_imports: List[FromImportStmt] = []
-	exports: List[ExportDecl] = []
+	exports: List[ExportStmt] = []
+	statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt] = []
 	structs: List[StructDef] = []
 	exceptions: List[ExceptionDef] = []
 	variants: List[VariantDef] = []
 	module_name: Optional[str] = None
-	module_loc: object | None = None
-	saw_non_module_directive = False
+	module_loc: Optional[Located] = None
+	seen_non_module_item = False
 	for child in tree.children:
 		if not isinstance(child, Tree):
 			continue
 		kind = _name(child)
 		if kind == "module_decl":
-			if saw_non_module_directive:
+			if seen_non_module_item:
 				raise ModuleDeclError(
 					"`module ...` must be the first top-level declaration in the file",
 					loc=_loc(child),
@@ -519,32 +533,29 @@ def _build_program(tree: Tree) -> Program:
 			module_name = _build_module_decl(child)
 			module_loc = _loc(child)
 			continue
+		seen_non_module_item = True
 		if kind == "func_def":
-			saw_non_module_directive = True
 			functions.append(_build_function(child))
 		elif kind == "implement_def":
-			saw_non_module_directive = True
 			implements.append(_build_implement_def(child))
 		elif kind == "struct_def":
-			saw_non_module_directive = True
 			structs.append(_build_struct_def(child))
 		elif kind == "exception_def":
-			saw_non_module_directive = True
 			exceptions.append(_build_exception_def(child))
 		elif kind == "variant_def":
-			saw_non_module_directive = True
 			variants.append(_build_variant_def(child))
 		else:
-			saw_non_module_directive = True
 			stmt = _build_stmt(child)
-			if stmt is not None:
+			if stmt is None:
+				continue
+			if isinstance(stmt, ImportStmt):
+				imports.append(stmt)
+			elif isinstance(stmt, FromImportStmt):
+				from_imports.append(stmt)
+			elif isinstance(stmt, ExportStmt):
+				exports.append(stmt)
+			else:
 				statements.append(stmt)
-				if isinstance(stmt, ImportStmt):
-					imports.append(stmt)
-				elif isinstance(stmt, FromImportStmt):
-					from_imports.append(stmt)
-				elif isinstance(stmt, ExportDecl):
-					exports.append(stmt)
 	return Program(
 		functions=functions,
 		implements=implements,
@@ -552,12 +563,12 @@ def _build_program(tree: Tree) -> Program:
 		from_imports=from_imports,
 		exports=exports,
 		statements=statements,
-			structs=structs,
-			exceptions=exceptions,
-			variants=variants,
-			module=module_name,
-			module_loc=module_loc,
-		)
+		structs=structs,
+		exceptions=exceptions,
+		variants=variants,
+		module=module_name,
+		module_loc=module_loc,
+	)
 
 
 def _build_module_decl(tree: Tree) -> str:
@@ -847,7 +858,39 @@ def _build_stmt(tree: Tree):
 		return _build_raise_stmt(tree)
 	if kind == "expr_stmt":
 		return _build_expr_stmt(tree)
+	if kind == "import_stmt":
+		return _build_import_stmt(tree)
+	if kind == "from_import_stmt":
+		return _build_from_import_stmt(tree)
+	if kind == "export_stmt":
+		return _build_export_stmt(tree)
 	return None
+
+
+def _build_from_import_stmt(tree: Tree) -> FromImportStmt:
+	loc = _loc(tree)
+	module_path_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_path"), None)
+	module_path = [tok.value for tok in module_path_node.children if isinstance(tok, Token) and tok.type == "NAME"] if module_path_node else []
+	symbol_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
+	symbol = symbol_tok.value if symbol_tok is not None else ""
+	alias = None
+	alias_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_alias"), None)
+	if alias_node is not None:
+		alias_tok = next((c for c in alias_node.children if isinstance(c, Token) and c.type == "NAME"), None)
+		if alias_tok is not None:
+			alias = alias_tok.value
+	return FromImportStmt(loc=loc, module_path=module_path, symbol=symbol, alias=alias)
+
+
+def _build_export_stmt(tree: Tree) -> ExportStmt:
+	loc = _loc(tree)
+	names: list[str] = []
+	name_list = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "export_name_list"), None)
+	if name_list is not None:
+		for tok in name_list.children:
+			if isinstance(tok, Token) and tok.type == "NAME":
+				names.append(tok.value)
+	return ExportStmt(loc=loc, names=names)
 
 
 def _build_let_stmt(tree: Tree) -> LetStmt:
@@ -1125,14 +1168,14 @@ def _build_from_import_stmt(tree: Tree) -> FromImportStmt:
 	return FromImportStmt(loc=loc, module_path=parts, symbol=sym_tok.value, alias=alias)
 
 
-def _build_export_stmt(tree: Tree) -> ExportDecl:
+def _build_export_stmt(tree: Tree) -> ExportStmt:
 	loc = _loc(tree)
 	items_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "export_items"), None)
 	if items_node is None:
 		names: List[str] = []
 	else:
 		names = [tok.value for tok in items_node.children if isinstance(tok, Token) and tok.type == "NAME"]
-	return ExportDecl(loc=loc, names=names)
+	return ExportStmt(loc=loc, names=names)
 
 
 def _build_if_stmt(tree: Tree) -> IfStmt:

@@ -264,16 +264,12 @@ class FString(Expr):
 class Program:
 	functions: List[FunctionDef] = field(default_factory=list)
 	implements: List["ImplementDef"] = field(default_factory=list)
-	# Top-level module directives.
-	#
-	# Drift treats imports/exports as module-level declarations, not statements.
-	# They are collected here so later phases can build a module graph, enforce
-	# export visibility, and perform cross-module resolution.
+	# Module directives are tracked separately from general statements so later
+	# compilation stages can ignore them without having to add stage0/HIR nodes
+	# for import/export syntax.
 	imports: List["ImportStmt"] = field(default_factory=list)
 	from_imports: List["FromImportStmt"] = field(default_factory=list)
-	exports: List["ExportDecl"] = field(default_factory=list)
-	# Deprecated: top-level statements are not part of the language surface; kept
-	# only for error recovery and transitional parsing.
+	exports: List["ExportStmt"] = field(default_factory=list)
 	statements: List[Stmt] = field(default_factory=list)
 	structs: List[StructDef] = field(default_factory=list)
 	exceptions: List[ExceptionDef] = field(default_factory=list)
@@ -344,10 +340,11 @@ class ImportStmt(Stmt):
 @dataclass
 class FromImportStmt(Stmt):
 	"""
-	Module-level symbol import:
+	Import a single exported symbol into the local file scope.
 
-	  from my.module import foo
-	  from my.module import foo as bar
+	MVP shape (single symbol per statement):
+	  from foo.bar import baz
+	  from foo.bar import baz as qux
 	"""
 
 	loc: Located
@@ -357,10 +354,11 @@ class FromImportStmt(Stmt):
 
 
 @dataclass
-class ExportDecl(Stmt):
+class ExportStmt(Stmt):
 	"""
-	Module-level export declaration:
+	Explicit export list for a module (MVP).
 
+	Syntax:
 	  export { foo, Bar, Baz }
 	"""
 

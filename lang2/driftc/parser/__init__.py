@@ -138,6 +138,29 @@ def _format_span_short(span: Span) -> str:
 	return f"{f}:{l}:{c}"
 
 
+def _prime_builtins(table: TypeTable) -> None:
+	"""
+	Ensure builtin TypeIds exist and are seeded in a stable order.
+
+	This is required for package embedding in Milestone 4: until TypeId remapping
+	exists, independently-produced artifacts must agree on builtin ids.
+	"""
+	table.ensure_unknown()
+	table.ensure_int()
+	table.ensure_uint()
+	table.ensure_bool()
+	table.ensure_float()
+	table.ensure_string()
+	table.ensure_void()
+	table.ensure_error()
+	table.ensure_diagnostic_value()
+	# Seed commonly used derived types so TypeIds are stable across builds.
+	#
+	# MVP: DV accessors return Optional<Int/Bool/String>, so we ensure those
+	# instantiations exist even if a particular module doesn't use them directly.
+	table.new_optional(table.ensure_int())
+	table.new_optional(table.ensure_bool())
+	table.new_optional(table.ensure_string())
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 	"""Render a TypeExpr into a string (e.g., Array<Int>, Result<Int, Error>)."""
 	if not typ.args:
@@ -1494,6 +1517,7 @@ def parse_drift_workspace_to_hir(
 
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
 	shared_type_table = TypeTable()
+	_prime_builtins(shared_type_table)
 
 	def _qualify_fn_name(module_id: str, name: str) -> str:
 		# Entrypoint is always the unqualified symbol `main` regardless of which
@@ -1810,6 +1834,7 @@ def _lower_parsed_program_to_hir(
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.
 	type_table = type_table or TypeTable()
+	_prime_builtins(type_table)
 	# Prelude: `Optional<T>` is required for iterator-style `for` desugaring and
 	# other control-flow sugar. Until modules are supported, the compiler injects
 	# a canonical `Optional<T>` variant base into every compilation unit unless

@@ -104,6 +104,9 @@ ident: NAME | MOVE
      | exception_def
      | variant_def
      | implement_def
+     | import_stmt
+     | from_import_stmt
+     | export_stmt
      | stmt
 
 func_def: "fn" ident "(" [params] ")" return_sig block
@@ -141,20 +144,17 @@ stmt: if_stmt
     | try_stmt
     | simple_stmt TERMINATOR
 
-	simple_stmt: let_stmt
+simple_stmt: let_stmt
 	           | return_stmt
 	           | rethrow_stmt
 	           | raise_stmt
-	           | import_stmt
-	           | from_import_stmt
-	           | export_stmt
 	           | break_stmt
 	           | continue_stmt
 	           | while_stmt
 	           | for_stmt
-           | aug_assign_stmt
-           | assign_stmt
-           | expr_stmt
+	           | aug_assign_stmt
+	           | assign_stmt
+	           | expr_stmt
 
 // Disambiguation: `try ... catch ...` is both a statement form (`try_stmt`) and
 // an expression form (`try_catch_expr`). In statement position we want the
@@ -205,16 +205,16 @@ raise_stmt: ("raise" domain_clause? expr)
 // access, indexing, literals, names). This avoids ambiguity with statement-form
 // `try` and keeps expression-form `try ... catch ...` as a value-producing
 // expression (not a statement).
-	expr_stmt: postfix
+expr_stmt: postfix
 
-	import_stmt: "import" import_path import_alias?
-	import_path: NAME (DOT NAME)*
-	import_alias: "as" NAME
+// Module directives (tracked separately from normal statements).
+import_stmt: "import" module_path import_alias?
+import_alias: "as" NAME
 
-	from_import_stmt: FROM module_path "import" NAME import_alias?
+from_import_stmt: FROM module_path "import" NAME import_alias?
 
-	export_stmt: EXPORT "{" export_items? "}"
-	export_items: NAME (COMMA NAME)*
+export_stmt: EXPORT "{" export_items? "}"
+export_items: NAME (COMMA NAME)*
 
 struct_def: "struct" NAME struct_body
 struct_body: tuple_struct | block_struct
