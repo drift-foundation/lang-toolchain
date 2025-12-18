@@ -41,6 +41,22 @@ class Located:
 class TypeExpr:
     name: str
     args: List["TypeExpr"] = field(default_factory=list)
+    # Optional module alias qualifier for type names in surface annotations.
+    #
+    # Example:
+    #   import lib as x
+    #   val p: x.Point = ...
+    #
+    # The compiler resolves `module_alias` using per-file import bindings and
+    # then rewrites the type reference to the unqualified nominal name (Point).
+    # This is an MVP compromise while type identity is still global-by-name
+    # across modules; cross-module type collisions are rejected earlier.
+    module_alias: Optional[str] = None
+    # Source location of the type expression (best-effort).
+    #
+    # This enables source-anchored diagnostics for type-level module qualifiers
+    # (e.g. `x.Point`) and internal-only type usage rejections.
+    loc: Optional[Located] = None
 
 
 @dataclass

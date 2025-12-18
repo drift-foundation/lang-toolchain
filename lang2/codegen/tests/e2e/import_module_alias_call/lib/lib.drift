@@ -1,0 +1,7 @@
+export { Point, make }
+
+struct Point(x: Int, y: Int)
+
+fn make(x: Int, y: Int) returns Point {
+	return Point(x = x, y = y);
+}

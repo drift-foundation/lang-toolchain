@@ -161,6 +161,8 @@ def _prime_builtins(table: TypeTable) -> None:
 	table.new_optional(table.ensure_int())
 	table.new_optional(table.ensure_bool())
 	table.new_optional(table.ensure_string())
+
+
 def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 	"""Render a TypeExpr into a string (e.g., Array<Int>, Result<Int, Error>)."""
 	if not typ.args:
@@ -1283,6 +1285,7 @@ def parse_drift_workspace_to_hir(
 	dep_edges: dict[str, list[tuple[str, Span]]] = {mid: [] for mid in merged_programs}
 	from_value_bindings_by_file: dict[Path, dict[str, tuple[str, str]]] = {}
 	from_type_bindings_by_file: dict[Path, dict[str, tuple[str, str]]] = {}
+	module_aliases_by_file: dict[Path, dict[str, str]] = {}
 	for mid, files in by_module.items():
 		for path, prog in files:
 			file_seen_values: dict[str, tuple[str, str]] = {}
@@ -1327,6 +1330,10 @@ def parse_drift_workspace_to_hir(
 							span=span,
 						)
 					)
+
+			# Record module aliases for later module-qualified access resolution.
+			# This is per-file by design (imports are file-scoped in MVP).
+			module_aliases_by_file[path] = dict(file_module_aliases)
 
 			for fi in getattr(prog, "from_imports", []) or []:
 				mod = ".".join(getattr(fi, "module_path", []) or [])
@@ -1446,6 +1453,102 @@ def parse_drift_workspace_to_hir(
 	# Collapse edge lists into a simple adjacency set for cycle detection.
 	deps: dict[str, set[str]] = {mid: {to for (to, _sp) in edges if to in merged_programs} for mid, edges in dep_edges.items()}
 
+	# Resolve module-qualified type references (`x.Point`) using per-file module
+	# alias bindings (`import foo.bar as x`) and the exporting module's type
+	# interface.
+	#
+	# After successful resolution we rewrite the type expression to the unqualified
+	# nominal name (Point). This is an MVP compromise while type identity is still
+	# global-by-name across modules; cross-module collisions are rejected earlier.
+	def _exported_types_for_module(mod: str) -> set[str]:
+		if mod in exports_types_by_module:
+			return exports_types_by_module.get(mod, set())
+		if external_module_exports is not None and mod in external_module_exports:
+			ext = external_module_exports.get(mod) or {}
+			return set(ext.get("types") or set())
+		return set()
+
+	def _resolve_type_expr_in_file(path: Path, file_aliases: dict[str, str], te: parser_ast.TypeExpr | None) -> None:
+		if te is None:
+			return
+		if getattr(te, "module_alias", None):
+			alias = te.module_alias
+			mod = file_aliases.get(alias or "")
+			span = _span_in_file(path, getattr(te, "loc", None))
+			if mod is None:
+				diagnostics.append(
+					Diagnostic(
+						message=f"unknown module alias '{alias}' in type reference '{alias}.{te.name}'",
+						severity="error",
+						span=span,
+					)
+				)
+			else:
+				types = _exported_types_for_module(mod)
+				if te.name not in types:
+					available = ", ".join(sorted(types))
+					notes = (
+						[f"available exported types: {available}"]
+						if available
+						else [f"module '{mod}' exports no types (private by default)"]
+					)
+					diagnostics.append(
+						Diagnostic(
+							message=f"module '{mod}' does not export type '{te.name}'",
+							severity="error",
+							span=span,
+							notes=notes,
+						)
+					)
+				else:
+					te.module_alias = None
+		for a in getattr(te, "args", []) or []:
+			_resolve_type_expr_in_file(path, file_aliases, a)
+
+	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], blk: parser_ast.Block) -> None:
+		for st in getattr(blk, "statements", []) or []:
+			if isinstance(st, parser_ast.LetStmt) and getattr(st, "type_expr", None) is not None:
+				_resolve_type_expr_in_file(path, file_aliases, st.type_expr)
+			if isinstance(st, parser_ast.IfStmt):
+				_resolve_types_in_block(path, file_aliases, st.then_block)
+				if st.else_block is not None:
+					_resolve_types_in_block(path, file_aliases, st.else_block)
+			if isinstance(st, parser_ast.TryStmt):
+				_resolve_types_in_block(path, file_aliases, st.body)
+				for c in getattr(st, "catches", []) or []:
+					_resolve_types_in_block(path, file_aliases, c.block)
+			if isinstance(st, parser_ast.WhileStmt):
+				_resolve_types_in_block(path, file_aliases, st.body)
+			if isinstance(st, parser_ast.ForStmt):
+				_resolve_types_in_block(path, file_aliases, st.body)
+
+	for mid, files in by_module.items():
+		for path, prog in files:
+			file_aliases = module_aliases_by_file.get(path, {})
+			# Top-level declarations.
+			for fn in getattr(prog, "functions", []) or []:
+				for p in getattr(fn, "params", []) or []:
+					_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
+				_resolve_type_expr_in_file(path, file_aliases, getattr(fn, "return_type", None))
+				_resolve_types_in_block(path, file_aliases, fn.body)
+			for impl in getattr(prog, "implements", []) or []:
+				_resolve_type_expr_in_file(path, file_aliases, impl.target)
+				for mfn in getattr(impl, "methods", []) or []:
+					for p in getattr(mfn, "params", []) or []:
+						_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, getattr(mfn, "return_type", None))
+					_resolve_types_in_block(path, file_aliases, mfn.body)
+			for s in getattr(prog, "structs", []) or []:
+				for f in getattr(s, "fields", []) or []:
+					_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
+			for e in getattr(prog, "exceptions", []) or []:
+				for a in getattr(e, "args", []) or []:
+					_resolve_type_expr_in_file(path, file_aliases, a.type_expr)
+			for v in getattr(prog, "variants", []) or []:
+				for arm in getattr(v, "arms", []) or []:
+					for f in getattr(arm, "fields", []) or []:
+						_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
+
 	# Cycle detection (MVP: reject import cycles).
 	def _find_cycle() -> list[str] | None:
 		vis: set[str] = set()
@@ -1518,6 +1621,44 @@ def parse_drift_workspace_to_hir(
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
 	shared_type_table = TypeTable()
 	_prime_builtins(shared_type_table)
+	# Pre-declare all nominal type names across the workspace before lowering any
+	# individual module.
+	#
+	# This prevents cross-module type references (e.g. `import lib as x; val p: x.Point`)
+	# from accidentally minting placeholder scalar TypeIds via `ensure_named` when
+	# the defining module hasn't been lowered yet. `declare_struct`/`declare_variant`
+	# are idempotent when the kind already matches, so later per-module lowering
+	# can safely re-run its local declaration passes.
+	for _mid, _prog in merged_programs.items():
+		for _s in getattr(_prog, "structs", []) or []:
+			try:
+				shared_type_table.declare_struct(_s.name, [f.name for f in getattr(_s, "fields", []) or []])
+			except ValueError as err:
+				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_s, "loc", None))))
+		for _v in getattr(_prog, "variants", []) or []:
+			arms: list[VariantArmSchema] = []
+			for _arm in getattr(_v, "arms", []) or []:
+				fields = [
+					VariantFieldSchema(
+						name=_f.name,
+						type_expr=_generic_type_expr_from_parser(
+							_f.type_expr, type_params=list(getattr(_v, "type_params", []) or [])
+						),
+					)
+					for _f in getattr(_arm, "fields", []) or []
+				]
+				arms.append(VariantArmSchema(name=_arm.name, fields=fields))
+			try:
+				shared_type_table.declare_variant(
+					_v.name,
+					list(getattr(_v, "type_params", []) or []),
+					arms,
+				)
+			except ValueError as err:
+				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_v, "loc", None))))
+
+	if any(d.severity == "error" for d in diagnostics):
+		return {}, {}, TypeTable(), {}, diagnostics
 
 	def _qualify_fn_name(module_id: str, name: str) -> str:
 		# Entrypoint is always the unqualified symbol `main` regardless of which
@@ -1655,6 +1796,7 @@ def parse_drift_workspace_to_hir(
 		local_map = local_maps.get(module_id, {})
 		file_bindings = from_value_bindings_by_file.get(origin_file or Path(), {})
 		import_map: dict[str, str] = {local_name: _qualify_fn_name(mod, sym) for local_name, (mod, sym) in file_bindings.items()}
+		file_module_aliases = module_aliases_by_file.get(origin_file or Path(), {})
 		# Call-site rewriting must be scope-correct: a local binding shadows only
 		# within its lexical block, not across the whole function.
 		#
@@ -1677,6 +1819,84 @@ def parse_drift_workspace_to_hir(
 				return import_map[name]
 			return name
 
+		def exported_value_names(mod: str) -> set[str]:
+			if mod in exports_values_by_module:
+				return set((exports_values_by_module.get(mod) or {}).keys())
+			if external_module_exports is not None and mod in external_module_exports:
+				ext = external_module_exports.get(mod) or {}
+				return set(ext.get("values") or set())
+			return set()
+
+		def exported_type_names(mod: str) -> set[str]:
+			if mod in exports_types_by_module:
+				return set(exports_types_by_module.get(mod) or set())
+			if external_module_exports is not None and mod in external_module_exports:
+				ext = external_module_exports.get(mod) or {}
+				return set(ext.get("types") or set())
+			return set()
+
+		def _rewrite_module_qualified_call(
+			*,
+			receiver: H.HExpr,
+			member: str,
+			args: list[H.HExpr],
+			kwargs: list[H.HKwArg],
+		) -> H.HExpr | None:
+			"""
+			Rewrite a syntactic member call `x.member(...)` when `x` is a module alias.
+
+			MVP surface rule (pinned):
+			  import lib as x
+			  x.foo(1, 2)   // call exported function foo from module lib
+			  x.Point(...)  // call struct constructor Point from module lib
+
+			We do *not* create a runtime module object. Instead, we resolve the
+			member at compile time and rewrite the callee to a fully-qualified
+			callable symbol (`lib::foo`) or an unqualified struct constructor (`Point`).
+
+			Note on representation: in stage1 HIR, a `.`-call like `x.foo(...)` is
+			represented as `HMethodCall(receiver=x, method_name="foo", ...)` (method
+			sugar). We reuse that syntactic form for module-qualified access and
+			rewrite it here into a plain `HCall` once we confirm `x` is a module alias.
+			"""
+			if not isinstance(receiver, H.HVar):
+				return None
+			if receiver.binding_id is not None:
+				# Local/param shadowing wins: `x.foo` refers to the local `x`, not a module.
+				return None
+			alias = receiver.name
+			mod = file_module_aliases.get(alias)
+			if mod is None:
+				return None
+			vals = exported_value_names(mod)
+			types = exported_type_names(mod)
+			if member in vals:
+				return H.HCall(fn=H.HVar(name=_qualify_fn_name(mod, member)), args=args, kwargs=kwargs)
+			if member in types:
+				# Constructor call through a module alias. MVP supports only struct ctors.
+				struct_schemas = getattr(shared_type_table, "struct_schemas", {}) or {}
+				if member not in struct_schemas:
+					diagnostics.append(
+						Diagnostic(
+							message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in MVP",
+							severity="error",
+							span=getattr(receiver, "loc", Span()),
+						)
+					)
+					return H.HCall(fn=H.HVar(name=member), args=args, kwargs=kwargs)
+				return H.HCall(fn=H.HVar(name=member), args=args, kwargs=kwargs)
+			available = ", ".join(sorted(vals | types))
+			notes = [f"available exports: {available}"] if available else [f"module '{mod}' exports nothing (private by default)"]
+			diagnostics.append(
+				Diagnostic(
+					message=f"module '{mod}' does not export symbol '{member}'",
+					severity="error",
+					span=getattr(receiver, "loc", Span()),
+					notes=notes,
+				)
+			)
+			return None
+
 		def walk_block(b: H.HBlock, *, bound: set[str]) -> None:
 			scope_bound = set(bound)
 			for st in b.statements:
@@ -1684,28 +1904,68 @@ def parse_drift_workspace_to_hir(
 				if isinstance(st, H.HLet):
 					scope_bound.add(st.name)
 
-		def walk_expr(expr: H.HExpr, *, bound: set[str]) -> None:
-			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
-				expr.fn.name = rewrite_name(expr.fn.name, bound=bound)
+		def walk_expr(expr: H.HExpr, *, bound: set[str]) -> H.HExpr:
+			# Module-qualified access: the surface syntax is `x.foo(...)`. Stage1
+			# initially represents this as `HMethodCall`, so we rewrite that form
+			# when `x` resolves to a module alias in the current file.
 			if isinstance(expr, H.HMethodCall):
-				walk_expr(expr.receiver, bound=bound)
-				for a in expr.args:
-					walk_expr(a, bound=bound)
+				expr.receiver = walk_expr(expr.receiver, bound=bound)
+				expr.args = [walk_expr(a, bound=bound) for a in expr.args]
 				for kw in getattr(expr, "kwargs", []) or []:
 					if getattr(kw, "value", None) is not None:
-						walk_expr(kw.value, bound=bound)
-			# Recurse into generic child expressions/blocks.
-			for child in getattr(expr, "__dict__", {}).values():
+						kw.value = walk_expr(kw.value, bound=bound)
+				rewritten = _rewrite_module_qualified_call(
+					receiver=expr.receiver,
+					member=expr.method_name,
+					args=expr.args,
+					kwargs=getattr(expr, "kwargs", []) or [],
+				)
+				if rewritten is not None:
+					return rewritten
+				return expr
+
+			if isinstance(expr, H.HCall):
+				expr.fn = walk_expr(expr.fn, bound=bound)
+				expr.args = [walk_expr(a, bound=bound) for a in expr.args]
+				for kw in getattr(expr, "kwargs", []) or []:
+					if getattr(kw, "value", None) is not None:
+						kw.value = walk_expr(kw.value, bound=bound)
+				# Resolve direct calls that name a local/imported/free function.
+				if isinstance(expr.fn, H.HVar):
+					expr.fn.name = rewrite_name(expr.fn.name, bound=bound)
+				elif isinstance(expr.fn, H.HField) and isinstance(expr.fn.subject, H.HVar):
+					# Handle the (rarer) explicit field-call form: `(x.foo)(...)`.
+					q = _rewrite_module_qualified_call(
+						receiver=expr.fn.subject,
+						member=expr.fn.name,
+						args=expr.args,
+						kwargs=getattr(expr, "kwargs", []) or [],
+					)
+					if isinstance(q, H.HCall):
+						# Preserve the rewritten call and ignore the original callee expression.
+						return q
+				return expr
+
+			if isinstance(expr, H.HField) and isinstance(expr.subject, H.HVar) and expr.subject.binding_id is None:
+				mod = file_module_aliases.get(expr.subject.name)
+				if mod is not None and expr.name in exported_value_names(mod):
+					return H.HVar(name=_qualify_fn_name(mod, expr.name))
+				return expr
+
+			# Generic recursion for other expression shapes.
+			for k, child in list(getattr(expr, "__dict__", {}).items()):
 				if isinstance(child, H.HExpr):
-					walk_expr(child, bound=bound)
+					setattr(expr, k, walk_expr(child, bound=bound))
 				elif isinstance(child, H.HBlock):
 					walk_block(child, bound=bound)
 				elif isinstance(child, list):
+					new_list = []
 					for it in child:
 						if isinstance(it, H.HExpr):
-							walk_expr(it, bound=bound)
+							new_list.append(walk_expr(it, bound=bound))
 						elif isinstance(it, H.HBlock):
 							walk_block(it, bound=bound)
+							new_list.append(it)
 						# Expression-form arms (match/try) live under expression nodes and
 						# must be handled here so binders introduce lexical scopes.
 						elif hasattr(H, "HMatchArm") and isinstance(it, getattr(H, "HMatchArm")):
@@ -1714,18 +1974,20 @@ def parse_drift_workspace_to_hir(
 								arm_bound.add(bname)
 							walk_block(it.block, bound=arm_bound)
 							if getattr(it, "result", None) is not None:
-								walk_expr(it.result, bound=arm_bound)
+								it.result = walk_expr(it.result, bound=arm_bound)
+							new_list.append(it)
 						elif hasattr(H, "HTryExprArm") and isinstance(it, getattr(H, "HTryExprArm")):
 							arm_bound = set(bound)
 							if getattr(it, "binder", None):
 								arm_bound.add(it.binder)
 							walk_block(it.block, bound=arm_bound)
 							if getattr(it, "result", None) is not None:
-								walk_expr(it.result, bound=arm_bound)
-			if isinstance(expr, H.HCall):
-				for kw in getattr(expr, "kwargs", []) or []:
-					if getattr(kw, "value", None) is not None:
-						walk_expr(kw.value, bound=bound)
+								it.result = walk_expr(it.result, bound=arm_bound)
+							new_list.append(it)
+						else:
+							new_list.append(it)
+					setattr(expr, k, new_list)
+			return expr
 
 		def walk_stmt(stmt: H.HStmt, *, bound: set[str]) -> None:
 			if isinstance(stmt, H.HTry):
@@ -1736,38 +1998,47 @@ def parse_drift_workspace_to_hir(
 						arm_bound.add(arm.binder)
 					walk_block(arm.block, bound=arm_bound)
 				return
-			for child in getattr(stmt, "__dict__", {}).values():
+			for k, child in list(getattr(stmt, "__dict__", {}).items()):
 				if isinstance(child, H.HExpr):
-					walk_expr(child, bound=bound)
+					setattr(stmt, k, walk_expr(child, bound=bound))
 				elif isinstance(child, H.HBlock):
 					walk_block(child, bound=bound)
 				elif isinstance(child, list):
+					new_list = []
 					for it in child:
 						if isinstance(it, H.HStmt):
 							walk_stmt(it, bound=bound)
+							new_list.append(it)
 						elif isinstance(it, H.HExpr):
-							walk_expr(it, bound=bound)
+							new_list.append(walk_expr(it, bound=bound))
 						elif isinstance(it, H.HBlock):
 							walk_block(it, bound=bound)
+							new_list.append(it)
 						elif hasattr(H, "HCatchArm") and isinstance(it, getattr(H, "HCatchArm")):
 							arm_bound = set(bound)
 							if getattr(it, "binder", None):
 								arm_bound.add(it.binder)
 							walk_block(it.block, bound=arm_bound)
+							new_list.append(it)
 						elif hasattr(H, "HMatchArm") and isinstance(it, getattr(H, "HMatchArm")):
 							arm_bound = set(bound)
 							for bname in getattr(it, "binders", []) or []:
 								arm_bound.add(bname)
 							walk_block(it.block, bound=arm_bound)
 							if getattr(it, "result", None) is not None:
-								walk_expr(it.result, bound=arm_bound)
+								it.result = walk_expr(it.result, bound=arm_bound)
+							new_list.append(it)
 						elif hasattr(H, "HTryExprArm") and isinstance(it, getattr(H, "HTryExprArm")):
 							arm_bound = set(bound)
 							if getattr(it, "binder", None):
 								arm_bound.add(it.binder)
 							walk_block(it.block, bound=arm_bound)
 							if getattr(it, "result", None) is not None:
-								walk_expr(it.result, bound=arm_bound)
+								it.result = walk_expr(it.result, bound=arm_bound)
+							new_list.append(it)
+						else:
+							new_list.append(it)
+					setattr(stmt, k, new_list)
 
 		initial_bound = set(param_names)
 		walk_block(block, bound=initial_bound)

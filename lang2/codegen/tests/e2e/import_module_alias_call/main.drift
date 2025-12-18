@@ -1,0 +1,6 @@
+import lib as x
+
+fn main() returns Int {
+	val p: x.Point = x.make(40, 2);
+	return p.x + p.y;
+}

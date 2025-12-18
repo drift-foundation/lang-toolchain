@@ -774,7 +774,7 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 		return TypeExpr(name=ref_name, args=[inner])
 	if name == "type_expr":
 		for child in tree.children:
-			if isinstance(child, Tree) and _name(child) in {"base_type", "type_expr", "ref_type"}:
+			if isinstance(child, Tree) and _name(child) in {"base_type", "qualified_base_type", "type_expr", "ref_type"}:
 				return _build_type_expr(child)
 		return TypeExpr(name="<unknown>")
 	if name == "base_type":
@@ -788,7 +788,25 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 				if len(children) == 1 and _name(children[0]) in {"angle_type_args", "square_type_args"}:
 					children = [arg for arg in children[0].children if isinstance(arg, Tree)]
 				args = [_build_type_expr(arg) for arg in children]
-		return TypeExpr(name=name_token.value, args=args)
+		return TypeExpr(name=name_token.value, args=args, loc=Located(line=name_token.line, column=name_token.column))
+	if name == "qualified_base_type":
+		# NAME "." NAME type_args?
+		alias_tok = tree.children[0]
+		name_tok = tree.children[2]
+		args: List[TypeExpr] = []
+		if len(tree.children) > 3:
+			type_args = tree.children[3]
+			if isinstance(type_args, Tree):
+				children = [arg for arg in type_args.children if isinstance(arg, Tree)]
+				if len(children) == 1 and _name(children[0]) in {"angle_type_args", "square_type_args"}:
+					children = [arg for arg in children[0].children if isinstance(arg, Tree)]
+				args = [_build_type_expr(arg) for arg in children]
+		return TypeExpr(
+			name=name_tok.value,
+			args=args,
+			module_alias=alias_tok.value,
+			loc=Located(line=alias_tok.line, column=alias_tok.column),
+		)
 	# fallback for other wrappers
 	if tree.children:
 		last = tree.children[-1]

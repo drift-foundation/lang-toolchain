@@ -97,6 +97,13 @@ Provider-agnostic resolution (pinned):
   2) Current module top-level declarations
   3) Imported modules’ exported top-level declarations
 
+MVP qualified module access (implemented):
+- `import my.module as x` introduces a **module binding** `x`.
+- `x.foo(...)` calls exported functions from the imported module.
+- `x.Type` is permitted in type positions (e.g., `val p: x.Point = ...`) and
+  module-qualified struct constructor calls are supported (`x.Point(...)`).
+  This is resolved at compile time; there is no runtime “module object”.
+
 ### Internal symbol identity
 
 - Every top-level symbol has an internal “module-qualified name”:
@@ -177,7 +184,7 @@ Tests:
 - E2E: missing module import target → compile error with span.
 - E2E: cyclic module imports → compile error (deterministic message).
 
-Status: completed (for MVP `from ... import ...`; qualified module access deferred)
+Status: completed (MVP `from ... import ...` + module-qualified access)
 
 Progress note (partial implementation):
 - A workspace parser is available via `parse_drift_workspace_to_hir(...)`:
@@ -195,9 +202,13 @@ Progress note (partial implementation):
   - call sites are rewritten so `from lib import add; add(...)` calls `lib::add`.
 - Method symbols are also module-qualified to avoid collisions across modules:
   - `Type::method` becomes `<module>::Type::method` in the merged workspace unit.
+- Module-qualified access is supported for both value and type namespaces:
+  - `import lib as x; x.make(...)` resolves `make` in the imported module’s value exports.
+  - `val p: x.Point = ...` resolves `Point` in the imported module’s type exports.
 - E2E harness uses the workspace loader for all cases (single-file and multi-file) so missing-module imports are diagnosed consistently.
 - E2E cases now unskipped and passing:
   - `import_basic_one_symbol`
+  - `import_module_alias_call`
   - `import_multiple_files_same_module`
   - `import_alias`
   - `import_missing_module`
@@ -211,9 +222,10 @@ Progress note (partial implementation):
   - Existing Milestone 1 cases remain green (`module_multifile_basic`, `module_multifile_duplicate_fn`).
 
 Remaining work for Milestone 2:
-- Qualified module access (`import m as x; x.foo()`) and type namespace imports remain deferred.
+- (none for MVP import resolution; remaining items are Milestone-4/package related)
 - Exported ABI boundary enforcement for cross-module calls is not wired yet (Milestone 3 pinned requirement).
 - True module-scoped type identity and cross-module type imports are deferred until type namespaces land.
+- Keep one canonical “module namespace” design (future): extend `x.foo` to permit deeper module paths or richer import mechanisms without introducing runtime module objects.
 
 Test maintenance (pinned):
 - The repo contains a set of module/import-related e2e cases that are committed as `skip: true`
@@ -222,7 +234,7 @@ Test maintenance (pinned):
   that are now supported, keeping the e2e suite authoritative without duplicating coverage.
 
 Skipped test inventory (non-exhaustive; keep up to date as new coverage is added):
-- Milestone 2 (deferred features): qualified module access (`import m as x; x.foo()`), `import <module>`-style namespace access, module-qualified type identity, cross-module type imports.
+- Milestone 2 (deferred features): module-qualified type identity and cross-module type imports.
 - Future (glob imports / richer UX): `import_ambiguous_symbol_due_to_glob`, candidate-list diagnostics, minimal-cycle trace formatting.
 
 ### Milestone 3 — Exports / visibility (minimal, spec-aligned)
@@ -334,6 +346,23 @@ Work:
   - produces either an executable or another unsigned package artifact
 
 Status: deferred
+
+Progress note (current reality):
+- Unsigned package artifacts are implemented (DMIR-PKG v0, deterministic manifest+blobs, hash-verified).
+- `driftc` can:
+  - emit unsigned packages (`--emit-package`) and load them from `--package-root`,
+  - reject duplicate module ids across packages,
+  - enforce a strict TypeTable fingerprint match (until TypeId remapping exists),
+  - embed only the call-graph closure of referenced package functions into codegen.
+- Signature verification is still deferred (planned sidecar `*.dmp.sig` + offline trust policy); current loader verifies hashes only.
+
+Remaining work for Milestone 4 (pinned for later):
+- Implement signature sidecar ingestion + verification (offline):
+  - `pkg.dmp.sig` JSON metadata (algorithm, key id(s), signature bytes),
+  - trust store selection and policy enforcement (including revocation checks),
+  - require signatures for downloaded packages; allow unsigned for local workspace outputs.
+- Implement true TypeId remapping / link-time unified TypeTable across packages.
+- Enforce exported ABI-boundary calling convention for cross-module calls using recorded interface metadata.
 
 ---
 

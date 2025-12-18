@@ -124,7 +124,16 @@ type_expr: ref_type
          | base_type
 
 ref_type: AMP MUT? type_expr
-base_type: NAME type_args?
+// Base (nominal) type reference.
+//
+// MVP supports a single module-alias qualifier in type positions:
+//   import lib as x
+//   val p: x.Point = ...
+//
+// This is *not* a general module path type syntax. Only one dot is allowed
+// (alias + name); direct `a.b.c` type paths are deferred.
+base_type: NAME DOT NAME type_args? -> qualified_base_type
+         | NAME type_args?          -> base_type
 type_args: square_type_args
          | angle_type_args
 square_type_args: "[" type_expr (COMMA type_expr)* "]"
