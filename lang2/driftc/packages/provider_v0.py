@@ -14,9 +14,12 @@ The provider is intentionally conservative:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from lang2.driftc.packages.dmir_pkg_v0 import LoadedPackage, load_dmir_pkg_v0
+from lang2.driftc.packages.signature_v0 import verify_package_signatures
+from lang2.driftc.packages.trust_v0 import TrustStore
 
 
 def discover_package_files(package_roots: list[Path]) -> list[Path]:
@@ -26,19 +29,58 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 	MVP rule: any `*.dmp` file under a root is considered a package artifact.
 	The returned list is deterministic.
 	"""
-	out: list[Path] = []
+	out: set[Path] = set()
 	for root in package_roots:
 		if not root.exists():
 			continue
+		if root.is_file():
+			if root.suffix == ".dmp":
+				out.add(root)
+			continue
 		for p in sorted(root.rglob("*.dmp")):
 			if p.is_file():
-				out.append(p)
+				out.add(p)
 	return sorted(out)
 
 
 def load_package_v0(path: Path) -> LoadedPackage:
-	"""Load and verify a DMIR-PKG v0 artifact."""
+	"""Load and verify a DMIR-PKG v0 artifact (integrity only)."""
 	return load_dmir_pkg_v0(path)
+
+
+@dataclass(frozen=True)
+class PackageTrustPolicy:
+	"""
+	Trust policy used when loading packages from a package root.
+
+	This is intentionally passed in from the driver (`driftc`), not hard-coded in
+	the loader, because policy is a tooling concern (project trust store, CI
+	settings, local unsigned roots, etc.).
+	"""
+
+	trust_store: TrustStore
+	require_signatures: bool
+	allow_unsigned_roots: list[Path]
+
+
+def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_bytes: bytes | None = None) -> LoadedPackage:
+	"""
+	Load a package and enforce signature/trust policy.
+
+	`pkg_bytes` is an optional optimization: callers that already read the bytes
+	(for hashing) can provide them to avoid a second read.
+	"""
+	pkg = load_dmir_pkg_v0(path)
+	data = pkg_bytes if pkg_bytes is not None else path.read_bytes()
+	verify_package_signatures(
+		pkg_path=path,
+		pkg_bytes=data,
+		pkg_manifest=pkg.manifest,
+		trust=policy.trust_store,
+		require_signatures=policy.require_signatures,
+		allow_unsigned_roots=policy.allow_unsigned_roots,
+	)
+	return pkg
 
 
 def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[str, set[str]]]:
@@ -68,4 +110,3 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 				"types": set(types) if isinstance(types, list) else set(),
 			}
 	return out
-

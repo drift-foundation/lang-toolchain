@@ -52,7 +52,14 @@ from lang2.driftc.type_checker import TypeChecker
 from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
 from lang2.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
 from lang2.driftc.packages.provisional_dmir_v0 import encode_module_payload_v0, decode_mir_funcs, type_table_fingerprint
-from lang2.driftc.packages.provider_v0 import discover_package_files, load_package_v0, collect_external_exports
+from lang2.driftc.packages.provider_v0 import (
+	PackageTrustPolicy,
+	collect_external_exports,
+	discover_package_files,
+	load_package_v0,
+	load_package_v0_with_policy,
+)
+from lang2.driftc.packages.trust_v0 import TrustStore, load_trust_store_json, merge_trust_stores
 
 
 def _inject_prelude(signatures: dict[str, FnSignature], type_table: TypeTable) -> None:
@@ -435,6 +442,28 @@ def main(argv: list[str] | None = None) -> int:
 		type=Path,
 		help="Package root directory (repeatable); used to satisfy imports from local package artifacts",
 	)
+	parser.add_argument(
+		"--trust-store",
+		type=Path,
+		help="Path to project trust store JSON (default: ./drift/trust.json)",
+	)
+	parser.add_argument(
+		"--no-user-trust-store",
+		action="store_true",
+		help="Disable user-level trust store fallback (~/.config/drift/trust.json)",
+	)
+	parser.add_argument(
+		"--allow-unsigned-from",
+		dest="allow_unsigned_from",
+		action="append",
+		type=Path,
+		help="Allow unsigned packages from this directory (repeatable)",
+	)
+	parser.add_argument(
+		"--require-signatures",
+		action="store_true",
+		help="Require signatures for all packages (including local build outputs)",
+	)
 	parser.add_argument("-o", "--output", type=Path, help="Path to output executable")
 	parser.add_argument("--emit-ir", type=Path, help="Write LLVM IR to the given path")
 	parser.add_argument("--emit-package", type=Path, help="Write an unsigned package artifact (.dmp) to the given path")
@@ -455,9 +484,89 @@ def main(argv: list[str] | None = None) -> int:
 	loaded_pkgs = []
 	external_exports = None
 	if args.package_roots:
+		# Load trust store(s) for package signature verification.
+		#
+		# Pinned policy:
+		# - project-local trust store is primary: ./drift/trust.json (or --trust-store)
+		# - user-level trust store is an optional convenience layer
+		# - `driftc` is the final gatekeeper: verification happens at use time
+		project_trust_path = args.trust_store or (Path.cwd() / "drift" / "trust.json")
+		project_trust = TrustStore(keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set())
+		if project_trust_path.exists():
+			project_trust = load_trust_store_json(project_trust_path)
+		elif args.trust_store is not None:
+			# Explicit trust store path is required to exist.
+			msg = f"trust store not found: {project_trust_path}"
+			if args.json:
+				print(
+					json.dumps(
+						{
+							"exit_code": 1,
+							"diagnostics": [
+								{
+									"phase": "package",
+									"message": msg,
+									"severity": "error",
+									"file": str(project_trust_path),
+									"line": None,
+									"column": None,
+								}
+							],
+						}
+					)
+				)
+			else:
+				print(f"{project_trust_path}:?:?: error: {msg}", file=sys.stderr)
+			return 1
+
+		merged_trust = project_trust
+		if not args.no_user_trust_store:
+			user_path = Path.home() / ".config" / "drift" / "trust.json"
+			if user_path.exists():
+				user_trust = load_trust_store_json(user_path)
+				merged_trust = merge_trust_stores(project_trust, user_trust)
+
+		allow_unsigned_roots: list[Path] = []
+		# Default local unsigned outputs directory (pinned).
+		allow_unsigned_roots.append((Path.cwd() / "build" / "drift" / "localpkgs").resolve())
+		for p in list(args.allow_unsigned_from or []):
+			allow_unsigned_roots.append(p.resolve())
+
+		policy = PackageTrustPolicy(
+			trust_store=merged_trust,
+			require_signatures=bool(args.require_signatures),
+			allow_unsigned_roots=allow_unsigned_roots,
+		)
+
 		package_files = discover_package_files(list(args.package_roots))
 		for pkg_path in package_files:
-			loaded_pkgs.append(load_package_v0(pkg_path))
+			# Integrity + trust verification happens here, before any package
+			# metadata is used for import resolution.
+			try:
+				loaded_pkgs.append(load_package_v0_with_policy(pkg_path, policy=policy))
+			except ValueError as err:
+				msg = str(err)
+				if args.json:
+					print(
+						json.dumps(
+							{
+								"exit_code": 1,
+								"diagnostics": [
+									{
+										"phase": "package",
+										"message": msg,
+										"severity": "error",
+										"file": str(pkg_path),
+										"line": None,
+										"column": None,
+									}
+								],
+							}
+						)
+					)
+				else:
+					print(f"{pkg_path}:?:?: error: {msg}", file=sys.stderr)
+				return 1
 		# Reject duplicate module ids across package files early. Unioning exports
 		# is unsafe because it can mask collisions and make resolution nondeterministic.
 		mod_to_pkg: dict[str, Path] = {}

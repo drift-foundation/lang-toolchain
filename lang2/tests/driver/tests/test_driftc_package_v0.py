@@ -1,12 +1,14 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from lang2.driftc.driftc import main as driftc_main
 from lang2.driftc.packages import dmir_pkg_v0
+from lang2.driftc.packages.provider_v0 import discover_package_files
 from lang2.driftc.packages.provider_v0 import load_package_v0
 
 
@@ -54,6 +56,35 @@ def _patch_pkg_header(path: Path, *, manifest_sha256: bytes | None = None, toc_s
 		reserved,
 	)
 	_patch_file_bytes(path, 0, new_header)
+
+
+def _patch_pkg_manifest_bytes_same_len(path: Path, patch_fn) -> None:
+	"""
+	Patch the manifest bytes in-place without changing `manifest_len`.
+
+	This helper is intentionally strict: it requires the new bytes to be the same
+	length as the old bytes so TOC offsets remain valid.
+	"""
+	header_bytes = path.read_bytes()[: dmir_pkg_v0.HEADER_SIZE_V0]
+	(
+		_magic,
+		_version,
+		_flags,
+		_header_size,
+		manifest_len,
+		_manifest_sha,
+		_toc_len,
+		_toc_entry_size,
+		_toc_sha,
+		_reserved,
+	) = dmir_pkg_v0._HEADER_STRUCT.unpack(header_bytes)
+	manifest_off = dmir_pkg_v0.HEADER_SIZE_V0
+	old = path.read_bytes()[manifest_off : manifest_off + int(manifest_len)]
+	new = patch_fn(old)
+	if len(new) != len(old):
+		raise ValueError("manifest patch must not change length")
+	_patch_file_bytes(path, manifest_off, new)
+	_patch_pkg_header(path, manifest_sha256=dmir_pkg_v0.sha256_bytes(new))
 
 
 def test_emit_package_is_deterministic(tmp_path: Path) -> None:
@@ -289,6 +320,8 @@ fn main() returns Int {
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -329,7 +362,19 @@ fn main() returns Int {
 }
 """.lstrip(),
 	)
-	rc = driftc_main(["-M", str(tmp_path), "--package-root", str(tmp_path), str(tmp_path / "main.drift"), "--emit-ir", str(tmp_path / "out.ll")])
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
 	assert rc != 0
 
 
@@ -366,8 +411,210 @@ fn main() returns Int {
 """.lstrip(),
 	)
 	ir_path = tmp_path / "out.ll"
-	assert driftc_main(["-M", str(tmp_path), "--package-root", str(tmp_path), str(tmp_path / "main.drift"), "--emit-ir", str(ir_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				"--package-root",
+				str(tmp_path),
+				"--allow-unsigned-from",
+				str(tmp_path),
+				str(tmp_path / "main.drift"),
+				"--emit-ir",
+				str(ir_path),
+			]
+		)
+		== 0
+	)
 	ir = ir_path.read_text(encoding="utf-8")
 	assert "lib::unused" not in ir
 	assert "define i64 @\"lib::add\"" in ir
 	assert "define i64 @lib::unused" not in ir
+
+
+def test_discover_package_files_accepts_package_file_path(tmp_path: Path) -> None:
+	pkg = tmp_path / "one.dmp"
+	pkg.write_bytes(b"")
+	assert discover_package_files([pkg]) == [pkg]
+
+
+def test_driftc_rejects_unsigned_package_outside_allowlist(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { add }
+
+fn add(a: Int, b: Int) returns Int {
+	return a + b
+}
+""".lstrip(),
+	)
+	pkg_root = tmp_path / "pkgs"
+	pkg_root.mkdir(parents=True, exist_ok=True)
+	pkg = pkg_root / "lib.dmp"
+	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+from lib import add
+
+fn main() returns Int {
+	return add(40, 2)
+}
+""".lstrip(),
+	)
+
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(pkg_root),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc != 0
+
+
+def test_driftc_missing_explicit_trust_store_is_reported_as_diagnostic(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+fn main() returns Int {
+	return 0
+}
+""".lstrip(),
+	)
+	missing = tmp_path / "nope-trust.json"
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--trust-store",
+			str(missing),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+			"--json",
+		]
+	)
+	assert rc != 0
+	out = capsys.readouterr().out
+	obj = json.loads(out)
+	assert obj["exit_code"] == 1
+	assert obj["diagnostics"][0]["phase"] == "package"
+	assert "trust store not found" in obj["diagnostics"][0]["message"]
+
+
+def test_driftc_rejects_unsigned_package_without_manifest_marker(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { add }
+
+fn add(a: Int, b: Int) returns Int {
+	return a + b
+}
+""".lstrip(),
+	)
+	pkg_root = tmp_path / "pkgs"
+	pkg_root.mkdir(parents=True, exist_ok=True)
+	pkg = pkg_root / "lib.dmp"
+	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+
+	# Remove the "unsigned": true marker without changing manifest length.
+	def patch_manifest(old: bytes) -> bytes:
+		needle = b"\"unsigned\":true"
+		if needle not in old:
+			raise ValueError("expected unsigned marker in manifest")
+		return old.replace(needle, b"\"unsigned\":null")
+
+	_patch_pkg_manifest_bytes_same_len(pkg, patch_manifest)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+from lib import add
+
+fn main() returns Int {
+	return add(40, 2)
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(pkg_root),
+			"--allow-unsigned-from",
+			str(pkg_root),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc != 0
+
+
+def test_driftc_require_signatures_rejects_unsigned_packages(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { add }
+
+fn add(a: Int, b: Int) returns Int {
+	return a + b
+}
+""".lstrip(),
+	)
+	pkg_root = tmp_path / "pkgs"
+	pkg_root.mkdir(parents=True, exist_ok=True)
+	pkg = pkg_root / "lib.dmp"
+	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+from lib import add
+
+fn main() returns Int {
+	return add(40, 2)
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(pkg_root),
+			"--allow-unsigned-from",
+			str(pkg_root),
+			"--require-signatures",
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc != 0

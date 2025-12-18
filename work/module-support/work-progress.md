@@ -31,7 +31,7 @@ Build targets vs compilation units (pinned for clarity):
 Non-goals for MVP (explicitly deferred):
 
 - Real package manager / registry / lockfiles.
-- Signed module artifacts (DMP/DMIR) and verification workflow.
+- Publishing/distribution workflows for signed packages (handled by `drift`, not `driftc`).
 - Rich visibility lattice / fine-grained privacy controls (e.g. `pub(crate)`, per-item `private/public/protected`, re-export graphs). MVP still requires an explicit export set for cross-module imports (Milestone 3).
 - Interfaces/traits-based module boundaries and dynamic linking.
 
@@ -345,7 +345,7 @@ Work:
   - enforces exported ABI boundary rules using the recorded interface table
   - produces either an executable or another unsigned package artifact
 
-Status: deferred
+Status: in progress (MVP container + package consumption implemented; TypeId remapping and ABI-boundary enforcement deferred)
 
 Progress note (current reality):
 - Unsigned package artifacts are implemented (DMIR-PKG v0, deterministic manifest+blobs, hash-verified).
@@ -354,13 +354,12 @@ Progress note (current reality):
   - reject duplicate module ids across packages,
   - enforce a strict TypeTable fingerprint match (until TypeId remapping exists),
   - embed only the call-graph closure of referenced package functions into codegen.
-- Signature verification is still deferred (planned sidecar `*.dmp.sig` + offline trust policy); current loader verifies hashes only.
+- Signature sidecar verification is implemented (offline, at use time):
+  - published packages may include `pkg.dmp.sig` sidecars (produced by `drift`),
+  - `driftc` verifies signatures at use time (gatekeeper) using project/user trust stores,
+  - unsigned packages are accepted only from local build outputs (`build/drift/localpkgs/`) or explicitly allowed unsigned roots.
 
 Remaining work for Milestone 4 (pinned for later):
-- Implement signature sidecar ingestion + verification (offline):
-  - `pkg.dmp.sig` JSON metadata (algorithm, key id(s), signature bytes),
-  - trust store selection and policy enforcement (including revocation checks),
-  - require signatures for downloaded packages; allow unsigned for local workspace outputs.
 - Implement true TypeId remapping / link-time unified TypeTable across packages.
 - Enforce exported ABI-boundary calling convention for cross-module calls using recorded interface metadata.
 

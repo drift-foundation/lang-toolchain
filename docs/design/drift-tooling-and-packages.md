@@ -50,7 +50,14 @@ trust can change over time (e.g., key rotation, revocation lists, or namespace p
 
 `driftc` is a verifier/consumer only: it never signs packages, never publishes packages, and never compresses artifacts for distribution.
 
-**Implementation status:** package containers are hash-verified today; signature verification is planned but not implemented yet.
+**Implementation status:** package containers are hash-verified, and `driftc` verifies signature sidecars (when required by policy) before consuming any package contents.
+Package signing itself is performed by `drift` as a separate, offline publishing step.
+
+Pinned defaults (MVP):
+- Trust store is project-local by default: `./drift/trust.json` (override with `--trust-store`).
+- A user trust store may be optionally loaded (`~/.config/drift/trust.json`), and can be disabled for CI determinism (`--no-user-trust-store`).
+- Unsigned packages are accepted only for local build outputs (e.g. `build/drift/localpkgs/`) unless explicitly allowed (`--allow-unsigned-from`).
+- `--require-signatures` forces signatures everywhere, including local outputs.
 
 ### 2.2 `drift` (package manager / ecosystem tool)
 
@@ -233,6 +240,16 @@ Signature policy:
 - Packages produced locally into `build/drift/localpkgs/` do not need to be signed (they are part of the local workspace build).
 - Any package consumed from `vendor/` or `cache/` is expected to be signed for distribution and must pass `driftc` verification before use.
 
+### 8.1 Package artifact format and signatures
+
+- Package artifacts are stored as **DMIR-PKG v0** containers (`*.dmp`) produced and consumed by `driftc`.
+- **Compression:** DMIR-PKG v0 containers are stored uncompressed. Compression, if used, is applied as an **outer transport layer** (Zstandard recommended) and is not part of the container format nor the signed payload.
+- Published packages may include a **signature sidecar** file next to the container:
+  - `pkg.dmp` (DMIR-PKG container bytes)
+  - `pkg.dmp.sig` (JSON signature metadata)
+- `drift` signs artifacts for distribution; `driftc` verifies signatures **at use time** (gatekeeper) using only local trust configuration.
+- For the normative container and sidecar schema, see `docs/design/drift-lang-spec.md` (Chapter “DMIR-PKG v0”).
+
 ---
 
 ## 9. Build outputs
@@ -289,7 +306,7 @@ The lockfile is authoritative for reproducible builds.
 
 ---
 
-## 12. Versioning rules (pinned)
+## 12. Versioning rules
 
 - **Compatibility and dependency resolution use only target/package SemVer.**
 - Project version is an **epoch label only** (no role in compatibility).
@@ -301,7 +318,7 @@ Metadata is authoritative; filenames are friendly tags.
 
 ---
 
-## 13. Trust model defaults (pinned)
+## 13. Trust model defaults
 
 ### Reserved namespaces
 Core namespaces are **reserved** and **must** be signed by toolchain-shipped keys:
@@ -332,7 +349,7 @@ A repository is represented by a signed, static **index snapshot** (`drift-index
 
 Packages themselves may be hosted anywhere; the index is metadata only.
 
-### 14.2 Repository directory (index-of-indexes): `drift-sources.json` (pinned)
+### 14.2 Repository directory (index-of-indexes): `drift-sources.json`
 Discovery at ecosystem scale uses **`drift-sources.json`**, a directory of repository indexes.
 This is the canonical, toolchain-recognized name for the index-of-indexes.
 
@@ -445,9 +462,9 @@ Rules:
 
 ---
 
-## 19. Native components (pinned Mode A: rebuild on install)
+## 19. Native components (Mode A: rebuild on install)
 
-### 19.1 Policy (pinned)
+### 19.1 Policy
 Drift prefers **source-available native components**.
 
 Mode A (“system-native”):
