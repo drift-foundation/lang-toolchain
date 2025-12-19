@@ -1,7 +1,6 @@
 module main
 
-// Planned: glob imports (not in MVP).
-// import a.*
-// import b.*
-fn main() returns Int { return 0; }
+from a import *
+from b import *
 
+fn main() returns Int { return foo(); }

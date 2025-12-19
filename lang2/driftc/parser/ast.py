@@ -370,12 +370,16 @@ class FromImportStmt(Stmt):
 	MVP shape (single symbol per statement):
 	  from foo.bar import baz
 	  from foo.bar import baz as qux
+
+	Glob import (Milestone 2+):
+	  from foo.bar import *
 	"""
 
 	loc: Located
 	module_path: List[str]
 	symbol: str
 	alias: Optional[str] = None
+	is_glob: bool = False
 
 
 @dataclass

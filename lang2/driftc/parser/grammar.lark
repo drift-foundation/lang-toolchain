@@ -220,7 +220,7 @@ expr_stmt: postfix
 import_stmt: "import" module_path import_alias?
 import_alias: "as" NAME
 
-from_import_stmt: FROM module_path "import" NAME import_alias?
+from_import_stmt: FROM module_path "import" (STAR | NAME) import_alias?
 
 export_stmt: EXPORT "{" export_items? "}"
 export_items: NAME (COMMA NAME)*

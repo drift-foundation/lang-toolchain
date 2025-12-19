@@ -1298,6 +1298,58 @@ def parse_drift_workspace_to_hir(
 					exported_values_map = {n: (mod, n) for n in sorted(ext.get("values") or set())}
 					exported_types_set = set(ext.get("types") or set())
 				available_exports = sorted(set(exported_values_map.keys()) | exported_types_set)
+				is_glob = bool(getattr(fi, "is_glob", False))
+				if is_glob:
+					if getattr(fi, "alias", None) is not None:
+						diagnostics.append(
+							Diagnostic(
+								message="from-import glob does not support aliasing",
+								severity="error",
+								span=span,
+							)
+						)
+						continue
+					# Expand deterministically: values then types, each sorted.
+					glob_values = sorted(exported_values_map.keys())
+					glob_types = sorted(exported_types_set)
+					for v in glob_values:
+						local_name = v
+						target = exported_values_map.get(v, (mod, v))
+						prev = file_seen_values.get(local_name)
+						if prev is None:
+							file_seen_values[local_name] = target
+							file_value_binding_span[local_name] = span
+							file_value_bindings[local_name] = target
+						elif prev != target:
+							prev_span = file_value_binding_span.get(local_name, Span())
+							diagnostics.append(
+								Diagnostic(
+									message=f"ambiguous imported name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
+									severity="error",
+									span=span,
+									notes=[f"previous import was here: {_format_span_short(prev_span)}"],
+								)
+							)
+					for t in glob_types:
+						local_name = t
+						target = (mod, t)
+						prev = file_seen_types.get(local_name)
+						if prev is None:
+							file_seen_types[local_name] = target
+							file_type_binding_span[local_name] = span
+							file_type_bindings[local_name] = target
+						elif prev != target:
+							prev_span = file_type_binding_span.get(local_name, Span())
+							diagnostics.append(
+								Diagnostic(
+									message=f"ambiguous imported type name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
+									severity="error",
+									span=span,
+									notes=[f"previous import was here: {_format_span_short(prev_span)}"],
+								)
+							)
+					continue
+
 				is_value = sym in exported_values_map
 				is_type = sym in exported_types_set
 				if not is_value and not is_type:
@@ -1332,9 +1384,10 @@ def parse_drift_workspace_to_hir(
 					elif prev != target:
 						diagnostics.append(
 							Diagnostic(
-								message=f"import name '{local_name}' conflicts: cannot import both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}'",
+								message=f"ambiguous imported name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
 								severity="error",
 								span=span,
+								notes=[f"previous import was here: {_format_span_short(file_value_binding_span.get(local_name, Span()))}"],
 							)
 						)
 						continue
@@ -1349,9 +1402,10 @@ def parse_drift_workspace_to_hir(
 					elif prev != target:
 						diagnostics.append(
 							Diagnostic(
-								message=f"type import name '{local_name}' conflicts: cannot import both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}'",
+								message=f"ambiguous imported type name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
 								severity="error",
 								span=span,
+								notes=[f"previous import was here: {_format_span_short(file_type_binding_span.get(local_name, Span()))}"],
 							)
 						)
 						continue

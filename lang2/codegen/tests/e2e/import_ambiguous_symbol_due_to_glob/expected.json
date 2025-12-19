@@ -1,8 +1,7 @@
 {
-  "skip": true,
   "exit_code": 1,
   "diagnostics": [
-    { "phase": "typecheck", "message_contains": "ambiguous" }
-  ]
+    { "phase": "parser", "message_contains": "ambiguous" }
+  ],
+  "module_paths": ["."]
 }
-

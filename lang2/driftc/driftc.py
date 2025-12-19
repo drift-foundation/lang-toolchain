@@ -1055,12 +1055,39 @@ def main(argv: list[str] | None = None) -> int:
 			payload_sigs = payload_obj.get("signatures") if isinstance(payload_obj, dict) else None
 			if not isinstance(payload_sigs, dict):
 				payload_sigs = {}
+			iface_sigs: dict[str, object] = {}
+			for sym in exported_syms:
+				sd = payload_sigs.get(sym)
+				if not isinstance(sd, dict):
+					msg = f"internal: missing signature metadata for exported value '{sym}' while emitting package"
+					if args.json:
+						print(
+							json.dumps(
+								{
+									"exit_code": 1,
+									"diagnostics": [
+										{
+											"phase": "package",
+											"message": msg,
+											"severity": "error",
+											"file": str(source_path),
+											"line": None,
+											"column": None,
+										}
+									],
+								}
+							)
+						)
+					else:
+						print(f"{source_path}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				iface_sigs[sym] = sd
 			iface_obj = {
 				"format": "drift-module-interface",
 				"version": 0,
 				"module_id": mid,
 				"exports": payload_obj.get("exports", {"values": [], "types": []}),
-				"signatures": {sym: payload_sigs.get(sym) for sym in exported_syms},
+				"signatures": iface_sigs,
 			}
 			iface_bytes = canonical_json_bytes(iface_obj)
 			iface_sha = sha256_hex(iface_bytes)

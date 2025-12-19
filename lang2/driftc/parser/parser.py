@@ -885,21 +885,6 @@ def _build_stmt(tree: Tree):
 	return None
 
 
-def _build_from_import_stmt(tree: Tree) -> FromImportStmt:
-	loc = _loc(tree)
-	module_path_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_path"), None)
-	module_path = [tok.value for tok in module_path_node.children if isinstance(tok, Token) and tok.type == "NAME"] if module_path_node else []
-	symbol_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
-	symbol = symbol_tok.value if symbol_tok is not None else ""
-	alias = None
-	alias_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_alias"), None)
-	if alias_node is not None:
-		alias_tok = next((c for c in alias_node.children if isinstance(c, Token) and c.type == "NAME"), None)
-		if alias_tok is not None:
-			alias = alias_tok.value
-	return FromImportStmt(loc=loc, module_path=module_path, symbol=symbol, alias=alias)
-
-
 def _build_export_stmt(tree: Tree) -> ExportStmt:
 	loc = _loc(tree)
 	names: list[str] = []
@@ -1174,16 +1159,19 @@ def _build_from_import_stmt(tree: Tree) -> FromImportStmt:
 	if module_node is None:
 		raise ValueError("from-import missing module path")
 	parts = [tok.value for tok in module_node.children if isinstance(tok, Token) and tok.type == "NAME"]
-	sym_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
+	sym_tok = next((c for c in tree.children if isinstance(c, Token) and c.type in {"NAME", "STAR"}), None)
 	if sym_tok is None:
-		raise ValueError("from-import missing symbol name")
+		raise ValueError("from-import missing symbol")
 	alias = None
 	alias_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_alias"), None)
 	if alias_node is not None:
 		alias_tok = next((c for c in alias_node.children if isinstance(c, Token) and c.type == "NAME"), None)
 		if alias_tok:
 			alias = alias_tok.value
-	return FromImportStmt(loc=loc, module_path=parts, symbol=sym_tok.value, alias=alias)
+	is_glob = sym_tok.type == "STAR"
+	if is_glob and alias is not None:
+		raise ValueError("from-import glob does not support aliasing")
+	return FromImportStmt(loc=loc, module_path=parts, symbol=sym_tok.value, alias=alias, is_glob=is_glob)
 
 
 def _build_export_stmt(tree: Tree) -> ExportStmt:
