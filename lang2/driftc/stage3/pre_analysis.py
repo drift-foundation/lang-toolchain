@@ -29,7 +29,6 @@ from lang2.driftc.stage2 import (
 	MTerminator,
 	AddrOfLocal,
 	Call,
-	MethodCall,
 	ConstructDV,
 	ConstructError,
 	ConstInt,
@@ -42,7 +41,7 @@ class MirAnalysisResult:
 
 	address_taken: Set[str]  # locals whose address is taken
 	may_fail: Set[tuple[str, int]]  # instruction sites that construct errors (block_name, instruction_index)
-	call_sites: Set[tuple[str, int]]  # all Call/MethodCall sites (informational)
+	call_sites: Set[tuple[str, int]]  # all Call sites (informational)
 	construct_error_sites: Set[tuple[str, int]]  # where ConstructError appears
 	exception_types: Set[str] = field(default_factory=set)  # DV type names seen via event-code mapping
 
@@ -118,7 +117,7 @@ class MirPreAnalysis:
 		if isinstance(instr, AddrOfLocal):
 			addr_taken.add(instr.local)
 
-		if isinstance(instr, (Call, MethodCall)):
+		if isinstance(instr, Call):
 			# Track call sites separately; v1 does not treat calls alone as hard
 			# may-fail for invariants.
 			call_sites.add((block_name, idx))

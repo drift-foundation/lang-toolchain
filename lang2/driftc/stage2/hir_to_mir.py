@@ -1960,7 +1960,7 @@ class HIRToMIR:
 		"""
 		Lower a method call to a plain function call.
 
-		We do not keep a distinct MIR `MethodCall` instruction in the v1 backend;
+		We do not keep a distinct MIR method-call instruction in the v1 backend;
 		it complicates codegen and duplicates resolution logic. Instead we resolve
 		the method to a concrete symbol (e.g. `m.geom::Point::move_by`) and call it
 		with the receiver as the first argument.

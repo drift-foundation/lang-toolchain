@@ -29,7 +29,7 @@ class ThrowSummary:
 	constructs_error: bool  # does this function contain any ConstructError at all?
 	exception_types: Set[str]  # DV names inferred from event codes via code_to_exc
 	may_fail_sites: Set[tuple[str, int]]  # sites that construct Error (throw/ConstructError)
-	call_sites: Set[tuple[str, int]]  # raw Call/MethodCall sites (informational)
+	call_sites: Set[tuple[str, int]]  # raw Call sites (informational)
 
 
 class ThrowSummaryBuilder:

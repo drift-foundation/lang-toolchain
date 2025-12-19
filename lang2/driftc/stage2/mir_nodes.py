@@ -473,15 +473,6 @@ class Call(MInstr):
 
 
 @dataclass
-class MethodCall(MInstr):
-	"""dest = receiver.method(args...) with an explicit receiver arg."""
-	dest: Optional[ValueId]  # None for void calls
-	receiver: ValueId
-	method_name: str
-	args: List[ValueId]
-
-
-@dataclass
 class ConstructDV(MInstr):
 	"""dest = DiagnosticValue constructor with typed args."""
 	dest: ValueId
@@ -768,7 +759,6 @@ __all__ = [
 	"ArrayLen",
 	"ArrayCap",
 	"Call",
-	"MethodCall",
 	"ConstructDV",
 	"ConstructError",
 	"ErrorAddAttrDV",

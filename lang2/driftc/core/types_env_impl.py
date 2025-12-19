@@ -22,7 +22,6 @@ from lang2.driftc.stage2 import (
 	ConstructResultErr,
 	ConstructResultOk,
 	LoadLocal,
-	MethodCall,
 	Phi,
 )
 from lang2.driftc.checker import FnSignature
@@ -161,17 +160,7 @@ def build_type_env_from_ssa(
 							ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
 							if is_void(ret_ty):
 								continue
-							types[(fname, instr.dest)] = ret_ty
-				elif isinstance(instr, MethodCall) and instr.dest is not None:
-					sig = sig_map.get(instr.method_name)
-					if sig is not None:
-						if sig.declared_can_throw:
-							types[(fname, instr.dest)] = fnresult_from_signature(sig)
-						else:
-							ret_ty = sig.return_type_id if sig.return_type_id is not None else sig.return_type
-							if is_void(ret_ty):
-								continue
-							types[(fname, instr.dest)] = ret_ty
+								types[(fname, instr.dest)] = ret_ty
 				elif isinstance(instr, AssignSSA):
 					src_ty = types.get((fname, instr.src))
 					if src_ty is not None:

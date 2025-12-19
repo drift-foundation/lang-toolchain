@@ -1786,27 +1786,27 @@ class Checker:
 		can_throw_by_name: Mapping[str, bool] | None = None,
 	) -> Optional["CheckerTypeEnv"]:
 		"""
-			Assign TypeIds to SSA values using checker signatures and simple heuristics.
+		Assign TypeIds to SSA values using checker signatures and simple heuristics.
 
-			This is a minimal pass: it handles constants, ConstructResultOk/Err,
-			Call/MethodCall, AssignSSA copies, UnaryOp/BinaryOp propagation, and Phi
-			when incoming types agree. Unknowns default to `Unknown` TypeId.
+		This is a minimal pass: it handles constants, ConstructResultOk/Err, Call,
+		AssignSSA copies, UnaryOp/BinaryOp propagation, and Phi when incoming types
+		agree. Unknowns default to `Unknown` TypeId.
 
-			Can-throw note (important for long-term correctness):
-			- `FnSignature.declared_can_throw` is an *explicitness* signal (surface
-			  language intent), not the checker's effective "this function may throw"
-			  result.
-			- The stub checker computes the effective can-throw bit per function and
-			  stores it on `FnInfo.declared_can_throw`.
-			- Typed SSA interpretation (for throw checks and LLVM lowering) needs the
-			  *effective* can-throw bit so calls/returns are typed as the internal ABI
-			  `FnResult<T, Error>` only when a function actually can throw.
+		Can-throw note (important for long-term correctness):
+		- `FnSignature.declared_can_throw` is an *explicitness* signal (surface
+		  language intent), not the checker's effective "this function may throw"
+		  result.
+		- The stub checker computes the effective can-throw bit per function and
+		  stores it on `FnInfo.declared_can_throw`.
+		- Typed SSA interpretation (for throw checks and LLVM lowering) needs the
+		  *effective* can-throw bit so calls/returns are typed as the internal ABI
+		  `FnResult<T, Error>` only when a function actually can throw.
 
-			Pass `can_throw_by_name={fn_name: bool}` (usually from `FnInfo`) to keep
-			type inference aligned with the checker without mutating signatures.
+		Pass `can_throw_by_name={fn_name: bool}` (usually from `FnInfo`) to keep
+		type inference aligned with the checker without mutating signatures.
 
-			Returns None if no types were assigned.
-			"""
+		Returns None if no types were assigned.
+		"""
 		from lang2.driftc.checker.type_env_impl import CheckerTypeEnv
 		from lang2.driftc.stage2 import (
 			LoadLocal,
@@ -1826,7 +1826,6 @@ class Checker:
 			ResultOk,
 			ResultErr,
 			Call,
-			MethodCall,
 			ConstInt,
 			ConstBool,
 			ConstString,
@@ -2073,47 +2072,6 @@ class Checker:
 											continue
 								else:
 									dest_ty = self._unknown_type
-								if value_types.get((fn_name, dest)) != dest_ty:
-									value_types[(fn_name, dest)] = dest_ty
-									changed = True
-							elif isinstance(instr, MethodCall) and dest is not None:
-								# Intrinsic methods on FnResult: unwrap/unwrap_err/is_err
-								recv_ty = value_types.get((fn_name, instr.receiver))
-								if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.FNRESULT:
-									ok_ty, err_ty = self._type_table.get(recv_ty).param_types
-									if instr.method_name == "unwrap":
-										dest_ty = ok_ty
-									elif instr.method_name == "unwrap_err":
-										dest_ty = err_ty
-									elif instr.method_name == "is_err":
-										dest_ty = self._bool_type
-									else:
-										dest_ty = self._unknown_type
-								else:
-									cands = signatures_by_display_name.get(instr.method_name, [])
-									callee_sig = cands[0] if len(cands) == 1 else None
-									if callee_sig is not None:
-										if callee_sig.return_type_id is None:
-											rt_id, err_id = self._resolve_signature_types(callee_sig)
-											callee_sig.return_type_id = rt_id
-											callee_sig.error_type_id = err_id
-										# Method resolution is name-based; for can-throw typing,
-										# consult the effective mapping when available.
-										callee_can_throw = (
-											can_throw_by_name.get(callee_sig.name, False)
-											if can_throw_by_name is not None
-											else bool(callee_sig.declared_can_throw)
-										)
-										if callee_can_throw:
-											ok_ty = callee_sig.return_type_id or self._unknown_type
-											err_ty = callee_sig.error_type_id or self._error_type
-											dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
-										else:
-											dest_ty = callee_sig.return_type_id or self._unknown_type
-											if is_void_tid(dest_ty):
-												continue
-									else:
-										dest_ty = self._unknown_type
 								if value_types.get((fn_name, dest)) != dest_ty:
 									value_types[(fn_name, dest)] = dest_ty
 									changed = True
