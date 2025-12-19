@@ -1962,31 +1962,25 @@ class HIRToMIR:
 
 		We do not keep a distinct MIR `MethodCall` instruction in the v1 backend;
 		it complicates codegen and duplicates resolution logic. Instead we resolve
-		the method to a concrete symbol (e.g. `Point::move_by`) and call it with
-		the receiver as the first argument.
+		the method to a concrete symbol (e.g. `m.geom::Point::move_by`) and call it
+		with the receiver as the first argument.
 		"""
 		if getattr(expr, "kwargs", None):
 			raise AssertionError("keyword arguments for method calls are not supported in MIR lowering (checker bug)")
+
 		recv_ty = self._infer_expr_type(expr.receiver)
 		if recv_ty is None:
-			# Legacy/stub path: if we cannot infer the receiver type, keep the call
-			# as a generic MIR MethodCall so stage2 unit tests can still lower HIR.
-			#
-			# Production codegen requires signature-based resolution; the LLVM backend
-			# does not support generic MethodCall instructions.
-			receiver = self.lower_expr(expr.receiver)
-			arg_vals = [self.lower_expr(a) for a in expr.args]
-			dest = self.b.new_temp()
-			self.b.emit(M.MethodCall(dest=dest, receiver=receiver, method_name=expr.method_name, args=arg_vals))
-			return dest, expr.method_name
+			raise AssertionError(
+				"method receiver type unknown in MIR lowering (typecheck/inference bug): "
+				f"{expr.method_name}(...)"
+			)
+
 		resolved = self._resolve_method_symbol(recv_ty, expr.method_name)
 		if resolved is None:
-			# Same as above: keep unresolved method calls as generic MethodCall in MIR.
-			receiver = self.lower_expr(expr.receiver)
-			arg_vals = [self.lower_expr(a) for a in expr.args]
-			dest = self.b.new_temp()
-			self.b.emit(M.MethodCall(dest=dest, receiver=receiver, method_name=expr.method_name, args=arg_vals))
-			return dest, expr.method_name
+			raise AssertionError(
+				"unresolved method call reached MIR lowering (typecheck/resolution bug): "
+				f"{expr.method_name}(...)"
+			)
 		symbol_name, self_mode = resolved
 
 		# Compute the receiver argument according to the method's receiver mode.
@@ -2022,10 +2016,12 @@ class HIRToMIR:
 			dest = self.b.new_temp()
 			self.b.emit(M.Call(dest=dest, fn=symbol_name, args=arg_vals))
 			return dest, symbol_name
+
 		ret_tid = self._return_type_for_name(symbol_name)
 		if ret_tid is not None and self._type_table.is_void(ret_tid):
 			self.b.emit(M.Call(dest=None, fn=symbol_name, args=arg_vals))
 			return None, symbol_name
+
 		dest = self.b.new_temp()
 		self.b.emit(M.Call(dest=dest, fn=symbol_name, args=arg_vals))
 		return dest, symbol_name

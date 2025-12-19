@@ -31,7 +31,6 @@ from lang2.driftc.stage1 import (
 	HBreak,
 	HContinue,
 	HCall,
-	HMethodCall,
 	HDVInit,
 	HFString,
 	HFStringHole,
@@ -51,7 +50,6 @@ from lang2.driftc.stage2 import (
 	Return,
 	IfTerminator,
 	Goto,
-	MethodCall,
 	Call,
 	ConstructDV,
 )
@@ -125,11 +123,10 @@ def test_loop_and_break_continue():
 
 
 def test_calls_and_dv():
-	# f(1); obj.m(2); MyDV(3)
+	# f(1); MyDV(3)
 	block = HBlock(
 		statements=[
 			HExprStmt(expr=HCall(fn=HVar("f"), args=[HLiteralInt(1)])),
-			HExprStmt(expr=HMethodCall(receiver=HVar("obj"), method_name="m", args=[HLiteralInt(2)])),
 			HExprStmt(expr=HDVInit(dv_type_name="MyDV", args=[HLiteralInt(3)])),
 		]
 	)
@@ -137,7 +134,6 @@ def test_calls_and_dv():
 	entry = func.blocks[func.entry]
 	kinds = {type(instr) for instr in entry.instructions}
 	assert Call in kinds
-	assert MethodCall in kinds
 	assert ConstructDV in kinds
 
 
