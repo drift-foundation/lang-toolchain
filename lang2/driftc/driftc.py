@@ -1031,23 +1031,43 @@ def main(argv: list[str] | None = None) -> int:
 				exported_values.append(sym_name[len(prefix) :] if sym_name.startswith(prefix) else sym_name)
 			exported_values.sort()
 
-			exported_types = module_exports.get(mid, {}).get("types", []) if isinstance(module_exports, dict) else []
-			iface_obj = {"module_id": mid, "exports": {"values": exported_values, "types": list(exported_types)}}
-			iface_bytes = canonical_json_bytes(iface_obj)
-			iface_sha = sha256_hex(iface_bytes)
-			blobs_by_sha[iface_sha] = iface_bytes
-			blob_types[iface_sha] = 2
-			blob_names[iface_sha] = f"iface:{mid}"
-			manifest_blobs[f"sha256:{iface_sha}"] = {"type": "exports", "length": len(iface_bytes)}
-
+			exported_types = (
+				list(module_exports.get(mid, {}).get("types", [])) if isinstance(module_exports, dict) else []
+			)
 			payload_obj = encode_module_payload_v0(
 				module_id=mid,
 				type_table=checked_pkg.type_table or type_table,
 				signatures=per_module_sigs.get(mid, {}),
 				mir_funcs=per_module_mir.get(mid, {}),
 				exported_values=exported_values,
-				exported_types=list(exported_types),
+				exported_types=exported_types,
 			)
+
+			# Module interface (package interface table v0).
+			#
+			# This is the authoritative exported surface used by:
+			# - the workspace loader for import validation, and
+			# - driftc for ABI-boundary enforcement at call sites.
+			#
+			# Tightening rule: exported values must have corresponding signature
+			# entries, and the interface must match the payload exports exactly.
+			exported_syms = [f"{mid}::{v}" for v in exported_values]
+			payload_sigs = payload_obj.get("signatures") if isinstance(payload_obj, dict) else None
+			if not isinstance(payload_sigs, dict):
+				payload_sigs = {}
+			iface_obj = {
+				"format": "drift-module-interface",
+				"version": 0,
+				"module_id": mid,
+				"exports": payload_obj.get("exports", {"values": [], "types": []}),
+				"signatures": {sym: payload_sigs.get(sym) for sym in exported_syms},
+			}
+			iface_bytes = canonical_json_bytes(iface_obj)
+			iface_sha = sha256_hex(iface_bytes)
+			blobs_by_sha[iface_sha] = iface_bytes
+			blob_types[iface_sha] = 2
+			blob_names[iface_sha] = f"iface:{mid}"
+			manifest_blobs[f"sha256:{iface_sha}"] = {"type": "exports", "length": len(iface_bytes)}
 			payload_bytes = canonical_json_bytes(payload_obj)
 			payload_sha = sha256_hex(payload_bytes)
 			blobs_by_sha[payload_sha] = payload_bytes

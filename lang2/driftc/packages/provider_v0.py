@@ -58,25 +58,77 @@ def _validate_package_interfaces(pkg: LoadedPackage) -> None:
 	This is a package consumption guardrail: it rejects malformed/inconsistent
 	packages early, before imports are resolved or IR is embedded.
 	"""
+
+	def _err(msg: str) -> ValueError:
+		return ValueError(msg)
+
 	for mid, mod in pkg.modules_by_id.items():
+		if not isinstance(mod.interface, dict):
+			raise _err(f"module '{mid}' interface is not a JSON object")
+		if mod.interface.get("format") != "drift-module-interface":
+			raise _err(f"module '{mid}' has unsupported interface format")
+		if mod.interface.get("version") != 0:
+			raise _err(f"module '{mid}' has unsupported interface version")
+		if mod.interface.get("module_id") != mid:
+			raise _err(f"module '{mid}' interface module_id mismatch")
+
 		exports = mod.interface.get("exports")
 		if not isinstance(exports, dict):
-			continue
+			raise _err(f"module '{mid}' interface missing exports")
 		values = exports.get("values")
-		if not isinstance(values, list):
-			continue
-		sigs = mod.payload.get("signatures")
-		if not isinstance(sigs, dict):
-			sigs = {}
+		types = exports.get("types")
+		if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+			raise _err(f"module '{mid}' interface exports.values must be a list of strings")
+		if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+			raise _err(f"module '{mid}' interface exports.types must be a list of strings")
+		if len(set(values)) != len(values):
+			raise _err(f"module '{mid}' interface exports.values contains duplicates")
+		if len(set(types)) != len(types):
+			raise _err(f"module '{mid}' interface exports.types contains duplicates")
+
+		# Payload must agree with interface exports exactly.
+		payload_exports = mod.payload.get("exports")
+		if not isinstance(payload_exports, dict):
+			raise _err(f"module '{mid}' payload missing exports")
+		payload_values = payload_exports.get("values")
+		payload_types = payload_exports.get("types")
+		if not isinstance(payload_values, list) or not isinstance(payload_types, list):
+			raise _err(f"module '{mid}' payload exports must include values/types lists")
+		if sorted(payload_values) != sorted(values) or sorted(payload_types) != sorted(types):
+			raise _err(f"module '{mid}' interface exports do not match payload exports")
+
+		iface_sigs = mod.interface.get("signatures")
+		if not isinstance(iface_sigs, dict):
+			raise _err(f"module '{mid}' interface missing signatures table")
+
+		payload_sigs = mod.payload.get("signatures")
+		if not isinstance(payload_sigs, dict):
+			raise _err(f"module '{mid}' payload missing signatures table")
+
+		# Tightened ABI boundary invariants.
 		for v in values:
-			if not isinstance(v, str):
-				continue
 			sym = f"{mid}::{v}"
-			sd = sigs.get(sym)
-			if not isinstance(sd, dict) or not bool(sd.get("is_exported_entrypoint", False)):
-				raise ValueError(f"exported value '{v}' is missing exported entrypoint signature metadata")
-			if bool(sd.get("is_method", False)):
-				raise ValueError(f"exported value '{v}' must not be a method")
+			if "__impl" in sym:
+				raise _err(f"exported value '{v}' must not reference private symbols")
+			if sym not in iface_sigs:
+				raise _err(f"exported value '{v}' is missing interface signature metadata")
+			if sym not in payload_sigs:
+				raise _err(f"exported value '{v}' is missing payload signature metadata")
+			iface_sd = iface_sigs.get(sym)
+			payload_sd = payload_sigs.get(sym)
+			if not isinstance(iface_sd, dict) or not isinstance(payload_sd, dict):
+				raise _err(f"exported value '{v}' has invalid signature metadata")
+			if iface_sd != payload_sd:
+				raise _err(f"exported value '{v}' interface signature does not match payload signature")
+			if not bool(payload_sd.get("is_exported_entrypoint", False)):
+				raise _err(f"exported value '{v}' is missing exported entrypoint signature metadata")
+			if bool(payload_sd.get("is_method", False)):
+				raise _err(f"exported value '{v}' must not be a method")
+
+		# Forbid extra interface signature entries (strict interface).
+		extra = set(iface_sigs.keys()) - {f"{mid}::{v}" for v in values}
+		if extra:
+			raise _err(f"module '{mid}' interface contains non-export signature entries")
 
 
 @dataclass(frozen=True)

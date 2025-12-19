@@ -1800,6 +1800,13 @@ def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_
 	sd["is_exported_entrypoint"] = False
 	sigs[add_key] = sd
 	payload_obj["signatures"] = sigs
+	# Keep interface and payload signatures consistent; the interface table is
+	# strict and must match the payload.
+	iface_sigs = dict(iface_obj.get("signatures") or {})
+	iface_sd = dict(iface_sigs.get(add_key) or {})
+	iface_sd["is_exported_entrypoint"] = False
+	iface_sigs[add_key] = iface_sd
+	iface_obj["signatures"] = iface_sigs
 
 	iface_bytes = canonical_json_bytes(iface_obj)
 	payload_bytes = canonical_json_bytes(payload_obj)
@@ -1864,6 +1871,172 @@ fn main() returns Int {
 	assert payload["exit_code"] == 1
 	assert payload["diagnostics"][0]["phase"] == "package"
 	assert "exported value 'add' is missing exported entrypoint signature metadata" in payload["diagnostics"][0]["message"]
+
+
+def test_driftc_rejects_package_with_exported_value_missing_interface_signature(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	"""
+	Interface table tightening: exported values must have interface signature entries.
+	"""
+	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badiface2")
+	pkg = load_package_v0(pkg_path)
+	mod = pkg.modules_by_id["acme.badiface2"]
+
+	iface_obj = dict(mod.interface)
+	payload_obj = dict(mod.payload)
+
+	add_key = "acme.badiface2::add"
+	iface_sigs = dict(iface_obj.get("signatures") or {})
+	iface_sigs.pop(add_key, None)
+	iface_obj["signatures"] = iface_sigs
+
+	iface_bytes = canonical_json_bytes(iface_obj)
+	payload_bytes = canonical_json_bytes(payload_obj)
+	iface_sha = sha256_hex(iface_bytes)
+	payload_sha = sha256_hex(payload_bytes)
+	out_pkg = tmp_path / "badiface2.dmp"
+	write_dmir_pkg_v0(
+		out_pkg,
+		manifest_obj={
+			"format": "dmir-pkg",
+			"format_version": 0,
+			"unsigned": True,
+			"unstable_format": True,
+			"payload_kind": "provisional-dmir",
+			"payload_version": 0,
+			"modules": [
+				{
+					"module_id": "acme.badiface2",
+					"exports": iface_obj.get("exports", {}),
+					"interface_blob": f"sha256:{iface_sha}",
+					"payload_blob": f"sha256:{payload_sha}",
+				}
+			],
+			"blobs": {
+				f"sha256:{iface_sha}": {"type": "exports", "length": len(iface_bytes)},
+				f"sha256:{payload_sha}": {"type": "dmir", "length": len(payload_bytes)},
+			},
+		},
+		blobs={iface_sha: iface_bytes, payload_sha: payload_bytes},
+		blob_types={iface_sha: 2, payload_sha: 1},
+		blob_names={iface_sha: "iface:acme.badiface2", payload_sha: "dmir:acme.badiface2"},
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+from acme.badiface2 import add
+
+fn main() returns Int {
+	return add(40, 2)
+}
+""".lstrip(),
+	)
+	rc, payload = _run_driftc_json(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0
+	assert payload["exit_code"] == 1
+	assert payload["diagnostics"][0]["phase"] == "package"
+	assert "missing interface signature metadata" in payload["diagnostics"][0]["message"]
+
+
+def test_driftc_rejects_package_with_exports_mismatch_between_interface_and_payload(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	"""
+	Interface table tightening: interface exports must match payload exports exactly.
+	"""
+	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badiface3")
+	pkg = load_package_v0(pkg_path)
+	mod = pkg.modules_by_id["acme.badiface3"]
+
+	iface_obj = dict(mod.interface)
+	payload_obj = dict(mod.payload)
+
+	# Remove an exported value from the interface, leaving payload unchanged.
+	exports = dict(iface_obj.get("exports") or {})
+	values = list(exports.get("values") or [])
+	values = [v for v in values if v != "add"]
+	exports["values"] = values
+	iface_obj["exports"] = exports
+	# Also keep interface signature table consistent with its exports.
+	iface_sigs = dict(iface_obj.get("signatures") or {})
+	iface_sigs.pop("acme.badiface3::add", None)
+	iface_obj["signatures"] = iface_sigs
+
+	iface_bytes = canonical_json_bytes(iface_obj)
+	payload_bytes = canonical_json_bytes(payload_obj)
+	iface_sha = sha256_hex(iface_bytes)
+	payload_sha = sha256_hex(payload_bytes)
+	out_pkg = tmp_path / "badiface3.dmp"
+	write_dmir_pkg_v0(
+		out_pkg,
+		manifest_obj={
+			"format": "dmir-pkg",
+			"format_version": 0,
+			"unsigned": True,
+			"unstable_format": True,
+			"payload_kind": "provisional-dmir",
+			"payload_version": 0,
+			"modules": [
+				{
+					"module_id": "acme.badiface3",
+					"exports": iface_obj.get("exports", {}),
+					"interface_blob": f"sha256:{iface_sha}",
+					"payload_blob": f"sha256:{payload_sha}",
+				}
+			],
+			"blobs": {
+				f"sha256:{iface_sha}": {"type": "exports", "length": len(iface_bytes)},
+				f"sha256:{payload_sha}": {"type": "dmir", "length": len(payload_bytes)},
+			},
+		},
+		blobs={iface_sha: iface_bytes, payload_sha: payload_bytes},
+		blob_types={iface_sha: 2, payload_sha: 1},
+		blob_names={iface_sha: "iface:acme.badiface3", payload_sha: "dmir:acme.badiface3"},
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+from acme.badiface3 import add
+
+fn main() returns Int {
+	return add(40, 2)
+}
+""".lstrip(),
+	)
+	rc, payload = _run_driftc_json(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0
+	assert payload["exit_code"] == 1
+	assert payload["diagnostics"][0]["phase"] == "package"
+	assert "interface exports do not match payload exports" in payload["diagnostics"][0]["message"]
 
 
 def test_driftc_require_signatures_rejects_unsigned_packages(tmp_path: Path) -> None:
