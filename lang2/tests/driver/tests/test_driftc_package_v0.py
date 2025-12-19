@@ -1219,7 +1219,8 @@ fn main() returns Int {
 	)
 	assert rc != 0
 	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "no valid signatures" in payload["diagnostics"][0]["message"]
+	msg = str(payload["diagnostics"][0]["message"])
+	assert ("no valid signatures" in msg) or ("revoked" in msg.lower())
 
 
 def test_driftc_accepts_if_any_signature_entry_is_valid(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

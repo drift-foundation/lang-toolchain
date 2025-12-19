@@ -127,7 +127,11 @@ def load_trust_store_json(path: Path) -> TrustStore:
 	revoked_kids: set[str] = set()
 	revoked_obj = obj.get("revoked") or []
 	if isinstance(revoked_obj, list):
+		# Legacy v0 shape: "revoked": ["<kid>", ...]
 		revoked_kids = {str(k) for k in revoked_obj if isinstance(k, str)}
+	elif isinstance(revoked_obj, dict):
+		# Preferred v0 shape used by drift tooling: "revoked": { "<kid>": {...}, ... }
+		revoked_kids = {str(k) for k in revoked_obj.keys() if isinstance(k, str)}
 
 	return TrustStore(keys_by_kid=keys_by_kid, allowed_kids_by_namespace=allowed, revoked_kids=revoked_kids)
 
@@ -147,4 +151,3 @@ def merge_trust_stores(primary: TrustStore, secondary: TrustStore) -> TrustStore
 		allowed.setdefault(ns, set()).update(kids)
 	revoked = set(secondary.revoked_kids) | set(primary.revoked_kids)
 	return TrustStore(keys_by_kid=keys, allowed_kids_by_namespace=allowed, revoked_kids=revoked)
-

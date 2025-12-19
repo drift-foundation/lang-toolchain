@@ -187,10 +187,14 @@ def verify_package_signatures(
 
 	# Verify signatures and collect the set of verified kids.
 	verified_kids: dict[str, str] = {}  # kid -> pubkey source ("trust"|"sidecar")
+	seen_ed25519 = 0
+	seen_revoked_kids: set[str] = set()
 	for entry in sf.signatures:
 		if entry.algo != "ed25519":
 			continue
+		seen_ed25519 += 1
 		if entry.kid in trust.revoked_kids:
+			seen_revoked_kids.add(entry.kid)
 			continue
 		pub_raw = None
 		pub_source = "none"
@@ -215,6 +219,11 @@ def verify_package_signatures(
 			verified_kids[entry.kid] = pub_source
 
 	if not verified_kids:
+		# Provide a clearer error when the sidecar is present but all candidate
+		# signatures are revoked by the local trust store.
+		if seen_ed25519 > 0 and len(seen_revoked_kids) == seen_ed25519:
+			k = sorted(seen_revoked_kids)[0]
+			raise ValueError(f"signature key '{k}' is revoked")
 		raise ValueError("no valid signatures for package")
 
 	# Enforce per-module namespace trust policy.
