@@ -1201,14 +1201,14 @@ class Checker:
 			return self._error_type
 		return resolve_opaque_type(val, self._type_table)
 
-	def _resolve_typeexpr(self, raw: object) -> TypeId:
+	def _resolve_typeexpr(self, raw: object, *, module_id: str | None = None) -> TypeId:
 		"""
 		Map a parser TypeExpr-like object (name/args) or simple string/tuple into a
 		TypeId using the shared TypeTable. This mirrors the resolver and is used for
 		declared local types. The len/cap rule (Array/String → Uint) is centralized
 		in the type resolver; this helper simply resolves declared type names.
 		"""
-		return resolve_opaque_type(raw, self._type_table)
+		return resolve_opaque_type(raw, self._type_table, module_id=module_id)
 
 	def _len_cap_result_type(self, subj_ty: TypeId) -> Optional[TypeId]:
 		"""Return Uint when length/capacity is requested on Array or String; otherwise None."""
@@ -1399,7 +1399,8 @@ class Checker:
 					walk_expr(stmt.value)
 					decl_ty: Optional[TypeId] = None
 					if getattr(stmt, "declared_type_expr", None) is not None:
-						decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
+						mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
+						decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
 					value_ty = ctx.infer(stmt.value)
 					# MVP: allow `Uint` locals to be initialized from an integer literal.
 					if (
@@ -1668,7 +1669,8 @@ class Checker:
 		if isinstance(stmt, H.HLet):
 			decl_ty = None
 			if getattr(stmt, "declared_type_expr", None) is not None:
-				decl_ty = self._resolve_typeexpr(stmt.declared_type_expr)
+				mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
+				decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
 			if is_void(decl_ty):
 				ctx._append_diag(
 					Diagnostic(

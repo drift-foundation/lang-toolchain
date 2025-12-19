@@ -1,0 +1,10 @@
+module main
+
+import a.geom as ag
+import b.geom as bg
+
+fn main() returns Int {
+	val p1: ag.Point = ag.make()
+	val p2: bg.Point = bg.make()
+	return p1.x + p2.x
+}

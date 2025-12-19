@@ -110,6 +110,21 @@ class TypeChecker:
 		visible_modules: Optional[Tuple[ModuleId, ...]] = None,
 		current_module: ModuleId = 0,
 	) -> TypeCheckResult:
+		# Best-effort current module id in canonical string form.
+		#
+		# This is required for correct module-scoped nominal type resolution
+		# (e.g., `Point(...)` inside module `a.geom` must refer to `a.geom:Point`
+		# even if another module also defines `Point`).
+		current_module_name: str | None = None
+		if call_signatures is not None and name in call_signatures:
+			current_module_name = getattr(call_signatures[name], "module", None)
+		if current_module_name is None and "::" in name:
+			parts = name.split("::")
+			if len(parts) >= 2:
+				current_module_name = parts[0]
+		if current_module_name is None:
+			current_module_name = "main"
+
 		scope_env: List[Dict[str, TypeId]] = [dict()]
 		scope_bindings: List[Dict[str, int]] = [dict()]
 		expr_types: Dict[int, TypeId] = {}
@@ -712,9 +727,19 @@ class TypeChecker:
 					# fires.
 					if expr.fn.name in ("swap", "replace"):
 						should_type_fn = False
-					is_struct_ctor = (
-						expr.fn.name in self.type_table.struct_schemas
-						and (call_signatures is None or expr.fn.name not in call_signatures)
+					struct_ctor_tid: TypeId | None = None
+					if "::" in expr.fn.name:
+						parts = expr.fn.name.split("::")
+						if len(parts) == 2:
+							struct_ctor_tid = self.type_table.get_nominal(
+								kind=TypeKind.STRUCT, module_id=parts[0], name=parts[1]
+							)
+					else:
+						struct_ctor_tid = self.type_table.get_nominal(
+							kind=TypeKind.STRUCT, module_id=current_module_name, name=expr.fn.name
+						) or self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=expr.fn.name)
+					is_struct_ctor = struct_ctor_tid is not None and (
+						call_signatures is None or expr.fn.name not in call_signatures
 					)
 					if is_struct_ctor:
 						should_type_fn = False
@@ -918,13 +943,32 @@ class TypeChecker:
 				# We only treat the call as a constructor when there is no known callable
 				# signature for the same name (to avoid ambiguity if user code later
 				# allows a free function named `Point`).
+				def _resolve_struct_ctor_type_id(name: str) -> TypeId | None:
+					# Module-qualified constructor calls are rewritten to `mod::Type`.
+					if "::" in name:
+						parts = name.split("::")
+						if len(parts) != 2:
+							return None
+						mod, tname = parts[0], parts[1]
+						return self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=tname)
+					# Unqualified constructor: resolve in the current module first.
+					local = self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=current_module_name, name=name)
+					if local is not None:
+						return local
+					# Fallback: accept only when the name is unique across all modules.
+					return self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+
+				struct_id: TypeId | None = None
+				struct_name: str | None = None
+				if isinstance(expr.fn, H.HVar):
+					struct_id = _resolve_struct_ctor_type_id(expr.fn.name)
+					struct_name = expr.fn.name
+
 				if (
 					(call_signatures is None or not (isinstance(expr.fn, H.HVar) and expr.fn.name in call_signatures))
 					and isinstance(expr.fn, H.HVar)
-					and expr.fn.name in self.type_table.struct_schemas
+					and struct_id is not None
 				):
-					struct_name = expr.fn.name
-					struct_id = self.type_table.ensure_named(struct_name)
 					struct_def = self.type_table.get(struct_id)
 					if struct_def.kind is not TypeKind.STRUCT:
 						diagnostics.append(
@@ -935,7 +979,7 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-					field_names = self.type_table.struct_schemas[struct_name][1]
+					field_names = list(struct_def.field_names or [])
 					field_types = list(struct_def.param_types)
 					if len(field_names) != len(field_types):
 						diagnostics.append(
@@ -1169,9 +1213,8 @@ class TypeChecker:
 							)
 							return record_expr(expr, self._unknown)
 						elem_ty = arr_def.param_types[0]
-						opt_base = self.type_table.ensure_named("Optional")
-						opt_def = self.type_table.get(opt_base)
-						if opt_def.kind is not TypeKind.VARIANT:
+						opt_base = self.type_table.get_variant_base(module_id="lang.core", name="Optional")
+						if opt_base is None:
 							diagnostics.append(
 								Diagnostic(
 									message="Optional<T> variant base is missing (compiler bug)",
@@ -1553,7 +1596,7 @@ class TypeChecker:
 				declared_ty: TypeId | None = None
 				if getattr(stmt, "declared_type_expr", None) is not None:
 					try:
-						declared_ty = resolve_opaque_type(stmt.declared_type_expr, self.type_table)
+						declared_ty = resolve_opaque_type(stmt.declared_type_expr, self.type_table, module_id=current_module_name)
 					except Exception:
 						declared_ty = None
 				# If the user provides a type annotation, treat it as the expected type

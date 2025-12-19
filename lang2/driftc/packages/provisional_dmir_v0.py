@@ -131,6 +131,7 @@ def encode_type_table(table: TypeTable) -> dict[str, Any]:
 			"kind": td.kind.name,
 			"name": td.name,
 			"param_types": list(td.param_types),
+			"module_id": td.module_id,
 			"ref_mut": td.ref_mut,
 			"field_names": list(td.field_names) if td.field_names is not None else None,
 		}
@@ -140,6 +141,7 @@ def encode_type_table(table: TypeTable) -> dict[str, Any]:
 			"name": expr.name,
 			"args": [_encode_generic_type_expr(a) for a in expr.args],
 			"param_index": expr.param_index,
+			"module_id": expr.module_id,
 		}
 
 	def _encode_variant_schema(schema: Any) -> dict[str, Any]:
@@ -147,6 +149,7 @@ def encode_type_table(table: TypeTable) -> dict[str, Any]:
 		# but we encode them manually so the payload stays stable even if we later
 		# refactor internal Python class names.
 		return {
+			"module_id": schema.module_id,
 			"name": schema.name,
 			"type_params": list(schema.type_params),
 			"arms": [
@@ -166,7 +169,17 @@ def encode_type_table(table: TypeTable) -> dict[str, Any]:
 		variant_schemas[str(base_id)] = _encode_variant_schema(table.variant_schemas[base_id])
 	return {
 		"defs": defs,
-		"struct_schemas": {k: v for k, v in sorted(table.struct_schemas.items())},
+		"struct_schemas": [
+			{
+				"module_id": key.module_id,
+				"name": key.name,
+				"fields": list(fields),
+			}
+			for key, (_n, fields) in sorted(
+				table.struct_schemas.items(),
+				key=lambda kv: ((kv[0].module_id or ""), kv[0].name),
+			)
+		],
 		"exception_schemas": {k: v for k, v in sorted(table.exception_schemas.items())},
 		"variant_schemas": variant_schemas,
 	}

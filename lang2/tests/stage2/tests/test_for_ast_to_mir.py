@@ -35,6 +35,7 @@ def test_for_ast_lowered_to_mir_cfg():
 	# Stage2 unit tests bypass the parser adapter, so we must seed the prelude
 	# `Optional<T>` variant that `for` desugaring relies on.
 	type_table.declare_variant(
+		"lang.core",
 		"Optional",
 		["T"],
 		[

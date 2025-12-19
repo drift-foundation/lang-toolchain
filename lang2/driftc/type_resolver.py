@@ -71,11 +71,11 @@ def resolve_program_signatures(
 			raw_ty = getattr(p, "type", None)
 			raw_params.append(raw_ty)
 			param_names.append(getattr(p, "name", f"p{len(param_names)}"))
-			param_type_ids.append(resolve_opaque_type(raw_ty, table))
+			param_type_ids.append(resolve_opaque_type(raw_ty, table, module_id=module_name))
 
 		# Return
 		raw_ret = getattr(decl, "return_type", None)
-		return_type_id = resolve_opaque_type(raw_ret, table)
+		return_type_id = resolve_opaque_type(raw_ret, table, module_id=module_name)
 		error_type_id = None
 		ret_def = table.get(return_type_id)
 		if ret_def.kind is TypeKind.FNRESULT and len(ret_def.param_types) >= 2:
@@ -90,7 +90,7 @@ def resolve_program_signatures(
 		self_mode = getattr(decl, "self_mode", None)
 		impl_target_type_id: TypeId | None = None
 		if is_method and getattr(decl, "impl_target", None) is not None:
-			impl_target_type_id = resolve_opaque_type(decl.impl_target, table)
+			impl_target_type_id = resolve_opaque_type(decl.impl_target, table, module_id=module_name)
 
 		signatures[name] = FnSignature(
 			name=name,

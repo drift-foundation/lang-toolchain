@@ -220,6 +220,20 @@ class HIRToMIR:
 			return True
 		return None
 
+	def _current_module_name(self) -> str:
+		"""
+		Best-effort current module id (string) for nominal type resolution.
+
+		This is used for module-scoped nominal types such as structs and variants.
+		"""
+		if self._fn_sig is not None and getattr(self._fn_sig, "module", None):
+			return str(self._fn_sig.module)
+		if "::" in self.b.func.name:
+			parts = self.b.func.name.split("::")
+			if len(parts) >= 2:
+				return parts[0]
+		return "main"
+
 	# --- Expression lowering ---
 
 	def _lower_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
@@ -688,12 +702,21 @@ class HIRToMIR:
 			#
 			# This only triggers when there is no function signature for the same
 			# name (to avoid ambiguity in older tests).
-			if name in getattr(self._type_table, "struct_schemas", {}) and name not in self._signatures:
-				struct_ty = self._type_table.ensure_named(name)
+			struct_ty: TypeId | None = None
+			cur_mod = self._current_module_name()
+			if "::" in name:
+				parts = name.split("::")
+				if len(parts) == 2:
+					struct_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=parts[0], name=parts[1])
+			else:
+				struct_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=cur_mod, name=name) or self._type_table.find_unique_nominal_by_name(
+					kind=TypeKind.STRUCT, name=name
+				)
+			if struct_ty is not None and name not in self._signatures:
 				struct_def = self._type_table.get(struct_ty)
 				if struct_def.kind is not TypeKind.STRUCT:
 					raise AssertionError("struct schema name resolved to non-STRUCT TypeId (checker bug)")
-				field_names = self._type_table.struct_schemas[name][1]
+				field_names = list(struct_def.field_names or [])
 				field_types = list(struct_def.param_types)
 				if len(field_names) != len(field_types):
 					raise AssertionError("struct schema/type mismatch reached MIR lowering (checker bug)")
@@ -916,7 +939,9 @@ class HIRToMIR:
 			self.b.emit(M.LoadRef(dest=idx_val, ptr=idx_ptr, inner_ty=idx_ty))
 
 			# Ensure Optional<T> exists and instantiate Optional<elem>.
-			opt_base = self._type_table.ensure_named("Optional")
+			opt_base = self._type_table.get_variant_base(module_id="lang.core", name="Optional")
+			if opt_base is None:
+				raise AssertionError("Optional<T> variant base is missing (compiler bug)")
 			opt_ty = self._type_table.ensure_instantiated(opt_base, [elem_ty])
 
 			# Hidden local to merge the Optional result.
@@ -1307,7 +1332,11 @@ class HIRToMIR:
 		declared_ty: TypeId | None = None
 		if getattr(stmt, "declared_type_expr", None) is not None:
 			try:
-				declared_ty = resolve_opaque_type(stmt.declared_type_expr, self._type_table)
+				declared_ty = resolve_opaque_type(
+					stmt.declared_type_expr,
+					self._type_table,
+					module_id=self._current_module_name(),
+				)
 			except Exception:
 				declared_ty = None
 		val = self.lower_expr(stmt.value, expected_type=declared_ty)
@@ -2191,8 +2220,18 @@ class HIRToMIR:
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			name = expr.fn.name
 			# Struct constructor call: result is the struct TypeId.
-			if name in getattr(self._type_table, "struct_schemas", {}):
-				return self._type_table.ensure_named(name)
+			struct_ty: TypeId | None = None
+			cur_mod = self._current_module_name()
+			if "::" in name:
+				parts = name.split("::")
+				if len(parts) == 2:
+					struct_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=parts[0], name=parts[1])
+			else:
+				struct_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=cur_mod, name=name) or self._type_table.find_unique_nominal_by_name(
+					kind=TypeKind.STRUCT, name=name
+				)
+			if struct_ty is not None:
+				return struct_ty
 			sig_ret = self._return_type_for_name(name)
 			if sig_ret is not None:
 				return sig_ret
@@ -2344,7 +2383,9 @@ class HIRToMIR:
 					if arr_def.kind is not TypeKind.ARRAY or not arr_def.param_types:
 						return None
 					elem_ty = arr_def.param_types[0]
-					opt_base = self._type_table.ensure_named("Optional")
+					opt_base = self._type_table.get_variant_base(module_id="lang.core", name="Optional")
+					if opt_base is None:
+						return None
 					return self._type_table.ensure_instantiated(opt_base, [elem_ty])
 			ret = self._return_type_for_name(expr.method_name)
 			if ret is not None:

@@ -67,7 +67,7 @@ def ensure_array_iter_struct(array_ty: TypeId, table: TypeTable) -> TypeId:
 	elem_ty = td.param_types[0]
 	key = type_key_for_typeid(elem_ty, table)
 	name = f"__ArrayIter_{key}"
-	struct_id = table.declare_struct(name, ["arr", "idx"])
+	struct_id = table.declare_struct("lang.core", name, ["arr", "idx"])
 	table.define_struct_fields(struct_id, [array_ty, table.ensure_int()])
 	return struct_id
 
@@ -83,4 +83,3 @@ __all__ = [
 	"is_array_iter_struct",
 	"type_key_for_typeid",
 ]
-

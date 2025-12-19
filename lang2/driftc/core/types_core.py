@@ -37,12 +37,33 @@ class TypeKind(Enum):
 
 
 @dataclass(frozen=True)
+class NominalKey:
+	"""
+	Canonical identity for a nominal (named) type.
+
+	For production correctness, user-defined nominal types are module-scoped.
+	That means `struct Point` declared in module `a.geom` is a different type
+	from `struct Point` declared in module `b.geom`, even though both share the
+	short name `Point`.
+
+	Builtins use `module_id=None` and are toolchain-owned.
+	"""
+
+	module_id: str | None
+	name: str
+	kind: TypeKind
+
+
+@dataclass(frozen=True)
 class TypeDef:
 	"""Definition of a type stored in the TypeTable."""
 
 	kind: TypeKind
 	name: str
 	param_types: List[TypeId]
+	# Module id for nominal types (STRUCT/VARIANT and any other module-scoped
+	# named types). Builtins use module_id=None.
+	module_id: str | None = None
 	ref_mut: bool | None = None  # only meaningful for TypeKind.REF
 	field_names: List[str] | None = None  # only meaningful for TypeKind.STRUCT
 
@@ -73,6 +94,7 @@ class VariantSchema:
 	evaluates field `GenericTypeExpr`s into concrete `TypeId`s.
 	"""
 
+	module_id: str
 	name: str
 	type_params: list[str]
 	arms: list[VariantArmSchema]
@@ -116,10 +138,9 @@ class TypeTable:
 	def __init__(self) -> None:
 		self._defs: Dict[TypeId, TypeDef] = {}
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"
-		# Nominal name → TypeId mapping. This ensures repeated references to the
-		# same user-defined type resolve to a single TypeId (critical for long-term
-		# correctness once structs/enums/modules are enabled).
-		self._named: Dict[str, TypeId] = {}
+		# Nominal key → TypeId mapping. This ensures repeated references to the
+		# same module-scoped user-defined type resolve to a single TypeId.
+		self._nominal: Dict[NominalKey, TypeId] = {}
 		# Seed well-known scalars if callers stash them here.
 		self._uint_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._int_type: TypeId | None = None  # type: ignore[var-annotated]
@@ -135,9 +156,9 @@ class TypeTable:
 		# - enforce exact coverage (no missing/unknown/duplicates)
 		# - attach attrs deterministically in lowering.
 		self.exception_schemas: dict[str, tuple[str, list[str]]] = {}
-		# Struct schemas keyed by nominal type name. Values are (name, [field_names]).
+		# Struct schemas keyed by nominal identity. Values are (name, [field_names]).
 		# Field types live in the STRUCT TypeDef itself.
-		self.struct_schemas: dict[str, tuple[str, list[str]]] = {}
+		self.struct_schemas: dict[NominalKey, tuple[str, list[str]]] = {}
 		# Variant schemas keyed by the *base* TypeId (declared name).
 		self.variant_schemas: dict[TypeId, VariantSchema] = {}
 		# Concrete instantiations keyed by the instantiated TypeId.
@@ -149,39 +170,70 @@ class TypeTable:
 		"""Register a scalar type (e.g., Int, Bool) and return its TypeId."""
 		return self._add(TypeKind.SCALAR, name, [])
 
-	def ensure_named(self, name: str) -> TypeId:
+	def ensure_named(self, name: str, *, module_id: str | None = None) -> TypeId:
 		"""
-		Return a stable TypeId for a nominal name.
+		Return a stable TypeId for a nominal scalar name.
 
 		This is used for user-defined type names that appear in annotations.
 		If the name has not been declared yet, we conservatively create a scalar
 		nominal type. Later, a richer kind (STRUCT/ENUM) may be declared under
 		that name; callers should prefer explicit `declare_struct` for structs.
 		"""
-		if name in self._named:
-			return self._named[name]
-		return self._add(TypeKind.SCALAR, name, [])
+		key = NominalKey(module_id=module_id, name=name, kind=TypeKind.SCALAR)
+		prev = self._nominal.get(key)
+		if prev is not None:
+			return prev
+		return self._add(TypeKind.SCALAR, name, [], module_id=module_id)
 
-	def declare_struct(self, name: str, field_names: List[str]) -> TypeId:
+	def get_nominal(self, *, kind: TypeKind, module_id: str | None, name: str) -> TypeId | None:
+		"""Return a nominal TypeId by identity, or None if not present."""
+		return self._nominal.get(NominalKey(module_id=module_id, name=name, kind=kind))
+
+	def require_nominal(self, *, kind: TypeKind, module_id: str | None, name: str) -> TypeId:
+		"""Return a nominal TypeId by identity, raising if missing."""
+		ty = self.get_nominal(kind=kind, module_id=module_id, name=name)
+		if ty is None:
+			raise ValueError(f"unknown nominal type {module_id or '<builtin>'}:{name} ({kind.name})")
+		return ty
+
+	def find_unique_nominal_by_name(self, *, kind: TypeKind, name: str) -> TypeId | None:
+		"""
+		Return the unique nominal TypeId matching (kind,name) across all modules.
+
+		This is a convenience for MVP call sites that do not yet thread module
+		context explicitly (e.g. local struct constructor typing in single-module
+		builds). If more than one module defines the same nominal name, this
+		returns None so callers can produce a clear “ambiguous; qualify it” error.
+		"""
+		found: TypeId | None = None
+		for key, tid in self._nominal.items():
+			if key.kind is kind and key.name == name:
+				if found is not None and found != tid:
+					return None
+				found = tid
+		return found
+
+	def declare_struct(self, module_id: str, name: str, field_names: List[str]) -> TypeId:
 		"""
 		Declare a struct nominal type with placeholder field types.
 
 		This supports recursive type references by first declaring all struct
 		names, then filling field types in a second pass via `define_struct_fields`.
 		"""
-		if name in self._named:
-			ty_id = self._named[name]
+		key = NominalKey(module_id=module_id, name=name, kind=TypeKind.STRUCT)
+		if key in self._nominal:
+			ty_id = self._nominal[key]
 			td = self.get(ty_id)
 			if td.kind is TypeKind.STRUCT:
 				return ty_id
 			raise ValueError(f"type name '{name}' already defined as {td.kind}")
 		unknown = self.ensure_unknown()
 		placeholder = [unknown for _ in field_names]
-		ty_id = self._add(TypeKind.STRUCT, name, placeholder, field_names=list(field_names))
-		self.struct_schemas[name] = (name, list(field_names))
+		ty_id = self._add(TypeKind.STRUCT, name, placeholder, field_names=list(field_names), module_id=module_id)
+		self.struct_schemas[key] = (name, list(field_names))
 		return ty_id
 
-	def declare_variant(self, name: str, type_params: list[str], arms: list[VariantArmSchema]) -> TypeId:
+	def declare_variant(self, module_id: str, name: str, type_params: list[str], arms: list[VariantArmSchema]) -> TypeId:
 		"""
 		Declare a variant nominal type (generic or non-generic).
 
@@ -192,15 +244,16 @@ class TypeTable:
 		concrete instantiation with zero type arguments, and is available via
 		`get_variant_instance(base_id)`.
 		"""
-		if name in self._named:
-			ty_id = self._named[name]
+		key = NominalKey(module_id=module_id, name=name, kind=TypeKind.VARIANT)
+		if key in self._nominal:
+			ty_id = self._nominal[key]
 			td = self.get(ty_id)
 			if td.kind is TypeKind.VARIANT:
 				return ty_id
 			raise ValueError(f"type name '{name}' already defined as {td.kind}")
 		# Base variant type. Note: base is named; instantiations are not.
-		base_id = self._add(TypeKind.VARIANT, name, [], register_named=True)
-		self.variant_schemas[base_id] = VariantSchema(name=name, type_params=list(type_params), arms=list(arms))
+		base_id = self._add(TypeKind.VARIANT, name, [], register_named=True, module_id=module_id)
+		self.variant_schemas[base_id] = VariantSchema(module_id=module_id, name=name, type_params=list(type_params), arms=list(arms))
 		return base_id
 
 	def ensure_instantiated(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
@@ -226,7 +279,16 @@ class TypeTable:
 		key = (base_id, tuple(type_args))
 		if key in self._instantiation_cache:
 			return self._instantiation_cache[key]
-		inst_id = self._add(TypeKind.VARIANT, schema.name, list(type_args), register_named=False)
+		# Concrete instantiations are not nominal (not registered in `_nominal`),
+		# but they still carry the originating module id for deterministic package
+		# encoding/linking and for clearer diagnostics.
+		inst_id = self._add(
+			TypeKind.VARIANT,
+			schema.name,
+			list(type_args),
+			register_named=False,
+			module_id=schema.module_id,
+		)
 		self._instantiation_cache[key] = inst_id
 		self._define_variant_instance(base_id, inst_id, list(type_args))
 		return inst_id
@@ -269,9 +331,18 @@ class TypeTable:
 		return self.variant_instances.get(ty)
 
 	def is_variant_base_named(self, name: str) -> bool:
-		"""Return True if `name` refers to a declared variant base."""
-		ty = self._named.get(name)
-		return bool(ty is not None and ty in self.variant_schemas)
+		"""Return True if `name` refers to any declared variant base (any module)."""
+		for key, tid in self._nominal.items():
+			if key.kind is TypeKind.VARIANT and key.name == name and tid in self.variant_schemas:
+				return True
+		return False
+
+	def get_variant_base(self, *, module_id: str, name: str) -> TypeId | None:
+		"""Return the base TypeId for a declared variant in `module_id`, if present."""
+		tid = self.get_nominal(kind=TypeKind.VARIANT, module_id=module_id, name=name)
+		if tid is None:
+			return None
+		return tid if tid in self.variant_schemas else None
 
 	def _define_variant_instance(self, base_id: TypeId, inst_id: TypeId, type_args: list[TypeId]) -> None:
 		"""
@@ -285,7 +356,7 @@ class TypeTable:
 		by_name: dict[str, VariantArmInstance] = {}
 		for tag, arm in enumerate(schema.arms):
 			field_names = [f.name for f in arm.fields]
-			field_types = [self._eval_generic_type_expr(f.type_expr, type_args) for f in arm.fields]
+			field_types = [self._eval_generic_type_expr(f.type_expr, type_args, module_id=schema.module_id) for f in arm.fields]
 			arm_inst = VariantArmInstance(tag=tag, name=arm.name, field_names=field_names, field_types=field_types)
 			arms.append(arm_inst)
 			by_name[arm.name] = arm_inst
@@ -296,7 +367,7 @@ class TypeTable:
 			arms_by_name=by_name,
 		)
 
-	def _eval_generic_type_expr(self, expr: GenericTypeExpr, type_args: list[TypeId]) -> TypeId:
+	def _eval_generic_type_expr(self, expr: GenericTypeExpr, type_args: list[TypeId], *, module_id: str) -> TypeId:
 		"""
 		Evaluate a schema-time `GenericTypeExpr` into a concrete `TypeId`.
 
@@ -314,17 +385,46 @@ class TypeTable:
 				return self.ensure_unknown()
 			return type_args[idx]
 		name = expr.name
+		# Builtins are toolchain-owned and are not module-scoped.
+		if name == "Int":
+			return self.ensure_int()
+		if name == "Uint":
+			return self.ensure_uint()
+		if name == "Bool":
+			return self.ensure_bool()
+		if name == "Float":
+			return self.ensure_float()
+		if name == "String":
+			return self.ensure_string()
+		if name == "Void":
+			return self.ensure_void()
+		if name == "Error":
+			return self.ensure_error()
+		if name == "DiagnosticValue":
+			return self.ensure_diagnostic_value()
+		if name == "Unknown":
+			return self.ensure_unknown()
 		# Reference constructors as produced by the parser (`&` / `&mut`).
 		if name in {"&", "&mut"} and expr.args:
-			inner = self._eval_generic_type_expr(expr.args[0], type_args)
+			inner = self._eval_generic_type_expr(expr.args[0], type_args, module_id=module_id)
 			return self.ensure_ref_mut(inner) if name == "&mut" else self.ensure_ref(inner)
 		if name == "Array" and expr.args:
-			elem = self._eval_generic_type_expr(expr.args[0], type_args)
+			elem = self._eval_generic_type_expr(expr.args[0], type_args, module_id=module_id)
 			return self.new_array(elem)
 		# Named nominal types: either a simple name, or a generic instantiation.
-		base_id = self.ensure_named(name)
+		#
+		# The `module_id` on `GenericTypeExpr` is a resolved canonical origin module
+		# for imported/qualified names. If absent, the name is unqualified and is
+		# resolved in the declaring module scope (`module_id` argument).
+		origin_mod = expr.module_id or module_id
+		# MVP supports structs and variants as nominal names.
+		base_id = (
+			self.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
+			or self.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
+			or self.ensure_named(name, module_id=origin_mod)
+		)
 		if expr.args:
-			arg_ids = [self._eval_generic_type_expr(a, type_args) for a in expr.args]
+			arg_ids = [self._eval_generic_type_expr(a, type_args, module_id=module_id) for a in expr.args]
 			# Only variants are instantiable in MVP.
 			if base_id in self.variant_schemas:
 				return self.ensure_instantiated(base_id, arg_ids)
@@ -341,6 +441,7 @@ class TypeTable:
 			kind=TypeKind.STRUCT,
 			name=td.name,
 			param_types=list(field_types),
+			module_id=td.module_id,
 			ref_mut=None,
 			field_names=list(td.field_names),
 		)
@@ -514,6 +615,7 @@ class TypeTable:
 		field_names: List[str] | None = None,
 		*,
 		register_named: bool | None = None,
+		module_id: str | None = None,
 	) -> TypeId:
 		ty_id = self._next_id
 		self._next_id += 1
@@ -521,13 +623,15 @@ class TypeTable:
 			kind=kind,
 			name=name,
 			param_types=list(params),
+			module_id=module_id,
 			ref_mut=ref_mut if kind is TypeKind.REF else None,
 			field_names=list(field_names) if field_names is not None else None,
 		)
 		if register_named is None:
 			register_named = kind in (TypeKind.SCALAR, TypeKind.STRUCT)
 		if register_named:
-			self._named.setdefault(name, ty_id)
+			key = NominalKey(module_id=module_id, name=name, kind=kind)
+			self._nominal.setdefault(key, ty_id)
 		return ty_id
 
 	def get(self, ty: TypeId) -> TypeDef:
@@ -542,6 +646,7 @@ class TypeTable:
 __all__ = [
 	"TypeId",
 	"TypeKind",
+	"NominalKey",
 	"TypeDef",
 	"TypeTable",
 	"VariantFieldSchema",

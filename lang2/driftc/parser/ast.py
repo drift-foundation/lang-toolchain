@@ -48,10 +48,19 @@ class TypeExpr:
     #   val p: x.Point = ...
     #
     # The compiler resolves `module_alias` using per-file import bindings and
-    # then rewrites the type reference to the unqualified nominal name (Point).
-    # This is an MVP compromise while type identity is still global-by-name
-    # across modules; cross-module type collisions are rejected earlier.
+    # then rewrites the type reference to carry a canonical `module_id`.
+    #
+    # Note: once nominal type identity is module-scoped, the compiler must not
+    # discard module qualification. Instead it records the resolved module id in
+    # `module_id` so later phases can resolve `(module_id, name)` deterministically.
     module_alias: Optional[str] = None
+    # Canonical resolved module id for this type reference (best-effort).
+    #
+    # For unqualified type names this is usually the current module id, but it
+    # can also refer to an imported type (`from other.mod import Point`).
+    #
+    # Builtins use module_id=None.
+    module_id: Optional[str] = None
     # Source location of the type expression (best-effort).
     #
     # This enables source-anchored diagnostics for type-level module qualifiers

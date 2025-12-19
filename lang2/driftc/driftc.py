@@ -205,9 +205,9 @@ def compile_stubbed_funcs(
 			shared_type_table = TypeTable()
 		for sig in signatures.values():
 			if sig.return_type_id is None and sig.return_type is not None:
-				sig.return_type_id = resolve_opaque_type(sig.return_type, shared_type_table)
+				sig.return_type_id = resolve_opaque_type(sig.return_type, shared_type_table, module_id=getattr(sig, "module", None))
 			if sig.param_type_ids is None and sig.param_types is not None:
-				sig.param_type_ids = [resolve_opaque_type(p, shared_type_table) for p in sig.param_types]
+				sig.param_type_ids = [resolve_opaque_type(p, shared_type_table, module_id=getattr(sig, "module", None)) for p in sig.param_types]
 
 	# Stage “checker”: obtain declared_can_throw from the checker stub so the
 	# driver path mirrors the real compiler layering once a proper checker exists.

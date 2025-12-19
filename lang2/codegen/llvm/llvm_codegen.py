@@ -422,13 +422,24 @@ class LlvmModuleBuilder:
 		if td.kind is not TypeKind.STRUCT:
 			raise AssertionError("ensure_struct_type called with non-STRUCT TypeId")
 		name = td.name
-		if name in self._struct_types_by_name:
-			return self._struct_types_by_name[name]
-		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
-		llvm_name = f"%Struct_{safe}"
+		mod = td.module_id or ""
+		cache_key = f"{mod}::{name}"
+		if cache_key in self._struct_types_by_name:
+			return self._struct_types_by_name[cache_key]
+		def _mangle(seg: str) -> str:
+			out = []
+			for ch in seg:
+				if ch.isalnum() or ch == "_":
+					out.append(ch)
+				else:
+					out.append(f"_{ord(ch):02X}")
+			return "".join(out) if out else "main"
+		safe_mod = _mangle(mod)
+		safe_name = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+		llvm_name = f"%Struct_{safe_mod}_{safe_name}"
 		# Insert into cache before mapping fields to allow self-recursive pointer
 		# shapes like `struct Node { next: &Node }` to refer to the named type.
-		self._struct_types_by_name[name] = llvm_name
+		self._struct_types_by_name[cache_key] = llvm_name
 		field_lltys = [map_type(ft) for ft in td.param_types]
 		body = ", ".join(field_lltys) if field_lltys else ""
 		self.type_decls.append(f"{llvm_name} = type {{ {body} }}")
@@ -2036,8 +2047,10 @@ class _FuncBuilder:
 			prefix = "RefMut" if td.ref_mut else "Ref"
 			return f"{prefix}_{inner_key}"
 		if td.kind is TypeKind.STRUCT:
+			mod = td.module_id or ""
+			safe_mod = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in mod) or "main"
 			safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in td.name)
-			return f"Struct_{safe}"
+			return f"Struct_{safe_mod}_{safe}"
 		if td.kind is TypeKind.VARIANT:
 			# Variant TypeIds are unique per instantiation; include the TypeId to
 			# avoid collisions between different instantiations with the same name.

@@ -45,6 +45,14 @@ class GenericTypeExpr:
 	name: str = ""
 	args: List["GenericTypeExpr"] = field(default_factory=list)
 	param_index: Optional[int] = None
+	# Optional canonical module id for nominal (named) types.
+	#
+	# This is required for production correctness once nominal type identity is
+	# module-scoped. For example, `Point` imported from module `a.geom` must be
+	# distinct from `Point` declared in module `b.geom`.
+	#
+	# Builtins use `module_id=None`.
+	module_id: Optional[str] = None
 
 	@staticmethod
 	def param(idx: int) -> "GenericTypeExpr":
@@ -52,10 +60,14 @@ class GenericTypeExpr:
 		return GenericTypeExpr(param_index=int(idx))
 
 	@staticmethod
-	def named(name: str, args: List["GenericTypeExpr"] | None = None) -> "GenericTypeExpr":
+	def named(
+		name: str,
+		args: List["GenericTypeExpr"] | None = None,
+		*,
+		module_id: Optional[str] = None,
+	) -> "GenericTypeExpr":
 		"""Construct a named type node (possibly with type arguments)."""
-		return GenericTypeExpr(name=str(name), args=list(args or []), param_index=None)
+		return GenericTypeExpr(name=str(name), args=list(args or []), param_index=None, module_id=module_id)
 
 
 __all__ = ["GenericTypeExpr"]
-

@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.types_core import (
+	NominalKey,
 	TypeDef,
 	TypeId,
 	TypeKind,
@@ -57,6 +58,7 @@ class DecodedTypeDef:
 	kind: TypeKind
 	name: str
 	param_types: list[TypeId]
+	module_id: str | None
 	ref_mut: bool | None
 	field_names: list[str] | None
 
@@ -64,7 +66,7 @@ class DecodedTypeDef:
 @dataclass(frozen=True)
 class DecodedTypeTable:
 	defs: dict[TypeId, DecodedTypeDef]
-	struct_schemas: dict[str, tuple[str, list[str]]]
+	struct_schemas: dict[NominalKey, tuple[str, list[str]]]
 	exception_schemas: dict[str, tuple[str, list[str]]]
 	variant_schemas: dict[TypeId, VariantSchema]
 
@@ -85,6 +87,9 @@ def _decode_generic_type_expr(obj: Any) -> GenericTypeExpr:
 	name = obj.get("name")
 	if not isinstance(name, str):
 		raise ValueError("invalid GenericTypeExpr.name")
+	module_id = obj.get("module_id")
+	if module_id is not None and not isinstance(module_id, str):
+		raise ValueError("invalid GenericTypeExpr.module_id")
 	args_obj = obj.get("args")
 	args: list[GenericTypeExpr] = []
 	if args_obj is not None:
@@ -94,7 +99,7 @@ def _decode_generic_type_expr(obj: Any) -> GenericTypeExpr:
 	param_index = obj.get("param_index")
 	if param_index is not None and not isinstance(param_index, int):
 		raise ValueError("invalid GenericTypeExpr.param_index")
-	return GenericTypeExpr(name=name, args=args, param_index=param_index)
+	return GenericTypeExpr(name=name, args=args, param_index=param_index, module_id=module_id)
 
 
 def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
@@ -115,10 +120,13 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		kind_s = td_obj.get("kind")
 		name = td_obj.get("name")
 		param_types = td_obj.get("param_types")
+		module_id = td_obj.get("module_id")
 		ref_mut = td_obj.get("ref_mut")
 		field_names = td_obj.get("field_names")
 		if not isinstance(kind_s, str) or not isinstance(name, str) or not isinstance(param_types, list):
 			raise ValueError("invalid type_table.defs entry fields")
+		if module_id is not None and not isinstance(module_id, str):
+			raise ValueError("invalid type_table.defs module_id")
 		if ref_mut is not None and not isinstance(ref_mut, bool):
 			raise ValueError("invalid type_table.defs ref_mut")
 		if field_names is not None and not isinstance(field_names, list):
@@ -127,23 +135,28 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 			kind=_decode_kind(kind_s),
 			name=name,
 			param_types=[int(x) for x in param_types],
+			module_id=module_id,
 			ref_mut=ref_mut,
 			field_names=[str(x) for x in field_names] if field_names is not None else None,
 		)
 
 	struct_schemas_obj = obj.get("struct_schemas")
-	struct_schemas: dict[str, tuple[str, list[str]]] = {}
+	struct_schemas: dict[NominalKey, tuple[str, list[str]]] = {}
 	if struct_schemas_obj is not None:
-		if not isinstance(struct_schemas_obj, dict):
+		if not isinstance(struct_schemas_obj, list):
 			raise ValueError("invalid type_table.struct_schemas")
-		for k, v in struct_schemas_obj.items():
-			if not isinstance(k, str) or not isinstance(v, list) or len(v) != 2:
+		for entry in struct_schemas_obj:
+			if not isinstance(entry, dict):
 				raise ValueError("invalid struct_schemas entry")
-			name = str(v[0])
-			fields = v[1]
+			module_id = entry.get("module_id")
+			name = entry.get("name")
+			fields = entry.get("fields")
+			if not isinstance(module_id, str) or not isinstance(name, str) or not isinstance(fields, list):
+				raise ValueError("invalid struct_schemas entry fields")
 			if not isinstance(fields, list):
 				raise ValueError("invalid struct_schemas field list")
-			struct_schemas[k] = (name, [str(x) for x in fields])
+			key = NominalKey(module_id=module_id, name=name, kind=TypeKind.STRUCT)
+			struct_schemas[key] = (name, [str(x) for x in fields])
 
 	exc_schemas_obj = obj.get("exception_schemas")
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
@@ -168,10 +181,11 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 			base_id = int(base_id_s)
 			if not isinstance(schema_obj, dict):
 				raise ValueError("invalid variant schema entry")
+			schema_mid = schema_obj.get("module_id")
 			name = schema_obj.get("name")
 			type_params = schema_obj.get("type_params")
 			arms_obj = schema_obj.get("arms")
-			if not isinstance(name, str) or not isinstance(type_params, list) or not isinstance(arms_obj, list):
+			if not isinstance(schema_mid, str) or not isinstance(name, str) or not isinstance(type_params, list) or not isinstance(arms_obj, list):
 				raise ValueError("invalid variant schema fields")
 			arms: list[VariantArmSchema] = []
 			for arm_obj in arms_obj:
@@ -191,7 +205,7 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 						raise ValueError("invalid variant field name")
 					fields.append(VariantFieldSchema(name=fname, type_expr=_decode_generic_type_expr(fty)))
 				arms.append(VariantArmSchema(name=arm_name, fields=fields))
-			variant_schemas[base_id] = VariantSchema(name=name, type_params=[str(x) for x in type_params], arms=arms)
+			variant_schemas[base_id] = VariantSchema(module_id=schema_mid, name=name, type_params=[str(x) for x in type_params], arms=arms)
 
 	return DecodedTypeTable(
 		defs=defs,
@@ -257,45 +271,49 @@ def import_type_table_and_build_typeid_map(pkg_tt_obj: Mapping[str, Any], host: 
 
 	# Declare/validate structs deterministically by name.
 	# Find the package TypeId for each declared struct name.
-	pkg_struct_ids: dict[str, TypeId] = {}
+	pkg_struct_ids: dict[NominalKey, TypeId] = {}
 	for tid, td in pkg.defs.items():
 		if td.kind is TypeKind.STRUCT:
-			pkg_struct_ids[td.name] = tid
-	for name, (_n, field_names) in sorted(pkg.struct_schemas.items()):
-		pkg_tid = pkg_struct_ids.get(name)
+			if td.module_id is None:
+				raise ValueError(f"package STRUCT '{td.name}' missing module_id")
+			key = NominalKey(module_id=td.module_id, name=td.name, kind=TypeKind.STRUCT)
+			pkg_struct_ids[key] = tid
+	for key, (_n, field_names) in sorted(pkg.struct_schemas.items(), key=lambda kv: ((kv[0].module_id or ""), kv[0].name)):
+		pkg_tid = pkg_struct_ids.get(key)
 		if pkg_tid is None:
-			raise ValueError(f"struct schema '{name}' missing STRUCT TypeDef in package type table")
+			raise ValueError(f"struct schema '{key.module_id}:{key.name}' missing STRUCT TypeDef in package type table")
 		if pkg_tid in tid_map:
 			continue
-		if name in host.struct_schemas:
+		if key in host.struct_schemas:
 			# Declared in host already; verify schema shape matches.
-			h_name, h_fields = host.struct_schemas[name]
+			h_name, h_fields = host.struct_schemas[key]
 			if h_fields != field_names:
-				raise ValueError(f"struct field name mismatch for '{name}'")
-			host_tid = host.ensure_named(name)
+				raise ValueError(f"struct field name mismatch for '{key.module_id}:{key.name}'")
+			host_tid = host.require_nominal(kind=TypeKind.STRUCT, module_id=key.module_id, name=key.name)
 			if host.get(host_tid).kind is not TypeKind.STRUCT:
-				raise ValueError(f"type name '{name}' already defined as {host.get(host_tid).kind}")
+				raise ValueError(f"type name '{key.module_id}:{key.name}' already defined as {host.get(host_tid).kind}")
 			tid_map[pkg_tid] = host_tid
 		else:
-			host_tid = host.declare_struct(name, list(field_names))
+			host_tid = host.declare_struct(key.module_id or "", key.name, list(field_names))
 			tid_map[pkg_tid] = host_tid
 
 	# Declare/validate variant schemas deterministically by name.
-	pkg_variant_ids: dict[str, TypeId] = {}
+	pkg_variant_ids: dict[NominalKey, TypeId] = {}
 	for base_id, schema in pkg.variant_schemas.items():
-		pkg_variant_ids[schema.name] = base_id
-	for base_id, schema in sorted(pkg.variant_schemas.items(), key=lambda kv: kv[1].name):
+		key = NominalKey(module_id=schema.module_id, name=schema.name, kind=TypeKind.VARIANT)
+		pkg_variant_ids[key] = base_id
+	for base_id, schema in sorted(pkg.variant_schemas.items(), key=lambda kv: (kv[1].module_id, kv[1].name)):
 		if base_id in tid_map:
 			continue
-		name = schema.name
-		if host.is_variant_base_named(name):
-			host_base = host.ensure_named(name)
+		key = NominalKey(module_id=schema.module_id, name=schema.name, kind=TypeKind.VARIANT)
+		host_base = host.get_variant_base(module_id=schema.module_id, name=schema.name)
+		if host_base is not None:
 			host_schema = host.get_variant_schema(host_base)
 			if host_schema is None or host_schema != schema:
-				raise ValueError(f"variant schema collision for '{name}'")
+				raise ValueError(f"variant schema collision for '{schema.module_id}:{schema.name}'")
 			tid_map[base_id] = host_base
 		else:
-			host_base = host.declare_variant(name, schema.type_params, schema.arms)
+			host_base = host.declare_variant(schema.module_id, schema.name, schema.type_params, schema.arms)
 			tid_map[base_id] = host_base
 
 	# Helper: map any remaining TypeId recursively.
@@ -313,15 +331,19 @@ def import_type_table_and_build_typeid_map(pkg_tt_obj: Mapping[str, Any], host: 
 			# Must have been declared in the struct schema pass.
 			host_tid = tid_map.get(tid)
 			if host_tid is None:
-				host_tid = host.ensure_named(td.name)
+				if td.module_id is None:
+					raise ValueError(f"package STRUCT '{td.name}' missing module_id")
+				host_tid = host.require_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
 				tid_map[tid] = host_tid
 			return host_tid
 		if td.kind is TypeKind.VARIANT:
 			# Variant bases were declared in the schema pass; instantiations carry
 			# type args in `param_types`.
-			base = host.ensure_named(td.name)
+			if td.module_id is None:
+				raise ValueError(f"package VARIANT '{td.name}' missing module_id")
+			base = host.require_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
 			if base not in host.variant_schemas:
-				raise ValueError(f"variant '{td.name}' not declared in host after import")
+				raise ValueError(f"variant '{td.module_id}:{td.name}' not declared in host after import")
 			if td.param_types:
 				args = [map_tid(x) for x in td.param_types]
 				inst = host.ensure_instantiated(base, args)
@@ -360,7 +382,7 @@ def import_type_table_and_build_typeid_map(pkg_tt_obj: Mapping[str, Any], host: 
 			return out
 		if td.kind is TypeKind.SCALAR:
 			# Unknown nominal scalar: keep as named scalar.
-			out = host.ensure_named(td.name)
+			out = host.ensure_named(td.name, module_id=td.module_id)
 			tid_map[tid] = out
 			return out
 		raise ValueError(f"unsupported package type kind {td.kind} for TypeId {tid}")
@@ -370,13 +392,13 @@ def import_type_table_and_build_typeid_map(pkg_tt_obj: Mapping[str, Any], host: 
 		map_tid(tid)
 
 	# Finalize struct field types now that all referenced types can be mapped.
-	for name, pkg_tid in sorted(pkg_struct_ids.items()):
+	for key, pkg_tid in sorted(pkg_struct_ids.items(), key=lambda kv: ((kv[0].module_id or ""), kv[0].name)):
 		host_tid = tid_map[pkg_tid]
 		pkg_def = pkg.defs[pkg_tid]
 		field_types = [map_tid(x) for x in pkg_def.param_types]
 		h_td = host.get(host_tid)
 		if h_td.kind is not TypeKind.STRUCT:
-			raise ValueError(f"expected STRUCT for '{name}' after import")
+			raise ValueError(f"expected STRUCT for '{key.module_id}:{key.name}' after import")
 		# If host struct already had field types defined, require exact match.
 		if any(t != host.ensure_unknown() for t in h_td.param_types):
 			if list(h_td.param_types) != field_types:
@@ -388,4 +410,3 @@ def import_type_table_and_build_typeid_map(pkg_tt_obj: Mapping[str, Any], host: 
 	host.finalize_variants()
 
 	return tid_map
-

@@ -174,7 +174,40 @@ fn make() returns Point {{
 	return pkg_path
 
 
-def _emit_optional_variant_pkg(tmp_path: Path, *, module_id: str = "acme.opt", extra_arm: bool = False) -> Path:
+def _emit_point_pkg(tmp_path: Path, *, module_id: str) -> Path:
+	"""
+	Emit a package that exports a `struct Point` and an exported constructor-like `make()`.
+
+	This is used to validate module-scoped nominal type identity across multiple
+	package-provided modules that share the same short type name.
+	"""
+	module_dir = tmp_path.joinpath(*module_id.split("."))
+	_write_file(
+		module_dir / "point.drift",
+		f"""
+module {module_id}
+
+export {{ Point, make }}
+
+struct Point {{ x: Int, y: Int }}
+
+fn make() returns Point {{
+	return Point(x = 1, y = 0)
+}}
+""".lstrip(),
+	)
+	pkg_path = tmp_path / f"{module_id.replace('.', '_')}.dmp"
+	assert driftc_main(["-M", str(tmp_path), str(module_dir / "point.drift"), "--emit-package", str(pkg_path)]) == 0
+	return pkg_path
+
+
+def _emit_optional_variant_pkg(
+	tmp_path: Path,
+	*,
+	module_id: str = "acme.opt",
+	extra_arm: bool = False,
+	pkg_name: str | None = None,
+) -> Path:
 	"""
 	Emit a package that exports a generic `variant Optional<T>` and a function
 	that returns `Optional<Int>`.
@@ -210,7 +243,7 @@ fn foo() returns Optional<Int> {{
 }}
 """.lstrip(),
 	)
-	pkg_path = tmp_path / f"{module_id.replace('.', '_')}.dmp"
+	pkg_path = tmp_path / (pkg_name or f"{module_id.replace('.', '_')}.dmp")
 	assert driftc_main(["-M", str(tmp_path), str(module_dir / "opt.drift"), "--emit-package", str(pkg_path)]) == 0
 	return pkg_path
 
@@ -1427,9 +1460,9 @@ fn main() returns Int {
 
 
 def test_driftc_rejects_variant_schema_collision_between_source_and_package(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	# Package defines `variant Optional<T>` one way, and source defines a different
-	# `variant Optional<T>`; since module-qualified type identity isn't implemented,
-	# this must hard-error during package type import/linking.
+	# Package defines `variant Optional<T>` in module `acme.opt`, while source defines
+	# a different `variant Optional<T>` in module `main`. With module-scoped nominal
+	# type identity, these are distinct and must not collide.
 	_emit_optional_variant_pkg(tmp_path)
 
 	_write_file(
@@ -1464,19 +1497,15 @@ fn main() returns Int {
 		],
 		capsys,
 	)
-	assert rc != 0
-	assert payload["exit_code"] == 1
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "failed to import package types" in payload["diagnostics"][0]["message"]
-	assert "Optional" in payload["diagnostics"][0]["message"]
+	assert rc == 0
+	assert payload["exit_code"] == 0
+	assert payload["diagnostics"] == []
 
 
 def test_driftc_rejects_variant_schema_collision_between_packages(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	# Two packages provide different schemas for the same variant name `Optional<T>`.
-	# Since type identity is still global-by-name, this must hard-error during
-	# package type import/linking.
-	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt1")
-	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt2", extra_arm=True)
+	# The same module id must not be provided by multiple packages.
+	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt", pkg_name="opt_a.dmp")
+	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt", extra_arm=True, pkg_name="opt_b.dmp")
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -1506,8 +1535,8 @@ fn main() returns Int {
 	assert rc != 0
 	assert payload["exit_code"] == 1
 	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "failed to import package types" in payload["diagnostics"][0]["message"]
-	assert "Optional" in payload["diagnostics"][0]["message"]
+	assert "provided by multiple packages" in payload["diagnostics"][0]["message"]
+	assert "acme.opt" in payload["diagnostics"][0]["message"]
 
 
 def test_driftc_rejects_import_of_non_exported_value_from_package(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1584,6 +1613,44 @@ fn main() returns Int {
 	assert payload["exit_code"] == 1
 	assert payload["diagnostics"][0]["phase"] == "parser"
 	assert "does not export symbol 'make'" in payload["diagnostics"][0]["message"]
+
+
+def test_driftc_allows_two_modules_with_same_struct_name_from_packages(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	_emit_point_pkg(tmp_path, module_id="a.geom")
+	_emit_point_pkg(tmp_path, module_id="b.geom")
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import a.geom as ag
+import b.geom as bg
+
+fn main() returns Int {
+	val p1: ag.Point = ag.make()
+	val p2: bg.Point = bg.make()
+	return p1.x + p2.x
+}
+""".lstrip(),
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc == 0
+	assert payload["exit_code"] == 0
 
 
 def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -187,6 +187,7 @@ def _generic_type_expr_from_parser(
 	return GenericTypeExpr.named(
 		typ.name,
 		[_generic_type_expr_from_parser(a, type_params=type_params) for a in getattr(typ, "args", [])],
+		module_id=getattr(typ, "module_id", None),
 	)
 
 
@@ -1180,82 +1181,9 @@ def parse_drift_workspace_to_hir(
 				exported_types.add(n)
 		return exported_values, exported_types
 
-	# Reject cross-module type name collisions in MVP.
-	#
-	# The workspace build shares a single TypeTable across all modules, and the
-	# type system is not module-scoped yet (no `mod::Type` identity). Until we
-	# implement true module-qualified types, any user-defined type name that
-	# appears in more than one module would collide in:
-	# - TypeTable nominal name mapping,
-	# - LLVM named struct/type emission (`%Struct_Name`, `%Variant_Name`, etc.).
-	#
-	# To keep correctness predictable, we reject such programs early.
-	first_type_def: dict[str, tuple[str, Path, object | None, str]] = {}
-	for mid, files in by_module.items():
-		for path, prog in files:
-			for s in getattr(prog, "structs", []) or []:
-				key = s.name
-				kind = "struct"
-				prev = first_type_def.get(key)
-				if prev is None:
-					first_type_def[key] = (mid, path, getattr(s, "loc", None), kind)
-				else:
-					prev_mid, prev_path, prev_loc, prev_kind = prev
-					if prev_mid != mid:
-						diagnostics.append(
-							Diagnostic(
-								message=(
-									f"type name '{key}' is defined in multiple modules ('{prev_mid}' and '{mid}'); "
-									"module-qualified type identity is not implemented yet"
-								),
-								severity="error",
-								span=_span_in_file(path, getattr(s, "loc", None)),
-								notes=[f"first definition was a {prev_kind} in module '{prev_mid}' ({prev_path})"],
-							)
-						)
-			for v in getattr(prog, "variants", []) or []:
-				key = v.name
-				kind = "variant"
-				prev = first_type_def.get(key)
-				if prev is None:
-					first_type_def[key] = (mid, path, getattr(v, "loc", None), kind)
-				else:
-					prev_mid, prev_path, prev_loc, prev_kind = prev
-					if prev_mid != mid:
-						diagnostics.append(
-							Diagnostic(
-								message=(
-									f"type name '{key}' is defined in multiple modules ('{prev_mid}' and '{mid}'); "
-									"module-qualified type identity is not implemented yet"
-								),
-								severity="error",
-								span=_span_in_file(path, getattr(v, "loc", None)),
-								notes=[f"first definition was a {prev_kind} in module '{prev_mid}' ({prev_path})"],
-							)
-						)
-			for e in getattr(prog, "exceptions", []) or []:
-				key = e.name
-				kind = "exception"
-				prev = first_type_def.get(key)
-				if prev is None:
-					first_type_def[key] = (mid, path, getattr(e, "loc", None), kind)
-				else:
-					prev_mid, prev_path, prev_loc, prev_kind = prev
-					if prev_mid != mid:
-						diagnostics.append(
-							Diagnostic(
-								message=(
-									f"type name '{key}' is defined in multiple modules ('{prev_mid}' and '{mid}'); "
-									"module-qualified type identity is not implemented yet"
-								),
-								severity="error",
-								span=_span_in_file(path, getattr(e, "loc", None)),
-								notes=[f"first definition was a {prev_kind} in module '{prev_mid}' ({prev_path})"],
-							)
-						)
-
-	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, TypeTable(), {}, {}, diagnostics
+	# Note: module-scoped nominal type identity is implemented in lang2.
+	# Multiple modules may define types with the same short name without
+	# colliding; identity is `(module_id, name, kind)`.
 
 	# Export sets (private by default, explicit exports required).
 	#
@@ -1470,13 +1398,12 @@ def parse_drift_workspace_to_hir(
 	# Collapse edge lists into a simple adjacency set for cycle detection.
 	deps: dict[str, set[str]] = {mid: {to for (to, _sp) in edges if to in merged_programs} for mid, edges in dep_edges.items()}
 
-	# Resolve module-qualified type references (`x.Point`) using per-file module
-	# alias bindings (`import foo.bar as x`) and the exporting module's type
-	# interface.
+	# Resolve module-qualified and imported type references using per-file import
+	# bindings and module export interfaces.
 	#
-	# After successful resolution we rewrite the type expression to the unqualified
-	# nominal name (Point). This is an MVP compromise while type identity is still
-	# global-by-name across modules; cross-module collisions are rejected earlier.
+	# After successful resolution we record the canonical `module_id` on the type
+	# expression (and rewrite imported aliases to their original symbol name). This
+	# preserves module-scoped nominal identity end-to-end.
 	def _exported_types_for_module(mod: str) -> set[str]:
 		if mod in exports_types_by_module:
 			return exports_types_by_module.get(mod, set())
@@ -1485,7 +1412,12 @@ def parse_drift_workspace_to_hir(
 			return set(ext.get("types") or set())
 		return set()
 
-	def _resolve_type_expr_in_file(path: Path, file_aliases: dict[str, str], te: parser_ast.TypeExpr | None) -> None:
+	def _resolve_type_expr_in_file(
+		path: Path,
+		file_aliases: dict[str, str],
+		file_type_bindings: dict[str, tuple[str, str]],
+		te: parser_ast.TypeExpr | None,
+	) -> None:
 		if te is None:
 			return
 		if getattr(te, "module_alias", None):
@@ -1518,53 +1450,64 @@ def parse_drift_workspace_to_hir(
 						)
 					)
 				else:
+					# Record the canonical module id for later lowering.
+					te.module_id = mod
 					te.module_alias = None
+		# Unqualified imported type: `from m import Point` makes `Point` resolve to
+		# the imported module, even when referenced without an `x.` qualifier.
+		if getattr(te, "module_alias", None) is None and getattr(te, "module_id", None) is None:
+			target = file_type_bindings.get(te.name)
+			if target is not None:
+				mod, sym = target
+				te.module_id = mod
+				te.name = sym
 		for a in getattr(te, "args", []) or []:
-			_resolve_type_expr_in_file(path, file_aliases, a)
+			_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, a)
 
-	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], blk: parser_ast.Block) -> None:
+	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], file_type_bindings: dict[str, tuple[str, str]], blk: parser_ast.Block) -> None:
 		for st in getattr(blk, "statements", []) or []:
 			if isinstance(st, parser_ast.LetStmt) and getattr(st, "type_expr", None) is not None:
-				_resolve_type_expr_in_file(path, file_aliases, st.type_expr)
+				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, st.type_expr)
 			if isinstance(st, parser_ast.IfStmt):
-				_resolve_types_in_block(path, file_aliases, st.then_block)
+				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.then_block)
 				if st.else_block is not None:
-					_resolve_types_in_block(path, file_aliases, st.else_block)
+					_resolve_types_in_block(path, file_aliases, file_type_bindings, st.else_block)
 			if isinstance(st, parser_ast.TryStmt):
-				_resolve_types_in_block(path, file_aliases, st.body)
+				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
 				for c in getattr(st, "catches", []) or []:
-					_resolve_types_in_block(path, file_aliases, c.block)
+					_resolve_types_in_block(path, file_aliases, file_type_bindings, c.block)
 			if isinstance(st, parser_ast.WhileStmt):
-				_resolve_types_in_block(path, file_aliases, st.body)
+				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
 			if isinstance(st, parser_ast.ForStmt):
-				_resolve_types_in_block(path, file_aliases, st.body)
+				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
 
 	for mid, files in by_module.items():
 		for path, prog in files:
 			file_aliases = module_aliases_by_file.get(path, {})
+			file_type_bindings = from_type_bindings_by_file.get(path, {})
 			# Top-level declarations.
 			for fn in getattr(prog, "functions", []) or []:
 				for p in getattr(fn, "params", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
-				_resolve_type_expr_in_file(path, file_aliases, getattr(fn, "return_type", None))
-				_resolve_types_in_block(path, file_aliases, fn.body)
+					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, p.type_expr)
+				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, getattr(fn, "return_type", None))
+				_resolve_types_in_block(path, file_aliases, file_type_bindings, fn.body)
 			for impl in getattr(prog, "implements", []) or []:
-				_resolve_type_expr_in_file(path, file_aliases, impl.target)
+				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, impl.target)
 				for mfn in getattr(impl, "methods", []) or []:
 					for p in getattr(mfn, "params", []) or []:
-						_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
-					_resolve_type_expr_in_file(path, file_aliases, getattr(mfn, "return_type", None))
-					_resolve_types_in_block(path, file_aliases, mfn.body)
+						_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, p.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, getattr(mfn, "return_type", None))
+					_resolve_types_in_block(path, file_aliases, file_type_bindings, mfn.body)
 			for s in getattr(prog, "structs", []) or []:
 				for f in getattr(s, "fields", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, f.type_expr)
 			for e in getattr(prog, "exceptions", []) or []:
 				for a in getattr(e, "args", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, a.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, a.type_expr)
 			for v in getattr(prog, "variants", []) or []:
 				for arm in getattr(v, "arms", []) or []:
 					for f in getattr(arm, "fields", []) or []:
-						_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
+						_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, f.type_expr)
 
 	# Cycle detection (MVP: reject import cycles).
 	def _find_cycle() -> list[str] | None:
@@ -1649,7 +1592,7 @@ def parse_drift_workspace_to_hir(
 	for _mid, _prog in merged_programs.items():
 		for _s in getattr(_prog, "structs", []) or []:
 			try:
-				shared_type_table.declare_struct(_s.name, [f.name for f in getattr(_s, "fields", []) or []])
+				shared_type_table.declare_struct(_mid, _s.name, [f.name for f in getattr(_s, "fields", []) or []])
 			except ValueError as err:
 				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_s, "loc", None))))
 		for _v in getattr(_prog, "variants", []) or []:
@@ -1667,6 +1610,7 @@ def parse_drift_workspace_to_hir(
 				arms.append(VariantArmSchema(name=_arm.name, fields=fields))
 			try:
 				shared_type_table.declare_variant(
+					_mid,
 					_v.name,
 					list(getattr(_v, "type_params", []) or []),
 					arms,
@@ -1891,8 +1835,8 @@ def parse_drift_workspace_to_hir(
 				return H.HCall(fn=H.HVar(name=_qualify_fn_name(mod, member)), args=args, kwargs=kwargs)
 			if member in types:
 				# Constructor call through a module alias. MVP supports only struct ctors.
-				struct_schemas = getattr(shared_type_table, "struct_schemas", {}) or {}
-				if member not in struct_schemas:
+				struct_id = shared_type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=member)
+				if struct_id is None:
 					diagnostics.append(
 						Diagnostic(
 							message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in MVP",
@@ -1900,8 +1844,11 @@ def parse_drift_workspace_to_hir(
 							span=getattr(receiver, "loc", Span()),
 						)
 					)
-					return H.HCall(fn=H.HVar(name=member), args=args, kwargs=kwargs)
-				return H.HCall(fn=H.HVar(name=member), args=args, kwargs=kwargs)
+					return None
+				# Rewrite to an internal fully-qualified constructor name so later
+				# phases can resolve it deterministically even when multiple modules
+				# define the same short type name.
+				return H.HCall(fn=H.HVar(name=f"{mod}::{member}"), args=args, kwargs=kwargs)
 			available = ", ".join(sorted(vals | types))
 			notes = [f"available exports: {available}"] if available else [f"module '{mod}' exports nothing (private by default)"]
 			diagnostics.append(
@@ -1965,8 +1912,12 @@ def parse_drift_workspace_to_hir(
 
 			if isinstance(expr, H.HField) and isinstance(expr.subject, H.HVar) and expr.subject.binding_id is None:
 				mod = file_module_aliases.get(expr.subject.name)
-				if mod is not None and expr.name in exported_value_names(mod):
-					return H.HVar(name=_qualify_fn_name(mod, expr.name))
+				if mod is not None:
+					if expr.name in exported_value_names(mod):
+						return H.HVar(name=_qualify_fn_name(mod, expr.name))
+					# Note: module-qualified type names are handled in type positions
+					# via TypeExpr.module_id. Expression-position `x.Point` without
+					# call is not a supported surface construct in MVP.
 				return expr
 
 			# Generic recursion for other expression shapes.
@@ -2102,6 +2053,7 @@ def _lower_parsed_program_to_hir(
 	"""
 	diagnostics = list(diagnostics or [])
 	module_name = getattr(prog, "module", None)
+	module_id = module_name or "main"
 	func_hirs: Dict[str, H.HBlock] = {}
 	decls: list[_FrontendDecl] = []
 	signatures: Dict[str, FnSignature] = {}
@@ -2130,10 +2082,11 @@ def _lower_parsed_program_to_hir(
 	#
 	# MVP contract:
 	#   variant Optional<T> { Some(value: T), None }
-	if not any(getattr(v, "name", None) == "Optional" for v in variant_defs) and not type_table.is_variant_base_named(
-		"Optional"
-	):
+	if not any(getattr(v, "name", None) == "Optional" for v in variant_defs) and type_table.get_variant_base(
+		module_id="lang.core", name="Optional"
+	) is None:
 		type_table.declare_variant(
+			"lang.core",
 			"Optional",
 			["T"],
 			[
@@ -2148,7 +2101,7 @@ def _lower_parsed_program_to_hir(
 	for s in struct_defs:
 		field_names = [f.name for f in getattr(s, "fields", [])]
 		try:
-			type_table.declare_struct(s.name, field_names)
+			type_table.declare_struct(module_id, s.name, field_names)
 		except ValueError as err:
 			diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(s, "loc", None))))
 	# Declare all variant names/schemas next so type resolution can instantiate
@@ -2166,6 +2119,7 @@ def _lower_parsed_program_to_hir(
 			arms.append(VariantArmSchema(name=arm.name, fields=fields))
 		try:
 			type_table.declare_variant(
+				module_id,
 				v.name,
 				list(getattr(v, "type_params", []) or []),
 				arms,
@@ -2174,10 +2128,10 @@ def _lower_parsed_program_to_hir(
 			diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(v, "loc", None))))
 	# Fill field TypeIds in a second pass now that all names exist.
 	for s in struct_defs:
-		struct_id = type_table.ensure_named(s.name)
+		struct_id = type_table.require_nominal(kind=TypeKind.STRUCT, module_id=module_id, name=s.name)
 		field_types = []
 		for f in getattr(s, "fields", []):
-			ft = resolve_opaque_type(f.type_expr, type_table)
+			ft = resolve_opaque_type(f.type_expr, type_table, module_id=module_id)
 			# MVP escape policy: references cannot be stored in long-lived memory.
 			# Struct fields are long-lived by construction, so `struct S(r: &T)` is
 			# rejected early (before lowering/typecheck) with a source-anchored
@@ -2199,16 +2153,6 @@ def _lower_parsed_program_to_hir(
 	# After all variant schemas are known and structs are declared, finalize
 	# non-generic variants so their concrete arm types are available.
 	type_table.finalize_variants()
-	# Thread struct schemas for downstream helpers (optional; TypeDefs are authoritative).
-	#
-	# Important: when `type_table` is shared across multiple modules (workspace
-	# builds), we must not overwrite schemas declared by previously-lowered
-	# modules. Update incrementally instead.
-	prev_struct_schemas = getattr(type_table, "struct_schemas", None)
-	if prev_struct_schemas is None:
-		prev_struct_schemas = {}
-	prev_struct_schemas.update({s.name: (s.name, [f.name for f in getattr(s, "fields", [])]) for s in struct_defs})
-	type_table.struct_schemas = prev_struct_schemas
 	for fn in prog.functions:
 		if fn.name in seen:
 			diagnostics.append(
@@ -2331,12 +2275,18 @@ def _lower_parsed_program_to_hir(
 			# locals and module-scope items are considered.
 			#
 			# We only need names here; semantic validation happens in the typed checker.
-			target_str = _type_expr_to_str(impl.target)
+			# Collect receiver field names for implicit `self` member lookup.
+			#
+			# IMPORTANT: structs are module-scoped. We must resolve the impl target
+			# in the current module context, not by bare name.
 			field_names: set[str] = set()
 			try:
-				schema = getattr(type_table, "struct_schemas", {}).get(target_str)
-				if schema is not None and isinstance(schema, tuple) and len(schema) == 2:
-					field_names = set(schema[1])
+				origin_mod = getattr(impl.target, "module_id", None) or module_name or "main"
+				struct_id = type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=impl.target.name)
+				if struct_id is not None:
+					td = type_table.get(struct_id)
+					if td.field_names is not None:
+						field_names = set(td.field_names)
 			except Exception:
 				field_names = set()
 			method_names: set[str] = {m.name for m in getattr(impl, "methods", []) or []}
