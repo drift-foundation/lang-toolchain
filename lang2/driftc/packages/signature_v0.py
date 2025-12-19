@@ -85,7 +85,10 @@ def load_sig_sidecar(path: Path) -> SigFile:
 	  ]
 	}
 	"""
-	obj = json.loads(path.read_text(encoding="utf-8"))
+	try:
+		obj = json.loads(path.read_text(encoding="utf-8"))
+	except json.JSONDecodeError as err:
+		raise ValueError("signature sidecar invalid JSON") from err
 	if not isinstance(obj, dict):
 		raise ValueError("signature sidecar must be a JSON object")
 	if obj.get("format") != "dmir-pkg-sig" or obj.get("version") != 0:
@@ -107,8 +110,20 @@ def load_sig_sidecar(path: Path) -> SigFile:
 		pub_b64 = s.get("pubkey")
 		if algo != "ed25519" or not isinstance(sig_b64, str) or not kid:
 			continue
-		sig_raw = _b64_decode(sig_b64)
-		pub_raw = _b64_decode(pub_b64) if isinstance(pub_b64, str) else None
+		try:
+			sig_raw = _b64_decode(sig_b64)
+		except Exception as err:
+			raise ValueError("signature sidecar contains invalid base64 in 'sig'") from err
+		if len(sig_raw) != 64:
+			raise ValueError("ed25519 signature must be 64 bytes")
+		pub_raw = None
+		if isinstance(pub_b64, str):
+			try:
+				pub_raw = _b64_decode(pub_b64)
+			except Exception as err:
+				raise ValueError("signature sidecar contains invalid base64 in 'pubkey'") from err
+			if len(pub_raw) != 32:
+				raise ValueError("ed25519 pubkey must be 32 bytes")
 		entries.append(SigEntry(algo=algo, kid=kid, sig_raw=sig_raw, pubkey_raw=pub_raw))
 	if not entries:
 		raise ValueError("signature sidecar contains no usable signatures")
@@ -183,12 +198,11 @@ def verify_package_signatures(
 		if tk is not None:
 			pub_raw = tk.pubkey_raw
 			pub_source = "trust"
-		elif entry.pubkey_raw is not None:
-			pub_raw = entry.pubkey_raw
-			pub_source = "sidecar"
-			# Ensure provided pubkey matches kid deterministically.
-			if compute_ed25519_kid(pub_raw) != entry.kid:
-				continue
+		# MVP policy: driftc does not perform TOFU by accepting unknown public keys
+		# from signature sidecars. The trust store is authoritative for which keys
+		# are trusted and what their public key bytes are. Sidecars may still
+		# include `pubkey` as a convenience for tooling, but driftc verifies only
+		# against trust-store keys.
 
 		if pub_raw is None:
 			continue

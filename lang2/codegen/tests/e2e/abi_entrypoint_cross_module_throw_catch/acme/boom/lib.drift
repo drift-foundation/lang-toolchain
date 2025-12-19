@@ -1,0 +1,10 @@
+module acme.boom
+
+export { boom }
+
+exception Boom()
+
+fn boom() returns Int {
+	throw Boom()
+}
+

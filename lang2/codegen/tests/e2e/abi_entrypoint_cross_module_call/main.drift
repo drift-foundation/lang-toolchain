@@ -1,0 +1,8 @@
+module main
+
+from acme.lib import answer
+
+fn main() returns Int {
+	return answer();
+}
+

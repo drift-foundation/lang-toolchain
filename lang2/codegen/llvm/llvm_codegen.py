@@ -126,6 +126,22 @@ def _llvm_fn_sym(name: str) -> str:
 		return f"@{name}"
 	escaped = name.replace("\\", "\\5c").replace("\"", "\\22")
 	return f"@\"{escaped}\""
+
+
+def _module_id_from_symbol(sym: str) -> str | None:
+	"""
+	Best-effort extraction of a module id from a qualified callable symbol.
+
+	In a workspace build we qualify callables as:
+	  - free functions: `mod.sub::foo` (except the entrypoint `main`)
+	  - methods: `mod.sub::Type::method`
+
+	This helper returns the module id prefix before the first `::`, or `None`
+	for unqualified symbols (e.g. `main`).
+	"""
+	if "::" not in sym:
+		return None
+	return sym.split("::", 1)[0]
 DRIFT_DV_TYPE = "%DriftDiagnosticValue"
 DRIFT_OPT_INT_TYPE = "%DriftOptionalInt"
 DRIFT_OPT_BOOL_TYPE = "%DriftOptionalBool"
@@ -181,19 +197,133 @@ def lower_module_to_llvm(
 	  fn_infos: name -> FnInfo for each function
 	"""
 	mod = LlvmModuleBuilder()
-	for name, func in funcs.items():
+
+	# --- ABI-boundary export wrappers (Milestone 4) --------------------------
+	#
+	# Drift's language-level type system does not expose ABI shapes like
+	# `FnResult<T, Error>`, but package/module boundaries do. We model this at the
+	# LLVM emission layer by:
+	#
+	# 1) Renaming exported function bodies to private `__impl` symbols.
+	# 2) Emitting public wrapper functions under the original symbol name.
+	#
+	# Wrappers are called only across module boundaries (calls from another
+	# module to an exported symbol). Internal (same-module) calls are redirected
+	# to the `__impl` symbol and therefore keep the internal calling convention.
+	#
+	# Wrapper calling convention:
+	# - If the function is can-throw, the wrapper forwards the internal
+	#   `FnResult<ok, Error>` carrier unchanged.
+	# - If the function is not can-throw, the wrapper returns a `FnResult<ok, Error>`
+	#   with `is_err=false` and `err=null`.
+	#
+	# This preserves the language semantics ("returns T") while making the
+	# module interface uniformly boundary-shaped.
+	# Driver-level renames (e.g. argv wrapper name) must not affect call-site
+	# binding decisions. Keep them separate from export wrapper renames.
+	driver_rename: dict[str, str] = dict(rename_map or {})
+	body_rename: dict[str, str] = dict(driver_rename)
+	export_impl_map: dict[str, str] = {}
+	exported_fns: list[str] = []
+	for name, info in fn_infos.items():
+		sig = info.signature
+		if sig is None or not bool(getattr(sig, "is_exported_entrypoint", False)):
+			continue
+		if bool(getattr(sig, "is_method", False)):
+			continue
+		# Only functions that exist in the current module (i.e. present in funcs)
+		# can have wrappers emitted here. Imported functions are declared elsewhere.
+		if name not in funcs:
+			continue
+		if name in body_rename:
+			# If the driver already renamed this symbol (e.g. argv wrapper), do not
+			# add another layer of indirection.
+			continue
+		impl = f"{name}__impl"
+		body_rename[name] = impl
+		export_impl_map[name] = impl
+		exported_fns.append(name)
+
+	for name, mir_func in funcs.items():
 		ssa = ssa_funcs[name]
 		fn_info = fn_infos[name]
 		builder = _FuncBuilder(
-			func=func,
+			func=mir_func,
 			ssa=ssa,
 			fn_info=fn_info,
 			fn_infos=fn_infos,
 			module=mod,
 			type_table=type_table,
-			sym_name=rename_map.get(name) if rename_map else None,
+			sym_name=body_rename.get(name),
+			rename_map=driver_rename,
+			export_impl_map=export_impl_map,
 		)
 		mod.emit_func(builder.lower())
+
+	# Emit wrappers after all implementation bodies so they can reference the
+	# renamed `__impl` symbols.
+	for public in sorted(exported_fns):
+		info = fn_infos[public]
+		sig = info.signature
+		assert sig is not None
+		impl = export_impl_map[public]
+		type_builder = _FuncBuilder(
+			func=funcs[public],
+			ssa=ssa_funcs[public],
+			fn_info=info,
+			fn_infos=fn_infos,
+			module=mod,
+			type_table=type_table,
+			sym_name=impl,
+			rename_map=driver_rename,
+			export_impl_map=export_impl_map,
+		)
+		type_builder._prime_type_ids()
+		# Wrapper parameters mirror the internal function exactly.
+		param_parts: list[str] = []
+		param_names = list(sig.param_names or [])
+		param_tids = list(sig.param_type_ids or [])
+		if len(param_names) != len(param_tids):
+			# Older tests may omit param_names; fall back to positional `p{i}`.
+			param_names = [f"p{i}" for i in range(len(param_tids))]
+		for i, ty_id in enumerate(param_tids):
+			llty = type_builder._llvm_type_for_typeid(ty_id)
+			param_parts.append(f"{llty} %{param_names[i]}")
+		params_str = ", ".join(param_parts)
+
+		# Return type: always a boundary FnResult for exported entrypoints.
+		ok_llty, ok_key = type_builder._llvm_ok_type_for_sig(sig)
+		fnres_llty = mod.fnresult_type(ok_key, ok_llty)
+
+		lines: list[str] = []
+		lines.append(f"define {fnres_llty} {_llvm_fn_sym(public)}({params_str}) {{")
+		lines.append("entry:")
+		args = ", ".join(f"{type_builder._llvm_type_for_typeid(t)} %{n}" for t, n in zip(param_tids, param_names))
+
+		if info.declared_can_throw:
+			# Forward can-throw carrier result unchanged.
+			lines.append(f"  %res = call {fnres_llty} {_llvm_fn_sym(impl)}({args})")
+			lines.append(f"  ret {fnres_llty} %res")
+		else:
+			# Wrap a non-throwing return into FnResult.Ok(...).
+			ret_tid = sig.return_type_id
+			is_void_ret = ret_tid is not None and type_builder._is_void_typeid(ret_tid)
+			if is_void_ret:
+				lines.append(f"  call void {_llvm_fn_sym(impl)}({args})")
+				ok_val = "0"
+			else:
+				ret_ty = "i64"
+				if ret_tid is not None and type_table is not None:
+					ret_ty = type_builder._llvm_type_for_typeid(ret_tid)
+				lines.append(f"  %ok = call {ret_ty} {_llvm_fn_sym(impl)}({args})")
+				ok_val = "%ok"
+			lines.append(f"  %tmp0 = insertvalue {fnres_llty} undef, i1 0, 0")
+			lines.append(f"  %tmp1 = insertvalue {fnres_llty} %tmp0, {ok_llty} {ok_val}, 1")
+			lines.append(f"  %tmp2 = insertvalue {fnres_llty} %tmp1, {DRIFT_ERROR_PTR} null, 2")
+			lines.append(f"  ret {fnres_llty} %tmp2")
+		lines.append("}")
+		mod.emit_func("\n".join(lines))
+
 	if argv_wrapper is not None:
 		array_llty = f"{{ {DRIFT_SIZE_TYPE}, {DRIFT_SIZE_TYPE}, {DRIFT_STRING_TYPE}* }}"
 		mod.emit_argv_entry_wrapper(user_main=argv_wrapper, array_type=array_llty)
@@ -238,9 +368,11 @@ class LlvmModuleBuilder:
 	needs_console_runtime: bool = False
 	needs_dv_runtime: bool = False
 	needs_error_runtime: bool = False
+	needs_llvm_trap: bool = False
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
 	_fnresult_ok_llty_by_type: Dict[str, str] = field(default_factory=dict)
+	_fnresult_unwrap_helpers: Dict[str, str] = field(default_factory=dict)
 	_struct_types_by_name: Dict[str, str] = field(default_factory=dict)
 	_variant_types_by_id: Dict[int, str] = field(default_factory=dict)
 
@@ -330,8 +462,11 @@ class LlvmModuleBuilder:
 		Return the LLVM struct type for FnResult<ok_llty, Error>.
 
 		We emit named types per ok payload for readability/ABI stability. Supported
-		ok payloads in v1: i64 (Int), %DriftString (String), i8 (void-like), and
-		typed pointers `T*` (Ref<T>). Error slot is always %DriftError*.
+		ok payloads in v1 include:
+		  - Int (i64), String (%DriftString), Void-like (i8), Ref<T> (T*)
+		  - concrete Struct and Variant values by-value (compiler-private ABI)
+
+		Error slot is always %DriftError*.
 		"""
 		if ok_key in self._fnresult_types_by_key:
 			return self._fnresult_types_by_key[ok_key]
@@ -341,11 +476,40 @@ class LlvmModuleBuilder:
 			return self._declare_fnresult_named_type(ok_key, ok_llty, "%FnResult_String_Error")
 		if ok_key == "Void":
 			return self._declare_fnresult_named_type(ok_key, ok_llty, "%FnResult_Void_Error")
-		if ok_key.startswith("Ref_"):
-			return self._declare_fnresult_named_type(ok_key, ok_llty)
-		raise NotImplementedError(
-			f"LLVM codegen v1: unsupported FnResult ok payload type {ok_key!r}"
-		)
+		# Other supported ok payloads are emitted as named types lazily.
+		return self._declare_fnresult_named_type(ok_key, ok_llty)
+
+	def fnresult_unwrap_ok_or_trap(self, ok_key: str, fnres_llty: str, ok_llty: str) -> str:
+		"""
+		Emit (or reuse) a tiny helper that unwraps `FnResult.Ok` or traps.
+
+		This is used at ABI boundaries where the surface language expects a plain
+		value `T`, but the module interface uses the uniform `FnResult<T, Error*>`
+		shape. We must not silently treat an error as a value.
+		"""
+		# Cache key must include both the stable ok_key and the concrete ok_llty.
+		cache_key = f"{ok_key}:{ok_llty}"
+		name = self._fnresult_unwrap_helpers.get(cache_key)
+		if name is not None:
+			return name
+		self.needs_llvm_trap = True
+		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in ok_key)
+		name = f"@drift_fnresult_unwrap_ok_or_trap_{safe}"
+		self._fnresult_unwrap_helpers[cache_key] = name
+		lines: list[str] = []
+		lines.append(f"define {ok_llty} {name}({fnres_llty} %res) {{")
+		lines.append("entry:")
+		lines.append(f"  %is_err = extractvalue {fnres_llty} %res, 0")
+		lines.append("  br i1 %is_err, label %trap, label %ok")
+		lines.append("trap:")
+		lines.append("  call void @llvm.trap()")
+		lines.append("  unreachable")
+		lines.append("ok:")
+		lines.append(f"  %okv = extractvalue {fnres_llty} %res, 1")
+		lines.append(f"  ret {ok_llty} %okv")
+		lines.append("}")
+		self.funcs.append("\n".join(lines))
+		return name
 
 	def _declare_fnresult_named_type(self, ok_key: str, ok_llty: str, name: str | None = None) -> str:
 		"""Declare and cache a named FnResult type for the given ok payload."""
@@ -486,6 +650,9 @@ class LlvmModuleBuilder:
 					"",
 				]
 			)
+		if self.needs_llvm_trap:
+			lines.append("declare void @llvm.trap()")
+			lines.append("")
 		lines.extend(self.funcs)
 		lines.append("")
 		return "\n".join(lines)
@@ -521,6 +688,16 @@ class _FuncBuilder:
 	fn_info: FnInfo
 	fn_infos: Mapping[str, FnInfo]
 	module: LlvmModuleBuilder
+	# Name mapping hooks used by the module-level emitter for ABI-boundary export
+	# wrappers. These maps are purely about symbol selection at call sites.
+	#
+	# - `export_impl_map` maps an exported public symbol name (e.g. `m::foo`) to
+	#   its private implementation symbol name (e.g. `m::foo__impl`).
+	# - `rename_map` is a more general symbol rename table supplied by the driver
+	#   (e.g. for argv wrappers). Codegen only uses it defensively for call sites
+	#   that must target renamed bodies.
+	rename_map: Mapping[str, str] = field(default_factory=dict)
+	export_impl_map: Mapping[str, str] = field(default_factory=dict)
 	type_table: Optional[TypeTable] = None
 	tmp_counter: int = 0
 	lines: List[str] = field(default_factory=list)
@@ -1501,11 +1678,62 @@ class _FuncBuilder:
 			arg_parts = [f"i64 {self._map_value(a)}" for a in instr.args]
 		args = ", ".join(arg_parts)
 
+		target_sym = instr.fn
+		is_exported_entry = bool(
+			callee_info.signature is not None and getattr(callee_info.signature, "is_exported_entrypoint", False)
+		)
+		caller_mod = (
+			getattr(self.fn_info.signature, "module", None) if self.fn_info.signature is not None else None
+		) or _module_id_from_symbol(self.func.name)
+		callee_mod = (
+			getattr(callee_info.signature, "module", None) if callee_info.signature is not None else None
+		) or _module_id_from_symbol(instr.fn)
+		# Treat unknown caller/callee module as cross-module to avoid accidentally
+		# targeting private `__impl` symbols from entrypoints like `main`.
+		is_cross_module = is_exported_entry and (caller_mod is None or callee_mod is None or caller_mod != callee_mod)
+		# For same-module calls to exported entrypoints, call the private `__impl`
+		# body so the internal calling convention (`returns T` for nothrow fns) is
+		# preserved. Cross-module calls use the public wrapper symbol.
+		if is_exported_entry and not is_cross_module:
+			target_sym = self.export_impl_map.get(instr.fn, instr.fn)
+		# Apply any final driver-level renames (e.g. argv wrapper) as a backstop.
+		target_sym = self.rename_map.get(target_sym, target_sym)
+
+		if is_exported_entry and is_cross_module and not callee_info.declared_can_throw:
+			# ABI boundary wrapper returns FnResult even for nothrow entrypoints.
+			# The surface language expects a plain `T`. We must not silently treat an
+			# error as a `T`, so unwrap via a helper that traps on `is_err = true`.
+			ret_tid = None
+			if callee_info.signature and callee_info.signature.return_type_id is not None:
+				ret_tid = callee_info.signature.return_type_id
+			# Void-returning exported entrypoints still return FnResult<Void, Error*>
+			# at the boundary, but the call result must not be captured in MIR.
+			is_void_ret = ret_tid is not None and self._is_void_typeid(ret_tid)
+			if is_void_ret and dest is not None:
+				raise NotImplementedError("LLVM codegen v1: cannot capture result of a void call")
+			if self.type_table is None or ret_tid is None:
+				raise NotImplementedError(
+					f"LLVM codegen v1: exported entrypoint call requires TypeTable and return type (callee {instr.fn})"
+				)
+			ok_llty, ok_key = self._llvm_ok_type_for_typeid(ret_tid)
+			fnres_llty = self.module.fnresult_type(ok_key, ok_llty)
+			tmp = self._fresh("entryres")
+			self.lines.append(f"  {tmp} = call {fnres_llty} {_llvm_fn_sym(target_sym)}({args})")
+			unwrap_fn = self.module.fnresult_unwrap_ok_or_trap(ok_key, fnres_llty, ok_llty)
+			if dest is None:
+				# Statement position: still validate the carrier (trap on error),
+				# then discard the Ok payload.
+				self.lines.append(f"  call {ok_llty} {unwrap_fn}({fnres_llty} {tmp})")
+				return
+			self.lines.append(f"  {dest} = call {ok_llty} {unwrap_fn}({fnres_llty} {tmp})")
+			self.value_types[dest] = ok_llty
+			return
+
 		if callee_info.declared_can_throw:
 			_, fnres_llty = self._fnresult_types_for_fn(callee_info)
 			if dest is None:
 				raise AssertionError("can-throw calls must preserve their FnResult value (MIR bug)")
-			self.lines.append(f"  {dest} = call {fnres_llty} {_llvm_fn_sym(instr.fn)}({args})")
+			self.lines.append(f"  {dest} = call {fnres_llty} {_llvm_fn_sym(target_sym)}({args})")
 			self.value_types[dest] = fnres_llty
 		else:
 			ret_tid = None
@@ -1516,11 +1744,11 @@ class _FuncBuilder:
 			if ret_tid is not None and self.type_table is not None and not is_void_ret:
 				ret_ty = self._llvm_type_for_typeid(ret_tid)
 			if dest is None:
-				self.lines.append(f"  call {ret_ty} {_llvm_fn_sym(instr.fn)}({args})")
+				self.lines.append(f"  call {ret_ty} {_llvm_fn_sym(target_sym)}({args})")
 			else:
 				if ret_ty == "void":
 					raise NotImplementedError("LLVM codegen v1: cannot capture result of a void call")
-				self.lines.append(f"  {dest} = call {ret_ty} {_llvm_fn_sym(instr.fn)}({args})")
+				self.lines.append(f"  {dest} = call {ret_ty} {_llvm_fn_sym(target_sym)}({args})")
 				self.value_types[dest] = ret_ty
 
 	def _lower_term(self, term: object) -> None:
@@ -1807,13 +2035,21 @@ class _FuncBuilder:
 			inner_key = self._type_key(td.param_types[0])
 			prefix = "RefMut" if td.ref_mut else "Ref"
 			return f"{prefix}_{inner_key}"
+		if td.kind is TypeKind.STRUCT:
+			safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in td.name)
+			return f"Struct_{safe}"
+		if td.kind is TypeKind.VARIANT:
+			# Variant TypeIds are unique per instantiation; include the TypeId to
+			# avoid collisions between different instantiations with the same name.
+			return f"Variant_{ty_id}"
 		return f"{td.kind.name}"
 
 	def _llvm_ok_type_for_typeid(self, ty_id: TypeId) -> tuple[str, str]:
 		"""
 		Map an Ok TypeId to (ok_llty, ok_key) for FnResult payloads.
 
-		Supported in v1: Int -> i64, String -> %DriftString, Void -> i8, Ref<T> -> T*.
+		Supported in v1: Int -> i64, String -> %DriftString, Void -> i8, Ref<T> -> T*,
+		and concrete Struct/Variant values by-value.
 		Other kinds are rejected with a clear diagnostic.
 		"""
 		if self.type_table is None:
@@ -1831,10 +2067,27 @@ class _FuncBuilder:
 			if td.param_types:
 				inner_llty = self._llvm_type_for_typeid(td.param_types[0])
 			return f"{inner_llty}*", key
-		supported = "Int, String, Void, Ref<T>"
+		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT):
+			return self._llvm_type_for_typeid(ty_id), key
+		supported = "Int, String, Void, Ref<T>, Struct, Variant"
 		raise NotImplementedError(
 			f"LLVM codegen v1: FnResult ok type {key} is not supported yet; supported ok payloads: {supported}"
 		)
+
+	def _llvm_ok_type_for_sig(self, sig: object) -> tuple[str, str]:
+		"""
+		Return (ok_llty, ok_key) for a surface signature's return type.
+
+		Export wrappers use this to compute the ABI-boundary FnResult carrier type:
+		exported entrypoints always return FnResult<Ok, Error*> at the module
+		boundary, even if the function body is not can-throw.
+		"""
+		ret_tid = getattr(sig, "return_type_id", None)
+		if ret_tid is None:
+			raise NotImplementedError(
+				f"LLVM codegen v1: exported entrypoint wrapper requires a return type (function {self.func.name})"
+			)
+		return self._llvm_ok_type_for_typeid(ret_tid)
 
 	def _llvm_scalar_type(self) -> str:
 		# All lowered values are i64 or i1; phis currently assume Int.

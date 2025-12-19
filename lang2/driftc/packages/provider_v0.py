@@ -48,6 +48,37 @@ def load_package_v0(path: Path) -> LoadedPackage:
 	return load_dmir_pkg_v0(path)
 
 
+def _validate_package_interfaces(pkg: LoadedPackage) -> None:
+	"""
+	Validate module interfaces against payload metadata.
+
+	Pinned rule (ABI boundary): any exported value must have a corresponding
+	payload signature entry with `is_exported_entrypoint == True`.
+
+	This is a package consumption guardrail: it rejects malformed/inconsistent
+	packages early, before imports are resolved or IR is embedded.
+	"""
+	for mid, mod in pkg.modules_by_id.items():
+		exports = mod.interface.get("exports")
+		if not isinstance(exports, dict):
+			continue
+		values = exports.get("values")
+		if not isinstance(values, list):
+			continue
+		sigs = mod.payload.get("signatures")
+		if not isinstance(sigs, dict):
+			sigs = {}
+		for v in values:
+			if not isinstance(v, str):
+				continue
+			sym = f"{mid}::{v}"
+			sd = sigs.get(sym)
+			if not isinstance(sd, dict) or not bool(sd.get("is_exported_entrypoint", False)):
+				raise ValueError(f"exported value '{v}' is missing exported entrypoint signature metadata")
+			if bool(sd.get("is_method", False)):
+				raise ValueError(f"exported value '{v}' must not be a method")
+
+
 @dataclass(frozen=True)
 class PackageTrustPolicy:
 	"""
@@ -80,6 +111,7 @@ def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_b
 		require_signatures=policy.require_signatures,
 		allow_unsigned_roots=policy.allow_unsigned_roots,
 	)
+	_validate_package_interfaces(pkg)
 	return pkg
 
 

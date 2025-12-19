@@ -1,0 +1,11 @@
+module main
+
+from acme.boom import boom
+
+fn main() returns Int {
+	try boom() catch {
+		return 0
+	}
+	return 1
+}
+
