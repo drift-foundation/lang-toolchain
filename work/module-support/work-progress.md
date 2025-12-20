@@ -507,10 +507,112 @@ Progress note:
 
 Goal: make local/offline workflows robust without chasing networking.
 
-Pinned next polish items:
-- lockfile semantics (`drift.lock.json` authoritative)
-- `drift fetch` supports multiple sources and deterministic selection rules
-- better error messages when index conflicts or identity mismatches occur
+Pinned next polish items (execution order):
+
+#### 5.1 Lockfile semantics (`drift.lock.json` authoritative)
+
+Goal: if a lock exists, `drift fetch` must reproduce it exactly, or fail loudly.
+
+Steps:
+- Define lock schema v0:
+  - `format`, `version`
+  - `packages`: map `package_id` → `{version, target, pkg_sha256, sig_sha256?, sig_kids?, modules, source_id, path}`
+- Update `drift vendor` to write the lock from the **actual cached artifacts**:
+  - hash `pkg.dmp` bytes (`pkg_sha256`)
+  - hash `.dmp.sig` bytes (`sig_sha256`) when signatures are required
+  - record module ids contained in the package (`modules`) for better diagnostics
+- Update `drift fetch` behavior when `drift.lock.json` exists:
+  - ignore “latest” discovery; fetch exactly those artifacts
+  - verify signature/trust policy (early rejection); `driftc` remains the final gatekeeper
+  - fail if:
+    - index points to different `pkg_sha256` / `sig_sha256`
+    - package is missing
+    - version/target mismatch
+
+Tests:
+- Lock round-trip: publish → fetch → vendor writes lock; delete cache; fetch with lock reproduces identical `pkg.dmp` bytes and vendor layout.
+
+Status: completed
+
+Progress note:
+- `drift vendor` now writes a v0 lockfile with `packages` as a map keyed by `package_id` and includes `pkg_sha256`, optional `sig_sha256`, `sig_kids`, and `modules`.
+- `drift fetch` now accepts `--lock` and, when the lock exists, fetches only the locked packages and verifies `pkg_sha256` (and `sig_sha256` when present), failing loudly on mismatches or missing artifacts.
+- Driver test updated to lock “lock is authoritative” behavior: `lang2/tests/driver/tests/test_drift_publish_fetch_vendor.py`.
+
+#### 5.2 Deterministic multi-source selection
+
+Goal: deterministic behavior when multiple sources can satisfy the same `(package_id, version, target)`.
+
+Steps:
+- Extend `drift-sources.json`:
+  - ordered list of sources with stable `id` and explicit `priority`
+  - sources are directory-only in MVP
+- Resolution algorithm:
+  - if lock exists: `source_id` is pinned; use only that source (or fail)
+  - else:
+    - scan sources in priority order
+    - pick the first source that provides an exact match
+    - if multiple sources provide the same identity, do not merge; pick deterministically by `(priority, source_id)`
+  - verify selected artifact bytes match `index.json` `pkg_sha256` (and `sig_sha256` when required)
+- Emit a resolution report (`--json` also): for each selected package, record which source won and why.
+
+Tests:
+- Two sources both contain the same package; chosen one is stable and matches priority.
+- Tie-break by `source_id` is stable.
+
+Status: completed
+
+Progress note:
+- `drift-sources.json` v0 now requires each source to provide:
+  - a stable `id` string (`source_id`), and
+  - an integer `priority` (lower values are preferred).
+- `drift fetch` deterministically selects at most one package per `package_id` across all sources:
+  - without a lockfile, winner selection is by `(priority, source_id)`,
+  - with a lockfile, a pinned `source_id` is enforced (or `unknown` selects by `(priority, source_id)`).
+- Locked by driver test:
+  - `lang2/tests/driver/tests/test_drift_publish_fetch_vendor.py::test_drift_fetch_selects_deterministically_across_sources`.
+
+#### 5.3 Better index/identity errors (actionable diagnostics)
+
+Goal: mismatches are obvious and actionable (print expected vs actual).
+
+Hardening points:
+- Identity mismatch at fetch time:
+  - expected `{package_id, version, target}` from lock/index
+  - actual manifest identity read from `.dmp`
+  - error message prints both + source id + file path
+- Index corruption:
+  - missing required fields
+  - duplicate entries for same identity within a source index
+  - inconsistent `pkg_sha256` / `sig_sha256`
+- Single-version-per-package enforcement:
+  - if user requests deps that imply two versions of same `package_id`, error shows both requesters and versions (lock vs sources is enough in MVP)
+
+Tests:
+- malformed `index.json` (missing fields) → clear error
+- sha mismatch between index and file bytes → clear error
+- identity mismatch (`.dmp` says different version/target) → clear error
+
+Status: completed
+
+Pinned clarifications (post-implementation hardening):
+- `source_id` is mandatory in v0 lockfiles. Locks that omit `source_id` or use
+  placeholder values (e.g. `"unknown"`) are rejected with a clear remediation
+  message (“regenerate the lockfile with `drift vendor`”).
+- `drift vendor` fails loudly if the cache index is missing `source_id` for a
+  package, to prevent producing non-authoritative lockfiles.
+
+Progress note:
+- `drift fetch` now validates that each referenced `.dmp` declares the same identity
+  as the source `index.json` entry (package_id, version, target) and reports a clear
+  “identity mismatch” error when they differ.
+- `drift fetch` error messages for sha mismatches now include both expected and
+  computed sha256 values and the originating index path.
+- Driver coverage added in:
+  - `lang2/tests/driver/tests/test_drift_publish_fetch_vendor.py`
+    - sha mismatch between index and bytes is rejected,
+    - identity mismatch between index and package manifest is rejected,
+    - malformed index entries are rejected.
 
 ### Phase 6 — Concurrency/runtime follow-on (post re-export authority)
 

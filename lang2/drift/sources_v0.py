@@ -16,6 +16,18 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class DirSource:
+	"""
+	A local directory repository source.
+
+	`source_id` is a stable identifier chosen by the user (not derived from a
+	path). It is used for deterministic selection, lock pinning, and
+	human-readable diagnostics.
+
+	`priority` is an integer where lower values are preferred.
+	"""
+
+	source_id: str
+	priority: int
 	path: Path
 
 
@@ -41,9 +53,14 @@ def load_sources_v0(path: Path) -> SourcesV0:
 		kind = s.get("kind")
 		if kind != "dir":
 			raise ValueError("unsupported source kind (MVP supports dir only)")
+		source_id = s.get("id")
+		if not isinstance(source_id, str) or not source_id:
+			raise ValueError("dir source must have a non-empty 'id' string")
+		raw_priority = s.get("priority")
+		if not isinstance(raw_priority, int):
+			raise ValueError("dir source must have an integer 'priority'")
 		p = s.get("path")
 		if not isinstance(p, str) or not p:
 			raise ValueError("dir source must have a path string")
-		out.append(DirSource(path=Path(p)))
+		out.append(DirSource(source_id=source_id, priority=raw_priority, path=Path(p)))
 	return SourcesV0(sources=out)
-

@@ -5,6 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from lang2.drift.dmir_pkg_v0 import read_identity_v0, sha256_hex
 from lang2.drift.index_v0 import IndexEntry, load_index
 from lang2.drift.lock_v0 import LockEntry, save_lock
 
@@ -48,6 +49,8 @@ MVP behavior:
 			filename=str(raw.get("filename", "")),
 			signers=list(raw.get("signers") or []),
 			unsigned=bool(raw.get("unsigned", False)),
+			source_id=str(raw["source_id"]) if isinstance(raw.get("source_id"), str) and raw.get("source_id") else None,
+			path=str(raw["path"]) if isinstance(raw.get("path"), str) and raw.get("path") else None,
 		)
 		src_pkg = opts.cache_dir / "pkgs" / entry.filename
 		if not src_pkg.exists():
@@ -59,13 +62,35 @@ MVP behavior:
 		if src_sig.exists():
 			shutil.copyfile(src_sig, opts.dest_dir / src_sig.name)
 
+		# Record exact bytes in the lockfile so future fetches can reproduce the
+		# same artifacts (or fail loudly).
+		pkg_hex = sha256_hex(dst_pkg.read_bytes())
+		pkg_sha = f"sha256:{pkg_hex}"
+		if entry.sha256 and entry.sha256 != pkg_sha:
+			raise ValueError(f"cached package sha256 mismatch for {entry.package_id}: index {entry.sha256} != bytes {pkg_sha}")
+		sig_sha: str | None = None
+		if src_sig.exists():
+			sig_bytes = (opts.dest_dir / src_sig.name).read_bytes()
+			sig_sha = f"sha256:{sha256_hex(sig_bytes)}"
+		ident = read_identity_v0(dst_pkg)
+		mod_ids: list[str] = []
+		raw_mods = ident.manifest.get("modules")
+		if isinstance(raw_mods, list):
+			for m in raw_mods:
+				if isinstance(m, dict) and isinstance(m.get("module_id"), str):
+					mod_ids.append(m["module_id"])
+
 		out_entries.append(
 			LockEntry(
 				package_id=entry.package_id,
 				package_version=entry.package_version,
 				target=entry.target,
-				sha256=entry.sha256,
-				filename=entry.filename,
+				pkg_sha256=pkg_sha,
+				sig_sha256=sig_sha,
+				sig_kids=sorted(set(entry.signers)),
+				modules=sorted(set(mod_ids)),
+				source_id=entry.source_id or "",
+				path=entry.path or entry.filename,
 			)
 		)
 
@@ -74,5 +99,10 @@ MVP behavior:
 		if missing:
 			raise ValueError(f"requested package ids not found in cache index: {', '.join(missing)}")
 
-	save_lock(opts.lock_path, out_entries)
+	for e in out_entries:
+		if not e.source_id:
+			raise ValueError(
+				f"cache entry for package_id '{e.package_id}' is missing source_id; re-fetch the package via 'drift fetch' before vendoring"
+			)
 
+	save_lock(opts.lock_path, out_entries)

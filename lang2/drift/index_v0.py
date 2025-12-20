@@ -27,6 +27,11 @@ class IndexEntry:
 	filename: str
 	signers: list[str]  # kids
 	unsigned: bool
+	# Optional provenance: which source repository provided this entry and the
+	# path within that repository. These fields are informational for MVP; the
+	# lockfile may pin them for reproducibility.
+	source_id: str | None = None
+	path: str | None = None
 
 
 def _empty_index() -> dict[str, Any]:
@@ -68,6 +73,8 @@ def get_entry(index_obj: Mapping[str, Any], package_id: str) -> Optional[IndexEn
 			filename=str(raw["filename"]),
 			signers=list(raw.get("signers") or []),
 			unsigned=bool(raw.get("unsigned", False)),
+			source_id=str(raw["source_id"]) if isinstance(raw.get("source_id"), str) and raw.get("source_id") else None,
+			path=str(raw["path"]) if isinstance(raw.get("path"), str) and raw.get("path") else None,
 		)
 	except KeyError:
 		return None
@@ -108,4 +115,7 @@ def upsert_entry(
 		"signers": sorted(set(entry.signers)),
 		"unsigned": entry.unsigned,
 	}
-
+	if entry.source_id:
+		pkgs[entry.package_id]["source_id"] = entry.source_id
+	if entry.path:
+		pkgs[entry.package_id]["path"] = entry.path

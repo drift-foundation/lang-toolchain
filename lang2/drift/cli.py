@@ -96,6 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
 		help="Cache directory (default: ./cache/driftpm)",
 	)
 	fetch.add_argument("--force", action="store_true", help="Replace conflicting entries in cache index")
+	fetch.add_argument(
+		"--lock",
+		type=Path,
+		default=Path("drift.lock.json"),
+		help="Lockfile path; if it exists, fetch reproduces it exactly (default: ./drift.lock.json)",
+	)
 
 	vendor = sub.add_parser("vendor", help="Vendor cached packages into vendor/driftpkgs and write a lockfile")
 	vendor.add_argument(
@@ -206,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
 			return 2
 
 	if args.cmd == "fetch":
-		opts = FetchOptions(sources_path=args.sources, cache_dir=args.cache_dir, force=bool(args.force))
+		opts = FetchOptions(sources_path=args.sources, cache_dir=args.cache_dir, force=bool(args.force), lock_path=args.lock)
 		try:
 			fetch_v0(opts)
 			return 0
