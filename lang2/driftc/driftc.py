@@ -513,6 +513,10 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("-o", "--output", type=Path, help="Path to output executable")
 	parser.add_argument("--emit-ir", type=Path, help="Write LLVM IR to the given path")
 	parser.add_argument("--emit-package", type=Path, help="Write an unsigned package artifact (.dmp) to the given path")
+	parser.add_argument("--package-id", type=str, help="Package identity (required with --emit-package)")
+	parser.add_argument("--package-version", type=str, help="Package version (SemVer; required with --emit-package)")
+	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
+	parser.add_argument("--package-build-epoch", type=str, default=None, help="Optional build epoch label (non-semantic)")
 	parser.add_argument(
 		"--json",
 		action="store_true",
@@ -619,6 +623,47 @@ def main(argv: list[str] | None = None) -> int:
 		# packages by the module ids they provide, which is a content-derived key and
 		# independent of filesystem paths.
 		loaded_pkgs.sort(key=lambda p: tuple(sorted(p.modules_by_id.keys())))
+
+		# Enforce "single version per package id per build".
+		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)
+		for pkg in loaded_pkgs:
+			man = pkg.manifest
+			pkg_id = man.get("package_id")
+			pkg_ver = man.get("package_version")
+			pkg_target = man.get("target")
+			if not isinstance(pkg_id, str) or not isinstance(pkg_ver, str) or not isinstance(pkg_target, str):
+				msg = f"package '{pkg.path}' missing package identity fields"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(pkg.path), "line": None, "column": None}]}))
+				else:
+					print(f"{pkg.path}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			pkg_sha = sha256_hex(pkg.path.read_bytes())
+			prev = pkg_id_map.get(pkg_id)
+			if prev is None:
+				pkg_id_map[pkg_id] = (pkg_ver, pkg_target, pkg_sha, pkg.path)
+				continue
+			prev_ver, prev_target, prev_sha, prev_path = prev
+			if pkg_ver != prev_ver or pkg_target != prev_target:
+				msg = (
+					f"multiple versions/targets for package id '{pkg_id}' in build: "
+					f"'{prev_ver}' ({prev_target}) from '{prev_path}' and '{pkg_ver}' ({pkg_target}) from '{pkg.path}'"
+				)
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(pkg.path), "line": None, "column": None}]}))
+				else:
+					print(f"{pkg.path}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			if pkg_sha != prev_sha and pkg.path != prev_path:
+				msg = (
+					f"duplicate package id '{pkg_id}' in build from different artifacts: "
+					f"'{prev_path}' and '{pkg.path}'"
+				)
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(pkg.path), "line": None, "column": None}]}))
+				else:
+					print(f"{pkg.path}:?:?: error: {msg}", file=sys.stderr)
+				return 1
 
 		# Reject duplicate module ids across package files early. Unioning exports
 		# is unsafe because it can mask collisions and make resolution nondeterministic.
@@ -973,6 +1018,30 @@ def main(argv: list[str] | None = None) -> int:
 	# Package emission mode (Milestone 4): produce an unsigned package artifact
 	# containing provisional DMIR payloads for all modules in the workspace.
 	if args.emit_package is not None:
+		if not args.package_id or not args.package_version or not args.package_target:
+			msg = "--emit-package requires --package-id, --package-version, and --package-target"
+			if args.json:
+				print(
+					json.dumps(
+						{
+							"exit_code": 1,
+							"diagnostics": [
+								{
+									"phase": "package",
+									"message": msg,
+									"severity": "error",
+									"file": str(source_path),
+									"line": None,
+									"column": None,
+								}
+							],
+						}
+					)
+				)
+			else:
+				print(f"{source_path}:?:?: error: {msg}", file=sys.stderr)
+			return 1
+
 		mir_funcs, checked_pkg = compile_stubbed_funcs(
 			func_hirs=func_hirs,
 			signatures=signatures,
@@ -1114,6 +1183,10 @@ def main(argv: list[str] | None = None) -> int:
 		manifest_obj: dict[str, object] = {
 			"format": "dmir-pkg",
 			"format_version": 0,
+			"package_id": str(args.package_id),
+			"package_version": str(args.package_version),
+			"target": str(args.package_target),
+			"build_epoch": str(args.package_build_epoch) if args.package_build_epoch else None,
 			"unsigned": True,
 			"unstable_format": True,
 			"payload_kind": "provisional-dmir",

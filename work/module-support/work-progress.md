@@ -378,6 +378,103 @@ Remaining work for Milestone 4 (pinned for later):
 
 ---
 
+## Next steps (pinned; `drift` tool + packages)
+
+These are the pinned phases for the next major step: making the “publish → depend → revoke” loop real across projects.
+
+Pinned goals:
+- Single version per package id per build (hard error if multiple versions of the same `package_id` are present in the build graph).
+- Support exported `exception` / `variant` / `const` in module interfaces (packages).
+- Forbid exported methods (MVP guardrail; methods remain module-internal).
+
+### Phase 1 — Repository workflow in `drift`: publish → fetch → vendor
+
+Goal: another project can depend on packages without manual copying.
+
+1. `drift publish --dest-dir <dir> <pkg.dmp>...`
+- Validate inputs exist and sidecars exist (or allow unsigned only with an explicit flag).
+- Copy `pkg.dmp` + `pkg.dmp.sig` into dest.
+- Update a simple `index.json` in dest:
+  - key: `{package_id, version, target}`
+  - values: paths + sha256 + signers (kids)
+- Enforce “single version per package id” at publish time (error if dest already has a different version of the same `package_id` unless `--force`).
+
+2. `drift fetch --sources drift-sources.json`
+- Read repo indexes listed in `drift-sources.json`.
+- Download/copy packages into project-local cache (pinned cache layout in tooling spec).
+- Verify signature + trust policy at fetch time (early rejection), but `driftc` remains the final gatekeeper.
+
+3. `drift vendor`
+- Copy exact resolved artifacts into `vendor/driftpkgs/` for CI/offline.
+- Write a lock file (minimal `drift.lock.json`) mapping `package_id` → exact version + hashes.
+
+Status: completed (dir-only MVP)
+
+Progress note:
+- Implemented `drift publish` (directory repository with `index.json`, one version per `package_id` unless `--force`).
+- Implemented `drift fetch` (MVP: directory sources only, offline copy into `./cache/driftpm` with merged `index.json`).
+- Implemented `drift vendor` (copies from cache into `./vendor/driftpkgs` and writes `drift.lock.json`).
+- Locked by driver test `lang2/tests/driver/tests/test_drift_publish_fetch_vendor.py`.
+
+### Phase 2 — Package identity/version fields
+
+Goal: drift can resolve; driftc can validate.
+
+4. Add to the package manifest (and/or interface header):
+- `package_id` (namespaced)
+- `package_version` (SemVer)
+- `target` (triple)
+- `build_epoch` optional tag (non-semantic)
+
+5. `driftc` load-time validation:
+- Reject missing identity fields.
+- Reject multiple packages with the same `package_id` but different versions in the build graph.
+
+Status: completed
+
+Progress note:
+- `driftc --emit-package` requires `--package-id`, `--package-version`, and `--package-target` and writes them into the manifest.
+- `driftc` rejects any loaded package missing identity fields (package-phase diagnostic).
+- `driftc` enforces “single version per package id per build” (hard error when the build graph contains conflicting versions/targets or different artifacts for the same id).
+
+### Phase 3 — Interface completeness: exported exceptions/variants/consts
+
+Goal: module interface is authoritative and sufficient for import/typecheck/codegen.
+
+6. Extend `drift-module-interface v0` to include:
+- `exports.values` / `exports.types` / `exports.consts`
+- `signatures` for exported values (already)
+- `exception_schemas`: exported exception name → ordered fields `{name, type}`
+- `variant_schemas`: exported variant base name → type params + arms + field schemas
+- `consts`: exported const name → `{type, value_encoding}` (pinned deterministic encoding)
+
+7. Tighten provider validation (load time):
+- Interface schemas must exactly match payload schemas for exported items.
+- Interface must not list non-exported entries (already enforced for signatures; extend to schemas).
+- Hard reject exported methods in the interface.
+
+8. Add driver negative tests (one per rule):
+- exported exception missing schema
+- exported variant schema mismatch
+- exported const missing type/value
+- method listed in exports → reject
+
+### Phase 4 — Re-export authority
+
+Goal: `export { foo }` where `foo` is imported becomes fully supported and reflected.
+
+9. Make re-exports explicit and validated:
+- Keep the trampoline strategy: `a::foo` exists as a real exported wrapper in the payload and appears normally in the interface.
+- Add tests:
+  - re-exported function callable from a third module
+  - re-exported type usable from a third module
+  - ambiguity errors when two imports try to re-export the same local name
+
+Concrete next commit (pinned):
+- Implement Phase 1 (publish/fetch/vendor) next; Phase 2 (identity/version fields) is complete.
+
+---
+
 ## Implementation notes / known hard parts
 
 ### Namespacing and `TypeId`
@@ -406,4 +503,5 @@ does not leak into runtime semantics.
 
 - Milestone 1: completed
 - Milestone 2: completed (workspace loader + `from <module> import <symbol> [as alias]`, cycle detection, idempotent per-file imports)
-- Milestone 3: completed for explicit exports + visibility enforcement; ABI-boundary codegen rules deferred to Milestone 4
+- Milestone 3: completed for explicit exports + visibility enforcement (explicit export set required; importing non-exported symbols is an error).
+- Milestone 4: in progress (package artifacts + trust pipeline); MVP DMIR-PKG, type linking, and ABI-boundary call enforcement are implemented; remaining work is Phase 1 drift workflows + Phase 3 interface completeness + Phase 4 re-export authority.

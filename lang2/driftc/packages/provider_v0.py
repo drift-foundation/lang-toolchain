@@ -154,6 +154,17 @@ def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_b
 	(for hashing) can provide them to avoid a second read.
 	"""
 	pkg = load_dmir_pkg_v0(path)
+	# Package identity fields (pinned): required for dependency resolution and for
+	# driftc to enforce "single version per package id per build".
+	pkg_id = pkg.manifest.get("package_id")
+	pkg_ver = pkg.manifest.get("package_version")
+	pkg_target = pkg.manifest.get("target")
+	if not isinstance(pkg_id, str) or not pkg_id:
+		raise ValueError("package manifest missing package_id")
+	if not isinstance(pkg_ver, str) or not pkg_ver:
+		raise ValueError("package manifest missing package_version")
+	if not isinstance(pkg_target, str) or not pkg_target:
+		raise ValueError("package manifest missing target")
 	data = pkg_bytes if pkg_bytes is not None else path.read_bytes()
 	verify_package_signatures(
 		pkg_path=path,

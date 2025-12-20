@@ -5,6 +5,8 @@ import argparse
 import json
 from pathlib import Path
 
+from lang2.drift.fetch import FetchOptions, fetch_v0
+from lang2.drift.publish import PublishOptions, publish_packages_v0
 from lang2.drift.sign import SignOptions, sign_package_v0
 from lang2.drift.trust import (
 	TrustAddKeyOptions,
@@ -15,6 +17,7 @@ from lang2.drift.trust import (
 	revoke_kid_in_trust_store,
 )
 from lang2.drift.keygen import KeygenOptions, keygen_ed25519_seed
+from lang2.drift.vendor import VendorOptions, vendor_v0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -73,6 +76,53 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 	trust_revoke.add_argument("--kid", type=str, required=True, help="Key id (kid) to revoke")
 	trust_revoke.add_argument("--reason", type=str, default=None, help="Optional revocation reason")
+
+	publish = sub.add_parser("publish", help="Publish package(s) to a local directory repository (index.json)")
+	publish.add_argument("--dest-dir", type=Path, required=True, help="Destination directory (repository root)")
+	publish.add_argument("packages", nargs="+", type=Path, help="One or more pkg.dmp files to publish")
+	publish.add_argument("--force", action="store_true", help="Replace existing entry/files for the same package_id")
+	publish.add_argument(
+		"--allow-unsigned",
+		action="store_true",
+		help="Allow publishing unsigned packages (no .sig sidecar)",
+	)
+
+	fetch = sub.add_parser("fetch", help="Fetch packages from local sources into a project cache")
+	fetch.add_argument("--sources", type=Path, required=True, help="Path to drift-sources.json")
+	fetch.add_argument(
+		"--cache-dir",
+		type=Path,
+		default=Path("cache") / "driftpm",
+		help="Cache directory (default: ./cache/driftpm)",
+	)
+	fetch.add_argument("--force", action="store_true", help="Replace conflicting entries in cache index")
+
+	vendor = sub.add_parser("vendor", help="Vendor cached packages into vendor/driftpkgs and write a lockfile")
+	vendor.add_argument(
+		"--cache-dir",
+		type=Path,
+		default=Path("cache") / "driftpm",
+		help="Cache directory (default: ./cache/driftpm)",
+	)
+	vendor.add_argument(
+		"--dest-dir",
+		type=Path,
+		default=Path("vendor") / "driftpkgs",
+		help="Vendored package directory (default: ./vendor/driftpkgs)",
+	)
+	vendor.add_argument(
+		"--lock",
+		type=Path,
+		default=Path("drift.lock.json"),
+		help="Lockfile output path (default: ./drift.lock.json)",
+	)
+	vendor.add_argument(
+		"--package-id",
+		dest="package_ids",
+		action="append",
+		default=None,
+		help="Restrict vendoring to specific package_id (repeatable); defaults to all cached packages",
+	)
 	return p
 
 
@@ -140,5 +190,42 @@ def main(argv: list[str] | None = None) -> int:
 				return 2
 
 		raise AssertionError("unreachable")
+
+	if args.cmd == "publish":
+		opts = PublishOptions(
+			dest_dir=args.dest_dir,
+			package_paths=list(args.packages),
+			force=bool(args.force),
+			allow_unsigned=bool(args.allow_unsigned),
+		)
+		try:
+			publish_packages_v0(opts)
+			return 0
+		except Exception as err:
+			p.error(str(err))
+			return 2
+
+	if args.cmd == "fetch":
+		opts = FetchOptions(sources_path=args.sources, cache_dir=args.cache_dir, force=bool(args.force))
+		try:
+			fetch_v0(opts)
+			return 0
+		except Exception as err:
+			p.error(str(err))
+			return 2
+
+	if args.cmd == "vendor":
+		opts = VendorOptions(
+			cache_dir=args.cache_dir,
+			dest_dir=args.dest_dir,
+			lock_path=args.lock,
+			package_ids=list(args.package_ids) if args.package_ids else None,
+		)
+		try:
+			vendor_v0(opts)
+			return 0
+		except Exception as err:
+			p.error(str(err))
+			return 2
 
 	raise AssertionError("unreachable")

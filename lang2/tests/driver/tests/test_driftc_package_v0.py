@@ -19,6 +19,17 @@ from lang2.driftc.packages.signature_v0 import compute_ed25519_kid
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
+def _emit_pkg_args(package_id: str) -> list[str]:
+	return [
+		"--package-id",
+		package_id,
+		"--package-version",
+		"0.0.0",
+		"--package-target",
+		"test-target",
+	]
+
+
 def _write_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(text, encoding="utf-8")
@@ -126,7 +137,19 @@ fn add(a: Int, b: Int) returns Int {{
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(module_dir / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "lib.drift"),
+				*_emit_pkg_args(module_id),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 	return pkg_path
 
 
@@ -149,7 +172,19 @@ fn hidden() returns Int {{
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "hidden.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(module_dir / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "lib.drift"),
+				*_emit_pkg_args(module_id),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 	return pkg_path
 
 
@@ -170,7 +205,19 @@ fn make() returns Point {{
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "point.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(module_dir / "point.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "point.drift"),
+				*_emit_pkg_args(module_id),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 	return pkg_path
 
 
@@ -197,7 +244,19 @@ fn make() returns Point {{
 """.lstrip(),
 	)
 	pkg_path = tmp_path / f"{module_id.replace('.', '_')}.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(module_dir / "point.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "point.drift"),
+				*_emit_pkg_args(module_id),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 	return pkg_path
 
 
@@ -207,6 +266,7 @@ def _emit_optional_variant_pkg(
 	module_id: str = "acme.opt",
 	extra_arm: bool = False,
 	pkg_name: str | None = None,
+	package_id: str | None = None,
 ) -> Path:
 	"""
 	Emit a package that exports a generic `variant Optional<T>` and a function
@@ -244,7 +304,19 @@ fn foo() returns Optional<Int> {{
 """.lstrip(),
 	)
 	pkg_path = tmp_path / (pkg_name or f"{module_id.replace('.', '_')}.dmp")
-	assert driftc_main(["-M", str(tmp_path), str(module_dir / "opt.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "opt.drift"),
+				*_emit_pkg_args(package_id or module_id),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 	return pkg_path
 
 
@@ -344,7 +416,14 @@ fn add(a: Int, b: Int) returns Int {
 	out1 = tmp_path / "p1.dmp"
 	out2 = tmp_path / "p2.dmp"
 
-	argv_common = ["-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "lib" / "lib.drift"), "--emit-package"]
+	argv_common = [
+		"-M",
+		str(tmp_path),
+		str(tmp_path / "main.drift"),
+		str(tmp_path / "lib" / "lib.drift"),
+		*_emit_pkg_args("test.determinism"),
+		"--emit-package",
+	]
 	assert driftc_main(argv_common + [str(out1)]) == 0
 	assert driftc_main(argv_common + [str(out2)]) == 0
 
@@ -420,8 +499,8 @@ fn main() returns Int {
 		str(pkgs_b),
 	]
 
-	assert driftc_main(argv_ab + ["--emit-package", str(out1)]) == 0
-	assert driftc_main(argv_ba + ["--emit-package", str(out2)]) == 0
+	assert driftc_main(argv_ab + [*_emit_pkg_args("test.determinism"), "--emit-package", str(out1)]) == 0
+	assert driftc_main(argv_ba + [*_emit_pkg_args("test.determinism"), "--emit-package", str(out2)]) == 0
 	assert out1.read_bytes() == out2.read_bytes()
 
 
@@ -469,6 +548,7 @@ fn main() returns Int {
 		str(pkgs),
 		"--allow-unsigned-from",
 		str(pkgs),
+		*_emit_pkg_args("test.determinism"),
 		"--emit-package",
 	]
 
@@ -534,6 +614,7 @@ fn main() returns Int {
 		str(pkgs),
 		"--allow-unsigned-from",
 		str(pkgs),
+		*_emit_pkg_args("test.determinism"),
 		"--emit-package",
 	]
 
@@ -580,7 +661,15 @@ fn add(a: Int, b: Int) returns Int {
 
 	out = tmp_path / "p.dmp"
 	assert driftc_main(
-		["-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(out)]
+		[
+			"-M",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			str(tmp_path / "lib" / "lib.drift"),
+			*_emit_pkg_args("test.roundtrip"),
+			"--emit-package",
+			str(out),
+		]
 	) == 0
 
 	pkg = load_package_v0(out)
@@ -606,7 +695,19 @@ fn add(a: Int, b: Int) returns Int {
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 
 	# Load once to discover a concrete blob offset, then corrupt the blob bytes.
 	pkg_ok = load_package_v0(pkg_path)
@@ -634,7 +735,19 @@ fn add(a: Int, b: Int) returns Int {
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 
 	_patch_pkg_header(pkg_path, manifest_sha256=b"\0" * 32)
 	with pytest.raises(ValueError, match="manifest sha256 mismatch"):
@@ -655,7 +768,19 @@ fn add(a: Int, b: Int) returns Int {
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 
 	_patch_pkg_header(pkg_path, toc_sha256=b"\0" * 32)
 	with pytest.raises(ValueError, match="toc sha256 mismatch"):
@@ -676,7 +801,19 @@ fn add(a: Int, b: Int) returns Int {
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg_path)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg_path),
+			]
+		)
+		== 0
+	)
 
 	# Duplicate the first TOC entry's sha256 into the second entry.
 	header_bytes = pkg_path.read_bytes()[: dmir_pkg_v0.HEADER_SIZE_V0]
@@ -724,7 +861,19 @@ fn add(a: Int, b: Int) returns Int {{
 """.lstrip(),
 		)
 		pkg = tmp_path / f"lib{n}.dmp"
-		assert driftc_main(["-M", str(root), str(root / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+		assert (
+			driftc_main(
+				[
+					"-M",
+					str(root),
+					str(root / "lib" / "lib.drift"),
+					*_emit_pkg_args(f"test.lib{n}"),
+					"--emit-package",
+					str(pkg),
+				]
+			)
+			== 0
+		)
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -773,7 +922,19 @@ fn make() returns S {
 """.lstrip(),
 	)
 	pkg = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -823,7 +984,19 @@ fn unused() returns Int {
 """.lstrip(),
 	)
 	pkg = tmp_path / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -886,7 +1059,19 @@ fn add(a: Int, b: Int) returns Int {
 	pkg_root = tmp_path / "pkgs"
 	pkg_root.mkdir(parents=True, exist_ok=True)
 	pkg = pkg_root / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -1508,7 +1693,19 @@ fn add(a: Int, b: Int) returns Int {
 	pkg_root = tmp_path / "pkgs"
 	pkg_root.mkdir(parents=True, exist_ok=True)
 	pkg = pkg_root / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
 
 	# Remove the "unsigned": true marker without changing manifest length.
 	def patch_manifest(old: bytes) -> bytes:
@@ -1632,8 +1829,10 @@ fn main() returns Int {
 
 def test_driftc_rejects_variant_schema_collision_between_packages(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	# The same module id must not be provided by multiple packages.
-	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt", pkg_name="opt_a.dmp")
-	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt", extra_arm=True, pkg_name="opt_b.dmp")
+	_emit_optional_variant_pkg(tmp_path, module_id="acme.opt", pkg_name="opt_a.dmp", package_id="test.opt_a")
+	_emit_optional_variant_pkg(
+		tmp_path, module_id="acme.opt", extra_arm=True, pkg_name="opt_b.dmp", package_id="test.opt_b"
+	)
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -1813,12 +2012,15 @@ def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_
 	payload_bytes = canonical_json_bytes(payload_obj)
 	iface_sha = sha256_hex(iface_bytes)
 	payload_sha = sha256_hex(payload_bytes)
-	out_pkg = tmp_path / "badiface.dmp"
+	out_pkg = pkg_path
 	write_dmir_pkg_v0(
 		out_pkg,
 		manifest_obj={
 			"format": "dmir-pkg",
 			"format_version": 0,
+			"package_id": "acme.badiface",
+			"package_version": "0.0.0",
+			"target": "test-target",
 			"unsigned": True,
 			"unstable_format": True,
 			"payload_kind": "provisional-dmir",
@@ -1894,12 +2096,15 @@ def test_driftc_rejects_package_with_exported_value_missing_interface_signature(
 	payload_bytes = canonical_json_bytes(payload_obj)
 	iface_sha = sha256_hex(iface_bytes)
 	payload_sha = sha256_hex(payload_bytes)
-	out_pkg = tmp_path / "badiface2.dmp"
+	out_pkg = pkg_path
 	write_dmir_pkg_v0(
 		out_pkg,
 		manifest_obj={
 			"format": "dmir-pkg",
 			"format_version": 0,
+			"package_id": "acme.badiface2",
+			"package_version": "0.0.0",
+			"target": "test-target",
 			"unsigned": True,
 			"unstable_format": True,
 			"payload_kind": "provisional-dmir",
@@ -1980,12 +2185,15 @@ def test_driftc_rejects_package_with_exports_mismatch_between_interface_and_payl
 	payload_bytes = canonical_json_bytes(payload_obj)
 	iface_sha = sha256_hex(iface_bytes)
 	payload_sha = sha256_hex(payload_bytes)
-	out_pkg = tmp_path / "badiface3.dmp"
+	out_pkg = pkg_path
 	write_dmir_pkg_v0(
 		out_pkg,
 		manifest_obj={
 			"format": "dmir-pkg",
 			"format_version": 0,
+			"package_id": "acme.badiface3",
+			"package_version": "0.0.0",
+			"target": "test-target",
 			"unsigned": True,
 			"unstable_format": True,
 			"payload_kind": "provisional-dmir",
@@ -2056,7 +2264,19 @@ fn add(a: Int, b: Int) returns Int {
 	pkg_root = tmp_path / "pkgs"
 	pkg_root.mkdir(parents=True, exist_ok=True)
 	pkg = pkg_root / "lib.dmp"
-	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(pkg)]) == 0
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
 
 	_write_file(
 		tmp_path / "main.drift",
