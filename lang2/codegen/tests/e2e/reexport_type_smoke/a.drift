@@ -1,0 +1,10 @@
+module a
+
+struct Point(x: Int, y: Int)
+
+export { Point, make }
+
+fn make() returns Point {
+	return Point(x = 1, y = 2);
+}
+

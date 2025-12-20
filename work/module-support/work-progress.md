@@ -260,7 +260,7 @@ Tests:
 - Importing a private symbol should be a compile error.
 - Exported functions must be compiled with the cross-module ABI shape.
 
-Status: completed (explicit exports enforced; ABI-boundary enforcement deferred to package artifacts)
+Status: completed
 
 Progress note:
 - Parser support for `export { ... }` and `from <module> import <symbol> [as alias]`
@@ -281,9 +281,9 @@ Implementation note (pinned; avoid ABI leaks):
 
 Status update (MVP reality):
 - Explicit exports are enforced and imports reject non-exported symbols.
-- ABI-boundary calling convention enforcement is deferred until package artifact
-  generation (Milestone 4), because source-workspace builds currently compile and
-  link modules in one unit and do not yet emit boundary wrappers/metadata.
+- Export metadata is now consumed by the package pipeline and LLVM backend:
+  cross-module calls to exported functions always target the public entrypoint
+  wrapper (uniform `FnResult<Ok, Error*>` ABI), never `__impl`.
 
 ### Milestone 4 — Artifact generation (post-MVP, but planned now)
 
@@ -346,7 +346,7 @@ Work:
   - enforces exported ABI boundary rules using the recorded interface table
   - produces either an executable or another unsigned package artifact
 
-Status: in progress (MVP container + package consumption + TypeId remapping implemented; ABI-boundary enforcement deferred)
+Status: completed (DMIR-PKG v0 + package consumption + deterministic linking + trust verification + ABI boundary)
 
 Progress note (current reality):
 - Unsigned package artifacts are implemented (DMIR-PKG v0, deterministic manifest+blobs, hash-verified).
@@ -459,14 +459,15 @@ Goal: module interface is authoritative and sufficient for import/typecheck/code
 - exported const missing type/value
 - method listed in exports → reject
 
-Status: in progress
+Status: completed
 
 Progress note:
 - Package module interfaces now include:
-  - `exports.values/types/consts` (consts are present but remain empty in MVP),
+  - `exports.values/types/consts`,
   - `exception_schemas` for exported exceptions (keyed by event FQN),
   - `variant_schemas` for exported variants (keyed by variant name),
-  - `consts` table placeholder (empty until const declarations exist).
+- Compile-time `const` declarations are implemented end-to-end (parser/merge/import/export/typecheck/MIR/codegen)
+  and package interfaces carry exported consts with deterministic value encodings.
 - `driftc` validates these schemas at package load time and rejects:
   - exported exception/variant missing or mismatched interface schemas,
   - exported methods (guardrail; methods must not appear in exports).
@@ -474,6 +475,7 @@ Progress note:
   - `test_driftc_rejects_package_with_exported_exception_missing_schema`
   - `test_driftc_rejects_package_with_exported_variant_missing_schema`
   - `test_driftc_rejects_package_exporting_method_value`
+  - (consts) `test_driftc_allows_import_of_exported_const_from_package`
 
 ### Phase 4 — Re-export authority
 
@@ -488,6 +490,54 @@ Goal: `export { foo }` where `foo` is imported becomes fully supported and refle
 
 Concrete next commit (pinned):
 - Implement Phase 1 (publish/fetch/vendor) next; Phase 2 (identity/version fields) is complete.
+
+Status: pending (next)
+
+Execution plan (pinned for next work):
+
+#### 1) Make re-export resolution deterministic and explicit
+
+- `from a import foo` + `export { foo }` must always result in a real exported symbol of the current module.
+- Keep the trampoline strategy for values: generate `m::foo` as a wrapper forwarding to `a::foo`.
+- Re-exported types must be exported under the current module’s interface without duplicating the type definition.
+
+#### 2) Reflect re-exports in the interface table
+
+- The module interface export lists must represent what downstream sees, including re-exports.
+- For re-exported values, the interface signature must be the trampoline signature (byte-for-byte equal to the target signature, but owned by the exporting module identity).
+
+#### 3) Add tests (driver + e2e)
+
+- e2e: module `b` re-exports `a.foo`; module `c` imports from `b` and calls `foo()`.
+- e2e: module `b` re-exports type `a.Point`; module `c` uses `Point` via `b`.
+- negative: ambiguous re-export if two different imports bind the same local name and you try to export it.
+
+Status: completed
+
+Progress note:
+- Value re-exports are authoritative: `from a import foo; export { foo }` always materializes a trampoline `this_module::foo` forwarding to `a::foo`.
+- Type re-exports are supported without duplicating types: exported type names may resolve to a defining module identity (module-scoped nominal keys preserved).
+- Deterministic ambiguity diagnostics are enforced when a module attempts to export a name that is bound to conflicting imports.
+- E2E coverage:
+  - `lang2/codegen/tests/e2e/reexport_smoke` (value re-export)
+  - `lang2/codegen/tests/e2e/reexport_type_smoke` (type re-export + third-module consumption)
+  - `lang2/codegen/tests/e2e/reexport_ambiguous_import_conflict` (negative)
+
+### Phase 5 — Ecosystem minimum polish (post re-export authority)
+
+Goal: make local/offline workflows robust without chasing networking.
+
+Pinned next polish items:
+- lockfile semantics (`drift.lock.json` authoritative)
+- `drift fetch` supports multiple sources and deterministic selection rules
+- better error messages when index conflicts or identity mismatches occur
+
+### Phase 6 — Concurrency/runtime follow-on (post re-export authority)
+
+Goal: once re-exports are authoritative, build stdlib modules cleanly without reshuffling symbol locations.
+
+Pinned follow-on:
+- concurrency/runtime work (e.g., `std.concurrent`, `std.io`, `std.fmt`)
 
 ---
 
@@ -520,4 +570,4 @@ does not leak into runtime semantics.
 - Milestone 1: completed
 - Milestone 2: completed (workspace loader + `from <module> import <symbol> [as alias]`, cycle detection, idempotent per-file imports)
 - Milestone 3: completed for explicit exports + visibility enforcement (explicit export set required; importing non-exported symbols is an error).
-- Milestone 4: in progress (package artifacts + trust pipeline); MVP DMIR-PKG, type linking, and ABI-boundary call enforcement are implemented; remaining work is Phase 1 drift workflows + Phase 3 interface completeness + Phase 4 re-export authority.
+- Milestone 4: completed for MVP (package artifacts + trust pipeline + deterministic linking + ABI-boundary call enforcement); deferred work remains around richer re-export authority (`pub use` graphs) and future DMIR evolution.

@@ -1,0 +1,4 @@
+module b
+
+from a import foo as x
+

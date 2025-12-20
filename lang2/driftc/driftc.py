@@ -1143,12 +1143,16 @@ def main(argv: list[str] | None = None) -> int:
 			exported_values.sort()
 
 			exported_types_obj: object = {}
+			reexports_obj: object = {}
 			if isinstance(module_exports, dict):
 				mexp = module_exports.get(mid, {})
 				if isinstance(mexp, dict):
 					exported_types_obj = mexp.get("types", {})
+					reexports_obj = mexp.get("reexports", {})
 			if not isinstance(exported_types_obj, dict):
 				exported_types_obj = {}
+			if not isinstance(reexports_obj, dict):
+				reexports_obj = {}
 			exported_types: dict[str, list[str]] = {
 				"structs": list(exported_types_obj.get("structs", [])) if isinstance(exported_types_obj.get("structs"), list) else [],
 				"variants": list(exported_types_obj.get("variants", [])) if isinstance(exported_types_obj.get("variants"), list) else [],
@@ -1166,6 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
 				exported_values=exported_values,
 				exported_types=exported_types,
 				exported_consts=exported_consts,
+				reexports=reexports_obj,
 			)
 
 			# Module interface (package interface table v0).
@@ -1251,6 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
 						"consts": [],
 					},
 				),
+				"reexports": payload_obj.get("reexports", {}) if isinstance(payload_obj, dict) else {},
 				"signatures": iface_sigs,
 				"exception_schemas": iface_exc,
 				"variant_schemas": iface_var,

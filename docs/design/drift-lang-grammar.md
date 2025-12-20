@@ -46,7 +46,7 @@ ImportItem   ::= ModulePath ("as" Ident)?
 Declarations:
 ```
 TopDecl      ::= FnDef | StructDef | TraitDef | Implement | VariantDef
-               | ExceptionDef | InterfaceDef | TypeDef
+               | ExceptionDef | InterfaceDef | TypeDef | ConstDef
 
 FnDef        ::= "fn" Ident "(" Params? ")" Returns? TraitReq? Block
 Params       ::= Param ("," Param)*
@@ -79,6 +79,8 @@ InterfaceDef ::= "interface" Ident TraitParams? "{" InterfaceMember+ "}"
 InterfaceMember ::= FnSig TERMINATOR?
 
 TypeDef      ::= "type" Ident "=" Ty TERMINATOR?
+
+ConstDef     ::= "const" Ident ":" Ty "=" Expr TERMINATOR
 ```
 
 Functions and types:

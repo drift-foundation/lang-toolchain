@@ -1,0 +1,7 @@
+module b
+
+from a import Point
+from a import make
+
+export { Point, make }
+

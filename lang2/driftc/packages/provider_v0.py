@@ -134,6 +134,68 @@ def _validate_package_interfaces(pkg: LoadedPackage) -> None:
 		):
 			raise _err(f"module '{mid}' interface exports do not match payload exports")
 
+		# Re-export metadata must match between interface and payload.
+		#
+		# Values are re-exported by materialized trampoline functions, but types and
+		# (future) consts may be re-exported as aliases. This metadata is required
+		# so import resolution can bind to the defining module identity without
+		# duplicating nominal type definitions.
+		iface_reexp = mod.interface.get("reexports", {})
+		payload_reexp = mod.payload.get("reexports", {})
+		if iface_reexp is None:
+			iface_reexp = {}
+		if payload_reexp is None:
+			payload_reexp = {}
+		if not isinstance(iface_reexp, dict):
+			raise _err(f"module '{mid}' interface reexports must be an object")
+		if not isinstance(payload_reexp, dict):
+			raise _err(f"module '{mid}' payload reexports must be an object")
+		if iface_reexp != payload_reexp:
+			raise _err(f"module '{mid}' interface reexports do not match payload reexports")
+
+		types_reexp = iface_reexp.get("types", {})
+		consts_reexp = iface_reexp.get("consts", {})
+		if types_reexp is None:
+			types_reexp = {}
+		if consts_reexp is None:
+			consts_reexp = {}
+		if not isinstance(types_reexp, dict):
+			raise _err(f"module '{mid}' reexports.types must be an object")
+		if not isinstance(consts_reexp, dict):
+			raise _err(f"module '{mid}' reexports.consts must be an object")
+		for kind, exported in (("structs", type_structs), ("variants", type_variants), ("exceptions", type_excs)):
+			kind_map = types_reexp.get(kind, {})
+			if kind_map is None:
+				kind_map = {}
+			if not isinstance(kind_map, dict):
+				raise _err(f"module '{mid}' reexports.types.{kind} must be an object")
+			for local_name, target in kind_map.items():
+				if not isinstance(local_name, str):
+					raise _err(f"module '{mid}' reexports.types.{kind} has non-string key")
+				if local_name not in exported:
+					raise _err(f"module '{mid}' reexports.types.{kind} contains non-exported name '{local_name}'")
+				if not isinstance(target, dict):
+					raise _err(f"module '{mid}' reexports.types.{kind} target for '{local_name}' must be an object")
+				tmod = target.get("module")
+				tname = target.get("name")
+				if not isinstance(tmod, str) or not tmod:
+					raise _err(f"module '{mid}' reexports.types.{kind} target for '{local_name}' missing module")
+				if not isinstance(tname, str) or not tname:
+					raise _err(f"module '{mid}' reexports.types.{kind} target for '{local_name}' missing name")
+		for local_name, target in consts_reexp.items():
+			if not isinstance(local_name, str):
+				raise _err(f"module '{mid}' reexports.consts has non-string key")
+			if local_name not in consts:
+				raise _err(f"module '{mid}' reexports.consts contains non-exported name '{local_name}'")
+			if not isinstance(target, dict):
+				raise _err(f"module '{mid}' reexports.consts target for '{local_name}' must be an object")
+			tmod = target.get("module")
+			tname = target.get("name")
+			if not isinstance(tmod, str) or not tmod:
+				raise _err(f"module '{mid}' reexports.consts target for '{local_name}' missing module")
+			if not isinstance(tname, str) or not tname:
+				raise _err(f"module '{mid}' reexports.consts target for '{local_name}' missing name")
+
 		iface_sigs = mod.interface.get("signatures")
 		if not isinstance(iface_sigs, dict):
 			raise _err(f"module '{mid}' interface missing signatures table")
@@ -322,6 +384,7 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 	    "values": set[str],
 	    "types": {"structs": set[str], "variants": set[str], "exceptions": set[str]},
 	    "consts": set[str],
+	    "reexports": {"types": {"structs": dict, "variants": dict, "exceptions": dict}, "consts": dict},
 	  }
 	"""
 	mod_to_pkg: dict[str, Path] = {}
@@ -340,6 +403,7 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 			values = exports.get("values")
 			types = exports.get("types")
 			consts = exports.get("consts")
+			reexports = mod.interface.get("reexports", {}) if isinstance(mod.interface, dict) else {}
 			type_structs: list[str] = []
 			type_variants: list[str] = []
 			type_excs: list[str] = []
@@ -354,5 +418,6 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 				"values": set(values) if isinstance(values, list) else set(),
 				"types": {"structs": set(type_structs), "variants": set(type_variants), "exceptions": set(type_excs)},
 				"consts": set(consts) if isinstance(consts, list) else set(),
+				"reexports": reexports if isinstance(reexports, dict) else {},
 			}
 	return out

@@ -1,0 +1,4 @@
+module b
+
+from c import foo as x
+

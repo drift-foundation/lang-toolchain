@@ -414,6 +414,38 @@ To access the member in that case, write it explicitly using `self.name(...)`, `
 
 ---
 
+### 3.10. Constants (`const`)
+
+Drift supports top-level constants via `const`. Constants are immutable,
+module-scoped bindings that are evaluated at compile time and embedded into
+uses (no runtime storage is required in v1).
+
+Syntax:
+
+```drift
+const ANSWER: Int = 42
+const OK: Bool = true
+const GREETING: String = "hello"
+```
+
+MVP rules (v1):
+
+- A `const` declaration is **top-level only** (not inside blocks).
+- A `const` must have an explicit type annotation.
+- The initializer must be a **compile-time literal**:
+  - `Int`, `Uint`, `Bool`, `String`, `Float` literals
+  - unary `+` / `-` applied to an integer/float literal
+- Non-literal expressions (`1 + 2`, calls, indexing, interpolation, etc.) are
+  rejected in v1.
+- A `const` name is a value-namespace binding and participates in import/export
+  and conflict rules like other exported values.
+
+Tooling/packaging note:
+
+- When a module exports a constant, its type and literal value become part of
+  the module interface recorded in DMIR/DMIR-PKG (§20), so importing modules do
+  not need access to source to type-check and inline the constant.
+
 
 ## 4. Ownership and move semantics (`move x`)
 
@@ -1488,6 +1520,7 @@ Rules:
   the module’s export set.
 - The export list names top-level items declared in the current module:
   - functions
+  - constants (`const`)
   - types such as `struct`, `variant`, `exception`, `trait`, `interface`, `type`
 - `export` may appear multiple times across multiple files in the same module;
   the effective export set is their union.

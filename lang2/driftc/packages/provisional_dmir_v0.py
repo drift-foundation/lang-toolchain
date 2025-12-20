@@ -227,6 +227,7 @@ def encode_module_payload_v0(
 	exported_values: list[str],
 	exported_types: dict[str, list[str]],
 	exported_consts: list[str] | None = None,
+	reexports: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Build the provisional payload object (not yet canonical-JSON encoded)."""
 	tt_obj = encode_type_table(type_table)
@@ -254,12 +255,14 @@ def encode_module_payload_v0(
 		"variants": list(exported_types.get("variants", [])),
 		"exceptions": list(exported_types.get("exceptions", [])),
 	}
+	reexports_obj = reexports if isinstance(reexports, dict) else {}
 	return {
 		"payload_kind": "provisional-dmir",
 		"payload_version": 0,
 		"unstable_format": True,
 		"module_id": module_id,
 		"exports": {"values": list(exported_values), "types": types_obj, "consts": consts},
+		"reexports": _to_jsonable(reexports_obj),
 		"consts": const_table,
 		"type_table": tt_obj,
 		"type_table_fingerprint": type_table_fingerprint(tt_obj),

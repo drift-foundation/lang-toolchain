@@ -1,0 +1,6 @@
+module c
+
+export { foo }
+
+fn foo() returns Int { return 2; }
+
