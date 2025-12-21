@@ -1,0 +1,20 @@
+variant Pair {
+	P(x: Int, y: Int),
+}
+
+fn main() returns Int {
+	val p: Pair = P(x = 2, y = 99)
+
+	val a = match p {
+		P() => { 1 }
+		default => { 0 }
+	}
+
+	val b = match p {
+		P(x = v) => { v }
+		default => { 0 }
+	}
+
+	return a + b
+}
+

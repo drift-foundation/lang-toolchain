@@ -662,7 +662,10 @@ class AstToHIR:
 					renamed_arms.append(
 						H.HMatchArm(
 							ctor=arm.ctor,
+							pattern_arg_form=getattr(arm, "pattern_arg_form", "positional"),
 							binders=arm.binders,
+							binder_fields=getattr(arm, "binder_fields", None),
+							binder_field_indices=getattr(arm, "binder_field_indices", []),
 							block=renamed_block,
 							result=renamed_result,
 							loc=arm.loc,
@@ -746,7 +749,20 @@ class AstToHIR:
 			arms.append(
 				H.HMatchArm(
 					ctor=arm.ctor,
+					pattern_arg_form=getattr(arm, "pattern_arg_form", "positional"),
 					binders=new_binders,
+					binder_fields=getattr(arm, "binder_fields", None),
+					# Seed positional binder indices structurally so stage2 lowering has a
+					# stable mapping even in pipelines that don't run the typed checker.
+					#
+					# Named binders require schema-aware mapping and are normalized by the
+					# typed checker; we leave `binder_field_indices` empty for that form.
+					binder_field_indices=(
+						list(range(len(new_binders)))
+						if new_binders
+						and getattr(arm, "pattern_arg_form", "positional") not in ("bare", "paren", "named")
+						else []
+					),
 					block=arm_block,
 					result=arm_result,
 					loc=Span.from_loc(arm.loc),
@@ -887,7 +903,9 @@ class AstToHIR:
 		next_call = H.HMethodCall(receiver=H.HVar(iter_name), method_name="next", args=[])
 		body_block = self.lower_block(stmt.body)
 		arms: list[H.HMatchArm] = [
-			H.HMatchArm(ctor="Some", binders=[stmt.iter_var], block=body_block, result=None),
+			# `for` desugaring matches `Optional<T>::Some(value: T)` positionally,
+			# so the single binder always maps to field index 0.
+			H.HMatchArm(ctor="Some", binders=[stmt.iter_var], binder_field_indices=[0], block=body_block, result=None),
 			H.HMatchArm(ctor=None, binders=[], block=H.HBlock(statements=[H.HBreak()]), result=None),
 		]
 		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms)

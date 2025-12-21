@@ -327,8 +327,22 @@ class HMatchArm(HNode):
 
 	ctor: Optional[str]  # None means default arm
 	binders: list[str]
+	# Field names for named binders, parallel to `binders`. Only meaningful when
+	# `pattern_arg_form == "named"`.
 	block: "HBlock"
 	result: Optional[HExpr]
+	# Pattern argument form:
+	# - "bare": `Ctor` (allowed only for zero-field constructors)
+	# - "paren": `Ctor()` (tag-only match, ignores payload)
+	# - "positional": `Ctor(a, b)` (binds fields by index, exact arity)
+	# - "named": `Ctor(x = a, y = b)` (binds a subset of fields by name)
+	pattern_arg_form: str = "positional"
+	# Field names for named binders, parallel to `binders`. Only meaningful when
+	# `pattern_arg_form == "named"`.
+	binder_fields: Optional[list[str]] = None
+	# Normalized mapping from binders to field indices, parallel to `binders`.
+	# Filled by the typed checker once the scrutinee type is known.
+	binder_field_indices: list[int] = field(default_factory=list)
 	loc: Span = field(default_factory=Span)
 
 

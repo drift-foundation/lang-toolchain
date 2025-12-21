@@ -189,6 +189,9 @@ class HIRToMIR:
 		self._can_throw_by_name: dict[str, bool] = dict(can_throw_by_name) if can_throw_by_name else {}
 		self._current_fn_can_throw: bool | None = self._can_throw_by_name.get(self.b.func.name)
 		self._ret_type = return_type
+		# Stage2 lowering is "assert-only" with respect to match pattern
+		# normalization: the typed checker is expected to populate
+		# `HMatchArm.binder_field_indices` once the scrutinee type is known.
 		# Cache the current function signature for defensive fallbacks in older
 		# unit tests that bypass the checker.
 		self._fn_sig = self._signatures.get(self.b.func.name)
@@ -245,7 +248,11 @@ class HIRToMIR:
 		- `match` is an expression in the language, but it may appear in statement
 		  position as an ExprStmt. In statement position, arm result expressions
 		  (if present) are evaluated and discarded, and arms may omit a result.
-		- Pattern support is positional-only constructor binders plus `default`.
+		- Pattern forms:
+		  - `Ctor` (bare) is allowed only for zero-field constructors.
+		  - `Ctor()` matches ctor tag and ignores payload.
+		  - `Ctor(a,b,...)` binds fields positionally (exact arity).
+		  - `Ctor(x=a,...)` binds a subset by name (normalized by the typed checker).
 		"""
 		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
 		scrut_val = self.lower_expr(expr.scrutinee)
@@ -304,42 +311,93 @@ class HIRToMIR:
 			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=bb.name, else_target=else_block.name))
 			current_block = else_block
 
+		# Final else path: jump to default arm (if present), otherwise unreachable.
 		self.b.set_block(current_block)
 		if default_block is not None:
 			self.b.set_terminator(M.Goto(target=default_block.name))
 		else:
-			# Exhaustive matches should ensure this path is unreachable.
 			self.b.set_terminator(M.Unreachable())
 
-		# Lower each arm block: bind pattern fields, lower statements, store optional result, jump to join.
+		# Lower each arm block: bind pattern fields, lower statements, store optional
+		# result, jump to join.
 		for arm, bb in arm_blocks:
 			self.b.set_block(bb)
+
 			if arm.ctor is not None:
 				arm_def = inst.arms_by_name[arm.ctor]
-				if len(arm.binders) != len(arm_def.field_types):
-					raise AssertionError("match binder arity mismatch reached MIR lowering (checker bug)")
-				for idx, (bname, bty) in enumerate(zip(arm.binders, arm_def.field_types)):
-					field_val = self.b.new_temp()
-					self.b.emit(
-						M.VariantGetField(
-							dest=field_val,
-							variant=scrut_val,
-							variant_ty=scrut_ty,
-							ctor=arm.ctor,
-							field_index=idx,
-							field_ty=bty,
+				form = getattr(arm, "pattern_arg_form", "positional")
+				if form == "bare":
+					if arm_def.field_types:
+						raise AssertionError(
+							"bare ctor pattern for non-zero-field ctor reached MIR lowering (checker bug)"
 						)
-					)
-					self._local_types[field_val] = bty
-					self.b.ensure_local(bname)
-					self._local_types[bname] = bty
-					self.b.emit(M.StoreLocal(local=bname, value=field_val))
+				elif form == "paren":
+					if arm.binders:
+						raise AssertionError("Ctor() pattern must not bind fields (checker bug)")
+				else:
+					# Typed checker is the single source of truth for match pattern
+					# normalization. By the time we reach MIR lowering, any constructor
+					# pattern that binds payload fields must already carry a normalized
+					# binder→field-index mapping.
+					field_indices = list(getattr(arm, "binder_field_indices", []) or [])
+					if len(field_indices) != len(arm.binders):
+						raise AssertionError("match binder field-index mapping missing (checker bug)")
+
+					for bname, fidx in zip(arm.binders, field_indices):
+						if fidx < 0 or fidx >= len(arm_def.field_types):
+							raise AssertionError("match binder field index out of range (checker bug)")
+						bty = arm_def.field_types[fidx]
+						field_val = self.b.new_temp()
+						self.b.emit(
+							M.VariantGetField(
+								dest=field_val,
+								variant=scrut_val,
+								variant_ty=scrut_ty,
+								ctor=arm.ctor,
+								field_index=int(fidx),
+								field_ty=bty,
+							)
+						)
+						self._local_types[field_val] = bty
+						self.b.ensure_local(bname)
+						self._local_types[bname] = bty
+						self.b.emit(M.StoreLocal(local=bname, value=field_val))
+
+			# Lower the arm body statements regardless of pattern kind.
 			self.lower_block(arm.block)
-			if want_value and arm.result is not None and result_local is not None:
-				val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
-				self.b.emit(M.StoreLocal(local=result_local, value=val))
+
+			# If this match is used as a value, store the arm's resulting expression.
+			did_store_result = False
+			if want_value and result_local is not None:
+				if arm.result is None:
+					if self.b.block.terminator is None:
+						raise AssertionError(
+							"value-producing match arm must yield a value or terminate (checker bug)"
+						)
+				else:
+					# If an arm declares a result expression, its statement block must not
+					# diverge; we must be able to evaluate and store the result before
+					# branching to the match join.
+					if self.b.block.terminator is not None:
+						raise AssertionError(
+							"value-producing match arm has a result expression but its block terminates (checker bug)"
+						)
+					val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
+					self.b.emit(M.StoreLocal(local=result_local, value=val))
+					did_store_result = True
+
 			if self.b.block.terminator is None:
+				if want_value and result_local is not None and not did_store_result:
+					raise AssertionError(
+						"value-producing match arm falls through without storing result (lowering bug)"
+					)
 				self.b.set_terminator(M.Goto(target=join_block.name))
+
+		# Defensive invariant: every arm block must end in a terminator. This catches
+		# structural lowering bugs where an arm block is accidentally skipped.
+		for _arm, _bb in arm_blocks:
+			if _bb.terminator is None:
+				raise AssertionError("match arm missing terminator after lowering (lowering bug)")
 
 		# Join point.
 		self.b.set_block(join_block)
@@ -684,11 +742,11 @@ class HIRToMIR:
 		indirect/function-valued calls will be added later if needed.
 		"""
 		if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("qualified variant constructors do not accept keyword args (checker bug)")
 			qm = expr.fn
 			expected = self._current_expected_type()
-			variant_ty = self._infer_qualified_ctor_variant_type(qm, expr.args, expected_type=expected)
+			variant_ty = self._infer_qualified_ctor_variant_type(
+				qm, expr.args, getattr(expr, "kwargs", []) or [], expected_type=expected
+			)
 			if variant_ty is None:
 				raise AssertionError("qualified constructor call cannot determine variant type (checker bug)")
 			inst = self._type_table.get_variant_instance(variant_ty)
@@ -697,9 +755,35 @@ class HIRToMIR:
 			arm_def = inst.arms_by_name.get(qm.member)
 			if arm_def is None:
 				raise AssertionError("unknown constructor reached MIR lowering (checker bug)")
-			if len(expr.args) != len(arm_def.field_types):
-				raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
-			arg_vals = [self.lower_expr(a, expected_type=fty) for a, fty in zip(expr.args, arm_def.field_types)]
+			pos_args = list(expr.args)
+			kw_pairs = list(getattr(expr, "kwargs", []) or [])
+			if pos_args and kw_pairs:
+				raise AssertionError("variant constructor does not allow mixing positional and named arguments (checker bug)")
+
+			field_names = list(getattr(arm_def, "field_names", []) or [])
+			field_types = list(arm_def.field_types)
+			if len(field_names) != len(field_types):
+				raise AssertionError("variant ctor schema/type mismatch reached MIR lowering (checker bug)")
+
+			ordered: list[M.ValueId | None] = [None] * len(field_types)
+			# Evaluate arguments left-to-right as written, but pass them in field order.
+			if kw_pairs:
+				for kw in kw_pairs:
+					try:
+						field_idx = field_names.index(kw.name)
+					except ValueError as err:
+						raise AssertionError("unknown variant ctor field reached MIR lowering (checker bug)") from err
+					if ordered[field_idx] is not None:
+						raise AssertionError("duplicate variant ctor field reached MIR lowering (checker bug)")
+					ordered[field_idx] = self.lower_expr(kw.value, expected_type=field_types[field_idx])
+			else:
+				if len(pos_args) != len(field_types):
+					raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
+				for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
+					ordered[idx] = self.lower_expr(arg_expr, expected_type=fty)
+			if any(v is None for v in ordered):
+				raise AssertionError("missing variant ctor field reached MIR lowering (checker bug)")
+			arg_vals = [v for v in ordered if v is not None]
 			dest = self.b.new_temp()
 			self.b.emit(M.ConstructVariant(dest=dest, variant_ty=variant_ty, ctor=qm.member, args=arg_vals))
 			self._local_types[dest] = variant_ty
@@ -718,14 +802,35 @@ class HIRToMIR:
 					inst = self._type_table.get_variant_instance(expected)
 					if inst is not None and name in inst.arms_by_name:
 						arm_def = inst.arms_by_name[name]
-						if getattr(expr, "kwargs", None):
-							raise AssertionError("variant constructors do not accept keyword args (checker bug)")
-						if len(expr.args) != len(arm_def.field_types):
-							raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
-						arg_vals = [
-							self.lower_expr(a, expected_type=fty)
-							for a, fty in zip(expr.args, arm_def.field_types)
-						]
+						pos_args = list(expr.args)
+						kw_pairs = list(getattr(expr, "kwargs", []) or [])
+						if pos_args and kw_pairs:
+							raise AssertionError("variant constructor does not allow mixing positional and named arguments (checker bug)")
+
+						field_names = list(getattr(arm_def, "field_names", []) or [])
+						field_types = list(arm_def.field_types)
+						if len(field_names) != len(field_types):
+							raise AssertionError("variant ctor schema/type mismatch reached MIR lowering (checker bug)")
+
+						ordered: list[M.ValueId | None] = [None] * len(field_types)
+						# Evaluate arguments left-to-right as written, but pass them in field order.
+						if kw_pairs:
+							for kw in kw_pairs:
+								try:
+									field_idx = field_names.index(kw.name)
+								except ValueError as err:
+									raise AssertionError("unknown variant ctor field reached MIR lowering (checker bug)") from err
+								if ordered[field_idx] is not None:
+									raise AssertionError("duplicate variant ctor field reached MIR lowering (checker bug)")
+								ordered[field_idx] = self.lower_expr(kw.value, expected_type=field_types[field_idx])
+						else:
+							if len(pos_args) != len(field_types):
+								raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
+							for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
+								ordered[idx] = self.lower_expr(arg_expr, expected_type=fty)
+						if any(v is None for v in ordered):
+							raise AssertionError("missing variant ctor field reached MIR lowering (checker bug)")
+						arg_vals = [v for v in ordered if v is not None]
 						dest = self.b.new_temp()
 						self.b.emit(M.ConstructVariant(dest=dest, variant_ty=expected, ctor=name, args=arg_vals))
 						self._local_types[dest] = expected
@@ -2441,6 +2546,7 @@ class HIRToMIR:
 		self,
 		qm: H.HQualifiedMember,
 		args: list[H.HExpr],
+		kwargs: list[H.HKeywordArg] | None = None,
 		*,
 		expected_type: TypeId | None = None,
 	) -> TypeId | None:
@@ -2488,8 +2594,27 @@ class HIRToMIR:
 			arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
 			if arm_schema is None:
 				return None
-			if len(args) != len(arm_schema.fields):
+			kw_pairs = list(kwargs or [])
+			if kw_pairs and args:
 				return None
+
+			ordered_args: list[H.HExpr] = []
+			if kw_pairs:
+				by_name: dict[str, H.HExpr] = {}
+				for kw in kw_pairs:
+					if kw.name in by_name:
+						return None
+					by_name[kw.name] = kw.value
+				for f in arm_schema.fields:
+					if f.name not in by_name:
+						return None
+					ordered_args.append(by_name[f.name])
+				if len(by_name) != len(arm_schema.fields):
+					return None
+			else:
+				if len(args) != len(arm_schema.fields):
+					return None
+				ordered_args = list(args)
 
 			inferred: list[TypeId | None] = [None for _ in schema.type_params]
 
@@ -2517,7 +2642,7 @@ class HIRToMIR:
 					for gsub, tsub in zip(sub, td2.param_types):
 						unify(gsub, tsub)
 
-			for f, arg_expr in zip(arm_schema.fields, args):
+			for f, arg_expr in zip(arm_schema.fields, ordered_args):
 				arg_ty = self._infer_expr_type(arg_expr)
 				if arg_ty is None:
 					return None

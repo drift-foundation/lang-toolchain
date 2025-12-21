@@ -205,8 +205,17 @@ class MatchArm:
 	"""
 
 	ctor: Optional[str]  # None means default arm
+	# Pattern argument form:
+	# - "bare": `Ctor` (allowed only for zero-field constructors)
+	# - "paren": `Ctor()` (tag-only match, ignores payload)
+	# - "positional": `Ctor(a, b)` (binds fields by index, exact arity)
+	# - "named": `Ctor(x = a, y = b)` (binds a subset of fields by name)
+	pattern_arg_form: str
 	binders: List[str]
 	block: List[Stmt]
+	# Field names for named binders, parallel to `binders`. Only meaningful when
+	# `pattern_arg_form == "named"`.
+	binder_fields: Optional[List[str]] = None
 	loc: Span = field(default_factory=Span)
 
 

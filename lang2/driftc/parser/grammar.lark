@@ -291,9 +291,13 @@ variant_field: NAME COLON type_expr
 match_expr: MATCH expr "{" (match_arm (TERMINATOR | COMMA)*)+ "}"
 match_arm: match_pat FATARROW match_arm_body
 match_pat: DEFAULT              -> match_default
-         | NAME "(" [match_binders] ")"  -> match_ctor
+         | NAME "(" ")"         -> match_ctor_paren
+         | NAME "(" match_named_binders ")"  -> match_ctor_named
+         | NAME "(" match_binders ")"  -> match_ctor
          | NAME                  -> match_ctor0
 match_binders: NAME (COMMA NAME)*
+match_named_binders: match_named_binder (COMMA match_named_binder)*
+match_named_binder: NAME EQUAL NAME
 match_arm_body: value_block
               | block
 

@@ -1853,7 +1853,16 @@ def _build_match_expr(tree: Tree) -> MatchExpr:
 			if child_name == "match_pat":
 				pat = next((c for c in child.children if isinstance(c, Tree)), None)
 				break
-			if child_name in ("match_default", "match_ctor", "match_ctor0"):
+			# `match_pat` is not inlined, but because each alternative uses `->`,
+			# Lark typically produces the alternative node directly (e.g.
+			# `match_ctor_paren`) rather than a `match_pat` wrapper.
+			if child_name in (
+				"match_default",
+				"match_ctor",
+				"match_ctor0",
+				"match_ctor_named",
+				"match_ctor_paren",
+			):
 				pat = child
 				break
 		if pat is None:
@@ -1862,17 +1871,44 @@ def _build_match_expr(tree: Tree) -> MatchExpr:
 		pat_kind = _name(pat)
 		ctor: Optional[str] = None
 		binders: list[str] = []
+		binder_fields: list[str] | None = None
+		pattern_arg_form = "positional"
 		if pat_kind == "match_default":
 			ctor = None
+			pattern_arg_form = "bare"
 		elif pat_kind == "match_ctor":
 			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
 			ctor = name_tok.value
 			binders_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_binders"), None)
 			if binders_node is not None:
 				binders = [c.value for c in binders_node.children if isinstance(c, Token) and c.type == "NAME"]
+			pattern_arg_form = "positional"
+		elif pat_kind == "match_ctor_named":
+			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
+			ctor = name_tok.value
+			fields_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_named_binders"), None)
+			if fields_node is None:
+				raise ValueError("match_ctor_named missing match_named_binders")
+			binders = []
+			binder_fields = []
+			for nb in (c for c in fields_node.children if isinstance(c, Tree) and _name(c) == "match_named_binder"):
+				parts = [c for c in nb.children if isinstance(c, Token) and c.type == "NAME"]
+				if len(parts) != 2:
+					raise ValueError("match_named_binder expects two NAME tokens")
+				field_name, binder_name = parts[0].value, parts[1].value
+				binder_fields.append(field_name)
+				binders.append(binder_name)
+			pattern_arg_form = "named"
+		elif pat_kind == "match_ctor_paren":
+			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
+			ctor = name_tok.value
+			binders = []
+			binder_fields = None
+			pattern_arg_form = "paren"
 		elif pat_kind == "match_ctor0":
 			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
 			ctor = name_tok.value
+			pattern_arg_form = "bare"
 		else:
 			raise ValueError(f"Unsupported match_pat shape: {pat_kind}")
 
@@ -1883,7 +1919,16 @@ def _build_match_expr(tree: Tree) -> MatchExpr:
 		if inner is None:
 			raise ValueError("match_arm_body missing block")
 		block = _build_value_block(inner) if _name(inner) == "value_block" else _build_block(inner)
-		arms.append(MatchArm(loc=_loc(arm_node), ctor=ctor, binders=binders, block=block))
+		arms.append(
+			MatchArm(
+				loc=_loc(arm_node),
+				ctor=ctor,
+				pattern_arg_form=pattern_arg_form,
+				binders=binders,
+				binder_fields=binder_fields,
+				block=block,
+			)
+		)
 
 	if not arms:
 		raise ValueError("match_expr requires at least one arm")

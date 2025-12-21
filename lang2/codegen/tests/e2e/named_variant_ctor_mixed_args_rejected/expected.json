@@ -1,0 +1,7 @@
+{
+  "exit_code": 1,
+  "phase": "typecheck",
+  "diagnostics": [
+    { "message_contains": "does not allow mixing positional and named arguments" }
+  ]
+}

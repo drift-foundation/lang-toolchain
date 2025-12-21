@@ -406,6 +406,7 @@ class Checker:
 			self._seed_locals_from_signature(ctx)
 
 			def combined_on_expr(expr: "H.HExpr", typing_ctx: Checker._TypingContext = ctx) -> None:
+				self._match_validator_on_expr(expr, typing_ctx)
 				self._array_validator_on_expr(expr, typing_ctx)
 				self._bitwise_validator_on_expr(expr, typing_ctx)
 				self._void_usage_on_expr(expr, typing_ctx)
@@ -512,6 +513,12 @@ class Checker:
 			elif isinstance(expr, H.HDVInit):
 				for a in expr.args:
 					walk_expr(a, caught_events, catch_all)
+			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+				walk_expr(expr.scrutinee, caught_events, catch_all)
+				for arm in expr.arms:
+					walk_block(arm.block, caught_events, catch_all)
+					if getattr(arm, "result", None) is not None:
+						walk_expr(arm.result, caught_events, catch_all)
 			# literals/vars are leaf nodes
 
 		def walk_block(b: H.HBlock, caught: set[str] | None = None, catch_all: bool = False) -> None:
@@ -738,6 +745,91 @@ class Checker:
 				if callee is not None and callee.signature and callee.signature.return_type_id is not None:
 					return callee.signature.return_type_id
 				return None
+			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HQualifiedMember):
+				# Qualified member calls like `Optional<Int>::Some(1)` produce an
+				# instance of the referenced variant type. This is used for match
+				# scrutinee typing and basic argument checks in the stub pipeline.
+				mod = None
+				if self.current_fn is not None and self.current_fn.signature is not None:
+					mod = getattr(self.current_fn.signature, "module", None)
+				base_ty = checker._resolve_typeexpr(expr.fn.base_type_expr, module_id=mod)
+				td = self.table.get(base_ty)
+				if td.kind is not TypeKind.VARIANT:
+					return None
+
+				# If this is already a concrete instantiation (i.e., not a declared
+				# generic base), return it directly.
+				if self.table.get_variant_instance(base_ty) is not None:
+					return base_ty
+
+				schema = self.table.variant_schemas.get(base_ty)
+				if schema is None:
+					return base_ty
+				# Generic base with no explicit type args: try inference from ctor args.
+				if not schema.type_params:
+					return base_ty
+
+				# Find the constructor schema so we can unify its field types with the
+				# call argument types.
+				arm_schema = None
+				for a in schema.arms:
+					if a.name == expr.fn.member:
+						arm_schema = a
+						break
+				if arm_schema is None:
+					return None
+
+				# Best-effort inference: unify constructor field `GenericTypeExpr`s
+				# against the inferred argument types. This is sufficient for MVP
+				# generics used by Optional/Result and keeps the stub pipeline usable.
+				type_args: list[TypeId | None] = [None for _ in schema.type_params]
+
+				def unify(gty, actual: TypeId) -> None:
+					# Type parameter reference.
+					if getattr(gty, "param_index", None) is not None:
+						idx = int(gty.param_index)
+						if 0 <= idx < len(type_args):
+							prev = type_args[idx]
+							if prev is None:
+								type_args[idx] = actual
+							elif prev != actual:
+								# Conflicting constraints: leave as-is; caller will treat
+								# inference as failed.
+								type_args[idx] = None
+						return
+					name = getattr(gty, "name", "")
+					args = list(getattr(gty, "args", []) or [])
+					if name in ("&", "&mut") and args:
+						ad = self.table.get(actual)
+						if ad.kind is TypeKind.REF and ad.param_types:
+							unify(args[0], ad.param_types[0])
+						return
+					if name == "Array" and args:
+						ad = self.table.get(actual)
+						if ad.kind is TypeKind.ARRAY and ad.param_types:
+							unify(args[0], ad.param_types[0])
+						return
+					if name == "Optional" and args:
+						inst = self.table.get_variant_instance(actual)
+						if inst is not None and inst.base_id == base_ty and inst.type_args:
+							unify(args[0], inst.type_args[0])
+						return
+					# Other named nodes: we don't currently infer through them in MVP.
+
+				# Positional args only for MVP inference in the stub (named args are
+				# validated by the typed checker).
+				for field, arg_expr in zip(arm_schema.fields, expr.args):
+					arg_ty = self._infer_expr_type(arg_expr)
+					if arg_ty is None:
+						continue
+					unify(field.type_expr, arg_ty)
+
+				if any(t is None for t in type_args):
+					return None
+				try:
+					return self.table.ensure_instantiated(base_ty, [t for t in type_args if t is not None])
+				except Exception:
+					return None
 
 			if isinstance(expr, H.HResultOk):
 				if (
@@ -1043,6 +1135,12 @@ class Checker:
 					walk_block(arm.block)
 					if getattr(arm, "result", None) is not None:
 						walk_expr(arm.result)
+			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+				walk_expr(expr.scrutinee)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if getattr(arm, "result", None) is not None:
+						walk_expr(arm.result)
 			# literals/vars are leaf nodes
 
 		def walk_block(b: H.HBlock) -> None:
@@ -1289,6 +1387,12 @@ class Checker:
 					walk_expr(arg)
 				for kw in getattr(expr, "kwargs", []) or []:
 					walk_expr(kw.value)
+			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+				walk_expr(expr.scrutinee)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if getattr(arm, "result", None) is not None:
+						walk_expr(arm.result)
 			elif isinstance(expr, H.HTernary):
 				walk_expr(expr.cond)
 				walk_expr(expr.then_expr)
@@ -1388,6 +1492,43 @@ class Checker:
 			elif isinstance(expr, H.HDVInit):
 				for a in expr.args:
 					walk_expr(a)
+			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+				# `match` is an expression; traverse scrutinee and then each arm with
+				# a scoped view of locals that includes any pattern binders.
+				walk_expr(expr.scrutinee)
+				for arm in expr.arms:
+					saved: dict[str, Optional[TypeId]] = {}
+					# If the checker has normalized binder field indices, use scrutinee
+					# type to seed binder types. This keeps type inference for arm
+					# expressions meaningful for downstream validators.
+					scrut_ty = ctx.infer(expr.scrutinee)
+					inst = None
+					if scrut_ty is not None and ctx.table.get(scrut_ty).kind is TypeKind.VARIANT:
+						inst = ctx.table.get_variant_instance(scrut_ty)
+					if inst is not None and arm.ctor is not None:
+						arm_def = inst.arms_by_name.get(arm.ctor)
+					else:
+						arm_def = None
+
+					field_indices = list(getattr(arm, "binder_field_indices", []) or [])
+					for idx, bname in enumerate(getattr(arm, "binders", []) or []):
+						saved[bname] = ctx.locals.get(bname)
+						bty = self._unknown_type
+						if arm_def is not None and idx < len(field_indices):
+							fidx = field_indices[idx]
+							if 0 <= fidx < len(arm_def.field_types):
+								bty = arm_def.field_types[fidx]
+						ctx.locals[bname] = bty
+
+					walk_block(arm.block)
+					if getattr(arm, "result", None) is not None:
+						walk_expr(arm.result)
+
+					for bname, prev in saved.items():
+						if prev is None:
+							ctx.locals.pop(bname, None)
+						else:
+							ctx.locals[bname] = prev
 			# literals/vars are leaf nodes
 
 		def walk_stmt(stmt: H.HStmt) -> None:
@@ -1439,6 +1580,10 @@ class Checker:
 					walk_block(stmt.then_block)
 					if stmt.else_block:
 						walk_block(stmt.else_block)
+				elif hasattr(H, "HMatchExpr") and isinstance(stmt, getattr(H, "HMatchExpr")):
+					# Defensive: match is an expression node; it should appear under
+					# HExprStmt, but allow traversal if a legacy shape places it as a stmt.
+					walk_expr(stmt)
 			elif isinstance(stmt, H.HLoop):
 				walk_block(stmt.body)
 			elif isinstance(stmt, H.HReturn):
@@ -1457,6 +1602,178 @@ class Checker:
 				walk_stmt(stmt)
 
 		walk_block(block)
+
+	def _match_validator_on_expr(self, expr: "H.HExpr", ctx: "_TypingContext") -> None:
+		"""
+		Normalize and validate `match` constructor patterns.
+
+		Stage2 lowering is assert-only for pattern→field mapping: any constructor
+		arm that binds fields must carry `binder_field_indices` computed from the
+		scrutinee's concrete variant instance. This validator is the stub-checker
+		owner of that normalization so the pipeline stays robust even before the
+		full typed checker is the only frontend.
+		"""
+		from lang2.driftc import stage1 as H
+
+		if not (hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr"))):
+			return
+
+		scrut_ty = ctx.infer(expr.scrutinee)
+		if scrut_ty is None:
+			ctx._append_diag(
+				Diagnostic(
+					message="match scrutinee type is unknown",
+					severity="error",
+					span=getattr(expr, "loc", Span()),
+				)
+			)
+			return
+		if ctx.table.get(scrut_ty).kind is not TypeKind.VARIANT:
+			ctx._append_diag(
+				Diagnostic(
+					message="match scrutinee must have a variant type",
+					severity="error",
+					span=getattr(expr, "loc", Span()),
+				)
+			)
+			return
+
+		inst = ctx.table.get_variant_instance(scrut_ty)
+		if inst is None:
+			ctx._append_diag(
+				Diagnostic(
+					message="match scrutinee variant instance is missing",
+					severity="error",
+					span=getattr(expr, "loc", Span()),
+				)
+			)
+			return
+
+		seen_ctors: set[str] = set()
+		default_seen = False
+		for arm in getattr(expr, "arms", []) or []:
+			# Default arm.
+			if arm.ctor is None:
+				default_seen = True
+				continue
+			if default_seen:
+				ctx._append_diag(
+					Diagnostic(
+						message="match arm after default is unreachable",
+						severity="error",
+						span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+					)
+				)
+			if arm.ctor in seen_ctors:
+				ctx._append_diag(
+					Diagnostic(
+						message=f"duplicate match arm for constructor '{arm.ctor}'",
+						severity="error",
+						span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+					)
+				)
+			seen_ctors.add(arm.ctor)
+
+			arm_def = inst.arms_by_name.get(arm.ctor)
+			if arm_def is None:
+				ctx._append_diag(
+					Diagnostic(
+						message=f"unknown constructor '{arm.ctor}' in match",
+						severity="error",
+						span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+					)
+				)
+				continue
+
+			form = getattr(arm, "pattern_arg_form", "positional")
+			field_indices: list[int] = []
+
+			if form == "bare":
+				# Bare ctor patterns are allowed only for zero-field constructors.
+				if arm_def.field_types:
+					ctx._append_diag(
+						Diagnostic(
+							message=(
+								"E-MATCH-PAT-BARE: bare constructor pattern is only allowed for zero-field constructors; "
+								f"use '{arm.ctor}()' to ignore payload"
+							),
+							severity="error",
+							span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+						)
+					)
+			elif form == "paren":
+				if arm.binders:
+					ctx._append_diag(
+						Diagnostic(
+							message=f"constructor pattern '{arm.ctor}()' must not bind fields",
+							severity="error",
+							span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+						)
+					)
+			elif form == "named":
+				field_names = list(getattr(arm_def, "field_names", []) or [])
+				field_types = list(getattr(arm_def, "field_types", []) or [])
+				binder_fields = getattr(arm, "binder_fields", None)
+				if binder_fields is None:
+					ctx._append_diag(
+						Diagnostic(
+							message=f"named constructor pattern '{arm.ctor}' is missing field names",
+							severity="error",
+							span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+						)
+					)
+				else:
+					seen_fields: set[str] = set()
+					for fname in binder_fields:
+						if fname in seen_fields:
+							ctx._append_diag(
+								Diagnostic(
+									message=f"duplicate field '{fname}' in constructor pattern '{arm.ctor}'",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+							continue
+						seen_fields.add(fname)
+						if fname not in field_names:
+							ctx._append_diag(
+								Diagnostic(
+									message=(
+										f"unknown field '{fname}' in constructor pattern '{arm.ctor}'; "
+										f"available fields: {', '.join(field_names)}"
+									),
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+							continue
+						field_indices.append(field_names.index(fname))
+					# Typecheck-stage normalization: store mapping only when lengths align.
+					if len(binder_fields) != len(arm.binders):
+						ctx._append_diag(
+							Diagnostic(
+								message=f"constructor pattern '{arm.ctor}' expects {len(binder_fields)} binders, got {len(arm.binders)}",
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+							)
+						)
+						field_indices = []
+			else:
+				# Positional binders (exact arity in MVP).
+				field_types = list(getattr(arm_def, "field_types", []) or [])
+				if len(arm.binders) != len(field_types):
+					ctx._append_diag(
+						Diagnostic(
+							message=f"constructor pattern '{arm.ctor}' expects {len(field_types)} binders, got {len(arm.binders)}",
+							severity="error",
+							span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+						)
+					)
+				else:
+					field_indices = list(range(len(arm.binders)))
+
+			# Store normalized binder→field-index mapping for stage2 lowering.
+			arm.binder_field_indices = list(field_indices)
 
 	def _array_validator_on_expr(self, expr: "H.HExpr", ctx: "_TypingContext") -> None:
 		"""Trigger array literal/index inference to surface diagnostics."""

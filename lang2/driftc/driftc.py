@@ -38,6 +38,7 @@ from lang2.driftc.stage2 import HIRToMIR, MirBuilder, mir_nodes as M
 from lang2.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang2.driftc.stage4 import run_throw_checks
 from lang2.driftc.stage4 import MirToSSA
+from lang2.driftc.checker.type_env_builder import build_minimal_checker_type_env
 from lang2.driftc.checker import Checker, CheckedProgram, FnSignature, FnInfo
 from lang2.driftc.borrow_checker_pass import BorrowChecker
 from lang2.driftc.borrow_checker import PlaceBase, PlaceKind
@@ -192,13 +193,16 @@ def compile_stubbed_funcs(
 			if sig.return_type_id is not None or sig.param_type_ids is not None:
 				raise ValueError("signatures with TypeIds require a shared type_table")
 
-	# Normalize upfront so catch-arm collection and lowering share the same HIR.
-	normalized_hirs: Dict[str, H.HBlock] = {name: normalize_hir(hir_block) for name, hir_block in func_hirs.items()}
+	# Important: run the checker on the original HIR (pre-normalization) so it can
+	# diagnose surface constructs that are later desugared/rewritten during
+	# normalization (e.g., `try` sugar). We normalize only after the checker runs,
+	# and normalization copies checker-produced annotations (like match binder
+	# field indices) forward via `getattr(..., "binder_field_indices", ...)`.
 
-	# If no signatures were supplied, resolve basic signatures from normalized HIR.
+	# If no signatures were supplied, resolve basic signatures from the original HIR.
 	shared_type_table = type_table
 	if signatures is None:
-		shared_type_table, signatures = resolve_program_signatures(_fake_decls_from_hirs(normalized_hirs))
+		shared_type_table, signatures = resolve_program_signatures(_fake_decls_from_hirs(func_hirs))
 	else:
 		# Ensure TypeIds are resolved on supplied signatures using a shared table.
 		if shared_type_table is None:
@@ -239,6 +243,10 @@ def compile_stubbed_funcs(
 	if shared_type_table is None and checked.type_table is not None:
 		shared_type_table = checked.type_table
 	mir_funcs: Dict[str, M.MirFunc] = {}
+
+	# Normalize after typecheck so lowering sees canonical HIR and preserves any
+	# checker-produced annotations needed by stage2 (e.g., match binder indices).
+	normalized_hirs: Dict[str, H.HBlock] = {name: normalize_hir(hir_block) for name, hir_block in func_hirs.items()}
 
 	for name, hir_norm in normalized_hirs.items():
 		builder = MirBuilder(name=name)
@@ -319,9 +327,9 @@ def compile_to_llvm_ir_for_tests(
 	shared_type_table = type_table or TypeTable()
 	_inject_prelude(signatures, shared_type_table)
 
-	# In the real compiler, any error diagnostics stop the pipeline before
-	# lowering/codegen. Mirror that in tests so negative cases can assert on
-	# diagnostics without tripping MIR/LLVM invariants (assertions).
+	# Mirror the real compiler behavior: any error diagnostics stop the pipeline
+	# before MIR/SSA/LLVM lowering. This prevents stage2 assertions from surfacing
+	# as user-facing failures in negative tests.
 	precheck = Checker(
 		declared_can_throw=None,
 		signatures=signatures,
@@ -329,7 +337,9 @@ def compile_to_llvm_ir_for_tests(
 		hir_blocks=dict(func_hirs),
 		type_table=shared_type_table,
 	)
-	prechecked = precheck.check(func_hirs.keys())
+	decl_names: set[str] = set(func_hirs.keys())
+	decl_names.update(signatures.keys())
+	prechecked = precheck.check(sorted(decl_names))
 	if any(d.severity == "error" for d in prechecked.diagnostics):
 		return "", prechecked
 
@@ -343,6 +353,8 @@ def compile_to_llvm_ir_for_tests(
 		return_ssa=True,
 		type_table=shared_type_table,
 	)
+	if any(d.severity == "error" for d in checked.diagnostics):
+		return "", checked
 
 	# Lower module to LLVM IR and append the OS entry wrapper when needed.
 	rename_map: dict[str, str] = {}

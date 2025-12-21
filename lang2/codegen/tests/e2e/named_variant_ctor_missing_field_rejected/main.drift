@@ -1,0 +1,9 @@
+variant Pair {
+	P(x: Int, y: Int),
+}
+
+fn main() returns Int {
+	val p: Pair = P(x = 1)
+	return 0
+}
+

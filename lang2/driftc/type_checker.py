@@ -433,17 +433,101 @@ class TypeChecker:
 									)
 								)
 							else:
-								if len(arm.binders) != len(arm_def.field_types):
-									diagnostics.append(
-										Diagnostic(
-											message=(
-												f"constructor pattern '{arm.ctor}' expects {len(arm_def.field_types)} binders, got {len(arm.binders)}"
-											),
-											severity="error",
-											span=getattr(arm, "loc", Span()),
+								form = getattr(arm, "pattern_arg_form", "positional")
+								field_names = list(getattr(arm_def, "field_names", []) or [])
+								field_types = list(arm_def.field_types)
+								field_indices: list[int] = []
+
+								if form == "bare":
+									# Bare ctor patterns (`Ctor`) are allowed only for zero-field ctors.
+									if field_types:
+										diagnostics.append(
+											Diagnostic(
+												message=(
+													f"E-MATCH-PAT-BARE: constructor pattern '{arm.ctor}' requires parentheses; "
+													"use `Ctor()` to ignore payload fields"
+												),
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
 										)
-									)
-								for bname, bty in zip(arm.binders, arm_def.field_types):
+									if arm.binders:
+										diagnostics.append(
+											Diagnostic(
+												message=f"E-MATCH-PAT-BARE: bare constructor pattern '{arm.ctor}' cannot bind fields",
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+								elif form == "paren":
+									# `Ctor()` matches the tag only and ignores payload; it binds nothing.
+									if arm.binders:
+										diagnostics.append(
+											Diagnostic(
+												message=f"E-MATCH-PAT-PAREN: '{arm.ctor}()' pattern must not bind fields",
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+								elif form == "named":
+									binder_fields = getattr(arm, "binder_fields", None)
+									if binder_fields is None or len(binder_fields) != len(arm.binders):
+										diagnostics.append(
+											Diagnostic(
+												message=f"internal: named constructor pattern missing binder field list (compiler bug)",
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+									else:
+										seen_fields: set[str] = set()
+										for fname, bname in zip(binder_fields, arm.binders):
+											if fname in seen_fields:
+												diagnostics.append(
+													Diagnostic(
+														message=f"duplicate field '{fname}' in constructor pattern '{arm.ctor}'",
+														severity="error",
+														span=getattr(arm, "loc", Span()),
+													)
+												)
+												continue
+											seen_fields.add(fname)
+											if fname not in field_names:
+												diagnostics.append(
+													Diagnostic(
+														message=(
+															f"unknown field '{fname}' in constructor pattern '{arm.ctor}'; "
+															f"available fields: {', '.join(field_names)}"
+														),
+														severity="error",
+														span=getattr(arm, "loc", Span()),
+													)
+												)
+												continue
+											field_indices.append(field_names.index(fname))
+								else:
+									# Positional binders (exact arity in MVP).
+									if len(arm.binders) != len(field_types):
+										diagnostics.append(
+											Diagnostic(
+												message=(
+													f"constructor pattern '{arm.ctor}' expects {len(field_types)} binders, got {len(arm.binders)}"
+												),
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+									field_indices = list(range(min(len(arm.binders), len(field_types))))
+
+								# Store normalized binder→field-index mapping for stage2 lowering.
+								if hasattr(arm, "binder_field_indices"):
+									arm.binder_field_indices = list(field_indices)
+
+								# Bind only the fields requested by the pattern form.
+								for bname, fidx in zip(arm.binders, field_indices):
+									if fidx < 0 or fidx >= len(field_types):
+										continue
+									bty = field_types[fidx]
 									bid = self._alloc_local_id()
 									locals.append(bid)
 									scope_env[-1][bname] = bty
@@ -782,15 +866,6 @@ class TypeChecker:
 				if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 					qm = expr.fn
 					kw_pairs = getattr(expr, "kwargs", []) or []
-					if kw_pairs:
-						diagnostics.append(
-							Diagnostic(
-								message="variant constructors do not support keyword arguments in MVP",
-								severity="error",
-								span=getattr(kw_pairs[0], "loc", getattr(expr, "loc", Span())),
-							)
-						)
-					arg_types = [type_expr(a) for a in expr.args]
 
 					base_te = getattr(qm, "base_type_expr", None)
 					base_tid = resolve_opaque_type(base_te, self.type_table, module_id=current_module_name)
@@ -831,37 +906,98 @@ class TypeChecker:
 						)
 						return record_expr(expr, self._unknown)
 
-					# Determine the concrete variant type for this constructor call.
-					inst_tid: TypeId = base_tid
-					has_explicit_type_args = bool(getattr(base_te, "args", []) or [])
-					if schema.type_params and not has_explicit_type_args:
-						arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
-						if arm_schema is None:
-							ctors = self._format_ctor_signature_list(
-								schema=schema, instance=None, current_module=current_module_name
+					# Validate and map ctor arguments. For MVP:
+					# - positional args require exact arity
+					# - named args require all fields, no mixing, no unknown/dup/missing
+					arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
+					if arm_schema is None:
+						ctors = self._format_ctor_signature_list(schema=schema, instance=None, current_module=current_module_name)
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"E-QMEM-NO-CTOR: constructor '{qm.member}' not found in variant "
+									f"'{self._pretty_type_name(base_tid, current_module=current_module_name)}'. "
+									f"Available constructors: {', '.join(ctors)}"
+								),
+								severity="error",
+								span=getattr(qm, "loc", getattr(expr, "loc", Span())),
 							)
-							diagnostics.append(
-								Diagnostic(
-									message=(
-										f"E-QMEM-NO-CTOR: constructor '{qm.member}' not found in variant "
-										f"'{self._pretty_type_name(base_tid, current_module=current_module_name)}'. "
-										f"Available constructors: {', '.join(ctors)}"
-									),
-									severity="error",
-									span=getattr(qm, "loc", getattr(expr, "loc", Span())),
+						)
+						return record_expr(expr, self._unknown)
+
+					field_names = [f.name for f in arm_schema.fields]
+					mapped_types: list[TypeId | None] = [None] * len(field_names)
+					mapped_spans: list[Span] = [getattr(expr, "loc", Span())] * len(field_names)
+
+					if kw_pairs and expr.args:
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"E-QMEM-MIXED-ARGS: constructor '{qm.member}' does not allow mixing positional "
+									"and named arguments"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+
+					if kw_pairs:
+						# Typecheck keyword values (in written order) and place them in field order.
+						for kw in kw_pairs:
+							try:
+								field_idx = field_names.index(kw.name)
+							except ValueError:
+								diagnostics.append(
+									Diagnostic(
+										message=f"unknown field '{kw.name}' for constructor '{qm.member}'",
+										severity="error",
+										span=getattr(kw, "loc", getattr(expr, "loc", Span())),
+									)
 								)
-							)
-							return record_expr(expr, self._unknown)
-						if len(expr.args) != len(arm_schema.fields):
+								continue
+							if mapped_types[field_idx] is not None:
+								diagnostics.append(
+									Diagnostic(
+										message=f"duplicate field '{kw.name}' for constructor '{qm.member}'",
+										severity="error",
+										span=getattr(kw, "loc", getattr(expr, "loc", Span())),
+									)
+								)
+								continue
+							mapped_types[field_idx] = type_expr(kw.value)
+							mapped_spans[field_idx] = getattr(kw.value, "loc", getattr(expr, "loc", Span()))
+					else:
+						# Positional arguments in declaration order.
+						if len(expr.args) != len(field_names):
 							diagnostics.append(
 								Diagnostic(
-									message=f"E-QMEM-ARITY: constructor '{qm.member}' expects {len(arm_schema.fields)} arguments, got {len(expr.args)}",
+									message=f"E-QMEM-ARITY: constructor '{qm.member}' expects {len(field_names)} arguments, got {len(expr.args)}",
 									severity="error",
 									span=getattr(expr, "loc", Span()),
 								)
 							)
 							return record_expr(expr, self._unknown)
+						for idx, a in enumerate(expr.args):
+							mapped_types[idx] = type_expr(a)
+							mapped_spans[idx] = getattr(a, "loc", getattr(expr, "loc", Span()))
 
+					for idx, ty in enumerate(mapped_types):
+						if ty is None:
+							diagnostics.append(
+								Diagnostic(
+									message=f"missing field '{field_names[idx]}' for constructor '{qm.member}'",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+
+					arg_types = [t if t is not None else self._unknown for t in mapped_types]
+
+					# Determine the concrete variant type for this constructor call.
+					inst_tid: TypeId = base_tid
+					has_explicit_type_args = bool(getattr(base_te, "args", []) or [])
+					if schema.type_params and not has_explicit_type_args:
 						inferred: list[TypeId | None] = [None for _ in schema.type_params]
 
 						def unify(gexpr: GenericTypeExpr, actual: TypeId) -> None:
@@ -953,27 +1089,38 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-					if len(expr.args) != len(arm_def.field_types):
+					if len(arm_def.field_types) != len(field_names):
 						diagnostics.append(
 							Diagnostic(
-								message=f"E-QMEM-ARITY: constructor '{qm.member}' expects {len(arm_def.field_types)} arguments, got {len(expr.args)}",
+								message="internal: variant ctor schema/type mismatch (compiler bug)",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
 						)
-						return record_expr(expr, self._unknown)
-
-					for i, (have, want) in enumerate(zip(arg_types, arm_def.field_types)):
-						if have != want:
-							arg_span = getattr(expr.args[i], "loc", getattr(expr, "loc", Span()))
+						return record_expr(expr, inst_tid)
+					for idx, want in enumerate(arm_def.field_types):
+						arg_expr: H.HExpr | None = None
+						# Re-typecheck with expected field types for better diagnostics.
+						if kw_pairs:
+							# Find the kw expression for this field (if any) for span.
+							for kw in kw_pairs:
+								if kw.name == field_names[idx]:
+									arg_expr = kw.value
+									break
+						else:
+							arg_expr = expr.args[idx] if idx < len(expr.args) else None
+						have = mapped_types[idx]
+						if arg_expr is not None:
+							have = type_expr(arg_expr, expected_type=want)
+						if have is not None and have != want:
 							diagnostics.append(
 								Diagnostic(
 									message=(
-										f"constructor '{qm.member}' argument {i} type mismatch "
+										f"constructor '{qm.member}' field '{field_names[idx]}' type mismatch "
 										f"(have {self.type_table.get(have).name}, expected {self.type_table.get(want).name})"
 									),
 									severity="error",
-									span=arg_span,
+									span=mapped_spans[idx],
 								)
 							)
 					return record_expr(expr, inst_tid)
@@ -993,26 +1140,95 @@ class TypeChecker:
 						if inst is not None and expr.fn.name in inst.arms_by_name:
 							arm_def = inst.arms_by_name[expr.fn.name]
 							kw_pairs = getattr(expr, "kwargs", []) or []
-							if kw_pairs:
-								diagnostics.append(
-									Diagnostic(
-										message="variant constructors do not support keyword arguments in MVP",
-										severity="error",
-										span=getattr(kw_pairs[0], "loc", getattr(expr, "loc", Span())),
-									)
-								)
-							if len(expr.args) != len(arm_def.field_types):
+							if kw_pairs and expr.args:
 								diagnostics.append(
 									Diagnostic(
 										message=(
-											f"constructor '{arm_def.name}' expects {len(arm_def.field_types)} arguments, got {len(expr.args)}"
+											f"constructor '{arm_def.name}' does not allow mixing positional and named arguments"
 										),
 										severity="error",
 										span=getattr(expr, "loc", Span()),
 									)
 								)
-							for arg, want in zip(expr.args, arm_def.field_types):
-								type_expr(arg, expected_type=want)
+								return record_expr(expr, self._unknown)
+
+							field_names = list(getattr(arm_def, "field_names", []) or [])
+							field_types = list(arm_def.field_types)
+							if len(field_names) != len(field_types):
+								diagnostics.append(
+									Diagnostic(
+										message="internal: variant ctor schema/type mismatch (compiler bug)",
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+								return record_expr(expr, expected_type)
+
+							mapped_types: list[TypeId | None] = [None] * len(field_names)
+							mapped_spans: list[Span] = [getattr(expr, "loc", Span())] * len(field_names)
+
+							if kw_pairs:
+								for kw in kw_pairs:
+									try:
+										field_idx = field_names.index(kw.name)
+									except ValueError:
+										diagnostics.append(
+											Diagnostic(
+												message=f"unknown field '{kw.name}' for constructor '{arm_def.name}'",
+												severity="error",
+												span=getattr(kw, "loc", getattr(expr, "loc", Span())),
+											)
+										)
+										continue
+									if mapped_types[field_idx] is not None:
+										diagnostics.append(
+											Diagnostic(
+												message=f"duplicate field '{kw.name}' for constructor '{arm_def.name}'",
+												severity="error",
+												span=getattr(kw, "loc", getattr(expr, "loc", Span())),
+											)
+										)
+										continue
+									mapped_types[field_idx] = type_expr(kw.value, expected_type=field_types[field_idx])
+									mapped_spans[field_idx] = getattr(kw.value, "loc", getattr(expr, "loc", Span()))
+							else:
+								if len(expr.args) != len(field_types):
+									diagnostics.append(
+										Diagnostic(
+											message=(
+												f"constructor '{arm_def.name}' expects {len(field_types)} arguments, got {len(expr.args)}"
+											),
+											severity="error",
+											span=getattr(expr, "loc", Span()),
+										)
+									)
+									return record_expr(expr, self._unknown)
+								for idx, (arg, want) in enumerate(zip(expr.args, field_types)):
+									mapped_types[idx] = type_expr(arg, expected_type=want)
+									mapped_spans[idx] = getattr(arg, "loc", getattr(expr, "loc", Span()))
+
+							for idx, want in enumerate(field_types):
+								if mapped_types[idx] is None:
+									diagnostics.append(
+										Diagnostic(
+											message=f"missing field '{field_names[idx]}' for constructor '{arm_def.name}'",
+											severity="error",
+											span=getattr(expr, "loc", Span()),
+										)
+									)
+									continue
+								have = mapped_types[idx]
+								if have is not None and have != want:
+									diagnostics.append(
+										Diagnostic(
+											message=(
+												f"constructor '{arm_def.name}' field '{field_names[idx]}' type mismatch "
+												f"(have {self.type_table.get(have).name}, expected {self.type_table.get(want).name})"
+											),
+											severity="error",
+											span=mapped_spans[idx],
+										)
+									)
 							return record_expr(expr, expected_type)
 
 				# Always type fn and args first for side-effects/subexpressions.

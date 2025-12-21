@@ -21,9 +21,8 @@
 
 [Iteration]
 - Deferred follow-ups:
-  - Variant constructor collisions: improve diagnostics/UX when unqualified constructors are ambiguous (list candidates; add coverage).
-  - Named-field construction/patterns for variants: support `Some(value = x)` and matching on named fields once the surface design is pinned.
-  - Qualified constructor syntax: consider `Optional.Some(...)` / `Optional::Some` ergonomics once namespacing rules are pinned (keep current `TypeRef::Ctor(...)`).
+  - Module-qualified constructor syntax: consider `Optional.Some(...)` ergonomics once namespacing rules are pinned (keep current `TypeRef::Ctor(...)`).
+  - Variant pattern ergonomics: consider rest/wildcard patterns and richer exhaustiveness diagnostics (named-field construction + named binders are implemented in MVP).
   - Variant external ABI: freeze and document a stable ABI in `docs/design/drift-lang-abi.md` once FFI/packages demand it (currently compiler-private).
   - Trait-based iteration: replace iterator intrinsics with a real `Iterator` trait + library implementation once module support lands (no dynamic dispatch in MVP).
   - Dynamic dispatch and trait bounds: pin surface syntax and type rules for trait bounds / trait objects (out of MVP).

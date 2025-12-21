@@ -237,4 +237,7 @@ E2E tests:
 
 ## Status
 
-- Not started
+- Completed (MVP)
+  - Parser + HIR support for `TypeRef::Ctor(...)` with bounded `<...>` speculation (`>::` / `>(` commit tokens) and nested generic handling.
+  - Typechecker resolves qualified members to variant ctors, supports deterministic inference (`Optional::Some(1)`), and emits improved ctor-related diagnostics.
+  - E2E + driver coverage includes nested generics, both explicit spellings, and a pinned parser diagnostic for duplicate type-arg lists (`E-PARSE-QMEM-DUP-TYPEARGS`).

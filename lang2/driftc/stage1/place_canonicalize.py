@@ -227,7 +227,10 @@ class PlaceCanonicalizeRewriter:
 				new_arms.append(
 					H.HMatchArm(
 						ctor=arm.ctor,
+						pattern_arg_form=getattr(arm, "pattern_arg_form", "positional"),
 						binders=list(arm.binders),
+						binder_fields=getattr(arm, "binder_fields", None),
+						binder_field_indices=getattr(arm, "binder_field_indices", []),
 						block=arm_block,
 						result=arm_result,
 						loc=arm.loc,

@@ -274,7 +274,9 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		arms = [
 			s0.MatchArm(
 				ctor=arm.ctor,
+				pattern_arg_form=getattr(arm, "pattern_arg_form", "positional"),
 				binders=list(arm.binders),
+				binder_fields=list(arm.binder_fields) if getattr(arm, "binder_fields", None) is not None else None,
 				block=_convert_block(arm.block),
 				loc=Span.from_loc(getattr(arm, "loc", None)),
 			)
