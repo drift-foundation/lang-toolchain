@@ -61,10 +61,10 @@ This tracker covers **Phase 5** only (tooling polish on top of existing `drift p
   - verifies signatures/trust as configured
 
 ### Status
-- [ ] Implement lock schema/validator updates (`observed_identity`, mandatory `source_id`)
-- [ ] `drift vendor` writes authoritative lock from vendored bytes (sha256 over bytes)
-- [ ] `drift fetch` honors lock strictly (no resolution, no lock mutation)
-- [ ] Tests: lock-authoritative + legacy-lock rejection
+- [x] Implement lock schema/validator updates (`observed_identity`, mandatory `source_id`)
+- [x] `drift vendor` writes authoritative lock from vendored bytes (sha256 over bytes)
+- [x] `drift fetch` honors lock strictly (no resolution, no lock mutation)
+- [x] Tests: lock-authoritative + legacy-lock rejection
 
 ---
 
@@ -91,10 +91,10 @@ Normalization:
 - If the same identity can be satisfied by more than one source (even if bytes/sha match), this is an **error** unless the lock exists.
 
 ### Status
-- [ ] Add/validate `drift-sources.json` schema with explicit `priority`
-- [ ] Implement deterministic selection by stable tuple key
-- [ ] Reject ambiguous identity available in multiple sources when unlocked
-- [ ] Tests: deterministic selection + ambiguity rejection (unlocked)
+- [x] Add/validate `drift-sources.json` schema with explicit `priority`
+- [x] Implement deterministic selection by stable tuple key
+- [x] Reject ambiguous identity available in multiple sources when unlocked
+- [x] Tests: deterministic selection + ambiguity rejection (unlocked)
 
 ---
 
@@ -115,9 +115,9 @@ When failing on index/identity/hash errors, build a structured context:
 - `IDENTITY_MISMATCH` and `SHA_MISMATCH` are **always fatal**.
 
 ### Status
-- [ ] Improve mismatch error messages to include claimed vs observed + source/index context
-- [ ] Add stable error codes/substrings for CI assertions
-- [ ] Tests: malformed index, sha mismatch, identity mismatch (prints both)
+- [x] Improve mismatch error messages to include claimed vs observed + source/index context
+- [x] Add stable error codes/substrings for CI assertions
+- [x] Tests: malformed index, sha mismatch, identity mismatch (prints both)
 
 ---
 
@@ -134,8 +134,8 @@ When failing on index/identity/hash errors, build a structured context:
 - No human text mixed into JSON output.
 
 ### Status
-- [ ] Implement `--json` output for `drift fetch`
-- [ ] Tests: required keys present; mode is correct
+- [x] Implement `--json` output for `drift fetch`
+- [x] Tests: required keys present; mode is correct
 
 ---
 
@@ -157,12 +157,11 @@ MVP can exit on first fatal; later we can add `--all`.
 - cache/vendor optional consistency checks (flag-gated)
 
 ### Status
-- [ ] Implement `drift doctor` with fatal/degraded/info classification
-- [ ] Tests: bad sources, bad trust store, lock/cache mismatch
+- [x] Implement `drift doctor` with fatal/degraded/info classification
+- [x] Tests: bad sources, bad trust store, lock/cache mismatch
 
 ---
 
 ## Guardrail for execution order
 
 - Do not start Phase 5.3+ until Phase 5.1 and 5.2 tests pass without flags or fallbacks.
-
