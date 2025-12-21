@@ -28,3 +28,17 @@
   - Dynamic dispatch and trait bounds: pin surface syntax and type rules for trait bounds / trait objects (out of MVP).
   - Generic functions and generic `implement<T>` blocks: extend generics beyond nominal types (out of MVP).
   - Replace iterator intrinsics with real modules/traits: migrate `Array<T>.iter()` / `__ArrayIter_<T>.next()` from compiler intrinsics to a real `Iterator` trait + library implementation when module support lands.
+
+[Tooling / Packages]
+- Phase 5 polish (highest leverage):
+  - Lockfile authoritative by default: `drift build` honors `drift.lock.json`; only `drift update` changes resolution.
+  - Multi-source deterministic selection rules (stable source ordering + tie-break + precedence) so identical inputs resolve identically.
+  - Sharper index/identity mismatch errors (print claimed vs observed identity, signer, source id, mismatch axis).
+  - `drift doctor` (sources, index sanity, trust graph, lock/cache consistency, toolchain compatibility).
+  - `drift fetch --json` (machine-readable resolution/verification report for CI/IDE).
+
+[FFI / ABI]
+- Document “current ABI intent” now; freeze later:
+  - Variant layout intent (tag width rules, payload alignment, field order) and what is stable vs internal.
+  - Calling convention assumptions at ABI boundaries and current string/array/buffer representations.
+  - Add an explicit NOT YET STABLE banner + checklist for freezing.
