@@ -26,7 +26,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -118,10 +118,10 @@ fn add(a: Int, b: Int) returns Int {
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)

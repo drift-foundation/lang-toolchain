@@ -1,8 +1,8 @@
 module main
+import acme.lib as lib
 
-from acme.lib import answer
 
 fn main() returns Int {
-	return answer();
+	return lib.answer();
 }
 

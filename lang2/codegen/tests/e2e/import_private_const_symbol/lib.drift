@@ -3,4 +3,4 @@ module lib
 export { PUBLIC }
 
 const SECRET: Int = 1;
-const PUBLIC: Int = 2;
+pub const PUBLIC: Int = 2;

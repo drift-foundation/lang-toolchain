@@ -1,7 +1,7 @@
 module main
+import lib as lib
 
-from lib import add
 
-fn add() returns Int { return 0; }
-fn main() returns Int { return add(); }
+fn lib.add() returns Int { return 0; }
+fn main() returns Int { return lib.add(); }
 

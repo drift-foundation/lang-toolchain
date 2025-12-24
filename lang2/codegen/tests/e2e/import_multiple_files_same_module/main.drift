@@ -1,9 +1,8 @@
 module main
+import lib as lib
 
-from lib import a
-from lib import b
 
 fn main() returns Int {
-	return a() + b();
+	return lib.a() + lib.b();
 }
 

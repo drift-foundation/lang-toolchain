@@ -39,15 +39,17 @@ Program      ::= ModuleDecl? ExportDecl* ImportDecl* TopDecl*
 ModuleDecl   ::= "module" ModulePath TERMINATOR?
 ModulePath   ::= Ident ("." Ident)*
 ExportDecl   ::= "export" "{" ExportItems? "}" TERMINATOR
-ExportItems  ::= Ident ("," Ident)*
+ExportItems  ::= ExportItem ("," ExportItem)*
+ExportItem   ::= Ident | ModulePath "." "*"
 ImportDecl   ::= "import" ImportItem ("," ImportItem)* TERMINATOR
 ImportItem   ::= ModulePath ("as" Ident)?
 ```
 
 Declarations:
 ```
-TopDecl      ::= FnDef | StructDef | TraitDef | Implement | VariantDef
-               | ExceptionDef | InterfaceDef | TypeDef | ConstDef
+TopDecl      ::= Pub? (FnDef | StructDef | TraitDef | Implement | VariantDef
+               | ExceptionDef | InterfaceDef | TypeDef | ConstDef)
+Pub          ::= "pub"
 
 FnDef        ::= "fn" Ident FnTypeParams? "(" Params? ")" Returns? TraitReq? Block
 FnTypeParams ::= "<" Ident ("," Ident)* ">"

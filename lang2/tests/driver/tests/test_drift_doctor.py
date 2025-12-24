@@ -140,7 +140,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -232,7 +232,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),

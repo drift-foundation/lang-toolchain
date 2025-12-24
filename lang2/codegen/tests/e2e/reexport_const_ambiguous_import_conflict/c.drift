@@ -2,5 +2,5 @@ module c
 
 export { ANSWER }
 
-const ANSWER: Int = 2;
+pub const ANSWER: Int = 2;
 

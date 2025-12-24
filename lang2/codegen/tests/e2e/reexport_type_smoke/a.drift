@@ -1,10 +1,9 @@
 module a
 
-struct Point(x: Int, y: Int)
+pub struct Point(x: Int, y: Int)
 
 export { Point, make }
 
-fn make() returns Point {
+pub fn make() returns Point {
 	return Point(x = 1, y = 2);
 }
-

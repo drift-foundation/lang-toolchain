@@ -131,7 +131,7 @@ module {module_id}
 
 export {{ add }}
 
-fn add(a: Int, b: Int) returns Int {{
+pub fn add(a: Int, b: Int) returns Int {{
 	return a + b
 }}
 """.lstrip(),
@@ -162,7 +162,7 @@ module {module_id}
 
 export {{ add }}
 
-fn add(a: Int, b: Int) returns Int {{
+pub fn add(a: Int, b: Int) returns Int {{
 	return a + b
 }}
 
@@ -197,7 +197,7 @@ module {module_id}
 
 export {{ ANSWER }}
 
-const ANSWER: Int = 42;
+pub const ANSWER: Int = 42;
 """.lstrip(),
 	)
 	pkg_path = tmp_path / "consts.dmp"
@@ -226,7 +226,7 @@ module {module_id}
 
 export {{ Point }}
 
-struct Point {{ x: Int, y: Int }}
+pub struct Point {{ x: Int, y: Int }}
 
 fn make() returns Point {{
 	return Point(x = 1, y = 2)
@@ -265,9 +265,9 @@ module {module_id}
 
 export {{ Point, make }}
 
-struct Point {{ x: Int, y: Int }}
+pub struct Point {{ x: Int, y: Int }}
 
-fn make() returns Point {{
+pub fn make() returns Point {{
 	return Point(x = 1, y = 0)
 }}
 """.lstrip(),
@@ -323,11 +323,11 @@ module {module_id}
 
 export {{ Optional, foo }}
 
-variant Optional<T> {{
+pub variant Optional<T> {{
 {arms}
 }}
 
-fn foo() returns Optional<Int> {{
+pub fn foo() returns Optional<Int> {{
 	return Some(41)
 }}
 """.lstrip(),
@@ -364,7 +364,7 @@ module {module_id}
 
 export {{ Boom }}
 
-exception Boom(a: Int, b: String)
+pub exception Boom(a: Int, b: String)
 
 fn dummy() returns Int {{
 	return 0
@@ -461,10 +461,10 @@ def test_emit_package_is_deterministic(tmp_path: Path) -> None:
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -475,7 +475,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -526,13 +526,12 @@ def test_emit_package_is_deterministic_with_permuted_package_roots(tmp_path: Pat
 		"""
 module main
 
-from acme.liba import add
-from acme.optb import Optional
-from acme.optb import foo
+import acme.liba as liba
+import acme.optb as optb
 
 fn main() returns Int {
-	val x = add(40, 2)
-	val y: Optional<Int> = foo()
+	val x = liba.add(40, 2)
+	val y: optb.Optional<Int> = optb.foo()
 	val z = match y {
 		Some(v) => { v }
 		default => { 0 }
@@ -590,13 +589,12 @@ def test_emit_package_is_deterministic_with_changed_package_filenames(tmp_path: 
 		"""
 module main
 
-from acme.liba import add
-from acme.optb import Optional
-from acme.optb import foo
+import acme.liba as liba
+import acme.optb as optb
 
 fn main() returns Int {
-	val x = add(40, 2)
-	val y: Optional<Int> = foo()
+	val x = liba.add(40, 2)
+	val y: optb.Optional<Int> = optb.foo()
 	val z = match y {
 		Some(v) => { v }
 		default => { 0 }
@@ -657,17 +655,17 @@ module main
 
 import acme.geom as g
 
-from acme.liba import add
-from acme.opt import Optional
+import acme.liba as liba
+import acme.opt as opt
 
 fn main() returns Int {
 	val p: g.Point = g.make()
-	val o: Optional<g.Point> = Some(p)
+	val o: opt.Optional<g.Point> = Some(p)
 	val x = match o {
 		Some(v) => { v.x }
 		default => { 0 }
 	}
-	return add(40, 2) + x
+	return liba.add(40, 2) + x
 }
 """.lstrip(),
 	)
@@ -707,10 +705,10 @@ def test_load_package_v0_round_trip(tmp_path: Path) -> None:
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -721,7 +719,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -757,7 +755,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -797,7 +795,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -830,7 +828,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -863,7 +861,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -923,7 +921,7 @@ module lib
 
 export {{ add }}
 
-fn add(a: Int, b: Int) returns Int {{
+pub fn add(a: Int, b: Int) returns Int {{
 	return a + b + {n}
 }}
 """.lstrip(),
@@ -948,10 +946,10 @@ fn add(a: Int, b: Int) returns Int {{
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -982,9 +980,9 @@ module lib
 
 export { S, make }
 
-struct S(x: Int)
+pub struct S(x: Int)
 
-fn make() returns S {
+pub fn make() returns S {
 	return S(x = 42)
 }
 """.lstrip(),
@@ -1009,11 +1007,10 @@ fn make() returns S {
 		"""
 module main
 
-from lib import S
-from lib import make
+import lib as lib
 
 fn main() returns Int {
-	val s: S = make()
+	val s: lib.S = lib.make()
 	return s.x
 }
 """.lstrip(),
@@ -1042,7 +1039,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 
@@ -1071,10 +1068,10 @@ fn unused() returns Int {
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1119,7 +1116,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -1146,10 +1143,10 @@ fn add(a: Int, b: Int) returns Int {
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1210,10 +1207,10 @@ def test_driftc_accepts_signed_package_when_required(tmp_path: Path, capsys: pyt
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1239,6 +1236,111 @@ fn main() returns Int {
 	assert payload.get("diagnostics") == []
 
 
+def test_driftc_rejects_signature_missing_module_in_strict_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badmod")
+	pkg = load_package_v0(pkg_path)
+	mod = pkg.modules_by_id["acme.badmod"]
+
+	iface_obj = dict(mod.interface)
+	payload_obj = dict(mod.payload)
+
+	def _strip_sig_module(obj: dict) -> dict[str, dict]:
+		sigs = dict(obj.get("signatures") or {})
+		add_key = "acme.badmod::add"
+		sd = dict(sigs.get(add_key) or {})
+		sd.pop("module", None)
+		sd["name"] = "add"
+		return {"add": sd}
+
+	payload_obj["signatures"] = _strip_sig_module(payload_obj)
+	iface_obj["signatures"] = {}
+
+	iface_exports = dict(iface_obj.get("exports") or {})
+	iface_exports["values"] = []
+	iface_obj["exports"] = iface_exports
+	payload_exports = dict(payload_obj.get("exports") or {})
+	payload_exports["values"] = []
+	payload_obj["exports"] = payload_exports
+
+	iface_bytes = canonical_json_bytes(iface_obj)
+	payload_bytes = canonical_json_bytes(payload_obj)
+	iface_sha = sha256_hex(iface_bytes)
+	payload_sha = sha256_hex(payload_bytes)
+	write_dmir_pkg_v0(
+		pkg_path,
+		manifest_obj={
+			"format": "dmir-pkg",
+			"format_version": 0,
+			"package_id": "acme.badmod",
+			"package_version": "0.0.0",
+			"target": "test-target",
+			"unsigned": True,
+			"unstable_format": True,
+			"payload_kind": "provisional-dmir",
+			"payload_version": 0,
+			"modules": [
+				{
+					"module_id": "acme.badmod",
+					"exports": iface_obj.get("exports", {}),
+					"interface_blob": f"sha256:{iface_sha}",
+					"payload_blob": f"sha256:{payload_sha}",
+				}
+			],
+			"blobs": {
+				f"sha256:{iface_sha}": {"type": "exports", "length": len(iface_bytes)},
+				f"sha256:{payload_sha}": {"type": "dmir", "length": len(payload_bytes)},
+			},
+		},
+		blobs={iface_sha: iface_bytes, payload_sha: payload_bytes},
+		blob_types={iface_sha: 2, payload_sha: 1},
+		blob_names={iface_sha: "iface:acme.badmod", payload_sha: "dmir:acme.badmod"},
+	)
+
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = priv.public_key().public_bytes_raw()
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import acme.badmod as badmod
+
+fn main() returns Int {
+	return 0
+}
+""".lstrip(),
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--trust-store",
+			str(trust_path),
+			"--require-signatures",
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0
+	assert payload["exit_code"] == 1
+	assert payload["diagnostics"][0]["phase"] == "package"
+	assert "missing module" in payload["diagnostics"][0]["message"]
+
+
 def test_driftc_rejects_missing_sidecar_when_signatures_required(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	# Emit an unsigned package but do not write a `.sig` file.
 	pkg_path = _emit_lib_pkg(tmp_path)
@@ -1250,10 +1352,10 @@ def test_driftc_rejects_missing_sidecar_when_signatures_required(tmp_path: Path,
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1287,10 +1389,10 @@ def test_driftc_rejects_malformed_signature_sidecar_json(tmp_path: Path, capsys:
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1325,10 +1427,10 @@ def test_driftc_rejects_sidecar_package_sha_mismatch(tmp_path: Path, capsys: pyt
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1364,10 +1466,10 @@ def test_driftc_rejects_sidecar_invalid_base64(tmp_path: Path, capsys: pytest.Ca
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1403,10 +1505,10 @@ def test_driftc_rejects_sidecar_wrong_sig_length(tmp_path: Path, capsys: pytest.
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1448,10 +1550,10 @@ def test_driftc_rejects_signed_package_when_kid_revoked(tmp_path: Path, capsys: 
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1520,10 +1622,10 @@ def test_driftc_accepts_if_any_signature_entry_is_valid(tmp_path: Path, capsys: 
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1577,10 +1679,10 @@ def test_driftc_rejects_valid_signature_when_kid_not_trusted(tmp_path: Path, cap
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1640,10 +1742,10 @@ def test_driftc_rejects_valid_signature_when_namespace_disallows_kid(tmp_path: P
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1679,10 +1781,10 @@ def test_driftc_rejects_sidecar_wrong_pubkey_length(tmp_path: Path, capsys: pyte
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1718,10 +1820,10 @@ def test_driftc_rejects_sidecar_invalid_pubkey_base64(tmp_path: Path, capsys: py
 		"""
 module main
 
-from acme.lib import add
+import acme.lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1753,7 +1855,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -1789,10 +1891,10 @@ fn add(a: Int, b: Int) returns Int {
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -1821,11 +1923,10 @@ def test_driftc_can_consume_package_exporting_generic_variant_optional(tmp_path:
 		"""
 module main
 
-from acme.opt import Optional
-from acme.opt import foo
+import acme.opt as opt
 
 fn main() returns Int {
-	val x: Optional<Int> = foo()
+	val x: opt.Optional<Int> = opt.foo()
 	val y = match x {
 		Some(v) => { v + 1 }
 		None => { 0 }
@@ -1942,10 +2043,10 @@ def test_driftc_rejects_import_of_non_exported_value_from_package(tmp_path: Path
 		"""
 module main
 
-from acme.hidden import hidden
+import acme.hidden as hidden
 
 fn main() returns Int {
-	return hidden()
+	return hidden.hidden()
 }
 """.lstrip(),
 	)
@@ -1978,10 +2079,10 @@ def test_driftc_allows_import_of_exported_const_from_package(tmp_path: Path, cap
 		"""
 module main
 
-from acme.consts import ANSWER
+import acme.consts as consts
 
 fn main() returns Int {
-	return ANSWER
+	return consts.ANSWER
 }
 """.lstrip(),
 	)
@@ -2015,11 +2116,10 @@ def test_driftc_allows_import_of_exported_type_but_rejects_non_exported_value_fr
 		"""
 module main
 
-from acme.point import Point
-from acme.point import make
+import acme.point as point
 
 fn main() returns Int {
-	val p: Point = make()
+	val p: point.Point = point.make()
 	return p.x
 }
 """.lstrip(),
@@ -2151,10 +2251,10 @@ def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_
 		"""
 module main
 
-from acme.badiface import add
+import acme.badiface as badiface
 
 fn main() returns Int {
-	return add(40, 2)
+	return badiface.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -2235,10 +2335,10 @@ def test_driftc_rejects_package_with_exported_value_missing_interface_signature(
 		"""
 module main
 
-from acme.badiface2 import add
+import acme.badiface2 as badiface2
 
 fn main() returns Int {
-	return add(40, 2)
+	return badiface2.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -2324,10 +2424,10 @@ def test_driftc_rejects_package_with_exports_mismatch_between_interface_and_payl
 		"""
 module main
 
-from acme.badiface3 import add
+import acme.badiface3 as badiface3
 
 fn main() returns Int {
-	return add(40, 2)
+	return badiface3.add(40, 2)
 }
 """.lstrip(),
 	)
@@ -2406,7 +2506,7 @@ Interface completeness: exported exceptions must have interface schema entries.
 		"""
 module main
 
-from acme.badexc import Boom
+import acme.badexc as badexc
 
 fn main() returns Int {
 	return 0
@@ -2487,10 +2587,10 @@ Interface completeness: exported variants must have interface schema entries.
 		"""
 module main
 
-from acme.badvar import Optional
+import acme.badvar as badvar
 
 fn main() returns Int {
-	val o: Optional<Int> = None
+	val o: badvar.Optional<Int> = None
 	return 0
 }
 """.lstrip(),
@@ -2526,9 +2626,9 @@ module m
 
 export { Point }
 
-struct Point { x: Int }
+pub struct Point { x: Int }
 
-implement Point {
+pub implement Point {
 	fn move_by(self: &mut Point, dx: Int) returns Void {
 		self->x += dx;
 	}
@@ -2661,7 +2761,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -2688,10 +2788,10 @@ fn add(a: Int, b: Int) returns Int {
 		"""
 module main
 
-from lib import add
+import lib as lib
 
 fn main() returns Int {
-	return add(40, 2)
+	return lib.add(40, 2)
 }
 """.lstrip(),
 	)

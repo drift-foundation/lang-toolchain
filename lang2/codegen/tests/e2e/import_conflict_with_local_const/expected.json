@@ -1,7 +1,5 @@
 {
-  "exit_code": 1,
-  "phase": "parser",
-  "diagnostics": [
-    { "phase": "parser", "message_contains": "conflicts with imported const binding from module 'lib'" }
-  ]
+  "exit_code": 42,
+  "stdout": "",
+  "stderr": ""
 }

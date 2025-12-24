@@ -2,5 +2,5 @@ module m
 
 export { add }
 
-fn add() returns Int { return 2; }
+pub fn add() returns Int { return 2; }
 

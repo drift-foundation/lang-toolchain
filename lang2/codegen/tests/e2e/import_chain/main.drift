@@ -1,6 +1,6 @@
 module main
+import a as a
 
-from a import afn
 
-fn main() returns Int { return afn(); }
+fn main() returns Int { return a.afn(); }
 

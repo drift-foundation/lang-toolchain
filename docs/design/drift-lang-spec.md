@@ -1470,17 +1470,17 @@ Together they form a flexible dual system:
 Drift uses explicit imports — no global or magic identifiers beyond the implicit
 `lang.core` prelude (Section 3.3). This chapter focuses on import mechanics.
 
-**Provider-agnostic imports.** From the programmer’s perspective, `import` and
-`from ... import ...` always import a module interface by **module id**. A build
-may supply modules either as Drift source files or as signed module packages
-(DMIR/DMP, Chapter 20). This does not change the surface syntax or the
-name-resolution rules; it only changes where the toolchain obtains the imported
-module’s interface and typed semantics.
+**Provider-agnostic imports.** From the programmer’s perspective, `import`
+always imports a module interface by **module id**. A build may supply modules
+either as Drift source files or as signed module packages (DMIR/DMP, Chapter
+20). This does not change the surface syntax or the name-resolution rules; it
+only changes where the toolchain obtains the imported module’s interface and
+typed semantics.
 
 **Build targets vs compilation units.** Drift code is organized into **modules**
-(the language-level unit named by a module id and referenced by `import` / `from
-... import ...`). End users generally think in terms of producing an executable
-or a package artifact, not “building a module” directly.
+(the language-level unit named by a module id and referenced by `import`).
+End users generally think in terms of producing an executable or a package
+artifact, not “building a module” directly.
 
 - **Executable build**: resolve imports from source roots and package roots,
   compile all required modules, then link into a single executable with an entry
@@ -1511,20 +1511,20 @@ This separation avoids ambiguity and makes builds reproducible: source roots are
 
 ### 7.0. Exports (module interface)
 
-Modules have an explicit **export set**: the list of names that are visible to
-other modules via `from ... import ...`. All other top-level items are private
-to the defining module.
+Modules have an explicit **export set** and an explicit **visibility marker**
+(`pub`). All other top-level items are private to the defining module.
 
 MVP syntax:
 
 ```drift
 export { foo, Point, Boom }
+export { other.module.* }
 ```
 
 Rules:
 
-- Items are **private by default**. A name is importable only if it appears in
-  the module’s export set.
+- Items are **private by default**. A name is eligible for export only if it is
+  declared `pub`.
 - The export list names top-level items declared in the current module:
   - functions
   - constants (`const`)
@@ -1532,40 +1532,36 @@ Rules:
 - `export` may appear multiple times across multiple files in the same module;
   the effective export set is their union.
 - Exporting a name that is not declared in the module is a compile-time error.
+- Exporting a **non-`pub`** local symbol is a compile-time error.
+- `export { other.module.* }` re-exports exactly that module’s export set.
+- Exporting a non-`pub` symbol **must not** elevate visibility; `export` only
+  exposes items already marked `pub`.
+- Name collisions introduced by re-exports are a compile-time error (the toolchain
+  must report both sources).
 
 Exported functions are module interface entry points and therefore use the
 cross-module can-throw ABI calling convention (Section 7.2).
 
-### 7.1. Import syntax (modules and symbols)
+### 7.1. Import syntax (modules only)
 
-Drift has two import forms:
+Drift has a single import form:
 
-1) **Module import** — binds a module name (or alias) into the local scope:
+**Module import** — binds a module name (or alias) into the local scope:
 
 ```drift
 import lang.array          // bind the module
 import std.concurrent as conc  // bind with alias
 ```
 
-2) **Symbol import** — binds a single exported symbol from a module into the
-local scope:
-
-```drift
-from lang.array import len
-from std.concurrent import spawn as go
-```
-
 **Name‑resolution semantics**
 
 - `import <ModuleId>` always resolves to a **module** and binds that module under
   its last segment (or the `as` alias).
-- `from <ModuleId> import <Symbol>` resolves `<Symbol>` inside that module and
-  binds it directly into the local scope under its own name (or the `as` alias).
 - Aliases affect only the local binding; frames and module metadata always record the original module ID, not the alias.
 - For the implicit `lang.core` prelude, no import is needed; everything else
   must be imported explicitly.
-- Only **exported** symbols may be imported via `from ... import ...`. Attempting
-  to import a non-exported symbol is a compile-time error.
+- Only **exported** symbols may be referenced through an imported module. Attempting
+  to access a non-exported symbol is a compile-time error.
 
 **Module identifiers**
 
@@ -1588,10 +1584,28 @@ Drift treats functions in the module interface as **can-throw entry points**:
 
 Import resolution (Section 7.1) only considers **exported** symbols:
 
-- `from my.module import foo` may only bind `foo` if `foo` appears in `my.module`’s export list.
+- A module-qualified access `my.module.foo` is valid only if `foo` appears in
+  `my.module`’s export list.
 - Non-exported functions and types are private to the defining module and cannot be named from other modules.
 
 The export set is recorded in the module’s DMIR/DMP metadata (Chapter 20). Tools use this metadata to enforce that only exported, can-throw entry points participate in cross-module linking.
+
+### 7.3. Export surfaces and entry modules (package boundary)
+
+`export` and `pub` define a module’s interface **within a build**. At the
+package boundary, tooling may further restrict which modules are importable from
+other packages via **surfaces**.
+
+Rules:
+
+- A package may declare one or more **surfaces** (e.g., `api`, `internal`).
+- Each surface lists **entry modules** (module ids).
+- Cross-package imports may only target entry modules that are listed in a
+  surface of the dependency package.
+- Modules not listed as entry modules are not importable cross-package, even if
+  they contain `pub` items.
+- Surfaces may carry an `import_notice` that is emitted once per build when an
+  entry module is imported.
 
 ## 8. Control flow
 
@@ -1677,7 +1691,7 @@ try {
 ## 9. Reserved keywords and operators
 
 Keywords and literals are reserved and cannot be used as identifiers (functions, variables, modules, structs, exceptions, etc.):  
-`fn`, `val`, `var`, `returns`, `if`, `else`, `while`, `break`, `continue`, `try`, `catch`, `throw`, `raise`, `return`, `exception`, `import`, `module`, `implement`, `true`, `false`, `not`, `and`, `or`, plus language/FFI/legacy keywords (`auto`, `pragma`, `bool`, `int`, `float`, `string`, `void`, `abstract`, `assert`, `boolean`, `byte`, `case`, `char`, `class`, `const`, `default`, `do`, `double`, `enum`, `extends`, `final`, `finally`, `for`, `goto`, `instanceof`, `interface`, `long`, `native`, `new`, `package`, `private`, `protected`, `public`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`, `this`, `throws`, `transient`, `volatile`).
+`fn`, `val`, `var`, `returns`, `if`, `else`, `while`, `break`, `continue`, `try`, `catch`, `throw`, `raise`, `return`, `exception`, `import`, `module`, `implement`, `pub`, `type`, `true`, `false`, `not`, `and`, `or`, plus language/FFI/legacy keywords (`auto`, `pragma`, `bool`, `int`, `float`, `string`, `void`, `abstract`, `assert`, `boolean`, `byte`, `case`, `char`, `class`, `const`, `default`, `do`, `double`, `enum`, `extends`, `final`, `finally`, `for`, `goto`, `instanceof`, `interface`, `long`, `native`, `new`, `package`, `private`, `protected`, `public`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`, `this`, `throws`, `transient`, `volatile`).
 
 **Operator tokens (reserved):** `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`, `? :`, `|>` (pipeline), `<<`, `>>`, indexing brackets `[]`, and member access `.`. These participate in precedence/associativity rules; identifiers cannot reuse them.
 
@@ -3229,6 +3243,9 @@ It records (minimum required set):
   - `interface_blob`: string reference `sha256:<hex>`
   - `payload_blob`: string reference `sha256:<hex>`
 - `blobs`: a mapping from blob references (`"sha256:<hex>"`) to an object `{type, length}`.
+ - `surfaces`: a map of surface name → object:
+   - `entry_modules`: list of module ids that are allowed as cross-package import entry points
+   - `import_notice`: optional string emitted once per build when an entry module is imported
 
 It may additionally record tooling-level metadata such as:
 

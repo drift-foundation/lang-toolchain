@@ -1,5 +1,5 @@
 module main
+import lib as lib
 
-from lib import SECRET
 
-fn main() returns Int { return SECRET; }
+fn main() returns Int { return lib.SECRET; }

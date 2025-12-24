@@ -2,5 +2,5 @@ module b
 
 export { bfn }
 
-fn bfn() returns Int { return 42; }
+pub fn bfn() returns Int { return 42; }
 

@@ -1,4 +1,4 @@
 module a
 export { foo }
-fn foo() returns Int { return 1; }
+pub fn foo() returns Int { return 1; }
 

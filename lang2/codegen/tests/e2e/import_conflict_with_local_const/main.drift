@@ -1,9 +1,9 @@
 module main
+import lib as lib
 
-from lib import ANSWER
 
 const ANSWER: Int = 0;
 
 fn main() returns Int {
-	return ANSWER;
+	return lib.ANSWER;
 }

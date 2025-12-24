@@ -3146,8 +3146,15 @@ class TypeChecker:
 								span=getattr(expr, "loc", Span()),
 							)
 						if len(viable) > 1:
+							mod_names: list[str] = []
+							for res in viable:
+								if res.decl.fn_id is not None and res.decl.fn_id.module:
+									mod_names.append(res.decl.fn_id.module)
+								else:
+									mod_names.append(str(res.decl.module_id))
+							mod_list = ", ".join(sorted(set(mod_names)))
 							raise ResolutionError(
-								f"ambiguous method '{expr.method_name}' for receiver {recv_ty} and args {arg_types}",
+								f"ambiguous method '{expr.method_name}' for receiver {recv_ty} and args {arg_types}; candidates from modules: {mod_list}",
 								span=getattr(expr, "loc", Span()),
 							)
 						resolution = viable[0]

@@ -1,7 +1,7 @@
 {
   "exit_code": 1,
   "diagnostics": [
-    { "phase": "parser", "message_contains": "ambiguous" }
+    { "phase": "parser", "message_contains": "import alias" }
   ],
   "module_paths": ["."]
 }

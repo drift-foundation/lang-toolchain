@@ -36,7 +36,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -150,7 +150,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -268,7 +268,7 @@ module lib
 
 export {{ add }}
 
-fn add(a: Int, b: Int) returns Int {{
+pub fn add(a: Int, b: Int) returns Int {{
 	{lib_body}
 }}
 """.lstrip(),
@@ -350,7 +350,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -412,7 +412,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -475,7 +475,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -592,7 +592,7 @@ module a
 
 export { add }
 
-fn add(x: Int, y: Int) returns Int {
+pub fn add(x: Int, y: Int) returns Int {
 	return x + y
 }
 """.lstrip(),
@@ -604,7 +604,7 @@ module b
 
 export { add }
 
-fn add(x: Int, y: Int) returns Int {
+pub fn add(x: Int, y: Int) returns Int {
 	return x + y + 1
 }
 """.lstrip(),
@@ -711,7 +711,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -784,7 +784,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -844,7 +844,7 @@ module lib
 
 export { add }
 
-fn add(a: Int, b: Int) returns Int {
+pub fn add(a: Int, b: Int) returns Int {
 	return a + b
 }
 """.lstrip(),
@@ -948,7 +948,7 @@ module lib
 
 export {{ add }}
 
-fn add(a: Int, b: Int) returns Int {{
+pub fn add(a: Int, b: Int) returns Int {{
 	{lib_body}
 }}
 """.lstrip(),

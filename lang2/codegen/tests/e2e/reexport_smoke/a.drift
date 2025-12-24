@@ -1,5 +1,4 @@
 module a
+import b as b
 
-from b import add
-
-export { add }
+export { b.* }

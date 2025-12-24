@@ -1,5 +1,5 @@
 module c
-from a import afn
+import a as a
 export { cfn }
-fn cfn() returns Int { return afn(); }
+pub fn cfn() returns Int { return a.afn(); }
 

@@ -1,8 +1,7 @@
 module main
+import b as b
 
-from b import X
 
 fn main() returns Int {
-	return X;
+	return b.ANSWER;
 }
-

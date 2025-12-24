@@ -39,7 +39,7 @@ fn main() returns Int {
 	)
 
 	# Workspace path.
-	_hirs, sigs, _fn_ids_by_name, _tt, _exc, _exports, diags = parse_drift_workspace_to_hir([src], module_paths=[tmp_path])
+	_hirs, sigs, _fn_ids_by_name, _tt, _exc, _exports, _deps, diags = parse_drift_workspace_to_hir([src], module_paths=[tmp_path])
 	assert not diags
 	methods = [s for s in sigs.values() if getattr(s, "is_method", False)]
 	assert methods

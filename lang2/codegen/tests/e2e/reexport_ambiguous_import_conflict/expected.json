@@ -2,7 +2,6 @@
   "exit_code": 1,
   "phase": "parser",
   "diagnostics": [
-    { "phase": "parser", "message_contains": "ambiguous due to conflicting imports" }
+    { "phase": "parser", "message_contains": "ambiguous due to re-exports" }
   ]
 }
-

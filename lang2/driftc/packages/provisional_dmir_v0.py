@@ -203,9 +203,10 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 		sig = signatures[name]
 		if getattr(sig, "module", None) not in (module_id, None):
 			continue
+		sig_module = getattr(sig, "module", None) or module_id
 		out[name] = {
 			"name": sig.name,
-			"module": getattr(sig, "module", None),
+			"module": sig_module,
 			"is_method": sig.is_method,
 			"method_name": getattr(sig, "method_name", None),
 			"impl_target_type_id": getattr(sig, "impl_target_type_id", None),

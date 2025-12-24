@@ -2,8 +2,8 @@ module a.geom
 
 export { Point, make }
 
-struct Point { x: Int, y: Int }
+pub struct Point { x: Int, y: Int }
 
-fn make() returns Point {
+pub fn make() returns Point {
 	return Point(x = 1, y = 0)
 }

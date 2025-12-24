@@ -1,5 +1,5 @@
 module a
-from b import bfn
+import b as b
 export { afn }
-fn afn() returns Int { return bfn(); }
+pub fn afn() returns Int { return b.bfn(); }
 

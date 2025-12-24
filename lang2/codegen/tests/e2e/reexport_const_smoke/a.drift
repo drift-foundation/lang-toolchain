@@ -2,5 +2,4 @@ module a
 
 export { ANSWER }
 
-const ANSWER: Int = 42;
-
+pub const ANSWER: Int = 42;

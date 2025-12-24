@@ -1,6 +1,5 @@
 module main
+import a as m
+import b as m
 
-from a import *
-from b import *
-
-fn main() returns Int { return foo(); }
+fn main() returns Int { return 0; }

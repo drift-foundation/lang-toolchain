@@ -42,6 +42,14 @@ def _build_registry(signatures: dict[FunctionId, object]) -> tuple[CallableRegis
 	return registry, module_ids
 
 
+def _visible_modules_for(
+	module_name: str, module_deps: dict[str, set[str]], module_ids: dict[object, int]
+) -> tuple[int, ...]:
+	visible = set(module_deps.get(module_name, set()))
+	visible.add(module_name)
+	return tuple(sorted(module_ids.get(mod, 0) for mod in visible))
+
+
 def _collect_calls(block: H.HBlock) -> list[H.HCall]:
 	calls: list[H.HCall] = []
 
@@ -108,8 +116,8 @@ module a
 
 export { f }
 
-fn f(x: Int) returns Int { return x + 1; }
-fn f(x: String) returns Int { return 2; }
+pub fn f(x: Int) returns Int { return x + 1; }
+pub fn f(x: String) returns Int { return 2; }
 """,
 	)
 	_write_file(
@@ -127,7 +135,7 @@ fn main() returns Int {
 """,
 	)
 	paths = [mod_root / "a" / "lib.drift", mod_root / "b" / "main.drift"]
-	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, _exports, diagnostics = parse_drift_workspace_to_hir(
+	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, _exports, module_deps, diagnostics = parse_drift_workspace_to_hir(
 		paths,
 		module_paths=[mod_root],
 	)
@@ -142,7 +150,7 @@ fn main() returns Int {
 	if main_sig and main_sig.param_names and main_sig.param_type_ids:
 		param_types = {pname: pty for pname, pty in zip(main_sig.param_names, main_sig.param_type_ids)}
 	current_mod = module_ids.setdefault(main_sig.module, len(module_ids))
-	visible_mods = tuple(module_ids.values())
+	visible_mods = _visible_modules_for("b", module_deps, module_ids)
 	tc = TypeChecker(type_table=type_table)
 	result = tc.check_function(
 		main_id,

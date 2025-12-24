@@ -1,6 +1,6 @@
 module main
+import does_not_exist as does_not_exist
 
-from does_not_exist import x
 
 fn main() returns Int { return 0; }
 

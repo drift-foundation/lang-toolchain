@@ -811,7 +811,7 @@ def main(argv: list[str] | None = None) -> int:
 					return 1
 		external_exports = collect_external_exports(loaded_pkgs)
 
-	func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, module_exports, parse_diags = parse_drift_workspace_to_hir(
+	func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
 		source_paths,
 		module_paths=module_paths,
 		external_module_exports=external_exports,
@@ -959,6 +959,37 @@ def main(argv: list[str] | None = None) -> int:
 						return 1
 					if name in local_display_names or name in external_signatures_by_name:
 						continue
+					module_name = sd.get("module")
+					if module_name is None:
+						if "::" in name:
+							module_name = name.rsplit("::", 1)[0]
+						elif "::" in sym:
+							module_name = sym.rsplit("::", 1)[0]
+						elif args.require_signatures:
+							msg = f"package signature '{name}' missing module; signatures must include module or qualified name"
+							if args.json:
+								print(
+									json.dumps(
+										{
+											"exit_code": 1,
+											"diagnostics": [
+												{
+													"phase": "package",
+													"message": msg,
+													"severity": "error",
+													"file": str(source_path),
+													"line": None,
+													"column": None,
+												}
+											],
+										}
+									)
+								)
+							else:
+								print(f"{source_path}:?:?: error: {msg}", file=sys.stderr)
+							return 1
+					if module_name is not None and "::" not in name:
+						name = f"{module_name}::{name}"
 					param_type_ids = sd.get("param_type_ids")
 					if isinstance(param_type_ids, list):
 						param_type_ids = [tid_map.get(int(x), int(x)) for x in param_type_ids]
@@ -970,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
 						impl_tid = tid_map.get(impl_tid, impl_tid)
 					external_signatures_by_name[name] = FnSignature(
 						name=name,
-						module=sd.get("module"),
+						module=module_name,
 						method_name=sd.get("method_name"),
 						param_names=sd.get("param_names"),
 						param_type_ids=param_type_ids,
@@ -1278,6 +1309,59 @@ def main(argv: list[str] | None = None) -> int:
 			continue
 		call_sigs_by_name.setdefault(sig_name, []).append(sig)
 
+	def _collect_reexport_targets(mod: str) -> set[str]:
+		if not isinstance(module_exports, dict):
+			return set()
+		exp = module_exports.get(mod) or {}
+		reexp = exp.get("reexports") if isinstance(exp, dict) else None
+		if not isinstance(reexp, dict):
+			return set()
+		targets: set[str] = set()
+		type_reexp = reexp.get("types") if isinstance(reexp.get("types"), dict) else {}
+		for kind in ("structs", "variants", "exceptions"):
+			entries = type_reexp.get(kind) if isinstance(type_reexp, dict) else None
+			if not isinstance(entries, dict):
+				continue
+			for info in entries.values():
+				if isinstance(info, dict):
+					tgt = info.get("module")
+					if isinstance(tgt, str):
+						targets.add(tgt)
+		const_reexp = reexp.get("consts") if isinstance(reexp.get("consts"), dict) else {}
+		if isinstance(const_reexp, dict):
+			for info in const_reexp.values():
+				if isinstance(info, dict):
+					tgt = info.get("module")
+					if isinstance(tgt, str):
+						targets.add(tgt)
+		return targets
+
+	# Ensure module ids exist for any module mentioned in the workspace graph.
+	if isinstance(module_deps, dict):
+		all_mods = set(module_deps.keys())
+		if isinstance(module_exports, dict):
+			all_mods |= set(module_exports.keys())
+		for mid in sorted(all_mods):
+			module_ids.setdefault(mid, len(module_ids))
+
+	visible_modules_by_name: dict[str, tuple[int, ...]] = {}
+	if isinstance(module_deps, dict):
+		for mod_name in module_deps.keys():
+			visible: set[str] = {mod_name}
+			visible |= set(module_deps.get(mod_name, set()))
+			queue = list(visible)
+			while queue:
+				cur = queue.pop()
+				for tgt in _collect_reexport_targets(cur):
+					if tgt not in visible:
+						visible.add(tgt)
+						queue.append(tgt)
+			visible_ids_list = []
+			for m in sorted(visible):
+				visible_ids_list.append(module_ids.setdefault(m, len(module_ids)))
+			visible_ids = tuple(visible_ids_list)
+			visible_modules_by_name[mod_name] = visible_ids
+
 	typed_fns: dict[FunctionId, object] = {}
 	for fn_id, hir_block in normalized_hirs_by_id.items():
 		# Build param type map from signatures when available.
@@ -1285,7 +1369,9 @@ def main(argv: list[str] | None = None) -> int:
 		sig = signatures_by_id.get(fn_id)
 		if sig and sig.param_names and sig.param_type_ids:
 			param_types = {pname: pty for pname, pty in zip(sig.param_names, sig.param_type_ids) if pty is not None}
-		fn_module_id = module_ids.get(sig.module, 0) if sig is not None else 0
+		fn_module_name = sig.module if sig is not None and sig.module is not None else "main"
+		fn_module_id = module_ids.setdefault(fn_module_name, len(module_ids))
+		visible_modules = visible_modules_by_name.get(fn_module_name, (fn_module_id,))
 		result = type_checker.check_function(
 			fn_id,
 			hir_block,
@@ -1293,7 +1379,7 @@ def main(argv: list[str] | None = None) -> int:
 			return_type=sig.return_type_id if sig is not None else None,
 			call_signatures=call_sigs_by_name,
 			callable_registry=callable_registry,
-			visible_modules=tuple(module_ids.values()),
+			visible_modules=visible_modules,
 			current_module=fn_module_id,
 			signatures_by_id=signatures_by_id,
 		)

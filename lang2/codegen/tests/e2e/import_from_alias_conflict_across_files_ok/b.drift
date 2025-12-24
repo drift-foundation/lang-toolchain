@@ -1,7 +1,7 @@
 module main
+import lib as lib
 
-from lib import sub as f
 
 fn b() returns Int {
-	return f(10, 3);
+	return lib.sub(10, 3);
 }

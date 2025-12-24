@@ -971,7 +971,6 @@ def _merge_module_files(
 	# Combine module directives (imports/exports).
 	for _, prog in files:
 		merged.imports.extend(getattr(prog, "imports", []) or [])
-		merged.from_imports.extend(getattr(prog, "from_imports", []) or [])
 		merged.exports.extend(getattr(prog, "exports", []) or [])
 
 	# Merge implement blocks by target repr and de-duplicate methods.
@@ -992,9 +991,21 @@ def _merge_module_files(
 					trait=getattr(impl, "trait", None),
 					require=getattr(impl, "require", None),
 					loc=getattr(impl, "loc", None),
+					is_pub=getattr(impl, "is_pub", False),
+					type_params=list(getattr(impl, "type_params", []) or []),
+					type_param_locs=list(getattr(impl, "type_param_locs", []) or []),
 					methods=[],
 				)
 				impls_by_key[key] = dst
+			elif list(getattr(dst, "type_params", []) or []) != impl_type_params:
+				impl_label = f"{trait_str} for {target_str}" if trait_str else target_str
+				diagnostics.append(
+					Diagnostic(
+						message=f"conflicting type parameter lists for implement block '{impl_label}'",
+						severity="error",
+						span=_span_in_file(path, getattr(impl, "loc", None)),
+					)
+				)
 			elif getattr(dst, "require", None) != getattr(impl, "require", None):
 				impl_label = f"{trait_str} for {target_str}" if trait_str else target_str
 				diagnostics.append(
@@ -1057,6 +1068,7 @@ def parse_drift_workspace_to_hir(
 	"TypeTable",
 	Dict[str, int],
 	Dict[str, Dict[str, object]],
+	Dict[str, set[str]],
 	List[Diagnostic],
 ]:
 	"""
@@ -1082,11 +1094,11 @@ def parse_drift_workspace_to_hir(
 		  (types: structs, variants, exceptions).
 
 	Returns:
-	  (func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, module_exports, diagnostics)
+	  (func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, module_exports, module_deps, diagnostics)
 	"""
 	diagnostics: list[Diagnostic] = []
 	if not paths:
-		return {}, {}, {}, TypeTable(), {}, {}, [Diagnostic(message="no input files", severity="error")]
+		return {}, {}, {}, TypeTable(), {}, {}, {}, [Diagnostic(message="no input files", severity="error")]
 
 	def _effective_module_id(p: parser_ast.Program) -> str:
 		return getattr(p, "module", None) or "main"
@@ -1118,7 +1130,7 @@ def parse_drift_workspace_to_hir(
 		parsed.append((path, prog))
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	def _infer_module_id_from_paths(path: Path) -> tuple[str, Path] | tuple[None, None]:
 		"""
@@ -1216,7 +1228,7 @@ def parse_drift_workspace_to_hir(
 			by_module.setdefault(mid, []).append((path, prog))
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	# When module roots are used, reject ambiguous module ids coming from
 	# multiple roots (prevents accidental shadowing/selection by search order).
@@ -1239,7 +1251,7 @@ def parse_drift_workspace_to_hir(
 					)
 				)
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 	# Merge each module (Milestone 1 rules) and retain callable provenance per file.
 	merged_programs: dict[str, parser_ast.Program] = {}
 	origin_by_module: dict[str, dict[FunctionId, Path]] = {}
@@ -1249,7 +1261,7 @@ def parse_drift_workspace_to_hir(
 		origin_by_module[mid] = origins
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	def _build_export_interface(
 		*,
@@ -1270,6 +1282,8 @@ def parse_drift_workspace_to_hir(
 		MVP visibility model:
 		- items are private by default,
 		- `export { Name, ... }` lists the exported names,
+		- `export { other.module.* }` re-exports the other module's export set,
+		- `export` cannot elevate visibility; only `pub` items may be exported.
 		- both values and types may be exported, but in separate namespaces:
 		  - values: free functions
 		  - types: structs, variants, exceptions
@@ -1290,65 +1304,55 @@ def parse_drift_workspace_to_hir(
 		module_struct_names: set[str] = {s.name for s in getattr(merged_prog, "structs", []) or []}
 		module_variant_names: set[str] = {v.name for v in getattr(merged_prog, "variants", []) or []}
 		module_exception_names: set[str] = {e.name for e in getattr(merged_prog, "exceptions", []) or []}
+		module_pub_fn_names: set[str] = {fn.name for fn in getattr(merged_prog, "functions", []) or [] if getattr(fn, "is_pub", False)}
+		module_pub_const_names: set[str] = {c.name for c in getattr(merged_prog, "consts", []) or [] if getattr(c, "is_pub", False)}
+		module_pub_struct_names: set[str] = {s.name for s in getattr(merged_prog, "structs", []) or [] if getattr(s, "is_pub", False)}
+		module_pub_variant_names: set[str] = {v.name for v in getattr(merged_prog, "variants", []) or [] if getattr(v, "is_pub", False)}
+		module_pub_exception_names: set[str] = {e.name for e in getattr(merged_prog, "exceptions", []) or [] if getattr(e, "is_pub", False)}
 
 		raw_export_entries: list[tuple[str, Span]] = []
+		star_export_entries: list[tuple[str, Span]] = []
 		for path, parsed_prog in module_files:
 			for ex in getattr(parsed_prog, "exports", []) or []:
-				ex_span = _span_in_file(path, getattr(ex, "loc", None))
-				for n in getattr(ex, "names", []) or []:
-					raw_export_entries.append((n, ex_span))
+				for item in getattr(ex, "items", []) or []:
+					item_span = _span_in_file(path, getattr(item, "loc", None))
+					if isinstance(item, parser_ast.ExportName):
+						raw_export_entries.append((item.name, item_span))
+					elif isinstance(item, parser_ast.ExportModuleStar):
+						mod = ".".join(getattr(item, "module_path", []) or [])
+						if mod:
+							star_export_entries.append((mod, item_span))
 
 		# MVP rule: exporting the same name multiple times within a module is a
 		# deterministic user error (even if it would be a no-op). We treat it as a
 		# duplicate declaration so the module interface remains crisp and tooling
 		# never has to guess which export site is authoritative.
 		seen_export_names: dict[str, Span] = {}
+		seen_star_modules: dict[str, Span] = {}
 
 		# Exported values map exported local name -> underlying (module_id, symbol).
 		#
-		# This enables a minimal re-export mechanism without introducing a new
-		# surface syntax yet:
-		#
-		#   from other.module import foo
-		#   export { foo }
-		#
 		# Export entries always name symbols in the *current* module interface
-		# (e.g., `a::foo`). When `foo` is re-exported (implemented by another module),
-		# the workspace loader materializes a trampoline function `a::foo` that
-		# forwards to the underlying target `other.module::foo`.
+		# (e.g., `a::foo`). Re-exports preserve the origin module in the map so
+		# consumers always bind to the defining symbol.
 		exported_values: dict[str, tuple[str, str]] = {}
 		exported_types: dict[str, set[str]] = {"structs": set(), "variants": set(), "exceptions": set()}
 		exported_consts: set[str] = set()
-		pending_reexports: dict[str, Span] = {}
-
-		# Collect re-export candidates from `from <module> import <symbol> [as alias]`
-		# statements across files in the module. Imports are per-file, but exports
-		# are module-level; to keep export resolution deterministic we require that
-		# any *exported* imported binding be unambiguous across the module.
-		reexport_candidates: dict[str, tuple[str, str]] = {}
-		reexport_first_span: dict[str, Span] = {}
-		reexport_conflicts: dict[str, tuple[tuple[str, str], tuple[str, str], Span, Span]] = {}
-		for path, parsed_prog in module_files:
-			for imp in getattr(parsed_prog, "from_imports", []) or []:
-				local_name = getattr(imp, "alias", None) or getattr(imp, "symbol", "")
-				mod = ".".join(getattr(imp, "module_path", []) or [])
-				sym = getattr(imp, "symbol", "")
-				if not local_name or not mod or not sym:
-					continue
-				target = (mod, sym)
-				imp_span = _span_in_file(path, getattr(imp, "loc", None))
-				prev = reexport_candidates.get(local_name)
-				if prev is None:
-					reexport_candidates[local_name] = target
-					reexport_first_span[local_name] = imp_span
-				elif prev != target:
-					if local_name not in reexport_conflicts:
-						reexport_conflicts[local_name] = (
-							prev,
-							target,
-							reexport_first_span.get(local_name, Span()),
-							imp_span,
-						)
+		star_reexports: dict[str, Span] = {}
+		for mod, ex_span in star_export_entries:
+			prev = seen_star_modules.get(mod)
+			if prev is None:
+				seen_star_modules[mod] = ex_span
+				star_reexports[mod] = ex_span
+			else:
+				diagnostics.append(
+					Diagnostic(
+						message=f"duplicate export of module '{mod}.*' in module '{module_id}'",
+						severity="error",
+						span=ex_span,
+						notes=[f"first export was here: {_format_span_short(prev)}"],
+					)
+				)
 
 		for n, ex_span in raw_export_entries:
 			first_span = seen_export_names.get(n)
@@ -1393,34 +1397,6 @@ def parse_drift_workspace_to_hir(
 				continue
 
 			if not in_values and not in_consts and not in_types:
-				# Re-export candidate. We resolve these deterministically after we
-				# have computed export interfaces for all modules and any external
-				# package-provided modules.
-				#
-				# This keeps the export interface composable: `export { foo }` may
-				# refer to a local definition or an imported binding (re-export).
-				conflict = reexport_conflicts.get(n)
-				if conflict is not None:
-					prev, new, first_imp_span, second_imp_span = conflict
-					diagnostics.append(
-						Diagnostic(
-							message=(
-								f"exported name '{n}' is ambiguous due to conflicting imports "
-								f"({prev[0]}::{prev[1]} vs {new[0]}::{new[1]}); cannot export it"
-							),
-							severity="error",
-							span=ex_span,
-							notes=[
-								f"first import was here: {_format_span_short(first_imp_span)}",
-								f"conflicting import was here: {_format_span_short(second_imp_span)}",
-							],
-						)
-					)
-					continue
-				target = reexport_candidates.get(n)
-				if target is not None:
-					pending_reexports[n] = ex_span
-					continue
 				diagnostics.append(
 					Diagnostic(
 						message=f"module '{module_id}' exports unknown symbol '{n}'",
@@ -1431,23 +1407,66 @@ def parse_drift_workspace_to_hir(
 				continue
 
 			if in_values:
+				if n not in module_pub_fn_names:
+					diagnostics.append(
+						Diagnostic(
+							message=f"cannot export '{n}': symbol is not public (mark it 'pub')",
+							severity="error",
+							span=ex_span,
+						)
+					)
+					continue
 				exported_values[n] = (module_id, n)
 			if in_consts:
+				if n not in module_pub_const_names:
+					diagnostics.append(
+						Diagnostic(
+							message=f"cannot export '{n}': symbol is not public (mark it 'pub')",
+							severity="error",
+							span=ex_span,
+						)
+					)
+					continue
 				exported_consts.add(n)
 			if in_struct:
+				if n not in module_pub_struct_names:
+					diagnostics.append(
+						Diagnostic(
+							message=f"cannot export '{n}': symbol is not public (mark it 'pub')",
+							severity="error",
+							span=ex_span,
+						)
+					)
+					continue
 				exported_types["structs"].add(n)
 			if in_variant:
+				if n not in module_pub_variant_names:
+					diagnostics.append(
+						Diagnostic(
+							message=f"cannot export '{n}': symbol is not public (mark it 'pub')",
+							severity="error",
+							span=ex_span,
+						)
+					)
+					continue
 				exported_types["variants"].add(n)
 			if in_exc:
+				if n not in module_pub_exception_names:
+					diagnostics.append(
+						Diagnostic(
+							message=f"cannot export '{n}': symbol is not public (mark it 'pub')",
+							severity="error",
+							span=ex_span,
+						)
+					)
+					continue
 				exported_types["exceptions"].add(n)
 
 		return (
 			exported_values,
 			exported_types,
 			exported_consts,
-			pending_reexports,
-			reexport_candidates,
-			reexport_conflicts,
+			star_reexports,
 		)
 
 	# Note: module-scoped nominal type identity is implemented in lang2.
@@ -1467,9 +1486,9 @@ def parse_drift_workspace_to_hir(
 	exports_values_by_module: dict[str, dict[str, tuple[str, str]]] = {}
 	exports_types_by_module: dict[str, dict[str, set[str]]] = {}
 	exports_consts_by_module: dict[str, set[str]] = {}
-	pending_reexports_by_module: dict[str, dict[str, Span]] = {}
-	reexport_candidates_by_module: dict[str, dict[str, tuple[str, str]]] = {}
-	reexport_conflicts_by_module: dict[str, dict[str, tuple[tuple[str, str], tuple[str, str], Span, Span]]] = {}
+	star_reexports_by_module: dict[str, dict[str, Span]] = {}
+	exported_const_origins_by_module: dict[str, dict[str, tuple[str, str]]] = {}
+	exported_type_origins_by_module: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
 	# Re-export target maps (for types/consts). Values are materialized as
 	# trampolines, so consumers always reference the exporting module id.
 	reexported_type_targets_by_module: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
@@ -1479,9 +1498,7 @@ def parse_drift_workspace_to_hir(
 			exported_values,
 			exported_types,
 			exported_consts,
-			pending_reexports,
-			reexport_candidates,
-			reexport_conflicts,
+			star_reexports,
 		) = _build_export_interface(
 			module_id=mid,
 			merged_prog=prog,
@@ -1490,121 +1507,133 @@ def parse_drift_workspace_to_hir(
 		exports_values_by_module[mid] = exported_values
 		exports_types_by_module[mid] = exported_types
 		exports_consts_by_module[mid] = exported_consts
-		pending_reexports_by_module[mid] = pending_reexports
-		reexport_candidates_by_module[mid] = reexport_candidates
-		reexport_conflicts_by_module[mid] = reexport_conflicts
+		star_reexports_by_module[mid] = star_reexports
+		exported_const_origins_by_module[mid] = {n: (mid, n) for n in exported_consts}
+		exported_type_origins_by_module[mid] = {
+			"structs": {n: (mid, n) for n in exported_types.get("structs") or set()},
+			"variants": {n: (mid, n) for n in exported_types.get("variants") or set()},
+			"exceptions": {n: (mid, n) for n in exported_types.get("exceptions") or set()},
+		}
 		reexported_type_targets_by_module[mid] = {"structs": {}, "variants": {}, "exceptions": {}}
 		reexported_const_targets_by_module[mid] = {}
 
-	# Resolve re-exports across modules deterministically.
-	#
-	# For `export { foo }` where `foo` is imported via `from m import foo`,
-	# we extend the exporting module's interface with:
-	# - values: `foo` is exported and later materialized as a trampoline function
-	#   `this_module::foo` that forwards to `m::foo`,
-	# - consts: `foo` is exported and later materialized as a *local* compile-time
-	#   constant `this_module::foo` copied from `m::foo` (no runtime storage),
-	# - types: `foo` is exported as an alias of the underlying definition and is
-	#   recorded in reexport target maps so import resolution can bind it to the
-	#   defining module identity (no type duplication).
-	def _export_lookup(mod: str) -> tuple[set[str], set[str], dict[str, set[str]]]:
-		"""Return (exported_values, exported_consts, exported_types_by_kind) for a module."""
+	# Resolve star re-exports across modules deterministically.
+	def _export_origin_lookup(
+		mod: str,
+	) -> tuple[dict[str, tuple[str, str]], dict[str, tuple[str, str]], dict[str, dict[str, tuple[str, str]]]]:
+		"""Return (exported_values, exported_consts, exported_types_by_kind) with origin targets."""
 		if mod in exports_values_by_module or mod in exports_types_by_module or mod in exports_consts_by_module:
 			return (
-				set((exports_values_by_module.get(mod) or {}).keys()),
-				set(exports_consts_by_module.get(mod) or set()),
-				exports_types_by_module.get(mod) or {"structs": set(), "variants": set(), "exceptions": set()},
+				exports_values_by_module.get(mod) or {},
+				exported_const_origins_by_module.get(mod) or {},
+				exported_type_origins_by_module.get(mod) or {"structs": {}, "variants": {}, "exceptions": {}},
 			)
 		if external_module_exports is not None and mod in external_module_exports:
 			ext = external_module_exports.get(mod) or {}
+			values_obj = {n: (mod, n) for n in sorted(ext.get("values") or set())}
+			consts_obj = {n: (mod, n) for n in sorted(ext.get("consts") or set())}
+			types_obj: dict[str, dict[str, tuple[str, str]]] = {"structs": {}, "variants": {}, "exceptions": {}}
 			ext_types = ext.get("types")
-			types_obj: dict[str, set[str]] = {"structs": set(), "variants": set(), "exceptions": set()}
 			if isinstance(ext_types, dict):
-				types_obj = {
-					"structs": set(ext_types.get("structs") or set()),
-					"variants": set(ext_types.get("variants") or set()),
-					"exceptions": set(ext_types.get("exceptions") or set()),
-				}
-			return (
-				set(ext.get("values") or set()),
-				set(ext.get("consts") or set()),
-				types_obj,
-			)
-		return set(), set(), {"structs": set(), "variants": set(), "exceptions": set()}
+				for kind in ("structs", "variants", "exceptions"):
+					for name in sorted(ext_types.get(kind) or set()):
+						types_obj[kind][name] = (mod, name)
+			ext_reexp = ext.get("reexports")
+			if isinstance(ext_reexp, dict):
+				ext_reexp_types = ext_reexp.get("types")
+				ext_reexp_consts = ext_reexp.get("consts")
+				if isinstance(ext_reexp_consts, dict):
+					for name, v in ext_reexp_consts.items():
+						if isinstance(v, dict):
+							tm = v.get("module")
+							tn = v.get("name")
+							if isinstance(tm, str) and isinstance(tn, str):
+								consts_obj[name] = (tm, tn)
+				if isinstance(ext_reexp_types, dict):
+					for kind in ("structs", "variants", "exceptions"):
+						km = ext_reexp_types.get(kind)
+						if isinstance(km, dict):
+							for name, v in km.items():
+								if isinstance(v, dict):
+									tm = v.get("module")
+									tn = v.get("name")
+									if isinstance(tm, str) and isinstance(tn, str):
+										types_obj[kind][name] = (tm, tn)
+			return values_obj, consts_obj, types_obj
+		return {}, {}, {"structs": {}, "variants": {}, "exceptions": {}}
 
-	# We iterate until no progress so multi-hop re-exports resolve deterministically.
+	# We iterate until no progress so multi-hop star re-exports resolve deterministically.
 	for _ in range(len(merged_programs) + 1):
 		progress = False
-		for mid, pending in pending_reexports_by_module.items():
-			if not pending:
-				continue
-			for name, ex_span in list(pending.items()):
-				target = (reexport_candidates_by_module.get(mid) or {}).get(name)
-				if target is None:
-					continue
-				tmod, tsym = target
-				vals, consts, types_obj = _export_lookup(tmod)
-				is_val = tsym in vals
-				is_const = tsym in consts
-				is_struct = tsym in (types_obj.get("structs") or set())
-				is_variant = tsym in (types_obj.get("variants") or set())
-				is_exc = tsym in (types_obj.get("exceptions") or set())
-				hits = int(is_val) + int(is_const) + int(is_struct) + int(is_variant) + int(is_exc)
-				if hits == 0:
-					continue
-				if hits > 1:
+		for mid, stars in star_reexports_by_module.items():
+			for target_mod, ex_span in stars.items():
+				if target_mod not in merged_programs and (external_module_exports is None or target_mod not in external_module_exports):
 					diagnostics.append(
 						Diagnostic(
-							message=f"exported name '{name}' is ambiguous (target '{tmod}::{tsym}' exists in multiple namespaces)",
+							message=f"module '{mid}' re-exports unknown module '{target_mod}'",
 							severity="error",
 							span=ex_span,
 						)
 					)
-					pending.pop(name, None)
-					progress = True
 					continue
-				if is_val:
-					exports_values_by_module[mid][name] = (tmod, tsym)
-				elif is_const:
-					# Const re-export MVP:
-					# - the exporting module `mid` exports a *local* const symbol
-					#   `mid::name` as part of its interface.
-					# - later in the driver pipeline, `mid::name` is materialized by
-					#   copying the typed literal value of `tmod::tsym` into the exporting
-					#   module’s const table.
-					#
-					# Import resolution must treat the const as belonging to the exporting
-					# module so consumers do not need to reference the origin module.
-					exports_consts_by_module[mid].add(name)
-					reexported_const_targets_by_module[mid][name] = (tmod, tsym)
-				elif is_struct:
-					exports_types_by_module[mid]["structs"].add(name)
-					reexported_type_targets_by_module[mid]["structs"][name] = (tmod, tsym)
-				elif is_variant:
-					exports_types_by_module[mid]["variants"].add(name)
-					reexported_type_targets_by_module[mid]["variants"][name] = (tmod, tsym)
-				elif is_exc:
-					exports_types_by_module[mid]["exceptions"].add(name)
-					reexported_type_targets_by_module[mid]["exceptions"][name] = (tmod, tsym)
-				pending.pop(name, None)
-				progress = True
+				vals, consts, types_obj = _export_origin_lookup(target_mod)
+				for name, origin in vals.items():
+					prev = exports_values_by_module[mid].get(name)
+					if prev is None:
+						exports_values_by_module[mid][name] = origin
+						progress = True
+					elif prev != origin:
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"exported name '{name}' is ambiguous due to re-exports "
+									f"('{prev[0]}' vs '{origin[0]}') in module '{mid}'"
+								),
+								severity="error",
+								span=ex_span,
+							)
+						)
+				for name, origin in consts.items():
+					prev = exported_const_origins_by_module[mid].get(name)
+					if prev is None:
+						exports_consts_by_module[mid].add(name)
+						exported_const_origins_by_module[mid][name] = origin
+						if origin[0] != mid:
+							reexported_const_targets_by_module[mid][name] = origin
+						progress = True
+					elif prev != origin:
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"exported const '{name}' is ambiguous due to re-exports "
+									f"('{prev[0]}' vs '{origin[0]}') in module '{mid}'"
+								),
+								severity="error",
+								span=ex_span,
+							)
+						)
+				for kind, origins in types_obj.items():
+					for name, origin in origins.items():
+						prev = exported_type_origins_by_module[mid][kind].get(name)
+						if prev is None:
+							exports_types_by_module[mid][kind].add(name)
+							exported_type_origins_by_module[mid][kind][name] = origin
+							if origin[0] != mid:
+								reexported_type_targets_by_module[mid][kind][name] = origin
+							progress = True
+						elif prev != origin:
+							diagnostics.append(
+								Diagnostic(
+									message=(
+										f"exported type '{name}' is ambiguous due to re-exports "
+										f"('{prev[0]}' vs '{origin[0]}') in module '{mid}'"
+									),
+									severity="error",
+									span=ex_span,
+								)
+							)
 		if not progress:
 			break
-
-	# Any remaining pending re-exports could not be resolved.
-	for mid, pending in pending_reexports_by_module.items():
-		for name, ex_span in pending.items():
-			target = (reexport_candidates_by_module.get(mid) or {}).get(name)
-			if target is None:
-				continue
-			tmod, tsym = target
-			diagnostics.append(
-				Diagnostic(
-					message=f"module '{mid}' exports unknown symbol '{name}' (imported as '{tsym}' from '{tmod}')",
-					severity="error",
-					span=ex_span,
-				)
-			)
 
 	def _union_exported_types(types_obj: dict[str, set[str]] | None) -> set[str]:
 		if not types_obj:
@@ -1615,7 +1644,7 @@ def parse_drift_workspace_to_hir(
 		return out
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	# Export interface summary (used by package emission and future tooling).
 	module_exports: dict[str, dict[str, list[str]]] = {}
@@ -1652,36 +1681,10 @@ def parse_drift_workspace_to_hir(
 	# Keep per-edge provenance so cycle diagnostics can be source-anchored.
 	# Each edge is (to_module, span).
 	dep_edges: dict[str, list[tuple[str, Span]]] = {mid: [] for mid in merged_programs}
-	from_value_bindings_by_file: dict[Path, dict[str, tuple[str, str]]] = {}
-	from_type_bindings_by_file: dict[Path, dict[str, tuple[str, str]]] = {}
-	from_const_bindings_by_file: dict[Path, dict[str, tuple[str, str]]] = {}
 	module_aliases_by_file: dict[Path, dict[str, str]] = {}
 	for mid, files in by_module.items():
 		for path, prog in files:
-			file_seen_values: dict[str, tuple[str, str]] = {}
-			file_seen_types: dict[str, tuple[str, str]] = {}
-			file_seen_consts: dict[str, tuple[str, str]] = {}
-			file_value_bindings: dict[str, tuple[str, str]] = {}
-			file_type_bindings: dict[str, tuple[str, str]] = {}
-			file_const_bindings: dict[str, tuple[str, str]] = {}
-			# Track first import site per local binding name so conflict diagnostics
-			# can point at both the import and the local declaration.
-			file_value_binding_span: dict[str, Span] = {}
-			file_type_binding_span: dict[str, Span] = {}
-			file_const_binding_span: dict[str, Span] = {}
 			file_module_aliases: dict[str, str] = {}
-			# MVP rule: `from m import name` introduces a file-scoped binding in the
-			# same namespace as top-level declarations in that file. Conflicts are
-			# errors regardless of order (imports are treated as a logical header).
-			top_level_fn_by_name: dict[str, object] = {fn.name: fn for fn in getattr(prog, "functions", []) or []}
-			top_level_const_by_name: dict[str, object] = {c.name: c for c in getattr(prog, "consts", []) or []}
-			top_level_type_by_name: dict[str, object] = {}
-			for s in getattr(prog, "structs", []) or []:
-				top_level_type_by_name[s.name] = s
-			for v in getattr(prog, "variants", []) or []:
-				top_level_type_by_name[v.name] = v
-			for e in getattr(prog, "exceptions", []) or []:
-				top_level_type_by_name[e.name] = e
 
 			for imp in getattr(prog, "imports", []) or []:
 				mod = ".".join(getattr(imp, "path", []) or [])
@@ -1709,297 +1712,15 @@ def parse_drift_workspace_to_hir(
 			# This is per-file by design (imports are file-scoped in MVP).
 			module_aliases_by_file[path] = dict(file_module_aliases)
 
-			for fi in getattr(prog, "from_imports", []) or []:
-				mod = ".".join(getattr(fi, "module_path", []) or [])
-				sym = getattr(fi, "symbol", "")
-				if not mod or not sym:
-					continue
-				span = _span_in_file(path, getattr(fi, "loc", None))
-				dep_edges[mid].append((mod, span))
-				if mod not in merged_programs and (external_module_exports is None or mod not in external_module_exports):
-					diagnostics.append(Diagnostic(message=f"imported module '{mod}' not found", severity="error", span=span))
-					continue
-
-				exported_values_map = exports_values_by_module.get(mod, {})
-				exported_types_obj = exports_types_by_module.get(mod, {"structs": set(), "variants": set(), "exceptions": set()})
-				exported_types_set = _union_exported_types(exported_types_obj)
-				exported_consts_set = set(exports_consts_by_module.get(mod, set()))
-				exported_const_targets = reexported_const_targets_by_module.get(mod, {})
-				exported_type_targets = reexported_type_targets_by_module.get(mod, {"structs": {}, "variants": {}, "exceptions": {}})
-				if mod not in merged_programs and external_module_exports is not None and mod in external_module_exports:
-					ext = external_module_exports.get(mod) or {}
-					exported_values_map = {n: (mod, n) for n in sorted(ext.get("values") or set())}
-					ext_types = ext.get("types")
-					if isinstance(ext_types, dict):
-						exported_types_set = set(ext_types.get("structs") or set()) | set(ext_types.get("variants") or set()) | set(
-							ext_types.get("exceptions") or set()
-						)
-					else:
-						exported_types_set = set()
-					exported_consts_set = set(ext.get("consts") or set())
-					# External modules may include re-export metadata for types/consts.
-					ext_reexp = ext.get("reexports")
-					exported_const_targets = {}
-					exported_type_targets = {"structs": {}, "variants": {}, "exceptions": {}}
-					if isinstance(ext_reexp, dict):
-						ext_reexp_types = ext_reexp.get("types")
-						ext_reexp_consts = ext_reexp.get("consts")
-						if isinstance(ext_reexp_consts, dict):
-							for k, v in ext_reexp_consts.items():
-								if isinstance(k, str) and isinstance(v, dict):
-									tm = v.get("module")
-									tn = v.get("name")
-									if isinstance(tm, str) and isinstance(tn, str):
-										exported_const_targets[k] = (tm, tn)
-						if isinstance(ext_reexp_types, dict):
-							for kind in ("structs", "variants", "exceptions"):
-								km = ext_reexp_types.get(kind)
-								if isinstance(km, dict):
-									for k, v in km.items():
-										if isinstance(k, str) and isinstance(v, dict):
-											tm = v.get("module")
-											tn = v.get("name")
-											if isinstance(tm, str) and isinstance(tn, str):
-												exported_type_targets[kind][k] = (tm, tn)
-				available_exports = sorted(set(exported_values_map.keys()) | exported_types_set | exported_consts_set)
-				is_glob = bool(getattr(fi, "is_glob", False))
-				if is_glob:
-					if getattr(fi, "alias", None) is not None:
-						diagnostics.append(
-							Diagnostic(
-								message="from-import glob does not support aliasing",
-								severity="error",
-								span=span,
-							)
-						)
-						continue
-					# Expand deterministically: values, consts, then types; each sorted.
-					glob_values = sorted(exported_values_map.keys())
-					glob_consts = sorted(exported_consts_set)
-					glob_types = sorted(exported_types_set)
-					for v in glob_values:
-						local_name = v
-						target = exported_values_map.get(v, (mod, v))
-						prev = file_seen_values.get(local_name)
-						if prev is None:
-							file_seen_values[local_name] = target
-							file_value_binding_span[local_name] = span
-							file_value_bindings[local_name] = target
-						elif prev != target:
-							prev_span = file_value_binding_span.get(local_name, Span())
-							diagnostics.append(
-								Diagnostic(
-									message=f"ambiguous imported name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-									severity="error",
-									span=span,
-									notes=[f"previous import was here: {_format_span_short(prev_span)}"],
-								)
-							)
-					for c in glob_consts:
-						local_name = c
-						# Const re-exports are materialized into the exporting module’s
-						# own const table, so the local binding always targets `mod::c`.
-						target = (mod, c)
-						prev = file_seen_consts.get(local_name)
-						if prev is None:
-							file_seen_consts[local_name] = target
-							file_const_binding_span[local_name] = span
-							file_const_bindings[local_name] = target
-						elif prev != target:
-							prev_span = file_const_binding_span.get(local_name, Span())
-							diagnostics.append(
-								Diagnostic(
-									message=f"ambiguous imported const name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-									severity="error",
-									span=span,
-									notes=[f"previous import was here: {_format_span_short(prev_span)}"],
-								)
-							)
-					for t in glob_types:
-						local_name = t
-						if t in (exported_types_obj.get("structs") or set()):
-							target = exported_type_targets.get("structs", {}).get(t, (mod, t))
-						elif t in (exported_types_obj.get("variants") or set()):
-							target = exported_type_targets.get("variants", {}).get(t, (mod, t))
-						elif t in (exported_types_obj.get("exceptions") or set()):
-							target = exported_type_targets.get("exceptions", {}).get(t, (mod, t))
-						else:
-							target = (mod, t)
-						prev = file_seen_types.get(local_name)
-						if prev is None:
-							file_seen_types[local_name] = target
-							file_type_binding_span[local_name] = span
-							file_type_bindings[local_name] = target
-						elif prev != target:
-							prev_span = file_type_binding_span.get(local_name, Span())
-							diagnostics.append(
-								Diagnostic(
-									message=f"ambiguous imported type name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-									severity="error",
-									span=span,
-									notes=[f"previous import was here: {_format_span_short(prev_span)}"],
-								)
-							)
-					continue
-
-				is_value = sym in exported_values_map
-				is_type = sym in exported_types_set
-				is_const = sym in exported_consts_set
-				if not is_value and not is_type and not is_const:
-					available = ", ".join(available_exports)
-					notes = (
-						[f"available exports: {available}"]
-						if available
-						else [f"module '{mod}' exports nothing (private by default)"]
-					)
-					diagnostics.append(
-						Diagnostic(
-							message=f"module '{mod}' does not export symbol '{sym}'",
-							severity="error",
-							span=span,
-							notes=notes,
-						)
-					)
-					continue
-				if int(is_value) + int(is_type) + int(is_const) > 1:
-					diagnostics.append(
-						Diagnostic(
-							message=f"module '{mod}' exports symbol '{sym}' in multiple namespaces; cannot import it in MVP",
-							severity="error",
-							span=span,
-						)
-					)
-					continue
-
-				local_name = getattr(fi, "alias", None) or sym
-				if is_value:
-					# Re-exported values are exported under the current module id but
-					# implemented by another module/symbol. For MVP we materialize
-					# re-exports as trampoline functions (`mod::sym`) so imports remain
-					# stable and module interfaces are self-contained.
-					raw_target = exported_values_map.get(sym, (mod, sym))
-					target = (mod, sym) if raw_target != (mod, sym) else raw_target
-					prev = file_seen_values.get(local_name)
-					if prev is None:
-						file_seen_values[local_name] = target
-						file_value_binding_span[local_name] = span
-					elif prev != target:
-						diagnostics.append(
-							Diagnostic(
-								message=f"ambiguous imported name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-								severity="error",
-								span=span,
-								notes=[f"previous import was here: {_format_span_short(file_value_binding_span.get(local_name, Span()))}"],
-							)
-						)
-						continue
-					file_value_bindings[local_name] = target
-
-				if is_const:
-					# Const re-exports are materialized into the exporting module’s
-					# own const table, so the local binding always targets `mod::sym`.
-					target = (mod, sym)
-					prev = file_seen_consts.get(local_name)
-					if prev is None:
-						file_seen_consts[local_name] = target
-						file_const_binding_span[local_name] = span
-					elif prev != target:
-						diagnostics.append(
-							Diagnostic(
-								message=f"ambiguous imported const name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-								severity="error",
-								span=span,
-								notes=[f"previous import was here: {_format_span_short(file_const_binding_span.get(local_name, Span()))}"],
-							)
-						)
-						continue
-					file_const_bindings[local_name] = target
-
-				if is_type:
-					if sym in (exported_types_obj.get("structs") or set()):
-						target = exported_type_targets.get("structs", {}).get(sym, (mod, sym))
-					elif sym in (exported_types_obj.get("variants") or set()):
-						target = exported_type_targets.get("variants", {}).get(sym, (mod, sym))
-					elif sym in (exported_types_obj.get("exceptions") or set()):
-						target = exported_type_targets.get("exceptions", {}).get(sym, (mod, sym))
-					else:
-						target = (mod, sym)
-					prev = file_seen_types.get(local_name)
-					if prev is None:
-						file_seen_types[local_name] = target
-						file_type_binding_span[local_name] = span
-					elif prev != target:
-						diagnostics.append(
-							Diagnostic(
-								message=f"ambiguous imported type name '{local_name}': both '{prev[0]}::{prev[1]}' and '{target[0]}::{target[1]}' are in scope",
-								severity="error",
-								span=span,
-								notes=[f"previous import was here: {_format_span_short(file_type_binding_span.get(local_name, Span()))}"],
-							)
-						)
-						continue
-					file_type_bindings[local_name] = target
-
-			from_value_bindings_by_file[path] = file_value_bindings
-			from_type_bindings_by_file[path] = file_type_bindings
-			from_const_bindings_by_file[path] = file_const_bindings
-
-			# After collecting the effective import bindings, enforce the pinned
-			# conflict rule with local top-level declarations.
-			for local_name, (imp_mod, imp_sym) in file_value_bindings.items():
-				local_decl = top_level_fn_by_name.get(local_name) or top_level_const_by_name.get(local_name)
-				if local_decl is None:
-					continue
-				decl_span = _span_in_file(path, getattr(local_decl, "loc", None))
-				imp_span = file_value_binding_span.get(local_name, Span())
-				diagnostics.append(
-					Diagnostic(
-						message=f"name '{local_name}' conflicts with imported binding from module '{imp_mod}'",
-						severity="error",
-						span=decl_span,
-						notes=[
-							f"imported as '{local_name}' from '{imp_mod}::{imp_sym}' at {getattr(imp_span, 'file', str(path))}:{getattr(imp_span, 'line', '?')}:{getattr(imp_span, 'column', '?')}",
-						],
-					)
-				)
-			for local_name, (imp_mod, imp_sym) in file_const_bindings.items():
-				local_decl = top_level_fn_by_name.get(local_name) or top_level_const_by_name.get(local_name)
-				if local_decl is None:
-					continue
-				decl_span = _span_in_file(path, getattr(local_decl, "loc", None))
-				imp_span = file_const_binding_span.get(local_name, Span())
-				diagnostics.append(
-					Diagnostic(
-						message=f"name '{local_name}' conflicts with imported const binding from module '{imp_mod}'",
-						severity="error",
-						span=decl_span,
-						notes=[
-							f"imported as '{local_name}' from '{imp_mod}::{imp_sym}' at {getattr(imp_span, 'file', str(path))}:{getattr(imp_span, 'line', '?')}:{getattr(imp_span, 'column', '?')}",
-						],
-					)
-				)
-			for local_name, (imp_mod, imp_sym) in file_type_bindings.items():
-				local_decl = top_level_type_by_name.get(local_name)
-				if local_decl is None:
-					continue
-				decl_span = _span_in_file(path, getattr(local_decl, "loc", None))
-				imp_span = file_type_binding_span.get(local_name, Span())
-				diagnostics.append(
-					Diagnostic(
-						message=f"type name '{local_name}' conflicts with imported type from module '{imp_mod}'",
-						severity="error",
-						span=decl_span,
-						notes=[
-							f"imported as '{local_name}' from '{imp_mod}::{imp_sym}' at {getattr(imp_span, 'file', str(path))}:{getattr(imp_span, 'line', '?')}:{getattr(imp_span, 'column', '?')}",
-						],
-					)
-				)
-
 	# Collapse edge lists into a simple adjacency set for cycle detection.
-	deps: dict[str, set[str]] = {mid: {to for (to, _sp) in edges if to in merged_programs} for mid, edges in dep_edges.items()}
+	# Include external modules so visibility rules can see package imports.
+	deps: dict[str, set[str]] = {
+		mid: {to for (to, _sp) in edges if to in merged_programs or (external_module_exports and to in external_module_exports)}
+		for mid, edges in dep_edges.items()
+	}
 
-	# Resolve module-qualified and imported type references using per-file import
-	# bindings and module export interfaces.
+	# Resolve module-qualified type references using per-file module aliases and
+	# module export interfaces.
 	#
 	# After successful resolution we record the canonical `module_id` on the type
 	# expression (and rewrite imported aliases to their original symbol name). This
@@ -2020,7 +1741,6 @@ def parse_drift_workspace_to_hir(
 	def _resolve_type_expr_in_file(
 		path: Path,
 		file_aliases: dict[str, str],
-		file_type_bindings: dict[str, tuple[str, str]],
 		te: parser_ast.TypeExpr | None,
 	) -> None:
 		if te is None:
@@ -2086,24 +1806,16 @@ def parse_drift_workspace_to_hir(
 					te.module_id = def_mod
 					te.name = def_name
 					te.module_alias = None
-		# Unqualified imported type: `from m import Point` makes `Point` resolve to
-		# the imported module, even when referenced without an `x.` qualifier.
-		if getattr(te, "module_alias", None) is None and getattr(te, "module_id", None) is None:
-			target = file_type_bindings.get(te.name)
-			if target is not None:
-				mod, sym = target
-				te.module_id = mod
-				te.name = sym
 		for a in getattr(te, "args", []) or []:
-			_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, a)
+			_resolve_type_expr_in_file(path, file_aliases, a)
 
-	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], file_type_bindings: dict[str, tuple[str, str]], blk: parser_ast.Block) -> None:
+	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], blk: parser_ast.Block) -> None:
 		for st in getattr(blk, "statements", []) or []:
 			# Resolve any type-level references embedded in expressions (e.g.,
 			# `TypeRef::Ctor(...)` where `TypeRef` may include a module alias).
 			def _resolve_types_in_expr(expr: parser_ast.Expr) -> None:
 				if isinstance(expr, parser_ast.QualifiedMember):
-					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, expr.base_type)
+					_resolve_type_expr_in_file(path, file_aliases, expr.base_type)
 					return
 				if isinstance(expr, parser_ast.Call):
 					_resolve_types_in_expr(expr.func)
@@ -2141,12 +1853,12 @@ def parse_drift_workspace_to_hir(
 				if isinstance(expr, parser_ast.TryCatchExpr):
 					_resolve_types_in_expr(expr.attempt)
 					for arm in getattr(expr, "catch_arms", []) or []:
-						_resolve_types_in_block(path, file_aliases, file_type_bindings, arm.block)
+						_resolve_types_in_block(path, file_aliases, arm.block)
 					return
 				if isinstance(expr, parser_ast.MatchExpr):
 					_resolve_types_in_expr(expr.scrutinee)
 					for arm in getattr(expr, "arms", []) or []:
-						_resolve_types_in_block(path, file_aliases, file_type_bindings, arm.block)
+						_resolve_types_in_block(path, file_aliases, arm.block)
 					return
 				if isinstance(expr, parser_ast.ExceptionCtor):
 					for a in getattr(expr, "args", []) or []:
@@ -2161,7 +1873,7 @@ def parse_drift_workspace_to_hir(
 				# literals/names/placeholders are leaf nodes
 
 			if isinstance(st, parser_ast.LetStmt) and getattr(st, "type_expr", None) is not None:
-				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, st.type_expr)
+				_resolve_type_expr_in_file(path, file_aliases, st.type_expr)
 			if isinstance(st, parser_ast.LetStmt):
 				_resolve_types_in_expr(st.value)
 			if isinstance(st, parser_ast.AssignStmt):
@@ -2176,51 +1888,50 @@ def parse_drift_workspace_to_hir(
 				_resolve_types_in_expr(st.value)
 			if isinstance(st, parser_ast.IfStmt):
 				_resolve_types_in_expr(st.condition)
-				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.then_block)
+				_resolve_types_in_block(path, file_aliases, st.then_block)
 				if st.else_block is not None:
-					_resolve_types_in_block(path, file_aliases, file_type_bindings, st.else_block)
+					_resolve_types_in_block(path, file_aliases, st.else_block)
 			if isinstance(st, parser_ast.TryStmt):
 				if isinstance(getattr(st, "attempt", None), parser_ast.Expr):
 					_resolve_types_in_expr(st.attempt)
-				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
+				_resolve_types_in_block(path, file_aliases, st.body)
 				for c in getattr(st, "catches", []) or []:
-					_resolve_types_in_block(path, file_aliases, file_type_bindings, c.block)
+					_resolve_types_in_block(path, file_aliases, c.block)
 			if isinstance(st, parser_ast.WhileStmt):
 				_resolve_types_in_expr(st.condition)
-				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
+				_resolve_types_in_block(path, file_aliases, st.body)
 			if isinstance(st, parser_ast.ForStmt):
 				_resolve_types_in_expr(st.iter_expr)
-				_resolve_types_in_block(path, file_aliases, file_type_bindings, st.body)
+				_resolve_types_in_block(path, file_aliases, st.body)
 			if isinstance(st, parser_ast.ThrowStmt):
 				_resolve_types_in_expr(st.expr)
 
 	for mid, files in by_module.items():
 		for path, prog in files:
 			file_aliases = module_aliases_by_file.get(path, {})
-			file_type_bindings = from_type_bindings_by_file.get(path, {})
 			# Top-level declarations.
 			for fn in getattr(prog, "functions", []) or []:
 				for p in getattr(fn, "params", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, p.type_expr)
-				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, getattr(fn, "return_type", None))
-				_resolve_types_in_block(path, file_aliases, file_type_bindings, fn.body)
+					_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
+				_resolve_type_expr_in_file(path, file_aliases, getattr(fn, "return_type", None))
+				_resolve_types_in_block(path, file_aliases, fn.body)
 			for impl in getattr(prog, "implements", []) or []:
-				_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, impl.target)
+				_resolve_type_expr_in_file(path, file_aliases, impl.target)
 				for mfn in getattr(impl, "methods", []) or []:
 					for p in getattr(mfn, "params", []) or []:
-						_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, p.type_expr)
-					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, getattr(mfn, "return_type", None))
-					_resolve_types_in_block(path, file_aliases, file_type_bindings, mfn.body)
+						_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, getattr(mfn, "return_type", None))
+					_resolve_types_in_block(path, file_aliases, mfn.body)
 			for s in getattr(prog, "structs", []) or []:
 				for f in getattr(s, "fields", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, f.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
 			for e in getattr(prog, "exceptions", []) or []:
 				for a in getattr(e, "args", []) or []:
-					_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, a.type_expr)
+					_resolve_type_expr_in_file(path, file_aliases, a.type_expr)
 			for v in getattr(prog, "variants", []) or []:
 				for arm in getattr(v, "arms", []) or []:
 					for f in getattr(arm, "fields", []) or []:
-						_resolve_type_expr_in_file(path, file_aliases, file_type_bindings, f.type_expr)
+						_resolve_type_expr_in_file(path, file_aliases, f.type_expr)
 
 	# Cycle detection (MVP: reject import cycles).
 	def _find_cycle() -> list[str] | None:
@@ -2289,7 +2000,7 @@ def parse_drift_workspace_to_hir(
 		)
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
 	shared_type_table = TypeTable()
@@ -2305,12 +2016,22 @@ def parse_drift_workspace_to_hir(
 	for _mid, _prog in merged_programs.items():
 		for _s in getattr(_prog, "structs", []) or []:
 			try:
-				shared_type_table.declare_struct(
+				struct_id = shared_type_table.declare_struct(
 					_mid,
 					_s.name,
 					[f.name for f in getattr(_s, "fields", []) or []],
 					list(getattr(_s, "type_params", []) or []),
 				)
+				field_templates = [
+					StructFieldSchema(
+						name=_f.name,
+						type_expr=_generic_type_expr_from_parser(
+							_f.type_expr, type_params=list(getattr(_s, "type_params", []) or [])
+						),
+					)
+					for _f in getattr(_s, "fields", []) or []
+				]
+				shared_type_table.define_struct_schema_fields(struct_id, field_templates)
 			except ValueError as err:
 				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_s, "loc", None))))
 		for _v in getattr(_prog, "variants", []) or []:
@@ -2337,7 +2058,7 @@ def parse_drift_workspace_to_hir(
 				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_v, "loc", None))))
 
 		if any(d.severity == "error" for d in diagnostics):
-			return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+			return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	def _qualify_fn_name(module_id: str, name: str) -> str:
 		# MVP: symbols in the default `main` module remain unqualified so
@@ -2477,7 +2198,7 @@ def parse_drift_workspace_to_hir(
 				all_func_hirs[trampoline_id] = H.HBlock(statements=[H.HReturn(value=call_expr)])
 
 		if any(d.severity == "error" for d in diagnostics):
-			return {}, {}, {}, TypeTable(), {}, {}, diagnostics
+			return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	# Materialize const re-exports into the exporting module’s const table when
 	# the origin const value is already available in the shared TypeTable.
@@ -2523,10 +2244,6 @@ def parse_drift_workspace_to_hir(
 		origin_file: Path | None,
 	) -> None:
 		local_map = local_maps.get(module_id, {})
-		file_bindings = from_value_bindings_by_file.get(origin_file or Path(), {})
-		import_map: dict[str, str] = {local_name: _qualify_fn_name(mod, sym) for local_name, (mod, sym) in file_bindings.items()}
-		file_const_bindings = from_const_bindings_by_file.get(origin_file or Path(), {})
-		import_const_map: dict[str, str] = {local_name: f"{mod}::{sym}" for local_name, (mod, sym) in file_const_bindings.items()}
 		file_module_aliases = module_aliases_by_file.get(origin_file or Path(), {})
 		# Call-site rewriting must be scope-correct: a local binding shadows only
 		# within its lexical block, not across the whole function.
@@ -2546,14 +2263,12 @@ def parse_drift_workspace_to_hir(
 				return name
 			if name in local_map:
 				return local_map[name]
-			if name in import_map:
-				return import_map[name]
 			return name
 
 		def rewrite_const_name(name: str, *, bound: set[str]) -> str:
 			if name in bound:
 				return name
-			return import_const_map.get(name, name)
+			return name
 
 		def exported_value_names(mod: str) -> set[str]:
 			if mod in exports_values_by_module:
@@ -2745,6 +2460,20 @@ def parse_drift_workspace_to_hir(
 						# literal value into the exporting module, so consumers do not
 						# need to reference the origin module.
 						return H.HVar(name=f"{mod}::{expr.name}")
+					available = ", ".join(sorted(exported_value_names(mod) | exported_const_names(mod) | exported_type_names(mod)))
+					notes = (
+						[f"available exports: {available}"]
+						if available
+						else [f"module '{mod}' exports nothing (private by default)"]
+					)
+					diagnostics.append(
+						Diagnostic(
+							message=f"module '{mod}' does not export symbol '{expr.name}'",
+							severity="error",
+							span=getattr(expr.subject, "loc", Span()),
+							notes=notes,
+						)
+					)
 					# Note: module-qualified type names are handled in type positions
 					# via TypeExpr.module_id. Expression-position `x.Point` without
 					# call is not a supported surface construct in MVP.
@@ -2870,7 +2599,7 @@ def parse_drift_workspace_to_hir(
 		else:
 			payload_seen[payload] = fqn
 
-	return all_func_hirs, all_sigs, fn_ids_by_name, shared_type_table, exc_catalog, module_exports, diagnostics
+	return all_func_hirs, all_sigs, fn_ids_by_name, shared_type_table, exc_catalog, module_exports, deps, diagnostics
 
 
 def _lower_parsed_program_to_hir(

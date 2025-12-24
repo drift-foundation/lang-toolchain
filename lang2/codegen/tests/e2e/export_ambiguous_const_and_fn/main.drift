@@ -1,8 +1,8 @@
 module main
 
-const X: Int = 1;
+pub const X: Int = 1;
 
-fn X() returns Int { return 2; }
+pub fn X() returns Int { return 2; }
 
 export { X }
 

@@ -2,4 +2,4 @@ module lib
 
 export { add }
 
-fn add() returns Int { return 42; }
+pub fn add() returns Int { return 42; }

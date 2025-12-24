@@ -1,4 +1,7 @@
 {
   "phase": "parser",
-  "exit_code": 1
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "parser", "message_contains": "import alias 'm' conflicts" }
+  ]
 }

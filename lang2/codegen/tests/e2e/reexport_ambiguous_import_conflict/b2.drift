@@ -1,4 +1,4 @@
 module b
+import c as c
 
-from c import foo as x
-
+export { c.* }

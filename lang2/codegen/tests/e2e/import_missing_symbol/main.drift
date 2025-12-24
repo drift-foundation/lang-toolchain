@@ -1,6 +1,5 @@
 module main
+import lib as lib
 
-from lib import nope
 
-fn main() returns Int { return 0; }
-
+fn main() returns Int { return lib.nope; }

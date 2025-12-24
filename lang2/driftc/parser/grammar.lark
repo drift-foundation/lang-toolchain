@@ -4,7 +4,7 @@
 // Identifiers: allow leading underscore, but reserve double-underscore (compiler use).
 // Give identifiers a lower priority than keyword terminals so the basic lexer
 // prefers `and`, `or`, `val`, etc. as their own tokens instead of `NAME`.
-NAME.0: /(?!type\b)[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
+NAME.0: /(?!type\b)(?!pub\b)[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 %import common.SIGNED_INT
 // Float literals: decimal only, digits on both sides of '.', optional exponent.
 // Important: float literals never include a leading sign; unary '-' is parsed separately.
@@ -25,6 +25,7 @@ NEWLINE: /(\r?\n[ \t]*)/
 VAL: "val"
 VAR: "var"
 CONST: "const"
+PUB.2: "pub"
 MUT: "mut"
 TYPE.2: "type"
 CALL_TYPE_LT.2: /<\s*type\b/
@@ -93,7 +94,6 @@ REQUIRE: "require"
 TRY: "try"
 CATCH: "catch"
 EXPORT: "export"
-FROM: "from"
 QMARK: "?"
 MODULE: "module"
 LINE_COMMENT: /\/\/[^\n]*/
@@ -109,7 +109,8 @@ module_decl: MODULE module_path
 module_path: NAME (DOT NAME)*
 ident: NAME | MOVE
 
-?item: func_def
+?item: pub_item
+     | func_def
      | const_def
      | struct_def
      | exception_def
@@ -117,9 +118,10 @@ ident: NAME | MOVE
      | trait_def
      | implement_def
      | import_stmt
-     | from_import_stmt
      | export_stmt
      | stmt
+
+pub_item: PUB (func_def | const_def | struct_def | exception_def | variant_def | trait_def | implement_def)
 
 # Top-level constant definition.
 #
@@ -248,10 +250,10 @@ expr_stmt: postfix
 import_stmt: "import" module_path import_alias?
 import_alias: "as" NAME
 
-from_import_stmt: FROM module_path "import" (STAR | NAME) import_alias?
-
 export_stmt: EXPORT "{" export_items? "}"
-export_items: NAME (COMMA NAME)*
+export_items: export_item (COMMA export_item)*
+export_item: NAME | module_path_star
+module_path_star: NAME (DOT NAME)* DOT STAR
 
 struct_def: "struct" NAME type_params? require_clause? struct_body
 struct_body: tuple_struct | block_struct

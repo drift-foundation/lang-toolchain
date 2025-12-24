@@ -1,6 +1,5 @@
 module main
+import b as b
 
-from b import x
 
-fn main() returns Int { return x(); }
-
+fn main() returns Int { return b.foo(); }

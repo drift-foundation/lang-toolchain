@@ -2,7 +2,7 @@ module acme.lib
 
 export { answer }
 
-fn answer() returns Int {
+pub fn answer() returns Int {
 	return 42
 }
 

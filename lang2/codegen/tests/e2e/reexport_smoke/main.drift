@@ -1,5 +1,5 @@
 module main
+import a as a
 
-from a import add
 
-fn main() returns Int { return add(40, 2); }
+fn main() returns Int { return a.add(40, 2); }

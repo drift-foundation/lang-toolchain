@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from lark import UnexpectedInput
 
+from lang2.driftc.parser import ast
 from lang2.driftc.parser import parser as p
 
 
@@ -15,7 +16,9 @@ export { a }
 """
 	)
 	assert len(prog.exports) == 1
-	assert prog.exports[0].names == ["a"]
+	items = prog.exports[0].items
+	assert [type(i) for i in items] == [ast.ExportName]
+	assert [i.name for i in items] == ["a"]
 
 
 def test_parse_export_multiple_names() -> None:
@@ -26,7 +29,9 @@ export { a, b }
 """
 	)
 	assert len(prog.exports) == 1
-	assert prog.exports[0].names == ["a", "b"]
+	items = prog.exports[0].items
+	assert [type(i) for i in items] == [ast.ExportName, ast.ExportName]
+	assert [i.name for i in items] == ["a", "b"]
 
 
 def test_export_trailing_comma_rejected() -> None:

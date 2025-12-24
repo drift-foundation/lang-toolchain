@@ -131,7 +131,7 @@ fn main() returns Int {
 """,
 	)
 	paths = [mod_root / "a.drift", mod_root / "b.drift", mod_root / "main.drift"]
-	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, _exports, diagnostics = parse_drift_workspace_to_hir(
+	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, _exports, _deps, diagnostics = parse_drift_workspace_to_hir(
 		paths,
 		module_paths=[tmp_path],
 	)

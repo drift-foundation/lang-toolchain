@@ -1,6 +1,6 @@
 module main
+import lib as m
+import other as m
 
-from lib import add
-from other import add
 
 fn main() returns Int { return 0; }

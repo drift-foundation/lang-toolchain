@@ -15,6 +15,7 @@ class StructDef:
     name: str
     fields: List[StructField]
     loc: "Located"
+    is_pub: bool = False
     require: Optional["RequireClause"] = None
     type_params: List[str] = field(default_factory=list)
     type_param_locs: List["Located"] = field(default_factory=list)
@@ -31,6 +32,7 @@ class ExceptionDef:
     name: str
     args: List[ExceptionArg]
     loc: "Located"
+    is_pub: bool = False
     domain: Optional[str] = None
 
 
@@ -167,6 +169,7 @@ class FunctionDef:
 	return_type: TypeExpr
 	body: Block
 	loc: Located
+	is_pub: bool = False
 	type_param_locs: List[Located] = field(default_factory=list)
 	require: Optional["RequireClause"] = None
 	is_method: bool = False
@@ -375,7 +378,6 @@ class Program:
 	# compilation stages can ignore them without having to add stage0/HIR nodes
 	# for import/export syntax.
 	imports: List["ImportStmt"] = field(default_factory=list)
-	from_imports: List["FromImportStmt"] = field(default_factory=list)
 	exports: List["ExportStmt"] = field(default_factory=list)
 	statements: List[Stmt] = field(default_factory=list)
 	structs: List[StructDef] = field(default_factory=list)
@@ -407,6 +409,7 @@ class ConstDef:
 	name: str
 	type_expr: TypeExpr
 	value: "Expr"
+	is_pub: bool = False
 
 
 @dataclass
@@ -447,6 +450,7 @@ class VariantDef:
 	type_params: List[str]
 	arms: List[VariantArm]
 	loc: Located
+	is_pub: bool = False
 
 
 @dataclass
@@ -462,6 +466,7 @@ class TraitDef:
 	name: str
 	methods: List[TraitMethodSig]
 	loc: Located
+	is_pub: bool = False
 	require: Optional["RequireClause"] = None
 
 
@@ -469,6 +474,7 @@ class TraitDef:
 class ImplementDef:
     target: TypeExpr
     loc: Located
+    is_pub: bool = False
     type_params: List[str] = field(default_factory=list)
     type_param_locs: List[Located] = field(default_factory=list)
     trait: Optional[TypeExpr] = None
@@ -484,23 +490,18 @@ class ImportStmt(Stmt):
 
 
 @dataclass
-class FromImportStmt(Stmt):
-	"""
-	Import a single exported symbol into the local file scope.
-
-	MVP shape (single symbol per statement):
-	  from foo.bar import baz
-	  from foo.bar import baz as qux
-
-	Glob import (Milestone 2+):
-	  from foo.bar import *
-	"""
-
+class ExportItem:
 	loc: Located
+
+
+@dataclass
+class ExportName(ExportItem):
+	name: str
+
+
+@dataclass
+class ExportModuleStar(ExportItem):
 	module_path: List[str]
-	symbol: str
-	alias: Optional[str] = None
-	is_glob: bool = False
 
 
 @dataclass
@@ -510,10 +511,11 @@ class ExportStmt(Stmt):
 
 	Syntax:
 	  export { foo, Bar, Baz }
+	  export { other.module.* }
 	"""
 
 	loc: Located
-	names: List[str]
+	items: List[ExportItem]
 
 
 @dataclass

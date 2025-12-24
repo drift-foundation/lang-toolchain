@@ -26,7 +26,9 @@ from .ast import (
     FunctionDef,
     IfStmt,
     ImportStmt,
-    FromImportStmt,
+    ExportItem,
+    ExportModuleStar,
+    ExportName,
     ExportStmt,
     ImplementDef,
     Index,
@@ -830,7 +832,6 @@ def _build_program(tree: Tree) -> Program:
 	implements: List[ImplementDef] = []
 	traits: List[TraitDef] = []
 	imports: List[ImportStmt] = []
-	from_imports: List[FromImportStmt] = []
 	exports: List[ExportStmt] = []
 	statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt] = []
 	structs: List[StructDef] = []
@@ -858,28 +859,49 @@ def _build_program(tree: Tree) -> Program:
 			module_loc = _loc(child)
 			continue
 		seen_non_module_item = True
+		if kind == "pub_item":
+			pub_child = next((c for c in child.children if isinstance(c, Tree)), None)
+			if pub_child is None:
+				continue
+			kind = _name(pub_child)
+			child = pub_child
+			is_pub = True
+		else:
+			is_pub = False
 		if kind == "func_def":
-			functions.append(_build_function(child))
+			fn = _build_function(child)
+			fn.is_pub = is_pub
+			functions.append(fn)
 		elif kind == "const_def":
-			consts.append(_build_const_def(child))
+			const_def = _build_const_def(child)
+			const_def.is_pub = is_pub
+			consts.append(const_def)
 		elif kind == "implement_def":
-			implements.append(_build_implement_def(child))
+			impl = _build_implement_def(child)
+			impl.is_pub = is_pub
+			implements.append(impl)
 		elif kind == "struct_def":
-			structs.append(_build_struct_def(child))
+			struct_def = _build_struct_def(child)
+			struct_def.is_pub = is_pub
+			structs.append(struct_def)
 		elif kind == "exception_def":
-			exceptions.append(_build_exception_def(child))
+			exc = _build_exception_def(child)
+			exc.is_pub = is_pub
+			exceptions.append(exc)
 		elif kind == "variant_def":
-			variants.append(_build_variant_def(child))
+			var_def = _build_variant_def(child)
+			var_def.is_pub = is_pub
+			variants.append(var_def)
 		elif kind == "trait_def":
-			traits.append(_build_trait_def(child))
+			tr_def = _build_trait_def(child)
+			tr_def.is_pub = is_pub
+			traits.append(tr_def)
 		else:
 			stmt = _build_stmt(child)
 			if stmt is None:
 				continue
 			if isinstance(stmt, ImportStmt):
 				imports.append(stmt)
-			elif isinstance(stmt, FromImportStmt):
-				from_imports.append(stmt)
 			elif isinstance(stmt, ExportStmt):
 				exports.append(stmt)
 			else:
@@ -890,7 +912,6 @@ def _build_program(tree: Tree) -> Program:
 		implements=implements,
 		traits=traits,
 		imports=imports,
-		from_imports=from_imports,
 		exports=exports,
 		statements=statements,
 		structs=structs,
@@ -1402,8 +1423,6 @@ def _build_stmt(tree: Tree):
 			return _build_expr_stmt(target)
 		if stmt_kind == "import_stmt":
 			return _build_import_stmt(target)
-		if stmt_kind == "from_import_stmt":
-			return _build_from_import_stmt(target)
 		if stmt_kind == "export_stmt":
 			return _build_export_stmt(target)
 		if stmt_kind == "while_stmt":
@@ -1435,8 +1454,6 @@ def _build_stmt(tree: Tree):
 		return _build_expr_stmt(tree)
 	if kind == "import_stmt":
 		return _build_import_stmt(tree)
-	if kind == "from_import_stmt":
-		return _build_from_import_stmt(tree)
 	if kind == "export_stmt":
 		return _build_export_stmt(tree)
 	return None
@@ -1721,35 +1738,30 @@ def _build_import_stmt(tree: Tree) -> ImportStmt:
     return ImportStmt(loc=loc, path=parts, alias=alias)
 
 
-def _build_from_import_stmt(tree: Tree) -> FromImportStmt:
-	loc = _loc(tree)
-	module_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "module_path"), None)
-	if module_node is None:
-		raise ValueError("from-import missing module path")
-	parts = [tok.value for tok in module_node.children if isinstance(tok, Token) and tok.type == "NAME"]
-	sym_tok = next((c for c in tree.children if isinstance(c, Token) and c.type in {"NAME", "STAR"}), None)
-	if sym_tok is None:
-		raise ValueError("from-import missing symbol")
-	alias = None
-	alias_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "import_alias"), None)
-	if alias_node is not None:
-		alias_tok = next((c for c in alias_node.children if isinstance(c, Token) and c.type == "NAME"), None)
-		if alias_tok:
-			alias = alias_tok.value
-	is_glob = sym_tok.type == "STAR"
-	if is_glob and alias is not None:
-		raise ValueError("from-import glob does not support aliasing")
-	return FromImportStmt(loc=loc, module_path=parts, symbol=sym_tok.value, alias=alias, is_glob=is_glob)
-
-
 def _build_export_stmt(tree: Tree) -> ExportStmt:
 	loc = _loc(tree)
 	items_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "export_items"), None)
-	if items_node is None:
-		names: List[str] = []
-	else:
-		names = [tok.value for tok in items_node.children if isinstance(tok, Token) and tok.type == "NAME"]
-	return ExportStmt(loc=loc, names=names)
+	items: List[ExportItem] = []
+	if items_node is not None:
+		for child in items_node.children:
+			if isinstance(child, Tree) and _name(child) == "export_item":
+				items.append(_build_export_item(child))
+	return ExportStmt(loc=loc, items=items)
+
+
+def _build_export_item(tree: Tree) -> ExportItem:
+	loc = _loc(tree)
+	module_node = next(
+		(c for c in tree.children if isinstance(c, Tree) and _name(c) in {"module_path", "module_path_star"}),
+		None,
+	)
+	if module_node is not None:
+		parts = [tok.value for tok in module_node.children if isinstance(tok, Token) and tok.type == "NAME"]
+		return ExportModuleStar(loc=loc, module_path=parts)
+	name_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
+	if name_tok is not None:
+		return ExportName(loc=loc, name=name_tok.value)
+	raise ValueError("export item missing name or module path")
 
 
 def _build_if_stmt(tree: Tree) -> IfStmt:

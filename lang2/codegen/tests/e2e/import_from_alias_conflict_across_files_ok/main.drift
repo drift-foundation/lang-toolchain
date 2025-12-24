@@ -2,6 +2,6 @@ module main
 
 export { main }
 
-fn main() returns Int {
+pub fn main() returns Int {
 	return a() + b();
 }

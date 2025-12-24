@@ -1,7 +1,7 @@
 module main
+import lib as lib
 
-from lib import add as f
 
 fn a() returns Int {
-	return f(1, 2);
+	return lib.add(1, 2);
 }

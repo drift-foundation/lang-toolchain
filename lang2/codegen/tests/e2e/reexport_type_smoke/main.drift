@@ -1,10 +1,9 @@
 module main
+import b as b
 
-from b import Point
-from b import make
 
 fn main() returns Int {
-	val p: Point = make();
+	val p: b.Point = b.make();
 	return p.x + p.y;
 }
 

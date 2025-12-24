@@ -2,5 +2,4 @@ module c
 
 export { foo }
 
-fn foo() returns Int { return 2; }
-
+pub fn foo() returns Int { return 2; }

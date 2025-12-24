@@ -1,4 +1,5 @@
 module b
+import a as a
 
-from a import ANSWER as X
+export { a.* }
 
