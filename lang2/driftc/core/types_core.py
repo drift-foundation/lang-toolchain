@@ -80,6 +80,40 @@ class TypeDef:
 
 
 @dataclass(frozen=True)
+class StructFieldSchema:
+	"""Single declared field in a struct schema."""
+
+	name: str
+	type_expr: GenericTypeExpr
+
+
+@dataclass(frozen=True)
+class StructSchema:
+	"""
+	Definition-time schema for a struct (generic or non-generic).
+
+	Field types are stored as GenericTypeExpr templates and instantiated with
+	concrete type arguments to create StructInstance entries.
+	"""
+
+	module_id: str
+	name: str
+	type_params: list[str]
+	fields: list[StructFieldSchema]
+
+
+@dataclass(frozen=True)
+class StructInstance:
+	"""Concrete (monomorphized) view of a struct type."""
+
+	base_id: TypeId
+	type_args: list[TypeId]
+	field_names: list[str]
+	field_types: list[TypeId]
+	fields_by_name: dict[str, int]
+
+
+@dataclass(frozen=True)
 class VariantFieldSchema:
 	"""A single declared field in a variant constructor."""
 
@@ -170,12 +204,18 @@ class TypeTable:
 		# Struct schemas keyed by nominal identity. Values are (name, [field_names]).
 		# Field types live in the STRUCT TypeDef itself.
 		self.struct_schemas: dict[NominalKey, tuple[str, list[str]]] = {}
+		# Struct base schemas keyed by the base TypeId (declared name).
+		self.struct_bases: dict[TypeId, StructSchema] = {}
+		# Concrete instantiations keyed by the instantiated TypeId.
+		self.struct_instances: dict[TypeId, StructInstance] = {}
 		# Variant schemas keyed by the *base* TypeId (declared name).
 		self.variant_schemas: dict[TypeId, VariantSchema] = {}
 		# Concrete instantiations keyed by the instantiated TypeId.
 		self.variant_instances: dict[TypeId, VariantInstance] = {}
 		# Instantiation cache: (base_id, args...) -> instantiated TypeId.
 		self._instantiation_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
+		# Struct instantiation cache: (base_id, args...) -> instantiated TypeId.
+		self._struct_instantiation_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
 		# Type parameter cache: TypeParamId -> TypeId.
 		self._typevar_cache: dict[TypeParamId, TypeId] = {}
 		# Compile-time constants keyed by their fully-qualified symbol name.
@@ -251,13 +291,14 @@ class TypeTable:
 				found = tid
 		return found
 
-	def declare_struct(self, module_id: str, name: str, field_names: List[str]) -> TypeId:
+	def declare_struct(self, module_id: str, name: str, field_names: List[str], type_params: list[str] | None = None) -> TypeId:
 		"""
 		Declare a struct nominal type with placeholder field types.
 
 		This supports recursive type references by first declaring all struct
 		names, then filling field types in a second pass via `define_struct_fields`.
 		"""
+		type_params = list(type_params or [])
 		key = NominalKey(module_id=module_id, name=name, kind=TypeKind.STRUCT)
 		if key in self._nominal:
 			ty_id = self._nominal[key]
@@ -269,6 +310,12 @@ class TypeTable:
 		placeholder = [unknown for _ in field_names]
 		ty_id = self._add(TypeKind.STRUCT, name, placeholder, field_names=list(field_names), module_id=module_id)
 		self.struct_schemas[key] = (name, list(field_names))
+		self.struct_bases[ty_id] = StructSchema(
+			module_id=module_id,
+			name=name,
+			type_params=type_params,
+			fields=[],
+		)
 		return ty_id
 
 	def declare_variant(self, module_id: str, name: str, type_params: list[str], arms: list[VariantArmSchema]) -> TypeId:
@@ -293,6 +340,106 @@ class TypeTable:
 		base_id = self._add(TypeKind.VARIANT, name, [], register_named=True, module_id=module_id)
 		self.variant_schemas[base_id] = VariantSchema(module_id=module_id, name=name, type_params=list(type_params), arms=list(arms))
 		return base_id
+
+	def define_struct_schema_fields(self, struct_id: TypeId, fields: list[StructFieldSchema]) -> None:
+		"""Define struct schema fields (template types) for a declared struct base."""
+		schema = self.struct_bases.get(struct_id)
+		if schema is None:
+			raise ValueError("define_struct_schema_fields requires a declared struct base TypeId")
+		self.struct_bases[struct_id] = StructSchema(
+			module_id=schema.module_id,
+			name=schema.name,
+			type_params=list(schema.type_params),
+			fields=list(fields),
+		)
+
+	def get_struct_schema(self, ty: TypeId) -> StructSchema | None:
+		"""Return the struct schema for a base or instantiated struct TypeId."""
+		td = self.get(ty)
+		if td.kind is not TypeKind.STRUCT:
+			return None
+		if ty in self.struct_bases:
+			return self.struct_bases[ty]
+		inst = self.struct_instances.get(ty)
+		if inst is not None:
+			return self.struct_bases.get(inst.base_id)
+		return None
+
+	def get_struct_base(self, *, module_id: str, name: str) -> TypeId | None:
+		"""Return the base TypeId for a declared struct in `module_id`, if present."""
+		tid = self.get_nominal(kind=TypeKind.STRUCT, module_id=module_id, name=name)
+		if tid is None:
+			return None
+		return tid if tid in self.struct_bases else None
+
+	def get_struct_instance(self, ty: TypeId) -> StructInstance | None:
+		"""Return the concrete struct instance for a struct TypeId, if available."""
+		return self.struct_instances.get(ty)
+
+	def ensure_struct_instantiated(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
+		"""
+		Return a stable TypeId for a concrete instantiation of a generic struct.
+
+		Instances must be fully concrete (no TypeVar).
+		"""
+		schema = self.struct_bases.get(base_id)
+		if schema is None:
+			raise ValueError("ensure_struct_instantiated requires a declared struct base TypeId")
+		if len(type_args) != len(schema.type_params):
+			raise ValueError(
+				f"type argument count mismatch for '{schema.name}': expected {len(schema.type_params)}, got {len(type_args)}"
+			)
+		if any(self.get(arg).kind is TypeKind.TYPEVAR for arg in type_args):
+			raise ValueError(f"type arguments for '{schema.name}' must be concrete")
+		if not schema.type_params:
+			if base_id not in self.struct_instances:
+				field_names = [f.name for f in schema.fields]
+				field_types = list(self.get(base_id).param_types)
+				self._define_struct_instance(base_id, base_id, type_args=[], field_names=field_names, field_types=field_types)
+			return base_id
+		key = (base_id, tuple(type_args))
+		if key in self._struct_instantiation_cache:
+			return self._struct_instantiation_cache[key]
+		inst_id = self._add(
+			TypeKind.STRUCT,
+			schema.name,
+			[],
+			register_named=False,
+			module_id=schema.module_id,
+			field_names=[f.name for f in schema.fields],
+		)
+		self._struct_instantiation_cache[key] = inst_id
+		field_names = [f.name for f in schema.fields]
+		field_types = [self._eval_generic_type_expr(f.type_expr, type_args, module_id=schema.module_id) for f in schema.fields]
+		self._define_struct_instance(base_id, inst_id, type_args=list(type_args), field_names=field_names, field_types=field_types)
+		return inst_id
+
+	def ensure_struct_template(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
+		"""
+		Return a template struct TypeId that may include TypeVar arguments.
+
+		This is used when resolving type annotations that mention impl type
+		parameters (e.g., impl<T> Box<T>). Template instances are not cached.
+		"""
+		schema = self.struct_bases.get(base_id)
+		if schema is None:
+			raise ValueError("ensure_struct_template requires a declared struct base TypeId")
+		if len(type_args) != len(schema.type_params):
+			raise ValueError(
+				f"type argument count mismatch for '{schema.name}': expected {len(schema.type_params)}, got {len(type_args)}"
+			)
+		inst_id = self._add(
+			TypeKind.STRUCT,
+			schema.name,
+			[],
+			register_named=False,
+			module_id=schema.module_id,
+			field_names=[f.name for f in schema.fields],
+		)
+		field_names = [f.name for f in schema.fields]
+		field_types = [self._eval_generic_type_expr(f.type_expr, type_args, module_id=schema.module_id) for f in schema.fields]
+		self._define_struct_instance(base_id, inst_id, type_args=list(type_args), field_names=field_names, field_types=field_types)
+		return inst_id
 
 	def ensure_instantiated(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
 		"""
@@ -411,6 +558,24 @@ class TypeTable:
 			arms_by_name=by_name,
 		)
 
+	def _define_struct_instance(
+		self,
+		base_id: TypeId,
+		inst_id: TypeId,
+		*,
+		type_args: list[TypeId],
+		field_names: list[str],
+		field_types: list[TypeId],
+	) -> None:
+		"""Create and store a concrete StructInstance for `inst_id`."""
+		self.struct_instances[inst_id] = StructInstance(
+			base_id=base_id,
+			type_args=list(type_args),
+			field_names=list(field_names),
+			field_types=list(field_types),
+			fields_by_name={name: idx for idx, name in enumerate(field_names)},
+		)
+
 	def _eval_generic_type_expr(self, expr: GenericTypeExpr, type_args: list[TypeId], *, module_id: str) -> TypeId:
 		"""
 		Evaluate a schema-time `GenericTypeExpr` into a concrete `TypeId`.
@@ -469,9 +634,10 @@ class TypeTable:
 		)
 		if expr.args:
 			arg_ids = [self._eval_generic_type_expr(a, type_args, module_id=module_id) for a in expr.args]
-			# Only variants are instantiable in MVP.
 			if base_id in self.variant_schemas:
 				return self.ensure_instantiated(base_id, arg_ids)
+			if base_id in self.struct_bases:
+				return self.ensure_struct_instantiated(base_id, arg_ids)
 		return base_id
 
 	def define_struct_fields(self, struct_id: TypeId, field_types: List[TypeId]) -> None:
@@ -489,9 +655,26 @@ class TypeTable:
 			ref_mut=None,
 			field_names=list(td.field_names),
 		)
+		schema = self.struct_bases.get(struct_id)
+		if schema is not None and not schema.type_params:
+			self._define_struct_instance(
+				struct_id,
+				struct_id,
+				type_args=[],
+				field_names=list(td.field_names),
+				field_types=list(field_types),
+			)
 
 	def struct_field(self, struct_id: TypeId, field_name: str) -> tuple[int, TypeId] | None:
 		"""Return (field_index, field_type_id) for a struct field, or None."""
+		inst = self.struct_instances.get(struct_id)
+		if inst is not None:
+			idx = inst.fields_by_name.get(field_name)
+			if idx is None:
+				return None
+			if idx >= len(inst.field_types):
+				return None
+			return idx, inst.field_types[idx]
 		td = self.get(struct_id)
 		if td.kind is not TypeKind.STRUCT or td.field_names is None:
 			return None
@@ -710,6 +893,9 @@ __all__ = [
 	"TypeParamId",
 	"NominalKey",
 	"TypeDef",
+	"StructFieldSchema",
+	"StructSchema",
+	"StructInstance",
 	"TypeTable",
 	"VariantFieldSchema",
 	"VariantArmSchema",

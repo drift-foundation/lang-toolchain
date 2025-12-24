@@ -16,6 +16,8 @@ class StructDef:
     fields: List[StructField]
     loc: "Located"
     require: Optional["RequireClause"] = None
+    type_params: List[str] = field(default_factory=list)
+    type_param_locs: List["Located"] = field(default_factory=list)
 
 
 @dataclass
@@ -287,6 +289,13 @@ class Call(Expr):
 
 
 @dataclass
+class TypeApp(Expr):
+    loc: Located
+    func: Expr
+    type_args: List[TypeExpr]
+
+
+@dataclass
 class Lambda(Expr):
     loc: Located
     params: List[Param]
@@ -458,11 +467,13 @@ class TraitDef:
 
 @dataclass
 class ImplementDef:
-	target: TypeExpr
-	loc: Located
-	trait: Optional[TypeExpr] = None
-	require: Optional["RequireClause"] = None
-	methods: List[FunctionDef] = field(default_factory=list)
+    target: TypeExpr
+    loc: Located
+    type_params: List[str] = field(default_factory=list)
+    type_param_locs: List[Located] = field(default_factory=list)
+    trait: Optional[TypeExpr] = None
+    require: Optional["RequireClause"] = None
+    methods: List[FunctionDef] = field(default_factory=list)
 
 
 @dataclass

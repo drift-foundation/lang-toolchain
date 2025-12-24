@@ -128,6 +128,14 @@ class Call(Expr):
 
 
 @dataclass
+class TypeApp(Expr):
+	"""Explicit type application on a callable reference (no call)."""
+	func: Expr
+	type_args: List[object]
+	loc: Optional[object] = None
+
+
+@dataclass
 class Lambda(Expr):
 	"""Lambda expression: params + body (expr or block)."""
 	params: List["Param"]
@@ -458,7 +466,7 @@ __all__ = [
 	"Node", "Expr", "Stmt",
 	"TraitExpr", "TraitIs", "TraitAnd", "TraitOr", "TraitNot",
 	"Literal", "Name", "Placeholder", "Attr", "QualifiedMember",
-	"Param", "KwArg", "Call", "Lambda", "Block",
+	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
 	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
 	"TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "ThrowStmt", "RethrowStmt",

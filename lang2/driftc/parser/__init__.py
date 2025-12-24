@@ -25,6 +25,7 @@ from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 from lang2.driftc.core.function_id import FunctionId
 from lang2.driftc.core.types_core import (
 	TypeTable,
+	StructFieldSchema,
 	VariantArmSchema,
 	VariantFieldSchema,
 )
@@ -194,6 +195,14 @@ def _type_expr_key_str(typ: parser_ast.TypeExpr) -> str:
 	return f"{base}<{args}>"
 
 
+def _impl_target_key(typ: parser_ast.TypeExpr, type_params: list[str]) -> tuple[object | None, str, tuple] | tuple[str, int]:
+	"""Normalize impl target keys by treating type params as indexed placeholders."""
+	if typ.name in type_params and not getattr(typ, "args", []):
+		return ("param", type_params.index(typ.name))
+	qual = getattr(typ, "module_id", None) or getattr(typ, "module_alias", None)
+	return (qual, typ.name, tuple(_impl_target_key(a, type_params) for a in getattr(typ, "args", []) or []))
+
+
 def _generic_type_expr_from_parser(
 	typ: parser_ast.TypeExpr,
 	*,
@@ -275,6 +284,12 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 				for kw in getattr(expr, "kwargs", [])
 			],
 			type_args=getattr(expr, "type_args", None),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
+	if isinstance(expr, parser_ast.TypeApp):
+		return s0.TypeApp(
+			func=_convert_expr(expr.func),
+			type_args=list(expr.type_args),
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
 	if isinstance(expr, parser_ast.Attr):
@@ -541,6 +556,9 @@ class _FrontendDecl:
 		is_method: bool = False,
 		self_mode: Optional[str] = None,
 		impl_target: Optional[parser_ast.TypeExpr] = None,
+		impl_type_params: list[str] | None = None,
+		impl_type_param_locs: list[parser_ast.Located] | None = None,
+		impl_owner: FunctionId | None = None,
 		module: Optional[str] = None,
 	) -> None:
 		self.fn_id = fn_id
@@ -557,10 +575,20 @@ class _FrontendDecl:
 		self.is_method = is_method
 		self.self_mode = self_mode
 		self.impl_target = impl_target
+		self.impl_type_params = list(impl_type_params or [])
+		self.impl_type_param_locs = list(impl_type_param_locs or [])
+		self.impl_owner = impl_owner
 		self.module = module
 
 
-def _decl_from_parser_fn(fn: parser_ast.FunctionDef, *, fn_id: FunctionId) -> _FrontendDecl:
+def _decl_from_parser_fn(
+	fn: parser_ast.FunctionDef,
+	*,
+	fn_id: FunctionId,
+	impl_type_params: list[str] | None = None,
+	impl_type_param_locs: list[parser_ast.Located] | None = None,
+	impl_owner: FunctionId | None = None,
+) -> _FrontendDecl:
 	params = [
 		_FrontendParam(
 			p.name,
@@ -582,6 +610,9 @@ def _decl_from_parser_fn(fn: parser_ast.FunctionDef, *, fn_id: FunctionId) -> _F
 		fn.is_method,
 		fn.self_mode,
 		fn.impl_target,
+		impl_type_params,
+		impl_type_param_locs,
+		impl_owner,
 	)
 
 
@@ -948,7 +979,8 @@ def _merge_module_files(
 	first_method: dict[tuple[tuple | None, tuple, str], tuple[Path, object | None]] = {}
 	for path, prog in files:
 		for impl in getattr(prog, "implements", []) or []:
-			target_key = _type_expr_key(impl.target)
+			impl_type_params = list(getattr(impl, "type_params", []) or [])
+			target_key = _impl_target_key(impl.target, impl_type_params)
 			target_str = _type_expr_key_str(impl.target)
 			trait_key = _type_expr_key(impl.trait) if getattr(impl, "trait", None) is not None else None
 			trait_str = _type_expr_key_str(impl.trait) if getattr(impl, "trait", None) is not None else None
@@ -2273,7 +2305,12 @@ def parse_drift_workspace_to_hir(
 	for _mid, _prog in merged_programs.items():
 		for _s in getattr(_prog, "structs", []) or []:
 			try:
-				shared_type_table.declare_struct(_mid, _s.name, [f.name for f in getattr(_s, "fields", []) or []])
+				shared_type_table.declare_struct(
+					_mid,
+					_s.name,
+					[f.name for f in getattr(_s, "fields", []) or []],
+					list(getattr(_s, "type_params", []) or []),
+				)
 			except ValueError as err:
 				diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(_s, "loc", None))))
 		for _v in getattr(_prog, "variants", []) or []:
@@ -2855,7 +2892,7 @@ def _lower_parsed_program_to_hir(
 	decls: list[_FrontendDecl] = []
 	signatures: Dict[FunctionId, FnSignature] = {}
 	lowerer = AstToHIR()
-	lowerer._module_name = module_name
+	lowerer._module_name = module_id
 	from lang2.driftc.traits.world import build_trait_world
 	# Track method keys to prevent duplicate method bodies within the same impl.
 	method_keys: set[tuple[tuple | None, tuple, str]] = set()  # (trait_key, impl_target_key, method_name)
@@ -2968,7 +3005,12 @@ def _lower_parsed_program_to_hir(
 	for s in struct_defs:
 		field_names = [f.name for f in getattr(s, "fields", [])]
 		try:
-			type_table.declare_struct(module_id, s.name, field_names)
+			type_table.declare_struct(
+				module_id,
+				s.name,
+				field_names,
+				list(getattr(s, "type_params", []) or []),
+			)
 		except ValueError as err:
 			diagnostics.append(Diagnostic(message=str(err), severity="error", span=Span.from_loc(getattr(s, "loc", None))))
 	# Declare all variant names/schemas next so type resolution can instantiate
@@ -2996,8 +3038,18 @@ def _lower_parsed_program_to_hir(
 	# Fill field TypeIds in a second pass now that all names exist.
 	for s in struct_defs:
 		struct_id = type_table.require_nominal(kind=TypeKind.STRUCT, module_id=module_id, name=s.name)
+		type_params = list(getattr(s, "type_params", []) or [])
 		field_types = []
+		field_templates = []
 		for f in getattr(s, "fields", []):
+			field_templates.append(
+				StructFieldSchema(
+					name=f.name,
+					type_expr=_generic_type_expr_from_parser(f.type_expr, type_params=type_params),
+				)
+			)
+			if type_params:
+				continue
 			ft = resolve_opaque_type(f.type_expr, type_table, module_id=module_id)
 			# MVP escape policy: references cannot be stored in long-lived memory.
 			# Struct fields are long-lived by construction, so `struct S(r: &T)` is
@@ -3016,7 +3068,9 @@ def _lower_parsed_program_to_hir(
 					)
 				)
 			field_types.append(ft)
-		type_table.define_struct_fields(struct_id, field_types)
+		type_table.define_struct_schema_fields(struct_id, field_templates)
+		if not type_params:
+			type_table.define_struct_fields(struct_id, field_types)
 	# After all variant schemas are known and structs are declared, finalize
 	# non-generic variants so their concrete arm types are available.
 	type_table.finalize_variants()
@@ -3045,7 +3099,7 @@ def _lower_parsed_program_to_hir(
 		qualified_name = _qualify_fn_name(module_id, fn.name)
 		fn_ids_by_name.setdefault(qualified_name, []).append(fn_id)
 		decl_decl = _decl_from_parser_fn(fn, fn_id=fn_id)
-		decl_decl.module = module_name
+		decl_decl.module = module_id
 		# Reject FnResult in surface type annotations (return or parameter types).
 		# FnResult is an internal ABI carrier in lang2, not a user-facing type.
 		if _typeexpr_uses_internal_fnresult(decl_decl.return_type):
@@ -3076,7 +3130,7 @@ def _lower_parsed_program_to_hir(
 		hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
 		func_hirs[fn_id] = hir_block
 	# Methods inside implement blocks.
-	for impl in getattr(prog, "implements", []):
+	for impl_index, impl in enumerate(getattr(prog, "implements", [])):
 		# Reject reference-qualified impl headers in v1 (must be nominal types).
 		if getattr(impl.target, "name", None) in {"&", "&mut"}:
 			diagnostics.append(
@@ -3087,6 +3141,15 @@ def _lower_parsed_program_to_hir(
 				)
 			)
 			continue
+		impl_type_params = list(getattr(impl, "type_params", []) or [])
+		impl_type_param_locs = list(getattr(impl, "type_param_locs", []) or [])
+		impl_target_str = _type_expr_key_str(impl.target)
+		impl_trait_str = _type_expr_key_str(impl.trait) if getattr(impl, "trait", None) is not None else None
+		impl_owner = FunctionId(
+			module="lang.__internal",
+			name=f"__impl_{module_id}::{impl_trait_str or 'inherent'}::{impl_target_str}",
+			ordinal=impl_index,
+		)
 		for fn in impl.methods:
 			# Note: receiver shape/name/type are semantic rules enforced by the
 			# typecheck phase. The parser adapter stays structural-only here so
@@ -3104,7 +3167,7 @@ def _lower_parsed_program_to_hir(
 			trait_str = _type_expr_key_str(impl.trait) if getattr(impl, "trait", None) is not None else None
 			# Compute the canonical symbol for this method early so any diagnostics
 			# (including type-annotation validation) can reference it.
-			target_key = _type_expr_key(impl.target)
+			target_key = _impl_target_key(impl.target, impl_type_params)
 			target_str = _type_expr_key_str(impl.target)
 			if trait_str:
 				symbol_name = f"{target_str}::{trait_str}::{fn.name}"
@@ -3181,7 +3244,10 @@ def _lower_parsed_program_to_hir(
 					is_method=True,
 					self_mode=self_mode,
 					impl_target=impl.target,
-					module=module_name,
+					impl_type_params=impl_type_params,
+					impl_type_param_locs=impl_type_param_locs,
+					impl_owner=impl_owner,
+					module=module_id,
 				)
 			)
 			stmt_block = _convert_block(fn.body)
@@ -3197,7 +3263,7 @@ def _lower_parsed_program_to_hir(
 			field_names: set[str] = set()
 			try:
 				origin_mod = getattr(impl.target, "module_id", None) or module_name or "main"
-				struct_id = type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=impl.target.name)
+				struct_id = type_table.get_struct_base(module_id=origin_mod, name=impl.target.name)
 				if struct_id is not None:
 					td = type_table.get(struct_id)
 					if td.field_names is not None:

@@ -401,6 +401,10 @@ class AstToHIR:
 		args = [self.lower_expr(a) for a in expr.args]
 		return H.HCall(fn=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args)
 
+	def _visit_expr_TypeApp(self, expr: ast.TypeApp) -> H.HExpr:
+		fn_expr = self.lower_expr(expr.func)
+		return H.HTypeApp(fn=fn_expr, type_args=list(expr.type_args))
+
 	def _visit_expr_Attr(self, expr: ast.Attr) -> H.HExpr:
 		"""Field access: subject.name (no method/placeholder sugar here)."""
 		subject = self.lower_expr(expr.value)

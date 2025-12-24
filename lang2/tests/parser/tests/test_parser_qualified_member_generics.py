@@ -1,5 +1,5 @@
 from lang2.driftc.parser import parser as p
-from lang2.driftc.parser.ast import Call, QualifiedMember, ReturnStmt
+from lang2.driftc.parser.ast import Call, QualifiedMember, ReturnStmt, LetStmt, TypeApp
 
 
 def _get_return_expr(prog, fn_index: int):
@@ -70,3 +70,21 @@ fn post() returns Optional[Int] {
 	assert len(post_expr.type_args) == 1
 	assert post_expr.type_args[0].name == "Int"
 	assert post_expr.func.member == "None"
+
+
+def test_parse_qualified_member_type_app_reference() -> None:
+	prog = p.parse_program(
+		"""
+fn main() returns Int {
+	val f = Optional::None<type Int>;
+	return 0;
+}
+"""
+	)
+	stmt = prog.functions[0].body.statements[0]
+	assert isinstance(stmt, LetStmt)
+	assert isinstance(stmt.value, TypeApp)
+	assert isinstance(stmt.value.func, QualifiedMember)
+	assert stmt.value.func.base_type.name == "Optional"
+	assert stmt.value.func.member == "None"
+	assert stmt.value.type_args[0].name == "Int"

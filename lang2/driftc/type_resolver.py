@@ -76,30 +76,48 @@ def resolve_program_signatures(
 		raw_type_param_locs = list(getattr(decl, "type_param_locs", []) or [])
 		type_params: list[TypeParam] = []
 		type_param_map: dict[str, TypeParamId] = {}
-		for idx, name in enumerate(raw_type_params):
+		for idx, tp_name in enumerate(raw_type_params):
 			param_id = TypeParamId(owner=fn_id, index=idx)
 			span = None
 			if idx < len(raw_type_param_locs):
 				span = Span.from_loc(raw_type_param_locs[idx])
-			type_params.append(TypeParam(id=param_id, name=name, span=span))
-			type_param_map[name] = param_id
+			type_params.append(TypeParam(id=param_id, name=tp_name, span=span))
+			type_param_map[tp_name] = param_id
+		raw_impl_type_params = list(getattr(decl, "impl_type_params", []) or [])
+		raw_impl_type_param_locs = list(getattr(decl, "impl_type_param_locs", []) or [])
+		impl_type_params: list[TypeParam] = []
+		impl_type_param_map: dict[str, TypeParamId] = {}
+		impl_owner = getattr(decl, "impl_owner", None)
+		if raw_impl_type_params:
+			if not isinstance(impl_owner, FunctionId):
+				impl_owner = FunctionId(module="lang.__internal", name=f"__impl_{module_name or 'main'}::{name}", ordinal=0)
+			for idx, tp_name in enumerate(raw_impl_type_params):
+				param_id = TypeParamId(owner=impl_owner, index=idx)
+				span = None
+				if idx < len(raw_impl_type_param_locs):
+					span = Span.from_loc(raw_impl_type_param_locs[idx])
+				impl_type_params.append(TypeParam(id=param_id, name=tp_name, span=span))
+				impl_type_param_map[tp_name] = param_id
+
 		# Params
 		raw_params = []
 		param_names: list[str] = []
 		param_type_ids: list[TypeId] = []
 		param_nonescaping: list[bool] = []
+		local_type_params = dict(impl_type_param_map)
+		local_type_params.update(type_param_map)
 		for p in getattr(decl, "params", []):
 			raw_ty = getattr(p, "type", None)
 			raw_params.append(raw_ty)
 			param_names.append(getattr(p, "name", f"p{len(param_names)}"))
 			param_type_ids.append(
-				resolve_opaque_type(raw_ty, table, module_id=module_name, type_params=type_param_map)
+				resolve_opaque_type(raw_ty, table, module_id=module_name, type_params=local_type_params)
 			)
 			param_nonescaping.append(bool(getattr(p, "non_escaping", False)))
 
 		# Return
 		raw_ret = getattr(decl, "return_type", None)
-		return_type_id = resolve_opaque_type(raw_ret, table, module_id=module_name, type_params=type_param_map)
+		return_type_id = resolve_opaque_type(raw_ret, table, module_id=module_name, type_params=local_type_params)
 		error_type_id = None
 		ret_def = table.get(return_type_id)
 		if ret_def.kind is TypeKind.FNRESULT and len(ret_def.param_types) >= 2:
@@ -113,8 +131,23 @@ def resolve_program_signatures(
 		is_method = bool(getattr(decl, "is_method", False))
 		self_mode = getattr(decl, "self_mode", None)
 		impl_target_type_id: TypeId | None = None
+		impl_target_type_args: list[TypeId] | None = None
 		if is_method and getattr(decl, "impl_target", None) is not None:
-			impl_target_type_id = resolve_opaque_type(decl.impl_target, table, module_id=module_name)
+			origin_mod = getattr(decl.impl_target, "module_id", None) or module_name
+			base_id = None
+			if origin_mod is not None:
+				base_id = table.get_struct_base(module_id=origin_mod, name=decl.impl_target.name)
+			if base_id is None and origin_mod is not None:
+				base_id = table.get_variant_base(module_id=origin_mod, name=decl.impl_target.name)
+			if base_id is None:
+				impl_target_type_id = resolve_opaque_type(decl.impl_target, table, module_id=module_name)
+			else:
+				impl_target_type_id = base_id
+			if getattr(decl.impl_target, "args", None):
+				impl_target_type_args = [
+					resolve_opaque_type(a, table, module_id=origin_mod, type_params=impl_type_param_map)
+					for a in list(getattr(decl.impl_target, "args", []) or [])
+				]
 
 		signatures[fn_id] = FnSignature(
 			name=name,
@@ -136,6 +169,8 @@ def resolve_program_signatures(
 			is_method=is_method,
 			self_mode=self_mode,
 			impl_target_type_id=impl_target_type_id,
+			impl_target_type_args=impl_target_type_args,
+			impl_type_params=impl_type_params,
 			module=module_name,
 		)
 

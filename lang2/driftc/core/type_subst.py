@@ -32,6 +32,20 @@ def apply_subst(type_id: TypeId, subst: Subst, table: TypeTable) -> TypeId:
 		if idx < 0 or idx >= len(subst.args):
 			return type_id
 		return subst.args[idx]
+	if td.kind is TypeKind.STRUCT:
+		inst = table.get_struct_instance(type_id)
+		if inst is not None:
+			new_args = [apply_subst(a, subst, table) for a in inst.type_args]
+			if new_args != inst.type_args:
+				return table.ensure_struct_instantiated(inst.base_id, list(new_args))
+			return type_id
+	if td.kind is TypeKind.VARIANT:
+		inst = table.get_variant_instance(type_id)
+		if inst is not None:
+			new_args = [apply_subst(a, subst, table) for a in inst.type_args]
+			if new_args != inst.type_args:
+				return table.ensure_instantiated(inst.base_id, list(new_args))
+			return type_id
 	if not td.param_types:
 		return type_id
 	new_params = [apply_subst(p, subst, table) for p in td.param_types]
@@ -51,9 +65,6 @@ def apply_subst(type_id: TypeId, subst: Subst, table: TypeTable) -> TypeId:
 		return table.new_function(td.name, new_params[:-1], new_params[-1])
 	if td.kind is TypeKind.VARIANT:
 		if td.param_types:
-			inst = table.get_variant_instance(type_id)
-			if inst is not None:
-				return table.ensure_instantiated(inst.base_id, list(new_params))
 			base = table.get_variant_base(module_id=td.module_id or "", name=td.name)
 			if base is not None:
 				return table.ensure_instantiated(base, list(new_params))

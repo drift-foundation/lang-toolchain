@@ -58,6 +58,7 @@ from .ast import (
     TryCatchExpr,
     CatchExprArm,
     ExceptionCtor,
+    TypeApp,
     TryStmt,
     WhileStmt,
     BreakStmt,
@@ -482,10 +483,15 @@ class QualifiedTypeArgInserter:
 
     def process(self, stream):
         recent: list[Token] = []
-        pending_angle: list[Token] | None = None
-        angle_depth = 0
-        angle_kind: str | None = None  # "pre" | "post"
         call_angle_depth = 0
+        type_mode = False
+        type_mode_next = False
+        type_angle_depth = 0
+        type_square_depth = 0
+        impl_header = False
+        impl_typeparam_depth = 0
+        struct_header = False
+        fn_header = False
         allowed_in_type_args = {
             # Type refs.
             "NAME",
@@ -503,12 +509,35 @@ class QualifiedTypeArgInserter:
             "LSQB",
             "RSQB",
         }
+        type_mode_start = {"COLON", "RETURNS", "FOR"}
+        type_mode_end = {
+            "COMMA",
+            "LPAR",
+            "RPAR",
+            "RBRACE",
+            "LBRACE",
+            "EQUAL",
+            "SEMI",
+            "NEWLINE",
+            "BAR",
+            "FOR",
+            "REQUIRE",
+        }
 
         def _emit(tok: Token):
             recent.append(tok)
             if len(recent) > 4:
                 recent.pop(0)
             return tok
+
+        def _enter_type_mode() -> None:
+            nonlocal type_mode, type_mode_next, type_angle_depth, type_square_depth
+            if type_mode:
+                return
+            type_mode = True
+            type_mode_next = False
+            type_angle_depth = 0
+            type_square_depth = 0
 
         def _is_pre_base_context(_: Token) -> bool:
             # ... NAME < ...
@@ -535,6 +564,80 @@ class QualifiedTypeArgInserter:
                     return False
             return True
 
+        def _emit_pre_type_args(first_lt: Token) -> bool:
+            # Buffer the <...> span and rewrite to QUAL_TYPE_LT/GT if followed by ::.
+            buf: list[Token] = [first_lt]
+            depth = 1
+            while True:
+                try:
+                    tok = pushback.pop() if pushback else next(it)
+                except StopIteration:
+                    for t in buf:
+                        yield _emit(t)
+                    return True
+
+                if tok.type not in allowed_in_type_args:
+                    for t in buf:
+                        yield _emit(t)
+                    pushback.append(tok)
+                    return True
+
+                buf.append(tok)
+                if tok.type == "LT":
+                    depth += 1
+                    continue
+                if tok.type == "GT":
+                    depth -= 1
+                elif tok.type == "SHR":
+                    depth -= 2
+
+                if depth > 0:
+                    continue
+                if depth < 0:
+                    for t in buf:
+                        yield _emit(t)
+                    return True
+
+                try:
+                    next_tok = pushback.pop() if pushback else next(it)
+                except StopIteration:
+                    for t in buf:
+                        yield _emit(t)
+                    return True
+
+                commit = next_tok.type == "DCOLON" and _is_type_arg_span(buf)
+                if commit:
+                    depth = 0
+                    for t in buf:
+                        if t.type == "LT":
+                            if depth == 0:
+                                yield _emit(Token.new_borrow_pos("QUAL_TYPE_LT", t.value, t))
+                            else:
+                                yield _emit(t)
+                            depth += 1
+                            continue
+                        if t.type == "GT":
+                            if depth == 1:
+                                yield _emit(Token.new_borrow_pos("QUAL_TYPE_GT", t.value, t))
+                            else:
+                                yield _emit(t)
+                            depth -= 1
+                            continue
+                        if t.type == "SHR":
+                            for _ in range(2):
+                                if depth == 1:
+                                    yield _emit(Token.new_borrow_pos("QUAL_TYPE_GT", ">", t))
+                                else:
+                                    yield _emit(Token.new_borrow_pos("GT", ">", t))
+                                depth -= 1
+                            continue
+                        yield _emit(t)
+                else:
+                    for t in buf:
+                        yield _emit(t)
+                pushback.append(next_tok)
+                return True
+
         it = iter(stream)
         pushback: list[Token] = []
 
@@ -544,215 +647,121 @@ class QualifiedTypeArgInserter:
             except StopIteration:
                 break
 
-            tt = token.type
+            if type_mode_next:
+                _enter_type_mode()
 
-            if pending_angle is None:
-                if call_angle_depth:
-                    if tt in {"LT", "TYPE_LT", "QUAL_TYPE_LT"}:
-                        call_angle_depth += 1
-                        yield _emit(token)
-                        continue
-                    if tt in {"GT", "TYPE_GT", "QUAL_TYPE_GT"}:
+            tt = token.type
+            if call_angle_depth:
+                if tt in {"LT", "TYPE_LT", "QUAL_TYPE_LT"}:
+                    call_angle_depth += 1
+                    yield _emit(token)
+                    continue
+                if tt in {"GT", "TYPE_GT", "QUAL_TYPE_GT"}:
+                    call_angle_depth -= 1
+                    yield _emit(token)
+                    if call_angle_depth <= 0:
+                        call_angle_depth = 0
+                    continue
+                if tt == "SHR":
+                    for _ in range(2):
+                        yield _emit(Token.new_borrow_pos("GT", ">", token))
                         call_angle_depth -= 1
-                        yield _emit(token)
                         if call_angle_depth <= 0:
                             call_angle_depth = 0
-                        continue
-                    if tt == "SHR":
-                        for _ in range(2):
-                            yield _emit(Token.new_borrow_pos("GT", ">", token))
-                            call_angle_depth -= 1
-                            if call_angle_depth <= 0:
-                                call_angle_depth = 0
-                                break
-                        continue
-                    yield _emit(token)
+                            break
                     continue
-
-                if tt == "CALL_TYPE_LT":
-                    yield _emit(token)
-                    call_angle_depth = 1
+                yield _emit(token)
+                continue
+            if impl_header:
+                if tt in {"LT", "TYPE_LT"}:
+                    impl_typeparam_depth += 1
+                elif tt in {"GT", "TYPE_GT"} and impl_typeparam_depth:
+                    impl_typeparam_depth -= 1
+                elif tt == "SHR" and impl_typeparam_depth >= 2:
+                    for _ in range(2):
+                        impl_typeparam_depth -= 1
+                        yield _emit(Token.new_borrow_pos("GT", ">", token))
                     continue
-
-                if tt == "LT":
-                    is_pre = _is_pre_base_context(token)
-                    if is_pre:
-                        # Start buffering only in syntactic contexts where this *might* be a
-                        # generic type-argument list for a qualified member.
-                        angle_kind = "pre"
-                        pending_angle = [token]
-                        angle_depth = 1
-                        continue
+                if impl_typeparam_depth == 0 and tt == "NAME":
+                    impl_header = False
+                    _enter_type_mode()
                 yield _emit(token)
                 continue
 
-            # We are buffering a potential `<...>` span.
-            if tt not in allowed_in_type_args:
-                # Bail early: this cannot be a type-argument list, so treat the buffered
-                # tokens as normal expression tokens.
-                for t in pending_angle:
-                    yield _emit(t)
-                pending_angle = None
-                angle_kind = None
+            if struct_header and tt == "NAME":
+                struct_header = False
+                _enter_type_mode()
                 yield _emit(token)
                 continue
 
-            pending_angle.append(token)
+            if fn_header and tt == "NAME":
+                fn_header = False
+                _enter_type_mode()
+                yield _emit(token)
+                continue
+
+            if tt == "IMPLEMENT":
+                impl_header = True
+                yield _emit(token)
+                continue
+
+            if tt == "CALL_TYPE_LT":
+                yield _emit(token)
+                call_angle_depth = 1
+                continue
+
+            if tt == "STRUCT":
+                struct_header = True
+                yield _emit(token)
+                continue
+
+            if tt == "FN":
+                fn_header = True
+                yield _emit(token)
+                continue
+
+            if type_mode:
+                if tt in {"LT", "TYPE_LT", "QUAL_TYPE_LT"}:
+                    type_angle_depth += 1
+                    yield _emit(token)
+                    continue
+                if tt in {"GT", "TYPE_GT", "QUAL_TYPE_GT"}:
+                    if type_angle_depth > 0:
+                        type_angle_depth -= 1
+                    yield _emit(token)
+                    if type_angle_depth == 0 and type_square_depth == 0 and tt in type_mode_end:
+                        type_mode = False
+                    continue
+                if tt == "LSQB":
+                    type_square_depth += 1
+                    yield _emit(token)
+                    continue
+                if tt == "RSQB":
+                    if type_square_depth > 0:
+                        type_square_depth -= 1
+                    yield _emit(token)
+                    continue
+                if tt == "SHR" and type_angle_depth >= 2:
+                    for _ in range(2):
+                        type_angle_depth -= 1
+                        yield _emit(Token.new_borrow_pos("GT", ">", token))
+                    continue
+                yield _emit(token)
+                if type_angle_depth == 0 and type_square_depth == 0 and tt in type_mode_end:
+                    type_mode = False
+                    if tt in type_mode_start:
+                        type_mode_next = True
+                continue
+
             if tt == "LT":
-                angle_depth += 1
-                continue
-            if tt == "GT":
-                angle_depth -= 1
-                if angle_depth != 0:
+                is_pre = _is_pre_base_context(token)
+                if is_pre:
+                    yield from _emit_pre_type_args(token)
                     continue
-
-                # Closing '>' for the buffered span; peek the next token to decide
-                # whether this was a type-arg group.
-                try:
-                    next_tok = pushback.pop() if pushback else next(it)
-                except StopIteration:
-                    for t in pending_angle:
-                        yield _emit(t)
-                    pending_angle = None
-                    angle_kind = None
-                    break
-
-                commit = False
-                lt_tok = "TYPE_LT"
-                gt_tok = "TYPE_GT"
-                if angle_kind == "pre" and next_tok.type == "DCOLON":
-                    if _is_type_arg_span(pending_angle):
-                        commit = True
-                        lt_tok = "QUAL_TYPE_LT"
-                        gt_tok = "QUAL_TYPE_GT"
-                if commit:
-                    if lt_tok == "QUAL_TYPE_LT":
-                        depth = 0
-                        for t in pending_angle:
-                            if t.type == "LT":
-                                if depth == 0:
-                                    yield _emit(Token.new_borrow_pos(lt_tok, t.value, t))
-                                else:
-                                    yield _emit(t)
-                                depth += 1
-                                continue
-                            if t.type == "GT":
-                                if depth == 1:
-                                    yield _emit(Token.new_borrow_pos(gt_tok, t.value, t))
-                                else:
-                                    yield _emit(t)
-                                depth -= 1
-                                continue
-                            if t.type == "SHR":
-                                for _ in range(2):
-                                    if depth == 1:
-                                        yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                                    else:
-                                        yield _emit(Token.new_borrow_pos("GT", ">", t))
-                                    depth -= 1
-                                continue
-                            yield _emit(t)
-                    else:
-                        for t in pending_angle:
-                            if t.type == "LT":
-                                yield _emit(Token.new_borrow_pos(lt_tok, t.value, t))
-                            elif t.type == "GT":
-                                yield _emit(Token.new_borrow_pos(gt_tok, t.value, t))
-                            elif t.type == "SHR":
-                                yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                                yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                            else:
-                                yield _emit(t)
-                    yield _emit(next_tok)
-                else:
-                    for t in pending_angle:
-                        yield _emit(t)
-                    yield _emit(next_tok)
-
-                pending_angle = None
-                angle_kind = None
-                continue
-            if tt == "SHR":
-                angle_depth -= 2
-                if angle_depth > 0:
-                    continue
-                if angle_depth < 0:
-                    for t in pending_angle:
-                        yield _emit(t)
-                    pending_angle = None
-                    angle_kind = None
-                    angle_depth = 0
-                    continue
-
-                try:
-                    next_tok = pushback.pop() if pushback else next(it)
-                except StopIteration:
-                    for t in pending_angle:
-                        yield _emit(t)
-                    pending_angle = None
-                    angle_kind = None
-                    break
-
-                commit = False
-                lt_tok = "TYPE_LT"
-                gt_tok = "TYPE_GT"
-                if angle_kind == "pre" and next_tok.type == "DCOLON":
-                    if _is_type_arg_span(pending_angle):
-                        commit = True
-                        lt_tok = "QUAL_TYPE_LT"
-                        gt_tok = "QUAL_TYPE_GT"
-                if commit:
-                    if lt_tok == "QUAL_TYPE_LT":
-                        depth = 0
-                        for t in pending_angle:
-                            if t.type == "LT":
-                                if depth == 0:
-                                    yield _emit(Token.new_borrow_pos(lt_tok, t.value, t))
-                                else:
-                                    yield _emit(t)
-                                depth += 1
-                                continue
-                            if t.type == "GT":
-                                if depth == 1:
-                                    yield _emit(Token.new_borrow_pos(gt_tok, t.value, t))
-                                else:
-                                    yield _emit(t)
-                                depth -= 1
-                                continue
-                            if t.type == "SHR":
-                                for _ in range(2):
-                                    if depth == 1:
-                                        yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                                    else:
-                                        yield _emit(Token.new_borrow_pos("GT", ">", t))
-                                    depth -= 1
-                                continue
-                            yield _emit(t)
-                    else:
-                        for t in pending_angle:
-                            if t.type == "LT":
-                                yield _emit(Token.new_borrow_pos(lt_tok, t.value, t))
-                            elif t.type == "GT":
-                                yield _emit(Token.new_borrow_pos(gt_tok, t.value, t))
-                            elif t.type == "SHR":
-                                yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                                yield _emit(Token.new_borrow_pos(gt_tok, ">", t))
-                            else:
-                                yield _emit(t)
-                    yield _emit(next_tok)
-                else:
-                    for t in pending_angle:
-                        yield _emit(t)
-                    yield _emit(next_tok)
-
-                pending_angle = None
-                angle_kind = None
-                continue
-
-        # Flush unterminated span (treat as normal tokens).
-        if pending_angle is not None:
-            for t in pending_angle:
-                yield _emit(t)
+            yield _emit(token)
+            if tt in type_mode_start:
+                type_mode_next = True
+            continue
 
 
 class DriftPostLex:
@@ -1159,6 +1168,14 @@ def _build_function(tree: Tree) -> FunctionDef:
 
 def _build_implement_def(tree: Tree) -> ImplementDef:
 	loc = _loc(tree)
+	type_params_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "type_params"), None)
+	type_params: list[str] = []
+	type_param_locs: list[Located] = []
+	if type_params_node is not None:
+		for tok in type_params_node.children:
+			if isinstance(tok, Token) and tok.type == "NAME":
+				type_params.append(tok.value)
+				type_param_locs.append(_loc_from_token(tok))
 	type_nodes = [child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr"]
 	if not type_nodes:
 		raise ValueError("implement missing target type")
@@ -1194,7 +1211,15 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 		fn.is_method = True
 		fn.impl_target = target
 		methods.append(fn)
-	return ImplementDef(target=target, trait=trait, require=require, methods=methods, loc=loc)
+	return ImplementDef(
+		target=target,
+		loc=loc,
+		type_params=type_params,
+		type_param_locs=type_param_locs,
+		trait=trait,
+		require=require,
+		methods=methods,
+	)
 
 
 def _build_block(tree: Tree) -> Block:
@@ -1618,6 +1643,14 @@ def _build_expr_stmt(tree: Tree) -> ExprStmt:
 def _build_struct_def(tree: Tree) -> StructDef:
     loc = _loc(tree)
     name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    type_params_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "type_params"), None)
+    type_params: list[str] = []
+    type_param_locs: list[Located] = []
+    if type_params_node is not None:
+        for tok in type_params_node.children:
+            if isinstance(tok, Token) and tok.type == "NAME":
+                type_params.append(tok.value)
+                type_param_locs.append(_loc_from_token(tok))
     require_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "require_clause"), None)
     body = next(
         (c for c in tree.children if isinstance(c, Tree) and _name(c) in {"struct_body", "tuple_struct", "block_struct"}),
@@ -1628,7 +1661,14 @@ def _build_struct_def(tree: Tree) -> StructDef:
     field_nodes = _collect_struct_fields(body)
     fields = [_build_struct_field(node) for node in field_nodes]
     require = _build_require_clause(require_node) if require_node is not None else None
-    return StructDef(name=name_token.value, fields=fields, require=require, loc=loc)
+    return StructDef(
+        name=name_token.value,
+        fields=fields,
+        type_params=type_params,
+        type_param_locs=type_param_locs,
+        require=require,
+        loc=loc,
+    )
 
 
 def _collect_struct_fields(tree: Tree) -> List[Tree]:
@@ -2346,6 +2386,14 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
                 None,
             )
             type_args = _build_call_type_args(type_args_node)
+            if isinstance(expr, TypeApp):
+                if type_args is not None:
+                    raise QualifiedMemberParseError(
+                        "E-PARSE-CALL-DUP-TYPEARGS: call may specify type arguments only once",
+                        loc=_loc(child),
+                    )
+                type_args = list(expr.type_args)
+                expr = expr.func
             if type_args is not None and isinstance(expr, QualifiedMember) and expr.base_type.args:
                 raise QualifiedMemberParseError(
                     "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
@@ -2365,6 +2413,22 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
             expr = Attr(loc=_loc(child), value=expr, attr=attr_token.value, op="->")
         elif child_name == "index_suffix":
             expr = _apply_index_suffix(expr, child)
+        elif child_name == "type_app_suffix":
+            type_args_node = next((c for c in child.children if isinstance(c, Tree)), None)
+            type_args = _build_call_type_args(type_args_node)
+            if type_args is None:
+                raise ValueError("type application suffix missing type arguments")
+            if isinstance(expr, TypeApp):
+                raise QualifiedMemberParseError(
+                    "E-PARSE-TYPEAPP-DUP-TYPEARGS: type application may specify type arguments only once",
+                    loc=_loc(child),
+                )
+            if isinstance(expr, QualifiedMember) and expr.base_type.args:
+                raise QualifiedMemberParseError(
+                    "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
+                    loc=_loc(child),
+                )
+            expr = TypeApp(loc=_loc(child), func=expr, type_args=type_args)
         else:
             raise ValueError(f"Unexpected postfix child: {child_name}")
     return expr

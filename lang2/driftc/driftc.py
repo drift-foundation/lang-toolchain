@@ -1194,7 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
 				impl_id=next_callable_id,
 				impl_target_type_id=sig.impl_target_type_id,
 				self_mode=self_mode,
-				is_generic=bool(sig.type_params),
+				is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
 			)
 			next_callable_id += 1
 		else:
@@ -1251,7 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
 				impl_id=next_callable_id,
 				impl_target_type_id=sig.impl_target_type_id,
 				self_mode=self_mode,
-				is_generic=bool(sig.type_params),
+				is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
 			)
 			next_callable_id += 1
 		else:

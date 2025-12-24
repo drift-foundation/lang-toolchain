@@ -41,7 +41,12 @@ def resolve_opaque_type(
 		if type_params and name in type_params and not args:
 			return table.ensure_typevar(type_params[name], name=name)
 		if name in {"&", "&mut"}:
-			inner = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod)
+			inner = resolve_opaque_type(
+				args[0] if args else None,
+				table,
+				module_id=origin_mod,
+				type_params=type_params,
+			)
 			return table.ensure_ref_mut(inner) if name == "&mut" else table.ensure_ref(inner)
 		if name == "Void":
 			return table.ensure_void()
@@ -50,17 +55,35 @@ def resolve_opaque_type(
 			base = None
 			if origin_mod is not None:
 				base = table.get_variant_base(module_id=origin_mod, name=str(name))
+				if base is None:
+					base = table.get_struct_base(module_id=origin_mod, name=str(name))
 			if base is None and table.get_variant_base(module_id="lang.core", name=str(name)) is not None:
 				base = table.get_variant_base(module_id="lang.core", name=str(name))
 			if base is not None:
-				arg_ids = [resolve_opaque_type(a, table, module_id=origin_mod) for a in list(args)]
-				return table.ensure_instantiated(base, arg_ids)
+				arg_ids = [
+					resolve_opaque_type(a, table, module_id=origin_mod, type_params=type_params)
+					for a in list(args)
+				]
+				if base in table.variant_schemas:
+					return table.ensure_instantiated(base, arg_ids)
+				if base in table.struct_bases:
+					try:
+						if any(table.get(a).kind is TypeKind.TYPEVAR for a in arg_ids):
+							return table.ensure_struct_template(base, arg_ids)
+						return table.ensure_struct_instantiated(base, arg_ids)
+					except ValueError:
+						return table.ensure_unknown()
 		if name == "FnResult":
-			ok = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod)
-			err = resolve_opaque_type(args[1] if len(args) > 1 else table.ensure_error(), table, module_id=origin_mod)
+			ok = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod, type_params=type_params)
+			err = resolve_opaque_type(
+				args[1] if len(args) > 1 else table.ensure_error(),
+				table,
+				module_id=origin_mod,
+				type_params=type_params,
+			)
 			return table.new_fnresult(ok, err)
 		if name == "Array":
-			elem = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod)
+			elem = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod, type_params=type_params)
 			return table.new_array(elem)
 		if name == "DiagnosticValue":
 			return table.ensure_diagnostic_value()
@@ -130,11 +153,11 @@ def resolve_opaque_type(
 			return table.ensure_unknown()
 		if raw.startswith("Array<") and raw.endswith(">"):
 			inner = raw[len("Array<"):-1]
-			elem_ty = resolve_opaque_type(inner, table, module_id=module_id)
+			elem_ty = resolve_opaque_type(inner, table, module_id=module_id, type_params=type_params)
 			return table.new_array(elem_ty)
 		if raw.startswith("Optional<") and raw.endswith(">"):
 			inner = raw[len("Optional<"):-1]
-			inner_ty = resolve_opaque_type(inner, table, module_id=module_id)
+			inner_ty = resolve_opaque_type(inner, table, module_id=module_id, type_params=type_params)
 			base_id = table.get_variant_base(module_id="lang.core", name="Optional")
 			if base_id is not None:
 				return table.ensure_instantiated(base_id, [inner_ty])

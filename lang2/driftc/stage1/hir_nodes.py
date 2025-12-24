@@ -287,6 +287,13 @@ class HCall(HExpr):
 
 
 @dataclass
+class HTypeApp(HExpr):
+	"""Explicit type application on a callable reference (no call)."""
+	fn: HExpr
+	type_args: list["HTypeExpr"]
+
+
+@dataclass
 class HMethodCall(HExpr):
 	"""
 	Method call with explicit receiver.
@@ -675,6 +682,7 @@ __all__ = [
 	"HFString", "HFStringHole",
 	"HParam", "HLambda",
 	"HCall", "HMethodCall", "HTernary", "HResultOk",
+	"HTypeApp",
 	"HPlaceExpr", "HPlaceProj", "HPlaceField", "HPlaceIndex", "HPlaceDeref",
 	"HField", "HQualifiedMember", "HIndex", "HBorrow", "HDVInit",
 	"HMove",

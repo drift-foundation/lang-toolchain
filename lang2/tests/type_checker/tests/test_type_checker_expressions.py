@@ -199,6 +199,233 @@ def test_call_with_explicit_type_args_instantiates_signature():
 	assert table.ensure_int() in res.typed_fn.expr_types.values()
 
 
+def test_call_infers_type_args_from_args():
+	table = TypeTable()
+	tc = TypeChecker(table)
+	fn_id = _fn_id("id")
+	type_param_id = TypeParamId(owner=fn_id, index=0)
+	type_param = TypeParam(id=type_param_id, name="T", span=Span())
+	type_var = table.ensure_typevar(type_param_id, name="T")
+	sig = FnSignature(
+		name="id",
+		return_type_id=type_var,
+		param_type_ids=[type_var],
+		type_params=[type_param],
+		module="main",
+	)
+	registry = CallableRegistry()
+	registry.register_free_function(
+		callable_id=1,
+		name="id",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(type_var,), result_type=type_var),
+		fn_id=fn_id,
+		is_generic=True,
+	)
+	block = H.HBlock(
+		statements=[
+			H.HExprStmt(expr=H.HCall(fn=H.HVar("id"), args=[H.HLiteralInt(1)])),
+		]
+	)
+	res = tc.check_function(
+		_fn_id("caller"),
+		block,
+		callable_registry=registry,
+		signatures_by_id={fn_id: sig},
+		visible_modules=(0,),
+		current_module=0,
+	)
+	assert res.diagnostics == []
+	assert table.ensure_int() in res.typed_fn.expr_types.values()
+
+
+def test_call_infers_type_args_from_expected_return_type():
+	table = TypeTable()
+	tc = TypeChecker(table)
+	fn_id = _fn_id("make")
+	type_param_id = TypeParamId(owner=fn_id, index=0)
+	type_param = TypeParam(id=type_param_id, name="T", span=Span())
+	type_var = table.ensure_typevar(type_param_id, name="T")
+	sig = FnSignature(
+		name="make",
+		return_type_id=type_var,
+		param_type_ids=[],
+		type_params=[type_param],
+		module="main",
+	)
+	registry = CallableRegistry()
+	registry.register_free_function(
+		callable_id=1,
+		name="make",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(), result_type=type_var),
+		fn_id=fn_id,
+		is_generic=True,
+	)
+	block = H.HBlock(
+		statements=[
+			H.HReturn(value=H.HCall(fn=H.HVar("make"), args=[])),
+		]
+	)
+	res = tc.check_function(
+		_fn_id("caller"),
+		block,
+		return_type=table.ensure_int(),
+		callable_registry=registry,
+		signatures_by_id={fn_id: sig},
+		visible_modules=(0,),
+		current_module=0,
+	)
+	assert res.diagnostics == []
+	assert table.ensure_int() in res.typed_fn.expr_types.values()
+
+
+def test_method_call_with_explicit_type_args_instantiates_signature():
+	table = TypeTable()
+	tc = TypeChecker(table)
+	recv_ty = table.ensure_int()
+	type_param_id = TypeParamId(owner=_fn_id("m"), index=0)
+	type_param = TypeParam(id=type_param_id, name="T", span=Span())
+	type_var = table.ensure_typevar(type_param_id, name="T")
+	sig = FnSignature(
+		name="m",
+		param_type_ids=[recv_ty, type_var],
+		return_type_id=type_var,
+		type_params=[type_param],
+		module="main",
+	)
+	registry = CallableRegistry()
+	registry.register_inherent_method(
+		callable_id=1,
+		name="m",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(recv_ty, type_var), result_type=type_var),
+		fn_id=_fn_id("m"),
+		impl_id=1,
+		impl_target_type_id=recv_ty,
+		self_mode=SelfMode.SELF_BY_VALUE,
+		is_generic=True,
+	)
+	call = H.HMethodCall(
+		receiver=H.HVar("x", binding_id=1),
+		method_name="m",
+		args=[H.HLiteralInt(1)],
+		type_args=[
+			parser_ast.TypeExpr(
+				name="Int",
+				args=[],
+				module_alias=None,
+				module_id=None,
+				loc=parser_ast.Located(line=1, column=1),
+			)
+		],
+	)
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HExprStmt(expr=call),
+		]
+	)
+	res = tc.check_function(
+		_fn_id("caller"),
+		block,
+		param_types={"x": recv_ty},
+		callable_registry=registry,
+		signatures_by_id={_fn_id("m"): sig},
+		visible_modules=(0,),
+		current_module=0,
+	)
+	assert res.diagnostics == []
+	assert res.typed_fn.expr_types.get(id(call)) == table.ensure_int()
+
+
+def test_method_type_args_skip_nongeneric_candidate():
+	table = TypeTable()
+	tc = TypeChecker(table)
+	recv_ty = table.ensure_int()
+	fn_id_gen = _fn_id("m")
+	fn_id_plain = _fn_id("m_plain")
+
+	tp_id = TypeParamId(owner=fn_id_gen, index=0)
+	tp = TypeParam(id=tp_id, name="T", span=Span())
+	tp_ty = table.ensure_typevar(tp_id, name="T")
+
+	sig_plain = FnSignature(
+		name="m",
+		param_type_ids=[recv_ty, table.ensure_int()],
+		return_type_id=table.ensure_int(),
+		type_params=[],
+		module="main",
+	)
+	sig_gen = FnSignature(
+		name="m",
+		param_type_ids=[recv_ty, tp_ty],
+		return_type_id=tp_ty,
+		type_params=[tp],
+		module="main",
+	)
+
+	registry = CallableRegistry()
+	registry.register_inherent_method(
+		callable_id=1,
+		name="m",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(recv_ty, table.ensure_int()), result_type=table.ensure_int()),
+		fn_id=fn_id_plain,
+		impl_id=1,
+		impl_target_type_id=recv_ty,
+		self_mode=SelfMode.SELF_BY_VALUE,
+		is_generic=False,
+	)
+	registry.register_inherent_method(
+		callable_id=2,
+		name="m",
+		module_id=0,
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(recv_ty, tp_ty), result_type=tp_ty),
+		fn_id=fn_id_gen,
+		impl_id=1,
+		impl_target_type_id=recv_ty,
+		self_mode=SelfMode.SELF_BY_VALUE,
+		is_generic=True,
+	)
+
+	call = H.HMethodCall(
+		receiver=H.HVar("x", binding_id=1),
+		method_name="m",
+		args=[H.HLiteralInt(1)],
+		type_args=[
+			parser_ast.TypeExpr(
+				name="Int",
+				args=[],
+				module_alias=None,
+				module_id=None,
+				loc=parser_ast.Located(line=1, column=1),
+			)
+		],
+	)
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="x", value=H.HLiteralInt(1), declared_type_expr=None, binding_id=1),
+			H.HExprStmt(expr=call),
+		]
+	)
+	res = tc.check_function(
+		_fn_id("caller"),
+		block,
+		param_types={"x": recv_ty},
+		callable_registry=registry,
+		signatures_by_id={fn_id_plain: sig_plain, fn_id_gen: sig_gen},
+		visible_modules=(0,),
+		current_module=0,
+	)
+	assert res.diagnostics == []
+	assert res.typed_fn.expr_types.get(id(call)) == table.ensure_int()
+
 def test_method_resolution_uses_registry_and_types():
 	table = TypeTable()
 	tc = TypeChecker(table)

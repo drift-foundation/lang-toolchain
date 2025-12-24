@@ -173,3 +173,19 @@ fn main(x: S) returns Int { return h(x); }
 	)
 	assert any("no matching overload" in d.message for d in result.diagnostics)
 
+
+def test_overload_type_arg_count_selects_matching_candidate(tmp_path: Path) -> None:
+	resolved_id, sigs, _type_table = _resolve_main_call(
+		tmp_path,
+		"""
+fn f<T>(x: T) returns T { return x; }
+fn f<T, U>(x: T, y: U) returns T { return x; }
+fn main() returns Int { return f<type Int, String>(1, "s"); }
+""",
+	)
+	expected = next(
+		fn_id
+		for fn_id, sig in sigs.items()
+		if sig.name == "f" and len(list(sig.param_names or [])) == 2
+	)
+	assert resolved_id == expected

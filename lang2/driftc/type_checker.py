@@ -19,10 +19,10 @@ from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Mapping, Tuple
 
 from lang2.driftc import stage1 as H
-from lang2.driftc.checker import FnSignature
+from lang2.driftc.checker import FnSignature, TypeParam
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
-from lang2.driftc.core.types_core import TypeId, TypeTable, TypeKind, VariantInstance, VariantSchema
+from lang2.driftc.core.types_core import TypeId, TypeTable, TypeKind, VariantInstance, VariantSchema, TypeParamId
 from lang2.driftc.core.function_id import FunctionId, function_symbol
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.core.type_subst import Subst, apply_subst
@@ -37,7 +37,7 @@ from lang2.driftc.borrow_checker import (
 	place_from_expr,
 	places_overlap,
 )
-from lang2.driftc.method_registry import CallableDecl, CallableRegistry, CallableSignature, ModuleId
+from lang2.driftc.method_registry import CallableDecl, CallableRegistry, CallableSignature, ModuleId, SelfMode
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_method_call
 from lang2.driftc.core.iter_intrinsics import ensure_array_iter_struct, is_array_iter_struct
 from lang2.driftc.parser import ast as parser_ast
@@ -92,6 +92,7 @@ class TypeChecker:
 		self._bool = self.type_table.ensure_bool()
 		self._string = self.type_table.ensure_string()
 		self._void = self.type_table.ensure_void()
+		self._error = self.type_table.ensure_error()
 		self._dv = self.type_table.ensure_diagnostic_value()
 		self._opt_int = self.type_table.new_optional(self._int)
 		self._opt_bool = self.type_table.new_optional(self._bool)
@@ -284,6 +285,239 @@ class TypeChecker:
 				return False, 0
 			return False, 0
 
+		def _bind_type_param(
+			bindings: dict[TypeParamId, TypeId],
+			tp_id: TypeParamId,
+			actual: TypeId,
+		) -> bool:
+			prev = bindings.get(tp_id)
+			if prev is None:
+				bindings[tp_id] = actual
+				return True
+			return prev == actual
+
+		def _infer_from_types(
+			*,
+			sig: FnSignature,
+			param_types: list[TypeId],
+			actual_types: list[TypeId],
+			expected_type: TypeId | None,
+		) -> tuple[Subst | None, list[TypeId] | None, TypeId | None, str | None]:
+			type_params = list(getattr(sig, "type_params", []) or [])
+			if not type_params:
+				return None, None, None, None
+			type_param_ids = {p.id for p in type_params if hasattr(p, "id")}
+			if not type_param_ids:
+				return None, None, None, None
+			bindings: dict[TypeParamId, TypeId] = {}
+
+			def unify(param_ty: TypeId, actual_ty: TypeId) -> bool:
+				pd = self.type_table.get(param_ty)
+				if pd.kind is TypeKind.TYPEVAR and pd.type_param_id in type_param_ids:
+					return _bind_type_param(bindings, pd.type_param_id, actual_ty)
+				if param_ty == actual_ty:
+					return True
+				ad = self.type_table.get(actual_ty)
+				if pd.kind != ad.kind:
+					return False
+				if pd.kind in (TypeKind.ARRAY, TypeKind.OPTIONAL, TypeKind.FNRESULT):
+					if len(pd.param_types) != len(ad.param_types):
+						return False
+					return all(unify(p, a) for p, a in zip(pd.param_types, ad.param_types))
+				if pd.kind is TypeKind.REF:
+					if pd.ref_mut != ad.ref_mut or not pd.param_types or not ad.param_types:
+						return False
+					return unify(pd.param_types[0], ad.param_types[0])
+				if pd.kind in (TypeKind.STRUCT, TypeKind.VARIANT):
+					if pd.name != ad.name or pd.module_id != ad.module_id:
+						return False
+					if len(pd.param_types) != len(ad.param_types):
+						return False
+					return all(unify(p, a) for p, a in zip(pd.param_types, ad.param_types))
+				if pd.kind is TypeKind.FUNCTION:
+					if len(pd.param_types) != len(ad.param_types):
+						return False
+					return all(unify(p, a) for p, a in zip(pd.param_types, ad.param_types))
+				return False
+
+			if len(param_types) != len(actual_types):
+				return None, None, None, "arity"
+			for p, a in zip(param_types, actual_types):
+				if not unify(p, a):
+					return None, None, None, "mismatch"
+			if expected_type is not None and sig.return_type_id is not None:
+				unify(sig.return_type_id, expected_type)
+
+			args: list[TypeId] = []
+			for tp in type_params:
+				bound = bindings.get(tp.id)
+				if bound is None:
+					return None, None, None, "incomplete"
+				args.append(bound)
+
+			subst = Subst(owner=type_params[0].id.owner, args=args)
+			inst_params = [apply_subst(p, subst, self.type_table) for p in param_types]
+			inst_return = apply_subst(sig.return_type_id, subst, self.type_table) if sig.return_type_id is not None else None
+			return subst, inst_params, inst_return, None
+
+		def _instantiate_sig(
+			*,
+			sig: FnSignature,
+			arg_types: list[TypeId],
+			expected_type: TypeId | None,
+			explicit_type_args: list[TypeId] | None,
+			allow_infer: bool,
+		) -> tuple[list[TypeId] | None, TypeId | None, str | None]:
+			if sig.param_type_ids is None or sig.return_type_id is None:
+				return None, None, "no_types"
+			if explicit_type_args:
+				if not sig.type_params:
+					return None, None, "no_typeparams"
+				if len(explicit_type_args) != len(sig.type_params):
+					return None, None, "typearg_count"
+				subst = Subst(owner=sig.type_params[0].id.owner, args=list(explicit_type_args))
+				inst_params = [apply_subst(p, subst, self.type_table) for p in sig.param_type_ids]
+				inst_return = apply_subst(sig.return_type_id, subst, self.type_table)
+				return inst_params, inst_return, None
+			if sig.type_params:
+				if not allow_infer:
+					return None, None, "cannot_infer"
+				subst, inst_params, inst_return, infer_err = _infer_from_types(
+					sig=sig,
+					param_types=list(sig.param_type_ids),
+					actual_types=list(arg_types),
+					expected_type=expected_type,
+				)
+				if subst is None or inst_params is None or inst_return is None:
+					if infer_err == "incomplete":
+						return None, None, "cannot_infer"
+					return None, None, "mismatch"
+				return inst_params, inst_return, None
+			return list(sig.param_type_ids), sig.return_type_id, None
+
+		def _receiver_compat(
+			receiver_type: TypeId,
+			param_self: TypeId,
+			self_mode: SelfMode | None,
+		) -> tuple[bool, Optional[SelfMode]]:
+			if self_mode is None:
+				return False, None
+			if self_mode is SelfMode.SELF_BY_VALUE:
+				return (receiver_type == param_self), None
+			td_param = self.type_table.get(param_self)
+			td_recv = self.type_table.get(receiver_type)
+			if self_mode is SelfMode.SELF_BY_REF:
+				if receiver_type == param_self and td_recv.kind is TypeKind.REF and td_recv.ref_mut is False:
+					return True, None
+				if td_param.kind is TypeKind.REF and td_param.ref_mut is False and td_param.param_types:
+					if td_param.param_types[0] == receiver_type:
+						return True, SelfMode.SELF_BY_REF
+				return False, None
+			if self_mode is SelfMode.SELF_BY_REF_MUT:
+				if receiver_type == param_self and td_recv.kind is TypeKind.REF and td_recv.ref_mut is True:
+					return True, None
+				if td_param.kind is TypeKind.REF and td_param.ref_mut is True and td_param.param_types:
+					if td_param.param_types[0] == receiver_type:
+						return True, SelfMode.SELF_BY_REF_MUT
+				return False, None
+			return False, None
+
+		def _unwrap_ref_type(ty: TypeId) -> TypeId:
+			td = self.type_table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				return td.param_types[0]
+			return ty
+
+		def _struct_base_and_args(ty: TypeId) -> tuple[TypeId, list[TypeId]]:
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None:
+				return inst.base_id, list(inst.type_args)
+			return ty, []
+
+		def _match_impl_type_args(
+			*,
+			template_args: list[TypeId],
+			recv_args: list[TypeId],
+			impl_type_params: list[TypeParam],
+		) -> Subst | None:
+			if not impl_type_params:
+				return None
+			if len(template_args) != len(recv_args):
+				return None
+			owner = impl_type_params[0].id.owner
+			bindings: list[TypeId | None] = [None] * len(impl_type_params)
+			def _bind_typevar(param_id: TypeParamId, recv: TypeId) -> bool:
+				if param_id.owner != owner:
+					return False
+				idx = int(param_id.index)
+				if idx < 0 or idx >= len(bindings):
+					return False
+				if bindings[idx] is None:
+					bindings[idx] = recv
+					return True
+				return bindings[idx] == recv
+
+			def _match_type(tmpl: TypeId, recv: TypeId) -> bool:
+				tdef = self.type_table.get(tmpl)
+				if tdef.kind is TypeKind.TYPEVAR and tdef.type_param_id is not None:
+					return _bind_typevar(tdef.type_param_id, recv)
+				if tmpl == recv:
+					return True
+				rdef = self.type_table.get(recv)
+				if tdef.kind is not rdef.kind:
+					return False
+				if tdef.kind is TypeKind.REF:
+					if tdef.ref_mut != rdef.ref_mut:
+						return False
+					if len(tdef.param_types) != len(rdef.param_types):
+						return False
+					return _match_type(tdef.param_types[0], rdef.param_types[0])
+				if tdef.kind in {TypeKind.ARRAY, TypeKind.OPTIONAL, TypeKind.FNRESULT, TypeKind.FUNCTION}:
+					if len(tdef.param_types) != len(rdef.param_types):
+						return False
+					for sub_t, sub_r in zip(tdef.param_types, rdef.param_types):
+						if not _match_type(sub_t, sub_r):
+							return False
+					return True
+				if tdef.kind is TypeKind.STRUCT:
+					tmpl_inst = self.type_table.get_struct_instance(tmpl)
+					recv_inst = self.type_table.get_struct_instance(recv)
+					if tmpl_inst is None and recv_inst is None:
+						return tmpl == recv
+					if tmpl_inst is None or recv_inst is None:
+						return False
+					if tmpl_inst.base_id != recv_inst.base_id:
+						return False
+					if len(tmpl_inst.type_args) != len(recv_inst.type_args):
+						return False
+					for sub_t, sub_r in zip(tmpl_inst.type_args, recv_inst.type_args):
+						if not _match_type(sub_t, sub_r):
+							return False
+					return True
+				if tdef.kind is TypeKind.VARIANT:
+					tmpl_inst = self.type_table.get_variant_instance(tmpl)
+					recv_inst = self.type_table.get_variant_instance(recv)
+					if tmpl_inst is None and recv_inst is None:
+						return tmpl == recv
+					if tmpl_inst is None or recv_inst is None:
+						return False
+					if tmpl_inst.base_id != recv_inst.base_id:
+						return False
+					if len(tmpl_inst.type_args) != len(recv_inst.type_args):
+						return False
+					for sub_t, sub_r in zip(tmpl_inst.type_args, recv_inst.type_args):
+						if not _match_type(sub_t, sub_r):
+							return False
+					return True
+				return False
+
+			for tmpl, recv in zip(template_args, recv_args):
+				if not _match_type(tmpl, recv):
+					return None
+			if any(b is None for b in bindings):
+				return None
+			return Subst(owner=owner, args=[b for b in bindings if b is not None])
+
 		def _fn_id_for_decl(decl: CallableDecl) -> FunctionId | None:
 			return decl.fn_id
 
@@ -293,6 +527,7 @@ class TypeChecker:
 			arg_types: List[TypeId],
 			call_type_args: List[TypeId] | None = None,
 			call_type_args_span: Span | None = None,
+			expected_type: TypeId | None = None,
 		) -> tuple[CallableDecl, CallableSignature]:
 			candidates = callable_registry.get_free_candidates(
 				name=name,
@@ -300,6 +535,10 @@ class TypeChecker:
 				include_private_in=current_module,
 			)
 			viable: List[tuple[CallableDecl, CallableSignature]] = []
+			type_arg_counts: set[int] = set()
+			saw_registry_only_with_type_args = False
+			saw_typed_nongeneric_with_type_args = False
+			saw_infer_incomplete = False
 			for decl in candidates:
 				sig = None
 				if decl.fn_id is not None and signatures_by_id is not None:
@@ -309,10 +548,8 @@ class TypeChecker:
 
 				if sig is None:
 					if call_type_args:
-						raise ResolutionError(
-							f"type arguments require a typed signature for function '{name}'",
-							span=call_type_args_span,
-						)
+						saw_registry_only_with_type_args = True
+						continue
 					params = list(decl.signature.param_types)
 					result_type = decl.signature.result_type
 					if len(params) != len(arg_types):
@@ -342,24 +579,26 @@ class TypeChecker:
 				if sig.param_type_ids is None or sig.return_type_id is None:
 					continue
 
-				if call_type_args:
-					if not sig.type_params:
-						continue
-					if len(call_type_args) != len(sig.type_params):
-						raise ResolutionError(
-							f"type argument count mismatch for '{name}': expected {len(sig.type_params)}, got {len(call_type_args)}",
-							span=call_type_args_span,
-						)
-					subst = Subst(owner=sig.type_params[0].id.owner, args=list(call_type_args))
-					inst_params = [apply_subst(p, subst, self.type_table) for p in sig.param_type_ids]
-					inst_return = apply_subst(sig.return_type_id, subst, self.type_table)
-					params = inst_params
-					result_type = inst_return
-				else:
-					if sig.type_params:
-						continue
-					params = list(sig.param_type_ids)
-					result_type = sig.return_type_id
+				inst_params, inst_return, inst_err = _instantiate_sig(
+					sig=sig,
+					arg_types=arg_types,
+					expected_type=expected_type,
+					explicit_type_args=call_type_args,
+					allow_infer=True,
+				)
+				if inst_err == "no_typeparams" and call_type_args:
+					saw_typed_nongeneric_with_type_args = True
+					continue
+				if inst_err == "typearg_count" and call_type_args:
+					type_arg_counts.add(len(sig.type_params))
+					continue
+				if inst_err == "cannot_infer":
+					saw_infer_incomplete = True
+					continue
+				if inst_err:
+					continue
+				params = inst_params
+				result_type = inst_return
 
 				if len(params) != len(arg_types):
 					continue
@@ -372,7 +611,28 @@ class TypeChecker:
 					)
 			if not viable:
 				if call_type_args:
+					if type_arg_counts:
+						exp = ", ".join(str(n) for n in sorted(type_arg_counts))
+						raise ResolutionError(
+							f"type argument count mismatch for '{name}': expected one of ({exp}), got {len(call_type_args)}",
+							span=call_type_args_span,
+						)
+					if saw_typed_nongeneric_with_type_args:
+						raise ResolutionError(
+							f"type arguments require a generic signature for function '{name}'",
+							span=call_type_args_span,
+						)
+					if saw_registry_only_with_type_args:
+						raise ResolutionError(
+							f"type arguments require a typed signature for function '{name}'",
+							span=call_type_args_span,
+						)
 					raise ResolutionError(f"no matching overload for function '{name}' with provided type arguments")
+				if saw_infer_incomplete:
+					raise ResolutionError(
+						f"cannot infer type arguments for '{name}'; add explicit '<type ...>'",
+						span=call_type_args_span,
+					)
 				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
 			world = None
 			applicable: List[tuple[CallableDecl, CallableSignature]] = []
@@ -549,12 +809,526 @@ class TypeChecker:
 				return record_expr(expr, self._unknown)
 
 			if hasattr(H, "HQualifiedMember") and isinstance(expr, getattr(H, "HQualifiedMember")):
+				base_te = getattr(expr, "base_type_expr", None)
+				if base_te is None or not getattr(base_te, "args", None):
+					diagnostics.append(
+						Diagnostic(
+							message=(
+								"E-QMEM-NOT-CALLABLE: qualified member reference is not a first-class value in MVP; "
+								"call it directly (e.g. `Type::Ctor(...)`)"
+							),
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+
+				base_tid = resolve_opaque_type(base_te, self.type_table, module_id=current_module_name)
+				try:
+					base_def = self.type_table.get(base_tid)
+				except Exception:
+					base_def = None
+				if base_def is None or base_def.kind is not TypeKind.VARIANT:
+					name = getattr(base_te, "name", None)
+					if isinstance(name, str):
+						vb = self.type_table.get_variant_base(module_id=current_module_name, name=name) or self.type_table.get_variant_base(
+							module_id="lang.core", name=name
+						)
+						if vb is not None:
+							base_tid = vb
+							base_def = self.type_table.get(base_tid)
+				if base_def is None or base_def.kind is not TypeKind.VARIANT:
+					diagnostics.append(
+						Diagnostic(
+							message="E-QMEM-NONVARIANT: qualified member base is not a variant type",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+
+				schema = self.type_table.get_variant_schema(base_tid)
+				if schema is None:
+					diagnostics.append(
+						Diagnostic(
+							message="internal: missing variant schema for qualified member base (compiler bug)",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				arm_schema = next((a for a in schema.arms if a.name == expr.member), None)
+				if arm_schema is None:
+					ctors = self._format_ctor_signature_list(schema=schema, instance=None, current_module=current_module_name)
+					diagnostics.append(
+						Diagnostic(
+							message=(
+								f"E-QMEM-NO-CTOR: constructor '{expr.member}' not found in variant "
+								f"'{self._pretty_type_name(base_tid, current_module=current_module_name)}'. "
+								f"Available constructors: {', '.join(ctors)}"
+							),
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+
+				type_params: list[TypeParam] = []
+				typevar_ids: list[TypeId] = []
+				if schema.type_params:
+					owner = FunctionId(module="lang.__internal", name=f"__variant_{schema.module_id}::{schema.name}", ordinal=0)
+					for idx, tp_name in enumerate(schema.type_params):
+						param_id = TypeParamId(owner=owner, index=idx)
+						type_params.append(TypeParam(id=param_id, name=tp_name, span=None))
+						typevar_ids.append(self.type_table.ensure_typevar(param_id, name=tp_name))
+
+				type_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
+
+				def _lower_generic_expr(expr: GenericTypeExpr) -> TypeId:
+					if expr.param_index is not None:
+						idx = int(expr.param_index)
+						if 0 <= idx < len(typevar_ids):
+							return typevar_ids[idx]
+						return self._unknown
+					name = expr.name
+					if name == "Int":
+						return self._int
+					if name == "Uint":
+						return self._uint
+					if name == "Bool":
+						return self._bool
+					if name == "Float":
+						return self._float
+					if name == "String":
+						return self._string
+					if name == "Void":
+						return self._void
+					if name == "Error":
+						return self._error
+					if name == "DiagnosticValue":
+						return self._dv
+					if name == "Unknown":
+						return self._unknown
+					if name in {"&", "&mut"} and expr.args:
+						inner = _lower_generic_expr(expr.args[0])
+						return self.type_table.ensure_ref_mut(inner) if name == "&mut" else self.type_table.ensure_ref(inner)
+					if name == "Array" and expr.args:
+						elem = _lower_generic_expr(expr.args[0])
+						return self.type_table.new_array(elem)
+					origin_mod = expr.module_id or schema.module_id
+					base_id = (
+						self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
+						or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
+						or self.type_table.ensure_named(name, module_id=origin_mod)
+					)
+					if expr.args:
+						arg_ids = [_lower_generic_expr(a) for a in expr.args]
+						if base_id in self.type_table.variant_schemas:
+							if any(self.type_table.get(a).kind is TypeKind.TYPEVAR for a in arg_ids):
+								key = (base_id, tuple(arg_ids))
+								if key not in type_cache:
+									td = self.type_table.get(base_id)
+									type_cache[key] = self.type_table._add(
+										TypeKind.VARIANT,
+										td.name,
+										list(arg_ids),
+										register_named=False,
+										module_id=td.module_id,
+									)
+								return type_cache[key]
+							return self.type_table.ensure_instantiated(base_id, arg_ids)
+					return base_id
+
+				param_type_ids: list[TypeId] = []
+				for f in arm_schema.fields:
+					param_type_ids.append(_lower_generic_expr(f.type_expr))
+				ret_type_id = base_tid
+				if schema.type_params:
+					ret_type_id = _lower_generic_expr(
+						GenericTypeExpr.named(schema.name, args=[GenericTypeExpr.param(i) for i in range(len(schema.type_params))], module_id=schema.module_id)
+					)
+				ctor_sig = FnSignature(
+					name=expr.member,
+					param_type_ids=param_type_ids,
+					return_type_id=ret_type_id,
+					type_params=type_params,
+					module=current_module_name,
+				)
+
+				explicit_type_args = [
+					resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+					for t in (base_te.args or [])
+				]
+				first_loc = getattr((base_te.args or [None])[0], "loc", None)
+				call_type_args_span = Span.from_loc(first_loc) if first_loc is not None else None
+				inst_params, inst_return, inst_err = _instantiate_sig(
+					sig=ctor_sig,
+					arg_types=[],
+					expected_type=None,
+					explicit_type_args=explicit_type_args,
+					allow_infer=False,
+				)
+				if inst_err == "typearg_count":
+					diagnostics.append(
+						Diagnostic(
+							message=(
+								f"E-QMEM-TYPEARGS-ARITY: expected {len(schema.type_params)} type arguments, got {len(explicit_type_args)}"
+							),
+							severity="error",
+							span=call_type_args_span or getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				if inst_err == "no_typeparams":
+					diagnostics.append(
+						Diagnostic(
+							message="constructor does not accept type arguments; use the non-generic form instead",
+							severity="error",
+							span=call_type_args_span or getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				if inst_err:
+					return record_expr(expr, self._unknown)
+				if inst_params is None or inst_return is None:
+					return record_expr(expr, self._unknown)
+
+				fn_name = f"{schema.name}::{expr.member}"
+				return record_expr(expr, self.type_table.new_function(fn_name, list(inst_params), inst_return))
+
+			if hasattr(H, "HTypeApp") and isinstance(expr, getattr(H, "HTypeApp")):
+				call_type_args_span = None
+				if getattr(expr, "type_args", None):
+					first_loc = getattr((expr.type_args or [None])[0], "loc", None)
+					call_type_args_span = Span.from_loc(first_loc)
+				type_arg_ids = [
+					resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+					for t in (expr.type_args or [])
+				]
+
+				if isinstance(expr.fn, H.HVar):
+					if callable_registry is not None:
+						candidates = callable_registry.get_free_candidates(
+							name=expr.fn.name,
+							visible_modules=visible_modules or (current_module,),
+							include_private_in=current_module,
+						)
+						viable: list[tuple[CallableDecl, list[TypeId], TypeId]] = []
+						type_arg_counts: set[int] = set()
+						saw_registry_only = False
+						saw_typed_nongeneric = False
+						for decl in candidates:
+							sig = None
+							if decl.fn_id is not None and signatures_by_id is not None:
+								sig = signatures_by_id.get(decl.fn_id)
+							if sig is None:
+								sig = _single_sig(decl.name)
+							if sig is None:
+								saw_registry_only = True
+								continue
+							if sig.param_type_ids is None and sig.param_types is not None:
+								local_type_params = {p.name: p.id for p in sig.type_params}
+								param_type_ids = [
+									resolve_opaque_type(p, self.type_table, module_id=sig.module, type_params=local_type_params)
+									for p in sig.param_types
+								]
+								sig = replace(sig, param_type_ids=param_type_ids)
+							if sig.return_type_id is None and sig.return_type is not None:
+								local_type_params = {p.name: p.id for p in sig.type_params}
+								ret_id = resolve_opaque_type(sig.return_type, self.type_table, module_id=sig.module, type_params=local_type_params)
+								sig = replace(sig, return_type_id=ret_id)
+							if sig.param_type_ids is None or sig.return_type_id is None:
+								continue
+							inst_params, inst_return, inst_err = _instantiate_sig(
+								sig=sig,
+								arg_types=[],
+								expected_type=None,
+								explicit_type_args=type_arg_ids,
+								allow_infer=False,
+							)
+							if inst_err == "no_typeparams":
+								saw_typed_nongeneric = True
+								continue
+							if inst_err == "typearg_count":
+								type_arg_counts.add(len(sig.type_params))
+								continue
+							if inst_err:
+								continue
+							if inst_params is None or inst_return is None:
+								continue
+							viable.append((decl, list(inst_params), inst_return))
+
+						if len(viable) == 1:
+							decl, params, ret = viable[0]
+							fn_name = decl.name
+							if decl.fn_id is not None:
+								fn_name = function_symbol(decl.fn_id)
+							return record_expr(expr, self.type_table.new_function(fn_name, params, ret))
+						if saw_registry_only:
+							diagnostics.append(
+								Diagnostic(
+									message=f"type arguments require a typed signature for '{expr.fn.name}'",
+									severity="error",
+									span=call_type_args_span or getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						if saw_typed_nongeneric:
+							diagnostics.append(
+								Diagnostic(
+									message=f"type arguments require a generic signature for '{expr.fn.name}'",
+									severity="error",
+									span=call_type_args_span or getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						if type_arg_counts:
+							diagnostics.append(
+								Diagnostic(
+									message=(
+										f"type argument count mismatch for '{expr.fn.name}': expected {sorted(type_arg_counts)}, "
+										f"got {len(type_arg_ids)}"
+									),
+									severity="error",
+									span=call_type_args_span or getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						if len(viable) > 1:
+							diagnostics.append(
+								Diagnostic(
+									message=f"ambiguous callable reference to '{expr.fn.name}'",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+					sig = _single_sig(expr.fn.name)
+					if sig is None:
+						diagnostics.append(
+							Diagnostic(
+								message=f"unknown function '{expr.fn.name}'",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					inst_params, inst_return, inst_err = _instantiate_sig(
+						sig=sig,
+						arg_types=[],
+						expected_type=None,
+						explicit_type_args=type_arg_ids,
+						allow_infer=False,
+					)
+					if inst_err == "typearg_count":
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"type argument count mismatch for '{expr.fn.name}': expected {len(sig.type_params)}, got {len(type_arg_ids)}"
+								),
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err == "no_typeparams":
+						diagnostics.append(
+							Diagnostic(
+								message=f"type arguments require a generic signature for '{expr.fn.name}'",
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err:
+						return record_expr(expr, self._unknown)
+					if inst_params is not None and inst_return is not None:
+						return record_expr(expr, self.type_table.new_function(expr.fn.name, list(inst_params), inst_return))
+					return record_expr(expr, self._unknown)
+
+				if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
+					qm = expr.fn
+					base_te = getattr(qm, "base_type_expr", None)
+					if base_te is not None and getattr(base_te, "args", None):
+						diagnostics.append(
+							Diagnostic(
+								message="E-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					base_tid = resolve_opaque_type(base_te, self.type_table, module_id=current_module_name)
+					try:
+						base_def = self.type_table.get(base_tid)
+					except Exception:
+						base_def = None
+					if base_def is None or base_def.kind is not TypeKind.VARIANT:
+						name = getattr(base_te, "name", None)
+						if isinstance(name, str):
+							vb = self.type_table.get_variant_base(module_id=current_module_name, name=name) or self.type_table.get_variant_base(
+								module_id="lang.core", name=name
+							)
+							if vb is not None:
+								base_tid = vb
+								base_def = self.type_table.get(base_tid)
+					if base_def is None or base_def.kind is not TypeKind.VARIANT:
+						diagnostics.append(
+							Diagnostic(
+								message="E-QMEM-NONVARIANT: qualified member base is not a variant type",
+								severity="error",
+								span=getattr(qm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					schema = self.type_table.get_variant_schema(base_tid)
+					if schema is None:
+						diagnostics.append(
+							Diagnostic(
+								message="internal: missing variant schema for qualified member base (compiler bug)",
+								severity="error",
+								span=getattr(qm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
+					if arm_schema is None:
+						ctors = self._format_ctor_signature_list(schema=schema, instance=None, current_module=current_module_name)
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"E-QMEM-NO-CTOR: constructor '{qm.member}' not found in variant "
+									f"'{self._pretty_type_name(base_tid, current_module=current_module_name)}'. "
+									f"Available constructors: {', '.join(ctors)}"
+								),
+								severity="error",
+								span=getattr(qm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+						return record_expr(expr, self._unknown)
+
+					type_params: list[TypeParam] = []
+					typevar_ids: list[TypeId] = []
+					if schema.type_params:
+						owner = FunctionId(module="lang.__internal", name=f"__variant_{schema.module_id}::{schema.name}", ordinal=0)
+						for idx, tp_name in enumerate(schema.type_params):
+							param_id = TypeParamId(owner=owner, index=idx)
+							type_params.append(TypeParam(id=param_id, name=tp_name, span=None))
+							typevar_ids.append(self.type_table.ensure_typevar(param_id, name=tp_name))
+
+					type_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
+
+					def _lower_generic_expr(expr: GenericTypeExpr) -> TypeId:
+						if expr.param_index is not None:
+							idx = int(expr.param_index)
+							if 0 <= idx < len(typevar_ids):
+								return typevar_ids[idx]
+							return self._unknown
+						name = expr.name
+						if name == "Int":
+							return self._int
+						if name == "Uint":
+							return self._uint
+						if name == "Bool":
+							return self._bool
+						if name == "Float":
+							return self._float
+						if name == "String":
+							return self._string
+						if name == "Void":
+							return self._void
+						if name == "Error":
+							return self._error
+						if name == "DiagnosticValue":
+							return self._dv
+						if name == "Unknown":
+							return self._unknown
+						if name in {"&", "&mut"} and expr.args:
+							inner = _lower_generic_expr(expr.args[0])
+							return self.type_table.ensure_ref_mut(inner) if name == "&mut" else self.type_table.ensure_ref(inner)
+						if name == "Array" and expr.args:
+							elem = _lower_generic_expr(expr.args[0])
+							return self.type_table.new_array(elem)
+						origin_mod = expr.module_id or schema.module_id
+						base_id = (
+							self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
+							or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
+							or self.type_table.ensure_named(name, module_id=origin_mod)
+						)
+						if expr.args:
+							arg_ids = [_lower_generic_expr(a) for a in expr.args]
+							if base_id in self.type_table.variant_schemas:
+								if any(self.type_table.get(a).kind is TypeKind.TYPEVAR for a in arg_ids):
+									key = (base_id, tuple(arg_ids))
+									if key not in type_cache:
+										td = self.type_table.get(base_id)
+										type_cache[key] = self.type_table._add(
+											TypeKind.VARIANT,
+											td.name,
+											list(arg_ids),
+											register_named=False,
+											module_id=td.module_id,
+										)
+									return type_cache[key]
+								return self.type_table.ensure_instantiated(base_id, arg_ids)
+						return base_id
+
+					param_type_ids: list[TypeId] = []
+					for f in arm_schema.fields:
+						param_type_ids.append(_lower_generic_expr(f.type_expr))
+					ret_type_id = base_tid
+					if schema.type_params:
+						ret_type_id = _lower_generic_expr(
+							GenericTypeExpr.named(schema.name, args=[GenericTypeExpr.param(i) for i in range(len(schema.type_params))], module_id=schema.module_id)
+						)
+					ctor_sig = FnSignature(
+						name=qm.member,
+						param_type_ids=param_type_ids,
+						return_type_id=ret_type_id,
+						type_params=type_params,
+						module=current_module_name,
+					)
+
+					inst_params, inst_return, inst_err = _instantiate_sig(
+						sig=ctor_sig,
+						arg_types=[],
+						expected_type=None,
+						explicit_type_args=type_arg_ids,
+						allow_infer=False,
+					)
+					if inst_err == "typearg_count":
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"E-QMEM-TYPEARGS-ARITY: expected {len(schema.type_params)} type arguments, got {len(type_arg_ids)}"
+								),
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err == "no_typeparams":
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									"constructor does not accept type arguments; use the non-generic form instead"
+								),
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err:
+						return record_expr(expr, self._unknown)
+					if inst_params is None or inst_return is None:
+						return record_expr(expr, self._unknown)
+
+					fn_name = f"{schema.name}::{qm.member}"
+					return record_expr(expr, self.type_table.new_function(fn_name, list(inst_params), inst_return))
+
 				diagnostics.append(
 					Diagnostic(
-						message=(
-							"E-QMEM-NOT-CALLABLE: qualified member reference is not a first-class value in MVP; "
-							"call it directly (e.g. `Type::Ctor(...)`)"
-						),
+						message="E-TYPEAPP-TARGET: type application requires a named callable target",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)
@@ -1060,6 +1834,15 @@ class TypeChecker:
 
 			# Calls.
 			if isinstance(expr, H.HCall):
+				if not isinstance(expr.fn, H.HVar) and getattr(expr, "type_args", None):
+					diagnostics.append(
+						Diagnostic(
+							message="E-TYPEARGS-NOT-ALLOWED: type arguments are only supported on named call targets",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				# Qualified type member call: `TypeRef::member(args...)`.
 				#
 				# MVP: only variant constructors are supported, and the qualified
@@ -1082,6 +1865,11 @@ class TypeChecker:
 							return record_expr(expr, self._unknown)
 						base_te = replace(base_te, args=list(call_type_args))
 					base_tid = resolve_opaque_type(base_te, self.type_table, module_id=current_module_name)
+					call_type_args_span = None
+					if call_type_args:
+						first_loc = getattr(call_type_args[0], "loc", None)
+						if first_loc is not None:
+							call_type_args_span = Span.from_loc(first_loc)
 					# TypeRef without explicit module context may refer to lang.core
 					# variants (e.g., `Optional`). Prefer that base when present.
 					try:
@@ -1207,74 +1995,178 @@ class TypeChecker:
 
 					arg_types = [t if t is not None else self._unknown for t in mapped_types]
 
-					# Determine the concrete variant type for this constructor call.
-					inst_tid: TypeId = base_tid
-					has_explicit_type_args = bool(getattr(base_te, "args", []) or [])
-					if schema.type_params and not has_explicit_type_args:
-						inferred: list[TypeId | None] = [None for _ in schema.type_params]
+					# Build a constructor template and instantiate via the shared helper.
+					type_params: list[TypeParam] = []
+					typevar_ids: list[TypeId] = []
+					if schema.type_params:
+						owner = FunctionId(module="lang.__internal", name=f"__variant_{schema.module_id}::{schema.name}", ordinal=0)
+						for idx, tp_name in enumerate(schema.type_params):
+							param_id = TypeParamId(owner=owner, index=idx)
+							type_params.append(TypeParam(id=param_id, name=tp_name, span=None))
+							typevar_ids.append(self.type_table.ensure_typevar(param_id, name=tp_name))
 
-						def unify(gexpr: GenericTypeExpr, actual: TypeId) -> None:
-							# Only infer from occurrences of type parameters. Shape mismatches
-							# are reported later as normal argument type mismatches once the
-							# variant instantiation is determined.
-							if gexpr.param_index is not None:
-								idx = int(gexpr.param_index)
-								prev = inferred[idx]
-								if prev is None:
-									inferred[idx] = actual
-									return
-								if prev != actual:
-									diagnostics.append(
-										Diagnostic(
-											message=(
-												f"E-QMEM-INFER-CONFLICT: inferred type argument '{schema.type_params[idx]}' "
-												f"conflicts ({self.type_table.get(prev).name} vs {self.type_table.get(actual).name})"
-											),
-											severity="error",
-											span=getattr(expr, "loc", Span()),
+					type_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
+
+					def _lower_generic_expr(expr: GenericTypeExpr) -> TypeId:
+						if expr.param_index is not None:
+							idx = int(expr.param_index)
+							if 0 <= idx < len(typevar_ids):
+								return typevar_ids[idx]
+							return self._unknown
+						name = expr.name
+						if name == "Int":
+							return self._int
+						if name == "Uint":
+							return self._uint
+						if name == "Bool":
+							return self._bool
+						if name == "Float":
+							return self._float
+						if name == "String":
+							return self._string
+						if name == "Void":
+							return self._void
+						if name == "Error":
+							return self._error
+						if name == "DiagnosticValue":
+							return self._dv
+						if name == "Unknown":
+							return self._unknown
+						if name in {"&", "&mut"} and expr.args:
+							inner = _lower_generic_expr(expr.args[0])
+							return self.type_table.ensure_ref_mut(inner) if name == "&mut" else self.type_table.ensure_ref(inner)
+						if name == "Array" and expr.args:
+							elem = _lower_generic_expr(expr.args[0])
+							return self.type_table.new_array(elem)
+						origin_mod = expr.module_id or schema.module_id
+						base_id = (
+							self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
+							or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
+							or self.type_table.ensure_named(name, module_id=origin_mod)
+						)
+						if expr.args:
+							arg_ids = [_lower_generic_expr(a) for a in expr.args]
+							if base_id in self.type_table.variant_schemas:
+								if any(self.type_table.get(a).kind is TypeKind.TYPEVAR for a in arg_ids):
+									key = (base_id, tuple(arg_ids))
+									if key not in type_cache:
+										td = self.type_table.get(base_id)
+										type_cache[key] = self.type_table._add(
+											TypeKind.VARIANT,
+											td.name,
+											list(arg_ids),
+											register_named=False,
+											module_id=td.module_id,
 										)
-									)
-								return
+									return type_cache[key]
+								return self.type_table.ensure_instantiated(base_id, arg_ids)
+						return base_id
 
-							name = gexpr.name
-							args = list(gexpr.args or [])
-							td = self.type_table.get(actual)
-							if name in {"&", "&mut"} and args:
-								if td.kind is TypeKind.REF and td.param_types:
-									if name == "&mut" and not td.ref_mut:
-										return
-									unify(args[0], td.param_types[0])
-								return
-							if name == "Array" and args:
-								if td.kind is TypeKind.ARRAY and td.param_types:
-									unify(args[0], td.param_types[0])
-								return
-							if not args:
-								return
-							# Recurse into variant instantiations to discover nested params.
-							if td.kind is TypeKind.VARIANT and len(td.param_types) == len(args):
-								for sub_g, sub_t in zip(args, td.param_types):
-									unify(sub_g, sub_t)
+					param_type_ids: list[TypeId] = []
+					for f in arm_schema.fields:
+						param_type_ids.append(_lower_generic_expr(f.type_expr))
+					ret_type_id = base_tid
+					if schema.type_params:
+						ret_type_id = _lower_generic_expr(
+							GenericTypeExpr.named(schema.name, args=[GenericTypeExpr.param(i) for i in range(len(schema.type_params))], module_id=schema.module_id)
+						)
+					ctor_sig = FnSignature(
+						name=qm.member,
+						param_type_ids=param_type_ids,
+						return_type_id=ret_type_id,
+						type_params=type_params,
+						module=current_module_name,
+					)
 
-						for f, at in zip(arm_schema.fields, arg_types):
-							unify(f.type_expr, at)
+					explicit_type_args: list[TypeId] | None = None
+					if getattr(base_te, "args", []) or []:
+						explicit_type_args = [
+							resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+							for t in (base_te.args or [])
+						]
+					elif call_type_args:
+						explicit_type_args = [
+							resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+							for t in call_type_args
+						]
+					inst_params, inst_return, inst_err = _instantiate_sig(
+						sig=ctor_sig,
+						arg_types=arg_types,
+						expected_type=expected_type,
+						explicit_type_args=explicit_type_args,
+						allow_infer=True,
+					)
+					if inst_err == "typearg_count":
+						span = call_type_args_span or getattr(expr, "loc", Span())
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"E-QMEM-TYPEARGS-ARITY: expected {len(schema.type_params)} type arguments, got {len(explicit_type_args or [])}"
+								),
+								severity="error",
+								span=span,
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err == "cannot_infer":
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									"E-QMEM-CANNOT-INFER: cannot infer type arguments for generic variant "
+									"(underconstrained; arguments do not determine all type parameters). "
+									"Fix: add an expected type (e.g., `val x: Optional<Int> = Optional::None()`) "
+									"or add explicit type arguments (e.g., `Optional<Int>::None()` or `Optional::None<type Int>()`)."
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err:
+						return record_expr(expr, self._unknown)
+					if inst_params is None or inst_return is None:
+						return record_expr(expr, self._unknown)
 
-						if any(t is None for t in inferred):
+					if len(inst_params) != len(field_names):
+						diagnostics.append(
+							Diagnostic(
+								message=f"E-QMEM-ARITY: constructor '{qm.member}' expects {len(field_names)} arguments, got {len(inst_params)}",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+
+					for idx, want in enumerate(inst_params):
+						arg_expr: H.HExpr | None = None
+						if kw_pairs:
+							for kw in kw_pairs:
+								if kw.name == field_names[idx]:
+									arg_expr = kw.value
+									break
+						else:
+							arg_expr = expr.args[idx] if idx < len(expr.args) else None
+						have = mapped_types[idx]
+						if arg_expr is not None:
+							have = type_expr(arg_expr, expected_type=want)
+						if have is not None and have != want:
 							diagnostics.append(
 								Diagnostic(
 									message=(
-										"E-QMEM-CANNOT-INFER: cannot infer type arguments for generic variant "
-										"(underconstrained; arguments do not determine all type parameters). "
-										"Fix: add an expected type (e.g., `val x: Optional<Int> = Optional::None()`) "
-										"or add explicit type arguments (e.g., `Optional<Int>::None()` or `Optional::None<type Int>()`)."
+										f"constructor '{qm.member}' field '{field_names[idx]}' type mismatch "
+										f"(have {self.type_table.get(have).name}, expected {self.type_table.get(want).name})"
 									),
 									severity="error",
-									span=getattr(expr, "loc", Span()),
+									span=mapped_spans[idx],
 								)
 							)
-							return record_expr(expr, self._unknown)
-						inst_tid = self.type_table.ensure_instantiated(base_tid, [t for t in inferred if t is not None])
 
+					inst_tid = inst_return
+					td_ret = self.type_table.get(inst_tid)
+					if td_ret.kind is TypeKind.VARIANT and schema.type_params:
+						args = list(td_ret.param_types)
+						if all(self.type_table.get(a).kind is not TypeKind.TYPEVAR for a in args):
+							inst_tid = self.type_table.ensure_instantiated(base_tid, args)
 					inst = self.type_table.get_variant_instance(inst_tid)
 					if inst is None:
 						diagnostics.append(
@@ -1486,7 +2378,9 @@ class TypeChecker:
 				# arguments, e.g. `takes_opt(Some(1))` where `takes_opt` expects
 				# `Optional<Int>`.
 				arg_types: list[TypeId] = []
-				if isinstance(expr.fn, H.HVar):
+				if callable_registry is not None:
+					sig = None
+				elif isinstance(expr.fn, H.HVar):
 					sig = _single_sig(expr.fn.name)
 				else:
 					sig = None
@@ -1690,12 +2584,54 @@ class TypeChecker:
 
 				struct_id: TypeId | None = None
 				struct_name: str | None = None
+				call_type_args = getattr(expr, "type_args", None) or []
+				type_arg_ids: list[TypeId] | None = None
+				call_type_args_span = None
+				if call_type_args:
+					first_loc = getattr(call_type_args[0], "loc", None)
+					if first_loc is not None:
+						call_type_args_span = Span.from_loc(first_loc)
+					type_arg_ids = [
+						resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+						for t in call_type_args
+					]
 				if isinstance(expr.fn, H.HVar):
 					struct_id = _resolve_struct_ctor_type_id(expr.fn.name)
 					struct_name = expr.fn.name
 
 				sig = _single_sig(expr.fn.name) if isinstance(expr.fn, H.HVar) else None
 				if sig is None and isinstance(expr.fn, H.HVar) and struct_id is not None:
+					struct_schema = self.type_table.get_struct_schema(struct_id)
+					if struct_schema is not None and struct_schema.type_params:
+						if not type_arg_ids:
+							diagnostics.append(
+								Diagnostic(
+									message=f"cannot infer type arguments for struct '{struct_name}'; add explicit '<type ...>'",
+									severity="error",
+									span=call_type_args_span or getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						try:
+							struct_id = self.type_table.ensure_struct_instantiated(struct_id, type_arg_ids)
+						except ValueError as err:
+							diagnostics.append(
+								Diagnostic(
+									message=str(err),
+									severity="error",
+									span=call_type_args_span or getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+					elif type_arg_ids:
+						diagnostics.append(
+							Diagnostic(
+								message=f"type arguments require a generic struct for '{struct_name}'",
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
 					struct_def = self.type_table.get(struct_id)
 					if struct_def.kind is not TypeKind.STRUCT:
 						diagnostics.append(
@@ -1706,8 +2642,13 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-					field_names = list(struct_def.field_names or [])
-					field_types = list(struct_def.param_types)
+					struct_inst = self.type_table.get_struct_instance(struct_id)
+					if struct_inst is not None:
+						field_names = list(struct_inst.field_names)
+						field_types = list(struct_inst.field_types)
+					else:
+						field_names = list(struct_def.field_names or [])
+						field_types = list(struct_def.param_types)
 					if len(field_names) != len(field_types):
 						diagnostics.append(
 							Diagnostic(
@@ -1791,6 +2732,54 @@ class TypeChecker:
 							)
 					return record_expr(expr, struct_id)
 
+				# Call through a function-typed local value.
+				if isinstance(expr.fn, H.HVar) and expr.fn.binding_id is not None:
+					fn_ty = binding_types.get(expr.fn.binding_id)
+					if fn_ty is not None and self.type_table.get(fn_ty).kind is TypeKind.FUNCTION:
+						if getattr(expr, "type_args", None):
+							diagnostics.append(
+								Diagnostic(
+									message="type arguments are not supported on function values; apply them on the named function",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						if kw_pairs:
+							diagnostics.append(
+								Diagnostic(
+									message="keyword arguments are not supported on function values in MVP",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						td_fn = self.type_table.get(fn_ty)
+						fn_params = list(td_fn.param_types[:-1]) if td_fn.param_types else []
+						fn_ret = td_fn.param_types[-1] if td_fn.param_types else self._unknown
+						if len(fn_params) != len(arg_types):
+							diagnostics.append(
+								Diagnostic(
+									message=f"function value expects {len(fn_params)} arguments, got {len(arg_types)}",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, fn_ret)
+						for want, have in zip(fn_params, arg_types):
+							if have is not None and want != have:
+								diagnostics.append(
+									Diagnostic(
+										message=(
+											f"function value argument type mismatch (have {self.type_table.get(have).name}, "
+											f"expected {self.type_table.get(want).name})"
+										),
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+						return record_expr(expr, fn_ret)
+
 				if kw_pairs:
 					diagnostics.append(
 						Diagnostic(
@@ -1818,6 +2807,7 @@ class TypeChecker:
 							arg_types=arg_types,
 							call_type_args=type_arg_ids,
 							call_type_args_span=call_type_args_span or getattr(expr, "loc", Span()),
+							expected_type=expected_type,
 						)
 						if decl.fn_id is not None:
 							expr.fn.name = function_symbol(decl.fn_id)
@@ -1860,6 +2850,53 @@ class TypeChecker:
 				else:
 					sig = None
 				if sig and sig.return_type_id is not None:
+					type_arg_ids: List[TypeId] | None = None
+					call_type_args_span = None
+					if getattr(expr, "type_args", None):
+						type_arg_ids = [
+							resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+							for t in (expr.type_args or [])
+						]
+						first_loc = getattr((expr.type_args or [None])[0], "loc", None)
+						call_type_args_span = Span.from_loc(first_loc)
+					inst_params, inst_return, inst_err = _instantiate_sig(
+						sig=sig,
+						arg_types=arg_types,
+						expected_type=expected_type,
+						explicit_type_args=type_arg_ids,
+						allow_infer=True,
+					)
+					if inst_err == "typearg_count" and type_arg_ids:
+						diagnostics.append(
+							Diagnostic(
+								message=(
+									f"type argument count mismatch for '{expr.fn.name}': expected {len(sig.type_params)}, got {len(type_arg_ids)}"
+								),
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err == "no_typeparams" and type_arg_ids:
+						diagnostics.append(
+							Diagnostic(
+								message=f"type arguments require a generic signature for '{expr.fn.name}'",
+								severity="error",
+								span=call_type_args_span or getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_err == "cannot_infer":
+						diagnostics.append(
+							Diagnostic(
+								message=f"cannot infer type arguments for '{expr.fn.name}'; add explicit '<type ...>'",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if inst_return is not None:
+						return record_expr(expr, inst_return)
 					return record_expr(expr, sig.return_type_id)
 				# Constructor calls without an expected variant type are rejected in MVP.
 				if isinstance(expr.fn, H.HVar) and expected_type is None:
@@ -1966,20 +3003,161 @@ class TypeChecker:
 
 				if callable_registry:
 					try:
-						resolution = resolve_method_call(
-							callable_registry,
-							self.type_table,
-							receiver_type=recv_ty,
-							method_name=expr.method_name,
-							arg_types=arg_types,
+						call_type_args = getattr(expr, "type_args", None) or []
+						type_arg_ids: List[TypeId] | None = None
+						call_type_args_span = None
+						if call_type_args:
+							first_loc = getattr(call_type_args[0], "loc", None)
+							if first_loc is not None:
+								call_type_args_span = Span.from_loc(first_loc)
+							type_arg_ids = [
+								resolve_opaque_type(t, self.type_table, module_id=current_module_name)
+								for t in call_type_args
+							]
+						receiver_nominal = _unwrap_ref_type(recv_ty)
+						receiver_base, receiver_args = _struct_base_and_args(receiver_nominal)
+						candidates = callable_registry.get_method_candidates(
+							receiver_nominal_type_id=receiver_base,
+							name=expr.method_name,
 							visible_modules=visible_modules or (current_module,),
-							current_module=current_module,
+							include_private_in=current_module,
 						)
+						viable: List[MethodResolution] = []
+						type_arg_counts: set[int] = set()
+						saw_registry_only_with_type_args = False
+						saw_typed_nongeneric_with_type_args = False
+						saw_infer_incomplete = False
+						for decl in candidates:
+							sig = None
+							if decl.fn_id is not None and signatures_by_id is not None:
+								sig = signatures_by_id.get(decl.fn_id)
+							if sig is None:
+								sig = _single_sig(decl.name)
+							if sig is None:
+								if type_arg_ids:
+									saw_registry_only_with_type_args = True
+									continue
+								params = decl.signature.param_types
+								if len(params) - 1 != len(arg_types):
+									continue
+								ok, autoborrow = _receiver_compat(recv_ty, params[0], decl.self_mode)
+								if not ok:
+									continue
+								if all(p == a for p, a in zip(params[1:], arg_types)):
+									viable.append(
+										MethodResolution(
+											decl=decl,
+											receiver_autoborrow=autoborrow,
+											result_type=decl.signature.result_type,
+										)
+									)
+								continue
+							if sig.param_type_ids is None and sig.param_types is not None:
+								local_type_params = {p.name: p.id for p in sig.type_params}
+								param_type_ids = [
+									resolve_opaque_type(p, self.type_table, module_id=sig.module, type_params=local_type_params)
+									for p in sig.param_types
+								]
+								sig = replace(sig, param_type_ids=param_type_ids)
+							if sig.return_type_id is None and sig.return_type is not None:
+								local_type_params = {p.name: p.id for p in sig.type_params}
+								ret_id = resolve_opaque_type(sig.return_type, self.type_table, module_id=sig.module, type_params=local_type_params)
+								sig = replace(sig, return_type_id=ret_id)
+							if sig.param_type_ids is None or sig.return_type_id is None:
+								continue
+							if sig.impl_target_type_args:
+								impl_type_params = list(getattr(sig, "impl_type_params", []) or [])
+								if not impl_type_params:
+									if receiver_args != sig.impl_target_type_args:
+										continue
+								else:
+									impl_subst = _match_impl_type_args(
+										template_args=sig.impl_target_type_args,
+										recv_args=receiver_args,
+										impl_type_params=impl_type_params,
+									)
+									if impl_subst is None:
+										continue
+									inst_param_ids = [apply_subst(t, impl_subst, self.type_table) for t in sig.param_type_ids]
+									inst_return_id = apply_subst(sig.return_type_id, impl_subst, self.type_table)
+									sig = replace(sig, param_type_ids=inst_param_ids, return_type_id=inst_return_id)
+
+							inst_params: list[TypeId] | None = None
+							inst_return: TypeId | None = None
+							inst_params, inst_return, inst_err = _instantiate_sig(
+								sig=sig,
+								arg_types=[recv_ty, *arg_types],
+								expected_type=expected_type,
+								explicit_type_args=type_arg_ids,
+								allow_infer=True,
+							)
+							if inst_err == "no_typeparams" and type_arg_ids:
+								saw_typed_nongeneric_with_type_args = True
+								continue
+							if inst_err == "typearg_count" and type_arg_ids:
+								type_arg_counts.add(len(sig.type_params))
+								continue
+							if inst_err == "cannot_infer":
+								saw_infer_incomplete = True
+								continue
+							if inst_err:
+								continue
+
+							if inst_params is None or inst_return is None:
+								continue
+							if len(inst_params) - 1 != len(arg_types):
+								continue
+							ok, autoborrow = _receiver_compat(recv_ty, inst_params[0], decl.self_mode)
+							if not ok:
+								continue
+							if all(p == a for p, a in zip(inst_params[1:], arg_types)):
+								viable.append(
+									MethodResolution(
+										decl=decl,
+										receiver_autoborrow=autoborrow,
+										result_type=inst_return,
+									)
+								)
+
+						if not viable:
+							if type_arg_ids and type_arg_counts:
+								exp = ", ".join(str(n) for n in sorted(type_arg_counts))
+								raise ResolutionError(
+									f"type argument count mismatch for method '{expr.method_name}': expected one of ({exp}), got {len(type_arg_ids)}",
+									span=call_type_args_span,
+								)
+							if type_arg_ids and saw_typed_nongeneric_with_type_args:
+								raise ResolutionError(
+									f"type arguments require a generic method signature for '{expr.method_name}'",
+									span=call_type_args_span,
+								)
+							if type_arg_ids and saw_registry_only_with_type_args:
+								raise ResolutionError(
+									f"type arguments require a typed signature for method '{expr.method_name}'",
+									span=call_type_args_span,
+								)
+							if saw_infer_incomplete:
+								raise ResolutionError(
+									f"cannot infer type arguments for method '{expr.method_name}'; add explicit '<type ...>'",
+									span=call_type_args_span,
+								)
+							raise ResolutionError(
+								f"no matching method '{expr.method_name}' for receiver {recv_ty} and args {arg_types}",
+								span=getattr(expr, "loc", Span()),
+							)
+						if len(viable) > 1:
+							raise ResolutionError(
+								f"ambiguous method '{expr.method_name}' for receiver {recv_ty} and args {arg_types}",
+								span=getattr(expr, "loc", Span()),
+							)
+						resolution = viable[0]
 						call_resolutions[id(expr)] = resolution
-						return record_expr(expr, resolution.decl.signature.result_type)
+						result_type = resolution.result_type or resolution.decl.signature.result_type
+						return record_expr(expr, result_type)
 					except ResolutionError as err:
+						diag_span = getattr(err, "span", None) or getattr(expr, "loc", Span())
 						diagnostics.append(
-							Diagnostic(message=str(err), severity="error", span=getattr(expr, "loc", Span()))
+							Diagnostic(message=str(err), severity="error", span=diag_span)
 						)
 						return record_expr(expr, self._unknown)
 

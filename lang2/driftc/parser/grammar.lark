@@ -136,7 +136,7 @@ params: param (COMMA param)*
 param: NONESCAPING? ident COLON type_expr
 
 # implement Trait for Type { fn ... }
-implement_def: "implement" type_expr ("for" type_expr)? require_clause? implement_body
+implement_def: "implement" type_params? type_expr ("for" type_expr)? require_clause? implement_body
 implement_body: "{" (implement_item | TERMINATOR)* "}"
 implement_item: func_def   -> implement_func
 
@@ -253,7 +253,7 @@ from_import_stmt: FROM module_path "import" (STAR | NAME) import_alias?
 export_stmt: EXPORT "{" export_items? "}"
 export_items: NAME (COMMA NAME)*
 
-struct_def: "struct" NAME require_clause? struct_body
+struct_def: "struct" NAME type_params? require_clause? struct_body
 struct_body: tuple_struct | block_struct
 tuple_struct: "(" struct_field_list? ")"
 struct_field_list: struct_field (COMMA struct_field)*
@@ -373,9 +373,11 @@ postfix_suffix: call_suffix
               | attr_suffix
               | arrow_suffix
               | index_suffix
+              | type_app_suffix
 
 call_suffix: call_type_args? "(" [call_args] ")"
 call_type_args: CALL_TYPE_LT type_expr (COMMA type_expr)* ">"
+type_app_suffix: call_type_args
 attr_suffix: DOT NAME
 arrow_suffix: ARROW NAME
 index_suffix: "[" (leading_dot | expr) "]"
@@ -437,6 +439,7 @@ leading_suffix: call_suffix
               | attr_suffix
               | arrow_suffix
               | index_suffix
+              | type_app_suffix
 
 array_literal: "[" [expr (COMMA expr)*] "]"
 

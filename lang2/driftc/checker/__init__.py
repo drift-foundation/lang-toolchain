@@ -75,6 +75,8 @@ class FnSignature:
 	is_method: bool = False
 	self_mode: Optional[str] = None  # "value", "ref", "ref_mut" for now; parser maps to this
 	impl_target_type_id: Optional[TypeId] = None
+	impl_target_type_args: Optional[list[TypeId]] = None
+	impl_type_params: list[TypeParam] = field(default_factory=list)
 
 	# Legacy/raw fields (to be removed once real type checker is wired).
 	return_type: Any = None

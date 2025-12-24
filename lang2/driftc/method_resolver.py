@@ -42,6 +42,7 @@ class MethodResolution:
 
 	decl: CallableDecl
 	receiver_autoborrow: Optional[SelfMode]  # None, SELF_BY_REF, or SELF_BY_REF_MUT
+	result_type: Optional[TypeId] = None
 
 
 def _unwrap_ref(type_table: TypeTable, ty: TypeId) -> TypeId:
