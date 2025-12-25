@@ -6,6 +6,7 @@ from pathlib import Path
 from lang2.driftc import stage1 as H
 from lang2.driftc.core.function_id import FunctionId
 from lang2.driftc.method_registry import CallableRegistry, CallableSignature, SelfMode, Visibility
+from lang2.driftc.impl_index import GlobalImplIndex, find_impl_method_conflicts
 from lang2.driftc.parser import parse_drift_workspace_to_hir
 from lang2.driftc.type_checker import TypeChecker
 
@@ -71,6 +72,10 @@ def _visible_modules_for(
 	return tuple(sorted(module_ids.get(mod, 0) for mod in visible))
 
 
+def _visible_modules_by_name(module_deps: dict[str, set[str]]) -> dict[str, set[str]]:
+	return {mod: set(deps) | {mod} for mod, deps in module_deps.items()}
+
+
 def _collect_method_calls(block: H.HBlock) -> list[H.HMethodCall]:
 	calls: list[H.HMethodCall] = []
 
@@ -126,12 +131,24 @@ def _resolve_main_block(
 	for rel, content in files.items():
 		_write_file(mod_root / rel, content)
 	paths = sorted(mod_root.rglob("*.drift"))
-	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, _exports, module_deps, diagnostics = parse_drift_workspace_to_hir(
+	func_hirs, signatures, fn_ids_by_name, type_table, _exc_catalog, module_exports, module_deps, diagnostics = parse_drift_workspace_to_hir(
 		paths,
 		module_paths=[mod_root],
 	)
 	assert diagnostics == []
 	registry, module_ids = _build_registry(signatures)
+	impl_index = GlobalImplIndex.from_module_exports(
+		module_exports=module_exports,
+		type_table=type_table,
+		module_ids=module_ids,
+	)
+	conflicts = find_impl_method_conflicts(
+		module_exports=module_exports,
+		signatures_by_id=signatures,
+		type_table=type_table,
+		visible_modules_by_name=_visible_modules_by_name(module_deps),
+	)
+	assert conflicts == []
 	main_ids = fn_ids_by_name.get(f"{main_module}::main") or []
 	assert len(main_ids) == 1
 	main_id = main_ids[0]
@@ -150,6 +167,7 @@ def _resolve_main_block(
 		return_type=main_sig.return_type_id if main_sig is not None else None,
 		signatures_by_id=signatures,
 		callable_registry=registry,
+		impl_index=impl_index,
 		visible_modules=visible_mods,
 		current_module=current_mod,
 	)
@@ -240,7 +258,22 @@ fn main() returns Int {
 		module_paths=[mod_root],
 	)
 	assert diagnostics == []
+	conflicts = find_impl_method_conflicts(
+		module_exports=_exports,
+		signatures_by_id=signatures,
+		type_table=type_table,
+		visible_modules_by_name=_visible_modules_by_name(module_deps),
+	)
+	assert conflicts
+	msg = conflicts[0].message
+	assert "duplicate inherent method" in msg
+	assert "m_a" in msg and "m_b" in msg
 	registry, module_ids = _build_registry(signatures)
+	impl_index = GlobalImplIndex.from_module_exports(
+		module_exports=_exports,
+		type_table=type_table,
+		module_ids=module_ids,
+	)
 	main_ids = fn_ids_by_name.get("m_main::main") or []
 	assert len(main_ids) == 1
 	main_id = main_ids[0]
@@ -259,6 +292,7 @@ fn main() returns Int {
 		return_type=main_sig.return_type_id if main_sig is not None else None,
 		signatures_by_id=signatures,
 		callable_registry=registry,
+		impl_index=impl_index,
 		visible_modules=visible_mods,
 		current_module=current_mod,
 	)
@@ -358,6 +392,11 @@ fn main() returns Int {
 	)
 	assert diagnostics == []
 	registry, module_ids = _build_registry(signatures)
+	impl_index = GlobalImplIndex.from_module_exports(
+		module_exports=_exports,
+		type_table=type_table,
+		module_ids=module_ids,
+	)
 	main_ids = fn_ids_by_name.get("m_main::main") or []
 	assert len(main_ids) == 1
 	main_id = main_ids[0]
@@ -376,11 +415,14 @@ fn main() returns Int {
 		return_type=main_sig.return_type_id if main_sig is not None else None,
 		signatures_by_id=signatures,
 		callable_registry=registry,
+		impl_index=impl_index,
 		visible_modules=visible_mods,
 		current_module=current_mod,
 	)
 	assert result.diagnostics
-	assert "no matching method" in result.diagnostics[0].message
+	msg = result.diagnostics[0].message
+	assert "exists but is not visible" in msg
+	assert "m_impl" in msg
 
 
 def test_method_resolution_generic_impl_across_modules(tmp_path: Path) -> None:
@@ -422,3 +464,44 @@ fn main() returns Int {
 	assert res is not None and res.decl.fn_id is not None
 	assert res.decl.fn_id.module == "m_impl"
 	assert signatures[res.decl.fn_id].is_method
+
+
+def test_duplicate_method_signature_in_single_module_is_error(tmp_path: Path) -> None:
+	files = {
+		Path("m_box/lib.drift"): """
+module m_box
+
+export { Box }
+
+pub struct Box<T> { value: T }
+
+implement Box<Int> {
+	pub fn tag(self: Box<Int>) returns Int { return 1; }
+}
+
+implement Box<Int> {
+	pub fn tag(self: Box<Int>) returns Int { return 2; }
+}
+""",
+	}
+	mod_root = tmp_path / "mods"
+	for rel, content in files.items():
+		_write_file(mod_root / rel, content)
+	paths = sorted(mod_root.rglob("*.drift"))
+	_func_hirs, signatures, _fn_ids_by_name, type_table, _exc_catalog, exports, module_deps, diagnostics = (
+		parse_drift_workspace_to_hir(
+			paths,
+			module_paths=[mod_root],
+		)
+	)
+	assert diagnostics == []
+	conflicts = find_impl_method_conflicts(
+		module_exports=exports,
+		signatures_by_id=signatures,
+		type_table=type_table,
+		visible_modules_by_name=_visible_modules_by_name(module_deps),
+	)
+	assert conflicts
+	msg = conflicts[0].message
+	assert "duplicate inherent method" in msg
+	assert "m_box" in msg

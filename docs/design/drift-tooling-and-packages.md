@@ -389,6 +389,9 @@ Canonical sidecar format:
 What is signed:
 - `package_sha256` is the sha256 of the raw `pkg.dmp` bytes.
 - Each signature is computed over the raw `pkg.dmp` bytes (byte-for-byte).
+  This includes package metadata stored in the DMIR-PKG manifest (for example
+  `surfaces`, `entry_modules`, and `import_notice`), so those fields are
+  authenticated. See the language spec for the normative schema.
 - Compression (e.g., `.zst`) is an outer transport layer; it is not part of the container format nor the signed payload.
 
 Precedence rules (pinned):

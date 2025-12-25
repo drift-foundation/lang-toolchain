@@ -38,6 +38,7 @@ from lang2.driftc.borrow_checker import (
 	places_overlap,
 )
 from lang2.driftc.method_registry import CallableDecl, CallableRegistry, CallableSignature, ModuleId, SelfMode
+from lang2.driftc.impl_index import GlobalImplIndex
 from lang2.driftc.method_resolver import MethodResolution, ResolutionError, resolve_method_call
 from lang2.driftc.core.iter_intrinsics import ensure_array_iter_struct, is_array_iter_struct
 from lang2.driftc.parser import ast as parser_ast
@@ -178,6 +179,7 @@ class TypeChecker:
 		call_signatures: Mapping[str, list[FnSignature]] | None = None,
 		signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
 		callable_registry: CallableRegistry | None = None,
+		impl_index: GlobalImplIndex | None = None,
 		visible_modules: Optional[Tuple[ModuleId, ...]] = None,
 		current_module: ModuleId = 0,
 	) -> TypeCheckResult:
@@ -3016,12 +3018,30 @@ class TypeChecker:
 							]
 						receiver_nominal = _unwrap_ref_type(recv_ty)
 						receiver_base, receiver_args = _struct_base_and_args(receiver_nominal)
-						candidates = callable_registry.get_method_candidates(
-							receiver_nominal_type_id=receiver_base,
-							name=expr.method_name,
-							visible_modules=visible_modules or (current_module,),
-							include_private_in=current_module,
-						)
+						if impl_index is not None:
+							candidates: list[CallableDecl] = []
+							hidden_candidates: list[tuple[CallableDecl, ImplMethodCandidate]] = []
+							visible_set = set(visible_modules or (current_module,))
+							for cand in impl_index.get_candidates(receiver_base, expr.method_name):
+								decl = callable_registry.get_by_fn_id(cand.fn_id)
+								if decl is None:
+									continue
+								if cand.is_pub:
+									if cand.def_module_id in visible_set:
+										candidates.append(decl)
+									else:
+										hidden_candidates.append((decl, cand))
+								elif cand.def_module_id == current_module:
+									candidates.append(decl)
+								else:
+									hidden_candidates.append((decl, cand))
+						else:
+							candidates = callable_registry.get_method_candidates(
+								receiver_nominal_type_id=receiver_base,
+								name=expr.method_name,
+								visible_modules=visible_modules or (current_module,),
+								include_private_in=current_module,
+							)
 						viable: List[MethodResolution] = []
 						type_arg_counts: set[int] = set()
 						saw_registry_only_with_type_args = False
@@ -3120,6 +3140,35 @@ class TypeChecker:
 								)
 
 						if not viable:
+							if not candidates and hidden_candidates:
+								mod_names: list[str] = []
+								notes: list[str] = []
+								for decl, cand in hidden_candidates:
+									mod = (
+										decl.fn_id.module
+										if decl.fn_id is not None and decl.fn_id.module
+										else str(cand.def_module_id)
+									)
+									mod_names.append(mod)
+									span = cand.method_loc or cand.impl_loc
+									if span and span.line is not None:
+										loc = f"{span.file}:{span.line}:{span.column}" if span.file else f"line {span.line}"
+										notes.append(f"candidate in module '{mod}' at {loc}")
+									else:
+										notes.append(f"candidate in module '{mod}'")
+								mod_list = ", ".join(sorted(set(mod_names)))
+								diagnostics.append(
+									Diagnostic(
+										message=(
+											f"method '{expr.method_name}' exists but is not visible here; "
+											f"candidates from modules: {mod_list}"
+										),
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+										notes=notes,
+									)
+								)
+								return record_expr(expr, self._unknown)
 							if type_arg_ids and type_arg_counts:
 								exp = ", ".join(str(n) for n in sorted(type_arg_counts))
 								raise ResolutionError(

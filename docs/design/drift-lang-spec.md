@@ -3247,6 +3247,10 @@ It records (minimum required set):
    - `entry_modules`: list of module ids that are allowed as cross-package import entry points
    - `import_notice`: optional string emitted once per build when an entry module is imported
 
+The manifest bytes are part of `pkg.dmp`; therefore any signature over `pkg.dmp`
+authenticates the manifest contents (including `surfaces`, `entry_modules`, and
+`import_notice`).
+
 It may additionally record tooling-level metadata such as:
 
 - `unsigned`: boolean (true when the package has no sidecar signature; local build outputs may be unsigned)
@@ -3280,8 +3284,13 @@ Signatures are stored as a sidecar file next to the package container:
 The sidecar is JSON and may contain multiple signatures (multiple keys/algorithms/rotations).
 
 Signatures cover the canonical **uncompressed** `pkg.dmp` bytes (the DMIR-PKG container bytes). Transport compression (e.g. `pkg.dmp.zst`) is outside the signed payload.
+Because signatures are computed over the raw `pkg.dmp` bytes, all container
+contents are signed: header + manifest + TOC + blobs.
 
 **Verification point.** Package signatures (when required by policy) are verified at module import / compilation time by the Drift toolchain. No runtime signature verification is performed by the generated program.
+
+**Policy rule.** When signatures are required by policy, consumers must reject
+any package whose manifest is not covered by a valid signature.
 
 ### 20.5. Security properties
 

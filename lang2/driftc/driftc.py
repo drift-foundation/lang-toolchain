@@ -55,6 +55,7 @@ from lang2.driftc.type_resolver import resolve_program_signatures
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.type_checker import TypeChecker
 from lang2.driftc.method_registry import CallableRegistry, CallableSignature, Visibility, SelfMode
+from lang2.driftc.impl_index import GlobalImplIndex, find_impl_method_conflicts
 from lang2.driftc.fake_decl import FakeDecl
 from lang2.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
 from lang2.driftc.packages.provisional_dmir_v0 import encode_module_payload_v0, decode_mir_funcs, type_table_fingerprint
@@ -1381,6 +1382,26 @@ def main(argv: list[str] | None = None) -> int:
 			visible_ids = tuple(visible_ids_list)
 			visible_modules_by_name[mod_name] = visible_ids
 
+	global_impl_index = GlobalImplIndex.from_module_exports(
+		module_exports=module_exports,
+		type_table=type_table,
+		module_ids=module_ids,
+	)
+	if isinstance(module_deps, dict):
+		visible_modules_by_name_set = {
+			mod: set(dep_set) | {mod} for mod, dep_set in module_deps.items()
+		}
+	else:
+		visible_modules_by_name_set = {}
+	type_diags.extend(
+		find_impl_method_conflicts(
+			module_exports=module_exports,
+			signatures_by_id=signatures_by_id,
+			type_table=type_table,
+			visible_modules_by_name=visible_modules_by_name_set,
+		)
+	)
+
 	typed_fns: dict[FunctionId, object] = {}
 	for fn_id, hir_block in normalized_hirs_by_id.items():
 		# Build param type map from signatures when available.
@@ -1398,6 +1419,7 @@ def main(argv: list[str] | None = None) -> int:
 			return_type=sig.return_type_id if sig is not None else None,
 			call_signatures=call_sigs_by_name,
 			callable_registry=callable_registry,
+			impl_index=global_impl_index,
 			visible_modules=visible_modules,
 			current_module=fn_module_id,
 			signatures_by_id=signatures_by_id,

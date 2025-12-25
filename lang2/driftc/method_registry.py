@@ -112,6 +112,7 @@ class CallableRegistry:
 		# Methods bucketed per module: module_id -> {(impl_target_type_id, name) -> [CallableDecl]}
 		self._methods_by_module: Dict[ModuleId, Dict[Tuple[TypeId, str], List[CallableDecl]]] = {}
 		self._by_id: Dict[CallableId, CallableDecl] = {}
+		self._by_fn_id: Dict[FunctionId, CallableDecl] = {}
 
 	def register_free_function(
 		self,
@@ -137,6 +138,8 @@ class CallableRegistry:
 			is_generic=is_generic,
 		)
 		self._by_id[callable_id] = decl
+		if fn_id is not None:
+			self._by_fn_id[fn_id] = decl
 		self._free_by_name.setdefault(name, []).append(decl)
 
 	def register_inherent_method(
@@ -169,6 +172,8 @@ class CallableRegistry:
 			is_generic=is_generic,
 		)
 		self._by_id[callable_id] = decl
+		if fn_id is not None:
+			self._by_fn_id[fn_id] = decl
 		bucket = self._methods_by_module.setdefault(module_id, {})
 		bucket.setdefault((impl_target_type_id, name), []).append(decl)
 
@@ -253,6 +258,9 @@ class CallableRegistry:
 
 	def get_by_id(self, callable_id: CallableId) -> CallableDecl:
 		return self._by_id[callable_id]
+
+	def get_by_fn_id(self, fn_id: FunctionId) -> CallableDecl | None:
+		return self._by_fn_id.get(fn_id)
 
 
 __all__ = [

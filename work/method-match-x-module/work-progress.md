@@ -11,6 +11,9 @@
   - predeclaring struct schemas before per-module lowering (prevents empty-field instantiations),
   - and including external modules in visibility deps.
 - `lang2-driver-suite` passes after updating method-resolution tests to use qualified impl targets.
+- Global impl index is built from per-module `ImplMeta` (attached to `module_exports`) and method resolution now queries that index.
+- Cross-module method/impl driver tests live in `lang2/tests/driver/tests/test_method_resolution_multimodule.py` and are green.
+- Link-time duplicate inherent method check runs before typecheck and is covered by the cross-module ambiguity fixture.
 
 ## Goal
 Enable method/impl matching across module boundaries using a workspace-wide impl index and call-site visibility, with deterministic ambiguity handling and production-grade diagnostics.
@@ -127,3 +130,43 @@ Coherence violation:
 ## After this
 - Add trait method lookup (dot-call via in-scope traits) + where-clause enforcement on the same impl index.
 - Then proceed to borrow/lifetime upgrades (NLL-lite/place-model expansion).
+
+## Next plan: Trait method lookup for dot-calls
+
+### Lookup order and determinism
+- For `x.m(...)`: inherent methods first, then trait methods from explicitly in-scope traits only.
+- If multiple viable candidates remain at the chosen stage: hard ambiguity error, grouped by trait + defining module.
+
+### In-scope traits
+- New module-level directive: `use trait <QualifiedTraitName>`.
+- The trait must be importable and exported; alias must be declared via `import ... as ...`.
+- Track `used_traits: list[TraitRef]` per module (trait id + optional span).
+
+### Indexes to build
+- `GlobalTraitIndex`:
+  - `traits_by_id: TraitId -> TraitDecl`
+  - `trait_method_sigs: (TraitId, method_name) -> MethodSig`
+- `GlobalTraitImplIndex`:
+  - key: `(trait_id, receiver_base_type_id)`
+  - value: `TraitImplCandidate` entries with impl id, def module, target template, type params/args, per-method fn_id + visibility, spans.
+- `trait_scope_by_module[module_id] -> list[TraitId]` in source order.
+
+### Trait lookup flow (only when inherent yields none)
+- For each in-scope trait with method `m`:
+  - find impls for `(trait_id, receiver_base)`
+  - unify receiver with impl template
+  - apply impl substitution + method instantiation (`_instantiate_sig`)
+  - filter by visibility (`is_pub` or same module)
+  - enforce requires/where-clauses (provable only)
+- Choose best candidate or emit ambiguity (group by trait + module).
+
+### Require/where enforcement (phase 1)
+- Support `require T is Trait` bounds only.
+- Candidate is applicable only if requirements are provable after full substitution.
+
+### Tests (minimum)
+1. Trait dot-call succeeds when trait is in scope.
+2. Trait not in scope -> no matching method.
+3. Inherent beats trait.
+4. Two traits in scope define `m` -> ambiguity listing both traits + modules.
+5. Require blocks a candidate -> no matching method.

@@ -232,6 +232,10 @@ SSA MIR is an internal compiler representation and is not signed. Implementation
 - Signature scope includes: DMIR version, module metadata, and full DMIR body.
 - SSA/backends are not signed artifacts; they must verify against the signed DMIR.
 
+Distribution packages (DMP/DMIR-PKG) are signed at the container level; the
+signature covers the container bytes, which include the DMIR blobs and the
+package manifest metadata.
+
 ## Surface → DMIR → SSA MIR examples (annotated)
 
 ### Example 1: ternary call

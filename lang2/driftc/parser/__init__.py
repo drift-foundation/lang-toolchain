@@ -20,7 +20,7 @@ from lang2.driftc import stage1 as H
 from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.diagnostics import Diagnostic
 from lang2.driftc.core.span import Span
-from lang2.driftc.core.types_core import TypeKind
+from lang2.driftc.core.types_core import TypeKind, TypeParamId
 from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 from lang2.driftc.core.function_id import FunctionId
 from lang2.driftc.core.types_core import (
@@ -31,6 +31,7 @@ from lang2.driftc.core.types_core import (
 )
 from lang2.driftc.core.type_resolve_common import resolve_opaque_type
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
+from lang2.driftc.impl_index import ImplMeta, ImplMethodMeta
 
 
 def _qualify_fn_name(module_id: str, name: str) -> str:
@@ -822,7 +823,11 @@ def parse_drift_files_to_hir(
 	merged, _origins = _merge_module_files(module_id, programs, diagnostics)
 
 	# Lower the merged program using the existing single-file pipeline.
-	return _lower_parsed_program_to_hir(merged, diagnostics=diagnostics)
+	func_hirs, sigs, fn_ids, table, excs, _impl_metas, diags = _lower_parsed_program_to_hir(
+		merged,
+		diagnostics=diagnostics,
+	)
+	return func_hirs, sigs, fn_ids, table, excs, diags
 
 
 def _merge_module_files(
@@ -976,9 +981,8 @@ def _merge_module_files(
 		merged.imports.extend(getattr(prog, "imports", []) or [])
 		merged.exports.extend(getattr(prog, "exports", []) or [])
 
-	# Merge implement blocks by target repr and de-duplicate methods.
+	# Merge implement blocks by target repr.
 	impls_by_key: dict[tuple[tuple | None, tuple], parser_ast.ImplementDef] = {}
-	first_method: dict[tuple[tuple | None, tuple, str], tuple[Path, object | None]] = {}
 	for path, prog in files:
 		for impl in getattr(prog, "implements", []) or []:
 			impl_type_params = list(getattr(impl, "type_params", []) or [])
@@ -1030,22 +1034,6 @@ def _merge_module_files(
 						)
 					)
 					continue
-				method_key = (trait_key, target_key, m.name)
-				if method_key in first_method:
-					first_path, first_loc = first_method[method_key]
-					impl_label = f"{trait_str} for {target_str}" if trait_str else target_str
-					diagnostics.extend(
-						_diag_duplicate(
-							kind=f"method for type '{impl_label}'",
-							name=m.name,
-							first_path=first_path,
-							first_loc=first_loc,
-							second_path=path,
-							second_loc=getattr(m, "loc", None),
-						)
-					)
-					continue
-				first_method[method_key] = (path, getattr(m, "loc", None))
 				dst.methods.append(m)
 				if trait_str:
 					symbol_name = f"{target_str}::{trait_str}::{m.name}"
@@ -1650,7 +1638,7 @@ def parse_drift_workspace_to_hir(
 		return {}, {}, {}, TypeTable(), {}, {}, {}, diagnostics
 
 	# Export interface summary (used by package emission and future tooling).
-	module_exports: dict[str, dict[str, list[str]]] = {}
+	module_exports: dict[str, dict[str, object]] = {}
 	for mid in merged_programs.keys():
 		vals = exports_values_by_module.get(mid, {})
 		types = exports_types_by_module.get(mid, {"structs": set(), "variants": set(), "exceptions": set()})
@@ -2096,16 +2084,18 @@ def parse_drift_workspace_to_hir(
 	exc_catalog: dict[str, int] = {}
 	fn_owner_module: dict[FunctionId, str] = {}
 	fn_symbol_by_id: dict[FunctionId, str] = {}
+	impls_by_module: dict[str, list[ImplMeta]] = {}
 
 	# Lower each module and qualify its callable symbols.
 	for mid, prog in merged_programs.items():
-		func_hirs, sigs, ids_by_name, _table, excs, diags = _lower_parsed_program_to_hir(
+		func_hirs, sigs, ids_by_name, _table, excs, impl_metas, diags = _lower_parsed_program_to_hir(
 			prog,
 			diagnostics=[],
 			type_table=shared_type_table,
 		)
 		diagnostics.extend(diags)
 		exc_catalog.update(excs)
+		impls_by_module[mid] = list(impl_metas)
 
 		local_free_fns = {fn.name for fn in getattr(prog, "functions", []) or []}
 		exported_values = exports_values_by_module.get(mid, {})
@@ -2126,6 +2116,12 @@ def parse_drift_workspace_to_hir(
 			# enforce visibility and (later) ABI-boundary rules consistently.
 			is_exported = (local_name in local_free_fns) and (local_name in exported_values) and (local_name != "main")
 			all_sigs[fn_id] = replace(sig, name=global_name, is_exported_entrypoint=is_exported)
+
+	# Attach impl metadata after lowering so downstream phases can build
+	# the global impl index without rescanning signatures.
+	for mid, impls in impls_by_module.items():
+		if mid in module_exports:
+			module_exports[mid]["impls"] = impls
 
 	# Materialize re-exported functions as trampoline entry points.
 	#
@@ -2617,7 +2613,15 @@ def _lower_parsed_program_to_hir(
 	*,
 	diagnostics: list[Diagnostic] | None = None,
 	type_table: TypeTable | None = None,
-) -> Tuple[Dict[FunctionId, H.HBlock], Dict[FunctionId, FnSignature], Dict[str, List[FunctionId]], "TypeTable", Dict[str, int], List[Diagnostic]]:
+) -> Tuple[
+	Dict[FunctionId, H.HBlock],
+	Dict[FunctionId, FnSignature],
+	Dict[str, List[FunctionId]],
+	"TypeTable",
+	Dict[str, int],
+	List[ImplMeta],
+	List[Diagnostic],
+]:
 	"""
 	Lower an already-parsed `Program` to HIR/signatures/type table.
 
@@ -2630,11 +2634,10 @@ def _lower_parsed_program_to_hir(
 	fn_ids_by_name: Dict[str, List[FunctionId]] = {}
 	decls: list[_FrontendDecl] = []
 	signatures: Dict[FunctionId, FnSignature] = {}
+	impl_metas: list[ImplMeta] = []
 	lowerer = AstToHIR()
 	lowerer._module_name = module_id
 	from lang2.driftc.traits.world import build_trait_world
-	# Track method keys to prevent duplicate method bodies within the same impl.
-	method_keys: set[tuple[tuple | None, tuple, str]] = set()  # (trait_key, impl_target_key, method_name)
 	module_function_names: set[str] = {fn.name for fn in getattr(prog, "functions", []) or []}
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
 	struct_defs = list(getattr(prog, "structs", []) or [])
@@ -2889,6 +2892,20 @@ def _lower_parsed_program_to_hir(
 			name=f"__impl_{module_id}::{impl_trait_str or 'inherent'}::{impl_target_str}",
 			ordinal=impl_index,
 		)
+		impl_param_ids = {name: TypeParamId(impl_owner, idx) for idx, name in enumerate(impl_type_params)}
+		impl_target_type_id = resolve_opaque_type(
+			impl.target,
+			type_table,
+			module_id=module_id,
+			type_params=impl_param_ids,
+		)
+		impl_meta = ImplMeta(
+			impl_id=impl_index,
+			def_module=module_id,
+			target_type_id=impl_target_type_id,
+			loc=Span.from_loc(getattr(impl, "loc", None)),
+			methods=[],
+		)
 		for fn in impl.methods:
 			# Note: receiver shape/name/type are semantic rules enforced by the
 			# typecheck phase. The parser adapter stays structural-only here so
@@ -2954,22 +2971,18 @@ def _lower_parsed_program_to_hir(
 					)
 				)
 				continue
-			key = (trait_key, target_key, fn.name)
-			if key in method_keys:
-				impl_label = f"{trait_str} for {target_str}" if trait_str else target_str
-				diagnostics.append(
-					Diagnostic(
-						message=f"duplicate method definition '{fn.name}' for type '{impl_label}'",
-						severity="error",
-						span=Span.from_loc(getattr(fn, "loc", None)),
-					)
-				)
-				continue
-			method_keys.add(key)
 			ordinal = name_ord.get(symbol_name, 0)
 			name_ord[symbol_name] = ordinal + 1
 			fn_id = FunctionId(module=module_id, name=symbol_name, ordinal=ordinal)
 			fn_ids_by_name.setdefault(symbol_name, []).append(fn_id)
+			impl_meta.methods.append(
+				ImplMethodMeta(
+					fn_id=fn_id,
+					name=fn.name,
+					is_pub=bool(getattr(fn, "is_pub", False)),
+					loc=Span.from_loc(getattr(fn, "loc", None)),
+				)
+			)
 			decls.append(
 				_FrontendDecl(
 					fn_id,
@@ -3027,6 +3040,7 @@ def _lower_parsed_program_to_hir(
 			else:
 				hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
 			func_hirs[fn_id] = hir_block
+		impl_metas.append(impl_meta)
 	# Build signatures with resolved TypeIds from parser decls.
 	from lang2.driftc.type_resolver import resolve_program_signatures
 
@@ -3045,7 +3059,7 @@ def _lower_parsed_program_to_hir(
 		prev_schemas = {}
 	prev_schemas.update(exception_schemas)
 	type_table.exception_schemas = prev_schemas
-	return func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, diagnostics
+	return func_hirs, signatures, fn_ids_by_name, type_table, exception_catalog, impl_metas, diagnostics
 
 
 def parse_drift_to_hir(path: Path) -> Tuple[Dict[FunctionId, H.HBlock], Dict[FunctionId, FnSignature], Dict[str, List[FunctionId]], "TypeTable", Dict[str, int], List[Diagnostic]]:
@@ -3070,7 +3084,11 @@ def parse_drift_to_hir(path: Path) -> Tuple[Dict[FunctionId, H.HBlock], Dict[Fun
 			raw=err,
 		)
 		return {}, {}, {}, TypeTable(), {}, [Diagnostic(message=str(err), severity="error", span=span)]
-	return _lower_parsed_program_to_hir(prog, diagnostics=[])
+	func_hirs, sigs, fn_ids, table, excs, _impl_metas, diags = _lower_parsed_program_to_hir(
+		prog,
+		diagnostics=[],
+	)
+	return func_hirs, sigs, fn_ids, table, excs, diags
 
 
 __all__ = ["parse_drift_to_hir", "parse_drift_files_to_hir", "parse_drift_workspace_to_hir"]

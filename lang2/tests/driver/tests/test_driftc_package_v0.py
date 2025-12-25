@@ -1536,6 +1536,51 @@ fn main() returns Int {
 	assert "package_sha256 mismatch" in payload["diagnostics"][0]["message"]
 
 
+def test_driftc_rejects_manifest_tamper_when_signatures_required(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	signed = _make_signed_package(tmp_path)
+
+	def patch_manifest(old: bytes) -> bytes:
+		needle = b"\"package_version\":\"0.0.0\""
+		if needle not in old:
+			raise ValueError("expected package_version in manifest")
+		return old.replace(needle, b"\"package_version\":\"0.0.1\"")
+
+	_patch_pkg_manifest_bytes_same_len(signed.pkg_path, patch_manifest)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import acme.lib as lib
+
+fn main() returns Int {
+	return lib.add(40, 2)
+}
+""".lstrip(),
+	)
+	rc, payload = _run_driftc_json(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--trust-store",
+			str(signed.trust_path),
+			"--require-signatures",
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0
+	assert payload["diagnostics"][0]["phase"] == "package"
+	assert "package_sha256 mismatch" in payload["diagnostics"][0]["message"]
+
+
 def test_driftc_rejects_sidecar_invalid_base64(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
 	sidecar = Path(str(signed.pkg_path) + ".sig")
