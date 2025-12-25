@@ -433,6 +433,23 @@ class TypeChecker:
 				msg = f"{msg} (required by {label})"
 			return msg
 
+		def _pick_best_failure(failures: list[ProofFailure]) -> ProofFailure | None:
+			if not failures:
+				return None
+			priority = {
+				ProofFailureReason.NO_IMPL: 0,
+				ProofFailureReason.AMBIGUOUS_IMPL: 1,
+				ProofFailureReason.UNKNOWN: 2,
+			}
+			def _key(f: ProofFailure) -> tuple[int, str, str, str]:
+				return (
+					priority.get(f.reason, 9),
+					_trait_label(f.obligation.trait),
+					_type_key_label(f.obligation.subject),
+					f.obligation.origin.label or "",
+				)
+			return sorted(failures, key=_key)[0]
+
 		def _require_rank(expr: parser_ast.TraitExpr | None) -> tuple[bool, int]:
 			if expr is None:
 				return True, 0
@@ -880,7 +897,7 @@ class TypeChecker:
 			world = None
 			applicable: List[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			ranks: Dict[int, tuple[bool, int]] = {}
-			require_failure: ProofFailure | None = None
+			require_failures: list[ProofFailure] = []
 			for decl, sig_inst, inst_subst in viable:
 				fn_id = _fn_id_for_decl(decl)
 				if fn_id is None:
@@ -923,26 +940,26 @@ class TypeChecker:
 					ranks[decl.callable_id] = _require_rank(req)
 				else:
 					saw_require_failed = True
-					if require_failure is None:
-						origin = ObligationOrigin(
-							kind=ObligationOriginKind.CALLEE_REQUIRE,
-							label=f"function '{name}'",
-							span=Span.from_loc(getattr(req, "loc", None)),
-						)
-						failure = _first_obligation_failure(
-							req_expr=req,
-							subst=subst,
-							origin=origin,
-							span=call_type_args_span or Span(),
-							env=env,
-							world=world,
-						)
-						if failure is not None:
-							require_failure = failure
+					origin = ObligationOrigin(
+						kind=ObligationOriginKind.CALLEE_REQUIRE,
+						label=f"function '{name}'",
+						span=Span.from_loc(getattr(req, "loc", None)),
+					)
+					failure = _first_obligation_failure(
+						req_expr=req,
+						subst=subst,
+						origin=origin,
+						span=call_type_args_span or Span(),
+						env=env,
+						world=world,
+					)
+					if failure is not None:
+						require_failures.append(failure)
 			if not applicable:
 				if saw_require_failed:
-					if require_failure is not None:
-						raise ResolutionError(_format_failure_message(require_failure), span=call_type_args_span)
+					failure = _pick_best_failure(require_failures)
+					if failure is not None:
+						raise ResolutionError(_format_failure_message(failure), span=call_type_args_span)
 					raise ResolutionError(f"trait requirements not met for function '{name}'")
 				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
 			if len(applicable) == 1:
@@ -2560,12 +2577,13 @@ class TypeChecker:
 									span=call_type_args_span,
 								)
 							if trait_require_failures:
-								failure = trait_require_failures[0]
+								failure = _pick_best_failure(trait_require_failures)
 								diagnostics.append(
 									Diagnostic(
-										message=_format_failure_message(failure),
+										message=_format_failure_message(failure) if failure is not None else "trait requirements not met",
 										severity="error",
-										span=failure.obligation.span or getattr(expr, "loc", Span()),
+										span=(failure.obligation.span if failure is not None else None)
+										or getattr(expr, "loc", Span()),
 									)
 								)
 								return record_expr(expr, self._unknown)
@@ -4344,16 +4362,18 @@ class TypeChecker:
 									span=call_type_args_span,
 								)
 							if trait_require_failures:
-								failure = trait_require_failures[0]
+								failure = _pick_best_failure(trait_require_failures)
 								raise ResolutionError(
-									_format_failure_message(failure),
-									span=failure.obligation.span or getattr(expr, "loc", Span()),
+									_format_failure_message(failure) if failure is not None else "trait requirements not met",
+									span=(failure.obligation.span if failure is not None else None)
+									or getattr(expr, "loc", Span()),
 								)
 							if require_failures:
-								failure = require_failures[0]
+								failure = _pick_best_failure(require_failures)
 								raise ResolutionError(
-									_format_failure_message(failure),
-									span=failure.obligation.span or getattr(expr, "loc", Span()),
+									_format_failure_message(failure) if failure is not None else "trait requirements not met",
+									span=(failure.obligation.span if failure is not None else None)
+									or getattr(expr, "loc", Span()),
 								)
 							raise ResolutionError(
 								f"no matching method '{expr.method_name}' for receiver {recv_ty} and args {arg_types}",

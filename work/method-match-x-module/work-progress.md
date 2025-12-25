@@ -19,6 +19,7 @@
 - T2 trait dot-call fallback is implemented and covered by driver tests in `lang2/tests/driver/tests/test_trait_method_resolution.py` (scope required, inherent beats trait, ambiguity, require blocks, private impl visibility).
 - Trait bounds now act as ambient assumptions inside a generic function body and are enforced at call sites (with `use trait` still controlling dot-call scope). Tests cover bound inference, bound failure, and dot-call inside bounded functions.
 - T3 diagnostics tightened: failed requirements now report the concrete `Type is Trait` obligation (with “required by …” context) instead of a generic “trait requirements not met”, and method-resolution falls back to trait matches only after inherent failure.
+- Added driver regression `lang2/tests/driver/tests/test_method_require_diagnostics.py` to ensure “candidates exist but require failed” yields a `requirement not satisfied` message.
 - Spec clarification added: inside a trait, an untyped `self` is implicitly `self: Self`.
 - Added a local-vs-cross-module coverage test (`test_local_impl_wins_over_unimported_impl`) in `lang2/tests/driver/tests/test_method_resolution_multimodule.py`.
 - Borrow checker NLL-lite cleanup complete: per-ref live-region tracking, target-use collection, and updated e2e case `borrow_nll_last_use_allows_write`.
