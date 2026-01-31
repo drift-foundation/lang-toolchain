@@ -7,8 +7,7 @@ fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	var res = t.join();
 	return match res {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Failed(_e) => { 2 },
 				Busy => { 1 },
 				Cancelled => { 1 },

@@ -11,8 +11,7 @@ module main
 		var res = t.join();
 		var v = counter.get();
 	return match res {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Cancelled => {
 					var out = 2;
 					if v == 0 {

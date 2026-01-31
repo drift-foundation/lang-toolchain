@@ -1,6 +1,7 @@
 module lang.thread
 
 import std.core as core;
+import std.mem as mem;
 
 export {
 	VtHandle,
@@ -29,7 +30,23 @@ export {
 	test_eventfd_create,
 	test_eventfd_write,
 	test_timerfd_create,
-	test_timerfd_set
+	test_timerfd_set,
+	io_open,
+	io_close,
+	io_read,
+	io_write,
+	io_errno,
+	net_listen,
+	net_accept,
+	net_connect,
+	net_listener_port,
+	net_udp_local_port,
+	net_udp_bind,
+	net_udp_bind_v6,
+	net_udp_send_to,
+	net_udp_send_to_v6,
+	net_udp_recv_from,
+	net_udp_recv_from_v6
 };
 
 pub type VtHandle = Int;
@@ -50,7 +67,7 @@ pub type ReactorHandle = Int;
 
 @intrinsic pub fn exec_default_get() nothrow -> ExecutorHandle;
 @intrinsic pub fn exec_default_set(exec: ExecutorHandle) nothrow -> Void;
-@intrinsic pub fn exec_create(min_threads: Int, max_threads: Int, queue_limit: Int, timeout_ms: Int, saturation: Int) nothrow -> ExecutorHandle;
+@intrinsic pub fn exec_create(min_threads: Int, max_threads: Int, queue_limit: Int, timeout_ms: Int, saturation: Int, stack_bytes: Int) nothrow -> ExecutorHandle;
 @intrinsic pub fn exec_submit(exec: ExecutorHandle, vt: VtHandle) nothrow -> Int;
 @intrinsic pub fn exec_submit_test_override(code: Int) nothrow -> Void;
 
@@ -62,3 +79,19 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn test_eventfd_write(fd: Int, value: Int) nothrow -> Void;
 @intrinsic pub fn test_timerfd_create() nothrow -> Int;
 @intrinsic pub fn test_timerfd_set(fd: Int, delay_ms: Int) nothrow -> Void;
+@intrinsic pub fn io_open(path: String, flags: Int, mode: Int) nothrow -> Int;
+@intrinsic pub fn io_close(fd: Int) nothrow -> Int;
+@intrinsic pub fn io_read(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
+@intrinsic pub fn io_write(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
+@intrinsic pub fn io_errno() nothrow -> Int;
+@intrinsic pub fn net_listen(ip: &String, port: Int) nothrow -> Int;
+@intrinsic pub fn net_accept(fd: Int) nothrow -> Int;
+@intrinsic pub fn net_connect(ip: &String, port: Int) nothrow -> Int;
+@intrinsic pub fn net_listener_port(fd: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_local_port(fd: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_bind(ip: &String, port: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_bind_v6(ip: &String, port: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_send_to(fd: Int, ip: &String, port: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_send_to_v6(fd: Int, ip: &String, port: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
+@intrinsic pub fn net_udp_recv_from(fd: Int, buf: mem.Ptr<Byte>, len: Int, out_ip: &mut String, out_port: &mut Int) nothrow -> Int;
+@intrinsic pub fn net_udp_recv_from_v6(fd: Int, buf: mem.Ptr<Byte>, len: Int, out_ip: &mut String, out_port: &mut Int) nothrow -> Int;

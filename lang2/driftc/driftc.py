@@ -107,7 +107,7 @@ from lang2.driftc.traits.world import TypeKey, TraitKey, type_key_from_typeid
 from lang2.driftc.traits.solver import Env as TraitEnv, ProofStatus, prove_is
 from lang2.codegen.llvm import lower_module_to_llvm
 from lang2.codegen.llvm.test_utils import host_word_bits
-from lang2.drift_core.runtime import get_runtime_sources
+from lang2.language_runtime import get_runtime_sources
 from lang2.driftc.parser import parse_drift_to_hir, parse_drift_files_to_hir, parse_drift_workspace_to_hir
 from lang2.driftc.module_lowered import flatten_modules
 from lang2.driftc.type_resolver import resolve_program_signatures
@@ -646,23 +646,48 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 	call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
 	if not isinstance(call_info, dict):
 		return
-	callsite_to_node: dict[int, int] = {}
+	callsite_to_nodes: dict[int, list[int]] = {}
 	for node_id, call in call_nodes.items():
 		csid = getattr(call, "callsite_id", None)
 		if isinstance(csid, int):
-			callsite_to_node[csid] = node_id
+			callsite_to_nodes.setdefault(csid, []).append(node_id)
 	for key, info in call_info.items():
 		if info.target.kind is not CallTargetKind.INTRINSIC:
 			continue
 		kind = info.target.intrinsic
 		if kind is None:
 			raise AssertionError("intrinsic call missing kind (checker bug)")
-		node_id = callsite_to_node.get(key)
-		call = call_nodes.get(node_id) if node_id is not None else None
+		node_ids = callsite_to_nodes.get(key) or []
+		call = None
+		if node_ids:
+			call = call_nodes.get(node_ids[0])
+			if len(node_ids) > 1:
+				def _call_name(n: object) -> str | None:
+					if isinstance(n, H.HCall) and isinstance(n.fn, H.HVar):
+						return n.fn.name
+					if isinstance(n, H.HMethodCall):
+						return n.method_name
+					return None
+				for node_id in node_ids:
+					cand = call_nodes.get(node_id)
+					name = _call_name(cand)
+					if kind is IntrinsicKind.STRING_BYTE_AT and name == "string_byte_at":
+						call = cand
+						break
+					if kind is IntrinsicKind.BYTE_LENGTH and name == "byte_length":
+						call = cand
+						break
 		if call is None:
 			raise AssertionError(f"intrinsic CallInfo without call node (checker bug): fn={function_symbol(getattr(typed_fn, 'fn_id', None))} callsite_id={key} kind={kind.value}")
 		kwargs = getattr(call, "kwargs", None) or []
 		if kind is IntrinsicKind.BYTE_LENGTH:
+			if not isinstance(call, (H.HCall, H.HMethodCall)):
+				continue
+			if isinstance(call, H.HCall):
+				if not (isinstance(call.fn, H.HVar) and call.fn.name == "byte_length"):
+					continue
+			if isinstance(call, H.HMethodCall) and call.method_name != "byte_length":
+				continue
 			if kwargs or len(call.args) != 1:
 				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
 			continue
@@ -675,10 +700,17 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
 			continue
 		if kind is IntrinsicKind.STRING_BYTE_AT:
+			if not isinstance(call, (H.HCall, H.HMethodCall)):
+				continue
+			if isinstance(call, H.HCall):
+				if not (isinstance(call.fn, H.HVar) and call.fn.name == "string_byte_at"):
+					continue
+			if isinstance(call, H.HMethodCall) and call.method_name != "string_byte_at":
+				continue
 			if kwargs or len(call.args) != 2:
 				raise AssertionError("string_byte_at(...) arity mismatch reached validation (checker bug)")
 			continue
-		if kind in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2):
+		if kind in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
 			if kwargs or len(call.args) != 1:
 				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
 			continue
@@ -1355,6 +1387,8 @@ def compile_stubbed_funcs(
 	prelude_enabled: bool = True,
 	emit_instantiation_index: Path | None = None,
 	enforce_entrypoint: bool = False,
+	entry_module: str = "main",
+	entry_name: str = "main",
 	allow_unsafe: bool = True,
 ) -> (
 	Dict[FunctionId, M.MirFunc]
@@ -1755,6 +1789,10 @@ def compile_stubbed_funcs(
 			return inner
 		if td.kind is TypeKind.ARRAY:
 			return shared_type_table.array_base_id()
+		if td.kind is TypeKind.VARIANT:
+			inst = shared_type_table.get_variant_instance(impl_tid)
+			if inst is not None:
+				return inst.base_id
 		return impl_tid
 	def _template_sig_for(sig: FnSignature) -> CallableTemplateSignature | None:
 		if not (sig.type_params or getattr(sig, "impl_type_params", [])):
@@ -2559,9 +2597,11 @@ def compile_stubbed_funcs(
 			for node_id, res in call_resolutions.items():
 				csid = node_to_callsite.get(node_id, -1)
 				info_key = csid
-				if info_key in call_info_map:
-					continue
 				if isinstance(res, MethodResolution):
+					if info_key in call_info_map:
+						info = call_info_map.get(info_key)
+						if info is not None and info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
+							continue
 					decl = res.decl
 					target_fn_id = decl.fn_id
 					if target_fn_id is None:
@@ -2662,8 +2702,14 @@ def compile_stubbed_funcs(
 		fn_decls_by_id=signatures_by_id.keys(),
 	)
 	if enforce_entrypoint and signatures_by_id and shared_type_table is not None:
-		from lang2.driftc.type_checker import validate_entrypoint_main
-		validate_entrypoint_main(signatures_by_id, shared_type_table, checked.diagnostics)
+		from lang2.driftc.type_checker import validate_entrypoint
+		validate_entrypoint(
+			signatures_by_id,
+			shared_type_table,
+			checked.diagnostics,
+			entry_module=entry_module,
+			entry_name=entry_name,
+		)
 	if type_diags:
 		checked.diagnostics.extend(type_diags)
 	typevar_diags: list[Diagnostic] = []
@@ -2993,10 +3039,15 @@ def compile_stubbed_funcs(
 				can_throw_by_id=declared_by_id,
 				return_type=sig.return_type_id if sig is not None else None,
 				binding_names=getattr(typed_fns_by_id.get(fn_id), "binding_names", None),
+				binding_types=getattr(typed_fns_by_id.get(fn_id), "binding_types", None),
 				typed_mode=typed_mode,
 			)
 			lower.lower_function_body(hir_norm)
 			builder.func.local_types = dict(lower._local_types)
+			unknown_ty = shared_type_table.ensure_unknown()
+			for local_name in builder.func.locals:
+				if local_name not in builder.func.local_types:
+					builder.func.local_types[local_name] = unknown_ty
 			for spec in lower.synth_sig_specs():
 				if spec.kind == "hidden_lambda":
 					continue
@@ -3008,6 +3059,10 @@ def compile_stubbed_funcs(
 				extra_id = getattr(extra, "fn_id", None)
 				if extra_id is None:
 					raise AssertionError(f"extra func missing fn_id for '{extra.name}' (stage2 bug)")
+				extra.local_types = dict(getattr(extra, "local_types", {}) or {})
+				for local_name in extra.locals:
+					if local_name not in extra.local_types:
+						extra.local_types[local_name] = unknown_ty
 				mir_funcs_by_id[extra_id] = extra
 				if extra_id is not None and extra_id not in checked.fn_infos_by_id:
 					sig = signatures_by_id.get(extra_id)
@@ -3038,9 +3093,33 @@ def compile_stubbed_funcs(
 		if spec.fn_id in mir_funcs_by_id:
 			continue
 		lam = copy.deepcopy(spec.lambda_expr)
+		capture_name_to_id: dict[str, int] = {}
 		if not getattr(lam, "captures", None):
 			discovery = discover_captures(lam)
 			lam.captures = discovery.captures
+		if not lam.captures and getattr(lam, "explicit_captures", None):
+			kind_map = {
+				"ref": C.HCaptureKind.REF,
+				"ref_mut": C.HCaptureKind.REF_MUT,
+				"copy": C.HCaptureKind.COPY,
+				"move": C.HCaptureKind.MOVE,
+				"auto": C.HCaptureKind.REF,
+			}
+			explicit_list: list[C.HCapture] = []
+			for cap in lam.explicit_captures or []:
+				if cap.binding_id is None:
+					continue
+				kind = kind_map.get(cap.kind)
+				if kind is None:
+					continue
+				explicit_list.append(
+					C.HCapture(
+						kind=kind,
+						key=C.HCaptureKey(root_local=cap.binding_id, proj=()),
+						span=cap.span,
+					)
+				)
+			lam.captures = explicit_list
 		if lam.captures:
 			lam.captures = sort_captures(lam.captures)
 		capture_id_map: dict[int, int] = {}
@@ -3137,6 +3216,7 @@ def compile_stubbed_funcs(
 					for item in obj.values():
 						_remap_ids(item)
 
+			capture_name_to_id: dict[str, int] = {}
 			if lam.explicit_captures:
 				for cap in lam.explicit_captures:
 					_remap_ids(cap)
@@ -3144,7 +3224,6 @@ def compile_stubbed_funcs(
 				_remap_ids(lam.body_expr)
 			if lam.body_block is not None:
 				_remap_ids(lam.body_block)
-			capture_name_to_id: dict[str, int] = {}
 			for cap in lam.explicit_captures or []:
 				if cap.name and getattr(cap, "binding_id", None) is not None:
 					capture_name_to_id[cap.name] = int(cap.binding_id)
@@ -3243,6 +3322,274 @@ def compile_stubbed_funcs(
 		else:
 			raise AssertionError("hidden lambda missing body (checker bug)")
 		lambda_body = normalize_hir(lambda_body)
+		def _apply_capture_names_post(obj: object, name_map: dict[str, int]) -> None:
+			if obj is None:
+				return
+			if isinstance(obj, H.HVar):
+				if obj.name in name_map:
+					target_id = name_map[obj.name]
+					if getattr(obj, "binding_id", None) != target_id:
+						obj.binding_id = target_id
+			elif isinstance(obj, H.HPlaceExpr):
+				base = obj.base
+				if (
+					isinstance(base, H.HVar)
+					and base.name in name_map
+				):
+					target_id = name_map[base.name]
+					if getattr(base, "binding_id", None) != target_id:
+						base.binding_id = target_id
+			if isinstance(obj, H.HExpr):
+				for child in obj.__dict__.values():
+					_apply_capture_names_post(child, name_map)
+			elif isinstance(obj, H.HStmt):
+				for child in obj.__dict__.values():
+					_apply_capture_names_post(child, name_map)
+			elif isinstance(obj, H.HBlock):
+				for stmt in obj.statements:
+					_apply_capture_names_post(stmt, name_map)
+			elif isinstance(obj, list):
+				for item in obj:
+					_apply_capture_names_post(item, name_map)
+			elif isinstance(obj, dict):
+				for item in obj.values():
+					_apply_capture_names_post(item, name_map)
+
+		if capture_name_to_id:
+			_apply_capture_names_post(lambda_body, capture_name_to_id)
+		capture_id_set = set(capture_id_map.values()) | set(capture_id_map.keys())
+		if capture_name_to_id:
+			capture_id_set.update(capture_name_to_id.values())
+		if capture_id_set:
+			def _remap_lambda_local_collisions(block: H.HBlock, capture_ids: set[int]) -> None:
+				max_id = 0
+				for stmt in block.statements:
+					if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
+						max_id = max(max_id, int(stmt.binding_id))
+				if capture_ids:
+					max_id = max(max_id, max(capture_ids))
+				remap_by_name: dict[tuple[int, str], int] = {}
+				def _scan_expr(expr: H.HExpr) -> None:
+					if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+						for arm in expr.arms:
+							for s in arm.block.statements:
+								_scan_stmt(s)
+						if expr.scrutinee is not None:
+							_scan_expr(expr.scrutinee)
+					elif hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+						_scan_expr(expr.attempt)
+						for arm in expr.arms:
+							for s in arm.block.statements:
+								_scan_stmt(s)
+							if arm.result is not None:
+								_scan_expr(arm.result)
+					elif isinstance(expr, H.HCall):
+						_scan_expr(expr.fn)
+						for a in expr.args:
+							_scan_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_scan_expr(kw.value)
+					elif isinstance(expr, H.HMethodCall):
+						_scan_expr(expr.receiver)
+						for a in expr.args:
+							_scan_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_scan_expr(kw.value)
+					elif isinstance(expr, H.HInvoke):
+						_scan_expr(expr.callee)
+						for a in expr.args:
+							_scan_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_scan_expr(kw.value)
+					elif isinstance(expr, H.HBinary):
+						_scan_expr(expr.left)
+						_scan_expr(expr.right)
+					elif isinstance(expr, H.HUnary):
+						_scan_expr(expr.expr)
+					elif isinstance(expr, H.HTernary):
+						_scan_expr(expr.cond)
+						_scan_expr(expr.then_expr)
+						_scan_expr(expr.else_expr)
+					elif isinstance(expr, H.HField):
+						_scan_expr(expr.subject)
+					elif isinstance(expr, H.HIndex):
+						_scan_expr(expr.subject)
+						_scan_expr(expr.index)
+					elif isinstance(expr, H.HBorrow):
+						_scan_expr(expr.subject)
+					elif hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+						_scan_expr(expr.subject)
+					elif hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+						_scan_expr(expr.subject)
+					elif isinstance(expr, H.HArrayLiteral):
+						for el in expr.elements:
+							_scan_expr(el)
+					elif isinstance(expr, H.HDVInit):
+						for a in expr.args:
+							_scan_expr(a)
+					elif isinstance(expr, H.HExceptionInit):
+						for a in expr.pos_args:
+							_scan_expr(a)
+						for kw in getattr(expr, "kw_args", []) or []:
+							_scan_expr(kw.value)
+				def _scan_stmt(stmt: H.HStmt) -> None:
+					nonlocal max_id
+					if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
+						bid = int(stmt.binding_id)
+						if bid in capture_ids:
+							max_id += 1
+							remap_by_name[(bid, stmt.name)] = max_id
+							stmt.binding_id = max_id
+					elif isinstance(stmt, H.HLet):
+						_scan_expr(stmt.value)
+					elif isinstance(stmt, H.HExprStmt):
+						_scan_expr(stmt.expr)
+					elif isinstance(stmt, H.HIf):
+						for s in stmt.then_block.statements:
+							_scan_stmt(s)
+						if stmt.else_block:
+							for s in stmt.else_block.statements:
+								_scan_stmt(s)
+					elif isinstance(stmt, H.HLoop):
+						for s in stmt.body.statements:
+							_scan_stmt(s)
+					elif isinstance(stmt, H.HTry):
+						for s in stmt.body.statements:
+							_scan_stmt(s)
+						for arm in stmt.catches:
+							for s in arm.block.statements:
+								_scan_stmt(s)
+					elif isinstance(stmt, H.HBlock):
+						for s in stmt.statements:
+							_scan_stmt(s)
+					elif hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+						for s in stmt.block.statements:
+							_scan_stmt(s)
+				for s in block.statements:
+					_scan_stmt(s)
+
+				if not remap_by_name:
+					return
+
+				def _remap_expr(expr: H.HExpr) -> None:
+					if isinstance(expr, H.HVar):
+						bid = getattr(expr, "binding_id", None)
+						if bid is not None:
+							key = (int(bid), expr.name)
+							if key in remap_by_name:
+								expr.binding_id = remap_by_name[key]
+					elif isinstance(expr, H.HPlaceExpr):
+						base = expr.base
+						if isinstance(base, H.HVar):
+							bid = getattr(base, "binding_id", None)
+							if bid is not None:
+								key = (int(bid), base.name)
+								if key in remap_by_name:
+									base.binding_id = remap_by_name[key]
+						for proj in expr.projections:
+							if isinstance(proj, H.HPlaceIndex):
+								_remap_expr(proj.index)
+					elif isinstance(expr, H.HBinary):
+						_remap_expr(expr.left)
+						_remap_expr(expr.right)
+					elif isinstance(expr, H.HUnary):
+						_remap_expr(expr.expr)
+					elif isinstance(expr, H.HTernary):
+						_remap_expr(expr.cond)
+						_remap_expr(expr.then_expr)
+						_remap_expr(expr.else_expr)
+					elif isinstance(expr, H.HCall):
+						_remap_expr(expr.fn)
+						for a in expr.args:
+							_remap_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_remap_expr(kw.value)
+					elif isinstance(expr, H.HMethodCall):
+						_remap_expr(expr.receiver)
+						for a in expr.args:
+							_remap_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_remap_expr(kw.value)
+					elif isinstance(expr, H.HInvoke):
+						_remap_expr(expr.callee)
+						for a in expr.args:
+							_remap_expr(a)
+						for kw in getattr(expr, "kwargs", []) or []:
+							_remap_expr(kw.value)
+					elif isinstance(expr, H.HField):
+						_remap_expr(expr.subject)
+					elif isinstance(expr, H.HIndex):
+						_remap_expr(expr.subject)
+						_remap_expr(expr.index)
+					elif isinstance(expr, H.HBorrow):
+						_remap_expr(expr.subject)
+					elif hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+						_remap_expr(expr.subject)
+					elif hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+						_remap_expr(expr.subject)
+					elif isinstance(expr, H.HArrayLiteral):
+						for el in expr.elements:
+							_remap_expr(el)
+					elif isinstance(expr, H.HDVInit):
+						for a in expr.args:
+							_remap_expr(a)
+					elif isinstance(expr, H.HExceptionInit):
+						for a in expr.pos_args:
+							_remap_expr(a)
+						for kw in getattr(expr, "kw_args", []) or []:
+							_remap_expr(kw.value)
+					elif hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+						_remap_expr(expr.attempt)
+						for arm in expr.arms:
+							for s in arm.block.statements:
+								_remap_stmt(s)
+							if arm.result is not None:
+								_remap_expr(arm.result)
+					elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+						_remap_expr(expr.scrutinee)
+						for arm in expr.arms:
+							for s in arm.block.statements:
+								_remap_stmt(s)
+							if arm.result is not None:
+								_remap_expr(arm.result)
+
+				def _remap_stmt(stmt: H.HStmt) -> None:
+					if isinstance(stmt, H.HLet):
+						_remap_expr(stmt.value)
+					elif isinstance(stmt, H.HAssign):
+						_remap_expr(stmt.target)
+						_remap_expr(stmt.value)
+					elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+						_remap_expr(stmt.value)
+					elif isinstance(stmt, H.HExprStmt):
+						_remap_expr(stmt.expr)
+					elif isinstance(stmt, H.HIf):
+						_remap_expr(stmt.cond)
+						for s in stmt.then_block.statements:
+							_remap_stmt(s)
+						if stmt.else_block:
+							for s in stmt.else_block.statements:
+								_remap_stmt(s)
+					elif isinstance(stmt, H.HLoop):
+						for s in stmt.body.statements:
+							_remap_stmt(s)
+					elif isinstance(stmt, H.HTry):
+						for s in stmt.body.statements:
+							_remap_stmt(s)
+						for arm in stmt.catches:
+							for s in arm.block.statements:
+								_remap_stmt(s)
+					elif isinstance(stmt, H.HBlock):
+						for s in stmt.statements:
+							_remap_stmt(s)
+					elif hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+						for s in stmt.block.statements:
+							_remap_stmt(s)
+
+				for s in block.statements:
+					_remap_stmt(s)
+
+			_remap_lambda_local_collisions(lambda_body, capture_id_set)
 		lam_param_names = [p.name for p in lam.params]
 		if spec.has_captures:
 			lam_param_type_ids = list(spec.param_type_ids[1:])
@@ -3256,18 +3603,28 @@ def compile_stubbed_funcs(
 		preseed_binding_mutable: dict[int, bool] = {}
 		preseed_binding_place_kind: dict[int, PlaceKind] = {}
 		remapped_capture_map: dict[C.HCaptureKey, int] = {}
+		cap_name_by_id: dict[int, str] = {}
+		for cap in lam.explicit_captures or []:
+			if getattr(cap, "binding_id", None) is not None and cap.name:
+				cap_name_by_id[int(cap.binding_id)] = cap.name
 		for key, slot in getattr(spec, "capture_map", {}).items():
 			new_root = capture_id_map.get(int(key.root_local), int(key.root_local))
 			new_key = C.HCaptureKey(root_local=new_root, proj=key.proj)
 			remapped_capture_map[new_key] = slot
 		rev_capture_id_map = {new: old for old, new in capture_id_map.items()}
 		origin_typed = typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
+		origin_mir = mir_funcs_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
 		if origin_typed is not None:
 			for cap in lam.captures or []:
 				bid = int(cap.key.root_local)
 				orig_bid = rev_capture_id_map.get(bid, bid)
 				cap_name = origin_typed.binding_names.get(orig_bid, f"__cap_{orig_bid}")
 				cap_ty = origin_typed.binding_types.get(orig_bid, shared_type_table.ensure_unknown())
+				if origin_mir is not None and cap_ty == shared_type_table.ensure_unknown():
+					lookup_name = cap_name_by_id.get(bid, cap_name)
+					mir_ty = origin_mir.local_types.get(lookup_name)
+					if mir_ty is not None:
+						cap_ty = mir_ty
 				if spec.env_field_types is not None:
 					slot = remapped_capture_map.get(cap.key)
 					if slot is not None and slot < len(spec.env_field_types):
@@ -3278,6 +3635,19 @@ def compile_stubbed_funcs(
 				preseed_binding_names[bid] = cap_name
 				preseed_binding_mutable[bid] = origin_typed.binding_mutable.get(orig_bid, False)
 				preseed_binding_place_kind[bid] = PlaceKind.CAPTURE
+		if preseed_binding_names and preseed_binding_types:
+			for bid, name in preseed_binding_names.items():
+				ty = preseed_binding_types.get(bid)
+				if ty is not None:
+					preseed_scope_env.setdefault(name, ty)
+		if preseed_binding_names:
+			capture_name_to_id = {name: bid for bid, name in preseed_binding_names.items()}
+			_apply_capture_names_post(lambda_body, capture_name_to_id)
+		if capture_name_to_id:
+			for name, bid in capture_name_to_id.items():
+				preseed_scope_bindings.setdefault(name, int(bid))
+		for bid, name in preseed_binding_names.items():
+			preseed_scope_bindings.setdefault(name, int(bid))
 		mod_name = spec.fn_id.module or "main"
 		current_mod = _module_id_with_visibility(mod_name)
 		visible_mods = None
@@ -3326,7 +3696,13 @@ def compile_stubbed_funcs(
 		hidden_typed_fn = hidden_typed.typed_fn
 		_rewrite_call_targets(hidden_typed_fn, lambda_body)
 		type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
-		hidden_ret_type = _hidden_lambda_ret_type(lambda_body, hidden_typed_fn, shared_type_table)
+		hidden_ret_type = spec.return_type_id
+		if shared_type_table is not None:
+			try:
+				if shared_type_table.get(hidden_ret_type).kind is TypeKind.UNKNOWN:
+					hidden_ret_type = _hidden_lambda_ret_type(lambda_body, hidden_typed_fn, shared_type_table)
+			except Exception:
+				hidden_ret_type = _hidden_lambda_ret_type(lambda_body, hidden_typed_fn, shared_type_table)
 		hidden_sig = FnSignature(
 			name=function_symbol(spec.fn_id),
 			param_type_ids=list(spec.param_type_ids),
@@ -3338,6 +3714,7 @@ def compile_stubbed_funcs(
 		_register_synth_signature(spec.fn_id, hidden_sig)
 		builder = make_builder(spec.fn_id)
 		builder.func.params = list(spec.param_names)
+		binding_types = getattr(hidden_typed_fn, "binding_types", None) or preseed_binding_types
 		lower = HIRToMIR(
 			builder,
 			type_table=shared_type_table,
@@ -3350,22 +3727,87 @@ def compile_stubbed_funcs(
 			call_info_by_callsite_id=hidden_typed_fn.call_info_by_callsite_id,
 			can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
 			return_type=hidden_ret_type,
+			binding_types=binding_types,
 			typed_mode=_typed_mode_for(hidden_typed_fn, shared_type_table, not _has_error(hidden_typed.diagnostics)),
 		)
 		lower._lambda_capture_ref_is_value = spec.lambda_capture_ref_is_value
 		if spec.has_captures:
 			lower._lambda_env_local = spec.param_names[0]
 			lower._lambda_env_ty = spec.env_ty
-			lower._lambda_env_field_types = list(spec.env_field_types)
+			env_field_types = list(spec.env_field_types)
+			if env_field_types and preseed_binding_types:
+				for cap in lam.captures or []:
+					bid = int(cap.key.root_local)
+					slot = remapped_capture_map.get(cap.key)
+					if slot is None or slot >= len(env_field_types):
+						continue
+					cap_ty = preseed_binding_types.get(bid)
+					if cap_ty is None:
+						continue
+					if shared_type_table.get(cap_ty).kind is TypeKind.UNKNOWN:
+						continue
+					env_field_types[slot] = cap_ty
+			lower._lambda_env_field_types = env_field_types
 			lower._lambda_capture_slots = remapped_capture_map
+			name_to_slot: dict[str, int] = {}
+			for key, slot in remapped_capture_map.items():
+				name = preseed_binding_names.get(int(key.root_local))
+				if name:
+					name_to_slot[name] = slot
+			lower._lambda_capture_name_to_slot = name_to_slot
 			lower._lambda_capture_kinds = list(spec.capture_kinds)
 			for bid, name in preseed_binding_names.items():
 				lower._binding_names[bid] = name
+			for bid, ty in preseed_binding_types.items():
+				name = preseed_binding_names.get(bid, f"__b{bid}")
+				local_name = lower._canonical_local(bid, name)
+				if local_name not in lower._local_types:
+					lower._local_types[local_name] = ty
 		for param in lam.params:
 			if getattr(param, "binding_id", None) is not None:
 				lower._binding_names[int(param.binding_id)] = param.name
 		lower._seed_lambda_locals_for_inference(lower, lambda_body)
 		ret_val = lower._lower_lambda_block(lower, lambda_body)
+		if spec.has_captures and spec.env_ty is not None:
+			inst = shared_type_table.get_struct_instance(spec.env_ty)
+			if inst is None:
+				schema = shared_type_table.get_struct_schema(spec.env_ty)
+				if schema is not None and not schema.type_params:
+					inst_id = shared_type_table.ensure_struct_instantiated(spec.env_ty, [])
+					inst = shared_type_table.get_struct_instance(inst_id)
+			if inst is not None:
+				if not remapped_capture_map and lam.captures:
+					for idx, cap in enumerate(lam.captures):
+						if idx >= len(inst.field_types):
+							continue
+						bid = int(cap.key.root_local)
+						name = preseed_binding_names.get(bid, cap_name_by_id.get(bid, f"__b{bid}"))
+						local_name = lower._canonical_local(bid, name)
+						cur_ty = lower._local_types.get(local_name)
+						ty = inst.field_types[idx]
+						if ty is not None and ty != shared_type_table.ensure_unknown():
+							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
+								lower._local_types[local_name] = ty
+				if cap_name_by_id:
+					cap_names = [n for n in builder.func.locals if n in cap_name_by_id.values()]
+					for idx, name in enumerate(cap_names):
+						if idx >= len(inst.field_types):
+							continue
+						cur_ty = lower._local_types.get(name)
+						ty = inst.field_types[idx]
+						if ty is not None and ty != shared_type_table.ensure_unknown():
+							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
+								lower._local_types[name] = ty
+				for key, slot in remapped_capture_map.items():
+					bid = int(key.root_local)
+					name = preseed_binding_names.get(bid, cap_name_by_id.get(bid, f"__b{bid}"))
+					local_name = lower._canonical_local(bid, name)
+					cur_ty = lower._local_types.get(local_name)
+					if slot < len(inst.field_types):
+						ty = inst.field_types[slot]
+						if ty is not None and ty != shared_type_table.ensure_unknown():
+							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
+								lower._local_types[local_name] = ty
 		if builder.block.terminator is None:
 			if ret_val is None:
 				raise AssertionError("hidden lambda block must end with a value or return")
@@ -3584,6 +4026,20 @@ def compile_stubbed_funcs(
 				type_table=shared_type_table,
 				fn_infos=checked.fn_infos_by_id,
 			)
+		unknown_ty = shared_type_table.ensure_unknown()
+		for func in mir_funcs_by_id.values():
+			func.local_types = dict(getattr(func, "local_types", {}) or {})
+			for local_name in func.locals:
+				if local_name not in func.local_types:
+					func.local_types[local_name] = unknown_ty
+			for block in func.blocks.values():
+				for instr in block.instructions:
+					if isinstance(instr, M.StoreLocal):
+						cur = func.local_types.get(instr.local)
+						if cur is None or cur == unknown_ty:
+							val_ty = func.local_types.get(instr.value)
+							if val_ty is not None and val_ty != unknown_ty:
+								func.local_types[instr.local] = val_ty
 	_assert_signature_map_split(
 		base_signatures_by_id=base_signatures_by_id,
 		derived_signatures_by_id=derived_signatures_by_id,
@@ -3682,6 +4138,10 @@ def compile_to_llvm_ir_for_tests(
 		_inject_prelude(signatures_by_id, fn_ids_by_name, shared_type_table)
 
 	# First, run the normal pipeline to get MIR + FnInfos + SSA (and diagnostics).
+	if "::" in entry:
+		entry_module, entry_name = entry.split("::", 1)
+	else:
+		entry_module, entry_name = "main", entry
 	mir_funcs, checked, ssa_funcs = compile_stubbed_funcs(
 		func_hirs=func_hirs_by_id,
 		signatures=signatures_by_id,
@@ -3696,6 +4156,8 @@ def compile_to_llvm_ir_for_tests(
 		prelude_enabled=prelude_enabled,
 		emit_instantiation_index=emit_instantiation_index,
 		enforce_entrypoint=enforce_entrypoint,
+		entry_module=entry_module,
+		entry_name=entry_name,
 	)
 	_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 	if any(d.severity == "error" for d in checked.diagnostics):
@@ -3724,35 +4186,39 @@ def compile_to_llvm_ir_for_tests(
 	# Lower module to LLVM IR and append the OS entry wrapper when needed.
 	rename_map: dict[FunctionId, str] = {}
 	argv_wrapper: str | None = None
-	entry_ids = fn_ids_by_name.get(entry, [])
-	entry_id = entry_ids[0] if entry_ids else None
+	entry_ids = fn_ids_by_name.get(entry_name, [])
+	entry_id = None
+	for fn_id in entry_ids:
+		if fn_id.module == entry_module:
+			entry_id = fn_id
+			break
+	if entry_id is None and len(entry_ids) == 1:
+		entry_id = entry_ids[0]
+		entry_module = entry_id.module
+	if entry_id is None and not entry_ids:
+		name_matches = [fn_id for fn_id in signatures_by_id.keys() if fn_id.name == entry_name]
+		if len(name_matches) == 1:
+			entry_id = name_matches[0]
+			entry_module = entry_id.module
 	if entry_id is None:
 		for fn_id in signatures_by_id.keys():
-			if function_symbol(fn_id) == entry:
+			if function_symbol(fn_id) == f"{entry_module}::{entry_name}":
 				entry_id = fn_id
 				break
 	entry_info = checked.fn_infos_by_id.get(entry_id) if entry_id is not None else None
 	# Detect main(argv: Array<String>) and emit a C-ABI wrapper that builds argv.
-	if (
-		entry == "main"
-		and entry_info
-		and entry_info.signature
-		and entry_info.signature.param_type_ids
-		and len(entry_info.signature.param_type_ids) == 1
-		and checked.type_table is not None
-	):
+	if entry_info and entry_info.signature and entry_info.signature.param_type_ids and checked.type_table is not None:
 		param_ty = entry_info.signature.param_type_ids[0]
 		td = checked.type_table.get(param_ty)
-		if td.kind.name == "ARRAY" and td.param_types:
+		if len(entry_info.signature.param_type_ids) == 1 and td.kind.name == "ARRAY" and td.param_types:
 			elem_td = checked.type_table.get(td.param_types[0])
 			if elem_td.name == "String":
 				# Guard: require return Int and exactly one param of Array<String>.
 				if entry_info.signature.return_type_id != checked.type_table.ensure_int():
 					raise ValueError("main(argv: Array<String>) must return Int")
-				entry_ids = fn_ids_by_name.get("main", [])
-				if not entry_ids:
+				if entry_id is None:
 					raise ValueError("main(argv: Array<String>) requires a main entry function")
-				rename_map[entry_ids[0]] = "drift_main"
+				rename_map[entry_id] = "drift_main"
 				argv_wrapper = "drift_main"
 
 	# Add prelude FnInfos so codegen can recognize console intrinsics by module/name.
@@ -3781,8 +4247,9 @@ def compile_to_llvm_ir_for_tests(
 	# If the entry is already called "main" and has no argv wrapper, do not emit
 	# a wrapper that would call itself; otherwise emit a thin OS wrapper that
 	# calls the entry.
-	if argv_wrapper is None and entry != "main":
-		module.emit_entry_wrapper(entry)
+	if argv_wrapper is None and not (entry_module == "main" and entry_name == "main"):
+		entry_sym = function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}"
+		module.emit_entry_wrapper(entry_sym)
 	return module.render(), checked
 
 
@@ -3994,11 +4461,30 @@ def main(argv: list[str] | None = None) -> int:
 		help="Path to stdlib root (optional); when set, stdlib sources are loaded",
 	)
 	parser.add_argument(
+		"--entry",
+		type=str,
+		help="Entry point symbol (module::fn or fn; default main::main)",
+	)
+	parser.add_argument(
 		"--test-build-only",
 		action="store_true",
 		help="Enable @test_build_only declarations (tests only)",
 	)
 	args = parser.parse_args(argv)
+	if args.stdlib_root is None:
+		from lang2.driftc.parser import stdlib_root as _stdlib_root
+		args.stdlib_root = _stdlib_root()
+	def _parse_entry_spec(spec: str | None) -> tuple[str, str]:
+		if not spec:
+			return ("main", "main")
+		if "::" in spec:
+			mod, fn = spec.split("::", 1)
+			if not mod or not fn:
+				raise ValueError(f"invalid --entry '{spec}' (expected module::fn)")
+			return (mod, fn)
+		return ("main", spec)
+
+	entry_module, entry_name = _parse_entry_spec(args.entry)
 	if args.target_word_bits is None and _TEST_TARGET_WORD_BITS is not None:
 		args.target_word_bits = _TEST_TARGET_WORD_BITS
 
@@ -4354,8 +4840,24 @@ def main(argv: list[str] | None = None) -> int:
 		context="driftc",
 	)
 
+	def _is_toolchain_stdlib_module(mid: str) -> bool:
+		if args.stdlib_root is None:
+			return False
+		mod = modules.get(mid)
+		if mod is None:
+			return False
+		try:
+			mod.source_path.resolve().relative_to(args.stdlib_root.resolve())
+		except ValueError:
+			return False
+		return True
+
 	if not args.dev:
-		reserved = [mid for mid in modules.keys() if mid.startswith(("std.", "lang.", "drift."))]
+		reserved = [
+			mid
+			for mid in modules.keys()
+			if mid.startswith(("std.", "lang.", "drift.")) and not _is_toolchain_stdlib_module(mid)
+		]
 		if reserved:
 			diags = _reserved_namespace_diags(reserved)
 			_assert_all_phased(diags, context="package")
@@ -4757,6 +5259,10 @@ def main(argv: list[str] | None = None) -> int:
 						impl_type_params=impl_type_params,
 						impl_target_type_args=impl_target_type_args,
 					)
+					if module_name is not None and (
+						module_name.startswith("std.") or module_name.startswith("lang.") or module_name.startswith("drift.")
+					):
+						continue
 					external_signatures_by_name[name] = sig
 					if symbol not in external_signatures_by_symbol:
 						external_signatures_by_symbol[symbol] = sig
@@ -5206,6 +5712,9 @@ def main(argv: list[str] | None = None) -> int:
 				module_id=module_id,
 				visibility=Visibility.public() if sig.is_pub else Visibility.private(),
 				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+				template_signature=_template_sig_for(sig),
+				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
+				template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
 				fn_id=fn_id,
 				impl_id=next_callable_id,
 				impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
@@ -5220,17 +5729,25 @@ def main(argv: list[str] | None = None) -> int:
 				module_id=module_id,
 				visibility=Visibility.public(),
 				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+				template_signature=_template_sig_for(sig),
+				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
 				fn_id=fn_id,
 				is_generic=bool(sig.type_params),
 			)
 			next_callable_id += 1
 
 	for fn_id, sig in external_signatures_by_id.items():
+		if callable_registry.get_by_fn_id(fn_id) is not None:
+			continue
 		sig_name = display_name_by_id.get(fn_id, _display_name_for_fn_id(fn_id))
 		if sig.param_type_ids is None or sig.return_type_id is None:
 			continue
 		param_types_tuple = tuple(sig.param_type_ids)
 		module_name = getattr(fn_id, "module", None) or sig.module
+		if module_name is not None and (
+			module_name.startswith("std.") or module_name.startswith("lang.") or module_name.startswith("drift.")
+		):
+			continue
 		module_id = module_ids.setdefault(module_name, len(module_ids))
 		if sig.is_method:
 			if sig.impl_target_type_id is None or sig.self_mode is None:
@@ -5387,6 +5904,20 @@ def main(argv: list[str] | None = None) -> int:
 				visible_ids_list.append(module_ids.setdefault(m, len(module_ids)))
 			visible_ids = tuple(visible_ids_list)
 			visible_modules_by_name[mod_name] = visible_ids
+	else:
+		all_mods = set(merged_programs.keys())
+		if args.prelude:
+			for fn_id in signatures_by_id.keys():
+				if fn_id.module == "lang.core":
+					all_mods.add("lang.core")
+					break
+		for mod_name in sorted(all_mods):
+			visible_module_names_by_name[mod_name] = set(all_mods)
+			visibility_provenance_by_name[mod_name] = {m: (mod_name, m) for m in all_mods}
+			visible_ids_list = []
+			for m in sorted(all_mods):
+				visible_ids_list.append(module_ids.setdefault(m, len(module_ids)))
+			visible_modules_by_name[mod_name] = tuple(visible_ids_list)
 
 	global_impl_index = GlobalImplIndex.from_module_exports(
 		module_exports=module_exports,
@@ -5836,16 +6367,31 @@ def main(argv: list[str] | None = None) -> int:
 		blob_names: dict[str, str] = {}
 		manifest_modules: list[dict[str, object]] = []
 		manifest_blobs: dict[str, dict[str, object]] = {}
-	
+		module_origin_by_id: dict[str, Path] = {}
+		for fn_id, src_path in origin_by_fn_id.items():
+			mid = getattr(fn_id, "module", None) or "main"
+			if mid not in module_origin_by_id and isinstance(src_path, Path):
+				module_origin_by_id[mid] = src_path
+		stdlib_root_path = Path(args.stdlib_root).resolve() if args.stdlib_root else None
+
 		all_module_ids: set[str] = set(per_module_sigs.keys()) | set(per_module_mir.keys())
 		if isinstance(module_exports, dict):
 			all_module_ids |= set(str(k) for k in module_exports.keys())
 		for mid in sorted(all_module_ids):
-			# MVP packaging: do not bundle the built-in prelude module. It is
-			# supplied by the toolchain and will later be distributed as its own
-			# package under the `std.*` namespace.
-			if mid == "lang.core":
-				continue
+			# MVP packaging: do not bundle toolchain modules. They are supplied by
+			# the toolchain and distributed separately under reserved namespaces.
+			if mid.startswith(("std.", "lang.", "drift.")):
+				if stdlib_root_path is not None:
+					mod_origin = module_origin_by_id.get(mid)
+					if mod_origin is not None:
+						try:
+							mod_origin.resolve().relative_to(stdlib_root_path)
+						except Exception:
+							pass
+						else:
+							continue
+				else:
+					continue
 	
 			# Export surface uses module-local names (unqualified). Global names
 			# inside the compiler are qualified (`mid::name`).
@@ -6341,10 +6887,27 @@ def main(argv: list[str] | None = None) -> int:
 			func_hirs=func_hirs_by_id,
 			signatures=signatures_by_id,
 			exc_env=exception_catalog,
-			entry="main",
+			entry=f"{entry_module}::{entry_name}",
 			type_table=type_table,
+			module_exports=module_exports,
+			module_deps=module_deps,
+			origin_by_fn_id=origin_by_fn_id,
+			prelude_enabled=bool(args.prelude),
+			enforce_entrypoint=True,
 			emit_instantiation_index=args.emit_instantiation_index,
 		)
+		if _checked is not None and any(d.severity == "error" for d in _checked.diagnostics):
+			if args.json:
+				payload = {
+					"exit_code": 1,
+					"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in _checked.diagnostics],
+				}
+				print(json.dumps(payload))
+			else:
+				for d in _checked.diagnostics:
+					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+			return 1
 		if args.emit_instantiation_index is not None and not args.emit_instantiation_index.exists():
 			compile_stubbed_funcs(
 				func_hirs=func_hirs_by_id,
@@ -6357,6 +6920,8 @@ def main(argv: list[str] | None = None) -> int:
 				prelude_enabled=bool(args.prelude),
 				emit_instantiation_index=args.emit_instantiation_index,
 				enforce_entrypoint=True,
+				entry_module=entry_module,
+				entry_name=entry_name,
 			)
 
 	# Emit IR if requested.
@@ -6408,6 +6973,8 @@ def main(argv: list[str] | None = None) -> int:
 	ir_path.write_text(ir)
 
 	runtime_sources = [str(p) for p in get_runtime_sources(ROOT)]
+	runtime_root = (ROOT / "lang2" / "language_runtime").resolve()
+	compiler_infra_root = (ROOT / "lang2" / "compiler_infra").resolve()
 	link_cmd = [
 		clang,
 		"-x",
@@ -6415,6 +6982,10 @@ def main(argv: list[str] | None = None) -> int:
 		str(ir_path),
 		"-x",
 		"c",
+		"-I",
+		str(runtime_root),
+		"-I",
+		str(compiler_infra_root),
 		*runtime_sources,
 		"-o",
 		str(args.output),

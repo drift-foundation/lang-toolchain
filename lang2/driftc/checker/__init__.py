@@ -268,6 +268,7 @@ class Checker:
 		self._uint_type = _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
 		self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
 		self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
+		self._dv = _find_named(TypeKind.DIAGNOSTICVALUE, "DiagnosticValue") or self._type_table.ensure_diagnostic_value()
 		self._unknown_type = _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.ensure_unknown()
 
 	@classmethod
@@ -323,6 +324,9 @@ class Checker:
 		fn_infos: Dict[FunctionId, FnInfo] = {}
 		diagnostics: List[Diagnostic] = []
 		known_events: Set[str] = set(self._exception_catalog.keys()) if self._exception_catalog else set()
+		exc_schemas = getattr(self._type_table, "exception_schemas", None)
+		if isinstance(exc_schemas, dict):
+			known_events.update(exc_schemas.keys())
 		callinfo_ok_by_fn: Dict[FunctionId, bool] = {}
 		skip_validation: Set[FunctionId] = set()
 
@@ -333,6 +337,9 @@ class Checker:
 
 			def walk_expr(expr: H.HExpr) -> None:
 				if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HLambda):
+					csid = getattr(expr, "callsite_id", None)
+					if isinstance(csid, int):
+						ids.append(csid)
 					lam = expr.fn
 					if getattr(lam, "body_expr", None) is not None:
 						walk_expr(lam.body_expr)
@@ -410,6 +417,10 @@ class Checker:
 				elif isinstance(stmt, H.HThrow):
 					if stmt.value is not None:
 						walk_expr(stmt.value)
+				elif isinstance(stmt, H.HTry):
+					walk_block(stmt.body)
+					for arm in stmt.catches:
+						walk_block(arm.block)
 				elif getattr(H, "HIf", None) is not None and isinstance(stmt, H.HIf):
 					walk_expr(stmt.cond)
 					walk_block(stmt.then_block)
@@ -1475,6 +1486,9 @@ class Checker:
 					if err_ty is None:
 						return None
 					err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.REF and err_def.param_types:
+						err_ty = err_def.param_types[0]
+						err_def = self.table.get(err_ty)
 					if err_def.kind is TypeKind.ERROR:
 						idx_ty = self._infer_expr_type(expr.index)
 						if idx_ty is not None:
@@ -2635,6 +2649,9 @@ class Checker:
 					)
 				)
 			if stmt.value is not None and fn_is_void:
+				val_tid = ctx.infer(stmt.value)
+				if val_tid is None or is_void(val_tid):
+					return
 				ctx._append_diag(
 					_chk_diag(
 						message="cannot return a value from a Void function",

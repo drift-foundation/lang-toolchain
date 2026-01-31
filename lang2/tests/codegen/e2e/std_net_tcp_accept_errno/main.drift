@@ -1,0 +1,45 @@
+module m
+
+import std.concurrent as conc;
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	var lr = net.listen(&addr);
+	match lr {
+		Ok(l) => {
+			val port = l.test_local_port();
+			var t = conc.spawn(| | captures(copy port) => {
+				var caddr = net.socket_addr("127.0.0.1", port);
+				var cr = net.connect(&caddr);
+				match cr {
+					Ok(s) => {
+						val _ = s.close();
+						return 0;
+					},
+					Err(_) => { return 2; },
+					default => { return 3; }
+				}
+			});
+			var ar = net.accept(&l);
+			match ar {
+				Ok(s2) => {
+					val _ = s2.close();
+				},
+				Err(e) => {
+					val code = match e {
+						Errno(c) => { c },
+						WouldBlock => { 201 },
+						default => { 202 }
+					};
+					return code;
+				},
+				default => { return 203; }
+			}
+			val _ = t.join();
+			return 0;
+		},
+		Err(_) => { return 9; },
+		default => { return 10; }
+	}
+}

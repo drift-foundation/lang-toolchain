@@ -1,0 +1,30 @@
+module m
+
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val lr = net.listen(&addr);
+	match lr {
+		Ok(l) => {
+			val port = l.test_local_port();
+			var addr2 = net.socket_addr("127.0.0.1", port);
+			val lr2 = net.listen(&addr2);
+			match lr2 {
+				Ok(_l2) => { return 2; },
+				Err(e) => {
+					val code = match e {
+						Errno(c) => { c },
+						WouldBlock => { 201 },
+						default => { 202 }
+					};
+					if code == 98 { return 0; }
+					return code;
+				},
+				default => { return 203; }
+			}
+		},
+		Err(_) => { return 1; },
+		default => { return 3; }
+	}
+}

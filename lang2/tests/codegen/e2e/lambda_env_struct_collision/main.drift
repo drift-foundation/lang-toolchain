@@ -1,0 +1,20 @@
+import std.core as core;
+
+fn make_int() nothrow -> Int {
+	val x = 1;
+	val _ = core.callback0(| | captures(copy x) nothrow => { return x; });
+	return x;
+}
+
+fn make_bool() nothrow -> Int {
+	val y = true;
+	val _ = core.callback0(| | captures(copy y) nothrow => { return y; });
+	if y { return 1; }
+	return 0;
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	val _a = make_int();
+	val _b = make_bool();
+	return 0;
+}

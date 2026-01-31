@@ -7,6 +7,7 @@ from __future__ import annotations
 from lang2.driftc import stage1 as H
 from lang2.driftc.driftc import compile_stubbed_funcs
 from lang2.driftc.checker import FnSignature
+from lang2.driftc.core.types_core import TypeTable
 from lang2.test_support import build_exception_catalog
 
 
@@ -41,3 +42,34 @@ def test_driver_collects_catch_arms_and_reports_diagnostics():
 	msgs = [diag.message for diag in checked.diagnostics]
 	assert any("duplicate catch arm for event m:Evt" in msg for msg in msgs)
 	assert any("unknown catch event m:UnknownEvt" in msg for msg in msgs)
+
+
+def test_driver_accepts_catch_event_from_exception_schema():
+	"""
+	If the exception schema exists in the type table, the catch arm should be
+	considered known even if the exception catalog is empty.
+	"""
+	hir_block = H.HBlock(
+		statements=[
+			H.HTry(
+				body=H.HBlock(statements=[]),
+				catches=[H.HCatchArm(event_fqn="m:Evt", binder=None, block=H.HBlock(statements=[]))],
+			),
+			H.HReturn(value=H.HLiteralInt(value=0)),
+		]
+	)
+
+	signatures = {"f": FnSignature(name="f", return_type="Int")}
+	type_table = TypeTable()
+	type_table.exception_schemas = {"m:Evt": ("m:Evt", [])}
+
+	_, checked = compile_stubbed_funcs(
+		func_hirs={"f": hir_block},
+		signatures=signatures,
+		exc_env=build_exception_catalog({}),
+		type_table=type_table,
+		return_checked=True,
+	)
+
+	msgs = [diag.message for diag in checked.diagnostics]
+	assert not any("unknown catch event m:Evt" in msg for msg in msgs)

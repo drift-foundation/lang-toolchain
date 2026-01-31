@@ -1,0 +1,7 @@
+{
+  "description": "e2e: Result.on_error throwing lambda",
+  "skip": false,
+  "exit_code": 7,
+  "stdout": "",
+  "stderr": ""
+}

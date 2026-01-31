@@ -103,6 +103,7 @@ INTERFACE.2: /interface\b/
 REQUIRE.2: /require\b/
 TRY.2: /try\b/
 CATCH.2: /catch\b/
+YIELD.2: /yield\b/
 EXPORT.2: /export\b/
 QMARK: "?"
 MODULE.2: /module\b/
@@ -179,14 +180,14 @@ fn_return: NOTHROW? ARROW type_expr
 ref_type: AMP MUT? type_expr
 // Base (nominal) type reference.
 //
-// MVP supports a single module-alias qualifier in type positions:
-//   import lib as x
-//   val p: x.Point = ...
+// Supports deep module paths in type positions:
+//   std.err.ResultError
 //
-// This is *not* a general module path type syntax. Only one dot is allowed
-// (alias + name); direct `a.b.c` type paths are deferred.
-base_type: NAME DOT NAME type_args? -> qualified_base_type
-         | NAME type_args?          -> base_type
+// For single-segment qualifiers (alias + name), the resolver treats the first
+// segment as a module alias when available.
+base_type: module_path_type type_args? -> qualified_base_type
+         | NAME type_args?        -> base_type
+module_path_type: NAME (DOT NAME)+
 type_args: square_type_args
          | angle_type_args
 square_type_args: "[" type_expr (COMMA type_expr)* "]"
@@ -201,6 +202,8 @@ block: "{" stmt* "}"
 // This is used by expression-form try/catch arms:
 //   try foo() catch { log(e); 0 }
 value_block: "{" stmt* expr "}"
+          | "{" stmt* yield_expr "}"
+yield_expr: YIELD expr
 
 stmt: compound_stmt
     | simple_stmt TERMINATOR
@@ -269,7 +272,6 @@ rethrow_stmt: RETHROW
 
 raise_stmt: ("raise" domain_clause? expr)
           | (THROW exception_ctor)
-          | (THROW expr)
 
 // Expression statements are restricted to postfix expressions (calls, member
 // access, indexing, literals, names). This avoids ambiguity with statement-form

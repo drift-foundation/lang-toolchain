@@ -70,7 +70,7 @@ fn id(var x: File) -> File {
 	assert diags == []
 
 
-def test_move_val_param_rejected(tmp_path: Path) -> None:
+def test_move_val_param_allowed(tmp_path: Path) -> None:
 	diags = _typecheck_workspace(
 		tmp_path,
 		"""
@@ -83,7 +83,7 @@ fn id(x: File) -> File {
 }
 """,
 	)
-	assert any("move requires an owned mutable binding declared with var" in msg for msg in diags)
+	assert diags == []
 
 
 def test_move_self_allowed(tmp_path: Path) -> None:

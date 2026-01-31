@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std net accept errno",
+  "skip": false,
+  "stderr": "",
+  "stdout": "",
+  "sandbox_blocks": true
+}

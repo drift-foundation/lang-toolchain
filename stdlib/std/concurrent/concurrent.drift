@@ -3,6 +3,7 @@ module std.concurrent
 import std.core as core;
 import std.mem as mem;
 import lang.thread as thread;
+import lang.atomic as atomic;
 
 use trait core.Fn0;
 use trait core.Fn1;
@@ -14,6 +15,11 @@ export {
 	VtResultNotAvailable,
 	ExecSubmitFailed,
 	InvalidDuration,
+	MemoryOrder,
+	AtomicBool,
+	AtomicInt,
+	AtomicUint,
+	AtomicUint64,
 	SaturationPolicy,
 	ExecutorPolicy,
 	ExecutorPolicyBuilder,
@@ -24,6 +30,10 @@ export {
 	Scope,
 	executor_policy_builder,
 	build_executor,
+	atomic_bool,
+	atomic_int,
+	atomic_uint,
+	atomic_uint64,
 	spawn,
 	spawn_cb,
 	spawn_on,
@@ -32,7 +42,6 @@ export {
 	future_group,
 	scope,
 	sleep,
-	block_on_io,
 	default_executor,
 	set_default_executor
 };
@@ -45,6 +54,12 @@ pub struct Duration {
 implement core.Copy for Duration {
 }
 
+pub type MemoryOrder = atomic.MemoryOrder;
+pub type AtomicBool = atomic.AtomicBool;
+pub type AtomicInt = atomic.AtomicInt;
+pub type AtomicUint = atomic.AtomicUint;
+pub type AtomicUint64 = atomic.AtomicUint64;
+
 pub variant ConcurrencyError {
 	Timeout,
 	Cancelled,
@@ -52,6 +67,23 @@ pub variant ConcurrencyError {
 	Busy,
 	Failed(err: Error),
 }
+
+pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
+	return atomic.atomic_bool(v);
+}
+
+pub fn atomic_int(v: Int) nothrow -> AtomicInt {
+	return atomic.atomic_int(v);
+}
+
+pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
+	return atomic.atomic_uint(v);
+}
+
+pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
+	return atomic.atomic_uint64(v);
+}
+
 
 pub exception VtResultNotAvailable();
 pub exception ExecSubmitFailed(code: Int);
@@ -68,6 +100,7 @@ pub struct ExecutorPolicy {
 	queue_limit: Int,
 	timeout: Duration,
 	on_saturation: SaturationPolicy,
+	stack_bytes: Int,
 }
 
 implement core.Copy for ExecutorPolicy {
@@ -79,6 +112,7 @@ pub struct ExecutorPolicyBuilder {
 	queue_limit: Int,
 	timeout: Duration,
 	on_saturation: SaturationPolicy,
+	stack_bytes: Int,
 }
 
 pub struct Executor {
@@ -114,7 +148,8 @@ pub fn executor_policy_builder() nothrow -> ExecutorPolicyBuilder {
 		max_threads = 1,
 		queue_limit = 0,
 		timeout = Duration(millis = 0),
-		on_saturation = SaturationPolicy::ReturnBusy()
+		on_saturation = SaturationPolicy::ReturnBusy(),
+		stack_bytes = 262144
 	);
 }
 
@@ -144,13 +179,19 @@ implement ExecutorPolicyBuilder {
 		return self;
 	}
 
+	pub fn stack_bytes(self: &mut ExecutorPolicyBuilder, v: Int) nothrow -> &mut ExecutorPolicyBuilder {
+		self.stack_bytes = v;
+		return self;
+	}
+
 	pub fn build(self: &ExecutorPolicyBuilder) nothrow -> ExecutorPolicy {
 		return ExecutorPolicy(
 			min_threads = self.min_threads,
 			max_threads = self.max_threads,
 			queue_limit = self.queue_limit,
 			timeout = self.timeout,
-			on_saturation = self.on_saturation
+			on_saturation = self.on_saturation,
+			stack_bytes = self.stack_bytes
 		);
 	}
 
@@ -166,7 +207,8 @@ implement ExecutorPolicyBuilder {
 			policy.max_threads,
 			policy.queue_limit,
 			policy.timeout.millis,
-			sat
+			sat,
+			policy.stack_bytes
 		);
 		return Executor(policy = policy, handle = handle);
 	}
@@ -194,7 +236,8 @@ pub fn build_executor(policy: ExecutorPolicy) nothrow -> Executor {
 		policy.max_threads,
 		policy.queue_limit,
 		policy.timeout.millis,
-		sat
+		sat,
+		policy.stack_bytes
 	);
 	return Executor(policy = policy, handle = handle);
 }

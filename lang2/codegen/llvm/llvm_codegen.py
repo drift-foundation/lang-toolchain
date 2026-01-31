@@ -101,6 +101,7 @@ from lang2.driftc.stage2 import (
 	ConstInt,
 	ConstUint,
 	ConstUint64,
+	ConstByte,
 	IntFromUint,
 	UintFromInt,
 	CastScalar,
@@ -522,6 +523,7 @@ class LlvmModuleBuilder:
 	needs_argv_helper: bool = False
 	needs_console_runtime: bool = False
 	needs_thread_runtime: bool = False
+	needs_atomic_runtime: bool = False
 	needs_dv_runtime: bool = False
 	needs_error_runtime: bool = False
 	needs_llvm_trap: bool = False
@@ -884,17 +886,50 @@ class LlvmModuleBuilder:
 					f"declare void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()",
 					f"declare void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)})",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+				f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()",
 					f"declare void @drift_reactor_default_set({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_reactor_register_io({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_reactor_register_timer({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind_v6({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_send_to({self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_send_to_v6({self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}*)",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from_v6({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}*)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()",
 					f"declare void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()",
 					f"declare void @drift_test_timerfd_set({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					"",
+				]
+			)
+		if self.needs_atomic_runtime:
+			lines.extend(
+				[
+					f"declare i8 @drift_atomic_load_bool(i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_atomic_store_bool(i8*, i8, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_atomic_store_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_atomic_store_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_atomic_store_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					"",
 				]
 			)
@@ -1275,6 +1310,11 @@ class _FuncBuilder:
 			self.value_types[dest] = DRIFT_INT_TYPE
 			self.const_values[dest] = int(instr.value)
 			self.lines.append(f"  {dest} = add {self._llty(DRIFT_INT_TYPE)} 0, {instr.value}")
+		elif isinstance(instr, ConstByte):
+			dest = self._map_value(instr.dest)
+			self.value_types[dest] = "i8"
+			self.const_values[dest] = int(instr.value)
+			self.lines.append(f"  {dest} = add i8 0, {instr.value}")
 		elif isinstance(instr, ConstVoid):
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = "i8"
@@ -2338,9 +2378,9 @@ class _FuncBuilder:
 		callee_info = self.fn_infos.get(instr.fn_id)
 		callee_sym = function_symbol(instr.fn_id)
 		if instr.fn_id.module == "lang.thread":
-			if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:
-				raise NotImplementedError(f"LLVM codegen v1: missing signature for lang.thread intrinsic {callee_sym}")
 			if instr.fn_id.name == "vt_spawn":
+				if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:
+					raise NotImplementedError(f"LLVM codegen v1: missing signature for lang.thread intrinsic {callee_sym}")
 				if len(instr.args) != 2:
 					raise NotImplementedError(f"LLVM codegen v1: vt_spawn expects 2 args, got {len(instr.args)}")
 				if callee_info.signature.param_type_ids is None or len(callee_info.signature.param_type_ids) != 2:
@@ -2360,6 +2400,589 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "vt_join":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_join expects 1 arg, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_join({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: vt_join returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_join_timeout":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: vt_join_timeout expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_join_timeout result must be captured")
+				vt_val = self._map_value(instr.args[0])
+				timeout_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_join_timeout({self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {timeout_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_is_completed":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_is_completed expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_is_completed result must be captured")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_completed({self._llty(DRIFT_INT_TYPE)} {vt_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_cancel":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_cancel expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_cancel result must be captured")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_cancel({self._llty(DRIFT_INT_TYPE)} {vt_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_drop":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_drop expects 1 arg, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_drop({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: vt_drop returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_current":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: vt_current expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_current result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_park":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_park expects 1 arg, got {len(instr.args)}")
+				reason_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_park({self._llty(DRIFT_INT_TYPE)} {reason_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: vt_park returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_park_until":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_park_until expects 1 arg, got {len(instr.args)}")
+				deadline_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_park_until({self._llty(DRIFT_INT_TYPE)} {deadline_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_unpark":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: vt_unpark expects 1 arg, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: vt_unpark returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "now_ms":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: now_ms expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: now_ms result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "exec_default_get":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: exec_default_get expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: exec_default_get result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "exec_default_set":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: exec_default_set expects 1 arg, got {len(instr.args)}")
+				exec_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)} {exec_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: exec_default_set returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "exec_create":
+				if len(instr.args) != 6:
+					raise NotImplementedError(f"LLVM codegen v1: exec_create expects 6 args, got {len(instr.args)}")
+				min_threads = self._map_value(instr.args[0])
+				max_threads = self._map_value(instr.args[1])
+				queue_limit = self._map_value(instr.args[2])
+				timeout_ms = self._map_value(instr.args[3])
+				saturation = self._map_value(instr.args[4])
+				stack_bytes = self._map_value(instr.args[5])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					self.lines.append(
+						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
+					)
+					return
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "exec_submit":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: exec_submit expects 2 args, got {len(instr.args)}")
+				exec_val = self._map_value(instr.args[0])
+				vt_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					self.lines.append(
+						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)} {exec_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
+					)
+					return
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)} {exec_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "exec_submit_test_override":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: exec_submit_test_override expects 1 arg, got {len(instr.args)}")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: exec_submit_test_override returns Void; result cannot be captured")
+				code_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  call void @drift_exec_submit_test_override({self._llty(DRIFT_INT_TYPE)} {code_val})"
+				)
+				return
+			if instr.fn_id.name == "reactor_default_get":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_default_get expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: reactor_default_get result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "reactor_default_set":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_default_set expects 1 arg, got {len(instr.args)}")
+				reactor_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_reactor_default_set({self._llty(DRIFT_INT_TYPE)} {reactor_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: reactor_default_set returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "reactor_register_io":
+				if len(instr.args) != 4:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_register_io expects 4 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				interest_val = self._map_value(instr.args[1])
+				vt_val = self._map_value(instr.args[2])
+				deadline_val = self._map_value(instr.args[3])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  call void @drift_reactor_register_io({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {interest_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {deadline_val})"
+				)
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: reactor_register_io returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "reactor_register_timer":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_register_timer expects 2 args, got {len(instr.args)}")
+				deadline_val = self._map_value(instr.args[0])
+				vt_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  call void @drift_reactor_register_timer({self._llty(DRIFT_INT_TYPE)} {deadline_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
+				)
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: reactor_register_timer returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "test_eventfd_create":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: test_eventfd_create expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: test_eventfd_create result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "test_eventfd_write":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: test_eventfd_write expects 2 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				val_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  call void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {val_val})"
+				)
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: test_eventfd_write returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "test_timerfd_create":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: test_timerfd_create expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: test_timerfd_create result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "test_timerfd_set":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: test_timerfd_set expects 2 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				delay_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  call void @drift_test_timerfd_set({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {delay_val})"
+				)
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: test_timerfd_set returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "io_open":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_open expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_open result must be captured")
+				path_val = self._map_value(instr.args[0])
+				flags_val = self._map_value(instr.args[1])
+				mode_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE} {path_val}, {self._llty(DRIFT_INT_TYPE)} {flags_val}, {self._llty(DRIFT_INT_TYPE)} {mode_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_close":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: io_close expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_close result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_read":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_read expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_read result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_write":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_write expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_write result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_errno":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: io_errno expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_errno result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_listen":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_listen expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_listen result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_accept":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_accept expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_accept result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_connect":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_connect result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_listener_port":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_listener_port expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_listener_port result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_local_port":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_local_port expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_local_port result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_local_port":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_local_port expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_local_port result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_bind":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_bind expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_bind result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_bind_v6":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_bind_v6 expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_bind_v6 result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind_v6({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_send_to":
+				if len(instr.args) != 5:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_send_to expects 5 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_send_to result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				ip_val = self._map_value(instr.args[1])
+				port_val = self._map_value(instr.args[2])
+				buf_val = self._map_value(instr.args[3])
+				len_val = self._map_value(instr.args[4])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_send_to({self._llty(DRIFT_INT_TYPE)} {fd_val}, {DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_send_to_v6":
+				if len(instr.args) != 5:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_send_to_v6 expects 5 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_send_to_v6 result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				ip_val = self._map_value(instr.args[1])
+				port_val = self._map_value(instr.args[2])
+				buf_val = self._map_value(instr.args[3])
+				len_val = self._map_value(instr.args[4])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_send_to_v6({self._llty(DRIFT_INT_TYPE)} {fd_val}, {DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_recv_from":
+				if len(instr.args) != 5:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_recv_from expects 5 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_recv_from result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				out_ip = self._map_value(instr.args[3])
+				out_port = self._map_value(instr.args[4])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val}, {DRIFT_STRING_TYPE}* {out_ip}, {self._llty(DRIFT_INT_TYPE)}* {out_port})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_udp_recv_from_v6":
+				if len(instr.args) != 5:
+					raise NotImplementedError(f"LLVM codegen v1: net_udp_recv_from_v6 expects 5 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_udp_recv_from_v6 result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				out_ip = self._map_value(instr.args[3])
+				out_port = self._map_value(instr.args[4])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from_v6({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val}, {DRIFT_STRING_TYPE}* {out_ip}, {self._llty(DRIFT_INT_TYPE)}* {out_port})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+		if instr.fn_id.module == "lang.atomic" and callee_info is not None and callee_info.signature is not None and bool(getattr(callee_info.signature, "is_intrinsic", False)):
+			if callee_info.signature.param_type_ids is None:
+				raise NotImplementedError(f"LLVM codegen v1: missing signature for lang.atomic intrinsic {callee_sym}")
+			self.module.needs_atomic_runtime = True
+			if len(instr.args) < 2:
+				raise NotImplementedError(f"LLVM codegen v1: {callee_sym} expects at least 2 args")
+			param_ty = callee_info.signature.param_type_ids[0]
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: atomic lowering requires a TypeTable")
+			td = self.type_table.get(param_ty)
+			if td.kind is not TypeKind.REF or not td.param_types:
+				raise NotImplementedError(f"LLVM codegen v1: {callee_sym} expects ref to atomic type")
+			inner_ty = td.param_types[0]
+			struct_llty = self._llvm_type_for_typeid(inner_ty)
+			ptr_val = self._map_value(instr.args[0])
+			field_ptr = self._fresh("atomic_ptr")
+			self.lines.append(f"  {field_ptr} = getelementptr inbounds {struct_llty}, {struct_llty}* {ptr_val}, i32 0, i32 0")
+			order_val = self._map_value(instr.args[1])
+			if instr.fn_id.name == "atomic_load_bool":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: atomic_load_bool result must be captured")
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_load_bool(i8* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
+			if instr.fn_id.name == "atomic_store_bool":
+				if len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_bool expects 3 args")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				val = self._bool_to_storage(val)
+				self.lines.append(f"  call void @drift_atomic_store_bool(i8* {field_ptr}, i8 {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_bool returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "atomic_load_int":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: atomic_load_int result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_store_int":
+				if len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_int expects 3 args")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  call void @drift_atomic_store_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_int returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "atomic_fetch_add_int":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_int expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_load_uint":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: atomic_load_uint result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_store_uint":
+				if len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_uint expects 3 args")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  call void @drift_atomic_store_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_uint returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "atomic_fetch_add_uint":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_uint expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_load_uint64":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: atomic_load_uint64 result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_store_uint64":
+				if len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_uint64 expects 3 args")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  call void @drift_atomic_store_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: atomic_store_uint64 returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "atomic_fetch_add_uint64":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_uint64 expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			raise NotImplementedError(f"LLVM codegen v1: unsupported lang.atomic intrinsic {callee_sym}")
 			if instr.fn_id.name == "vt_join":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: vt_join expects 1 arg, got {len(instr.args)}")
@@ -2475,6 +3098,119 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: test_timerfd_set returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "io_open":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_open expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_open result must be captured")
+				path_val = self._map_value(instr.args[0])
+				flags_val = self._map_value(instr.args[1])
+				mode_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE} {path_val}, {self._llty(DRIFT_INT_TYPE)} {flags_val}, {self._llty(DRIFT_INT_TYPE)} {mode_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_close":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: io_close expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_close result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_read":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_read expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_read result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_write":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: io_write expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_write result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				buf_val = self._map_value(instr.args[1])
+				len_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_errno":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: io_errno expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_errno result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_listen":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_listen expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_listen result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_accept":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_accept expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_accept result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_connect":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_connect result must be captured")
+				ip_val = self._map_value(instr.args[0])
+				port_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_listener_port":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_listener_port expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_listener_port result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "vt_park":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: vt_park expects 1 arg, got {len(instr.args)}")
@@ -2521,21 +3257,22 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: exec_default_set returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_create":
-				if len(instr.args) != 5:
-					raise NotImplementedError(f"LLVM codegen v1: exec_create expects 5 args, got {len(instr.args)}")
+				if len(instr.args) != 6:
+					raise NotImplementedError(f"LLVM codegen v1: exec_create expects 6 args, got {len(instr.args)}")
 				min_threads = self._map_value(instr.args[0])
 				max_threads = self._map_value(instr.args[1])
 				queue_limit = self._map_value(instr.args[2])
 				timeout_ms = self._map_value(instr.args[3])
 				saturation = self._map_value(instr.args[4])
+				stack_bytes = self._map_value(instr.args[5])
 				self.module.needs_thread_runtime = True
 				if dest is None:
 					self.lines.append(
-						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation})"
+						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
 					)
 					return
 				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation})"
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
@@ -2936,10 +3673,11 @@ class _FuncBuilder:
 	def _emit_callback_thunk(self, thunk_name: str, fn_ref: FunctionRefId, call_sig: CallSig, env_ty: TypeId | None) -> None:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: callback thunks require a TypeTable")
-		if call_sig.can_throw:
-			raise NotImplementedError("LLVM codegen v1: callback thunks cannot throw in MVP")
 		ret_tid = call_sig.user_ret_type
-		if self.type_table.is_void(ret_tid):
+		if call_sig.can_throw:
+			err_tid = self.type_table.ensure_error()
+			ret_tid = self.type_table.ensure_fnresult(call_sig.user_ret_type, err_tid)
+		if not call_sig.can_throw and self.type_table.is_void(ret_tid):
 			ret_llty = "void"
 		else:
 			ret_llty = self._llvm_type_for_typeid(ret_tid)

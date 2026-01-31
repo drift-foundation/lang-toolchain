@@ -233,6 +233,12 @@ class Expr:
 
 
 @dataclass
+class YieldExpr(Expr):
+    loc: Located
+    value: "Expr"
+
+
+@dataclass
 class RequireClause:
     expr: "TraitExpr"
     loc: Located

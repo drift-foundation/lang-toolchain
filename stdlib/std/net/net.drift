@@ -1,42 +1,368 @@
 module std.net
 
-import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import lang.thread as thread;
 
 export {
+	SocketAddr,
+	SocketAddrV6,
+	NetError,
 	TcpStream,
 	TcpListener,
-	tcp_stream,
-	tcp_listener
+	UdpSocket,
+	listen,
+	connect,
+	accept,
+	socket_addr,
+	socket_addr_v6,
+	udp_bind,
+	udp_bind_v6,
+	test_tcp_stream,
+	test_tcp_listener
 };
 
+pub struct SocketAddr {
+	pub ip: String,
+	pub port: Int
+}
+
+pub struct SocketAddrV6 {
+	pub ip: String,
+	pub port: Int
+}
+
+pub variant NetError {
+	Errno(code: Int),
+	WouldBlock
+}
+
 pub struct TcpStream {
-	pub fd: Int
+	fd: Int
 }
 
 pub struct TcpListener {
-	pub fd: Int
+	fd: Int
 }
 
-pub fn tcp_stream(fd: Int) nothrow -> TcpStream {
+pub struct UdpSocket {
+	fd: Int
+}
+
+pub const NET_EINTR: Int = 4;
+pub const NET_EAGAIN: Int = 11;
+
+fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
+	val vt = thread.vt_current();
+	if vt == 0 {
+		if deadline_ms > 0 {
+			thread.vt_park_until(deadline_ms);
+		} else {
+			thread.vt_park_until(1);
+		}
+		return;
+	}
+	thread.reactor_register_io(fd, interest, vt, deadline_ms);
+	if deadline_ms > 0 {
+		thread.vt_park_until(deadline_ms);
+	} else {
+		thread.vt_park(0);
+	}
+	return;
+}
+
+pub fn socket_addr(ip: String, port: Int) nothrow -> SocketAddr {
+	return SocketAddr(ip = ip, port = port);
+}
+
+pub fn socket_addr_v6(ip: String, port: Int) nothrow -> SocketAddrV6 {
+	return SocketAddrV6(ip = ip, port = port);
+}
+
+pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
+	val fd = thread.net_udp_bind(&addr.ip, addr.port);
+	if fd < 0 {
+		return core.Result::Err(NetError::Errno(thread.io_errno()));
+	}
+	return core.Result::Ok(UdpSocket(fd = fd));
+}
+
+pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetError> {
+	val fd = thread.net_udp_bind_v6(&addr.ip, addr.port);
+	if fd < 0 {
+		return core.Result::Err(NetError::Errno(thread.io_errno()));
+	}
+	return core.Result::Ok(UdpSocket(fd = fd));
+}
+
+pub fn listen(addr: &SocketAddr) nothrow -> core.Result<TcpListener, NetError> {
+	val fd = thread.net_listen(&addr.ip, addr.port);
+	if fd < 0 {
+		return core.Result::Err(NetError::Errno(thread.io_errno()));
+	}
+	return core.Result::Ok(TcpListener(fd = fd));
+}
+
+pub fn accept(self: &TcpListener) nothrow -> core.Result<TcpStream, NetError> {
+	while true {
+		val fd = thread.net_accept(self.fd);
+		if fd >= 0 {
+			return core.Result::Ok(TcpStream(fd = fd));
+		}
+		val err = thread.io_errno();
+		if err == NET_EINTR {
+			continue;
+		}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 1, 0);
+			continue;
+		}
+		return core.Result::Err(NetError::Errno(err));
+	}
+	return core.Result::Err(NetError::Errno(-1));
+}
+
+pub fn connect(addr: &SocketAddr) nothrow -> core.Result<TcpStream, NetError> {
+	while true {
+		val fd = thread.net_connect(&addr.ip, addr.port);
+		if fd >= 0 {
+			return core.Result::Ok(TcpStream(fd = fd));
+		}
+		val err = thread.io_errno();
+		if err == NET_EINTR {
+			continue;
+		}
+		return core.Result::Err(NetError::Errno(err));
+	}
+	return core.Result::Err(NetError::Errno(-1));
+}
+
+@test_build_only
+pub fn test_tcp_stream() nothrow -> TcpStream {
+	val fd = thread.test_eventfd_create();
 	return TcpStream(fd = fd);
 }
 
-pub fn tcp_listener(fd: Int) nothrow -> TcpListener {
+@test_build_only
+pub fn test_tcp_listener() nothrow -> TcpListener {
+	val fd = thread.test_eventfd_create();
 	return TcpListener(fd = fd);
 }
 
 implement TcpStream {
-	pub fn block_on_read(self: &TcpStream, deadline_ms: Int) nothrow -> Void {
-		conc.block_on_io(self.fd, 1, deadline_ms);
+	pub fn read(self: &TcpStream, buf: &mut io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr_mut(buf);
+		val len = io.buffer_capacity_mut(buf);
+		while true {
+			val n = thread.io_read(self.fd, ptr, len);
+			if n >= 0 {
+				io.buffer_set_len(buf, n);
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 1, 0);
+			continue;
+		}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
 	}
 
-	pub fn block_on_write(self: &TcpStream, deadline_ms: Int) nothrow -> Void {
-		conc.block_on_io(self.fd, 4, deadline_ms);
+	pub fn write(self: &TcpStream, buf: &io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr(buf);
+		val len = io.buffer_len(buf);
+		while true {
+			val n = thread.io_write(self.fd, ptr, len);
+			if n >= 0 {
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 4, 0);
+			continue;
+		}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
+	}
+
+	pub fn close(self: &TcpStream) nothrow -> core.Result<Void, NetError> {
+		val r = thread.io_close(self.fd);
+		if r < 0 {
+			return core.Result::Err(NetError::Errno(thread.io_errno()));
+		}
+		return core.Result::Ok(core.void_value());
+	}
+
+	@test_build_only
+	pub fn test_signal(self: &TcpStream, value: Int) nothrow -> Void {
+		thread.test_eventfd_write(self.fd, value);
 	}
 }
 
 implement TcpListener {
-	pub fn block_on_accept(self: &TcpListener, deadline_ms: Int) nothrow -> Void {
-		conc.block_on_io(self.fd, 1, deadline_ms);
+	pub fn accept(self: &TcpListener) nothrow -> core.Result<TcpStream, NetError> {
+		return accept(self);
+	}
+
+	pub fn local_port(self: &TcpListener) nothrow -> Int {
+		return thread.net_listener_port(self.fd);
+	}
+
+	@test_build_only
+	pub fn test_signal(self: &TcpListener, value: Int) nothrow -> Void {
+		thread.test_eventfd_write(self.fd, value);
+	}
+
+	@test_build_only
+	pub fn test_local_port(self: &TcpListener) nothrow -> Int {
+		return self.local_port();
+	}
+}
+
+implement UdpSocket {
+	pub fn send_to(self: &UdpSocket, addr: &SocketAddr, buf: &io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr(buf);
+		val len = io.buffer_len(buf);
+		while true {
+			val n = thread.net_udp_send_to(self.fd, &addr.ip, addr.port, ptr, len);
+			if n >= 0 {
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 4, 0);
+			continue;
+		}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
+	}
+
+	pub fn send_to_v6(self: &UdpSocket, addr: &SocketAddrV6, buf: &io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr(buf);
+		val len = io.buffer_len(buf);
+		while true {
+			val n = thread.net_udp_send_to_v6(self.fd, &addr.ip, addr.port, ptr, len);
+			if n >= 0 {
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+			if err == NET_EAGAIN {
+				val vt = thread.vt_current();
+				if vt == 0 {
+					thread.vt_park_until(1);
+					continue;
+				}
+				_block_on_io(self.fd, 4, 0);
+				continue;
+			}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
+	}
+
+	pub fn recv_from(self: &UdpSocket, addr_out: &mut SocketAddr, buf: &mut io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr_mut(buf);
+		val len = io.buffer_capacity_mut(buf);
+		while true {
+			val n = thread.net_udp_recv_from(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
+			if n >= 0 {
+				io.buffer_set_len(buf, n);
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 1, 0);
+			continue;
+		}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
+	}
+
+	pub fn recv_from_v6(self: &UdpSocket, addr_out: &mut SocketAddrV6, buf: &mut io.Buffer) nothrow -> core.Result<Int, NetError> {
+		val ptr = io.buffer_ptr_mut(buf);
+		val len = io.buffer_capacity_mut(buf);
+		while true {
+			val n = thread.net_udp_recv_from_v6(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
+			if n >= 0 {
+				io.buffer_set_len(buf, n);
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+		if err == NET_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 1, 0);
+			continue;
+		}
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Err(NetError::Errno(-1));
+	}
+
+	pub fn close(self: &UdpSocket) nothrow -> core.Result<Void, NetError> {
+		val r = thread.io_close(self.fd);
+		if r < 0 {
+			return core.Result::Err(NetError::Errno(thread.io_errno()));
+		}
+		return core.Result::Ok(core.void_value());
+	}
+
+	@test_build_only
+	pub fn test_local_port(self: &UdpSocket) nothrow -> Int {
+		return self.local_port();
+	}
+
+	pub fn local_port(self: &UdpSocket) nothrow -> Int {
+		return thread.net_udp_local_port(self.fd);
 	}
 }

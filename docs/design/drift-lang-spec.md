@@ -3736,6 +3736,11 @@ fn erase1<F, A, R>(f: F) -> Callback1<A, R>
     require F is Fn1<A, R> {
     // implementation-defined boxing/adaptation
 }
+
+**Throwing callbacks** (`CallbackThrowN`) use the same interface/value layout as `CallbackN`.
+The only difference is the call signature: the `call` slot follows the throwing ABI
+(returns a `FnResult`-shaped value instead of a plain `R`). No representation changes
+are required beyond that calling convention.
 ```
 
 Erasure is explicit; the default callable path remains trait-based static dispatch.

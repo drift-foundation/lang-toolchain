@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.net read/write roundtrip",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

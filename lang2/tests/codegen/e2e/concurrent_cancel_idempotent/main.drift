@@ -8,8 +8,7 @@ fn main() nothrow -> Int {
 	t.cancel();
 	var res = t.join();
 	return match res {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Cancelled => { 0 },
 				default => { 1 },
 			}

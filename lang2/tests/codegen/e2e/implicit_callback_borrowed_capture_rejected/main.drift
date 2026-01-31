@@ -1,0 +1,9 @@
+module m
+
+import std.concurrent as conc;
+
+fn main() nothrow -> Int {
+	var x: Int = 1;
+	var t = conc.spawn_cb(| | captures(&x) => { return x; });
+	return 0;
+}

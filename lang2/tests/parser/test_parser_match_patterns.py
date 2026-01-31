@@ -51,3 +51,18 @@ fn main() -> Int {
 }
 """
 		)
+
+
+def test_parser_type_expr_module_path_module_id() -> None:
+	prog = p.parse_program(
+		"""
+fn main(x: std.err.ResultError) -> Int {
+	return 0;
+}
+"""
+	)
+	fn = prog.functions[0]
+	param = fn.params[0]
+	assert isinstance(param.type_expr, parser_ast.TypeExpr)
+	assert param.type_expr.name == "ResultError"
+	assert param.type_expr.module_id == "std.err"

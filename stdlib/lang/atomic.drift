@@ -1,0 +1,146 @@
+module lang.atomic
+
+export {
+	MemoryOrder,
+	AtomicBool,
+	AtomicInt,
+	AtomicUint,
+	AtomicUint64,
+	atomic_bool,
+	atomic_int,
+	atomic_uint,
+	atomic_uint64,
+	atomic_load_bool,
+	atomic_store_bool,
+	atomic_load_int,
+	atomic_store_int,
+	atomic_fetch_add_int,
+	atomic_load_uint,
+	atomic_store_uint,
+	atomic_fetch_add_uint,
+	atomic_load_uint64,
+	atomic_store_uint64,
+	atomic_fetch_add_uint64
+};
+
+pub variant MemoryOrder {
+	Relaxed,
+	Acquire,
+	Release,
+	AcqRel,
+	SeqCst,
+}
+
+pub struct AtomicBool {
+	value: Bool
+}
+
+pub struct AtomicInt {
+	value: Int
+}
+
+pub struct AtomicUint {
+	value: Uint
+}
+
+pub struct AtomicUint64 {
+	value: Uint64
+}
+
+pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
+	return AtomicBool(v);
+}
+
+pub fn atomic_int(v: Int) nothrow -> AtomicInt {
+	return AtomicInt(v);
+}
+
+pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
+	return AtomicUint(v);
+}
+
+pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
+	return AtomicUint64(v);
+}
+
+pub fn _order_code(order: MemoryOrder) nothrow -> Int {
+	match order {
+		Relaxed => { return 0; },
+		Acquire => { return 1; },
+		Release => { return 2; },
+		AcqRel => { return 3; },
+		SeqCst => { return 4; },
+		default => { return 0; }
+	}
+}
+
+implement AtomicBool {
+	pub fn load(self: &AtomicBool, order: MemoryOrder) nothrow -> Bool {
+		return atomic_load_bool(self, _order_code(order));
+	}
+
+	pub fn store(self: &AtomicBool, v: Bool, order: MemoryOrder) nothrow -> Void {
+		atomic_store_bool(self, v, _order_code(order));
+		return;
+	}
+}
+
+implement AtomicInt {
+	pub fn load(self: &AtomicInt, order: MemoryOrder) nothrow -> Int {
+		return atomic_load_int(self, _order_code(order));
+	}
+
+	pub fn store(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Void {
+		atomic_store_int(self, v, _order_code(order));
+		return;
+	}
+
+	pub fn fetch_add(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
+		return atomic_fetch_add_int(self, v, _order_code(order));
+	}
+}
+
+implement AtomicUint {
+	pub fn load(self: &AtomicUint, order: MemoryOrder) nothrow -> Uint {
+		return atomic_load_uint(self, _order_code(order));
+	}
+
+	pub fn store(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Void {
+		atomic_store_uint(self, v, _order_code(order));
+		return;
+	}
+
+	pub fn fetch_add(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
+		return atomic_fetch_add_uint(self, v, _order_code(order));
+	}
+}
+
+implement AtomicUint64 {
+	pub fn load(self: &AtomicUint64, order: MemoryOrder) nothrow -> Uint64 {
+		return atomic_load_uint64(self, _order_code(order));
+	}
+
+	pub fn store(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Void {
+		atomic_store_uint64(self, v, _order_code(order));
+		return;
+	}
+
+	pub fn fetch_add(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
+		return atomic_fetch_add_uint64(self, v, _order_code(order));
+	}
+}
+
+@intrinsic pub fn atomic_load_bool(p: &AtomicBool, order: Int) nothrow -> Bool;
+@intrinsic pub fn atomic_store_bool(p: &AtomicBool, v: Bool, order: Int) nothrow -> Void;
+
+@intrinsic pub fn atomic_load_int(p: &AtomicInt, order: Int) nothrow -> Int;
+@intrinsic pub fn atomic_store_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Void;
+@intrinsic pub fn atomic_fetch_add_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Int;
+
+@intrinsic pub fn atomic_load_uint(p: &AtomicUint, order: Int) nothrow -> Uint;
+@intrinsic pub fn atomic_store_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Void;
+@intrinsic pub fn atomic_fetch_add_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Uint;
+
+@intrinsic pub fn atomic_load_uint64(p: &AtomicUint64, order: Int) nothrow -> Uint64;
+@intrinsic pub fn atomic_store_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Void;
+@intrinsic pub fn atomic_fetch_add_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Uint64;

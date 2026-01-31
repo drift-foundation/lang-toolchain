@@ -137,6 +137,17 @@ def test_copy_lvalue_ok():
 	assert res.diagnostics == []
 
 
+def test_borrow_mut_rvalue_rejected():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HExprStmt(expr=H.HBorrow(subject=H.HLiteralInt(1), is_mut=True)),
+		]
+	)
+	res = tc.check_function(_fn_id("borrow_mut_rvalue"), block)
+	assert any("borrow operand must be an addressable place" in d.message for d in res.diagnostics)
+
+
 def test_call_return_type_uses_signature():
 	table = TypeTable()
 	tc = TypeChecker(table)

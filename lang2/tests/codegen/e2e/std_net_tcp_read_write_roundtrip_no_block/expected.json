@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std net read write roundtrip no block",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "",
+  "sandbox_blocks": true
+}

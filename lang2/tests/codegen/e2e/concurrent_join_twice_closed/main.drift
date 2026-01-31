@@ -15,7 +15,7 @@ pub fn main() nothrow -> Int {
 	var r2 = t.join();
 	var out = match r2 {
 		Err(e) => {
-			match e {
+			yield match e {
 				conc.ConcurrencyError::Closed() => { acc },
 				default => { 3 }
 			}

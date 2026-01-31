@@ -50,6 +50,8 @@ class AstToHIR:
 		self._scope_stack: list[dict[str, H.BindingId]] = [dict()]
 		# Current module name for building canonical FQNs; set by parser adapter.
 		self._module_name: str | None = None
+		# Import aliases for resolving exception/catch event FQNs.
+		self._module_aliases: dict[str, str] = {}
 		# Optional method-body context used for implicit `self` member lookup.
 		#
 		# The parser adapter sets this when lowering methods declared inside an
@@ -330,6 +332,10 @@ class AstToHIR:
 
 	def _visit_stmt_ExprStmt(self, stmt: ast.ExprStmt) -> H.HStmt:
 		"""Expression as statement (value discarded)."""
+		if isinstance(stmt.expr, ast.MatchExpr):
+			return H.HExprStmt(expr=self._lower_match_expr(stmt.expr, value_context=False))
+		if isinstance(stmt.expr, ast.TryCatchExpr):
+			return H.HExprStmt(expr=self._lower_try_expr(stmt.expr, value_context=False))
 		return H.HExprStmt(expr=self.lower_expr(stmt.expr))
 
 	# --- stubs for remaining nodes ---
@@ -575,14 +581,7 @@ class AstToHIR:
 		Mapping arguments to declared exception field names happens later once
 		exception schemas are available (checker / MIR lowering).
 		"""
-		if not self._module_name:
-			raise NotImplementedError(
-				"Exception constructor lowering requires a module name to build an event FQN"
-			)
-		if ":" in expr.name:
-			fqn = expr.name
-		else:
-			fqn = f"{self._module_name}:{expr.name}"
+		fqn = self._resolve_event_fqn(expr.name)
 		pos_args = [self.lower_expr(a) for a in getattr(expr, "args", [])]
 		kw_pairs = getattr(expr, "kwargs", []) or []
 		return H.HExceptionInit(
@@ -606,7 +605,26 @@ class AstToHIR:
 		else_h = self.lower_expr(expr.else_expr)
 		return H.HTernary(cond=cond_h, then_expr=then_h, else_expr=else_h)
 
+	def _visit_expr_YieldExpr(self, expr: ast.YieldExpr) -> H.HExpr:
+		# Yield is only valid as an explicit value inside value blocks; here we
+		# just lower its inner expression.
+		return self.lower_expr(expr.value)
+
+	def _resolve_event_fqn(self, name: str) -> str:
+		if ":" not in name:
+			if not self._module_name:
+				raise NotImplementedError("exception/catch lowering requires a module name to build an event FQN")
+			return f"{self._module_name}:{name}"
+		mod, event = name.split(":", 1)
+		alias = self._module_aliases.get(mod)
+		if alias:
+			return f"{alias}:{event}"
+		return name
+
 	def _visit_expr_TryCatchExpr(self, expr: ast.TryCatchExpr) -> H.HExpr:
+		return self._lower_try_expr(expr, value_context=True)
+
+	def _lower_try_expr(self, expr: ast.TryCatchExpr, *, value_context: bool) -> H.HExpr:
 		"""
 		Lower expression-form try/catch into HTryExpr.
 
@@ -618,18 +636,22 @@ class AstToHIR:
 
 		arms: list[H.HTryExprArm] = []
 		for arm in expr.catch_arms:
-			event_fqn = arm.event
-			if event_fqn is not None and ":" not in event_fqn:
-				if not self._module_name:
-					raise NotImplementedError("catch event requires a module name to build an event FQN")
-				event_fqn = f"{self._module_name}:{event_fqn}"
-			# Split arm body: all but last statement into the block, last expr (if any)
-			# becomes the arm result.
+			event_fqn = self._resolve_event_fqn(arm.event) if arm.event is not None else None
 			arm_result: Optional[H.HExpr] = None
 			stmts = list(arm.block)
 			if stmts and isinstance(stmts[-1], ast.ExprStmt):
-				last_expr_stmt = stmts.pop()
-				arm_result = self.lower_expr(last_expr_stmt.expr)
+				last_expr_stmt = stmts[-1]
+				last_expr = last_expr_stmt.expr
+				last_name = type(last_expr).__name__
+				if last_name == "YieldExpr":
+					if value_context:
+						stmts.pop()
+						arm_result = self.lower_expr(last_expr.value)
+					else:
+						stmts[-1] = ast.ExprStmt(expr=last_expr.value, loc=getattr(last_expr_stmt, "loc", None))
+				elif value_context:
+					stmts.pop()
+					arm_result = self.lower_expr(last_expr)
 			arm_block = self.lower_block(stmts)
 			catch_loc = Span.from_loc(arm.loc)
 			arms.append(
@@ -649,6 +671,9 @@ class AstToHIR:
 		)
 
 	def _visit_expr_MatchExpr(self, expr: ast.MatchExpr) -> H.HExpr:
+		return self._lower_match_expr(expr, value_context=True)
+
+	def _lower_match_expr(self, expr: ast.MatchExpr, *, value_context: bool) -> H.HExpr:
 		"""
 		Lower expression-form `match` into HIR (`HMatchExpr`).
 
@@ -711,6 +736,8 @@ class AstToHIR:
 				return H.HField(subject=_rename_expr(e.subject, mapping), name=e.name)
 			if isinstance(e, H.HIndex):
 				return H.HIndex(subject=_rename_expr(e.subject, mapping), index=_rename_expr(e.index, mapping))
+			if isinstance(e, H.HBorrow):
+				return H.HBorrow(subject=_rename_expr(e.subject, mapping), is_mut=e.is_mut)
 			if hasattr(H, "HMove") and isinstance(e, getattr(H, "HMove")):
 				return H.HMove(subject=_rename_expr(e.subject, mapping), loc=e.loc)
 			if hasattr(H, "HCopy") and isinstance(e, getattr(H, "HCopy")):
@@ -839,8 +866,18 @@ class AstToHIR:
 			arm_result: Optional[H.HExpr] = None
 			stmts = list(arm.block)
 			if stmts and isinstance(stmts[-1], ast.ExprStmt):
-				last_expr_stmt = stmts.pop()
-				arm_result = self.lower_expr(last_expr_stmt.expr)
+				last_expr_stmt = stmts[-1]
+				last_expr = last_expr_stmt.expr
+				last_name = type(last_expr).__name__
+				if last_name == "YieldExpr":
+					if value_context:
+						stmts.pop()
+						arm_result = self.lower_expr(last_expr.value)
+					else:
+						stmts[-1] = ast.ExprStmt(expr=last_expr.value, loc=getattr(last_expr_stmt, "loc", None))
+				elif value_context:
+					stmts.pop()
+					arm_result = self.lower_expr(last_expr)
 			arm_block = self.lower_block(stmts)
 			if rename_map:
 				arm_block, after_map = _rename_block(arm_block, rename_map)
@@ -925,11 +962,7 @@ class AstToHIR:
 		catch_arms: list[H.HCatchArm] = []
 		for arm in stmt.catches:
 			event_name = arm.event
-			event_fqn = event_name if event_name is not None else None
-			if event_fqn is not None and ":" not in event_fqn:
-				if not self._module_name:
-					raise NotImplementedError("catch event requires a module name to build an event FQN")
-				event_fqn = f"{self._module_name}:{event_fqn}"
+			event_fqn = self._resolve_event_fqn(event_name) if event_name is not None else None
 			binder = arm.binder
 			handler_block = self.lower_block(arm.block)
 			catch_loc = Span.from_loc(arm.loc)
@@ -950,11 +983,7 @@ class AstToHIR:
 
 		catch_arms: list[H.HCatchArm] = []
 		for arm in expr.catch_arms:
-			event_fqn = arm.event
-			if event_fqn is not None and ":" not in event_fqn:
-				if not self._module_name:
-					raise NotImplementedError("catch event requires a module name to build an event FQN")
-				event_fqn = f"{self._module_name}:{event_fqn}"
+			event_fqn = self._resolve_event_fqn(arm.event) if arm.event is not None else None
 			binder = arm.binder
 			handler_block = self.lower_block(arm.block)
 			catch_loc = Span.from_loc(arm.loc)

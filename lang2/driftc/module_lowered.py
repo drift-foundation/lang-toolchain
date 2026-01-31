@@ -25,6 +25,7 @@ class ModuleLowered:
 
 	module_id: str
 	package_id: str | None
+	source_path: Path
 	func_hirs: Dict[FunctionId, "H.HBlock"]
 	signatures_by_id: Dict[FunctionId, FnSignature]
 	fn_ids_by_name: Dict[str, List[FunctionId]]

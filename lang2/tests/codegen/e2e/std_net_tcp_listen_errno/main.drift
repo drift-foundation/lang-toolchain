@@ -1,0 +1,20 @@
+module m
+
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	var lr = net.listen(&addr);
+	match lr {
+		Ok(_l) => { return 0; },
+		Err(e) => {
+			val code = match e {
+				Errno(c) => { c },
+				WouldBlock => { 201 },
+				default => { 202 }
+			};
+			return code;
+		},
+		default => { return 203; }
+	}
+}

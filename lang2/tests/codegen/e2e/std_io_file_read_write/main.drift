@@ -1,0 +1,62 @@
+module m_main
+
+import std.io as io;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val w_opts = io.OpenOptions(read = false, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
+	var w: core.Result<io.File, io.IoError> = io.open("io_test_file.bin", &w_opts);
+	match w {
+		Ok(v) => {
+			var buf = io.buffer(3);
+			io.buffer_write(&mut buf, 0, cast<Byte>(65));
+			io.buffer_write(&mut buf, 1, cast<Byte>(66));
+			io.buffer_write(&mut buf, 2, cast<Byte>(67));
+			val wres = v.write(&buf);
+			val wok = match wres {
+				Ok(n) => { (n != 3) ? 1 : 0 },
+				default => { 2 }
+			};
+			if wok != 0 {
+				return wok;
+			}
+			val c = v.close();
+			val ccode = match c {
+				Ok(_) => { 0 },
+				default => { 3 }
+			};
+			if ccode != 0 {
+				return ccode;
+			}
+		},
+		default => { return 4; }
+	}
+	val r_opts = io.OpenOptions(read = true, write = false, create = false, truncate = false, append = false, mode = 0);
+	var r: core.Result<io.File, io.IoError> = io.open("io_test_file.bin", &r_opts);
+	match r {
+		Ok(v2) => {
+			var buf2 = io.buffer(3);
+			val rres = v2.read(&mut buf2);
+			val n = match rres {
+				Ok(v) => { v },
+				default => { 5 }
+			};
+			if n == 5 {
+				return 5;
+			}
+			if n != 3 {
+				return 6;
+			}
+			val c2 = v2.close();
+			val c2code = match c2 {
+				Ok(_) => { 0 },
+				default => { 10 }
+			};
+			if c2code != 0 {
+				return c2code;
+			}
+			return 0;
+		},
+		default => { return 11; }
+	}
+}

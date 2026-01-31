@@ -1,0 +1,22 @@
+module m
+
+import std.core as core;
+import std.err as err;
+
+pub fn main() nothrow -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	match r {
+		Ok(v) => {
+			try {
+				throw std.err:IndexError(container_id = "x", index = 1);
+			} catch std.err:IndexError(_) {
+				val _x = 0;
+			} catch {
+				val _y = 1;
+			}
+		},
+		Err(_) => { return 2; },
+		default => { return 3; }
+	}
+	return 0;
+}

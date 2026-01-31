@@ -562,6 +562,8 @@ _CORE_NOMINAL_ALLOWLIST: set[tuple[TypeKind, str]] = {(TypeKind.VARIANT, "Option
 def _normalized_pkg_id_for_module(pkg_id: str, module_id: str | None) -> str:
 	if module_id == "lang.core":
 		return "lang.core"
+	if isinstance(module_id, str) and module_id.startswith(("lang.", "std.")):
+		return "std"
 	return pkg_id
 
 
@@ -1039,6 +1041,14 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			if not pts:
 				raise ValueError("invalid function type key (no return type)")
 			key_to_host[k] = host.ensure_function(pts[:-1], pts[-1], can_throw=can_throw)
+		elif tag == "kind":
+			_kind, kind_s, _name, sub_keys, _ref_mut = k
+			if kind_s == TypeKind.RAW_PTR.name:
+				if not sub_keys:
+					raise ValueError("invalid raw ptr type key (no inner type)")
+				key_to_host[k] = host.new_ptr(key_to_host[sub_keys[0]])
+			else:
+				raise ValueError(f"unsupported type key in package linker: {k!r}")
 		elif tag == "inst":
 			base_tid = key_to_host[k[1]]
 			args = [key_to_host[x] for x in list(k[2])]
@@ -1049,6 +1059,11 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 					key_to_host[k] = host.ensure_struct_template(base_tid, args)
 				else:
 					key_to_host[k] = host.ensure_struct_instantiated(base_tid, args)
+			elif kind_s == TypeKind.INTERFACE.name:
+				if any(host.has_typevar(arg) for arg in args):
+					key_to_host[k] = host.ensure_interface_template(base_tid, args)
+				else:
+					key_to_host[k] = host.ensure_interface_instantiated(base_tid, args)
 			else:
 				if any(host.has_typevar(arg) for arg in args):
 					key_to_host[k] = host.ensure_variant_template(base_tid, args)

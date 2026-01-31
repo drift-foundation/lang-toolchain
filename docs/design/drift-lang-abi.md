@@ -134,6 +134,13 @@ All interface values are fat pointers with inline storage:
 * `vtable_ptr` points to the **start of the segment** for the *static interface type* of the value.
 * When `is_inline == 1`, the concrete value is stored in `inline_payload` and `data_ptr` is ignored.
 
+Throwing callback interfaces (`CallbackThrowN`) use the same interface value layout as
+`CallbackN`. Their `call` slot follows the throwing ABI (returns a `FnResult`-shaped
+value), but the data/vtable representation is unchanged.
+
+Captured environments for `CallbackN`/`CallbackThrowN` are stored in the interface
+value’s data payload (boxed or inline); captures are not treated specially by the ABI.
+
 ## 4.2 Vtable layout: segment-per-interface
 
 Each interface `I` has a **segment**:

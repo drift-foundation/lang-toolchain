@@ -1,0 +1,4 @@
+{
+  "description": "spawn_cb accepts implicit Fn->Callback coercion",
+  "exit_code": 7
+}

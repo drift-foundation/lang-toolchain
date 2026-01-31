@@ -1,5 +1,13 @@
 ## Work progress
 
+## Trait import for method resolution (use trait)
+
+- Plan:
+  - Add regression driver test: `use trait` enables method resolution for trait methods (and missing `use trait` fails).
+  - Parser: accept `use trait <module.path.TraitName>;` as a distinct import form.
+  - Resolver: register trait in scope for method resolution when `use trait` is present.
+  - Update diagnostics to mention missing `use trait` when a trait method exists but isn’t in resolution scope.
+  - Add a negative test for invalid `use trait` target (non-trait).
 ### Interfaces (dynamic dispatch)
 - Fixed iface e2e failures by preferring declared type in HLet lowering (enables iface coercion and avoids CallIndirect on iface values).
 - MIR iface init validator now treats iface-producing instructions as initialized (ConstructIface*, CallIface/Call*).
@@ -57,6 +65,14 @@
 - Added qualified constructor patterns in match arms (e.g., `mod.Type::Ctor()`), with module-alias resolution.
 - Added e2e `match_qualified_ctor_pattern` to lock qualified ctor matching.
 
+### Match/try value position
+- Match/try arms now yield values only in value position; statement matches no longer treat trailing nested match/try as arm results.
+- Added e2e `match_nested_expr_value` to lock nested match as value in value position and fixed `match_stmt_nested_match_last_stmt` regression.
+
+### Entrypoint diagnostics
+- Entry validation messages now include the entry name (e.g., `entrypoint main must return Int`), restoring expected diagnostics for entrypoint e2e tests.
+- Fixed OS entry wrapper to call the correct symbol for main-module entries (avoid `main::drift_main` undefined reference); added regression `test_entry_wrapper_symbol`.
+
 ### Call resolver refactor (CallIntent)
 - Introduced a minimal `CallIntent` and propagated expected arg types for method calls after resolution (first step toward explicit expected-type plumbing).
 - Extended expected-type propagation to free/UFCS calls in `resolve_call_expr` and added driver regression `test_expected_type_propagation_method_arg.py`.
@@ -75,9 +91,54 @@
 
 ### Concurrency (executor plumbing)
 - Added `exec_create` runtime hook and `build_executor` API; default executor is lazily created with single-thread policy; `Executor`/`ExecutorPolicy` are `Copy`.
-- Added `std.io`/`std.net` boundary helpers wired to `std.concurrent.block_on_io` plus e2e tests for read/write/accept readiness.
+- Added `std.io`/`std.net` boundary helpers (internal waits via `std.concurrent.block_on_io`).
 - Added Phase‑3 correctness e2e tests for spawn/join ordering, join‑twice error path, sleep timing, and IO deadline timeout.
 - Added Phase‑3 correctness e2e tests for vt_current behavior, IO readiness before deadline, repeated IO waits, many short tasks, and non‑VT park.
 - Added Phase‑3 correctness e2e test for join_timeout after completion.
 - Added Phase‑3 correctness e2e test for cancel then join_timeout(0).
 - Added Phase‑3 correctness e2e tests for executor queue limit and default executor override.
+
+### Phase‑3 stdlib IO/net (planned)
+- std.io surface: File/OpenOptions/IoError + open/read/write/close (blocking; VT‑aware).
+- Added trait-based `or_throw` for Result (throws `std.err:ResultError`); current payload is a placeholder DiagnosticValue::Int(0) until generic error payloads can be threaded (TODO).
+- std.net surface: TcpListener/TcpStream/SocketAddr/NetError + listen/accept/connect + read/write + block_on_*.
+- Tests: std_io roundtrip + would‑block + timeout; std_net listen/accept/connect + roundtrip + timeout.
+
+### Phase‑3 stdlib IO/net (in progress)
+- std.io: added OpenOptions, WouldBlock error, and Result-returning block_on_*; updated std_io e2e cases and removed fd exposure.
+- std.net: replaced fd-based test constructors with test-only helpers and updated std_net e2e block_on tests.
+- std.net read/write roundtrip test: use Byte literal instead of string_byte_at to avoid borrow-from-rvalue (string_byte_at requires &String place).
+
+### Result.on_error (throwing lambdas)
+- Added FnThrow0/1/2 traits and Result.on_error in std.core; on_error uses FnThrow1<E, T> and returns Ok(v) or calls the throwing handler on Err.
+- Added e2e: result_on_error_throw (throws) + result_on_error_recover (returns), and driver regression for throwing lambda rejected for Fn1 bounds.
+- Call resolver now retypes lambda args after resolution when requirements imply Fn*/FnThrow* (uses signature param typevars to map subjects).
+- on_error method call special-case no longer marks lambdas as capture-invoke; captureless lambdas now coerce to function pointers and lower correctly.
+
+### MIR validation + e2e runner
+- MIR: `_infer_expr_type` now consults typed `expr_types` for all expressions, fixing missing local types for casts used by wrapping_u64 ops.
+- MIR: `_infer_expr_type` no longer overrides known local types for `HVar` (avoids treating `self` as scalar in ArrayRange methods).
+- E2E runner: added per-test timeout enforcement in ordered/single-thread runs so hangs report the exact case name.
+
+### Concurrency runtime (VT scheduling)
+- Fixed double-free in Linux fiber path: `drift_thread_join`/`join_timeout` no longer free VT stacks (worker owns them).
+- Fixed VT park/unpark race for timer/park: re-check park token after marking PARKED and after timer registration.
+- Fixed fiber scheduler: only free VT stack on FINISHED/CANCELLED after swapcontext (not on PARKED yields).
+
+### Package type-table linking
+- Normalized package ids for std/lang modules in type-table linking (`lang.*`/`std.*` resolve to `std`, `lang.core` stays `lang.core`), preventing schema/TypeDef mismatches for toolchain-provided types.
+- Added interface instance handling in type key instantiation during package link.
+- Added RAW_PTR type key handling in package linker.
+
+### Package root + stdlib method resolution
+- Filtered external signatures for reserved toolchain modules (`std.*`, `lang.*`, `drift.*`) at package-load time so they never enter `signatures_by_id_all` (prevents duplicate stdlib method entries when packages are present).
+- Registry now skips registering external signatures whose fn_id already exists; also skips registering external std/lang/drift signatures.
+- Method registry de-dupes identical inherent/trait method signatures per (type, name, self_mode) to avoid ambiguity from duplicate entries.
+- Added regression: `test_package_root_does_not_duplicate_std_methods` (package-root + stdlib Deque methods resolve without ambiguity).
+- Package emission now only omits reserved modules when they originate under `stdlib_root`; user-defined `std.*`/`lang.*`/`drift.*` modules stay in the manifest so unsigned reserved namespaces are rejected as required.
+- Workspace parser now skips stdlib root when module roots include reserved-namespace modules (e.g., test-only std.mem stubs), preventing stdlib/override collisions in dev tests.
+- ODR instantiation test now compiles IR to object (`clang -c`) instead of linking; avoids runtime symbol requirements while still validating symbol dedup via `nm`.
+
+### Implicit Fn → Callback coercion
+- Added e2e: `concurrent_spawn_cb_implicit_callback` to cover implicit coercion at callsite.
+- Added e2e: `implicit_callback_borrowed_capture_rejected` to ensure borrowed captures are still rejected when coercion is implicit.

@@ -129,6 +129,12 @@ lang2-borrow-test:
 	fi
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/borrow_checker
 
+# Build examples (lang2.driftc)
+make-examples:
+	mkdir -p build/examples/tcp_client_server
+	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/server.drift -o build/examples/tcp_client_server/server
+	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/client.drift -o build/examples/tcp_client_server/client
+
 stage-for-review:
 	#!/usr/bin/env bash
 	staged_dir=staged

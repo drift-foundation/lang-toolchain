@@ -194,6 +194,13 @@ class Block(Expr):
 
 
 @dataclass
+class YieldExpr(Expr):
+	"""Explicit value production inside a value block."""
+	value: Expr
+	loc: Optional[object] = None
+
+
+@dataclass
 class KwArg:
 	"""
 	Keyword argument `name = value` (used by calls and exception constructors).
@@ -531,7 +538,7 @@ __all__ = [
 	"TraitExpr", "TraitSubject", "SelfRef", "TypeNameRef", "TraitIs", "TraitAnd", "TraitOr", "TraitNot",
 	"Literal", "Name", "Placeholder", "Attr", "QualifiedMember",
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
-	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary",
+	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
 	"TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
 ]

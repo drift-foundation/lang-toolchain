@@ -1,0 +1,17 @@
+module m
+
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val e = conc.ConcurrencyError::Closed();
+	val out = match e {
+		conc.ConcurrencyError::Closed() => {
+			yield match e {
+				conc.ConcurrencyError::Closed() => { 7 },
+				default => { 1 }
+			}
+		},
+		default => { 2 }
+	};
+	return out;
+}

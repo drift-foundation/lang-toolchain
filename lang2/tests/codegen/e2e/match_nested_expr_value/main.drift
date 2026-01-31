@@ -1,0 +1,25 @@
+variant ErrKind {
+	A(x: Int),
+	B(),
+}
+
+variant Res {
+	Ok(v: Int),
+	Err(e: ErrKind),
+}
+
+pub fn main() nothrow -> Int {
+	var res = Res::Err(ErrKind::A(1));
+	val out = match res {
+		Err(e) => {
+			match e {
+				A(x) => { x },
+				B() => { 2 },
+				default => { 3 }
+			}
+		},
+		Ok(v) => { v },
+		default => { 4 }
+	};
+	return out;
+}

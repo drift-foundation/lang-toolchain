@@ -1,0 +1,123 @@
+module m
+
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.err;
+
+type VtInt = conc.VirtualThread<Int>;
+
+const N: Int = 500;
+
+fn code_from_error(e: std.err.ResultError) nothrow -> Int {
+	val dv = e.attrs["dv"];
+	val opt = dv.as_int();
+	match opt {
+		Some(v) => { return v; },
+		None => { return 90; }
+	}
+}
+
+fn handle_client(var s: net.TcpStream) -> Int {
+	// Server-side handler for one client:
+	// - read a fixed-size buffer
+	// - echo it back
+	// - close the socket
+	var buf = io.buffer(1024);
+	s.read(&mut buf).on_error(|_e| => { throw std.err:ResultError(dv = 11); });
+	s.write(&buf).on_error(|_e| => { throw std.err:ResultError(dv = 13); });
+	s.close().on_error(|_e| => { throw std.err:ResultError(dv = 15); });
+	return 0;
+}
+
+fn server_loop(listener: net.TcpListener) -> Int {
+	// Accept exactly N connections and handle them sequentially.
+	var i = 0;
+	while i < N {
+		val s = net.accept(&listener).on_error(|_e| => { throw std.err:ResultError(dv = -21); });
+		val r = handle_client(move s);
+		if r < 0 { return r; }
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn client_once(port: Int, size: Int) -> Int {
+	// One client:
+	// - connect to 127.0.0.1:port
+	// - write size bytes (all 65)
+	// - read size bytes back
+	// - close socket
+	var addr = net.socket_addr("127.0.0.1", port);
+	val s = net.connect(&addr).on_error(|_e| => { throw std.err:ResultError(dv = -31); });
+	// Prepare write buffer.
+	val byte = cast<Byte>(65);
+	var wbuf = io.buffer(size);
+	var i = 0;
+	while i < size {
+		io.buffer_write(&mut wbuf, i, byte);
+		i = i + 1;
+	}
+	val n = s.write(&wbuf).on_error(|_e| => { throw std.err:ResultError(dv = -34); });
+	if n != size { return -33; }
+	// Read echoed bytes into a fresh buffer.
+	var rbuf = io.buffer(size);
+	val r = s.read(&mut rbuf).on_error(|_e| => { throw std.err:ResultError(dv = -37); });
+	if r != size { return -36; }
+	s.close().on_error(|_e| => { throw std.err:ResultError(dv = -40); });
+	return size * 65;
+}
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch std.err:ResultError(e) {
+		1000 + code_from_error(e)
+	} catch {
+		-777
+	};
+}
+
+fn run_main() -> Int {
+	// Spin up a TCP listener on an ephemeral port.
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val listener = net.listen(&addr).on_error(|_e| => { throw std.err:ResultError(dv = 101); });
+	val port = listener.local_port();
+	// Start the server in its own VT.
+	var server = conc.spawn(| | captures(move listener, copy port) => {
+		return try server_loop(move listener) catch std.err:ResultError(e) {
+			code_from_error(e)
+		} catch { 92 };
+	});
+	var dq = containers.deque<type VtInt>();
+	// Expected sum is the total bytes written across all clients.
+	var expected = 0;
+	var k = 0;
+	var actual = 0;
+	while k < N {
+		// Size cycles 1/64/1024 to stress small/medium/large payloads.
+		val size = (k % 3 == 0) ? 1 : ((k % 3 == 1) ? 64 : 1024);
+		expected = expected + (size * 65);
+		// Spawn the client VT.
+		val t = conc.spawn(| | captures(copy port, copy size) => {
+			return try client_once(port, size) catch std.err:ResultError(e) {
+				code_from_error(e)
+			} catch { 91 };
+		});
+		dq.push_back(move t);
+		k = k + 1;
+	}
+	// Join all client VTs and accumulate actual sum.
+	while dq.len() > 0 {
+		val vt = dq.pop_front().on_none(| | => { throw std.err:ResultError(dv = 60); });
+		var t = move vt;
+		val code = t.join().on_error(|_e| => { throw std.err:ResultError(dv = 61); });
+		if code < 0 { return code; }
+		actual = actual + code;
+	}
+	// Join server and verify total math.
+	val v = server.join().on_error(|_e| => { throw std.err:ResultError(dv = 51); });
+	if v != 0 { return 70; }
+	if actual != expected { return 71; }
+	return 0;
+}

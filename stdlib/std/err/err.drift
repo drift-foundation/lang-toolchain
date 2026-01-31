@@ -8,6 +8,7 @@ export {
 	IteratorOpId,
 	IndexError,
 	IteratorInvalidated,
+	ResultError,
 	throw_iterator_invalidated
 };
 
@@ -22,6 +23,7 @@ pub variant IteratorOpId {
 
 pub exception IndexError(container_id: String, index: Int);
 pub exception IteratorInvalidated(container_id: String, op_id: IteratorOpId);
+pub exception ResultError(dv: DiagnosticValue);
 
 pub fn throw_iterator_invalidated(container_id: String, op_id: IteratorOpId) -> Void {
 	throw IteratorInvalidated(

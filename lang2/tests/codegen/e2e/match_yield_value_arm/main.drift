@@ -1,0 +1,13 @@
+module m
+
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	val r: core.Result<Int, Int> = core.Result::Err(0);
+	val out = match r {
+		Ok(v) => { v },
+		Err(_e) => { yield 3 },
+		default => { 4 }
+	};
+	return out;
+}

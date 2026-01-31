@@ -9,8 +9,7 @@ fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 7; });
 	var res = t.join();
 	return match res {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Failed(_e) => { 0 },
 				default => { 1 },
 			}

@@ -1,0 +1,13 @@
+module m
+
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	var a = conc.atomic_bool(false);
+	a.store(true, conc.MemoryOrder::Relaxed());
+	val v = a.load(conc.MemoryOrder::Relaxed());
+	if v {
+		return 0;
+	}
+	return 1;
+}

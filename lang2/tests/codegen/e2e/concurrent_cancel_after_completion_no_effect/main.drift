@@ -13,8 +13,7 @@ fn main() nothrow -> Int {
 	t.cancel();
 	var res2 = t.join();
 	return match res2 {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Closed => { 0 },
 				default => { 3 },
 			}

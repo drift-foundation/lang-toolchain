@@ -1,0 +1,54 @@
+module m
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var saddr = net.socket_addr("127.0.0.1", 0);
+	var sr = net.udp_bind(&saddr);
+	match sr {
+		Ok(srv) => {
+			val port = srv.test_local_port();
+			var caddr = net.socket_addr("127.0.0.1", 0);
+			var cr = net.udp_bind(&caddr);
+			match cr {
+				Ok(cli) => {
+					var b = io.buffer(1);
+					io.buffer_write(&mut b, 0, cast<Byte>(65));
+					var send_addr = net.socket_addr("127.0.0.1", port);
+					var ws = cli.send_to(&send_addr, &b);
+					var ws_code = 0;
+					match ws {
+						Ok(_) => { ws_code = 0; },
+						Err(_) => { ws_code = 3; },
+						default => { ws_code = 4; }
+					}
+					if ws_code != 0 { return ws_code; }
+					var rbuf = io.buffer(1);
+					var raddr = net.socket_addr("0.0.0.0", 0);
+					var rr = srv.recv_from(&mut raddr, &mut rbuf);
+					var rr_code = 0;
+					match rr {
+						Ok(n) => { rr_code = n; },
+						Err(_) => { rr_code = -7; },
+						default => { rr_code = -8; }
+					}
+					if rr_code == -7 { return 7; }
+					if rr_code == -8 { return 8; }
+					if rr_code != 1 { return 5; }
+					val v = io.buffer_read(&mut rbuf, 0);
+					if cast<Int>(v) != 65 { return 6; }
+					val _ = cli.close();
+					val _ = srv.close();
+					return 0;
+				},
+				Err(_) => { return 9; },
+				default => { return 10; }
+			}
+		},
+		Err(_) => { return 11; },
+		default => { return 12; }
+	}
+	return 99;
+}

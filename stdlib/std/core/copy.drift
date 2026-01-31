@@ -4,20 +4,29 @@ import std.core.hash as hash;
 import std.mem as mem;
 
 use trait hash.Hasher;
+use trait Diagnostic;
+use trait Try;
 
 export {
 	Copy,
 	Destructible,
 	Diagnostic,
+	Try,
 	Result,
 	Fn0,
 	Fn1,
 	Fn2,
+	FnThrow0,
+	FnThrow1,
+	FnThrow2,
 	Borrow,
 	BorrowMut,
 	Callback0,
 	Callback1,
 	Callback2,
+	CallbackThrow0,
+	CallbackThrow1,
+	CallbackThrow2,
 	Cell,
 	cell,
 	void_value,
@@ -25,6 +34,10 @@ export {
 	callback0,
 	callback1,
 	callback2,
+	callback_throw0,
+	callback_throw1,
+	callback_throw2,
+	or_throw,
 	STRING_CONTAINER_ID,
 	string_byte_at
 };
@@ -40,6 +53,10 @@ pub trait Diagnostic {
 	fn to_diag(self: Self) nothrow -> DiagnosticValue;
 }
 
+pub trait Try<T> {
+	fn into_try(self: Self) -> T;
+}
+
 pub trait Borrow<T> {
 	fn borrow(self: &Self) nothrow -> &T;
 }
@@ -48,9 +65,68 @@ pub trait BorrowMut<T> {
 	fn borrow_mut(self: &mut Self) nothrow -> &mut T;
 }
 
+pub trait FnThrow0<R> {
+	fn call(self: &Self) -> R;
+}
+
+pub trait FnThrow1<A, R> {
+	fn call(self: &Self, a: A) -> R;
+}
+
+pub trait FnThrow2<A, B, R> {
+	fn call(self: &Self, a: A, b: B) -> R;
+}
+
+pub interface CallbackThrow0<R> {
+	fn call(self: &Self) -> R;
+}
+
+pub interface CallbackThrow1<A, R> {
+	fn call(self: &Self, a: A) -> R;
+}
+
+pub interface CallbackThrow2<A, B, R> {
+	fn call(self: &Self, a: A, b: B) -> R;
+}
+
 pub variant Result<T, E> {
 	Ok(value: T),
 	Err(err: E),
+}
+
+implement<T, E> Try<T> for Result<T, E> {
+	pub fn into_try(self: Result<T, E>) -> T {
+		match self {
+			Ok(v) => { return move v; },
+			Err(_) => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
+		}
+	}
+}
+
+implement<T, E> Result<T, E> {
+	pub fn or_throw(self: Result<T, E>) -> T {
+		return self.into_try();
+	}
+
+	pub fn on_error(self: Result<T, E>, f: CallbackThrow1<E, T>) -> T {
+		match self {
+			Ok(v) => { return move v; },
+			Err(err) => { return f.call(move err); }
+		}
+	}
+}
+
+implement<T> Optional<T> {
+	pub fn on_none(self: Optional<T>, f: CallbackThrow0<T>) -> T {
+		match self {
+			Some(v) => { return move v; },
+			None => { return f.call(); }
+		}
+	}
+}
+
+pub fn or_throw<T, E>(r: Result<T, E>) -> T {
+	return r.into_try();
 }
 
 pub trait Fn0<R> {
@@ -105,6 +181,9 @@ pub interface Callback2<A, B, R> {
 @intrinsic pub fn callback0<F, R>(f: F) nothrow -> Callback0<R> require F is Fn0<R>;
 @intrinsic pub fn callback1<F, A, R>(f: F) nothrow -> Callback1<A, R> require F is Fn1<A, R>;
 @intrinsic pub fn callback2<F, A, B, R>(f: F) nothrow -> Callback2<A, B, R> require F is Fn2<A, B, R>;
+@intrinsic pub fn callback_throw0<F, R>(f: F) nothrow -> CallbackThrow0<R> require F is FnThrow0<R>;
+@intrinsic pub fn callback_throw1<F, A, R>(f: F) nothrow -> CallbackThrow1<A, R> require F is FnThrow1<A, R>;
+@intrinsic pub fn callback_throw2<F, A, B, R>(f: F) nothrow -> CallbackThrow2<A, B, R> require F is FnThrow2<A, B, R>;
 @intrinsic pub fn drop_value<T>(value: T) nothrow -> Void;
 
 implement Copy for Int {

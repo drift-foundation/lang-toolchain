@@ -1,0 +1,14 @@
+module m
+
+import std.core as core;
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	var lr = net.listen(&addr);
+	match lr {
+		Ok(_l) => { return 0; },
+		Err(_) => { return 1; },
+		default => { return 2; }
+	}
+}

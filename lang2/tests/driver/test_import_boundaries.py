@@ -70,7 +70,7 @@ def _resolve_importfrom(
 	if level == 0:
 		if not module:
 			return None
-		if module == "lang2" and name in {"drift", "driftc", "drift_common", "pkg_common", "drift_core"}:
+		if module == "lang2" and name in {"drift", "driftc", "drift_common", "pkg_common", "language_runtime", "compiler_infra"}:
 			return f"{module}.{name}"
 		return module
 	# In Python, level=1 means "from .", level=2 means "from ..", etc.

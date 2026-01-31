@@ -1,0 +1,7 @@
+{
+  "description": "e2e: Result.on_error recover",
+  "skip": false,
+  "exit_code": 7,
+  "stdout": "",
+  "stderr": ""
+}

@@ -53,7 +53,7 @@ def _compile_ir_with_clang(ir_path: Path, bin_path: Path) -> None:
 	if clang is None:
 		raise RuntimeError("clang not available")
 	res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		[clang, "-x", "ir", "-c", str(ir_path), "-o", str(bin_path)],
 		check=False,
 		capture_output=True,
 		text=True,

@@ -411,6 +411,11 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			expr=_convert_expr(expr.expr),
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
+	if isinstance(expr, parser_ast.YieldExpr):
+		return s0.YieldExpr(
+			value=_convert_expr(expr.value),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Lambda):
 		params = [
 			s0.Param(
@@ -1119,6 +1124,7 @@ def parse_drift_files_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=Path("<unknown>"),
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -1164,6 +1170,7 @@ def parse_drift_files_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=paths[0],
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -1188,6 +1195,7 @@ def parse_drift_files_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=paths[0],
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -1230,6 +1238,7 @@ def parse_drift_files_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=paths[0],
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -1253,6 +1262,7 @@ def parse_drift_files_to_hir(
 	module = ModuleLowered(
 		module_id=module_id,
 		package_id=package_id,
+		source_path=path,
 		func_hirs=func_hirs,
 		signatures_by_id=sigs,
 		fn_ids_by_name=fn_ids,
@@ -1312,6 +1322,24 @@ def parse_drift_workspace_to_hir(
 	diagnostics: list[Diagnostic] = []
 	user_paths = list(paths)
 	user_path_set = {p.resolve() for p in user_paths}
+
+	if stdlib_root is not None and module_paths:
+		_reserved_roots = {"std", "lang", "drift"}
+		for root in module_paths:
+			try:
+				root_resolved = root.resolve()
+			except OSError:
+				continue
+			for path in user_paths:
+				try:
+					rel = path.resolve().relative_to(root_resolved)
+				except ValueError:
+					continue
+				if rel.parts and rel.parts[0] in _reserved_roots:
+					stdlib_root = None
+					break
+			if stdlib_root is None:
+				break
 
 	if stdlib_root is not None:
 		std_root = stdlib_root
@@ -1471,17 +1499,45 @@ def parse_drift_workspace_to_hir(
 	if stdlib_root is not None:
 		std_root_resolved = stdlib_root.resolve()
 
+	def _is_path_under(path: Path, root: Path) -> bool:
+		try:
+			path.resolve().relative_to(root)
+		except ValueError:
+			return False
+		return True
+
 	def _is_stdlib_module(mid: str) -> bool:
 		if std_root_resolved is None:
 			return False
 		path = module_source_path.get(mid)
 		if path is None:
 			return False
-		try:
-			path.resolve().relative_to(std_root_resolved)
-		except ValueError:
-			return False
-		return True
+		return _is_path_under(path, std_root_resolved)
+
+	if module_paths and std_root_resolved is not None:
+		for mid, files in list(by_module.items()):
+			if len(files) < 2:
+				continue
+			std_files: list[tuple[Path, parser_ast.Program]] = []
+			user_files: list[tuple[Path, parser_ast.Program]] = []
+			for path, prog in files:
+				try:
+					path.resolve().relative_to(std_root_resolved)
+				except ValueError:
+					user_files.append((path, prog))
+				else:
+					std_files.append((path, prog))
+			if std_files and user_files:
+				by_module[mid] = user_files
+				roots_by_module[mid] = {
+					r
+					for r in roots_by_module.get(mid, set())
+					if not _is_path_under(r, std_root_resolved)
+				}
+				if mid in root_file_by_module:
+					root_file_by_module[mid] = {
+						r: p for r, p in root_file_by_module[mid].items() if not _is_path_under(r, std_root_resolved)
+					}
 
 	# When module roots are used, reject ambiguous module ids coming from
 	# multiple roots (prevents accidental shadowing/selection by search order).
@@ -1545,6 +1601,12 @@ def parse_drift_workspace_to_hir(
 	if any(d.severity == "error" for d in diagnostics):
 		return {}, TypeTable(), {}, {}, {}, diagnostics
 
+	# Public symbol maps (used for same-workspace module-qualified access).
+	pub_values_by_module: dict[str, set[str]] = {}
+	pub_consts_by_module: dict[str, set[str]] = {}
+	pub_types_by_module: dict[str, dict[str, set[str]]] = {}
+	pub_traits_by_module: dict[str, set[str]] = {}
+
 	def _build_export_interface(
 		*,
 		module_id: str,
@@ -1602,6 +1664,16 @@ def parse_drift_workspace_to_hir(
 		if builtin_public_structs:
 			module_struct_names |= set(builtin_public_structs)
 			module_pub_struct_names |= set(builtin_public_structs)
+		pub_values_by_module[module_id] = set(module_pub_fn_names)
+		pub_consts_by_module[module_id] = set(module_pub_const_names)
+		pub_types_by_module[module_id] = {
+			"structs": set(module_pub_struct_names),
+			"variants": set(module_pub_variant_names),
+			"exceptions": set(module_pub_exception_names),
+			"interfaces": set(module_pub_interface_names),
+			"aliases": set(module_pub_alias_names),
+		}
+		pub_traits_by_module[module_id] = set(module_pub_trait_names)
 
 		raw_export_entries: list[tuple[str, Span]] = []
 		star_export_entries: list[tuple[str, Span]] = []
@@ -2239,6 +2311,7 @@ def parse_drift_workspace_to_hir(
 		return mod, trait_name
 
 	for mid, files in by_module.items():
+		local_trait_names = {t.name for t in getattr(merged_programs.get(mid), "traits", []) or []}
 		module_aliases = module_aliases_by_module.get(mid, {})
 		for path, prog in files:
 			_check_alias_binding_conflicts(path, module_aliases, prog)
@@ -2250,6 +2323,10 @@ def parse_drift_workspace_to_hir(
 				else:
 					alias = ".".join(ref_path)
 					mod = module_aliases.get(alias)
+					if mod is None:
+						# Allow direct module paths in use-trait without prior import alias.
+						if alias in merged_programs or (external_module_exports is not None and alias in external_module_exports):
+							mod = alias
 				span = _span_in_file(path, getattr(tr, "loc", None))
 				if mod is None:
 					diagnostics.append(
@@ -2269,7 +2346,17 @@ def parse_drift_workspace_to_hir(
 						)
 					)
 					continue
-				if mod != mid:
+				if mod == mid:
+					if tr.name not in local_trait_names:
+						diagnostics.append(
+							_p_diag(
+								message=f"module '{mod}' does not define trait '{tr.name}'",
+								severity="error",
+								span=span,
+							)
+						)
+						continue
+				else:
 					exported_traits = _exported_traits_for_module(mod)
 					if tr.name not in exported_traits:
 						available = ", ".join(sorted(exported_traits))
@@ -2295,16 +2382,6 @@ def parse_drift_workspace_to_hir(
 					continue
 				seen.add(key)
 				trait_scope_by_module[mid].append(key)
-
-	for mid, prog in merged_programs.items():
-		origin_pkg = module_packages_for_scope.get(mid, package_id)
-		for tr in getattr(prog, "traits", []) or []:
-			key = TraitKey(package_id=origin_pkg, module=mid, name=tr.name)
-			seen = trait_scope_seen_by_module[mid]
-			if key in seen:
-				continue
-			seen.add(key)
-			trait_scope_by_module[mid].append(key)
 
 	for mid in merged_programs:
 		if mid in module_exports:
@@ -2485,6 +2562,9 @@ def parse_drift_workspace_to_hir(
 					_resolve_types_in_expr(expr.attempt)
 					for arm in getattr(expr, "catch_arms", []) or []:
 						_resolve_types_in_block(path, file_aliases, arm.block)
+					return
+				if isinstance(expr, parser_ast.YieldExpr):
+					_resolve_types_in_expr(expr.value)
 					return
 				if isinstance(expr, parser_ast.MatchExpr):
 					_resolve_types_in_expr(expr.scrutinee)
@@ -2948,16 +3028,14 @@ def parse_drift_workspace_to_hir(
 			return name
 
 		def exported_value_names(mod: str) -> set[str]:
-			if mod in exports_values_by_module:
-				return set((exports_values_by_module.get(mod) or {}).keys())
 			if external_module_exports is not None and mod in external_module_exports:
 				ext = external_module_exports.get(mod) or {}
 				return set(ext.get("values") or set())
-			return set()
+			values = set((exports_values_by_module.get(mod) or {}).keys())
+			values |= set(pub_values_by_module.get(mod) or set())
+			return values
 
 		def exported_type_names(mod: str) -> set[str]:
-			if mod in exports_types_by_module:
-				return _union_exported_types(exports_types_by_module.get(mod))
 			if external_module_exports is not None and mod in external_module_exports:
 				ext = external_module_exports.get(mod) or {}
 				ext_types = ext.get("types")
@@ -2970,15 +3048,22 @@ def parse_drift_workspace_to_hir(
 						| set(ext_types.get("aliases") or set())
 					)
 				return set()
-			return set()
+			types = _union_exported_types(exports_types_by_module.get(mod))
+			pub_types = pub_types_by_module.get(mod) or {}
+			types |= set(pub_types.get("structs") or set())
+			types |= set(pub_types.get("variants") or set())
+			types |= set(pub_types.get("exceptions") or set())
+			types |= set(pub_types.get("interfaces") or set())
+			types |= set(pub_types.get("aliases") or set())
+			return types
 
 		def exported_const_names(mod: str) -> set[str]:
-			if mod in exports_consts_by_module:
-				return set(exports_consts_by_module.get(mod) or set())
 			if external_module_exports is not None and mod in external_module_exports:
 				ext = external_module_exports.get(mod) or {}
 				return set(ext.get("consts") or set())
-			return set()
+			consts = set(exports_consts_by_module.get(mod) or set())
+			consts |= set(pub_consts_by_module.get(mod) or set())
+			return consts
 
 		def exported_struct_names(mod: str) -> set[str]:
 			if mod in exports_types_by_module:
@@ -3393,6 +3478,7 @@ def parse_drift_workspace_to_hir(
 		modules[mid] = ModuleLowered(
 			module_id=mid,
 			package_id=package_id,
+			source_path=module_file_by_id.get(mid, Path("<unknown>")),
 			func_hirs=func_hirs_by_module.get(mid, {}),
 			signatures_by_id=signatures_by_module.get(mid, {}),
 			fn_ids_by_name=fn_ids_by_name_by_module.get(mid, {}),
@@ -3406,6 +3492,29 @@ def parse_drift_workspace_to_hir(
 				if module_file_by_id.get(mid) is not None
 			},
 		)
+	# After all modules are parsed, normalize exception-named forward nominals in
+	# signatures using the full exception schema set.
+	def _coerce_exception_nominal(tid: TypeId) -> TypeId:
+		try:
+			td = shared_type_table.get(tid)
+		except Exception:
+			return tid
+		if td.kind is TypeKind.FORWARD_NOMINAL and td.module_id:
+			fqn = f"{td.module_id}:{td.name}"
+			if fqn in shared_type_table.exception_schemas:
+				return shared_type_table.ensure_error()
+		if td.kind is TypeKind.REF and td.param_types:
+			inner = td.param_types[0]
+			new_inner = _coerce_exception_nominal(inner)
+			if new_inner != inner:
+				return shared_type_table.ensure_ref_mut(new_inner) if td.ref_mut else shared_type_table.ensure_ref(new_inner)
+		return tid
+	for mod in modules.values():
+		for sig in mod.signatures_by_id.values():
+			if sig.param_type_ids:
+				sig.param_type_ids = [_coerce_exception_nominal(t) for t in sig.param_type_ids]
+			if sig.return_type_id is not None:
+				sig.return_type_id = _coerce_exception_nominal(sig.return_type_id)
 	for module in modules.values():
 		for block in module.func_hirs.values():
 			assign_callsite_ids(block, start=0)
@@ -3454,6 +3563,15 @@ def _lower_parsed_program_to_hir(
 	impl_metas: list[ImplMeta] = []
 	lowerer = AstToHIR()
 	lowerer._module_name = module_id
+	module_aliases: dict[str, str] = {}
+	for imp in getattr(prog, "imports", []) or []:
+		mod = ".".join(getattr(imp, "path", []) or [])
+		if not mod:
+			continue
+		alias = getattr(imp, "alias", None) or (getattr(imp, "path", []) or [mod])[-1]
+		if alias not in module_aliases:
+			module_aliases[alias] = mod
+	lowerer._module_aliases = module_aliases
 	module_function_names: set[str] = {fn.name for fn in getattr(prog, "functions", []) or []}
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
 	struct_defs = list(getattr(prog, "structs", []) or [])
@@ -3461,11 +3579,18 @@ def _lower_parsed_program_to_hir(
 	interface_defs = list(getattr(prog, "interfaces", []) or [])
 	type_alias_defs = list(getattr(prog, "type_aliases", []) or [])
 	struct_param_maps: dict[TypeKey, dict[str, TypeParamId]] = {}
-	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_name, diagnostics)
+	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_id, diagnostics)
 	for exc in prog.exceptions:
-		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
+		fqn = f"{module_id}:{exc.name}"
 		field_names = [arg.name for arg in getattr(exc, "args", [])]
 		exception_schemas[fqn] = (fqn, field_names)
+	# Make exception schemas visible before signature resolution so exception
+	# types can be used in annotations without minting forward-nominal types.
+	prev_exc = getattr(type_table, "exception_schemas", None)
+	if not isinstance(prev_exc, dict):
+		prev_exc = {}
+	prev_exc.update(exception_schemas)
+	type_table.exception_schemas = prev_exc
 	# Build a TypeTable early so we can register user-defined type names (structs)
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.
@@ -4034,6 +4159,26 @@ def _lower_parsed_program_to_hir(
 
 	type_table, sigs = resolve_program_signatures(decls, table=type_table)
 	signatures.update(sigs)
+	# Normalize any exception-named forward nominals in signatures to Error so
+	# helpers can accept exception types in annotations.
+	def _coerce_exception_nominal(tid: TypeId) -> TypeId:
+		try:
+			td = type_table.get(tid)
+		except Exception:
+			return tid
+		if td.kind is TypeKind.FORWARD_NOMINAL and td.module_id:
+			fqn = f"{td.module_id}:{td.name}"
+			if fqn in type_table.exception_schemas:
+				return type_table.ensure_error()
+		if td.kind is TypeKind.REF and td.param_types:
+			inner = td.param_types[0]
+			new_inner = _coerce_exception_nominal(inner)
+			if new_inner != inner:
+				return type_table.ensure_ref_mut(new_inner) if td.ref_mut else type_table.ensure_ref(new_inner)
+		return tid
+	for sig in signatures.values():
+		sig.param_type_ids = [_coerce_exception_nominal(t) for t in sig.param_type_ids]
+		sig.return_type_id = _coerce_exception_nominal(sig.return_type_id)
 	for impl in impl_metas:
 		for method in getattr(impl, "methods", []) or []:
 			if not getattr(method, "is_pub", False):
@@ -4086,6 +4231,7 @@ def parse_drift_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=path,
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -4102,6 +4248,7 @@ def parse_drift_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=path,
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -4126,6 +4273,7 @@ def parse_drift_to_hir(
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,
+			source_path=path,
 			func_hirs={},
 			signatures_by_id={},
 			fn_ids_by_name={},
@@ -4148,6 +4296,7 @@ def parse_drift_to_hir(
 	module = ModuleLowered(
 		module_id=module_id,
 		package_id=package_id,
+		source_path=path,
 		func_hirs=func_hirs,
 		signatures_by_id=sigs,
 		fn_ids_by_name=fn_ids,

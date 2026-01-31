@@ -1,11 +1,30 @@
 module std.io
 
-import std.concurrent as conc;
+import std.core as core;
+import std.mem as mem;
+import lang.thread as thread;
 
 export {
 	IoInterest,
-	block_on_read,
-	block_on_write
+	IoError,
+	File,
+	OpenOptions,
+	Buffer,
+	buffer,
+	buffer_ptr,
+	buffer_ptr_mut,
+	buffer_capacity,
+	buffer_capacity_mut,
+	buffer_len,
+	buffer_len_mut,
+	buffer_set_len,
+	buffer_write,
+	buffer_read,
+	open,
+	FILE_MODE_DEFAULT,
+	close,
+	read,
+	write
 };
 
 pub variant IoInterest {
@@ -13,10 +32,209 @@ pub variant IoInterest {
 	Write
 }
 
-pub fn block_on_read(fd: Int, deadline_ms: Int) nothrow -> Void {
-	conc.block_on_io(fd, 1, deadline_ms);
+pub variant IoError {
+	Errno(code: Int),
+	WouldBlock
 }
 
-pub fn block_on_write(fd: Int, deadline_ms: Int) nothrow -> Void {
-	conc.block_on_io(fd, 4, deadline_ms);
+pub struct File {
+	fd: Int
+}
+
+pub struct OpenOptions {
+	pub read: Bool,
+	pub write: Bool,
+	pub create: Bool,
+	pub truncate: Bool,
+	pub append: Bool,
+	pub mode: Int
+}
+
+@test_build_only
+pub fn file_from_fd(fd: Int) nothrow -> File {
+	return File(fd = fd);
+}
+
+pub struct Buffer {
+	buf: mem.RawBuffer<Byte>,
+	cap: Int,
+	len: Int
+}
+
+pub const FILE_READ_ONLY: Uint = 0;
+pub const FILE_WRITE_ONLY: Uint = 1;
+pub const FILE_READ_WRITE: Uint = 2;
+pub const FILE_CREATE: Uint = 64;
+pub const FILE_TRUNCATE: Uint = 512;
+pub const FILE_APPEND: Uint = 1024;
+pub const FILE_MODE_DEFAULT: Int = 420;
+pub const IO_EINTR: Int = 4;
+pub const IO_EAGAIN: Int = 11;
+
+fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
+	val vt = thread.vt_current();
+	if vt == 0 {
+		if deadline_ms > 0 {
+			thread.vt_park_until(deadline_ms);
+		} else {
+			thread.vt_park_until(1);
+		}
+		return;
+	}
+	thread.reactor_register_io(fd, interest, vt, deadline_ms);
+	if deadline_ms > 0 {
+		thread.vt_park_until(deadline_ms);
+	} else {
+		thread.vt_park(0);
+	}
+	return;
+}
+
+pub fn buffer(len: Int) nothrow -> Buffer {
+	unsafe {
+		var b = mem.alloc_uninit<type Byte>(len);
+		return Buffer(buf = move b, cap = len, len = 0);
+	}
+}
+
+pub fn buffer_capacity(self: &Buffer) nothrow -> Int {
+	return self.cap;
+}
+
+pub fn buffer_capacity_mut(self: &mut Buffer) nothrow -> Int {
+	return self.cap;
+}
+
+pub fn buffer_len(self: &Buffer) nothrow -> Int {
+	return self.len;
+}
+
+pub fn buffer_len_mut(self: &mut Buffer) nothrow -> Int {
+	return self.len;
+}
+
+pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
+	self.len = len;
+}
+
+pub fn buffer_ptr(self: &Buffer) nothrow -> mem.Ptr<Byte> {
+	return mem.rawbuffer_ptr<type Byte>(&self.buf);
+}
+
+pub fn buffer_ptr_mut(self: &mut Buffer) nothrow -> mem.Ptr<Byte> {
+	return mem.rawbuffer_ptr<type Byte>(&self.buf);
+}
+
+pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
+	mem.write<type Byte>(&mut self.buf, i, v);
+	val new_len = i + 1;
+	if new_len > self.len {
+		self.len = new_len;
+	}
+}
+
+pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
+	return mem.read<type Byte>(&mut self.buf, i);
+}
+
+pub fn open(path: String, opts: &OpenOptions) nothrow -> core.Result<File, IoError> {
+	var flags = FILE_READ_ONLY;
+	if opts.read and opts.write {
+		flags = FILE_READ_WRITE;
+	} else {
+		if opts.write {
+			flags = FILE_WRITE_ONLY;
+		} else {
+			flags = FILE_READ_ONLY;
+		}
+	}
+	if opts.create {
+		flags = flags + FILE_CREATE;
+	}
+	if opts.truncate {
+		flags = flags + FILE_TRUNCATE;
+	}
+	if opts.append {
+		flags = flags + FILE_APPEND;
+	}
+	val fd = thread.io_open(path, cast<Int>(flags), opts.mode);
+	if fd < 0 {
+		return core.Result::Err(IoError::Errno(thread.io_errno()));
+	}
+	return core.Result::Ok(File(fd = fd));
+}
+
+pub fn close(self: &File) nothrow -> core.Result<Void, IoError> {
+	val r = thread.io_close(self.fd);
+	if r < 0 {
+		return core.Result::Err(IoError::Errno(thread.io_errno()));
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+implement File {
+	pub fn close(self: &File) nothrow -> core.Result<Void, IoError> {
+		return close(self);
+	}
+
+	pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+		return read(self, buf);
+	}
+
+	pub fn write(self: &File, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+		return write(self, buf);
+	}
+}
+
+pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val len = buf.cap;
+	while true {
+		val n = thread.io_read(self.fd, ptr, len);
+		if n >= 0 {
+			buf.len = n;
+			return core.Result::Ok(n);
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 1, 0);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
+	}
+	return core.Result::Err(IoError::Errno(-1));
+}
+
+pub fn write(self: &File, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val len = buf.len;
+	while true {
+		val n = thread.io_write(self.fd, ptr, len);
+		if n >= 0 {
+			return core.Result::Ok(n);
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(1);
+				continue;
+			}
+			_block_on_io(self.fd, 4, 0);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
+	}
+	return core.Result::Err(IoError::Errno(-1));
 }

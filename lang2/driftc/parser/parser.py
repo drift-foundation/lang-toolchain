@@ -86,6 +86,7 @@ from .ast import (
     VariantField,
     MatchExpr,
     MatchArm,
+    YieldExpr,
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
@@ -1351,6 +1352,7 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 		if not isinstance(item, Tree):
 			continue
 		item_test_only = _has_test_build_only_marker(item)
+		is_pub_from_marker = any(isinstance(c, Token) and c.type == "PUB" for c in getattr(item, "children", []) or [])
 		if item_test_only:
 			item = _strip_test_build_only_marker(item)
 		item_kind = _name(item)
@@ -1368,7 +1370,7 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 			continue
 		fn = _build_function(fn_node)
 		if item_kind == "func_def":
-			is_pub = bool(getattr(fn, "is_pub", False))
+			is_pub = bool(getattr(fn, "is_pub", False)) or is_pub_from_marker
 		fn.is_pub = is_pub
 		fn.test_build_only = item_test_only
 		fn.is_method = True
@@ -1427,9 +1429,30 @@ def _build_value_block(tree: Tree) -> Block:
     if result_expr_node is None:
         raise ValueError("value_block missing trailing expression")
 
-    result_expr = _build_expr(result_expr_node)
+    if _name(result_expr_node) == "yield_expr":
+        result_expr = _build_yield_expr(result_expr_node)
+    else:
+        result_expr = _build_expr(result_expr_node)
     statements.append(ExprStmt(loc=result_expr.loc, value=result_expr))
     return Block(statements=statements)
+
+
+def _build_yield_expr(tree: Tree) -> YieldExpr:
+    """
+    Build a yield expression (value production inside a value block).
+
+    Grammar:
+        yield_expr: YIELD expr
+    """
+    expr_node: Tree | None = None
+    for child in tree.children:
+        if isinstance(child, Tree):
+            expr_node = child
+            break
+    if expr_node is None:
+        raise ValueError("yield_expr missing expression")
+    value_expr = _build_expr(expr_node)
+    return YieldExpr(loc=value_expr.loc, value=value_expr)
 
 
 def _build_param(tree: Tree) -> Param:
@@ -1583,22 +1606,41 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 				args = [_build_type_expr(arg) for arg in children]
 		return TypeExpr(name=name_token.value, args=args, loc=Located(line=name_token.line, column=name_token.column))
 	if name == "qualified_base_type":
-		# NAME "." NAME type_args?
-		alias_tok = tree.children[0]
-		name_tok = tree.children[2]
+		# module_path type_args?
+		module_path = tree.children[0]
+		path_parts: List[str] = []
+		path_loc = None
+		if isinstance(module_path, Tree):
+			for child in module_path.children:
+				if isinstance(child, Token) and child.type == "NAME":
+					path_parts.append(child.value)
+					if path_loc is None:
+						path_loc = Located(line=child.line, column=child.column)
+		if len(path_parts) < 2:
+			return TypeExpr(name="<unknown>")
+		name_tok = path_parts[-1]
+		alias_tok = path_parts[0]
 		args: List[TypeExpr] = []
-		if len(tree.children) > 3:
-			type_args = tree.children[3]
+		if len(tree.children) > 1:
+			type_args = tree.children[1]
 			if isinstance(type_args, Tree):
 				children = [arg for arg in type_args.children if isinstance(arg, Tree)]
 				if len(children) == 1 and _name(children[0]) in {"angle_type_args", "square_type_args"}:
 					children = [arg for arg in children[0].children if isinstance(arg, Tree)]
 				args = [_build_type_expr(arg) for arg in children]
+		if len(path_parts) == 2:
+			return TypeExpr(
+				name=name_tok,
+				args=args,
+				module_alias=alias_tok,
+				loc=path_loc,
+			)
+		module_id = ".".join(path_parts[:-1])
 		return TypeExpr(
-			name=name_tok.value,
+			name=name_tok,
 			args=args,
-			module_alias=alias_tok.value,
-			loc=Located(line=alias_tok.line, column=alias_tok.column),
+			module_id=module_id,
+			loc=path_loc,
 		)
 	# fallback for other wrappers
 	if tree.children:
@@ -1876,7 +1918,11 @@ def _build_raise_stmt(tree: Tree) -> RaiseStmt:
     if idx < len(children) and _name(children[idx]) == "domain_clause":
         domain = children[idx].children[0].value
         idx += 1
-    value = _build_expr(children[idx])
+    value_node = children[idx]
+    if isinstance(value_node, Tree) and _name(value_node) == "exception_ctor":
+        value = _build_exception_ctor(value_node)
+    else:
+        value = _build_expr(value_node)
     return RaiseStmt(loc=loc, value=value, domain=domain)
 
 

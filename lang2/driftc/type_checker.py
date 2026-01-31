@@ -930,6 +930,8 @@ class TypeChecker:
 								_scan_expr(it)
 							elif isinstance(it, H.HBlock):
 								_scan_block(it)
+							elif isinstance(it, H.HNode):
+								_scan_expr(it)
 
 			def _scan_block(block: H.HBlock) -> None:
 				for st in block.statements:
@@ -975,6 +977,8 @@ class TypeChecker:
 								_walk_expr(it)
 							elif isinstance(it, H.HBlock):
 								_walk_block(it)
+							elif isinstance(it, H.HNode):
+								_walk_expr(it)
 
 			def _walk_block(b: H.HBlock) -> None:
 				for st in b.statements:
@@ -1145,6 +1149,42 @@ class TypeChecker:
 					return False
 				return bool(binding_mutable.get(place.base.local_id, False))
 			if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+				# Special-case Error.attrs["key"] in place-expr form.
+				for idx, proj in enumerate(expr.projections):
+					if not (isinstance(proj, H.HPlaceField) and proj.name == "attrs"):
+						continue
+					if idx + 1 >= len(expr.projections) or not isinstance(expr.projections[idx + 1], H.HPlaceIndex):
+						continue
+					# Only support direct Error.attrs["key"] access (no trailing projections).
+					if idx + 2 != len(expr.projections):
+						continue
+					key_proj = expr.projections[idx + 1]
+					sub_ty = type_expr(expr.base, used_as_value=False)
+					sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is TypeKind.REF and sub_def.param_types:
+						sub_ty = sub_def.param_types[0]
+						sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is TypeKind.ERROR:
+						key_ty = type_expr(key_proj.index)
+						if self.type_table.get(key_ty).name != "String":
+							diagnostics.append(
+								_tc_diag(
+									message="Error.attrs expects a String key",
+									severity="error",
+									span=getattr(key_proj.index, "loc", Span()),
+									code="E-ERROR-ATTR-KEY-NOT-STRING",
+								)
+							)
+						return record_expr(expr, self._dv)
+					diagnostics.append(
+						_tc_diag(
+							message="attrs access is only supported on Error values",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+
 				cur = type_expr(expr.base, used_as_value=False)
 				for pr in expr.projections:
 					if isinstance(pr, H.HPlaceDeref):
@@ -1369,15 +1409,21 @@ class TypeChecker:
 					ref_mut, inner = ref_info
 					place_expr = place_expr_from_lvalue_expr(arg_expr)
 					if place_expr is None:
-						diagnostics.append(
-							_tc_diag(
-								message="borrow requires an addressable place; bind to a local first",
-								severity="error",
-								phase="typecheck",
-								span=getattr(arg_expr, "loc", span),
+						if ref_mut:
+							diagnostics.append(
+								_tc_diag(
+									message="borrow requires an addressable place; bind to a local first",
+									severity="error",
+									phase="typecheck",
+									span=getattr(arg_expr, "loc", span),
+								)
 							)
-						)
-						had_error = True
+							had_error = True
+							continue
+						borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False)
+						_assign_node_id(borrow_expr)
+						args[idx] = borrow_expr
+						updated_types[idx] = type_expr(borrow_expr)
 						continue
 					_assign_place_expr_ids(place_expr)
 					if ref_mut:
@@ -1399,6 +1445,11 @@ class TypeChecker:
 					updated_types[idx] = type_expr(borrow_expr)
 					continue
 				if arg_ty is not None and arg_ty != param_ty and self.type_table.get(param_ty).kind is TypeKind.INTERFACE:
+					inst = self.type_table.get_interface_instance(param_ty)
+					base_id = inst.base_id if inst is not None else param_ty
+					base_def = self.type_table.interface_bases.get(base_id)
+					if base_def is not None and base_def.name.startswith("Callback") and isinstance(arg_expr, H.HLambda):
+						continue
 					if self.type_table.get(arg_ty).kind is TypeKind.INTERFACE:
 						if iface_assignable(arg_ty, param_ty):
 							record_iface_coercion(arg_expr, param_ty)
@@ -1421,15 +1472,21 @@ class TypeChecker:
 					continue
 				place_expr = place_expr_from_lvalue_expr(arg_expr)
 				if place_expr is None:
-					diagnostics.append(
-						_tc_diag(
-							message="borrow requires an addressable place; bind to a local first",
-							severity="error",
-							phase="typecheck",
-							span=getattr(arg_expr, "loc", span),
+					if ref_mut:
+						diagnostics.append(
+							_tc_diag(
+								message="borrow requires an addressable place; bind to a local first",
+								severity="error",
+								phase="typecheck",
+								span=getattr(arg_expr, "loc", span),
+							)
 						)
-					)
-					had_error = True
+						had_error = True
+						continue
+					borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False)
+					_assign_node_id(borrow_expr)
+					args[idx] = borrow_expr
+					updated_types[idx] = type_expr(borrow_expr)
 					continue
 				_assign_place_expr_ids(place_expr)
 				if ref_mut:
@@ -1968,6 +2025,21 @@ class TypeChecker:
 			ret = td.param_types[-1]
 			can_throw = td.can_throw()
 			return params, ret, can_throw
+
+		def _fn_trait_expected(trait_name: str) -> tuple[int, bool] | None:
+			if trait_name == "Fn0":
+				return (1, False)
+			if trait_name == "Fn1":
+				return (2, False)
+			if trait_name == "Fn2":
+				return (3, False)
+			if trait_name == "FnThrow0":
+				return (1, True)
+			if trait_name == "FnThrow1":
+				return (2, True)
+			if trait_name == "FnThrow2":
+				return (3, True)
+			return None
 
 		def _force_boundary_can_throw(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
 			if sig is None:
@@ -3134,11 +3206,13 @@ class TypeChecker:
 						if not isinstance(atom, parser_ast.TraitIs):
 							continue
 						trait_name = getattr(atom.trait, "name", None)
-						if trait_name not in ("Fn0", "Fn1", "Fn2"):
+						exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+						if exp is None:
 							continue
-						if trait_name == "Fn0" and len(arg_types) == 1 and len(type_param_ids) >= 2:
+						need, trait_can_throw = exp
+						if trait_name in ("Fn0", "FnThrow0") and len(arg_types) == 1 and len(type_param_ids) >= 2:
 							ad = self.type_table.get(arg_types[0])
-							if ad.kind is TypeKind.FUNCTION and not ad.can_throw():
+							if ad.kind is TypeKind.FUNCTION and ad.can_throw() == trait_can_throw:
 								bindings.setdefault(type_param_ids[0], arg_types[0])
 								bindings.setdefault(type_param_ids[1], ad.param_types[-1])
 						subj = atom.subject
@@ -3155,8 +3229,9 @@ class TypeChecker:
 						td = self.type_table.get(subj_ty)
 						if td.kind is not TypeKind.FUNCTION:
 							continue
+						if td.can_throw() != trait_can_throw:
+							continue
 						fn_parts = list(td.param_types)
-						need = 1 if trait_name == "Fn0" else (2 if trait_name == "Fn1" else 3)
 						if len(fn_parts) != need:
 							continue
 						trait_args = list(getattr(atom.trait, "args", []) or [])
@@ -3279,7 +3354,11 @@ class TypeChecker:
 			if self_mode is None:
 				return False, None
 			if self_mode is SelfMode.SELF_BY_VALUE:
-				return (receiver_type == param_self), None
+				if receiver_type == param_self:
+					return True, None
+				if _generic_nominal_match(param_self, receiver_type):
+					return True, None
+				return False, None
 			td_param = self.type_table.get(param_self)
 			td_recv = self.type_table.get(receiver_type)
 			if self_mode is SelfMode.SELF_BY_REF:
@@ -3703,7 +3782,7 @@ class TypeChecker:
 					continue
 				if req is not None and len(arg_types) == 1:
 					ad = self.type_table.get(arg_types[0])
-					if ad.kind is TypeKind.FUNCTION and not ad.can_throw():
+					if ad.kind is TypeKind.FUNCTION:
 						facts = _extract_conjunctive_facts(req)
 						if facts:
 							all_fn = True
@@ -3712,8 +3791,12 @@ class TypeChecker:
 									all_fn = False
 									break
 								trait_name = getattr(atom.trait, "name", None)
-								expected = 1 if trait_name == "Fn0" else (2 if trait_name == "Fn1" else 3)
-								if trait_name not in ("Fn0", "Fn1", "Fn2"):
+								exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+								if exp is None:
+									all_fn = False
+									break
+								expected, trait_can_throw = exp
+								if ad.can_throw() != trait_can_throw:
 									all_fn = False
 									break
 								if len(ad.param_types) != expected:
@@ -3760,8 +3843,10 @@ class TypeChecker:
 						if not isinstance(atom, parser_ast.TraitIs):
 							continue
 						trait_name = getattr(atom.trait, "name", None)
-						if trait_name not in ("Fn0", "Fn1", "Fn2"):
+						exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+						if exp is None:
 							continue
+						expected, trait_can_throw = exp
 						subj = atom.subject
 						subj_key = subst.get(subj)
 						if subj_key is None and isinstance(subj, parser_ast.TypeNameRef):
@@ -3789,7 +3874,6 @@ class TypeChecker:
 						if not fn_args:
 							continue
 						trait_args = list(getattr(atom.trait, "args", []) or [])
-						expected = 1 if trait_name == "Fn0" else (2 if trait_name == "Fn1" else 3)
 						if len(trait_args) != expected or len(fn_args) != expected:
 							continue
 						for targ, farg in zip(trait_args, fn_args):
@@ -3809,20 +3893,21 @@ class TypeChecker:
 								all_fn = False
 								break
 							trait_name = getattr(atom.trait, "name", None)
-							if trait_name not in ("Fn0", "Fn1", "Fn2"):
+							exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+							if exp is None:
 								all_fn = False
 								break
+							expected, trait_can_throw = exp
 							subj = atom.subject
 							subj_key = subst.get(subj)
 							if subj_key is None and isinstance(subj, parser_ast.TypeNameRef):
 								subj_key = subst.get(subj.name)
 							if subj_key is None and isinstance(subj, TypeKey):
 								subj_key = subj
-							expected = 1 if trait_name == "Fn0" else (2 if trait_name == "Fn1" else 3)
 							if subj_key is None and len(arg_types) == 1:
 								ad = self.type_table.get(arg_types[0])
 								if ad.kind is TypeKind.FUNCTION:
-									if ad.can_throw():
+									if ad.can_throw() != trait_can_throw:
 										all_fn = False
 										break
 									if len(ad.param_types) != expected:
@@ -3834,7 +3919,10 @@ class TypeChecker:
 							if not isinstance(subj_key, TypeKey) or subj_key.name != "fn":
 								all_fn = False
 								break
-							if subj_key.fn_throws is True:
+							if subj_key.fn_throws is True and not trait_can_throw:
+								all_fn = False
+								break
+							if subj_key.fn_throws is False and trait_can_throw:
 								all_fn = False
 								break
 							if len(subj_key.args) != expected:
@@ -3860,7 +3948,7 @@ class TypeChecker:
 				res = prove_expr(world, env, subst, req)
 				if res.status is not ProofStatus.PROVED and len(arg_types) == 1:
 					ad = self.type_table.get(arg_types[0])
-					if ad.kind is TypeKind.FUNCTION and not ad.can_throw():
+					if ad.kind is TypeKind.FUNCTION:
 						facts = _extract_conjunctive_facts(req)
 						ok_fn = True
 						for atom in facts:
@@ -3868,10 +3956,14 @@ class TypeChecker:
 								ok_fn = False
 								break
 							trait_name = getattr(atom.trait, "name", None)
-							if trait_name not in ("Fn0", "Fn1", "Fn2"):
+							exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+							if exp is None:
 								ok_fn = False
 								break
-							expected = 1 if trait_name == "Fn0" else (2 if trait_name == "Fn1" else 3)
+							expected, trait_can_throw = exp
+							if ad.can_throw() != trait_can_throw:
+								ok_fn = False
+								break
 							if len(ad.param_types) != expected:
 								ok_fn = False
 								break
@@ -4483,6 +4575,8 @@ class TypeChecker:
 				return record_expr(expr, self._unknown)
 
 			if isinstance(expr, H.HLambda):
+				if expected_type is None and hasattr(expr, "expected_type_from_require"):
+					expected_type = getattr(expr, "expected_type_from_require")
 				expected_fn = _expected_function_shape(expected_type) if expected_type is not None else None
 				lambda_type_error = False
 				allow_capture_invoke = bool(getattr(expr, "allow_capture_invoke", False))
@@ -4587,10 +4681,32 @@ class TypeChecker:
 					if expr.body_expr is not None:
 						inferred_ret = type_expr(expr.body_expr)
 					elif expr.body_block is not None:
-						for st in expr.body_block.statements:
-							if isinstance(st, H.HReturn) and st.value is not None:
-								inferred_ret = type_expr(st.value)
-								break
+						def _find_return_expr(node: H.HNode) -> H.HExpr | None:
+							if isinstance(node, H.HReturn) and node.value is not None:
+								return node.value
+							if isinstance(node, H.HBlock):
+								for st in node.statements:
+									found = _find_return_expr(st)
+									if found is not None:
+										return found
+								return None
+							for field in getattr(node, "__dataclass_fields__", {}) or {}:
+								val = getattr(node, field, None)
+								if isinstance(val, H.HNode):
+									found = _find_return_expr(val)
+									if found is not None:
+										return found
+								elif isinstance(val, list):
+									for it in val:
+										if isinstance(it, H.HNode):
+											found = _find_return_expr(it)
+											if found is not None:
+												return found
+							return None
+
+						ret_expr = _find_return_expr(expr.body_block)
+						if ret_expr is not None:
+							inferred_ret = type_expr(ret_expr)
 						if inferred_ret is None:
 							inferred_ret = self._void
 					if inferred_ret is not None:
@@ -4635,6 +4751,16 @@ class TypeChecker:
 						return record_expr(expr, self._unknown)
 					captures = list(getattr(expr, "captures", []) or [])
 					if expr.explicit_captures:
+						if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in expr.explicit_captures):
+							diagnostics.append(
+								_tc_diag(
+									message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+									notes=["wrap it like: (|...| => ...)(...)"],
+								)
+							)
+							return record_expr(expr, self._unknown)
 						diagnostics.append(
 							_tc_diag(
 								message="capturing lambdas cannot be coerced to function pointers",
@@ -4649,6 +4775,16 @@ class TypeChecker:
 						captures = res.captures
 						expr.captures = res.captures
 					if captures:
+						if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in captures):
+							diagnostics.append(
+								_tc_diag(
+									message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+									notes=["wrap it like: (|...| => ...)(...)"],
+								)
+							)
+							return record_expr(expr, self._unknown)
 						diagnostics.append(
 							_tc_diag(
 								message="capturing lambdas cannot be coerced to function pointers",
@@ -5488,14 +5624,15 @@ class TypeChecker:
 					return record_expr(expr, self._unknown)
 
 				inner_ty = type_expr(expr.subject, used_as_value=False)
-				# MVP: borrowing is only supported from addressable places.
+				# MVP: borrowing is only supported from addressable places, except
+				# for shared borrows which may be materialized from rvalues.
 				#
 				# Current support:
 				# - locals/params: `&x`, `&mut x`
 				# - projections: `&x.field`, `&arr[i]`
 				# - reborrow through a reference: `&*p`, `&mut *p`
-				#
-				# Future work: temporary materialization of rvalues (e.g., `&(make())`).
+				# - shared borrows of rvalues via temporary materialization
+				#   (`&(make())` becomes `val tmp = make(); &tmp`).
 				def _base_lookup(hv: object) -> Optional[PlaceBase]:
 					bid = getattr(hv, "binding_id", None)
 					if bid is None:
@@ -5506,14 +5643,18 @@ class TypeChecker:
 
 				place = place_from_expr(expr.subject, base_lookup=_base_lookup)
 				if place is None:
-					diagnostics.append(
-						_tc_diag(
-							message="borrow operand must be an addressable place in MVP (local/param or deref place)",
-							severity="error",
-							span=getattr(expr, "loc", Span()),
+					if expr.is_mut:
+						diagnostics.append(
+							_tc_diag(
+								message="borrow operand must be an addressable place in MVP (local/param or deref place)",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
 						)
-					)
-					return record_expr(expr, self._unknown)
+						return record_expr(expr, self._unknown)
+					inner_ty = type_expr(expr.subject)
+					ref_ty = self.type_table.ensure_ref(inner_ty) if inner_ty is not None else self._unknown
+					return record_expr(expr, ref_ty)
 
 				# MVP: we accept borrowing from nested projections (`x.field`, `arr[i]`,
 				# `(*p).field`, etc.) as long as the operand is a real place.
@@ -5708,23 +5849,18 @@ class TypeChecker:
 				if subject_name is None and hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
 					subject_name = getattr(expr.subject.base, "name", None)
 				if place.base.local_id is not None:
-					is_param = binding_place_kind.get(place.base.local_id) is PlaceKind.PARAM
-					is_self_name = subject_name == "self"
 					is_implicit_move = bool(getattr(expr, "is_implicit", False))
-					if (
-						not binding_mutable.get(place.base.local_id, False)
-						and not (is_param and is_self_name)
-						and not is_self_name
-						and not is_implicit_move
-					):
-						diagnostics.append(
-							_tc_diag(
-								message="move requires an owned mutable binding declared with var",
-								severity="error",
-								span=getattr(expr, "loc", Span()),
+					if is_implicit_move:
+						# Implicit moves keep existing mutability rules.
+						if not binding_mutable.get(place.base.local_id, False) and subject_name != "self":
+							diagnostics.append(
+								_tc_diag(
+									message="move requires an owned mutable binding declared with var",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
 							)
-						)
-						return record_expr(expr, self._unknown)
+							return record_expr(expr, self._unknown)
 				inner_ty = type_expr(expr.subject, used_as_value=False)
 				if inner_ty is not None:
 					td = self.type_table.get(inner_ty)
@@ -5939,10 +6075,156 @@ class TypeChecker:
 				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, dv_ty=self._dv, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
 				method_ctx = make_method_ctx(call_ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
 				method_res = resolve_method_call(method_ctx, expr, expected_type=expected_type)
+				if method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
+					decl = method_res.resolution.decl
+					fn_id_local = getattr(decl, "fn_id", None)
+					if fn_id_local is not None:
+						sig_for_throw = signatures_by_id.get(fn_id_local) if signatures_by_id is not None else None
+						fallback_param_types = tuple(decl.signature.param_types) if decl.signature is not None else tuple()
+						fallback_ret = decl.signature.result_type if decl.signature is not None else self._unknown
+						if sig_for_throw is not None:
+							if sig_for_throw.param_type_ids:
+								fallback_param_types = tuple(sig_for_throw.param_type_ids)
+							if sig_for_throw.return_type_id is not None:
+								fallback_ret = sig_for_throw.return_type_id
+						fallback_can_throw = bool(getattr(sig_for_throw, "declared_can_throw", False)) if sig_for_throw is not None else False
+						method_res = MethodCallResult(
+							method_res.return_type,
+							CallInfo(
+								target=CallTarget.direct(fn_id_local),
+								sig=CallSig(
+									param_types=fallback_param_types,
+									user_ret_type=fallback_ret,
+									can_throw=fallback_can_throw,
+									includes_callee=False,
+								),
+							),
+							method_res.resolution,
+						)
+				if (
+					method_res.call_info is not None
+					and method_res.resolution is not None
+					and getattr(method_res.resolution, "decl", None) is not None
+				):
+					decl = method_res.resolution.decl
+					fn_id_local = getattr(decl, "fn_id", None)
+					if fn_id_local is not None and method_res.call_info.target.kind is CallTargetKind.INDIRECT:
+						method_res = MethodCallResult(
+							method_res.return_type,
+							CallInfo(
+								target=CallTarget.direct(fn_id_local),
+								sig=CallSig(
+									param_types=method_res.call_info.sig.param_types,
+									user_ret_type=method_res.call_info.sig.user_ret_type,
+									can_throw=bool(method_res.call_info.sig.can_throw),
+									includes_callee=method_res.call_info.sig.includes_callee,
+								),
+							),
+							method_res.resolution,
+						)
 				if method_res.call_info is not None:
 					param_types = list(method_res.call_info.sig.param_types)
 					if method_res.call_info.sig.includes_callee:
 						param_types = param_types[1:]
+					csid = getattr(expr, "callsite_id", None)
+					fn_id_local = None
+					decl_sig: FnSignature | None = None
+					if method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
+						fn_id_local = getattr(method_res.resolution.decl, "fn_id", None)
+					if fn_id_local is None and method_res.call_info is not None and method_res.call_info.target.kind is CallTargetKind.DIRECT:
+						fn_id_local = method_res.call_info.target.symbol
+					if fn_id_local is not None and signatures_by_id is not None:
+						decl_sig = signatures_by_id.get(fn_id_local)
+					if fn_id_local is not None:
+						req = _require_for_fn(fn_id_local)
+						if req is not None:
+							local_type_params: dict[str, TypeId] = {}
+							if signatures_by_id is not None and isinstance(csid, int):
+								sig = signatures_by_id.get(fn_id_local)
+								inst = instantiations_by_callsite_id.get(csid)
+								if sig is not None and inst is not None:
+									tp_names: list[str] = []
+									for tp in (getattr(sig, "type_params", []) or []):
+										tp_names.append(tp.name)
+									for name, arg in zip(tp_names, getattr(inst, "type_args", ()) or ()):
+										local_type_params[name] = arg
+							if decl_sig is not None:
+								recv_ty = type_expr(expr.receiver, used_as_value=False)
+								impl_target = getattr(decl_sig, "impl_target_type_id", None)
+								if impl_target is not None and recv_ty is not None:
+									_base_id, base_args = _struct_base_and_args(_unwrap_ref_type(recv_ty))
+									for tp, arg in zip(getattr(decl_sig, "impl_type_params", []) or [], base_args):
+										if tp.name not in local_type_params:
+											local_type_params[tp.name] = arg
+									base_def = self.type_table.get(_base_id)
+									base_param_names: list[str] = []
+									if base_def.kind is TypeKind.VARIANT:
+										schema = self.type_table.variant_schemas.get(_base_id)
+										if schema is not None:
+											base_param_names = list(schema.type_params)
+									elif base_def.kind is TypeKind.STRUCT:
+										schema = self.type_table.struct_bases.get(_base_id)
+										if schema is not None:
+											base_param_names = list(schema.type_params)
+									elif base_def.kind is TypeKind.INTERFACE:
+										schema = self.type_table.interface_bases.get(_base_id)
+										if schema is not None:
+											base_param_names = list(schema.type_params)
+									if base_param_names:
+										for name, arg in zip(base_param_names, base_args):
+											if name not in local_type_params:
+												local_type_params[name] = arg
+							facts = _extract_conjunctive_facts(req)
+							if facts:
+								for idx, arg in enumerate(expr.args):
+									if idx >= len(param_types) or not isinstance(arg, H.HLambda):
+										continue
+									td = self.type_table.get(param_types[idx])
+									sig_param_tp: TypeParamId | None = None
+									if sig is not None and sig.param_type_ids:
+										sig_idx = idx
+										if sig.param_names and sig.param_names[0] == "self":
+											sig_idx = idx + 1
+										if sig_idx < len(sig.param_type_ids):
+											sig_td = self.type_table.get(sig.param_type_ids[sig_idx])
+											if sig_td.kind is TypeKind.TYPEVAR:
+												sig_param_tp = sig_td.type_param_id
+									if td.kind is TypeKind.TYPEVAR and td.type_param_id is not None:
+										sig_param_tp = td.type_param_id
+									for atom in facts:
+										if not isinstance(atom, parser_ast.TraitIs):
+											continue
+										trait_name = getattr(atom.trait, "name", None)
+										exp = _fn_trait_expected(trait_name) if trait_name is not None else None
+										if exp is None:
+											continue
+										expected_arity, trait_can_throw = exp
+										subj = atom.subject
+										subj_name = _subject_name(subj)
+										if isinstance(subj, TypeParamId):
+											if sig_param_tp is None or subj != sig_param_tp:
+												continue
+										elif subj_name is not None:
+											if sig_param_tp is None or subj_name != (type_param_names.get(sig_param_tp) or ""):
+												continue
+										else:
+											continue
+										trait_args = list(getattr(atom.trait, "args", []) or [])
+										if len(trait_args) != expected_arity:
+											continue
+										arg_types: list[TypeId] = []
+										for targ in trait_args:
+											try:
+												arg_types.append(resolve_opaque_type(targ, self.type_table, module_id=fn_id_local.module or current_module_name, type_params=local_type_params))
+											except Exception:
+												arg_types.append(self._unknown)
+										if not arg_types:
+											continue
+										ret_ty = arg_types[-1]
+										param_tys = arg_types[:-1]
+										param_types[idx] = self.type_table.ensure_function(param_tys, ret_ty, can_throw=trait_can_throw)
+										arg.expected_fn_inferred = True
+										break
 					for idx, arg in enumerate(expr.args):
 						if idx < len(param_types):
 							type_expr(arg, expected_type=param_types[idx])
@@ -6105,7 +6387,11 @@ class TypeChecker:
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 					sub_ty = type_expr(expr.subject.subject, used_as_value=False)
 					key_ty = type_expr(expr.index)
-					if self.type_table.get(sub_ty).kind is not TypeKind.ERROR:
+					sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is TypeKind.REF and sub_def.param_types:
+						sub_ty = sub_def.param_types[0]
+						sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is not TypeKind.ERROR:
 						diagnostics.append(
 							_tc_diag(
 								message="attrs access is only supported on Error values",
@@ -6124,6 +6410,40 @@ class TypeChecker:
 							)
 						)
 					return record_expr(expr, self._dv)
+				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
+					subject = expr.subject
+					for idx, proj in enumerate(subject.projections):
+						if not (isinstance(proj, H.HPlaceField) and proj.name == "attrs"):
+							continue
+						if idx + 1 >= len(subject.projections) or not isinstance(subject.projections[idx + 1], H.HPlaceIndex):
+							continue
+						if idx + 2 != len(subject.projections):
+							continue
+						sub_ty = type_expr(subject.base, used_as_value=False)
+						sub_def = self.type_table.get(sub_ty)
+						if sub_def.kind is TypeKind.REF and sub_def.param_types:
+							sub_ty = sub_def.param_types[0]
+							sub_def = self.type_table.get(sub_ty)
+						if sub_def.kind is not TypeKind.ERROR:
+							diagnostics.append(
+								_tc_diag(
+									message="attrs access is only supported on Error values",
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+						key_ty = type_expr(expr.index)
+						if self.type_table.get(key_ty).name != "String":
+							diagnostics.append(
+								_tc_diag(
+									message="Error.attrs expects a String key",
+									severity="error",
+									span=getattr(expr.index, "loc", Span()),
+									code="E-ERROR-ATTR-KEY-NOT-STRING",
+								)
+							)
+						return record_expr(expr, self._dv)
 
 				sub_ty = type_expr(expr.subject, used_as_value=False)
 				idx_ty = type_expr(expr.index)
@@ -6233,6 +6553,40 @@ class TypeChecker:
 						return record_expr(expr, self._float)
 					if expr.op is H.BinaryOp.MOD and left_ty == self._uint and right_ty == self._uint:
 						return record_expr(expr, self._uint)
+					if left_ty is not None and right_ty is not None and left_ty == right_ty:
+						if left_ty == self._unknown:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(left_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"arithmetic operators require Int/Uint/Uint64/Float operands "
+									f"(have {self._pretty_type_name(left_ty, current_module=current_module_name)})"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if left_ty is not None and right_ty is not None and left_ty != right_ty:
+						if left_ty == self._unknown or right_ty == self._unknown:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(left_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(right_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"arithmetic operators require matching Int/Uint/Uint64/Float operands "
+									f"(have {self._pretty_type_name(left_ty, current_module=current_module_name)} "
+									f"vs {self._pretty_type_name(right_ty, current_module=current_module_name)})"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
 					return record_expr(expr, self._unknown)
 				if expr.op in (H.BinaryOp.DIV,):
 					if left_ty == self._int and right_ty == self._int:
@@ -6243,6 +6597,40 @@ class TypeChecker:
 						return record_expr(expr, self._uint64)
 					if left_ty == self._float and right_ty == self._float:
 						return record_expr(expr, self._float)
+					if left_ty is not None and right_ty is not None and left_ty == right_ty:
+						if left_ty == self._unknown:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(left_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"division requires Int/Uint/Uint64/Float operands "
+									f"(have {self._pretty_type_name(left_ty, current_module=current_module_name)})"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if left_ty is not None and right_ty is not None and left_ty != right_ty:
+						if left_ty == self._unknown or right_ty == self._unknown:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(left_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						if self.type_table.get(right_ty).kind is TypeKind.TYPEVAR:
+							return record_expr(expr, self._unknown)
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"division requires matching Int/Uint/Uint64/Float operands "
+									f"(have {self._pretty_type_name(left_ty, current_module=current_module_name)} "
+									f"vs {self._pretty_type_name(right_ty, current_module=current_module_name)})"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
 					return record_expr(expr, self._unknown)
 				if expr.op in (
 					H.BinaryOp.BIT_AND,
@@ -6280,7 +6668,11 @@ class TypeChecker:
 							return record_expr(expr, self._bool)
 						diagnostics.append(
 							_tc_diag(
-								message="comparison requires matching operand types",
+								message=(
+									"comparison requires matching operand types "
+									f"(have {self._pretty_type_name(left_ty, current_module=current_module_name)} "
+									f"vs {self._pretty_type_name(right_ty, current_module=current_module_name)})"
+								),
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
@@ -6942,17 +7334,16 @@ class TypeChecker:
 			elif isinstance(stmt, H.HThrow):
 				if isinstance(stmt.value, H.HMethodCall) and stmt.value.method_name == "unwrap_err":
 					type_expr(stmt.value)
-				elif not isinstance(stmt.value, H.HExceptionInit):
-					diagnostics.append(
-						_tc_diag(
-							message="throw payload must be an exception constructor",
-							severity="error",
-							span=getattr(stmt, "loc", Span()),
-						)
-					)
-					type_expr(stmt.value)
 				else:
-					type_expr(stmt.value, allow_exception_init=True)
+					val_ty = type_expr(stmt.value, allow_exception_init=True)
+					if not isinstance(stmt.value, H.HExceptionInit) and val_ty != self._error:
+						diagnostics.append(
+							_tc_diag(
+								message="throw payload must be an exception constructor",
+								severity="error",
+								span=getattr(stmt, "loc", Span()),
+							)
+						)
 			elif isinstance(stmt, H.HRethrow):
 				# Valid only inside a catch; outside catches it is reported here.
 				if catch_depth == 0:
@@ -7256,22 +7647,29 @@ class TypeChecker:
 		return lid
 
 
-def validate_entrypoint_main(
+def validate_entrypoint(
 	signatures_by_id: Mapping[FunctionId, FnSignature],
 	type_table: TypeTable,
 	diagnostics: list[Diagnostic],
+	*,
+	entry_module: str,
+	entry_name: str,
 ) -> None:
-	main_defs: list[tuple[FunctionId, FnSignature]] = []
+	entry_defs: list[tuple[FunctionId, FnSignature]] = []
 	for fn_id, sig in signatures_by_id.items():
 		if sig.is_method:
 			continue
-		if fn_id.name == "main":
-			main_defs.append((fn_id, sig))
+		if fn_id.name != entry_name:
+			continue
+		if fn_id.module != entry_module:
+			continue
+		entry_defs.append((fn_id, sig))
 
-	if not main_defs:
+	if not entry_defs:
+		entry_label = entry_name
 		diagnostics.append(
 			_tc_diag(
-				message="missing entry point 'main' for code generation",
+				message=f"missing entry point '{entry_label}' for code generation",
 				severity="error",
 				phase="typecheck",
 				span=Span(),
@@ -7282,13 +7680,13 @@ def validate_entrypoint_main(
 	def _span_for_sig(sig: FnSignature) -> Span:
 		return Span.from_loc(getattr(sig, "loc", None))
 
-	if len(main_defs) > 1:
-		first_id, first_sig = main_defs[0]
+	if len(entry_defs) > 1:
+		first_id, first_sig = entry_defs[0]
 		first_span = _span_for_sig(first_sig)
-		for fn_id, sig in main_defs[1:]:
+		for fn_id, sig in entry_defs[1:]:
 			diagnostics.append(
 				_tc_diag(
-					message="duplicate entry point definition for 'main'",
+					message=f"duplicate entry point definition for '{entry_module}::{entry_name}'",
 					severity="error",
 					phase="typecheck",
 					span=_span_for_sig(sig),
@@ -7304,7 +7702,7 @@ def validate_entrypoint_main(
 			)
 		return
 
-	fn_id, sig = main_defs[0]
+	fn_id, sig = entry_defs[0]
 	int_id = type_table.ensure_int()
 	string_id = type_table.ensure_string()
 
@@ -7320,7 +7718,7 @@ def validate_entrypoint_main(
 	if ret_id != int_id:
 		diagnostics.append(
 			_tc_diag(
-				message="entrypoint main must return Int",
+				message=f"entrypoint {entry_name} must return Int",
 				severity="error",
 				phase="typecheck",
 				span=_span_for_sig(sig),
@@ -7338,7 +7736,7 @@ def validate_entrypoint_main(
 		if not valid:
 			diagnostics.append(
 				_tc_diag(
-					message="entrypoint main has invalid signature; expected main() or main(argv: Array<String>)",
+					message=f"entrypoint {entry_name} has invalid signature; expected fn() or fn(argv: Array<String>)",
 					severity="error",
 					phase="typecheck",
 					span=_span_for_sig(sig),
@@ -7348,10 +7746,24 @@ def validate_entrypoint_main(
 	if sig.declared_can_throw is not False:
 		diagnostics.append(
 			_tc_diag(
-				message="entrypoint main must be declared nothrow (uncaught exceptions are not supported yet)",
+				message=f"entrypoint {entry_name} must be declared nothrow (uncaught exceptions are not supported yet)",
 				severity="error",
 				phase="typecheck",
 				span=_span_for_sig(sig),
 				notes=["add 'nothrow' to main or handle failures explicitly"],
 			)
 		)
+
+
+def validate_entrypoint_main(
+	signatures_by_id: Mapping[FunctionId, FnSignature],
+	type_table: TypeTable,
+	diagnostics: list[Diagnostic],
+) -> None:
+	validate_entrypoint(
+		signatures_by_id,
+		type_table,
+		diagnostics,
+		entry_module="main",
+		entry_name="main",
+	)

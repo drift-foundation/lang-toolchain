@@ -1,0 +1,4 @@
+{
+  "description": "e2e: pass ResultError to helper by ref",
+  "exit_code": 7
+}

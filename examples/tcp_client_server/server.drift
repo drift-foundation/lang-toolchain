@@ -1,0 +1,38 @@
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+use trait core.Try;
+
+fn handle_client(var s: net.TcpStream) -> Int {
+	var buf = io.buffer(1024);
+	val _n = s.read(&mut buf).or_throw();
+	val _ = s.write(&buf).or_throw();
+	s.close().or_throw();
+	return 0;
+}
+
+fn run_server(listener: net.TcpListener) -> Int {
+	while true {
+		val s = net.accept(&listener).or_throw();
+		val _ = conc.spawn_cb(| | captures(move s) => {
+			return try handle_client(move s) catch { 1 };
+		});
+	}
+	return 0;
+}
+
+fn run_main(argv: Array<String>) -> Int {
+	val port = 5555;
+	var addr = net.socket_addr("127.0.0.1", port);
+	val listener = net.listen(&addr).or_throw();
+	var server = conc.spawn_cb(| | captures(move listener) => {
+		return try run_server(move listener) catch { 1 };
+	});
+	return server.join().or_throw();
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	return try run_main(argv) catch { 1 };
+}

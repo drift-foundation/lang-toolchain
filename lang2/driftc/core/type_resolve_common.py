@@ -183,6 +183,13 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 			return table.ensure_float()
 		if name == "Error":
 			return table.ensure_error()
+		# Exception schemas are modeled as Error in type positions.
+		# This allows helper signatures like err.ResultError without introducing
+		# distinct nominal types for each exception.
+		if origin_mod is not None:
+			event_fqn = f"{origin_mod}:{name}"
+			if event_fqn in table.exception_schemas:
+				return table.ensure_error()
 		# User-defined nominal types (structs/variants/interfaces) and unknown names.
 		if origin_mod is not None:
 			ty = table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=str(name))

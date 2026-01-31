@@ -1,0 +1,24 @@
+module m
+
+fn code_from_error(e: std.err.ResultError) nothrow -> Int {
+	val dv = e.attrs["dv"];
+	val opt = dv.as_int();
+	match opt {
+		Some(v) => { return v; },
+		None => { return -1; },
+		default => { return -2; }
+	}
+}
+
+fn fail() -> Int {
+	throw std.err:ResultError(dv = 7);
+}
+
+pub fn main() nothrow -> Int {
+	val v = try fail() catch std.err:ResultError(e) {
+		code_from_error(e)
+	} catch {
+		99
+	};
+	return v;
+}

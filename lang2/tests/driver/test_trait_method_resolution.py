@@ -302,6 +302,164 @@ fn main() nothrow -> Int{
 	assert res.decl.fn_id.module == "m_box"
 
 
+def test_trait_dot_call_requires_use_trait_same_module(tmp_path: Path) -> None:
+	files = {
+		Path("m_main.drift"): """
+module m_main
+
+struct S(x: Int);
+
+trait Show {
+	fn show(self: S) -> Int
+}
+
+implement Show for S {
+	fn show(self: S) -> Int { return self.x; }
+}
+
+fn main() nothrow -> Int{
+	val s = S(1);
+	return s.show();
+}
+""",
+	}
+	_, result, _sigs, _deps, _ids, _types = _resolve_main_block(
+		tmp_path, files, main_module="m_main"
+	)
+	assert result.diagnostics
+	msgs = [d.message for d in result.diagnostics]
+	assert any("no matching method 'show'" in m for m in msgs)
+
+
+def test_trait_dot_call_with_use_trait_same_module(tmp_path: Path) -> None:
+	files = {
+		Path("m_main.drift"): """
+module m_main
+
+struct S(x: Int);
+
+trait Show {
+	fn show(self: S) -> Int
+}
+
+implement Show for S {
+	fn show(self: S) -> Int { return self.x; }
+}
+
+use trait Show;
+
+fn main() nothrow -> Int{
+	val s = S(1);
+	return s.show();
+}
+""",
+	}
+	_, result, _sigs, _deps, _ids, _types = _resolve_main_block(
+		tmp_path, files, main_module="m_main"
+	)
+	assert result.diagnostics == []
+
+
+def test_use_trait_external_module_path_without_import_alias(tmp_path: Path) -> None:
+	files = {
+		Path("m_box.drift"): """
+module m_box
+
+pub struct Box<T> { pub value: T }
+
+export { Box };
+""",
+		Path("m_trait.drift"): """
+module m_trait
+
+import m_box;
+
+pub trait Show {
+	fn show(self: m_box.Box<Int>) -> Int
+}
+
+export { Show };
+
+implement Show for m_box.Box<Int> {
+	pub fn show(self: m_box.Box<Int>) -> Int { return self.value; }
+}
+""",
+		Path("m_main.drift"): """
+module m_main
+
+import m_box as box;
+import m_trait as t;
+use trait m_trait.Show;
+
+fn main() nothrow -> Int{
+	val b: box.Box<Int> = box.Box<type Int>(1);
+	return b.show();
+}
+""",
+	}
+	main_block, result, sigs, _deps, _ids, _types = _resolve_main_block(
+		tmp_path, files, main_module="m_main"
+	)
+	assert result.diagnostics == []
+	calls = _collect_method_calls(main_block)
+	assert calls
+	res = result.typed_fn.call_resolutions[calls[0].node_id]
+	assert res.decl.fn_id in sigs
+	assert res.decl.fn_id.module == "m_trait"
+
+
+def test_use_trait_unknown_trait_is_error(tmp_path: Path) -> None:
+	files = {
+		Path("m_main.drift"): """
+module m_main
+
+use trait NotATrait;
+
+fn main() nothrow -> Int{
+	return 0;
+}
+	""",
+	}
+	mod_root = tmp_path / "mods"
+	for rel, content in files.items():
+		_write_file(mod_root / rel, content)
+	paths = sorted(mod_root.rglob("*.drift"))
+	_mods, _tt, _exc, _exports, _deps, diagnostics = parse_drift_workspace_to_hir(
+		paths,
+		module_paths=[mod_root],
+		stdlib_root=stdlib_root(),
+	)
+	assert diagnostics
+	msgs = [d.message for d in diagnostics]
+	assert any("does not define trait 'NotATrait'" in m for m in msgs)
+
+
+def test_use_trait_unknown_module_path_is_error(tmp_path: Path) -> None:
+	files = {
+		Path("m_main.drift"): """
+module m_main
+
+use trait missing.mod.Show;
+
+fn main() nothrow -> Int{
+	return 0;
+}
+""",
+	}
+	mod_root = tmp_path / "mods"
+	for rel, content in files.items():
+		_write_file(mod_root / rel, content)
+	paths = sorted(mod_root.rglob("*.drift"))
+	_mods, _tt, _exc, _exports, _deps, diagnostics = parse_drift_workspace_to_hir(
+		paths,
+		module_paths=[mod_root],
+		stdlib_root=stdlib_root(),
+	)
+	assert diagnostics
+	msgs = [d.message for d in diagnostics]
+	assert any("unknown module" in m for m in msgs)
+
+
 def test_trait_method_infers_method_type_params(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """

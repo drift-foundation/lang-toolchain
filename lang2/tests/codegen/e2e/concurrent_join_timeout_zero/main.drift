@@ -6,8 +6,7 @@ fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	var res = t.join_timeout(conc.Duration(millis = 0));
 	return match res {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Timeout => { 0 },
 				Busy => { 1 },
 				Cancelled => { 1 },

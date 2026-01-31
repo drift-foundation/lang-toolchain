@@ -1,0 +1,10 @@
+module m
+
+import std.core as core;
+import std.err as err;
+
+pub fn main() nothrow -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(7);
+	val v = try core.or_throw(r) catch err:ResultError(_) { 1 } catch { 2 };
+	return v;
+}

@@ -16,8 +16,7 @@ fn main() nothrow -> Int {
 			}
 			out
 		},
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Cancelled => { 0 },
 				default => { 2 },
 			}

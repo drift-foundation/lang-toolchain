@@ -84,7 +84,7 @@ class DVInitRewriter:
 				base_mod = None
 				if base_te is not None:
 					base_mod = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None)
-				if base_name == "DiagnosticValue" and (base_mod is None or base_mod == "std.core"):
+				if base_name == "DiagnosticValue":
 					if not (getattr(expr, "kwargs", None) or []):
 						new_args = [self._rewrite_expr(a) for a in expr.args]
 						return H.HDVInit(dv_type_name=fn.member, args=new_args)

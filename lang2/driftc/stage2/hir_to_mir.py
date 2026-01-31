@@ -200,6 +200,7 @@ class HIRToMIR:
 		can_throw_by_id: Mapping[FunctionId, bool] | None = None,
 		return_type: TypeId | None = None,
 		binding_names: Mapping[int, str] | None = None,
+		binding_types: Mapping[int, TypeId] | None = None,
 		typed_mode: str | bool = False,
 	):
 		"""
@@ -301,17 +302,26 @@ class HIRToMIR:
 		self._binding_locals: dict[int, str] = {}
 		# BindingId -> source name mapping (for capture reconstruction).
 		self._binding_names: dict[int, str] = dict(binding_names) if binding_names else {}
+		self._binding_types: dict[int, TypeId] = dict(binding_types) if binding_types else {}
 		# Lambda lowering context (hidden fn + env).
 		self._lambda_env_local: str | None = None
 		self._lambda_env_ty: TypeId | None = None
 		self._lambda_env_field_types: list[TypeId] | None = None
 		self._lambda_capture_slots: dict[C.HCaptureKey, int] | None = None
+		self._lambda_capture_name_to_slot: dict[str, int] | None = None
 		self._lambda_capture_kinds: list[C.HCaptureKind] | None = None
 		self._lambda_capture_ref_is_value: bool = True
 		self._lambda_counter = 0
 		# Names reserved for this function (params + locals).
 		self._reserved_names: set[str] = set(self.b.func.params)
 		self._local_binding_ids: set[int] = set()
+		for bid, name in self._binding_names.items():
+			ty = self._binding_types.get(bid)
+			if ty is None:
+				continue
+			local_name = self._canonical_local(bid, name)
+			if local_name not in self._local_types:
+				self._local_types[local_name] = ty
 
 	def _is_destructible_type(self, ty: TypeId) -> bool:
 		try:
@@ -399,6 +409,8 @@ class HIRToMIR:
 			root = getattr(expr.base, "binding_id", None)
 			if root is None:
 				return None
+			if int(root) in self._local_binding_ids:
+				return None
 			fields: list[str] = []
 			for proj in expr.projections:
 				if isinstance(proj, H.HPlaceField):
@@ -409,6 +421,8 @@ class HIRToMIR:
 		if isinstance(expr, H.HVar):
 			if expr.binding_id is None:
 				return None
+			if int(expr.binding_id) in self._local_binding_ids:
+				return None
 			return C.HCaptureKey(root_local=int(expr.binding_id), proj=())
 		if isinstance(expr, H.HField):
 			fields: list[str] = []
@@ -417,6 +431,8 @@ class HIRToMIR:
 				fields.append(cur.name)
 				cur = cur.subject
 			if not isinstance(cur, H.HVar):
+				return None
+			if cur.binding_id is not None and int(cur.binding_id) in self._local_binding_ids:
 				return None
 			if cur.binding_id is None:
 				return None
@@ -546,6 +562,15 @@ class HIRToMIR:
 			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
 			if want_ty is not None:
 				self._local_types[result_local] = want_ty
+			else:
+				arm_ty: TypeId | None = None
+				for arm in expr.arms:
+					if arm.result is None:
+						continue
+					arm_ty = self._infer_expr_type(arm.result)
+					if arm_ty is not None:
+						break
+				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
 
 		dispatch_block = self.b.new_block("match_dispatch")
 		join_block = self.b.new_block("match_join")
@@ -665,7 +690,15 @@ class HIRToMIR:
 						raise AssertionError(
 							"value-producing match arm has a result expression but its block terminates (checker bug)"
 						)
+					if self._local_types.get(result_local) is self._unknown_type:
+						arm_ty = self._infer_expr_type(arm.result)
+						if arm_ty is not None:
+							self._local_types[result_local] = arm_ty
 					val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
+					if self._local_types.get(result_local) is self._unknown_type:
+						val_ty = self._local_types.get(val)
+						if val_ty is not None:
+							self._local_types[result_local] = val_ty
 					self.b.emit(M.StoreLocal(local=result_local, value=val))
 					did_store_result = True
 
@@ -749,22 +782,35 @@ class HIRToMIR:
 	def _visit_expr_HLiteralInt(self, expr: H.HLiteralInt) -> M.ValueId:
 		dest = self.b.new_temp()
 		expected = self._current_expected_type()
+		if expected == self._byte_type:
+			self.b.emit(M.ConstByte(dest=dest, value=expr.value))
+			self._local_types[dest] = self._byte_type
+			return dest
 		if expected == self._uint64_type:
 			self.b.emit(M.ConstUint64(dest=dest, value=expr.value))
+			self._local_types[dest] = self._uint64_type
 			return dest
 		if expected == self._uint_type:
 			self.b.emit(M.ConstUint(dest=dest, value=expr.value))
+			self._local_types[dest] = self._uint_type
 			return dest
 		if expected == self._int_type:
 			self.b.emit(M.ConstInt(dest=dest, value=expr.value))
+			self._local_types[dest] = self._int_type
 			return dest
 		ty = self._infer_expr_type(expr)
-		if ty == self._uint64_type:
+		if ty == self._byte_type:
+			self.b.emit(M.ConstByte(dest=dest, value=expr.value))
+			self._local_types[dest] = self._byte_type
+		elif ty == self._uint64_type:
 			self.b.emit(M.ConstUint64(dest=dest, value=expr.value))
+			self._local_types[dest] = self._uint64_type
 		elif ty == self._uint_type:
 			self.b.emit(M.ConstUint(dest=dest, value=expr.value))
+			self._local_types[dest] = self._uint_type
 		else:
 			self.b.emit(M.ConstInt(dest=dest, value=expr.value))
+			self._local_types[dest] = self._int_type
 		return dest
 
 	def _visit_expr_HLiteralFloat(self, expr: H.HLiteralFloat) -> M.ValueId:
@@ -869,6 +915,11 @@ class HIRToMIR:
 			return self._recover_unknown_value(
 				f"stage2: HCast missing source type (node_id={expr.node_id}); typecheck required"
 			)
+		if isinstance(expr.value, H.HLiteralInt):
+			td = self._type_table.get(target_ty)
+			if td.kind is TypeKind.SCALAR and td.name in ("Int", "Uint", "Byte"):
+				val = self.lower_expr(expr.value, expected_type=target_ty)
+				return val
 		val = self.lower_expr(expr.value)
 		if src_ty == target_ty:
 			return val
@@ -1003,6 +1054,10 @@ class HIRToMIR:
 					self.b.emit(M.LoadRef(dest=dest, ptr=ptr_val, inner_ty=inner_ty))
 					return dest
 				return self._load_capture_from_env(slot)
+		if expr.binding_id is None and self._lambda_capture_name_to_slot is not None:
+			slot = self._lambda_capture_name_to_slot.get(expr.name)
+			if slot is not None:
+				return self._load_capture_from_env(slot)
 		local_name = self._canonical_local(getattr(expr, "binding_id", None), expr.name)
 		self.b.ensure_local(local_name)
 		# Treat String.EMPTY as a builtin zero-length string literal.
@@ -1010,6 +1065,9 @@ class HIRToMIR:
 			return self._string_empty_const
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=dest, local=local_name))
+		local_ty = self._local_types.get(local_name)
+		if local_ty is not None:
+			self._local_types[dest] = local_ty
 		return dest
 
 	def _visit_expr_HBorrow(self, expr: H.HBorrow) -> M.ValueId:
@@ -1027,7 +1085,19 @@ class HIRToMIR:
 		referenced storage and returns it as the borrow result.
 		"""
 		if not (hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr"))):
-			raise AssertionError("non-canonical borrow operand reached MIR lowering (normalize/typechecker bug)")
+			if expr.is_mut:
+				raise AssertionError("non-canonical &mut borrow operand reached MIR lowering (normalize/typechecker bug)")
+			inner_ty = self._infer_expr_type(expr.subject)
+			if inner_ty is None:
+				raise AssertionError("borrow operand type unknown in MIR lowering (checker bug)")
+			tmp_local = f"__borrow_tmp{self.b.new_temp()}"
+			self.b.ensure_local(tmp_local)
+			self._local_types[tmp_local] = inner_ty
+			val = self.lower_expr(expr.subject)
+			self.b.emit(M.StoreLocal(local=tmp_local, value=val))
+			ptr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=ptr, local=tmp_local, is_mut=False))
+			return ptr
 		ptr, _inner = self._lower_addr_of_place(expr.subject, is_mut=expr.is_mut)
 		return ptr
 
@@ -1179,6 +1249,14 @@ class HIRToMIR:
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
 		if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 			err_val = self.lower_expr(expr.subject.subject)
+			err_ty = self._infer_expr_type(expr.subject.subject)
+			if err_ty is not None:
+				err_def = self._type_table.get(err_ty)
+				if err_def.kind is TypeKind.REF and err_def.param_types:
+					inner_ty = err_def.param_types[0]
+					tmp = self.b.new_temp()
+					self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
+					err_val = tmp
 			key_val = self.lower_expr(expr.index)
 			dest = self.b.new_temp()
 			self.b.emit(M.ErrorAttrsGetDV(dest=dest, error=err_val, key=key_val))
@@ -1678,7 +1756,7 @@ class HIRToMIR:
 			self.b.emit(M.StringConcat(dest=dest, left=l_val, right=r_val))
 			self._local_types[dest] = self._string_type
 			return dest
-		if intrinsic in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2):
+		if intrinsic in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
 			if getattr(expr, "kwargs", None):
 				raise AssertionError(f"{intrinsic.value}(...) does not accept keyword arguments (checker bug)")
 			if len(expr.args) != 1:
@@ -1686,6 +1764,7 @@ class HIRToMIR:
 			arg = expr.args[0]
 			if info is None:
 				raise AssertionError(f"{intrinsic.value}(...) missing CallInfo (checker bug)")
+			can_throw = intrinsic in (IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2)
 			dest = self.b.new_temp()
 			if isinstance(arg, H.HFnPtrConst):
 				self.b.emit(M.ConstructIface(dest=dest, iface_ty=info.sig.user_ret_type, fn_ref=arg.fn_ref, call_sig=arg.call_sig))
@@ -1698,12 +1777,12 @@ class HIRToMIR:
 					raise AssertionError(f"{intrinsic.value} expected function type for lambda (checker bug)")
 				sig_params = list(fn_def.param_types[:-1])
 				ret_ty = fn_def.param_types[-1]
-				call_sig = CallSig(param_types=tuple(sig_params), user_ret_type=ret_ty, can_throw=False)
+				call_sig = CallSig(param_types=tuple(sig_params), user_ret_type=ret_ty, can_throw=can_throw)
 				fn_ref, env_ptr, env_ty = self._lower_lambda_callback(
 					arg,
 					param_types=sig_params,
 					ret_type=ret_ty,
-					can_throw=False,
+					can_throw=can_throw,
 				)
 				data_ty = self._type_table.ensure_ref_mut(env_ty) if env_ty is not None else None
 				self.b.emit(
@@ -2102,7 +2181,10 @@ class HIRToMIR:
 		env_field_types: list[TypeId] = []
 		env_ptr: M.ValueId | None = None
 		if has_captures:
-			env_name = f"__lambda_env_{lambda_id}"
+			if self._current_fn_id is not None:
+				env_name = f"__lambda_env_{self._current_fn_id.name}_{self._current_fn_id.ordinal}_{lambda_id}"
+			else:
+				env_name = f"__lambda_env_{lambda_id}"
 			field_names = [f"c{i}" for i in range(len(lam.captures))]
 			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
 			env_local = f"__env_{lambda_id}"
@@ -2122,8 +2204,9 @@ class HIRToMIR:
 				elif cap.kind is C.HCaptureKind.MOVE:
 					place = self._place_from_capture_key(cap.key)
 					if cap.key.proj:
-						env_vals.append(self.lower_expr(expr))
-						env_field_types.append(self._infer_expr_type(expr) or unknown)
+						env_val = self.lower_expr(expr)
+						env_vals.append(env_val)
+						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 					else:
 						if not (hasattr(H, "HPlaceExpr") and isinstance(place, getattr(H, "HPlaceExpr"))):
 							raise AssertionError("non-canonical move capture place (compiler bug)")
@@ -2139,10 +2222,11 @@ class HIRToMIR:
 						self._local_types[moved_val] = inner_ty
 						self._moved_locals.add(subj_name)
 						env_vals.append(moved_val)
-						env_field_types.append(self._infer_expr_type(expr) or unknown)
+						env_field_types.append(inner_ty)
 				else:
-					env_vals.append(self.lower_expr(expr))
-					env_field_types.append(self._infer_expr_type(expr) or unknown)
+					env_val = self.lower_expr(expr)
+					env_vals.append(env_val)
+					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 			self._type_table.define_struct_fields(env_ty, env_field_types)
 			env_val = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=env_val, struct_ty=env_ty, args=env_vals))
@@ -2266,7 +2350,10 @@ class HIRToMIR:
 		env_ptr: M.ValueId | None = None
 
 		if has_captures:
-			env_name = f"__lambda_env_cb_{lambda_id}"
+			if self._current_fn_id is not None:
+				env_name = f"__lambda_env_cb_{self._current_fn_id.name}_{self._current_fn_id.ordinal}_{lambda_id}"
+			else:
+				env_name = f"__lambda_env_cb_{lambda_id}"
 			field_names = [f"c{i}" for i in range(len(lam.captures))]
 			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
 			env_vals: list[M.ValueId] = []
@@ -2284,8 +2371,9 @@ class HIRToMIR:
 				elif cap.kind is C.HCaptureKind.MOVE:
 					place = self._place_from_capture_key(cap.key)
 					if cap.key.proj:
-						env_vals.append(self.lower_expr(expr))
-						env_field_types.append(self._infer_expr_type(expr) or unknown)
+						env_val = self.lower_expr(expr)
+						env_vals.append(env_val)
+						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 					else:
 						if not (hasattr(H, "HPlaceExpr") and isinstance(place, getattr(H, "HPlaceExpr"))):
 							raise AssertionError("non-canonical move capture place (compiler bug)")
@@ -2301,10 +2389,11 @@ class HIRToMIR:
 						self._local_types[moved_val] = inner_ty
 						self._moved_locals.add(subj_name)
 						env_vals.append(moved_val)
-						env_field_types.append(self._infer_expr_type(expr) or unknown)
+						env_field_types.append(inner_ty)
 				else:
-					env_vals.append(self.lower_expr(expr))
-					env_field_types.append(self._infer_expr_type(expr) or unknown)
+					env_val = self.lower_expr(expr)
+					env_vals.append(env_val)
+					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 			self._type_table.define_struct_fields(env_ty, env_field_types)
 			env_val = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=env_val, struct_ty=env_ty, args=env_vals))
@@ -2378,6 +2467,7 @@ class HIRToMIR:
 		if not block.statements:
 			return None
 		lower._push_scope(include_params=True)
+		lower._emit_lambda_capture_prologue()
 		*prefix, last = block.statements
 		for stmt in prefix:
 			lower.lower_stmt(stmt)
@@ -2395,6 +2485,49 @@ class HIRToMIR:
 			lower._emit_scope_drops(scope_index=len(lower._scope_stack) - 1)
 		lower._pop_scope()
 		return None
+
+	def _emit_lambda_capture_prologue(self) -> None:
+		if getattr(self, "_lambda_capture_prologue_done", False):
+			return
+		if self._lambda_capture_slots is None:
+			return
+		if self._lambda_env_local is None or self._lambda_env_ty is None or self._lambda_env_field_types is None:
+			return
+		for key, slot in sorted(self._lambda_capture_slots.items(), key=lambda item: item[1]):
+			bid = int(key.root_local)
+			name = self._binding_names.get(bid, f"__b{bid}")
+			local_name = self._canonical_local(bid, name)
+			self.b.ensure_local(local_name)
+			local_ty = self._local_types.get(local_name)
+			if local_ty is None and slot < len(self._lambda_env_field_types):
+				local_ty = self._lambda_env_field_types[slot]
+				if local_ty is self._unknown_type and self._lambda_env_ty is not None:
+					inst = self._type_table.get_struct_instance(self._lambda_env_ty)
+					if inst is None:
+						schema = self._type_table.get_struct_schema(self._lambda_env_ty)
+						if schema is not None and not schema.type_params:
+							inst_id = self._type_table.ensure_struct_instantiated(self._lambda_env_ty, [])
+							inst = self._type_table.get_struct_instance(inst_id)
+					if inst is not None and slot < len(inst.field_types):
+						inst_ty = inst.field_types[slot]
+						if inst_ty is not self._unknown_type:
+							local_ty = inst_ty
+				if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
+					kind = self._lambda_capture_kinds[slot]
+					if kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT) and self._lambda_capture_ref_is_value:
+						td = self._type_table.get(local_ty)
+						if td.kind is TypeKind.REF and td.param_types:
+							local_ty = td.param_types[0]
+				self._local_types[local_name] = local_ty
+			if local_ty is None:
+				local_ty = self._binding_types.get(bid)
+				if local_ty is not None:
+					self._local_types[local_name] = local_ty
+			val = self._load_capture_from_env(slot)
+			self.b.emit(M.StoreLocal(local=local_name, value=val))
+			if local_ty is not None:
+				self._register_drop_local(local_name, local_ty)
+		self._lambda_capture_prologue_done = True
 
 	def _seed_lambda_locals_for_inference(self, lower: "HIRToMIR", block: H.HBlock) -> None:
 		"""Seed declared local types for lambda return-type inference."""
@@ -3360,6 +3493,12 @@ class HIRToMIR:
 		# Allocate a hidden local for the ternary result.
 		temp_local = f"__tern_tmp{self.b.new_temp()}"
 		self.b.ensure_local(temp_local)
+		tern_ty = self._infer_expr_type(expr.then_expr)
+		if tern_ty is None:
+			tern_ty = self._infer_expr_type(expr.else_expr)
+		if tern_ty is None:
+			tern_ty = self._unknown_type
+		self._local_types[temp_local] = tern_ty
 
 		# Evaluate condition in the current block.
 		cond_val = self.lower_expr(expr.cond)
@@ -3439,6 +3578,10 @@ class HIRToMIR:
 		# Hidden local for the expression result.
 		temp_local = f"__try_expr_tmp{self.b.new_temp()}"
 		self.b.ensure_local(temp_local)
+		try_ty = self._current_expected_type() or self._infer_expr_type(expr.attempt)
+		if try_ty is None:
+			try_ty = self._unknown_type
+		self._local_types[temp_local] = try_ty
 
 		# Blocks: attempt body, dispatch for errors, catch arms, join for value.
 		attempt_block = self.b.new_block("tryexpr_attempt")
@@ -3530,15 +3673,17 @@ class HIRToMIR:
 			err_again = self.b.new_temp()
 			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
 			if arm.binder:
-				self.b.ensure_local(arm.binder)
-				self._local_types[arm.binder] = self._type_table.ensure_error()
-				self.b.emit(M.StoreLocal(local=arm.binder, value=err_again))
+				binder_id = self._find_binder_binding_id(arm.binder, arm.block, arm.result)
+				binder_local = self._canonical_local(binder_id, arm.binder)
+				self.b.ensure_local(binder_local)
+				self._local_types[binder_local] = self._type_table.ensure_error()
+				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
 			prev_catch_err = self._current_catch_error
 			self._current_catch_error = error_local
 			self.lower_block(arm.block)
 			if arm.result is None:
 				raise RuntimeError("try/catch expression arm must produce a value")
-			arm_val = self.lower_expr(arm.result)
+			arm_val = self.lower_expr(arm.result, expected_type=try_ty)
 			self._current_catch_error = prev_catch_err
 			self.b.emit(M.StoreLocal(local=temp_local, value=arm_val))
 			if self.b.block.terminator is None:
@@ -3616,6 +3761,9 @@ class HIRToMIR:
 		# - Can-throw calls must still be checked so Err paths route into the try
 		#   dispatch (or propagate out of the function) even when the Ok value is
 		#   ignored.
+		if isinstance(stmt.expr, H.HMatchExpr):
+			self._lower_match(stmt.expr, want_value=False)
+			return
 		if isinstance(stmt.expr, H.HCall):
 			info = self._call_info_for_expr_optional(stmt.expr)
 			if info is not None and info.target.kind is CallTargetKind.INTRINSIC:
@@ -3971,6 +4119,11 @@ class HIRToMIR:
 		if not can_throw:
 			if fn_is_void:
 				if stmt.value is not None:
+					val_ty = self._infer_expr_type(stmt.value)
+					if val_ty is None or self._type_table.is_void(val_ty):
+						self._emit_scope_drops(scope_index=0)
+						self.b.set_terminator(M.Return(value=None))
+						return
 					raise AssertionError("Void function must not have a return value (checker bug)")
 				self._emit_scope_drops(scope_index=0)
 				self.b.set_terminator(M.Return(value=None))
@@ -3986,6 +4139,13 @@ class HIRToMIR:
 		# `FnResult<T, Error>` return. Wrap normal returns into Ok.
 		if fn_is_void:
 			if stmt.value is not None:
+				val_ty = self._infer_expr_type(stmt.value)
+				if val_ty is None or self._type_table.is_void(val_ty):
+					res_val = self.b.new_temp()
+					self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
+					self._emit_scope_drops(scope_index=0)
+					self.b.set_terminator(M.Return(value=res_val))
+					return
 				raise AssertionError("Void function must not have a return value (checker bug)")
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
@@ -4285,9 +4445,11 @@ class HIRToMIR:
 			err_again = self.b.new_temp()
 			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
 			if arm.binder:
-				self.b.ensure_local(arm.binder)
-				self._local_types[arm.binder] = self._type_table.ensure_error()
-				self.b.emit(M.StoreLocal(local=arm.binder, value=err_again))
+				binder_id = self._find_binder_binding_id(arm.binder, arm.block)
+				binder_local = self._canonical_local(binder_id, arm.binder)
+				self.b.ensure_local(binder_local)
+				self._local_types[binder_local] = self._type_table.ensure_error()
+				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
 			code_again = self.b.new_temp()
 			self.b.emit(M.ErrorEvent(dest=code_again, error=err_again))
 			# Make the caught error available to `rethrow` inside this catch arm.
@@ -4764,7 +4926,10 @@ class HIRToMIR:
 				return self._lower_iface_call(expr.receiver, expr.args, expr.method_name, info), info
 			return self._lower_indirect_call(expr.receiver, expr.args, info), info
 		if info.target.kind is not CallTargetKind.DIRECT or not info.target.symbol:
-			raise AssertionError("method call missing direct CallTarget (typecheck/call-info bug)")
+			raise AssertionError(
+				"method call missing direct CallTarget (typecheck/call-info bug): "
+				f"{expr.method_name} callsite={getattr(expr, 'callsite_id', None)}"
+			)
 		target_fn_id = info.target.symbol
 		symbol_name = function_symbol(target_fn_id)
 		sig = self._signatures_by_id.get(target_fn_id)
@@ -4971,6 +5136,16 @@ class HIRToMIR:
 						):
 							return known
 				return local_ty
+			if self._expr_types and self._typed_mode != "none":
+				known = self._expr_types.get(expr.node_id)
+				if known is not None:
+					known_def = self._type_table.get(known)
+					if known_def.kind is not TypeKind.UNKNOWN:
+						return known
+			if getattr(expr, "binding_id", None) is not None:
+				bid_ty = self._binding_types.get(int(expr.binding_id))
+				if bid_ty is not None:
+					return bid_ty
 			if getattr(expr, "binding_id", None) is None:
 				const_mod = getattr(expr, "module_id", None) or self._current_module_name()
 				const_val = self._type_table.lookup_const(f"{const_mod}::{expr.name}")
@@ -5206,6 +5381,145 @@ class HIRToMIR:
 			return self._infer_expr_type(expr.attempt)
 		return None
 
+	def _infer_capture_type(self, expr: H.HExpr, key: C.HCaptureKey) -> TypeId | None:
+		ty = self._infer_expr_type(expr)
+		if ty is not None:
+			return ty
+		if self._expr_types and self._typed_mode != "none":
+			known = self._expr_types.get(expr.node_id)
+			if known is not None and self._type_table.get(known).kind is not TypeKind.UNKNOWN:
+				return known
+		return self._binding_types.get(int(key.root_local))
+
+	def _find_binder_binding_id(self, binder: str, block: H.HBlock, result_expr: H.HExpr | None = None) -> int | None:
+		found: int | None = None
+
+		def walk_expr(expr: H.HExpr) -> None:
+			nonlocal found
+			if found is not None:
+				return
+			if isinstance(expr, H.HVar) and expr.name == binder and expr.binding_id is not None:
+				found = int(expr.binding_id)
+				return
+			if isinstance(expr, H.HPlaceExpr):
+				base = expr.base
+				if isinstance(base, H.HVar) and base.name == binder and base.binding_id is not None:
+					found = int(base.binding_id)
+					return
+				for proj in expr.projections:
+					if isinstance(proj, H.HPlaceIndex):
+						walk_expr(proj.index)
+				return
+			if isinstance(expr, H.HCall):
+				walk_expr(expr.fn)
+				for a in expr.args:
+					walk_expr(a)
+				for kw in expr.kwargs:
+					walk_expr(kw.value)
+				return
+			if isinstance(expr, H.HMethodCall):
+				walk_expr(expr.receiver)
+				for a in expr.args:
+					walk_expr(a)
+				for kw in expr.kwargs:
+					walk_expr(kw.value)
+				return
+			if isinstance(expr, H.HField):
+				walk_expr(expr.subject)
+				return
+			if isinstance(expr, H.HIndex):
+				walk_expr(expr.subject)
+				walk_expr(expr.index)
+				return
+			if isinstance(expr, H.HBorrow):
+				walk_expr(expr.subject)
+				return
+			if isinstance(expr, H.HTryExpr):
+				walk_expr(expr.attempt)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if arm.result is not None:
+						walk_expr(arm.result)
+				return
+			if isinstance(expr, H.HMatchExpr):
+				walk_expr(expr.subject)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if arm.result is not None:
+						walk_expr(arm.result)
+				return
+			if isinstance(expr, H.HUnary):
+				walk_expr(expr.expr)
+				return
+			if isinstance(expr, H.HBinary):
+				walk_expr(expr.left)
+				walk_expr(expr.right)
+				return
+			if isinstance(expr, H.HTernary):
+				walk_expr(expr.cond)
+				walk_expr(expr.then_expr)
+				walk_expr(expr.else_expr)
+				return
+			if isinstance(expr, H.HArrayLiteral):
+				for e in expr.elements:
+					walk_expr(e)
+				return
+			if isinstance(expr, H.HFString):
+				for h in expr.holes:
+					walk_expr(h.expr)
+				return
+
+		def walk_stmt(stmt: H.HStmt) -> None:
+			nonlocal found
+			if found is not None:
+				return
+			if isinstance(stmt, H.HExprStmt):
+				walk_expr(stmt.expr)
+				return
+			if isinstance(stmt, H.HReturn) and stmt.value is not None:
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HLet) and stmt.value is not None:
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HAssign):
+				walk_expr(stmt.target)
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HAugAssign):
+				walk_expr(stmt.target)
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HIf):
+				walk_expr(stmt.cond)
+				walk_block(stmt.then_block)
+				if stmt.else_block is not None:
+					walk_block(stmt.else_block)
+				return
+			if isinstance(stmt, H.HLoop):
+				walk_block(stmt.body)
+				return
+			if isinstance(stmt, H.HTry):
+				walk_block(stmt.body)
+				for arm in stmt.catches:
+					walk_block(arm.block)
+				return
+			if isinstance(stmt, H.HBlock):
+				walk_block(stmt)
+				return
+			if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+				walk_block(stmt.block)
+				return
+
+		def walk_block(b: H.HBlock) -> None:
+			for st in b.statements:
+				walk_stmt(st)
+
+		walk_block(block)
+		if result_expr is not None:
+			walk_expr(result_expr)
+		return found
+
 	def _infer_qualified_ctor_variant_type(
 		self,
 		qm: H.HQualifiedMember,
@@ -5400,7 +5714,11 @@ class HIRToMIR:
 					cur_ty = base_def.param_types[0]
 					base_def = self._type_table.get(cur_ty)
 				if base_def.kind is not TypeKind.STRUCT:
-					raise AssertionError("field place base is not a struct (checker bug)")
+					fn_name = getattr(self.b.func, "name", None)
+					raise AssertionError(
+						"field place base is not a struct (checker bug): "
+						f"{base_def.kind} for {cur_ty} base={base_name} field={proj.name} fn={fn_name}"
+					)
 				info = self._type_table.struct_field(cur_ty, proj.name)
 				if info is None:
 					raise AssertionError("unknown struct field reached MIR lowering (checker bug)")

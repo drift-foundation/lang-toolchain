@@ -1,0 +1,12 @@
+{
+  "description": "borrowed capture rejected when implicitly coerced to Callback",
+  "exit_code": 1,
+  "phase": "checker",
+  "stderr": "",
+  "stdout": "",
+  "diagnostics": [
+    {
+      "message_contains": "closures with borrowed captures are non-escaping in v0"
+    }
+  ]
+}

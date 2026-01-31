@@ -1,0 +1,7 @@
+{
+  "description": "e2e: udp send/recv v6",
+  "diagnostics": [],
+  "exit_code": 0,
+  "use_driftc_json": false,
+  "sandbox_blocks": true
+}

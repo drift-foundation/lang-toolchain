@@ -117,6 +117,26 @@ def resolve_program_signatures(
 		param_mutable: list[bool] = []
 		param_type_ids: list[TypeId] = []
 		param_nonretaining: list[Optional[bool]] = []
+
+		def _coerce_exception_nominal(ty: TypeId) -> TypeId:
+			"""
+			Map forward-nominal exception types to Error, preserving &/&mut wrappers.
+			This allows signatures to use exception names in type positions.
+			"""
+			try:
+				td = table.get(ty)
+			except Exception:
+				return ty
+			if td.kind is TypeKind.FORWARD_NOMINAL and td.module_id:
+				fqn = f"{td.module_id}:{td.name}"
+				if fqn in table.exception_schemas:
+					return table.ensure_error()
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = td.param_types[0]
+				new_inner = _coerce_exception_nominal(inner)
+				if new_inner != inner:
+					return table.ensure_ref_mut(new_inner) if td.ref_mut else table.ensure_ref(new_inner)
+			return ty
 		local_type_params = dict(impl_type_param_map)
 		local_type_params.update(type_param_map)
 		for idx, p in enumerate(getattr(decl, "params", [])):
@@ -127,9 +147,10 @@ def resolve_program_signatures(
 			resolved_param: TypeId | None = None
 			if resolved_param is None:
 				resolved_param = resolve_opaque_type(raw_ty, table, module_id=module_name, type_params=local_type_params)
+			resolved_param = _coerce_exception_nominal(resolved_param)
 			param_type_ids.append(resolved_param)
 			param_nonretaining.append(None)
-		if intrinsic_kind in {IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2}:
+		if intrinsic_kind in {IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2}:
 			if param_nonretaining:
 				param_nonretaining[0] = False
 

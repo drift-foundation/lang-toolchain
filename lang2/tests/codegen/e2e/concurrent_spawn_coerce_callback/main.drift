@@ -1,0 +1,13 @@
+module m
+
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	var t = conc.spawn(| | => { return 7; });
+	val r = t.join();
+	match r {
+		Ok(v) => { return v; },
+		Err(_) => { return 1; },
+		default => { return 2; }
+	}
+}

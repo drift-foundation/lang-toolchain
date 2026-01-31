@@ -22,8 +22,7 @@ pub fn main() nothrow -> Int {
 	}
 	val t2 = conc.spawn_on(exec, | | => { return 2; });
 	var ok2 = match t2 {
-		Err(err) => {
-			match err {
+		Err(err) => { yield match err {
 				Busy => { true },
 				default => { false },
 			}

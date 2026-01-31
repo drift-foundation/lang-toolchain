@@ -1,0 +1,20 @@
+module m
+
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val b = cast<Byte>(5);
+	var t = conc.spawn(| | captures(copy b) => {
+		val v = cast<Int>(b);
+		return v + 1;
+	});
+	val r = t.join();
+	match r {
+		Ok(x) => {
+			if x != 6 { return 1; }
+			return 0;
+		},
+		Err(_) => { return 2; },
+		default => { return 3; }
+	}
+}

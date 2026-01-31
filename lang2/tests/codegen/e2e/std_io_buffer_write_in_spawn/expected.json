@@ -1,0 +1,4 @@
+{
+  "description": "e2e: buffer_write inside spawned VT",
+  "exit_code": 0
+}

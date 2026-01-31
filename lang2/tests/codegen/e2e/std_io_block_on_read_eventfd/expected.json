@@ -1,4 +1,0 @@
-{
-  "description": "e2e: std.io block_on_read eventfd",
-  "exit_code": 9
-}

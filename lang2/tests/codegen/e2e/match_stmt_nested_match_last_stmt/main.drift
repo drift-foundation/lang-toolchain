@@ -1,0 +1,19 @@
+module m
+
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	match r {
+		Ok(v) => {
+			match r {
+				Ok(_) => { val _x = 0; },
+				Err(_) => { val _y = 1; },
+				default => { val _z = 2; }
+			}
+		},
+		Err(_) => { return 3; },
+		default => { return 4; }
+	}
+	return 0;
+}

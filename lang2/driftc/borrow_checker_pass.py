@@ -110,6 +110,7 @@ class BorrowChecker:
 	binding_types: Optional[Dict[int, TypeId]] = None
 	binding_mutable: Optional[Dict[int, bool]] = None
 	binding_names: Optional[Dict[int, str]] = None
+	module_id: Optional[str] = None
 	signatures_by_id: Optional[Mapping[FunctionId, FnSignature]] = None
 	call_resolutions: Optional[Mapping[int, object]] = None
 	call_info_by_callsite_id: Optional[Mapping[int, CallInfo]] = None
@@ -318,6 +319,7 @@ class BorrowChecker:
 			call_resolutions=getattr(typed_fn, "call_resolutions", None),
 			call_info_by_callsite_id=getattr(typed_fn, "call_info_by_callsite_id", None),
 			base_lookup=base_lookup,
+			module_id=getattr(getattr(typed_fn, "fn_id", None), "module", None),
 			enable_auto_borrow=enable_auto_borrow,
 		)
 
@@ -367,6 +369,10 @@ class BorrowChecker:
 		"""
 		if place.base.kind is PlaceKind.GLOBAL:
 			return PlaceState.VALID
+		if self.module_id is not None:
+			const_sym = f"{self.module_id}::{place.base.name}"
+			if self.type_table.lookup_const(const_sym) is not None:
+				return PlaceState.VALID
 		if place.base.name == "self":
 			return PlaceState.VALID
 		if place in state.place_states:
@@ -498,10 +504,6 @@ class BorrowChecker:
 		- no moving while borrowed (overlap with any live loan), and
 		- use-after-move diagnostics until the place is reinitialized.
 		"""
-		if self.binding_mutable is not None and place.base.kind in (PlaceKind.LOCAL, PlaceKind.PARAM):
-			if not self.binding_mutable.get(place.base.local_id, False) and place.base.name != "self":
-				self._diagnostic("move requires an owned mutable binding declared with var", span)
-				return
 		curr = self._state_for(state, place)
 		if curr is PlaceState.MOVED:
 			self._diagnostic(f"use after move of '{place.base.name}'", span, code="E_USE_AFTER_MOVE")

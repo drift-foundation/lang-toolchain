@@ -1,0 +1,12 @@
+module m
+
+import std.core as core;
+
+exception MyError(code: Int);
+
+fn main() nothrow -> Int {
+	val r: core.Result<Int, Int> = core.Result::Err(5);
+	val tag = 7;
+	val v = try r.on_error(|e| captures(copy tag) => { throw MyError(tag + e); }) catch MyError(_) { 9 } catch { 10 };
+	return v;
+}

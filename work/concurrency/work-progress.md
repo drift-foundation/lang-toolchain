@@ -122,12 +122,9 @@ Phase 2 runtime (scheduler + reactor + VT lifecycle) complete.
 - `std.concurrent.sleep` now registers a reactor timer (deadline = now_ms + duration) and parks the current VT; non‑VT path still uses `vt_park_until`.
 - Runtime executor now has a queue + worker threads; `exec_submit` enqueues VTs and workers run callbacks (no per‑VT pthread creation).
 - Added test intrinsics for reactor IO (`test_eventfd_*`, `test_timerfd_*`) and e2e tests for IO‑driven unpark.
-- Added `std.concurrent.block_on_io` helper (register + park) and e2e `concurrent_block_on_io_eventfd`.
-- Added `std.io.block_on_read/write` and `std.net` stream/listener helpers wired to `std.concurrent.block_on_io`.
-- Added e2e `std_io_block_on_read_eventfd` and `std_net_block_on_read_eventfd`.
-- Added e2e `std_net_block_on_write_eventfd` and `std_net_block_on_accept_eventfd`.
-- Added e2e `std_io_block_on_write_eventfd`.
-- NOTE: `concurrent_block_on_io_eventfd` and `concurrent_reactor_eventfd_unpark` currently annotate `var t: VirtualThread<Int>` due to `spawn` inference failing to infer `T` from lambda return; add a compiler fix and remove these annotations.
+- Added internal `std.concurrent.block_on_io` helper (register + park).
+- Dropped public `std.io`/`std.net` block_on_* APIs; read/write now always block (VT‑aware). Internal waits use `std.concurrent.block_on_io`.
+- NOTE: `concurrent_reactor_eventfd_unpark` currently annotates `var t: VirtualThread<Int>` due to `spawn` inference failing to infer `T` from lambda return; add a compiler fix and remove these annotations.
 - Added e2e `concurrent_spawn_infers` to lock spawn() inference from lambda return (expected to pass once compiler fix lands).
 - Added e2e `concurrent_spawn_future_capture_infers` to lock capture inference for `spawn_future` inside loops.
 - Removed `CallbackN` implementations of `FnN` (no implicit Callback→Fn coercion); avoids invalid interface call stubs.
@@ -140,11 +137,38 @@ Phase 2 runtime (scheduler + reactor + VT lifecycle) complete.
 - Added `lang.thread.vt_is_completed` intrinsic + runtime hook; `FutureGroup.join_any` now polls completion via `vt_is_completed` and reads results without consuming.
 - `concurrent_future_group` e2e now passes (join_any returns a value while join_all still succeeds).
 - Fixed a NameError in `type_checker.py` for `let` bindings with declared types by removing a stray `ctx.locals[...]` write; binding types now flow through the normal path.
+- Allowed shared borrows from rvalues via temp materialization in MIR lowering and auto-borrowing; `string_byte_at`/`byte_length` now accept rvalue strings.
+- Added e2e `string_byte_at_rvalue` to lock rvalue borrow behavior.
+- Fixed lambda-local binding/capture collision in stage2: locals are no longer resolved as capture slots (prevents buffer_write bounds abort in spawned lambdas).
+- Added e2e `std_io_buffer_write_in_spawn` to lock local buffer writes inside spawned VTs.
 - TODO: add examples in `docs/effective-drift.md` showing concurrency usage (publisher/worker, simulated server, etc.).
 - TODO: after current inference/CallInfo bugs are resolved, sweep tests to reduce explicit type annotations (keep only where expected-type inference or diagnostics are the point).
+ - Added `std.net.test_listener_port(&TcpListener)` as a test-only free function and updated net e2e tests to use it. This sidesteps a compiler CallInfo issue for test-only impl methods (see Workarounds).
 
 ## Workarounds (documented for cleanup)
 - `call_resolver` Array element mismatch checks currently skip mismatches when `elem_def.name` is present in `ctx.type_param_map` to avoid false positives on generic Array<T> paths; remove once expected-type propagation and instantiation are fully aligned.
+- `std.net` tests use `test_listener_port` free function to avoid `test_local_port` method calls (method call currently yields indirect CallTarget in CallInfo for test-only impl methods).
+
+## Immediate work plan: or_throw ergonomics (Try trait)
+Goal: reduce match noise for IO/Result by adding `or_throw` as a trait method.
+
+Pinned decision:
+- Option A2 for try-block auto-unwrap: in `try { ... }` blocks (and only when `use trait std.core.Try;` is in scope),
+  Result-returning call statements are treated as value-position and auto-unwrapped.
+  This avoids silent ignores and keeps code clean.
+- If `Try` is not in scope, Result-returning call statements inside `try { ... }` must emit a diagnostic (no silent ignore).
+- Add regression tests: one verifies the diagnostic without `use trait Try`, and one verifies auto-unwrap behavior with it.
+
+Plan:
+1) Add `std.core.Try` trait for `Result<T, E>`:
+   - `or_throw(self) -> T` (throws original error)
+   - `or_throw(self, f: Fn1<E, X>) -> T` (throws mapped error)
+2) Ensure method overload resolution by arity selects the correct `or_throw` variant.
+3) Ensure expected-type propagation for lambda arg in `or_throw(f)` in method-call position.
+4) Confirm trait visibility: require `use trait std.core.Try;` (no prelude magic).
+5) Add regression tests:
+   - `Result<T,E>.or_throw()` compiles and throws on Err.
+   - `Result<T,E>.or_throw(|e| MyError(...))` compiles and throws mapped error.
 
 ### Phase 1: runtime scaffold (OS-thread fallback)
 1) Implement runtime stubs that execute VTs as OS threads (no epoll yet).
@@ -172,12 +196,14 @@ Phase 2 runtime (scheduler + reactor + VT lifecycle) complete.
    - IO parking: deadline timeout path (no readiness) + existing eventfd readiness tests.
    - timing: sleep(0) → Timeout, sleep(>0) → Ok, join_timeout(0) → Timeout, join_timeout(>0) → Ok.
    - Added: `concurrent_spawn_join_ordering`, `concurrent_join_twice_closed`, `concurrent_sleep_zero_timeout`,
-     `concurrent_sleep_nonzero_ok`, `concurrent_block_on_io_deadline_timeout`.
-   - Added: `concurrent_vt_current_in_task`, `concurrent_block_on_io_deadline_then_signal`,
-     `concurrent_block_on_io_multiple_waits`, `concurrent_many_short_tasks` (500 tasks, sum check), `concurrent_park_nonvt_noop`.
+     `concurrent_sleep_nonzero_ok`.
+   - Added: `concurrent_vt_current_in_task`, `concurrent_many_short_tasks` (500 tasks, sum check), `concurrent_park_nonvt_noop`.
    - Added: `concurrent_join_timeout_after_completion`.
    - Added: `concurrent_cancel_join_timeout_zero`.
    - Added: `concurrent_queue_limit_enforced`, `concurrent_default_executor_override`.
+   - Added: `std_net_tcp_stress_connections` (500 clients, mixed payload sizes) with comment map.
+   - Adjusted TCP read/write roundtrip tests to use larger buffers (len tracks actual bytes written).
+   - Added: `byte_capture_arithmetic` (capture Byte, cast to Int, arithmetic in lambda).
 
 ## Post‑MVP
 - ReentrantMutex.

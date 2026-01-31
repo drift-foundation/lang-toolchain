@@ -260,6 +260,8 @@ def verify_package_signatures(
 		mid = m.get("module_id")
 		if not isinstance(mid, str):
 			continue
+		if mid.endswith(".__instantiations"):
+			continue
 		is_core = mid.startswith(("std.", "lang.", "drift."))
 		allowed = (
 			core_trust_store.allowed_kids_for_module(mid)

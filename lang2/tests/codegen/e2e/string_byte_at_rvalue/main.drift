@@ -1,0 +1,6 @@
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val b = core.string_byte_at("abc", 1);
+	return cast<Int>(b);
+}

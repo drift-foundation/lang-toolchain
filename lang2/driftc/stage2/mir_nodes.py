@@ -71,6 +71,13 @@ class ConstUint64(MInstr):
 
 
 @dataclass
+class ConstByte(MInstr):
+	"""dest = constant byte (u8)"""
+	dest: ValueId
+	value: int
+
+
+@dataclass
 class IntFromUint(MInstr):
 	"""dest = cast Int from Uint (isize/usize conversion)."""
 	dest: ValueId
@@ -1081,6 +1088,7 @@ __all__ = [
 	"ConstInt",
 	"ConstUint",
 	"ConstUint64",
+	"ConstByte",
 	"IntFromUint",
 	"UintFromInt",
 	"CastScalar",

@@ -26,6 +26,7 @@ from lang2.driftc.stage2 import (
 	MInstr,
 	AssignSSA,
 	Phi,
+	ZeroValue,
 	Goto,
 	IfTerminator,
 )
@@ -118,7 +119,6 @@ class MirToSSA:
 			current_value[param] = param
 		new_instrs: list[MInstr] = []
 		value_for_instr: Dict[tuple[str, int], str] = {}
-
 		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, StoreLocal):
 				if instr.local in addr_taken:
@@ -354,6 +354,7 @@ class MirToSSA:
 		counters: Dict[str, int] = {}
 		stacks: Dict[str, list[str]] = {}
 		value_for_instr: Dict[tuple[str, int], str] = {}
+		zero_defs: Dict[tuple[str, str], str] = {}
 
 		def new_name(local: str) -> str:
 			counters[local] = counters.get(local, 0) + 1
@@ -423,6 +424,18 @@ class MirToSSA:
 						local = getattr(succ_instr, "local", succ_instr.dest)
 						if local in stacks and stacks[local]:
 							succ_instr.incoming[block_name] = stacks[local][-1]
+							continue
+						key = (block_name, local)
+						zero_name = zero_defs.get(key)
+						if zero_name is None:
+							ty = func.local_types.get(local)
+							if ty is None:
+								raise RuntimeError(f"SSA: missing type for zero-init local '{local}' in block '{block_name}'")
+							zero_name = new_name(local)
+							zero_defs[key] = zero_name
+							locals_defined.append(local)
+							block.instructions.append(ZeroValue(dest=zero_name, ty=ty))
+						succ_instr.incoming[block_name] = zero_name
 
 			# Recurse dominator-tree children.
 			for child in children[block_name]:

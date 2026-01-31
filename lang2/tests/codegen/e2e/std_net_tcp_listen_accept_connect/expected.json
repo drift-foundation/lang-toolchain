@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.net listen/accept/connect",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

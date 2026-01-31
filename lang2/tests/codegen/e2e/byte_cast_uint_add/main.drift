@@ -1,0 +1,9 @@
+module m
+
+pub fn main() nothrow -> Int {
+	val b = cast<Byte>(65);
+	val u = cast<Uint>(b);
+	val s = u + 1;
+	if s == 66 { return 0; }
+	return 1;
+}

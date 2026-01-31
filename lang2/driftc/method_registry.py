@@ -198,7 +198,11 @@ class CallableRegistry:
 		if fn_id is not None:
 			self._by_fn_id[fn_id] = decl
 		bucket = self._methods_by_module.setdefault(module_id, {})
-		bucket.setdefault((impl_target_type_id, name), []).append(decl)
+		method_bucket = bucket.setdefault((impl_target_type_id, name), [])
+		for existing in method_bucket:
+			if existing.signature == signature and existing.self_mode == self_mode:
+				return
+		method_bucket.append(decl)
 
 	def register_trait_method(
 		self,
@@ -239,7 +243,11 @@ class CallableRegistry:
 		)
 		self._by_id[callable_id] = decl
 		bucket = self._methods_by_module.setdefault(module_id, {})
-		bucket.setdefault((impl_target_type_id, name), []).append(decl)
+		method_bucket = bucket.setdefault((impl_target_type_id, name), [])
+		for existing in method_bucket:
+			if existing.signature == signature and existing.self_mode == self_mode and existing.trait_id == trait_id:
+				return
+		method_bucket.append(decl)
 
 	def get_free_candidates(
 		self,

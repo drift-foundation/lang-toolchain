@@ -38,7 +38,7 @@ from lang2.driftc.parser import (
 from lang2.driftc.module_lowered import flatten_modules
 from lang2.driftc.driftc import compile_to_llvm_ir_for_tests, ReservedNamespacePolicy
 from lang2.driftc.core.function_id import function_symbol
-from lang2.drift_core.runtime import get_runtime_sources
+from lang2.language_runtime import get_runtime_sources
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -64,7 +64,7 @@ def _run_ir_with_clang(
 	runtime_sources = get_runtime_sources(ROOT)
 	# The runtime sources include vendored C code (e.g. Ryu) that expects the
 	# directory containing the `ryu/` folder to be on the include path.
-	runtime_include = ROOT / "lang2" / "drift_core" / "runtime"
+	runtime_include = ROOT / "lang2" / "language_runtime"
 	try:
 		compile_res = subprocess.run(
 			[
@@ -116,6 +116,8 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 	expected = json.loads(expected_path.read_text())
 	if expected.get("skip"):
 		return "skipped (marked)"
+	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
+		return "skipped (sandbox)"
 	allow_reserved_flag = expected.get("dev_allow_reserved_namespaces")
 	if allow_reserved_flag is not None:
 		allow_reserved = bool(allow_reserved_flag)
@@ -360,6 +362,24 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 	return "ok"
 
 
+def _run_case_with_timeout(case_dir: Path, timeout_s: int) -> str:
+	if not timeout_s:
+		return _run_case(case_dir, timeout_s)
+	old_handler = None
+	def _on_timeout(signum, frame) -> None:
+		raise TimeoutError(f"timeout after {timeout_s}s")
+	old_handler = signal.signal(signal.SIGALRM, _on_timeout)
+	signal.alarm(timeout_s)
+	try:
+		return _run_case(case_dir, timeout_s)
+	except TimeoutError:
+		return f"FAIL (timeout after {timeout_s}s)"
+	finally:
+		signal.alarm(0)
+		if old_handler is not None:
+			signal.signal(signal.SIGALRM, old_handler)
+
+
 def _run_case_worker(case_dir: str, timeout_s: int) -> tuple[str, str]:
 	path = Path(case_dir)
 	old_handler = None
@@ -458,7 +478,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 			return 2
 	if jobs == 1 or len(case_dirs) <= 1:
 		for case_dir in case_dirs:
-			status = _run_case(case_dir, args.timeout)
+			status = _run_case_with_timeout(case_dir, args.timeout)
 			print(f"{case_dir.name}: {status}")
 			if status.startswith("FAIL"):
 				failures.append((case_dir, status))
