@@ -75,6 +75,7 @@ class FnSignature:
 	param_type_ids: Optional[list[TypeId]] = None
 	return_type_id: Optional[TypeId] = None
 	declared_can_throw: Optional[bool] = None
+	declared_throws: bool = False
 	declared_unsafe: Optional[bool] = None
 	is_extern: bool = False
 	is_intrinsic: bool = False
@@ -847,7 +848,7 @@ class Checker:
 				call_can_throw = info.sig.can_throw
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					fn_info = fn_infos.get(info.target.symbol)
-					if fn_info is not None:
+					if fn_info is not None and fn_info.declared_can_throw is not None:
 						call_can_throw = bool(fn_info.declared_can_throw)
 				if call_can_throw and not catch_all:
 					may_throw = True
@@ -1209,9 +1210,11 @@ class Checker:
 					return None
 				info = self.call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
 				if info is None:
+					fn_name = function_symbol(self.current_fn.fn_id) if self.current_fn is not None else "<unknown>"
+					csid = getattr(expr, "callsite_id", None)
 					self._append_diag(
 						_chk_diag(
-							message="internal: missing CallInfo for call typing (checker bug)",
+							message=f"internal: missing CallInfo for call typing (checker bug) in {fn_name} (callsite_id={csid})",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -1232,9 +1235,11 @@ class Checker:
 					return None
 				info = self.call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
 				if info is None:
+					fn_name = function_symbol(self.current_fn.fn_id) if self.current_fn is not None else "<unknown>"
+					csid = getattr(expr, "callsite_id", None)
 					self._append_diag(
 						_chk_diag(
-							message="internal: missing CallInfo for call typing (checker bug)",
+							message=f"internal: missing CallInfo for call typing (checker bug) in {fn_name} (callsite_id={csid})",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -2274,7 +2279,11 @@ class Checker:
 				)
 			)
 			return
-		if ctx.table.get(scrut_ty).kind is not TypeKind.VARIANT:
+		scrut_def = ctx.table.get(scrut_ty)
+		if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+			scrut_ty = scrut_def.param_types[0]
+			scrut_def = ctx.table.get(scrut_ty)
+		if scrut_def.kind is not TypeKind.VARIANT:
 			ctx._append_diag(
 				_chk_diag(
 					message="match scrutinee must have a variant type",

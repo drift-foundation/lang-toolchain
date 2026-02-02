@@ -3,7 +3,7 @@ variant Pair {
 }
 
 fn main() nothrow -> Int{
-val p: Pair = P(x = 2, y = 99);
+val p = Pair::P(x = 2, y = 99);
 
 	val a = match p{
 	P() => { 1 },

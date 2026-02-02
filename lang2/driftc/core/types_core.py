@@ -1232,7 +1232,7 @@ class TypeTable:
 		if needs_drop:
 			ctor = schema.tombstone_ctor
 			if not ctor:
-				raise ValueError(f"variant '{schema.name}' requires tombstone_ctor for droppable payloads")
+				raise ValueError(f"variant instantiation requires tombstone_ctor for variant '{schema.name}'")
 			tombstone_arm = by_name.get(ctor)
 			if tombstone_arm is None:
 				raise ValueError(f"tombstone_ctor '{ctor}' missing in variant '{schema.name}'")
@@ -1594,8 +1594,9 @@ class TypeTable:
 					name="Some",
 					fields=[VariantFieldSchema(name="value", type_expr=GenericTypeExpr.param(0))],
 				),
+				VariantArmSchema(name="Tombstone", fields=[]),
 			],
-			tombstone_ctor="None",
+			tombstone_ctor="Tombstone",
 		)
 
 	def ensure_ref(self, inner: TypeId) -> TypeId:

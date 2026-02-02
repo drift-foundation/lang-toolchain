@@ -1,0 +1,15 @@
+module m
+
+import std.core as core;
+
+fn run_main() -> Int {
+	try {
+		val opt: Optional<Int> = Optional::None();
+		val v = opt.on_none(| | => { return 3; });
+		return v;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}

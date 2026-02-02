@@ -265,7 +265,7 @@ def test_array_optional_string_take_uses_tombstone_ctor():
 	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=host_word_bits())
 	ir = mod.render()
 
-	assert "store i8 0" in ir
+	assert "store i8 2" in ir
 	match = re.search(
 		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store [^\n]*, [^\n]*\* \1)",
 		ir,

@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Optional.on_none used in try expression",
+  "exit_code": 7,
+  "stdout": "",
+  "stderr": ""
+}

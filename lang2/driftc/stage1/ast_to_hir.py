@@ -754,6 +754,16 @@ class AstToHIR:
 				)
 			if isinstance(e, H.HArrayLiteral):
 				return H.HArrayLiteral(elements=[_rename_expr(a, mapping) for a in e.elements])
+			if isinstance(e, H.HExceptionInit):
+				return H.HExceptionInit(
+					event_fqn=e.event_fqn,
+					pos_args=[_rename_expr(a, mapping) for a in e.pos_args],
+					kw_args=[
+						H.HKwArg(name=kw.name, value=_rename_expr(kw.value, mapping), loc=kw.loc)
+						for kw in e.kw_args
+					],
+					loc=e.loc,
+				)
 			if isinstance(e, H.HFString):
 				return H.HFString(
 					parts=e.parts,
@@ -829,6 +839,8 @@ class AstToHIR:
 				)
 			if isinstance(st, H.HReturn):
 				return (H.HReturn(value=_rename_expr(st.value, mapping) if st.value is not None else None), mapping)
+			if isinstance(st, H.HThrow):
+				return (H.HThrow(value=_rename_expr(st.value, mapping) if st.value is not None else None), mapping)
 			if isinstance(st, H.HExprStmt):
 				return (H.HExprStmt(expr=_rename_expr(st.expr, mapping)), mapping)
 			if isinstance(st, H.HIf):
@@ -956,9 +968,6 @@ class AstToHIR:
 		Arms are preserved in source order.
 		"""
 		body_block = self.lower_block(stmt.body)
-		if not stmt.catches:
-			raise NotImplementedError("Try lowering requires at least one catch arm")
-
 		catch_arms: list[H.HCatchArm] = []
 		for arm in stmt.catches:
 			event_name = arm.event

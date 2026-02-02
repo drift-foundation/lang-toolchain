@@ -68,6 +68,28 @@ pub variant ConcurrencyError {
 	Failed(err: Error),
 }
 
+implement core.Diagnostic for ConcurrencyError {
+	pub fn to_diag(self: ConcurrencyError) nothrow -> DiagnosticValue {
+		return match self {
+			Timeout => {
+				DiagnosticValue::Int(-1)
+			},
+			Cancelled => {
+				DiagnosticValue::Int(-2)
+			},
+			Closed => {
+				DiagnosticValue::Int(-3)
+			},
+			Busy => {
+				DiagnosticValue::Int(-4)
+			},
+			Failed(_) => {
+				DiagnosticValue::Int(-5)
+			}
+		};
+	}
+}
+
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
 	return atomic.atomic_bool(v);
 }

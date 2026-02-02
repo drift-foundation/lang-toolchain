@@ -548,6 +548,18 @@ class HIRToMIR:
 		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
 		scrut_val = self.lower_expr(expr.scrutinee)
 		scrut_ty = self._infer_expr_type(expr.scrutinee)
+		scrut_is_ref = False
+		scrut_ref_mut = False
+		if scrut_ty is not None:
+			scrut_def = self._type_table.get(scrut_ty)
+			if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+				scrut_is_ref = True
+				scrut_ref_mut = bool(scrut_def.ref_mut)
+				scrut_ty = scrut_def.param_types[0]
+				load_tmp = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=load_tmp, ptr=scrut_val, inner_ty=scrut_ty))
+				self._local_types[load_tmp] = scrut_ty
+				scrut_val = load_tmp
 		if scrut_ty is None or self._type_table.get(scrut_ty).kind is not TypeKind.VARIANT:
 			raise AssertionError("match scrutinee must have a concrete variant type (checker bug)")
 		inst = self._type_table.get_variant_instance(scrut_ty)
@@ -649,6 +661,9 @@ class HIRToMIR:
 						if fidx < 0 or fidx >= len(arm_def.field_types):
 							raise AssertionError("match binder field index out of range (checker bug)")
 						bty = arm_def.field_types[fidx]
+						binder_ty = bty
+						if scrut_is_ref:
+							binder_ty = self._type_table.ensure_ref_mut(bty) if scrut_ref_mut else self._type_table.ensure_ref(bty)
 						field_val = self.b.new_temp()
 						self.b.emit(
 							M.VariantGetField(
@@ -661,9 +676,21 @@ class HIRToMIR:
 							)
 						)
 						self._local_types[field_val] = bty
-						self.b.ensure_local(bname)
-						self._local_types[bname] = bty
-						self.b.emit(M.StoreLocal(local=bname, value=field_val))
+						if scrut_is_ref:
+							tmp_local = f"{bname}__match_tmp{self.b.new_temp()}"
+							self.b.ensure_local(tmp_local)
+							self._local_types[tmp_local] = bty
+							self.b.emit(M.StoreLocal(local=tmp_local, value=field_val))
+							addr = self.b.new_temp()
+							self.b.emit(M.AddrOfLocal(dest=addr, local=tmp_local, is_mut=scrut_ref_mut))
+							self._local_types[addr] = binder_ty
+							self.b.ensure_local(bname)
+							self._local_types[bname] = binder_ty
+							self.b.emit(M.StoreLocal(local=bname, value=addr))
+						else:
+							self.b.ensure_local(bname)
+							self._local_types[bname] = binder_ty
+							self.b.emit(M.StoreLocal(local=bname, value=field_val))
 
 			# Lower the arm body statements regardless of pattern kind.
 			self.lower_block(arm.block)
@@ -894,6 +921,23 @@ class HIRToMIR:
 			return None
 
 		target_ty = self._expr_types.get(expr.node_id) if self._typed_mode != "none" else None
+		if self._typed_mode == "strict" and target_ty is None:
+			target = _format_type_expr(getattr(expr, "target_type_expr", None))
+			raise AssertionError(
+				"internal compiler error: HCast must be eliminated during typecheck "
+				f"(node_id={expr.node_id}, target={target}); "
+				"rewrite to HFnPtrConst or emit a diagnostic"
+			)
+		resolved_target = _resolve_scalar_target()
+		if resolved_target is not None:
+			if target_ty is None:
+				target_ty = resolved_target
+			else:
+				target_def = self._type_table.get(target_ty)
+				resolved_def = self._type_table.get(resolved_target)
+				if target_def.kind is TypeKind.SCALAR and resolved_def.kind is TypeKind.SCALAR:
+					if target_def.name != resolved_def.name:
+						target_ty = resolved_target
 		if target_ty is None:
 			if self._typed_mode == "strict":
 				target = _format_type_expr(getattr(expr, "target_type_expr", None))
@@ -902,14 +946,14 @@ class HIRToMIR:
 					f"(node_id={expr.node_id}, target={target}); "
 					"rewrite to HFnPtrConst or emit a diagnostic"
 				)
-			target_ty = _resolve_scalar_target()
+			target_ty = resolved_target
 			if target_ty is None:
 				target = _format_type_expr(getattr(expr, "target_type_expr", None))
 				return self._recover_unknown_value(
 					f"stage2: unable to resolve scalar cast target (node_id={expr.node_id}, target={target})"
 				)
 		src_ty = self._expr_types.get(expr.value.node_id) if self._typed_mode != "none" else None
-		if src_ty is None and self._typed_mode != "strict":
+		if src_ty is None:
 			src_ty = self._infer_expr_type(expr.value)
 		if src_ty is None:
 			return self._recover_unknown_value(
@@ -2156,7 +2200,24 @@ class HIRToMIR:
 
 	def _lower_lambda_immediate_call(self, lam: H.HLambda, args: list[H.HExpr]) -> M.ValueId:
 		"""Lower an immediate-call lambda via env + hidden function."""
-		if not lam.captures:
+		if getattr(lam, "explicit_captures", None) is not None:
+			explicit_list: list[C.HCapture] = []
+			kind_map = {
+				"ref": C.HCaptureKind.REF,
+				"ref_mut": C.HCaptureKind.REF_MUT,
+				"copy": C.HCaptureKind.COPY,
+				"move": C.HCaptureKind.MOVE,
+				"auto": C.HCaptureKind.REF,
+			}
+			for cap in lam.explicit_captures or []:
+				if cap.binding_id is None:
+					continue
+				kind = kind_map.get(cap.kind)
+				if kind is None:
+					continue
+				explicit_list.append(C.HCapture(kind=kind, key=C.HCaptureKey(root_local=cap.binding_id, proj=()), span=cap.span))
+			lam.captures = explicit_list
+		elif not lam.captures:
 			discover_captures(lam)
 		if lam.captures:
 			# Ensure deterministic capture ordering for env layout and slots.
@@ -2214,7 +2275,7 @@ class HIRToMIR:
 							raise AssertionError("move capture of projected place (compiler bug)")
 						subj_name = self._canonical_local(getattr(place.base, "binding_id", None), place.base.name)
 						self.b.ensure_local(subj_name)
-						inner_ty = self._infer_expr_type(expr)
+						inner_ty = self._local_types.get(subj_name) or self._infer_expr_type(expr)
 						if inner_ty is None:
 							raise AssertionError("move capture operand type unknown in MIR lowering (checker bug)")
 						moved_val = self.b.new_temp()
@@ -2227,6 +2288,12 @@ class HIRToMIR:
 					env_val = self.lower_expr(expr)
 					env_vals.append(env_val)
 					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+			for idx, val in enumerate(env_vals):
+				val_ty = self._local_types.get(val)
+				if val_ty is None or idx >= len(env_field_types):
+					continue
+				if val_ty != env_field_types[idx]:
+					env_field_types[idx] = val_ty
 			self._type_table.define_struct_fields(env_ty, env_field_types)
 			env_val = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=env_val, struct_ty=env_ty, args=env_vals))
@@ -2330,7 +2397,24 @@ class HIRToMIR:
 		can_throw: bool,
 	) -> tuple[FunctionRefId, M.ValueId | None, TypeId | None]:
 		"""Lower a lambda into a callback thunk + optional heap env."""
-		if not lam.captures:
+		if getattr(lam, "explicit_captures", None) is not None:
+			explicit_list: list[C.HCapture] = []
+			kind_map = {
+				"ref": C.HCaptureKind.REF,
+				"ref_mut": C.HCaptureKind.REF_MUT,
+				"copy": C.HCaptureKind.COPY,
+				"move": C.HCaptureKind.MOVE,
+				"auto": C.HCaptureKind.REF,
+			}
+			for cap in lam.explicit_captures or []:
+				if cap.binding_id is None:
+					continue
+				kind = kind_map.get(cap.kind)
+				if kind is None:
+					continue
+				explicit_list.append(C.HCapture(kind=kind, key=C.HCaptureKey(root_local=cap.binding_id, proj=()), span=cap.span))
+			lam.captures = explicit_list
+		elif not lam.captures:
 			discover_captures(lam)
 		if lam.captures:
 			lam.captures = sort_captures(lam.captures)
@@ -2381,7 +2465,7 @@ class HIRToMIR:
 							raise AssertionError("move capture of projected place (compiler bug)")
 						subj_name = self._canonical_local(getattr(place.base, "binding_id", None), place.base.name)
 						self.b.ensure_local(subj_name)
-						inner_ty = self._infer_expr_type(expr)
+						inner_ty = self._local_types.get(subj_name) or self._infer_expr_type(expr)
 						if inner_ty is None:
 							raise AssertionError("move capture operand type unknown in MIR lowering (checker bug)")
 						moved_val = self.b.new_temp()
@@ -2394,6 +2478,12 @@ class HIRToMIR:
 					env_val = self.lower_expr(expr)
 					env_vals.append(env_val)
 					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+			for idx, val in enumerate(env_vals):
+				val_ty = self._local_types.get(val)
+				if val_ty is None or idx >= len(env_field_types):
+					continue
+				if val_ty != env_field_types[idx]:
+					env_field_types[idx] = val_ty
 			self._type_table.define_struct_fields(env_ty, env_field_types)
 			env_val = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=env_val, struct_ty=env_ty, args=env_vals))
@@ -3534,8 +3624,6 @@ class HIRToMIR:
 		return dest
 
 	def _visit_expr_HQualifiedMember(self, expr: H.HQualifiedMember) -> M.ValueId:
-		if self._typed_mode != "none":
-			raise AssertionError("qualified member reached MIR lowering in typed mode (checker bug)")
 		base_te = getattr(expr, "base_type_expr", None)
 		if base_te is None:
 			raise AssertionError("qualified member missing base type (checker bug)")
@@ -3954,6 +4042,11 @@ class HIRToMIR:
 		expected_ty = declared_ty if declared_ty is not None else inferred_ty
 		val = self.lower_expr(stmt.value, expected_type=expected_ty)
 		val_ty = declared_ty if declared_ty is not None else inferred_ty
+		bid = getattr(stmt, "binding_id", None)
+		if bid is not None:
+			bid_ty = self._binding_types.get(int(bid))
+			if bid_ty is not None and self._type_table.get(bid_ty).kind is not TypeKind.UNKNOWN:
+				val_ty = bid_ty
 		if val_ty is not None:
 			self._local_types[local_name] = val_ty
 			self._register_drop_local(local_name, val_ty)
@@ -4346,7 +4439,8 @@ class HIRToMIR:
 		if self.b.block.terminator is not None:
 			return
 		if not stmt.catches:
-			raise RuntimeError("HTry lowering requires at least one catch arm")
+			self.lower_block(stmt.body)
+			return
 
 		body_block = self.b.new_block("try_body")
 		dispatch_block = self.b.new_block("try_dispatch")
@@ -4655,16 +4749,24 @@ class HIRToMIR:
 			ptd = self._type_table.get(param_ty)
 			if ptd.kind is TypeKind.REF:
 				return self.lower_expr(arg)
-		if isinstance(arg, H.HVar):
-			arg_ty = self._infer_expr_type(arg) or param_ty
-			if arg_ty is not None and not self._type_table.is_copy(arg_ty):
-				subj_name = self._canonical_local(getattr(arg, "binding_id", None), arg.name)
-				self.b.ensure_local(subj_name)
-				moved_val = self.b.new_temp()
-				self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
-				self._local_types[moved_val] = arg_ty
-				self._moved_locals.add(subj_name)
-				return moved_val
+		if isinstance(arg, H.HVar) or (hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr"))):
+			base = arg
+			if hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr")):
+				if arg.projections:
+					return self.lower_expr(arg)
+				base = arg.base
+			if isinstance(base, H.HVar):
+				arg_ty = self._infer_expr_type(base)
+				if param_ty is not None and not self._type_table.is_copy(param_ty):
+					arg_ty = param_ty
+				if arg_ty is not None and not self._type_table.is_copy(arg_ty):
+					subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
+					self.b.ensure_local(subj_name)
+					moved_val = self.b.new_temp()
+					self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
+					self._local_types[moved_val] = arg_ty
+					self._moved_locals.add(subj_name)
+					return moved_val
 		return self.lower_expr(arg)
 
 	def _lower_constructor_call(self, expr: H.HCall, info: CallInfo) -> M.ValueId:
@@ -5043,7 +5145,11 @@ class HIRToMIR:
 		# Join: load ok from hidden local as the value of this expression.
 		self.b.set_block(join_block)
 		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
+		if self._type_table.is_copy(ok_ty):
+			self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
+		else:
+			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))
+			self._moved_locals.add(ok_local)
 		self._local_types[dest] = ok_ty
 		return dest
 
@@ -5106,6 +5212,21 @@ class HIRToMIR:
 				if known_def.kind is TypeKind.SCALAR and known_def.name in ("Int", "Uint", "Uint64", "Byte"):
 					return known
 			return self._int_type
+		if isinstance(expr, H.HCast):
+			if self._expr_types and self._typed_mode != "none":
+				known = self._expr_types.get(expr.node_id)
+				if known is not None and self._type_table.get(known).kind is not TypeKind.UNKNOWN:
+					return known
+			te = getattr(expr, "target_type_expr", None)
+			if te is not None:
+				try:
+					mod_id = getattr(te, "module_id", None) or self._current_module_name()
+					tid = resolve_opaque_type(te, self._type_table, module_id=mod_id)
+					if tid is not None and self._type_table.get(tid).kind is not TypeKind.UNKNOWN:
+						return tid
+				except Exception:
+					return None
+			return None
 		if isinstance(expr, H.HVar):
 			if self._lambda_capture_slots is not None:
 				key = self._capture_key_for_expr(expr)
@@ -5135,6 +5256,15 @@ class HIRToMIR:
 							TypeKind.TYPEVAR,
 						):
 							return known
+				if getattr(expr, "binding_id", None) is not None:
+					bid_ty = self._binding_types.get(int(expr.binding_id))
+					if bid_ty is not None and self._type_table.get(bid_ty).kind not in (TypeKind.UNKNOWN, TypeKind.TYPEVAR):
+						local_def = self._type_table.get(local_ty)
+						bid_def = self._type_table.get(bid_ty)
+						if local_def.kind in (TypeKind.UNKNOWN, TypeKind.TYPEVAR):
+							return bid_ty
+						if local_def.kind is TypeKind.SCALAR and bid_def.kind is TypeKind.SCALAR and local_ty != bid_ty:
+							return bid_ty
 				return local_ty
 			if self._expr_types and self._typed_mode != "none":
 				known = self._expr_types.get(expr.node_id)

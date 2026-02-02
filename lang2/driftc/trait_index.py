@@ -79,6 +79,7 @@ class GlobalTraitImplIndex:
 		self._by_trait_target_method: Dict[Tuple[TraitKey, TypeId, str], List[TraitImplCandidate]] = {}
 		self._seen_impl_methods: set[tuple[TraitKey, TypeId, str, ModuleId, int, FunctionId]] = set()
 		self._trait_by_fn_id: Dict[FunctionId, TraitKey] = {}
+		self._require_by_fn_id: Dict[FunctionId, object] = {}
 		self.missing_modules: set[ModuleId] = set()
 		self.module_names_by_id: Dict[ModuleId, str] = {}
 
@@ -140,9 +141,14 @@ class GlobalTraitImplIndex:
 			)
 			self._by_trait_target_method.setdefault((impl.trait_key, base_id, method.name), []).append(cand)
 			self._trait_by_fn_id.setdefault(method.fn_id, impl.trait_key)
+			if impl.require_expr is not None:
+				self._require_by_fn_id.setdefault(method.fn_id, impl.require_expr)
 
 	def trait_key_for_fn_id(self, fn_id: FunctionId) -> TraitKey | None:
 		return self._trait_by_fn_id.get(fn_id)
+
+	def require_for_fn_id(self, fn_id: FunctionId) -> object | None:
+		return self._require_by_fn_id.get(fn_id)
 
 	def candidates_for_target_method(self, receiver_base: TypeId, name: str) -> List[TraitImplCandidate]:
 		out: List[TraitImplCandidate] = []

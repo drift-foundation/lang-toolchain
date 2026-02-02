@@ -1,0 +1,10 @@
+{
+  "description": "empty array literal requires type annotation",
+  "diagnostics": [
+    {
+      "message_contains": "cannot infer element type for array literal",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

@@ -66,7 +66,7 @@ def test_resolve_optional_and_diagnostic_value():
 	assert base is not None
 	schema = table.get_variant_schema(base)
 	assert schema is not None
-	assert [arm.name for arm in schema.arms] == ["None", "Some"]
+	assert [arm.name for arm in schema.arms] == ["None", "Some", "Tombstone"]
 
 	dv_ty = resolve_opaque_type("DiagnosticValue", table)
 	assert table.get(dv_ty).kind is TypeKind.DIAGNOSTICVALUE

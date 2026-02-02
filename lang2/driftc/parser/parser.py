@@ -1124,9 +1124,14 @@ def _build_trait_method_sig(tree: Tree) -> TraitMethodSig:
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
 	declared_nothrow = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
+	declared_throws = False
+	if idx < len(children) and isinstance(children[idx], Token):
+		if children[idx].type == "NOTHROW":
+			declared_nothrow = True
+			idx += 1
+		elif children[idx].type == "THROWS":
+			declared_throws = True
+			idx += 1
 	return_sig = children[idx]
 	type_child = next(child for child in return_sig.children if isinstance(child, Tree))
 	return_type = _build_type_expr(type_child)
@@ -1138,6 +1143,7 @@ def _build_trait_method_sig(tree: Tree) -> TraitMethodSig:
 		type_params=type_params,
 		type_param_locs=type_param_locs,
 		declared_nothrow=declared_nothrow,
+		declared_throws=declared_throws,
 		is_unsafe=is_unsafe,
 	)
 
@@ -1202,9 +1208,14 @@ def _build_interface_method_sig(tree: Tree) -> InterfaceMethodSig:
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
 	declared_nothrow = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
+	declared_throws = False
+	if idx < len(children) and isinstance(children[idx], Token):
+		if children[idx].type == "NOTHROW":
+			declared_nothrow = True
+			idx += 1
+		elif children[idx].type == "THROWS":
+			declared_throws = True
+			idx += 1
 	return_sig = children[idx]
 	type_child = next(child for child in return_sig.children if isinstance(child, Tree))
 	return_type = _build_type_expr(type_child)
@@ -1216,6 +1227,7 @@ def _build_interface_method_sig(tree: Tree) -> InterfaceMethodSig:
 		type_params=type_params,
 		type_param_locs=type_param_locs,
 		declared_nothrow=declared_nothrow,
+		declared_throws=declared_throws,
 		is_unsafe=is_unsafe,
 	)
 
@@ -1285,9 +1297,14 @@ def _build_function(tree: Tree, *, allow_missing_body: bool = False) -> Function
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
 	declared_nothrow = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
+	declared_throws = False
+	if idx < len(children) and isinstance(children[idx], Token):
+		if children[idx].type == "NOTHROW":
+			declared_nothrow = True
+			idx += 1
+		elif children[idx].type == "THROWS":
+			declared_throws = True
+			idx += 1
 	return_sig = children[idx]
 	type_child = next(child for child in return_sig.children if isinstance(child, Tree))
 	return_type = _build_type_expr(type_child)
@@ -1310,6 +1327,7 @@ def _build_function(tree: Tree, *, allow_missing_body: bool = False) -> Function
 		params=params,
 		return_type=return_type,
 		declared_nothrow=declared_nothrow,
+		declared_throws=declared_throws,
 		is_unsafe=is_unsafe,
 		body=body,
 		loc=loc,
@@ -2134,6 +2152,7 @@ def _build_continue_stmt(tree: Tree) -> ContinueStmt:
 def _build_try_stmt(tree: Tree) -> TryStmt:
     loc = _loc(tree)
     try_block = None
+    body_from_expr = False
     catches: list[CatchClause] = []
     for child in tree.children:
         if not isinstance(child, Tree):
@@ -2152,12 +2171,13 @@ def _build_try_stmt(tree: Tree) -> TryStmt:
             else:
                 expr = _build_expr(child)
                 try_block = Block(statements=[ExprStmt(loc=_loc(child), value=expr)])
+                body_from_expr = True
         elif name == "catch_clause":
             catches.append(_build_catch_clause(child))
     if try_block is None:
         raise ValueError("try statement missing body")
-    if not catches:
-        raise ValueError("try statement requires at least one catch clause")
+    if not catches and body_from_expr:
+        raise ValueError("try statement with expression body requires at least one catch clause")
     return TryStmt(loc=loc, body=try_block, catches=catches)
 
 
@@ -2937,18 +2957,34 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
                     if isinstance(t, Tree) and _name(t) == "type_expr"
                 ]
             if isinstance(expr, TypeApp):
-                raise QualifiedMemberParseError(
-                    "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
-                    loc=_loc(child),
-                )
+                if type_arg_node is not None:
+                    raise QualifiedMemberParseError(
+                        "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
+                        loc=_loc(child),
+                    )
+                type_args = list(expr.type_args)
+                expr = expr.func
+            def _attr_chain_parts(node: Expr) -> list[str] | None:
+                if isinstance(node, Name):
+                    return [node.ident]
+                if isinstance(node, Attr):
+                    parts = _attr_chain_parts(node.value)
+                    if parts is None:
+                        return None
+                    parts.append(node.attr)
+                    return parts
+                return None
+
             base_alias: str | None = None
             base_name: str | None = None
             base_loc = getattr(expr, "loc", _loc(child))
-            if isinstance(expr, Attr) and isinstance(expr.value, Name):
-                base_alias = expr.value.ident
-                base_name = expr.attr
-            elif isinstance(expr, Name):
-                base_name = expr.ident
+            parts = _attr_chain_parts(expr)
+            if parts is not None:
+                if len(parts) == 1:
+                    base_name = parts[0]
+                else:
+                    base_alias = ".".join(parts[:-1])
+                    base_name = parts[-1]
             else:
                 raise QualifiedMemberParseError(
                     "E-PARSE-QMEM-SHAPE: qualified member base must be a name or module-qualified name",

@@ -9,7 +9,11 @@ import std.algo as algo;
 import std.mem as mem;
 
 use trait cmp.Comparable;
+use trait cmp.Equatable;
 use trait core.Copy;
+use trait hash.BuildHasher;
+use trait hash.Hash;
+use trait hash.Hasher;
 use trait iter.SinglePassIterator;
 
 export {

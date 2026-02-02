@@ -1,0 +1,7 @@
+module main
+import std.core as core;
+import std.net as net;
+fn main() -> Int {
+  val r: core.Result<net.TcpListener, net.NetError> = core.Result::Err(net.NetError::WouldBlock);
+  return 0;
+}

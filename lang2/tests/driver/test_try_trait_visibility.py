@@ -61,9 +61,112 @@ module main
 
 import std.core as core;
 use trait core.Try;
+use trait core.Diagnostic;
 
 	fn main() -> Int {
 	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val v = r.into_try();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == []
+
+
+def test_try_trait_method_on_ref_succeeds_with_use_trait(tmp_path: Path) -> None:
+	diagnostics = _compile_source(
+		"""
+module main
+
+import std.core as core;
+use trait core.Try;
+use trait core.Diagnostic;
+
+	fn main() -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val v = (&r).into_try();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == []
+
+
+def test_try_trait_requires_diagnostic_impl(tmp_path: Path) -> None:
+	diagnostics = _compile_source(
+		"""
+module main
+
+import std.core as core;
+use trait core.Try;
+use trait core.Diagnostic;
+
+pub variant MyErr {
+	Msg(m: String),
+	@tombstone None
+}
+
+	fn main() -> Int {
+	val r: core.Result<Int, MyErr> = core.Result::Err(MyErr::Msg("oops"));
+	val v = r.into_try();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics
+	assert any("into_try" in d.message or "Try" in d.message for d in diagnostics)
+
+
+def test_try_trait_into_try_uses_err_type_for_result_variant(tmp_path: Path) -> None:
+	diagnostics = _compile_source(
+		"""
+module main
+
+import std.core as core;
+import std.net as net;
+use trait core.Try;
+use trait core.Diagnostic;
+
+	fn main() -> Int {
+	val r: core.Result<net.TcpListener, net.NetError> = Err(net.NetError::WouldBlock());
+	val _v = r.into_try();
+	return 0;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == []
+
+def test_try_trait_accepts_diagnostic_impl(tmp_path: Path) -> None:
+	diagnostics = _compile_source(
+		"""
+module main
+
+import std.core as core;
+use trait core.Try;
+use trait core.Diagnostic;
+
+pub variant MyErr {
+	Msg(m: String),
+	@tombstone None
+}
+
+	implement core.Diagnostic for MyErr {
+		pub fn to_diag(self: MyErr) nothrow -> DiagnosticValue {
+			return match self {
+				Msg(m) => {
+					m.to_diag()
+				},
+				default => { DiagnosticValue::Int(0) }
+			};
+		}
+	}
+
+	fn main() -> Int {
+	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = r.into_try();
 	return v;
 }

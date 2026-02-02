@@ -45,6 +45,21 @@ ROOT = Path(__file__).resolve().parents[4]
 BUILD_ROOT = ROOT / "build" / "tests" / "lang2" / "tests" / "codegen" / "e2e"
 
 
+def _drift_debug_diags_enabled() -> bool:
+	raw = os.environ.get("DRIFT_DEBUG")
+	if not raw:
+		return False
+	if raw in ("1", "true", "True"):
+		return True
+	try:
+		cfg = json.loads(raw)
+	except json.JSONDecodeError:
+		return False
+	if isinstance(cfg, dict):
+		return bool(cfg.get("diags") or cfg.get("e2e_diags"))
+	return False
+
+
 def _run_ir_with_clang(
 	ir: str,
 	build_dir: Path,
@@ -187,7 +202,7 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 				match_found = True
 				break
 			if not match_found:
-				if os.environ.get("E2E_DEBUG_DIAGS"):
+				if _drift_debug_diags_enabled():
 					diag_text = "; ".join(d.get("message", "") for d in diags)
 					return f"FAIL (missing expected diagnostic: {diag_text})"
 				return "FAIL (missing expected diagnostic)"
@@ -295,13 +310,13 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 				match_found = True
 				break
 			if not match_found:
-				if os.environ.get("E2E_DEBUG_DIAGS"):
+				if _drift_debug_diags_enabled():
 					diag_text = "; ".join(d.message for d in checked_diags)
 					return f"FAIL (missing expected diagnostic: {diag_text})"
 				return "FAIL (missing expected diagnostic)"
 		return "ok"
 	if checked_diags:
-		if os.environ.get("E2E_DEBUG_DIAGS"):
+		if _drift_debug_diags_enabled():
 			diag_text = "; ".join(d.message for d in checked_diags)
 			return f"FAIL (unexpected checker diagnostics: {diag_text})"
 		return "FAIL (unexpected checker diagnostics)"

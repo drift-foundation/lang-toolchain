@@ -1,0 +1,13 @@
+module m
+
+import std.core as core;
+
+exception MyError(code: Int);
+
+pub fn main() nothrow -> Int {
+	try {
+		val r: core.Result<Int, Int> = core.Result::Err(5);
+		val v = r.on_error(|e: Int| => { throw MyError(e); });
+		return v;
+	}
+}

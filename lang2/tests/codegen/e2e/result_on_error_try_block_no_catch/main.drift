@@ -1,0 +1,20 @@
+module m
+
+import std.core as core;
+
+exception MyError(code: Int);
+
+fn ok() -> core.Result<Int, Int> {
+	return core.Result::Ok(7);
+}
+
+fn run_main() -> Int {
+	try {
+		val v = ok().on_error(|_e: Int| => { throw MyError(9); });
+		return v;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}

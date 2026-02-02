@@ -32,6 +32,7 @@ TYPE.2: /type\b/
 CALL_TYPE_LT.2: /<\s*type\b/
 THROW.2: /throw\b/
 NOTHROW.2: /nothrow\b/
+THROWS.2: /throws\b/
 VARIANT.2: /variant\b/
 TOMBSTONE.2: /@tombstone\b/
 TEST_BUILD_ONLY.2: /@test_build_only\b/
@@ -146,7 +147,7 @@ pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_de
 const_def: CONST NAME COLON type_expr EQUAL expr TERMINATOR
 type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 
-func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" NOTHROW? return_sig require_clause? (block | TERMINATOR)
+func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig require_clause? (block | TERMINATOR)
 return_sig: ARROW type_expr
 
 params: param (COMMA param)*
@@ -161,13 +162,13 @@ implement_item: test_build_only_marker? PUB func_def -> implement_func_pub
 trait_def: TRAIT NAME type_params? require_clause? trait_body
 trait_body: "{" (trait_item | TERMINATOR)* "}"
 trait_item: trait_method_sig TERMINATOR*
-trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" NOTHROW? return_sig
+trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig
 
 interface_def: INTERFACE NAME type_params? interface_parents? interface_body
 interface_parents: ":" type_expr ("," type_expr)*
 interface_body: "{" (interface_item | TERMINATOR)* "}"
 interface_item: interface_method_sig TERMINATOR*
-interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" NOTHROW? return_sig
+interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig
 
 type_expr: ref_type
          | fn_type
@@ -230,7 +231,8 @@ simple_stmt: let_stmt
 // an expression form (`try_catch_expr`). In statement position we want the
 // parser to prefer `try_stmt` so `try foo() catch { ... }` behaves like the
 // statement construct (and does not get parsed as an expression statement).
-try_stmt.2: TRY (block | expr) catch_clause catch_clause*
+try_stmt.2: TRY block catch_clause*
+          | TRY expr catch_clause catch_clause*
 catch_clause: CATCH catch_pattern block
 catch_pattern: event_fqn "(" ident ")"   -> catch_event
              | ident "(" ident ")"      -> catch_event_unqualified

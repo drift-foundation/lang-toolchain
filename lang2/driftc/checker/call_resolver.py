@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import sys
+
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
 
 from lang2.driftc.infer import InferContext, InferError, InferErrorKind, InferResult
+from lang2.driftc import debug as drift_debug
 from lang2.driftc.checker import FnSignature
 from lang2.driftc.core.types_core import (
 	FunctionId,
@@ -16,7 +20,7 @@ from lang2.driftc.core.function_id import method_wrapper_id
 from lang2.driftc.core.type_subst import Subst, apply_subst
 from lang2.driftc.checker import TypeParam
 from lang2.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
-from lang2.driftc.method_registry import CallableDecl, CallableSignature, CallableKind, Visibility, SelfMode
+from lang2.driftc.method_registry import CallableDecl, CallableSignature, CallableTemplateSignature, CallableKind, Visibility, SelfMode
 from lang2.driftc.checker.unsafe_gate import check_unsafe_call
 from lang2.driftc.traits.linked_world import BOOL_TRUE
 from lang2.driftc.traits.solver import Env as TraitEnv, Obligation, ObligationOrigin, ObligationOriginKind, ProofFailure, ProofFailureReason, ProofStatus, prove_expr, prove_obligation
@@ -299,6 +303,7 @@ class CallResolverContext:
 	require_env_local: object
 	fn_require_assumed: set
 	binding_mutable: dict[int, bool]
+	binding_id_by_name: dict[str, int] | None
 	traits_in_scope: Callable[[], list[TraitKey]]
 	trait_key_for_id: Callable[[int], TraitKey | None] | None
 	tc_diag: Callable[..., object]
@@ -405,7 +410,7 @@ def resolve_qualified_member_call(
 		return None
 	base_kind = None
 	base_name = getattr(base_te, "name", None)
-	base_module = getattr(base_te, "module_id", None) or ctx.current_module_name
+	base_module = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or ctx.current_module_name
 	if base_kind is None:
 		base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_module, type_params=ctx.type_param_map, allow_generic_base=True)
 		if base_tid is not None:
@@ -444,6 +449,15 @@ def resolve_variant_ctor(
 	allow_infer: bool,
 	call_type_args_span: Span | None,
 ) -> VariantCtorResolveResult | None:
+	if drift_debug.enabled("call_resolve"):
+		member = getattr(qm, "member", None)
+		if member == "Next":
+			base_te_dbg = getattr(qm, "base_type_expr", None)
+			base_mod_dbg = getattr(base_te_dbg, "module_id", None) if base_te_dbg is not None else None
+			print(
+				f"[call_resolve_debug] resolve_variant_ctor member=Next base_mod={base_mod_dbg} current_module={ctx.current_module_name}",
+				file=sys.stderr,
+			)
 	base_te = getattr(qm, "base_type_expr", None)
 	if base_te is None:
 		ctx.diagnostics.append(
@@ -457,7 +471,7 @@ def resolve_variant_ctor(
 	base_tid = resolve_opaque_type(
 		base_te,
 		ctx.type_table,
-		module_id=getattr(base_te, "module_id", None) or ctx.current_module_name,
+		module_id=getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or ctx.current_module_name,
 		type_params=ctx.type_param_map,
 		allow_generic_base=True,
 	)
@@ -499,6 +513,15 @@ def resolve_variant_ctor(
 					f"'{ctx.pretty_type_name(base_tid, current_module=ctx.current_module_name)}'. "
 					f"Available constructors: {', '.join(ctors)}"
 				),
+				severity="error",
+				span=getattr(qm, "loc", Span()),
+			)
+		)
+		return None
+	if schema.tombstone_ctor == arm_schema.name:
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"E-QMEM-TOMBSTONE: constructor '{arm_schema.name}' is internal and cannot be constructed",
 				severity="error",
 				span=getattr(qm, "loc", Span()),
 			)
@@ -662,6 +685,8 @@ def resolve_variant_ctor(
 			)
 		)
 		return None
+	if not schema.type_params and not arm_schema.fields and not arg_exprs and not kw_pairs and not type_arg_ids:
+		return VariantCtorResolveResult(base_tid, [], [], [])
 	ctor_sig = FnSignature(
 		name=qm.member,
 		param_type_ids=param_type_ids,
@@ -722,6 +747,15 @@ def resolve_variant_ctor(
 		)
 		return None
 	if inst_res.error:
+		msg, notes = ctx.format_infer_failure(inst_res.context, inst_res)
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"cannot infer type arguments for variant '{schema.name}'",
+				severity="error",
+				span=call_type_args_span or getattr(qm, "loc", Span()),
+				notes=[msg] + list(notes),
+			)
+		)
 		return None
 	if inst_res.inst_params is None or inst_res.inst_return is None:
 		return None
@@ -921,6 +955,16 @@ def resolve_unqualified_variant_ctor(ctx: ResolverContext, *, ctor_name: str, ex
 	inst = ctx.type_table.get_variant_instance(expected_type)
 	if inst is None or ctor_name not in inst.arms_by_name:
 		return None
+	schema = ctx.type_table.get_variant_schema(inst.base_id)
+	if schema is not None and schema.tombstone_ctor == ctor_name:
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"E-CTOR-TOMBSTONE: constructor '{ctor_name}' is internal and cannot be constructed",
+				severity="error",
+				span=getattr(arg_exprs[0], "loc", Span()) if arg_exprs else Span(),
+			)
+		)
+		return None
 	arm_def = inst.arms_by_name[ctor_name]
 	if kw_pairs and arg_exprs:
 		ctx.diagnostics.append(ctx.tc_diag(message=f"constructor '{arm_def.name}' does not allow mixing positional and named arguments", severity="error", span=getattr(kw_pairs[0], "loc", Span())))
@@ -991,6 +1035,24 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	traits_in_scope = ctx.traits_in_scope
 	current_module_name = ctx.current_module_name
 	intent = CallIntent(expected_return=expected_type)
+	debug_call_resolve = drift_debug.enabled("call_resolve")
+
+	def _debug_call_resolve(msg: str) -> None:
+		if not debug_call_resolve:
+			return
+		print(f"[call_resolve_debug] {msg}", file=sys.stderr)
+
+	def _debug_if_target_call() -> None:
+		if not debug_call_resolve:
+			return
+		method_name = getattr(expr, "method_name", None)
+		if method_name not in ("throw_iterator_invalidated", "Next"):
+			return
+		_debug_call_resolve(
+			f"method={method_name} current_module={current_module_name}"
+		)
+
+	_debug_if_target_call()
 	call_type_args = list(getattr(expr, "type_args", None) or [])
 	call_type_args_span = None
 	if call_type_args:
@@ -1674,6 +1736,48 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				return deduped
 
 			candidates = _collect_method_candidates(receiver_nominal_for_lookup)
+			if not candidates and receiver_base is not None:
+				candidates = _collect_method_candidates(receiver_base)
+			if not candidates and ctx.impl_index is not None and receiver_nominal_for_lookup is not None and hasattr(ctx.impl_index, "get_candidates"):
+				fallback_candidates: list[CallableDecl] = []
+				for impl_cand in ctx.impl_index.get_candidates(receiver_nominal_for_lookup, expr.method_name):
+					if impl_cand.fn_id is None:
+						continue
+					sig_local = ctx.signatures_by_id.get(impl_cand.fn_id) if ctx.signatures_by_id is not None else None
+					if sig_local is None:
+						continue
+					if sig_local.return_type_id is None or sig_local.param_type_ids is None:
+						continue
+					self_mode = {
+						"value": SelfMode.SELF_BY_VALUE,
+						"ref": SelfMode.SELF_BY_REF,
+						"ref_mut": SelfMode.SELF_BY_REF_MUT,
+					}.get(sig_local.self_mode)
+					if self_mode is None:
+						continue
+					template_signature = None
+					if (sig_local.type_params or getattr(sig_local, "impl_type_params", [])) and sig_local.param_types is not None and sig_local.return_type is not None:
+						template_signature = CallableTemplateSignature(param_types=tuple(sig_local.param_types), result_type=sig_local.return_type)
+					fallback_candidates.append(
+						CallableDecl(
+							callable_id=impl_cand.impl_id,
+							name=impl_cand.name,
+							kind=CallableKind.METHOD_INHERENT,
+							module_id=impl_cand.def_module_id,
+							visibility=Visibility.public() if impl_cand.is_pub else Visibility.private(),
+							signature=CallableSignature(param_types=tuple(sig_local.param_type_ids), result_type=sig_local.return_type_id),
+							template_signature=template_signature,
+							fn_id=impl_cand.fn_id,
+							impl_id=impl_cand.impl_id,
+							impl_target_type_id=receiver_nominal_for_lookup,
+							self_mode=self_mode,
+							template_type_params=tuple(tp.name for tp in (sig_local.type_params or [])),
+							template_impl_type_params=tuple(tp.name for tp in (getattr(sig_local, "impl_type_params", []) or [])),
+							is_generic=bool(sig_local.type_params or getattr(sig_local, "impl_type_params", [])),
+						)
+					)
+				if fallback_candidates:
+					candidates = fallback_candidates
 			trait_candidates: list[CallableDecl] = []
 			inherent_candidates: list[CallableDecl] = []
 			traits_in_scope_set = set(traits_in_scope()) if traits_in_scope is not None else set()
@@ -1763,12 +1867,14 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 							impl_subst_req = _match_impl_type_args(template_args=impl_args, recv_args=list(receiver_args), impl_type_params=impl_params)
 						if impl_subst_req is None and impl_params and len(impl_params) == len(receiver_args):
 							impl_subst_req = Subst(owner=impl_params[0].id.owner, args=list(receiver_args))
-						if impl_subst_req is not None:
-							for idx, tp in enumerate(impl_params):
-								if idx < len(impl_subst_req.args):
-									key = _normalize_type_key(type_key_from_typeid(ctx.type_table, impl_subst_req.args[idx]))
-									subst[tp.id] = key
-									subst[tp.name] = key
+					if impl_subst_req is not None:
+						for idx, tp in enumerate(impl_params):
+							if idx < len(impl_subst_req.args):
+								if ctx.type_table.has_typevar(impl_subst_req.args[idx]):
+									continue
+								key = _normalize_type_key(type_key_from_typeid(ctx.type_table, impl_subst_req.args[idx]))
+								subst[tp.id] = key
+								subst[tp.name] = key
 					self_mode_for_infer = _self_mode_from_sig(sig_local) if sig_local is not None else None
 					inferred_recv_ty = _infer_receiver_arg_type(self_mode_for_infer, recv_ty, receiver_is_lvalue=receiver_is_lvalue, receiver_can_mut_borrow=receiver_can_mut_borrow)
 					arg_types_with_recv = [inferred_recv_ty] + list(arg_types)
@@ -1776,18 +1882,22 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						type_params = list(getattr(sig_local, "type_params", []) or [])
 						for idx, tp in enumerate(type_params):
 							if idx < len(receiver_args) and (tp.id in subjects or tp.name in subjects):
+								if ctx.type_table.has_typevar(receiver_args[idx]):
+									continue
 								key = _normalize_type_key(type_key_from_typeid(ctx.type_table, receiver_args[idx]))
 								subst[tp.id] = key
 								subst[tp.name] = key
-					if sig_local is not None and getattr(sig_local, "type_params", None):
-						inst_res = ctx.instantiate_sig_with_subst(sig=sig_local, arg_types=arg_types_with_recv, expected_type=expected_type, explicit_type_args=type_arg_ids, allow_infer=True, diag_span=call_type_args_span, call_kind="method", call_name=expr.method_name, receiver_type=inferred_recv_ty)
-						if getattr(inst_res, "subst", None) is not None:
-							inst_args = list(getattr(inst_res.subst, "args", []) or [])
-							for idx, tp in enumerate(list(getattr(sig_local, "type_params", []) or [])):
-								if idx < len(inst_args) and tp.id not in subst and tp.name not in subst:
-									key = _normalize_type_key(type_key_from_typeid(ctx.type_table, inst_args[idx]))
-									subst[tp.id] = key
-									subst[tp.name] = key
+						if sig_local is not None and getattr(sig_local, "type_params", None):
+							inst_res = ctx.instantiate_sig_with_subst(sig=sig_local, arg_types=arg_types_with_recv, expected_type=expected_type, explicit_type_args=type_arg_ids, allow_infer=True, diag_span=call_type_args_span, call_kind="method", call_name=expr.method_name, receiver_type=inferred_recv_ty)
+							if getattr(inst_res, "subst", None) is not None:
+								inst_args = list(getattr(inst_res.subst, "args", []) or [])
+								for idx, tp in enumerate(list(getattr(sig_local, "type_params", []) or [])):
+									if idx < len(inst_args) and tp.id not in subst and tp.name not in subst:
+										if ctx.type_table.has_typevar(inst_args[idx]):
+											continue
+										key = _normalize_type_key(type_key_from_typeid(ctx.type_table, inst_args[idx]))
+										subst[tp.id] = key
+										subst[tp.name] = key
 					if sig_local and sig_local.param_names:
 						for idx, pname in enumerate(sig_local.param_names):
 							if pname in subst:
@@ -1912,6 +2022,17 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 									subst[type_params[tp_idx].name] = key
 					res = prove_expr(world, env, subst, req_expr)
 					if res.status is not ProofStatus.PROVED:
+						if res.status is ProofStatus.UNKNOWN:
+							if _require_unknown_defer(ctx, arg_types=arg_types, receiver_args=list(receiver_args) if receiver_args is not None else None, type_arg_ids=type_arg_ids):
+								filtered_candidates.append(cand)
+								cand_key = _candidate_key_for_decl(cand)
+								if sig_local is not None:
+									scope_map = _param_scope_map(sig_local)
+								else:
+									scope_map = {}
+								req_mod = cand.fn_id.module if cand.fn_id is not None else ctx.current_module_name
+								require_info[cand_key] = (req_expr, subst, req_mod, scope_map)
+								continue
 						saw_require_failed = True
 						if require_missing_label is None:
 							_atoms = _extract_conjunctive_facts(req_expr)
@@ -1939,6 +2060,10 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				receiver_inst = ctx.type_table.get_struct_instance(receiver_inst_ty)
 				if receiver_inst is not None:
 					receiver_inst_args = list(receiver_inst.type_args)
+				else:
+					receiver_vinst = ctx.type_table.get_variant_instance(receiver_inst_ty)
+					if receiver_vinst is not None:
+						receiver_inst_args = list(receiver_vinst.type_args)
 			if receiver_base is not None and receiver_args is not None and receiver_args:
 				param_ids = ctx.type_table.get_struct_type_param_ids(receiver_base)
 				if param_ids and len(param_ids) == len(receiver_args):
@@ -2319,9 +2444,12 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					continue
 				param_ty = expected_params[idx]
 				schema = ctx.type_table.get_interface_schema(param_ty)
-				if schema is None:
-					continue
-				if schema.name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+				schema_name = schema.name if schema is not None else None
+				if schema_name is None:
+					param_def = ctx.type_table.get(param_ty)
+					if param_def.kind is TypeKind.INTERFACE:
+						schema_name = param_def.name
+				if schema_name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
 					continue
 				arg_ty = arg_types[idx] if idx < len(arg_types) else None
 				if not isinstance(arg, H.HLambda):
@@ -2334,7 +2462,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					arity = len(arg.params)
 				else:
 					arity = len(arg_def.param_types) - 1
-				is_throw = schema.name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
+				is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
 				if arity == 0:
 					cb_name = "callback_throw0" if is_throw else "callback0"
 				elif arity == 1:
@@ -2351,14 +2479,56 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					_alloc_node_id(cb_call)
 				cb_call.expected_type_hint = param_ty
 				expr.args[idx] = cb_call
+				if idx < len(arg_types):
+					cb_ty = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
+					arg_types[idx] = param_ty if cb_ty == ctx.unknown_ty else cb_ty
 			intent.arg_expected_types = _expected_arg_types_for_call(expected_params, len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)
 			match_recv_ty = recv_ty
 			if needs_autoborrow is not None and param_type_ids:
 				match_recv_ty = param_type_ids[0]
 			if not ctx.args_match_params([match_recv_ty] + arg_types, param_type_ids):
-				diagnostics.append(_tc_diag(message=f"no matching method '{expr.method_name}' for receiver {_label_typeid(recv_ty)}", severity="error", span=getattr(expr, "loc", Span())))
-				return MethodCallResult(ctx.unknown_ty, None, None)
+				alt_arg_types = list(arg_types)
+				for idx, arg in enumerate(expr.args):
+					if idx >= len(expected_params):
+						continue
+					param_ty = expected_params[idx]
+					schema = ctx.type_table.get_interface_schema(param_ty)
+					schema_name = schema.name if schema is not None else None
+					if schema_name is None:
+						param_def = ctx.type_table.get(param_ty)
+						if param_def.kind is TypeKind.INTERFACE:
+							schema_name = param_def.name
+					if schema_name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+						continue
+					if isinstance(arg, H.HLambda):
+						arity = len(arg.params)
+						is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
+						if arity == 0:
+							cb_name = "callback_throw0" if is_throw else "callback0"
+						elif arity == 1:
+							cb_name = "callback_throw1" if is_throw else "callback1"
+						else:
+							cb_name = "callback_throw2" if is_throw else "callback2"
+						cb_var = H.HVar(name=cb_name, module_id="std.core")
+						cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+						_alloc_callsite_id = getattr(ctx, "alloc_callsite_id", None)
+						if _alloc_callsite_id is not None:
+							cb_call.callsite_id = _alloc_callsite_id()
+						_alloc_node_id = getattr(ctx, "alloc_node_id", None)
+						if _alloc_node_id is not None:
+							_alloc_node_id(cb_call)
+						cb_call.expected_type_hint = param_ty
+						expr.args[idx] = cb_call
+						cb_ty = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
+						alt_arg_types[idx] = param_ty if cb_ty == ctx.unknown_ty else cb_ty
+					elif isinstance(arg, H.HCall):
+						alt_arg_types[idx] = param_ty
+				if ctx.args_match_params([match_recv_ty] + alt_arg_types, param_type_ids):
+					arg_types = alt_arg_types
+				else:
+					diagnostics.append(_tc_diag(message=f"no matching method '{expr.method_name}' for receiver {_label_typeid(recv_ty)}", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None, None)
 			coerced_params = ctx.coerce_args_for_params([match_recv_ty] + arg_types, param_type_ids)
 			ret_id = ret_id or ctx.unknown_ty
 			target_fn_id = cand.fn_id
@@ -2403,18 +2573,42 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					recv_inst = ctx.type_table.get_struct_instance(ctx.unwrap_ref_type(recv_ty))
 					if recv_inst is not None:
 						impl_args = tuple(recv_inst.type_args)
+					else:
+						recv_vinst = ctx.type_table.get_variant_instance(ctx.unwrap_ref_type(recv_ty))
+						if recv_vinst is not None:
+							impl_args = tuple(recv_vinst.type_args)
 				if not impl_args and param_type_ids:
 					recv_inst = ctx.type_table.get_struct_instance(ctx.unwrap_ref_type(param_type_ids[0]))
 					if recv_inst is not None:
 						impl_args = tuple(recv_inst.type_args)
+					else:
+						recv_vinst = ctx.type_table.get_variant_instance(ctx.unwrap_ref_type(param_type_ids[0]))
+						if recv_vinst is not None:
+							impl_args = tuple(recv_vinst.type_args)
 				fn_args = tuple(inst_subst_args or [])
 				if (impl_args or fn_args) and not any(ctx.type_table.has_typevar(t) for t in list(impl_args) + list(fn_args)):
 					csid = getattr(expr, "callsite_id", None)
+					if drift_debug.enabled("instantiate") and target_fn_id is not None and "into_try" in target_fn_id.name:
+						try:
+							import sys
+							print(f"[debug] inst {target_fn_id} impl_args={impl_args} fn_args={fn_args}", file=sys.stderr)
+						except Exception:
+							pass
 					ctx.record_instantiation(callsite_id=csid, target_fn_id=target_fn_id, impl_args=impl_args, fn_args=fn_args)
 			return MethodCallResult(ret_id, info, MethodResolution(decl=cand, receiver_autoborrow=receiver_autoborrow, result_type=ret_id))
 
 	diagnostics.append(_tc_diag(message=f"no matching method '{expr.method_name}' for receiver {_label_typeid(recv_ty)}", severity="error", span=getattr(expr, "loc", Span())))
 	return MethodCallResult(ctx.unknown_ty, None)
+
+
+def _require_unknown_defer(ctx: MethodResolverContext, *, arg_types: list[TypeId], receiver_args: list[TypeId] | None = None, type_arg_ids: list[TypeId] | None = None) -> bool:
+	if receiver_args is not None and any(ctx.type_table.has_typevar(t) for t in receiver_args):
+		return True
+	if arg_types and any(ctx.type_table.has_typevar(t) for t in arg_types):
+		return True
+	if type_arg_ids and any(ctx.type_table.has_typevar(t) for t in type_arg_ids):
+		return True
+	return False
 
 
 def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: object, *, expected_type: TypeId | None, type_arg_ids: list[TypeId] | None, call_type_args_span: Span | None, call_origin: str | None, recv_arg_type: TypeId | None, arg_type_ids: list[TypeId] | None) -> MethodCallResult | None:
@@ -2427,6 +2621,15 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 	if trait_index is None:
 		return None
 	trait_key = trait_key_from_expr(base_te, default_module=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages)
+	if drift_debug.enabled("call_resolve") and getattr(qm, "member", None) in ("build", "hash", "finish", "eq"):
+		try:
+			scope_traits = list(ctx.traits_in_scope()) if ctx.traits_in_scope is not None else []
+		except Exception:
+			scope_traits = []
+		print(
+			f"[call_resolve] ufcs member={qm.member} base_mod={getattr(base_te, 'module_id', None)} base_alias={getattr(base_te, 'module_alias', None)} trait_key={trait_key} traits_in_scope={scope_traits}",
+			file=sys.stderr,
+		)
 	if trait_key not in trait_index.traits_by_id:
 		for _k in trait_index.traits_by_id:
 			if getattr(_k, "module", None) == getattr(trait_key, "module", None) and getattr(_k, "name", None) == getattr(trait_key, "name", None):
@@ -2630,14 +2833,19 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 						impl_subst_req = ctx.match_impl_type_args(template_args=impl_args, recv_args=list(receiver_args), impl_type_params=impl_params)
 					if impl_subst_req is None and impl_params and len(impl_params) == len(receiver_args):
 						impl_subst_req = Subst(owner=impl_params[0].id.owner, args=list(receiver_args))
-					if impl_subst_req is not None:
-						for idx, tp in enumerate(impl_params):
-							if idx < len(impl_subst_req.args):
-								key = ctx.normalize_type_key(type_key_from_typeid(ctx.type_table, impl_subst_req.args[idx]))
-								subst[tp.id] = key
-								subst[tp.name] = key
+				if impl_subst_req is not None:
+					for idx, tp in enumerate(impl_params):
+						if idx < len(impl_subst_req.args):
+							if ctx.type_table.has_typevar(impl_subst_req.args[idx]):
+								continue
+							key = ctx.normalize_type_key(type_key_from_typeid(ctx.type_table, impl_subst_req.args[idx]))
+							subst[tp.id] = key
+							subst[tp.name] = key
 				res = prove_expr(world, env, subst, req_expr)
 				if res.status is not ProofStatus.PROVED:
+					if res.status is ProofStatus.UNKNOWN:
+						if _require_unknown_defer(ctx, arg_types=arg_type_ids or [], receiver_args=list(receiver_args) if receiver_args is not None else None):
+							continue
 					origin = ObligationOrigin(
 						kind=ObligationOriginKind.CALLEE_REQUIRE,
 						label=f"method '{qm.member}'",
@@ -2864,6 +3072,7 @@ def resolve_call_expr(
 	visibility_provenance = ctx.visibility_provenance
 	current_module_name = ctx.current_module_name
 	current_module = ctx.current_module
+	_debug_stderr = sys.stderr
 	type_param_map = ctx.type_param_map
 	def _contains_foreign_typevar(ty: TypeId, allowed: set[TypeParamId]) -> bool:
 		td = ctx.type_table.get(ty)
@@ -2905,6 +3114,33 @@ def resolve_call_expr(
 	require_env_local = ctx.require_env_local
 	fn_require_assumed = ctx.fn_require_assumed
 	_traits_in_scope = ctx.traits_in_scope
+	debug_call_resolve = drift_debug.enabled("call_resolve")
+
+	def _debug_call_resolve(msg: str) -> None:
+		if not debug_call_resolve:
+			return
+		print(f"[call_resolve_debug] {msg}", file=_debug_stderr)
+
+	def _debug_if_target_call() -> None:
+		if not debug_call_resolve:
+			return
+		fn_obj = getattr(expr, "fn", None)
+		if fn_obj is None:
+			return
+		fn_name = getattr(fn_obj, "name", None)
+		if fn_name not in ("throw_iterator_invalidated", "Next"):
+			return
+		base_te = getattr(fn_obj, "base_type_expr", None)
+		base_mod = getattr(base_te, "module_id", None) if base_te is not None else None
+		if fn_name == "Next" and base_te is not None and base_mod != "std.err":
+			return
+		if fn_name == "throw_iterator_invalidated" and getattr(fn_obj, "module_id", None) != "std.err":
+			return
+		_debug_call_resolve(
+			f"fn={fn_name} base_mod={base_mod} fn_mod={getattr(fn_obj, 'module_id', None)} "
+			f"current_module={current_module_name} visible_modules={visible_modules} "
+			f"module_ids_by_name_has={('std.err' in module_ids_by_name)}"
+		)
 
 	def _propagate_arg_expected_types(intent: CallIntent, arg_types: list[TypeId | None]) -> None:
 		if not getattr(expr, "args", None):
@@ -3117,6 +3353,11 @@ def resolve_call_expr(
 			return record_expr(expr, ctx.unknown_ty)
 		callee_def = ctx.type_table.get(callee_ty)
 		if callee_def.kind is not TypeKind.FUNCTION:
+			if drift_debug.enabled("call"):
+				try:
+					print(f"[debug] call target not function (lambda-call) fn={expr.fn} module={current_module_name}", file=_debug_stderr)
+				except Exception:
+					pass
 			diagnostics.append(_tc_diag(message="call target is not a function value", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		fn_sig_params = list(callee_def.param_types[:-1]) if callee_def.param_types else []
@@ -3785,6 +4026,12 @@ def resolve_call_expr(
 		qm = expr.fn
 		kw_pairs = getattr(expr, "kwargs", []) or []
 		arg_exprs = list(expr.args)
+		for arg in arg_exprs:
+			if isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
+				if isinstance(arg.fn, H.HQualifiedMember):
+					arg.defer_infer_diag = True
+				else:
+					arg.defer_infer_diag = False
 		kw_value_types = [type_expr(kw.value, used_as_value=False) for kw in kw_pairs]
 		call_type_args = getattr(expr, "type_args", None) or []
 		call_type_args_span = None
@@ -3794,6 +4041,24 @@ def resolve_call_expr(
 			if first_loc is not None:
 				call_type_args_span = Span.from_loc(first_loc)
 			type_arg_ids = [resolve_opaque_type(t, ctx.type_table, module_id=current_module_name, type_params=type_param_map) for t in call_type_args]
+		ctor_res = None
+		if not call_type_args and not getattr(expr, "kwargs", None) and not expr.args:
+			base_te = getattr(qm, "base_type_expr", None)
+			if base_te is not None:
+				base_mod = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or current_module_name
+				base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_mod, type_params=type_param_map, allow_generic_base=True)
+				if drift_debug.enabled("call_resolve") and getattr(qm, "member", None) in ("ReturnBusy", "Closed", "Cancelled", "Failed"):
+					schema_dbg = ctx.type_table.get_variant_schema(base_tid) if base_tid is not None else None
+					arm_names = [a.name for a in schema_dbg.arms] if schema_dbg is not None else None
+					print(f"[call_resolve] qmem {qm.member} csid={getattr(expr, 'callsite_id', None)} base_mod={base_mod} base_tid={base_tid} arms={arm_names}", file=_debug_stderr)
+				if base_tid is not None:
+					schema = ctx.type_table.get_variant_schema(base_tid)
+					if schema is not None and not schema.type_params:
+						arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
+						if arm_schema is not None and not arm_schema.fields:
+							if drift_debug.enabled("call_resolve") and getattr(qm, "member", None) in ("ReturnBusy", "Closed", "Cancelled", "Failed"):
+								print(f"[call_resolve] qmem {qm.member} csid={getattr(expr, 'callsite_id', None)} ctor_res preset via zero-field fastpath", file=_debug_stderr)
+							ctor_res = VariantCtorResolveResult(base_tid, [], [], [])
 		arg_types = [type_expr(a, used_as_value=False) for a in arg_exprs]
 		for idx, arg in enumerate(arg_exprs):
 			if isinstance(arg, H.HLambda):
@@ -3802,13 +4067,32 @@ def resolve_call_expr(
 					arg_types[idx] = type_expr(arg)
 		if kw_pairs and not arg_exprs:
 			arg_types = list(kw_value_types)
-		ctor_res = resolve_qualified_member_call(_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw), qm, arg_exprs=list(arg_exprs), arg_types=arg_types, kw_pairs=kw_pairs, expected_type=expected_type, type_arg_ids=type_arg_ids, allow_infer=True, call_type_args_span=call_type_args_span)
+		if ctor_res is None:
+			ctor_res = resolve_qualified_member_call(_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw), qm, arg_exprs=list(arg_exprs), arg_types=arg_types, kw_pairs=kw_pairs, expected_type=expected_type, type_arg_ids=type_arg_ids, allow_infer=True, call_type_args_span=call_type_args_span)
+		if ctor_res is None:
+			base_te = getattr(qm, "base_type_expr", None)
+			if base_te is not None and not arg_exprs and not kw_pairs and not call_type_args:
+				base_mod = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or current_module_name
+				base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_mod, type_params=type_param_map, allow_generic_base=True)
+				if base_tid is not None:
+					schema = ctx.type_table.get_variant_schema(base_tid)
+					if schema is not None and not schema.type_params:
+						arm_schema = next((a for a in schema.arms if a.name == qm.member), None)
+						if arm_schema is not None and not arm_schema.fields:
+							ctor_res = VariantCtorResolveResult(base_tid, [], [], [])
 		if ctor_res is not None:
 			inst_params = list(ctor_res.inst_params)
 			inst_return = ctor_res.inst_return
 			expr.args = list(ctor_res.ctor_args)
 			expr.kwargs = []
 			expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+			ctor_mod = getattr(qm.base_type_expr, "module_id", None) or getattr(qm.base_type_expr, "module_alias", None) or current_module_name
+			# Replace qualified member with a plain name to satisfy typed-mode invariants.
+			expr.fn = H.HVar(name=qm.member, module_id=ctor_mod)
+			setattr(expr, "_resolved_ctor_return", inst_return)
+			setattr(expr, "_resolved_ctor_info", (tuple(inst_params), inst_return, tuple(ctor_res.ctor_arg_field_indices), qm.member))
+			intent.arg_expected_types = _expected_arg_types_for_call(list(inst_params), len(arg_exprs))
+			_propagate_arg_expected_types(intent, arg_types)
 			record_call_info(expr, param_types=inst_params, return_type=inst_return, can_throw=False, target=CallTarget.constructor(ctor_res.inst_return, qm.member, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
 			return record_expr(expr, inst_return)
 		method_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
@@ -3816,6 +4100,8 @@ def resolve_call_expr(
 		if method_res is not None and method_res.call_info is not None:
 			intent.arg_expected_types = _expected_arg_types_for_call(list(method_res.call_info.sig.param_types), len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)
+			setattr(expr, "_resolved_method_call_info", (list(method_res.call_info.sig.param_types), method_res.return_type, bool(method_res.call_info.sig.can_throw), method_res.call_info.target))
+			setattr(expr, "_resolved_method_return", method_res.return_type)
 			record_call_info(expr, param_types=list(method_res.call_info.sig.param_types), return_type=method_res.return_type, can_throw=bool(method_res.call_info.sig.can_throw), target=method_res.call_info.target)
 			if ctx.record_instantiation is not None and isinstance(getattr(method_res.call_info, "target", None), CallTarget):
 				target = method_res.call_info.target
@@ -3842,6 +4128,31 @@ def resolve_call_expr(
 			return record_expr(expr, method_res.return_type)
 		return record_expr(expr, ctx.unknown_ty)
 	if isinstance(expr.fn, H.HVar):
+		resolved_ctor_info = getattr(expr, "_resolved_ctor_info", None)
+		if resolved_ctor_info is not None:
+			param_types, ctor_return, ctor_arg_fields, ctor_name = resolved_ctor_info
+			record_call_info(expr, param_types=list(param_types), return_type=ctor_return, can_throw=False, target=CallTarget.constructor(ctor_return, ctor_name, ctor_arg_field_indices=tuple(ctor_arg_fields)))
+			return record_expr(expr, ctor_return)
+		resolved_method_call = getattr(expr, "_resolved_method_call_info", None)
+		if resolved_method_call is not None:
+			param_types, ret_type, can_throw, target = resolved_method_call
+			record_call_info(expr, param_types=list(param_types), return_type=ret_type, can_throw=bool(can_throw), target=target)
+			return record_expr(expr, ret_type)
+		resolved_ctor_return = getattr(expr, "_resolved_ctor_return", None)
+		if resolved_ctor_return is not None:
+			return record_expr(expr, resolved_ctor_return)
+		if expected_type is None and getattr(expr, "defer_infer_diag", False):
+			return record_expr(expr, ctx.unknown_ty)
+		if debug_call_resolve and expr.fn.name == "Next":
+			_debug_call_resolve(
+				f"HVar Next module_id={getattr(expr.fn, 'module_id', None)} expected_type={expected_type} "
+				f"current_module={current_module_name} visible_modules={visible_modules}"
+			)
+		if drift_debug.enabled("call_resolve") and expr.fn.name in ("ReturnBusy", "Busy", "Timeout", "Failed", "VirtualThread", "Closed", "Cancelled"):
+			print(
+				f"[call_resolve] HVar {expr.fn.name} csid={getattr(expr, 'callsite_id', None)} module_id={getattr(expr.fn, 'module_id', None)} expected_type={expected_type} current_module={current_module_name}",
+				file=_debug_stderr,
+			)
 		kw_pairs = getattr(expr, "kwargs", []) or []
 		kw_value_types = [type_expr(kw.value, used_as_value=False) for kw in kw_pairs]
 		call_type_args = list(getattr(expr, "type_args", None) or [])
@@ -3851,22 +4162,49 @@ def resolve_call_expr(
 			if first_loc is not None:
 				call_type_args_span = Span.from_loc(first_loc)
 		call_type_arg_ids = [resolve_opaque_type(t, ctx.type_table, module_id=current_module_name, type_params=type_param_map) for t in call_type_args] if call_type_args else None
+		if drift_debug.enabled("err_call") and isinstance(expr.fn, H.HVar) and expr.fn.name == "Err":
+			try:
+				print(f"[debug] Err call: binding_id={getattr(expr.fn,'binding_id',None)} expected_type={expected_type} module={current_module_name}", file=_debug_stderr)
+			except Exception:
+				pass
 		binding_id = getattr(expr.fn, "binding_id", None)
+		if binding_id is None and getattr(expr.fn, "module_id", None) is None:
+			name_to_id = getattr(ctx, "binding_id_by_name", None)
+			if name_to_id is not None:
+				bid = name_to_id.get(expr.fn.name)
+				if bid is not None:
+					expr.fn.binding_id = bid
+					binding_id = bid
+		if drift_debug.enabled("call_resolve") and binding_id is None and expr.fn.name == "f":
+			print(f"[call_resolve] HVar f with no binding_id module_id={getattr(expr.fn, 'module_id', None)} expected_type={expected_type} span={getattr(expr, 'loc', None)}", file=_debug_stderr)
 		if binding_id is not None:
 			fn_val_ty = type_expr(expr.fn, used_as_value=True)
 			if fn_val_ty is not None:
 				fn_def = ctx.type_table.get(fn_val_ty)
+				if drift_debug.enabled("call_resolve"):
+					print(f"[call_resolve] binding call name={expr.fn.name} binding_id={binding_id} fn_val_ty={fn_val_ty} fn_kind={fn_def.kind} param_types={getattr(fn_def, 'param_types', None)} args={len(expr.args)}", file=_debug_stderr)
 				if fn_def.kind is TypeKind.FUNCTION and fn_def.param_types:
 					if call_type_args:
 						diagnostics.append(_tc_diag(message="type arguments are not supported on function values", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
 					param_types = list(fn_def.param_types[:-1])
 					ret_type = fn_def.param_types[-1]
+					if drift_debug.enabled("call_resolve"):
+						print(f"[call_resolve] binding call name={expr.fn.name} param_types={param_types} ret_type={ret_type} arg_count={len(expr.args)}", file=_debug_stderr)
 					if len(param_types) != len(expr.args):
+						if drift_debug.enabled("call_resolve"):
+							print(f"[call_resolve] binding mismatch name={expr.fn.name} param_len={len(param_types)} arg_len={len(expr.args)} arg_types={arg_types}", file=_debug_stderr)
 						diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types}", severity="error", span=getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
+					if drift_debug.enabled("call_resolve"):
+						print(f"[call_resolve] binding resolved name={expr.fn.name} csid={getattr(expr, 'callsite_id', None)} return={ret_type}", file=_debug_stderr)
 					record_call_info(expr, param_types=param_types, return_type=ret_type, can_throw=fn_def.can_throw(), target=CallTarget.indirect(binding_id))
 					return record_expr(expr, ret_type)
+				if drift_debug.enabled("call"):
+					try:
+						print(f"[debug] call target not function (binding call) fn={expr.fn} module={current_module_name} binding_id={binding_id}", file=_debug_stderr)
+					except Exception:
+						pass
 				diagnostics.append(_tc_diag(message="call target is not a function value", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 		if expected_type is not None:
@@ -3875,8 +4213,82 @@ def resolve_call_expr(
 				expr.args = list(ctor_res.ctor_args)
 				expr.kwargs = []
 				expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+				arg_exprs = list(expr.args)
+				arg_types = [type_expr(a, used_as_value=False) for a in arg_exprs]
+				intent.arg_expected_types = _expected_arg_types_for_call(list(ctor_res.inst_params), len(arg_exprs))
+				_propagate_arg_expected_types(intent, arg_types)
 				record_call_info(expr, param_types=list(ctor_res.inst_params), return_type=ctor_res.inst_return, can_throw=False, target=CallTarget.constructor(ctor_res.inst_return, expr.fn.name, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
 				return record_expr(expr, ctor_res.inst_return)
+		if expected_type is None and getattr(expr.fn, "module_id", None):
+			schema_map = getattr(ctx.type_table, "variant_schemas", {})
+			candidate = None
+			candidate_arm = None
+			for _base_id, schema in getattr(schema_map, "items", lambda: [])():
+				if getattr(schema, "module_id", None) != expr.fn.module_id:
+					continue
+				arm = next((a for a in getattr(schema, "arms", []) or [] if a.name == expr.fn.name), None)
+				if arm is None:
+					continue
+				if schema.type_params:
+					continue
+				if candidate is not None:
+					candidate = None
+					candidate_arm = None
+					break
+				candidate = schema
+				candidate_arm = arm
+			if drift_debug.enabled("call_resolve") and expr.fn.name in ("Closed", "Cancelled", "Failed"):
+				print(
+					f"[call_resolve] HVar {expr.fn.name} module_id={expr.fn.module_id} candidate={getattr(candidate, 'name', None)}",
+					file=_debug_stderr,
+				)
+			if candidate is not None:
+				base_id = ctx.type_table.get_variant_base(module_id=candidate.module_id, name=candidate.name)
+				if base_id is not None:
+					inst = ctx.type_table.ensure_variant_instantiated(base_id, [])
+					if candidate_arm is not None and not candidate_arm.fields:
+						record_call_info(expr, param_types=[], return_type=inst, can_throw=False, target=CallTarget.constructor(inst, expr.fn.name, ctor_arg_field_indices=()))
+						return record_expr(expr, inst)
+					ctor_res = resolve_unqualified_variant_ctor(
+						_make_resolver_ctx(
+							ctx,
+							diagnostics=diagnostics,
+							current_module_name=current_module_name,
+							default_package=default_package,
+							module_packages=module_packages,
+							type_param_map=type_param_map,
+							tc_diag=_tc_diag,
+							fixed_width_allowed=_fixed_width_allowed,
+							reject_zst_array=_reject_zst_array,
+							pretty_type_name=_pretty_type_name,
+							format_ctor_signature_list=_format_ctor_signature_list,
+							instantiate_sig=_instantiate_sig,
+							enforce_struct_requires=_enforce_struct_requires,
+							ensure_field_visible=_ensure_field_visible,
+							visible_modules_for_free_call=_visible_modules_for_free_call,
+							module_ids_by_name=module_ids_by_name,
+							visibility_provenance=visibility_provenance,
+							infer=_infer,
+							format_infer_failure=_format_infer_failure,
+							lambda_can_throw=_lambda_can_throw,
+						),
+						ctor_name=expr.fn.name,
+						expected_type=inst,
+						arg_exprs=list(expr.args),
+						kw_pairs=kw_pairs,
+					)
+					if ctor_res is not None:
+						expr.args = list(ctor_res.ctor_args)
+						expr.kwargs = []
+						expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+						record_call_info(
+							expr,
+							param_types=list(ctor_res.inst_params),
+							return_type=ctor_res.inst_return,
+							can_throw=False,
+							target=CallTarget.constructor(ctor_res.inst_return, expr.fn.name, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)),
+						)
+						return record_expr(expr, ctor_res.inst_return)
 		if expected_type is None:
 			schema_map = getattr(ctx.type_table, "variant_schemas", {})
 			for _base_id, schema in getattr(schema_map, "items", lambda: [])():
@@ -3906,6 +4318,8 @@ def resolve_call_expr(
 				expr.args = list(ctor_res.ctor_args)
 				expr.kwargs = []
 				expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+				if drift_debug.enabled("call_resolve") and expr.fn.name in ("VirtualThread", "Busy", "Timeout", "Failed"):
+					print(f"[call_resolve] struct/ctor resolved {expr.fn.name} csid={getattr(expr, 'callsite_id', None)} return={ctor_res.inst_return}", file=_debug_stderr)
 				record_call_info(expr, param_types=list(ctor_res.inst_params), return_type=ctor_res.inst_return, can_throw=False, target=CallTarget.constructor_struct(ctor_res.inst_return, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
 				return record_expr(expr, ctor_res.inst_return)
 		def _resolve_free_call_with_require_local(*, name: str, module_name: str | None, arg_types: list[TypeId], call_type_args: list[TypeId] | None = None, call_type_args_span: Span | None = None, expected_type: TypeId | None = None) -> tuple[CallableDecl, CallableSignature, Subst | None, ResolutionError | None]:
@@ -4193,6 +4607,12 @@ def resolve_call_expr(
 					scope_map = _param_scope_map(sig_local)
 					require_info[cand_key] = (req, subst, fn_id_local.module or current_module_name, scope_map)
 				else:
+					if res.status is ProofStatus.UNKNOWN:
+						if _require_unknown_defer(ctx, arg_types=arg_types, type_arg_ids=type_arg_ids):
+							applicable.append((decl, sig_inst, inst_subst))
+							scope_map = _param_scope_map(sig_local)
+							require_info[cand_key] = (req, subst, fn_id_local.module or current_module_name, scope_map)
+							continue
 					saw_require_failed = True
 					origin = ObligationOrigin(kind=ObligationOriginKind.CALLEE_REQUIRE, label=f"function '{name}'", span=Span.from_loc(getattr(req, "loc", None)))
 					failure = _require_failure(req_expr=req, subst=subst, origin=origin, span=call_type_args_span or Span(), env=env, world=world, result=res)
@@ -4254,7 +4674,10 @@ def resolve_call_expr(
 				arg.expected_fn_inferred = True
 				arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
 			elif isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
-				arg.defer_infer_diag = True
+				if isinstance(arg.fn, H.HQualifiedMember):
+					arg.defer_infer_diag = True
+				else:
+					arg.defer_infer_diag = False
 				arg_types.append(type_expr(arg, used_as_value=False))
 			else:
 				arg_types.append(type_expr(arg, used_as_value=False))

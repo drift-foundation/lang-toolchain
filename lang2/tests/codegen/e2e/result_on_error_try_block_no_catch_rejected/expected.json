@@ -1,0 +1,12 @@
+{
+  "description": "e2e: Result.on_error in nothrow try block without catch is rejected",
+  "diagnostics": [
+    {
+      "message_contains": "declared nothrow but may throw",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1,
+  "stderr": "",
+  "stdout": ""
+}

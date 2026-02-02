@@ -1,0 +1,12 @@
+
+module main
+
+import std.core as core;
+
+fn main() -> Int {
+	val r: core.Result<Int, Int> = core.Result::Err(2);
+	match r {
+		Ok(v) => { return v; },
+		Err(err) => { return err; }
+	}
+}

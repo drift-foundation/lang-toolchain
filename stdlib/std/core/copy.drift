@@ -92,26 +92,39 @@ pub interface CallbackThrow2<A, B, R> {
 pub variant Result<T, E> {
 	Ok(value: T),
 	Err(err: E),
+	@tombstone Tombstone
 }
 
-implement<T, E> Try<T> for Result<T, E> {
-	pub fn into_try(self: Result<T, E>) -> T {
+implement<OkT, ErrT> Try<OkT> for Result<OkT, ErrT> require ErrT is Diagnostic {
+	pub fn into_try(self: Result<OkT, ErrT>) -> OkT {
 		match self {
 			Ok(v) => { return move v; },
-			Err(_) => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
+			Err(err) => { throw std.err:ResultError(dv = err.to_diag()); },
+			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
+		}
+	}
+}
+
+implement<OkT, ErrT> Try<OkT> for &Result<OkT, ErrT> require OkT is Copy, ErrT is Diagnostic {
+	pub fn into_try(self: &Result<OkT, ErrT>) -> OkT {
+		match self {
+			Ok(v) => { return *v; },
+			Err(err) => { throw std.err:ResultError(dv = (*err).to_diag()); },
+			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
 		}
 	}
 }
 
 implement<T, E> Result<T, E> {
-	pub fn or_throw(self: Result<T, E>) -> T {
-		return self.into_try();
+pub fn or_throw(self: Result<T, E>) -> T {
+		return (move self).into_try();
 	}
 
 	pub fn on_error(self: Result<T, E>, f: CallbackThrow1<E, T>) -> T {
 		match self {
 			Ok(v) => { return move v; },
-			Err(err) => { return f.call(move err); }
+			Err(err) => { return f.call(move err); },
+			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
 		}
 	}
 }
@@ -126,7 +139,7 @@ implement<T> Optional<T> {
 }
 
 pub fn or_throw<T, E>(r: Result<T, E>) -> T {
-	return r.into_try();
+	return (move r).into_try();
 }
 
 pub trait Fn0<R> {
@@ -222,6 +235,12 @@ implement<T> Copy for mem.Ptr<T> {
 implement Diagnostic for Int {
 	pub fn to_diag(self: Int) nothrow -> DiagnosticValue {
 		return DiagnosticValue::Int(self);
+	}
+}
+
+implement<T> Diagnostic for &T require T is Diagnostic {
+	pub fn to_diag(self: &T) nothrow -> DiagnosticValue {
+		return (*self).to_diag();
 	}
 }
 

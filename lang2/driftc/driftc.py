@@ -33,6 +33,7 @@ from types import MappingProxyType
 from pathlib import Path
 from dataclasses import replace, dataclass, fields, is_dataclass
 from typing import Any, Dict, Mapping, List, Tuple, Callable
+from lang2.driftc import debug as drift_debug
 
 # Repository root (lang2 lives under this).
 ROOT = Path(__file__).resolve().parents[2]
@@ -1445,6 +1446,10 @@ def compile_stubbed_funcs(
 	  from parsed sources instead of the shims here.
 	"""
 	func_hirs_by_id, signatures_by_id, fn_ids_by_name = _normalize_func_maps(func_hirs, signatures)
+	if drift_debug.enabled("try_auto"):
+		for fn_id, sig in signatures_by_id.items():
+			if getattr(fn_id, "module", None) == "m":
+				print(f"[try_auto] precheck sig {function_symbol(fn_id)} declared_throws={getattr(sig, 'declared_throws', None)}", file=sys.stderr)
 	_required_modules: set[str] = {fid.module for fid in func_hirs_by_id.keys() if isinstance(fid, FunctionId)}
 	_required_modules.update({fid.module for fid in signatures_by_id.keys() if isinstance(fid, FunctionId)})
 	if module_exports:
@@ -1993,7 +1998,7 @@ def compile_stubbed_funcs(
 					visible.add(tgt)
 					queue.append(tgt)
 			visible_module_names_by_name[mod_name] = visible
-	for fn_id, hir_norm in normalized_hirs_by_id.items():
+	def _typecheck_fn(fn_id: FunctionId, hir_norm: H.HBlock) -> None:
 		sig = signatures_by_id.get(fn_id)
 		param_types: dict[str, "TypeId"] = {}
 		param_mutable: dict[str, bool] | None = None
@@ -2052,6 +2057,12 @@ def compile_stubbed_funcs(
 			if fn_key is not None:
 				deferred_guard_diags_by_template[fn_key] = dict(deferred)
 		typed_fns_by_id[fn_id] = result.typed_fn
+
+	for fn_id, hir_norm in normalized_hirs_by_id.items():
+		if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
+			sig_dbg = signatures_by_id.get(fn_id)
+			print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=sys.stderr)
+		_typecheck_fn(fn_id, hir_norm)
 	if type_checker.defaulted_phase_count() != 0:
 		raise AssertionError(
 			f"typecheck diagnostics missing phase (defaulted={type_checker.defaulted_phase_count()})"
@@ -2100,6 +2111,132 @@ def compile_stubbed_funcs(
 	template_hirs_by_key: dict[FunctionKey, H.HBlock] = {}
 	if isinstance(generic_templates_by_key, dict):
 		template_hirs_by_key.update(generic_templates_by_key)
+
+	def _clear_var_binding_ids(block: H.HBlock) -> None:
+		def walk_expr(expr: H.HExpr) -> None:
+			if isinstance(expr, H.HVar):
+				if expr.binding_id is not None:
+					expr.binding_id = None
+				return
+			if isinstance(expr, getattr(H, "HPlaceExpr", ())):
+				walk_expr(expr.base)
+				for proj in expr.projections:
+					if isinstance(proj, H.HPlaceIndex):
+						walk_expr(proj.index)
+				return
+			if isinstance(expr, H.HCall):
+				walk_expr(expr.fn)
+				for arg in expr.args:
+					walk_expr(arg)
+				for kw in getattr(expr, "kwargs", []) or []:
+					walk_expr(kw.value)
+				return
+			if isinstance(expr, H.HMethodCall):
+				walk_expr(expr.receiver)
+				for arg in expr.args:
+					walk_expr(arg)
+				for kw in getattr(expr, "kwargs", []) or []:
+					walk_expr(kw.value)
+				return
+			if isinstance(expr, H.HField):
+				walk_expr(expr.subject)
+				return
+			if isinstance(expr, H.HIndex):
+				walk_expr(expr.subject)
+				walk_expr(expr.index)
+				return
+			if isinstance(expr, H.HArrayLiteral):
+				for elem in expr.elements:
+					walk_expr(elem)
+				return
+			if isinstance(expr, H.HFString):
+				for hole in expr.holes:
+					walk_expr(hole.expr)
+				return
+			if isinstance(expr, H.HLambda):
+				for param in expr.params:
+					if param.binding_id is not None:
+						param.binding_id = None
+				for cap in expr.explicit_captures or []:
+					if cap.binding_id is not None:
+						cap.binding_id = None
+				if expr.body_expr is not None:
+					walk_expr(expr.body_expr)
+				if expr.body_block is not None:
+					walk_block(expr.body_block)
+				return
+			if isinstance(expr, H.HResultOk):
+				walk_expr(expr.value)
+				return
+			if isinstance(expr, H.HExceptionInit):
+				for arg in expr.pos_args:
+					walk_expr(arg)
+				for kw in expr.kw_args:
+					walk_expr(kw.value)
+				return
+			if isinstance(expr, H.HTryExpr):
+				walk_expr(expr.attempt)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if arm.result is not None:
+						walk_expr(arm.result)
+				return
+			if isinstance(expr, H.HMatchExpr):
+				walk_expr(expr.scrutinee)
+				for arm in expr.arms:
+					walk_block(arm.block)
+					if arm.result is not None:
+						walk_expr(arm.result)
+				return
+
+		def walk_stmt(stmt: H.HStmt) -> None:
+			if isinstance(stmt, H.HLet):
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HAssign):
+				walk_expr(stmt.target)
+				walk_expr(stmt.value)
+				return
+			if hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
+				walk_expr(stmt.target)
+				walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HExprStmt):
+				walk_expr(stmt.expr)
+				return
+			if isinstance(stmt, H.HReturn):
+				if stmt.value is not None:
+					walk_expr(stmt.value)
+				return
+			if isinstance(stmt, H.HIf):
+				walk_expr(stmt.cond)
+				walk_block(stmt.then_block)
+				if stmt.else_block is not None:
+					walk_block(stmt.else_block)
+				return
+			if isinstance(stmt, H.HLoop):
+				walk_block(stmt.body)
+				return
+			if isinstance(stmt, H.HBlock):
+				walk_block(stmt)
+				return
+			if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+				walk_block(stmt.block)
+				return
+			if isinstance(stmt, H.HTry):
+				walk_block(stmt.body)
+				for arm in stmt.catches:
+					walk_block(arm.block)
+				return
+			if isinstance(stmt, H.HThrow):
+				walk_expr(stmt.value)
+				return
+
+		def walk_block(block: H.HBlock) -> None:
+			for stmt in block.statements:
+				walk_stmt(stmt)
+
+		walk_block(block)
 	if isinstance(generic_templates_by_id, dict):
 		for fn_id, hir in generic_templates_by_id.items():
 			key = function_keys_by_fn_id.get(fn_id)
@@ -2442,12 +2579,25 @@ def compile_stubbed_funcs(
 					handle.status = "failed"
 					continue
 			inst_hir = normalize_hir(template_hir)
+			_clear_var_binding_ids(inst_hir)
 			normalized_hirs_by_id[inst_fn_id] = inst_hir
 			mod_name = getattr(inst_fn_id, "module", None) or "main"
 			current_mod = _module_id_with_visibility(mod_name)
 			visible_mods = None
 			if module_deps is not None:
-				visible = visible_module_names_by_name.get(mod_name, {mod_name})
+				visible = set(visible_module_names_by_name.get(mod_name, {mod_name}))
+				def _collect_type_modules(tid: TypeId) -> None:
+					try:
+						td = shared_type_table.get(tid)
+					except Exception:
+						return
+					if td.kind in {TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.ERROR, TypeKind.INTERFACE}:
+						if td.module_id:
+							visible.add(td.module_id)
+					for child in td.param_types or []:
+						_collect_type_modules(child)
+				for _tid in list(impl_args) + list(fn_args):
+					_collect_type_modules(_tid)
 				visible_mods = tuple(sorted(_module_id_with_visibility(m) for m in visible))
 			_sync_visibility_provenance()
 			current_file = None

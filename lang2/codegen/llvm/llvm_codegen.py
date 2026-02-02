@@ -1803,8 +1803,11 @@ class _FuncBuilder:
 				field_store_llty = self._llvm_storage_type_for_typeid(field_ty)
 				have = self.value_types.get(arg_val)
 				if have is not None and have != field_val_llty:
+					field_lltys = [self._llvm_type_for_typeid(t) for t in field_types]
+					arg_lltys = [self.value_types.get(self._map_value(a)) for a in instr.args]
 					raise NotImplementedError(
-						f"LLVM codegen v1: struct field {idx} type mismatch (have {have}, expected {field_val_llty})"
+						f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
+						f"fields={field_lltys} args={arg_lltys}"
 					)
 				if field_store_llty == "i8" and field_val_llty == "i1":
 					arg_val = self._bool_to_storage(arg_val)

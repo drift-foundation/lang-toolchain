@@ -99,6 +99,29 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 			return table.new_ptr(inner, module_id=origin_mod)
 		if name == "Void":
 			return table.ensure_void()
+		if not args:
+			base = None
+			if origin_mod is not None:
+				base = table.get_variant_base(module_id=origin_mod, name=str(name))
+				if base is None:
+					base = table.get_struct_base(module_id=origin_mod, name=str(name))
+				if base is None:
+					base = table.get_interface_base(module_id=origin_mod, name=str(name))
+			if base is None and name in _CORE_VARIANT_ALLOWLIST:
+				base = table.get_variant_base(module_id="lang.core", name=str(name))
+			if base is not None:
+				if allow_generic_base:
+					return base
+				schema = table.get_variant_schema(base)
+				if schema is not None and schema.type_params:
+					return table.ensure_unknown()
+				struct = table.get_struct_schema(base)
+				if struct is not None and struct.type_params:
+					return table.ensure_unknown()
+				iface = table.get_interface_schema(base)
+				if iface is not None and iface.type_params:
+					return table.ensure_unknown()
+				return base
 		# Generic nominal instantiation (MVP: variants/structs/interfaces). Example: Optional<Int>.
 		if args:
 			base = None
@@ -201,6 +224,22 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 				return ty
 			ty = table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=str(name))
 			if ty is not None:
+				if args:
+					type_args = [
+						resolve_opaque_type(
+							arg,
+							table,
+							module_id=origin_mod,
+							type_params=type_params,
+							allow_generic_base=allow_generic_base,
+							alias_stack=alias_stack,
+						)
+						for arg in args
+					]
+					try:
+						return table.ensure_variant_template(ty, type_args)
+					except Exception:
+						return table.ensure_unknown()
 				if not args and ty in table.variant_schemas:
 					schema = table.variant_schemas.get(ty)
 					if schema is not None and schema.type_params and not allow_generic_base:

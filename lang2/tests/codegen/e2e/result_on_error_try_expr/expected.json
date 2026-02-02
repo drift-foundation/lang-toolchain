@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Result.on_error used in try expression",
+  "exit_code": 7,
+  "stdout": "",
+  "stderr": ""
+}

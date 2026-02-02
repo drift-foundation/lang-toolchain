@@ -1,0 +1,11 @@
+module m
+
+import std.core as core;
+
+exception MyError(code: Int);
+
+pub fn main() nothrow -> Int {
+	val opt = Optional<type Int>::None();
+	val v = try opt.on_none(| | => { throw MyError(5); }) catch MyError(_) { 7 } catch { 8 };
+	return v;
+}

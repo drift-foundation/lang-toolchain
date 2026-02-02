@@ -1,0 +1,6 @@
+
+module main
+
+import std.core as core;
+
+fn main() -> Int { return 1; }

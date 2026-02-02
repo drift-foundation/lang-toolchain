@@ -170,6 +170,11 @@ Plan:
    - `Result<T,E>.or_throw()` compiles and throws on Err.
    - `Result<T,E>.or_throw(|e| MyError(...))` compiles and throws mapped error.
 
+Progress:
+- `Try::into_try` now requires `E is Diagnostic` and throws `ResultError` with `e.to_diag()`.
+- Implemented `core.Diagnostic` for `std.net.NetError`, `std.io.IoError`, and `std.concurrent.ConcurrencyError`.
+- Added driver tests: `Try` requires `Diagnostic` impl; succeeds when provided.
+
 ### Phase 1: runtime scaffold (OS-thread fallback)
 1) Implement runtime stubs that execute VTs as OS threads (no epoll yet).
 2) Provide `ExecutorPolicy` plumbing but default to single-thread policy.
@@ -204,6 +209,8 @@ Plan:
    - Added: `std_net_tcp_stress_connections` (500 clients, mixed payload sizes) with comment map.
    - Adjusted TCP read/write roundtrip tests to use larger buffers (len tracks actual bytes written).
    - Added: `byte_capture_arithmetic` (capture Byte, cast to Int, arithmetic in lambda).
+   - Infra fix: qualified zero-field variant ctors now resolve via module alias (e.g. `conc.SaturationPolicy::ReturnBusy()`), added driver regression.
+   - Infra fix: non-generic nominal types now resolve in `resolve_opaque_type` when used as type exprs.
 
 ## Post‑MVP
 - ReentrantMutex.

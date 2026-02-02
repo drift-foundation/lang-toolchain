@@ -37,6 +37,19 @@ pub variant IoError {
 	WouldBlock
 }
 
+implement core.Diagnostic for IoError {
+	pub fn to_diag(self: IoError) nothrow -> DiagnosticValue {
+		return match self {
+			Errno(code) => {
+				DiagnosticValue::Int(code)
+			},
+			WouldBlock => {
+				DiagnosticValue::Int(-1)
+			}
+		};
+	}
+}
+
 pub struct File {
 	fd: Int
 }

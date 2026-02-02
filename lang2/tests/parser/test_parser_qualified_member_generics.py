@@ -72,6 +72,23 @@ fn post() -> Optional[Int] {
 	assert post_expr.func.member == "None"
 
 
+def test_parse_qualified_member_type_app_before_qualified() -> None:
+	prog = p.parse_program(
+		"""
+fn main() -> Optional[Int] {
+	return Optional<type Int>::None();
+}
+"""
+	)
+	expr = _get_return_expr(prog, 0)
+	assert isinstance(expr, Call)
+	assert isinstance(expr.func, QualifiedMember)
+	assert expr.func.base_type.name == "Optional"
+	assert len(expr.func.base_type.args) == 1
+	assert expr.func.base_type.args[0].name == "Int"
+	assert expr.func.member == "None"
+
+
 def test_parse_qualified_member_type_app_reference() -> None:
 	prog = p.parse_program(
 		"""

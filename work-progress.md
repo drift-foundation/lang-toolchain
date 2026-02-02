@@ -114,6 +114,7 @@
 - Added e2e: result_on_error_throw (throws) + result_on_error_recover (returns), and driver regression for throwing lambda rejected for Fn1 bounds.
 - Call resolver now retypes lambda args after resolution when requirements imply Fn*/FnThrow* (uses signature param typevars to map subjects).
 - on_error method call special-case no longer marks lambdas as capture-invoke; captureless lambdas now coerce to function pointers and lower correctly.
+ - Fixed into_try wrapping to assign callsite_id + node_id; added driver regression to ensure try-block autounwrap in stmt path doesn't trigger missing CallInfo.
 
 ### MIR validation + e2e runner
 - MIR: `_infer_expr_type` now consults typed `expr_types` for all expressions, fixing missing local types for casts used by wrapping_u64 ops.

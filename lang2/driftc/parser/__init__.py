@@ -745,6 +745,7 @@ class _FrontendDecl:
 		return_type: parser_ast.TypeExpr,
 		loc: Optional[parser_ast.Located],
 		declared_nothrow: bool = False,
+		declared_throws: bool = False,
 		is_unsafe: bool = False,
 		is_pub: bool = False,
 		is_method: bool = False,
@@ -763,6 +764,7 @@ class _FrontendDecl:
 		self.params = params
 		self.return_type = return_type
 		self.declared_nothrow = declared_nothrow
+		self.declared_throws = declared_throws
 		self.is_unsafe = is_unsafe
 		self.throws = ()
 		self.loc = loc
@@ -805,6 +807,7 @@ def _decl_from_parser_fn(
 		fn.return_type,
 		getattr(fn, "loc", None),
 		bool(getattr(fn, "declared_nothrow", False)),
+		bool(getattr(fn, "declared_throws", False)),
 		bool(getattr(fn, "is_unsafe", False)),
 		fn.is_pub,
 		fn.is_method,
@@ -2430,6 +2433,10 @@ def parse_drift_workspace_to_hir(
 			alias = te.module_alias
 			mod = file_aliases.get(alias or "")
 			span = _span_in_file(path, getattr(te, "loc", None))
+			if mod is None and alias:
+				# Allow direct module paths in type references without prior import alias.
+				if alias in merged_programs or (external_module_exports is not None and alias in external_module_exports):
+					mod = alias
 			if mod is None:
 				diagnostics.append(
 					_p_diag(
@@ -3164,21 +3171,32 @@ def parse_drift_workspace_to_hir(
 					kwargs=kwargs,
 					type_args=type_args,
 				)
-			available = ", ".join(sorted(vals | types))
-			notes = (
-				[f"available exports: {available}"]
-				if available
-				else [f"module '{mod}' exports nothing (private by default)"]
-			)
-			diagnostics.append(
-				_p_diag(
-					message=f"module '{mod}' does not export symbol '{member}'",
-					severity="error",
-					span=getattr(receiver, "loc", Span()),
-					notes=notes,
+			ext_vals = exported_value_names(mod)
+			ext_structs = exported_struct_names(mod)
+			if member not in ext_vals and member not in ext_structs:
+				available = ", ".join(sorted(ext_vals | ext_structs))
+				notes = (
+					[f"available exports: {available}"]
+					if available
+					else [f"module '{mod}' exports nothing (private by default)"]
 				)
+				diagnostics.append(
+					_p_diag(
+						message=f"module '{mod}' does not export symbol '{member}'",
+						severity="error",
+						span=getattr(receiver, "loc", Span()),
+						notes=notes,
+					)
+				)
+				return None
+			# Defer export/visibility checks to type resolution for non-module-qualified
+			# value references; qualified calls are validated here.
+			return H.HCall(
+				fn=H.HVar(name=member, module_id=mod),
+				args=args,
+				kwargs=kwargs,
+				type_args=type_args,
 			)
-			return None
 
 		def _rewrite_module_qualified_value(
 			*,
@@ -4084,8 +4102,18 @@ def _lower_parsed_program_to_hir(
 			name_ord[symbol_name] = ordinal + 1
 			fn_id = FunctionId(module=module_id, name=symbol_name, ordinal=ordinal)
 			fn_ids_by_name.setdefault(function_symbol(fn_id), []).append(fn_id)
-			if getattr(fn, "require", None) is not None:
-				world.requires_by_fn[fn_id] = fn.require.expr
+			impl_req = getattr(impl, "require", None)
+			fn_req = getattr(fn, "require", None)
+			if impl_req is not None or fn_req is not None:
+				req_expr = fn_req.expr if fn_req is not None else None
+				if impl_req is not None:
+					req_expr = impl_req.expr if req_expr is None else parser_ast.TraitAnd(
+						loc=getattr(impl_req, "loc", None),
+						left=impl_req.expr,
+						right=req_expr,
+					)
+				if req_expr is not None:
+					world.requires_by_fn[fn_id] = req_expr
 			impl_meta.methods.append(
 				ImplMethodMeta(
 					fn_id=fn_id,

@@ -81,7 +81,39 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 				if not is_function_expr:
 					diagnostics.append(tc_diag(message="internal: HTypeApp survived typed mode (checker bug)", severity="error", span=getattr(node, "loc", None)))
 			if isinstance(node, H.HQualifiedMember) and node.node_id not in allowed_qmem_nodes:
-				if not is_function_expr:
+				allow_qmem = False
+				if expr_type_id is not None and type_table is not None:
+					try:
+						td = type_table.get(expr_type_id)
+						inst = None
+						if td.kind is TypeKind.VARIANT_INSTANCE:
+							inst = type_table.get_variant_instance(expr_type_id)
+						elif td.kind is TypeKind.VARIANT:
+							inst = type_table.get_variant_instance(expr_type_id)
+						if inst is not None:
+							arm = inst.arms_by_name.get(getattr(node, "member", ""))
+							if arm is not None and not arm.field_types:
+								allow_qmem = True
+					except Exception:
+						allow_qmem = False
+				if not allow_qmem and type_table is not None:
+					base_te = getattr(node, "base_type_expr", None)
+					base_name = getattr(base_te, "name", None) if base_te is not None else None
+					if isinstance(base_name, str):
+						module_id = getattr(base_te, "module_id", None) or current_module_name
+						try:
+							base_tid = type_table.get_variant_base(module_id=module_id, name=base_name)
+						except Exception:
+							base_tid = None
+						if base_tid is not None:
+							try:
+								schema = type_table.get_variant_schema(base_tid)
+								arm = next((a for a in schema.arms if a.name == getattr(node, "member", "")), None)
+								if arm is not None and not arm.fields:
+									allow_qmem = True
+							except Exception:
+								pass
+				if not is_function_expr and not allow_qmem:
 					diagnostics.append(tc_diag(message="internal: HQualifiedMember survived typed mode (checker bug)", severity="error", span=getattr(node, "loc", None)))
 			if getattr(node, "kwargs", None):
 				diagnostics.append(tc_diag(message="internal: kwargs survived typed mode (checker bug)", severity="error", span=getattr(node, "loc", None)))

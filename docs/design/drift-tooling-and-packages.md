@@ -71,6 +71,25 @@ Pinned defaults (MVP):
 - Repository discovery configuration (`drift-sources.json`)
 - Publisher tooling: building and signing repository indexes
 
+### 2.3 Debug logging (compiler)
+
+`driftc` supports a unified debug toggle via the `DRIFT_DEBUG` environment variable.
+
+Accepted forms:
+- `DRIFT_DEBUG=1` enables all debug channels.
+- `DRIFT_DEBUG='{"call_resolve": true, "instantiate": true}'` enables specific channels.
+- `DRIFT_DEBUG='{"diags": true}'` makes the e2e runner include full diagnostics in failures.
+
+If `DRIFT_DEBUG` is set to invalid JSON, `driftc` prints a single warning and proceeds with debug disabled.
+
+Common channels (non-exhaustive):
+- `call_resolve` – call resolution candidates and selected targets
+- `instantiate` – generic instantiation decisions
+- `traits` – trait visibility/resolution
+- `borrow` – auto-borrow and place resolution
+- `stage2` – HIR → MIR lowering checkpoints
+- `ssa` – SSA build diagnostics
+
 ---
 
 ## 3. Repository layout (typical)

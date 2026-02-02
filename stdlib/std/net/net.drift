@@ -37,6 +37,19 @@ pub variant NetError {
 	WouldBlock
 }
 
+implement core.Diagnostic for NetError {
+	pub fn to_diag(self: NetError) nothrow -> DiagnosticValue {
+		return match self {
+			Errno(code) => {
+				DiagnosticValue::Int(code)
+			},
+			WouldBlock => {
+				DiagnosticValue::Int(-1)
+			}
+		};
+	}
+}
+
 pub struct TcpStream {
 	fd: Int
 }
