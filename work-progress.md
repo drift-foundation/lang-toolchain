@@ -30,6 +30,7 @@
 - Added MIR validation for unresolved layout types (TypeVar/ForwardNominal/Unknown) across array/rawbuffer/ptr/struct/variant/iface/typed ops.
 - Added e2e `generic_impl_array_literal` to exercise generic impl + array literal lowering with concrete instantiations.
 - Added driver fuzz-style test `test_generic_impl_array_literal_fuzz_fixed_seed` to catch forward-nominal leakage in generic impls.
+ - Added driver + e2e regressions for empty array literal inference (`[]` without expected type) and new diagnostic.
 
 ### Concurrency (callback inference)
 - Fixed `std.core.callbackN` inference for lambdas without expected type by allowing return type inference (prevents forward-nominal fallback in spawn tests).

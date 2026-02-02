@@ -118,6 +118,20 @@
 - Added stable, argument-sensitive type keys (with hashed LLVM names) for struct/variant caching and FnResult keying to avoid cross-instantiation collisions.
 - Fixed struct constructor lowering to pass expected field types and record constructed struct types; tightened typed-mode rules (strict vs recover) and gated strict mode on error-free typechecking.
 - Hard-stopped codegen on typecheck errors to avoid partial MIR/SSA emission.
+
+## 2026-02-02 – Call/try plumbing, interfaces, concurrency/runtime, IO/net, and test hardening
+- Introduced `use trait` import form for trait method visibility; added driver/e2e coverage for trait scope and UFCS resolution.
+- Hardened callsite/callinfo invariants: all synthesized method calls now receive callsite ids; added MIR validators and regressions for missing CallInfo.
+- Added structured debug toggles via `DRIFT_DEBUG` JSON and expanded debug channels (try_auto/borrow/ssa/package/stage2).
+- Interface ABI stabilization: iface layout modeled as `{data_ptr, vtable_ptr, inline_payload, flags}`; inline flag bitfield; size/align modeling fixed for interface values.
+- Implemented Throwing callback traits (FnThrow0/1/2) and `Result.on_error` with capture support; added tests for throw/recover paths and trait visibility.
+- Added `std.core.Try` trait and try auto-unwrap behavior; enforced trait visibility in try-blocks; added regression tests.
+- Result tombstone formalized with hidden tombstone state; kept tombstone unmatchable in user code; added tests and restored global droppable-variant requirement.
+- Improved HIR/SSA lowering: lambda capture materialization, MIR validators for unresolved types, and stricter MoveOut rules for non-Copy by-value args.
+- Concurrency runtime: fixed VT double-free and park/unpark races, corrected yield handling, added executor policy plumbing, and expanded join/cancel/timeout semantics with e2e coverage.
+- Reactor + IO integration: block_on_io helpers, std.io/std.net nonblocking APIs, TCP/UDP tests, and stress connection e2e with try/on_error patterns.
+- Parser enhancements: qualified ctor patterns, module-qualified ctor resolution without expected type, `TypeApp` before qualified member (`Optional<type T>::None()`).
+- Added diagnostics: empty array literal requires element type; improved entrypoint checks and try/match value vs statement context.
 - Added codegen e2e coverage for two instantiations of the same generic struct in one module.
 
 ## 2026-01-06 – Optional consolidation + module/diagnostic policy alignment
