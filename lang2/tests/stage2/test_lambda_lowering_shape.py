@@ -40,7 +40,8 @@ def test_lambda_immediate_call_lowered_inline_with_param_and_capture() -> None:
 	assert spec.has_captures is True
 	assert spec.param_names and spec.param_names[0].startswith("__env_")
 	assert spec.capture_map
-	assert len(spec.capture_map) == len(lambda_expr.captures)
+	assert len(spec.capture_map) == len(spec.lambda_expr.captures)
+	assert not lambda_expr.captures
 
 
 def test_lambda_block_body_returns_trailing_expr() -> None:

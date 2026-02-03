@@ -51,107 +51,114 @@ Notes
 
 - This works with owned callbacks and does not rely on borrowed captures.
 
-## TCP echo (client/server) with `or_throw`
+## File I/O with `try` + `or_throw`
 
-This example shows a VT‑friendly echo server and N concurrent clients. The key
-idiom is replacing deep `match` nesting with `or_throw`.
+Use a throwing helper and keep `main` `nothrow`. I/O calls take a `Duration`
+timeout and may park the current VT.
 
 ```drift
 import std.concurrent as conc;
-import std.containers as containers;
+import std.core as core;
 import std.io as io;
-import std.net as net;
-import std.err;
 use trait core.Try;
 
-type VtInt = conc.VirtualThread<Int>;
-const N: Int = 50;
-
-fn handle_client(var s: net.TcpStream) -> Int {
-	var buf = io.buffer(256);
-	s.read(&mut buf).or_throw();
-	s.write(&buf).or_throw();
-	s.close().or_throw();
-	return 0;
-}
-
-fn server_loop(listener: net.TcpListener) -> Int {
-	var i = 0;
-	while i < N {
-		val s = net.accept(&listener).or_throw();
-		val r = handle_client(move s);
-		if r < 0 { return r; }
-		i = i + 1;
-	}
-	return 0;
-}
-
-fn client_once(port: Int, size: Int) -> Int {
-	var addr = net.socket_addr("127.0.0.1", port);
-	val s = net.connect(&addr).or_throw();
-	val byte = cast<Byte>(65);
-	var wbuf = io.buffer(size);
-	var i = 0;
-	while i < size {
-		io.buffer_write(&mut wbuf, i, byte);
-		i = i + 1;
-	}
-	val n = s.write(&wbuf).or_throw();
-	if n != size { return -33; }
-	var rbuf = io.buffer(size);
-	val r = s.read(&mut rbuf).or_throw();
-	if r != size { return -36; }
-	s.close().or_throw();
-	return size * 65;
-}
-
 pub fn main() nothrow -> Int {
-	return try run_main() catch {
-		return 1;
-	};
+	return try run_main() catch { 1 };
 }
 
-fn run_main() -> Int {
-	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr).or_throw();
-	val port = listener.local_port();
-	var server = conc.spawn(| | captures(move listener, copy port) => {
-		return server_loop(move listener);
-	});
-
-	var dq = containers.deque<type VtInt>();
-	var expected = 0;
-	var actual = 0;
-	var k = 0;
-	while k < N {
-		val size = (k % 3 == 0) ? 1 : ((k % 3 == 1) ? 64 : 256);
-		expected = expected + (size * 65);
-		val t = conc.spawn(| | captures(copy port, copy size) => {
-			return client_once(port, size);
-		});
-		dq.push_back(move t);
-		k = k + 1;
-	}
-
-	while dq.len() > 0 {
-		val vt = dq.pop_front().or_throw();
-		var t = move vt;
-		val code = t.join().or_throw();
-		if code < 0 { return code; }
-		actual = actual + code;
-	}
-
-	val v = server.join().or_throw();
-	if v != 0 { return 70; }
-	if actual != expected { return 71; }
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var opts = io.OpenOptions(read = true, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
+	val f = io.open("example.txt", &opts, t).or_throw();
+	var buf = io.buffer(5);
+	io.buffer_write(&mut buf, 0, cast<Byte>(72));
+	io.buffer_write(&mut buf, 1, cast<Byte>(101));
+	io.buffer_write(&mut buf, 2, cast<Byte>(108));
+	io.buffer_write(&mut buf, 3, cast<Byte>(108));
+	io.buffer_write(&mut buf, 4, cast<Byte>(111));
+	val _ = f.write(&buf, t).or_throw();
+	val _ = f.read(&mut buf, t).or_throw();
+	f.close(t).or_throw();
 	return 0;
 }
 ```
 
-Notes
+## UDP ping (self‑send)
 
-- `or_throw` keeps error plumbing flat.
-- `run_main` is can‑throw; `main` remains `nothrow` via `try ... catch`.
+```drift
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val sock = net.udp_bind(&addr).or_throw();
+	val port = sock.local_port();
+	var to = net.socket_addr("127.0.0.1", port);
+	var buf = io.buffer(4);
+	io.buffer_write(&mut buf, 0, cast<Byte>(80));
+	io.buffer_write(&mut buf, 1, cast<Byte>(73));
+	io.buffer_write(&mut buf, 2, cast<Byte>(78));
+	io.buffer_write(&mut buf, 3, cast<Byte>(71));
+	val _ = sock.send_to(&to, &buf, t).or_throw();
+	var from = net.socket_addr("127.0.0.1", 0);
+	val _ = sock.recv_from(&mut from, &mut buf, t).or_throw();
+	sock.close(t).or_throw();
+	return 0;
+}
+```
+
+## TCP echo (single client)
+
+```drift
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val listener = net.listen(&addr, t).or_throw();
+	val port = listener.local_port();
+	var server = conc.spawn(| | captures(move listener, copy t) => {
+		return try (| | => {
+			val s = net.accept(&listener, t).or_throw();
+			var buf = io.buffer(16);
+			val _ = s.read(&mut buf, t).or_throw();
+			val _ = s.write(&buf, t).or_throw();
+			s.close(t).or_throw();
+			return 0;
+		})() catch { 1 };
+	});
+	var caddr = net.socket_addr("127.0.0.1", port);
+	val c = net.connect(&caddr, t).or_throw();
+	var wbuf = io.buffer(5);
+	io.buffer_write(&mut wbuf, 0, cast<Byte>(72));
+	io.buffer_write(&mut wbuf, 1, cast<Byte>(101));
+	io.buffer_write(&mut wbuf, 2, cast<Byte>(108));
+	io.buffer_write(&mut wbuf, 3, cast<Byte>(108));
+	io.buffer_write(&mut wbuf, 4, cast<Byte>(111));
+	val _ = c.write(&wbuf, t).or_throw();
+	var rbuf = io.buffer(5);
+	val _ = c.read(&mut rbuf, t).or_throw();
+	c.close(t).or_throw();
+	val _ = server.join().or_throw();
+	return 0;
+}
+```
 
 ## Iterate, then mutate
 

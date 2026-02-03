@@ -1,0 +1,28 @@
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val sock = net.udp_bind(&addr).or_throw();
+	val port = sock.local_port();
+	var to = net.socket_addr("127.0.0.1", port);
+	var buf = io.buffer(4);
+	io.buffer_write(&mut buf, 0, cast<Byte>(80));
+	io.buffer_write(&mut buf, 1, cast<Byte>(73));
+	io.buffer_write(&mut buf, 2, cast<Byte>(78));
+	io.buffer_write(&mut buf, 3, cast<Byte>(71));
+	val _ = sock.send_to(&to, &buf, t).or_throw();
+	var from = net.socket_addr("127.0.0.1", 0);
+	val _ = sock.recv_from(&mut from, &mut buf, t).or_throw();
+	sock.close(t).or_throw();
+	return 0;
+}

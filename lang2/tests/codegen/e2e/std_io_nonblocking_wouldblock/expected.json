@@ -1,0 +1,6 @@
+{
+  "description": "e2e: std.io read with timeout=0 returns WouldBlock",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

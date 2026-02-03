@@ -131,9 +131,18 @@ lang2-borrow-test:
 
 # Build examples (lang2.driftc)
 make-examples:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	set -x
 	mkdir -p build/examples/tcp_client_server
 	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/server.drift -o build/examples/tcp_client_server/server
 	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/client.drift -o build/examples/tcp_client_server/client
+	mkdir -p build/examples/file_io
+	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/file_io/main.drift -o build/examples/file_io/main
+	mkdir -p build/examples/udp_ping
+	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/udp_ping/main.drift -o build/examples/udp_ping/main
+	mkdir -p build/examples/tcp_echo
+	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_echo/main.drift -o build/examples/tcp_echo/main
 
 stage-for-review:
 	#!/usr/bin/env bash

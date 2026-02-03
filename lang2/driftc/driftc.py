@@ -3239,9 +3239,13 @@ def compile_stubbed_funcs(
 		return type_table.ensure_void()
 
 	type_diag_len = len(type_diags)
-	for spec in hidden_lambda_specs:
+	hidden_lambda_index = 0
+	while hidden_lambda_index < len(hidden_lambda_specs):
+		spec = hidden_lambda_specs[hidden_lambda_index]
+		hidden_lambda_index += 1
 		if spec.fn_id in mir_funcs_by_id:
 			continue
+		origin_typed = typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
 		lam = copy.deepcopy(spec.lambda_expr)
 		capture_name_to_id: dict[str, int] = {}
 		if not getattr(lam, "captures", None):
@@ -3255,6 +3259,13 @@ def compile_stubbed_funcs(
 				"move": C.HCaptureKind.MOVE,
 				"auto": C.HCaptureKind.REF,
 			}
+			if origin_typed is not None and lam.explicit_captures:
+				name_to_bid: dict[str, int] = {}
+				for bid, name in origin_typed.binding_names.items():
+					name_to_bid[name] = int(bid)
+				for cap in lam.explicit_captures or []:
+					if cap.binding_id is None and cap.name and cap.name in name_to_bid:
+						cap.binding_id = name_to_bid[cap.name]
 			explicit_list: list[C.HCapture] = []
 			for cap in lam.explicit_captures or []:
 				if cap.binding_id is None:
@@ -3322,6 +3333,9 @@ def compile_stubbed_funcs(
 					new_caps.append(cap)
 			lam.captures = new_caps
 
+			keep_binding_types = (H.HLet,)
+			if hasattr(H, "HParam"):
+				keep_binding_types = (H.HLet, H.HParam)
 			def _remap_ids(obj: object) -> None:
 				if obj is None:
 					return
@@ -3339,7 +3353,7 @@ def compile_stubbed_funcs(
 							obj.binding_id = capture_id_map[int(bid)]
 						else:
 							obj.binding_id = None
-				elif hasattr(obj, "binding_id"):
+				elif hasattr(obj, "binding_id") and not isinstance(obj, keep_binding_types):
 					obj.binding_id = None
 				elif isinstance(obj, H.HPlaceExpr):
 					base = obj.base
@@ -3489,7 +3503,12 @@ def compile_stubbed_funcs(
 					target_id = name_map[base.name]
 					if getattr(base, "binding_id", None) != target_id:
 						base.binding_id = target_id
-			if isinstance(obj, H.HExpr):
+			if isinstance(obj, H.HLambda):
+				if obj.body_expr is not None:
+					_apply_capture_names_post(obj.body_expr, name_map)
+				if obj.body_block is not None:
+					_apply_capture_names_post(obj.body_block, name_map)
+			elif isinstance(obj, H.HExpr):
 				for child in obj.__dict__.values():
 					_apply_capture_names_post(child, name_map)
 			elif isinstance(obj, H.HStmt):
@@ -3754,15 +3773,24 @@ def compile_stubbed_funcs(
 		preseed_binding_place_kind: dict[int, PlaceKind] = {}
 		remapped_capture_map: dict[C.HCaptureKey, int] = {}
 		cap_name_by_id: dict[int, str] = {}
+		if origin_typed is not None and lam.explicit_captures:
+			name_to_bid: dict[str, int] = {}
+			for bid, name in origin_typed.binding_names.items():
+				name_to_bid[name] = int(bid)
+			for cap in lam.explicit_captures or []:
+				if cap.binding_id is None and cap.name and cap.name in name_to_bid:
+					cap.binding_id = name_to_bid[cap.name]
 		for cap in lam.explicit_captures or []:
 			if getattr(cap, "binding_id", None) is not None and cap.name:
 				cap_name_by_id[int(cap.binding_id)] = cap.name
+				preseed_binding_names.setdefault(int(cap.binding_id), cap.name)
+			elif cap.name:
+				preseed_scope_env.setdefault(cap.name, shared_type_table.ensure_unknown())
 		for key, slot in getattr(spec, "capture_map", {}).items():
 			new_root = capture_id_map.get(int(key.root_local), int(key.root_local))
 			new_key = C.HCaptureKey(root_local=new_root, proj=key.proj)
 			remapped_capture_map[new_key] = slot
 		rev_capture_id_map = {new: old for old, new in capture_id_map.items()}
-		origin_typed = typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
 		origin_mir = mir_funcs_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
 		if origin_typed is not None:
 			for cap in lam.captures or []:
@@ -3785,11 +3813,11 @@ def compile_stubbed_funcs(
 				preseed_binding_names[bid] = cap_name
 				preseed_binding_mutable[bid] = origin_typed.binding_mutable.get(orig_bid, False)
 				preseed_binding_place_kind[bid] = PlaceKind.CAPTURE
-		if preseed_binding_names and preseed_binding_types:
+		if preseed_binding_names:
+			unknown_ty = shared_type_table.ensure_unknown()
 			for bid, name in preseed_binding_names.items():
-				ty = preseed_binding_types.get(bid)
-				if ty is not None:
-					preseed_scope_env.setdefault(name, ty)
+				ty = preseed_binding_types.get(bid, unknown_ty)
+				preseed_scope_env.setdefault(name, ty)
 		if preseed_binding_names:
 			capture_name_to_id = {name: bid for bid, name in preseed_binding_names.items()}
 			_apply_capture_names_post(lambda_body, capture_name_to_id)
@@ -3798,6 +3826,17 @@ def compile_stubbed_funcs(
 				preseed_scope_bindings.setdefault(name, int(bid))
 		for bid, name in preseed_binding_names.items():
 			preseed_scope_bindings.setdefault(name, int(bid))
+		if preseed_scope_bindings:
+			_apply_capture_names_post(lambda_body, preseed_scope_bindings)
+		if drift_debug.enabled("stage2"):
+			import sys
+			print(f"[drift:debug] hidden lambda {spec.fn_id} origin={spec.origin_fn_id} captures={len(lam.captures or [])} preseed_bindings={sorted(preseed_binding_types.keys())}", file=sys.stderr)
+		elif origin_typed is not None:
+			name_to_bid: dict[str, int] = {}
+			for bid, name in origin_typed.binding_names.items():
+				name_to_bid[name] = int(bid)
+			if name_to_bid:
+				_apply_capture_names_post(lambda_body, name_to_bid)
 		mod_name = spec.fn_id.module or "main"
 		current_mod = _module_id_with_visibility(mod_name)
 		visible_mods = None
@@ -3844,6 +3883,8 @@ def compile_stubbed_funcs(
 			type_diags.extend(hidden_typed.diagnostics)
 			continue
 		hidden_typed_fn = hidden_typed.typed_fn
+		if spec.fn_id not in typed_fns_by_id:
+			typed_fns_by_id[spec.fn_id] = hidden_typed_fn
 		_rewrite_call_targets(hidden_typed_fn, lambda_body)
 		type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
 		hidden_ret_type = spec.return_type_id
@@ -3918,6 +3959,12 @@ def compile_stubbed_funcs(
 				lower._binding_names[int(param.binding_id)] = param.name
 		lower._seed_lambda_locals_for_inference(lower, lambda_body)
 		ret_val = lower._lower_lambda_block(lower, lambda_body)
+		for synth_spec in lower.synth_sig_specs():
+			if synth_spec.kind == "hidden_lambda":
+				continue
+			_register_synth_signature(synth_spec.fn_id, synth_spec.sig)
+		if getattr(lower, "hidden_lambda_specs", None):
+			hidden_lambda_specs.extend(lower.hidden_lambda_specs())
 		if spec.has_captures and spec.env_ty is not None:
 			inst = shared_type_table.get_struct_instance(spec.env_ty)
 			if inst is None:

@@ -198,6 +198,13 @@
 - Added deterministic auto-codes for diagnostics without explicit codes (prefix-detected or hashed), ensuring stable `Diagnostic.code` values across phases.
 ## 2026-02-01 – Deque container + non-Array payload tests
 - Added `Deque` container with `DequeRange`/`DequeRangeMut` and `DEQUE_CONTAINER_ID` in stdlib.
+
+## 2026-02-03 – Diagnostic by-ref, IO/net tests, and example builds
+- Switched `Diagnostic.to_diag` to a by-ref method (`self: &Self`) and updated all stdlib implementations (core, err, io, net, concurrent), plus added Copy for `DiagnosticValue`.
+- Adjusted `Result`/`Try` paths to use by-ref diagnostics; updated driver test harness stubs and added a new driver regression for non-Copy Diagnostic by-ref implementations.
+- Added/expanded std.io/std.net e2e tests for timeouts, nonblocking behavior, TCP/UDP flows, and a TCP stress test; fixed connect-timeout flakiness by accepting success as OK.
+- Updated e2e runner debug behavior and test fixtures (e.g., buffer len updates, byte cast buffer write).
+- Added file/udp/tcp examples under `examples/` and improved example build recipe output (now prints driftc invocations).
 - Added non-Array OOB payload e2e test (`deque_index_error_payload_oob`).
 - Added non-Array range invalidation e2e tests for `compare_at`/`swap` (`deque_range_compare_at_invalidated`, `deque_range_swap_invalidated`).
 ## 2026-02-02 – Module-qualified calls + struct-field gen access

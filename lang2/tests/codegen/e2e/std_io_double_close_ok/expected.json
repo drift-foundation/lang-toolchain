@@ -1,0 +1,4 @@
+{
+  "description": "double close is idempotent",
+  "exit_code": 0
+}

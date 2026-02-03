@@ -1,0 +1,25 @@
+module m
+
+import std.concurrent as conc;
+import std.io as io;
+import lang.thread as thread;
+
+pub fn main() nothrow -> Int {
+	val fd = thread.test_eventfd_create();
+	if fd <= 0 { return 9; }
+	val f = io.file_from_fd(fd);
+	var buf = io.buffer(8);
+	val t = conc.Duration(millis = 1);
+	val r = io.read(&f, &mut buf, t);
+	match r {
+		Ok(_) => { return 2; },
+		Err(e) => {
+			match e {
+				WouldBlock => { return 0; },
+				Errno(_) => { return 3; },
+				default => { return 4; }
+			}
+		},
+		default => { return 5; }
+	}
+}

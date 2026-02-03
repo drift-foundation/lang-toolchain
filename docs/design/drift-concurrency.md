@@ -188,8 +188,8 @@ Intrinsics:
 `std.concurrent.block_on_io(fd, interest, deadline_ms)` is an internal helper used by stdlib I/O:
 
 - stdlib I/O performs a non‑blocking syscall
-- on `EAGAIN`/`EWOULDBLOCK`, it calls `block_on_io`
+- on `EAGAIN`/`EWOULDBLOCK`, it calls `block_on_io` and retries until the timeout elapses
 - `block_on_io` registers interest with the reactor and parks the current VT
 - the reactor unparks the VT when the fd is ready (or deadline elapses)
 
-User code should call normal blocking I/O APIs; the boundary helper keeps those APIs synchronous while still scaling on virtual threads.
+User code calls std.io/std.net methods with an explicit timeout. Those methods may park the current VT and return `WouldBlock` on timeout. The boundary helper keeps the implementation VT‑friendly while preserving a synchronous API surface.

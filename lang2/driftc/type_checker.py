@@ -1422,6 +1422,14 @@ class TypeChecker:
 			had_error = False
 			for idx, (param_ty, arg_ty, arg_expr) in enumerate(zip(param_types, arg_types, args)):
 				if arg_ty is None:
+					if self.type_table.get(param_ty).kind is TypeKind.INTERFACE and isinstance(arg_expr, H.HLambda):
+						inst = self.type_table.get_interface_instance(param_ty)
+						base_id = inst.base_id if inst is not None else param_ty
+						base_def = self.type_table.interface_bases.get(base_id)
+						if base_def is not None and base_def.name.startswith("Callback"):
+							record_iface_coercion(arg_expr, param_ty)
+							updated_types[idx] = param_ty
+							continue
 					ref_info = _ref_param_info(param_ty)
 					if ref_info is None:
 						continue
@@ -2062,6 +2070,25 @@ class TypeChecker:
 			if expected_type is None:
 				return None
 			td = self.type_table.get(expected_type)
+			if td.kind is TypeKind.INTERFACE:
+				inst = self.type_table.get_interface_instance(expected_type)
+				base_id = inst.base_id if inst is not None else expected_type
+				base_def = self.type_table.interface_bases.get(base_id)
+				if base_def is None:
+					return None
+				args = list(inst.type_args) if inst is not None else []
+				if base_def.name == "Callback0" and len(args) >= 1:
+					return [], args[0], False
+				if base_def.name == "Callback1" and len(args) >= 2:
+					return [args[0]], args[1], False
+				if base_def.name == "Callback2" and len(args) >= 3:
+					return [args[0], args[1]], args[2], False
+				if base_def.name == "CallbackThrow0" and len(args) >= 1:
+					return [], args[0], True
+				if base_def.name == "CallbackThrow1" and len(args) >= 2:
+					return [args[0]], args[1], True
+				if base_def.name == "CallbackThrow2" and len(args) >= 3:
+					return [args[0], args[1]], args[2], True
 			if td.kind is not TypeKind.FUNCTION or not td.param_types:
 				return None
 			params = list(td.param_types[:-1])
@@ -4558,8 +4585,25 @@ class TypeChecker:
 
 			# Names and bindings.
 			if isinstance(expr, H.HVar):
+				if expr.module_id is None:
+					for scope in reversed(scope_bindings):
+						if expr.name in scope:
+							scoped_id = scope[expr.name]
+							if expr.binding_id != scoped_id:
+								expr.binding_id = scoped_id
+							break
 				if expr.binding_id is not None:
 					bound = binding_types.get(expr.binding_id)
+					if bound is None or self.type_table.get(bound).kind is TypeKind.UNKNOWN:
+						if expr.module_id is None:
+							for scope in reversed(scope_bindings):
+								if expr.name in scope:
+									candidate = scope[expr.name]
+									cand_ty = binding_types.get(candidate)
+									if cand_ty is not None and self.type_table.get(cand_ty).kind is not TypeKind.UNKNOWN:
+										expr.binding_id = candidate
+										bound = cand_ty
+										break
 					if bound is not None:
 						cap_kind = _explicit_capture_kind(expr.binding_id)
 						if cap_kind in ("ref", "ref_mut"):
@@ -4616,6 +4660,25 @@ class TypeChecker:
 						return record_expr(expr, self._unknown)
 					fnptr_consts_by_node_id[expr.node_id] = (resolution.fn_ref, resolution.call_sig)
 					return record_expr(expr, resolution.fn_type)
+				if expr.binding_id is None:
+					for scope in reversed(scope_bindings):
+						if expr.name in scope:
+							expr.binding_id = scope[expr.name]
+							binding_for_var[expr.node_id] = expr.binding_id
+							bid_ty = binding_types.get(expr.binding_id, self._unknown)
+							return record_expr(expr, bid_ty)
+				if expr.binding_id is None and binding_names:
+					for bid, name in binding_names.items():
+						if name == expr.name:
+							expr.binding_id = bid
+							binding_for_var[expr.node_id] = expr.binding_id
+							bid_ty = binding_types.get(expr.binding_id, self._unknown)
+							return record_expr(expr, bid_ty)
+				if expr.binding_id is not None:
+					bid_ty = binding_types.get(expr.binding_id)
+					if bid_ty is not None:
+						binding_for_var[expr.node_id] = expr.binding_id
+						return record_expr(expr, bid_ty)
 				diagnostics.append(
 					_tc_diag(
 						message=f"unknown variable '{expr.name}'",
@@ -4667,6 +4730,27 @@ class TypeChecker:
 						lambda_type_error = True
 				scope_env.append({})
 				scope_bindings.append({})
+				if expr.explicit_captures is None:
+					for outer_scope in scope_env[:-1]:
+						for name, ty in outer_scope.items():
+							scope_env[-1].setdefault(name, ty)
+					for outer_scope in scope_bindings[:-1]:
+						for name, bid in outer_scope.items():
+							scope_bindings[-1].setdefault(name, bid)
+					res = discover_captures(expr)
+					if res.captures:
+						outer_by_id: dict[int, str] = {}
+						for outer_scope in scope_bindings[:-1]:
+							for name, bid in outer_scope.items():
+								outer_by_id[int(bid)] = name
+						for cap in res.captures:
+							bid = int(cap.key.root_local)
+							name = outer_by_id.get(bid)
+							if name is None:
+								continue
+							scope_bindings[-1].setdefault(name, bid)
+							cap_ty = binding_types.get(bid, self._unknown)
+							scope_env[-1].setdefault(name, cap_ty)
 				lambda_param_types: list[TypeId] = []
 				for param in expr.params:
 					if getattr(param, "binding_id", None) is None:
@@ -4717,6 +4801,16 @@ class TypeChecker:
 							continue
 						capture_kinds[int(root_id)] = cap.kind
 						root_ty = binding_types.get(root_id, self._unknown)
+						if root_ty == self._unknown and cap.name is not None:
+							for scope in reversed(scope_env):
+								if cap.name in scope:
+									root_ty = scope[cap.name]
+									break
+						if root_ty != self._unknown:
+							binding_types[root_id] = root_ty
+						if drift_debug.enabled("typecheck"):
+							import sys
+							print(f"[drift:debug] explicit capture '{cap.name}' root_id={root_id} root_ty={root_ty} fn={function_symbol(fn_id)}", file=sys.stderr)
 						if cap.kind == "ref_mut":
 							cap_ty = self.type_table.ensure_ref_mut(root_ty)
 						elif cap.kind == "ref":
@@ -6252,6 +6346,43 @@ class TypeChecker:
 							method_res.resolution,
 						)
 				if method_res.call_info is not None:
+					if method_res.resolution is not None and getattr(method_res.resolution, "receiver_autoborrow", None) is not None:
+						receiver_mode = method_res.resolution.receiver_autoborrow
+						is_mut = receiver_mode is SelfMode.SELF_BY_REF_MUT
+						recv_ty = type_expr(expr.receiver, used_as_value=False)
+						if recv_ty is not None:
+							ref_info = _ref_param_info(recv_ty)
+							if ref_info is not None:
+								ref_mut, _inner = ref_info
+								if not is_mut or ref_mut:
+									pass
+								else:
+									ref_info = None
+							if ref_info is not None:
+								pass
+							else:
+								place_expr = place_expr_from_lvalue_expr(expr.receiver)
+								if place_expr is None:
+									if is_mut:
+										diagnostics.append(
+											_tc_diag(
+												message="borrow requires an addressable place; bind to a local first",
+												severity="error",
+												phase="typecheck",
+												span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+											)
+										)
+									else:
+										borrow_expr = H.HBorrow(subject=expr.receiver, is_mut=False)
+										_assign_node_id(borrow_expr)
+										expr.receiver = borrow_expr
+										type_expr(borrow_expr)
+								else:
+									_assign_place_expr_ids(place_expr)
+									borrow_expr = H.HBorrow(subject=place_expr, is_mut=is_mut)
+									_assign_node_id(borrow_expr)
+									expr.receiver = borrow_expr
+									type_expr(borrow_expr)
 					param_types = list(method_res.call_info.sig.param_types)
 					if method_res.call_info.sig.includes_callee:
 						param_types = param_types[1:]
@@ -7011,6 +7142,8 @@ class TypeChecker:
 			if isinstance(stmt, H.HLet):
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()
+				elif stmt.binding_id in binding_names and binding_names.get(stmt.binding_id) != stmt.name:
+					stmt.binding_id = self._alloc_local_id()
 				locals.append(stmt.binding_id)
 				declared_ty: TypeId | None = None
 				if getattr(stmt, "declared_type_expr", None) is not None:
@@ -7106,6 +7239,13 @@ class TypeChecker:
 				binding_names[stmt.binding_id] = stmt.name
 				binding_mutable[stmt.binding_id] = bool(getattr(stmt, "is_mutable", False))
 				binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
+				if drift_debug.enabled("typecheck"):
+					import sys
+					try:
+						pretty_val = self._pretty_type_name(val_ty, current_module=current_module_name)
+					except Exception:
+						pretty_val = str(val_ty)
+					print(f"[drift:debug] let {stmt.name} id={stmt.binding_id} type={pretty_val} fn={function_symbol(fn_id)}", file=sys.stderr)
 				# Track origin for ref-typed locals: allow propagation from an existing
 				# ref binding, otherwise treat as local/temporary.
 				if val_ty is not None and self.type_table.get(val_ty).kind is TypeKind.REF:

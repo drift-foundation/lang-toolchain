@@ -1,0 +1,25 @@
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var opts = io.OpenOptions(read = true, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
+	val f = io.open("example.txt", &opts, t).or_throw();
+	var buf = io.buffer(5);
+	io.buffer_write(&mut buf, 0, cast<Byte>(72));
+	io.buffer_write(&mut buf, 1, cast<Byte>(101));
+	io.buffer_write(&mut buf, 2, cast<Byte>(108));
+	io.buffer_write(&mut buf, 3, cast<Byte>(108));
+	io.buffer_write(&mut buf, 4, cast<Byte>(111));
+	val _ = f.write(&buf, t).or_throw();
+	val _ = f.read(&mut buf, t).or_throw();
+	f.close(t).or_throw();
+	return 0;
+}

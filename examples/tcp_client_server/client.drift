@@ -1,4 +1,5 @@
 import std.core as core;
+import std.concurrent as conc;
 import std.io as io;
 import std.net as net;
 
@@ -7,11 +8,12 @@ use trait core.Try;
 pub fn main(argv: Array<String>) nothrow -> Int {
 	var out = 0;
 	try {
+		val io_t = conc.Duration(millis = 5000);
 		if argv.len < 2 { return 1; }
 		val msg = argv[1];
 		val len = byte_length(msg);
 		var addr = net.socket_addr("127.0.0.1", 5555);
-		val s = net.connect(&addr).or_throw();
+		val s = net.connect(&addr, io_t).or_throw();
 		if len < 1 { return 2; }
 		var wbuf = io.buffer(len);
 		var i = 0;
@@ -20,10 +22,10 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 			io.buffer_write(&mut wbuf, i, b);
 			i = i + 1;
 		}
-		val n = s.write(&wbuf).or_throw();
+		val n = s.write(&wbuf, io_t).or_throw();
 		if n != len { return 2; }
 		var rbuf = io.buffer(len);
-		val r = s.read(&mut rbuf).or_throw();
+		val r = s.read(&mut rbuf, io_t).or_throw();
 		if r != len { return 3; }
 		var j = 0;
 		while j < len {
@@ -32,7 +34,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 			if got != exp { return 4; }
 			j = j + 1;
 		}
-		s.close().or_throw();
+		s.close(io_t).or_throw();
 		out = 0;
 	} catch std.err:ResultError(_) {
 		out = 5;

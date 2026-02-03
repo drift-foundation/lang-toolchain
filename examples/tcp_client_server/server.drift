@@ -5,30 +5,31 @@ import std.net as net;
 
 use trait core.Try;
 
-fn handle_client(var s: net.TcpStream) -> Int {
+fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	var buf = io.buffer(1024);
-	val _n = s.read(&mut buf).or_throw();
-	val _ = s.write(&buf).or_throw();
-	s.close().or_throw();
+	val _n = s.read(&mut buf, timeout).or_throw();
+	val _ = s.write(&buf, timeout).or_throw();
+	s.close(timeout).or_throw();
 	return 0;
 }
 
-fn run_server(listener: net.TcpListener) -> Int {
+fn run_server(listener: net.TcpListener, timeout: conc.Duration) -> Int {
 	while true {
-		val s = net.accept(&listener).or_throw();
-		val _ = conc.spawn_cb(| | captures(move s) => {
-			return try handle_client(move s) catch { 1 };
+		val s = net.accept(&listener, timeout).or_throw();
+		val _ = conc.spawn_cb(| | captures(move s, copy timeout) => {
+			return try handle_client(move s, timeout) catch { 1 };
 		});
 	}
 	return 0;
 }
 
 fn run_main(argv: Array<String>) -> Int {
+	val io_t = conc.Duration(millis = 5000);
 	val port = 5555;
 	var addr = net.socket_addr("127.0.0.1", port);
-	val listener = net.listen(&addr).or_throw();
-	var server = conc.spawn_cb(| | captures(move listener) => {
-		return try run_server(move listener) catch { 1 };
+	val listener = net.listen(&addr, io_t).or_throw();
+	var server = conc.spawn_cb(| | captures(move listener, copy io_t) => {
+		return try run_server(move listener, io_t) catch { 1 };
 	});
 	return server.join().or_throw();
 }

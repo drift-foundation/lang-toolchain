@@ -1,10 +1,12 @@
 module m
 
+import std.concurrent as conc;
 import std.core as core;
 import std.io as io;
 import std.net as net;
 
 pub fn main() nothrow -> Int {
+	val io_t = conc.Duration(millis = 1000);
 	var saddr = net.socket_addr_v6("::1", 0);
 	var sr = net.udp_bind_v6(&saddr);
 	match sr {
@@ -17,7 +19,7 @@ pub fn main() nothrow -> Int {
 					var b = io.buffer(1);
 					io.buffer_write(&mut b, 0, cast<Byte>(66));
 					var send_addr = net.socket_addr_v6("::1", port);
-					var ws = cli.send_to_v6(&send_addr, &b);
+					var ws = cli.send_to_v6(&send_addr, &b, io_t);
 					var ws_code = 0;
 					match ws {
 						Ok(_) => { ws_code = 0; },
@@ -27,7 +29,7 @@ pub fn main() nothrow -> Int {
 					if ws_code != 0 { return ws_code; }
 					var rbuf = io.buffer(1);
 					var raddr = net.socket_addr_v6("::", 0);
-					var rr = srv.recv_from_v6(&mut raddr, &mut rbuf);
+					var rr = srv.recv_from_v6(&mut raddr, &mut rbuf, io_t);
 					var rr_code = 0;
 					match rr {
 						Ok(n) => { rr_code = n; },
@@ -39,8 +41,8 @@ pub fn main() nothrow -> Int {
 					if rr_code != 1 { return 5; }
 					val v = io.buffer_read(&mut rbuf, 0);
 					if cast<Int>(v) != 66 { return 6; }
-					val _ = cli.close();
-					val _ = srv.close();
+					val _ = cli.close(io_t);
+					val _ = srv.close(io_t);
 					return 0;
 				},
 				Err(_) => { return 9; },

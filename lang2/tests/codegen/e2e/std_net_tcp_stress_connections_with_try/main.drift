@@ -11,38 +11,38 @@ type VtInt = conc.VirtualThread<Int>;
 
 const N: Int = 500;
 
-fn handle_client(var s: net.TcpStream) throws -> Int {
+fn handle_client(var s: net.TcpStream, timeout: conc.Duration) throws -> Int {
 	// Server-side handler for one client:
 	// - read a fixed-size buffer
 	// - echo it back
 	// - close the socket
 	var buf = io.buffer(1024);
-	s.read(&mut buf);
-	s.write(&buf);
-	s.close();
+	s.read(&mut buf, timeout);
+	s.write(&buf, timeout);
+	s.close(timeout);
 	return 0;
 }
 
-fn server_loop(listener: net.TcpListener) throws -> Int {
+fn server_loop(listener: net.TcpListener, timeout: conc.Duration) throws -> Int {
 	// Accept exactly N connections and handle them sequentially.
 	var i = 0;
 	while i < N {
-		val s = net.accept(&listener);
-		val r = handle_client(move s);
+		val s = net.accept(&listener, timeout);
+		val r = handle_client(move s, timeout);
 		if r < 0 { return r; }
 		i = i + 1;
 	}
 	return 0;
 }
 
-fn client_once(port: Int, size: Int) throws -> Int {
+fn client_once(port: Int, size: Int, timeout: conc.Duration) throws -> Int {
 	// One client:
 	// - connect to 127.0.0.1:port
 	// - write size bytes (all 65)
 	// - read size bytes back
 	// - close socket
 	var addr = net.socket_addr("127.0.0.1", port);
-	val s = net.connect(&addr);
+	val s = net.connect(&addr, timeout);
 	// Prepare write buffer.
 	val byte = cast<Byte>(65);
 	var wbuf = io.buffer(size);
@@ -51,13 +51,13 @@ fn client_once(port: Int, size: Int) throws -> Int {
 		io.buffer_write(&mut wbuf, i, byte);
 		i = i + 1;
 	}
-	val n = s.write(&wbuf);
+	val n = s.write(&wbuf, timeout);
 	if n != size { return -33; }
 	// Read echoed bytes into a fresh buffer.
 	var rbuf = io.buffer(size);
-	val r = s.read(&mut rbuf);
+	val r = s.read(&mut rbuf, timeout);
 	if r != size { return -36; }
-	s.close();
+	s.close(timeout);
 	return size * 65;
 }
 
@@ -67,12 +67,13 @@ pub fn main() nothrow -> Int {
 
 fn run_main() throws -> Int {
 	// Spin up a TCP listener on an ephemeral port.
+	val io_t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr);
+	val listener = net.listen(&addr, io_t);
 	val port = listener.local_port();
 	// Start the server in its own VT.
-	var server = conc.spawn(| | captures(move listener, copy port) => {
-		return try server_loop(move listener) catch { -70 };
+	var server = conc.spawn(| | captures(move listener, copy port, copy io_t) => {
+		return try server_loop(move listener, io_t) catch { -70 };
 	});
 	var dq = containers.deque<type VtInt>();
 	// Expected sum is the total bytes written across all clients.
@@ -84,8 +85,8 @@ fn run_main() throws -> Int {
 		val size = (k % 3 == 0) ? 1 : ((k % 3 == 1) ? 64 : 1024);
 		expected = expected + (size * 65);
 		// Spawn the client VT.
-		val t = conc.spawn(| | captures(copy port, copy size) => {
-			return try client_once(port, size) catch { -80 };
+		val t = conc.spawn(| | captures(copy port, copy size, copy io_t) => {
+			return try client_once(port, size, io_t) catch { -80 };
 		});
 		dq.push_back(move t);
 		k = k + 1;

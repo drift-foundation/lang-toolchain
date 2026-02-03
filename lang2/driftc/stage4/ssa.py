@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, List
 
+from lang2.driftc import debug as drift_debug
+
 from lang2.driftc.stage2 import (
 	MirFunc,
 	AddrOfLocal,
@@ -135,6 +137,8 @@ class MirToSSA:
 					new_instrs.append(instr)
 					continue
 				if instr.local not in version:
+					if drift_debug.enabled("ssa"):
+						print(f"[drift:ssa] load-before-store local={instr.local} block={block.name} fn={func.fn_id}")
 					raise RuntimeError(f"SSA: load before store for local '{instr.local}'")
 				# Load sees the current SSA value for the local.
 				value_for_instr[(block.name, idx)] = current_value[instr.local]
@@ -364,6 +368,8 @@ class MirToSSA:
 
 		def current(local: str) -> str:
 			if local not in stacks or not stacks[local]:
+				if drift_debug.enabled("ssa"):
+					print(f"[drift:ssa] load-before-store local={local} block={block.name} fn={func.fn_id}")
 				raise RuntimeError(f"SSA: load before store for local '{local}' in multi-block rename")
 			return stacks[local][-1]
 

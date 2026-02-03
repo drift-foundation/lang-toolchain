@@ -36,7 +36,7 @@ implement core.Copy for IteratorOpId {
 }
 
 implement core.Diagnostic for IteratorOpId {
-	pub fn to_diag(self: IteratorOpId) nothrow -> DiagnosticValue {
+	pub fn to_diag(self: &IteratorOpId) nothrow -> DiagnosticValue {
 		// ABI-stable numeric tags: append-only; never reorder.
 		return match self {
 			Next => {

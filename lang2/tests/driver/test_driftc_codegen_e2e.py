@@ -285,7 +285,7 @@ pub trait Destructible {
 }
 
 pub trait Diagnostic {
-	fn to_diag(self: Self) nothrow -> DiagnosticValue;
+	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
 }
 
 pub trait Fn1<A, R> {

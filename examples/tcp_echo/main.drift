@@ -1,0 +1,41 @@
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val listener = net.listen(&addr, t).or_throw();
+	val port = listener.local_port();
+	var server = conc.spawn(| | captures(move listener, copy t) => {
+		return try (| | captures(& listener, copy t) => {
+			val s = net.accept(listener, t).or_throw();
+			var buf = io.buffer(16);
+			val _ = s.read(&mut buf, t).or_throw();
+			val _ = s.write(&buf, t).or_throw();
+			s.close(t).or_throw();
+			return 0;
+		})() catch { 1 };
+	});
+	var caddr = net.socket_addr("127.0.0.1", port);
+	val c = net.connect(&caddr, t).or_throw();
+	var wbuf = io.buffer(5);
+	io.buffer_write(&mut wbuf, 0, cast<Byte>(72));
+	io.buffer_write(&mut wbuf, 1, cast<Byte>(101));
+	io.buffer_write(&mut wbuf, 2, cast<Byte>(108));
+	io.buffer_write(&mut wbuf, 3, cast<Byte>(108));
+	io.buffer_write(&mut wbuf, 4, cast<Byte>(111));
+	val _ = c.write(&wbuf, t).or_throw();
+	var rbuf = io.buffer(5);
+	val _ = c.read(&mut rbuf, t).or_throw();
+	c.close(t).or_throw();
+	val _ = server.join().or_throw();
+	return 0;
+}

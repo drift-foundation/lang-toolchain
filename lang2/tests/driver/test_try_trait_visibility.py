@@ -155,7 +155,7 @@ pub variant MyErr {
 }
 
 	implement core.Diagnostic for MyErr {
-		pub fn to_diag(self: MyErr) nothrow -> DiagnosticValue {
+		pub fn to_diag(self: &MyErr) nothrow -> DiagnosticValue {
 			return match self {
 				Msg(m) => {
 					m.to_diag()

@@ -1,0 +1,30 @@
+module m
+
+import std.core as core;
+import std.io as io;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val opts = io.OpenOptions(read = true, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
+	val t = conc.Duration(millis = 1000);
+	val r = io.open("io_double_close.bin", &opts, t);
+	match r {
+		Ok(f) => {
+			val c1 = f.close(t);
+			match c1 {
+				Ok(_) => { },
+				Err(_) => { return 1; },
+				default => { return 2; }
+			}
+			val c2 = f.close(t);
+			match c2 {
+				Ok(_) => { },
+				Err(_) => { return 3; },
+				default => { return 4; }
+			}
+			return 0;
+		},
+		Err(_) => { return 5; },
+		default => { return 6; }
+	}
+}

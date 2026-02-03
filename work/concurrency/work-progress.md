@@ -123,7 +123,8 @@ Phase 2 runtime (scheduler + reactor + VT lifecycle) complete.
 - Runtime executor now has a queue + worker threads; `exec_submit` enqueues VTs and workers run callbacks (no per‑VT pthread creation).
 - Added test intrinsics for reactor IO (`test_eventfd_*`, `test_timerfd_*`) and e2e tests for IO‑driven unpark.
 - Added internal `std.concurrent.block_on_io` helper (register + park).
-- Dropped public `std.io`/`std.net` block_on_* APIs; read/write now always block (VT‑aware). Internal waits use `std.concurrent.block_on_io`.
+- Dropped public `std.io`/`std.net` block_on_* APIs; read/write/accept/connect/close take explicit timeouts, park VTs internally, and return `WouldBlock` on timeout. Internal waits use `std.concurrent.block_on_io`.
+- std.io/std.net now require explicit `Duration` timeouts for all I/O calls (read/write/accept/connect/close); no implicit infinite waits.
 - NOTE: `concurrent_reactor_eventfd_unpark` currently annotates `var t: VirtualThread<Int>` due to `spawn` inference failing to infer `T` from lambda return; add a compiler fix and remove these annotations.
 - Added e2e `concurrent_spawn_infers` to lock spawn() inference from lambda return (expected to pass once compiler fix lands).
 - Added e2e `concurrent_spawn_future_capture_infers` to lock capture inference for `spawn_future` inside loops.

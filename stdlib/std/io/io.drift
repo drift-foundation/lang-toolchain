@@ -2,6 +2,7 @@ module std.io
 
 import std.core as core;
 import std.mem as mem;
+import std.concurrent as conc;
 import lang.thread as thread;
 
 export {
@@ -20,6 +21,7 @@ export {
 	buffer_set_len,
 	buffer_write,
 	buffer_read,
+	file_from_fd,
 	open,
 	FILE_MODE_DEFAULT,
 	close,
@@ -38,10 +40,10 @@ pub variant IoError {
 }
 
 implement core.Diagnostic for IoError {
-	pub fn to_diag(self: IoError) nothrow -> DiagnosticValue {
+	pub fn to_diag(self: &IoError) nothrow -> DiagnosticValue {
 		return match self {
 			Errno(code) => {
-				DiagnosticValue::Int(code)
+				DiagnosticValue::Int(*code)
 			},
 			WouldBlock => {
 				DiagnosticValue::Int(-1)
@@ -51,7 +53,8 @@ implement core.Diagnostic for IoError {
 }
 
 pub struct File {
-	fd: Int
+	fd: Int,
+	closed: core.Cell<Bool>
 }
 
 pub struct OpenOptions {
@@ -65,7 +68,7 @@ pub struct OpenOptions {
 
 @test_build_only
 pub fn file_from_fd(fd: Int) nothrow -> File {
-	return File(fd = fd);
+	return File(fd = fd, closed = core.cell(false));
 }
 
 pub struct Buffer {
@@ -84,22 +87,38 @@ pub const FILE_MODE_DEFAULT: Int = 420;
 pub const IO_EINTR: Int = 4;
 pub const IO_EAGAIN: Int = 11;
 
+fn _deadline_from_timeout(timeout: conc.Duration) nothrow -> Int {
+	if timeout.millis <= 0 {
+		return 0;
+	}
+	return thread.now_ms() + timeout.millis;
+}
+
+fn _remaining_ms(deadline_ms: Int) nothrow -> Int {
+	if deadline_ms <= 0 {
+		return 0;
+	}
+	val now = thread.now_ms();
+	if now >= deadline_ms {
+		return 0;
+	}
+	return deadline_ms - now;
+}
+
 fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
+	if deadline_ms <= 0 {
+		return;
+	}
 	val vt = thread.vt_current();
 	if vt == 0 {
-		if deadline_ms > 0 {
-			thread.vt_park_until(deadline_ms);
-		} else {
-			thread.vt_park_until(1);
+		val remaining = _remaining_ms(deadline_ms);
+		if remaining > 0 {
+			thread.vt_park_until(remaining);
 		}
 		return;
 	}
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
-	if deadline_ms > 0 {
-		thread.vt_park_until(deadline_ms);
-	} else {
-		thread.vt_park(0);
-	}
+	thread.vt_park_until(deadline_ms);
 	return;
 }
 
@@ -150,8 +169,9 @@ pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
 	return mem.read<type Byte>(&mut self.buf, i);
 }
 
-pub fn open(path: String, opts: &OpenOptions) nothrow -> core.Result<File, IoError> {
+pub fn open(path: String, opts: &OpenOptions, timeout: conc.Duration) nothrow -> core.Result<File, IoError> {
 	var flags = FILE_READ_ONLY;
+	val deadline = _deadline_from_timeout(timeout);
 	if opts.read and opts.write {
 		flags = FILE_READ_WRITE;
 	} else {
@@ -170,38 +190,80 @@ pub fn open(path: String, opts: &OpenOptions) nothrow -> core.Result<File, IoErr
 	if opts.append {
 		flags = flags + FILE_APPEND;
 	}
-	val fd = thread.io_open(path, cast<Int>(flags), opts.mode);
-	if fd < 0 {
-		return core.Result::Err(IoError::Errno(thread.io_errno()));
+	while true {
+		val fd = thread.io_open(path, cast<Int>(flags), opts.mode);
+		if fd >= 0 {
+			return core.Result::Ok(File(fd = fd, closed = core.cell(false)));
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			thread.vt_park_until(remaining);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
 	}
-	return core.Result::Ok(File(fd = fd));
+	return core.Result::Err(IoError::Errno(-1));
 }
 
-pub fn close(self: &File) nothrow -> core.Result<Void, IoError> {
-	val r = thread.io_close(self.fd);
-	if r < 0 {
-		return core.Result::Err(IoError::Errno(thread.io_errno()));
+pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
+	if self.closed.get() {
+		return core.Result::Ok(core.void_value());
 	}
-	return core.Result::Ok(core.void_value());
+	val deadline = _deadline_from_timeout(timeout);
+	while true {
+		val r = thread.io_close(self.fd);
+		if r >= 0 {
+			self.closed.set(true);
+			return core.Result::Ok(core.void_value());
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			thread.vt_park_until(remaining);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
+	}
+	return core.Result::Err(IoError::Errno(-1));
 }
 
 implement File {
-	pub fn close(self: &File) nothrow -> core.Result<Void, IoError> {
-		return close(self);
+	pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
+		return close(self, timeout);
 	}
 
-	pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
-		return read(self, buf);
+	pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+		return read(self, buf, timeout);
 	}
 
-	pub fn write(self: &File, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
-		return write(self, buf);
+	pub fn write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+		return write(self, buf, timeout);
 	}
 }
 
-pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
+	val deadline = _deadline_from_timeout(timeout);
 	while true {
 		val n = thread.io_read(self.fd, ptr, len);
 		if n >= 0 {
@@ -213,12 +275,19 @@ pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> 
 			continue;
 		}
 		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(1);
+				thread.vt_park_until(remaining);
 				continue;
 			}
-			_block_on_io(self.fd, 1, 0);
+			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
 		return core.Result::Err(IoError::Errno(err));
@@ -226,9 +295,10 @@ pub fn read(self: &File, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> 
 	return core.Result::Err(IoError::Errno(-1));
 }
 
-pub fn write(self: &File, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+pub fn write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
+	val deadline = _deadline_from_timeout(timeout);
 	while true {
 		val n = thread.io_write(self.fd, ptr, len);
 		if n >= 0 {
@@ -239,12 +309,19 @@ pub fn write(self: &File, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
 			continue;
 		}
 		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::WouldBlock());
+			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(1);
+				thread.vt_park_until(remaining);
 				continue;
 			}
-			_block_on_io(self.fd, 4, 0);
+			_block_on_io(self.fd, 4, deadline);
 			continue;
 		}
 		return core.Result::Err(IoError::Errno(err));

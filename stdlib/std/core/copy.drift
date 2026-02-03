@@ -50,7 +50,7 @@ pub trait Destructible {
 }
 
 pub trait Diagnostic {
-	fn to_diag(self: Self) nothrow -> DiagnosticValue;
+	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
 }
 
 pub trait Try<T> {
@@ -109,7 +109,7 @@ implement<OkT, ErrT> Try<OkT> for &Result<OkT, ErrT> require OkT is Copy, ErrT i
 	pub fn into_try(self: &Result<OkT, ErrT>) -> OkT {
 		match self {
 			Ok(v) => { return *v; },
-			Err(err) => { throw std.err:ResultError(dv = (*err).to_diag()); },
+			Err(err) => { throw std.err:ResultError(dv = err.to_diag()); },
 			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
 		}
 	}
@@ -220,6 +220,9 @@ implement Copy for Byte {
 implement Copy for String {
 }
 
+implement Copy for DiagnosticValue {
+}
+
 implement Copy for Void {
 }
 
@@ -233,44 +236,38 @@ implement<T> Copy for mem.Ptr<T> {
 }
 
 implement Diagnostic for Int {
-	pub fn to_diag(self: Int) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(self);
-	}
-}
-
-implement<T> Diagnostic for &T require T is Diagnostic {
-	pub fn to_diag(self: &T) nothrow -> DiagnosticValue {
-		return (*self).to_diag();
+	pub fn to_diag(self: &Int) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Int(*self);
 	}
 }
 
 implement Diagnostic for Uint {
-	pub fn to_diag(self: Uint) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(self);
+	pub fn to_diag(self: &Uint) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Int(*self);
 	}
 }
 
 implement Diagnostic for Bool {
-	pub fn to_diag(self: Bool) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Bool(self);
+	pub fn to_diag(self: &Bool) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Bool(*self);
 	}
 }
 
 implement Diagnostic for Float {
-	pub fn to_diag(self: Float) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Float(self);
+	pub fn to_diag(self: &Float) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Float(*self);
 	}
 }
 
 implement Diagnostic for String {
-	pub fn to_diag(self: String) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self);
+	pub fn to_diag(self: &String) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(*self);
 	}
 }
 
 implement Diagnostic for DiagnosticValue {
-	pub fn to_diag(self: DiagnosticValue) nothrow -> DiagnosticValue {
-		return move self;
+	pub fn to_diag(self: &DiagnosticValue) nothrow -> DiagnosticValue {
+		return *self;
 	}
 }
 

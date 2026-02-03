@@ -109,6 +109,7 @@
 - std.io: added OpenOptions, WouldBlock error, and Result-returning block_on_*; updated std_io e2e cases and removed fd exposure.
 - std.net: replaced fd-based test constructors with test-only helpers and updated std_net e2e block_on tests.
 - std.net read/write roundtrip test: use Byte literal instead of string_byte_at to avoid borrow-from-rvalue (string_byte_at requires &String place).
+- std.io: make File.close idempotent; add e2e std_io_double_close_ok.
 
 ### Result.on_error (throwing lambdas)
 - Added FnThrow0/1/2 traits and Result.on_error in std.core; on_error uses FnThrow1<E, T> and returns Ok(v) or calls the throwing handler on Err.

@@ -27,9 +27,11 @@ Currently supported:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
 from typing import List, Set, Mapping, Optional
 
 from lang2.driftc import stage1 as H
+from lang2.driftc import debug as drift_debug
 from lang2.driftc.stage1 import closures as C
 from lang2.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang2.driftc.stage1.call_info import (
@@ -409,21 +411,27 @@ class HIRToMIR:
 			root = getattr(expr.base, "binding_id", None)
 			if root is None:
 				return None
-			if int(root) in self._local_binding_ids:
-				return None
 			fields: list[str] = []
 			for proj in expr.projections:
 				if isinstance(proj, H.HPlaceField):
 					fields.append(proj.name)
 				else:
 					return None
-			return C.HCaptureKey(root_local=int(root), proj=tuple(C.HCaptureProj(field=f) for f in fields))
+			key = C.HCaptureKey(root_local=int(root), proj=tuple(C.HCaptureProj(field=f) for f in fields))
+			if self._lambda_capture_slots is not None and key in self._lambda_capture_slots:
+				return key
+			if int(root) in self._local_binding_ids:
+				return None
+			return key
 		if isinstance(expr, H.HVar):
 			if expr.binding_id is None:
 				return None
+			key = C.HCaptureKey(root_local=int(expr.binding_id), proj=())
+			if self._lambda_capture_slots is not None and key in self._lambda_capture_slots:
+				return key
 			if int(expr.binding_id) in self._local_binding_ids:
 				return None
-			return C.HCaptureKey(root_local=int(expr.binding_id), proj=())
+			return key
 		if isinstance(expr, H.HField):
 			fields: list[str] = []
 			cur = expr
@@ -432,14 +440,17 @@ class HIRToMIR:
 				cur = cur.subject
 			if not isinstance(cur, H.HVar):
 				return None
-			if cur.binding_id is not None and int(cur.binding_id) in self._local_binding_ids:
-				return None
 			if cur.binding_id is None:
 				return None
-			return C.HCaptureKey(
+			key = C.HCaptureKey(
 				root_local=int(cur.binding_id),
 				proj=tuple(C.HCaptureProj(field=f) for f in reversed(fields)),
 			)
+			if self._lambda_capture_slots is not None and key in self._lambda_capture_slots:
+				return key
+			if cur.binding_id is not None and int(cur.binding_id) in self._local_binding_ids:
+				return None
+			return key
 		return None
 
 	def _expr_from_capture_key(self, key: C.HCaptureKey) -> H.HExpr:
@@ -920,6 +931,10 @@ class HIRToMIR:
 				return tid
 			return None
 
+		if drift_debug.enabled("stage2"):
+			import sys
+			target_desc = _format_type_expr(getattr(expr, "target_type_expr", None))
+			print(f"[drift:debug] HCast node={expr.node_id} target={target_desc}", file=sys.stderr)
 		target_ty = self._expr_types.get(expr.node_id) if self._typed_mode != "none" else None
 		if self._typed_mode == "strict" and target_ty is None:
 			target = _format_type_expr(getattr(expr, "target_type_expr", None))
@@ -935,8 +950,10 @@ class HIRToMIR:
 			else:
 				target_def = self._type_table.get(target_ty)
 				resolved_def = self._type_table.get(resolved_target)
-				if target_def.kind is TypeKind.SCALAR and resolved_def.kind is TypeKind.SCALAR:
-					if target_def.name != resolved_def.name:
+				if resolved_def.kind is TypeKind.SCALAR:
+					if target_def.kind is not TypeKind.SCALAR:
+						target_ty = resolved_target
+					elif target_def.name != resolved_def.name:
 						target_ty = resolved_target
 		if target_ty is None:
 			if self._typed_mode == "strict":
@@ -962,9 +979,35 @@ class HIRToMIR:
 		if isinstance(expr.value, H.HLiteralInt):
 			td = self._type_table.get(target_ty)
 			if td.kind is TypeKind.SCALAR and td.name in ("Int", "Uint", "Byte"):
+				if td.name == "Byte":
+					if drift_debug.enabled("stage2"):
+						import sys
+						print(f"[drift:debug] cast<Byte> literal {expr.value.value}", file=sys.stderr)
+					dest = self.b.new_temp()
+					self.b.emit(M.ConstByte(dest=dest, value=expr.value.value))
+					self._local_types[dest] = self._byte_type
+					return dest
 				val = self.lower_expr(expr.value, expected_type=target_ty)
 				return val
+		else:
+			td = self._type_table.get(target_ty)
+			if td.kind is TypeKind.SCALAR and td.name == "Byte" and drift_debug.enabled("stage2"):
+				import sys
+				print(f"[drift:debug] cast<Byte> nonliteral value={type(expr.value).__name__}", file=sys.stderr)
 		val = self.lower_expr(expr.value)
+		val_ty = self._local_types.get(val)
+		if drift_debug.enabled("stage2"):
+			import sys
+			print(f"[drift:debug] HCast node={expr.node_id} val_ty={val_ty} target_ty={target_ty}", file=sys.stderr)
+		if val_ty is not None and val_ty != target_ty:
+			if _is_scalar_cast_type(val_ty) and _is_scalar_cast_type(target_ty):
+				if drift_debug.enabled("stage2"):
+					import sys
+					print(f"[drift:debug] HCast emit CastScalar node={expr.node_id}", file=sys.stderr)
+				dest = self.b.new_temp()
+				self.b.emit(M.CastScalar(dest=dest, value=val, src_ty=val_ty, dst_ty=target_ty))
+				self._local_types[dest] = target_ty
+				return dest
 		if src_ty == target_ty:
 			return val
 		if not _is_scalar_cast_type(src_ty) or not _is_scalar_cast_type(target_ty):
@@ -2200,6 +2243,42 @@ class HIRToMIR:
 
 	def _lower_lambda_immediate_call(self, lam: H.HLambda, args: list[H.HExpr]) -> M.ValueId:
 		"""Lower an immediate-call lambda via env + hidden function."""
+		lam = copy.deepcopy(lam)
+		name_to_binding_id: dict[str, int] = {}
+		if self._binding_names:
+			for bid, name in self._binding_names.items():
+				name_to_binding_id[name] = int(bid)
+		if name_to_binding_id:
+			def _apply_binding_ids(obj: object) -> None:
+				if obj is None:
+					return
+				if isinstance(obj, H.HVar):
+					if getattr(obj, "binding_id", None) is None and obj.name in name_to_binding_id:
+						obj.binding_id = name_to_binding_id[obj.name]
+				elif isinstance(obj, H.HPlaceExpr):
+					base = obj.base
+					if isinstance(base, H.HVar):
+						if getattr(base, "binding_id", None) is None and base.name in name_to_binding_id:
+							base.binding_id = name_to_binding_id[base.name]
+				if isinstance(obj, H.HExpr):
+					for child in obj.__dict__.values():
+						_apply_binding_ids(child)
+				elif isinstance(obj, H.HStmt):
+					for child in obj.__dict__.values():
+						_apply_binding_ids(child)
+				elif isinstance(obj, H.HBlock):
+					for stmt in obj.statements:
+						_apply_binding_ids(stmt)
+				elif isinstance(obj, list):
+					for item in obj:
+						_apply_binding_ids(item)
+				elif isinstance(obj, dict):
+					for item in obj.values():
+						_apply_binding_ids(item)
+			if lam.body_expr is not None:
+				_apply_binding_ids(lam.body_expr)
+			if lam.body_block is not None:
+				_apply_binding_ids(lam.body_block)
 		if getattr(lam, "explicit_captures", None) is not None:
 			explicit_list: list[C.HCapture] = []
 			kind_map = {
@@ -2248,7 +2327,7 @@ class HIRToMIR:
 				env_name = f"__lambda_env_{lambda_id}"
 			field_names = [f"c{i}" for i in range(len(lam.captures))]
 			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
-			env_local = f"__env_{lambda_id}"
+			env_local = f"__imm_env_{lambda_id}"
 			self.b.ensure_local(env_local)
 			env_vals: list[M.ValueId] = []
 			for cap in lam.captures:
@@ -5810,6 +5889,12 @@ class HIRToMIR:
 		base_name = self._canonical_local(getattr(expr.base, "binding_id", None), expr.base.name)
 		self.b.ensure_local(base_name)
 		cur_ty = self._infer_expr_type(expr.base)
+		if cur_ty is None and isinstance(expr.base, H.HVar) and expr.base.binding_id is not None:
+			bid_ty = self._binding_types.get(int(expr.base.binding_id))
+			if bid_ty is not None:
+				cur_ty = bid_ty
+		if cur_ty is None and not expr.projections:
+			cur_ty = self._type_table.ensure_unknown()
 		if cur_ty is None:
 			raise AssertionError("address-of place base type unknown in MIR lowering (checker bug)")
 		addr = self.b.new_temp()

@@ -1,0 +1,20 @@
+module m
+
+import std.concurrent as conc;
+import std.core as core;
+import std.err;
+
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	var x: Int = 41;
+	var t = conc.spawn(| | captures(move x) => {
+		return try (| | captures(move x) => { return x + 1; })() catch { 0 };
+	});
+	val r = t.join().or_throw();
+	return r;
+}

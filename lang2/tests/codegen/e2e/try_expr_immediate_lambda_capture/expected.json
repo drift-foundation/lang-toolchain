@@ -1,0 +1,6 @@
+{
+  "description": "e2e: try expr around immediate lambda capture inside callback",
+  "exit_code": 42,
+  "stdout": "",
+  "stderr": ""
+}

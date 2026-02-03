@@ -1,0 +1,32 @@
+module m
+
+import std.concurrent as conc;
+import std.net as net;
+import std.io as io;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val io_t = conc.Duration(millis = 1000);
+	val br = net.udp_bind(&addr);
+	match br {
+		Ok(s) => {
+			var buf = io.buffer(8);
+			var from = net.socket_addr("127.0.0.1", 0);
+			val t = conc.Duration(millis = 1);
+			val r = s.recv_from(&mut from, &mut buf, t);
+			match r {
+				Ok(_) => { return 2; },
+				Err(e) => {
+					match e {
+						WouldBlock => { return 0; },
+						Errno(_) => { return 3; },
+						default => { return 4; }
+					}
+				},
+				default => { return 5; }
+			}
+		},
+		Err(_) => { return 9; },
+		default => { return 10; }
+	}
+}

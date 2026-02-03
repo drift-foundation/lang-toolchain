@@ -18,6 +18,7 @@ The runner:
 from __future__ import annotations
 
 import argparse
+import traceback
 import json
 import os
 import shutil
@@ -119,7 +120,7 @@ def _run_ir_with_clang(
 	return run_res.returncode, run_res.stdout, run_res.stderr
 
 
-def _run_case(case_dir: Path, timeout_s: int) -> str:
+def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	expected_path = case_dir / "expected.json"
 	source_path = case_dir / "main.drift"
 	drift_files = sorted(case_dir.rglob("*.drift"))
@@ -286,6 +287,9 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 				if exp.get("message_contains") and exp["message_contains"] not in msg:
 					return f"FAIL (missing expected diagnostic; saw exception {msg})"
 			return "ok"
+		if debug:
+			trace = traceback.format_exc()
+			return f"FAIL (worker exception: {err})\n{trace}"
 		raise
 
 	# If the checker produced diagnostics and the test expects them, validate and
@@ -369,24 +373,33 @@ def _run_case(case_dir: Path, timeout_s: int) -> str:
 		return "ok"
 
 	if exit_code != expected.get("exit_code", 0):
-		return f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
+		msg = f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
 	if stdout != expected.get("stdout", ""):
-		return "FAIL (stdout mismatch)"
+		msg = "FAIL (stdout mismatch)"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
 	if stderr != expected.get("stderr", ""):
-		return "FAIL (stderr mismatch)"
+		msg = "FAIL (stderr mismatch)"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
 	return "ok"
 
 
-def _run_case_with_timeout(case_dir: Path, timeout_s: int) -> str:
+def _run_case_with_timeout(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	if not timeout_s:
-		return _run_case(case_dir, timeout_s)
+		return _run_case(case_dir, timeout_s, debug=debug)
 	old_handler = None
 	def _on_timeout(signum, frame) -> None:
 		raise TimeoutError(f"timeout after {timeout_s}s")
 	old_handler = signal.signal(signal.SIGALRM, _on_timeout)
 	signal.alarm(timeout_s)
 	try:
-		return _run_case(case_dir, timeout_s)
+		return _run_case(case_dir, timeout_s, debug=debug)
 	except TimeoutError:
 		return f"FAIL (timeout after {timeout_s}s)"
 	finally:
@@ -395,7 +408,7 @@ def _run_case_with_timeout(case_dir: Path, timeout_s: int) -> str:
 			signal.signal(signal.SIGALRM, old_handler)
 
 
-def _run_case_worker(case_dir: str, timeout_s: int) -> tuple[str, str]:
+def _run_case_worker(case_dir: str, timeout_s: int, debug: bool) -> tuple[str, str]:
 	path = Path(case_dir)
 	old_handler = None
 	if timeout_s:
@@ -404,10 +417,13 @@ def _run_case_worker(case_dir: str, timeout_s: int) -> tuple[str, str]:
 		old_handler = signal.signal(signal.SIGALRM, _on_timeout)
 		signal.alarm(timeout_s)
 	try:
-		status = _run_case(path, timeout_s)
+		status = _run_case(path, timeout_s, debug=debug)
 	except TimeoutError:
 		return path.name, f"FAIL (timeout after {timeout_s}s)"
 	except Exception as err:  # pragma: no cover - worker guardrail
+		if debug:
+			trace = traceback.format_exc()
+			return path.name, f"FAIL (worker exception: {err})\n{trace}"
 		return path.name, f"FAIL (worker exception: {err})"
 	finally:
 		if timeout_s:
@@ -417,10 +433,10 @@ def _run_case_worker(case_dir: str, timeout_s: int) -> tuple[str, str]:
 	return path.name, status
 
 
-def _run_case_chunk(case_dirs: list[str], timeout_s: int) -> list[tuple[str, str]]:
+def _run_case_chunk(case_dirs: list[str], timeout_s: int, debug: bool) -> list[tuple[str, str]]:
 	results: list[tuple[str, str]] = []
 	for case_dir in case_dirs:
-		results.append(_run_case_worker(case_dir, timeout_s))
+		results.append(_run_case_worker(case_dir, timeout_s, debug))
 	return results
 
 
@@ -454,6 +470,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 		type=int,
 		default=30,
 		help="Per-case timeout in seconds (default: 30)",
+	)
+	ap.add_argument(
+		"--debug",
+		action="store_true",
+		help="Emit detailed diagnostics on failures (stdout/stderr/tracebacks)",
 	)
 	ap.add_argument(
 		"--summarize",
@@ -493,7 +514,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 			return 2
 	if jobs == 1 or len(case_dirs) <= 1:
 		for case_dir in case_dirs:
-			status = _run_case_with_timeout(case_dir, args.timeout)
+			status = _run_case_with_timeout(case_dir, args.timeout, debug=args.debug)
 			print(f"{case_dir.name}: {status}")
 			if status.startswith("FAIL"):
 				failures.append((case_dir, status))
@@ -508,7 +529,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 		for i in range(0, len(case_dirs), chunk_size):
 			chunks.append([str(p) for p in case_dirs[i : i + chunk_size]])
 		with ProcessPoolExecutor(max_workers=jobs) as executor:
-			futures = [executor.submit(_run_case_chunk, chunk, args.timeout) for chunk in chunks]
+			futures = [executor.submit(_run_case_chunk, chunk, args.timeout, args.debug) for chunk in chunks]
 			if args.ordered:
 				results: dict[str, str] = {}
 				next_idx = 0

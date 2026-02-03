@@ -69,7 +69,7 @@ pub variant ConcurrencyError {
 }
 
 implement core.Diagnostic for ConcurrencyError {
-	pub fn to_diag(self: ConcurrencyError) nothrow -> DiagnosticValue {
+	pub fn to_diag(self: &ConcurrencyError) nothrow -> DiagnosticValue {
 		return match self {
 			Timeout => {
 				DiagnosticValue::Int(-1)

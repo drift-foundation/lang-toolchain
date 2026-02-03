@@ -5,25 +5,26 @@ import std.net as net;
 
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
-	var lr = net.listen(&addr);
+	val io_t = conc.Duration(millis = 1000);
+	var lr = net.listen(&addr, io_t);
 	match lr {
 		Ok(l) => {
 			val port = l.test_local_port();
-			var t = conc.spawn(| | captures(copy port) => {
+			var t = conc.spawn(| | captures(copy port, copy io_t) => {
 				var caddr = net.socket_addr("127.0.0.1", port);
-				var cr = net.connect(&caddr);
+				var cr = net.connect(&caddr, io_t);
 				match cr {
 					Ok(s) => {
-						val _ = s.close();
+						val _ = s.close(io_t);
 						return 1;
 					},
 					Err(_) => { return 2; },
 					default => { return 3; }
 				}
 			});
-			var ar = net.accept(&l);
+			var ar = net.accept(&l, io_t);
 			match ar {
-				Ok(s2) => { val _ = s2.close(); },
+				Ok(s2) => { val _ = s2.close(io_t); },
 				Err(_) => { return 4; },
 				default => { return 5; }
 			}
