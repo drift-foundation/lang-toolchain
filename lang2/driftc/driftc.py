@@ -3772,7 +3772,6 @@ def compile_stubbed_funcs(
 		preseed_binding_mutable: dict[int, bool] = {}
 		preseed_binding_place_kind: dict[int, PlaceKind] = {}
 		remapped_capture_map: dict[C.HCaptureKey, int] = {}
-		cap_name_by_id: dict[int, str] = {}
 		if origin_typed is not None and lam.explicit_captures:
 			name_to_bid: dict[str, int] = {}
 			for bid, name in origin_typed.binding_names.items():
@@ -3782,7 +3781,6 @@ def compile_stubbed_funcs(
 					cap.binding_id = name_to_bid[cap.name]
 		for cap in lam.explicit_captures or []:
 			if getattr(cap, "binding_id", None) is not None and cap.name:
-				cap_name_by_id[int(cap.binding_id)] = cap.name
 				preseed_binding_names.setdefault(int(cap.binding_id), cap.name)
 			elif cap.name:
 				preseed_scope_env.setdefault(cap.name, shared_type_table.ensure_unknown())
@@ -3798,11 +3796,6 @@ def compile_stubbed_funcs(
 				orig_bid = rev_capture_id_map.get(bid, bid)
 				cap_name = origin_typed.binding_names.get(orig_bid, f"__cap_{orig_bid}")
 				cap_ty = origin_typed.binding_types.get(orig_bid, shared_type_table.ensure_unknown())
-				if origin_mir is not None and cap_ty == shared_type_table.ensure_unknown():
-					lookup_name = cap_name_by_id.get(bid, cap_name)
-					mir_ty = origin_mir.local_types.get(lookup_name)
-					if mir_ty is not None:
-						cap_ty = mir_ty
 				if spec.env_field_types is not None:
 					slot = remapped_capture_map.get(cap.key)
 					if slot is not None and slot < len(spec.env_field_types):
@@ -3818,25 +3811,11 @@ def compile_stubbed_funcs(
 			for bid, name in preseed_binding_names.items():
 				ty = preseed_binding_types.get(bid, unknown_ty)
 				preseed_scope_env.setdefault(name, ty)
-		if preseed_binding_names:
-			capture_name_to_id = {name: bid for bid, name in preseed_binding_names.items()}
-			_apply_capture_names_post(lambda_body, capture_name_to_id)
-		if capture_name_to_id:
-			for name, bid in capture_name_to_id.items():
-				preseed_scope_bindings.setdefault(name, int(bid))
 		for bid, name in preseed_binding_names.items():
 			preseed_scope_bindings.setdefault(name, int(bid))
-		if preseed_scope_bindings:
-			_apply_capture_names_post(lambda_body, preseed_scope_bindings)
 		if drift_debug.enabled("stage2"):
 			import sys
 			print(f"[drift:debug] hidden lambda {spec.fn_id} origin={spec.origin_fn_id} captures={len(lam.captures or [])} preseed_bindings={sorted(preseed_binding_types.keys())}", file=sys.stderr)
-		elif origin_typed is not None:
-			name_to_bid: dict[str, int] = {}
-			for bid, name in origin_typed.binding_names.items():
-				name_to_bid[name] = int(bid)
-			if name_to_bid:
-				_apply_capture_names_post(lambda_body, name_to_bid)
 		mod_name = spec.fn_id.module or "main"
 		current_mod = _module_id_with_visibility(mod_name)
 		visible_mods = None
@@ -3978,26 +3957,16 @@ def compile_stubbed_funcs(
 						if idx >= len(inst.field_types):
 							continue
 						bid = int(cap.key.root_local)
-						name = preseed_binding_names.get(bid, cap_name_by_id.get(bid, f"__b{bid}"))
+						name = preseed_binding_names.get(bid, f"__b{bid}")
 						local_name = lower._canonical_local(bid, name)
 						cur_ty = lower._local_types.get(local_name)
 						ty = inst.field_types[idx]
 						if ty is not None and ty != shared_type_table.ensure_unknown():
 							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
 								lower._local_types[local_name] = ty
-				if cap_name_by_id:
-					cap_names = [n for n in builder.func.locals if n in cap_name_by_id.values()]
-					for idx, name in enumerate(cap_names):
-						if idx >= len(inst.field_types):
-							continue
-						cur_ty = lower._local_types.get(name)
-						ty = inst.field_types[idx]
-						if ty is not None and ty != shared_type_table.ensure_unknown():
-							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
-								lower._local_types[name] = ty
 				for key, slot in remapped_capture_map.items():
 					bid = int(key.root_local)
-					name = preseed_binding_names.get(bid, cap_name_by_id.get(bid, f"__b{bid}"))
+					name = preseed_binding_names.get(bid, f"__b{bid}")
 					local_name = lower._canonical_local(bid, name)
 					cur_ty = lower._local_types.get(local_name)
 					if slot < len(inst.field_types):

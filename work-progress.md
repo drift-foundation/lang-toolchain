@@ -145,3 +145,7 @@
 ### Implicit Fn → Callback coercion
 - Added e2e: `concurrent_spawn_cb_implicit_callback` to cover implicit coercion at callsite.
 - Added e2e: `implicit_callback_borrowed_capture_rejected` to ensure borrowed captures are still rejected when coercion is implicit.
+
+### Hidden lambda capture typing (follow-up)
+- Remove name-based capture typing in hidden-lambda preseed; use capture slots/binding ids only (no fallback to local-name lookup).
+  - Dropped origin MIR local-name fallback, removed capture-name rebinding in preseed, and stopped using capture-name maps to seed types.
