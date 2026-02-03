@@ -251,12 +251,13 @@ def test_call_abi_return_types_extended() -> None:
 	int_ty = table.ensure_int()
 	void_ty = table.ensure_void()
 	obj_init = H.HLet(name="obj", value=H.HLiteralInt(0))
+	obj_init.binding_id = 0
 	call_throw = H.HCall(fn=H.HVar("may_throw"), args=[H.HLiteralInt(1)])
 	call_void = H.HCall(fn=H.HVar("nothrow_void"), args=[])
 	call_throw_void = H.HCall(fn=H.HVar("may_throw_void"), args=[])
 	call_inner = H.HCall(fn=H.HVar("inner"), args=[])
 	call_outer = H.HCall(fn=H.HVar("outer"), args=[call_inner])
-	method_call = H.HMethodCall(receiver=H.HVar("obj"), method_name="m", args=[])
+	method_call = H.HMethodCall(receiver=H.HVar("obj", binding_id=0), method_name="m", args=[])
 	block = H.HBlock(
 		statements=[
 			obj_init,
@@ -330,8 +331,8 @@ def test_invoke_call_abi_return_types() -> None:
 	table = TypeTable()
 	int_ty = table.ensure_int()
 	void_ty = table.ensure_void()
-	call_throw = H.HInvoke(callee=H.HVar("fp1"), args=[H.HLiteralInt(1)])
-	call_void = H.HInvoke(callee=H.HVar("fp2"), args=[])
+	call_throw = H.HInvoke(callee=H.HVar("fp1", binding_id=0), args=[H.HLiteralInt(1)])
+	call_void = H.HInvoke(callee=H.HVar("fp2", binding_id=1), args=[])
 	block = H.HBlock(
 		statements=[
 			H.HExprStmt(expr=call_throw),
@@ -374,8 +375,9 @@ def test_call_target_uses_canonical_symbol() -> None:
 	table = TypeTable()
 	int_ty = table.ensure_int()
 	obj_init = H.HLet(name="obj", value=H.HLiteralInt(0))
+	obj_init.binding_id = 0
 	free_call = H.HCall(fn=H.HVar("foo"), args=[H.HLiteralInt(1)])
-	method_call = H.HMethodCall(receiver=H.HVar("obj"), method_name="m", args=[])
+	method_call = H.HMethodCall(receiver=H.HVar("obj", binding_id=0), method_name="m", args=[])
 	block = H.HBlock(statements=[obj_init, H.HExprStmt(expr=free_call), H.HExprStmt(expr=method_call)])
 	assign_node_ids(block)
 	assign_callsite_ids(block)

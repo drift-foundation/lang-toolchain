@@ -1122,6 +1122,8 @@ class HIRToMIR:
 				self.b.emit(M.ConstFloat(dest=dest, value=float(val)))
 				return dest
 			raise AssertionError("unsupported const type reached MIR lowering (checker/package bug)")
+		if self._typed_mode == "strict" and expr.binding_id is None and expr.module_id is None:
+			raise AssertionError("typed_mode strict: missing binding_id for local read (checker bug)")
 		if self._lambda_capture_slots is not None:
 			key = self._capture_key_for_expr(expr)
 			if key is not None and key in self._lambda_capture_slots:
@@ -2244,41 +2246,6 @@ class HIRToMIR:
 	def _lower_lambda_immediate_call(self, lam: H.HLambda, args: list[H.HExpr]) -> M.ValueId:
 		"""Lower an immediate-call lambda via env + hidden function."""
 		lam = copy.deepcopy(lam)
-		name_to_binding_id: dict[str, int] = {}
-		if self._binding_names:
-			for bid, name in self._binding_names.items():
-				name_to_binding_id[name] = int(bid)
-		if name_to_binding_id:
-			def _apply_binding_ids(obj: object) -> None:
-				if obj is None:
-					return
-				if isinstance(obj, H.HVar):
-					if getattr(obj, "binding_id", None) is None and obj.name in name_to_binding_id:
-						obj.binding_id = name_to_binding_id[obj.name]
-				elif isinstance(obj, H.HPlaceExpr):
-					base = obj.base
-					if isinstance(base, H.HVar):
-						if getattr(base, "binding_id", None) is None and base.name in name_to_binding_id:
-							base.binding_id = name_to_binding_id[base.name]
-				if isinstance(obj, H.HExpr):
-					for child in obj.__dict__.values():
-						_apply_binding_ids(child)
-				elif isinstance(obj, H.HStmt):
-					for child in obj.__dict__.values():
-						_apply_binding_ids(child)
-				elif isinstance(obj, H.HBlock):
-					for stmt in obj.statements:
-						_apply_binding_ids(stmt)
-				elif isinstance(obj, list):
-					for item in obj:
-						_apply_binding_ids(item)
-				elif isinstance(obj, dict):
-					for item in obj.values():
-						_apply_binding_ids(item)
-			if lam.body_expr is not None:
-				_apply_binding_ids(lam.body_expr)
-			if lam.body_block is not None:
-				_apply_binding_ids(lam.body_block)
 		if getattr(lam, "explicit_captures", None) is not None:
 			explicit_list: list[C.HCapture] = []
 			kind_map = {
@@ -5886,6 +5853,8 @@ class HIRToMIR:
 				)
 				return addr, field_ty
 		# Canonical place expression (stage1→stage2 boundary).
+		if self._typed_mode == "strict" and isinstance(expr.base, H.HVar) and expr.base.binding_id is None:
+			raise AssertionError("typed_mode strict: missing binding_id for place base (checker bug)")
 		base_name = self._canonical_local(getattr(expr.base, "binding_id", None), expr.base.name)
 		self.b.ensure_local(base_name)
 		cur_ty = self._infer_expr_type(expr.base)
