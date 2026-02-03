@@ -1,0 +1,10 @@
+module main
+
+fn main() nothrow -> Int {
+	var x = 1;
+	val y = (| | => {
+		var x = 2;
+		return (| | captures(copy x) => { return x; })();
+	})();
+	return y;
+}

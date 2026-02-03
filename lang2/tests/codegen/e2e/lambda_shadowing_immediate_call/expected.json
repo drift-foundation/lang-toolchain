@@ -1,0 +1,6 @@
+{
+  "description": "e2e: lambda shadowing immediate-call uses inner binding",
+  "exit_code": 2,
+  "stderr": "",
+  "stdout": ""
+}

@@ -3862,8 +3862,7 @@ def compile_stubbed_funcs(
 			type_diags.extend(hidden_typed.diagnostics)
 			continue
 		hidden_typed_fn = hidden_typed.typed_fn
-		if spec.fn_id not in typed_fns_by_id:
-			typed_fns_by_id[spec.fn_id] = hidden_typed_fn
+		typed_fns_by_id[spec.fn_id] = hidden_typed_fn
 		_rewrite_call_targets(hidden_typed_fn, lambda_body)
 		type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
 		hidden_ret_type = spec.return_type_id
