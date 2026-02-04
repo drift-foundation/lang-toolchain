@@ -788,6 +788,14 @@ class StringConcat(MInstr):
 
 
 @dataclass
+class AssertLoc(MInstr):
+	cond: ValueId
+	file: ValueId
+	line: ValueId
+	msg: ValueId
+
+
+@dataclass
 class Call(MInstr):
 	"""
 	dest = fn(args...) (plain function call; dest may be None for void returns).
@@ -1071,6 +1079,7 @@ class MirFunc:
 	blocks: Dict[str, BasicBlock] = field(default_factory=dict)
 	entry: str = "entry"
 	local_types: Dict[str, TypeId] = field(default_factory=dict)
+	debug_local_names: Dict[str, str] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if self.name != function_symbol(self.fn_id):
@@ -1115,6 +1124,7 @@ __all__ = [
 	"StringEq",
 	"StringCmp",
 	"StringConcat",
+	"AssertLoc",
 	"LoadLocal",
 	"AddrOfLocal",
 	"AddrOfArrayElem",

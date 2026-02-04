@@ -301,14 +301,14 @@ class Checker:
 		hir_blocks: Mapping[FunctionId, "H.HBlock"],
 	) -> dict[FunctionId, list[list[CatchArmInfo]]]:
 		"""
-		Normalize HIR blocks and collect catch-arm info uniformly for all callers.
+		Collect catch-arm info uniformly for all callers without mutating HIR.
 
-		This keeps catch validation consistent between the CLI and stub helpers.
+		This keeps catch validation consistent between the CLI and stub helpers
+		without running normalization passes that can reassign node ids.
 		"""
 		catch_arms: dict[FunctionId, list[list[CatchArmInfo]]] = {}
 		for fn_id, block in hir_blocks.items():
-			hir_norm = normalize_hir(block)
-			arms = collect_catch_arms_from_block(hir_norm)
+			arms = collect_catch_arms_from_block(block)
 			if arms:
 				catch_arms[fn_id] = arms
 		return catch_arms

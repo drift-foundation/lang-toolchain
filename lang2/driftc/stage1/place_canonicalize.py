@@ -57,7 +57,14 @@ class PlaceCanonicalizeRewriter:
 	def _rewrite_stmt(self, stmt: H.HStmt) -> List[H.HStmt]:
 		if isinstance(stmt, H.HExprStmt):
 			pfx, expr = self._rewrite_expr(stmt.expr)
-			return pfx + [H.HExprStmt(expr=expr)]
+			return pfx + [H.HExprStmt(expr=expr, loc=stmt.loc)]
+		if isinstance(stmt, H.HAssert):
+			pfx_c, cond = self._rewrite_expr(stmt.cond)
+			if stmt.msg is not None:
+				pfx_m, msg = self._rewrite_expr(stmt.msg)
+			else:
+				pfx_m, msg = [], None
+			return pfx_c + pfx_m + [H.HAssert(cond=cond, msg=msg, loc=stmt.loc)]
 		if isinstance(stmt, H.HThrow):
 			pfx, expr = self._rewrite_expr(stmt.value)
 			return pfx + [H.HThrow(value=expr)]
@@ -70,6 +77,7 @@ class PlaceCanonicalizeRewriter:
 					declared_type_expr=stmt.declared_type_expr,
 					binding_id=stmt.binding_id,
 					is_mutable=stmt.is_mutable,
+					loc=stmt.loc,
 				)
 			]
 		if isinstance(stmt, H.HAssign):
@@ -78,7 +86,7 @@ class PlaceCanonicalizeRewriter:
 			if place is not None:
 				tgt = place
 			pfx_v, val = self._rewrite_expr(stmt.value)
-			return pfx_t + pfx_v + [H.HAssign(target=tgt, value=val)]
+			return pfx_t + pfx_v + [H.HAssign(target=tgt, value=val, loc=stmt.loc)]
 		if hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
 			pfx_t, tgt = self._rewrite_expr(stmt.target)
 			place = place_expr_from_lvalue_expr(tgt)
@@ -92,12 +100,12 @@ class PlaceCanonicalizeRewriter:
 			if stmt.value is None:
 				return [stmt]
 			pfx, expr = self._rewrite_expr(stmt.value)
-			return pfx + [H.HReturn(value=expr)]
+			return pfx + [H.HReturn(value=expr, loc=stmt.loc)]
 		if isinstance(stmt, H.HIf):
 			pfx, cond = self._rewrite_expr(stmt.cond)
 			then_block = self.rewrite_block(stmt.then_block)
 			else_block = self.rewrite_block(stmt.else_block) if stmt.else_block else None
-			return pfx + [H.HIf(cond=cond, then_block=then_block, else_block=else_block)]
+			return pfx + [H.HIf(cond=cond, then_block=then_block, else_block=else_block, loc=stmt.loc)]
 		if isinstance(stmt, H.HLoop):
 			return [H.HLoop(body=self.rewrite_block(stmt.body))]
 		# Block statements introduce a nested statement scope (used by desugarings
@@ -169,6 +177,7 @@ class PlaceCanonicalizeRewriter:
 				type_args=getattr(expr, "type_args", None),
 				callsite_id=getattr(expr, "callsite_id", None),
 				origin=getattr(expr, "origin", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, getattr(H, "HInvoke", ())):
 			_, callee = self._rewrite_expr(expr.callee)
@@ -185,6 +194,7 @@ class PlaceCanonicalizeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HMethodCall):
 			_, recv = self._rewrite_expr(expr.receiver)
@@ -202,6 +212,7 @@ class PlaceCanonicalizeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HField):
 			_, subj = self._rewrite_expr(expr.subject)

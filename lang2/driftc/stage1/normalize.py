@@ -32,11 +32,14 @@ class DVInitRewriter:
 
 	def _rewrite_stmt(self, stmt: H.HStmt) -> H.HStmt:
 		if isinstance(stmt, H.HExprStmt):
-			return H.HExprStmt(expr=self._rewrite_expr(stmt.expr))
+			return H.HExprStmt(expr=self._rewrite_expr(stmt.expr), loc=stmt.loc)
+		if isinstance(stmt, H.HAssert):
+			msg = self._rewrite_expr(stmt.msg) if stmt.msg is not None else None
+			return H.HAssert(cond=self._rewrite_expr(stmt.cond), msg=msg, loc=stmt.loc)
 		if isinstance(stmt, H.HThrow):
 			return H.HThrow(value=self._rewrite_expr(stmt.value))
 		if isinstance(stmt, H.HReturn):
-			return H.HReturn(value=self._rewrite_expr(stmt.value) if stmt.value is not None else None)
+			return H.HReturn(value=self._rewrite_expr(stmt.value) if stmt.value is not None else None, loc=stmt.loc)
 		if isinstance(stmt, H.HLet):
 			return H.HLet(
 				name=stmt.name,
@@ -44,17 +47,20 @@ class DVInitRewriter:
 				is_mutable=stmt.is_mutable,
 				declared_type_expr=stmt.declared_type_expr,
 				binding_id=stmt.binding_id,
+				loc=stmt.loc,
 			)
 		if isinstance(stmt, H.HAssign):
 			return H.HAssign(
 				target=self._rewrite_expr(stmt.target),
 				value=self._rewrite_expr(stmt.value),
+				loc=stmt.loc,
 			)
 		if isinstance(stmt, H.HIf):
 			return H.HIf(
 				cond=self._rewrite_expr(stmt.cond),
 				then_block=self.rewrite_block(stmt.then_block),
 				else_block=self.rewrite_block(stmt.else_block) if stmt.else_block else None,
+				loc=stmt.loc,
 			)
 		if isinstance(stmt, H.HLoop):
 			return H.HLoop(body=self.rewrite_block(stmt.body))
@@ -97,6 +103,7 @@ class DVInitRewriter:
 				],
 				type_args=getattr(expr, "type_args", None),
 				origin=getattr(expr, "origin", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HMethodCall):
 			return H.HMethodCall(
@@ -107,6 +114,7 @@ class DVInitRewriter:
 					H.HKwArg(name=kw.name, value=self._rewrite_expr(kw.value))
 					for kw in getattr(expr, "kwargs", []) or []
 				],
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HInvoke):
 			return H.HInvoke(
@@ -116,6 +124,7 @@ class DVInitRewriter:
 					H.HKwArg(name=kw.name, value=self._rewrite_expr(kw.value))
 					for kw in getattr(expr, "kwargs", []) or []
 				],
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HBinary):
 			return H.HBinary(

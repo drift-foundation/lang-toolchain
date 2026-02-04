@@ -28,6 +28,7 @@ from enum import Enum
 import sys
 import shutil
 import subprocess
+from ctypes.util import find_library
 from collections import ChainMap
 from types import MappingProxyType
 from pathlib import Path
@@ -1579,6 +1580,40 @@ def compile_stubbed_funcs(
 	normalized_hirs_by_id: dict[FunctionId, H.HBlock] = {
 		fn_id: normalize_hir(hir_block) for fn_id, hir_block in func_hirs_by_id.items()
 	}
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, block in normalized_hirs_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} pre_typecheck_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
 
 	# candidate_signatures_for_diag removed; no name-keyed fallback map
 	unsafe_trusted_modules = set()
@@ -2077,6 +2112,87 @@ def compile_stubbed_funcs(
 		if not isinstance(block, H.HBlock):
 			continue
 		normalized_hirs_by_id[fn_id] = block
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, block in normalized_hirs_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} post_typecheck_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			if not isinstance(block, H.HBlock):
+				continue
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_typecheck_typed", file=_dbg_sys.stderr)
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids_typed(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} post_typecheck_typed_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids_typed(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids_typed(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids_typed(obj[key])
+					return
+			_walk_expr_ids_typed(block)
+	if drift_debug.enabled("ssa"):
+		import sys
+		for fn_id, block in normalized_hirs_by_id.items():
+			if getattr(fn_id, "module", None) != "main":
+				continue
+			for stmt in block.statements:
+				if isinstance(stmt, H.HReturn):
+					span = Span.from_loc(getattr(stmt, "loc", None))
+					print(f"[drift:debug][hir] return loc={span}", file=sys.stderr)
 
 	# Instantiation phase: clone generic templates into concrete instantiations
 	# and rewrite call targets.
@@ -2704,6 +2820,77 @@ def compile_stubbed_funcs(
 		block = getattr(typed_fn, "body", None)
 		if isinstance(block, H.HBlock):
 			_rewrite_call_targets(typed_fn, block)
+	if drift_debug.enabled("local_types_trace"):
+		seen_expr_objs: dict[int, tuple[FunctionId, str, object]] = {}
+		for fn_id, block in normalized_hirs_by_id.items():
+			if not isinstance(block, H.HBlock):
+				continue
+			def _walk_shared(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					obj_id = id(obj)
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_objs.get(obj_id)
+					if prev is None:
+						seen_expr_objs[obj_id] = (fn_id, kind, span)
+					else:
+						prev_fn, prev_kind, prev_span = prev
+						if (getattr(prev_fn, "module", None), getattr(prev_fn, "name", None)) == ("main", "run") or (getattr(fn_id, "module", None), getattr(fn_id, "name", None)) == ("main", "run"):
+							import sys as _dbg_sys
+							print(f"[drift:debug][local_types_trace] shared_expr_obj id={obj_id} prev_fn={prev_fn} prev_kind={prev_kind} prev_span={prev_span} now_fn={fn_id} now_kind={kind} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_shared(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_shared(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_shared(obj[key])
+					return
+			_walk_shared(block)
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			if not isinstance(block, H.HBlock):
+				continue
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_instantiation", file=_dbg_sys.stderr)
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} post_instantiation_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
 
 	if emit_instantiation_index is not None:
 		entries: list[dict[str, object]] = []
@@ -2844,6 +3031,14 @@ def compile_stubbed_funcs(
 		signatures_by_id=signatures_by_id,
 		call_info_by_callsite_id=call_info_by_callsite_id,
 	)
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			norm_block = normalized_hirs_by_id.get(fn_id)
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} pre_checker_body_shared={block is norm_block}", file=_dbg_sys.stderr)
 	checked = Checker.run_by_id(
 		check_inputs,
 		declared_can_throw_by_id=declared_can_throw_by_id,
@@ -2851,6 +3046,45 @@ def compile_stubbed_funcs(
 		type_table=shared_type_table,
 		fn_decls_by_id=signatures_by_id.keys(),
 	)
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			if not isinstance(block, H.HBlock):
+				continue
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_checker", file=_dbg_sys.stderr)
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} post_checker_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
 	if enforce_entrypoint and signatures_by_id and shared_type_table is not None:
 		from lang2.driftc.type_checker import validate_entrypoint
 		validate_entrypoint(
@@ -3066,6 +3300,45 @@ def compile_stubbed_funcs(
 		typed_fn.call_info_by_callsite_id = updated_callsite
 	for typed_fn in typed_fns_by_id.values():
 		_validate_intrinsic_callinfo(typed_fn)
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			if not isinstance(block, H.HBlock):
+				continue
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_callinfo", file=_dbg_sys.stderr)
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} post_callinfo_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
 	# Prefer the checker's table when the caller did not supply one so TypeIds
 	# stay coherent across lowering/codegen.
 	if shared_type_table is None and checked.type_table is not None:
@@ -3136,6 +3409,46 @@ def compile_stubbed_funcs(
 		walk(body)
 		return ids
 
+	if drift_debug.enabled("local_types_trace"):
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+				continue
+			block = getattr(typed_fn, "body", None)
+			if not isinstance(block, H.HBlock):
+				continue
+			import sys as _dbg_sys
+			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=pre_lowering", file=_dbg_sys.stderr)
+			seen_expr_ids: dict[int, tuple[str, object]] = {}
+			def _walk_expr_ids(obj: object) -> None:
+				if isinstance(obj, H.HExpr):
+					node_id = getattr(obj, "node_id", 0)
+					if node_id == 0:
+						return
+					kind = type(obj).__name__
+					span = getattr(obj, "loc", Span())
+					prev = seen_expr_ids.get(node_id)
+					if prev is None:
+						seen_expr_ids[node_id] = (kind, span)
+					else:
+						prev_kind, prev_span = prev
+						if prev_kind != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} pre_lowering_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+					return
+				if is_dataclass(obj):
+					for f in fields(obj):
+						_walk_expr_ids(getattr(obj, f.name))
+					return
+				if isinstance(obj, (list, tuple)):
+					for item in obj:
+						_walk_expr_ids(item)
+					return
+				if isinstance(obj, dict):
+					for key in sorted(obj.keys(), key=repr):
+						_walk_expr_ids(obj[key])
+					return
+			_walk_expr_ids(block)
+
 	for fn_id, hir_norm in normalized_hirs_by_id.items():
 		builder = make_builder(fn_id)
 		sig = signatures_by_id.get(fn_id)
@@ -3159,50 +3472,92 @@ def compile_stubbed_funcs(
 			if sig.return_type_id is not None and shared_type_table.has_typevar(sig.return_type_id):
 				mir_funcs_by_id[fn_id] = builder.func
 				continue
-			if sig.error_type_id is not None and shared_type_table.has_typevar(sig.error_type_id):
-				mir_funcs_by_id[fn_id] = builder.func
-				continue
-			typed_mode = _typed_mode_for(
-				typed_fns_by_id.get(fn_id),
+		if sig.error_type_id is not None and shared_type_table.has_typevar(sig.error_type_id):
+			mir_funcs_by_id[fn_id] = builder.func
+			continue
+		typed_mode = _typed_mode_for(
+			typed_fns_by_id.get(fn_id),
 				shared_type_table,
 				typecheck_ok_by_fn.get(fn_id, False),
 			)
-			if typed_mode == "strict":
-				expr_types = getattr(typed_fns_by_id.get(fn_id), "expr_types", None)
-				if not isinstance(expr_types, dict):
+		if typed_mode == "strict":
+			expr_types = getattr(typed_fns_by_id.get(fn_id), "expr_types", None)
+			if not isinstance(expr_types, dict):
+				typed_mode = "recover"
+			else:
+				hcast_ids = _collect_hcast_node_ids(hir_norm)
+				if any(node_id not in expr_types for node_id in hcast_ids):
 					typed_mode = "recover"
-				else:
-					hcast_ids = _collect_hcast_node_ids(hir_norm)
-					if any(node_id not in expr_types for node_id in hcast_ids):
-						typed_mode = "recover"
-			lower = HIRToMIR(
-				builder,
-				type_table=shared_type_table,
-				exc_env=exc_env,
-				param_types=param_types,
-				expr_types=getattr(typed_fns_by_id.get(fn_id), "expr_types", None),
-				iface_coercions=getattr(typed_fns_by_id.get(fn_id), "iface_coercions", None),
-				signatures_by_id=signatures_by_id,
-				current_fn_id=fn_id,
-				call_info_by_callsite_id=getattr(typed_fns_by_id.get(fn_id), "call_info_by_callsite_id", {}),
-				call_resolutions=getattr(typed_fns_by_id.get(fn_id), "call_resolutions", {}),
-				can_throw_by_id=declared_by_id,
-				return_type=sig.return_type_id if sig is not None else None,
-				binding_names=getattr(typed_fns_by_id.get(fn_id), "binding_names", None),
-				binding_types=getattr(typed_fns_by_id.get(fn_id), "binding_types", None),
-				typed_mode=typed_mode,
-			)
-			lower.lower_function_body(hir_norm)
-			builder.func.local_types = dict(lower._local_types)
-			unknown_ty = shared_type_table.ensure_unknown()
-			for local_name in builder.func.locals:
-				if local_name not in builder.func.local_types:
-					builder.func.local_types[local_name] = unknown_ty
-			for spec in lower.synth_sig_specs():
-				if spec.kind == "hidden_lambda":
-					continue
-				_register_synth_signature(spec.fn_id, spec.sig)
-			hidden_lambda_specs.extend(lower.hidden_lambda_specs())
+		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":
+			typed_fn = typed_fns_by_id.get(fn_id)
+			body_dbg = getattr(typed_fn, "body", None)
+			expr_types_dbg = getattr(typed_fn, "expr_types", None)
+			if isinstance(body_dbg, H.HBlock) and isinstance(expr_types_dbg, dict):
+				import sys as _dbg_sys
+				seen_dbg: set[int] = set()
+				expr_node_kinds: dict[int, str] = {}
+				expr_node_spans: dict[int, object] = {}
+				def _walk_dbg(obj: object) -> None:
+					obj_id = id(obj)
+					if obj_id in seen_dbg:
+						return
+					seen_dbg.add(obj_id)
+					if isinstance(obj, H.HExpr):
+						kind = type(obj).__name__
+						prev = expr_node_kinds.get(obj.node_id)
+						if prev is None:
+							expr_node_kinds[obj.node_id] = kind
+							expr_node_spans[obj.node_id] = getattr(obj, "loc", None)
+						elif prev != kind:
+							print(f"[drift:debug][local_types_trace] fn={fn_id} lowering_dup_node_id={obj.node_id} prev={prev} now={kind} prev_span={expr_node_spans.get(obj.node_id)} now_span={getattr(obj, 'loc', None)}", file=_dbg_sys.stderr)
+					if isinstance(obj, H.HLiteralBool):
+						tid = expr_types_dbg.get(obj.node_id)
+						if tid is not None:
+							td = shared_type_table.get(tid)
+							print(f"[drift:debug][local_types_trace] fn={fn_id} typed_fn_literal_bool node_id={obj.node_id} ty={tid}:{td.kind.name}:{td.name} span={getattr(obj, 'loc', None)}", file=_dbg_sys.stderr)
+					if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+						return
+					if is_dataclass(obj):
+						for f in fields(obj):
+							_walk_dbg(getattr(obj, f.name))
+						return
+					if isinstance(obj, (list, tuple)):
+						for item in obj:
+							_walk_dbg(item)
+						return
+					if isinstance(obj, dict):
+						for key in sorted(obj.keys(), key=repr):
+							_walk_dbg(obj[key])
+						return
+				_walk_dbg(body_dbg)
+		lower = HIRToMIR(
+			builder,
+			type_table=shared_type_table,
+			exc_env=exc_env,
+			param_types=param_types,
+			expr_types=getattr(typed_fns_by_id.get(fn_id), "expr_types", None),
+			iface_coercions=getattr(typed_fns_by_id.get(fn_id), "iface_coercions", None),
+			signatures_by_id=signatures_by_id,
+			current_fn_id=fn_id,
+			call_info_by_callsite_id=getattr(typed_fns_by_id.get(fn_id), "call_info_by_callsite_id", {}),
+			call_resolutions=getattr(typed_fns_by_id.get(fn_id), "call_resolutions", {}),
+			can_throw_by_id=declared_by_id,
+			return_type=sig.return_type_id if sig is not None else None,
+			binding_names=getattr(typed_fns_by_id.get(fn_id), "binding_names", None),
+			binding_types=getattr(typed_fns_by_id.get(fn_id), "binding_types", None),
+			typed_mode=typed_mode,
+		)
+		lower.lower_function_body(hir_norm)
+		builder.func.local_types = dict(lower._local_types)
+		unknown_ty = shared_type_table.ensure_unknown()
+		for local_name in builder.func.locals:
+			if local_name not in builder.func.local_types:
+				builder.func.local_types[local_name] = unknown_ty
+		for spec in lower.synth_sig_specs():
+			if spec.kind == "hidden_lambda":
+				continue
+			_register_synth_signature(spec.fn_id, spec.sig)
+		hidden_lambda_specs.extend(lower.hidden_lambda_specs())
 		mir_funcs_by_id[fn_id] = builder.func
 		if getattr(builder, "extra_funcs", None):
 			for extra in builder.extra_funcs:
@@ -3791,6 +4146,14 @@ def compile_stubbed_funcs(
 		rev_capture_id_map = {new: old for old, new in capture_id_map.items()}
 		origin_mir = mir_funcs_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
 		if origin_typed is not None:
+			def _dbg_ty(tid: TypeId | None) -> str:
+				if tid is None:
+					return "None"
+				try:
+					td = shared_type_table.get(tid)
+					return f"{tid}:{td.kind.name}:{td.name}"
+				except Exception:
+					return str(tid)
 			for cap in lam.captures or []:
 				bid = int(cap.key.root_local)
 				orig_bid = rev_capture_id_map.get(bid, bid)
@@ -3802,6 +4165,24 @@ def compile_stubbed_funcs(
 						candidate = spec.env_field_types[slot]
 						if shared_type_table.has_typevar(cap_ty) or shared_type_table.get(cap_ty).kind is TypeKind.UNKNOWN:
 							cap_ty = candidate
+						if drift_debug.enabled("lambda_capture"):
+							import sys
+							print(
+								f"[drift:debug][lambda_capture] fn={spec.fn_id} cap_root={cap.key.root_local} orig_bid={orig_bid} slot={slot} origin_ty={_dbg_ty(origin_typed.binding_types.get(orig_bid))} env_ty={_dbg_ty(candidate)} final={_dbg_ty(cap_ty)}",
+								file=sys.stderr,
+							)
+					elif drift_debug.enabled("lambda_capture"):
+						import sys
+						print(
+							f"[drift:debug][lambda_capture] fn={spec.fn_id} cap_root={cap.key.root_local} orig_bid={orig_bid} slot=None origin_ty={_dbg_ty(origin_typed.binding_types.get(orig_bid))} env_ty=None final={_dbg_ty(cap_ty)}",
+							file=sys.stderr,
+						)
+				elif drift_debug.enabled("lambda_capture"):
+					import sys
+					print(
+						f"[drift:debug][lambda_capture] fn={spec.fn_id} cap_root={cap.key.root_local} orig_bid={orig_bid} slot=None origin_ty={_dbg_ty(origin_typed.binding_types.get(orig_bid))} env_ty=None final={_dbg_ty(cap_ty)}",
+						file=sys.stderr,
+					)
 				preseed_binding_types[bid] = cap_ty
 				preseed_binding_names[bid] = cap_name
 				preseed_binding_mutable[bid] = origin_typed.binding_mutable.get(orig_bid, False)
@@ -3864,6 +4245,35 @@ def compile_stubbed_funcs(
 		hidden_typed_fn = hidden_typed.typed_fn
 		typed_fns_by_id[spec.fn_id] = hidden_typed_fn
 		_rewrite_call_targets(hidden_typed_fn, lambda_body)
+		def _patch_hidden_lambda_call_info_from_sigs() -> None:
+			call_info_map = getattr(hidden_typed_fn, "call_info_by_callsite_id", None)
+			if not isinstance(call_info_map, dict):
+				return
+			for csid, info in list(call_info_map.items()):
+				if info is None:
+					continue
+				sig = info.sig
+				if sig is None:
+					continue
+				user_ret = sig.user_ret_type
+				if user_ret is not None:
+					td = shared_type_table.get(user_ret)
+					if td.kind is not TypeKind.UNKNOWN and not shared_type_table.has_typevar(user_ret):
+						continue
+				target = info.target
+				if target.kind is not CallTargetKind.DIRECT or target.symbol is None:
+					continue
+				target_sig = signatures_by_id.get(target.symbol)
+				if target_sig is None or target_sig.return_type_id is None:
+					continue
+				ret_id = target_sig.return_type_id
+				ret_def = shared_type_table.get(ret_id)
+				if ret_def.kind is TypeKind.UNKNOWN:
+					continue
+				param_ids = target_sig.param_type_ids or sig.param_types
+				new_sig = CallSig(param_types=tuple(param_ids), user_ret_type=ret_id, can_throw=sig.can_throw, includes_callee=sig.includes_callee)
+				call_info_map[csid] = CallInfo(target=target, sig=new_sig)
+		_patch_hidden_lambda_call_info_from_sigs()
 		type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
 		hidden_ret_type = spec.return_type_id
 		if shared_type_table is not None:
@@ -3951,6 +4361,10 @@ def compile_stubbed_funcs(
 					inst_id = shared_type_table.ensure_struct_instantiated(spec.env_ty, [])
 					inst = shared_type_table.get_struct_instance(inst_id)
 			if inst is not None:
+				unknown_ty = shared_type_table.ensure_unknown()
+				cap_kind_by_key: dict[C.HCaptureKey, C.HCaptureKind] = {}
+				for cap in lam.captures or []:
+					cap_kind_by_key[cap.key] = cap.kind
 				if not remapped_capture_map and lam.captures:
 					for idx, cap in enumerate(lam.captures):
 						if idx >= len(inst.field_types):
@@ -3960,8 +4374,11 @@ def compile_stubbed_funcs(
 						local_name = lower._canonical_local(bid, name)
 						cur_ty = lower._local_types.get(local_name)
 						ty = inst.field_types[idx]
-						if ty is not None and ty != shared_type_table.ensure_unknown():
-							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
+						if ty is not None and ty != unknown_ty:
+							force_ref = (not spec.lambda_capture_ref_is_value and cap.kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT))
+							if force_ref:
+								lower._local_types[local_name] = ty
+							elif cur_ty is None or cur_ty == unknown_ty:
 								lower._local_types[local_name] = ty
 				for key, slot in remapped_capture_map.items():
 					bid = int(key.root_local)
@@ -3970,9 +4387,18 @@ def compile_stubbed_funcs(
 					cur_ty = lower._local_types.get(local_name)
 					if slot < len(inst.field_types):
 						ty = inst.field_types[slot]
-						if ty is not None and ty != shared_type_table.ensure_unknown():
-							if cur_ty is None or cur_ty == shared_type_table.ensure_unknown():
+						if ty is not None and ty != unknown_ty:
+							kind = cap_kind_by_key.get(key)
+							force_ref = (not spec.lambda_capture_ref_is_value and kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT))
+							if force_ref:
 								lower._local_types[local_name] = ty
+							elif cur_ty is None or cur_ty == unknown_ty:
+								lower._local_types[local_name] = ty
+		builder.func.local_types = dict(lower._local_types)
+		unknown_ty = shared_type_table.ensure_unknown()
+		for local_name in builder.func.locals:
+			if local_name not in builder.func.local_types:
+				builder.func.local_types[local_name] = unknown_ty
 		if builder.block.terminator is None:
 			if ret_val is None:
 				raise AssertionError("hidden lambda block must end with a value or return")
@@ -4124,6 +4550,11 @@ def compile_stubbed_funcs(
 				lower._binding_names[int(param.binding_id)] = param.name
 		lower._seed_lambda_locals_for_inference(lower, lambda_body)
 		ret_val = lower._lower_lambda_block(lower, lambda_body)
+		builder.func.local_types = dict(lower._local_types)
+		unknown_ty = shared_type_table.ensure_unknown()
+		for local_name in builder.func.locals:
+			if local_name not in builder.func.local_types:
+				builder.func.local_types[local_name] = unknown_ty
 		if builder.block.terminator is None:
 			if ret_val is None:
 				raise AssertionError("captureless lambda block must end with a value or return")
@@ -4185,6 +4616,15 @@ def compile_stubbed_funcs(
 	if shared_type_table is not None:
 		validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
 	if shared_type_table is not None:
+		if drift_debug.enabled("ssa"):
+			import sys
+			for fn_id, func in mir_funcs_by_id.items():
+				if getattr(fn_id, "module", None) != "main":
+					continue
+				for block in func.blocks.values():
+					for instr in block.instructions:
+						if isinstance(instr, M.Call):
+							print(f"[drift:debug][mir-pre-arc] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 		for fn_id, func in mir_funcs_by_id.items():
 			mir_funcs_by_id[fn_id] = insert_string_arc(
 				func,
@@ -4205,6 +4645,18 @@ def compile_stubbed_funcs(
 							val_ty = func.local_types.get(instr.value)
 							if val_ty is not None and val_ty != unknown_ty:
 								func.local_types[instr.local] = val_ty
+								if drift_debug.enabled("local_types_trace") and instr.local == "done":
+									td = shared_type_table.get(val_ty)
+									print(f"[drift:debug][local_types_trace] fn={func.fn_id} pass=post_arc store_local={instr.local} ty={val_ty}:{td.kind.name}:{td.name}", file=sys.stderr)
+	if drift_debug.enabled("ssa"):
+		import sys
+		for fn_id, func in mir_funcs_by_id.items():
+			if getattr(fn_id, "module", None) != "main":
+				continue
+			for block in func.blocks.values():
+				for instr in block.instructions:
+					if isinstance(instr, M.Call):
+						print(f"[drift:debug][mir] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 	_assert_signature_map_split(
 		base_signatures_by_id=base_signatures_by_id,
 		derived_signatures_by_id=derived_signatures_by_id,
@@ -4272,6 +4724,7 @@ def compile_to_llvm_ir_for_tests(
 	emit_instantiation_index: Path | None = None,
 	enforce_entrypoint: bool = False,
 	reserved_namespace_policy: ReservedNamespacePolicy = ReservedNamespacePolicy.ALLOW_DEV,
+	debug_enabled: bool = True,
 ) -> tuple[str, CheckedProgramById]:
 	"""
 	End-to-end helper: HIR -> MIR -> throw checks -> SSA -> LLVM IR for tests.
@@ -4408,6 +4861,7 @@ def compile_to_llvm_ir_for_tests(
 		rename_map=rename_map,
 		argv_wrapper=argv_wrapper,
 		word_bits=host_word_bits(),
+		debug_enabled=debug_enabled,
 	)
 	# If the entry is already called "main" and has no argv wrapper, do not emit
 	# a wrapper that would call itself; otherwise emit a thin OS wrapper that
@@ -4596,6 +5050,9 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--package-id", type=str, help="Package identity (required with --emit-package)")
 	parser.add_argument("--package-version", type=str, help="Package version (SemVer; required with --emit-package)")
 	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
+	parser.add_argument("-g", "--debug-info", action="store_true", help="Emit debug info in generated LLVM (DWARF)")
+	parser.add_argument("--no-debug-info", action="store_true", help="Disable debug info emission")
+	parser.add_argument("--linker", choices=["ld", "gold"], default=None, help="Select linker (default: prefer gold if available)")
 	parser.add_argument(
 		"--target-word-bits",
 		type=int,
@@ -4636,6 +5093,11 @@ def main(argv: list[str] | None = None) -> int:
 		help="Enable @test_build_only declarations (tests only)",
 	)
 	args = parser.parse_args(argv)
+	debug_enabled = True
+	if args.no_debug_info:
+		debug_enabled = False
+	if args.debug_info:
+		debug_enabled = True
 	if args.stdlib_root is None:
 		from lang2.driftc.parser import stdlib_root as _stdlib_root
 		args.stdlib_root = _stdlib_root()
@@ -7045,6 +7507,7 @@ def main(argv: list[str] | None = None) -> int:
 			rename_map={},
 			argv_wrapper=None,
 			word_bits=_target_word_bits(args.target_word_bits),
+			debug_enabled=debug_enabled,
 		)
 		ir = module.render()
 	else:
@@ -7060,6 +7523,7 @@ def main(argv: list[str] | None = None) -> int:
 			prelude_enabled=bool(args.prelude),
 			enforce_entrypoint=True,
 			emit_instantiation_index=args.emit_instantiation_index,
+			debug_enabled=debug_enabled,
 		)
 		if _checked is not None and any(d.severity == "error" for d in _checked.diagnostics):
 			if args.json:
@@ -7140,21 +7604,131 @@ def main(argv: list[str] | None = None) -> int:
 	runtime_sources = [str(p) for p in get_runtime_sources(ROOT)]
 	runtime_root = (ROOT / "lang2" / "language_runtime").resolve()
 	compiler_infra_root = (ROOT / "lang2" / "compiler_infra").resolve()
-	link_cmd = [
-		clang,
-		"-x",
-		"ir",
-		str(ir_path),
-		"-x",
-		"c",
-		"-I",
-		str(runtime_root),
-		"-I",
-		str(compiler_infra_root),
-		*runtime_sources,
-		"-o",
-		str(args.output),
+	search_dirs = [
+		Path("/lib"),
+		Path("/lib64"),
+		Path("/usr/lib"),
+		Path("/usr/lib64"),
+		Path("/lib/x86_64-linux-gnu"),
+		Path("/usr/lib/x86_64-linux-gnu"),
 	]
+	def _link_flags_for_lib(name: str) -> list[str]:
+		if not find_library(name):
+			return []
+		for d in search_dirs:
+			if (d / f"lib{name}.so").exists():
+				return [f"-l{name}"]
+		return []
+	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("elf")
+	def _select_linker() -> str:
+		if args.linker == "ld":
+			return "ld"
+		if args.linker == "gold":
+			return "gold"
+		if shutil.which("ld.gold") is not None:
+			return "gold"
+		return "ld"
+
+	def _linker_supports_gdb_index(use_linker: str) -> bool:
+		if use_linker == "gold":
+			ld = shutil.which("ld.gold")
+			if ld is None:
+				return False
+			try:
+				res = subprocess.run([ld, "--help"], capture_output=True, text=True, cwd=ROOT)
+			except Exception:
+				return False
+			if res.returncode != 0:
+				return False
+			return "--gdb-index" in res.stdout
+		return False
+
+	use_linker = _select_linker()
+	linker_flags = ["-fuse-ld=gold"] if use_linker == "gold" else []
+	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
+
+	if debug_enabled:
+		ir_obj = args.output.with_suffix(".ir.o")
+		rt_dir = args.output.parent / "runtime_objs"
+		rt_dir.mkdir(parents=True, exist_ok=True)
+		rt_objs: list[str] = []
+		ir_compile_cmd = [
+			clang,
+			*linker_flags,
+			"-c",
+			"-x",
+			"ir",
+			str(ir_path),
+			"-g",
+			"-o",
+			str(ir_obj),
+		]
+		ir_compile = subprocess.run(ir_compile_cmd, capture_output=True, text=True, cwd=ROOT)
+		if ir_compile.returncode != 0:
+			msg = f"clang failed: {ir_compile.stderr.strip()}"
+			if args.json:
+				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			else:
+				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			return 1
+		for src in runtime_sources:
+			src_path = Path(src)
+			obj_path = rt_dir / (src_path.stem + ".o")
+			rt_compile_cmd = [
+				clang,
+				*linker_flags,
+				"-c",
+				"-x",
+				"c",
+				str(src_path),
+				"-g0",
+				"-I",
+				str(runtime_root),
+				"-I",
+				str(compiler_infra_root),
+				"-o",
+				str(obj_path),
+			]
+			rt_compile = subprocess.run(rt_compile_cmd, capture_output=True, text=True, cwd=ROOT)
+			if rt_compile.returncode != 0:
+				msg = f"clang failed: {rt_compile.stderr.strip()}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+				else:
+					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			rt_objs.append(str(obj_path))
+		link_cmd = [
+			clang,
+			*linker_flags,
+			str(ir_obj),
+			*rt_objs,
+			*link_libs,
+			*gdb_index_flag,
+			"-Wl,--as-needed",
+			"-o",
+			str(args.output),
+		]
+	else:
+		link_cmd = [
+			clang,
+			*linker_flags,
+			"-x",
+			"ir",
+			str(ir_path),
+			"-x",
+			"c",
+			"-I",
+			str(runtime_root),
+			"-I",
+			str(compiler_infra_root),
+			*runtime_sources,
+			*link_libs,
+			"-Wl,--as-needed",
+			"-o",
+			str(args.output),
+		]
+	print("[driftc] link:", " ".join(link_cmd), file=sys.stderr)
 	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:
 		msg = f"clang failed: {link_res.stderr.strip()}"

@@ -91,6 +91,7 @@ class MirBuilder:
 		self.block = entry_block
 		self._temp_counter = 0
 		self._locals_set: Set[M.LocalId] = set()
+		self.current_span: Span | None = None
 
 	def new_temp(self) -> M.ValueId:
 		"""Allocate a fresh temporary ValueId for intermediate results."""
@@ -102,6 +103,10 @@ class MirBuilder:
 		Append a MIR instruction to the current block and return its dest, if any.
 		"""
 		self.block.instructions.append(instr)
+		if self.current_span is not None and self.current_span != Span():
+			existing = getattr(instr, "span", None)
+			if existing is None or existing == Span():
+				setattr(instr, "span", self.current_span)
 		if hasattr(instr, "dest"):
 			return getattr(instr, "dest")
 		return None
@@ -109,6 +114,10 @@ class MirBuilder:
 	def set_terminator(self, term: M.MTerminator) -> None:
 		"""Set the terminator for the current block."""
 		self.block.terminator = term
+		if self.current_span is not None and self.current_span != Span():
+			existing = getattr(term, "span", None)
+			if existing is None or existing == Span():
+				setattr(term, "span", self.current_span)
 
 	def ensure_local(self, name: M.LocalId) -> None:
 		"""Record a local name on the function if it hasn't been seen yet."""
@@ -217,6 +226,7 @@ class HIRToMIR:
 		# Stack of scopes; each scope stores locals that need drop at scope exit.
 		self._scope_stack: list[list[str]] = []
 		self._moved_locals: set[str] = set()
+		self._current_stmt_span: Span | None = None
 		# Stack of try contexts for nested try/catch (innermost on top).
 		self._try_stack: list["_TryCtx"] = []
 		# Error value bound by the innermost catch block (if any) for rethrow.
@@ -782,36 +792,43 @@ class HIRToMIR:
 			self._expected_type_stack.pop()
 
 	def lower_expr(self, expr: H.HExpr, *, expected_type: TypeId | None = None) -> M.ValueId:
-		if getattr(expr, "node_id", None) in self._iface_coercions:
-			target_iface = self._iface_coercions[expr.node_id]
-			value = self._lower_expr_raw(expr, expected_type=expected_type)
-			value_ty = self._infer_expr_type(expr)
-			if value_ty is None:
-				raise AssertionError("interface coercion missing source type (checker bug)")
-			if self._type_table.get(value_ty).kind is TypeKind.INTERFACE:
-				src_inst = self._type_table.get_interface_instance(value_ty)
-				src_base = src_inst.base_id if src_inst is not None else value_ty
-				tgt_inst = self._type_table.get_interface_instance(target_iface)
-				tgt_base = tgt_inst.base_id if tgt_inst is not None else target_iface
-				offsets = self._type_table.interface_segment_offsets(src_base)
-				if tgt_base not in offsets:
-					raise AssertionError("interface upcast target not in linearization (checker bug)")
+		prev_span = self.b.current_span
+		expr_span = Span.from_loc(getattr(expr, "loc", None))
+		if expr_span != Span() and (prev_span is None or prev_span == Span()):
+			self.b.current_span = expr_span
+		try:
+			if getattr(expr, "node_id", None) in self._iface_coercions:
+				target_iface = self._iface_coercions[expr.node_id]
+				value = self._lower_expr_raw(expr, expected_type=expected_type)
+				value_ty = self._infer_expr_type(expr)
+				if value_ty is None:
+					raise AssertionError("interface coercion missing source type (checker bug)")
+				if self._type_table.get(value_ty).kind is TypeKind.INTERFACE:
+					src_inst = self._type_table.get_interface_instance(value_ty)
+					src_base = src_inst.base_id if src_inst is not None else value_ty
+					tgt_inst = self._type_table.get_interface_instance(target_iface)
+					tgt_base = tgt_inst.base_id if tgt_inst is not None else target_iface
+					offsets = self._type_table.interface_segment_offsets(src_base)
+					if tgt_base not in offsets:
+						raise AssertionError("interface upcast target not in linearization (checker bug)")
+					dest = self.b.new_temp()
+					self.b.emit(M.IfaceUpcast(dest=dest, iface=value, slot_offset=offsets[tgt_base]))
+					self._local_types[dest] = target_iface
+					return dest
 				dest = self.b.new_temp()
-				self.b.emit(M.IfaceUpcast(dest=dest, iface=value, slot_offset=offsets[tgt_base]))
+				self.b.emit(
+					M.ConstructIfaceValue(
+						dest=dest,
+						iface_ty=target_iface,
+						value=value,
+						value_ty=value_ty,
+					)
+				)
 				self._local_types[dest] = target_iface
 				return dest
-			dest = self.b.new_temp()
-			self.b.emit(
-				M.ConstructIfaceValue(
-					dest=dest,
-					iface_ty=target_iface,
-					value=value,
-					value_ty=value_ty,
-				)
-			)
-			self._local_types[dest] = target_iface
-			return dest
-		return self._lower_expr_raw(expr, expected_type=expected_type)
+			return self._lower_expr_raw(expr, expected_type=expected_type)
+		finally:
+			self.b.current_span = prev_span
 
 	def _current_expected_type(self) -> TypeId | None:
 		"""Return the current expected type hint for expression lowering."""
@@ -1897,6 +1914,9 @@ class HIRToMIR:
 		Plain function call. For now only direct function names are supported;
 		indirect/function-valued calls will be added later if needed.
 		"""
+		if drift_debug.enabled("stage2"):
+			import sys
+			print(f"[drift:debug][stage2] visit HCall fn={getattr(expr.fn, 'name', None)} loc={Span.from_loc(getattr(expr, 'loc', None))}", file=sys.stderr)
 		if isinstance(expr.fn, H.HLambda):
 			return self._lower_lambda_immediate_call(expr.fn, expr.args)
 		if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
@@ -3847,7 +3867,15 @@ class HIRToMIR:
 		method = getattr(self, f"_visit_stmt_{type(stmt).__name__}", None)
 		if method is None:
 			raise NotImplementedError(f"No MIR lowering for stmt {type(stmt).__name__}")
-		method(stmt)
+		prev_span = self.b.current_span
+		self.b.current_span = Span.from_loc(getattr(stmt, "loc", None))
+		prev_stmt_span = self._current_stmt_span
+		self._current_stmt_span = self.b.current_span
+		try:
+			method(stmt)
+		finally:
+			self.b.current_span = prev_span
+			self._current_stmt_span = prev_stmt_span
 
 	def lower_block(self, block: H.HBlock) -> None:
 		"""Entry point: lower an HIR block (list of statements) into MIR."""
@@ -4066,7 +4094,29 @@ class HIRToMIR:
 	def _visit_stmt_HUnsafeBlock(self, stmt: H.HUnsafeBlock) -> None:
 		self.lower_block(stmt.block)
 
+	def _visit_stmt_HAssert(self, stmt: H.HAssert) -> None:
+		cond_val = self.lower_expr(stmt.cond)
+		span = getattr(stmt, "loc", Span())
+		file_str = span.file or "<unknown>"
+		line_num = span.line or 0
+		file_val = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=file_val, value=file_str))
+		line_val = self.b.new_temp()
+		self.b.emit(M.ConstInt(dest=line_val, value=line_num))
+		if stmt.msg is None:
+			msg_val = self._string_empty_const
+		else:
+			msg_val = self.lower_expr(stmt.msg)
+		instr = M.AssertLoc(cond=cond_val, file=file_val, line=line_val, msg=msg_val)
+		instr.span = span
+		self.b.emit(instr)
+
 	def _visit_stmt_HLet(self, stmt: H.HLet) -> None:
+		prev_stmt_span = self._current_stmt_span
+		stmt_span = Span.from_loc(getattr(stmt, "loc", None))
+		if stmt_span == Span():
+			stmt_span = Span.from_loc(getattr(stmt.value, "loc", None))
+		self._current_stmt_span = stmt_span
 		if getattr(stmt, "binding_id", None) is not None:
 			self._local_binding_ids.add(int(stmt.binding_id))
 		local_name = self._canonical_local(getattr(stmt, "binding_id", None), stmt.name)
@@ -4086,7 +4136,12 @@ class HIRToMIR:
 				declared_ty = None
 		inferred_ty = self._infer_expr_type(stmt.value)
 		expected_ty = declared_ty if declared_ty is not None else inferred_ty
-		val = self.lower_expr(stmt.value, expected_type=expected_ty)
+		prev_span = self.b.current_span
+		self.b.current_span = self._current_stmt_span
+		try:
+			val = self.lower_expr(stmt.value, expected_type=expected_ty)
+		finally:
+			self.b.current_span = prev_span
 		val_ty = declared_ty if declared_ty is not None else inferred_ty
 		bid = getattr(stmt, "binding_id", None)
 		if bid is not None:
@@ -4095,9 +4150,35 @@ class HIRToMIR:
 				val_ty = bid_ty
 		if val_ty is not None:
 			self._local_types[local_name] = val_ty
+			if stmt.name != local_name:
+				self._local_types[stmt.name] = val_ty
 			self._register_drop_local(local_name, val_ty)
-		self.b.emit(M.StoreLocal(local=local_name, value=val))
+			if drift_debug.enabled("local_types_trace") and (local_name == "done" or stmt.name == "done"):
+				import sys
+				td = self._type_table.get(val_ty)
+				fn = self._current_fn_id
+				print(f"[drift:debug][local_types_trace] fn={fn} stmt=HLet local={local_name} name={stmt.name} ty={val_ty}:{td.kind.name}:{td.name}", file=sys.stderr)
+		self.b.func.debug_local_names[local_name] = stmt.name
+		store = M.StoreLocal(local=local_name, value=val)
+		setattr(store, "debug_name", stmt.name)
+		span = None
+		if hasattr(stmt, "span") and stmt.span is not None:
+			span = stmt.span
+		elif hasattr(stmt, "loc") and stmt.loc is not None:
+			span = stmt.loc
+		if span is None or span == Span():
+			val_span = None
+			if hasattr(stmt.value, "span") and stmt.value.span is not None:
+				val_span = stmt.value.span
+			elif hasattr(stmt.value, "loc") and stmt.value.loc is not None:
+				val_span = stmt.value.loc
+			if val_span is not None:
+				span = val_span
+		if span is not None:
+			store.span = span
+		self.b.emit(store)
 		self._moved_locals.discard(local_name)
+		self._current_stmt_span = prev_stmt_span
 
 	def _visit_stmt_HAssign(self, stmt: H.HAssign) -> None:
 		val = self.lower_expr(stmt.value)
@@ -4149,6 +4230,11 @@ class HIRToMIR:
 			val_ty = self._infer_expr_type(stmt.value)
 			if val_ty is not None:
 				self._local_types[local_name] = val_ty
+				if drift_debug.enabled("local_types_trace") and local_name == "done":
+					import sys
+					td = self._type_table.get(val_ty)
+					fn = self._current_fn_id
+					print(f"[drift:debug][local_types_trace] fn={fn} stmt=HAssign local={local_name} ty={val_ty}:{td.kind.name}:{td.name}", file=sys.stderr)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
 			self._moved_locals.discard(local_name)
 			return
@@ -4252,6 +4338,12 @@ class HIRToMIR:
 	def _visit_stmt_HReturn(self, stmt: H.HReturn) -> None:
 		if self.b.block.terminator is not None:
 			return
+		ret_span = Span.from_loc(getattr(stmt, "loc", None))
+		if drift_debug.enabled("stage2") and getattr(self._current_fn_id, "module", None) == "main":
+			import sys
+			print(f"[drift:debug][stage2] return loc={ret_span}", file=sys.stderr)
+		if ret_span == Span() and stmt.value is not None:
+			ret_span = Span.from_loc(getattr(stmt.value, "loc", None))
 		can_throw = self._fn_can_throw() is True
 		fn_is_void = self._ret_type is not None and self._type_table.is_void(self._ret_type)
 
@@ -4261,17 +4353,26 @@ class HIRToMIR:
 					val_ty = self._infer_expr_type(stmt.value)
 					if val_ty is None or self._type_table.is_void(val_ty):
 						self._emit_scope_drops(scope_index=0)
-						self.b.set_terminator(M.Return(value=None))
+						term = M.Return(value=None)
+						if ret_span != Span():
+							term.span = ret_span
+						self.b.set_terminator(term)
 						return
 					raise AssertionError("Void function must not have a return value (checker bug)")
 				self._emit_scope_drops(scope_index=0)
-				self.b.set_terminator(M.Return(value=None))
+				term = M.Return(value=None)
+				if ret_span != Span():
+					term.span = ret_span
+				self.b.set_terminator(term)
 				return
 			if stmt.value is None:
 				raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
 			val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 			self._emit_scope_drops(scope_index=0)
-			self.b.set_terminator(M.Return(value=val))
+			term = M.Return(value=val)
+			if ret_span != Span():
+				term.span = ret_span
+			self.b.set_terminator(term)
 			return
 
 		# Can-throw function: surface `-> T` lowers to an internal
@@ -4283,13 +4384,19 @@ class HIRToMIR:
 					res_val = self.b.new_temp()
 					self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
 					self._emit_scope_drops(scope_index=0)
-					self.b.set_terminator(M.Return(value=res_val))
+					term = M.Return(value=res_val)
+					if ret_span != Span():
+						term.span = ret_span
+					self.b.set_terminator(term)
 					return
 				raise AssertionError("Void function must not have a return value (checker bug)")
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
 			self._emit_scope_drops(scope_index=0)
-			self.b.set_terminator(M.Return(value=res_val))
+			term = M.Return(value=res_val)
+			if ret_span != Span():
+				term.span = ret_span
+			self.b.set_terminator(term)
 			return
 		if stmt.value is None:
 			raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
@@ -4297,7 +4404,10 @@ class HIRToMIR:
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
 		self._emit_scope_drops(scope_index=0)
-		self.b.set_terminator(M.Return(value=res_val))
+		term = M.Return(value=res_val)
+		if ret_span != Span():
+			term.span = ret_span
+		self.b.set_terminator(term)
 
 	def _visit_stmt_HBreak(self, stmt: H.HBreak) -> None:
 		# Break jumps to the innermost loop's break target.
@@ -4741,20 +4851,44 @@ class HIRToMIR:
 		if not isinstance(expr.fn, H.HVar):
 			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
 		arg_vals = [self.lower_expr(a) for a in expr.args]
-		# Can-throw calls always return an internal FnResult value, even when the
-		# surface ok type is Void.
-		if info.sig.can_throw:
+		expr_span = Span.from_loc(getattr(expr, "loc", None))
+		cur_span = self._current_stmt_span
+		call_span = expr_span if expr_span != Span() else (cur_span if cur_span is not None else Span())
+		if drift_debug.enabled("stage2"):
+			import sys
+			print(f"[drift:debug][stage2] call spans fn={getattr(expr.fn, 'name', None)} expr={expr_span} stmt={cur_span} call={call_span}", file=sys.stderr)
+		if drift_debug.enabled("stage2") and expr_span != Span() and call_span != expr_span:
+			import sys
+			print(f"[drift:debug][stage2] call span mismatch: expr={expr_span} call={call_span} fn={getattr(expr.fn, 'name', None)}", file=sys.stderr)
+		prev_span = self.b.current_span
+		if call_span != Span():
+			self.b.current_span = call_span
+		try:
+			# Can-throw calls always return an internal FnResult value, even when the
+			# surface ok type is Void.
+			if info.sig.can_throw:
+				dest = self.b.new_temp()
+				call = M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=True)
+				if call_span != Span():
+					call.span = call_span
+				self.b.emit(call)
+				self._local_types[dest] = call_abi_ret_type(info.sig, self._type_table)
+				return dest
+			if self._type_table.is_void(info.sig.user_ret_type):
+				call = M.Call(dest=None, fn_id=target_fn_id, args=arg_vals, can_throw=False)
+				if call_span != Span():
+					call.span = call_span
+				self.b.emit(call)
+				return None
 			dest = self.b.new_temp()
-			self.b.emit(M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=True))
-			self._local_types[dest] = call_abi_ret_type(info.sig, self._type_table)
+			call = M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=False)
+			if call_span != Span():
+				call.span = call_span
+			self.b.emit(call)
+			self._local_types[dest] = info.sig.user_ret_type
 			return dest
-		if self._type_table.is_void(info.sig.user_ret_type):
-			self.b.emit(M.Call(dest=None, fn_id=target_fn_id, args=arg_vals, can_throw=False))
-			return None
-		dest = self.b.new_temp()
-		self.b.emit(M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=False))
-		self._local_types[dest] = info.sig.user_ret_type
-		return dest
+		finally:
+			self.b.current_span = prev_span
 
 	def _lower_call_with_info(self, expr: H.HCall, info: CallInfo) -> M.ValueId | None:
 		if info.target.kind is CallTargetKind.CONSTRUCTOR:
@@ -4770,18 +4904,42 @@ class HIRToMIR:
 		for idx, arg in enumerate(expr.args):
 			param_ty = info.sig.param_types[idx] if idx < len(info.sig.param_types) else None
 			arg_vals.append(self._lower_call_arg(arg, param_ty))
-		if info.sig.can_throw:
+		expr_span = Span.from_loc(getattr(expr, "loc", None))
+		cur_span = self._current_stmt_span
+		call_span = expr_span if expr_span != Span() else (cur_span if cur_span is not None else Span())
+		if drift_debug.enabled("stage2"):
+			import sys
+			print(f"[drift:debug][stage2] call spans fn={getattr(expr.fn, 'name', None)} expr={expr_span} stmt={cur_span} call={call_span}", file=sys.stderr)
+		if drift_debug.enabled("stage2") and expr_span != Span() and call_span != expr_span:
+			import sys
+			print(f"[drift:debug][stage2] call span mismatch: expr={expr_span} call={call_span} fn={getattr(expr.fn, 'name', None)}", file=sys.stderr)
+		prev_span = self.b.current_span
+		if call_span != Span():
+			self.b.current_span = call_span
+		try:
+			if info.sig.can_throw:
+				dest = self.b.new_temp()
+				call = M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=True)
+				if call_span != Span():
+					call.span = call_span
+				self.b.emit(call)
+				self._local_types[dest] = call_abi_ret_type(info.sig, self._type_table)
+				return dest
+			if self._type_table.is_void(info.sig.user_ret_type):
+				call = M.Call(dest=None, fn_id=target_fn_id, args=arg_vals, can_throw=False)
+				if call_span != Span():
+					call.span = call_span
+				self.b.emit(call)
+				return None
 			dest = self.b.new_temp()
-			self.b.emit(M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=True))
-			self._local_types[dest] = call_abi_ret_type(info.sig, self._type_table)
+			call = M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=False)
+			if call_span != Span():
+				call.span = call_span
+			self.b.emit(call)
+			self._local_types[dest] = info.sig.user_ret_type
 			return dest
-		if self._type_table.is_void(info.sig.user_ret_type):
-			self.b.emit(M.Call(dest=None, fn_id=target_fn_id, args=arg_vals, can_throw=False))
-			return None
-		dest = self.b.new_temp()
-		self.b.emit(M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=False))
-		self._local_types[dest] = info.sig.user_ret_type
-		return dest
+		finally:
+			self.b.current_span = prev_span
 
 	def _lower_call_arg(self, arg: H.HExpr, param_ty: TypeId | None) -> M.ValueId:
 		"""
@@ -5335,6 +5493,11 @@ class HIRToMIR:
 					if self._typed_mode == "strict":
 						raise AssertionError("typed_mode strict: Unknown expr type encountered")
 				else:
+					if drift_debug.enabled("local_types_trace") and isinstance(expr, H.HLiteralBool) and known != self._bool_type:
+						import sys
+						td = self._type_table.get(known)
+						fn = self._current_fn_id
+						print(f"[drift:debug][local_types_trace] fn={fn} expr=HLiteralBool node_id={expr.node_id} known={known}:{td.kind.name}:{td.name}", file=sys.stderr)
 					return known
 		if isinstance(expr, H.HLiteralFloat):
 			return self._float_type

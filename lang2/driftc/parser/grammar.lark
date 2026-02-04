@@ -219,6 +219,7 @@ compound_stmt: if_stmt
 
 simple_stmt: let_stmt
 	           | return_stmt
+	           | assert_stmt
 	           | rethrow_stmt
 	           | raise_stmt
 	           | break_stmt
@@ -270,6 +271,7 @@ type_spec: COLON type_expr
 require_clause: REQUIRE trait_expr (COMMA trait_expr)*
 
 return_stmt: "return" expr?
+assert_stmt: "assert" "(" expr ("," expr)? ")"
 rethrow_stmt: RETHROW
 
 raise_stmt: ("raise" domain_clause? expr)

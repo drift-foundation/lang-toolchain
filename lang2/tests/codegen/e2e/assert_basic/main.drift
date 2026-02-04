@@ -1,0 +1,5 @@
+fn main() nothrow -> Int {
+	assert(true);
+	assert(1 == 1, "ok");
+	return 0;
+}

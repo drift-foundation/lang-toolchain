@@ -37,10 +37,14 @@ from __future__ import annotations
 
 import re
 import struct
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional
 
 from lang2.driftc.checker import FnInfo
+from lang2.driftc import debug as drift_debug
+from lang2.driftc.core.span import Span
 from lang2.driftc.core.function_id import FunctionId, FunctionRefId, function_symbol, function_ref_symbol
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.container_ids import ARRAY_CONTAINER_ID, RAW_BUFFER_CONTAINER_ID, STRING_CONTAINER_ID
@@ -116,6 +120,7 @@ from lang2.driftc.stage2 import (
 	CopyValue,
 	DropValue,
 	MoveOut,
+	AssertLoc,
 	ConstructError,
 	ErrorAddAttrDV,
 	ErrorEvent,
@@ -210,6 +215,14 @@ def _llvm_comdat_sym(name: str) -> str:
 
 
 DRIFT_DV_TYPE = "%DriftDiagnosticValue"
+DWARF_LANG = "DW_LANG_Rust"
+DW_TAG_POINTER = "DW_TAG_pointer_type"
+DW_TAG_STRUCT = "DW_TAG_structure_type"
+DW_TAG_MEMBER = "DW_TAG_member"
+DW_ATE_SIGNED = "DW_ATE_signed"
+DW_ATE_UNSIGNED = "DW_ATE_unsigned"
+DW_ATE_BOOLEAN = "DW_ATE_boolean"
+DW_ATE_FLOAT = "DW_ATE_float"
 
 
 # Public API -------------------------------------------------------------------
@@ -293,6 +306,7 @@ def lower_module_to_llvm(
 	argv_wrapper: Optional[str] = None,
 	word_bits: int | None = None,
 	float_bits: int | None = None,
+	debug_enabled: bool = True,
 ) -> LlvmModuleBuilder:
 	"""
 	Lower a set of SSA functions to an LLVM module.
@@ -304,7 +318,7 @@ def lower_module_to_llvm(
 	"""
 	if word_bits is None:
 		raise AssertionError("LLVM codegen requires explicit word_bits")
-	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64)
+	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
 
 	# --- ABI-boundary export wrappers (Milestone 4) --------------------------
@@ -498,12 +512,26 @@ def _escape_byte(b: int) -> str:
 	return f"\\{b:02X}"
 
 
+def _llvm_md_escape(text: str) -> str:
+	"""Escape strings used in LLVM metadata (handles backslash and quotes)."""
+	out = []
+	for ch in text:
+		if ch == "\\":
+			out.append("\\\\")
+		elif ch == "\"":
+			out.append("\\\"")
+		else:
+			out.append(ch)
+	return "".join(out)
+
+
 @dataclass
 class LlvmModuleBuilder:
 	"""Textual LLVM module builder with seeded ABI type declarations."""
 
 	word_bits: int
 	float_bits: int = 64
+	debug_enabled: bool = True
 	type_decls: List[str] = field(default_factory=list)
 	consts: List[str] = field(default_factory=list)
 	funcs: List[str] = field(default_factory=list)
@@ -526,6 +554,7 @@ class LlvmModuleBuilder:
 	needs_atomic_runtime: bool = False
 	needs_dv_runtime: bool = False
 	needs_error_runtime: bool = False
+	needs_assert_runtime: bool = False
 	needs_llvm_trap: bool = False
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
@@ -540,11 +569,112 @@ class LlvmModuleBuilder:
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
 	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
 	iface_vtable_sizes: Dict[str, int] = field(default_factory=dict)
+	_dbg_next_id: int = 0
+	_dbg_metadata: List[str] = field(default_factory=list)
+	_dbg_compile_unit_id: int | None = None
+	_dbg_file_ids: Dict[tuple[str, str], int] = field(default_factory=dict)
+	_dbg_subprogram_ids: Dict[str, int] = field(default_factory=dict)
+	_dbg_location_ids: Dict[tuple[int, int, int], int] = field(default_factory=dict)
+	_dbg_subroutine_type_id: int | None = None
+	_dbg_empty_md_id: int | None = None
+	_dbg_module_flag_ids: tuple[int, int] | None = None
+	_dbg_type_ids: Dict[TypeId, int] = field(default_factory=dict)
+	_dbg_expression_id: int | None = None
+	needs_dbg_intrinsics: bool = False
 
 	def _llty(self, ty: str) -> str:
 		if ty in (DRIFT_INT_TYPE, DRIFT_USIZE_TYPE):
 			return f"i{self.word_bits}"
 		return ty
+
+	def _dbg_new_id(self) -> int:
+		self._dbg_next_id += 1
+		return self._dbg_next_id
+
+	def _ensure_dbg_empty(self) -> int:
+		if self._dbg_empty_md_id is None:
+			self._dbg_empty_md_id = self._dbg_new_id()
+			self._dbg_metadata.append(f"!{self._dbg_empty_md_id} = !{{}}")
+		return self._dbg_empty_md_id
+
+	def _ensure_dbg_subroutine_type(self) -> int:
+		if self._dbg_subroutine_type_id is None:
+			empty = self._ensure_dbg_empty()
+			self._dbg_subroutine_type_id = self._dbg_new_id()
+			self._dbg_metadata.append(f"!{self._dbg_subroutine_type_id} = !DISubroutineType(types: !{empty})")
+		return self._dbg_subroutine_type_id
+
+	def _ensure_dbg_module_flags(self) -> tuple[int, int]:
+		if self._dbg_module_flag_ids is None:
+			dwarf_flag = self._dbg_new_id()
+			dbg_flag = self._dbg_new_id()
+			self._dbg_metadata.append(f"!{dwarf_flag} = !{{i32 2, !\"Dwarf Version\", i32 5}}")
+			self._dbg_metadata.append(f"!{dbg_flag} = !{{i32 2, !\"Debug Info Version\", i32 3}}")
+			self._dbg_module_flag_ids = (dwarf_flag, dbg_flag)
+		return self._dbg_module_flag_ids
+
+	def _ensure_dbg_expression(self) -> int:
+		if self._dbg_expression_id is None:
+			self._dbg_expression_id = self._dbg_new_id()
+			self._dbg_metadata.append(f"!{self._dbg_expression_id} = !DIExpression()")
+		return self._dbg_expression_id
+
+	def _ensure_di_file(self, span: Span | None) -> int:
+		file_name = "<unknown>"
+		dir_name = "."
+		if span is not None and span.file:
+			file_name = os.path.basename(span.file)
+			dir_name = os.path.dirname(span.file) or "."
+		key = (file_name, dir_name)
+		if key in self._dbg_file_ids:
+			return self._dbg_file_ids[key]
+		file_id = self._dbg_new_id()
+		self._dbg_file_ids[key] = file_id
+		self._dbg_metadata.append(
+			f"!{file_id} = !DIFile(filename: \"{_llvm_md_escape(file_name)}\", directory: \"{_llvm_md_escape(dir_name)}\")"
+		)
+		return file_id
+
+	def _ensure_di_compile_unit(self, file_id: int) -> int:
+		if self._dbg_compile_unit_id is None:
+			empty = self._ensure_dbg_empty()
+			self._dbg_compile_unit_id = self._dbg_new_id()
+			self._dbg_metadata.append(
+				f"!{self._dbg_compile_unit_id} = distinct !DICompileUnit(language: {DWARF_LANG}, file: !{file_id}, producer: \"driftc\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !{empty}, globals: !{empty})"
+			)
+		return self._dbg_compile_unit_id
+
+	def get_di_subprogram(self, fn_name: str, linkage_name: str | None, span: Span | None) -> int | None:
+		if not self.debug_enabled:
+			return None
+		if fn_name in self._dbg_subprogram_ids:
+			return self._dbg_subprogram_ids[fn_name]
+		file_id = self._ensure_di_file(span)
+		cu_id = self._ensure_di_compile_unit(file_id)
+		sub_type = self._ensure_dbg_subroutine_type()
+		line = span.line if span is not None and span.line is not None else 1
+		sub_id = self._dbg_new_id()
+		linkage = linkage_name or fn_name
+		self._dbg_metadata.append(
+			f"!{sub_id} = distinct !DISubprogram(name: \"{_llvm_md_escape(fn_name)}\", linkageName: \"{_llvm_md_escape(linkage)}\", scope: !{file_id}, file: !{file_id}, line: {line}, type: !{sub_type}, unit: !{cu_id}, spFlags: DISPFlagDefinition, retainedNodes: !{self._ensure_dbg_empty()})"
+		)
+		self._dbg_subprogram_ids[fn_name] = sub_id
+		return sub_id
+
+	def get_di_location(self, span: Span | None, scope_id: int | None) -> int | None:
+		if not self.debug_enabled or scope_id is None:
+			return None
+		if span is None or span.line is None:
+			return None
+		line = span.line
+		column = span.column or 1
+		key = (scope_id, line, column)
+		if key in self._dbg_location_ids:
+			return self._dbg_location_ids[key]
+		loc_id = self._dbg_new_id()
+		self._dbg_location_ids[key] = loc_id
+		self._dbg_metadata.append(f"!{loc_id} = !DILocation(line: {line}, column: {column}, scope: !{scope_id})")
+		return loc_id
 
 	def __post_init__(self) -> None:
 		inline_storage = f"[{DRIFT_IFACE_INLINE_WORDS} x {self._llty(DRIFT_USIZE_TYPE)}]"
@@ -958,10 +1088,31 @@ class LlvmModuleBuilder:
 					"",
 				]
 			)
+		if self.needs_assert_runtime:
+			lines.extend(
+				[
+					f"declare void @drift_assert_loc(i1, {DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
+					"",
+				]
+			)
 		if self.needs_llvm_trap:
 			lines.append("declare void @llvm.trap()")
 			lines.append("")
+		if self.debug_enabled and self.needs_dbg_intrinsics:
+			lines.extend(
+				[
+					"declare void @llvm.dbg.declare(metadata, metadata, metadata)",
+					"declare void @llvm.dbg.value(metadata, metadata, metadata)",
+					"",
+				]
+			)
 		lines.extend(self.funcs)
+		if self.debug_enabled and self._dbg_compile_unit_id is not None:
+			dwarf_flag, dbg_flag = self._ensure_dbg_module_flags()
+			lines.append("")
+			lines.append(f"!llvm.dbg.cu = !{{!{self._dbg_compile_unit_id}}}")
+			lines.append(f"!llvm.module.flags = !{{!{dwarf_flag}, !{dbg_flag}}}")
+			lines.extend(self._dbg_metadata)
 		lines.append("")
 		return "\n".join(lines)
 
@@ -1039,6 +1190,13 @@ class _FuncBuilder:
 	_variant_layouts: Dict[TypeId, "_VariantLayout"] = field(default_factory=dict)
 	_size_align_cache: Dict[TypeId, tuple[int, int]] = field(default_factory=dict)
 	_drop_cache: Dict[TypeId, bool] = field(default_factory=dict)
+	_dbg_subprogram_id: int | None = None
+	_dbg_default_span: Span | None = None
+	_dbg_local_ids: Dict[str, int] = field(default_factory=dict)
+	_dbg_local_declared: set[str] = field(default_factory=set)
+	_dbg_last_span: Span | None = None
+	_dbg_keepalive_allocas: Dict[str, str] = field(default_factory=dict)
+	_dbg_keepalive_storage_types: Dict[str, str] = field(default_factory=dict)
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
@@ -1125,7 +1283,161 @@ class _FuncBuilder:
 		if is_instantiation:
 			self.module.ensure_comdat(func_name)
 			comdat = " comdat"
-		self.lines.append(f"define{linkage} {emit_ret_ty} {_llvm_fn_sym(func_name)}({params_str}){comdat} {{")
+		dbg_suffix = ""
+		if self.module.debug_enabled:
+			span = Span.from_loc(getattr(self.fn_info.signature, "loc", None)) if self.fn_info.signature is not None else Span()
+			self._dbg_default_span = span
+			self._dbg_subprogram_id = self.module.get_di_subprogram(func_name, func_name, span)
+			if self._dbg_subprogram_id is not None:
+				dbg_suffix = f" !dbg !{self._dbg_subprogram_id}"
+		self.lines.append(f"define{linkage} {emit_ret_ty} {_llvm_fn_sym(func_name)}({params_str}){comdat}{dbg_suffix} {{")
+
+	def _dbg_local_var(self, local: str, ty_id: TypeId, span: Span | None) -> int | None:
+		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
+			return None
+		if local in self._dbg_local_ids:
+			return self._dbg_local_ids[local]
+		file_id = self.module._ensure_di_file(span)
+		line = span.line if span is not None and span.line is not None else 1
+		di_type = self._dbg_type_for_typeid(ty_id, span)
+		if di_type is None:
+			return None
+		local_id = self.module._dbg_new_id()
+		self.module._dbg_metadata.append(
+			f"!{local_id} = !DILocalVariable(name: \"{_llvm_md_escape(local)}\", scope: !{self._dbg_subprogram_id}, file: !{file_id}, line: {line}, type: !{di_type})"
+		)
+		self._dbg_local_ids[local] = local_id
+		return local_id
+
+	def _dbg_type_for_typeid(self, ty_id: TypeId, span: Span | None) -> int | None:
+		if not self.module.debug_enabled or self.type_table is None:
+			return None
+		if ty_id in self.module._dbg_type_ids:
+			return self.module._dbg_type_ids[ty_id]
+		td = self.type_table.get(ty_id)
+		file_id = self.module._ensure_di_file(span)
+		size_bytes, align_bytes = self._size_align_typeid(ty_id)
+		size_bits = max(0, size_bytes * 8)
+		align_bits = max(0, align_bytes * 8)
+		name = getattr(td, "name", None) or self.type_table.type_key_string(ty_id)
+		if td.kind is TypeKind.REF:
+			inner = td.param_types[0] if td.param_types else None
+			base = self._dbg_type_for_typeid(inner, span) if inner is not None else None
+			type_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{type_id} = !DIDerivedType(tag: {DW_TAG_POINTER}, baseType: !{base}, size: {size_bits}, align: {align_bits})"
+			)
+			self.module._dbg_type_ids[ty_id] = type_id
+			return type_id
+		if td.kind is TypeKind.SCALAR:
+			lower = (td.name or "").lower()
+			if lower in ("string", "error", "diagnosticvalue"):
+				type_id = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{type_id} = !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{self.module._ensure_dbg_empty()})"
+				)
+				self.module._dbg_type_ids[ty_id] = type_id
+				return type_id
+			if lower in ("int", "i32", "i64", "isize"):
+				encoding = DW_ATE_SIGNED
+			elif lower in ("uint", "u32", "u64", "usize", "byte"):
+				encoding = DW_ATE_UNSIGNED
+			elif lower == "bool":
+				encoding = DW_ATE_BOOLEAN
+			elif lower == "float":
+				encoding = DW_ATE_FLOAT
+			else:
+				encoding = DW_ATE_UNSIGNED
+			type_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{type_id} = !DIBasicType(name: \"{_llvm_md_escape(name)}\", size: {size_bits}, encoding: {encoding})"
+			)
+			self.module._dbg_type_ids[ty_id] = type_id
+			return type_id
+		if td.kind is TypeKind.STRUCT:
+			struct_id = self.module._dbg_new_id()
+			elements_id = self.module._dbg_new_id()
+			self.module._dbg_type_ids[ty_id] = struct_id
+			inst = self.type_table.get_struct_instance(ty_id)
+			field_names = list(inst.field_names) if inst is not None else []
+			field_types = list(inst.field_types) if inst is not None else []
+			member_ids: list[int] = []
+			offset_bytes = 0
+			for idx, fty in enumerate(field_types):
+				fsz, fal = self._size_align_typeid(fty)
+				if fal > 0 and offset_bytes % fal != 0:
+					offset_bytes += fal - (offset_bytes % fal)
+				member_id = self.module._dbg_new_id()
+				fname = field_names[idx] if idx < len(field_names) else f"field{idx}"
+				base = self._dbg_type_for_typeid(fty, span)
+				fsz_bits = fsz * 8
+				fal_bits = max(0, fal * 8)
+				off_bits = offset_bytes * 8
+				self.module._dbg_metadata.append(
+					f"!{member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"{_llvm_md_escape(fname)}\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{base}, size: {fsz_bits}, align: {fal_bits}, offset: {off_bits})"
+				)
+				member_ids.append(member_id)
+				offset_bytes += fsz
+			if member_ids:
+				members = ", ".join(f"!{mid}" for mid in member_ids)
+				self.module._dbg_metadata.append(f"!{elements_id} = !{{{members}}}")
+			else:
+				self.module._dbg_metadata.append(f"!{elements_id} = !{{}}")
+			self.module._dbg_metadata.append(
+				f"!{struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{elements_id})"
+			)
+			return struct_id
+		type_id = self.module._dbg_new_id()
+		self.module._dbg_metadata.append(
+			f"!{type_id} = !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{self.module._ensure_dbg_empty()})"
+		)
+		self.module._dbg_type_ids[ty_id] = type_id
+		return type_id
+
+	def _emit_dbg_value(self, local: str, ty_id: TypeId, value: str, span: Span | None) -> None:
+		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
+			return
+		local_id = self._dbg_local_var(local, ty_id, span)
+		if local_id is None:
+			return
+		expr_id = self.module._ensure_dbg_expression()
+		self.module.needs_dbg_intrinsics = True
+		loc_id = self._dbg_location_for_span(span)
+		val_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
+		emit_llty = self._llty(val_llty)
+		line = f"  call void @llvm.dbg.value(metadata {emit_llty} {value}, metadata !{local_id}, metadata !{expr_id})"
+		if loc_id is not None:
+			line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
+
+	def _emit_dbg_declare(self, local: str, ty_id: TypeId, alloca_id: str, store_llty: str, span: Span | None) -> None:
+		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
+			return
+		if local in self._dbg_local_declared:
+			return
+		local_id = self._dbg_local_var(local, ty_id, span)
+		if local_id is None:
+			return
+		expr_id = self.module._ensure_dbg_expression()
+		self.module.needs_dbg_intrinsics = True
+		loc_id = self._dbg_location_for_span(span)
+		emit_store_llty = self._llty(store_llty)
+		line = f"  call void @llvm.dbg.declare(metadata {emit_store_llty}* %{alloca_id}, metadata !{local_id}, metadata !{expr_id})"
+		if loc_id is not None:
+			line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
+		self._dbg_local_declared.add(local)
+
+	def _dbg_location_for_span(self, span: Span | None) -> int | None:
+		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
+			return None
+		use_span = span
+		if use_span is None or use_span == Span():
+			use_span = self._dbg_default_span
+		loc_id = self.module.get_di_location(use_span, self._dbg_subprogram_id)
+		if loc_id is None:
+			loc_id = self.module.get_di_location(Span(file="<unknown>", line=1, column=1), self._dbg_subprogram_id)
+		return loc_id
 
 	def _declare_array_helpers_if_needed(self) -> None:
 		"""Mark the module to emit array helper decls if any array ops are present."""
@@ -1229,6 +1541,56 @@ class _FuncBuilder:
 			self._entry_alloca_insert_index += 1
 		return alloca_id
 
+	def _dbg_keepalive_alloca_name(self, local: str) -> str:
+		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in local)
+		return f"__dbg_keepalive_{safe}__addr"
+
+	def _ensure_dbg_keepalive_storage(self, local: str, llty: str) -> str:
+		existing = self._dbg_keepalive_storage_types.get(local)
+		if existing is not None:
+			if existing != llty:
+				raise AssertionError(
+					f"debug keepalive storage type mismatch for '{local}': {existing} vs {llty}"
+				)
+			return self._dbg_keepalive_allocas[local]
+		if self._entry_alloca_insert_index is None:
+			if self._current_block_name == self.func.entry:
+				self._ensure_entry_insertion_point()
+			else:
+				raise AssertionError("debug keepalive storage requested before entry block insertion point is set")
+		alloca_id = self._dbg_keepalive_alloca_name(local)
+		emit_llty = self._llty(llty)
+		self.lines.insert(self._entry_alloca_insert_index, f"  %{alloca_id} = alloca {emit_llty}")
+		self._entry_alloca_insert_index += 1
+		self._dbg_keepalive_storage_types[local] = llty
+		self._dbg_keepalive_allocas[local] = alloca_id
+		return alloca_id
+
+	def _emit_dbg_keepalive_store(self, local: str, ty_id: TypeId, src_val: str, span: Span | None) -> None:
+		if not self.module.debug_enabled or self.type_table is None:
+			return
+		td = self.type_table.get(ty_id)
+		if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
+			return
+		store_llty = self._llvm_storage_type_for_typeid(ty_id)
+		alloca_id = self._ensure_dbg_keepalive_storage(local, store_llty)
+		self._emit_dbg_declare(local, ty_id, alloca_id, store_llty, span)
+		val_llty = self.value_types.get(src_val)
+		if val_llty is None:
+			val_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
+			self.value_types[src_val] = val_llty
+		val = src_val
+		if store_llty == "i8" and val_llty == "i1":
+			tmp = self._fresh("bool8")
+			self.lines.append(f"  {tmp} = zext i1 {val} to i8")
+			val = tmp
+		emit_store_llty = self._llty(store_llty)
+		line = f"  store {emit_store_llty} {val}, {emit_store_llty}* %{alloca_id}"
+		loc_id = self._dbg_location_for_span(span)
+		if loc_id is not None:
+			line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
+
 	def _emit_entry_param_inits(self) -> None:
 		"""
 		Initialize storage for address-taken parameters.
@@ -1277,10 +1639,37 @@ class _FuncBuilder:
 		for idx, instr in enumerate(block.instructions):
 			if isinstance(instr, Phi):
 				continue
+			start_line = len(self.lines)
 			self._lower_instr(instr, instr_index=idx)
+			if len(self.lines) > start_line:
+				if not isinstance(instr, AssignSSA):
+					self._attach_dbg(start_line, instr)
+		term_start = len(self.lines)
 		self._lower_term(block.terminator)
+		if len(self.lines) > term_start:
+			self._attach_dbg(term_start, block.terminator)
 		# Best-effort cleanup; not strictly necessary.
 		self._current_block_name = None
+
+	def _attach_dbg(self, line_index: int, instr: object) -> None:
+		if not self.module.debug_enabled:
+			return
+		if self._dbg_subprogram_id is None:
+			return
+		if line_index < len(self.lines) and ", !dbg !" in self.lines[line_index]:
+			return
+		span = getattr(instr, "span", None)
+		if span is None or span == Span():
+			span = self._dbg_last_span or self._dbg_default_span
+		if span is None or span == Span():
+			span = Span(file="<unknown>", line=0, column=0)
+		loc_id = self.module.get_di_location(span, self._dbg_subprogram_id)
+		if loc_id is None:
+			return
+		if line_index >= len(self.lines):
+			return
+		self.lines[line_index] = f"{self.lines[line_index]}, !dbg !{loc_id}"
+		self._dbg_last_span = span
 
 	def _lower_phi(self, block_name: str, phi: Phi) -> None:
 		dest = self._map_value(phi.dest)
@@ -1559,6 +1948,35 @@ class _FuncBuilder:
 				f"{DRIFT_STRING_TYPE} {left}, {DRIFT_STRING_TYPE} {right})"
 			)
 			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, AssertLoc):
+			cond = self._map_value(instr.cond)
+			file_val = self._map_value(instr.file)
+			line_val = self._map_value(instr.line)
+			msg_val = self._map_value(instr.msg)
+			cond_ty = self.value_types.get(cond)
+			if cond_ty != "i1":
+				raise NotImplementedError(
+					f"LLVM codegen v1: assert cond must be Bool (i1), got {cond_ty}"
+				)
+			file_ty = self.value_types.get(file_val)
+			if file_ty != DRIFT_STRING_TYPE:
+				raise NotImplementedError(
+					f"LLVM codegen v1: assert file must be String ({DRIFT_STRING_TYPE}), got {file_ty}"
+				)
+			line_ty = self.value_types.get(line_val)
+			if line_ty != DRIFT_INT_TYPE:
+				raise NotImplementedError(
+					f"LLVM codegen v1: assert line must be Int ({DRIFT_INT_TYPE}), got {line_ty}"
+				)
+			msg_ty = self.value_types.get(msg_val)
+			if msg_ty != DRIFT_STRING_TYPE:
+				raise NotImplementedError(
+					f"LLVM codegen v1: assert msg must be String ({DRIFT_STRING_TYPE}), got {msg_ty}"
+				)
+			self.module.needs_assert_runtime = True
+			self.lines.append(
+				f"  call void @drift_assert_loc(i1 {cond}, {DRIFT_STRING_TYPE} {file_val}, {self._llty(DRIFT_INT_TYPE)} {line_val}, {DRIFT_STRING_TYPE} {msg_val})"
+			)
 		elif isinstance(instr, StringFromInt):
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
@@ -1659,6 +2077,34 @@ class _FuncBuilder:
 			# AssignSSA is a pure SSA alias. We pre-collect aliases in
 			# `_collect_assign_aliases` so Φ lowering can resolve aliases even when
 			# the defining AssignSSA appears in a later-emitted block.
+			if self.module.debug_enabled and self.type_table is not None:
+				debug_name = getattr(instr, "debug_name", None)
+				local_name = getattr(instr, "local", None)
+				if debug_name is None and local_name is not None:
+					debug_name = self.func.debug_local_names.get(local_name)
+				ty_id = None
+				if local_name is not None:
+					ty_id = self.func.local_types.get(local_name)
+				if ty_id is None and debug_name is not None:
+					ty_id = self.func.local_types.get(debug_name)
+				if ty_id is None:
+					ty_id = self.func.local_types.get(instr.dest)
+				if ty_id is not None:
+					td = self.type_table.get(ty_id)
+					if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
+						if drift_debug.enabled("dbg_unknown_types"):
+							import sys
+							span_dbg = getattr(instr, "span", None)
+							print(
+								f"[drift:debug][dbg_unknown_types] fn={self.func.fn_id} local={local_name or instr.dest} ty={ty_id}:{td.kind.name}:{td.name} span={span_dbg}",
+								file=sys.stderr,
+							)
+						return
+					span = getattr(instr, "span", None) or self._dbg_default_span
+					src_val = self._map_value(instr.src)
+					self._emit_dbg_value(debug_name or local_name or instr.dest, ty_id, src_val, span)
+					if local_name is not None:
+						self._emit_dbg_keepalive_store(local_name, ty_id, src_val, span)
 			return
 		elif isinstance(instr, LoadLocal):
 			# Address-taken locals are materialized as storage. For them, LoadLocal
@@ -1717,6 +2163,11 @@ class _FuncBuilder:
 					val = self._bool_to_storage(val)
 				emit_store_llty = self._llty(store_llty)
 				self.lines.append(f"  store {emit_store_llty} {val}, {emit_store_llty}* %{alloca_id}")
+				if self.module.debug_enabled and self.type_table is not None:
+					ty_id = self.func.local_types.get(instr.local)
+					span = getattr(instr, "span", None) or self._dbg_default_span
+					if ty_id is not None:
+						self._emit_dbg_declare(instr.local, ty_id, alloca_id, store_llty, span)
 				return
 			# SSA maps locals to versioned names; no IR emission required here.
 			block_name = getattr(self, "_current_block_name", None)
@@ -1730,6 +2181,11 @@ class _FuncBuilder:
 					self.value_types[ssa_name] = self.value_types[val]
 			if instr.local in self.value_types and val in self.value_types:
 				self.value_types[instr.local] = self.value_types[val]
+			if self.module.debug_enabled and self.type_table is not None:
+				ty_id = self.func.local_types.get(instr.local)
+				span = getattr(instr, "span", None) or self._dbg_default_span
+				if ty_id is not None:
+					self._emit_dbg_value(instr.local, ty_id, val, span)
 		elif isinstance(instr, AddrOfLocal):
 			# Produce a pointer to a stable local storage slot.
 			llty = self.local_storage_types.get(instr.local)
@@ -2377,6 +2833,8 @@ class _FuncBuilder:
 		return dest
 
 	def _lower_call(self, instr: Call) -> None:
+		if drift_debug.enabled("llvm") and getattr(instr.fn_id, "module", None) == "main":
+			print(f"[drift:debug][llvm] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 		dest = self._map_value(instr.dest) if instr.dest else None
 		callee_info = self.fn_infos.get(instr.fn_id)
 		callee_sym = function_symbol(instr.fn_id)

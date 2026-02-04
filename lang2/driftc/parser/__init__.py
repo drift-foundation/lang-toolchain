@@ -685,6 +685,14 @@ def _convert_unsafe_block(stmt: parser_ast.UnsafeBlockStmt) -> s0.Stmt:
 	return s0.UnsafeBlockStmt(body=_convert_block(stmt.block), loc=Span.from_loc(stmt.loc))
 
 
+def _convert_assert(stmt: parser_ast.AssertStmt) -> s0.Stmt:
+	return s0.AssertStmt(
+		cond=_convert_expr(stmt.cond),
+		msg=_convert_expr(stmt.msg) if stmt.msg is not None else None,
+		loc=Span.from_loc(stmt.loc),
+	)
+
+
 _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]] = {
 	parser_ast.ReturnStmt: _convert_return,
 	parser_ast.ExprStmt: _convert_expr_stmt,
@@ -700,6 +708,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.RaiseStmt: _convert_raise,
 	parser_ast.RethrowStmt: _convert_rethrow,
 	parser_ast.TryStmt: _convert_try,
+	parser_ast.AssertStmt: _convert_assert,
 	parser_ast.ImportStmt: _convert_import,
 	parser_ast.UnsafeBlockStmt: _convert_unsafe_block,
 }
@@ -1144,7 +1153,7 @@ def parse_drift_files_to_hir(
 	for path in paths:
 		source = path.read_text()
 		try:
-			prog = _parser.parse_program(source)
+			prog = _parser.parse_program(source, filename=str(path))
 		except _parser.ModuleDeclError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
@@ -1384,7 +1393,7 @@ def parse_drift_workspace_to_hir(
 	for path in paths:
 		source = path.read_text()
 		try:
-			prog = _parser.parse_program(source)
+			prog = _parser.parse_program(source, filename=str(path))
 		except _parser.ModuleDeclError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
@@ -4253,7 +4262,7 @@ def parse_drift_to_hir(
 	path = path.resolve()
 	source = path.read_text()
 	try:
-		prog = _parser.parse_program(source)
+		prog = _parser.parse_program(source, filename=str(path))
 		prog = _filter_test_build_only(prog, test_build_only=test_build_only)
 	except _parser.FStringParseError as err:
 		empty = ModuleLowered(

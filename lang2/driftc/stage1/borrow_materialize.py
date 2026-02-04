@@ -56,6 +56,13 @@ class BorrowMaterializeRewriter:
 		if isinstance(stmt, H.HExprStmt):
 			pfx, expr = self._rewrite_expr(stmt.expr)
 			return pfx + [H.HExprStmt(expr=expr)]
+		if isinstance(stmt, H.HAssert):
+			pfx_c, cond = self._rewrite_expr(stmt.cond)
+			if stmt.msg is not None:
+				pfx_m, msg = self._rewrite_expr(stmt.msg)
+			else:
+				pfx_m, msg = [], None
+			return pfx_c + pfx_m + [H.HAssert(cond=cond, msg=msg, loc=stmt.loc)]
 		if isinstance(stmt, H.HThrow):
 			pfx, expr = self._rewrite_expr(stmt.value)
 			return pfx + [H.HThrow(value=expr)]
@@ -86,7 +93,7 @@ class BorrowMaterializeRewriter:
 			if stmt.value is None:
 				return [stmt]
 			pfx, expr = self._rewrite_expr(stmt.value)
-			return pfx + [H.HReturn(value=expr)]
+			return pfx + [H.HReturn(value=expr, loc=getattr(stmt, "loc", Span()))]
 		if isinstance(stmt, H.HIf):
 			pfx, cond = self._rewrite_expr(stmt.cond)
 			then_block = self.rewrite_block(stmt.then_block)
@@ -227,6 +234,7 @@ class BorrowMaterializeRewriter:
 				type_args=getattr(expr, "type_args", None),
 				callsite_id=getattr(expr, "callsite_id", None),
 				origin=getattr(expr, "origin", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, getattr(H, "HInvoke", ())):
 			pfx_callee, callee = self._rewrite_expr(expr.callee)
@@ -247,6 +255,7 @@ class BorrowMaterializeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 			inv.callsite_id = getattr(expr, "callsite_id", None)
 			return pfx_callee + pfx_args + pfx_kwargs, inv
@@ -270,6 +279,7 @@ class BorrowMaterializeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				loc=getattr(expr, "loc", Span()),
 			)
 			mc.callsite_id = getattr(expr, "callsite_id", None)
 			return pfx_recv + pfx_args + pfx_kwargs, mc

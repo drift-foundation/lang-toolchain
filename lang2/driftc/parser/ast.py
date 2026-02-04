@@ -43,6 +43,7 @@ class ExceptionDef:
 class Located:
     line: int
     column: int
+    file: str | None = None
 
 
 @dataclass
@@ -187,6 +188,13 @@ class IfStmt(Stmt):
 class ReturnStmt(Stmt):
     loc: Located
     value: Optional["Expr"]
+
+
+@dataclass
+class AssertStmt(Stmt):
+	loc: Located
+	cond: "Expr"
+	msg: Optional["Expr"] = None
 
 
 @dataclass

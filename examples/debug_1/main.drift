@@ -1,0 +1,33 @@
+pub fn main() nothrow -> Int {
+	val a = 6;
+	val b = 7;
+	val c = add(a, b);
+	val d = mul(c, 3);
+	val e = clamp(d, 10, 50);
+	val p = Point(x = a, y = d, label = "pt");
+	return e;
+}
+
+struct Point {
+	x: Int,
+	y: Int,
+	label: String,
+}
+
+fn add(x: Int, y: Int) nothrow -> Int {
+	return x + y;
+}
+
+fn mul(x: Int, y: Int) nothrow -> Int {
+	return x * y;
+}
+
+fn clamp(v: Int, lo: Int, hi: Int) nothrow -> Int {
+	if v < lo {
+		return lo;
+	}
+	if v > hi {
+		return hi;
+	}
+	return v;
+}

@@ -15,6 +15,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "atomic_runtime.c",
 		base / "posix" / "io_runtime.c",
 		base / "posix" / "thread_runtime.c",
+		base / "posix" / "assert_runtime.c",
 		# Diagnostic/Error runtime lives alongside lang2/ for now; include it so
 		# e2e codegen links DV/exception helpers.
 		runtime / "diagnostic_runtime.c",

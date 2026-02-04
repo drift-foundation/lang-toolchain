@@ -10,6 +10,7 @@ from lark import Lark, Token, Tree
 from .ast import (
     ArrayLiteral,
     AssignStmt,
+    AssertStmt,
     AugAssignStmt,
     Attr,
     QualifiedMember,
@@ -209,7 +210,7 @@ def _parse_fstring(loc: Located, raw_string_token: Token) -> FString:
 		parts.append(_decode_string_fragment(fragment_raw))
 
 	def _hole_loc(offset: int) -> Located:
-		return Located(line=base_line, column=base_col + offset)
+		return Located(line=base_line, column=base_col + offset, file=_CURRENT_FILE)
 
 	def _unescape_hole_source(src: str) -> str:
 		out: list[str] = []
@@ -714,10 +715,18 @@ _PARSER = Lark(
     postlex=DriftPostLex(),
 )
 
+_CURRENT_FILE: str | None = None
 
-def parse_program(source: str) -> Program:
-    tree = _PARSER.parse(source)
-    return _build_program(tree)
+
+def parse_program(source: str, *, filename: str | None = None) -> Program:
+    global _CURRENT_FILE
+    prev_file = _CURRENT_FILE
+    _CURRENT_FILE = filename
+    try:
+        tree = _PARSER.parse(source)
+        return _build_program(tree)
+    finally:
+        _CURRENT_FILE = prev_file
 
 
 class ModuleDeclError(ValueError):
@@ -914,7 +923,7 @@ def _build_type_alias_def(tree: Tree) -> "TypeAliasDef":
 		for tok in type_params_node.children:
 			if isinstance(tok, Token) and tok.type == "NAME":
 				type_params.append(tok.value)
-				type_param_locs.append(Located(tok.line, tok.column))
+				type_param_locs.append(Located(tok.line, tok.column, file=_CURRENT_FILE))
 	type_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr")
 	return TypeAliasDef(
 		loc=loc,
@@ -1406,7 +1415,7 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 
 
 def _build_block(tree: Tree) -> Block:
-    statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt] = []
+    statements: List[ExprStmt | LetStmt | ReturnStmt | AssertStmt | RaiseStmt] = []
     for child in tree.children:
         if not isinstance(child, Tree):
             continue
@@ -1430,7 +1439,7 @@ def _build_value_block(tree: Tree) -> Block:
     "yields a value" rules (e.g. try/catch expression catch arms).
     """
 
-    statements: List[ExprStmt | LetStmt | ReturnStmt | RaiseStmt] = []
+    statements: List[ExprStmt | LetStmt | ReturnStmt | AssertStmt | RaiseStmt] = []
     result_expr_node: Tree | None = None
 
     for child in tree.children:
@@ -1622,7 +1631,7 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 				if len(children) == 1 and _name(children[0]) in {"angle_type_args", "square_type_args"}:
 					children = [arg for arg in children[0].children if isinstance(arg, Tree)]
 				args = [_build_type_expr(arg) for arg in children]
-		return TypeExpr(name=name_token.value, args=args, loc=Located(line=name_token.line, column=name_token.column))
+		return TypeExpr(name=name_token.value, args=args, loc=Located(line=name_token.line, column=name_token.column, file=_CURRENT_FILE))
 	if name == "qualified_base_type":
 		# module_path type_args?
 		module_path = tree.children[0]
@@ -1633,7 +1642,7 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 				if isinstance(child, Token) and child.type == "NAME":
 					path_parts.append(child.value)
 					if path_loc is None:
-						path_loc = Located(line=child.line, column=child.column)
+						path_loc = Located(line=child.line, column=child.column, file=_CURRENT_FILE)
 		if len(path_parts) < 2:
 			return TypeExpr(name="<unknown>")
 		name_tok = path_parts[-1]
@@ -1693,6 +1702,8 @@ def _build_stmt(tree: Tree):
 			return _build_assign_stmt(target)
 		if stmt_kind == "return_stmt":
 			return _build_return_stmt(target)
+		if stmt_kind == "assert_stmt":
+			return _build_assert_stmt(target)
 		if stmt_kind == "rethrow_stmt":
 			return _build_rethrow_stmt(target)
 		if stmt_kind == "raise_stmt":
@@ -1736,6 +1747,8 @@ def _build_stmt(tree: Tree):
 		return _build_aug_assign_stmt(tree)
 	if kind == "return_stmt":
 		return _build_return_stmt(tree)
+	if kind == "assert_stmt":
+		return _build_assert_stmt(tree)
 	if kind == "rethrow_stmt":
 		return _build_rethrow_stmt(tree)
 	if kind == "raise_stmt":
@@ -1917,6 +1930,14 @@ def _build_return_stmt(tree: Tree) -> ReturnStmt:
 	children = [child for child in tree.children if not isinstance(child, Token) or child.type != "RETURN"]
 	value = _build_expr(children[0]) if children else None
 	return ReturnStmt(loc=loc, value=value)
+
+
+def _build_assert_stmt(tree: Tree) -> AssertStmt:
+	loc = _loc(tree)
+	children = [child for child in tree.children if isinstance(child, Tree)]
+	cond = _build_expr(children[0])
+	msg = _build_expr(children[1]) if len(children) > 1 else None
+	return AssertStmt(loc=loc, cond=cond, msg=msg)
 
 
 def _build_rethrow_stmt(tree: Tree) -> RethrowStmt:
@@ -2387,12 +2408,12 @@ def _build_expr(node) -> Expr:
             base_alias = name_toks[0].value
             base_name = name_toks[1].value
             member_tok = name_toks[2]
-            base_loc = Located(line=name_toks[0].line, column=name_toks[0].column)
+            base_loc = Located(line=name_toks[0].line, column=name_toks[0].column, file=_CURRENT_FILE)
         else:
             base_alias = None
             base_name = name_toks[0].value
             member_tok = name_toks[1]
-            base_loc = Located(line=name_toks[0].line, column=name_toks[0].column)
+            base_loc = Located(line=name_toks[0].line, column=name_toks[0].column, file=_CURRENT_FILE)
 
         base_type = TypeExpr(
             name=base_name,
@@ -3053,11 +3074,11 @@ def _build_kwarg(tree: Tree) -> KwArg:
 
 def _loc(tree: Tree) -> Located:
     meta = tree.meta
-    return Located(line=meta.line, column=meta.column)
+    return Located(line=meta.line, column=meta.column, file=_CURRENT_FILE)
 
 
 def _loc_from_token(token: Token) -> Located:
-    return Located(line=token.line, column=token.column)
+    return Located(line=token.line, column=token.column, file=_CURRENT_FILE)
 
 
 def _name(node: Tree | Token) -> str:

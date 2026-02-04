@@ -88,6 +88,7 @@ from .mir_nodes import (
 	StringEq,
 	StringCmp,
 	StringConcat,
+	AssertLoc,
 	Call,
 	CallIndirect,
 	CallIface,

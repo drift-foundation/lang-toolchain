@@ -4155,6 +4155,11 @@ class TypeChecker:
 				binding_param_ref_mut[pid] = True
 
 		def record_expr(expr: H.HExpr, ty: TypeId) -> TypeId:
+			if drift_debug.enabled("local_types_trace") and isinstance(expr, H.HLiteralBool) and ty != self._bool:
+				td = self.type_table.get(ty)
+				fn = fn_id
+				span = getattr(expr, "loc", Span())
+				print(f"[drift:debug][local_types_trace] fn={fn} record_expr=HLiteralBool node_id={expr.node_id} ty={ty}:{td.kind.name}:{td.name} span={span}", file=sys.stderr)
 			expr_types[expr.node_id] = ty
 			return ty
 
@@ -7496,6 +7501,28 @@ class TypeChecker:
 								message="Result value discarded in try-block (use 'use trait std.core.Try' or assign the value)",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
+						)
+					)
+			elif isinstance(stmt, H.HAssert):
+				cond_ty = type_expr(stmt.cond)
+				if cond_ty is not None and cond_ty != self._bool:
+					pretty = self._pretty_type_name(cond_ty, current_module=current_module_name)
+					diagnostics.append(
+						_tc_diag(
+							message=f"assert condition must be Bool (have '{pretty}')",
+							severity="error",
+							span=getattr(stmt, "loc", Span()),
+						)
+					)
+				if stmt.msg is not None:
+					msg_ty = type_expr(stmt.msg)
+					if msg_ty is not None and msg_ty != self._string:
+						pretty = self._pretty_type_name(msg_ty, current_module=current_module_name)
+						diagnostics.append(
+							_tc_diag(
+								message=f"assert message must be String (have '{pretty}')",
+								severity="error",
+								span=getattr(stmt, "loc", Span()),
 							)
 						)
 			elif isinstance(stmt, H.HReturn):
@@ -7754,8 +7781,44 @@ class TypeChecker:
 				return obj
 			return obj
 
+		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":
+			def _check_dup_expr_ids(tag: str) -> None:
+				print(f"[drift:debug][local_types_trace] fn={fn_id} scan={tag}", file=sys.stderr)
+				seen_expr_ids: Dict[int, tuple[str, object]] = {}
+				def _walk_expr_ids(obj: object) -> None:
+					if isinstance(obj, H.HExpr):
+						node_id = getattr(obj, "node_id", 0)
+						if node_id == 0:
+							return
+						kind = type(obj).__name__
+						span = getattr(obj, "loc", Span())
+						prev = seen_expr_ids.get(node_id)
+						if prev is None:
+							seen_expr_ids[node_id] = (kind, span)
+						else:
+							prev_kind, prev_span = prev
+							if prev_kind != kind:
+								print(f"[drift:debug][local_types_trace] fn={fn_id} {tag}_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=sys.stderr)
+					if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+						return
+					if is_dataclass(obj):
+						for f in fields(obj):
+							_walk_expr_ids(getattr(obj, f.name))
+						return
+					if isinstance(obj, (list, tuple)):
+						for item in obj:
+							_walk_expr_ids(item)
+						return
+					if isinstance(obj, dict):
+						for key in sorted(obj.keys(), key=repr):
+							_walk_expr_ids(obj[key])
+						return
+				_walk_expr_ids(body)
+			_check_dup_expr_ids("pre_fnptr")
 		if fnptr_consts_by_node_id:
 			_apply_fnptr_consts(body)
+		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":
+			_check_dup_expr_ids("post_fnptr")
 
 		typed = TypedFn(
 			fn_id=fn_id,

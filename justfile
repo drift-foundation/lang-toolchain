@@ -130,19 +130,34 @@ lang2-borrow-test:
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/borrow_checker
 
 # Build examples (lang2.driftc)
+make-example EXAMPLE:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	set -x
+	example="{{EXAMPLE}}"
+	out_dir="build/examples/${example}"
+	mkdir -p "${out_dir}"
+	if [[ -f "examples/${example}/server.drift" ]] && [[ -f "examples/${example}/client.drift" ]]; then
+		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib "examples/${example}/server.drift" -o "${out_dir}/server"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib "examples/${example}/client.drift" -o "${out_dir}/client"
+	else
+		out_bin="${out_dir}/example_${example}"
+		extra_args=()
+		if [[ "${example}" == debug_* ]]; then
+			extra_args+=(--debug-info)
+		fi
+		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc "${extra_args[@]}" --stdlib-root stdlib "examples/${example}/main.drift" -o "${out_bin}"
+	fi
+
 make-examples:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	set -x
-	mkdir -p build/examples/tcp_client_server
-	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/server.drift -o build/examples/tcp_client_server/server
-	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_client_server/client.drift -o build/examples/tcp_client_server/client
-	mkdir -p build/examples/file_io
-	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/file_io/main.drift -o build/examples/file_io/main
-	mkdir -p build/examples/udp_ping
-	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/udp_ping/main.drift -o build/examples/udp_ping/main
-	mkdir -p build/examples/tcp_echo
-	PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib examples/tcp_echo/main.drift -o build/examples/tcp_echo/main
+	just make-example tcp_client_server
+	just make-example file_io
+	just make-example udp_ping
+	just make-example tcp_echo
+	just make-example debug_1
 
 stage-for-review:
 	#!/usr/bin/env bash

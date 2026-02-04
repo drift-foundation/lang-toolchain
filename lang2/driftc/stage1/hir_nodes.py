@@ -93,6 +93,7 @@ class HVar(HExpr):
 	name: str
 	binding_id: Optional[BindingId] = None
 	module_id: Optional[str] = None
+	loc: Span = field(default_factory=Span)
 
 
 class HTraitExpr(HExpr):
@@ -219,18 +220,21 @@ class HPlaceExpr(HExpr):
 class HLiteralInt(HExpr):
 	"""Integer literal (as parsed)."""
 	value: int
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
 class HLiteralString(HExpr):
 	"""String literal (UTF-8 bytes; normalization happens later)."""
 	value: str
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
 class HLiteralBool(HExpr):
 	"""Boolean literal."""
 	value: bool
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -241,6 +245,7 @@ class HLiteralFloat(HExpr):
 	Surface `Float` in lang2 v1 is IEEE-754 double precision (`f64` / LLVM `double`).
 	"""
 	value: float
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -318,6 +323,7 @@ class HCall(HExpr):
 	type_args: Optional[list["HTypeExpr"]] = None
 	callsite_id: Optional[int] = None
 	origin: str | None = None
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -333,6 +339,7 @@ class HInvoke(HExpr):
 	kwargs: List["HKwArg"] = field(default_factory=list)
 	type_args: Optional[list["HTypeExpr"]] = None
 	callsite_id: Optional[int] = None
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -376,6 +383,7 @@ class HMethodCall(HExpr):
 	kwargs: List["HKwArg"] = field(default_factory=list)
 	type_args: Optional[list["HTypeExpr"]] = None
 	callsite_id: Optional[int] = None
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -675,6 +683,7 @@ class HUnsafeBlock(HStmt):
 class HExprStmt(HStmt):
 	"""Expression used as a statement (value discarded)."""
 	expr: HExpr
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -691,6 +700,7 @@ class HLet(HStmt):
 	declared_type_expr: Optional[object] = None
 	binding_id: Optional[BindingId] = None
 	is_mutable: bool = False
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -705,6 +715,7 @@ class HAssign(HStmt):
 	# Canonical assignment target (stage1→stage2 boundary).
 	target: "HPlaceExpr"
 	value: HExpr
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -739,6 +750,7 @@ class HIf(HStmt):
 	cond: HExpr
 	then_block: HBlock
 	else_block: Optional[HBlock]
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -760,6 +772,14 @@ class HContinue(HStmt):
 @dataclass
 class HReturn(HStmt):
 	value: Optional[HExpr]
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
+class HAssert(HStmt):
+	cond: HExpr
+	msg: Optional[HExpr] = None
+	loc: Span = field(default_factory=Span)
 
 
 __all__ = [
@@ -778,7 +798,7 @@ __all__ = [
 	"HExceptionInit",
 	"HUnary", "HBinary", "HArrayLiteral",
 	"HBlock", "HUnsafeBlock", "HExprStmt", "HLet", "HAssign", "HAugAssign", "HIf", "HLoop",
-	"HBreak", "HContinue", "HReturn",
+	"HBreak", "HContinue", "HReturn", "HAssert",
 	"HThrow", "HRethrow",
 	"HTry", "HCatchArm",
 	"HTryExpr", "HTryExprArm",

@@ -212,10 +212,10 @@ class AstToHIR:
 		"""
 		bid = self._lookup_binding(expr.ident)
 		if bid is not None:
-			return H.HVar(name=expr.ident, binding_id=bid)
+			return H.HVar(name=expr.ident, binding_id=bid, loc=self._as_span(getattr(expr, "loc", None)))
 		# Fallback: unresolved name remains an HVar. The typed checker is the
 		# authority for rejecting unknown variables with a source span.
-		return H.HVar(name=expr.ident, binding_id=None)
+		return H.HVar(name=expr.ident, binding_id=None, loc=self._as_span(getattr(expr, "loc", None)))
 
 	def _visit_expr_TraitIs(self, expr: ast.TraitIs) -> H.HExpr:
 		def _lower_trait_subject(subject: object) -> object:
@@ -258,14 +258,15 @@ class AstToHIR:
 		starts producing new literal value kinds, we want a loud failure here so
 		we don't silently mis-lower the program.
 		"""
+		loc = self._as_span(getattr(expr, "loc", None))
 		if isinstance(expr.value, bool):
-			return H.HLiteralBool(value=bool(expr.value))
+			return H.HLiteralBool(value=bool(expr.value), loc=loc)
 		if isinstance(expr.value, int):
-			return H.HLiteralInt(value=int(expr.value))
+			return H.HLiteralInt(value=int(expr.value), loc=loc)
 		if isinstance(expr.value, float):
-			return H.HLiteralFloat(value=float(expr.value))
+			return H.HLiteralFloat(value=float(expr.value), loc=loc)
 		if isinstance(expr.value, str):
-			return H.HLiteralString(value=str(expr.value))
+			return H.HLiteralString(value=str(expr.value), loc=loc)
 		raise NotImplementedError(f"Literal of unsupported type: {type(expr.value).__name__}")
 
 	def _as_span(self, loc: object | None) -> Span:
@@ -323,20 +324,26 @@ class AstToHIR:
 			declared_type_expr=getattr(stmt, "type_expr", None),
 			binding_id=bid,
 			is_mutable=bool(getattr(stmt, "mutable", False)),
+			loc=self._as_span(getattr(stmt, "loc", None)),
 		)
 
 	def _visit_stmt_ReturnStmt(self, stmt: ast.ReturnStmt) -> H.HStmt:
 		"""Return with optional value."""
 		val = self.lower_expr(stmt.value) if stmt.value is not None else None
-		return H.HReturn(value=val)
+		return H.HReturn(value=val, loc=self._as_span(getattr(stmt, "loc", None)))
+
+	def _visit_stmt_AssertStmt(self, stmt: ast.AssertStmt) -> H.HStmt:
+		cond = self.lower_expr(stmt.cond)
+		msg = self.lower_expr(stmt.msg) if stmt.msg is not None else None
+		return H.HAssert(cond=cond, msg=msg, loc=self._as_span(stmt.loc))
 
 	def _visit_stmt_ExprStmt(self, stmt: ast.ExprStmt) -> H.HStmt:
 		"""Expression as statement (value discarded)."""
 		if isinstance(stmt.expr, ast.MatchExpr):
-			return H.HExprStmt(expr=self._lower_match_expr(stmt.expr, value_context=False))
+			return H.HExprStmt(expr=self._lower_match_expr(stmt.expr, value_context=False), loc=self._as_span(getattr(stmt, "loc", None)))
 		if isinstance(stmt.expr, ast.TryCatchExpr):
-			return H.HExprStmt(expr=self._lower_try_expr(stmt.expr, value_context=False))
-		return H.HExprStmt(expr=self.lower_expr(stmt.expr))
+			return H.HExprStmt(expr=self._lower_try_expr(stmt.expr, value_context=False), loc=self._as_span(getattr(stmt, "loc", None)))
+		return H.HExprStmt(expr=self.lower_expr(stmt.expr), loc=self._as_span(getattr(stmt, "loc", None)))
 
 	# --- stubs for remaining nodes ---
 
@@ -374,6 +381,7 @@ class AstToHIR:
 				args=args,
 				kwargs=h_kwargs,
 				type_args=type_args,
+				loc=Span.from_loc(getattr(expr, "loc", None)),
 			)
 
 		# Plain function call or call through a computed value.
@@ -384,8 +392,8 @@ class AstToHIR:
 		if isinstance(fn_expr, (H.HVar, H.HLambda)) or (
 			hasattr(H, "HQualifiedMember") and isinstance(fn_expr, getattr(H, "HQualifiedMember"))
 		):
-			return H.HCall(fn=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args)
-		return H.HInvoke(callee=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args)
+			return H.HCall(fn=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args, loc=Span.from_loc(getattr(expr, "loc", None)))
+		return H.HInvoke(callee=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args, loc=Span.from_loc(getattr(expr, "loc", None)))
 
 	def _visit_expr_TypeApp(self, expr: ast.TypeApp) -> H.HExpr:
 		fn_expr = self.lower_expr(expr.func)
@@ -473,12 +481,12 @@ class AstToHIR:
 			left = self.lower_expr(expr.left)
 			def _call_expr(fn_expr: H.HExpr, args: list[H.HExpr], kwargs: list[H.HKwArg]) -> H.HExpr:
 				if isinstance(fn_expr, H.HVar):
-					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs)
+					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs, loc=Span.from_loc(getattr(expr, "loc", None)))
 				if hasattr(H, "HQualifiedMember") and isinstance(fn_expr, getattr(H, "HQualifiedMember")):
-					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs)
+					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs, loc=Span.from_loc(getattr(expr, "loc", None)))
 				if isinstance(fn_expr, H.HLambda):
-					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs)
-				return H.HInvoke(callee=fn_expr, args=args, kwargs=kwargs)
+					return H.HCall(fn=fn_expr, args=args, kwargs=kwargs, loc=Span.from_loc(getattr(expr, "loc", None)))
+				return H.HInvoke(callee=fn_expr, args=args, kwargs=kwargs, loc=Span.from_loc(getattr(expr, "loc", None)))
 			# `lhs |> f(...)` becomes `f(lhs, ...)`.
 			if isinstance(expr.right, ast.Call):
 				fn = self.lower_expr(expr.right.func)
@@ -704,11 +712,11 @@ class AstToHIR:
 			shadowing by adjusting the mapping as it walks statements.
 			"""
 			if isinstance(e, H.HVar) and e.name in mapping:
-				return H.HVar(name=mapping[e.name], binding_id=e.binding_id)
+				return H.HVar(name=mapping[e.name], binding_id=e.binding_id, loc=getattr(e, "loc", Span()))
 			if isinstance(e, H.HPlaceExpr):
 				base = e.base
 				if isinstance(base, H.HVar) and base.name in mapping:
-					base = H.HVar(name=mapping[base.name], binding_id=base.binding_id)
+					base = H.HVar(name=mapping[base.name], binding_id=base.binding_id, loc=getattr(base, "loc", Span()))
 				return H.HPlaceExpr(base=base, projections=e.projections, loc=e.loc)
 			if isinstance(e, H.HCall):
 				return H.HCall(
@@ -716,6 +724,7 @@ class AstToHIR:
 					args=[_rename_expr(a, mapping) for a in e.args],
 					kwargs=[H.HKwArg(name=kw.name, value=_rename_expr(kw.value, mapping), loc=kw.loc) for kw in e.kwargs],
 					type_args=getattr(e, "type_args", None),
+					loc=getattr(e, "loc", Span()),
 				)
 			if isinstance(e, getattr(H, "HInvoke", ())):
 				return H.HInvoke(
@@ -723,6 +732,7 @@ class AstToHIR:
 					args=[_rename_expr(a, mapping) for a in e.args],
 					kwargs=[H.HKwArg(name=kw.name, value=_rename_expr(kw.value, mapping), loc=kw.loc) for kw in e.kwargs],
 					type_args=getattr(e, "type_args", None),
+					loc=getattr(e, "loc", Span()),
 				)
 			if isinstance(e, H.HMethodCall):
 				return H.HMethodCall(
@@ -731,6 +741,7 @@ class AstToHIR:
 					args=[_rename_expr(a, mapping) for a in e.args],
 					kwargs=[H.HKwArg(name=kw.name, value=_rename_expr(kw.value, mapping), loc=kw.loc) for kw in e.kwargs],
 					type_args=getattr(e, "type_args", None),
+					loc=getattr(e, "loc", Span()),
 				)
 			if isinstance(e, H.HField):
 				return H.HField(subject=_rename_expr(e.subject, mapping), name=e.name)
@@ -929,7 +940,7 @@ class AstToHIR:
 	def _visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
 		target = self.lower_expr(stmt.target)
 		value = self.lower_expr(stmt.value)
-		return H.HAssign(target=target, value=value)
+		return H.HAssign(target=target, value=value, loc=self._as_span(getattr(stmt, "loc", None)))
 
 	def _visit_stmt_AugAssignStmt(self, stmt: ast.AugAssignStmt) -> H.HStmt:
 		"""
@@ -948,7 +959,7 @@ class AstToHIR:
 		cond = self.lower_expr(stmt.cond)
 		then_block = self.lower_block(stmt.then_block)
 		else_block = self.lower_block(stmt.else_block) if stmt.else_block else None
-		return H.HIf(cond=cond, then_block=then_block, else_block=else_block)
+		return H.HIf(cond=cond, then_block=then_block, else_block=else_block, loc=self._as_span(getattr(stmt, "loc", None)))
 
 	def _visit_stmt_BlockStmt(self, stmt: ast.BlockStmt) -> H.HStmt:
 		return self.lower_block(stmt.block)

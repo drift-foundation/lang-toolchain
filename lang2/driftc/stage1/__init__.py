@@ -79,6 +79,7 @@ from .hir_nodes import (
 	HBreak,
 	HContinue,
 	HReturn,
+	HAssert,
 	UnaryOp,
 	BinaryOp,
 )
@@ -161,6 +162,7 @@ __all__ = [
 	"HBreak",
 	"HContinue",
 	"HReturn",
+	"HAssert",
 	"UnaryOp",
 	"BinaryOp",
 	"AstToHIR",

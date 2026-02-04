@@ -99,6 +99,15 @@ class MirToSSA:
 		ssa.cfg_kind = CfgKind.GENERAL if has_cycle else CfgKind.ACYCLIC
 		return ssa
 
+	def _assign_with_span(self, dest: str, src: str, src_instr: MInstr, local: str | None = None) -> AssignSSA:
+		"""Create AssignSSA while preserving source span metadata when present."""
+		new_instr = AssignSSA(dest=dest, src=src)
+		if hasattr(src_instr, "span"):
+			setattr(new_instr, "span", getattr(src_instr, "span"))
+		if local is not None:
+			setattr(new_instr, "local", local)
+		return new_instr
+
 	def _run_single_block(self, func: MirFunc) -> SsaFunc:
 		"""Rewrite a single-block MIR function into SSA using AssignSSA moves."""
 		# Locals whose address is taken must remain as real storage (loads/stores),
@@ -131,7 +140,10 @@ class MirToSSA:
 				ssa_name = f"{instr.local}_{version_idx}"
 				current_value[instr.local] = ssa_name
 				value_for_instr[(block.name, idx)] = ssa_name
-				new_instrs.append(AssignSSA(dest=ssa_name, src=instr.value))
+				new_instr = self._assign_with_span(dest=ssa_name, src=instr.value, src_instr=instr, local=instr.local)
+				if hasattr(instr, "debug_name"):
+					setattr(new_instr, "debug_name", getattr(instr, "debug_name"))
+				new_instrs.append(new_instr)
 			elif isinstance(instr, LoadLocal):
 				if instr.local in addr_taken:
 					new_instrs.append(instr)
@@ -142,7 +154,8 @@ class MirToSSA:
 					raise RuntimeError(f"SSA: load before store for local '{instr.local}'")
 				# Load sees the current SSA value for the local.
 				value_for_instr[(block.name, idx)] = current_value[instr.local]
-				new_instrs.append(AssignSSA(dest=instr.dest, src=current_value[instr.local]))
+				new_instr = self._assign_with_span(dest=instr.dest, src=current_value[instr.local], src_instr=instr)
+				new_instrs.append(new_instr)
 			else:
 				new_instrs.append(instr)
 
@@ -408,7 +421,10 @@ class MirToSSA:
 						continue
 					dest_name = new_name(local)
 					value_for_instr[(block_name, len(new_instrs))] = dest_name
-					new_instrs.append(AssignSSA(dest=dest_name, src=instr.value))
+					new_instr = self._assign_with_span(dest=dest_name, src=instr.value, src_instr=instr, local=local)
+					if hasattr(instr, "debug_name"):
+						setattr(new_instr, "debug_name", getattr(instr, "debug_name"))
+					new_instrs.append(new_instr)
 					locals_defined.append(local)
 				elif isinstance(instr, LoadLocal):
 					local = instr.local
@@ -417,11 +433,23 @@ class MirToSSA:
 						continue
 					src_name = current(local)
 					value_for_instr[(block_name, len(new_instrs))] = src_name
-					new_instrs.append(AssignSSA(dest=instr.dest, src=src_name))
+					new_instr = self._assign_with_span(dest=instr.dest, src=src_name, src_instr=instr)
+					new_instrs.append(new_instr)
 				else:
+					if drift_debug.enabled("ssa"):
+						import sys
+						from lang2.driftc.stage2.mir_nodes import Call as MCall
+						if isinstance(instr, MCall) and getattr(instr.fn_id, "module", None) == "main":
+							print(f"[drift:ssa] call instr pre fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 					new_instrs.append(instr)
 
 			block.instructions = new_instrs
+			if drift_debug.enabled("ssa"):
+				import sys
+				from lang2.driftc.stage2.mir_nodes import Call as MCall
+				for instr in block.instructions:
+					if isinstance(instr, MCall) and getattr(instr.fn_id, "module", None) == "main":
+						print(f"[drift:ssa] call instr post fn={instr.fn_id} span={getattr(instr, 'span', None)} block={block_name}", file=sys.stderr)
 
 			# Patch phi incoming values in successors using current stacks.
 			for succ in succs.get(block_name, ()):
@@ -459,7 +487,8 @@ class MirToSSA:
 			for instr in block.instructions:
 				if isinstance(instr, Phi) and len(instr.incoming) == 1:
 					src = next(iter(instr.incoming.values()))
-					new_instrs.append(AssignSSA(dest=instr.dest, src=src))
+					new_instr = self._assign_with_span(dest=instr.dest, src=src, src_instr=instr, local=getattr(instr, "local", None))
+					new_instrs.append(new_instr)
 					continue
 				new_instrs.append(instr)
 			block.instructions = new_instrs

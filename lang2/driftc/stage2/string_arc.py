@@ -14,6 +14,7 @@ from typing import Dict, Iterable, Mapping, Set
 from lang2.driftc.checker import FnInfo
 from lang2.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang2.driftc.core.function_id import FunctionId
+from lang2.driftc import debug as drift_debug
 from . import mir_nodes as M
 
 
@@ -313,6 +314,10 @@ def insert_string_arc(
 			yield instr.value
 		elif isinstance(instr, M.MoveOut):
 			yield instr.local
+
+	def _copy_span(dst: M.MInstr, src: M.MInstr) -> None:
+		if hasattr(src, "span"):
+			setattr(dst, "span", getattr(src, "span"))
 
 	def _iter_term_used(term: M.MTerminator) -> Iterable[str]:
 		if isinstance(term, M.Return) and term.value is not None:
@@ -677,6 +682,9 @@ def insert_string_arc(
 				continue
 
 			if isinstance(instr, M.Call):
+				if drift_debug.enabled("ssa") and getattr(instr.fn_id, "module", None) == "main":
+					import sys
+					print(f"[drift:debug][arc] pre call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 				info = fn_infos.get(instr.fn_id)
 				if info is not None and info.signature and info.signature.param_type_ids is not None:
 					args: list[str] = []
@@ -693,8 +701,16 @@ def insert_string_arc(
 								_note_use(arg, consume=True)
 						else:
 							args.append(arg)
-					new_instrs.append(M.Call(dest=instr.dest, fn_id=instr.fn_id, args=args, can_throw=instr.can_throw))
+					new_call = M.Call(dest=instr.dest, fn_id=instr.fn_id, args=args, can_throw=instr.can_throw)
+					_copy_span(new_call, instr)
+					if drift_debug.enabled("ssa") and getattr(instr.fn_id, "module", None) == "main":
+						import sys
+						print(f"[drift:debug][arc] new call fn={new_call.fn_id} span={getattr(new_call, 'span', None)}", file=sys.stderr)
+					new_instrs.append(new_call)
 					continue
+				if drift_debug.enabled("ssa") and getattr(instr.fn_id, "module", None) == "main":
+					import sys
+					print(f"[drift:debug][arc] keep call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 				new_instrs.append(instr)
 				continue
 
@@ -713,16 +729,16 @@ def insert_string_arc(
 							_note_use(arg, consume=True)
 					else:
 						args.append(arg)
-				new_instrs.append(
-					M.CallIndirect(
-						dest=instr.dest,
-						callee=instr.callee,
-						args=args,
-						param_types=instr.param_types,
-						user_ret_type=instr.user_ret_type,
-						can_throw=instr.can_throw,
-					)
+				new_call = M.CallIndirect(
+					dest=instr.dest,
+					callee=instr.callee,
+					args=args,
+					param_types=instr.param_types,
+					user_ret_type=instr.user_ret_type,
+					can_throw=instr.can_throw,
 				)
+				_copy_span(new_call, instr)
+				new_instrs.append(new_call)
 				continue
 			if isinstance(instr, M.CallIface):
 				args: list[str] = []
@@ -739,17 +755,17 @@ def insert_string_arc(
 							_note_use(arg, consume=True)
 					else:
 						args.append(arg)
-				new_instrs.append(
-					M.CallIface(
-						dest=instr.dest,
-						iface=instr.iface,
-						args=args,
-						param_types=instr.param_types,
-						user_ret_type=instr.user_ret_type,
-						can_throw=instr.can_throw,
-						slot_index=instr.slot_index,
-					)
+				new_call = M.CallIface(
+					dest=instr.dest,
+					iface=instr.iface,
+					args=args,
+					param_types=instr.param_types,
+					user_ret_type=instr.user_ret_type,
+					can_throw=instr.can_throw,
+					slot_index=instr.slot_index,
 				)
+				_copy_span(new_call, instr)
+				new_instrs.append(new_call)
 				continue
 
 			new_instrs.append(instr)
@@ -758,7 +774,8 @@ def insert_string_arc(
 					_note_use(val, consume=False)
 
 		if isinstance(block.terminator, M.Return):
-			val = block.terminator.value
+			term = block.terminator
+			val = term.value
 			if val is not None and _is_string_value(val):
 				if val in move_only_values:
 					_note_use(val, consume=True)
@@ -768,7 +785,10 @@ def insert_string_arc(
 			_drop_all_arrays(new_instrs)
 			_release_all_locals(new_instrs)
 			_drop_all_destructibles(new_instrs)
-			block.terminator = M.Return(value=val)
+			new_term = M.Return(value=val)
+			if hasattr(term, "span"):
+				setattr(new_term, "span", getattr(term, "span"))
+			block.terminator = new_term
 		elif block.terminator is not None:
 			for val in _iter_term_used(block.terminator):
 				if _is_string_value(val) and not _is_local_name(val):

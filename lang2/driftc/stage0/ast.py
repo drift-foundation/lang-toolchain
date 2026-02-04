@@ -456,6 +456,14 @@ class ReturnStmt(Stmt):
 
 
 @dataclass
+class AssertStmt(Stmt):
+	"""Assert statement: assert(cond[, msg])."""
+	cond: Expr
+	msg: Optional[Expr]
+	loc: Optional[object] = None
+
+
+@dataclass
 class RaiseStmt(Stmt):
 	"""Raise expression value as an error (placeholder)."""
 	value: Expr
@@ -540,5 +548,5 @@ __all__ = [
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
 	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
-	"TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
+	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
 ]

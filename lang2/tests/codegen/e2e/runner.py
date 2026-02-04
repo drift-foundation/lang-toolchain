@@ -18,6 +18,7 @@ The runner:
 from __future__ import annotations
 
 import argparse
+from ctypes.util import find_library
 import traceback
 import json
 import os
@@ -81,6 +82,22 @@ def _run_ir_with_clang(
 	# The runtime sources include vendored C code (e.g. Ryu) that expects the
 	# directory containing the `ryu/` folder to be on the include path.
 	runtime_include = ROOT / "lang2" / "language_runtime"
+	search_dirs = [
+		Path("/lib"),
+		Path("/lib64"),
+		Path("/usr/lib"),
+		Path("/usr/lib64"),
+		Path("/lib/x86_64-linux-gnu"),
+		Path("/usr/lib/x86_64-linux-gnu"),
+	]
+	def _link_flags_for_lib(name: str) -> list[str]:
+		if not find_library(name):
+			return []
+		for d in search_dirs:
+			if (d / f"lib{name}.so").exists():
+				return [f"-l{name}"]
+		return []
+	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("elf")
 	try:
 		compile_res = subprocess.run(
 			[
@@ -94,6 +111,8 @@ def _run_ir_with_clang(
 				"-x",
 				"c",
 				*(str(p) for p in runtime_sources),
+				*link_libs,
+				"-Wl,--as-needed",
 				"-o",
 				str(bin_path),
 			],
