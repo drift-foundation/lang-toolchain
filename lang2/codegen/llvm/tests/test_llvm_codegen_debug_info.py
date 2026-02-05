@@ -45,7 +45,9 @@ def _build_ir_with_span(span_file: str) -> str:
 
 def test_debug_noop_assignssa_does_not_get_dbg():
 	ir = _build_ir_with_span('src/fi"le\\\\name.drift')
-	dbg_lines = [line for line in ir.splitlines() if " !dbg !" in line]
+	dbg_lines = [
+		line for line in ir.splitlines() if " !dbg !" in line and "asm sideeffect" not in line
+	]
 	assert len(dbg_lines) == 3
 	assert any(line.startswith("define ") and " !dbg !" in line for line in ir.splitlines())
 	assert any(" = add " in line and " !dbg !" in line for line in ir.splitlines())

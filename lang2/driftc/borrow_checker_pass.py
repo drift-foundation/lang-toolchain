@@ -327,7 +327,10 @@ class BorrowChecker:
 		"""Return True if the type is Copy per the core type table."""
 		if ty is None:
 			return False
-		return bool(self.type_table.is_copy(ty))
+		copy_status = self.type_table.copy_status(ty)
+		if copy_status is None:
+			return False
+		return copy_status
 
 	def _is_optional_ref_type(self, ty: Optional[TypeId], *, is_mut: bool) -> bool:
 		"""Return True if `ty` is Optional<&T> or Optional<&mut T>."""

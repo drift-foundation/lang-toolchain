@@ -74,6 +74,38 @@ def validate_mir_array_copy_invariants(
 	type_table: TypeTable,
 ) -> None:
 	"""Ensure array ops observe CopyValue/MoveOut invariants for Copy elements."""
+	def _copy_status_can_be_unknown(tid: TypeId) -> bool:
+		seen: set[TypeId] = set()
+
+		def _scan(cur: TypeId) -> bool:
+			if cur in seen:
+				return False
+			seen.add(cur)
+			td = type_table.get(cur)
+			if td.kind in {TypeKind.TYPEVAR, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL}:
+				return True
+			if td.kind is TypeKind.STRUCT:
+				inst = type_table.get_struct_instance(cur)
+				if inst is None:
+					return True
+				return any(_scan(f) for f in inst.field_types)
+			if td.kind is TypeKind.VARIANT:
+				inst = type_table.get_variant_instance(cur)
+				if inst is None:
+					return True
+				for arm in inst.arms:
+					if any(_scan(f) for f in arm.field_types):
+						return True
+				return False
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return _scan(td.param_types[0])
+			for child in td.param_types:
+				if _scan(child):
+					return True
+			return False
+
+		return _scan(tid)
+
 	for fn_id, func in funcs.items():
 		defs: dict[M.ValueId, M.MirInstr] = {}
 		for block in func.blocks.values():
@@ -86,7 +118,14 @@ def validate_mir_array_copy_invariants(
 			for idx, instr in enumerate(instrs):
 				if isinstance(instr, M.ArrayIndexLoad):
 					elem_ty = instr.elem_ty
-					if type_table.is_copy(elem_ty) and not type_table.is_bitcopy(elem_ty):
+					copy_status = type_table.copy_status(elem_ty)
+					if copy_status is None:
+						if _copy_status_can_be_unknown(elem_ty):
+							continue
+						raise AssertionError(
+							f"MIR invariant violation: unresolved Copy status for array element type in {function_symbol(fn_id)}"
+						)
+					if copy_status and not type_table.is_bitcopy(elem_ty):
 						if idx + 1 >= len(instrs):
 							raise AssertionError(
 								f"MIR invariant violation: ArrayIndexLoad in {function_symbol(fn_id)} must be followed by CopyValue for Copy element type"
@@ -98,7 +137,14 @@ def validate_mir_array_copy_invariants(
 							)
 				if isinstance(instr, (M.ArrayElemInit, M.ArrayElemInitUnchecked, M.ArrayElemAssign, M.ArrayIndexStore)):
 					elem_ty = instr.elem_ty
-					if type_table.is_copy(elem_ty) and not type_table.is_bitcopy(elem_ty):
+					copy_status = type_table.copy_status(elem_ty)
+					if copy_status is None:
+						if _copy_status_can_be_unknown(elem_ty):
+							continue
+						raise AssertionError(
+							f"MIR invariant violation: unresolved Copy status for array element type in {function_symbol(fn_id)}"
+						)
+					if copy_status and not type_table.is_bitcopy(elem_ty):
 						src = defs.get(instr.value)
 						if isinstance(src, (M.CopyValue, M.MoveOut, M.ArrayElemTake)):
 							continue
@@ -538,6 +584,38 @@ def validate_mir_call_byvalue_moves(
 	type_table: TypeTable,
 ) -> None:
 	"""Ensure non-Copy by-value call args originate from MoveOut (or non-local producers)."""
+	def _copy_status_can_be_unknown(tid: TypeId) -> bool:
+		seen: set[TypeId] = set()
+
+		def _scan(cur: TypeId) -> bool:
+			if cur in seen:
+				return False
+			seen.add(cur)
+			td = type_table.get(cur)
+			if td.kind in {TypeKind.TYPEVAR, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL}:
+				return True
+			if td.kind is TypeKind.STRUCT:
+				inst = type_table.get_struct_instance(cur)
+				if inst is None:
+					return True
+				return any(_scan(f) for f in inst.field_types)
+			if td.kind is TypeKind.VARIANT:
+				inst = type_table.get_variant_instance(cur)
+				if inst is None:
+					return True
+				for arm in inst.arms:
+					if any(_scan(f) for f in arm.field_types):
+						return True
+				return False
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return _scan(td.param_types[0])
+			for child in td.param_types:
+				if _scan(child):
+					return True
+			return False
+
+		return _scan(tid)
+
 	for fn_id, func in funcs.items():
 		defs: dict[M.ValueId, M.MirInstr] = {}
 		for block in func.blocks.values():
@@ -555,7 +633,14 @@ def validate_mir_call_byvalue_moves(
 						td = type_table.get(param_ty)
 						if td.kind is TypeKind.REF:
 							continue
-						if type_table.is_copy(param_ty):
+						copy_status = type_table.copy_status(param_ty)
+						if copy_status is None:
+							if _copy_status_can_be_unknown(param_ty):
+								continue
+							raise AssertionError(
+								f"MIR invariant violation: unresolved Copy status for call param type in {function_symbol(fn_id)}"
+							)
+						if copy_status:
 							continue
 						src = defs.get(arg_val)
 						if isinstance(src, M.MoveOut):
@@ -569,7 +654,14 @@ def validate_mir_call_byvalue_moves(
 						td = type_table.get(param_ty)
 						if td.kind is TypeKind.REF:
 							continue
-						if type_table.is_copy(param_ty):
+						copy_status = type_table.copy_status(param_ty)
+						if copy_status is None:
+							if _copy_status_can_be_unknown(param_ty):
+								continue
+							raise AssertionError(
+								f"MIR invariant violation: unresolved Copy status for call param type in {function_symbol(fn_id)}"
+							)
+						if copy_status:
 							continue
 						src = defs.get(arg_val)
 						if isinstance(src, M.MoveOut):

@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
+import sys
 from typing import Dict, Iterable, List
 
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.function_id import FunctionId, function_symbol
 from lang2.driftc.core.span import Span
+from lang2.driftc import debug as drift_debug
 
 
 TypeId = int  # opaque handle into the TypeTable
@@ -1824,81 +1826,256 @@ class TypeTable:
 
 	def is_copy(self, ty: TypeId) -> bool:
 		"""Return True if `ty` is Copy under MVP structural rules."""
-		if not hasattr(self, "_copy_cache"):
-			self._copy_cache = {}  # type: ignore[attr-defined]
-		cache: Dict[TypeId, bool] = getattr(self, "_copy_cache")  # type: ignore[attr-defined]
+		status = self.copy_status(ty)
+		return bool(status)
+
+	def _contains_kind(self, tid: TypeId, kinds: set[TypeKind], *, seen: set[TypeId]) -> bool:
+		if tid in seen:
+			return False
+		seen.add(tid)
+		td = self.get(tid)
+		if td.kind in kinds:
+			return True
+		if td.kind is TypeKind.STRUCT:
+			inst = self.get_struct_instance(tid)
+			if inst is None:
+				return False
+			return any(self._contains_kind(f, kinds, seen=seen) for f in inst.field_types)
+		if td.kind is TypeKind.VARIANT:
+			inst = self.get_variant_instance(tid)
+			if inst is None:
+				return False
+			for arm in inst.arms:
+				if any(self._contains_kind(f, kinds, seen=seen) for f in arm.field_types):
+					return True
+			return False
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			return self._contains_kind(td.param_types[0], kinds, seen=seen)
+		for child in td.param_types:
+			if self._contains_kind(child, kinds, seen=seen):
+				return True
+		return False
+
+	def copy_status(self, ty: TypeId) -> bool | None:
+		if not hasattr(self, "_copy_cache_proof"):
+			self._copy_cache_proof = {}  # type: ignore[attr-defined]
+		if not hasattr(self, "_copy_cache_structural"):
+			self._copy_cache_structural = {}  # type: ignore[attr-defined]
+		cache_proof: Dict[TypeId, bool] = getattr(self, "_copy_cache_proof")  # type: ignore[attr-defined]
+		cache_structural: Dict[TypeId, bool] = getattr(self, "_copy_cache_structural")  # type: ignore[attr-defined]
 		if not hasattr(self, "_copy_query"):
 			trait_worlds = getattr(self, "trait_worlds", None)
 			if isinstance(trait_worlds, dict) and any(
 				mod in {"std.core", "std.iter", "std.containers", "std.algo"} for mod in trait_worlds.keys()
 			):
 				raise ValueError("Copy query hook is missing while stdlib trait metadata is present")
-		if ty in cache:
-			return cache[ty]
+		if ty in cache_proof:
+			if drift_debug.enabled("copy_cache"):
+				td = self.get(ty)
+				print(f"[drift:debug][copy_cache] hit source=proof ty={ty} kind={td.kind.name} name={td.name} val={cache_proof[ty]}", file=sys.stderr)
+			return cache_proof[ty]
+		if ty in cache_structural:
+			if drift_debug.enabled("copy_cache"):
+				td = self.get(ty)
+				print(f"[drift:debug][copy_cache] hit source=structural ty={ty} kind={td.kind.name} name={td.name} val={cache_structural[ty]}", file=sys.stderr)
+			return cache_structural[ty]
+		td = self.get(ty)
+		if td.kind in {TypeKind.TYPEVAR, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL}:
+			if drift_debug.enabled("copy_cache"):
+				print(f"[drift:debug][copy_cache] unresolved ty={ty} kind={td.kind.name} name={td.name}", file=sys.stderr)
+			return None
+
+		def _is_concrete_type(tid: TypeId, *, seen: set[TypeId]) -> bool:
+			if tid in seen:
+				return True
+			seen.add(tid)
+			td = self.get(tid)
+			if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
+				return False
+			if td.kind is TypeKind.STRUCT:
+				inst = self.get_struct_instance(tid)
+				if inst is None:
+					return False
+				return all(_is_concrete_type(f, seen=seen) for f in inst.field_types)
+			if td.kind is TypeKind.VARIANT:
+				inst = self.get_variant_instance(tid)
+				if inst is None:
+					return False
+				for arm in inst.arms:
+					if not all(_is_concrete_type(f, seen=seen) for f in arm.field_types):
+						return False
+				return True
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return _is_concrete_type(td.param_types[0], seen=seen)
+			for child in td.param_types:
+				if not _is_concrete_type(child, seen=seen):
+					return False
+			return True
+
+		def _eligible_structural_fallback(tid: TypeId) -> bool:
+			td = self.get(tid)
+			if td.kind not in {TypeKind.STRUCT, TypeKind.VARIANT}:
+				return False
+			if self.has_typevar(tid):
+				return False
+			if td.kind is TypeKind.STRUCT:
+				inst = self.get_struct_instance(tid)
+				if inst is None:
+					return False
+				if inst.base_id not in self.struct_bases:
+					return False
+				return _is_concrete_type(tid, seen=set())
+			if td.kind is TypeKind.VARIANT:
+				inst = self.get_variant_instance(tid)
+				if inst is None:
+					return False
+				if inst.base_id not in self.variant_schemas:
+					return False
+				return _is_concrete_type(tid, seen=set())
+			return False
+
 		seen: set[TypeId] = set()
 
-		def _is_copy(tid: TypeId) -> bool:
-			if tid in cache:
-				return cache[tid]
+		def _assert_structural_cacheable(tid: TypeId) -> None:
+			if not drift_debug.enabled("copy_cache_assert"):
+				return
+			td = self.get(tid)
+			if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
+				raise AssertionError(f"structural copy cache on unresolved type {tid}:{td.kind.name}:{td.name}")
+			if td.kind is TypeKind.STRUCT:
+				inst = self.get_struct_instance(tid)
+				if inst is None or inst.base_id not in self.struct_bases:
+					raise AssertionError(f"structural copy cache on unresolvable struct {tid}:{td.name}")
+			if td.kind is TypeKind.VARIANT:
+				inst = self.get_variant_instance(tid)
+				if inst is None or inst.base_id not in self.variant_schemas:
+					raise AssertionError(f"structural copy cache on unresolvable variant {tid}:{td.name}")
+
+		def _is_copy_structural(tid: TypeId) -> bool:
+			if tid in cache_structural:
+				return cache_structural[tid]
 			if tid in seen:
 				return False
 			seen.add(tid)
 			td = self.get(tid)
 			if td.kind in {TypeKind.SCALAR, TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION, TypeKind.VOID}:
 				if td.kind is TypeKind.SCALAR and td.name == "String":
-					cache[tid] = False
 					return False
-				cache[tid] = True
-				return True
+				ok = True
+				_assert_structural_cacheable(tid)
+				cache_structural[tid] = ok
+				return ok
 			if td.kind in {TypeKind.FORWARD_NOMINAL, TypeKind.UNKNOWN, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.TYPEVAR}:
-				cache[tid] = False
+				if drift_debug.enabled("copy_cache"):
+					print(f"[drift:debug][copy_cache] unresolved ty={tid} kind={td.kind.name} name={td.name}", file=sys.stderr)
 				return False
 			if td.kind is TypeKind.ARRAY:
-				cache[tid] = False
 				return False
 			if td.kind is TypeKind.FNRESULT:
-				cache[tid] = False
 				return False
 			if td.kind is TypeKind.STRUCT:
 				inst = self.get_struct_instance(tid)
 				if inst is None:
-					cache[tid] = False
+					if drift_debug.enabled("copy_cache"):
+						print(f"[drift:debug][copy_cache] struct_no_instance ty={tid} name={td.name} module={td.module_id}", file=sys.stderr)
 					return False
-				ok = all(_is_copy(f) for f in inst.field_types)
-				cache[tid] = ok
+				ok = all(_is_copy_structural(f) for f in inst.field_types)
+				_assert_structural_cacheable(tid)
+				cache_structural[tid] = ok
 				return ok
 			if td.kind is TypeKind.VARIANT:
 				inst = self.get_variant_instance(tid)
 				if inst is None:
-					cache[tid] = False
+					if drift_debug.enabled("copy_cache"):
+						print(f"[drift:debug][copy_cache] variant_no_instance ty={tid} name={td.name} module={td.module_id}", file=sys.stderr)
 					return False
 				ok = True
 				for arm in inst.arms:
 					for f in arm.field_types:
-						if not _is_copy(f):
+						if not _is_copy_structural(f):
 							ok = False
 							break
 					if not ok:
 						break
-				cache[tid] = ok
+				_assert_structural_cacheable(tid)
+				cache_structural[tid] = ok
 				return ok
-			cache[tid] = False
 			return False
 
 		if hasattr(self, "_copy_query"):
 			query = getattr(self, "_copy_query")  # type: ignore[attr-defined]
-			allow_fallback = bool(getattr(self, "_copy_query_allow_fallback", False))  # type: ignore[attr-defined]
-			try:
-				res = query(ty)
-			except Exception:
-				res = None
+			res = query(ty)
 			if res is not None:
-				cache[ty] = bool(res)
-				return cache[ty]
-			if not allow_fallback:
-				cache[ty] = False
-				return False
-		return _is_copy(ty)
+				cache_proof[ty] = bool(res)
+				return cache_proof[ty]
+			if _eligible_structural_fallback(ty):
+				if drift_debug.enabled("copy_fallback"):
+					td = self.get(ty)
+					print(f"[drift:debug][copy_fallback] ty={ty} kind={td.kind.name} name={td.name} module={td.module_id}", file=sys.stderr)
+				return _is_copy_structural(ty)
+			if drift_debug.enabled("copy_fallback"):
+				td = self.get(ty)
+				print(f"[drift:debug][copy_fallback] ty={ty} kind={td.kind.name} name={td.name} module={td.module_id} status=defer", file=sys.stderr)
+			return None
+		return _is_copy_structural(ty)
+
+	def copy_unknown_reason(self, ty: TypeId) -> str:
+		"""Return a short explanation for why Copy is unknown."""
+		seen: set[TypeId] = set()
+		has_typevar = False
+		has_unknown = False
+		has_forward = False
+
+		def _scan(tid: TypeId) -> None:
+			nonlocal has_typevar, has_unknown, has_forward
+			if tid in seen:
+				return
+			seen.add(tid)
+			td = self.get(tid)
+			if td.kind is TypeKind.TYPEVAR:
+				has_typevar = True
+			if td.kind is TypeKind.UNKNOWN:
+				has_unknown = True
+			if td.kind is TypeKind.FORWARD_NOMINAL:
+				has_forward = True
+			if td.kind is TypeKind.STRUCT:
+				inst = self.get_struct_instance(tid)
+				if inst is None:
+					return
+				for f in inst.field_types:
+					_scan(f)
+				return
+			if td.kind is TypeKind.VARIANT:
+				inst = self.get_variant_instance(tid)
+				if inst is None:
+					return
+				for arm in inst.arms:
+					for f in arm.field_types:
+						_scan(f)
+				return
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				_scan(td.param_types[0])
+				return
+			for child in td.param_types:
+				_scan(child)
+
+		_scan(ty)
+		if has_typevar:
+			return "element type contains type variables"
+		if has_unknown:
+			return "element type contains Unknown"
+		if has_forward:
+			return "element type contains forward nominals"
+		td = self.get(ty)
+		if td.kind is TypeKind.STRUCT:
+			inst = self.get_struct_instance(ty)
+			if inst is None or inst.base_id not in self.struct_bases:
+				return "element type not fully resolved yet"
+		if td.kind is TypeKind.VARIANT:
+			inst = self.get_variant_instance(ty)
+			if inst is None or inst.base_id not in self.variant_schemas:
+				return "element type not fully resolved yet"
+		return "element type not fully resolved yet"
 
 	def is_diagnostic(self, ty: TypeId) -> bool:
 		"""Return True if `ty` implements Diagnostic."""

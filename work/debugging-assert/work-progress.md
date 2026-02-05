@@ -119,3 +119,34 @@
 - Debug info coverage (variants):
 - Implemented DWARF debug types for `variant` values: tag + payload union derived from the compiler’s internal variant layout.
 - Added test `lang2/codegen/llvm/tests/test_llvm_codegen_debug_variant.py` to assert union/tag/payload metadata.
+- Debug info coverage (arrays):
+- Implemented DWARF debug types for `Array<T>` headers (len/cap/gen/data) using the compiler’s `%DriftArrayHeader` layout.
+- Added test `lang2/codegen/llvm/tests/test_llvm_codegen_debug_array.py`.
+- Copy regression (stage2): array literals with forward-declared structs/variants fail with `array literal element type must be Copy` even though element types are resolved.
+- Root cause confirmed: `TypeTable.is_copy` relies on Copy trait proof; when proof returns `None`, it is treated as `False` and cached, overriding structural Copy for POD structs/variants.
+- Added debug channel `array_literal_ty` to log array literal element types at typecheck and `copy_cache`/`copy_fallback` to trace proof vs. structural cache usage.
+- Implemented `TypeTable.copy_status()` with separate proof/structural caches and gated structural fallback.
+- Structural fallback now only applies for concrete, resolvable `STRUCT`/`VARIANT` types with no typevars/unknown/forward in their instance fields/arms; otherwise returns `None` (no implicit False).
+- Array literal checks now use `copy_status()` and emit `E-ARRAY-LITERAL-COPY-UNKNOWN` when Copy proof is unknown.
+- Copy query now returns `None` for `TypeVar`/`Unknown`/`ForwardNominal` to preserve the “unknown” state instead of refuting Copy.
+- Added stage2 test `test_array_literal_typevar_copy_unknown` (generic `mk<T>` with `val xs = [x];`) to assert `E-ARRAY-LITERAL-COPY-UNKNOWN` for unconstrained typevars.
+- Added stage2 mixed-hazard test `test_array_literal_forward_generic_wrapper_no_non_copy` to ensure generic wrapper + forward nominal never produces the misleading non-Copy error.
+- `E-ARRAY-LITERAL-COPY-UNKNOWN` now includes a short reason (typevars/Unknown/forward/unresolved) to avoid opaque diagnostics.
+- Added `copy_cache_assert` debug guard to assert structural cache entries are only written for canonical/resolved types.
+- Regression tests:
+- `lang2/tests/stage2/test_array_literal_forward_nominal.py::test_array_literal_forward_nominal_copy_allowed` (fails before fix).
+- `lang2/tests/stage2/test_array_literal_forward_nominal.py::test_array_literal_forward_nominal_non_copy_rejected` (should still fail for non-Copy).
+- `lang2/tests/type_checker/test_type_checker_array_literal_forward_nominal.py` (type-checker-only passes).
+- Copy audit pass:
+- Stage2 MIR lowering now uses `copy_status()` for array element copies (array literal init, array index loads, array elem assign), only copying when status is `True`.
+- Stage2 array index read now raises an internal error if Copy status is unknown for non-typevar element types (typevars still allowed).
+- MIR validation now asserts Copy status is resolved for array element/call param checks (ICE on `None`).
+- Borrow checker now asserts Copy status is resolved (ICE on `None`).
+- LLVM codegen now asserts Copy status is resolved for array literals (ICE on `None`).
+- Type checker now emits `E-COPY-UNKNOWN` for explicit copy and implicit copy requirements when Copy status is unknown (non-TypeVar), with a short reason.
+- Call resolver now emits `E-COPY-UNKNOWN` for `Array<T>.dup()` when element Copy status is unknown.
+- Added type-checker regression tests for `E-COPY-UNKNOWN` in generic explicit copy and `Array<T>.dup()`.
+- Borrow checker Copy handling: downgraded invariant to treat `copy_status(None)` as non-Copy instead of ICE (borrow checker runs with Unknown types in tests). Reclassified as Bucket A; conservative behavior is to prevent implicit copies when type is unresolved.
+- Reran borrow checker tests: `lang2/tests/borrow_checker/test_auto_borrow_signatures.py`, `test_cfg_branches_and_loops.py`, `test_move_tracking.py` all pass.
+- Debug info test update: filtered out the entry `asm sideeffect` debug anchor line when counting `!dbg` lines (anchor now emits a dbg location). `test_debug_noop_assignssa_does_not_get_dbg` updated accordingly; test passes.
+- Added debug-only timing output in `compile_stubbed_funcs` gated by `DRIFT_DEBUG={"timing": true}`. Timed stages: `normalize_hir`, `typecheck`, `checker`, `hir_to_mir`, `hidden_lambda_lowering`, `borrow_check`, `mir_validate`, `string_arc`, `ssa`, `throw_checks`.

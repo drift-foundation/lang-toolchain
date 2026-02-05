@@ -552,25 +552,25 @@ def insert_string_arc(
 			if isinstance(instr, (M.ArrayElemInit, M.ArrayElemInitUnchecked, M.ArrayElemAssign)) and _is_string_tid(instr.elem_ty):
 				val = instr.value
 				if val in move_only_values:
-					new_instrs.append(
-						type(instr)(
-							elem_ty=instr.elem_ty,
-							array=instr.array,
-							index=instr.index,
-							value=val,
-						)
+					new_instr = type(instr)(
+						elem_ty=instr.elem_ty,
+						array=instr.array,
+						index=instr.index,
+						value=val,
 					)
+					_copy_span(new_instr, instr)
+					new_instrs.append(new_instr)
 					_note_use(val, consume=True)
 				else:
 					val = _ensure_owned(val, owned_values, new_instrs)
-					new_instrs.append(
-						type(instr)(
-							elem_ty=instr.elem_ty,
-							array=instr.array,
-							index=instr.index,
-							value=val,
-						)
+					new_instr = type(instr)(
+						elem_ty=instr.elem_ty,
+						array=instr.array,
+						index=instr.index,
+						value=val,
 					)
+					_copy_span(new_instr, instr)
+					new_instrs.append(new_instr)
 					_note_use(val, consume=True)
 				continue
 
@@ -583,7 +583,9 @@ def insert_string_arc(
 					else:
 						elems.append(_ensure_owned(e, owned_values, new_instrs))
 						_note_use(e, consume=True)
-				new_instrs.append(M.ArrayLit(dest=instr.dest, elem_ty=instr.elem_ty, elements=elems))
+				new_instr = M.ArrayLit(dest=instr.dest, elem_ty=instr.elem_ty, elements=elems)
+				_copy_span(new_instr, instr)
+				new_instrs.append(new_instr)
 				continue
 
 			if isinstance(instr, M.ConstructStruct):

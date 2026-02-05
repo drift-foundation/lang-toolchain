@@ -191,6 +191,8 @@ def _install_copy_query(type_table: TypeTable, linked_world: LinkedWorld) -> Non
 
 	def _query_copy(tid: int) -> bool | None:
 		td = type_table.get(tid)
+		if td.kind in (TypeKind.TYPEVAR, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
+			return None
 		if td.kind is TypeKind.REF:
 			return False if td.ref_mut else True
 		if td.kind is TypeKind.FUNCTION:
@@ -203,6 +205,10 @@ def _install_copy_query(type_table: TypeTable, linked_world: LinkedWorld) -> Non
 		if res.status is ProofStatus.PROVED:
 			return True
 		if res.status is ProofStatus.REFUTED:
+			if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT):
+				mod = td.module_id or ""
+				if not (mod.startswith("std.") or mod.startswith("lang.")):
+					return None
 			return False
 		return None
 
@@ -1447,6 +1453,26 @@ def compile_stubbed_funcs(
 	  from parsed sources instead of the shims here.
 	"""
 	func_hirs_by_id, signatures_by_id, fn_ids_by_name = _normalize_func_maps(func_hirs, signatures)
+	_timing_enabled = drift_debug.enabled("timing")
+	def _timed(label: str):
+		if not _timing_enabled:
+			class _Noop:
+				def __enter__(self_inner):  # type: ignore[no-untyped-def]
+					return None
+				def __exit__(self_inner, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+					return False
+			return _Noop()
+		import time as _timing_time
+		start = _timing_time.perf_counter()
+		class _Timing:
+			def __enter__(self_inner):  # type: ignore[no-untyped-def]
+				return None
+			def __exit__(self_inner, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+				elapsed = _timing_time.perf_counter() - start
+				import sys as _timing_sys
+				print(f"[drift:debug][timing] {label}={elapsed:.3f}s", file=_timing_sys.stderr)
+				return False
+		return _Timing()
 	if drift_debug.enabled("try_auto"):
 		for fn_id, sig in signatures_by_id.items():
 			if getattr(fn_id, "module", None) == "m":
@@ -1617,9 +1643,10 @@ def compile_stubbed_funcs(
 		raise ValueError(wrapper_errors[0])
 
 	# Normalize before typecheck so the checker sees canonical HIR for diagnostics.
-	normalized_hirs_by_id: dict[FunctionId, H.HBlock] = {
-		fn_id: normalize_hir(hir_block) for fn_id, hir_block in func_hirs_by_id.items()
-	}
+	with _timed("normalize_hir"):
+		normalized_hirs_by_id: dict[FunctionId, H.HBlock] = {
+			fn_id: normalize_hir(hir_block) for fn_id, hir_block in func_hirs_by_id.items()
+		}
 	if drift_debug.enabled("local_types_trace"):
 		for fn_id, block in normalized_hirs_by_id.items():
 			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
@@ -2133,11 +2160,12 @@ def compile_stubbed_funcs(
 				deferred_guard_diags_by_template[fn_key] = dict(deferred)
 		typed_fns_by_id[fn_id] = result.typed_fn
 
-	for fn_id, hir_norm in normalized_hirs_by_id.items():
-		if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
-			sig_dbg = signatures_by_id.get(fn_id)
-			print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=sys.stderr)
-		_typecheck_fn(fn_id, hir_norm)
+	with _timed("typecheck"):
+		for fn_id, hir_norm in normalized_hirs_by_id.items():
+			if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
+				sig_dbg = signatures_by_id.get(fn_id)
+				print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=sys.stderr)
+			_typecheck_fn(fn_id, hir_norm)
 	if type_checker.defaulted_phase_count() != 0:
 		raise AssertionError(
 			f"typecheck diagnostics missing phase (defaulted={type_checker.defaulted_phase_count()})"
@@ -3079,13 +3107,14 @@ def compile_stubbed_funcs(
 			norm_block = normalized_hirs_by_id.get(fn_id)
 			import sys as _dbg_sys
 			print(f"[drift:debug][local_types_trace] fn={fn_id} pre_checker_body_shared={block is norm_block}", file=_dbg_sys.stderr)
-	checked = Checker.run_by_id(
-		check_inputs,
-		declared_can_throw_by_id=declared_can_throw_by_id,
-		exception_catalog=exc_env,
-		type_table=shared_type_table,
-		fn_decls_by_id=signatures_by_id.keys(),
-	)
+	with _timed("checker"):
+		checked = Checker.run_by_id(
+			check_inputs,
+			declared_can_throw_by_id=declared_can_throw_by_id,
+			exception_catalog=exc_env,
+			type_table=shared_type_table,
+			fn_decls_by_id=signatures_by_id.keys(),
+		)
 	if drift_debug.enabled("local_types_trace"):
 		for fn_id, typed_fn in typed_fns_by_id.items():
 			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
@@ -3314,14 +3343,15 @@ def compile_stubbed_funcs(
 							)
 	if run_borrow_check and not any(d.severity == "error" for d in checked.diagnostics):
 		borrow_diags: list[Diagnostic] = []
-		for _fn_id, typed_fn in typed_fns_by_id.items():
-			bc = BorrowChecker.from_typed_fn(
-				typed_fn,
-				type_table=shared_type_table,
-				signatures_by_id=signatures_by_id,
-				enable_auto_borrow=True,
-			)
-			borrow_diags.extend(bc.check_block(typed_fn.body))
+		with _timed("borrow_check"):
+			for _fn_id, typed_fn in typed_fns_by_id.items():
+				bc = BorrowChecker.from_typed_fn(
+					typed_fn,
+					type_table=shared_type_table,
+					signatures_by_id=signatures_by_id,
+					enable_auto_borrow=True,
+				)
+				borrow_diags.extend(bc.check_block(typed_fn.body))
 		if borrow_diags:
 			_assert_all_phased(borrow_diags, context="borrowcheck")
 			checked.diagnostics.extend(borrow_diags)
@@ -3568,6 +3598,10 @@ def compile_stubbed_funcs(
 					return
 			_walk_expr_ids(block)
 
+	hir_to_mir_start = None
+	if _timing_enabled:
+		import time as _timing_time
+		hir_to_mir_start = _timing_time.perf_counter()
 	for fn_id, hir_norm in normalized_hirs_by_id.items():
 		builder = make_builder(fn_id)
 		sig = signatures_by_id.get(fn_id)
@@ -3596,9 +3630,9 @@ def compile_stubbed_funcs(
 			continue
 		typed_mode = _typed_mode_for(
 			typed_fns_by_id.get(fn_id),
-				shared_type_table,
-				typecheck_ok_by_fn.get(fn_id, False),
-			)
+			shared_type_table,
+			typecheck_ok_by_fn.get(fn_id, False),
+		)
 		if typed_mode == "strict":
 			expr_types = getattr(typed_fns_by_id.get(fn_id), "expr_types", None)
 			if not isinstance(expr_types, dict):
@@ -3698,7 +3732,10 @@ def compile_stubbed_funcs(
 						)
 						checked.fn_infos_by_id[extra_id] = info
 						declared_by_id[extra_id] = info.declared_can_throw
-
+	if _timing_enabled and hir_to_mir_start is not None:
+		import time as _timing_time
+		import sys as _timing_sys
+		print(f"[drift:debug][timing] hir_to_mir={_timing_time.perf_counter() - hir_to_mir_start:.3f}s", file=_timing_sys.stderr)
 	def _hidden_lambda_ret_type(
 		body: H.HBlock, typed_fn: "TypedFn", type_table: "TypeTable"
 	) -> "TypeId":
@@ -3714,6 +3751,10 @@ def compile_stubbed_funcs(
 
 	type_diag_len = len(type_diags)
 	hidden_lambda_index = 0
+	hidden_lambda_start = None
+	if _timing_enabled:
+		import time as _timing_time
+		hidden_lambda_start = _timing_time.perf_counter()
 	while hidden_lambda_index < len(hidden_lambda_specs):
 		spec = hidden_lambda_specs[hidden_lambda_index]
 		hidden_lambda_index += 1
@@ -4527,6 +4568,10 @@ def compile_stubbed_funcs(
 				ret_val = ok_dest
 			builder.set_terminator(M.Return(value=ret_val))
 		mir_funcs_by_id[spec.fn_id] = builder.func
+	if _timing_enabled and hidden_lambda_start is not None:
+		import time as _timing_time
+		import sys as _timing_sys
+		print(f"[drift:debug][timing] hidden_lambda_lowering={_timing_time.perf_counter() - hidden_lambda_start:.3f}s", file=_timing_sys.stderr)
 
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
@@ -4722,18 +4767,19 @@ def compile_stubbed_funcs(
 		builder.set_terminator(M.Return(value=ok_dest))
 		mir_funcs_by_id[spec.wrapper_fn_id] = builder.func
 
-	validate_mir_call_invariants(mir_funcs_by_id)
-	if shared_type_table is not None:
-		validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
-		validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
-	validate_mir_array_alloc_invariants(mir_funcs_by_id)
-	validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
-	if shared_type_table is not None:
-		validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)
-	if shared_type_table is not None:
-		validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)
-	if shared_type_table is not None:
-		validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
+	with _timed("mir_validate"):
+		validate_mir_call_invariants(mir_funcs_by_id)
+		if shared_type_table is not None:
+			validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
+			validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
+		validate_mir_array_alloc_invariants(mir_funcs_by_id)
+		validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
+		if shared_type_table is not None:
+			validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)
+		if shared_type_table is not None:
+			validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)
+		if shared_type_table is not None:
+			validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
 	if shared_type_table is not None:
 		if drift_debug.enabled("ssa"):
 			import sys
@@ -4744,12 +4790,13 @@ def compile_stubbed_funcs(
 					for instr in block.instructions:
 						if isinstance(instr, M.Call):
 							print(f"[drift:debug][mir-pre-arc] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
-		for fn_id, func in mir_funcs_by_id.items():
-			mir_funcs_by_id[fn_id] = insert_string_arc(
-				func,
-				type_table=shared_type_table,
-				fn_infos=checked.fn_infos_by_id,
-			)
+		with _timed("string_arc"):
+			for fn_id, func in mir_funcs_by_id.items():
+				mir_funcs_by_id[fn_id] = insert_string_arc(
+					func,
+					type_table=shared_type_table,
+					fn_infos=checked.fn_infos_by_id,
+				)
 		unknown_ty = shared_type_table.ensure_unknown()
 		for func in mir_funcs_by_id.values():
 			func.local_types = dict(getattr(func, "local_types", {}) or {})
@@ -4789,7 +4836,8 @@ def compile_stubbed_funcs(
 	ssa_funcs: Dict[FunctionId, MirToSSA.SsaFunc] | None = None
 	type_env = checked.type_env
 	if build_ssa:
-		ssa_funcs = {fn_id: MirToSSA().run(func) for fn_id, func in mir_funcs_by_id.items()}
+		with _timed("ssa"):
+			ssa_funcs = {fn_id: MirToSSA().run(func) for fn_id, func in mir_funcs_by_id.items()}
 		if type_env is None:
 			# First preference: checker-owned SSA typing using TypeIds + signatures.
 			type_env = Checker(
@@ -4812,15 +4860,16 @@ def compile_stubbed_funcs(
 			checked.type_env = type_env
 
 	# Stage4: throw checks
-	run_throw_checks(
-		funcs=mir_funcs_by_id,
-		summaries=summaries,
-		declared_can_throw=declared_by_id,
-		type_env=type_env or checked.type_env,
-		fn_infos=checked.fn_infos_by_id,
-		ssa_funcs=ssa_funcs,
-		diagnostics=checked.diagnostics,
-	)
+	with _timed("throw_checks"):
+		run_throw_checks(
+			funcs=mir_funcs_by_id,
+			summaries=summaries,
+			declared_can_throw=declared_by_id,
+			type_env=type_env or checked.type_env,
+			fn_infos=checked.fn_infos_by_id,
+			ssa_funcs=ssa_funcs,
+			diagnostics=checked.diagnostics,
+		)
 	_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 
 	if return_checked and return_ssa:

@@ -658,7 +658,7 @@ class LlvmModuleBuilder:
 		sub_id = self._dbg_new_id()
 		linkage = linkage_name or fn_name
 		self._dbg_metadata.append(
-			f"!{sub_id} = distinct !DISubprogram(name: \"{_llvm_md_escape(fn_name)}\", linkageName: \"{_llvm_md_escape(linkage)}\", scope: !{file_id}, file: !{file_id}, line: {line}, type: !{sub_type}, unit: !{cu_id}, spFlags: DISPFlagDefinition, retainedNodes: !{self._ensure_dbg_empty()})"
+			f"!{sub_id} = distinct !DISubprogram(name: \"{_llvm_md_escape(fn_name)}\", linkageName: \"{_llvm_md_escape(linkage)}\", scope: !{file_id}, file: !{file_id}, line: {line}, scopeLine: {line}, type: !{sub_type}, unit: !{cu_id}, spFlags: DISPFlagDefinition, retainedNodes: !{self._ensure_dbg_empty()})"
 		)
 		self._dbg_subprogram_ids[fn_name] = sub_id
 		return sub_id
@@ -1199,6 +1199,7 @@ class _FuncBuilder:
 	_dbg_last_span: Span | None = None
 	_dbg_keepalive_allocas: Dict[str, str] = field(default_factory=dict)
 	_dbg_keepalive_storage_types: Dict[str, str] = field(default_factory=dict)
+	_dbg_entry_anchor_emitted: bool = False
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
@@ -1416,6 +1417,43 @@ class _FuncBuilder:
 				self.module._dbg_metadata.append(f"!{elements_id} = !{{{members}}}")
 			else:
 				self.module._dbg_metadata.append(f"!{elements_id} = !{{}}")
+			self.module._dbg_metadata.append(
+				f"!{struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{elements_id})"
+			)
+			return struct_id
+		if td.kind is TypeKind.ARRAY:
+			elem_ty = td.param_types[0] if td.param_types else None
+			elem_di = self._dbg_type_for_typeid(elem_ty, span) if elem_ty is not None else None
+			elem_ptr_di = None
+			if elem_di is not None:
+				elem_ptr_di = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{elem_ptr_di} = !DIDerivedType(tag: {DW_TAG_POINTER}, baseType: !{elem_di}, size: {self.module.word_bits}, align: {self.module.word_bits})"
+				)
+			struct_id = self.module._dbg_new_id()
+			elements_id = self.module._dbg_new_id()
+			self.module._dbg_type_ids[ty_id] = struct_id
+			word_bytes = max(1, self.module.word_bits // 8)
+			word_bits = word_bytes * 8
+			int_tid = self.type_table.ensure_int()
+			int_di = self._dbg_type_for_typeid(int_tid, span)
+			len_member_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{len_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"len\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{int_di}, size: {word_bits}, align: {word_bits}, offset: 0)"
+			)
+			cap_member_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{cap_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"cap\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{int_di}, size: {word_bits}, align: {word_bits}, offset: {word_bits})"
+			)
+			gen_member_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{gen_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"gen\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{int_di}, size: {word_bits}, align: {word_bits}, offset: {word_bits * 2})"
+			)
+			data_member_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{data_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"data\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{elem_ptr_di}, size: {word_bits}, align: {word_bits}, offset: {word_bits * 3})"
+			)
+			self.module._dbg_metadata.append(f"!{elements_id} = !{{!{len_member_id}, !{cap_member_id}, !{gen_member_id}, !{data_member_id}}}")
 			self.module._dbg_metadata.append(
 				f"!{struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{elements_id})"
 			)
@@ -1652,6 +1690,26 @@ class _FuncBuilder:
 		# the wrong basic block if emission order changes).
 		assert self._current_block_name == self.func.entry
 		if self._entry_alloca_insert_index is None:
+			if self.module.debug_enabled and not self._dbg_entry_anchor_emitted:
+				span = self._dbg_default_span
+				if span is None or span.line is None:
+					entry_block = self.func.blocks.get(self.func.entry)
+					if entry_block is not None:
+						for instr in entry_block.instructions:
+							span = getattr(instr, "span", None)
+							if span is not None and span.line is not None:
+								break
+						if span is None or span.line is None:
+							span = getattr(entry_block.terminator, "span", None)
+				if span is None or span.line is None:
+					fallback_file = self._dbg_default_span.file if self._dbg_default_span is not None else "<unknown>"
+					span = Span(file=fallback_file, line=1, column=1)
+				loc_id = self._dbg_location_for_span(span)
+				line = "  call void asm sideeffect \"\", \"\"()"
+				if loc_id is not None:
+					line = f"{line}, !dbg !{loc_id}"
+				self.lines.append(line)
+				self._dbg_entry_anchor_emitted = True
 			self._entry_alloca_insert_index = len(self.lines)
 
 	def _ensure_local_storage(self, local: str, llty: str) -> str:
@@ -5867,10 +5925,13 @@ class _FuncBuilder:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: ArrayLit requires a TypeTable")
 		td = self.type_table.get(instr.elem_ty)
-		if not self.type_table.is_copy(instr.elem_ty) and td.kind is not TypeKind.VOID:
+		copy_status = self.type_table.copy_status(instr.elem_ty)
+		if copy_status is None:
+			raise AssertionError("internal: unresolved Copy status for ArrayLit element type in codegen")
+		if not copy_status and td.kind is not TypeKind.VOID:
 				raise AssertionError("internal: non-Copy ArrayLit reached codegen")
 		is_bool = self._is_bool_type(instr.elem_ty)
-		needs_copy = self.type_table.is_copy(instr.elem_ty) and not self.type_table.is_bitcopy(instr.elem_ty)
+		needs_copy = copy_status and not self.type_table.is_bitcopy(instr.elem_ty)
 		for idx, elem in enumerate(instr.elements):
 			elem_val = self._map_value(elem)
 			if needs_copy:
@@ -5925,10 +5986,18 @@ class _FuncBuilder:
 		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
-		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
+		line = f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}"
+		if self.module.debug_enabled:
+			loc_id = self._dbg_location_for_span(getattr(instr, "span", None))
+			if loc_id is not None:
+				line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
 
 	def _lower_array_elem_init_unchecked(self, instr: ArrayElemInitUnchecked) -> None:
 		"""Lower ArrayElemInitUnchecked without bounds checks."""
+		if drift_debug.enabled("dbg_array_span") and getattr(self.func.fn_id, "module", None) == "main":
+			import sys
+			print(f"[drift:debug][dbg_array_span] fn={self.func.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
 		array = self._map_value(instr.array)
 		index = self._map_value(instr.index)
 		value = self._map_value(instr.value)
@@ -5947,7 +6016,12 @@ class _FuncBuilder:
 		)
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
-		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
+		line = f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}"
+		if self.module.debug_enabled:
+			loc_id = self._dbg_location_for_span(getattr(instr, "span", None))
+			if loc_id is not None:
+				line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
 
 	def _lower_array_elem_assign(self, instr: ArrayElemAssign) -> None:
 		"""Lower ArrayElemAssign by dropping the old element then storing the new one."""
@@ -5964,7 +6038,12 @@ class _FuncBuilder:
 			self._emit_drop_value(instr.elem_ty, old_val)
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
-		self.lines.append(f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}")
+		line = f"  store {elem_llty} {value}, {elem_llty}* {ptr_tmp}"
+		if self.module.debug_enabled:
+			loc_id = self._dbg_location_for_span(getattr(instr, "span", None))
+			if loc_id is not None:
+				line = f"{line}, !dbg !{loc_id}"
+		self.lines.append(line)
 
 	def _lower_array_elem_drop(self, instr: ArrayElemDrop) -> None:
 		"""Lower ArrayElemDrop by loading and dropping the element."""

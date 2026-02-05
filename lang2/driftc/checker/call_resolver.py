@@ -1247,8 +1247,26 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 		recv_def = ctx.type_table.get(recv_nominal)
 		if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
 			elem_ty = recv_def.param_types[0]
-			if not ctx.type_table.is_copy(elem_ty):
-				diagnostics.append(_tc_diag(message="Array<T>.dup() requires element type to be Copy in MVP", severity="error", span=getattr(expr, "loc", Span())))
+			copy_status = ctx.type_table.copy_status(elem_ty)
+			if copy_status is None:
+				reason = ctx.type_table.copy_unknown_reason(elem_ty)
+				diagnostics.append(
+					_tc_diag(
+						message=f"Array<T>.dup() requires element type to be Copy in MVP (Copy is unknown: {reason})",
+						code="E-COPY-UNKNOWN",
+						severity="error",
+						span=getattr(expr, "loc", Span()),
+					)
+				)
+				return MethodCallResult(ctx.unknown_ty, None)
+			if not copy_status:
+				diagnostics.append(
+					_tc_diag(
+						message="Array<T>.dup() requires element type to be Copy in MVP",
+						severity="error",
+						span=getattr(expr, "loc", Span()),
+					)
+				)
 				return MethodCallResult(ctx.unknown_ty, None)
 			info = _call_info([recv_ty], recv_nominal, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(recv_nominal, info)

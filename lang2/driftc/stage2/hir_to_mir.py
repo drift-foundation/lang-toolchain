@@ -1407,11 +1407,17 @@ class HIRToMIR:
 		loaded = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=loaded, local=tmp_local))
 
-		if self._type_table.is_copy(elem_ty):
+		copy_status = self._type_table.copy_status(elem_ty)
+		if copy_status is True:
 			copy_dest = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copy_dest, value=loaded, ty=elem_ty))
 			self._local_types[copy_dest] = elem_ty
 			return copy_dest
+		if copy_status is None:
+			td = self._type_table.get(elem_ty)
+			if td.kind is TypeKind.TYPEVAR:
+				return loaded
+			raise AssertionError("MIR lowering invariant violated: unresolved Copy status for array index read")
 		td = self._type_table.get(elem_ty)
 		if td.kind is not TypeKind.TYPEVAR:
 			raise NotImplementedError("array index read requires Copy element type; borrow not supported in MVP")
@@ -1470,6 +1476,10 @@ class HIRToMIR:
 		self._propagate_error(err_val)
 
 	def _visit_expr_HArrayLiteral(self, expr: H.HArrayLiteral) -> M.ValueId:
+		prev_span = self.b.current_span
+		forced_span = self._current_stmt_span if self._current_stmt_span is not None and self._current_stmt_span != Span() else self.b.current_span
+		if forced_span is not None and forced_span != Span():
+			self.b.current_span = forced_span
 		elem_ty = None
 		expected = self._current_expected_type()
 		if expected is not None:
@@ -1515,22 +1525,37 @@ class HIRToMIR:
 		zero_len = self.b.new_temp()
 		self.b.emit(M.ConstInt(dest=zero_len, value=0))
 		self._local_types[zero_len] = self._int_type
-		self.b.emit(M.ArrayAlloc(dest=dest, elem_ty=elem_ty, length=zero_len, cap=cap_val))
+		alloc = M.ArrayAlloc(dest=dest, elem_ty=elem_ty, length=zero_len, cap=cap_val)
+		span = self.b.current_span if self.b.current_span is not None and self.b.current_span != Span() else self._current_stmt_span
+		if span is not None and span != Span():
+			alloc.span = span
+		self.b.emit(alloc)
 		for idx, elem_expr in enumerate(expr.elements):
 			val = self.lower_expr(elem_expr)
 			val_ty = self._infer_expr_type(elem_expr)
-			if val_ty is not None and self._type_table.is_copy(val_ty) and not isinstance(elem_expr, H.HMove):
-				copy_dest = self.b.new_temp()
-				self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
-				self._local_types[copy_dest] = val_ty
-				val = copy_dest
+			if val_ty is not None:
+				copy_status = self._type_table.copy_status(val_ty)
+				if copy_status is True and not isinstance(elem_expr, H.HMove):
+					copy_dest = self.b.new_temp()
+					self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
+					self._local_types[copy_dest] = val_ty
+					val = copy_dest
 			idx_val = self.b.new_temp()
 			self.b.emit(M.ConstInt(dest=idx_val, value=idx))
 			self._local_types[idx_val] = self._int_type
-			self.b.emit(M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=dest, index=idx_val, value=val))
+			init = M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=dest, index=idx_val, value=val)
+			span = self.b.current_span if self.b.current_span is not None and self.b.current_span != Span() else self._current_stmt_span
+			if span is not None and span != Span():
+				init.span = span
+			self.b.emit(init)
 		final_arr = self.b.new_temp()
-		self.b.emit(M.ArraySetLen(dest=final_arr, array=dest, length=len_val))
+		set_len = M.ArraySetLen(dest=final_arr, array=dest, length=len_val)
+		span = self.b.current_span if self.b.current_span is not None and self.b.current_span != Span() else self._current_stmt_span
+		if span is not None and span != Span():
+			set_len.span = span
+		self.b.emit(set_len)
 		self._local_types[final_arr] = self._type_table.new_array(elem_ty)
+		self.b.current_span = prev_span
 		return final_arr
 
 	def _lower_len(self, subj_ty: Optional[TypeId], subj_val: M.ValueId, dest: M.ValueId) -> None:
@@ -2823,7 +2848,8 @@ class HIRToMIR:
 	def _array_index_load_value(self, *, elem_ty: TypeId, array: M.ValueId, index: M.ValueId) -> M.ValueId:
 		raw = self.b.new_temp()
 		self.b.emit(M.ArrayIndexLoad(dest=raw, elem_ty=elem_ty, array=array, index=index))
-		if self._type_table.is_copy(elem_ty) and not self._type_table.is_bitcopy(elem_ty):
+		copy_status = self._type_table.copy_status(elem_ty)
+		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):
 			copied = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copied, value=raw, ty=elem_ty))
 			return copied
@@ -4255,11 +4281,13 @@ class HIRToMIR:
 					self.b.emit(M.LoadLocal(dest=array_val, local=array_name))
 					index_val = self.lower_expr(proj.index)
 					val_ty = self._infer_expr_type(stmt.value)
-					if val_ty is not None and self._type_table.is_copy(val_ty) and not isinstance(stmt.value, H.HMove):
-						copy_dest = self.b.new_temp()
-						self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
-						self._local_types[copy_dest] = val_ty
-						val = copy_dest
+					if val_ty is not None:
+						copy_status = self._type_table.copy_status(val_ty)
+						if copy_status is True and not isinstance(stmt.value, H.HMove):
+							copy_dest = self.b.new_temp()
+							self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
+							self._local_types[copy_dest] = val_ty
+							val = copy_dest
 					self.b.emit(M.ArrayElemAssign(elem_ty=elem_ty, array=array_val, index=index_val, value=val))
 					return
 		ptr, inner_ty = self._lower_addr_of_place(stmt.target, is_mut=True)
@@ -4961,16 +4989,20 @@ class HIRToMIR:
 				base = arg.base
 			if isinstance(base, H.HVar):
 				arg_ty = self._infer_expr_type(base)
-				if param_ty is not None and not self._type_table.is_copy(param_ty):
-					arg_ty = param_ty
-				if arg_ty is not None and not self._type_table.is_copy(arg_ty):
-					subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
-					self.b.ensure_local(subj_name)
-					moved_val = self.b.new_temp()
-					self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
-					self._local_types[moved_val] = arg_ty
-					self._moved_locals.add(subj_name)
-					return moved_val
+				if param_ty is not None:
+					param_copy = self._type_table.copy_status(param_ty)
+					if param_copy is False or param_copy is None:
+						arg_ty = param_ty
+				if arg_ty is not None:
+					arg_copy = self._type_table.copy_status(arg_ty)
+					if arg_copy is False or arg_copy is None:
+						subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
+						self.b.ensure_local(subj_name)
+						moved_val = self.b.new_temp()
+						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
+						self._local_types[moved_val] = arg_ty
+						self._moved_locals.add(subj_name)
+						return moved_val
 		return self.lower_expr(arg)
 
 	def _lower_constructor_call(self, expr: H.HCall, info: CallInfo) -> M.ValueId:
@@ -5349,7 +5381,8 @@ class HIRToMIR:
 		# Join: load ok from hidden local as the value of this expression.
 		self.b.set_block(join_block)
 		dest = self.b.new_temp()
-		if self._type_table.is_copy(ok_ty):
+		ok_copy = self._type_table.copy_status(ok_ty)
+		if ok_copy is True:
 			self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
 		else:
 			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))

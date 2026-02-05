@@ -1,0 +1,24 @@
+pub fn main() nothrow -> Int {
+	val ints = [1, 2, 3, 4];
+	val floats = [1.5, 2.25, 3.75];
+	val pairs = [Pair(a = 1, b = 2), Pair(a = 3, b = 4)];
+	val points = [Point(x = 1, y = 2), Point(x = 3, y = 4)];
+	val point_variants = [PointChoice::PointVal(Point(x = 5, y = 6)), PointChoice::PairVal(Pair(a = 7, b = 8))];
+	val total = ints.len + floats.len + pairs.len + points.len + point_variants.len;
+	return total;
+}
+
+struct Pair {
+	a: Int,
+	b: Int,
+}
+
+struct Point {
+	x: Int,
+	y: Int,
+}
+
+variant PointChoice {
+	PointVal(p: Point),
+	PairVal(p: Pair),
+}

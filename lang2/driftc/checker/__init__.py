@@ -20,9 +20,11 @@ and validate catch-arm shapes when provided.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import sys
 from typing import Any, Dict, Iterable, List, Optional, Callable, FrozenSet, Mapping, Sequence, Set, Tuple, TYPE_CHECKING
 
 from lang2.driftc.core.diagnostics import Diagnostic
+from lang2.driftc import debug as drift_debug
 
 # Checker diagnostics should always carry phase.
 def _chk_diag(*args, **kwargs):
@@ -2438,15 +2440,46 @@ class Checker:
 			tid = ctx.infer(expr)
 			if isinstance(expr, H.HArrayLiteral) and expr.elements and tid is not None:
 				elem_ty = ctx.table.get(tid).param_types[0] if ctx.table.get(tid).param_types else None
-				if elem_ty is not None and not ctx.table.is_copy(elem_ty):
-					ctx._append_diag(
-						_chk_diag(
-							message="array literal element type must be Copy",
-							severity="error",
-							span=getattr(expr, "loc", Span()),
-							code="E-ARRAY-LITERAL-NON-COPY",
+				if drift_debug.enabled("array_literal_ty"):
+					if elem_ty is None:
+						print(f"[drift:debug][array_literal_ty] array_literal tid={tid} elem_ty=None", file=sys.stderr)
+					else:
+						td = ctx.table.get(elem_ty)
+						inst_note = ""
+						if td.kind is TypeKind.STRUCT:
+							inst = ctx.table.get_struct_instance(elem_ty)
+							if inst is None:
+								inst_note = " inst=None"
+							else:
+								inst_note = f" inst_fields={inst.field_types}"
+						if td.kind is TypeKind.VARIANT:
+							inst = ctx.table.get_variant_instance(elem_ty)
+							if inst is None:
+								inst_note = " inst=None"
+							else:
+								inst_note = f" inst_arms={[list(arm.field_types) for arm in inst.arms]}"
+						print(f"[drift:debug][array_literal_ty] array_literal tid={tid} elem_ty={elem_ty} kind={td.kind.name} name={td.name} module={td.module_id}{inst_note}", file=sys.stderr)
+				if elem_ty is not None:
+					copy_status = ctx.table.copy_status(elem_ty)
+					if copy_status is None:
+						reason = ctx.table.copy_unknown_reason(elem_ty)
+						ctx._append_diag(
+							_chk_diag(
+								message=f"array literal element type Copy proof is unknown ({reason})",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E-ARRAY-LITERAL-COPY-UNKNOWN",
+							)
 						)
-					)
+					elif not copy_status:
+						ctx._append_diag(
+							_chk_diag(
+								message="array literal element type must be Copy",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E-ARRAY-LITERAL-NON-COPY",
+							)
+						)
 
 	def _bitwise_validator_on_expr(self, expr: "H.HExpr", ctx: "_TypingContext") -> None:
 		"""

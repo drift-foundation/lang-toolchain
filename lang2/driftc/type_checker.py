@@ -1839,7 +1839,24 @@ class TypeChecker:
 			if td.kind is TypeKind.TYPEVAR:
 				# Defer Copy requirements for unresolved type parameters to instantiation.
 				return
-			if self.type_table.is_copy(ty_id):
+			copy_status = self.type_table.copy_status(ty_id)
+			if copy_status is True:
+				return
+			if copy_status is None:
+				pretty = self._pretty_type_name(ty_id, current_module=current_module_name)
+				reason = self.type_table.copy_unknown_reason(ty_id)
+				if name:
+					msg = f"cannot copy '{name}': type '{pretty}' Copy is unknown ({reason})"
+				else:
+					msg = f"cannot copy value of type '{pretty}': Copy is unknown ({reason})"
+				diagnostics.append(
+					_tc_diag(
+						message=msg,
+						code="E-COPY-UNKNOWN",
+						severity="error",
+						span=span,
+					)
+				)
 				return
 			pretty = self._pretty_type_name(ty_id, current_module=current_module_name)
 			if name:
@@ -6174,16 +6191,30 @@ class TypeChecker:
 					)
 					return record_expr(expr, self._unknown)
 				inner_ty = type_expr(expr.subject, used_as_value=False, expected_type=expected_type)
-				if inner_ty is not None and not self.type_table.is_copy(inner_ty):
-					pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
-					diagnostics.append(
-						_tc_diag(
-							message=f"cannot copy value of type '{pretty}': type is not Copy",
-							severity="error",
-							span=getattr(expr, "loc", Span()),
+				if inner_ty is not None:
+					copy_status = self.type_table.copy_status(inner_ty)
+					if copy_status is None:
+						pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
+						reason = self.type_table.copy_unknown_reason(inner_ty)
+						diagnostics.append(
+							_tc_diag(
+								message=f"cannot copy value of type '{pretty}': Copy is unknown ({reason})",
+								code="E-COPY-UNKNOWN",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
 						)
-					)
-					return record_expr(expr, self._unknown)
+						return record_expr(expr, self._unknown)
+					if not copy_status:
+						pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
+						diagnostics.append(
+							_tc_diag(
+								message=f"cannot copy value of type '{pretty}': type is not Copy",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
 				return record_expr(expr, inner_ty)
 
 			# Calls.
@@ -7032,6 +7063,16 @@ class TypeChecker:
 			# Arrays/ternary.
 			if isinstance(expr, H.HArrayLiteral):
 				elem_types = [type_expr(e) for e in expr.elements]
+				if drift_debug.enabled("array_literal_ty"):
+					import sys as _sys
+					if not elem_types:
+						print(f"[drift:debug][array_literal_ty] array_literal node_id={expr.node_id} elem_types=[]", file=_sys.stderr)
+					else:
+						parts = []
+						for t in elem_types:
+							td = self.type_table.get(t)
+							parts.append(f"{t}:{td.kind.name}:{td.name}:{td.module_id}")
+						print(f"[drift:debug][array_literal_ty] array_literal node_id={expr.node_id} elem_types={','.join(parts)}", file=_sys.stderr)
 				if not elem_types:
 					if expected_type is not None:
 						td = self.type_table.get(expected_type)
@@ -7048,7 +7089,19 @@ class TypeChecker:
 				if elem_types and all(t == elem_types[0] for t in elem_types):
 					if _reject_zst_array(elem_types[0], span=getattr(expr, "loc", Span())):
 						return record_expr(expr, self._unknown)
-					if not self.type_table.is_copy(elem_types[0]):
+					copy_status = self.type_table.copy_status(elem_types[0])
+					if copy_status is None:
+						reason = self.type_table.copy_unknown_reason(elem_types[0])
+						diagnostics.append(
+							_tc_diag(
+								message=f"array literal element type Copy proof is unknown ({reason})",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E-ARRAY-LITERAL-COPY-UNKNOWN",
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if not copy_status:
 						diagnostics.append(
 							_tc_diag(
 								message="array literals require Copy element type in MVP",
