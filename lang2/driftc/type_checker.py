@@ -4161,6 +4161,15 @@ class TypeChecker:
 				span = getattr(expr, "loc", Span())
 				print(f"[drift:debug][local_types_trace] fn={fn} record_expr=HLiteralBool node_id={expr.node_id} ty={ty}:{td.kind.name}:{td.name} span={span}", file=sys.stderr)
 			expr_types[expr.node_id] = ty
+			if self.type_table is not None and self.type_table.type_provenance_enabled():
+				span = getattr(expr, "loc", None)
+				self.type_table.record_type_provenance(
+					ty,
+					phase="typecheck",
+					kind="expr",
+					span=span,
+					note=type(expr).__name__,
+				)
 			return ty
 
 		def record_iface_coercion(expr: H.HExpr, target_iface: TypeId) -> None:
@@ -4204,6 +4213,24 @@ class TypeChecker:
 				target=target,
 				sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw)),
 			)
+			if self.type_table is not None and self.type_table.type_provenance_enabled():
+				span = getattr(expr, "loc", None)
+				note = f"callsite:{getattr(expr, 'callsite_id', None)}"
+				for tid in param_types:
+					self.type_table.record_type_provenance(
+						tid,
+						phase="typecheck",
+						kind="call_param",
+						span=span,
+						note=note,
+					)
+				self.type_table.record_type_provenance(
+					return_type,
+					phase="typecheck",
+					kind="call_ret",
+					span=span,
+					note=note,
+				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
 				call_info_by_callsite_id[csid] = info
@@ -4243,6 +4270,24 @@ class TypeChecker:
 					includes_callee=False,
 				),
 			)
+			if self.type_table is not None and self.type_table.type_provenance_enabled():
+				span = getattr(expr, "loc", None)
+				note = f"callsite:{getattr(expr, 'callsite_id', None)}"
+				for tid in param_types:
+					self.type_table.record_type_provenance(
+						tid,
+						phase="typecheck",
+						kind="call_param",
+						span=span,
+						note=note,
+					)
+				self.type_table.record_type_provenance(
+					return_type,
+					phase="typecheck",
+					kind="call_ret",
+					span=span,
+					note=note,
+				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
 				call_info_by_callsite_id[csid] = info
@@ -4267,6 +4312,24 @@ class TypeChecker:
 				target=CallTarget.direct(target),
 				sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw)),
 			)
+			if self.type_table is not None and self.type_table.type_provenance_enabled():
+				span = getattr(expr, "loc", None)
+				note = f"callsite:{getattr(expr, 'callsite_id', None)}"
+				for tid in param_types:
+					self.type_table.record_type_provenance(
+						tid,
+						phase="typecheck",
+						kind="call_param",
+						span=span,
+						note=note,
+					)
+				self.type_table.record_type_provenance(
+					return_type,
+					phase="typecheck",
+					kind="call_ret",
+					span=span,
+					note=note,
+				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
 				call_info_by_callsite_id[csid] = info
@@ -6509,6 +6572,24 @@ class TypeChecker:
 				csid = getattr(expr, "callsite_id", None)
 				if method_res.call_info is not None:
 					if isinstance(csid, int):
+						if self.type_table is not None and self.type_table.type_provenance_enabled():
+							span = getattr(expr, "loc", None)
+							note = f"callsite:{getattr(expr, 'callsite_id', None)}"
+							for tid in method_res.call_info.sig.param_types:
+								self.type_table.record_type_provenance(
+									tid,
+									phase="typecheck",
+									kind="call_param",
+									span=span,
+									note=note,
+								)
+							self.type_table.record_type_provenance(
+								method_res.call_info.sig.user_ret_type,
+								phase="typecheck",
+								kind="call_ret",
+								span=span,
+								note=note,
+							)
 						call_info_by_callsite_id[csid] = method_res.call_info
 						inst = instantiations_by_callsite_id.get(csid)
 						if inst is not None:
@@ -7838,6 +7919,16 @@ class TypeChecker:
 			instantiations_by_callsite_id=instantiations_by_callsite_id,
 			iface_coercions=iface_coercions,
 		)
+		if self.type_table is not None and self.type_table.type_provenance_enabled():
+			for bid, bty in binding_types.items():
+				note = binding_names.get(bid)
+				self.type_table.record_type_provenance(
+					bty,
+					phase="typecheck",
+					kind="binding",
+					span=None,
+					note=note,
+				)
 
 		if callable_registry is not None:
 			missing_callsite_nodes: list[int] = []

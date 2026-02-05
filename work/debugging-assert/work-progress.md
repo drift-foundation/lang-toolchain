@@ -105,6 +105,14 @@
 - Added `scan=post_checker` after `Checker.run_by_id`; rerun shows duplicates already present there. This pins the corruption to `Checker.run_by_id` (likely its `Checker.__init__` path that calls `_normalize_and_collect_catch_arms`, which runs `normalize_hir` and reassigns node_ids on shared HIR).
 - Verified `pre_checker_body_shared=True` for `main::run`, meaning `typed_fn.body` is the same object as `normalized_hirs_by_id[fn_id]`. This makes `Checker`’s internal `normalize_hir` call a likely source of node_id corruption (partial renumbering via shared nodes).
 - Updated `Checker._normalize_and_collect_catch_arms` to skip `normalize_hir` and collect catch arms directly, avoiding mutation of shared HIR during checker initialization.
-- Provenance metadata idea (pending approval):
-- Add an optional side table keyed by `TypeId` or by `ExprId/CallsiteId` that records the phase/stage that determined the type (e.g., `typecheck`, `instantiation`, `mir_infer`, `codegen`, `debug_patch`) plus confidence and optional source span.
-- Keep this separate from `TypeId`/TypeDef hashing to avoid breaking interning or equality. This is a future enhancement, not yet implemented.
+- Type provenance metadata (in progress, debug-only):
+- Goal: optional side table keyed by `TypeId` with entries `{phase, kind, span, note, order}` to trace where a type was first determined.
+- Must stay out of `TypeId`/TypeDef hashing to avoid interning/equality regressions; side-table only.
+- Planned coverage proof: when `DRIFT_DEBUG={"type_prov": true}`, collect all TypeIds encountered in signatures, expr types, binding types, and callsite info; assert each has at least one provenance entry.
+- Current implementation:
+- Added `TypeProvenanceEntry` and provenance table on `TypeTable` with `record_type_provenance` + `audit_type_provenance`.
+- Typechecker now records provenance for expr types, binding types, and callsite param/return types.
+- Current implementation (cont.):
+- `compile_stubbed_funcs` now enables provenance with `DRIFT_DEBUG={"type_prov": true}`, records signature param/return/error types, and audits coverage across signatures + expr/binding/callsite types.
+- The audit prints a summary and raises if any required TypeId lacks provenance.
+- Defer any shared `TypeId` metadata changes (side-table only) until approval.

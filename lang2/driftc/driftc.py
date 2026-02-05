@@ -1504,6 +1504,8 @@ def compile_stubbed_funcs(
 		# Ensure TypeIds are resolved on supplied signatures using a shared table.
 		if shared_type_table is None:
 			shared_type_table = TypeTable()
+		if drift_debug.enabled("type_prov") and shared_type_table is not None:
+			shared_type_table.enable_type_provenance()
 		resolved_signatures: dict[FunctionId, FnSignature] = {}
 		for fn_id, sig in signatures_by_id.items():
 			type_param_map: dict[str, object] = {}
@@ -1540,8 +1542,45 @@ def compile_stubbed_funcs(
 			)
 		base_signatures_by_id = resolved_signatures
 
+	if drift_debug.enabled("type_prov") and shared_type_table is not None:
+		shared_type_table.enable_type_provenance()
+
 	derived_signatures_by_id: dict[FunctionId, FnSignature] = {}
 	base_signatures_by_id = MappingProxyType(dict(base_signatures_by_id))
+
+	def _record_signature_provenance(fn_id: FunctionId, sig: FnSignature) -> None:
+		if shared_type_table is None or not shared_type_table.type_provenance_enabled():
+			return
+		span = getattr(sig, "loc", None)
+		note = function_symbol(fn_id)
+		for tid in sig.param_type_ids or []:
+			shared_type_table.record_type_provenance(
+				tid,
+				phase="signature",
+				kind="sig_param",
+				span=span,
+				note=note,
+			)
+		if sig.return_type_id is not None:
+			shared_type_table.record_type_provenance(
+				sig.return_type_id,
+				phase="signature",
+				kind="sig_return",
+				span=span,
+				note=note,
+			)
+		if sig.error_type_id is not None:
+			shared_type_table.record_type_provenance(
+				sig.error_type_id,
+				phase="signature",
+				kind="sig_error",
+				span=span,
+				note=note,
+			)
+
+	if shared_type_table is not None and shared_type_table.type_provenance_enabled():
+		for fn_id, sig in base_signatures_by_id.items():
+			_record_signature_provenance(fn_id, sig)
 	_ensure_module_packages(
 		shared_type_table,
 		modules=_required_modules,
@@ -1565,6 +1604,7 @@ def compile_stubbed_funcs(
 			if existing != sig:
 				raise AssertionError(f"signature collision for '{function_symbol(fn_id)}'")
 			return
+		_record_signature_provenance(fn_id, sig)
 		derived_signatures_by_id[fn_id] = sig
 
 	method_wrapper_specs, wrapper_errors = _inject_method_boundary_wrappers(
@@ -3085,6 +3125,84 @@ def compile_stubbed_funcs(
 						_walk_expr_ids(obj[key])
 					return
 			_walk_expr_ids(block)
+	if shared_type_table is not None and shared_type_table.type_provenance_enabled():
+		required_type_ids: set[TypeId] = set()
+		def _add_type_id(tid: TypeId | None) -> None:
+			if tid is None or not isinstance(tid, int) or tid <= 0:
+				return
+			required_type_ids.add(tid)
+		for sig in signatures_by_id.values():
+			for tid in sig.param_type_ids or []:
+				_add_type_id(tid)
+			_add_type_id(sig.return_type_id)
+			_add_type_id(sig.error_type_id)
+		for typed_fn in typed_fns_by_id.values():
+			expr_types = getattr(typed_fn, "expr_types", None)
+			if isinstance(expr_types, dict):
+				for tid in expr_types.values():
+					_add_type_id(tid)
+			binding_types = getattr(typed_fn, "binding_types", None)
+			if isinstance(binding_types, dict):
+				for tid in binding_types.values():
+					_add_type_id(tid)
+			call_info_by_callsite = getattr(typed_fn, "call_info_by_callsite_id", None)
+			if isinstance(call_info_by_callsite, dict):
+				for info in call_info_by_callsite.values():
+					for tid in info.sig.param_types:
+						_add_type_id(tid)
+					_add_type_id(info.sig.user_ret_type)
+		import sys as _dbg_sys
+		missing, phase_counts, kind_counts = shared_type_table.audit_type_provenance(required=required_type_ids)
+		print(f"[drift:debug][type_prov] required={len(required_type_ids)} missing={len(missing)} phases={phase_counts} kinds={kind_counts}", file=_dbg_sys.stderr)
+		if missing:
+			missing_set = set(missing)
+			missing_sources: dict[TypeId, list[str]] = {tid: [] for tid in missing}
+			for fn_id, sig in signatures_by_id.items():
+				fn_label = function_symbol(fn_id)
+				for tid in sig.param_type_ids or []:
+					if tid in missing_set:
+						missing_sources[tid].append(f"signature:param fn={fn_label}")
+				if sig.return_type_id in missing_set:
+					missing_sources[sig.return_type_id].append(f"signature:return fn={fn_label}")
+				if sig.error_type_id in missing_set:
+					missing_sources[sig.error_type_id].append(f"signature:error fn={fn_label}")
+			for fn_id, typed_fn in typed_fns_by_id.items():
+				fn_label = function_symbol(fn_id)
+				expr_types = getattr(typed_fn, "expr_types", None)
+				if isinstance(expr_types, dict):
+					for node_id, tid in expr_types.items():
+						if tid in missing_set:
+							missing_sources[tid].append(f"expr fn={fn_label} node={node_id}")
+				binding_types = getattr(typed_fn, "binding_types", None)
+				binding_names = getattr(typed_fn, "binding_names", None)
+				if isinstance(binding_types, dict):
+					for bid, tid in binding_types.items():
+						if tid in missing_set:
+							name = binding_names.get(bid) if isinstance(binding_names, dict) else None
+							missing_sources[tid].append(f"binding fn={fn_label} id={bid} name={name}")
+				call_info_by_callsite = getattr(typed_fn, "call_info_by_callsite_id", None)
+				if isinstance(call_info_by_callsite, dict):
+					for csid, info in call_info_by_callsite.items():
+						for idx, tid in enumerate(info.sig.param_types):
+							if tid in missing_set:
+								missing_sources[tid].append(f"call_param fn={fn_label} csid={csid} idx={idx}")
+						if info.sig.user_ret_type in missing_set:
+							missing_sources[info.sig.user_ret_type].append(f"call_ret fn={fn_label} csid={csid}")
+			def _type_desc(tid: TypeId) -> str:
+				try:
+					td = shared_type_table.get(tid)
+				except Exception:
+					return str(tid)
+				name = td.name or "<anon>"
+				kind = td.kind.name if hasattr(td, "kind") else "UNKNOWN"
+				return f"{tid}:{kind}:{name}"
+			sample = ", ".join(_type_desc(tid) for tid in missing[:12])
+			print(f"[drift:debug][type_prov] missing_sample={sample}", file=_dbg_sys.stderr)
+			for tid in missing[:6]:
+				sources = missing_sources.get(tid) or []
+				source_desc = "; ".join(sources[:6])
+				print(f"[drift:debug][type_prov] missing_sources {tid} {source_desc}", file=_dbg_sys.stderr)
+			raise AssertionError("type provenance missing for required TypeIds")
 	if enforce_entrypoint and signatures_by_id and shared_type_table is not None:
 		from lang2.driftc.type_checker import validate_entrypoint
 		validate_entrypoint(
@@ -3269,6 +3387,7 @@ def compile_stubbed_funcs(
 				checked.fn_infos_by_id[fn_id] = info
 				declared_by_id[fn_id] = info.declared_can_throw
 			return None
+		_record_signature_provenance(fn_id, sig)
 		derived_signatures_by_id[fn_id] = sig
 		info = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
 		checked.fn_infos_by_id[fn_id] = info

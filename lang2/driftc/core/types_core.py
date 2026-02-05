@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.function_id import FunctionId, function_symbol
+from lang2.driftc.core.span import Span
 
 
 TypeId = int  # opaque handle into the TypeTable
@@ -236,6 +237,15 @@ class VariantInstance:
 	arms_by_name: dict[str, VariantArmInstance]
 
 
+@dataclass(frozen=True)
+class TypeProvenanceEntry:
+	phase: str
+	kind: str
+	span: Span | None = None
+	note: str | None = None
+	order: int = 0
+
+
 class TypeTable:
 	"""
 	Simple type table that owns TypeIds.
@@ -328,6 +338,65 @@ class TypeTable:
 		#
 		# Values are (type_params, target_type_expr, loc).
 		self.type_aliases: dict[tuple[str | None, str], tuple[list[str], object, object | None]] = {}
+		# Optional type provenance side table (enabled via debug flag).
+		self._type_provenance_enabled: bool = False
+		self._type_provenance_counter: int = 0
+		self._type_provenance: dict[TypeId, list[TypeProvenanceEntry]] = {}
+
+	def enable_type_provenance(self) -> None:
+		self._type_provenance_enabled = True
+
+	def type_provenance_enabled(self) -> bool:
+		return bool(self._type_provenance_enabled)
+
+	def record_type_provenance(
+		self,
+		ty_id: TypeId | None,
+		*,
+		phase: str,
+		kind: str,
+		span: Span | None = None,
+		note: str | None = None,
+	) -> None:
+		if not self._type_provenance_enabled:
+			return
+		if ty_id is None or not isinstance(ty_id, int) or ty_id <= 0:
+			return
+		self._type_provenance_counter += 1
+		entry = TypeProvenanceEntry(
+			phase=phase,
+			kind=kind,
+			span=span,
+			note=note,
+			order=self._type_provenance_counter,
+		)
+		self._type_provenance.setdefault(ty_id, []).append(entry)
+
+	def provenance_for(self, ty_id: TypeId) -> list[TypeProvenanceEntry]:
+		return list(self._type_provenance.get(ty_id, []))
+
+	def audit_type_provenance(
+		self,
+		*,
+		required: Iterable[TypeId],
+	) -> tuple[list[TypeId], dict[str, int], dict[str, int]]:
+		"""
+		Return (missing, phase_counts, kind_counts) for required TypeIds.
+		"""
+		missing: list[TypeId] = []
+		phase_counts: dict[str, int] = {}
+		kind_counts: dict[str, int] = {}
+		for tid in required:
+			if tid is None or not isinstance(tid, int) or tid <= 0:
+				continue
+			entries = self._type_provenance.get(tid)
+			if not entries:
+				missing.append(tid)
+				continue
+			for entry in entries:
+				phase_counts[entry.phase] = phase_counts.get(entry.phase, 0) + 1
+				kind_counts[entry.kind] = kind_counts.get(entry.kind, 0) + 1
+		return missing, phase_counts, kind_counts
 
 	def define_const(self, *, module_id: str, name: str, type_id: TypeId, value: object) -> None:
 		"""

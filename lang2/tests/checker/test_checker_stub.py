@@ -104,3 +104,54 @@ def test_checker_method_call_missing_callinfo_is_bug():
 	assert any(
 		diag.code == "E_INTERNAL_MISSING_CALLINFO" for diag in checked.diagnostics
 	), "expected missing CallInfo diagnostic"
+
+
+def test_checker_does_not_mutate_node_ids_on_normalized_hir():
+	"""Checker should not reassign node ids on already-normalized HIR."""
+	from dataclasses import fields, is_dataclass
+	from lang2.driftc import stage1 as H
+	from lang2.driftc.stage1.normalize import normalize_hir
+
+	fn_id = FunctionId(module="main", name="main", ordinal=0)
+	signatures = {fn_id: FnSignature(name="main", return_type="Int")}
+	block = H.HBlock(
+		statements=[
+			H.HExprStmt(expr=H.HCall(fn=H.HVar("foo"), args=[H.HLiteralInt(1)])),
+		]
+	)
+	normalized = normalize_hir(block)
+	checker = Checker(
+		signatures_by_id=signatures,
+		hir_blocks_by_id={fn_id: normalized},
+		call_info_by_callsite_id={fn_id: {}},
+	)
+	checker.check_by_id([fn_id])
+	seen: dict[int, str] = {}
+	dups: list[tuple[int, str, str]] = []
+
+	def walk(obj: object) -> None:
+		if isinstance(obj, H.HExpr):
+			node_id = getattr(obj, "node_id", 0)
+			kind = type(obj).__name__
+			prev = seen.get(node_id)
+			if prev is None:
+				seen[node_id] = kind
+			elif prev != kind:
+				dups.append((node_id, prev, kind))
+		if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+			return
+		if is_dataclass(obj):
+			for f in fields(obj):
+				walk(getattr(obj, f.name))
+			return
+		if isinstance(obj, (list, tuple)):
+			for item in obj:
+				walk(item)
+			return
+		if isinstance(obj, dict):
+			for key in sorted(obj.keys(), key=repr):
+				walk(obj[key])
+			return
+
+	walk(normalized)
+	assert not dups, f"duplicate node_id values detected: {dups[:5]}"

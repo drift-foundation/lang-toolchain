@@ -1397,6 +1397,7 @@ class _FuncBuilder:
 	def _emit_dbg_value(self, local: str, ty_id: TypeId, value: str, span: Span | None) -> None:
 		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
 			return
+		actual_llty = self.value_types.get(value)
 		local_id = self._dbg_local_var(local, ty_id, span)
 		if local_id is None:
 			return
@@ -1405,6 +1406,8 @@ class _FuncBuilder:
 		loc_id = self._dbg_location_for_span(span)
 		val_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 		emit_llty = self._llty(val_llty)
+		if actual_llty is not None and self._llty(actual_llty) != emit_llty:
+			return
 		line = f"  call void @llvm.dbg.value(metadata {emit_llty} {value}, metadata !{local_id}, metadata !{expr_id})"
 		if loc_id is not None:
 			line = f"{line}, !dbg !{loc_id}"
@@ -1572,6 +1575,10 @@ class _FuncBuilder:
 		td = self.type_table.get(ty_id)
 		if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
 			return
+		expected_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
+		actual_llty = self.value_types.get(src_val)
+		if actual_llty is not None and self._llty(actual_llty) != self._llty(expected_llty):
+			return
 		store_llty = self._llvm_storage_type_for_typeid(ty_id)
 		alloca_id = self._ensure_dbg_keepalive_storage(local, store_llty)
 		self._emit_dbg_declare(local, ty_id, alloca_id, store_llty, span)
@@ -1658,6 +1665,14 @@ class _FuncBuilder:
 			return
 		if line_index < len(self.lines) and ", !dbg !" in self.lines[line_index]:
 			return
+		target_index = line_index
+		while target_index < len(self.lines):
+			line = self.lines[target_index].strip()
+			if line and not line.endswith(":"):
+				break
+			target_index += 1
+		if target_index >= len(self.lines):
+			return
 		span = getattr(instr, "span", None)
 		if span is None or span == Span():
 			span = self._dbg_last_span or self._dbg_default_span
@@ -1666,9 +1681,7 @@ class _FuncBuilder:
 		loc_id = self.module.get_di_location(span, self._dbg_subprogram_id)
 		if loc_id is None:
 			return
-		if line_index >= len(self.lines):
-			return
-		self.lines[line_index] = f"{self.lines[line_index]}, !dbg !{loc_id}"
+		self.lines[target_index] = f"{self.lines[target_index]}, !dbg !{loc_id}"
 		self._dbg_last_span = span
 
 	def _lower_phi(self, block_name: str, phi: Phi) -> None:
