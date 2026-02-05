@@ -116,3 +116,6 @@
 - `compile_stubbed_funcs` now enables provenance with `DRIFT_DEBUG={"type_prov": true}`, records signature param/return/error types, and audits coverage across signatures + expr/binding/callsite types.
 - The audit prints a summary and raises if any required TypeId lacks provenance.
 - Defer any shared `TypeId` metadata changes (side-table only) until approval.
+- Debug info coverage (variants):
+- Implemented DWARF debug types for `variant` values: tag + payload union derived from the compiler’s internal variant layout.
+- Added test `lang2/codegen/llvm/tests/test_llvm_codegen_debug_variant.py` to assert union/tag/payload metadata.

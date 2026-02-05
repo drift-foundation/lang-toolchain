@@ -219,6 +219,8 @@ DWARF_LANG = "DW_LANG_Rust"
 DW_TAG_POINTER = "DW_TAG_pointer_type"
 DW_TAG_STRUCT = "DW_TAG_structure_type"
 DW_TAG_MEMBER = "DW_TAG_member"
+DW_TAG_UNION = "DW_TAG_union_type"
+DW_TAG_ENUM = "DW_TAG_enumeration_type"
 DW_ATE_SIGNED = "DW_ATE_signed"
 DW_ATE_UNSIGNED = "DW_ATE_unsigned"
 DW_ATE_BOOLEAN = "DW_ATE_boolean"
@@ -1331,7 +1333,38 @@ class _FuncBuilder:
 			return type_id
 		if td.kind is TypeKind.SCALAR:
 			lower = (td.name or "").lower()
-			if lower in ("string", "error", "diagnosticvalue"):
+			if lower == "string":
+				int_tid = self.type_table.ensure_int()
+				byte_tid = self.type_table.ensure_byte()
+				len_di = self._dbg_type_for_typeid(int_tid, span)
+				byte_di = self._dbg_type_for_typeid(byte_tid, span)
+				data_ptr_di = None
+				if byte_di is not None:
+					data_ptr_di = self.module._dbg_new_id()
+					self.module._dbg_metadata.append(
+						f"!{data_ptr_di} = !DIDerivedType(tag: {DW_TAG_POINTER}, baseType: !{byte_di}, size: {self.module.word_bits}, align: {self.module.word_bits})"
+					)
+				struct_id = self.module._dbg_new_id()
+				elements_id = self.module._dbg_new_id()
+				self.module._dbg_type_ids[ty_id] = struct_id
+				word_bytes = max(1, self.module.word_bits // 8)
+				len_size_bits = word_bytes * 8
+				len_align_bits = word_bytes * 8
+				len_member_id = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{len_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"len\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{len_di}, size: {len_size_bits}, align: {len_align_bits}, offset: 0)"
+				)
+				data_member_id = self.module._dbg_new_id()
+				data_offset_bits = word_bytes * 8
+				self.module._dbg_metadata.append(
+					f"!{data_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"data\", scope: !{struct_id}, file: !{file_id}, line: 0, baseType: !{data_ptr_di}, size: {self.module.word_bits}, align: {self.module.word_bits}, offset: {data_offset_bits})"
+				)
+				self.module._dbg_metadata.append(f"!{elements_id} = !{{!{len_member_id}, !{data_member_id}}}")
+				self.module._dbg_metadata.append(
+					f"!{struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{elements_id})"
+				)
+				return struct_id
+			if lower in ("error", "diagnosticvalue"):
 				type_id = self.module._dbg_new_id()
 				self.module._dbg_metadata.append(
 					f"!{type_id} = !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{self.module._ensure_dbg_empty()})"
@@ -1387,6 +1420,117 @@ class _FuncBuilder:
 				f"!{struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{elements_id})"
 			)
 			return struct_id
+		if td.kind is TypeKind.VARIANT:
+			inst = self.type_table.get_variant_instance(ty_id)
+			if inst is None:
+				type_id = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{type_id} = !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{self.module._ensure_dbg_empty()})"
+				)
+				self.module._dbg_type_ids[ty_id] = type_id
+				return type_id
+			layout = self._variant_layout(ty_id)
+			variant_id = self.module._dbg_new_id()
+			variant_elements_id = self.module._dbg_new_id()
+			self.module._dbg_type_ids[ty_id] = variant_id
+			payload_size_bytes = layout.payload_words * layout.payload_cell_bytes
+			payload_align_bytes = layout.payload_align_bytes
+			payload_offset = 1
+			if payload_align_bytes > 1 and payload_offset % payload_align_bytes != 0:
+				payload_offset += payload_align_bytes - (payload_offset % payload_align_bytes)
+			schema = self.type_table.get_variant_schema(inst.base_id)
+			tombstone_ctor = schema.tombstone_ctor if schema is not None else None
+			arms_sorted = [
+				arm for arm in inst.arms
+				if tombstone_ctor is None or arm.name != tombstone_ctor
+			]
+			arms_sorted.sort(key=lambda arm: (arm.tag, arm.name))
+			enum_id = self.module._dbg_new_id()
+			enum_elements_id = self.module._dbg_new_id()
+			enum_members: list[int] = []
+			for arm in arms_sorted:
+				enum_member_id = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{enum_member_id} = !DIEnumerator(name: \"{_llvm_md_escape(arm.name)}\", value: {arm.tag})"
+				)
+				enum_members.append(enum_member_id)
+			if enum_members:
+				members = ", ".join(f"!{mid}" for mid in enum_members)
+				self.module._dbg_metadata.append(f"!{enum_elements_id} = !{{{members}}}")
+			else:
+				self.module._dbg_metadata.append(f"!{enum_elements_id} = !{{}}")
+			self.module._dbg_metadata.append(
+				f"!{enum_id} = distinct !DICompositeType(tag: {DW_TAG_ENUM}, name: \"{_llvm_md_escape(name)}::Tag\", file: !{file_id}, line: 0, size: 8, align: 8, elements: !{enum_elements_id})"
+			)
+			union_id = self.module._dbg_new_id()
+			union_elements_id = self.module._dbg_new_id()
+			union_members: list[int] = []
+			for arm in arms_sorted:
+				arm_struct_id = self.module._dbg_new_id()
+				arm_elements_id = self.module._dbg_new_id()
+				field_members: list[int] = []
+				offset_bytes = 0
+				max_align = 1
+				for idx, fty in enumerate(arm.field_types):
+					fsz, fal = self._size_align_typeid(fty)
+					if fal > 1 and offset_bytes % fal != 0:
+						offset_bytes += fal - (offset_bytes % fal)
+					max_align = max(max_align, fal)
+					member_id = self.module._dbg_new_id()
+					fname = arm.field_names[idx] if idx < len(arm.field_names) else f"field{idx}"
+					base = self._dbg_type_for_typeid(fty, span)
+					fsz_bits = fsz * 8
+					fal_bits = max(0, fal * 8)
+					off_bits = offset_bytes * 8
+					self.module._dbg_metadata.append(
+						f"!{member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"{_llvm_md_escape(fname)}\", scope: !{arm_struct_id}, file: !{file_id}, line: 0, baseType: !{base}, size: {fsz_bits}, align: {fal_bits}, offset: {off_bits})"
+					)
+					field_members.append(member_id)
+					offset_bytes += fsz
+				if max_align > 1 and offset_bytes % max_align != 0:
+					offset_bytes += max_align - (offset_bytes % max_align)
+				if field_members:
+					members = ", ".join(f"!{mid}" for mid in field_members)
+					self.module._dbg_metadata.append(f"!{arm_elements_id} = !{{{members}}}")
+				else:
+					self.module._dbg_metadata.append(f"!{arm_elements_id} = !{{}}")
+				arm_name = f"{name}::{arm.name}"
+				arm_size_bits = offset_bytes * 8
+				arm_align_bits = max_align * 8
+				self.module._dbg_metadata.append(
+					f"!{arm_struct_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(arm_name)}\", file: !{file_id}, line: 0, size: {arm_size_bits}, align: {arm_align_bits}, elements: !{arm_elements_id})"
+				)
+				union_member_id = self.module._dbg_new_id()
+				self.module._dbg_metadata.append(
+					f"!{union_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"{_llvm_md_escape(arm.name)}\", scope: !{union_id}, file: !{file_id}, line: 0, baseType: !{arm_struct_id}, size: {arm_size_bits}, align: {arm_align_bits}, offset: 0)"
+				)
+				union_members.append(union_member_id)
+			if union_members:
+				members = ", ".join(f"!{mid}" for mid in union_members)
+				self.module._dbg_metadata.append(f"!{union_elements_id} = !{{{members}}}")
+			else:
+				self.module._dbg_metadata.append(f"!{union_elements_id} = !{{}}")
+			union_size_bits = payload_size_bytes * 8
+			union_align_bits = payload_align_bytes * 8
+			self.module._dbg_metadata.append(
+				f"!{union_id} = distinct !DICompositeType(tag: {DW_TAG_UNION}, name: \"{_llvm_md_escape(name)}::payload\", file: !{file_id}, line: 0, size: {union_size_bits}, align: {union_align_bits}, elements: !{union_elements_id})"
+			)
+			tag_member_id = self.module._dbg_new_id()
+			self.module._dbg_metadata.append(
+				f"!{tag_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"tag\", scope: !{variant_id}, file: !{file_id}, line: 0, baseType: !{enum_id}, size: 8, align: 8, offset: 0)"
+			)
+			payload_member_id = self.module._dbg_new_id()
+			payload_offset_bits = payload_offset * 8
+			self.module._dbg_metadata.append(
+				f"!{payload_member_id} = !DIDerivedType(tag: {DW_TAG_MEMBER}, name: \"payload\", scope: !{variant_id}, file: !{file_id}, line: 0, baseType: !{union_id}, size: {union_size_bits}, align: {union_align_bits}, offset: {payload_offset_bits})"
+			)
+			self.module._dbg_metadata.append(
+				f"!{variant_elements_id} = !{{!{tag_member_id}, !{payload_member_id}}}"
+			)
+			self.module._dbg_metadata.append(
+				f"!{variant_id} = distinct !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{variant_elements_id})"
+			)
+			return variant_id
 		type_id = self.module._dbg_new_id()
 		self.module._dbg_metadata.append(
 			f"!{type_id} = !DICompositeType(tag: {DW_TAG_STRUCT}, name: \"{_llvm_md_escape(name)}\", file: !{file_id}, line: 0, size: {size_bits}, align: {align_bits}, elements: !{self.module._ensure_dbg_empty()})"

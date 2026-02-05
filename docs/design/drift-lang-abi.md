@@ -278,6 +278,37 @@ That is, a struct:
 
 ### When `T` is sized (e.g., Int, Bool, Float):
 
+---
+
+# 5. Variant ABI (intra-module, compiler-private)
+
+This section documents the **current compiler layout** for general `variant` values.
+It is **not** part of the stable exported ABI. It only needs to be self-consistent
+within a module so that all call sites agree.
+
+The canonical v1 layout used by LLVM codegen is:
+
+```c
+typedef struct {
+    uint8_t tag;       // constructor tag (0..N-1)
+    // padding to payload alignment
+    payload_cell_t payload[payload_words];
+} DriftVariant;
+```
+
+Where:
+- `payload_cell_t` is an integer cell sized to the payload alignment (e.g., `i64` on 64-bit targets).
+- `payload_words` is the number of cells required to fit the largest constructor payload.
+- Payload alignment is the maximum alignment across constructor fields (at least word size).
+
+Per-constructor payloads are packed as a literal struct of field storage types:
+- `Bool` is stored as `i8` inside payloads (aggregate/storage form).
+- Other fields use their aggregate/storage representation.
+
+Notes:
+- This layout is used for all variants (including `Optional<T>` and `Result<T, Error>`) **inside a module**.
+- The exported ABI for `Result<T, Error>` remains the stable layout described in §4.3.
+
 ```c
 typedef struct {
     T           value;
