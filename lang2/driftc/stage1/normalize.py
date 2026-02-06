@@ -131,14 +131,16 @@ class DVInitRewriter:
 				left=self._rewrite_expr(expr.left),
 				op=expr.op,
 				right=self._rewrite_expr(expr.right),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HUnary):
-			return H.HUnary(op=expr.op, expr=self._rewrite_expr(expr.expr))
+			return H.HUnary(op=expr.op, expr=self._rewrite_expr(expr.expr), loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HTernary):
 			return H.HTernary(
 				cond=self._rewrite_expr(expr.cond),
 				then_expr=self._rewrite_expr(expr.then_expr),
 				else_expr=self._rewrite_expr(expr.else_expr),
+				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HField):
 			return H.HField(subject=self._rewrite_expr(expr.subject), name=expr.name)

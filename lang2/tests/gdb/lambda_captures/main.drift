@@ -1,0 +1,34 @@
+struct Point { x: Int, y: Int, label: String }
+
+fn point_ref_sum(p: &Point) nothrow -> Int {
+	return p.x + p.y;
+}
+
+variant Choice {
+	IntVal(v: Int),
+	PointVal(p: Point),
+}
+
+fn add(a: Int, b: Int) nothrow -> Int {
+	return a + b;
+}
+
+fn point_sum(p: Point) nothrow -> Int {
+	return p.x + p.y;
+}
+
+fn main() nothrow -> Int {
+	val arr = [1, 2, 3];
+	val words = ["hi", "pt"];
+	val floats = [1.5, 2.25, 3.75];
+	val points = [Point(x = 1, y = 2, label = "a"), Point(x = 3, y = 4, label = "b")];
+	val choice = Choice::IntVal(7);
+	val choice2 = Choice::PointVal(points[0]);
+	val s = "ok";
+	val _ = (| | captures(move arr, move words, move floats, move points, move choice, move choice2, copy s) => {
+		val pref: &Point = &points[0];
+		val _n = add(arr.len, words.len) + floats.len + point_sum(points[0]) + point_ref_sum(pref) + s.len;
+		return _n;
+	})();
+	return 0;
+}

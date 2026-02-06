@@ -34,6 +34,7 @@ def stdlib_root() -> Path | None:
 	return root if root.exists() else None
 
 from lang2.driftc.core.span import Span
+from lang2.driftc.core.source_manager import SourceManager
 from lang2.driftc.core.types_core import TypeKind, TypeParamId
 from lang2.driftc.core.event_codes import event_code, PAYLOAD_MASK
 from lang2.driftc.core.function_id import FunctionId, function_symbol
@@ -963,7 +964,7 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 	return catalog
 
 
-def _span_in_file(path: Path, loc: object | None) -> Span:
+def _span_in_file(path: Path, loc: object | None, source_manager: SourceManager | None = None) -> Span:
 	"""
 	Construct a Span that is anchored to a specific source file.
 
@@ -971,16 +972,24 @@ def _span_in_file(path: Path, loc: object | None) -> Span:
 	builds we need the file to be explicit so diagnostics can point at the right
 	origin.
 	"""
+	sm = source_manager or _ACTIVE_SOURCE_MANAGER
 	if loc is None:
-		return Span(file=str(path))
+		file_id = sm.file_id_for_path(str(path)) if sm is not None else None
+		return Span(file=str(path), file_id=file_id)
 	span = Span.from_loc(loc)
 	if span.file is None:
+		file_id = span.file_id
+		if file_id is None and sm is not None:
+			file_id = sm.file_id_for_path(str(path))
 		return Span(
 			file=str(path),
+			file_id=file_id,
 			line=span.line,
 			column=span.column,
 			end_line=span.end_line,
 			end_column=span.end_column,
+			start_pos=span.start_pos,
+			end_pos=span.end_pos,
 			raw=span.raw,
 		)
 	return span
@@ -1132,6 +1141,9 @@ def parse_drift_files_to_hir(
 	treats it as one module unit; multiple files are a hard error.
 	"""
 	diagnostics: list[Diagnostic] = []
+	source_manager = SourceManager()
+	prev_source_manager = _ACTIVE_SOURCE_MANAGER
+	_set_active_source_manager(source_manager)
 	if not paths:
 		empty = ModuleLowered(
 			module_id="main",
@@ -1146,14 +1158,18 @@ def parse_drift_files_to_hir(
 			impl_defs=[],
 			origin_by_fn_id={},
 		)
-		return empty, TypeTable(), {}, [_p_diag(message="no input files", severity="error")]
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, [_p_diag(message="no input files", severity="error")]
 
 	paths = [p.resolve() for p in paths]
 	programs: list[tuple[Path, parser_ast.Program]] = []
 	for path in paths:
 		source = path.read_text()
+		file_id = source_manager.add(str(path), source)
 		try:
-			prog = _parser.parse_program(source, filename=str(path))
+			prog = _parser.parse_program(source, filename=str(path), file_id=file_id)
 		except _parser.ModuleDeclError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
@@ -1192,7 +1208,10 @@ def parse_drift_files_to_hir(
 			impl_defs=[],
 			origin_by_fn_id={},
 		)
-		return empty, TypeTable(), {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diagnostics
 
 	if len(programs) > 1:
 		span = Span(file=str(programs[0][0]), line=1, column=1)
@@ -1217,7 +1236,10 @@ def parse_drift_files_to_hir(
 			impl_defs=[],
 			origin_by_fn_id={},
 		)
-		return empty, TypeTable(), {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diagnostics
 
 	# Enforce single-module membership across the file set.
 	def _effective_module_id(p: parser_ast.Program) -> str:
@@ -1260,7 +1282,10 @@ def parse_drift_files_to_hir(
 			impl_defs=[],
 			origin_by_fn_id={},
 		)
-		return empty, TypeTable(), {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diagnostics
 
 	path, prog = programs[0]
 	prog = _filter_test_build_only(prog, test_build_only=test_build_only)
@@ -1286,6 +1311,8 @@ def parse_drift_files_to_hir(
 	)
 	for block in func_hirs.values():
 		assign_callsite_ids(block, start=0)
+	table.set_source_manager(source_manager)
+	_set_active_source_manager(prev_source_manager)
 	return module, table, excs, diags
 
 
@@ -1332,6 +1359,9 @@ def parse_drift_workspace_to_hir(
 	from lang2.driftc.traits.world import TraitKey
 
 	diagnostics: list[Diagnostic] = []
+	source_manager = SourceManager()
+	prev_source_manager = _ACTIVE_SOURCE_MANAGER
+	_set_active_source_manager(source_manager)
 	user_paths = list(paths)
 	user_path_set = {p.resolve() for p in user_paths}
 
@@ -1372,7 +1402,10 @@ def parse_drift_workspace_to_hir(
 					roots.append(std_root)
 				module_paths = roots
 	if not paths:
-		return {}, TypeTable(), {}, {}, {}, [_p_diag(message="no input files", severity="error")]
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, [_p_diag(message="no input files", severity="error")]
 
 	def _sort_key_for_path(path: Path) -> tuple[str]:
 		try:
@@ -1392,8 +1425,9 @@ def parse_drift_workspace_to_hir(
 	parsed: list[tuple[Path, parser_ast.Program]] = []
 	for path in paths:
 		source = path.read_text()
+		file_id = source_manager.add(str(path), source)
 		try:
-			prog = _parser.parse_program(source, filename=str(path))
+			prog = _parser.parse_program(source, filename=str(path), file_id=file_id)
 		except _parser.ModuleDeclError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
@@ -1418,7 +1452,10 @@ def parse_drift_workspace_to_hir(
 
 	if any(d.severity == "error" for d in diagnostics):
 		_relabel_diagnostics(diagnostics, label_by_path_all)
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	def _file_root_for_path(path: Path) -> Path | None:
 		if not module_paths:
@@ -1500,7 +1537,10 @@ def parse_drift_workspace_to_hir(
 	)
 	_relabel_diagnostics(diagnostics, label_by_path)
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	module_source_path: dict[str, Path] = {}
 	for mid, files in by_module.items():
@@ -1572,7 +1612,10 @@ def parse_drift_workspace_to_hir(
 				)
 	_relabel_diagnostics(diagnostics, label_by_path)
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	# MVP: one source file defines one module.
 	for mid, files in by_module.items():
@@ -1587,7 +1630,10 @@ def parse_drift_workspace_to_hir(
 			)
 	_relabel_diagnostics(diagnostics, label_by_path)
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	# MVP: one file defines one module (no merge).
 	merged_programs: dict[str, parser_ast.Program] = {}
@@ -1611,7 +1657,10 @@ def parse_drift_workspace_to_hir(
 			)
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	# Public symbol maps (used for same-workspace module-qualified access).
 	pub_values_by_module: dict[str, set[str]] = {}
@@ -2132,7 +2181,10 @@ def parse_drift_workspace_to_hir(
 	}
 	_relabel_diagnostics(diagnostics, label_by_path)
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	# Export interface summary (used by package emission and future tooling).
 	module_exports: dict[str, dict[str, object]] = {}
@@ -2762,7 +2814,10 @@ def parse_drift_workspace_to_hir(
 		)
 
 	if any(d.severity == "error" for d in diagnostics):
-		return {}, TypeTable(), {}, {}, {}, diagnostics
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return {}, table, {}, {}, {}, diagnostics
 
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
 	shared_type_table = TypeTable()
@@ -2927,7 +2982,10 @@ def parse_drift_workspace_to_hir(
 				diagnostics.append(_p_diag(message=str(err), severity="error", span=Span.from_loc(getattr(_v, "loc", None))))
 
 		if any(d.severity == "error" for d in diagnostics):
-			return {}, TypeTable(), {}, {}, {}, diagnostics
+			table = TypeTable()
+			table.set_source_manager(source_manager)
+			_set_active_source_manager(prev_source_manager)
+			return {}, table, {}, {}, {}, diagnostics
 
 	all_func_hirs: dict[FunctionId, H.HBlock] = {}
 	all_sigs: dict[FunctionId, FnSignature] = {}
@@ -2986,7 +3044,10 @@ def parse_drift_workspace_to_hir(
 	# the origin module/value during lowering (no trampolines).
 
 		if any(d.severity == "error" for d in diagnostics):
-			return {}, TypeTable(), {}, {}, {}, diagnostics
+			table = TypeTable()
+			table.set_source_manager(source_manager)
+			_set_active_source_manager(prev_source_manager)
+			return {}, table, {}, {}, {}, diagnostics
 
 	# Materialize const re-exports into the exporting module’s const table when
 	# the origin const value is already available in the shared TypeTable.
@@ -3546,6 +3607,8 @@ def parse_drift_workspace_to_hir(
 		for block in module.func_hirs.values():
 			assign_callsite_ids(block, start=0)
 
+	shared_type_table.set_source_manager(source_manager)
+	_set_active_source_manager(prev_source_manager)
 	return modules, shared_type_table, exc_catalog, module_exports, deps, diagnostics
 
 
@@ -4260,9 +4323,13 @@ def parse_drift_to_hir(
 	throwing, so callers can report them alongside later pipeline checks.
 	"""
 	path = path.resolve()
+	source_manager = SourceManager()
+	prev_source_manager = _ACTIVE_SOURCE_MANAGER
+	_set_active_source_manager(source_manager)
 	source = path.read_text()
+	file_id = source_manager.add(str(path), source)
 	try:
-		prog = _parser.parse_program(source, filename=str(path))
+		prog = _parser.parse_program(source, filename=str(path), file_id=file_id)
 		prog = _filter_test_build_only(prog, test_build_only=test_build_only)
 	except _parser.FStringParseError as err:
 		empty = ModuleLowered(
@@ -4280,7 +4347,10 @@ def parse_drift_to_hir(
 		)
 		diags = [_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc))]
 		_relabel_diagnostics(diags, {str(path): "<source>"})
-		return empty, TypeTable(), {}, diags
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diags
 	except _parser.QualifiedMemberParseError as err:
 		empty = ModuleLowered(
 			module_id="main",
@@ -4297,7 +4367,10 @@ def parse_drift_to_hir(
 		)
 		diags = [_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc))]
 		_relabel_diagnostics(diags, {str(path): "<source>"})
-		return empty, TypeTable(), {}, diags
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diags
 	except UnexpectedInput as err:
 		code = _parse_error_code(err)
 		message = _parse_error_message(err, code)
@@ -4322,7 +4395,10 @@ def parse_drift_to_hir(
 		)
 		diags = [_p_diag(message=message, severity="error", span=span, code=code)]
 		_relabel_diagnostics(diags, {str(path): "<source>"})
-		return empty, TypeTable(), {}, diags
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diags
 	func_hirs, sigs, fn_ids, table, excs, impl_metas, diags = _lower_parsed_program_to_hir(
 		prog,
 		diagnostics=[],
@@ -4345,7 +4421,15 @@ def parse_drift_to_hir(
 	)
 	label = f"<{module_id}>"
 	_relabel_diagnostics(diags, {str(path): label})
+	table.set_source_manager(source_manager)
+	_set_active_source_manager(prev_source_manager)
 	return module, table, excs, diags
 
 
 __all__ = ["parse_drift_to_hir", "parse_drift_files_to_hir", "parse_drift_workspace_to_hir", "stdlib_root"]
+_ACTIVE_SOURCE_MANAGER: SourceManager | None = None
+
+
+def _set_active_source_manager(source_manager: SourceManager | None) -> None:
+	global _ACTIVE_SOURCE_MANAGER
+	_ACTIVE_SOURCE_MANAGER = source_manager

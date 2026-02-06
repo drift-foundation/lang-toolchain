@@ -1,0 +1,27 @@
+{
+  "description": "gdb: lambda captures visible",
+  "sandbox_blocks": true,
+  "stdout_contains": [
+    "[0] = 1",
+    "[1] = 2",
+    "[2] = 3",
+    "len = 3",
+    "cap = 3",
+    "[0] = \"hi\"",
+    "[1] = \"pt\"",
+    "[0] = 1.5",
+    "[1] = 2.25",
+    "[2] = 3.75",
+    "Point {x: 1, y: 2",
+    "Point {x: 3, y: 4",
+    "Choice {tag:",
+    "Choice {tag:",
+    "ok",
+    "Line 16",
+    "a = 3",
+    "b = 2",
+    "p = Point {x: 1, y: 2",
+    "p =",
+    "Point {x: 1, y: 2"
+  ]
+}

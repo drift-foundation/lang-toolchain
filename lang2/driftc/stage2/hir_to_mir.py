@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import copy
+import os
 from typing import List, Set, Mapping, Optional
 
 from lang2.driftc import stage1 as H
@@ -4123,17 +4124,30 @@ class HIRToMIR:
 	def _visit_stmt_HAssert(self, stmt: H.HAssert) -> None:
 		cond_val = self.lower_expr(stmt.cond)
 		span = getattr(stmt, "loc", Span())
+		cond_span = Span.from_loc(getattr(stmt.cond, "loc", None))
 		file_str = span.file or "<unknown>"
+		if file_str != "<unknown>" and self._current_fn_id is not None:
+			base_name = os.path.basename(file_str)
+			file_str = f"{self._current_fn_id.module}@{base_name}"
 		line_num = span.line or 0
 		file_val = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=file_val, value=file_str))
 		line_val = self.b.new_temp()
 		self.b.emit(M.ConstInt(dest=line_val, value=line_num))
+		expr_text = None
+		if self._type_table is not None:
+			expr_text = self._type_table.source_slice_from_span(cond_span)
+		if expr_text is None:
+			expr_text = ""
+		else:
+			expr_text = expr_text.strip()
+		expr_val = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=expr_val, value=expr_text))
 		if stmt.msg is None:
 			msg_val = self._string_empty_const
 		else:
 			msg_val = self.lower_expr(stmt.msg)
-		instr = M.AssertLoc(cond=cond_val, file=file_val, line=line_val, msg=msg_val)
+		instr = M.AssertLoc(cond=cond_val, file=file_val, line=line_val, expr=expr_val, msg=msg_val)
 		instr.span = span
 		self.b.emit(instr)
 

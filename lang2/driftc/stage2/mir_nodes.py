@@ -792,6 +792,7 @@ class AssertLoc(MInstr):
 	cond: ValueId
 	file: ValueId
 	line: ValueId
+	expr: ValueId
 	msg: ValueId
 
 

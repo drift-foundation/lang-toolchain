@@ -223,16 +223,16 @@ class PlaceCanonicalizeRewriter:
 			return [], H.HIndex(subject=subj, index=idx)
 		if isinstance(expr, H.HUnary):
 			_, inner = self._rewrite_expr(expr.expr)
-			return [], H.HUnary(op=expr.op, expr=inner)
+			return [], H.HUnary(op=expr.op, expr=inner, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HBinary):
 			_, left = self._rewrite_expr(expr.left)
 			_, right = self._rewrite_expr(expr.right)
-			return [], H.HBinary(op=expr.op, left=left, right=right)
+			return [], H.HBinary(op=expr.op, left=left, right=right, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HTernary):
 			_, cond = self._rewrite_expr(expr.cond)
 			_, then = self._rewrite_expr(expr.then_expr)
 			_, els = self._rewrite_expr(expr.else_expr)
-			return [], H.HTernary(cond=cond, then_expr=then, else_expr=els)
+			return [], H.HTernary(cond=cond, then_expr=then, else_expr=els, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HArrayLiteral):
 			new_elems: List[H.HExpr] = []
 			for e in expr.elements:

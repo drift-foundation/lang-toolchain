@@ -18,10 +18,13 @@ class Span:
 	"""Represents a source span (best-effort file/line/column plus raw parser loc)."""
 
 	file: Optional[str] = None
+	file_id: Optional[int] = None
 	line: Optional[int] = None
 	column: Optional[int] = None
 	end_line: Optional[int] = None
 	end_column: Optional[int] = None
+	start_pos: Optional[int] = None
+	end_pos: Optional[int] = None
 	raw: Any = None
 
 	@classmethod
@@ -41,10 +44,13 @@ class Span:
 		# so richer renderers can still recover parser-specific details.
 		return cls(
 			file=getattr(loc, "file", None) or getattr(loc, "filename", None) or None,
+			file_id=getattr(loc, "file_id", None),
 			line=getattr(loc, "line", None),
 			column=getattr(loc, "column", None),
 			end_line=getattr(loc, "end_line", None),
 			end_column=getattr(loc, "end_column", None),
+			start_pos=getattr(loc, "start_pos", None),
+			end_pos=getattr(loc, "end_pos", None),
 			raw=loc,
 		)
 

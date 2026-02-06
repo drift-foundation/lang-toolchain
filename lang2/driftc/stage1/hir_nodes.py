@@ -392,6 +392,7 @@ class HTernary(HExpr):
 	cond: HExpr
 	then_expr: HExpr
 	else_expr: HExpr
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -649,6 +650,7 @@ class HUnary(HExpr):
 	"""Unary operation."""
 	op: UnaryOp
 	expr: HExpr
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -657,6 +659,7 @@ class HBinary(HExpr):
 	op: BinaryOp
 	left: HExpr
 	right: HExpr
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass

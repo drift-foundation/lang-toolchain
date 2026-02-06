@@ -293,16 +293,16 @@ class BorrowMaterializeRewriter:
 			return pfx_s + pfx_i, H.HIndex(subject=subj, index=idx)
 		if isinstance(expr, H.HUnary):
 			pfx, inner = self._rewrite_expr(expr.expr)
-			return pfx, H.HUnary(op=expr.op, expr=inner)
+			return pfx, H.HUnary(op=expr.op, expr=inner, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HBinary):
 			pfx_l, left = self._rewrite_expr(expr.left)
 			pfx_r, right = self._rewrite_expr(expr.right)
-			return pfx_l + pfx_r, H.HBinary(op=expr.op, left=left, right=right)
+			return pfx_l + pfx_r, H.HBinary(op=expr.op, left=left, right=right, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HTernary):
 			pfx_c, cond = self._rewrite_expr(expr.cond)
 			pfx_t, then = self._rewrite_expr(expr.then_expr)
 			pfx_e, els = self._rewrite_expr(expr.else_expr)
-			return pfx_c + pfx_t + pfx_e, H.HTernary(cond=cond, then_expr=then, else_expr=els)
+			return pfx_c + pfx_t + pfx_e, H.HTernary(cond=cond, then_expr=then, else_expr=els, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HBorrow):
 			pfx, subj = self._rewrite_expr(expr.subject)
 			place = self._to_place(subj)

@@ -77,14 +77,19 @@ static void drift_debug_print_stacktrace(void) {
 #endif
 }
 
-void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString msg) {
+void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString expr, DriftString msg) {
 	if (cond) {
 		return;
 	}
 	char *file_c = drift_string_to_cstr(file);
+	char *expr_c = drift_string_to_cstr(expr);
 	char *msg_c = drift_string_to_cstr(msg);
 
-	if (msg.len > 0) {
+	if (expr.len > 0 && msg.len > 0) {
+		fprintf(stderr, "assertion failed: %s — %s\n", expr_c, msg_c);
+	} else if (expr.len > 0) {
+		fprintf(stderr, "assertion failed: %s\n", expr_c);
+	} else if (msg.len > 0) {
 		fprintf(stderr, "assertion failed: %s\n", msg_c);
 	} else {
 		fprintf(stderr, "assertion failed\n");
@@ -92,6 +97,7 @@ void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString 
 	fprintf(stderr, "  at %s:%lld\n", file_c, (long long)line);
 	drift_debug_print_stacktrace();
 	free(file_c);
+	free(expr_c);
 	free(msg_c);
 	abort();
 }

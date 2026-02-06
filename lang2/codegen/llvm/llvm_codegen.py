@@ -1093,7 +1093,7 @@ class LlvmModuleBuilder:
 		if self.needs_assert_runtime:
 			lines.extend(
 				[
-					f"declare void @drift_assert_loc(i1, {DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
+					f"declare void @drift_assert_loc(i1, {DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})",
 					"",
 				]
 			)
@@ -2167,6 +2167,7 @@ class _FuncBuilder:
 			cond = self._map_value(instr.cond)
 			file_val = self._map_value(instr.file)
 			line_val = self._map_value(instr.line)
+			expr_val = self._map_value(instr.expr)
 			msg_val = self._map_value(instr.msg)
 			cond_ty = self.value_types.get(cond)
 			if cond_ty != "i1":
@@ -2188,9 +2189,14 @@ class _FuncBuilder:
 				raise NotImplementedError(
 					f"LLVM codegen v1: assert msg must be String ({DRIFT_STRING_TYPE}), got {msg_ty}"
 				)
+			expr_ty = self.value_types.get(expr_val)
+			if expr_ty != DRIFT_STRING_TYPE:
+				raise NotImplementedError(
+					f"LLVM codegen v1: assert expr must be String ({DRIFT_STRING_TYPE}), got {expr_ty}"
+				)
 			self.module.needs_assert_runtime = True
 			self.lines.append(
-				f"  call void @drift_assert_loc(i1 {cond}, {DRIFT_STRING_TYPE} {file_val}, {self._llty(DRIFT_INT_TYPE)} {line_val}, {DRIFT_STRING_TYPE} {msg_val})"
+				f"  call void @drift_assert_loc(i1 {cond}, {DRIFT_STRING_TYPE} {file_val}, {self._llty(DRIFT_INT_TYPE)} {line_val}, {DRIFT_STRING_TYPE} {expr_val}, {DRIFT_STRING_TYPE} {msg_val})"
 			)
 		elif isinstance(instr, StringFromInt):
 			dest = self._map_value(instr.dest)

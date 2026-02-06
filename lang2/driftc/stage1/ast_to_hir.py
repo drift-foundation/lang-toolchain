@@ -446,7 +446,7 @@ class AstToHIR:
 			op = op_map[expr.op]
 		except KeyError:
 			raise NotImplementedError(f"Unsupported unary op: {expr.op}")
-		return H.HUnary(op=op, expr=self.lower_expr(expr.operand))
+		return H.HUnary(op=op, expr=self.lower_expr(expr.operand), loc=self._as_span(expr.loc))
 
 	def _visit_expr_Move(self, expr: ast.Move) -> H.HExpr:
 		"""
@@ -531,7 +531,7 @@ class AstToHIR:
 			raise NotImplementedError(f"Unsupported binary op: {expr.op}")
 		left = self.lower_expr(expr.left)
 		right = self.lower_expr(expr.right)
-		return H.HBinary(op=op, left=left, right=right)
+		return H.HBinary(op=op, left=left, right=right, loc=self._as_span(expr.loc))
 
 	def _visit_expr_ArrayLiteral(self, expr: ast.ArrayLiteral) -> H.HExpr:
 		"""Lower array literal by lowering each element expression."""
@@ -611,7 +611,7 @@ class AstToHIR:
 		cond_h = self.lower_expr(expr.cond)
 		then_h = self.lower_expr(expr.then_expr)
 		else_h = self.lower_expr(expr.else_expr)
-		return H.HTernary(cond=cond_h, then_expr=then_h, else_expr=else_h)
+		return H.HTernary(cond=cond_h, then_expr=then_h, else_expr=else_h, loc=self._as_span(expr.loc))
 
 	def _visit_expr_YieldExpr(self, expr: ast.YieldExpr) -> H.HExpr:
 		# Yield is only valid as an explicit value inside value blocks; here we
@@ -754,14 +754,15 @@ class AstToHIR:
 			if hasattr(H, "HCopy") and isinstance(e, getattr(H, "HCopy")):
 				return H.HCopy(subject=_rename_expr(e.subject, mapping), loc=e.loc)
 			if isinstance(e, H.HUnary):
-				return H.HUnary(op=e.op, expr=_rename_expr(e.expr, mapping))
+				return H.HUnary(op=e.op, expr=_rename_expr(e.expr, mapping), loc=e.loc)
 			if isinstance(e, H.HBinary):
-				return H.HBinary(op=e.op, left=_rename_expr(e.left, mapping), right=_rename_expr(e.right, mapping))
+				return H.HBinary(op=e.op, left=_rename_expr(e.left, mapping), right=_rename_expr(e.right, mapping), loc=e.loc)
 			if isinstance(e, H.HTernary):
 				return H.HTernary(
 					cond=_rename_expr(e.cond, mapping),
 					then_expr=_rename_expr(e.then_expr, mapping),
 					else_expr=_rename_expr(e.else_expr, mapping),
+					loc=e.loc,
 				)
 			if isinstance(e, H.HArrayLiteral):
 				return H.HArrayLiteral(elements=[_rename_expr(a, mapping) for a in e.elements])

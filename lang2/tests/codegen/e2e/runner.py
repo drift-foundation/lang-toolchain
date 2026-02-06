@@ -97,7 +97,7 @@ def _run_ir_with_clang(
 			if (d / f"lib{name}.so").exists():
 				return [f"-l{name}"]
 		return []
-	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("elf")
+	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
 	try:
 		compile_res = subprocess.run(
 			[

@@ -1,0 +1,30 @@
+set pagination off
+set confirm off
+source tools/gdb/drift.py
+break main.drift:16
+break __lambda_main_0_0
+run
+info line *main
+p_array_int arr 3
+p arr
+p_array_str words 2
+p_array_float floats 3
+p_array points 2 Point
+p choice
+p choice2
+p_string s
+break add
+continue
+info args
+p a
+p b
+break point_sum
+continue
+info args
+p p
+break point_ref_sum
+continue
+info args
+p p
+p *p
+quit

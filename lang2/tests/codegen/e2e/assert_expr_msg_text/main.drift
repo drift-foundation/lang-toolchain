@@ -1,0 +1,4 @@
+fn main() nothrow -> Int {
+	assert(1 == 2, "boom");
+	return 0;
+}

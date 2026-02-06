@@ -44,6 +44,11 @@ class Located:
     line: int
     column: int
     file: str | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+    start_pos: int | None = None
+    end_pos: int | None = None
+    file_id: int | None = None
 
 
 @dataclass

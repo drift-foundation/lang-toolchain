@@ -1,0 +1,6 @@
+{
+  "description": "e2e: assert prints expression",
+  "exit_code": -6,
+  "stdout": "",
+  "stderr": "assertion failed: 1 == 2\n  at main@main.drift:2\n  #0 drift_assert_loc\n  #1 main (/home/sl/src/drift-lang/lang2/tests/codegen/e2e/assert_expr_text/main.drift:3)\n  #2 __libc_start_call_main (../sysdeps/nptl/libc_start_call_main.h:74)\n  #3 __libc_start_main_alias_2 (../csu/libc-start.c:128)\n  #4 _start\n"
+}

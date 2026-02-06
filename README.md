@@ -116,4 +116,15 @@ Use the MIR+LLVM prototype to lower and run a sample:
 just mir-codegen
 ```
 
+## Prerequisites
+
+Build/test requirements (Linux):
+
+- Python 3.13+
+- LLVM/Clang (clang-15 recommended)
+- Gold linker (`ld.gold`) for `--gdb-index` support (optional)
+- `just` (task runner)
+- `pkg-config`
+- `libdw-dev` (elfutils), `libunwind-dev`, `libelf-dev` (runtime stack traces)
+
 See the full language specification in [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md).

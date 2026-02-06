@@ -716,17 +716,21 @@ _PARSER = Lark(
 )
 
 _CURRENT_FILE: str | None = None
+_CURRENT_FILE_ID: int | None = None
 
 
-def parse_program(source: str, *, filename: str | None = None) -> Program:
-    global _CURRENT_FILE
+def parse_program(source: str, *, filename: str | None = None, file_id: int | None = None) -> Program:
+    global _CURRENT_FILE, _CURRENT_FILE_ID
     prev_file = _CURRENT_FILE
+    prev_file_id = _CURRENT_FILE_ID
     _CURRENT_FILE = filename
+    _CURRENT_FILE_ID = file_id
     try:
         tree = _PARSER.parse(source)
         return _build_program(tree)
     finally:
         _CURRENT_FILE = prev_file
+        _CURRENT_FILE_ID = prev_file_id
 
 
 class ModuleDeclError(ValueError):
@@ -2506,7 +2510,9 @@ def _fold_chain(tree: Tree, tail_name: str) -> Expr:
 def _binary_tail(left: Expr, tail: Tree) -> Expr:
     op_token = tail.children[0]
     right = _build_expr(tail.children[1])
-    return Binary(loc=_loc_from_token(op_token), op=op_token.value, left=left, right=right)
+    fallback = _loc_from_token(op_token)
+    loc = _loc_from_bounds(left, right, fallback)
+    return Binary(loc=loc, op=op_token.value, left=left, right=right)
 
 
 def _build_pipeline(tree: Tree) -> Expr:
@@ -3074,11 +3080,50 @@ def _build_kwarg(tree: Tree) -> KwArg:
 
 def _loc(tree: Tree) -> Located:
     meta = tree.meta
-    return Located(line=meta.line, column=meta.column, file=_CURRENT_FILE)
+    return Located(
+        line=meta.line,
+        column=meta.column,
+        file=_CURRENT_FILE,
+        end_line=getattr(meta, "end_line", None),
+        end_column=getattr(meta, "end_column", None),
+        start_pos=getattr(meta, "start_pos", None),
+        end_pos=getattr(meta, "end_pos", None),
+        file_id=_CURRENT_FILE_ID,
+    )
 
 
 def _loc_from_token(token: Token) -> Located:
-    return Located(line=token.line, column=token.column, file=_CURRENT_FILE)
+    return Located(
+        line=token.line,
+        column=token.column,
+        file=_CURRENT_FILE,
+        end_line=getattr(token, "end_line", None),
+        end_column=getattr(token, "end_column", None),
+        start_pos=getattr(token, "start_pos", None),
+        end_pos=getattr(token, "end_pos", None),
+        file_id=_CURRENT_FILE_ID,
+    )
+
+
+def _loc_from_bounds(left: Expr, right: Expr, fallback: Located) -> Located:
+    left_loc = getattr(left, "loc", None)
+    right_loc = getattr(right, "loc", None)
+    if left_loc is None or right_loc is None:
+        return fallback
+    start_pos = getattr(left_loc, "start_pos", None)
+    end_pos = getattr(right_loc, "end_pos", None)
+    if start_pos is None or end_pos is None:
+        return fallback
+    return Located(
+        line=getattr(left_loc, "line", None) or fallback.line,
+        column=getattr(left_loc, "column", None) or fallback.column,
+        file=getattr(left_loc, "file", None) or getattr(right_loc, "file", None) or fallback.file,
+        end_line=getattr(right_loc, "end_line", None) or fallback.end_line,
+        end_column=getattr(right_loc, "end_column", None) or fallback.end_column,
+        start_pos=start_pos,
+        end_pos=end_pos,
+        file_id=getattr(left_loc, "file_id", None) or getattr(right_loc, "file_id", None) or fallback.file_id,
+    )
 
 
 def _name(node: Tree | Token) -> str:

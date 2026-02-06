@@ -1,0 +1,12 @@
+fn main() nothrow -> Int {
+	val a = 1;
+	var b = 2;
+	var c = 3;
+	val res = (| | captures(copy a, move b) => {
+		return a + b;
+	})();
+	val res2 = (| | captures(& c, copy res) => {
+		return c + res;
+	})();
+	return res2;
+}

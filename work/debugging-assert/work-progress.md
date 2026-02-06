@@ -9,6 +9,8 @@
 - Debug info strategy: **Option A (DWARF)**.
 - Assert lowering: expand `assert(cond)` → `std.core.assert_loc(cond, file, line)` (frozen).
 - Output format: minimal but stable (assertion failed + optional msg + file:line + stack trace).
+ - Assert condition text: **Option B** (slice from in-memory `SourceManager` using span offsets; no AST string payloads).
+ - No filesystem reads after parse; spans reference source buffer by `file_id`.
 
 ## Implementation Plan
 
@@ -45,6 +47,13 @@
 - Ensure file/line constants are correct for nested/inline call sites.
 - Ensure `assert` is not optimized away even in release.
 
+### 4b) SourceManager + span offsets (for expr text)
+- Extend `parser.ast.Located` with `start_pos/end_pos/end_line/end_column`.
+- Extend `Span` to carry `start_pos/end_pos` and `file_id` (or ensure `raw` holds a `Located` with offsets).
+- Add `SourceManager` (per compilation) that stores `SourceFile{text,path}` and returns `file_id`.
+- Parser registers sources with `SourceManager` during parse; `_span_in_file` sets `file_id`.
+- Lowering slices `source[file_id].text[start_pos:end_pos]` to get condition text.
+
 ### 5) E2E tests
 - `assert_basic_fail`: failing assert prints file:line and function name.
 - `assert_call_chain`: nested calls show stack trace order.
@@ -59,11 +68,12 @@
 
 ## Progress
 - [x] Decision on debug info strategy
-- [ ] Compiler debug metadata emission
-- [ ] Runtime stack trace resolver
-- [ ] std.core assert surface
-- [ ] Compiler assert lowering
-- [ ] E2E tests
+- [x] Compiler debug metadata emission
+- [x] Runtime stack trace resolver
+- [x] std.core assert surface
+- [x] Compiler assert lowering
+- [x] SourceManager + span offsets for condition text
+- [x] E2E tests
 
 ### Work Progress (Debugging Session)
 - Diagnosed gdb stepping skip: line 7 missing from DWARF line table, so `next` jumped from line 6 to 8 and `p` was out of scope.
@@ -150,3 +160,16 @@
 - Reran borrow checker tests: `lang2/tests/borrow_checker/test_auto_borrow_signatures.py`, `test_cfg_branches_and_loops.py`, `test_move_tracking.py` all pass.
 - Debug info test update: filtered out the entry `asm sideeffect` debug anchor line when counting `!dbg` lines (anchor now emits a dbg location). `test_debug_noop_assignssa_does_not_get_dbg` updated accordingly; test passes.
 - Added debug-only timing output in `compile_stubbed_funcs` gated by `DRIFT_DEBUG={"timing": true}`. Timed stages: `normalize_hir`, `typecheck`, `checker`, `hir_to_mir`, `hidden_lambda_lowering`, `borrow_check`, `mir_validate`, `string_arc`, `ssa`, `throw_checks`.
+- Assert work (SourceManager + expr text):
+- Added `SourceManager` and source buffer slicing via spans; spans now carry `file_id` and byte offsets.
+- Assert lowering now slices expression text from source buffers and passes it to runtime.
+- Updated runtime `drift_assert_loc` signature to print expression text + message.
+- Added loc tracking for `HUnary`/`HBinary`/`HTernary` and ensured loc is preserved through AST→HIR, normalize, and borrow/materialize passes.
+- Parser binary expression locations now span full `left..right` range (not just operator token) for correct expression text.
+- Added e2e tests:
+- `lang2/tests/codegen/e2e/assert_expr_text` expects expression text in stderr.
+- `lang2/tests/codegen/e2e/assert_expr_msg_text` expects expression + message in stderr.
+
+---
+
+**Status:** This work log has been fully migrated into `history.md` (2026-02-06 entry). It can be deleted.

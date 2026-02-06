@@ -17,6 +17,7 @@ from typing import Dict, Iterable, List
 from lang2.driftc.core.generic_type_expr import GenericTypeExpr
 from lang2.driftc.core.function_id import FunctionId, function_symbol
 from lang2.driftc.core.span import Span
+from lang2.driftc.core.source_manager import SourceManager
 from lang2.driftc import debug as drift_debug
 
 
@@ -274,6 +275,7 @@ class TypeTable:
 		self._void_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._error_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._dv_type: TypeId | None = None  # type: ignore[var-annotated]
+		self.source_manager: SourceManager | None = None
 		# Exception schemas keyed by canonical event FQN strings. Values are
 		# (canonical_fqn, [declared_field_names]) so later stages can:
 		# - resolve constructor-call args (positional/keyword) to declared fields
@@ -344,6 +346,24 @@ class TypeTable:
 		self._type_provenance_enabled: bool = False
 		self._type_provenance_counter: int = 0
 		self._type_provenance: dict[TypeId, list[TypeProvenanceEntry]] = {}
+
+	def set_source_manager(self, source_manager: SourceManager | None) -> None:
+		self.source_manager = source_manager
+
+	def source_slice_from_span(self, span: Span) -> str | None:
+		sm = self.source_manager
+		if sm is None:
+			return None
+		start_pos = span.start_pos
+		end_pos = span.end_pos
+		if start_pos is None or end_pos is None:
+			return None
+		file_id = span.file_id
+		if file_id is None and span.file is not None:
+			file_id = sm.file_id_for_path(span.file)
+		if file_id is None:
+			return None
+		return sm.slice(file_id, start_pos, end_pos)
 
 	def enable_type_provenance(self) -> None:
 		self._type_provenance_enabled = True

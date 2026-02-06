@@ -2,14 +2,17 @@ set shell := ["bash", "-lc"]
 set quiet
 CLANG_BIN := "clang-15"
 
-# Default task: run the staged lang2 compiler tests.
-default: lang2-test
+# Default task: run deps check then staged lang2 compiler tests.
+default: deps-check lang2-test
+
+deps-check:
+	PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py
 
 review-cleanup:
 	rm -f combined_*
 
 # Lang2 staged compiler tests
-lang2-test: review-cleanup lang2-stage1-test lang2-stage2-test lang2-stage3-test lang2-stage4-test lang2-parser-test lang2-core-test lang2-llvm-test lang2-borrow-test lang2-type-checker-test lang2-method-registry-test lang2-driver-suite lang2-codegen-test
+lang2-test: review-cleanup lang2-stage1-test lang2-stage2-test lang2-stage3-test lang2-stage4-test lang2-parser-test lang2-core-test lang2-llvm-test lang2-borrow-test lang2-type-checker-test lang2-method-registry-test lang2-driver-suite lang2-codegen-test lang2-gdb-test
 	@echo "lang2 tests: Success."
 
 lang2-stage1-test:
@@ -115,6 +118,9 @@ lang2-codegen-test:
 	PYTHONPATH=. ./.venv/bin/python3 lang2/codegen/ir_cases/e2e_runner.py
 	# Run Drift-source e2e cases (per-case dirs under lang2/tests/codegen/e2e).
 	PYTHONPATH=. ./.venv/bin/python3 lang2/tests/codegen/e2e/runner.py --summarize
+
+lang2-gdb-test:
+	DRIFT_GDB_TEST=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/gdb/test_gdb_runner.py
 
 # Lang2 e2e runner (lang2.driftc: json + run modes against tests/e2e)
 lang2-e2e CASES="":

@@ -299,3 +299,13 @@
 - Package/boundary fixes: boundary upgrades use package identity only; module_packages now enforced centrally, with stdlib ownership derived from stdlib_root path (no std.* name heuristics); added regression tests.
 - Resolver cleanup: qualified-member ctor resolution now relies on `resolve_opaque_type` (no lang.core/std.core fallbacks), plus new ctor-resolution tests (positive and error cases).
 - For-loop lowering: borrow-by-default preserved with deterministic temp binding for borrowed temporaries; added stage1 regression.
+
+## 2026-02-06 – Debug info, assert runtime, copy tri-state, gdb tooling
+- Fixed DWARF line/locals fidelity for debug_1: preserved return spans through string ARC, added keepalive storage + dbg.declare for SSA locals so gdb can stop on correct lines and print structs.
+- Added variant + array DWARF types and tests (debug variant union/tag/payload, array header layout).
+- Introduced debug-only type provenance side table and audit (DRIFT_DEBUG type_prov) to trace where TypeIds are determined.
+- Copy semantics: added tri-state copy_status with gated structural fallback for concrete resolvable structs/variants; array literals now emit COPY-UNKNOWN instead of misleading non-Copy; added regression tests for forward nominals and typevars; tightened/adjusted copy handling across stage2/typechecker/borrow checker.
+- Assert system: SourceManager + span offsets for condition text; compiler passes expr text to runtime; assert output includes expression + message; stacktrace resolver wired via libdw/libunwind; updated runtime signature and e2e assert tests.
+- Debug path fixes: corrected HIR->MIR flow bug from local_types_trace indentation and added timing diagnostics (DRIFT_DEBUG timing).
+- Added deps check: tools/deps_check.py + just deps-check; hard-fails without ld.gold and required libs; README prerequisites updated.
+- GDB tooling: tools/gdb/drift.py commands for strings/arrays; added gdb test runner with sandbox_blocks gating; gdb smoke case validates captures, arrays, floats, structs, variants, refs, function args, and line mapping; integrated into default test suite as last step.
