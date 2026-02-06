@@ -309,3 +309,6 @@
 - Debug path fixes: corrected HIR->MIR flow bug from local_types_trace indentation and added timing diagnostics (DRIFT_DEBUG timing).
 - Added deps check: tools/deps_check.py + just deps-check; hard-fails without ld.gold and required libs; README prerequisites updated.
 - GDB tooling: tools/gdb/drift.py commands for strings/arrays; added gdb test runner with sandbox_blocks gating; gdb smoke case validates captures, arrays, floats, structs, variants, refs, function args, and line mapping; integrated into default test suite as last step.
+- E2E runner linking now includes libunwind-x86_64 to resolve stacktrace symbols during codegen tests.
+- Deps driver test now runs by default (skips only with DRIFT_DEPS_TEST=0) and fixes repo-root detection.
+- Updated assert e2e expected stderr to include stacktrace output when available.
