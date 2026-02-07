@@ -1,0 +1,23 @@
+import std.log as log;
+import std.meta as meta;
+
+// Example custom formatter hook.
+// Default formatter remains JSON with "tm": "YYYY-MM-DDTHH:mm:ss.sssZ".
+struct KvFormatter {}
+
+implement log.Formatter for KvFormatter {
+	pub fn format(self: &KvFormatter, rec: &log.Record) nothrow -> String {
+		// Design-shape example only: turn record into a compact key=value line.
+		return "tm=" + rec.tm + " level=" + rec.level + " ev=" + rec.ev;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Debug).queue_capacity(2048).enqueue_timeout_ms(2).write_timeout_ms(25).formatter(KvFormatter{}).build();
+	log.init(cfg);
+	log.info("startup", "component": "worker", "src": meta.caller());
+	log.error("job-failed", "job_id": "42", "retryable": false, "src": meta.caller());
+	log.flush();
+	log.shutdown();
+	return 0;
+}

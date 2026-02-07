@@ -109,6 +109,30 @@ fn run_main() throws -> Int {
 }
 ```
 
+## Structured event logging (JSON-first)
+
+Prefer event names plus key-value attrs over prose strings. Keep payloads
+machine-friendly and use explicit source metadata when you need it.
+Default formatter is JSON and includes `tm` as ISO-8601 UTC
+(`YYYY-MM-DDTHH:mm:ss.sssZ`).
+
+```drift
+import std.log as log;
+import std.meta as meta;
+
+pub fn main() nothrow -> Int {
+	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Info).queue_capacity(4096).enqueue_timeout_ms(2).write_timeout_ms(25).build();
+	log.init(cfg);
+	log.info("auth-failed", "user": "alice", "reason": "bad-password", "src": meta.caller());
+	log.error("db-timeout", "host": "db-main", "retryable": true, "src": meta.caller());
+	log.flush();
+log.shutdown();
+return 0;
+}
+```
+
+For formatter customization, see `lang/examples/logging/pluggable_formatter.drift`.
+
 ## UDP ping (self‑send)
 
 ```drift

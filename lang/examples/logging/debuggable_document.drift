@@ -1,0 +1,31 @@
+import std.core as core;
+import std.log as log;
+import std.meta as meta;
+
+struct Document {
+	name: String,
+	size: Int,
+	pages: Int,
+	owner: String,
+}
+
+implement log.Debuggable for Document {
+	pub fn to_debug(self: &Document) nothrow -> core.DiagnosticValue {
+		return core.DiagnosticValue::Object(
+			"name": core.DiagnosticValue::String(self.name),
+			"size": core.DiagnosticValue::Int(self.size),
+			"pages": core.DiagnosticValue::Int(self.pages),
+			"owner": core.DiagnosticValue::String(self.owner),
+		);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val cfg = log.config_builder().sink_stderr().min_level(log.Level::Debug).queue_capacity(1024).enqueue_timeout_ms(2).write_timeout_ms(25).build();
+	log.init(cfg);
+	val doc = Document(name = "contract.pdf", size = 1048576, pages = 42, owner = "legal");
+	log.debug("document-indexed", "doc": doc, "pipeline": "ingest", "src": meta.caller());
+	log.flush();
+	log.shutdown();
+	return 0;
+}

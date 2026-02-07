@@ -1,0 +1,13 @@
+import std.log as log;
+import std.meta as meta;
+
+pub fn main() nothrow -> Int {
+	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Info).queue_capacity(4096).enqueue_timeout_ms(2).write_timeout_ms(25).build();
+	log.init(cfg);
+	log.info("auth-failed", "user": "alice", "reason": "bad-password", "src": meta.caller());
+	log.info("session-opened", "user": "alice", "session_id": "sess-01", "src": meta.caller());
+	log.error("db-timeout", "host": "db-main", "retryable": true, "src": meta.caller());
+	log.flush();
+	log.shutdown();
+	return 0;
+}
