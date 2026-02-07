@@ -400,6 +400,19 @@ Iteration 26:
 - Docs status:
   - `docs/design/drift-lang-spec.md` IO/console section: done.
 
+Iteration 27:
+- Investigated intermittent `-11` crash report in concurrency e2e after merge (`concurrent_cancel_before_start_join_timeout_zero_cancelled`).
+- Root cause identified in runtime cancel/start race:
+  - `DriftVt.started` was non-atomic (data race / UB across cancel + worker threads).
+  - worker could pass initial cancel check, then `cancel()` could drop callback data, then worker could still start and run callback path.
+- Runtime fix in `lang2/language_runtime/posix/thread_runtime.c`:
+  - made `started` an `atomic_int` and updated all reads/writes to atomic ops.
+  - added a second cancel check immediately after setting `started=1` in worker path; if cancelled, mark cancelled/completed and skip callback execution.
+- Validation:
+  - single-case debug run passes.
+  - repeated bounded stress run for reported case passes (`ALL_OK:30`).
+  - full `concurrent_*` e2e subset passes (`48/48`).
+
 ## Docs Status
 - Not done (intentionally postponed until API reshaping is complete):
   - `docs/design/drift-lang-spec.md` updates for latest flat error model and helper ergonomics.

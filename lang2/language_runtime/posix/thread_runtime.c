@@ -36,7 +36,7 @@ typedef struct DriftVt {
 	pthread_t thread;
 	// Written by the worker thread when it begins execution.
 	// Other threads may read it; keep single-writer invariant unless protected.
-	int started;
+	atomic_int started;
 	atomic_int completed;
 	atomic_int cancelled;
 	atomic_int state;
@@ -188,7 +188,7 @@ static void *drift_exec_worker(void *arg) {
 		if (!vt) {
 			continue;
 		}
-		if (atomic_load(&vt->cancelled) && !vt->started) {
+		if (atomic_load(&vt->cancelled) && !atomic_load(&vt->started)) {
 			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
 			drift_drop_callback(&vt->cb);
 			atomic_store(&vt->completed, 1);
@@ -198,7 +198,18 @@ static void *drift_exec_worker(void *arg) {
 			pthread_mutex_unlock(&vt->mu);
 			continue;
 		}
-		vt->started = 1;
+		atomic_store(&vt->started, 1);
+		if (atomic_load(&vt->cancelled)) {
+			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+			if (!atomic_exchange(&vt->completed, 1)) {
+				drift_drop_callback(&vt->cb);
+				pthread_mutex_lock(&vt->mu);
+				vt->park_token++;
+				pthread_cond_broadcast(&vt->cv);
+				pthread_mutex_unlock(&vt->mu);
+			}
+			continue;
+		}
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		atomic_fetch_add(&exec->running, 1);
 #ifdef __linux__
@@ -548,7 +559,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 		return 0;
 	}
 	vt->cb = cb;
-	vt->started = 0;
+	atomic_store(&vt->started, 0);
 	atomic_store(&vt->completed, 0);
 	atomic_store(&vt->cancelled, 0);
 	atomic_store(&vt->state, DRIFT_VT_NEW);
@@ -801,7 +812,7 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 		return 0;
 	}
 	DriftVt *h = (DriftVt *)vt;
-	if (h->started) {
+	if (atomic_load(&h->started)) {
 		return 0;
 	}
 	if (atomic_load(&h->cancelled)) {
@@ -840,7 +851,7 @@ void drift_thread_drop(uint64_t vt) {
 	if (!h) {
 		return;
 	}
-	if (!h->started) {
+	if (!atomic_load(&h->started)) {
 		atomic_store(&h->state, DRIFT_VT_CANCELLED);
 		drift_drop_callback(&h->cb);
 	}
@@ -862,7 +873,7 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 	h->park_token++;
 	pthread_cond_broadcast(&h->cv);
 	pthread_mutex_unlock(&h->mu);
-	if (!h->started) {
+	if (!atomic_load(&h->started)) {
 		atomic_store(&h->state, DRIFT_VT_CANCELLED);
 		drift_drop_callback(&h->cb);
 		atomic_store(&h->completed, 1);
