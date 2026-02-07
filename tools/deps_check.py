@@ -64,7 +64,7 @@ def main() -> int:
 		cmd = [
 			sys.executable,
 			"-m",
-			"lang2.driftc",
+			"lang.driftc",
 			"--debug-info",
 			"--stdlib-root",
 			"stdlib",
@@ -76,7 +76,7 @@ def main() -> int:
 		env["PYTHONPATH"] = str(ROOT)
 		res = _run(cmd, cwd=ROOT, env=env, timeout=120)
 		if res.returncode != 0:
-			return _fail(f"lang2.driftc debug build failed: {res.stderr.strip()}")
+			return _fail(f"lang.driftc debug build failed: {res.stderr.strip()}")
 
 		run = _run([str(out)], cwd=tmp_dir, env=env, timeout=30)
 		stderr = run.stderr or ""

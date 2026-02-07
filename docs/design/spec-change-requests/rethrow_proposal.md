@@ -57,7 +57,7 @@ It is equivalent to “throw the error bound to this catch arm,” but expressed
 
 ---
 
-## Compiler implementation plan (lang2)
+## Compiler implementation plan (lang)
 
 ### Stage0 AST
 

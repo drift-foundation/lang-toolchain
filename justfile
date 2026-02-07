@@ -2,8 +2,8 @@ set shell := ["bash", "-lc"]
 set quiet
 CLANG_BIN := "clang-15"
 
-# Default task: run deps check then staged lang2 compiler tests.
-default: deps-check lang2-test
+# Default task: run deps check then staged lang compiler tests.
+default: deps-check lang-test
 
 deps-check:
 	PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py
@@ -12,130 +12,130 @@ review-cleanup:
 	rm -f combined_*
 
 # Lang2 staged compiler tests
-lang2-test: review-cleanup lang2-stage1-test lang2-stage2-test lang2-stage3-test lang2-stage4-test lang2-parser-test lang2-core-test lang2-llvm-test lang2-borrow-test lang2-type-checker-test lang2-method-registry-test lang2-driver-suite lang2-codegen-test lang2-gdb-test
-	@echo "lang2 tests: Success."
+lang-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-suite lang-codegen-test lang-gdb-test
+	@echo "lang tests: Success."
 
-lang2-stage1-test:
+lang-stage1-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage1
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage1
 
-lang2-stage2-test:
+lang-stage2-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage2
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage2
 
-lang2-stage3-test:
+lang-stage3-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage3
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage3
 
-lang2-stage4-test:
+lang-stage4-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/stage4
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage4
 
-# Parser tests (lang2 parser copy + adapter).
-lang2-parser-test:
+# Parser tests (lang parser copy + adapter).
+lang-parser-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/parser
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/parser
 
 # Core TypeEnv/TypeTable tests.
-lang2-core-test:
+lang-core-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/core
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core
 
 # Type checker tests (typed HIR + resolution).
-lang2-type-checker-test:
+lang-type-checker-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/type_checker
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/type_checker
 
 # Method registry/resolver tests.
-lang2-method-registry-test:
+lang-method-registry-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/method_registry
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/method_registry
 
 # Driver/integration tests (driftc pipeline, try sugar, declared events).
-lang2-driver-test:
+lang-driver-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/driver
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver
 
-lang2-driver-suite:
-	# Full driver suite (lang2/tests/driver).
+lang-driver-suite:
+	# Full driver suite (lang/tests/driver).
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/driver
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver
 
 # Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
-lang2-llvm-test:
-	./.venv/bin/python3 tools/test-llvm/test_codegen.py /tmp/lang2_test_codegen.o
+lang-llvm-test:
+	./.venv/bin/python3 tools/test-llvm/test_codegen.py /tmp/lang_test_codegen.o
 
 # LLVM textual codegen tests (SSA→LLVM IR).
-lang2-codegen-test:
+lang-codegen-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
 	# Clean codegen artifacts to keep cases isolated between runs.
-	rm -rf build/tests/lang2
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/codegen/llvm/tests
-	# Run clang-based IR cases (per-case dirs under lang2/codegen/ir_cases).
-	PYTHONPATH=. ./.venv/bin/python3 lang2/codegen/ir_cases/e2e_runner.py
-	# Run Drift-source e2e cases (per-case dirs under lang2/tests/codegen/e2e).
-	PYTHONPATH=. ./.venv/bin/python3 lang2/tests/codegen/e2e/runner.py --summarize
+	rm -rf build/tests/lang
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/codegen/llvm/tests
+	# Run clang-based IR cases (per-case dirs under lang/codegen/ir_cases).
+	PYTHONPATH=. ./.venv/bin/python3 lang/codegen/ir_cases/e2e_runner.py
+	# Run Drift-source e2e cases (per-case dirs under lang/tests/codegen/e2e).
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
 
-lang2-gdb-test:
-	DRIFT_GDB_TEST=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/gdb/test_gdb_runner.py
+lang-gdb-test:
+	DRIFT_GDB_TEST=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/gdb/test_gdb_runner.py
 
-# Lang2 e2e runner (lang2.driftc: json + run modes against tests/e2e)
-lang2-e2e CASES="":
-	PYTHONPATH=. ./.venv/bin/python3 lang2/codegen/codegen_runner.py {{CASES}}
+# Lang2 e2e runner (lang.driftc: json + run modes against tests/e2e)
+lang-e2e CASES="":
+	PYTHONPATH=. ./.venv/bin/python3 lang/codegen/codegen_runner.py {{CASES}}
 
 # Borrow checker scaffolding tests.
-lang2-borrow-test:
+lang-borrow-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang2/tests/borrow_checker
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker
 
-# Build examples (lang2.driftc)
+# Build examples (lang.driftc)
 make-example EXAMPLE:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -144,15 +144,15 @@ make-example EXAMPLE:
 	out_dir="build/examples/${example}"
 	mkdir -p "${out_dir}"
 	if [[ -f "examples/${example}/server.drift" ]] && [[ -f "examples/${example}/client.drift" ]]; then
-		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib "examples/${example}/server.drift" -o "${out_dir}/server"
-		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc --stdlib-root stdlib "examples/${example}/client.drift" -o "${out_dir}/client"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "examples/${example}/server.drift" -o "${out_dir}/server"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "examples/${example}/client.drift" -o "${out_dir}/client"
 	else
 		out_bin="${out_dir}/example_${example}"
 		extra_args=()
 		if [[ "${example}" == debug_* ]]; then
 			extra_args+=(--debug-info)
 		fi
-		PYTHONPATH=. ./.venv/bin/python3 -m lang2.driftc "${extra_args[@]}" --stdlib-root stdlib "examples/${example}/main.drift" -o "${out_bin}"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc "${extra_args[@]}" --stdlib-root stdlib "examples/${example}/main.drift" -o "${out_bin}"
 	fi
 
 make-examples:

@@ -1,4 +1,4 @@
-# Drift Compiler Architecture (lang2)
+# Drift Compiler Architecture (lang)
 
 The Drift compiler is a **pipeline of explicit, isolated stages**.
 Each stage has one responsibility and transforms the program into a simpler, more structured form.

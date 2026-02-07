@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from lang2.driftc.core.generic_type_expr import GenericTypeExpr
-from lang2.driftc.core.type_resolve_common import resolve_opaque_type
-from lang2.driftc.core.types_core import (
+from lang.driftc.core.generic_type_expr import GenericTypeExpr
+from lang.driftc.core.type_resolve_common import resolve_opaque_type
+from lang.driftc.core.types_core import (
 	TypeKind,
 	TypeTable,
 	VariantArmSchema,
 	VariantFieldSchema,
 )
-from lang2.driftc.parser import ast as parser_ast
+from lang.driftc.parser import ast as parser_ast
 
 
 def test_variant_instantiation_produces_concrete_instance() -> None:

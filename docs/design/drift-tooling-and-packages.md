@@ -409,7 +409,7 @@ Canonical trust-store format:
 ```
 
 Notes:
-- `kid` is derived from the public key bytes and is stable (see implementation docs in `lang2/driftc/packages/signature_v0.py`).
+- `kid` is derived from the public key bytes and is stable (see implementation docs in `lang/driftc/packages/signature_v0.py`).
 - `revoked` is canonical as a JSON object keyed by `kid`. For backward compatibility, `driftc` also accepts legacy `revoked: ["<kid>", ...]`.
 - Namespace keys may be exact (`acme.crypto`) or prefix (`acme.*`), and `driftc` selects the most specific (longest) match.
 

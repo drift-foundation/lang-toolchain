@@ -1,67 +1,67 @@
 reading file "/home/sl/src/drift-lang/heaptrack.a.out.1135521.zst" - please wait, this might take some time...
-Debuggee command was: ./build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+Debuggee command was: ./build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 finished reading file, now analyzing data:
 
 MOST CALLS TO ALLOCATION FUNCTIONS
 1510 calls to allocation functions with 40.98K peak consumption from
 drift_alloc_array
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 1.24K peak consumption from:
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 4.00K peak consumption from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 11.16K peak consumption from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 10 calls with 24.58K peak consumption from:
     std.containers::Deque<>::ensure_capacity__inst__4d117e013d55036e
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.containers::Deque<>::push_back__inst__4050e5f60d613bc3
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 500 calls to allocation functions with 588.00K peak consumption from
 drift_thread_spawn
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 588.00K peak consumption from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 500 calls to allocation functions with 2.45K peak consumption from
 drift_exec_enqueue
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 2.45K peak consumption from:
     drift_exec_submit
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 500 calls to allocation functions with 262.14K peak consumption from
 drift_exec_worker
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 500 calls with 262.14K peak consumption from:
     0x7dc380ea3d63
       in /lib/x86_64-linux-gnu/libc.so.6
@@ -70,41 +70,41 @@ drift_exec_worker
 
 2 calls to allocation functions with 160B peak consumption from
 drift_exec_create_internal
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 1 calls with 152B peak consumption from:
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 1 calls with 8B peak consumption from:
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 1 calls to allocation functions with 73.73K peak consumption from
 0x7dc380abd5de
@@ -124,40 +124,40 @@ _dl_allocate_tls
     pthread_create
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_create_internal
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 
 PEAK MEMORY CONSUMERS
 588.00K peak memory consumed over 500 calls from
 drift_thread_spawn
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 588.00K consumed over 500 calls from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 262.14K peak memory consumed over 500 calls from
 drift_exec_worker
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 262.14K consumed over 500 calls from:
     0x7dc380ea3d63
       in /lib/x86_64-linux-gnu/libc.so.6
@@ -177,48 +177,48 @@ drift_exec_worker
 
 40.98K peak memory consumed over 1510 calls from
 drift_alloc_array
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 24.58K consumed over 10 calls from:
     std.containers::Deque<>::ensure_capacity__inst__4d117e013d55036e
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.containers::Deque<>::push_back__inst__4050e5f60d613bc3
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 11.16K consumed over 500 calls from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 4.00K consumed over 500 calls from:
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 1.24K consumed over 500 calls from:
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 2.45K peak memory consumed over 500 calls from
 drift_exec_enqueue
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 2.45K consumed over 500 calls from:
     drift_exec_submit
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 352B peak memory consumed over 1 calls from
 _dl_allocate_tls
@@ -227,76 +227,76 @@ _dl_allocate_tls
     pthread_create
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_create_internal
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 160B peak memory consumed over 2 calls from
 drift_exec_create_internal
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 152B consumed over 1 calls from:
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 8B consumed over 1 calls from:
     drift_exec_init_once
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     0x7dc380ea94a3
       in /lib/x86_64-linux-gnu/libc.so.6
     pthread_once
       in /lib/x86_64-linux-gnu/libc.so.6
     drift_exec_default_get
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::default_executor__impl
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 
 MOST TEMPORARY ALLOCATIONS
 4 temporary allocations of 500 allocations in total (0.80%) from
 drift_exec_enqueue
-  in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+  in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 4 temporary allocations of 500 allocations in total (0.80%) from:
     drift_exec_submit
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     std.concurrent::spawn_cb__inst__3e15874017af7b6c
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     m::main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
     main
-      in /home/sl/src/drift-lang/build/tests/lang2/tests/codegen/e2e/concurrent_many_short_tasks/a.out
+      in /home/sl/src/drift-lang/build/tests/lang/tests/codegen/e2e/concurrent_many_short_tasks/a.out
 
 1 temporary allocations of 1 allocations in total (100.00%) from
 0x7dc380abd5de

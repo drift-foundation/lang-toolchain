@@ -51,7 +51,7 @@ def _run_case(case_dir: Path) -> str:
         cmd = [
             str(DRIFTC),
             "-m",
-            "lang2.driftc",
+            "lang.driftc",
             str(case_dir / "main.drift"),
             "--json",
         ]

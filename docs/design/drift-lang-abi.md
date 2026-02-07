@@ -112,7 +112,7 @@ User-defined exception events use:
 event_code = (0b0001 << 60) | (xxHash64(fqn_utf8) & ((1 << 60) - 1))
 ```
 
-Where `fqn` is the canonical fully-qualified name `"module.sub:Event"` (dot-separated module path, colon before the event name, UTF-8 encoding, no aliases). No other domains (builtin/test) are defined in lang2 v1.
+Where `fqn` is the canonical fully-qualified name `"module.sub:Event"` (dot-separated module path, colon before the event name, UTF-8 encoding, no aliases). No other domains (builtin/test) are defined in lang v1.
 
 `event_code == 0` is reserved as an **“unknown/unmapped” sentinel** (e.g., missing catalog entry) and must not be produced by declared events. The encoded domain+hash form above always sets the high tag (`0b0001`), so valid events cannot collide with the reserved zero value.
 

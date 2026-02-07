@@ -21,7 +21,7 @@
   - Added additional timeout anti-regression for rvalue mut-receiver chain termination (`test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion`).
 - Updated docs/spec for current surface:
   - `docs/design/drift-lang-spec.md` IO/console sections aligned to builder/configured APIs, flat error model, `read_line` semantics, and console wrapper behavior.
-  - `docs/effective-drift.md` file IO examples updated to current `file_builder` API; matching examples added under `lang2/examples/file_io/read_file.drift` and `lang2/examples/file_io/write_file.drift`.
+  - `docs/effective-drift.md` file IO examples updated to current `file_builder` API; matching examples added under `lang/examples/file_io/read_file.drift` and `lang/examples/file_io/write_file.drift`.
 
 ## 2025-12-29 – Core trust enforcement (reserved namespaces)
 - Made the core trust store mandatory for reserved namespaces; removed fallback to project/user trust for `lang.*`, `std.*`, and `drift.*`.
@@ -64,7 +64,7 @@
 
 ## 2025-12-15 – Exceptions: constructor-only throw syntax + schema-validated args
 - Switched exception throwing to constructor-call form only: `throw E(...)` (parens required even for zero-field events via `throw E()`); removed brace-based and shorthand throw forms across parser/AST/HIR/checker/lowering and tests.
-- Added shared exception ctor argument resolver (`lang2/driftc/core/exception_ctor_args.py`) to map positional/keyword args to declared exception fields (schema order), with diagnostics for missing/unknown/duplicate fields.
+- Added shared exception ctor argument resolver (`lang/driftc/core/exception_ctor_args.py`) to map positional/keyword args to declared exception fields (schema order), with diagnostics for missing/unknown/duplicate fields.
 - Extended parser/stage0/HIR kwarg nodes to carry name spans for precise diagnostics; `HExceptionInit` now carries `pos_args` and `kw_args` with spans; try-result rewrite preserves the new shape.
 - Updated checker (stub + type checker) and HIR→MIR lowering to validate/resolve ctor args against `TypeTable.exception_schemas` and attach attrs deterministically; e2e + unit tests updated accordingly; full suite passes (`just`).
 
@@ -72,13 +72,13 @@
 - Added HBorrow HIR node and parser lowering for `&` / `&mut`; exported via stage1 API.
 - Extended borrow checker to track active loans (shared vs mut) in CFG/dataflow state, enforcing lvalue-only borrows, moved/uninit rejects, conflict rules (whole-place overlap), and moves-blocked-while-borrowed. Assignments drop overlapping loans; temporary borrows in expr/conds are dropped after use; Loan carries region_id for upcoming NLL work. Optional shared auto-borrow flag scaffolded with call-scoped temporary loans.
 - Added borrow-specific tests (rvalue/moved borrow errors, shared allowed, shared+mut and mut+mut conflicts, move under loan, temp-borrow NLL approx) alongside existing move/CFG tests.
-- Updated progress tracking for Phase 2 and documented the new scaffolding; borrow checker docstrings now cover loans. Tests: `PYTHONPATH=. .venv/bin/pytest lang2/borrow_checker/tests`.
+- Updated progress tracking for Phase 2 and documented the new scaffolding; borrow checker docstrings now cover loans. Tests: `PYTHONPATH=. .venv/bin/pytest lang/borrow_checker/tests`.
 
 ## 2025-12-09 – Borrow checker scaffolding (places + CFG/dataflow)
 - Implemented hashable place identity (`PlaceBase` with kinds/ids) and projection-aware places; added `PlaceState` + `merge_place_state` lattice for dataflow joins.
 - Added Phase-1 borrow_checker_pass: builds a CFG from HIR, runs forward dataflow to track UNINIT/VALID/MOVED, walks all HIR expressions to record moves, and emits use-after-move diagnostics with stable names.
-- Improved tests and tooling: branch/loop CFG move tests, expanded move-tracking and place-builder coverage, Justfile target `lang2-borrow-test` included in `lang2-test`; diagnostics reset per run.
-- All borrow checker suites passing: `PYTHONPATH=. .venv/bin/pytest lang2/borrow_checker/tests`.
+- Improved tests and tooling: branch/loop CFG move tests, expanded move-tracking and place-builder coverage, Justfile target `lang-borrow-test` included in `lang-test`; diagnostics reset per run.
+- All borrow checker suites passing: `PYTHONPATH=. .venv/bin/pytest lang/borrow_checker/tests`.
 
 ## 2025-12-08 – String params & array helper decls
 - Fixed LLVM backend to type arguments using function signatures (Int → i64, String → %DriftString) and emit typed call sites; function headers now preload param types into value_types.
@@ -100,10 +100,10 @@
 - Parser now accepts `\xHH` hex escapes in string literals; added e2e `string_utf8_escape_eq` comparing a UTF-8 literal to its escaped form (equal at runtime) and adjusted UTF-8 multibyte e2e to check byte_length. Literal escaper continues to produce correct UTF-8 globals.
 - Checker maps opaque/declared `Uint` to the canonical Uint TypeId (len/cap return types); bitwise ops are enforced as Uint-only with a clear op set. `String.EMPTY` handling in HVar inference simplified.
 - `%drift.size` alias reinstated in IR (Uint carrier); string/array IR tests updated to expect `%drift.size` in `%DriftString`. ArrayLen lowering comment cleaned up (strings use StringLen MIR).
-- All suites green after changes: just lang2-codegen-test, lang2-test, parser/checker/core/stage tests.
+- All suites green after changes: just lang-codegen-test, lang-test, parser/checker/core/stage tests.
 ## 2025-12-09 – Parser diagnostics & shared typing cleanup
 - Parser adapter now reports duplicate functions as diagnostics (with spans) instead of raising; parse_drift_to_hir returns diagnostics. E2E runner supports phase-aware diagnostic cases and matches stderr/exit for parser/checker failures; added duplicate_main e2e case.
-- Added lang2/driftc.py `--json` flag to emit structured diagnostics (phase/message/severity/file/line/column) for parser failures; CLI bootstraps sys.path for venv usage.
+- Added lang/driftc.py `--json` flag to emit structured diagnostics (phase/message/severity/file/line/column) for parser failures; CLI bootstraps sys.path for venv usage.
 - Checker refactor: introduced shared _TypingContext + _walk_hir; array/bool validators share locals/diagnostics, and new tests cover param-indexed arrays and param-based if conditions.
 - Parser now builds signatures and HIR from the same non-duplicate function set so duplicates can’t desync signature vs. body; parser tests updated and pass.
 - All updated parser/checker/e2e tests passing (PYTHONPATH=. pytest ...; runner duplicate_main ok).
