@@ -1,5 +1,7 @@
+import std.console as console;
+
 fn log() nothrow -> Void {
-	println("hello");
+	console.println("hello");
 	return;
 }
 

@@ -66,6 +66,7 @@ def _run_ir_with_clang(
 	ir: str,
 	build_dir: Path,
 	argv: list[str] | None = None,
+	stdin_data: str | None = None,
 	timeout_s: int = 30,
 ) -> tuple[int, str, str]:
 	"""Compile the provided LLVM IR with clang and return (exit, stdout, stderr)."""
@@ -129,6 +130,7 @@ def _run_ir_with_clang(
 	try:
 		run_res = subprocess.run(
 			[str(bin_path), *(argv or [])],
+			input=stdin_data,
 			capture_output=True,
 			text=True,
 			cwd=ROOT,
@@ -368,9 +370,10 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 
 	build_dir = BUILD_ROOT / case_dir.name
 	run_args = expected.get("args", [])
+	stdin_data = expected.get("stdin")
 	if needs_argv and not run_args:
 		return "FAIL (argv main requires args in expected.json)"
-	exit_code, stdout, stderr = _run_ir_with_clang(ir, build_dir, argv=run_args, timeout_s=timeout_s)
+	exit_code, stdout, stderr = _run_ir_with_clang(ir, build_dir, argv=run_args, stdin_data=stdin_data, timeout_s=timeout_s)
 	if exit_code != 0 and stderr == "clang not available":
 		return "FAIL (clang not available)"
 	if exit_code == 124 and "timeout" in stderr:

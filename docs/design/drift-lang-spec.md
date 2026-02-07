@@ -240,14 +240,13 @@ fn example() -> Void { ... }
 
 Block comments may span multiple lines but do not nest. Comments are ignored by the parser, so indentation/terminator rules treat them as whitespace.
 
-### 3.3. `lang.core` prelude (auto-imported)
+### 3.3. Console helpers (`std.console`)
 
-The `lang.core` prelude injects a **curated list of names** into every Drift
-module. It does **not** bind the `lang.core` module itself, nor does it bring
-all public symbols into scope. The prelude currently exposes:
+Console helpers are provided by the standard module `std.console` and must be
+imported explicitly.
 
 ```drift
-module lang.core
+module std.console
 
 /// Writes UTF-8 text to the process standard output.
 /// Does not append a newline.
@@ -257,6 +256,10 @@ fn print(text: String) -> Void
 /// then appends a single '\n'.
 fn println(text: String) -> Void
 
+/// Writes UTF-8 text to the process standard error.
+/// Does not append a newline.
+fn eprint(text: String) -> Void
+
 /// Writes UTF-8 text to the process standard error,
 /// then appends a single '\n'.
 fn eprintln(text: String) -> Void
@@ -264,15 +267,16 @@ fn eprintln(text: String) -> Void
 
 Notes:
 
-- Inputs to `print`/`println`/`eprintln` must be `String` (UTF-8). `print` writes
-  to stdout without a trailing newline; `println` writes to stdout and appends
-  exactly one `\n`; `eprintln` writes to stderr and appends exactly one `\n`.
-- In v1 these functions do not throw; if the console handle is unavailable,
-  the call traps. Other write failures are implementation-defined (abort or
-  silent failure).
+- Inputs to `print`/`println`/`eprint`/`eprintln` must be `String` (UTF-8).
+- `print` writes to stdout without a trailing newline.
+- `println` writes to stdout and appends exactly one `\n`.
+- `eprint` writes to stderr without a trailing newline.
+- `eprintln` writes to stderr and appends exactly one `\n`.
+- In v1 these functions are `nothrow` and best-effort: if write fails or times
+  out, they return without raising.
+- Console writes are implemented on top of `std.io` configured output streams
+  using nonblocking/reactor-backed write loops with bounded timeout.
 - They perform no formatting beyond what you compose yourself.
-- The compiler flag `--no-prelude` disables these injected names; users must
-  explicitly import or qualify `lang.core` symbols. `--prelude` re-enables them.
 
 ### 3.4. Type prelude (always-on in v1)
 
@@ -3120,23 +3124,97 @@ Fixed-width FFI examples (e.g., `int32_t` → `Int32`) are deferred to post-MVP 
 
 ## 18. Standard I/O design (v1)
 
-In this revision, Drift guarantees only a minimal console surface via `lang.core`
-(auto-imported):
+`std.io` is part of the v1 surface and provides configured stream/file I/O with
+nonblocking + reactor-backed timeout behavior.
+
+### 18.1. Handles and builders
+
+Console handles:
 
 ```drift
-fn print(text: String) -> Void      // stdout, no trailing newline
-fn println(text: String) -> Void    // stdout, appends '\n'
-fn eprintln(text: String) -> Void   // stderr, appends '\n'
+fn stdin() -> InputStream
+fn stdout() -> OutputStream
+fn stderr() -> OutputStream
+
+fn stdin_builder() -> InputStreamBuilder
+fn stdout_builder() -> OutputStreamBuilder
+fn stderr_builder() -> OutputStreamBuilder
 ```
 
-These write UTF-8 text to the process standard output/error. They do not format
-arguments beyond what you concatenate yourself. They do not throw in v1; if
-the console handle is unavailable, the call traps. Other write failures are
-implementation-defined (abort or silent failure).
+File entry:
 
-`std.io` / `std.console` remain reserved for richer stream-based APIs in future
-revisions. The stream-based design sketched here (with `out`/`err`/`in`) is
-non-normative for v1 and may evolve before it is stabilized.
+```drift
+fn file_builder(path: String) -> FileBuilder
+```
+
+Configured values are produced via `build()`:
+
+```drift
+InputStreamBuilder.build()  -> ConfiguredInputStream
+OutputStreamBuilder.build() -> ConfiguredOutputStream
+FileBuilder.build()         -> Result<ConfiguredFile, IoError>
+```
+
+### 18.2. Operations
+
+Core operations:
+
+```drift
+ConfiguredInputStream.read(buf: &mut Buffer) -> Result<Int, IoError>
+ConfiguredInputStream.read_line()            -> Result<String, IoError>
+ConfiguredOutputStream.write(buf: &Buffer)   -> Result<Int, IoError>
+
+ConfiguredFile.read(buf: &mut Buffer)        -> Result<Int, IoError>
+ConfiguredFile.write(buf: &Buffer)           -> Result<Int, IoError>
+ConfiguredFile.close()                       -> Result<Void, IoError>
+```
+
+`FileBuilder` configuration methods are fluent:
+`read/write/create/truncate/append/mode/timeout`.
+
+### 18.3. Error model
+
+`IoError` is flat:
+
+```drift
+variant IoError { Errno(code: Int) }
+```
+
+Sentinel codes:
+
+- `IO_ERR_WOULD_BLOCK`
+- `IO_ERR_EOF`
+- `IO_ERR_LINE_TOO_LONG`
+
+Helpers:
+
+```drift
+fn io_error_code(e: IoError) -> Int
+fn io_is_would_block(code: Int) -> Bool
+fn io_is_eof(code: Int) -> Bool
+fn io_is_line_too_long(code: Int) -> Bool
+fn is_would_block_error(e: IoError) -> Bool
+fn is_eof_error(e: IoError) -> Bool
+fn is_line_too_long_error(e: IoError) -> Bool
+```
+
+### 18.4. `read_line` semantics
+
+- Returns `Ok(line)` without trailing `\n` (newline is consumed).
+- Consecutive newlines produce consecutive empty strings (`Ok("")`).
+- EOF before any byte returns `Err(Errno(IO_ERR_EOF))`.
+- If bytes exceed `max_line_bytes`, returns `Err(Errno(IO_ERR_LINE_TOO_LONG))`.
+
+### 18.5. Console wrappers
+
+`std.console` remains a thin text API (`print`, `println`, `eprint`,
+`eprintln`) built on configured `stdout`/`stderr` streams. It is `nothrow`,
+best-effort, and performs no formatting beyond explicit string composition.
+
+### 18.6. Legacy surface
+
+Legacy file-open APIs such as `OpenOptions` + `io.open(...)` are not part of
+the current v1 surface; use `file_builder(...)` and configured handles.
 
 
 ## 19. Concurrency & virtual threads

@@ -547,6 +547,7 @@ class LlvmModuleBuilder:
 	needs_string_from_uint64: bool = False
 	needs_string_from_bool: bool = False
 	needs_string_from_f64: bool = False
+	needs_string_from_utf8_bytes: bool = False
 	needs_string_retain: bool = False
 	needs_string_release: bool = False
 	needs_memcpy: bool = False
@@ -977,6 +978,8 @@ class LlvmModuleBuilder:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_bool(i32)")
 		if self.needs_string_from_f64:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_f64(double)")
+		if self.needs_string_from_utf8_bytes:
+			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8*, {self._llty(DRIFT_INT_TYPE)})")
 		if self.needs_string_retain:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_retain({DRIFT_STRING_TYPE})")
 		if self.needs_string_release:
@@ -989,6 +992,7 @@ class LlvmModuleBuilder:
 			or self.needs_string_from_uint64
 			or self.needs_string_from_bool
 			or self.needs_string_from_f64
+			or self.needs_string_from_utf8_bytes
 			or self.needs_string_retain
 			or self.needs_string_release
 		):
@@ -998,6 +1002,7 @@ class LlvmModuleBuilder:
 				[
 					f"declare void @drift_console_write({DRIFT_STRING_TYPE})",
 					f"declare void @drift_console_writeln({DRIFT_STRING_TYPE})",
+					f"declare void @drift_console_eprint({DRIFT_STRING_TYPE})",
 					f"declare void @drift_console_eprintln({DRIFT_STRING_TYPE})",
 					"",
 				]
@@ -1029,6 +1034,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
@@ -3059,6 +3065,17 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest) if instr.dest else None
 		callee_info = self.fn_infos.get(instr.fn_id)
 		callee_sym = function_symbol(instr.fn_id)
+		if instr.fn_id.module == "std.core" and instr.fn_id.name == "string_from_utf8_bytes":
+			if len(instr.args) != 2:
+				raise NotImplementedError(f"LLVM codegen v1: string_from_utf8_bytes expects 2 args, got {len(instr.args)}")
+			if dest is None:
+				raise NotImplementedError("LLVM codegen v1: string_from_utf8_bytes result must be captured")
+			ptr_val = self._map_value(instr.args[0])
+			len_val = self._map_value(instr.args[1])
+			self.module.needs_string_from_utf8_bytes = True
+			self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})")
+			self.value_types[dest] = DRIFT_STRING_TYPE
+			return
 		if instr.fn_id.module == "lang.thread":
 			if instr.fn_id.name == "vt_spawn":
 				if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:
@@ -3394,6 +3411,58 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
 				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "io_set_nonblocking":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: io_set_nonblocking expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_set_nonblocking result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "console_write":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_write expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_write({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_write returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_writeln":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_writeln expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_writeln({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_writeln returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_eprint":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_eprint expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_eprint({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_eprint returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_eprintln":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_eprintln expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_eprintln({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_eprintln returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "net_listen":
 				if len(instr.args) != 2:
@@ -3843,6 +3912,58 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "io_set_nonblocking":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: io_set_nonblocking expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: io_set_nonblocking result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "console_write":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_write expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_write({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_write returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_writeln":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_writeln expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_writeln({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_writeln returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_eprint":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_eprint expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_eprint({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_eprint returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "console_eprintln":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: console_eprintln expects 1 arg, got {len(instr.args)}")
+				text_val = self._map_value(instr.args[0])
+				self.module.needs_console_runtime = True
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_console_eprintln({DRIFT_STRING_TYPE} {text_val})")
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: console_eprintln returns Void; result cannot be captured")
+				return
 			if instr.fn_id.name == "net_listen":
 				if len(instr.args) != 2:
 					raise NotImplementedError(f"LLVM codegen v1: net_listen expects 2 args, got {len(instr.args)}")
@@ -4052,41 +4173,8 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = add {self._llty(llty)} 0, 0")
 			self.value_types[dest] = llty
 			return
-		# Allow intrinsic console trio even without FnInfo (e.g., prelude).
-		if callee_info is None and instr.fn_id.module == "lang.core" and instr.fn_id.name in {"print", "println", "eprintln"}:
-			if len(instr.args) != 1:
-				raise NotImplementedError(f"LLVM codegen v1: {callee_sym} expects exactly one argument")
-			arg_val = self._map_value(instr.args[0])
-			self.value_types.setdefault(arg_val, DRIFT_STRING_TYPE)
-			runtime_name = {
-				"print": "drift_console_write",
-				"println": "drift_console_writeln",
-				"eprintln": "drift_console_eprintln",
-			}[instr.fn_id.name]
-			self.module.needs_console_runtime = True
-			self.lines.append(f"  call void @{runtime_name}({DRIFT_STRING_TYPE} {arg_val})")
-			if dest:
-				raise NotImplementedError("console intrinsics return Void; result cannot be captured")
-			return
 		if callee_info is None:
 			raise NotImplementedError(f"LLVM codegen v1: missing FnInfo for callee {callee_sym}")
-
-		# Prelude console trio: treat lang.core::print/println/eprintln as runtime intrinsics.
-		if instr.fn_id.module == "lang.core" and instr.fn_id.name in {"print", "println", "eprintln"}:
-			if len(instr.args) != 1:
-				raise NotImplementedError(f"LLVM codegen v1: {callee_sym} expects exactly one argument")
-			arg_val = self._map_value(instr.args[0])
-			self.value_types.setdefault(arg_val, DRIFT_STRING_TYPE)
-			runtime_name = {
-				"print": "drift_console_write",
-				"println": "drift_console_writeln",
-				"eprintln": "drift_console_eprintln",
-			}[instr.fn_id.name]
-			self.module.needs_console_runtime = True
-			self.lines.append(f"  call void @{runtime_name}({DRIFT_STRING_TYPE} {arg_val})")
-			if dest:
-				raise NotImplementedError("console intrinsics return Void; result cannot be captured")
-			return
 
 		arg_parts: list[str] = []
 		if callee_info.signature and callee_info.signature.param_type_ids is not None:

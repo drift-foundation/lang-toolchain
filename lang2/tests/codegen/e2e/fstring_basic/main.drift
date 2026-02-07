@@ -1,11 +1,13 @@
 module m
 
+import std.console as console;
+
 fn main() nothrow -> Int{
 	val i = 10;
 	val b = true;
 	val s = "x";
 	val f = 1.25;
-	println(f"i={i} b={b} s={s} f={f}");
-	println(f"{{}}");
+	console.println(f"i={i} b={b} s={s} f={f}");
+	console.println(f"{{}}");
 	return 0;
 }

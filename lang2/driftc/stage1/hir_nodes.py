@@ -581,6 +581,9 @@ class HBorrow(HExpr):
 	# `normalize_hir` which canonicalizes place contexts to `HPlaceExpr`.
 	subject: "HPlaceExpr"
 	is_mut: bool
+	# Compiler-synthesized escape hatch for Phase 1 fluent receiver chaining:
+	# permit shared borrow of rvalues only when this flag is set.
+	allow_rvalue: bool = False
 
 
 @dataclass

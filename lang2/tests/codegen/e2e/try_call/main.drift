@@ -1,5 +1,7 @@
 module m
 
+import std.console as console;
+
 exception Boom()
 
 fn may_fail(flag: Int) -> Int {
@@ -12,7 +14,7 @@ fn may_fail(flag: Int) -> Int {
 fn main() nothrow -> Int{
 	val y = try may_fail(0) catch { 0 };
 	if y == 41 {
-		println("ok");
+		console.println("ok");
 	}
 	return y + 1;
 }

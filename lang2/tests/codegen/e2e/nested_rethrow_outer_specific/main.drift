@@ -1,5 +1,7 @@
 module main
 
+import std.console as console;
+
 exception A()
 exception B()
 
@@ -8,12 +10,12 @@ fn run() -> Int {
         try {
             throw A();
         } catch A(a) {
-            print("inner");
+            console.print("inner");
             throw B();
         }
-        print("UNREACHABLE");
+        console.print("UNREACHABLE");
     } catch B(b) {
-        print("outer");
+        console.print("outer");
     }
     return 0;
 }

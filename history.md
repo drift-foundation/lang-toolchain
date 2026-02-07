@@ -1,3 +1,28 @@
+## 2026-02-07 – Console/IO API completion, hardening, and docs alignment
+- Completed the `std.io`/`std.console` MVP migration from legacy file-open APIs to configured builder-based streams:
+  - Added/standardized `stdin/stdout/stderr` handles and builders, configured stream/file types, fluent file builder (`read/write/create/truncate/append/mode/timeout/build`), and configured operations (`read/write/close/read_line`).
+  - Moved `std.console` internals onto `std.io` nonblocking/reactor-backed write loops with bounded timeout (no special compiler intrinsic path).
+- Finalized IO error surface to flat errno-style model:
+  - `IoError::Errno(code)` only, sentinel codes (`IO_ERR_WOULD_BLOCK`, `IO_ERR_EOF`, `IO_ERR_LINE_TOO_LONG`) and helper predicates (`io_is_*`, `is_*_error`, `io_error_code`).
+- Completed line I/O semantics and coverage:
+  - `read_line()` semantics pinned and implemented (newline consumed, EOF/line-too-long in error space, empty-line behavior).
+  - Added deterministic stdin-line edge matrix e2e (`std_io_stdin_line_edge_matrix`) covering consecutive newlines, empty-input EOF, over-cap line, and mixed newline/EOF boundaries.
+- Executed legacy API removal gate:
+  - Removed public legacy `OpenOptions`/`io.open(...)` and timeout-arg `File` methods from `std.io`.
+  - Migrated remaining tests/examples to configured-builder path.
+  - Gate results green: targeted std.io e2e + targeted driver + package regression.
+- Added true pipe-style e2e and runner stdin support:
+  - e2e runner now accepts optional `stdin` from `expected.json`.
+  - New case `std_io_pipe_reverse_stdout` validates stdin->process->stdout flow (`"ABCD\\n"` -> `"DCBA"`).
+- Regression-first fix for resolver deadlock (not workaround-only):
+  - Added timeout-guarded compile regression for fluent `FileBuilder` chains (`append/mode` path).
+  - Fixed call-resolution recursion by threading known receiver type into mutability checks (`_receiver_can_mut_borrow(..., recv_ty_hint)`), avoiding recursive re-typechecking loops.
+  - Reverted temporary API workaround and verified by-ref fluent builder chains remain stable.
+  - Added additional timeout anti-regression for rvalue mut-receiver chain termination (`test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion`).
+- Updated docs/spec for current surface:
+  - `docs/design/drift-lang-spec.md` IO/console sections aligned to builder/configured APIs, flat error model, `read_line` semantics, and console wrapper behavior.
+  - `docs/effective-drift.md` file IO examples updated to current `file_builder` API; matching examples added under `lang2/examples/file_io/read_file.drift` and `lang2/examples/file_io/write_file.drift`.
+
 ## 2025-12-29 – Core trust enforcement (reserved namespaces)
 - Made the core trust store mandatory for reserved namespaces; removed fallback to project/user trust for `lang.*`, `std.*`, and `drift.*`.
 - Added dev-only override via `--dev --dev-core-trust-store` (non-normative), and documented the exception in the spec.

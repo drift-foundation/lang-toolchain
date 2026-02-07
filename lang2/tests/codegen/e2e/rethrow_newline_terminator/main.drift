@@ -1,5 +1,7 @@
 module main
 
+import std.console as console;
+
 exception E()
 
 fn run() -> Int {
@@ -7,12 +9,12 @@ fn run() -> Int {
         try {
             throw E();
         } catch err {
-            print("inner");
+            console.print("inner");
             rethrow;
         }
-        print("UNREACHABLE");
+        console.print("UNREACHABLE");
     } catch err {
-        print("outer");
+        console.print("outer");
     }
     return 0;
 }

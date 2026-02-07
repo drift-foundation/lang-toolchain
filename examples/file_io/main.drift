@@ -10,16 +10,15 @@ pub fn main() nothrow -> Int {
 
 fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
-	var opts = io.OpenOptions(read = true, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
-	val f = io.open("example.txt", &opts, t).or_throw();
+	val f = io.file_builder("example.txt").read(true).write(true).create(true).truncate(true).timeout(t).build().or_throw();
 	var buf = io.buffer(5);
 	io.buffer_write(&mut buf, 0, cast<Byte>(72));
 	io.buffer_write(&mut buf, 1, cast<Byte>(101));
 	io.buffer_write(&mut buf, 2, cast<Byte>(108));
 	io.buffer_write(&mut buf, 3, cast<Byte>(108));
 	io.buffer_write(&mut buf, 4, cast<Byte>(111));
-	val _ = f.write(&buf, t).or_throw();
-	val _ = f.read(&mut buf, t).or_throw();
-	f.close(t).or_throw();
+	val _ = f.write(&buf).or_throw();
+	val _ = f.read(&mut buf).or_throw();
+	f.close().or_throw();
 	return 0;
 }

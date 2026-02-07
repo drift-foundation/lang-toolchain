@@ -39,7 +39,8 @@ export {
 	callback_throw2,
 	or_throw,
 	STRING_CONTAINER_ID,
-	string_byte_at
+	string_byte_at,
+	string_from_utf8_bytes
 };
 
 pub trait Copy {
@@ -274,3 +275,4 @@ implement Diagnostic for DiagnosticValue {
 pub const STRING_CONTAINER_ID: String = "std.core:String";
 
 @intrinsic pub fn string_byte_at(s: &String, i: Int) -> Byte;
+@intrinsic pub fn string_from_utf8_bytes(ptr: mem.Ptr<Byte>, len: Int) nothrow -> String;

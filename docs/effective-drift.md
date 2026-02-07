@@ -51,10 +51,10 @@ Notes
 
 - This works with owned callbacks and does not rely on borrowed captures.
 
-## File I/O with `try` + `or_throw`
+## Read a file
 
-Use a throwing helper and keep `main` `nothrow`. I/O calls take a `Duration`
-timeout and may park the current VT.
+Use `file_builder(...).read(true).write(false)` and keep timeout on the
+configured handle.
 
 ```drift
 import std.concurrent as conc;
@@ -68,17 +68,43 @@ pub fn main() nothrow -> Int {
 
 fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
-	var opts = io.OpenOptions(read = true, write = true, create = true, truncate = true, append = false, mode = io.FILE_MODE_DEFAULT);
-	val f = io.open("example.txt", &opts, t).or_throw();
-	var buf = io.buffer(5);
+	val f = io.file_builder("example.txt").read(true).write(false).timeout(t).build().or_throw();
+	var buf = io.buffer(1024);
+	val n = f.read(&mut buf).or_throw();
+	val _s = core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+	f.close().or_throw();
+	return 0;
+}
+```
+
+## Write a file
+
+Use `file_builder(...).write(true).create(true).truncate(true)` for replace
+semantics.
+
+```drift
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+use trait core.Try;
+
+pub fn main() nothrow -> Int {
+	return try run_main() catch { 1 };
+}
+
+fn run_main() throws -> Int {
+	val t = conc.Duration(millis = 5000);
+	val f = io.file_builder("example.txt").read(false).write(true).create(true).truncate(true).timeout(t).build().or_throw();
+	var buf = io.buffer(6);
 	io.buffer_write(&mut buf, 0, cast<Byte>(72));
 	io.buffer_write(&mut buf, 1, cast<Byte>(101));
 	io.buffer_write(&mut buf, 2, cast<Byte>(108));
 	io.buffer_write(&mut buf, 3, cast<Byte>(108));
 	io.buffer_write(&mut buf, 4, cast<Byte>(111));
-	val _ = f.write(&buf, t).or_throw();
-	val _ = f.read(&mut buf, t).or_throw();
-	f.close(t).or_throw();
+	io.buffer_write(&mut buf, 5, cast<Byte>(10));
+	val n = f.write(&buf).or_throw();
+	if n != 6 { return 2; }
+	f.close().or_throw();
 	return 0;
 }
 ```

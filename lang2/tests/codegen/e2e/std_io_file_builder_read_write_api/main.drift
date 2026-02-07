@@ -1,0 +1,57 @@
+module m_main
+
+import std.io as io;
+import std.core as core;
+import std.concurrent as conc;
+
+fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 1000);
+	val w = io.file_builder("io_test_file_builder.bin").read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	match w {
+		Ok(fw) => {
+			var buf = io.buffer(3);
+			io.buffer_write(&mut buf, 0, cast<Byte>(65));
+			io.buffer_write(&mut buf, 1, cast<Byte>(66));
+			io.buffer_write(&mut buf, 2, cast<Byte>(67));
+			val wres = fw.write(&buf);
+			val wcode = match wres {
+				Ok(n) => { (n == 3) ? 0 : 1 },
+				default => { 2 }
+			};
+			if wcode != 0 { return wcode; }
+			val c = fw.close();
+			val ccode = match c {
+				Ok(_) => { 0 },
+				default => { 3 }
+			};
+			if ccode != 0 { return ccode; }
+		},
+		Err(_) => { return 4; },
+		default => { return 5; }
+	}
+	val r = io.file_builder("io_test_file_builder.bin").read(true).write(false).timeout(t).build();
+	match r {
+		Ok(fr) => {
+			var buf2 = io.buffer(3);
+			val rr = fr.read(&mut buf2);
+			val n = match rr {
+				Ok(v) => { v },
+				default => { 6 }
+			};
+			if n == 6 { return 6; }
+			if n != 3 { return 7; }
+			if io.buffer_read(&mut buf2, 0) != cast<Byte>(65) { return 8; }
+			if io.buffer_read(&mut buf2, 1) != cast<Byte>(66) { return 9; }
+			if io.buffer_read(&mut buf2, 2) != cast<Byte>(67) { return 10; }
+			val c2 = fr.close();
+			val c2code = match c2 {
+				Ok(_) => { 0 },
+				default => { 11 }
+			};
+			if c2code != 0 { return c2code; }
+			return 0;
+		},
+		Err(_) => { return 12; },
+		default => { return 13; }
+	}
+}

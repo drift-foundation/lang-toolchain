@@ -1,0 +1,40 @@
+module m
+
+import std.io as io;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 1000);
+	val input = io.stdin_builder().timeout(t).build();
+	val output = io.stdout_builder().timeout(t).build();
+	var inb = io.buffer(128);
+	val rr = input.read(&mut inb);
+	val n0 = match rr {
+		Ok(n) => { n },
+		Err(e) => {
+			io.is_would_block_error(e) ? 0 : (io.is_eof_error(e) ? 0 : 2)
+		},
+		default => { 3 }
+	};
+	if n0 <= 0 {
+		return 0;
+	}
+	var n = n0;
+	val last = io.buffer_read(&mut inb, n - 1);
+	if last == cast<Byte>(10) {
+		n = n - 1;
+	}
+	var outb = io.buffer(n);
+	var i = 0;
+	while i < n {
+		val b = io.buffer_read(&mut inb, n - 1 - i);
+		io.buffer_write(&mut outb, i, b);
+		i += 1;
+	}
+	val wr = output.write(&outb);
+	match wr {
+		Ok(_) => { return 0; },
+		Err(_) => { return 4; },
+		default => { return 5; }
+	}
+}

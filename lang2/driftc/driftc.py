@@ -389,32 +389,12 @@ def _inject_prelude(
 	type_table: TypeTable,
 ) -> None:
 	"""
-	Ensure the lang.core prelude trio is present in the signatures map.
-
-	These are pure functions (not macros) that write UTF-8 text to stdout/stderr.
-	They return Void (v2 wires a real Void type through the pipeline).
+	Value prelude injection is disabled. Console helpers live in `std.console`
+	and must be imported explicitly.
 	"""
-	string_id = type_table.ensure_string()
-	void_id = type_table.ensure_void()
-	for name in ("print", "println", "eprintln"):
-		fn_id = FunctionId(module="lang.core", name=name, ordinal=0)
-		if fn_id in signatures:
-			continue
-		sym_name = name
-		# Keyed by short name; module carries qualification.
-		name_list = fn_ids_by_name.setdefault(sym_name, [])
-		if fn_id not in name_list:
-			name_list.append(fn_id)
-		signatures[fn_id] = FnSignature(
-			name=name,
-			method_name=name,
-			param_names=["text"],
-			param_type_ids=[string_id],
-			return_type_id=void_id,
-			declared_can_throw=False,
-			is_method=False,
-			module="lang.core",
-		)
+	_ = signatures
+	_ = fn_ids_by_name
+	_ = type_table
 
 
 def _prelude_exports() -> dict[str, object]:
@@ -425,7 +405,7 @@ def _prelude_exports() -> dict[str, object]:
 	even when implicit prelude injection is disabled.
 	"""
 	return {
-		"values": ["print", "println", "eprintln"],
+		"values": [],
 		"types": {"structs": [], "variants": [], "exceptions": [], "interfaces": []},
 		"consts": [],
 		"traits": [],
@@ -444,13 +424,10 @@ def _should_inject_prelude(
 	"""
 	Decide whether prelude signatures should be injected.
 
-	- If implicit prelude is enabled, always inject.
-	- If disabled, inject only when a module explicitly imports lang.core.
+	Value prelude injection is disabled.
 	"""
-	if prelude_enabled:
-		return True
-	if module_deps:
-		return any("lang.core" in deps for deps in module_deps.values())
+	_ = prelude_enabled
+	_ = module_deps
 	return False
 
 
@@ -5007,18 +4984,7 @@ def compile_to_llvm_ir_for_tests(
 				rename_map[entry_id] = "drift_main"
 				argv_wrapper = "drift_main"
 
-	# Add prelude FnInfos so codegen can recognize console intrinsics by module/name.
 	fn_infos = dict(checked.fn_infos_by_id)
-	if prelude_injected:
-		for name in ("print", "println", "eprintln"):
-			ids = fn_ids_by_name.get(name, [])
-			if not ids:
-				continue
-			if ids[0] in fn_infos:
-				continue
-			sig = signatures_by_id.get(ids[0])
-			if sig is not None:
-				fn_infos[ids[0]] = make_fn_info(ids[0], sig, declared_can_throw=False)
 
 	module = lower_module_to_llvm(
 		mir_funcs,
@@ -5237,13 +5203,13 @@ def main(argv: list[str] | None = None) -> int:
 		dest="prelude",
 		action="store_true",
 		default=True,
-		help="Enable implicit import of lang.core (default)",
+		help="Legacy no-op flag (value prelude removed; kept for compatibility)",
 	)
 	parser.add_argument(
 		"--no-prelude",
 		dest="prelude",
 		action="store_false",
-		help="Disable the implicit import of lang.core (e.g. println); import/qualify explicitly",
+		help="Legacy no-op flag (value prelude removed; kept for compatibility)",
 	)
 	parser.add_argument(
 		"--stdlib-root",

@@ -9,7 +9,14 @@ export {
 	IoInterest,
 	IoError,
 	File,
-	OpenOptions,
+	FileBuilder,
+	ConfiguredFile,
+	InputStream,
+	OutputStream,
+	InputStreamBuilder,
+	OutputStreamBuilder,
+	ConfiguredInputStream,
+	ConfiguredOutputStream,
 	Buffer,
 	buffer,
 	buffer_ptr,
@@ -22,11 +29,30 @@ export {
 	buffer_write,
 	buffer_read,
 	file_from_fd,
-	open,
-	FILE_MODE_DEFAULT,
-	close,
-	read,
-	write
+	stdin,
+	stdout,
+	stderr,
+	stdin_builder,
+	stdout_builder,
+	stderr_builder,
+	input_read,
+	output_write,
+	input_read_line,
+	configured_input_read_line,
+	configured_input_from_file,
+	configure_file,
+	file_builder,
+	IO_ERR_WOULD_BLOCK,
+	IO_ERR_EOF,
+	IO_ERR_LINE_TOO_LONG,
+	io_error_code,
+	io_is_would_block,
+	io_is_eof,
+	io_is_line_too_long,
+	is_would_block_error,
+	is_eof_error,
+	is_line_too_long_error,
+	FILE_MODE_DEFAULT
 };
 
 pub variant IoInterest {
@@ -35,8 +61,7 @@ pub variant IoInterest {
 }
 
 pub variant IoError {
-	Errno(code: Int),
-	WouldBlock
+	Errno(code: Int)
 }
 
 implement core.Diagnostic for IoError {
@@ -44,9 +69,6 @@ implement core.Diagnostic for IoError {
 		return match self {
 			Errno(code) => {
 				DiagnosticValue::Int(*code)
-			},
-			WouldBlock => {
-				DiagnosticValue::Int(-1)
 			}
 		};
 	}
@@ -57,7 +79,77 @@ pub struct File {
 	closed: core.Cell<Bool>
 }
 
-pub struct OpenOptions {
+pub struct FileBuilder {
+	path: String,
+	opt_read: Bool,
+	opt_write: Bool,
+	opt_create: Bool,
+	opt_truncate: Bool,
+	opt_append: Bool,
+	opt_mode: Int,
+	timeout: conc.Duration
+}
+
+pub struct ConfiguredFile {
+	inner: File,
+	timeout: conc.Duration
+}
+
+pub struct InputStream {
+	fd: Int
+}
+
+pub struct OutputStream {
+	fd: Int
+}
+
+pub struct InputStreamBuilder {
+	fd: Int,
+	timeout: conc.Duration,
+	max_line_bytes: Int
+}
+
+pub struct OutputStreamBuilder {
+	fd: Int,
+	timeout: conc.Duration
+}
+
+pub struct ConfiguredInputStream {
+	fd: Int,
+	timeout: conc.Duration,
+	max_line_bytes: Int
+}
+
+pub struct ConfiguredOutputStream {
+	fd: Int,
+	timeout: conc.Duration
+}
+
+implement core.Copy for InputStream {
+}
+
+implement core.Copy for OutputStream {
+}
+
+implement core.Copy for IoError {
+}
+
+implement core.Copy for InputStreamBuilder {
+}
+
+implement core.Copy for OutputStreamBuilder {
+}
+
+implement core.Copy for ConfiguredInputStream {
+}
+
+implement core.Copy for ConfiguredOutputStream {
+}
+
+implement core.Copy for FileBuilder {
+}
+
+struct FileOpenOptions {
 	pub read: Bool,
 	pub write: Bool,
 	pub create: Bool,
@@ -69,6 +161,45 @@ pub struct OpenOptions {
 @test_build_only
 pub fn file_from_fd(fd: Int) nothrow -> File {
 	return File(fd = fd, closed = core.cell(false));
+}
+
+@test_build_only
+pub fn configured_input_from_file(self: &ConfiguredFile, max_line_bytes: Int) nothrow -> ConfiguredInputStream {
+	return ConfiguredInputStream(fd = self.inner.fd, timeout = self.timeout, max_line_bytes = max_line_bytes);
+}
+
+pub fn stdin() nothrow -> InputStream {
+	val _ = thread.io_set_nonblocking(STDIN_FD);
+	return InputStream(fd = STDIN_FD);
+}
+
+pub fn stdout() nothrow -> OutputStream {
+	val _ = thread.io_set_nonblocking(STDOUT_FD);
+	return OutputStream(fd = STDOUT_FD);
+}
+
+pub fn stderr() nothrow -> OutputStream {
+	val _ = thread.io_set_nonblocking(STDERR_FD);
+	return OutputStream(fd = STDERR_FD);
+}
+
+pub fn stdin_builder() nothrow -> InputStreamBuilder {
+	val _ = thread.io_set_nonblocking(STDIN_FD);
+	return InputStreamBuilder(fd = STDIN_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS), max_line_bytes = STREAM_MAX_LINE_BYTES_DEFAULT);
+}
+
+pub fn stdout_builder() nothrow -> OutputStreamBuilder {
+	val _ = thread.io_set_nonblocking(STDOUT_FD);
+	return OutputStreamBuilder(fd = STDOUT_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
+}
+
+pub fn stderr_builder() nothrow -> OutputStreamBuilder {
+	val _ = thread.io_set_nonblocking(STDERR_FD);
+	return OutputStreamBuilder(fd = STDERR_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
+}
+
+pub fn file_builder(path: String) nothrow -> FileBuilder {
+	return FileBuilder(path = path, opt_read = true, opt_write = false, opt_create = false, opt_truncate = false, opt_append = false, opt_mode = FILE_MODE_DEFAULT, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
 }
 
 pub struct Buffer {
@@ -86,6 +217,53 @@ pub const FILE_APPEND: Uint = 1024;
 pub const FILE_MODE_DEFAULT: Int = 420;
 pub const IO_EINTR: Int = 4;
 pub const IO_EAGAIN: Int = 11;
+pub const IO_ERR_WOULD_BLOCK: Int = -4095;
+pub const IO_ERR_EOF: Int = -4096;
+pub const IO_ERR_LINE_TOO_LONG: Int = -4097;
+pub const STDIN_FD: Int = 0;
+pub const STDOUT_FD: Int = 1;
+pub const STDERR_FD: Int = 2;
+pub const STREAM_TIMEOUT_DEFAULT_MS: Int = 60000;
+pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
+
+pub fn io_error_code(e: IoError) nothrow -> Int {
+	return match e {
+		Errno(code) => { code }
+	};
+}
+
+pub fn io_is_would_block(code: Int) nothrow -> Bool {
+	if code == IO_ERR_WOULD_BLOCK {
+		return true;
+	}
+	return false;
+}
+
+pub fn io_is_eof(code: Int) nothrow -> Bool {
+	if code == IO_ERR_EOF {
+		return true;
+	}
+	return false;
+}
+
+pub fn is_would_block_error(e: IoError) nothrow -> Bool {
+	return io_is_would_block(io_error_code(e));
+}
+
+pub fn is_eof_error(e: IoError) nothrow -> Bool {
+	return io_is_eof(io_error_code(e));
+}
+
+pub fn is_line_too_long_error(e: IoError) nothrow -> Bool {
+	return io_is_line_too_long(io_error_code(e));
+}
+
+pub fn io_is_line_too_long(code: Int) nothrow -> Bool {
+	if code == IO_ERR_LINE_TOO_LONG {
+		return true;
+	}
+	return false;
+}
 
 fn _deadline_from_timeout(timeout: conc.Duration) nothrow -> Int {
 	if timeout.millis <= 0 {
@@ -169,7 +347,7 @@ pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
 	return mem.read<type Byte>(&mut self.buf, i);
 }
 
-pub fn open(path: String, opts: &OpenOptions, timeout: conc.Duration) nothrow -> core.Result<File, IoError> {
+fn _file_open(path: String, opts: &FileOpenOptions, timeout: conc.Duration) nothrow -> core.Result<File, IoError> {
 	var flags = FILE_READ_ONLY;
 	val deadline = _deadline_from_timeout(timeout);
 	if opts.read and opts.write {
@@ -201,11 +379,11 @@ pub fn open(path: String, opts: &OpenOptions, timeout: conc.Duration) nothrow ->
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			thread.vt_park_until(remaining);
 			continue;
@@ -215,7 +393,7 @@ pub fn open(path: String, opts: &OpenOptions, timeout: conc.Duration) nothrow ->
 	return core.Result::Err(IoError::Errno(-1));
 }
 
-pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
+fn _file_close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
 	if self.closed.get() {
 		return core.Result::Ok(core.void_value());
 	}
@@ -232,11 +410,11 @@ pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, I
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			thread.vt_park_until(remaining);
 			continue;
@@ -246,21 +424,81 @@ pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, I
 	return core.Result::Err(IoError::Errno(-1));
 }
 
-implement File {
-	pub fn close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
-		return close(self, timeout);
+pub fn configure_file(self: &File, timeout: conc.Duration) nothrow -> ConfiguredFile {
+	return ConfiguredFile(inner = File(fd = self.fd, closed = self.closed), timeout = timeout);
+}
+
+implement InputStreamBuilder {
+	pub fn timeout(self: &InputStreamBuilder, timeout: conc.Duration) nothrow -> InputStreamBuilder {
+		return InputStreamBuilder(fd = self.fd, timeout = timeout, max_line_bytes = self.max_line_bytes);
 	}
 
-	pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
-		return read(self, buf, timeout);
+	pub fn max_line_bytes(self: &InputStreamBuilder, max_line_bytes: Int) nothrow -> InputStreamBuilder {
+		return InputStreamBuilder(fd = self.fd, timeout = self.timeout, max_line_bytes = max_line_bytes);
 	}
 
-	pub fn write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
-		return write(self, buf, timeout);
+	pub fn build(self: &InputStreamBuilder) nothrow -> ConfiguredInputStream {
+		return ConfiguredInputStream(fd = self.fd, timeout = self.timeout, max_line_bytes = self.max_line_bytes);
 	}
 }
 
-pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+implement FileBuilder {
+	pub fn read(self: &FileBuilder, read: Bool) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
+	}
+
+	pub fn write(self: &FileBuilder, write: Bool) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
+	}
+
+	pub fn create(self: &FileBuilder, create: Bool) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
+	}
+
+	pub fn truncate(self: &FileBuilder, truncate: Bool) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
+	}
+
+	pub fn append(self: &FileBuilder, append: Bool) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = append, opt_mode = self.opt_mode, timeout = self.timeout);
+	}
+
+	pub fn mode(self: &FileBuilder, mode: Int) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = mode, timeout = self.timeout);
+	}
+
+	pub fn timeout(self: &FileBuilder, timeout: conc.Duration) nothrow -> FileBuilder {
+		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = timeout);
+	}
+
+	pub fn build(self: &FileBuilder) nothrow -> core.Result<ConfiguredFile, IoError> {
+		val opts = FileOpenOptions(read = self.opt_read, write = self.opt_write, create = self.opt_create, truncate = self.opt_truncate, append = self.opt_append, mode = self.opt_mode);
+		val opened = _file_open(self.path, &opts, self.timeout);
+		match opened {
+			Ok(file) => {
+				return core.Result::Ok(ConfiguredFile(inner = move file, timeout = self.timeout));
+			},
+			Err(e) => {
+				return core.Result::Err(e);
+			},
+			default => {
+				return core.Result::Err(IoError::Errno(-1));
+			}
+		}
+	}
+}
+
+implement OutputStreamBuilder {
+	pub fn timeout(self: &OutputStreamBuilder, timeout: conc.Duration) nothrow -> OutputStreamBuilder {
+		return OutputStreamBuilder(fd = self.fd, timeout = timeout);
+	}
+
+	pub fn build(self: &OutputStreamBuilder) nothrow -> ConfiguredOutputStream {
+		return ConfiguredOutputStream(fd = self.fd, timeout = self.timeout);
+	}
+}
+
+pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
 	val deadline = _deadline_from_timeout(timeout);
@@ -276,11 +514,11 @@ pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> co
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
@@ -295,7 +533,7 @@ pub fn read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> co
 	return core.Result::Err(IoError::Errno(-1));
 }
 
-pub fn write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
 	val deadline = _deadline_from_timeout(timeout);
@@ -310,11 +548,184 @@ pub fn write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::WouldBlock());
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+			}
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(remaining);
+				continue;
+			}
+			_block_on_io(self.fd, 4, deadline);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
+	}
+	return core.Result::Err(IoError::Errno(-1));
+}
+
+pub fn configured_input_read(self: &ConfiguredInputStream, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+	val stream = InputStream(fd = self.fd);
+	return input_read(&stream, buf, self.timeout);
+}
+
+pub fn configured_output_write(self: &ConfiguredOutputStream, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+	val stream = OutputStream(fd = self.fd);
+	return output_write(&stream, buf, self.timeout);
+}
+
+implement InputStream {
+	pub fn read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+		return input_read(self, buf, timeout);
+	}
+
+	pub fn read_line(self: &InputStream, timeout: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<String, IoError> {
+		return input_read_line(self, timeout, max_line_bytes);
+	}
+}
+
+implement OutputStream {
+	pub fn write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+		return output_write(self, buf, timeout);
+	}
+}
+
+implement ConfiguredInputStream {
+	pub fn read(self: &ConfiguredInputStream, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+		return configured_input_read(self, buf);
+	}
+
+	pub fn read_line(self: &ConfiguredInputStream) nothrow -> core.Result<String, IoError> {
+		return configured_input_read_line(self);
+	}
+}
+
+implement ConfiguredOutputStream {
+	pub fn write(self: &ConfiguredOutputStream, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+		return configured_output_write(self, buf);
+	}
+}
+
+implement ConfiguredFile {
+	pub fn read(self: &ConfiguredFile, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
+		return _file_read(&self.inner, buf, self.timeout);
+	}
+
+	pub fn write(self: &ConfiguredFile, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
+		return _file_write(&self.inner, buf, self.timeout);
+	}
+
+	pub fn close(self: &ConfiguredFile) nothrow -> core.Result<Void, IoError> {
+		return _file_close(&self.inner, self.timeout);
+	}
+}
+
+fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val len = buf.cap;
+	val deadline = _deadline_from_timeout(timeout);
+	while true {
+		val n = thread.io_read(self.fd, ptr, len);
+		if n >= 0 {
+			buf.len = n;
+			return core.Result::Ok(n);
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+			}
+			val vt = thread.vt_current();
+			if vt == 0 {
+				thread.vt_park_until(remaining);
+				continue;
+			}
+			_block_on_io(self.fd, 1, deadline);
+			continue;
+		}
+		return core.Result::Err(IoError::Errno(err));
+	}
+	return core.Result::Err(IoError::Errno(-1));
+}
+
+pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.Result<String, IoError> {
+	if self.max_line_bytes <= 0 {
+		return core.Result::Err(IoError::Errno(IO_ERR_LINE_TOO_LONG));
+	}
+	var line = buffer(self.max_line_bytes);
+	var one = buffer(1);
+	var used = 0;
+	var got_any = false;
+	while true {
+		val r = configured_input_read(self, &mut one);
+		match r {
+			Ok(n) => {
+				if n <= 0 {
+					if got_any {
+						val s = core.string_from_utf8_bytes(buffer_ptr(&line), used);
+						return core.Result::Ok(s);
+					}
+					return core.Result::Err(IoError::Errno(IO_ERR_EOF));
+				}
+				got_any = true;
+				val b = buffer_read(&mut one, 0);
+				if b == cast<Byte>(10) {
+					val s = core.string_from_utf8_bytes(buffer_ptr(&line), used);
+					return core.Result::Ok(s);
+				}
+				if used >= self.max_line_bytes {
+					return core.Result::Err(IoError::Errno(IO_ERR_LINE_TOO_LONG));
+				}
+				buffer_write(&mut line, used, b);
+				used += 1;
+				continue;
+			},
+			Err(e) => {
+				return core.Result::Err(e);
+			},
+			default => {
+				return core.Result::Err(IoError::Errno(-1));
+			}
+		}
+	}
+	return core.Result::Err(IoError::Errno(-1));
+}
+
+pub fn input_read_line(self: &InputStream, timeout: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<String, IoError> {
+	val configured = ConfiguredInputStream(fd = self.fd, timeout = timeout, max_line_bytes = max_line_bytes);
+	return configured_input_read_line(&configured);
+}
+
+fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val len = buf.len;
+	val deadline = _deadline_from_timeout(timeout);
+	while true {
+		val n = thread.io_write(self.fd, ptr, len);
+		if n >= 0 {
+			return core.Result::Ok(n);
+		}
+		val err = thread.io_errno();
+		if err == IO_EINTR {
+			continue;
+		}
+		if err == IO_EAGAIN {
+			if deadline <= 0 {
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+			}
+			val remaining = _remaining_ms(deadline);
+			if remaining <= 0 {
+				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {

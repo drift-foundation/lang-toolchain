@@ -22,7 +22,7 @@ void drift_console_writeln(DriftString s) {
 	fputc('\n', stdout);
 }
 
-void drift_console_eprintln(DriftString s) {
+void drift_console_eprint(DriftString s) {
 	if (s.len > 0 && s.data != NULL) {
 		size_t n = (size_t)s.len;
 		size_t written = fwrite(s.data, 1, n, stderr);
@@ -30,6 +30,10 @@ void drift_console_eprintln(DriftString s) {
 			abort();
 		}
 	}
-	fputc('\n', stderr);
 	drift_string_release(s);
+}
+
+void drift_console_eprintln(DriftString s) {
+	drift_console_eprint(s);
+	fputc('\n', stderr);
 }

@@ -27,11 +27,12 @@ def test_array_dup_string_uses_retain(tmp_path: Path) -> None:
 	src.write_text(
 		"""
 module main
+import std.console as console;
 
 fn main() nothrow -> Int {
 	val xs: Array<String> = ["a", "b"];
 	val ys = xs.dup();
-	println(ys[0]);
+	console.println(ys[0]);
 	return 0;
 }
 """
@@ -55,7 +56,7 @@ fn main() nothrow -> Int {
 	assert not checked.diagnostics
 	main_ir = _extract_llvm_function(ir, "main")
 	assert "drift_string_retain" in ir
-	assert "drift_string_from_utf8_bytes" not in ir
+	assert "drift_string_from_utf8_bytes" not in main_ir
 	assert "llvm.memcpy" not in main_ir
 
 

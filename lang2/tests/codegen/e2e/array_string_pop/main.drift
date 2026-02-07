@@ -1,10 +1,12 @@
+import std.console as console;
+
 fn main() nothrow -> Int{
 	var xs = ["a", "b"];
 	val popped = xs.pop();
 	val _ = match popped {
-		Some(v) => { println(v); 0 },
-		None => { println("none"); 0 },
+		Some(v) => { console.println(v); 0 },
+		None => { console.println("none"); 0 },
 	};
-	println(xs[0]);
+	console.println(xs[0]);
 	return 0;
 }

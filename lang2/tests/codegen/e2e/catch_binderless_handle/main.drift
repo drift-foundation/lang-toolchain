@@ -1,5 +1,7 @@
 module main
 
+import std.console as console;
+
 exception E()
 
 fn fail() -> Int {
@@ -8,7 +10,7 @@ fn fail() -> Int {
 
 fn main() nothrow -> Int{
     try fail() catch {
-        print("handled");
+        console.print("handled");
     }
     return 0;
 }

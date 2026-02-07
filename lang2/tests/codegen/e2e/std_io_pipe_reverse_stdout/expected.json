@@ -1,0 +1,7 @@
+{
+  "description": "e2e: stdin pipe reverse to stdout",
+  "stdin": "ABCD\n",
+  "exit_code": 0,
+  "stdout": "DCBA",
+  "stderr": ""
+}

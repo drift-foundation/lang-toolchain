@@ -1,0 +1,103 @@
+module std.console
+
+import std.core as core;
+import std.io as io;
+import std.concurrent as conc;
+
+export {
+	print,
+	println,
+	eprint,
+	eprintln
+};
+
+pub const CONSOLE_CHUNK_BYTES: Int = 4096;
+pub const CONSOLE_TIMEOUT_MS: Int = 60000;
+
+fn _write_timeout() nothrow -> conc.Duration {
+	return conc.Duration(millis = CONSOLE_TIMEOUT_MS);
+}
+
+fn _min(a: Int, b: Int) nothrow -> Int {
+	if a < b {
+		return a;
+	}
+	return b;
+}
+
+fn _fill_chunk(dst: &mut io.Buffer, text: &String, start: Int, total_len: Int, with_newline: Bool) nothrow -> Void {
+	var i = 0;
+	val cap = io.buffer_capacity_mut(dst);
+	while i < cap {
+		val absolute = start + i;
+		if absolute < total_len {
+			val b = core.string_byte_at(text, absolute);
+			io.buffer_write(dst, i, b);
+		} else {
+			if with_newline and absolute == total_len {
+				io.buffer_write(dst, i, cast<Byte>(10));
+			}
+		}
+		i += 1;
+	}
+}
+
+fn _write_all_stream(out: &io.ConfiguredOutputStream, text: String, with_newline: Bool) nothrow -> Void {
+	val text_len = cast<Int>(byte_length(text));
+	val newline_len = with_newline ? 1 : 0;
+	val total_len = text_len + newline_len;
+	var offset = 0;
+	while offset < total_len {
+		val rem = total_len - offset;
+		val chunk_len = _min(rem, CONSOLE_CHUNK_BYTES);
+		var chunk = io.buffer(chunk_len);
+		_fill_chunk(&mut chunk, &text, offset, text_len, with_newline);
+		val r = out.write(&chunk);
+		match r {
+			Ok(n) => {
+				if n <= 0 {
+					return;
+				}
+				offset += n;
+			},
+			Err(_) => {
+				return;
+			},
+			default => {
+				return;
+			}
+		}
+	}
+}
+
+pub fn print(text: String) nothrow -> Void {
+	val b = io.stdout_builder();
+	val b2 = b.timeout(_write_timeout());
+	val out = b2.build();
+	_write_all_stream(&out, text, false);
+	return;
+}
+
+pub fn println(text: String) nothrow -> Void {
+	val b = io.stdout_builder();
+	val b2 = b.timeout(_write_timeout());
+	val out = b2.build();
+	_write_all_stream(&out, text, true);
+	return;
+}
+
+pub fn eprint(text: String) nothrow -> Void {
+	val b = io.stderr_builder();
+	val b2 = b.timeout(_write_timeout());
+	val err = b2.build();
+	_write_all_stream(&err, text, false);
+	return;
+}
+
+pub fn eprintln(text: String) nothrow -> Void {
+	val b = io.stderr_builder();
+	val b2 = b.timeout(_write_timeout());
+	val err = b2.build();
+	_write_all_stream(&err, text, true);
+	return;
+}

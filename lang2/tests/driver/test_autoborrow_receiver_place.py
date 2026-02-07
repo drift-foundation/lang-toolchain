@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -55,5 +57,51 @@ fn main() nothrow -> Int {
 	paths = sorted(mod_root.rglob("*.drift"))
 	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
 	assert rc != 0
+	diags = payload.get("diagnostics", [])
+	assert any("borrow requires an addressable place" in str(d.get("message", "")) for d in diags)
+
+
+def test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion(tmp_path: Path) -> None:
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main
+
+struct Builder { x: Int }
+
+implement Builder {
+	pub fn step(self: &Builder) nothrow -> Builder {
+		return Builder(x = self.x);
+	}
+
+	pub fn finish(self: &mut Builder) nothrow -> Int {
+		self.x = self.x + 1;
+		return self.x;
+	}
+}
+
+fn make() nothrow -> Builder {
+	return Builder(x = 0);
+}
+
+fn main() nothrow -> Int {
+	val _ = make().step().step().finish();
+	return 0;
+}
+""".lstrip(),
+	)
+	main_path = mod_root / "main" / "main.drift"
+	cmd = [sys.executable, "-m", "lang2.driftc", "-M", str(mod_root), str(main_path), "--dev", "--json"]
+	root = stdlib_root()
+	if root:
+		cmd.insert(3, "--stdlib-root")
+		cmd.insert(4, str(root))
+	try:
+		res = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=20)
+	except subprocess.TimeoutExpired:
+		pytest.fail("driftc compile timed out (possible resolver recursion on rvalue mut receiver chain)")
+	payload = json.loads(res.stdout) if res.stdout.strip() else {}
+	assert res.returncode != 0
 	diags = payload.get("diagnostics", [])
 	assert any("borrow requires an addressable place" in str(d.get("message", "")) for d in diags)

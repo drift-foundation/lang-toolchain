@@ -1309,7 +1309,15 @@ class BorrowChecker:
 		if isinstance(expr, H.HBorrow):
 			place = place_from_expr(expr.subject, base_lookup=self.base_lookup)
 			if place is None:
-				self._diagnostic("cannot borrow from a non-lvalue expression", getattr(expr, "loc", Span()))
+				if expr.is_mut:
+					self._diagnostic("cannot borrow from a non-lvalue expression", getattr(expr, "loc", Span()))
+					return
+				if not bool(getattr(expr, "allow_rvalue", False)):
+					self._diagnostic("cannot borrow from a non-lvalue expression", getattr(expr, "loc", Span()))
+					return
+				# Phase 1: compiler-synthesized shared borrow of rvalue receivers is
+				# lowered via temporary materialization in MIR; no place-loan to track.
+				self._visit_expr(state, expr.subject, consume=False, escapes=False)
 				return
 			self._borrow_place(
 				state,
@@ -1682,7 +1690,12 @@ class BorrowChecker:
 					if isinstance(stmt.value, H.HBorrow):
 						place = place_from_expr(stmt.value.subject, base_lookup=self.base_lookup)
 						if place is None:
-							self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
+							if stmt.value.is_mut:
+								self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
+							elif bool(getattr(stmt.value, "allow_rvalue", False)):
+								self._visit_expr(state, stmt.value.subject, consume=False, escapes=False)
+							else:
+								self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
 						else:
 							self._borrow_place(
 								state,
@@ -1722,7 +1735,12 @@ class BorrowChecker:
 								state.loans = {ln for ln in state.loans if ln.ref_binding_id != bid}
 								place = place_from_expr(stmt.value.subject, base_lookup=self.base_lookup)
 								if place is None:
-									self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
+									if stmt.value.is_mut:
+										self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
+									elif bool(getattr(stmt.value, "allow_rvalue", False)):
+										self._visit_expr(state, stmt.value.subject, consume=False, escapes=False)
+									else:
+										self._diagnostic("cannot borrow from a non-lvalue expression", getattr(stmt.value, "loc", Span()))
 								else:
 									self._borrow_place(
 										state,

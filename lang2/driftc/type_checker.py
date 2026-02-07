@@ -1136,8 +1136,8 @@ class TypeChecker:
 				return place_from_expr(expr.subject, base_lookup=_receiver_base_lookup)
 			return place_from_expr(expr, base_lookup=_receiver_base_lookup)
 
-		def _receiver_can_mut_borrow(expr: H.HExpr, place: Optional[Place]) -> bool:
-			ref_ty = type_expr(expr, used_as_value=False)
+		def _receiver_can_mut_borrow(expr: H.HExpr, place: Optional[Place], recv_ty_hint: Optional[TypeId] = None) -> bool:
+			ref_ty = recv_ty_hint if recv_ty_hint is not None else type_expr(expr, used_as_value=False)
 			if ref_ty is not None:
 				ref_def = self.type_table.get(ref_ty)
 				if ref_def.kind is TypeKind.REF and bool(ref_def.ref_mut):
@@ -1243,6 +1243,9 @@ class TypeChecker:
 				return None
 			if not receiver_is_lvalue:
 				if self_mode is SelfMode.SELF_BY_VALUE:
+					return 1
+				if self_mode is SelfMode.SELF_BY_REF:
+					# Phase 1: allow auto-borrow of rvalue receivers for &self methods.
 					return 0
 				return -1
 			if self_mode is SelfMode.SELF_BY_REF:
@@ -1268,9 +1271,7 @@ class TypeChecker:
 			if self_mode is SelfMode.SELF_BY_REF:
 				if td_recv.kind is TypeKind.REF and not td_recv.ref_mut:
 					return recv_ty
-				if receiver_is_lvalue:
-					return self.type_table.ensure_ref(recv_ty)
-				return recv_ty
+				return self.type_table.ensure_ref(recv_ty)
 			if self_mode is SelfMode.SELF_BY_REF_MUT:
 				if td_recv.kind is TypeKind.REF and td_recv.ref_mut:
 					return recv_ty
@@ -1447,7 +1448,7 @@ class TypeChecker:
 							)
 							had_error = True
 							continue
-						borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False)
+						borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)
 						_assign_node_id(borrow_expr)
 						args[idx] = borrow_expr
 						updated_types[idx] = type_expr(borrow_expr)
@@ -1510,7 +1511,7 @@ class TypeChecker:
 						)
 						had_error = True
 						continue
-					borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False)
+					borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)
 					_assign_node_id(borrow_expr)
 					args[idx] = borrow_expr
 					updated_types[idx] = type_expr(borrow_expr)
@@ -6445,9 +6446,35 @@ class TypeChecker:
 							method_res.resolution,
 						)
 				if method_res.call_info is not None:
+					if method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
+						decl_self_mode = getattr(method_res.resolution.decl, "self_mode", None)
+						autoborrow_mode = getattr(method_res.resolution, "receiver_autoborrow", None)
+						if decl_self_mode is SelfMode.SELF_BY_REF and autoborrow_mode is None:
+							recv_place = place_expr_from_lvalue_expr(expr.receiver)
+							if recv_place is None and not isinstance(expr.receiver, H.HBorrow):
+								diagnostics.append(
+									_tc_diag(
+										message="borrow requires an addressable place; bind to a local first",
+										severity="error",
+										phase="typecheck",
+										span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+									)
+								)
 					if method_res.resolution is not None and getattr(method_res.resolution, "receiver_autoborrow", None) is not None:
 						receiver_mode = method_res.resolution.receiver_autoborrow
 						is_mut = receiver_mode is SelfMode.SELF_BY_REF_MUT
+						if not is_mut:
+							recv_place_expr = place_expr_from_lvalue_expr(expr.receiver)
+							allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+							if recv_place_expr is None and not allow_rvalue_receiver and not isinstance(expr.receiver, H.HBorrow):
+								diagnostics.append(
+									_tc_diag(
+										message="borrow requires an addressable place; bind to a local first",
+										severity="error",
+										phase="typecheck",
+										span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+									)
+								)
 						recv_ty = type_expr(expr.receiver, used_as_value=False)
 						if recv_ty is not None:
 							ref_info = _ref_param_info(recv_ty)
@@ -6472,10 +6499,21 @@ class TypeChecker:
 											)
 										)
 									else:
-										borrow_expr = H.HBorrow(subject=expr.receiver, is_mut=False)
-										_assign_node_id(borrow_expr)
-										expr.receiver = borrow_expr
-										type_expr(borrow_expr)
+										allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+										if allow_rvalue_receiver:
+											borrow_expr = H.HBorrow(subject=expr.receiver, is_mut=False, allow_rvalue=True)
+											_assign_node_id(borrow_expr)
+											expr.receiver = borrow_expr
+											type_expr(borrow_expr)
+										else:
+											diagnostics.append(
+												_tc_diag(
+													message="borrow requires an addressable place; bind to a local first",
+													severity="error",
+													phase="typecheck",
+													span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+												)
+											)
 								else:
 									_assign_place_expr_ids(place_expr)
 									borrow_expr = H.HBorrow(subject=place_expr, is_mut=is_mut)

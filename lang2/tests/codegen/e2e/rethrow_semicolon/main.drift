@@ -1,5 +1,7 @@
 module main
 
+import std.console as console;
+
 exception E()
 
 fn run() -> Int {
@@ -10,7 +12,7 @@ fn run() -> Int {
             rethrow;
         }
     } catch err {
-        print("ok");
+        console.print("ok");
     }
     return 0;
 }

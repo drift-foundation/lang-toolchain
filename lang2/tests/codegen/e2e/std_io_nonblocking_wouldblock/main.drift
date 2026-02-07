@@ -8,15 +8,17 @@ pub fn main() nothrow -> Int {
 	val fd = thread.test_eventfd_create();
 	if fd <= 0 { return 9; }
 	val f = io.file_from_fd(fd);
+	val c = io.configure_file(&f, conc.Duration(millis = 0));
 	var buf = io.buffer(8);
-	val t = conc.Duration(millis = 0);
-	val r = io.read(&f, &mut buf, t);
+	val r = c.read(&mut buf);
 	match r {
 		Ok(_) => { return 2; },
 		Err(e) => {
 			match e {
-				WouldBlock => { return 0; },
-				Errno(_) => { return 3; },
+				Errno(code) => {
+					if io.io_is_would_block(code) { return 0; }
+					return 3;
+				},
 				default => { return 4; }
 			}
 		},

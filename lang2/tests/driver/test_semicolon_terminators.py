@@ -77,11 +77,12 @@ def test_value_block_allows_trailing_expr_without_semicolon(
 module main
 
 exception Boom()
+import std.console as console;
 
 fn foo() -> Int { throw Boom(); }
 
 fn main() nothrow -> Int {
-	val x: Int = try foo() catch { println("x"); 0 };
+	val x: Int = try foo() catch { console.println("x"); 0 };
 	return x;
 }
 """.lstrip(),
@@ -146,6 +147,7 @@ variant Flag {
 	On,
 	Off,
 }
+import std.console as console;
 
 fn main() nothrow -> Int {
 	val f: Flag = On();
@@ -154,8 +156,8 @@ fn main() nothrow -> Int {
 		Off => { 20 },
 	};
 	match f {
-		On => { println("on"); },
-		Off => { println("off"); },
+		On => { console.println("on"); },
+		Off => { console.println("off"); },
 	}
 	return y;
 }
@@ -209,12 +211,13 @@ variant Flag {
 	On,
 	Off,
 }
+import std.console as console;
 
 fn main() nothrow -> Int {
 	val f: Flag = On();
 	match f {
-		On => { println("on"); },
-		Off => { println("off"); },
+		On => { console.println("on"); },
+		Off => { console.println("off"); },
 	};
 	return 0;
 }

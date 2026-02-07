@@ -10,9 +10,10 @@ def test_fstring_unbalanced_brace_reports_diagnostic(tmp_path: Path) -> None:
 	src.write_text(
 		"""
 module m
+import std.console as console;
 
 fn main() -> Int {
-	println(f"{");
+	console.println(f"{");
 	return 0;
 }
 """
@@ -27,9 +28,10 @@ def test_fstring_empty_hole_reports_diagnostic(tmp_path: Path) -> None:
 	src.write_text(
 		"""
 module m
+import std.console as console;
 
 fn main() -> Int {
-	println(f"{}");
+	console.println(f"{}");
 	return 0;
 }
 """
@@ -44,9 +46,10 @@ def test_fstring_nested_braces_in_spec_reports_diagnostic(tmp_path: Path) -> Non
 	src.write_text(
 		"""
 module m
+import std.console as console;
 
 fn main() -> Int {
-	println(f"{1:{x}}");
+	console.println(f"{1:{x}}");
 	return 0;
 }
 """

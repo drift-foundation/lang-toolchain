@@ -1,0 +1,149 @@
+module m
+
+import std.io as io;
+import std.concurrent as conc;
+import std.core as core;
+
+fn _write_buf(path: String, buf: &io.Buffer, t: conc.Duration) nothrow -> Int {
+	val w = io.file_builder(path).read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	match w {
+		Ok(f) => {
+			val wr = f.write(buf);
+			match wr {
+				Ok(_) => { },
+				Err(_) => { return 1; },
+				default => { return 2; }
+			}
+			val c = f.close();
+			match c {
+				Ok(_) => { return 0; },
+				Err(_) => { return 3; },
+				default => { return 4; }
+			}
+		},
+		Err(_) => { return 5; },
+		default => { return 6; }
+	}
+}
+
+fn _truncate_empty(path: String, t: conc.Duration) nothrow -> Int {
+	val w = io.file_builder(path).read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	match w {
+		Ok(f) => {
+			val c = f.close();
+			match c {
+				Ok(_) => { return 0; },
+				Err(_) => { return 1; },
+				default => { return 2; }
+			}
+		},
+		Err(_) => { return 3; },
+		default => { return 4; }
+	}
+}
+
+fn _open_input(path: String, t: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<io.ConfiguredInputStream, io.IoError> {
+	val r = io.file_builder(path).read(true).write(false).timeout(t).build();
+	match r {
+		Ok(f) => {
+			return core.Result::Ok(io.configured_input_from_file(&f, max_line_bytes));
+		},
+		Err(e) => { return core.Result::Err(e); },
+		default => { return core.Result::Err(io.IoError::Errno(-1)); }
+	}
+}
+
+fn _expect_eof(r: core.Result<String, io.IoError>) nothrow -> Bool {
+	match r {
+		Err(e) => { return io.is_eof_error(e); },
+		default => { return false; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 1000);
+
+	// Case 1: consecutive newlines => "", "", EOF
+	var c1 = io.buffer(2);
+	io.buffer_write(&mut c1, 0, cast<Byte>(10));
+	io.buffer_write(&mut c1, 1, cast<Byte>(10));
+	if _write_buf("io_line_matrix_c1.bin", &c1, t) != 0 { return 10; }
+	val r1 = _open_input("io_line_matrix_c1.bin", t, 128);
+	match r1 {
+		Ok(input1) => {
+			match input1.read_line() {
+				Ok(s) => { if s != "" { return 11; } },
+				default => { return 12; }
+			}
+			match input1.read_line() {
+				Ok(s) => { if s != "" { return 13; } },
+				default => { return 14; }
+			}
+			if not _expect_eof(input1.read_line()) { return 15; }
+		},
+		Err(_) => { return 16; },
+		default => { return 17; }
+	}
+
+	// Case 2: empty input => EOF
+	if _truncate_empty("io_line_matrix_c2.bin", t) != 0 { return 20; }
+	val r2 = _open_input("io_line_matrix_c2.bin", t, 128);
+	match r2 {
+		Ok(input2) => {
+			if not _expect_eof(input2.read_line()) { return 21; }
+		},
+		Err(_) => { return 22; },
+		default => { return 23; }
+	}
+
+	// Case 3: long line over cap => line-too-long error
+	var c3 = io.buffer(5);
+	io.buffer_write(&mut c3, 0, cast<Byte>(97));
+	io.buffer_write(&mut c3, 1, cast<Byte>(98));
+	io.buffer_write(&mut c3, 2, cast<Byte>(99));
+	io.buffer_write(&mut c3, 3, cast<Byte>(100));
+	io.buffer_write(&mut c3, 4, cast<Byte>(10));
+	if _write_buf("io_line_matrix_c3.bin", &c3, t) != 0 { return 30; }
+	val r3 = _open_input("io_line_matrix_c3.bin", t, 3);
+	match r3 {
+		Ok(input3) => {
+			match input3.read_line() {
+				Err(e) => {
+					if not io.is_line_too_long_error(e) { return 31; }
+				},
+				default => { return 32; }
+			}
+		},
+		Err(_) => { return 33; },
+		default => { return 34; }
+	}
+
+	// Case 4: mixed newline/EOF boundaries => "abc", "xyz", EOF
+	var c4 = io.buffer(7);
+	io.buffer_write(&mut c4, 0, cast<Byte>(97));
+	io.buffer_write(&mut c4, 1, cast<Byte>(98));
+	io.buffer_write(&mut c4, 2, cast<Byte>(99));
+	io.buffer_write(&mut c4, 3, cast<Byte>(10));
+	io.buffer_write(&mut c4, 4, cast<Byte>(120));
+	io.buffer_write(&mut c4, 5, cast<Byte>(121));
+	io.buffer_write(&mut c4, 6, cast<Byte>(122));
+	if _write_buf("io_line_matrix_c4.bin", &c4, t) != 0 { return 40; }
+	val r4 = _open_input("io_line_matrix_c4.bin", t, 128);
+	match r4 {
+		Ok(input4) => {
+			match input4.read_line() {
+				Ok(s) => { if s != "abc" { return 41; } },
+				default => { return 42; }
+			}
+			match input4.read_line() {
+				Ok(s) => { if s != "xyz" { return 43; } },
+				default => { return 44; }
+			}
+			if not _expect_eof(input4.read_line()) { return 45; }
+		},
+		Err(_) => { return 46; },
+		default => { return 47; }
+	}
+
+	return 0;
+}

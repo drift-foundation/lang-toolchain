@@ -1,5 +1,7 @@
 module m
 
+import std.console as console;
+
 exception Boom()
 
 fn maybe_fail(flag: Int) -> Void {
@@ -14,19 +16,19 @@ fn main() nothrow -> Int{
 	try {
 		maybe_fail(0);
 	} catch err {
-		println("unexpected");
+		console.println("unexpected");
 		return 2;
 	}
-	println("ok");
+	console.println("ok");
 
 	// Error path.
 	try {
 		maybe_fail(1);
 	} catch err {
-		println("err");
+		console.println("err");
 		return 1;
 	}
 
-	println("should-not-reach");
+	console.println("should-not-reach");
 	return 0;
 }

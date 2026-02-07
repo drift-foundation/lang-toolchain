@@ -1,0 +1,21 @@
+module m
+
+import std.io as io;
+
+pub fn main() nothrow -> Int {
+	val eof = io.io_is_eof(io.IO_ERR_EOF);
+	val long = io.io_is_line_too_long(io.IO_ERR_LINE_TOO_LONG);
+	val wb = io.io_is_would_block(io.IO_ERR_WOULD_BLOCK);
+	if not eof { return 2; }
+	if not long { return 3; }
+	if not wb { return 6; }
+	val wrong = io.io_is_eof(io.IO_ERR_LINE_TOO_LONG);
+	if wrong { return 4; }
+	val e = io.IoError::Errno(io.IO_ERR_LINE_TOO_LONG);
+	if not io.is_line_too_long_error(e) { return 5; }
+	val wb_err = io.IoError::Errno(io.IO_ERR_WOULD_BLOCK);
+	if not io.is_would_block_error(wb_err) { return 7; }
+	val eof_err = io.IoError::Errno(io.IO_ERR_EOF);
+	if not io.is_eof_error(eof_err) { return 8; }
+	return 0;
+}

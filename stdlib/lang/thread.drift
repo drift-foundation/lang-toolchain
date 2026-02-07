@@ -36,6 +36,11 @@ export {
 	io_read,
 	io_write,
 	io_errno,
+	io_set_nonblocking,
+	console_write,
+	console_writeln,
+	console_eprint,
+	console_eprintln,
 	net_listen,
 	net_accept,
 	net_connect,
@@ -84,6 +89,11 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn io_read(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn io_write(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn io_errno() nothrow -> Int;
+@intrinsic pub fn io_set_nonblocking(fd: Int) nothrow -> Int;
+@intrinsic pub fn console_write(text: String) nothrow -> Void;
+@intrinsic pub fn console_writeln(text: String) nothrow -> Void;
+@intrinsic pub fn console_eprint(text: String) nothrow -> Void;
+@intrinsic pub fn console_eprintln(text: String) nothrow -> Void;
 @intrinsic pub fn net_listen(ip: &String, port: Int) nothrow -> Int;
 @intrinsic pub fn net_accept(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_connect(ip: &String, port: Int) nothrow -> Int;

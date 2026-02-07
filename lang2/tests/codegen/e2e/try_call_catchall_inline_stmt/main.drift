@@ -1,5 +1,7 @@
 module m
 
+import std.console as console;
+
 exception Boom()
 
 fn foo() -> Int {
@@ -8,7 +10,7 @@ fn foo() -> Int {
 
 fn main() nothrow -> Int{
 	try foo() catch {
-		print("caught");
+		console.print("caught");
 	}
 	return 0;
 }

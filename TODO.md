@@ -6,7 +6,10 @@
 - Keep expanding test coverage as features land (print, more negative cases).
 
 [I/O]
-- Move `print`/`println`/`eprint`/`eprintln` from the prelude hack into real `std.runtime` APIs (no lang.core special-casing).
+- Move `print`/`println`/`eprint`/`eprintln` from the prelude hack into real `std.console` / `std.io` APIs (no lang.core special-casing).
+
+[Logging]
+- Add an MVP logging library with thread-safe logging semantics (safe multi-threaded producers, deterministic sink ownership/serialization).
 
 [FFI / ABI]
 - Document “current ABI intent” now; freeze later:

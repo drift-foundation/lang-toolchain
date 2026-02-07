@@ -1,0 +1,88 @@
+module m
+
+import std.io as io;
+import std.concurrent as conc;
+
+pub const CHUNK_BYTES: Int = 4096;
+pub const CHUNK_COUNT: Int = 64;
+pub const TOTAL_BYTES: Int = 262144;
+
+fn _byte_at(offset: Int) nothrow -> Byte {
+	return cast<Byte>(offset % 251);
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 2000);
+	val w = io.file_builder("io_chunked_large.bin").read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	match w {
+		Ok(fw) => {
+			val wfile = move fw;
+			var chunk = 0;
+			while chunk < CHUNK_COUNT {
+				var buf = io.buffer(CHUNK_BYTES);
+				var i = 0;
+				val base = chunk * CHUNK_BYTES;
+				while i < CHUNK_BYTES {
+					io.buffer_write(&mut buf, i, _byte_at(base + i));
+					i += 1;
+				}
+				val wr = wfile.write(&buf);
+				val wn = match wr {
+					Ok(n) => { n },
+					Err(e) => { io.is_would_block_error(e) ? -3 : -4 },
+					default => { -5 }
+				};
+				if wn == -3 { return 3; }
+				if wn == -4 { return 4; }
+				if wn == -5 { return 5; }
+				if wn != CHUNK_BYTES { return 2; }
+				chunk += 1;
+			}
+			val cw = wfile.close();
+			match cw {
+				Ok(_) => { },
+				default => { return 6; }
+			}
+		},
+		Err(_) => { return 7; },
+		default => { return 8; }
+	}
+
+	val r = io.file_builder("io_chunked_large.bin").read(true).write(false).timeout(t).build();
+	match r {
+		Ok(fr) => {
+			val rfile = move fr;
+			var total = 0;
+			var buf = io.buffer(CHUNK_BYTES);
+			while true {
+				val rr = rfile.read(&mut buf);
+				val n = match rr {
+					Ok(v) => { v },
+					Err(e) => { io.is_eof_error(e) ? -1 : (io.is_would_block_error(e) ? -10 : -11) },
+					default => { -12 }
+				};
+				if n == -1 { break; }
+				if n == -10 { return 10; }
+				if n == -11 { return 11; }
+				if n == -12 { return 12; }
+				if n == 0 { break; }
+				var i = 0;
+				while i < n {
+					val got = io.buffer_read(&mut buf, i);
+					val expected = _byte_at(total + i);
+					if got != expected { return 9; }
+					i += 1;
+				}
+				total += n;
+			}
+			if total != TOTAL_BYTES { return 13; }
+			val cr = rfile.close();
+			match cr {
+				Ok(_) => { return 0; },
+				default => { return 14; }
+			}
+		},
+		Err(_) => { return 15; },
+		default => { return 16; }
+	}
+}

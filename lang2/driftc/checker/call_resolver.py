@@ -1278,7 +1278,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			elem_ty = recv_def.param_types[0]
 			recv_place = _receiver_place(expr.receiver)
 			needs_mut = expr.method_name in ("push", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range_mut", "set", "pop")
-			if needs_mut and not _receiver_can_mut_borrow(expr.receiver, recv_place):
+			if needs_mut and not _receiver_can_mut_borrow(expr.receiver, recv_place, recv_ty):
 				diagnostics.append(_tc_diag(message=f"Array.{expr.method_name}() requires a mutable Array receiver", severity="error", span=getattr(expr, "loc", Span())))
 				return MethodCallResult(ctx.unknown_ty, None)
 			if expr.method_name == "get" and recv_place is None:
@@ -1509,7 +1509,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			recv_type_key = _normalize_type_key(type_key_from_typeid(ctx.type_table, receiver_nominal))
 		receiver_place = _receiver_place(expr.receiver)
 		receiver_is_lvalue = receiver_place is not None
-		receiver_can_mut_borrow = _receiver_can_mut_borrow(expr.receiver, receiver_place)
+		receiver_can_mut_borrow = _receiver_can_mut_borrow(expr.receiver, receiver_place, recv_ty)
 		recv_def_full = ctx.type_table.get(recv_ty)
 		recv_is_ref = recv_def_full.kind is TypeKind.REF
 		if receiver_is_type_param:
@@ -2135,9 +2135,15 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if not compat_ok:
 					continue
 				if needs_autoborrow is not None and not receiver_is_lvalue:
-					if isinstance(expr, H.HMethodCall):
-						had_autoborrow_place_error = True
-					continue
+					allow_rvalue_shared = (
+						needs_autoborrow is SelfMode.SELF_BY_REF
+						and isinstance(expr, H.HMethodCall)
+						and isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+					)
+					if needs_autoborrow is SelfMode.SELF_BY_REF_MUT or not allow_rvalue_shared:
+						if isinstance(expr, H.HMethodCall):
+							had_autoborrow_place_error = True
+						continue
 				if self_mode is None:
 					continue
 				wants_mut_ref = self_mode.name == "SELF_BY_REF_MUT"

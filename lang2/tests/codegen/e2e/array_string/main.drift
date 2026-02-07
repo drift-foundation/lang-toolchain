@@ -1,6 +1,8 @@
+import std.console as console;
+
 fn main() nothrow -> Int{
 	val msgs = ["hello", "world"];
 	val idx = 1;
-	println(msgs[idx]);
+	console.println(msgs[idx]);
 	return 0;
 }

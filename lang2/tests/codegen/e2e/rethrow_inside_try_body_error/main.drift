@@ -1,10 +1,12 @@
 module m
 
+import std.console as console;
+
 fn main() nothrow -> Int{
     try {
         rethrow;
     } catch err {
-        print("caught");
+        console.print("caught");
     }
     return 0;
 }

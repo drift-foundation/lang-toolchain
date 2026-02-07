@@ -1,8 +1,10 @@
 module m
 
+import std.console as console;
+
 fn main() nothrow -> Int{
 	val xs = [1, 2, 3];
-	println(f"{xs}");
+	console.println(f"{xs}");
 	return 0;
 }
 

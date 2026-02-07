@@ -1,0 +1,17 @@
+module m
+
+import std.io as io;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val input = io.stdin_builder().max_line_bytes(256).timeout(conc.Duration(millis = 10)).build();
+	if false {
+		val r = input.read_line();
+		match r {
+			Ok(_) => { return 7; },
+			Err(_) => { return 8; },
+			default => { return 9; }
+		}
+	}
+	return 0;
+}

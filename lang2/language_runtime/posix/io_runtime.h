@@ -10,6 +10,7 @@ int64_t drift_io_close(int64_t fd);
 int64_t drift_io_read(int64_t fd, void *buf, int64_t len);
 int64_t drift_io_write(int64_t fd, const void *buf, int64_t len);
 int64_t drift_io_errno(void);
+int64_t drift_io_set_nonblocking(int64_t fd);
 int64_t drift_net_listen(DriftString *ip, int64_t port);
 int64_t drift_net_accept(int64_t fd);
 int64_t drift_net_connect(DriftString *ip, int64_t port);

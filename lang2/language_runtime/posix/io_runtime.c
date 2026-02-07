@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <string.h>
 
+static int drift_set_nonblocking(int fd);
+
 int64_t drift_io_open(DriftString path, int64_t flags, int64_t mode) {
 	char *cstr = drift_string_to_cstr(path);
 	int fd = open(cstr, (int)flags, (mode_t)mode);
@@ -35,6 +37,10 @@ int64_t drift_io_write(int64_t fd, const void *buf, int64_t len) {
 
 int64_t drift_io_errno(void) {
 	return (int64_t)errno;
+}
+
+int64_t drift_io_set_nonblocking(int64_t fd) {
+	return (int64_t)drift_set_nonblocking((int)fd);
 }
 
 static int drift_set_nonblocking(int fd) {
