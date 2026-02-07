@@ -324,6 +324,8 @@ class AstToHIR:
 			declared_type_expr=getattr(stmt, "type_expr", None),
 			binding_id=bid,
 			is_mutable=bool(getattr(stmt, "mutable", False)),
+			capture=bool(getattr(stmt, "capture", False)),
+			capture_alias=getattr(stmt, "capture_alias", None),
 			loc=self._as_span(getattr(stmt, "loc", None)),
 		)
 

@@ -869,6 +869,16 @@ class ErrorAddAttrDV(MInstr):
 
 
 @dataclass
+class ErrorAddLocalDV(MInstr):
+	"""error.ctx_frames[frame].locals[key] = dv (append-style in runtime)."""
+
+	error: ValueId
+	frame: ValueId
+	key: ValueId
+	value: ValueId
+
+
+@dataclass
 class ConstructResultOk(MInstr):
 	"""
 	Construct FnResult.Ok(value).
@@ -924,6 +934,18 @@ class ErrorAttrsGetDV(MInstr):
 
 	dest: ValueId
 	error: ValueId
+	key: ValueId
+
+
+@dataclass
+class ErrorCapturesGetDV(MInstr):
+	"""
+	dest = error.captures[frame][key] (DiagnosticValue lookup; missing yields DV_MISSING).
+	"""
+
+	dest: ValueId
+	error: ValueId
+	frame: ValueId
 	key: ValueId
 
 
@@ -1174,12 +1196,14 @@ __all__ = [
 	"ConstructDV",
 	"ConstructError",
 	"ErrorAddAttrDV",
+	"ErrorAddLocalDV",
 	"ConstructResultOk",
 	"ConstructResultErr",
 	"ResultIsErr",
 	"ResultOk",
 	"ResultErr",
 	"ErrorAttrsGetDV",
+	"ErrorCapturesGetDV",
 	"DVAsInt",
 	"DVAsBool",
 	"DVAsString",

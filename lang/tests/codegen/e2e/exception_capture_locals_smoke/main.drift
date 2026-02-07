@@ -1,0 +1,13 @@
+module m
+
+exception E(code: Int)
+
+fn fail(x: Int) -> Int {
+	val ^input: Int = x;
+	val ^note: String as "pipeline.note" = "captured";
+	throw E(code = x);
+}
+
+fn main() nothrow -> Int {
+	return try fail(7) catch E(_e) { 0 } catch { 1 };
+}

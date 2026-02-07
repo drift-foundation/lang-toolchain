@@ -1,0 +1,14 @@
+module m
+
+exception E()
+
+struct S { x: Int }
+
+fn fail() -> Int {
+	val ^s = S(x = 1);
+	throw E();
+}
+
+fn main() nothrow -> Int {
+	return try fail() catch { 0 };
+}

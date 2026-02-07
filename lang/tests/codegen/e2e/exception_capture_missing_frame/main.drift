@@ -1,0 +1,22 @@
+module m
+
+exception E(code: Int)
+
+fn fail(x: Int) -> Int {
+	val ^input: Int = x;
+	throw E(code = x);
+}
+
+fn inspect(e: E) nothrow -> Int {
+	val dv = e.captures["m::no_such_frame"]["input"];
+	val oi = dv.as_int();
+	match oi {
+		Some(_v) => { return 1; },
+		None => { return 0; },
+		default => { return 2; }
+	}
+}
+
+fn main() nothrow -> Int {
+	return try fail(7) catch E(e) { inspect(e) } catch { 3 };
+}

@@ -1,3 +1,13 @@
+## 2026-02-07 – Exception captures API read path + e2e value coverage
+- Implemented public capture lookup path for exceptions via `.captures[frame][key]`, lowered as a single non-throwing runtime lookup returning `DiagnosticValue` (`Missing` on unknown frame/key).
+- Added runtime accessor `__exc_captures_get_dv(...)` and compiler/codegen support (`ErrorCapturesGetDV`) for typed capture reads.
+- Fixed captured-local value loss in runtime ABI:
+  - `drift_error_add_local_dv` now takes `const DriftDiagnosticValue*` (pointer ABI), matching codegen emission and avoiding struct-by-value misclassification to `Missing`.
+- Added/updated e2e coverage:
+  - `exception_capture_locals_values` now validates real captured values (`Int`, `String`) and missing-key behavior.
+  - New `exception_capture_missing_frame` validates missing-frame lookup returns `DiagnosticValue::Missing`.
+  - Existing smoke and non-primitive rejection cases remain green.
+
 ## 2026-02-07 – Namespace migration + concurrency park/deadline regression fix
 - Repository namespace cleanup:
   - Moved active compiler/runtime tree from `lang2/` to `lang/`.

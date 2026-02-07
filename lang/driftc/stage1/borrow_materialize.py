@@ -77,6 +77,8 @@ class BorrowMaterializeRewriter:
 					declared_type_expr=stmt.declared_type_expr,
 					binding_id=stmt.binding_id,
 					is_mutable=stmt.is_mutable,
+					capture=bool(getattr(stmt, "capture", False)),
+					capture_alias=getattr(stmt, "capture_alias", None),
 					loc=stmt.loc,
 				)
 			]

@@ -123,6 +123,7 @@ from lang.driftc.stage2 import (
 	AssertLoc,
 	ConstructError,
 	ErrorAddAttrDV,
+	ErrorAddLocalDV,
 	ErrorEvent,
 	ConstructResultErr,
 	ConstructResultOk,
@@ -130,6 +131,7 @@ from lang.driftc.stage2 import (
 	DVAsInt,
 	DVAsString,
 	ErrorAttrsGetDV,
+	ErrorCapturesGetDV,
 	LoadLocal,
 	AddrOfLocal,
 	AddrOfArrayElem,
@@ -1075,6 +1077,7 @@ class LlvmModuleBuilder:
 			lines.extend(
 				[
 					f"declare void @__exc_attrs_get_dv({DRIFT_DV_TYPE}*, {DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
+					f"declare void @__exc_captures_get_dv({DRIFT_DV_TYPE}*, {DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_missing()",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_int({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i8)",
@@ -1093,6 +1096,7 @@ class LlvmModuleBuilder:
 					f"declare {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
 					f"declare void @drift_error_add_attr_dv({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
+					f"declare void @drift_error_add_local_dv({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
 					"",
 				]
 			)
@@ -2880,6 +2884,19 @@ class _FuncBuilder:
 				f"  call void @__exc_attrs_get_dv({DRIFT_DV_TYPE}* {tmp_ptr}, {DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val})"
 			)
 			self.lines.append(f"  {dest} = load {DRIFT_DV_TYPE}, {DRIFT_DV_TYPE}* {tmp_ptr}")
+		elif isinstance(instr, ErrorCapturesGetDV):
+			self.module.needs_dv_runtime = True
+			dest = self._map_value(instr.dest)
+			err_val = self._map_value(instr.error)
+			frame_val = self._map_value(instr.frame)
+			key_val = self._map_value(instr.key)
+			self.value_types[dest] = DRIFT_DV_TYPE
+			tmp_ptr = self._fresh("dvptr")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(
+				f"  call void @__exc_captures_get_dv({DRIFT_DV_TYPE}* {tmp_ptr}, {DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val})"
+			)
+			self.lines.append(f"  {dest} = load {DRIFT_DV_TYPE}, {DRIFT_DV_TYPE}* {tmp_ptr}")
 		elif isinstance(instr, ErrorAddAttrDV):
 			self.module.needs_error_runtime = True
 			self.module.needs_dv_runtime = True
@@ -2891,6 +2908,19 @@ class _FuncBuilder:
 			self.lines.append(f"  store {DRIFT_DV_TYPE} {val}, {DRIFT_DV_TYPE}* {tmp_ptr}")
 			self.lines.append(
 				f"  call void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val}, {DRIFT_DV_TYPE}* {tmp_ptr})"
+			)
+		elif isinstance(instr, ErrorAddLocalDV):
+			self.module.needs_error_runtime = True
+			self.module.needs_dv_runtime = True
+			err_val = self._map_value(instr.error)
+			frame_val = self._map_value(instr.frame)
+			key_val = self._map_value(instr.key)
+			val = self._map_value(instr.value)
+			tmp_ptr = self._fresh("dvptr")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {val}, {DRIFT_DV_TYPE}* {tmp_ptr}")
+			self.lines.append(
+				f"  call void @drift_error_add_local_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val}, {DRIFT_DV_TYPE}* {tmp_ptr})"
 			)
 		elif isinstance(instr, ErrorEvent):
 			dest = self._map_value(instr.dest)

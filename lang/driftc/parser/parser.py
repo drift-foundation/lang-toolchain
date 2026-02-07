@@ -2892,7 +2892,9 @@ def _build_postfix(tree: Tree) -> Expr:
 
 def _build_leading_dot(tree: Tree) -> Expr:
     # Base receiver placeholder with an initial attribute name from the DOT NAME.
-    name_tok = next(tok for tok in tree.children if isinstance(tok, Token) and tok.type == "NAME")
+    name_tok = next(
+        tok for tok in tree.children if isinstance(tok, Token) and tok.type in {"NAME", "CAPTURES"}
+    )
     base_loc = _loc(tree)
     expr: Expr = Attr(loc=_loc_from_token(name_tok), value=Placeholder(loc=base_loc), attr=name_tok.value)
     suffix_nodes = [child for child in tree.children if isinstance(child, Tree)]
@@ -2945,7 +2947,9 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
             expr = Call(loc=_loc(child), func=expr, args=args, kwargs=kwargs, type_args=type_args)
         elif child_name == "attr_suffix":
             attr_token = next(
-                token for token in child.children if isinstance(token, Token) and token.type == "NAME"
+                token
+                for token in child.children
+                if isinstance(token, Token) and token.type in {"NAME", "CAPTURES"}
             )
             expr = Attr(loc=_loc(child), value=expr, attr=attr_token.value)
         elif child_name == "arrow_suffix":

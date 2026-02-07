@@ -32,6 +32,16 @@
   - blocking I/O boundary helpers for std.io/std.net (park/unpark on would-block).
   - std.concurrent public API per virtual_threads_concurrency_spec.md (spawn/join/scope/sleep).
 
+[Error handling]
+- MVP-candidate: exception local captures (`^`)
+  - Implemented first slice:
+    - `val ^name` / `as "alias"` metadata is preserved through parser -> stage1 -> stage2.
+    - Throw lowering appends captured locals into error frame storage via `drift_error_add_local_dv`.
+    - Added regression coverage (driver IR + codegen e2e reject case for unsupported capture payloads).
+  - Pending for MVP promotion:
+    - Expand captures beyond primitives/`DiagnosticValue` to full `Diagnostic::to_diag` for non-primitive captured locals.
+    - Add user-facing inspection surface (or pin explicit no-surface policy) for `ctx_frames`.
+
 ## Post MVP
 [Concurrency]
 - Add ReentrantMutex (distinct from Mutex); define semantics and API surface.
@@ -44,7 +54,6 @@
 - `Array<String>.dup()` should require `String.dup()` and then lift `Array<T>.dup()` to `T: Dup` (out of MVP scope).
 
 [Error handling]
-  - Captures (`^`): implement unwind-time frame capture (locals per frame + frames list), runtime representation, lowering/codegen, and e2e tests.
   - DiagnosticValue payloads: design/implement a stable ownership/handle model for opaque/object/array payload kinds so they can be stored in `Error.attrs` without ABI/lifetime churn.
 
 [Variants]

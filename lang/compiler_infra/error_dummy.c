@@ -45,7 +45,7 @@ void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, con
     err->attr_count = new_count;
 }
 
-void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, struct DriftString key, struct DriftDiagnosticValue value) {
+void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, struct DriftString key, const struct DriftDiagnosticValue* value) {
     if (!err) return;
     size_t frame_idx = err->frame_count;
     for (size_t i = 0; i < err->frame_count; i++) {
@@ -69,7 +69,7 @@ void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, 
     struct DriftErrorLocal* new_locals = realloc(tgt->locals, new_lcount * sizeof(struct DriftErrorLocal));
     if (!new_locals) abort();
     new_locals[new_lcount - 1].key = key;
-    new_locals[new_lcount - 1].value = value;
+    new_locals[new_lcount - 1].value = value ? *value : drift_dv_missing();
     tgt->locals = new_locals;
     tgt->local_count = new_lcount;
 }
@@ -123,7 +123,36 @@ void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftErro
     if (!val) {
         return;
     }
-    *out = *val;
+	*out = *val;
+}
+
+void __exc_captures_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString frame, struct DriftString key) {
+    if (!out) return;
+    *out = drift_dv_missing();
+    if (!err) {
+        return;
+    }
+    for (size_t i = 0; i < err->frame_count; i++) {
+        const struct DriftCtxFrame* fr = &err->frames[i];
+        if (fr->name.len != frame.len) {
+            continue;
+        }
+        if (frame.len != 0 && memcmp(fr->name.data, frame.data, frame.len) != 0) {
+            continue;
+        }
+        for (size_t j = 0; j < fr->local_count; j++) {
+            const struct DriftErrorLocal* loc = &fr->locals[j];
+            if (loc->key.len != key.len) {
+                continue;
+            }
+            if (key.len != 0 && memcmp(loc->key.data, key.data, key.len) != 0) {
+                continue;
+            }
+            *out = loc->value;
+            return;
+        }
+        return;
+    }
 }
 
 struct DriftError* drift_error_new_with_payload(drift_error_code_t code, struct DriftString event_fqn, struct DriftString key, const struct DriftDiagnosticValue* payload) {

@@ -409,6 +409,8 @@ class LetStmt(Stmt):
 	value: Expr
 	type_expr: Optional[object] = None  # preserve parsed type annotation if present
 	mutable: bool = False
+	capture: bool = False
+	capture_alias: Optional[str] = None
 	loc: Optional[object] = None
 
 

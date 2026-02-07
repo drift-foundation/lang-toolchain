@@ -6724,6 +6724,15 @@ class TypeChecker:
 						)
 					)
 					return record_expr(expr, self._unknown)
+				if expr.name == "captures":
+					diagnostics.append(
+						_tc_diag(
+							message='captures must be indexed: use error.captures["frame"]["key"]',
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				# Struct fields: `x.field`
 				sub_def = self.type_table.get(sub_ty)
 				if sub_def.kind is TypeKind.REF and sub_def.param_types:
@@ -6798,6 +6807,84 @@ class TypeChecker:
 				return record_expr(expr, cur)
 
 			if isinstance(expr, H.HIndex):
+				# Special-case Error.captures["frame"]["key"] → DiagnosticValue.
+				if (
+					isinstance(expr.subject, H.HIndex)
+					and (
+						(
+							isinstance(expr.subject.subject, H.HField)
+							and expr.subject.subject.name == "captures"
+						)
+						or (
+							hasattr(H, "HPlaceExpr")
+							and isinstance(expr.subject.subject, getattr(H, "HPlaceExpr"))
+							and len(expr.subject.subject.projections) == 1
+							and isinstance(expr.subject.subject.projections[0], H.HPlaceField)
+							and expr.subject.subject.projections[0].name == "captures"
+						)
+					)
+				):
+					if isinstance(expr.subject.subject, H.HField):
+						err_base = expr.subject.subject.subject
+					else:
+						err_base = expr.subject.subject.base
+					sub_ty = type_expr(err_base, used_as_value=False)
+					frame_ty = type_expr(expr.subject.index)
+					key_ty = type_expr(expr.index)
+					sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is TypeKind.REF and sub_def.param_types:
+						sub_ty = sub_def.param_types[0]
+						sub_def = self.type_table.get(sub_ty)
+					if sub_def.kind is not TypeKind.ERROR:
+						diagnostics.append(
+							_tc_diag(
+								message="captures access is only supported on Error values",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if self.type_table.get(frame_ty).name != "String":
+						diagnostics.append(
+							_tc_diag(
+								message="Error.captures expects a String frame key",
+								severity="error",
+								span=getattr(expr.subject.index, "loc", Span()),
+							)
+						)
+					if self.type_table.get(key_ty).name != "String":
+						diagnostics.append(
+							_tc_diag(
+								message="Error.captures expects a String local key",
+								severity="error",
+								span=getattr(expr.index, "loc", Span()),
+							)
+						)
+					return record_expr(expr, self._dv)
+				if isinstance(expr.subject, H.HField) and expr.subject.name == "captures":
+					diagnostics.append(
+						_tc_diag(
+							message='captures frame must be indexed by key: use error.captures["frame"]["key"]',
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				if (
+					hasattr(H, "HPlaceExpr")
+					and isinstance(expr.subject, getattr(H, "HPlaceExpr"))
+					and len(expr.subject.projections) == 1
+					and isinstance(expr.subject.projections[0], H.HPlaceField)
+					and expr.subject.projections[0].name == "captures"
+				):
+					diagnostics.append(
+						_tc_diag(
+							message='captures frame must be indexed by key: use error.captures["frame"]["key"]',
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				# Special-case Error.attrs["key"] → DiagnosticValue.
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 					sub_ty = type_expr(expr.subject.subject, used_as_value=False)
@@ -6828,6 +6915,44 @@ class TypeChecker:
 				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
 					subject = expr.subject
 					for idx, proj in enumerate(subject.projections):
+						if isinstance(proj, H.HPlaceField) and proj.name == "captures":
+							if idx + 1 >= len(subject.projections) or not isinstance(subject.projections[idx + 1], H.HPlaceIndex):
+								continue
+							if idx + 2 != len(subject.projections):
+								continue
+							frame_ty = type_expr(subject.projections[idx + 1].index)
+							sub_ty = type_expr(subject.base, used_as_value=False)
+							sub_def = self.type_table.get(sub_ty)
+							if sub_def.kind is TypeKind.REF and sub_def.param_types:
+								sub_ty = sub_def.param_types[0]
+								sub_def = self.type_table.get(sub_ty)
+							if sub_def.kind is not TypeKind.ERROR:
+								diagnostics.append(
+									_tc_diag(
+										message="captures access is only supported on Error values",
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+									)
+								)
+								return record_expr(expr, self._unknown)
+							if self.type_table.get(frame_ty).name != "String":
+								diagnostics.append(
+									_tc_diag(
+										message="Error.captures expects a String frame key",
+										severity="error",
+										span=getattr(subject.projections[idx + 1].index, "loc", Span()),
+									)
+								)
+							key_ty = type_expr(expr.index)
+							if self.type_table.get(key_ty).name != "String":
+								diagnostics.append(
+									_tc_diag(
+										message="Error.captures expects a String local key",
+										severity="error",
+										span=getattr(expr.index, "loc", Span()),
+									)
+								)
+							return record_expr(expr, self._dv)
 						if not (isinstance(proj, H.HPlaceField) and proj.name == "attrs"):
 							continue
 						if idx + 1 >= len(subject.projections) or not isinstance(subject.projections[idx + 1], H.HPlaceIndex):
@@ -7410,6 +7535,26 @@ class TypeChecker:
 									)
 								)
 					val_ty = declared_ty
+				if getattr(stmt, "capture_alias", None) is not None and not bool(getattr(stmt, "capture", False)):
+					diagnostics.append(
+						_tc_diag(
+							message='capture alias requires capture marker: use `val ^name as "alias" = ...`',
+							severity="error",
+							span=getattr(stmt, "loc", Span()),
+						)
+					)
+				if bool(getattr(stmt, "capture", False)):
+					cap_ty = val_ty
+					if cap_ty is not None and cap_ty != self._unknown:
+						allowed = {self._dv, self._int, self._uint, self._bool, self._string, self._float}
+						if cap_ty not in allowed:
+							diagnostics.append(
+								_tc_diag(
+									message="captured locals currently support Int/Uint/Bool/Float/String/DiagnosticValue only",
+									severity="error",
+									span=getattr(stmt, "loc", Span()),
+								)
+							)
 				scope_env[-1][stmt.name] = val_ty
 				scope_bindings[-1][stmt.name] = stmt.binding_id
 				binding_types[stmt.binding_id] = val_ty

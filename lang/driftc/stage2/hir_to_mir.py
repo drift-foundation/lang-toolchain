@@ -328,6 +328,9 @@ class HIRToMIR:
 		# Names reserved for this function (params + locals).
 		self._reserved_names: set[str] = set(self.b.func.params)
 		self._local_binding_ids: set[int] = set()
+		# Scope-aware set of `val ^x` captures active at the current throw site.
+		self._capture_scope_stack: list[list[int]] = []
+		self._active_captured_locals: dict[int, _CapturedLocal] = {}
 		for bid, name in self._binding_names.items():
 			ty = self._binding_types.get(bid)
 			if ty is None:
@@ -347,10 +350,14 @@ class HIRToMIR:
 		if include_params and self._param_drop_locals:
 			scope.extend(self._param_drop_locals)
 		self._scope_stack.append(scope)
+		self._capture_scope_stack.append([])
 
 	def _pop_scope(self) -> None:
 		if not self._scope_stack:
 			return
+		captured = self._capture_scope_stack.pop() if self._capture_scope_stack else []
+		for bid in captured:
+			self._active_captured_locals.pop(int(bid), None)
 		self._scope_stack.pop()
 
 	def _register_drop_local(self, local_name: str, ty: TypeId) -> None:
@@ -364,6 +371,68 @@ class HIRToMIR:
 		if local_name in scope:
 			return
 		scope.append(local_name)
+
+	def _register_captured_local(self, *, binding_id: int, local_name: str, source_name: str, capture_name: str) -> None:
+		if not self._capture_scope_stack:
+			return
+		self._active_captured_locals[int(binding_id)] = _CapturedLocal(
+			binding_id=int(binding_id),
+			local_name=local_name,
+			source_name=source_name,
+			capture_name=capture_name,
+		)
+		self._capture_scope_stack[-1].append(int(binding_id))
+
+	def _capture_to_dv(self, *, value: M.ValueId, value_ty: TypeId) -> M.ValueId:
+		if value_ty == self._dv_type:
+			return value
+		if value_ty == self._int_type:
+			dv = self.b.new_temp()
+			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Int", args=[value]))
+			self._local_types[dv] = self._dv_type
+			return dv
+		if value_ty == self._uint_type:
+			as_int = self.b.new_temp()
+			self.b.emit(M.IntFromUint(dest=as_int, value=value))
+			self._local_types[as_int] = self._int_type
+			dv = self.b.new_temp()
+			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Int", args=[as_int]))
+			self._local_types[dv] = self._dv_type
+			return dv
+		if value_ty == self._bool_type:
+			dv = self.b.new_temp()
+			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Bool", args=[value]))
+			self._local_types[dv] = self._dv_type
+			return dv
+		if value_ty == self._string_type:
+			dv = self.b.new_temp()
+			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="String", args=[value]))
+			self._local_types[dv] = self._dv_type
+			return dv
+		if value_ty == self._float_type:
+			dv = self.b.new_temp()
+			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Float", args=[value]))
+			self._local_types[dv] = self._dv_type
+			return dv
+		raise AssertionError("captured local type must lower to DiagnosticValue (checker bug)")
+
+	def _emit_captured_locals(self, err_val: M.ValueId) -> None:
+		if not self._active_captured_locals:
+			return
+		frame_name = function_symbol(self._current_fn_id) if self._current_fn_id is not None else self.b.func.name
+		frame_val = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=frame_val, value=frame_name))
+		for bid in sorted(self._active_captured_locals.keys()):
+			cap = self._active_captured_locals[bid]
+			val = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=val, local=cap.local_name))
+			val_ty = self._local_types.get(cap.local_name) or self._binding_types.get(cap.binding_id)
+			if val_ty is None:
+				raise AssertionError("captured local type missing in MIR lowering (checker bug)")
+			dv = self._capture_to_dv(value=val, value_ty=val_ty)
+			key_val = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=key_val, value=cap.capture_name))
+			self.b.emit(M.ErrorAddLocalDV(error=err_val, frame=frame_val, key=key_val, value=dv))
 
 	def _emit_scope_drops(self, *, scope_index: int) -> None:
 		if self._suppress_drop_glue:
@@ -1334,6 +1403,10 @@ class HIRToMIR:
 			return dest
 		if expr.name == "attrs":
 			raise NotImplementedError("attrs view must be indexed: Error.attrs[\"key\"]")
+		if expr.name == "captures":
+			raise NotImplementedError(
+				"captures view must be indexed: Error.captures[\"frame\"][\"key\"]"
+			)
 		# Struct field access.
 		if sub_def.kind is not TypeKind.STRUCT:
 			raise NotImplementedError(f"field access is only supported on structs in v1 (have {sub_def.kind})")
@@ -1354,6 +1427,81 @@ class HIRToMIR:
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
+		if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
+			for idx, proj in enumerate(expr.subject.projections):
+				if not isinstance(proj, H.HPlaceField):
+					continue
+				if proj.name == "attrs":
+					if idx + 1 >= len(expr.subject.projections) or not isinstance(expr.subject.projections[idx + 1], H.HPlaceIndex):
+						continue
+					if idx + 2 != len(expr.subject.projections):
+						continue
+					err_val = self.lower_expr(expr.subject.base)
+					err_ty = self._infer_expr_type(expr.subject.base)
+					if err_ty is not None:
+						err_def = self._type_table.get(err_ty)
+						if err_def.kind is TypeKind.REF and err_def.param_types:
+							inner_ty = err_def.param_types[0]
+							tmp = self.b.new_temp()
+							self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
+							err_val = tmp
+					key_val = self.lower_expr(expr.index)
+					dest = self.b.new_temp()
+					self.b.emit(M.ErrorAttrsGetDV(dest=dest, error=err_val, key=key_val))
+					self._local_types[dest] = self._dv_type
+					return dest
+				if proj.name == "captures":
+					if idx + 1 >= len(expr.subject.projections) or not isinstance(expr.subject.projections[idx + 1], H.HPlaceIndex):
+						continue
+					if idx + 2 != len(expr.subject.projections):
+						continue
+					err_val = self.lower_expr(expr.subject.base)
+					err_ty = self._infer_expr_type(expr.subject.base)
+					if err_ty is not None:
+						err_def = self._type_table.get(err_ty)
+						if err_def.kind is TypeKind.REF and err_def.param_types:
+							inner_ty = err_def.param_types[0]
+							tmp = self.b.new_temp()
+							self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
+							err_val = tmp
+					frame_val = self.lower_expr(expr.subject.projections[idx + 1].index)
+					key_val = self.lower_expr(expr.index)
+					dest = self.b.new_temp()
+					self.b.emit(M.ErrorCapturesGetDV(dest=dest, error=err_val, frame=frame_val, key=key_val))
+					self._local_types[dest] = self._dv_type
+					return dest
+		if (
+			isinstance(expr.subject, H.HIndex)
+			and (
+				(
+					isinstance(expr.subject.subject, H.HField)
+					and expr.subject.subject.name == "captures"
+				)
+				or (
+					hasattr(H, "HPlaceExpr")
+					and isinstance(expr.subject.subject, getattr(H, "HPlaceExpr"))
+					and len(expr.subject.subject.projections) == 1
+					and isinstance(expr.subject.subject.projections[0], H.HPlaceField)
+					and expr.subject.subject.projections[0].name == "captures"
+				)
+			)
+		):
+			err_base = expr.subject.subject.subject if isinstance(expr.subject.subject, H.HField) else expr.subject.subject.base
+			err_val = self.lower_expr(err_base)
+			err_ty = self._infer_expr_type(err_base)
+			if err_ty is not None:
+				err_def = self._type_table.get(err_ty)
+				if err_def.kind is TypeKind.REF and err_def.param_types:
+					inner_ty = err_def.param_types[0]
+					tmp = self.b.new_temp()
+					self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
+					err_val = tmp
+			frame_val = self.lower_expr(expr.subject.index)
+			key_val = self.lower_expr(expr.index)
+			dest = self.b.new_temp()
+			self.b.emit(M.ErrorCapturesGetDV(dest=dest, error=err_val, frame=frame_val, key=key_val))
+			self._local_types[dest] = self._dv_type
+			return dest
 		if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 			err_val = self.lower_expr(expr.subject.subject)
 			err_ty = self._infer_expr_type(expr.subject.subject)
@@ -4217,6 +4365,16 @@ class HIRToMIR:
 		if span is not None:
 			store.span = span
 		self.b.emit(store)
+		if bool(getattr(stmt, "capture", False)):
+			bid_i = getattr(stmt, "binding_id", None)
+			if bid_i is not None:
+				cap_name = str(getattr(stmt, "capture_alias", None) or stmt.name)
+				self._register_captured_local(
+					binding_id=int(bid_i),
+					local_name=local_name,
+					source_name=stmt.name,
+					capture_name=cap_name,
+				)
 		self._moved_locals.discard(local_name)
 		self._current_stmt_span = prev_stmt_span
 
@@ -4558,6 +4716,7 @@ class HIRToMIR:
 		else:
 			# Throwing an existing Error value (e.g., from try-result sugar unwrap_err).
 			err_val = self.lower_expr(stmt.value)
+		self._emit_captured_locals(err_val)
 
 		# If we are inside a try, route to the catch block instead of returning.
 		if self._try_stack and self.b.block.terminator is None:
@@ -6212,3 +6371,11 @@ class _TryCtx:
 	error_local: str
 	dispatch_block_name: str
 	cont_block_name: str
+
+
+@dataclass
+class _CapturedLocal:
+	binding_id: int
+	local_name: str
+	source_name: str
+	capture_name: str

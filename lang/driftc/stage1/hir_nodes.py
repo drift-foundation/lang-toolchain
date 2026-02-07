@@ -706,6 +706,8 @@ class HLet(HStmt):
 	declared_type_expr: Optional[object] = None
 	binding_id: Optional[BindingId] = None
 	is_mutable: bool = False
+	capture: bool = False
+	capture_alias: Optional[str] = None
 	loc: Span = field(default_factory=Span)
 
 

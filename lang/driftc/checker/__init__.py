@@ -1488,6 +1488,131 @@ class Checker:
 				return checker._len_cap_result_type(subj_ty)
 
 			if isinstance(expr, H.HIndex):
+				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
+					subject = expr.subject
+					if (
+						len(subject.projections) == 1
+						and isinstance(subject.projections[0], H.HPlaceField)
+						and subject.projections[0].name == "captures"
+					):
+						err_ty = self._infer_expr_type(subject.base)
+						if err_ty is None:
+							return None
+						err_def = self.table.get(err_ty)
+						if err_def.kind is TypeKind.REF and err_def.param_types:
+							err_ty = err_def.param_types[0]
+							err_def = self.table.get(err_ty)
+						if err_def.kind is TypeKind.ERROR:
+							frame_ty = self._infer_expr_type(expr.index)
+							if frame_ty is not None:
+								frame_def = self.table.get(frame_ty)
+								if frame_def.name != "String":
+									self._append_diag(
+										_chk_diag(
+											message="Error.captures expects a String frame key",
+											severity="error",
+											span=None,
+										)
+									)
+							return checker._dv
+				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
+					subject = expr.subject
+					for idx, proj in enumerate(subject.projections):
+						if not (isinstance(proj, H.HPlaceField) and proj.name == "captures"):
+							continue
+						if idx + 1 >= len(subject.projections) or not isinstance(subject.projections[idx + 1], H.HPlaceIndex):
+							continue
+						if idx + 2 != len(subject.projections):
+							continue
+						err_ty = self._infer_expr_type(subject.base)
+						if err_ty is None:
+							return None
+						err_def = self.table.get(err_ty)
+						if err_def.kind is TypeKind.REF and err_def.param_types:
+							err_ty = err_def.param_types[0]
+							err_def = self.table.get(err_ty)
+						if err_def.kind is TypeKind.ERROR:
+							frame_ty = self._infer_expr_type(subject.projections[idx + 1].index)
+							if frame_ty is not None:
+								frame_def = self.table.get(frame_ty)
+								if frame_def.name != "String":
+									self._append_diag(
+										_chk_diag(
+											message="Error.captures expects a String frame key",
+											severity="error",
+											span=None,
+										)
+									)
+							idx_ty = self._infer_expr_type(expr.index)
+							if idx_ty is not None:
+								idx_def = self.table.get(idx_ty)
+								if idx_def.name != "String":
+									self._append_diag(
+										_chk_diag(
+											message="Error.captures expects a String local key",
+											severity="error",
+											span=None,
+										)
+									)
+							return checker._dv
+				if (
+					isinstance(expr.subject, H.HIndex)
+					and isinstance(expr.subject.subject, H.HField)
+					and expr.subject.subject.name == "captures"
+				):
+					err_ty = self._infer_expr_type(expr.subject.subject.subject)
+					if err_ty is None:
+						return None
+					err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.REF and err_def.param_types:
+						err_ty = err_def.param_types[0]
+						err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.ERROR:
+						frame_ty = self._infer_expr_type(expr.subject.index)
+						if frame_ty is not None:
+							frame_def = self.table.get(frame_ty)
+							if frame_def.name != "String":
+								self._append_diag(
+									_chk_diag(
+										message="Error.captures expects a String frame key",
+										severity="error",
+										span=None,
+									)
+								)
+						idx_ty = self._infer_expr_type(expr.index)
+						if idx_ty is not None:
+							idx_def = self.table.get(idx_ty)
+							if idx_def.name != "String":
+								self._append_diag(
+									_chk_diag(
+										message="Error.captures expects a String local key",
+										severity="error",
+										span=None,
+									)
+								)
+						return checker._dv
+				if isinstance(expr.subject, H.HField) and expr.subject.name == "captures":
+					err_ty = self._infer_expr_type(expr.subject.subject)
+					if err_ty is None:
+						return None
+					err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.REF and err_def.param_types:
+						err_ty = err_def.param_types[0]
+						err_def = self.table.get(err_ty)
+					if err_def.kind is TypeKind.ERROR:
+						frame_ty = self._infer_expr_type(expr.index)
+						if frame_ty is not None:
+							frame_def = self.table.get(frame_ty)
+							if frame_def.name != "String":
+								self._append_diag(
+									_chk_diag(
+										message="Error.captures expects a String frame key",
+										severity="error",
+										span=None,
+									)
+								)
+						# Intermediate map view (frame-selected captures) for outer index.
+						return checker._dv
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 					err_ty = self._infer_expr_type(expr.subject.subject)
 					if err_ty is None:

@@ -293,8 +293,17 @@ def insert_string_arc(
 			yield instr.error
 			yield instr.key
 			yield instr.value
+		elif isinstance(instr, M.ErrorAddLocalDV):
+			yield instr.error
+			yield instr.frame
+			yield instr.key
+			yield instr.value
 		elif isinstance(instr, M.ErrorAttrsGetDV):
 			yield instr.error
+			yield instr.key
+		elif isinstance(instr, M.ErrorCapturesGetDV):
+			yield instr.error
+			yield instr.frame
 			yield instr.key
 		elif isinstance(instr, M.DVAsInt):
 			yield instr.dv
@@ -681,6 +690,42 @@ def insert_string_arc(
 						key = _ensure_owned(key, owned_values, new_instrs)
 						_note_use(key, consume=True)
 				new_instrs.append(M.ErrorAddAttrDV(error=instr.error, key=key, value=instr.value))
+				continue
+
+			if isinstance(instr, M.ErrorAddLocalDV):
+				frame = instr.frame
+				if _is_string_value(frame):
+					if frame in move_only_values:
+						_note_use(frame, consume=True)
+					else:
+						frame = _ensure_owned(frame, owned_values, new_instrs)
+						_note_use(frame, consume=True)
+				key = instr.key
+				if _is_string_value(key):
+					if key in move_only_values:
+						_note_use(key, consume=True)
+					else:
+						key = _ensure_owned(key, owned_values, new_instrs)
+						_note_use(key, consume=True)
+				new_instrs.append(M.ErrorAddLocalDV(error=instr.error, frame=frame, key=key, value=instr.value))
+				continue
+
+			if isinstance(instr, M.ErrorCapturesGetDV):
+				frame = instr.frame
+				if _is_string_value(frame):
+					if frame in move_only_values:
+						_note_use(frame, consume=True)
+					else:
+						frame = _ensure_owned(frame, owned_values, new_instrs)
+						_note_use(frame, consume=True)
+				key = instr.key
+				if _is_string_value(key):
+					if key in move_only_values:
+						_note_use(key, consume=True)
+					else:
+						key = _ensure_owned(key, owned_values, new_instrs)
+						_note_use(key, consume=True)
+				new_instrs.append(M.ErrorCapturesGetDV(dest=instr.dest, error=instr.error, frame=frame, key=key))
 				continue
 
 			if isinstance(instr, M.Call):
