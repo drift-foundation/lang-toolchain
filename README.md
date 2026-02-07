@@ -47,7 +47,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - Driver/runtime notes: [docs/articles/driver-notes.md](docs/articles/driver-notes.md)
 - Compiler architecture overview: [docs/articles/drift-compiler-architecture.md](docs/articles/drift-compiler-architecture.md)
 - Development history: [docs/history.md](docs/history.md)
-- Project TODO/roadmap: [docs/TODO.md](docs/TODO.md)
+- Project TODO/roadmap: [TODO.md](TODO.md)
 - Toolchain:
   - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM 15).
   - `just test-e2e` — runs e2e programs through the SSA backend and compares outputs.

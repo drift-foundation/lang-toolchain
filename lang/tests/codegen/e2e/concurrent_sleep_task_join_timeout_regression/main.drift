@@ -1,0 +1,21 @@
+module main
+
+import std.concurrent as conc;
+
+fn main() nothrow -> Int {
+	var f = conc.spawn_future(| | => {
+		val _ = conc.sleep(conc.Duration(millis = 500));
+		return 7;
+	});
+	val r = f.join_timeout(conc.Duration(millis = 100));
+	match r {
+		Err(e) => {
+			match e {
+				Timeout => { return 0; },
+				default => { return 2; }
+			}
+		},
+		Ok(_) => { return 1; },
+		default => { return 3; }
+	}
+}

@@ -556,7 +556,12 @@ implement<T> FutureGroup<T> require T is core.Copy {
 			if !pending {
 				return core.Result::Err(ConcurrencyError::Closed());
 			}
-			thread.vt_park_until(1);
+			var me = thread.vt_current();
+			if me != 0 {
+				thread.vt_park_until(thread.now_ms() + 1);
+			} else {
+				thread.vt_park_until(1);
+			}
 		}
 		return core.Result::Err(ConcurrencyError::Timeout());
 	}
@@ -577,14 +582,14 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	if d.millis == 0 {
 		return core.Result::Err(ConcurrencyError::Timeout());
 	}
+	var deadline = thread.now_ms() + d.millis;
 	var vt = thread.vt_current();
 	if vt == 0 {
 		thread.vt_park_until(d.millis);
 		return core.Result::Ok(core.void_value());
 	}
-	var deadline = thread.now_ms() + d.millis;
 	thread.reactor_register_timer(deadline, vt);
-	thread.vt_park_until(d.millis);
+	thread.vt_park_until(deadline);
 	return core.Result::Ok(core.void_value());
 }
 

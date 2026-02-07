@@ -1,3 +1,18 @@
+## 2026-02-07 – Namespace migration + concurrency park/deadline regression fix
+- Repository namespace cleanup:
+  - Moved active compiler/runtime tree from `lang2/` to `lang/`.
+  - Moved legacy pre-refactor tree to `lang-obsolete/`.
+  - Rewired repository references, tooling, tests, and runners to `lang.*` paths/modules (including `justfile`, e2e runners, and docs links), and removed temporary compatibility symlink after validation.
+- TODO source-of-truth cleanup:
+  - Removed stale `docs/TODO.md` and updated references to root `TODO.md`.
+- Concurrency timeout/parking hardening:
+  - Added e2e regression `concurrent_sleep_task_join_timeout_regression` to capture timeout behavior when a spawned task sleeps and caller uses `join_timeout`.
+  - Fixed `std.concurrent.sleep` VT path to park until an absolute deadline (`now_ms + duration`) after timer registration.
+  - Fixed `FutureGroup.join_any` parking loop to be context-aware:
+    - VT context uses absolute park deadline (`now_ms + 1`).
+    - non-VT context uses relative sleep (`1ms`), avoiding long unintended sleeps/timeouts.
+  - Validated focused concurrency suites including cancel/join timeout, reactor wakeup, and IO timeout paths.
+
 ## 2026-02-07 – Console/IO API completion, hardening, and docs alignment
 - Completed the `std.io`/`std.console` MVP migration from legacy file-open APIs to configured builder-based streams:
   - Added/standardized `stdin/stdout/stderr` handles and builders, configured stream/file types, fluent file builder (`read/write/create/truncate/append/mode/timeout/build`), and configured operations (`read/write/close/read_line`).
