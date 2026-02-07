@@ -18,13 +18,10 @@
   - Add an explicit NOT YET STABLE banner + checklist for freezing.
 
 [Traits]
-- Gate `copy` via a real `Copy` trait post-typecheck.
-- Trait-based iteration (MVP): replace iterator intrinsics with a real `Iterator` trait + library implementation once module support lands (no dynamic dispatch in MVP).
-- Implement `Destructible`:
-  - `trait Destructible { fn destroy(self) -> Void }` (non-throwing).
-  - Checker: treat Destructible types as droppable; insert `DropValue` as today.
-  - Codegen: lower `DropValue` to the concrete `destroy` impl.
-  - Vtables: owned interface values require Destructible so the drop slot is always present.
+- Completed in MVP:
+  - `Copy` trait gating post-typecheck.
+  - Trait-based iteration surface (`std.iter` with `Iterable`/`SinglePassIterator`) replacing iterator-intrinsic usage.
+  - `Destructible` end-to-end (trait/checker `DropValue`/codegen lowering/interface owned-vtable drop-slot contract).
 
 [Operators]
 - Pin operator overloading MVP: define operator->trait desugar rules (e.g., `a + b` -> `Add::add(...)`), scope/prelude policy, and by-ref/by-value signature contract; add tests. Keep this aligned with the "free function vs receiver" resolution decision.
