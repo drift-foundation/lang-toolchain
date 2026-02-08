@@ -2,36 +2,61 @@
 
 ## Status
 
-Logging interface baseline is in place and tested. Final logger internals are intentionally blocked on two prerequisite tracks.
+This is the single logger plan file.
 
-## Hard Dependencies
+Logger interface and baseline behavior are already in place and tested.
+Remaining work is backend migration after atomics + std.json are complete.
 
-1. `work/atomics-memory-ord/work-progress.md`
-2. `work/stdlib-json/work-progress.md`
+## Completed Baseline (Pinned + Landed)
 
-Logging migration/finalization starts only after both are complete.
+- MVP levels: `debug`, `info`, `error`.
+- Default logger is `main`.
+- Builder surface available:
+  - `sink(...)`
+  - `min_level(...)`
+  - `queue_capacity(...)`
+  - `write_timeout(...)`
+  - `enqueue_timeout(...)`
+  - `backpressure_policy(...)`
+  - `build()`
+- Backpressure policies pinned:
+  - `BlockWithTimeout` (default)
+  - `DropOldest`
+  - `DropNewest`
+- Event-first API available:
+  - `log.debug(ev, attrs)`
+  - `log.info(ev, attrs)`
+  - `log.error(ev, attrs)`
+- Attr map literal path available for logging, including empty map `{:}` with explicit type context.
+- `Debuggable` conversion path pinned for attr values.
+- `std.meta.caller()` pinned as optional source helper (no automatic compiler injection in MVP).
+- Lifecycle pinning:
+  - init idempotent for same config,
+  - re-init with different config rejected,
+  - no shutdown API in MVP.
+- Structured JSON output currently emitted in runtime-backed path with:
+  - `tm`, `level`, `ev`, `logger`, `attrs`, `tid`.
+- Test support for nondeterministic fields is in place (`stderr_jsonl`, `__ANY__`).
 
-## Completed Baseline
+## Dependencies Before Logger Backend Migration
 
-- MVP API surface available (`log.debug/info/error(ev, attrs)`, builders, logger derivation, flush/init behavior).
-- Structured JSON emission present in current runtime-backed path.
-- Logger e2e/driver coverage in place, including nondeterministic field masking (`tm`, `tid`).
+1. Atomics + memory ordering track complete.
+2. `std.json` track complete.
 
-## Deferred Until Dependencies Complete
+## Work To Resume After Dependencies
 
-- Move queue/backpressure orchestration to Drift atomics.
-- Move worker coordination to Drift.
-- Remove logger-specific runtime queue policy code.
-- Replace runtime `DiagnosticValue -> JSON` helper with Drift-side JSON path built on `std.json`.
-- Finalize custom sink mechanics on pure Drift backend.
-
-## Resume Plan (After Both Dependencies)
-
-1. Port queue state and producer policies to Drift atomics.
-2. Switch payload construction to `std.json` value + encode.
-3. Port worker loop/orchestration to Drift.
-4. Remove logger-specific runtime scaffolding.
+1. Port queue state and producer backpressure policies to Drift atomics.
+2. Switch payload construction/encoding to `std.json`.
+3. Port worker dequeue loop/orchestration to Drift.
+4. Remove logger-specific runtime queue/policy scaffolding.
 5. Re-run full logger regression matrix and parity gates.
+
+## Deferred Follow-Ups (After Migration)
+
+- Refresh/add examples under `lang/examples/logging/`.
+- Update effective-drift logger entry to final API/behavior.
+- Add user-pluggable formatter example.
+- Add sink composition examples (file/fanout/custom sink).
 
 ## Parity Gates
 
