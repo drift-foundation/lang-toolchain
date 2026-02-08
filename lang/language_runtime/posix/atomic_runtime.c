@@ -41,6 +41,17 @@ void drift_atomic_store_bool(uint8_t *p, uint8_t v, int64_t order) {
 	atomic_store_explicit(ap, v, drift_order_store(order));
 }
 
+uint8_t drift_atomic_exchange_bool(uint8_t *p, uint8_t v, int64_t order) {
+	_Atomic uint8_t *ap = (_Atomic uint8_t *)p;
+	return atomic_exchange_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint8_t drift_atomic_compare_exchange_bool(uint8_t *p, uint8_t expected, uint8_t desired, int64_t success_order, int64_t failure_order) {
+	_Atomic uint8_t *ap = (_Atomic uint8_t *)p;
+	uint8_t exp = expected;
+	return atomic_compare_exchange_strong_explicit(ap, &exp, desired, drift_order_rmw(success_order), drift_order_load(failure_order)) ? 1 : 0;
+}
+
 int64_t drift_atomic_load_int(int64_t *p, int64_t order) {
 	_Atomic int64_t *ap = (_Atomic int64_t *)p;
 	return atomic_load_explicit(ap, drift_order_load(order));
@@ -54,6 +65,22 @@ void drift_atomic_store_int(int64_t *p, int64_t v, int64_t order) {
 int64_t drift_atomic_fetch_add_int(int64_t *p, int64_t v, int64_t order) {
 	_Atomic int64_t *ap = (_Atomic int64_t *)p;
 	return atomic_fetch_add_explicit(ap, v, drift_order_rmw(order));
+}
+
+int64_t drift_atomic_fetch_sub_int(int64_t *p, int64_t v, int64_t order) {
+	_Atomic int64_t *ap = (_Atomic int64_t *)p;
+	return atomic_fetch_sub_explicit(ap, v, drift_order_rmw(order));
+}
+
+int64_t drift_atomic_exchange_int(int64_t *p, int64_t v, int64_t order) {
+	_Atomic int64_t *ap = (_Atomic int64_t *)p;
+	return atomic_exchange_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint8_t drift_atomic_compare_exchange_int(int64_t *p, int64_t expected, int64_t desired, int64_t success_order, int64_t failure_order) {
+	_Atomic int64_t *ap = (_Atomic int64_t *)p;
+	int64_t exp = expected;
+	return atomic_compare_exchange_strong_explicit(ap, &exp, desired, drift_order_rmw(success_order), drift_order_load(failure_order)) ? 1 : 0;
 }
 
 uint64_t drift_atomic_load_uint(uint64_t *p, int64_t order) {
@@ -71,6 +98,22 @@ uint64_t drift_atomic_fetch_add_uint(uint64_t *p, uint64_t v, int64_t order) {
 	return atomic_fetch_add_explicit(ap, v, drift_order_rmw(order));
 }
 
+uint64_t drift_atomic_fetch_sub_uint(uint64_t *p, uint64_t v, int64_t order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	return atomic_fetch_sub_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint64_t drift_atomic_exchange_uint(uint64_t *p, uint64_t v, int64_t order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	return atomic_exchange_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint8_t drift_atomic_compare_exchange_uint(uint64_t *p, uint64_t expected, uint64_t desired, int64_t success_order, int64_t failure_order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	uint64_t exp = expected;
+	return atomic_compare_exchange_strong_explicit(ap, &exp, desired, drift_order_rmw(success_order), drift_order_load(failure_order)) ? 1 : 0;
+}
+
 uint64_t drift_atomic_load_uint64(uint64_t *p, int64_t order) {
 	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
 	return atomic_load_explicit(ap, drift_order_load(order));
@@ -84,4 +127,20 @@ void drift_atomic_store_uint64(uint64_t *p, uint64_t v, int64_t order) {
 uint64_t drift_atomic_fetch_add_uint64(uint64_t *p, uint64_t v, int64_t order) {
 	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
 	return atomic_fetch_add_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint64_t drift_atomic_fetch_sub_uint64(uint64_t *p, uint64_t v, int64_t order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	return atomic_fetch_sub_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint64_t drift_atomic_exchange_uint64(uint64_t *p, uint64_t v, int64_t order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	return atomic_exchange_explicit(ap, v, drift_order_rmw(order));
+}
+
+uint8_t drift_atomic_compare_exchange_uint64(uint64_t *p, uint64_t expected, uint64_t desired, int64_t success_order, int64_t failure_order) {
+	_Atomic uint64_t *ap = (_Atomic uint64_t *)p;
+	uint64_t exp = expected;
+	return atomic_compare_exchange_strong_explicit(ap, &exp, desired, drift_order_rmw(success_order), drift_order_load(failure_order)) ? 1 : 0;
 }

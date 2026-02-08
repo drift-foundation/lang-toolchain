@@ -1,0 +1,67 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.core as core;
+import std.containers as containers;
+
+fn worker_cas(id: Int) nothrow -> Int {
+	var cell = sync.atomic_int(0);
+	val ok1 = cell.compare_exchange(0, id, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire());
+	val ok2 = cell.compare_exchange(0, id + 100, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire());
+	val bad = cell.compare_exchange(id, id + 1, sync.MemoryOrder::Relaxed(), sync.MemoryOrder::Release());
+	val got = cell.load(sync.MemoryOrder::SeqCst());
+	if not ok1 {
+		return -1;
+	}
+	if ok2 {
+		return -2;
+	}
+	if bad {
+		return -3;
+	}
+	if got != id {
+		return -4;
+	}
+	return 1;
+}
+
+fn run() -> Int {
+	val workers = 20;
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+	var i = 0;
+	while i < workers {
+		val id = i + 1;
+		var t = conc.spawn_cb(core.callback0(| | captures(copy id) => { return worker_cas(id); }));
+		tasks.push_back(move t);
+		i = i + 1;
+	}
+
+	var success = 0;
+	while tasks.len() > 0 {
+		var opt = tasks.pop_front();
+		match opt {
+			Some(var vt) => {
+				var r = vt.join();
+				match r {
+					Ok(v) => {
+						if v != 1 {
+							return 1;
+						}
+						success = success + v;
+					},
+					default => { return 2; }
+				}
+			},
+			default => { return 3; }
+		}
+	}
+	if success == workers {
+		return 0;
+	}
+	return 4;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

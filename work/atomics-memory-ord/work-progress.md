@@ -61,6 +61,18 @@ Enable first-class atomics and explicit memory ordering in Drift so core systems
 - Ordering validity checks enforced (compile-time if possible, otherwise deterministic checker error).
 - `compare_exchange` follows standard success/failure ordering constraints.
 - No hidden default ordering in APIs; order must be explicit in MVP.
+- `fetch_add`/`fetch_sub` overflow semantics are wrapping (modulo width), never trap.
+
+## Lock-Free Readiness (Pinned for Future Algorithms)
+
+- Keep atomic APIs stable across stdlib modules (`std.sync` as user surface).
+- Preserve `compare_exchange` ordering controls (success/failure split) for lock-free loops.
+- Keep RMW primitives (`exchange`, `fetch_add`, `fetch_sub`) available on numeric atomics.
+- Avoid introducing API shapes that block later pointer/word-level atomics expansion.
+- Plan follow-on additions (separate track) without breaking current API:
+  - weak-CAS form,
+  - fence operation,
+  - bitwise RMW ops (`fetch_or/and/xor`) where relevant.
 
 ## Regression-First Test Plan
 
@@ -128,3 +140,20 @@ Enable first-class atomics and explicit memory ordering in Drift so core systems
 - Logger queue/backpressure/worker internals moved to Drift.
 - Logger runtime C path reduced to generic primitives only (no logger-specific queue policy logic).
 - Existing logger e2e + driver suites remain green.
+
+## Progress Update (Current Branch State)
+
+- Implemented `std.sync` module surface (wrapper types over `lang.atomic`) with method API:
+  - `load/store/exchange/compare_exchange/fetch_add/fetch_sub` (where applicable).
+- Extended `lang.atomic` + runtime + LLVM lowering with new intrinsics:
+  - `exchange`, `compare_exchange`, `fetch_sub` for bool/int/uint/uint64.
+- Added CAS order validation guard in stdlib path:
+  - invalid failure order (`Release`/`AcqRel`) returns `false` without mutating.
+- Added regression tests first, then implementation:
+  - driver: `lang/tests/driver/test_std_sync_api.py`
+  - e2e: `std_sync_atomic_ops`, `std_sync_atomic_compare_exchange_invalid_failure_order`
+  - migrated existing atomic e2e smoke to `std.sync` imports.
+- Validation snapshot:
+  - `lang/tests/driver/test_std_sync_api.py` passing,
+  - atomic e2e set passing (`atomic_bool_basic`, `atomic_int_fetch_add`, `std_sync_atomic_ops`, `std_sync_atomic_compare_exchange_invalid_failure_order`),
+  - logger smoke unaffected (`std_log_mvp_smoke`, `test_std_log_api_smoke.py`).

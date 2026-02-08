@@ -1,11 +1,11 @@
 module m
 
-import std.concurrent as conc;
+import std.sync as sync;
 
 pub fn main() nothrow -> Int {
-	var a = conc.atomic_bool(false);
-	a.store(true, conc.MemoryOrder::Relaxed());
-	val v = a.load(conc.MemoryOrder::Relaxed());
+	var a = sync.atomic_bool(false);
+	a.store(true, sync.MemoryOrder::Relaxed());
+	val v = a.load(sync.MemoryOrder::Relaxed());
 	if v {
 		return 0;
 	}

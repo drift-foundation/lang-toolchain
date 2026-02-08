@@ -121,17 +121,49 @@ import std.log as log;
 import std.meta as meta;
 
 pub fn main() nothrow -> Int {
-	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Info).queue_capacity(4096).enqueue_timeout_ms(2).write_timeout_ms(25).build();
-	log.init(cfg);
-	log.info("auth-failed", "user": "alice", "reason": "bad-password", "src": meta.caller());
-	log.error("db-timeout", "host": "db-main", "retryable": true, "src": meta.caller());
-	log.flush();
-log.shutdown();
-return 0;
+    val cfg_builder = log.config_builder();
+    cfg_builder.sink(log.stderr_sink());
+    cfg_builder.min_level(log.Level::Info());
+    val cfg = cfg_builder.build();
+    log.init(cfg);
+
+    log.info("auth-failed", {"user": "alice", "reason": "bad-password", "src": meta.caller()});
+    log.error("db-timeout", {"host": "db-main", "retryable": true, "src": meta.caller()});
+    log.flush();
+    return 0;
 }
 ```
 
 For formatter customization, see `lang/examples/logging/pluggable_formatter.drift`.
+
+## Atomic ordering defaults (`std.sync`)
+
+Use the weakest ordering that proves correctness:
+- counters and telemetry: `Relaxed`
+- read-modify-write ownership/state transitions: `AcqRel` (failure usually `Acquire` or `Relaxed`)
+- producer/consumer handoff: producer `Release` store, consumer `Acquire` load
+
+```drift
+import std.sync as sync;
+
+fn bump(counter: &sync.AtomicInt) -> Int {
+    return counter.fetch_add(1, sync.MemoryOrder::Relaxed());
+}
+
+fn claim_once(flag: &sync.AtomicBool) -> Bool {
+    var expected = false;
+    return flag.compare_exchange(&mut expected, true, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+}
+
+fn publish(ready: &sync.AtomicBool) -> Void {
+    // Write shared data first, then publish availability.
+    ready.store(true, sync.MemoryOrder::Release());
+}
+
+fn wait_until_ready(ready: &sync.AtomicBool) -> Bool {
+    return ready.load(sync.MemoryOrder::Acquire());
+}
+```
 
 ## UDP ping (self‑send)
 

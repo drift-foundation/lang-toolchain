@@ -1,0 +1,28 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	val max_i: Int = 9223372036854775807;
+	val min_i: Int = -9223372036854775808;
+	var a = sync.atomic_int(max_i);
+	val old1 = a.fetch_add(1, sync.MemoryOrder::Relaxed());
+	if old1 != max_i {
+		return 1;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != min_i {
+		return 2;
+	}
+	val old2 = a.fetch_sub(1, sync.MemoryOrder::Relaxed());
+	if old2 != min_i {
+		return 3;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != max_i {
+		return 4;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

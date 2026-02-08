@@ -1,0 +1,57 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.core as core;
+import std.containers as containers;
+
+fn worker_order(id: Int) nothrow -> Int {
+	var data = sync.atomic_int(0);
+	var ready = sync.atomic_bool(false);
+	data.store(id * 10, sync.MemoryOrder::Relaxed());
+	ready.store(true, sync.MemoryOrder::Release());
+	if not ready.load(sync.MemoryOrder::Acquire()) {
+		return -1;
+	}
+	return data.load(sync.MemoryOrder::Relaxed());
+}
+
+fn run() -> Int {
+	val workers = 12;
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+	var i = 0;
+	while i < workers {
+		val id = i + 1;
+		var t = conc.spawn_cb(core.callback0(| | captures(copy id) => { return worker_order(id); }));
+		tasks.push_back(move t);
+		i = i + 1;
+	}
+
+	var seen = 0;
+	while tasks.len() > 0 {
+		var opt = tasks.pop_front();
+		match opt {
+			Some(var vt) => {
+				var r = vt.join();
+				match r {
+					Ok(v) => {
+						if v <= 0 {
+							return 1;
+						}
+						seen = seen + 1;
+					},
+					default => { return 2; }
+				}
+			},
+			default => { return 3; }
+		}
+	}
+	if seen == workers {
+		return 0;
+	}
+	return 4;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

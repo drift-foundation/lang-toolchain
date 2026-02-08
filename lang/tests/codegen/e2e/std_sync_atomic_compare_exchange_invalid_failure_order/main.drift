@@ -1,0 +1,20 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	var a = sync.atomic_int(5);
+	// failure order cannot be Release/AcqRel; invalid combo should fail and not mutate.
+	val ok = a.compare_exchange(5, 9, sync.MemoryOrder::Relaxed(), sync.MemoryOrder::Release());
+	if ok {
+		return 1;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != 5 {
+		return 2;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

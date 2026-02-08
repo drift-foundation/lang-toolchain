@@ -12,6 +12,7 @@ collections, algorithms, and error events referenced by language lowering.
 - `std.core.cmp`: comparison traits and operator lowering paths.
 - `std.err`: standard error/exception events used by stdlib APIs.
 - `std.mem`: unsafe pointer primitives and trusted raw storage helpers.
+- `std.sync`: atomics and memory ordering primitives.
 
 ## std.iter
 
@@ -274,6 +275,121 @@ Semantics and invariants:
 - `GlobalRegistry` lookups are thread-safe; values require `Send + Sync`.
 - `ThreadLocalRegistry` is per-thread; no `Send`/`Sync` required.
 - Registries return shared references only; mutable state must be explicit in `T`.
+
+## std.sync
+
+`std.sync` is the stable stdlib surface for atomics and memory ordering.
+
+### MemoryOrder
+
+```drift
+module std.sync
+
+enum MemoryOrder {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+```
+
+Semantics:
+- `Relaxed`: atomicity only, no synchronization edges.
+- `Acquire`: prevents later memory operations from moving before the atomic read.
+- `Release`: prevents earlier memory operations from moving after the atomic write.
+- `AcqRel`: acquire + release for read-modify-write operations.
+- `SeqCst`: single total order across seq-cst operations.
+
+### Atomic types
+
+Pinned MVP types:
+- `AtomicBool`
+- `AtomicInt`
+- `AtomicUint`
+- `AtomicUint64` (ABI/runtime surface pinned; user-level source availability may be gated by language support)
+
+### AtomicBool
+
+```drift
+struct AtomicBool
+
+fn atomic_bool_new(value: Bool) -> AtomicBool
+
+implement AtomicBool {
+    fn load(self: &AtomicBool, order: MemoryOrder) -> Bool
+    fn store(self: &AtomicBool, value: Bool, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicBool, value: Bool, order: MemoryOrder) -> Bool
+    fn compare_exchange(self: &AtomicBool, expected: &mut Bool, desired: Bool, success: MemoryOrder, failure: MemoryOrder) -> Bool
+}
+```
+
+### AtomicInt
+
+```drift
+struct AtomicInt
+
+fn atomic_int_new(value: Int) -> AtomicInt
+
+implement AtomicInt {
+    fn load(self: &AtomicInt, order: MemoryOrder) -> Int
+    fn store(self: &AtomicInt, value: Int, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
+    fn compare_exchange(self: &AtomicInt, expected: &mut Int, desired: Int, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn fetch_add(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
+    fn fetch_sub(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
+}
+```
+
+### AtomicUint / AtomicUint64
+
+```drift
+struct AtomicUint
+struct AtomicUint64
+
+fn atomic_uint_new(value: Uint) -> AtomicUint
+fn atomic_uint64_new(value: Uint64) -> AtomicUint64
+
+implement AtomicUint {
+    fn load(self: &AtomicUint, order: MemoryOrder) -> Uint
+    fn store(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
+    fn compare_exchange(self: &AtomicUint, expected: &mut Uint, desired: Uint, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn fetch_add(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
+    fn fetch_sub(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
+}
+
+implement AtomicUint64 {
+    fn load(self: &AtomicUint64, order: MemoryOrder) -> Uint64
+    fn store(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
+    fn compare_exchange(self: &AtomicUint64, expected: &mut Uint64, desired: Uint64, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn fetch_add(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
+    fn fetch_sub(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
+}
+```
+
+### compare_exchange contract
+
+`compare_exchange` returns `true` on success and `false` on failure.
+- Success: stores `desired`, leaves `expected` unchanged.
+- Failure: writes observed current value into `expected`, does not store `desired`.
+
+Failure-order validity rule:
+- Invalid failure orders (`Release`, `AcqRel`) are rejected by the API guard.
+- Current guard behavior is non-throwing and returns `false`.
+
+### fetch_add / fetch_sub overflow semantics
+
+`fetch_add` and `fetch_sub` use wrapping modular arithmetic and never trap.
+- Unsigned atomics (`AtomicUint`, `AtomicUint64`): modulo `2^N`.
+- Signed atomics (`AtomicInt`): two's-complement modular wrap.
+
+### Behavior and guarantees
+
+- All `std.sync` atomic methods are nothrow.
+- Operations are lock-free when the target/runtime supports lock-free atomics for that width; otherwise runtime fallback may be used.
+- For handoff patterns, correctness requires matching `Release` publisher and `Acquire` consumer on the same synchronization variable.
 
 ## std.err
 

@@ -1,0 +1,23 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	val iters = 100000;
+	var a = sync.atomic_int(0);
+	var i = 0;
+	while i < iters {
+		if not a.compare_exchange(i, i + 1, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire()) {
+			return 1;
+		}
+		i = i + 1;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != iters {
+		return 2;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

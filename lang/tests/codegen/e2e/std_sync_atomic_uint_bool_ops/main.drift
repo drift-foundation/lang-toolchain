@@ -1,0 +1,56 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	var ab = sync.atomic_bool(false);
+	if ab.exchange(true, sync.MemoryOrder::Relaxed()) {
+		return 1;
+	}
+	if not ab.compare_exchange(true, false, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire()) {
+		return 2;
+	}
+	if ab.load(sync.MemoryOrder::Relaxed()) {
+		return 3;
+	}
+	if ab.compare_exchange(true, false, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire()) {
+		return 4;
+	}
+	if ab.load(sync.MemoryOrder::Relaxed()) {
+		return 5;
+	}
+	if ab.compare_exchange(false, true, sync.MemoryOrder::Relaxed(), sync.MemoryOrder::Release()) {
+		return 6;
+	}
+	if ab.load(sync.MemoryOrder::Relaxed()) {
+		return 7;
+	}
+
+	var au = sync.atomic_uint(cast<Uint>(10));
+	if au.exchange(cast<Uint>(3), sync.MemoryOrder::SeqCst()) != cast<Uint>(10) {
+		return 8;
+	}
+	if au.fetch_sub(cast<Uint>(2), sync.MemoryOrder::Relaxed()) != cast<Uint>(3) {
+		return 9;
+	}
+	if au.load(sync.MemoryOrder::Relaxed()) != cast<Uint>(1) {
+		return 10;
+	}
+	if not au.compare_exchange(cast<Uint>(1), cast<Uint>(7), sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire()) {
+		return 11;
+	}
+	if au.load(sync.MemoryOrder::Relaxed()) != cast<Uint>(7) {
+		return 12;
+	}
+	if au.compare_exchange(cast<Uint>(7), cast<Uint>(9), sync.MemoryOrder::Relaxed(), sync.MemoryOrder::AcqRel()) {
+		return 13;
+	}
+	if au.load(sync.MemoryOrder::Relaxed()) != cast<Uint>(7) {
+		return 14;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

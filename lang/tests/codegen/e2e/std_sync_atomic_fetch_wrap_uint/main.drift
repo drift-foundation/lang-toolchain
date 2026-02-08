@@ -1,0 +1,27 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	val max_u: Uint = cast<Uint>(18446744073709551615);
+	var a = sync.atomic_uint(max_u);
+	val old1 = a.fetch_add(cast<Uint>(1), sync.MemoryOrder::Relaxed());
+	if old1 != max_u {
+		return 1;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != cast<Uint>(0) {
+		return 2;
+	}
+	val old2 = a.fetch_sub(cast<Uint>(1), sync.MemoryOrder::Relaxed());
+	if old2 != cast<Uint>(0) {
+		return 3;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != max_u {
+		return 4;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

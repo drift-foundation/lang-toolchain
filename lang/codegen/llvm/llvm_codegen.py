@@ -1067,15 +1067,26 @@ class LlvmModuleBuilder:
 				[
 					f"declare i8 @drift_atomic_load_bool(i8*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_atomic_store_bool(i8*, i8, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_atomic_exchange_bool(i8*, i8, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_atomic_compare_exchange_bool(i8*, i8, i8, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_atomic_store_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_atomic_compare_exchange_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_int({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_atomic_store_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_atomic_compare_exchange_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_uint({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_load_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_atomic_store_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_atomic_compare_exchange_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_uint64({self._llty(DRIFT_INT_TYPE)}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					"",
 				]
 			)
@@ -3776,6 +3787,29 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: atomic_store_bool returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "atomic_exchange_bool":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_exchange_bool expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				val = self._bool_to_storage(val)
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_exchange_bool(i8* {field_ptr}, i8 {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
+			if instr.fn_id.name == "atomic_compare_exchange_bool":
+				if dest is None or len(instr.args) != 5:
+					raise NotImplementedError("LLVM codegen v1: atomic_compare_exchange_bool expects 5 args and captures result")
+				expected_val = self._bool_to_storage(self._map_value(instr.args[1]))
+				desired_val = self._bool_to_storage(self._map_value(instr.args[2]))
+				success_order_val = self._map_value(instr.args[3])
+				failure_order_val = self._map_value(instr.args[4])
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_compare_exchange_bool(i8* {field_ptr}, i8 {expected_val}, i8 {desired_val}, {self._llty(DRIFT_INT_TYPE)} {success_order_val}, {self._llty(DRIFT_INT_TYPE)} {failure_order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
 			if instr.fn_id.name == "atomic_load_int":
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: atomic_load_int result must be captured")
@@ -3791,12 +3825,40 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: atomic_store_int returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "atomic_exchange_int":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_exchange_int expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_compare_exchange_int":
+				if dest is None or len(instr.args) != 5:
+					raise NotImplementedError("LLVM codegen v1: atomic_compare_exchange_int expects 5 args and captures result")
+				expected_val = self._map_value(instr.args[1])
+				desired_val = self._map_value(instr.args[2])
+				success_order_val = self._map_value(instr.args[3])
+				failure_order_val = self._map_value(instr.args[4])
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_compare_exchange_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {expected_val}, {self._llty(DRIFT_INT_TYPE)} {desired_val}, {self._llty(DRIFT_INT_TYPE)} {success_order_val}, {self._llty(DRIFT_INT_TYPE)} {failure_order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
 			if instr.fn_id.name == "atomic_fetch_add_int":
 				if dest is None or len(instr.args) != 3:
 					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_int expects 3 args and captures result")
 				val = self._map_value(instr.args[1])
 				order_val = self._map_value(instr.args[2])
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_fetch_sub_int":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_sub_int expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_int({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
 				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
 				return
 			if instr.fn_id.name == "atomic_load_uint":
@@ -3814,12 +3876,40 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: atomic_store_uint returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "atomic_exchange_uint":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_exchange_uint expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_compare_exchange_uint":
+				if dest is None or len(instr.args) != 5:
+					raise NotImplementedError("LLVM codegen v1: atomic_compare_exchange_uint expects 5 args and captures result")
+				expected_val = self._map_value(instr.args[1])
+				desired_val = self._map_value(instr.args[2])
+				success_order_val = self._map_value(instr.args[3])
+				failure_order_val = self._map_value(instr.args[4])
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_compare_exchange_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {expected_val}, {self._llty(DRIFT_INT_TYPE)} {desired_val}, {self._llty(DRIFT_INT_TYPE)} {success_order_val}, {self._llty(DRIFT_INT_TYPE)} {failure_order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
 			if instr.fn_id.name == "atomic_fetch_add_uint":
 				if dest is None or len(instr.args) != 3:
 					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_uint expects 3 args and captures result")
 				val = self._map_value(instr.args[1])
 				order_val = self._map_value(instr.args[2])
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_fetch_sub_uint":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_sub_uint expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_uint({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
 				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
 				return
 			if instr.fn_id.name == "atomic_load_uint64":
@@ -3837,12 +3927,40 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: atomic_store_uint64 returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "atomic_exchange_uint64":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_exchange_uint64 expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_exchange_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_compare_exchange_uint64":
+				if dest is None or len(instr.args) != 5:
+					raise NotImplementedError("LLVM codegen v1: atomic_compare_exchange_uint64 expects 5 args and captures result")
+				expected_val = self._map_value(instr.args[1])
+				desired_val = self._map_value(instr.args[2])
+				success_order_val = self._map_value(instr.args[3])
+				failure_order_val = self._map_value(instr.args[4])
+				raw = self._fresh("abool")
+				self.lines.append(f"  {raw} = call i8 @drift_atomic_compare_exchange_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {expected_val}, {self._llty(DRIFT_INT_TYPE)} {desired_val}, {self._llty(DRIFT_INT_TYPE)} {success_order_val}, {self._llty(DRIFT_INT_TYPE)} {failure_order_val})")
+				self._bool_from_storage(raw, dest=dest)
+				self.value_types[dest] = "i1"
+				return
 			if instr.fn_id.name == "atomic_fetch_add_uint64":
 				if dest is None or len(instr.args) != 3:
 					raise NotImplementedError("LLVM codegen v1: atomic_fetch_add_uint64 expects 3 args and captures result")
 				val = self._map_value(instr.args[1])
 				order_val = self._map_value(instr.args[2])
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_add_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
+				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+				return
+			if instr.fn_id.name == "atomic_fetch_sub_uint64":
+				if dest is None or len(instr.args) != 3:
+					raise NotImplementedError("LLVM codegen v1: atomic_fetch_sub_uint64 expects 3 args and captures result")
+				val = self._map_value(instr.args[1])
+				order_val = self._map_value(instr.args[2])
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_atomic_fetch_sub_uint64({self._llty(DRIFT_INT_TYPE)}* {field_ptr}, {self._llty(DRIFT_INT_TYPE)} {val}, {self._llty(DRIFT_INT_TYPE)} {order_val})")
 				self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
 				return
 			raise NotImplementedError(f"LLVM codegen v1: unsupported lang.atomic intrinsic {callee_sym}")

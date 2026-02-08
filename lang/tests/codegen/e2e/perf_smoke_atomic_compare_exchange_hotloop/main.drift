@@ -1,0 +1,56 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+
+fn worker_add(per_worker: Int) nothrow -> Int {
+	var a = sync.atomic_int(0);
+	var i = 0;
+	while i < per_worker {
+		val _ = a.fetch_add(1, sync.MemoryOrder::AcqRel());
+		i = i + 1;
+	}
+	return a.load(sync.MemoryOrder::Relaxed());
+}
+
+fn run() -> Int {
+	val workers = 12;
+	val per_worker = 2000;
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+	var i = 0;
+	while i < workers {
+		var t = conc.spawn_cb(core.callback0(| | captures(copy per_worker) => { return worker_add(per_worker); }));
+		tasks.push_back(move t);
+		i = i + 1;
+	}
+
+	var sum = 0;
+	while tasks.len() > 0 {
+		var opt = tasks.pop_front();
+		match opt {
+			Some(var vt) => {
+				var r = vt.join();
+				match r {
+					Ok(v) => {
+						if v != per_worker {
+							return 1;
+						}
+						sum = sum + v;
+					},
+					default => { return 2; }
+				}
+			},
+			default => { return 3; }
+		}
+	}
+	if sum != workers * per_worker {
+		return 4;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

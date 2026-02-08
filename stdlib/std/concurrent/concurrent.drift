@@ -106,7 +106,6 @@ pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 	return atomic.atomic_uint64(v);
 }
 
-
 pub exception VtResultNotAvailable();
 pub exception ExecSubmitFailed(code: Int);
 pub exception InvalidDuration(millis: Int);

@@ -4,6 +4,7 @@ Drift-source end-to-end runner (clang-based).
 Each case lives under `lang/tests/codegen/e2e/<case>/` and must provide:
   - main.drift   (parsed with the copied lang parser)
   - expected.json with exit_code/stdout/stderr fields
+    (optional: timeout_s for per-case runtime budget override)
 
 The runner:
   1) Parses main.drift with the lang parser copy.
@@ -449,18 +450,39 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	return "ok"
 
 
+def _effective_case_timeout(case_dir: Path, default_timeout_s: int) -> int:
+	expected_path = case_dir / "expected.json"
+	if not expected_path.exists():
+		return default_timeout_s
+	try:
+		expected = json.loads(expected_path.read_text())
+	except Exception:
+		return default_timeout_s
+	raw = expected.get("timeout_s")
+	if raw is None:
+		return default_timeout_s
+	try:
+		case_timeout = int(raw)
+	except Exception:
+		return default_timeout_s
+	if case_timeout <= 0:
+		return default_timeout_s
+	return case_timeout
+
+
 def _run_case_with_timeout(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
-	if not timeout_s:
-		return _run_case(case_dir, timeout_s, debug=debug)
+	effective_timeout = _effective_case_timeout(case_dir, timeout_s)
+	if not effective_timeout:
+		return _run_case(case_dir, effective_timeout, debug=debug)
 	old_handler = None
 	def _on_timeout(signum, frame) -> None:
-		raise TimeoutError(f"timeout after {timeout_s}s")
+		raise TimeoutError(f"timeout after {effective_timeout}s")
 	old_handler = signal.signal(signal.SIGALRM, _on_timeout)
-	signal.alarm(timeout_s)
+	signal.alarm(effective_timeout)
 	try:
-		return _run_case(case_dir, timeout_s, debug=debug)
+		return _run_case(case_dir, effective_timeout, debug=debug)
 	except TimeoutError:
-		return f"FAIL (timeout after {timeout_s}s)"
+		return f"FAIL (timeout after {effective_timeout}s)"
 	finally:
 		signal.alarm(0)
 		if old_handler is not None:
@@ -469,23 +491,24 @@ def _run_case_with_timeout(case_dir: Path, timeout_s: int, debug: bool = False) 
 
 def _run_case_worker(case_dir: str, timeout_s: int, debug: bool) -> tuple[str, str]:
 	path = Path(case_dir)
+	effective_timeout = _effective_case_timeout(path, timeout_s)
 	old_handler = None
-	if timeout_s:
+	if effective_timeout:
 		def _on_timeout(signum, frame) -> None:
-			raise TimeoutError(f"timeout after {timeout_s}s")
+			raise TimeoutError(f"timeout after {effective_timeout}s")
 		old_handler = signal.signal(signal.SIGALRM, _on_timeout)
-		signal.alarm(timeout_s)
+		signal.alarm(effective_timeout)
 	try:
-		status = _run_case(path, timeout_s, debug=debug)
+		status = _run_case(path, effective_timeout, debug=debug)
 	except TimeoutError:
-		return path.name, f"FAIL (timeout after {timeout_s}s)"
+		return path.name, f"FAIL (timeout after {effective_timeout}s)"
 	except Exception as err:  # pragma: no cover - worker guardrail
 		if debug:
 			trace = traceback.format_exc()
 			return path.name, f"FAIL (worker exception: {err})\n{trace}"
 		return path.name, f"FAIL (worker exception: {err})"
 	finally:
-		if timeout_s:
+		if effective_timeout:
 			signal.alarm(0)
 			if old_handler is not None:
 				signal.signal(signal.SIGALRM, old_handler)

@@ -1,0 +1,51 @@
+module m
+
+import std.sync as sync;
+
+fn run() -> Int {
+	var a = sync.atomic_int(10);
+	val old1 = a.exchange(20, sync.MemoryOrder::SeqCst());
+	if old1 != 10 {
+		return 1;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != 20 {
+		return 2;
+	}
+	if not a.compare_exchange(20, 30, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire()) {
+		return 3;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != 30 {
+		return 4;
+	}
+	if a.compare_exchange(20, 40, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire()) {
+		return 5;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != 30 {
+		return 6;
+	}
+	val old2 = a.fetch_sub(5, sync.MemoryOrder::Relaxed());
+	if old2 != 30 {
+		return 7;
+	}
+	if a.load(sync.MemoryOrder::Relaxed()) != 25 {
+		return 8;
+	}
+
+	var u = sync.atomic_uint(cast<Uint>(9));
+	val oldu = u.exchange(cast<Uint>(3), sync.MemoryOrder::SeqCst());
+	if oldu != cast<Uint>(9) {
+		return 9;
+	}
+	val oldu2 = u.fetch_sub(cast<Uint>(2), sync.MemoryOrder::Relaxed());
+	if oldu2 != cast<Uint>(3) {
+		return 10;
+	}
+	if u.load(sync.MemoryOrder::Relaxed()) != cast<Uint>(1) {
+		return 11;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

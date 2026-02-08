@@ -1,0 +1,149 @@
+module std.sync
+
+import lang.atomic as atomic;
+
+export {
+	MemoryOrder,
+	AtomicBool,
+	AtomicInt,
+	AtomicUint,
+	AtomicUint64,
+	atomic_bool,
+	atomic_int,
+	atomic_uint,
+	atomic_uint64
+};
+
+pub type MemoryOrder = atomic.MemoryOrder;
+
+pub struct AtomicBool {
+	inner: atomic.AtomicBool
+}
+
+pub struct AtomicInt {
+	inner: atomic.AtomicInt
+}
+
+pub struct AtomicUint {
+	inner: atomic.AtomicUint
+}
+
+pub struct AtomicUint64 {
+	inner: atomic.AtomicUint64
+}
+
+pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
+	return AtomicBool(inner = atomic.atomic_bool(v));
+}
+
+pub fn atomic_int(v: Int) nothrow -> AtomicInt {
+	return AtomicInt(inner = atomic.atomic_int(v));
+}
+
+pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
+	return AtomicUint(inner = atomic.atomic_uint(v));
+}
+
+pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
+	return AtomicUint64(inner = atomic.atomic_uint64(v));
+}
+
+implement AtomicBool {
+	pub fn load(self: &AtomicBool, order: MemoryOrder) nothrow -> Bool {
+		return self.inner.load(order);
+	}
+
+	pub fn store(self: &AtomicBool, v: Bool, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicBool, v: Bool, order: MemoryOrder) nothrow -> Bool {
+		return self.inner.exchange(v, order);
+	}
+
+	pub fn compare_exchange(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
+	}
+}
+
+implement AtomicInt {
+	pub fn load(self: &AtomicInt, order: MemoryOrder) nothrow -> Int {
+		return self.inner.load(order);
+	}
+
+	pub fn store(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
+		return self.inner.exchange(v, order);
+	}
+
+	pub fn compare_exchange(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
+	}
+
+	pub fn fetch_add(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
+		return self.inner.fetch_add(v, order);
+	}
+
+	pub fn fetch_sub(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
+		return self.inner.fetch_sub(v, order);
+	}
+}
+
+implement AtomicUint {
+	pub fn load(self: &AtomicUint, order: MemoryOrder) nothrow -> Uint {
+		return self.inner.load(order);
+	}
+
+	pub fn store(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
+		return self.inner.exchange(v, order);
+	}
+
+	pub fn compare_exchange(self: &AtomicUint, expected: Uint, desired: Uint, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
+	}
+
+	pub fn fetch_add(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
+		return self.inner.fetch_add(v, order);
+	}
+
+	pub fn fetch_sub(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
+		return self.inner.fetch_sub(v, order);
+	}
+}
+
+implement AtomicUint64 {
+	pub fn load(self: &AtomicUint64, order: MemoryOrder) nothrow -> Uint64 {
+		return self.inner.load(order);
+	}
+
+	pub fn store(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
+		return self.inner.exchange(v, order);
+	}
+
+	pub fn compare_exchange(self: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
+	}
+
+	pub fn fetch_add(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
+		return self.inner.fetch_add(v, order);
+	}
+
+	pub fn fetch_sub(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
+		return self.inner.fetch_sub(v, order);
+	}
+}
