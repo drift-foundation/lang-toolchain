@@ -1,0 +1,41 @@
+module m
+
+import std.log as log;
+
+fn run() -> Int {
+	val root = log.logger_named("app").with_min_level(log.Level::Error());
+	val child = root.derive("lib").build();
+	if child.info("child-info", {"x": 1}) {
+		return 1;
+	}
+	if not child.error("child-error", {"x": 2}) {
+		return 2;
+	}
+
+	var b = root.derive("lib-debug");
+	b.min_level(log.Level::Debug());
+	val child_debug = b.build();
+	if not child_debug.debug("child-debug", {"x": 3}) {
+		return 3;
+	}
+
+	if child.debug("child-still-error", {"x": 4}) {
+		return 4;
+	}
+	if root.debug("root-still-error", {"x": 5}) {
+		return 5;
+	}
+
+	val root_debug = root.with_min_level(log.Level::Debug());
+	if not root_debug.debug("root-debug", {"x": 6}) {
+		return 6;
+	}
+	if root.debug("root-unchanged", {"x": 7}) {
+		return 7;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

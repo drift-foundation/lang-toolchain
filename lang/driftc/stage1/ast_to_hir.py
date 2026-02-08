@@ -540,10 +540,10 @@ class AstToHIR:
 		return H.HArrayLiteral(elements=[self.lower_expr(e) for e in expr.elements])
 
 	def _visit_expr_MapLiteral(self, expr: ast.MapLiteral) -> H.HExpr:
-		"""Lower map literal by lowering each entry value expression."""
+		"""Lower map literal by lowering each entry key/value expression."""
 		return H.HMapLiteral(
 			entries=[
-				H.HMapEntry(key=entry.key, value=self.lower_expr(entry.value))
+				H.HMapEntry(key=self.lower_expr(entry.key), value=self.lower_expr(entry.value))
 				for entry in expr.entries
 			]
 		)
@@ -780,7 +780,10 @@ class AstToHIR:
 			if hasattr(H, "HMapLiteral") and isinstance(e, getattr(H, "HMapLiteral")):
 				return H.HMapLiteral(
 					entries=[
-						H.HMapEntry(key=entry.key, value=_rename_expr(entry.value, mapping))
+						H.HMapEntry(
+							key=_rename_expr(entry.key, mapping),
+							value=_rename_expr(entry.value, mapping),
+						)
 						for entry in e.entries
 					]
 				)

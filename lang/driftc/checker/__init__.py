@@ -2075,6 +2075,28 @@ class Checker:
 			if arg_ty is None or param_ty is None:
 				continue
 			if arg_ty != param_ty:
+				try:
+					arg_def = self._type_table.get(arg_ty)
+					param_def = self._type_table.get(param_ty)
+				except Exception:
+					arg_def = None
+					param_def = None
+				if param_def is not None and param_def.kind is TypeKind.INTERFACE:
+					# Owned interface coercion: concrete implementation values are
+					# coercible to interface-typed parameters.
+					if arg_def is not None and arg_def.kind is not TypeKind.INTERFACE:
+						continue
+					# Interface upcast/retarget is allowed when destination is a view
+					# of the source interface value.
+					if arg_def is not None and arg_def.kind is TypeKind.INTERFACE:
+						try:
+							param_inst = self._type_table.get_interface_instance(param_ty)
+							param_base = param_inst.base_id if param_inst is not None else param_ty
+							view_map = self._type_table.interface_instance_view_map(arg_ty)
+							if view_map.get(param_base) == param_ty:
+								continue
+						except Exception:
+							pass
 				diagnostics.append(
 					_chk_diag(
 						message=(

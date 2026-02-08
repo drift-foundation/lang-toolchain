@@ -1,0 +1,31 @@
+module m
+
+import std.log as log;
+
+fn run() -> Int {
+	if log.debug("dbg-main", {"attempts": 1}) {
+		return 1;
+	}
+	if not log.info("info-main", {"attempts": 2}) {
+		return 2;
+	}
+	if not log.error("err-main", {"attempts": 3}) {
+		return 3;
+	}
+
+	val err_only = log.logger_main().with_min_level(log.Level::Error());
+	if err_only.debug("dbg-err-only", {"attempts": 4}) {
+		return 4;
+	}
+	if err_only.info("info-err-only", {"attempts": 5}) {
+		return 5;
+	}
+	if not err_only.error("err-err-only", {"attempts": 6}) {
+		return 6;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

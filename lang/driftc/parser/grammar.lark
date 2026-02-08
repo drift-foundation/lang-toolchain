@@ -513,9 +513,7 @@ array_literal: "[" [expr (COMMA expr)*] "]"
 map_literal: "{" map_entries "}"
            | "{" COLON "}"
 map_entries: map_entry (COMMA map_entry)* COMMA?
-map_entry: map_key COLON expr
-map_key: NAME
-       | STRING
+map_entry: expr COLON expr
 
 // Exception constructor call syntax (used only in `throw`).
 //

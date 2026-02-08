@@ -77,13 +77,16 @@ def test_map_literal_lowering():
 	map_hir = l.lower_expr(
 		ast.MapLiteral(
 			entries=[
-				ast.MapEntry(key="user", value=ast.Literal(1)),
-				ast.MapEntry(key="reason", value=ast.Literal(2)),
+				ast.MapEntry(key=ast.Literal("user"), value=ast.Literal(1)),
+				ast.MapEntry(key=ast.Literal("reason"), value=ast.Literal(2)),
 			]
 		)
 	)
 	assert isinstance(map_hir, HMapLiteral)
-	assert [entry.key for entry in map_hir.entries] == ["user", "reason"]
+	assert isinstance(map_hir.entries[0].key, HLiteralString)
+	assert map_hir.entries[0].key.value == "user"
+	assert isinstance(map_hir.entries[1].key, HLiteralString)
+	assert map_hir.entries[1].key.value == "reason"
 
 
 def test_plain_and_method_calls():

@@ -160,6 +160,16 @@ class DVInitRewriter:
 			return H.HCopy(subject=self._rewrite_expr(expr.subject))
 		if isinstance(expr, H.HArrayLiteral):
 			return H.HArrayLiteral(elements=[self._rewrite_expr(e) for e in expr.elements])
+		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			return H.HMapLiteral(
+				entries=[
+					H.HMapEntry(
+						key=self._rewrite_expr(e.key),
+						value=self._rewrite_expr(e.value),
+					)
+					for e in expr.entries
+				]
+			)
 		if isinstance(expr, H.HExceptionInit):
 			return H.HExceptionInit(
 				event_fqn=expr.event_fqn,
@@ -270,6 +280,10 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 		elif isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:
 				_scan_expr(el)
+		elif hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			for e in expr.entries:
+				_scan_expr(e.key)
+				_scan_expr(e.value)
 		elif isinstance(expr, H.HDVInit):
 			for a in expr.args:
 				_scan_expr(a)
@@ -392,6 +406,10 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 		elif isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:
 				_assign_expr(el)
+		elif hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			for e in expr.entries:
+				_assign_expr(e.key)
+				_assign_expr(e.value)
 		elif isinstance(expr, H.HDVInit):
 			for a in expr.args:
 				_assign_expr(a)

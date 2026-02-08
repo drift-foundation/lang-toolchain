@@ -1,0 +1,8 @@
+{
+  "diagnostics": [
+    {
+      "message_contains": "cannot infer target type for empty map literal; add a type annotation"
+    }
+  ],
+  "exit_code": 1
+}

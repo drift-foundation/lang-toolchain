@@ -1,0 +1,30 @@
+module m
+
+interface Sink {
+	fn write(self: &Self) nothrow -> Int;
+}
+
+struct StdErrSink {
+}
+
+implement Sink for StdErrSink {
+	pub fn write(self: &StdErrSink) nothrow -> Int {
+		return 7;
+	}
+}
+
+struct Holder {
+	sink: Sink
+}
+
+fn build() nothrow -> Holder {
+	return Holder(sink = StdErrSink());
+}
+
+fn main() nothrow -> Int {
+	val h = build();
+	if h.sink.write() != 7 {
+		return 1;
+	}
+	return 0;
+}

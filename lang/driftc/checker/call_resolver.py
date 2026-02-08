@@ -262,6 +262,8 @@ class ResolverContext:
 	infer: Callable[..., InferResult]
 	format_infer_failure: Callable[..., tuple[str, list[str]]]
 	lambda_can_throw: Callable[..., bool]
+	record_iface_coercion: Callable[[object, TypeId], None] | None
+	iface_assignable: Callable[[TypeId, TypeId], bool] | None
 	allow_unsafe: bool
 	unsafe_context: bool
 	allow_unsafe_without_block: bool
@@ -351,6 +353,8 @@ class CallResolverContext:
 	infer: Callable[..., InferResult]
 	format_infer_failure: Callable[..., tuple[str, list[str]]]
 	lambda_can_throw: Callable[..., bool]
+	record_iface_coercion: Callable[[object, TypeId], None] | None
+	iface_assignable: Callable[[TypeId, TypeId], bool] | None
 	allow_unsafe: bool
 	unsafe_context: bool
 	allow_unsafe_without_block: bool
@@ -369,7 +373,7 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer)
 	base.update(overrides)
 	return ResolverContext(**base)
 
@@ -917,6 +921,18 @@ def resolve_struct_ctor(
 			if skip_generic_type_checks or ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
+				want_def = ctx.type_table.get(want)
+				have_def = ctx.type_table.get(have)
+				if want_def.kind is TypeKind.INTERFACE:
+					if have_def.kind is TypeKind.INTERFACE:
+						if ctx.iface_assignable is not None and ctx.iface_assignable(have, want):
+							if ctx.record_iface_coercion is not None:
+								ctx.record_iface_coercion(arg_exprs[idx], want)
+							continue
+					else:
+						if ctx.record_iface_coercion is not None:
+							ctx.record_iface_coercion(arg_exprs[idx], want)
+						continue
 				ctx.diagnostics.append(ctx.tc_diag(message=(f"struct '{struct_name}' field '{field_names[idx]}' type mismatch (have {ctx.type_table.get(have).name}, expected {ctx.type_table.get(want).name})"), severity="error", span=getattr(arg_exprs[idx], "loc", Span())))
 				return None
 	else:
@@ -940,6 +956,18 @@ def resolve_struct_ctor(
 			if skip_generic_type_checks or ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
+				want_def = ctx.type_table.get(want)
+				have_def = ctx.type_table.get(have)
+				if want_def.kind is TypeKind.INTERFACE:
+					if have_def.kind is TypeKind.INTERFACE:
+						if ctx.iface_assignable is not None and ctx.iface_assignable(have, want):
+							if ctx.record_iface_coercion is not None:
+								ctx.record_iface_coercion(ctor_args[idx], want)
+							continue
+					else:
+						if ctx.record_iface_coercion is not None:
+							ctx.record_iface_coercion(ctor_args[idx], want)
+						continue
 				ctx.diagnostics.append(ctx.tc_diag(message=(f"struct '{struct_name}' field '{field_names[field_idx]}' type mismatch (have {ctx.type_table.get(have).name}, expected {ctx.type_table.get(want).name})"), severity="error", span=getattr(ctor_args[idx], "loc", Span())))
 				return None
 	return StructCtorResolveResult(struct_id, field_types, ctor_arg_field_indices, ctor_args)

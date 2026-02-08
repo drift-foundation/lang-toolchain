@@ -1,0 +1,34 @@
+module m
+
+interface Sink {
+	fn write(self: &Self) nothrow -> Int;
+}
+
+struct StdErrSink {
+}
+
+implement Sink for StdErrSink {
+	pub fn write(self: &StdErrSink) nothrow -> Int {
+		return 9;
+	}
+}
+
+struct Holder {
+	sink: Sink
+}
+
+implement Holder {
+	pub fn set_sink(self: &mut Holder, sink: Sink) nothrow -> Void {
+		self.sink = move sink;
+		return;
+	}
+}
+
+fn main() nothrow -> Int {
+	var h = Holder(sink = StdErrSink());
+	h.set_sink(StdErrSink());
+	if h.sink.write() != 9 {
+		return 1;
+	}
+	return 0;
+}

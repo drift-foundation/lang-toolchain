@@ -1,0 +1,34 @@
+module m
+
+import std.log as log;
+import std.concurrent as conc;
+
+fn run() -> Int {
+	var b = log.config_builder();
+	b.queue_capacity(1);
+	b.backpressure_policy(log.BackpressurePolicy::DropNewest());
+	val cfg = b.build();
+	if not log.init(cfg) {
+		return 1;
+	}
+	if not log.info("ev-1", {"x": 1}) {
+		return 2;
+	}
+	if log.info("ev-2", {"x": 2}) {
+		return 3;
+	}
+	if not log.flush(conc.Duration(millis = 10)) {
+		return 4;
+	}
+	if not log.info("ev-3", {"x": 3}) {
+		return 5;
+	}
+	if not log.flush(conc.Duration(millis = 10)) {
+		return 6;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,12 @@
+module m
+
+import std.log as log;
+
+struct User {
+	id: Int
+}
+
+fn main() nothrow -> Int {
+	val _ = log.info("user-created", {"user": User(id = 7)});
+	return 0;
+}

@@ -1,0 +1,27 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-failed",
+      "logger": "main",
+      "attrs": {
+        "attempts": 3,
+        "status": 401
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "debug",
+      "ev": "token-parse",
+      "logger": "auth",
+      "attrs": {
+        "attempts": 3,
+        "status": 401
+      },
+      "tid": "__ANY__"
+    }
+  ]
+}

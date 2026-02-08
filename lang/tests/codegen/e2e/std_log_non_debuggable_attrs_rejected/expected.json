@@ -1,0 +1,13 @@
+{
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "std.log.Debuggable"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "requirement not satisfied"
+    }
+  ]
+}

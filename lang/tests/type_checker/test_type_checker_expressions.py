@@ -103,8 +103,8 @@ def test_map_literal_mixed_values_reports_diagnostic():
 			H.HExprStmt(
 				expr=H.HMapLiteral(
 					entries=[
-						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
-						H.HMapEntry(key="b", value=H.HLiteralBool(True)),
+						H.HMapEntry(key=H.HLiteralString("a"), value=H.HLiteralInt(1)),
+						H.HMapEntry(key=H.HLiteralString("b"), value=H.HLiteralBool(True)),
 					]
 				)
 			)
@@ -121,8 +121,8 @@ def test_map_literal_without_expected_type_reports_diagnostic():
 			H.HExprStmt(
 				expr=H.HMapLiteral(
 					entries=[
-						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
-						H.HMapEntry(key="b", value=H.HLiteralInt(2)),
+						H.HMapEntry(key=H.HLiteralString("a"), value=H.HLiteralInt(1)),
+						H.HMapEntry(key=H.HLiteralString("b"), value=H.HLiteralInt(2)),
 					]
 				)
 			)
@@ -140,8 +140,8 @@ def test_map_literal_with_explicit_map_annotation_ok():
 				name="attrs",
 				value=H.HMapLiteral(
 					entries=[
-						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
-						H.HMapEntry(key="b", value=H.HLiteralInt(2)),
+						H.HMapEntry(key=H.HLiteralString("a"), value=H.HLiteralInt(1)),
+						H.HMapEntry(key=H.HLiteralString("b"), value=H.HLiteralInt(2)),
 					]
 				),
 				declared_type_expr=parser_ast.TypeExpr(
@@ -170,6 +170,29 @@ def test_empty_map_literal_colon_form_with_explicit_map_annotation_ok():
 		]
 	)
 	res = tc.check_function(_fn_id("map_empty_expected"), block)
+	assert res.diagnostics == []
+
+
+def test_map_literal_with_int_keys_explicit_map_annotation_ok():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="attrs",
+				value=H.HMapLiteral(
+					entries=[
+						H.HMapEntry(key=H.HLiteralInt(1), value=H.HLiteralInt(10)),
+						H.HMapEntry(key=H.HLiteralInt(2), value=H.HLiteralInt(20)),
+					]
+				),
+				declared_type_expr=parser_ast.TypeExpr(
+					name="Map",
+					loc=parser_ast.Located(line=1, column=1),
+				),
+			),
+		]
+	)
+	res = tc.check_function(_fn_id("map_int_keys_expected"), block)
 	assert res.diagnostics == []
 
 

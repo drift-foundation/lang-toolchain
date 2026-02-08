@@ -512,7 +512,7 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.MapLiteral(
 			entries=[
 				s0.MapEntry(
-					key=entry.key,
+					key=_convert_expr(entry.key),
 					value=_convert_expr(entry.value),
 					loc=Span.from_loc(getattr(entry, "loc", None)),
 				)

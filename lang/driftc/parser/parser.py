@@ -2500,25 +2500,12 @@ def _build_map_literal(tree: Tree) -> MapLiteral:
     for child in map_entries.children:
         if not isinstance(child, Tree) or _name(child) != "map_entry":
             continue
-        key_node = next((c for c in child.children if isinstance(c, Tree) and _name(c) == "map_key"), None)
-        value_node = next(
-            (
-                c
-                for c in child.children
-                if isinstance(c, Tree) and _name(c) != "map_key"
-            ),
-            None,
-        )
-        if key_node is None or value_node is None:
+        expr_nodes = [c for c in child.children if isinstance(c, Tree)]
+        if len(expr_nodes) < 2:
             continue
-        key_token = next((c for c in key_node.children if isinstance(c, Token) and c.type in {"NAME", "STRING"}), None)
-        if key_token is None:
-            continue
-        if key_token.type == "STRING":
-            key_text = _decode_string_token(key_token)
-        else:
-            key_text = key_token.value
-        entries.append(MapEntry(key=key_text, value=_build_expr(value_node), loc=_loc(child)))
+        key_node = expr_nodes[0]
+        value_node = expr_nodes[1]
+        entries.append(MapEntry(key=_build_expr(key_node), value=_build_expr(value_node), loc=_loc(child)))
     return MapLiteral(loc=_loc(tree), entries=entries)
 
 

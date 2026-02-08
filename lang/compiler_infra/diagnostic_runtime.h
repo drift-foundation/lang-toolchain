@@ -25,10 +25,12 @@ typedef size_t drift_usize;
 _Static_assert(sizeof(drift_isize) == sizeof(void*), "drift_isize must be pointer-sized");
 _Static_assert(sizeof(drift_usize) == sizeof(void*), "drift_usize must be pointer-sized");
 
+#ifndef DRIFT_STRING_RUNTIME_H
 struct DriftString {
     drift_isize len;
     char* data;
 };
+#endif
 
 struct DriftDiagnosticArray {
     struct DriftDiagnosticValue* items;

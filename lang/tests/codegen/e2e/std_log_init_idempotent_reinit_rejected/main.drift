@@ -1,0 +1,28 @@
+module m
+
+import std.log as log;
+
+fn run() -> Int {
+	var b1 = log.config_builder();
+	b1.min_level(log.Level::Info());
+	b1.queue_capacity(2);
+	val cfg1 = b1.build();
+	if not log.init(cfg1) {
+		return 1;
+	}
+	if not log.init(cfg1) {
+		return 2;
+	}
+	var b2 = log.config_builder();
+	b2.min_level(log.Level::Error());
+	b2.queue_capacity(2);
+	val cfg2 = b2.build();
+	if log.init(cfg2) {
+		return 3;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

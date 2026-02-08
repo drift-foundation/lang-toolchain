@@ -1,3 +1,25 @@
+## 2026-02-08 – Logger interface baseline, JSON emission, and deterministic masking
+- Completed `std.log` MVP user-facing interface coverage with e2e/driver tests while keeping mechanics runtime-backed for now.
+- Added/validated map-literal attrs usage for logger calls (`log.<level>(ev, {"k": v, ...})`) and type-gated attrs (`V is Debuggable`).
+- Wired runtime-backed logger enqueue/worker emission to output structured JSON lines with fields:
+  - `tm` (ISO-8601 UTC with millis),
+  - `level`,
+  - `ev`,
+  - `logger`,
+  - `attrs`,
+  - `tid`.
+- Added intrinsic plumbing for logger runtime helpers (`init`, `min_level`, `enqueue`, `flush`, JSON escape, and `DiagnosticValue` JSON conversion) across stdlib/thread/codegen/runtime.
+- Fixed a critical ABI mismatch for `DiagnosticValue` logger conversion by switching `log_runtime_dv_to_json` to by-ref (`&DiagnosticValue` -> pointer at runtime boundary), restoring correct attr values.
+- Fixed C header interop issue for shared `DriftString` definitions (`diagnostic_runtime.h` guarded against `string_runtime.h` redefinition).
+- Extended codegen e2e runner to support nondeterministic JSON-field masking:
+  - new `stderr_jsonl` expected shape,
+  - `__ANY__` wildcard matching for fields like `tm` and `tid`.
+- Updated logger e2e expectations to JSONL masked assertions and validated logger suite stability.
+- Verified green runs:
+  - codegen e2e logger suite (`std_log_*`): 8/8 pass,
+  - driver logger API smoke: 3/3 pass.
+- Pinned follow-on direction: split next work into atomics/memory-ordering capability and migrate logger internals from runtime scaffolding to pure Drift incrementally.
+
 ## 2026-02-07 – Exception captures API read path + e2e value coverage
 - Implemented public capture lookup path for exceptions via `.captures[frame][key]`, lowered as a single non-throwing runtime lookup returning `DiagnosticValue` (`Missing` on unknown frame/key).
 - Added runtime accessor `__exc_captures_get_dv(...)` and compiler/codegen support (`ErrorCapturesGetDV`) for typed capture reads.

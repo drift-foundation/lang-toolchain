@@ -51,7 +51,13 @@ export {
 	net_udp_send_to,
 	net_udp_send_to_v6,
 	net_udp_recv_from,
-	net_udp_recv_from_v6
+	net_udp_recv_from_v6,
+	log_runtime_init,
+	log_runtime_min_level,
+	log_runtime_enqueue,
+	log_runtime_flush,
+	log_runtime_json_escape,
+	log_runtime_dv_to_json
 };
 
 pub type VtHandle = Int;
@@ -105,3 +111,9 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn net_udp_send_to_v6(fd: Int, ip: &String, port: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn net_udp_recv_from(fd: Int, buf: mem.Ptr<Byte>, len: Int, out_ip: &mut String, out_port: &mut Int) nothrow -> Int;
 @intrinsic pub fn net_udp_recv_from_v6(fd: Int, buf: mem.Ptr<Byte>, len: Int, out_ip: &mut String, out_port: &mut Int) nothrow -> Int;
+@intrinsic pub fn log_runtime_init(min_level: Int, queue_capacity: Int, backpressure_policy: Int, write_timeout_ms: Int, enqueue_timeout_ms: Int) nothrow -> Int;
+@intrinsic pub fn log_runtime_min_level() nothrow -> Int;
+@intrinsic pub fn log_runtime_enqueue(level: Int, logger_min_level: Int, enqueue_timeout_ms: Int, payload_json: String) nothrow -> Int;
+@intrinsic pub fn log_runtime_flush(timeout_ms: Int) nothrow -> Int;
+@intrinsic pub fn log_runtime_json_escape(s: String) nothrow -> String;
+@intrinsic pub fn log_runtime_dv_to_json(dv: &DiagnosticValue) nothrow -> String;

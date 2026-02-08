@@ -1,105 +1,63 @@
 # Logger Work Progress
 
-## 1. Pin MVP Contract First (Short Spec Note)
+## Status Summary
 
-- `std.log` levels: `debug`, `info`, `error`.
-- Global default logger plus optional named logger instances.
-- Thread-safe producer API with single-owner sink serialization.
-- Non-throwing, best-effort logging path for app code (`nothrow`-friendly).
-- Backpressure policy pinned before implementation: choose one of `block-with-timeout`, `drop-oldest`, or `drop-newest`.
-- Backpressure policy is configured via builder: `backpressure_policy(...)`.
-- Default backpressure policy is `block_with_timeout`.
-- Root logger default backpressure policy is `block_with_timeout`; derived loggers inherit it unless explicitly overridden at creation.
-- Any dropping policy must expose dropped-record telemetry (for example counters/health metrics) so loss is visible, not silent.
-- Pinned: logging path is async via bounded MPSC queue so caller path is not stalled on sink I/O.
-- Pinned: sink I/O and JSON serialization are owned by a single consumer thread/task.
-- Pinned: producer path is enqueue-only and non-throwing; queue-full behavior follows the pinned backpressure policy.
+- This track is split into:
+  1. interface + behavior baseline (completed),
+  2. mechanics migration to pure Drift (deferred until atomics/memory-ordering lands).
 
-## 2. API Surface (Small, Stable)
+## Completed (Pinned + Implemented)
 
-- Structured JSON is the default formatter.
-- Default timestamp field is `tm` with ISO-8601 UTC format: `YYYY-MM-DDTHH:mm:ss.sssZ`.
-- Logs are events, not prose:
-  - `log.debug(ev, attrs)`
-  - `log.info(ev, attrs)`
-  - `log.error(ev, attrs)`
-- Default global logger name is `main`; plain `log.*(...)` routes through that logger.
-- Default sink for logger `main` is `stderr` (`stdout` is opt-in via config).
-- Canonical shape target:
-  - `ev` (string event name, e.g. `auth-failed`)
-  - `level` (`debug` | `info` | `error`)
-  - `logger` (logger/facility name; default logger is `main`)
-  - `tid` (thread id)
-  - `attrs` (object; nested objects allowed)
-- Logger attrs typing contract: keys are `String`; values are `T` where `T` implements the chosen diagnostic/debug trait (`Debuggable` for now, name can be finalized later).
-- Attribute passing stays machine-friendly and key-value oriented (exact call syntax depends on final language ergonomics).
-- MVP call shape is positional: `log.<level>(ev, attrs)`.
-- `attrs` is a map/object value; target ergonomic form is literal `{ key: value, ... }` once map literals land.
-- Introduce `Debuggable` trait so non-primitive values can project safe structured fields instead of dumping raw object internals.
-- `Debuggable` output may be nested under the attribute key to preserve structure in JSON logs.
-- User-pluggable formatter hook is supported by config builder (default remains JSON).
-- Source metadata (`file`, `line`, `fn`, `module`) is not auto-injected in MVP to avoid compiler magic/special treatment.
-- If source metadata is needed, it should be provided explicitly via attrs until a non-special mechanism is available.
-- Pinned: generic compiler primitive for callsite metadata is `std.meta.caller()`.
+- [x] MVP levels pinned: `debug`, `info`, `error`.
+- [x] Global default logger plus named/sub-loggers pinned (`main` default).
+- [x] Builder surface pinned and implemented:
+  - `sink(...)`
+  - `min_level(...)`
+  - `queue_capacity(...)`
+  - `write_timeout(...)`
+  - `enqueue_timeout(...)`
+  - `backpressure_policy(...)`
+  - `build()`
+- [x] Backpressure policy pinned (`BlockWithTimeout`, `DropOldest`, `DropNewest`), default = block.
+- [x] Event-first API pinned and implemented for MVP shape:
+  - `log.info(ev, attrs)` / `debug` / `error`
+  - attrs passed as typed map/object value.
+- [x] Attr literal dependency unblocked:
+  - map literals landed for logging path,
+  - empty map spelling pinned as `{:}` (with explicit type context required).
+- [x] `Debuggable` trait contract pinned and used for attrs value conversion.
+- [x] `std.meta.caller()` pinned as compiler primitive for optional source injection (no automatic compiler magic in MVP).
+- [x] Default logger sink pinned to `stderr`.
+- [x] Lifecycle pinning done:
+  - init idempotent for same config,
+  - re-init with different config rejected,
+  - no shutdown API in MVP.
+- [x] Interface-owned storage blocker resolved (constructor/assignment coercion), unblocking sink interface usage patterns.
+- [x] Runtime-backed emission now produces structured JSON records including:
+  - `tm`, `level`, `ev`, `logger`, `attrs`, `tid`.
+- [x] E2E deterministic masking support added (`stderr_jsonl` + `__ANY__`) for non-deterministic fields (`tm`, `tid`).
+- [x] Regression coverage in place (driver + `std_log_*` e2e suite currently green).
 
-## 3. Init / Config Builder
+## Intentionally Deferred Until After Atomics/Memory-Ordering
 
-- Provide logger initialization via a small config builder.
-- Root logger carries default settings; additional loggers are derived from an existing logger via builder overlays.
-- Deriving/building a logger always creates a new parent logger instance; existing loggers are unchanged.
-- Builder fields (MVP):
-  - `sink`: `stdout` | `stderr` | `file(path)` | `custom(sink)`
-  - `min_level`: `debug` | `info` | `error`
-  - `backpressure_policy`: `block_with_timeout` | `drop_oldest` | `drop_newest`
-  - `queue_capacity`: bounded queue size
-  - `write_timeout`: max sink write wait
-  - `enqueue_timeout`: max producer enqueue wait (if policy can block)
-- Custom sinks are user-implementable and supported through builder-provided `custom(sink)`.
-- Fanout is modeled as a custom sink (multi-sink forwarding), not a distinct logger-core feature.
-- File sink default policy:
-  - append mode by default
-  - create file if missing
-  - on write failure: do not throw into app path; emit internal logger error to `stderr` (best-effort) and increment sink-failure telemetry
+- [ ] Move logger queue/backpressure core from runtime C to Drift atomics-based implementation.
+- [ ] Move worker dequeue coordination/orchestration to Drift (retain only minimal OS primitives as intrinsics).
+- [ ] Remove logger-specific queue policy logic from runtime C.
+- [ ] Replace temporary runtime `DiagnosticValue -> JSON` conversion path with Drift-side formatter path.
+- [ ] Finalize full custom sink contract behavior on pure Drift mechanics (ownership/move semantics are pinned; backend mechanics migration remains).
 
-## 4. Logger Scoping (Sub-Loggers)
+## Still Open (Post-Atomics Logger Follow-Ups)
 
-- A class/module can create a scoped sub-logger from an existing logger handle.
-- Sub-loggers are cheap clones/children and share the same backend pipeline (queue + sink worker).
-- Sub-loggers carry scope metadata (for example `facility`, `module`, or component name).
-- Sub-loggers may override `min_level`.
-- Sub-loggers do not override sink, queue capacity, timeout, or backpressure policy in MVP.
-- Sub-loggers are shareable handles across files/modules so library code can log through one library-level scoped logger.
-- Hierarchy model: applications configure a root logger once, then libraries/modules derive logger handles from that root (or from other derived loggers), inheriting defaults plus explicit builder overrides.
+- [ ] Add/refresh examples under `lang/examples/logging/`.
+- [ ] Add effective-drift book entry for final logger API and patterns.
+- [ ] Add user-pluggable formatter example (default remains JSON ISO timestamp format).
+- [ ] Add/expand sink examples (file/fanout/custom sink composition).
 
-## 5. Lifecycle Guarantees
+## Resume Point
 
-- `init` is idempotent for equivalent config (repeat init is a no-op).
-- Re-init with a different config is rejected; config mutation requires creating a new logger instance/name.
-- Logger instances are immutable after creation (no in-place config edits).
-- `flush(timeout)` is supported and attempts to drain accepted records to sink within timeout.
-- No `shutdown` API in MVP.
-- Logging remains available for process lifetime once initialized.
-
-## 6. Test Matrix (Before Legacy Cleanup)
-
-- Unit:
-  - level filtering
-  - format correctness
-  - queue overflow/backpressure behavior
-- Concurrency:
-  - many producer threads
-  - no record corruption
-  - all accepted records serialized deterministically
-- E2E:
-  - stdout/stderr sink logging
-  - file sink logging
-  - timeout paths
-  - flush drain guarantees
-
-## 7. Follow-Ups
-
-- Fix examples under `lang/examples/logging/` to valid Drift call syntax (named args use `name = expr`, not `"key": value`), with attrs passed through a proper `attrs` value/builder.
-- Near-term prerequisite feature: add map/object literals (similar ergonomics to array literals), then standardize logger calls as `log.<level>(ev, attrs)` with `{ key: value }` attrs.
-- Empty map literal spelling is `{:}` (avoids `{}` ambiguity with block syntax); non-empty map literals remain `{ key: value, ... }`.
-- Current compiler status: parser + type-checking for map literals is in place; MIR/codegen currently supports typed empty map literal `{:}` and keeps non-empty map literal lowering as pending follow-up.
-- Separate future feature track (non-logging-specific): macro system. Logging macros can later improve ergonomics and lazy attrs/source injection, but macro design should live in its own branch/feature.
+- Active next work is in `work/atomics-memory-ord/work-progress.md`.
+- Once atomics MVP is complete and tested, resume logger at:
+  1. Drift-side queue state,
+  2. Drift-side producer backpressure policies,
+  3. Drift-side worker coordination,
+  4. runtime logger-path removal.

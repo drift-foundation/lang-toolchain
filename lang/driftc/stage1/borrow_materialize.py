@@ -190,6 +190,8 @@ class BorrowMaterializeRewriter:
 			return False
 		if isinstance(expr, H.HArrayLiteral):
 			return any(self._contains_move(e) for e in expr.elements)
+		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			return any(self._contains_move(e.key) or self._contains_move(e.value) for e in expr.entries)
 		if isinstance(expr, H.HDVInit):
 			return any(self._contains_move(a) for a in expr.args)
 		if isinstance(expr, H.HExceptionInit):
@@ -351,6 +353,16 @@ class BorrowMaterializeRewriter:
 				pfx.extend(epfx)
 				new_elems.append(ev)
 			return pfx, H.HArrayLiteral(elements=new_elems)
+		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			pfx: List[H.HStmt] = []
+			new_entries: List[H.HMapEntry] = []
+			for e in expr.entries:
+				kpfx, kv = self._rewrite_expr(e.key)
+				vpfx, vv = self._rewrite_expr(e.value)
+				pfx.extend(kpfx)
+				pfx.extend(vpfx)
+				new_entries.append(H.HMapEntry(key=kv, value=vv))
+			return pfx, H.HMapLiteral(entries=new_entries)
 		if isinstance(expr, H.HFString):
 			pfx: List[H.HStmt] = []
 			new_holes: List[H.HFStringHole] = []

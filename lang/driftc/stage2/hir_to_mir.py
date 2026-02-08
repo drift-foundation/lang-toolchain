@@ -316,6 +316,7 @@ class HIRToMIR:
 		# BindingId -> source name mapping (for capture reconstruction).
 		self._binding_names: dict[int, str] = dict(binding_names) if binding_names else {}
 		self._binding_types: dict[int, TypeId] = dict(binding_types) if binding_types else {}
+		self._next_synth_binding_id: int = -1
 		# Lambda lowering context (hidden fn + env).
 		self._lambda_env_local: str | None = None
 		self._lambda_env_ty: TypeId | None = None
@@ -1716,10 +1717,55 @@ class HIRToMIR:
 		td = self._type_table.get(map_ty)
 		if td.kind is not TypeKind.STRUCT:
 			raise AssertionError("map literal target type must be a concrete struct type (checker bug)")
+		if not expr.entries:
+			dest = self.b.new_temp()
+			self.b.emit(M.ZeroValue(dest=dest, ty=map_ty))
+			self._local_types[dest] = map_ty
+			return dest
+
+		struct_inst = self._type_table.get_struct_instance(map_ty)
+		if struct_inst is None or len(struct_inst.type_args) < 2:
+			raise AssertionError("map literal target must be an instantiated map type (checker bug)")
+		base_def = self._type_table.get(struct_inst.base_id)
+		if base_def.kind is not TypeKind.STRUCT or base_def.module_id != "std.containers" or base_def.name not in {"HashMapCore", "TreeMap"}:
+			raise NotImplementedError("map literal MIR lowering currently supports std.containers HashMap/TreeMap only")
+		key_ty = struct_inst.type_args[0]
+		value_ty = struct_inst.type_args[1]
+
+		insert_info = self._resolve_map_insert_call_info(map_ty=map_ty, key_ty=key_ty, value_ty=value_ty)
+
+		map_local = f"__maplit{self.b.new_temp()}"
+		self.b.ensure_local(map_local)
+		self._local_types[map_local] = map_ty
+		map_binding_id = self._next_synth_binding_id
+		self._next_synth_binding_id -= 1
+		self._binding_names[map_binding_id] = map_local
+		self._binding_types[map_binding_id] = map_ty
+		zero_map = self.b.new_temp()
+		self.b.emit(M.ZeroValue(dest=zero_map, ty=map_ty))
+		self._local_types[zero_map] = map_ty
+		self.b.emit(M.StoreLocal(local=map_local, value=zero_map))
+
+		for entry in expr.entries:
+			insert_expr = H.HMethodCall(
+				receiver=H.HVar(name=map_local, binding_id=map_binding_id, loc=getattr(expr, "loc", Span())),
+				method_name="insert",
+				args=[
+					entry.key,
+					entry.value,
+				],
+				loc=getattr(expr, "loc", Span()),
+			)
+			insert_res, _insert_sig = self._lower_method_call_with_info(insert_expr, insert_info)
+			if insert_info.sig.can_throw:
+				assert insert_res is not None
+				def emit_insert() -> M.ValueId:
+					return insert_res
+				self._lower_can_throw_call_stmt(emit_call=emit_insert)
+
 		dest = self.b.new_temp()
-		if expr.entries:
-			raise NotImplementedError("non-empty map literal MIR lowering is not implemented yet")
-		self.b.emit(M.ZeroValue(dest=dest, ty=map_ty))
+		self.b.emit(M.MoveOut(dest=dest, local=map_local, ty=map_ty))
+		self._moved_locals.add(map_local)
 		self._local_types[dest] = map_ty
 		return dest
 
@@ -2409,6 +2455,8 @@ class HIRToMIR:
 				return False
 			if isinstance(expr, H.HArrayLiteral):
 				return any(expr_can_throw(el) for el in expr.elements)
+			if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+				return any(expr_can_throw(e.key) or expr_can_throw(e.value) for e in expr.entries)
 			if isinstance(expr, H.HDVInit):
 				return any(expr_can_throw(a) for a in expr.args)
 			return False
@@ -5029,6 +5077,78 @@ class HIRToMIR:
 			)
 		return info
 
+	def _resolve_map_insert_call_info(self, *, map_ty: TypeId, key_ty: TypeId, value_ty: TypeId) -> CallInfo:
+		def _same_type_shape(expected: TypeId, actual: TypeId) -> bool:
+			if expected == actual:
+				return True
+			exp = self._type_table.get(expected)
+			act = self._type_table.get(actual)
+			if exp.kind is not act.kind:
+				return False
+			if exp.kind is TypeKind.SCALAR:
+				return exp.module_id == act.module_id and exp.name == act.name
+			if exp.kind is TypeKind.REF:
+				if bool(getattr(exp, "ref_mut", False)) != bool(getattr(act, "ref_mut", False)):
+					return False
+				if not exp.param_types or not act.param_types:
+					return False
+				return _same_type_shape(exp.param_types[0], act.param_types[0])
+			if exp.kind is TypeKind.STRUCT:
+				exp_inst = self._type_table.get_struct_instance(expected)
+				act_inst = self._type_table.get_struct_instance(actual)
+				if exp_inst is not None and act_inst is not None:
+					exp_base = self._type_table.get(exp_inst.base_id)
+					act_base = self._type_table.get(act_inst.base_id)
+					if exp_base.module_id != act_base.module_id or exp_base.name != act_base.name:
+						return False
+					if len(exp_inst.type_args) != len(act_inst.type_args):
+						return False
+					return all(_same_type_shape(e, a) for e, a in zip(exp_inst.type_args, act_inst.type_args))
+				return exp.module_id == act.module_id and exp.name == act.name
+			return False
+
+		matches: list[tuple[FunctionId, FnSignature]] = []
+		for fn_id, sig in self._signatures_by_id.items():
+			if not getattr(sig, "is_method", False):
+				continue
+			if getattr(sig, "method_name", None) != "insert":
+				continue
+			if bool(getattr(sig, "is_wrapper", False)):
+				continue
+			params = list(sig.param_type_ids or [])
+			if len(params) != 3:
+				continue
+			recv = self._type_table.get(params[0])
+			if recv.kind is not TypeKind.REF or not recv.param_types or not bool(getattr(recv, "ref_mut", False)):
+				continue
+			if not _same_type_shape(map_ty, recv.param_types[0]):
+				continue
+			if not _same_type_shape(key_ty, params[1]) or not _same_type_shape(value_ty, params[2]):
+				continue
+			if sig.return_type_id is None:
+				continue
+			matches.append((fn_id, sig))
+		if not matches:
+			raise AssertionError("map literal insert call target not found (checker bug)")
+		if len(matches) > 1:
+			inst = [m for m in matches if "__inst__" in m[0].name]
+			if inst:
+				matches = inst
+		if len(matches) > 1:
+			raise AssertionError("map literal insert call target is ambiguous (checker bug)")
+		fn_id, sig = matches[0]
+		can_throw = self._can_throw_by_id.get(fn_id)
+		if can_throw is None:
+			can_throw = True if sig.declared_can_throw is None else bool(sig.declared_can_throw)
+		return CallInfo(
+			target=CallTarget.direct(fn_id),
+			sig=CallSig(
+				param_types=tuple(sig.param_type_ids or []),
+				user_ret_type=sig.return_type_id,
+				can_throw=bool(can_throw),
+			),
+		)
+
 	def _call_returns_void(self, expr: H.HExpr) -> bool:
 		if isinstance(expr, H.HCall):
 			info = self._call_info_for_expr_optional(expr)
@@ -5815,6 +5935,8 @@ class HIRToMIR:
 		if isinstance(expr, H.HArrayLiteral):
 			elem_ty = self._infer_array_literal_elem_type(expr)
 			return self._type_table.new_array(elem_ty)
+		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			return self._expr_types.get(expr.node_id) if self._expr_types and getattr(expr, "node_id", None) is not None else None
 		if isinstance(expr, H.HField):
 			if self._lambda_capture_slots is not None:
 				key = self._capture_key_for_expr(expr)
@@ -6027,6 +6149,11 @@ class HIRToMIR:
 			if isinstance(expr, H.HArrayLiteral):
 				for e in expr.elements:
 					walk_expr(e)
+				return
+			if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+				for e in expr.entries:
+					walk_expr(e.key)
+					walk_expr(e.value)
 				return
 			if isinstance(expr, H.HFString):
 				for h in expr.holes:

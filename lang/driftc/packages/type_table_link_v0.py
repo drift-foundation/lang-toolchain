@@ -1087,6 +1087,132 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			raise ValueError(f"unsupported type key in package linker: {k!r}")
 
 	# Finalize struct field types deterministically (names + types).
+	host_default_pkg = getattr(host, "package_id", None)
+	host_default_pkg_s = str(host_default_pkg) if isinstance(host_default_pkg, str) else ""
+
+	def _host_pkg_for_module(module_id: str | None) -> str:
+		if not module_id:
+			return ""
+		pkg_id = host.module_packages.get(module_id, host_default_pkg_s)
+		return _normalized_pkg_id_for_module(str(pkg_id), module_id)
+
+	host_key_memo: dict[TypeId, TypeKey] = {}
+
+	def _host_type_key_for_tid(tid: TypeId) -> TypeKey:
+		if tid in host_key_memo:
+			return host_key_memo[tid]
+		td = host.get(tid)
+		if td.kind is TypeKind.SCALAR and td.module_id is None:
+			builtin_name = _canonical_builtin_name(td.name)
+			if builtin_name in {"Int", "Uint", "Uint64", "Byte", "Bool", "Float", "String"}:
+				k = ("builtin", TypeKind.SCALAR.name, builtin_name)
+				host_key_memo[tid] = k
+				return k
+		if td.kind is TypeKind.VOID and td.name == "Void":
+			k = ("builtin", TypeKind.VOID.name, "Void")
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.ERROR and td.name == "Error":
+			k = ("builtin", TypeKind.ERROR.name, "Error")
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.DIAGNOSTICVALUE and td.name == "DiagnosticValue":
+			k = ("builtin", TypeKind.DIAGNOSTICVALUE.name, "DiagnosticValue")
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.UNKNOWN and td.name == "Unknown":
+			k = ("builtin", TypeKind.UNKNOWN.name, "Unknown")
+			host_key_memo[tid] = k
+			return k
+		mid = td.module_id or ""
+		pkg_id = _host_pkg_for_module(td.module_id) if mid else ""
+		if td.kind is TypeKind.STRUCT:
+			inst = host.get_struct_instance(tid)
+			if inst is not None:
+				base_td = host.get(inst.base_id)
+				base_mid = base_td.module_id or ""
+				base_pkg_id = _host_pkg_for_module(base_td.module_id) if base_mid else ""
+				base_key = ("nominal", TypeKind.STRUCT.name, base_pkg_id, base_mid, base_td.name)
+				arg_keys = tuple(_host_type_key_for_tid(x) for x in inst.type_args)
+				k = ("inst", base_key, arg_keys)
+				host_key_memo[tid] = k
+				return k
+			k = ("nominal", TypeKind.STRUCT.name, pkg_id, mid, td.name)
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.INTERFACE:
+			inst = host.get_interface_instance(tid)
+			if inst is not None:
+				base_td = host.get(inst.base_id)
+				base_mid = base_td.module_id or ""
+				base_pkg_id = _host_pkg_for_module(base_td.module_id) if base_mid else ""
+				base_key = ("nominal", TypeKind.INTERFACE.name, base_pkg_id, base_mid, base_td.name)
+				arg_keys = tuple(_host_type_key_for_tid(x) for x in inst.type_args)
+				k = ("inst", base_key, arg_keys)
+				host_key_memo[tid] = k
+				return k
+			k = ("nominal", TypeKind.INTERFACE.name, pkg_id, mid, td.name)
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.VARIANT:
+			inst = host.get_variant_instance(tid)
+			if inst is not None:
+				base_td = host.get(inst.base_id)
+				base_mid = base_td.module_id or ""
+				base_pkg_id = _host_pkg_for_module(base_td.module_id) if base_mid else ""
+				base_key = ("nominal", TypeKind.VARIANT.name, base_pkg_id, base_mid, base_td.name)
+				arg_keys = tuple(_host_type_key_for_tid(x) for x in inst.type_args)
+				k = ("inst", base_key, arg_keys)
+				host_key_memo[tid] = k
+				return k
+			base_key = ("nominal", TypeKind.VARIANT.name, pkg_id, mid, td.name)
+			if td.param_types:
+				arg_keys = tuple(_host_type_key_for_tid(x) for x in td.param_types)
+				k = ("inst", base_key, arg_keys)
+				host_key_memo[tid] = k
+				return k
+			host_key_memo[tid] = base_key
+			return base_key
+		if td.kind in (TypeKind.SCALAR, TypeKind.FORWARD_NOMINAL):
+			k = ("nominal", td.kind.name, pkg_id, mid, td.name)
+			host_key_memo[tid] = k
+			return k
+		if td.kind is TypeKind.TYPEVAR:
+			type_param = td.type_param_id
+			if type_param is None:
+				raise ValueError("host TYPEVAR missing type_param_id")
+			owner = type_param.owner
+			k = ("typevar", _host_pkg_for_module(owner.module), ("owner", owner.module, owner.name, owner.ordinal), type_param.index)
+			host_key_memo[tid] = k
+			return k
+		sub_keys = tuple(_host_type_key_for_tid(x) for x in td.param_types)
+		if td.kind is TypeKind.ARRAY:
+			k = ("array", sub_keys[0])
+		elif td.kind is TypeKind.REF:
+			k = ("ref", bool(td.ref_mut), sub_keys[0])
+		elif td.kind is TypeKind.FNRESULT:
+			k = ("fnresult", sub_keys[0], sub_keys[1])
+		elif td.kind is TypeKind.FUNCTION:
+			k = ("function", bool(td.fn_throws), sub_keys)
+		else:
+			k = ("kind", td.kind.name, td.name, sub_keys, bool(td.ref_mut))
+		host_key_memo[tid] = k
+		return k
+
+	def _is_unknown_type_key(k: object) -> bool:
+		return isinstance(k, tuple) and len(k) == 3 and k[0] == "builtin" and k[1] == TypeKind.UNKNOWN.name and k[2] == "Unknown"
+
+	def _type_key_compatible(lhs: object, rhs: object) -> bool:
+		if _is_unknown_type_key(lhs) or _is_unknown_type_key(rhs):
+			return True
+		if type(lhs) is not type(rhs):
+			return False
+		if isinstance(lhs, tuple):
+			if len(lhs) != len(rhs):
+				return False
+			return all(_type_key_compatible(a, b) for a, b in zip(lhs, rhs))
+		return lhs == rhs
+
 	for nk in sorted(merged_struct_schemas.keys(), key=lambda k: (k.package_id or "", k.module_id or "", k.name)):
 		mid = nk.module_id or ""
 		host_tid = host.require_nominal(kind=TypeKind.STRUCT, module_id=mid, name=nk.name)
@@ -1101,7 +1227,11 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				host._eval_generic_type_expr(f.type_expr, [], module_id=mid) for f in field_schemas
 			]
 			if any(t != host.ensure_unknown() for t in h_td.param_types):
-				if list(h_td.param_types) != field_types:
+				host_fields_key = [_host_type_key_for_tid(t) for t in list(h_td.param_types)]
+				new_fields_key = [_host_type_key_for_tid(t) for t in field_types]
+				if len(host_fields_key) != len(new_fields_key) or any(
+					not _type_key_compatible(a, b) for a, b in zip(host_fields_key, new_fields_key)
+				):
 					raise ValueError(f"struct field type mismatch for '{mid}:{nk.name}'")
 			else:
 				host.define_struct_fields(host_tid, field_types)

@@ -286,7 +286,7 @@ class ArrayLiteral(Expr):
 @dataclass
 class MapEntry:
 	"""Single `{ key: value }` map literal entry."""
-	key: str
+	key: Expr
 	value: Expr
 	loc: Optional[object] = None
 

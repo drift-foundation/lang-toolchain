@@ -1,0 +1,435 @@
+module std.log
+
+import std.core as core;
+import std.containers as containers;
+import std.concurrent as conc;
+import std.iter as iter;
+import lang.thread as thread;
+
+use trait iter.SinglePassIterator;
+
+export {
+	Level,
+	BackpressurePolicy,
+	Sink,
+	StdErrSink,
+	stderr_sink,
+	FormatterKind,
+	Debuggable,
+	Formatter,
+	LogRecord,
+	LoggerConfig,
+	LoggerConfigBuilder,
+	Logger,
+	LoggerBuilder,
+	config_builder,
+	init,
+	logger_main,
+	logger_named,
+	flush,
+	debug,
+	info,
+	error
+};
+
+pub variant Level {
+	Debug,
+	Info,
+	Error
+}
+
+pub variant BackpressurePolicy {
+	BlockWithTimeout,
+	DropOldest,
+	DropNewest
+}
+
+pub interface Sink {
+	fn write(self: &Self, rec: &LogRecord) nothrow -> Bool;
+	fn flush(self: &Self, timeout_ms: Int) nothrow -> Bool;
+}
+
+pub struct StdErrSink {
+}
+
+pub variant FormatterKind {
+	JsonIso8601,
+	Custom(name: String),
+	@tombstone Tombstone
+}
+
+pub trait Debuggable {
+	fn to_debug(self: &Self) nothrow -> DiagnosticValue;
+}
+
+implement Debuggable for Int {
+	pub fn to_debug(self: &Int) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Int(*self);
+	}
+}
+
+implement Debuggable for Uint {
+	pub fn to_debug(self: &Uint) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Int(*self);
+	}
+}
+
+implement Debuggable for Bool {
+	pub fn to_debug(self: &Bool) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Bool(*self);
+	}
+}
+
+implement Debuggable for Float {
+	pub fn to_debug(self: &Float) nothrow -> DiagnosticValue {
+		return DiagnosticValue::Float(*self);
+	}
+}
+
+implement Debuggable for String {
+	pub fn to_debug(self: &String) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(*self);
+	}
+}
+
+implement Debuggable for DiagnosticValue {
+	pub fn to_debug(self: &DiagnosticValue) nothrow -> DiagnosticValue {
+		return *self;
+	}
+}
+
+pub trait Formatter {
+	fn format(self: &Self, rec: &LogRecord) nothrow -> String;
+}
+
+pub struct LogRecord {
+	pub tm: String,
+	pub ev: String,
+	pub level: Level,
+	pub logger: String,
+	pub tid: Int,
+	pub attrs_count: Int
+}
+
+pub struct LoggerConfig {
+	pub sink: Sink,
+	pub min_level: Level,
+	pub queue_capacity: Int,
+	pub write_timeout: conc.Duration,
+	pub enqueue_timeout: conc.Duration,
+	pub backpressure_policy: BackpressurePolicy,
+	pub formatter: FormatterKind
+}
+
+pub struct LoggerConfigBuilder {
+	sink: Sink,
+	min_level: Level,
+	queue_capacity: Int,
+	write_timeout: conc.Duration,
+	enqueue_timeout: conc.Duration,
+	backpressure_policy: BackpressurePolicy,
+	formatter: FormatterKind
+}
+
+pub struct Logger {
+	name: String,
+	min_level: Level
+}
+
+pub struct LoggerBuilder {
+	parent: Logger,
+	name: String,
+	min_level: Optional<Level>
+}
+
+implement core.Copy for Level {
+}
+
+implement core.Copy for BackpressurePolicy {
+}
+
+implement core.Copy for FormatterKind {
+}
+
+implement core.Copy for LoggerConfig {
+}
+
+implement core.Copy for Logger {
+}
+
+implement core.Copy for StdErrSink {
+}
+
+implement Sink for StdErrSink {
+	pub fn write(self: &StdErrSink, rec: &LogRecord) nothrow -> Bool {
+		val _ = self;
+		val _ = rec;
+		return true;
+	}
+
+	pub fn flush(self: &StdErrSink, timeout_ms: Int) nothrow -> Bool {
+		val _ = self;
+		val _ = timeout_ms;
+		return true;
+	}
+}
+
+pub fn stderr_sink() nothrow -> StdErrSink {
+	return StdErrSink();
+}
+
+pub fn config_builder() nothrow -> LoggerConfigBuilder {
+	return LoggerConfigBuilder(
+		sink = stderr_sink(),
+		min_level = Level::Info(),
+		queue_capacity = 1024,
+		write_timeout = conc.Duration(millis = 1000),
+		enqueue_timeout = conc.Duration(millis = 1000),
+		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
+		formatter = FormatterKind::JsonIso8601()
+	);
+}
+
+implement LoggerConfigBuilder {
+	pub fn sink(self: &mut LoggerConfigBuilder, sink: Sink) nothrow -> &mut LoggerConfigBuilder {
+		self.sink = move sink;
+		return self;
+	}
+
+	pub fn min_level(self: &mut LoggerConfigBuilder, var v: Level) nothrow -> &mut LoggerConfigBuilder {
+		self.min_level = move v;
+		return self;
+	}
+
+	pub fn queue_capacity(self: &mut LoggerConfigBuilder, v: Int) nothrow -> &mut LoggerConfigBuilder {
+		self.queue_capacity = v;
+		return self;
+	}
+
+	pub fn write_timeout(self: &mut LoggerConfigBuilder, v: conc.Duration) nothrow -> &mut LoggerConfigBuilder {
+		self.write_timeout = v;
+		return self;
+	}
+
+	pub fn enqueue_timeout(self: &mut LoggerConfigBuilder, v: conc.Duration) nothrow -> &mut LoggerConfigBuilder {
+		self.enqueue_timeout = v;
+		return self;
+	}
+
+	pub fn backpressure_policy(self: &mut LoggerConfigBuilder, var v: BackpressurePolicy) nothrow -> &mut LoggerConfigBuilder {
+		self.backpressure_policy = move v;
+		return self;
+	}
+
+	pub fn formatter(self: &mut LoggerConfigBuilder, var v: FormatterKind) nothrow -> &mut LoggerConfigBuilder {
+		self.formatter = move v;
+		return self;
+	}
+
+	pub fn build(self: &LoggerConfigBuilder) nothrow -> LoggerConfig {
+		return LoggerConfig(
+			sink = self.sink,
+			min_level = self.min_level,
+			queue_capacity = self.queue_capacity,
+			write_timeout = self.write_timeout,
+			enqueue_timeout = self.enqueue_timeout,
+			backpressure_policy = self.backpressure_policy,
+			formatter = self.formatter
+		);
+	}
+}
+
+pub fn init(config: LoggerConfig) nothrow -> Bool {
+	val rc = thread.log_runtime_init(
+		_level_rank(config.min_level),
+		config.queue_capacity,
+		_backpressure_code(config.backpressure_policy),
+		config.write_timeout.millis,
+		config.enqueue_timeout.millis
+	);
+	if rc == 0 {
+		return false;
+	}
+	return true;
+}
+
+pub fn logger_main() nothrow -> Logger {
+	return Logger(name = "main", min_level = _level_from_rank(thread.log_runtime_min_level()));
+}
+
+pub fn logger_named(name: String) nothrow -> Logger {
+	return Logger(name = name, min_level = _level_from_rank(thread.log_runtime_min_level()));
+}
+
+fn _level_rank(level: Level) nothrow -> Int {
+	return match level {
+		Debug => {
+			0
+		},
+		Info => {
+			1
+		},
+		Error => {
+			2
+		}
+	};
+}
+
+fn _level_from_rank(rank: Int) nothrow -> Level {
+	if rank <= 0 {
+		return Level::Debug();
+	}
+	if rank == 1 {
+		return Level::Info();
+	}
+	return Level::Error();
+}
+
+fn _backpressure_code(var policy: BackpressurePolicy) nothrow -> Int {
+	return match policy {
+		BlockWithTimeout => {
+			0
+		},
+		DropOldest => {
+			1
+		},
+		DropNewest => {
+			2
+		}
+	};
+}
+
+fn _enabled(min_level: Level, event_level: Level) nothrow -> Bool {
+	if _level_rank(event_level) >= _level_rank(min_level) {
+		return true;
+	}
+	return false;
+}
+
+fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+	if not _enabled(logger.min_level, level) {
+		core.drop_value(move attrs);
+		return false;
+	}
+	val ok = try _emit_throwing<type V>(logger, level, ev, &attrs) catch { false };
+	core.drop_value(move attrs);
+	return ok;
+}
+
+fn _emit_throwing<V>(logger: &Logger, var level: Level, ev: String, attrs: &containers.HashMap<String, V>) -> Bool require V is Debuggable {
+	val payload = _payload_json<type V>(logger, ev, attrs);
+	val rc = thread.log_runtime_enqueue(_level_rank(level), _level_rank(logger.min_level), 0, payload);
+	if rc == 0 {
+		return false;
+	}
+	return true;
+}
+
+fn _attrs_json<V>(attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
+	var out = "{";
+	var first = true;
+	var it = attrs.iter();
+	while true {
+		val next = it.next();
+		match next {
+			Some(item) => {
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = thread.log_runtime_json_escape(*item.key);
+				val dv = Debuggable::to_debug(item.value);
+				val value_json = thread.log_runtime_dv_to_json(&dv);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return out + "}";
+}
+
+fn _payload_json<V>(logger: &Logger, ev: String, attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
+	val ev_json = thread.log_runtime_json_escape(ev);
+	val logger_json = thread.log_runtime_json_escape(logger.name);
+	val attrs_json = _attrs_json<type V>(attrs);
+	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
+}
+
+implement Logger {
+	pub fn name(self: &Logger) nothrow -> String {
+		return self.name;
+	}
+
+	pub fn min_level(self: &Logger) nothrow -> Level {
+		return self.min_level;
+	}
+
+	pub fn with_min_level(self: &Logger, var level: Level) nothrow -> Logger {
+		return Logger(name = self.name, min_level = move level);
+	}
+
+	pub fn derive(self: &Logger, name: String) nothrow -> LoggerBuilder {
+		return LoggerBuilder(parent = *self, name = name, min_level = Optional<Level>::None());
+	}
+
+	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+		return _emit(self, Level::Debug(), ev, move attrs);
+	}
+
+	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+		return _emit(self, Level::Info(), ev, move attrs);
+	}
+
+	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+		return _emit(self, Level::Error(), ev, move attrs);
+	}
+}
+
+implement LoggerBuilder {
+	pub fn name(self: &mut LoggerBuilder, name: String) nothrow -> &mut LoggerBuilder {
+		self.name = name;
+		return self;
+	}
+
+	pub fn min_level(self: &mut LoggerBuilder, var level: Level) nothrow -> &mut LoggerBuilder {
+		self.min_level = Optional::Some(move level);
+		return self;
+	}
+
+	pub fn build(self: &LoggerBuilder) nothrow -> Logger {
+		val min = match self.min_level {
+			Some(level) => {
+				level
+			},
+			None => {
+				self.parent.min_level
+			}
+		};
+		return Logger(name = self.name, min_level = min);
+	}
+}
+
+pub fn flush(timeout: conc.Duration) nothrow -> Bool {
+	val rc = thread.log_runtime_flush(timeout.millis);
+	if rc == 0 {
+		return false;
+	}
+	return true;
+}
+
+pub fn debug<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+	val main = logger_main();
+	return main.debug(ev, move attrs);
+}
+
+pub fn info<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+	val main = logger_main();
+	return main.info(ev, move attrs);
+}
+
+pub fn error<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+	val main = logger_main();
+	return main.error(ev, move attrs);
+}

@@ -458,7 +458,7 @@ class ArrayLiteral(Expr):
 
 @dataclass
 class MapEntry:
-    key: str
+    key: Expr
     value: Expr
     loc: Located
 

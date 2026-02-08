@@ -1,0 +1,39 @@
+module m
+
+import std.containers as containers;
+
+fn run() -> Int {
+	val attrs: containers.HashMap<Int, Int> = {1: 10, 2: 20};
+	if attrs.len() != 2 {
+		return 1;
+	}
+	val k1 = 1;
+	val v1 = match attrs.get(&k1) {
+		None => {
+			-1
+		},
+		Some(v) => {
+			*v
+		}
+	};
+	if v1 != 10 {
+		return 2;
+	}
+	val k2 = 2;
+	val v2 = match attrs.get(&k2) {
+		None => {
+			-1
+		},
+		Some(v) => {
+			*v
+		}
+	};
+	if v2 != 20 {
+		return 3;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

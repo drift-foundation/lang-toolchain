@@ -673,8 +673,8 @@ class HArrayLiteral(HExpr):
 
 @dataclass
 class HMapEntry(HNode):
-	"""Single map literal entry with a normalized string key."""
-	key: str
+	"""Single map literal entry."""
+	key: HExpr
 	value: HExpr
 
 

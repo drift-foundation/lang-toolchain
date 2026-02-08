@@ -1037,6 +1037,12 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_init({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_min_level()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_enqueue({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_flush({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_json_escape({DRIFT_STRING_TYPE})",
+					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}*)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
@@ -3453,6 +3459,82 @@ class _FuncBuilder:
 					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_init":
+				if len(instr.args) != 5:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_init expects 5 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_init result must be captured")
+				min_level_val = self._map_value(instr.args[0])
+				queue_cap_val = self._map_value(instr.args[1])
+				backpressure_val = self._map_value(instr.args[2])
+				write_timeout_val = self._map_value(instr.args[3])
+				enqueue_timeout_val = self._map_value(instr.args[4])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_init({self._llty(DRIFT_INT_TYPE)} {min_level_val}, {self._llty(DRIFT_INT_TYPE)} {queue_cap_val}, {self._llty(DRIFT_INT_TYPE)} {backpressure_val}, {self._llty(DRIFT_INT_TYPE)} {write_timeout_val}, {self._llty(DRIFT_INT_TYPE)} {enqueue_timeout_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_min_level":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_min_level expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_min_level result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_min_level()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_enqueue":
+				if len(instr.args) != 4:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_enqueue expects 4 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_enqueue result must be captured")
+				level_val = self._map_value(instr.args[0])
+				logger_min_level_val = self._map_value(instr.args[1])
+				enqueue_timeout_val = self._map_value(instr.args[2])
+				payload_val = self._map_value(instr.args[3])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_enqueue({self._llty(DRIFT_INT_TYPE)} {level_val}, {self._llty(DRIFT_INT_TYPE)} {logger_min_level_val}, {self._llty(DRIFT_INT_TYPE)} {enqueue_timeout_val}, {DRIFT_STRING_TYPE} {payload_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_flush":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_flush expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_flush result must be captured")
+				timeout_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_flush({self._llty(DRIFT_INT_TYPE)} {timeout_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_json_escape":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_json_escape expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_json_escape result must be captured")
+				in_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_log_runtime_json_escape({DRIFT_STRING_TYPE} {in_val})"
+				)
+				self.value_types[dest] = DRIFT_STRING_TYPE
+				return
+			if instr.fn_id.name == "log_runtime_dv_to_json":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: log_runtime_dv_to_json expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: log_runtime_dv_to_json result must be captured")
+				dv_ptr = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}* {dv_ptr})"
+				)
+				self.value_types[dest] = DRIFT_STRING_TYPE
 				return
 			if instr.fn_id.name == "console_write":
 				if len(instr.args) != 1:
