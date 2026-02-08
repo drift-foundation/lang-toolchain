@@ -448,6 +448,7 @@ primary: literal
        | "(" expr ")"
        | lambda_expr
        | array_literal
+       | map_literal
 
 cast_expr: CAST LT type_expr GT "(" expr ")"
 
@@ -509,6 +510,12 @@ leading_suffix: call_suffix
               | type_app_suffix
 
 array_literal: "[" [expr (COMMA expr)*] "]"
+map_literal: "{" map_entries "}"
+           | "{" COLON "}"
+map_entries: map_entry (COMMA map_entry)* COMMA?
+map_entry: map_key COLON expr
+map_key: NAME
+       | STRING
 
 // Exception constructor call syntax (used only in `throw`).
 //

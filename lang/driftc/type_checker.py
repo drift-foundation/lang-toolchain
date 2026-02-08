@@ -1825,6 +1825,17 @@ class TypeChecker:
 				return True
 			return False
 
+		def _is_map_like_target_type(ty_id: TypeId | None) -> bool:
+			if ty_id is None:
+				return False
+			td = self.type_table.get(ty_id)
+			# v1 map literal typing bridge:
+			# accept explicit targets named like map containers until a dedicated
+			# map-literal desugaring/typeclass path lands.
+			if td.name in {"Map", "HashMap", "HashMapCore", "TreeMap"}:
+				return True
+			return False
+
 		def _require_copy_value(
 			ty_id: TypeId | None,
 			*,
@@ -7274,6 +7285,39 @@ class TypeChecker:
 						)
 						return record_expr(expr, self._unknown)
 					return record_expr(expr, self.type_table.new_array(elem_types[0]))
+				return record_expr(expr, self._unknown)
+
+			if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+				value_types = [type_expr(entry.value) for entry in expr.entries]
+				if not value_types:
+					if _is_map_like_target_type(expected_type):
+						return record_expr(expr, expected_type if expected_type is not None else self._unknown)
+					diagnostics.append(
+						_tc_diag(
+							message="cannot infer target type for empty map literal; add a type annotation",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				if not all(t == value_types[0] for t in value_types):
+					diagnostics.append(
+						_tc_diag(
+							message="map literal values do not have a consistent type",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				if _is_map_like_target_type(expected_type):
+					return record_expr(expr, expected_type if expected_type is not None else self._unknown)
+				diagnostics.append(
+					_tc_diag(
+						message="cannot infer target type for map literal; add a type annotation",
+						severity="error",
+						span=getattr(expr, "loc", Span()),
+					)
+				)
 				return record_expr(expr, self._unknown)
 
 			if isinstance(expr, H.HTernary):

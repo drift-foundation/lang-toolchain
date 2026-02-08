@@ -32,6 +32,7 @@ from lang.driftc.stage1 import (
 	HField,
 	HIndex,
 	HCall,
+	HMapLiteral,
 	HMethodCall,
 	HExceptionInit,
 	HLet,
@@ -69,6 +70,20 @@ def test_binary_and_field_index():
 	assert field_hir.name == "f"
 	index_hir = l.lower_expr(ast.Index(ast.Name("arr"), ast.Literal(1)))
 	assert isinstance(index_hir, HIndex)
+
+
+def test_map_literal_lowering():
+	l = AstToHIR()
+	map_hir = l.lower_expr(
+		ast.MapLiteral(
+			entries=[
+				ast.MapEntry(key="user", value=ast.Literal(1)),
+				ast.MapEntry(key="reason", value=ast.Literal(2)),
+			]
+		)
+	)
+	assert isinstance(map_hir, HMapLiteral)
+	assert [entry.key for entry in map_hir.entries] == ["user", "reason"]
 
 
 def test_plain_and_method_calls():

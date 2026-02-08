@@ -9,6 +9,8 @@ from lark import Lark, Token, Tree
 
 from .ast import (
     ArrayLiteral,
+    MapEntry,
+    MapLiteral,
     AssignStmt,
     AssertStmt,
     AugAssignStmt,
@@ -2478,6 +2480,8 @@ def _build_expr(node) -> Expr:
         return Literal(loc=_loc(node), value=False)
     if name == "array_literal":
         return _build_array_literal(node)
+    if name == "map_literal":
+        return _build_map_literal(node)
     if node.children:
         return _build_expr(node.children[0])
     raise ValueError(f"Unsupported expression node: {name}")
@@ -2486,6 +2490,36 @@ def _build_expr(node) -> Expr:
 def _build_array_literal(tree: Tree) -> ArrayLiteral:
     elements = [_build_expr(child) for child in tree.children if isinstance(child, Tree)]
     return ArrayLiteral(loc=_loc(tree), elements=elements)
+
+
+def _build_map_literal(tree: Tree) -> MapLiteral:
+    entries: list[MapEntry] = []
+    map_entries = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "map_entries"), None)
+    if map_entries is None:
+        return MapLiteral(loc=_loc(tree), entries=entries)
+    for child in map_entries.children:
+        if not isinstance(child, Tree) or _name(child) != "map_entry":
+            continue
+        key_node = next((c for c in child.children if isinstance(c, Tree) and _name(c) == "map_key"), None)
+        value_node = next(
+            (
+                c
+                for c in child.children
+                if isinstance(c, Tree) and _name(c) != "map_key"
+            ),
+            None,
+        )
+        if key_node is None or value_node is None:
+            continue
+        key_token = next((c for c in key_node.children if isinstance(c, Token) and c.type in {"NAME", "STRING"}), None)
+        if key_token is None:
+            continue
+        if key_token.type == "STRING":
+            key_text = _decode_string_token(key_token)
+        else:
+            key_text = key_token.value
+        entries.append(MapEntry(key=key_text, value=_build_expr(value_node), loc=_loc(child)))
+    return MapLiteral(loc=_loc(tree), entries=entries)
 
 
 def _apply_index_suffix(base: Expr, suffix_node: Tree) -> Index:

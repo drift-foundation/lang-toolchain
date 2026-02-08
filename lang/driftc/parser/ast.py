@@ -457,6 +457,19 @@ class ArrayLiteral(Expr):
 
 
 @dataclass
+class MapEntry:
+    key: str
+    value: Expr
+    loc: Located
+
+
+@dataclass
+class MapLiteral(Expr):
+    loc: Located
+    entries: List[MapEntry]
+
+
+@dataclass
 class FStringHole:
 	"""
 	Single `{expr[:spec]}` hole inside an f-string.

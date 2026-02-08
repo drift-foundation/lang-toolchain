@@ -539,6 +539,15 @@ class AstToHIR:
 		"""Lower array literal by lowering each element expression."""
 		return H.HArrayLiteral(elements=[self.lower_expr(e) for e in expr.elements])
 
+	def _visit_expr_MapLiteral(self, expr: ast.MapLiteral) -> H.HExpr:
+		"""Lower map literal by lowering each entry value expression."""
+		return H.HMapLiteral(
+			entries=[
+				H.HMapEntry(key=entry.key, value=self.lower_expr(entry.value))
+				for entry in expr.entries
+			]
+		)
+
 	def _visit_expr_Lambda(self, expr: ast.Lambda) -> H.HExpr:
 		explicit_captures: list[H.HExplicitCapture] | None = None
 		if getattr(expr, "captures", None) is not None:
@@ -768,6 +777,13 @@ class AstToHIR:
 				)
 			if isinstance(e, H.HArrayLiteral):
 				return H.HArrayLiteral(elements=[_rename_expr(a, mapping) for a in e.elements])
+			if hasattr(H, "HMapLiteral") and isinstance(e, getattr(H, "HMapLiteral")):
+				return H.HMapLiteral(
+					entries=[
+						H.HMapEntry(key=entry.key, value=_rename_expr(entry.value, mapping))
+						for entry in e.entries
+					]
+				)
 			if isinstance(e, H.HExceptionInit):
 				return H.HExceptionInit(
 					event_fqn=e.event_fqn,

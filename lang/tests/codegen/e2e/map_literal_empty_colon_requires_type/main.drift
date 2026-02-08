@@ -1,0 +1,15 @@
+module m
+
+import std.containers as containers;
+
+fn run() -> Int {
+	val attrs: containers.HashMap<String, Int> = {:};
+	if attrs.len() != 0 {
+		return 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

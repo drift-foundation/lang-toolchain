@@ -96,6 +96,83 @@ def test_array_literal_and_index():
 	assert int_ty in res.typed_fn.expr_types.values()
 
 
+def test_map_literal_mixed_values_reports_diagnostic():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HExprStmt(
+				expr=H.HMapLiteral(
+					entries=[
+						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
+						H.HMapEntry(key="b", value=H.HLiteralBool(True)),
+					]
+				)
+			)
+		]
+	)
+	res = tc.check_function(_fn_id("map_mixed"), block)
+	assert any("map literal values do not have a consistent type" in d.message for d in res.diagnostics)
+
+
+def test_map_literal_without_expected_type_reports_diagnostic():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HExprStmt(
+				expr=H.HMapLiteral(
+					entries=[
+						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
+						H.HMapEntry(key="b", value=H.HLiteralInt(2)),
+					]
+				)
+			)
+		]
+	)
+	res = tc.check_function(_fn_id("map_no_expected"), block)
+	assert any("cannot infer target type for map literal; add a type annotation" in d.message for d in res.diagnostics)
+
+
+def test_map_literal_with_explicit_map_annotation_ok():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="attrs",
+				value=H.HMapLiteral(
+					entries=[
+						H.HMapEntry(key="a", value=H.HLiteralInt(1)),
+						H.HMapEntry(key="b", value=H.HLiteralInt(2)),
+					]
+				),
+				declared_type_expr=parser_ast.TypeExpr(
+					name="Map",
+					loc=parser_ast.Located(line=1, column=1),
+				),
+			),
+		]
+	)
+	res = tc.check_function(_fn_id("map_expected"), block)
+	assert res.diagnostics == []
+
+
+def test_empty_map_literal_colon_form_with_explicit_map_annotation_ok():
+	tc = _tc()
+	block = H.HBlock(
+		statements=[
+			H.HLet(
+				name="attrs",
+				value=H.HMapLiteral(entries=[]),
+				declared_type_expr=parser_ast.TypeExpr(
+					name="Map",
+					loc=parser_ast.Located(line=1, column=1),
+				),
+			),
+		]
+	)
+	res = tc.check_function(_fn_id("map_empty_expected"), block)
+	assert res.diagnostics == []
+
+
 def test_ternary_prefers_common_type():
 	tc = _tc()
 	block = H.HBlock(

@@ -31,6 +31,7 @@
   - `logger` (logger/facility name; default logger is `main`)
   - `tid` (thread id)
   - `attrs` (object; nested objects allowed)
+- Logger attrs typing contract: keys are `String`; values are `T` where `T` implements the chosen diagnostic/debug trait (`Debuggable` for now, name can be finalized later).
 - Attribute passing stays machine-friendly and key-value oriented (exact call syntax depends on final language ergonomics).
 - MVP call shape is positional: `log.<level>(ev, attrs)`.
 - `attrs` is a map/object value; target ergonomic form is literal `{ key: value, ... }` once map literals land.
@@ -99,4 +100,6 @@
 
 - Fix examples under `lang/examples/logging/` to valid Drift call syntax (named args use `name = expr`, not `"key": value`), with attrs passed through a proper `attrs` value/builder.
 - Near-term prerequisite feature: add map/object literals (similar ergonomics to array literals), then standardize logger calls as `log.<level>(ev, attrs)` with `{ key: value }` attrs.
+- Empty map literal spelling is `{:}` (avoids `{}` ambiguity with block syntax); non-empty map literals remain `{ key: value, ... }`.
+- Current compiler status: parser + type-checking for map literals is in place; MIR/codegen currently supports typed empty map literal `{:}` and keeps non-empty map literal lowering as pending follow-up.
 - Separate future feature track (non-logging-specific): macro system. Logging macros can later improve ergonomics and lazy attrs/source injection, but macro design should live in its own branch/feature.

@@ -508,6 +508,18 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.Unary(op=expr.op, operand=_convert_expr(expr.operand), loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.ArrayLiteral):
 		return s0.ArrayLiteral(elements=[_convert_expr(e) for e in expr.elements], loc=Span.from_loc(getattr(expr, "loc", None)))
+	if isinstance(expr, parser_ast.MapLiteral):
+		return s0.MapLiteral(
+			entries=[
+				s0.MapEntry(
+					key=entry.key,
+					value=_convert_expr(entry.value),
+					loc=Span.from_loc(getattr(entry, "loc", None)),
+				)
+				for entry in expr.entries
+			],
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.Move):
 		return s0.Move(value=_convert_expr(expr.value), loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Copy):

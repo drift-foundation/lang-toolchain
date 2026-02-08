@@ -212,6 +212,23 @@ fn main() -> Int {
 	assert isinstance(block.statements[0], H.HLoop)
 
 
+def test_parse_map_literal_lowering(tmp_path: Path):
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"""
+fn main() -> Int {
+    val attrs = { user: 1, reason: 2 };
+    return 0;
+}
+"""
+	)
+	module, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
+	assert diagnostics == []
+	block = module.func_hirs[_main_fn_id(module.fn_ids_by_name)]
+	assert len(block.statements) == 2
+	assert isinstance(block.statements[0], H.HLet)
+
+
 def test_fnresult_typeids_are_resolved(tmp_path: Path):
 	"""
 	Ensure the resolver produces real TypeIds for a normal return type.

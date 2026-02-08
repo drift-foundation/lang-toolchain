@@ -1707,6 +1707,22 @@ class HIRToMIR:
 		self.b.current_span = prev_span
 		return final_arr
 
+	def _visit_expr_HMapLiteral(self, expr: H.HMapLiteral) -> M.ValueId:
+		map_ty = self._current_expected_type()
+		if map_ty is None and self._expr_types and getattr(expr, "node_id", None) is not None:
+			map_ty = self._expr_types.get(expr.node_id)
+		if map_ty is None:
+			raise AssertionError("map literal missing concrete target type in MIR lowering (checker bug)")
+		td = self._type_table.get(map_ty)
+		if td.kind is not TypeKind.STRUCT:
+			raise AssertionError("map literal target type must be a concrete struct type (checker bug)")
+		dest = self.b.new_temp()
+		if expr.entries:
+			raise NotImplementedError("non-empty map literal MIR lowering is not implemented yet")
+		self.b.emit(M.ZeroValue(dest=dest, ty=map_ty))
+		self._local_types[dest] = map_ty
+		return dest
+
 	def _lower_len(self, subj_ty: Optional[TypeId], subj_val: M.ValueId, dest: M.ValueId) -> None:
 		"""Lower length for Array<T> and String to Int."""
 		if subj_ty is None:
@@ -5413,7 +5429,7 @@ class HIRToMIR:
 		self._local_types[dest] = info.sig.user_ret_type
 		return dest
 
-	def _lower_method_call(self, expr: H.HMethodCall) -> tuple[M.ValueId | None, CallInfo]:
+	def _lower_method_call_with_info(self, expr: H.HMethodCall, info: CallInfo) -> tuple[M.ValueId | None, CallInfo]:
 		"""
 		Lower a method call to a plain function call.
 
@@ -5428,7 +5444,6 @@ class HIRToMIR:
 		if getattr(expr, "kwargs", None):
 			raise AssertionError("keyword arguments for method calls are not supported in MIR lowering (checker bug)")
 
-		info = self._call_info_for_method(expr)
 		if info.target.kind is CallTargetKind.INDIRECT:
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None and self._expr_types and getattr(expr.receiver, "node_id", None) is not None:
@@ -5501,6 +5516,10 @@ class HIRToMIR:
 		self.b.emit(M.Call(dest=dest, fn_id=target_fn_id, args=arg_vals, can_throw=False))
 		self._local_types[dest] = info.sig.user_ret_type
 		return dest, info
+
+	def _lower_method_call(self, expr: H.HMethodCall) -> tuple[M.ValueId | None, CallInfo]:
+		info = self._call_info_for_method(expr)
+		return self._lower_method_call_with_info(expr, info)
 
 	def _lower_can_throw_call_value(
 		self,

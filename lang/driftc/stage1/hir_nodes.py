@@ -671,6 +671,19 @@ class HArrayLiteral(HExpr):
 	elements: List[HExpr]
 
 
+@dataclass
+class HMapEntry(HNode):
+	"""Single map literal entry with a normalized string key."""
+	key: str
+	value: HExpr
+
+
+@dataclass
+class HMapLiteral(HExpr):
+	"""Map literal with key/value entries."""
+	entries: List[HMapEntry]
+
+
 # Statements
 
 @dataclass
@@ -804,7 +817,7 @@ __all__ = [
 	"HMove", "HCopy",
 	"HKwArg",
 	"HExceptionInit",
-	"HUnary", "HBinary", "HArrayLiteral",
+	"HUnary", "HBinary", "HArrayLiteral", "HMapEntry", "HMapLiteral",
 	"HBlock", "HUnsafeBlock", "HExprStmt", "HLet", "HAssign", "HAugAssign", "HIf", "HLoop",
 	"HBreak", "HContinue", "HReturn", "HAssert",
 	"HThrow", "HRethrow",
