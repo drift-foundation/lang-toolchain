@@ -1,0 +1,47 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_roundtrip(s: String, expected: String) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(ts) => {
+			val out = time.format_iso8601_utc(&ts);
+			if out != expected {
+				return 1;
+			}
+			match time.parse_iso8601_utc(out) {
+				core.Result::Ok(ts2) => {
+					if time.format_iso8601_utc(&ts2) != expected {
+						return 2;
+					}
+				},
+				core.Result::Err(_) => { return 3; }
+			}
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	if expect_roundtrip("1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000Z") != 0 { return 10; }
+	if expect_roundtrip("1970-01-01T00:00:00.123Z", "1970-01-01T00:00:00.123Z") != 0 { return 11; }
+	if expect_roundtrip("2024-02-29T23:59:59.999Z", "2024-02-29T23:59:59.999Z") != 0 { return 12; }
+	val now = time.now_utc();
+	val s = time.format_iso8601_utc(&now);
+	if byte_length(s) != 24 {
+		return 13;
+	}
+	if core.string_byte_at(&s, 23) != cast<Byte>(90) {
+		return 14;
+	}
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 15; }
+	}
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

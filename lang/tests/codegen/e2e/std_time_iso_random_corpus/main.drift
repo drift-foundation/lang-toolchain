@@ -1,0 +1,145 @@
+module m
+
+import std.core as core;
+import std.time as time;
+import std.format as format;
+
+fn next_i31(state: &mut Int) -> Int {
+	*state = (*state * 1103515245 + 12345) % 2147483647;
+	if *state < 0 {
+		*state = -*state;
+	}
+	return *state;
+}
+
+fn rand_range(state: &mut Int, max: Int) -> Int {
+	val x = next_i31(state);
+	return x % max;
+}
+
+fn is_leap(year: Int) -> Bool {
+	if year % 400 == 0 { return true; }
+	if year % 100 == 0 { return false; }
+	if year % 4 == 0 { return true; }
+	return false;
+}
+
+fn days_in_month(year: Int, month: Int) -> Int {
+	if month == 1 { return 31; }
+	if month == 2 {
+		if is_leap(year) { return 29; }
+		return 28;
+	}
+	if month == 3 { return 31; }
+	if month == 4 { return 30; }
+	if month == 5 { return 31; }
+	if month == 6 { return 30; }
+	if month == 7 { return 31; }
+	if month == 8 { return 31; }
+	if month == 9 { return 30; }
+	if month == 10 { return 31; }
+	if month == 11 { return 30; }
+	return 31;
+}
+
+fn pad2(v: Int) -> String {
+	if v < 10 { return "0" + format.format_int(v); }
+	return format.format_int(v);
+}
+
+fn pad3(v: Int) -> String {
+	if v < 10 { return "00" + format.format_int(v); }
+	if v < 100 { return "0" + format.format_int(v); }
+	return format.format_int(v);
+}
+
+fn pad4(v: Int) -> String {
+	if v < 10 { return "000" + format.format_int(v); }
+	if v < 100 { return "00" + format.format_int(v); }
+	if v < 1000 { return "0" + format.format_int(v); }
+	return format.format_int(v);
+}
+
+fn build_iso(year: Int, month: Int, day: Int, hh: Int, mm: Int, ss: Int, ms: Int, with_ms: Bool) -> String {
+	val base = pad4(year) + "-" + pad2(month) + "-" + pad2(day) + "T" + pad2(hh) + ":" + pad2(mm) + ":" + pad2(ss);
+	if with_ms {
+		return base + "." + pad3(ms) + "Z";
+	}
+	return base + "Z";
+}
+
+fn check_one(raw: String, expected: String) -> Int {
+	match time.parse_iso8601_utc(raw) {
+		core.Result::Ok(ts) => {
+			val out = time.format_iso8601_utc(&ts);
+			if out != expected {
+				return 1;
+			}
+			match time.parse_iso8601_utc(out) {
+				core.Result::Ok(ts2) => {
+					if time.format_iso8601_utc(&ts2) != expected {
+						return 2;
+					}
+					return 0;
+				},
+				core.Result::Err(_) => { return 3; }
+			}
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+}
+
+fn run() -> Int {
+	var state: Int = 123456789;
+	var i: Int = 0;
+	while i < 3000 {
+		val year = 1600 + rand_range(&mut state, 1400);
+		val month = 1 + rand_range(&mut state, 12);
+		val max_day = days_in_month(year, month);
+		val day = 1 + rand_range(&mut state, max_day);
+		val hh = rand_range(&mut state, 24);
+		val mm = rand_range(&mut state, 60);
+		val ss = rand_range(&mut state, 60);
+		val ms = rand_range(&mut state, 1000);
+		val with_ms = (rand_range(&mut state, 2) == 0);
+		val raw = build_iso(year, month, day, hh, mm, ss, ms, with_ms);
+		var ms_expected = 0;
+		if with_ms {
+			ms_expected = ms;
+		}
+		val expected = build_iso(year, month, day, hh, mm, ss, ms_expected, true);
+		if check_one(raw, expected) != 0 {
+			return 10;
+		}
+		i = i + 1;
+	}
+	var j: Int = 0;
+	while j < 1000 {
+		var year2: Int = 1600 + rand_range(&mut state, 1400);
+		if is_leap(year2) {
+			year2 = year2 + 1;
+		}
+		val hh2 = rand_range(&mut state, 24);
+		val mm2 = rand_range(&mut state, 60);
+		val ss2 = rand_range(&mut state, 60);
+		val ms2 = rand_range(&mut state, 1000);
+		val bad = build_iso(year2, 2, 29, hh2, mm2, ss2, ms2, true);
+		match time.parse_iso8601_utc(bad) {
+			core.Result::Ok(_) => { return 11; },
+			core.Result::Err(e) => {
+				if e.tag != "invalid-range" {
+					return 12;
+				}
+				if e.offset != 8 {
+					return 13;
+				}
+			}
+		}
+		j = j + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,36 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_err(s: String, tag: String, off: Int) -> Int {
+	match time.parse_iso8601_date(s) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != tag { return 2; }
+			if e.offset != off { return 3; }
+			return 0;
+		}
+	}
+}
+
+fn run() -> Int {
+	if expect_err("", "invalid-syntax", 0) != 0 { return 10; }
+	if expect_err("1970-01-01Z", "invalid-syntax", 0) != 0 { return 11; }
+	if expect_err("1970/01/01", "invalid-syntax", 4) != 0 { return 12; }
+	if expect_err("1970-01/01", "invalid-syntax", 7) != 0 { return 13; }
+	if expect_err("197a-01-01", "invalid-syntax", 0) != 0 { return 14; }
+	if expect_err("1970-0a-01", "invalid-syntax", 5) != 0 { return 15; }
+	if expect_err("1970-01-0a", "invalid-syntax", 8) != 0 { return 16; }
+	if expect_err("1970-00-01", "invalid-range", 5) != 0 { return 17; }
+	if expect_err("1970-13-01", "invalid-range", 5) != 0 { return 18; }
+	if expect_err("1970-02-00", "invalid-range", 8) != 0 { return 19; }
+	if expect_err("1970-02-30", "invalid-range", 8) != 0 { return 20; }
+	if expect_err("1900-02-29", "invalid-range", 8) != 0 { return 21; }
+	if expect_err("2100-02-29", "invalid-range", 8) != 0 { return 22; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

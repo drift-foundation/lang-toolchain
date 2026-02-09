@@ -1,0 +1,35 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_tag(s: String, tag: String) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != tag {
+				return 2;
+			}
+			return 0;
+		}
+	}
+}
+
+fn run() -> Int {
+	if expect_tag("1970-01-01T00:00:00+02:00", "unsupported-offset") != 0 { return 10; }
+	if expect_tag("1970-01-01T00:00:00-0500", "unsupported-offset") != 0 { return 11; }
+	if expect_tag("1970-01-01T00:00:00", "invalid-syntax") != 0 { return 12; }
+	if expect_tag("1970-01-01T00:00:00X", "invalid-utc-designator") != 0 { return 13; }
+	if expect_tag("1970-13-01T00:00:00Z", "invalid-range") != 0 { return 14; }
+	if expect_tag("1970-02-30T00:00:00Z", "invalid-range") != 0 { return 15; }
+	if expect_tag("1970-01-01T24:00:00Z", "invalid-range") != 0 { return 16; }
+	if expect_tag("1970-01-01T00:60:00Z", "invalid-range") != 0 { return 17; }
+	if expect_tag("1970-01-01T00:00:60Z", "invalid-range") != 0 { return 18; }
+	if expect_tag("1970-01-01 00:00:00Z", "invalid-syntax") != 0 { return 19; }
+	if expect_tag("1970-01-01T00:00:00.1Z", "invalid-syntax") != 0 { return 20; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

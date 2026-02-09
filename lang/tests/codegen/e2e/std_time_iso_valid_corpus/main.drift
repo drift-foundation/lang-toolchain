@@ -1,0 +1,42 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_ok(s: String, canon: String) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(ts) => {
+			val out = time.format_iso8601_utc(&ts);
+			if out != canon {
+				return 1;
+			}
+			match time.parse_iso8601_utc(out) {
+				core.Result::Ok(ts2) => {
+					if time.format_iso8601_utc(&ts2) != canon {
+						return 2;
+					}
+				},
+				core.Result::Err(_) => { return 3; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+}
+
+fn run() -> Int {
+	if expect_ok("1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000Z") != 0 { return 10; }
+	if expect_ok("1970-01-01T00:00:00.001Z", "1970-01-01T00:00:00.001Z") != 0 { return 11; }
+	if expect_ok("2000-02-29T12:34:56.789Z", "2000-02-29T12:34:56.789Z") != 0 { return 12; }
+	if expect_ok("2001-02-28T23:59:59.999Z", "2001-02-28T23:59:59.999Z") != 0 { return 13; }
+	if expect_ok("2024-02-29T23:59:59.999Z", "2024-02-29T23:59:59.999Z") != 0 { return 14; }
+	if expect_ok("1969-12-31T23:59:59Z", "1969-12-31T23:59:59.000Z") != 0 { return 15; }
+	if expect_ok("1900-01-01T00:00:00Z", "1900-01-01T00:00:00.000Z") != 0 { return 16; }
+	if expect_ok("2400-02-29T00:00:00Z", "2400-02-29T00:00:00.000Z") != 0 { return 17; }
+	if expect_ok("9999-12-31T23:59:59.999Z", "9999-12-31T23:59:59.999Z") != 0 { return 18; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,366 @@
+module std.time
+
+import std.core as core;
+import std.format as format;
+import lang.thread as thread;
+
+export {
+	Instant,
+	UtcTimestamp,
+	Date,
+	TimeParseError,
+	now_monotonic,
+	now_utc,
+	elapsed_ms,
+	duration_ms_between,
+	format_iso8601_utc,
+	parse_iso8601_utc,
+	is_leap_year,
+	days_in_month,
+	is_valid_date,
+	format_iso8601_date,
+	parse_iso8601_date
+};
+
+pub struct Instant {
+	ticks_ms: Int
+}
+
+pub struct UtcTimestamp {
+	epoch_ms: Int
+}
+
+pub struct Date {
+	pub year: Int,
+	pub month: Int,
+	pub day: Int
+}
+
+pub struct TimeParseError {
+	pub tag: String,
+	pub offset: Int
+}
+
+implement core.Diagnostic for TimeParseError {
+	pub fn to_diag(self: &TimeParseError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub fn now_monotonic() nothrow -> Instant {
+	return Instant(ticks_ms = thread.now_ms());
+}
+
+pub fn elapsed_ms(start: &Instant) nothrow -> Int {
+	val now = thread.now_ms();
+	if now < start.ticks_ms {
+		return 0;
+	}
+	return now - start.ticks_ms;
+}
+
+pub fn now_utc() nothrow -> UtcTimestamp {
+	return UtcTimestamp(epoch_ms = thread.now_utc_ms());
+}
+
+pub fn duration_ms_between(a: &UtcTimestamp, b: &UtcTimestamp) nothrow -> Int {
+	return b.epoch_ms - a.epoch_ms;
+}
+
+pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
+	val day_ms = 86400000;
+	val sec_ms = 1000;
+	var days = _floor_div(ts.epoch_ms, day_ms);
+	var rem_ms = _floor_mod(ts.epoch_ms, day_ms);
+	if rem_ms < 0 {
+		days = days - 1;
+		rem_ms = rem_ms + day_ms;
+	}
+	val sec_of_day = rem_ms / sec_ms;
+	val millis = rem_ms % sec_ms;
+	val hour = sec_of_day / 3600;
+	val minute = (sec_of_day % 3600) / 60;
+	val second = sec_of_day % 60;
+	val date = _civil_from_days(days);
+	return _pad4(date.year) + "-" + _pad2(date.month) + "-" + _pad2(date.day) + "T" + _pad2(hour) + ":" + _pad2(minute) + ":" + _pad2(second) + "." + _pad3(millis) + "Z";
+}
+
+pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimeParseError> {
+	val n = byte_length(s);
+	if n >= 6 {
+		val sign6 = core.string_byte_at(&s, n - 6);
+		if (sign6 == cast<Byte>(43) or sign6 == cast<Byte>(45)) and core.string_byte_at(&s, n - 3) == cast<Byte>(58) {
+			return _err("unsupported-offset", n - 6);
+		}
+	}
+	if n >= 5 {
+		val sign5 = core.string_byte_at(&s, n - 5);
+		if sign5 == cast<Byte>(43) or sign5 == cast<Byte>(45) {
+			return _err("unsupported-offset", n - 5);
+		}
+	}
+	if n != 20 and n != 24 {
+		return _err("invalid-syntax", 0);
+	}
+	if core.string_byte_at(&s, 4) != cast<Byte>(45) { return _err("invalid-syntax", 4); }
+	if core.string_byte_at(&s, 7) != cast<Byte>(45) { return _err("invalid-syntax", 7); }
+	if core.string_byte_at(&s, 10) != cast<Byte>(84) { return _err("invalid-syntax", 10); }
+	if core.string_byte_at(&s, 13) != cast<Byte>(58) { return _err("invalid-syntax", 13); }
+	if core.string_byte_at(&s, 16) != cast<Byte>(58) { return _err("invalid-syntax", 16); }
+	var tz_idx = 19;
+	var millis = 0;
+	if n == 24 {
+		if core.string_byte_at(&s, 19) != cast<Byte>(46) {
+			return _err("invalid-syntax", 19);
+		}
+		val ms_v = _parse_fixed_digits(&s, 20, 3);
+		if ms_v < 0 {
+			return _err("invalid-syntax", 20);
+		}
+		millis = ms_v;
+		tz_idx = 23;
+	}
+	if tz_idx >= n {
+		return _err("invalid-utc-designator", -1);
+	}
+	val tz = core.string_byte_at(&s, tz_idx);
+	if tz == cast<Byte>(43) or tz == cast<Byte>(45) {
+		return _err("unsupported-offset", tz_idx);
+	}
+	if tz != cast<Byte>(90) {
+		return _err("invalid-utc-designator", tz_idx);
+	}
+	val year = _parse_fixed_digits(&s, 0, 4);
+	val month = _parse_fixed_digits(&s, 5, 2);
+	val day = _parse_fixed_digits(&s, 8, 2);
+	val hour = _parse_fixed_digits(&s, 11, 2);
+	val minute = _parse_fixed_digits(&s, 14, 2);
+	val second = _parse_fixed_digits(&s, 17, 2);
+	if year < 0 { return _err("invalid-syntax", 0); }
+	if month < 0 { return _err("invalid-syntax", 5); }
+	if day < 0 { return _err("invalid-syntax", 8); }
+	if hour < 0 { return _err("invalid-syntax", 11); }
+	if minute < 0 { return _err("invalid-syntax", 14); }
+	if second < 0 { return _err("invalid-syntax", 17); }
+	if month < 1 or month > 12 {
+		return _err("invalid-range", 5);
+	}
+	val max_day = _days_in_month(year, month);
+	if day < 1 or day > max_day {
+		return _err("invalid-range", 8);
+	}
+	if hour < 0 or hour > 23 {
+		return _err("invalid-range", 11);
+	}
+	if minute < 0 or minute > 59 {
+		return _err("invalid-range", 14);
+	}
+	if second < 0 or second > 59 {
+		return _err("invalid-range", 17);
+	}
+	val days = _days_from_civil(year, month, day);
+	val sec_of_day = hour * 3600 + minute * 60 + second;
+	val epoch_ms = days * 86400000 + sec_of_day * 1000 + millis;
+	return core.Result::Ok(UtcTimestamp(epoch_ms = epoch_ms));
+}
+
+pub fn is_leap_year(year: Int) nothrow -> Bool {
+	return _is_leap_year(year);
+}
+
+pub fn days_in_month(year: Int, month: Int) nothrow -> Int {
+	if month < 1 or month > 12 {
+		return 0;
+	}
+	return _days_in_month(year, month);
+}
+
+pub fn is_valid_date(year: Int, month: Int, day: Int) nothrow -> Bool {
+	if month < 1 or month > 12 {
+		return false;
+	}
+	if day < 1 {
+		return false;
+	}
+	val max_day = _days_in_month(year, month);
+	if day <= max_day {
+		return true;
+	}
+	return false;
+}
+
+pub fn format_iso8601_date(d: &Date) nothrow -> String {
+	return _pad4(d.year) + "-" + _pad2(d.month) + "-" + _pad2(d.day);
+}
+
+pub fn parse_iso8601_date(s: String) nothrow -> core.Result<Date, TimeParseError> {
+	val n = byte_length(s);
+	if n != 10 {
+		return _err_date("invalid-syntax", 0);
+	}
+	if core.string_byte_at(&s, 4) != cast<Byte>(45) { return _err_date("invalid-syntax", 4); }
+	if core.string_byte_at(&s, 7) != cast<Byte>(45) { return _err_date("invalid-syntax", 7); }
+	val year = _parse_fixed_digits(&s, 0, 4);
+	val month = _parse_fixed_digits(&s, 5, 2);
+	val day = _parse_fixed_digits(&s, 8, 2);
+	if year < 0 { return _err_date("invalid-syntax", 0); }
+	if month < 0 { return _err_date("invalid-syntax", 5); }
+	if day < 0 { return _err_date("invalid-syntax", 8); }
+	if month < 1 or month > 12 {
+		return _err_date("invalid-range", 5);
+	}
+	val max_day = _days_in_month(year, month);
+	if day < 1 or day > max_day {
+		return _err_date("invalid-range", 8);
+	}
+	return core.Result::Ok(Date(year = year, month = month, day = day));
+}
+
+struct CivilDate {
+	year: Int,
+	month: Int,
+	day: Int
+}
+
+fn _err(tag: String, offset: Int) nothrow -> core.Result<UtcTimestamp, TimeParseError> {
+	return core.Result::Err(TimeParseError(tag = tag, offset = offset));
+}
+
+fn _err_date(tag: String, offset: Int) nothrow -> core.Result<Date, TimeParseError> {
+	return core.Result::Err(TimeParseError(tag = tag, offset = offset));
+}
+
+fn _is_digit(b: Byte) nothrow -> Bool {
+	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
+}
+
+fn _digit_to_int(b: Byte) nothrow -> Int {
+	return cast<Int>(b) - 48;
+}
+
+fn _parse_fixed_digits(s: &String, start: Int, count: Int) nothrow -> Int {
+	var i = 0;
+	var out = 0;
+	while i < count {
+		val b = core.string_byte_at(s, start + i);
+		if not _is_digit(b) {
+			return -1;
+		}
+		out = out * 10 + _digit_to_int(b);
+		i = i + 1;
+	}
+	return out;
+}
+
+fn _is_leap_year(year: Int) nothrow -> Bool {
+	if year % 400 == 0 {
+		return true;
+	}
+	if year % 100 == 0 {
+		return false;
+	}
+	if year % 4 == 0 {
+		return true;
+	}
+	return false;
+}
+
+fn _days_in_month(year: Int, month: Int) nothrow -> Int {
+	if month == 1 { return 31; }
+	if month == 2 {
+		if _is_leap_year(year) { return 29; }
+		return 28;
+	}
+	if month == 3 { return 31; }
+	if month == 4 { return 30; }
+	if month == 5 { return 31; }
+	if month == 6 { return 30; }
+	if month == 7 { return 31; }
+	if month == 8 { return 31; }
+	if month == 9 { return 30; }
+	if month == 10 { return 31; }
+	if month == 11 { return 30; }
+	return 31;
+}
+
+fn _floor_div(a: Int, b: Int) nothrow -> Int {
+	var q = a / b;
+	val r = a % b;
+	if r != 0 and ((r > 0 and b < 0) or (r < 0 and b > 0)) {
+		q = q - 1;
+	}
+	return q;
+}
+
+fn _floor_mod(a: Int, b: Int) nothrow -> Int {
+	return a - _floor_div(a, b) * b;
+}
+
+fn _days_from_civil(year: Int, month: Int, day: Int) nothrow -> Int {
+	var y = year;
+	if month <= 2 {
+		y = y - 1;
+	}
+	val era = _floor_div(y, 400);
+	val yoe = y - era * 400;
+	var m_adj = month;
+	if month > 2 {
+		m_adj = month - 3;
+	} else {
+		m_adj = month + 9;
+	}
+	val doy = (153 * m_adj + 2) / 5 + day - 1;
+	val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return era * 146097 + doe - 719468;
+}
+
+fn _civil_from_days(days: Int) nothrow -> CivilDate {
+	val z = days + 719468;
+	val era = _floor_div(z, 146097);
+	val doe = z - era * 146097;
+	val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	var year = yoe + era * 400;
+	val doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	val mp = (5 * doy + 2) / 153;
+	val day = doy - (153 * mp + 2) / 5 + 1;
+	var month = 0;
+	if mp < 10 {
+		month = mp + 3;
+	} else {
+		month = mp - 9;
+	}
+	if month <= 2 {
+		year = year + 1;
+	}
+	return CivilDate(year = year, month = month, day = day);
+}
+
+fn _pad2(v: Int) nothrow -> String {
+	if v < 10 {
+		return "0" + format.format_int(v);
+	}
+	return format.format_int(v);
+}
+
+fn _pad3(v: Int) nothrow -> String {
+	if v < 10 {
+		return "00" + format.format_int(v);
+	}
+	if v < 100 {
+		return "0" + format.format_int(v);
+	}
+	return format.format_int(v);
+}
+
+fn _pad4(v: Int) nothrow -> String {
+	if v < 10 {
+		return "000" + format.format_int(v);
+	}
+	if v < 100 {
+		return "00" + format.format_int(v);
+	}
+	if v < 1000 {
+		return "0" + format.format_int(v);
+	}
+	return format.format_int(v);
+}

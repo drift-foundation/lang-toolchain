@@ -1,0 +1,36 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_date(s: String, y: Int, mo: Int, d: Int, canon: String) -> Int {
+	match time.parse_iso8601_date(s) {
+		core.Result::Ok(dt) => {
+			if dt.year != y { return 1; }
+			if dt.month != mo { return 2; }
+			if dt.day != d { return 3; }
+			if time.format_iso8601_date(&dt) != canon { return 4; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 5; }
+	}
+}
+
+fn run() -> Int {
+	if expect_date("1970-01-01", 1970, 1, 1, "1970-01-01") != 0 { return 10; }
+	if expect_date("2000-02-29", 2000, 2, 29, "2000-02-29") != 0 { return 11; }
+	if expect_date("2400-02-29", 2400, 2, 29, "2400-02-29") != 0 { return 12; }
+	if time.is_leap_year(2000) != true { return 13; }
+	if time.is_leap_year(1900) != false { return 14; }
+	if time.days_in_month(2000, 2) != 29 { return 15; }
+	if time.days_in_month(1900, 2) != 28 { return 16; }
+	if time.days_in_month(2024, 13) != 0 { return 17; }
+	if time.is_valid_date(2024, 2, 29) != true { return 18; }
+	if time.is_valid_date(2023, 2, 29) != false { return 19; }
+	if time.is_valid_date(2024, 13, 1) != false { return 20; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

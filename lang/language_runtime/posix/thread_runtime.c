@@ -398,12 +398,13 @@ static void *drift_exec_worker(void *arg) {
 		}
 		if (atomic_load(&vt->cancelled) && !atomic_load(&vt->started)) {
 			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
-			drift_drop_callback(&vt->cb);
-			atomic_store(&vt->completed, 1);
-			pthread_mutex_lock(&vt->mu);
-			vt->park_token++;
-			pthread_cond_broadcast(&vt->cv);
-			pthread_mutex_unlock(&vt->mu);
+			if (!atomic_exchange(&vt->completed, 1)) {
+				drift_drop_callback(&vt->cb);
+				pthread_mutex_lock(&vt->mu);
+				vt->park_token++;
+				pthread_cond_broadcast(&vt->cv);
+				pthread_mutex_unlock(&vt->mu);
+			}
 			continue;
 		}
 		atomic_store(&vt->started, 1);
@@ -1050,6 +1051,18 @@ uint64_t drift_time_now_ms(void) {
 	return (uint64_t)now;
 }
 
+uint64_t drift_time_now_utc_ms(void) {
+	struct timespec ts;
+	if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+		return 0;
+	}
+	int64_t out = (int64_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
+	if (out < 0) {
+		return 0;
+	}
+	return (uint64_t)out;
+}
+
 uint64_t drift_log_runtime_init(int64_t min_level, int64_t queue_capacity, int64_t backpressure_policy, int64_t write_timeout_ms, int64_t enqueue_timeout_ms) {
 	drift_log_ensure_defaults();
 	if (queue_capacity <= 0) {
@@ -1275,8 +1288,9 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 	pthread_mutex_unlock(&h->mu);
 	if (!atomic_load(&h->started)) {
 		atomic_store(&h->state, DRIFT_VT_CANCELLED);
-		drift_drop_callback(&h->cb);
-		atomic_store(&h->completed, 1);
+		if (!atomic_exchange(&h->completed, 1)) {
+			drift_drop_callback(&h->cb);
+		}
 	}
 	return 0;
 }

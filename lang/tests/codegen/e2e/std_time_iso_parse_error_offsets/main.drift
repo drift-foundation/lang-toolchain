@@ -1,0 +1,52 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_err(s: String, tag: String, off: Int) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != tag {
+				return 2;
+			}
+			if e.offset != off {
+				return 3;
+			}
+			return 0;
+		}
+	}
+}
+
+fn run() -> Int {
+	if expect_err("", "invalid-syntax", 0) != 0 { return 10; }
+	if expect_err("1970-01-01T00:00:00", "invalid-syntax", 0) != 0 { return 11; }
+	if expect_err("1970-01-01T00:00:00.000", "invalid-syntax", 0) != 0 { return 12; }
+	if expect_err("1970-01-01T00:00:00X", "invalid-utc-designator", 19) != 0 { return 13; }
+	if expect_err("1970-01-01T00:00:00+02:00", "unsupported-offset", 19) != 0 { return 14; }
+	if expect_err("1970-01-01T00:00:00-0500", "unsupported-offset", 19) != 0 { return 15; }
+	if expect_err("1970-01-01T00:00:00.000+02:00", "unsupported-offset", 23) != 0 { return 16; }
+	if expect_err("1970/01/01T00:00:00Z", "invalid-syntax", 4) != 0 { return 17; }
+	if expect_err("1970-01-01 00:00:00Z", "invalid-syntax", 10) != 0 { return 18; }
+	if expect_err("1970-01-01T00.00:00Z", "invalid-syntax", 13) != 0 { return 19; }
+	if expect_err("1970-01-01T00:00.00Z", "invalid-syntax", 16) != 0 { return 20; }
+	if expect_err("1970-01-0aT00:00:00Z", "invalid-syntax", 8) != 0 { return 21; }
+	if expect_err("1970-01-01T0a:00:00Z", "invalid-syntax", 11) != 0 { return 22; }
+	if expect_err("1970-01-01T00:0a:00Z", "invalid-syntax", 14) != 0 { return 23; }
+	if expect_err("1970-01-01T00:00:0aZ", "invalid-syntax", 17) != 0 { return 24; }
+	if expect_err("1970-01-01T00:00:00.a00Z", "invalid-syntax", 20) != 0 { return 25; }
+	if expect_err("1970-01-01T00:00:00.00aZ", "invalid-syntax", 20) != 0 { return 26; }
+	if expect_err("1970-01-01T00:00:00.0a0Z", "invalid-syntax", 20) != 0 { return 27; }
+	if expect_err("1970-13-01T00:00:00Z", "invalid-range", 5) != 0 { return 28; }
+	if expect_err("1970-00-01T00:00:00Z", "invalid-range", 5) != 0 { return 29; }
+	if expect_err("1970-02-30T00:00:00Z", "invalid-range", 8) != 0 { return 30; }
+	if expect_err("1970-01-00T00:00:00Z", "invalid-range", 8) != 0 { return 31; }
+	if expect_err("1970-01-01T24:00:00Z", "invalid-range", 11) != 0 { return 32; }
+	if expect_err("1970-01-01T00:60:00Z", "invalid-range", 14) != 0 { return 33; }
+	if expect_err("1970-01-01T00:00:60Z", "invalid-range", 17) != 0 { return 34; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

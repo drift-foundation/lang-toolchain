@@ -1056,6 +1056,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}*)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from_v6({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}*)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()",
 					f"declare void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()",
@@ -3294,6 +3295,14 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "now_utc_ms":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: now_utc_ms expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "exec_default_get":
 				if len(instr.args) != 0:
 					raise NotImplementedError(f"LLVM codegen v1: exec_default_get expects 0 args, got {len(instr.args)}")
@@ -4084,6 +4093,15 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: now_ms result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "now_utc_ms":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: now_utc_ms expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_eventfd_create":

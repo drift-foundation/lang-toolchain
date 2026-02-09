@@ -1,0 +1,40 @@
+module m
+
+import std.core as core;
+import std.time as time;
+
+fn expect_ok(s: String) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+fn expect_range_err(s: String) -> Int {
+	match time.parse_iso8601_utc(s) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-range" {
+				return 2;
+			}
+			if e.offset != 8 {
+				return 3;
+			}
+			return 0;
+		}
+	}
+}
+
+fn run() -> Int {
+	if expect_ok("2000-02-29T00:00:00Z") != 0 { return 10; }
+	if expect_ok("2400-02-29T00:00:00Z") != 0 { return 11; }
+	if expect_range_err("1900-02-29T00:00:00Z") != 0 { return 12; }
+	if expect_range_err("2100-02-29T00:00:00Z") != 0 { return 13; }
+	if expect_range_err("2200-02-29T00:00:00Z") != 0 { return 14; }
+	if expect_range_err("2300-02-29T00:00:00Z") != 0 { return 15; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

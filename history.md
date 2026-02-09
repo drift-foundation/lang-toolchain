@@ -400,3 +400,58 @@
   - `lang/tests/driver/test_driftc_codegen_void_e2e.py`
 - Added next-focus planning doc for UTC-only minimal time support:
   - `work/time/work-progress.md`.
+## 2026-02-09 – std.time UTC MVP implementation (phases 2-4)
+- Added dedicated UTC runtime primitive path distinct from monotonic time:
+  - `lang.thread.now_utc_ms()` intrinsic
+  - LLVM lowering to `drift_time_now_utc_ms`
+  - POSIX runtime implementation using `CLOCK_REALTIME`.
+- Updated `std.time.now_utc()` to use UTC runtime source while keeping monotonic APIs on `now_ms()`.
+- Implemented `std.time.format_iso8601_utc` canonical output:
+  - `YYYY-MM-DDTHH:mm:ss.sssZ`
+  - integer civil-date conversion from epoch milliseconds (UTC-only).
+- Implemented `std.time.parse_iso8601_utc` strict parser:
+  - accepts `YYYY-MM-DDTHH:mm:ssZ` and `YYYY-MM-DDTHH:mm:ss.sssZ`
+  - rejects offsets/local forms and malformed/range-invalid fields
+  - emits pinned tags: `invalid-syntax`, `invalid-range`, `invalid-utc-designator`, `unsupported-offset`.
+- Added std.time e2e coverage:
+  - `lang/tests/codegen/e2e/std_time_iso_parse_format/`
+  - `lang/tests/codegen/e2e/std_time_iso_parse_invalid/`
+  - retained `lang/tests/codegen/e2e/std_time_monotonic_smoke/`.
+- Kept driver API compile coverage passing:
+  - `lang/tests/driver/test_std_time_api.py`.
+## 2026-02-09 – std.time deep hardening coverage
+- Added strict parser error tag+offset regression coverage:
+  - `lang/tests/codegen/e2e/std_time_iso_parse_error_offsets/`.
+- Added broad valid corpus parse/format roundtrip coverage:
+  - `lang/tests/codegen/e2e/std_time_iso_valid_corpus/`.
+- Added duration/date-math edge coverage across leap/day/month/year boundaries:
+  - `lang/tests/codegen/e2e/std_time_iso_duration_edges/`.
+- Added negative-epoch behavior coverage for canonical formatting and signed deltas:
+  - `lang/tests/codegen/e2e/std_time_iso_negative_epoch/`.
+- Added Gregorian century leap-rule coverage (2000/2400 leap, 1900/2100/2200/2300 non-leap):
+  - `lang/tests/codegen/e2e/std_time_iso_century_leap_rules/`.
+- Added fixed-seed high-volume randomized corpus coverage:
+  - `lang/tests/codegen/e2e/std_time_iso_random_corpus/` (3000 valid generated timestamps + 1000 generated invalid non-leap Feb-29 cases).
+## 2026-02-09 – std.time Date MVP
+- Added `Date` support to `std.time`:
+  - `Date { year, month, day }`
+  - `is_leap_year`, `days_in_month`, `is_valid_date`
+  - `format_iso8601_date`, `parse_iso8601_date`.
+- Added Date e2e coverage:
+  - `lang/tests/codegen/e2e/std_time_date_parse_format/`
+  - `lang/tests/codegen/e2e/std_time_date_invalid_offsets/`.
+- Added driver API compile coverage:
+  - `lang/tests/driver/test_std_time_date_api.py`.
+## 2026-02-09 – Concurrency cancel-before-start runtime race fix
+- Fixed an intermittent cancellation race in POSIX thread runtime that could cause double callback destruction and heap corruption (`malloc_consolidate(): unaligned fastbin chunk detected`) in cancel-before-start paths.
+- Runtime change in `lang/language_runtime/posix/thread_runtime.c`:
+  - guarded callback drop with `atomic_exchange(completed, 1)` in both worker pre-start-cancel handling and `drift_thread_cancel`, ensuring single-owner destruction.
+- Added regression stress e2e:
+  - `lang/tests/codegen/e2e/concurrent_cancel_before_start_race_stress/`
+  - repeatedly exercises spawn→cancel→join_timeout(0) to lock in race behavior.
+- Revalidated related cancellation cases:
+  - `concurrent_cancel_before_start_join_timeout_zero_cancelled`
+  - `concurrent_cancel_before_start_join_returns_cancelled`
+  - `concurrent_cancel_before_start_join_timeout_nonzero_cancelled`
+  - `concurrent_cancel_after_start_does_not_kill`
+  - `concurrent_cancel_then_join_closed`.
