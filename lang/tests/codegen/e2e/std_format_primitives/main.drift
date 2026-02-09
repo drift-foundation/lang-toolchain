@@ -1,0 +1,18 @@
+module m
+
+import std.format as fmt;
+
+fn run() -> Int {
+	if fmt.format_bool(true) != "true" { return 1; }
+	if fmt.format_bool(false) != "false" { return 2; }
+	if fmt.format_int(42) != "42" { return 3; }
+	if fmt.format_int(-7) != "-7" { return 4; }
+	if fmt.format_uint(cast<Uint>(9)) != "9" { return 5; }
+	if fmt.format_float(1.25) != "1.25E0" { return 6; }
+	if fmt.format_float(7.0) != "7E0" { return 7; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

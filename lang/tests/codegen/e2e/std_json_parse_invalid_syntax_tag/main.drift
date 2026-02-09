@@ -1,0 +1,23 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn run() -> Int {
+	val text = "{\"a\":}";
+	match json.parse(&text) {
+		core.Result::Ok(_) => {
+			return 1;
+		},
+		core.Result::Err(e) => {
+			if e.tag != "invalid-syntax" {
+				return 2;
+			}
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

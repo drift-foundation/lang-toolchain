@@ -409,7 +409,14 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 						if schema is not None and schema.type_params:
 							return table.ensure_unknown()
 					return core_base
-		return table.ensure_named(raw, module_id=module_id)
+			unique = (
+				table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=str(raw))
+				or table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=str(raw))
+				or table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=str(raw))
+			)
+			if unique is not None:
+				return unique
+			return table.ensure_named(raw, module_id=module_id)
 
 	# Tuple forms used by legacy call sites.
 	if isinstance(raw, tuple):

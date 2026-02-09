@@ -1,0 +1,317 @@
+module std.parse
+
+import std.core as core;
+
+export {
+	ParseError,
+	parse_bool,
+	parse_int,
+	parse_uint,
+	parse_float
+};
+
+pub struct ParseError {
+	pub tag: String,
+	pub offset: Int
+}
+
+const INT_MIN: Int = -9223372036854775808;
+const INT_MAX: Int = 9223372036854775807;
+
+implement core.Diagnostic for ParseError {
+	pub fn to_diag(self: &ParseError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+fn _is_digit(b: Byte) nothrow -> Bool {
+	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
+}
+
+fn _digit_to_int(b: Byte) nothrow -> Int {
+	return cast<Int>(b) - 48;
+}
+
+fn _digit_to_uint(b: Byte) nothrow -> Uint {
+	return cast<Uint>(cast<Int>(b) - 48);
+}
+
+fn _digit_to_float(b: Byte) nothrow -> Float {
+	if b == cast<Byte>(48) { return 0.0; }
+	if b == cast<Byte>(49) { return 1.0; }
+	if b == cast<Byte>(50) { return 2.0; }
+	if b == cast<Byte>(51) { return 3.0; }
+	if b == cast<Byte>(52) { return 4.0; }
+	if b == cast<Byte>(53) { return 5.0; }
+	if b == cast<Byte>(54) { return 6.0; }
+	if b == cast<Byte>(55) { return 7.0; }
+	if b == cast<Byte>(56) { return 8.0; }
+	if b == cast<Byte>(57) { return 9.0; }
+	return 0.0;
+}
+
+fn _to_lower_ascii(b: Byte) nothrow -> Byte {
+	if b >= cast<Byte>(65) and b <= cast<Byte>(90) {
+		return cast<Byte>(cast<Int>(b) + 32);
+	}
+	return b;
+}
+
+fn _eq_ascii_ci_slice(s: &String, start: Int, lit: String) nothrow -> Bool {
+	val n = byte_length(*s);
+	val m = byte_length(lit);
+	if start < 0 or start + m != n {
+		return false;
+	}
+	var i = 0;
+	while i < m {
+		val a = _to_lower_ascii(core.string_byte_at(s, start + i));
+		val b = _to_lower_ascii(core.string_byte_at(&lit, i));
+		if a != b {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+pub fn parse_bool(s: String) nothrow -> Bool {
+	if s == "1" {
+		return true;
+	}
+	if s == "true" { return true; }
+	if s == "truE" { return true; }
+	if s == "trUe" { return true; }
+	if s == "trUE" { return true; }
+	if s == "tRue" { return true; }
+	if s == "tRuE" { return true; }
+	if s == "tRUe" { return true; }
+	if s == "tRUE" { return true; }
+	if s == "True" { return true; }
+	if s == "TruE" { return true; }
+	if s == "TrUe" { return true; }
+	if s == "TrUE" { return true; }
+	if s == "TRue" { return true; }
+	if s == "TRuE" { return true; }
+	if s == "TRUe" { return true; }
+	if s == "TRUE" { return true; }
+	if s == "yes" { return true; }
+	if s == "yeS" { return true; }
+	if s == "yEs" { return true; }
+	if s == "yES" { return true; }
+	if s == "Yes" { return true; }
+	if s == "YeS" { return true; }
+	if s == "YEs" { return true; }
+	if s == "YES" { return true; }
+	if s == "on" { return true; }
+	if s == "oN" { return true; }
+	if s == "On" { return true; }
+	if s == "ON" { return true; }
+	return false;
+}
+
+pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
+	val len = byte_length(s);
+	if len == 0 {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
+	}
+	var i = 0;
+	var neg = false;
+	val first = core.string_byte_at(&s, 0);
+	if first == cast<Byte>(45) {
+		neg = true;
+		i = 1;
+	} else {
+		if first == cast<Byte>(43) {
+			i = 1;
+		}
+	}
+	if i >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	var acc = 0;
+	while i < len {
+		val b = core.string_byte_at(&s, i);
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
+		}
+		val d = _digit_to_int(b);
+		if neg {
+			if acc < (INT_MIN + d) / 10 {
+				return core.Result::Err(ParseError(tag = "underflow", offset = i));
+			}
+			acc = acc * 10 - d;
+		} else {
+			if acc > (INT_MAX - d) / 10 {
+				return core.Result::Err(ParseError(tag = "overflow", offset = i));
+			}
+			acc = acc * 10 + d;
+		}
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
+}
+
+pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
+	val len = byte_length(s);
+	if len == 0 {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
+	}
+	var i = 0;
+	val first = core.string_byte_at(&s, 0);
+	if first == cast<Byte>(43) {
+		i = 1;
+	}
+	if i >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	if first == cast<Byte>(45) {
+		return core.Result::Err(ParseError(tag = "invalid-datatype", offset = 0));
+	}
+	val uint_max: Uint = cast<Uint>(18446744073709551615);
+	var acc: Uint = cast<Uint>(0);
+	while i < len {
+		val b = core.string_byte_at(&s, i);
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
+		}
+		val d = _digit_to_uint(b);
+		if acc > (uint_max - d) / cast<Uint>(10) {
+			return core.Result::Err(ParseError(tag = "overflow", offset = i));
+		}
+		acc = acc * cast<Uint>(10) + d;
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
+}
+
+pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
+	val len = byte_length(s);
+	if len == 0 {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
+	}
+	var i = 0;
+	var neg = false;
+	val first = core.string_byte_at(&s, 0);
+	if first == cast<Byte>(45) {
+		neg = true;
+		i = 1;
+	} else {
+		if first == cast<Byte>(43) {
+			i = 1;
+		}
+	}
+	if i >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	if _eq_ascii_ci_slice(&s, i, "nan") {
+		var nan = 0.0 / 0.0;
+		if neg {
+			nan = -nan;
+		}
+		return core.Result::Ok(nan);
+	}
+	if _eq_ascii_ci_slice(&s, i, "inf") or _eq_ascii_ci_slice(&s, i, "infinity") {
+		var inf = 1.0 / 0.0;
+		if neg {
+			inf = -inf;
+		}
+		return core.Result::Ok(inf);
+	}
+	var saw_int_digit = false;
+	var value: Float = 0.0;
+	while i < len {
+		val b = core.string_byte_at(&s, i);
+		if not _is_digit(b) {
+			break;
+		}
+		saw_int_digit = true;
+		value = value * 10.0 + _digit_to_float(b);
+		i = i + 1;
+	}
+	if i < len {
+		if core.string_byte_at(&s, i) == cast<Byte>(46) {
+			i = i + 1;
+			if i >= len {
+				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+			}
+			var saw_frac_digit = false;
+			var div: Float = 10.0;
+			while i < len {
+				val b = core.string_byte_at(&s, i);
+				if not _is_digit(b) {
+					break;
+				}
+				saw_frac_digit = true;
+				value = value + _digit_to_float(b) / div;
+				div = div * 10.0;
+				i = i + 1;
+			}
+			if not saw_frac_digit {
+				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+			}
+		}
+	}
+	if i < len {
+		val eb = core.string_byte_at(&s, i);
+		if eb == cast<Byte>(101) or eb == cast<Byte>(69) {
+			i = i + 1;
+			if i >= len {
+				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+			}
+			var exp_neg = false;
+			val sb = core.string_byte_at(&s, i);
+			if sb == cast<Byte>(45) {
+				exp_neg = true;
+				i = i + 1;
+			} else {
+				if sb == cast<Byte>(43) {
+					i = i + 1;
+				}
+			}
+			if i >= len {
+				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+			}
+			var exp = 0;
+			var saw_exp_digit = false;
+			while i < len {
+				val b = core.string_byte_at(&s, i);
+				if not _is_digit(b) {
+					return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+				}
+				saw_exp_digit = true;
+				val d = _digit_to_int(b);
+				if exp > (10000 - d) / 10 {
+					return core.Result::Err(ParseError(tag = "overflow", offset = i));
+				}
+				exp = exp * 10 + d;
+				i = i + 1;
+			}
+			if not saw_exp_digit {
+				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+			}
+			var k = 0;
+			if exp_neg {
+				while k < exp {
+					value = value / 10.0;
+					k = k + 1;
+				}
+			} else {
+				while k < exp {
+					value = value * 10.0;
+					k = k + 1;
+				}
+			}
+		}
+	}
+	if not saw_int_digit {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	if i != len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	if neg {
+		value = -value;
+	}
+	return core.Result::Ok(value);
+}

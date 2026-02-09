@@ -98,6 +98,7 @@ from lang.driftc.stage2 import (
 	ConstructVariant,
 	VariantTag,
 	VariantGetField,
+	VariantGetFieldAddr,
 	StructGetField,
 	ConstructDV,
 	ConstBool,
@@ -1902,6 +1903,11 @@ class _FuncBuilder:
 			target_index += 1
 		if target_index >= len(self.lines):
 			return
+		line_text = self.lines[target_index].lstrip()
+		# LLVM 20 occasionally misparses debug-attached insertvalue instructions
+		# in larger modules; keep debug locations on surrounding instructions.
+		if "= insertvalue " in line_text or line_text.startswith("insertvalue "):
+			return
 		span = getattr(instr, "span", None)
 		if span is None or span == Span():
 			span = self._dbg_last_span or self._dbg_default_span
@@ -2617,7 +2623,7 @@ class _FuncBuilder:
 			)
 			payload_i8 = self._fresh("payload_i8")
 			self.lines.append(
-			f"  {payload_i8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {payload_words_ptr} to i8*"
+				f"  {payload_i8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {payload_words_ptr} to i8*"
 			)
 			payload_struct_ptr = self._fresh("payload_struct")
 			self.lines.append(
@@ -2640,6 +2646,49 @@ class _FuncBuilder:
 				# For non-bool payload fields, storage and value types are identical.
 				self.lines.append(f"  {dest} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
 				self.value_types[dest] = want_llty
+		elif isinstance(instr, VariantGetFieldAddr):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: VariantGetFieldAddr requires a TypeTable")
+			layout = self._variant_layout(instr.variant_ty)
+			variant_llty = layout.llvm_ty
+			arm_layout = layout.arm_by_name.get(instr.ctor)
+			if arm_layout is None or not arm_layout.payload_struct_llty:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantGetFieldAddr unsupported ctor '{instr.ctor}' for TypeId {instr.variant_ty}"
+				)
+			variant_ptr = self._map_value(instr.variant_ref)
+			have = self.value_types.get(variant_ptr)
+			expect_ptr = f"{variant_llty}*"
+			if have is not None and have != expect_ptr:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantGetFieldAddr value type mismatch (have {have}, expected {expect_ptr})"
+				)
+			payload_words_ptr = self._fresh("payload_words")
+			self.lines.append(
+				f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {variant_ptr}, i32 0, i32 2"
+			)
+			payload_i8 = self._fresh("payload_i8")
+			self.lines.append(
+				f"  {payload_i8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {payload_words_ptr} to i8*"
+			)
+			payload_struct_ptr = self._fresh("payload_struct")
+			self.lines.append(
+				f"  {payload_struct_ptr} = bitcast i8* {payload_i8} to {arm_layout.payload_struct_llty}*"
+			)
+			field_ptr = self._fresh("fieldptr")
+			self.lines.append(
+				f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {instr.field_index}"
+			)
+			store_llty = arm_layout.field_storage_lltys[instr.field_index]
+			want_llty = arm_layout.field_lltys[instr.field_index]
+			dest = self._map_value(instr.dest)
+			if store_llty == "i8" and want_llty == "i1":
+				# Bool references use storage form (i8*) in v1, matching Ref<Bool> ABI.
+				self.lines.append(f"  {dest} = bitcast i8* {field_ptr} to i8*")
+				self.value_types[dest] = "i8*"
+			else:
+				self.lines.append(f"  {dest} = bitcast {store_llty}* {field_ptr} to {self._llty(want_llty)}*")
+				self.value_types[dest] = f"{self._llty(want_llty)}*"
 		elif isinstance(instr, StructGetField):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: StructGetField requires a TypeTable")
@@ -5354,10 +5403,76 @@ class _FuncBuilder:
 		Payload packing per constructor uses a literal struct type containing the
 		constructor's field storage types (Bool stored as i8).
 		"""
-		if ty_id in self._variant_layouts:
-			return self._variant_layouts[ty_id]
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: TypeTable required for variant lowering")
+		def _resolve_forward_nominal(tid: TypeId) -> TypeId:
+			seen: set[TypeId] = set()
+			cur = tid
+			while cur not in seen:
+				seen.add(cur)
+				td_cur = self.type_table.get(cur)
+				if td_cur.kind is not TypeKind.FORWARD_NOMINAL:
+					return cur
+				mod = td_cur.module_id
+				name = td_cur.name
+				alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+				if alias_def is not None:
+					alias_params, alias_target, _loc = alias_def
+					if not alias_params:
+						resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
+						if resolved != cur:
+							cur = resolved
+							continue
+				nominal = (
+					self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
+					or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
+					or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=mod, name=name)
+				)
+				if nominal is not None and nominal != cur:
+					cur = nominal
+					continue
+				unique = (
+					self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
+				)
+				if unique is not None and unique != cur:
+					cur = unique
+					continue
+				return cur
+			return cur
+		def _canon(tid: TypeId) -> TypeId:
+			td_cur = self.type_table.get(tid)
+			if td_cur.kind is TypeKind.FORWARD_NOMINAL:
+				resolved = _resolve_forward_nominal(tid)
+				if resolved != tid:
+					return _canon(resolved)
+				return tid
+			if td_cur.kind is TypeKind.REF and td_cur.param_types:
+				inner = _canon(td_cur.param_types[0])
+				return self.type_table.ensure_ref_mut(inner) if td_cur.ref_mut else self.type_table.ensure_ref(inner)
+			if td_cur.kind is TypeKind.ARRAY and td_cur.param_types:
+				elem = _canon(td_cur.param_types[0])
+				return self.type_table.new_array(elem)
+			if td_cur.kind is TypeKind.RAW_PTR and td_cur.param_types:
+				inner = _canon(td_cur.param_types[0])
+				return self.type_table.new_ptr(inner, module_id=td_cur.module_id)
+			if td_cur.kind is TypeKind.STRUCT:
+				inst = self.type_table.get_struct_instance(tid)
+				if inst is not None and inst.type_args:
+					args = [_canon(arg) for arg in inst.type_args]
+					return self.type_table.ensure_struct_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_struct_instantiated(inst.base_id, args)
+				return tid
+			if td_cur.kind is TypeKind.VARIANT:
+				inst = self.type_table.get_variant_instance(tid)
+				if inst is not None and inst.type_args:
+					args = [_canon(arg) for arg in inst.type_args]
+					return self.type_table.ensure_variant_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_variant_instantiated(inst.base_id, args)
+				return tid
+			return tid
+		ty_id = _canon(ty_id)
+		if ty_id in self._variant_layouts:
+			return self._variant_layouts[ty_id]
 		inst = self.type_table.get_variant_instance(ty_id)
 		if inst is None:
 			raise NotImplementedError(f"LLVM codegen v1: missing variant instance for TypeId {ty_id}")
@@ -5483,13 +5598,90 @@ class _FuncBuilder:
 
 		v1 supports Int (isize), String (%DriftString), and Array<T> (by value).
 		"""
+		def _resolve_forward_nominal(tid: TypeId) -> TypeId:
+			if self.type_table is None:
+				return tid
+			seen: set[TypeId] = set()
+			cur = tid
+			while cur not in seen:
+				seen.add(cur)
+				td_cur = self.type_table.get(cur)
+				if td_cur.kind is not TypeKind.FORWARD_NOMINAL:
+					return cur
+				mod = td_cur.module_id
+				name = td_cur.name
+				alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+				if alias_def is not None:
+					alias_params, alias_target, _loc = alias_def
+					if not alias_params:
+						resolved = resolve_opaque_type(
+							alias_target,
+							self.type_table,
+							module_id=mod,
+							type_params=None,
+							allow_generic_base=True,
+						)
+						if resolved != cur:
+							cur = resolved
+							continue
+				nominal = (
+					self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
+					or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
+					or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=mod, name=name)
+				)
+				if nominal is not None and nominal != cur:
+					cur = nominal
+					continue
+				unique = (
+					self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
+				)
+				if unique is not None and unique != cur:
+					cur = unique
+					continue
+				return cur
+			return cur
+
+		def _canonical_codegen_typeid(tid: TypeId) -> TypeId:
+			if self.type_table is None:
+				return tid
+			td_cur = self.type_table.get(tid)
+			if td_cur.kind is TypeKind.FORWARD_NOMINAL:
+				resolved = _resolve_forward_nominal(tid)
+				if resolved != tid:
+					return _canonical_codegen_typeid(resolved)
+				return tid
+			if td_cur.kind is TypeKind.REF and td_cur.param_types:
+				inner = _canonical_codegen_typeid(td_cur.param_types[0])
+				return self.type_table.ensure_ref_mut(inner) if td_cur.ref_mut else self.type_table.ensure_ref(inner)
+			if td_cur.kind is TypeKind.ARRAY and td_cur.param_types:
+				elem = _canonical_codegen_typeid(td_cur.param_types[0])
+				return self.type_table.new_array(elem)
+			if td_cur.kind is TypeKind.RAW_PTR and td_cur.param_types:
+				inner = _canonical_codegen_typeid(td_cur.param_types[0])
+				return self.type_table.new_ptr(inner, module_id=td_cur.module_id)
+			if td_cur.kind is TypeKind.STRUCT:
+				inst = self.type_table.get_struct_instance(tid)
+				if inst is not None and inst.type_args:
+					args = [_canonical_codegen_typeid(arg) for arg in inst.type_args]
+					return self.type_table.ensure_struct_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_struct_instantiated(inst.base_id, args)
+				return tid
+			if td_cur.kind is TypeKind.VARIANT:
+				inst = self.type_table.get_variant_instance(tid)
+				if inst is not None and inst.type_args:
+					args = [_canonical_codegen_typeid(arg) for arg in inst.type_args]
+					return self.type_table.ensure_variant_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_variant_instantiated(inst.base_id, args)
+				return tid
+			return tid
+
 		if self.type_table is not None:
+			ty_id = _canonical_codegen_typeid(ty_id)
 			if self.type_table.is_void(ty_id):
 				# Void ok-payloads/params are represented as an unused i8 slot.
 				return "i8"
 			td = self.type_table.get(ty_id)
 			if td.kind is TypeKind.ARRAY and td.param_types:
-				elem_llty = self._emit_storage_type_for_typeid(td.param_types[0])
 				return self._llvm_array_header_type()
 			if td.kind is TypeKind.STRUCT and td.name == "MaybeUninit" and td.module_id == "std.mem":
 				inst = self.type_table.get_struct_instance(ty_id)
@@ -6110,12 +6302,16 @@ class _FuncBuilder:
 			self.value_types[dest] = "i1"
 			return
 		if instr.op is UnaryOp.NEG:
-			# Arithmetic negation on Int (isize).
-			if ty not in (None, DRIFT_INT_TYPE):
-				raise NotImplementedError("LLVM codegen v1: neg only supported on Int")
-			self.lines.append(f"  {dest} = sub {self._llty(DRIFT_INT_TYPE)} 0, {operand}")
-			self.value_types[dest] = DRIFT_INT_TYPE
-			return
+			# Arithmetic negation on Int and Float.
+			if ty in (None, DRIFT_INT_TYPE):
+				self.lines.append(f"  {dest} = sub {self._llty(DRIFT_INT_TYPE)} 0, {operand}")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if ty in ("double", "float"):
+				self.lines.append(f"  {dest} = fsub {ty} 0.0, {operand}")
+				self.value_types[dest] = ty
+				return
+			raise NotImplementedError("LLVM codegen v1: neg only supported on Int/Float")
 		if instr.op is UnaryOp.BIT_NOT:
 			# Bitwise not on Uint only.
 			if ty != DRIFT_USIZE_TYPE:
@@ -6171,6 +6367,51 @@ class _FuncBuilder:
 				self.value_types[dest] = "i1"
 				return
 			raise NotImplementedError(f"LLVM codegen v1: unsupported bool binary op {instr.op}")
+
+		# Float ops on float/double.
+		if left_ty in ("double", "float") and right_ty == left_ty:
+			float_ty = left_ty
+			if instr.op is BinaryOp.ADD:
+				self.lines.append(f"  {dest} = fadd {float_ty} {left}, {right}")
+				self.value_types[dest] = float_ty
+				return
+			if instr.op is BinaryOp.SUB:
+				self.lines.append(f"  {dest} = fsub {float_ty} {left}, {right}")
+				self.value_types[dest] = float_ty
+				return
+			if instr.op is BinaryOp.MUL:
+				self.lines.append(f"  {dest} = fmul {float_ty} {left}, {right}")
+				self.value_types[dest] = float_ty
+				return
+			if instr.op is BinaryOp.DIV:
+				self.lines.append(f"  {dest} = fdiv {float_ty} {left}, {right}")
+				self.value_types[dest] = float_ty
+				return
+			if instr.op is BinaryOp.EQ:
+				self.lines.append(f"  {dest} = fcmp oeq {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			if instr.op is BinaryOp.NE:
+				self.lines.append(f"  {dest} = fcmp one {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			if instr.op is BinaryOp.LT:
+				self.lines.append(f"  {dest} = fcmp olt {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			if instr.op is BinaryOp.LE:
+				self.lines.append(f"  {dest} = fcmp ole {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			if instr.op is BinaryOp.GT:
+				self.lines.append(f"  {dest} = fcmp ogt {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			if instr.op is BinaryOp.GE:
+				self.lines.append(f"  {dest} = fcmp oge {float_ty} {left}, {right}")
+				self.value_types[dest] = "i1"
+				return
+			raise NotImplementedError(f"LLVM codegen v1: unsupported float binary op {instr.op}")
 
 		# Integer ops on isize/usize.
 		int_ty = None

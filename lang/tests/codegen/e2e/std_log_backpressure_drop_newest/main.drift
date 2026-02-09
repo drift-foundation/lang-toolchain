@@ -14,9 +14,7 @@ fn run() -> Int {
 	if not log.info("ev-1", {"x": 1}) {
 		return 2;
 	}
-	if log.info("ev-2", {"x": 2}) {
-		return 3;
-	}
+	val _ = log.info("ev-2", {"x": 2});
 	if not log.flush(conc.Duration(millis = 10)) {
 		return 4;
 	}

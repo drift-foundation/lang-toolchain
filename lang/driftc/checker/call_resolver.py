@@ -545,7 +545,7 @@ def resolve_variant_ctor(
 			param_id = TypeParamId(owner=owner, index=idx)
 			type_params.append(TypeParam(id=param_id, name=tp_name, span=None))
 			typevar_ids.append(ctx.type_table.ensure_typevar(param_id, name=tp_name))
-		type_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
+	type_cache: dict[tuple[TypeId, tuple[TypeId, ...]], TypeId] = {}
 
 	def _lower_generic_expr(expr: GenericTypeExpr) -> TypeId:
 		if expr.param_index is not None:
@@ -601,11 +601,38 @@ def resolve_variant_ctor(
 				return ctx.unknown_ty
 			return ctx.type_table.new_array(elem)
 		origin_mod = expr.module_id or schema.module_id
+		alias_def = ctx.type_table.lookup_type_alias(module_id=origin_mod, name=name)
+		if alias_def is None:
+			unique_alias = ctx.type_table.find_unique_type_alias_by_name(name=name)
+			if unique_alias is not None:
+				origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias
+				alias_def = (alias_params_u, alias_target_u, alias_loc_u)
+		if alias_def is not None:
+			alias_params, alias_target, _loc = alias_def
+			if len(expr.args) != len(alias_params):
+				return ctx.unknown_ty
+			type_param_bindings: dict[str, TypeId] = {}
+			for idx, param_name in enumerate(alias_params):
+				type_param_bindings[param_name] = _lower_generic_expr(expr.args[idx])
+			return resolve_opaque_type(
+				alias_target,
+				ctx.type_table,
+				module_id=origin_mod,
+				type_params=type_param_bindings,
+				allow_generic_base=True,
+			)
 		base_id = (
 			ctx.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
 			or ctx.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
 			or ctx.type_table.ensure_named(name, module_id=origin_mod)
 		)
+		if ctx.type_table.get(base_id).kind is TypeKind.FORWARD_NOMINAL:
+			unique = (
+				ctx.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+				or ctx.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+			)
+			if unique is not None:
+				base_id = unique
 		if expr.args:
 			if base_id in ctx.type_table.struct_bases:
 				base_schema = ctx.type_table.struct_bases.get(base_id)
@@ -2754,6 +2781,20 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 		if call_origin == "for_next" and base_mod == "std.iter" and base_name == "SinglePassIterator" and qm.member == "next":
 			diagnostics.append(_tc_diag(message="iter() result is not an iterator", code="E-ITER-RESULT-NOT-ITERATOR", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
+		base_tid = None
+		try:
+			base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_mod or ctx.current_module_name, type_params=ctx.type_param_map, allow_generic_base=True)
+		except Exception:
+			base_tid = None
+		if base_tid is not None and ctx.type_table.get(base_tid).kind is TypeKind.INTERFACE:
+			diagnostics.append(
+				_tc_diag(
+					message="UFCS interface dispatch is not supported yet; call through an interface value",
+					severity="error",
+					span=getattr(expr, "loc", Span()),
+				)
+			)
+			return MethodCallResult(ctx.unknown_ty, None)
 		return MethodCallResult(ctx.unknown_ty, None)
 	if not getattr(expr, "args", None):
 		diagnostics.append(_tc_diag(message="UFCS call requires a receiver argument", severity="error", span=getattr(expr, "loc", Span())))
@@ -3865,7 +3906,7 @@ def resolve_call_expr(
 			if arg_ty == ctx.string_ty:
 				place_expr = place_expr_from_lvalue_expr(expr.args[0])
 				if place_expr is None:
-					expr.args[0] = H.HBorrow(subject=expr.args[0], is_mut=False)
+					expr.args[0] = H.HBorrow(subject=expr.args[0], is_mut=False, allow_rvalue=True)
 				else:
 					expr.args[0] = H.HBorrow(subject=place_expr, is_mut=False)
 				param_types = [ctx.type_table.ensure_ref(ctx.string_ty)]
@@ -3888,7 +3929,7 @@ def resolve_call_expr(
 			if arg0_ty == ctx.string_ty:
 				place_expr = place_expr_from_lvalue_expr(expr.args[0])
 				if place_expr is None:
-					expr.args[0] = H.HBorrow(subject=expr.args[0], is_mut=False)
+					expr.args[0] = H.HBorrow(subject=expr.args[0], is_mut=False, allow_rvalue=True)
 				else:
 					expr.args[0] = H.HBorrow(subject=place_expr, is_mut=False)
 				arg0_ty = ctx.type_table.ensure_ref(ctx.string_ty)
@@ -4149,6 +4190,54 @@ def resolve_call_expr(
 			return record_expr(expr, inst_return)
 		method_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
 		method_res = resolve_qualified_member_ufcs(method_ctx, expr, qm, expected_type=expected_type, type_arg_ids=type_arg_ids, call_type_args_span=call_type_args_span, call_origin=getattr(expr, "origin", None), recv_arg_type=arg_types[0] if arg_types else None, arg_type_ids=arg_types)
+		if method_res is not None and method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
+			decl = method_res.resolution.decl
+			fn_id_local = getattr(decl, "fn_id", None)
+			if fn_id_local is not None:
+				sig_for_throw = signatures_by_id.get(fn_id_local) if signatures_by_id is not None else None
+				fallback_param_types = tuple(decl.signature.param_types) if decl.signature is not None else tuple()
+				fallback_ret = decl.signature.result_type if decl.signature is not None else ctx.unknown_ty
+				if sig_for_throw is not None:
+					if sig_for_throw.param_type_ids:
+						fallback_param_types = tuple(sig_for_throw.param_type_ids)
+					if sig_for_throw.return_type_id is not None:
+						fallback_ret = sig_for_throw.return_type_id
+				fallback_can_throw = bool(getattr(sig_for_throw, "declared_can_throw", False)) if sig_for_throw is not None else False
+				method_res = MethodCallResult(
+					method_res.return_type,
+					CallInfo(
+						target=CallTarget.direct(fn_id_local),
+						sig=CallSig(
+							param_types=fallback_param_types,
+							user_ret_type=fallback_ret,
+							can_throw=fallback_can_throw,
+							includes_callee=False,
+						),
+					),
+					method_res.resolution,
+				)
+		if (
+			method_res is not None
+			and method_res.call_info is not None
+			and method_res.resolution is not None
+			and getattr(method_res.resolution, "decl", None) is not None
+		):
+			decl = method_res.resolution.decl
+			fn_id_local = getattr(decl, "fn_id", None)
+			if fn_id_local is not None and method_res.call_info.target.kind is CallTargetKind.INDIRECT:
+				method_res = MethodCallResult(
+					method_res.return_type,
+					CallInfo(
+						target=CallTarget.direct(fn_id_local),
+						sig=CallSig(
+							param_types=method_res.call_info.sig.param_types,
+							user_ret_type=method_res.call_info.sig.user_ret_type,
+							can_throw=bool(method_res.call_info.sig.can_throw),
+							includes_callee=method_res.call_info.sig.includes_callee,
+						),
+					),
+					method_res.resolution,
+				)
 		if method_res is not None and method_res.call_info is not None:
 			intent.arg_expected_types = _expected_arg_types_for_call(list(method_res.call_info.sig.param_types), len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)

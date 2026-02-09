@@ -8,6 +8,7 @@ from lang.driftc.core.function_id import FunctionId
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -36,25 +37,28 @@ def _run_ir_and_get_exit(ir: str) -> int:
 	if clang is None:
 		raise RuntimeError("clang not available")
 
-	ir_path = BUILD_ROOT / "tmp.ll"
-	bin_path = BUILD_ROOT / "tmp.out"
-	ir_path.write_text(ir)
+	work_dir = Path(tempfile.mkdtemp(prefix="llvm-e2e-", dir=BUILD_ROOT))
+	try:
+		ir_path = work_dir / "tmp.ll"
+		bin_path = work_dir / "tmp.out"
+		ir_path.write_text(ir)
 
-	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
-		stdout=subprocess.PIPE,
-		stderr=subprocess.PIPE,
-	)
-	if compile_res.returncode != 0:
-		raise RuntimeError(f"clang failed: {compile_res.stderr.decode()}")
+		compile_res = subprocess.run(
+			[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+		)
+		if compile_res.returncode != 0:
+			raise RuntimeError(f"clang failed: {compile_res.stderr.decode()}")
 
-	BUILD_ROOT.mkdir(parents=True, exist_ok=True)
-	run_res = subprocess.run(
-		[str(bin_path)],
-		stdout=subprocess.PIPE,
-		stderr=subprocess.PIPE,
-	)
-	return run_res.returncode
+		run_res = subprocess.run(
+			[str(bin_path)],
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+		)
+		return run_res.returncode
+	finally:
+		shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def test_e2e_scalar_main_returns_42():

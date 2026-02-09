@@ -1,0 +1,25 @@
+module m
+
+import std.json as json;
+import std.io as io;
+import std.core as core;
+
+fn make_raw_ctrl_01() nothrow -> String {
+	var b = io.buffer(1);
+	io.buffer_write(&mut b, 0, cast<Byte>(1));
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
+}
+
+fn run() -> Int {
+	val s = "A\bB\fC" + make_raw_ctrl_01();
+	val node = json.JsonNode::String(s);
+	val enc = json.encode(&node);
+	if enc != "\"A\\bB\\fC\\u0001\"" {
+		return 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

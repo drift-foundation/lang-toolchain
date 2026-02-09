@@ -1,0 +1,28 @@
+module m
+
+import std.json as json;
+import std.containers as containers;
+
+fn run() -> Int {
+	var fields = containers.hash_map<type String, json.JsonNode>();
+	fields.insert("z", json.JsonNode::Number("1"));
+	fields.insert("a", json.JsonNode::Number("2"));
+	fields.insert("m", json.JsonNode::Number("3"));
+	val root = json.JsonNode::Object(move fields);
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = b.build();
+	val s = json.encode_with_config(&root, &cfg);
+	if s != "{\"a\":2,\"m\":3,\"z\":1}" {
+		return 1;
+	}
+	val sc = json.encode_compact_with_config(&root, &cfg);
+	if sc != "{\"a\":2,\"m\":3,\"z\":1}" {
+		return 2;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: intrinsic replace consumes non-Copy arg and rejects use-after-move",
+  "exit_code": 1,
+  "phase": "borrowcheck",
+  "diagnostics": [
+    {
+      "message_contains": "cannot borrow from moved or uninitialized 'b'"
+    }
+  ]
+}

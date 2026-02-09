@@ -429,6 +429,27 @@ class VariantGetField(MInstr):
 
 
 @dataclass
+class VariantGetFieldAddr(MInstr):
+	"""
+	dest = &variant_ref.<ctor>.<field_index>
+
+	Project the address of a constructor field from a *referenced* variant.
+
+	Contract:
+	- `variant_ref` must be a reference/pointer to `variant_ty`.
+	- The caller must ensure the active constructor is `ctor` (usually via tag check).
+	- `field_ty` is the pointee type of the produced reference.
+	"""
+
+	dest: ValueId
+	variant_ref: ValueId
+	variant_ty: TypeId
+	ctor: str
+	field_index: int
+	field_ty: TypeId
+
+
+@dataclass
 class StructGetField(MInstr):
 	"""
 	dest = subject.<field_index> (struct field read).
@@ -1158,6 +1179,7 @@ __all__ = [
 	"ConstructVariant",
 	"VariantTag",
 	"VariantGetField",
+	"VariantGetFieldAddr",
 	"StructGetField",
 	"AddrOfField",
 	"LoadField",

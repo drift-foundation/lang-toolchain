@@ -1,0 +1,32 @@
+module m
+
+import std.float as f;
+
+fn run() -> Int {
+	val n = f.nan();
+	if not f.is_nan(n) {
+		return 1;
+	}
+	if f.is_finite(n) {
+		return 2;
+	}
+	val p = f.infinity();
+	if not f.is_infinite(p) or p <= 0.0 {
+		return 3;
+	}
+	if f.is_finite(p) {
+		return 4;
+	}
+	val q = f.neg_infinity();
+	if not f.is_infinite(q) or q >= 0.0 {
+		return 5;
+	}
+	if f.is_finite(q) {
+		return 6;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,37 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn run() -> Int {
+	val text = "{\"a\":1,\"a\":2}";
+	var root = json.JsonNode::Null();
+	match json.parse(&text) {
+		core.Result::Ok(v) => {
+			root = move v;
+		},
+		core.Result::Err(_) => {
+			return 1;
+		}
+	}
+	match root.as_object() {
+		Some(obj) => {
+			val k = "a";
+			match obj.get(&k) {
+				Some(_v) => {
+					return 0;
+				},
+				None => {
+					return 2;
+				}
+			}
+		},
+		None => {
+			return 3;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

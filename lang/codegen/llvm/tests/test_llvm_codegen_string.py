@@ -7,7 +7,7 @@ LLVM lowering for String literals and ->.
 
 from lang.driftc.checker import FnInfo, FnSignature
 from lang.driftc.core.types_core import TypeTable
-from lang.driftc.stage2 import BasicBlock, Call, ConstString, LoadLocal, MirFunc, Return, StoreLocal
+from lang.driftc.stage2 import BasicBlock, Call, ConstString, LoadLocal, MirFunc, Return, StoreLocal, StringRelease
 from lang.driftc.stage2.string_arc import insert_string_arc
 from lang.driftc.stage4.ssa import MirToSSA
 from lang.codegen.llvm import lower_ssa_func_to_llvm, lower_module_to_llvm
@@ -169,3 +169,38 @@ def test_string_literal_overwrite_emits_release():
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())
 
 	assert "call void @drift_string_release(%DriftString" in ir
+
+
+def test_string_arc_return_from_local_without_temp_type_does_not_release_return_value():
+	table = TypeTable()
+	str_ty = _string_type(table)
+	block = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="t0", value="x"),
+			StoreLocal(local="s", value="t0"),
+			LoadLocal(dest="t1", local="s"),
+		],
+		terminator=Return(value="t1"),
+	)
+	fn_id = FunctionId(module="main", name="f", ordinal=0)
+	func = MirFunc(
+		fn_id=fn_id,
+		name="f",
+		params=[],
+		locals=["s"],
+		blocks={"entry": block},
+		entry="entry",
+		local_types={"s": str_ty, "t0": str_ty},
+	)
+	sig = FnSignature(name="f", return_type_id=str_ty, param_type_ids=[])
+	fn_info = FnInfo(fn_id=fn_id, name="f", declared_can_throw=False, signature=sig, return_type_id=str_ty)
+	func = insert_string_arc(func, type_table=table, fn_infos={fn_id: fn_info})
+	entry = func.blocks["entry"]
+	assert isinstance(entry.terminator, Return)
+	ret_val = entry.terminator.value
+	assert ret_val is not None
+	assert ret_val != "t1"
+	for instr in entry.instructions:
+		if isinstance(instr, StringRelease):
+			assert instr.value != ret_val

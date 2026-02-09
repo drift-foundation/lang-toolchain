@@ -1,0 +1,155 @@
+module m
+
+import std.parse as parse;
+import std.core as core;
+import std.float as f;
+
+fn expect_int_ok(s: String, want: Int) -> Int {
+	val r = parse.parse_int(s);
+	match r {
+		core.Result::Ok(v) => {
+			if v == want { return 0; }
+			return 1;
+		},
+		core.Result::Err(_) => { return 2; },
+		default => { return 3; }
+	}
+}
+
+fn expect_int_err_tag(s: String, tag: String) -> Int {
+	val r = parse.parse_int(s);
+	match r {
+		core.Result::Err(e) => {
+			if e.tag == tag { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_uint_ok(s: String, want: Uint) -> Int {
+	val r = parse.parse_uint(s);
+	match r {
+		core.Result::Ok(v) => {
+			if v == want { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_uint_err_tag(s: String, tag: String) -> Int {
+	val r = parse.parse_uint(s);
+	match r {
+		core.Result::Err(e) => {
+			if e.tag == tag { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_ok(s: String, want: Float) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Ok(v) => {
+			if v == want { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_neg_ok(s: String, abs: Float) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Ok(v) => {
+			if v + abs == 0.0 { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_err_tag(s: String, tag: String) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Err(e) => {
+			if e.tag == tag { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_nan(s: String) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Ok(v) => {
+			if f.is_nan(v) { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_pos_inf(s: String) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Ok(v) => {
+			if f.is_infinite(v) and v > 0.0 { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn expect_float_neg_inf(s: String) -> Int {
+	val r = parse.parse_float(s);
+	match r {
+		core.Result::Ok(v) => {
+			if f.is_infinite(v) and v < 0.0 { return 0; }
+			return 1;
+		},
+		default => { return 2; }
+	}
+}
+
+fn run() -> Int {
+	if expect_int_ok("123", 123) != 0 { return 1; }
+	if expect_int_ok("-42", -42) != 0 { return 2; }
+	if expect_int_ok("+7", 7) != 0 { return 3; }
+	if expect_int_err_tag("12x", "invalid-digit") != 0 { return 4; }
+	if expect_int_err_tag("9223372036854775808", "overflow") != 0 { return 5; }
+	if expect_int_err_tag("", "invalid-syntax") != 0 { return 6; }
+
+	if expect_uint_ok("42", cast<Uint>(42)) != 0 { return 7; }
+	if expect_uint_ok("+9", cast<Uint>(9)) != 0 { return 8; }
+	if expect_uint_err_tag("-1", "invalid-datatype") != 0 { return 9; }
+	if expect_uint_err_tag("4a", "invalid-digit") != 0 { return 10; }
+	if expect_uint_err_tag("", "invalid-syntax") != 0 { return 11; }
+
+	if expect_float_ok("12.5", 12.5) != 0 { return 12; }
+	if expect_float_neg_ok("-0.25", 0.25) != 0 { return 13; }
+	if expect_float_ok("+7", 7.0) != 0 { return 14; }
+	if expect_float_ok("1e3", 1000.0) != 0 { return 15; }
+	if expect_float_ok("1E-2", 0.01) != 0 { return 16; }
+	if expect_float_err_tag(" true", "invalid-syntax") != 0 { return 17; }
+	if expect_float_err_tag("1.", "invalid-syntax") != 0 { return 18; }
+	if expect_float_err_tag("1e", "invalid-syntax") != 0 { return 19; }
+	if expect_float_err_tag("1e+", "invalid-syntax") != 0 { return 20; }
+	if expect_float_nan("nan") != 0 { return 21; }
+	if expect_float_nan("+NaN") != 0 { return 22; }
+	if expect_float_nan("-nAn") != 0 { return 23; }
+	if expect_float_pos_inf("inf") != 0 { return 24; }
+	if expect_float_pos_inf("+Infinity") != 0 { return 25; }
+	if expect_float_pos_inf("INf") != 0 { return 26; }
+	if expect_float_neg_inf("-inf") != 0 { return 27; }
+	if expect_float_neg_inf("-InFiNiTy") != 0 { return 28; }
+	if expect_float_err_tag("infi", "invalid-syntax") != 0 { return 29; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

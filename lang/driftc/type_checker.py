@@ -3492,6 +3492,43 @@ class TypeChecker:
 				return td.param_types[0]
 			return ty
 
+		def _dealias_zero_param(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
+			seen = _seen if _seen is not None else set()
+			td = self.type_table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = _dealias_zero_param(td.param_types[0], _seen=seen)
+				return self.type_table.ensure_ref_mut(inner) if td.ref_mut else self.type_table.ensure_ref(inner)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				elem = _dealias_zero_param(td.param_types[0], _seen=seen)
+				return self.type_table.new_array(elem)
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None and inst.type_args:
+				new_args = [_dealias_zero_param(arg, _seen=seen) for arg in inst.type_args]
+				return self.type_table.ensure_struct_template(inst.base_id, new_args) if any(self.type_table.has_typevar(arg) for arg in new_args) else self.type_table.ensure_struct_instantiated(inst.base_id, new_args)
+			vinst = self.type_table.get_variant_instance(ty)
+			if vinst is not None and vinst.type_args:
+				new_args = [_dealias_zero_param(arg, _seen=seen) for arg in vinst.type_args]
+				return self.type_table.ensure_variant_template(vinst.base_id, new_args) if any(self.type_table.has_typevar(arg) for arg in new_args) else self.type_table.ensure_variant_instantiated(vinst.base_id, new_args)
+			mod = td.module_id
+			name = td.name
+			alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+			if alias_def is None:
+				return ty
+			alias_params, alias_target, _loc = alias_def
+			if alias_params:
+				return ty
+			alias_key = (mod, name)
+			if alias_key in seen:
+				return ty
+			resolved = resolve_opaque_type(
+				alias_target,
+				self.type_table,
+				module_id=mod,
+				type_params=None,
+				allow_generic_base=True,
+			)
+			return _dealias_zero_param(resolved, _seen=seen | {alias_key})
+
 		def _struct_base_and_args(ty: TypeId) -> tuple[TypeId, list[TypeId]]:
 			inst = self.type_table.get_struct_instance(ty)
 			if inst is not None:
@@ -5209,14 +5246,14 @@ class TypeChecker:
 							)
 						)
 						return self._unknown
-						if name == "Int":
-							return self._int
-						if name == "Uint":
-							return self._uint
-						if name == "Byte":
-							return self.type_table.ensure_byte()
-						if name == "Bool":
-							return self._bool
+					if name == "Int":
+						return self._int
+					if name == "Uint":
+						return self._uint
+					if name == "Byte":
+						return self.type_table.ensure_byte()
+					if name == "Bool":
+						return self._bool
 					if name == "Float":
 						return self._float
 					if name == "String":
@@ -5239,12 +5276,40 @@ class TypeChecker:
 							return self._unknown
 						return self.type_table.new_array(elem)
 					origin_mod = expr.module_id or schema.module_id
+					alias_def = self.type_table.lookup_type_alias(module_id=origin_mod, name=name)
+					if alias_def is None:
+						unique_alias = self.type_table.find_unique_type_alias_by_name(name=name)
+						if unique_alias is not None:
+							origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias
+							alias_def = (alias_params_u, alias_target_u, alias_loc_u)
+					if alias_def is not None:
+						alias_params, alias_target, _loc = alias_def
+						if len(expr.args) != len(alias_params):
+							return self._unknown
+						type_param_bindings: dict[str, TypeId] = {}
+						for idx, param_name in enumerate(alias_params):
+							type_param_bindings[param_name] = _lower_generic_expr(expr.args[idx])
+						return resolve_opaque_type(
+							alias_target,
+							self.type_table,
+							module_id=origin_mod,
+							type_params=type_param_bindings,
+							allow_generic_base=True,
+						)
 					base_id = (
 						self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
 						or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=origin_mod, name=name)
 						or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=origin_mod, name=name)
 						or self.type_table.ensure_named(name, module_id=origin_mod)
 					)
+					if self.type_table.get(base_id).kind is TypeKind.FORWARD_NOMINAL:
+						unique = (
+							self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+							or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+							or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
+						)
+						if unique is not None:
+							base_id = unique
 					if expr.args:
 						if base_id in self.type_table.struct_bases:
 							schema = self.type_table.struct_bases.get(base_id)
@@ -5811,10 +5876,17 @@ class TypeChecker:
 						if used_as_value and arm_value_ty is not None:
 							if result_ty is None:
 								result_ty = arm_value_ty
-							elif result_ty != arm_value_ty:
-								diagnostics.append(
-									_tc_diag(
-										message=(
+							else:
+								arm_cmp_ty = _dealias_zero_param(arm_value_ty)
+								result_cmp_ty = _dealias_zero_param(result_ty)
+								if arm_cmp_ty == result_cmp_ty:
+									continue
+								arm_key = _normalize_type_key(type_key_from_typeid(self.type_table, arm_cmp_ty))
+								result_key = _normalize_type_key(type_key_from_typeid(self.type_table, result_cmp_ty))
+								if arm_key != result_key:
+									diagnostics.append(
+										_tc_diag(
+											message=(
 											"E-MATCH-ARM-TYPE: match arms must produce the same type when match result is used "
 											f"(have {self.type_table.get(arm_value_ty).name}, expected {self.type_table.get(result_ty).name})"
 										),

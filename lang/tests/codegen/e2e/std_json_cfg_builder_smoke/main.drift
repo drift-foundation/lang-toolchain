@@ -1,0 +1,9 @@
+module m
+import std.json as json;
+fn run() -> Int {
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val _cfg = b.build();
+	return 0;
+}
+fn main() nothrow -> Int { return try run() catch { 99 }; }

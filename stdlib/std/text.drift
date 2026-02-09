@@ -1,0 +1,30 @@
+module std.text
+
+import std.core as core;
+
+export {
+	TokenizeAction,
+	TokenSpan,
+	TokenConsumer
+};
+
+pub variant TokenizeAction {
+	Continue,
+	Stop,
+}
+
+pub struct TokenSpan {
+	pub start: Int,
+	pub end: Int,
+}
+
+pub interface TokenConsumer<Tok, Err> {
+	fn on_token(self: &mut Self, tok: Tok, span: TokenSpan) nothrow -> TokenizeAction;
+	fn on_error(self: &mut Self, err: Err, at: Int) nothrow -> TokenizeAction;
+}
+
+implement core.Copy for TokenizeAction {
+}
+
+implement core.Copy for TokenSpan {
+}

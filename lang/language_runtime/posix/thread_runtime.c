@@ -1141,9 +1141,27 @@ uint64_t drift_log_runtime_enqueue(int64_t level, int64_t logger_min_level, int6
 		}
 		int64_t policy = atomic_load(&drift_log_backpressure);
 		if (policy == 1) {
+			int64_t cur = atomic_load(&drift_log_queue_depth);
+			if (cur <= 0) {
+				continue;
+			}
+			if (!atomic_compare_exchange_weak(&drift_log_queue_depth, &cur, cur - 1)) {
+				continue;
+			}
+			uint64_t seq = atomic_fetch_add(&drift_log_read_seq, 1);
+			DriftLogRecordSlot *slot = &drift_log_slots[seq % (uint64_t)cap];
+			while (atomic_load(&slot->state) != 2) {
+				sched_yield();
+			}
+			DriftString dropped = slot->payload_json;
+			slot->level = 0;
+			atomic_store(&slot->state, 0);
+			drift_string_release(dropped);
 			atomic_fetch_add(&drift_log_dropped_oldest, 1);
-			drift_string_release(payload_json);
-			return 1;
+			pthread_mutex_lock(&drift_log_cv_mu);
+			pthread_cond_broadcast(&drift_log_cv);
+			pthread_mutex_unlock(&drift_log_cv_mu);
+			continue;
 		}
 		if (policy == 2) {
 			atomic_fetch_add(&drift_log_dropped_newest, 1);

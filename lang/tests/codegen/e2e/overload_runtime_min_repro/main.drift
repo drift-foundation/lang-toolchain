@@ -1,0 +1,28 @@
+module m
+
+struct Cfg { v: Int }
+
+fn emit(x: &String) nothrow -> String {
+	return *x;
+}
+
+fn emit(x: &String, cfg: &Cfg) nothrow -> String {
+	if cfg.v == 1 {
+		return *x;
+	}
+	return "bad";
+}
+
+fn run() -> Int {
+	val s = "ok";
+	val c = Cfg(v = 1);
+	val a = emit(&s);
+	val b = emit(&s, &c);
+	if a != "ok" { return 1; }
+	if b != "ok" { return 2; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

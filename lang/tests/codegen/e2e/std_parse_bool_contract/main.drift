@@ -1,0 +1,23 @@
+module m
+
+import std.parse as parse;
+
+fn run() -> Int {
+	if not parse.parse_bool("true") { return 1; }
+	if not parse.parse_bool("TRUE") { return 2; }
+	if not parse.parse_bool("TrUe") { return 3; }
+	if not parse.parse_bool("yes") { return 4; }
+	if not parse.parse_bool("ON") { return 5; }
+	if not parse.parse_bool("1") { return 6; }
+	if parse.parse_bool("false") { return 7; }
+	if parse.parse_bool("0") { return 8; }
+	if parse.parse_bool("off") { return 9; }
+	if parse.parse_bool(" true") { return 10; }
+	if parse.parse_bool("true ") { return 11; }
+	if parse.parse_bool("") { return 12; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

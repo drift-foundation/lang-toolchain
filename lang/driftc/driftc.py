@@ -4921,6 +4921,7 @@ def compile_to_llvm_ir_for_tests(
 		enforce_entrypoint=enforce_entrypoint,
 		entry_module=entry_module,
 		entry_name=entry_name,
+		run_borrow_check=True,
 	)
 	_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 	if any(d.severity == "error" for d in checked.diagnostics):
@@ -7133,6 +7134,11 @@ def main(argv: list[str] | None = None) -> int:
 			mid = getattr(fn_id, "module", None) or "main"
 			if mid not in module_origin_by_id and isinstance(src_path, Path):
 				module_origin_by_id[mid] = src_path
+		module_source_by_id: dict[str, Path] = {}
+		for mid, mod in modules.items():
+			sp = getattr(mod, "source_path", None)
+			if isinstance(sp, Path):
+				module_source_by_id[mid] = sp
 		stdlib_root_path = Path(args.stdlib_root).resolve() if args.stdlib_root else None
 
 		all_module_ids: set[str] = set(per_module_sigs.keys()) | set(per_module_mir.keys())
@@ -7144,6 +7150,8 @@ def main(argv: list[str] | None = None) -> int:
 			if mid.startswith(("std.", "lang.", "drift.")):
 				if stdlib_root_path is not None:
 					mod_origin = module_origin_by_id.get(mid)
+					if mod_origin is None:
+						mod_origin = module_source_by_id.get(mid)
 					if mod_origin is not None:
 						try:
 							mod_origin.resolve().relative_to(stdlib_root_path)

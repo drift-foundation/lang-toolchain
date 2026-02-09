@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,24 +27,28 @@ def _run_ir_with_clang(ir: str) -> int:
 		raise RuntimeError("clang not available")
 
 	BUILD_ROOT.mkdir(parents=True, exist_ok=True)
-	ir_path = BUILD_ROOT / "ir.ll"
-	bin_path = BUILD_ROOT / "a.out"
-	ir_path.write_text(ir)
+	work_dir = Path(tempfile.mkdtemp(prefix="driftc-codegen-", dir=BUILD_ROOT))
+	try:
+		ir_path = work_dir / "ir.ll"
+		bin_path = work_dir / "a.out"
+		ir_path.write_text(ir)
 
-	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
-		capture_output=True,
-		text=True,
-	)
-	if compile_res.returncode != 0:
-		raise RuntimeError(f"clang failed: {compile_res.stderr}")
+		compile_res = subprocess.run(
+			[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+			capture_output=True,
+			text=True,
+		)
+		if compile_res.returncode != 0:
+			raise RuntimeError(f"clang failed: {compile_res.stderr}")
 
-	run_res = subprocess.run(
-		[str(bin_path)],
-		capture_output=True,
-		text=True,
-	)
-	return run_res.returncode
+		run_res = subprocess.run(
+			[str(bin_path)],
+			capture_output=True,
+			text=True,
+		)
+		return run_res.returncode
+	finally:
+		shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _extract_llvm_function(ir: str, name: str) -> str:

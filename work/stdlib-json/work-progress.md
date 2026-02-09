@@ -6,12 +6,12 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 
 ## Dependency Position
 
-- This track runs after: `work/atomics-memory-ord/work-progress.md`.
+- This track runs after foundational scalar parsers land in `std.parse`.
 - Logger finalization depends on this track plus atomics.
 
 ## MVP Scope
 
-1. JSON value model in Drift (`Null`, `Bool`, `Number`, `String`, `Array`, `Object`).
+1. JSON node model in Drift (`Null`, `Bool`, `Number`, `String`, `Array`, `Object`).
 2. Deterministic JSON encoding API.
 3. JSON parsing API with clear error surface.
 4. Deterministic object key ordering policy for encoded output.
@@ -26,21 +26,40 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 ## Draft API Surface
 
 - Module: `std.json`
-- Core value: `JsonValue` variant.
+- Core node: `JsonNode` variant.
 - Encode:
-  - `encode(value: &JsonValue) -> String`
-  - `encode_compact(value: &JsonValue) -> String`
+  - `encode(value: &JsonNode) -> String`
+  - `encode_compact(value: &JsonNode) -> String`
 - Parse:
-  - `parse(text: &String) -> Result<JsonValue, JsonError>`
+  - `parse(text: &String) -> Result<JsonNode, JsonError>`
+- Access:
+  - `get(key: String) -> Optional<&JsonNode>`
+  - `get_path(path: Array<String>) -> Optional<&JsonNode>` (key segments only in MVP)
+  - `entries() -> Iterator<(String, &JsonNode)>` (empty iteration for non-object)
+  - `is_null() -> Bool`
+- Extractors:
+  - safe probes: `as_bool/as_int/as_float/as_decimal/as_string/as_array/as_object -> Optional<...>`
+  - strict extractors: `expect_bool/expect_int/expect_float/expect_decimal/expect_string/expect_array/expect_object`
+  - `as_*` returns `Optional::None` on type mismatch, including `Null`
+  - no `as_null()` in MVP
 - Object helpers:
   - deterministic insertion/iteration contract for encoder output.
 
 ## Semantics Pin
 
 - Encoder output must be deterministic for the same logical `JsonValue`.
-- Object encoding uses a pinned key order policy (final choice to be documented before implementation; default target: lexical UTF-8 byte order).
+- Duplicate object keys on parse: keep-last (later key overwrites earlier key).
+- Object encoding supports config policy:
+  - `unordered` (default)
+  - `ordered_lex_utf8` for canonical/signing use cases.
+- `get_path` is key-only in MVP; index traversal is via `as_array()/at(...)`, not path segments.
 - Parse errors are structured and non-panicking.
 - No hidden runtime formatting side effects.
+- Strict extractor failures throw `std.json:JsonError` (single event type).
+- `JsonError` carries machine tags:
+  - required `tag` field in kebab-case (example: `invalid-datatype`)
+  - stable, append-only tag namespace
+  - optional structured context (`offset`, `line`, `col`, `path`, `key`, `expected`, `actual`, ...).
 
 ## Regression-First Test Plan
 
@@ -69,11 +88,13 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 
 ## Execution Steps
 
-1. Add failing tests for encode/parse determinism and error surface.
-2. Land `JsonValue` + encoder.
-3. Land parser + structured errors.
-4. Add integration tests for logger payload shapes.
-5. Keep logger migration itself in logging track, not in this track.
+1. Land `std.parse` foundation first (separate track/module).
+2. Add failing tests for `std.json` encode/parse determinism and error surface.
+3. Land `JsonNode` + encoder + ordering configuration.
+4. Land parser + structured `JsonError` tags + keep-last duplicate handling.
+5. Land navigation/extractor APIs (`get`, `get_path`, `entries`, `as_*`, `expect_*`).
+6. Add integration tests for logger payload shapes.
+7. Keep logger migration itself in logging track, not in this track.
 
 ## Exit Criteria
 

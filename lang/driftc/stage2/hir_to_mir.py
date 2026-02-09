@@ -639,6 +639,7 @@ class HIRToMIR:
 		"""
 		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
 		scrut_val = self.lower_expr(expr.scrutinee)
+		scrut_ref_val: M.ValueId | None = None
 		scrut_ty = self._infer_expr_type(expr.scrutinee)
 		scrut_is_ref = False
 		scrut_ref_mut = False
@@ -647,6 +648,7 @@ class HIRToMIR:
 			if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
 				scrut_is_ref = True
 				scrut_ref_mut = bool(scrut_def.ref_mut)
+				scrut_ref_val = scrut_val
 				scrut_ty = scrut_def.param_types[0]
 				load_tmp = self.b.new_temp()
 				self.b.emit(M.LoadRef(dest=load_tmp, ptr=scrut_val, inner_ty=scrut_ty))
@@ -757,29 +759,35 @@ class HIRToMIR:
 						if scrut_is_ref:
 							binder_ty = self._type_table.ensure_ref_mut(bty) if scrut_ref_mut else self._type_table.ensure_ref(bty)
 						field_val = self.b.new_temp()
-						self.b.emit(
-							M.VariantGetField(
-								dest=field_val,
-								variant=scrut_val,
-								variant_ty=scrut_ty,
-								ctor=arm.ctor,
-								field_index=int(fidx),
-								field_ty=bty,
-							)
-						)
-						self._local_types[field_val] = bty
 						if scrut_is_ref:
-							tmp_local = f"{bname}__match_tmp{self.b.new_temp()}"
-							self.b.ensure_local(tmp_local)
-							self._local_types[tmp_local] = bty
-							self.b.emit(M.StoreLocal(local=tmp_local, value=field_val))
-							addr = self.b.new_temp()
-							self.b.emit(M.AddrOfLocal(dest=addr, local=tmp_local, is_mut=scrut_ref_mut))
-							self._local_types[addr] = binder_ty
+							if scrut_ref_val is None:
+								raise AssertionError("match ref scrutinee missing reference value (lowering bug)")
+							self.b.emit(
+								M.VariantGetFieldAddr(
+									dest=field_val,
+									variant_ref=scrut_ref_val,
+									variant_ty=scrut_ty,
+									ctor=arm.ctor,
+									field_index=int(fidx),
+									field_ty=bty,
+								)
+							)
+							self._local_types[field_val] = binder_ty
 							self.b.ensure_local(bname)
 							self._local_types[bname] = binder_ty
-							self.b.emit(M.StoreLocal(local=bname, value=addr))
+							self.b.emit(M.StoreLocal(local=bname, value=field_val))
 						else:
+							self.b.emit(
+								M.VariantGetField(
+									dest=field_val,
+									variant=scrut_val,
+									variant_ty=scrut_ty,
+									ctor=arm.ctor,
+									field_index=int(fidx),
+									field_ty=bty,
+								)
+							)
+							self._local_types[field_val] = bty
 							self.b.ensure_local(bname)
 							self._local_types[bname] = binder_ty
 							self.b.emit(M.StoreLocal(local=bname, value=field_val))

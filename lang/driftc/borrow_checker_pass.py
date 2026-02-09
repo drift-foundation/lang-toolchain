@@ -125,7 +125,9 @@ class BorrowChecker:
 	_ref_witness_in: Optional[Dict[int, Dict[int, Span]]] = field(init=False, default=None, repr=False)
 	_ref_live_after_stmt: Optional[Dict[int, List[Set[int]]]] = field(init=False, default=None, repr=False)
 	_ref_no_use_ids: Optional[Set[int]] = field(init=False, default=None, repr=False)
+	_synthetic_ref_binding_ids: Set[int] = field(init=False, default_factory=set, repr=False)
 	_block_facts_in: Optional[Dict[int, Set[Tuple[int, int]]]] = field(init=False, default=None, repr=False)
+	_catch_binders_by_block: Dict[int, str] = field(init=False, default_factory=dict, repr=False)
 
 	def __post_init__(self) -> None:
 		# Ensure we always have a binding_id -> TypeId mapping to avoid repeated scans.
@@ -134,9 +136,12 @@ class BorrowChecker:
 		if self.binding_names is None:
 			self.binding_names = {pb.local_id: pb.name for pb in self.fn_types.keys()}
 		self._bases_by_binding: Dict[int, PlaceBase] = {pb.local_id: pb for pb in self.fn_types.keys()}
-		self._binding_id_by_name: Dict[str, int] = {
-			name: bid for bid, name in (self.binding_names or {}).items()
-		}
+		# Keep the earliest binding id for a name to avoid shadowing collisions
+		# when fallback name-based lookups are needed (e.g. match binders).
+		self._binding_id_by_name: Dict[str, int] = {}
+		for bid, name in sorted((self.binding_names or {}).items(), key=lambda it: int(it[0])):
+			if name not in self._binding_id_by_name:
+				self._binding_id_by_name[name] = int(bid)
 		self._method_sig_by_key: Dict[Tuple[int, str], FnSignature] = {}
 		if self.signatures_by_id:
 			for sig in self.signatures_by_id.values():
@@ -352,7 +357,9 @@ class BorrowChecker:
 
 	def _is_ref_binding_id(self, binding_id: Optional[int]) -> bool:
 		if binding_id is None or self.binding_types is None:
-			return False
+			return binding_id is not None and int(binding_id) in self._synthetic_ref_binding_ids
+		if int(binding_id) in self._synthetic_ref_binding_ids:
+			return True
 		ty = self.binding_types.get(binding_id)
 		if ty is None:
 			return False
@@ -428,8 +435,15 @@ class BorrowChecker:
 			self._diagnostic(f"use after move of '{place.base.name}'", span, code="E_USE_AFTER_MOVE")
 			return
 		if curr is PlaceState.UNINIT:
-			self._diagnostic(f"use of uninitialized '{place.base.name}'", span)
-			return
+			# Match-arm binders are compiler-synthesized names and may not always
+			# carry a stable binding id through every lowering path. Treat them as
+			# initialized when first observed at use-site.
+			if str(place.base.name).startswith("__match_binder_"):
+				self._set_state(state, place, PlaceState.VALID)
+				curr = PlaceState.VALID
+			else:
+				self._diagnostic(f"use of uninitialized '{place.base.name}'", span)
+				return
 		overlap_loan = None
 		mut_loan = None
 		for loan in state.loans:
@@ -857,6 +871,8 @@ class BorrowChecker:
 					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses, ref_use_spans)
 					uses_stmt[blk.id][stmt_i] |= self._ref_binding_ids_in_expr(stmt.value)
 					bid = getattr(stmt, "binding_id", None)
+					if bid is not None and self._call_returns_optional_ref(stmt.value):
+						self._synthetic_ref_binding_ids.add(int(bid))
 					if self._is_ref_binding_id(bid):
 						def_by_block[blk.id].add(int(bid))
 						defs_stmt[blk.id][stmt_i].add(int(bid))
@@ -869,6 +885,9 @@ class BorrowChecker:
 					self._collect_ref_uses_in_expr(stmt.value, blk.id, ref_uses, ref_use_spans)
 					uses_stmt[blk.id][stmt_i] |= self._ref_binding_ids_in_expr(stmt.value)
 					if isinstance(tgt, H.HPlaceExpr) and not tgt.projections and isinstance(tgt.base, H.HVar):
+						tgt_bid = getattr(tgt.base, "binding_id", None)
+						if tgt_bid is not None and self._call_returns_optional_ref(stmt.value):
+							self._synthetic_ref_binding_ids.add(int(tgt_bid))
 						if self._is_ref_binding_id(getattr(tgt.base, "binding_id", None)):
 							def_by_block[blk.id].add(int(tgt.base.binding_id))
 							defs_stmt[blk.id][stmt_i].add(int(tgt.base.binding_id))
@@ -959,9 +978,18 @@ class BorrowChecker:
 				continue
 			use_blocks = ref_uses.get(rid, set())
 			if not use_blocks:
-				# No tracked uses: keep the lexical scope to stay conservative.
-				ref_regions[rid] = set(scope)
-				no_use_ids.add(rid)
+				# No tracked uses:
+				# - `_`/underscore-prefixed bindings are treated as intentionally
+				#   discarded and should not keep borrows alive past the statement.
+				# - other bindings stay conservative (lexical scope).
+				name = None
+				if self.binding_names is not None:
+					name = self.binding_names.get(rid)
+				if isinstance(name, str) and name.startswith("_"):
+					ref_regions[rid] = {def_block}
+				else:
+					ref_regions[rid] = set(scope)
+					no_use_ids.add(rid)
 				continue
 			region = {bid for bid, live in live_in.items() if rid in live}
 			region.add(def_block)
@@ -1098,6 +1126,123 @@ class BorrowChecker:
 			return int(bid_id)
 		return None
 
+	def _collect_binding_ids_for_name_in_expr(self, expr: H.HExpr, name: str, out: Set[int]) -> None:
+		if isinstance(expr, H.HVar):
+			if expr.name == name and getattr(expr, "binding_id", None) is not None:
+				out.add(int(expr.binding_id))
+			return
+		if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+			self._collect_binding_ids_for_name_in_expr(expr.base, name, out)
+			for proj in expr.projections:
+				if isinstance(proj, H.HPlaceIndex):
+					self._collect_binding_ids_for_name_in_expr(proj.index, name, out)
+			return
+		if isinstance(expr, H.HField):
+			self._collect_binding_ids_for_name_in_expr(expr.subject, name, out)
+			return
+		if isinstance(expr, H.HIndex):
+			self._collect_binding_ids_for_name_in_expr(expr.subject, name, out)
+			self._collect_binding_ids_for_name_in_expr(expr.index, name, out)
+			return
+		if isinstance(expr, H.HBorrow):
+			self._collect_binding_ids_for_name_in_expr(expr.subject, name, out)
+			return
+		if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+			self._collect_binding_ids_for_name_in_expr(expr.subject, name, out)
+			return
+		if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+			self._collect_binding_ids_for_name_in_expr(expr.subject, name, out)
+			return
+		if isinstance(expr, H.HCall):
+			if not (isinstance(expr.fn, H.HVar) and getattr(expr.fn, "binding_id", None) is None):
+				self._collect_binding_ids_for_name_in_expr(expr.fn, name, out)
+			for a in expr.args:
+				self._collect_binding_ids_for_name_in_expr(a, name, out)
+			for kw in expr.kwargs:
+				self._collect_binding_ids_for_name_in_expr(kw.value, name, out)
+			return
+		if isinstance(expr, H.HMethodCall):
+			self._collect_binding_ids_for_name_in_expr(expr.receiver, name, out)
+			for a in expr.args:
+				self._collect_binding_ids_for_name_in_expr(a, name, out)
+			for kw in expr.kwargs:
+				self._collect_binding_ids_for_name_in_expr(kw.value, name, out)
+			return
+		if isinstance(expr, H.HInvoke):
+			self._collect_binding_ids_for_name_in_expr(expr.callee, name, out)
+			for a in expr.args:
+				self._collect_binding_ids_for_name_in_expr(a, name, out)
+			for kw in expr.kwargs:
+				self._collect_binding_ids_for_name_in_expr(kw.value, name, out)
+			return
+		if isinstance(expr, H.HBinary):
+			self._collect_binding_ids_for_name_in_expr(expr.left, name, out)
+			self._collect_binding_ids_for_name_in_expr(expr.right, name, out)
+			return
+		if isinstance(expr, H.HUnary):
+			self._collect_binding_ids_for_name_in_expr(expr.expr, name, out)
+			return
+		if isinstance(expr, H.HTernary):
+			self._collect_binding_ids_for_name_in_expr(expr.cond, name, out)
+			self._collect_binding_ids_for_name_in_expr(expr.then_expr, name, out)
+			self._collect_binding_ids_for_name_in_expr(expr.else_expr, name, out)
+			return
+		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+			self._collect_binding_ids_for_name_in_expr(expr.scrutinee, name, out)
+			for arm in expr.arms:
+				self._collect_binding_ids_for_name_in_block(arm.block, name, out)
+				if arm.result is not None:
+					self._collect_binding_ids_for_name_in_expr(arm.result, name, out)
+			return
+		if isinstance(expr, H.HArrayLiteral):
+			for el in expr.elements:
+				self._collect_binding_ids_for_name_in_expr(el, name, out)
+			return
+		if isinstance(expr, H.HDVInit):
+			for a in expr.args:
+				self._collect_binding_ids_for_name_in_expr(a, name, out)
+			return
+		if isinstance(expr, H.HResultOk):
+			self._collect_binding_ids_for_name_in_expr(expr.value, name, out)
+			return
+
+	def _collect_binding_ids_for_name_in_block(self, block: H.HBlock, name: str, out: Set[int]) -> None:
+		for stmt in block.statements:
+			if isinstance(stmt, H.HLet):
+				if stmt.name == name and getattr(stmt, "binding_id", None) is not None:
+					out.add(int(stmt.binding_id))
+				self._collect_binding_ids_for_name_in_expr(stmt.value, name, out)
+			elif isinstance(stmt, H.HAssign):
+				self._collect_binding_ids_for_name_in_expr(stmt.target, name, out)
+				self._collect_binding_ids_for_name_in_expr(stmt.value, name, out)
+			elif hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
+				self._collect_binding_ids_for_name_in_expr(stmt.target, name, out)
+				self._collect_binding_ids_for_name_in_expr(stmt.value, name, out)
+			elif isinstance(stmt, H.HExprStmt):
+				self._collect_binding_ids_for_name_in_expr(stmt.expr, name, out)
+			elif isinstance(stmt, H.HReturn) and stmt.value is not None:
+				self._collect_binding_ids_for_name_in_expr(stmt.value, name, out)
+			elif isinstance(stmt, H.HIf):
+				self._collect_binding_ids_for_name_in_expr(stmt.cond, name, out)
+				self._collect_binding_ids_for_name_in_block(stmt.then_block, name, out)
+				if stmt.else_block is not None:
+					self._collect_binding_ids_for_name_in_block(stmt.else_block, name, out)
+			elif isinstance(stmt, H.HLoop):
+				self._collect_binding_ids_for_name_in_block(stmt.body, name, out)
+			elif isinstance(stmt, H.HTry):
+				self._collect_binding_ids_for_name_in_block(stmt.body, name, out)
+				for arm in stmt.catches:
+					self._collect_binding_ids_for_name_in_block(arm.block, name, out)
+			elif isinstance(stmt, H.HBlock):
+				self._collect_binding_ids_for_name_in_block(stmt, name, out)
+
+	def _binding_ids_for_name_in_block(self, block: H.HBlock, name: str) -> Set[int]:
+		out: Set[int] = set()
+		if name in self._binding_id_by_name:
+			out.add(int(self._binding_id_by_name[name]))
+		self._collect_binding_ids_for_name_in_block(block, name, out)
+		return out
+
 	def _call_returns_optional_ref(self, expr: H.HExpr) -> bool:
 		if self.call_info_by_callsite_id is None:
 			return False
@@ -1106,7 +1251,7 @@ class BorrowChecker:
 		if info is None:
 			return False
 		ty = info.sig.user_ret_type
-		return self._is_optional_ref_type(ty, is_mut=True) or self._is_optional_ref_type(ty, is_mut=False)
+		return self._is_optional_ref_type(ty, is_mut=True)
 
 	def _borrow_from_optional_ref_call(
 		self,
@@ -1133,8 +1278,6 @@ class BorrowChecker:
 		kind: Optional[LoanKind] = None
 		if self._is_optional_ref_type(ty, is_mut=True):
 			kind = LoanKind.MUT
-		elif self._is_optional_ref_type(ty, is_mut=False):
-			kind = LoanKind.SHARED
 		if kind is None:
 			return
 		place_expr: Optional[H.HExpr] = None
@@ -1200,10 +1343,7 @@ class BorrowChecker:
 		if isinstance(expr, H.HVar):
 			bid_id = getattr(expr, "binding_id", None)
 			if bid_id is not None:
-				ty = None
-				if self.binding_types is not None:
-					ty = self.binding_types.get(bid_id)
-				if ty is not None and self.type_table.get(ty).kind is TypeKind.REF:
+				if self._is_ref_binding_id(int(bid_id)):
 					ref_uses.setdefault(bid_id, set()).add(bid)
 					if ref_use_spans is not None:
 						ref_use_spans.setdefault(bid_id, {}).setdefault(bid, getattr(expr, "loc", Span()))
@@ -1648,15 +1788,17 @@ class BorrowChecker:
 			for arm in expr.arms:
 				arm_state = _FlowState(place_states=dict(state.place_states), loans=set(state.loans))
 				for bname in getattr(arm, "binders", []) or []:
-					bid = self._binding_id_by_name.get(bname)
-					if bid is None:
-						continue
-					base = self._base_for_binding(bid)
-					if base is None:
-						base = PlaceBase(PlaceKind.LOCAL, bid, bname)
-					self._set_state(arm_state, Place(base), PlaceState.VALID)
+					bids = self._binding_ids_for_name_in_block(arm.block, bname)
+					if arm.result is not None:
+						self._collect_binding_ids_for_name_in_expr(arm.result, bname, bids)
+					self._set_state(arm_state, Place(PlaceBase(PlaceKind.LOCAL, -1, bname)), PlaceState.VALID)
+					for bid in sorted(bids):
+						base = self._base_for_binding(bid)
+						if base is None:
+							base = PlaceBase(PlaceKind.LOCAL, bid, bname)
+						self._set_state(arm_state, Place(base), PlaceState.VALID)
 				arm_block = BasicBlock(id=self._current_block_id or 0, statements=list(arm.block.statements), terminator=None)
-				_ = self._transfer_block(arm_block, arm_state)
+				arm_state = self._transfer_block(arm_block, arm_state)
 				if arm.result is not None:
 					self._visit_expr(arm_state, arm.result, consume=consume, escapes=escapes)
 			return
@@ -1685,6 +1827,16 @@ class BorrowChecker:
 				place_states=dict(in_state.place_states),
 				loans=self._filter_live_loans(in_state.loans, block.id),
 			)
+			catch_binder = self._catch_binders_by_block.get(block.id)
+			if catch_binder is not None:
+				shadow_block = H.HBlock(statements=list(block.statements))
+				bids = self._binding_ids_for_name_in_block(shadow_block, catch_binder)
+				self._set_state(state, Place(PlaceBase(PlaceKind.LOCAL, -1, catch_binder)), PlaceState.VALID)
+				for bid in sorted(bids):
+					base = self._base_for_binding(bid)
+					if base is None:
+						base = PlaceBase(PlaceKind.LOCAL, bid, catch_binder)
+					self._set_state(state, Place(base), PlaceState.VALID)
 			for stmt_i, stmt in enumerate(block.statements):
 				if isinstance(stmt, H.HLet):
 					if isinstance(stmt.value, H.HBorrow):
@@ -1815,6 +1967,8 @@ class BorrowChecker:
 	def check_block(self, block: H.HBlock) -> List[Diagnostic]:
 		"""Run move tracking on a HIR block by building a CFG and flowing states."""
 		self.diagnostics.clear()
+		self._catch_binders_by_block = {}
+		self._synthetic_ref_binding_ids.clear()
 		blocks, entry_id, scopes = self._build_cfg(block)
 		# Build region info for explicit borrows.
 		#
@@ -1937,6 +2091,8 @@ class BorrowChecker:
 						entry, ids_arm = build(arm.block.statements, cont_entry)
 						catch_entries.append(entry)
 						catch_ids.extend(ids_arm)
+						if arm.binder is not None:
+							self._catch_binders_by_block[entry] = arm.binder
 					targets = [body_entry] + catch_entries
 					bb.terminator = Terminator(kind="branch", targets=targets, cond=None)
 					ids.extend(body_ids + catch_ids + cont_ids)

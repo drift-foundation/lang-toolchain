@@ -384,3 +384,19 @@
 - E2E runner linking now includes libunwind-x86_64 to resolve stacktrace symbols during codegen tests.
 - Deps driver test now runs by default (skips only with DRIFT_DEPS_TEST=0) and fixes repo-root detection.
 - Updated assert e2e expected stderr to include stacktrace output when available.
+## 2026-02-09 – JSON/parse hardening, std.float, and parallel test artifact isolation
+- Fixed JSON ordered key encoding for `JsonKeyOrder::OrderedLexUtf8` in `std.json` (no longer a no-op) and strengthened e2e coverage with multi-key deterministic ordering.
+- Fixed `resolve_opaque_type` control-flow indentation bug that made core/unique nominal fallback resolution unreachable in `module_id` paths; added core regression test.
+- Fixed codegen e2e runner `__ANY__` behavior: wildcard now applies per-stream without short-circuiting checks for the other stream; added driver regression tests for stdout/stderr mismatch cases.
+- JSON parser now accepts syntactically valid numeric lexemes without `parse_float` gating (stores raw number text), including large exponents; added e2e regression for large-number raw preservation.
+- Added/validated JSON numeric-form coverage (decimal/scientific/negative forms) with raw-lexeme assertions.
+- Added `std.float` module (function-based non-finite API due to MVP const-literal limits): `nan`, `infinity`, `neg_infinity`, `is_nan`, `is_infinite`, `is_finite`; added e2e + driver API tests.
+- Extended `std.parse.parse_float` to accept case-insensitive signed `nan`, `inf`, and `infinity`; updated numeric contract e2e accordingly.
+- Kept `std.json` strict: added e2e regression rejecting non-finite JSON tokens (`NaN`, `Infinity`, `-Infinity`, `+Infinity`).
+- Fixed JSON string encoding for control characters: now escapes `\b`, `\f`, and any remaining `< 0x20` bytes as `\u00xx`; added e2e regression.
+- Removed temporary probe case `std_parse_float_nonfinite_probe` from e2e suite after investigation.
+- Hardened driver clang e2e tests for parallel execution by moving fixed `a.out`/`ir.ll` artifacts to per-run temp directories in:
+  - `lang/tests/driver/test_driftc_codegen_e2e.py`
+  - `lang/tests/driver/test_driftc_codegen_void_e2e.py`
+- Added next-focus planning doc for UTC-only minimal time support:
+  - `work/time/work-progress.md`.

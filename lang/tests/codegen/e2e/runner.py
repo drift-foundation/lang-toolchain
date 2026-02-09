@@ -142,6 +142,70 @@ def _run_ir_with_clang(
 	return run_res.returncode, run_res.stdout, run_res.stderr
 
 
+def _compare_process_output(
+	exit_code: int,
+	stdout: str,
+	stderr: str,
+	expected: dict,
+	debug: bool = False,
+) -> str | None:
+	def _json_matches(expected_obj: object, actual_obj: object) -> bool:
+		if isinstance(expected_obj, str) and expected_obj == "__ANY__":
+			return True
+		if type(expected_obj) is not type(actual_obj):
+			return False
+		if isinstance(expected_obj, dict):
+			if set(expected_obj.keys()) != set(actual_obj.keys()):
+				return False
+			for k, v in expected_obj.items():
+				if not _json_matches(v, actual_obj[k]):
+					return False
+			return True
+		if isinstance(expected_obj, list):
+			if len(expected_obj) != len(actual_obj):
+				return False
+			for e, a in zip(expected_obj, actual_obj):
+				if not _json_matches(e, a):
+					return False
+			return True
+		return expected_obj == actual_obj
+
+	if exit_code != expected.get("exit_code", 0):
+		msg = f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
+	expect_stdout = expected.get("stdout", "")
+	if expect_stdout != "__ANY__" and stdout != expect_stdout:
+		msg = "FAIL (stdout mismatch)"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
+	expect_stderr = expected.get("stderr", "")
+	if expect_stderr != "__ANY__" and stderr != expect_stderr:
+		stderr_jsonl = expected.get("stderr_jsonl")
+		if isinstance(stderr_jsonl, list):
+			lines = [line for line in stderr.splitlines() if line.strip() != ""]
+			if len(lines) == len(stderr_jsonl):
+				try:
+					actual_objs = [json.loads(line) for line in lines]
+				except json.JSONDecodeError:
+					actual_objs = []
+				if len(actual_objs) == len(stderr_jsonl):
+					ok = True
+					for exp_obj, act_obj in zip(stderr_jsonl, actual_objs):
+						if not _json_matches(exp_obj, act_obj):
+							ok = False
+							break
+					if ok:
+						return None
+		msg = "FAIL (stderr mismatch)"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
+	return None
+
+
 def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	def _json_matches(expected_obj: object, actual_obj: object) -> bool:
 		if isinstance(expected_obj, str) and expected_obj == "__ANY__":
@@ -416,37 +480,9 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 			return "FAIL (checker/codegen phase stderr mismatch)"
 		return "ok"
 
-	if exit_code != expected.get("exit_code", 0):
-		msg = f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
-		if debug and (stdout or stderr):
-			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-		return msg
-	if stdout != expected.get("stdout", ""):
-		msg = "FAIL (stdout mismatch)"
-		if debug and (stdout or stderr):
-			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-		return msg
-	if stderr != expected.get("stderr", ""):
-		stderr_jsonl = expected.get("stderr_jsonl")
-		if isinstance(stderr_jsonl, list):
-			lines = [line for line in stderr.splitlines() if line.strip() != ""]
-			if len(lines) == len(stderr_jsonl):
-				try:
-					actual_objs = [json.loads(line) for line in lines]
-				except json.JSONDecodeError:
-					actual_objs = []
-				if len(actual_objs) == len(stderr_jsonl):
-					ok = True
-					for exp_obj, act_obj in zip(stderr_jsonl, actual_objs):
-						if not _json_matches(exp_obj, act_obj):
-							ok = False
-							break
-					if ok:
-						return "ok"
-		msg = "FAIL (stderr mismatch)"
-		if debug and (stdout or stderr):
-			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-		return msg
+	mismatch = _compare_process_output(exit_code, stdout, stderr, expected, debug)
+	if mismatch is not None:
+		return mismatch
 	return "ok"
 
 

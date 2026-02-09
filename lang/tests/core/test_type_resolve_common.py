@@ -98,3 +98,14 @@ def test_resolve_opaque_type_rejects_none_fn_throws():
 
 	with pytest.raises(TypeError):
 		resolve_opaque_type(_RawFn(), TypeTable())
+
+
+def test_resolve_opaque_type_uses_unique_nominal_fallback_with_module_id():
+	table = TypeTable()
+	declared = table.declare_struct(module_id="pkg.a", name="UniqueNominal", field_names=[], type_params=[])
+
+	resolved = resolve_opaque_type("UniqueNominal", table, module_id="pkg.b")
+
+	assert resolved == declared
+	assert table.get(resolved).kind is TypeKind.STRUCT
+	assert table.get(resolved).module_id == "pkg.a"

@@ -1,0 +1,75 @@
+# vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from lang.driftc.driftc import main as driftc_main
+from lang.driftc.parser import stdlib_root
+
+
+def _write_file(path: Path, text: str) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+
+
+def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, dict]:
+	root = stdlib_root()
+	args = list(argv)
+	if root:
+		args += ["--stdlib-root", str(root)]
+	args += ["--dev"]
+	args += ["--json"]
+	rc = driftc_main(args)
+	out = capsys.readouterr().out
+	payload = json.loads(out) if out.strip() else {}
+	return rc, payload
+
+
+def test_std_json_hashmap_object_model_compiles_without_noncopy_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main
+
+import std.json as json;
+import std.containers as containers;
+
+fn main() -> Int {
+	var m = containers.hash_map<type String, json.JsonNode>();
+	m.insert("a", json.JsonNode::Number("1"));
+	val n = json.JsonNode::Object(move m);
+	val k = "a";
+	match n.get(&k) {
+		Some(_v) => {
+		},
+		None => {
+			return 2;
+		}
+	}
+	return 0;
+}
+""".lstrip(),
+	)
+	paths = sorted(mod_root.rglob("*.drift"))
+	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
+	assert rc == 0
+	assert payload.get("diagnostics", []) == []
+
+
+def test_std_json_duplicate_key_parse_e2e_does_not_crash() -> None:
+	cmd = [
+		str(Path(sys.executable)),
+		"lang/tests/codegen/e2e/runner.py",
+		"std_json_parse_basic_duplicate_keys",
+		"--jobs",
+		"1",
+	]
+	res = subprocess.run(cmd, capture_output=True, text=True, cwd=Path(__file__).resolve().parents[3])
+	assert res.returncode == 0, res.stdout + "\n" + res.stderr
+	assert "std_json_parse_basic_duplicate_keys: ok" in res.stdout

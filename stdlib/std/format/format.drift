@@ -1,0 +1,24 @@
+module std.format
+
+export {
+	format_bool,
+	format_int,
+	format_uint,
+	format_float
+};
+
+pub fn format_bool(v: Bool) nothrow -> String {
+	return f"{v}";
+}
+
+pub fn format_int(v: Int) nothrow -> String {
+	return f"{v}";
+}
+
+pub fn format_uint(v: Uint) nothrow -> String {
+	return f"{v}";
+}
+
+pub fn format_float(v: Float) nothrow -> String {
+	return f"{v}";
+}

@@ -1,0 +1,20 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn run() -> Int {
+	val text = "{\"a\":1,\"a\":2}";
+	match json.parse(&text) {
+		core.Result::Ok(_v) => {
+			return 0;
+		},
+		core.Result::Err(_) => {
+			return 1;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

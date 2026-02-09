@@ -1,0 +1,38 @@
+module std.float
+
+import std.format as format;
+
+export {
+	nan,
+	infinity,
+	neg_infinity,
+	is_nan,
+	is_infinite,
+	is_finite
+};
+
+pub fn nan() nothrow -> Float {
+	return 0.0 / 0.0;
+}
+
+pub fn infinity() nothrow -> Float {
+	return 1.0 / 0.0;
+}
+
+pub fn neg_infinity() nothrow -> Float {
+	return -infinity();
+}
+
+pub fn is_nan(v: Float) nothrow -> Bool {
+	val s = format.format_float(v);
+	return s == "nan" or s == "-nan" or s == "NaN" or s == "-NaN" or s == "NAN" or s == "-NAN";
+}
+
+pub fn is_infinite(v: Float) nothrow -> Bool {
+	val s = format.format_float(v);
+	return s == "inf" or s == "-inf" or s == "Inf" or s == "-Inf" or s == "INF" or s == "-INF" or s == "infinity" or s == "-infinity" or s == "Infinity" or s == "-Infinity" or s == "INFINITY" or s == "-INFINITY";
+}
+
+pub fn is_finite(v: Float) nothrow -> Bool {
+	return not is_nan(v) and not is_infinite(v);
+}

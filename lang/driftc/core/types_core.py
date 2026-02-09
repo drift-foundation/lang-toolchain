@@ -442,6 +442,18 @@ class TypeTable:
 		"""Return (type_params, target_type_expr, loc) for a module-scoped alias."""
 		return self.type_aliases.get((module_id, name))
 
+	def find_unique_type_alias_by_name(self, *, name: str) -> tuple[str | None, list[str], object, object | None] | None:
+		"""Return a unique type alias match by name across modules, or None if ambiguous/missing."""
+		found: tuple[str | None, list[str], object, object | None] | None = None
+		for (mod, alias_name), payload in self.type_aliases.items():
+			if alias_name != name:
+				continue
+			if found is not None and found[0] != mod:
+				return None
+			type_params, target, loc = payload
+			found = (mod, list(type_params), target, loc)
+		return found
+
 	def _package_for_module(self, module_id: str | None) -> str | None:
 		if module_id is None:
 			return None
@@ -1266,9 +1278,12 @@ class TypeTable:
 		# stable across runs.
 		items = [(base_id, schema) for base_id, schema in self.variant_schemas.items() if not schema.type_params]
 		items.sort(key=lambda kv: (kv[1].module_id, kv[1].name))
+		# Variant payload field types can depend on aliases declared in other modules.
+		# Rebuild non-generic instances after declaration-finalization so any early
+		# placeholder/Unknown payloads are refreshed with fully-resolved types.
+		self._needs_drop_cache.clear()
 		for base_id, schema in items:
-			if base_id not in self.variant_instances:
-				self._define_variant_instance(base_id, base_id, [])
+			self._define_variant_instance(base_id, base_id, [])
 
 	def get_variant_schema(self, ty: TypeId) -> VariantSchema | None:
 		"""Return the variant schema for a base or instantiated variant TypeId."""
@@ -1457,12 +1472,39 @@ class TypeTable:
 				return self.ensure_unknown()
 			inner = self._eval_generic_type_expr(expr.args[0], type_args, module_id=module_id)
 			return self.new_ptr(inner, module_id=origin_mod)
+		# Module-scoped type aliases may appear in schema-time expressions
+		# (for example, variant payload fields using `containers.HashMap<...>`).
+		# Expand aliases here so instantiations do not degrade to Unknown.
+		origin_mod = expr.module_id or module_id
+		alias_def = self.lookup_type_alias(module_id=origin_mod, name=name)
+		if alias_def is None:
+			unique_alias = self.find_unique_type_alias_by_name(name=name)
+			if unique_alias is not None:
+				origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias
+				alias_def = (alias_params_u, alias_target_u, alias_loc_u)
+		if alias_def is not None:
+			alias_params, alias_target, _loc = alias_def
+			if len(expr.args) != len(alias_params):
+				return self.ensure_unknown()
+			try:
+				from lang.driftc.core.type_resolve_common import resolve_opaque_type
+			except Exception:
+				return self.ensure_unknown()
+			bindings: dict[str, TypeId] = {}
+			for idx, param_name in enumerate(alias_params):
+				bindings[param_name] = self._eval_generic_type_expr(expr.args[idx], type_args, module_id=module_id)
+			return resolve_opaque_type(
+				alias_target,
+				self,
+				module_id=origin_mod,
+				type_params=bindings,
+				allow_generic_base=True,
+			)
 		# Named nominal types: either a simple name, or a generic instantiation.
 		#
 		# The `module_id` on `GenericTypeExpr` is a resolved canonical origin module
 		# for imported/qualified names. If absent, the name is unqualified and is
 		# resolved in the declaring module scope (`module_id` argument).
-		origin_mod = expr.module_id or module_id
 		# MVP supports structs, variants, and interfaces as nominal names.
 		base_id = (
 			self.get_nominal(kind=TypeKind.STRUCT, module_id=origin_mod, name=name)
@@ -1470,6 +1512,14 @@ class TypeTable:
 			or self.get_nominal(kind=TypeKind.INTERFACE, module_id=origin_mod, name=name)
 			or self.ensure_named(name, module_id=origin_mod)
 		)
+		if self.get(base_id).kind is TypeKind.FORWARD_NOMINAL:
+			unique = (
+				self.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+				or self.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+				or self.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
+			)
+			if unique is not None:
+				base_id = unique
 		if expr.args:
 			arg_ids = [self._eval_generic_type_expr(a, type_args, module_id=module_id) for a in expr.args]
 			if base_id in self.variant_schemas:

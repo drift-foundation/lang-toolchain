@@ -21,7 +21,11 @@ lang-stage1-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage1
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage1; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage1; \
+	fi
 
 lang-stage2-test:
 	# Ensure pytest is available in the venv
@@ -29,7 +33,11 @@ lang-stage2-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage2
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage2; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage2; \
+	fi
 
 lang-stage3-test:
 	# Ensure pytest is available in the venv
@@ -37,7 +45,11 @@ lang-stage3-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage3
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage3; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage3; \
+	fi
 
 lang-stage4-test:
 	# Ensure pytest is available in the venv
@@ -45,7 +57,11 @@ lang-stage4-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage4
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage4; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage4; \
+	fi
 
 # Parser tests (lang parser copy + adapter).
 lang-parser-test:
@@ -54,7 +70,11 @@ lang-parser-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/parser
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/parser; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/parser; \
+	fi
 
 # Core TypeEnv/TypeTable tests.
 lang-core-test:
@@ -63,7 +83,11 @@ lang-core-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/core; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core; \
+	fi
 
 # Type checker tests (typed HIR + resolution).
 lang-type-checker-test:
@@ -72,7 +96,11 @@ lang-type-checker-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/type_checker
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/type_checker; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/type_checker; \
+	fi
 
 # Method registry/resolver tests.
 lang-method-registry-test:
@@ -81,7 +109,11 @@ lang-method-registry-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/method_registry
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/method_registry; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/method_registry; \
+	fi
 
 # Driver/integration tests (driftc pipeline, try sugar, declared events).
 lang-driver-test:
@@ -90,7 +122,12 @@ lang-driver-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-auto}}" -v lang/tests/driver; \
+	else \
+	  echo "pytest-xdist is missing in .venv; running driver tests serially (install: ./.venv/bin/python3 -m pip install pytest-xdist)"; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
+	fi
 
 lang-driver-suite:
 	# Full driver suite (lang/tests/driver).
@@ -98,7 +135,12 @@ lang-driver-suite:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-auto}}" -v lang/tests/driver; \
+	else \
+	  echo "pytest-xdist is missing in .venv; running driver tests serially (install: ./.venv/bin/python3 -m pip install pytest-xdist)"; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
+	fi
 
 # Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
 lang-llvm-test:
@@ -113,7 +155,11 @@ lang-codegen-test:
 	fi
 	# Clean codegen artifacts to keep cases isolated between runs.
 	rm -rf build/tests/lang
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/codegen/llvm/tests
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/codegen/llvm/tests; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/codegen/llvm/tests; \
+	fi
 	# Run clang-based IR cases (per-case dirs under lang/codegen/ir_cases).
 	PYTHONPATH=. ./.venv/bin/python3 lang/codegen/ir_cases/e2e_runner.py
 	# Run Drift-source e2e cases (per-case dirs under lang/tests/codegen/e2e).
@@ -133,7 +179,11 @@ lang-borrow-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/borrow_checker; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
+	fi
 
 # Build examples (lang.driftc)
 make-example EXAMPLE:

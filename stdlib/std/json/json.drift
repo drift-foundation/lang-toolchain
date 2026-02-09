@@ -1,0 +1,851 @@
+module std.json
+
+import std.core as core;
+import std.containers as containers;
+import std.parse as parse_std;
+import std.io as io;
+import std.iter as iter;
+
+use trait iter.SinglePassIterator;
+
+export {
+	JsonNode,
+	JsonErrorData,
+	JsonError,
+	JsonKeyOrder,
+	JsonConfig,
+	JsonConfigBuilder,
+	config_builder,
+	encode,
+	encode_compact,
+	encode_with_config,
+	encode_compact_with_config,
+	parse
+};
+
+pub exception JsonError(tag: String, offset: Int, line: Int, col: Int, path: String, key: String);
+
+pub struct JsonErrorData {
+	pub tag: String,
+	pub offset: Int,
+	pub line: Int,
+	pub col: Int,
+	pub path: String,
+	pub key: String
+}
+
+pub variant JsonNode {
+	Null,
+	Bool(value: Bool),
+	Number(raw: String),
+	String(value: String),
+	Array(values: Array<JsonNode>),
+	Object(fields: containers.HashMap<String, std.json.JsonNode>),
+	@tombstone Tombstone
+}
+
+pub variant JsonKeyOrder {
+	Unordered,
+	OrderedLexUtf8
+}
+
+pub struct JsonConfig {
+	pub key_order: JsonKeyOrder
+}
+
+pub struct JsonConfigBuilder {
+	key_order: JsonKeyOrder
+}
+
+implement core.Copy for JsonKeyOrder {
+}
+
+implement core.Copy for JsonConfig {
+}
+
+implement core.Diagnostic for JsonErrorData {
+	pub fn to_diag(self: &JsonErrorData) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub fn config_builder() nothrow -> JsonConfigBuilder {
+	return JsonConfigBuilder(key_order = JsonKeyOrder::Unordered());
+}
+
+implement JsonConfigBuilder {
+	pub fn key_order(self: &mut JsonConfigBuilder, var v: JsonKeyOrder) nothrow -> &mut JsonConfigBuilder {
+		self.key_order = move v;
+		return self;
+	}
+
+	pub fn build(self: &JsonConfigBuilder) nothrow -> JsonConfig {
+		return JsonConfig(key_order = self.key_order);
+	}
+}
+
+fn _err_data(tag: String, path: String, key: String) nothrow -> JsonErrorData {
+	return JsonErrorData(tag = tag, offset = -1, line = -1, col = -1, path = path, key = key);
+}
+
+fn _throw_json(tag: String, path: String, key: String) -> Void {
+	throw JsonError(tag = tag, offset = -1, line = -1, col = -1, path = path, key = key);
+}
+
+pub fn encode(node: &JsonNode) nothrow -> String {
+	return _encode_node(node, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+}
+
+pub fn encode_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
+	return _encode_node(node, cfg);
+}
+
+pub fn encode_compact(node: &JsonNode) nothrow -> String {
+	return _encode_node(node, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+}
+
+pub fn encode_compact_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
+	return _encode_node(node, cfg);
+}
+
+pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	var idx = 0;
+	_skip_ws(text, &mut idx);
+	match _parse_value(text, &mut idx) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(v) => {
+			_skip_ws(text, &mut idx);
+			if idx != byte_length(*text) {
+				return core.Result::Err(_err_parse("invalid-syntax", idx));
+			}
+			return core.Result::Ok(v);
+		}
+	}
+}
+
+implement JsonNode {
+	pub fn is_null(self: &JsonNode) nothrow -> Bool {
+		return match self {
+			Null => { true },
+			default => { false }
+		};
+	}
+
+	pub fn as_bool(self: &JsonNode) nothrow -> Optional<Bool> {
+		return match self {
+			Bool(v) => { Optional::Some(*v) },
+			default => { Optional<Bool>::None() }
+		};
+	}
+
+	pub fn as_int(self: &JsonNode) nothrow -> Optional<Int> {
+		return match self {
+			Number(raw) => {
+				match parse_std.parse_int(*raw) {
+					core.Result::Ok(v) => { Optional::Some(v) },
+					default => { Optional<Int>::None() }
+				}
+			},
+			default => { Optional<Int>::None() }
+		};
+	}
+
+	pub fn as_uint(self: &JsonNode) nothrow -> Optional<Uint> {
+		return match self {
+			Number(raw) => {
+				match parse_std.parse_uint(*raw) {
+					core.Result::Ok(v) => { Optional::Some(v) },
+					default => { Optional<Uint>::None() }
+				}
+			},
+			default => { Optional<Uint>::None() }
+		};
+	}
+
+	pub fn as_float(self: &JsonNode) nothrow -> Optional<Float> {
+		return match self {
+			Number(raw) => {
+				match parse_std.parse_float(*raw) {
+					core.Result::Ok(v) => { Optional::Some(v) },
+					default => { Optional<Float>::None() }
+				}
+			},
+			default => { Optional<Float>::None() }
+		};
+	}
+
+	pub fn as_string(self: &JsonNode) nothrow -> Optional<String> {
+		return match self {
+			String(v) => { Optional::Some(*v) },
+			default => { Optional<String>::None() }
+		};
+	}
+
+	pub fn as_number_raw(self: &JsonNode) nothrow -> Optional<String> {
+		return match self {
+			Number(raw) => { Optional::Some(*raw) },
+			default => { Optional<String>::None() }
+		};
+	}
+
+	pub fn as_array(self: &JsonNode) nothrow -> Optional<&Array<JsonNode>> {
+		return match self {
+			Array(v) => { Optional::Some(v) },
+			default => { Optional<&Array<JsonNode>>::None() }
+		};
+	}
+
+	pub fn as_object(self: &JsonNode) nothrow -> Optional<&containers.HashMap<String, std.json.JsonNode>> {
+		match self {
+			Object(v) => {
+				return Optional::Some(v);
+			},
+			default => {
+			}
+		}
+		return Optional<&containers.HashMap<String, std.json.JsonNode>>::None();
+	}
+
+	pub fn get(self: &JsonNode, key: &String) nothrow -> Optional<&JsonNode> {
+		match self {
+			Object(fields) => {
+				return try fields.get(key) catch { Optional<&JsonNode>::None() };
+			},
+			default => { return Optional<&JsonNode>::None(); }
+		}
+	}
+
+	pub fn get_path(self: &JsonNode, path: &Array<String>) nothrow -> Optional<&JsonNode> {
+		return _get_path_at(self, path, 0);
+	}
+
+	pub fn expect_bool(self: &JsonNode, path: String, key: String) -> Bool {
+		match self {
+			Bool(v) => { return *v; },
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return false;
+			}
+		}
+	}
+
+	pub fn expect_int(self: &JsonNode, path: String, key: String) -> Int {
+		match self {
+			Number(raw) => {
+				match parse_std.parse_int(*raw) {
+					core.Result::Ok(v) => { return v; },
+					default => {
+						_throw_json("invalid-datatype", path, key);
+						return 0;
+					}
+				}
+			},
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return 0;
+			}
+		}
+	}
+
+	pub fn expect_float(self: &JsonNode, path: String, key: String) -> Float {
+		match self {
+			Number(raw) => {
+				match parse_std.parse_float(*raw) {
+					core.Result::Ok(v) => { return v; },
+					default => {
+						_throw_json("invalid-datatype", path, key);
+						return 0.0;
+					}
+				}
+			},
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return 0.0;
+			}
+		}
+	}
+
+	pub fn expect_string(self: &JsonNode, path: String, key: String) -> String {
+		match self {
+			String(v) => { return *v; },
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return "";
+			}
+		}
+	}
+
+	pub fn expect_array(self: &JsonNode, path: String, key: String) -> &Array<JsonNode> {
+		match self.as_array() {
+			Some(v) => { return v; },
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return self.expect_array(path, key);
+			}
+		}
+	}
+
+	pub fn expect_object(self: &JsonNode, path: String, key: String) -> &containers.HashMap<String, std.json.JsonNode> {
+		match self.as_object() {
+			Some(v) => { return v; },
+			default => {
+				_throw_json("invalid-datatype", path, key);
+				return self.expect_object(path, key);
+			}
+		}
+	}
+
+	pub fn expect_path(self: &JsonNode, path: &Array<String>) -> &JsonNode {
+		match self.get_path(path) {
+			Some(v) => { return v; },
+			default => {
+				_throw_json("missing-path", "", "");
+				return self;
+			}
+		}
+	}
+}
+
+fn _get_path_at(node: &JsonNode, path: &Array<String>, idx: Int) nothrow -> Optional<&JsonNode> {
+	if idx >= path.len {
+		return Optional::Some(node);
+	}
+	val key = &path[idx];
+	match node.get(key) {
+		Some(next) => {
+			return _get_path_at(next, path, idx + 1);
+		},
+		default => { return Optional<&JsonNode>::None(); }
+	}
+}
+
+fn _err_parse(tag: String, offset: Int) nothrow -> JsonErrorData {
+	return JsonErrorData(tag = tag, offset = offset, line = -1, col = -1, path = "", key = "");
+}
+
+fn _is_ws(b: Byte) nothrow -> Bool {
+	return b == cast<Byte>(32) or b == cast<Byte>(9) or b == cast<Byte>(10) or b == cast<Byte>(13);
+}
+
+fn _is_digit(b: Byte) nothrow -> Bool {
+	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
+}
+
+fn _skip_ws(text: &String, idx: &mut Int) nothrow -> Void {
+	val n = byte_length(*text);
+	while *idx < n {
+		val b = core.string_byte_at(text, *idx);
+		if not _is_ws(b) {
+			return;
+		}
+		*idx = *idx + 1;
+	}
+}
+
+fn _byte_to_string(b: Byte) nothrow -> String {
+	var out = io.buffer(1);
+	io.buffer_write(&mut out, 0, b);
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), io.buffer_len(&out));
+}
+
+fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
+	if end <= start {
+		return "";
+	}
+	val n = end - start;
+	var out = io.buffer(n);
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(text, start + i);
+		io.buffer_write(&mut out, i, b);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), io.buffer_len(&out));
+}
+
+fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val start = *idx;
+	val want = byte_length(lit);
+	val n = byte_length(*text);
+	if start + want > n {
+		return core.Result::Err(_err_parse("invalid-syntax", start));
+	}
+	var i = 0;
+	while i < want {
+		val b = core.string_byte_at(text, start + i);
+		val w = core.string_byte_at(&lit, i);
+		if b != w {
+			return core.Result::Err(_err_parse("invalid-syntax", start + i));
+		}
+		i = i + 1;
+	}
+	*idx = start + want;
+	return core.Result::Ok(move node);
+}
+
+fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, JsonErrorData> {
+	val n = byte_length(*text);
+	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(34) {
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	*idx = *idx + 1;
+	var out = "";
+	while *idx < n {
+		val b = core.string_byte_at(text, *idx);
+		if b == cast<Byte>(34) {
+			*idx = *idx + 1;
+			return core.Result::Ok(out);
+		}
+		if b == cast<Byte>(92) {
+			*idx = *idx + 1;
+			if *idx >= n {
+				return core.Result::Err(_err_parse("invalid-escape", *idx));
+			}
+			val e = core.string_byte_at(text, *idx);
+			if e == cast<Byte>(34) {
+				out = out + "\"";
+			} else {
+				if e == cast<Byte>(92) {
+					out = out + "\\";
+				} else {
+					if e == cast<Byte>(47) {
+						out = out + "/";
+					} else {
+						if e == cast<Byte>(98) {
+							out = out + "\b";
+						} else {
+							if e == cast<Byte>(102) {
+								out = out + "\f";
+							} else {
+								if e == cast<Byte>(110) {
+									out = out + "\n";
+								} else {
+									if e == cast<Byte>(114) {
+										out = out + "\r";
+									} else {
+										if e == cast<Byte>(116) {
+											out = out + "\t";
+										} else {
+											return core.Result::Err(_err_parse("invalid-escape", *idx));
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			*idx = *idx + 1;
+			continue;
+		}
+		out = out + _byte_to_string(b);
+		*idx = *idx + 1;
+	}
+	return core.Result::Err(_err_parse("invalid-syntax", *idx));
+}
+
+fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val n = byte_length(*text);
+	val start = *idx;
+	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(45) {
+		*idx = *idx + 1;
+	}
+	if *idx >= n or not _is_digit(core.string_byte_at(text, *idx)) {
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
+		*idx = *idx + 1;
+	}
+	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(46) {
+		*idx = *idx + 1;
+		if *idx >= n or not _is_digit(core.string_byte_at(text, *idx)) {
+			return core.Result::Err(_err_parse("invalid-syntax", *idx));
+		}
+		while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
+			*idx = *idx + 1;
+		}
+	}
+	if *idx < n {
+		val e = core.string_byte_at(text, *idx);
+		if e == cast<Byte>(101) or e == cast<Byte>(69) {
+			*idx = *idx + 1;
+			if *idx < n {
+				val s = core.string_byte_at(text, *idx);
+				if s == cast<Byte>(43) or s == cast<Byte>(45) {
+					*idx = *idx + 1;
+				}
+			}
+			if *idx >= n or not _is_digit(core.string_byte_at(text, *idx)) {
+				return core.Result::Err(_err_parse("invalid-syntax", *idx));
+			}
+			while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
+				*idx = *idx + 1;
+			}
+		}
+	}
+	val raw = _slice_string(text, start, *idx);
+	return core.Result::Ok(JsonNode::Number(raw));
+}
+
+fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val n = byte_length(*text);
+	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(91) {
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	*idx = *idx + 1;
+	_skip_ws(text, idx);
+	var values: Array<JsonNode> = [];
+	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(93) {
+		*idx = *idx + 1;
+		return core.Result::Ok(JsonNode::Array(move values));
+	}
+	while true {
+		match _parse_value(text, idx) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(v) => { values.push(move v); }
+		}
+		_skip_ws(text, idx);
+		if *idx >= n {
+			return core.Result::Err(_err_parse("invalid-syntax", *idx));
+		}
+		val b = core.string_byte_at(text, *idx);
+		if b == cast<Byte>(44) {
+			*idx = *idx + 1;
+			_skip_ws(text, idx);
+			continue;
+		}
+		if b == cast<Byte>(93) {
+			*idx = *idx + 1;
+			return core.Result::Ok(JsonNode::Array(move values));
+		}
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	return core.Result::Err(_err_parse("invalid-syntax", *idx));
+}
+
+fn _parse_object_throwing(text: &String, idx: &mut Int) -> core.Result<JsonNode, JsonErrorData> {
+	val n = byte_length(*text);
+	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(123) {
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	*idx = *idx + 1;
+	_skip_ws(text, idx);
+	var fields = containers.hash_map<type String, std.json.JsonNode>();
+	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(125) {
+		*idx = *idx + 1;
+		return core.Result::Ok(JsonNode::Object(move fields));
+	}
+	while true {
+		var key = "";
+		match _parse_string(text, idx) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(v) => { key = v; }
+		}
+		_skip_ws(text, idx);
+		if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(58) {
+			return core.Result::Err(_err_parse("invalid-syntax", *idx));
+		}
+		*idx = *idx + 1;
+		_skip_ws(text, idx);
+			match _parse_value(text, idx) {
+				core.Result::Err(e) => { return core.Result::Err(e); },
+				core.Result::Ok(v) => {
+					fields.insert(move key, move v);
+				}
+			}
+		_skip_ws(text, idx);
+		if *idx >= n {
+			return core.Result::Err(_err_parse("invalid-syntax", *idx));
+		}
+		val b = core.string_byte_at(text, *idx);
+		if b == cast<Byte>(44) {
+			*idx = *idx + 1;
+			_skip_ws(text, idx);
+			continue;
+		}
+			if b == cast<Byte>(125) {
+				*idx = *idx + 1;
+				return core.Result::Ok(JsonNode::Object(move fields));
+			}
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	return core.Result::Err(_err_parse("invalid-syntax", *idx));
+}
+
+fn _parse_object(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	return try _parse_object_throwing(text, idx) catch { core.Result::Err(_err_parse("internal-error", *idx)) };
+}
+
+fn _parse_value(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val n = byte_length(*text);
+	if *idx >= n {
+		return core.Result::Err(_err_parse("invalid-syntax", *idx));
+	}
+	val b = core.string_byte_at(text, *idx);
+	if b == cast<Byte>(110) {
+		return _parse_literal(text, idx, "null", JsonNode::Null());
+	}
+	if b == cast<Byte>(116) {
+		return _parse_literal(text, idx, "true", JsonNode::Bool(true));
+	}
+	if b == cast<Byte>(102) {
+		return _parse_literal(text, idx, "false", JsonNode::Bool(false));
+	}
+	if b == cast<Byte>(34) {
+		match _parse_string(text, idx) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(v) => { return core.Result::Ok(JsonNode::String(move v)); }
+		}
+	}
+	if b == cast<Byte>(91) {
+		return _parse_array(text, idx);
+	}
+	if b == cast<Byte>(123) {
+		return _parse_object(text, idx);
+	}
+	if b == cast<Byte>(45) or _is_digit(b) {
+		return _parse_number(text, idx);
+	}
+	return core.Result::Err(_err_parse("invalid-syntax", *idx));
+}
+
+fn _encode_string(s: String) nothrow -> String {
+	var out = "\"";
+	val n = byte_length(s);
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(&s, i);
+		if b == cast<Byte>(34) {
+			out = out + "\\\"";
+		} else {
+			if b == cast<Byte>(92) {
+				out = out + "\\\\";
+			} else {
+				if b == cast<Byte>(8) {
+					out = out + "\\b";
+				} else {
+					if b == cast<Byte>(12) {
+						out = out + "\\f";
+					} else {
+						if b == cast<Byte>(10) {
+							out = out + "\\n";
+						} else {
+							if b == cast<Byte>(13) {
+								out = out + "\\r";
+							} else {
+								if b == cast<Byte>(9) {
+									out = out + "\\t";
+								} else {
+									if b < cast<Byte>(32) {
+										out = out + "\\u00" + _hex_byte(b);
+									} else {
+										out = out + _byte_to_string(b);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return out + "\"";
+}
+
+fn _hex_nibble(n: Int) nothrow -> String {
+	if n == 0 { return "0"; }
+	if n == 1 { return "1"; }
+	if n == 2 { return "2"; }
+	if n == 3 { return "3"; }
+	if n == 4 { return "4"; }
+	if n == 5 { return "5"; }
+	if n == 6 { return "6"; }
+	if n == 7 { return "7"; }
+	if n == 8 { return "8"; }
+	if n == 9 { return "9"; }
+	if n == 10 { return "a"; }
+	if n == 11 { return "b"; }
+	if n == 12 { return "c"; }
+	if n == 13 { return "d"; }
+	if n == 14 { return "e"; }
+	if n == 15 { return "f"; }
+	return "0";
+}
+
+fn _hex_byte(b: Byte) nothrow -> String {
+	val v = cast<Int>(b);
+	val hi = v / 16;
+	val lo = v % 16;
+	return _hex_nibble(hi) + _hex_nibble(lo);
+}
+
+fn _encode_array(values: &Array<JsonNode>, cfg: &JsonConfig) nothrow -> String {
+	var out = "[";
+	var i = 0;
+	while i < values.len {
+		if i > 0 {
+			out = out + ",";
+		}
+		out = out + _encode_node(&values[i], cfg);
+		i = i + 1;
+	}
+	return out + "]";
+}
+
+fn _bool_to_json(v: Bool) nothrow -> String {
+	if v {
+		return "true";
+	}
+	return "false";
+}
+
+fn _string_lex_cmp(a: &String, b: &String) nothrow -> Int {
+	val na = byte_length(*a);
+	val nb = byte_length(*b);
+	var n = na;
+	if nb < n {
+		n = nb;
+	}
+	var i = 0;
+	while i < n {
+		val ba = core.string_byte_at(a, i);
+		val bb = core.string_byte_at(b, i);
+		if ba < bb {
+			return -1;
+		}
+		if ba > bb {
+			return 1;
+		}
+		i = i + 1;
+	}
+	if na < nb {
+		return -1;
+	}
+	if na > nb {
+		return 1;
+	}
+	return 0;
+}
+
+fn _sort_keys_lex(keys: &mut Array<String>) nothrow -> Void {
+	var i = 1;
+	while i < keys.len {
+		var j = i;
+		while j > 0 {
+			if _string_lex_cmp(&keys[j - 1], &keys[j]) <= 0 {
+				break;
+			}
+			keys.swap(j - 1, j);
+			j = j - 1;
+		}
+		i = i + 1;
+	}
+}
+
+fn _encode_object_unordered_throwing(fields: &containers.HashMap<String, std.json.JsonNode>, cfg: &JsonConfig) -> String {
+	var out = "{";
+	var first = true;
+	var it = fields.iter();
+	while true {
+		match it.next() {
+			Some(item) => {
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val k = item.key;
+				out = out + _encode_string(*k) + ":" + _encode_node(item.value, cfg);
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return out + "}";
+}
+
+fn _encode_object_ordered_throwing(fields: &containers.HashMap<String, std.json.JsonNode>, cfg: &JsonConfig) -> String {
+	var out = "{";
+	var total = fields.len();
+	var emitted = 0;
+	var has_prev = false;
+	var prev = "";
+	while emitted < total {
+		var found = false;
+		var best = "";
+		var it = fields.iter();
+		while true {
+			match it.next() {
+				Some(item) => {
+					val k = item.key;
+					if has_prev and _string_lex_cmp(k, &prev) <= 0 {
+						continue;
+					}
+					if not found or _string_lex_cmp(k, &best) < 0 {
+						best = *k;
+						found = true;
+					}
+				},
+				None => {
+					break;
+				}
+			}
+		}
+		if not found {
+			break;
+		}
+		if emitted > 0 {
+			out = out + ",";
+		}
+		val key = &best;
+		match fields.get(key) {
+			Some(v) => {
+				out = out + _encode_string(*key) + ":" + _encode_node(v, cfg);
+			},
+			None => {
+			}
+		}
+		prev = best;
+		has_prev = true;
+		emitted = emitted + 1;
+	}
+	return out + "}";
+}
+
+fn _encode_object(fields: &containers.HashMap<String, std.json.JsonNode>, cfg: &JsonConfig) nothrow -> String {
+	return try match cfg.key_order {
+		JsonKeyOrder::OrderedLexUtf8() => { _encode_object_ordered_throwing(fields, cfg) },
+		default => { _encode_object_unordered_throwing(fields, cfg) }
+	} catch { "{}" };
+}
+
+fn _encode_node(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
+	match node {
+		Null => {
+			return "null";
+		},
+		Bool(v) => {
+			return _bool_to_json(*v);
+		},
+		Number(raw) => {
+			return *raw;
+		},
+		String(v) => {
+			return _encode_string(*v);
+		},
+		Array(values) => {
+			return _encode_array(values, cfg);
+		},
+		Object(fields) => {
+			return _encode_object(fields, cfg);
+		},
+		default => {
+			return "null";
+		}
+	}
+}
+
+fn _encode_node(node: JsonNode, cfg: &JsonConfig) nothrow -> String {
+	return _encode_node(&node, cfg);
+}

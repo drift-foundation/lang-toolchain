@@ -1,0 +1,40 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn run() -> Int {
+	val text = "{\"n\":1e10001}";
+	var root = json.JsonNode::Null();
+	match json.parse(&text) {
+		core.Result::Ok(v) => {
+			root = move v;
+		},
+		core.Result::Err(_) => {
+			return 1;
+		}
+	}
+	val k = "n";
+	match root.get(&k) {
+		Some(node) => {
+			match node.as_number_raw() {
+				Some(raw) => {
+					if raw != "1e10001" {
+						return 2;
+					}
+				},
+				None => {
+					return 3;
+				}
+			}
+		},
+		None => {
+			return 4;
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

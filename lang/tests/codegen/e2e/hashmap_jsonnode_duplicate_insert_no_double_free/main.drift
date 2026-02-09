@@ -1,0 +1,15 @@
+module m
+
+import std.containers as containers;
+import std.json as json;
+
+fn run() -> Int {
+	var m = containers.hash_map<type String, json.JsonNode>();
+	m.insert("a", json.JsonNode::Number("1"));
+	m.insert("a", json.JsonNode::Number("2"));
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

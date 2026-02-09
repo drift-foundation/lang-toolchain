@@ -655,21 +655,21 @@ implement<K, V, B> HashMapCore<K, V, B>
 		}
 	}
 
-	fn replace_value(self: &mut HashMapCore<K, V, B>, i: Int, value: V) -> V {
+	fn replace_value(self: &mut HashMapCore<K, V, B>, i: Int, var value: V) -> V {
 		val old = self.read_value(i);
 		unsafe {
 			val slot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(&mut self.values, i);
-			mem.maybe_write<type V>(slot, value);
+			mem.maybe_write<type V>(slot, move value);
 		}
-		return old;
+		return move old;
 	}
 
-	fn write_entry(self: &mut HashMapCore<K, V, B>, i: Int, key: K, value: V) -> Void {
+	fn write_entry(self: &mut HashMapCore<K, V, B>, i: Int, var key: K, var value: V) -> Void {
 		unsafe {
 			val kslot = mem.ptr_at_mut<type mem.MaybeUninit<K>>(&mut self.keys, i);
-			mem.maybe_write<type K>(kslot, key);
+			mem.maybe_write<type K>(kslot, move key);
 			val vslot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(&mut self.values, i);
-			mem.maybe_write<type V>(vslot, value);
+			mem.maybe_write<type V>(vslot, move value);
 		}
 		self.set_state(i, HASH_MAP_STATE_FULL);
 	}
@@ -710,7 +710,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return HashMapFindResult(index = 0, found = false);
 	}
 
-	fn _insert_into_buffers(self: &HashMapCore<K, V, B>, keys: &mut mem.RawBuffer<mem.MaybeUninit<K>>, values: &mut mem.RawBuffer<mem.MaybeUninit<V>>, states: &mut mem.RawBuffer<Int>, cap: Int, key: K, value: V) -> Void {
+	fn _insert_into_buffers(self: &HashMapCore<K, V, B>, keys: &mut mem.RawBuffer<mem.MaybeUninit<K>>, values: &mut mem.RawBuffer<mem.MaybeUninit<V>>, states: &mut mem.RawBuffer<Int>, cap: Int, var key: K, var value: V) -> Void {
 		if cap <= 0 {
 			throw std.err:IndexError(container_id = HASH_MAP_CONTAINER_ID, index = 0);
 		}
@@ -721,14 +721,14 @@ implement<K, V, B> HashMapCore<K, V, B>
 			unsafe {
 				val sref = mem.ptr_at_ref<type Int>(states, idx);
 				val state = *sref;
-				if state != HASH_MAP_STATE_FULL {
-					val kslot = mem.ptr_at_mut<type mem.MaybeUninit<K>>(keys, idx);
-					mem.maybe_write<type K>(kslot, key);
-					val vslot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(values, idx);
-					mem.maybe_write<type V>(vslot, value);
-					mem.write<type Int>(states, idx, HASH_MAP_STATE_FULL);
-					return;
-				}
+					if state != HASH_MAP_STATE_FULL {
+						val kslot = mem.ptr_at_mut<type mem.MaybeUninit<K>>(keys, idx);
+						mem.maybe_write<type K>(kslot, move key);
+						val vslot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(values, idx);
+						mem.maybe_write<type V>(vslot, move value);
+						mem.write<type Int>(states, idx, HASH_MAP_STATE_FULL);
+						return;
+					}
 			}
 			idx = (idx + 1) % cap;
 			probes = probes + 1;
@@ -770,11 +770,11 @@ implement<K, V, B> HashMapCore<K, V, B>
 				var j = 0;
 				while j < cap0 {
 					val state = self.state_at(j);
-					if state == HASH_MAP_STATE_FULL {
-						var k = self.read_key(j);
-						var v = self.read_value(j);
-						self._insert_into_buffers(&mut new_keys, &mut new_values, &mut new_states, new_cap, k, v);
-					}
+						if state == HASH_MAP_STATE_FULL {
+							var k = self.read_key(j);
+							var v = self.read_value(j);
+							self._insert_into_buffers(&mut new_keys, &mut new_values, &mut new_states, new_cap, move k, move v);
+						}
 					j = j + 1;
 				}
 				val old_keys = mem.replace<type mem.RawBuffer<mem.MaybeUninit<K>> >(&mut self.keys, new_keys);
@@ -837,10 +837,10 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.ensure_capacity(needed);
 		val res = self.find_slot(&key);
 		if res.found {
-			val old = self.replace_value(res.index, value);
-			return Optional::Some(old);
+			val old = self.replace_value(res.index, move value);
+			return Optional::Some(move old);
 		}
-		self.write_entry(res.index, key, value);
+		self.write_entry(res.index, move key, move value);
 		self.len = self.len + 1;
 		self.gen = self.gen + 1;
 		return Optional::None();
@@ -856,7 +856,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.set_state(res.index, HASH_MAP_STATE_TOMB);
 		self.len = self.len - 1;
 		self.gen = self.gen + 1;
-		return Optional::Some(v);
+		return Optional::Some(move v);
 	}
 
 	pub fn iter(self: &HashMapCore<K, V, B>) -> HashMapIter<K, V, B> {

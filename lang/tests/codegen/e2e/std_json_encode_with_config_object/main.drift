@@ -1,0 +1,15 @@
+module m
+import std.json as json;
+import std.containers as containers;
+fn run() -> Int {
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = b.build();
+	var fields = containers.hash_map<type String, json.JsonNode>();
+	fields.insert("a", json.JsonNode::Number("1"));
+	val n = json.JsonNode::Object(move fields);
+	val s = json.encode_with_config(&n, &cfg);
+	if byte_length(s) <= 0 { return 1; }
+	return 0;
+}
+fn main() nothrow -> Int { return try run() catch { 99 }; }

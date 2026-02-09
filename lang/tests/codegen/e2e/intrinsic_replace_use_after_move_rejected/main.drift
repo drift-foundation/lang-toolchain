@@ -1,0 +1,15 @@
+module m
+
+import std.mem as mem;
+
+struct Box {
+	x: String
+}
+
+fn main() nothrow -> Int {
+	var a = Box(x = "1");
+	var b = Box(x = "2");
+	val _ = mem.replace<type Box>(&mut a, b);
+	val _r = &b;
+	return 0;
+}

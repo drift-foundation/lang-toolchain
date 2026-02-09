@@ -1,0 +1,30 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn expect_parse_err(text: String, tag: String) -> Int {
+	match json.parse(&text) {
+		core.Result::Ok(_) => {
+			return 1;
+		},
+		core.Result::Err(e) => {
+			if e.tag == tag {
+				return 0;
+			}
+			return 2;
+		}
+	}
+}
+
+fn run() -> Int {
+	if expect_parse_err("{\"x\":NaN}", "invalid-syntax") != 0 { return 1; }
+	if expect_parse_err("{\"x\":Infinity}", "invalid-syntax") != 0 { return 2; }
+	if expect_parse_err("{\"x\":-Infinity}", "invalid-syntax") != 0 { return 3; }
+	if expect_parse_err("{\"x\":+Infinity}", "invalid-syntax") != 0 { return 4; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}
