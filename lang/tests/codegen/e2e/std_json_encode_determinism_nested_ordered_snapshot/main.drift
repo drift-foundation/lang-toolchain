@@ -1,0 +1,63 @@
+module m
+
+import std.console as console;
+import std.containers as containers;
+import std.json as json;
+
+fn build_one() -> json.JsonNode {
+	var inner = containers.hash_map<type String, json.JsonNode>();
+	inner.insert("z", json.JsonNode::Number("3"));
+	inner.insert("a", json.JsonNode::Bool(true));
+
+	var child = containers.hash_map<type String, json.JsonNode>();
+	child.insert("k2", json.JsonNode::String("v2"));
+	var arr: Array<json.JsonNode> = [];
+	arr.push(json.JsonNode::Number("1"));
+	arr.push(json.JsonNode::Number("2"));
+	arr.push(json.JsonNode::Object(move inner));
+	child.insert("k1", json.JsonNode::Array(move arr));
+
+	var root = containers.hash_map<type String, json.JsonNode>();
+	root.insert("m", json.JsonNode::Object(move child));
+	root.insert("a", json.JsonNode::Null());
+	root.insert("z", json.JsonNode::String("end"));
+	return json.JsonNode::Object(move root);
+}
+
+fn build_two() -> json.JsonNode {
+	var inner = containers.hash_map<type String, json.JsonNode>();
+	inner.insert("a", json.JsonNode::Bool(true));
+	inner.insert("z", json.JsonNode::Number("3"));
+
+	var child = containers.hash_map<type String, json.JsonNode>();
+	var arr: Array<json.JsonNode> = [];
+	arr.push(json.JsonNode::Number("1"));
+	arr.push(json.JsonNode::Number("2"));
+	arr.push(json.JsonNode::Object(move inner));
+	child.insert("k1", json.JsonNode::Array(move arr));
+	child.insert("k2", json.JsonNode::String("v2"));
+
+	var root = containers.hash_map<type String, json.JsonNode>();
+	root.insert("z", json.JsonNode::String("end"));
+	root.insert("a", json.JsonNode::Null());
+	root.insert("m", json.JsonNode::Object(move child));
+	return json.JsonNode::Object(move root);
+}
+
+fn run() -> Int {
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = b.build();
+
+	val s1 = json.encode_with_config(&build_one(), &cfg);
+	val s2 = json.encode_with_config(&build_two(), &cfg);
+	if s1 != s2 {
+		return 10;
+	}
+	console.println(s1);
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

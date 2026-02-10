@@ -1,0 +1,24 @@
+module m
+
+import std.console as console;
+import std.containers as containers;
+import std.json as json;
+
+fn run() -> Int {
+	var root = containers.hash_map<type String, json.JsonNode>();
+	root.insert("q", json.JsonNode::String("x\"y"));
+	root.insert("b", json.JsonNode::String("x\\y"));
+	root.insert("n", json.JsonNode::String("x\ny"));
+	root.insert("r", json.JsonNode::String("x\ry"));
+	root.insert("t", json.JsonNode::String("x\ty"));
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = b.build();
+	val node = json.JsonNode::Object(move root);
+	console.println(json.encode_with_config(&node, &cfg));
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

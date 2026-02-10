@@ -136,6 +136,65 @@ pub fn main() nothrow -> Int {
 
 For formatter customization, see `lang/examples/logging/pluggable_formatter.drift`.
 
+## JSON API + error tags (`std.json`)
+
+`std.json` is JSON-first and machine-oriented:
+- parse: `json.parse(&text) -> Result<JsonNode, JsonErrorData>`
+- encode: `json.encode(...)` and `json.encode_with_config(...)`
+- deterministic key order: `JsonKeyOrder::OrderedLexUtf8()`
+- navigation: `get(...)`, `get_path(Array<String>)`, `entries()`
+- extractors: `as_*` (optional) and `expect_*` (throws `std.json:JsonError`)
+
+```drift
+import std.console as console;
+import std.core as core;
+import std.iter as iter;
+import std.json as json;
+use trait iter.SinglePassIterator;
+
+fn main() nothrow -> Int {
+    return try run() catch { 99 };
+}
+
+fn run() -> Int {
+    val text = "{\"user\":{\"id\":42,\"name\":\"alice\"}}";
+    var node = json.JsonNode::Null();
+    match json.parse(&text) {
+        core.Result::Ok(v) => { node = move v; },
+        core.Result::Err(e) => {
+            // machine tag + positional context
+            console.println(e.tag);
+            return 1;
+        }
+    }
+
+    var cfgb = json.config_builder();
+    cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+    val cfg = cfgb.build();
+    console.println(json.encode_with_config(&node, &cfg));
+
+    val path = ["user", "id"];
+    val id_node = node.expect_path(&path);
+    val id = id_node.expect_int("user.id", "id");
+    if id != 42 { return 2; }
+
+    var it = node.entries();
+    while true {
+        match it.next() {
+            Some(item) => { console.println(*item.key); },
+            None => { break; }
+        }
+    }
+    return 0;
+}
+```
+
+Error tag contract:
+- stable, machine-readable kebab-case tags
+- current parse/data tags include:
+`invalid-syntax`, `invalid-escape`, `invalid-datatype`, `missing-path`, `internal-error`
+- `JsonErrorData` carries structured context (`tag`, `offset`, `line`, `col`, `path`, `key`)
+
 ## Atomic ordering defaults (`std.sync`)
 
 Use the weakest ordering that proves correctness:
