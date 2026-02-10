@@ -1,0 +1,10 @@
+{
+  "description": "e2e: for count typed init mismatch",
+  "diagnostics": [
+    {
+      "message_contains": "initializer type",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

@@ -70,5 +70,58 @@ Land ergonomic loop syntax for common counted/index iteration without changing i
 
 ## Status
 
-- Pinned only.
-- Implementation not started.
+### Completed
+
+1. Grammar/parser support landed for:
+   - counted/index `for`:
+     - `for var i = 0; i < n; i += 1 { ... }`
+     - `for val i = 0; i < n; i += 1 { ... }`
+     - `for Int i = 0; i < n; i += 1 { ... }`
+   - iterable shortcut `for`:
+     - `for val x : xs { ... }`
+     - `for Int x : xs { ... }`
+   - legacy `for x in xs { ... }` remains supported.
+2. Stage0/stage1 AST/HIR plumbing added for:
+   - mutable/typed iterable binders
+   - counted loop init metadata (mutable + optional type).
+3. Counted-loop lowering implemented with correct step ordering around `continue`.
+4. Counted-loop binding scoping fixed:
+   - init variable no longer leaks outside loop scope.
+5. Regression coverage added:
+   - parser unit tests for valid/invalid counted + colon forms
+   - stage1 scope regression test for counted-loop init binding
+   - codegen e2e:
+     - `for_loop_colon_sum_int`
+     - `for_count_loop_sum_int`
+     - `for_count_loop_continue_break`
+     - `for_count_nested_continue_break`
+     - `for_count_outer_continue_step`
+     - `for_iter_colon_typed_mismatch`
+     - `for_count_typed_init_mismatch`
+     - `for_count_loop_scope_unknown_name`
+6. Unknown-name diagnostics pinned and stabilized for loop scope errors:
+   - Added driver regression:
+     - `lang/tests/driver/test_unknown_name_diagnostic.py`
+   - Added checker `E-UNKNOWN-NAME` for unresolved user-style local names in function scope.
+   - Hardened checker to avoid false positives in shallow/incomplete inference contexts:
+     - do not treat call callee var nodes as unknown locals in generic traversal
+     - suppress unknown-name reporting in lambda-body shallow inference
+     - suppress unknown-name reporting while traversing `try`/`match` arm blocks
+     - keep unknown-name checks active for normal function-scope traversal.
+7. Validated previously regressed e2e families after unknown-name integration:
+   - closures/try-catch lambda
+   - concurrency cancel/spawn timeout cases
+   - exception/index error payload cases
+   - match binder/type-args cases
+
+### Remaining
+
+1. Iterator protocol consolidation track (follow-up branch, not a blocker for closing this branch):
+   - formalize `Iterable` as canonical `iter()` entry in docs/spec notes
+   - converge container docs/examples on `iter()/iter_mut()` naming.
+
+### Branch Status
+
+- Full suite validation passed.
+- Looping MVP scope is complete.
+- Branch is ready to close and resume JSON-focused work.

@@ -744,6 +744,20 @@ class ForStmt(Stmt):
     var: str
     iter_expr: "Expr"
     body: Block
+    var_mutable: bool = False
+    var_type_expr: Optional["TypeExpr"] = None
+
+
+@dataclass
+class ForCountStmt(Stmt):
+    loc: Located
+    init_name: str
+    init_value: "Expr"
+    condition: "Expr"
+    step: "Stmt"
+    body: Block
+    init_mutable: bool = False
+    init_type_expr: Optional["TypeExpr"] = None
 
 @dataclass
 class BreakStmt(Stmt):

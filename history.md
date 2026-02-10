@@ -455,3 +455,33 @@
   - `concurrent_cancel_before_start_join_timeout_nonzero_cancelled`
   - `concurrent_cancel_after_start_does_not_kill`
   - `concurrent_cancel_then_join_closed`.
+
+## 2026-02-10 – Looping MVP completion and checker stabilization
+- Landed looping syntax + lowering MVP:
+  - counted/index form: `for var/val/type i = init; cond; step { ... }`
+  - iterable shortcut form: `for val/type x : source { ... }`
+  - legacy `for x in xs` preserved.
+- Added parser/stage AST-HIR plumbing for typed/mutable loop binders and counted-loop init metadata.
+- Fixed counted-loop scope leak so init binders do not escape loop scope.
+- Added loop regression coverage:
+  - parser valid/invalid header cases (`lang/tests/parser/test_parser_for_looping.py`)
+  - stage1 scope regressions (`lang/tests/stage1/test_ast_to_hir.py`)
+  - e2e behavior/typing cases:
+    - `for_loop_colon_sum_int`
+    - `for_count_loop_sum_int`
+    - `for_count_loop_continue_break`
+    - `for_count_nested_continue_break`
+    - `for_count_outer_continue_step`
+    - `for_iter_colon_typed_mismatch`
+    - `for_count_typed_init_mismatch`
+    - `for_count_loop_scope_unknown_name`.
+- Added driver regression for unknown loop-scope names:
+  - `lang/tests/driver/test_unknown_name_diagnostic.py`.
+- Introduced checker `E-UNKNOWN-NAME` for unresolved user-style local names in function scope and stabilized it to avoid false positives:
+  - skip plain callee-var traversal in generic call-walk path
+  - suppress unknown-name checks in shallow/incomplete inference contexts (lambda internals, try/match arm-local inference paths).
+- Fixed follow-up regressions surfaced by broader e2e runs:
+  - prelude callable path (`byte_length`) false positive
+  - match/arm inference regression that caused `cannot bind a Void value` in `array_string_pop`
+  - restored passing concurrency/match/exception payload e2e families.
+- Full test suite passed; looping branch marked ready to close.

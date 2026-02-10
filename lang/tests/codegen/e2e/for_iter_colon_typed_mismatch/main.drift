@@ -1,0 +1,7 @@
+fn main() nothrow -> Int {
+	val xs = [1, 2, 3];
+	for Bool x : xs {
+		x;
+	}
+	return 0;
+}

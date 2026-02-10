@@ -1,0 +1,10 @@
+{
+  "description": "e2e: for iter colon typed binder mismatch",
+  "diagnostics": [
+    {
+      "message_contains": "initializer type",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

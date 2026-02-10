@@ -1,0 +1,10 @@
+{
+  "description": "e2e: counted for init name is scoped to loop",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'i'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

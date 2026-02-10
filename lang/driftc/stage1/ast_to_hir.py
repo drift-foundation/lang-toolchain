@@ -1123,10 +1123,29 @@ class AstToHIR:
 			origin="for_next",
 		)
 		body_block = self.lower_block(stmt.body)
+		binder_name = stmt.iter_var
+		binder_mut_flags: list[bool] | None = None
+		if bool(getattr(stmt, "iter_var_mutable", False)):
+			binder_mut_flags = [True]
+		if getattr(stmt, "iter_var_type", None) is not None:
+			tmp_name = self._fresh_temp("__for_item")
+			tmp_bid = self._alloc_binding(tmp_name)
+			binder_name = tmp_name
+			binder_mut_flags = [False]
+			decl_bid = self._alloc_binding(stmt.iter_var)
+			decl_let = H.HLet(
+				name=stmt.iter_var,
+				value=H.HVar(tmp_name, binding_id=tmp_bid),
+				declared_type_expr=getattr(stmt, "iter_var_type", None),
+				binding_id=decl_bid,
+				is_mutable=bool(getattr(stmt, "iter_var_mutable", False)),
+				loc=self._as_span(getattr(stmt, "loc", None)),
+			)
+			body_block = H.HBlock(statements=[decl_let, *body_block.statements])
 		arms: list[H.HMatchArm] = [
 			# `for` desugaring matches `Optional<T>::Some(value: T)` positionally,
 			# so the single binder always maps to field index 0.
-			H.HMatchArm(ctor="Some", ctor_base=None, binders=[stmt.iter_var], binder_field_indices=[0], block=body_block, result=None),
+			H.HMatchArm(ctor="Some", ctor_base=None, binders=[binder_name], binder_field_indices=[0], block=body_block, result=None, binder_is_mutable=binder_mut_flags),
 			H.HMatchArm(ctor=None, ctor_base=None, binders=[], block=H.HBlock(statements=[H.HBreak()]), result=None),
 		]
 		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms)
@@ -1139,6 +1158,63 @@ class AstToHIR:
 			stmts.append(iterable_let)
 		stmts.extend([iter_let, loop_stmt])
 		return H.HBlock(statements=stmts)
+
+	def _visit_stmt_ForCountStmt(self, stmt: ast.ForCountStmt) -> H.HStmt:
+		"""
+		Desugar counted loop:
+		  for init; cond; step { body }
+
+		As:
+		  let init
+		  var __for_first = true
+		  loop {
+		    if __for_first { __for_first = false } else { step }
+		    if cond { body } else { break }
+		  }
+
+		This preserves `continue` semantics naturally: a continue jumps to loop
+		header, which runs `step` before the next condition check.
+		"""
+		self._push_scope()
+		try:
+			init_bid = self._alloc_binding(stmt.init_name)
+			init_let = H.HLet(
+				name=stmt.init_name,
+				value=self.lower_expr(stmt.init_value),
+				declared_type_expr=getattr(stmt, "init_type", None),
+				binding_id=init_bid,
+				is_mutable=bool(getattr(stmt, "init_mutable", False)),
+				loc=self._as_span(getattr(stmt, "loc", None)),
+			)
+			first_name = self._fresh_temp("__for_first")
+			first_bid = self._alloc_binding(first_name)
+			first_let = H.HLet(
+				name=first_name,
+				value=H.HLiteralBool(True),
+				declared_type_expr=None,
+				binding_id=first_bid,
+				is_mutable=True,
+				loc=self._as_span(getattr(stmt, "loc", None)),
+			)
+			first_cond = H.HVar(first_name, binding_id=first_bid)
+			clear_first = H.HAssign(target=H.HVar(first_name, binding_id=first_bid), value=H.HLiteralBool(False))
+			step_stmt = self.lower_stmt(stmt.step)
+			step_gate = H.HIf(
+				cond=first_cond,
+				then_block=H.HBlock(statements=[clear_first]),
+				else_block=H.HBlock(statements=[step_stmt]),
+			)
+			cond_expr = self.lower_expr(stmt.cond)
+			body_block = self.lower_block(stmt.body)
+			cond_gate = H.HIf(
+				cond=cond_expr,
+				then_block=body_block,
+				else_block=H.HBlock(statements=[H.HBreak()]),
+			)
+			loop_stmt = H.HLoop(body=H.HBlock(statements=[step_gate, cond_gate]))
+			return H.HBlock(statements=[init_let, first_let, loop_stmt])
+		finally:
+			self._pop_scope()
 
 	def _visit_stmt_BreakStmt(self, stmt: ast.BreakStmt) -> H.HStmt:
 		return H.HBreak()

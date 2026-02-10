@@ -40,6 +40,7 @@ from .ast import (
 	TryStmt,
 	WhileStmt,
 	ForStmt,
+	ForCountStmt,
 	ThrowStmt,
 	RaiseStmt,
 )
@@ -73,6 +74,7 @@ __all__ = [
 	"TryStmt",
 	"WhileStmt",
 	"ForStmt",
+	"ForCountStmt",
 	"ThrowStmt",
 	"RaiseStmt",
 	# parse_source can be added here when implemented

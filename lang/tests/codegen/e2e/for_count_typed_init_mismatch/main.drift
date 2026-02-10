@@ -1,0 +1,6 @@
+fn main() nothrow -> Int {
+	for Bool i = 0; i; i = false {
+		0;
+	}
+	return 0;
+}

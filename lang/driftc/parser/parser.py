@@ -29,6 +29,7 @@ from .ast import (
     Cast,
     Expr,
     ExprStmt,
+    ForCountStmt,
     ForStmt,
     FunctionDef,
     IfStmt,
@@ -1736,6 +1737,12 @@ def _build_stmt(tree: Tree):
 		return _build_while_stmt(tree)
 	if kind == "for_stmt":
 		return _build_for_stmt(tree)
+	if kind == "for_iter_stmt":
+		return _build_for_iter_stmt(tree)
+	if kind == "for_legacy_stmt":
+		return _build_for_stmt(tree)
+	if kind == "for_count_stmt":
+		return _build_for_count_stmt(tree)
 	if kind == "try_stmt":
 		return _build_try_stmt(tree)
 	if kind == "unsafe_block":
@@ -1868,31 +1875,146 @@ def _build_aug_assign_stmt(tree: Tree) -> "AugAssignStmt":
     return AugAssignStmt(loc=loc, target=target, op=op_tok.value, value=value)
 
 
+def _parse_for_iter_binding(tree: Tree) -> tuple[str, bool, TypeExpr | None]:
+	kind = _name(tree)
+	if kind == "for_iter_bind_infer":
+		mutable = any(isinstance(c, Token) and c.type == "VAR" for c in tree.children)
+		ident_node = next(
+			c for c in tree.children
+			if (isinstance(c, Token) and c.type in {"NAME", "MOVE"}) or (isinstance(c, Tree) and _name(c) == "ident")
+		)
+		name_tok = _unwrap_ident(ident_node)
+		return name_tok.value, mutable, None
+	if kind == "for_iter_bind_typed":
+		type_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "type_expr")
+		ident_node = next(
+			c for c in tree.children
+			if (isinstance(c, Token) and c.type in {"NAME", "MOVE"}) or (isinstance(c, Tree) and _name(c) == "ident")
+		)
+		name_tok = _unwrap_ident(ident_node)
+		return name_tok.value, False, _build_type_expr(type_node)
+	raise ValueError(f"unsupported for_iter_binding node: {kind}")
+
+
+def _build_for_iter_stmt(tree: Tree) -> ForStmt:
+	loc = _loc(tree)
+	binding_inner = next(
+		c for c in tree.children
+		if isinstance(c, Tree) and _name(c) in {"for_iter_bind_infer", "for_iter_bind_typed", "for_iter_binding"}
+	)
+	if _name(binding_inner) == "for_iter_binding":
+		binding_inner = next(
+			c for c in binding_inner.children
+			if isinstance(c, Tree) and _name(c) in {"for_iter_bind_infer", "for_iter_bind_typed"}
+		)
+	var_name, var_mutable, var_type_expr = _parse_for_iter_binding(binding_inner)
+	expr_node = next(
+		c for c in tree.children
+		if isinstance(c, Tree) and _name(c) not in {"for_iter_bind_infer", "for_iter_bind_typed", "for_iter_binding", "block"}
+	)
+	block_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "block")
+	iter_expr = _build_expr(expr_node)
+	body_stmts = [_build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"]
+	body_stmts = [s for s in body_stmts if s is not None]
+	return ForStmt(loc=loc, var=var_name, iter_expr=iter_expr, body=Block(statements=body_stmts), var_mutable=var_mutable, var_type_expr=var_type_expr)
+
+
 def _build_for_stmt(tree: Tree) -> ForStmt:
-    loc = _loc(tree)
-    ident_node = next(
-        child
-        for child in tree.children
-        if (isinstance(child, Token) and child.type in {"NAME", "MOVE"})
-        or (isinstance(child, Tree) and _name(child) == "ident")
-    )
-    name_token = _unwrap_ident(ident_node)
-    # The parse tree includes both the loop binding `ident` and the iterable
-    # `expr` as Tree nodes. We must select the iterable expression here, not
-    # the binding identifier; otherwise we end up trying to build an expression
-    # from the `ident` node and crash on its raw Token child.
-    expr_node = next(
-        child
-        for child in tree.children
-        if isinstance(child, Tree) and _name(child) not in {"ident", "block"}
-    )
-    block_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "block")
-    iter_expr = _build_expr(expr_node)
-    body_stmts = [
-        _build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"
-    ]
-    body_stmts = [s for s in body_stmts if s is not None]
-    return ForStmt(loc=loc, var=name_token.value, iter_expr=iter_expr, body=Block(statements=body_stmts))
+	loc = _loc(tree)
+	ident_node = next(
+		child
+		for child in tree.children
+		if (isinstance(child, Token) and child.type in {"NAME", "MOVE"})
+		or (isinstance(child, Tree) and _name(child) == "ident")
+	)
+	name_token = _unwrap_ident(ident_node)
+	# The parse tree includes both the loop binding `ident` and the iterable
+	# `expr` as Tree nodes. We must select the iterable expression here, not
+	# the binding identifier; otherwise we end up trying to build an expression
+	# from the `ident` node and crash on its raw Token child.
+	expr_node = next(
+		child
+		for child in tree.children
+		if isinstance(child, Tree) and _name(child) not in {"ident", "block"}
+	)
+	block_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "block")
+	iter_expr = _build_expr(expr_node)
+	body_stmts = [
+		_build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"
+	]
+	body_stmts = [s for s in body_stmts if s is not None]
+	return ForStmt(loc=loc, var=name_token.value, iter_expr=iter_expr, body=Block(statements=body_stmts))
+
+
+def _parse_for_count_init(tree: Tree) -> tuple[str, Expr, bool, TypeExpr | None]:
+	kind = _name(tree)
+	if kind == "for_count_init_infer":
+		mutable = any(isinstance(c, Token) and c.type == "VAR" for c in tree.children)
+		ident_node = next(
+			c for c in tree.children
+			if (isinstance(c, Token) and c.type in {"NAME", "MOVE"}) or (isinstance(c, Tree) and _name(c) == "ident")
+		)
+		name_tok = _unwrap_ident(ident_node)
+		expr_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) != "ident")
+		return name_tok.value, _build_expr(expr_node), mutable, None
+	if kind == "for_count_init_typed":
+		type_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "type_expr")
+		ident_node = next(
+			c for c in tree.children
+			if (isinstance(c, Token) and c.type in {"NAME", "MOVE"}) or (isinstance(c, Tree) and _name(c) == "ident")
+		)
+		name_tok = _unwrap_ident(ident_node)
+		expr_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) not in {"type_expr", "ident"})
+		return name_tok.value, _build_expr(expr_node), False, _build_type_expr(type_node)
+	raise ValueError(f"unsupported for_count_init node: {kind}")
+
+
+def _build_for_count_step(tree: Tree):
+	child = next((c for c in tree.children if isinstance(c, Tree)), None)
+	if child is None:
+		raise ValueError("for_count_step missing child")
+	kind = _name(child)
+	if kind == "assign_stmt":
+		return _build_assign_stmt(child)
+	if kind == "aug_assign_stmt":
+		return _build_aug_assign_stmt(child)
+	if kind == "for_count_step_expr":
+		expr_node = next(c for c in child.children if isinstance(c, Tree))
+		return ExprStmt(loc=_loc(child), value=_build_expr(expr_node))
+	if kind == "expr":
+		return ExprStmt(loc=_loc(child), value=_build_expr(child))
+	raise ValueError(f"unsupported for_count_step kind: {kind}")
+
+
+def _build_for_count_stmt(tree: Tree) -> ForCountStmt:
+	loc = _loc(tree)
+	init_node = next(
+		c for c in tree.children
+		if isinstance(c, Tree) and _name(c) in {"for_count_init_infer", "for_count_init_typed", "for_count_init"}
+	)
+	if _name(init_node) == "for_count_init":
+		init_node = next(c for c in init_node.children if isinstance(c, Tree))
+	init_name, init_value, init_mutable, init_type_expr = _parse_for_count_init(init_node)
+	condition_node = next(
+		c for c in tree.children
+		if isinstance(c, Tree) and _name(c) not in {"for_count_init_infer", "for_count_init_typed", "for_count_init", "for_count_step", "block"}
+	)
+	condition = _build_expr(condition_node)
+	step_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "for_count_step")
+	step_stmt = _build_for_count_step(step_node)
+	block_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "block")
+	body_stmts = [_build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"]
+	body_stmts = [s for s in body_stmts if s is not None]
+	return ForCountStmt(
+		loc=loc,
+		init_name=init_name,
+		init_value=init_value,
+		condition=condition,
+		step=step_stmt,
+		body=Block(statements=body_stmts),
+		init_mutable=init_mutable,
+		init_type_expr=init_type_expr,
+	)
 
 
 def _parse_binding_name(tree: Tree) -> tuple[Token, bool]:

@@ -660,7 +660,27 @@ def _convert_while(stmt: parser_ast.WhileStmt) -> s0.Stmt:
 
 
 def _convert_for(stmt: parser_ast.ForStmt) -> s0.Stmt:
-	return s0.ForStmt(iter_var=stmt.var, iterable=_convert_expr(stmt.iter_expr), body=_convert_block(stmt.body), loc=Span.from_loc(stmt.loc))
+	return s0.ForStmt(
+		iter_var=stmt.var,
+		iterable=_convert_expr(stmt.iter_expr),
+		body=_convert_block(stmt.body),
+		iter_var_mutable=bool(getattr(stmt, "var_mutable", False)),
+		iter_var_type=getattr(stmt, "var_type_expr", None),
+		loc=Span.from_loc(stmt.loc),
+	)
+
+
+def _convert_for_count(stmt: parser_ast.ForCountStmt) -> s0.Stmt:
+	return s0.ForCountStmt(
+		init_name=stmt.init_name,
+		init_value=_convert_expr(stmt.init_value),
+		cond=_convert_expr(stmt.condition),
+		step=_convert_stmt(stmt.step),
+		body=_convert_block(stmt.body),
+		init_mutable=bool(getattr(stmt, "init_mutable", False)),
+		init_type=getattr(stmt, "init_type_expr", None),
+		loc=Span.from_loc(stmt.loc),
+	)
 
 
 def _convert_throw(stmt: parser_ast.ThrowStmt) -> s0.Stmt:
@@ -719,6 +739,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.ContinueStmt: _convert_continue,
 	parser_ast.WhileStmt: _convert_while,
 	parser_ast.ForStmt: _convert_for,
+	parser_ast.ForCountStmt: _convert_for_count,
 	parser_ast.ThrowStmt: _convert_throw,
 	parser_ast.RaiseStmt: _convert_raise,
 	parser_ast.RethrowStmt: _convert_rethrow,
@@ -2322,6 +2343,9 @@ def parse_drift_workspace_to_hir(
 				elif isinstance(st, parser_ast.ForStmt):
 					_diag_conflict(st.var, st.loc)
 					_check_block(st.body)
+				elif isinstance(st, parser_ast.ForCountStmt):
+					_diag_conflict(st.init_name, st.loc)
+					_check_block(st.body)
 				elif isinstance(st, parser_ast.TryStmt):
 					_check_block(st.body)
 					for c in getattr(st, "catches", []) or []:
@@ -2700,9 +2724,25 @@ def parse_drift_workspace_to_hir(
 				_resolve_types_in_block(path, file_aliases, st.body)
 			if isinstance(st, parser_ast.ForStmt):
 				_resolve_types_in_expr(st.iter_expr)
+				if getattr(st, "var_type_expr", None) is not None:
+					_resolve_type_expr_in_file(path, file_aliases, st.var_type_expr)
 				_resolve_types_in_block(path, file_aliases, st.body)
-				if isinstance(st, parser_ast.ThrowStmt):
-					_resolve_types_in_expr(st.expr)
+			if isinstance(st, parser_ast.ForCountStmt):
+				if getattr(st, "init_type_expr", None) is not None:
+					_resolve_type_expr_in_file(path, file_aliases, st.init_type_expr)
+				_resolve_types_in_expr(st.init_value)
+				_resolve_types_in_expr(st.condition)
+				if isinstance(st.step, parser_ast.ExprStmt):
+					_resolve_types_in_expr(st.step.value)
+				elif isinstance(st.step, parser_ast.AssignStmt):
+					_resolve_types_in_expr(st.step.target)
+					_resolve_types_in_expr(st.step.value)
+				elif isinstance(st.step, parser_ast.AugAssignStmt):
+					_resolve_types_in_expr(st.step.target)
+					_resolve_types_in_expr(st.step.value)
+				_resolve_types_in_block(path, file_aliases, st.body)
+			if isinstance(st, parser_ast.ThrowStmt):
+				_resolve_types_in_expr(st.expr)
 
 	def _resolve_trait_expr_in_file(
 		path: Path,

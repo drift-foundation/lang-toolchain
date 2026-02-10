@@ -218,6 +218,41 @@ def test_for_desugars_to_iter_loop_match():
 	assert isinstance(default.block.statements[0], HBreak)
 
 
+def test_for_iter_binding_does_not_escape_scope():
+	l = AstToHIR()
+	block = l.lower_block(
+		[
+			ast.ForStmt(iter_var="i", iterable=ast.Name("items"), body=[ast.ExprStmt(expr=ast.Name("i"))]),
+			ast.ReturnStmt(value=ast.Name("i")),
+		]
+	)
+	ret = block.statements[1]
+	assert isinstance(ret, HReturn)
+	assert isinstance(ret.value, HVar)
+	assert ret.value.binding_id is None
+
+
+def test_for_count_init_binding_does_not_escape_scope():
+	l = AstToHIR()
+	block = l.lower_block(
+		[
+			ast.ForCountStmt(
+				init_name="i",
+				init_value=ast.Literal(0),
+				cond=ast.Binary("<", ast.Name("i"), ast.Literal(3)),
+				step=ast.AugAssignStmt(target=ast.Name("i"), op="+=", value=ast.Literal(1)),
+				body=[ast.ExprStmt(expr=ast.Name("i"))],
+				init_mutable=True,
+			),
+			ast.ReturnStmt(value=ast.Name("i")),
+		]
+	)
+	ret = block.statements[1]
+	assert isinstance(ret, HReturn)
+	assert isinstance(ret.value, HVar)
+	assert ret.value.binding_id is None
+
+
 def test_for_evaluates_iterable_once():
 	l = AstToHIR()
 	for_ast = ast.ForStmt(

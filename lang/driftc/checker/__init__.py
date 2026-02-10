@@ -1024,6 +1024,7 @@ class Checker:
 		call_info_by_callsite_id: Mapping[int, CallInfo] | None
 		locals: Dict[str, TypeId]
 		diagnostics: Optional[List[Diagnostic]]
+		report_unknown_names: bool = True
 		cache: Dict[int, Optional[TypeId]] = field(default_factory=dict)
 
 		def infer(self, expr: "H.HExpr") -> Optional[TypeId]:
@@ -1146,21 +1147,26 @@ class Checker:
 
 			if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 				match_ty: Optional[TypeId] = None
-				for arm in expr.arms:
-					arm_ty: Optional[TypeId] = None
-					if getattr(arm, "result", None) is not None:
-						arm_ty = self._infer_expr_type(arm.result)
-					else:
-						last = arm.block.statements[-1] if arm.block.statements else None
-						if isinstance(last, H.HExprStmt):
-							arm_ty = self._infer_expr_type(last.expr)
-					if arm_ty is None:
-						continue
-					if match_ty is None:
-						match_ty = arm_ty
-					elif match_ty != arm_ty:
-						return None
-				return match_ty
+				prev_report_unknown = self.report_unknown_names
+				self.report_unknown_names = False
+				try:
+					for arm in expr.arms:
+						arm_ty: Optional[TypeId] = None
+						if getattr(arm, "result", None) is not None:
+							arm_ty = self._infer_expr_type(arm.result)
+						else:
+							last = arm.block.statements[-1] if arm.block.statements else None
+							if isinstance(last, H.HExprStmt):
+								arm_ty = self._infer_expr_type(last.expr)
+						if arm_ty is None:
+							continue
+						if match_ty is None:
+							match_ty = arm_ty
+						elif match_ty != arm_ty:
+							return None
+					return match_ty
+				finally:
+					self.report_unknown_names = prev_report_unknown
 
 			if hasattr(H, "HFString") and isinstance(expr, getattr(H, "HFString")):
 				for hole in expr.holes:
@@ -1196,6 +1202,33 @@ class Checker:
 					return checker._string_type
 				if expr.name in self.locals:
 					return self.locals[expr.name]
+				# Bare names can also denote function symbols (e.g. function-value
+				# positions like `return g;`). Those are not local-variable errors.
+				for fn_id in checker._signatures_by_id.keys():
+					if expr.name == fn_id.name or expr.name == function_symbol(fn_id):
+						return None
+				# Emit unknown-name diagnostics only for user-style local identifiers.
+				# We intentionally skip toolchain modules and constructor/type-like
+				# symbols until checker name resolution is fully generalized.
+				mod = getattr(getattr(self.current_fn, "signature", None), "module", None)
+				is_toolchain_mod = isinstance(mod, str) and (mod.startswith("std.") or mod.startswith("lang."))
+				is_local_ident = (
+					bool(expr.name)
+					and "." not in expr.name
+					and expr.name[0].islower()
+				)
+				if not is_toolchain_mod and is_local_ident:
+					if self.report_unknown_names:
+						self._append_diag(
+							_chk_diag(
+								message=f"unknown name '{expr.name}'",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E-UNKNOWN-NAME",
+							)
+						)
+						return checker._unknown_type
+					return None
 			if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
 				# `move <place>` yields the underlying value type (best-effort).
 				return self._infer_expr_type(expr.subject)
@@ -1253,7 +1286,9 @@ class Checker:
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HLambda):
 				lam = expr.fn
 				prev_locals = dict(self.locals)
+				prev_report_unknown = self.report_unknown_names
 				try:
+					self.report_unknown_names = False
 					mod = None
 					if self.current_fn is not None and self.current_fn.signature is not None:
 						mod = getattr(self.current_fn.signature, "module", None)
@@ -1311,6 +1346,7 @@ class Checker:
 						return expected_ret
 					return None
 				finally:
+					self.report_unknown_names = prev_report_unknown
 					self.locals = prev_locals
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HQualifiedMember):
 				if self.call_info_by_callsite_id is not None:
@@ -1822,6 +1858,7 @@ class Checker:
 			call_info_by_callsite_id=self._call_info_by_callsite_id.get(current_fn.fn_id) if current_fn else None,
 			locals=locals if locals is not None else {},
 			diagnostics=diagnostics,
+			report_unknown_names=False,
 		)
 		return ctx.infer(expr)
 
@@ -2224,7 +2261,11 @@ class Checker:
 				on_expr(expr, ctx)
 
 			if isinstance(expr, H.HCall):
-				walk_expr(expr.fn)
+				# Do not infer plain callee vars here; unresolved-call diagnostics are
+				# produced via CallInfo/call validation, and walking callee HVar nodes
+				# would misclassify prelude/builtin callable names as unknown locals.
+				if not isinstance(expr.fn, H.HVar):
+					walk_expr(expr.fn)
 				for arg in expr.args:
 					walk_expr(arg)
 				for kw in getattr(expr, "kwargs", []) or []:
@@ -2285,9 +2326,14 @@ class Checker:
 								bty = arm_def.field_types[fidx]
 						ctx.locals[bname] = bty
 
-					walk_block(arm.block)
-					if getattr(arm, "result", None) is not None:
-						walk_expr(arm.result)
+					prev_report_unknown = ctx.report_unknown_names
+					ctx.report_unknown_names = False
+					try:
+						walk_block(arm.block)
+						if getattr(arm, "result", None) is not None:
+							walk_expr(arm.result)
+					finally:
+						ctx.report_unknown_names = prev_report_unknown
 
 					for bname, prev in saved.items():
 						if prev is None:
@@ -2383,7 +2429,12 @@ class Checker:
 			elif isinstance(stmt, H.HTry):
 				walk_block(stmt.body)
 				for arm in stmt.catches:
-					walk_block(arm.block)
+					prev_report_unknown = ctx.report_unknown_names
+					ctx.report_unknown_names = False
+					try:
+						walk_block(arm.block)
+					finally:
+						ctx.report_unknown_names = prev_report_unknown
 			# HBreak/HContinue carry no expressions.
 
 		def walk_block(hb: H.HBlock) -> None:

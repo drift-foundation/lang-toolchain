@@ -523,6 +523,21 @@ class ForStmt(Stmt):
 	iter_var: str
 	iterable: Expr
 	body: List[Stmt]
+	iter_var_mutable: bool = False
+	iter_var_type: Optional[TypeExpr] = None
+	loc: Optional[object] = None
+
+
+@dataclass
+class ForCountStmt(Stmt):
+	"""Counted loop: for init; cond; step { body }."""
+	init_name: str
+	init_value: Expr
+	cond: Expr
+	step: Stmt
+	body: List[Stmt]
+	init_mutable: bool = False
+	init_type: Optional[TypeExpr] = None
 	loc: Optional[object] = None
 
 
@@ -565,5 +580,5 @@ __all__ = [
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
 	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "MapEntry", "MapLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
-	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
+	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "ForCountStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
 ]

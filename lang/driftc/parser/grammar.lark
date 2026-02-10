@@ -251,7 +251,20 @@ aug_assign_stmt: assign_target (PLUS_EQ | MINUS_EQ | STAR_EQ | SLASH_EQ | PERCEN
 assign_target: postfix
              | STAR assign_target -> deref
 
-for_stmt: "for" ident "in" expr block
+for_stmt: "for" for_count_init TERMINATOR expr TERMINATOR for_count_step block -> for_count_stmt
+        | "for" for_iter_binding "in" expr block -> for_iter_stmt
+        | "for" for_iter_binding COLON expr block -> for_iter_stmt
+        | "for" ident "in" expr block -> for_legacy_stmt
+
+for_iter_binding: (VAR | VAL)? ident -> for_iter_bind_infer
+                | type_expr ident -> for_iter_bind_typed
+
+for_count_init: (VAR | VAL)? ident EQUAL expr -> for_count_init_infer
+              | type_expr ident EQUAL expr -> for_count_init_typed
+
+for_count_step: assign_stmt
+              | aug_assign_stmt
+              | expr -> for_count_step_expr
 
 if_stmt: IF if_cond block else_clause?
 if_cond: trait_expr | expr
