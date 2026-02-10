@@ -15,7 +15,8 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 2. Deterministic JSON encoding API.
 3. JSON parsing API with clear error surface.
 4. Deterministic object key ordering policy for encoded output.
-5. Bridge helpers for logging attrs conversion.
+5. Navigation/extractor APIs (`get`, `get_path`, `entries`, `as_*`, `expect_*`).
+6. Bridge helpers for logging attrs conversion.
 
 ## Non-Goals (MVP)
 
@@ -35,7 +36,7 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 - Access:
   - `get(key: String) -> Optional<&JsonNode>`
   - `get_path(path: Array<String>) -> Optional<&JsonNode>` (key segments only in MVP)
-  - `entries() -> Iterator<(String, &JsonNode)>` (empty iteration for non-object)
+  - `entries() -> JsonEntriesIter` (empty iteration for non-object)
   - `is_null() -> Bool`
 - Extractors:
   - safe probes: `as_bool/as_int/as_float/as_decimal/as_string/as_array/as_object -> Optional<...>`
@@ -81,6 +82,23 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 1. Logger-targeted payload samples round-trip through `std.json`.
 2. Stable snapshot tests for encoded outputs.
 
+## Completed Since Plan Start
+
+1. Core `JsonNode` model and encoder landed.
+2. Parse API landed with structured `JsonErrorData` and machine-tag surface.
+3. Duplicate-key parse policy pinned and implemented as keep-last.
+4. Ordered object encoding (`OrderedLexUtf8`) implemented.
+5. Parse error position (`offset`, `line`, `col`) implemented and covered.
+6. JSON string encoder control-char escaping fixed to valid JSON behavior.
+7. Non-finite JSON numbers are rejected in parser (JSON-compliant).
+8. `entries()` landed via `JsonEntriesIter` with empty semantics for non-object.
+9. Compiler regression uncovered and fixed in MIR array ownership join (`LoadLocal` -> `MoveOut`) that caused JSON parse double-free on error paths.
+
+## Current Status
+
+- MVP JSON APIs are functionally in place and passing targeted e2e coverage.
+- JSON parse-focused e2e subset is green, including previous crash repros.
+
 ## Logger Migration Hooks (Post-JSON)
 
 - Replace runtime `DiagnosticValue -> JSON` conversion path with Drift-side conversion feeding `std.json`.
@@ -101,3 +119,12 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 - `std.json` encode/parse APIs are stable and covered.
 - Deterministic encoding policy is documented and tested.
 - Logger can consume `std.json` for payload/attrs formatting in follow-up migration.
+
+## Remaining JSON Work (Post-MVP / Pending)
+
+1. Add logger-focused integration coverage using real log payload shapes (attrs/event fields).
+2. Add broader encode determinism snapshots for complex nested objects/arrays.
+3. Optional API polish:
+   - decide whether `entries()` should expose a dedicated item type alias in `std.json` for nicer ergonomics.
+   - decide whether any additional navigation helpers are needed beyond pinned MVP (`get_path` key-only + `as_array` index navigation).
+4. Documentation pass in effective-drift for final `std.json` surface and error-tag contract.

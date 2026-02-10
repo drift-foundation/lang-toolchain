@@ -1,0 +1,48 @@
+module m
+
+import std.core as core;
+import std.iter as iter;
+import std.json as json;
+
+use trait iter.SinglePassIterator;
+
+fn run() -> Int {
+	val t = "{\"a\":1,\"b\":2}";
+	var node = json.JsonNode::Null();
+	match json.parse(&t) {
+		core.Result::Ok(v) => { node = move v; },
+		core.Result::Err(e) => { if e.tag == "x" { return 98; } return 10; }
+	}
+	var count = 0;
+	var it = node.entries();
+	while true {
+		match it.next() {
+			Some(item) => {
+				if byte_length(*item.key) <= 0 { return 97; }
+				count = count + 1;
+			},
+			None => { break; }
+		}
+	}
+	if count != 2 { return 11; }
+
+	val n = json.JsonNode::Number("1");
+	var itn = n.entries();
+	match itn.next() {
+		Some(_) => { return 20; },
+		None => {}
+	}
+
+	val z = json.JsonNode::Null();
+	var itz = z.entries();
+	match itz.next() {
+		Some(_) => { return 21; },
+		None => {}
+	}
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

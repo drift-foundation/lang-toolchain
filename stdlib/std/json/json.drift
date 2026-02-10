@@ -2,6 +2,7 @@ module std.json
 
 import std.core as core;
 import std.containers as containers;
+import std.core.hash as hash;
 import std.parse as parse_std;
 import std.io as io;
 import std.iter as iter;
@@ -15,6 +16,7 @@ export {
 	JsonKeyOrder,
 	JsonConfig,
 	JsonConfigBuilder,
+	JsonEntriesIter,
 	config_builder,
 	encode,
 	encode_compact,
@@ -55,6 +57,11 @@ pub struct JsonConfig {
 
 pub struct JsonConfigBuilder {
 	key_order: JsonKeyOrder
+}
+
+pub variant JsonEntriesIter {
+	Empty,
+	Object(it: containers.HashMapIter<String, JsonNode, hash.DefaultBuildHasher>)
 }
 
 implement core.Copy for JsonKeyOrder {
@@ -219,6 +226,18 @@ implement JsonNode {
 		return _get_path_at(self, path, 0);
 	}
 
+	pub fn entries(self: &JsonNode) nothrow -> JsonEntriesIter {
+		match self {
+			Object(fields) => {
+				var obj_it = fields.iter();
+				return JsonEntriesIter::Object(move obj_it);
+			},
+			default => {
+				return JsonEntriesIter::Empty();
+			}
+		}
+	}
+
 	pub fn expect_bool(self: &JsonNode, path: String, key: String) -> Bool {
 		match self {
 			Bool(v) => { return *v; },
@@ -302,6 +321,17 @@ implement JsonNode {
 				_throw_json("missing-path", "", "");
 				return self;
 			}
+		}
+	}
+}
+
+implement iter.SinglePassIterator<containers.HashMapItemRef<String, JsonNode>> for JsonEntriesIter {
+	pub fn next(self: &mut JsonEntriesIter) -> Optional<containers.HashMapItemRef<String, JsonNode>> {
+		match self {
+			JsonEntriesIter::Object(it) => {
+				return it.next();
+			},
+			default => { return Optional<containers.HashMapItemRef<String, JsonNode>>::None(); }
 		}
 	}
 }

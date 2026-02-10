@@ -859,7 +859,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(move v);
 	}
 
-	pub fn iter(self: &HashMapCore<K, V, B>) -> HashMapIter<K, V, B> {
+	pub fn iter(self: &HashMapCore<K, V, B>) nothrow -> HashMapIter<K, V, B> {
 		return HashMapIter<type K, V, B>(map = self, idx = 0, gen_snapshot = self.gen);
 	}
 }
