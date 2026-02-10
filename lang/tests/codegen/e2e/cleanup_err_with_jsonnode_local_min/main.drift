@@ -1,0 +1,29 @@
+module m
+
+import std.core as core;
+import std.containers as c;
+import std.json as json;
+
+fn mk_err() nothrow -> core.Result<String, json.JsonErrorData> {
+  return core.Result::Err(json.JsonErrorData(tag = "bad", offset = 1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
+  var hm = c.hash_map<type String, json.JsonNode>();
+  match mk_err() {
+    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Ok(_v) => { }
+  }
+  if hm.len() == 999 { return core.Result::Ok(json.JsonNode::Null()); }
+  return core.Result::Ok(json.JsonNode::Null());
+}
+
+fn run() -> Int {
+  match f() {
+    core.Result::Ok(_) => { return 1; },
+    core.Result::Err(_e) => { }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

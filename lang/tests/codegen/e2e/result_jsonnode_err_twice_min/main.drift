@@ -1,0 +1,22 @@
+module m
+
+import std.core as core;
+import std.json as json;
+
+fn fail(tag: String) nothrow -> core.Result<json.JsonNode, json.JsonErrorData> {
+  return core.Result::Err(json.JsonErrorData(tag = tag, offset = -1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn run() -> Int {
+  match fail("a") {
+    core.Result::Ok(_) => { return 1; },
+    core.Result::Err(_e) => { }
+  }
+  match fail("b") {
+    core.Result::Ok(_) => { return 2; },
+    core.Result::Err(_e2) => { }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

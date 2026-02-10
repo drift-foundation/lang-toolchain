@@ -1,0 +1,26 @@
+module m
+import std.core as core;
+
+struct E {
+  tag: String,
+  path: String,
+  key: String
+}
+
+fn h() nothrow -> core.Result<String, E> {
+  return core.Result::Err(E(tag = "bad", path = "", key = ""));
+}
+
+fn g() -> core.Result<String, E> {
+  match h() {
+    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Ok(v) => { return core.Result::Ok(v); }
+  }
+}
+
+fn run() -> Int {
+  val _r = g();
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

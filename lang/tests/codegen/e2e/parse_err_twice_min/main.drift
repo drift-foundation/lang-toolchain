@@ -1,0 +1,9 @@
+module m
+import std.core as core;
+import std.parse as p;
+fn run() -> Int {
+  match p.parse_int("x") { core.Result::Ok(_) => { return 1; }, core.Result::Err(_e) => { } }
+  match p.parse_int("y") { core.Result::Ok(_) => { return 2; }, core.Result::Err(_e2) => { } }
+  return 0;
+}
+fn main() nothrow -> Int { return try run() catch { 99 }; }

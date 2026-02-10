@@ -1,0 +1,52 @@
+module m
+import std.core as core;
+
+struct E {
+  pub tag: String,
+  pub offset: Int,
+  pub line: Int,
+  pub col: Int,
+  pub path: String,
+  pub key: String,
+}
+
+fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
+  var line = 1;
+  var col = 1;
+  var i = 0;
+  while i < offset and i < byte_length(*text) {
+    if core.string_byte_at(text, i) == cast<Byte>(10) {
+      line = line + 1;
+      col = 1;
+    } else {
+      col = col + 1;
+    }
+    i = i + 1;
+  }
+  return E(tag = tag, offset = offset, line = line, col = col, path = "", key = "");
+}
+
+fn parse(text: &String) nothrow -> core.Result<Int, E> {
+  return core.Result::Err(mk(text, "invalid-syntax", 6));
+}
+
+fn run() -> Int {
+  val s = "{\n\"a\":}\n";
+  match parse(&s) {
+    core.Result::Ok(_) => { return 1; },
+    core.Result::Err(e) => {
+      if e.tag != "invalid-syntax" { return 2; }
+      if e.line != 2 { return 3; }
+    }
+  }
+  match parse(&s) {
+    core.Result::Ok(_) => { return 4; },
+    core.Result::Err(e) => {
+      if e.tag != "invalid-syntax" { return 5; }
+      if e.line != 2 { return 6; }
+    }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

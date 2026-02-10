@@ -1,0 +1,25 @@
+module m
+
+import std.core as core;
+import std.json as json;
+import std.containers as c;
+
+fn h() nothrow -> core.Result<String, json.JsonErrorData> {
+  return core.Result::Err(json.JsonErrorData(tag = "bad", offset = 1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
+  var fields = c.hash_map<type String, json.JsonNode>();
+  match h() {
+    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Ok(v) => { fields.insert("k", json.JsonNode::String(v)); }
+  }
+  return core.Result::Ok(json.JsonNode::Object(move fields));
+}
+
+fn run() -> Int {
+  val _r = f();
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

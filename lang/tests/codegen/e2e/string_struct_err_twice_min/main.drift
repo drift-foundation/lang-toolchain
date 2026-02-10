@@ -1,0 +1,23 @@
+module m
+
+import std.core as core;
+
+struct E {
+  tag: String,
+  path: String,
+  key: String
+}
+
+fn mk(tag: String) -> E {
+  return E(tag = tag, path = "", key = "");
+}
+
+fn run() -> Int {
+  var e1 = mk("a");
+  if e1.tag == "" { return 1; }
+  var e2 = mk("b");
+  if e2.tag == "" { return 2; }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

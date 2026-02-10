@@ -61,7 +61,7 @@ class UnaryOp(Enum):
 
 
 class BinaryOp(Enum):
-	"""Binary operators preserved in HIR (no short-circuit lowering yet)."""
+	"""Binary operators preserved in HIR."""
 	ADD = auto()
 	SUB = auto()
 	MUL = auto()

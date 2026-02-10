@@ -1339,6 +1339,33 @@ class HIRToMIR:
 	def _visit_expr_HBinary(self, expr: H.HBinary) -> M.ValueId:
 		left_expr = expr.left
 		right_expr = expr.right
+		if expr.op in (H.BinaryOp.AND, H.BinaryOp.OR):
+			left = self.lower_expr(left_expr)
+			temp_local = f"__logic_tmp{self.b.new_temp()}"
+			self.b.ensure_local(temp_local)
+			self._local_types[temp_local] = self._bool_type
+			rhs_block = self.b.new_block("logic_rhs")
+			short_block = self.b.new_block("logic_short")
+			join_block = self.b.new_block("logic_join")
+			if expr.op is H.BinaryOp.AND:
+				self.b.set_terminator(M.IfTerminator(cond=left, then_target=rhs_block.name, else_target=short_block.name))
+			else:
+				self.b.set_terminator(M.IfTerminator(cond=left, then_target=short_block.name, else_target=rhs_block.name))
+			self.b.set_block(short_block)
+			short_val = self.b.new_temp()
+			self.b.emit(M.ConstBool(dest=short_val, value=(expr.op is H.BinaryOp.OR)))
+			self.b.emit(M.StoreLocal(local=temp_local, value=short_val))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+			self.b.set_block(rhs_block)
+			right = self.lower_expr(right_expr)
+			self.b.emit(M.StoreLocal(local=temp_local, value=right))
+			if self.b.block.terminator is None:
+				self.b.set_terminator(M.Goto(target=join_block.name))
+			self.b.set_block(join_block)
+			dest = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
+			return dest
 		if isinstance(left_expr, H.HLiteralInt) and not isinstance(right_expr, H.HLiteralInt):
 			right_ty = self._infer_expr_type(right_expr)
 			left = self.lower_expr(left_expr, expected_type=right_ty) if right_ty is not None else self.lower_expr(left_expr)
@@ -3430,7 +3457,7 @@ class HIRToMIR:
 
 			self.b.set_block(join_block)
 			out = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=out, local=arr_local))
+			self.b.emit(M.MoveOut(dest=out, local=arr_local, ty=array_ty))
 			grew = self.b.new_temp()
 			self.b.emit(M.LoadLocal(dest=grew, local=grew_local))
 			return out, grew

@@ -1,0 +1,8 @@
+module m
+import std.json as json;
+fn run() -> Int {
+  val a = "{";
+  val _r = json.parse(&a);
+  return 0;
+}
+fn main() nothrow -> Int { return try run() catch { 99 }; }

@@ -1,0 +1,17 @@
+module m
+import std.core as core;
+
+fn run() -> Int {
+  val s = "{";
+  if false and core.string_byte_at(&s, 1) == cast<Byte>(0) {
+    return 1;
+  }
+  if true or core.string_byte_at(&s, 1) == cast<Byte>(0) {
+    return 0;
+  }
+  return 2;
+}
+
+fn main() nothrow -> Int {
+  return try run() catch { 99 };
+}

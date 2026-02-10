@@ -1,0 +1,26 @@
+module m
+
+import std.core as core;
+
+struct E {
+  tag: String,
+  offset: Int,
+  line: Int,
+  col: Int,
+  path: String,
+  key: String
+}
+
+fn f() nothrow -> core.Result<String, E> {
+  var out = "";
+  if byte_length(out) == 1 { return core.Result::Ok(out); }
+  return core.Result::Err(E(tag = "invalid-syntax", offset = 1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn run() -> Int {
+  match f() { core.Result::Ok(_) => { return 1; }, core.Result::Err(_e) => { } }
+  match f() { core.Result::Ok(_) => { return 2; }, core.Result::Err(_e2) => { } }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

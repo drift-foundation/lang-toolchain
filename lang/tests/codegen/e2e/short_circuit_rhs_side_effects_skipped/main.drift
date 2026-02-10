@@ -1,0 +1,29 @@
+module m
+
+fn bump(counter: &mut Int) nothrow -> Bool {
+  *counter = *counter + 1;
+  return true;
+}
+
+fn run() -> Int {
+  var counter = 0;
+
+  if false and bump(&mut counter) {
+    return 1;
+  }
+
+  if true or bump(&mut counter) {
+  } else {
+    return 2;
+  }
+
+  if counter != 0 {
+    return 3;
+  }
+
+  return 0;
+}
+
+fn main() nothrow -> Int {
+  return try run() catch { 99 };
+}

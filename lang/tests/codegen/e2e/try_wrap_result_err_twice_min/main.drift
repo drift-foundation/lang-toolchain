@@ -1,0 +1,19 @@
+module m
+import std.core as core;
+import std.json as json;
+
+fn g_throwing() -> core.Result<json.JsonNode, json.JsonErrorData> {
+  return core.Result::Err(json.JsonErrorData(tag = "invalid-syntax", offset = 1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn g() nothrow -> core.Result<json.JsonNode, json.JsonErrorData> {
+  return try g_throwing() catch { core.Result::Err(json.JsonErrorData(tag = "internal-error", offset = 1, line = -1, col = -1, path = "", key = "")) };
+}
+
+fn run() -> Int {
+  match g() { core.Result::Ok(_) => { return 1; }, core.Result::Err(_e) => { } }
+  match g() { core.Result::Ok(_) => { return 2; }, core.Result::Err(_e2) => { } }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

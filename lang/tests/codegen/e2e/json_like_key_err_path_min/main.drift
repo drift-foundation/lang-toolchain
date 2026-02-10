@@ -1,0 +1,30 @@
+module m
+
+import std.core as core;
+import std.containers as c;
+import std.json as json;
+
+fn key_parse_fail() nothrow -> core.Result<String, json.JsonErrorData> {
+  return core.Result::Err(json.JsonErrorData(tag = "invalid-syntax", offset = 1, line = -1, col = -1, path = "", key = ""));
+}
+
+fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
+  var fields = c.hash_map<type String, json.JsonNode>();
+  var key = "";
+  match key_parse_fail() {
+    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Ok(v) => { key = v; }
+  }
+  fields.insert(move key, json.JsonNode::Null());
+  return core.Result::Ok(json.JsonNode::Object(move fields));
+}
+
+fn run() -> Int {
+  match f() {
+    core.Result::Ok(_) => { return 1; },
+    core.Result::Err(_e) => { }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

@@ -1,0 +1,62 @@
+module m
+import std.core as core;
+
+struct E {
+  pub tag: String,
+  pub offset: Int,
+  pub line: Int,
+  pub col: Int,
+  pub path: String,
+  pub key: String,
+}
+
+fn lc(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void {
+  val n = byte_length(*text);
+  var end = offset;
+  if end > n { end = n; }
+  if end < 0 { end = 0; }
+  var i = 0;
+  var ln = 1;
+  var cl = 1;
+  while i < end {
+    val b = core.string_byte_at(text, i);
+    if b == cast<Byte>(10) {
+      ln = ln + 1;
+      cl = 1;
+    } else {
+      cl = cl + 1;
+    }
+    i = i + 1;
+  }
+  *line = ln;
+  *col = cl;
+}
+
+fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
+  var line = -1;
+  var col = -1;
+  lc(text, offset, &mut line, &mut col);
+  return E(tag = tag, offset = offset, line = line, col = col, path = "", key = "");
+}
+
+fn parse_like(text: &String) nothrow -> core.Result<Int, E> {
+  var xs: Array<Int> = [];
+  xs.push(1);
+  xs.push(2);
+  return core.Result::Err(mk(text, "invalid-syntax", 7));
+}
+
+fn run() -> Int {
+  val t = "[1,\n2,\n]";
+  match parse_like(&t) {
+    core.Result::Ok(_) => { return 1; },
+    core.Result::Err(e) => {
+      if e.line != 3 { return 2; }
+      if e.col != 1 { return 3; }
+      if e.tag != "invalid-syntax" { return 4; }
+    }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

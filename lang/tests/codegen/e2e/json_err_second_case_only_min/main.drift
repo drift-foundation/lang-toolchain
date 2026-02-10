@@ -1,0 +1,19 @@
+module m
+import std.core as core;
+import std.json as json;
+
+fn run() -> Int {
+  val t2 = "[1,\n2,\n]";
+  match json.parse(&t2) {
+    core.Result::Ok(_) => { return 20; },
+    core.Result::Err(e) => {
+      if e.tag != "invalid-syntax" { return 21; }
+      if e.offset != 7 { return 22; }
+      if e.line != 3 { return 23; }
+      if e.col != 1 { return 24; }
+    }
+  }
+  return 0;
+}
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

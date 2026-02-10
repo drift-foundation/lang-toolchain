@@ -1806,6 +1806,11 @@ class _FuncBuilder:
 		td = self.type_table.get(ty_id)
 		if td.kind in {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR}:
 			return
+		# Keepalive storage currently performs a by-value store without retain/release
+		# balancing. Limit it to plain scalar POD types to avoid duplicating ownership
+		# for refcounted/non-trivial values (e.g., String/struct/variant/interface).
+		if td.kind is not TypeKind.SCALAR or td.name not in {"Int", "Uint", "Uint64", "Byte", "Bool", "Float"}:
+			return
 		expected_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 		actual_llty = self.value_types.get(src_val)
 		if actual_llty is not None and self._llty(actual_llty) != self._llty(expected_llty):
