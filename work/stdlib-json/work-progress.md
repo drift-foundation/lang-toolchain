@@ -112,6 +112,20 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 17. Timeout-path leak regressions (`concurrent_join_timeout_nonzero`, `concurrent_sleep_task_join_timeout_regression`) are now green under `DRIFT_ALLOC_TRACK=1` with runtime cleanup sequencing hardening.
 18. Broader deterministic encode snapshot coverage added for deep mixed nested JSON structures with differing insertion order constructions (objects/arrays/null/bool/number/string/empty containers), pinned by `std_json_encode_determinism_deep_mixed_snapshot`.
 19. Valgrind validation run for `std_json_encode_determinism_deep_mixed_snapshot` is clean (`in use at exit: 0 bytes`, `ERROR SUMMARY: 0`).
+20. LANGUAGE_BUG fixed for `for`-iteration over already-borrowed iterables (`&Array<T>`), which blocked natural JSON usage (`for val item : users` after `expect_array(...)`):
+   - added regressions `for_iter_json_expect_array` and `for_iter_ref_array_local`
+   - fixed UFCS `for_iter` receiver normalization/coercion for nested refs so lowering no longer passes `&&T` where `&T` is required.
+21. Added broader `&Array<JsonNode>` usage-matrix e2e regression (`ref_array_jsonnode_usage_matrix`) covering:
+   - direct function calls with `&Array<JsonNode>`
+   - nested-ref call coercion (`&&Array<JsonNode>` to `&Array<JsonNode>`)
+   - direct call-expression arguments from `expect_array(...)`
+   - ref pass-through return from helper
+   - iteration via `for val item : users`
+   - valgrind memcheck run is clean (`in use at exit: 0 bytes`, `ERROR SUMMARY: 0`).
+22. Added dedicated dot-call iterator regression on `&Array<JsonNode>`:
+   - `ref_array_dot_iter_next` covers `users.iter()` + `it.next()` flow
+   - pinned required trait-scope behavior (`use trait iter.Iterable; use trait iter.SinglePassIterator;`)
+   - valgrind memcheck run is clean (`in use at exit: 0 bytes`, `ERROR SUMMARY: 0`).
 
 ## Current Status
 
@@ -149,4 +163,4 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 3. Optional API polish:
    - decide whether `entries()` should expose a dedicated item type alias in `std.json` for nicer ergonomics.
    - decide whether any additional navigation helpers are needed beyond pinned MVP (`get_path` key-only + `as_array` index navigation).
-4. Documentation pass in effective-drift for final `std.json` surface and error-tag contract.
+4. Documentation pass in effective-drift for final `std.json` surface and error-tag contract. ✅

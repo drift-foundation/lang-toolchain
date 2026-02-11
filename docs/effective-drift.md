@@ -140,10 +140,13 @@ For formatter customization, see `examples/logging/pluggable_formatter.drift`.
 
 `std.json` is JSON-first and machine-oriented:
 - parse: `json.parse(&text) -> Result<JsonNode, JsonErrorData>`
-- encode: `json.encode(...)` and `json.encode_with_config(...)`
-- deterministic key order: `JsonKeyOrder::OrderedLexUtf8()`
-- navigation: `get(...)`, `get_path(Array<String>)`
-- extractors: `as_*` (optional) and `expect_*` (throws `std.json:JsonError`)
+- encode: `json.encode(...)`, `json.encode_compact(...)`, and `..._with_config(...)`
+- key ordering policy: `JsonKeyOrder::Unordered()` (default) or `JsonKeyOrder::OrderedLexUtf8()`
+- parse duplicate keys: keep-last
+- navigation: `get(&key)`, `get_path(&Array<String>)`, `entries()`
+- extractors:
+`as_bool/as_int/as_uint/as_float/as_string/as_number_raw/as_array/as_object` return `Optional`
+`expect_*` throws `std.json:JsonError` with machine fields (`tag`, `offset`, `line`, `col`, `path`, `key`)
 
 ```drift
 import std.console as console;
@@ -171,15 +174,10 @@ fn run() -> Int {
     val cfg = cfgb.build();
     console.println(json.encode_with_config(&node, &cfg));
 
-    val users_path = ["users"];
+    var users_path = ["users"];
     val users_node = node.expect_path(&users_path);
     val users = users_node.expect_array("users", "users");
-    val id_path = ["id"];
-    var sum = 0;
-    for val item : users {
-        sum = sum + item.expect_path(&id_path).expect_int("users.id", "id");
-    }
-    if sum != 49 { return 2; }
+    if users.len != 2 { return 2; }
     return 0;
 }
 ```
@@ -194,6 +192,9 @@ Error tag contract:
 
 Loop ergonomics note:
 - use `for val x : source { ... }` when `source` is iterable (for example arrays)
+- preferred JSON array iteration is `for val item : users { ... }` after `expect_array(...)`
+- manual iterator form is also valid, but trait methods require trait scope:
+`use trait iter.Iterable; use trait iter.SinglePassIterator;`
 
 ## Atomic ordering defaults (`std.sync`)
 

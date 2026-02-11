@@ -1,0 +1,68 @@
+module m
+
+import std.core as core;
+import std.json as json;
+
+fn count_items(xs: &Array<json.JsonNode>) nothrow -> Int {
+	var n = 0;
+	for val item : xs {
+		val _ = item;
+		n += 1;
+	}
+	return n;
+}
+
+fn id_ref(xs: &Array<json.JsonNode>) nothrow -> &Array<json.JsonNode> {
+	return xs;
+}
+
+fn sum_ids(xs: &Array<json.JsonNode>) -> Int {
+	var total = 0;
+	for val item : xs {
+		var id_path = ["id"];
+		val id_node = item.expect_path(&id_path);
+		total += id_node.expect_int("users", "id");
+	}
+	return total;
+}
+
+fn run() -> Int {
+	val text = "{\"users\":[{\"id\":1},{\"id\":2}]}";
+	var root = json.JsonNode::Null();
+	match json.parse(&text) {
+		core.Result::Ok(v) => { root = move v; },
+		core.Result::Err(_) => { return 100; }
+	}
+
+	var users_path = ["users"];
+	val users_node = root.expect_path(&users_path);
+	val users = users_node.expect_array("users", "users");
+
+	if count_items(users) != 2 {
+		return 1;
+	}
+	val users_ref = &users;
+	if count_items(users_ref) != 2 {
+		return 2;
+	}
+	if count_items(users_node.expect_array("users", "users")) != 2 {
+		return 3;
+	}
+	val users_alias: &Array<json.JsonNode> = users;
+	if count_items(users_alias) != 2 {
+		return 4;
+	}
+	val users_id = id_ref(users_ref);
+	if count_items(users_id) != 2 {
+		return 5;
+	}
+	if sum_ids(users) != 3 {
+		return 6;
+	}
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

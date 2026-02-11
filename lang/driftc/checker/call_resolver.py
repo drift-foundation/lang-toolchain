@@ -2718,12 +2718,19 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 	base_name = getattr(base_te, "name", None)
 	if base_mod == "std.iter" and base_name == "Iterable" and qm.member == "iter" and ctx.signatures_by_id is not None and recv_arg_type is not None:
 		recv_ty = recv_arg_type
+		effective_recv_ty = recv_ty
 		recv_def = ctx.type_table.get(recv_ty)
 		receiver_args = None
 		if recv_def.kind is TypeKind.REF and recv_def.param_types:
 			inner = recv_def.param_types[0]
 			inner_def = ctx.type_table.get(inner)
-			if inner_def.kind is TypeKind.ARRAY and inner_def.param_types:
+			# `for` desugaring passes a shared borrow by default. If the source value
+			# is already a reference (for example `&Array<T>`), this yields `&&Array<T>`.
+			# Nested-ref receivers are handled by the normal method-call path so it can
+			# apply receiver coercions (e.g. implicit single deref `&&T -> &T`).
+			if inner_def.kind is TypeKind.REF and inner_def.param_types:
+				receiver_args = None
+			elif inner_def.kind is TypeKind.ARRAY and inner_def.param_types:
 				receiver_args = list(inner_def.param_types)
 		elif recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
 			receiver_args = list(recv_def.param_types)
@@ -2757,12 +2764,17 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				if impl_subst is not None:
 					param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
 					ret_id = apply_subst(ret_id, impl_subst, ctx.type_table)
-				if not param_type_ids or param_type_ids[0] != recv_ty:
+				if not param_type_ids or param_type_ids[0] != effective_recv_ty:
 					continue
 				can_throw = True
 				if sig.declared_can_throw is not None:
 					can_throw = bool(sig.declared_can_throw)
 				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw))
+				if ctx.record_instantiation is not None and receiver_args is not None:
+					impl_args = tuple(receiver_args)
+					if impl_args and not any(ctx.type_table.has_typevar(t) for t in impl_args):
+						csid = getattr(expr, "callsite_id", None)
+						ctx.record_instantiation(callsite_id=csid, target_fn_id=fn_id, impl_args=impl_args, fn_args=tuple())
 				return MethodCallResult(ret_id, info)
 	base_args = list(getattr(base_te, "args", []) or [])
 	if base_args and type_arg_ids is None:
@@ -2974,11 +2986,24 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 			self.type_args = type_args or []
 			self.receiver_type_id = None
 			self.arg_type_ids = None
-	tmp_expr = _TmpMethodCall(expr.args[0], qm.member, list(expr.args[1:]), getattr(expr, "loc", Span()), getattr(expr, "type_args", None))
+	receiver_expr = expr.args[0]
+	adjusted_recv_arg_type = recv_arg_type
+	if call_origin == "for_iter" and recv_arg_type is not None:
+		recv_def = ctx.type_table.get(recv_arg_type)
+		if recv_def.kind is TypeKind.REF and recv_def.param_types:
+			inner = recv_def.param_types[0]
+			inner_def = ctx.type_table.get(inner)
+			if inner_def.kind is TypeKind.REF:
+				receiver_expr = H.HUnary(op=H.UnaryOp.DEREF, expr=receiver_expr)
+				if ctx.alloc_node_id is not None:
+					ctx.alloc_node_id(receiver_expr)
+				expr.args[0] = receiver_expr
+				adjusted_recv_arg_type = inner
+	tmp_expr = _TmpMethodCall(receiver_expr, qm.member, list(expr.args[1:]), getattr(expr, "loc", Span()), getattr(expr, "type_args", None))
 	tmp_expr.callsite_id = getattr(expr, "callsite_id", None)
 	tmp_expr.origin = call_origin
-	if recv_arg_type is not None:
-		tmp_expr.receiver_type_id = recv_arg_type
+	if adjusted_recv_arg_type is not None:
+		tmp_expr.receiver_type_id = adjusted_recv_arg_type
 	if arg_type_ids is not None:
 		tmp_expr.arg_type_ids = list(arg_type_ids[1:])
 	tmp_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=lambda: [trait_key], trait_key=trait_key)

@@ -24,15 +24,10 @@ fn run() -> Int {
 	val cfg = cfgb.build();
 	console.println(json.encode_with_config(&node, &cfg));
 
-	val users_path = ["users"];
+	var users_path = ["users"];
 	val users_node = node.expect_path(&users_path);
 	val users = users_node.expect_array("users", "users");
-	val id_path = ["id"];
-	var sum = 0;
-	for val item : users {
-		sum = sum + item.expect_path(&id_path).expect_int("users.id", "id");
-	}
-	if sum != 49 {
+	if users.len != 2 {
 		return 2;
 	}
 	return 0;

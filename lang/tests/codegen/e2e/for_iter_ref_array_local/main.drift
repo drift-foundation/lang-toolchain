@@ -1,0 +1,12 @@
+fn main() nothrow -> Int {
+	val xs = [1, 2, 3];
+	val ys = &xs;
+	var sum = 0;
+	for val x : ys {
+		sum += *x;
+	}
+	if sum != 6 {
+		return 1;
+	}
+	return 0;
+}

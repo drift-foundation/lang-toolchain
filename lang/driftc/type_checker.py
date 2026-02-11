@@ -1343,6 +1343,10 @@ class TypeChecker:
 				ref_info = _ref_param_info(param_ty)
 				if ref_info is not None and arg_ty == ref_info[1]:
 					continue
+				param_def = self.type_table.get(param_ty)
+				arg_def = self.type_table.get(arg_ty)
+				if param_def.kind is TypeKind.REF and arg_def.kind is TypeKind.REF and arg_def.param_types and arg_def.param_types[0] == param_ty:
+					continue
 				return False
 			return True
 
@@ -1493,6 +1497,19 @@ class TypeChecker:
 				ref_mut, inner = ref_info
 				if arg_ty == param_ty:
 					continue
+				arg_def = self.type_table.get(arg_ty)
+				if arg_def.kind is TypeKind.REF and arg_def.param_types:
+					arg_inner = arg_def.param_types[0]
+					if arg_inner == param_ty:
+						# Allow implicit single deref for nested refs in call arguments,
+						# e.g. passing &&T where &T is required.
+						deref_expr = H.HUnary(op=H.UnaryOp.DEREF, expr=arg_expr)
+						_assign_node_id(deref_expr)
+						coerced_ty = type_expr(deref_expr, expected_type=param_ty)
+						if coerced_ty == param_ty:
+							args[idx] = deref_expr
+							updated_types[idx] = coerced_ty
+							continue
 				if not (skip_first and idx == 0):
 					if _try_borrow_coerce(idx, arg_ty, param_ty, arg_expr, ref_mut):
 						continue

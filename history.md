@@ -1,3 +1,55 @@
+## 2026-02-11 – std.json MVP completion, leak/crash hardening, and iterable ergonomics pinning
+- Completed `std.json` MVP with first-class Drift-side JSON model and APIs:
+  - `JsonNode` variant (`Null`, `Bool`, `Number`, `String`, `Array`, `Object`)
+  - parse surface: `parse(&String) -> Result<JsonNode, JsonErrorData>`
+  - encode surface: `encode`, `encode_compact`, and config-based variants.
+- Landed deterministic encoding behavior and policy controls:
+  - duplicate object keys on parse are keep-last
+  - key ordering policy implemented (`Unordered` default, `OrderedLexUtf8` for canonical signing use-cases)
+  - added broader deterministic snapshots including deep mixed nested object/array structures.
+- Finalized JSON parse/error semantics:
+  - machine-tagged `JsonErrorData` with structured fields (`tag`, `offset`, `line`, `col`, `path`, `key`)
+  - parse error position reporting implemented and covered
+  - non-finite number rejection in parser (JSON-compliant)
+  - control-character escaping fixed for valid JSON string emission.
+- Completed navigation/extractor APIs and behavior:
+  - `get`, `get_path`, `entries`, `as_*`, `expect_*`
+  - `entries()` iterator semantics are empty for non-object nodes
+  - strict extractor failures use machine-friendly `std.json:JsonError` tags.
+- Regression-first compiler/runtime fixes discovered through JSON work:
+  - MIR ownership join fix (`LoadLocal` -> `MoveOut`) for array ownership correctness on JSON parse paths
+  - LLVM lowering fix for variant `DropValue` CFG/PHI corruption (no inline injected labels; helper-call drop path)
+  - match-lowering cleanup fix so non-Copy binders are scope-dropped (prevents early-return leaks)
+  - lambda move-capture double-drop fix (capture prologue no longer duplicates drop ownership)
+  - interface-owned callback lifetime fix (stage2 runtime-drop participation + iface-init MIR validation alignment).
+- Runtime hardening and leak-signal infrastructure completed:
+  - assert/abort paths now still emit alloc stats for alloc-tracked runs
+  - deterministic runtime teardown at exit for logger worker/queue, default reactor, and virtual-thread registry
+  - cancel/join prestart race fixes and timeout-path leak fixes
+  - `VirtualThread<T>` destructor semantics added for dropped-but-unjoined cleanup.
+- Alloc/leak validation outcomes:
+  - `std_json_encode_determinism_deep_mixed_snapshot` validated leak-free under valgrind (`in use at exit: 0`, `ERROR SUMMARY: 0`)
+  - sampled alloc-tracked JSON/concurrency/logging-adjacent sweeps green after fixes
+  - full-suite alloc-tracking run remains environment/user-run gate (`DRIFT_ALLOC_TRACK=1 just`).
+- LANGUAGE_BUG and ergonomics regressions pinned/fixed for iterable usage from JSON:
+  - fixed `for` iteration over already-borrowed iterables (`&Array<T>`) used by `expect_array(...)`
+  - added e2e regressions:
+    - `for_iter_json_expect_array`
+    - `for_iter_ref_array_local`
+  - fixed UFCS `for_iter` nested-ref receiver handling and callsite instantiation recording.
+- Added broader `&Array<JsonNode>` usage-matrix regression and validation:
+  - `ref_array_jsonnode_usage_matrix` covers direct calls, nested-ref arg coercion (`&& -> &`), direct expression arguments, pass-through refs, and `for` iteration
+  - valgrind memcheck for matrix case is clean.
+- Added dedicated dot-call iterator regression on `&Array<JsonNode>`:
+  - `ref_array_dot_iter_next` (`users.iter()` + `it.next()`)
+  - pinned required trait-scope rule for manual trait-method calls:
+    - `use trait iter.Iterable;`
+    - `use trait iter.SinglePassIterator;`
+  - valgrind memcheck for this case is clean.
+- Documentation updates:
+  - `docs/effective-drift.md` updated for final `std.json` API/error-tag contract
+  - added explicit guidance that preferred JSON array iteration is `for val item : users`, while manual `iter()/next()` form requires trait imports.
+
 ## 2026-02-08 – Logger interface baseline, JSON emission, and deterministic masking
 - Completed `std.log` MVP user-facing interface coverage with e2e/driver tests while keeping mechanics runtime-backed for now.
 - Added/validated map-literal attrs usage for logger calls (`log.<level>(ev, {"k": v, ...})`) and type-gated attrs (`V is Debuggable`).

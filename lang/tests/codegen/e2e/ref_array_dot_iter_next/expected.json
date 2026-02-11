@@ -1,0 +1,6 @@
+{
+  "description": "e2e: dot-call iter/next on &Array<JsonNode>",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}
