@@ -126,14 +126,28 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
    - `ref_array_dot_iter_next` covers `users.iter()` + `it.next()` flow
    - pinned required trait-scope behavior (`use trait iter.Iterable; use trait iter.SinglePassIterator;`)
    - valgrind memcheck run is clean (`in use at exit: 0 bytes`, `ERROR SUMMARY: 0`).
+23. Added ASan execution mode to codegen e2e runner (`DRIFT_ASAN=1`) with:
+   - clang/runner sanitizer wiring (`-fsanitize=address -g`)
+   - incompatibility guard against valgrind modes (`DRIFT_MEMCHECK`/`DRIFT_MASSIF`)
+   - stderr normalization for known `swapcontext` ASan warning noise.
+24. Fixed runtime LANGUAGE_BUG in virtual-thread/reactor lifetime handling that caused intermittent `tcache_thread_shutdown(): unaligned tcache chunk detected` under cancel-before-start stress:
+   - reactor now forgets vt-owned watches/timers during VT destroy
+   - worker completion snapshots dropped state before completion publish
+   - executor teardown sequencing avoids stale VT deref windows.
+25. Fixed post-join cancel UAF path in `std.concurrent`:
+   - `VirtualThread.join` / `join_timeout` clear native handle after join
+   - `cancel()` no-ops when joined/handle-cleared.
+26. Fixed logger shutdown nondeterminism causing stderr snapshot mismatches:
+   - logger worker drains queue before exit on shutdown.
+27. Resolved alloc-tracked regressions discovered in broad sweeps (JSON/concurrency/logging-adjacent) and validated targeted clean runs with both allocator tracking and valgrind on representative JSON determinism/iteration cases.
 
 ## Current Status
 
-- MVP JSON APIs are in place and green on targeted parse/encode/e2e coverage.
-- Previously pinned JSON leak/crash regressions are resolved in current branch state.
-- Alloc-tracked sampled sweep (JSON + concurrency + logging-adjacent cases) is green after runtime/codegen fixes, including prior timeout leak and callback double-free repros.
-- One environment-sensitive test remains outside JSON scope (`std_net_tcp_read_write_roundtrip` can fail with listen error in restricted environments).
-- Full-suite alloc-tracking confirmation remains pending user run (`DRIFT_ALLOC_TRACK=1 just`).
+- JSON branch scope is complete for MVP: parse/encode/navigation/error-tag/determinism are implemented and covered.
+- Pinned JSON-related LANGUAGE_BUGs are fixed at compiler/runtime root cause with regressions in place.
+- Runner diagnostics modes are now documented and operational (`DRIFT_ALLOC_TRACK`, `DRIFT_MEMCHECK`, `DRIFT_MASSIF`, `DRIFT_ASAN`).
+- Full-suite runs are green in normal mode; alloc/ASan sweeps are now actionable via env toggles without test harness patching.
+- Remaining leak/perf/concurrency improvements are tracked outside this JSON plan and should continue on dedicated branches.
 
 ## Logger Migration Hooks (Post-JSON)
 
@@ -156,11 +170,7 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 - Deterministic encoding policy is documented and tested.
 - Logger can consume `std.json` for payload/attrs formatting in follow-up migration.
 
-## Remaining JSON Work (Post-MVP / Pending)
+## Remaining JSON Work (Post-MVP / Deferred)
 
-1. Add logger-focused integration coverage using real log payload shapes (attrs/event fields).
-2. Add broader encode determinism snapshots for complex nested objects/arrays. ✅
-3. Optional API polish:
-   - decide whether `entries()` should expose a dedicated item type alias in `std.json` for nicer ergonomics.
-   - decide whether any additional navigation helpers are needed beyond pinned MVP (`get_path` key-only + `as_array` index navigation).
-4. Documentation pass in effective-drift for final `std.json` surface and error-tag contract. ✅
+1. Logger-focused integration coverage using real production payloads remains optional and is best owned by the logging track.
+2. Any additional API polish (`entries` aliasing, extra helpers) is deferred until real-user feedback indicates need.

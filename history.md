@@ -1,3 +1,22 @@
+## 2026-02-11 – JSON branch closure: sanitizer mode, runtime lifetime fixes, and final plan sync
+- Added ASan mode to codegen e2e runner via `DRIFT_ASAN=1`:
+  - compile/run sanitizer wiring (`-fsanitize=address -g`)
+  - env defaults for actionable crash reports
+  - incompatibility guard with valgrind-backed modes (`DRIFT_MEMCHECK`/`DRIFT_MASSIF`)
+  - normalization of known non-fatal ASan `swapcontext` warning noise to avoid false stderr mismatches.
+- Fixed intermittent concurrency/runtime memory corruption found during stress/sanitizer runs:
+  - hardened VT/reactor teardown so reactor no longer retains stale VT references after destroy
+  - tightened worker completion ordering to avoid stale VT state reads after completion publish
+  - adjusted executor teardown sequencing to remove race windows in queued/prestart cancellation paths.
+- Fixed post-join cancel use-after-free at stdlib boundary:
+  - `VirtualThread.join`/`join_timeout` now clear native handle after successful join state transition
+  - `VirtualThread.cancel` now no-ops when already joined/handle-cleared.
+- Fixed logger shutdown nondeterminism causing stderr snapshot mismatches:
+  - log worker now drains queued records before exit on shutdown path.
+- Completed branch sync/docs updates:
+  - updated `work/stdlib-json/work-progress.md` to reflect completed JSON MVP scope and what is explicitly deferred out-of-scope
+  - documented diagnostics env toggles in toolchain/e2e docs to support repeatable alloc/sanitizer sweeps.
+
 ## 2026-02-11 – std.json MVP completion, leak/crash hardening, and iterable ergonomics pinning
 - Completed `std.json` MVP with first-class Drift-side JSON model and APIs:
   - `JsonNode` variant (`Null`, `Bool`, `Number`, `String`, `Array`, `Object`)

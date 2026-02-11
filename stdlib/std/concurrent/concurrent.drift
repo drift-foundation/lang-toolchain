@@ -404,6 +404,7 @@ implement<T> VirtualThread<T> {
 		if self.submit_error != 0 {
 			var code = self.submit_error;
 			self.joined = true;
+			self.handle = 0;
 			try {
 				throw ExecSubmitFailed(code = code);
 			} catch e {
@@ -413,6 +414,7 @@ implement<T> VirtualThread<T> {
 		if self.cancelled {
 			thread.vt_join(self.handle);
 			self.joined = true;
+			self.handle = 0;
 			unsafe {
 				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
 				val cap = mem.rawbuffer_cap<type T>(&self.result);
@@ -423,6 +425,7 @@ implement<T> VirtualThread<T> {
 		}
 		thread.vt_join(self.handle);
 		self.joined = true;
+		self.handle = 0;
 		unsafe {
 			var v = mem.read<type T>(&mut self.result, 0);
 			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
@@ -445,6 +448,7 @@ implement<T> VirtualThread<T> {
 		if self.submit_error != 0 {
 			var code = self.submit_error;
 			self.joined = true;
+			self.handle = 0;
 			try {
 				throw ExecSubmitFailed(code = code);
 			} catch e {
@@ -454,6 +458,7 @@ implement<T> VirtualThread<T> {
 		if self.cancelled {
 			thread.vt_join(self.handle);
 			self.joined = true;
+			self.handle = 0;
 			unsafe {
 				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
 				val cap = mem.rawbuffer_cap<type T>(&self.result);
@@ -466,6 +471,7 @@ implement<T> VirtualThread<T> {
 		if done != 0 {
 			thread.vt_join(self.handle);
 			self.joined = true;
+			self.handle = 0;
 			unsafe {
 				var v = mem.read<type T>(&mut self.result, 0);
 				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
@@ -483,6 +489,7 @@ implement<T> VirtualThread<T> {
 			return core.Result::Err(ConcurrencyError::Timeout());
 		}
 		self.joined = true;
+		self.handle = 0;
 		unsafe {
 			var v = mem.read<type T>(&mut self.result, 0);
 			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
@@ -494,6 +501,12 @@ implement<T> VirtualThread<T> {
 	}
 
 	pub fn cancel(self: &mut VirtualThread<T>) nothrow -> Void {
+		if self.joined {
+			return;
+		}
+		if self.handle == 0 {
+			return;
+		}
 		var ok = thread.vt_cancel(self.handle);
 		if ok == 0 {
 			self.cancelled = true;

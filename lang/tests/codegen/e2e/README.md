@@ -6,5 +6,12 @@ Cases live under `lang/tests/codegen/e2e/<case>/` with:
 
 Runner: `lang/tests/codegen/e2e/runner.py` (invoked by `just lang-codegen-test`) builds IR via `compile_to_llvm_ir_for_tests`, compiles with clang, runs the binary, and compares results. Artifacts go under `build/tests/lang/tests/codegen/e2e/<case>/`.
 
+Useful runner env toggles:
+- `DRIFT_ALLOC_TRACK=1` — enable allocator tracking and leak checks for configured cases.
+- `DRIFT_MEMCHECK=1` — run binaries under valgrind memcheck.
+- `DRIFT_MASSIF=1` — run binaries under valgrind massif.
+- `DRIFT_ASAN=1` — compile+run binaries with AddressSanitizer (`-fsanitize=address -g`).
+  - `DRIFT_ASAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`.
+
 Current cases:
 - `simple_return`: `drift_main` returns 42; expect exit_code=42, empty stdout/stderr.

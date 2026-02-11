@@ -1,3 +1,15 @@
 {
-  "exit_code": 0
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "error",
+      "ev": "err",
+      "logger": "main",
+      "attrs": {
+        "x": 2
+      },
+      "tid": "__ANY__"
+    }
+  ]
 }

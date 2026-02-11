@@ -608,6 +608,19 @@ Targets/packages may declare minimum requirements in `drift-target.json`:
   - `cache_consistency` (deep only, degraded-only): missing cache dir/index (`CACHE_MISSING`, `CACHE_INDEX_MISSING`/`CACHE_INDEX_INVALID`), missing cache entry (`LOCK_CACHE_MISSING_ENTRY`), sha divergence (`LOCK_CACHE_DIVERGENCE`), missing artifact (`CACHE_MISSING_ARTIFACT`)
 - JSON reports are strict: stderr should be empty in success/structured error paths; findings include `artifact_path` and `sha256_expected/got` where relevant.
 
+### 19.4 Codegen e2e runtime diagnostics toggles
+The codegen e2e runner (`lang/tests/codegen/e2e/runner.py`) supports environment toggles:
+- `DRIFT_ALLOC_TRACK=1`
+  - enables allocator tracking instrumentation in runtime and enforces per-case leak checks when expected config requires it.
+- `DRIFT_MEMCHECK=1`
+  - runs produced binaries under `valgrind --tool=memcheck`.
+- `DRIFT_MASSIF=1`
+  - runs produced binaries under `valgrind --tool=massif`.
+- `DRIFT_ASAN=1`
+  - compiles/runs cases with AddressSanitizer (`-fsanitize=address -g`).
+  - runner defaults `ASAN_OPTIONS` to include `detect_leaks=0` and `halt_on_error=1` unless explicitly provided.
+  - incompatible with `DRIFT_MEMCHECK` and `DRIFT_MASSIF` in the same run.
+
 Rules:
 - `drift` must refuse to install incompatible packages.
 - `driftc` must refuse to build if an incompatible package is in the closure.

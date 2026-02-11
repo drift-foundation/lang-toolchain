@@ -26,6 +26,7 @@ from lang.driftc.stage2 import (
 	ConstructVariant,
 	MirFunc,
 	Return,
+	StringRelease,
 )
 from lang.driftc.stage4.ssa import MirToSSA
 from lang.codegen.llvm import lower_module_to_llvm
@@ -226,6 +227,45 @@ def test_array_string_take_zeros_slot():
 		ir,
 	)
 	assert match is not None
+
+
+def test_array_string_index_load_retains_owned_result():
+	table, int_ty, uint_ty, str_ty = _types()
+
+	block = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="t0", value="a"),
+			ConstInt(dest="i0", value=0),
+			ConstInt(dest="tlen0", value=0),
+			ConstInt(dest="tlen", value=1),
+			ConstInt(dest="tcap", value=1),
+			ArrayAlloc(dest="arr", elem_ty=str_ty, length="tlen0", cap="tcap"),
+			ArrayElemInitUnchecked(elem_ty=str_ty, array="arr", index="i0", value="t0"),
+			ArraySetLen(dest="arr_len", array="arr", length="tlen"),
+			ArrayIndexLoad(dest="t3", elem_ty=str_ty, array="arr_len", index="i0"),
+			StringRelease(value="t3"),
+			ConstInt(dest="ret0", value=0),
+		],
+		terminator=Return(value="ret0"),
+	)
+	fn_id = FunctionId(module="main", name="main", ordinal=0)
+	func = MirFunc(
+		fn_id=fn_id,
+		name="main",
+		params=[],
+		locals=["t0", "i0", "tlen0", "tlen", "tcap", "arr", "arr_len", "t3", "ret0"],
+		blocks={"entry": block},
+		entry="entry",
+	)
+	ssa = MirToSSA().run(func)
+	sig = FnSignature(name="main", param_type_ids=[], return_type_id=int_ty)
+	info = FnInfo(fn_id=fn_id, name="main", declared_can_throw=False, signature=sig, return_type_id=int_ty)
+
+	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=host_word_bits())
+	ir = mod.render()
+
+	assert "call %DriftString @drift_string_retain(%DriftString %t3)" in ir
 
 
 def test_array_optional_string_take_uses_tombstone_ctor():

@@ -113,6 +113,7 @@ static _Atomic uint64_t drift_log_read_seq = 0;
 static void drift_drop_callback(DriftIface *cb);
 static pthread_mutex_t drift_vt_registry_mu = PTHREAD_MUTEX_INITIALIZER;
 static DriftVt *drift_vt_registry_head = NULL;
+static void drift_reactor_forget_vt(DriftVt *vt);
 
 static void drift_vt_registry_add(DriftVt *vt) {
 	if (!vt) {
@@ -150,6 +151,7 @@ static void drift_vt_destroy(DriftVt *h) {
 	if (!h) {
 		return;
 	}
+	drift_reactor_forget_vt(h);
 	drift_vt_registry_remove(h);
 	pthread_mutex_destroy(&h->mu);
 	pthread_cond_destroy(&h->cv);
@@ -219,6 +221,51 @@ typedef struct Reactor {
 static Reactor *drift_default_reactor_ptr = NULL;
 static void drift_reactor_shutdown_default_atexit(void);
 static void drift_log_ensure_defaults(void);
+
+static void drift_reactor_forget_vt(DriftVt *vt) {
+#ifdef __linux__
+	Reactor *r = drift_default_reactor_ptr;
+	if (!r || !vt) {
+		return;
+	}
+	pthread_mutex_lock(&r->mu);
+	ReactorTimer *tp = NULL;
+	ReactorTimer *tc = r->timers;
+	while (tc) {
+		ReactorTimer *tn = tc->next;
+		if (tc->vt == (uint64_t)vt) {
+			if (tp) {
+				tp->next = tn;
+			} else {
+				r->timers = tn;
+			}
+			free(tc);
+		} else {
+			tp = tc;
+		}
+		tc = tn;
+	}
+	ReactorWatch *wp = NULL;
+	ReactorWatch *wc = r->watches;
+	while (wc) {
+		ReactorWatch *wn = wc->next;
+		if (wc->vt == (uint64_t)vt) {
+			if (wp) {
+				wp->next = wn;
+			} else {
+				r->watches = wn;
+			}
+			free(wc);
+		} else {
+			wp = wc;
+		}
+		wc = wn;
+	}
+	pthread_mutex_unlock(&r->mu);
+#else
+	(void)vt;
+#endif
+}
 
 static void drift_reactor_register_shutdown_once(void) {
 	(void)atexit(drift_reactor_shutdown_default_atexit);
@@ -433,9 +480,12 @@ static void drift_log_emit_record_json(int64_t level, DriftString payload_json) 
 
 static void *drift_log_worker_main(void *arg) {
 	(void)arg;
-	while (atomic_load(&drift_log_worker_shutdown) == 0) {
+	for (;;) {
 		int64_t depth = atomic_load(&drift_log_queue_depth);
 		if (depth <= 0) {
+			if (atomic_load(&drift_log_worker_shutdown) != 0) {
+				break;
+			}
 			pthread_mutex_lock(&drift_log_cv_mu);
 			if (atomic_load(&drift_log_queue_depth) == 0 && atomic_load(&drift_log_worker_shutdown) == 0) {
 				pthread_cond_wait(&drift_log_cv, &drift_log_cv_mu);
@@ -600,6 +650,7 @@ static void *drift_exec_worker(void *arg) {
 		drift_vt_tls_set(NULL);
 		int state = atomic_load(&vt->state);
 			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
+				int dropped_after_finish = atomic_load(&vt->dropped);
 				if (vt->stack) {
 					free(vt->stack);
 					vt->stack = NULL;
@@ -610,7 +661,7 @@ static void *drift_exec_worker(void *arg) {
 				vt->park_token++;
 				pthread_cond_broadcast(&vt->cv);
 				pthread_mutex_unlock(&vt->mu);
-				if (atomic_load(&vt->dropped)) {
+				if (dropped_after_finish) {
 					drift_vt_destroy(vt);
 				}
 			}
@@ -618,12 +669,13 @@ static void *drift_exec_worker(void *arg) {
 		drift_vt_tls_set(vt);
 		drift_run_callback(&vt->cb, 0);
 		atomic_store(&vt->state, DRIFT_VT_FINISHED);
+			int dropped_after_finish = atomic_load(&vt->dropped);
 			atomic_store(&vt->completed, 1);
 			pthread_mutex_lock(&vt->mu);
 			vt->park_token++;
 			pthread_cond_broadcast(&vt->cv);
 			pthread_mutex_unlock(&vt->mu);
-			if (atomic_load(&vt->dropped)) {
+			if (dropped_after_finish) {
 				drift_vt_destroy(vt);
 			}
 			drift_vt_tls_set(NULL);
@@ -951,7 +1003,11 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 					pthread_mutex_unlock(&vt->mu);
 				}
 			}
-			drift_vt_destroy(vt);
+			/* Ownership of VT allocations is centralized in the global VT registry.
+			 * Executor queue drain only finalizes queued work state/callback drop;
+			 * final memory reclamation is handled by join/drop paths or registry
+			 * cleanup to avoid duplicate free on stale/duplicate queue references. */
+			vt->exec = NULL;
 		}
 		free(node);
 		node = next;

@@ -7323,7 +7323,12 @@ class _FuncBuilder:
 			self._bool_from_storage(raw, dest=dest)
 			self.value_types[dest] = "i1"
 		else:
-			self.value_types[dest] = elem_val_llty
+			copied = self._emit_copy_value(instr.elem_ty, raw)
+			if copied != raw:
+				self.value_map[instr.dest] = copied
+				self.value_types[copied] = elem_val_llty
+			else:
+				self.value_types[dest] = elem_val_llty
 
 	def _lower_array_index_load_unchecked(self, instr: ArrayIndexLoadUnchecked) -> None:
 		"""Lower ArrayIndexLoadUnchecked without bounds checks."""
@@ -7342,7 +7347,12 @@ class _FuncBuilder:
 			self._bool_from_storage(raw, dest=dest)
 			self.value_types[dest] = "i1"
 		else:
-			self.value_types[dest] = elem_val_llty
+			copied = self._emit_copy_value(instr.elem_ty, raw)
+			if copied != raw:
+				self.value_map[instr.dest] = copied
+				self.value_types[copied] = elem_val_llty
+			else:
+				self.value_types[dest] = elem_val_llty
 
 	def _lower_array_index_store(self, instr: ArrayIndexStore) -> None:
 		"""Lower ArrayIndexStore with bounds checks and a store into data[idx]."""

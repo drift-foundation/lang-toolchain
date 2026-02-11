@@ -48,6 +48,22 @@ ROOT = Path(__file__).resolve().parents[4]
 BUILD_ROOT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
 
 
+def _env_true(name: str) -> bool:
+	return os.environ.get(name) in {"1", "true", "True"}
+
+
+def _asan_options_with_defaults(existing: str | None) -> str:
+	parts: list[str] = []
+	if existing:
+		parts = [p for p in existing.split(":") if p]
+	keys = {p.split("=", 1)[0] for p in parts}
+	if "detect_leaks" not in keys:
+		parts.append("detect_leaks=0")
+	if "halt_on_error" not in keys:
+		parts.append("halt_on_error=1")
+	return ":".join(parts)
+
+
 def _drift_debug_diags_enabled() -> bool:
 	raw = os.environ.get("DRIFT_DEBUG")
 	if not raw:
@@ -101,8 +117,18 @@ def _run_ir_with_clang(
 				return [f"-l{name}"]
 		return []
 	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
+	massif_enabled = _env_true("DRIFT_MASSIF")
+	asan_enabled = _env_true("DRIFT_ASAN")
+	if asan_enabled and (memcheck_enabled or massif_enabled):
+		return 1, "", "DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF"
+	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
+		return 1, "", "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
+
 	try:
 		c_defs: list[str] = []
+		c_flags: list[str] = []
+		link_flags: list[str] = []
 		link_wrap_flags: list[str] = []
 		if alloc_track_enabled:
 			c_defs.append("-DDRIFT_ALLOC_WRAP_ENABLED=1")
@@ -116,10 +142,14 @@ def _run_ir_with_clang(
 					"-Wl,--wrap=aligned_alloc",
 				]
 			)
+		if asan_enabled:
+			c_flags.extend(["-fsanitize=address", "-g"])
+			link_flags.extend(["-fsanitize=address"])
 		compile_res = subprocess.run(
 			[
 				clang,
 				"-pthread",
+				*c_flags,
 				*c_defs,
 				"-I",
 				str(runtime_include),
@@ -129,6 +159,7 @@ def _run_ir_with_clang(
 				"-x",
 				"c",
 				*(str(p) for p in runtime_sources),
+				*link_flags,
 				*link_libs,
 				*link_wrap_flags,
 				"-Wl,--as-needed",
@@ -145,17 +176,15 @@ def _run_ir_with_clang(
 	if compile_res.returncode != 0:
 		return compile_res.returncode, "", compile_res.stderr
 
-	memcheck_enabled = os.environ.get("DRIFT_MEMCHECK") in {"1", "true", "True"}
-	massif_enabled = os.environ.get("DRIFT_MASSIF") in {"1", "true", "True"}
-	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
-		return 1, "", "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
-
 	try:
 		run_cmd = [str(bin_path), *(argv or [])]
 		run_timeout_s = timeout_s
 		run_env = os.environ.copy()
 		if alloc_track_enabled:
 			run_env["DRIFT_ALLOC_TRACK"] = "1"
+		if asan_enabled:
+			run_timeout_s = max(timeout_s, 30) * 2
+			run_env["ASAN_OPTIONS"] = _asan_options_with_defaults(run_env.get("ASAN_OPTIONS"))
 		if memcheck_enabled:
 			run_timeout_s = max(timeout_s, 30) * 10
 			run_cmd = [
@@ -277,6 +306,21 @@ def _extract_alloc_track_stats(stderr: str) -> tuple[str, dict | None]:
 	if kept and stderr.endswith("\n"):
 		clean += "\n"
 	return clean, stats
+
+
+def _strip_asan_runtime_warnings(stderr: str) -> str:
+	# ASan emits a known runtime warning for makecontext/swapcontext paths.
+	# Keep ASan hard failures, but ignore this non-fatal warning line so
+	# stderr-asserting tests stay stable under DRIFT_ASAN=1.
+	lines: list[str] = []
+	for line in stderr.splitlines():
+		if "WARNING: ASan doesn't fully support makecontext/swapcontext functions" in line:
+			continue
+		lines.append(line)
+	clean = "\n".join(lines)
+	if lines and stderr.endswith("\n"):
+		clean += "\n"
+	return clean
 
 
 def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
@@ -544,6 +588,8 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 		alloc_track_enabled=alloc_track_enabled,
 	)
 	stderr_clean, alloc_stats = _extract_alloc_track_stats(stderr)
+	if _env_true("DRIFT_ASAN"):
+		stderr_clean = _strip_asan_runtime_warnings(stderr_clean)
 	if exit_code != 0 and stderr == "clang not available":
 		return "FAIL (clang not available)"
 	if exit_code != 0 and stderr.startswith("valgrind not available"):
