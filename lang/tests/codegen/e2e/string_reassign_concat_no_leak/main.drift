@@ -1,0 +1,22 @@
+module m
+
+fn run() -> Int {
+	var i = 0;
+	while i < 1000 {
+		var s = "";
+		var j = 0;
+		while j < 32 {
+			s = s + "x";
+			j = j + 1;
+		}
+		if byte_length(s) != 32 {
+			return 2;
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

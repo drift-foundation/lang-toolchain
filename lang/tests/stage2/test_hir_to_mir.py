@@ -26,6 +26,7 @@ from lang.driftc.stage1 import (
 	HBinary,
 	HVar,
 	HLiteralInt,
+	HLiteralString,
 	HLiteralFloat,
 	HIf,
 	HLoop,
@@ -62,6 +63,8 @@ from lang.driftc.stage2 import (
 	Goto,
 	Call,
 	ConstructDV,
+	ConstructVariant,
+	MoveOut,
 )
 
 
@@ -339,6 +342,29 @@ def test_loop_and_break_continue():
 	assert "loop_exit" in func.blocks
 	body_term = func.blocks["loop_body"].terminator
 	assert isinstance(body_term, Goto)
+
+
+def test_constructor_noncopy_arg_moves_out_local() -> None:
+	block = HBlock(
+		statements=[
+			HLet(name="s", value=HLiteralString("x")),
+			HReturn(
+				value=HCall(
+					fn=HQualifiedMember(
+						base_type_expr=TypeExpr(name="Optional", args=[TypeExpr(name="String")]),
+						member="Some",
+					),
+					args=[HVar("s")],
+					kwargs=[],
+				)
+			),
+		]
+	)
+	type_table = TypeTable()
+	func = _lower_with_call_info(block, type_table)
+	entry = func.blocks[func.entry]
+	assert any(isinstance(op, MoveOut) and op.local == "s" for op in entry.instructions)
+	assert any(isinstance(op, ConstructVariant) for op in entry.instructions)
 
 
 def test_calls_and_dv():

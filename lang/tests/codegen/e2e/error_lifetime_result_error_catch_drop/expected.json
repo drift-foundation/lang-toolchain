@@ -1,0 +1,4 @@
+{
+  "description": "e2e: ResultError catch/drop should not leak",
+  "exit_code": 0
+}

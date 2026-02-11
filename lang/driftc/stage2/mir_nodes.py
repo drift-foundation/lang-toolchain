@@ -408,6 +408,20 @@ class VariantTag(MInstr):
 
 
 @dataclass
+class VariantTagRef(MInstr):
+	"""
+	dest = tag(*variant_ref) as Uint (0..N-1), without materializing a by-value copy.
+
+	Use this when scrutinee is borrowed; it avoids ownership-changing loads of
+	non-Copy variants.
+	"""
+
+	dest: ValueId
+	variant_ref: ValueId
+	variant_ty: TypeId
+
+
+@dataclass
 class VariantGetField(MInstr):
 	"""
 	dest = variant.<ctor>.<field_index>
@@ -1178,6 +1192,7 @@ __all__ = [
 	"ConstructStruct",
 	"ConstructVariant",
 	"VariantTag",
+	"VariantTagRef",
 	"VariantGetField",
 	"VariantGetFieldAddr",
 	"StructGetField",

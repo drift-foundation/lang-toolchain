@@ -1,0 +1,5 @@
+{
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "{\"events\":[{\"attrs\":{\"empty_arr\":[],\"empty_obj\":{},\"profile\":{\"active\":true,\"age\":30,\"name\":\"Ada\"},\"tags\":[\"core\",\"json\"]},\"ev\":\"login\",\"tm\":\"2026-02-11T00:00:00.000Z\"},{\"attrs\":{\"attempt\":2,\"ok\":false},\"ev\":\"auth-failed\",\"tm\":\"2026-02-11T00:00:01.000Z\"}],\"meta\":{\"build\":\"dbg\",\"commit\":\"abc123\",\"module\":\"m\"},\"state\":{\"counters\":{\"errors\":1,\"ok\":9},\"last\":null},\"z\":\"done\"}\n"
+}

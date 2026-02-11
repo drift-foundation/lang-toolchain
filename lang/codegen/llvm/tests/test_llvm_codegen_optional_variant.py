@@ -165,6 +165,8 @@ def test_optional_drop_optional_string_releases() -> None:
 	ir = _lower_ir(mir, fn_info, table)
 
 	assert "call void @drift_string_release" in ir
+	# Variant drop must lower via helper call so it doesn't inject CFG labels into the caller block.
+	assert "var_drop_done" not in ir
 
 
 def test_optional_bool_storage_decode_uses_icmp() -> None:

@@ -1,0 +1,26 @@
+module m
+
+import std.core as core;
+import std.containers as containers;
+import std.format as format;
+
+fn run() -> Int {
+	var i = 0;
+	while i < 400 {
+		var m = containers.hash_map<type String, String>();
+		var j = 0;
+		while j < 16 {
+			val k = "k-" + format.format_int(j);
+			val v = "v-" + format.format_int(j);
+			m.insert(move k, move v);
+			j = j + 1;
+		}
+		m.clear();
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

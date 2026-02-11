@@ -69,6 +69,7 @@ def _run_ir_with_clang(
 	argv: list[str] | None = None,
 	stdin_data: str | None = None,
 	timeout_s: int = 30,
+	alloc_track_enabled: bool = False,
 ) -> tuple[int, str, str]:
 	"""Compile the provided LLVM IR with clang and return (exit, stdout, stderr)."""
 	clang = shutil.which("clang-15") or shutil.which("clang")
@@ -101,10 +102,25 @@ def _run_ir_with_clang(
 		return []
 	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
 	try:
+		c_defs: list[str] = []
+		link_wrap_flags: list[str] = []
+		if alloc_track_enabled:
+			c_defs.append("-DDRIFT_ALLOC_WRAP_ENABLED=1")
+			link_wrap_flags.extend(
+				[
+					"-Wl,--wrap=malloc",
+					"-Wl,--wrap=calloc",
+					"-Wl,--wrap=realloc",
+					"-Wl,--wrap=free",
+					"-Wl,--wrap=posix_memalign",
+					"-Wl,--wrap=aligned_alloc",
+				]
+			)
 		compile_res = subprocess.run(
 			[
 				clang,
 				"-pthread",
+				*c_defs,
 				"-I",
 				str(runtime_include),
 				"-x",
@@ -114,6 +130,7 @@ def _run_ir_with_clang(
 				"c",
 				*(str(p) for p in runtime_sources),
 				*link_libs,
+				*link_wrap_flags,
 				"-Wl,--as-needed",
 				"-o",
 				str(bin_path),
@@ -128,14 +145,46 @@ def _run_ir_with_clang(
 	if compile_res.returncode != 0:
 		return compile_res.returncode, "", compile_res.stderr
 
+	memcheck_enabled = os.environ.get("DRIFT_MEMCHECK") in {"1", "true", "True"}
+	massif_enabled = os.environ.get("DRIFT_MASSIF") in {"1", "true", "True"}
+	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
+		return 1, "", "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
+
 	try:
+		run_cmd = [str(bin_path), *(argv or [])]
+		run_timeout_s = timeout_s
+		run_env = os.environ.copy()
+		if alloc_track_enabled:
+			run_env["DRIFT_ALLOC_TRACK"] = "1"
+		if memcheck_enabled:
+			run_timeout_s = max(timeout_s, 30) * 10
+			run_cmd = [
+				"valgrind",
+				"--tool=memcheck",
+				"--leak-check=full",
+				"--show-leak-kinds=definite,indirect,possible,reachable",
+				"--errors-for-leak-kinds=definite,indirect",
+				"--error-exitcode=97",
+				f"--log-file={str(build_dir / 'valgrind-memcheck.log')}",
+				*run_cmd,
+			]
+		elif massif_enabled:
+			run_timeout_s = max(timeout_s, 30) * 6
+			run_cmd = [
+				"valgrind",
+				"--tool=massif",
+				f"--massif-out-file={str(build_dir / 'valgrind-massif.out')}",
+				f"--log-file={str(build_dir / 'valgrind-massif.log')}",
+				*run_cmd,
+			]
 		run_res = subprocess.run(
-			[str(bin_path), *(argv or [])],
+			run_cmd,
 			input=stdin_data,
 			capture_output=True,
 			text=True,
 			cwd=ROOT,
-			timeout=timeout_s,
+			env=run_env,
+			timeout=run_timeout_s,
 		)
 	except subprocess.TimeoutExpired:
 		return 124, "", "timeout during execution"
@@ -148,6 +197,8 @@ def _compare_process_output(
 	stderr: str,
 	expected: dict,
 	debug: bool = False,
+	alloc_stats: dict | None = None,
+	alloc_track_check_enabled: bool = False,
 ) -> str | None:
 	def _json_matches(expected_obj: object, actual_obj: object) -> bool:
 		if isinstance(expected_obj, str) and expected_obj == "__ANY__":
@@ -203,7 +254,29 @@ def _compare_process_output(
 		if debug and (stdout or stderr):
 			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 		return msg
+	if alloc_track_check_enabled:
+		if alloc_stats is None:
+			return "FAIL (alloc tracking enabled but no alloc stats line emitted)"
+		if int(alloc_stats.get("live_blocks", -1)) != 0 or int(alloc_stats.get("live_bytes", -1)) != 0:
+			return f"FAIL (alloc leak detected: live_blocks={alloc_stats.get('live_blocks')}, live_bytes={alloc_stats.get('live_bytes')})"
 	return None
+
+
+def _extract_alloc_track_stats(stderr: str) -> tuple[str, dict | None]:
+	stats: dict | None = None
+	kept: list[str] = []
+	for line in stderr.splitlines():
+		if line.startswith("__DRIFT_ALLOC_TRACK__ "):
+			try:
+				stats = json.loads(line[len("__DRIFT_ALLOC_TRACK__ ") :])
+			except json.JSONDecodeError:
+				stats = None
+		else:
+			kept.append(line)
+	clean = "\n".join(kept)
+	if kept and stderr.endswith("\n"):
+		clean += "\n"
+	return clean, stats
 
 
 def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
@@ -459,9 +532,22 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	stdin_data = expected.get("stdin")
 	if needs_argv and not run_args:
 		return "FAIL (argv main requires args in expected.json)"
-	exit_code, stdout, stderr = _run_ir_with_clang(ir, build_dir, argv=run_args, stdin_data=stdin_data, timeout_s=timeout_s)
+	alloc_track_env_enabled = os.environ.get("DRIFT_ALLOC_TRACK") in {"1", "true", "True"}
+	alloc_track_case_required = bool(expected.get("alloc_track_leak") or expected.get("alloc_track_no_leak_if_enabled"))
+	alloc_track_enabled = alloc_track_case_required or alloc_track_env_enabled
+	exit_code, stdout, stderr = _run_ir_with_clang(
+		ir,
+		build_dir,
+		argv=run_args,
+		stdin_data=stdin_data,
+		timeout_s=timeout_s,
+		alloc_track_enabled=alloc_track_enabled,
+	)
+	stderr_clean, alloc_stats = _extract_alloc_track_stats(stderr)
 	if exit_code != 0 and stderr == "clang not available":
 		return "FAIL (clang not available)"
+	if exit_code != 0 and stderr.startswith("valgrind not available"):
+		return f"FAIL ({stderr})"
 	if exit_code == 124 and "timeout" in stderr:
 		return f"FAIL (timeout: {stderr})"
 
@@ -480,7 +566,15 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 			return "FAIL (checker/codegen phase stderr mismatch)"
 		return "ok"
 
-	mismatch = _compare_process_output(exit_code, stdout, stderr, expected, debug)
+	mismatch = _compare_process_output(
+		exit_code,
+		stdout,
+		stderr_clean,
+		expected,
+		debug,
+		alloc_stats=alloc_stats,
+		alloc_track_check_enabled=alloc_track_enabled,
+	)
 	if mismatch is not None:
 		return mismatch
 	return "ok"

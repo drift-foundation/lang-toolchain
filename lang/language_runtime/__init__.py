@@ -8,6 +8,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 	return [
 		# Deterministic float formatting (Ryu) for Drift `Float` once supported.
 		base / "ryu_d2s.c",
+		base / "alloc_track_runtime.c",
 		base / "array_runtime.c",
 		base / "string_runtime.c",
 		base / "argv_runtime.c",

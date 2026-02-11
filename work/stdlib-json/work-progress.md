@@ -93,11 +93,33 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 7. Non-finite JSON numbers are rejected in parser (JSON-compliant).
 8. `entries()` landed via `JsonEntriesIter` with empty semantics for non-object.
 9. Compiler regression uncovered and fixed in MIR array ownership join (`LoadLocal` -> `MoveOut`) that caused JSON parse double-free on error paths.
+10. LANGUAGE_BUG fixed in LLVM lowering: variant `DropValue` no longer injects inline CFG labels that corrupt PHI predecessors; lowering now routes variant drop through helper call path.
+11. Alloc-tracking hardening for assert/abort paths: assert runtime now emits alloc stats before abort to keep leak-signal tests reliable.
+12. Runtime lifecycle hardening landed for leak sweeps:
+   - logger worker + queue teardown at exit
+   - default reactor teardown at exit
+   - virtual-thread registry cleanup at exit
+   - cancel/join race fix for prestart queued tasks
+13. `VirtualThread<T>` destructor semantics added so dropped-but-unjoined threads release handles/result buffers deterministically.
+14. LANGUAGE_BUG fixed in match lowering cleanup: non-Copy match binders now register for scope-based drops, so early-return match arms no longer leak moved payloads (pinned by `std_json_parse_duplicate_only_no_access` under alloc tracking).
+15. Interface-owned callback lifetime fix landed:
+   - interface runtime-drop participation re-enabled in stage2 drop planning
+   - iface-init MIR validation aligned with canonicalized param/local names and hidden lambda callback locals
+   - pinned callback-env leak (`result_on_error_capture`) now passes with `DRIFT_ALLOC_TRACK=1`.
+16. Move-capture double-drop LANGUAGE_BUG fixed in lambda lowering:
+   - lambda capture prologue no longer registers scope drops for `captures(move ...)` locals
+   - ownership stays with callback env drop thunk, preventing double-free in callback/concurrency paths (for example `byte_capture_add_uint`).
+17. Timeout-path leak regressions (`concurrent_join_timeout_nonzero`, `concurrent_sleep_task_join_timeout_regression`) are now green under `DRIFT_ALLOC_TRACK=1` with runtime cleanup sequencing hardening.
+18. Broader deterministic encode snapshot coverage added for deep mixed nested JSON structures with differing insertion order constructions (objects/arrays/null/bool/number/string/empty containers), pinned by `std_json_encode_determinism_deep_mixed_snapshot`.
+19. Valgrind validation run for `std_json_encode_determinism_deep_mixed_snapshot` is clean (`in use at exit: 0 bytes`, `ERROR SUMMARY: 0`).
 
 ## Current Status
 
-- MVP JSON APIs are functionally in place and passing targeted e2e coverage.
-- JSON parse-focused e2e subset is green, including previous crash repros.
+- MVP JSON APIs are in place and green on targeted parse/encode/e2e coverage.
+- Previously pinned JSON leak/crash regressions are resolved in current branch state.
+- Alloc-tracked sampled sweep (JSON + concurrency + logging-adjacent cases) is green after runtime/codegen fixes, including prior timeout leak and callback double-free repros.
+- One environment-sensitive test remains outside JSON scope (`std_net_tcp_read_write_roundtrip` can fail with listen error in restricted environments).
+- Full-suite alloc-tracking confirmation remains pending user run (`DRIFT_ALLOC_TRACK=1 just`).
 
 ## Logger Migration Hooks (Post-JSON)
 
@@ -123,7 +145,7 @@ Provide a first-class `std.json` library in Drift that supports deterministic, m
 ## Remaining JSON Work (Post-MVP / Pending)
 
 1. Add logger-focused integration coverage using real log payload shapes (attrs/event fields).
-2. Add broader encode determinism snapshots for complex nested objects/arrays.
+2. Add broader encode determinism snapshots for complex nested objects/arrays. ✅
 3. Optional API polish:
    - decide whether `entries()` should expose a dedicated item type alias in `std.json` for nicer ergonomics.
    - decide whether any additional navigation helpers are needed beyond pinned MVP (`get_path` key-only + `as_array` index navigation).

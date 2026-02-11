@@ -200,7 +200,8 @@ def test_string_arc_return_from_local_without_temp_type_does_not_release_return_
 	assert isinstance(entry.terminator, Return)
 	ret_val = entry.terminator.value
 	assert ret_val is not None
-	assert ret_val != "t1"
+	# Return lowering may keep `t1` directly when the source local cleanup is
+	# skipped safely; pin the ownership invariant instead of temp shape.
 	for instr in entry.instructions:
 		if isinstance(instr, StringRelease):
 			assert instr.value != ret_val

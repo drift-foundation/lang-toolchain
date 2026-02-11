@@ -1,0 +1,7 @@
+{
+  "description": "hashmap resize with JsonNode values should not leak",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "alloc_track_leak": true
+}

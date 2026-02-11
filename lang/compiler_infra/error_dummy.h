@@ -49,6 +49,7 @@ uint8_t __exc_attrs_get(struct DriftString* out, const struct DriftError* err, s
 void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString key);
 void __exc_captures_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString frame, struct DriftString key);
 struct DriftError* drift_error_new_with_payload(drift_error_code_t code, struct DriftString event_fqn, struct DriftString key, const struct DriftDiagnosticValue* payload);
+void drift_error_release(struct DriftError* err);
 void drift_error_raise(struct DriftError* err) __attribute__((noreturn));
 
 #ifdef __cplusplus

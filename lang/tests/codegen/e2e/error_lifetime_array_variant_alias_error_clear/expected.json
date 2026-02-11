@@ -1,0 +1,5 @@
+{
+  "description": "e2e: array.clear releases variant alias(Error) payloads",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

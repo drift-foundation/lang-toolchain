@@ -134,7 +134,7 @@ pub fn main() nothrow -> Int {
 }
 ```
 
-For formatter customization, see `lang/examples/logging/pluggable_formatter.drift`.
+For formatter customization, see `examples/logging/pluggable_formatter.drift`.
 
 ## JSON API + error tags (`std.json`)
 
@@ -142,22 +142,20 @@ For formatter customization, see `lang/examples/logging/pluggable_formatter.drif
 - parse: `json.parse(&text) -> Result<JsonNode, JsonErrorData>`
 - encode: `json.encode(...)` and `json.encode_with_config(...)`
 - deterministic key order: `JsonKeyOrder::OrderedLexUtf8()`
-- navigation: `get(...)`, `get_path(Array<String>)`, `entries()`
+- navigation: `get(...)`, `get_path(Array<String>)`
 - extractors: `as_*` (optional) and `expect_*` (throws `std.json:JsonError`)
 
 ```drift
 import std.console as console;
 import std.core as core;
-import std.iter as iter;
 import std.json as json;
-use trait iter.SinglePassIterator;
 
 fn main() nothrow -> Int {
     return try run() catch { 99 };
 }
 
 fn run() -> Int {
-    val text = "{\"user\":{\"id\":42,\"name\":\"alice\"}}";
+    val text = "{\"users\":[{\"id\":42},{\"id\":7}]}";
     var node = json.JsonNode::Null();
     match json.parse(&text) {
         core.Result::Ok(v) => { node = move v; },
@@ -173,27 +171,29 @@ fn run() -> Int {
     val cfg = cfgb.build();
     console.println(json.encode_with_config(&node, &cfg));
 
-    val path = ["user", "id"];
-    val id_node = node.expect_path(&path);
-    val id = id_node.expect_int("user.id", "id");
-    if id != 42 { return 2; }
-
-    var it = node.entries();
-    while true {
-        match it.next() {
-            Some(item) => { console.println(*item.key); },
-            None => { break; }
-        }
+    val users_path = ["users"];
+    val users_node = node.expect_path(&users_path);
+    val users = users_node.expect_array("users", "users");
+    val id_path = ["id"];
+    var sum = 0;
+    for val item : users {
+        sum = sum + item.expect_path(&id_path).expect_int("users.id", "id");
     }
+    if sum != 49 { return 2; }
     return 0;
 }
 ```
+
+Matching runnable example: `examples/json/effective_drift_json_api.drift`.
 
 Error tag contract:
 - stable, machine-readable kebab-case tags
 - current parse/data tags include:
 `invalid-syntax`, `invalid-escape`, `invalid-datatype`, `missing-path`, `internal-error`
 - `JsonErrorData` carries structured context (`tag`, `offset`, `line`, `col`, `path`, `key`)
+
+Loop ergonomics note:
+- use `for val x : source { ... }` when `source` is iterable (for example arrays)
 
 ## Atomic ordering defaults (`std.sync`)
 

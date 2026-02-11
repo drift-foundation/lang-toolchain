@@ -1,0 +1,39 @@
+module example.json_effective_drift_api
+
+import std.console as console;
+import std.core as core;
+import std.json as json;
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}
+
+fn run() -> Int {
+	val text = "{\"users\":[{\"id\":42},{\"id\":7}]}";
+	var node = json.JsonNode::Null();
+	match json.parse(&text) {
+		core.Result::Ok(v) => { node = move v; },
+		core.Result::Err(e) => {
+			console.println(e.tag);
+			return 1;
+		}
+	}
+
+	var cfgb = json.config_builder();
+	cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = cfgb.build();
+	console.println(json.encode_with_config(&node, &cfg));
+
+	val users_path = ["users"];
+	val users_node = node.expect_path(&users_path);
+	val users = users_node.expect_array("users", "users");
+	val id_path = ["id"];
+	var sum = 0;
+	for val item : users {
+		sum = sum + item.expect_path(&id_path).expect_int("users.id", "id");
+	}
+	if sum != 49 {
+		return 2;
+	}
+	return 0;
+}

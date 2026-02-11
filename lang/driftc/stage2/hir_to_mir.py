@@ -292,7 +292,7 @@ class HIRToMIR:
 		self._param_drop_locals: list[str] = []
 		if param_types:
 			for name, ty in param_types.items():
-				if self._is_destructible_type(ty):
+				if self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
 		# Stage2 lowering is "assert-only" with respect to match pattern
 		# normalization: the typed checker is expected to populate
@@ -341,10 +341,27 @@ class HIRToMIR:
 				self._local_types[local_name] = ty
 
 	def _is_destructible_type(self, ty: TypeId) -> bool:
+		if ty == self._type_table.ensure_error():
+			return True
 		try:
 			return bool(self._type_table.is_destructible(ty))
 		except Exception:
 			return False
+
+	def _needs_runtime_drop(self, ty: TypeId) -> bool:
+		if ty == self._unknown_type:
+			return False
+		td = self._type_table.get(ty)
+		if td.kind is TypeKind.REF:
+			return False
+		if td.kind is TypeKind.INTERFACE:
+			return True
+		try:
+			if not self._type_table.is_copy(ty):
+				return True
+		except Exception:
+			pass
+		return self._is_destructible_type(ty)
 
 	def _push_scope(self, *, include_params: bool) -> None:
 		scope: list[str] = []
@@ -366,7 +383,7 @@ class HIRToMIR:
 			return
 		if not self._scope_stack:
 			return
-		if not self._is_destructible_type(ty):
+		if not self._needs_runtime_drop(ty):
 			return
 		scope = self._scope_stack[-1]
 		if local_name in scope:
@@ -447,10 +464,10 @@ class HIRToMIR:
 				if local in self._moved_locals:
 					continue
 				ty = self._local_types.get(local)
-				if ty is None or not self._is_destructible_type(ty):
+				if ty is None or not self._needs_runtime_drop(ty):
 					continue
 				tmp = self.b.new_temp()
-				self.b.emit(M.LoadLocal(dest=tmp, local=local))
+				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))
 				self.b.emit(M.DropValue(value=tmp, ty=ty))
 				self._local_types[tmp] = ty
 
@@ -650,15 +667,14 @@ class HIRToMIR:
 				scrut_ref_mut = bool(scrut_def.ref_mut)
 				scrut_ref_val = scrut_val
 				scrut_ty = scrut_def.param_types[0]
-				load_tmp = self.b.new_temp()
-				self.b.emit(M.LoadRef(dest=load_tmp, ptr=scrut_val, inner_ty=scrut_ty))
-				self._local_types[load_tmp] = scrut_ty
-				scrut_val = load_tmp
 		if scrut_ty is None or self._type_table.get(scrut_ty).kind is not TypeKind.VARIANT:
 			raise AssertionError("match scrutinee must have a concrete variant type (checker bug)")
 		inst = self._type_table.get_variant_instance(scrut_ty)
 		if inst is None:
 			raise AssertionError("match scrutinee variant instance missing (type table bug)")
+		scrut_source_local: str | None = None
+		if isinstance(expr.scrutinee, H.HVar):
+			scrut_source_local = self._canonical_local(getattr(expr.scrutinee, "binding_id", None), expr.scrutinee.name)
 
 		# Optional hidden local for the match result when used as a value.
 		result_local: str | None = None
@@ -690,7 +706,12 @@ class HIRToMIR:
 		# Dispatch: tag = VariantTag(scrutinee); chain IfTerminator tests in source order.
 		self.b.set_block(dispatch_block)
 		tag_tmp = self.b.new_temp()
-		self.b.emit(M.VariantTag(dest=tag_tmp, variant=scrut_val, variant_ty=scrut_ty))
+		if scrut_is_ref:
+			if scrut_ref_val is None:
+				raise AssertionError("match ref scrutinee missing reference value (lowering bug)")
+			self.b.emit(M.VariantTagRef(dest=tag_tmp, variant_ref=scrut_ref_val, variant_ty=scrut_ty))
+		else:
+			self.b.emit(M.VariantTag(dest=tag_tmp, variant=scrut_val, variant_ty=scrut_ty))
 		self._local_types[tag_tmp] = self._uint_type
 
 		# Find default arm (if any) and build dispatch chain for ctor arms.
@@ -730,112 +751,193 @@ class HIRToMIR:
 		join_reachable = False
 		for arm, bb in arm_blocks:
 			self.b.set_block(bb)
+			self._push_scope(include_params=False)
+			arm_scrut_local: str | None = None
+			arm_scrut_ptr: M.ValueId | None = None
+			arm_drop_locals: list[str] = []
+			try:
+				def _ensure_arm_scrut_ptr() -> None:
+					nonlocal arm_scrut_local, arm_scrut_ptr
+					if arm_scrut_ptr is not None:
+						return
+					arm_scrut_local = f"__match_scrut_tmp{self.b.new_temp()}"
+					self.b.ensure_local(arm_scrut_local)
+					self._local_types[arm_scrut_local] = scrut_ty
+					if scrut_source_local is not None and not self._type_table.is_copy(scrut_ty):
+						arm_scrut_moved_in = self.b.new_temp()
+						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=scrut_source_local, ty=scrut_ty))
+						self._local_types[arm_scrut_moved_in] = scrut_ty
+						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=arm_scrut_moved_in))
+					else:
+						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
+					arm_scrut_ptr = self.b.new_temp()
+					self.b.emit(M.AddrOfLocal(dest=arm_scrut_ptr, local=arm_scrut_local, is_mut=True))
+					self._local_types[arm_scrut_ptr] = self._type_table.ensure_ref_mut(scrut_ty)
 
-			if arm.ctor is not None:
-				arm_def = inst.arms_by_name[arm.ctor]
-				form = getattr(arm, "pattern_arg_form", "positional")
-				if form == "bare":
-					if arm_def.field_types:
-						raise AssertionError(
-							"bare ctor pattern for non-zero-field ctor reached MIR lowering (checker bug)"
-						)
-				elif form == "paren":
-					if arm.binders:
-						raise AssertionError("Ctor() pattern must not bind fields (checker bug)")
-				else:
-					# Typed checker is the single source of truth for match pattern
-					# normalization. By the time we reach MIR lowering, any constructor
-					# pattern that binds payload fields must already carry a normalized
-					# binder→field-index mapping.
-					field_indices = list(getattr(arm, "binder_field_indices", []) or [])
-					if len(field_indices) != len(arm.binders):
-						raise AssertionError("match binder field-index mapping missing (checker bug)")
+				if not want_value and not scrut_is_ref:
+					_ensure_arm_scrut_ptr()
 
-					for bname, fidx in zip(arm.binders, field_indices):
-						if fidx < 0 or fidx >= len(arm_def.field_types):
-							raise AssertionError("match binder field index out of range (checker bug)")
-						bty = arm_def.field_types[fidx]
-						binder_ty = bty
-						if scrut_is_ref:
-							binder_ty = self._type_table.ensure_ref_mut(bty) if scrut_ref_mut else self._type_table.ensure_ref(bty)
-						field_val = self.b.new_temp()
-						if scrut_is_ref:
-							if scrut_ref_val is None:
-								raise AssertionError("match ref scrutinee missing reference value (lowering bug)")
-							self.b.emit(
-								M.VariantGetFieldAddr(
-									dest=field_val,
-									variant_ref=scrut_ref_val,
-									variant_ty=scrut_ty,
-									ctor=arm.ctor,
-									field_index=int(fidx),
-									field_ty=bty,
-								)
+				if arm.ctor is not None:
+					arm_def = inst.arms_by_name[arm.ctor]
+					form = getattr(arm, "pattern_arg_form", "positional")
+					if form == "bare":
+						if arm_def.field_types:
+							raise AssertionError(
+								"bare ctor pattern for non-zero-field ctor reached MIR lowering (checker bug)"
 							)
-							self._local_types[field_val] = binder_ty
-							self.b.ensure_local(bname)
-							self._local_types[bname] = binder_ty
-							self.b.emit(M.StoreLocal(local=bname, value=field_val))
-						else:
-							self.b.emit(
-								M.VariantGetField(
-									dest=field_val,
-									variant=scrut_val,
-									variant_ty=scrut_ty,
-									ctor=arm.ctor,
-									field_index=int(fidx),
-									field_ty=bty,
+					elif form == "paren":
+						if arm.binders:
+							raise AssertionError("Ctor() pattern must not bind fields (checker bug)")
+					else:
+						# Typed checker is the single source of truth for match pattern
+						# normalization. By the time we reach MIR lowering, any constructor
+						# pattern that binds payload fields must already carry a normalized
+						# binder→field-index mapping.
+						field_indices = list(getattr(arm, "binder_field_indices", []) or [])
+						if len(field_indices) != len(arm.binders):
+							raise AssertionError("match binder field-index mapping missing (checker bug)")
+						if (not scrut_is_ref) and any(
+							not self._type_table.is_copy(arm_def.field_types[int(fidx)])
+							for fidx in field_indices
+						):
+							_ensure_arm_scrut_ptr()
+
+						for bname, fidx in zip(arm.binders, field_indices):
+							if fidx < 0 or fidx >= len(arm_def.field_types):
+								raise AssertionError("match binder field index out of range (checker bug)")
+							bty = arm_def.field_types[fidx]
+							binder_ty = bty
+							if scrut_is_ref:
+								binder_ty = self._type_table.ensure_ref_mut(bty) if scrut_ref_mut else self._type_table.ensure_ref(bty)
+							field_val = self.b.new_temp()
+							if scrut_is_ref:
+								if scrut_ref_val is None:
+									raise AssertionError("match ref scrutinee missing reference value (lowering bug)")
+								self.b.emit(
+									M.VariantGetFieldAddr(
+										dest=field_val,
+										variant_ref=scrut_ref_val,
+										variant_ty=scrut_ty,
+										ctor=arm.ctor,
+										field_index=int(fidx),
+										field_ty=bty,
+									)
 								)
-							)
-							self._local_types[field_val] = bty
-							self.b.ensure_local(bname)
-							self._local_types[bname] = binder_ty
-							self.b.emit(M.StoreLocal(local=bname, value=field_val))
+								self._local_types[field_val] = binder_ty
+								self.b.ensure_local(bname)
+								self._local_types[bname] = binder_ty
+								self.b.emit(M.StoreLocal(local=bname, value=field_val))
+							else:
+								if arm_scrut_ptr is not None and not self._type_table.is_copy(bty):
+									self.b.emit(
+										M.VariantGetFieldAddr(
+											dest=field_val,
+											variant_ref=arm_scrut_ptr,
+											variant_ty=scrut_ty,
+											ctor=arm.ctor,
+											field_index=int(fidx),
+											field_ty=bty,
+										)
+									)
+									field_moved = self.b.new_temp()
+									self.b.emit(M.LoadRef(dest=field_moved, ptr=field_val, inner_ty=bty))
+									self._local_types[field_moved] = bty
+									field_zero = self.b.new_temp()
+									self.b.emit(M.ZeroValue(dest=field_zero, ty=bty))
+									self._local_types[field_zero] = bty
+									self.b.emit(M.StoreRef(ptr=field_val, value=field_zero, inner_ty=bty))
+								else:
+									self.b.emit(
+										M.VariantGetField(
+											dest=field_val,
+											variant=scrut_val,
+											variant_ty=scrut_ty,
+											ctor=arm.ctor,
+											field_index=int(fidx),
+											field_ty=bty,
+										)
+									)
+									self._local_types[field_val] = bty
+									field_moved = field_val
+								self.b.ensure_local(bname)
+								self._local_types[bname] = binder_ty
+								binder_def = self._type_table.get(binder_ty)
+								if binder_def.kind is not TypeKind.REF and not self._type_table.is_copy(binder_ty):
+									arm_drop_locals.append(bname)
+									self._register_drop_local(bname, binder_ty)
+								self.b.emit(M.StoreLocal(local=bname, value=field_moved))
 
-			# Lower the arm body statements regardless of pattern kind.
-			self.lower_block(arm.block)
+				# Consume and drop by-value scrutinee before arm body so cleanup runs
+				# even when the arm terminates early (e.g., return/throw).
+				if arm_scrut_local is not None:
+					arm_scrut_moved_pre = self.b.new_temp()
+					self.b.emit(M.MoveOut(dest=arm_scrut_moved_pre, local=arm_scrut_local, ty=scrut_ty))
+					self._local_types[arm_scrut_moved_pre] = scrut_ty
+					self.b.emit(M.DropValue(value=arm_scrut_moved_pre, ty=scrut_ty))
+					arm_scrut_local = None
 
-			# In statement position, still evaluate any arm result expression and
-			# discard its value (side effects must run).
-			if not want_value and arm.result is not None:
-				if self.b.block.terminator is None:
-					self.lower_stmt(H.HExprStmt(expr=arm.result))
+				# Lower the arm body statements regardless of pattern kind.
+				self.lower_block(arm.block)
 
-			# If this match is used as a value, store the arm's resulting expression.
-			did_store_result = False
-			if want_value and result_local is not None:
-				if arm.result is None:
+				# In statement position, still evaluate any arm result expression and
+				# discard its value (side effects must run).
+				if not want_value and arm.result is not None:
 					if self.b.block.terminator is None:
-						raise AssertionError(
-							"value-producing match arm must yield a value or terminate (checker bug)"
-						)
-				else:
-					# If an arm declares a result expression, its statement block must not
-					# diverge; we must be able to evaluate and store the result before
-					# branching to the match join.
-					if self.b.block.terminator is not None:
-						raise AssertionError(
-							"value-producing match arm has a result expression but its block terminates (checker bug)"
-						)
-					if self._local_types.get(result_local) is self._unknown_type:
-						arm_ty = self._infer_expr_type(arm.result)
-						if arm_ty is not None:
-							self._local_types[result_local] = arm_ty
-					val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
-					if self._local_types.get(result_local) is self._unknown_type:
-						val_ty = self._local_types.get(val)
-						if val_ty is not None:
-							self._local_types[result_local] = val_ty
-					self.b.emit(M.StoreLocal(local=result_local, value=val))
-					did_store_result = True
+						self.lower_stmt(H.HExprStmt(expr=arm.result))
 
-			if self.b.block.terminator is None:
-				if want_value and result_local is not None and not did_store_result:
-					raise AssertionError(
-						"value-producing match arm falls through without storing result (lowering bug)"
-					)
-				self.b.set_terminator(M.Goto(target=join_block.name))
-				join_reachable = True
+				# If this match is used as a value, store the arm's resulting expression.
+				did_store_result = False
+				if want_value and result_local is not None:
+					if arm.result is None:
+						if self.b.block.terminator is None:
+							raise AssertionError(
+								"value-producing match arm must yield a value or terminate (checker bug)"
+							)
+					else:
+						# If an arm declares a result expression, its statement block must not
+						# diverge; we must be able to evaluate and store the result before
+						# branching to the match join.
+						if self.b.block.terminator is not None:
+							raise AssertionError(
+								"value-producing match arm has a result expression but its block terminates (checker bug)"
+							)
+						if self._local_types.get(result_local) is self._unknown_type:
+							arm_ty = self._infer_expr_type(arm.result)
+							if arm_ty is not None:
+								self._local_types[result_local] = arm_ty
+						val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
+						if self._local_types.get(result_local) is self._unknown_type:
+							val_ty = self._local_types.get(val)
+							if val_ty is not None:
+								self._local_types[result_local] = val_ty
+						self.b.emit(M.StoreLocal(local=result_local, value=val))
+						did_store_result = True
+
+				if arm_scrut_local is not None and self.b.block.terminator is None:
+					arm_scrut_moved = self.b.new_temp()
+					self.b.emit(M.MoveOut(dest=arm_scrut_moved, local=arm_scrut_local, ty=scrut_ty))
+					self._local_types[arm_scrut_moved] = scrut_ty
+					self.b.emit(M.DropValue(value=arm_scrut_moved, ty=scrut_ty))
+
+				if self.b.block.terminator is None:
+					for local in reversed(arm_drop_locals):
+						if local in self._moved_locals:
+							continue
+						local_ty = self._local_types.get(local)
+						if local_ty is None or not self._needs_runtime_drop(local_ty):
+							continue
+						tmp = self.b.new_temp()
+						self.b.emit(M.MoveOut(dest=tmp, local=local, ty=local_ty))
+						self._local_types[tmp] = local_ty
+						self.b.emit(M.DropValue(value=tmp, ty=local_ty))
+					if want_value and result_local is not None and not did_store_result:
+						raise AssertionError(
+							"value-producing match arm falls through without storing result (lowering bug)"
+						)
+					self.b.set_terminator(M.Goto(target=join_block.name))
+					join_reachable = True
+			finally:
+				self._pop_scope()
 
 		# Defensive invariant: every arm block must end in a terminator. This catches
 		# structural lowering bugs where an arm block is accidentally skipped.
@@ -1796,7 +1898,7 @@ class HIRToMIR:
 				assert insert_res is not None
 				def emit_insert() -> M.ValueId:
 					return insert_res
-				self._lower_can_throw_call_stmt(emit_call=emit_insert)
+				self._lower_can_throw_call_stmt(emit_call=emit_insert, ok_ty=insert_info.sig.user_ret_type)
 
 		dest = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=dest, local=map_local, ty=map_ty))
@@ -1877,7 +1979,11 @@ class HIRToMIR:
 				raise AssertionError("maybe_write(...) missing &mut T return type (checker bug)")
 			slot = self.lower_expr(expr.args[0])
 			val = self.lower_expr(expr.args[1])
-			self.b.emit(M.StoreRef(ptr=slot, value=val, inner_ty=inner_ty))
+			raw_ptr = self.b.new_temp()
+			ptr_ty = self._type_table.new_ptr(inner_ty)
+			self.b.emit(M.PtrFromRef(dest=raw_ptr, src=slot, ptr_ty=ptr_ty))
+			self.b.emit(M.PtrWrite(ptr=raw_ptr, value=val, elem_ty=inner_ty))
+			self._local_types[raw_ptr] = ptr_ty
 			self._local_types[slot] = ret_ty
 			return slot
 		if intrinsic in (IntrinsicKind.MAYBE_ASSUME_INIT_REF, IntrinsicKind.MAYBE_ASSUME_INIT_MUT):
@@ -1900,8 +2006,16 @@ class HIRToMIR:
 				raise AssertionError("maybe_assume_init_read(...) missing CallInfo (checker bug)")
 			ret_ty = info.sig.user_ret_type
 			slot = self.lower_expr(expr.args[0])
+			raw_ptr = self.b.new_temp()
+			ptr_ty = self._type_table.new_ptr(ret_ty)
+			self.b.emit(M.PtrFromRef(dest=raw_ptr, src=slot, ptr_ty=ptr_ty))
 			dest = self.b.new_temp()
-			self.b.emit(M.LoadRef(dest=dest, ptr=slot, inner_ty=ret_ty))
+			self.b.emit(M.PtrRead(dest=dest, ptr=raw_ptr, elem_ty=ret_ty))
+			zero = self.b.new_temp()
+			self.b.emit(M.ZeroValue(dest=zero, ty=ret_ty))
+			self._local_types[zero] = ret_ty
+			self.b.emit(M.PtrWrite(ptr=raw_ptr, value=zero, elem_ty=ret_ty))
+			self._local_types[raw_ptr] = ptr_ty
 			self._local_types[dest] = ret_ty
 			return dest
 		if intrinsic in (IntrinsicKind.WRAPPING_ADD_U64, IntrinsicKind.WRAPPING_MUL_U64):
@@ -2955,7 +3069,14 @@ class HIRToMIR:
 			val = self._load_capture_from_env(slot)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
 			if local_ty is not None:
-				self._register_drop_local(local_name, local_ty)
+				# Move-captured values remain owned by the lambda env object and are
+				# released by the env drop thunk; registering an additional local drop
+				# here double-drops non-Copy captures.
+				kind = None
+				if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
+					kind = self._lambda_capture_kinds[slot]
+				if kind is not C.HCaptureKind.MOVE:
+					self._register_drop_local(local_name, local_ty)
 		self._lambda_capture_prologue_done = True
 
 	def _seed_lambda_locals_for_inference(self, lower: "HIRToMIR", block: H.HBlock) -> None:
@@ -4019,7 +4140,13 @@ class HIRToMIR:
 		# Hidden local to carry the caught Error.
 		error_local = f"__try_err{self.b.new_temp()}"
 		self.b.ensure_local(error_local)
-		self._local_types[error_local] = self._type_table.ensure_error()
+		error_ty = self._type_table.ensure_error()
+		self._local_types[error_local] = error_ty
+		self._register_drop_local(error_local, error_ty)
+		err_zero = self.b.new_temp()
+		self.b.emit(M.ZeroValue(dest=err_zero, ty=error_ty))
+		self._local_types[err_zero] = error_ty
+		self.b.emit(M.StoreLocal(local=error_local, value=err_zero))
 
 		# Prepare catch blocks.
 		catch_blocks: list[tuple[H.HTryExprArm, M.BasicBlock]] = []
@@ -4099,20 +4226,40 @@ class HIRToMIR:
 		for arm, cb in catch_blocks:
 			self.b.set_block(cb)
 			err_again = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
+			should_drop_caught_error = arm.binder is None
+			catch_error_local = error_local
+			binder_local: str | None = None
 			if arm.binder:
+				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
+				self._local_types[err_again] = error_ty
+				self._moved_locals.add(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block, arm.result)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
 				self._local_types[binder_local] = self._type_table.ensure_error()
 				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
+				catch_error_local = binder_local
+			else:
+				self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
 			prev_catch_err = self._current_catch_error
-			self._current_catch_error = error_local
+			self._current_catch_error = catch_error_local
 			self.lower_block(arm.block)
 			if arm.result is None:
 				raise RuntimeError("try/catch expression arm must produce a value")
 			arm_val = self.lower_expr(arm.result, expected_type=try_ty)
 			self._current_catch_error = prev_catch_err
+			if self.b.block.terminator is None and should_drop_caught_error:
+				err_done = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
+				self._local_types[err_done] = error_ty
+				self._moved_locals.add(error_local)
+				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
+			if self.b.block.terminator is None and binder_local is not None:
+				binder_done = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
+				self._local_types[binder_done] = error_ty
+				self._moved_locals.add(binder_local)
+				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			self.b.emit(M.StoreLocal(local=temp_local, value=arm_val))
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=join_block.name))
@@ -4180,6 +4327,21 @@ class HIRToMIR:
 			return
 		can_throw = self._fn_can_throw() is True
 		fn_is_void = self._ret_type is not None and self._type_table.is_void(self._ret_type)
+		if self._current_catch_error is not None:
+			reuses_caught = False
+			if isinstance(stmt.value, H.HVar):
+				cand = self._canonical_local(getattr(stmt.value, "binding_id", None), stmt.value.name)
+				reuses_caught = cand == self._current_catch_error
+			elif isinstance(stmt.value, H.HPlaceExpr) and not stmt.value.projections and isinstance(stmt.value.base, H.HVar):
+				cand = self._canonical_local(getattr(stmt.value.base, "binding_id", None), stmt.value.base.name)
+				reuses_caught = cand == self._current_catch_error
+			if not reuses_caught and self._current_catch_error not in self._moved_locals:
+				caught_drop = self.b.new_temp()
+				error_ty = self._type_table.ensure_error()
+				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
+				self._local_types[caught_drop] = error_ty
+				self._moved_locals.add(self._current_catch_error)
+				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
 		if not fn_is_void:
 			raise AssertionError("missing return reached MIR lowering (checker bug)")
 		if not can_throw:
@@ -4291,7 +4453,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call_with_info(stmt.expr, info)
@@ -4306,7 +4468,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call(expr=stmt.expr)
@@ -4321,7 +4483,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_invoke(expr=stmt.expr)
@@ -4345,7 +4507,7 @@ class HIRToMIR:
 				def emit_call() -> M.ValueId:
 					return fnres_val
 
-				self._lower_can_throw_call_stmt(emit_call=emit_call)
+				self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
 				return
 			if self._type_table.is_void(info.sig.user_ret_type):
 				self._lower_method_call(expr=stmt.expr)
@@ -4353,7 +4515,15 @@ class HIRToMIR:
 		if hasattr(H, "HMatchExpr") and isinstance(stmt.expr, getattr(H, "HMatchExpr")):
 			self._lower_match(stmt.expr, want_value=False)
 			return
-		self.lower_expr(stmt.expr)
+		val = self.lower_expr(stmt.expr)
+		expr_ty = self._infer_expr_type(stmt.expr)
+		if expr_ty is None:
+			return
+		if self._type_table.is_void(expr_ty):
+			return
+		if self._type_table.copy_status(expr_ty) is True:
+			return
+		self.b.emit(M.DropValue(value=val, ty=expr_ty))
 
 	def _visit_stmt_HBlock(self, stmt: H.HBlock) -> None:
 		"""
@@ -4815,6 +4985,24 @@ class HIRToMIR:
 		else:
 			# Throwing an existing Error value (e.g., from try-result sugar unwrap_err).
 			err_val = self.lower_expr(stmt.value)
+
+		# When throwing a new error from inside a catch arm, release the currently
+		# caught error unless this throw is directly reusing that same local.
+		if self._current_catch_error is not None:
+			reuses_caught = False
+			if isinstance(stmt.value, H.HVar):
+				cand = self._canonical_local(getattr(stmt.value, "binding_id", None), stmt.value.name)
+				reuses_caught = cand == self._current_catch_error
+			elif isinstance(stmt.value, H.HPlaceExpr) and not stmt.value.projections and isinstance(stmt.value.base, H.HVar):
+				cand = self._canonical_local(getattr(stmt.value.base, "binding_id", None), stmt.value.base.name)
+				reuses_caught = cand == self._current_catch_error
+			if not reuses_caught and self._current_catch_error not in self._moved_locals:
+				caught_drop = self.b.new_temp()
+				error_ty = self._type_table.ensure_error()
+				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
+				self._local_types[caught_drop] = error_ty
+				self._moved_locals.add(self._current_catch_error)
+				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
 		self._emit_captured_locals(err_val)
 
 		# If we are inside a try, route to the catch block instead of returning.
@@ -4857,6 +5045,7 @@ class HIRToMIR:
 				return
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
+			self._emit_scope_drops(scope_index=0)
 			self.b.set_terminator(M.Return(value=res_val))
 
 	def _visit_stmt_HRethrow(self, stmt: H.HRethrow) -> None:
@@ -4870,8 +5059,11 @@ class HIRToMIR:
 			return
 		if self._current_catch_error is None:
 			raise AssertionError("rethrow outside catch (checker bug)")
+		error_ty = self._type_table.ensure_error()
 		err_val = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=err_val, local=self._current_catch_error))
+		self.b.emit(M.MoveOut(dest=err_val, local=self._current_catch_error, ty=error_ty))
+		self._local_types[err_val] = error_ty
+		self._moved_locals.add(self._current_catch_error)
 		self._propagate_error(err_val)
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
@@ -4906,7 +5098,13 @@ class HIRToMIR:
 		error_local = f"__try_err{self.b.new_temp()}"
 		self.b.ensure_local(error_local)
 		# Track the hidden error slot type so downstream inference/codegen has a concrete type.
-		self._local_types[error_local] = self._type_table.ensure_error()
+		error_ty = self._type_table.ensure_error()
+		self._local_types[error_local] = error_ty
+		self._register_drop_local(error_local, error_ty)
+		err_zero = self.b.new_temp()
+		self.b.emit(M.ZeroValue(dest=err_zero, ty=error_ty))
+		self._local_types[err_zero] = error_ty
+		self.b.emit(M.StoreLocal(local=error_local, value=err_zero))
 
 		# Create catch blocks for each arm.
 		catch_blocks: list[tuple[H.HCatchArm, M.BasicBlock]] = []
@@ -4993,20 +5191,40 @@ class HIRToMIR:
 		for arm_idx, (arm, cb) in enumerate(catch_blocks):
 			self.b.set_block(cb)
 			err_again = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
+			should_drop_caught_error = arm.binder is None
+			catch_error_local = error_local
+			binder_local: str | None = None
 			if arm.binder:
+				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
+				self._local_types[err_again] = error_ty
+				self._moved_locals.add(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
 				self._local_types[binder_local] = self._type_table.ensure_error()
 				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
+				catch_error_local = binder_local
+			else:
+				self.b.emit(M.LoadLocal(dest=err_again, local=error_local))
 			code_again = self.b.new_temp()
 			self.b.emit(M.ErrorEvent(dest=code_again, error=err_again))
 			# Make the caught error available to `rethrow` inside this catch arm.
 			prev_catch_err = self._current_catch_error
-			self._current_catch_error = error_local
+			self._current_catch_error = catch_error_local
 			self.lower_block(arm.block)
 			self._current_catch_error = prev_catch_err
+			if self.b.block.terminator is None and should_drop_caught_error:
+				err_done = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
+				self._local_types[err_done] = error_ty
+				self._moved_locals.add(error_local)
+				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
+			if self.b.block.terminator is None and binder_local is not None:
+				binder_done = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
+				self._local_types[binder_done] = error_ty
+				self._moved_locals.add(binder_local)
+				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=cont_block.name))
 				cont_reachable = True
@@ -5324,7 +5542,7 @@ class HIRToMIR:
 		if param_ty is not None:
 			ptd = self._type_table.get(param_ty)
 			if ptd.kind is TypeKind.REF:
-				return self.lower_expr(arg)
+				return self.lower_expr(arg, expected_type=param_ty)
 		if isinstance(arg, H.HVar) or (hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr"))):
 			base = arg
 			if hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr")):
@@ -5347,7 +5565,7 @@ class HIRToMIR:
 						self._local_types[moved_val] = arg_ty
 						self._moved_locals.add(subj_name)
 						return moved_val
-		return self.lower_expr(arg)
+		return self.lower_expr(arg, expected_type=param_ty)
 
 	def _lower_constructor_call(self, expr: H.HCall, info: CallInfo) -> M.ValueId:
 		variant_ty = info.target.variant_type_id
@@ -5399,7 +5617,7 @@ class HIRToMIR:
 				if ordered[field_idx] is not None:
 					raise AssertionError("constructor arg mapping duplicates field (checker bug)")
 				field_ty = field_types[field_idx]
-				arg_val = self.lower_expr(arg_expr, expected_type=field_ty)
+				arg_val = self._lower_call_arg(arg_expr, field_ty)
 				if arg_val is None:
 					if self._type_table.is_void(field_ty):
 						ordered[field_idx] = None
@@ -5410,7 +5628,7 @@ class HIRToMIR:
 			if len(pos_args) != len(field_types):
 				raise AssertionError("constructor arity mismatch reached MIR lowering (checker bug)")
 			for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
-				arg_val = self.lower_expr(arg_expr, expected_type=fty)
+				arg_val = self._lower_call_arg(arg_expr, fty)
 				if arg_val is None:
 					if self._type_table.is_void(fty):
 						ordered[idx] = None
@@ -5741,6 +5959,7 @@ class HIRToMIR:
 		self,
 		*,
 		emit_call: callable,
+		ok_ty: TypeId,
 	) -> None:
 		"""
 		Lower a can-throw call in a try context as a statement (ignores ok value).
@@ -5773,6 +5992,11 @@ class HIRToMIR:
 
 		# Ok path: ignore ok payload and continue.
 		self.b.set_block(ok_block)
+		if not self._type_table.is_void(ok_ty):
+			ok_val = self.b.new_temp()
+			self.b.emit(M.ResultOk(dest=ok_val, result=fnres_val))
+			if self._type_table.copy_status(ok_ty) is not True:
+				self.b.emit(M.DropValue(value=ok_val, ty=ok_ty))
 		self.b.set_terminator(M.Goto(target=join_block.name))
 
 		# Join: continue lowering subsequent statements in the surrounding block.

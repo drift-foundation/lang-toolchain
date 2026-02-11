@@ -163,6 +163,7 @@ pub struct FutureGroup<T> {
 	items: Array<Future<T>>
 }
 
+
 pub fn executor_policy_builder() nothrow -> ExecutorPolicyBuilder {
 	return ExecutorPolicyBuilder(
 		min_threads = 1,
@@ -412,6 +413,12 @@ implement<T> VirtualThread<T> {
 		if self.cancelled {
 			thread.vt_join(self.handle);
 			self.joined = true;
+			unsafe {
+				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
+				val cap = mem.rawbuffer_cap<type T>(&self.result);
+				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
+				mem.dealloc<type T>(buf);
+			}
 			return core.Result::Err(ConcurrencyError::Cancelled());
 		}
 		thread.vt_join(self.handle);
@@ -445,8 +452,14 @@ implement<T> VirtualThread<T> {
 			}
 		}
 		if self.cancelled {
-			thread.vt_join_timeout(self.handle, d.millis);
+			thread.vt_join(self.handle);
 			self.joined = true;
+			unsafe {
+				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
+				val cap = mem.rawbuffer_cap<type T>(&self.result);
+				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
+				mem.dealloc<type T>(buf);
+			}
 			return core.Result::Err(ConcurrencyError::Cancelled());
 		}
 		var done = thread.vt_is_completed(self.handle);
@@ -486,6 +499,23 @@ implement<T> VirtualThread<T> {
 			self.cancelled = true;
 		}
 		return;
+	}
+}
+
+implement<T> core.Destructible for VirtualThread<T> {
+	pub fn destroy(var self: VirtualThread<T>) nothrow -> Void {
+		if self.joined {
+			return;
+		}
+		if self.handle != 0 {
+			thread.vt_drop(self.handle);
+		}
+		unsafe {
+			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
+			val cap = mem.rawbuffer_cap<type T>(&self.result);
+			var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
+			mem.dealloc<type T>(buf);
+		}
 	}
 }
 

@@ -191,29 +191,41 @@ make-example EXAMPLE:
 	set -euo pipefail
 	set -x
 	example="{{EXAMPLE}}"
+	example_dir="examples/${example}"
 	out_dir="build/examples/${example}"
 	mkdir -p "${out_dir}"
-	if [[ -f "examples/${example}/server.drift" ]] && [[ -f "examples/${example}/client.drift" ]]; then
-		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "examples/${example}/server.drift" -o "${out_dir}/server"
-		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "examples/${example}/client.drift" -o "${out_dir}/client"
-	else
+	if [[ -f "${example_dir}/server.drift" ]] && [[ -f "${example_dir}/client.drift" ]]; then
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "${example_dir}/server.drift" -o "${out_dir}/server"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "${example_dir}/client.drift" -o "${out_dir}/client"
+	elif [[ -f "${example_dir}/main.drift" ]]; then
 		out_bin="${out_dir}/example_${example}"
 		extra_args=()
 		if [[ "${example}" == debug_* ]]; then
 			extra_args+=(--debug-info)
 		fi
-		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc "${extra_args[@]}" --stdlib-root stdlib "examples/${example}/main.drift" -o "${out_bin}"
+		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc "${extra_args[@]}" --stdlib-root stdlib "${example_dir}/main.drift" -o "${out_bin}"
+	else
+		shopt -s nullglob
+		files=("${example_dir}"/*.drift)
+		if [[ ${#files[@]} -eq 0 ]]; then
+			echo "no drift sources found in ${example_dir}" >&2
+			exit 1
+		fi
+		for src in "${files[@]}"; do
+			name="$(basename "${src}" .drift)"
+			PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib "${src}" -o "${out_dir}/${name}"
+		done
 	fi
 
 make-examples:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	set -x
-	just make-example tcp_client_server
-	just make-example file_io
-	just make-example udp_ping
-	just make-example tcp_echo
-	just make-example debug_1
+	shopt -s nullglob
+	for d in examples/*; do
+		[[ -d "${d}" ]] || continue
+		just make-example "$(basename "${d}")"
+	done
 
 stage-for-review:
 	#!/usr/bin/env bash

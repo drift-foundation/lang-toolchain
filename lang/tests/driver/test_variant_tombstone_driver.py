@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 
 
@@ -29,11 +27,10 @@ def _resolve(tmp_path: Path, content: str) -> None:
 	type_table.ensure_instantiated(base_id, [type_table.ensure_string()])
 
 
-def test_droppable_variant_without_tombstone_rejected(tmp_path: Path) -> None:
-	with pytest.raises(ValueError, match="requires tombstone_ctor"):
-		_resolve(
-			tmp_path,
-			"""
+def test_droppable_variant_without_tombstone_is_allowed(tmp_path: Path) -> None:
+	_resolve(
+		tmp_path,
+		"""
 module m_main
 
 variant Maybe<T> {
@@ -47,4 +44,4 @@ fn main() nothrow -> Int {
 	return 0;
 }
 """,
-		)
+	)

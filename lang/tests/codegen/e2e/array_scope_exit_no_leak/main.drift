@@ -1,0 +1,10 @@
+fn main() nothrow -> Int {
+    var xs: Array<Int> = [];
+    xs.push(1);
+    xs.push(2);
+    xs.push(3);
+    if xs.len != 3 {
+        return 1;
+    }
+    return 0;
+}

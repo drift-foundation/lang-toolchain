@@ -1,0 +1,17 @@
+import std.core as core;
+import std.io as io;
+
+fn main() nothrow -> Int {
+	val r: core.Result<Int, core.Error> = core.Result::Ok(1);
+	match r {
+		Ok(v) => {
+			var buf = io.buffer(1);
+			io.buffer_write(&mut buf, 0, cast<Byte>(65));
+			if v == 2 {
+				return 1;
+			}
+		},
+		default => {}
+	}
+	return 0;
+}

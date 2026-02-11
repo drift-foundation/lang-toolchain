@@ -1,0 +1,7 @@
+{
+  "description": "e2e: HashMap<String, JsonNode> with dynamic strings drops without leaks",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "alloc_track_leak": true
+}

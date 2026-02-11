@@ -1,0 +1,12 @@
+module m
+
+import std.err as err;
+
+fn fail() -> Int {
+	throw err:ResultError(dv = 7);
+}
+
+fn main() nothrow -> Int {
+	val v = try fail() catch err:ResultError(_e) { 0 } catch { 3 };
+	return v;
+}

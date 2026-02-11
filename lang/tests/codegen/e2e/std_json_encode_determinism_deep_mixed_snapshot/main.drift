@@ -1,0 +1,134 @@
+module m
+
+import std.console as console;
+import std.containers as containers;
+import std.json as json;
+
+fn build_one() -> json.JsonNode {
+	var tags1: Array<json.JsonNode> = [];
+	tags1.push(json.JsonNode::String("core"));
+	tags1.push(json.JsonNode::String("json"));
+	var empty_nodes1: Array<json.JsonNode> = [];
+
+	var profile = containers.hash_map<type String, json.JsonNode>();
+	profile.insert("name", json.JsonNode::String("Ada"));
+	profile.insert("age", json.JsonNode::Number("30"));
+	profile.insert("active", json.JsonNode::Bool(true));
+
+	var attrs1 = containers.hash_map<type String, json.JsonNode>();
+	attrs1.insert("tags", json.JsonNode::Array(move tags1));
+	attrs1.insert("profile", json.JsonNode::Object(move profile));
+	attrs1.insert("empty_obj", json.JsonNode::Object(containers.hash_map<type String, json.JsonNode>()));
+	attrs1.insert("empty_arr", json.JsonNode::Array(move empty_nodes1));
+
+	var e1 = containers.hash_map<type String, json.JsonNode>();
+	e1.insert("tm", json.JsonNode::String("2026-02-11T00:00:00.000Z"));
+	e1.insert("ev", json.JsonNode::String("login"));
+	e1.insert("attrs", json.JsonNode::Object(move attrs1));
+
+	var attrs2 = containers.hash_map<type String, json.JsonNode>();
+	attrs2.insert("ok", json.JsonNode::Bool(false));
+	attrs2.insert("attempt", json.JsonNode::Number("2"));
+
+	var e2 = containers.hash_map<type String, json.JsonNode>();
+	e2.insert("ev", json.JsonNode::String("auth-failed"));
+	e2.insert("attrs", json.JsonNode::Object(move attrs2));
+	e2.insert("tm", json.JsonNode::String("2026-02-11T00:00:01.000Z"));
+
+	var events: Array<json.JsonNode> = [];
+	events.push(json.JsonNode::Object(move e1));
+	events.push(json.JsonNode::Object(move e2));
+
+	var counters = containers.hash_map<type String, json.JsonNode>();
+	counters.insert("ok", json.JsonNode::Number("9"));
+	counters.insert("errors", json.JsonNode::Number("1"));
+
+	var state = containers.hash_map<type String, json.JsonNode>();
+	state.insert("last", json.JsonNode::Null());
+	state.insert("counters", json.JsonNode::Object(move counters));
+
+	var meta = containers.hash_map<type String, json.JsonNode>();
+	meta.insert("module", json.JsonNode::String("m"));
+	meta.insert("build", json.JsonNode::String("dbg"));
+	meta.insert("commit", json.JsonNode::String("abc123"));
+
+	var root = containers.hash_map<type String, json.JsonNode>();
+	root.insert("z", json.JsonNode::String("done"));
+	root.insert("events", json.JsonNode::Array(move events));
+	root.insert("meta", json.JsonNode::Object(move meta));
+	root.insert("state", json.JsonNode::Object(move state));
+	return json.JsonNode::Object(move root);
+}
+
+fn build_two() -> json.JsonNode {
+	var tags2: Array<json.JsonNode> = [];
+	tags2.push(json.JsonNode::String("core"));
+	tags2.push(json.JsonNode::String("json"));
+	var empty_nodes2: Array<json.JsonNode> = [];
+
+	var profile = containers.hash_map<type String, json.JsonNode>();
+	profile.insert("active", json.JsonNode::Bool(true));
+	profile.insert("age", json.JsonNode::Number("30"));
+	profile.insert("name", json.JsonNode::String("Ada"));
+
+	var attrs1 = containers.hash_map<type String, json.JsonNode>();
+	attrs1.insert("empty_arr", json.JsonNode::Array(move empty_nodes2));
+	attrs1.insert("empty_obj", json.JsonNode::Object(containers.hash_map<type String, json.JsonNode>()));
+	attrs1.insert("profile", json.JsonNode::Object(move profile));
+	attrs1.insert("tags", json.JsonNode::Array(move tags2));
+
+	var e1 = containers.hash_map<type String, json.JsonNode>();
+	e1.insert("attrs", json.JsonNode::Object(move attrs1));
+	e1.insert("ev", json.JsonNode::String("login"));
+	e1.insert("tm", json.JsonNode::String("2026-02-11T00:00:00.000Z"));
+
+	var attrs2 = containers.hash_map<type String, json.JsonNode>();
+	attrs2.insert("attempt", json.JsonNode::Number("2"));
+	attrs2.insert("ok", json.JsonNode::Bool(false));
+
+	var e2 = containers.hash_map<type String, json.JsonNode>();
+	e2.insert("tm", json.JsonNode::String("2026-02-11T00:00:01.000Z"));
+	e2.insert("attrs", json.JsonNode::Object(move attrs2));
+	e2.insert("ev", json.JsonNode::String("auth-failed"));
+
+	var events: Array<json.JsonNode> = [];
+	events.push(json.JsonNode::Object(move e1));
+	events.push(json.JsonNode::Object(move e2));
+
+	var counters = containers.hash_map<type String, json.JsonNode>();
+	counters.insert("errors", json.JsonNode::Number("1"));
+	counters.insert("ok", json.JsonNode::Number("9"));
+
+	var state = containers.hash_map<type String, json.JsonNode>();
+	state.insert("counters", json.JsonNode::Object(move counters));
+	state.insert("last", json.JsonNode::Null());
+
+	var meta = containers.hash_map<type String, json.JsonNode>();
+	meta.insert("commit", json.JsonNode::String("abc123"));
+	meta.insert("module", json.JsonNode::String("m"));
+	meta.insert("build", json.JsonNode::String("dbg"));
+
+	var root = containers.hash_map<type String, json.JsonNode>();
+	root.insert("state", json.JsonNode::Object(move state));
+	root.insert("z", json.JsonNode::String("done"));
+	root.insert("meta", json.JsonNode::Object(move meta));
+	root.insert("events", json.JsonNode::Array(move events));
+	return json.JsonNode::Object(move root);
+}
+
+fn run() -> Int {
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = b.build();
+	val s1 = json.encode_with_config(&build_one(), &cfg);
+	val s2 = json.encode_with_config(&build_two(), &cfg);
+	if s1 != s2 {
+		return 10;
+	}
+	console.println(s1);
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

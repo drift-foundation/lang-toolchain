@@ -1,0 +1,32 @@
+module m
+
+import std.containers as containers;
+
+exception Boom();
+
+type AliasErr = Error;
+
+variant Wrapper {
+	Ok,
+	Fail(err: AliasErr),
+}
+
+fn make() nothrow -> Wrapper {
+	try {
+		throw Boom();
+	} catch e {
+		return Wrapper::Fail(e);
+	}
+}
+
+fn run() -> Int {
+	var m = containers.hash_map<type Int, Wrapper>();
+	m.insert(1, make());
+	m.insert(2, make());
+	m.clear();
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

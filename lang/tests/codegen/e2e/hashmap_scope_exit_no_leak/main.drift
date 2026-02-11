@@ -1,0 +1,17 @@
+module m
+
+import std.containers as containers;
+
+fn run() -> Int {
+    var hm = containers.hash_map<type String, Int>();
+    hm.insert("a", 1);
+    hm.insert("b", 2);
+    if hm.len() != 2 {
+        return 1;
+    }
+    return 0;
+}
+
+fn main() nothrow -> Int {
+    return try run() catch { 99 };
+}

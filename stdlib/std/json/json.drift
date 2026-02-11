@@ -4,8 +4,8 @@ import std.core as core;
 import std.containers as containers;
 import std.core.hash as hash;
 import std.parse as parse_std;
-import std.io as io;
 import std.iter as iter;
+import std.mem as mem;
 
 use trait iter.SinglePassIterator;
 
@@ -402,9 +402,13 @@ fn _skip_ws(text: &String, idx: &mut Int) nothrow -> Void {
 }
 
 fn _byte_to_string(b: Byte) nothrow -> String {
-	var out = io.buffer(1);
-	io.buffer_write(&mut out, 0, b);
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), io.buffer_len(&out));
+	unsafe {
+		var raw = mem.alloc_uninit<type Byte>(1);
+		mem.write<type Byte>(&mut raw, 0, b);
+		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.dealloc<type Byte>(move raw);
+		return s;
+	}
 }
 
 fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
@@ -412,14 +416,18 @@ fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
 		return "";
 	}
 	val n = end - start;
-	var out = io.buffer(n);
-	var i = 0;
-	while i < n {
-		val b = core.string_byte_at(text, start + i);
-		io.buffer_write(&mut out, i, b);
-		i = i + 1;
+	unsafe {
+		var raw = mem.alloc_uninit<type Byte>(n);
+		var i = 0;
+		while i < n {
+			val b = core.string_byte_at(text, start + i);
+			mem.write<type Byte>(&mut raw, i, b);
+			i = i + 1;
+		}
+		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), n);
+		mem.dealloc<type Byte>(move raw);
+		return s;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), io.buffer_len(&out));
 }
 
 fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) nothrow -> core.Result<JsonNode, JsonErrorData> {

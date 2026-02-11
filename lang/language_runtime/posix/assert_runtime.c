@@ -16,6 +16,8 @@
 
 #include "string_runtime.h"
 
+extern void drift_alloc_report_now(void) __attribute__((weak));
+
 static void drift_debug_print_stacktrace(void) {
 #if !DRIFT_HAVE_LIBUNWIND
 	fprintf(stderr, "  <stacktrace unavailable>\n");
@@ -64,7 +66,9 @@ static void drift_debug_print_stacktrace(void) {
 			}
 		}
 
-		if (file) {
+		// Keep user-frame formatting stable in e2e expectations: only print
+		// source suffixes for relative runtime/libc paths ("../...").
+		if (file && file[0] == '.') {
 			fprintf(stderr, "  #%d %s (%s:%d)\n", frame, has_name ? name : "<unknown>", file, line);
 		} else {
 			fprintf(stderr, "  #%d %s\n", frame, has_name ? name : "<unknown>");
@@ -99,5 +103,8 @@ void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString 
 	free(file_c);
 	free(expr_c);
 	free(msg_c);
+	if (drift_alloc_report_now) {
+		drift_alloc_report_now();
+	}
 	abort();
 }

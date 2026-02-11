@@ -1,0 +1,33 @@
+module main
+
+struct Point {
+	x: Int,
+	y: Int,
+	label: String,
+}
+
+variant Choice {
+	None,
+	IntVal(value: Int),
+	PointVal(p: Point),
+}
+
+fn main() nothrow -> Int {
+	val a = 5;
+	val p = Point(x = 7, y = a * 3, label = "pt");
+	val v1 = Choice::IntVal(a);
+	val v2 = Choice::PointVal(p);
+	val v3 = Choice::None();
+	match v1 {
+		IntVal(value) => { if value != 5 { return 1; } },
+		default => { return 2; }
+	}
+	match v2 {
+		PointVal(pp) => { if pp.x != 7 { return 3; } },
+		default => { return 4; }
+	}
+	match v3 {
+		None => { return 0; },
+		default => { return 5; }
+	}
+}

@@ -171,6 +171,25 @@ struct DriftError* drift_error_new(drift_error_code_t code, struct DriftString e
     return err;
 }
 
+void drift_error_release(struct DriftError* err) {
+    if (!err) {
+        return;
+    }
+    for (size_t i = 0; i < err->frame_count; i++) {
+        struct DriftCtxFrame* frame = &err->frames[i];
+        free(frame->locals);
+        frame->locals = NULL;
+        frame->local_count = 0;
+    }
+    free(err->frames);
+    err->frames = NULL;
+    err->frame_count = 0;
+    free(err->attrs);
+    err->attrs = NULL;
+    err->attr_count = 0;
+    free(err);
+}
+
 void drift_error_raise(struct DriftError* err) {
     (void)err;
     abort();

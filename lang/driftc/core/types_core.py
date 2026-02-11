@@ -238,6 +238,8 @@ class VariantInstance:
 	type_args: list[TypeId]
 	arms: list[VariantArmInstance]
 	arms_by_name: dict[str, VariantArmInstance]
+	internal_tombstone_ctor: str | None = None
+	internal_tombstone_tag: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1335,27 +1337,35 @@ class TypeTable:
 			arms.append(arm_inst)
 			by_name[arm.name] = arm_inst
 		needs_drop = any(self._type_needs_drop(fty) for arm in arms for fty in arm.field_types)
+		internal_tombstone_ctor: str | None = None
+		internal_tombstone_tag: int | None = None
 		if needs_drop:
 			ctor = schema.tombstone_ctor
-			if not ctor:
-				raise ValueError(f"variant instantiation requires tombstone_ctor for variant '{schema.name}'")
-			tombstone_arm = by_name.get(ctor)
-			if tombstone_arm is None:
-				raise ValueError(f"tombstone_ctor '{ctor}' missing in variant '{schema.name}'")
-			if tombstone_arm.field_types:
-				raise ValueError(
-					f"tombstone_ctor '{ctor}' for variant '{schema.name}' must have no payload"
-				)
-			for fty in tombstone_arm.field_types:
-				if self._type_needs_drop(fty):
+			if ctor:
+				tombstone_arm = by_name.get(ctor)
+				if tombstone_arm is None:
+					raise ValueError(f"tombstone_ctor '{ctor}' missing in variant '{schema.name}'")
+				if tombstone_arm.field_types:
 					raise ValueError(
-						f"tombstone_ctor '{ctor}' for variant '{schema.name}' must be non-droppable"
+						f"tombstone_ctor '{ctor}' for variant '{schema.name}' must have no payload"
 					)
+				for fty in tombstone_arm.field_types:
+					if self._type_needs_drop(fty):
+						raise ValueError(
+							f"tombstone_ctor '{ctor}' for variant '{schema.name}' must be non-droppable"
+						)
+				internal_tombstone_ctor = ctor
+				internal_tombstone_tag = tombstone_arm.tag
+			else:
+				internal_tombstone_ctor = "__drift_internal_tombstone"
+				internal_tombstone_tag = len(arms)
 		self.variant_instances[inst_id] = VariantInstance(
 			base_id=base_id,
 			type_args=list(type_args),
 			arms=arms,
 			arms_by_name=by_name,
+			internal_tombstone_ctor=internal_tombstone_ctor,
+			internal_tombstone_tag=internal_tombstone_tag,
 		)
 
 	def _type_needs_drop(self, tid: TypeId) -> bool:

@@ -121,6 +121,13 @@ implement<T> iter.Iterable<&mut Array<T>, &mut T, ArrayBorrowMutIter<T>> for &mu
 	}
 }
 
+implement<T> core.Destructible for Array<T> {
+	pub fn destroy(var self: Array<T>) nothrow -> Void {
+		self.clear();
+		self.shrink_to_fit();
+	}
+}
+
 implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {
 	pub fn next(self: &mut ArrayBorrowIter<T>) -> Optional<&T> {
 		if self.arr.gen != self.gen_snapshot {
@@ -319,7 +326,7 @@ implement<T> Deque<T> {
 			while i < self.len {
 				val phys = (self.head + i) % cap0;
 				var v = mem.read<type T>(&mut self.buf, phys);
-				mem.write<type T>(&mut new_buf, i, v);
+				mem.write<type T>(&mut new_buf, i, move v);
 				i = i + 1;
 			}
 			var old = mem.replace<type mem.RawBuffer<T> >(&mut self.buf, new_buf);
@@ -334,7 +341,7 @@ implement<T> Deque<T> {
 		self.ensure_capacity(needed);
 		val cap = self.cap();
 		val phys = (self.head + self.len) % cap;
-		unsafe { mem.write<type T>(&mut self.buf, phys, value); }
+		unsafe { mem.write<type T>(&mut self.buf, phys, move value); }
 		self.len = self.len + 1;
 		self.gen = self.gen + 1;
 	}
@@ -344,7 +351,7 @@ implement<T> Deque<T> {
 		self.ensure_capacity(needed);
 		val cap = self.cap();
 		self.head = (self.head - 1 + cap) % cap;
-		unsafe { mem.write<type T>(&mut self.buf, self.head, value); }
+		unsafe { mem.write<type T>(&mut self.buf, self.head, move value); }
 		self.len = self.len + 1;
 		self.gen = self.gen + 1;
 	}
@@ -433,6 +440,21 @@ implement<T> Deque<T> {
 			mem.write<type T>(&mut self.buf, pi, b);
 			mem.write<type T>(&mut self.buf, pj, a);
 		}
+	}
+}
+
+implement<T> core.Destructible for Deque<T> {
+	pub fn destroy(var self: Deque<T>) nothrow -> Void {
+		while true {
+			match self.pop_front() {
+				Some(_v) => { },
+				None => { break; }
+			}
+		}
+		val ptr = mem.rawbuffer_ptr<type T>(&self.buf);
+		val cap = mem.rawbuffer_cap<type T>(&self.buf);
+		var tmp = mem.rawbuffer_from_parts<type T>(ptr, cap);
+		mem.dealloc<type T>(tmp);
 	}
 }
 
@@ -590,18 +612,18 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return self.len == 0;
 	}
 
-	fn cap(self: &HashMapCore<K, V, B>) -> Int {
+	fn cap(self: &HashMapCore<K, V, B>) nothrow -> Int {
 		return mem.capacity(&self.states);
 	}
 
-	fn state_at(self: &HashMapCore<K, V, B>, i: Int) -> Int {
+	fn state_at(self: &HashMapCore<K, V, B>, i: Int) nothrow -> Int {
 		unsafe {
 			val s = mem.ptr_at_ref<type Int>(&self.states, i);
 			return *s;
 		}
 	}
 
-	fn set_state(self: &mut HashMapCore<K, V, B>, i: Int, state: Int) -> Void {
+	fn set_state(self: &mut HashMapCore<K, V, B>, i: Int, state: Int) nothrow -> Void {
 		unsafe { mem.write<type Int>(&mut self.states, i, state); }
 	}
 
@@ -620,35 +642,35 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return cast<Int>(idx);
 	}
 
-	fn key_ref(self: &HashMapCore<K, V, B>, i: Int) -> &K {
+	fn key_ref(self: &HashMapCore<K, V, B>, i: Int) nothrow -> &K {
 		unsafe {
 			val slot = mem.ptr_at_ref<type mem.MaybeUninit<K>>(&self.keys, i);
 			return mem.maybe_assume_init_ref<type K>(slot);
 		}
 	}
 
-	fn value_ref(self: &HashMapCore<K, V, B>, i: Int) -> &V {
+	fn value_ref(self: &HashMapCore<K, V, B>, i: Int) nothrow -> &V {
 		unsafe {
 			val slot = mem.ptr_at_ref<type mem.MaybeUninit<V>>(&self.values, i);
 			return mem.maybe_assume_init_ref<type V>(slot);
 		}
 	}
 
-	fn value_mut(self: &mut HashMapCore<K, V, B>, i: Int) -> &mut V {
+	fn value_mut(self: &mut HashMapCore<K, V, B>, i: Int) nothrow -> &mut V {
 		unsafe {
 			val slot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(&mut self.values, i);
 			return mem.maybe_assume_init_mut<type V>(slot);
 		}
 	}
 
-	fn read_key(self: &mut HashMapCore<K, V, B>, i: Int) -> K {
+	fn read_key(self: &mut HashMapCore<K, V, B>, i: Int) nothrow -> K {
 		unsafe {
 			val slot = mem.ptr_at_mut<type mem.MaybeUninit<K>>(&mut self.keys, i);
 			return mem.maybe_assume_init_read<type K>(slot);
 		}
 	}
 
-	fn read_value(self: &mut HashMapCore<K, V, B>, i: Int) -> V {
+	fn read_value(self: &mut HashMapCore<K, V, B>, i: Int) nothrow -> V {
 		unsafe {
 			val slot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(&mut self.values, i);
 			return mem.maybe_assume_init_read<type V>(slot);
@@ -795,14 +817,14 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.gen = self.gen + 1;
 	}
 
-	pub fn clear(self: &mut HashMapCore<K, V, B>) -> Void {
+	pub fn clear(self: &mut HashMapCore<K, V, B>) nothrow -> Void {
 		val cap = self.cap();
 		var i = 0;
 		while i < cap {
 			val state = self.state_at(i);
 			if state == HASH_MAP_STATE_FULL {
-				var _k = self.read_key(i);
-				var _v = self.read_value(i);
+				core.drop_value<type K>(self.read_key(i));
+				core.drop_value<type V>(self.read_value(i));
 			}
 			self.set_state(i, HASH_MAP_STATE_EMPTY);
 			i = i + 1;
@@ -864,6 +886,25 @@ implement<K, V, B> HashMapCore<K, V, B>
 	}
 }
 
+implement<K, V, B> core.Destructible for HashMapCore<K, V, B>
+	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
+	pub fn destroy(var self: HashMapCore<K, V, B>) nothrow -> Void {
+		self.clear();
+		val kptr = mem.rawbuffer_ptr<type mem.MaybeUninit<K>>(&self.keys);
+		val kcap = mem.rawbuffer_cap<type mem.MaybeUninit<K>>(&self.keys);
+		var ktmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<K>>(kptr, kcap);
+		mem.dealloc<type mem.MaybeUninit<K>>(ktmp);
+		val vptr = mem.rawbuffer_ptr<type mem.MaybeUninit<V>>(&self.values);
+		val vcap = mem.rawbuffer_cap<type mem.MaybeUninit<V>>(&self.values);
+		var vtmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<V>>(vptr, vcap);
+		mem.dealloc<type mem.MaybeUninit<V>>(vtmp);
+		val sptr = mem.rawbuffer_ptr<type Int>(&self.states);
+		val scap = mem.rawbuffer_cap<type Int>(&self.states);
+		var stmp = mem.rawbuffer_from_parts<type Int>(sptr, scap);
+		mem.dealloc<type Int>(stmp);
+	}
+}
+
 implement<K, V, B> iter.SinglePassIterator<HashMapItemRef<K, V>> for HashMapIter<K, V, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
 	pub fn next(self: &mut HashMapIter<K, V, B>) -> Optional<HashMapItemRef<K, V>> {
@@ -920,7 +961,7 @@ implement<K, B> HashSetCore<K, B>
 		return self.map.is_empty();
 	}
 
-	pub fn clear(self: &mut HashSetCore<K, B>) -> Void {
+	pub fn clear(self: &mut HashSetCore<K, B>) nothrow -> Void {
 		self.map.clear();
 	}
 
@@ -947,6 +988,25 @@ implement<K, B> HashSetCore<K, B>
 	pub fn iter(self: &HashSetCore<K, B>) -> HashSetIter<K, B> {
 		val inner = self.map.iter();
 		return HashSetIter<type K, B>(inner = inner);
+	}
+}
+
+implement<K, B> core.Destructible for HashSetCore<K, B>
+	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
+	pub fn destroy(var self: HashSetCore<K, B>) nothrow -> Void {
+		self.map.clear();
+		val kptr = mem.rawbuffer_ptr<type mem.MaybeUninit<K>>(&self.map.keys);
+		val kcap = mem.rawbuffer_cap<type mem.MaybeUninit<K>>(&self.map.keys);
+		var ktmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<K>>(kptr, kcap);
+		mem.dealloc<type mem.MaybeUninit<K>>(ktmp);
+		val vptr = mem.rawbuffer_ptr<type mem.MaybeUninit<Bool>>(&self.map.values);
+		val vcap = mem.rawbuffer_cap<type mem.MaybeUninit<Bool>>(&self.map.values);
+		var vtmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<Bool>>(vptr, vcap);
+		mem.dealloc<type mem.MaybeUninit<Bool>>(vtmp);
+		val sptr = mem.rawbuffer_ptr<type Int>(&self.map.states);
+		val scap = mem.rawbuffer_cap<type Int>(&self.map.states);
+		var stmp = mem.rawbuffer_from_parts<type Int>(sptr, scap);
+		mem.dealloc<type Int>(stmp);
 	}
 }
 
@@ -1027,93 +1087,93 @@ pub fn tree_map<K, V>() -> TreeMap<K, V> {
 }
 
 implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
-	fn cap(self: &TreeMap<K, V>) -> Int {
+	fn cap(self: &TreeMap<K, V>) nothrow -> Int {
 		return mem.capacity(&self.lefts);
 	}
 
-	fn key_ref(self: &TreeMap<K, V>, idx: Int) -> &K {
+	fn key_ref(self: &TreeMap<K, V>, idx: Int) nothrow -> &K {
 		unsafe { return mem.ptr_at_ref<type K>(&self.keys, idx); }
 	}
 
-	fn value_ref(self: &TreeMap<K, V>, idx: Int) -> &V {
+	fn value_ref(self: &TreeMap<K, V>, idx: Int) nothrow -> &V {
 		unsafe { return mem.ptr_at_ref<type V>(&self.values, idx); }
 	}
 
-	fn value_mut(self: &mut TreeMap<K, V>, idx: Int) -> &mut V {
+	fn value_mut(self: &mut TreeMap<K, V>, idx: Int) nothrow -> &mut V {
 		unsafe { return mem.ptr_at_mut<type V>(&mut self.values, idx); }
 	}
 
-	fn read_key(self: &mut TreeMap<K, V>, idx: Int) -> K {
+	fn read_key(self: &mut TreeMap<K, V>, idx: Int) nothrow -> K {
 		unsafe { return mem.read<type K>(&mut self.keys, idx); }
 	}
 
-	fn read_value(self: &mut TreeMap<K, V>, idx: Int) -> V {
+	fn read_value(self: &mut TreeMap<K, V>, idx: Int) nothrow -> V {
 		unsafe { return mem.read<type V>(&mut self.values, idx); }
 	}
 
-	fn left_at(self: &TreeMap<K, V>, idx: Int) -> Int {
+	fn left_at(self: &TreeMap<K, V>, idx: Int) nothrow -> Int {
 		unsafe {
 			val slot = mem.ptr_at_ref<type Int>(&self.lefts, idx);
 			return *slot;
 		}
 	}
 
-	fn right_at(self: &TreeMap<K, V>, idx: Int) -> Int {
+	fn right_at(self: &TreeMap<K, V>, idx: Int) nothrow -> Int {
 		unsafe {
 			val slot = mem.ptr_at_ref<type Int>(&self.rights, idx);
 			return *slot;
 		}
 	}
 
-	fn parent_at(self: &TreeMap<K, V>, idx: Int) -> Int {
+	fn parent_at(self: &TreeMap<K, V>, idx: Int) nothrow -> Int {
 		unsafe {
 			val slot = mem.ptr_at_ref<type Int>(&self.parents, idx);
 			return *slot;
 		}
 	}
 
-	fn red_at(self: &TreeMap<K, V>, idx: Int) -> Bool {
+	fn red_at(self: &TreeMap<K, V>, idx: Int) nothrow -> Bool {
 		unsafe {
 			val slot = mem.ptr_at_ref<type Bool>(&self.reds, idx);
 			return *slot;
 		}
 	}
 
-	fn set_left_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) -> Void {
+	fn set_left_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) nothrow -> Void {
 		unsafe { mem.write<type Int>(&mut self.lefts, idx, value); }
 	}
 
-	fn set_right_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) -> Void {
+	fn set_right_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) nothrow -> Void {
 		unsafe { mem.write<type Int>(&mut self.rights, idx, value); }
 	}
 
-	fn set_parent_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) -> Void {
+	fn set_parent_at(self: &mut TreeMap<K, V>, idx: Int, value: Int) nothrow -> Void {
 		unsafe { mem.write<type Int>(&mut self.parents, idx, value); }
 	}
 
-	fn set_red_at(self: &mut TreeMap<K, V>, idx: Int, value: Bool) -> Void {
+	fn set_red_at(self: &mut TreeMap<K, V>, idx: Int, value: Bool) nothrow -> Void {
 		unsafe { mem.write<type Bool>(&mut self.reds, idx, value); }
 	}
 
-	fn free_next_at(self: &TreeMap<K, V>, idx: Int) -> Int {
+	fn free_next_at(self: &TreeMap<K, V>, idx: Int) nothrow -> Int {
 		unsafe {
 			val slot = mem.ptr_at_ref<type Int>(&self.free_next, idx);
 			return *slot;
 		}
 	}
 
-	fn set_free_next(self: &mut TreeMap<K, V>, idx: Int, next: Int) -> Void {
+	fn set_free_next(self: &mut TreeMap<K, V>, idx: Int, next: Int) nothrow -> Void {
 		unsafe { mem.write<type Int>(&mut self.free_next, idx, next); }
 	}
 
-	fn is_red(self: &TreeMap<K, V>, node: Int) -> Bool {
+	fn is_red(self: &TreeMap<K, V>, node: Int) nothrow -> Bool {
 		if node < 0 {
 			return false;
 		}
 		return self.red_at(node);
 	}
 
-	fn set_red(self: &mut TreeMap<K, V>, node: Int, red: Bool) -> Void {
+	fn set_red(self: &mut TreeMap<K, V>, node: Int, red: Bool) nothrow -> Void {
 		if node < 0 {
 			return;
 		}
@@ -1332,7 +1392,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return idx;
 	}
 
-	fn free_node(self: &mut TreeMap<K, V>, idx: Int) -> V {
+	fn free_node(self: &mut TreeMap<K, V>, idx: Int) nothrow -> V {
 		val _k = self.read_key(idx);
 		val v = self.read_value(idx);
 		unsafe { mem.write<type Int>(&mut self.free_next, idx, self.free_head); }
@@ -1645,7 +1705,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return self.len == 0;
 	}
 
-	pub fn clear(self: &mut TreeMap<K, V>) -> Void {
+	pub fn clear(self: &mut TreeMap<K, V>) nothrow -> Void {
 		var stack: Array<Int> = [];
 		if self.root >= 0 {
 			stack.push(self.root);
@@ -1663,7 +1723,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 					if r >= 0 {
 						stack.push(r);
 					}
-					val _v = self.free_node(i);
+					core.drop_value<type V>(self.free_node(i));
 				}
 			}
 		}
@@ -1775,6 +1835,40 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 	}
 }
 
+implement<K, V> core.Destructible for TreeMap<K, V> require K is cmp.Comparable {
+	pub fn destroy(var self: TreeMap<K, V>) nothrow -> Void {
+		self.clear();
+		val kptr = mem.rawbuffer_ptr<type K>(&self.keys);
+		val kcap = mem.rawbuffer_cap<type K>(&self.keys);
+		var ktmp = mem.rawbuffer_from_parts<type K>(kptr, kcap);
+		mem.dealloc<type K>(ktmp);
+		val vptr = mem.rawbuffer_ptr<type V>(&self.values);
+		val vcap = mem.rawbuffer_cap<type V>(&self.values);
+		var vtmp = mem.rawbuffer_from_parts<type V>(vptr, vcap);
+		mem.dealloc<type V>(vtmp);
+		val lptr = mem.rawbuffer_ptr<type Int>(&self.lefts);
+		val lcap = mem.rawbuffer_cap<type Int>(&self.lefts);
+		var ltmp = mem.rawbuffer_from_parts<type Int>(lptr, lcap);
+		mem.dealloc<type Int>(ltmp);
+		val rptr = mem.rawbuffer_ptr<type Int>(&self.rights);
+		val rcap = mem.rawbuffer_cap<type Int>(&self.rights);
+		var rtmp = mem.rawbuffer_from_parts<type Int>(rptr, rcap);
+		mem.dealloc<type Int>(rtmp);
+		val pptr = mem.rawbuffer_ptr<type Int>(&self.parents);
+		val pcap = mem.rawbuffer_cap<type Int>(&self.parents);
+		var ptmp = mem.rawbuffer_from_parts<type Int>(pptr, pcap);
+		mem.dealloc<type Int>(ptmp);
+		val redptr = mem.rawbuffer_ptr<type Bool>(&self.reds);
+		val redcap = mem.rawbuffer_cap<type Bool>(&self.reds);
+		var redtmp = mem.rawbuffer_from_parts<type Bool>(redptr, redcap);
+		mem.dealloc<type Bool>(redtmp);
+		val fptr = mem.rawbuffer_ptr<type Int>(&self.free_next);
+		val fcap = mem.rawbuffer_cap<type Int>(&self.free_next);
+		var ftmp = mem.rawbuffer_from_parts<type Int>(fptr, fcap);
+		mem.dealloc<type Int>(ftmp);
+	}
+}
+
 implement<K, V> iter.SinglePassIterator<TreeMapItemRef<K, V>> for TreeMapIter<K, V> {
 	pub fn next(self: &mut TreeMapIter<K, V>) -> Optional<TreeMapItemRef<K, V>> {
 		val map = self.map;
@@ -1818,7 +1912,7 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 		return self.map.is_empty();
 	}
 
-	pub fn clear(self: &mut TreeSet<K>) -> Void {
+	pub fn clear(self: &mut TreeSet<K>) nothrow -> Void {
 		self.map.clear();
 	}
 
@@ -1845,6 +1939,40 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 	pub fn iter(self: &TreeSet<K>) -> TreeSetIter<K> {
 		val inner = self.map.iter();
 		return TreeSetIter<type K>(inner = inner);
+	}
+}
+
+implement<K> core.Destructible for TreeSet<K> require K is cmp.Comparable {
+	pub fn destroy(var self: TreeSet<K>) nothrow -> Void {
+		self.map.clear();
+		val kptr = mem.rawbuffer_ptr<type K>(&self.map.keys);
+		val kcap = mem.rawbuffer_cap<type K>(&self.map.keys);
+		var ktmp = mem.rawbuffer_from_parts<type K>(kptr, kcap);
+		mem.dealloc<type K>(ktmp);
+		val vptr = mem.rawbuffer_ptr<type Bool>(&self.map.values);
+		val vcap = mem.rawbuffer_cap<type Bool>(&self.map.values);
+		var vtmp = mem.rawbuffer_from_parts<type Bool>(vptr, vcap);
+		mem.dealloc<type Bool>(vtmp);
+		val lptr = mem.rawbuffer_ptr<type Int>(&self.map.lefts);
+		val lcap = mem.rawbuffer_cap<type Int>(&self.map.lefts);
+		var ltmp = mem.rawbuffer_from_parts<type Int>(lptr, lcap);
+		mem.dealloc<type Int>(ltmp);
+		val rptr = mem.rawbuffer_ptr<type Int>(&self.map.rights);
+		val rcap = mem.rawbuffer_cap<type Int>(&self.map.rights);
+		var rtmp = mem.rawbuffer_from_parts<type Int>(rptr, rcap);
+		mem.dealloc<type Int>(rtmp);
+		val pptr = mem.rawbuffer_ptr<type Int>(&self.map.parents);
+		val pcap = mem.rawbuffer_cap<type Int>(&self.map.parents);
+		var ptmp = mem.rawbuffer_from_parts<type Int>(pptr, pcap);
+		mem.dealloc<type Int>(ptmp);
+		val redptr = mem.rawbuffer_ptr<type Bool>(&self.map.reds);
+		val redcap = mem.rawbuffer_cap<type Bool>(&self.map.reds);
+		var redtmp = mem.rawbuffer_from_parts<type Bool>(redptr, redcap);
+		mem.dealloc<type Bool>(redtmp);
+		val fptr = mem.rawbuffer_ptr<type Int>(&self.map.free_next);
+		val fcap = mem.rawbuffer_cap<type Int>(&self.map.free_next);
+		var ftmp = mem.rawbuffer_from_parts<type Int>(fptr, fcap);
+		mem.dealloc<type Int>(ftmp);
 	}
 }
 

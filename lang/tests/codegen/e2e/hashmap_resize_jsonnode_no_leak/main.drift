@@ -1,0 +1,24 @@
+module m
+
+import std.containers as containers;
+import std.core as core;
+import std.json as json;
+
+fn run() -> Int {
+	var outer = 0;
+	while outer < 100 {
+		var m = containers.hash_map<type Int, json.JsonNode>();
+		var i = 0;
+		while i < 300 {
+			m.insert(i, json.JsonNode::String("v"));
+			i = i + 1;
+		}
+		core.drop_value<type containers.HashMap<Int, json.JsonNode>>(move m);
+		outer = outer + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

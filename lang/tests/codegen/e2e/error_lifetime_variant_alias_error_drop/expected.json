@@ -1,0 +1,5 @@
+{
+  "description": "e2e: alias(Error) payload in variant is released on drop",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

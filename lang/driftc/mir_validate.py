@@ -1,6 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
+import re
 from typing import Callable, Mapping
 
 from lang.driftc.core.function_id import FunctionId, function_symbol
@@ -236,10 +237,13 @@ def validate_mir_concrete_layout_types(
 					if hasattr(instr, "elem_ty"):
 						_check_type(fn_id, instr.elem_ty, instr.__class__.__name__)
 					continue
-				if isinstance(instr, (M.PtrFromRef, M.PtrOffset, M.PtrRead, M.PtrIsNull)):
+				if isinstance(instr, (M.PtrFromRef, M.PtrOffset, M.PtrIsNull)):
 					_check_type(fn_id, instr.ptr_ty, instr.__class__.__name__)
 					if hasattr(instr, "elem_ty"):
 						_check_type(fn_id, instr.elem_ty, instr.__class__.__name__)
+					continue
+				if isinstance(instr, (M.PtrRead,)):
+					_check_type(fn_id, instr.elem_ty, instr.__class__.__name__)
 					continue
 				if isinstance(instr, (M.PtrWrite,)):
 					_check_type(fn_id, instr.elem_ty, instr.__class__.__name__)
@@ -451,17 +455,47 @@ def validate_mir_iface_init_invariants(
 		iface_params: set[M.ValueId] = set()
 		iface_param_locals: set[M.LocalId] = set()
 		if sig is not None and sig.param_type_ids:
-			for name, ty_id in zip(func.params, sig.param_type_ids):
-				if _is_iface(ty_id):
+			for idx, name in enumerate(func.params):
+				ty_id = sig.param_type_ids[idx] if idx < len(sig.param_type_ids) else None
+				local_iface = False
+				local_ty = func.local_types.get(name)
+				if local_ty is not None and _is_iface(local_ty):
+					local_iface = True
+				if (ty_id is not None and _is_iface(ty_id)) or local_iface:
+					iface_params.add(name)
+					iface_param_locals.add(name)
+					m = re.match(r"^(.*)_\d+$", name)
+					if m is not None:
+						base_name = m.group(1)
+						base_ty = func.local_types.get(base_name)
+						if base_ty is not None and _is_iface(base_ty):
+							iface_params.add(base_name)
+							iface_param_locals.add(base_name)
+			for local_name, local_ty in func.local_types.items():
+				if not _is_iface(local_ty):
+					continue
+				m_local = re.match(r"^(.*)_\d+$", local_name)
+				if m_local is None:
+					continue
+				base_name = m_local.group(1)
+				if base_name in iface_param_locals:
+					iface_params.add(local_name)
+					iface_param_locals.add(local_name)
+		elif func.params:
+			for name in func.params:
+				ty_id = func.local_types.get(name)
+				if ty_id is not None and _is_iface(ty_id):
 					iface_params.add(name)
 					iface_param_locals.add(name)
 
 		value_iface_type: dict[M.ValueId, bool] = {}
+		defs: dict[M.ValueId, M.MirInstr] = {}
 		for block in func.blocks.values():
 			for instr in block.instructions:
 				dest = getattr(instr, "dest", None)
 				if not isinstance(dest, str):
 					continue
+				defs[dest] = instr
 				ty_id: TypeId | None = None
 				if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue)):
 					ty_id = instr.iface_ty
@@ -545,9 +579,13 @@ def validate_mir_iface_init_invariants(
 						cur_values.add(instr.dest)
 						continue
 					if isinstance(instr, M.MoveOut) and _is_iface(instr.ty):
-						if instr.local not in cur_locals:
+						local_iface = False
+						local_ty = func.local_types.get(instr.local)
+						if local_ty is not None and _is_iface(local_ty):
+							local_iface = True
+						if instr.local not in cur_locals and instr.local not in iface_param_locals and not local_iface:
 							raise AssertionError(
-								f"MIR invariant violation: MoveOut of uninitialized iface local in {function_symbol(fn_id)}"
+								f"MIR invariant violation: MoveOut of uninitialized iface local '{instr.local}' in {function_symbol(fn_id)} block {name}"
 							)
 						cur_values.add(instr.dest)
 						cur_locals.add(instr.local)
@@ -568,7 +606,11 @@ def validate_mir_iface_init_invariants(
 							cur_values.add(instr.dest)
 						continue
 					if isinstance(instr, M.DropValue) and _is_iface(instr.ty):
-						if instr.value not in cur_values and instr.value not in iface_params:
+						allow_loaded_iface_param = False
+						src = defs.get(instr.value)
+						if isinstance(src, M.LoadLocal) and src.local in iface_param_locals:
+							allow_loaded_iface_param = True
+						if instr.value not in cur_values and instr.value not in iface_params and not allow_loaded_iface_param:
 							raise AssertionError(
 								f"MIR invariant violation: DropValue of uninitialized iface value in {function_symbol(fn_id)}"
 							)

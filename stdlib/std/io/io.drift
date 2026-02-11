@@ -208,6 +208,15 @@ pub struct Buffer {
 	len: Int
 }
 
+implement core.Destructible for Buffer {
+	pub fn destroy(var self: Buffer) nothrow -> Void {
+		val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
+		val cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+		var tmp = mem.rawbuffer_from_parts<type Byte>(ptr, cap);
+		mem.dealloc<type Byte>(tmp);
+	}
+}
+
 pub const FILE_READ_ONLY: Uint = 0;
 pub const FILE_WRITE_ONLY: Uint = 1;
 pub const FILE_READ_WRITE: Uint = 2;

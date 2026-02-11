@@ -1,0 +1,19 @@
+module example.json_iterate_array
+
+import std.console as console;
+import std.json as json;
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}
+
+fn run() -> Int {
+	val items = [json.JsonNode::Number("1"), json.JsonNode::Number("2"), json.JsonNode::Number("3")];
+	for val item : items {
+		val n = item.expect_int("root[]", "item");
+		if n < 0 {
+			return 2;
+		}
+	}
+	return 0;
+}

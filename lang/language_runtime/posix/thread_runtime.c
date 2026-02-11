@@ -45,6 +45,7 @@ typedef struct DriftVt {
 	atomic_int started;
 	atomic_int completed;
 	atomic_int cancelled;
+	atomic_int dropped;
 	atomic_int state;
 	// Stack is allocated/freed by the worker thread (single owner).
 	void *stack;
@@ -58,6 +59,8 @@ typedef struct DriftVt {
 	pthread_mutex_t mu;
 	pthread_cond_t cv;
 	int park_token;
+	struct DriftVt *reg_prev;
+	struct DriftVt *reg_next;
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -77,9 +80,11 @@ static _Atomic uint64_t drift_default_executor = 0;
 static _Atomic uint64_t drift_default_reactor = 0;
 static int64_t drift_exec_submit_override = -1;
 static pthread_once_t drift_reactor_once = PTHREAD_ONCE_INIT;
+static pthread_once_t drift_reactor_shutdown_once = PTHREAD_ONCE_INIT;
 static pthread_once_t drift_vt_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t drift_vt_tls_key;
 static pthread_once_t drift_exec_once = PTHREAD_ONCE_INIT;
+static pthread_once_t drift_exec_cleanup_once = PTHREAD_ONCE_INIT;
 static pthread_once_t drift_log_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t drift_log_mu;
 static pthread_mutex_t drift_log_cv_mu;
@@ -105,6 +110,86 @@ typedef struct DriftLogRecordSlot {
 static DriftLogRecordSlot *drift_log_slots = NULL;
 static _Atomic uint64_t drift_log_write_seq = 0;
 static _Atomic uint64_t drift_log_read_seq = 0;
+static void drift_drop_callback(DriftIface *cb);
+static pthread_mutex_t drift_vt_registry_mu = PTHREAD_MUTEX_INITIALIZER;
+static DriftVt *drift_vt_registry_head = NULL;
+
+static void drift_vt_registry_add(DriftVt *vt) {
+	if (!vt) {
+		return;
+	}
+	pthread_mutex_lock(&drift_vt_registry_mu);
+	vt->reg_prev = NULL;
+	vt->reg_next = drift_vt_registry_head;
+	if (drift_vt_registry_head) {
+		drift_vt_registry_head->reg_prev = vt;
+	}
+	drift_vt_registry_head = vt;
+	pthread_mutex_unlock(&drift_vt_registry_mu);
+}
+
+static void drift_vt_registry_remove(DriftVt *vt) {
+	if (!vt) {
+		return;
+	}
+	pthread_mutex_lock(&drift_vt_registry_mu);
+	if (vt->reg_prev) {
+		vt->reg_prev->reg_next = vt->reg_next;
+	} else if (drift_vt_registry_head == vt) {
+		drift_vt_registry_head = vt->reg_next;
+	}
+	if (vt->reg_next) {
+		vt->reg_next->reg_prev = vt->reg_prev;
+	}
+	vt->reg_prev = NULL;
+	vt->reg_next = NULL;
+	pthread_mutex_unlock(&drift_vt_registry_mu);
+}
+
+static void drift_vt_destroy(DriftVt *h) {
+	if (!h) {
+		return;
+	}
+	drift_vt_registry_remove(h);
+	pthread_mutex_destroy(&h->mu);
+	pthread_cond_destroy(&h->cv);
+	if (h->stack) {
+		free(h->stack);
+		h->stack = NULL;
+		h->stack_size = 0;
+	}
+	free(h);
+}
+
+static void drift_vt_registry_cleanup_atexit(void) {
+	pthread_mutex_lock(&drift_vt_registry_mu);
+	DriftVt *cur = drift_vt_registry_head;
+	drift_vt_registry_head = NULL;
+	pthread_mutex_unlock(&drift_vt_registry_mu);
+	while (cur) {
+		DriftVt *next = cur->reg_next;
+		cur->reg_prev = NULL;
+		cur->reg_next = NULL;
+		if (!atomic_load(&cur->completed)) {
+			drift_drop_callback(&cur->cb);
+			atomic_store(&cur->completed, 1);
+		}
+		pthread_mutex_destroy(&cur->mu);
+		pthread_cond_destroy(&cur->cv);
+		if (cur->stack) {
+			free(cur->stack);
+			cur->stack = NULL;
+			cur->stack_size = 0;
+		}
+		free(cur);
+		cur = next;
+	}
+}
+
+__attribute__((constructor))
+static void drift_vt_registry_register_cleanup_ctor(void) {
+	(void)atexit(drift_vt_registry_cleanup_atexit);
+}
 
 typedef struct ReactorTimer {
 	int64_t deadline_ms;
@@ -128,9 +213,16 @@ typedef struct Reactor {
 	ReactorWatch *watches;
 	int stopping;
 	pthread_t thread;
+	int thread_started;
 } Reactor;
 
 static Reactor *drift_default_reactor_ptr = NULL;
+static void drift_reactor_shutdown_default_atexit(void);
+static void drift_log_ensure_defaults(void);
+
+static void drift_reactor_register_shutdown_once(void) {
+	(void)atexit(drift_reactor_shutdown_default_atexit);
+}
 
 static void drift_run_callback(DriftIface *cb, int do_free);
 static void drift_drop_callback(DriftIface *cb);
@@ -158,9 +250,46 @@ typedef struct DriftExec {
 	int threads_count;
 	pthread_t *threads;
 	size_t stack_bytes;
+	int destroyed;
+	struct DriftExec *reg_prev;
+	struct DriftExec *reg_next;
 } DriftExec;
 
 static __thread DriftExec *drift_exec_tls = NULL;
+static pthread_mutex_t drift_exec_registry_mu = PTHREAD_MUTEX_INITIALIZER;
+static DriftExec *drift_exec_registry_head = NULL;
+
+static void drift_exec_registry_add(DriftExec *exec) {
+	if (!exec) {
+		return;
+	}
+	pthread_mutex_lock(&drift_exec_registry_mu);
+	exec->reg_prev = NULL;
+	exec->reg_next = drift_exec_registry_head;
+	if (drift_exec_registry_head) {
+		drift_exec_registry_head->reg_prev = exec;
+	}
+	drift_exec_registry_head = exec;
+	pthread_mutex_unlock(&drift_exec_registry_mu);
+}
+
+static void drift_exec_registry_remove(DriftExec *exec) {
+	if (!exec) {
+		return;
+	}
+	pthread_mutex_lock(&drift_exec_registry_mu);
+	if (exec->reg_prev) {
+		exec->reg_prev->reg_next = exec->reg_next;
+	} else if (drift_exec_registry_head == exec) {
+		drift_exec_registry_head = exec->reg_next;
+	}
+	if (exec->reg_next) {
+		exec->reg_next->reg_prev = exec->reg_prev;
+	}
+	exec->reg_prev = NULL;
+	exec->reg_next = NULL;
+	pthread_mutex_unlock(&drift_exec_registry_mu);
+}
 #ifdef __linux__
 static __thread ucontext_t *drift_sched_ctx = NULL;
 #endif
@@ -339,10 +468,44 @@ static void *drift_log_worker_main(void *arg) {
 	return NULL;
 }
 
+static void drift_log_shutdown_atexit(void) {
+	drift_log_ensure_defaults();
+	pthread_mutex_lock(&drift_log_mu);
+	if (atomic_load(&drift_log_inited) == 0) {
+		pthread_mutex_unlock(&drift_log_mu);
+		return;
+	}
+	atomic_store(&drift_log_worker_shutdown, 1);
+	pthread_mutex_unlock(&drift_log_mu);
+	pthread_mutex_lock(&drift_log_cv_mu);
+	pthread_cond_broadcast(&drift_log_cv);
+	pthread_mutex_unlock(&drift_log_cv_mu);
+	if (atomic_load(&drift_log_worker_started) != 0) {
+		pthread_join(drift_log_worker, NULL);
+		atomic_store(&drift_log_worker_started, 0);
+	}
+	int64_t cap = atomic_load(&drift_log_queue_capacity);
+	if (cap > 0 && drift_log_slots != NULL) {
+		for (int64_t i = 0; i < cap; i++) {
+			if (atomic_load(&drift_log_slots[i].state) == 2) {
+				drift_string_release(drift_log_slots[i].payload_json);
+			}
+		}
+		free(drift_log_slots);
+		drift_log_slots = NULL;
+	}
+	atomic_store(&drift_log_inited, 0);
+	atomic_store(&drift_log_queue_depth, 0);
+	atomic_store(&drift_log_inflight, 0);
+	atomic_store(&drift_log_write_seq, 0);
+	atomic_store(&drift_log_read_seq, 0);
+}
+
 static void drift_log_init_once(void) {
 	pthread_mutex_init(&drift_log_mu, NULL);
 	pthread_mutex_init(&drift_log_cv_mu, NULL);
 	pthread_cond_init(&drift_log_cv, NULL);
+	(void)atexit(drift_log_shutdown_atexit);
 }
 
 static void drift_log_ensure_defaults(void) {
@@ -436,23 +599,34 @@ static void *drift_exec_worker(void *arg) {
 		swapcontext(&sched_ctx, &vt->ctx);
 		drift_vt_tls_set(NULL);
 		int state = atomic_load(&vt->state);
-		if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
-			if (vt->stack) {
-				free(vt->stack);
-				vt->stack = NULL;
-				vt->stack_size = 0;
+			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
+				if (vt->stack) {
+					free(vt->stack);
+					vt->stack = NULL;
+					vt->stack_size = 0;
+				}
+				atomic_store(&vt->completed, 1);
+				pthread_mutex_lock(&vt->mu);
+				vt->park_token++;
+				pthread_cond_broadcast(&vt->cv);
+				pthread_mutex_unlock(&vt->mu);
+				if (atomic_load(&vt->dropped)) {
+					drift_vt_destroy(vt);
+				}
 			}
-		}
 #else
 		drift_vt_tls_set(vt);
 		drift_run_callback(&vt->cb, 0);
 		atomic_store(&vt->state, DRIFT_VT_FINISHED);
-		atomic_store(&vt->completed, 1);
-		pthread_mutex_lock(&vt->mu);
-		vt->park_token++;
-		pthread_cond_broadcast(&vt->cv);
-		pthread_mutex_unlock(&vt->mu);
-		drift_vt_tls_set(NULL);
+			atomic_store(&vt->completed, 1);
+			pthread_mutex_lock(&vt->mu);
+			vt->park_token++;
+			pthread_cond_broadcast(&vt->cv);
+			pthread_mutex_unlock(&vt->mu);
+			if (atomic_load(&vt->dropped)) {
+				drift_vt_destroy(vt);
+			}
+			drift_vt_tls_set(NULL);
 #endif
 		atomic_fetch_sub(&exec->running, 1);
 	}
@@ -631,15 +805,68 @@ static Reactor *drift_reactor_create(void) {
 		ev.data.fd = r->wake_fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, r->wake_fd, &ev);
 	}
-	pthread_create(&r->thread, NULL, drift_reactor_thread_entry, r);
+	if (pthread_create(&r->thread, NULL, drift_reactor_thread_entry, r) == 0) {
+		r->thread_started = 1;
+	}
 #endif
 	return r;
+}
+
+static void drift_reactor_destroy(Reactor *r) {
+	if (!r) {
+		return;
+	}
+	pthread_mutex_lock(&r->mu);
+	r->stopping = 1;
+	pthread_mutex_unlock(&r->mu);
+	drift_reactor_wake(r);
+#ifdef __linux__
+	if (r->thread_started) {
+		pthread_join(r->thread, NULL);
+	}
+	if (r->wake_fd >= 0) {
+		close(r->wake_fd);
+		r->wake_fd = -1;
+	}
+	if (r->epoll_fd >= 0) {
+		close(r->epoll_fd);
+		r->epoll_fd = -1;
+	}
+#endif
+	ReactorTimer *t = r->timers;
+	while (t) {
+		ReactorTimer *next = t->next;
+		free(t);
+		t = next;
+	}
+	ReactorWatch *w = r->watches;
+	while (w) {
+		ReactorWatch *next = w->next;
+		free(w);
+		w = next;
+	}
+	pthread_cond_destroy(&r->cv);
+	pthread_mutex_destroy(&r->mu);
+	free(r);
+}
+
+static void drift_reactor_shutdown_default_atexit(void) {
+	uint64_t raw = atomic_exchange(&drift_default_reactor, 0);
+	Reactor *r = (Reactor *)raw;
+	if (!r) {
+		r = drift_default_reactor_ptr;
+	}
+	drift_default_reactor_ptr = NULL;
+	if (r) {
+		drift_reactor_destroy(r);
+	}
 }
 
 static void drift_reactor_init_once(void) {
 	drift_default_reactor_ptr = drift_reactor_create();
 	if (drift_default_reactor_ptr) {
 		atomic_store(&drift_default_reactor, (uint64_t)drift_default_reactor_ptr);
+		pthread_once(&drift_reactor_shutdown_once, drift_reactor_register_shutdown_once);
 	}
 }
 
@@ -660,6 +887,9 @@ static DriftExec *drift_exec_create_internal(int64_t min_threads, int64_t max_th
 		stack_bytes = 262144;
 	}
 	exec->stack_bytes = (size_t)stack_bytes;
+	exec->destroyed = 0;
+	exec->reg_prev = NULL;
+	exec->reg_next = NULL;
 	exec->threads_count = (int)max_threads;
 	exec->threads = (pthread_t *)calloc((size_t)exec->threads_count, sizeof(pthread_t));
 	if (!exec->threads) {
@@ -669,13 +899,99 @@ static DriftExec *drift_exec_create_internal(int64_t min_threads, int64_t max_th
 	for (int i = 0; i < exec->threads_count; i++) {
 		pthread_create(&exec->threads[i], NULL, drift_exec_worker, exec);
 	}
+	drift_exec_registry_add(exec);
 	return exec;
 }
 
+static void drift_exec_destroy_internal(DriftExec *exec) {
+	if (!exec) {
+		return;
+	}
+	pthread_mutex_lock(&drift_exec_registry_mu);
+	if (exec->destroyed) {
+		pthread_mutex_unlock(&drift_exec_registry_mu);
+		return;
+	}
+	exec->destroyed = 1;
+	if (exec->reg_prev) {
+		exec->reg_prev->reg_next = exec->reg_next;
+	} else if (drift_exec_registry_head == exec) {
+		drift_exec_registry_head = exec->reg_next;
+	}
+	if (exec->reg_next) {
+		exec->reg_next->reg_prev = exec->reg_prev;
+	}
+	exec->reg_prev = NULL;
+	exec->reg_next = NULL;
+	pthread_mutex_unlock(&drift_exec_registry_mu);
+	pthread_mutex_lock(&exec->mu);
+	exec->shutting_down = 1;
+	pthread_cond_broadcast(&exec->cv);
+	pthread_mutex_unlock(&exec->mu);
+	for (int i = 0; i < exec->threads_count; i++) {
+		pthread_join(exec->threads[i], NULL);
+	}
+	pthread_mutex_lock(&exec->mu);
+	ExecNode *node = exec->head;
+	exec->head = NULL;
+	exec->tail = NULL;
+	exec->queue_len = 0;
+	pthread_mutex_unlock(&exec->mu);
+	while (node) {
+		ExecNode *next = node->next;
+		DriftVt *vt = node->vt;
+		if (vt) {
+			if (!atomic_load(&vt->started)) {
+				atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+				if (!atomic_exchange(&vt->completed, 1)) {
+					drift_drop_callback(&vt->cb);
+					pthread_mutex_lock(&vt->mu);
+					vt->park_token++;
+					pthread_cond_broadcast(&vt->cv);
+					pthread_mutex_unlock(&vt->mu);
+				}
+			}
+			drift_vt_destroy(vt);
+		}
+		free(node);
+		node = next;
+	}
+	pthread_cond_destroy(&exec->cv);
+	pthread_mutex_destroy(&exec->mu);
+	free(exec->threads);
+	free(exec);
+}
+
+static void drift_exec_shutdown_all_atexit(void) {
+	while (1) {
+		pthread_mutex_lock(&drift_exec_registry_mu);
+		DriftExec *exec = drift_exec_registry_head;
+		pthread_mutex_unlock(&drift_exec_registry_mu);
+		if (!exec) {
+			break;
+		}
+		drift_exec_destroy_internal(exec);
+	}
+}
+
+static void drift_exec_register_shutdown_once(void) {
+	(void)atexit(drift_exec_shutdown_all_atexit);
+}
+
+static void drift_exec_shutdown_default_atexit(void) {
+	uint64_t raw = atomic_exchange(&drift_default_executor, 0);
+	DriftExec *exec = (DriftExec *)raw;
+	if (exec) {
+		drift_exec_destroy_internal(exec);
+	}
+}
+
 static void drift_exec_init_once(void) {
+	pthread_once(&drift_exec_cleanup_once, drift_exec_register_shutdown_once);
 	DriftExec *exec = drift_exec_create_internal(1, 1, 0, 262144);
 	if (exec) {
 		atomic_store(&drift_default_executor, (uint64_t)exec);
+		(void)atexit(drift_exec_shutdown_default_atexit);
 	}
 }
 
@@ -717,11 +1033,6 @@ static void drift_vt_fiber_entry(uintptr_t arg) {
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	drift_run_callback(&vt->cb, 0);
 	atomic_store(&vt->state, DRIFT_VT_FINISHED);
-	atomic_store(&vt->completed, 1);
-	pthread_mutex_lock(&vt->mu);
-	vt->park_token++;
-	pthread_cond_broadcast(&vt->cv);
-	pthread_mutex_unlock(&vt->mu);
 	drift_vt_tls_set(NULL);
 	if (drift_sched_ctx) {
 		swapcontext(&vt->ctx, drift_sched_ctx);
@@ -744,6 +1055,35 @@ static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt) {
 	exec->tail = node;
 	exec->queue_len++;
 	pthread_cond_signal(&exec->cv);
+}
+
+static int drift_exec_remove_vt_locked(DriftExec *exec, DriftVt *vt) {
+	if (!exec || !vt) {
+		return 0;
+	}
+	ExecNode *prev = NULL;
+	ExecNode *cur = exec->head;
+	while (cur) {
+		if (cur->vt == vt) {
+			ExecNode *next = cur->next;
+			if (prev) {
+				prev->next = next;
+			} else {
+				exec->head = next;
+			}
+			if (exec->tail == cur) {
+				exec->tail = prev;
+			}
+			if (exec->queue_len > 0) {
+				exec->queue_len--;
+			}
+			free(cur);
+			return 1;
+		}
+		prev = cur;
+		cur = cur->next;
+	}
+	return 0;
 }
 
 static void *drift_thread_entry(void *arg) {
@@ -771,6 +1111,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	atomic_store(&vt->started, 0);
 	atomic_store(&vt->completed, 0);
 	atomic_store(&vt->cancelled, 0);
+	atomic_store(&vt->dropped, 0);
 	atomic_store(&vt->state, DRIFT_VT_NEW);
 	vt->stack = NULL;
 	vt->stack_size = 0;
@@ -782,6 +1123,9 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	pthread_mutex_init(&vt->mu, NULL);
 	pthread_cond_init(&vt->cv, NULL);
 	vt->park_token = 0;
+	vt->reg_prev = NULL;
+	vt->reg_next = NULL;
+	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
 
@@ -795,9 +1139,7 @@ void drift_thread_join(uint64_t vt) {
 		pthread_cond_wait(&h->cv, &h->mu);
 	}
 	pthread_mutex_unlock(&h->mu);
-	pthread_mutex_destroy(&h->mu);
-	pthread_cond_destroy(&h->cv);
-	free(h);
+	drift_vt_destroy(h);
 }
 
 uint64_t drift_thread_is_completed(uint64_t vt) {
@@ -817,12 +1159,7 @@ uint64_t drift_thread_join_timeout(uint64_t vt, int64_t timeout_ms) {
 		return 1;
 	}
 	if (atomic_load(&h->completed)) {
-		pthread_mutex_destroy(&h->mu);
-		pthread_cond_destroy(&h->cv);
-		if (h->stack) {
-			free(h->stack);
-		}
-		free(h);
+		drift_vt_destroy(h);
 		return 0;
 	}
 	if (atomic_load(&h->cancelled)) {
@@ -849,9 +1186,7 @@ uint64_t drift_thread_join_timeout(uint64_t vt, int64_t timeout_ms) {
 		}
 	}
 	pthread_mutex_unlock(&h->mu);
-	pthread_mutex_destroy(&h->mu);
-	pthread_cond_destroy(&h->cv);
-	free(h);
+	drift_vt_destroy(h);
 	return 0;
 }
 
@@ -1002,6 +1337,7 @@ void drift_exec_default_set(uint64_t exec) {
 uint64_t drift_exec_create(int64_t min_threads, int64_t max_threads, int64_t queue_limit, int64_t timeout_ms, int64_t saturation, int64_t stack_bytes) {
 	(void)timeout_ms;
 	(void)saturation;
+	pthread_once(&drift_exec_cleanup_once, drift_exec_register_shutdown_once);
 	DriftExec *exec = drift_exec_create_internal(min_threads, max_threads, queue_limit, stack_bytes);
 	if (!exec) {
 		return 0;
@@ -1028,7 +1364,6 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 		return 0;
 	}
 	atomic_store(&h->state, DRIFT_VT_READY);
-	h->exec = ex;
 	pthread_mutex_lock(&ex->mu);
 	if (ex->queue_limit > 0) {
 		int running = atomic_load(&ex->running);
@@ -1038,6 +1373,7 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 			return 1;
 		}
 	}
+	h->exec = ex;
 	drift_exec_enqueue(ex, h);
 	pthread_mutex_unlock(&ex->mu);
 	return 0;
@@ -1264,13 +1600,25 @@ void drift_thread_drop(uint64_t vt) {
 	if (!h) {
 		return;
 	}
-	if (!atomic_load(&h->started)) {
-		atomic_store(&h->state, DRIFT_VT_CANCELLED);
-		drift_drop_callback(&h->cb);
+	atomic_store(&h->dropped, 1);
+	if (atomic_load(&h->completed)) {
+		drift_vt_destroy(h);
+		return;
 	}
-	pthread_mutex_destroy(&h->mu);
-	pthread_cond_destroy(&h->cv);
-	free(h);
+	if (!atomic_load(&h->started) && h->exec == NULL) {
+		if (!atomic_exchange(&h->completed, 1)) {
+			drift_drop_callback(&h->cb);
+		}
+		drift_vt_destroy(h);
+		return;
+	}
+	if (atomic_load(&h->started)) {
+		atomic_store(&h->cancelled, 1);
+		pthread_mutex_lock(&h->mu);
+		h->park_token++;
+		pthread_cond_broadcast(&h->cv);
+		pthread_mutex_unlock(&h->mu);
+	}
 }
 
 uint64_t drift_thread_cancel(uint64_t vt) {
@@ -1288,8 +1636,14 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 	pthread_mutex_unlock(&h->mu);
 	if (!atomic_load(&h->started)) {
 		atomic_store(&h->state, DRIFT_VT_CANCELLED);
-		if (!atomic_exchange(&h->completed, 1)) {
-			drift_drop_callback(&h->cb);
+		if (h->exec == NULL) {
+			if (!atomic_exchange(&h->completed, 1)) {
+				drift_drop_callback(&h->cb);
+				pthread_mutex_lock(&h->mu);
+				h->park_token++;
+				pthread_cond_broadcast(&h->cv);
+				pthread_mutex_unlock(&h->mu);
+			}
 		}
 	}
 	return 0;
@@ -1305,7 +1659,7 @@ uint64_t drift_reactor_default_get(void) {
 }
 
 void drift_reactor_default_set(uint64_t reactor) {
-	drift_default_reactor = reactor;
+	atomic_store(&drift_default_reactor, reactor);
 	if (reactor != 0) {
 		drift_default_reactor_ptr = (Reactor *)reactor;
 	}
@@ -1325,6 +1679,9 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		r = drift_reactor_create();
 		drift_default_reactor_ptr = r;
 		atomic_store(&drift_default_reactor, (uint64_t)r);
+		if (r) {
+			pthread_once(&drift_reactor_shutdown_once, drift_reactor_register_shutdown_once);
+		}
 	}
 	if (!r) {
 		return;
@@ -1380,6 +1737,9 @@ void drift_reactor_register_timer(uint64_t deadline_ms, uint64_t vt) {
 		r = drift_reactor_create();
 		drift_default_reactor_ptr = r;
 		atomic_store(&drift_default_reactor, (uint64_t)r);
+		if (r) {
+			pthread_once(&drift_reactor_shutdown_once, drift_reactor_register_shutdown_once);
+		}
 	}
 	if (!r) {
 		return;

@@ -97,6 +97,7 @@ from lang.driftc.stage2 import (
 	ConstructStruct,
 	ConstructVariant,
 	VariantTag,
+	VariantTagRef,
 	VariantGetField,
 	VariantGetFieldAddr,
 	StructGetField,
@@ -959,8 +960,18 @@ class LlvmModuleBuilder:
 		if self.needs_iface_helpers:
 			lines.extend(
 				[
-					f"declare i8* @drift_iface_alloc({self._llty(DRIFT_USIZE_TYPE)}, {self._llty(DRIFT_USIZE_TYPE)})",
-					"declare void @drift_iface_free(i8*)",
+					f"declare i8* @malloc({self._llty(DRIFT_USIZE_TYPE)})",
+					"declare void @free(i8*)",
+					f"define weak i8* @drift_iface_alloc({self._llty(DRIFT_USIZE_TYPE)} %size, {self._llty(DRIFT_USIZE_TYPE)} %align) {{",
+					"entry:",
+					f"  %p = call i8* @malloc({self._llty(DRIFT_USIZE_TYPE)} %size)",
+					"  ret i8* %p",
+					"}",
+					"define weak void @drift_iface_free(i8* %p) {",
+					"entry:",
+					"  call void @free(i8* %p)",
+					"  ret void",
+					"}",
 					"",
 				]
 			)
@@ -1112,13 +1123,29 @@ class LlvmModuleBuilder:
 		if self.needs_error_runtime:
 			lines.extend(
 				[
-					f"declare {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE})",
-					f"declare {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
-					f"declare void @drift_error_add_attr_dv({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
-					f"declare void @drift_error_add_local_dv({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
-					"",
+					f"define weak {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event) {{",
+					"entry:",
+					f"  ret {DRIFT_ERROR_PTR} null",
+					"}",
+					f"define weak {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event, {DRIFT_STRING_TYPE} %key, {DRIFT_DV_TYPE}* %dv) {{",
+					"entry:",
+					f"  ret {DRIFT_ERROR_PTR} null",
+					"}",
+					f"define weak void @drift_error_release({DRIFT_ERROR_PTR} %err) {{",
+					"entry:",
+					"  ret void",
+					"}",
+					f"define weak void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %key, {DRIFT_DV_TYPE}* %dv) {{",
+					"entry:",
+					"  ret void",
+					"}",
+					f"define weak void @drift_error_add_local_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %frame, {DRIFT_STRING_TYPE} %key, {DRIFT_DV_TYPE}* %dv) {{",
+					"entry:",
+					"  ret void",
+					"}",
 				]
 			)
+			lines.append("")
 		if self.needs_assert_runtime:
 			lines.extend(
 				[
@@ -1609,6 +1636,8 @@ class _FuncBuilder:
 		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
 			return
 		actual_llty = self.value_types.get(value)
+		if actual_llty is None:
+			return
 		local_id = self._dbg_local_var(local, ty_id, span)
 		if local_id is None:
 			return
@@ -1617,6 +1646,8 @@ class _FuncBuilder:
 		loc_id = self._dbg_location_for_span(span)
 		val_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 		emit_llty = self._llty(val_llty)
+		if emit_llty.startswith("%"):
+			return
 		if actual_llty is not None and self._llty(actual_llty) != emit_llty:
 			return
 		line = f"  call void @llvm.dbg.value(metadata {emit_llty} {value}, metadata !{local_id}, metadata !{expr_id})"
@@ -2601,6 +2632,25 @@ class _FuncBuilder:
 				)
 			raw = self._fresh("tag8")
 			self.lines.append(f"  {raw} = extractvalue {variant_llty} {val}, 0")
+			dest = self._map_value(instr.dest)
+			self.lines.append(f"  {dest} = zext i8 {raw} to {self._llty(DRIFT_UINT_TYPE)}")
+			self.value_types[dest] = DRIFT_UINT_TYPE
+		elif isinstance(instr, VariantTagRef):
+			layout = self._variant_layout(instr.variant_ty)
+			variant_llty = layout.llvm_ty
+			variant_ptr = self._map_value(instr.variant_ref)
+			have = self.value_types.get(variant_ptr)
+			expect_ptr = f"{variant_llty}*"
+			if have is not None and have != expect_ptr:
+				raise NotImplementedError(
+					f"LLVM codegen v1: VariantTagRef value type mismatch (have {have}, expected {expect_ptr})"
+				)
+			tag_ptr = self._fresh("tagptr")
+			self.lines.append(
+				f"  {tag_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {variant_ptr}, i32 0, i32 0"
+			)
+			raw = self._fresh("tag8")
+			self.lines.append(f"  {raw} = load i8, i8* {tag_ptr}")
 			dest = self._map_value(instr.dest)
 			self.lines.append(f"  {dest} = zext i8 {raw} to {self._llty(DRIFT_UINT_TYPE)}")
 			self.value_types[dest] = DRIFT_UINT_TYPE
@@ -6915,6 +6965,10 @@ class _FuncBuilder:
 		cached = self._drop_cache.get(ty_id)
 		if cached is not None:
 			return cached
+		destructor_fns = getattr(self.type_table, "destructor_fns", None)
+		if isinstance(destructor_fns, dict) and destructor_fns.get(ty_id) is not None:
+			self._drop_cache[ty_id] = True
+			return True
 		td = self.type_table.get(ty_id)
 		if td.kind is TypeKind.SCALAR:
 			needs = td.name == "String"
@@ -6923,6 +6977,9 @@ class _FuncBuilder:
 		if td.kind is TypeKind.REF:
 			self._drop_cache[ty_id] = False
 			return False
+		if td.kind is TypeKind.ERROR:
+			self._drop_cache[ty_id] = True
+			return True
 		if td.kind is TypeKind.INTERFACE:
 			self._drop_cache[ty_id] = True
 			return True
@@ -6934,9 +6991,8 @@ class _FuncBuilder:
 			except Exception:
 				pass
 		if td.kind is TypeKind.ARRAY and td.param_types:
-			needs = self._type_needs_drop(td.param_types[0])
-			self._drop_cache[ty_id] = needs
-			return needs
+			self._drop_cache[ty_id] = True
+			return True
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
 			if inst is not None:
@@ -6976,6 +7032,10 @@ class _FuncBuilder:
 		if td.kind is TypeKind.SCALAR and td.name == "String":
 			self.module.needs_string_release = True
 			self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {value})")
+			return
+		if td.kind is TypeKind.ERROR:
+			self.module.needs_error_runtime = True
+			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value})")
 			return
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]
@@ -7065,71 +7125,13 @@ class _FuncBuilder:
 				self._emit_drop_value(field_ty, field_val)
 			return
 		if td.kind is TypeKind.VARIANT:
-			inst = self.type_table.get_variant_instance(ty_id)
-			if inst is None:
-				return
 			layout = self._variant_layout(ty_id)
 			variant_llty = layout.llvm_ty
-			tag_val = self._fresh("drop_tag")
-			self.lines.append(f"  {tag_val} = extractvalue {variant_llty} {value}, 0")
-			done_block = self._fresh("var_drop_done")
-			arms = list(layout.arms)
-			default_block = self._fresh("var_drop_bad")
-			arm_blocks: list[tuple[str, _VariantArmLayout]] = []
-			for ctor_name, arm_layout in arms:
-				arm_blocks.append((self._fresh(f"var_drop_{ctor_name.lower()}"), arm_layout))
-			case_specs = " ".join(
-				f"i8 {arm_layout.tag}, label {arm_block}" for (arm_block, arm_layout) in arm_blocks
-			)
-			self.lines.append(f"  switch i8 {tag_val}, label {default_block} [ {case_specs} ]")
-			for (arm_block, arm_layout), (ctor_name, _arm_layout) in zip(arm_blocks, arms):
-				self.lines.append(f"{arm_block[1:]}:")
-				if arm_layout.payload_struct_llty:
-					tmp_ptr = self._fresh("variant")
-					self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
-					self.lines.append(f"  store {variant_llty} {value}, {variant_llty}* {tmp_ptr}")
-					payload_words_ptr = self._fresh("payload_words")
-					self.lines.append(
-						f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {tmp_ptr}, i32 0, i32 2"
-					)
-					payload_i8 = self._fresh("payload_i8")
-					self.lines.append(
-						f"  {payload_i8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {payload_words_ptr} to i8*"
-					)
-					payload_struct_ptr = self._fresh("payload_struct")
-					self.lines.append(
-						f"  {payload_struct_ptr} = bitcast i8* {payload_i8} to {arm_layout.payload_struct_llty}*"
-					)
-					field_types = inst.arms_by_name[ctor_name].field_types
-					for fidx, (want_llty, store_llty) in enumerate(
-						zip(arm_layout.field_lltys, arm_layout.field_storage_lltys)
-					):
-						field_ty = field_types[fidx]
-						if not self._type_needs_drop(field_ty):
-							continue
-						field_ptr = self._fresh("fieldptr")
-						self.lines.append(
-							f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {fidx}"
-						)
-						if store_llty == "i8" and want_llty == "i1":
-							raw = self._fresh("field8")
-							self.lines.append(f"  {raw} = load i8, i8* {field_ptr}")
-							field_val = self._fresh("field")
-							self.lines.append(f"  {field_val} = icmp ne i8 {raw}, 0")
-							self.value_types[field_val] = "i1"
-						else:
-							field_val = self._fresh("field")
-							emit_want_llty = self._llty(want_llty)
-							self.lines.append(f"  {field_val} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
-							self.value_types[field_val] = want_llty
-						self._emit_drop_value(field_ty, field_val)
-				self.lines.append(f"  br label {done_block}")
-			self.lines.append(f"{default_block[1:]}:")
-			if self.module is not None:
-				self.module.needs_llvm_trap = True
-			self.lines.append("  call void @llvm.trap()")
-			self.lines.append("  unreachable")
-			self.lines.append(f"{done_block[1:]}:")
+			tmp_ptr = self._fresh("drop_variant_ptr")
+			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+			self.lines.append(f"  store {variant_llty} {value}, {variant_llty}* {tmp_ptr}")
+			helper = self._ensure_array_drop_helper(ty_id)
+			self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} 1, {variant_llty}* {tmp_ptr})")
 			return
 
 	def _ensure_array_drop_helper(self, elem_ty: TypeId) -> str:
@@ -7153,9 +7155,20 @@ class _FuncBuilder:
 		def emit_drop(ty_id: TypeId, val: str) -> None:
 			td = self.type_table.get(ty_id)
 			llty = self._llvm_type_for_typeid(ty_id)
+			destructor_fns = getattr(self.type_table, "destructor_fns", None)
+			if isinstance(destructor_fns, dict):
+				fn_id = destructor_fns.get(ty_id)
+				if fn_id is not None:
+					sym = function_symbol(fn_id)
+					lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {val})")
+					return
 			if td.kind is TypeKind.SCALAR and td.name == "String":
 				self.module.needs_string_release = True
 				lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {val})")
+				return
+			if td.kind is TypeKind.ERROR:
+				self.module.needs_error_runtime = True
+				lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {val})")
 				return
 			if td.kind is TypeKind.ARRAY and td.param_types:
 				inner_elem = td.param_types[0]

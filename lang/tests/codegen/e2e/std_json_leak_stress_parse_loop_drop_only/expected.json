@@ -1,0 +1,8 @@
+{
+  "description": "e2e: json parse stress loop drop-only with alloc tracking",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "alloc_track_leak": true,
+  "timeout_s": 60
+}

@@ -1,0 +1,25 @@
+module m
+
+import std.core as core;
+import std.format as format;
+
+fn run() -> Int {
+	var i = 0;
+	while i < 400 {
+		var s = "";
+		var j = 0;
+		while j < 64 {
+			s = s + format.format_int(j % 10);
+			j = j + 1;
+		}
+		if byte_length(s) != 64 {
+			return 2;
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

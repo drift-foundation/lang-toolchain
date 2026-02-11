@@ -1,0 +1,11 @@
+import std.core;
+
+fn mk() nothrow -> Optional<String> {
+	val s = "x" + "y";
+	return Optional<String>::Some(s);
+}
+
+fn main() nothrow -> Int {
+	mk();
+	return 0;
+}

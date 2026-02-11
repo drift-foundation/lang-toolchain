@@ -1,0 +1,19 @@
+module main
+
+variant Maybe<T> {
+	Some(value: T),
+	None,
+}
+
+fn main() nothrow -> Int {
+	val s: Maybe<String> = Some("x");
+	val n: Maybe<String> = Maybe::None();
+	match s {
+		Some(v) => { if v != "x" { return 1; } },
+		default => { return 2; }
+	}
+	match n {
+		None => { return 0; },
+		default => { return 3; }
+	}
+}

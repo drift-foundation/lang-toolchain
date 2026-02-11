@@ -1,0 +1,35 @@
+module m
+
+import std.core as core;
+
+exception Boom();
+
+type AliasErr = Error;
+
+variant Wrapper {
+	Ok,
+	Fail(err: AliasErr),
+}
+
+fn make() nothrow -> Wrapper {
+	try {
+		throw Boom();
+	} catch e {
+		return Wrapper::Fail(e);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	var v = make();
+	match v {
+		Fail(_e) => {
+			return 0;
+		},
+		Ok => {
+			return 1;
+		},
+		default => {
+			return 2;
+		}
+	}
+}

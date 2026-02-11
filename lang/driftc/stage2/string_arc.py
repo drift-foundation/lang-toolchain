@@ -13,6 +13,7 @@ from typing import Dict, Iterable, Mapping, Set
 
 from lang.driftc.checker import FnInfo
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
+from lang.driftc.core.function_id import function_symbol
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
@@ -24,11 +25,23 @@ def insert_string_arc(
 	type_table: TypeTable,
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
+	is_destructor_method = "std.core.Destructible::destroy" in func.fn_id.name
 	string_ty = type_table.ensure_string()
 	local_types: Dict[str, TypeId] = func.local_types
 	string_locals: Set[str] = {
 		name for name in (list(func.params) + list(func.locals)) if local_types.get(name) == string_ty
 	}
+	storage_locals: Set[str] = set(func.params)
+	for _blk in func.blocks.values():
+		for _ins in _blk.instructions:
+			local_name = getattr(_ins, "local", None)
+			if isinstance(local_name, str):
+				storage_locals.add(local_name)
+	addr_taken_locals: Set[str] = set()
+	for _blk in func.blocks.values():
+		for _ins in _blk.instructions:
+			if isinstance(_ins, M.AddrOfLocal):
+				addr_taken_locals.add(_ins.local)
 	_type_needs_drop_cache: Dict[TypeId, bool] = {}
 	block_order = sorted(func.blocks.keys())
 
@@ -66,10 +79,12 @@ def insert_string_arc(
 		if td.kind is TypeKind.REF:
 			_type_needs_drop_cache[tid] = False
 			return False
+		if td.kind is TypeKind.ERROR:
+			_type_needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.ARRAY and td.param_types:
-			needs = _type_needs_drop(td.param_types[0])
-			_type_needs_drop_cache[tid] = needs
-			return needs
+			_type_needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.STRUCT:
 			inst = type_table.get_struct_instance(tid)
 			if inst is not None:
@@ -92,24 +107,27 @@ def insert_string_arc(
 	array_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
+		if (not name.startswith("__")) or name.startswith("__match_binder_")
 		if (tid := local_types.get(name)) is not None
 		and type_table.get(tid).kind is TypeKind.ARRAY
-		and _type_needs_drop(type_table.get(tid).param_types[0])
 	}
 
 	def _is_destructible_tid(tid: TypeId | None) -> bool:
 		if tid is None:
 			return False
-		if hasattr(type_table, "is_destructible"):
-			try:
-				return bool(type_table.is_destructible(tid))
-			except Exception:
-				return False
-		return False
+		return _type_needs_drop(tid)
+
+	def _is_error_tid(tid: TypeId | None) -> bool:
+		if tid is None:
+			return False
+		return type_table.get(tid).kind is TypeKind.ERROR
 
 	destructible_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
+		if (not name.startswith("__")) or _is_error_tid(local_types.get(name))
+		if name not in string_locals
+		if name not in array_locals
 		if _is_destructible_tid(local_types.get(name))
 	}
 
@@ -117,11 +135,17 @@ def insert_string_arc(
 		return _is_string_tid(local_types.get(val))
 
 	def _is_local_name(val: str) -> bool:
-		return val in func.locals or val in func.params
+		return val in storage_locals
 
 	def _ensure_owned(val: str, owned: Set[str], out: list[M.MInstr]) -> str:
 		if not _is_string_value(val):
 			return val
+		if val in use_counts:
+			use_counts[val] -= 1
+			if use_counts[val] == 0 and val in owned and val not in live_out.get(block.name, set()):
+				out.append(M.StringRelease(value=val))
+				owned.discard(val)
+				move_only_values.discard(val)
 		tmp = _new_temp()
 		out.append(M.StringRetain(dest=tmp, value=val))
 		local_types[tmp] = string_ty
@@ -141,6 +165,10 @@ def insert_string_arc(
 			return
 		old = _new_temp()
 		out.append(M.LoadLocal(dest=old, local=local))
+		zero = _new_temp()
+		out.append(M.ZeroValue(dest=zero, ty=string_ty))
+		local_types[zero] = string_ty
+		out.append(M.StoreLocal(local=local, value=zero))
 		out.append(M.StringRelease(value=old))
 		local_types[old] = string_ty
 
@@ -163,6 +191,10 @@ def insert_string_arc(
 		elem_ty = td.param_types[0]
 		tmp = _new_temp()
 		out.append(M.LoadLocal(dest=tmp, local=local))
+		zero = _new_temp()
+		out.append(M.ZeroValue(dest=zero, ty=arr_ty))
+		local_types[zero] = arr_ty
+		out.append(M.StoreLocal(local=local, value=zero))
 		out.append(M.ArrayDrop(elem_ty=elem_ty, array=tmp))
 		local_types[tmp] = arr_ty
 
@@ -174,10 +206,34 @@ def insert_string_arc(
 			_drop_array_local(local, out)
 
 	def _drop_destructible_local(local: str, out: list[M.MInstr]) -> None:
-		return
+		if local not in destructible_locals:
+			return
+		ty = local_types.get(local)
+		if ty is None:
+			return
+		tmp = _new_temp()
+		out.append(M.LoadLocal(dest=tmp, local=local))
+		zero = _new_temp()
+		out.append(M.ZeroValue(dest=zero, ty=ty))
+		local_types[zero] = ty
+		out.append(M.StoreLocal(local=local, value=zero))
+		out.append(M.DropValue(value=tmp, ty=ty))
+		local_types[tmp] = ty
 
-	def _drop_all_destructibles(out: list[M.MInstr], *, skip_locals: Set[str] | None = None) -> None:
-		return
+	def _drop_all_destructibles(
+		out: list[M.MInstr],
+		*,
+		skip_locals: Set[str] | None = None,
+		only_locals: Set[str] | None = None,
+	) -> None:
+		skip = skip_locals or set()
+		only = only_locals
+		for local in sorted(destructible_locals):
+			if local in skip:
+				continue
+			if only is not None and local not in only:
+				continue
+			_drop_destructible_local(local, out)
 
 	def _iter_used_values(instr: M.MInstr) -> Iterable[str]:
 		if isinstance(instr, M.StoreLocal):
@@ -340,6 +396,59 @@ def insert_string_arc(
 		elif isinstance(term, M.IfTerminator):
 			yield term.cond
 
+	def _seed_dest_types() -> None:
+		"""Pre-seed missing destination types before ARC liveness/use analysis."""
+		for bname in block_order:
+			block = func.blocks[bname]
+			for instr in block.instructions:
+				dest = getattr(instr, "dest", None)
+				if dest is None:
+					continue
+				if local_types.get(dest) is not None:
+					continue
+				if isinstance(instr, (M.ConstString, M.StringConcat, M.StringRetain, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
+					local_types[dest] = string_ty
+					continue
+				if isinstance(instr, M.AssignSSA):
+					src_ty = local_types.get(instr.src)
+					if src_ty is not None:
+						local_types[dest] = src_ty
+					continue
+				if isinstance(instr, M.Phi):
+					for incoming in instr.incoming.values():
+						in_ty = local_types.get(incoming)
+						if in_ty is not None:
+							local_types[dest] = in_ty
+							break
+					continue
+				if isinstance(instr, M.Call):
+					info = fn_infos.get(instr.fn_id)
+					if info is not None and info.signature is not None and info.signature.return_type_id is not None and not bool(getattr(info, "declared_can_throw", False)):
+						local_types[dest] = info.signature.return_type_id
+					else:
+						sym = function_symbol(instr.fn_id)
+						if sym in {
+							"drift_string_from_cstr",
+							"drift_string_from_utf8_bytes",
+							"drift_string_from_int64",
+							"drift_string_from_uint64",
+							"drift_string_from_f64",
+							"drift_string_from_bool",
+							"drift_string_literal",
+							"drift_string_concat",
+							"drift_string_retain",
+						}:
+							local_types[dest] = string_ty
+					continue
+				if isinstance(instr, M.CallIndirect):
+					if instr.user_ret_type is not None:
+						local_types[dest] = instr.user_ret_type
+					continue
+				if isinstance(instr, M.CallIface):
+					if instr.user_ret_type is not None:
+						local_types[dest] = instr.user_ret_type
+					continue
+
 	def _block_succs(term: M.MTerminator | None) -> list[str]:
 		if term is None:
 			return []
@@ -348,6 +457,18 @@ def insert_string_arc(
 		if isinstance(term, M.IfTerminator):
 			return [term.then_target, term.else_target]
 		return []
+
+	def _block_preds() -> Dict[str, Set[str]]:
+		preds: Dict[str, Set[str]] = {name: set() for name in block_order}
+		for name in block_order:
+			for succ in _block_succs(func.blocks[name].terminator):
+				if succ in preds:
+					preds[succ].add(name)
+		return preds
+
+	# Fill in missing destination types first so string-use liveness sees all
+	# intermediate string temps (including conversion/call-produced values).
+	_seed_dest_types()
 
 	# Compute per-block use/def for string temps (non-local value ids).
 	use: Dict[str, Set[str]] = {}
@@ -391,6 +512,40 @@ def insert_string_arc(
 				live_out[name] = out
 				changed = True
 
+	# Definite local assignment across CFG.
+	preds = _block_preds()
+	store_defs: Dict[str, Set[str]] = {}
+	for name in block_order:
+		stores: Set[str] = set()
+		for instr in func.blocks[name].instructions:
+			if isinstance(instr, M.StoreLocal):
+				stores.add(instr.local)
+		store_defs[name] = stores
+	assigned_in: Dict[str, Set[str]] = {name: set() for name in block_order}
+	assigned_out: Dict[str, Set[str]] = {name: set() for name in block_order}
+	assigned_in[func.entry] = set(func.params)
+	assigned_out[func.entry] = set(func.params) | store_defs.get(func.entry, set())
+	changed = True
+	while changed:
+		changed = False
+		for name in block_order:
+			if name == func.entry:
+				new_in = set(func.params)
+			else:
+				ps = preds.get(name, set())
+				if not ps:
+					new_in = set()
+				else:
+					it = iter(ps)
+					new_in = set(assigned_out[next(it)])
+					for p in it:
+						new_in &= assigned_out[p]
+			new_out = new_in | store_defs.get(name, set())
+			if new_in != assigned_in[name] or new_out != assigned_out[name]:
+				assigned_in[name] = new_in
+				assigned_out[name] = new_out
+				changed = True
+
 	owned_defs: Set[str] = set()
 	move_only_defs: Set[str] = set()
 	for name in block_order:
@@ -402,6 +557,13 @@ def insert_string_arc(
 				owned_defs.add(dest)
 			elif isinstance(instr, (M.StringRetain, M.CopyValue)):
 				owned_defs.add(dest)
+			elif isinstance(instr, (M.Call, M.CallIndirect, M.CallIface)):
+				# String-returning calls produce owned values that must be released
+				# when their last use in the block is consumed.
+				owned_defs.add(dest)
+			elif isinstance(instr, M.PtrRead):
+				if _is_string_tid(instr.elem_ty):
+					owned_defs.add(dest)
 			elif isinstance(instr, M.MoveOut):
 				owned_defs.add(dest)
 				move_only_defs.add(dest)
@@ -414,6 +576,9 @@ def insert_string_arc(
 		new_instrs: list[M.MInstr] = []
 		owned_values: Set[str] = set(owned_defs)
 		move_only_values: Set[str] = set(move_only_defs)
+		moved_out_locals: Set[str] = set()
+		explicitly_dropped_locals: Set[str] = set()
+		load_local_src: Dict[str, str] = {}
 
 		# Initialize string locals in the entry block to avoid uninitialized releases.
 		if block.name == func.entry:
@@ -438,10 +603,13 @@ def insert_string_arc(
 				new_instrs.append(M.ZeroValue(dest=zero, ty=arr_ty))
 				new_instrs.append(M.StoreLocal(local=local, value=zero))
 				local_types[zero] = arr_ty
-
 		# Count uses in this block for temp string values.
 		use_counts: Dict[str, int] = {}
+		producers: Dict[str, M.MInstr] = {}
 		for instr in block.instructions:
+			dest = getattr(instr, "dest", None)
+			if isinstance(dest, str):
+				producers[dest] = instr
 			for val in _iter_used_values(instr):
 				if _is_string_value(val) and not _is_local_name(val):
 					use_counts[val] = use_counts.get(val, 0) + 1
@@ -463,7 +631,66 @@ def insert_string_arc(
 				owned_values.discard(val)
 				move_only_values.discard(val)
 
+		def _can_move_owned_once(val: str) -> bool:
+			return val in owned_values and use_counts.get(val, 0) == 1
+
+		def _is_string_creator(instr: M.MInstr | None) -> bool:
+			if instr is None:
+				return False
+			if isinstance(instr, (M.ConstString, M.StringConcat, M.StringRetain, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
+				return True
+			if isinstance(instr, M.Call):
+				info = fn_infos.get(instr.fn_id)
+				if info is not None and info.signature is not None and not bool(getattr(info, "declared_can_throw", False)) and info.signature.return_type_id == string_ty and local_types.get(getattr(instr, "dest", "")) == string_ty:
+					return True
+				sym = function_symbol(instr.fn_id)
+				return sym in {
+					"drift_string_from_cstr",
+					"drift_string_from_utf8_bytes",
+					"drift_string_from_int64",
+					"drift_string_from_uint64",
+					"drift_string_from_f64",
+					"drift_string_from_bool",
+					"drift_string_literal",
+					"drift_string_concat",
+					"drift_string_retain",
+				}
+			return False
+
+		def _can_move_creator_return(val: str) -> bool:
+			return use_counts.get(val, 0) <= 1 and _is_string_creator(producers.get(val))
+
+		def _collect_return_source_locals(v: str, seen: Set[str] | None = None) -> Set[str]:
+			seen_vals = seen or set()
+			if v in seen_vals:
+				return set()
+			seen_vals.add(v)
+			for prev in reversed(new_instrs):
+				if isinstance(prev, M.AssignSSA) and prev.dest == v:
+					return _collect_return_source_locals(prev.src, seen_vals)
+				if isinstance(prev, M.LoadLocal) and prev.dest == v:
+					return {prev.local}
+			prod = producers.get(v)
+			if prod is None:
+				return set()
+			locals_used: Set[str] = set()
+			if isinstance(prod, M.ConstructStruct):
+				for a in prod.args:
+					locals_used |= _collect_return_source_locals(a, seen_vals)
+			elif isinstance(prod, M.ConstructVariant):
+				for a in prod.args:
+					locals_used |= _collect_return_source_locals(a, seen_vals)
+			elif isinstance(prod, M.ConstructResultOk):
+				if prod.value is not None:
+					locals_used |= _collect_return_source_locals(prod.value, seen_vals)
+			elif isinstance(prod, M.ConstructIfaceValue):
+				locals_used |= _collect_return_source_locals(prod.value, seen_vals)
+			return locals_used
+
 		for instr in block.instructions:
+			if isinstance(instr, M.StoreLocal):
+				moved_out_locals.discard(instr.local)
+				explicitly_dropped_locals.discard(instr.local)
 			if isinstance(instr, M.StoreLocal) and instr.local in array_locals:
 				_drop_array_local(instr.local, new_instrs)
 				new_instrs.append(instr)
@@ -479,6 +706,7 @@ def insert_string_arc(
 				new_instrs.append(M.ZeroValue(dest=zero, ty=instr.ty))
 				new_instrs.append(M.StoreLocal(local=instr.local, value=zero))
 				local_types[zero] = instr.ty
+				moved_out_locals.add(instr.local)
 				continue
 
 			if isinstance(instr, M.ConstString):
@@ -491,6 +719,7 @@ def insert_string_arc(
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.LoadLocal):
+				load_local_src[instr.dest] = instr.local
 				load_ty = local_types.get(instr.local)
 				if load_ty is not None:
 					local_types[instr.dest] = load_ty
@@ -517,6 +746,11 @@ def insert_string_arc(
 				if _is_string_tid(instr.elem_ty):
 					owned_values.add(instr.dest)
 					move_only_values.add(instr.dest)
+			elif isinstance(instr, M.PtrRead):
+				local_types[instr.dest] = instr.elem_ty
+				if _is_string_tid(instr.elem_ty):
+					owned_values.add(instr.dest)
+					move_only_values.add(instr.dest)
 			elif isinstance(instr, M.AssignSSA):
 				if _is_string_value(instr.src):
 					if instr.src in owned_values:
@@ -527,7 +761,7 @@ def insert_string_arc(
 			if isinstance(instr, M.StoreLocal) and _is_string_tid(local_types.get(instr.local)):
 				_release_local(instr.local, new_instrs)
 				val = instr.value
-				if val in move_only_values:
+				if val in move_only_values or _can_move_owned_once(val):
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
 				else:
@@ -542,7 +776,7 @@ def insert_string_arc(
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
-				if val in move_only_values:
+				if val in move_only_values or _can_move_owned_once(val):
 					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
 					_note_use(val, consume=True)
 				else:
@@ -559,7 +793,7 @@ def insert_string_arc(
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
-				if val in move_only_values:
+				if val in move_only_values or _can_move_owned_once(val):
 					new_instrs.append(
 						M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
 					)
@@ -574,7 +808,7 @@ def insert_string_arc(
 
 			if isinstance(instr, (M.ArrayElemInit, M.ArrayElemInitUnchecked, M.ArrayElemAssign)) and _is_string_tid(instr.elem_ty):
 				val = instr.value
-				if val in move_only_values:
+				if val in move_only_values or _can_move_owned_once(val):
 					new_instr = type(instr)(
 						elem_ty=instr.elem_ty,
 						array=instr.array,
@@ -600,7 +834,7 @@ def insert_string_arc(
 			if isinstance(instr, M.ArrayLit) and _is_string_tid(instr.elem_ty):
 				elems: list[str] = []
 				for e in instr.elements:
-					if e in move_only_values:
+					if e in move_only_values or _can_move_owned_once(e):
 						elems.append(e)
 						_note_use(e, consume=True)
 					else:
@@ -617,7 +851,7 @@ def insert_string_arc(
 					args: list[str] = []
 					for field_ty, arg in zip(inst.field_types, instr.args):
 						if _is_string_tid(field_ty):
-							if arg in move_only_values:
+							if arg in move_only_values or _can_move_owned_once(arg):
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
@@ -635,7 +869,7 @@ def insert_string_arc(
 					args: list[str] = []
 					for field_ty, arg in zip(arm.field_types, instr.args):
 						if _is_string_tid(field_ty):
-							if arg in move_only_values:
+							if arg in move_only_values or _can_move_owned_once(arg):
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
@@ -650,7 +884,7 @@ def insert_string_arc(
 			if isinstance(instr, M.ConstructIfaceValue):
 				val = instr.value
 				if _is_string_tid(instr.value_ty):
-					if val in move_only_values:
+					if val in move_only_values or _can_move_owned_once(val):
 						_note_use(val, consume=True)
 					else:
 						val = _ensure_owned(val, owned_values, new_instrs)
@@ -668,7 +902,7 @@ def insert_string_arc(
 			if isinstance(instr, M.ConstructResultOk) and instr.value is not None:
 				val = instr.value
 				if _is_string_value(val):
-					if val in move_only_values:
+					if val in move_only_values or _can_move_owned_once(val):
 						_note_use(val, consume=True)
 					else:
 						val = _ensure_owned(val, owned_values, new_instrs)
@@ -679,7 +913,7 @@ def insert_string_arc(
 			if isinstance(instr, M.ConstructError):
 				event_fqn = instr.event_fqn
 				if _is_string_value(event_fqn):
-					if event_fqn in move_only_values:
+					if event_fqn in move_only_values or _can_move_owned_once(event_fqn):
 						_note_use(event_fqn, consume=True)
 					else:
 						event_fqn = _ensure_owned(event_fqn, owned_values, new_instrs)
@@ -698,7 +932,7 @@ def insert_string_arc(
 			if isinstance(instr, M.ErrorAddAttrDV):
 				key = instr.key
 				if _is_string_value(key):
-					if key in move_only_values:
+					if key in move_only_values or _can_move_owned_once(key):
 						_note_use(key, consume=True)
 					else:
 						key = _ensure_owned(key, owned_values, new_instrs)
@@ -709,14 +943,14 @@ def insert_string_arc(
 			if isinstance(instr, M.ErrorAddLocalDV):
 				frame = instr.frame
 				if _is_string_value(frame):
-					if frame in move_only_values:
+					if frame in move_only_values or _can_move_owned_once(frame):
 						_note_use(frame, consume=True)
 					else:
 						frame = _ensure_owned(frame, owned_values, new_instrs)
 						_note_use(frame, consume=True)
 				key = instr.key
 				if _is_string_value(key):
-					if key in move_only_values:
+					if key in move_only_values or _can_move_owned_once(key):
 						_note_use(key, consume=True)
 					else:
 						key = _ensure_owned(key, owned_values, new_instrs)
@@ -727,14 +961,14 @@ def insert_string_arc(
 			if isinstance(instr, M.ErrorCapturesGetDV):
 				frame = instr.frame
 				if _is_string_value(frame):
-					if frame in move_only_values:
+					if frame in move_only_values or _can_move_owned_once(frame):
 						_note_use(frame, consume=True)
 					else:
 						frame = _ensure_owned(frame, owned_values, new_instrs)
 						_note_use(frame, consume=True)
 				key = instr.key
 				if _is_string_value(key):
-					if key in move_only_values:
+					if key in move_only_values or _can_move_owned_once(key):
 						_note_use(key, consume=True)
 					else:
 						key = _ensure_owned(key, owned_values, new_instrs)
@@ -754,7 +988,7 @@ def insert_string_arc(
 							args.append(arg)
 							continue
 						if _param_is_string(ty_id):
-							if arg in move_only_values:
+							if arg in move_only_values or _can_move_owned_once(arg):
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
@@ -782,7 +1016,7 @@ def insert_string_arc(
 						args.append(arg)
 						continue
 					if _param_is_string(ty_id):
-						if arg in move_only_values:
+						if arg in move_only_values or _can_move_owned_once(arg):
 							args.append(arg)
 							_note_use(arg, consume=True)
 						else:
@@ -808,7 +1042,7 @@ def insert_string_arc(
 						args.append(arg)
 						continue
 					if _param_is_string(ty_id):
-						if arg in move_only_values:
+						if arg in move_only_values or _can_move_owned_once(arg):
 							args.append(arg)
 							_note_use(arg, consume=True)
 						else:
@@ -829,6 +1063,17 @@ def insert_string_arc(
 				new_instrs.append(new_call)
 				continue
 
+			if isinstance(instr, M.DropValue) and _is_string_tid(instr.ty):
+				new_instrs.append(instr)
+				val = instr.value
+				if _is_string_value(val) and not _is_local_name(val):
+					_note_use(val, consume=True)
+				continue
+			if isinstance(instr, M.DropValue):
+				src_local = load_local_src.get(instr.value)
+				if src_local is not None and src_local in destructible_locals:
+					explicitly_dropped_locals.add(src_local)
+
 			new_instrs.append(instr)
 			for val in _iter_used_values(instr):
 				if _is_string_value(val) and not _is_local_name(val):
@@ -838,6 +1083,11 @@ def insert_string_arc(
 			term = block.terminator
 			val = term.value
 			skip_cleanup_locals: Set[str] = set()
+			skip_cleanup_locals |= moved_out_locals
+			skip_cleanup_locals |= explicitly_dropped_locals
+			if is_destructor_method and "self" in func.params:
+				skip_cleanup_locals.add("self")
+			can_move_from_skipped_local = False
 			if val is not None:
 				alias = val
 				while True:
@@ -852,16 +1102,20 @@ def insert_string_arc(
 				for prev in reversed(new_instrs):
 					if isinstance(prev, M.LoadLocal) and prev.dest == alias:
 						skip_cleanup_locals.add(prev.local)
+						can_move_from_skipped_local = True
 						break
-			if val is not None and _is_string_value(val):
-				if val in move_only_values:
+				return_source_locals = _collect_return_source_locals(val)
+				skip_cleanup_locals |= {loc for loc in return_source_locals if loc not in string_locals}
+			if val is not None and (_is_string_value(val) or _can_move_creator_return(val)):
+				if val in move_only_values or _can_move_owned_once(val) or _can_move_creator_return(val) or can_move_from_skipped_local:
 					_note_use(val, consume=True)
 				else:
 					val = _ensure_owned(val, owned_values, new_instrs)
 					_note_use(val, consume=True)
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
-			_drop_all_destructibles(new_instrs, skip_locals=skip_cleanup_locals)
+			initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
+			_drop_all_destructibles(new_instrs, skip_locals=skip_cleanup_locals, only_locals=initialized_at_return)
 			new_term = M.Return(value=val)
 			if hasattr(term, "span"):
 				setattr(new_term, "span", getattr(term, "span"))
