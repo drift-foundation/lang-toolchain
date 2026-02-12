@@ -337,10 +337,10 @@ implement<T> core.Copy for Ptr<T> { }
 implement<T> core.Copy for RawBuffer<T> { }
 """
 	)
-	conc_src = tmp_path / "concurrency.drift"
+	conc_src = tmp_path / "concurrent.drift"
 	conc_src.write_text(
 		"""
-module std.concurrency
+module std.concurrent
 
 export { Arc, Mutex, MutexGuard, StateMachine, arc, mutex };
 
@@ -451,7 +451,7 @@ implement core.Destructible for Arc<Mutex<StateMachine>> {
 module main
 
 import std.core as core;
-import std.concurrency as conc;
+import std.concurrent as conc;
 
 struct Event {
 	v: Int

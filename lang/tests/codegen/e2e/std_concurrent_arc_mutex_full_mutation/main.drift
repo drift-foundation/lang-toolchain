@@ -29,7 +29,7 @@ implement EventBus {
 }
 
 fn on_x(e: &mut Event) nothrow -> Void {
-	var g = conc.lock(e.state);
+	var g = conc.lock(e.state.get_mut());
 	g.get_mut().on_signal_x(e.v);
 	e.v = g.get_mut().state;
 }

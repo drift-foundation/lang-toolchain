@@ -1,0 +1,26 @@
+module main
+
+import std.core as core;
+
+exception Oops()
+
+struct Stream { v: Int }
+
+fn handle(var s: Stream) -> Int {
+	if s.v == 0 {
+		throw Oops();
+	}
+	return s.v;
+}
+
+fn main() nothrow -> Int {
+	val s = Stream(v = 2);
+	var cb: core.Callback0<Int> = core.callback0(| | captures(move s) => {
+		return try handle(move s) catch { 1 };
+	});
+	val a = cb.call();
+	val b = cb.call();
+	if a != 2 { return 10; }
+	if b != 1 { return 11; }
+	return 0;
+}

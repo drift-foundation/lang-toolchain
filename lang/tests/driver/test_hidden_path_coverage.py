@@ -279,7 +279,7 @@ def test_drop_glue_instantiates_arc(tmp_path: Path, capsys: pytest.CaptureFixtur
 		"""
 module main
 
-import std.concurrency as conc;
+import std.concurrent as conc;
 import std.core as core;
 
 fn main() -> Int {
@@ -301,7 +301,7 @@ def test_drop_glue_instantiates_mutex_guard(tmp_path: Path, capsys: pytest.Captu
 		"""
 module main
 
-import std.concurrency as conc;
+import std.concurrent as conc;
 import std.core as core;
 
 fn main() -> Int {
@@ -324,7 +324,7 @@ def test_drop_value_expr_context_errors(tmp_path: Path, capsys: pytest.CaptureFi
 		"""
 module main
 
-import std.concurrency as conc;
+import std.concurrent as conc;
 import std.core as core;
 
 fn main() -> Int {

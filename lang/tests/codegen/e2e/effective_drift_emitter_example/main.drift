@@ -1,7 +1,7 @@
 module main
 
 import std.core as core;
-import std.concurrency as conc;
+import std.concurrent as conc;
 
 struct Event {
 	v: Int

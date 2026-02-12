@@ -1,3 +1,27 @@
+## 2026-02-11 – Concurrency namespace consolidation (`std.concurrent` only) + Arc/Mutex migration
+- Consolidated concurrency surface to a single stdlib package:
+  - `std.concurrent` is now the sole concurrency namespace.
+  - Removed `std.concurrency` shim/module after migrating all in-tree usage.
+- Migrated shared-state primitives into `std.concurrent`:
+  - Added `Arc<T>`, `Mutex<T>`, `MutexGuard<T>` and helpers (`arc`, `mutex`, `lock`, `mutex_guard_get_mut`) to `stdlib/std/concurrent/concurrent.drift`.
+  - Updated exports and trait impls (`Borrow`, `BorrowMut`, `Destructible`) for these types.
+- Pinned and fixed a LANGUAGE_BUG uncovered by the migration:
+  - LLVM integer binop lowering now normalizes mixed abstract/concrete integer type tags (`drift.int`/`drift.uint` vs concrete LLVM widths) before op selection.
+  - This resolved codegen crashes on new atomic/intrinsic paths used by Arc/Mutex internals.
+- Added/updated regression coverage:
+  - New canonical e2e `std_concurrent_arc_mutex_full_mutation`.
+  - Existing Arc/Mutex callback/effective-drift e2e cases migrated to `std.concurrent`.
+  - Removed compatibility-only e2e case after shim deletion (`std_concurrency_compat_arc_mutex`).
+  - Driver callback fixture modules/imports updated from `std.concurrency` to `std.concurrent`.
+- Validation highlights:
+  - Targeted e2e Arc/Mutex and effective-drift cases pass in normal and ASan modes.
+  - Targeted driver callback/arc subsets pass after migration.
+  - Refcount memory-order policy aligned to pinned spec/perf target:
+    - `Arc` increment uses Relaxed (`fetch_add`),
+    - `Arc` decrement uses Release (`fetch_sub`),
+    - zero-destroy path performs Acquire barrier (`atomic_load_int` Acquire) before dropping payload.
+  - Removed stale empty compatibility e2e directory that was showing as skipped (`std_concurrency_compat_arc_mutex`).
+
 ## 2026-02-11 – JSON branch closure: sanitizer mode, runtime lifetime fixes, and final plan sync
 - Added ASan mode to codegen e2e runner via `DRIFT_ASAN=1`:
   - compile/run sanitizer wiring (`-fsanitize=address -g`)

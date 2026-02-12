@@ -171,6 +171,7 @@ class HiddenLambdaSpec:
 	capture_map: dict[C.HCaptureKey, int]
 	capture_kinds: list[C.HCaptureKind]
 	lambda_capture_ref_is_value: bool
+	is_callback_lambda: bool
 
 
 class HIRToMIR:
@@ -325,6 +326,7 @@ class HIRToMIR:
 		self._lambda_capture_name_to_slot: dict[str, int] | None = None
 		self._lambda_capture_kinds: list[C.HCaptureKind] | None = None
 		self._lambda_capture_ref_is_value: bool = True
+		self._lambda_is_callback: bool = False
 		self._lambda_counter = 0
 		# Names reserved for this function (params + locals).
 		self._reserved_names: set[str] = set(self.b.func.params)
@@ -1408,6 +1410,12 @@ class HIRToMIR:
 			raise AssertionError("non-canonical move operand reached MIR lowering (normalize/typechecker bug)")
 		if expr.subject.projections:
 			raise AssertionError("move of projected place reached MIR lowering (checker bug)")
+		if self._lambda_is_callback and self._lambda_capture_slots is not None:
+			key = self._capture_key_for_expr(expr.subject)
+			if key is not None:
+				moved = self._move_from_callback_capture_slot(key)
+				if moved is not None:
+					return moved
 		subj_name = self._canonical_local(getattr(expr.subject.base, "binding_id", None), expr.subject.base.name)
 		self.b.ensure_local(subj_name)
 		inner_ty = self._infer_expr_type(expr.subject.base)
@@ -1417,6 +1425,33 @@ class HIRToMIR:
 		self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 		self._local_types[moved_val] = inner_ty
 		self._moved_locals.add(subj_name)
+		return moved_val
+
+	def _move_from_callback_capture_slot(self, key: C.HCaptureKey) -> M.ValueId | None:
+		if not self._lambda_is_callback or self._lambda_capture_slots is None or self._lambda_capture_kinds is None:
+			return None
+		slot = self._lambda_capture_slots.get(key)
+		if slot is None or slot >= len(self._lambda_capture_kinds):
+			return None
+		if self._lambda_capture_kinds[slot] is not C.HCaptureKind.MOVE:
+			return None
+		place = self._place_from_capture_key(key)
+		ptr, inner_ty = self._lower_addr_of_place(place, is_mut=True)
+		loaded = self.b.new_temp()
+		self.b.emit(M.LoadRef(dest=loaded, ptr=ptr, inner_ty=inner_ty))
+		self._local_types[loaded] = inner_ty
+		tmp_local = f"__cap_move_{self.b.new_temp()}"
+		self.b.ensure_local(tmp_local)
+		self._local_types[tmp_local] = inner_ty
+		self.b.emit(M.StoreLocal(local=tmp_local, value=loaded))
+		moved_val = self.b.new_temp()
+		self.b.emit(M.MoveOut(dest=moved_val, local=tmp_local, ty=inner_ty))
+		self._local_types[moved_val] = inner_ty
+		self._moved_locals.add(tmp_local)
+		zero_val = self.b.new_temp()
+		self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
+		self._local_types[zero_val] = inner_ty
+		self.b.emit(M.StoreRef(ptr=ptr, value=zero_val, inner_ty=inner_ty))
 		return moved_val
 
 	def _visit_expr_HUnary(self, expr: H.HUnary) -> M.ValueId:
@@ -2722,6 +2757,11 @@ class HIRToMIR:
 						env_vals.append(env_val)
 						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 					else:
+						cb_moved = self._move_from_callback_capture_slot(cap.key)
+						if cb_moved is not None:
+							env_vals.append(cb_moved)
+							env_field_types.append(self._local_types.get(cb_moved) or self._infer_capture_type(expr, cap.key) or unknown)
+							continue
 						if not (hasattr(H, "HPlaceExpr") and isinstance(place, getattr(H, "HPlaceExpr"))):
 							raise AssertionError("non-canonical move capture place (compiler bug)")
 						if place.projections:
@@ -2826,6 +2866,7 @@ class HIRToMIR:
 				capture_map=dict(capture_map),
 				capture_kinds=list(capture_kinds),
 				lambda_capture_ref_is_value=lambda_capture_ref_is_value,
+				is_callback_lambda=False,
 			)
 		)
 
@@ -2912,6 +2953,11 @@ class HIRToMIR:
 						env_vals.append(env_val)
 						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
 					else:
+						cb_moved = self._move_from_callback_capture_slot(cap.key)
+						if cb_moved is not None:
+							env_vals.append(cb_moved)
+							env_field_types.append(self._local_types.get(cb_moved) or self._infer_capture_type(expr, cap.key) or unknown)
+							continue
 						if not (hasattr(H, "HPlaceExpr") and isinstance(place, getattr(H, "HPlaceExpr"))):
 							raise AssertionError("non-canonical move capture place (compiler bug)")
 						if place.projections:
@@ -2998,6 +3044,7 @@ class HIRToMIR:
 				capture_map=dict(capture_map),
 				capture_kinds=list(capture_kinds),
 				lambda_capture_ref_is_value=lambda_capture_ref_is_value,
+				is_callback_lambda=True,
 			)
 		)
 		fn_ref = FunctionRefId(fn_id=hidden_fn_id, kind=FunctionRefKind.IMPL, has_wrapper=False)
@@ -3066,15 +3113,19 @@ class HIRToMIR:
 				local_ty = self._binding_types.get(bid)
 				if local_ty is not None:
 					self._local_types[local_name] = local_ty
+			kind = None
+			if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
+				kind = self._lambda_capture_kinds[slot]
+			if self._lambda_is_callback and kind is C.HCaptureKind.MOVE:
+				# Escaping callback lambdas own move captures in heap env storage.
+				# Avoid materializing per-invocation locals from env values.
+				continue
 			val = self._load_capture_from_env(slot)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
 			if local_ty is not None:
 				# Move-captured values remain owned by the lambda env object and are
 				# released by the env drop thunk; registering an additional local drop
 				# here double-drops non-Copy captures.
-				kind = None
-				if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
-					kind = self._lambda_capture_kinds[slot]
 				if kind is not C.HCaptureKind.MOVE:
 					self._register_drop_local(local_name, local_ty)
 		self._lambda_capture_prologue_done = True
@@ -4673,7 +4724,7 @@ class HIRToMIR:
 						td = self._type_table.get(field_ty)
 						if td.kind is TypeKind.REF and td.param_types:
 							inner_ty = td.param_types[0]
-						self.b.emit(M.StoreRef(ptr=ptr_val, value=val, inner_ty=inner_ty))
+						self._emit_assign_store_ref(ptr=ptr_val, value=val, inner_ty=inner_ty)
 						return
 			base_ty = self._infer_expr_type(stmt.target.base)
 			if base_ty is not None:
@@ -4690,7 +4741,7 @@ class HIRToMIR:
 					self.b.ensure_local(local_name)
 					ptr_val = self.b.new_temp()
 					self.b.emit(M.LoadLocal(dest=ptr_val, local=local_name))
-					self.b.emit(M.StoreRef(ptr=ptr_val, value=val, inner_ty=td.param_types[0]))
+					self._emit_assign_store_ref(ptr=ptr_val, value=val, inner_ty=td.param_types[0])
 					return
 			local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 			self.b.ensure_local(local_name)
@@ -4732,8 +4783,21 @@ class HIRToMIR:
 					self.b.emit(M.ArrayElemAssign(elem_ty=elem_ty, array=array_val, index=index_val, value=val))
 					return
 		ptr, inner_ty = self._lower_addr_of_place(stmt.target, is_mut=True)
-		self.b.emit(M.StoreRef(ptr=ptr, value=val, inner_ty=inner_ty))
+		self._emit_assign_store_ref(ptr=ptr, value=val, inner_ty=inner_ty)
 		return
+
+	def _emit_assign_store_ref(self, *, ptr: M.ValueId, value: M.ValueId, inner_ty: TypeId) -> None:
+		# Assignment semantics for lvalue stores are replace, not raw overwrite:
+		# drop the previous non-Copy occupant before storing the new value.
+		if self._needs_runtime_drop(inner_ty):
+			old_val = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=old_val, ptr=ptr, inner_ty=inner_ty))
+			self._local_types[old_val] = inner_ty
+			zero_val = self.b.new_temp()
+			self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
+			self.b.emit(M.StoreRef(ptr=ptr, value=zero_val, inner_ty=inner_ty))
+			self.b.emit(M.DropValue(value=old_val, ty=inner_ty))
+		self.b.emit(M.StoreRef(ptr=ptr, value=value, inner_ty=inner_ty))
 
 	def _visit_stmt_HAugAssign(self, stmt: "H.HAugAssign") -> None:
 		"""

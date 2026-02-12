@@ -63,3 +63,36 @@ fn main() nothrow -> Int {
 		["-M", str(mod_root), *map(str, paths), "--emit-ir", str(tmp_path / "out.ll")], capsys
 	)
 	assert rc == 0, payload
+
+
+def test_emit_ir_callback_move_capture_byvalue_call_no_mir_invariant_failure(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main
+
+import std.concurrent as conc;
+
+struct Box { s: String }
+
+fn consume(_b: Box) nothrow -> Int {
+	return 7;
+}
+
+fn main() nothrow -> Int {
+	val b = Box(s = "hi");
+	val _ = conc.spawn_cb(| | captures(move b) => {
+		return consume(move b);
+	});
+	return 0;
+}
+""".lstrip(),
+	)
+	paths = sorted(mod_root.rglob("*.drift"))
+	rc, payload = _run_driftc_json(
+		["-M", str(mod_root), *map(str, paths), "--emit-ir", str(tmp_path / "out.ll")], capsys
+	)
+	assert rc == 0, payload

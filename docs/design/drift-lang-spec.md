@@ -3372,6 +3372,18 @@ This pattern mirrors `try/finally`: if any child throws, the scope cancels the r
 - Destructors run deterministically when each virtual thread ends, preserving RAII guarantees.
 - Containers backed by `RawBuffer` (`Array`, `Map`, etc.) behave identically on all threads.
 
+#### 19.9.1. `Arc` / `Mutex` memory-order contract (`std.concurrent`)
+
+For shared-state primitives in `std.concurrent`, memory orders are pinned as:
+
+- `Arc` refcount increment (`clone`): `Relaxed`.
+- `Arc` refcount decrement (`drop`): `Release`.
+- `Arc` final-drop path (`prev == 1`): perform an `Acquire` barrier/load before destroying payload.
+- `Mutex` lock acquisition (CAS success): `Acquire` (failure path may use `Relaxed`).
+- `Mutex` unlock: `Release`.
+
+This is the normative contract for stdlib behavior and performance tuning; stronger orderings are allowed internally only if they preserve these semantics.
+
 ### 19.10. Summary
 
 - Virtual threads deliver the ergonomics of synchronous code with the scalability of event-driven runtimes.

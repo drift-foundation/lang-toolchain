@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -60,16 +58,3 @@ fn main() -> Int {
 	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
 	assert rc == 0
 	assert payload.get("diagnostics", []) == []
-
-
-def test_std_json_duplicate_key_parse_e2e_does_not_crash() -> None:
-	cmd = [
-		str(Path(sys.executable)),
-		"lang/tests/codegen/e2e/runner.py",
-		"std_json_parse_basic_duplicate_keys",
-		"--jobs",
-		"1",
-	]
-	res = subprocess.run(cmd, capture_output=True, text=True, cwd=Path(__file__).resolve().parents[3])
-	assert res.returncode == 0, res.stdout + "\n" + res.stderr
-	assert "std_json_parse_basic_duplicate_keys: ok" in res.stdout

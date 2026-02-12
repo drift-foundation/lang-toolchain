@@ -1,0 +1,23 @@
+module main
+
+import std.core as core;
+import std.concurrent as conc;
+
+struct State {
+	v: Int
+}
+
+fn main() nothrow -> Int {
+	var m = conc.mutex(State(v = 5));
+	var sm = conc.arc(m);
+	var sm2 = sm.clone();
+	var outer = core.callback0(| | captures(move sm2) nothrow => {
+		var inner = core.callback0(| | captures(move sm2) nothrow => {
+			var g = conc.lock(sm2);
+			return g.get_mut().v;
+		});
+		return inner.call();
+	});
+	if outer.call() != 5 { return 20; }
+	return 0;
+}

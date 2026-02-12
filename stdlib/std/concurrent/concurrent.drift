@@ -8,6 +8,9 @@ import lang.atomic as atomic;
 use trait core.Fn0;
 use trait core.Fn1;
 use trait core.Copy;
+use trait core.Borrow;
+use trait core.BorrowMut;
+use trait core.Destructible;
 
 export {
 	Duration,
@@ -24,10 +27,17 @@ export {
 	ExecutorPolicy,
 	ExecutorPolicyBuilder,
 	Executor,
+	Arc,
+	Mutex,
+	MutexGuard,
 	VirtualThread,
 	Future,
 	FutureGroup,
 	Scope,
+	arc,
+	mutex,
+	lock,
+	mutex_guard_get_mut,
 	executor_policy_builder,
 	build_executor,
 	atomic_bool,
@@ -161,6 +171,141 @@ pub struct Future<T> {
 
 pub struct FutureGroup<T> {
 	items: Array<Future<T>>
+}
+
+pub struct ArcBox<T> {
+	count: atomic.AtomicInt,
+	value: T
+}
+
+pub struct Arc<T> {
+	buf: mem.RawBuffer<ArcBox<T>>
+}
+
+pub struct Mutex<T> {
+	locked: atomic.AtomicBool,
+	value: T
+}
+
+pub struct MutexGuard<T> {
+	m: &mut Mutex<T>
+}
+
+pub fn arc<T>(var value: T) nothrow -> Arc<T> {
+	unsafe {
+		var buf = mem.alloc_uninit<type ArcBox<T>>(1);
+		var slot = mem.ptr_at_mut<type ArcBox<T>>(&mut buf, 0);
+		slot.count = atomic_int(1);
+		slot.value = move value;
+		return Arc<type T>(buf = move buf);
+	}
+}
+
+implement<T> Arc<T> {
+	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
+		unsafe {
+			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+			val _ = atomic.atomic_fetch_add_int(&slot.count, 1, 0);
+		}
+		val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+		val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
+		return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
+	}
+
+	pub fn get(self: &Arc<T>) nothrow -> &T {
+		unsafe {
+			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+			return &slot.value;
+		}
+	}
+
+	pub fn get_mut(self: &mut Arc<T>) nothrow -> &mut T {
+		unsafe {
+			val slot = mem.ptr_at_mut<type ArcBox<T>>(&mut self.buf, 0);
+			return &mut slot.value;
+		}
+	}
+}
+
+implement<T> core.Borrow<T> for Arc<T> {
+	pub fn borrow(self: &Arc<T>) nothrow -> &T {
+		return self.get();
+	}
+}
+
+implement<T> core.BorrowMut<T> for Arc<T> {
+	pub fn borrow_mut(self: &mut Arc<T>) nothrow -> &mut T {
+		return self.get_mut();
+	}
+}
+
+implement<T> core.Destructible for Arc<T> {
+	pub fn destroy(var self: Arc<T>) nothrow -> Void {
+		unsafe {
+			// Moved-from Arc values are represented as zero/raw-null buffers.
+			// Dropping that sentinel must be a no-op.
+			val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+			if mem.ptr_is_null<type Byte>(ptr) {
+				return;
+			}
+		}
+		var prev = 0;
+		unsafe {
+			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+			prev = atomic.atomic_fetch_sub_int(&slot.count, 1, 2);
+		}
+		if prev == 1 {
+			unsafe {
+				// Acquire barrier pairs with prior Release decrements before final destroy.
+				val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+				val _ = atomic.atomic_load_int(&slot.count, 1);
+				var buf = self.buf;
+				var inner = mem.read<type ArcBox<T>>(&mut buf, 0);
+				core.drop_value<type ArcBox<T>>(inner);
+				mem.dealloc<type ArcBox<T>>(buf);
+			}
+		}
+	}
+}
+
+pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
+	return Mutex<type T>(locked = atomic_bool(false), value = value);
+}
+
+pub fn lock<T>(m: &mut Mutex<T>) nothrow -> MutexGuard<T> {
+	while not atomic.atomic_compare_exchange_bool(&m.locked, false, true, 1, 0) {
+	}
+	return MutexGuard<type T>(m = m);
+}
+
+pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
+	return &mut g.m.value;
+}
+
+implement<T> Mutex<T> {
+	pub fn lock(self: &mut Mutex<T>) nothrow -> MutexGuard<T> {
+		while not atomic.atomic_compare_exchange_bool(&self.locked, false, true, 1, 0) {
+		}
+		return MutexGuard<type T>(m = self);
+	}
+}
+
+implement<T> MutexGuard<T> {
+	pub fn get_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
+		return &mut self.m.value;
+	}
+}
+
+implement<T> core.BorrowMut<T> for MutexGuard<T> {
+	pub fn borrow_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
+		return self.get_mut();
+	}
+}
+
+implement<T> core.Destructible for MutexGuard<T> {
+	pub fn destroy(self: MutexGuard<T>) nothrow -> Void {
+		atomic.atomic_store_bool(&self.m.locked, false, 2);
+	}
 }
 
 

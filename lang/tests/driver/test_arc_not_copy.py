@@ -43,7 +43,7 @@ def test_arc_is_not_copy(tmp_path: Path) -> None:
 module m_main
 
 import std.core as core;
-import std.concurrency as conc;
+import std.concurrent as conc;
 
 fn needs_copy<T>() nothrow -> Int require T is core.Copy { return 0; }
 

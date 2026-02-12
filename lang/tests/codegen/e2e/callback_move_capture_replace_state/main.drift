@@ -1,0 +1,39 @@
+module main
+
+import std.core as core;
+import std.concurrent as conc;
+
+struct Counter { v: Int }
+
+implement Counter {
+	pub fn inc(self: &mut Counter, delta: Int) nothrow -> Int {
+		self.v = self.v + delta;
+		return self.v;
+	}
+}
+
+struct Holder {
+	cb: core.Callback0<Int>
+}
+
+fn noop() nothrow -> Int { return -1; }
+
+implement Holder {
+	pub fn call(self: &Holder) nothrow -> Int { return self.cb.call(); }
+	pub fn replace(self: &mut Holder, var cb: core.Callback0<Int>) nothrow -> Void { self.cb = move cb; }
+}
+
+fn main() nothrow -> Int {
+	var root = conc.arc(conc.mutex(Counter(v = 1)));
+	var captured = root.clone();
+	var cb: core.Callback0<Int> = core.callback0(| | captures(move captured) => {
+		var g = conc.lock(captured);
+		return g.get_mut().inc(2);
+	});
+	var h = Holder(cb = move cb);
+	if h.call() != 3 { return 40; }
+	h.replace(core.callback0(noop));
+	var g2 = conc.lock(root);
+	if g2.get_mut().v != 3 { return 41; }
+	return 0;
+}

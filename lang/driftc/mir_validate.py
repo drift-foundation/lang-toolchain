@@ -552,6 +552,9 @@ def validate_mir_iface_init_invariants(
 						if instr.local in cur_locals:
 							cur_values.add(instr.dest)
 						continue
+					if isinstance(instr, M.LoadRef) and _is_iface(instr.inner_ty):
+						cur_values.add(instr.dest)
+						continue
 					if isinstance(instr, M.StoreLocal):
 						val_is_iface = instr.value in cur_values or instr.value in iface_params or value_iface_type.get(instr.value, False)
 						if val_is_iface:

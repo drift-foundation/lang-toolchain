@@ -11,7 +11,7 @@ conflicts and keeps the emitter dumb.
 
 ```drift
 import std.core as core;
-import std.concurrency as conc;
+import std.concurrent as conc;
 
 struct StateMachine { state: Int }
 
@@ -200,7 +200,7 @@ Loop ergonomics note:
 
 Use the weakest ordering that proves correctness:
 - counters and telemetry: `Relaxed`
-- read-modify-write ownership/state transitions: `AcqRel` (failure usually `Acquire` or `Relaxed`)
+- read-modify-write ownership/state transitions: start with `AcqRel`, then relax case-by-case (for example Arc-style refcount: inc `Relaxed`, dec `Release` + acquire-on-zero before destroy)
 - producer/consumer handoff: producer `Release` store, consumer `Acquire` load
 
 ```drift

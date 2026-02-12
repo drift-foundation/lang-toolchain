@@ -4432,21 +4432,22 @@ def compile_stubbed_funcs(
 		builder.func.params = list(spec.param_names)
 		binding_types = getattr(hidden_typed_fn, "binding_types", None) or preseed_binding_types
 		lower = HIRToMIR(
-			builder,
-			type_table=shared_type_table,
-			exc_env=exc_env,
-			param_types=param_types,
-			expr_types=getattr(hidden_typed_fn, "expr_types", None),
-			iface_coercions=getattr(hidden_typed_fn, "iface_coercions", None),
-			signatures_by_id=signatures_by_id,
-			current_fn_id=spec.fn_id,
-			call_info_by_callsite_id=hidden_typed_fn.call_info_by_callsite_id,
-			can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
-			return_type=hidden_ret_type,
-			binding_types=binding_types,
-			typed_mode=_typed_mode_for(hidden_typed_fn, shared_type_table, not _has_error(hidden_typed.diagnostics)),
-		)
+				builder,
+				type_table=shared_type_table,
+				exc_env=exc_env,
+				param_types=param_types,
+				expr_types=getattr(hidden_typed_fn, "expr_types", None),
+				iface_coercions=getattr(hidden_typed_fn, "iface_coercions", None),
+				signatures_by_id=signatures_by_id,
+				current_fn_id=spec.fn_id,
+				call_info_by_callsite_id=hidden_typed_fn.call_info_by_callsite_id,
+				can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
+				return_type=hidden_ret_type,
+				binding_types=binding_types,
+				typed_mode=_typed_mode_for(hidden_typed_fn, shared_type_table, not _has_error(hidden_typed.diagnostics)),
+			)
 		lower._lambda_capture_ref_is_value = spec.lambda_capture_ref_is_value
+		lower._lambda_is_callback = bool(getattr(spec, "is_callback_lambda", False))
 		if spec.has_captures:
 			lower._lambda_env_local = spec.param_names[0]
 			lower._lambda_env_ty = spec.env_ty

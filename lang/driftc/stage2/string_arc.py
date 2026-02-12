@@ -546,6 +546,37 @@ def insert_string_arc(
 				assigned_out[name] = new_out
 				changed = True
 
+	# Track locals that are definitely moved-out at each block boundary so
+	# successor return blocks do not re-drop moved values.
+	moved_in: Dict[str, Set[str]] = {name: set() for name in block_order}
+	moved_out: Dict[str, Set[str]] = {name: set() for name in block_order}
+	changed = True
+	while changed:
+		changed = False
+		for name in block_order:
+			if name == func.entry:
+				new_in = set()
+			else:
+				ps = preds.get(name, set())
+				if not ps:
+					new_in = set()
+				else:
+					it = iter(ps)
+					new_in = set(moved_out[next(it)])
+					for p in it:
+						new_in &= moved_out[p]
+			cur = set(new_in)
+			for instr in func.blocks[name].instructions:
+				if isinstance(instr, M.StoreLocal):
+					cur.discard(instr.local)
+				elif isinstance(instr, M.MoveOut):
+					cur.add(instr.local)
+			new_out = cur
+			if new_in != moved_in[name] or new_out != moved_out[name]:
+				moved_in[name] = new_in
+				moved_out[name] = new_out
+				changed = True
+
 	owned_defs: Set[str] = set()
 	move_only_defs: Set[str] = set()
 	for name in block_order:
@@ -576,7 +607,7 @@ def insert_string_arc(
 		new_instrs: list[M.MInstr] = []
 		owned_values: Set[str] = set(owned_defs)
 		move_only_values: Set[str] = set(move_only_defs)
-		moved_out_locals: Set[str] = set()
+		moved_out_locals: Set[str] = set(moved_in.get(block.name, set()))
 		explicitly_dropped_locals: Set[str] = set()
 		load_local_src: Dict[str, str] = {}
 

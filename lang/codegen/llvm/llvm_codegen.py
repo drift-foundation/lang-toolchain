@@ -6489,6 +6489,14 @@ class _FuncBuilder:
 		# Integer ops on isize/usize.
 		int_ty = None
 		unsigned = False
+		# Some intrinsic lowering paths record concrete LLVM integer types
+		# (e.g. i64) while constants keep abstract drift integer kinds.
+		# Normalize mixed abstract/concrete pairs before selecting op kind.
+		abstract_ints = {DRIFT_INT_TYPE, DRIFT_USIZE_TYPE, DRIFT_U64_TYPE}
+		if left_ty in abstract_ints and self._llty(left_ty) == right_ty:
+			right_ty = left_ty
+		elif right_ty in abstract_ints and self._llty(right_ty) == left_ty:
+			left_ty = right_ty
 		bitwise_ops = {BinaryOp.BIT_AND, BinaryOp.BIT_OR, BinaryOp.BIT_XOR, BinaryOp.SHL, BinaryOp.SHR}
 		if instr.op in bitwise_ops:
 			if left_ty != DRIFT_USIZE_TYPE or right_ty != DRIFT_USIZE_TYPE:
