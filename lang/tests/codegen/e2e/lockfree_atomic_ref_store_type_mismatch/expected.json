@@ -1,0 +1,10 @@
+{
+  "description": "lockfree phase1: AtomicRef store rejects cross-type RefToken",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "no matching method 'store'"
+    }
+  ]
+}

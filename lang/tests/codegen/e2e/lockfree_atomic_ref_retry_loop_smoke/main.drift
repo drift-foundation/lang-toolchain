@@ -1,0 +1,31 @@
+module m
+
+import std.sync as sync;
+
+struct Node {
+	v: Int
+}
+
+fn cas_set(ar: &sync.AtomicRef<Node>, var expected: sync.RefToken<Node>, var desired: sync.RefToken<Node>) nothrow -> Int {
+	while true {
+		val observed = ar.compare_exchange_observed(expected, desired, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+		if observed.to_uint() == expected.to_uint() {
+			return 0;
+		}
+		expected = observed;
+		if expected.to_uint() == desired.to_uint() {
+			return 1;
+		}
+	}
+	return 2;
+}
+
+fn main() nothrow -> Int {
+	var ar = sync.atomic_ref<type Node>(sync.null_ref_token<type Node>());
+	val t1 = sync.ref_token<type Node>(cast<Uint>(11));
+	val t2 = sync.ref_token<type Node>(cast<Uint>(22));
+	if cas_set(&ar, sync.null_ref_token<type Node>(), t1) != 0 { return 3; }
+	if cas_set(&ar, sync.null_ref_token<type Node>(), t2) != 0 { return 4; }
+	if ar.load(sync.MemoryOrder::Acquire()).to_uint() != cast<Uint>(22) { return 5; }
+	return 0;
+}

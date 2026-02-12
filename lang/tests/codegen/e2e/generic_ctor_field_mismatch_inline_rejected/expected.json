@@ -1,0 +1,10 @@
+{
+  "description": "generic ctor field mismatch must be rejected in inline call-expression form",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "field 'inner' type mismatch"
+    }
+  ]
+}

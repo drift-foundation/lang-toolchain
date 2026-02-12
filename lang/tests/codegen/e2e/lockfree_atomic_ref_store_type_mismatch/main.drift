@@ -1,0 +1,13 @@
+module m
+
+import std.sync as sync;
+
+struct A { v: Int }
+struct B { v: Int }
+
+fn main() nothrow -> Int {
+	var ar = sync.atomic_ref<type A>(sync.null_ref_token<type A>());
+	val bad = sync.ref_token<type B>(cast<Uint>(7));
+	ar.store(bad, sync.MemoryOrder::Release());
+	return 0;
+}

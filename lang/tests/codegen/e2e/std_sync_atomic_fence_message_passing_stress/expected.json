@@ -1,0 +1,6 @@
+{
+  "description": "std.sync fence semantics: repeated release/acquire handoff with relaxed atomics",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

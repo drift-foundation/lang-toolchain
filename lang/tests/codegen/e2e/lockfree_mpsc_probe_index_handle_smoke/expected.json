@@ -1,0 +1,6 @@
+{
+  "description": "lockfree probe: index-handle MPSC skeleton compiles/runs with CAS-observed",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

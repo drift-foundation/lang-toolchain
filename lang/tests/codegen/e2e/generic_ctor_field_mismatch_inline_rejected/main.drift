@@ -1,0 +1,29 @@
+module main
+
+import lang.atomic as atomic;
+
+struct Wrap {
+	inner: atomic.AtomicUint
+}
+
+struct Holder<T> {
+	inner: atomic.AtomicUint
+}
+
+struct Handle<T> {
+	raw: Uint
+}
+
+fn make(v: Uint) nothrow -> Wrap {
+	return Wrap(inner = atomic.atomic_uint(v));
+}
+
+fn build<T>(h: Handle<T>) nothrow -> Holder<T> {
+	return Holder<type T>(inner = make(h.raw));
+}
+
+fn main() nothrow -> Int {
+	val h = Handle<type Int>(raw = cast<Uint>(1));
+	val _ = build<type Int>(h);
+	return 0;
+}

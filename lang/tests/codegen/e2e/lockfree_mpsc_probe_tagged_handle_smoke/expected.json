@@ -1,0 +1,6 @@
+{
+  "description": "lockfree probe: tagged handle (index+tag in Uint) with CAS-observed transitions",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

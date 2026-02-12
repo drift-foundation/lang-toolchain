@@ -1,0 +1,62 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.core as core;
+
+struct Shared {
+	data: sync.AtomicInt,
+	flag: sync.AtomicInt
+}
+
+fn writer(a: conc.Arc<Shared>, value: Int) nothrow -> Int {
+	val s = a.get();
+	s.data.store(value, sync.MemoryOrder::Relaxed());
+	sync.thread_fence(sync.MemoryOrder::Release());
+	s.flag.store(1, sync.MemoryOrder::Relaxed());
+	return 0;
+}
+
+fn run_once(value: Int) -> Int {
+	var shared = conc.arc(Shared(data = sync.atomic_int(0), flag = sync.atomic_int(0)));
+	var w = shared.clone();
+	var t = conc.spawn_cb(core.callback0(| | captures(move w, copy value) => { return writer(move w, value); }));
+	val s = shared.get();
+	var spins = 0;
+	while s.flag.load(sync.MemoryOrder::Relaxed()) == 0 {
+		spins = spins + 1;
+		if spins > 100000000 {
+			return 1;
+		}
+	}
+	sync.thread_fence(sync.MemoryOrder::Acquire());
+	val got = s.data.load(sync.MemoryOrder::Relaxed());
+	match t.join() {
+		Ok(v) => {
+			if v != 0 {
+				return 2;
+			}
+		},
+		default => { return 3; }
+	}
+	if got != value {
+		return 4;
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	var i = 1;
+	while i <= 250 {
+		val rc = try run_once(i) catch { 99 };
+		if rc != 0 {
+			return 10 + rc;
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 98 };
+}

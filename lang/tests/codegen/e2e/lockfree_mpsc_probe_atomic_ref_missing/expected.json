@@ -1,0 +1,4 @@
+{
+  "description": "lockfree probe: atomic reference head type is available in std.sync API",
+  "exit_code": 0
+}

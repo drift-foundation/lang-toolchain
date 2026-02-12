@@ -1,0 +1,42 @@
+module main
+
+import std.concurrent as conc;
+
+fn one() -> Int {
+	var t = conc.spawn(| | => {
+		conc.sleep(conc.Duration(millis = 1));
+		return 1;
+	});
+	t.cancel();
+	var res = t.join_timeout(conc.Duration(millis = 0));
+	return match res {
+		Err(err) => {
+			yield match err {
+				Cancelled => { 0 },
+				Timeout => { 0 },
+				Closed => { 12 },
+				Busy => { 13 },
+				Failed(_) => { 14 },
+				default => { 15 },
+			}
+		},
+		Ok(_v) => { 0 },
+		default => { 16 },
+	};
+}
+
+fn run() -> Int {
+	var i = 0;
+	while i < 3000 {
+		val rc = one();
+		if rc != 0 {
+			return rc;
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

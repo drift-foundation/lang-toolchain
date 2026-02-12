@@ -1,0 +1,26 @@
+module m
+
+import std.sync as sync;
+
+struct MpscHeadTail {
+	head: sync.AtomicUint,
+	tail: sync.AtomicUint
+}
+
+fn producer_claim_tail(q: &MpscHeadTail, expect: Uint, next: Uint) nothrow -> Uint {
+	return q.tail.compare_exchange_observed(expect, next, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+}
+
+fn main() nothrow -> Int {
+	var q = MpscHeadTail(
+		head = sync.atomic_uint(cast<Uint>(0)),
+		tail = sync.atomic_uint(cast<Uint>(0))
+	);
+	val a = producer_claim_tail(&q, cast<Uint>(0), cast<Uint>(1));
+	if a != cast<Uint>(0) { return 1; }
+	val b = producer_claim_tail(&q, cast<Uint>(0), cast<Uint>(2));
+	if b != cast<Uint>(1) { return 2; }
+	val c = q.tail.load(sync.MemoryOrder::Acquire());
+	if c != cast<Uint>(1) { return 3; }
+	return 0;
+}

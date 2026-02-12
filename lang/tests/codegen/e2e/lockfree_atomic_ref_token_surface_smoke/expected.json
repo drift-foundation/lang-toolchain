@@ -1,0 +1,6 @@
+{
+  "description": "lockfree phase1: AtomicRef token-only CAS/load/store surface smoke",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

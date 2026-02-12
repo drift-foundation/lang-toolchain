@@ -1,0 +1,4 @@
+{
+  "description": "std.sync exposes thread/signal fence APIs",
+  "exit_code": 0
+}

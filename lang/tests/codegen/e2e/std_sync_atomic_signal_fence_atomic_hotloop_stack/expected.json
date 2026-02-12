@@ -1,0 +1,6 @@
+{
+  "description": "regression: signal_fence+atomic hot loop must not stack-overflow from per-iteration variant allocas",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

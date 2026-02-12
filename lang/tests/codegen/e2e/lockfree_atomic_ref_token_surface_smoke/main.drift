@@ -1,0 +1,19 @@
+module m
+
+import std.sync as sync;
+
+struct Node {
+	v: Int
+}
+
+fn main() nothrow -> Int {
+	var ar = sync.atomic_ref<type Node>(sync.null_ref_token<type Node>());
+	val t0 = ar.load(sync.MemoryOrder::Acquire());
+	if not t0.is_null() { return 1; }
+	val t1 = sync.ref_token<type Node>(cast<Uint>(9));
+	val old = ar.compare_exchange_observed(sync.null_ref_token<type Node>(), t1, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+	if not old.is_null() { return 2; }
+	val cur = ar.load(sync.MemoryOrder::Acquire());
+	if cur.to_uint() != cast<Uint>(9) { return 3; }
+	return 0;
+}

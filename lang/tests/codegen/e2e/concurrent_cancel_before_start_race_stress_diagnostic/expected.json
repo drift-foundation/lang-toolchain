@@ -1,0 +1,6 @@
+{
+  "description": "diagnostic companion: classify cancel-before-start race-stress failures under load",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

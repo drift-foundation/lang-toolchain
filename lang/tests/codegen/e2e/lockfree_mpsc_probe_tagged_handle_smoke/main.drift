@@ -1,0 +1,51 @@
+module m
+
+import std.sync as sync;
+
+const INDEX_BITS_U: Uint = 16;
+
+fn pack_handle(tag: Uint, idx: Uint) nothrow -> Uint {
+	return (tag << INDEX_BITS_U) | (idx & cast<Uint>(65535));
+}
+
+fn unpack_tag(h: Uint) nothrow -> Uint {
+	return h >> INDEX_BITS_U;
+}
+
+fn unpack_idx(h: Uint) nothrow -> Uint {
+	return h & cast<Uint>(65535);
+}
+
+struct MpscTagged {
+	head: sync.AtomicUint,
+	tail: sync.AtomicUint
+}
+
+fn producer_try_advance_tail(q: &MpscTagged, expected: Uint, next: Uint) nothrow -> Uint {
+	return q.tail.compare_exchange_observed(expected, next, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+}
+
+fn main() nothrow -> Int {
+	var q = MpscTagged(
+		head = sync.atomic_uint(pack_handle(cast<Uint>(0), cast<Uint>(0))),
+		tail = sync.atomic_uint(pack_handle(cast<Uint>(0), cast<Uint>(0)))
+	);
+
+	val old0 = producer_try_advance_tail(&q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(1), cast<Uint>(9)));
+	if old0 != pack_handle(cast<Uint>(0), cast<Uint>(0)) { return 1; }
+
+	val old1 = producer_try_advance_tail(&q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(2), cast<Uint>(10)));
+	if old1 != pack_handle(cast<Uint>(1), cast<Uint>(9)) { return 2; }
+
+	val cur = q.tail.load(sync.MemoryOrder::Acquire());
+	if unpack_tag(cur) != cast<Uint>(1) { return 3; }
+	if unpack_idx(cur) != cast<Uint>(9) { return 4; }
+
+	// Consumer publishes new head independently (single-consumer side).
+	val h0 = q.head.compare_exchange_observed(pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(1), cast<Uint>(9)), sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+	if h0 != pack_handle(cast<Uint>(0), cast<Uint>(0)) { return 5; }
+	val hcur = q.head.load(sync.MemoryOrder::Acquire());
+	if hcur != pack_handle(cast<Uint>(1), cast<Uint>(9)) { return 6; }
+
+	return 0;
+}

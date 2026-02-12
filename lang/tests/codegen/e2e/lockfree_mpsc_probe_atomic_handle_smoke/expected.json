@@ -1,0 +1,6 @@
+{
+  "description": "lockfree probe: typed AtomicHandle<T> supports tagged-handle CAS transitions",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

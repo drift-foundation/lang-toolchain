@@ -111,6 +111,7 @@ static DriftLogRecordSlot *drift_log_slots = NULL;
 static _Atomic uint64_t drift_log_write_seq = 0;
 static _Atomic uint64_t drift_log_read_seq = 0;
 static void drift_drop_callback(DriftIface *cb);
+static void drift_exec_shutdown_all_atexit(void);
 static pthread_mutex_t drift_vt_registry_mu = PTHREAD_MUTEX_INITIALIZER;
 static DriftVt *drift_vt_registry_head = NULL;
 static void drift_reactor_forget_vt(DriftVt *vt);
@@ -164,6 +165,9 @@ static void drift_vt_destroy(DriftVt *h) {
 }
 
 static void drift_vt_registry_cleanup_atexit(void) {
+	/* Ensure no executor workers are concurrently mutating VT lifetime/registry
+	 * while process-exit VT cleanup walks and tears down the registry list. */
+	drift_exec_shutdown_all_atexit();
 	pthread_mutex_lock(&drift_vt_registry_mu);
 	DriftVt *cur = drift_vt_registry_head;
 	drift_vt_registry_head = NULL;
@@ -224,7 +228,7 @@ static void drift_log_ensure_defaults(void);
 
 static void drift_reactor_forget_vt(DriftVt *vt) {
 #ifdef __linux__
-	Reactor *r = drift_default_reactor_ptr;
+	Reactor *r = (Reactor *)atomic_load(&drift_default_reactor);
 	if (!r || !vt) {
 		return;
 	}
@@ -903,11 +907,11 @@ static void drift_reactor_destroy(Reactor *r) {
 }
 
 static void drift_reactor_shutdown_default_atexit(void) {
+	/* Reactor users run on executor workers; ensure workers are stopped before
+	 * reactor mutex/fds are torn down at process exit. */
+	drift_exec_shutdown_all_atexit();
 	uint64_t raw = atomic_exchange(&drift_default_reactor, 0);
 	Reactor *r = (Reactor *)raw;
-	if (!r) {
-		r = drift_default_reactor_ptr;
-	}
 	drift_default_reactor_ptr = NULL;
 	if (r) {
 		drift_reactor_destroy(r);
@@ -1019,6 +1023,9 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 }
 
 static void drift_exec_shutdown_all_atexit(void) {
+	/* Prevent the default-executor atexit hook from dereferencing stale
+	 * pointers after global executor teardown runs first. */
+	atomic_store(&drift_default_executor, 0);
 	while (1) {
 		pthread_mutex_lock(&drift_exec_registry_mu);
 		DriftExec *exec = drift_exec_registry_head;
@@ -1215,6 +1222,8 @@ uint64_t drift_thread_join_timeout(uint64_t vt, int64_t timeout_ms) {
 		return 1;
 	}
 	if (atomic_load(&h->completed)) {
+		pthread_mutex_lock(&h->mu);
+		pthread_mutex_unlock(&h->mu);
 		drift_vt_destroy(h);
 		return 0;
 	}
@@ -1658,6 +1667,8 @@ void drift_thread_drop(uint64_t vt) {
 	}
 	atomic_store(&h->dropped, 1);
 	if (atomic_load(&h->completed)) {
+		pthread_mutex_lock(&h->mu);
+		pthread_mutex_unlock(&h->mu);
 		drift_vt_destroy(h);
 		return;
 	}
@@ -1716,27 +1727,17 @@ uint64_t drift_reactor_default_get(void) {
 
 void drift_reactor_default_set(uint64_t reactor) {
 	atomic_store(&drift_default_reactor, reactor);
-	if (reactor != 0) {
-		drift_default_reactor_ptr = (Reactor *)reactor;
-	}
+	drift_default_reactor_ptr = (Reactor *)reactor;
 }
 
 void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint64_t deadline_ms) {
 #ifdef __linux__
-	Reactor *r = drift_default_reactor_ptr;
+	Reactor *r = (Reactor *)drift_reactor_default_get();
 	if (vt != 0) {
 		DriftVt *h = (DriftVt *)vt;
 		int st = atomic_load(&h->state);
 		if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) {
 			return;
-		}
-	}
-	if (!r) {
-		r = drift_reactor_create();
-		drift_default_reactor_ptr = r;
-		atomic_store(&drift_default_reactor, (uint64_t)r);
-		if (r) {
-			pthread_once(&drift_reactor_shutdown_once, drift_reactor_register_shutdown_once);
 		}
 	}
 	if (!r) {
@@ -1781,20 +1782,12 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 }
 
 void drift_reactor_register_timer(uint64_t deadline_ms, uint64_t vt) {
-	Reactor *r = drift_default_reactor_ptr;
+	Reactor *r = (Reactor *)drift_reactor_default_get();
 	if (vt != 0) {
 		DriftVt *h = (DriftVt *)vt;
 		int st = atomic_load(&h->state);
 		if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) {
 			return;
-		}
-	}
-	if (!r) {
-		r = drift_reactor_create();
-		drift_default_reactor_ptr = r;
-		atomic_store(&drift_default_reactor, (uint64_t)r);
-		if (r) {
-			pthread_once(&drift_reactor_shutdown_once, drift_reactor_register_shutdown_once);
 		}
 	}
 	if (!r) {

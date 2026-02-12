@@ -913,7 +913,6 @@ def resolve_struct_ctor(
 	if len(field_names) != len(field_types):
 		ctx.diagnostics.append(ctx.tc_diag(message=f"internal: struct '{struct_name}' schema/type mismatch", severity="error", span=span))
 		return StructCtorResolveResult(struct_id, field_types, [], list(arg_exprs))
-	skip_generic_type_checks = bool(schema.type_params)
 	def _same_type(a: TypeId, b: TypeId) -> bool:
 		if a == b:
 			return True
@@ -945,7 +944,7 @@ def resolve_struct_ctor(
 		ctor_arg_field_indices = list(range(len(arg_exprs)))
 		ctor_args = list(arg_exprs)
 		for idx, (have, want) in enumerate(zip(arg_types, field_types)):
-			if skip_generic_type_checks or ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
+			if ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
 				want_def = ctx.type_table.get(want)
@@ -980,7 +979,7 @@ def resolve_struct_ctor(
 			return None
 		for idx, (have, field_idx) in enumerate(zip(arg_types, ctor_arg_field_indices)):
 			want = field_types[field_idx]
-			if skip_generic_type_checks or ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
+			if ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
 				want_def = ctx.type_table.get(want)

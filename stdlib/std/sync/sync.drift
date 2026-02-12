@@ -1,17 +1,30 @@
 module std.sync
 
 import lang.atomic as atomic;
+import std.core as core;
 
 export {
 	MemoryOrder,
+	Handle,
+	RefToken,
+	AtomicHandle,
+	AtomicRef,
 	AtomicBool,
 	AtomicInt,
 	AtomicUint,
 	AtomicUint64,
+	handle,
+	null_handle,
+	ref_token,
+	null_ref_token,
 	atomic_bool,
 	atomic_int,
 	atomic_uint,
-	atomic_uint64
+	atomic_uint64,
+	atomic_handle,
+	atomic_ref,
+	thread_fence,
+	signal_fence
 };
 
 pub type MemoryOrder = atomic.MemoryOrder;
@@ -32,6 +45,22 @@ pub struct AtomicUint64 {
 	inner: atomic.AtomicUint64
 }
 
+pub struct Handle<T> {
+	raw: Uint
+}
+
+pub struct AtomicHandle<T> {
+	inner: atomic.AtomicUint
+}
+
+pub struct RefToken<T> {
+	inner: Handle<T>
+}
+
+pub struct AtomicRef<T> {
+	inner: AtomicHandle<T>
+}
+
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
 	return AtomicBool(inner = atomic.atomic_bool(v));
 }
@@ -46,6 +75,70 @@ pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
 
 pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 	return AtomicUint64(inner = atomic.atomic_uint64(v));
+}
+
+pub fn handle<T>(raw: Uint) nothrow -> Handle<T> {
+	return Handle<type T>(raw = raw);
+}
+
+pub fn null_handle<T>() nothrow -> Handle<T> {
+	return Handle<type T>(raw = cast<Uint>(0));
+}
+
+pub fn atomic_handle<T>(v: Handle<T>) nothrow -> AtomicHandle<T> {
+	val x = atomic.atomic_uint(v.raw);
+	return AtomicHandle<type T>(inner = x);
+}
+
+pub fn ref_token<T>(raw: Uint) nothrow -> RefToken<T> {
+	val h = handle<type T>(raw);
+	return RefToken<type T>(inner = h);
+}
+
+pub fn null_ref_token<T>() nothrow -> RefToken<T> {
+	val h = null_handle<type T>();
+	return RefToken<type T>(inner = h);
+}
+
+pub fn atomic_ref<T>(v: RefToken<T>) nothrow -> AtomicRef<T> {
+	val a = atomic_handle<type T>(v.inner);
+	return AtomicRef<type T>(inner = a);
+}
+
+pub fn thread_fence(order: MemoryOrder) nothrow -> Void {
+	atomic.thread_fence(order);
+	return;
+}
+
+pub fn signal_fence(order: MemoryOrder) nothrow -> Void {
+	atomic.signal_fence(order);
+	return;
+}
+
+implement<T> core.Copy for Handle<T> {
+}
+
+implement<T> Handle<T> {
+	pub fn to_uint(self: &Handle<T>) nothrow -> Uint {
+		return self.raw;
+	}
+
+	pub fn is_null(self: &Handle<T>) nothrow -> Bool {
+		return self.raw == cast<Uint>(0);
+	}
+}
+
+implement<T> core.Copy for RefToken<T> {
+}
+
+implement<T> RefToken<T> {
+	pub fn to_uint(self: &RefToken<T>) nothrow -> Uint {
+		return self.inner.raw;
+	}
+
+	pub fn is_null(self: &RefToken<T>) nothrow -> Bool {
+		return self.inner.is_null();
+	}
 }
 
 implement AtomicBool {
@@ -65,6 +158,10 @@ implement AtomicBool {
 	pub fn compare_exchange(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
+
+	pub fn compare_exchange_observed(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
+	}
 }
 
 implement AtomicInt {
@@ -83,6 +180,10 @@ implement AtomicInt {
 
 	pub fn compare_exchange(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
+	}
+
+	pub fn compare_exchange_observed(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Int {
+		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
 	}
 
 	pub fn fetch_add(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
@@ -112,6 +213,10 @@ implement AtomicUint {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	pub fn compare_exchange_observed(self: &AtomicUint, expected: Uint, desired: Uint, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint {
+		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
+	}
+
 	pub fn fetch_add(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
 		return self.inner.fetch_add(v, order);
 	}
@@ -139,11 +244,67 @@ implement AtomicUint64 {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	pub fn compare_exchange_observed(self: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint64 {
+		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
+	}
+
 	pub fn fetch_add(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.fetch_add(v, order);
 	}
 
 	pub fn fetch_sub(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.fetch_sub(v, order);
+	}
+}
+
+implement<T> AtomicHandle<T> {
+	pub fn load(self: &AtomicHandle<T>, order: MemoryOrder) nothrow -> Handle<T> {
+		val raw = self.inner.load(order);
+		return Handle<type T>(raw = raw);
+	}
+
+	pub fn store(self: &AtomicHandle<T>, v: Handle<T>, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v.raw, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicHandle<T>, v: Handle<T>, order: MemoryOrder) nothrow -> Handle<T> {
+		val raw = self.inner.exchange(v.raw, order);
+		return Handle<type T>(raw = raw);
+	}
+
+	pub fn compare_exchange(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected.raw, desired.raw, success_order, failure_order);
+	}
+
+	pub fn compare_exchange_observed(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Handle<T> {
+		val raw = self.inner.compare_exchange_observed(expected.raw, desired.raw, success_order, failure_order);
+		return Handle<type T>(raw = raw);
+	}
+}
+
+implement<T> AtomicRef<T> {
+	pub fn load(self: &AtomicRef<T>, order: MemoryOrder) nothrow -> RefToken<T> {
+		val h = self.inner.load(order);
+		return RefToken<type T>(inner = h);
+	}
+
+	pub fn store(self: &AtomicRef<T>, v: RefToken<T>, order: MemoryOrder) nothrow -> Void {
+		self.inner.store(v.inner, order);
+		return;
+	}
+
+	pub fn exchange(self: &AtomicRef<T>, v: RefToken<T>, order: MemoryOrder) nothrow -> RefToken<T> {
+		val h = self.inner.exchange(v.inner, order);
+		return RefToken<type T>(inner = h);
+	}
+
+	pub fn compare_exchange(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		return self.inner.compare_exchange(expected.inner, desired.inner, success_order, failure_order);
+	}
+
+	pub fn compare_exchange_observed(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> RefToken<T> {
+		val h = self.inner.compare_exchange_observed(expected.inner, desired.inner, success_order, failure_order);
+		return RefToken<type T>(inner = h);
 	}
 }

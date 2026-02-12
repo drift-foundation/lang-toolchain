@@ -1,0 +1,16 @@
+module m
+
+import std.sync as sync;
+
+struct A { v: Int }
+struct B { v: Int }
+
+fn take_a(t: sync.RefToken<A>) nothrow -> Int {
+	if t.is_null() { return 0; }
+	return 1;
+}
+
+fn main() nothrow -> Int {
+	val tb = sync.ref_token<type B>(cast<Uint>(3));
+	return take_a(tb);
+}

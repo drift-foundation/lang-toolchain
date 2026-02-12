@@ -1,0 +1,4 @@
+{
+  "description": "lang.atomic exposes fence APIs for low-level users",
+  "exit_code": 0
+}

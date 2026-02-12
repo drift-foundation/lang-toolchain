@@ -16,24 +16,30 @@ export {
 	atomic_store_bool,
 	atomic_exchange_bool,
 	atomic_compare_exchange_bool,
+	atomic_compare_exchange_observed_bool,
 	atomic_load_int,
 	atomic_store_int,
 	atomic_exchange_int,
 	atomic_compare_exchange_int,
+	atomic_compare_exchange_observed_int,
 	atomic_fetch_add_int,
 	atomic_fetch_sub_int,
 	atomic_load_uint,
 	atomic_store_uint,
 	atomic_exchange_uint,
 	atomic_compare_exchange_uint,
+	atomic_compare_exchange_observed_uint,
 	atomic_fetch_add_uint,
 	atomic_fetch_sub_uint,
 	atomic_load_uint64,
 	atomic_store_uint64,
 	atomic_exchange_uint64,
 	atomic_compare_exchange_uint64,
+	atomic_compare_exchange_observed_uint64,
 	atomic_fetch_add_uint64,
-	atomic_fetch_sub_uint64
+	atomic_fetch_sub_uint64,
+	thread_fence,
+	signal_fence
 };
 
 pub variant MemoryOrder {
@@ -155,6 +161,13 @@ implement AtomicBool {
 		}
 		return atomic_compare_exchange_bool(self, expected, desired, _order_code(success_order), _order_code(failure_order));
 	}
+
+	pub fn compare_exchange_observed(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
+		if not _cas_orders_valid(success_order, failure_order) {
+			return expected;
+		}
+		return atomic_compare_exchange_observed_bool(self, expected, desired, _order_code(success_order), _order_code(failure_order));
+	}
 }
 
 implement AtomicInt {
@@ -184,6 +197,13 @@ implement AtomicInt {
 			return false;
 		}
 		return atomic_compare_exchange_int(self, expected, desired, _order_code(success_order), _order_code(failure_order));
+	}
+
+	pub fn compare_exchange_observed(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Int {
+		if not _cas_orders_valid(success_order, failure_order) {
+			return expected;
+		}
+		return atomic_compare_exchange_observed_int(self, expected, desired, _order_code(success_order), _order_code(failure_order));
 	}
 }
 
@@ -215,6 +235,13 @@ implement AtomicUint {
 		}
 		return atomic_compare_exchange_uint(self, expected, desired, _order_code(success_order), _order_code(failure_order));
 	}
+
+	pub fn compare_exchange_observed(self: &AtomicUint, expected: Uint, desired: Uint, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint {
+		if not _cas_orders_valid(success_order, failure_order) {
+			return expected;
+		}
+		return atomic_compare_exchange_observed_uint(self, expected, desired, _order_code(success_order), _order_code(failure_order));
+	}
 }
 
 implement AtomicUint64 {
@@ -245,17 +272,36 @@ implement AtomicUint64 {
 		}
 		return atomic_compare_exchange_uint64(self, expected, desired, _order_code(success_order), _order_code(failure_order));
 	}
+
+	pub fn compare_exchange_observed(self: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint64 {
+		if not _cas_orders_valid(success_order, failure_order) {
+			return expected;
+		}
+		return atomic_compare_exchange_observed_uint64(self, expected, desired, _order_code(success_order), _order_code(failure_order));
+	}
+}
+
+pub fn thread_fence(order: MemoryOrder) nothrow -> Void {
+	atomic_thread_fence(_order_code(order));
+	return;
+}
+
+pub fn signal_fence(order: MemoryOrder) nothrow -> Void {
+	atomic_signal_fence(_order_code(order));
+	return;
 }
 
 @intrinsic pub fn atomic_load_bool(p: &AtomicBool, order: Int) nothrow -> Bool;
 @intrinsic pub fn atomic_store_bool(p: &AtomicBool, v: Bool, order: Int) nothrow -> Void;
 @intrinsic pub fn atomic_exchange_bool(p: &AtomicBool, v: Bool, order: Int) nothrow -> Bool;
 @intrinsic pub fn atomic_compare_exchange_bool(p: &AtomicBool, expected: Bool, desired: Bool, success_order: Int, failure_order: Int) nothrow -> Bool;
+@intrinsic pub fn atomic_compare_exchange_observed_bool(p: &AtomicBool, expected: Bool, desired: Bool, success_order: Int, failure_order: Int) nothrow -> Bool;
 
 @intrinsic pub fn atomic_load_int(p: &AtomicInt, order: Int) nothrow -> Int;
 @intrinsic pub fn atomic_store_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Void;
 @intrinsic pub fn atomic_exchange_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Int;
 @intrinsic pub fn atomic_compare_exchange_int(p: &AtomicInt, expected: Int, desired: Int, success_order: Int, failure_order: Int) nothrow -> Bool;
+@intrinsic pub fn atomic_compare_exchange_observed_int(p: &AtomicInt, expected: Int, desired: Int, success_order: Int, failure_order: Int) nothrow -> Int;
 @intrinsic pub fn atomic_fetch_add_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Int;
 @intrinsic pub fn atomic_fetch_sub_int(p: &AtomicInt, v: Int, order: Int) nothrow -> Int;
 
@@ -263,6 +309,7 @@ implement AtomicUint64 {
 @intrinsic pub fn atomic_store_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Void;
 @intrinsic pub fn atomic_exchange_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Uint;
 @intrinsic pub fn atomic_compare_exchange_uint(p: &AtomicUint, expected: Uint, desired: Uint, success_order: Int, failure_order: Int) nothrow -> Bool;
+@intrinsic pub fn atomic_compare_exchange_observed_uint(p: &AtomicUint, expected: Uint, desired: Uint, success_order: Int, failure_order: Int) nothrow -> Uint;
 @intrinsic pub fn atomic_fetch_add_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Uint;
 @intrinsic pub fn atomic_fetch_sub_uint(p: &AtomicUint, v: Uint, order: Int) nothrow -> Uint;
 
@@ -270,5 +317,8 @@ implement AtomicUint64 {
 @intrinsic pub fn atomic_store_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Void;
 @intrinsic pub fn atomic_exchange_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Uint64;
 @intrinsic pub fn atomic_compare_exchange_uint64(p: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: Int, failure_order: Int) nothrow -> Bool;
+@intrinsic pub fn atomic_compare_exchange_observed_uint64(p: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: Int, failure_order: Int) nothrow -> Uint64;
 @intrinsic pub fn atomic_fetch_add_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Uint64;
 @intrinsic pub fn atomic_fetch_sub_uint64(p: &AtomicUint64, v: Uint64, order: Int) nothrow -> Uint64;
+@intrinsic pub fn atomic_thread_fence(order: Int) nothrow -> Void;
+@intrinsic pub fn atomic_signal_fence(order: Int) nothrow -> Void;

@@ -1,0 +1,10 @@
+{
+  "description": "lockfree phase1: RefToken type safety rejects cross-type call",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "no matching overload for function 'take_a'"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "description": "lockfree phase1: AtomicRef observed-CAS retry loop semantics",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,0 +1,15 @@
+module m
+
+import std.sync as sync;
+
+struct Node {
+	v: Int
+}
+
+struct MpscQueue {
+	head: sync.AtomicRef<Node>
+}
+
+fn main() nothrow -> Int {
+	return 0;
+}
