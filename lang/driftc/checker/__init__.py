@@ -825,7 +825,7 @@ class Checker:
 							first_note = (
 								"cross-module call to exported/extern requires can-throw calling convention"
 							)
-					else:
+					elif call_can_throw:
 						call_can_throw = self._call_may_throw(callee_id, fn_infos)
 				if call_can_throw and not catch_all:
 					may_throw = True
@@ -850,7 +850,7 @@ class Checker:
 				call_can_throw = info.sig.can_throw
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					fn_info = fn_infos.get(info.target.symbol)
-					if fn_info is not None and fn_info.declared_can_throw is not None:
+					if call_can_throw and fn_info is not None and fn_info.declared_can_throw is not None:
 						call_can_throw = bool(fn_info.declared_can_throw)
 				if call_can_throw and not catch_all:
 					may_throw = True
@@ -3409,8 +3409,21 @@ class Checker:
 								continue
 							left_ty = ty_for(fn_id, instr.left)
 							right_ty = ty_for(fn_id, instr.right)
-							# If both operands agree, propagate that type; otherwise fall back to Unknown.
-							dest_ty = left_ty if left_ty == right_ty else self._unknown_type
+							from lang.driftc.stage1.hir_nodes import BinaryOp as HBinaryOp
+							if instr.op in (
+								HBinaryOp.EQ,
+								HBinaryOp.NE,
+								HBinaryOp.LT,
+								HBinaryOp.LE,
+								HBinaryOp.GT,
+								HBinaryOp.GE,
+								HBinaryOp.AND,
+								HBinaryOp.OR,
+							):
+								dest_ty = self._bool_type
+							else:
+								# Arithmetic/bitwise ops preserve operand scalar type when operands agree.
+								dest_ty = left_ty if left_ty == right_ty else self._unknown_type
 							if value_types.get((fn_id, dest)) != dest_ty:
 								value_types[(fn_id, dest)] = dest_ty
 								changed = True

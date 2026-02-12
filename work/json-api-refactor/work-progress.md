@@ -54,6 +54,54 @@ And keep `JsonNode` as the common sum type.
 3. Migrate std/examples/effective-drift to wrapper-first style.
 4. Decide deprecation/removal timeline after migration is stable.
 
+## Current Status
+
+### Landed
+
+1. Wrapper types added in `stdlib/std/json/json.drift`:
+   - `JsonArray`
+   - `JsonObject`
+2. Wrapper-first constructors added:
+   - `new_array() -> JsonArray`
+   - `new_object() -> JsonObject`
+3. Wrapper APIs added:
+   - `JsonArray.len/push/get/to_node`
+   - `JsonObject.len/set/get/to_node`
+4. Conversion from `JsonNode` to wrappers added:
+   - `JsonNode.into_array() -> Optional<JsonArray>`
+   - `JsonNode.into_object() -> Optional<JsonObject>`
+5. Regression test added and passing:
+   - `lang/tests/codegen/e2e/std_json_wrapper_build_encode`
+6. Dependency detour completed (LANGUAGE_BUG + container throw-contract tightening):
+   - pinned regression: `lang/tests/driver/test_equatable_nothrow_ssa_return_regression.py`
+   - checker fix in `lang/driftc/checker/__init__.py` for `BinaryOpInstr` bool-result typing
+   - `Equatable`/`Comparable` trait methods made `nothrow` in `stdlib/std/core/cmp.drift`
+   - `HashMap`/`HashSet` surfaces tightened where valid so wrapper object APIs can stay `nothrow`
+
+### Verified
+
+- Driver:
+  - `test_equatable_nothrow_ssa_return_regression`
+  - `test_hash_map_smoke`
+  - `test_std_json_regressions`
+- e2e:
+  - `std_json_wrapper_build_encode`
+  - `std_json_entries_iter_behavior`
+  - `std_json_parse_duplicate_as_object_get`
+  - `std_json_parse_duplicate_get_only`
+  - `hashmap_clear`
+  - `hashmap_iter_invalidate`
+  - `hashmap_jsonnode_duplicate_get_no_double_free`
+
+## Next Steps
+
+1. Add wrapper roundtrip coverage:
+   - `wrapper -> to_node -> into_array/into_object`
+   - `parse -> into_object/into_array`
+2. Migrate top-level examples/docs to wrapper-first construction style.
+3. Decide compatibility fate of old `JsonNode` shape-mutation helpers (retain/deprecate/remove).
+4. Add ASAN + alloc-track validation pass for the new wrapper test cluster.
+
 ## Regression-First Plan
 
 1. Add compile-pass e2e showing shape-safe construction:

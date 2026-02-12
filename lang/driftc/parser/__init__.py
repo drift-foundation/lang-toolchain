@@ -4248,6 +4248,41 @@ def _lower_parsed_program_to_hir(
 					loc=Span.from_loc(getattr(fn, "loc", None)),
 				)
 			)
+			trait_method_declared_nothrow = False
+			if getattr(impl, "trait", None) is not None:
+				trait_mod = getattr(impl.trait, "module_id", None) or module_id
+				trait_worlds_map = getattr(type_table, "trait_worlds", None)
+				trait_world = trait_worlds_map.get(trait_mod) if isinstance(trait_worlds_map, dict) else None
+				if trait_world is not None:
+					trait_defs = getattr(trait_world, "traits", {}) or {}
+					for trait_key, trait_def in trait_defs.items():
+						if getattr(trait_key, "module", None) != trait_mod:
+							continue
+						if getattr(trait_key, "name", None) != impl.trait.name:
+							continue
+						for meth in list(getattr(trait_def, "methods", []) or []):
+							if meth.name == fn.name:
+								trait_method_declared_nothrow = bool(getattr(meth, "declared_nothrow", False))
+								break
+						if trait_method_declared_nothrow:
+							break
+			if getattr(impl, "trait", None) is not None and not trait_method_declared_nothrow:
+				trait_mod = getattr(impl.trait, "module_id", None) or module_id
+				trait_base_id = type_table.get_interface_base(module_id=trait_mod, name=impl.trait.name)
+				if trait_base_id is not None:
+					try:
+						trait_linear = type_table.interface_linearization(trait_base_id)
+					except Exception:
+						trait_linear = [trait_base_id]
+					for owner_id in trait_linear:
+						owner_schema = type_table.interface_bases.get(owner_id)
+						for meth in list(getattr(owner_schema, "methods", []) or []):
+							if meth.name == fn.name:
+								trait_method_declared_nothrow = bool(getattr(meth, "declared_nothrow", False))
+								break
+						if trait_method_declared_nothrow:
+							break
+			declared_nothrow = bool(getattr(fn, "declared_nothrow", False)) or trait_method_declared_nothrow
 			decls.append(
 				_FrontendDecl(
 					fn_id,
@@ -4258,7 +4293,7 @@ def _lower_parsed_program_to_hir(
 					params,
 					fn.return_type,
 					getattr(fn, "loc", None),
-					bool(getattr(fn, "declared_nothrow", False)),
+					declared_nothrow,
 					is_unsafe=bool(getattr(fn, "is_unsafe", False)),
 					is_pub=bool(getattr(fn, "is_pub", False)),
 					is_method=True,

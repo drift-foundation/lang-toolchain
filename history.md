@@ -624,3 +624,21 @@
   - match/arm inference regression that caused `cannot bind a Void value` in `array_string_pop`
   - restored passing concurrency/match/exception payload e2e families.
 - Full test suite passed; looping branch marked ready to close.
+
+## 2026-02-12 – Trait UFCS nothrow contract fix (`hashmap_collision`)
+- Fixed `hashmap_collision` checker regression where `HashMapCore::find_slot` was reported as “declared nothrow but may throw” after `Equatable.eq` contract tightening.
+- Root cause: checker nothrow analysis was overriding direct-call `CallInfo.can_throw` with callee metadata even when call-site trait contract had already resolved to non-throwing.
+- Checker fix in `lang/driftc/checker/__init__.py`:
+  - preserve explicit non-throwing call-site contracts during direct-call analysis;
+  - only refine direct callee throw status when call was already marked can-throw.
+- Hardened trait UFCS throw-effect computation in `lang/driftc/checker/call_resolver.py`:
+  - trait metadata fallback to trait-world when trait-index method metadata is incomplete;
+  - explicit `declared_nothrow`-driven `CallInfo.can_throw` for trait UFCS calls.
+- Added parser-side impl signature hardening in `lang/driftc/parser/__init__.py`:
+  - trait method `declared_nothrow` inheritance into impl method signatures when omitted by the impl method declaration.
+- Added dedicated driver regression:
+  - `lang/tests/driver/test_trait_impl_nothrow_inherits_interface.py`.
+- Revalidated:
+  - e2e `hashmap_collision` now passes;
+  - `hashmap_clear`, `hashmap_iter_invalidate`, and `std_log_level_filtering` spot checks pass;
+  - existing checker regression `test_equatable_nothrow_ssa_return_regression` remains passing.

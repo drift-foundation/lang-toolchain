@@ -2811,11 +2811,17 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 		diagnostics.append(_tc_diag(message="UFCS call requires a receiver argument", severity="error", span=getattr(expr, "loc", Span())))
 		return MethodCallResult(ctx.unknown_ty, None)
 	trait_def = trait_index.traits_by_id.get(trait_key)
+	if trait_def is None or not list(getattr(trait_def, "methods", []) or []):
+		world = ctx.global_trait_world or ctx.visible_trait_world
+		if world is not None:
+			trait_def = world.traits.get(trait_key)
+	trait_method_declared_nothrow: bool | None = None
 	method_sig = None
 	if trait_def is not None:
 		for method in getattr(trait_def, "methods", []) or []:
 			if getattr(method, "name", None) == qm.member:
 				method_sig = method
+				trait_method_declared_nothrow = bool(getattr(method, "declared_nothrow", False))
 				break
 	trait_type_params = list(getattr(trait_def, "type_params", []) or []) if trait_def is not None else []
 	if method_sig is not None and (not trait_type_params or type_arg_ids):
@@ -2874,7 +2880,10 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				param_type_ids.append(resolve_opaque_type(param.type_expr, ctx.type_table, module_id=trait_key.module or ctx.current_module_name, type_params=local_type_param_map))
 			ret_id = resolve_opaque_type(method_sig.return_type, ctx.type_table, module_id=trait_key.module or ctx.current_module_name, type_params=local_type_param_map)
 			call_target = CallTarget.trait(trait_key, qm.member)
-			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=not bool(getattr(method_sig, "declared_nothrow", False))))
+			call_can_throw = not bool(getattr(method_sig, "declared_nothrow", False))
+			if trait_method_declared_nothrow is not None:
+				call_can_throw = not trait_method_declared_nothrow
+			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw))
 			return MethodCallResult(ret_id, info)
 		param_type_ids: list[TypeId] = []
 		for param in list(getattr(method_sig, "params", []) or []):
@@ -2973,7 +2982,14 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 					return MethodCallResult(ctx.unknown_ty, None)
 		target_fn_id = visible_candidates[0].fn_id
 		call_target = CallTarget.direct(target_fn_id)
-		info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=not bool(getattr(method_sig, "declared_nothrow", False))))
+		call_can_throw = not bool(getattr(method_sig, "declared_nothrow", False))
+		if trait_method_declared_nothrow is not None:
+			call_can_throw = not trait_method_declared_nothrow
+		elif target_fn_id is not None and ctx.signatures_by_id is not None:
+			target_sig = ctx.signatures_by_id.get(target_fn_id)
+			if target_sig is not None and target_sig.declared_can_throw is not None:
+				call_can_throw = bool(target_sig.declared_can_throw)
+		info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw))
 		return MethodCallResult(ret_id, info)
 	class _TmpMethodCall:
 		def __init__(self, receiver: object, method_name: str, args: list[object], loc: Span, type_args: list[object] | None):

@@ -9,15 +9,16 @@ fn main() nothrow -> Int {
 }
 
 fn run() -> Int {
-	val text = "{\"users\":[{\"id\":42},{\"id\":7}]}";
-	var node = json.JsonNode::Null();
-	match json.parse(&text) {
-		core.Result::Ok(v) => { node = move v; },
-		core.Result::Err(e) => {
-			console.println(e.tag);
-			return 1;
-		}
-	}
+	var users = json.new_array();
+	var u0 = json.new_object();
+	u0.set("id", json.JsonNode::Number("42"));
+	users.push(u0.to_node());
+	var u1 = json.new_object();
+	u1.set("id", json.JsonNode::Number("7"));
+	users.push(u1.to_node());
+	var root = json.new_object();
+	root.set("users", users.to_node());
+	val node = root.to_node();
 
 	var cfgb = json.config_builder();
 	cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
@@ -26,9 +27,26 @@ fn run() -> Int {
 
 	var users_path = ["users"];
 	val users_node = node.expect_path(&users_path);
-	val users = users_node.expect_array("users", "users");
-	if users.len != 2 {
+	val arr = users_node.expect_array("users", "users");
+	if arr.len != 2 {
 		return 2;
+	}
+	val text = json.encode(&node);
+	match json.parse(&text) {
+		core.Result::Ok(parsed) => {
+			match parsed.into_object() {
+				Some(obj) => {
+					if obj.len() != 1 {
+						return 3;
+					}
+				},
+				None => { return 4; }
+			}
+		},
+		core.Result::Err(e) => {
+			console.println(e.tag);
+			return 5;
+		}
 	}
 	return 0;
 }

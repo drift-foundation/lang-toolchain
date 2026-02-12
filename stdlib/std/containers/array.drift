@@ -582,18 +582,18 @@ pub struct HashMapCore<K, V, B> {
 
 pub type HashMap<K, V> = HashMapCore<K, V, hash.DefaultBuildHasher>;
 
-pub fn hash_map<K, V>() -> HashMap<K, V> {
+pub fn hash_map<K, V>() nothrow -> HashMap<K, V> {
 	return hash_map_with_builder<type K, V, hash.DefaultBuildHasher>(hash.default_build_hasher());
 }
 
-pub fn hash_map_with_capacity<K, V>(cap: Int) -> HashMap<K, V>
+pub fn hash_map_with_capacity<K, V>(cap: Int) nothrow -> HashMap<K, V>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher> {
 	var map = hash_map<type K, V>();
-	map.ensure_capacity(cap);
+	val _ = map.ensure_capacity(cap);
 	return move map;
 }
 
-pub fn hash_map_with_builder<K, V, B>(var builder: B) -> HashMapCore<K, V, B> require B is hash.BuildHasher {
+pub fn hash_map_with_builder<K, V, B>(var builder: B) nothrow -> HashMapCore<K, V, B> require B is hash.BuildHasher {
 	unsafe {
 		var keys = mem.alloc_uninit<type mem.MaybeUninit<K>>(0);
 		var values = mem.alloc_uninit<type mem.MaybeUninit<V>>(0);
@@ -604,11 +604,11 @@ pub fn hash_map_with_builder<K, V, B>(var builder: B) -> HashMapCore<K, V, B> re
 
 implement<K, V, B> HashMapCore<K, V, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
-	pub fn len(self: &HashMapCore<K, V, B>) -> Int {
+	pub fn len(self: &HashMapCore<K, V, B>) nothrow -> Int {
 		return self.len;
 	}
 
-	pub fn is_empty(self: &HashMapCore<K, V, B>) -> Bool {
+	pub fn is_empty(self: &HashMapCore<K, V, B>) nothrow -> Bool {
 		return self.len == 0;
 	}
 
@@ -627,13 +627,13 @@ implement<K, V, B> HashMapCore<K, V, B>
 		unsafe { mem.write<type Int>(&mut self.states, i, state); }
 	}
 
-	fn hash_key(self: &HashMapCore<K, V, B>, key: &K) -> Uint64 {
+	fn hash_key(self: &HashMapCore<K, V, B>, key: &K) nothrow -> Uint64 {
 		var h = hash.BuildHasher::build(&self.builder);
 		hash.Hash<hash.DefaultHasher>::hash(key, &mut h);
 		return hash.Hasher::finish(&h);
 	}
 
-	fn index_for(self: &HashMapCore<K, V, B>, h: Uint64, cap: Int) -> Int {
+	fn index_for(self: &HashMapCore<K, V, B>, h: Uint64, cap: Int) nothrow -> Int {
 		if cap <= 0 {
 			return 0;
 		}
@@ -677,7 +677,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		}
 	}
 
-	fn replace_value(self: &mut HashMapCore<K, V, B>, i: Int, var value: V) -> V {
+	fn replace_value(self: &mut HashMapCore<K, V, B>, i: Int, var value: V) nothrow -> V {
 		val old = self.read_value(i);
 		unsafe {
 			val slot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(&mut self.values, i);
@@ -686,7 +686,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return move old;
 	}
 
-	fn write_entry(self: &mut HashMapCore<K, V, B>, i: Int, var key: K, var value: V) -> Void {
+	fn write_entry(self: &mut HashMapCore<K, V, B>, i: Int, var key: K, var value: V) nothrow -> Void {
 		unsafe {
 			val kslot = mem.ptr_at_mut<type mem.MaybeUninit<K>>(&mut self.keys, i);
 			mem.maybe_write<type K>(kslot, move key);
@@ -696,7 +696,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.set_state(i, HASH_MAP_STATE_FULL);
 	}
 
-	fn find_slot(self: &HashMapCore<K, V, B>, key: &K) -> HashMapFindResult {
+	fn find_slot(self: &HashMapCore<K, V, B>, key: &K) nothrow -> HashMapFindResult {
 		val cap = self.cap();
 		if cap <= 0 {
 			return HashMapFindResult(index = 0, found = false);
@@ -732,9 +732,11 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return HashMapFindResult(index = 0, found = false);
 	}
 
-	fn _insert_into_buffers(self: &HashMapCore<K, V, B>, keys: &mut mem.RawBuffer<mem.MaybeUninit<K>>, values: &mut mem.RawBuffer<mem.MaybeUninit<V>>, states: &mut mem.RawBuffer<Int>, cap: Int, var key: K, var value: V) -> Void {
+	fn _insert_into_buffers(self: &HashMapCore<K, V, B>, keys: &mut mem.RawBuffer<mem.MaybeUninit<K>>, values: &mut mem.RawBuffer<mem.MaybeUninit<V>>, states: &mut mem.RawBuffer<Int>, cap: Int, var key: K, var value: V) nothrow -> Bool {
 		if cap <= 0 {
-			throw std.err:IndexError(container_id = HASH_MAP_CONTAINER_ID, index = 0);
+			core.drop_value<type K>(move key);
+			core.drop_value<type V>(move value);
+			return false;
 		}
 		val h = self.hash_key(&key);
 		var idx = self.index_for(h, cap);
@@ -749,16 +751,18 @@ implement<K, V, B> HashMapCore<K, V, B>
 						val vslot = mem.ptr_at_mut<type mem.MaybeUninit<V>>(values, idx);
 						mem.maybe_write<type V>(vslot, move value);
 						mem.write<type Int>(states, idx, HASH_MAP_STATE_FULL);
-						return;
+						return true;
 					}
 			}
 			idx = (idx + 1) % cap;
 			probes = probes + 1;
 		}
-		throw std.err:IndexError(container_id = HASH_MAP_CONTAINER_ID, index = 0);
+		core.drop_value<type K>(move key);
+		core.drop_value<type V>(move value);
+		return false;
 	}
 
-	fn ensure_capacity(self: &mut HashMapCore<K, V, B>, needed: Int) -> Void {
+	fn ensure_capacity(self: &mut HashMapCore<K, V, B>, needed: Int) nothrow -> Bool {
 		val cap0 = self.cap();
 		var need = needed;
 		if need < 0 {
@@ -772,7 +776,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 			}
 		} else {
 			if need * 10 < cap0 * 7 {
-				return;
+				return true;
 			}
 			new_cap = cap0 * 2;
 			while new_cap * 7 < need * 10 {
@@ -795,7 +799,9 @@ implement<K, V, B> HashMapCore<K, V, B>
 						if state == HASH_MAP_STATE_FULL {
 							var k = self.read_key(j);
 							var v = self.read_value(j);
-							self._insert_into_buffers(&mut new_keys, &mut new_values, &mut new_states, new_cap, move k, move v);
+							if not self._insert_into_buffers(&mut new_keys, &mut new_values, &mut new_states, new_cap, move k, move v) {
+								return false;
+							}
 						}
 					j = j + 1;
 				}
@@ -815,6 +821,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 			}
 		}
 		self.gen = self.gen + 1;
+		return true;
 	}
 
 	pub fn clear(self: &mut HashMapCore<K, V, B>) nothrow -> Void {
@@ -833,12 +840,12 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.gen = self.gen + 1;
 	}
 
-	pub fn contains_key(self: &HashMapCore<K, V, B>, key: &K) -> Bool {
+	pub fn contains_key(self: &HashMapCore<K, V, B>, key: &K) nothrow -> Bool {
 		val res = self.find_slot(key);
 		return res.found;
 	}
 
-	pub fn get(self: &HashMapCore<K, V, B>, key: &K) -> Optional<&V> {
+	pub fn get(self: &HashMapCore<K, V, B>, key: &K) nothrow -> Optional<&V> {
 		val res = self.find_slot(key);
 		if not res.found {
 			return Optional::None();
@@ -846,7 +853,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(self.value_ref(res.index));
 	}
 
-	pub fn get_mut(self: &mut HashMapCore<K, V, B>, key: &K) -> Optional<&mut V> {
+	pub fn get_mut(self: &mut HashMapCore<K, V, B>, key: &K) nothrow -> Optional<&mut V> {
 		val res = self.find_slot(key);
 		if not res.found {
 			return Optional::None();
@@ -854,9 +861,13 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(self.value_mut(res.index));
 	}
 
-	pub fn insert(self: &mut HashMapCore<K, V, B>, var key: K, var value: V) -> Optional<V> {
+	pub fn insert(self: &mut HashMapCore<K, V, B>, var key: K, var value: V) nothrow -> Optional<V> {
 		val needed = self.len + 1;
-		self.ensure_capacity(needed);
+		if not self.ensure_capacity(needed) {
+			core.drop_value<type K>(move key);
+			core.drop_value<type V>(move value);
+			return Optional::None();
+		}
 		val res = self.find_slot(&key);
 		if res.found {
 			val old = self.replace_value(res.index, move value);
@@ -868,7 +879,7 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::None();
 	}
 
-	pub fn remove(self: &mut HashMapCore<K, V, B>, key: &K) -> Optional<V> {
+	pub fn remove(self: &mut HashMapCore<K, V, B>, key: &K) nothrow -> Optional<V> {
 		val res = self.find_slot(key);
 		if not res.found {
 			return Optional::None();
@@ -936,28 +947,28 @@ pub struct HashSetCore<K, B> {
 
 pub type HashSet<K> = HashSetCore<K, hash.DefaultBuildHasher>;
 
-pub fn hash_set<K>() -> HashSet<K> {
+pub fn hash_set<K>() nothrow -> HashSet<K> {
 	return hash_set_with_builder<type K, hash.DefaultBuildHasher>(hash.default_build_hasher());
 }
 
-pub fn hash_set_with_capacity<K>(cap: Int) -> HashSet<K>
+pub fn hash_set_with_capacity<K>(cap: Int) nothrow -> HashSet<K>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher> {
 	var map = hash_map_with_capacity<type K, Bool>(cap);
 	return HashSetCore<type K, hash.DefaultBuildHasher>(map = move map);
 }
 
-pub fn hash_set_with_builder<K, B>(builder: B) -> HashSetCore<K, B> require B is hash.BuildHasher {
+pub fn hash_set_with_builder<K, B>(builder: B) nothrow -> HashSetCore<K, B> require B is hash.BuildHasher {
 	var map = hash_map_with_builder<type K, Bool, B>(builder);
 	return HashSetCore<type K, B>(map = move map);
 }
 
 implement<K, B> HashSetCore<K, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
-	pub fn len(self: &HashSetCore<K, B>) -> Int {
+	pub fn len(self: &HashSetCore<K, B>) nothrow -> Int {
 		return self.map.len();
 	}
 
-	pub fn is_empty(self: &HashSetCore<K, B>) -> Bool {
+	pub fn is_empty(self: &HashSetCore<K, B>) nothrow -> Bool {
 		return self.map.is_empty();
 	}
 
@@ -965,11 +976,11 @@ implement<K, B> HashSetCore<K, B>
 		self.map.clear();
 	}
 
-	pub fn contains(self: &HashSetCore<K, B>, key: &K) -> Bool {
+	pub fn contains(self: &HashSetCore<K, B>, key: &K) nothrow -> Bool {
 		return self.map.contains_key(key);
 	}
 
-	pub fn insert(self: &mut HashSetCore<K, B>, key: K) -> Bool {
+	pub fn insert(self: &mut HashSetCore<K, B>, key: K) nothrow -> Bool {
 		val res = self.map.insert(key, true);
 		return match res {
 			None => { true },
@@ -977,7 +988,7 @@ implement<K, B> HashSetCore<K, B>
 		};
 	}
 
-	pub fn remove(self: &mut HashSetCore<K, B>, key: &K) -> Bool {
+	pub fn remove(self: &mut HashSetCore<K, B>, key: &K) nothrow -> Bool {
 		val res = self.map.remove(key);
 		return match res {
 			None => { false },
@@ -985,7 +996,7 @@ implement<K, B> HashSetCore<K, B>
 		};
 	}
 
-	pub fn iter(self: &HashSetCore<K, B>) -> HashSetIter<K, B> {
+	pub fn iter(self: &HashSetCore<K, B>) nothrow -> HashSetIter<K, B> {
 		val inner = self.map.iter();
 		return HashSetIter<type K, B>(inner = inner);
 	}

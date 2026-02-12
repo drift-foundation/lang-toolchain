@@ -1,0 +1,64 @@
+module m
+
+import std.json as json;
+import std.core as core;
+use trait core.Try;
+
+fn main() nothrow -> Int {
+	return try run_main() catch { 10 };
+}
+
+fn run_main() throws -> Int {
+	var arr = json.new_array();
+	arr.push(json.JsonNode::Number("1"));
+	arr.push(json.JsonNode::String("ok"));
+	if arr.len() != 2 {
+		return 1;
+	}
+	match arr.get(0) {
+		Some(v) => {
+			if v.expect_int("", "") != 1 {
+				return 2;
+			}
+		},
+		None => {
+			return 3;
+		}
+	}
+	var obj = json.new_object();
+	obj.set("b", arr.to_node());
+	obj.set("a", json.JsonNode::Bool(true));
+	if obj.len() != 2 {
+		return 4;
+	}
+	val akey = "a";
+	match obj.get(&akey) {
+		Some(v) => {
+			if not v.expect_bool("", "") {
+				return 5;
+			}
+		},
+		None => {
+			return 6;
+		}
+	}
+	val node = obj.to_node();
+	var cfgb = json.config_builder();
+	cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	val cfg = cfgb.build();
+	val out = json.encode_with_config(&node, &cfg);
+	if out != "{\"a\":true,\"b\":[1,\"ok\"]}" {
+		return 7;
+	}
+	match node.into_object() {
+		Some(v) => {
+			if v.len() != 2 {
+				return 8;
+			}
+		},
+		None => {
+			return 9;
+		}
+	}
+	return 0;
+}

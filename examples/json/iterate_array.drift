@@ -9,20 +9,33 @@ fn main() nothrow -> Int {
 }
 
 fn run() -> Int {
-	val text = "[1,2,3]";
-	var node = json.JsonNode::Null();
-	match json.parse(&text) {
-		core.Result::Ok(v) => { node = move v; },
-		core.Result::Err(e) => {
-			console.println(e.tag);
-			return 1;
-		}
-	}
+	var arr = json.new_array();
+	arr.push(json.JsonNode::Number("1"));
+	arr.push(json.JsonNode::Number("2"));
+	arr.push(json.JsonNode::Number("3"));
+	val node = arr.to_node();
 	val items = node.expect_array("root", "items");
 	for val item : items {
 		val n = item.expect_int("root[]", "item");
 		if n < 0 {
-			return 2;
+			return 1;
+		}
+	}
+	val text = json.encode(&node);
+	match json.parse(&text) {
+		core.Result::Ok(parsed) => {
+			match parsed.into_array() {
+				Some(v) => {
+					if v.len() != 3 {
+						return 2;
+					}
+				},
+				None => { return 3; }
+			}
+		},
+		core.Result::Err(e) => {
+			console.println(e.tag);
+			return 4;
 		}
 	}
 	return 0;

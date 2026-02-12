@@ -11,12 +11,16 @@ use trait iter.SinglePassIterator;
 
 export {
 	JsonNode,
+	JsonArray,
+	JsonObject,
 	JsonErrorData,
 	JsonError,
 	JsonKeyOrder,
 	JsonConfig,
 	JsonConfigBuilder,
 	JsonEntriesIter,
+	new_array,
+	new_object,
 	config_builder,
 	encode,
 	encode_compact,
@@ -44,6 +48,14 @@ pub variant JsonNode {
 	Array(values: Array<JsonNode>),
 	Object(fields: containers.HashMap<String, std.json.JsonNode>),
 	@tombstone Tombstone
+}
+
+pub struct JsonArray {
+	values: Array<JsonNode>
+}
+
+pub struct JsonObject {
+	fields: containers.HashMap<String, std.json.JsonNode>
 }
 
 pub variant JsonKeyOrder {
@@ -78,6 +90,16 @@ implement core.Diagnostic for JsonErrorData {
 
 pub fn config_builder() nothrow -> JsonConfigBuilder {
 	return JsonConfigBuilder(key_order = JsonKeyOrder::Unordered());
+}
+
+pub fn new_array() nothrow -> JsonArray {
+	var values: Array<JsonNode> = [];
+	return JsonArray(move values);
+}
+
+pub fn new_object() nothrow -> JsonObject {
+	var fields = containers.hash_map<type String, std.json.JsonNode>();
+	return JsonObject(move fields);
 }
 
 implement JsonConfigBuilder {
@@ -322,6 +344,65 @@ implement JsonNode {
 				return self;
 			}
 		}
+	}
+
+	pub fn into_array(self: JsonNode) nothrow -> Optional<JsonArray> {
+		match self {
+			Array(values) => { return Optional::Some(JsonArray(move values)); },
+			default => { return Optional<JsonArray>::None(); }
+		}
+	}
+
+	pub fn into_object(self: JsonNode) nothrow -> Optional<JsonObject> {
+		match self {
+			Object(fields) => { return Optional::Some(JsonObject(move fields)); },
+			default => { return Optional<JsonObject>::None(); }
+		}
+	}
+}
+
+implement JsonArray {
+	pub fn len(self: &JsonArray) nothrow -> Int {
+		return self.values.len;
+	}
+
+	pub fn push(self: &mut JsonArray, value: JsonNode) nothrow -> Void {
+		self.values.push(move value);
+		return;
+	}
+
+	pub fn get(self: &JsonArray, index: Int) nothrow -> Optional<&JsonNode> {
+		if index < 0 or index >= self.values.len {
+			return Optional<&JsonNode>::None();
+		}
+		return Optional::Some(&self.values[index]);
+	}
+
+	pub fn to_node(var self: JsonArray) nothrow -> JsonNode {
+		var empty: Array<JsonNode> = [];
+		val values = mem.replace<type Array<JsonNode> >(&mut self.values, move empty);
+		return JsonNode::Array(move values);
+	}
+}
+
+implement JsonObject {
+	pub fn len(self: &JsonObject) nothrow -> Int {
+		return self.fields.len();
+	}
+
+	pub fn set(self: &mut JsonObject, key: String, value: JsonNode) nothrow -> Void {
+		self.fields.insert(move key, move value);
+		return;
+	}
+
+	pub fn get(self: &JsonObject, key: &String) nothrow -> Optional<&JsonNode> {
+		return try self.fields.get(key) catch { Optional<&JsonNode>::None() };
+	}
+
+	pub fn to_node(var self: JsonObject) nothrow -> JsonNode {
+		var empty = containers.hash_map<type String, std.json.JsonNode>();
+		val fields = mem.replace<type containers.HashMap<String, std.json.JsonNode> >(&mut self.fields, move empty);
+		return JsonNode::Object(move fields);
 	}
 }
 

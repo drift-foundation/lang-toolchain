@@ -6,21 +6,21 @@ export {
 };
 
 pub trait Equatable {
-	fn eq(self: &Self, other: &Self) -> Bool;
+	fn eq(self: &Self, other: &Self) nothrow -> Bool;
 }
 
 pub trait Comparable require Self is Equatable {
-	fn cmp(self: &Self, other: &Self) -> Int;
+	fn cmp(self: &Self, other: &Self) nothrow -> Int;
 }
 
 implement Equatable for Int {
-	pub fn eq(self: &Int, other: &Int) -> Bool {
+	pub fn eq(self: &Int, other: &Int) nothrow -> Bool {
 		return *self == *other;
 	}
 }
 
 implement Comparable for Int {
-	pub fn cmp(self: &Int, other: &Int) -> Int {
+	pub fn cmp(self: &Int, other: &Int) nothrow -> Int {
 		val a = *self;
 		val b = *other;
 		if a < b {
@@ -34,13 +34,13 @@ implement Comparable for Int {
 }
 
 implement Equatable for Uint {
-	pub fn eq(self: &Uint, other: &Uint) -> Bool {
+	pub fn eq(self: &Uint, other: &Uint) nothrow -> Bool {
 		return *self == *other;
 	}
 }
 
 implement Comparable for Uint {
-	pub fn cmp(self: &Uint, other: &Uint) -> Int {
+	pub fn cmp(self: &Uint, other: &Uint) nothrow -> Int {
 		val a = *self;
 		val b = *other;
 		if a < b {
@@ -54,25 +54,25 @@ implement Comparable for Uint {
 }
 
 implement Equatable for Uint64 {
-	pub fn eq(self: &Uint64, other: &Uint64) -> Bool {
+	pub fn eq(self: &Uint64, other: &Uint64) nothrow -> Bool {
 		return *self == *other;
 	}
 }
 
 implement Equatable for Bool {
-	pub fn eq(self: &Bool, other: &Bool) -> Bool {
+	pub fn eq(self: &Bool, other: &Bool) nothrow -> Bool {
 		return *self == *other;
 	}
 }
 
 implement Equatable for Byte {
-	pub fn eq(self: &Byte, other: &Byte) -> Bool {
+	pub fn eq(self: &Byte, other: &Byte) nothrow -> Bool {
 		return *self == *other;
 	}
 }
 
 implement Equatable for String {
-	pub fn eq(self: &String, other: &String) -> Bool {
+	pub fn eq(self: &String, other: &String) nothrow -> Bool {
 		return string_eq(*self, *other);
 	}
 }
