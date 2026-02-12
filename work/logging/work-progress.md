@@ -43,13 +43,23 @@ Remaining work is backend migration after atomics + std.json are complete.
 1. Atomics + memory ordering track complete.
 2. `std.json` track complete.
 
+## Backend Pin (Updated)
+
+- Logger backend is lock-free-first and uses `std.sync::MpscQueue` as the transport queue.
+- This is an intentional stress path to exercise compiler/runtime with realistic concurrent load.
+- Any discovered compiler/runtime defect follows regression-first LANGUAGE_BUG handling (no stdlib masking workaround).
+
 ## Work To Resume After Dependencies
 
-1. Port queue state and producer backpressure policies to Drift atomics.
-2. Switch payload construction/encoding to `std.json`.
-3. Port worker dequeue loop/orchestration to Drift.
-4. Remove logger-specific runtime queue/policy scaffolding.
-5. Re-run full logger regression matrix and parity gates.
+1. Replace logger queue path with `std.sync::MpscQueue` (producer enqueue + single-consumer worker dequeue).
+2. Integrate backpressure policy semantics on top of bounded MPSC behavior:
+   - `BlockWithTimeout` (default),
+   - `DropOldest`,
+   - `DropNewest`.
+3. Switch payload construction/encoding to `std.json`.
+4. Port worker loop/orchestration to Drift around MPSC.
+5. Remove logger-specific runtime queue/policy scaffolding.
+6. Re-run full logger regression matrix and parity gates.
 
 ## Deferred Follow-Ups (After Migration)
 
