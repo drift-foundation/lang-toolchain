@@ -1,0 +1,15 @@
+module m
+
+import std.sync as sync;
+
+struct Node { v: Int }
+
+fn main() nothrow -> Int {
+	val q0 = sync.mpsc_queue<type Node>(0);
+	if q0.capacity() != 2 { return 1; }
+	val q1 = sync.mpsc_queue<type Node>(1);
+	if q1.capacity() != 2 { return 2; }
+	val q8 = sync.mpsc_queue<type Node>(8);
+	if q8.capacity() != 8 { return 3; }
+	return 0;
+}

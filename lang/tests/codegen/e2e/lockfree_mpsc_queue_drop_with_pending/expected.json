@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue can be dropped with pending elements",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

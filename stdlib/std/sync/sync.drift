@@ -13,6 +13,9 @@ export {
 	AtomicInt,
 	AtomicUint,
 	AtomicUint64,
+	MpscQueue,
+	EpochDomain,
+	EpochParticipant,
 	handle,
 	null_handle,
 	ref_token,
@@ -21,10 +24,20 @@ export {
 	atomic_int,
 	atomic_uint,
 	atomic_uint64,
+	mpsc_queue,
 	atomic_handle,
 	atomic_ref,
 	thread_fence,
-	signal_fence
+	signal_fence,
+	epoch_domain,
+	epoch_participant,
+	epoch_enter,
+	epoch_leave,
+	epoch_retire,
+	epoch_try_advance,
+	epoch_current,
+	epoch_pending,
+	epoch_reclaimed
 };
 
 pub type MemoryOrder = atomic.MemoryOrder;
@@ -59,6 +72,26 @@ pub struct RefToken<T> {
 
 pub struct AtomicRef<T> {
 	inner: AtomicHandle<T>
+}
+
+pub struct MpscQueue<T> {
+	cap: Uint,
+	head: atomic.AtomicUint,
+	tail: atomic.AtomicUint,
+	slots: Array<AtomicHandle<T>>,
+	states: Array<atomic.AtomicUint>
+}
+
+pub struct EpochDomain {
+	current: atomic.AtomicUint,
+	active: atomic.AtomicUint,
+	pending: atomic.AtomicUint,
+	reclaimed: atomic.AtomicUint
+}
+
+pub struct EpochParticipant {
+	active: Bool,
+	epoch: Uint
 }
 
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
@@ -105,6 +138,24 @@ pub fn atomic_ref<T>(v: RefToken<T>) nothrow -> AtomicRef<T> {
 	return AtomicRef<type T>(inner = a);
 }
 
+pub fn mpsc_queue<T>(capacity: Int) nothrow -> MpscQueue<T> {
+	var cap = capacity;
+	if cap < 2 {
+		cap = 2;
+	}
+	var slots: Array<AtomicHandle<T>> = [];
+	var states: Array<atomic.AtomicUint> = [];
+	var i = 0;
+	while i < cap {
+		var slot = atomic_handle<type T>(null_handle<type T>());
+		slots.push(move slot);
+		var st = atomic.atomic_uint(cast<Uint>(i));
+		states.push(move st);
+		i = i + 1;
+	}
+	return MpscQueue(cast<Uint>(cap), atomic.atomic_uint(cast<Uint>(0)), atomic.atomic_uint(cast<Uint>(0)), move slots, move states);
+}
+
 pub fn thread_fence(order: MemoryOrder) nothrow -> Void {
 	atomic.thread_fence(order);
 	return;
@@ -113,6 +164,71 @@ pub fn thread_fence(order: MemoryOrder) nothrow -> Void {
 pub fn signal_fence(order: MemoryOrder) nothrow -> Void {
 	atomic.signal_fence(order);
 	return;
+}
+
+fn _ord_relaxed() nothrow -> Int { return 0; }
+fn _ord_acquire() nothrow -> Int { return 1; }
+fn _ord_release() nothrow -> Int { return 2; }
+fn _ord_acqrel() nothrow -> Int { return 3; }
+
+pub fn epoch_domain() nothrow -> EpochDomain {
+	return EpochDomain(current = atomic.atomic_uint(cast<Uint>(0)), active = atomic.atomic_uint(cast<Uint>(0)), pending = atomic.atomic_uint(cast<Uint>(0)), reclaimed = atomic.atomic_uint(cast<Uint>(0)));
+}
+
+pub fn epoch_participant() nothrow -> EpochParticipant {
+	return EpochParticipant(active = false, epoch = cast<Uint>(0));
+}
+
+pub fn epoch_enter(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
+	if p.active {
+		return;
+	}
+	val cur = atomic.atomic_load_uint(&d.current, _ord_acquire());
+	p.active = true;
+	p.epoch = cur;
+	val _ = atomic.atomic_fetch_add_uint(&d.active, cast<Uint>(1), _ord_acqrel());
+	return;
+}
+
+pub fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
+	if not p.active {
+		return;
+	}
+	p.active = false;
+	val _ = atomic.atomic_fetch_sub_uint(&d.active, cast<Uint>(1), _ord_acqrel());
+	return;
+}
+
+pub fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) nothrow -> Void {
+	if p.active and p.epoch > atomic.atomic_load_uint(&d.current, _ord_acquire()) {
+		return;
+	}
+	val _ = atomic.atomic_fetch_add_uint(&d.pending, cast<Uint>(1), _ord_acqrel());
+	return;
+}
+
+pub fn epoch_try_advance(d: &EpochDomain) nothrow -> Int {
+	if atomic.atomic_load_uint(&d.active, _ord_acquire()) != cast<Uint>(0) {
+		return 0;
+	}
+	val _ = atomic.atomic_fetch_add_uint(&d.current, cast<Uint>(1), _ord_acqrel());
+	val reclaim = atomic.atomic_exchange_uint(&d.pending, cast<Uint>(0), _ord_acqrel());
+	if reclaim != cast<Uint>(0) {
+		val _ = atomic.atomic_fetch_add_uint(&d.reclaimed, reclaim, _ord_acqrel());
+	}
+	return cast<Int>(reclaim);
+}
+
+pub fn epoch_current(d: &EpochDomain) nothrow -> Uint {
+	return atomic.atomic_load_uint(&d.current, _ord_acquire());
+}
+
+pub fn epoch_pending(d: &EpochDomain) nothrow -> Uint {
+	return atomic.atomic_load_uint(&d.pending, _ord_acquire());
+}
+
+pub fn epoch_reclaimed(d: &EpochDomain) nothrow -> Uint {
+	return atomic.atomic_load_uint(&d.reclaimed, _ord_acquire());
 }
 
 implement<T> core.Copy for Handle<T> {
@@ -280,6 +396,59 @@ implement<T> AtomicHandle<T> {
 	pub fn compare_exchange_observed(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Handle<T> {
 		val raw = self.inner.compare_exchange_observed(expected.raw, desired.raw, success_order, failure_order);
 		return Handle<type T>(raw = raw);
+	}
+}
+
+implement<T> MpscQueue<T> {
+	pub fn capacity(self: &MpscQueue<T>) nothrow -> Int {
+		return cast<Int>(self.cap);
+	}
+
+	pub fn push(self: &MpscQueue<T>, v: Handle<T>) nothrow -> Bool {
+		var pos = atomic.atomic_load_uint(&self.tail, _ord_relaxed());
+		while true {
+			val idx = cast<Int>(pos % self.cap);
+			val seq = atomic.atomic_load_uint(&self.states[idx], _ord_acquire());
+			if seq == pos {
+				val observed = atomic.atomic_compare_exchange_observed_uint(&self.tail, pos, pos + cast<Uint>(1), _ord_acqrel(), _ord_acquire());
+				if observed == pos {
+					atomic.atomic_store_uint(&self.slots[idx].inner, v.raw, _ord_relaxed());
+					atomic.atomic_store_uint(&self.states[idx], pos + cast<Uint>(1), _ord_release());
+					return true;
+				}
+				pos = observed;
+				continue;
+			}
+			if seq < pos {
+				return false;
+			}
+			pos = atomic.atomic_load_uint(&self.tail, _ord_acquire());
+		}
+		return false;
+	}
+
+	pub fn pop(self: &MpscQueue<T>) nothrow -> Optional<Handle<T>> {
+		var pos = atomic.atomic_load_uint(&self.head, _ord_relaxed());
+		while true {
+			val idx = cast<Int>(pos % self.cap);
+			val seq = atomic.atomic_load_uint(&self.states[idx], _ord_acquire());
+			val ready = pos + cast<Uint>(1);
+			if seq == ready {
+				val observed = atomic.atomic_compare_exchange_observed_uint(&self.head, pos, ready, _ord_acqrel(), _ord_acquire());
+				if observed == pos {
+					val old_raw = atomic.atomic_exchange_uint(&self.slots[idx].inner, cast<Uint>(0), _ord_relaxed());
+					atomic.atomic_store_uint(&self.states[idx], pos + self.cap, _ord_release());
+					return Optional::Some(handle<type T>(old_raw));
+				}
+				pos = observed;
+				continue;
+			}
+			if seq < ready {
+				return Optional::None();
+			}
+			pos = atomic.atomic_load_uint(&self.head, _ord_acquire());
+		}
+		return Optional::None();
 	}
 }
 

@@ -1,0 +1,6 @@
+{
+  "description": "std.sync compare_exchange_observed retry-loop under contention",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

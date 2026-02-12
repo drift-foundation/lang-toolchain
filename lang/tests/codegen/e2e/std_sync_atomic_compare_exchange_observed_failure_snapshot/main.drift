@@ -1,0 +1,48 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.core as core;
+
+fn writer(cell: conc.Arc<sync.AtomicUint>, start: conc.Arc<sync.AtomicBool>, done: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val start_ref = start.get();
+	while not start_ref.load(sync.MemoryOrder::Acquire()) {
+	}
+	val cell_ref = cell.get();
+	cell_ref.store(cast<Uint>(2), sync.MemoryOrder::Release());
+	val done_ref = done.get();
+	done_ref.store(true, sync.MemoryOrder::Release());
+	return 0;
+}
+
+fn run() -> Int {
+	var cell = conc.arc(sync.atomic_uint(cast<Uint>(0)));
+	var start = conc.arc(sync.atomic_bool(false));
+	var done = conc.arc(sync.atomic_bool(false));
+
+	var cell2 = cell.clone();
+	var start2 = start.clone();
+	var done2 = done.clone();
+	var t = conc.spawn_cb(core.callback0(| | captures(move cell2, move start2, move done2) => { return writer(move cell2, move start2, move done2); }));
+
+	val start_ref = start.get();
+	start_ref.store(true, sync.MemoryOrder::Release());
+	val done_ref = done.get();
+	while not done_ref.load(sync.MemoryOrder::Acquire()) {
+	}
+
+	val cell_ref = cell.get();
+	val observed = cell_ref.compare_exchange_observed(cast<Uint>(0), cast<Uint>(3), sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+	if observed != cast<Uint>(2) { return 1; }
+	if cell_ref.load(sync.MemoryOrder::Acquire()) != cast<Uint>(2) { return 2; }
+
+	match t.join() {
+		Ok(_) => { },
+		default => { return 3; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

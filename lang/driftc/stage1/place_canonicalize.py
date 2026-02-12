@@ -241,6 +241,13 @@ class PlaceCanonicalizeRewriter:
 				_, ev = self._rewrite_expr(e)
 				new_elems.append(ev)
 			return [], H.HArrayLiteral(elements=new_elems)
+		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
+			new_entries: List[H.HMapEntry] = []
+			for entry in expr.entries:
+				_, key = self._rewrite_expr(entry.key)
+				_, value = self._rewrite_expr(entry.value)
+				new_entries.append(H.HMapEntry(key=key, value=value))
+			return [], H.HMapLiteral(entries=new_entries)
 		if isinstance(expr, H.HFString):
 			new_holes: List[H.HFStringHole] = []
 			for hole in expr.holes:

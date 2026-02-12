@@ -1,0 +1,35 @@
+module m
+
+import std.sync as sync;
+
+struct Node { v: Int }
+
+fn main() nothrow -> Int {
+	var q = sync.mpsc_queue<type Node>(3);
+	var round = 0;
+	while round < 200 {
+		val base = round * 10;
+		if not q.push(sync.handle<type Node>(cast<Uint>(base + 1))) { return 1; }
+		if not q.push(sync.handle<type Node>(cast<Uint>(base + 2))) { return 2; }
+		if not q.push(sync.handle<type Node>(cast<Uint>(base + 3))) { return 3; }
+		if q.push(sync.handle<type Node>(cast<Uint>(base + 4))) { return 4; }
+		match q.pop() {
+			Some(v) => { if v.to_uint() != cast<Uint>(base + 1) { return 5; } },
+			default => { return 6; }
+		}
+		match q.pop() {
+			Some(v) => { if v.to_uint() != cast<Uint>(base + 2) { return 7; } },
+			default => { return 8; }
+		}
+		match q.pop() {
+			Some(v) => { if v.to_uint() != cast<Uint>(base + 3) { return 9; } },
+			default => { return 10; }
+		}
+		match q.pop() {
+			Some(_) => { return 11; },
+			default => {}
+		}
+		round = round + 1;
+	}
+	return 0;
+}

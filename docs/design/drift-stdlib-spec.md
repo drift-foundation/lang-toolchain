@@ -320,7 +320,8 @@ implement AtomicBool {
     fn load(self: &AtomicBool, order: MemoryOrder) -> Bool
     fn store(self: &AtomicBool, value: Bool, order: MemoryOrder) -> Void
     fn exchange(self: &AtomicBool, value: Bool, order: MemoryOrder) -> Bool
-    fn compare_exchange(self: &AtomicBool, expected: &mut Bool, desired: Bool, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange(self: &AtomicBool, expected: Bool, desired: Bool, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicBool, expected: Bool, desired: Bool, success: MemoryOrder, failure: MemoryOrder) -> Bool
 }
 ```
 
@@ -335,7 +336,8 @@ implement AtomicInt {
     fn load(self: &AtomicInt, order: MemoryOrder) -> Int
     fn store(self: &AtomicInt, value: Int, order: MemoryOrder) -> Void
     fn exchange(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
-    fn compare_exchange(self: &AtomicInt, expected: &mut Int, desired: Int, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange(self: &AtomicInt, expected: Int, desired: Int, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicInt, expected: Int, desired: Int, success: MemoryOrder, failure: MemoryOrder) -> Int
     fn fetch_add(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
     fn fetch_sub(self: &AtomicInt, value: Int, order: MemoryOrder) -> Int
 }
@@ -354,7 +356,8 @@ implement AtomicUint {
     fn load(self: &AtomicUint, order: MemoryOrder) -> Uint
     fn store(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Void
     fn exchange(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
-    fn compare_exchange(self: &AtomicUint, expected: &mut Uint, desired: Uint, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange(self: &AtomicUint, expected: Uint, desired: Uint, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicUint, expected: Uint, desired: Uint, success: MemoryOrder, failure: MemoryOrder) -> Uint
     fn fetch_add(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
     fn fetch_sub(self: &AtomicUint, value: Uint, order: MemoryOrder) -> Uint
 }
@@ -363,21 +366,108 @@ implement AtomicUint64 {
     fn load(self: &AtomicUint64, order: MemoryOrder) -> Uint64
     fn store(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Void
     fn exchange(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
-    fn compare_exchange(self: &AtomicUint64, expected: &mut Uint64, desired: Uint64, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange(self: &AtomicUint64, expected: Uint64, desired: Uint64, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicUint64, expected: Uint64, desired: Uint64, success: MemoryOrder, failure: MemoryOrder) -> Uint64
     fn fetch_add(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
     fn fetch_sub(self: &AtomicUint64, value: Uint64, order: MemoryOrder) -> Uint64
 }
 ```
 
-### compare_exchange contract
+### compare_exchange contracts
 
 `compare_exchange` returns `true` on success and `false` on failure.
-- Success: stores `desired`, leaves `expected` unchanged.
-- Failure: writes observed current value into `expected`, does not store `desired`.
+- Success: stores `desired`.
+- Failure: does not store `desired`.
+
+`compare_exchange_observed` returns the observed value at the target location.
+- On success, returned value equals `expected`.
+- On failure, returned value is the current value and is used by retry loops.
 
 Failure-order validity rule:
 - Invalid failure orders (`Release`, `AcqRel`) are rejected by the API guard.
 - Current guard behavior is non-throwing and returns `false`.
+
+### Fences
+
+```drift
+fn thread_fence(order: MemoryOrder) -> Void
+fn signal_fence(order: MemoryOrder) -> Void
+```
+
+Semantics:
+- `thread_fence`: inter-thread ordering fence.
+- `signal_fence`: compiler reordering fence for signal-handler style boundaries.
+
+### Handle-based atomics
+
+Pinned lock-free carrier surface:
+
+```drift
+struct Handle<T>
+struct AtomicHandle<T>
+
+fn handle<T>(raw: Uint) -> Handle<T>
+fn null_handle<T>() -> Handle<T>
+fn atomic_handle<T>(v: Handle<T>) -> AtomicHandle<T>
+
+implement<T> AtomicHandle<T> {
+    fn load(self: &AtomicHandle<T>, order: MemoryOrder) -> Handle<T>
+    fn store(self: &AtomicHandle<T>, value: Handle<T>, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicHandle<T>, value: Handle<T>, order: MemoryOrder) -> Handle<T>
+    fn compare_exchange(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success: MemoryOrder, failure: MemoryOrder) -> Handle<T>
+}
+```
+
+### Restricted atomic-reference tokens
+
+Pinned non-reference model (not ordinary `&T`):
+
+```drift
+struct RefToken<T>
+struct AtomicRef<T>
+
+fn ref_token<T>(raw: Uint) -> RefToken<T>
+fn null_ref_token<T>() -> RefToken<T>
+fn atomic_ref<T>(v: RefToken<T>) -> AtomicRef<T>
+
+implement<T> AtomicRef<T> {
+    fn load(self: &AtomicRef<T>, order: MemoryOrder) -> RefToken<T>
+    fn store(self: &AtomicRef<T>, value: RefToken<T>, order: MemoryOrder) -> Void
+    fn exchange(self: &AtomicRef<T>, value: RefToken<T>, order: MemoryOrder) -> RefToken<T>
+    fn compare_exchange(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success: MemoryOrder, failure: MemoryOrder) -> Bool
+    fn compare_exchange_observed(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success: MemoryOrder, failure: MemoryOrder) -> RefToken<T>
+}
+```
+
+Rules:
+- No implicit coercions between `RefToken<T>` and references.
+- No mutable-reference derivation from token loads.
+
+### Lock-free queue and reclamation baseline
+
+```drift
+struct MpscQueue<T>
+fn mpsc_queue<T>(capacity: Int) -> MpscQueue<T>
+
+implement<T> MpscQueue<T> {
+    fn capacity(self: &MpscQueue<T>) -> Int
+    fn push(self: &MpscQueue<T>, value: Handle<T>) -> Bool
+    fn pop(self: &MpscQueue<T>) -> Optional<Handle<T>>
+}
+
+struct EpochDomain
+struct EpochParticipant
+fn epoch_domain() -> EpochDomain
+fn epoch_participant() -> EpochParticipant
+fn epoch_enter(d: &EpochDomain, p: &mut EpochParticipant) -> Void
+fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) -> Void
+fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) -> Void
+fn epoch_try_advance(d: &EpochDomain) -> Int
+fn epoch_current(d: &EpochDomain) -> Uint
+fn epoch_pending(d: &EpochDomain) -> Uint
+fn epoch_reclaimed(d: &EpochDomain) -> Uint
+```
 
 ### fetch_add / fetch_sub overflow semantics
 
@@ -390,6 +480,10 @@ Failure-order validity rule:
 - All `std.sync` atomic methods are nothrow.
 - Operations are lock-free when the target/runtime supports lock-free atomics for that width; otherwise runtime fallback may be used.
 - For handoff patterns, correctness requires matching `Release` publisher and `Acquire` consumer on the same synchronization variable.
+- Recommended defaults:
+  - counters/telemetry: `Relaxed`
+  - RMW state transitions: `AcqRel` (failure path `Acquire`)
+  - handoff publish/consume: `Release` / `Acquire`
 
 ## std.err
 

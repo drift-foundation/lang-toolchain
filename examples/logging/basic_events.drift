@@ -1,13 +1,18 @@
 import std.log as log;
-import std.meta as meta;
+import std.concurrent as conc;
 
 pub fn main() nothrow -> Int {
-	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Info).queue_capacity(4096).enqueue_timeout_ms(2).write_timeout_ms(25).build();
-	log.init(cfg);
-	log.info("auth-failed", "user": "alice", "reason": "bad-password", "src": meta.caller());
-	log.info("session-opened", "user": "alice", "session_id": "sess-01", "src": meta.caller());
-	log.error("db-timeout", "host": "db-main", "retryable": true, "src": meta.caller());
-	log.flush();
-	log.shutdown();
+	var cfgb = log.config_builder();
+	cfgb.sink(log.stderr_sink());
+	cfgb.min_level(log.Level::Info());
+	cfgb.queue_capacity(4096);
+	cfgb.enqueue_timeout(conc.Duration(millis = 2));
+	cfgb.write_timeout(conc.Duration(millis = 25));
+	val cfg = cfgb.build();
+	val _ = log.init(cfg);
+	val _ = log.info("auth-failed", {"user": "alice", "reason": "bad-password"});
+	val _ = log.info("session-opened", {"user": "alice", "session_id": "sess-01"});
+	val _ = log.error("db-timeout", {"host": "db-main", "retryable": "true"});
+	val _ = log.flush(conc.Duration(millis = 1000));
 	return 0;
 }

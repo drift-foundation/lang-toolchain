@@ -194,9 +194,8 @@ pub struct MutexGuard<T> {
 pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type ArcBox<T>>(1);
-		var slot = mem.ptr_at_mut<type ArcBox<T>>(&mut buf, 0);
-		slot.count = atomic_int(1);
-		slot.value = move value;
+		var box = ArcBox<type T>(count = atomic_int(1), value = move value);
+		mem.write<type ArcBox<T>>(&mut buf, 0, move box);
 		return Arc<type T>(buf = move buf);
 	}
 }

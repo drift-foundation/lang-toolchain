@@ -32,6 +32,10 @@
   - blocking I/O boundary helpers for std.io/std.net (park/unpark on would-block).
   - std.concurrent public API per virtual_threads_concurrency_spec.md (spawn/join/scope/sleep).
 
+[Build / Linking]
+- For examples, switch runtime linking from per-object `.o` lists to a shared static runtime archive (e.g., `libdrift_rt.a`) to reduce link-command noise and improve incremental build ergonomics.
+- Pin archive partitioning by build/runtime mode (at least debug vs release; plus sanitizer/alloc-track/target variants) so incompatible runtime objects are never mixed.
+
 [Error handling]
 - MVP-candidate: exception local captures (`^`)
   - Implemented first slice:

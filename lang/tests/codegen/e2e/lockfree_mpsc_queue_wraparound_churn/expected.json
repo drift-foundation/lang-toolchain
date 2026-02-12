@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue wraparound churn single-thread",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

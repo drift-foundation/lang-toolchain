@@ -1,0 +1,17 @@
+module m
+
+import std.sync as sync;
+
+fn main() nothrow -> Int {
+	var d = sync.epoch_domain();
+	var p = sync.epoch_participant();
+	sync.epoch_enter(&d, &mut p);
+	sync.epoch_retire(&d, &p);
+	if sync.epoch_try_advance(&d) != 0 { return 1; }
+	sync.epoch_leave(&d, &mut p);
+	if sync.epoch_try_advance(&d) != 1 { return 2; }
+	if sync.epoch_pending(&d) != cast<Uint>(0) { return 3; }
+	if sync.epoch_reclaimed(&d) != cast<Uint>(1) { return 4; }
+	if sync.epoch_current(&d) == cast<Uint>(0) { return 5; }
+	return 0;
+}

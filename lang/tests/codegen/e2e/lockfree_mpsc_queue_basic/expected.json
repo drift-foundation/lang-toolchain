@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue basic ordering/full/empty behavior",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

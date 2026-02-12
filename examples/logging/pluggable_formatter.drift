@@ -1,23 +1,21 @@
 import std.log as log;
-import std.meta as meta;
+import std.concurrent as conc;
 
-// Example custom formatter hook.
-// Default formatter remains JSON with "tm": "YYYY-MM-DDTHH:mm:ss.sssZ".
-struct KvFormatter {}
-
-implement log.Formatter for KvFormatter {
-	pub fn format(self: &KvFormatter, rec: &log.Record) nothrow -> String {
-		// Design-shape example only: turn record into a compact key=value line.
-		return "tm=" + rec.tm + " level=" + rec.level + " ev=" + rec.ev;
-	}
-}
+// MVP formatter API uses FormatterKind.
+// Default remains JSON with ISO timestamp.
 
 pub fn main() nothrow -> Int {
-	val cfg = log.config_builder().sink_stdout().min_level(log.Level::Debug).queue_capacity(2048).enqueue_timeout_ms(2).write_timeout_ms(25).formatter(KvFormatter{}).build();
-	log.init(cfg);
-	log.info("startup", "component": "worker", "src": meta.caller());
-	log.error("job-failed", "job_id": "42", "retryable": false, "src": meta.caller());
-	log.flush();
-	log.shutdown();
+	var cfgb = log.config_builder();
+	cfgb.sink(log.stderr_sink());
+	cfgb.min_level(log.Level::Debug());
+	cfgb.queue_capacity(2048);
+	cfgb.enqueue_timeout(conc.Duration(millis = 2));
+	cfgb.write_timeout(conc.Duration(millis = 25));
+	cfgb.formatter(log.FormatterKind::Custom("kv"));
+	val cfg = cfgb.build();
+	val _ = log.init(cfg);
+	val _ = log.info("startup", {"component": "worker"});
+	val _ = log.error("job-failed", {"job_id": "42", "retryable": "false"});
+	val _ = log.flush(conc.Duration(millis = 1000));
 	return 0;
 }

@@ -90,9 +90,60 @@ Current atomics now cover counters/flags and typed handle CAS loops (`AtomicHand
    - `std_sync_atomic_fence_message_passing_release_acquire`
    - `std_sync_atomic_fence_message_passing_stress`
    - both pass in normal, `DRIFT_ASAN=1`, and `DRIFT_ALLOC_TRACK=1` runs
+5. Concurrency teardown hardening:
+   - fixed default-executor exit-time UAF by clearing `drift_default_executor` before global executor shutdown loop in runtime atexit path
+   - this unblocked `concurrent_*` ASAN failures that were collapsing to exit `1` via teardown aborts
 
-5. Implementation note:
+6. Compiler/runtime regressions fixed while implementing Phase 4:
+   - Added driver regression: `lang/tests/driver/test_atomic_store_field_ref_codegen_regression.py`
+   - Fixed LLVM codegen type canonicalization gaps for:
+     - `StoreRef` value type checks
+     - `CastScalar` source type checks
+   - Root cause: mixed canonical LLVM types (`i64`) vs named scalar aliases (`drift.uint`) in intrinsic-heavy paths.
+
+7. Implementation note:
    - `std.sync` constructors that wrap call expressions into generic wrapper structs use typed temporaries first (`val x = ...; Struct(field = x);`) due to a current checker/codegen sensitivity. Keep this pattern until a dedicated compiler regression is pinned and fixed.
+8. Additional CAS contention/failure-path coverage:
+   - Added regressions:
+     - `std_sync_atomic_compare_exchange_observed_retry_contention`
+     - `std_sync_atomic_compare_exchange_observed_failure_snapshot`
+   - Validation:
+     - normal mode: pass
+     - `DRIFT_ASAN=1`: pass
+     - `DRIFT_ALLOC_TRACK=1`: pass
+   - While adding this coverage, fixed LLVM zero-materialization bug for scalar `Uint`/`Uint64` (and `i8`) in `_emit_zero_value`.
+9. Expanded driver/codegen regression coverage for struct-field-byref atomic intrinsics:
+   - Updated `lang/tests/driver/test_atomic_store_field_ref_codegen_regression.py` with `test_atomic_uint_field_ref_intrinsics_codegen_surface`.
+   - Coverage now explicitly exercises:
+     - `atomic_load_uint`
+     - `atomic_store_uint`
+     - `atomic_exchange_uint`
+     - `atomic_compare_exchange_uint`
+     - `atomic_compare_exchange_observed_uint`
+     - `atomic_fetch_add_uint`
+     - `atomic_fetch_sub_uint`
+     on `&struct_field` references.
+10. Flaky-hunter bounded repeat sweep (lock-free subset):
+   - Mode: `DRIFT_ASAN=1`
+     - 3/3 full subset iterations passed.
+   - Mode: `DRIFT_ALLOC_TRACK=1`
+     - 3/3 full subset iterations passed.
+   - Subset size: 14 lock-free/e2e cases (MPSC + AtomicRef + epoch reclaim + CAS observed contention/failure snapshot).
+11. Package-linking stability regression fix:
+   - Symptom: cross-package import/link failures (`struct field type mismatch for 'std.sync:EpochDomain'`) cascading into signing/package/instantiation tests.
+   - Root cause: ambiguous/non-stable nominal typing for `EpochDomain` fields during package schema reconciliation.
+   - Fix: pin `EpochDomain` field types explicitly to `lang.atomic.AtomicUint` and update epoch helpers accordingly.
+   - Spot checks of previously failing driver tests now pass (`test_method_boundary_wrapper_packages`, `test_driftc_package_v0`, `test_drift_sign_cli`, `test_drift_multisig_policy`, `test_instantiation_odr`, `test_package_root_stdlib_method_resolution` selected cases).
+12. Docs/spec alignment completed for lock-free foundations:
+   - Updated `docs/design/drift-stdlib-spec.md` to match current `std.sync` surface:
+     - observed-CAS signatures (no `&mut expected` contract),
+     - fence APIs (`thread_fence` / `signal_fence`),
+     - `Handle<T>`/`AtomicHandle<T>`,
+     - `RefToken<T>`/`AtomicRef<T>`,
+     - `MpscQueue<T>` + epoch reclamation API.
+   - Updated `docs/effective-drift.md` atomic example to current `compare_exchange` call shape.
+13. Naming cleanup completed:
+   - Renamed stale e2e case directories from `lockfree_mpsc_handle_queue_*` to `lockfree_mpsc_queue_*` for consistency with public API (`std.sync::MpscQueue`).
 
 ## Regression-First Plan
 
@@ -121,16 +172,51 @@ Status:
 2. Multithread stress with alloc tracking + ASan gates.
 3. Leak/UAF regressions pinned in e2e.
 
+Status:
+- Implemented baseline epoch reclamation API in `std.sync`:
+  - `EpochDomain`, `EpochParticipant`
+  - `epoch_domain`, `epoch_participant`, `epoch_enter`, `epoch_leave`, `epoch_retire`, `epoch_try_advance`, `epoch_current`, `epoch_pending`, `epoch_reclaimed`
+- Added regressions:
+  - `lockfree_epoch_reclaim_deterministic`
+  - `lockfree_epoch_reclaim_active_blocked`
+  - `lockfree_epoch_reclaim_multithread_stress`
+- Validation:
+  - normal mode: pass
+  - `DRIFT_ASAN=1`: pass
+  - `DRIFT_ALLOC_TRACK=1`: pass
+
 ### Phase 4: MPSC proving target
 
 1. Functional tests (ordering, progress, close/shutdown behavior).
 2. Contention stress (many producers, one consumer).
 3. Memory safety sweeps (alloc tracking + ASan).
 
+Status:
+- Implemented `std.sync::MpscQueue<T>` with:
+  - constructor: `mpsc_queue<T>(capacity)`
+  - operations: `push(Handle<T>) -> Bool`, `pop() -> Optional<Handle<T>>`
+- Added regressions:
+  - `lockfree_mpsc_queue_basic`
+  - `lockfree_mpsc_queue_contention`
+  - `lockfree_mpsc_queue_capacity_normalization`
+  - `lockfree_mpsc_queue_full_empty_deterministic`
+  - `lockfree_mpsc_queue_contention_order_integrity`
+  - `lockfree_mpsc_queue_drop_with_pending`
+  - `lockfree_mpsc_queue_arc_clone_drop_orders`
+- Validation:
+  - normal mode: pass
+  - `DRIFT_ASAN=1`: pass
+  - `DRIFT_ALLOC_TRACK=1`: pass
+- Additional memory-safety fix required by ASAN:
+  - fixed `std.concurrent::arc` initialization for non-trivial `T` by writing fully-initialized `ArcBox<T>` via `mem.write` into uninitialized buffer (avoids invalid free from partially/incorrectly initialized slot writes).
+
 ### Phase 5: Docs follow-up (after API stabilization)
 
 1. Update language spec with final `AtomicRef` token/guard semantics, constraints, and fence contracts.
 2. Update effective-drift with practical lock-free usage examples (container user API + brief internals sketch).
+
+Status:
+- Implemented for current API surface (`drift-stdlib-spec` + `effective-drift` updates above).
 
 ## Validation Matrix
 

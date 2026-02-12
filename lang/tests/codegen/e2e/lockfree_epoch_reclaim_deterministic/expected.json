@@ -1,0 +1,6 @@
+{
+  "description": "epoch reclamation deterministic: reclaim deferred while active then reclaimed after leave",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

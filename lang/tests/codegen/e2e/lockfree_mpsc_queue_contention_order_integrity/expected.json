@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue contention per-producer order and integrity",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

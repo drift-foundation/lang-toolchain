@@ -211,8 +211,7 @@ fn bump(counter: &sync.AtomicInt) -> Int {
 }
 
 fn claim_once(flag: &sync.AtomicBool) -> Bool {
-    var expected = false;
-    return flag.compare_exchange(&mut expected, true, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+    return flag.compare_exchange(false, true, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
 }
 
 fn publish(ready: &sync.AtomicBool) -> Void {
@@ -224,6 +223,55 @@ fn wait_until_ready(ready: &sync.AtomicBool) -> Bool {
     return ready.load(sync.MemoryOrder::Acquire());
 }
 ```
+
+## MPSC queue pattern (`std.sync::MpscQueue`)
+
+Simple producer/consumer shape:
+
+```drift
+import std.concurrent as conc;
+import std.core as core;
+import std.sync as sync;
+
+struct Event { id: Int }
+
+fn producer(q: conc.Arc<sync.MpscQueue<Event>>, n: Int) nothrow -> Int {
+    var i = 0;
+    while i < n {
+        val qr = q.get();
+        while not qr.push(sync.handle<type Event>(cast<Uint>(i))) {
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main() nothrow -> Int {
+    val total = 100;
+    var q = conc.arc(sync.mpsc_queue<type Event>(64));
+    var qp = q.clone();
+    var t = conc.spawn_cb(core.callback0(| | captures(move qp, copy total) => { return producer(move qp, total); }));
+    var seen = 0;
+    while seen < total {
+        val qr = q.get();
+        match qr.pop() {
+            Some(_) => { seen = seen + 1; },
+            default => {}
+        }
+    }
+    match t.join() {
+        Ok(v) => { if v != total { return 1; } },
+        default => { return 2; }
+    }
+    return 0;
+}
+```
+
+Notes:
+- `MpscQueue` is many-producer / single-consumer.
+- Current lock-free payload is `Handle<T>` (`sync.handle(...)`).
+
+Matching runnable example: `examples/sync_mpsc_queue/main.drift`.
 
 ## UDP ping (self‑send)
 

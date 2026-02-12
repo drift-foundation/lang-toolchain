@@ -1,0 +1,99 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.core as core;
+import std.containers as containers;
+
+struct Node { v: Int }
+
+fn enc(pid: Int, seq: Int) nothrow -> Uint {
+	return cast<Uint>(pid * 10000 + seq);
+}
+
+fn dec_pid(raw: Uint) nothrow -> Int {
+	return cast<Int>(raw) / 10000;
+}
+
+fn dec_seq(raw: Uint) nothrow -> Int {
+	return cast<Int>(raw) % 10000;
+}
+
+fn producer(q: conc.Arc<sync.MpscQueue<Node>>, pid: Int, n: Int) nothrow -> Int {
+	var i = 0;
+	while i < n {
+		val qr = q.get();
+		while not qr.push(sync.handle<type Node>(enc(pid, i))) {
+		}
+		i = i + 1;
+	}
+	return n;
+}
+
+fn run() -> Int {
+	val producers = 2;
+	val per = 160;
+	val total = producers * per;
+	var q = conc.arc(sync.mpsc_queue<type Node>(2));
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+
+	var p = 0;
+	while p < producers {
+		var qc = q.clone();
+		var t = conc.spawn_cb(core.callback0(| | captures(move qc, copy p, copy per) => { return producer(move qc, p, per); }));
+		tasks.push_back(move t);
+		p = p + 1;
+	}
+
+	var seen_by_prod: Array<Int> = [];
+	var last_by_prod: Array<Int> = [];
+	p = 0;
+	while p < producers {
+		seen_by_prod.push(0);
+		last_by_prod.push(-1);
+		p = p + 1;
+	}
+
+	var seen = 0;
+	while seen < total {
+		val qr = q.get();
+		match qr.pop() {
+			Some(v) => {
+				val raw = v.to_uint();
+				val pid = dec_pid(raw);
+				val seq = dec_seq(raw);
+				if pid < 0 or pid >= producers { return 1; }
+				if seq < 0 or seq >= per { return 2; }
+				if seq <= last_by_prod[pid] { return 3; }
+				last_by_prod[pid] = seq;
+				seen_by_prod[pid] = seen_by_prod[pid] + 1;
+				seen = seen + 1;
+			},
+			default => {}
+		}
+	}
+
+	while true {
+		match tasks.pop_front() {
+			Some(var t) => {
+				match t.join() {
+					Ok(_) => {},
+					default => { return 4; }
+				}
+			},
+			default => { break; }
+		}
+	}
+
+	p = 0;
+	while p < producers {
+		if seen_by_prod[p] != per { return 5; }
+		if last_by_prod[p] != per - 1 { return 6; }
+		p = p + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

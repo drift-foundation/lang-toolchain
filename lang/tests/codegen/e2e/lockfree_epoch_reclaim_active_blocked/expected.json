@@ -1,0 +1,6 @@
+{
+  "description": "epoch reclamation: active participants block reclaim until all leave",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

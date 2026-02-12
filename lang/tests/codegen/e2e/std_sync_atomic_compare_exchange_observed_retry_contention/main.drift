@@ -1,0 +1,63 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+
+fn worker(counter: conc.Arc<sync.AtomicUint>, iters: Int) nothrow -> Int {
+	var i = 0;
+	while i < iters {
+		val counter_ref = counter.get();
+		var expected = counter_ref.load(sync.MemoryOrder::Relaxed());
+		while true {
+			val observed = counter_ref.compare_exchange_observed(expected, expected + cast<Uint>(1), sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
+			if observed == expected {
+				break;
+			}
+			expected = observed;
+		}
+		i = i + 1;
+	}
+	return iters;
+}
+
+fn run() -> Int {
+	val workers = 2;
+	val iters = 120;
+	val expected_total = workers * iters;
+
+	var counter = conc.arc(sync.atomic_uint(cast<Uint>(0)));
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+
+	var w = 0;
+	while w < workers {
+		var c = counter.clone();
+		var t = conc.spawn_cb(core.callback0(| | captures(move c, copy iters) => { return worker(move c, iters); }));
+		tasks.push_back(move t);
+		w = w + 1;
+	}
+
+	var joined = 0;
+	while true {
+		match tasks.pop_front() {
+			Some(var t) => {
+				match t.join() {
+					Ok(v) => { joined = joined + v; },
+					default => { return 1; }
+				}
+			},
+			default => { break; }
+		}
+	}
+
+	if joined != expected_total { return 2; }
+	val counter_ref = counter.get();
+	val final = counter_ref.load(sync.MemoryOrder::Acquire());
+	if final != cast<Uint>(expected_total) { return 3; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

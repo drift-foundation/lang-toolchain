@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue capacity normalization",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

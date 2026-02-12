@@ -1,0 +1,6 @@
+{
+  "description": "lockfree mpsc queue full-drain-refill cycles",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -2040,7 +2040,7 @@ class _FuncBuilder:
 			src_tag, src_bits, src_signed = src_info
 			dst_tag, dst_bits, _dst_signed = dst_info
 			val_ty = self.value_types.get(val)
-			if val_ty != src_tag:
+			if val_ty is None or self._llty(val_ty) != self._llty(src_tag):
 				raise NotImplementedError(
 					f"LLVM codegen v1: CastScalar type mismatch (have {val_ty}, expected {src_tag})"
 				)
@@ -2824,10 +2824,14 @@ class _FuncBuilder:
 			ptr_ty = f"{emit_store_llty}*"
 			val = self._map_value(instr.value)
 			have = self.value_types.get(val)
-			if have is not None and have != val_llty:
-				raise NotImplementedError(
-					f"LLVM codegen v1: StoreRef value type mismatch (have {have}, expected {val_llty})"
-				)
+			if have is not None:
+				have_emit = self._llty(have)
+				want_emit = self._llty(val_llty)
+				store_emit = self._llty(store_llty)
+				if have_emit != want_emit and have_emit != store_emit:
+					raise NotImplementedError(
+						f"LLVM codegen v1: StoreRef value type mismatch (have {have}, expected {val_llty})"
+					)
 			if store_llty == "i8" and val_llty == "i1":
 				val = self._bool_to_storage(val)
 			self.lines.append(f"  store {emit_store_llty} {val}, {ptr_ty} {ptr}")
@@ -6206,9 +6210,21 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = add {self._llty(DRIFT_INT_TYPE)} 0, 0")
 			self.value_types[dest] = DRIFT_INT_TYPE
 			return
+		if llty == DRIFT_UINT_TYPE:
+			self.lines.append(f"  {dest} = add {self._llty(DRIFT_UINT_TYPE)} 0, 0")
+			self.value_types[dest] = DRIFT_UINT_TYPE
+			return
+		if llty == DRIFT_U64_TYPE:
+			self.lines.append(f"  {dest} = add {self._llty(DRIFT_U64_TYPE)} 0, 0")
+			self.value_types[dest] = DRIFT_U64_TYPE
+			return
 		if llty == "i1":
 			self.lines.append(f"  {dest} = add i1 0, 0")
 			self.value_types[dest] = "i1"
+			return
+		if llty == "i8":
+			self.lines.append(f"  {dest} = add i8 0, 0")
+			self.value_types[dest] = "i8"
 			return
 		if llty == "double":
 			self.lines.append(f"  {dest} = fadd double 0.0, 0.0")

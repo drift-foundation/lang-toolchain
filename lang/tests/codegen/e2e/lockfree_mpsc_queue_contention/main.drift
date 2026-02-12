@@ -1,0 +1,60 @@
+module m
+
+import std.sync as sync;
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+
+struct Node { v: Int }
+
+fn producer(q: conc.Arc<sync.MpscQueue<Node>>, base: Uint, n: Int) nothrow -> Int {
+	var i = 0;
+	while i < n {
+		val v = base + cast<Uint>(i);
+		val queue_ref = q.get();
+		while not queue_ref.push(sync.handle<type Node>(v)) {
+		}
+		i = i + 1;
+	}
+	return n;
+}
+
+fn run() -> Int {
+	val producers = 4;
+	val per = 128;
+	val total = producers * per;
+	var q = conc.arc(sync.mpsc_queue<type Node>(128));
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+	var p = 0;
+	while p < producers {
+		val base = cast<Uint>(p * 1000);
+		var qq = q.clone();
+		var t = conc.spawn_cb(core.callback0(| | captures(move qq, copy base, copy per) => { return producer(move qq, base, per); }));
+		tasks.push_back(move t);
+		p = p + 1;
+	}
+	var seen = 0;
+	while seen < total {
+		val queue_ref = q.get();
+		match queue_ref.pop() {
+			Some(_) => { seen = seen + 1; },
+			default => {}
+		}
+	}
+	while true {
+		match tasks.pop_front() {
+			Some(var t) => {
+				match t.join() {
+					Ok(_) => { },
+					default => { }
+				}
+			},
+			default => { break; }
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

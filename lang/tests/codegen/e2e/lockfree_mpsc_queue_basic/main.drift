@@ -1,0 +1,44 @@
+module m
+
+import std.sync as sync;
+
+struct Node { v: Int }
+
+fn pack(n: Uint) nothrow -> sync.Handle<Node> {
+	return sync.handle<type Node>(n);
+}
+
+fn main() nothrow -> Int {
+	var q = sync.mpsc_queue<type Node>(4);
+	if not q.push(pack(cast<Uint>(11))) { return 1; }
+	if not q.push(pack(cast<Uint>(22))) { return 2; }
+	if not q.push(pack(cast<Uint>(33))) { return 3; }
+	if not q.push(pack(cast<Uint>(44))) { return 4; }
+	if q.push(pack(cast<Uint>(55))) { return 5; }
+	match q.pop() {
+		Some(v) => { if v.to_uint() != cast<Uint>(11) { return 6; } },
+		default => { return 7; }
+	}
+	match q.pop() {
+		Some(v) => { if v.to_uint() != cast<Uint>(22) { return 8; } },
+		default => { return 9; }
+	}
+	if not q.push(pack(cast<Uint>(66))) { return 10; }
+	match q.pop() {
+		Some(v) => { if v.to_uint() != cast<Uint>(33) { return 11; } },
+		default => { return 12; }
+	}
+	match q.pop() {
+		Some(v) => { if v.to_uint() != cast<Uint>(44) { return 13; } },
+		default => { return 14; }
+	}
+	match q.pop() {
+		Some(v) => { if v.to_uint() != cast<Uint>(66) { return 15; } },
+		default => { return 16; }
+	}
+	match q.pop() {
+		Some(_) => { return 17; },
+		default => {}
+	}
+	return 0;
+}

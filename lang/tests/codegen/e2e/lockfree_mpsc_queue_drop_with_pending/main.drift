@@ -1,0 +1,20 @@
+module m
+
+import std.sync as sync;
+
+struct Node { v: Int }
+
+fn build_and_drop_pending() nothrow -> Int {
+	var q = sync.mpsc_queue<type Node>(8);
+	if not q.push(sync.handle<type Node>(cast<Uint>(101))) { return 1; }
+	if not q.push(sync.handle<type Node>(cast<Uint>(102))) { return 2; }
+	if not q.push(sync.handle<type Node>(cast<Uint>(103))) { return 3; }
+	if not q.push(sync.handle<type Node>(cast<Uint>(104))) { return 4; }
+	if not q.push(sync.handle<type Node>(cast<Uint>(105))) { return 5; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	if build_and_drop_pending() != 0 { return 10; }
+	return 0;
+}

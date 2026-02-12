@@ -1,4 +1,4 @@
-module example.json_effective_drift_api
+module main
 
 import std.console as console;
 import std.core as core;

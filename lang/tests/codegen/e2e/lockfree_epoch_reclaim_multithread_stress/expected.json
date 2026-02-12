@@ -1,0 +1,6 @@
+{
+  "description": "epoch reclamation multithread stress: retire from many workers, reclaim once quiescent",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

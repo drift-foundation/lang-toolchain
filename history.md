@@ -1,3 +1,47 @@
+## 2026-02-12 – Lock-free foundations wrap-up (docs/spec + naming cleanup)
+- Closed remaining lock-free branch wrap-up items before branch closure:
+  - Completed spec/doc sync for current `std.sync` API:
+    - observed-CAS signatures (`compare_exchange_observed`) across scalar atomics,
+    - fence APIs (`thread_fence`, `signal_fence`),
+    - handle/token surfaces (`Handle<T>`, `AtomicHandle<T>`, `RefToken<T>`, `AtomicRef<T>`),
+    - `MpscQueue<T>` and epoch reclamation API coverage.
+  - Updated effective-drift atomic example to current `compare_exchange(expected, desired, ...)` call shape.
+- Renamed stale e2e case directories from `lockfree_mpsc_handle_queue_*` to `lockfree_mpsc_queue_*` to align with public API naming.
+- Refreshed stale expected descriptions mentioning “handle queue”.
+- Validation:
+  - targeted lock-free MPSC e2e subset after rename: 10/10 passing.
+- Lock-free foundations delivered on this track:
+  - Added observed-CAS support end-to-end for `Bool`/`Int`/`Uint`/`Uint64` (`lang.atomic`, `std.sync`, runtime intrinsics, LLVM codegen wiring).
+  - Added `Handle<T>`/`AtomicHandle<T>` and restricted tokenized reference surface (`RefToken<T>`/`AtomicRef<T>`) in `std.sync`.
+  - Added explicit fence APIs end-to-end:
+    - `lang.atomic.thread_fence` / `lang.atomic.signal_fence`
+    - `std.sync.thread_fence` / `std.sync.signal_fence`
+    - runtime + codegen integration.
+  - Added lock-free viability probes/regressions for handle CAS and tokenized atomic refs.
+  - Added fence semantic regressions (release/acquire message-passing + stress) and fixed a hot-loop lowering bug caused by per-iteration zero-payload variant stack allocation.
+  - Implemented baseline epoch reclamation API (`EpochDomain`/`EpochParticipant`) plus deterministic and multithread stress regressions.
+  - Implemented `std.sync::MpscQueue<T>` (`mpsc_queue`, `push`, `pop`) and expanded coverage:
+    - basic behavior
+    - contention
+    - capacity normalization
+    - full/empty determinism
+    - per-producer ordering/integrity
+    - drop-with-pending
+    - Arc clone/drop ordering
+    - wraparound churn
+    - full-drain/refill cycles
+    - tiny-capacity pressure.
+- LANGUAGE_BUG fixes landed during lock-free track:
+  - Fixed LLVM type canonicalization gaps in intrinsic-heavy paths (`StoreRef` and `CastScalar` checks against mixed canonical vs alias scalar forms).
+  - Fixed LLVM `_emit_zero_value` scalar materialization for `Uint`/`Uint64`/`i8`.
+  - Fixed default-executor shutdown UAF by clearing `drift_default_executor` before global executor teardown.
+  - Stabilized package/link schema matching for `std.sync:EpochDomain` by pinning field types to `lang.atomic.AtomicUint`, resolving cross-package/signing/instantiation failures.
+- Validation matrix outcomes captured:
+  - lock-free subsets pass in normal mode,
+  - `DRIFT_ASAN=1` pass,
+  - `DRIFT_ALLOC_TRACK=1` pass,
+  - bounded flaky-hunter sweeps passed (`3/3` for ASAN and alloc-track over lock-free subset).
+
 ## 2026-02-11 – Concurrency namespace consolidation (`std.concurrent` only) + Arc/Mutex migration
 - Consolidated concurrency surface to a single stdlib package:
   - `std.concurrent` is now the sole concurrency namespace.
