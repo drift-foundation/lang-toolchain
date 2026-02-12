@@ -22,7 +22,7 @@ import std.concurrent as conc;
 
 fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 1000);
-	var w = io.file_builder("io_test_file.bin").read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	var w = io.file_builder("/tmp/drift_test_match_stmt_missing_return_repro.bin").read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
 	match w {
 		Ok(v) => {
 			var buf = io.buffer(3);
@@ -48,7 +48,7 @@ fn main() nothrow -> Int {
 		},
 		default => { return 4; }
 	}
-	var r = io.file_builder("io_test_file.bin").read(true).write(false).timeout(t).build();
+	var r = io.file_builder("/tmp/drift_test_match_stmt_missing_return_repro.bin").read(true).write(false).timeout(t).build();
 	match r {
 		Ok(v2) => {
 			var buf2 = io.buffer(3);

@@ -50,9 +50,8 @@ And keep `JsonNode` as the common sum type.
 ## Compatibility Strategy
 
 1. Add wrappers and new APIs first.
-2. Keep current `JsonNode` mutation APIs temporarily as compatibility shim.
-3. Migrate std/examples/effective-drift to wrapper-first style.
-4. Decide deprecation/removal timeline after migration is stable.
+2. Migrate std/examples/effective-drift to wrapper-first style.
+3. Remove legacy `JsonNode` shape-mutation helper entrypoints (done).
 
 ## Current Status
 
@@ -77,6 +76,18 @@ And keep `JsonNode` as the common sum type.
    - checker fix in `lang/driftc/checker/__init__.py` for `BinaryOpInstr` bool-result typing
    - `Equatable`/`Comparable` trait methods made `nothrow` in `stdlib/std/core/cmp.drift`
    - `HashMap`/`HashSet` surfaces tightened where valid so wrapper object APIs can stay `nothrow`
+7. Test hygiene cleanup for file-writing suites:
+   - moved fixed-path std.io test artifacts from repo-root filenames to `/tmp/drift_*` paths in affected e2e + driver tests.
+8. Underscore semantics cleanup:
+   - removed underscore-prefixed special-case borrow-liveness behavior in borrow checker (`_name` no longer treated differently from regular names).
+   - added regression: `lang/tests/borrow_checker/test_regions.py::test_unused_underscore_borrow_same_block_still_blocks_write`.
+9. Match-pattern regression pin:
+   - added e2e regression `lang/tests/codegen/e2e/match_result_err_underscore_expr_value` confirming `Err(_)` is accepted in expression-match arms.
+10. Wrapper roundtrip test hardening:
+   - stabilized ownership/borrow flows in:
+     - `lang/tests/codegen/e2e/std_json_wrapper_roundtrip_to_node_into`
+     - `lang/tests/codegen/e2e/std_json_parse_into_wrappers`
+   - both now pass.
 
 ### Verified
 
@@ -92,15 +103,22 @@ And keep `JsonNode` as the common sum type.
   - `hashmap_clear`
   - `hashmap_iter_invalidate`
   - `hashmap_jsonnode_duplicate_get_no_double_free`
+  - `match_result_err_underscore_expr_value`
+  - `std_json_wrapper_roundtrip_to_node_into`
+  - `std_json_parse_into_wrappers`
+  - `std_io_file_read_write`
+  - `std_io_file_builder_read_write_api`
+  - `std_io_file_builder_chunked_large`
+  - `std_io_stdin_line_edge_matrix`
+  - `std_io_buffer_len_updates`
+  - `std_io_double_close_ok`
 
 ## Next Steps
 
-1. Add wrapper roundtrip coverage:
-   - `wrapper -> to_node -> into_array/into_object`
-   - `parse -> into_object/into_array`
-2. Migrate top-level examples/docs to wrapper-first construction style.
-3. Decide compatibility fate of old `JsonNode` shape-mutation helpers (retain/deprecate/remove).
-4. Add ASAN + alloc-track validation pass for the new wrapper test cluster.
+1. Run ASAN + alloc-track validation pass for the wrapper roundtrip/new JSON cluster (in progress by user).
+2. Hold docs/examples migration until memory run is complete.
+3. After memory run is clean:
+   - migrate top-level examples/docs to wrapper-first construction style.
 
 ## Regression-First Plan
 
@@ -121,8 +139,7 @@ And keep `JsonNode` as the common sum type.
    - `set/get` vs `put/get`.
 2. Borrow-return shape for getters:
    - `Optional<&JsonNode>` vs by-value `Optional<JsonNode>`.
-3. Whether `JsonNode` retains mutation methods long-term.
-4. Iterator surface:
+3. Iterator surface:
    - direct `for val x : arr` support once iterable traits align.
 
 ## Out of Scope

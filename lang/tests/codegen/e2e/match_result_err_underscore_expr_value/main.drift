@@ -1,0 +1,11 @@
+module main
+
+import std.parse as p;
+
+fn main() nothrow -> Int {
+	val x = match p.parse_int("x") {
+		Ok(v) => { v },
+		Err(_) => { 1 }
+	};
+	return x;
+}

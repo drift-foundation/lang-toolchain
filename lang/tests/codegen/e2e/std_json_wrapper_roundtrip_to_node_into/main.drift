@@ -1,0 +1,53 @@
+module m
+
+import std.json as json;
+import std.core as core;
+use trait core.Try;
+
+fn main() nothrow -> Int {
+	return try run_main() catch { 20 };
+}
+
+fn run_main() throws -> Int {
+	var arr = json.new_array();
+	arr.push(json.JsonNode::Number("7"));
+	arr.push(json.JsonNode::String("x"));
+	var obj = json.new_object();
+	obj.set("items", arr.to_node());
+	obj.set("ok", json.JsonNode::Bool(true));
+	val obj_node = obj.to_node();
+	match obj_node.into_object() {
+		Some(o2) => {
+			if o2.len() != 2 {
+				return 1;
+			}
+			val k = "ok";
+			match o2.get(&k) {
+				Some(v) => {
+					if not v.expect_bool("", "") {
+						return 2;
+					}
+				},
+				None => {
+					return 3;
+				}
+			}
+			val kitems = "items";
+			match o2.get(&kitems) {
+				Some(v) => {
+					val items = v.expect_array("", "");
+					if items.len != 2 {
+						return 4;
+					}
+				},
+				None => {
+					return 5;
+				}
+			}
+		},
+		None => {
+			return 6;
+		}
+	}
+	return 0;
+}

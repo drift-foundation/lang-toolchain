@@ -642,3 +642,23 @@
   - e2e `hashmap_collision` now passes;
   - `hashmap_clear`, `hashmap_iter_invalidate`, and `std_log_level_filtering` spot checks pass;
   - existing checker regression `test_equatable_nothrow_ssa_return_regression` remains passing.
+
+## 2026-02-12 – Test hygiene + underscore semantics follow-up
+- Stopped test-generated I/O artifacts from polluting repo root by moving fixed filenames to `/tmp` in affected tests:
+  - `lang/tests/codegen/e2e/std_io_file_read_write/main.drift`
+  - `lang/tests/codegen/e2e/std_io_file_builder_read_write_api/main.drift`
+  - `lang/tests/codegen/e2e/std_io_file_builder_chunked_large/main.drift`
+  - `lang/tests/codegen/e2e/std_io_stdin_line_edge_matrix/main.drift`
+  - `lang/tests/codegen/e2e/std_io_buffer_len_updates/main.drift`
+  - `lang/tests/codegen/e2e/std_io_double_close_ok/main.drift`
+  - `lang/tests/driver/test_match_stmt_missing_return_repro.py`
+- Removed underscore-prefixed special-casing from borrow liveness:
+  - `lang/driftc/borrow_checker_pass.py` no longer shortens unused borrows for names starting with `_`; they are treated like ordinary bindings.
+  - Added regression in `lang/tests/borrow_checker/test_regions.py`:
+    - `test_unused_underscore_borrow_same_block_still_blocks_write`.
+- Pinned and verified `Err(_)` pattern usage in expression match arms:
+  - added e2e regression `lang/tests/codegen/e2e/match_result_err_underscore_expr_value`.
+  - confirmed prior parse confusion was due to `return` inside expression-value match arms, not underscore binder parsing.
+- Updated JSON wrapper roundtrip tests accordingly and kept `_` binder form:
+  - `lang/tests/codegen/e2e/std_json_parse_into_wrappers/main.drift`
+  - `lang/tests/codegen/e2e/std_json_wrapper_roundtrip_to_node_into/main.drift`.

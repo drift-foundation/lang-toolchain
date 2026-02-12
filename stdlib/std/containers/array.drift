@@ -916,8 +916,7 @@ implement<K, V, B> core.Destructible for HashMapCore<K, V, B>
 	}
 }
 
-implement<K, V, B> iter.SinglePassIterator<HashMapItemRef<K, V>> for HashMapIter<K, V, B>
-	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
+implement<K, V, B> iter.SinglePassIterator<HashMapItemRef<K, V>> for HashMapIter<K, V, B> {
 	pub fn next(self: &mut HashMapIter<K, V, B>) -> Optional<HashMapItemRef<K, V>> {
 		if self.map.gen != self.gen_snapshot {
 			err.throw_iterator_invalidated(HASH_MAP_CONTAINER_ID, err.IteratorOpId::Next());

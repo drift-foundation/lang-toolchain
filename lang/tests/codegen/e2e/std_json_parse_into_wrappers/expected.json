@@ -1,0 +1,6 @@
+{
+  "description": "std.json parse result conversion into JsonObject/JsonArray wrappers",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

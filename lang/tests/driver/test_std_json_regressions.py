@@ -58,3 +58,31 @@ fn main() -> Int {
 	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
 	assert rc == 0
 	assert payload.get("diagnostics", []) == []
+
+
+def test_std_json_legacy_node_mutation_helpers_are_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main
+
+import std.json as json;
+
+fn main() -> Int {
+	var arr = json.JsonNode::new_array();
+	arr.array_push(json.JsonNode::Number("1"));
+	var obj = json.JsonNode::new_object();
+	obj.object_set("k", move arr);
+	return 0;
+}
+""".lstrip(),
+	)
+	paths = sorted(mod_root.rglob("*.drift"))
+	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
+	assert rc != 0
+	msgs = [str(d.get("message") or "") for d in payload.get("diagnostics", [])]
+	assert any("new_array" in m for m in msgs)
+	assert any("array_push" in m for m in msgs)
+	assert any("new_object" in m for m in msgs)
+	assert any("object_set" in m for m in msgs)

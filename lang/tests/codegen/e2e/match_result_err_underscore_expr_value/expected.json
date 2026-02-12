@@ -1,0 +1,6 @@
+{
+  "description": "result match expression accepts Err(_) binder",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": ""
+}

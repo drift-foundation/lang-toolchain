@@ -143,6 +143,8 @@ For formatter customization, see `examples/logging/pluggable_formatter.drift`.
 - encode: `json.encode(...)`, `json.encode_compact(...)`, and `..._with_config(...)`
 - key ordering policy: `JsonKeyOrder::Unordered()` (default) or `JsonKeyOrder::OrderedLexUtf8()`
 - parse duplicate keys: keep-last
+- shape mutation is wrapper-only:
+`json.new_array()/json.new_object()` with `JsonArray.push(...)` and `JsonObject.set(...)`
 - navigation: `get(&key)`, `get_path(&Array<String>)`, `entries()`
 - extractors:
 `as_bool/as_int/as_uint/as_float/as_string/as_number_raw/as_array/as_object` return `Optional`

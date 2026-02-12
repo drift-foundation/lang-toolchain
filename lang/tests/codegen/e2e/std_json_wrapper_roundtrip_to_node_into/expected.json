@@ -1,0 +1,6 @@
+{
+  "description": "std.json wrapper roundtrip via to_node/into_array/into_object",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

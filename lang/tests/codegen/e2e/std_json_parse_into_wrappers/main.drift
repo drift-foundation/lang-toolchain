@@ -1,0 +1,87 @@
+module m
+
+import std.json as json;
+import std.core as core;
+use trait core.Try;
+
+fn main() nothrow -> Int {
+	return try run_main() catch { 20 };
+}
+
+fn run_main() throws -> Int {
+	val s_obj = "{\"items\":[1,2,3],\"ok\":true}";
+	val parsed_obj = match json.parse(s_obj) {
+		Ok(v) => {
+			move v
+		},
+		Err(_) => {
+			json.JsonNode::Null()
+		}
+	};
+	if parsed_obj.is_null() {
+		return 1;
+	}
+	val obj = match parsed_obj.into_object() {
+		Some(v) => {
+			move v
+		},
+		None => {
+			json.new_object()
+		}
+	};
+	if obj.len() == 0 {
+		return 2;
+	}
+	if obj.len() != 2 {
+		return 3;
+	}
+	val key_ok = "ok";
+	match obj.get(&key_ok) {
+		Some(v) => {
+			if not v.expect_bool("", "") {
+				return 5;
+			}
+		},
+		None => {
+			return 4;
+		}
+	}
+
+	val s_arr = "[1,2,3]";
+	val parsed_arr = match json.parse(s_arr) {
+		Ok(v) => {
+			move v
+		},
+		Err(_) => {
+			json.JsonNode::Null()
+		}
+	};
+	if parsed_arr.is_null() {
+		return 6;
+	}
+	val items = match parsed_arr.into_array() {
+		Some(v) => {
+			move v
+		},
+		None => {
+			json.new_array()
+		}
+	};
+	if items.len() == 0 {
+		return 7;
+	}
+	if items.len() != 3 {
+		return 8;
+	}
+	match items.get(2) {
+		Some(v) => {
+			if v.expect_int("", "") != 3 {
+				return 9;
+			}
+		},
+		None => {
+			return 10;
+		}
+	}
+	return 0;
+}
