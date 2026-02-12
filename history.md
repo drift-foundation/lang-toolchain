@@ -1,3 +1,19 @@
+## 2026-02-12 – JSON API refactor finalization (legacy helper removal)
+- Finalized wrapper-only JSON mutation API:
+  - Legacy `JsonNode` mutation helper surface is now treated as removed/deprecated path (use `json.new_array/new_object` + `JsonArray.push`/`JsonObject.set`).
+- Added regression coverage to pin this contract:
+  - `lang/tests/driver/test_std_json_regressions.py::test_std_json_legacy_node_mutation_helpers_are_rejected`
+  - Confirms rejection of legacy calls:
+    - `JsonNode::new_array`
+    - `JsonNode::new_object`
+    - `array_push`
+    - `object_set`
+- Updated docs:
+  - `docs/effective-drift.md` JSON section now explicitly states shape mutation is wrapper-only.
+- Validation:
+  - JSON regression driver subset passes with `DRIFT_ASAN=1` and `DRIFT_ALLOC_TRACK=1`.
+  - JSON examples compile and run clean under `DRIFT_ASAN=1` + `DRIFT_ALLOC_TRACK=1` (`live_blocks=0`, `live_bytes=0`).
+
 ## 2026-02-12 – Lock-free foundations wrap-up (docs/spec + naming cleanup)
 - Closed remaining lock-free branch wrap-up items before branch closure:
   - Completed spec/doc sync for current `std.sync` API:
