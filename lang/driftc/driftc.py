@@ -699,6 +699,10 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 			if kwargs or len(call.args) != 1:
 				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
 			continue
+		if kind is IntrinsicKind.TYPE_ID:
+			if kwargs or len(call.args) != 0:
+				raise AssertionError("type_id(...) arity mismatch reached validation (checker bug)")
+			continue
 		if kind is IntrinsicKind.DROP_VALUE:
 			if kwargs or len(call.args) != 1:
 				raise AssertionError("drop_value(...) arity mismatch reached validation (checker bug)")
@@ -3669,6 +3673,7 @@ def compile_stubbed_funcs(
 			iface_coercions=getattr(typed_fns_by_id.get(fn_id), "iface_coercions", None),
 			signatures_by_id=signatures_by_id,
 			current_fn_id=fn_id,
+			type_param_subst=getattr(typed_fns_by_id.get(fn_id), "preseed_type_params", None),
 			call_info_by_callsite_id=getattr(typed_fns_by_id.get(fn_id), "call_info_by_callsite_id", {}),
 			call_resolutions=getattr(typed_fns_by_id.get(fn_id), "call_resolutions", {}),
 			can_throw_by_id=declared_by_id,
@@ -4440,6 +4445,7 @@ def compile_stubbed_funcs(
 				iface_coercions=getattr(hidden_typed_fn, "iface_coercions", None),
 				signatures_by_id=signatures_by_id,
 				current_fn_id=spec.fn_id,
+				type_param_subst=getattr(hidden_typed_fn, "preseed_type_params", None),
 				call_info_by_callsite_id=hidden_typed_fn.call_info_by_callsite_id,
 				can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
 				return_type=hidden_ret_type,
@@ -4682,6 +4688,7 @@ def compile_stubbed_funcs(
 			iface_coercions=getattr(lambda_typed_fn, "iface_coercions", None),
 			signatures_by_id=signatures_by_id,
 			current_fn_id=spec.fn_id,
+			type_param_subst=getattr(lambda_typed_fn, "preseed_type_params", None),
 			call_info_by_callsite_id=lambda_call_info or lambda_typed_fn.call_info_by_callsite_id,
 			can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
 			return_type=lambda_ret_type,

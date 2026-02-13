@@ -1,0 +1,84 @@
+module m
+
+import std.core as core;
+
+fn mk_user() nothrow -> DiagnosticValue {
+	return DiagnosticValue::Object([
+		core.diagnostic_entry("name", DiagnosticValue::String("ann")),
+		core.diagnostic_entry("id", DiagnosticValue::Int(7)),
+		core.diagnostic_entry("id", DiagnosticValue::Int(9))
+	]);
+}
+
+fn run() -> Int {
+	val root = DiagnosticValue::Object([
+		core.diagnostic_entry("user", mk_user())
+	]);
+	match root.as_object() {
+		Some(obj) => {
+			match obj.get("user") {
+				Some(user_dv) => {
+					match user_dv.get("name") {
+						Some(name_dv) => {
+							match name_dv.as_string() {
+								Some(name) => {
+									if name != "ann" {
+										return 1;
+									}
+								},
+								None => {
+									return 2;
+								},
+							}
+						},
+						None => {
+							return 3;
+						},
+					}
+					match user_dv.get("id") {
+						Some(id_dv) => {
+							match id_dv.as_int() {
+								Some(id) => {
+									if id != 9 {
+										return 4;
+									}
+								},
+								None => {
+									return 5;
+								},
+							}
+						},
+						None => {
+							return 6;
+						},
+					}
+					match user_dv.get("missing") {
+						Some(_) => {
+							return 7;
+						},
+						None => {
+						},
+					}
+				},
+				None => {
+					return 8;
+				},
+			}
+		},
+		None => {
+			return 9;
+		},
+	}
+	match DiagnosticValue::Int(11).as_object() {
+		Some(_) => {
+			return 10;
+		},
+		None => {
+		},
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

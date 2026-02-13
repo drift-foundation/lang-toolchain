@@ -1,0 +1,48 @@
+module main
+
+import std.runtime as rt;
+
+fn run() nothrow -> Int {
+	val reg = rt.global_registry();
+	if rt.contains<type Int>(reg) {
+		return 1;
+	}
+	match rt.get<type Int>(reg) {
+		Some(_v) => { return 2; },
+		None => {}
+	}
+	if not reg.set<type Int>(41) {
+		return 3;
+	}
+	if not rt.contains<type Int>(reg) {
+		return 4;
+	}
+	match rt.get<type Int>(reg) {
+		Some(v) => {
+			if *v != 41 {
+				return 5;
+			}
+		},
+		None => { return 6; }
+	}
+	if reg.set<type Int>(99) {
+		return 7;
+	}
+	match rt.get<type Int>(reg) {
+		Some(v2) => {
+			if *v2 != 41 {
+				return 8;
+			}
+		},
+		None => { return 9; }
+	}
+	match rt.get<type Uint>(reg) {
+		Some(_u) => { return 10; },
+		None => {}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

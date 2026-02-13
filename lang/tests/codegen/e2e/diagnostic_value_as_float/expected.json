@@ -1,0 +1,5 @@
+{
+  "description": "DiagnosticValue.as_float returns Some for float attrs and None for missing attrs",
+  "exit_code": 0
+}
+

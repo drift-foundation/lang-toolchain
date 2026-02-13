@@ -2997,16 +2997,26 @@ class Checker:
 				values_to_validate = list(stmt.value.pos_args) + [kw.value for kw in stmt.value.kw_args]
 
 			for fexpr in values_to_validate:
-				if isinstance(fexpr, H.HDVInit):
+				if isinstance(fexpr, H.HMove):
+					fexpr_check = fexpr.subject
+					if hasattr(H, "HPlaceExpr") and isinstance(fexpr_check, getattr(H, "HPlaceExpr")):
+						fexpr_check = fexpr_check.base
+				else:
+					fexpr_check = fexpr
+				if isinstance(fexpr_check, H.HDVInit):
 					continue
-				if isinstance(fexpr, (H.HLiteralInt, H.HLiteralBool)):
+				if isinstance(fexpr_check, (H.HLiteralInt, H.HLiteralBool)):
 					continue
-				if hasattr(H, "HLiteralString") and isinstance(fexpr, getattr(H, "HLiteralString")):
+				if hasattr(H, "HLiteralString") and isinstance(fexpr_check, getattr(H, "HLiteralString")):
 					continue
-				val_ty = ctx.infer(fexpr)
+				val_ty = ctx.infer(fexpr_check)
 				if val_ty is None:
 					continue
-				if val_ty is not None and ctx.table.is_diagnostic(val_ty):
+				val_nom_ty = val_ty
+				td = ctx.table.get(val_nom_ty)
+				if td.kind is TypeKind.REF and td.param_types:
+					val_nom_ty = td.param_types[0]
+				if val_nom_ty is not None and ctx.table.is_diagnostic(val_nom_ty):
 					continue
 				ctx._append_diag(
 					_chk_diag(

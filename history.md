@@ -1,3 +1,22 @@
+## 2026-02-13 – Registry singleton ABI fix (leak closure) + stale skipped test cleanup
+- Fixed a LANGUAGE_BUG in runtime registry codegen ABI for dropper callbacks:
+  - `drift_runtime_registry_set` was emitted as taking `%DriftIface` by-value in LLVM IR.
+  - Runtime C ABI expects byval-pointer semantics for this struct parameter.
+  - Result before fix: registry cleanup saw null/invalid dropper vtable and skipped payload-drop callback invocation, leaving registry-owned payload allocations live at process exit.
+- Fixes landed:
+  - aligned LLVM `%DriftIface` definition to runtime ABI layout with explicit tail padding (`{ i8*, i8*, [4 x i64], i8, [7 x i8] }`);
+  - changed `drift_runtime_registry_set` LLVM declaration to byval-pointer form;
+  - changed lowering of `lang.thread::runtime_registry_set` calls to spill iface to stack and pass byval pointer.
+- Validation:
+  - `DRIFT_ALLOC_TRACK=1`: registry leak regressions now pass:
+    - `std_runtime_global_registry_arc_payload`
+    - `std_runtime_global_registry_get_concurrent_stress`
+    - `std_runtime_global_registry_nontrivial_payload`
+  - `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`: same subset passes.
+  - broader `std_runtime_global_registry_*` subset passes under alloc tracking.
+- Removed stale skipped codegen e2e placeholder by deleting empty directory:
+  - `lang/tests/codegen/e2e/catch_typed_binder_field_projection`.
+
 ## 2026-02-12 – JSON API refactor finalization (legacy helper removal)
 - Finalized wrapper-only JSON mutation API:
   - Legacy `JsonNode` mutation helper surface is now treated as removed/deprecated path (use `json.new_array/new_object` + `JsonArray.push`/`JsonObject.set`).
@@ -678,3 +697,22 @@
 - Updated JSON wrapper roundtrip tests accordingly and kept `_` binder form:
   - `lang/tests/codegen/e2e/std_json_parse_into_wrappers/main.drift`
   - `lang/tests/codegen/e2e/std_json_wrapper_roundtrip_to_node_into/main.drift`.
+
+## 2026-02-13 – std.runtime registry expect/tag slice
+- Added `std.runtime` miss helper API:
+  - `RegistryError(tag: String)`
+  - `expect<T>(reg: &GlobalRegistry, tag: String) -> &T` (throws on miss).
+- Added regression coverage for generic throws carrying string exception fields:
+  - `lang/tests/driver/test_exception_string_generic_throw_regression.py`.
+- Added e2e coverage for registry expect success + miss-tag behavior:
+  - `lang/tests/codegen/e2e/std_runtime_global_registry_expect_tag`.
+- Added runtime registry docs/examples:
+  - `docs/effective-drift.md` registry section
+  - `examples/runtime_registry/global_singleton.drift`
+  - `examples/runtime_registry/per_thread_slots.drift`.
+- Validation:
+  - `std_runtime_global_registry_expect_tag` passes.
+  - targeted driver regression subset passes (`13 passed`).
+- Pinned limitation:
+  - catch binders currently lower as `Error`; direct field access like `e.tag` in catch arms is not yet supported.
+  - supported catch-path access remains `e.attrs["tag"]` + `as_*` extractors.

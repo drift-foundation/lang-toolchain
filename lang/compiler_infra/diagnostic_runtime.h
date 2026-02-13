@@ -37,10 +37,7 @@ struct DriftDiagnosticArray {
     size_t len;
 };
 
-struct DriftDiagnosticField {
-    struct DriftString key;
-    struct DriftDiagnosticValue* value;
-};
+struct DriftDiagnosticField;
 
 struct DriftDiagnosticObject {
     struct DriftDiagnosticField* fields;
@@ -64,6 +61,16 @@ struct DriftDiagnosticValue {
     } data;
 };
 
+struct DriftDiagnosticField {
+    struct DriftString key;
+    struct DriftDiagnosticValue value;
+};
+
+struct DriftDiagnosticEntry {
+    struct DriftString key;
+    struct DriftDiagnosticValue value;
+};
+
 _Static_assert(sizeof(struct DriftDiagnosticValue) == 24, "DriftDiagnosticValue size mismatch");
 _Static_assert(_Alignof(struct DriftDiagnosticValue) == 8, "DriftDiagnosticValue alignment mismatch");
 
@@ -76,6 +83,9 @@ struct DriftDiagnosticValue drift_dv_float(double value);
 struct DriftDiagnosticValue drift_dv_string(struct DriftString value);
 struct DriftDiagnosticValue drift_dv_array(struct DriftDiagnosticValue* items, size_t len);
 struct DriftDiagnosticValue drift_dv_object(struct DriftDiagnosticField* fields, size_t len);
+struct DriftDiagnosticValue drift_dv_object_from_entries(void* entries_data, drift_isize len);
+struct DriftDiagnosticValue drift_dv_clone(const struct DriftDiagnosticValue* dv);
+void drift_dv_release(struct DriftDiagnosticValue* dv);
 
 // Accessors
 struct DriftDiagnosticValue drift_dv_get(struct DriftDiagnosticValue dv, struct DriftString field);
@@ -89,6 +99,8 @@ bool drift_dv_as_int(const struct DriftDiagnosticValue* dv, drift_isize* out);
 bool drift_dv_as_bool(const struct DriftDiagnosticValue* dv, uint8_t* out);
 bool drift_dv_as_float(const struct DriftDiagnosticValue* dv, double* out);
 bool drift_dv_as_string(const struct DriftDiagnosticValue* dv, struct DriftString* out);
+bool drift_dv_as_object(const struct DriftDiagnosticValue* dv, struct DriftDiagnosticValue* out);
+bool drift_dv_get_field(const struct DriftDiagnosticValue* dv, struct DriftString key, struct DriftDiagnosticValue* out);
 
 // Primitive to_diag helpers (runtime equivalents of Diagnostic for primitives)
 struct DriftDiagnosticValue drift_diag_from_bool(uint8_t value);

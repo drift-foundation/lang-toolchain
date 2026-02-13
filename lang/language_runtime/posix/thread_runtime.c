@@ -107,14 +107,63 @@ typedef struct DriftLogRecordSlot {
 	int64_t level;
 	DriftString payload_json;
 } DriftLogRecordSlot;
+typedef struct DriftRuntimeRegistryEntry {
+	uint64_t type_tag;
+	void *ptr;
+	DriftIface dropper;
+	struct DriftRuntimeRegistryEntry *next;
+} DriftRuntimeRegistryEntry;
+typedef struct DriftRuntimeGlobalRegistry {
+	int64_t _opaque;
+} DriftRuntimeGlobalRegistry;
 static DriftLogRecordSlot *drift_log_slots = NULL;
 static _Atomic uint64_t drift_log_write_seq = 0;
 static _Atomic uint64_t drift_log_read_seq = 0;
+static pthread_mutex_t drift_runtime_registry_mu = PTHREAD_MUTEX_INITIALIZER;
+static DriftRuntimeRegistryEntry *drift_runtime_registry_head = NULL;
+static pthread_once_t drift_runtime_registry_cleanup_once = PTHREAD_ONCE_INIT;
+static _Atomic int drift_runtime_registry_cleaned = 0;
+static DriftRuntimeGlobalRegistry drift_runtime_global_registry = {0};
 static void drift_drop_callback(DriftIface *cb);
 static void drift_exec_shutdown_all_atexit(void);
+static void drift_runtime_registry_cleanup_atexit(void);
 static pthread_mutex_t drift_vt_registry_mu = PTHREAD_MUTEX_INITIALIZER;
 static DriftVt *drift_vt_registry_head = NULL;
 static void drift_reactor_forget_vt(DriftVt *vt);
+
+static void drift_runtime_registry_register_cleanup_once(void) {
+	(void)atexit(drift_runtime_registry_cleanup_atexit);
+}
+
+static void drift_runtime_registry_cleanup_atexit(void) {
+	if (atomic_exchange_explicit(&drift_runtime_registry_cleaned, 1, memory_order_acq_rel) != 0) {
+		return;
+	}
+	pthread_mutex_lock(&drift_runtime_registry_mu);
+	DriftRuntimeRegistryEntry *cur = drift_runtime_registry_head;
+	drift_runtime_registry_head = NULL;
+	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	while (cur) {
+		DriftRuntimeRegistryEntry *next = cur->next;
+		void *drop_data = cur->dropper.data;
+		if ((cur->dropper.is_inline & 1) != 0) {
+			drop_data = (void *)cur->dropper.inline_words;
+		}
+		DriftCallbackVTable *vt = (DriftCallbackVTable *)cur->dropper.vtable;
+		if (vt && vt->call) {
+			((void (*)(void *, void *))vt->call)(drop_data, cur->ptr);
+		}
+		if (vt && vt->drop) {
+			((DriftCallbackDrop)vt->drop)(drop_data);
+		}
+		free(cur);
+		cur = next;
+	}
+}
+
+void drift_runtime_registry_cleanup_now(void) {
+	drift_runtime_registry_cleanup_atexit();
+}
 
 static void drift_vt_registry_add(DriftVt *vt) {
 	if (!vt) {
@@ -403,7 +452,7 @@ static DriftString drift_log_json_escape_impl(DriftString s) {
 	return escaped;
 }
 
-static DriftString drift_log_dv_to_json_impl(struct DriftDiagnosticValue dv) {
+static DriftString drift_log_dv_to_json_impl_depth(struct DriftDiagnosticValue dv, int depth) {
 	switch ((int)dv.tag) {
 		case DV_BOOL: {
 			uint8_t b = 0;
@@ -436,11 +485,40 @@ static DriftString drift_log_dv_to_json_impl(struct DriftDiagnosticValue dv) {
 			out = drift_string_concat(out, drift_string_from_cstr("\""));
 			return out;
 		}
+		case DV_OBJECT: {
+			if (depth >= 4) {
+				return drift_string_from_cstr("{}");
+			}
+			DriftString out = drift_string_from_cstr("{");
+			size_t count = dv.data.object.len;
+			if (count > 16u) {
+				count = 16u;
+			}
+			for (size_t i = 0; i < count; i++) {
+				struct DriftDiagnosticField *f = &dv.data.object.fields[i];
+				if (i > 0) {
+					out = drift_string_concat(out, drift_string_from_cstr(","));
+				}
+				DriftString escaped_key = drift_log_json_escape_impl((DriftString){f->key.len, f->key.data});
+				out = drift_string_concat(out, drift_string_from_cstr("\""));
+				out = drift_string_concat(out, escaped_key);
+				out = drift_string_concat(out, drift_string_from_cstr("\":"));
+				struct DriftDiagnosticValue v = f->value;
+				DriftString v_json = drift_log_dv_to_json_impl_depth(v, depth + 1);
+				out = drift_string_concat(out, v_json);
+			}
+			out = drift_string_concat(out, drift_string_from_cstr("}"));
+			return out;
+		}
 		case DV_NULL:
 		case DV_MISSING:
 		default:
 			return drift_string_from_cstr("null");
 	}
+}
+
+static DriftString drift_log_dv_to_json_impl(struct DriftDiagnosticValue dv) {
+	return drift_log_dv_to_json_impl_depth(dv, 0);
 }
 
 DriftString drift_log_runtime_json_escape(DriftString s) {
@@ -1845,4 +1923,69 @@ void drift_test_timerfd_set(uint64_t fd, uint64_t delay_ms) {
 	(void)fd;
 	(void)delay_ms;
 #endif
+}
+
+void *drift_runtime_global_registry_ptr(void) {
+	pthread_once(&drift_runtime_registry_cleanup_once, drift_runtime_registry_register_cleanup_once);
+	return (void *)&drift_runtime_global_registry;
+}
+
+uint64_t drift_runtime_registry_set(uint64_t type_tag, void *ptr, DriftIface dropper) {
+	if (ptr == NULL) {
+		drift_drop_callback(&dropper);
+		return 0;
+	}
+	pthread_once(&drift_runtime_registry_cleanup_once, drift_runtime_registry_register_cleanup_once);
+	pthread_mutex_lock(&drift_runtime_registry_mu);
+	DriftRuntimeRegistryEntry *cur = drift_runtime_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			pthread_mutex_unlock(&drift_runtime_registry_mu);
+			drift_drop_callback(&dropper);
+			return 0;
+		}
+		cur = cur->next;
+	}
+	DriftRuntimeRegistryEntry *entry = (DriftRuntimeRegistryEntry *)malloc(sizeof(DriftRuntimeRegistryEntry));
+	if (!entry) {
+		pthread_mutex_unlock(&drift_runtime_registry_mu);
+		drift_drop_callback(&dropper);
+		return 0;
+	}
+	entry->type_tag = type_tag;
+	entry->ptr = ptr;
+	entry->dropper = dropper;
+	entry->next = drift_runtime_registry_head;
+	drift_runtime_registry_head = entry;
+	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	return 1;
+}
+
+uint64_t drift_runtime_registry_contains(uint64_t type_tag) {
+	pthread_mutex_lock(&drift_runtime_registry_mu);
+	DriftRuntimeRegistryEntry *cur = drift_runtime_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			pthread_mutex_unlock(&drift_runtime_registry_mu);
+			return 1;
+		}
+		cur = cur->next;
+	}
+	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	return 0;
+}
+
+void *drift_runtime_registry_get(uint64_t type_tag) {
+	pthread_mutex_lock(&drift_runtime_registry_mu);
+	DriftRuntimeRegistryEntry *cur = drift_runtime_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			void *ptr = cur->ptr;
+			pthread_mutex_unlock(&drift_runtime_registry_mu);
+			return ptr;
+		}
+		cur = cur->next;
+	}
+	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	return NULL;
 }

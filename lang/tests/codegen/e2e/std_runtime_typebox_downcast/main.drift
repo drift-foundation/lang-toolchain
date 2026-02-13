@@ -1,0 +1,28 @@
+module main
+
+import std.core as core;
+import std.runtime as rt;
+
+fn run() nothrow -> Int {
+	val b = rt.type_box(42);
+	if b.type_id() != core.type_id<type Int>() {
+		return 1;
+	}
+	match rt.downcast<type Int>(&b) {
+		Some(v) => {
+			if *v != 42 {
+				return 2;
+			}
+		},
+		None => { return 3; }
+	}
+	match rt.downcast<type String>(&b) {
+		Some(_v) => { return 4; },
+		None => {}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

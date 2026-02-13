@@ -1,0 +1,37 @@
+module main
+
+import std.runtime as rt;
+
+struct AppConfig {
+	name: String,
+	max_workers: Int
+}
+
+fn init_config() nothrow -> Bool {
+	val reg = rt.global_registry();
+	val cfg = AppConfig(name = "main", max_workers = 8);
+	return reg.set(move cfg);
+}
+
+fn read_config() nothrow -> Int {
+	val reg = rt.global_registry();
+	match rt.get<type AppConfig>(reg) {
+		Some(cfg) => {
+			if cfg.max_workers != 8 {
+				return 1;
+			}
+			if cfg.name != "main" {
+				return 2;
+			}
+			return 0;
+		},
+		None => { return 3; }
+	}
+}
+
+fn main() nothrow -> Int {
+	if not init_config() {
+		return 10;
+	}
+	return read_config();
+}

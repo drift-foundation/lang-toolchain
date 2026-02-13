@@ -1,0 +1,24 @@
+module main
+
+import std.core as core;
+
+struct A {
+	v: Int
+}
+
+struct B {
+	v: Int
+}
+
+fn main() nothrow -> Int {
+	val a0 = core.type_id<type A>();
+	val a1 = core.type_id<type A>();
+	val b0 = core.type_id<type B>();
+	if a0 != a1 {
+		return 1;
+	}
+	if a0 == b0 {
+		return 2;
+	}
+	return 0;
+}

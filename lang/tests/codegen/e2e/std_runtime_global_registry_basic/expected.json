@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime global registry basic set/contains/get set-once behavior",
+  "exit_code": 0
+}

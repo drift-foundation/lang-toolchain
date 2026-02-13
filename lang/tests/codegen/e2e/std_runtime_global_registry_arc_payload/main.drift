@@ -1,0 +1,35 @@
+module main
+
+import std.runtime as rt;
+import std.concurrent as conc;
+
+struct State {
+	v: Int
+}
+
+fn run() nothrow -> Int {
+	val reg = rt.global_registry();
+	val a = conc.arc(State(v = 5));
+	if not reg.set<type conc.Arc<State>>(move a) {
+		return 1;
+	}
+	var i = 0;
+	while i < 4000 {
+		match rt.get<type conc.Arc<State>>(reg) {
+			Some(stored) => {
+				val c = (*stored).clone();
+				val s = c.get();
+				if s.v != 5 {
+					return 2;
+				}
+			},
+			None => { return 3; }
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

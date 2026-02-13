@@ -173,6 +173,7 @@ class TypedFn:
 	call_info_by_callsite_id: Dict[int, "CallInfo"] = field(default_factory=dict)
 	instantiations_by_callsite_id: Dict[int, "CallInstantiation"] = field(default_factory=dict)
 	iface_coercions: Dict[int, TypeId] = field(default_factory=dict)
+	preseed_type_params: Dict[str, TypeId] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -4734,27 +4735,54 @@ class TypeChecker:
 				)
 				return record_expr(expr, self._unknown)
 
+			if isinstance(expr, H.HFnPtrConst):
+				call_sig = getattr(expr, "call_sig", None)
+				if call_sig is None:
+					diagnostics.append(
+						_tc_diag(
+							message="internal: function pointer constant missing call signature",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
+				fn_ty = self.type_table.ensure_function(
+					list(call_sig.param_types),
+					call_sig.user_ret_type,
+					can_throw=bool(call_sig.can_throw),
+				)
+				return record_expr(expr, fn_ty)
+
 			# Names and bindings.
 			if isinstance(expr, H.HVar):
-				if expr.module_id is None:
+				def _scope_lookup_binding_id(var_name: str) -> Optional[int]:
 					for scope in reversed(scope_bindings):
-						if expr.name in scope:
-							scoped_id = scope[expr.name]
-							if expr.binding_id != scoped_id:
-								expr.binding_id = scoped_id
-							break
+						if var_name not in scope:
+							continue
+						cand_id = scope[var_name]
+						cand_name = binding_names.get(cand_id)
+						if cand_name is not None and cand_name != var_name:
+							continue
+						return cand_id
+					return None
+				if expr.binding_id is not None:
+					bound_name = binding_names.get(expr.binding_id)
+					if bound_name is not None and bound_name != expr.name:
+						expr.binding_id = None
+				if expr.module_id is None:
+					scoped_id = _scope_lookup_binding_id(expr.name)
+					if scoped_id is not None and expr.binding_id != scoped_id:
+						expr.binding_id = scoped_id
 				if expr.binding_id is not None:
 					bound = binding_types.get(expr.binding_id)
 					if bound is None or self.type_table.get(bound).kind is TypeKind.UNKNOWN:
 						if expr.module_id is None:
-							for scope in reversed(scope_bindings):
-								if expr.name in scope:
-									candidate = scope[expr.name]
-									cand_ty = binding_types.get(candidate)
-									if cand_ty is not None and self.type_table.get(cand_ty).kind is not TypeKind.UNKNOWN:
-										expr.binding_id = candidate
-										bound = cand_ty
-										break
+							candidate = _scope_lookup_binding_id(expr.name)
+							if candidate is not None:
+								cand_ty = binding_types.get(candidate)
+								if cand_ty is not None and self.type_table.get(cand_ty).kind is not TypeKind.UNKNOWN:
+									expr.binding_id = candidate
+									bound = cand_ty
 					if bound is not None:
 						cap_kind = _explicit_capture_kind(expr.binding_id)
 						if cap_kind in ("ref", "ref_mut"):
@@ -4785,10 +4813,9 @@ class TypeChecker:
 							_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
 							return record_expr(expr, ty_id)
 				if expr.module_id is None and expr.binding_id is None:
-					for scope in reversed(scope_bindings):
-						if expr.name in scope:
-							expr.binding_id = scope[expr.name]
-							break
+					scoped_id = _scope_lookup_binding_id(expr.name)
+					if scoped_id is not None:
+						expr.binding_id = scoped_id
 				if expr.module_id is None:
 					for scope in reversed(scope_env):
 						if expr.name in scope:
@@ -5474,7 +5501,7 @@ class TypeChecker:
 							visible_modules=_visible_modules_for_free_call(expr.fn.module_id),
 							include_private_in=include_private,
 						)
-						viable: list[tuple[CallableDecl, list[TypeId], TypeId]] = []
+						viable: list[tuple[CallableDecl, FnSignature, list[TypeId], TypeId, bool]] = []
 						type_arg_counts: set[int] = set()
 						saw_registry_only = False
 						saw_typed_nongeneric = False
@@ -5508,6 +5535,18 @@ class TypeChecker:
 								call_kind="free",
 								call_name=decl.name,
 							)
+							if inst_res.error is not None and sig.type_params and len(type_arg_ids) == len(sig.type_params) and sig.param_type_ids is not None and sig.return_type_id is not None:
+								subst = Subst(owner=sig.type_params[0].id.owner, args=list(type_arg_ids))
+								inst_params = [apply_subst(p, subst, self.type_table) for p in sig.param_type_ids]
+								inst_return = apply_subst(sig.return_type_id, subst, self.type_table)
+								inst_res = InferResult(
+									ok=True,
+									subst=subst,
+									inst_params=inst_params,
+									inst_return=inst_return,
+									context=None,
+									error=None,
+								)
 							if inst_res.error and inst_res.error.kind is InferErrorKind.NO_TYPEPARAMS:
 								saw_typed_nongeneric = True
 								continue
@@ -5519,11 +5558,43 @@ class TypeChecker:
 								continue
 							if inst_res.inst_params is None or inst_res.inst_return is None:
 								continue
-							viable.append((decl, list(inst_res.inst_params), inst_res.inst_return))
+							can_throw = True
+							if sig.declared_can_throw is not None:
+								can_throw = bool(sig.declared_can_throw)
+							viable.append((decl, sig, list(inst_res.inst_params), inst_res.inst_return, can_throw))
 
 						if len(viable) == 1:
-							decl, params, ret = viable[0]
-							return record_expr(expr, self.type_table.new_function(params, ret))
+							decl, sig, params, ret, can_throw = viable[0]
+							if decl.fn_id is not None:
+								concrete_type_args = not type_arg_ids or not any(self.type_table.has_typevar(t) for t in type_arg_ids)
+								if concrete_type_args:
+									ref_fn_id = decl.fn_id
+									if type_arg_ids and function_keys_by_fn_id is not None:
+										key = function_keys_by_fn_id.get(decl.fn_id)
+										if key is not None:
+											record_instantiation(
+												callsite_id=expr.node_id,
+												target_fn_id=decl.fn_id,
+												impl_args=tuple(),
+												fn_args=tuple(type_arg_ids),
+											)
+											inst_key = build_instantiation_key(
+												key,
+												tuple(type_arg_ids),
+												type_table=self.type_table,
+												can_throw=bool(can_throw),
+											)
+											inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
+											ref_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
+									is_exported = bool(getattr(sig, "is_exported_entrypoint", False))
+									is_extern = bool(getattr(sig, "is_extern", False))
+									if (is_exported or is_extern) and ref_fn_id == decl.fn_id:
+										fn_ref = _ensure_boundary_thunk(ref_fn_id, params, ret)
+									else:
+										fn_ref = FunctionRefId(fn_id=ref_fn_id, kind=FunctionRefKind.IMPL, has_wrapper=False)
+									call_sig = CallSig(param_types=tuple(params), user_ret_type=ret, can_throw=bool(can_throw))
+									fnptr_consts_by_node_id[expr.node_id] = (fn_ref, call_sig)
+							return record_expr(expr, self.type_table.ensure_function(params, ret, can_throw=can_throw))
 						if saw_registry_only:
 							diagnostics.append(
 								_tc_diag(
@@ -7534,10 +7605,20 @@ class TypeChecker:
 
 				replacements: dict[int, H.HExpr] = {}
 				for val_expr in values_to_validate:
-					val_ty = type_expr(val_expr)
+					if isinstance(val_expr, H.HMove):
+						val_check_expr = val_expr.subject
+						if hasattr(H, "HPlaceExpr") and isinstance(val_check_expr, getattr(H, "HPlaceExpr")):
+							val_check_expr = val_check_expr.base
+					else:
+						val_check_expr = val_expr
+					val_ty = type_expr(val_check_expr, used_as_value=True)
 					if val_ty == self._dv:
 						continue
-					if not self.type_table.is_diagnostic(val_ty):
+					val_nom_ty = val_ty
+					val_td = self.type_table.get(val_nom_ty)
+					if val_td.kind is TypeKind.REF and val_td.param_types:
+						val_nom_ty = val_td.param_types[0]
+					if not self.type_table.is_diagnostic(val_nom_ty):
 						diagnostics.append(
 							_tc_diag(
 								message="exception field value must implement Diagnostic",
@@ -7550,13 +7631,13 @@ class TypeChecker:
 						continue
 					if isinstance(val_expr, H.HDVInit):
 						continue
-					if val_ty in (self._int, self._uint, self._bool, self._string, self._float):
+					if val_nom_ty in (self._int, self._uint, self._bool, self._string, self._float):
 						kind_name = "Int"
-						if val_ty == self._bool:
+						if val_nom_ty == self._bool:
 							kind_name = "Bool"
-						elif val_ty == self._string:
+						elif val_nom_ty == self._string:
 							kind_name = "String"
-						elif val_ty == self._float:
+						elif val_nom_ty == self._float:
 							kind_name = "Float"
 						dv_init = H.HDVInit(dv_type_name=kind_name, args=[val_expr])
 						type_expr(dv_init)
@@ -7577,7 +7658,8 @@ class TypeChecker:
 			if isinstance(expr, H.HDVInit):
 				arg_types = [type_expr(a) for a in expr.args]
 				if expr.args:
-					# Only zero-arg (missing) or single-arg primitive DV ctors are supported in v1.
+					# Only zero-arg, single-arg primitive DV ctors, or Object(entries)
+					# are supported in v1.
 					if len(expr.args) > 1:
 						diagnostics.append(
 							_tc_diag(
@@ -7588,7 +7670,30 @@ class TypeChecker:
 						)
 						return record_expr(expr, self._unknown)
 					inner_ty = arg_types[0]
-					if inner_ty not in (self._int, self._uint, self._bool, self._string, self._float):
+					if expr.dv_type_name == "Object":
+						td_inner = self.type_table.get(inner_ty)
+						is_ok = False
+						if td_inner.kind is TypeKind.ARRAY and td_inner.param_types:
+							elem_ty = td_inner.param_types[0]
+							elem_td = self.type_table.get(elem_ty)
+							if elem_td.kind is TypeKind.STRUCT:
+								key_info = _resolve_struct_field_type(elem_ty, "key")
+								value_info = _resolve_struct_field_type(elem_ty, "value")
+								if key_info is not None and value_info is not None:
+									_, key_ty = key_info
+									_, value_ty = value_info
+									if key_ty == self._string and value_ty == self._dv:
+										is_ok = True
+						if not is_ok:
+							diagnostics.append(
+								_tc_diag(
+									message="DiagnosticValue::Object requires Array<DiagnosticEntry>-shaped argument (fields: key:String, value:DiagnosticValue)",
+									severity="error",
+									span=getattr(expr.args[0], "loc", Span()),
+								)
+							)
+							return record_expr(expr, self._unknown)
+					elif inner_ty not in (self._int, self._uint, self._bool, self._string, self._float):
 						diagnostics.append(
 							_tc_diag(
 								message="unsupported DiagnosticValue constructor argument type",
@@ -8377,6 +8482,7 @@ class TypeChecker:
 			call_info_by_callsite_id=call_info_by_callsite_id,
 			instantiations_by_callsite_id=instantiations_by_callsite_id,
 			iface_coercions=iface_coercions,
+			preseed_type_params=dict(preseed_type_params or {}),
 		)
 		if self.type_table is not None and self.type_table.type_provenance_enabled():
 			for bid, bty in binding_types.items():

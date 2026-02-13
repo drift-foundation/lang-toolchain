@@ -1,0 +1,43 @@
+module main
+
+import std.runtime as rt;
+
+struct Inner {
+	title: String,
+	count: Int
+}
+
+struct Payload {
+	inner: Inner,
+	msg: String
+}
+
+fn run() nothrow -> Int {
+	val reg = rt.global_registry();
+	val p = Payload(
+		inner = Inner(title = "svc-main", count = 9),
+		msg = "ready"
+	);
+	if not reg.set<type Payload>(move p) {
+		return 1;
+	}
+	match rt.get<type Payload>(reg) {
+		Some(v) => {
+			if v.inner.count != 9 {
+				return 2;
+			}
+			if v.inner.title != "svc-main" {
+				return 3;
+			}
+			if v.msg != "ready" {
+				return 4;
+			}
+		},
+		None => { return 5; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

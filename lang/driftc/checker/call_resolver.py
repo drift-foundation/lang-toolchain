@@ -1178,27 +1178,48 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				arg_types[idx] = exp_ty
 
 	# Built-in DiagnosticValue helpers are reserved method names and take precedence.
-	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_string"):
+	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get"):
 		recv_ty = type_expr(expr.receiver, used_as_value=False)
 		recv_def = ctx.type_table.get(recv_ty)
 		if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
-			diagnostics.append(_tc_diag(message=f"{expr.method_name} is only valid on DiagnosticValue", severity="error", span=getattr(expr, "loc", Span())))
+			# Allow normal method resolution on non-DV receivers (e.g. JsonNode.get/as_object).
+			pass
+		else:
+			if expr.method_name == "get":
+				if len(getattr(expr, "args", []) or []) != 1:
+					diagnostics.append(_tc_diag(message="DiagnosticValue.get expects exactly one key argument", severity="error", span=getattr(expr, "loc", Span())))
+					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+					return MethodCallResult(ctx.unknown_ty, info)
+				key_ty = type_expr(expr.args[0], used_as_value=False)
+				if key_ty != ctx.string_ty:
+					diagnostics.append(_tc_diag(message="DiagnosticValue.get key must be String", severity="error", span=getattr(expr.args[0], "loc", Span())))
+					info = _call_info([recv_ty, key_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+					return MethodCallResult(ctx.unknown_ty, info)
+				opt_dv = _optional_variant_type(ctx.dv_ty)
+				info = _call_info([recv_ty, key_ty], opt_dv, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_dv, info)
+			if expr.method_name == "as_int":
+				opt_int = _optional_variant_type(ctx.int_ty)
+				info = _call_info([recv_ty], opt_int, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_int, info)
+			if expr.method_name == "as_bool":
+				opt_bool = _optional_variant_type(ctx.bool_ty)
+				info = _call_info([recv_ty], opt_bool, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_bool, info)
+			if expr.method_name == "as_float":
+				opt_float = _optional_variant_type(ctx.float_ty)
+				info = _call_info([recv_ty], opt_float, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_float, info)
+			if expr.method_name == "as_string":
+				opt_string = _optional_variant_type(ctx.string_ty)
+				info = _call_info([recv_ty], opt_string, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_string, info)
+			if expr.method_name == "as_object":
+				opt_dv = _optional_variant_type(ctx.dv_ty)
+				info = _call_info([recv_ty], opt_dv, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(opt_dv, info)
 			info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(ctx.unknown_ty, info)
-		if expr.method_name == "as_int":
-			opt_int = _optional_variant_type(ctx.int_ty)
-			info = _call_info([recv_ty], opt_int, False, _intrinsic_method_fn_id(expr.method_name))
-			return MethodCallResult(opt_int, info)
-		if expr.method_name == "as_bool":
-			opt_bool = _optional_variant_type(ctx.bool_ty)
-			info = _call_info([recv_ty], opt_bool, False, _intrinsic_method_fn_id(expr.method_name))
-			return MethodCallResult(opt_bool, info)
-		if expr.method_name == "as_string":
-			opt_string = _optional_variant_type(ctx.string_ty)
-			info = _call_info([recv_ty], opt_string, False, _intrinsic_method_fn_id(expr.method_name))
-			return MethodCallResult(opt_string, info)
-		info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-		return MethodCallResult(ctx.unknown_ty, info)
 
 	if getattr(expr, "kwargs", None):
 		first = (getattr(expr, "kwargs", []) or [None])[0]
@@ -1919,7 +1940,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if world is None:
 						filtered_candidates.append(cand)
 						continue
-					if receiver_args is not None and isinstance(req_expr, parser_ast.TraitIs):
+					if receiver_args and isinstance(req_expr, parser_ast.TraitIs):
 						_req_key = trait_key_from_expr(req_expr.trait, default_module=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages)
 						if getattr(_req_key, "name", None) == "Copy" and ctx.type_table.is_copy(receiver_args[0]):
 							filtered_candidates.append(cand)

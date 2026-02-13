@@ -1383,6 +1383,9 @@ class TypeTable:
 			needs = td.name == "String"
 			self._needs_drop_cache[tid] = needs
 			return needs
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			self._needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.ARRAY:
 			needs = bool(td.param_types) and self._type_needs_drop(td.param_types[0])
 			self._needs_drop_cache[tid] = needs

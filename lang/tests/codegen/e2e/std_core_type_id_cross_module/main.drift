@@ -1,0 +1,13 @@
+module main
+
+import std.core as core;
+import lib as lib;
+
+fn main() nothrow -> Int {
+	val a = core.type_id<type lib.Node>();
+	val b = lib.node_type_id();
+	if a != b {
+		return 1;
+	}
+	return 0;
+}

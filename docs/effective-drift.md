@@ -51,6 +51,77 @@ Notes
 
 - This works with owned callbacks and does not rely on borrowed captures.
 
+## Runtime registry patterns (`std.runtime`)
+
+Use `global_registry()` for process-wide singletons. Reads are typed and safe via
+`contains<T>(&reg)` / `get<T>(&reg)`, and strict retrieval is available via
+`expect<T>(&reg, "missing-tag")` which throws `std.runtime:RegistryError`
+with `tag: String`.
+
+```drift
+import std.runtime as rt;
+
+struct AppConfig {
+    name: String,
+    max_workers: Int
+}
+
+fn init_config() nothrow -> Bool {
+    val reg = rt.global_registry();
+    val cfg = AppConfig(name = "main", max_workers = 8);
+    return reg.set(move cfg);
+}
+
+fn read_config() nothrow -> Int {
+    val reg = rt.global_registry();
+    match rt.get<type AppConfig>(reg) {
+        Some(cfg) => {
+            if cfg.max_workers != 8 { return 1; }
+            return 0;
+        },
+        None => { return 2; }
+    }
+}
+```
+
+For per-thread state in MVP (before a dedicated thread-local registry), use a
+global singleton that stores a map keyed by `vt_current()` and guard it with
+`Arc<Mutex<...>>`.
+
+```drift
+import std.concurrent as conc;
+import std.containers as containers;
+import std.runtime as rt;
+import lang.thread as thread;
+
+fn init_slots() nothrow -> Bool {
+    val reg = rt.global_registry();
+    var by_tid: containers.HashMap<Int, Int> = containers.hash_map<type Int, Int>();
+    var map_mutex: conc.Mutex<containers.HashMap<Int, Int>> = conc.mutex(move by_tid);
+    var map_arc: conc.Arc<conc.Mutex<containers.HashMap<Int, Int>>> = conc.arc(move map_mutex);
+    return reg.set(move map_arc);
+}
+
+fn write_current_thread_slot() nothrow -> Bool {
+    val reg = rt.global_registry();
+    match rt.get<type conc.Arc<conc.Mutex<containers.HashMap<Int, Int>>>>(reg) {
+        Some(shared_ref) => {
+            var shared: conc.Arc<conc.Mutex<containers.HashMap<Int, Int>>> = (*shared_ref).clone();
+            var g = conc.lock(shared);
+            val slots = g.get_mut();
+            val tid = thread.vt_current();
+            val _ = slots.insert(tid, 1);
+            return true;
+        },
+        None => { return false; }
+    }
+}
+```
+
+Matching runnable examples:
+- `examples/runtime_registry/global_singleton.drift`
+- `examples/runtime_registry/per_thread_slots.drift`
+
 ## Read a file
 
 Use `file_builder(...).read(true).write(false)` and keep timeout on the

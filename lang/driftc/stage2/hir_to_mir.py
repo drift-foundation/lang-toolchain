@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import copy
+import hashlib
 import os
 from typing import List, Set, Mapping, Optional
 
@@ -208,6 +209,7 @@ class HIRToMIR:
 		iface_coercions: Mapping[int, TypeId] | None = None,
 		signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
 		current_fn_id: FunctionId | None = None,
+		type_param_subst: Mapping[str, TypeId] | None = None,
 		call_info_by_callsite_id: Mapping[int, CallInfo] | None = None,
 		call_resolutions: Mapping[int, object] | None = None,
 		can_throw_by_id: Mapping[FunctionId, bool] | None = None,
@@ -257,7 +259,7 @@ class HIRToMIR:
 		self._dv_type = self._type_table.ensure_diagnostic_value()
 		self._signatures_by_id = signatures_by_id or {}
 		self._current_fn_id = current_fn_id
-		self._type_param_subst: dict[str, TypeId] = {}
+		self._type_param_subst: dict[str, TypeId] = dict(type_param_subst or {})
 		if self._current_fn_id is not None and self._signatures_by_id:
 			sig = self._signatures_by_id.get(self._current_fn_id)
 			if sig is not None and sig.impl_target_type_id and sig.impl_target_type_args:
@@ -271,6 +273,7 @@ class HIRToMIR:
 			dict(call_info_by_callsite_id) if call_info_by_callsite_id else {}
 		)
 		self._call_resolutions: dict[int, object] = dict(call_resolutions) if call_resolutions else {}
+		self._type_id_token_cache: dict[TypeId, int] = {}
 		if isinstance(typed_mode, bool):
 			self._typed_mode = "strict" if typed_mode else "none"
 		else:
@@ -356,6 +359,8 @@ class HIRToMIR:
 		td = self._type_table.get(ty)
 		if td.kind is TypeKind.REF:
 			return False
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			return True
 		if td.kind is TypeKind.INTERFACE:
 			return True
 		try:
@@ -640,6 +645,16 @@ class HIRToMIR:
 				return parts[0]
 		return "main"
 
+	def _type_id_token(self, ty: TypeId) -> int:
+		cached = self._type_id_token_cache.get(ty)
+		if cached is not None:
+			return cached
+		key = self._type_table.type_key_string(ty)
+		digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+		token = int.from_bytes(digest, byteorder="little", signed=False)
+		self._type_id_token_cache[ty] = token
+		return token
+
 	# --- Expression lowering ---
 
 	def _lower_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
@@ -864,7 +879,7 @@ class HIRToMIR:
 								self.b.ensure_local(bname)
 								self._local_types[bname] = binder_ty
 								binder_def = self._type_table.get(binder_ty)
-								if binder_def.kind is not TypeKind.REF and not self._type_table.is_copy(binder_ty):
+								if binder_def.kind is not TypeKind.REF and self._needs_runtime_drop(binder_ty):
 									arm_drop_locals.append(bname)
 									self._register_drop_local(bname, binder_ty)
 								self.b.emit(M.StoreLocal(local=bname, value=field_moved))
@@ -1857,7 +1872,10 @@ class HIRToMIR:
 			val_ty = self._infer_expr_type(elem_expr)
 			if val_ty is not None:
 				copy_status = self._type_table.copy_status(val_ty)
-				if copy_status is True and not isinstance(elem_expr, H.HMove):
+				is_lvalue_elem = isinstance(elem_expr, H.HVar)
+				if hasattr(H, "HPlaceExpr") and isinstance(elem_expr, getattr(H, "HPlaceExpr")):
+					is_lvalue_elem = True
+				if copy_status is True and is_lvalue_elem and not isinstance(elem_expr, H.HMove):
 					copy_dest = self.b.new_temp()
 					self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
 					self._local_types[copy_dest] = val_ty
@@ -2326,6 +2344,26 @@ class HIRToMIR:
 				raise NotImplementedError(f"{intrinsic.value} requires a function pointer constant or lambda in MVP")
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
+		if intrinsic is IntrinsicKind.TYPE_ID:
+			if getattr(expr, "kwargs", None):
+				raise AssertionError("type_id(...) does not accept keyword arguments (checker bug)")
+			if len(expr.args) != 0:
+				raise AssertionError("type_id(...) arity mismatch reached MIR lowering (checker bug)")
+			type_arg_exprs = list(getattr(expr, "type_args", []) or [])
+			if len(type_arg_exprs) != 1:
+				raise AssertionError("type_id<T>() requires exactly one type argument (checker bug)")
+			cur_mod = self._current_module_name()
+			type_arg = resolve_opaque_type(
+				type_arg_exprs[0],
+				self._type_table,
+				module_id=getattr(type_arg_exprs[0], "module_id", None) or cur_mod,
+				type_params=self._type_param_subst or None,
+			)
+			token = self._type_id_token(type_arg)
+			dest = self.b.new_temp()
+			self.b.emit(M.ConstUint64(dest=dest, value=token))
+			self._local_types[dest] = self._uint64_type
+			return dest
 		raise AssertionError(f"unknown intrinsic '{intrinsic.value}' reached MIR lowering (checker bug)")
 
 	# Stubs for unhandled expressions
@@ -2591,7 +2629,7 @@ class HIRToMIR:
 				else:
 					# Conservatively assume unknown method calls can throw, except for
 					# built-in, non-throwing intrinsics handled directly in lowering.
-					if expr.method_name not in {"as_int", "as_bool", "as_string", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
+					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
 						return True
 				if expr_can_throw(expr.receiver):
 					return True
@@ -3189,9 +3227,30 @@ class HIRToMIR:
 				self.b.emit(M.ResultErr(dest=dest, result=res_val))
 				self._local_types[dest] = self._type_table.ensure_error()
 				return dest
-		if expr.method_name in ("as_int", "as_bool", "as_string"):
-			if expr.args:
+		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get"):
+			recv_ty = self._infer_expr_type(expr.receiver)
+			if recv_ty is None:
+				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
+			if recv_ty is not None:
+				recv_def = self._type_table.get(recv_ty)
+				if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
+					recv_ty = None
+			if recv_ty is None:
+				result, info = self._lower_method_call(expr)
+				if result is None:
+					if self._type_table.is_void(info.sig.user_ret_type):
+						return self._void_value()
+					raise AssertionError("Void-returning method call used in expression context (checker bug)")
+				if info.sig.can_throw:
+					ok_tid = info.sig.user_ret_type
+					def emit_call() -> M.ValueId:
+						return result
+					return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
+				return result
+			if expr.method_name != "get" and expr.args:
 				raise NotImplementedError(f"{expr.method_name} takes no arguments")
+			if expr.method_name == "get" and len(expr.args) != 1:
+				raise NotImplementedError("get takes exactly one key argument")
 			dv_val = self.lower_expr(expr.receiver)
 			dest = self.b.new_temp()
 			if expr.method_name == "as_int":
@@ -3202,9 +3261,22 @@ class HIRToMIR:
 				self.b.emit(M.DVAsBool(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._bool_type)
 				return dest
+			if expr.method_name == "as_float":
+				self.b.emit(M.DVAsFloat(dest=dest, dv=dv_val))
+				self._local_types[dest] = self._optional_variant_type(self._float_type)
+				return dest
 			if expr.method_name == "as_string":
 				self.b.emit(M.DVAsString(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._string_type)
+				return dest
+			if expr.method_name == "as_object":
+				self.b.emit(M.DVAsObject(dest=dest, dv=dv_val))
+				self._local_types[dest] = self._optional_variant_type(self._dv_type)
+				return dest
+			if expr.method_name == "get":
+				key_val = self.lower_expr(expr.args[0])
+				self.b.emit(M.DVGetField(dest=dest, dv=dv_val, key=key_val))
+				self._local_types[dest] = self._optional_variant_type(self._dv_type)
 				return dest
 		result, info = self._lower_method_call(expr)
 		if result is None:
@@ -6173,6 +6245,8 @@ class HIRToMIR:
 			return self._bool_type
 		if isinstance(expr, H.HLiteralString):
 			return self._string_type
+		if isinstance(expr, H.HDVInit):
+			return self._dv_type
 		if isinstance(expr, H.HFString):
 			return self._string_type
 		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
@@ -6384,8 +6458,14 @@ class HIRToMIR:
 						return self._optional_variant_type(self._int_type)
 					if expr.method_name == "as_bool":
 						return self._optional_variant_type(self._bool_type)
+					if expr.method_name == "as_float":
+						return self._optional_variant_type(self._float_type)
 					if expr.method_name == "as_string":
 						return self._optional_variant_type(self._string_type)
+					if expr.method_name == "as_object":
+						return self._optional_variant_type(self._dv_type)
+					if expr.method_name == "get":
+						return self._optional_variant_type(self._dv_type)
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			return self._infer_expr_type(expr.attempt)
 		return None

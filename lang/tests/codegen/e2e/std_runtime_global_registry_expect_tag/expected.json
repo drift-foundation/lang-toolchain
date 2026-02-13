@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime registry expect returns value and throws tagged RegistryError on miss",
+  "exit_code": 0
+}

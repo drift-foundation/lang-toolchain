@@ -1,0 +1,4 @@
+{
+  "description": "std.core type_id<T>() resolves concrete types in instantiated generic bodies",
+  "exit_code": 0
+}

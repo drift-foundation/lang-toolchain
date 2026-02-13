@@ -177,6 +177,9 @@ void drift_error_release(struct DriftError* err) {
     }
     for (size_t i = 0; i < err->frame_count; i++) {
         struct DriftCtxFrame* frame = &err->frames[i];
+        for (size_t j = 0; j < frame->local_count; j++) {
+            drift_dv_release(&frame->locals[j].value);
+        }
         free(frame->locals);
         frame->locals = NULL;
         frame->local_count = 0;
@@ -184,6 +187,9 @@ void drift_error_release(struct DriftError* err) {
     free(err->frames);
     err->frames = NULL;
     err->frame_count = 0;
+    for (size_t i = 0; i < err->attr_count; i++) {
+        drift_dv_release(&err->attrs[i].value);
+    }
     free(err->attrs);
     err->attrs = NULL;
     err->attr_count = 0;

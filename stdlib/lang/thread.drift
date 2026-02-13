@@ -58,7 +58,11 @@ export {
 	log_runtime_enqueue,
 	log_runtime_flush,
 	log_runtime_json_escape,
-	log_runtime_dv_to_json
+	log_runtime_dv_to_json,
+	runtime_global_registry_ptr,
+	runtime_registry_set,
+	runtime_registry_contains,
+	runtime_registry_get
 };
 
 pub type VtHandle = Int;
@@ -119,3 +123,7 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn log_runtime_flush(timeout_ms: Int) nothrow -> Int;
 @intrinsic pub fn log_runtime_json_escape(s: String) nothrow -> String;
 @intrinsic pub fn log_runtime_dv_to_json(dv: &DiagnosticValue) nothrow -> String;
+@intrinsic pub fn runtime_global_registry_ptr() nothrow -> mem.Ptr<Byte>;
+@intrinsic pub fn runtime_registry_set(type_tag: Uint64, ptr: mem.Ptr<Byte>, dropper: core.Callback1<mem.Ptr<Byte>, Void>) nothrow -> Int;
+@intrinsic pub fn runtime_registry_contains(type_tag: Uint64) nothrow -> Int;
+@intrinsic pub fn runtime_registry_get(type_tag: Uint64) nothrow -> mem.Ptr<Byte>;

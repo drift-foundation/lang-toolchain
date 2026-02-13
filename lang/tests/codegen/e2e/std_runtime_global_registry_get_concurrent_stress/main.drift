@@ -1,0 +1,63 @@
+module main
+
+import std.runtime as rt;
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+
+fn reader_loop(iters: Int) nothrow -> Int {
+	var i = 0;
+	while i < iters {
+		val reg = rt.global_registry();
+		match rt.get<type Int>(reg) {
+			Some(v) => {
+				if *v != 123456 {
+					return 1;
+				}
+			},
+			None => {
+				return 2;
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	val reg = rt.global_registry();
+	if not reg.set<type Int>(123456) {
+		return 3;
+	}
+	val workers = 8;
+	val iters = 5000;
+	var tasks = containers.deque<type conc.VirtualThread<Int>>();
+	var i = 0;
+	while i < workers {
+		val t = conc.spawn_cb(core.callback0(| | captures(copy iters) => {
+			return reader_loop(iters);
+		}));
+		tasks.push_back(move t);
+		i = i + 1;
+	}
+	while true {
+		match tasks.pop_front() {
+			Some(var t) => {
+				match t.join() {
+					Ok(code) => {
+						if code != 0 {
+							return 4;
+						}
+					},
+					Err(_e) => { return 5; }
+				}
+			},
+			None => { break; }
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

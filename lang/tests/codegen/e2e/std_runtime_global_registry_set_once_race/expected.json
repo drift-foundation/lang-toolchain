@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime global registry first-writer race enforces set-once",
+  "exit_code": 0
+}

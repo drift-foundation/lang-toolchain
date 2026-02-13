@@ -1,0 +1,13 @@
+module lib
+
+import std.core as core;
+
+export { Node, node_type_id };
+
+pub struct Node {
+	id: Int
+}
+
+pub fn node_type_id() nothrow -> Uint64 {
+	return core.type_id<type Node>();
+}

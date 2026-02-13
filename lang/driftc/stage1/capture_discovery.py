@@ -45,6 +45,7 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 	diags: list[Diagnostic] = []
 	used_roots: Set[int] = set()
 	used_root_spans: dict[int, Span] = {}
+	used_root_names: dict[int, set[str]] = {}
 
 	lambda_local_ids: Set[H.BindingId] = set()
 	lambda_local_names: Set[str] = set()
@@ -62,6 +63,7 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		root: H.BindingId | None,
 		fields: list[str],
 		span: Span,
+		root_name: str | None = None,
 		*,
 		read: bool = False,
 		borrow_shared: bool = False,
@@ -74,6 +76,8 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		used_roots.add(int(root))
 		if int(root) not in used_root_spans:
 			used_root_spans[int(root)] = span
+		if root_name is not None and root_name != "":
+			used_root_names.setdefault(int(root), set()).add(root_name)
 		key = C.HCaptureKey(root_local=root, proj=tuple(C.HCaptureProj(field=f) for f in fields))
 		entry = usage.setdefault(key, _CaptureUsage())
 		if entry.span == Span():
@@ -84,26 +88,27 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		entry.move = entry.move or move
 		entry.write = entry.write or write
 
-	def _flatten_field_chain(expr: H.HExpr) -> tuple[H.BindingId | None, list[str]] | None:
+	def _flatten_field_chain(expr: H.HExpr) -> tuple[H.BindingId | None, list[str], str | None] | None:
 		# HPlaceExpr (canonical place)
 		if isinstance(expr, H.HPlaceExpr):
 			root = getattr(expr.base, "binding_id", None)
+			root_name = expr.base.name if isinstance(expr.base, H.HVar) else None
 			fields: list[str] = []
 			for proj in expr.projections:
 				if isinstance(proj, H.HPlaceField):
 					fields.append(proj.name)
 				else:
 					return None
-			return (root, fields)
+			return (root, fields, root_name)
 		# HField chain rooted in HVar
 		if isinstance(expr, H.HField):
 			inner = _flatten_field_chain(expr.subject)
 			if inner is None:
 				return None
-			root, fields = inner
-			return (root, fields + [expr.name])
+			root, fields, root_name = inner
+			return (root, fields + [expr.name], root_name)
 		if isinstance(expr, H.HVar):
-			return (expr.binding_id, [])
+			return (expr.binding_id, [], expr.name)
 		return None
 
 	def _walk_place_expr(place: H.HExpr, *, usage_kind: str) -> None:
@@ -124,11 +129,12 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 						_walk_expr(proj.index)
 			return
 		if flattened is not None:
-			root, fields = flattened
+			root, fields, root_name = flattened
 			_add_usage(
 				root,
 				fields,
 				getattr(place, "loc", Span()),
+				root_name=root_name,
 				read=usage_kind == "read",
 				borrow_shared=usage_kind == "borrow_shared",
 				borrow_mut=usage_kind == "borrow_mut",
@@ -151,13 +157,13 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			_walk_place_expr(e.subject, usage_kind="borrow_mut" if e.is_mut else "borrow_shared")
 			return
 		if isinstance(e, H.HVar):
-			_add_usage(e.binding_id, [], getattr(e, "span", Span()), read=True)
+			_add_usage(e.binding_id, [], getattr(e, "span", Span()), root_name=e.name, read=True)
 			return
 		elif isinstance(e, (H.HPlaceExpr, H.HField)):
 			flattened = _flatten_field_chain(e)
 			if flattened is not None:
-				root, fields = flattened
-				_add_usage(root, fields, getattr(e, "loc", getattr(e, "span", Span())), read=True)
+				root, fields, root_name = flattened
+				_add_usage(root, fields, getattr(e, "loc", getattr(e, "span", Span())), root_name=root_name, read=True)
 			elif isinstance(e, H.HPlaceExpr):
 				root = getattr(e.base, "binding_id", None)
 				if root is not None and root not in lambda_local_ids:
@@ -207,8 +213,8 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			else:
 				flattened = _flatten_field_chain(s.target)
 				if flattened is not None:
-					root, fields = flattened
-					_add_usage(root, fields, getattr(s.target, "loc", Span()), write=True)
+					root, fields, root_name = flattened
+					_add_usage(root, fields, getattr(s.target, "loc", Span()), root_name=root_name, write=True)
 			_walk_expr(s.value)
 		elif isinstance(s, H.HAugAssign):
 			if isinstance(s.target, H.HPlaceExpr):
@@ -216,8 +222,8 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			else:
 				flattened = _flatten_field_chain(s.target)
 				if flattened is not None:
-					root, fields = flattened
-					_add_usage(root, fields, getattr(s.target, "loc", Span()), write=True)
+					root, fields, root_name = flattened
+					_add_usage(root, fields, getattr(s.target, "loc", Span()), root_name=root_name, write=True)
 			_walk_expr(s.value)
 		elif isinstance(s, H.HIf):
 			_walk_expr(s.cond)
@@ -352,6 +358,9 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 				)
 		for root_id in used_roots:
 			if root_id in explicit_roots:
+				continue
+			root_names = used_root_names.get(root_id)
+			if root_names is not None and any(name in lambda_local_names for name in root_names):
 				continue
 			span = used_root_spans.get(root_id, Span())
 			diags.append(

@@ -130,7 +130,10 @@ from lang.driftc.stage2 import (
 	ConstructResultErr,
 	ConstructResultOk,
 	DVAsBool,
+	DVAsFloat,
 	DVAsInt,
+	DVAsObject,
+	DVGetField,
 	DVAsString,
 	ErrorAttrsGetDV,
 	ErrorCapturesGetDV,
@@ -689,7 +692,7 @@ class LlvmModuleBuilder:
 			[
 				f"{DRIFT_STRING_TYPE} = type {{ {self._llty(DRIFT_INT_TYPE)}, i8* }}",
 				f"{DRIFT_ERROR_TYPE} = type {{ {DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, i8*, {self._llty(DRIFT_USIZE_TYPE)}, i8*, {self._llty(DRIFT_USIZE_TYPE)} }}",
-				f"{DRIFT_IFACE_TYPE} = type {{ i8*, i8*, {inline_storage}, i8 }}",
+				f"{DRIFT_IFACE_TYPE} = type {{ i8*, i8*, {inline_storage}, i8, [7 x i8] }}",
 				f"{DRIFT_CALLBACK_VTABLE_TYPE} = type [2 x i8*]",
 				f"{FNRESULT_INT_ERROR} = type {{ i1, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
@@ -1055,6 +1058,10 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_flush({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_json_escape({DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}*)",
+					f"declare i8* @drift_runtime_global_registry_ptr()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64, i8*, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.word_bits // 8})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64)",
+					f"declare i8* @drift_runtime_registry_get(i64)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
@@ -1119,10 +1126,15 @@ class LlvmModuleBuilder:
 					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i8)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_float(double)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE})",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_object_from_entries(i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_clone({DRIFT_DV_TYPE}*)",
+					f"declare void @drift_dv_release({DRIFT_DV_TYPE}*)",
 					f"declare i1 @drift_dv_as_int({DRIFT_DV_TYPE}*, {self._llty(DRIFT_INT_TYPE)}*)",
 					f"declare i1 @drift_dv_as_bool({DRIFT_DV_TYPE}*, i8*)",
 					f"declare i1 @drift_dv_as_float({DRIFT_DV_TYPE}*, double*)",
 					f"declare i1 @drift_dv_as_string({DRIFT_DV_TYPE}*, {DRIFT_STRING_TYPE}*)",
+					f"declare i1 @drift_dv_as_object({DRIFT_DV_TYPE}*, {DRIFT_DV_TYPE}*)",
+					f"declare i1 @drift_dv_get_field({DRIFT_DV_TYPE}*, {DRIFT_STRING_TYPE}, {DRIFT_DV_TYPE}*)",
 					"",
 				]
 			)
@@ -2951,7 +2963,7 @@ class _FuncBuilder:
 				return
 			if len(instr.args) != 1:
 				raise NotImplementedError(
-					"LLVM codegen v1: DiagnosticValue constructors support at most one argument (Int/Bool/String)"
+					"LLVM codegen v1: DiagnosticValue constructors support at most one argument (Int/Bool/Float/String/Object)"
 				)
 			self.module.needs_dv_runtime = True
 			arg_val = self._map_value(instr.args[0])
@@ -2967,6 +2979,19 @@ class _FuncBuilder:
 			if arg_ty == DRIFT_STRING_TYPE:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
 				return
+			if instr.dv_type_name == "Object":
+				if arg_ty != "%DriftArrayHeader":
+					raise NotImplementedError(
+						f"LLVM codegen v1: DiagnosticValue::Object expects Array<DiagnosticEntry>-shaped argument, got {arg_ty}"
+					)
+				len_val = self._fresh("dv_obj_len")
+				ptr_val = self._fresh("dv_obj_ptr")
+				self.lines.append(f"  {len_val} = extractvalue %DriftArrayHeader {arg_val}, {ARRAY_LEN_IDX}")
+				self.lines.append(f"  {ptr_val} = extractvalue %DriftArrayHeader {arg_val}, {ARRAY_PTR_IDX}")
+				self.lines.append(
+					f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_object_from_entries(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				return
 			float_llty = self._llvm_float_type()
 			if arg_ty == float_llty:
 				if float_llty == "float":
@@ -2977,7 +3002,7 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_float(double {arg_val})")
 				return
 			raise NotImplementedError(
-				f"LLVM codegen v1: ConstructDV arg type {arg_ty} not supported (expected Int/Bool/String)"
+				f"LLVM codegen v1: ConstructDV arg type {arg_ty} not supported (expected Int/Bool/Float/String/Object)"
 			)
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
@@ -3076,7 +3101,7 @@ class _FuncBuilder:
 			self.lines.append(f"  {loaded} = load {DRIFT_ERROR_TYPE}, {DRIFT_ERROR_PTR} {err_val}")
 			self.lines.append(f"  {dest} = extractvalue {DRIFT_ERROR_TYPE} {loaded}, 0")
 			self.value_types[dest] = DRIFT_ERROR_CODE_TYPE
-		elif isinstance(instr, (DVAsInt, DVAsBool, DVAsString)):
+		elif isinstance(instr, (DVAsInt, DVAsBool, DVAsFloat, DVAsString, DVAsObject, DVGetField)):
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)
 			dv_val = self._map_value(instr.dv)
@@ -3126,6 +3151,85 @@ class _FuncBuilder:
 				val_raw = self._fresh("opt_val_raw")
 				self.lines.append(f"  {val_raw} = load i8, i8* {out_ptr}")
 				val = self._bool_from_storage(val_raw)
+				some_val = self._emit_variant_value(opt_ty, "Some", [val])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{none_block[1:]}:")
+				none_val = self._emit_variant_value(opt_ty, "None", [])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{done_block[1:]}:")
+				self.lines.append(
+					f"  {dest} = phi {variant_llty} [ {some_val}, {some_block} ], [ {none_val}, {none_block} ]"
+				)
+				self.value_types[dest] = variant_llty
+			elif isinstance(instr, DVAsFloat):
+				out_ptr = self._fresh("out_f64")
+				self.lines.append(f"  {out_ptr} = alloca double")
+				is_some = self._fresh("opt_some")
+				self.lines.append(
+					f"  {is_some} = call i1 @drift_dv_as_float({DRIFT_DV_TYPE}* {tmp_ptr}, double* {out_ptr})"
+				)
+				opt_ty = self._optional_variant_type(self.float_type_id or self.type_table.ensure_float())
+				variant_llty = self._variant_layout(opt_ty).llvm_ty
+				some_block = self._fresh("dv_f64_some")
+				none_block = self._fresh("dv_f64_none")
+				done_block = self._fresh("dv_f64_done")
+				self.lines.append(f"  br i1 {is_some}, label {some_block}, label {none_block}")
+				self.lines.append(f"{some_block[1:]}:")
+				val = self._fresh("opt_val")
+				self.lines.append(f"  {val} = load double, double* {out_ptr}")
+				some_val = self._emit_variant_value(opt_ty, "Some", [val])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{none_block[1:]}:")
+				none_val = self._emit_variant_value(opt_ty, "None", [])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{done_block[1:]}:")
+				self.lines.append(
+					f"  {dest} = phi {variant_llty} [ {some_val}, {some_block} ], [ {none_val}, {none_block} ]"
+				)
+				self.value_types[dest] = variant_llty
+			elif isinstance(instr, DVAsObject):
+				out_ptr = self._fresh("out_dv")
+				self.lines.append(f"  {out_ptr} = alloca {DRIFT_DV_TYPE}")
+				is_some = self._fresh("opt_some")
+				self.lines.append(
+					f"  {is_some} = call i1 @drift_dv_as_object({DRIFT_DV_TYPE}* {tmp_ptr}, {DRIFT_DV_TYPE}* {out_ptr})"
+				)
+				opt_ty = self._optional_variant_type(self.dv_type_id or self.type_table.ensure_diagnostic_value())
+				variant_llty = self._variant_layout(opt_ty).llvm_ty
+				some_block = self._fresh("dv_obj_some")
+				none_block = self._fresh("dv_obj_none")
+				done_block = self._fresh("dv_obj_done")
+				self.lines.append(f"  br i1 {is_some}, label {some_block}, label {none_block}")
+				self.lines.append(f"{some_block[1:]}:")
+				val = self._fresh("opt_val")
+				self.lines.append(f"  {val} = load {DRIFT_DV_TYPE}, {DRIFT_DV_TYPE}* {out_ptr}")
+				some_val = self._emit_variant_value(opt_ty, "Some", [val])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{none_block[1:]}:")
+				none_val = self._emit_variant_value(opt_ty, "None", [])
+				self.lines.append(f"  br label {done_block}")
+				self.lines.append(f"{done_block[1:]}:")
+				self.lines.append(
+					f"  {dest} = phi {variant_llty} [ {some_val}, {some_block} ], [ {none_val}, {none_block} ]"
+				)
+				self.value_types[dest] = variant_llty
+			elif isinstance(instr, DVGetField):
+				key_val = self._map_value(instr.key)
+				out_ptr = self._fresh("out_dv")
+				self.lines.append(f"  {out_ptr} = alloca {DRIFT_DV_TYPE}")
+				is_some = self._fresh("opt_some")
+				self.lines.append(
+					f"  {is_some} = call i1 @drift_dv_get_field({DRIFT_DV_TYPE}* {tmp_ptr}, {DRIFT_STRING_TYPE} {key_val}, {DRIFT_DV_TYPE}* {out_ptr})"
+				)
+				opt_ty = self._optional_variant_type(self.dv_type_id or self.type_table.ensure_diagnostic_value())
+				variant_llty = self._variant_layout(opt_ty).llvm_ty
+				some_block = self._fresh("dv_get_some")
+				none_block = self._fresh("dv_get_none")
+				done_block = self._fresh("dv_get_done")
+				self.lines.append(f"  br i1 {is_some}, label {some_block}, label {none_block}")
+				self.lines.append(f"{some_block[1:]}:")
+				val = self._fresh("opt_val")
+				self.lines.append(f"  {val} = load {DRIFT_DV_TYPE}, {DRIFT_DV_TYPE}* {out_ptr}")
 				some_val = self._emit_variant_value(opt_ty, "Some", [val])
 				self.lines.append(f"  br label {done_block}")
 				self.lines.append(f"{none_block[1:]}:")
@@ -3674,6 +3778,50 @@ class _FuncBuilder:
 					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}* {dv_ptr})"
 				)
 				self.value_types[dest] = DRIFT_STRING_TYPE
+				return
+			if instr.fn_id.name == "runtime_global_registry_ptr":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_global_registry_ptr expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_global_registry_ptr result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call i8* @drift_runtime_global_registry_ptr()")
+				self.value_types[dest] = "i8*"
+				return
+			if instr.fn_id.name == "runtime_registry_set":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_registry_set expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_registry_set result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				ptr_val = self._map_value(instr.args[1])
+				dropper_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				dropper_addr = self._fresh("registry_dropper_addr")
+				self.lines.append(f"  {dropper_addr} = alloca {DRIFT_IFACE_TYPE}")
+				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "runtime_registry_contains":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_registry_contains expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_registry_contains result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64 {tag_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "runtime_registry_get":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_registry_get expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_registry_get result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
+				self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "console_write":
 				if len(instr.args) != 1:
@@ -5508,6 +5656,12 @@ class _FuncBuilder:
 			out = (word_bytes, word_bytes)
 			self._size_align_cache[ty_id] = out
 			return out
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			# Keep in sync with %DriftDiagnosticValue = { i8, [7 x i8], [2 x i64] }.
+			# This is currently 24 bytes with word alignment on 64-bit targets.
+			out = (word_bytes * 3, word_bytes)
+			self._size_align_cache[ty_id] = out
+			return out
 		if td.kind is TypeKind.ARRAY:
 			# Current array value lowering is a 4-word header (len, cap, gen, data ptr).
 			out = (word_bytes * 4, word_bytes)
@@ -6671,10 +6825,10 @@ class _FuncBuilder:
 		if not copy_status and td.kind is not TypeKind.VOID:
 				raise AssertionError("internal: non-Copy ArrayLit reached codegen")
 		is_bool = self._is_bool_type(instr.elem_ty)
-		needs_copy = copy_status and not self.type_table.is_bitcopy(instr.elem_ty)
+		needs_string_copy = td.kind is TypeKind.SCALAR and td.name == "String"
 		for idx, elem in enumerate(instr.elements):
 			elem_val = self._map_value(elem)
-			if needs_copy:
+			if needs_string_copy:
 				elem_val = self._emit_copy_value(instr.elem_ty, elem_val)
 			if is_bool:
 				elem_val = self._bool_to_storage(elem_val)
@@ -7032,6 +7186,15 @@ class _FuncBuilder:
 			self.lines.append(f"  {out} = load {variant_llty}, {variant_llty}* {result_ptr}")
 			self.value_types[out] = variant_llty
 			return out
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			self.module.needs_dv_runtime = True
+			tmp_ptr = self._fresh("dv_clone_arg")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {value}, {DRIFT_DV_TYPE}* {tmp_ptr}")
+			out = self._fresh("dv_clone")
+			self.lines.append(f"  {out} = call {DRIFT_DV_TYPE} @drift_dv_clone({DRIFT_DV_TYPE}* {tmp_ptr})")
+			self.value_types[out] = DRIFT_DV_TYPE
+			return out
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
 			if inst is None:
@@ -7080,6 +7243,9 @@ class _FuncBuilder:
 			self._drop_cache[ty_id] = False
 			return False
 		if td.kind is TypeKind.ERROR:
+			self._drop_cache[ty_id] = True
+			return True
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
 			self._drop_cache[ty_id] = True
 			return True
 		if td.kind is TypeKind.INTERFACE:
@@ -7138,6 +7304,13 @@ class _FuncBuilder:
 		if td.kind is TypeKind.ERROR:
 			self.module.needs_error_runtime = True
 			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value})")
+			return
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			self.module.needs_dv_runtime = True
+			tmp_ptr = self._fresh("dv_drop_arg")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {value}, {DRIFT_DV_TYPE}* {tmp_ptr}")
+			self.lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr})")
 			return
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]

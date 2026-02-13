@@ -30,6 +30,7 @@ static _Atomic uint64_t drift_live_bytes = 0;
 static _Atomic uint64_t drift_peak_live_bytes = 0;
 static _Atomic int drift_track_enabled = 0;
 static _Atomic int drift_track_init = 0;
+extern void drift_runtime_registry_cleanup_now(void) __attribute__((weak));
 
 static uint64_t drift_alloc_size_of_ptr(void *ptr) {
 	if (ptr == NULL) {
@@ -76,6 +77,9 @@ static void drift_alloc_init_once(void) {
 }
 
 static void drift_alloc_report(void) {
+	if (drift_runtime_registry_cleanup_now) {
+		drift_runtime_registry_cleanup_now();
+	}
 	if (atomic_load_explicit(&drift_track_enabled, memory_order_relaxed) == 0) {
 		return;
 	}

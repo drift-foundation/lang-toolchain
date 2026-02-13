@@ -1,0 +1,5 @@
+{
+  "description": "std.runtime global registry concurrent get stress across workers",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

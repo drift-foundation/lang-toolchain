@@ -1,0 +1,4 @@
+{
+  "description": "std.core type_id<T>() matches across modules for same concrete type",
+  "exit_code": 0
+}

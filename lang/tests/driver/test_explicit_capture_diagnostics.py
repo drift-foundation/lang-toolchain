@@ -195,3 +195,17 @@ fn main() nothrow -> Int{
 	assert rc != 0
 	msgs = [d.get("message", "") for d in payload.get("diagnostics", [])]
 	assert any("cannot copy 'b': type is not Copy" in m for m in msgs)
+
+
+def test_explicit_empty_captures_allows_lambda_param_usage(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	source = """
+module m_main
+
+fn main() nothrow -> Int{
+	return (|x: Int| captures() => { return x; })(1);
+}
+"""
+	rc, payload = _compile_single_module(tmp_path, capsys, source)
+	assert rc == 0, payload

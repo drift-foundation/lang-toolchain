@@ -1,0 +1,5 @@
+{
+  "description": "std.runtime global registry stores Arc payload with clone/drop stress",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

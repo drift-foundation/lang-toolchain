@@ -45,6 +45,7 @@ class IntrinsicKind(Enum):
 	CALLBACK_THROW0 = "callback_throw0"
 	CALLBACK_THROW1 = "callback_throw1"
 	CALLBACK_THROW2 = "callback_throw2"
+	TYPE_ID = "type_id"
 	DROP_VALUE = "drop_value"
 	RAW_ALLOC = "raw_alloc"
 	RAW_DEALLOC = "raw_dealloc"

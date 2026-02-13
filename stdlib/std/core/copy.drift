@@ -11,6 +11,8 @@ export {
 	Copy,
 	Destructible,
 	Diagnostic,
+	DiagnosticEntry,
+	diagnostic_entry,
 	Try,
 	Result,
 	Fn0,
@@ -37,6 +39,7 @@ export {
 	callback_throw0,
 	callback_throw1,
 	callback_throw2,
+	type_id,
 	or_throw,
 	STRING_CONTAINER_ID,
 	string_byte_at,
@@ -52,6 +55,15 @@ pub trait Destructible {
 
 pub trait Diagnostic {
 	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
+}
+
+pub struct DiagnosticEntry {
+	key: String,
+	value: DiagnosticValue,
+}
+
+pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
+	return DiagnosticEntry(key = move key, value = move value);
 }
 
 pub trait Try<T> {
@@ -198,6 +210,7 @@ pub interface Callback2<A, B, R> {
 @intrinsic pub fn callback_throw0<F, R>(f: F) nothrow -> CallbackThrow0<R> require F is FnThrow0<R>;
 @intrinsic pub fn callback_throw1<F, A, R>(f: F) nothrow -> CallbackThrow1<A, R> require F is FnThrow1<A, R>;
 @intrinsic pub fn callback_throw2<F, A, B, R>(f: F) nothrow -> CallbackThrow2<A, B, R> require F is FnThrow2<A, B, R>;
+@intrinsic pub fn type_id<T>() nothrow -> Uint64;
 @intrinsic pub fn drop_value<T>(value: T) nothrow -> Void;
 
 implement Copy for Int {
@@ -222,6 +235,9 @@ implement Copy for String {
 }
 
 implement Copy for DiagnosticValue {
+}
+
+implement Copy for DiagnosticEntry {
 }
 
 implement Copy for Void {

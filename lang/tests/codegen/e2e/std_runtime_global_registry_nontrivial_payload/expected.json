@@ -1,0 +1,5 @@
+{
+  "description": "std.runtime global registry stores non-trivial nested payload and preserves first set",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

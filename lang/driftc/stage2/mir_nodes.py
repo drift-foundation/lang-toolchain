@@ -1001,11 +1001,36 @@ class DVAsBool(MInstr):
 
 
 @dataclass
+class DVAsFloat(MInstr):
+	"""dest = drift_dv_as_float(dv) (returns Optional<Float>)."""
+
+	dest: ValueId
+	dv: ValueId
+
+
+@dataclass
 class DVAsString(MInstr):
 	"""dest = drift_dv_as_string(dv) (returns Optional<String>)."""
 
 	dest: ValueId
 	dv: ValueId
+
+
+@dataclass
+class DVAsObject(MInstr):
+	"""dest = drift_dv_as_object(dv) (returns Optional<DiagnosticValue>)."""
+
+	dest: ValueId
+	dv: ValueId
+
+
+@dataclass
+class DVGetField(MInstr):
+	"""dest = drift_dv_get_field(dv, key) (returns Optional<DiagnosticValue>)."""
+
+	dest: ValueId
+	dv: ValueId
+	key: ValueId
 
 @dataclass
 class ErrorEvent(MInstr):
@@ -1243,7 +1268,10 @@ __all__ = [
 	"ErrorCapturesGetDV",
 	"DVAsInt",
 	"DVAsBool",
+	"DVAsFloat",
 	"DVAsString",
+	"DVAsObject",
+	"DVGetField",
 	"ErrorEvent",
 	"UnaryOpInstr",
 	"BinaryOpInstr",

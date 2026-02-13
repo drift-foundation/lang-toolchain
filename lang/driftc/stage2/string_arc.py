@@ -82,6 +82,9 @@ def insert_string_arc(
 		if td.kind is TypeKind.ERROR:
 			_type_needs_drop_cache[tid] = True
 			return True
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			_type_needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			_type_needs_drop_cache[tid] = True
 			return True
@@ -371,8 +374,15 @@ def insert_string_arc(
 			yield instr.dv
 		elif isinstance(instr, M.DVAsBool):
 			yield instr.dv
+		elif isinstance(instr, M.DVAsFloat):
+			yield instr.dv
 		elif isinstance(instr, M.DVAsString):
 			yield instr.dv
+		elif isinstance(instr, M.DVAsObject):
+			yield instr.dv
+		elif isinstance(instr, M.DVGetField):
+			yield instr.dv
+			yield instr.key
 		elif isinstance(instr, M.ErrorEvent):
 			yield instr.error
 		elif isinstance(instr, M.StringFromInt):
@@ -1005,6 +1015,17 @@ def insert_string_arc(
 						key = _ensure_owned(key, owned_values, new_instrs)
 						_note_use(key, consume=True)
 				new_instrs.append(M.ErrorCapturesGetDV(dest=instr.dest, error=instr.error, frame=frame, key=key))
+				continue
+
+			if isinstance(instr, M.DVGetField):
+				key = instr.key
+				if _is_string_value(key):
+					if key in move_only_values or _can_move_owned_once(key):
+						_note_use(key, consume=True)
+					else:
+						key = _ensure_owned(key, owned_values, new_instrs)
+						_note_use(key, consume=True)
+				new_instrs.append(M.DVGetField(dest=instr.dest, dv=instr.dv, key=key))
 				continue
 
 			if isinstance(instr, M.Call):
