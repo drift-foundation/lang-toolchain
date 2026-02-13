@@ -442,9 +442,11 @@ postfix_suffix: call_suffix
               | arrow_suffix
               | index_suffix
               | type_app_suffix
+              | macro_call_suffix
               | qualified_suffix
 
 call_suffix: call_type_args? "(" [call_args] ")"
+macro_call_suffix: BANG "(" [call_args] ")"
 call_type_args: CALL_TYPE_LT type_expr (COMMA type_expr)* ">"
 type_app_suffix: call_type_args
 qualified_suffix: qualified_pre_type_args? DCOLON NAME

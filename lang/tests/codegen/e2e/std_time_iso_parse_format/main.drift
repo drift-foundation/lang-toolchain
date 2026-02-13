@@ -30,7 +30,7 @@ fn run() -> Int {
 	if expect_roundtrip("2024-02-29T23:59:59.999Z", "2024-02-29T23:59:59.999Z") != 0 { return 12; }
 	val now = time.now_utc();
 	val s = time.format_iso8601_utc(&now);
-	if byte_length(s) != 24 {
+	if s.byte_length() != 24 {
 		return 13;
 	}
 	if core.string_byte_at(&s, 23) != cast<Byte>(90) {

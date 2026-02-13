@@ -11,7 +11,7 @@ pub fn main() nothrow -> Int {
 	io.buffer_write(&mut b, 3, cast<Byte>(102));
 	io.buffer_write(&mut b, 4, cast<Byte>(116));
 	val s = core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
-	if byte_length(s) != 5 { return 2; }
+	if s.byte_length() != 5 { return 2; }
 	if core.string_byte_at(&s, 0) != cast<Byte>(100) { return 3; }
 	if core.string_byte_at(&s, 4) != cast<Byte>(116) { return 4; }
 	return 0;

@@ -11,7 +11,7 @@ struct E {
 }
 
 fn lc(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void {
-  val n = byte_length(*text);
+  val n = text.byte_length();
   var end = offset;
   if end > n { end = n; }
   if end < 0 { end = 0; }

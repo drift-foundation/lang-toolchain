@@ -144,7 +144,7 @@ pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(v) => {
 			_skip_ws(text, &mut idx);
-			if idx != byte_length(*text) {
+			if idx != text.byte_length() {
 				return core.Result::Err(_err_parse(text, "invalid-syntax", idx));
 			}
 			return core.Result::Ok(v);
@@ -431,7 +431,7 @@ fn _get_path_at(node: &JsonNode, path: &Array<String>, idx: Int) nothrow -> Opti
 }
 
 fn _err_parse_line_col(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	var end = offset;
 	if end < 0 {
 		end = 0;
@@ -472,7 +472,7 @@ fn _is_digit(b: Byte) nothrow -> Bool {
 }
 
 fn _skip_ws(text: &String, idx: &mut Int) nothrow -> Void {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	while *idx < n {
 		val b = core.string_byte_at(text, *idx);
 		if not _is_ws(b) {
@@ -513,8 +513,8 @@ fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
 
 fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val start = *idx;
-	val want = byte_length(lit);
-	val n = byte_length(*text);
+	val want = lit.byte_length();
+	val n = text.byte_length();
 	if start + want > n {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", start));
 	}
@@ -532,7 +532,7 @@ fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) not
 }
 
 fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, JsonErrorData> {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(34) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
@@ -593,7 +593,7 @@ fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, Js
 }
 
 fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	val start = *idx;
 	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(45) {
 		*idx = *idx + 1;
@@ -636,7 +636,7 @@ fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, 
 }
 
 fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(91) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
@@ -672,7 +672,7 @@ fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, J
 }
 
 fn _parse_object_throwing(text: &String, idx: &mut Int) -> core.Result<JsonNode, JsonErrorData> {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(123) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
@@ -725,7 +725,7 @@ fn _parse_object(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, 
 }
 
 fn _parse_value(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	val n = byte_length(*text);
+	val n = text.byte_length();
 	if *idx >= n {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
@@ -759,7 +759,7 @@ fn _parse_value(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, J
 
 fn _encode_string(s: String) nothrow -> String {
 	var out = "\"";
-	val n = byte_length(s);
+	val n = s.byte_length();
 	var i = 0;
 	while i < n {
 		val b = core.string_byte_at(&s, i);
@@ -849,8 +849,8 @@ fn _bool_to_json(v: Bool) nothrow -> String {
 }
 
 fn _string_lex_cmp(a: &String, b: &String) nothrow -> Int {
-	val na = byte_length(*a);
-	val nb = byte_length(*b);
+	val na = a.byte_length();
+	val nb = b.byte_length();
 	var n = na;
 	if nb < n {
 		n = nb;

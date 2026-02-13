@@ -20,6 +20,7 @@ from .ast import (
     Block,
     BlockStmt,
     Call,
+    MacroCall,
     ConstDef,
     TypeAliasDef,
     Copy,
@@ -3088,6 +3089,17 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
                 )
             args, kwargs = _build_call_args(args_node)
             expr = Call(loc=_loc(child), func=expr, args=args, kwargs=kwargs, type_args=type_args)
+        elif child_name == "macro_call_suffix":
+            args_node = next(
+                (
+                    c
+                    for c in child.children
+                    if isinstance(c, Tree) and _name(c) == "call_args"
+                ),
+                None,
+            )
+            args, kwargs = _build_call_args(args_node)
+            expr = MacroCall(loc=_loc(child), func=expr, args=args, kwargs=kwargs)
         elif child_name == "attr_suffix":
             attr_token = next(
                 token

@@ -1,0 +1,33 @@
+module std.meta
+
+export { Caller, caller };
+
+pub struct Caller {
+	module_id_v: String,
+	file_v: String,
+	line_v: Int
+}
+
+implement Caller {
+	pub fn module_id(self: &Caller) nothrow -> &String {
+		return &self.module_id_v;
+	}
+
+	pub fn file(self: &Caller) nothrow -> &String {
+		return &self.file_v;
+	}
+
+	pub fn line(self: &Caller) nothrow -> Int {
+		return self.line_v;
+	}
+
+	pub fn module_id_len(self: &Caller) nothrow -> Int {
+		return byte_length(&self.module_id_v);
+	}
+
+	pub fn file_len(self: &Caller) nothrow -> Int {
+		return byte_length(&self.file_v);
+	}
+}
+
+@intrinsic pub fn caller() nothrow -> Caller;

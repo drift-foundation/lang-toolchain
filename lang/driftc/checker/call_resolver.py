@@ -2213,7 +2213,6 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					allow_rvalue_shared = (
 						needs_autoborrow is SelfMode.SELF_BY_REF
 						and isinstance(expr, H.HMethodCall)
-						and isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
 					)
 					if needs_autoborrow is SelfMode.SELF_BY_REF_MUT or not allow_rvalue_shared:
 						if isinstance(expr, H.HMethodCall):
@@ -3960,6 +3959,9 @@ def resolve_call_expr(
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types_local = [type_expr(a) for a in expr.args]
 		if expr.fn.name == "byte_length":
+			if not (isinstance(current_module_name, str) and current_module_name.startswith("std.")):
+				diagnostics.append(_tc_diag(message="global byte_length(...) is not exposed; use s.byte_length()", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
 			if len(arg_types_local) != 1:
 				diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects 1 argument", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)

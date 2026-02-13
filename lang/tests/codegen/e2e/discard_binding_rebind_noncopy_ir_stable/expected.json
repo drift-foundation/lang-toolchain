@@ -1,0 +1,4 @@
+{
+  "description": "rebinding discard local '_' across incompatible types must not corrupt cleanup/codegen",
+  "exit_code": 0
+}

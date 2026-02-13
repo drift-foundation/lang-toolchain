@@ -14,7 +14,7 @@ fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
   var line = 1;
   var col = 1;
   var i = 0;
-  while i < offset and i < byte_length(*text) {
+  while i < offset and i < text.byte_length() {
     if core.string_byte_at(text, i) == cast<Byte>(10) {
       line = line + 1;
       col = 1;

@@ -490,6 +490,10 @@ class HIRToMIR:
 
 		We prefer the original name when unused; otherwise suffix with the binding id.
 		"""
+		if binding_id is None and fallback == "_":
+			name = f"__discard{self.b.new_temp()}"
+			self._reserved_names.add(name)
+			return name
 		if fallback.startswith("__match_binder_"):
 			self._reserved_names.add(fallback)
 			return fallback
@@ -4730,7 +4734,7 @@ class HIRToMIR:
 				val_ty = bid_ty
 		if val_ty is not None:
 			self._local_types[local_name] = val_ty
-			if stmt.name != local_name:
+			if stmt.name != local_name and stmt.name != "_":
 				self._local_types[stmt.name] = val_ty
 			self._register_drop_local(local_name, val_ty)
 			if drift_debug.enabled("local_types_trace") and (local_name == "done" or stmt.name == "done"):

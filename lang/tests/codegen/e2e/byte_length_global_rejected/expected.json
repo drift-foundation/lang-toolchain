@@ -1,0 +1,11 @@
+{
+  "description": "global byte_length(...) is not exposed; String.byte_length() should be used",
+  "exit_code": 1,
+  "phase": "typecheck",
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "global byte_length(...) is not exposed; use s.byte_length()"
+    }
+  ]
+}

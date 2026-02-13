@@ -12,7 +12,7 @@ fn run() -> Int {
 			s = s + format.format_int(j % 10);
 			j = j + 1;
 		}
-		if byte_length(s) != 64 {
+		if s.byte_length() != 64 {
 			return 2;
 		}
 		i = i + 1;

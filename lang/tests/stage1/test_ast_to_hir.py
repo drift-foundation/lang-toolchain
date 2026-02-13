@@ -105,6 +105,34 @@ def test_plain_and_method_calls():
 	assert isinstance(meth_hir.args[0], HLiteralBool)
 
 
+def test_macro_log_info_rewrites_to_macro_helper_call():
+	l = AstToHIR()
+	macro_hir = l.lower_expr(
+		ast.MacroCall(
+			func=ast.Attr(ast.Name("log"), "info"),
+			args=[ast.Name("security_logger"), ast.Literal("auth-failed"), ast.MapLiteral(entries=[])],
+			kwargs=[],
+		)
+	)
+	assert isinstance(macro_hir, HMethodCall)
+	assert isinstance(macro_hir.receiver, HVar)
+	assert macro_hir.receiver.name == "log"
+	assert macro_hir.method_name == "macro_info"
+	assert len(macro_hir.args) == 4
+
+
+def test_macro_log_wrong_arity_rejected():
+	l = AstToHIR()
+	with pytest.raises(ValueError):
+		l.lower_expr(
+			ast.MacroCall(
+				func=ast.Attr(ast.Name("log"), "info"),
+				args=[ast.Name("security_logger"), ast.Literal("auth-failed")],
+				kwargs=[],
+			)
+		)
+
+
 def test_exception_ctor_to_dvinit():
 	l = AstToHIR()
 	l._module_name = "m"

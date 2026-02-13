@@ -86,7 +86,7 @@ pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
 }
 
 pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimeParseError> {
-	val n = byte_length(s);
+	val n = s.byte_length();
 	if n >= 6 {
 		val sign6 = core.string_byte_at(&s, n - 6);
 		if (sign6 == cast<Byte>(43) or sign6 == cast<Byte>(45)) and core.string_byte_at(&s, n - 3) == cast<Byte>(58) {
@@ -194,7 +194,7 @@ pub fn format_iso8601_date(d: &Date) nothrow -> String {
 }
 
 pub fn parse_iso8601_date(s: String) nothrow -> core.Result<Date, TimeParseError> {
-	val n = byte_length(s);
+	val n = s.byte_length();
 	if n != 10 {
 		return _err_date("invalid-syntax", 0);
 	}

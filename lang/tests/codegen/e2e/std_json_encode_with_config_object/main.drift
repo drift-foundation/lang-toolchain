@@ -1,4 +1,5 @@
 module m
+import std.core as core;
 import std.json as json;
 import std.containers as containers;
 fn run() -> Int {
@@ -9,7 +10,7 @@ fn run() -> Int {
 	fields.insert("a", json.JsonNode::Number("1"));
 	val n = json.JsonNode::Object(move fields);
 	val s = json.encode_with_config(&n, &cfg);
-	if byte_length(s) <= 0 { return 1; }
+	if s.byte_length() <= 0 { return 1; }
 	return 0;
 }
 fn main() nothrow -> Int { return try run() catch { 99 }; }

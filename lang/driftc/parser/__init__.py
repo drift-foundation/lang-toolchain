@@ -463,6 +463,20 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			type_args=getattr(expr, "type_args", None),
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
+	if isinstance(expr, parser_ast.MacroCall):
+		return s0.MacroCall(
+			func=_convert_expr(expr.func),
+			args=[_convert_expr(a) for a in expr.args],
+			kwargs=[
+				s0.KwArg(
+					name=kw.name,
+					value=_convert_expr(kw.value),
+					loc=Span.from_loc(getattr(kw, "loc", None)),
+				)
+				for kw in getattr(expr, "kwargs", [])
+			],
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.TypeApp):
 		return s0.TypeApp(
 			func=_convert_expr(expr.func),
@@ -4117,7 +4131,18 @@ def _lower_parsed_program_to_hir(
 		decls.append(decl_decl)
 		stmt_block = _convert_block(fn.body)
 		param_names = [p.name for p in getattr(fn, "params", []) or []]
-		hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
+		try:
+			hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
+		except ValueError as err:
+			diagnostics.append(
+				_p_diag(
+					phase="parser",
+					message=str(err),
+					severity="error",
+					span=Span.from_loc(getattr(fn, "loc", None)),
+				)
+			)
+			hir_block = H.HBlock(statements=[])
 		func_hirs[fn_id] = hir_block
 	# Methods inside implement blocks.
 	for impl_index, impl in enumerate(getattr(prog, "implements", [])):
@@ -4337,10 +4362,31 @@ def _lower_parsed_program_to_hir(
 				)
 				try:
 					hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
+				except ValueError as err:
+					diagnostics.append(
+						_p_diag(
+							phase="parser",
+							message=str(err),
+							severity="error",
+							span=Span.from_loc(getattr(fn, "loc", None)),
+						)
+					)
+					hir_block = H.HBlock(statements=[])
 				finally:
 					lowerer._pop_implicit_self()
 			else:
-				hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
+				try:
+					hir_block = lowerer.lower_function_block(stmt_block, param_names=param_names)
+				except ValueError as err:
+					diagnostics.append(
+						_p_diag(
+							phase="parser",
+							message=str(err),
+							severity="error",
+							span=Span.from_loc(getattr(fn, "loc", None)),
+						)
+					)
+					hir_block = H.HBlock(statements=[])
 			func_hirs[fn_id] = hir_block
 		impl_metas.append(impl_meta)
 	# Build signatures with resolved TypeIds from parser decls.

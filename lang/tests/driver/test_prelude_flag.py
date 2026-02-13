@@ -153,7 +153,7 @@ fn main() nothrow -> Int{
 	io.buffer_write(&mut b, 1, cast<Byte>(98));
 	io.buffer_write(&mut b, 2, cast<Byte>(99));
 	val s = core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
-	if byte_length(s) != 3 {
+	if s.byte_length() != 3 {
 		return 2;
 	}
 	return 0;

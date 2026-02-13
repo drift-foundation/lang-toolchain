@@ -4,6 +4,7 @@ import std.core as core;
 import std.containers as containers;
 import std.concurrent as conc;
 import std.iter as iter;
+import std.meta as meta;
 import lang.thread as thread;
 
 use trait iter.SinglePassIterator;
@@ -26,6 +27,9 @@ export {
 	init,
 	logger_main,
 	logger_named,
+	macro_debug,
+	macro_info,
+	macro_error,
 	flush,
 	debug,
 	info,
@@ -417,6 +421,21 @@ pub fn flush(timeout: conc.Duration) nothrow -> Bool {
 		return false;
 	}
 	return true;
+}
+
+pub fn macro_debug<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+	val _ = move src;
+	return logger.debug(ev, move attrs);
+}
+
+pub fn macro_info<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+	val _ = move src;
+	return logger.info(ev, move attrs);
+}
+
+pub fn macro_error<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+	val _ = move src;
+	return logger.error(ev, move attrs);
 }
 
 pub fn debug<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {

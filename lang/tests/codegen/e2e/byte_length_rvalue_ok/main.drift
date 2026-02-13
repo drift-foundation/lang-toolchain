@@ -1,4 +1,6 @@
+import std.core as core;
+
 fn main() nothrow -> Int{
-    val n = byte_length("abc");
+    val n = "abc".byte_length();
     return 0;
 }

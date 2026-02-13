@@ -1,6 +1,8 @@
+import std.core as core;
+
 fn main() nothrow -> Int{
     val s = string_concat("foo", "bar");
-    val n = byte_length(s);
+    val n = s.byte_length();
     if n == 6 {
         return 6;
     }

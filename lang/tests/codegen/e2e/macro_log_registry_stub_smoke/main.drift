@@ -1,0 +1,74 @@
+module main
+
+import std.runtime as rt;
+import std.meta as meta;
+
+struct CategoryLogger {
+	name: String
+}
+
+struct MacroLog {
+}
+
+implement MacroLog {
+	pub fn macro_info(self: &MacroLog, logger: &CategoryLogger, ev: String, attrs: String, src: meta.Caller) nothrow -> Bool {
+		val _ = self;
+		if logger.name != "security" {
+			return false;
+		}
+		if ev != "auth-failed" {
+			return false;
+		}
+		if attrs != "user=alice;reason=bad-password" {
+			return false;
+		}
+		val _ = move src;
+		return true;
+	}
+
+	pub fn macro_debug(self: &MacroLog, logger: &CategoryLogger, ev: String, attrs: String, src: meta.Caller) nothrow -> Bool {
+		val _ = self;
+		if logger.name != "security" {
+			return false;
+		}
+		if ev != "auth-attempt" {
+			return false;
+		}
+		if attrs != "user=alice" {
+			return false;
+		}
+		val _ = move src;
+		return true;
+	}
+}
+
+fn setup_logger() nothrow -> Int {
+	val reg = rt.global_registry();
+	val lg = CategoryLogger(name = "security");
+	if not reg.set<type CategoryLogger>(move lg) {
+		return 2;
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	val rc = setup_logger();
+	if rc != 0 {
+		return rc;
+	}
+	val reg = rt.global_registry();
+	val ml = MacroLog();
+	val ok_info = ml.info!(rt.expect<type CategoryLogger>(reg, "missing-security-logger"), "auth-failed", "user=alice;reason=bad-password");
+	if not ok_info {
+		return 3;
+	}
+	val ok_debug = ml.debug!(rt.expect<type CategoryLogger>(reg, "missing-security-logger"), "auth-attempt", "user=alice");
+	if not ok_debug {
+		return 4;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

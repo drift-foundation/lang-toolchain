@@ -13,7 +13,7 @@ struct E {
 
 fn f() nothrow -> core.Result<String, E> {
   var out = "";
-  if byte_length(out) == 1 { return core.Result::Ok(out); }
+  if out.byte_length() == 1 { return core.Result::Ok(out); }
   return core.Result::Err(E(tag = "invalid-syntax", offset = 1, line = -1, col = -1, path = "", key = ""));
 }
 

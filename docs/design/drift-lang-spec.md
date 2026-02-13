@@ -55,8 +55,8 @@ Drift expressions largely follow a C-style surface with explicit ownership rules
 - Explicit cast: `cast<T>(expr)` (strict; function-type casts only in v1)
 - Array literals: `[1, 2, 3]`
 - String concatenation uses `+`
-- String byte length is exposed via `byte_length(s: &String) -> Uint` (UTF‑8 code units, not characters); a future `char_length` may count user-visible characters.
-- Empty strings may be written as `""` or `String.EMPTY`. A convenience helper `is_empty(s: String) -> Bool` checks `byte_length(s) == 0`.
+- Public String byte length is exposed as method `s.byte_length() -> Int` (UTF‑8 code units, not characters); a future `char_length` may count user-visible characters.
+- Empty strings may be written as `""` or `String.EMPTY`. A convenience helper `is_empty(s: String) -> Bool` checks `s.byte_length() == 0`.
 - Program entry (v1): exactly one `main` function, returning `Int`, **declared `nothrow`**, with one of two signatures:
   - `fn main() nothrow -> Int`
   - `fn main(argv: Array<String>) nothrow -> Int` (argv includes the program name at index 0). The runtime builds `argv` and calls this `main`; no drift_main indirection in user code.
@@ -85,10 +85,28 @@ Semantics:
 `cast<T>(expr)` is an explicit, compile-time checked cast. In v1, `cast` is **strict** and supported only for function types; it is primarily used to disambiguate overloads when taking a function reference:
 
 ```drift
-val f = cast<Fn(Int) nothrow -> Int>(abs);
+  val f = cast<Fn(Int) nothrow -> Int>(abs);
 ```
 
 No thunking or adapter insertion occurs in this build; other cast targets are rejected.
+
+### 2.z. Macro direction (MVP + forward path)
+
+Drift macro support is language-aware and **not** a C-style textual preprocessor.
+
+- **Current MVP direction:** parse source into AST first, then expand macro invocations into ordinary AST nodes **before type checking**.
+- Expansion is deterministic and diagnostics are source-anchored at macro call sites and expanded nodes.
+- MVP macro support is compiler-owned/built-in only; user-defined macro systems are deferred.
+
+Forward compatibility path:
+
+- The language may add a later, typed/semantic macro tier that runs after type information is available.
+- This does not change the MVP model; it extends it with an additional expansion stage for macros that require semantic context.
+
+Design intent:
+
+- Avoid text-substitution pitfalls from preprocessor-style macros.
+- Preserve clear tooling, diagnostics, and predictable compilation semantics.
 
   behaves like:
 
@@ -200,9 +218,10 @@ Coercion rules (argument-only):
 #### 3.1.2. String semantics (v1)
 
 - Storage is UTF-8; **bytewise** semantics:
-  - `byte_length(s: &String) -> Uint` returns the number of UTF-8 code units (bytes), not graphemes. A future `char_length` may count user-visible characters.
+  - `s.byte_length() -> Int` returns the number of UTF-8 code units (bytes), not graphemes. A future `char_length` may count user-visible characters.
+  - Global `byte_length(...)` is internal-only (`std.*` implementation surface), not part of user-facing API.
   - Equality (`==`) is bytewise; no normalization or case folding.
-- Empty strings: `""` or `String.EMPTY`; `is_empty(s: String) -> Bool` checks `byte_length(s) == 0`.
+- Empty strings: `""` or `String.EMPTY`; `is_empty(s: String) -> Bool` checks `s.byte_length() == 0`.
 - Concatenation uses `+` and produces a new `String`.
 - `Array<String>` is supported; each element is a `%DriftString` header `{%drift.isize, i8*}` at the ABI.
 

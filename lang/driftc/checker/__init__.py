@@ -850,8 +850,11 @@ class Checker:
 				call_can_throw = info.sig.can_throw
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					fn_info = fn_infos.get(info.target.symbol)
-					if call_can_throw and fn_info is not None and fn_info.declared_can_throw is not None:
-						call_can_throw = bool(fn_info.declared_can_throw)
+					if call_can_throw and fn_info is not None:
+						if fn_info.signature is not None and fn_info.signature.declared_can_throw is not None:
+							call_can_throw = bool(fn_info.signature.declared_can_throw)
+						elif fn_info.declared_can_throw is not None:
+							call_can_throw = bool(fn_info.declared_can_throw)
 				if call_can_throw and not catch_all:
 					may_throw = True
 					if first_span is None:

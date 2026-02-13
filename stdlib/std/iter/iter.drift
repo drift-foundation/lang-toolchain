@@ -44,7 +44,7 @@ pub struct StringBytesIter {
 
 implement String {
 	pub fn bytes(self: &String) nothrow -> StringBytesIter {
-		val len = byte_length(self);
+		val len = self.byte_length();
 		// MVP: struct fields cannot be references, so we store a String handle copy.
 		return StringBytesIter(s = *self, idx = 0, len = len);
 	}

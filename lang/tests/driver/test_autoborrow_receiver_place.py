@@ -30,7 +30,7 @@ def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tup
 	return rc, payload
 
 
-def test_autoborrow_receiver_requires_place(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_autoborrow_shared_receiver_allows_rvalue_place_chain(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	mod_root = tmp_path / "mods"
 	_write_file(
 		mod_root / "main" / "main.drift",
@@ -40,7 +40,7 @@ module main
 struct Inner { value: Int }
 
 implement Inner {
-	pub fn get(self: &Inner) -> Int { return self.value; }
+	pub fn get(self: &Inner) nothrow -> Int { return self.value; }
 }
 
 struct Wrap { inner: Inner }
@@ -56,9 +56,7 @@ fn main() nothrow -> Int {
 	)
 	paths = sorted(mod_root.rglob("*.drift"))
 	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
-	assert rc != 0
-	diags = payload.get("diagnostics", [])
-	assert any("borrow requires an addressable place" in str(d.get("message", "")) for d in diags)
+	assert rc == 0, payload
 
 
 def test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion(tmp_path: Path) -> None:

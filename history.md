@@ -716,3 +716,30 @@
 - Pinned limitation:
   - catch binders currently lower as `Error`; direct field access like `e.tag` in catch arms is not yet supported.
   - supported catch-path access remains `e.attrs["tag"]` + `as_*` extractors.
+
+## 2026-02-13 – Macro/basic hardening + String byte-length API cleanup
+- Macro/basic + caller metadata slice stabilized:
+  - `std.meta` added with intrinsic `caller()` and `Caller` carrier (`module_id`, `file`, `line` accessors).
+  - Added e2e coverage: `lang/tests/codegen/e2e/std_meta_caller_basic`.
+- LANGUAGE_BUG fix (regression-first): discard-binding local alias corruption
+  - Pinned regression: `lang/tests/codegen/e2e/discard_binding_rebind_noncopy_ir_stable`.
+  - Fixed MIR local canonicalization for `val _ = ...` so discard bindings with no binding-id get unique hidden locals; removed `_` type alias back-propagation.
+  - Eliminated invalid LLVM cleanup IR (`extractvalue` on pointer-typed `%self`).
+- String byte-length API policy finalized:
+  - Public user-facing API is `String.byte_length()`.
+  - Global `byte_length(...)` is internal-only (`std.*`) and rejected in user modules with pinned diagnostic:
+    - `global byte_length(...) is not exposed; use s.byte_length()`.
+  - Added regressions:
+    - e2e: `lang/tests/codegen/e2e/byte_length_global_rejected`
+    - driver: `lang/tests/driver/test_string_byte_length_api.py`.
+- Receiver autoborrow policy cleanup:
+  - Removed hardcoded method-name exception from checker.
+  - Shared `&self` method receivers now follow generic rvalue-shared-autoborrow path; `&mut self` still requires addressable place.
+  - Updated/added driver coverage:
+    - `lang/tests/driver/test_autoborrow_receiver_place.py`
+    - `lang/tests/driver/test_method_call_nothrow_resolution.py`.
+- Prelude/driver updates aligned with API:
+  - `lang/tests/driver/test_prelude_flag.py::test_std_core_string_from_utf8_bytes_compiles` now uses `s.byte_length()`.
+- Validation:
+  - targeted driver + e2e subsets passed,
+  - ASAN + alloc-track targeted e2e subset passed.

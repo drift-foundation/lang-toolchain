@@ -18,7 +18,7 @@ fn run() -> Int {
 	while true {
 		match it.next() {
 			Some(item) => {
-				if byte_length(*item.key) <= 0 { return 97; }
+				if item.key.byte_length() <= 0 { return 97; }
 				count = count + 1;
 			},
 			None => { break; }

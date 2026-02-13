@@ -3347,6 +3347,31 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})")
 			self.value_types[dest] = DRIFT_STRING_TYPE
 			return
+		if instr.fn_id.module == "std.meta":
+			if instr.fn_id.name == "caller":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: caller expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: caller result must be captured")
+				if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:
+					raise NotImplementedError("LLVM codegen v1: caller missing signature")
+				ret_ty = callee_info.signature.return_type_id
+				ret_llty = self._llvm_type_for_typeid(ret_ty, allow_void_ok=False)
+				module_s = getattr(self.func.fn_id, "module", None) or "<unknown>"
+				span = getattr(instr, "span", None)
+				file_s = getattr(span, "file", None) if span is not None else None
+				line_n = getattr(span, "line", None) if span is not None else None
+				file_s = str(file_s) if file_s else "<unknown>"
+				line_n = int(line_n) if isinstance(line_n, int) else 0
+				module_v = self._emit_string_literal_value(module_s)
+				file_v = self._emit_string_literal_value(file_s)
+				tmp0 = self._fresh("caller0")
+				self.lines.append(f"  {tmp0} = insertvalue {self._llty(ret_llty)} undef, {DRIFT_STRING_TYPE} {module_v}, 0")
+				tmp1 = self._fresh("caller1")
+				self.lines.append(f"  {tmp1} = insertvalue {self._llty(ret_llty)} {tmp0}, {DRIFT_STRING_TYPE} {file_v}, 1")
+				self.lines.append(f"  {dest} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
+				self.value_types[dest] = ret_llty
+				return
 		if instr.fn_id.module == "lang.thread":
 			if instr.fn_id.name == "vt_spawn":
 				if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:

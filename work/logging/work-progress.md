@@ -68,6 +68,33 @@ Remaining work is backend migration after atomics + std.json are complete.
 - Add user-pluggable formatter example.
 - Add sink composition examples (file/fanout/custom sink).
 
+## Pinned Next Design Item (Context Scoping)
+
+- Introduce logger context scoping support (RAII-style push/pop over lexical scope) to reduce repeated attrs in related log lines.
+- Context is **not** implicitly consumed by macro scope magic in MVP.
+- Per-call context handling is explicit:
+  - a log call may provide zero or one context object,
+  - context can be skipped for a specific line,
+  - a different/richer context can be provided for a specific line.
+- Merge semantics (when context is supplied):
+  - effective attrs = context attrs + event attrs,
+  - event attrs win on key collisions.
+- Scoped context lifetime model:
+  - guard/handle pushes on create and pops on destroy,
+  - nesting is stack-based.
+- Concurrency isolation requirement:
+  - context stacks must be execution-local (virtual-thread/thread-local), never process-global.
+
+## Pinned API Ergonomics (Context Overloads)
+
+- Logging call surface should support context-first concise forms:
+  - `log.info(ev, ctx)`
+  - `log.info(ev, ctx, attrs)`
+- Keep non-context form as needed:
+  - `log.info(ev, attrs)` (or equivalent no-context variant).
+- Primary ergonomics goal:
+  - common event+context logging should not require empty attrs boilerplate.
+
 ## Parity Gates
 
 - Output JSON shape unchanged: `tm`, `level`, `ev`, `logger`, `attrs`, `tid`.

@@ -1,5 +1,7 @@
 module m
 
+import std.core as core;
+
 fn run() -> Int {
 	var i = 0;
 	while i < 1000 {
@@ -9,7 +11,7 @@ fn run() -> Int {
 			s = s + "x";
 			j = j + 1;
 		}
-		if byte_length(s) != 32 {
+		if s.byte_length() != 32 {
 			return 2;
 		}
 		i = i + 1;

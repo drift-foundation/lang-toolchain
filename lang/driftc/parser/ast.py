@@ -385,6 +385,14 @@ class Call(Expr):
 
 
 @dataclass
+class MacroCall(Expr):
+	loc: Located
+	func: Expr
+	args: List[Expr]
+	kwargs: List[KwArg]
+
+
+@dataclass
 class TypeApp(Expr):
     loc: Located
     func: Expr

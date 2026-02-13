@@ -1,5 +1,7 @@
 module m
 
+import std.core as core;
+
 struct E {
   pub tag: String,
   pub line: Int,
@@ -7,7 +9,7 @@ struct E {
 
 fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
   var line = 1;
-  if offset > byte_length(*text) {
+  if offset > text.byte_length() {
     line = 2;
   }
   return E(tag = tag, line = line);

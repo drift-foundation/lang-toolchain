@@ -27,6 +27,7 @@ from typing import List, Optional
 # Import stage0 AST via package API to keep stage layering explicit.
 from lang.driftc.stage0 import ast
 from . import hir_nodes as H
+from .macro_expander import expand_macro_call
 from lang.driftc.core.span import Span
 
 
@@ -396,6 +397,11 @@ class AstToHIR:
 		):
 			return H.HCall(fn=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args, loc=Span.from_loc(getattr(expr, "loc", None)))
 		return H.HInvoke(callee=fn_expr, args=args, kwargs=h_kwargs, type_args=type_args, loc=Span.from_loc(getattr(expr, "loc", None)))
+
+	def _visit_expr_MacroCall(self, expr: ast.MacroCall) -> H.HExpr:
+		"""Expand macro call via centralized stage1 macro dispatcher."""
+		expanded = expand_macro_call(expr)
+		return self._visit_expr_Call(expanded)
 
 	def _visit_expr_TypeApp(self, expr: ast.TypeApp) -> H.HExpr:
 		fn_expr = self.lower_expr(expr.func)

@@ -58,8 +58,8 @@ fn _to_lower_ascii(b: Byte) nothrow -> Byte {
 }
 
 fn _eq_ascii_ci_slice(s: &String, start: Int, lit: String) nothrow -> Bool {
-	val n = byte_length(*s);
-	val m = byte_length(lit);
+	val n = s.byte_length();
+	val m = lit.byte_length();
 	if start < 0 or start + m != n {
 		return false;
 	}
@@ -111,7 +111,7 @@ pub fn parse_bool(s: String) nothrow -> Bool {
 }
 
 pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
-	val len = byte_length(s);
+	val len = s.byte_length();
 	if len == 0 {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}
@@ -153,7 +153,7 @@ pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
 }
 
 pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
-	val len = byte_length(s);
+	val len = s.byte_length();
 	if len == 0 {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}
@@ -186,7 +186,7 @@ pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
 }
 
 pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
-	val len = byte_length(s);
+	val len = s.byte_length();
 	if len == 0 {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}

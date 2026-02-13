@@ -1,5 +1,7 @@
+import std.core as core;
+
 fn byte_len_ref(s: &String) nothrow -> Int {
-	return byte_length(s);
+	return s.byte_length();
 }
 
 fn main() nothrow -> Int{

@@ -11,7 +11,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 		val io_t = conc.Duration(millis = 5000);
 		if argv.len < 2 { return 1; }
 		val msg = argv[1];
-		val len = byte_length(msg);
+		val len = msg.byte_length();
 		var addr = net.socket_addr("127.0.0.1", 5555);
 		val s = net.connect(&addr, io_t).or_throw();
 		if len < 1 { return 2; }

@@ -151,6 +151,15 @@ class Call(Expr):
 
 
 @dataclass
+class MacroCall(Expr):
+	"""Macro invocation prior to expansion/desugaring."""
+	func: Expr
+	args: List[Expr]
+	kwargs: List["KwArg"]
+	loc: Optional[object] = None
+
+
+@dataclass
 class TypeApp(Expr):
 	"""Explicit type application on a callable reference (no call)."""
 	func: Expr

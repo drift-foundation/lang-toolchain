@@ -1,6 +1,8 @@
+import std.core as core;
+
 fn main() nothrow -> Int{
     val s = "abc";
-    val n = byte_length(s);
+    val n = s.byte_length();
     if n == 3 {
         return 3;
     }

@@ -43,7 +43,7 @@ fn _fill_chunk(dst: &mut io.Buffer, text: &String, start: Int, total_len: Int, w
 }
 
 fn _write_all_stream(out: &io.ConfiguredOutputStream, text: String, with_newline: Bool) nothrow -> Void {
-	val text_len = cast<Int>(byte_length(text));
+	val text_len = cast<Int>(text.byte_length());
 	val newline_len = with_newline ? 1 : 0;
 	val total_len = text_len + newline_len;
 	var offset = 0;

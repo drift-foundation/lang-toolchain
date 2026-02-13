@@ -1,8 +1,10 @@
+import std.core as core;
+
 fn main() nothrow -> Int{
     val s0 = "ążć";
     val s1 = "żół";
-    val n = byte_length(s0);
-    val expected = byte_length(s1);  // both are 6-byte UTF-8 strings
+    val n = s0.byte_length();
+    val expected = s1.byte_length();  // both are 6-byte UTF-8 strings
     if n == expected {
         return 0;
     }

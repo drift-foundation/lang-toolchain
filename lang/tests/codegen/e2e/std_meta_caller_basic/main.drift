@@ -1,0 +1,48 @@
+module main
+
+import std.core as core;
+import std.meta as meta;
+
+fn run() nothrow -> Int {
+	val c = meta.caller();
+	val module_id = c.module_id();
+	val expected_module = "main";
+	val module_n = module_id.byte_length();
+	val module_m = expected_module.byte_length();
+	if module_n != module_m {
+		return 1;
+	}
+	var j = 0;
+	while j < module_m {
+		val a = core.string_byte_at(module_id, j);
+		val b = core.string_byte_at(&expected_module, j);
+		if a != b {
+			return 1;
+		}
+		j = j + 1;
+	}
+	val file = c.file();
+	val n = file.byte_length();
+	val suffix = "main.drift";
+	val m = suffix.byte_length();
+	if n < m {
+		return 2;
+	}
+	var i = 0;
+	while i < m {
+		val a = core.string_byte_at(file, n - m + i);
+		val b = core.string_byte_at(&suffix, i);
+		if a != b {
+			return 2;
+		}
+		i = i + 1;
+	}
+	if c.line() <= 0 {
+		return 3;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

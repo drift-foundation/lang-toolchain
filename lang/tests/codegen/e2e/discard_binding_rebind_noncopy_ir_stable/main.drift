@@ -1,0 +1,22 @@
+module main
+
+struct S {
+	a: String
+}
+
+implement S {
+	pub fn check(self: &S, var src: S) nothrow -> Bool {
+		val _ = self;
+		val _ = move src;
+		return true;
+	}
+}
+
+fn main() nothrow -> Int {
+	val s = S(a = "left");
+	val t = S(a = "right");
+	if not s.check(move t) {
+		return 1;
+	}
+	return 0;
+}
