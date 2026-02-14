@@ -1,0 +1,38 @@
+module main
+
+import std.runtime as rt;
+
+struct Counter {
+	n: Int
+}
+
+fn run() nothrow -> Int {
+	val reg = rt.global_registry();
+	val c = Counter(n = 1);
+	if not reg.set<type Counter>(move c) {
+		return 1;
+	}
+	match rt.get_mut<type Counter>(reg) {
+		Some(v) => {
+			v.n = v.n + 41;
+		},
+		None => {
+			return 2;
+		}
+	}
+	match rt.get<type Counter>(reg) {
+		Some(v2) => {
+			if v2.n != 42 {
+				return 3;
+			}
+		},
+		None => {
+			return 4;
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

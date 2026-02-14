@@ -5006,12 +5006,16 @@ def compile_to_llvm_ir_for_tests(
 		word_bits=host_word_bits(),
 		debug_enabled=debug_enabled,
 	)
+	install_process_preamble_available = any(
+		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
+		for fn_id in fn_infos.keys()
+	)
 	# If the entry is already called "main" and has no argv wrapper, do not emit
 	# a wrapper that would call itself; otherwise emit a thin OS wrapper that
 	# calls the entry.
 	if argv_wrapper is None and not (entry_module == "main" and entry_name == "main"):
 		entry_sym = function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}"
-		module.emit_entry_wrapper(entry_sym)
+		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
 	return module.render(), checked
 
 

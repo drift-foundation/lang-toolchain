@@ -9,7 +9,6 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
 #ifdef __linux__
 #include <ucontext.h>
 #include <sys/epoll.h>
@@ -19,7 +18,6 @@
 #endif
 
 #include "string_runtime.h"
-#include "../../compiler_infra/diagnostic_runtime.h"
 
 // Drift interface value layout (ABI v1):
 // { i8*, i8*, [4 x i64], i8 }
@@ -36,6 +34,8 @@ typedef struct DriftCallbackVTable {
 	void *drop;
 	void *call;
 } DriftCallbackVTable;
+
+struct DriftRuntimeRegistryEntry;
 
 typedef struct DriftVt {
 	DriftIface cb;
@@ -61,6 +61,7 @@ typedef struct DriftVt {
 	int park_token;
 	struct DriftVt *reg_prev;
 	struct DriftVt *reg_next;
+	struct DriftRuntimeRegistryEntry *thread_registry_head;
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -85,28 +86,6 @@ static pthread_once_t drift_vt_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t drift_vt_tls_key;
 static pthread_once_t drift_exec_once = PTHREAD_ONCE_INIT;
 static pthread_once_t drift_exec_cleanup_once = PTHREAD_ONCE_INIT;
-static pthread_once_t drift_log_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t drift_log_mu;
-static pthread_mutex_t drift_log_cv_mu;
-static pthread_cond_t drift_log_cv;
-static pthread_t drift_log_worker;
-static _Atomic int64_t drift_log_inited = 0;
-static _Atomic int64_t drift_log_worker_started = 0;
-static _Atomic int64_t drift_log_worker_shutdown = 0;
-static _Atomic int64_t drift_log_min_level = 1;
-static _Atomic int64_t drift_log_queue_capacity = 1024;
-static _Atomic int64_t drift_log_backpressure = 0;
-static _Atomic int64_t drift_log_write_timeout_ms = 1000;
-static _Atomic int64_t drift_log_enqueue_timeout_ms = 1000;
-static _Atomic int64_t drift_log_queue_depth = 0;
-static _Atomic int64_t drift_log_inflight = 0;
-static _Atomic int64_t drift_log_dropped_oldest = 0;
-static _Atomic int64_t drift_log_dropped_newest = 0;
-typedef struct DriftLogRecordSlot {
-	_Atomic int state; // 0 empty, 2 ready
-	int64_t level;
-	DriftString payload_json;
-} DriftLogRecordSlot;
 typedef struct DriftRuntimeRegistryEntry {
 	uint64_t type_tag;
 	void *ptr;
@@ -116,14 +95,13 @@ typedef struct DriftRuntimeRegistryEntry {
 typedef struct DriftRuntimeGlobalRegistry {
 	int64_t _opaque;
 } DriftRuntimeGlobalRegistry;
-static DriftLogRecordSlot *drift_log_slots = NULL;
-static _Atomic uint64_t drift_log_write_seq = 0;
-static _Atomic uint64_t drift_log_read_seq = 0;
 static pthread_mutex_t drift_runtime_registry_mu = PTHREAD_MUTEX_INITIALIZER;
 static DriftRuntimeRegistryEntry *drift_runtime_registry_head = NULL;
+static __thread DriftRuntimeRegistryEntry *drift_runtime_thread_registry_head = NULL;
 static pthread_once_t drift_runtime_registry_cleanup_once = PTHREAD_ONCE_INIT;
 static _Atomic int drift_runtime_registry_cleaned = 0;
 static DriftRuntimeGlobalRegistry drift_runtime_global_registry = {0};
+static DriftRuntimeGlobalRegistry drift_runtime_thread_registry = {0};
 static void drift_drop_callback(DriftIface *cb);
 static void drift_exec_shutdown_all_atexit(void);
 static void drift_runtime_registry_cleanup_atexit(void);
@@ -135,14 +113,9 @@ static void drift_runtime_registry_register_cleanup_once(void) {
 	(void)atexit(drift_runtime_registry_cleanup_atexit);
 }
 
-static void drift_runtime_registry_cleanup_atexit(void) {
-	if (atomic_exchange_explicit(&drift_runtime_registry_cleaned, 1, memory_order_acq_rel) != 0) {
-		return;
-	}
-	pthread_mutex_lock(&drift_runtime_registry_mu);
-	DriftRuntimeRegistryEntry *cur = drift_runtime_registry_head;
-	drift_runtime_registry_head = NULL;
-	pthread_mutex_unlock(&drift_runtime_registry_mu);
+static void drift_runtime_registry_entry_list_cleanup(DriftRuntimeRegistryEntry **head) {
+	DriftRuntimeRegistryEntry *cur = *head;
+	*head = NULL;
 	while (cur) {
 		DriftRuntimeRegistryEntry *next = cur->next;
 		void *drop_data = cur->dropper.data;
@@ -159,6 +132,16 @@ static void drift_runtime_registry_cleanup_atexit(void) {
 		free(cur);
 		cur = next;
 	}
+}
+
+static void drift_runtime_registry_cleanup_atexit(void) {
+	if (atomic_exchange_explicit(&drift_runtime_registry_cleaned, 1, memory_order_acq_rel) != 0) {
+		return;
+	}
+	pthread_mutex_lock(&drift_runtime_registry_mu);
+	drift_runtime_registry_entry_list_cleanup(&drift_runtime_registry_head);
+	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	drift_runtime_registry_entry_list_cleanup(&drift_runtime_thread_registry_head);
 }
 
 void drift_runtime_registry_cleanup_now(void) {
@@ -201,6 +184,9 @@ static void drift_vt_destroy(DriftVt *h) {
 	if (!h) {
 		return;
 	}
+	pthread_mutex_lock(&h->mu);
+	drift_runtime_registry_entry_list_cleanup(&h->thread_registry_head);
+	pthread_mutex_unlock(&h->mu);
 	drift_reactor_forget_vt(h);
 	drift_vt_registry_remove(h);
 	pthread_mutex_destroy(&h->mu);
@@ -225,6 +211,9 @@ static void drift_vt_registry_cleanup_atexit(void) {
 		DriftVt *next = cur->reg_next;
 		cur->reg_prev = NULL;
 		cur->reg_next = NULL;
+		pthread_mutex_lock(&cur->mu);
+		drift_runtime_registry_entry_list_cleanup(&cur->thread_registry_head);
+		pthread_mutex_unlock(&cur->mu);
 		if (!atomic_load(&cur->completed)) {
 			drift_drop_callback(&cur->cb);
 			atomic_store(&cur->completed, 1);
@@ -273,7 +262,6 @@ typedef struct Reactor {
 
 static Reactor *drift_default_reactor_ptr = NULL;
 static void drift_reactor_shutdown_default_atexit(void);
-static void drift_log_ensure_defaults(void);
 
 static void drift_reactor_forget_vt(DriftVt *vt) {
 #ifdef __linux__
@@ -329,7 +317,6 @@ static void drift_drop_callback(DriftIface *cb);
 #ifdef __linux__
 static void drift_vt_fiber_entry(uintptr_t arg);
 #endif
-uint64_t drift_log_runtime_init(int64_t min_level, int64_t queue_capacity, int64_t backpressure_policy, int64_t write_timeout_ms, int64_t enqueue_timeout_ms);
 void drift_thread_unpark(uint64_t vt);
 void drift_reactor_register_timer(uint64_t deadline_ms, uint64_t vt);
 
@@ -400,248 +387,6 @@ static int64_t drift_now_ms(void) {
 		return 0;
 	}
 	return (int64_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
-}
-
-static DriftString drift_log_string_from_cbuf(const char *buf, size_t len) {
-	DriftString out = drift_string_from_utf8_bytes(buf, (drift_isize)len);
-	return out;
-}
-
-static DriftString drift_log_json_escape_impl(DriftString s) {
-	if (s.data == NULL || s.len <= 0) {
-		return drift_string_from_cstr("");
-	}
-	size_t n = (size_t)s.len;
-	size_t max_out = n * 6 + 1;
-	char *buf = (char *)malloc(max_out);
-	if (buf == NULL) {
-		return drift_string_from_cstr("");
-	}
-	size_t out = 0;
-	for (size_t i = 0; i < n; i++) {
-		unsigned char c = (unsigned char)s.data[i];
-		if (c == '\"' || c == '\\') {
-			buf[out++] = '\\';
-			buf[out++] = (char)c;
-			continue;
-		}
-		if (c == '\n') {
-			buf[out++] = '\\';
-			buf[out++] = 'n';
-			continue;
-		}
-		if (c == '\r') {
-			buf[out++] = '\\';
-			buf[out++] = 'r';
-			continue;
-		}
-		if (c == '\t') {
-			buf[out++] = '\\';
-			buf[out++] = 't';
-			continue;
-		}
-		if (c < 0x20) {
-			(void)snprintf(buf + out, max_out - out, "\\u%04x", (unsigned int)c);
-			out += 6;
-			continue;
-		}
-		buf[out++] = (char)c;
-	}
-	DriftString escaped = drift_log_string_from_cbuf(buf, out);
-	free(buf);
-	return escaped;
-}
-
-static DriftString drift_log_dv_to_json_impl_depth(struct DriftDiagnosticValue dv, int depth) {
-	switch ((int)dv.tag) {
-		case DV_BOOL: {
-			uint8_t b = 0;
-			if (drift_dv_as_bool(&dv, &b)) {
-				return drift_string_from_cstr(b ? "true" : "false");
-			}
-			return drift_string_from_cstr("false");
-		}
-		case DV_INT: {
-			drift_isize iv = 0;
-			if (drift_dv_as_int(&dv, &iv)) {
-				return drift_string_from_int64((int64_t)iv);
-			}
-			return drift_string_from_cstr("0");
-		}
-		case DV_FLOAT: {
-			double fv = 0.0;
-			if (drift_dv_as_float(&dv, &fv)) {
-				return drift_string_from_f64(fv);
-			}
-			return drift_string_from_cstr("0.0");
-		}
-		case DV_STRING: {
-			struct DriftString sv = {0, NULL};
-			if (!drift_dv_as_string(&dv, &sv)) {
-				return drift_string_from_cstr("\"\"");
-			}
-			DriftString escaped = drift_log_json_escape_impl((DriftString){sv.len, sv.data});
-			DriftString out = drift_string_concat(drift_string_from_cstr("\""), escaped);
-			out = drift_string_concat(out, drift_string_from_cstr("\""));
-			return out;
-		}
-		case DV_OBJECT: {
-			if (depth >= 4) {
-				return drift_string_from_cstr("{}");
-			}
-			DriftString out = drift_string_from_cstr("{");
-			size_t count = dv.data.object.len;
-			if (count > 16u) {
-				count = 16u;
-			}
-			for (size_t i = 0; i < count; i++) {
-				struct DriftDiagnosticField *f = &dv.data.object.fields[i];
-				if (i > 0) {
-					out = drift_string_concat(out, drift_string_from_cstr(","));
-				}
-				DriftString escaped_key = drift_log_json_escape_impl((DriftString){f->key.len, f->key.data});
-				out = drift_string_concat(out, drift_string_from_cstr("\""));
-				out = drift_string_concat(out, escaped_key);
-				out = drift_string_concat(out, drift_string_from_cstr("\":"));
-				struct DriftDiagnosticValue v = f->value;
-				DriftString v_json = drift_log_dv_to_json_impl_depth(v, depth + 1);
-				out = drift_string_concat(out, v_json);
-			}
-			out = drift_string_concat(out, drift_string_from_cstr("}"));
-			return out;
-		}
-		case DV_NULL:
-		case DV_MISSING:
-		default:
-			return drift_string_from_cstr("null");
-	}
-}
-
-static DriftString drift_log_dv_to_json_impl(struct DriftDiagnosticValue dv) {
-	return drift_log_dv_to_json_impl_depth(dv, 0);
-}
-
-DriftString drift_log_runtime_json_escape(DriftString s) {
-	return drift_log_json_escape_impl(s);
-}
-
-DriftString drift_log_runtime_dv_to_json(const struct DriftDiagnosticValue *dv) {
-	if (dv == NULL) {
-		return drift_string_from_cstr("null");
-	}
-	return drift_log_dv_to_json_impl(*dv);
-}
-
-static const char *drift_log_level_text(int64_t level) {
-	if (level <= 0) {
-		return "debug";
-	}
-	if (level == 1) {
-		return "info";
-	}
-	return "error";
-}
-
-static void drift_log_emit_record_json(int64_t level, DriftString payload_json) {
-	struct timespec ts;
-	(void)clock_gettime(CLOCK_REALTIME, &ts);
-	time_t sec = ts.tv_sec;
-	struct tm tm_utc;
-	(void)gmtime_r(&sec, &tm_utc);
-	char tm_buf[40];
-	size_t tm_len = strftime(tm_buf, sizeof(tm_buf), "%Y-%m-%dT%H:%M:%S", &tm_utc);
-	int millis = (int)(ts.tv_nsec / 1000000L);
-	unsigned long tid = (unsigned long)pthread_self();
-	fprintf(stderr, "{\"tm\":\"%.*s.%03dZ\",\"level\":\"%s\",", (int)tm_len, tm_buf, millis, drift_log_level_text(level));
-	if (payload_json.data != NULL && payload_json.len > 0) {
-		fwrite(payload_json.data, 1, (size_t)payload_json.len, stderr);
-	}
-	fprintf(stderr, ",\"tid\":%lu}\n", tid);
-	fflush(stderr);
-}
-
-static void *drift_log_worker_main(void *arg) {
-	(void)arg;
-	for (;;) {
-		int64_t depth = atomic_load(&drift_log_queue_depth);
-		if (depth <= 0) {
-			if (atomic_load(&drift_log_worker_shutdown) != 0) {
-				break;
-			}
-			pthread_mutex_lock(&drift_log_cv_mu);
-			if (atomic_load(&drift_log_queue_depth) == 0 && atomic_load(&drift_log_worker_shutdown) == 0) {
-				pthread_cond_wait(&drift_log_cv, &drift_log_cv_mu);
-			}
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			continue;
-		}
-		if (atomic_fetch_sub(&drift_log_queue_depth, 1) <= 0) {
-			atomic_fetch_add(&drift_log_queue_depth, 1);
-			sched_yield();
-			continue;
-		}
-		uint64_t seq = atomic_fetch_add(&drift_log_read_seq, 1);
-		DriftLogRecordSlot *slot = &drift_log_slots[seq % (uint64_t)atomic_load(&drift_log_queue_capacity)];
-		while (atomic_load(&slot->state) != 2) {
-			sched_yield();
-		}
-		int64_t level = slot->level;
-		DriftString payload_json = slot->payload_json;
-		slot->level = 0;
-		atomic_store(&slot->state, 0);
-		atomic_fetch_add(&drift_log_inflight, 1);
-		drift_log_emit_record_json(level, payload_json);
-		drift_string_release(payload_json);
-		atomic_fetch_sub(&drift_log_inflight, 1);
-		pthread_mutex_lock(&drift_log_cv_mu);
-		pthread_cond_broadcast(&drift_log_cv);
-		pthread_mutex_unlock(&drift_log_cv_mu);
-	}
-	return NULL;
-}
-
-static void drift_log_shutdown_atexit(void) {
-	drift_log_ensure_defaults();
-	pthread_mutex_lock(&drift_log_mu);
-	if (atomic_load(&drift_log_inited) == 0) {
-		pthread_mutex_unlock(&drift_log_mu);
-		return;
-	}
-	atomic_store(&drift_log_worker_shutdown, 1);
-	pthread_mutex_unlock(&drift_log_mu);
-	pthread_mutex_lock(&drift_log_cv_mu);
-	pthread_cond_broadcast(&drift_log_cv);
-	pthread_mutex_unlock(&drift_log_cv_mu);
-	if (atomic_load(&drift_log_worker_started) != 0) {
-		pthread_join(drift_log_worker, NULL);
-		atomic_store(&drift_log_worker_started, 0);
-	}
-	int64_t cap = atomic_load(&drift_log_queue_capacity);
-	if (cap > 0 && drift_log_slots != NULL) {
-		for (int64_t i = 0; i < cap; i++) {
-			if (atomic_load(&drift_log_slots[i].state) == 2) {
-				drift_string_release(drift_log_slots[i].payload_json);
-			}
-		}
-		free(drift_log_slots);
-		drift_log_slots = NULL;
-	}
-	atomic_store(&drift_log_inited, 0);
-	atomic_store(&drift_log_queue_depth, 0);
-	atomic_store(&drift_log_inflight, 0);
-	atomic_store(&drift_log_write_seq, 0);
-	atomic_store(&drift_log_read_seq, 0);
-}
-
-static void drift_log_init_once(void) {
-	pthread_mutex_init(&drift_log_mu, NULL);
-	pthread_mutex_init(&drift_log_cv_mu, NULL);
-	pthread_cond_init(&drift_log_cv, NULL);
-	(void)atexit(drift_log_shutdown_atexit);
-}
-
-static void drift_log_ensure_defaults(void) {
-	pthread_once(&drift_log_once, drift_log_init_once);
 }
 
 static void drift_vt_tls_init_once(void) {
@@ -1266,6 +1011,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->park_token = 0;
 	vt->reg_prev = NULL;
 	vt->reg_next = NULL;
+	vt->thread_registry_head = NULL;
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -1542,198 +1288,6 @@ uint64_t drift_time_now_utc_ms(void) {
 	return (uint64_t)out;
 }
 
-uint64_t drift_log_runtime_init(int64_t min_level, int64_t queue_capacity, int64_t backpressure_policy, int64_t write_timeout_ms, int64_t enqueue_timeout_ms) {
-	drift_log_ensure_defaults();
-	if (queue_capacity <= 0) {
-		queue_capacity = 1;
-	}
-	pthread_mutex_lock(&drift_log_mu);
-	if (atomic_load(&drift_log_inited) == 0) {
-		drift_log_slots = (DriftLogRecordSlot *)calloc((size_t)queue_capacity, sizeof(DriftLogRecordSlot));
-		if (drift_log_slots == NULL) {
-			pthread_mutex_unlock(&drift_log_mu);
-			return 0;
-		}
-		for (int64_t i = 0; i < queue_capacity; i++) {
-			atomic_store(&drift_log_slots[i].state, 0);
-		}
-		atomic_store(&drift_log_min_level, min_level);
-		atomic_store(&drift_log_queue_capacity, queue_capacity);
-		atomic_store(&drift_log_backpressure, backpressure_policy);
-		atomic_store(&drift_log_write_timeout_ms, write_timeout_ms);
-		atomic_store(&drift_log_enqueue_timeout_ms, enqueue_timeout_ms);
-		atomic_store(&drift_log_queue_depth, 0);
-		atomic_store(&drift_log_dropped_oldest, 0);
-		atomic_store(&drift_log_dropped_newest, 0);
-		atomic_store(&drift_log_write_seq, 0);
-		atomic_store(&drift_log_read_seq, 0);
-		atomic_store(&drift_log_inited, 1);
-		if (atomic_load(&drift_log_worker_started) == 0) {
-			if (pthread_create(&drift_log_worker, NULL, drift_log_worker_main, NULL) == 0) {
-				atomic_store(&drift_log_worker_started, 1);
-			}
-		}
-		pthread_mutex_unlock(&drift_log_mu);
-		return 1;
-	}
-	if (
-		atomic_load(&drift_log_min_level) == min_level
-		&& atomic_load(&drift_log_queue_capacity) == queue_capacity
-		&& atomic_load(&drift_log_backpressure) == backpressure_policy
-		&& atomic_load(&drift_log_write_timeout_ms) == write_timeout_ms
-		&& atomic_load(&drift_log_enqueue_timeout_ms) == enqueue_timeout_ms
-	) {
-		pthread_mutex_unlock(&drift_log_mu);
-		return 1;
-	}
-	pthread_mutex_unlock(&drift_log_mu);
-	return 0;
-}
-
-uint64_t drift_log_runtime_min_level(void) {
-	drift_log_ensure_defaults();
-	int64_t out = atomic_load(&drift_log_min_level);
-	return (uint64_t)out;
-}
-
-uint64_t drift_log_runtime_enqueue(int64_t level, int64_t logger_min_level, int64_t enqueue_timeout_ms, DriftString payload_json) {
-	drift_log_ensure_defaults();
-	if (atomic_load(&drift_log_inited) == 0) {
-		if (drift_log_runtime_init(1, 1024, 0, 1000, 1000) == 0) {
-			drift_string_release(payload_json);
-			return 0;
-		}
-	}
-	if (level < logger_min_level) {
-		drift_string_release(payload_json);
-		return 0;
-	}
-	int64_t cap = atomic_load(&drift_log_queue_capacity);
-	if (cap <= 0) {
-		cap = 1;
-	}
-	while (1) {
-		int64_t depth = atomic_load(&drift_log_queue_depth);
-		if (depth < cap) {
-			if (atomic_compare_exchange_weak(&drift_log_queue_depth, &depth, depth + 1)) {
-				uint64_t seq = atomic_fetch_add(&drift_log_write_seq, 1);
-				DriftLogRecordSlot *slot = &drift_log_slots[seq % (uint64_t)cap];
-				while (atomic_load(&slot->state) != 0) {
-					sched_yield();
-				}
-				slot->level = level;
-				slot->payload_json = payload_json;
-				atomic_store(&slot->state, 2);
-				pthread_mutex_lock(&drift_log_cv_mu);
-				pthread_cond_signal(&drift_log_cv);
-				pthread_mutex_unlock(&drift_log_cv_mu);
-				return 1;
-			}
-			continue;
-		}
-		int64_t policy = atomic_load(&drift_log_backpressure);
-		if (policy == 1) {
-			int64_t cur = atomic_load(&drift_log_queue_depth);
-			if (cur <= 0) {
-				continue;
-			}
-			if (!atomic_compare_exchange_weak(&drift_log_queue_depth, &cur, cur - 1)) {
-				continue;
-			}
-			uint64_t seq = atomic_fetch_add(&drift_log_read_seq, 1);
-			DriftLogRecordSlot *slot = &drift_log_slots[seq % (uint64_t)cap];
-			while (atomic_load(&slot->state) != 2) {
-				sched_yield();
-			}
-			DriftString dropped = slot->payload_json;
-			slot->level = 0;
-			atomic_store(&slot->state, 0);
-			drift_string_release(dropped);
-			atomic_fetch_add(&drift_log_dropped_oldest, 1);
-			pthread_mutex_lock(&drift_log_cv_mu);
-			pthread_cond_broadcast(&drift_log_cv);
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			continue;
-		}
-		if (policy == 2) {
-			atomic_fetch_add(&drift_log_dropped_newest, 1);
-			drift_string_release(payload_json);
-			return 0;
-		}
-		int64_t timeout_ms = enqueue_timeout_ms;
-		if (timeout_ms <= 0) {
-			timeout_ms = atomic_load(&drift_log_enqueue_timeout_ms);
-		}
-		if (timeout_ms <= 0) {
-			return 0;
-		}
-		int64_t deadline_ms = drift_now_ms() + timeout_ms;
-		pthread_mutex_lock(&drift_log_cv_mu);
-		while (atomic_load(&drift_log_queue_depth) >= cap) {
-			int64_t now_ms = drift_now_ms();
-			if (now_ms >= deadline_ms) {
-				pthread_mutex_unlock(&drift_log_cv_mu);
-				drift_string_release(payload_json);
-				return 0;
-			}
-			int64_t remain_ms = deadline_ms - now_ms;
-			struct timespec ts;
-			if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-				pthread_mutex_unlock(&drift_log_cv_mu);
-				drift_string_release(payload_json);
-				return 0;
-			}
-			ts.tv_sec += (time_t)(remain_ms / 1000);
-			ts.tv_nsec += (long)((remain_ms % 1000) * 1000000L);
-			if (ts.tv_nsec >= 1000000000L) {
-				ts.tv_sec += 1;
-				ts.tv_nsec -= 1000000000L;
-			}
-			(void)pthread_cond_timedwait(&drift_log_cv, &drift_log_cv_mu, &ts);
-		}
-		pthread_mutex_unlock(&drift_log_cv_mu);
-	}
-}
-
-uint64_t drift_log_runtime_flush(int64_t timeout_ms) {
-	drift_log_ensure_defaults();
-	if (timeout_ms < 0) {
-		return 0;
-	}
-	int64_t deadline_ms = drift_now_ms() + timeout_ms;
-	pthread_mutex_lock(&drift_log_cv_mu);
-	while (1) {
-		int64_t depth = atomic_load(&drift_log_queue_depth);
-		int64_t inflight = atomic_load(&drift_log_inflight);
-		if (depth == 0 && inflight == 0) {
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			return 1;
-		}
-		if (timeout_ms == 0) {
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			return 0;
-		}
-		int64_t now_ms = drift_now_ms();
-		if (now_ms >= deadline_ms) {
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			return 0;
-		}
-		int64_t remain_ms = deadline_ms - now_ms;
-		struct timespec ts;
-		if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-			pthread_mutex_unlock(&drift_log_cv_mu);
-			return 0;
-		}
-		ts.tv_sec += (time_t)(remain_ms / 1000);
-		ts.tv_nsec += (long)((remain_ms % 1000) * 1000000L);
-		if (ts.tv_nsec >= 1000000000L) {
-			ts.tv_sec += 1;
-			ts.tv_nsec -= 1000000000L;
-		}
-		(void)pthread_cond_timedwait(&drift_log_cv, &drift_log_cv_mu, &ts);
-	}
-}
-
 void drift_exec_submit_test_override(int64_t code) {
 	drift_exec_submit_override = code;
 }
@@ -1930,6 +1484,11 @@ void *drift_runtime_global_registry_ptr(void) {
 	return (void *)&drift_runtime_global_registry;
 }
 
+void *drift_runtime_thread_registry_ptr(void) {
+	pthread_once(&drift_runtime_registry_cleanup_once, drift_runtime_registry_register_cleanup_once);
+	return (void *)&drift_runtime_thread_registry;
+}
+
 uint64_t drift_runtime_registry_set(uint64_t type_tag, void *ptr, DriftIface dropper) {
 	if (ptr == NULL) {
 		drift_drop_callback(&dropper);
@@ -1987,5 +1546,110 @@ void *drift_runtime_registry_get(uint64_t type_tag) {
 		cur = cur->next;
 	}
 	pthread_mutex_unlock(&drift_runtime_registry_mu);
+	return NULL;
+}
+
+uint64_t drift_runtime_thread_registry_set(uint64_t type_tag, void *ptr, DriftIface dropper) {
+	if (ptr == NULL) {
+		drift_drop_callback(&dropper);
+		return 0;
+	}
+	pthread_once(&drift_runtime_registry_cleanup_once, drift_runtime_registry_register_cleanup_once);
+	DriftVt *vt = drift_vt_tls_get();
+	if (vt) {
+		pthread_mutex_lock(&vt->mu);
+		DriftRuntimeRegistryEntry *cur = vt->thread_registry_head;
+		while (cur) {
+			if (cur->type_tag == type_tag) {
+				pthread_mutex_unlock(&vt->mu);
+				drift_drop_callback(&dropper);
+				return 0;
+			}
+			cur = cur->next;
+		}
+		DriftRuntimeRegistryEntry *entry = (DriftRuntimeRegistryEntry *)malloc(sizeof(DriftRuntimeRegistryEntry));
+		if (!entry) {
+			pthread_mutex_unlock(&vt->mu);
+			drift_drop_callback(&dropper);
+			return 0;
+		}
+		entry->type_tag = type_tag;
+		entry->ptr = ptr;
+		entry->dropper = dropper;
+		entry->next = vt->thread_registry_head;
+		vt->thread_registry_head = entry;
+		pthread_mutex_unlock(&vt->mu);
+		return 1;
+	}
+	DriftRuntimeRegistryEntry *cur = drift_runtime_thread_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			drift_drop_callback(&dropper);
+			return 0;
+		}
+		cur = cur->next;
+	}
+	DriftRuntimeRegistryEntry *entry = (DriftRuntimeRegistryEntry *)malloc(sizeof(DriftRuntimeRegistryEntry));
+	if (!entry) {
+		drift_drop_callback(&dropper);
+		return 0;
+	}
+	entry->type_tag = type_tag;
+	entry->ptr = ptr;
+	entry->dropper = dropper;
+	entry->next = drift_runtime_thread_registry_head;
+	drift_runtime_thread_registry_head = entry;
+	return 1;
+}
+
+uint64_t drift_runtime_thread_registry_contains(uint64_t type_tag) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (vt) {
+		pthread_mutex_lock(&vt->mu);
+		DriftRuntimeRegistryEntry *cur = vt->thread_registry_head;
+		while (cur) {
+			if (cur->type_tag == type_tag) {
+				pthread_mutex_unlock(&vt->mu);
+				return 1;
+			}
+			cur = cur->next;
+		}
+		pthread_mutex_unlock(&vt->mu);
+		return 0;
+	}
+	DriftRuntimeRegistryEntry *cur = drift_runtime_thread_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			return 1;
+		}
+		cur = cur->next;
+	}
+	return 0;
+}
+
+void *drift_runtime_thread_registry_get(uint64_t type_tag) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (vt) {
+		pthread_mutex_lock(&vt->mu);
+		DriftRuntimeRegistryEntry *cur = vt->thread_registry_head;
+		while (cur) {
+			if (cur->type_tag == type_tag) {
+				void *ptr = cur->ptr;
+				pthread_mutex_unlock(&vt->mu);
+				return ptr;
+			}
+			cur = cur->next;
+		}
+		pthread_mutex_unlock(&vt->mu);
+		return NULL;
+	}
+	DriftRuntimeRegistryEntry *cur = drift_runtime_thread_registry_head;
+	while (cur) {
+		if (cur->type_tag == type_tag) {
+			void *ptr = cur->ptr;
+			return ptr;
+		}
+		cur = cur->next;
+	}
 	return NULL;
 }

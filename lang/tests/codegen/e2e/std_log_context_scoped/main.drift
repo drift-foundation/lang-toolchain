@@ -1,0 +1,52 @@
+module m
+
+import std.log as log;
+import std.runtime as rt;
+
+fn _with_ctx(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow -> Int {
+	var ctx = log.log_context();
+	ctx.put("user", "u-1");
+	ctx.put("req", "r-1");
+	val g = st.push(move ctx);
+	if st.depth() != 1 {
+		return 2;
+	}
+	match st.peek() {
+		Some(top) => {
+			if not main.info_ctx("auth-start", top) {
+				return 3;
+			}
+			if not main.info_ctx_attrs("auth-failed", top, {"user": DiagnosticValue::String("u-override"), "code": DiagnosticValue::Int(401)}) {
+				return 4;
+			}
+		},
+		None => {
+			return 5;
+		}
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	var b = log.config_builder();
+	val main = log.create_logger("auth", b.build());
+	var st = rt.scoped_stack<type log.LogContext>();
+	if st.depth() != 0 {
+		return 1;
+	}
+	val with_rc = _with_ctx(&main, &mut st);
+	if with_rc != 0 {
+		return with_rc;
+	}
+	if st.depth() != 0 {
+		return 6;
+	}
+	if not main.info("auth-end", {"ok": true}) {
+		return 7;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

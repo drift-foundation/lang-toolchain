@@ -3,7 +3,9 @@ module m
 import std.log as log;
 
 fn run() -> Int {
-	val root = log.logger_named("app").with_min_level(log.Level::Error());
+	var b = log.config_builder();
+	b.min_level(log.Level::Error());
+	val root = log.create_logger("app", b.build());
 	val child = root.derive("lib").build();
 	if child.info("child-info", {"x": 1}) {
 		return 1;

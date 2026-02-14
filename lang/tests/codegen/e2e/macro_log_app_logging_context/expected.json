@@ -1,0 +1,44 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "startup",
+      "logger": "security",
+      "attrs": {},
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-start",
+      "logger": "security",
+      "attrs": {
+        "user": "alice",
+        "req": "r-1"
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-failed",
+      "logger": "security",
+      "attrs": {
+        "user": "alice",
+        "req": "r-2",
+        "code": 401
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "after-scope",
+      "logger": "security",
+      "attrs": {},
+      "tid": "__ANY__"
+    }
+  ]
+}

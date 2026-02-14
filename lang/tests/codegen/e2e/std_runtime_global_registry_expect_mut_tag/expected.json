@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime expect_mut throws RegistryError with provided tag",
+  "exit_code": 0
+}

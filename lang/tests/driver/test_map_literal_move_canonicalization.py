@@ -52,9 +52,9 @@ fn main() nothrow -> Int {
 	cfgb.enqueue_timeout(conc.Duration(millis = 1));
 	cfgb.write_timeout(conc.Duration(millis = 1));
 	val cfg = cfgb.build();
-	val _ = log.init(cfg);
+	val lg = log.create_logger("main", cfg);
 	val doc = Document(name = "contract.pdf", size = 42);
-	val _ = log.debug("document-indexed", {"doc": move doc});
+	val _ = lg.debug("document-indexed", {"doc": move doc});
 	return 0;
 }
 """.lstrip(),

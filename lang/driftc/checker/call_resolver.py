@@ -1180,7 +1180,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	# Built-in DiagnosticValue helpers are reserved method names and take precedence.
 	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get"):
 		recv_ty = type_expr(expr.receiver, used_as_value=False)
-		recv_def = ctx.type_table.get(recv_ty)
+		recv_eff_ty = recv_ty
+		recv_def = ctx.type_table.get(recv_eff_ty)
+		while recv_def.kind is TypeKind.REF and recv_def.param_types:
+			recv_eff_ty = recv_def.param_types[0]
+			recv_def = ctx.type_table.get(recv_eff_ty)
 		if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
 			# Allow normal method resolution on non-DV receivers (e.g. JsonNode.get/as_object).
 			pass

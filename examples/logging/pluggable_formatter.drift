@@ -13,9 +13,9 @@ pub fn main() nothrow -> Int {
 	cfgb.write_timeout(conc.Duration(millis = 25));
 	cfgb.formatter(log.FormatterKind::Custom("kv"));
 	val cfg = cfgb.build();
-	val _ = log.init(cfg);
-	val _ = log.info("startup", {"component": "worker"});
-	val _ = log.error("job-failed", {"job_id": "42", "retryable": "false"});
-	val _ = log.flush(conc.Duration(millis = 1000));
+	val logger = log.create_logger("main", cfg);
+	val _ = logger.info("startup", {"component": "worker"});
+	val _ = logger.error("job-failed", {"job_id": "42", "retryable": "false"});
+	val _ = logger.flush(conc.Duration(millis = 1000));
 	return 0;
 }

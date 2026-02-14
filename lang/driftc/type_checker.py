@@ -265,7 +265,9 @@ class TypeChecker:
 
 	def _optional_variant_type(self, inner_ty: TypeId) -> TypeId:
 		opt_base = self.type_table.ensure_optional_base()
-		return self.type_table.ensure_instantiated(opt_base, [inner_ty])
+		if self.type_table.has_typevar(inner_ty):
+			return self.type_table.ensure_variant_template(opt_base, [inner_ty])
+		return self.type_table.ensure_variant_instantiated(opt_base, [inner_ty])
 
 	def thunk_specs(self) -> list[ThunkSpec]:
 		return list(self._thunk_specs.values())
@@ -3508,6 +3510,11 @@ class TypeChecker:
 			td = self.type_table.get(ty)
 			if td.kind is TypeKind.REF and td.param_types:
 				return td.param_types[0]
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None and len(inst.type_args) == 1:
+				base_td = self.type_table.get(inst.base_id)
+				if base_td.module_id in ("std.core", "core") and base_td.name in ("Ref", "RefMut"):
+					return inst.type_args[0]
 			return ty
 
 		def _dealias_zero_param(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
@@ -4666,6 +4673,11 @@ class TypeChecker:
 					)
 					return record_expr(expr, self._unknown)
 				target_def = self.type_table.get(target_ty)
+				def _is_uint_scalar_type(tid: TypeId | None) -> bool:
+					if tid is None:
+						return False
+					td = self.type_table.get(tid)
+					return td.kind is TypeKind.SCALAR and td.name == "Uint"
 				if target_def.kind is TypeKind.FUNCTION:
 					expected_fn = _expected_function_shape(target_ty)
 					if expected_fn is None:
@@ -4705,11 +4717,30 @@ class TypeChecker:
 						)
 						return record_expr(expr, self._unknown)
 					return record_expr(expr, target_ty)
+				if target_def.kind is TypeKind.RAW_PTR:
+					inner_ty = type_expr(expr.value, expected_type=None)
+					if inner_ty is None:
+						return record_expr(expr, self._unknown)
+					inner_def = self.type_table.get(inner_ty)
+					if inner_def.kind is TypeKind.RAW_PTR or _is_uint_scalar_type(inner_ty):
+						return record_expr(expr, target_ty)
+					inner_pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
+					target_pretty = self._pretty_type_name(target_ty, current_module=current_module_name)
+					diagnostics.append(
+						_tc_diag(
+							message=f"cannot cast expression of type {inner_pretty} to {target_pretty}",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				if target_def.kind is TypeKind.SCALAR and target_def.name in ("Int", "Uint", "Uint64", "Byte", "Bool"):
 					inner_ty = type_expr(expr.value, expected_type=None)
 					if inner_ty is None:
 						return record_expr(expr, self._unknown)
 					inner_def = self.type_table.get(inner_ty)
+					if target_def.name == "Uint" and inner_def.kind is TypeKind.RAW_PTR:
+						return record_expr(expr, target_ty)
 					if inner_def.kind is TypeKind.SCALAR and inner_def.name in ("Int", "Uint", "Uint64", "Byte", "Bool"):
 						return record_expr(expr, target_ty)
 					inner_pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
@@ -6866,7 +6897,9 @@ class TypeChecker:
 				sub_ty = type_expr(expr.subject, used_as_value=False)
 				inner_ty = sub_ty
 				inner_def = self.type_table.get(inner_ty)
+				subject_is_ref = False
 				if inner_def.kind is TypeKind.REF and inner_def.param_types:
+					subject_is_ref = True
 					inner_ty = inner_def.param_types[0]
 					inner_def = self.type_table.get(inner_ty)
 				if inner_def.kind is TypeKind.STRUCT:
@@ -6874,6 +6907,8 @@ class TypeChecker:
 					if info is not None:
 						idx, field_ty = info
 						_ensure_field_visible(inner_ty, expr.name, getattr(expr, "loc", Span()))
+						if subject_is_ref:
+							_require_copy_value(field_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
 						return record_expr(expr, field_ty)
 				if expr.name in ("len", "cap", "capacity", "gen"):
 					# Array/String length/capacity/gen sugar returns Int.
@@ -6923,7 +6958,8 @@ class TypeChecker:
 						)
 						return record_expr(expr, self._unknown)
 					_, field_ty = info
-					_require_copy_value(field_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
+					if subject_is_ref:
+						_require_copy_value(field_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
 					return record_expr(expr, field_ty)
 				return record_expr(expr, self._unknown)
 

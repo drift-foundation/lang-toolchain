@@ -1,0 +1,16 @@
+module m
+
+variant Level {
+	Debug,
+	Info,
+	Error
+}
+
+fn main() nothrow -> Int {
+	val a = Level::Info();
+	val b = Level::Error();
+	if a != b {
+		return 0;
+	}
+	return 1;
+}

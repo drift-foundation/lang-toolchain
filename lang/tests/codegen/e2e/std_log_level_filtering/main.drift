@@ -3,17 +3,20 @@ module m
 import std.log as log;
 
 fn run() -> Int {
-	if log.debug("dbg-main", {"attempts": 1}) {
+	var b = log.config_builder();
+	b.min_level(log.Level::Info());
+	val main = log.create_logger("main", b.build());
+	if main.debug("dbg-main", {"attempts": 1}) {
 		return 1;
 	}
-	if not log.info("info-main", {"attempts": 2}) {
+	if not main.info("info-main", {"attempts": 2}) {
 		return 2;
 	}
-	if not log.error("err-main", {"attempts": 3}) {
+	if not main.error("err-main", {"attempts": 3}) {
 		return 3;
 	}
 
-	val err_only = log.logger_main().with_min_level(log.Level::Error());
+	val err_only = main.with_min_level(log.Level::Error());
 	if err_only.debug("dbg-err-only", {"attempts": 4}) {
 		return 4;
 	}

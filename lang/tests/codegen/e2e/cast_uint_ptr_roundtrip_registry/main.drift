@@ -1,0 +1,25 @@
+module m
+
+import std.core as core;
+import std.mem as mem;
+import std.runtime as rt;
+
+fn main() nothrow -> Int {
+	val reg = rt.global_registry();
+	if not reg.set<type Int>(7) {
+		return 1;
+	}
+	val p = reg.get_ptr(core.type_id<type Int>());
+	if mem.ptr_is_null<type Byte>(p) {
+		return 2;
+	}
+	val u = cast<Uint>(p);
+	if u == cast<Uint>(0) {
+		return 3;
+	}
+	val p2 = cast<mem.Ptr<Byte> >(u);
+	if mem.ptr_is_null<type Byte>(p2) {
+		return 4;
+	}
+	return 0;
+}

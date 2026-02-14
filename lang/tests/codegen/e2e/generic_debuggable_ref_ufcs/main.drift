@@ -1,0 +1,23 @@
+module m
+
+import std.log as log;
+
+fn to_dv<V>(v: &V) nothrow -> DiagnosticValue require V is log.Debuggable {
+	return log.Debuggable::to_debug(v);
+}
+
+fn main() nothrow -> Int {
+	val dv = DiagnosticValue::Int(7);
+	val out = to_dv<type DiagnosticValue>(&dv);
+	match out.as_int() {
+		Some(v) => {
+			if v != 7 {
+				return 1;
+			}
+		},
+		None => {
+			return 2;
+		}
+	}
+	return 0;
+}

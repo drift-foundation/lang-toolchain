@@ -10,21 +10,18 @@ fn run() -> Int {
 	cfg_builder.backpressure_policy(log.BackpressurePolicy::BlockWithTimeout());
 	cfg_builder.sink(log.stderr_sink());
 	val cfg = cfg_builder.build();
-	if not log.init(cfg) {
-		return 1;
-	}
+	val main_logger = log.create_logger("main", cfg);
 
-	if not log.info("auth-failed", {"attempts": 3, "status": 401}) {
+	if not main_logger.info("auth-failed", {"attempts": 3, "status": 401}) {
 		return 2;
 	}
 
-	val main_logger = log.logger_main();
 	val lib_logger = main_logger.with_min_level(log.Level::Debug()).derive("auth").build();
 	if not lib_logger.debug("token-parse", {"attempts": 3, "status": 401}) {
 		return 3;
 	}
 
-	if not log.flush(conc.Duration(millis = 10)) {
+	if not main_logger.flush(conc.Duration(millis = 10)) {
 		return 4;
 	}
 	return 0;

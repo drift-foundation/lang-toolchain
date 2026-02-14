@@ -102,6 +102,8 @@ class GlobalTraitImplIndex:
 			return target_type_id
 		if td.kind is TypeKind.VARIANT:
 			return target_type_id
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			return target_type_id
 		if td.kind is TypeKind.SCALAR:
 			return target_type_id
 		return None

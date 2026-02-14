@@ -5,14 +5,11 @@ import std.log as log;
 fn run() -> Int {
 	var b = log.config_builder();
 	b.min_level(log.Level::Error());
-	val cfg = b.build();
-	if not log.init(cfg) {
-		return 1;
-	}
-	if log.info("info", {"x": 1}) {
+	val lg = log.create_logger("main", b.build());
+	if lg.info("info", {"x": 1}) {
 		return 2;
 	}
-	if not log.error("err", {"x": 2}) {
+	if not lg.error("err", {"x": 2}) {
 		return 3;
 	}
 	return 0;

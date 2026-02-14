@@ -1,0 +1,59 @@
+module app.logging
+
+import std.log as log;
+import std.runtime as rt;
+
+export {
+	AppLoggerState,
+	install,
+	push_auth,
+	current_context
+};
+
+pub struct AppLoggerState {
+	pub security: log.Logger
+}
+
+struct AppContextState {
+	ctx: rt.ScopedStack<log.LogContext>
+}
+
+pub fn install() nothrow -> Bool {
+	val greg = rt.global_registry();
+	val treg = rt.thread_registry();
+	var b = log.config_builder();
+	val logger_state = AppLoggerState(security = log.create_logger("security", b.build()));
+	if not greg.set<type AppLoggerState>(move logger_state) {
+		if not rt.contains<type AppLoggerState>(greg) {
+			return false;
+		}
+	}
+	val ctx_state = AppContextState(ctx = rt.scoped_stack<type log.LogContext>());
+	if not treg.set<type AppContextState>(move ctx_state) {
+		if not rt.contains<type AppContextState>(treg) {
+			return false;
+		}
+	}
+	return true;
+}
+
+pub fn push_auth(user: String, req: String) -> rt.ScopeGuard<log.LogContext> {
+	val reg = rt.thread_registry();
+	val st = rt.expect_mut<type AppContextState>(reg, "missing-logger-state-mut");
+	var ctx = log.log_context();
+	ctx.put("user", move user);
+	ctx.put("req", move req);
+	return st.ctx.push(move ctx);
+}
+
+pub fn current_context() nothrow -> Optional<&log.LogContext> {
+	val reg = rt.thread_registry();
+	match rt.get<type AppContextState>(reg) {
+		Some(st) => {
+			return st.ctx.peek();
+		},
+		None => {
+			return Optional<&log.LogContext>::None();
+		}
+	}
+}

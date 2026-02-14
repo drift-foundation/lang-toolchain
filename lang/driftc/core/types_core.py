@@ -1490,7 +1490,7 @@ class TypeTable:
 		# Expand aliases here so instantiations do not degrade to Unknown.
 		origin_mod = expr.module_id or module_id
 		alias_def = self.lookup_type_alias(module_id=origin_mod, name=name)
-		if alias_def is None:
+		if alias_def is None and expr.module_id is None:
 			unique_alias = self.find_unique_type_alias_by_name(name=name)
 			if unique_alias is not None:
 				origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias
@@ -1525,7 +1525,7 @@ class TypeTable:
 			or self.get_nominal(kind=TypeKind.INTERFACE, module_id=origin_mod, name=name)
 			or self.ensure_named(name, module_id=origin_mod)
 		)
-		if self.get(base_id).kind is TypeKind.FORWARD_NOMINAL:
+		if self.get(base_id).kind is TypeKind.FORWARD_NOMINAL and expr.module_id is None:
 			unique = (
 				self.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
 				or self.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)

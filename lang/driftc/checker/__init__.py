@@ -1483,6 +1483,16 @@ class Checker:
 					if expr.op in comparison_ops:
 						return checker._bool_type
 					return checker._int_type
+				if expr.op in (H.BinaryOp.EQ, H.BinaryOp.NE) and left_ty is not None and right_ty is not None and left_ty == right_ty:
+					left_def = self.table.get(left_ty)
+					if left_def.kind in (TypeKind.VARIANT, TypeKind.INTERFACE, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT):
+						self._append_diag(
+							_chk_diag(
+								message="==/!= are only supported for Bool, Int, Float, String in MVP",
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
 				return None
 
 			if isinstance(expr, H.HUnary):

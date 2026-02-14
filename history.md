@@ -1,3 +1,111 @@
+## 2026-02-14 – Logger sink strictness + runtime-state ownership leak fix
+- Tightened logger sink path to be capability-only:
+  - removed `std.log` direct console fallback writes from emit path.
+  - when runtime-state handle or stderr capability is unavailable, emit returns `false` (still nothrow/best-effort).
+- Added e2e coverage for preamble + logger bootstrap:
+  - `std_log_preamble_registry_stderr_default`
+  - validates global-registry stderr capability presence at process start and successful `create_logger(...).info(...)` without manual stdio install.
+- Fixed logger runtime-state lifetime leak:
+  - root cause: heap-allocated `LoggerRuntimeState` from `_alloc_runtime_state` was not released.
+  - `Logger` now implements `Destructible` and frees owned runtime-state allocation.
+  - `with_min_level(...)` and `derive(...).build()` now allocate independent runtime-state instances (no shared-handle alias ownership).
+- Validation:
+  - logger subset passes in normal mode.
+  - same subset passes under `DRIFT_ALLOC_TRACK=1`.
+  - logger+concurrency subset passes under `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`.
+  - driver logger/macro smoke subset passes (`6 passed`).
+
+## 2026-02-14 – Runtime preamble stdio capability install + e2e coverage
+- Added `std.io.install_process_preamble() -> Bool`:
+  - no-arg helper that resolves `std.runtime.global_registry()` and calls `install_process_stdio(reg)`.
+- Wired compiler-generated OS entry wrappers to run preamble before user entry:
+  - `emit_entry_wrapper` (`main()`) now calls `std.io::install_process_preamble__impl` first.
+  - `emit_argv_entry_wrapper` (`main(argc, argv)`) does the same before argv materialization/call.
+- Added e2e regressions:
+  - `std_io_preamble_installs_stdio`
+  - `std_io_preamble_installs_stdio_argv`
+  - both assert `ProcessStdinCapability`/`ProcessStdoutCapability`/`ProcessStderrCapability` are present in global registry at program start.
+- Validation:
+  - new e2e tests pass.
+  - logger smoke subset remains passing.
+  - subset passes under `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`.
+
+## 2026-02-14 – Thread registry (VT-local) support for scoped logging context
+- Added execution-local registry API in stdlib runtime:
+  - `std.runtime::ThreadRegistry`
+  - `std.runtime.thread_registry()`
+  - overloaded helpers on thread registry: `contains/get/get_mut/expect/expect_mut`.
+- Added intrinsic surface in `lang.thread`:
+  - `runtime_thread_registry_ptr`
+  - `runtime_thread_registry_set`
+  - `runtime_thread_registry_contains`
+  - `runtime_thread_registry_get`
+- Implemented runtime + LLVM codegen wiring for thread-registry intrinsics.
+- Runtime behavior:
+  - when inside a virtual thread, registry storage is VT-local (isolated by VT instance),
+  - outside VT context, uses a thread-local fallback registry.
+- Lifetime/cleanup:
+  - VT-local thread-registry entries are destroyed on VT teardown and process-exit VT cleanup,
+  - fallback thread-registry entries are included in registry cleanup path.
+- Added e2e regression:
+  - `std_runtime_thread_registry_isolation`
+  - validates same type-tag isolation across concurrent spawned tasks with preserved main-thread value.
+- Updated app logging wrapper e2e to consume thread registry:
+  - `macro_log_app_logging_context/app/logging.drift` now uses `rt.thread_registry()` for logger/context state.
+- Validation:
+  - `std_runtime_thread_registry_isolation`, `macro_log_app_logging_context`, `std_log_context_scoped` pass.
+  - same subset passes under `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`.
+
+## 2026-02-14 – Logger nested context scope regression coverage
+- Added e2e `std_log_context_nested_scopes` to pin nested context semantics:
+  - outer context emission before inner scope,
+  - inner context emission with event-level key override,
+  - outer context restoration after inner guard drop,
+  - no context bleed after all guards drop.
+- Validation:
+  - `std_log_context_nested_scopes`, `std_log_context_scoped`, `macro_log_app_logging_context` pass.
+  - `std_log_context_nested_scopes` passes with `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`.
+
+## 2026-02-14 – Logger scoped-context API landed (explicit, non-magic)
+- Added explicit context surface in `std.log`:
+  - `LogContext` type + `log.log_context()` constructor.
+  - `LogContext.put(key, value)` (`value` via `Debuggable`), `LogContext.get(key)`, `LogContext.clear()`.
+- Added explicit context-aware logger calls (no implicit TLS/global auto-consume):
+  - `logger.debug_ctx/info_ctx/error_ctx(ev, &ctx)`
+  - `logger.debug_ctx_attrs/info_ctx_attrs/error_ctx_attrs(ev, &ctx, attrs)`
+  - free-function equivalents: `log.debug_ctx/...` and `log.debug_ctx_attrs/...`.
+- Implemented merge semantics:
+  - effective attrs = context attrs + event attrs,
+  - event attrs override context on key collision.
+- Kept existing attr-only API unchanged (`log.<level>(ev, attrs)`).
+- Added e2e regression:
+  - `lang/tests/codegen/e2e/std_log_context_scoped`
+  - validates scoped push/pop usage (`std.runtime::ScopedStack<LogContext>`), context-only emit, override behavior, and no post-scope context bleed.
+- Validation:
+  - targeted logger e2e subset passes.
+  - targeted logger subset passes under `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`.
+
+## 2026-02-14 – Macro logger call path expanded + app logging wrapper e2e
+- Expanded built-in macro call rewriting for `info!/debug!/error!`:
+  - now accepts `2..4` positional args before caller injection:
+    - `(logger, ev)`,
+    - `(logger, ev, arg3)` (ctx or attrs by overload),
+    - `(logger, ev, ctx, attrs)`.
+- Added matching `std.log` macro overloads:
+  - no-context form,
+  - explicit context form,
+  - explicit context + attrs form,
+  - existing attrs-only form kept.
+- Added end-to-end app-wrapper scenario:
+  - new e2e `macro_log_app_logging_context` with `app.logging` module pattern over registry:
+    - logger category fetch helper,
+    - scoped request context push/pop via `ScopedStack<LogContext>`,
+    - macro usage with 2/3/4 argument forms,
+    - verified no context bleed after scope.
+- Validation:
+  - `macro_log_registry_stub_smoke`, `std_log_context_scoped`, `macro_log_app_logging_context` pass.
+  - `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1` pass for new context/macro coverage.
+
 ## 2026-02-13 – Registry singleton ABI fix (leak closure) + stale skipped test cleanup
 - Fixed a LANGUAGE_BUG in runtime registry codegen ABI for dropper callbacks:
   - `drift_runtime_registry_set` was emitted as taking `%DriftIface` by-value in LLVM IR.
@@ -743,3 +851,56 @@
 - Validation:
   - targeted driver + e2e subsets passed,
   - ASAN + alloc-track targeted e2e subset passed.
+
+## 2026-02-14 – Trait UFCS fix for DiagnosticValue receiver
+- Fixed LANGUAGE_BUG affecting generic/UFCS trait calls on `DiagnosticValue` through `Ref<...>` receivers.
+- Pinned regression: `lang/tests/codegen/e2e/generic_debuggable_ref_ufcs` (previously failed with:
+  - `no implementation for trait '__local__::std.log.Debuggable' on receiver Ref<DiagnosticValue>`).
+- Root cause:
+  - `GlobalTraitImplIndex._target_base_id` did not index impl targets with `TypeKind.DIAGNOSTICVALUE`.
+- Fix:
+  - `lang/driftc/trait_index.py` now maps `TypeKind.DIAGNOSTICVALUE` target types to their base id for trait impl candidate lookup.
+- Validation:
+  - e2e passed: `generic_debuggable_ref_ufcs`, `macro_log_app_logging_context`, `std_log_context_nested_scopes`.
+  - macro diagnostics smoke remained passing:
+    - `lang/tests/driver/test_macro_basic_diagnostics.py::test_macro_wrong_arity_reports_error`
+    - `lang/tests/stage1/test_ast_to_hir.py::test_macro_log_wrong_arity_rejected`.
+
+## 2026-02-14 – std.log ownership pivot to explicit create_logger
+- Implemented point-1 API direction: no hidden std.log global init/main logger path.
+- `std.log` surface changed to explicit logger creation and instance ownership:
+  - added `create_logger(name: String, config: LoggerConfig) -> Logger`
+  - `Logger` now carries runtime-state handle
+  - added `Logger.flush(timeout: std.concurrent.Duration) -> Bool`
+  - removed global shortcut path from `std.log`:
+    - `init`, `logger_main`, `logger_named`
+    - free-function `debug/info/error` (+ ctx variants)
+    - global `flush(...)`
+- Updated logging e2e/tests/examples to the explicit model:
+  - e2e: `std_log_*`, `macro_log_app_logging_context`
+  - driver: `test_std_log_api_smoke.py`, `test_macro_basic_diagnostics.py`, `test_map_literal_move_canonicalization.py`
+  - examples: `examples/logging/basic_events.drift`, `examples/logging/debuggable_document.drift`, `examples/logging/pluggable_formatter.drift`
+  - docs snippet updated in `docs/effective-drift.md`.
+- LANGUAGE_BUG fixed (regression-first) discovered during this change:
+  - symptom: shadowed lets with same source name could generate invalid drop-glue IR type mismatch.
+  - regressions:
+    - `lang/tests/codegen/e2e/let_shadow_drop_type_metadata`
+    - `lang/tests/codegen/e2e/local_shadow_same_name_distinct_types_codegen`
+  - root cause: `_visit_stmt_HLet` wrote `self._local_types[stmt.name]` alias, overwriting canonical-local type metadata under shadowing.
+  - fix: removed source-name alias overwrite in `lang/driftc/stage2/hir_to_mir.py`.
+- Validation:
+  - updated logging e2e subset passed.
+  - updated driver subset passed.
+
+## 2026-02-14 – stdio capability install + one-time stderr resolve in std.log
+- Added stdio capability install API in `std.io`:
+  - `install_process_stdio(reg: &std.runtime.GlobalRegistry) -> Bool` (idempotent set-or-present semantics).
+- Added capability carriers in `std.io`:
+  - `ProcessStdinCapability`, `ProcessStdoutCapability`, `ProcessStderrCapability`.
+- Logger integration:
+  - `std.log::create_logger(...)` now performs one-time stdio capability install/resolve via `global_registry`.
+  - `LoggerRuntimeState` stores resolved stderr capability.
+  - log hot path uses stored capability for emission (no per-log registry lookup).
+- Validation:
+  - logging e2e subset passed (`std_log_*`, `macro_log_app_logging_context`).
+  - driver subset passed (`test_std_log_api_smoke`, `test_macro_basic_diagnostics`).

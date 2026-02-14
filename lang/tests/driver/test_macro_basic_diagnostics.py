@@ -39,7 +39,8 @@ module m_main
 import std.log as log;
 
 fn main() nothrow -> Int {
-	val logger = log.logger_main();
+	var b = log.config_builder();
+	val logger = log.create_logger("main", b.build());
 	val _ = log.warn!(logger, "ev", {:});
 	return 0;
 }
@@ -56,14 +57,15 @@ module m_main
 import std.log as log;
 
 fn main() nothrow -> Int {
-	val logger = log.logger_main();
-	val _ = log.info!(logger, "ev");
+	var b = log.config_builder();
+	val logger = log.create_logger("main", b.build());
+	val _ = log.info!(logger);
 	return 0;
 }
 """
 	rc, payload = _compile_single_module(tmp_path, capsys, source)
 	assert rc != 0
-	assert any("expects 3 positional args" in m for m in _diag_messages(payload))
+	assert any("expects 2-4 positional args" in m for m in _diag_messages(payload))
 
 
 def test_macro_kwargs_rejected_reports_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -73,7 +75,8 @@ module m_main
 import std.log as log;
 
 fn main() nothrow -> Int {
-	val logger = log.logger_main();
+	var b = log.config_builder();
+	val logger = log.create_logger("main", b.build());
 	val _ = log.info!(logger, "ev", attrs = {:});
 	return 0;
 }

@@ -45,7 +45,12 @@ from lang.language_runtime import get_runtime_sources
 
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD_ROOT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
+_BUILD_ROOT_DEFAULT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
+_BUILD_ROOT_ENV = os.environ.get("DRIFT_E2E_BUILD_ROOT")
+if _BUILD_ROOT_ENV:
+	BUILD_ROOT = Path(_BUILD_ROOT_ENV)
+else:
+	BUILD_ROOT = _BUILD_ROOT_DEFAULT / f"run_{os.getpid()}"
 
 
 def _env_true(name: str) -> bool:
@@ -739,8 +744,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 		action="store_true",
 		help="Print a summary line with test counts and elapsed time",
 	)
+	ap.add_argument(
+		"--cleanup-build-root",
+		action="store_true",
+		help="Remove the effective build root directory at the end of the run",
+	)
 	args = ap.parse_args(argv)
 	start_time = time.monotonic() if args.summarize else None
+	if args.debug:
+		print(f"[codegen e2e] build root: {BUILD_ROOT}", file=sys.stderr)
 
 	case_root = ROOT / "lang" / "tests" / "codegen" / "e2e"
 	case_dirs = (
@@ -842,6 +854,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 			for case_dir in case_dirs:
 				if case_dir.name in skipped:
 					print(case_dir.name, file=sys.stderr)
+	if args.cleanup_build_root:
+		try:
+			shutil.rmtree(BUILD_ROOT)
+		except FileNotFoundError:
+			pass
 	return exit_code
 
 

@@ -1,0 +1,4 @@
+{
+  "description": "generic method returning Optional<T> from Array<T>.pop typechecks and runs",
+  "exit_code": 0
+}

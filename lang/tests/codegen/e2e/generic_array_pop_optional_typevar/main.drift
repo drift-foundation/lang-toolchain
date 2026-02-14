@@ -1,0 +1,30 @@
+module main
+
+struct Bag<T> {
+	items: Array<T>
+}
+
+implement<T> Bag<T> {
+	pub fn pop(self: &mut Bag<T>) nothrow -> Optional<T> {
+		return self.items.pop();
+	}
+}
+
+fn run() nothrow -> Int {
+	var items: Array<Int> = [];
+	var b: Bag<Int> = Bag(items = move items);
+	b.items.push(1);
+	match b.pop() {
+		Some(v) => {
+			if v != 1 {
+				return 1;
+			}
+		},
+		None => { return 2; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

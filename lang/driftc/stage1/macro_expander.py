@@ -9,17 +9,17 @@ def expand_macro_call(expr: ast.MacroCall) -> ast.Call:
 	Expand an MVP macro call into a normal stage0 call expression.
 
 	Current built-ins:
-	- log.info!(logger, ev, attrs)  -> log.macro_info(logger, ev, attrs)
-	- log.debug!(logger, ev, attrs) -> log.macro_debug(logger, ev, attrs)
-	- log.error!(logger, ev, attrs) -> log.macro_error(logger, ev, attrs)
+	- log.info!(logger, ev[, arg3[, arg4]])  -> log.macro_info(...)
+	- log.debug!(logger, ev[, arg3[, arg4]]) -> log.macro_debug(...)
+	- log.error!(logger, ev[, arg3[, arg4]]) -> log.macro_error(...)
 	"""
 	if getattr(expr, "kwargs", None):
 		raise ValueError("macro calls do not support keyword arguments in MVP")
 	macro_suffix = _macro_call_suffix_name(expr.func)
 	if macro_suffix is None:
 		raise ValueError("unsupported macro call target in MVP")
-	if len(expr.args) != 3:
-		raise ValueError(f"macro '{macro_suffix}!' expects 3 positional args: (logger, ev, attrs)")
+	if len(expr.args) < 2 or len(expr.args) > 4:
+		raise ValueError(f"macro '{macro_suffix}!' expects 2-4 positional args: (logger, ev[, arg3[, arg4]])")
 	rewrite = {
 		"info": "macro_info",
 		"debug": "macro_debug",

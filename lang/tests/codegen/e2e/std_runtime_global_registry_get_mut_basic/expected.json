@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime global registry get_mut allows in-place mutation",
+  "exit_code": 0
+}

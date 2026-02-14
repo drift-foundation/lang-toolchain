@@ -48,15 +48,12 @@ fn main() nothrow -> Int {
 	cfg_builder.sink(log.stderr_sink());
 	cfg_builder.formatter(log.FormatterKind::JsonIso8601());
 	val cfg = cfg_builder.build();
-	if not log.init(cfg) {
-		return 1;
-	}
+	val root = log.create_logger("main", cfg);
 
-	if not log.info("auth-failed", {"attempts": 3, "status": 401}) {
+	if not root.info("auth-failed", {"attempts": 3, "status": 401}) {
 		return 2;
 	}
 
-	val root = log.logger_main();
 	var lib_builder = root.derive("auth-lib");
 	lib_builder.min_level(log.Level::Debug());
 	val lib = lib_builder.build();
@@ -64,7 +61,7 @@ fn main() nothrow -> Int {
 		return 3;
 	}
 
-	if not log.flush(conc.Duration(millis = 100)) {
+	if not root.flush(conc.Duration(millis = 100)) {
 		return 4;
 	}
 	return 0;
@@ -87,7 +84,9 @@ module main
 import std.log as log;
 
 fn main() nothrow -> Int {
-	if not log.info("auth-failed", {"attempts": 3, "status": 401}) {
+	var b = log.config_builder();
+	val lg = log.create_logger("main", b.build());
+	if not lg.info("auth-failed", {"attempts": 3, "status": 401}) {
 		return 1;
 	}
 	return 0;
@@ -120,7 +119,9 @@ implement log.Debuggable for User {
 }
 
 fn main() nothrow -> Int {
-	if not log.info("user-created", {"user": User(id = 7)}) {
+	var b = log.config_builder();
+	val lg = log.create_logger("main", b.build());
+	if not lg.info("user-created", {"user": User(id = 7)}) {
 		return 1;
 	}
 	return 0;

@@ -3,6 +3,7 @@ module std.io
 import std.core as core;
 import std.mem as mem;
 import std.concurrent as conc;
+import std.runtime as runtime;
 import lang.thread as thread;
 
 export {
@@ -35,6 +36,11 @@ export {
 	stdin_builder,
 	stdout_builder,
 	stderr_builder,
+	ProcessStdinCapability,
+	ProcessStdoutCapability,
+	ProcessStderrCapability,
+	install_process_stdio,
+	install_process_preamble,
 	input_read,
 	output_write,
 	input_read_line,
@@ -125,6 +131,18 @@ pub struct ConfiguredOutputStream {
 	timeout: conc.Duration
 }
 
+pub struct ProcessStdinCapability {
+	fd: Int
+}
+
+pub struct ProcessStdoutCapability {
+	fd: Int
+}
+
+pub struct ProcessStderrCapability {
+	fd: Int
+}
+
 implement core.Copy for InputStream {
 }
 
@@ -147,6 +165,15 @@ implement core.Copy for ConfiguredOutputStream {
 }
 
 implement core.Copy for FileBuilder {
+}
+
+implement core.Copy for ProcessStdinCapability {
+}
+
+implement core.Copy for ProcessStdoutCapability {
+}
+
+implement core.Copy for ProcessStderrCapability {
 }
 
 struct FileOpenOptions {
@@ -196,6 +223,49 @@ pub fn stdout_builder() nothrow -> OutputStreamBuilder {
 pub fn stderr_builder() nothrow -> OutputStreamBuilder {
 	val _ = thread.io_set_nonblocking(STDERR_FD);
 	return OutputStreamBuilder(fd = STDERR_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
+}
+
+pub fn install_process_stdio(reg: &runtime.GlobalRegistry) nothrow -> Bool {
+	val stdin_cap = ProcessStdinCapability(fd = STDIN_FD);
+	if not reg.set<type ProcessStdinCapability>(stdin_cap) {
+		if not runtime.contains<type ProcessStdinCapability>(reg) {
+			return false;
+		}
+	}
+	val stdout_cap = ProcessStdoutCapability(fd = STDOUT_FD);
+	if not reg.set<type ProcessStdoutCapability>(stdout_cap) {
+		if not runtime.contains<type ProcessStdoutCapability>(reg) {
+			return false;
+		}
+	}
+	val stderr_cap = ProcessStderrCapability(fd = STDERR_FD);
+	if not reg.set<type ProcessStderrCapability>(stderr_cap) {
+		if not runtime.contains<type ProcessStderrCapability>(reg) {
+			return false;
+		}
+	}
+	return true;
+}
+
+pub fn install_process_preamble() nothrow -> Bool {
+	val reg = runtime.global_registry();
+	return install_process_stdio(reg);
+}
+
+implement ProcessStdoutCapability {
+	pub fn write_line(self: &ProcessStdoutCapability, text: String) nothrow -> Bool {
+		val _ = self.fd;
+		thread.console_writeln(text);
+		return true;
+	}
+}
+
+implement ProcessStderrCapability {
+	pub fn write_line(self: &ProcessStderrCapability, text: String) nothrow -> Bool {
+		val _ = self.fd;
+		thread.console_eprintln(text);
+		return true;
+	}
 }
 
 pub fn file_builder(path: String) nothrow -> FileBuilder {

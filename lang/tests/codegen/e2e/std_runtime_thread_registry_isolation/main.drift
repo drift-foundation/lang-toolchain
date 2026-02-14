@@ -1,0 +1,79 @@
+module m
+
+import std.concurrent as conc;
+import std.runtime as rt;
+
+fn worker_set_and_read(value: Int) nothrow -> Int {
+	val reg = rt.thread_registry();
+	if not reg.set<type Int>(value) {
+		return 1;
+	}
+	match rt.get<type Int>(reg) {
+		Some(got) => {
+			if *got != value {
+				return 2;
+			}
+		},
+		None => {
+			return 2;
+		}
+	}
+	return 0;
+}
+
+fn spawn_and_join(value: Int) nothrow -> Int {
+	var vt = conc.spawn_cb(| | captures(move value) => {
+		return worker_set_and_read(value);
+	});
+	match vt.join() {
+		Ok(rc) => {
+			return rc;
+		},
+		Err(_err) => {
+			return 3;
+		}
+	}
+}
+
+fn run() nothrow -> Int {
+	val reg = rt.thread_registry();
+	if rt.contains<type Int>(reg) {
+		return 10;
+	}
+	if not reg.set<type Int>(7) {
+		return 11;
+	}
+	match rt.get<type Int>(reg) {
+		Some(main_v) => {
+			if *main_v != 7 {
+				return 12;
+			}
+		},
+		None => {
+			return 12;
+		}
+	}
+	val rc1 = spawn_and_join(111);
+	if rc1 != 0 {
+		return 20 + rc1;
+	}
+	val rc2 = spawn_and_join(222);
+	if rc2 != 0 {
+		return 30 + rc2;
+	}
+	match rt.get<type Int>(reg) {
+		Some(main_v2) => {
+			if *main_v2 != 7 {
+				return 40;
+			}
+		},
+		None => {
+			return 40;
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return run();
+}

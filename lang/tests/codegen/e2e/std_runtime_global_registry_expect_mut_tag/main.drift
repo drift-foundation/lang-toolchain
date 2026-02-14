@@ -1,0 +1,30 @@
+module main
+
+import std.runtime as rt;
+
+fn run() -> Int {
+	val reg = rt.global_registry();
+	try {
+		val _ = rt.expect_mut<type Int>(reg, "missing-int-mut");
+		return 1;
+	} catch rt:RegistryError(e) {
+		val dv = e.attrs["tag"];
+		match dv.as_string() {
+			Some(s) => {
+				if s != "missing-int-mut" {
+					return 2;
+				}
+			},
+			None => {
+				return 3;
+			}
+		}
+		return 0;
+	} catch {
+		return 4;
+	}
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

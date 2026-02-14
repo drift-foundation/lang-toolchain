@@ -1,0 +1,15 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "preamble-sink",
+      "logger": "main",
+      "attrs": {
+        "ok": 1
+      },
+      "tid": "__ANY__"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+import std.io as io;
+import std.runtime as runtime;
+
+fn main(argv: Array<String>) nothrow -> Int {
+	val _ = argv.len;
+	val reg = runtime.global_registry();
+	if not runtime.contains<type io.ProcessStdinCapability>(reg) {
+		return 1;
+	}
+	if not runtime.contains<type io.ProcessStdoutCapability>(reg) {
+		return 2;
+	}
+	if not runtime.contains<type io.ProcessStderrCapability>(reg) {
+		return 3;
+	}
+	return 0;
+}

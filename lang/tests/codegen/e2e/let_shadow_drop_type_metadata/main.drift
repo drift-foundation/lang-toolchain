@@ -1,0 +1,20 @@
+module m
+
+struct A {
+	s: String
+}
+
+struct B {
+	s: String,
+	t: String
+}
+
+fn run() -> Int {
+	val v = A(s = "x");
+	val v = B(s = "y", t = "z");
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

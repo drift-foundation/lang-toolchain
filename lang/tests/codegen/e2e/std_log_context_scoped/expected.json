@@ -1,0 +1,38 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-start",
+      "logger": "auth",
+      "attrs": {
+        "user": "u-1",
+        "req": "r-1"
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-failed",
+      "logger": "auth",
+      "attrs": {
+        "user": "u-override",
+        "req": "r-1",
+        "code": 401
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "auth-end",
+      "logger": "auth",
+      "attrs": {
+        "ok": true
+      },
+      "tid": "__ANY__"
+    }
+  ]
+}

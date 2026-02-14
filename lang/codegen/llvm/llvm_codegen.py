@@ -329,6 +329,10 @@ def lower_module_to_llvm(
 		raise AssertionError("LLVM codegen requires explicit word_bits")
 	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
+	install_process_preamble_available = any(
+		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
+		for fn_id in fn_infos.keys()
+	)
 
 	# --- ABI-boundary export wrappers (Milestone 4) --------------------------
 	#
@@ -498,7 +502,11 @@ def lower_module_to_llvm(
 
 	if argv_wrapper is not None:
 		array_llty = "%DriftArrayHeader"
-		mod.emit_argv_entry_wrapper(user_main=argv_wrapper, array_type=array_llty)
+		mod.emit_argv_entry_wrapper(
+			user_main=argv_wrapper,
+			array_type=array_llty,
+			install_process_preamble=install_process_preamble_available,
+		)
 	return mod
 
 
@@ -883,7 +891,7 @@ class LlvmModuleBuilder:
 	def ensure_comdat(self, name: str) -> None:
 		self.comdats.add(name)
 
-	def emit_entry_wrapper(self, drift_main: str = "drift_main") -> None:
+	def emit_entry_wrapper(self, drift_main: str = "drift_main", install_process_preamble: bool = False) -> None:
 		"""
 		Emit a tiny OS entrypoint wrapper that calls `@drift_main` and truncs to i32.
 
@@ -891,20 +899,23 @@ class LlvmModuleBuilder:
 		process ABI. Err-mapping is not yet implemented; the wrapper simply
 		truncates the isize return to i32 for exit.
 		"""
-		self.funcs.append(
-			"\n".join(
-				[
-					"define i32 @main() {",
-					"entry:",
-					f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(drift_main)}()",
-					f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
-					"  ret i32 %trunc",
-					"}",
-				]
-			)
+		lines = [
+			"define i32 @main() {",
+			"entry:",
+		]
+		if install_process_preamble:
+			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
+		lines.extend(
+			[
+				f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(drift_main)}()",
+				f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+				"  ret i32 %trunc",
+				"}",
+			]
 		)
+		self.funcs.append("\n".join(lines))
 
-	def emit_argv_entry_wrapper(self, user_main: str, array_type: str) -> None:
+	def emit_argv_entry_wrapper(self, user_main: str, array_type: str, install_process_preamble: bool = False) -> None:
 		"""
 		Emit an OS entry for `main(argv: Array<String>) -> Int`.
 
@@ -916,22 +927,28 @@ class LlvmModuleBuilder:
 		lines = [
 			"define i32 @main(i32 %argc, i8** %argv) {",
 			"entry:",
-			"  %arr.ptr = alloca %DriftArrayHeader",
-			"  call void @drift_build_argv(%DriftArrayHeader* %arr.ptr, i32 %argc, i8** %argv)",
-			"  %arr = load %DriftArrayHeader, %DriftArrayHeader* %arr.ptr",
-			f"  %len = extractvalue %DriftArrayHeader %arr, {ARRAY_LEN_IDX}",
-			f"  %cap = extractvalue %DriftArrayHeader %arr, {ARRAY_CAP_IDX}",
-			f"  %gen = extractvalue %DriftArrayHeader %arr, {ARRAY_GEN_IDX}",
-			f"  %data_raw = extractvalue %DriftArrayHeader %arr, {ARRAY_PTR_IDX}",
-			f"  %tmp0 = insertvalue {array_type} undef, {self._llty(DRIFT_INT_TYPE)} %len, {ARRAY_LEN_IDX}",
-			f"  %tmp1 = insertvalue {array_type} %tmp0, {self._llty(DRIFT_INT_TYPE)} %cap, {ARRAY_CAP_IDX}",
-			f"  %tmp2 = insertvalue {array_type} %tmp1, {self._llty(DRIFT_INT_TYPE)} %gen, {ARRAY_GEN_IDX}",
-			f"  %argv_typed = insertvalue {array_type} %tmp2, i8* %data_raw, {ARRAY_PTR_IDX}",
-			f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(user_main)}({array_type} %argv_typed)",
-			f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
-			"  ret i32 %trunc",
-			"}",
 		]
+		if install_process_preamble:
+			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
+		lines.extend(
+			[
+				"  %arr.ptr = alloca %DriftArrayHeader",
+				"  call void @drift_build_argv(%DriftArrayHeader* %arr.ptr, i32 %argc, i8** %argv)",
+				"  %arr = load %DriftArrayHeader, %DriftArrayHeader* %arr.ptr",
+				f"  %len = extractvalue %DriftArrayHeader %arr, {ARRAY_LEN_IDX}",
+				f"  %cap = extractvalue %DriftArrayHeader %arr, {ARRAY_CAP_IDX}",
+				f"  %gen = extractvalue %DriftArrayHeader %arr, {ARRAY_GEN_IDX}",
+				f"  %data_raw = extractvalue %DriftArrayHeader %arr, {ARRAY_PTR_IDX}",
+				f"  %tmp0 = insertvalue {array_type} undef, {self._llty(DRIFT_INT_TYPE)} %len, {ARRAY_LEN_IDX}",
+				f"  %tmp1 = insertvalue {array_type} %tmp0, {self._llty(DRIFT_INT_TYPE)} %cap, {ARRAY_CAP_IDX}",
+				f"  %tmp2 = insertvalue {array_type} %tmp1, {self._llty(DRIFT_INT_TYPE)} %gen, {ARRAY_GEN_IDX}",
+				f"  %argv_typed = insertvalue {array_type} %tmp2, i8* %data_raw, {ARRAY_PTR_IDX}",
+				f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(user_main)}({array_type} %argv_typed)",
+				f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+				"  ret i32 %trunc",
+				"}",
+			]
+		)
 		self.funcs.append("\n".join(lines))
 
 	def render(self) -> str:
@@ -1052,16 +1069,14 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)})",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_init({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_min_level()",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_enqueue({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_flush({self._llty(DRIFT_INT_TYPE)})",
-					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_json_escape({DRIFT_STRING_TYPE})",
-					f"declare {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}*)",
 					f"declare i8* @drift_runtime_global_registry_ptr()",
+					f"declare i8* @drift_runtime_thread_registry_ptr()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64, i8*, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.word_bits // 8})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64)",
 					f"declare i8* @drift_runtime_registry_get(i64)",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_set(i64, i8*, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.word_bits // 8})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_contains(i64)",
+					f"declare i8* @drift_runtime_thread_registry_get(i64)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
@@ -2045,6 +2060,34 @@ class _FuncBuilder:
 		elif isinstance(instr, CastScalar):
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
+			if self.type_table is not None:
+				src_td = self.type_table.get(instr.src_ty)
+				dst_td = self.type_table.get(instr.dst_ty)
+				src_is_ptr = src_td.kind is TypeKind.RAW_PTR
+				dst_is_ptr = dst_td.kind is TypeKind.RAW_PTR
+				src_is_uint = src_td.kind is TypeKind.SCALAR and src_td.name == "Uint"
+				dst_is_uint = dst_td.kind is TypeKind.SCALAR and dst_td.name == "Uint"
+				if src_is_ptr or dst_is_ptr:
+					src_ll = self._llty(self._llvm_type_for_typeid(instr.src_ty))
+					dst_ll = self._llty(self._llvm_type_for_typeid(instr.dst_ty))
+					val_ty = self.value_types.get(val)
+					if val_ty is None or self._llty(val_ty) != src_ll:
+						raise NotImplementedError(
+							f"LLVM codegen v1: CastScalar ptr type mismatch (have {val_ty}, expected {src_ll})"
+						)
+					if src_is_ptr and dst_is_ptr:
+						self.lines.append(f"  {dest} = bitcast {src_ll} {val} to {dst_ll}")
+						self.value_types[dest] = self._llvm_type_for_typeid(instr.dst_ty)
+						return
+					if src_is_ptr and dst_is_uint:
+						self.lines.append(f"  {dest} = ptrtoint {src_ll} {val} to {self._llty(DRIFT_USIZE_TYPE)}")
+						self.value_types[dest] = DRIFT_USIZE_TYPE
+						return
+					if src_is_uint and dst_is_ptr:
+						self.lines.append(f"  {dest} = inttoptr {self._llty(DRIFT_USIZE_TYPE)} {val} to {dst_ll}")
+						self.value_types[dest] = self._llvm_type_for_typeid(instr.dst_ty)
+						return
+					raise NotImplementedError("LLVM codegen v1: unsupported pointer cast combination")
 			src_info = self._scalar_cast_info(instr.src_ty)
 			dst_info = self._scalar_cast_info(instr.dst_ty)
 			if src_info is None or dst_info is None:
@@ -3728,82 +3771,6 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
-			if instr.fn_id.name == "log_runtime_init":
-				if len(instr.args) != 5:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_init expects 5 args, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_init result must be captured")
-				min_level_val = self._map_value(instr.args[0])
-				queue_cap_val = self._map_value(instr.args[1])
-				backpressure_val = self._map_value(instr.args[2])
-				write_timeout_val = self._map_value(instr.args[3])
-				enqueue_timeout_val = self._map_value(instr.args[4])
-				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_init({self._llty(DRIFT_INT_TYPE)} {min_level_val}, {self._llty(DRIFT_INT_TYPE)} {queue_cap_val}, {self._llty(DRIFT_INT_TYPE)} {backpressure_val}, {self._llty(DRIFT_INT_TYPE)} {write_timeout_val}, {self._llty(DRIFT_INT_TYPE)} {enqueue_timeout_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
-				return
-			if instr.fn_id.name == "log_runtime_min_level":
-				if len(instr.args) != 0:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_min_level expects 0 args, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_min_level result must be captured")
-				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_min_level()")
-				self.value_types[dest] = DRIFT_INT_TYPE
-				return
-			if instr.fn_id.name == "log_runtime_enqueue":
-				if len(instr.args) != 4:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_enqueue expects 4 args, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_enqueue result must be captured")
-				level_val = self._map_value(instr.args[0])
-				logger_min_level_val = self._map_value(instr.args[1])
-				enqueue_timeout_val = self._map_value(instr.args[2])
-				payload_val = self._map_value(instr.args[3])
-				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_enqueue({self._llty(DRIFT_INT_TYPE)} {level_val}, {self._llty(DRIFT_INT_TYPE)} {logger_min_level_val}, {self._llty(DRIFT_INT_TYPE)} {enqueue_timeout_val}, {DRIFT_STRING_TYPE} {payload_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
-				return
-			if instr.fn_id.name == "log_runtime_flush":
-				if len(instr.args) != 1:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_flush expects 1 arg, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_flush result must be captured")
-				timeout_val = self._map_value(instr.args[0])
-				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_log_runtime_flush({self._llty(DRIFT_INT_TYPE)} {timeout_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
-				return
-			if instr.fn_id.name == "log_runtime_json_escape":
-				if len(instr.args) != 1:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_json_escape expects 1 arg, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_json_escape result must be captured")
-				in_val = self._map_value(instr.args[0])
-				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_log_runtime_json_escape({DRIFT_STRING_TYPE} {in_val})"
-				)
-				self.value_types[dest] = DRIFT_STRING_TYPE
-				return
-			if instr.fn_id.name == "log_runtime_dv_to_json":
-				if len(instr.args) != 1:
-					raise NotImplementedError(f"LLVM codegen v1: log_runtime_dv_to_json expects 1 arg, got {len(instr.args)}")
-				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: log_runtime_dv_to_json result must be captured")
-				dv_ptr = self._map_value(instr.args[0])
-				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_log_runtime_dv_to_json({DRIFT_DV_TYPE}* {dv_ptr})"
-				)
-				self.value_types[dest] = DRIFT_STRING_TYPE
-				return
 			if instr.fn_id.name == "runtime_global_registry_ptr":
 				if len(instr.args) != 0:
 					raise NotImplementedError(f"LLVM codegen v1: runtime_global_registry_ptr expects 0 args, got {len(instr.args)}")
@@ -3811,6 +3778,15 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: runtime_global_registry_ptr result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call i8* @drift_runtime_global_registry_ptr()")
+				self.value_types[dest] = "i8*"
+				return
+			if instr.fn_id.name == "runtime_thread_registry_ptr":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_thread_registry_ptr expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_ptr result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_ptr()")
 				self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "runtime_registry_set":
@@ -3828,6 +3804,21 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "runtime_thread_registry_set":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_thread_registry_set expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_set result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				ptr_val = self._map_value(instr.args[1])
+				dropper_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				dropper_addr = self._fresh("registry_dropper_addr")
+				self.lines.append(f"  {dropper_addr} = alloca {DRIFT_IFACE_TYPE}")
+				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "runtime_registry_contains":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: runtime_registry_contains expects 1 arg, got {len(instr.args)}")
@@ -3838,6 +3829,16 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64 {tag_val})")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "runtime_thread_registry_contains":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_thread_registry_contains expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_contains result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_contains(i64 {tag_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "runtime_registry_get":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: runtime_registry_get expects 1 arg, got {len(instr.args)}")
@@ -3846,6 +3847,16 @@ class _FuncBuilder:
 				tag_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
+				self.value_types[dest] = "i8*"
+				return
+			if instr.fn_id.name == "runtime_thread_registry_get":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: runtime_thread_registry_get expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_get result must be captured")
+				tag_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
 				self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "console_write":
@@ -7312,30 +7323,35 @@ class _FuncBuilder:
 			raise AssertionError("drop requires a TypeTable")
 		if not self._type_needs_drop(ty_id):
 			return
+		call_dbg_suffix = ""
+		if self.module.debug_enabled and self._dbg_subprogram_id is not None:
+			loc_id = self._dbg_location_for_span(self._dbg_last_span or self._dbg_default_span)
+			if loc_id is not None:
+				call_dbg_suffix = f", !dbg !{loc_id}"
 		destructor_fns = getattr(self.type_table, "destructor_fns", None)
 		if isinstance(destructor_fns, dict):
 			fn_id = destructor_fns.get(ty_id)
 			if fn_id is not None:
 				llty = self._llvm_type_for_typeid(ty_id)
 				sym = function_symbol(fn_id)
-				self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value})")
+				self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
 				return
 		td = self.type_table.get(ty_id)
 		llty = self._llvm_type_for_typeid(ty_id)
 		if td.kind is TypeKind.SCALAR and td.name == "String":
 			self.module.needs_string_release = True
-			self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {value})")
+			self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {value}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.ERROR:
 			self.module.needs_error_runtime = True
-			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value})")
+			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
 			self.module.needs_dv_runtime = True
 			tmp_ptr = self._fresh("dv_drop_arg")
 			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
 			self.lines.append(f"  store {DRIFT_DV_TYPE} {value}, {DRIFT_DV_TYPE}* {tmp_ptr}")
-			self.lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr})")
+			self.lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]
@@ -7349,9 +7365,9 @@ class _FuncBuilder:
 				data_ptr = self._fresh("data_ptr")
 				self.lines.append(f"  {data_ptr} = bitcast i8* {data_tmp} to {elem_llty}*")
 				helper = self._ensure_array_drop_helper(elem_ty)
-				self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} {len_tmp}, {elem_llty}* {data_ptr})")
+				self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} {len_tmp}, {elem_llty}* {data_ptr}){call_dbg_suffix}")
 			self.module.needs_array_helpers = True
-			self.lines.append(f"  call void @drift_free_array(i8* {data_tmp})")
+			self.lines.append(f"  call void @drift_free_array(i8* {data_tmp}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.INTERFACE:
 			iface_llty = self._llty(DRIFT_IFACE_TYPE)
@@ -7397,7 +7413,7 @@ class _FuncBuilder:
 			self.lines.append(f"{call_block[1:]}:")
 			drop_fn = self._fresh("iface_drop_fn")
 			self.lines.append(f"  {drop_fn} = bitcast i8* {drop_ptr} to void (i8*)*")
-			self.lines.append(f"  call void {drop_fn}(i8* {data_eff})")
+			self.lines.append(f"  call void {drop_fn}(i8* {data_eff}){call_dbg_suffix}")
 			self.lines.append(f"  br label {done_block}")
 			self.lines.append(f"{done_block[1:]}:")
 			self.module.needs_iface_helpers = True
@@ -7407,7 +7423,7 @@ class _FuncBuilder:
 			self.lines.append(f"  {free_cond} = icmp ne i8 {owns_bit}, 0")
 			self.lines.append(f"  br i1 {free_cond}, label {free_block}, label {free_done}")
 			self.lines.append(f"{free_block[1:]}:")
-			self.lines.append(f"  call void @drift_iface_free(i8* {data_tmp})")
+			self.lines.append(f"  call void @drift_iface_free(i8* {data_tmp}){call_dbg_suffix}")
 			self.lines.append(f"  br label {free_done}")
 			self.lines.append(f"{free_done[1:]}:")
 			return
@@ -7431,7 +7447,7 @@ class _FuncBuilder:
 			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
 			self.lines.append(f"  store {variant_llty} {value}, {variant_llty}* {tmp_ptr}")
 			helper = self._ensure_array_drop_helper(ty_id)
-			self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} 1, {variant_llty}* {tmp_ptr})")
+			self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} 1, {variant_llty}* {tmp_ptr}){call_dbg_suffix}")
 			return
 
 	def _ensure_array_drop_helper(self, elem_ty: TypeId) -> str:

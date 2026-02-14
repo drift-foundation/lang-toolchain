@@ -7,9 +7,16 @@ import lang.thread as thread;
 export {
 	GlobalRegistry,
 	global_registry,
+	ThreadRegistry,
+	thread_registry,
+	ScopedStack,
+	ScopeGuard,
+	scoped_stack,
 	contains,
 	get,
+	get_mut,
 	expect,
+	expect_mut,
 	RegistryError,
 	TypeBox,
 	TypeBoxError,
@@ -22,6 +29,19 @@ pub struct GlobalRegistry {
 	_opaque: Int
 }
 
+pub struct ThreadRegistry {
+	_opaque: Int
+}
+
+pub struct ScopedStack<T> {
+	items: Array<T>
+}
+
+pub struct ScopeGuard<T> {
+	stack_ptr: mem.Ptr<ScopedStack<T>>,
+	active: Bool
+}
+
 pub exception RegistryError(tag: String);
 
 pub fn global_registry() nothrow -> &GlobalRegistry {
@@ -29,6 +49,82 @@ pub fn global_registry() nothrow -> &GlobalRegistry {
 		val p = thread.runtime_global_registry_ptr();
 		var raw = mem.rawbuffer_from_parts<type GlobalRegistry>(p, 1);
 		return mem.ptr_at_ref<type GlobalRegistry>(&raw, 0);
+	}
+}
+
+pub fn thread_registry() nothrow -> &ThreadRegistry {
+	unsafe {
+		val p = thread.runtime_thread_registry_ptr();
+		var raw = mem.rawbuffer_from_parts<type ThreadRegistry>(p, 1);
+		return mem.ptr_at_ref<type ThreadRegistry>(&raw, 0);
+	}
+}
+
+pub fn scoped_stack<T>() nothrow -> ScopedStack<T> {
+	var items: Array<T> = [];
+	return ScopedStack<type T>(items = move items);
+}
+
+implement<T> ScopedStack<T> {
+	pub fn push(self: &mut ScopedStack<T>, value: T) nothrow -> ScopeGuard<T> {
+		self.items.push(move value);
+		unsafe {
+			val p = mem.ptr_from_ref_mut<type ScopedStack<T>>(self);
+			return ScopeGuard<type T>(stack_ptr = p, active = true);
+		}
+	}
+
+	pub fn pop(self: &mut ScopedStack<T>) nothrow -> Optional<T> {
+		return self.items.pop();
+	}
+
+	pub fn peek(self: &ScopedStack<T>) nothrow -> Optional<&T> {
+		val n = self.items.len;
+		if n <= 0 {
+			return Optional<&T>::None();
+		}
+		return Optional<&T>::Some(&self.items[n - 1]);
+	}
+
+	pub fn peek_mut(self: &mut ScopedStack<T>) nothrow -> Optional<&mut T> {
+		val n = self.items.len;
+		if n <= 0 {
+			return Optional<&mut T>::None();
+		}
+		return Optional<&mut T>::Some(&mut self.items[n - 1]);
+	}
+
+	pub fn depth(self: &ScopedStack<T>) nothrow -> Int {
+		return self.items.len;
+	}
+
+	pub fn is_empty(self: &ScopedStack<T>) nothrow -> Bool {
+		return self.items.len == 0;
+	}
+}
+
+implement<T> core.Destructible for ScopeGuard<T> {
+	pub fn destroy(var self: ScopeGuard<T>) nothrow -> Void {
+		if not self.active {
+			return;
+		}
+		self.active = false;
+		unsafe {
+			if mem.ptr_is_null<type ScopedStack<T>>(self.stack_ptr) {
+				return;
+			}
+			val p = cast<mem.Ptr<Byte> >(self.stack_ptr);
+			var raw = mem.rawbuffer_from_parts<type ScopedStack<T>>(p, 1);
+			val st = mem.ptr_at_mut<type ScopedStack<T>>(&mut raw, 0);
+			match st.pop() {
+				Some(v) => {
+					core.drop_value<type T>(move v);
+				},
+				None => {
+				}
+			}
+		}
+		return;
 	}
 }
 
@@ -62,7 +158,41 @@ implement GlobalRegistry {
 	}
 }
 
+implement ThreadRegistry {
+	pub fn set<T>(self: &ThreadRegistry, value: T) nothrow -> Bool {
+		val _ = self;
+		unsafe {
+			var raw = mem.alloc_uninit<type T>(1);
+			mem.write<type T>(&mut raw, 0, move value);
+			val p = mem.rawbuffer_ptr<type T>(&raw);
+			val dropper = core.callback1(_typebox_drop_impl<type T>);
+			val rc = thread.runtime_thread_registry_set(core.type_id<type T>(), p, move dropper);
+			if rc != 1 {
+				val v = mem.read<type T>(&mut raw, 0);
+				core.drop_value<type T>(move v);
+				mem.dealloc<type T>(move raw);
+				return false;
+			}
+			return true;
+		}
+	}
+
+	pub fn contains_type(self: &ThreadRegistry, type_tag: Uint64) nothrow -> Bool {
+		val _ = self;
+		return thread.runtime_thread_registry_contains(type_tag) == 1;
+	}
+
+	pub fn get_ptr(self: &ThreadRegistry, type_tag: Uint64) nothrow -> mem.Ptr<Byte> {
+		val _ = self;
+		return thread.runtime_thread_registry_get(type_tag);
+	}
+}
+
 pub fn contains<T>(reg: &GlobalRegistry) nothrow -> Bool {
+	return reg.contains_type(core.type_id<type T>());
+}
+
+pub fn contains<T>(reg: &ThreadRegistry) nothrow -> Bool {
 	return reg.contains_type(core.type_id<type T>());
 }
 
@@ -77,12 +207,76 @@ pub fn get<T>(reg: &GlobalRegistry) nothrow -> Optional<&T> {
 	}
 }
 
+pub fn get<T>(reg: &ThreadRegistry) nothrow -> Optional<&T> {
+	unsafe {
+		val p = reg.get_ptr(core.type_id<type T>());
+		if mem.ptr_is_null<type Byte>(p) {
+			return Optional<&T>::None();
+		}
+		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
+		return Optional<&T>::Some(mem.ptr_at_ref<type T>(&raw, 0));
+	}
+}
+
+pub fn get_mut<T>(reg: &GlobalRegistry) nothrow -> Optional<&mut T> {
+	unsafe {
+		val p = reg.get_ptr(core.type_id<type T>());
+		if mem.ptr_is_null<type Byte>(p) {
+			return Optional<&mut T>::None();
+		}
+		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
+		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(&mut raw, 0));
+	}
+}
+
+pub fn get_mut<T>(reg: &ThreadRegistry) nothrow -> Optional<&mut T> {
+	unsafe {
+		val p = reg.get_ptr(core.type_id<type T>());
+		if mem.ptr_is_null<type Byte>(p) {
+			return Optional<&mut T>::None();
+		}
+		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
+		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(&mut raw, 0));
+	}
+}
+
 pub fn expect<T>(reg: &GlobalRegistry, tag: String) -> &T {
 	match get<type T>(reg) {
 		Some(v) => { return v; },
 		None => {
 			throw RegistryError(tag = tag);
 		}
+	}
+}
+
+pub fn expect<T>(reg: &ThreadRegistry, tag: String) -> &T {
+	match get<type T>(reg) {
+		Some(v) => { return v; },
+		None => {
+			throw RegistryError(tag = tag);
+		}
+	}
+}
+
+pub fn expect_mut<T>(reg: &GlobalRegistry, tag: String) -> &mut T {
+	unsafe {
+		val p = reg.get_ptr(core.type_id<type T>());
+		if mem.ptr_is_null<type Byte>(p) {
+			throw RegistryError(tag = tag);
+		}
+		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
+		return mem.ptr_at_mut<type T>(&mut raw, 0);
+	}
+}
+
+pub fn expect_mut<T>(reg: &ThreadRegistry, tag: String) -> &mut T {
+	unsafe {
+		val p = reg.get_ptr(core.type_id<type T>());
+		if mem.ptr_is_null<type Byte>(p) {
+			throw RegistryError(tag = tag);
+		}
+		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
+		return mem.ptr_at_mut<type T>(&mut raw, 0);
 	}
 }
 

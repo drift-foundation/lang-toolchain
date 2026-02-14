@@ -3,8 +3,14 @@ module std.log
 import std.core as core;
 import std.containers as containers;
 import std.concurrent as conc;
+import std.format as format;
+import std.io as io;
 import std.iter as iter;
+import std.mem as mem;
 import std.meta as meta;
+import std.runtime as runtime;
+import std.sync as sync;
+import std.time as time;
 import lang.thread as thread;
 
 use trait iter.SinglePassIterator;
@@ -19,21 +25,17 @@ export {
 	Debuggable,
 	Formatter,
 	LogRecord,
+	LogContext,
 	LoggerConfig,
 	LoggerConfigBuilder,
 	Logger,
 	LoggerBuilder,
 	config_builder,
-	init,
-	logger_main,
-	logger_named,
+	log_context,
+	create_logger,
 	macro_debug,
 	macro_info,
-	macro_error,
-	flush,
-	debug,
-	info,
-	error
+	macro_error
 };
 
 pub variant Level {
@@ -115,6 +117,10 @@ pub struct LogRecord {
 	pub attrs_count: Int
 }
 
+pub struct LogContext {
+	attrs: containers.HashMap<String, DiagnosticValue>
+}
+
 pub struct LoggerConfig {
 	pub sink: Sink,
 	pub min_level: Level,
@@ -137,11 +143,31 @@ pub struct LoggerConfigBuilder {
 
 pub struct Logger {
 	name: String,
-	min_level: Level
+	min_level: Level,
+	state: sync.Handle<Byte>
+}
+
+struct LoggerRuntimeState {
+	min_level: Level,
+	queue_capacity: Int,
+	write_timeout_ms: Int,
+	enqueue_timeout_ms: Int,
+	backpressure_policy: BackpressurePolicy,
+	stderr_cap: Optional<io.ProcessStderrCapability>,
+	queue: sync.MpscQueue<Byte>,
+	drain_lock: sync.AtomicBool
+}
+
+struct LogEnvelope {
+	level_rank: Int,
+	logger_min_rank: Int,
+	enqueue_timeout_ms: Int,
+	payload_json: String
 }
 
 pub struct LoggerBuilder {
-	parent: Logger,
+	parent_state: sync.Handle<Byte>,
+	parent_min_level: Level,
 	name: String,
 	min_level: Optional<Level>
 }
@@ -156,9 +182,6 @@ implement core.Copy for FormatterKind {
 }
 
 implement core.Copy for LoggerConfig {
-}
-
-implement core.Copy for Logger {
 }
 
 implement core.Copy for StdErrSink {
@@ -192,6 +215,34 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
 		formatter = FormatterKind::JsonIso8601()
 	);
+}
+
+pub fn log_context() nothrow -> LogContext {
+	var attrs: containers.HashMap<String, DiagnosticValue> = {:};
+	return LogContext(attrs = move attrs);
+}
+
+implement LogContext {
+	pub fn put<V>(self: &mut LogContext, key: String, value: V) nothrow -> Void require V is Debuggable {
+		val dv = Debuggable::to_debug(&value);
+		match self.attrs.insert(move key, dv) {
+			Some(old) => {
+				core.drop_value(move old);
+			},
+			None => {
+			}
+		}
+		core.drop_value(move value);
+		return;
+	}
+
+	pub fn get(self: &LogContext, key: &String) nothrow -> Optional<&DiagnosticValue> {
+		return self.attrs.get(key);
+	}
+
+	pub fn clear(self: &mut LogContext) nothrow -> Void {
+		self.attrs.clear();
+	}
 }
 
 implement LoggerConfigBuilder {
@@ -243,26 +294,12 @@ implement LoggerConfigBuilder {
 	}
 }
 
-pub fn init(config: LoggerConfig) nothrow -> Bool {
-	val rc = thread.log_runtime_init(
-		_level_rank(config.min_level),
-		config.queue_capacity,
-		_backpressure_code(config.backpressure_policy),
-		config.write_timeout.millis,
-		config.enqueue_timeout.millis
-	);
-	if rc == 0 {
-		return false;
-	}
-	return true;
-}
-
-pub fn logger_main() nothrow -> Logger {
-	return Logger(name = "main", min_level = _level_from_rank(thread.log_runtime_min_level()));
-}
-
-pub fn logger_named(name: String) nothrow -> Logger {
-	return Logger(name = name, min_level = _level_from_rank(thread.log_runtime_min_level()));
+pub fn create_logger(name: String, config: LoggerConfig) nothrow -> Logger {
+	val reg = runtime.global_registry();
+	val _ = io.install_process_stdio(reg);
+	val st = _runtime_state_from_cfg(&config, _resolve_stderr_cap(reg));
+	val h = _alloc_runtime_state(st);
+	return Logger(name = name, min_level = config.min_level, state = h);
 }
 
 fn _level_rank(level: Level) nothrow -> Int {
@@ -303,9 +340,205 @@ fn _backpressure_code(var policy: BackpressurePolicy) nothrow -> Int {
 	};
 }
 
+fn _resolve_stderr_cap(reg: &runtime.GlobalRegistry) nothrow -> Optional<io.ProcessStderrCapability> {
+	match runtime.get<type io.ProcessStderrCapability>(reg) {
+		Some(cap) => {
+			return Optional<io.ProcessStderrCapability>::Some(*cap);
+		},
+		None => {
+			return Optional<io.ProcessStderrCapability>::None();
+		}
+	}
+}
+
+fn _runtime_state_from_cfg(cfg: &LoggerConfig, stderr_cap: Optional<io.ProcessStderrCapability>) nothrow -> LoggerRuntimeState {
+	return LoggerRuntimeState(
+		min_level = cfg.min_level,
+		queue_capacity = cfg.queue_capacity,
+		write_timeout_ms = cfg.write_timeout.millis,
+		enqueue_timeout_ms = cfg.enqueue_timeout.millis,
+		backpressure_policy = cfg.backpressure_policy,
+		stderr_cap = stderr_cap,
+		queue = sync.mpsc_queue<type Byte>(cfg.queue_capacity),
+		drain_lock = sync.atomic_bool(false)
+	);
+}
+
+fn _clone_runtime_state(st: &LoggerRuntimeState, min_level: Level) nothrow -> LoggerRuntimeState {
+	return LoggerRuntimeState(
+		min_level = min_level,
+		queue_capacity = st.queue_capacity,
+		write_timeout_ms = st.write_timeout_ms,
+		enqueue_timeout_ms = st.enqueue_timeout_ms,
+		backpressure_policy = st.backpressure_policy,
+		stderr_cap = st.stderr_cap,
+		queue = sync.mpsc_queue<type Byte>(st.queue_capacity),
+		drain_lock = sync.atomic_bool(false)
+	);
+}
+
+fn _alloc_runtime_state(st: LoggerRuntimeState) nothrow -> sync.Handle<Byte> {
+	unsafe {
+		var raw = mem.alloc_uninit<type LoggerRuntimeState>(1);
+		mem.write<type LoggerRuntimeState>(&mut raw, 0, move st);
+		val p = mem.rawbuffer_ptr<type LoggerRuntimeState>(&raw);
+		return sync.handle<type Byte>(cast<Uint>(p));
+	}
+}
+
+fn _runtime_state_from_handle(h: sync.Handle<Byte>) nothrow -> Optional<&LoggerRuntimeState> {
+	if h.is_null() {
+		return Optional<&LoggerRuntimeState>::None();
+	}
+	unsafe {
+		val p = cast<mem.Ptr<LoggerRuntimeState> >(h.to_uint());
+		return Optional<&LoggerRuntimeState>::Some(p);
+	}
+}
+
 fn _enabled(min_level: Level, event_level: Level) nothrow -> Bool {
 	if _level_rank(event_level) >= _level_rank(min_level) {
 		return true;
+	}
+	return false;
+}
+
+fn _alloc_envelope(level_rank: Int, logger_min_rank: Int, enqueue_timeout_ms: Int, payload_json: String) -> sync.Handle<Byte> {
+	unsafe {
+		var raw = mem.alloc_uninit<type LogEnvelope>(1);
+		val env = LogEnvelope(level_rank = level_rank, logger_min_rank = logger_min_rank, enqueue_timeout_ms = enqueue_timeout_ms, payload_json = payload_json);
+		mem.write<type LogEnvelope>(&mut raw, 0, move env);
+		val p = mem.rawbuffer_ptr<type LogEnvelope>(&raw);
+		val u = cast<Uint>(p);
+		return sync.handle<type Byte>(u);
+	}
+}
+
+fn _drop_envelope_handle(h: sync.Handle<Byte>) nothrow -> Void {
+	if h.is_null() {
+		return;
+	}
+	unsafe {
+		val p = cast<mem.Ptr<Byte> >(h.to_uint());
+		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
+		val env = mem.read<type LogEnvelope>(&mut raw, 0);
+		core.drop_value(move env);
+		mem.dealloc<type LogEnvelope>(raw);
+	}
+	return;
+}
+
+fn _emit_envelope_handle(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow -> Bool {
+	if h.is_null() {
+		return false;
+	}
+	unsafe {
+		val p = cast<mem.Ptr<Byte> >(h.to_uint());
+		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
+		val env = mem.read<type LogEnvelope>(&mut raw, 0);
+		val tm = time.format_iso8601_utc(&time.now_utc());
+		val tid = thread.vt_current();
+		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"tid\":" + format.format_int(tid) + "}";
+		val _ = _sink_write_line(st, line);
+		core.drop_value(move env);
+		mem.dealloc<type LogEnvelope>(raw);
+		return true;
+	}
+}
+
+fn _sink_write_line(st: &LoggerRuntimeState, line: String) nothrow -> Bool {
+	match st.stderr_cap {
+		Some(cap) => {
+			return cap.write_line(line);
+		},
+		None => {
+			val _ = st;
+			val _ = line;
+			return false;
+		}
+	}
+}
+
+fn _drain_locked(st: &LoggerRuntimeState) nothrow -> Void {
+	while true {
+		match st.queue.pop() {
+			Some(h) => {
+				val _ = _emit_envelope_handle(st, h);
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return;
+}
+
+fn _try_drain_once_owner(st: &LoggerRuntimeState) nothrow -> Void {
+	if st.drain_lock.compare_exchange(false, true, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire()) {
+		_drain_locked(st);
+		st.drain_lock.store(false, sync.MemoryOrder::Release());
+	}
+	return;
+}
+
+fn _flush_state(st: &LoggerRuntimeState, timeout_ms: Int) nothrow -> Void {
+	val deadline = thread.now_ms() + timeout_ms;
+	var acquired = false;
+	while thread.now_ms() <= deadline {
+		if st.drain_lock.compare_exchange(false, true, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire()) {
+			acquired = true;
+			break;
+		}
+	}
+	if acquired {
+		_drain_locked(st);
+		st.drain_lock.store(false, sync.MemoryOrder::Release());
+	}
+	return;
+}
+
+fn _enqueue_with_policy(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow -> Bool {
+	if st.queue.push(h) {
+		return true;
+	}
+	match st.backpressure_policy {
+		DropNewest => {
+			_drop_envelope_handle(h);
+			return false;
+		},
+		DropOldest => {
+			match st.queue.pop() {
+				Some(old) => {
+					_drop_envelope_handle(old);
+				},
+				None => {
+				}
+			}
+			if st.queue.push(h) {
+				return true;
+			}
+			_drop_envelope_handle(h);
+			return false;
+		},
+		BlockWithTimeout => {
+			if st.enqueue_timeout_ms <= 0 {
+				_drop_envelope_handle(h);
+				return false;
+			}
+			val deadline = thread.now_ms() + st.enqueue_timeout_ms;
+			var pushed = false;
+			while thread.now_ms() <= deadline {
+				if st.queue.push(h) {
+					pushed = true;
+					break;
+				}
+				_try_drain_once_owner(st);
+			}
+			if not pushed {
+				_drop_envelope_handle(h);
+			}
+			return pushed;
+		}
 	}
 	return false;
 }
@@ -320,13 +553,54 @@ fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.Has
 	return ok;
 }
 
-fn _emit_throwing<V>(logger: &Logger, var level: Level, ev: String, attrs: &containers.HashMap<String, V>) -> Bool require V is Debuggable {
-	val payload = _payload_json<type V>(logger, ev, attrs);
-	val rc = thread.log_runtime_enqueue(_level_rank(level), _level_rank(logger.min_level), 0, payload);
-	if rc == 0 {
+fn _emit_ctx(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) nothrow -> Bool {
+	if not _enabled(logger.min_level, level) {
 		return false;
 	}
-	return true;
+	return try _emit_ctx_throwing(logger, level, ev, ctx) catch { false };
+}
+
+fn _emit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+	if not _enabled(logger.min_level, level) {
+		core.drop_value(move attrs);
+		return false;
+	}
+	val ok = try _emit_ctx_attrs_throwing(logger, level, ev, ctx, &attrs) catch { false };
+	core.drop_value(move attrs);
+	return ok;
+}
+
+fn _emit_throwing<V>(logger: &Logger, var level: Level, ev: String, attrs: &containers.HashMap<String, V>) -> Bool require V is Debuggable {
+	val payload = _payload_json<type V>(logger, ev, attrs);
+	return _emit_payload_throwing(logger, level, payload);
+}
+
+fn _emit_ctx_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) -> Bool {
+	val payload = _payload_json_ctx(logger, ev, ctx);
+	return _emit_payload_throwing(logger, level, payload);
+}
+
+fn _emit_ctx_attrs_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> Bool {
+	val payload = _payload_json_ctx_attrs(logger, ev, ctx, attrs);
+	return _emit_payload_throwing(logger, level, payload);
+}
+
+fn _emit_payload_throwing(logger: &Logger, var level: Level, payload: String) -> Bool {
+	match _runtime_state_from_handle(logger.state) {
+		Some(st) => {
+			val h = _alloc_envelope(_level_rank(level), _level_rank(logger.min_level), st.enqueue_timeout_ms, payload);
+			if not _enqueue_with_policy(st, h) {
+				return false;
+			}
+			_try_drain_once_owner(st);
+			return true;
+		},
+		None => {
+			val _ = level;
+			val _ = payload;
+			return false;
+		}
+	}
 }
 
 fn _attrs_json<V>(attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
@@ -341,9 +615,9 @@ fn _attrs_json<V>(attrs: &containers.HashMap<String, V>) -> String require V is 
 					out = out + ",";
 				}
 				first = false;
-				val key = thread.log_runtime_json_escape(*item.key);
+				val key = _json_escape(*item.key);
 				val dv = Debuggable::to_debug(item.value);
-				val value_json = thread.log_runtime_dv_to_json(&dv);
+				val value_json = _dv_json(&dv);
 				out = out + "\"" + key + "\":" + value_json;
 			},
 			None => {
@@ -355,9 +629,92 @@ fn _attrs_json<V>(attrs: &containers.HashMap<String, V>) -> String require V is 
 }
 
 fn _payload_json<V>(logger: &Logger, ev: String, attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
-	val ev_json = thread.log_runtime_json_escape(ev);
-	val logger_json = thread.log_runtime_json_escape(logger.name);
+	val ev_json = _json_escape(ev);
+	val logger_json = _json_escape(logger.name);
 	val attrs_json = _attrs_json<type V>(attrs);
+	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
+}
+
+fn _ctx_attrs_json(ctx: &LogContext) -> String {
+	var out = "{";
+	var first = true;
+	var it = ctx.attrs.iter();
+	while true {
+		val next = it.next();
+		match next {
+			Some(item) => {
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = _json_escape(*item.key);
+				val value_json = _dv_json(item.value);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return out + "}";
+}
+
+fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> String {
+	var out = "{";
+	var first = true;
+	var it_ctx = ctx.attrs.iter();
+	while true {
+		val next = it_ctx.next();
+		match next {
+			Some(item) => {
+				if attrs.contains_key(item.key) {
+					continue;
+				}
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = _json_escape(*item.key);
+				val value_json = _dv_json(item.value);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	var it_attrs = attrs.iter();
+	while true {
+		val next = it_attrs.next();
+		match next {
+			Some(item) => {
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = _json_escape(*item.key);
+				val value_json = _dv_json(item.value);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return out + "}";
+}
+
+fn _payload_json_ctx(logger: &Logger, ev: String, ctx: &LogContext) -> String {
+	val ev_json = _json_escape(ev);
+	val logger_json = _json_escape(logger.name);
+	val attrs_json = _ctx_attrs_json(ctx);
+	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
+}
+
+fn _payload_json_ctx_attrs(logger: &Logger, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> String {
+	val ev_json = _json_escape(ev);
+	val logger_json = _json_escape(logger.name);
+	val attrs_json = _ctx_attrs_json_merged(ctx, attrs);
 	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
 }
 
@@ -371,23 +728,67 @@ implement Logger {
 	}
 
 	pub fn with_min_level(self: &Logger, var level: Level) nothrow -> Logger {
-		return Logger(name = self.name, min_level = move level);
+		match _runtime_state_from_handle(self.state) {
+			Some(st) => {
+				val next = _clone_runtime_state(st, level);
+				val h = _alloc_runtime_state(next);
+				return Logger(name = self.name, min_level = level, state = h);
+			},
+			None => {
+				return Logger(name = self.name, min_level = level, state = sync.null_handle<type Byte>());
+			}
+		}
 	}
 
 	pub fn derive(self: &Logger, name: String) nothrow -> LoggerBuilder {
-		return LoggerBuilder(parent = *self, name = name, min_level = Optional<Level>::None());
+		return LoggerBuilder(parent_state = self.state, parent_min_level = self.min_level, name = name, min_level = Optional<Level>::None());
+	}
+
+	pub fn flush(self: &Logger, timeout: conc.Duration) nothrow -> Bool {
+		match _runtime_state_from_handle(self.state) {
+			Some(st) => {
+				_flush_state(st, timeout.millis);
+			},
+			None => {
+			}
+		}
+		return true;
 	}
 
 	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
 		return _emit(self, Level::Debug(), ev, move attrs);
 	}
 
+	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
+		return _emit_ctx(self, Level::Debug(), ev, ctx);
+	}
+
+	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+		return _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
+	}
+
 	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
 		return _emit(self, Level::Info(), ev, move attrs);
 	}
 
+	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
+		return _emit_ctx(self, Level::Info(), ev, ctx);
+	}
+
+	pub fn info_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+		return _emit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
+	}
+
 	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
 		return _emit(self, Level::Error(), ev, move attrs);
+	}
+
+	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
+		return _emit_ctx(self, Level::Error(), ev, ctx);
+	}
+
+	pub fn error_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+		return _emit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
 	}
 }
 
@@ -408,47 +809,216 @@ implement LoggerBuilder {
 				level
 			},
 			None => {
-				self.parent.min_level
+				self.parent_min_level
 			}
 		};
-		return Logger(name = self.name, min_level = min);
+		match _runtime_state_from_handle(self.parent_state) {
+			Some(st) => {
+				val next = _clone_runtime_state(st, min);
+				val h = _alloc_runtime_state(next);
+				return Logger(name = self.name, min_level = min, state = h);
+			},
+			None => {
+				return Logger(name = self.name, min_level = min, state = sync.null_handle<type Byte>());
+			}
+		}
 	}
 }
 
-pub fn flush(timeout: conc.Duration) nothrow -> Bool {
-	val rc = thread.log_runtime_flush(timeout.millis);
-	if rc == 0 {
-		return false;
+implement core.Destructible for Logger {
+	pub fn destroy(var self: Logger) nothrow -> Void {
+		if self.state.is_null() {
+			return;
+		}
+		unsafe {
+			val p = cast<mem.Ptr<Byte> >(self.state.to_uint());
+			var raw = mem.rawbuffer_from_parts<type LoggerRuntimeState>(p, 1);
+			val st = mem.read<type LoggerRuntimeState>(&mut raw, 0);
+			core.drop_value(move st);
+			mem.dealloc<type LoggerRuntimeState>(raw);
+		}
+		return;
 	}
-	return true;
 }
 
-pub fn macro_debug<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+fn _level_text(level: Level) nothrow -> String {
+	return match level {
+		Debug => { "debug" },
+		Info => { "info" },
+		Error => { "error" }
+	};
+}
+
+fn _level_text_from_rank(rank: Int) nothrow -> String {
+	return _level_text(_level_from_rank(rank));
+}
+
+fn _hex_digit(v: Int) nothrow -> String {
+	if v <= 9 {
+		return format.format_int(v);
+	}
+	if v == 10 { return "A"; }
+	if v == 11 { return "B"; }
+	if v == 12 { return "C"; }
+	if v == 13 { return "D"; }
+	if v == 14 { return "E"; }
+	return "F";
+}
+
+fn _byte_hex2(b: Byte) nothrow -> String {
+	val v = cast<Int>(b);
+	val hi = v / 16;
+	val lo = v % 16;
+	return _hex_digit(hi) + _hex_digit(lo);
+}
+
+fn _byte_to_string(b: Byte) nothrow -> String {
+	unsafe {
+		var raw = mem.alloc_uninit<type Byte>(1);
+		mem.write<type Byte>(&mut raw, 0, b);
+		val out = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.dealloc<type Byte>(raw);
+		return out;
+	}
+}
+
+fn _json_escape(s: String) nothrow -> String {
+	var out = "";
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		val b = core.string_byte_at(&s, i);
+		if b == cast<Byte>(34) {
+			out = out + "\\\"";
+		} else {
+			if b == cast<Byte>(92) {
+				out = out + "\\\\";
+			} else {
+				if b == cast<Byte>(10) {
+					out = out + "\\n";
+				} else {
+					if b == cast<Byte>(13) {
+						out = out + "\\r";
+					} else {
+						if b == cast<Byte>(9) {
+							out = out + "\\t";
+						} else {
+							if b < cast<Byte>(32) {
+								out = out + "\\u00" + _byte_hex2(b);
+							} else {
+								out = out + _byte_to_string(b);
+							}
+						}
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return out;
+}
+
+fn _dv_json(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_bool() {
+		Some(v) => {
+			if v {
+				return "true";
+			}
+			return "false";
+		},
+		None => {
+		}
+	}
+	match dv.as_int() {
+		Some(v) => {
+			return format.format_int(v);
+		},
+		None => {
+		}
+	}
+	match dv.as_float() {
+		Some(v) => {
+			return format.format_float(v);
+		},
+		None => {
+		}
+	}
+	match dv.as_string() {
+		Some(v) => {
+			return "\"" + _json_escape(v) + "\"";
+		},
+		None => {
+		}
+	}
+	match dv.as_object() {
+		Some(_) => {
+			return "{}";
+		},
+		None => {
+		}
+	}
+	return "null";
+}
+
+pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	var attrs: containers.HashMap<String, Int> = {:};
+	return logger.debug(ev, move attrs);
+}
+
+pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.debug_ctx(ev, ctx);
+}
+
+pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.debug_ctx_attrs(ev, ctx, move attrs);
+}
+
+pub fn macro_debug<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
 	val _ = move src;
 	return logger.debug(ev, move attrs);
 }
 
-pub fn macro_info<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	var attrs: containers.HashMap<String, Int> = {:};
+	return logger.info(ev, move attrs);
+}
+
+pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.info_ctx(ev, ctx);
+}
+
+pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.info_ctx_attrs(ev, ctx, move attrs);
+}
+
+pub fn macro_info<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
 	val _ = move src;
 	return logger.info(ev, move attrs);
 }
 
-pub fn macro_error<V>(logger: Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
 	val _ = move src;
+	var attrs: containers.HashMap<String, Int> = {:};
 	return logger.error(ev, move attrs);
 }
 
-pub fn debug<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-	val main = logger_main();
-	return main.debug(ev, move attrs);
+pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.error_ctx(ev, ctx);
 }
 
-pub fn info<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-	val main = logger_main();
-	return main.info(ev, move attrs);
+pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+	val _ = move src;
+	return logger.error_ctx_attrs(ev, ctx, move attrs);
 }
 
-pub fn error<V>(ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-	val main = logger_main();
-	return main.error(ev, move attrs);
+pub fn macro_error<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+	val _ = move src;
+	return logger.error(ev, move attrs);
 }

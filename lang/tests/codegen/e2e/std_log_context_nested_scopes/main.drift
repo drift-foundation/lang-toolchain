@@ -1,0 +1,79 @@
+module m
+
+import std.log as log;
+import std.runtime as rt;
+
+fn _inner(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow -> Int {
+	var inner = log.log_context();
+	inner.put("user", "u-inner");
+	inner.put("req", "r-inner");
+	inner.put("span", "s1");
+	val g2 = st.push(move inner);
+	match st.peek() {
+		Some(top) => {
+			if not main.info_ctx_attrs("inner", top, {"req": DiagnosticValue::String("r-override"), "code": DiagnosticValue::Int(500)}) {
+				return 31;
+			}
+		},
+		None => {
+			return 32;
+		}
+	}
+	return 0;
+}
+
+fn _outer(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow -> Int {
+	var outer = log.log_context();
+	outer.put("user", "u-outer");
+	outer.put("req", "r-outer");
+	val g1 = st.push(move outer);
+	match st.peek() {
+		Some(top) => {
+			if not main.info_ctx("outer-before", top) {
+				return 21;
+			}
+		},
+		None => {
+			return 22;
+		}
+	}
+	val rc = _inner(main, st);
+	if rc != 0 {
+		return rc;
+	}
+	match st.peek() {
+		Some(top2) => {
+			if not main.info_ctx("outer-after", top2) {
+				return 23;
+			}
+		},
+		None => {
+			return 24;
+		}
+	}
+	return 0;
+}
+
+fn run() -> Int {
+	var b = log.config_builder();
+	val main = log.create_logger("svc", b.build());
+	var st = rt.scoped_stack<type log.LogContext>();
+	if st.depth() != 0 {
+		return 1;
+	}
+	val rc = _outer(&main, &mut st);
+	if rc != 0 {
+		return rc;
+	}
+	if st.depth() != 0 {
+		return 2;
+	}
+	if not main.info("after-all", {"ok": true}) {
+		return 3;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -9,10 +9,10 @@ pub fn main() nothrow -> Int {
 	cfgb.enqueue_timeout(conc.Duration(millis = 2));
 	cfgb.write_timeout(conc.Duration(millis = 25));
 	val cfg = cfgb.build();
-	val _ = log.init(cfg);
-	val _ = log.info("auth-failed", {"user": "alice", "reason": "bad-password"});
-	val _ = log.info("session-opened", {"user": "alice", "session_id": "sess-01"});
-	val _ = log.error("db-timeout", {"host": "db-main", "retryable": "true"});
-	val _ = log.flush(conc.Duration(millis = 1000));
+	val logger = log.create_logger("main", cfg);
+	val _ = logger.info("auth-failed", {"user": "alice", "reason": "bad-password"});
+	val _ = logger.info("session-opened", {"user": "alice", "session_id": "sess-01"});
+	val _ = logger.error("db-timeout", {"host": "db-main", "retryable": "true"});
+	val _ = logger.flush(conc.Duration(millis = 1000));
 	return 0;
 }

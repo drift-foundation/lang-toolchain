@@ -1,0 +1,50 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "outer-before",
+      "logger": "svc",
+      "attrs": {
+        "user": "u-outer",
+        "req": "r-outer"
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "inner",
+      "logger": "svc",
+      "attrs": {
+        "user": "u-inner",
+        "req": "r-override",
+        "span": "s1",
+        "code": 500
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "outer-after",
+      "logger": "svc",
+      "attrs": {
+        "user": "u-outer",
+        "req": "r-outer"
+      },
+      "tid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "after-all",
+      "logger": "svc",
+      "attrs": {
+        "ok": true
+      },
+      "tid": "__ANY__"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+module m
+
+struct A {
+	x: Int
+}
+
+struct B {
+	y: Int
+}
+
+implement A {
+	pub fn set(self: &mut A, v: Int) nothrow -> Void {
+		self.x = v;
+	}
+}
+
+implement B {
+	pub fn set(self: &mut B, v: Int) nothrow -> Void {
+		self.y = v;
+	}
+}
+
+fn run() -> Int {
+	var b = A(x = 0);
+	b.set(1);
+	var b = B(y = 0);
+	b.set(2);
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

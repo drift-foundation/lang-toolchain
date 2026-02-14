@@ -1055,10 +1055,11 @@ def decode_mir_funcs(
 	"""
 	from lang.driftc.stage2 import mir_nodes as M  # local import to avoid heavy import at module init
 	from lang.driftc.core import function_id as fn_id_mod  # local import
+	from lang.driftc.stage1 import call_info as call_info_mod  # local import
 	from lang.driftc.core.function_id import function_id_to_obj  # local import
 
-	dc = build_dataclass_registry(M, fn_id_mod)
-	enums = build_enum_registry(M)
+	dc = build_dataclass_registry(M, fn_id_mod, call_info_mod)
+	enums = build_enum_registry(M, fn_id_mod, call_info_mod)
 	out: dict[FunctionId, Any] = {}
 	for name, obj in mir_funcs_obj.items():
 		if isinstance(obj, dict) and "fn_id" not in obj:

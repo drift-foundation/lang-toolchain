@@ -1,0 +1,9 @@
+{
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "==/!= are only supported for Bool, Int, Float, String in MVP"
+    }
+  ]
+}

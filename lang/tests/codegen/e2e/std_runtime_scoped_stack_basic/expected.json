@@ -1,0 +1,4 @@
+{
+  "description": "std.runtime ScopedStack supports scoped push/pop restoration via ScopeGuard",
+  "exit_code": 0
+}

@@ -1132,6 +1132,14 @@ class HIRToMIR:
 			td = self._type_table.get(ty)
 			return td.kind is TypeKind.SCALAR and td.name in allowed_scalar_names
 
+		def _is_uint_scalar_type(ty: TypeId) -> bool:
+			td = self._type_table.get(ty)
+			return td.kind is TypeKind.SCALAR and td.name == "Uint"
+
+		def _is_raw_ptr_type(ty: TypeId) -> bool:
+			td = self._type_table.get(ty)
+			return td.kind is TypeKind.RAW_PTR
+
 		def _resolve_scalar_target() -> TypeId | None:
 			te = getattr(expr, "target_type_expr", None)
 			if te is None:
@@ -1150,6 +1158,20 @@ class HIRToMIR:
 				return tid
 			return None
 
+		def _resolve_ptr_target() -> TypeId | None:
+			te = getattr(expr, "target_type_expr", None)
+			if te is None:
+				return None
+			module_id = getattr(te, "module_id", None) or self._current_module_name()
+			try:
+				tid = resolve_opaque_type(te, self._type_table, module_id=module_id)
+			except Exception:
+				return None
+			td = self._type_table.get(tid)
+			if td.kind is TypeKind.RAW_PTR:
+				return tid
+			return None
+
 		if drift_debug.enabled("stage2"):
 			import sys
 			target_desc = _format_type_expr(getattr(expr, "target_type_expr", None))
@@ -1163,6 +1185,8 @@ class HIRToMIR:
 				"rewrite to HFnPtrConst or emit a diagnostic"
 			)
 		resolved_target = _resolve_scalar_target()
+		if resolved_target is None:
+			resolved_target = _resolve_ptr_target()
 		if resolved_target is not None:
 			if target_ty is None:
 				target_ty = resolved_target
@@ -1227,8 +1251,18 @@ class HIRToMIR:
 				self.b.emit(M.CastScalar(dest=dest, value=val, src_ty=val_ty, dst_ty=target_ty))
 				self._local_types[dest] = target_ty
 				return dest
+			if (_is_raw_ptr_type(val_ty) and (_is_raw_ptr_type(target_ty) or _is_uint_scalar_type(target_ty))) or (_is_uint_scalar_type(val_ty) and _is_raw_ptr_type(target_ty)):
+				dest = self.b.new_temp()
+				self.b.emit(M.CastScalar(dest=dest, value=val, src_ty=val_ty, dst_ty=target_ty))
+				self._local_types[dest] = target_ty
+				return dest
 		if src_ty == target_ty:
 			return val
+		if (_is_raw_ptr_type(src_ty) and (_is_raw_ptr_type(target_ty) or _is_uint_scalar_type(target_ty))) or (_is_uint_scalar_type(src_ty) and _is_raw_ptr_type(target_ty)):
+			dest = self.b.new_temp()
+			self.b.emit(M.CastScalar(dest=dest, value=val, src_ty=src_ty, dst_ty=target_ty))
+			self._local_types[dest] = target_ty
+			return dest
 		if not _is_scalar_cast_type(src_ty) or not _is_scalar_cast_type(target_ty):
 			return self._recover_unknown_value(
 				f"stage2: unsupported scalar cast (node_id={expr.node_id}, src={src_ty}, dst={target_ty})"
@@ -3235,8 +3269,12 @@ class HIRToMIR:
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None:
 				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
+			recv_eff_ty = recv_ty
 			if recv_ty is not None:
 				recv_def = self._type_table.get(recv_ty)
+				while recv_def.kind is TypeKind.REF and recv_def.param_types:
+					recv_eff_ty = recv_def.param_types[0]
+					recv_def = self._type_table.get(recv_eff_ty)
 				if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
 					recv_ty = None
 			if recv_ty is None:
@@ -3256,6 +3294,11 @@ class HIRToMIR:
 			if expr.method_name == "get" and len(expr.args) != 1:
 				raise NotImplementedError("get takes exactly one key argument")
 			dv_val = self.lower_expr(expr.receiver)
+			if recv_eff_ty is not None and recv_ty is not None:
+				recv_def2 = self._type_table.get(recv_ty)
+				if recv_def2.kind is TypeKind.REF:
+					deref = H.HUnary(op=H.UnaryOp.DEREF, expr=expr.receiver)
+					dv_val = self.lower_expr(deref)
 			dest = self.b.new_temp()
 			if expr.method_name == "as_int":
 				self.b.emit(M.DVAsInt(dest=dest, dv=dv_val))
@@ -4734,8 +4777,6 @@ class HIRToMIR:
 				val_ty = bid_ty
 		if val_ty is not None:
 			self._local_types[local_name] = val_ty
-			if stmt.name != local_name and stmt.name != "_":
-				self._local_types[stmt.name] = val_ty
 			self._register_drop_local(local_name, val_ty)
 			if drift_debug.enabled("local_types_trace") and (local_name == "done" or stmt.name == "done"):
 				import sys
@@ -6457,6 +6498,9 @@ class HIRToMIR:
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is not None:
 				recv_def = self._type_table.get(recv_ty)
+				while recv_def.kind is TypeKind.REF and recv_def.param_types:
+					recv_ty = recv_def.param_types[0]
+					recv_def = self._type_table.get(recv_ty)
 				if recv_def.kind is TypeKind.DIAGNOSTICVALUE:
 					if expr.method_name == "as_int":
 						return self._optional_variant_type(self._int_type)

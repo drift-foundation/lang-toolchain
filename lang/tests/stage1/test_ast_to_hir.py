@@ -127,7 +127,21 @@ def test_macro_log_wrong_arity_rejected():
 		l.lower_expr(
 			ast.MacroCall(
 				func=ast.Attr(ast.Name("log"), "info"),
-				args=[ast.Name("security_logger"), ast.Literal("auth-failed")],
+				args=[ast.Name("security_logger")],
+				kwargs=[],
+			)
+		)
+	with pytest.raises(ValueError):
+		l.lower_expr(
+			ast.MacroCall(
+				func=ast.Attr(ast.Name("log"), "info"),
+				args=[
+					ast.Name("security_logger"),
+					ast.Literal("auth-failed"),
+					ast.MapLiteral(entries=[]),
+					ast.MapLiteral(entries=[]),
+					ast.MapLiteral(entries=[]),
+				],
 				kwargs=[],
 			)
 		)

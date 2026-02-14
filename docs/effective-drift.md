@@ -190,17 +190,18 @@ Default formatter is JSON and includes `tm` as ISO-8601 UTC
 ```drift
 import std.log as log;
 import std.meta as meta;
+import std.concurrent as conc;
 
 pub fn main() nothrow -> Int {
     val cfg_builder = log.config_builder();
     cfg_builder.sink(log.stderr_sink());
     cfg_builder.min_level(log.Level::Info());
     val cfg = cfg_builder.build();
-    log.init(cfg);
+    val logger = log.create_logger("main", cfg);
 
-    log.info("auth-failed", {"user": "alice", "reason": "bad-password", "src": meta.caller()});
-    log.error("db-timeout", {"host": "db-main", "retryable": true, "src": meta.caller()});
-    log.flush();
+    logger.info("auth-failed", {"user": "alice", "reason": "bad-password", "src": meta.caller()});
+    logger.error("db-timeout", {"host": "db-main", "retryable": true, "src": meta.caller()});
+    logger.flush(conc.Duration(millis = 1000));
     return 0;
 }
 ```
