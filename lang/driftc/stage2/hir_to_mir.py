@@ -59,6 +59,7 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.closures import sort_captures
+from lang.driftc.call_contract import call_contract_issues
 from . import mir_nodes as M
 
 
@@ -5507,10 +5508,11 @@ class HIRToMIR:
 			raise AssertionError(
 				f"missing call info for HMethodCall callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
 			)
-		if info.target.kind is CallTargetKind.CONSTRUCTOR:
-			raise AssertionError(
-				f"method call has constructor CallTarget for callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
-			)
+		for issue in call_contract_issues(expr, info):
+			if issue.code == "E_CALLINFO_METHOD_CONSTRUCTOR_TARGET":
+				raise AssertionError(
+					f"method call has constructor CallTarget for callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
+				)
 		return info
 
 	def _call_info_for_invoke(self, expr: H.HInvoke) -> CallInfo:
@@ -5519,14 +5521,15 @@ class HIRToMIR:
 			raise AssertionError(
 				f"missing call info for HInvoke callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
 			)
-		if info.target.kind is not CallTargetKind.INDIRECT:
-			raise AssertionError(
-				f"invoke callsite_id={getattr(expr, 'callsite_id', None)} requires INDIRECT CallTarget (typecheck/call-info bug)"
-			)
-		if info.sig.includes_callee:
-			raise AssertionError(
-				f"invoke callsite_id={getattr(expr, 'callsite_id', None)} must not set includes_callee in CallSig (typecheck/call-info bug)"
-			)
+		for issue in call_contract_issues(expr, info):
+			if issue.code == "E_CALLINFO_INVOKE_TARGET_KIND":
+				raise AssertionError(
+					f"invoke callsite_id={getattr(expr, 'callsite_id', None)} requires INDIRECT CallTarget (typecheck/call-info bug)"
+				)
+			if issue.code == "E_CALLINFO_INVOKE_INCLUDES_CALLEE":
+				raise AssertionError(
+					f"invoke callsite_id={getattr(expr, 'callsite_id', None)} must not set includes_callee in CallSig (typecheck/call-info bug)"
+				)
 		return info
 
 	def _resolve_map_insert_call_info(self, *, map_ty: TypeId, key_ty: TypeId, value_ty: TypeId) -> CallInfo:

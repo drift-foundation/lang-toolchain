@@ -46,6 +46,7 @@ from lang.driftc.checker import FnSignature
 from lang.driftc.method_registry import CallableDecl
 from lang.driftc.method_resolver import MethodResolution, SelfMode
 from lang.driftc.stage1.call_info import CallInfo, CallTargetKind, IntrinsicKind
+from lang.driftc.call_contract import explicit_arg_param_types
 from collections import deque
 
 
@@ -284,9 +285,7 @@ class BorrowChecker:
 			recv_place = place_from_expr(recv_expr, base_lookup=self.base_lookup)
 			recv_ty = self._type_of_place(recv_place) if recv_place is not None else None
 			if recv_ty is not None and self.type_table.get(recv_ty).kind is TypeKind.INTERFACE:
-				param_types = list(call_info.sig.param_types)
-				if call_info.sig.includes_callee and param_types:
-					param_types = param_types[1:]
+				param_types = explicit_arg_param_types(expr, call_info)
 				param_offset = 0
 				params_include_receiver = False
 		return param_types, param_offset, params_include_receiver, receiver_autoborrow

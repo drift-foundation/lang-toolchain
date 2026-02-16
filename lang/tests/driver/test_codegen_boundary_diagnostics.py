@@ -51,6 +51,11 @@ fn main() nothrow -> Int {
 	errs = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any(d.phase == "codegen" for d in errs), errs
 	assert any("forced llvm lowering failure" in d.message for d in errs), errs
+	matches = [d for d in errs if "forced llvm lowering failure" in d.message]
+	assert matches
+	assert matches[0].span is not None
+	assert matches[0].span.line is not None
+	assert matches[0].span.column is not None
 
 
 def test_codegen_pipeline_surfaces_mir_lowering_contract_failure_as_diagnostic(
@@ -117,3 +122,8 @@ fn main() nothrow -> Int {
 	errs = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any(d.phase == "mir_validate" for d in errs), errs
 	assert any("MIR lowering contract failure" in d.message for d in errs), errs
+	matches = [d for d in errs if "MIR lowering contract failure" in d.message]
+	assert matches
+	assert matches[0].span is not None
+	assert matches[0].span.line is not None
+	assert matches[0].span.column is not None

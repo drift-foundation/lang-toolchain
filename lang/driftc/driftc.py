@@ -877,6 +877,173 @@ def _assert_all_phased(diags: Iterable[Diagnostic], *, context: str) -> None:
 		raise AssertionError(f"{context} diagnostics missing phase ({len(missing)})")
 
 
+def _span_has_location(span: Span | None) -> bool:
+	return bool(span is not None and span.line is not None and span.column is not None)
+
+
+def _first_span_in_hir_block(block: H.HBlock | None) -> Span | None:
+	if block is None:
+		return None
+	seen: set[int] = set()
+
+	def _walk_expr(expr: H.HExpr) -> Span | None:
+		obj_id = id(expr)
+		if obj_id in seen:
+			return None
+		seen.add(obj_id)
+		loc = Span.from_loc(getattr(expr, "loc", None))
+		if _span_has_location(loc):
+			return loc
+		if isinstance(expr, H.HCall):
+			hit = _walk_expr(expr.fn)
+			if hit is not None:
+				return hit
+			for arg in expr.args:
+				hit = _walk_expr(arg)
+				if hit is not None:
+					return hit
+			for kw in getattr(expr, "kwargs", []) or []:
+				hit = _walk_expr(kw.value)
+				if hit is not None:
+					return hit
+			return None
+		if isinstance(expr, H.HMethodCall):
+			hit = _walk_expr(expr.receiver)
+			if hit is not None:
+				return hit
+			for arg in expr.args:
+				hit = _walk_expr(arg)
+				if hit is not None:
+					return hit
+			for kw in getattr(expr, "kwargs", []) or []:
+				hit = _walk_expr(kw.value)
+				if hit is not None:
+					return hit
+			return None
+		if isinstance(expr, H.HInvoke):
+			hit = _walk_expr(expr.callee)
+			if hit is not None:
+				return hit
+			for arg in expr.args:
+				hit = _walk_expr(arg)
+				if hit is not None:
+					return hit
+			for kw in getattr(expr, "kwargs", []) or []:
+				hit = _walk_expr(kw.value)
+				if hit is not None:
+					return hit
+			return None
+		for child in getattr(expr, "__dict__", {}).values():
+			if isinstance(child, H.HExpr):
+				hit = _walk_expr(child)
+				if hit is not None:
+					return hit
+			elif isinstance(child, list):
+				for item in child:
+					if isinstance(item, H.HExpr):
+						hit = _walk_expr(item)
+						if hit is not None:
+							return hit
+		return None
+
+	for stmt in block.statements:
+		loc = Span.from_loc(getattr(stmt, "loc", None))
+		if _span_has_location(loc):
+			return loc
+		for child in getattr(stmt, "__dict__", {}).values():
+			if isinstance(child, H.HExpr):
+				hit = _walk_expr(child)
+				if hit is not None:
+					return hit
+			elif isinstance(child, H.HBlock):
+				hit = _first_span_in_hir_block(child)
+				if hit is not None:
+					return hit
+			elif isinstance(child, list):
+				for item in child:
+					if isinstance(item, H.HExpr):
+						hit = _walk_expr(item)
+						if hit is not None:
+							return hit
+					elif isinstance(item, H.HBlock):
+						hit = _first_span_in_hir_block(item)
+						if hit is not None:
+							return hit
+	return None
+
+
+def _best_effort_boundary_span(
+	*,
+	fn_id: FunctionId | None = None,
+	signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
+	checked: CheckedProgramById | None = None,
+	hir_block: H.HBlock | None = None,
+	origin_by_fn_id: Mapping[FunctionId, Path] | None = None,
+) -> Span:
+	candidates: list[Span] = []
+	if fn_id is not None and signatures_by_id is not None:
+		sig = signatures_by_id.get(fn_id)
+		if sig is not None:
+			candidates.append(Span.from_loc(getattr(sig, "loc", None)))
+	if fn_id is not None and checked is not None:
+		info = checked.fn_infos_by_id.get(fn_id)
+		if info is not None:
+			candidates.append(Span.from_loc(getattr(info, "span", None)))
+			sig = getattr(info, "signature", None)
+			if sig is not None:
+				candidates.append(Span.from_loc(getattr(sig, "loc", None)))
+	if hir_block is not None:
+		hit = _first_span_in_hir_block(hir_block)
+		if hit is not None:
+			candidates.append(hit)
+	if signatures_by_id is not None:
+		for sig in signatures_by_id.values():
+			candidates.append(Span.from_loc(getattr(sig, "loc", None)))
+	if checked is not None:
+		for info in checked.fn_infos_by_id.values():
+			candidates.append(Span.from_loc(getattr(info, "span", None)))
+			sig = getattr(info, "signature", None)
+			if sig is not None:
+				candidates.append(Span.from_loc(getattr(sig, "loc", None)))
+	best = next((sp for sp in candidates if _span_has_location(sp)), None)
+	if best is None:
+		best = next((sp for sp in candidates if sp.file is not None), None)
+	if best is None:
+		best = Span()
+	if best.file is None and fn_id is not None and origin_by_fn_id is not None:
+		path = origin_by_fn_id.get(fn_id)
+		if path is not None:
+			best = replace(best, file=str(path))
+	return best
+
+
+def _append_boundary_contract_diag(
+	checked: CheckedProgramById,
+	*,
+	phase: str,
+	prefix: str,
+	err: AssertionError,
+	fn_id: FunctionId | None = None,
+	signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
+	hir_block: H.HBlock | None = None,
+	origin_by_fn_id: Mapping[FunctionId, Path] | None = None,
+) -> None:
+	checked.diagnostics.append(
+		Diagnostic(
+			message=f"internal: {prefix} ({err})",
+			severity="error",
+			span=_best_effort_boundary_span(
+				fn_id=fn_id,
+				signatures_by_id=signatures_by_id,
+				checked=checked,
+				hir_block=hir_block,
+				origin_by_fn_id=origin_by_fn_id,
+			),
+			phase=phase,
+		)
+	)
+
+
 def _validate_codegen_contract(
 	mir_funcs: Mapping[FunctionId, M.MirFunc],
 	ssa_funcs: Mapping[FunctionId, MirToSSA.SsaFunc] | None,
@@ -3725,13 +3892,15 @@ def compile_stubbed_funcs(
 		try:
 			lower.lower_function_body(hir_norm)
 		except AssertionError as err:
-			checked.diagnostics.append(
-				Diagnostic(
-					message=f"internal: MIR lowering contract failure ({err})",
-					severity="error",
-					span=Span(),
-					phase="mir_validate",
-				)
+			_append_boundary_contract_diag(
+				checked,
+				phase="mir_validate",
+				prefix="MIR lowering contract failure",
+				err=err,
+				fn_id=fn_id,
+				signatures_by_id=signatures_by_id,
+				hir_block=hir_norm,
+				origin_by_fn_id=origin_by_fn_id,
 			)
 			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 			if return_checked:
@@ -4549,13 +4718,15 @@ def compile_stubbed_funcs(
 		try:
 			ret_val = lower._lower_lambda_block(lower, lambda_body)
 		except AssertionError as err:
-			checked.diagnostics.append(
-				Diagnostic(
-					message=f"internal: MIR lowering contract failure ({err})",
-					severity="error",
-					span=Span(),
-					phase="mir_validate",
-				)
+			_append_boundary_contract_diag(
+				checked,
+				phase="mir_validate",
+				prefix="MIR lowering contract failure",
+				err=err,
+				fn_id=spec.fn_id,
+				signatures_by_id=signatures_by_id,
+				hir_block=lambda_body,
+				origin_by_fn_id=origin_by_fn_id,
 			)
 			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 			if return_checked:
@@ -4773,13 +4944,15 @@ def compile_stubbed_funcs(
 		try:
 			ret_val = lower._lower_lambda_block(lower, lambda_body)
 		except AssertionError as err:
-			checked.diagnostics.append(
-				Diagnostic(
-					message=f"internal: MIR lowering contract failure ({err})",
-					severity="error",
-					span=Span(),
-					phase="mir_validate",
-				)
+			_append_boundary_contract_diag(
+				checked,
+				phase="mir_validate",
+				prefix="MIR lowering contract failure",
+				err=err,
+				fn_id=spec.fn_id,
+				signatures_by_id=signatures_by_id,
+				hir_block=lambda_body,
+				origin_by_fn_id=origin_by_fn_id,
 			)
 			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 			if return_checked:
@@ -4855,13 +5028,14 @@ def compile_stubbed_funcs(
 			if shared_type_table is not None:
 				validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
 		except AssertionError as err:
-			checked.diagnostics.append(
-				Diagnostic(
-					message=f"internal: MIR validation contract failure ({err})",
-					severity="error",
-					span=Span(),
-					phase="mir_validate",
-				)
+			_append_boundary_contract_diag(
+				checked,
+				phase="mir_validate",
+				prefix="MIR validation contract failure",
+				err=err,
+				fn_id=FunctionId(module=entry_module, name=entry_name, ordinal=0),
+				signatures_by_id=signatures_by_id,
+				origin_by_fn_id=origin_by_fn_id,
 			)
 			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 			if return_checked:
@@ -5107,13 +5281,14 @@ def compile_to_llvm_ir_for_tests(
 			debug_enabled=debug_enabled,
 		)
 	except AssertionError as err:
-		checked.diagnostics.append(
-			Diagnostic(
-				message=f"internal: LLVM lowering contract failure ({err})",
-				severity="error",
-				span=Span(),
-				phase="codegen",
-			)
+		_append_boundary_contract_diag(
+			checked,
+			phase="codegen",
+			prefix="LLVM lowering contract failure",
+			err=err,
+			fn_id=entry_id,
+			signatures_by_id=signatures_by_id,
+			origin_by_fn_id=origin_by_fn_id,
 		)
 		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 		return "", checked
@@ -5131,13 +5306,14 @@ def compile_to_llvm_ir_for_tests(
 			debug_enabled=debug_enabled,
 		)
 	except AssertionError as err:
-		checked.diagnostics.append(
-			Diagnostic(
-				message=f"internal: LLVM lowering contract failure ({err})",
-				severity="error",
-				span=Span(),
-				phase="codegen",
-			)
+		_append_boundary_contract_diag(
+			checked,
+			phase="codegen",
+			prefix="LLVM lowering contract failure",
+			err=err,
+			fn_id=entry_id,
+			signatures_by_id=signatures_by_id,
+			origin_by_fn_id=origin_by_fn_id,
 		)
 		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 		return "", checked

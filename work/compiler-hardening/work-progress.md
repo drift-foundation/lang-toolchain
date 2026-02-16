@@ -724,6 +724,68 @@ Phase 5 boundary pinning: compile_to_llvm_ir path regression for stage2 assertio
   - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_mir_validate_boundary_diagnostics.py lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py` -> pass
   - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/stage2/test_callinfo_cutover.py lang/tests/driver/test_callinfo_param_layout_contract.py` -> pass
 
+Phase 6 progress: boundary diagnostic span hygiene + guard rails (2026-02-16)
+- `lang/driftc/driftc.py`:
+  - Added shared best-effort span helpers for boundary diagnostics:
+    - `_span_has_location(...)`
+    - `_first_span_in_hir_block(...)`
+    - `_best_effort_boundary_span(...)`
+  - Replaced anonymous boundary spans with best-effort source spans in:
+    - `internal: MIR lowering contract failure (...)`
+    - `internal: MIR validation contract failure (...)`
+    - `internal: LLVM lowering contract failure (...)`
+  - Wired span fallback through function signature/body/origin data where available, preserving deterministic phase taxonomy (`mir_validate` / `codegen`).
+- Driver tests updated to assert span presence (line/column) for boundary diagnostics when source exists:
+  - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py`
+  - `lang/tests/driver/test_codegen_boundary_diagnostics.py`
+  - `lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py`
+- Added grep-style guard in `lang/tests/driver/test_no_blank_span_fallbacks.py`:
+  - prevents reintroduction of `span=Span()` specifically in boundary diagnostic construction blocks in `lang/driftc/driftc.py`.
+- Validation:
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_mir_validate_boundary_diagnostics.py lang/tests/driver/test_codegen_boundary_diagnostics.py lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py` -> pass
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_no_blank_span_fallbacks.py` -> pass
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/stage2/test_callinfo_cutover.py lang/tests/driver/test_callinfo_param_layout_contract.py` -> pass
+
+Phase 6 structural decomposition: shared call-contract module + centralized boundary diagnostic builder (2026-02-16)
+- Added shared call-contract module:
+  - `lang/driftc/call_contract.py`
+  - Extracted reusable primitives:
+    - `call_arg_exprs_for_param_layout(...)`
+    - `call_expected_param_count(...)`
+    - `explicit_arg_param_types(...)`
+    - `call_contract_issues(...)`
+  - Encodes cross-stage call metadata shape/arity issues as stable issue codes.
+- Checker integration (`lang/driftc/checker/__init__.py`):
+  - Replaced local ad-hoc call arg-shape computation with `call_arg_exprs_for_param_layout(...)`.
+  - Replaced local target/param validators with `call_contract_issues(...)`-driven diagnostics.
+  - Keeps existing checker diagnostic message strings stable.
+- Stage2 integration (`lang/driftc/stage2/hir_to_mir.py`):
+  - `_call_info_for_method(...)` / `_call_info_for_invoke(...)` now consume shared `call_contract_issues(...)` and map issue codes to existing assertion messages.
+  - Removes duplicated local target-shape branching logic.
+- Borrow checker integration (`lang/driftc/borrow_checker_pass.py`):
+  - `_method_call_param_layout(...)` now uses `explicit_arg_param_types(...)` for interface-indirect method param mapping.
+  - Reduces duplicated `includes_callee` stripping logic.
+- Boundary diagnostic construction centralized (`lang/driftc/driftc.py`):
+  - Added `_append_boundary_contract_diag(...)`.
+  - Replaced repeated ad-hoc `Diagnostic(...)` construction blocks for:
+    - MIR lowering contract failure
+    - MIR validation contract failure
+    - LLVM lowering contract failure
+  - Preserves existing message taxonomy and phase attribution while enforcing shared span policy.
+- Validation:
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_callinfo_param_layout_contract.py lang/tests/stage2/test_callinfo_cutover.py lang/tests/driver/test_mir_validate_boundary_diagnostics.py lang/tests/driver/test_codegen_boundary_diagnostics.py lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py lang/tests/driver/test_no_blank_span_fallbacks.py` -> pass
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_implicit_move_var_requirement.py lang/tests/driver/test_noncopy_field_projection_from_borrow.py lang/tests/driver/test_driftc_codegen_e2e.py::test_driftc_codegen_callback_arc_mutex_stub` -> pass
+
+Phase 6 final guard: enforce centralized boundary diagnostic builder usage (2026-02-16)
+- Added anti-regression driver test in:
+  - `lang/tests/driver/test_no_blank_span_fallbacks.py`
+  - `test_boundary_contract_diagnostics_use_central_helper_in_driftc`
+- Guard assertions:
+  - no direct `Diagnostic(message=f"internal: ... contract failure")` construction blocks for MIR lowering / MIR validation / LLVM lowering in `lang/driftc/driftc.py`
+  - `_append_boundary_contract_diag(...)` appears at all expected call sites (count-based floor check).
+- Validation:
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_no_blank_span_fallbacks.py lang/tests/driver/test_mir_validate_boundary_diagnostics.py lang/tests/driver/test_codegen_boundary_diagnostics.py lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py` -> pass
+
 ---
 
 ## Phase 5: MIR→LLVM Contract Guards

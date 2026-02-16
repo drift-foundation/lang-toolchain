@@ -54,3 +54,8 @@ fn main() nothrow -> Int {
 	assert any(d.phase == "codegen" for d in errs), errs
 	assert any("forced pre-emit contract failure" in d.message for d in errs), errs
 	assert all("should not run after pre-emit failure" not in d.message for d in errs), errs
+	matches = [d for d in errs if "forced pre-emit contract failure" in d.message]
+	assert matches
+	assert matches[0].span is not None
+	assert matches[0].span.line is not None
+	assert matches[0].span.column is not None

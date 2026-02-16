@@ -5,10 +5,8 @@ from pathlib import Path
 import pytest
 
 from lang.driftc import driftc
-from lang.driftc import stage1 as H
 from lang.driftc import type_checker as tc_mod
 from lang.driftc.driftc import compile_stubbed_funcs
-from lang.driftc.core.function_id import FunctionId
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget
@@ -54,6 +52,11 @@ fn main() nothrow -> Int {
 	errs = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any(d.phase == "mir_validate" for d in errs), errs
 	assert any("forced mir validator failure" in d.message for d in errs), errs
+	matches = [d for d in errs if "forced mir validator failure" in d.message]
+	assert matches
+	assert matches[0].span is not None
+	assert matches[0].span.line is not None
+	assert matches[0].span.column is not None
 
 
 def test_mir_lowering_contract_failure_is_diagnostic_not_assert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,5 +122,9 @@ fn main() nothrow -> Int {
 	errs = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any(d.phase == "mir_validate" for d in errs), errs
 	assert any("MIR lowering contract failure" in d.message for d in errs), errs
-	assert any("MIR lowering contract failure" in d.message for d in errs), errs
 	assert any("constructor call resolved to non-STRUCT" in d.message for d in errs), errs
+	matches = [d for d in errs if "constructor call resolved to non-STRUCT" in d.message]
+	assert matches
+	assert matches[0].span is not None
+	assert matches[0].span.line is not None
+	assert matches[0].span.column is not None

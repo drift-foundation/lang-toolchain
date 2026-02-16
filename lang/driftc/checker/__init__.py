@@ -40,6 +40,7 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeTable, TypeId, TypeKind, TypeParamId
 from lang.driftc.stage1.hir_utils import collect_catch_arms_from_block
 from lang.driftc.stage1.call_info import CallInfo, CallTargetKind, IntrinsicKind
+from lang.driftc.call_contract import call_arg_exprs_for_param_layout, call_contract_issues
 from lang.driftc.stage1.normalize import normalize_hir
 
 if TYPE_CHECKING:
@@ -1969,20 +1970,7 @@ class Checker:
 					return
 				kwargs = getattr(expr, "kwargs", []) or []
 				skip_type_check = bool(kwargs)
-				if isinstance(expr, H.HMethodCall):
-					if info.target.kind is CallTargetKind.INDIRECT:
-						arg_exprs = list(expr.args)
-					else:
-						arg_exprs = [expr.receiver] + list(expr.args)
-				elif isinstance(expr, H.HInvoke):
-					if info.sig.includes_callee:
-						arg_exprs = [expr.callee] + list(expr.args)
-					else:
-						arg_exprs = list(expr.args)
-				else:
-					arg_exprs = list(expr.args)
-				if kwargs:
-					arg_exprs.extend(kw.value for kw in kwargs)
+				arg_exprs = call_arg_exprs_for_param_layout(expr, info)
 				arg_type_ids = [
 					self._infer_hir_expr_type(a, fn_infos, current_fn, diagnostics) for a in arg_exprs
 				]
@@ -2080,63 +2068,23 @@ class Checker:
 
 		walk_block(block)
 
-	def _expected_call_param_count(self, expr: "H.HExpr", info: CallInfo) -> int:
-		from lang.driftc import stage1 as H
-
-		kwargs = list(getattr(expr, "kwargs", []) or [])
-		if isinstance(expr, H.HMethodCall):
-			base = len(expr.args)
-			if info.target.kind is not CallTargetKind.INDIRECT:
-				base += 1
-			return base + len(kwargs)
-		if isinstance(expr, H.HInvoke):
-			base = len(expr.args)
-			if info.sig.includes_callee:
-				base += 1
-			return base + len(kwargs)
-		if isinstance(expr, H.HCall):
-			return len(expr.args) + len(kwargs)
-		return len(kwargs)
-
 	def _validate_callinfo_param_layout(
 		self,
 		expr: "H.HExpr",
 		info: CallInfo,
 		diagnostics: List[Diagnostic],
 	) -> bool:
-		from lang.driftc import stage1 as H
-
-		expected = self._expected_call_param_count(expr, info)
-		actual = len(info.sig.param_types)
-		if actual != expected:
-			call_kind = "call"
-			if isinstance(expr, H.HMethodCall):
-				call_kind = "method call"
-			elif isinstance(expr, H.HInvoke):
-				call_kind = "invoke"
-			diagnostics.append(
-				_chk_diag(
-					message=f"internal: CallInfo param layout mismatch for {call_kind} (checker bug)",
-					severity="error",
-					span=getattr(expr, "loc", None),
-					notes=[
-						f"target_kind={info.target.kind.name}",
-						f"callsite_id={getattr(expr, 'callsite_id', None)} expected_params={expected} actual_params={actual}",
-					],
+		for issue in call_contract_issues(expr, info):
+			if issue.code == "E_CALLINFO_PARAM_LAYOUT" or issue.code == "E_CALLINFO_INCLUDES_CALLEE_INVALID":
+				diagnostics.append(
+					_chk_diag(
+						message=issue.message,
+						severity="error",
+						span=getattr(expr, "loc", None),
+						notes=list(issue.notes),
+					)
 				)
-			)
-			return False
-		if isinstance(expr, (H.HCall, H.HMethodCall)) and info.sig.includes_callee:
-			call_kind = "method call" if isinstance(expr, H.HMethodCall) else "call"
-			diagnostics.append(
-				_chk_diag(
-					message=f"internal: CallInfo includes_callee set on {call_kind} (checker bug)",
-					severity="error",
-					span=getattr(expr, "loc", None),
-					notes=[f"callsite_id={getattr(expr, 'callsite_id', None)}"],
-				)
-			)
-			return False
+				return False
 		return True
 
 	def _validate_callinfo_target_shape(
@@ -2145,28 +2093,17 @@ class Checker:
 		info: CallInfo,
 		diagnostics: List[Diagnostic],
 	) -> bool:
-		from lang.driftc import stage1 as H
-
-		if isinstance(expr, H.HInvoke) and info.target.kind is not CallTargetKind.INDIRECT:
-			diagnostics.append(
-				_chk_diag(
-					message="internal: invoke CallInfo target must be INDIRECT (checker bug)",
-					severity="error",
-					span=getattr(expr, "loc", None),
-					notes=[f"target_kind={info.target.kind.name}", f"callsite_id={getattr(expr, 'callsite_id', None)}"],
+		for issue in call_contract_issues(expr, info):
+			if issue.code == "E_CALLINFO_INVOKE_TARGET_KIND" or issue.code == "E_CALLINFO_METHOD_CONSTRUCTOR_TARGET":
+				diagnostics.append(
+					_chk_diag(
+						message=issue.message,
+						severity="error",
+						span=getattr(expr, "loc", None),
+						notes=list(issue.notes),
+					)
 				)
-			)
-			return False
-		if isinstance(expr, H.HMethodCall) and info.target.kind is CallTargetKind.CONSTRUCTOR:
-			diagnostics.append(
-				_chk_diag(
-					message="internal: method call CallInfo target must not be CONSTRUCTOR (checker bug)",
-					severity="error",
-					span=getattr(expr, "loc", None),
-					notes=[f"callsite_id={getattr(expr, 'callsite_id', None)}"],
-				)
-			)
-			return False
+				return False
 		return True
 
 	def check_call_signature(
