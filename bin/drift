@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ -n "${DRIFT_HOME:-}" ]]; then
+	ROOT_DIR="${DRIFT_HOME}"
+fi
+
+if [[ -x "${SCRIPT_DIR}/drift.real" ]]; then
+	exec "${SCRIPT_DIR}/drift.real" "$@"
+fi
+
+python_bin="${DRIFT_PYTHON_BIN:-}"
+if [[ -z "${python_bin}" ]]; then
+	if [[ -x "${ROOT_DIR}/.venv/bin/python3" ]]; then
+		python_bin="${ROOT_DIR}/.venv/bin/python3"
+	else
+		python_bin="$(command -v python3)"
+	fi
+fi
+
+export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${python_bin}" -m lang.drift "$@"

@@ -272,7 +272,7 @@ MVP constraints:
 						sha256=locked.pkg_sha256,
 						filename=rel,
 						signers=list(locked.sig_kids),
-						unsigned=(locked.sig_sha256 is None),
+						signed=(locked.sig_sha256 is not None),
 						source_id=locked.source_id,
 						path=rel,
 					),
@@ -340,7 +340,7 @@ MVP constraints:
 					sha256=str(raw.get("sha256", "")),
 					filename=str(raw.get("filename", "")),
 					signers=list(raw.get("signers") or []),
-					unsigned=bool(raw.get("unsigned", False)),
+					signed=(bool(raw.get("signed")) if isinstance(raw.get("signed"), bool) else (not bool(raw.get("unsigned", False)))),
 					source_id=src.source_id,
 					path=str(raw.get("path") or raw.get("filename", "")),
 				)

@@ -547,7 +547,7 @@ def test_drift_fetch_json_failure_missing_package_file(tmp_path: Path) -> None:
 						"sha256": "sha256:" + ("00" * 32),
 						"filename": "lib-0.0.0-test-target.dmp",
 						"signers": [],
-						"unsigned": True,
+						"signed": False,
 					}
 				},
 			}
@@ -885,7 +885,7 @@ pub fn add(a: Int, b: Int) -> Int {
 						"sha256": "sha256:" + pkg_sha,
 						"filename": "lib-0.0.0-test-target.dmp",
 						"signers": [],
-						"unsigned": True,
+						"signed": False,
 					}
 				},
 			}

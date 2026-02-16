@@ -15,6 +15,14 @@ PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --help
 PYTHONPATH=. ./.venv/bin/python3 -m lang.drift --help
 ```
 
+You can also use the repo-local wrappers (recommended for day-to-day use):
+
+```bash
+export DRIFTC="$PWD/bin/driftc"
+export DRIFT_TOOL="$PWD/bin/drift"
+export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
+```
+
 ## 1. Bootstrap & validate (fresh clone)
 
 The goal is to confirm your environment can run the full Drift pipeline (parser/checker/MIR/LLVM/codegen/runtime tests) before writing code.
@@ -39,8 +47,8 @@ python3 -m venv .venv
 ### 1.3 Quick CLI sanity
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --help
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift --help
+$DRIFTC --help
+$DRIFT_TOOL --help
 ```
 
 ### 1.4 Verify dependency wiring
@@ -59,6 +67,35 @@ Notes:
 - `just` runs the default full staged test path (`lang-test`) after `deps-check`.
 - This is the recommended gate before coding in Drift.
 - If you want to focus only on codegen/e2e for quick iteration: `just lang-codegen-test`.
+
+### 1.6 Create signing identity (package creators)
+
+For signed package publishing, create a local signing key once:
+
+```bash
+mkdir -p ~/.config/drift/keys
+chmod 700 ~/.config/drift ~/.config/drift/keys
+$DRIFT_TOOL keygen --out ~/.config/drift/keys/default.seed --print-pubkey --print-kid
+chmod 600 ~/.config/drift/keys/default.seed
+```
+
+Set default signing key for recipes/tooling:
+
+```bash
+export DRIFT_SIGN_KEY_FILE="$HOME/.config/drift/keys/default.seed"
+```
+
+Optional command-based key source (stdout must emit base64 seed):
+
+```bash
+export DRIFT_SIGN_KEY_CMD='gpg -d ~/.config/drift/keys/default.seed.pgp'
+```
+
+`drift sign` key resolution priority:
+
+1. `--key <path>`
+2. `DRIFT_SIGN_KEY_FILE`
+3. `DRIFT_SIGN_KEY_CMD`
 
 ## 2. Hello app (no dependency package)
 
@@ -153,42 +190,50 @@ Expected exit code: `42`.
 
 This is the distribution-style flow.
 
-### 4.1 Generate a signing key
+### 5.1 Generate a signing key
 
 ```bash
 mkdir -p sandbox/keys sandbox/drift
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift keygen --out sandbox/keys/acme.seed --print-pubkey --print-kid
+$DRIFT_TOOL keygen --out sandbox/keys/acme.seed --print-pubkey --print-kid
 ```
 
 Keep output values (`pubkey`, `kid`) for trust-store operations.
 
-### 4.2 Sign the package
+### 5.2 Sign the package
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift sign sandbox/libmath/acme.math.dmp --key sandbox/keys/acme.seed --include-pubkey
+$DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key sandbox/keys/acme.seed --include-pubkey
 ```
 
 This produces:
 - `sandbox/libmath/acme.math.dmp.sig`
 
-### 4.3 Trust signer for namespace
+### 5.3 Trust signer for namespace
 
-Add key to trust store. Use your printed pubkey:
+Import signer directly from package sidecar (namespace auto-derived as `<package_id>.*`):
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift trust add-key --trust-store sandbox/drift/trust.json --namespace mathlib.* --pubkey '<BASE64_PUBKEY>'
+$DRIFT_TOOL trust import --trust-store sandbox/drift/trust.json sandbox/libmath/acme.math.dmp.sig
+```
+
+By default this prompts for confirmation (`[y/N]`). Use `--yes` for non-interactive automation.
+
+Manual fallback (if sidecar has no embedded pubkey):
+
+```bash
+$DRIFT_TOOL trust add-key --trust-store sandbox/drift/trust.json --namespace mathlib.* --pubkey '<BASE64_PUBKEY>'
 ```
 
 Inspect trust store:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift trust list --trust-store sandbox/drift/trust.json --json
+$DRIFT_TOOL trust list --trust-store sandbox/drift/trust.json --json
 ```
 
-### 4.4 Build app with signatures required
+### 5.4 Build app with signatures required
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M sandbox/app_unsigned --package-root sandbox/libmath --require-signatures --trust-store sandbox/drift/trust.json --stdlib-root stdlib sandbox/app_unsigned/main.drift -o sandbox/app_unsigned/app_signed
+$DRIFTC -M sandbox/app_unsigned --package-root sandbox/libmath --trust-store sandbox/drift/trust.json --stdlib-root stdlib sandbox/app_unsigned/main.drift -o sandbox/app_unsigned/app_signed
 ```
 
 Run:
@@ -200,30 +245,52 @@ echo $?
 
 Expected exit code: `42`.
 
+### 5.5 Signed stdlib into local dist repo (creator flow)
+
+Build + sign + publish stdlib package into local repo (`dist/release`):
+
+```bash
+just dist-publish-stdlib
+```
+
+Behavior:
+- Uses `DRIFT_SIGN_KEY_FILE` by default.
+- You can override per-run: `just dist-publish-stdlib /path/to/other.seed`.
+- The fallback `just dist-publish-stdlib-unsigned` exists for local-only dev.
+
+Inspect local repo index:
+
+```bash
+just dist-index
+```
+
 ## 6. Revoke key (negative check)
 
 Revoke by `kid`:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift trust revoke --trust-store sandbox/drift/trust.json --kid '<KID>' --reason 'test revoke'
+$DRIFT_TOOL trust revoke --trust-store sandbox/drift/trust.json --kid '<KID>' --reason 'test revoke'
 ```
 
-Rebuild with `--require-signatures` should now fail for that package.
+Rebuild should now fail for that package.
 
 ## 7. Command checklist
 
 - Build app: `lang.driftc ... -o <exe>`
 - Emit package: `lang.driftc ... --emit-package <pkg.dmp> --package-id ... --package-version ... --package-target ...`
 - Sign package: `lang.drift sign <pkg.dmp> --key <seed>`
-- Trust signer: `lang.drift trust add-key --namespace <ns> --pubkey <base64>`
-- Enforce signatures: `lang.driftc ... --require-signatures --trust-store <path>`
+- Trust signer (recommended): `lang.drift trust import <pkg.dmp.sig>`
+- Trust signer (manual fallback): `lang.drift trust add-key --namespace <ns> --pubkey <base64>`
+- Signature verification is default in `bin/driftc` package mode.
+- Opt-out only when needed: `--skip-package-signatures`
 
 ## 8. Common pitfalls
 
 - `module main` is required for default executable entrypoint (`main::main`).
 - Imported module ids must match what the package exports.
-- If consuming unsigned local packages, include `--allow-unsigned-from <dir>`.
-- For signed flow, `--require-signatures` and a trust store are both required.
+- If consuming unsigned local packages, pass `--skip-package-signatures` (and optionally `--allow-unsigned-from <dir>` when using raw `lang.driftc`).
+- For signed flow, trust store must be configured (`--trust-store` or `DRIFT_TRUST_STORE`).
+- `dist-publish-stdlib` requires a signing key (`DRIFT_SIGN_KEY_FILE` or explicit `SIGN_KEY` arg).
 - For portability-sensitive environments, if toolchain asks for pointer width, add `--target-word-bits 64`.
 
 ## 9. Next expansion ideas

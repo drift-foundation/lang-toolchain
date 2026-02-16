@@ -87,7 +87,7 @@ MVP behavior:
 			sha256=str(raw.get("sha256", "")),
 			filename=str(raw.get("filename", "")),
 			signers=list(raw.get("signers") or []),
-			unsigned=bool(raw.get("unsigned", False)),
+			signed=(bool(raw.get("signed")) if isinstance(raw.get("signed"), bool) else (not bool(raw.get("unsigned", False)))),
 			source_id=str(raw["source_id"]) if isinstance(raw.get("source_id"), str) and raw.get("source_id") else None,
 			path=str(raw["path"]) if isinstance(raw.get("path"), str) and raw.get("path") else None,
 		)

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ -n "${DRIFT_HOME:-}" ]]; then
+	ROOT_DIR="${DRIFT_HOME}"
+fi
+
+has_arg() {
+	local needle="$1"
+	shift
+	for arg in "$@"; do
+		if [[ "${arg}" == "${needle}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+args=("$@")
+extra_args=()
+filtered_args=()
+skip_package_signatures=0
+for arg in "${args[@]}"; do
+	if [[ "${arg}" == "--skip-package-signatures" ]]; then
+		skip_package_signatures=1
+		continue
+	fi
+	filtered_args+=("${arg}")
+done
+args=("${filtered_args[@]}")
+
+stdlib_mode="${DRIFT_STDLIB_MODE:-auto}"
+stdlib_root="${DRIFT_STDLIB_ROOT:-}"
+package_root="${DRIFT_PACKAGE_ROOT:-}"
+trust_store="${DRIFT_TRUST_STORE:-}"
+allow_unsigned_from="${DRIFT_ALLOW_UNSIGNED_FROM:-}"
+require_signatures="${DRIFT_REQUIRE_SIGNATURES:-1}"
+
+if [[ -z "${stdlib_root}" ]]; then
+	if [[ -d "${ROOT_DIR}/stdlib" ]]; then
+		stdlib_root="${ROOT_DIR}/stdlib"
+	elif [[ -d "${ROOT_DIR}/lib/drift/stdlib" ]]; then
+		stdlib_root="${ROOT_DIR}/lib/drift/stdlib"
+	fi
+fi
+if [[ -z "${package_root}" ]]; then
+	if [[ -d "${ROOT_DIR}/dist/release" ]]; then
+		package_root="${ROOT_DIR}/dist/release"
+	elif [[ -d "${ROOT_DIR}/lib/drift/pkgs" ]]; then
+		package_root="${ROOT_DIR}/lib/drift/pkgs"
+	fi
+fi
+if [[ -z "${trust_store}" && -f "${ROOT_DIR}/drift/trust.json" ]]; then
+	trust_store="${ROOT_DIR}/drift/trust.json"
+elif [[ -z "${trust_store}" && -f "${ROOT_DIR}/lib/drift/trust/core-trust.json" ]]; then
+	trust_store="${ROOT_DIR}/lib/drift/trust/core-trust.json"
+fi
+
+if [[ "${stdlib_mode}" == "auto" ]]; then
+	if [[ -f "${package_root}/std.dmp" ]]; then
+		stdlib_mode="package"
+	else
+		stdlib_mode="source"
+	fi
+fi
+
+if ! has_arg "--stdlib-root" "${args[@]}" && ! has_arg "--package-root" "${args[@]}"; then
+	if [[ "${stdlib_mode}" == "package" && -n "${package_root}" ]]; then
+		extra_args+=("--package-root" "${package_root}")
+		if [[ -n "${trust_store}" ]]; then
+			extra_args+=("--trust-store" "${trust_store}")
+		fi
+		if [[ -n "${allow_unsigned_from}" ]]; then
+			extra_args+=("--allow-unsigned-from" "${allow_unsigned_from}")
+		fi
+		if [[ "${skip_package_signatures}" != "1" && "${require_signatures}" == "1" ]]; then
+			extra_args+=("--require-signatures")
+		fi
+	else
+		if [[ -n "${stdlib_root}" ]]; then
+			extra_args+=("--stdlib-root" "${stdlib_root}")
+		fi
+	fi
+fi
+
+if [[ -x "${SCRIPT_DIR}/driftc.real" ]]; then
+	exec "${SCRIPT_DIR}/driftc.real" "${extra_args[@]}" "${args[@]}"
+fi
+
+python_bin="${DRIFT_PYTHON_BIN:-}"
+if [[ -z "${python_bin}" ]]; then
+	if [[ -x "${ROOT_DIR}/.venv/bin/python3" ]]; then
+		python_bin="${ROOT_DIR}/.venv/bin/python3"
+	else
+		python_bin="$(command -v python3)"
+	fi
+fi
+
+export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${python_bin}" -m lang.driftc "${extra_args[@]}" "${args[@]}"

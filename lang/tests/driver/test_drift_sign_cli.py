@@ -64,6 +64,126 @@ pub fn add(a: Int, b: Int) -> Int {
 	out = json.loads(build_pkg.stdout or "{}")
 	assert out.get("exit_code") == 0
 
+
+def test_drift_sign_uses_env_key_file_when_key_flag_missing(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { add };
+
+pub fn add(a: Int, b: Int) -> Int {
+	return a + b;
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	repo_root = Path.cwd()
+	build_pkg = subprocess.run(
+		with_target_word_bits(
+			[
+				sys.executable,
+				"-m",
+				"lang.driftc.driftc",
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				"--package-id",
+				"test.pkg",
+				"--package-version",
+				"0.0.0",
+				"--package-target",
+				"test-target",
+				"--emit-package",
+				str(pkg),
+				"--json",
+			]
+		),
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+	assert build_pkg.returncode == 0, build_pkg.stderr
+
+	seed32 = os.urandom(32)
+	key_path = tmp_path / "key.seed"
+	key_path.write_text(base64.b64encode(seed32).decode("ascii") + "\n", encoding="utf-8")
+	env = dict(os.environ)
+	env["DRIFT_SIGN_KEY_FILE"] = str(key_path)
+
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.drift", "sign", str(pkg), "--include-pubkey"],
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+	)
+	assert res.returncode == 0, res.stderr
+	assert Path(str(pkg) + ".sig").exists()
+
+
+def test_drift_sign_uses_env_key_cmd_when_key_flag_missing(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { add };
+
+pub fn add(a: Int, b: Int) -> Int {
+	return a + b;
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	repo_root = Path.cwd()
+	build_pkg = subprocess.run(
+		with_target_word_bits(
+			[
+				sys.executable,
+				"-m",
+				"lang.driftc.driftc",
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				"--package-id",
+				"test.pkg",
+				"--package-version",
+				"0.0.0",
+				"--package-target",
+				"test-target",
+				"--emit-package",
+				str(pkg),
+				"--json",
+			]
+		),
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+	assert build_pkg.returncode == 0, build_pkg.stderr
+
+	seed32 = os.urandom(32)
+	key_path = tmp_path / "key.seed"
+	key_path.write_text(base64.b64encode(seed32).decode("ascii") + "\n", encoding="utf-8")
+	env = dict(os.environ)
+	env["DRIFT_SIGN_KEY_CMD"] = f"cat {key_path}"
+
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.drift", "sign", str(pkg), "--include-pubkey"],
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+	)
+	assert res.returncode == 0, res.stderr
+	assert Path(str(pkg) + ".sig").exists()
+
 	# Generate a deterministic key seed file (base64 raw 32 bytes).
 	seed32 = os.urandom(32)
 	key_path = tmp_path / "key.seed"

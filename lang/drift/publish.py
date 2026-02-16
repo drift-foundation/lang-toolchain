@@ -70,9 +70,8 @@ Pinned MVP rule: one version per package_id in a repository.
 			sha256=pkg_sha,
 			filename=out_pkg.name,
 			signers=signers,
-			unsigned=unsigned,
+			signed=(not unsigned),
 		)
 		upsert_entry(index_obj, entry=entry, force=opts.force)
 
 	save_index(index_path, index_obj)
-

@@ -187,3 +187,94 @@ fn main() nothrow -> Int{
 	assert out2.get("exit_code") == 1
 	diags = out2.get("diagnostics") or []
 	assert any("revoked" in str(d.get("message", "")).lower() for d in diags), diags
+
+
+def test_drift_trust_import_sidecar_adds_key_to_namespace(tmp_path: Path) -> None:
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { id };
+
+pub fn id(x: Int) -> Int {
+	return x;
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	repo_root = Path.cwd()
+	build_pkg = subprocess.run(
+		with_target_word_bits(
+			[
+				sys.executable,
+				"-m",
+				"lang.driftc.driftc",
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				"--package-id",
+				"test.pkg",
+				"--package-version",
+				"0.0.0",
+				"--package-target",
+				"test-target",
+				"--emit-package",
+				str(pkg),
+				"--json",
+			]
+		),
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+	assert build_pkg.returncode == 0, build_pkg.stderr
+	key_path = tmp_path / "key.seed"
+	key_path.write_text(base64.b64encode(os.urandom(32)).decode("ascii") + "\n", encoding="utf-8")
+	sign = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"lang.drift",
+			"sign",
+			str(pkg),
+			"--key",
+			str(key_path),
+			"--include-pubkey",
+		],
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+	assert sign.returncode == 0, sign.stderr
+	trust_path = tmp_path / "drift" / "trust.json"
+	import_cmd = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"lang.drift",
+			"trust",
+			"import",
+			"--trust-store",
+			str(trust_path),
+			"--yes",
+			str(Path(str(pkg) + ".sig")),
+			"--json",
+		],
+		cwd=str(repo_root),
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+	assert import_cmd.returncode == 0, import_cmd.stderr
+	report = json.loads(import_cmd.stdout or "{}")
+	imported = report.get("imported_kids") or []
+	assert len(imported) == 1
+	assert report.get("missing_pubkeys") == []
+	trust_obj = json.loads(trust_path.read_text(encoding="utf-8"))
+	keys = trust_obj.get("keys") or {}
+	namespaces = trust_obj.get("namespaces") or {}
+	assert imported[0] in keys
+	assert imported[0] in (namespaces.get("test.pkg.*") or [])

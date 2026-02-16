@@ -26,12 +26,17 @@ class IndexEntry:
 	sha256: str  # "sha256:<hex>"
 	filename: str
 	signers: list[str]  # kids
-	unsigned: bool
+	signed: bool
 	# Optional provenance: which source repository provided this entry and the
 	# path within that repository. These fields are informational for MVP; the
 	# lockfile may pin them for reproducibility.
 	source_id: str | None = None
 	path: str | None = None
+
+	@property
+	def unsigned(self) -> bool:
+		# Backward-compatible internal convenience during migration.
+		return not self.signed
 
 
 def _empty_index() -> dict[str, Any]:
@@ -65,6 +70,12 @@ def get_entry(index_obj: Mapping[str, Any], package_id: str) -> Optional[IndexEn
 	if not isinstance(raw, dict):
 		return None
 	try:
+		signed_raw = raw.get("signed")
+		if isinstance(signed_raw, bool):
+			signed = signed_raw
+		else:
+			# Legacy fallback for older indexes that only carried `unsigned`.
+			signed = not bool(raw.get("unsigned", False))
 		return IndexEntry(
 			package_id=package_id,
 			package_version=str(raw["package_version"]),
@@ -72,7 +83,7 @@ def get_entry(index_obj: Mapping[str, Any], package_id: str) -> Optional[IndexEn
 			sha256=str(raw["sha256"]),
 			filename=str(raw["filename"]),
 			signers=list(raw.get("signers") or []),
-			unsigned=bool(raw.get("unsigned", False)),
+			signed=signed,
 			source_id=str(raw["source_id"]) if isinstance(raw.get("source_id"), str) and raw.get("source_id") else None,
 			path=str(raw["path"]) if isinstance(raw.get("path"), str) and raw.get("path") else None,
 		)
@@ -113,7 +124,7 @@ def upsert_entry(
 		"sha256": entry.sha256,
 		"filename": entry.filename,
 		"signers": sorted(set(entry.signers)),
-		"unsigned": entry.unsigned,
+		"signed": entry.signed,
 	}
 	if entry.source_id:
 		pkgs[entry.package_id]["source_id"] = entry.source_id

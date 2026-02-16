@@ -16,3 +16,9 @@ build/
 combined.txt
 combined_*
 *.bin
+dist/release/*.dmp
+dist/release/*.sig
+dist/release/index.json
+*.seed
+*.seed.pgp
+.config/drift/keys/

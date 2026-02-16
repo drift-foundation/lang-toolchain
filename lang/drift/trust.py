@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from lang.drift.crypto import b64_decode, b64_encode, compute_ed25519_kid
+from lang.drift.dmir_pkg_v0 import read_identity_v0
+from lang.drift.sign import load_sig_sidecar_v0
 
 
 def _now_iso8601_utc() -> str:
@@ -123,3 +125,62 @@ def revoke_kid_in_trust_store(opts: TrustRevokeOptions) -> None:
 
 	_write_trust_store(opts.trust_store_path, obj)
 
+
+@dataclass(frozen=True)
+class TrustImportOptions:
+	trust_store_path: Path
+	namespace: str | None
+	source_path: Path
+
+
+def plan_trust_import(opts: TrustImportOptions) -> tuple[Path, str, str | None]:
+	source = opts.source_path
+	sidecar_path = source
+	package_id: str | None = None
+	if source.suffix == ".sig":
+		base = Path(str(source)[:-4])
+		if base.suffix == ".dmp" and base.exists():
+			ident = read_identity_v0(base)
+			package_id = ident.package_id
+	if source.suffix == ".dmp":
+		ident = read_identity_v0(source)
+		package_id = ident.package_id
+		sidecar_path = Path(str(source) + ".sig")
+	if sidecar_path.suffix != ".sig":
+		raise ValueError("trust import expects a .sig sidecar or a .dmp package path")
+	if not sidecar_path.exists():
+		raise ValueError(f"signature sidecar not found: {sidecar_path}")
+	namespace = opts.namespace
+	if namespace is None:
+		if package_id is None:
+			raise ValueError("namespace is required when importing from .sig without sibling .dmp")
+		namespace = f"{package_id}.*"
+	return (sidecar_path, namespace, package_id)
+
+
+def import_sidecar_keys_to_trust_store(opts: TrustImportOptions) -> dict[str, Any]:
+	sidecar_path, namespace, package_id = plan_trust_import(opts)
+	sf = load_sig_sidecar_v0(sidecar_path)
+	imported: list[str] = []
+	missing_pubkeys: list[str] = []
+	for sig in sf.signatures:
+		pubkey_b64 = sig.pubkey_b64
+		if pubkey_b64 is None or not pubkey_b64.strip():
+			missing_pubkeys.append(sig.kid)
+			continue
+		add_key_to_trust_store(
+			TrustAddKeyOptions(
+				trust_store_path=opts.trust_store_path,
+				namespace=namespace,
+				pubkey_b64=pubkey_b64,
+				kid=sig.kid,
+			)
+		)
+		imported.append(sig.kid)
+	return {
+		"source": str(sidecar_path),
+		"namespace": namespace,
+		"package_id": package_id,
+		"imported_kids": sorted(set(imported)),
+		"missing_pubkeys": sorted(set(missing_pubkeys)),
+	}

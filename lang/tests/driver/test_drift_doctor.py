@@ -74,7 +74,7 @@ def test_drift_doctor_json_failure_missing_package_file_deep(tmp_path: Path) -> 
 						"sha256": "sha256:" + ("00" * 32),
 						"filename": "lib-0.0.0-test-target.dmp",
 						"signers": [],
-						"unsigned": True,
+						"signed": False,
 					}
 				},
 			}

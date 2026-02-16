@@ -26,10 +26,21 @@ class SigSidecarV0:
 @dataclass(frozen=True)
 class SignOptions:
 	package_path: Path
-	key_seed_path: Path
+	key_seed_path: Path | None
+	key_seed_text: str | None
 	out_path: Path
 	add_signature: bool
 	include_pubkey: bool
+
+
+def _decode_seed32(text: str) -> bytes:
+	try:
+		raw = b64_decode(text.strip())
+	except Exception as err:
+		raise ValueError("invalid base64 in key seed input") from err
+	if len(raw) != 32:
+		raise ValueError("ed25519 private key seed must decode to 32 bytes")
+	return raw
 
 
 def _load_seed32(path: Path) -> bytes:
@@ -39,14 +50,8 @@ def _load_seed32(path: Path) -> bytes:
 	MVP format (pinned):
 	- file contains base64 of raw 32-byte Ed25519 private seed (whitespace allowed).
 	"""
-	text = path.read_text(encoding="utf-8").strip()
-	try:
-		raw = b64_decode(text)
-	except Exception as err:
-		raise ValueError("invalid base64 in key seed file") from err
-	if len(raw) != 32:
-		raise ValueError("ed25519 private key seed must decode to 32 bytes")
-	return raw
+	text = path.read_text(encoding="utf-8")
+	return _decode_seed32(text)
 
 
 def _load_sig_sidecar_obj(path: Path) -> dict[str, Any]:
@@ -101,7 +106,12 @@ def sign_package_v0(opts: SignOptions) -> None:
 
 	pkg_bytes = opts.package_path.read_bytes()
 	pkg_sha = sha256_hex(pkg_bytes)
-	seed32 = _load_seed32(opts.key_seed_path)
+	if opts.key_seed_path is not None:
+		seed32 = _load_seed32(opts.key_seed_path)
+	elif opts.key_seed_text is not None:
+		seed32 = _decode_seed32(opts.key_seed_text)
+	else:
+		raise ValueError("missing signing key seed input")
 	sig_raw, pub_raw = ed25519_sign_from_seed(priv_seed32=seed32, message=pkg_bytes)
 	kid = compute_ed25519_kid(pub_raw)
 

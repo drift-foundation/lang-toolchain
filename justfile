@@ -227,6 +227,63 @@ make-examples:
 		just make-example "$(basename "${d}")"
 	done
 
+# Local package distribution repo scaffold (dev convenience).
+dist-init:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p dist/release
+	echo "initialized local repo: dist/release"
+
+dist-publish PKG:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	pkg="{{PKG}}"
+	if [[ ! -f "${pkg}" ]]; then
+		echo "missing package file: ${pkg}" >&2
+		exit 1
+	fi
+	mkdir -p dist/release
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned "${pkg}"
+
+dist-index:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [[ ! -f dist/release/index.json ]]; then
+		echo "dist/release/index.json not found (publish at least one package first)" >&2
+		exit 1
+	fi
+	cat dist/release/index.json
+
+# Build stdlib package and publish into local dist/release repo (signed by default).
+# Key resolution priority: explicit SIGN_KEY arg, then DRIFT_SIGN_KEY_FILE.
+dist-publish-stdlib SIGN_KEY="" VERSION="0.1.0-dev" TARGET="drift-dev":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	sign_key="{{SIGN_KEY}}"
+	if [[ -z "${sign_key}" ]]; then
+		sign_key="${DRIFT_SIGN_KEY_FILE:-}"
+	fi
+	if [[ -z "${sign_key}" ]]; then
+		echo "missing signing key: pass SIGN_KEY or set DRIFT_SIGN_KEY_FILE" >&2
+		exit 1
+	fi
+	if [[ ! -f "${sign_key}" ]]; then
+		echo "missing signing key: ${sign_key}" >&2
+		exit 1
+	fi
+	mkdir -p build/pkg dist/release
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift sign build/pkg/std.dmp --key "${sign_key}" --include-pubkey
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release build/pkg/std.dmp
+
+# Local fallback for early dev only (publishes unsigned std package).
+dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p build/pkg dist/release
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
+
 stage-for-review:
 	#!/usr/bin/env bash
 	staged_dir=staged
