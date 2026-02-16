@@ -1,3 +1,55 @@
+## 2026-02-16 – Compiler hardening: phase-contract enforcement, shared call contracts, and boundary diagnostic hygiene
+- Completed compiler hardening phases focused on checker→MIR→LLVM contract reliability and deterministic failure reporting.
+- Added/expanded boundary regression coverage:
+  - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py`
+  - `lang/tests/driver/test_codegen_boundary_diagnostics.py`
+  - `lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py`
+  - `lang/tests/driver/test_callinfo_param_layout_contract.py`
+  - `lang/tests/stage2/test_callinfo_cutover.py` (new malformed CallInfo boundary cases)
+  - `lang/tests/driver/test_no_blank_span_fallbacks.py` (extended for driftc boundary guards).
+- Enforced explicit pre-emission LLVM contract in `lang/driftc/driftc.py` via `_validate_codegen_contract(...)`:
+  - type table required,
+  - SSA map required and complete for emitted MIR functions,
+  - `FnInfo/signature` coverage required,
+  - direct-call target resolvability required.
+- Added checker-side call metadata contract enforcement in `lang/driftc/checker/__init__.py`:
+  - target-kind shape checks (e.g. invoke must be indirect; method must not be constructor-target),
+  - param-layout checks against effective call argument shape,
+  - deterministic checker diagnostics for malformed CallInfo contract shapes.
+- Added stage2 call metadata contract assertions in `lang/driftc/stage2/hir_to_mir.py`:
+  - invoke requires indirect target and disallows `includes_callee`,
+  - method-call rejects constructor targets.
+- Fixed compile-path LANGUAGE_BUG where stage2 assertion failures leaked raw exceptions:
+  - `compile_stubbed_funcs(...)` now converts stage2 lowering assertion failures into deterministic diagnostics:
+    - `internal: MIR lowering contract failure (...)`
+    - phase=`mir_validate`.
+- Added codegen-helper regression to pin same behavior through `compile_to_llvm_ir_for_tests(...)` when stage2 contract failures occur.
+- Completed boundary diagnostic span hygiene:
+  - introduced best-effort boundary span selection in `lang/driftc/driftc.py`,
+  - removed anonymous `span=Span()` from MIR/LLVM boundary contract diagnostics where source location is available,
+  - extended driver tests to assert `line/column` presence for boundary failures.
+- Structural decomposition completed:
+  - added shared call metadata contract module `lang/driftc/call_contract.py` with reusable call-shape primitives:
+    - `call_arg_exprs_for_param_layout(...)`
+    - `call_expected_param_count(...)`
+    - `explicit_arg_param_types(...)`
+    - `call_contract_issues(...)`.
+  - integrated across:
+    - `lang/driftc/checker/__init__.py`
+    - `lang/driftc/stage2/hir_to_mir.py`
+    - `lang/driftc/borrow_checker_pass.py`.
+- Centralized boundary diagnostic construction in `lang/driftc/driftc.py`:
+  - `_append_boundary_contract_diag(...)` now emits MIR/LLVM contract diagnostics with shared message/phase/span policy.
+  - Added anti-regression guard test to enforce boundary failures route through the helper.
+- Call/entrypoint span hardening also landed in this cycle:
+  - constructor/call diagnostics now consistently carry source spans,
+  - entrypoint and fixed-width reserved-type diagnostics now carry deterministic phase+location expectations.
+- Validation outcomes:
+  - hardening regression subsets and stage2 callinfo suites pass clean,
+  - boundary diagnostics suites pass with span assertions,
+  - no-blank-span guard and central-helper guard pass,
+  - follow-up targeted ownership/borrow and callback seam checks remain green.
+
 ## 2026-02-14 – Logger sink strictness + runtime-state ownership leak fix
 - Tightened logger sink path to be capability-only:
   - removed `std.log` direct console fallback writes from emit path.
