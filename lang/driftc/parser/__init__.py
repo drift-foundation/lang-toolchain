@@ -925,11 +925,43 @@ def _is_trait_prop_value_pos_error(err: UnexpectedInput) -> bool:
 	return bool(expected & expr_continuations)
 
 
+def _is_expr_block_missing_value_error(err: UnexpectedInput) -> bool:
+	token = getattr(err, "token", None)
+	if token is None or getattr(token, "type", None) != "RBRACE":
+		return False
+	expected = set(getattr(err, "expected", None) or [])
+	if not expected:
+		return False
+	expr_starters = {
+		"NAME",
+		"SIGNED_INT",
+		"FLOAT",
+		"STRING",
+		"TRUE",
+		"FALSE",
+		"LPAR",
+		"LBRACE",
+		"LSQB",
+		"MATCH",
+		"TRY",
+		"IF",
+		"RETURN",
+		"MOVE",
+		"COPY",
+		"THROW",
+		"RAISE",
+		"YIELD",
+	}
+	return bool(expected & expr_starters)
+
+
 def _parse_error_code(err: UnexpectedInput) -> str | None:
 	expected = getattr(err, "expected", None)
 	token = getattr(err, "token", None)
 	if _is_trait_prop_value_pos_error(err):
 		return "E-TRAIT-PROP-VALUE-POS"
+	if _is_expr_block_missing_value_error(err):
+		return "E_EXPR_BLOCK_MISSING_VALUE"
 	if expected and "COMMA" in expected:
 		token_type = getattr(token, "type", None) if token is not None else None
 		if token_type in {"NAME", "DEFAULT"}:
@@ -944,7 +976,20 @@ def _parse_error_code(err: UnexpectedInput) -> str | None:
 def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 	if code == "E-TRAIT-PROP-VALUE-POS":
 		return "trait propositions are only allowed in require clauses or if guards"
+	if code == "E_EXPR_BLOCK_MISSING_VALUE":
+		return "expression block must end with a value expression; return is not allowed in expression-form blocks"
 	return str(err)
+
+
+def _missing_import_module_message(
+	mod: str,
+	*,
+	single_entry: bool,
+) -> str:
+	base = f"imported module '{mod}' not found"
+	if single_entry:
+		return base + "; module discovery uses provided sources/module roots: pass -M <dir> and compile all module files, or use --package-root for packaged modules"
+	return base + "; ensure the module is included in compile sources (or available via --package-root for packaged modules)"
 
 
 def _typeexpr_uses_internal_fnresult(typ: parser_ast.TypeExpr) -> bool:
@@ -2291,7 +2336,13 @@ def parse_drift_workspace_to_hir(
 				span = _span_in_file(path, getattr(imp, "loc", None))
 				dep_edges[mid].append((mod, span))
 				if mod not in merged_programs and (external_module_exports is None or mod not in external_module_exports):
-					diagnostics.append(_p_diag(message=f"imported module '{mod}' not found", severity="error", span=span))
+					diagnostics.append(
+						_p_diag(
+							message=_missing_import_module_message(mod, single_entry=(len(user_paths) == 1)),
+							severity="error",
+							span=span,
+						)
+					)
 					continue
 				alias = getattr(imp, "alias", None) or (getattr(imp, "path", []) or [mod])[-1]
 				prev = file_module_aliases.get(alias)
