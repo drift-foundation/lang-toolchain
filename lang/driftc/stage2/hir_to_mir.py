@@ -5426,6 +5426,9 @@ class HIRToMIR:
 		if isinstance(subject, H.HVar) and subject.name in self._local_types:
 			subj_ty = self._local_types[subject.name]
 			ty_def = self._type_table.get(subj_ty)
+			if ty_def.kind is TypeKind.REF and ty_def.param_types:
+				subj_ty = ty_def.param_types[0]
+				ty_def = self._type_table.get(subj_ty)
 			if ty_def.kind is TypeKind.ARRAY and ty_def.param_types:
 				return ty_def.param_types[0]
 
@@ -5433,6 +5436,9 @@ class HIRToMIR:
 		if subj_ty is None:
 			return self._unknown_type
 		ty_def = self._type_table.get(subj_ty)
+		if ty_def.kind is TypeKind.REF and ty_def.param_types:
+			subj_ty = ty_def.param_types[0]
+			ty_def = self._type_table.get(subj_ty)
 		if ty_def.kind is TypeKind.ARRAY and ty_def.param_types:
 			return ty_def.param_types[0]
 		# Strings are not arrays; bail out to Unknown so later passes can diagnose.
@@ -5501,6 +5507,10 @@ class HIRToMIR:
 			raise AssertionError(
 				f"missing call info for HMethodCall callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
 			)
+		if info.target.kind is CallTargetKind.CONSTRUCTOR:
+			raise AssertionError(
+				f"method call has constructor CallTarget for callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
+			)
 		return info
 
 	def _call_info_for_invoke(self, expr: H.HInvoke) -> CallInfo:
@@ -5508,6 +5518,14 @@ class HIRToMIR:
 		if info is None:
 			raise AssertionError(
 				f"missing call info for HInvoke callsite_id={getattr(expr, 'callsite_id', None)} (typecheck/call-info bug)"
+			)
+		if info.target.kind is not CallTargetKind.INDIRECT:
+			raise AssertionError(
+				f"invoke callsite_id={getattr(expr, 'callsite_id', None)} requires INDIRECT CallTarget (typecheck/call-info bug)"
+			)
+		if info.sig.includes_callee:
+			raise AssertionError(
+				f"invoke callsite_id={getattr(expr, 'callsite_id', None)} must not set includes_callee in CallSig (typecheck/call-info bug)"
 			)
 		return info
 
@@ -5935,7 +5953,10 @@ class HIRToMIR:
 		info: CallInfo,
 	) -> M.ValueId | None:
 		iface_val = self.lower_expr(iface_expr)
-		arg_vals = [self.lower_expr(a) for a in args]
+		arg_vals: list[M.ValueId] = []
+		for idx, arg in enumerate(args):
+			param_ty = info.sig.param_types[idx] if idx < len(info.sig.param_types) else None
+			arg_vals.append(self._lower_call_arg(arg, param_ty))
 		param_types = list(info.sig.param_types)
 		iface_ty = self._infer_expr_type(iface_expr)
 		if iface_ty is None:

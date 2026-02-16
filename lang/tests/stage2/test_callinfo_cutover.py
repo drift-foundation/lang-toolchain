@@ -157,6 +157,61 @@ def test_invoke_requires_call_info() -> None:
 		_lower_typed_callsite(block, call_info_by_callsite_id={})
 
 
+def test_invoke_rejects_non_indirect_call_target() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	call = H.HInvoke(callee=H.HVar("fp"), args=[H.HLiteralInt(1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call)])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.direct(_fn_id("f")),
+			sig=CallSig(param_types=(int_ty,), user_ret_type=int_ty, can_throw=False),
+		)
+	}
+	with pytest.raises(AssertionError, match=r"requires INDIRECT CallTarget"):
+		_lower_typed_callsite(block, call_info_by_callsite_id=call_info_by_callsite_id, type_table=table)
+
+
+def test_invoke_rejects_includes_callee_flag() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	call = H.HInvoke(callee=H.HVar("fp"), args=[H.HLiteralInt(1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call)])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.indirect(call.callee.node_id),
+			sig=CallSig(param_types=(int_ty, int_ty), user_ret_type=int_ty, can_throw=False, includes_callee=True),
+		)
+	}
+	with pytest.raises(AssertionError, match=r"must not set includes_callee"):
+		_lower_typed_callsite(block, call_info_by_callsite_id=call_info_by_callsite_id, type_table=table)
+
+
+def test_method_call_rejects_constructor_call_target() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	struct_ty = table.declare_struct("main", "Point", ["x"])
+	call = H.HMethodCall(receiver=H.HVar("obj"), method_name="m", args=[H.HLiteralInt(1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call)])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.constructor_struct(struct_ty),
+			sig=CallSig(param_types=(int_ty, int_ty), user_ret_type=struct_ty, can_throw=False),
+		)
+	}
+	with pytest.raises(AssertionError, match=r"method call has constructor CallTarget"):
+		_lower_typed_callsite(block, call_info_by_callsite_id=call_info_by_callsite_id, type_table=table)
+
+
 def test_missing_call_info_in_control_flow_and_lambda() -> None:
 	call_if = H.HCall(fn=H.HVar("f"), args=[H.HLiteralInt(1)])
 	call_loop = H.HCall(fn=H.HVar("g"), args=[])

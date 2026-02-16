@@ -1,0 +1,28 @@
+module main
+
+struct Blob {
+	xs: Array<Int>
+}
+
+struct Wrap {
+	p: Blob
+}
+
+interface Take {
+	fn take(self: &Self, v: Blob) nothrow -> Int;
+}
+
+struct Impl {}
+
+implement Take for Impl {
+	fn take(self: &Impl, v: Blob) nothrow -> Int {
+		return 23;
+	}
+}
+
+fn main() nothrow -> Int {
+	var x = Impl();
+	var t: Take = x;
+	var w = Wrap(p = Blob(xs = [1]));
+	return t.take(v = w.p);
+}

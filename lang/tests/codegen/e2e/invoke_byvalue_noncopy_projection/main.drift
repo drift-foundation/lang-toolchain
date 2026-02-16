@@ -1,0 +1,19 @@
+module main
+
+struct Payload {
+	xs: Array<Int>
+}
+
+struct Wrap {
+	p: Payload
+}
+
+fn take(v: Payload) nothrow -> Int {
+	return 9;
+}
+
+fn main() nothrow -> Int {
+	var w = Wrap(p = Payload(xs = [1]));
+	var f = take;
+	return f(w.p);
+}

@@ -1,0 +1,21 @@
+module main
+
+import std.core as core;
+
+struct Blob {
+	xs: Array<Int>
+}
+
+fn take(v: Blob) nothrow -> Int {
+	return 11;
+}
+
+fn get_fn() nothrow -> core.Callback1<Blob, Int> {
+	return core.callback1(take);
+}
+
+fn main() nothrow -> Int {
+	var b = Blob(xs = [1]);
+	var cb = get_fn();
+	return cb.call(move b);
+}

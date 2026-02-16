@@ -1,0 +1,4 @@
+{
+  "description": "e2e: interface call by-value non-Copy arg from val",
+  "exit_code": 8
+}

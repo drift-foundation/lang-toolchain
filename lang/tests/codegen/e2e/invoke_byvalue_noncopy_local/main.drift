@@ -1,0 +1,15 @@
+module main
+
+struct Blob {
+	xs: Array<Int>
+}
+
+fn take(v: Blob) nothrow -> Int {
+	return 7;
+}
+
+fn main() nothrow -> Int {
+	var b = Blob(xs = [1]);
+	var f = take;
+	return f(move b);
+}

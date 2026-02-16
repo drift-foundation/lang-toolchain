@@ -1,0 +1,32 @@
+module main
+
+import std.log as log;
+import std.runtime as rt;
+
+struct AppLoggerState {
+	security: log.Logger
+}
+
+fn install() nothrow -> Bool {
+	val reg = rt.global_registry();
+	var b = log.config_builder();
+	var st = AppLoggerState(security = log.create_logger("security", b.build()));
+	return reg.set<type AppLoggerState>(move st);
+}
+
+fn security(reg: &rt.GlobalRegistry) nothrow -> &log.Logger {
+	val st = rt.expect<type AppLoggerState>(reg, "missing-logger-state");
+	return &st.security;
+}
+
+fn main() nothrow -> Int {
+	if not install() {
+		return 1;
+	}
+	val lg = security(rt.global_registry());
+	var ctx = log.log_context();
+	if not lg.info_ctx("auth-failed", &ctx) {
+		return 2;
+	}
+	return 0;
+}

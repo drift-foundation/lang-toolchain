@@ -5589,6 +5589,8 @@ class _FuncBuilder:
 				self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
 			elif ty == DRIFT_DV_TYPE:
 				self.lines.append(f"  ret {DRIFT_DV_TYPE} {val}")
+			elif ty == DRIFT_IFACE_TYPE:
+				self.lines.append(f"  ret {DRIFT_IFACE_TYPE} {val}")
 			elif ty in (DRIFT_INT_TYPE, DRIFT_UINT_TYPE, DRIFT_U64_TYPE, "i1", "i8"):
 				self.lines.append(f"  ret {self._llty(ty)} {val}")
 			elif ty in ("double", "float"):
@@ -5607,7 +5609,7 @@ class _FuncBuilder:
 				self.lines.append(f"  ret {ty} {val}")
 			else:
 				raise NotImplementedError(
-					f"LLVM codegen v1: non-can-throw return must be Int, Float, String, DiagnosticValue, &T, Struct, or Variant, got {ty}"
+					f"LLVM codegen v1: non-can-throw return must be Int, Float, String, DiagnosticValue, Interface, &T, Struct, or Variant, got {ty}"
 				)
 			return
 

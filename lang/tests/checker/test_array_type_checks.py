@@ -70,7 +70,7 @@ def test_array_index_requires_int_index():
 		]
 	)
 	diagnostics = _run_checker(hir)
-	assert any("array index must be Int" in d.message for d in diagnostics)
+	assert any("array index must be an Int" in d.message for d in diagnostics)
 
 
 def test_array_string_index_requires_int_index():
@@ -89,7 +89,7 @@ def test_array_string_index_requires_int_index():
 		]
 	)
 	diagnostics = _run_checker(hir)
-	assert any("array index must be Int" in d.message for d in diagnostics)
+	assert any("array index must be an Int" in d.message for d in diagnostics)
 
 
 def test_array_index_assignment_type_mismatch():

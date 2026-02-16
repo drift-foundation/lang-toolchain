@@ -1,0 +1,23 @@
+module main
+
+struct Blob {
+	xs: Array<Int>
+}
+
+struct Sink {}
+
+struct Wrap {
+	p: Blob
+}
+
+implement Sink {
+	fn take(self: &Sink, v: Blob) nothrow -> Int {
+		return 17;
+	}
+}
+
+fn main() nothrow -> Int {
+	var s = Sink();
+	var w = Wrap(p = Blob(xs = [1]));
+	return s.take(w.p);
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: method call by-value non-Copy projection rejected",
+  "diagnostics": [
+    {
+      "message_contains": "move of a projected place is not supported in MVP; move a local/param or use swap/replace",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

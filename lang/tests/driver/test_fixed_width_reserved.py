@@ -44,7 +44,10 @@ module main
 	fn_id = FunctionId(module="main", name="main", ordinal=0)
 	block = func_hirs[fn_id]
 	res = TypeChecker(type_table).check_function(fn_id, block, current_module=0, visible_modules=(0,))
-	assert any(d.code == "E_FIXED_WIDTH_RESERVED" for d in res.diagnostics)
+	matches = [d for d in res.diagnostics if d.code == "E_FIXED_WIDTH_RESERVED"]
+	assert matches
+	assert all(d.phase == "typecheck" for d in matches)
+	assert all(d.span.line is not None and d.span.column is not None for d in matches)
 
 
 def test_fixed_width_allowed_in_lang_abi(tmp_path: Path) -> None:

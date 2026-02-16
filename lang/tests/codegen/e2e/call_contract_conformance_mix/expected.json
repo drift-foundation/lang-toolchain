@@ -1,0 +1,4 @@
+{
+  "description": "e2e: call contract conformance mix (direct/method/interface/invoke)",
+  "exit_code": 50
+}

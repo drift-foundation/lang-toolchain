@@ -60,6 +60,7 @@ Drift expressions largely follow a C-style surface with explicit ownership rules
 - Program entry (v1): exactly one `main` function, returning `Int`, **declared `nothrow`**, with one of two signatures:
   - `fn main() nothrow -> Int`
   - `fn main(argv: Array<String>) nothrow -> Int` (argv includes the program name at index 0). The runtime builds `argv` and calls this `main`; no drift_main indirection in user code.
+  - The executable entrypoint is `main::main`. For entry-bearing programs, the module must be `main`; if the module header is omitted, it defaults to `main`.
   - `main` is only allowed in the **root package**; dependency packages must not define a `main`.
 
 ### 2.x. Receiver placeholder (`.foo`, `.foo(...)`)

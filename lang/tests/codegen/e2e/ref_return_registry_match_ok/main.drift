@@ -1,0 +1,35 @@
+module main
+
+import std.runtime as rt;
+
+struct State {
+	v: Int
+}
+
+fn get_v(reg: &rt.GlobalRegistry) nothrow -> Optional<&Int> {
+	match rt.get<type State>(reg) {
+		Some(st) => {
+			return Optional<&Int>::Some(&st.v);
+		},
+		None => {
+			return Optional<&Int>::None();
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val reg = rt.global_registry();
+	var s = State(v = 7);
+	val ok = reg.set<type State>(move s);
+	if not ok {
+		return 1;
+	}
+	match get_v(reg) {
+		Some(v) => {
+			return *v;
+		},
+		None => {
+			return 2;
+		}
+	}
+}

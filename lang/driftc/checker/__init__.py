@@ -1048,7 +1048,7 @@ class Checker:
 		def report_index_not_int(self) -> None:
 			self._append_diag(
 				_chk_diag(
-					message="array index must be Int",
+				message="array index must be an Int",
 					severity="error",
 					span=None,
 				)
@@ -1090,6 +1090,20 @@ class Checker:
 					span=None,
 				)
 			)
+
+		def _unwrap_ref_typeid(self, ty: TypeId) -> TypeId:
+			td = self.table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				return td.param_types[0]
+			return ty
+
+		def _is_error_subject(self, expr: "H.HExpr") -> Optional[bool]:
+			err_ty = self._infer_expr_type(expr)
+			if err_ty is None:
+				return None
+			err_ty = self._unwrap_ref_typeid(err_ty)
+			err_def = self.table.get(err_ty)
+			return err_def.kind is TypeKind.ERROR
 
 		def _append_diag(self, diag: Diagnostic) -> None:
 			if self.diagnostics is not None:
@@ -1544,14 +1558,10 @@ class Checker:
 						and isinstance(subject.projections[0], H.HPlaceField)
 						and subject.projections[0].name == "captures"
 					):
-						err_ty = self._infer_expr_type(subject.base)
-						if err_ty is None:
+						is_err = self._is_error_subject(subject.base)
+						if is_err is None:
 							return None
-						err_def = self.table.get(err_ty)
-						if err_def.kind is TypeKind.REF and err_def.param_types:
-							err_ty = err_def.param_types[0]
-							err_def = self.table.get(err_ty)
-						if err_def.kind is TypeKind.ERROR:
+						if is_err:
 							frame_ty = self._infer_expr_type(expr.index)
 							if frame_ty is not None:
 								frame_def = self.table.get(frame_ty)
@@ -1573,14 +1583,10 @@ class Checker:
 							continue
 						if idx + 2 != len(subject.projections):
 							continue
-						err_ty = self._infer_expr_type(subject.base)
-						if err_ty is None:
+						is_err = self._is_error_subject(subject.base)
+						if is_err is None:
 							return None
-						err_def = self.table.get(err_ty)
-						if err_def.kind is TypeKind.REF and err_def.param_types:
-							err_ty = err_def.param_types[0]
-							err_def = self.table.get(err_ty)
-						if err_def.kind is TypeKind.ERROR:
+						if is_err:
 							frame_ty = self._infer_expr_type(subject.projections[idx + 1].index)
 							if frame_ty is not None:
 								frame_def = self.table.get(frame_ty)
@@ -1609,14 +1615,10 @@ class Checker:
 					and isinstance(expr.subject.subject, H.HField)
 					and expr.subject.subject.name == "captures"
 				):
-					err_ty = self._infer_expr_type(expr.subject.subject.subject)
-					if err_ty is None:
+					is_err = self._is_error_subject(expr.subject.subject.subject)
+					if is_err is None:
 						return None
-					err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.REF and err_def.param_types:
-						err_ty = err_def.param_types[0]
-						err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.ERROR:
+					if is_err:
 						frame_ty = self._infer_expr_type(expr.subject.index)
 						if frame_ty is not None:
 							frame_def = self.table.get(frame_ty)
@@ -1641,14 +1643,10 @@ class Checker:
 								)
 						return checker._dv
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "captures":
-					err_ty = self._infer_expr_type(expr.subject.subject)
-					if err_ty is None:
+					is_err = self._is_error_subject(expr.subject.subject)
+					if is_err is None:
 						return None
-					err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.REF and err_def.param_types:
-						err_ty = err_def.param_types[0]
-						err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.ERROR:
+					if is_err:
 						frame_ty = self._infer_expr_type(expr.index)
 						if frame_ty is not None:
 							frame_def = self.table.get(frame_ty)
@@ -1663,14 +1661,10 @@ class Checker:
 						# Intermediate map view (frame-selected captures) for outer index.
 						return checker._dv
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
-					err_ty = self._infer_expr_type(expr.subject.subject)
-					if err_ty is None:
+					is_err = self._is_error_subject(expr.subject.subject)
+					if is_err is None:
 						return None
-					err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.REF and err_def.param_types:
-						err_ty = err_def.param_types[0]
-						err_def = self.table.get(err_ty)
-					if err_def.kind is TypeKind.ERROR:
+					if is_err:
 						idx_ty = self._infer_expr_type(expr.index)
 						if idx_ty is not None:
 							idx_def = self.table.get(idx_ty)
@@ -1684,6 +1678,8 @@ class Checker:
 				if subject_ty is None:
 					return None
 				td = self.table.get(subject_ty)
+				if td.kind is TypeKind.REF and td.param_types:
+					td = self.table.get(td.param_types[0])
 				if td.kind is TypeKind.ARRAY and td.param_types:
 					return td.param_types[0]
 				self.report_index_subject_not_array()
@@ -1951,6 +1947,26 @@ class Checker:
 						msg = "internal: method call resolved to trait target in typed mode (checker bug)"
 					diagnostics.append(_chk_diag(message=msg, severity="error", span=getattr(expr, "loc", None)))
 					return
+				if not self._validate_callinfo_target_shape(expr, info, diagnostics):
+					if isinstance(expr, H.HMethodCall):
+						walk_expr(expr.receiver)
+					elif isinstance(expr, H.HInvoke):
+						walk_expr(expr.callee)
+					for arg in expr.args:
+						walk_expr(arg)
+					for kw in getattr(expr, "kwargs", []) or []:
+						walk_expr(kw.value)
+					return
+				if not self._validate_callinfo_param_layout(expr, info, diagnostics):
+					if isinstance(expr, H.HMethodCall):
+						walk_expr(expr.receiver)
+					elif isinstance(expr, H.HInvoke):
+						walk_expr(expr.callee)
+					for arg in expr.args:
+						walk_expr(arg)
+					for kw in getattr(expr, "kwargs", []) or []:
+						walk_expr(kw.value)
+					return
 				kwargs = getattr(expr, "kwargs", []) or []
 				skip_type_check = bool(kwargs)
 				if isinstance(expr, H.HMethodCall):
@@ -2063,6 +2079,95 @@ class Checker:
 				# other statements: continue
 
 		walk_block(block)
+
+	def _expected_call_param_count(self, expr: "H.HExpr", info: CallInfo) -> int:
+		from lang.driftc import stage1 as H
+
+		kwargs = list(getattr(expr, "kwargs", []) or [])
+		if isinstance(expr, H.HMethodCall):
+			base = len(expr.args)
+			if info.target.kind is not CallTargetKind.INDIRECT:
+				base += 1
+			return base + len(kwargs)
+		if isinstance(expr, H.HInvoke):
+			base = len(expr.args)
+			if info.sig.includes_callee:
+				base += 1
+			return base + len(kwargs)
+		if isinstance(expr, H.HCall):
+			return len(expr.args) + len(kwargs)
+		return len(kwargs)
+
+	def _validate_callinfo_param_layout(
+		self,
+		expr: "H.HExpr",
+		info: CallInfo,
+		diagnostics: List[Diagnostic],
+	) -> bool:
+		from lang.driftc import stage1 as H
+
+		expected = self._expected_call_param_count(expr, info)
+		actual = len(info.sig.param_types)
+		if actual != expected:
+			call_kind = "call"
+			if isinstance(expr, H.HMethodCall):
+				call_kind = "method call"
+			elif isinstance(expr, H.HInvoke):
+				call_kind = "invoke"
+			diagnostics.append(
+				_chk_diag(
+					message=f"internal: CallInfo param layout mismatch for {call_kind} (checker bug)",
+					severity="error",
+					span=getattr(expr, "loc", None),
+					notes=[
+						f"target_kind={info.target.kind.name}",
+						f"callsite_id={getattr(expr, 'callsite_id', None)} expected_params={expected} actual_params={actual}",
+					],
+				)
+			)
+			return False
+		if isinstance(expr, (H.HCall, H.HMethodCall)) and info.sig.includes_callee:
+			call_kind = "method call" if isinstance(expr, H.HMethodCall) else "call"
+			diagnostics.append(
+				_chk_diag(
+					message=f"internal: CallInfo includes_callee set on {call_kind} (checker bug)",
+					severity="error",
+					span=getattr(expr, "loc", None),
+					notes=[f"callsite_id={getattr(expr, 'callsite_id', None)}"],
+				)
+			)
+			return False
+		return True
+
+	def _validate_callinfo_target_shape(
+		self,
+		expr: "H.HExpr",
+		info: CallInfo,
+		diagnostics: List[Diagnostic],
+	) -> bool:
+		from lang.driftc import stage1 as H
+
+		if isinstance(expr, H.HInvoke) and info.target.kind is not CallTargetKind.INDIRECT:
+			diagnostics.append(
+				_chk_diag(
+					message="internal: invoke CallInfo target must be INDIRECT (checker bug)",
+					severity="error",
+					span=getattr(expr, "loc", None),
+					notes=[f"target_kind={info.target.kind.name}", f"callsite_id={getattr(expr, 'callsite_id', None)}"],
+				)
+			)
+			return False
+		if isinstance(expr, H.HMethodCall) and info.target.kind is CallTargetKind.CONSTRUCTOR:
+			diagnostics.append(
+				_chk_diag(
+					message="internal: method call CallInfo target must not be CONSTRUCTOR (checker bug)",
+					severity="error",
+					span=getattr(expr, "loc", None),
+					notes=[f"callsite_id={getattr(expr, 'callsite_id', None)}"],
+				)
+			)
+			return False
+		return True
 
 	def check_call_signature(
 		self,

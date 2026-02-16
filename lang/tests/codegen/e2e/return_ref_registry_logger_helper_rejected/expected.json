@@ -1,0 +1,10 @@
+{
+  "description": "e2e: ref-return from registry-fetched logger helper is rejected by MVP escape rule",
+  "diagnostics": [
+    {
+      "message_contains": "reference return must be derived from a reference parameter",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

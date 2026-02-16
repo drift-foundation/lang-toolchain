@@ -51,6 +51,20 @@ FIXED_WIDTH_TYPE_NAMES = {
 }
 
 
+def _best_effort_span(*items: object | None) -> Span:
+	for item in items:
+		if item is None:
+			continue
+		if isinstance(item, Span):
+			if item.line is not None and item.column is not None:
+				return item
+			continue
+		loc = getattr(item, "loc", None)
+		if isinstance(loc, Span) and loc.line is not None and loc.column is not None:
+			return loc
+	return Span()
+
+
 def _sig_from_decl_template(ctx: object, decl: CallableDecl, current_module_name: str) -> FnSignature | None:
 	tpl = getattr(decl, "template_signature", None)
 	if tpl is None:
@@ -565,7 +579,7 @@ def resolve_variant_ctor(
 					),
 					code="E_FIXED_WIDTH_RESERVED",
 					severity="error",
-					span=Span(),
+					span=_best_effort_span(expr),
 				)
 			)
 			return ctx.unknown_ty
@@ -965,17 +979,18 @@ def resolve_struct_ctor(
 		seen: set[str] = set()
 		for kw in kw_pairs:
 			if kw.name not in field_names:
-				ctx.diagnostics.append(ctx.tc_diag(message=f"unknown field '{kw.name}' for struct '{struct_name}'", severity="error", span=getattr(kw, "loc", Span())))
+				ctx.diagnostics.append(ctx.tc_diag(message=f"unknown field '{kw.name}' for struct '{struct_name}'", severity="error", span=_best_effort_span(kw, kw.value if hasattr(kw, "value") else None, span)))
 				return None
 			if kw.name in seen:
-				ctx.diagnostics.append(ctx.tc_diag(message=f"duplicate field '{kw.name}' for struct '{struct_name}'", severity="error", span=getattr(kw, "loc", Span())))
+				ctx.diagnostics.append(ctx.tc_diag(message=f"duplicate field '{kw.name}' for struct '{struct_name}'", severity="error", span=_best_effort_span(kw, kw.value if hasattr(kw, "value") else None, span)))
 				return None
 			seen.add(kw.name)
 			ctor_arg_field_indices.append(field_names.index(kw.name))
 			ctor_args.append(kw.value)
 		if len(kw_pairs) != len(field_names):
 			missing = [name for name in field_names if name not in seen]
-			ctx.diagnostics.append(ctx.tc_diag(message=f"missing field(s) for struct '{struct_name}': {', '.join(missing)}", severity="error", span=Span()))
+			first_kw = kw_pairs[0] if kw_pairs else None
+			ctx.diagnostics.append(ctx.tc_diag(message=f"missing field(s) for struct '{struct_name}': {', '.join(missing)}", severity="error", span=_best_effort_span(first_kw, span)))
 			return None
 		for idx, (have, field_idx) in enumerate(zip(arg_types, ctor_arg_field_indices)):
 			want = field_types[field_idx]
@@ -999,7 +1014,7 @@ def resolve_struct_ctor(
 	return StructCtorResolveResult(struct_id, field_types, ctor_arg_field_indices, ctor_args)
 
 
-def resolve_unqualified_variant_ctor(ctx: ResolverContext, *, ctor_name: str, expected_type: TypeId, arg_exprs: list[object], kw_pairs: list[object]) -> VariantCtorResolveResult | None:
+def resolve_unqualified_variant_ctor(ctx: ResolverContext, *, ctor_name: str, expected_type: TypeId, arg_exprs: list[object], kw_pairs: list[object], span: Span | None = None) -> VariantCtorResolveResult | None:
 	try:
 		exp_def = ctx.type_table.get(expected_type)
 	except Exception:
@@ -1021,7 +1036,7 @@ def resolve_unqualified_variant_ctor(ctx: ResolverContext, *, ctor_name: str, ex
 		return None
 	arm_def = inst.arms_by_name[ctor_name]
 	if kw_pairs and arg_exprs:
-		ctx.diagnostics.append(ctx.tc_diag(message=f"constructor '{arm_def.name}' does not allow mixing positional and named arguments", severity="error", span=getattr(kw_pairs[0], "loc", Span())))
+		ctx.diagnostics.append(ctx.tc_diag(message=f"constructor '{arm_def.name}' does not allow mixing positional and named arguments", severity="error", span=_best_effort_span(kw_pairs[0] if kw_pairs else None, arg_exprs[0] if arg_exprs else None, span)))
 		return None
 	field_names = list(getattr(arm_def, "field_names", []) or [])
 	field_types = list(arm_def.field_types)
@@ -1033,18 +1048,18 @@ def resolve_unqualified_variant_ctor(ctx: ResolverContext, *, ctor_name: str, ex
 	if kw_pairs:
 		for kw in kw_pairs:
 			if kw.name not in field_names:
-				ctx.diagnostics.append(ctx.tc_diag(message=f"unknown field '{kw.name}' for constructor '{arm_def.name}'", severity="error", span=getattr(kw, "loc", Span())))
+				ctx.diagnostics.append(ctx.tc_diag(message=f"unknown field '{kw.name}' for constructor '{arm_def.name}'", severity="error", span=_best_effort_span(kw, kw.value if hasattr(kw, "value") else None)))
 				continue
 			field_idx = field_names.index(kw.name)
 			if field_idx in ctor_arg_field_indices:
-				ctx.diagnostics.append(ctx.tc_diag(message=f"duplicate field '{kw.name}' for constructor '{arm_def.name}'", severity="error", span=getattr(kw, "loc", Span())))
+				ctx.diagnostics.append(ctx.tc_diag(message=f"duplicate field '{kw.name}' for constructor '{arm_def.name}'", severity="error", span=_best_effort_span(kw, kw.value if hasattr(kw, "value") else None)))
 				continue
 			ctor_arg_field_indices.append(field_idx)
 			ctor_args.append(kw.value)
 		if len(ctor_arg_field_indices) != len(field_names):
 			for idx, fname in enumerate(field_names):
 				if idx not in ctor_arg_field_indices:
-					ctx.diagnostics.append(ctx.tc_diag(message=f"missing field '{fname}' for constructor '{arm_def.name}'", severity="error", span=getattr(kw_pairs[0], "loc", Span()) if kw_pairs else Span()))
+					ctx.diagnostics.append(ctx.tc_diag(message=f"missing field '{fname}' for constructor '{arm_def.name}'", severity="error", span=_best_effort_span(kw_pairs[0] if kw_pairs else None, span)))
 			return None
 	else:
 		if len(arg_exprs) != len(field_types):
@@ -1227,7 +1242,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 
 	if getattr(expr, "kwargs", None):
 		first = (getattr(expr, "kwargs", []) or [None])[0]
-		diagnostics.append(_tc_diag(message="keyword arguments are not supported for method calls in MVP", severity="error", span=getattr(first, "loc", getattr(expr, "loc", Span()))))
+		diagnostics.append(_tc_diag(message="keyword arguments are not supported for method calls in MVP", severity="error", span=_best_effort_span(first, expr)))
 		return MethodCallResult(ctx.unknown_ty, None)
 
 	recv_ty = getattr(expr, "receiver_type_id", None)
@@ -4416,7 +4431,7 @@ def resolve_call_expr(
 				diagnostics.append(_tc_diag(message="call target is not a function value", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 		if expected_type is not None:
-			ctor_res = resolve_unqualified_variant_ctor(_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw), ctor_name=expr.fn.name, expected_type=expected_type, arg_exprs=list(expr.args), kw_pairs=kw_pairs)
+			ctor_res = resolve_unqualified_variant_ctor(_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw), ctor_name=expr.fn.name, expected_type=expected_type, arg_exprs=list(expr.args), kw_pairs=kw_pairs, span=getattr(expr, "loc", None))
 			if ctor_res is not None:
 				expr.args = list(ctor_res.ctor_args)
 				expr.kwargs = []
@@ -4484,6 +4499,7 @@ def resolve_call_expr(
 						expected_type=inst,
 						arg_exprs=list(expr.args),
 						kw_pairs=kw_pairs,
+						span=getattr(expr, "loc", None),
 					)
 					if ctor_res is not None:
 						expr.args = list(ctor_res.ctor_args)
@@ -4854,7 +4870,7 @@ def resolve_call_expr(
 			return winners[0][0], winners[0][1], winners[0][2], None
 		if kw_pairs:
 			first = (kw_pairs or [None])[0]
-			diagnostics.append(_tc_diag(message="keyword arguments are only supported for constructors in MVP", severity="error", span=getattr(first, "loc", getattr(expr, "loc", Span()))))
+			diagnostics.append(_tc_diag(message="keyword arguments are only supported for constructors in MVP", severity="error", span=_best_effort_span(first, expr)))
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types: list[TypeId | None] = []
 		lambda_arg_indices: list[int] = []

@@ -1631,7 +1631,7 @@ class TypeChecker:
 								+ ", ".join(str(mid) for mid in missing_modules)
 							),
 							severity="error",
-							span=Span(),
+							span=Span.from_loc(getattr(body, "loc", None)),
 						)
 					)
 			if not visible_names and current_module_name is not None:
@@ -1902,6 +1902,53 @@ class TypeChecker:
 					span=span,
 				)
 			)
+
+		def _require_int_index_type(idx_ty: TypeId | None, *, span: Span) -> bool:
+			if idx_ty is None:
+				return True
+			td_idx = self.type_table.get(idx_ty)
+			if td_idx.kind is not TypeKind.TYPEVAR and idx_ty != self._int:
+				diagnostics.append(
+					_tc_diag(
+						message="array index must be an Int",
+						severity="error",
+						span=span,
+					)
+				)
+				return False
+			return True
+
+		def _array_element_type(container_ty: TypeId | None, *, span: Span) -> TypeId | None:
+			if container_ty is None:
+				return None
+			td = self.type_table.get(container_ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				td = self.type_table.get(td.param_types[0])
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return td.param_types[0]
+			diagnostics.append(
+				_tc_diag(
+					message="indexing requires an Array value",
+					severity="error",
+					span=span,
+				)
+			)
+			return None
+
+		def _deref_inner_type(ptr_ty: TypeId | None, *, span: Span) -> TypeId | None:
+			if ptr_ty is None:
+				return None
+			td = self.type_table.get(ptr_ty)
+			if td.kind is not TypeKind.REF or not td.param_types:
+				diagnostics.append(
+					_tc_diag(
+						message="deref requires a reference value",
+						severity="error",
+						span=span,
+					)
+				)
+				return None
+			return td.param_types[0]
 
 		self_type_id: TypeId | None = None
 
@@ -2242,7 +2289,7 @@ class TypeChecker:
 					_tc_diag(
 						message="internal: signature missing declared_can_throw (checker bug)",
 						severity="error",
-						span=Span(),
+						span=Span.from_loc(getattr(sig, "loc", None)),
 					)
 				)
 				can_throw = True
@@ -4456,6 +4503,7 @@ class TypeChecker:
 			target_fn_id: FunctionId | None,
 			impl_args: Tuple[TypeId, ...],
 			fn_args: Tuple[TypeId, ...],
+			callsite_span: Span | None = None,
 		) -> None:
 			if target_fn_id is None or function_keys_by_fn_id is None:
 				return
@@ -4496,7 +4544,7 @@ class TypeChecker:
 					_tc_diag(
 						message="internal: missing callsite_id on instantiation call node",
 						severity="error",
-						span=Span(),
+						span=callsite_span or Span(),
 					)
 				)
 
@@ -4599,6 +4647,43 @@ class TypeChecker:
 							type_args[idx] = arg
 				inst_id = self.type_table.ensure_struct_template(struct_id, type_args) if any(self.type_table.has_typevar(t) for t in type_args) else self.type_table.ensure_struct_instantiated(struct_id, type_args)
 				return self.type_table.struct_field(inst_id, field_name)
+
+			def _expr_reads_through_ref_projection(node: H.HExpr) -> bool:
+				if isinstance(node, H.HField):
+					sub_ty = type_expr(node.subject, used_as_value=False)
+					sub_td = self.type_table.get(sub_ty) if sub_ty is not None else None
+					if sub_td is not None and sub_td.kind is TypeKind.REF:
+						return True
+					return _expr_reads_through_ref_projection(node.subject)
+				if isinstance(node, H.HIndex):
+					sub_ty = type_expr(node.subject, used_as_value=False)
+					sub_td = self.type_table.get(sub_ty) if sub_ty is not None else None
+					if sub_td is not None and sub_td.kind is TypeKind.REF:
+						return True
+					return _expr_reads_through_ref_projection(node.subject)
+				if hasattr(H, "HPlaceExpr") and isinstance(node, getattr(H, "HPlaceExpr")):
+					base_ty = type_expr(node.base, used_as_value=False)
+					base_td = self.type_table.get(base_ty) if base_ty is not None else None
+					if base_td is not None and base_td.kind is TypeKind.REF and len(getattr(node, "projections", []) or []) > 0:
+						return True
+				return False
+
+			def _best_effort_span_for_expr(node: H.HExpr) -> Span:
+				span = Span.from_loc(getattr(node, "loc", None))
+				if span.line is not None:
+					return span
+				if isinstance(node, H.HField):
+					return _best_effort_span_for_expr(node.subject)
+				if isinstance(node, H.HIndex):
+					sub_span = _best_effort_span_for_expr(node.subject)
+					if sub_span.line is not None:
+						return sub_span
+					return Span.from_loc(getattr(node.index, "loc", None))
+				if hasattr(H, "HPlaceExpr") and isinstance(node, getattr(H, "HPlaceExpr")):
+					base_span = _best_effort_span_for_expr(node.base)
+					if base_span.line is not None:
+						return base_span
+				return span
 			# Literals.
 			if isinstance(expr, H.HLiteralInt):
 				if expected_type == self._uint:
@@ -5317,7 +5402,7 @@ class TypeChecker:
 								),
 								code="E_FIXED_WIDTH_RESERVED",
 								severity="error",
-								span=Span(),
+								span=Span.from_loc(getattr(expr, "loc", None)),
 							)
 						)
 						return self._unknown
@@ -5608,6 +5693,7 @@ class TypeChecker:
 												target_fn_id=decl.fn_id,
 												impl_args=tuple(),
 												fn_args=tuple(type_arg_ids),
+												callsite_span=getattr(expr, "loc", None),
 											)
 											inst_key = build_instantiation_key(
 												key,
@@ -6054,6 +6140,9 @@ class TypeChecker:
 
 			# Borrow.
 			if isinstance(expr, H.HBorrow):
+				borrow_span = _best_effort_span_for_expr(expr.subject)
+				if borrow_span.line is None:
+					borrow_span = _best_effort_span_for_expr(expr)
 				expr_id = getattr(expr, "node_id", None)
 				if expr_id is None:
 					expr_id = id(expr)
@@ -6116,7 +6205,7 @@ class TypeChecker:
 						_tc_diag(
 							message="cannot take &mut of an expression containing move; assign to a var first",
 							severity="error",
-							span=getattr(expr, "loc", Span()),
+							span=borrow_span,
 						)
 					)
 					return record_expr(expr, self._unknown)
@@ -6146,7 +6235,7 @@ class TypeChecker:
 							_tc_diag(
 								message="borrow operand must be an addressable place in MVP (local/param or deref place)",
 								severity="error",
-								span=getattr(expr, "loc", Span()),
+								span=borrow_span,
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -6194,7 +6283,7 @@ class TypeChecker:
 							diag = _tc_diag(
 								message="cannot take &mut of an immutable binding; declare it with `var`",
 								severity="error",
-								span=getattr(expr, "loc", Span()),
+								span=borrow_span,
 							)
 							span = getattr(diag, "span", None)
 							if span is not None and span.file is None and span.line is None and span.column is None:
@@ -6219,7 +6308,7 @@ class TypeChecker:
 											_tc_diag(
 												message="cannot take &mut through *p unless p is a mutable reference (&mut T)",
 												severity="error",
-												span=getattr(expr, "loc", Span()),
+												span=borrow_span,
 											)
 										)
 										return
@@ -6241,12 +6330,12 @@ class TypeChecker:
 							ptr_def = self.type_table.get(ptr_ty)
 							if ptr_def.kind is not TypeKind.REF or not ptr_def.ref_mut:
 								diagnostics.append(
-									_tc_diag(
-										message="cannot take &mut through *p unless p is a mutable reference (&mut T)",
-										severity="error",
-										span=getattr(expr, "loc", Span()),
+										_tc_diag(
+											message="cannot take &mut through *p unless p is a mutable reference (&mut T)",
+											severity="error",
+											span=borrow_span,
+										)
 									)
-								)
 							_validate_mutable_derefs(node.expr)
 						elif isinstance(node, H.HField):
 							_validate_mutable_derefs(node.subject)
@@ -6261,12 +6350,12 @@ class TypeChecker:
 							continue
 						conflict = True
 						diagnostics.append(
-							_tc_diag(
-								message="conflicting borrows in the same statement: cannot take &mut while borrowed",
-								severity="error",
-								span=getattr(expr, "loc", Span()),
+								_tc_diag(
+									message="conflicting borrows in the same statement: cannot take &mut while borrowed",
+									severity="error",
+									span=borrow_span,
+								)
 							)
-						)
 						break
 					borrows_in_stmt[place] = "mut"
 					borrow_expr_ids_in_stmt.add(expr_id)
@@ -6278,12 +6367,12 @@ class TypeChecker:
 						if kind == "mut":
 							conflict = True
 							diagnostics.append(
-								_tc_diag(
-									message="conflicting borrows in the same statement: cannot take & while mutably borrowed",
-									severity="error",
-									span=getattr(expr, "loc", Span()),
+									_tc_diag(
+										message="conflicting borrows in the same statement: cannot take & while mutably borrowed",
+										severity="error",
+										span=borrow_span,
+									)
 								)
-							)
 							break
 					borrows_in_stmt.setdefault(place, "shared")
 					borrow_expr_ids_in_stmt.add(expr_id)
@@ -6303,6 +6392,9 @@ class TypeChecker:
 			# - no moving while borrowed, and
 			# - use-after-move until reinitialization.
 			if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+				move_span = _best_effort_span_for_expr(expr.subject)
+				if move_span.line is None:
+					move_span = _best_effort_span_for_expr(expr)
 				if isinstance(expr.subject, H.HVar) and expr.subject.binding_id is None:
 					for scope in reversed(scope_bindings):
 						if expr.subject.name in scope:
@@ -6330,7 +6422,7 @@ class TypeChecker:
 						_tc_diag(
 							message="move operand must be an addressable place in MVP (local/param)",
 							severity="error",
-							span=getattr(expr, "loc", Span()),
+							span=move_span,
 						)
 					)
 					return record_expr(expr, self._unknown)
@@ -6339,7 +6431,7 @@ class TypeChecker:
 						_tc_diag(
 							message="move of a projected place is not supported in MVP; move a local/param or use swap/replace",
 							severity="error",
-							span=getattr(expr, "loc", Span()),
+							span=move_span,
 						)
 					)
 					return record_expr(expr, self._unknown)
@@ -6355,7 +6447,7 @@ class TypeChecker:
 								_tc_diag(
 									message="move requires an owned mutable binding declared with var",
 									severity="error",
-									span=getattr(expr, "loc", Span()),
+									span=move_span,
 								)
 							)
 							return record_expr(expr, self._unknown)
@@ -6367,7 +6459,7 @@ class TypeChecker:
 							_tc_diag(
 								message="cannot move from a reference type; move requires owned storage",
 								severity="error",
-								span=getattr(expr, "loc", Span()),
+								span=move_span,
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -6375,6 +6467,9 @@ class TypeChecker:
 
 			# Explicit copy.
 			if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+				copy_span = _best_effort_span_for_expr(expr.subject)
+				if copy_span.line is None:
+					copy_span = _best_effort_span_for_expr(expr)
 				def _base_lookup(hv: object) -> Optional[PlaceBase]:
 					bid = getattr(hv, "binding_id", None)
 					if bid is None:
@@ -6389,7 +6484,7 @@ class TypeChecker:
 						_tc_diag(
 							message="copy operand must be an addressable place in MVP (local/param/field/index)",
 							severity="error",
-							span=getattr(expr, "loc", Span()),
+							span=copy_span,
 						)
 					)
 					return record_expr(expr, self._unknown)
@@ -6404,7 +6499,7 @@ class TypeChecker:
 								message=f"cannot copy value of type '{pretty}': Copy is unknown ({reason})",
 								code="E-COPY-UNKNOWN",
 								severity="error",
-								span=getattr(expr, "loc", Span()),
+								span=copy_span,
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -6414,7 +6509,7 @@ class TypeChecker:
 							_tc_diag(
 								message=f"cannot copy value of type '{pretty}': type is not Copy",
 								severity="error",
-								span=getattr(expr, "loc", Span()),
+								span=copy_span,
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -6826,7 +6921,7 @@ class TypeChecker:
 										break
 					for idx, arg in enumerate(expr.args):
 						if idx < len(param_types):
-							type_expr(arg, expected_type=param_types[idx])
+							type_expr(arg, expected_type=param_types[idx], used_as_value=False)
 				if method_res.call_info is not None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 					decl = method_res.resolution.decl
 					fn_id_local = getattr(decl, "fn_id", None)
@@ -6893,6 +6988,7 @@ class TypeChecker:
 					elif callable_registry is not None:
 						diagnostics.append(_tc_diag(message="internal: missing callsite_id on method call node", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, method_res.return_type)
+
 			if isinstance(expr, H.HField):
 				sub_ty = type_expr(expr.subject, used_as_value=False)
 				inner_ty = sub_ty
@@ -6905,10 +7001,11 @@ class TypeChecker:
 				if inner_def.kind is TypeKind.STRUCT:
 					info = _resolve_struct_field_type(inner_ty, expr.name)
 					if info is not None:
-						idx, field_ty = info
-						_ensure_field_visible(inner_ty, expr.name, getattr(expr, "loc", Span()))
-						if subject_is_ref:
-							_require_copy_value(field_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
+						_, field_ty = info
+						if not _ensure_field_visible(inner_ty, expr.name, getattr(expr, "loc", Span())):
+							return record_expr(expr, self._unknown)
+						if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
+							_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
 						return record_expr(expr, field_ty)
 				if expr.name in ("len", "cap", "capacity", "gen"):
 					# Array/String length/capacity/gen sugar returns Int.
@@ -6940,26 +7037,22 @@ class TypeChecker:
 					)
 					return record_expr(expr, self._unknown)
 				# Struct fields: `x.field`
-				sub_def = self.type_table.get(sub_ty)
-				if sub_def.kind is TypeKind.REF and sub_def.param_types:
-					sub_ty = sub_def.param_types[0]
-					sub_def = self.type_table.get(sub_ty)
-				if sub_def.kind is TypeKind.STRUCT:
-					if not _ensure_field_visible(sub_ty, expr.name, getattr(expr, "loc", Span())):
+				if inner_def.kind is TypeKind.STRUCT:
+					if not _ensure_field_visible(inner_ty, expr.name, getattr(expr, "loc", Span())):
 						return record_expr(expr, self._unknown)
-					info = _resolve_struct_field_type(sub_ty, expr.name)
+					info = _resolve_struct_field_type(inner_ty, expr.name)
 					if info is None:
 						diagnostics.append(
 							_tc_diag(
-								message=f"unknown field '{expr.name}' on struct '{sub_def.name}'",
+								message=f"unknown field '{expr.name}' on struct '{inner_def.name}'",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
 						)
 						return record_expr(expr, self._unknown)
 					_, field_ty = info
-					if subject_is_ref:
-						_require_copy_value(field_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
+					if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
+						_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
 					return record_expr(expr, field_ty)
 				return record_expr(expr, self._unknown)
 
@@ -6969,11 +7062,10 @@ class TypeChecker:
 					if isinstance(proj, H.HPlaceDeref):
 						if cur is None:
 							return record_expr(expr, self._unknown)
-						ptr_def = self.type_table.get(cur)
-						if ptr_def.kind is not TypeKind.REF or not ptr_def.param_types:
-							diagnostics.append(_tc_diag(message="cannot deref a non-reference value", severity="error", span=getattr(expr, "loc", Span())))
+						inner = _deref_inner_type(cur, span=getattr(expr, "loc", Span()))
+						if inner is None:
 							return record_expr(expr, self._unknown)
-						cur = ptr_def.param_types[0]
+						cur = inner
 					elif isinstance(proj, H.HPlaceField):
 						if cur is None:
 							return record_expr(expr, self._unknown)
@@ -6995,22 +7087,15 @@ class TypeChecker:
 						if cur is None:
 							return record_expr(expr, self._unknown)
 						idx_ty = type_expr(proj.index)
-						if idx_ty is not None:
-							td_idx = self.type_table.get(idx_ty)
-							if td_idx.kind is not TypeKind.TYPEVAR and idx_ty != self._int:
-								diagnostics.append(_tc_diag(message="array index must be an Int", severity="error", span=getattr(proj.index, "loc", Span())))
-								return record_expr(expr, self._unknown)
-						td = self.type_table.get(cur)
-						if td.kind is TypeKind.REF and td.param_types:
-							cur = td.param_types[0]
-							td = self.type_table.get(cur)
-						if td.kind is not TypeKind.ARRAY or not td.param_types:
-							diagnostics.append(_tc_diag(message="indexing requires an Array value", severity="error", span=getattr(expr, "loc", Span())))
+						if not _require_int_index_type(idx_ty, span=getattr(proj.index, "loc", Span())):
 							return record_expr(expr, self._unknown)
-						cur = td.param_types[0]
+						elem_ty = _array_element_type(cur, span=_best_effort_span_for_expr(expr))
+						if elem_ty is None:
+							return record_expr(expr, self._unknown)
+						cur = elem_ty
 				if cur is None:
 					return record_expr(expr, self._unknown)
-				_require_copy_value(cur, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
+				_require_copy_value(cur, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
 				return record_expr(expr, cur)
 
 			if isinstance(expr, H.HIndex):
@@ -7194,32 +7279,13 @@ class TypeChecker:
 
 				sub_ty = type_expr(expr.subject, used_as_value=False)
 				idx_ty = type_expr(expr.index)
-				td = self.type_table.get(sub_ty)
-				if idx_ty is not None:
-					td_idx = self.type_table.get(idx_ty)
-					if td_idx.kind is not TypeKind.TYPEVAR and idx_ty != self._int:
-						diagnostics.append(
-							_tc_diag(
-								message="array index must be an Int",
-								severity="error",
-								span=getattr(expr, "loc", Span()),
-							)
-						)
-						return record_expr(expr, self._unknown)
-				if td.kind is TypeKind.REF and td.param_types:
-					td = self.type_table.get(td.param_types[0])
-				if td.kind is TypeKind.ARRAY and td.param_types:
-					elem_ty = td.param_types[0]
-					_require_copy_value(elem_ty, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
-					return record_expr(expr, elem_ty)
-				diagnostics.append(
-					_tc_diag(
-						message="indexing requires an Array value",
-						severity="error",
-						span=getattr(expr, "loc", Span()),
-					)
-				)
-				return record_expr(expr, self._unknown)
+				if not _require_int_index_type(idx_ty, span=getattr(expr.index, "loc", getattr(expr, "loc", Span()))):
+					return record_expr(expr, self._unknown)
+				elem_ty = _array_element_type(sub_ty, span=_best_effort_span_for_expr(expr))
+				if elem_ty is None:
+					return record_expr(expr, self._unknown)
+				_require_copy_value(elem_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
+				return record_expr(expr, elem_ty)
 
 			# Disallow implicit setters; attrs require explicit runtime helpers in MIR.
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HField) and expr.fn.name == "attrs":
@@ -7242,19 +7308,9 @@ class TypeChecker:
 				if expr.op is H.UnaryOp.BIT_NOT:
 					return record_expr(expr, sub_ty if sub_ty in (self._uint, self._uint64) else self._unknown)
 				if expr.op is H.UnaryOp.DEREF:
-					if sub_ty is None:
+					inner = _deref_inner_type(sub_ty, span=getattr(expr, "loc", Span()))
+					if inner is None:
 						return record_expr(expr, self._unknown)
-					td = self.type_table.get(sub_ty)
-					if td.kind is not TypeKind.REF or not td.param_types:
-						diagnostics.append(
-							_tc_diag(
-								message="deref requires a reference value",
-								severity="error",
-								span=getattr(expr, "loc", Span()),
-							)
-						)
-						return record_expr(expr, self._unknown)
-					inner = td.param_types[0]
 					_require_copy_value(inner, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
 					return record_expr(expr, inner)
 				return record_expr(expr, self._unknown)
@@ -7519,6 +7575,7 @@ class TypeChecker:
 						target_fn_id=insert_fn_id,
 						impl_args=tuple(map_inst.type_args),
 						fn_args=(),
+						callsite_span=getattr(expr, "loc", None),
 					)
 
 				if not value_types:
@@ -8532,7 +8589,7 @@ class TypeChecker:
 				)
 
 		if callable_registry is not None:
-			missing_callsite_nodes: list[int] = []
+			missing_callsite_nodes: list[object] = []
 			missing_info: list[int] = []
 			callsite_nodes_by_id: dict[int, object] = {}
 
@@ -8552,7 +8609,7 @@ class TypeChecker:
 							ids.add(csid)
 							callsite_nodes_by_id.setdefault(csid, obj)
 						else:
-							missing_callsite_nodes.append(getattr(obj, "node_id", -1))
+							missing_callsite_nodes.append(obj)
 
 					if not _should_descend(obj):
 						return
@@ -8597,17 +8654,19 @@ class TypeChecker:
 				and not deferred_guard_diags
 			):
 				if missing_callsite_nodes:
+					first_missing_node = missing_callsite_nodes[0]
 					diagnostics.append(
 						_tc_diag(
 							message=(
 								"internal: missing callsite_id on call nodes "
-								f"in '{function_symbol(fn_id)}' (nodes: {sorted(missing_callsite_nodes)[:5]})"
+								f"in '{function_symbol(fn_id)}' (nodes: {sorted((getattr(n, 'node_id', -1) for n in missing_callsite_nodes))[:5]})"
 							),
 							severity="error",
-							span=Span(),
+							span=Span.from_loc(getattr(first_missing_node, "loc", None)),
 						)
 					)
 				if missing_info:
+					first_missing_info_node = callsite_nodes_by_id.get(sorted(missing_info)[0])
 					diagnostics.append(
 						_tc_diag(
 							message=(
@@ -8615,7 +8674,7 @@ class TypeChecker:
 								f"in '{function_symbol(fn_id)}' (ids: {sorted(missing_info)[:5]})"
 							),
 							severity="error",
-							span=Span(),
+							span=Span.from_loc(getattr(first_missing_info_node, "loc", None)),
 						)
 					)
 					if drift_debug.enabled("callsite"):
@@ -8783,12 +8842,18 @@ def validate_entrypoint(
 
 	if not entry_defs:
 		entry_label = entry_name
+		missing_entry_span = Span()
+		for _fid, sig in signatures_by_id.items():
+			cand = Span.from_loc(getattr(sig, "loc", None))
+			if cand.line is not None and cand.column is not None:
+				missing_entry_span = cand
+				break
 		diagnostics.append(
 			_tc_diag(
 				message=f"missing entry point '{entry_label}' for code generation",
 				severity="error",
 				phase="typecheck",
-				span=Span(),
+				span=missing_entry_span,
 			)
 		)
 		return

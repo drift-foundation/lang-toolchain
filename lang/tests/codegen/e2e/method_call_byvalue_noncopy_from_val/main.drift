@@ -1,0 +1,19 @@
+module main
+
+struct Blob {
+	xs: Array<Int>
+}
+
+struct Sink {}
+
+implement Sink {
+	fn take(self: &Sink, v: Blob) nothrow -> Int {
+		return 13;
+	}
+}
+
+fn main() nothrow -> Int {
+	var s = Sink();
+	val b = Blob(xs = [1]);
+	return s.take(b);
+}

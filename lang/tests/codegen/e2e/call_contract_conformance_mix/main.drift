@@ -1,0 +1,38 @@
+module main
+
+interface Adder {
+	fn add(self: &Self, v: Int) nothrow -> Int;
+}
+
+struct Impl {
+	base: Int
+}
+
+implement Adder for Impl {
+	fn add(self: &Impl, v: Int) nothrow -> Int {
+		return self.base + v;
+	}
+}
+
+struct Box {}
+
+implement Box {
+	fn bump(self: &Box, v: Int) nothrow -> Int {
+		return v + 1;
+	}
+}
+
+fn inc(v: Int) nothrow -> Int {
+	return v + 1;
+}
+
+fn main() nothrow -> Int {
+	var b = Box();
+	var impl = Impl(base = 30);
+	var f = inc;
+	val a = inc(5);
+	val m = b.bump(6);
+	val i = impl.add(5);
+	val v = f(1);
+	return a + m + i + v;
+}

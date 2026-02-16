@@ -46,7 +46,7 @@ def test_array_index_with_string_index_reports_diagnostic():
 		]
 	)
 	diagnostics = _run_checker(block)
-	assert any("array index must be Int" in d.message for d in diagnostics)
+	assert any("array index must be an Int" in d.message for d in diagnostics)
 
 
 def test_array_literal_mixed_element_types_reports_diagnostic():
@@ -93,7 +93,7 @@ def test_array_param_index_string_reports_diagnostic():
 		type_table=table,
 	)
 	diagnostics = checker.check_by_id([fn_id]).diagnostics
-	assert any("array index must be Int" in d.message for d in diagnostics)
+	assert any("array index must be an Int" in d.message for d in diagnostics)
 
 
 def test_array_index_store_type_mismatch_reports_diagnostic():

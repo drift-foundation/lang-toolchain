@@ -72,6 +72,43 @@ fn main() nothrow -> Int {
 	assert any(d.code == "E-PRIVATE-FIELD" for d in diagnostics)
 
 
+def test_private_field_access_through_borrow_is_error(tmp_path: Path) -> None:
+	diagnostics = _compile_workspace(
+		tmp_path,
+		{
+			Path("m_lib/lib.drift"): """
+module m_lib
+
+export { Point, make };
+
+pub struct Point {
+	x: Int,
+	pub y: Int
+}
+
+pub fn make() nothrow -> Point {
+	return Point(x = 1, y = 2);
+}
+""",
+			Path("m_main/main.drift"): """
+module m_main
+
+import m_lib as lib;
+
+fn read_x(p: &lib.Point) nothrow -> Int {
+	return p.x;
+}
+
+fn main() nothrow -> Int {
+	val p = lib.make();
+	return read_x(&p);
+}
+""",
+		},
+	)
+	assert any(d.code == "E-PRIVATE-FIELD" for d in diagnostics)
+
+
 def test_public_field_access_is_ok(tmp_path: Path) -> None:
 	diagnostics = _compile_workspace(
 		tmp_path,

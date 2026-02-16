@@ -877,6 +877,46 @@ def _assert_all_phased(diags: Iterable[Diagnostic], *, context: str) -> None:
 		raise AssertionError(f"{context} diagnostics missing phase ({len(missing)})")
 
 
+def _validate_codegen_contract(
+	mir_funcs: Mapping[FunctionId, M.MirFunc],
+	ssa_funcs: Mapping[FunctionId, MirToSSA.SsaFunc] | None,
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable | None,
+	*,
+	debug_enabled: bool,
+) -> None:
+	"""
+	Validate MIR->LLVM hand-off invariants before entering LLVM lowering.
+
+	This is intentionally conservative and should fail deterministically with a
+	clear assertion message so callers can surface a stable `phase=codegen`
+	diagnostic instead of propagating deep emitter assertions.
+	"""
+	if type_table is None:
+		raise AssertionError("codegen contract: missing type table")
+	if ssa_funcs is None:
+		raise AssertionError("codegen contract: missing SSA functions")
+	missing_ssa = [fn_id for fn_id in mir_funcs.keys() if fn_id not in ssa_funcs]
+	if missing_ssa:
+		raise AssertionError(f"codegen contract: missing SSA for {function_symbol(missing_ssa[0])}")
+	missing_info = [
+		fn_id
+		for fn_id in mir_funcs.keys()
+		if fn_id not in fn_infos or fn_infos[fn_id].signature is None
+	]
+	if missing_info:
+		raise AssertionError(f"codegen contract: missing FnInfo/signature for {function_symbol(missing_info[0])}")
+	for fn in mir_funcs.values():
+		for block in fn.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.Call) and instr.fn_id not in fn_infos:
+					raise AssertionError(
+						f"codegen contract: unknown call target {function_symbol(instr.fn_id)} in {function_symbol(fn.fn_id)}"
+					)
+	# Placeholder for future debug-info contract hardening.
+	_ = debug_enabled
+
+
 def _sig_declared_can_throw(sig: FnSignature) -> bool:
 	"""Normalize declared throw-mode for downstream ABI decisions."""
 	return True if sig.declared_can_throw is None else bool(sig.declared_can_throw)
@@ -3682,7 +3722,23 @@ def compile_stubbed_funcs(
 			binding_types=getattr(typed_fns_by_id.get(fn_id), "binding_types", None),
 			typed_mode=typed_mode,
 		)
-		lower.lower_function_body(hir_norm)
+		try:
+			lower.lower_function_body(hir_norm)
+		except AssertionError as err:
+			checked.diagnostics.append(
+				Diagnostic(
+					message=f"internal: MIR lowering contract failure ({err})",
+					severity="error",
+					span=Span(),
+					phase="mir_validate",
+				)
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 		builder.func.local_types = dict(lower._local_types)
 		unknown_ty = shared_type_table.ensure_unknown()
 		for local_name in builder.func.locals:
@@ -4490,7 +4546,23 @@ def compile_stubbed_funcs(
 			if getattr(param, "binding_id", None) is not None:
 				lower._binding_names[int(param.binding_id)] = param.name
 		lower._seed_lambda_locals_for_inference(lower, lambda_body)
-		ret_val = lower._lower_lambda_block(lower, lambda_body)
+		try:
+			ret_val = lower._lower_lambda_block(lower, lambda_body)
+		except AssertionError as err:
+			checked.diagnostics.append(
+				Diagnostic(
+					message=f"internal: MIR lowering contract failure ({err})",
+					severity="error",
+					span=Span(),
+					phase="mir_validate",
+				)
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 		for synth_spec in lower.synth_sig_specs():
 			if synth_spec.kind == "hidden_lambda":
 				continue
@@ -4698,7 +4770,23 @@ def compile_stubbed_funcs(
 			if getattr(param, "binding_id", None) is not None:
 				lower._binding_names[int(param.binding_id)] = param.name
 		lower._seed_lambda_locals_for_inference(lower, lambda_body)
-		ret_val = lower._lower_lambda_block(lower, lambda_body)
+		try:
+			ret_val = lower._lower_lambda_block(lower, lambda_body)
+		except AssertionError as err:
+			checked.diagnostics.append(
+				Diagnostic(
+					message=f"internal: MIR lowering contract failure ({err})",
+					severity="error",
+					span=Span(),
+					phase="mir_validate",
+				)
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 		builder.func.local_types = dict(lower._local_types)
 		unknown_ty = shared_type_table.ensure_unknown()
 		for local_name in builder.func.locals:
@@ -4753,18 +4841,34 @@ def compile_stubbed_funcs(
 		mir_funcs_by_id[spec.wrapper_fn_id] = builder.func
 
 	with _timed("mir_validate"):
-		validate_mir_call_invariants(mir_funcs_by_id)
-		if shared_type_table is not None:
-			validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
-			validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
-		validate_mir_array_alloc_invariants(mir_funcs_by_id)
-		validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
-		if shared_type_table is not None:
-			validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)
-		if shared_type_table is not None:
-			validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)
-		if shared_type_table is not None:
-			validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
+		try:
+			validate_mir_call_invariants(mir_funcs_by_id)
+			if shared_type_table is not None:
+				validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
+				validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
+			validate_mir_array_alloc_invariants(mir_funcs_by_id)
+			validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
+			if shared_type_table is not None:
+				validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)
+			if shared_type_table is not None:
+				validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)
+			if shared_type_table is not None:
+				validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
+		except AssertionError as err:
+			checked.diagnostics.append(
+				Diagnostic(
+					message=f"internal: MIR validation contract failure ({err})",
+					severity="error",
+					span=Span(),
+					phase="mir_validate",
+				)
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 	if shared_type_table is not None:
 		if drift_debug.enabled("ssa"):
 			import sys
@@ -4994,18 +5098,49 @@ def compile_to_llvm_ir_for_tests(
 				argv_wrapper = "drift_main"
 
 	fn_infos = dict(checked.fn_infos_by_id)
+	try:
+		_validate_codegen_contract(
+			mir_funcs,
+			ssa_funcs,
+			fn_infos,
+			checked.type_table,
+			debug_enabled=debug_enabled,
+		)
+	except AssertionError as err:
+		checked.diagnostics.append(
+			Diagnostic(
+				message=f"internal: LLVM lowering contract failure ({err})",
+				severity="error",
+				span=Span(),
+				phase="codegen",
+			)
+		)
+		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
+		return "", checked
 
-	module = lower_module_to_llvm(
-		mir_funcs,
-		ssa_funcs,
-		fn_infos,
-		type_table=checked.type_table,
-		module_exports=module_exports,
-		rename_map=rename_map,
-		argv_wrapper=argv_wrapper,
-		word_bits=host_word_bits(),
-		debug_enabled=debug_enabled,
-	)
+	try:
+		module = lower_module_to_llvm(
+			mir_funcs,
+			ssa_funcs,
+			fn_infos,
+			type_table=checked.type_table,
+			module_exports=module_exports,
+			rename_map=rename_map,
+			argv_wrapper=argv_wrapper,
+			word_bits=host_word_bits(),
+			debug_enabled=debug_enabled,
+		)
+	except AssertionError as err:
+		checked.diagnostics.append(
+			Diagnostic(
+				message=f"internal: LLVM lowering contract failure ({err})",
+				severity="error",
+				span=Span(),
+				phase="codegen",
+			)
+		)
+		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
+		return "", checked
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
 		for fn_id in fn_infos.keys()
@@ -7652,17 +7787,32 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
 
-		module = lower_module_to_llvm(
-			mir_all,
-			ssa_all,
-			fn_infos,
-			type_table=checked_src.type_table,
-			module_exports=module_exports,
-			rename_map={},
-			argv_wrapper=None,
-			word_bits=_target_word_bits(args.target_word_bits),
-			debug_enabled=debug_enabled,
-		)
+		try:
+			_validate_codegen_contract(
+				mir_all,
+				ssa_all,
+				fn_infos,
+				checked_src.type_table,
+				debug_enabled=debug_enabled,
+			)
+			module = lower_module_to_llvm(
+				mir_all,
+				ssa_all,
+				fn_infos,
+				type_table=checked_src.type_table,
+				module_exports=module_exports,
+				rename_map={},
+				argv_wrapper=None,
+				word_bits=_target_word_bits(args.target_word_bits),
+				debug_enabled=debug_enabled,
+			)
+		except AssertionError as err:
+			msg = f"internal: LLVM lowering contract failure ({err})"
+			if args.json:
+				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			else:
+				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			return 1
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(

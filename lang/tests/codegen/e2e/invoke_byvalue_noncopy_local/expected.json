@@ -1,0 +1,4 @@
+{
+  "description": "e2e: indirect invoke by-value non-Copy local",
+  "exit_code": 7
+}
