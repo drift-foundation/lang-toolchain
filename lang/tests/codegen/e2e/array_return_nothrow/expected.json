@@ -1,0 +1,4 @@
+{
+  "description": "e2e: nothrow function returning Array<Byte> lowers and runs",
+  "exit_code": 0
+}

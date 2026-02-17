@@ -5541,6 +5541,45 @@ class _FuncBuilder:
 			target_sym = self.rename_map.get(fn_id, target_sym)
 		return target_sym, is_cross_module
 
+	def _emit_nothrow_return_value(self, val: str, ty: str | None) -> None:
+		if ty == DRIFT_STRING_TYPE:
+			self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
+			return
+		if ty == DRIFT_DV_TYPE:
+			self.lines.append(f"  ret {DRIFT_DV_TYPE} {val}")
+			return
+		if ty == DRIFT_IFACE_TYPE:
+			self.lines.append(f"  ret {DRIFT_IFACE_TYPE} {val}")
+			return
+		if ty in (DRIFT_INT_TYPE, DRIFT_UINT_TYPE, DRIFT_U64_TYPE, "i1", "i8"):
+			self.lines.append(f"  ret {self._llty(ty)} {val}")
+			return
+		if ty in ("double", "float"):
+			self.lines.append(f"  ret {ty} {val}")
+			return
+		if ty is not None and (ty == "ptr" or ty.endswith("*")):
+			# Non-throwing functions may return references (`&T`), lowered as
+			# typed pointers (`T*`) in v1.
+			self.lines.append(f"  ret {ty} {val}")
+			return
+		if ty is not None and ty.startswith("%Variant_"):
+			# Variants are compiler-private aggregates in v1, but they are still
+			# valid surface return types (e.g. `Optional<Int>`). We return them by
+			# value using their named struct type.
+			self.lines.append(f"  ret {ty} {val}")
+			return
+		if ty is not None and ty.startswith("%Struct_"):
+			# User-defined structs are returned by value in v1.
+			self.lines.append(f"  ret {ty} {val}")
+			return
+		if ty == "%DriftArrayHeader":
+			# Builtin Array<T> header is a first-class by-value return type in v1.
+			self.lines.append(f"  ret %DriftArrayHeader {val}")
+			return
+		raise NotImplementedError(
+			f"LLVM codegen v1: non-can-throw return must be Int, Float, String, DiagnosticValue, Interface, &T, Array, Struct, or Variant, got {ty}"
+		)
+
 	def _lower_term(self, term: object) -> None:
 		if isinstance(term, Goto):
 			self.lines.append(f"  br label %{term.target}")
@@ -5585,32 +5624,7 @@ class _FuncBuilder:
 				if sig is not None and sig.return_type_id is not None and self.type_table is not None:
 					ty = self._llvm_type_for_typeid(sig.return_type_id)
 					self.value_types[val] = ty
-			if ty == DRIFT_STRING_TYPE:
-				self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
-			elif ty == DRIFT_DV_TYPE:
-				self.lines.append(f"  ret {DRIFT_DV_TYPE} {val}")
-			elif ty == DRIFT_IFACE_TYPE:
-				self.lines.append(f"  ret {DRIFT_IFACE_TYPE} {val}")
-			elif ty in (DRIFT_INT_TYPE, DRIFT_UINT_TYPE, DRIFT_U64_TYPE, "i1", "i8"):
-				self.lines.append(f"  ret {self._llty(ty)} {val}")
-			elif ty in ("double", "float"):
-				self.lines.append(f"  ret {ty} {val}")
-			elif ty is not None and (ty == "ptr" or ty.endswith("*")):
-				# Non-throwing functions may return references (`&T`), lowered as
-				# typed pointers (`T*`) in v1.
-				self.lines.append(f"  ret {ty} {val}")
-			elif ty is not None and ty.startswith("%Variant_"):
-				# Variants are compiler-private aggregates in v1, but they are still
-				# valid surface return types (e.g. `Optional<Int>`). We return them by
-				# value using their named struct type.
-				self.lines.append(f"  ret {ty} {val}")
-			elif ty is not None and ty.startswith("%Struct_"):
-				# User-defined structs are returned by value in v1.
-				self.lines.append(f"  ret {ty} {val}")
-			else:
-				raise NotImplementedError(
-					f"LLVM codegen v1: non-can-throw return must be Int, Float, String, DiagnosticValue, Interface, &T, Struct, or Variant, got {ty}"
-				)
+			self._emit_nothrow_return_value(val, ty)
 			return
 
 		if isinstance(term, Unreachable):
