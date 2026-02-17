@@ -15,8 +15,8 @@ review-cleanup:
 test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test
 	@echo "lang tests: Success."
 
-# Local release/deploy prep (no implicit full test run).
-deploy: runtime-libs dist-publish-stdlib
+# Local build/release prep (no implicit full test run).
+build: runtime-libs dist-publish-stdlib
 
 lang-stage1-test:
 	# Ensure pytest is available in the venv
