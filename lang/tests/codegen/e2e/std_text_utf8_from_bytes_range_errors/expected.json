@@ -1,0 +1,4 @@
+{
+  "description": "e2e: std.text utf8_from_bytes_range reports stable invalid range and relative utf8 offsets",
+  "exit_code": 0
+}

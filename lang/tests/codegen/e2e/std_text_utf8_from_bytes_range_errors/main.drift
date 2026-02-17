@@ -1,0 +1,34 @@
+module m
+
+import std.text as text;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var bytes: Array<Byte> = [cast<Byte>(226), cast<Byte>(130), cast<Byte>(172), cast<Byte>(255)];
+
+	match text.utf8_from_bytes_range(&bytes, -1, 1) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-range" { return 2; }
+			if e.offset != 0 { return 3; }
+		}
+	}
+
+	match text.utf8_from_bytes_range(&bytes, 3, 2) {
+		core.Result::Ok(_) => { return 4; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-range" { return 5; }
+			if e.offset != 0 { return 6; }
+		}
+	}
+
+	match text.utf8_from_bytes_range(&bytes, 3, 4) {
+		core.Result::Ok(_) => { return 7; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-leading-byte" { return 8; }
+			if e.offset != 0 { return 9; }
+		}
+	}
+
+	return 0;
+}
