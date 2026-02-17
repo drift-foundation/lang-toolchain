@@ -1,0 +1,4 @@
+{
+  "description": "e2e: Byte to Int cast preserves unsigned 0..255 semantics",
+  "exit_code": 0
+}

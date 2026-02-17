@@ -1,0 +1,10 @@
+module m
+
+pub fn main() nothrow -> Int {
+	val b = cast<Byte>(255);
+	val i = cast<Int>(b);
+	if i != 255 {
+		return 1;
+	}
+	return 0;
+}
