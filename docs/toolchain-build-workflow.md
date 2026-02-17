@@ -283,6 +283,8 @@ Rebuild should now fail for that package.
 - Trust signer (manual fallback): `lang.drift trust add-key --namespace <ns> --pubkey <base64>`
 - Signature verification is default in `bin/driftc` package mode.
 - Opt-out only when needed: `--skip-package-signatures`
+- `DRIFT_ASAN=1` is supported in direct `bin/driftc` compile/link mode and injects `-fsanitize=address -g`.
+- `DRIFT_MEMCHECK=1` and `DRIFT_MASSIF=1` are runner-only (execution-time) toggles; `bin/driftc` fails fast if they are set.
 
 ## 8. Common pitfalls
 

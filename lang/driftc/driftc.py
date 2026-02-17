@@ -23,6 +23,7 @@ import argparse
 import copy
 import heapq
 import json
+import os
 import struct
 from enum import Enum
 import sys
@@ -49,6 +50,11 @@ def _target_word_bits(target_word_bits: int | None) -> int:
 	if target_word_bits is None:
 		raise ValueError("target word size is required; pass --target-word-bits")
 	return target_word_bits
+
+
+def _env_true(name: str) -> bool:
+	v = (os.environ.get(name) or "").strip()
+	return v in {"1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"}
 
 from lang.driftc import stage1 as H
 from lang.driftc.stage1 import assign_callsite_ids, assign_node_ids
@@ -8126,6 +8132,7 @@ def main(argv: list[str] | None = None) -> int:
 	use_linker = _select_linker()
 	linker_flags = ["-fuse-ld=gold"] if use_linker == "gold" else []
 	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
+	asan_flags = ["-fsanitize=address", "-g"] if _env_true("DRIFT_ASAN") else []
 
 	if debug_enabled:
 		ir_obj = args.output.with_suffix(".ir.o")
@@ -8135,6 +8142,7 @@ def main(argv: list[str] | None = None) -> int:
 		ir_compile_cmd = [
 			clang,
 			*linker_flags,
+			*asan_flags,
 			"-c",
 			"-x",
 			"ir",
@@ -8157,6 +8165,7 @@ def main(argv: list[str] | None = None) -> int:
 			rt_compile_cmd = [
 				clang,
 				*linker_flags,
+				*asan_flags,
 				"-c",
 				"-x",
 				"c",
@@ -8181,6 +8190,7 @@ def main(argv: list[str] | None = None) -> int:
 		link_cmd = [
 			clang,
 			*linker_flags,
+			*asan_flags,
 			str(ir_obj),
 			*rt_objs,
 			*link_libs,
@@ -8193,6 +8203,7 @@ def main(argv: list[str] | None = None) -> int:
 		link_cmd = [
 			clang,
 			*linker_flags,
+			*asan_flags,
 			"-x",
 			"ir",
 			str(ir_path),

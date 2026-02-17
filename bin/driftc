@@ -18,6 +18,18 @@ has_arg() {
 	return 1
 }
 
+env_true() {
+	local v="${1:-}"
+	case "${v}" in
+		1|true|True|TRUE|yes|Yes|YES|on|On|ON)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 args=("$@")
 extra_args=()
 filtered_args=()
@@ -30,6 +42,29 @@ for arg in "${args[@]}"; do
 	filtered_args+=("${arg}")
 done
 args=("${filtered_args[@]}")
+
+asan_enabled=0
+memcheck_enabled=0
+massif_enabled=0
+if env_true "${DRIFT_ASAN:-}"; then
+	asan_enabled=1
+fi
+if env_true "${DRIFT_MEMCHECK:-}"; then
+	memcheck_enabled=1
+fi
+if env_true "${DRIFT_MASSIF:-}"; then
+	massif_enabled=1
+fi
+if [[ "${asan_enabled}" == "1" && ( "${memcheck_enabled}" == "1" || "${massif_enabled}" == "1" ) ]]; then
+	echo "driftc: DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF in direct compile mode" >&2
+	echo "driftc: use codegen e2e runner for valgrind modes, or unset conflicting flags" >&2
+	exit 2
+fi
+if [[ "${memcheck_enabled}" == "1" || "${massif_enabled}" == "1" ]]; then
+	echo "driftc: DRIFT_MEMCHECK/DRIFT_MASSIF are runner-only (execution-time) flags in direct compile mode" >&2
+	echo "driftc: use lang/tests/codegen/e2e/runner.py (or drift run wrapper) for valgrind instrumentation" >&2
+	exit 2
+fi
 
 stdlib_mode="${DRIFT_STDLIB_MODE:-auto}"
 stdlib_root="${DRIFT_STDLIB_ROOT:-}"
