@@ -41,7 +41,12 @@ from lang.driftc.parser import (
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.driftc import compile_to_llvm_ir_for_tests, ReservedNamespacePolicy
 from lang.driftc.core.function_id import function_symbol
-from lang.language_runtime import get_runtime_sources
+from lang.language_runtime import (
+	build_runtime_archive,
+	get_runtime_sources,
+	runtime_archive_mode,
+	runtime_archive_variant,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -135,6 +140,8 @@ def _run_ir_with_clang(
 		c_flags: list[str] = []
 		link_flags: list[str] = []
 		link_wrap_flags: list[str] = []
+		runtime_archive: str | None = None
+		rt_mode = runtime_archive_mode()
 		if alloc_track_enabled:
 			c_defs.append("-DDRIFT_ALLOC_WRAP_ENABLED=1")
 			link_wrap_flags.extend(
@@ -150,8 +157,36 @@ def _run_ir_with_clang(
 		if asan_enabled:
 			c_flags.extend(["-fsanitize=address", "-g"])
 			link_flags.extend(["-fsanitize=address"])
-		compile_res = subprocess.run(
-			[
+		if rt_mode == "archive":
+			try:
+				variant = runtime_archive_variant(
+					debug_enabled=False,
+					asan_enabled=asan_enabled,
+					alloc_track_enabled=alloc_track_enabled,
+				)
+				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
+			except Exception as ex:
+				return 1, "", f"runtime archive build failed in archive mode: {ex}"
+		if rt_mode == "archive":
+			compile_cmd = [
+				clang,
+				"-pthread",
+				*c_flags,
+				"-x",
+				"ir",
+				str(ir_path),
+				"-x",
+				"none",
+				runtime_archive,
+				*link_flags,
+				*link_libs,
+				*link_wrap_flags,
+				"-Wl,--as-needed",
+				"-o",
+				str(bin_path),
+			]
+		else:
+			compile_cmd = [
 				clang,
 				"-pthread",
 				*c_flags,
@@ -170,7 +205,9 @@ def _run_ir_with_clang(
 				"-Wl,--as-needed",
 				"-o",
 				str(bin_path),
-			],
+			]
+		compile_res = subprocess.run(
+			compile_cmd,
 			capture_output=True,
 			text=True,
 			cwd=ROOT,

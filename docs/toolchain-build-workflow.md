@@ -68,7 +68,18 @@ Notes:
 - This is the recommended gate before coding in Drift.
 - If you want to focus only on codegen/e2e for quick iteration: `just lang-codegen-test`.
 
-### 1.6 Create signing identity (package creators)
+### 1.6 Build runtime archives (required for archive-mode driftc)
+
+```bash
+just runtime-libs
+```
+
+Notes:
+- `bin/driftc` defaults to strict runtime archive mode and expects prebuilt archives.
+- If archives are missing, compile fails with a runtime archive missing error.
+- Use `DRIFT_RUNTIME_LINK_MODE=source` only when explicitly opting into legacy source/object runtime linking.
+
+### 1.7 Create signing identity (package creators)
 
 For signed package publishing, create a local signing key once:
 
@@ -285,6 +296,12 @@ Rebuild should now fail for that package.
 - Opt-out only when needed: `--skip-package-signatures`
 - `DRIFT_ASAN=1` is supported in direct `bin/driftc` compile/link mode and injects `-fsanitize=address -g`.
 - `DRIFT_MEMCHECK=1` and `DRIFT_MASSIF=1` are runner-only (execution-time) toggles; `bin/driftc` fails fast if they are set.
+- Runtime linking defaults to static archive mode (`libdrift_rt.a` variants under `build/runtime_libs/`).
+- Archive mode is strict: if archive build/link fails, `driftc` fails (no silent source fallback).
+- `driftc` does not auto-build runtime archives in archive mode; archives must already exist.
+- Set `DRIFT_RUNTIME_LINK_MODE=source` to force legacy source/object runtime linking.
+- Set `DRIFT_RUNTIME_LIB_CACHE_DIR=<path>` to redirect runtime archive artifacts/locks to a caller-writable location.
+- Legacy-compatible override: `DRIFT_RUNTIME_BUILD_ROOT=<path>` writes archives under `<path>/runtime_libs/`.
 
 ## 8. Common pitfalls
 

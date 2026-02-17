@@ -115,7 +115,12 @@ from lang.driftc.traits.world import TypeKey, TraitKey, type_key_from_typeid
 from lang.driftc.traits.solver import Env as TraitEnv, ProofStatus, prove_is
 from lang.codegen.llvm import lower_module_to_llvm
 from lang.codegen.llvm.test_utils import host_word_bits
-from lang.language_runtime import get_runtime_sources
+from lang.language_runtime import (
+	get_runtime_sources,
+	runtime_archive_path,
+	runtime_archive_mode,
+	runtime_archive_variant,
+)
 from lang.driftc.parser import parse_drift_to_hir, parse_drift_files_to_hir, parse_drift_workspace_to_hir
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.type_resolver import resolve_program_signatures
@@ -8132,13 +8137,31 @@ def main(argv: list[str] | None = None) -> int:
 	use_linker = _select_linker()
 	linker_flags = ["-fuse-ld=gold"] if use_linker == "gold" else []
 	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
-	asan_flags = ["-fsanitize=address", "-g"] if _env_true("DRIFT_ASAN") else []
+	asan_enabled = _env_true("DRIFT_ASAN")
+	asan_flags = ["-fsanitize=address", "-g"] if asan_enabled else []
+	runtime_archive: str | None = None
+	rt_mode = runtime_archive_mode()
+	if rt_mode == "archive":
+		variant = runtime_archive_variant(
+			debug_enabled=debug_enabled,
+			asan_enabled=asan_enabled,
+			alloc_track_enabled=False,
+		)
+		archive_path = runtime_archive_path(ROOT, variant=variant)
+		if not archive_path.exists():
+			msg = (
+				f"runtime archive missing in archive mode: {archive_path} "
+				f"(prebuild with 'just runtime-libs' or set DRIFT_RUNTIME_LINK_MODE=source)"
+			)
+			if args.json:
+				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			else:
+				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			return 1
+		runtime_archive = str(archive_path)
 
 	if debug_enabled:
 		ir_obj = args.output.with_suffix(".ir.o")
-		rt_dir = args.output.parent / "runtime_objs"
-		rt_dir.mkdir(parents=True, exist_ok=True)
-		rt_objs: list[str] = []
 		ir_compile_cmd = [
 			clang,
 			*linker_flags,
@@ -8159,40 +8182,48 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
-		for src in runtime_sources:
-			src_path = Path(src)
-			obj_path = rt_dir / (src_path.stem + ".o")
-			rt_compile_cmd = [
-				clang,
-				*linker_flags,
-				*asan_flags,
-				"-c",
-				"-x",
-				"c",
-				str(src_path),
-				"-g0",
-				"-I",
-				str(runtime_root),
-				"-I",
-				str(compiler_infra_root),
-				"-o",
-				str(obj_path),
-			]
-			rt_compile = subprocess.run(rt_compile_cmd, capture_output=True, text=True, cwd=ROOT)
-			if rt_compile.returncode != 0:
-				msg = f"clang failed: {rt_compile.stderr.strip()}"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
-				else:
-					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
-				return 1
-			rt_objs.append(str(obj_path))
+		rt_inputs: list[str]
+		if rt_mode == "archive":
+			rt_inputs = [runtime_archive]
+		else:
+			rt_dir = args.output.parent / "runtime_objs"
+			rt_dir.mkdir(parents=True, exist_ok=True)
+			rt_objs: list[str] = []
+			for src in runtime_sources:
+				src_path = Path(src)
+				obj_path = rt_dir / (src_path.stem + ".o")
+				rt_compile_cmd = [
+					clang,
+					*linker_flags,
+					*asan_flags,
+					"-c",
+					"-x",
+					"c",
+					str(src_path),
+					"-g0",
+					"-I",
+					str(runtime_root),
+					"-I",
+					str(compiler_infra_root),
+					"-o",
+					str(obj_path),
+				]
+				rt_compile = subprocess.run(rt_compile_cmd, capture_output=True, text=True, cwd=ROOT)
+				if rt_compile.returncode != 0:
+					msg = f"clang failed: {rt_compile.stderr.strip()}"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+					else:
+						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				rt_objs.append(str(obj_path))
+			rt_inputs = rt_objs
 		link_cmd = [
 			clang,
 			*linker_flags,
 			*asan_flags,
 			str(ir_obj),
-			*rt_objs,
+			*rt_inputs,
 			*link_libs,
 			*gdb_index_flag,
 			"-Wl,--as-needed",
@@ -8200,25 +8231,42 @@ def main(argv: list[str] | None = None) -> int:
 			str(args.output),
 		]
 	else:
-		link_cmd = [
-			clang,
-			*linker_flags,
-			*asan_flags,
-			"-x",
-			"ir",
-			str(ir_path),
-			"-x",
-			"c",
-			"-I",
-			str(runtime_root),
-			"-I",
-			str(compiler_infra_root),
-			*runtime_sources,
-			*link_libs,
-			"-Wl,--as-needed",
-			"-o",
-			str(args.output),
-		]
+		if rt_mode == "archive":
+			link_cmd = [
+				clang,
+				*linker_flags,
+				*asan_flags,
+				"-x",
+				"ir",
+				str(ir_path),
+				"-x",
+				"none",
+				runtime_archive,
+				*link_libs,
+				"-Wl,--as-needed",
+				"-o",
+				str(args.output),
+			]
+		else:
+			link_cmd = [
+				clang,
+				*linker_flags,
+				*asan_flags,
+				"-x",
+				"ir",
+				str(ir_path),
+				"-x",
+				"c",
+				"-I",
+				str(runtime_root),
+				"-I",
+				str(compiler_infra_root),
+				*runtime_sources,
+				*link_libs,
+				"-Wl,--as-needed",
+				"-o",
+				str(args.output),
+			]
 	print("[driftc] link:", " ".join(link_cmd), file=sys.stderr)
 	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:

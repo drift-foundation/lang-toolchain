@@ -625,6 +625,10 @@ Rules:
 - Direct `bin/driftc` mode:
   - supports `DRIFT_ASAN=1` for compile/link sanitization.
   - rejects `DRIFT_MEMCHECK=1` / `DRIFT_MASSIF=1` with actionable error (runner-only execution toggles).
+  - defaults to runtime static-archive linking (`build/runtime_libs/<variant>/libdrift_rt.a`).
+  - archive mode is strict (no silent fallback); use `DRIFT_RUNTIME_LINK_MODE=source` only when explicitly opting into source/object runtime linking.
+  - archive mode is consume-only in `driftc` (no implicit runtime archive build during compile).
+  - cache/output location is configurable via `DRIFT_RUNTIME_LIB_CACHE_DIR` (or `DRIFT_RUNTIME_BUILD_ROOT`, which maps to `<root>/runtime_libs`).
 - `drift` must refuse to install incompatible packages.
 - `driftc` must refuse to build if an incompatible package is in the closure.
 

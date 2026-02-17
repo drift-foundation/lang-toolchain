@@ -2,8 +2,8 @@ set shell := ["bash", "-lc"]
 set quiet
 CLANG_BIN := "clang-15"
 
-# Default task: run deps check then staged lang compiler tests.
-default: deps-check lang-test
+# Default task: run deps check then full staged compiler tests.
+default: deps-check test
 
 deps-check:
 	PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py
@@ -11,9 +11,12 @@ deps-check:
 review-cleanup:
 	rm -f combined_*
 
-# Lang2 staged compiler tests
-lang-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-suite lang-codegen-test lang-gdb-test
+# Full staged compiler tests
+test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test
 	@echo "lang tests: Success."
+
+# Local release/deploy prep (no implicit full test run).
+deploy: runtime-libs dist-publish-stdlib
 
 lang-stage1-test:
 	# Ensure pytest is available in the venv
@@ -118,19 +121,6 @@ lang-method-registry-test:
 # Driver/integration tests (driftc pipeline, try sugar, declared events).
 lang-driver-test:
 	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-auto}}" -v lang/tests/driver; \
-	else \
-	  echo "pytest-xdist is missing in .venv; running driver tests serially (install: ./.venv/bin/python3 -m pip install pytest-xdist)"; \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
-	fi
-
-lang-driver-suite:
-	# Full driver suite (lang/tests/driver).
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
@@ -253,6 +243,20 @@ dist-index:
 		exit 1
 	fi
 	cat dist/release/index.json
+
+# Prebuild runtime archives used by driftc/e2e archive-link mode.
+runtime-libs CLANG="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	clang_bin="{{CLANG}}"
+	if [[ -z "${clang_bin}" ]]; then
+		clang_bin="$(command -v clang-15 || command -v clang || true)"
+	fi
+	if [[ -z "${clang_bin}" ]]; then
+		echo "clang not found (pass CLANG=... or install clang/clang-15)" >&2
+		exit 1
+	fi
+	DRIFT_RUNTIME_CLANG="${clang_bin}" PYTHONPATH=. ./.venv/bin/python3 -c "from pathlib import Path; import os; from lang.language_runtime import build_runtime_archive; root=Path('.').resolve(); clang=os.environ['DRIFT_RUNTIME_CLANG']; [print(build_runtime_archive(root, clang=clang, variant=v)) for v in ('default','debug','asan','alloc_track')]"
 
 # Build stdlib package and publish into local dist/release repo (signed by default).
 # Key resolution priority: explicit SIGN_KEY arg, then DRIFT_SIGN_KEY_FILE.
