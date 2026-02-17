@@ -1,0 +1,10 @@
+{
+  "description": "e2e: array index read non-copy rejected",
+  "diagnostics": [
+    {
+      "message_contains": "cannot copy value of type"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

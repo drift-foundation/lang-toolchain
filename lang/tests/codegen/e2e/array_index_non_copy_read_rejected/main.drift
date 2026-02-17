@@ -1,0 +1,16 @@
+struct Cell {
+	x: Array<Int>
+}
+
+fn _mk() nothrow -> Cell {
+	var a: Array<Int> = [];
+	a.push(1);
+	return Cell(x = move a);
+}
+
+fn main() nothrow -> Int {
+	var xs: Array<Cell> = [];
+	xs.push(_mk());
+	val c = xs[0];
+	return c.x.len;
+}

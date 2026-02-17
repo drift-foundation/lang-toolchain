@@ -39,14 +39,27 @@ class Span:
 		if loc is None:
 			return cls()
 		if isinstance(loc, cls):
+			if loc.line is None and loc.column is None and loc.raw is not None:
+				raw_span = cls.from_loc(loc.raw)
+				return cls(
+					file=loc.file or raw_span.file,
+					file_id=loc.file_id if loc.file_id is not None else raw_span.file_id,
+					line=loc.line if loc.line is not None else raw_span.line,
+					column=loc.column if loc.column is not None else raw_span.column,
+					end_line=loc.end_line if loc.end_line is not None else raw_span.end_line,
+					end_column=loc.end_column if loc.end_column is not None else raw_span.end_column,
+					start_pos=loc.start_pos if loc.start_pos is not None else raw_span.start_pos,
+					end_pos=loc.end_pos if loc.end_pos is not None else raw_span.end_pos,
+					raw=loc.raw,
+				)
 			return loc
 		# Best-effort extraction of common location fields; keep the raw object
 		# so richer renderers can still recover parser-specific details.
 		return cls(
 			file=getattr(loc, "file", None) or getattr(loc, "filename", None) or None,
 			file_id=getattr(loc, "file_id", None),
-			line=getattr(loc, "line", None),
-			column=getattr(loc, "column", None),
+			line=getattr(loc, "line", None) or getattr(loc, "start_line", None),
+			column=getattr(loc, "column", None) or getattr(loc, "start_column", None),
 			end_line=getattr(loc, "end_line", None),
 			end_column=getattr(loc, "end_column", None),
 			start_pos=getattr(loc, "start_pos", None),

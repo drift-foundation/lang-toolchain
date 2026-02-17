@@ -1,0 +1,118 @@
+module mariadb.wire.proto.tests.unit.resultset_decode_test
+
+import std.core as core;
+import mariadb.wire.proto.decode.resultset as resultset;
+import mariadb.wire.proto.types as types;
+
+fn _mk_packet(bytes: Array<Byte>) nothrow -> Array<Byte> {
+	return move bytes;
+}
+
+fn _push_ascii(target: &mut Array<Byte>, s: String) nothrow -> Void {
+	var i = 0;
+	while i < s.byte_length() {
+		target.push(core.string_byte_at(&s, i));
+		i = i + 1;
+	}
+}
+
+fn _mk_lenenc_text_cell(s: String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	out.push(cast<Byte>(s.byte_length()));
+	_push_ascii(&mut out, move s);
+	return move out;
+}
+
+fn _mk_row_two(first: String, second: String) nothrow -> Array<Byte> {
+	var row: Array<Byte> = [];
+	var a = _mk_lenenc_text_cell(move first);
+	var i = 0;
+	while i < a.len {
+		row.push(a[i]);
+		i = i + 1;
+	}
+	var b = _mk_lenenc_text_cell(move second);
+	var j = 0;
+	while j < b.len {
+		row.push(b[j]);
+		j = j + 1;
+	}
+	return move row;
+}
+
+fn _expect_text_cell(row: &Array<types.ResultSetCell>, idx: Int, expected: String, code: Int) nothrow -> Int {
+	match row[idx] {
+		Text(value = v) => {
+			if v != expected { return code; }
+			return 0;
+		},
+		default => { return code + 1; }
+	}
+}
+
+fn _expect_null_cell(row: &Array<types.ResultSetCell>, idx: Int, code: Int) nothrow -> Int {
+	match row[idx] {
+		Null() => { return 0; },
+		default => { return code; }
+	}
+}
+
+fn expect_decode_basic_resultset() nothrow -> Int {
+	var packets: Array<Array<Byte>> = [];
+	packets.push(_mk_packet([cast<Byte>(2)])); // column_count
+	packets.push(_mk_packet([cast<Byte>(1), cast<Byte>(97)])); // coldef a (opaque)
+	packets.push(_mk_packet([cast<Byte>(1), cast<Byte>(98)])); // coldef b (opaque)
+	packets.push(_mk_row_two("x", "y"));
+	var row2: Array<Byte> = [];
+	var first = _mk_lenenc_text_cell("z");
+	row2.push(first[0]);
+	row2.push(first[1]);
+	row2.push(resultset.RESULTSET_NULL_HEADER);
+	packets.push(move row2);
+	packets.push(_mk_packet([resultset.RESULTSET_EOF_TERMINATOR_HEADER, cast<Byte>(0), cast<Byte>(0), cast<Byte>(2), cast<Byte>(0)]));
+	match resultset.decode_text_resultset_packets(&packets) {
+		Ok(v) => {
+			if v.column_count != cast<Uint>(2) { return 1; }
+			val rows = &v.rows;
+			if rows.len != 2 { return 2; }
+			val row0 = &rows[0];
+			if row0.len != 2 { return 3; }
+			val c1 = _expect_text_cell(row0, 0, "x", 4);
+			if c1 != 0 { return c1; }
+			val c2 = _expect_text_cell(row0, 1, "y", 6);
+			if c2 != 0 { return c2; }
+			val row1 = &rows[1];
+			if row1.len != 2 { return 8; }
+			val c3 = _expect_text_cell(row1, 0, "z", 9);
+			if c3 != 0 { return c3; }
+			val c4 = _expect_null_cell(row1, 1, 11);
+			if c4 != 0 { return c4; }
+			return 0;
+		},
+		Err(_) => { return 12; }
+	}
+}
+
+fn expect_missing_terminator_error() nothrow -> Int {
+	var packets: Array<Array<Byte>> = [];
+	packets.push(_mk_packet([cast<Byte>(1)])); // column_count
+	packets.push(_mk_packet([cast<Byte>(1), cast<Byte>(97)])); // coldef
+	packets.push(_mk_packet([cast<Byte>(1), cast<Byte>(120)])); // row: "x"
+	match resultset.decode_text_resultset_packets(&packets) {
+		Ok(_) => { return 20; },
+		Err(e) => {
+			if e.tag != "resultset-missing-terminator" {
+				return 21;
+			}
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_decode_basic_resultset();
+	if a != 0 { return a; }
+	val b = expect_missing_terminator_error();
+	if b != 0 { return b; }
+	return 0;
+}

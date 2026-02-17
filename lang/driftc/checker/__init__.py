@@ -1030,6 +1030,7 @@ class Checker:
 		diagnostics: Optional[List[Diagnostic]]
 		report_unknown_names: bool = True
 		cache: Dict[int, Optional[TypeId]] = field(default_factory=dict)
+		suppress_index_copy_check_expr_ids: set[int] = field(default_factory=set)
 
 		def infer(self, expr: "H.HExpr") -> Optional[TypeId]:
 			"""
@@ -1153,6 +1154,17 @@ class Checker:
 				H.BinaryOp.GT,
 				H.BinaryOp.GE,
 			}
+			def _contains_type_params(ty: TypeId, seen: set[int]) -> bool:
+				if int(ty) in seen:
+					return False
+				seen.add(int(ty))
+				td0 = self.table.get(ty)
+				if td0.kind is TypeKind.TYPEVAR:
+					return True
+				for child in td0.param_types:
+					if _contains_type_params(child, seen):
+						return True
+				return False
 
 			if isinstance(expr, H.HLiteralInt):
 				return checker._int_type
@@ -1682,7 +1694,38 @@ class Checker:
 				if td.kind is TypeKind.REF and td.param_types:
 					td = self.table.get(td.param_types[0])
 				if td.kind is TypeKind.ARRAY and td.param_types:
-					return td.param_types[0]
+					elem_ty = td.param_types[0]
+					elem_name = self.table.get(elem_ty).name
+					copy_span = Span.from_loc(getattr(expr, "loc", None))
+					if copy_span.line is None:
+						copy_span = Span.from_loc(getattr(expr.subject, "loc", None))
+					if copy_span.line is None:
+						copy_span = Span.from_loc(getattr(expr.index, "loc", None))
+					if copy_span.line is None and self.current_fn is not None and getattr(self.current_fn, "signature", None) is not None:
+						copy_span = Span.from_loc(getattr(self.current_fn.signature, "loc", None))
+					if id(expr) not in self.suppress_index_copy_check_expr_ids:
+						copy_status = self.table.copy_status(elem_ty)
+						if copy_status is None:
+							reason = self.table.copy_unknown_reason(elem_ty)
+							if _contains_type_params(elem_ty, set()):
+								return elem_ty
+							self._append_diag(
+								_chk_diag(
+									message=f"cannot copy value of type '{elem_name}': Copy is unknown ({reason})",
+									severity="error",
+									span=copy_span,
+									code="E-COPY-UNKNOWN",
+								)
+							)
+						elif not copy_status:
+							self._append_diag(
+								_chk_diag(
+									message=f"cannot copy value of type '{elem_name}' (use move <expr>)",
+									severity="error",
+									span=copy_span,
+								)
+							)
+					return elem_ty
 				self.report_index_subject_not_array()
 				return None
 			if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
@@ -2452,9 +2495,13 @@ class Checker:
 			elif isinstance(stmt, H.HAssign):
 				walk_expr(stmt.value)
 				value_ty = ctx.infer(stmt.value)
-				walk_expr(stmt.target)
 				if isinstance(stmt.target, H.HIndex):
-					target_ty = ctx.infer(stmt.target)
+					ctx.suppress_index_copy_check_expr_ids.add(id(stmt.target))
+					try:
+						walk_expr(stmt.target)
+						target_ty = ctx.infer(stmt.target)
+					finally:
+						ctx.suppress_index_copy_check_expr_ids.discard(id(stmt.target))
 					if target_ty is not None and value_ty is not None and target_ty != value_ty:
 						ctx._append_diag(
 							_chk_diag(
@@ -2463,7 +2510,9 @@ class Checker:
 								span=getattr(stmt.target, "loc", getattr(stmt, "loc", Span())),
 							)
 						)
-				elif isinstance(stmt.target, H.HVar) and value_ty is not None:
+				else:
+					walk_expr(stmt.target)
+				if isinstance(stmt.target, H.HVar) and value_ty is not None:
 					ctx.locals[stmt.target.name] = value_ty
 			elif isinstance(stmt, H.HIf):
 				walk_expr(stmt.cond)

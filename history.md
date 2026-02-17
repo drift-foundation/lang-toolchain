@@ -956,3 +956,82 @@
 - Validation:
   - logging e2e subset passed (`std_log_*`, `macro_log_app_logging_context`).
   - driver subset passed (`test_std_log_api_smoke`, `test_macro_basic_diagnostics`).
+
+## 2026-02-17 – Checker hardening for non-Copy array index reads (LANGUAGE_BUG)
+- Regression-first fix for internal crash path:
+  - symptom: stage2 raised `NotImplementedError` for `HIndex` on `Array<T>` when element type was non-Copy.
+  - pinned regression: `lang/tests/codegen/e2e/array_index_non_copy_read_rejected`.
+- Root-cause fix in checker boundary:
+  - `lang/driftc/checker/__init__.py` now emits normal typecheck diagnostics for non-Copy array index reads (`cannot copy value of type ...`) before stage2 lowering.
+  - added assignment-target suppression for `HAssign` indexed lvalues so assignment type checks do not spuriously trigger copy diagnostics on target inference.
+  - added structural typevar detection for generic contexts to avoid false `E-COPY-UNKNOWN` in unresolved type-parameter paths.
+- Follow-up stability fix:
+  - corrected checker enum reference from `TypeKind.TYPE_PARAM` to `TypeKind.TYPEVAR` (this unblocked `just deps-check`).
+- Validation:
+  - e2e: `array_index_non_copy_read_rejected`, `array_pop_move_out_non_copy`, `borrow_array_elem_mut` passed.
+  - sanitizer/memory modes for new regression passed: `DRIFT_ASAN=1 DRIFT_ALLOC_TRACK=1`, `DRIFT_MEMCHECK=1`.
+  - stage suites passed: `lang-stage1-test`, `lang-stage2-test`, `lang-stage3-test`, `lang-stage4-test`.
+
+## 2026-02-16 – std.text safe bytes→UTF-8 API expansion
+- Added safe range decode API in stdlib:
+  - `std.text.utf8_from_bytes_range(input: &Array<Byte>, start: Int, end: Int) -> Result<String, Utf8Error>`.
+- Kept user-land path safe (no unsafe/rawbuffer requirement) and aligned error shape with existing UTF-8 decoder behavior.
+- Added e2e coverage:
+  - `lang/tests/codegen/e2e/std_text_utf8_from_bytes_range`
+  - `lang/tests/codegen/e2e/std_text_utf8_from_bytes_range_errors`
+  - `lang/tests/codegen/e2e/std_text_utf8_from_bytes`
+  - `lang/tests/codegen/e2e/std_text_utf8_error_shape`.
+
+## 2026-02-16 – Byte semantics + typed const support
+- Pinned unsigned byte semantics in e2e:
+  - `lang/tests/codegen/e2e/byte_cast_int_unsigned_semantics`.
+- Added typed const support coverage for MVP scalar literals:
+  - byte literal accept/reject:
+    - `lang/tests/codegen/e2e/const_byte_typed_literal_ok`
+    - `lang/tests/codegen/e2e/const_byte_typed_literal_oob_rejected`
+  - bool/float typed consts:
+    - `lang/tests/codegen/e2e/const_bool_float_typed_literals_ok`.
+- Parser + stage2 lowering updates landed to support those typed const forms.
+
+## 2026-02-16 – LLVM codegen fix for nothrow Array return path (LANGUAGE_BUG)
+- Fixed internal codegen failure when a non-throwing function returned `Array<T>` by value.
+- Added regression e2e:
+  - `lang/tests/codegen/e2e/array_return_nothrow`.
+- Outcome: compile/run path now succeeds (instead of internal `NotImplementedError` codegen failure).
+
+## 2026-02-16 – Toolchain UX: signing/trust/publish + local dist flow
+- Added/expanded `drift` CLI operations and tests for key/trust/publish/fetch/vendor workflows:
+  - `lang/tests/driver/test_drift_key_package_cli.py`
+  - `lang/tests/driver/test_drift_publish_fetch_vendor.py`
+  - `lang/tests/driver/test_drift_sign_cli.py`
+  - `lang/tests/driver/test_drift_trust_cli.py`
+  - `lang/tests/driver/test_drift_doctor.py`.
+- Added local dist scaffold support in repo:
+  - `dist/README.md`, `dist/release/.gitkeep`
+  - just recipes: `dist-init`, `dist-index`, `dist-publish`, `dist-publish-stdlib`.
+- Improved package index signature shape:
+  - switched from negative flag (`unsigned`) to positive contract (`signed`) in index metadata.
+- Added key listing UX:
+  - `drift key list` with default marker + key id visibility.
+- Added trust sidecar import UX:
+  - `drift trust import ...` flow to import signer info from signature sidecars into trust store.
+
+## 2026-02-16 – Runtime archive link mode + wrapper env handling
+- Added runtime archive infrastructure and cache/build plumbing:
+  - `lang/language_runtime/__init__.py`
+  - `just runtime-libs` for explicit archive builds.
+- Added driftc wrapper/runtime-link mode handling:
+  - archive mode support in `lang/driftc/driftc.py` + `bin/driftc`.
+  - explicit env handling for debug/sanitizer modes (including `DRIFT_ASAN=1`) in wrapper path.
+- Added driver coverage for wrapper env behavior:
+  - `lang/tests/driver/test_driftc_wrapper_env_modes.py`.
+- Tooling docs updated:
+  - `docs/toolchain-build-workflow.md`
+  - `docs/design/drift-tooling-and-packages.md`.
+
+## 2026-02-16 – Import diagnostic UX + task cleanup
+- Improved import diagnostics for entry-module/module resolution edge case:
+  - parser/driver updates for clearer module-not-found hint path.
+  - coverage in `lang/tests/driver/test_import_module_not_found_hint.py`.
+- Justfile cleanup:
+  - renamed/streamlined recipes (including final cleanup of old deploy-oriented naming).
