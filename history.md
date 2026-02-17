@@ -1,3 +1,30 @@
+## 2026-02-17 – Compiler bug batch hardening (diagnostics + typevar/index regressions)
+- Closed and pinned compiler bug-batch items #1–#4 from `issues/compiler-core-bugs-2026-02-17/description.md`.
+- Fixed checker call-signature diagnostic quality regression in `lang/driftc/checker/__init__.py`:
+  - removed raw internal `TypeId` leakage (`type 170, expected 1`-style messages),
+  - now renders symbolic type labels via `TypeTable.type_key_string(...)`,
+  - propagated call-site source span into `check_call_signature(...)` (replaced `loc=None` path).
+- Added/expanded regression coverage for diagnostic shape and span:
+  - `lang/tests/driver/test_callinfo_param_layout_contract.py`
+    - new test `test_call_signature_type_mismatch_uses_symbolic_types_and_span`.
+- Verified tombstone contract fix sweep (issue #2) across core/package/LLVM/e2e paths:
+  - `lang/tests/core/test_variant_tombstone_requirement.py`
+  - `lang/tests/packages/test_link_variant_internal_tombstone.py`
+  - `lang/tests/driver/test_variant_tombstone_driver.py`
+  - `lang/codegen/llvm/tests/test_llvm_codegen_array_string.py -k tombstone`
+  - e2e: `variant_droppable_without_tombstone_generic`, `variant_droppable_without_tombstone_non_generic`, `variant_internal_tombstone_array_pop`.
+- Added boundary guard regressions for non-Copy array index read behavior (issue #3):
+  - new driver file `lang/tests/driver/test_array_index_noncopy_diagnostics.py`,
+  - asserts user-facing `typecheck` diagnostics with populated span and no leaked `internal:` diagnostics for non-Copy `arr[i]` value-read rejection.
+- Added regression coverage for checker type-param scan stability (issue #4):
+  - new driver file `lang/tests/driver/test_checker_typevar_scan_regression.py`,
+  - pins no internal exception in generic `HIndex` scan paths,
+  - pins nested generic non-Copy case as clean user-facing rejection (span + phase + no `internal:` leakage).
+- Validation outcomes:
+  - new driver regressions pass,
+  - nearby driver/type-checker/e2e subsets pass (`array_index_non_copy_read_rejected`, callinfo boundary suite, array index copy suite),
+  - issue tracker updated to mark #2/#3/#4 resolved/pinned for current pipeline.
+
 ## 2026-02-16 – Compiler hardening: phase-contract enforcement, shared call contracts, and boundary diagnostic hygiene
 - Completed compiler hardening phases focused on checker→MIR→LLVM contract reliability and deterministic failure reporting.
 - Added/expanded boundary regression coverage:

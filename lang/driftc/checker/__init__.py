@@ -275,6 +275,14 @@ class Checker:
 		self._dv = _find_named(TypeKind.DIAGNOSTICVALUE, "DiagnosticValue") or self._type_table.ensure_diagnostic_value()
 		self._unknown_type = _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.ensure_unknown()
 
+	def _type_label(self, ty: Optional[TypeId]) -> str:
+		if ty is None:
+			return "Unknown"
+		try:
+			return self._type_table.type_key_string(ty)
+		except Exception:
+			return repr(ty)
+
 	@classmethod
 	def run_by_id(
 		cls,
@@ -2034,7 +2042,7 @@ class Checker:
 					info.sig,
 					arg_type_ids,
 					diagnostics,
-					loc=None,
+					loc=Span.from_loc(getattr(expr, "loc", None)),
 					callee_name=callee_name,
 					skip_type_check=skip_type_check,
 				)
@@ -2235,8 +2243,8 @@ class Checker:
 				diagnostics.append(
 					_chk_diag(
 						message=(
-							f"argument {idx} to {callee_name} has type {arg_ty!r}, "
-							f"expected {param_ty!r}"
+							f"argument {idx} to {callee_name} has type {self._type_label(arg_ty)}, "
+							f"expected {self._type_label(param_ty)}"
 						),
 						severity="error",
 						span=loc,

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
+
 from lang.driftc import stage1 as H
 from lang.driftc.checker import Checker, FnSignature
 from lang.driftc.core.function_id import FunctionId
+from lang.driftc.core.span import Span
 from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, IntrinsicKind
 
@@ -159,3 +162,23 @@ def test_callinfo_target_shape_allows_intrinsic_callback_target_on_call() -> Non
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert not any("internal: invoke CallInfo target must be INDIRECT" in d.message for d in errors)
 	assert not any("internal: call CallInfo target must not be INDIRECT" in d.message for d in errors)
+
+
+def test_call_signature_type_mismatch_uses_symbolic_types_and_span() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	byte_ty = table.ensure_byte()
+	call = H.HCall(fn=H.HVar(name="f"), args=[H.HLiteralInt(value=1)], loc=Span(file="main.drift", line=4, column=12))
+	call.callsite_id = 9
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	info = CallInfo(
+		target=CallTarget.direct(FunctionId(module="main", name="f", ordinal=0)),
+		sig=CallSig(param_types=(byte_ty,), user_ret_type=int_ty, can_throw=False),
+	)
+	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=9, table=table)
+	checked = checker.check_by_id([fn_id])
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	matches = [d for d in errors if "argument 0 to f has type Int, expected Byte" in d.message]
+	assert matches, errors
+	assert all(re.search(r"type \\d+, expected \\d+", d.message) is None for d in matches), matches
+	assert all(d.span.line is not None and d.span.column is not None for d in matches), matches
