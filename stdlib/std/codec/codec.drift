@@ -1,0 +1,567 @@
+module std.codec
+
+import std.core as core;
+import std.io as io;
+
+export {
+	CodecError,
+	HexDecoder,
+	Base64Decoder,
+	Base32Decoder,
+	hex_encode,
+	hex_decode,
+	hex_decoder,
+	base64_encode,
+	base64_decode,
+	base64_decoder,
+	base32_encode,
+	base32_decode,
+	base32_decoder
+};
+
+pub struct CodecError {
+	pub tag: String,
+	pub offset: Int
+}
+
+pub struct HexDecoder {
+	allow_whitespace: Bool,
+	allow_prefix_0x: Bool
+}
+
+pub struct Base64Decoder {
+	allow_whitespace: Bool,
+	allow_url_safe: Bool
+}
+
+pub struct Base32Decoder {
+	allow_whitespace: Bool,
+	allow_lowercase: Bool
+}
+
+implement core.Diagnostic for CodecError {
+	pub fn to_diag(self: &CodecError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub fn hex_decoder() nothrow -> HexDecoder {
+	return HexDecoder(allow_whitespace = false, allow_prefix_0x = false);
+}
+
+pub fn base64_decoder() nothrow -> Base64Decoder {
+	return Base64Decoder(allow_whitespace = false, allow_url_safe = false);
+}
+
+pub fn base32_decoder() nothrow -> Base32Decoder {
+	return Base32Decoder(allow_whitespace = false, allow_lowercase = false);
+}
+
+implement HexDecoder {
+	pub fn allow_whitespace(self: &mut HexDecoder, flag: Bool) nothrow -> &mut HexDecoder {
+		self.allow_whitespace = flag;
+		return self;
+	}
+
+	pub fn allow_prefix_0x(self: &mut HexDecoder, flag: Bool) nothrow -> &mut HexDecoder {
+		self.allow_prefix_0x = flag;
+		return self;
+	}
+
+	pub fn decode(self: &HexDecoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+		return _hex_decode_impl(s, self.allow_whitespace, self.allow_prefix_0x);
+	}
+}
+
+implement Base64Decoder {
+	pub fn allow_whitespace(self: &mut Base64Decoder, flag: Bool) nothrow -> &mut Base64Decoder {
+		self.allow_whitespace = flag;
+		return self;
+	}
+
+	pub fn allow_url_safe(self: &mut Base64Decoder, flag: Bool) nothrow -> &mut Base64Decoder {
+		self.allow_url_safe = flag;
+		return self;
+	}
+
+	pub fn decode(self: &Base64Decoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+		return _base64_decode_impl(s, self.allow_whitespace, self.allow_url_safe);
+	}
+}
+
+implement Base32Decoder {
+	pub fn allow_whitespace(self: &mut Base32Decoder, flag: Bool) nothrow -> &mut Base32Decoder {
+		self.allow_whitespace = flag;
+		return self;
+	}
+
+	pub fn allow_lowercase(self: &mut Base32Decoder, flag: Bool) nothrow -> &mut Base32Decoder {
+		self.allow_lowercase = flag;
+		return self;
+	}
+
+	pub fn decode(self: &Base32Decoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+		return _base32_decode_impl(s, self.allow_whitespace, self.allow_lowercase);
+	}
+}
+
+pub fn hex_encode(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	if n <= 0 {
+		return "";
+	}
+	var out = io.buffer(n * 2);
+	var i = 0;
+	while i < n {
+		val u = _byte_u8(bytes[i]);
+		val hi = (u / 16) % 16;
+		val lo = u % 16;
+		io.buffer_write(&mut out, i * 2, _hex_digit_byte(hi));
+		io.buffer_write(&mut out, i * 2 + 1, _hex_digit_byte(lo));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), n * 2);
+}
+
+pub fn hex_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+	return _hex_decode_impl(s, false, false);
+}
+
+pub fn base64_encode(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	if n <= 0 {
+		return "";
+	}
+	val out_len = ((n + 2) / 3) * 4;
+	var out = io.buffer(out_len);
+	var i = 0;
+	var o = 0;
+	while i < n {
+		val b0 = _byte_u8(bytes[i]);
+		var b1 = 0;
+		var b2 = 0;
+		var rem = n - i;
+		if rem > 1 {
+			b1 = _byte_u8(bytes[i + 1]);
+		}
+		if rem > 2 {
+			b2 = _byte_u8(bytes[i + 2]);
+		}
+		val c0 = (b0 / 4) % 64;
+		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
+		val c2 = ((b1 % 16) * 4 + (b2 / 64)) % 64;
+		val c3 = b2 % 64;
+		io.buffer_write(&mut out, o, _b64_alphabet_byte(c0));
+		io.buffer_write(&mut out, o + 1, _b64_alphabet_byte(c1));
+		if rem > 1 {
+			io.buffer_write(&mut out, o + 2, _b64_alphabet_byte(c2));
+		} else {
+			io.buffer_write(&mut out, o + 2, cast<Byte>(61));
+		}
+		if rem > 2 {
+			io.buffer_write(&mut out, o + 3, _b64_alphabet_byte(c3));
+		} else {
+			io.buffer_write(&mut out, o + 3, cast<Byte>(61));
+		}
+		i = i + 3;
+		o = o + 4;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+}
+
+pub fn base64_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+	return _base64_decode_impl(s, false, false);
+}
+
+pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	if n <= 0 {
+		return "";
+	}
+	val out_len = ((n + 4) / 5) * 8;
+	var out = io.buffer(out_len);
+	var i = 0;
+	var o = 0;
+	while i < n {
+		var b0 = 0;
+		var b1 = 0;
+		var b2 = 0;
+		var b3 = 0;
+		var b4 = 0;
+		val rem = n - i;
+		b0 = _byte_u8(bytes[i]);
+		if rem > 1 { b1 = _byte_u8(bytes[i + 1]); }
+		if rem > 2 { b2 = _byte_u8(bytes[i + 2]); }
+		if rem > 3 { b3 = _byte_u8(bytes[i + 3]); }
+		if rem > 4 { b4 = _byte_u8(bytes[i + 4]); }
+		val c0 = (b0 / 8) % 32;
+		val c1 = ((b0 % 8) * 4 + (b1 / 64)) % 32;
+		val c2 = (b1 / 2) % 32;
+		val c3 = ((b1 % 2) * 16 + (b2 / 16)) % 32;
+		val c4 = ((b2 % 16) * 2 + (b3 / 128)) % 32;
+		val c5 = (b3 / 4) % 32;
+		val c6 = ((b3 % 4) * 8 + (b4 / 32)) % 32;
+		val c7 = b4 % 32;
+		io.buffer_write(&mut out, o, _b32_alphabet_byte(c0));
+		io.buffer_write(&mut out, o + 1, _b32_alphabet_byte(c1));
+		if rem == 1 {
+			io.buffer_write(&mut out, o + 2, cast<Byte>(61));
+			io.buffer_write(&mut out, o + 3, cast<Byte>(61));
+			io.buffer_write(&mut out, o + 4, cast<Byte>(61));
+			io.buffer_write(&mut out, o + 5, cast<Byte>(61));
+			io.buffer_write(&mut out, o + 6, cast<Byte>(61));
+			io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+		} else {
+			if rem == 2 {
+				io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
+				io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
+				io.buffer_write(&mut out, o + 4, cast<Byte>(61));
+				io.buffer_write(&mut out, o + 5, cast<Byte>(61));
+				io.buffer_write(&mut out, o + 6, cast<Byte>(61));
+				io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+			} else {
+				if rem == 3 {
+					io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
+					io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
+					io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
+					io.buffer_write(&mut out, o + 5, cast<Byte>(61));
+					io.buffer_write(&mut out, o + 6, cast<Byte>(61));
+					io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+				} else {
+					if rem == 4 {
+						io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
+						io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
+						io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
+						io.buffer_write(&mut out, o + 5, _b32_alphabet_byte(c5));
+						io.buffer_write(&mut out, o + 6, _b32_alphabet_byte(c6));
+						io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+					} else {
+						io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
+						io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
+						io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
+						io.buffer_write(&mut out, o + 5, _b32_alphabet_byte(c5));
+						io.buffer_write(&mut out, o + 6, _b32_alphabet_byte(c6));
+						io.buffer_write(&mut out, o + 7, _b32_alphabet_byte(c7));
+					}
+				}
+			}
+		}
+		i = i + 5;
+		o = o + 8;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+}
+
+pub fn base32_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+	return _base32_decode_impl(s, false, false);
+}
+
+fn _hex_decode_impl(s: &String, allow_whitespace: Bool, allow_prefix_0x: Bool) nothrow -> core.Result<Array<Byte>, CodecError> {
+	val n = s.byte_length();
+	var start = 0;
+	if allow_prefix_0x and n >= 2 {
+		val b0 = core.string_byte_at(s, 0);
+		val b1 = core.string_byte_at(s, 1);
+		if b0 == cast<Byte>(48) and (b1 == cast<Byte>(120) or b1 == cast<Byte>(88)) {
+			start = 2;
+		}
+	}
+	var clean: Array<Byte> = [];
+	var pos: Array<Int> = [];
+	var i = start;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if allow_whitespace and _is_ascii_whitespace(b) {
+			i = i + 1;
+			continue;
+		}
+		clean.push(b);
+		pos.push(i);
+		i = i + 1;
+	}
+	if clean.len % 2 != 0 {
+		return core.Result::Err(CodecError(tag = "hex-odd-length", offset = n));
+	}
+	var out: Array<Byte> = [];
+	var j = 0;
+	while j < clean.len {
+		val hi = _hex_value(clean[j]);
+		if hi < 0 {
+			return core.Result::Err(CodecError(tag = "hex-invalid-char", offset = pos[j]));
+		}
+		val lo = _hex_value(clean[j + 1]);
+		if lo < 0 {
+			return core.Result::Err(CodecError(tag = "hex-invalid-char", offset = pos[j + 1]));
+		}
+		out.push(cast<Byte>(hi * 16 + lo));
+		j = j + 2;
+	}
+	return core.Result::Ok(move out);
+}
+
+fn _base64_decode_impl(s: &String, allow_whitespace: Bool, allow_url_safe: Bool) nothrow -> core.Result<Array<Byte>, CodecError> {
+	val n = s.byte_length();
+	var clean: Array<Byte> = [];
+	var pos: Array<Int> = [];
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if allow_whitespace and _is_ascii_whitespace(b) {
+			i = i + 1;
+			continue;
+		}
+		clean.push(b);
+		pos.push(i);
+		i = i + 1;
+	}
+	if clean.len % 4 != 0 {
+		return core.Result::Err(CodecError(tag = "base64-invalid-length", offset = n));
+	}
+	var out: Array<Byte> = [];
+	i = 0;
+	while i < clean.len {
+		val b0 = clean[i];
+		val b1 = clean[i + 1];
+		val b2 = clean[i + 2];
+		val b3 = clean[i + 3];
+		val v0 = _b64_value(b0, allow_url_safe);
+		val v1 = _b64_value(b1, allow_url_safe);
+		val v2 = _b64_value(b2, allow_url_safe);
+		val v3 = _b64_value(b3, allow_url_safe);
+		if v0 == -1 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-char", offset = pos[i]));
+		}
+		if v1 == -1 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-char", offset = pos[i + 1]));
+		}
+		if v0 == -2 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-padding", offset = pos[i]));
+		}
+		if v1 == -2 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-padding", offset = pos[i + 1]));
+		}
+		if v2 == -1 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-char", offset = pos[i + 2]));
+		}
+		if v3 == -1 {
+			return core.Result::Err(CodecError(tag = "base64-invalid-char", offset = pos[i + 3]));
+		}
+		if v2 == -2 {
+			if v3 != -2 {
+				return core.Result::Err(CodecError(tag = "base64-invalid-padding", offset = pos[i + 3]));
+			}
+			if i + 4 != clean.len {
+				return core.Result::Err(CodecError(tag = "base64-trailing-data", offset = pos[i + 4]));
+			}
+			val o0 = (v0 * 4 + (v1 / 16)) % 256;
+			out.push(cast<Byte>(o0));
+			i = i + 4;
+			continue;
+		}
+		if v3 == -2 {
+			if i + 4 != clean.len {
+				return core.Result::Err(CodecError(tag = "base64-trailing-data", offset = pos[i + 4]));
+			}
+			val o0 = (v0 * 4 + (v1 / 16)) % 256;
+			val o1 = ((v1 % 16) * 16 + (v2 / 4)) % 256;
+			out.push(cast<Byte>(o0));
+			out.push(cast<Byte>(o1));
+			i = i + 4;
+			continue;
+		}
+		val o0 = (v0 * 4 + (v1 / 16)) % 256;
+		val o1 = ((v1 % 16) * 16 + (v2 / 4)) % 256;
+		val o2 = ((v2 % 4) * 64 + v3) % 256;
+		out.push(cast<Byte>(o0));
+		out.push(cast<Byte>(o1));
+		out.push(cast<Byte>(o2));
+		i = i + 4;
+	}
+	return core.Result::Ok(move out);
+}
+
+fn _base32_decode_impl(s: &String, allow_whitespace: Bool, allow_lowercase: Bool) nothrow -> core.Result<Array<Byte>, CodecError> {
+	val n = s.byte_length();
+	var clean: Array<Byte> = [];
+	var pos: Array<Int> = [];
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if allow_whitespace and _is_ascii_whitespace(b) {
+			i = i + 1;
+			continue;
+		}
+		clean.push(b);
+		pos.push(i);
+		i = i + 1;
+	}
+	if clean.len % 8 != 0 {
+		return core.Result::Err(CodecError(tag = "base32-invalid-length", offset = n));
+	}
+	var out: Array<Byte> = [];
+	i = 0;
+	while i < clean.len {
+		var vals: Array<Int> = [];
+		var j = 0;
+		while j < 8 {
+			val v = _b32_value(clean[i + j], allow_lowercase);
+			if v == -1 {
+				return core.Result::Err(CodecError(tag = "base32-invalid-char", offset = pos[i + j]));
+			}
+			vals.push(v);
+			j = j + 1;
+		}
+		var pad = 0;
+		j = 7;
+		while j >= 0 {
+			if vals[j] == -2 {
+				pad = pad + 1;
+				j = j - 1;
+				continue;
+			}
+			break;
+		}
+		j = 0;
+		while j < 8 - pad {
+			if vals[j] == -2 {
+				return core.Result::Err(CodecError(tag = "base32-invalid-padding", offset = pos[i + j]));
+			}
+			j = j + 1;
+		}
+		if pad > 0 and i + 8 != clean.len {
+			return core.Result::Err(CodecError(tag = "base32-trailing-data", offset = pos[i + 8]));
+		}
+		if not (pad == 0 or pad == 1 or pad == 3 or pad == 4 or pad == 6) {
+			return core.Result::Err(CodecError(tag = "base32-invalid-padding", offset = pos[i + (8 - pad)]));
+		}
+		val v0 = vals[0];
+		val v1 = vals[1];
+		val v2 = vals[2];
+		val v3 = vals[3];
+		val v4 = vals[4];
+		val v5 = vals[5];
+		val v6 = vals[6];
+		val v7 = vals[7];
+		val b0 = (v0 * 8 + (v1 / 4)) % 256;
+		val b1 = ((v1 % 4) * 64 + v2 * 2 + (v3 / 16)) % 256;
+		val b2 = ((v3 % 16) * 16 + (v4 / 2)) % 256;
+		val b3 = ((v4 % 2) * 128 + v5 * 4 + (v6 / 8)) % 256;
+		val b4 = ((v6 % 8) * 32 + v7) % 256;
+		if pad == 6 {
+			out.push(cast<Byte>(b0));
+		} else {
+			if pad == 4 {
+				out.push(cast<Byte>(b0));
+				out.push(cast<Byte>(b1));
+			} else {
+				if pad == 3 {
+					out.push(cast<Byte>(b0));
+					out.push(cast<Byte>(b1));
+					out.push(cast<Byte>(b2));
+				} else {
+					if pad == 1 {
+						out.push(cast<Byte>(b0));
+						out.push(cast<Byte>(b1));
+						out.push(cast<Byte>(b2));
+						out.push(cast<Byte>(b3));
+					} else {
+						out.push(cast<Byte>(b0));
+						out.push(cast<Byte>(b1));
+						out.push(cast<Byte>(b2));
+						out.push(cast<Byte>(b3));
+						out.push(cast<Byte>(b4));
+					}
+				}
+			}
+		}
+		i = i + 8;
+	}
+	return core.Result::Ok(move out);
+}
+
+fn _is_ascii_whitespace(b: Byte) nothrow -> Bool {
+	return b == cast<Byte>(32) or b == cast<Byte>(9) or b == cast<Byte>(10) or b == cast<Byte>(13);
+}
+
+fn _hex_value(b: Byte) nothrow -> Int {
+	val v = _byte_u8(b);
+	if v >= 48 and v <= 57 {
+		return v - 48;
+	}
+	if v >= 65 and v <= 70 {
+		return v - 65 + 10;
+	}
+	if v >= 97 and v <= 102 {
+		return v - 97 + 10;
+	}
+	return -1;
+}
+
+fn _hex_digit_byte(v: Int) nothrow -> Byte {
+	if v >= 0 and v <= 9 {
+		return cast<Byte>(48 + v);
+	}
+	return cast<Byte>(97 + (v - 10));
+}
+
+fn _b64_alphabet_byte(v: Int) nothrow -> Byte {
+	return core.string_byte_at("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", v);
+}
+
+fn _b64_value(b: Byte, allow_url_safe: Bool) nothrow -> Int {
+	val v = _byte_u8(b);
+	if v >= 65 and v <= 90 {
+		return v - 65;
+	}
+	if v >= 97 and v <= 122 {
+		return v - 97 + 26;
+	}
+	if v >= 48 and v <= 57 {
+		return v - 48 + 52;
+	}
+	if v == 43 {
+		return 62;
+	}
+	if v == 47 {
+		return 63;
+	}
+	if allow_url_safe and v == 45 {
+		return 62;
+	}
+	if allow_url_safe and v == 95 {
+		return 63;
+	}
+	if v == 61 {
+		return -2;
+	}
+	return -1;
+}
+
+fn _b32_alphabet_byte(v: Int) nothrow -> Byte {
+	return core.string_byte_at("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", v);
+}
+
+fn _b32_value(b: Byte, allow_lowercase: Bool) nothrow -> Int {
+	val v = _byte_u8(b);
+	if v >= 65 and v <= 90 {
+		return v - 65;
+	}
+	if v >= 50 and v <= 55 {
+		return v - 50 + 26;
+	}
+	if allow_lowercase and v >= 97 and v <= 122 {
+		return v - 97;
+	}
+	if v == 61 {
+		return -2;
+	}
+	return -1;
+}
+
+fn _byte_u8(b: Byte) nothrow -> Int {
+	var v = cast<Int>(b);
+	if v < 0 {
+		v = v + 256;
+	}
+	return v;
+}

@@ -1,0 +1,52 @@
+import std.codec as codec;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	var h = codec.hex_decoder();
+	h.allow_whitespace(true);
+	h.allow_prefix_0x(true);
+	match h.decode("0x0A 1b") {
+		core.Result::Err(err) => { return 1; },
+		core.Result::Ok(vals) => {
+			if vals.len != 2 { return 2; }
+			if codec.hex_encode(&vals) != "0a1b" { return 3; }
+		}
+	}
+
+	match codec.hex_decode("0x0A 1b") {
+		core.Result::Ok(v) => { return 5; },
+		core.Result::Err(err) => { }
+	}
+
+	var b = codec.base64_decoder();
+	b.allow_whitespace(true);
+	b.allow_url_safe(true);
+	match b.decode("-w== ") {
+		core.Result::Err(err) => { return 6; },
+		core.Result::Ok(vals) => {
+			if vals.len != 1 { return 7; }
+			if codec.base64_encode(&vals) != "+w==" { return 8; }
+		}
+	}
+
+	match codec.base64_decode("-w== ") {
+		core.Result::Ok(v) => { return 9; },
+		core.Result::Err(err) => { }
+	}
+
+	var c = codec.base32_decoder();
+	c.allow_whitespace(true);
+	c.allow_lowercase(true);
+	match c.decode("mzxw6ytb oi======") {
+		core.Result::Err(err) => { return 10; },
+		core.Result::Ok(vals) => {
+			if codec.base64_encode(&vals) != "Zm9vYmFy" { return 11; }
+		}
+	}
+
+	match codec.base32_decode("mzxw6ytboi======") {
+		core.Result::Ok(v) => { return 12; },
+		core.Result::Err(err) => { }
+	}
+	return 0;
+}

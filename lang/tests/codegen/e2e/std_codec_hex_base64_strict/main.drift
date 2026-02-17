@@ -1,0 +1,146 @@
+import std.codec as codec;
+import std.core as core;
+
+fn _require_ok_hex(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int, b3: Int) nothrow -> Int {
+	match codec.hex_decode(&s) {
+		core.Result::Err(err) => { return 100; },
+		core.Result::Ok(vals) => {
+			if vals.len != expected_len { return 101; }
+			val encoded = codec.hex_encode(&vals);
+			var expected: Array<Byte> = [];
+			expected.push(cast<Byte>(b0));
+			expected.push(cast<Byte>(b1));
+			expected.push(cast<Byte>(b2));
+			expected.push(cast<Byte>(b3));
+			val expected_hex = codec.hex_encode(&expected);
+			if encoded != expected_hex { return 102; }
+		}
+	}
+	return 0;
+}
+
+fn _require_err_hex(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
+	match codec.hex_decode(&s) {
+		core.Result::Ok(v) => { return code; },
+		core.Result::Err(e) => {
+			if e.tag != tag { return code + 1; }
+			if e.offset != off { return code + 2; }
+		}
+	}
+	return 0;
+}
+
+fn _require_ok_b64(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int) nothrow -> Int {
+	match codec.base64_decode(&s) {
+		core.Result::Err(err) => { return 200; },
+		core.Result::Ok(vals) => {
+			if vals.len != expected_len { return 201; }
+			val encoded = codec.base64_encode(&vals);
+			var expected: Array<Byte> = [];
+			expected.push(cast<Byte>(b0));
+			if expected_len > 1 { expected.push(cast<Byte>(b1)); }
+			if expected_len > 2 { expected.push(cast<Byte>(b2)); }
+			val expected_b64 = codec.base64_encode(&expected);
+			if encoded != expected_b64 { return 202; }
+		}
+	}
+	return 0;
+}
+
+fn _require_err_b64(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
+	match codec.base64_decode(&s) {
+		core.Result::Ok(v) => { return code; },
+		core.Result::Err(e) => {
+			if e.tag != tag { return code + 1; }
+			if e.offset != off { return code + 2; }
+		}
+	}
+	return 0;
+}
+
+fn _require_ok_b32(s: String, expected_b64: String, code: Int) nothrow -> Int {
+	match codec.base32_decode(&s) {
+		core.Result::Err(err) => { return code; },
+		core.Result::Ok(vals) => {
+			val encoded = codec.base64_encode(&vals);
+			if encoded != expected_b64 { return code + 1; }
+		}
+	}
+	return 0;
+}
+
+fn _require_err_b32(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
+	match codec.base32_decode(&s) {
+		core.Result::Ok(v) => { return code; },
+		core.Result::Err(e) => {
+			if e.tag != tag { return code + 1; }
+			if e.offset != off { return code + 2; }
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	var src: Array<Byte> = [];
+	src.push(cast<Byte>(0));
+	src.push(cast<Byte>(10));
+	src.push(cast<Byte>(27));
+	src.push(cast<Byte>(255));
+	val h = codec.hex_encode(&src);
+	if h != "000a1bff" { return 1; }
+	val r0 = _require_ok_hex(h, 4, 0, 10, 27, 255);
+	if r0 != 0 { return r0; }
+	val r1 = _require_err_hex("ABC", "hex-odd-length", 3, 10);
+	if r1 != 0 { return r1; }
+	val r2 = _require_err_hex("0g", "hex-invalid-char", 1, 20);
+	if r2 != 0 { return r2; }
+	val r3 = _require_err_hex("0x0a", "hex-invalid-char", 1, 30);
+	if r3 != 0 { return r3; }
+
+	var man: Array<Byte> = [];
+	man.push(cast<Byte>(77));
+	man.push(cast<Byte>(97));
+	man.push(cast<Byte>(110));
+	val b = codec.base64_encode(&man);
+	if b != "TWFu" { return 40; }
+	val r4 = _require_ok_b64("TWFu", 3, 77, 97, 110);
+	if r4 != 0 { return r4; }
+	val r5 = _require_err_b64("TQ=", "base64-invalid-length", 3, 50);
+	if r5 != 0 { return r5; }
+	val r6 = _require_err_b64("TW$u", "base64-invalid-char", 2, 60);
+	if r6 != 0 { return r6; }
+	val r7 = _require_err_b64("T=Wu", "base64-invalid-padding", 1, 70);
+	if r7 != 0 { return r7; }
+	val r8 = _require_err_b64("TQ==AAAA", "base64-trailing-data", 4, 80);
+	if r8 != 0 { return r8; }
+	val r9 = _require_err_b64("-w==", "base64-invalid-char", 0, 90);
+	if r9 != 0 { return r9; }
+
+	var b32_src: Array<Byte> = [];
+	b32_src.push(cast<Byte>(77));
+	b32_src.push(cast<Byte>(97));
+	b32_src.push(cast<Byte>(110));
+	val b32 = codec.base32_encode(&b32_src);
+	if b32 != "JVQW4===" { return 100; }
+	val r10 = _require_ok_b32("MY======", "Zg==", 110);
+	if r10 != 0 { return r10; }
+	val r11 = _require_ok_b32("MZXQ====", "Zm8=", 120);
+	if r11 != 0 { return r11; }
+	val r12 = _require_ok_b32("MZXW6===", "Zm9v", 130);
+	if r12 != 0 { return r12; }
+	val r13 = _require_ok_b32("MZXW6YQ=", "Zm9vYg==", 140);
+	if r13 != 0 { return r13; }
+	val r14 = _require_ok_b32("MZXW6YTB", "Zm9vYmE=", 150);
+	if r14 != 0 { return r14; }
+	val r15 = _require_ok_b32("MZXW6YTBOI======", "Zm9vYmFy", 160);
+	if r15 != 0 { return r15; }
+	val r16 = _require_err_b32("MZXW6YQ", "base32-invalid-length", 7, 170);
+	if r16 != 0 { return r16; }
+	val r17 = _require_err_b32("MZXW6YQ$", "base32-invalid-char", 7, 180);
+	if r17 != 0 { return r17; }
+	val r18 = _require_err_b32("M=ZW6YQ=", "base32-invalid-padding", 1, 190);
+	if r18 != 0 { return r18; }
+	val r19 = _require_err_b32("MY======AAAAAAAA", "base32-trailing-data", 8, 200);
+	if r19 != 0 { return r19; }
+	return 0;
+}

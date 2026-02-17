@@ -1,6 +1,7 @@
 set shell := ["bash", "-lc"]
 set quiet
 CLANG_BIN := "clang-15"
+PYTEST_AUTO_JOBS := `PYTHONPATH=. ./.venv/bin/python3 tools/pytest_jobs.py`
 
 # Default task: run deps check then full staged compiler tests.
 default: deps-check test
@@ -25,7 +26,7 @@ lang-stage1-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage1; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/stage1; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage1; \
 	fi
@@ -37,7 +38,7 @@ lang-stage2-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage2; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/stage2; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage2; \
 	fi
@@ -49,7 +50,7 @@ lang-stage3-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage3; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/stage3; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage3; \
 	fi
@@ -61,7 +62,7 @@ lang-stage4-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/stage4; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/stage4; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage4; \
 	fi
@@ -74,7 +75,7 @@ lang-parser-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/parser; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/parser; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/parser; \
 	fi
@@ -87,7 +88,7 @@ lang-core-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/core; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/core; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core; \
 	fi
@@ -100,7 +101,7 @@ lang-type-checker-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/type_checker; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/type_checker; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/type_checker; \
 	fi
@@ -113,7 +114,7 @@ lang-method-registry-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/method_registry; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/method_registry; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/method_registry; \
 	fi
@@ -126,7 +127,7 @@ lang-driver-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-auto}}" -v lang/tests/driver; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" -v lang/tests/driver; \
 	else \
 	  echo "pytest-xdist is missing in .venv; running driver tests serially (install: ./.venv/bin/python3 -m pip install pytest-xdist)"; \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
@@ -146,7 +147,7 @@ lang-codegen-test:
 	# Clean codegen artifacts to keep cases isolated between runs.
 	rm -rf build/tests/lang
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/codegen/llvm/tests; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/codegen/llvm/tests; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/codegen/llvm/tests; \
 	fi
@@ -170,7 +171,7 @@ lang-borrow-test:
 	  exit 1; \
 	fi
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-auto}" -v lang/tests/borrow_checker; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" -v lang/tests/borrow_checker; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
 	fi

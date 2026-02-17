@@ -1,0 +1,21 @@
+import std.codec as codec;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val fixture = "0xDE AD BE EF\n01 02";
+	var d = codec.hex_decoder();
+	d.allow_whitespace(true);
+	d.allow_prefix_0x(true);
+	match d.decode(&fixture) {
+		core.Result::Err(err) => { return 1; },
+		core.Result::Ok(vals) => {
+			if vals.len != 6 { return 2; }
+			if codec.hex_encode(&vals) != "deadbeef0102" { return 3; }
+		}
+	}
+	match codec.hex_decode(&fixture) {
+		core.Result::Ok(v) => { return 4; },
+		core.Result::Err(err) => { }
+	}
+	return 0;
+}

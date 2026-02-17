@@ -1,3 +1,55 @@
+## 2026-02-17 – std.codec landed (hex/base64/base32 + strict/permissive decode paths)
+- Added new stdlib module `stdlib/std/codec/codec.drift` with shared codec error surface:
+  - `CodecError { tag: String, offset: Int }` (+ `core.Diagnostic` impl).
+- Implemented codec APIs (both directions):
+  - Hex:
+    - `hex_encode(bytes)`
+    - `hex_decode(s)` (strict default)
+    - `hex_decoder()` builder with:
+      - `allow_whitespace(flag: Bool)`
+      - `allow_prefix_0x(flag: Bool)`
+      - `decode(s)`
+  - Base64:
+    - `base64_encode(bytes)`
+    - `base64_decode(s)` (strict default)
+    - `base64_decoder()` builder with:
+      - `allow_whitespace(flag: Bool)`
+      - `allow_url_safe(flag: Bool)`
+      - `decode(s)`
+  - Base32:
+    - `base32_encode(bytes)`
+    - `base32_decode(s)` (strict default)
+    - `base32_decoder()` builder with:
+      - `allow_whitespace(flag: Bool)`
+      - `allow_lowercase(flag: Bool)`
+      - `decode(s)`
+- Strict decode contracts + deterministic error taxonomy covered:
+  - Hex:
+    - `hex-odd-length`
+    - `hex-invalid-char`
+  - Base64:
+    - `base64-invalid-length`
+    - `base64-invalid-char`
+    - `base64-invalid-padding`
+    - `base64-trailing-data`
+  - Base32:
+    - `base32-invalid-length`
+    - `base32-invalid-char`
+    - `base32-invalid-padding`
+    - `base32-trailing-data`
+- Added new e2e coverage:
+  - `lang/tests/codegen/e2e/std_codec_hex_base64_strict`
+  - `lang/tests/codegen/e2e/std_codec_decoder_builder_permissive`
+  - `lang/tests/codegen/e2e/std_codec_hex_fixture_source_style`
+- Pinned practical fixture pattern for binary-heavy tests:
+  - readable source fixture strings like `"0xDE AD BE EF\n01 02"` decoded via:
+    - `hex_decoder().allow_whitespace(true).allow_prefix_0x(true).decode(...)`.
+- Validation matrix for codec e2e subset:
+  - normal mode: pass
+  - `DRIFT_ASAN=1`: pass
+  - `DRIFT_ALLOC_TRACK=1`: pass
+  - `DRIFT_MEMCHECK=1`: pass
+
 ## 2026-02-17 – Compiler bug batch hardening (diagnostics + typevar/index regressions)
 - Closed and pinned compiler bug-batch items #1–#4 from `issues/compiler-core-bugs-2026-02-17/description.md`.
 - Fixed checker call-signature diagnostic quality regression in `lang/driftc/checker/__init__.py`:
