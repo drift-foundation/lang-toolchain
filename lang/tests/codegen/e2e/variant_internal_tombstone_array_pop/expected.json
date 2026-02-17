@@ -1,0 +1,6 @@
+{
+  "description": "e2e: droppable variant without explicit tombstone supports array pop tombstoning",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

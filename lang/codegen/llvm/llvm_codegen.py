@@ -6568,37 +6568,57 @@ class _FuncBuilder:
 				cur = out
 			return cur
 		if td.kind is TypeKind.VARIANT:
-			inst = self.type_table.get_variant_instance(ty_id)
-			if inst is None:
-				raise AssertionError("internal: variant tombstone requires instance metadata")
-			schema = self.type_table.get_variant_schema(inst.base_id)
-			if schema is None:
-				raise AssertionError("internal: variant tombstone requires schema metadata")
-			ctor = schema.tombstone_ctor
-			if not ctor:
-				raise AssertionError(
-					f"internal: variant '{schema.name}' missing tombstone_ctor"
-				)
+			inst, ctor = self._resolve_variant_tombstone_ctor(ty_id)
 			arm = inst.arms_by_name.get(ctor)
 			if arm is None:
-				raise AssertionError(
-					f"internal: tombstone_ctor '{ctor}' missing in variant instance"
-				)
+				if ctor != "__drift_internal_tombstone":
+					raise AssertionError(f"internal: tombstone ctor '{ctor}' missing in variant instance")
+				layout = self._variant_layout(ty_id)
+				variant_llty = layout.llvm_ty
+				tmp_ptr = self._fresh("variant_tomb")
+				self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+				self.lines.append(f"  store {variant_llty} zeroinitializer, {variant_llty}* {tmp_ptr}")
+				tag = inst.internal_tombstone_tag
+				if tag is None:
+					raise AssertionError("internal: missing internal tombstone tag metadata")
+				tag_ptr = self._fresh("variant_tomb_tag")
+				self.lines.append(f"  {tag_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {tmp_ptr}, i32 0, i32 0")
+				self.lines.append(f"  store i8 {tag}, i8* {tag_ptr}")
+				out = self._fresh("variant_tomb_val")
+				self.lines.append(f"  {out} = load {variant_llty}, {variant_llty}* {tmp_ptr}")
+				self.value_types[out] = variant_llty
+				return out
 			if arm.field_types:
-				raise AssertionError(
-					"internal: tombstone ctor payload must be empty in MVP"
-				)
-			args: list[str] = []
-			for fty in arm.field_types:
-				if self._type_needs_drop(fty):
-					raise NotImplementedError(
-						"LLVM codegen v1: tombstone ctor payload must be non-droppable"
-					)
-				tmp = self._fresh("tomb_zero")
-				self._emit_zero_value(tmp, fty)
-				args.append(tmp)
-			return self._emit_variant_value(ty_id, ctor, args)
+				raise AssertionError("internal: tombstone ctor payload must be empty in MVP")
+			return self._emit_variant_value(ty_id, ctor, [])
 		raise NotImplementedError(f"LLVM codegen v1: tombstone unsupported for {td.kind.name}")
+
+	def _resolve_variant_tombstone_ctor(self, ty_id: TypeId) -> tuple[object, str]:
+		"""
+		Resolve effective tombstone constructor for a concrete variant type.
+
+		Centralizes tombstone selection so all variant tombstone emit paths use
+		instantiation metadata first (including synthesized internal tombstones).
+		"""
+		if self.type_table is None:
+			raise AssertionError("internal: variant tombstone requires type table metadata")
+		inst = self.type_table.get_variant_instance(ty_id)
+		if inst is None:
+			raise AssertionError("internal: variant tombstone requires instance metadata")
+		schema = self.type_table.get_variant_schema(inst.base_id)
+		if schema is None:
+			raise AssertionError("internal: variant tombstone requires schema metadata")
+		ctor = inst.internal_tombstone_ctor or schema.tombstone_ctor
+		if not ctor:
+			raise AssertionError(f"internal: variant '{schema.name}' missing tombstone ctor metadata")
+		arm = inst.arms_by_name.get(ctor)
+		if arm is None:
+			if ctor == "__drift_internal_tombstone":
+				return inst, ctor
+			raise AssertionError(f"internal: tombstone ctor '{ctor}' missing in variant instance")
+		if arm.field_types:
+			raise AssertionError("internal: tombstone ctor payload must be empty in MVP")
+		return inst, ctor
 
 	def _fresh(self, hint: str = "tmp") -> str:
 		self.tmp_counter += 1

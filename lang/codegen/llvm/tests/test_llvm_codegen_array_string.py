@@ -8,7 +8,9 @@ LLVM lowering for Array<String> allocations and indexing.
 """
 
 from lang.driftc.checker import FnInfo, FnSignature
+from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.core.types_core import TypeKind, TypeTable
+from lang.driftc.core.types_core import VariantArmSchema, VariantFieldSchema
 from lang.driftc.stage2 import (
 	ArrayAlloc,
 	ArrayLit,
@@ -311,3 +313,55 @@ def test_array_optional_string_take_uses_tombstone_ctor():
 		ir,
 	)
 	assert match is not None
+
+
+def test_array_variant_take_uses_internal_tombstone_when_schema_has_none():
+	table, int_ty, _uint_ty, str_ty = _types()
+	base = table.declare_variant(
+		"main",
+		"V",
+		[],
+		[
+			VariantArmSchema(name="None", fields=[]),
+			VariantArmSchema(
+				name="With",
+				fields=[VariantFieldSchema(name="value", type_expr=GenericTypeExpr.named("String"))],
+			),
+		],
+	)
+	v_ty = table.ensure_instantiated(base, [])
+
+	block = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="s0", value="x"),
+			ConstInt(dest="i0", value=0),
+			ConstInt(dest="tlen0", value=0),
+			ConstInt(dest="tlen", value=1),
+			ConstInt(dest="tcap", value=1),
+			ConstructVariant(dest="v0", variant_ty=v_ty, ctor="With", args=["s0"]),
+			ArrayAlloc(dest="arr", elem_ty=v_ty, length="tlen0", cap="tcap"),
+			ArrayElemInitUnchecked(elem_ty=v_ty, array="arr", index="i0", value="v0"),
+			ArraySetLen(dest="arr_len", array="arr", length="tlen"),
+			ArrayElemTake(dest="taken", elem_ty=v_ty, array="arr_len", index="i0"),
+		],
+		terminator=Return(value="tlen"),
+	)
+	fn_id = FunctionId(module="main", name="main", ordinal=0)
+	func = MirFunc(
+		fn_id=fn_id,
+		name="main",
+		params=[],
+		locals=["s0", "i0", "tlen0", "tlen", "tcap", "v0", "arr", "arr_len", "taken"],
+		blocks={"entry": block},
+		entry="entry",
+	)
+	ssa = MirToSSA().run(func)
+	sig = FnSignature(name="main", param_type_ids=[], return_type_id=int_ty)
+	info = FnInfo(fn_id=fn_id, name="main", declared_can_throw=False, signature=sig, return_type_id=int_ty)
+
+	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=host_word_bits())
+	ir = mod.render()
+
+	# Internal synthesized tombstone tag is len(arms)=2 for this schema.
+	assert "store i8 2" in ir

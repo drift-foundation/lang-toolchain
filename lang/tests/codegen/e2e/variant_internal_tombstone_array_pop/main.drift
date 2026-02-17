@@ -1,0 +1,24 @@
+module main
+
+struct P {
+	label: String
+}
+
+variant V {
+	None,
+	With(p: P),
+}
+
+fn main() nothrow -> Int {
+	var xs: Array<V> = [];
+	xs.push(V::With(P(label = "x")));
+	match xs.pop() {
+		Some(v) => {
+			match v {
+				With(p) => { return 0; },
+				default => { return 3; }
+			}
+		},
+		None => { return 1; }
+	}
+}

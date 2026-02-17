@@ -38,10 +38,10 @@ def get_runtime_include_dirs(root: Path) -> List[Path]:
 
 
 def runtime_archive_variant(*, debug_enabled: bool, asan_enabled: bool, alloc_track_enabled: bool) -> str:
-	if asan_enabled:
-		return "asan"
 	if alloc_track_enabled:
 		return "alloc_track"
+	if asan_enabled:
+		return "asan"
 	if debug_enabled:
 		return "debug"
 	return "default"
