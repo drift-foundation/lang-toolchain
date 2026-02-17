@@ -1,0 +1,11 @@
+{
+  "description": "e2e: typed Byte const rejects out-of-range int literal",
+  "diagnostics": [
+    {
+      "message_contains": "Byte literal out of range",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

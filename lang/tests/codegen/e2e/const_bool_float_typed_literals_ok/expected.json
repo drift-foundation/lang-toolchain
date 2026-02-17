@@ -1,0 +1,4 @@
+{
+  "description": "e2e: typed Bool/Float const literals compile and run",
+  "exit_code": 0
+}

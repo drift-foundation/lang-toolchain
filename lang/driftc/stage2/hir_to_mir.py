@@ -1375,6 +1375,9 @@ class HIRToMIR:
 			if ty_id == self._float_type:
 				self.b.emit(M.ConstFloat(dest=dest, value=float(val)))
 				return dest
+			if ty_id == self._byte_type:
+				self.b.emit(M.ConstByte(dest=dest, value=int(val)))
+				return dest
 			raise AssertionError("unsupported const type reached MIR lowering (checker/package bug)")
 		if self._typed_mode == "strict" and expr.binding_id is None and expr.module_id is None:
 			raise AssertionError("typed_mode strict: missing binding_id for local read (checker bug)")

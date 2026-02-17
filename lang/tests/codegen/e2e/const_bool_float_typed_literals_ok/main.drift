@@ -1,0 +1,14 @@
+module main
+
+const TB: Bool = true;
+const TF: Float = 1.25;
+
+fn main() nothrow -> Int {
+	if not TB {
+		return 1;
+	}
+	if TF <= 1.0 {
+		return 2;
+	}
+	return 0;
+}

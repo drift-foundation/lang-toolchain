@@ -3931,6 +3931,18 @@ def _lower_parsed_program_to_hir(
 		# and packages must be able to embed them deterministically without
 		# re-running the evaluator.
 		ok = False
+		if decl_ty == type_table.ensure_byte() and isinstance(val, int):
+			if val < 0 or val > 255:
+				diagnostics.append(
+					_p_diag(
+						phase="parser",
+						message=f"const '{c.name}' Byte literal out of range [0, 255]",
+						severity="error",
+						span=Span.from_loc(getattr(c, "loc", None)),
+					)
+				)
+				continue
+			ok = True
 		if decl_ty == type_table.ensure_int() and isinstance(val, int):
 			ok = True
 		elif decl_ty == type_table.ensure_uint() and isinstance(val, int) and val >= 0:
