@@ -1,0 +1,4 @@
+{
+  "description": "e2e: std.text Utf8Error exposes stable tag and offset fields",
+  "exit_code": 0
+}

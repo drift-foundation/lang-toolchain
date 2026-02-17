@@ -1,0 +1,4 @@
+{
+  "description": "e2e: field access bytes.len on &Array<Byte> lowers correctly",
+  "exit_code": 3
+}

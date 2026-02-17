@@ -1,0 +1,49 @@
+module m
+
+import std.text as text;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var ascii: Array<Byte> = [cast<Byte>(97), cast<Byte>(98), cast<Byte>(99)];
+	match text.utf8_from_bytes(&ascii) {
+		core.Result::Ok(s) => {
+			if s.byte_length() != 3 { return 1; }
+		},
+		core.Result::Err(_) => { return 2; }
+	}
+
+	var euro: Array<Byte> = [cast<Byte>(226), cast<Byte>(130), cast<Byte>(172)];
+	match text.utf8_from_bytes(&euro) {
+		core.Result::Ok(s) => {
+			if s.byte_length() != 3 { return 3; }
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+
+	var bad: Array<Byte> = [cast<Byte>(192), cast<Byte>(128)];
+	match text.utf8_from_bytes(&bad) {
+		core.Result::Ok(_) => { return 5; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-leading-byte" { return 6; }
+			if e.offset != 0 { return 7; }
+		}
+	}
+
+	var trunc: Array<Byte> = [cast<Byte>(226), cast<Byte>(130)];
+	match text.utf8_from_bytes(&trunc) {
+		core.Result::Ok(_) => { return 8; },
+		core.Result::Err(e) => {
+			if e.tag != "unexpected-eof" { return 9; }
+			if e.offset != 0 { return 10; }
+		}
+	}
+
+	var empty: Array<Byte> = [];
+	match text.utf8_from_bytes(&empty) {
+		core.Result::Ok(s) => {
+			if s.byte_length() != 0 { return 11; }
+		},
+		core.Result::Err(_) => { return 12; }
+	}
+	return 0;
+}

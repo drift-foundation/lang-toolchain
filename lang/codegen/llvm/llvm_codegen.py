@@ -7731,10 +7731,19 @@ class _FuncBuilder:
 				f"LLVM codegen v1: array index must be Int, got {idx_ty}"
 			)
 		# Extract len and data
+		arr_val = array
+		arr_ty = self.value_types.get(array)
+		if arr_ty is None:
+			arr_ty = self.param_value_types.get(array)
+		if arr_ty is not None and arr_ty.endswith("*"):
+			loaded = self._fresh("arrval")
+			self.lines.append(f"  {loaded} = load {arr_llty}, {arr_ty} {array}")
+			self.value_types[loaded] = arr_llty
+			arr_val = loaded
 		len_tmp = self._fresh("len")
 		data_tmp = self._fresh("data")
-		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {array}, {ARRAY_LEN_IDX}")
-		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {array}, {ARRAY_PTR_IDX}")
+		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_LEN_IDX}")
+		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_PTR_IDX}")
 		data_ptr = self._fresh("data_ptr")
 		self.lines.append(f"  {data_ptr} = bitcast i8* {data_tmp} to {elem_llty}*")
 		self.module.needs_array_helpers = True
@@ -7759,10 +7768,19 @@ class _FuncBuilder:
 			raise NotImplementedError(
 				f"LLVM codegen v1: array index must be Int, got {idx_ty}"
 			)
+		arr_val = array
+		arr_ty = self.value_types.get(array)
+		if arr_ty is None:
+			arr_ty = self.param_value_types.get(array)
+		if arr_ty is not None and arr_ty.endswith("*"):
+			loaded = self._fresh("arrval")
+			self.lines.append(f"  {loaded} = load {arr_llty}, {arr_ty} {array}")
+			self.value_types[loaded] = arr_llty
+			arr_val = loaded
 		len_tmp = self._fresh("len")
 		data_tmp = self._fresh("data")
-		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {array}, {ARRAY_LEN_IDX}")
-		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {array}, {ARRAY_PTR_IDX}")
+		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_LEN_IDX}")
+		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_PTR_IDX}")
 		data_ptr = self._fresh("data_ptr")
 		self.lines.append(f"  {data_ptr} = bitcast i8* {data_tmp} to {elem_llty}*")
 		idx_val = index
@@ -7778,6 +7796,8 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
 		arr_llty = self.value_types.get(array)
+		if arr_llty is None:
+			arr_llty = self.param_value_types.get(array)
 		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayLen missing LLVM type for array value (compiler bug)")
 		if arr_llty.endswith("*"):
@@ -7796,6 +7816,8 @@ class _FuncBuilder:
 		array = self._map_value(instr.array)
 		arr_llty = self.value_types.get(array)
 		if arr_llty is None:
+			arr_llty = self.param_value_types.get(array)
+		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayCap missing LLVM type for array value (compiler bug)")
 		if arr_llty.endswith("*"):
 			arr_val = self._fresh("arrval")
@@ -7811,6 +7833,8 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
 		arr_llty = self.value_types.get(array)
+		if arr_llty is None:
+			arr_llty = self.param_value_types.get(array)
 		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayGen missing LLVM type for array value (compiler bug)")
 		if arr_llty.endswith("*"):

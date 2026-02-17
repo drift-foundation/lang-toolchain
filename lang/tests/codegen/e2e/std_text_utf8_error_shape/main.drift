@@ -1,0 +1,26 @@
+module m
+
+import std.text as text;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var bad1: Array<Byte> = [cast<Byte>(192), cast<Byte>(128)];
+	match text.utf8_from_bytes(&bad1) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-leading-byte" { return 2; }
+			if e.offset != 0 { return 3; }
+		}
+	}
+
+	var bad2: Array<Byte> = [cast<Byte>(226), cast<Byte>(130)];
+	match text.utf8_from_bytes(&bad2) {
+		core.Result::Ok(_) => { return 4; },
+		core.Result::Err(e) => {
+			if e.tag != "unexpected-eof" { return 5; }
+			if e.offset != 0 { return 6; }
+		}
+	}
+
+	return 0;
+}

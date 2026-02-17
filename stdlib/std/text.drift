@@ -1,11 +1,14 @@
 module std.text
 
 import std.core as core;
+import std.io as io;
 
 export {
 	TokenizeAction,
 	TokenSpan,
-	TokenConsumer
+	TokenConsumer,
+	Utf8Error,
+	utf8_from_bytes
 };
 
 pub variant TokenizeAction {
@@ -27,4 +30,191 @@ implement core.Copy for TokenizeAction {
 }
 
 implement core.Copy for TokenSpan {
+}
+
+pub struct Utf8Error {
+	pub tag: String,
+	pub offset: Int
+}
+
+implement core.Diagnostic for Utf8Error {
+	pub fn to_diag(self: &Utf8Error) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+fn _byte_u8(b: Byte) nothrow -> Int {
+	var v = cast<Int>(b);
+	if v < 0 {
+		v = v + 256;
+	}
+	return v;
+}
+
+fn _is_cont(v: Int) nothrow -> Bool {
+	return v >= 128 and v <= 191;
+}
+
+fn _need_bytes(n: Int, i: Int, want: Int) nothrow -> Bool {
+	return i + want <= n;
+}
+
+fn _validate_utf8(bytes: &Array<Byte>) nothrow -> core.Result<Void, Utf8Error> {
+	val n = bytes.len;
+	var i = 0;
+	while i < n {
+		val b0 = _byte_u8(bytes[i]);
+		if b0 <= 127 {
+			i = i + 1;
+			continue;
+		}
+		if b0 >= 194 and b0 <= 223 {
+			if not _need_bytes(n, i, 2) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			if not _is_cont(b1) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			i = i + 2;
+			continue;
+		}
+		if b0 == 224 {
+			if not _need_bytes(n, i, 3) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			if b1 < 160 or b1 > 191 {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			i = i + 3;
+			continue;
+		}
+		if b0 >= 225 and b0 <= 236 {
+			if not _need_bytes(n, i, 3) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			if not _is_cont(b1) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			i = i + 3;
+			continue;
+		}
+		if b0 == 237 {
+			if not _need_bytes(n, i, 3) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			if b1 < 128 or b1 > 159 {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			i = i + 3;
+			continue;
+		}
+		if b0 >= 238 and b0 <= 239 {
+			if not _need_bytes(n, i, 3) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			if not _is_cont(b1) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			i = i + 3;
+			continue;
+		}
+		if b0 == 240 {
+			if not _need_bytes(n, i, 4) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			val b3 = _byte_u8(bytes[i + 3]);
+			if b1 < 144 or b1 > 191 {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			if not _is_cont(b3) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 3));
+			}
+			i = i + 4;
+			continue;
+		}
+		if b0 >= 241 and b0 <= 243 {
+			if not _need_bytes(n, i, 4) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			val b3 = _byte_u8(bytes[i + 3]);
+			if not _is_cont(b1) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			if not _is_cont(b3) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 3));
+			}
+			i = i + 4;
+			continue;
+		}
+		if b0 == 244 {
+			if not _need_bytes(n, i, 4) {
+				return core.Result::Err(Utf8Error(tag = "unexpected-eof", offset = i));
+			}
+			val b1 = _byte_u8(bytes[i + 1]);
+			val b2 = _byte_u8(bytes[i + 2]);
+			val b3 = _byte_u8(bytes[i + 3]);
+			if b1 < 128 or b1 > 143 {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 1));
+			}
+			if not _is_cont(b2) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 2));
+			}
+			if not _is_cont(b3) {
+				return core.Result::Err(Utf8Error(tag = "invalid-continuation", offset = i + 3));
+			}
+			i = i + 4;
+			continue;
+		}
+		return core.Result::Err(Utf8Error(tag = "invalid-leading-byte", offset = i));
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+pub fn utf8_from_bytes(bytes: &Array<Byte>) nothrow -> core.Result<String, Utf8Error> {
+	match _validate_utf8(bytes) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(_) => { }
+	}
+	val n = bytes.len;
+	if n <= 0 {
+		return core.Result::Ok("");
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b)));
 }
