@@ -273,8 +273,9 @@ dist-publish-stdlib SIGN_KEY="" VERSION="0.1.0-dev" TARGET="drift-dev":
 	fi
 	mkdir -p build/pkg dist/release
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
+	rm -f build/pkg/std.dmp.sig
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift sign build/pkg/std.dmp --key "${sign_key}" --include-pubkey
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release build/pkg/std.dmp
+	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --force --dest-dir dist/release build/pkg/std.dmp
 
 # Local fallback for early dev only (publishes unsigned std package).
 dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
