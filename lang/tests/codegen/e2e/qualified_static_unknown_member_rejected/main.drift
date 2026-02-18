@@ -1,0 +1,10 @@
+module main
+
+struct Point {
+	x: Int
+}
+
+fn main() nothrow -> Int {
+	val x = Point::missing(1);
+	return x;
+}

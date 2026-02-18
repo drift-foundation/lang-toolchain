@@ -1,10 +1,4 @@
 {
-  "description": "e2e: method receiver missing self",
-  "diagnostics": [
-    {
-      "message_contains": "missing receiver metadata (impl target/self_mode)",
-      "phase": "typecheck"
-    }
-  ],
-  "exit_code": 1
+  "description": "e2e: associated static method in impl without receiver",
+  "exit_code": 5
 }

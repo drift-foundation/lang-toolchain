@@ -6773,7 +6773,7 @@ def main(argv: list[str] | None = None) -> int:
 		module_name = getattr(fn_id, "module", None) or sig.module
 		module_id = module_ids.setdefault(module_name, len(module_ids))
 		if sig.is_method:
-			if sig.impl_target_type_id is None or sig.self_mode is None:
+			if sig.impl_target_type_id is None:
 				type_diags.append(
 					Diagnostic(
 						message=f"method '{display_name_by_id.get(fn_id, sig.name)}' missing receiver metadata (impl target/self_mode)",
@@ -6782,6 +6782,8 @@ def main(argv: list[str] | None = None) -> int:
 						span=getattr(sig, "loc", None),
 					)
 				)
+				continue
+			if sig.self_mode is None:
 				continue
 			self_mode = {
 				"value": SelfMode.SELF_BY_VALUE,
@@ -6842,7 +6844,7 @@ def main(argv: list[str] | None = None) -> int:
 			continue
 		module_id = module_ids.setdefault(module_name, len(module_ids))
 		if sig.is_method:
-			if sig.impl_target_type_id is None or sig.self_mode is None:
+			if sig.impl_target_type_id is None:
 				type_diags.append(
 					Diagnostic(
 						message=f"method '{sig_name}' missing receiver metadata (impl target/self_mode)",
@@ -6851,6 +6853,8 @@ def main(argv: list[str] | None = None) -> int:
 						span=getattr(sig, "loc", None),
 					)
 				)
+				continue
+			if sig.self_mode is None:
 				continue
 			self_mode = {
 				"value": SelfMode.SELF_BY_VALUE,

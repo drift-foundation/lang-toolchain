@@ -36,7 +36,7 @@ fn _append_u32_be(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
 }
 
 pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
-	var msg: Array<Byte> = [];
+	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
 	var i = 0;
 	while i < bytes.len {
 		msg.push(bytes[i]);
@@ -61,7 +61,7 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 
 	var chunk = 0;
 	while chunk < msg.len {
-		var w: Array<Uint> = [];
+		var w = Array<type Uint>::with_capacity(80);
 		var t = 0;
 		while t < 80 {
 			w.push(cast<Uint>(0));
@@ -127,7 +127,7 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 		chunk = chunk + 64;
 	}
 
-	var out: Array<Byte> = [];
+	var out = Array<type Byte>::with_capacity(20);
 	_append_u32_be(&mut out, h0);
 	_append_u32_be(&mut out, h1);
 	_append_u32_be(&mut out, h2);

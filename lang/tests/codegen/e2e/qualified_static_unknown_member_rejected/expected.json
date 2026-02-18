@@ -1,5 +1,5 @@
 {
-  "description": "e2e: qualified ctor nonvariant base rejected",
+  "description": "e2e: qualified static call unknown member rejected",
   "diagnostics": [
     {
       "message_contains": "E-QMEM-NO-MEMBER",

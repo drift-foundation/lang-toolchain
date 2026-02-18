@@ -251,6 +251,7 @@ class ResolverContext:
 	module_packages: dict
 	type_param_map: Optional[dict]
 	preseed_type_params: Optional[dict]
+	signatures_by_id: dict
 	int_ty: TypeId
 	uint_ty: TypeId
 	uint64_ty: TypeId
@@ -271,6 +272,12 @@ class ResolverContext:
 	enforce_struct_requires: Callable[[TypeId, Span], None]
 	ensure_field_visible: Callable[[TypeId, str, Span], bool]
 	visible_modules_for_free_call: Callable[[str | None], tuple[int, ...]]
+	struct_base_and_args: Callable[[TypeId], tuple[TypeId, list[TypeId]]]
+	receiver_compat: Callable[[TypeId, TypeId, object], tuple[bool, bool]]
+	args_match_params: Callable[[list[TypeId], list[TypeId]], bool]
+	coerce_args_for_params: Callable[[list[TypeId], list[TypeId]], list[TypeId]]
+	self_mode_from_sig: Callable[[FnSignature], object]
+	match_impl_type_args: Callable[..., object]
 	module_ids_by_name: dict
 	visibility_provenance: dict
 	infer: Callable[..., InferResult]
@@ -387,7 +394,7 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer)
 	base.update(overrides)
 	return ResolverContext(**base)
 
@@ -449,9 +456,134 @@ def resolve_qualified_member_call(
 			allow_infer=allow_infer,
 			call_type_args_span=call_type_args_span,
 		)
-	if base_kind is TypeKind.STRUCT:
-		ctx.diagnostics.append(ctx.tc_diag(message="E-QMEM-NONVARIANT: qualified member base is not a variant type", severity="error", span=getattr(qm, "loc", Span())))
+	return None
+
+
+def resolve_nonvariant_qualified_static_call(
+	ctx: ResolverContext,
+	qm: object,
+	*,
+	arg_types: list[TypeId],
+	expected_type: TypeId | None,
+	type_arg_ids: list[TypeId] | None,
+	allow_infer: bool,
+	call_type_args_span: Span | None,
+) -> MethodCallResult | None:
+	base_te = getattr(qm, "base_type_expr", None)
+	if base_te is None:
 		return None
+	base_module = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or ctx.current_module_name
+	base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_module, type_params=ctx.type_param_map, allow_generic_base=True)
+	if base_tid is None:
+		return None
+	base_def = ctx.type_table.get(base_tid)
+	if base_def.kind is TypeKind.VARIANT:
+		return None
+	base_base_id, base_args = ctx.struct_base_and_args(base_tid)
+	candidates_seen = False
+	receiver_required = False
+	infer_error = None
+	for fn_id, sig in (ctx.signatures_by_id or {}).items():
+		if not getattr(sig, "is_method", False):
+			continue
+		if (sig.method_name or sig.name) != qm.member:
+			continue
+		impl_tid = getattr(sig, "impl_target_type_id", None)
+		if impl_tid is None:
+			continue
+		impl_base_id, _impl_args = ctx.struct_base_and_args(impl_tid)
+		if impl_base_id != base_base_id:
+			continue
+		candidates_seen = True
+		param_type_ids = list(getattr(sig, "param_type_ids", []) or [])
+		ret_tid = getattr(sig, "return_type_id", None)
+		if ret_tid is None:
+			continue
+		impl_target_type_args = list(getattr(sig, "impl_target_type_args", None) or [])
+		impl_type_params = list(getattr(sig, "impl_type_params", None) or [])
+		impl_subst = None
+		if impl_target_type_args and impl_type_params:
+			impl_subst = ctx.match_impl_type_args(template_args=impl_target_type_args, recv_args=list(base_args), impl_type_params=impl_type_params)
+			if impl_subst is None:
+				continue
+		if impl_subst is not None:
+			param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
+			ret_tid = apply_subst(ret_tid, impl_subst, ctx.type_table)
+		self_mode = ctx.self_mode_from_sig(sig)
+		if param_type_ids:
+			compat_ok, _needs_autoborrow = ctx.receiver_compat(base_tid, param_type_ids[0], self_mode)
+			if compat_ok:
+				receiver_required = True
+				continue
+		sig_for_call = sig
+		if impl_subst is not None:
+			sig_for_call = replace(sig, param_type_ids=list(param_type_ids), return_type_id=ret_tid, impl_type_params=[], impl_target_type_args=[])
+		inst_res = ctx.instantiate_sig(
+			sig=sig_for_call,
+			arg_types=arg_types,
+			expected_type=expected_type,
+			explicit_type_args=type_arg_ids,
+			allow_infer=allow_infer,
+			diag_span=call_type_args_span or getattr(qm, "loc", Span()),
+			call_kind="associated",
+			call_name=qm.member,
+		)
+		if inst_res.error:
+			infer_error = inst_res
+			continue
+		if inst_res.inst_params is None or inst_res.inst_return is None:
+			continue
+		inst_params = list(inst_res.inst_params)
+		inst_return = inst_res.inst_return
+		coerced = list(arg_types)
+		if not ctx.args_match_params(inst_params, coerced):
+			coerced = ctx.coerce_args_for_params(inst_params, coerced)
+		if not ctx.args_match_params(inst_params, coerced):
+			continue
+		can_throw = True
+		if sig.declared_can_throw is not None:
+			can_throw = bool(sig.declared_can_throw)
+		info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(inst_params), user_ret_type=inst_return, can_throw=can_throw))
+		inferred_fn_args = tuple(getattr(getattr(inst_res, "subst", None), "args", []) or [])
+		return MethodCallResult(inst_return, info, {"inferred_fn_args": inferred_fn_args})
+	if receiver_required:
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"E-QMEM-RECEIVER-REQUIRED: '{qm.member}' on type '{ctx.pretty_type_name(base_tid, current_module=ctx.current_module_name)}' requires a receiver argument",
+				severity="error",
+				span=getattr(qm, "loc", Span()),
+			)
+		)
+		return MethodCallResult(ctx.unknown_ty, None)
+	if infer_error is not None:
+		msg, notes = ctx.format_infer_failure(infer_error.context, infer_error)
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"cannot infer type arguments for associated function '{qm.member}'",
+				severity="error",
+				span=call_type_args_span or getattr(qm, "loc", Span()),
+				notes=[msg] + list(notes),
+			)
+		)
+		return MethodCallResult(ctx.unknown_ty, None)
+	if candidates_seen:
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"E-QMEM-NO-OVERLOAD: no overload of '{qm.member}' on type '{ctx.pretty_type_name(base_tid, current_module=ctx.current_module_name)}' matches provided arguments",
+				severity="error",
+				span=getattr(qm, "loc", Span()),
+			)
+		)
+		return MethodCallResult(ctx.unknown_ty, None)
+	if base_def.kind in (TypeKind.STRUCT, TypeKind.ARRAY, TypeKind.REF):
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message=f"E-QMEM-NO-MEMBER: member '{qm.member}' not found on type '{ctx.pretty_type_name(base_tid, current_module=ctx.current_module_name)}'",
+				severity="error",
+				span=getattr(qm, "loc", Span()),
+			)
+		)
+		return MethodCallResult(ctx.unknown_ty, None)
 	return None
 
 
@@ -717,6 +849,15 @@ def resolve_variant_ctor(
 			type_arg_ids = [resolve_opaque_type(arg, ctx.type_table, module_id=ctx.current_module_name, type_params=ctx.type_param_map, allow_generic_base=True) for arg in getattr(base_te, "args", [])]
 		except Exception:
 			type_arg_ids = None
+	elif type_arg_ids is not None and hasattr(base_te, "args") and getattr(base_te, "args"):
+		ctx.diagnostics.append(
+			ctx.tc_diag(
+				message="E-QMEM-DUP-TYPEARGS: qualified constructor may specify type arguments only once",
+				severity="error",
+				span=call_type_args_span or getattr(qm, "loc", Span()),
+			)
+		)
+		return None
 	if schema.type_params and expected_type is None and not type_arg_ids and not arg_exprs:
 		hint = (
 			"Hint: qualify the constructor (e.g., `Optional<T>::None()` or `Optional::None<type T>()`)."
@@ -4270,8 +4411,18 @@ def resolve_call_expr(
 			_propagate_arg_expected_types(intent, arg_types)
 			record_call_info(expr, param_types=inst_params, return_type=inst_return, can_throw=False, target=CallTarget.constructor(ctor_res.inst_return, qm.member, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
 			return record_expr(expr, inst_return)
-		method_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
-		method_res = resolve_qualified_member_ufcs(method_ctx, expr, qm, expected_type=expected_type, type_arg_ids=type_arg_ids, call_type_args_span=call_type_args_span, call_origin=getattr(expr, "origin", None), recv_arg_type=arg_types[0] if arg_types else None, arg_type_ids=arg_types)
+		method_res = resolve_nonvariant_qualified_static_call(
+			_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw),
+			qm,
+			arg_types=arg_types,
+			expected_type=expected_type,
+			type_arg_ids=type_arg_ids,
+			allow_infer=True,
+			call_type_args_span=call_type_args_span,
+		)
+		if method_res is None:
+			method_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
+			method_res = resolve_qualified_member_ufcs(method_ctx, expr, qm, expected_type=expected_type, type_arg_ids=type_arg_ids, call_type_args_span=call_type_args_span, call_origin=getattr(expr, "origin", None), recv_arg_type=arg_types[0] if arg_types else None, arg_type_ids=arg_types)
 		if method_res is not None and method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 			decl = method_res.resolution.decl
 			fn_id_local = getattr(decl, "fn_id", None)
@@ -4329,25 +4480,48 @@ def resolve_call_expr(
 			if ctx.record_instantiation is not None and isinstance(getattr(method_res.call_info, "target", None), CallTarget):
 				target = method_res.call_info.target
 				target_fn_id = target.symbol if target.kind is CallTargetKind.DIRECT else None
-				if target_fn_id is not None and arg_types:
-					recv_nominal = _unwrap_ref_type(arg_types[0])
+				if target_fn_id is not None:
 					receiver_args = None
-					inst = ctx.type_table.get_struct_instance(recv_nominal)
-					if inst is not None:
-						receiver_args = list(inst.type_args)
-					else:
-						vinst = ctx.type_table.get_variant_instance(recv_nominal)
-						if vinst is not None:
-							receiver_args = list(vinst.type_args)
+					if arg_types:
+						recv_nominal = _unwrap_ref_type(arg_types[0])
+						inst = ctx.type_table.get_struct_instance(recv_nominal)
+						if inst is not None:
+							receiver_args = list(inst.type_args)
 						else:
-							recv_def = ctx.type_table.get(recv_nominal)
-							if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
-								receiver_args = list(recv_def.param_types)
+							vinst = ctx.type_table.get_variant_instance(recv_nominal)
+							if vinst is not None:
+								receiver_args = list(vinst.type_args)
+							else:
+								recv_def = ctx.type_table.get(recv_nominal)
+								if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
+									receiver_args = list(recv_def.param_types)
+					if receiver_args is None:
+						base_te = getattr(qm, "base_type_expr", None)
+						if base_te is not None:
+							base_mod = getattr(base_te, "module_id", None) or getattr(base_te, "module_alias", None) or current_module_name
+							base_tid = resolve_opaque_type(base_te, ctx.type_table, module_id=base_mod, type_params=type_param_map, allow_generic_base=True)
+							if base_tid is not None:
+								base_inst = ctx.type_table.get_struct_instance(base_tid)
+								if base_inst is not None:
+									receiver_args = list(base_inst.type_args)
+								else:
+									base_vinst = ctx.type_table.get_variant_instance(base_tid)
+									if base_vinst is not None:
+										receiver_args = list(base_vinst.type_args)
+									else:
+										base_def = ctx.type_table.get(base_tid)
+										if base_def.kind is TypeKind.ARRAY and base_def.param_types:
+											receiver_args = list(base_def.param_types)
 					if receiver_args:
 						impl_args = tuple(receiver_args)
 						if not any(ctx.type_table.has_typevar(t) for t in impl_args):
 							csid = getattr(expr, "callsite_id", None)
-							ctx.record_instantiation(callsite_id=csid, target_fn_id=target_fn_id, impl_args=impl_args, fn_args=tuple(type_arg_ids or []))
+							inferred_fn_args: tuple[TypeId, ...] = tuple()
+							if isinstance(getattr(method_res, "resolution", None), dict):
+								inferred_fn_args = tuple(getattr(method_res, "resolution", {}).get("inferred_fn_args", ()) or ())
+							explicit_fn_args = tuple(type_arg_ids or [])
+							fn_args = inferred_fn_args or explicit_fn_args
+							ctx.record_instantiation(callsite_id=csid, target_fn_id=target_fn_id, impl_args=impl_args, fn_args=fn_args)
 			return record_expr(expr, method_res.return_type)
 		return record_expr(expr, ctx.unknown_ty)
 	if isinstance(expr.fn, H.HVar):

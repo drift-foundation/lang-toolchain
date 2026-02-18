@@ -532,78 +532,113 @@ class Checker:
 			# For production correctness, method receiver conventions are validated
 			# in the checker (typecheck phase), not during parsing.
 			if sig is not None and sig.is_method:
-				# Receiver name: methods must declare a receiver parameter named `self`
-				# as their first parameter.
-				if not sig.param_names:
-					diagnostics.append(
-						_chk_diag(
-							message=f"method '{sig.method_name or sig.name}' must declare a receiver parameter 'self'",
-							severity="error",
-							span=Span.from_loc(getattr(sig, "loc", None)),
-						)
-					)
-				elif sig.param_names[0] != "self":
-					diagnostics.append(
-						_chk_diag(
-							message=f"first parameter of method '{sig.method_name or sig.name}' must be named 'self'",
-							severity="error",
-							span=Span.from_loc(getattr(sig, "loc", None)),
-						)
-					)
-				# Receiver type must match the impl target type according to self_mode.
-				if sig.param_type_ids and sig.impl_target_type_id is not None and sig.self_mode is not None:
-					recv_ty = sig.param_type_ids[0]
-					expected: TypeId | None = None
-					if sig.self_mode == "value":
-						expected = sig.impl_target_type_id
-					elif sig.self_mode == "ref":
-						expected = self._type_table.ensure_ref(sig.impl_target_type_id)
-					elif sig.self_mode == "ref_mut":
-						expected = self._type_table.ensure_ref_mut(sig.impl_target_type_id)
-					if expected is not None:
-						target_td = self._type_table.get(sig.impl_target_type_id)
-						if target_td.kind is TypeKind.REF:
-							if sig.self_mode == "ref" and not target_td.ref_mut:
-								expected = sig.impl_target_type_id
-							elif sig.self_mode == "ref_mut" and target_td.ref_mut:
-								expected = sig.impl_target_type_id
-					impl_args = getattr(sig, "impl_target_type_args", None)
-					receiver_ok = expected is not None and recv_ty == expected
-					if not receiver_ok and impl_args:
-						check_ty = recv_ty
-						if sig.self_mode in {"ref", "ref_mut"}:
-							td_recv = self._type_table.get(recv_ty)
-							if td_recv.kind is TypeKind.REF and td_recv.param_types:
-								check_ty = td_recv.param_types[0]
-						if not receiver_ok and target_td.kind is TypeKind.ARRAY:
-							check_def = self._type_table.get(check_ty)
-							if check_def.kind is TypeKind.ARRAY:
-								receiver_ok = True
-						struct_inst = self._type_table.get_struct_instance(check_ty)
-						var_inst = self._type_table.get_variant_instance(check_ty)
-						if struct_inst is not None:
-							if struct_inst.base_id == sig.impl_target_type_id and list(struct_inst.type_args) == list(impl_args):
-								receiver_ok = True
-						elif var_inst is not None:
-							if var_inst.base_id == sig.impl_target_type_id and list(var_inst.type_args) == list(impl_args):
-								receiver_ok = True
-						if not receiver_ok:
-							struct_template_id = self._type_table._struct_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
-							if struct_template_id is not None and struct_template_id == check_ty:
-								receiver_ok = True
-						if not receiver_ok:
-							variant_template_id = self._type_table._variant_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
-							if variant_template_id is not None and variant_template_id == check_ty:
-								receiver_ok = True
-					if expected is not None and not receiver_ok:
-						target_name = self._type_table.get(sig.impl_target_type_id).name
+				is_associated_static = sig.self_mode is None
+				if is_associated_static and sig.param_type_ids and sig.impl_target_type_id is not None:
+					first_param_ty = sig.param_type_ids[0]
+					target_tid = sig.impl_target_type_id
+					target_inst = self._type_table.get_struct_instance(target_tid)
+					def _receiver_like_type(tid: TypeId) -> bool:
+						if tid == target_tid:
+							return True
+						inst = self._type_table.get_struct_instance(tid)
+						if inst is not None:
+							if inst.base_id == target_tid:
+								return True
+							if target_inst is not None and inst.base_id == target_inst.base_id and list(inst.type_args) == list(target_inst.type_args):
+								return True
+						if target_inst is not None and tid == target_inst.base_id:
+							return True
+						td = self._type_table.get(tid)
+						target_td = self._type_table.get(target_tid)
+						if td.kind is TypeKind.ARRAY and target_td.kind is TypeKind.ARRAY:
+							return True
+						return False
+					receiver_like = _receiver_like_type(first_param_ty)
+					if not receiver_like:
+						td_first = self._type_table.get(first_param_ty)
+						if td_first.kind is TypeKind.REF and td_first.param_types:
+							receiver_like = _receiver_like_type(td_first.param_types[0])
+					if receiver_like and (not sig.param_names or sig.param_names[0] != "self"):
 						diagnostics.append(
 							_chk_diag(
-								message=f"receiver type for method '{sig.method_name or sig.name}' must be '{target_name}' (or '&{target_name}' / '&mut {target_name}')",
+								message=f"first parameter of method '{sig.method_name or sig.name}' must be named 'self'",
 								severity="error",
 								span=Span.from_loc(getattr(sig, "loc", None)),
 							)
 						)
+				if not is_associated_static:
+					# Receiver name: methods must declare a receiver parameter named `self`
+					# as their first parameter.
+					if not sig.param_names:
+						diagnostics.append(
+							_chk_diag(
+								message=f"method '{sig.method_name or sig.name}' must declare a receiver parameter 'self'",
+								severity="error",
+								span=Span.from_loc(getattr(sig, "loc", None)),
+							)
+						)
+					elif sig.param_names[0] != "self":
+						diagnostics.append(
+							_chk_diag(
+								message=f"first parameter of method '{sig.method_name or sig.name}' must be named 'self'",
+								severity="error",
+								span=Span.from_loc(getattr(sig, "loc", None)),
+							)
+						)
+					# Receiver type must match the impl target type according to self_mode.
+					if sig.param_type_ids and sig.impl_target_type_id is not None and sig.self_mode is not None:
+						recv_ty = sig.param_type_ids[0]
+						expected: TypeId | None = None
+						if sig.self_mode == "value":
+							expected = sig.impl_target_type_id
+						elif sig.self_mode == "ref":
+							expected = self._type_table.ensure_ref(sig.impl_target_type_id)
+						elif sig.self_mode == "ref_mut":
+							expected = self._type_table.ensure_ref_mut(sig.impl_target_type_id)
+						if expected is not None:
+							target_td = self._type_table.get(sig.impl_target_type_id)
+							if target_td.kind is TypeKind.REF:
+								if sig.self_mode == "ref" and not target_td.ref_mut:
+									expected = sig.impl_target_type_id
+								elif sig.self_mode == "ref_mut" and target_td.ref_mut:
+									expected = sig.impl_target_type_id
+						impl_args = getattr(sig, "impl_target_type_args", None)
+						receiver_ok = expected is not None and recv_ty == expected
+						if not receiver_ok and impl_args:
+							check_ty = recv_ty
+							if sig.self_mode in {"ref", "ref_mut"}:
+								td_recv = self._type_table.get(recv_ty)
+								if td_recv.kind is TypeKind.REF and td_recv.param_types:
+									check_ty = td_recv.param_types[0]
+							if not receiver_ok and target_td.kind is TypeKind.ARRAY:
+								check_def = self._type_table.get(check_ty)
+								if check_def.kind is TypeKind.ARRAY:
+									receiver_ok = True
+							struct_inst = self._type_table.get_struct_instance(check_ty)
+							var_inst = self._type_table.get_variant_instance(check_ty)
+							if struct_inst is not None:
+								if struct_inst.base_id == sig.impl_target_type_id and list(struct_inst.type_args) == list(impl_args):
+									receiver_ok = True
+							elif var_inst is not None:
+								if var_inst.base_id == sig.impl_target_type_id and list(var_inst.type_args) == list(impl_args):
+									receiver_ok = True
+							if not receiver_ok:
+								struct_template_id = self._type_table._struct_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
+								if struct_template_id is not None and struct_template_id == check_ty:
+									receiver_ok = True
+							if not receiver_ok:
+								variant_template_id = self._type_table._variant_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
+								if variant_template_id is not None and variant_template_id == check_ty:
+									receiver_ok = True
+						if expected is not None and not receiver_ok:
+							target_name = self._type_table.get(sig.impl_target_type_id).name
+							diagnostics.append(
+								_chk_diag(
+									message=f"receiver type for method '{sig.method_name or sig.name}' must be '{target_name}' (or '&{target_name}' / '&mut {target_name}')",
+									severity="error",
+									span=Span.from_loc(getattr(sig, "loc", None)),
+								)
+							)
 
 			catch_arms_groups = self._catch_arms.get(fn_id)
 			if catch_arms_groups is not None:

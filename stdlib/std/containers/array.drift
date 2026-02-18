@@ -128,6 +128,16 @@ implement<T> core.Destructible for Array<T> {
 	}
 }
 
+implement<T> Array<T> {
+	pub fn with_capacity(n: Int) nothrow -> Array<T> {
+		var out: Array<T> = [];
+		if n > 0 {
+			out.reserve(n);
+		}
+		return move out;
+	}
+}
+
 implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {
 	pub fn next(self: &mut ArrayBorrowIter<T>) -> Optional<&T> {
 		if self.arr.gen != self.gen_snapshot {

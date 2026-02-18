@@ -1,0 +1,24 @@
+module main
+
+fn main() nothrow -> Int {
+	var xs = Array<type Int>::with_capacity(8);
+	if xs.len != 0 {
+		return 1;
+	}
+	if xs.cap < 8 {
+		return 2;
+	}
+	xs.push(1);
+	xs.push(2);
+	if xs.len != 2 {
+		return 3;
+	}
+	if xs[0] != 1 or xs[1] != 2 {
+		return 4;
+	}
+	var ys = Array<type Int>::with_capacity(0);
+	if ys.len != 0 {
+		return 5;
+	}
+	return 0;
+}

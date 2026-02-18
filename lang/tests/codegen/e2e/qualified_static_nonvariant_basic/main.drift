@@ -1,0 +1,26 @@
+module main
+
+struct Box {
+	v: Int
+}
+
+implement Box {
+	fn make(v: Int) nothrow -> Box {
+		return Box(v = v);
+	}
+
+	fn bump(self: &Box, d: Int) nothrow -> Int {
+		return self.v + d;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Box::make(41);
+	if b.v != 41 {
+		return 1;
+	}
+	if b.bump(1) != 42 {
+		return 2;
+	}
+	return 0;
+}

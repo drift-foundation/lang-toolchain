@@ -2,7 +2,7 @@
   "description": "e2e: method receiver self required",
   "diagnostics": [
     {
-      "message_contains": "first parameter of method 'bump' must be named 'self'",
+      "message_contains": "no matching method 'bump' for receiver",
       "phase": "typecheck"
     }
   ],

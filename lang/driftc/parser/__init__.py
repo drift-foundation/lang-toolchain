@@ -4269,7 +4269,7 @@ def _lower_parsed_program_to_hir(
 			# related errors consistently report as typecheck diagnostics.
 			receiver_ty = fn.params[0].type_expr if fn.params else None
 			self_mode: str | None = None
-			if receiver_ty is not None:
+			if receiver_ty is not None and getattr(fn.params[0], "name", None) == "self":
 				self_mode = "value"
 				if receiver_ty.name == "&":
 					self_mode = "ref"

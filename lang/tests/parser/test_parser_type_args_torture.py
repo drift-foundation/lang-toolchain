@@ -193,14 +193,18 @@ variant Optional<T> { Some(value: T), None }
 		"return Optional < Int > :: None < type Int > ( );",
 	],
 )
-def test_duplicate_type_args_rejected(expr: str) -> None:
+def test_duplicate_type_args_parse_and_keep_both_channels(expr: str) -> None:
 	src = f"""
 variant Optional<T> {{ Some(value: T), None }}
 fn main() -> Int {{ {expr} }}
 """
-	with pytest.raises(QualifiedMemberParseError) as exc:
-		p.parse_program(src)
-	assert "E-PARSE-QMEM-DUP-TYPEARGS" in str(exc.value)
+	prog = p.parse_program(src)
+	stmt = prog.functions[0].body.statements[0]
+	call_expr = next(_stmt_exprs(stmt))
+	assert isinstance(call_expr, Call)
+	assert call_expr.type_args is not None
+	assert isinstance(call_expr.func, QualifiedMember)
+	assert call_expr.func.base_type.args
 
 
 def test_postfix_chain_parses_and_keeps_type_args() -> None:

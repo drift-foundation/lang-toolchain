@@ -1,0 +1,27 @@
+module main
+
+struct Box<T> {
+	value: T
+}
+
+implement<T> Box<T> {
+	fn make(v: T) nothrow -> Box<T> {
+		return Box<type T>(value = v);
+	}
+
+	fn id<U>(x: U) nothrow -> U {
+		return x;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Box<type Int>::make(9);
+	if b.value != 9 {
+		return 1;
+	}
+	val x = Box<type Int>::id<type Int>(11);
+	if x != 11 {
+		return 2;
+	}
+	return 0;
+}

@@ -3082,11 +3082,6 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
                     )
                 type_args = list(expr.type_args)
                 expr = expr.func
-            if type_args is not None and isinstance(expr, QualifiedMember) and expr.base_type.args:
-                raise QualifiedMemberParseError(
-                    "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
-                    loc=_loc(child),
-                )
             args, kwargs = _build_call_args(args_node)
             expr = Call(loc=_loc(child), func=expr, args=args, kwargs=kwargs, type_args=type_args)
         elif child_name == "macro_call_suffix":
@@ -3122,11 +3117,6 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
             if isinstance(expr, TypeApp):
                 raise QualifiedMemberParseError(
                     "E-PARSE-TYPEAPP-DUP-TYPEARGS: type application may specify type arguments only once",
-                    loc=_loc(child),
-                )
-            if isinstance(expr, QualifiedMember) and expr.base_type.args:
-                raise QualifiedMemberParseError(
-                    "E-PARSE-QMEM-DUP-TYPEARGS: qualified member may specify type arguments only once",
                     loc=_loc(child),
                 )
             expr = TypeApp(loc=_loc(child), func=expr, type_args=type_args)

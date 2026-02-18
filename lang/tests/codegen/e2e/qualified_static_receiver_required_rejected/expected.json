@@ -1,0 +1,10 @@
+{
+  "description": "e2e: qualified static call rejects receiver method",
+  "diagnostics": [
+    {
+      "message_contains": "E-QMEM-RECEIVER-REQUIRED",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}
