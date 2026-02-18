@@ -5566,6 +5566,16 @@ def main(argv: list[str] | None = None) -> int:
 	if args.stdlib_root is None:
 		from lang.driftc.parser import stdlib_root as _stdlib_root
 		args.stdlib_root = _stdlib_root()
+	def _normalize_cli_path(path: Path | None) -> Path | None:
+		if path is None:
+			return None
+		if path.is_absolute():
+			return path
+		return (Path.cwd() / path).resolve()
+	args.output = _normalize_cli_path(args.output)
+	args.emit_ir = _normalize_cli_path(args.emit_ir)
+	args.emit_package = _normalize_cli_path(args.emit_package)
+	args.emit_instantiation_index = _normalize_cli_path(args.emit_instantiation_index)
 	def _parse_entry_spec(spec: str | None) -> tuple[str, str]:
 		if not spec:
 			return ("main", "main")

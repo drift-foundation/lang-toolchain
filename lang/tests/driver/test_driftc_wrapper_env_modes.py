@@ -13,9 +13,9 @@ def _repo_root() -> Path:
 	return Path(__file__).resolve().parents[3]
 
 
-def _run_wrapper(args: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_wrapper(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
 	wrapper = _repo_root() / "bin" / "driftc"
-	return subprocess.run(["/bin/bash", str(wrapper), *args], text=True, capture_output=True, env=env)
+	return subprocess.run(["/bin/bash", str(wrapper), *args], text=True, capture_output=True, env=env, cwd=cwd)
 
 
 def test_driftc_wrapper_rejects_memcheck_and_massif_in_direct_mode() -> None:
@@ -133,3 +133,25 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 	assert "libdrift_rt.a" in stderr
 	assert (cache_dir / variant / "libdrift_rt.a").exists()
 	assert out.exists()
+
+
+def test_driftc_wrapper_relative_output_from_non_repo_cwd(tmp_path: Path) -> None:
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"\n".join(
+			[
+				"module main",
+				"import std.core;",
+				"fn main() nothrow -> Int {",
+				"	return 0;",
+				"}",
+				"",
+			]
+		),
+		encoding="utf-8",
+	)
+	rel_out = Path("out_rel.bin")
+	env = dict(os.environ)
+	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(rel_out)], env=env, cwd=tmp_path)
+	assert cp.returncode == 0, cp.stderr
+	assert (tmp_path / rel_out).exists()

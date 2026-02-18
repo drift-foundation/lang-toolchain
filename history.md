@@ -1,3 +1,10 @@
+## 2026-02-18 – driftc wrapper regression pin for relative `-o` output paths
+- Added driver regression to lock relative output behavior when invoking wrapper from a non-repo working directory:
+  - `lang/tests/driver/test_driftc_wrapper_env_modes.py::test_driftc_wrapper_relative_output_from_non_repo_cwd`.
+- Extended wrapper test helper to support custom `cwd` so this path is validated directly.
+- Validation run:
+  - `PYTHONPATH=. ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_driftc_wrapper_env_modes.py -k "relative_output_from_non_repo_cwd or runtime_archive_mode_links_static_runtime"` (passed).
+
 ## 2026-02-17 – std.codec landed (hex/base64/base32 + strict/permissive decode paths)
 - Added new stdlib module `stdlib/std/codec/codec.drift` with shared codec error surface:
   - `CodecError { tag: String, offset: Int }` (+ `core.Diagnostic` impl).
