@@ -1,0 +1,33 @@
+import std.codec as codec;
+import std.crypto as crypto;
+import std.core as core;
+
+fn _ascii_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < s.byte_length() {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _check_sha1_ascii(s: String, expected_hex: String, code: Int) nothrow -> Int {
+	val bytes = _ascii_bytes(&s);
+	val dig = crypto.sha1(&bytes);
+	val got = codec.hex_encode(&dig);
+	if got != expected_hex {
+		return code;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r0 = _check_sha1_ascii("", "da39a3ee5e6b4b0d3255bfef95601890afd80709", 1);
+	if r0 != 0 { return r0; }
+	val r1 = _check_sha1_ascii("abc", "a9993e364706816aba3e25717850c26c9cd0d89d", 2);
+	if r1 != 0 { return r1; }
+	val r2 = _check_sha1_ascii("The quick brown fox jumps over the lazy dog", "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12", 3);
+	if r2 != 0 { return r2; }
+	return 0;
+}

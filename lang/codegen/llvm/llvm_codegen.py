@@ -7,15 +7,14 @@ Scope (v1 bring-up):
   - Input: SSA (`SsaFunc`) plus MIR (`MirFunc`) and `FnInfo` metadata.
   - Supported types: Int (isize), Bool (i1 in regs), String ({%drift.size, i8*}),
     Array<T>, and FnResult<ok, Error> where ok ∈ {Int, String, Void-like, Ref<T>,
-    Struct, Variant, FnPtr} (arrays are supported as values but not as FnResult ok
-    payloads yet).
+    Array<T>, Struct, Variant, FnPtr}.
   - Supported ops: ConstInt/Bool/String, AssignSSA aliases, BinaryOpInstr (int),
     Call (Int/String or FnResult return), Phi, ConstructResultOk/Err,
     ConstructError (attrs zeroed), Return, IfTerminator/Goto, Array ops.
   - FnResult lowering requires a TypeTable so we can map ok/error TypeIds to
-    LLVM payloads; we fail fast without it for can-throw functions. FnResult
-    ok payloads outside {Int, String, Void-like, Ref<T>, Struct, Variant, FnPtr}
-    are currently rejected.
+  LLVM payloads; we fail fast without it for can-throw functions. FnResult
+  ok payloads outside {Int, String, Void-like, Ref<T>, Array<T>, Struct, Variant, FnPtr}
+  are currently rejected.
   - Control flow: straight-line, if/else, and loops/backedges (general CFGs).
 
 ABI (from docs/design/drift-lang-abi.md):
@@ -257,8 +256,7 @@ def lower_ssa_func_to_llvm(
 	  LLVM IR string for the function definition.
 
 	Limitations:
-	  - Returns: Int, String, or FnResult<ok, Error> (ok ∈ {Int, String, Void-like, Ref<T>}) in v1;
-	    arrays are supported as values but not as FnResult ok payloads yet.
+	  - Returns: Int, String, or FnResult<ok, Error> (ok ∈ {Int, String, Void-like, Ref<T>, Array<T>}) in v1.
 	  - General CFGs (including loops/backedges) are supported in v1.
 	"""
 	all_infos = dict(fn_infos) if fn_infos is not None else {fn_info.fn_id: fn_info}
@@ -6221,9 +6219,9 @@ class _FuncBuilder:
 			return self._llvm_type_for_typeid(ty_id), key
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
 			return DRIFT_DV_TYPE, key
-		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT):
+		if td.kind in (TypeKind.ARRAY, TypeKind.STRUCT, TypeKind.VARIANT):
 			return self._llvm_type_for_typeid(ty_id), key
-		supported = "Int, Uint, Uint64, Bool, Byte, Float, String, DiagnosticValue, Void, Ref<T>, Struct, Variant, FnPtr"
+		supported = "Int, Uint, Uint64, Bool, Byte, Float, String, DiagnosticValue, Void, Ref<T>, Array<T>, Struct, Variant, FnPtr"
 		raise NotImplementedError(
 			f"LLVM codegen v1: FnResult ok type {key} is not supported yet; supported ok payloads: {supported}"
 		)

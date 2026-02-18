@@ -1,0 +1,4 @@
+{
+  "description": "e2e: sha1 supports mysql_native_password token derivation",
+  "exit_code": 0
+}

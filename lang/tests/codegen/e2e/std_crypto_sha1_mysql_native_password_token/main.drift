@@ -1,0 +1,59 @@
+import std.codec as codec;
+import std.crypto as crypto;
+import std.core as core;
+
+fn _ascii_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < s.byte_length() {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _concat(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < a.len { out.push(a[i]); i = i + 1; }
+	i = 0;
+	while i < b.len { out.push(b[i]); i = i + 1; }
+	return move out;
+}
+
+fn _xor(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < a.len {
+		out.push(cast<Byte>(cast<Uint>(a[i]) ^ cast<Uint>(b[i])));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _hex_to_bytes(s: String) nothrow -> Array<Byte> {
+	match codec.hex_decode(&s) {
+		core.Result::Ok(v) => { return move v; },
+		core.Result::Err(e) => {
+			var empty: Array<Byte> = [];
+			return move empty;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val password = _ascii_bytes("password");
+	val scramble = _hex_to_bytes("0102030405060708090a0b0c0d0e0f1011121314");
+	if scramble.len != 20 { return 1; }
+
+	val stage1 = crypto.sha1(&password);
+	val stage2 = crypto.sha1(&stage1);
+	val seeded = crypto.sha1(&_concat(&scramble, &stage2));
+	val token = _xor(&stage1, &seeded);
+
+	if codec.hex_encode(&stage1) != "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8" { return 2; }
+	if codec.hex_encode(&stage2) != "2470c0c06dee42fd1618bb99005adca2ec9d1e19" { return 3; }
+	if codec.hex_encode(&seeded) != "9ad701ed6c7278da99f6a6f79cad60a0c19b5f0e" { return 4; }
+	if codec.hex_encode(&token) != "c17d6009a5cb47e59f7483fcf05553bbbf7dd0d6" { return 5; }
+	return 0;
+}

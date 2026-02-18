@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from lang.driftc.env_flags import env_true
 from lang.language_runtime import build_runtime_archive
 
 
@@ -19,12 +20,14 @@ def _run_wrapper(args: list[str], *, env: dict[str, str]) -> subprocess.Complete
 
 def test_driftc_wrapper_rejects_memcheck_and_massif_in_direct_mode() -> None:
 	env = dict(os.environ)
+	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_MEMCHECK"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
 	assert cp.returncode != 0
 	assert "runner-only" in (cp.stderr or "")
 
 	env = dict(os.environ)
+	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_MASSIF"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
 	assert cp.returncode != 0
@@ -99,17 +102,27 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 	)
 	out = tmp_path / "a.out"
 	cache_dir = tmp_path / "runtime_cache"
-	prev = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
+	variant = "asan" if env_true("DRIFT_ASAN", env=os.environ) else "debug"
+	prev_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
+	prev_asan = os.environ.get("DRIFT_ASAN")
 	try:
 		os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
+		if variant == "debug":
+			os.environ.pop("DRIFT_ASAN", None)
+		else:
+			os.environ["DRIFT_ASAN"] = "1"
 		clang = subprocess.run(["/bin/bash", "-lc", "command -v clang-15 || command -v clang"], text=True, capture_output=True).stdout.strip()
 		assert clang
-		build_runtime_archive(_repo_root(), clang=clang, variant="debug")
+		build_runtime_archive(_repo_root(), clang=clang, variant=variant)
 	finally:
-		if prev is None:
+		if prev_cache is None:
 			os.environ.pop("DRIFT_RUNTIME_LIB_CACHE_DIR", None)
 		else:
-			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev
+			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
+		if prev_asan is None:
+			os.environ.pop("DRIFT_ASAN", None)
+		else:
+			os.environ["DRIFT_ASAN"] = prev_asan
 	env = dict(os.environ)
 	env["DRIFT_RUNTIME_LINK_MODE"] = "archive"
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
@@ -118,5 +131,5 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 	stderr = cp.stderr or ""
 	assert str(cache_dir) in stderr
 	assert "libdrift_rt.a" in stderr
-	assert (cache_dir / "debug" / "libdrift_rt.a").exists()
+	assert (cache_dir / variant / "libdrift_rt.a").exists()
 	assert out.exists()

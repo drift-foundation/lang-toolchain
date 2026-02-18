@@ -79,14 +79,12 @@ def test_non_can_throw_returning_fnresult_rejected():
 		lower_ssa_func_to_llvm(mir, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())
 
 
-def test_can_throw_fnresult_with_unsupported_ok_type_is_rejected():
+def test_can_throw_fnresult_with_unsupported_interface_ok_type_is_rejected():
 	"""
 	Can-throw FnResult with an unsupported ok payload should fail fast with a clear diagnostic.
 	"""
 	table = TypeTable()
-	int_ty = table.ensure_int()
-	# Array<Int> stands in for an unsupported ok payload in v1 (arrays not yet allowed as FnResult ok).
-	opt_ty = table.new_array(int_ty)
+	opt_ty = table.declare_interface("m", "I", type_params=[])
 	err_ty = table.ensure_error()
 	fnresult_ty = table.new_fnresult(opt_ty, err_ty)
 
@@ -102,7 +100,7 @@ def test_can_throw_fnresult_with_unsupported_ok_type_is_rejected():
 	fn_id = FunctionId(module="main", name="f", ordinal=0)
 	fn_info = FnInfo(fn_id=fn_id, name="f", declared_can_throw=True, return_type_id=fnresult_ty, error_type_id=err_ty)
 
-	with pytest.raises(NotImplementedError, match="FnResult ok type Array_Int is not supported"):
+	with pytest.raises(NotImplementedError, match="FnResult ok type INTERFACE is not supported"):
 		lower_ssa_func_to_llvm(mir, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())
 
 

@@ -51,4 +51,13 @@
 		- root-cause compiler/runtime fix
 - “Workaround-only” changes must be reported as partial and not final resolution.
 
+## Boundary Contract Guardrails (strict)
+
+- Any change that expands/changes type support across stage boundaries (checker -> stage2 -> MIR validate -> LLVM lowering) must update boundary expectations explicitly.
+- Mandatory for boundary-shape changes (e.g. FnResult ok payload support changes):
+		1. Add/adjust a positive regression proving the new shape works end-to-end (driver or e2e).
+		2. Add/adjust a negative regression proving unsupported shapes still fail with clear contract diagnostics.
+		3. Update stale contract comments/messages/tests that describe supported boundary shapes.
+- Do not leave contradictory tests/comments (example forbidden state: behavior supports `Array<T>` but negative tests/docs still claim arrays are unsupported).
+- Prefer central boundary checks and diagnostics over scattered ad-hoc guards.
 

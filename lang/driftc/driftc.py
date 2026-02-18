@@ -36,6 +36,7 @@ from pathlib import Path
 from dataclasses import replace, dataclass, fields, is_dataclass
 from typing import Any, Dict, Mapping, List, Tuple, Callable
 from lang.driftc import debug as drift_debug
+from lang.driftc.env_flags import env_true as _env_true
 
 # Repository root (lang lives under this).
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,11 +51,6 @@ def _target_word_bits(target_word_bits: int | None) -> int:
 	if target_word_bits is None:
 		raise ValueError("target word size is required; pass --target-word-bits")
 	return target_word_bits
-
-
-def _env_true(name: str) -> bool:
-	v = (os.environ.get(name) or "").strip()
-	return v in {"1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"}
 
 from lang.driftc import stage1 as H
 from lang.driftc.stage1 import assign_callsite_ids, assign_node_ids

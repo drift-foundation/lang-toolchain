@@ -1,0 +1,18 @@
+module main
+
+fn mk() nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	out.push(cast<Byte>(1));
+	return move out;
+}
+
+fn main() nothrow -> Int {
+	val b = mk();
+	if b.len != 1 {
+		return 1;
+	}
+	if b[0] != cast<Byte>(1) {
+		return 2;
+	}
+	return 0;
+}

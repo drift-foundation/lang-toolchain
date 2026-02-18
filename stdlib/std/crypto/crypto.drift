@@ -1,0 +1,137 @@
+module std.crypto
+
+export {
+	sha1
+};
+
+const U32_MOD: Uint = 4294967296;
+const U32_MASK: Uint = 4294967295;
+const H0_INIT: Uint = 1732584193;
+const H1_INIT: Uint = 4023233417;
+const H2_INIT: Uint = 2562383102;
+const H3_INIT: Uint = 271733878;
+const H4_INIT: Uint = 3285377520;
+
+fn _u32(x: Uint) nothrow -> Uint {
+	return x % U32_MOD;
+}
+
+fn _rol32(x: Uint, n: Int) nothrow -> Uint {
+	val v = _u32(x);
+	val l = _u32(v << cast<Uint>(n));
+	val r = v >> cast<Uint>(32 - n);
+	return _u32(cast<Uint>(l) | cast<Uint>(r));
+}
+
+fn _u8(b: Byte) nothrow -> Uint {
+	return cast<Uint>(b);
+}
+
+fn _append_u32_be(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
+	val v = _u32(x);
+	out.push(cast<Byte>((v >> cast<Uint>(24)) % cast<Uint>(256)));
+	out.push(cast<Byte>((v >> cast<Uint>(16)) % cast<Uint>(256)));
+	out.push(cast<Byte>((v >> cast<Uint>(8)) % cast<Uint>(256)));
+	out.push(cast<Byte>(v % cast<Uint>(256)));
+}
+
+pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
+	var msg: Array<Byte> = [];
+	var i = 0;
+	while i < bytes.len {
+		msg.push(bytes[i]);
+		i = i + 1;
+	}
+	val mlen = msg.len;
+	val bit_len = cast<Uint>(mlen) * cast<Uint>(8);
+	msg.push(cast<Byte>(128));
+	while msg.len % 64 != 56 {
+		msg.push(cast<Byte>(0));
+	}
+	val hi = bit_len / U32_MOD;
+	val lo = bit_len % U32_MOD;
+	_append_u32_be(&mut msg, hi);
+	_append_u32_be(&mut msg, lo);
+
+	var h0 = H0_INIT;
+	var h1 = H1_INIT;
+	var h2 = H2_INIT;
+	var h3 = H3_INIT;
+	var h4 = H4_INIT;
+
+	var chunk = 0;
+	while chunk < msg.len {
+		var w: Array<Uint> = [];
+		var t = 0;
+		while t < 80 {
+			w.push(cast<Uint>(0));
+			t = t + 1;
+		}
+		t = 0;
+		while t < 16 {
+			val base = chunk + t * 4;
+			val b0 = _u8(msg[base]);
+			val b1 = _u8(msg[base + 1]);
+			val b2 = _u8(msg[base + 2]);
+			val b3 = _u8(msg[base + 3]);
+			w[t] = _u32((b0 << cast<Uint>(24)) | (b1 << cast<Uint>(16)) | (b2 << cast<Uint>(8)) | b3);
+			t = t + 1;
+		}
+		t = 16;
+		while t < 80 {
+			w[t] = _rol32(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1);
+			t = t + 1;
+		}
+
+		var a = h0;
+		var b = h1;
+		var c = h2;
+		var d = h3;
+		var e = h4;
+
+		t = 0;
+		while t < 80 {
+			var f: Uint = cast<Uint>(0);
+			var k: Uint = cast<Uint>(0);
+			if t < 20 {
+				f = (cast<Uint>(b) & cast<Uint>(c)) | ((cast<Uint>(b) ^ U32_MASK) & cast<Uint>(d));
+				k = cast<Uint>(1518500249);
+			} else {
+				if t < 40 {
+					f = cast<Uint>(b) ^ cast<Uint>(c) ^ cast<Uint>(d);
+					k = cast<Uint>(1859775393);
+				} else {
+					if t < 60 {
+						f = (cast<Uint>(b) & cast<Uint>(c)) | (cast<Uint>(b) & cast<Uint>(d)) | (cast<Uint>(c) & cast<Uint>(d));
+						k = cast<Uint>(2400959708);
+					} else {
+						f = cast<Uint>(b) ^ cast<Uint>(c) ^ cast<Uint>(d);
+						k = cast<Uint>(3395469782);
+					}
+				}
+			}
+			val temp = _u32(_rol32(a, 5) + f + e + k + w[t]);
+			e = d;
+			d = c;
+			c = _rol32(b, 30);
+			b = a;
+			a = temp;
+			t = t + 1;
+		}
+
+		h0 = _u32(h0 + a);
+		h1 = _u32(h1 + b);
+		h2 = _u32(h2 + c);
+		h3 = _u32(h3 + d);
+		h4 = _u32(h4 + e);
+		chunk = chunk + 64;
+	}
+
+	var out: Array<Byte> = [];
+	_append_u32_be(&mut out, h0);
+	_append_u32_be(&mut out, h1);
+	_append_u32_be(&mut out, h2);
+	_append_u32_be(&mut out, h3);
+	_append_u32_be(&mut out, h4);
+	return move out;
+}

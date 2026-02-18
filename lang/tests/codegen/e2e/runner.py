@@ -40,6 +40,7 @@ from lang.driftc.parser import (
 )
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.driftc import compile_to_llvm_ir_for_tests, ReservedNamespacePolicy
+from lang.driftc.env_flags import env_true as _env_true
 from lang.driftc.core.function_id import function_symbol
 from lang.language_runtime import (
 	build_runtime_archive,
@@ -56,10 +57,6 @@ if _BUILD_ROOT_ENV:
 	BUILD_ROOT = Path(_BUILD_ROOT_ENV)
 else:
 	BUILD_ROOT = _BUILD_ROOT_DEFAULT / f"run_{os.getpid()}"
-
-
-def _env_true(name: str) -> bool:
-	return os.environ.get(name) in {"1", "true", "True"}
 
 
 def _asan_options_with_defaults(existing: str | None) -> str:
