@@ -1,0 +1,27 @@
+module main
+
+import std.core as core;
+import std.cli as cli;
+
+fn main(argv: Array<String>) nothrow -> Int {
+	var p = cli.parser("tool", "0.1.0", "cli smoke");
+	val _ = p.flag("verbose", "v", "verbose mode");
+	val _ = p.positional("name", "name", true, false);
+	match p.parse(&argv) {
+		core.Result::Ok(parsed) => {
+			if parsed.has_flag("verbose", &p) {
+				return 1;
+			}
+			match parsed.positional_at(0) {
+				Some(v) => {
+					if v.byte_length() != 9 {
+						return 2;
+					}
+				},
+				None => { return 3; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+}

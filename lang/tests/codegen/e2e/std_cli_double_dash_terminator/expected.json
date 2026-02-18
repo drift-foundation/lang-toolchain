@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli double dash terminator",
+  "args": ["--", "--verbose"],
+  "exit_code": 0
+}

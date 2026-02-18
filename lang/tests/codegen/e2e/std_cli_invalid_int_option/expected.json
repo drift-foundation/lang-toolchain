@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli invalid int option",
+  "args": ["--port", "abc"],
+  "exit_code": 0
+}

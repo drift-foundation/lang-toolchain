@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli duplicate option",
+  "args": ["--verbose", "--verbose"],
+  "exit_code": 0
+}

@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli short cluster rejected",
+  "args": ["-vv"],
+  "exit_code": 0
+}

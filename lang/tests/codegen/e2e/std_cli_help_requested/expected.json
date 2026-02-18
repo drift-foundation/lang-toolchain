@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli help requested tag",
+  "args": ["--help"],
+  "exit_code": 0
+}

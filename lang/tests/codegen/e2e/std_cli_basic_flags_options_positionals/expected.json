@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli basic flags/options/positionals",
+  "args": ["--verbose", "--port", "3306", "alpha", "beta", "gamma"],
+  "exit_code": 0
+}

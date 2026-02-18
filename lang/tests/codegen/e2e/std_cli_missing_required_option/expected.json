@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli missing required option",
+  "args": ["alpha"],
+  "exit_code": 0
+}

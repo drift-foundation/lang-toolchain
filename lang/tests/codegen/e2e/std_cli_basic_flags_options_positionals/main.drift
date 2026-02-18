@@ -1,0 +1,52 @@
+module main
+
+import std.core as core;
+import std.cli as cli;
+
+fn main(argv: Array<String>) nothrow -> Int {
+	var p = cli.parser("tool", "0.1.0", "cli smoke");
+	val _ = p.flag("verbose", "v", "verbose mode");
+	val _ = p.option_int("port", "p", "PORT", "tcp port", true);
+	val _ = p.positional("target", "target name", true, false);
+	val _ = p.positional("extra", "extra args", false, true);
+	match p.parse(&argv) {
+		core.Result::Ok(parsed) => {
+			if not parsed.has_flag("verbose", &p) {
+				return 1;
+			}
+			match parsed.get_int("port", &p) {
+				Some(v) => {
+					if v != 3306 {
+						return 2;
+					}
+				},
+				None => {
+					return 3;
+				}
+			}
+			if parsed.positional_len() != 3 {
+				return 4;
+			}
+			match parsed.positional_at(0) {
+				Some(v) => {
+					if v.byte_length() != 5 {
+						return 5;
+					}
+				},
+				None => { return 6; }
+			}
+			match parsed.positional_at(2) {
+				Some(v) => {
+					if v.byte_length() != 5 {
+						return 7;
+					}
+				},
+				None => { return 8; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => {
+			return 9;
+		}
+	}
+}

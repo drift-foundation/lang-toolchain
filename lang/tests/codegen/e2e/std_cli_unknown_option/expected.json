@@ -1,0 +1,5 @@
+{
+  "description": "e2e: std.cli unknown option",
+  "args": ["--nope"],
+  "exit_code": 0
+}

@@ -1,0 +1,50 @@
+module main
+
+import std.cli as cli;
+import std.console as console;
+import std.core as core;
+import std.format as format;
+
+fn main(argv: Array<String>) nothrow -> Int {
+	var p = cli.parser("backup-tool", "0.1.0", "Create backups for a target directory.");
+	val _ = p.flag("verbose", "v", "Enable verbose output.");
+	val _ = p.option_int("port", "p", "PORT", "Control plane port.", true);
+	val _ = p.option_string("mode", "m", "MODE", "Backup mode: full or diff.", false);
+	val _ = p.positional("target", "Target directory.", true, false);
+	val _ = p.positional("paths", "Additional relative paths.", false, true);
+	match p.parse(&argv) {
+		core.Result::Ok(parsed) => {
+			var target = "";
+			var port = 3306;
+			var mode = "full";
+			match parsed.positional_at(0) {
+				Some(v) => { target = *v; },
+				None => { return 2; }
+			}
+			match parsed.get_int("port", &p) {
+				Some(v) => { port = v; },
+				None => { return 3; }
+			}
+			match parsed.get_string("mode", &p) {
+				Some(v) => { mode = *v; },
+				None => { }
+			}
+			if parsed.has_flag("verbose", &p) {
+				console.println("verbose=true");
+			}
+			console.println("target=" + target);
+			console.println("port=" + format.format_int(port));
+			console.println("mode=" + mode);
+			console.println("extra_paths=" + format.format_int(parsed.positional_len() - 1));
+			return 0;
+		},
+		core.Result::Err(err) => {
+			if err.tag == "cli-help-requested" {
+				console.println(p.help_text());
+				return 0;
+			}
+			console.println("cli error: " + err.tag + " at argv[" + format.format_int(err.index) + "] " + err.message);
+			return 2;
+		}
+	}
+}
