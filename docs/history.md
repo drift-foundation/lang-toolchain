@@ -1,5 +1,12 @@
 # Drift development history
 
+## 2026-02-18
+- Added initial `std.cli` argument parser API (`ArgParser`, `ParsedArgs`, `CliError`) with flags, string/int options, required-option enforcement, positional arguments (including trailing multiple), `--` terminator handling, and deterministic error tags for invalid/duplicate/missing inputs.
+- Added CLI e2e coverage for both success and rejection paths: basic parse flow, help request, unknown option, missing required option/positional, invalid int option, duplicate option, unsupported short clusters, and double-dash positional mode.
+- Fixed method-signature metadata classification so only receiver-bearing impl functions are tagged `is_method`, while impl-associated static functions still preserve `impl_target_type_id` for qualified-static resolution.
+- Updated type/call resolution to match the metadata contract (`impl_target_type_id`-based qualified static lookup), and validated with driver/e2e regressions for positive and negative qualified-static behaviors.
+- Added runnable CLI example `examples/cli/main.drift` and documented `std.cli` usage in `docs/effective-drift.md` with API-accurate parse/access patterns.
+
 ## 2026-01-06
 - Optional consolidation: inventoried Optional-specific logic, locked arm order `None=0`/`Some=1`, and removed MIR OptionalIsSome/OptionalValue ops across stage2/ARC/codegen.
 - DiagnosticValue Optional ABI pivoted to out-params + bool return; removed DriftOptional* runtime structs; updated DVAs* lowering/tests; aligned DV ctor ABI (isize for int, i8 for bool) and eliminated uninitialized out-param loads.
