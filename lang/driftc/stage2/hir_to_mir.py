@@ -6835,18 +6835,35 @@ class HIRToMIR:
 				self.b.emit(M.LoadLocal(dest=env_ptr, local=self._lambda_env_local))
 				addr = self.b.new_temp()
 				self.b.emit(
-					M.AddrOfField(
-						dest=addr,
-						base_ptr=env_ptr,
+						M.AddrOfField(
+							dest=addr,
+							base_ptr=env_ptr,
 						struct_ty=self._lambda_env_ty,
 						field_index=slot,
 						field_ty=field_ty,
-						is_mut=is_mut,
+							is_mut=is_mut,
+						)
 					)
-				)
 				return addr, field_ty
+		if isinstance(expr.base, H.HVar) and expr.base.binding_id is None:
+			const_mod = getattr(expr.base, "module_id", None) or self._current_module_name()
+			const_val = self._type_table.lookup_const(f"{const_mod}::{expr.base.name}")
+			if const_val is not None:
+				if is_mut:
+					raise AssertionError("mutable address-of module const reached MIR lowering (checker bug)")
+				if expr.projections:
+					raise AssertionError("address-of projected module const reached MIR lowering (checker bug)")
+				const_ty, _ = const_val
+				init_value = self.lower_expr(expr.base, expected_type=const_ty)
+				local = f"__const_{expr.base.name}_{self.b.new_temp()}"
+				self.b.ensure_local(local)
+				self._local_types[local] = const_ty
+				self.b.emit(M.StoreLocal(local=local, value=init_value))
+				addr = self.b.new_temp()
+				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
+				return addr, const_ty
 		# Canonical place expression (stage1→stage2 boundary).
-		if self._typed_mode == "strict" and isinstance(expr.base, H.HVar) and expr.base.binding_id is None:
+		if self._typed_mode == "strict" and isinstance(expr.base, H.HVar) and expr.base.binding_id is None and expr.base.module_id is None:
 			raise AssertionError("typed_mode strict: missing binding_id for place base (checker bug)")
 		base_name = self._canonical_local(getattr(expr.base, "binding_id", None), expr.base.name)
 		self.b.ensure_local(base_name)

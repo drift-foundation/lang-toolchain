@@ -1036,6 +1036,50 @@
   - logging e2e subset passed (`std_log_*`, `macro_log_app_logging_context`).
   - driver subset passed (`test_std_log_api_smoke`, `test_macro_basic_diagnostics`).
 
+## 2026-02-18 – Boundary hardening: module-const place bases in strict MIR lowering (LANGUAGE_BUG)
+- Fixed strict stage2 failure for address-of on module consts (`&CONST`) that previously raised:
+  - `internal: MIR lowering contract failure (typed_mode strict: missing binding_id for place base (checker bug))`.
+- Root-cause fix:
+  - `lang/driftc/stage2/hir_to_mir.py`
+  - `_lower_addr_of_place(...)` now handles module-const bases (no local `binding_id`) by materializing const value into a local temp and taking its address.
+  - strict `binding_id` guard remains enforced for true local-place cases.
+- Added driver regressions:
+  - positive: `lang/tests/driver/test_module_const_ref_place_binding.py::test_module_const_ref_place_does_not_hit_binding_id_contract`
+  - positive (constructor-shape close to live TCP auth): `lang/tests/driver/test_module_const_ref_place_binding.py::test_module_const_and_borrowed_field_in_constructor_args_compile`
+  - negative (checker-facing): `lang/tests/driver/test_module_const_ref_place_binding.py::test_mut_borrow_of_module_const_reports_checker_error_not_internal`
+- Verified strict guard coverage still holds:
+  - `lang/tests/driver/test_binding_id_strict_guard.py`.
+
+## 2026-02-18 – Boundary policy + FnResult/Array contract alignment
+- Added explicit boundary guardrails to repo policy:
+  - `AGENTS.md` now requires positive+negative boundary regressions and stale-contract cleanup whenever stage-boundary support changes.
+- Aligned FnResult ok-payload contract for arrays end-to-end:
+  - codegen support includes `TypeKind.ARRAY` in FnResult ok mapping (`lang/codegen/llvm/llvm_codegen.py`).
+  - updated stale docs/comments in LLVM codegen header/docs to include `Array<T>` support.
+  - added positive e2e regression: `lang/tests/codegen/e2e/fnresult_ok_array_byte`.
+  - updated negative LLVM unit to keep unsupported-shape guardrail via interface payload:
+    - `lang/codegen/llvm/tests/test_llvm_codegen_negative.py::test_can_throw_fnresult_with_unsupported_interface_ok_type_is_rejected`.
+  - added boundary driver regression:
+    - `lang/tests/driver/test_codegen_boundary_diagnostics.py::test_codegen_pipeline_allows_fnresult_array_ok_payload`.
+
+## 2026-02-18 – std.crypto SHA-1 for MySQL native auth path
+- Added API:
+  - `std.crypto.sha1(bytes: &Array<Byte>) -> Array<Byte>` in `stdlib/std/crypto/crypto.drift`.
+- Added e2e coverage:
+  - vectors: `lang/tests/codegen/e2e/std_crypto_sha1_vectors`
+  - MySQL native token flow: `lang/tests/codegen/e2e/std_crypto_sha1_mysql_native_password_token`
+- Validation completed in normal + memory/sanitizer modes for this subset:
+  - `DRIFT_ASAN=1`, `DRIFT_ALLOC_TRACK=1`, `DRIFT_MEMCHECK=1`.
+
+## 2026-02-18 – Shared env-bool parser cleanup
+- Centralized Python env-flag truth parsing:
+  - new shared helper: `lang/driftc/env_flags.py::env_true(...)`.
+- Rewired call sites:
+  - `lang/driftc/driftc.py`
+  - `lang/tests/codegen/e2e/runner.py`
+  - `lang/tests/driver/test_driftc_wrapper_env_modes.py`
+- Hardened wrapper env-mode tests against inherited env state (notably `DRIFT_ASAN`) and variant-specific runtime archive assertions.
+
 ## 2026-02-17 – Checker hardening for non-Copy array index reads (LANGUAGE_BUG)
 - Regression-first fix for internal crash path:
   - symptom: stage2 raised `NotImplementedError` for `HIndex` on `Array<T>` when element type was non-Copy.
