@@ -4384,7 +4384,7 @@ def _lower_parsed_program_to_hir(
 					declared_nothrow,
 					is_unsafe=bool(getattr(fn, "is_unsafe", False)),
 					is_pub=bool(getattr(fn, "is_pub", False)),
-					is_method=True,
+					is_method=bool(self_mode is not None),
 					self_mode=self_mode,
 					impl_target=impl.target,
 					impl_type_params=impl_type_params,

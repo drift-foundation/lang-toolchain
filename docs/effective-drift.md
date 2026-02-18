@@ -122,6 +122,48 @@ Matching runnable examples:
 - `examples/runtime_registry/global_singleton.drift`
 - `examples/runtime_registry/per_thread_slots.drift`
 
+## CLI arguments (`std.cli`)
+
+Use `std.cli` to define flags/options/positionals once, then parse `argv` and
+consume typed values.
+
+```drift
+import std.cli as cli;
+import std.core as core;
+
+fn main(argv: Array<String>) nothrow -> Int {
+    var p = cli.parser("backup-tool", "0.1.0", "Create backups.");
+    val _ = p.flag("verbose", "v", "verbose mode");
+    val _ = p.option_int("port", "p", "PORT", "control plane port", true);
+    val _ = p.positional("target", "target directory", true, false);
+
+    match p.parse(&argv) {
+        core.Result::Ok(parsed) => {
+            var port = 3306;
+            var target = "";
+            if parsed.has_flag("verbose", &p) {
+                // ...
+            }
+            match parsed.get_int("port", &p) {
+                Some(v) => { port = v; },
+                None => { return 2; }
+            }
+            match parsed.positional_at(0) {
+                Some(v) => { target = *v; },
+                None => { return 3; }
+            }
+            return 0;
+        },
+        core.Result::Err(err) => {
+            if err.tag == "cli-help-requested" { return 0; }
+            return 2;
+        }
+    }
+}
+```
+
+Matching runnable example: `examples/cli/main.drift`.
+
 ## Read a file
 
 Use `file_builder(...).read(true).write(false)` and keep timeout on the

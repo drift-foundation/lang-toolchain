@@ -484,12 +484,10 @@ def resolve_nonvariant_qualified_static_call(
 	receiver_required = False
 	infer_error = None
 	for fn_id, sig in (ctx.signatures_by_id or {}).items():
-		if not getattr(sig, "is_method", False):
-			continue
-		if (sig.method_name or sig.name) != qm.member:
-			continue
 		impl_tid = getattr(sig, "impl_target_type_id", None)
 		if impl_tid is None:
+			continue
+		if (sig.method_name or sig.name) != qm.member:
 			continue
 		impl_base_id, _impl_args = ctx.struct_base_and_args(impl_tid)
 		if impl_base_id != base_base_id:

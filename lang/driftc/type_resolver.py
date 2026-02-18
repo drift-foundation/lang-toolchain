@@ -176,7 +176,7 @@ def resolve_program_signatures(
 		self_mode = getattr(decl, "self_mode", None)
 		impl_target_type_id: TypeId | None = None
 		impl_target_type_args: list[TypeId] | None = None
-		if is_method and getattr(decl, "impl_target", None) is not None:
+		if getattr(decl, "impl_target", None) is not None:
 			target_expr = decl.impl_target
 			origin_mod = getattr(target_expr, "module_id", None) or module_name
 			target_base_expr = target_expr
