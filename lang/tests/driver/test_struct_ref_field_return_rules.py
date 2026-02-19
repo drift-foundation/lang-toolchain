@@ -59,6 +59,36 @@ fn main() nothrow -> Int {
 	assert errors == []
 
 
+def test_borrowed_aggregate_return_single_origin_via_local_wrapper_allowed(tmp_path: Path) -> None:
+	checked = _compile(
+		tmp_path,
+		"""
+module m
+
+import std.core as core;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
+	val st = Statement(session = s);
+	val out: core.Result<Statement, Int> = core.Result::Ok(st);
+	return move out;
+}
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	match query(&mut sess) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == []
+
+
 def test_borrowed_aggregate_return_from_local_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
@@ -71,6 +101,32 @@ struct Statement(session: &mut Session);
 fn bad() nothrow -> Statement {
 	var sess = Session(id = 1);
 	return Statement(session = &mut sess);
+}
+
+fn main() nothrow -> Int {
+	val _ = bad();
+	return 0;
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	matches = [d for d in errors if "borrowed aggregate return must derive from a reference parameter" in d.message]
+	assert matches, errors
+
+
+def test_borrowed_aggregate_return_from_local_binding_rejected(tmp_path: Path) -> None:
+	checked = _compile(
+		tmp_path,
+		"""
+module m
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn bad() nothrow -> Statement {
+	var sess = Session(id = 1);
+	val st = Statement(session = &mut sess);
+	return st;
 }
 
 fn main() nothrow -> Int {

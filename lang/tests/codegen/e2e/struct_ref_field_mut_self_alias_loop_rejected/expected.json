@@ -1,0 +1,10 @@
+{
+  "description": "e2e: &mut self method call conflicts with live shared borrow through ref field (loop)",
+  "diagnostics": [
+    {
+      "message_contains": "cannot take mutable borrow while borrow active on 'st'",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

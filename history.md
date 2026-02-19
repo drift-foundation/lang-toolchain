@@ -30,6 +30,42 @@
   - positive path pinned to reach IR/codegen without internal contract failures,
   - negative paths pinned to fail in `typecheck` with non-internal diagnostics.
 
+## 2026-02-19 – Struct ref-field hardening follow-up (provenance flow + container + alias stress)
+- Strengthened borrowed-aggregate return provenance through local variable flow in checker:
+  - supports valid `return local_var` / `return move local_var` for wrapper-carried borrowed aggregates tied to single ref-param origin,
+  - rejects local-origin borrowed aggregate returns through local bindings.
+- Added return-flow regressions:
+  - driver:
+    - `test_borrowed_aggregate_return_single_origin_via_local_wrapper_allowed`
+    - `test_borrowed_aggregate_return_from_local_binding_rejected`
+    - `test_struct_ref_field_result_return_via_local_wrapper_reaches_codegen_boundary`
+    - `test_struct_ref_field_local_return_rejected_at_checker_boundary`
+  - e2e:
+    - `struct_ref_field_result_return_local_wrapper_ok`.
+- Closed explicit container coverage gap beyond Array:
+  - added e2e negatives:
+    - `struct_ref_field_hashmap_store_rejected`
+    - `struct_ref_field_treemap_store_rejected`
+  - added driver boundary tests:
+    - `test_struct_ref_field_hashmap_store_rejected_at_checker_boundary`
+    - `test_struct_ref_field_treemap_store_rejected_at_checker_boundary`.
+- Added borrow-checker alias stress coverage for structs with ref fields and `&mut self` receiver methods:
+  - driver:
+    - `lang/tests/driver/test_struct_ref_field_borrow_alias_conflicts.py`
+      - direct conflict
+      - `if` conflict
+      - `match` conflict
+      - `loop` conflict
+  - e2e negatives:
+    - `struct_ref_field_mut_self_alias_if_rejected`
+    - `struct_ref_field_mut_self_alias_match_rejected`
+    - `struct_ref_field_mut_self_alias_loop_rejected`.
+- Validation matrix for new hardening coverage:
+  - targeted driver suites: pass
+  - targeted e2e subsets: pass
+  - targeted e2e with `DRIFT_ASAN=1`: pass
+  - targeted e2e with `DRIFT_MEMCHECK=1`: pass.
+
 ## 2026-02-18 – driftc wrapper regression pin for relative `-o` output paths
 - Added driver regression to lock relative output behavior when invoking wrapper from a non-repo working directory:
   - `lang/tests/driver/test_driftc_wrapper_env_modes.py::test_driftc_wrapper_relative_output_from_non_repo_cwd`.

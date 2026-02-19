@@ -8847,6 +8847,8 @@ class TypeChecker:
 				return call.args[field_index]
 			return None
 
+		borrowed_return_origins_by_binding: Dict[int, Optional[set[int]]] = {}
+
 		def _borrowed_aggregate_origins(expr: H.HExpr, expected_ty: TypeId) -> Optional[set[int]]:
 			if not _is_borrowed_aggregate_type(expected_ty):
 				return None
@@ -8877,6 +8879,14 @@ class TypeChecker:
 
 		def _return_borrowed_aggregate_origins(expr: H.HExpr, expected_ty: TypeId) -> Optional[set[int]]:
 			d = self.type_table.get(expected_ty)
+			if isinstance(expr, H.HVar) and getattr(expr, "binding_id", None) is not None:
+				origins_cached = borrowed_return_origins_by_binding.get(int(expr.binding_id))
+				if origins_cached is not None:
+					return set(origins_cached)
+			if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+				return _return_borrowed_aggregate_origins(expr.subject, expected_ty)
+			if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+				return _return_borrowed_aggregate_origins(expr.subject, expected_ty)
 			if _is_borrowed_aggregate_type(expected_ty):
 				return _borrowed_aggregate_origins(expr, expected_ty)
 			if d.kind is not TypeKind.VARIANT:
@@ -8920,6 +8930,76 @@ class TypeChecker:
 				if _is_borrowed_aggregate_type(inner_ty):
 					return True, _borrowed_aggregate_requires_mut_origin(inner_ty)
 			return False, False
+
+		def _merge_borrowed_origin_maps(
+			left: dict[int, Optional[set[int]]], right: dict[int, Optional[set[int]]]
+		) -> dict[int, Optional[set[int]]]:
+			out: dict[int, Optional[set[int]]] = {}
+			for bid in sorted(set(left.keys()) | set(right.keys())):
+				lv = left.get(bid)
+				rv = right.get(bid)
+				if lv is None or rv is None:
+					out[bid] = None
+					continue
+				if lv == rv:
+					out[bid] = set(lv)
+				else:
+					out[bid] = None
+			return out
+
+		def _infer_borrowed_return_origins(block: H.HBlock) -> dict[int, Optional[set[int]]]:
+			def _expr_origins(
+				expr: H.HExpr,
+				expected_ty: TypeId,
+				env: dict[int, Optional[set[int]]],
+			) -> Optional[set[int]]:
+				if isinstance(expr, H.HVar) and getattr(expr, "binding_id", None) is not None:
+					v = env.get(int(expr.binding_id))
+					if v is None:
+						return None
+					return set(v)
+				if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
+					return _expr_origins(expr.subject, expected_ty, env)
+				if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
+					return _expr_origins(expr.subject, expected_ty, env)
+				return _return_borrowed_aggregate_origins(expr, expected_ty)
+
+			def _walk(cur: H.HBlock, in_env: dict[int, Optional[set[int]]]) -> dict[int, Optional[set[int]]]:
+				env: dict[int, Optional[set[int]]] = {k: (None if v is None else set(v)) for k, v in in_env.items()}
+				for s in cur.statements:
+					if isinstance(s, H.HLet) and s.binding_id is not None:
+						bid = int(s.binding_id)
+						ty = binding_types.get(bid)
+						if ty is not None and _return_type_carries_borrowed_aggregate(ty)[0]:
+							env[bid] = _expr_origins(s.value, ty, env)
+					elif isinstance(s, H.HAssign) and isinstance(s.target, H.HVar) and getattr(s.target, "binding_id", None) is not None:
+						bid = int(s.target.binding_id)
+						ty = binding_types.get(bid)
+						if ty is not None and _return_type_carries_borrowed_aggregate(ty)[0]:
+							env[bid] = _expr_origins(s.value, ty, env)
+					elif isinstance(s, H.HBlock):
+						env = _walk(s, env)
+					elif isinstance(s, H.HIf):
+						then_env = _walk(s.then_block, env)
+						else_env = _walk(s.else_block, env) if s.else_block is not None else env
+						env = _merge_borrowed_origin_maps(then_env, else_env)
+					elif isinstance(s, H.HTry):
+						body_env = _walk(s.body, env)
+						cur_env = body_env
+						for arm in s.catches:
+							arm_env = _walk(arm.block, env)
+							cur_env = _merge_borrowed_origin_maps(cur_env, arm_env)
+						env = cur_env
+					elif isinstance(s, H.HLoop):
+						loop_env = _walk(s.body, env)
+						env = _merge_borrowed_origin_maps(env, loop_env)
+					elif hasattr(H, "HUnsafeBlock") and isinstance(s, getattr(H, "HUnsafeBlock")):
+						env = _walk(s.block, env)
+				return env
+
+			return _walk(block, {})
+
+		borrowed_return_origins_by_binding = _infer_borrowed_return_origins(body)
 
 		def _decl_and_sig_for_call(expr: H.HExpr) -> tuple[CallableDecl | None, FnSignature | None]:
 			resolution = call_resolutions.get(getattr(expr, "node_id", None))

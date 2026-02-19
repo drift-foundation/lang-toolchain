@@ -1,0 +1,24 @@
+module main
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+implement Statement {
+	fn bump(self: &mut Statement) nothrow -> Int {
+		self.session.id = self.session.id + 1;
+		return self.session.id;
+	}
+}
+
+fn read(r: &Int) nothrow -> Int { return r; }
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	var st = Statement(session = &mut sess);
+	val r = &st.session.id;
+	val _ = st.bump();
+	match Optional::Some(1) {
+		Optional::Some(_) => { return read(r); },
+		Optional::None() => { return 0; }
+	}
+}

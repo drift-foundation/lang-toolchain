@@ -72,6 +72,43 @@ fn main() nothrow -> Int {
 	assert "define i32 @main()" in ir
 
 
+def test_struct_ref_field_result_return_via_local_wrapper_reaches_codegen_boundary(tmp_path: Path) -> None:
+	ir, checked = _compile(
+		tmp_path,
+		"""
+module m
+
+import std.core as core;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
+	val st = Statement(session = s);
+	val out: core.Result<Statement, Int> = core.Result::Ok(st);
+	return move out;
+}
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	match query(&mut sess) {
+		core.Result::Ok(st) => {
+			if st.session.id != 1 {
+				return 1;
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 1; }
+	}
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == []
+	assert 'define i64 @"m::main"(' in ir
+	assert "define i32 @main()" in ir
+
+
 def test_struct_ref_field_array_store_rejected_at_checker_boundary(tmp_path: Path) -> None:
 	_ir, checked = _compile(
 		tmp_path,
@@ -92,6 +129,33 @@ fn main() nothrow -> Int {
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any("owning Array cannot contain borrowed aggregate element type in MVP" in d.message for d in errors), errors
+	assert any(d.phase == "typecheck" for d in errors), errors
+	_assert_no_internal_contract_errors(checked)
+
+
+def test_struct_ref_field_local_return_rejected_at_checker_boundary(tmp_path: Path) -> None:
+	_ir, checked = _compile(
+		tmp_path,
+		"""
+module m
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn bad() nothrow -> Statement {
+	var sess = Session(id = 1);
+	val st = Statement(session = &mut sess);
+	return st;
+}
+
+fn main() nothrow -> Int {
+	val _ = bad();
+	return 0;
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert any("borrowed aggregate return must derive from a reference parameter" in d.message for d in errors), errors
 	assert any(d.phase == "typecheck" for d in errors), errors
 	_assert_no_internal_contract_errors(checked)
 
@@ -122,6 +186,58 @@ fn main() nothrow -> Int {
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any("lambda capturing borrowed aggregate cannot escape through retaining" in d.message for d in errors), errors
+	assert any(d.phase == "typecheck" for d in errors), errors
+	_assert_no_internal_contract_errors(checked)
+
+
+def test_struct_ref_field_hashmap_store_rejected_at_checker_boundary(tmp_path: Path) -> None:
+	_ir, checked = _compile(
+		tmp_path,
+		"""
+module m
+
+import std.containers as containers;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	val st = Statement(session = &mut sess);
+	var m = containers.hash_map<type Int, Statement>();
+	val _ = m.insert(1, move st);
+	return 0;
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert any("borrowed aggregate argument cannot flow through retaining parameter 'value' of 'HashMapCore<K, V, B>::insert'" in d.message for d in errors), errors
+	assert any(d.phase == "typecheck" for d in errors), errors
+	_assert_no_internal_contract_errors(checked)
+
+
+def test_struct_ref_field_treemap_store_rejected_at_checker_boundary(tmp_path: Path) -> None:
+	_ir, checked = _compile(
+		tmp_path,
+		"""
+module m
+
+import std.containers as containers;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	val st = Statement(session = &mut sess);
+	var m = containers.tree_map<type Int, Statement>();
+	val _ = m.insert(1, move st);
+	return 0;
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert any("borrowed aggregate argument cannot flow through retaining parameter 'value' of 'TreeMap<K, V>::insert'" in d.message for d in errors), errors
 	assert any(d.phase == "typecheck" for d in errors), errors
 	_assert_no_internal_contract_errors(checked)
 

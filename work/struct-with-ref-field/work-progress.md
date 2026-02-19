@@ -103,12 +103,14 @@
 
 ## Current status
 - Planning pinned.
-- Implemented slice 1 + part of slice 2:
+- Implemented parser/checker/boundary slices for restricted MVP:
   - Removed parser hard reject for struct ref fields.
   - Existing e2e `struct_ref_field_rejected` flipped to acceptance (`exit_code: 0`).
   - Added driver regression suite:
     - `test_borrowed_aggregate_return_single_origin_allowed`
+    - `test_borrowed_aggregate_return_single_origin_via_local_wrapper_allowed`
     - `test_borrowed_aggregate_return_from_local_rejected`
+    - `test_borrowed_aggregate_return_from_local_binding_rejected`
     - `test_borrowed_aggregate_return_multi_origin_rejected`
     - `test_borrowed_aggregate_pass_through_generic_default_retaining_rejected`
     - `test_borrowed_aggregate_store_in_array_push_rejected`
@@ -125,6 +127,12 @@
     - registry/global store via retaining APIs (e.g. `GlobalRegistry::set`) is rejected through the same boundary rule
   - Added checker container boundary enforcement for arrays:
     - owning `Array<borrowed_aggregate>` declarations are rejected
+  - Strengthened borrowed-aggregate return provenance through local-variable flow:
+    - tracks borrowed origins for bindings carrying borrowed aggregates/wrappers,
+    - supports `return local_var` and `return move local_var` for valid single-origin cases,
+    - rejects local-origin borrowed aggregate returns via local bindings.
+  - Added positive e2e for local-wrapper return path:
+    - `struct_ref_field_result_return_local_wrapper_ok`
 
 ## Rollout note
 - Temporary `std.*` exemption was removed.
@@ -134,14 +142,26 @@
 - This keeps strict rejection for pinned invalid paths while avoiding broad stdlib false positives during incremental rollout.
 
 ## Remaining implementation work
-- Enforce non-escape boundaries beyond returns:
-  - reject container/global/registry stores for borrowed aggregates beyond current Array guard
-  - reject escaping closure/callback captures
-- Strengthen provenance through local variable flow (not only direct constructor returns).
-- Stage2/MIR/LLVM boundary alignment for borrowed-aggregate shapes:
-  - add positive/negative boundary regressions per guardrail policy
-  - verify diagnostics are checker-facing and non-internal for unsupported boundaries
-- Add dedicated e2e coverage for boundary rejections.
+- Expand container-specific rejection coverage beyond current pinned paths (Array + callback escape + registry retaining-store):
+  - Added and validated explicit `HashMap`/`TreeMap` insertion boundary rejections for borrowed aggregates:
+    - e2e:
+      - `struct_ref_field_hashmap_store_rejected`
+      - `struct_ref_field_treemap_store_rejected`
+    - driver:
+      - `test_struct_ref_field_hashmap_store_rejected_at_checker_boundary`
+      - `test_struct_ref_field_treemap_store_rejected_at_checker_boundary`
+- Continue borrow-checker-specific alias stress coverage for complex method/control-flow combinations over structs containing `&mut` fields:
+  - Added/validated driver suite `test_struct_ref_field_borrow_alias_conflicts.py`:
+    - direct conflict
+    - `if` control-flow conflict
+    - `match` control-flow conflict
+    - `loop` control-flow conflict
+  - Added/validated matching e2e negatives:
+    - `struct_ref_field_mut_self_alias_if_rejected`
+    - `struct_ref_field_mut_self_alias_match_rejected`
+    - `struct_ref_field_mut_self_alias_loop_rejected`
+  - Validation: normal + `DRIFT_ASAN=1` + `DRIFT_MEMCHECK=1` all pass.
+- Keep expanding e2e/driver stress around wrappers and nested control flow as additional user-land patterns land.
   - Added:
     - `struct_ref_field_result_return_ok` (positive)
     - `struct_ref_field_array_store_rejected` (negative)

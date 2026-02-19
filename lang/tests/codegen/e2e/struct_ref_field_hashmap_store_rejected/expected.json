@@ -1,0 +1,10 @@
+{
+  "description": "e2e: borrowed aggregate cannot be stored as HashMap value",
+  "diagnostics": [
+    {
+      "message_contains": "borrowed aggregate argument cannot flow through retaining parameter 'value' of 'HashMapCore<K, V, B>::insert'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

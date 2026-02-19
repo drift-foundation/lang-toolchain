@@ -1,0 +1,14 @@
+module main
+
+import std.containers as containers;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	val st = Statement(session = &mut sess);
+	var m = containers.hash_map<type Int, Statement>();
+	val _ = m.insert(1, move st);
+	return 0;
+}
