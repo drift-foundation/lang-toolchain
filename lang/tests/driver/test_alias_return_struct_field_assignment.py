@@ -83,3 +83,19 @@ def test_alias_to_missing_nominal_reports_user_diagnostic_not_internal(tmp_path:
 	)
 	assert any(d.severity == "error" for d in diags), diags
 	assert not any(d.message.startswith("internal:") for d in diags), diags
+	func_hirs, signatures, _fn_ids = flatten_modules(modules)
+	_ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=excs,
+		entry="main",
+		type_table=table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+	)
+	assert not any(
+		d.severity == "error"
+		and d.phase in ("mir_validate", "codegen")
+		and d.message.startswith("internal:")
+		for d in checked.diagnostics
+	), checked.diagnostics

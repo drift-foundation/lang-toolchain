@@ -1,3 +1,27 @@
+## 2026-02-19 – Alias-forward boundary canonicalization + match-binder deref checker fix
+- Fixed alias/forward-nominal leakage across checker→stage2→MIR boundary:
+  - added centralized canonicalization in `lang/driftc/driftc.py`:
+    - `_canonicalize_forward_nominal_type_id(...)`
+    - `_canonicalize_signature_type_ids(...)`
+    - `_canonicalize_mir_type_ids(...)`
+  - canonicalization is applied before MIR validation so unresolved alias-forward types do not reach layout-sensitive MIR/LLVM paths.
+- Fixed checker LANGUAGE_BUG for `match` binders on `&Variant` scrutinees:
+  - in `lang/driftc/checker/__init__.py`, `_walk_hir(...)` now seeds arm binder locals as `&T` / `&mut T` when scrutinee is `&Variant` / `&mut Variant`.
+  - in checker typing context, unary deref inference now resolves `&T -> T` correctly for shallow checker validations.
+- Added regression-first coverage for both fixes:
+  - alias boundary:
+    - `lang/tests/driver/test_alias_return_struct_field_assignment.py`
+      - positive: alias-return assigned into struct field reaches codegen.
+      - negative: unresolved alias target stays user-facing and does not leak boundary `internal:` failures.
+    - existing companion remains green:
+      - `lang/tests/driver/test_module_alias_exported_type_alias_ctor.py`.
+  - match/deref binder typing:
+    - `lang/tests/driver/test_match_ref_variant_binder_deref.py`
+      - positive: `match a: &Arg` binder deref (`*v`) infers payload primitive type end-to-end.
+      - negative: value-scrutinee binder deref rejects with user diagnostic (`deref requires a reference value`) and no `internal:` diagnostics.
+- Validation:
+  - targeted driver subset passes for new/related boundary tests and match binder index/lowering checks.
+
 ## 2026-02-19 – Struct ref-field restricted MVP landed (single-origin borrowed aggregates)
 - Enabled struct ref fields in parser/type declarations (removed hard parser reject for `&T` / `&mut T` struct fields).
 - Landed checker-side borrowed-aggregate boundary enforcement for restricted MVP:

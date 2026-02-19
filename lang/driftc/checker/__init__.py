@@ -1566,7 +1566,25 @@ class Checker:
 				return None
 
 			if isinstance(expr, H.HUnary):
-				return self._infer_expr_type(expr.expr)
+				sub_ty = self._infer_expr_type(expr.expr)
+				if expr.op is H.UnaryOp.DEREF:
+					if sub_ty is None:
+						return None
+					sub_def = self.table.get(sub_ty)
+					if sub_def.kind is TypeKind.REF and sub_def.param_types:
+						return sub_def.param_types[0]
+					return None
+				if expr.op in (H.UnaryOp.NOT,):
+					return checker._bool_type
+				if expr.op is H.UnaryOp.NEG:
+					if sub_ty in (checker._int_type, checker._float_type):
+						return sub_ty
+					return None
+				if expr.op is H.UnaryOp.BIT_NOT:
+					if sub_ty in (checker._uint_type, checker._uint64_type):
+						return sub_ty
+					return None
+				return sub_ty
 
 			if isinstance(expr, H.HArrayLiteral):
 				if not expr.elements:
@@ -2450,8 +2468,17 @@ class Checker:
 					# expressions meaningful for downstream validators.
 					scrut_ty = ctx.infer(expr.scrutinee)
 					inst = None
-					if scrut_ty is not None and ctx.table.get(scrut_ty).kind is TypeKind.VARIANT:
-						inst = ctx.table.get_variant_instance(scrut_ty)
+					scrut_ref_mut: bool | None = None
+					if scrut_ty is not None:
+						scrut_def = ctx.table.get(scrut_ty)
+						if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+							inner = scrut_def.param_types[0]
+							inner_def = ctx.table.get(inner)
+							if inner_def.kind is TypeKind.VARIANT:
+								inst = ctx.table.get_variant_instance(inner)
+								scrut_ref_mut = bool(scrut_def.ref_mut)
+						elif scrut_def.kind is TypeKind.VARIANT:
+							inst = ctx.table.get_variant_instance(scrut_ty)
 					if inst is not None and arm.ctor is not None:
 						arm_def = inst.arms_by_name.get(arm.ctor)
 					else:
@@ -2465,6 +2492,8 @@ class Checker:
 							fidx = field_indices[idx]
 							if 0 <= fidx < len(arm_def.field_types):
 								bty = arm_def.field_types[fidx]
+								if scrut_ref_mut is not None:
+									bty = ctx.table.ensure_ref_mut(bty) if scrut_ref_mut else ctx.table.ensure_ref(bty)
 						ctx.locals[bname] = bty
 
 					prev_report_unknown = ctx.report_unknown_names
