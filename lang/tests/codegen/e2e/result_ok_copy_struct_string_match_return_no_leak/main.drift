@@ -1,0 +1,28 @@
+module main
+
+import std.core as core;
+
+struct Payload {
+	msg: String
+}
+
+implement core.Copy for Payload {
+}
+
+fn make() nothrow -> core.Result<Payload, Int> {
+	return core.Result::Ok(Payload(msg = "hello"));
+}
+
+fn main() nothrow -> Int {
+	match make() {
+		core.Result::Ok(v) => {
+			if v.msg == "hello" {
+				return 0;
+			}
+			return 1;
+		},
+		core.Result::Err(_) => {
+			return 2;
+		}
+	}
+}

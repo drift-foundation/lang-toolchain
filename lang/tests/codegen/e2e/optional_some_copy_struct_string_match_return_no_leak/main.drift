@@ -1,0 +1,28 @@
+module main
+
+import std.core as core;
+
+struct Payload {
+	msg: String
+}
+
+implement core.Copy for Payload {
+}
+
+fn make() nothrow -> Optional<Payload> {
+	return Optional::Some(Payload(msg = "hello"));
+}
+
+fn main() nothrow -> Int {
+	match make() {
+		Optional::Some(v) => {
+			if v.msg == "hello" {
+				return 0;
+			}
+			return 1;
+		},
+		Optional::None() => {
+			return 2;
+		}
+	}
+}

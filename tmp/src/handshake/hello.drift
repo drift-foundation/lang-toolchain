@@ -1,0 +1,153 @@
+module mariadb.wire.proto.handshake.hello
+
+import std.core as core;
+import std.text as text;
+import mariadb.wire.proto.types as types;
+import mariadb.wire.proto.errors as errors;
+import mariadb.wire.proto.protocol.constants as protocol;
+
+export {
+	decode_handshake_hello
+};
+
+fn _error(tag: String, offset: Int) nothrow -> errors.PacketDecodeError {
+	return errors.PacketDecodeError(tag = tag, offset = offset);
+}
+
+fn _find_nul(input: &Array<Byte>, start: Int) nothrow -> Int {
+	var i = start;
+	while i < input.len {
+		if input[i] == cast<Byte>(0) {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _decode_utf8_range(input: &Array<Byte>, start: Int, end: Int, tag: String) nothrow -> core.Result<String, errors.PacketDecodeError> {
+	if start < 0 or end < start or end > input.len {
+		return core.Result::Err(_error("handshake-invalid-slice-" + tag, start));
+	}
+	val r = text.utf8_from_bytes_range(input, start, end);
+	match r {
+		core.Result::Ok(s) => { return core.Result::Ok(move s); },
+		core.Result::Err(e) => { return core.Result::Err(_error("handshake-" + tag + "-utf8-" + e.tag, start + e.offset)); }
+	}
+}
+
+fn _read_u16le_unchecked(input: &Array<Byte>, offset: Int) nothrow -> Uint {
+	return cast<Uint>(input[offset]) + cast<Uint>(input[offset + 1]) * cast<Uint>(256);
+}
+
+fn _read_u32le_unchecked(input: &Array<Byte>, offset: Int) nothrow -> Uint {
+	return cast<Uint>(input[offset]) + cast<Uint>(input[offset + 1]) * cast<Uint>(256) + cast<Uint>(input[offset + 2]) * cast<Uint>(65536) + cast<Uint>(input[offset + 3]) * cast<Uint>(16777216);
+}
+
+fn _make_hello(protocol_version: Byte, server_version: String, connection_id: Uint, capabilities: Uint, character_set: Byte, status_flags: Uint, auth_plugin_data: Array<Byte>, auth_plugin_name: String) nothrow -> types.HandshakeHello {
+	return types.HandshakeHello(protocol_version = protocol_version, server_version = move server_version, connection_id = connection_id, capabilities = capabilities, character_set = character_set, status_flags = status_flags, auth_plugin_data = move auth_plugin_data, auth_plugin_name = move auth_plugin_name);
+}
+
+pub fn decode_handshake_hello(payload: &Array<Byte>) nothrow -> core.Result<types.HandshakeHello, errors.PacketDecodeError> {
+	if payload.len < 1 {
+		return core.Result::Err(_error("handshake-truncated", 0));
+	}
+	val protocol_version = payload[0];
+	if protocol_version != cast<Byte>(protocol.HANDSHAKE_PROTOCOL_VERSION_V10) {
+		return core.Result::Err(_error("handshake-invalid-protocol-version", 0));
+	}
+	var idx = 1;
+	val server_end = _find_nul(payload, idx);
+	if server_end < 0 {
+		return core.Result::Err(_error("handshake-missing-server-version-nul", idx));
+	}
+	var server_version = "";
+	match _decode_utf8_range(payload, idx, server_end, "server-version") {
+		core.Result::Ok(s) => { server_version = move s; },
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	idx = server_end + 1;
+	if idx + protocol.HANDSHAKE_CONNECTION_ID_LEN > payload.len {
+		return core.Result::Err(_error("handshake-truncated", idx));
+	}
+	val connection_id = _read_u32le_unchecked(payload, idx);
+	idx = idx + protocol.HANDSHAKE_CONNECTION_ID_LEN;
+	if idx + protocol.HANDSHAKE_AUTH_PART1_LEN > payload.len {
+		return core.Result::Err(_error("handshake-truncated", idx));
+	}
+	var auth_plugin_data: Array<Byte> = [];
+	var a1 = 0;
+	while a1 < protocol.HANDSHAKE_AUTH_PART1_LEN {
+		auth_plugin_data.push(payload[idx + a1]);
+		a1 = a1 + 1;
+	}
+	idx = idx + protocol.HANDSHAKE_AUTH_PART1_LEN;
+	if idx >= payload.len {
+		return core.Result::Err(_error("handshake-truncated", idx));
+	}
+	if payload[idx] != cast<Byte>(0) {
+		return core.Result::Err(_error("handshake-expected-filler-zero", idx));
+	}
+	idx = idx + protocol.HANDSHAKE_FILLER_LEN;
+	if idx + protocol.HANDSHAKE_CAPABILITY_LO_LEN > payload.len {
+		return core.Result::Err(_error("handshake-truncated", idx));
+	}
+	val cap_low = _read_u16le_unchecked(payload, idx);
+	idx = idx + protocol.HANDSHAKE_CAPABILITY_LO_LEN;
+
+	var capabilities = cap_low;
+	var character_set = cast<Byte>(0);
+	var status_flags = cast<Uint>(0);
+	var auth_plugin_name = "";
+
+	if idx >= payload.len {
+		return core.Result::Ok(_make_hello(protocol_version, move server_version, connection_id, capabilities, character_set, status_flags, move auth_plugin_data, move auth_plugin_name));
+	}
+
+	if idx + protocol.HANDSHAKE_POST_CAP_LOW_MIN_LEN > payload.len {
+		return core.Result::Err(_error("handshake-truncated", idx));
+	}
+	character_set = payload[idx];
+	idx = idx + protocol.HANDSHAKE_CHARACTER_SET_LEN;
+	status_flags = _read_u16le_unchecked(payload, idx);
+	idx = idx + protocol.HANDSHAKE_STATUS_FLAGS_LEN;
+	val cap_high = _read_u16le_unchecked(payload, idx);
+	idx = idx + protocol.HANDSHAKE_CAPABILITY_HI_LEN;
+	capabilities = cap_low + cap_high * cast<Uint>(65536);
+	val auth_data_len = cast<Int>(payload[idx]);
+	idx = idx + protocol.HANDSHAKE_AUTH_DATA_LEN_LEN;
+	idx = idx + protocol.HANDSHAKE_RESERVED_LEN;
+
+	var auth_part2_len = 0;
+	if auth_data_len > 0 {
+		auth_part2_len = auth_data_len - protocol.HANDSHAKE_AUTH_PART1_LEN;
+		if auth_part2_len < protocol.HANDSHAKE_AUTH_PART2_MIN_LEN {
+			auth_part2_len = protocol.HANDSHAKE_AUTH_PART2_MIN_LEN;
+		}
+	}
+	val remaining = payload.len - idx;
+	if auth_part2_len > remaining {
+		auth_part2_len = remaining;
+	}
+	if auth_part2_len > 0 {
+		var j = 0;
+		while j < auth_part2_len {
+			auth_plugin_data.push(payload[idx + j]);
+			j = j + 1;
+		}
+		idx = idx + auth_part2_len;
+	}
+
+	if idx < payload.len {
+		var plugin_end = _find_nul(payload, idx);
+		if plugin_end < 0 {
+			plugin_end = payload.len;
+		}
+		match _decode_utf8_range(payload, idx, plugin_end, "auth-plugin-name") {
+			core.Result::Ok(s) => { auth_plugin_name = move s; },
+			core.Result::Err(e) => { return core.Result::Err(e); }
+		}
+	}
+
+	return core.Result::Ok(_make_hello(protocol_version, move server_version, connection_id, capabilities, character_set, status_flags, move auth_plugin_data, move auth_plugin_name));
+}

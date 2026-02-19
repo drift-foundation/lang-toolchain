@@ -1,0 +1,28 @@
+module main
+
+import std.core as core;
+
+struct Payload {
+	msg: String
+}
+
+implement core.Copy for Payload {
+}
+
+fn wrap<T>(v: T) nothrow -> core.Result<T, Int> {
+	return core.Result::Ok(move v);
+}
+
+fn main() nothrow -> Int {
+	match wrap<type Payload>(Payload(msg = "generic")) {
+		core.Result::Ok(v) => {
+			if v.msg == "generic" {
+				return 0;
+			}
+			return 1;
+		},
+		core.Result::Err(_) => {
+			return 2;
+		}
+	}
+}

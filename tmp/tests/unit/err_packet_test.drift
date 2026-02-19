@@ -1,0 +1,92 @@
+module mariadb.wire.proto.tests.unit.err_packet_test
+
+import mariadb.wire.proto.decode.err_packet as err_packet;
+
+fn expect_decode_with_sqlstate() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(err_packet.ERR_PACKET_HEADER);
+	payload.push(cast<Byte>(21)); // 1045 little-endian low byte
+	payload.push(cast<Byte>(4)); // high byte
+	payload.push(err_packet.ERR_SQLSTATE_MARKER);
+	payload.push(cast<Byte>(52)); // '4'
+	payload.push(cast<Byte>(50)); // '2'
+	payload.push(cast<Byte>(48)); // '0'
+	payload.push(cast<Byte>(48)); // '0'
+	payload.push(cast<Byte>(48)); // '0'
+	payload.push(cast<Byte>(98)); // 'b'
+	payload.push(cast<Byte>(97)); // 'a'
+	payload.push(cast<Byte>(100)); // 'd'
+	match err_packet.decode_err_packet(&payload) {
+		Ok(v) => {
+			if v.error_code != cast<Uint>(1045) { return 1; }
+			if v.sql_state != "42000" { return 2; }
+			if v.message != "bad" { return 3; }
+			return 0;
+		},
+		Err(_) => { return 4; }
+	}
+}
+
+fn expect_decode_without_sqlstate() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(err_packet.ERR_PACKET_HEADER);
+	payload.push(cast<Byte>(1));
+	payload.push(cast<Byte>(0));
+	payload.push(cast<Byte>(111)); // 'o'
+	payload.push(cast<Byte>(111)); // 'o'
+	payload.push(cast<Byte>(112)); // 'p'
+	payload.push(cast<Byte>(115)); // 's'
+	match err_packet.decode_err_packet(&payload) {
+		Ok(v) => {
+			if v.error_code != cast<Uint>(1) { return 10; }
+			if v.sql_state != "" { return 11; }
+			if v.message != "oops" { return 12; }
+			return 0;
+		},
+		Err(_) => { return 13; }
+	}
+}
+
+fn expect_invalid_header() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(0));
+	payload.push(cast<Byte>(1));
+	payload.push(cast<Byte>(0));
+	match err_packet.decode_err_packet(&payload) {
+		Ok(_) => { return 20; },
+		Err(e) => {
+			if e.tag != "invalid-err-header" { return 21; }
+			if e.offset != 0 { return 22; }
+			return 0;
+		}
+	}
+}
+
+fn expect_truncated_sql_state() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(err_packet.ERR_PACKET_HEADER);
+	payload.push(cast<Byte>(1));
+	payload.push(cast<Byte>(0));
+	payload.push(err_packet.ERR_SQLSTATE_MARKER);
+	payload.push(cast<Byte>(52)); // '4'
+	match err_packet.decode_err_packet(&payload) {
+		Ok(_) => { return 30; },
+		Err(e) => {
+			if e.tag != "truncated-sql-state" { return 31; }
+			if e.offset != 3 { return 32; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_decode_with_sqlstate();
+	if a != 0 { return a; }
+	val b = expect_decode_without_sqlstate();
+	if b != 0 { return b; }
+	val c = expect_invalid_header();
+	if c != 0 { return c; }
+	val d = expect_truncated_sql_state();
+	if d != 0 { return d; }
+	return 0;
+}

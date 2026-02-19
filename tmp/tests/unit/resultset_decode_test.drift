@@ -1,0 +1,107 @@
+module mariadb.wire.proto.tests.unit.resultset_decode_test
+
+import std.core as core;
+import mariadb.wire.proto.decode.resultset as resultset;
+
+fn _push_ascii(target: &mut Array<Byte>, s: String) nothrow -> Void {
+	var i = 0;
+	while i < s.byte_length() {
+		target.push(core.string_byte_at(&s, i));
+		i = i + 1;
+	}
+}
+
+fn _mk_lenenc_text_cell(s: String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	out.push(cast<Byte>(s.byte_length()));
+	_push_ascii(&mut out, move s);
+	return move out;
+}
+
+fn _mk_row_two(first: String, second: String) nothrow -> Array<Byte> {
+	var row: Array<Byte> = [];
+	var a = _mk_lenenc_text_cell(move first);
+	var i = 0;
+	while i < a.len {
+		row.push(a[i]);
+		i = i + 1;
+	}
+	var b = _mk_lenenc_text_cell(move second);
+	var j = 0;
+	while j < b.len {
+		row.push(b[j]);
+		j = j + 1;
+	}
+	return move row;
+}
+
+fn expect_decode_basic_resultset() nothrow -> Int {
+	var packets: Array<Array<Byte>> = [];
+	var p0: Array<Byte> = [];
+	p0.push(cast<Byte>(2));
+	packets.push(move p0); // column_count
+	var p1: Array<Byte> = [];
+	p1.push(cast<Byte>(1));
+	p1.push(cast<Byte>(97));
+	packets.push(move p1); // coldef a (opaque)
+	var p2: Array<Byte> = [];
+	p2.push(cast<Byte>(1));
+	p2.push(cast<Byte>(98));
+	packets.push(move p2); // coldef b (opaque)
+	var row0 = _mk_row_two("x", "y");
+	packets.push(move row0);
+	var row2: Array<Byte> = [];
+	var first = _mk_lenenc_text_cell("z");
+	row2.push(first[0]);
+	row2.push(first[1]);
+	row2.push(cast<Byte>(251));
+	packets.push(move row2);
+	var eof: Array<Byte> = [];
+	eof.push(cast<Byte>(254));
+	eof.push(cast<Byte>(0));
+	eof.push(cast<Byte>(0));
+	eof.push(cast<Byte>(2));
+	eof.push(cast<Byte>(0));
+	packets.push(move eof);
+	match resultset.decode_text_resultset_packets(&packets) {
+		Ok(v) => {
+			if v.column_count != cast<Uint>(2) { return 1; }
+			val rows = &v.rows;
+			if rows.len != 2 { return 2; }
+			return 0;
+		},
+		Err(_) => { return 3; }
+	}
+}
+
+fn expect_missing_terminator_error() nothrow -> Int {
+	var packets: Array<Array<Byte>> = [];
+	var p0: Array<Byte> = [];
+	p0.push(cast<Byte>(1));
+	packets.push(move p0); // column_count
+	var p1: Array<Byte> = [];
+	p1.push(cast<Byte>(1));
+	p1.push(cast<Byte>(97));
+	packets.push(move p1); // coldef
+	var p2: Array<Byte> = [];
+	p2.push(cast<Byte>(1));
+	p2.push(cast<Byte>(120));
+	packets.push(move p2); // row: "x"
+	match resultset.decode_text_resultset_packets(&packets) {
+		Ok(_) => { return 20; },
+		Err(e) => {
+			if e.tag != "resultset-missing-terminator" {
+				return 21;
+			}
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_decode_basic_resultset();
+	if a != 0 { return a; }
+	val b = expect_missing_terminator_error();
+	if b != 0 { return b; }
+	return 0;
+}

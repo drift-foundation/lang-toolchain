@@ -1,0 +1,101 @@
+module mariadb.wire.proto.tests.unit.handshake_decode_test
+
+import std.core as core;
+import mariadb.wire.proto.handshake.hello as hello;
+
+fn build_handshake_payload() nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	b.push(cast<Byte>(10));
+	b.push(cast<Byte>(49));
+	b.push(cast<Byte>(49));
+	b.push(cast<Byte>(46));
+	b.push(cast<Byte>(52));
+	b.push(cast<Byte>(46));
+	b.push(cast<Byte>(49));
+	b.push(cast<Byte>(48));
+	b.push(cast<Byte>(45));
+	b.push(cast<Byte>(77));
+	b.push(cast<Byte>(97));
+	b.push(cast<Byte>(114));
+	b.push(cast<Byte>(105));
+	b.push(cast<Byte>(97));
+	b.push(cast<Byte>(68));
+	b.push(cast<Byte>(66));
+	b.push(cast<Byte>(0));
+	b.push(cast<Byte>(120));
+	b.push(cast<Byte>(86));
+	b.push(cast<Byte>(52));
+	b.push(cast<Byte>(18));
+	var i = 1;
+	while i <= 8 {
+		b.push(cast<Byte>(i));
+		i = i + 1;
+	}
+	b.push(cast<Byte>(0));
+	b.push(cast<Byte>(255));
+	b.push(cast<Byte>(255));
+	b.push(cast<Byte>(45));
+	b.push(cast<Byte>(2));
+	b.push(cast<Byte>(0));
+	b.push(cast<Byte>(1));
+	b.push(cast<Byte>(0));
+	b.push(cast<Byte>(21));
+	var z = 0;
+	while z < 10 {
+		b.push(cast<Byte>(0));
+		z = z + 1;
+	}
+	var j = 9;
+	while j <= 21 {
+		b.push(cast<Byte>(j));
+		j = j + 1;
+	}
+	val plugin = "mysql_native_password";
+	var k = 0;
+	while k < plugin.byte_length() {
+		b.push(core.string_byte_at(&plugin, k));
+		k = k + 1;
+	}
+	b.push(cast<Byte>(0));
+	return move b;
+}
+
+fn expect_handshake_decode_ok() nothrow -> Int {
+	val payload = build_handshake_payload();
+	val r = hello.decode_handshake_hello(&payload);
+	match r {
+		Ok(v) => {
+			if v.protocol_version != cast<Byte>(10) { return 1; }
+			if v.server_version != "11.4.10-MariaDB" { return 2; }
+			if v.connection_id != cast<Uint>(305419896) { return 3; }
+			if v.capabilities != cast<Uint>(131071) { return 4; }
+			if v.character_set != cast<Byte>(45) { return 5; }
+			if v.status_flags != cast<Uint>(2) { return 6; }
+			if v.auth_plugin_data.len != 21 { return 7; }
+			if v.auth_plugin_name != "mysql_native_password" { return 8; }
+			return 0;
+		},
+		Err(_) => { return 9; }
+	}
+}
+
+fn expect_handshake_truncated() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(10));
+	val r = hello.decode_handshake_hello(&payload);
+	match r {
+		Ok(_) => { return 10; },
+		Err(e) => {
+			if e.tag != "handshake-missing-server-version-nul" { return 11; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_handshake_decode_ok();
+	if a != 0 { return a; }
+	val b = expect_handshake_truncated();
+	if b != 0 { return b; }
+	return 0;
+}

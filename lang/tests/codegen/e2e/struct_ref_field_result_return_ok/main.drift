@@ -1,0 +1,23 @@
+module main
+
+import std.core as core;
+
+struct Session(id: Int);
+struct Statement(session: &mut Session);
+
+fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
+	return core.Result::Ok(Statement(session = s));
+}
+
+fn main() nothrow -> Int {
+	var sess = Session(id = 1);
+	match query(&mut sess) {
+		core.Result::Ok(st) => {
+			if st.session.id != 1 {
+				return 1;
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 1; }
+	}
+}

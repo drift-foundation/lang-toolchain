@@ -1,0 +1,30 @@
+module mariadb.wire.proto.tests.unit.handshake_fixture_replay_test
+
+import std.core as core;
+import std.codec as codec;
+import mariadb.wire.proto.handshake.hello as hello;
+
+fn expect_decode_fixture_handshake() nothrow -> Int {
+	val payload_hex = "0a31312e342e31302d4d6172696144422d75627532343034001100000044743e745175792300feffe00200ff81150000000000001d0000003e4d475f27435a7c24382d76006d7973716c5f6e61746976655f70617373776f726400";
+	var payload: Array<Byte> = [];
+	match codec.hex_decode(&payload_hex) {
+		core.Result::Ok(b) => { payload = move b; },
+		core.Result::Err(_) => { return 10; }
+	}
+	match hello.decode_handshake_hello(&payload) {
+		core.Result::Ok(v) => {
+			if v.protocol_version != cast<Byte>(10) { return 1; }
+			if v.server_version != "11.4.10-MariaDB-ubu2404" { return 2; }
+			if v.connection_id != cast<Uint>(17) { return 3; }
+			if v.character_set != cast<Byte>(224) { return 4; }
+			if v.status_flags != cast<Uint>(2) { return 5; }
+			if v.auth_plugin_name != "mysql_native_password" { return 6; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 7; }
+	}
+}
+
+fn main() nothrow -> Int {
+	return expect_decode_fixture_handshake();
+}

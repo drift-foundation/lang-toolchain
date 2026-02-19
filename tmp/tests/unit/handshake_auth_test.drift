@@ -1,0 +1,55 @@
+module mariadb.wire.proto.tests.unit.handshake_auth_test
+
+import mariadb.wire.proto.handshake.auth as auth;
+import mariadb.wire.proto.types as types;
+
+fn _mk_req(database: String) nothrow -> types.HandshakeResponse41 {
+	var auth_response: Array<Byte> = [];
+	auth_response.push(cast<Byte>(1));
+	auth_response.push(cast<Byte>(2));
+	auth_response.push(cast<Byte>(3));
+	return types.HandshakeResponse41(capabilities = cast<Uint>(305419896), max_packet_size = cast<Uint>(16777216), character_set = cast<Byte>(45), username = "app", auth_response = move auth_response, database = move database, auth_plugin_name = "mysql_native_password");
+}
+
+fn expect_encode_with_database() nothrow -> Int {
+	val req = _mk_req("appdb");
+	val r = auth.encode_handshake_response41(&req);
+	match r {
+		Ok(out) => {
+			if out.len != 68 { return 1; }
+			if out[0] != cast<Byte>(120) { return 2; }
+			if out[1] != cast<Byte>(86) { return 3; }
+			if out[2] != cast<Byte>(52) { return 4; }
+			if out[3] != cast<Byte>(18) { return 5; }
+			if out[4] != cast<Byte>(0) { return 6; }
+			if out[5] != cast<Byte>(0) { return 7; }
+			if out[6] != cast<Byte>(0) { return 8; }
+			if out[7] != cast<Byte>(1) { return 9; }
+			if out[8] != cast<Byte>(45) { return 10; }
+			if out[35] != cast<Byte>(0) { return 11; } // username terminator
+			if out[36] != cast<Byte>(3) { return 12; } // lenenc auth length
+			return 0;
+		},
+		Err(_) => { return 13; }
+	}
+}
+
+fn expect_encode_without_database() nothrow -> Int {
+	val req = _mk_req("");
+	val r = auth.encode_handshake_response41(&req);
+	match r {
+		Ok(out) => {
+			if out.len != 62 { return 20; }
+			return 0;
+		},
+		Err(_) => { return 21; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_encode_with_database();
+	if a != 0 { return a; }
+	val b = expect_encode_without_database();
+	if b != 0 { return b; }
+	return 0;
+}

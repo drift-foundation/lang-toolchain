@@ -1,0 +1,235 @@
+module mariadb.wire.proto.tests.unit.sp_fixture_replay_test
+
+import std.core as core;
+import std.codec as codec;
+import mariadb.wire.proto.decode.resultset as resultset;
+import mariadb.wire.proto.decode.err_packet as err_packet;
+import mariadb.wire.proto.decode.ok_packet as ok_packet;
+
+fn _expect_sp_ping_resultset() nothrow -> Int {
+	var first_payload: Array<Byte> = [];
+	val first_hex = "0101";
+	match codec.hex_decode(&first_hex) {
+		core.Result::Ok(v) => { first_payload = move v; },
+		core.Result::Err(_) => { return 100; }
+	}
+	match resultset.discriminate_first_response(&first_payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::ResultSet => {},
+				default => { return 1; }
+			}
+		},
+		core.Result::Err(_) => { return 2; }
+	}
+	var packets: Array<Array<Byte>> = [];
+	val p0_hex = "0101";
+	val p1_hex = "03646566000000017600000c3f0002000000038100000000";
+	val p2_hex = "fe00000a00";
+	val p3_hex = "023432";
+	val p4_hex = "fe00000a00";
+	var p0: Array<Byte> = [];
+	var p1: Array<Byte> = [];
+	var p2: Array<Byte> = [];
+	var p3: Array<Byte> = [];
+	var p4: Array<Byte> = [];
+	match codec.hex_decode(&p0_hex) { core.Result::Ok(v) => { p0 = move v; }, core.Result::Err(_) => { return 110; } }
+	match codec.hex_decode(&p1_hex) { core.Result::Ok(v) => { p1 = move v; }, core.Result::Err(_) => { return 120; } }
+	match codec.hex_decode(&p2_hex) { core.Result::Ok(v) => { p2 = move v; }, core.Result::Err(_) => { return 130; } }
+	match codec.hex_decode(&p3_hex) { core.Result::Ok(v) => { p3 = move v; }, core.Result::Err(_) => { return 140; } }
+	match codec.hex_decode(&p4_hex) { core.Result::Ok(v) => { p4 = move v; }, core.Result::Err(_) => { return 150; } }
+	packets.push(move p0);
+	packets.push(move p1);
+	packets.push(move p2);
+	packets.push(move p3);
+	packets.push(move p4);
+	match resultset.decode_text_resultset_packets(&packets) {
+		core.Result::Ok(v) => {
+			if v.column_count != cast<Uint>(1) { return 3; }
+			if v.rows.len != 1 { return 4; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 5; }
+	}
+}
+
+fn _expect_sp_rows_resultset() nothrow -> Int {
+	var packets: Array<Array<Byte>> = [];
+	val p0_hex = "0101";
+	val p1_hex = "03646566000000016100000c3f0001000000038100000000";
+	val p2_hex = "fe00000a00";
+	val p3_hex = "0131";
+	val p4_hex = "0132";
+	val p5_hex = "fe00000a00";
+	var p0: Array<Byte> = [];
+	var p1: Array<Byte> = [];
+	var p2: Array<Byte> = [];
+	var p3: Array<Byte> = [];
+	var p4: Array<Byte> = [];
+	var p5: Array<Byte> = [];
+	match codec.hex_decode(&p0_hex) { core.Result::Ok(v) => { p0 = move v; }, core.Result::Err(_) => { return 200; } }
+	match codec.hex_decode(&p1_hex) { core.Result::Ok(v) => { p1 = move v; }, core.Result::Err(_) => { return 210; } }
+	match codec.hex_decode(&p2_hex) { core.Result::Ok(v) => { p2 = move v; }, core.Result::Err(_) => { return 220; } }
+	match codec.hex_decode(&p3_hex) { core.Result::Ok(v) => { p3 = move v; }, core.Result::Err(_) => { return 230; } }
+	match codec.hex_decode(&p4_hex) { core.Result::Ok(v) => { p4 = move v; }, core.Result::Err(_) => { return 240; } }
+	match codec.hex_decode(&p5_hex) { core.Result::Ok(v) => { p5 = move v; }, core.Result::Err(_) => { return 250; } }
+	packets.push(move p0);
+	packets.push(move p1);
+	packets.push(move p2);
+	packets.push(move p3);
+	packets.push(move p4);
+	packets.push(move p5);
+	match resultset.decode_text_resultset_packets(&packets) {
+		core.Result::Ok(v) => {
+			if v.column_count != cast<Uint>(1) { return 6; }
+			if v.rows.len != 2 { return 7; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 8; }
+	}
+}
+
+fn _expect_sp_bad_args_error() nothrow -> Int {
+	val err_hex = "ff2605233432303030496e636f7272656374206e756d626572206f6620617267756d656e747320666f722050524f4345445552452061707064622e73705f6164643b20657870656374656420322c20676f742031";
+	var payload: Array<Byte> = [];
+	match codec.hex_decode(&err_hex) {
+		core.Result::Ok(v) => { payload = move v; },
+		core.Result::Err(_) => { return 300; }
+	}
+	match resultset.discriminate_first_response(&payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::ErrPacket => {},
+				default => { return 9; }
+			}
+		},
+		core.Result::Err(_) => { return 10; }
+	}
+	match err_packet.decode_err_packet(&payload) {
+		core.Result::Ok(v) => {
+			if v.error_code != cast<Uint>(1318) { return 11; }
+			if v.sql_state != "42000" { return 12; }
+			if v.message != "Incorrect number of arguments for PROCEDURE appdb.sp_add; expected 2, got 1" { return 13; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 14; }
+	}
+}
+
+fn _expect_sp_missing_proc_error() nothrow -> Int {
+	val err_hex = "ff190523343230303050524f4345445552452061707064622e73705f6164645f7820646f6573206e6f74206578697374";
+	var payload: Array<Byte> = [];
+	match codec.hex_decode(&err_hex) {
+		core.Result::Ok(v) => { payload = move v; },
+		core.Result::Err(_) => { return 400; }
+	}
+	match err_packet.decode_err_packet(&payload) {
+		core.Result::Ok(v) => {
+			if v.error_code != cast<Uint>(1305) { return 15; }
+			if v.sql_state != "42000" { return 16; }
+			if v.message != "PROCEDURE appdb.sp_add_x does not exist" { return 17; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 18; }
+	}
+}
+
+fn _expect_sp_multi_resultset() nothrow -> Int {
+	var first_packets: Array<Array<Byte>> = [];
+	val p0_hex = "0101";
+	val p1_hex = "03646566000000016100000c3f0001000000038100000000";
+	val p2_hex = "fe00000800";
+	val p3_hex = "0131";
+	val p4_hex = "fe00000800";
+	var p0: Array<Byte> = [];
+	var p1: Array<Byte> = [];
+	var p2: Array<Byte> = [];
+	var p3: Array<Byte> = [];
+	var p4: Array<Byte> = [];
+	match codec.hex_decode(&p0_hex) { core.Result::Ok(v) => { p0 = move v; }, core.Result::Err(_) => { return 500; } }
+	match codec.hex_decode(&p1_hex) { core.Result::Ok(v) => { p1 = move v; }, core.Result::Err(_) => { return 510; } }
+	match codec.hex_decode(&p2_hex) { core.Result::Ok(v) => { p2 = move v; }, core.Result::Err(_) => { return 520; } }
+	match codec.hex_decode(&p3_hex) { core.Result::Ok(v) => { p3 = move v; }, core.Result::Err(_) => { return 530; } }
+	match codec.hex_decode(&p4_hex) { core.Result::Ok(v) => { p4 = move v; }, core.Result::Err(_) => { return 540; } }
+	first_packets.push(move p0);
+	first_packets.push(move p1);
+	first_packets.push(move p2);
+	first_packets.push(move p3);
+	first_packets.push(move p4);
+	match resultset.decode_text_resultset_packets(&first_packets) {
+		core.Result::Ok(v) => {
+			if v.column_count != cast<Uint>(1) { return 541; }
+			if v.rows.len != 1 { return 542; }
+		},
+		core.Result::Err(_) => { return 543; }
+	}
+
+	var second_packets: Array<Array<Byte>> = [];
+	val q0_hex = "0101";
+	val q1_hex = "03646566000000016200000c3f0001000000038100000000";
+	val q2_hex = "fe00000800";
+	val q3_hex = "0132";
+	val q4_hex = "fe00000800";
+	var q0: Array<Byte> = [];
+	var q1: Array<Byte> = [];
+	var q2: Array<Byte> = [];
+	var q3: Array<Byte> = [];
+	var q4: Array<Byte> = [];
+	match codec.hex_decode(&q0_hex) { core.Result::Ok(v) => { q0 = move v; }, core.Result::Err(_) => { return 550; } }
+	match codec.hex_decode(&q1_hex) { core.Result::Ok(v) => { q1 = move v; }, core.Result::Err(_) => { return 560; } }
+	match codec.hex_decode(&q2_hex) { core.Result::Ok(v) => { q2 = move v; }, core.Result::Err(_) => { return 570; } }
+	match codec.hex_decode(&q3_hex) { core.Result::Ok(v) => { q3 = move v; }, core.Result::Err(_) => { return 580; } }
+	match codec.hex_decode(&q4_hex) { core.Result::Ok(v) => { q4 = move v; }, core.Result::Err(_) => { return 590; } }
+	second_packets.push(move q0);
+	second_packets.push(move q1);
+	second_packets.push(move q2);
+	second_packets.push(move q3);
+	second_packets.push(move q4);
+	match resultset.decode_text_resultset_packets(&second_packets) {
+		core.Result::Ok(v) => {
+			if v.column_count != cast<Uint>(1) { return 591; }
+			if v.rows.len != 1 { return 592; }
+		},
+		core.Result::Err(_) => { return 593; }
+	}
+
+	var final_ok_payload: Array<Byte> = [];
+	val final_ok_hex = "00000000000000";
+	match codec.hex_decode(&final_ok_hex) {
+		core.Result::Ok(v) => { final_ok_payload = move v; },
+		core.Result::Err(_) => { return 594; }
+	}
+	match resultset.discriminate_first_response(&final_ok_payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::OkPacket => {},
+				default => { return 595; }
+			}
+		},
+		core.Result::Err(_) => { return 596; }
+	}
+	match ok_packet.decode_ok_packet(&final_ok_payload) {
+		core.Result::Ok(v) => {
+			if v.affected_rows != cast<Uint>(0) { return 597; }
+			if v.last_insert_id != cast<Uint>(0) { return 598; }
+			if v.status_flags != cast<Uint>(0) { return 599; }
+			if v.warnings != cast<Uint>(0) { return 600; }
+		},
+		core.Result::Err(_) => { return 601; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = _expect_sp_ping_resultset();
+	if a != 0 { return a; }
+	val b = _expect_sp_rows_resultset();
+	if b != 0 { return b; }
+	val c = _expect_sp_bad_args_error();
+	if c != 0 { return c; }
+	val d = _expect_sp_missing_proc_error();
+	if d != 0 { return d; }
+	val e = _expect_sp_multi_resultset();
+	if e != 0 { return e; }
+	return 0;
+}

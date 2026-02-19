@@ -1,0 +1,55 @@
+module mariadb.wire.proto.errors
+
+import std.core as core;
+
+export {
+	PacketDecodeError,
+	TAG_HANDSHAKE_AUTH_NUL_IN_PREFIX,
+	TAG_SHORT_OK_PACKET,
+	TAG_INVALID_OK_HEADER,
+	TAG_OK_MISSING_STATUS_OR_WARNINGS,
+	TAG_SHORT_ERR_PACKET,
+	TAG_INVALID_ERR_HEADER,
+	TAG_TRUNCATED_SQL_STATE,
+	TAG_ERR_SQLSTATE_UTF8_PREFIX,
+	TAG_ERR_MESSAGE_UTF8_PREFIX,
+	TAG_SHORT_RESPONSE_PAYLOAD,
+	TAG_UNSUPPORTED_LOCAL_INFILE,
+	TAG_RESULTSET_ROW_TRUNCATED,
+	TAG_RESULTSET_ROW_TRAILING_BYTES,
+	TAG_RESULTSET_MISSING_COLUMN_COUNT,
+	TAG_RESULTSET_INVALID_COLUMN_COUNT_PACKET,
+	TAG_RESULTSET_INVALID_COLUMN_COUNT,
+	TAG_RESULTSET_TRUNCATED_BEFORE_ROWS,
+	TAG_RESULTSET_MISSING_TERMINATOR
+};
+
+pub struct PacketDecodeError {
+	pub tag: String,
+	pub offset: Int
+}
+
+pub const TAG_HANDSHAKE_AUTH_NUL_IN_PREFIX: String = "handshake-auth-nul-in-";
+pub const TAG_SHORT_OK_PACKET: String = "short-ok-packet";
+pub const TAG_INVALID_OK_HEADER: String = "invalid-ok-header";
+pub const TAG_OK_MISSING_STATUS_OR_WARNINGS: String = "ok-missing-status-or-warnings";
+pub const TAG_SHORT_ERR_PACKET: String = "short-err-packet";
+pub const TAG_INVALID_ERR_HEADER: String = "invalid-err-header";
+pub const TAG_TRUNCATED_SQL_STATE: String = "truncated-sql-state";
+pub const TAG_ERR_SQLSTATE_UTF8_PREFIX: String = "err-sqlstate-utf8-";
+pub const TAG_ERR_MESSAGE_UTF8_PREFIX: String = "err-message-utf8-";
+pub const TAG_SHORT_RESPONSE_PAYLOAD: String = "short-response-payload";
+pub const TAG_UNSUPPORTED_LOCAL_INFILE: String = "unsupported-local-infile";
+pub const TAG_RESULTSET_ROW_TRUNCATED: String = "resultset-row-truncated";
+pub const TAG_RESULTSET_ROW_TRAILING_BYTES: String = "resultset-row-trailing-bytes";
+pub const TAG_RESULTSET_MISSING_COLUMN_COUNT: String = "resultset-missing-column-count";
+pub const TAG_RESULTSET_INVALID_COLUMN_COUNT_PACKET: String = "resultset-invalid-column-count-packet";
+pub const TAG_RESULTSET_INVALID_COLUMN_COUNT: String = "resultset-invalid-column-count";
+pub const TAG_RESULTSET_TRUNCATED_BEFORE_ROWS: String = "resultset-truncated-before-rows";
+pub const TAG_RESULTSET_MISSING_TERMINATOR: String = "resultset-missing-terminator";
+
+implement core.Diagnostic for PacketDecodeError {
+	pub fn to_diag(self: &PacketDecodeError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}

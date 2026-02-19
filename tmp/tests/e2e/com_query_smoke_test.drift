@@ -1,0 +1,140 @@
+module mariadb.wire.proto.tests.e2e.com_query_smoke_test
+
+import std.core as core;
+import std.codec as codec;
+import mariadb.wire.proto.handshake.hello as hello;
+import mariadb.wire.proto.command.com_query as com_query;
+import mariadb.wire.proto.decode.ok_packet as ok_packet;
+import mariadb.wire.proto.decode.err_packet as err_packet;
+import mariadb.wire.proto.decode.resultset as resultset;
+
+fn _decode_hex_or_fail(s: &String, code: Int) nothrow -> core.Result<Array<Byte>, Int> {
+	match codec.hex_decode(s) {
+		core.Result::Ok(v) => { return core.Result::Ok(move v); },
+		core.Result::Err(_) => { return core.Result::Err(code); }
+	}
+}
+
+fn _expect_handshake_path() nothrow -> Int {
+	val hello_hex = "0a31312e342e31302d4d6172696144422d75627532343034001100000044743e745175792300feffe00200ff81150000000000001d0000003e4d475f27435a7c24382d76006d7973716c5f6e61746976655f70617373776f726400";
+	var hello_payload: Array<Byte> = [];
+	match _decode_hex_or_fail(&hello_hex, 100) {
+		core.Result::Ok(v) => { hello_payload = move v; },
+		core.Result::Err(code) => { return code; }
+	}
+	match hello.decode_handshake_hello(&hello_payload) {
+		core.Result::Ok(v) => {
+			if v.server_version != "11.4.10-MariaDB-ubu2404" { return 1; }
+			if v.auth_plugin_name != "mysql_native_password" { return 2; }
+		},
+		core.Result::Err(_) => { return 3; }
+	}
+
+	val auth_ok_hex = "00000002400000410146383444334337333833303032373042303733393135374133343333323733464435454346394141334231304236363931444532464242374142443844373338";
+	var auth_ok_payload: Array<Byte> = [];
+	match _decode_hex_or_fail(&auth_ok_hex, 101) {
+		core.Result::Ok(v) => { auth_ok_payload = move v; },
+		core.Result::Err(code) => { return code; }
+	}
+	match ok_packet.decode_ok_packet(&auth_ok_payload) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 4; }
+	}
+}
+
+fn _expect_com_query_success_path() nothrow -> Int {
+	val sql = "SELECT VERSION()";
+	val sql_packet_hex = "0353454c4543542056455253494f4e2829";
+	var encoded: Array<Byte> = [];
+	match com_query.encode_com_query_payload(&sql) {
+		core.Result::Ok(v) => { encoded = move v; },
+		core.Result::Err(_) => { return 10; }
+	}
+	var expected: Array<Byte> = [];
+	match _decode_hex_or_fail(&sql_packet_hex, 102) {
+		core.Result::Ok(v) => { expected = move v; },
+		core.Result::Err(code) => { return code; }
+	}
+	if encoded.len != expected.len { return 11; }
+	var i = 0;
+	while i < encoded.len {
+		if encoded[i] != expected[i] { return 12; }
+		i = i + 1;
+	}
+
+	var first_response: Array<Byte> = [];
+	match _decode_hex_or_fail(&"0101", 103) {
+		core.Result::Ok(v) => { first_response = move v; },
+		core.Result::Err(code) => { return code; }
+	}
+	match resultset.discriminate_first_response(&first_response) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::ResultSet => {},
+				default => { return 13; }
+			}
+		},
+		core.Result::Err(_) => { return 14; }
+	}
+
+	var packets: Array<Array<Byte>> = [];
+	var p0: Array<Byte> = [];
+	var p1: Array<Byte> = [];
+	var p2: Array<Byte> = [];
+	var p3: Array<Byte> = [];
+	var p4: Array<Byte> = [];
+	match _decode_hex_or_fail(&"0101", 104) { core.Result::Ok(v) => { p0 = move v; }, core.Result::Err(code) => { return code; } }
+	match _decode_hex_or_fail(&"036465660000000956455253494f4e282900000ce0005c000000fd0100270000", 105) { core.Result::Ok(v) => { p1 = move v; }, core.Result::Err(code) => { return code; } }
+	match _decode_hex_or_fail(&"fe00000200", 106) { core.Result::Ok(v) => { p2 = move v; }, core.Result::Err(code) => { return code; } }
+	match _decode_hex_or_fail(&"1731312e342e31302d4d6172696144422d75627532343034", 107) { core.Result::Ok(v) => { p3 = move v; }, core.Result::Err(code) => { return code; } }
+	match _decode_hex_or_fail(&"fe00000200", 108) { core.Result::Ok(v) => { p4 = move v; }, core.Result::Err(code) => { return code; } }
+	packets.push(move p0);
+	packets.push(move p1);
+	packets.push(move p2);
+	packets.push(move p3);
+	packets.push(move p4);
+	match resultset.decode_text_resultset_packets(&packets) {
+		core.Result::Ok(v) => {
+			if v.column_count != cast<Uint>(1) { return 15; }
+			if v.rows.len != 1 { return 16; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 17; }
+	}
+}
+
+fn _expect_server_error_decode_path() nothrow -> Int {
+	val err_hex = "ff2605233432303030496e636f7272656374206e756d626572206f6620617267756d656e747320666f722050524f4345445552452061707064622e73705f6164643b20657870656374656420322c20676f742031";
+	var err_payload: Array<Byte> = [];
+	match _decode_hex_or_fail(&err_hex, 109) {
+		core.Result::Ok(v) => { err_payload = move v; },
+		core.Result::Err(code) => { return code; }
+	}
+	match resultset.discriminate_first_response(&err_payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::ErrPacket => {},
+				default => { return 20; }
+			}
+		},
+		core.Result::Err(_) => { return 21; }
+	}
+	match err_packet.decode_err_packet(&err_payload) {
+		core.Result::Ok(v) => {
+			if v.error_code != cast<Uint>(1318) { return 22; }
+			if v.sql_state != "42000" { return 23; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 24; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = _expect_handshake_path();
+	if a != 0 { return a; }
+	val b = _expect_com_query_success_path();
+	if b != 0 { return b; }
+	val c = _expect_server_error_decode_path();
+	if c != 0 { return c; }
+	return 0;
+}

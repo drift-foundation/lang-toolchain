@@ -1,0 +1,46 @@
+module mariadb.wire.proto.tests.unit.com_query_test
+
+import std.core as core;
+import mariadb.wire.proto.command.com_query as com_query;
+
+fn expect_basic_encode() nothrow -> Int {
+	val sql = "SELECT 1";
+	val encoded_res = com_query.encode_com_query_payload(&sql);
+	match encoded_res {
+		Ok(payload) => {
+			val p: &Array<Byte> = &payload;
+			if p.len != sql.byte_length() + 1 { return 1; }
+			if p[0] != com_query.COM_QUERY_COMMAND_ID { return 2; }
+			var i = 0;
+			val n = sql.byte_length();
+			while i < n {
+				if p[i + 1] != core.string_byte_at(&sql, i) { return 3; }
+				i = i + 1;
+			}
+			return 0;
+		},
+		Err(_) => { return 4; }
+	}
+}
+
+fn expect_empty_query() nothrow -> Int {
+	val sql = "";
+	val encoded_res = com_query.encode_com_query_payload(&sql);
+	match encoded_res {
+		Ok(payload) => {
+			val p: &Array<Byte> = &payload;
+			if p.len != 1 { return 10; }
+			if p[0] != com_query.COM_QUERY_COMMAND_ID { return 11; }
+			return 0;
+		},
+		Err(_) => { return 12; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_basic_encode();
+	if a != 0 { return a; }
+	val b = expect_empty_query();
+	if b != 0 { return b; }
+	return 0;
+}

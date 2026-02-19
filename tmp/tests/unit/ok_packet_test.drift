@@ -1,0 +1,62 @@
+module mariadb.wire.proto.tests.unit.ok_packet_test
+
+import mariadb.wire.proto.decode.ok_packet as ok_packet;
+
+fn expect_decode_ok() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(ok_packet.OK_PACKET_HEADER);
+	payload.push(cast<Byte>(1)); // affected_rows
+	payload.push(cast<Byte>(2)); // last_insert_id
+	payload.push(cast<Byte>(2)); // status low
+	payload.push(cast<Byte>(0)); // status high
+	payload.push(cast<Byte>(1)); // warnings low
+	payload.push(cast<Byte>(0)); // warnings high
+	match ok_packet.decode_ok_packet(&payload) {
+		Ok(v) => {
+			if v.affected_rows != cast<Uint>(1) { return 1; }
+			if v.last_insert_id != cast<Uint>(2) { return 2; }
+			if v.status_flags != cast<Uint>(2) { return 3; }
+			if v.warnings != cast<Uint>(1) { return 4; }
+			return 0;
+		},
+		Err(_) => { return 5; }
+	}
+}
+
+fn expect_invalid_header() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(1));
+	match ok_packet.decode_ok_packet(&payload) {
+		Ok(_) => { return 10; },
+		Err(e) => {
+			if e.tag != "invalid-ok-header" { return 11; }
+			if e.offset != 0 { return 12; }
+			return 0;
+		}
+	}
+}
+
+fn expect_missing_status_or_warnings() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(ok_packet.OK_PACKET_HEADER);
+	payload.push(cast<Byte>(1));
+	payload.push(cast<Byte>(2));
+	payload.push(cast<Byte>(2));
+	match ok_packet.decode_ok_packet(&payload) {
+		Ok(_) => { return 20; },
+		Err(e) => {
+			if e.tag != "ok-missing-status-or-warnings" { return 21; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_decode_ok();
+	if a != 0 { return a; }
+	val b = expect_invalid_header();
+	if b != 0 { return b; }
+	val c = expect_missing_status_or_warnings();
+	if c != 0 { return c; }
+	return 0;
+}

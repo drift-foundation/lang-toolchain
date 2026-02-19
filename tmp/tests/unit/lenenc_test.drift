@@ -1,0 +1,148 @@
+module mariadb.wire.proto.tests.unit.lenenc_test
+
+import mariadb.wire.proto.packet.lenenc as lenenc;
+
+fn expect_int_encode_decode() nothrow -> Int {
+	var values: Array<Uint> = [];
+	values.push(cast<Uint>(0));
+	values.push(cast<Uint>(250));
+	values.push(cast<Uint>(251));
+	values.push(cast<Uint>(65535));
+	values.push(cast<Uint>(65536));
+	values.push(cast<Uint>(16777215));
+	values.push(cast<Uint>(16777216));
+	values.push(cast<Uint>(1099511627776));
+	var i = 0;
+	while i < values.len {
+		val v = values[i];
+		val encoded_res = lenenc.encode_lenenc_int(v);
+		var encoded: Array<Byte> = [];
+		match encoded_res {
+			Ok(x) => { encoded = move x; },
+			Err(_) => { return 1; }
+		}
+		val decoded_res = lenenc.decode_lenenc_int_at(&encoded, 0);
+		var decoded_value: Uint = cast<Uint>(0);
+		var decoded_next_offset = -1;
+		match decoded_res {
+			Ok(x) => {
+				decoded_value = x.value;
+				decoded_next_offset = x.next_offset;
+			},
+			Err(_) => { return 2; }
+		}
+		if decoded_value != v { return 3; }
+		if decoded_next_offset != encoded.len { return 4; }
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn expect_prefix_shapes() nothrow -> Int {
+	var a: Array<Byte> = [];
+	match lenenc.encode_lenenc_int(cast<Uint>(250)) {
+		Ok(v) => { a = move v; },
+		Err(_) => { return 10; }
+	}
+	if a.len != 1 or a[0] != cast<Byte>(250) { return 11; }
+	var b: Array<Byte> = [];
+	match lenenc.encode_lenenc_int(cast<Uint>(251)) {
+		Ok(v) => { b = move v; },
+		Err(_) => { return 12; }
+	}
+	if b.len != 3 or b[0] != cast<Byte>(252) { return 13; }
+	var c: Array<Byte> = [];
+	match lenenc.encode_lenenc_int(cast<Uint>(65536)) {
+		Ok(v) => { c = move v; },
+		Err(_) => { return 14; }
+	}
+	if c.len != 4 or c[0] != cast<Byte>(253) { return 15; }
+	var d: Array<Byte> = [];
+	match lenenc.encode_lenenc_int(cast<Uint>(16777216)) {
+		Ok(v) => { d = move v; },
+		Err(_) => { return 16; }
+	}
+	if d.len != 9 or d[0] != cast<Byte>(254) { return 17; }
+	return 0;
+}
+
+fn expect_decode_errors() nothrow -> Int {
+	var truncated2: Array<Byte> = [];
+	truncated2.push(cast<Byte>(252));
+	truncated2.push(cast<Byte>(1));
+	val t2 = lenenc.decode_lenenc_int_at(&truncated2, 0);
+	var c1 = 0;
+	match t2 {
+		Ok(_) => { c1 = 20; },
+		Err(e) => {
+			if e.tag != "lenenc-truncated" {
+				c1 = 21;
+			}
+		}
+	}
+	if c1 != 0 { return c1; }
+	var null_marker: Array<Byte> = [];
+	null_marker.push(cast<Byte>(251));
+	val n = lenenc.decode_lenenc_int_at(&null_marker, 0);
+	match n {
+		Ok(_) => { return 22; },
+		Err(e) => {
+			if e.tag != "lenenc-null" {
+				return 23;
+			}
+			return 0;
+		}
+	}
+}
+
+fn expect_string_roundtrip() nothrow -> Int {
+	val source = "maria";
+	val encoded_res = lenenc.encode_lenenc_string(&source);
+	var encoded: Array<Byte> = [];
+	match encoded_res {
+		Ok(v) => { encoded = move v; },
+		Err(_) => { return 30; }
+	}
+	val decoded_res = lenenc.decode_lenenc_string_at(&encoded, 0);
+	var decoded_value = "";
+	var decoded_next_offset = -1;
+	match decoded_res {
+		Ok(v) => {
+			decoded_value = v.value;
+			decoded_next_offset = v.next_offset;
+		},
+		Err(_) => { return 31; }
+	}
+	if decoded_value != source { return 32; }
+	if decoded_next_offset != encoded.len { return 33; }
+	return 0;
+}
+
+fn expect_invalid_utf8_error() nothrow -> Int {
+	var bytes: Array<Byte> = [];
+	bytes.push(cast<Byte>(1));
+	bytes.push(cast<Byte>(255));
+	val decoded = lenenc.decode_lenenc_string_at(&bytes, 0);
+	match decoded {
+		Ok(_) => { return 40; },
+		Err(e) => {
+			if e.tag != "utf8-invalid-leading-byte" { return 41; }
+			if e.offset != 1 { return 42; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_int_encode_decode();
+	if a != 0 { return a; }
+	val b = expect_prefix_shapes();
+	if b != 0 { return b; }
+	val c = expect_decode_errors();
+	if c != 0 { return c; }
+	val d = expect_string_roundtrip();
+	if d != 0 { return d; }
+	val e = expect_invalid_utf8_error();
+	if e != 0 { return e; }
+	return 0;
+}

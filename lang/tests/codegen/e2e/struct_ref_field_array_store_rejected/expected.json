@@ -1,0 +1,10 @@
+{
+  "description": "e2e: borrowed aggregate cannot be stored in owning Array",
+  "diagnostics": [
+    {
+      "message_contains": "owning Array cannot contain borrowed aggregate element type in MVP",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

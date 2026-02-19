@@ -1,0 +1,10 @@
+{
+  "description": "e2e: borrowed aggregate cannot be stored in registry",
+  "diagnostics": [
+    {
+      "message_contains": "borrowed aggregate argument cannot flow through retaining parameter 'value' of 'GlobalRegistry::set'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

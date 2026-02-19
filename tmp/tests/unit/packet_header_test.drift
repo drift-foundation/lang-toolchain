@@ -1,0 +1,81 @@
+module mariadb.wire.proto.tests.unit.packet_header_test
+
+import mariadb.wire.proto.packet.header as header;
+
+fn expect_ok_roundtrip() nothrow -> Int {
+	val encoded_res = header.encode_packet_header(65539, cast<Byte>(7));
+	var encoded: Array<Byte> = [];
+	match encoded_res {
+		Ok(v) => { encoded = move v; },
+		Err(_) => { return 1; }
+	}
+	if encoded.len != 4 { return 2; }
+	if encoded[0] != cast<Byte>(3) { return 3; }
+	if encoded[1] != cast<Byte>(0) { return 4; }
+	if encoded[2] != cast<Byte>(1) { return 5; }
+	if encoded[3] != cast<Byte>(7) { return 6; }
+	val decoded_res = header.decode_packet_header(&encoded);
+	var decoded_payload_len = -1;
+	var decoded_sequence_id = cast<Byte>(0);
+	match decoded_res {
+		Ok(v) => {
+			decoded_payload_len = v.payload_len;
+			decoded_sequence_id = v.sequence_id;
+		},
+		Err(_) => { return 7; }
+	}
+	if decoded_payload_len != 65539 { return 8; }
+	if decoded_sequence_id != cast<Byte>(7) { return 9; }
+	return 0;
+}
+
+fn expect_short_decode_error() nothrow -> Int {
+	var short: Array<Byte> = [];
+	short.push(cast<Byte>(1));
+	short.push(cast<Byte>(2));
+	short.push(cast<Byte>(3));
+	val decoded_res = header.decode_packet_header(&short);
+	match decoded_res {
+		Ok(_) => { return 10; },
+		Err(e) => {
+			if e.tag != "short-packet-header" {
+				return 11;
+			}
+			return 0;
+		}
+	}
+}
+
+fn expect_payload_len_bounds_error() nothrow -> Int {
+	val negative = header.encode_packet_header(-1, cast<Byte>(0));
+	val over = header.encode_packet_header(header.MAX_PAYLOAD_LEN + 1, cast<Byte>(0));
+	var n = 0;
+	match negative {
+		Ok(_) => { n = 12; },
+		Err(e) => {
+			if e.tag != "invalid-payload-len" {
+				n = 13;
+			}
+		}
+	}
+	if n != 0 { return n; }
+	match over {
+		Ok(_) => { return 14; },
+		Err(e) => {
+			if e.tag != "invalid-payload-len" {
+				return 15;
+			}
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_ok_roundtrip();
+	if a != 0 { return a; }
+	val b = expect_short_decode_error();
+	if b != 0 { return b; }
+	val c = expect_payload_len_bounds_error();
+	if c != 0 { return c; }
+	return 0;
+}

@@ -226,8 +226,8 @@ class HIRToMIR:
 			throw lowering can emit real codes instead of placeholders.
 			"""
 		self.b = builder
-		# Stack of (continue_target, break_target, scope_index) for nested loops.
-		self._loop_stack: list[tuple[str, str, int]] = []
+		# Stack of (continue_target, break_target, scope_index, break_seen) for nested loops.
+		self._loop_stack: list[tuple[str, str, int, bool]] = []
 		# Stack of scopes; each scope stores locals that need drop at scope exit.
 		self._scope_stack: list[list[str]] = []
 		self._moved_locals: set[str] = set()
@@ -5067,7 +5067,8 @@ class HIRToMIR:
 		# Break jumps to the innermost loop's break target.
 		if not self._loop_stack:
 			raise NotImplementedError("break outside of loop not supported yet")
-		_, break_target, loop_scope_index = self._loop_stack[-1]
+		continue_target, break_target, loop_scope_index, _break_seen = self._loop_stack[-1]
+		self._loop_stack[-1] = (continue_target, break_target, loop_scope_index, True)
 		self._emit_scope_drops(scope_index=loop_scope_index)
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=break_target))
@@ -5076,7 +5077,7 @@ class HIRToMIR:
 		# Continue jumps to the innermost loop's continue target (loop header).
 		if not self._loop_stack:
 			raise NotImplementedError("continue outside of loop not supported yet")
-		continue_target, _, loop_scope_index = self._loop_stack[-1]
+		continue_target, _, loop_scope_index, _break_seen = self._loop_stack[-1]
 		self._emit_scope_drops(scope_index=loop_scope_index)
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=continue_target))
@@ -5084,6 +5085,13 @@ class HIRToMIR:
 	def _visit_stmt_HIf(self, stmt: H.HIf) -> None:
 		# If the current block already ended, do nothing.
 		if self.b.block.terminator is not None:
+			return
+		# Constant condition: lower only the reachable branch.
+		if isinstance(stmt.cond, H.HLiteralBool):
+			if bool(stmt.cond.value):
+				self.lower_block(stmt.then_block)
+			elif stmt.else_block is not None:
+				self.lower_block(stmt.else_block)
 			return
 
 		# 1) Evaluate condition in the current block.
@@ -5132,7 +5140,7 @@ class HIRToMIR:
 
 		# Record loop context: continue -> header, break -> exit.
 		loop_scope_index = len(self._scope_stack)
-		self._loop_stack.append((header.name, exit_block.name, loop_scope_index))
+		self._loop_stack.append((header.name, exit_block.name, loop_scope_index, False))
 
 		# Header: fall through to body.
 		self.b.set_block(header)
@@ -5146,8 +5154,10 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=header.name))
 
 		# Pop loop context and continue in exit block.
-		self._loop_stack.pop()
+		_continue_target, _break_target, _scope_idx, break_seen = self._loop_stack.pop()
 		self.b.set_block(exit_block)
+		if not break_seen and self.b.block.terminator is None:
+			self.b.set_terminator(M.Unreachable())
 
 	def _visit_stmt_HThrow(self, stmt: H.HThrow) -> None:
 		"""

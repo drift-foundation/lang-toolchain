@@ -4120,22 +4120,6 @@ def _lower_parsed_program_to_hir(
 			if type_params:
 				continue
 			ft = resolve_opaque_type(f.type_expr, type_table, module_id=module_id)
-			# MVP escape policy: references cannot be stored in long-lived memory.
-			# Struct fields are long-lived by construction, so `struct S(r: &T)` is
-			# rejected early (before lowering/typecheck) with a source-anchored
-			# diagnostic.
-			try:
-				td = type_table.get(ft)
-			except Exception:
-				td = None
-			if td is not None and td.kind is TypeKind.REF:
-				diagnostics.append(
-					_p_diag(
-						message=f"struct '{s.name}' field '{f.name}' cannot have a reference type in MVP",
-						severity="error",
-						span=Span.from_loc(getattr(f.type_expr, "loc", getattr(f, "loc", None))),
-					)
-				)
 			field_types.append(ft)
 		type_table.define_struct_schema_fields(struct_id, field_templates)
 		if not type_params:

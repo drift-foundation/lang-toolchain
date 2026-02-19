@@ -1,0 +1,37 @@
+module mariadb.wire.proto.packet.header
+
+import std.core as core;
+import mariadb.wire.proto.types as types;
+import mariadb.wire.proto.errors as errors;
+
+export {
+	MAX_PAYLOAD_LEN,
+	encode_packet_header,
+	decode_packet_header
+};
+
+pub const MAX_PAYLOAD_LEN: Int = 16777215;
+
+pub fn encode_packet_header(payload_len: Int, sequence_id: Byte) nothrow -> core.Result<Array<Byte>, errors.PacketDecodeError> {
+	if payload_len < 0 or payload_len > MAX_PAYLOAD_LEN {
+		return core.Result::Err(errors.PacketDecodeError(tag = "invalid-payload-len", offset = 0));
+	}
+	var out: Array<Byte> = [];
+	out.push(cast<Byte>(payload_len % 256));
+	out.push(cast<Byte>((payload_len / 256) % 256));
+	out.push(cast<Byte>((payload_len / 65536) % 256));
+	out.push(sequence_id);
+	return core.Result::Ok(move out);
+}
+
+pub fn decode_packet_header(input: &Array<Byte>) nothrow -> core.Result<types.PacketHeader, errors.PacketDecodeError> {
+	if input.len < 4 {
+		return core.Result::Err(errors.PacketDecodeError(tag = "short-packet-header", offset = input.len));
+	}
+	val b0 = input[0];
+	val b1 = input[1];
+	val b2 = input[2];
+	val seq = input[3];
+	val payload_len = cast<Int>(b0) + cast<Int>(b1) * 256 + cast<Int>(b2) * 65536;
+	return core.Result::Ok(types.PacketHeader(payload_len = payload_len, sequence_id = seq));
+}

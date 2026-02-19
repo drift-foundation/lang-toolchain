@@ -1,0 +1,89 @@
+module mariadb.wire.proto.tests.unit.response_discriminator_test
+
+import mariadb.wire.proto.decode.resultset as resultset;
+
+fn expect_ok_route() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(resultset.FIRST_RESPONSE_OK_HEADER);
+	val r = resultset.discriminate_first_response(&payload);
+	match r {
+		Ok(route) => {
+			match route {
+				OkPacket => { return 0; },
+				default => { return 1; }
+			}
+		},
+		Err(_) => { return 2; }
+	}
+}
+
+fn expect_err_route() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(resultset.FIRST_RESPONSE_ERR_HEADER);
+	val r = resultset.discriminate_first_response(&payload);
+	match r {
+		Ok(route) => {
+			match route {
+				ErrPacket => { return 0; },
+				default => { return 10; }
+			}
+		},
+		Err(_) => { return 11; }
+	}
+}
+
+fn expect_resultset_route() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(1));
+	val r = resultset.discriminate_first_response(&payload);
+	match r {
+		Ok(route) => {
+			match route {
+				ResultSet => { return 0; },
+				default => { return 20; }
+			}
+		},
+		Err(_) => { return 21; }
+	}
+}
+
+fn expect_local_infile_rejected() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(resultset.FIRST_RESPONSE_LOCAL_INFILE_HEADER);
+	val r = resultset.discriminate_first_response(&payload);
+	match r {
+		Ok(_) => { return 30; },
+		Err(e) => {
+			if e.tag != "unsupported-local-infile" { return 31; }
+			if e.offset != 0 { return 32; }
+			return 0;
+		}
+	}
+}
+
+fn expect_short_payload_error() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	val r = resultset.discriminate_first_response(&payload);
+	match r {
+		Ok(_) => { return 40; },
+		Err(e) => {
+			if e.tag != "short-response-payload" { return 41; }
+			if e.offset != 0 { return 42; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_ok_route();
+	if a != 0 { return a; }
+	val b = expect_err_route();
+	if b != 0 { return b; }
+	val c = expect_resultset_route();
+	if c != 0 { return c; }
+	val d = expect_local_infile_rejected();
+	if d != 0 { return d; }
+	val e = expect_short_payload_error();
+	if e != 0 { return e; }
+	return 0;
+}

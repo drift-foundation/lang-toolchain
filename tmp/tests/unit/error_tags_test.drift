@@ -1,0 +1,116 @@
+module mariadb.wire.proto.tests.unit.error_tags_test
+
+import std.core as core;
+import std.text as text;
+import mariadb.wire.proto.errors as errors;
+import mariadb.wire.proto.decode.ok_packet as ok_packet;
+import mariadb.wire.proto.decode.err_packet as err_packet;
+import mariadb.wire.proto.decode.resultset as resultset;
+import mariadb.wire.proto.handshake.auth as handshake_auth;
+import mariadb.wire.proto.types as types;
+
+fn expect_constant_values() nothrow -> Int {
+	if errors.TAG_SHORT_OK_PACKET != "short-ok-packet" { return 1; }
+	if errors.TAG_INVALID_OK_HEADER != "invalid-ok-header" { return 2; }
+	if errors.TAG_SHORT_ERR_PACKET != "short-err-packet" { return 3; }
+	if errors.TAG_INVALID_ERR_HEADER != "invalid-err-header" { return 4; }
+	if errors.TAG_SHORT_RESPONSE_PAYLOAD != "short-response-payload" { return 5; }
+	if errors.TAG_RESULTSET_MISSING_TERMINATOR != "resultset-missing-terminator" { return 6; }
+	if errors.TAG_HANDSHAKE_AUTH_NUL_IN_PREFIX != "handshake-auth-nul-in-" { return 7; }
+	return 0;
+}
+
+fn expect_ok_error_tag() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(1));
+	match ok_packet.decode_ok_packet(&payload) {
+		core.Result::Ok(_) => { return 10; },
+		core.Result::Err(e) => {
+			if e.tag != errors.TAG_INVALID_OK_HEADER { return 11; }
+			if e.offset != 0 { return 12; }
+			return 0;
+		}
+	}
+}
+
+fn expect_err_error_tag() nothrow -> Int {
+	var payload: Array<Byte> = [];
+	payload.push(cast<Byte>(0));
+	payload.push(cast<Byte>(1));
+	payload.push(cast<Byte>(0));
+	match err_packet.decode_err_packet(&payload) {
+		core.Result::Ok(_) => { return 20; },
+		core.Result::Err(e) => {
+			if e.tag != errors.TAG_INVALID_ERR_HEADER { return 21; }
+			if e.offset != 0 { return 22; }
+			return 0;
+		}
+	}
+}
+
+fn expect_resultset_error_tags() nothrow -> Int {
+	var empty: Array<Byte> = [];
+	match resultset.discriminate_first_response(&empty) {
+		core.Result::Ok(_) => { return 30; },
+		core.Result::Err(e) => {
+			if e.tag != errors.TAG_SHORT_RESPONSE_PAYLOAD { return 31; }
+			if e.offset != 0 { return 32; }
+		}
+	}
+	var packets: Array<Array<Byte>> = [];
+	var p0: Array<Byte> = [];
+	p0.push(cast<Byte>(1));
+	packets.push(move p0);
+	var p1: Array<Byte> = [];
+	p1.push(cast<Byte>(1));
+	p1.push(cast<Byte>(97));
+	packets.push(move p1);
+	var p2: Array<Byte> = [];
+	p2.push(cast<Byte>(1));
+	p2.push(cast<Byte>(120));
+	packets.push(move p2);
+	match resultset.decode_text_resultset_packets(&packets) {
+		core.Result::Ok(_) => { return 33; },
+		core.Result::Err(e) => {
+			if e.tag != errors.TAG_RESULTSET_MISSING_TERMINATOR { return 34; }
+			return 0;
+		}
+	}
+}
+
+fn expect_handshake_auth_nul_tag() nothrow -> Int {
+	var bytes: Array<Byte> = [];
+	bytes.push(cast<Byte>(97));
+	bytes.push(cast<Byte>(0));
+	bytes.push(cast<Byte>(98));
+	var username = "";
+	match text.utf8_from_bytes(&bytes) {
+		core.Result::Ok(s) => { username = move s; },
+		core.Result::Err(_) => { return 40; }
+	}
+	var auth_response: Array<Byte> = [];
+	auth_response.push(cast<Byte>(1));
+	val req = types.HandshakeResponse41(capabilities = cast<Uint>(1), max_packet_size = cast<Uint>(1), character_set = cast<Byte>(45), username = move username, auth_response = move auth_response, database = "", auth_plugin_name = "mysql_native_password");
+	match handshake_auth.encode_handshake_response41(&req) {
+		core.Result::Ok(_) => { return 41; },
+		core.Result::Err(e) => {
+			if e.tag != errors.TAG_HANDSHAKE_AUTH_NUL_IN_PREFIX + "username" { return 42; }
+			if e.offset != 1 { return 43; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = expect_constant_values();
+	if a != 0 { return a; }
+	val b = expect_ok_error_tag();
+	if b != 0 { return b; }
+	val c = expect_err_error_tag();
+	if c != 0 { return c; }
+	val d = expect_resultset_error_tags();
+	if d != 0 { return d; }
+	val e = expect_handshake_auth_nul_tag();
+	if e != 0 { return e; }
+	return 0;
+}

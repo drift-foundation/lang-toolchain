@@ -1,10 +1,4 @@
 {
-  "description": "e2e: struct ref field rejected",
-  "diagnostics": [
-    {
-      "message_contains": "cannot have a reference type",
-      "phase": "parser"
-    }
-  ],
-  "exit_code": 1
+  "description": "e2e: struct ref field declaration accepted",
+  "exit_code": 0
 }

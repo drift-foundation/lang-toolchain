@@ -2764,8 +2764,34 @@ class _FuncBuilder:
 				self.value_types[dest] = "i1"
 			else:
 				# For non-bool payload fields, storage and value types are identical.
-				self.lines.append(f"  {dest} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
-				self.value_types[dest] = want_llty
+				# Ownership is *not* always a raw bitcopy: for certain Copy aggregates
+				# (currently non-bitcopy structs), extracting a payload into a binder
+				# must perform semantic copy/retain before the source variant is dropped.
+				needs_semantic_copy = False
+				if self.type_table is not None:
+					td_field = self.type_table.get(instr.field_ty)
+					# Match binders over `Result::Ok(v)` lower through VariantGetField.
+					# For non-bitcopy Copy aggregates (e.g., struct with String fields),
+					# a raw load aliases the source payload; dropping the scrutinee then
+					# releases storage still used by `v`. Emit a semantic copy here.
+					if (
+						td_field.kind is TypeKind.STRUCT
+						and self.type_table.is_copy(instr.field_ty)
+						and not self.type_table.is_bitcopy(instr.field_ty)
+					):
+						needs_semantic_copy = True
+				if needs_semantic_copy:
+					loaded = self._fresh("field")
+					self.lines.append(f"  {loaded} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
+					self.value_types[loaded] = want_llty
+					copied = self._emit_copy_value(instr.field_ty, loaded)
+					# Materialize a real SSA def for `dest` (instead of aliasing via
+					# value_map) so downstream drop/phi logic remains consistent.
+					self.lines.append(f"  {dest} = select i1 1, {emit_want_llty} {copied}, {emit_want_llty} {copied}")
+					self.value_types[dest] = want_llty
+				else:
+					self.lines.append(f"  {dest} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
+					self.value_types[dest] = want_llty
 		elif isinstance(instr, VariantGetFieldAddr):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: VariantGetFieldAddr requires a TypeTable")

@@ -1,0 +1,87 @@
+module mariadb.wire.proto.handshake.auth
+
+import std.core as core;
+import mariadb.wire.proto.types as types;
+import mariadb.wire.proto.errors as errors;
+import mariadb.wire.proto.packet.lenenc as lenenc;
+import mariadb.wire.proto.protocol.constants as protocol;
+
+export {
+	encode_handshake_response41
+};
+
+fn _error(tag: String, offset: Int) nothrow -> errors.PacketDecodeError {
+	return errors.PacketDecodeError(tag = tag, offset = offset);
+}
+
+fn _write_u32le(out: &mut Array<Byte>, v: Uint) nothrow -> Void {
+	out.push(cast<Byte>(v % cast<Uint>(256)));
+	out.push(cast<Byte>((v / cast<Uint>(256)) % cast<Uint>(256)));
+	out.push(cast<Byte>((v / cast<Uint>(65536)) % cast<Uint>(256)));
+	out.push(cast<Byte>((v / cast<Uint>(16777216)) % cast<Uint>(256)));
+}
+
+fn _append_nul_terminated_string(out: &mut Array<Byte>, s: &String, label: String) nothrow -> core.Result<Void, errors.PacketDecodeError> {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b == cast<Byte>(0) {
+			return core.Result::Err(_error(errors.TAG_HANDSHAKE_AUTH_NUL_IN_PREFIX + label, i));
+		}
+		out.push(b);
+		i = i + 1;
+	}
+	out.push(cast<Byte>(0));
+	return core.Result::Ok(core.void_value());
+}
+
+fn _append_bytes(out: &mut Array<Byte>, bytes: &Array<Byte>) nothrow -> Void {
+	var i = 0;
+	while i < bytes.len {
+		out.push(bytes[i]);
+		i = i + 1;
+	}
+}
+
+pub fn encode_handshake_response41(req: &types.HandshakeResponse41) nothrow -> core.Result<Array<Byte>, errors.PacketDecodeError> {
+	var out: Array<Byte> = [];
+
+	_write_u32le(&mut out, req.capabilities);
+	_write_u32le(&mut out, req.max_packet_size);
+	out.push(req.character_set);
+
+	var i = 0;
+	while i < protocol.HANDSHAKE_RESPONSE_RESERVED_LEN {
+		out.push(cast<Byte>(0));
+		i = i + 1;
+	}
+
+	match _append_nul_terminated_string(&mut out, &req.username, "username") {
+		core.Result::Ok(_) => {},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+
+	val auth_len_res = lenenc.encode_lenenc_int(cast<Uint>(req.auth_response.len));
+	match auth_len_res {
+		core.Result::Ok(prefix) => {
+			_append_bytes(&mut out, &prefix);
+		},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	_append_bytes(&mut out, &req.auth_response);
+
+	if req.database.byte_length() > 0 {
+		match _append_nul_terminated_string(&mut out, &req.database, "database") {
+			core.Result::Ok(_) => {},
+			core.Result::Err(e) => { return core.Result::Err(e); }
+		}
+	}
+
+	match _append_nul_terminated_string(&mut out, &req.auth_plugin_name, "auth-plugin-name") {
+		core.Result::Ok(_) => {},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+
+	return core.Result::Ok(move out);
+}

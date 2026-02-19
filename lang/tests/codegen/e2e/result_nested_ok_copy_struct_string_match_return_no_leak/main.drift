@@ -1,0 +1,36 @@
+module main
+
+import std.core as core;
+
+struct Payload {
+	msg: String
+}
+
+implement core.Copy for Payload {
+}
+
+fn make() nothrow -> core.Result<core.Result<Payload, Int>, Int> {
+	val inner: core.Result<Payload, Int> = core.Result::Ok(Payload(msg = "inner"));
+	return core.Result::Ok(inner);
+}
+
+fn main() nothrow -> Int {
+	match make() {
+		core.Result::Ok(inner) => {
+			match inner {
+				core.Result::Ok(v) => {
+					if v.msg == "inner" {
+						return 0;
+					}
+					return 1;
+				},
+				core.Result::Err(_) => {
+					return 2;
+				}
+			}
+		},
+		core.Result::Err(_) => {
+			return 3;
+		}
+	}
+}

@@ -1,0 +1,128 @@
+module mariadb.wire.proto.tests.unit.tx_fixture_replay_test
+
+import std.core as core;
+import std.codec as codec;
+import mariadb.wire.proto.decode.ok_packet as ok_packet;
+import mariadb.wire.proto.decode.err_packet as err_packet;
+import mariadb.wire.proto.decode.resultset as resultset;
+
+fn _decode_hex(hex: String, code: Int) nothrow -> core.Result<Array<Byte>, Int> {
+	match codec.hex_decode(&hex) {
+		core.Result::Ok(v) => { return core.Result::Ok(move v); },
+		core.Result::Err(_) => { return core.Result::Err(code); }
+	}
+}
+
+fn _expect_ok_packet(hex: String, affected: Uint, last_id: Uint, status: Uint, warnings: Uint, bad_code: Int) nothrow -> Int {
+	var payload: Array<Byte> = [];
+	match _decode_hex(hex, bad_code) {
+		core.Result::Ok(v) => { payload = move v; },
+		core.Result::Err(c) => { return c; }
+	}
+	match resultset.discriminate_first_response(&payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::OkPacket => {},
+				default => { return bad_code + 1; }
+			}
+		},
+		core.Result::Err(_) => { return bad_code + 2; }
+	}
+	match ok_packet.decode_ok_packet(&payload) {
+		core.Result::Ok(v) => {
+			if v.affected_rows != affected { return bad_code + 3; }
+			if v.last_insert_id != last_id { return bad_code + 4; }
+			if v.status_flags != status { return bad_code + 5; }
+			if v.warnings != warnings { return bad_code + 6; }
+			return 0;
+		},
+		core.Result::Err(_) => { return bad_code + 7; }
+	}
+}
+
+fn _expect_err_packet(hex: String, code: Uint, sql_state: String, message: String, bad_code: Int) nothrow -> Int {
+	var payload: Array<Byte> = [];
+	match _decode_hex(hex, bad_code) {
+		core.Result::Ok(v) => { payload = move v; },
+		core.Result::Err(c) => { return c; }
+	}
+	match resultset.discriminate_first_response(&payload) {
+		core.Result::Ok(route) => {
+			match route {
+				resultset.FirstResponseRoute::ErrPacket => {},
+				default => { return bad_code + 1; }
+			}
+		},
+		core.Result::Err(_) => { return bad_code + 2; }
+	}
+	match err_packet.decode_err_packet(&payload) {
+		core.Result::Ok(v) => {
+			if v.error_code != code { return bad_code + 3; }
+			if v.sql_state != sql_state { return bad_code + 4; }
+			if v.message != message { return bad_code + 5; }
+			return 0;
+		},
+		core.Result::Err(_) => { return bad_code + 6; }
+	}
+}
+
+fn _expect_tx_commit_chain() nothrow -> Int {
+	val ok_autocommit_off_hex = "000000004000000011000f0a6175746f636f6d6d6974034f4646";
+	val ok_insert_hex = "00010001000000";
+	val ok_commit_hex = "00000000000000";
+	val ok_autocommit_on_hex = "000000024000000010000e0a6175746f636f6d6d6974024f4e";
+	val a = _expect_ok_packet(ok_autocommit_off_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16384), cast<Uint>(0), 100);
+	if a != 0 { return a; }
+	val b = _expect_ok_packet(ok_insert_hex, cast<Uint>(1), cast<Uint>(0), cast<Uint>(1), cast<Uint>(0), 120);
+	if b != 0 { return b; }
+	val c = _expect_ok_packet(ok_commit_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), 140);
+	if c != 0 { return c; }
+	val d = _expect_ok_packet(ok_autocommit_on_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16386), cast<Uint>(0), 160);
+	if d != 0 { return d; }
+	return 0;
+}
+
+fn _expect_tx_rollback_chain() nothrow -> Int {
+	val ok_autocommit_off_hex = "000000004000000011000f0a6175746f636f6d6d6974034f4646";
+	val ok_insert_hex = "00010001000000";
+	val ok_rollback_hex = "00000000000000";
+	val ok_autocommit_on_hex = "000000024000000010000e0a6175746f636f6d6d6974024f4e";
+	val a = _expect_ok_packet(ok_autocommit_off_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16384), cast<Uint>(0), 200);
+	if a != 0 { return a; }
+	val b = _expect_ok_packet(ok_insert_hex, cast<Uint>(1), cast<Uint>(0), cast<Uint>(1), cast<Uint>(0), 220);
+	if b != 0 { return b; }
+	val c = _expect_ok_packet(ok_rollback_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), 240);
+	if c != 0 { return c; }
+	val d = _expect_ok_packet(ok_autocommit_on_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16386), cast<Uint>(0), 260);
+	if d != 0 { return d; }
+	return 0;
+}
+
+fn _expect_tx_error_then_rollback_chain() nothrow -> Int {
+	val ok_autocommit_off_hex = "000000004000000011000f0a6175746f636f6d6d6974034f4646";
+	val ok_insert_hex = "00010001000000";
+	val err_sp_error_hex = "ff6c0623343530303073705f6572726f7220666f72636564206661696c757265";
+	val ok_rollback_hex = "00000000000000";
+	val ok_autocommit_on_hex = "000000024000000010000e0a6175746f636f6d6d6974024f4e";
+	val a = _expect_ok_packet(ok_autocommit_off_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16384), cast<Uint>(0), 300);
+	if a != 0 { return a; }
+	val b = _expect_ok_packet(ok_insert_hex, cast<Uint>(1), cast<Uint>(0), cast<Uint>(1), cast<Uint>(0), 320);
+	if b != 0 { return b; }
+	val c = _expect_err_packet(err_sp_error_hex, cast<Uint>(1644), "45000", "sp_error forced failure", 340);
+	if c != 0 { return c; }
+	val d = _expect_ok_packet(ok_rollback_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), cast<Uint>(0), 360);
+	if d != 0 { return d; }
+	val e = _expect_ok_packet(ok_autocommit_on_hex, cast<Uint>(0), cast<Uint>(0), cast<Uint>(16386), cast<Uint>(0), 380);
+	if e != 0 { return e; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = _expect_tx_commit_chain();
+	if a != 0 { return a; }
+	val b = _expect_tx_rollback_chain();
+	if b != 0 { return b; }
+	val c = _expect_tx_error_then_rollback_chain();
+	if c != 0 { return c; }
+	return 0;
+}

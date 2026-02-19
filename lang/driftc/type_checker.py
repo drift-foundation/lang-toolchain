@@ -7989,13 +7989,36 @@ class TypeChecker:
 					except Exception:
 						pretty_val = str(val_ty)
 					print(f"[drift:debug] let {stmt.name} id={stmt.binding_id} type={pretty_val} fn={function_symbol(fn_id)}", file=sys.stderr)
+				if val_ty is not None:
+					vd = self.type_table.get(val_ty)
+					if vd.kind is TypeKind.ARRAY and vd.param_types:
+						elem_ty = vd.param_types[0]
+						elem_td = self.type_table.get(elem_ty)
+						if elem_td.kind is TypeKind.STRUCT:
+							elem_fields: list[TypeId] = []
+							elem_inst = self.type_table.get_struct_instance(elem_ty)
+							if elem_inst is not None:
+								elem_fields = list(elem_inst.field_types)
+							elif elem_td.param_types is not None:
+								elem_fields = list(elem_td.param_types)
+							if any(self.type_table.get(ft).kind is TypeKind.REF for ft in elem_fields):
+								diagnostics.append(
+									_tc_diag(
+										message="owning Array cannot contain borrowed aggregate element type in MVP",
+										severity="error",
+										span=getattr(stmt, "loc", Span()),
+									)
+								)
 				# Track origin for ref-typed locals: allow propagation from an existing
 				# ref binding, otherwise treat as local/temporary.
 				if val_ty is not None and self.type_table.get(val_ty).kind is TypeKind.REF:
 					origin: Optional[int] = None
+					origin_known = False
 					# val r = p;  (p is a ref param or a local ref derived from param)
 					if isinstance(stmt.value, H.HVar) and getattr(stmt.value, "binding_id", None) is not None:
-						origin = ref_origin_param.get(stmt.value.binding_id)
+						if stmt.value.binding_id in ref_origin_param:
+							origin = ref_origin_param.get(stmt.value.binding_id)
+							origin_known = True
 					# val r = &(*p).x;  (reborrow through a ref that derives from param)
 					if isinstance(stmt.value, H.HBorrow):
 						def _base_lookup(hv: object) -> Optional[PlaceBase]:
@@ -8008,8 +8031,14 @@ class TypeChecker:
 
 						sub_place = place_from_expr(stmt.value.subject, base_lookup=_base_lookup)
 						if sub_place is not None and any(isinstance(p, DerefProj) for p in sub_place.projections):
-							origin = ref_origin_param.get(sub_place.base.local_id)
-					ref_origin_param[stmt.binding_id] = origin
+							if sub_place.base.local_id in ref_origin_param:
+								origin = ref_origin_param.get(sub_place.base.local_id)
+								origin_known = True
+						elif sub_place is not None:
+							origin = None
+							origin_known = True
+					if origin_known:
+						ref_origin_param[stmt.binding_id] = origin
 			elif isinstance(stmt, H.HBlock):
 				# Block statements introduce a nested lexical scope.
 				#
@@ -8083,9 +8112,13 @@ class TypeChecker:
 					tgt_ty = binding_types.get(tgt_bid)
 					if tgt_ty is not None and self.type_table.get(tgt_ty).kind is TypeKind.REF:
 						origin: Optional[int] = None
+						origin_known = False
 						if isinstance(stmt.value, H.HVar) and getattr(stmt.value, "binding_id", None) is not None:
-							origin = ref_origin_param.get(stmt.value.binding_id)
-						ref_origin_param[tgt_bid] = origin
+							if stmt.value.binding_id in ref_origin_param:
+								origin = ref_origin_param.get(stmt.value.binding_id)
+								origin_known = True
+						if origin_known:
+							ref_origin_param[tgt_bid] = origin
 			elif hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
 				"""
 				Augmented assignment (`+=`) type rules (MVP).
@@ -8708,50 +8741,539 @@ class TypeChecker:
 				if typed_validation.diagnostics:
 					diagnostics.extend(typed_validation.diagnostics)
 
+		# Seed origin for reference parameters.
+		for bid in param_bindings:
+			pty = binding_types.get(bid)
+			if pty is not None and self.type_table.get(pty).kind is TypeKind.REF:
+				ref_origin_param[bid] = bid
+
+		def _return_origin(expr: H.HExpr) -> Optional[int]:
+			if isinstance(expr, H.HCall):
+				if isinstance(expr.fn, H.HVar) and expr.fn.module_id == "std.mem" and expr.fn.name in ("ptr_at_ref", "ptr_at_mut"):
+					if expr.args:
+						return _return_origin(expr.args[0])
+			if isinstance(expr, H.HMethodCall):
+				origin = _return_origin(expr.receiver)
+				if origin is not None:
+					return origin
+			# Returning an existing reference value (param or local ref).
+			if isinstance(expr, H.HVar) and getattr(expr, "binding_id", None) is not None:
+				return ref_origin_param.get(expr.binding_id)
+			if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+				if isinstance(expr.base, H.HVar) and getattr(expr.base, "binding_id", None) is not None:
+					return ref_origin_param.get(expr.base.binding_id)
+			# Returning a borrow is only allowed when it reborrows through a ref
+			# that originates from a reference parameter (e.g. &(*p).x).
+			if isinstance(expr, H.HBorrow):
+				def _base_lookup(hv: object) -> Optional[PlaceBase]:
+					bid = getattr(hv, "binding_id", None)
+					if bid is None:
+						return None
+					kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
+					name = hv.name if hasattr(hv, "name") else str(hv)
+					return PlaceBase(kind=kind, local_id=bid, name=name)
+
+				sub_place = place_from_expr(expr.subject, base_lookup=_base_lookup)
+				if sub_place is None:
+					return None
+				if sub_place.base.local_id in ref_origin_param:
+					return ref_origin_param.get(sub_place.base.local_id)
+				if not any(isinstance(p, DerefProj) for p in sub_place.projections):
+					return None
+				return ref_origin_param.get(sub_place.base.local_id)
+			return None
+
+		def _struct_field_layout(struct_ty: TypeId) -> tuple[list[str], list[TypeId]] | None:
+			inst = self.type_table.get_struct_instance(struct_ty)
+			if inst is not None:
+				return list(inst.field_names), list(inst.field_types)
+			td = self.type_table.get(struct_ty)
+			if td.kind is not TypeKind.STRUCT or td.field_names is None:
+				return None
+			return list(td.field_names), list(td.param_types)
+
+		def _is_borrowed_aggregate_type(ty: TypeId) -> bool:
+			td = self.type_table.get(ty)
+			if td.kind is not TypeKind.STRUCT:
+				return False
+			layout = _struct_field_layout(ty)
+			if layout is None:
+				return False
+			_field_names, field_types = layout
+			return any(self.type_table.get(ft).kind is TypeKind.REF for ft in field_types)
+
+		def _lambda_capture_root_ids(lam: H.HLambda) -> set[int]:
+			out: set[int] = set()
+			for cap in getattr(lam, "explicit_captures", None) or []:
+				bid = getattr(cap, "binding_id", None)
+				if bid is not None:
+					out.add(int(bid))
+			for cap in getattr(lam, "captures", []) or []:
+				key = getattr(cap, "key", None)
+				root = getattr(key, "root_local", None) if key is not None else None
+				if root is not None:
+					out.add(int(root))
+			return out
+
+		def _lambda_captures_borrowed_aggregate(lam: H.HLambda) -> bool:
+			for bid in _lambda_capture_root_ids(lam):
+				ty = binding_types.get(bid)
+				if ty is not None and _is_borrowed_aggregate_type(ty):
+					return True
+			return False
+
+		def _borrowed_aggregate_requires_mut_origin(ty: TypeId) -> bool:
+			td = self.type_table.get(ty)
+			if td.kind is not TypeKind.STRUCT:
+				return False
+			layout = _struct_field_layout(ty)
+			if layout is None:
+				return False
+			_field_names, field_types = layout
+			return any(self.type_table.get(ft).kind is TypeKind.REF and bool(getattr(self.type_table.get(ft), "ref_mut", False)) for ft in field_types)
+
+		def _ctor_name(fn_expr: H.HExpr) -> Optional[str]:
+			if isinstance(fn_expr, H.HQualifiedMember):
+				return fn_expr.member
+			if isinstance(fn_expr, H.HVar):
+				return fn_expr.name
+			return None
+
+		def _arg_for_field(call: H.HCall, *, field_name: str, field_index: int) -> Optional[H.HExpr]:
+			for kw in call.kwargs:
+				if kw.name == field_name:
+					return kw.value
+			if field_index < len(call.args):
+				return call.args[field_index]
+			return None
+
+		def _borrowed_aggregate_origins(expr: H.HExpr, expected_ty: TypeId) -> Optional[set[int]]:
+			if not _is_borrowed_aggregate_type(expected_ty):
+				return None
+			if not isinstance(expr, H.HCall):
+				return None
+			layout = _struct_field_layout(expected_ty)
+			if layout is None:
+				return None
+			field_names, field_types = layout
+			out: set[int] = set()
+			for idx, fty in enumerate(field_types):
+				ftd = self.type_table.get(fty)
+				if ftd.kind is not TypeKind.REF:
+					continue
+				arg_expr = _arg_for_field(expr, field_name=field_names[idx], field_index=idx)
+				if arg_expr is None:
+					return None
+				origin = _return_origin(arg_expr)
+				if origin is None:
+					if isinstance(arg_expr, H.HBorrow):
+						return set()
+					if isinstance(arg_expr, H.HVar) and getattr(arg_expr, "binding_id", None) is not None:
+						if arg_expr.binding_id in ref_origin_param:
+							return set()
+					return None
+				out.add(origin)
+			return out
+
+		def _return_borrowed_aggregate_origins(expr: H.HExpr, expected_ty: TypeId) -> Optional[set[int]]:
+			d = self.type_table.get(expected_ty)
+			if _is_borrowed_aggregate_type(expected_ty):
+				return _borrowed_aggregate_origins(expr, expected_ty)
+			if d.kind is not TypeKind.VARIANT:
+				return None
+			inst = self.type_table.get_variant_instance(expected_ty)
+			if inst is None:
+				return None
+			if not isinstance(expr, H.HCall):
+				return None
+			ctor = _ctor_name(expr.fn)
+			if ctor is None:
+				return None
+			arm = inst.arms_by_name.get(ctor)
+			if arm is None or len(arm.field_types) != 1:
+				return None
+			inner_ty = arm.field_types[0]
+			if not _is_borrowed_aggregate_type(inner_ty):
+				return None
+			inner_arg = _arg_for_field(
+				expr,
+				field_name=arm.field_names[0] if arm.field_names else "value",
+				field_index=0,
+			)
+			if inner_arg is None:
+				return None
+			return _borrowed_aggregate_origins(inner_arg, inner_ty)
+
+		def _return_type_carries_borrowed_aggregate(ty: TypeId) -> tuple[bool, bool]:
+			if _is_borrowed_aggregate_type(ty):
+				return True, _borrowed_aggregate_requires_mut_origin(ty)
+			td = self.type_table.get(ty)
+			if td.kind is not TypeKind.VARIANT:
+				return False, False
+			inst = self.type_table.get_variant_instance(ty)
+			if inst is None:
+				return False, False
+			for arm in inst.arms:
+				if len(arm.field_types) != 1:
+					continue
+				inner_ty = arm.field_types[0]
+				if _is_borrowed_aggregate_type(inner_ty):
+					return True, _borrowed_aggregate_requires_mut_origin(inner_ty)
+			return False, False
+
+		def _decl_and_sig_for_call(expr: H.HExpr) -> tuple[CallableDecl | None, FnSignature | None]:
+			resolution = call_resolutions.get(getattr(expr, "node_id", None))
+			if isinstance(resolution, MethodResolution):
+				decl = resolution.decl
+			elif isinstance(resolution, CallableDecl):
+				decl = resolution
+			else:
+				decl = None
+			if decl is None:
+				return None, None
+			return decl, signatures_by_id.get(decl.fn_id) if signatures_by_id is not None else None
+
+		def _param_index_for_call(sig: FnSignature, *, arg_index: int | None = None, kw_name: str | None = None) -> Optional[int]:
+			if kw_name is not None:
+				if not sig.param_names:
+					return None
+				try:
+					idx = sig.param_names.index(kw_name)
+				except ValueError:
+					return None
+				if sig.is_method and idx == 0:
+					return None
+				return idx
+			if arg_index is None:
+				return None
+			if sig.is_method:
+				return arg_index + 1
+			return arg_index
+
+		def _nonretaining_param_state(sig: FnSignature, param_index: int) -> Optional[bool]:
+			if sig.param_nonretaining is None:
+				return None
+			if param_index < 0 or param_index >= len(sig.param_nonretaining):
+				return None
+			state = sig.param_nonretaining[param_index]
+			if state is True:
+				return True
+			if state is False:
+				return False
+			return None
+
+		def _check_borrowed_arg_boundary(
+			*,
+			arg_expr: H.HExpr,
+			param_ty: Optional[TypeId],
+			nonretaining_state: Optional[bool],
+			retaining_default: bool,
+			target_name: str,
+			target_module: str | None,
+			param_label: str,
+			span: Span,
+		) -> None:
+			if param_ty is None:
+				return
+			if target_name == "drop_value":
+				return
+			if isinstance(arg_expr, H.HLambda):
+				param_td = self.type_table.get(param_ty)
+				should_reject = (nonretaining_state is False) or retaining_default
+				if param_td.kind is not TypeKind.REF and should_reject and _lambda_captures_borrowed_aggregate(arg_expr):
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								f"lambda capturing borrowed aggregate cannot escape through retaining {param_label} of '{target_name}' "
+								"(generic/default-retaining boundary); require explicit non-retaining parameter"
+							),
+							severity="error",
+							span=span,
+						)
+					)
+				return
+			arg_ty = expr_types.get(getattr(arg_expr, "node_id", None))
+			if arg_ty is None and isinstance(arg_expr, H.HVar) and getattr(arg_expr, "binding_id", None) is not None:
+				arg_ty = binding_types.get(arg_expr.binding_id)
+			if arg_ty is None and hasattr(H, "HMove") and isinstance(arg_expr, getattr(H, "HMove")):
+				subj = arg_expr.subject
+				arg_ty = expr_types.get(getattr(subj, "node_id", None))
+				if arg_ty is None and isinstance(subj, H.HVar) and getattr(subj, "binding_id", None) is not None:
+					arg_ty = binding_types.get(subj.binding_id)
+			if arg_ty is None and hasattr(H, "HCopy") and isinstance(arg_expr, getattr(H, "HCopy")):
+				subj = arg_expr.subject
+				arg_ty = expr_types.get(getattr(subj, "node_id", None))
+				if arg_ty is None and isinstance(subj, H.HVar) and getattr(subj, "binding_id", None) is not None:
+					arg_ty = binding_types.get(subj.binding_id)
+			if arg_ty is None:
+				return
+			if not _is_borrowed_aggregate_type(arg_ty):
+				return
+			param_td = self.type_table.get(param_ty)
+			if param_td.kind is TypeKind.REF:
+				return
+			if nonretaining_state is True:
+				return
+			should_reject = (nonretaining_state is False) or retaining_default
+			if not should_reject:
+				return
+			diagnostics.append(
+				_tc_diag(
+					message=(
+						f"borrowed aggregate argument cannot flow through retaining {param_label} of '{target_name}' "
+						"(generic/default-retaining boundary); require explicit non-retaining parameter"
+					),
+					severity="error",
+					span=span,
+				)
+			)
+
+		def _check_call_expr_boundaries(expr: H.HExpr) -> None:
+			if isinstance(expr, H.HCall):
+				decl, sig = _decl_and_sig_for_call(expr)
+				if decl is not None and sig is not None:
+					for idx, arg in enumerate(expr.args):
+						param_index = _param_index_for_call(sig, arg_index=idx)
+						param_ty = None
+						param_label = f"parameter #{param_index}" if param_index is not None else "parameter"
+						nonret_state: Optional[bool] = None
+						retaining_default = False
+						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
+							param_ty = sig.param_type_ids[param_index]
+							nonret_state = _nonretaining_param_state(sig, param_index)
+							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
+							if sig.param_names and param_index < len(sig.param_names):
+								param_label = f"parameter '{sig.param_names[param_index]}'"
+						_check_borrowed_arg_boundary(
+						arg_expr=arg,
+						param_ty=param_ty,
+						nonretaining_state=nonret_state,
+						retaining_default=retaining_default,
+						target_name=decl.fn_id.name,
+						target_module=decl.fn_id.module,
+						param_label=param_label,
+						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+					)
+					for kw in expr.kwargs:
+						param_index = _param_index_for_call(sig, kw_name=kw.name)
+						param_ty = None
+						param_label = f"parameter #{param_index}" if param_index is not None else "parameter"
+						nonret_state: Optional[bool] = None
+						retaining_default = False
+						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
+							param_ty = sig.param_type_ids[param_index]
+							nonret_state = _nonretaining_param_state(sig, param_index)
+							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
+							if sig.param_names and param_index < len(sig.param_names):
+								param_label = f"parameter '{sig.param_names[param_index]}'"
+						_check_borrowed_arg_boundary(
+						arg_expr=kw.value,
+						param_ty=param_ty,
+						nonretaining_state=nonret_state,
+						retaining_default=retaining_default,
+						target_name=decl.fn_id.name,
+						target_module=decl.fn_id.module,
+						param_label=param_label,
+						span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+					)
+					return
+				call_info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
+				if call_info is None:
+					return
+				if call_info.target.kind is not CallTargetKind.INTRINSIC:
+					return
+				if call_info.target.intrinsic not in {
+					IntrinsicKind.CALLBACK0,
+					IntrinsicKind.CALLBACK1,
+					IntrinsicKind.CALLBACK2,
+					IntrinsicKind.CALLBACK_THROW0,
+					IntrinsicKind.CALLBACK_THROW1,
+					IntrinsicKind.CALLBACK_THROW2,
+				}:
+					return
+				target_name = call_info.target.intrinsic.name if call_info.target.intrinsic is not None else "intrinsic"
+				param_types = list(call_info.sig.param_types)
+				for idx, arg in enumerate(expr.args):
+					param_ty = param_types[idx] if idx < len(param_types) else None
+					_check_borrowed_arg_boundary(
+						arg_expr=arg,
+						param_ty=param_ty,
+						nonretaining_state=None,
+						retaining_default=True,
+						target_name=target_name,
+						target_module=None,
+						param_label=f"parameter #{idx}",
+						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+					)
+				for kw in expr.kwargs:
+					_check_borrowed_arg_boundary(
+						arg_expr=kw.value,
+						param_ty=None,
+						nonretaining_state=None,
+						retaining_default=False,
+						target_name=target_name,
+						target_module=None,
+						param_label=f"parameter '{kw.name}'",
+						span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+					)
+			elif isinstance(expr, H.HMethodCall):
+				decl, sig = _decl_and_sig_for_call(expr)
+				if decl is not None and sig is not None:
+					recv_param_ty = None
+					recv_nonret_state: Optional[bool] = None
+					recv_retaining_default = False
+					if sig.is_method and sig.param_type_ids and len(sig.param_type_ids) > 0:
+						recv_param_ty = sig.param_type_ids[0]
+						recv_nonret_state = _nonretaining_param_state(sig, 0)
+						recv_retaining_default = self.type_table.get(recv_param_ty).kind is TypeKind.TYPEVAR
+					_check_borrowed_arg_boundary(
+						arg_expr=expr.receiver,
+						param_ty=recv_param_ty,
+						nonretaining_state=recv_nonret_state,
+						retaining_default=recv_retaining_default,
+						target_name=decl.fn_id.name,
+						target_module=decl.fn_id.module,
+						param_label="receiver parameter",
+						span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+					)
+					for idx, arg in enumerate(expr.args):
+						param_index = _param_index_for_call(sig, arg_index=idx)
+						param_ty = None
+						param_label = f"parameter #{param_index}" if param_index is not None else "parameter"
+						nonret_state: Optional[bool] = None
+						retaining_default = False
+						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
+							param_ty = sig.param_type_ids[param_index]
+							nonret_state = _nonretaining_param_state(sig, param_index)
+							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
+							if sig.param_names and param_index < len(sig.param_names):
+								param_label = f"parameter '{sig.param_names[param_index]}'"
+						_check_borrowed_arg_boundary(
+							arg_expr=arg,
+							param_ty=param_ty,
+							nonretaining_state=nonret_state,
+							retaining_default=retaining_default,
+							target_name=decl.fn_id.name,
+							target_module=decl.fn_id.module,
+							param_label=param_label,
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
+					for kw in expr.kwargs:
+						param_index = _param_index_for_call(sig, kw_name=kw.name)
+						param_ty = None
+						param_label = f"parameter #{param_index}" if param_index is not None else "parameter"
+						nonret_state: Optional[bool] = None
+						retaining_default = False
+						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
+							param_ty = sig.param_type_ids[param_index]
+							nonret_state = _nonretaining_param_state(sig, param_index)
+							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
+							if sig.param_names and param_index < len(sig.param_names):
+								param_label = f"parameter '{sig.param_names[param_index]}'"
+						_check_borrowed_arg_boundary(
+							arg_expr=kw.value,
+							param_ty=param_ty,
+							nonretaining_state=nonret_state,
+							retaining_default=retaining_default,
+							target_name=decl.fn_id.name,
+							target_module=decl.fn_id.module,
+							param_label=param_label,
+							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+						)
+					return
+				call_info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
+				if call_info is None or call_info.target.kind is not CallTargetKind.INTRINSIC:
+					return
+				intr_name = call_info.target.intrinsic.name if call_info.target.intrinsic is not None else "intrinsic"
+				param_types = list(call_info.sig.param_types)
+				if param_types:
+					_check_borrowed_arg_boundary(
+						arg_expr=expr.receiver,
+						param_ty=param_types[0],
+						nonretaining_state=None,
+						retaining_default=True,
+						target_name=intr_name,
+						target_module=None,
+						param_label="receiver parameter",
+						span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+					)
+				for idx, arg in enumerate(expr.args):
+					param_ty = param_types[idx + 1] if idx + 1 < len(param_types) else None
+					_check_borrowed_arg_boundary(
+						arg_expr=arg,
+						param_ty=param_ty,
+						nonretaining_state=None,
+						retaining_default=True,
+						target_name=intr_name,
+						target_module=None,
+						param_label=f"parameter #{idx + 1}",
+						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+					)
+
+		def _walk_expr_for_borrowed_boundaries(expr: H.HExpr) -> None:
+			_check_call_expr_boundaries(expr)
+			if isinstance(expr, H.HCall):
+				_walk_expr_for_borrowed_boundaries(expr.fn)
+				for a in expr.args:
+					_walk_expr_for_borrowed_boundaries(a)
+				for kw in expr.kwargs:
+					_walk_expr_for_borrowed_boundaries(kw.value)
+			elif isinstance(expr, H.HMethodCall):
+				_walk_expr_for_borrowed_boundaries(expr.receiver)
+				for a in expr.args:
+					_walk_expr_for_borrowed_boundaries(a)
+				for kw in expr.kwargs:
+					_walk_expr_for_borrowed_boundaries(kw.value)
+			elif isinstance(expr, H.HBinary):
+				_walk_expr_for_borrowed_boundaries(expr.left)
+				_walk_expr_for_borrowed_boundaries(expr.right)
+			elif isinstance(expr, H.HUnary):
+				_walk_expr_for_borrowed_boundaries(expr.expr)
+			elif isinstance(expr, H.HTernary):
+				_walk_expr_for_borrowed_boundaries(expr.cond)
+				_walk_expr_for_borrowed_boundaries(expr.then_expr)
+				_walk_expr_for_borrowed_boundaries(expr.else_expr)
+			elif isinstance(expr, H.HArrayLiteral):
+				for el in expr.elements:
+					_walk_expr_for_borrowed_boundaries(el)
+			elif isinstance(expr, H.HMatchExpr):
+				_walk_expr_for_borrowed_boundaries(expr.scrutinee)
+				for arm in expr.arms:
+					_walk_expr_for_borrowed_boundaries(arm.result)
+
+		def _walk_block_for_borrowed_boundaries(block: H.HBlock) -> None:
+			for s in block.statements:
+				if isinstance(s, H.HLet):
+					_walk_expr_for_borrowed_boundaries(s.value)
+				elif isinstance(s, H.HAssign):
+					_walk_expr_for_borrowed_boundaries(s.target)
+					_walk_expr_for_borrowed_boundaries(s.value)
+				elif isinstance(s, H.HExprStmt):
+					_walk_expr_for_borrowed_boundaries(s.expr)
+				elif isinstance(s, H.HReturn):
+					if s.value is not None:
+						_walk_expr_for_borrowed_boundaries(s.value)
+				elif isinstance(s, H.HIf):
+					_walk_expr_for_borrowed_boundaries(s.cond)
+					_walk_block_for_borrowed_boundaries(s.then_block)
+					if s.else_block is not None:
+						_walk_block_for_borrowed_boundaries(s.else_block)
+				elif isinstance(s, H.HLoop):
+					_walk_block_for_borrowed_boundaries(s.body)
+				elif isinstance(s, H.HTry):
+					_walk_block_for_borrowed_boundaries(s.body)
+					for arm in s.catches:
+						_walk_block_for_borrowed_boundaries(arm.block)
+				elif isinstance(s, H.HBlock):
+					_walk_block_for_borrowed_boundaries(s)
+				elif hasattr(H, "HUnsafeBlock") and isinstance(s, getattr(H, "HUnsafeBlock")):
+					_walk_block_for_borrowed_boundaries(s.block)
+
+		_walk_block_for_borrowed_boundaries(body)
+
 		# MVP escape policy: reference returns must be derived from a single
 		# reference parameter.
 		if return_type is not None and self.type_table.get(return_type).kind is TypeKind.REF:
-			# Seed origin for reference parameters.
-			for bid in param_bindings:
-				pty = binding_types.get(bid)
-				if pty is not None and self.type_table.get(pty).kind is TypeKind.REF:
-					ref_origin_param[bid] = bid
-
-			def _return_origin(expr: H.HExpr) -> Optional[int]:
-				if isinstance(expr, H.HCall):
-					if isinstance(expr.fn, H.HVar) and expr.fn.module_id == "std.mem" and expr.fn.name in ("ptr_at_ref", "ptr_at_mut"):
-						if expr.args:
-							return _return_origin(expr.args[0])
-				if isinstance(expr, H.HMethodCall):
-					origin = _return_origin(expr.receiver)
-					if origin is not None:
-						return origin
-				# Returning an existing reference value (param or local ref).
-				if isinstance(expr, H.HVar) and getattr(expr, "binding_id", None) is not None:
-					return ref_origin_param.get(expr.binding_id)
-				if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
-					if isinstance(expr.base, H.HVar) and getattr(expr.base, "binding_id", None) is not None:
-						return ref_origin_param.get(expr.base.binding_id)
-				# Returning a borrow is only allowed when it reborrows through a ref
-				# that originates from a reference parameter (e.g. &(*p).x).
-				if isinstance(expr, H.HBorrow):
-					def _base_lookup(hv: object) -> Optional[PlaceBase]:
-						bid = getattr(hv, "binding_id", None)
-						if bid is None:
-							return None
-						kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
-						name = hv.name if hasattr(hv, "name") else str(hv)
-						return PlaceBase(kind=kind, local_id=bid, name=name)
-
-					sub_place = place_from_expr(expr.subject, base_lookup=_base_lookup)
-					if sub_place is None:
-						return None
-					if sub_place.base.local_id in ref_origin_param:
-						return ref_origin_param.get(sub_place.base.local_id)
-					if not any(isinstance(p, DerefProj) for p in sub_place.projections):
-						return None
-					return ref_origin_param.get(sub_place.base.local_id)
-				return None
 
 			def _walk_returns(block: H.HBlock, out: List[tuple[Optional[int], Span]]) -> None:
 				for s in block.statements:
@@ -8801,6 +9323,67 @@ class TypeChecker:
 							span=span,
 						)
 					)
+
+		# MVP borrowed-aggregate return policy:
+		# - return must derive from reference parameter provenance
+		# - exactly one origin parameter is allowed
+		# - mutable borrowed fields require origin from an &mut parameter
+		if return_type is not None:
+			carries_borrowed_aggregate, requires_mut_origin = _return_type_carries_borrowed_aggregate(return_type)
+			if carries_borrowed_aggregate:
+				returns2: List[tuple[Optional[set[int]], Span]] = []
+
+				def _walk_returns_borrowed(block: H.HBlock, out: List[tuple[Optional[set[int]], Span]]) -> None:
+					for s in block.statements:
+						if isinstance(s, H.HReturn) and s.value is not None:
+							out.append(
+								(
+									_return_borrowed_aggregate_origins(s.value, return_type),
+									getattr(s, "loc", getattr(s.value, "loc", Span())),
+								)
+							)
+						elif isinstance(s, H.HIf):
+							_walk_returns_borrowed(s.then_block, out)
+							if s.else_block:
+								_walk_returns_borrowed(s.else_block, out)
+						elif isinstance(s, H.HLoop):
+							_walk_returns_borrowed(s.body, out)
+						elif isinstance(s, H.HTry):
+							_walk_returns_borrowed(s.body, out)
+							for arm in s.catches:
+								_walk_returns_borrowed(arm.block, out)
+
+				_walk_returns_borrowed(body, returns2)
+				for origins, span in returns2:
+					if origins is None:
+						continue
+					if len(origins) == 0:
+						diagnostics.append(
+							_tc_diag(
+								message="borrowed aggregate return must derive from a reference parameter (MVP escape rule)",
+								severity="error",
+								span=span,
+							)
+						)
+						continue
+					if len(origins) != 1:
+						diagnostics.append(
+							_tc_diag(
+								message="borrowed aggregate return must derive from a single reference parameter (cannot return from different params)",
+								severity="error",
+								span=span,
+							)
+						)
+						continue
+					origin = next(iter(origins))
+					if requires_mut_origin and not binding_param_ref_mut.get(origin, False):
+						diagnostics.append(
+							_tc_diag(
+								message="borrowed aggregate return with mutable references must derive from an &mut parameter",
+								severity="error",
+								span=span,
+							)
+						)
 
 		for d in diagnostics:
 			self._stamp_diag_phase(d)

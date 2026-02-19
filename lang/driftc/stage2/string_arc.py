@@ -128,7 +128,7 @@ def insert_string_arc(
 	destructible_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
-		if (not name.startswith("__")) or _is_error_tid(local_types.get(name))
+		if (not name.startswith("__")) or name.startswith("__match_binder_") or _is_error_tid(local_types.get(name))
 		if name not in string_locals
 		if name not in array_locals
 		if _is_destructible_tid(local_types.get(name))

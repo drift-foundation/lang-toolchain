@@ -1,0 +1,23 @@
+module mariadb.wire.proto.command.com_query
+
+import std.core as core;
+import mariadb.wire.proto.errors as errors;
+
+export {
+	COM_QUERY_COMMAND_ID,
+	encode_com_query_payload
+};
+
+pub const COM_QUERY_COMMAND_ID: Byte = 3;
+
+pub fn encode_com_query_payload(query: &String) nothrow -> core.Result<Array<Byte>, errors.PacketDecodeError> {
+	var out: Array<Byte> = [];
+	out.push(COM_QUERY_COMMAND_ID);
+	var i = 0;
+	val n = query.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(query, i));
+		i = i + 1;
+	}
+	return core.Result::Ok(move out);
+}

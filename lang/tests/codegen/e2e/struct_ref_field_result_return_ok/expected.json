@@ -1,0 +1,4 @@
+{
+  "description": "e2e: borrowed aggregate can return via Result from single origin",
+  "exit_code": 0
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: borrowed aggregate cannot escape via callback lambda capture",
+  "diagnostics": [
+    {
+      "message_contains": "lambda capturing borrowed aggregate cannot escape through retaining parameter",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}
