@@ -1,0 +1,38 @@
+module main
+
+import std.core as core;
+
+struct Session {
+	pub drops: Int
+}
+
+struct Statement {
+	pub session: &mut Session
+}
+
+implement core.Destructible for Statement {
+	pub fn destroy(self: Statement) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
+	return core.Result::Ok(Statement(session = s));
+}
+
+fn main() nothrow -> Int {
+	var sess = Session(drops = 0);
+	match query(&mut sess) {
+		core.Result::Ok(st) => {
+			val owned = move st;
+			if owned.session.drops != 0 {
+				return 11;
+			}
+		},
+		core.Result::Err(_) => { return 10; }
+	}
+	if sess.drops != 1 {
+		return 1;
+	}
+	return 0;
+}

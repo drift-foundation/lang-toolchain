@@ -1155,6 +1155,28 @@
   - `lang/tests/driver/test_driftc_wrapper_env_modes.py`
 - Hardened wrapper env-mode tests against inherited env state (notably `DRIFT_ASAN`) and variant-specific runtime archive assertions.
 
+## 2026-02-19 – Exported type-alias constructor resolution via module aliases (LANGUAGE_BUG)
+- Fixed parser/module-resolution gap where `pub type` aliases exported from a module were not callable as constructors through import aliases.
+  - symptom: `module '<mod>' does not export symbol '<alias>'` on `api.X(...)` even when `X` was exported aliasing a struct.
+- Root-cause fix in `lang/driftc/parser/__init__.py`:
+  - module-qualified call rewrite now resolves exported alias ctor targets (including re-export origins) when alias ultimately resolves to a concrete struct.
+  - export diagnostics now include exported type names (not only value/struct sets) for qualified-call reporting consistency.
+- Regression added:
+  - `lang/tests/driver/test_module_alias_exported_type_alias_ctor.py`.
+
+## 2026-02-19 – Match lowering double-drop on Result<borrowed-aggregate> payload move (LANGUAGE_BUG)
+- Fixed stage2 match-lowering bug where by-value binder extraction from variant payload could trigger premature/drop-duplicate destruction.
+  - symptom (minimized): payload moved from `Result::Ok(Statement)` was destroyed before arm-body use, then destroyed again on later drop path.
+  - observed as e2e failure and crash-class behavior with borrowed-aggregate destructors.
+- Root-cause fix in `lang/driftc/stage2/hir_to_mir.py`:
+  - binder move path now treats payloads requiring runtime drop as move-out candidates.
+  - when payload is moved from arm scrutinee storage, lowering no longer emits immediate scrutinee drop in that path.
+- Regression added:
+  - `lang/tests/codegen/e2e/struct_ref_field_result_ok_move_drop_once`.
+- Validation:
+  - targeted e2e + stage2 tests pass.
+  - regression passes under `DRIFT_ASAN=1` and `DRIFT_MEMCHECK=1`.
+
 ## 2026-02-17 – Checker hardening for non-Copy array index reads (LANGUAGE_BUG)
 - Regression-first fix for internal crash path:
   - symptom: stage2 raised `NotImplementedError` for `HIndex` on `Array<T>` when element type was non-Copy.

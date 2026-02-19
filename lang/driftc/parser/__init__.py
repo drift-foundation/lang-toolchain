@@ -3272,6 +3272,45 @@ def parse_drift_workspace_to_hir(
 				return set()
 			return set()
 
+		def exported_alias_names(mod: str) -> set[str]:
+			if mod in exports_types_by_module:
+				return set((exports_types_by_module.get(mod) or {}).get("aliases") or set())
+			if external_module_exports is not None and mod in external_module_exports:
+				ext = external_module_exports.get(mod) or {}
+				ext_types = ext.get("types")
+				if isinstance(ext_types, dict):
+					return set(ext_types.get("aliases") or set())
+				return set()
+			return set()
+
+		def _resolve_alias_target_struct(module_id: str, alias_name: str, seen: set[tuple[str, str]] | None = None) -> tuple[str, str] | None:
+			seen = seen if seen is not None else set()
+			key = (module_id, alias_name)
+			if key in seen:
+				return None
+			seen.add(key)
+			alias_def = shared_type_table.lookup_type_alias(module_id=module_id, name=alias_name)
+			if alias_def is None:
+				return None
+			type_params, target_te, _target_loc = alias_def
+			if type_params:
+				return None
+			target_mod = str(getattr(target_te, "module_id", None) or module_id)
+			target_name = getattr(target_te, "name", None)
+			if not isinstance(target_name, str) or not target_name:
+				return None
+			if shared_type_table.get_nominal(kind=TypeKind.STRUCT, module_id=target_mod, name=target_name) is not None:
+				return (target_mod, target_name)
+			return _resolve_alias_target_struct(target_mod, target_name, seen)
+
+		def _resolve_exported_ctor_target(mod: str, member: str) -> tuple[str, str] | None:
+			if member in exported_struct_names(mod):
+				return reexported_type_targets_by_module.get(mod, {}).get("structs", {}).get(member, (mod, member))
+			if member not in exported_alias_names(mod):
+				return None
+			def_mod, def_name = reexported_type_targets_by_module.get(mod, {}).get("aliases", {}).get(member, (mod, member))
+			return _resolve_alias_target_struct(def_mod, def_name)
+
 		def exported_value_origin(mod: str, name: str) -> tuple[str, str] | None:
 			if mod in exports_values_by_module:
 				origin = (exports_values_by_module.get(mod) or {}).get(name)
@@ -3329,7 +3368,6 @@ def parse_drift_workspace_to_hir(
 				return None
 			vals = exported_value_names(mod)
 			types = exported_type_names(mod)
-			structs = exported_struct_names(mod)
 			if member in vals:
 				origin = exported_value_origin(mod, member) or (mod, member)
 				return H.HCall(
@@ -3338,9 +3376,10 @@ def parse_drift_workspace_to_hir(
 					kwargs=kwargs,
 					type_args=type_args,
 				)
-			if member in structs:
+			ctor_target = _resolve_exported_ctor_target(mod, member)
+			if ctor_target is not None:
 				# Constructor call through a module alias. MVP supports only struct ctors.
-				def_mod, def_name = reexported_type_targets_by_module.get(mod, {}).get("structs", {}).get(member, (mod, member))
+				def_mod, def_name = ctor_target
 				struct_id = shared_type_table.get_nominal(kind=TypeKind.STRUCT, module_id=def_mod, name=def_name)
 				if struct_id is None:
 					diagnostics.append(
@@ -3361,9 +3400,9 @@ def parse_drift_workspace_to_hir(
 					type_args=type_args,
 				)
 			ext_vals = exported_value_names(mod)
-			ext_structs = exported_struct_names(mod)
-			if member not in ext_vals and member not in ext_structs:
-				available = ", ".join(sorted(ext_vals | ext_structs))
+			ext_types = exported_type_names(mod)
+			if member not in ext_vals and member not in ext_types:
+				available = ", ".join(sorted(ext_vals | ext_types))
 				notes = (
 					[f"available exports: {available}"]
 					if available
@@ -3375,6 +3414,15 @@ def parse_drift_workspace_to_hir(
 						severity="error",
 						span=getattr(receiver, "loc", Span()),
 						notes=notes,
+					)
+				)
+				return None
+			if member in ext_types:
+				diagnostics.append(
+					_p_diag(
+						message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in MVP",
+						severity="error",
+						span=getattr(receiver, "loc", Span()),
 					)
 				)
 				return None

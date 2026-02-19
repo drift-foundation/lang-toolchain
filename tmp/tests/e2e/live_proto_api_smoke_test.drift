@@ -1,0 +1,176 @@
+module mariadb.wire.proto.tests.e2e.live_proto_api_smoke_test
+
+import std.core as core;
+import mariadb.wire.proto as proto;
+
+const LIVE_HOST: String = "127.0.0.1";
+const LIVE_PORT: Int = 34114;
+const LIVE_USER: String = "root";
+const LIVE_PASSWORD: String = "rootpw";
+const LIVE_DB: String = "appdb";
+const LIVE_CHARSET: Byte = 45;
+const LIVE_TIMEOUT_MS: Int = 3000;
+const LIVE_CLIENT_CAPS: Uint = 11510412;
+
+fn _opts() nothrow -> proto.WireConnectOptions {
+	return proto.WireConnectOptions(host = LIVE_HOST, port = LIVE_PORT, username = LIVE_USER, password = LIVE_PASSWORD, database = LIVE_DB, character_set = LIVE_CHARSET, client_capabilities = LIVE_CLIENT_CAPS, connect_timeout_ms = LIVE_TIMEOUT_MS, io_timeout_ms = LIVE_TIMEOUT_MS);
+}
+
+fn _drain_expect_statement_end(statement: &mut proto.Statement, err_base: Int) nothrow -> Int {
+	while true {
+		match proto.next_event(statement) {
+			core.Result::Err(_) => { return err_base; },
+			core.Result::Ok(ev) => {
+				match ev {
+					proto.StatementEvent::Row(_) => {},
+					proto.StatementEvent::ResultSetEnd => {},
+					proto.StatementEvent::StatementErr(_) => { return err_base + 1; },
+					proto.StatementEvent::StatementEnd(_) => { return 0; }
+				}
+			}
+		}
+	}
+}
+
+fn scenario_query_skip_and_commit() nothrow -> Int {
+	var s = _opts();
+	match proto.connect(&s) {
+		core.Result::Err(_) => { return 1000; },
+		core.Result::Ok(session) => {
+			var conn = move session;
+			match proto.query(&mut conn, &"CALL sp_multi_rs()") {
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1001; },
+				core.Result::Ok(stmt) => {
+						var statement = move stmt;
+						match proto.next_event(&mut statement) {
+							core.Result::Ok(ev) => {
+								match ev {
+									proto.StatementEvent::Row(_) => {},
+									default => { val _ = proto.close(&mut conn); return 1002; }
+								}
+							},
+							default => { val _ = proto.close(&mut conn); return 1002; }
+						}
+					match proto.skip_result(&mut statement) {
+						core.Result::Ok(_) => {},
+						core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1003; }
+					}
+						match proto.next_event(&mut statement) {
+							core.Result::Ok(ev) => {
+								match ev {
+									proto.StatementEvent::Row(_) => {},
+									default => { val _ = proto.close(&mut conn); return 1004; }
+								}
+							},
+							default => { val _ = proto.close(&mut conn); return 1004; }
+						}
+					match proto.skip_remaining(&mut statement) {
+						core.Result::Ok(_) => {},
+						core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1005; }
+					}
+				}
+			}
+			match proto.commit(&mut conn) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1006; }
+			}
+			val _ = proto.close(&mut conn);
+			return 0;
+		}
+	}
+}
+
+fn scenario_drop_auto_drain() nothrow -> Int {
+	var s = _opts();
+	match proto.connect(&s) {
+		core.Result::Err(_) => { return 1100; },
+		core.Result::Ok(session) => {
+			var conn = move session;
+			match proto.query(&mut conn, &"CALL sp_multi_rs()") {
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1101; },
+				core.Result::Ok(stmt) => {
+					var statement = move stmt;
+					match proto.next_event(&mut statement) {
+						core.Result::Ok(ev) => {
+							match ev {
+								proto.StatementEvent::Row(_) => {},
+								default => { val _ = proto.close(&mut conn); return 1102; }
+							}
+						},
+						default => { val _ = proto.close(&mut conn); return 1102; }
+					}
+				}
+			}
+			match proto.commit(&mut conn) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1103; }
+			}
+			val _ = proto.close(&mut conn);
+			return 0;
+		}
+	}
+}
+
+fn scenario_tx_roundtrip() nothrow -> Int {
+	var s = _opts();
+	match proto.connect(&s) {
+		core.Result::Err(_) => { return 1200; },
+		core.Result::Ok(session) => {
+			var conn = move session;
+			match proto.set_autocommit(&mut conn, false) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1201; }
+			}
+			match proto.query(&mut conn, &"CALL sp_1()") {
+				core.Result::Ok(stmt) => {
+					var statement = move stmt;
+					val rc = _drain_expect_statement_end(&mut statement, 1202);
+					if rc != 0 { val _ = proto.close(&mut conn); return rc; }
+				},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1203; }
+			}
+			match proto.query(&mut conn, &"CALL sp_error()") {
+				core.Result::Ok(stmt) => {
+					var statement = move stmt;
+					while true {
+						match proto.next_event(&mut statement) {
+							core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1204; },
+							core.Result::Ok(ev) => {
+								match ev {
+									proto.StatementEvent::StatementErr(_) => { break; },
+									proto.StatementEvent::StatementEnd(_) => { val _ = proto.close(&mut conn); return 1205; },
+									default => {}
+								}
+							}
+						}
+					}
+				},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1206; }
+			}
+			match proto.rollback(&mut conn) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1207; }
+			}
+			match proto.set_autocommit(&mut conn, true) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1208; }
+			}
+			match proto.reset_for_pool_reuse(&mut conn) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => { val _ = proto.close(&mut conn); return 1209; }
+			}
+			val _ = proto.close(&mut conn);
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_query_skip_and_commit();
+	if a != 0 { return a; }
+	val b = scenario_drop_auto_drain();
+	if b != 0 { return b; }
+	val c = scenario_tx_roundtrip();
+	if c != 0 { return c; }
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "e2e: moved borrowed-aggregate from Result::Ok is dropped exactly once",
+  "exit_code": 0
+}

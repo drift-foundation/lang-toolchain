@@ -776,6 +776,7 @@ class HIRToMIR:
 			self._push_scope(include_params=False)
 			arm_scrut_local: str | None = None
 			arm_scrut_ptr: M.ValueId | None = None
+			arm_scrut_payload_moved = False
 			arm_drop_locals: list[str] = []
 			try:
 				def _ensure_arm_scrut_ptr() -> None:
@@ -819,7 +820,8 @@ class HIRToMIR:
 						if len(field_indices) != len(arm.binders):
 							raise AssertionError("match binder field-index mapping missing (checker bug)")
 						if (not scrut_is_ref) and any(
-							not self._type_table.is_copy(arm_def.field_types[int(fidx)])
+							(not self._type_table.is_copy(arm_def.field_types[int(fidx)]))
+							or self._needs_runtime_drop(arm_def.field_types[int(fidx)])
 							for fidx in field_indices
 						):
 							_ensure_arm_scrut_ptr()
@@ -850,7 +852,7 @@ class HIRToMIR:
 								self._local_types[bname] = binder_ty
 								self.b.emit(M.StoreLocal(local=bname, value=field_val))
 							else:
-								if arm_scrut_ptr is not None and not self._type_table.is_copy(bty):
+								if arm_scrut_ptr is not None and ((not self._type_table.is_copy(bty)) or self._needs_runtime_drop(bty)):
 									self.b.emit(
 										M.VariantGetFieldAddr(
 											dest=field_val,
@@ -864,10 +866,7 @@ class HIRToMIR:
 									field_moved = self.b.new_temp()
 									self.b.emit(M.LoadRef(dest=field_moved, ptr=field_val, inner_ty=bty))
 									self._local_types[field_moved] = bty
-									field_zero = self.b.new_temp()
-									self.b.emit(M.ZeroValue(dest=field_zero, ty=bty))
-									self._local_types[field_zero] = bty
-									self.b.emit(M.StoreRef(ptr=field_val, value=field_zero, inner_ty=bty))
+									arm_scrut_payload_moved = True
 								else:
 									self.b.emit(
 										M.VariantGetField(
@@ -891,7 +890,9 @@ class HIRToMIR:
 
 				# Consume and drop by-value scrutinee before arm body so cleanup runs
 				# even when the arm terminates early (e.g., return/throw).
-				if arm_scrut_local is not None:
+				if arm_scrut_payload_moved:
+					arm_scrut_local = None
+				elif arm_scrut_local is not None:
 					arm_scrut_moved_pre = self.b.new_temp()
 					self.b.emit(M.MoveOut(dest=arm_scrut_moved_pre, local=arm_scrut_local, ty=scrut_ty))
 					self._local_types[arm_scrut_moved_pre] = scrut_ty
