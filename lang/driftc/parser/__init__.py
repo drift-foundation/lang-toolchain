@@ -3747,9 +3747,9 @@ def parse_drift_workspace_to_hir(
 				if module_file_by_id.get(mid) is not None
 			},
 		)
-	# After all modules are parsed, normalize exception-named forward nominals in
-	# signatures using the full exception schema set.
-	def _coerce_exception_nominal(tid: TypeId) -> TypeId:
+	# After all modules are parsed, normalize forward nominals in signatures
+	# using the full schema/alias set.
+	def _coerce_forward_nominal(tid: TypeId) -> TypeId:
 		try:
 			td = shared_type_table.get(tid)
 		except Exception:
@@ -3758,18 +3758,51 @@ def parse_drift_workspace_to_hir(
 			fqn = f"{td.module_id}:{td.name}"
 			if fqn in shared_type_table.exception_schemas:
 				return shared_type_table.ensure_error()
+			alias_def = shared_type_table.lookup_type_alias(module_id=td.module_id, name=td.name)
+			if alias_def is not None:
+				alias_params, alias_target, _loc = alias_def
+				if not alias_params:
+					resolved = resolve_opaque_type(alias_target, shared_type_table, module_id=td.module_id, type_params=None, allow_generic_base=True)
+					if resolved != tid:
+						return _coerce_forward_nominal(resolved)
+			resolved_nom = (
+				shared_type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+				or shared_type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+				or shared_type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+			)
+			if resolved_nom is not None:
+				return resolved_nom
 		if td.kind is TypeKind.REF and td.param_types:
 			inner = td.param_types[0]
-			new_inner = _coerce_exception_nominal(inner)
+			new_inner = _coerce_forward_nominal(inner)
 			if new_inner != inner:
 				return shared_type_table.ensure_ref_mut(new_inner) if td.ref_mut else shared_type_table.ensure_ref(new_inner)
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			elem = td.param_types[0]
+			new_elem = _coerce_forward_nominal(elem)
+			if new_elem != elem:
+				return shared_type_table.new_array(new_elem)
+		if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
+			ok_old = td.param_types[0]
+			err_old = td.param_types[1]
+			ok_new = _coerce_forward_nominal(ok_old)
+			err_new = _coerce_forward_nominal(err_old)
+			if ok_new != ok_old or err_new != err_old:
+				return shared_type_table.ensure_fnresult(ok_new, err_new)
+		if td.kind is TypeKind.FUNCTION and td.param_types:
+			new_params = [_coerce_forward_nominal(t) for t in td.param_types]
+			changed = any(a != b for a, b in zip(new_params, td.param_types))
+			if changed:
+				if len(new_params) == 1:
+					return shared_type_table.ensure_function([], new_params[0], can_throw=td.fn_throws)
+				return shared_type_table.ensure_function(new_params[:-1], new_params[-1], can_throw=td.fn_throws)
 		return tid
 	for mod in modules.values():
 		for sig in mod.signatures_by_id.values():
 			if sig.param_type_ids:
-				sig.param_type_ids = [_coerce_exception_nominal(t) for t in sig.param_type_ids]
+				sig.param_type_ids = [_coerce_forward_nominal(t) for t in sig.param_type_ids]
 			if sig.return_type_id is not None:
-				sig.return_type_id = _coerce_exception_nominal(sig.return_type_id)
+				sig.return_type_id = _coerce_forward_nominal(sig.return_type_id)
 	for module in modules.values():
 		for block in module.func_hirs.values():
 			assign_callsite_ids(block, start=0)

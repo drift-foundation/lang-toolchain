@@ -1638,6 +1638,23 @@ class HIRToMIR:
 			raise NotImplementedError(
 				"captures view must be indexed: Error.captures[\"frame\"][\"key\"]"
 			)
+		if sub_def.kind is TypeKind.FORWARD_NOMINAL:
+			resolved_ty: TypeId | None = None
+			alias_def = self._type_table.lookup_type_alias(module_id=sub_def.module_id, name=sub_def.name)
+			if alias_def is not None:
+				alias_params, alias_target, _loc = alias_def
+				if not alias_params:
+					cand = resolve_opaque_type(alias_target, self._type_table, module_id=sub_def.module_id, type_params=None, allow_generic_base=True)
+					cand_def = self._type_table.get(cand)
+					if cand_def.kind is TypeKind.STRUCT:
+						resolved_ty = cand
+			if resolved_ty is None:
+				resolved_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=sub_def.module_id, name=sub_def.name)
+			if resolved_ty is None:
+				resolved_ty = self._type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=sub_def.name)
+			if resolved_ty is not None:
+				subj_ty = resolved_ty
+				sub_def = self._type_table.get(subj_ty)
 		# Struct field access.
 		if sub_def.kind is not TypeKind.STRUCT:
 			raise NotImplementedError(f"field access is only supported on structs in v1 (have {sub_def.kind})")
@@ -6228,6 +6245,42 @@ class HIRToMIR:
 		This is intentionally conservative: it only returns a TypeId when the type
 		can be inferred locally (literals, some builtins, locals with known types).
 		"""
+		def _canonical_forward_nominal(ty: TypeId | None, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId | None:
+			if ty is None:
+				return None
+			seen = _seen if _seen is not None else set()
+			td = self._type_table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = _canonical_forward_nominal(td.param_types[0], _seen=seen)
+				if inner is not None and inner != td.param_types[0]:
+					return self._type_table.ensure_ref_mut(inner) if td.ref_mut else self._type_table.ensure_ref(inner)
+				return ty
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				elem = _canonical_forward_nominal(td.param_types[0], _seen=seen)
+				if elem is not None and elem != td.param_types[0]:
+					return self._type_table.new_array(elem)
+				return ty
+			if td.kind is not TypeKind.FORWARD_NOMINAL:
+				return ty
+			alias_key = (td.module_id, td.name)
+			if alias_key in seen:
+				return ty
+			alias_def = self._type_table.lookup_type_alias(module_id=td.module_id, name=td.name)
+			if alias_def is not None:
+				alias_params, alias_target, _loc = alias_def
+				if not alias_params:
+					resolved = resolve_opaque_type(alias_target, self._type_table, module_id=td.module_id, type_params=None, allow_generic_base=True)
+					if resolved != ty:
+						return _canonical_forward_nominal(resolved, _seen=seen | {alias_key})
+			resolved_nom = (
+				self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+				or self._type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+				or self._type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+			)
+			if resolved_nom is not None:
+				return resolved_nom
+			return ty
+
 		if isinstance(expr, H.HLiteralInt):
 			known = None
 			if self._expr_types and self._typed_mode != "none":
@@ -6289,20 +6342,20 @@ class HIRToMIR:
 						local_def = self._type_table.get(local_ty)
 						bid_def = self._type_table.get(bid_ty)
 						if local_def.kind in (TypeKind.UNKNOWN, TypeKind.TYPEVAR):
-							return bid_ty
+							return _canonical_forward_nominal(bid_ty)
 						if local_def.kind is TypeKind.SCALAR and bid_def.kind is TypeKind.SCALAR and local_ty != bid_ty:
-							return bid_ty
-				return local_ty
+							return _canonical_forward_nominal(bid_ty)
+				return _canonical_forward_nominal(local_ty)
 			if self._expr_types and self._typed_mode != "none":
 				known = self._expr_types.get(expr.node_id)
 				if known is not None:
 					known_def = self._type_table.get(known)
 					if known_def.kind is not TypeKind.UNKNOWN:
-						return known
+						return _canonical_forward_nominal(known)
 			if getattr(expr, "binding_id", None) is not None:
 				bid_ty = self._binding_types.get(int(expr.binding_id))
 				if bid_ty is not None:
-					return bid_ty
+					return _canonical_forward_nominal(bid_ty)
 			if getattr(expr, "binding_id", None) is None:
 				const_mod = getattr(expr, "module_id", None) or self._current_module_name()
 				const_val = self._type_table.lookup_const(f"{const_mod}::{expr.name}")
@@ -6321,7 +6374,7 @@ class HIRToMIR:
 						td = self._type_table.get(known)
 						fn = self._current_fn_id
 						print(f"[drift:debug][local_types_trace] fn={fn} expr=HLiteralBool node_id={expr.node_id} known={known}:{td.kind.name}:{td.name}", file=sys.stderr)
-					return known
+					return _canonical_forward_nominal(known)
 		if isinstance(expr, H.HLiteralFloat):
 			return self._float_type
 		if isinstance(expr, H.HLiteralBool):
@@ -6352,12 +6405,12 @@ class HIRToMIR:
 		if isinstance(expr, H.HCall) and hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 			info = self._call_info_for_expr_optional(expr)
 			if info is not None:
-				return info.sig.user_ret_type
+				return _canonical_forward_nominal(info.sig.user_ret_type)
 			return self._infer_qualified_ctor_variant_type(expr.fn, expr.args)
 		if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 			info = self._call_info_for_expr_optional(expr)
 			if info is not None:
-				return info.sig.user_ret_type
+				return _canonical_forward_nominal(info.sig.user_ret_type)
 			name = expr.fn.name
 			# Struct constructor call: result is the struct TypeId.
 			struct_ty: TypeId | None = None
@@ -6385,7 +6438,7 @@ class HIRToMIR:
 		if isinstance(expr, H.HInvoke):
 			info = self._call_info_for_expr_optional(expr)
 			if info is not None:
-				return info.sig.user_ret_type
+				return _canonical_forward_nominal(info.sig.user_ret_type)
 		if isinstance(expr, H.HFnPtrConst):
 			return self._type_table.ensure_function(
 				list(expr.call_sig.param_types),
@@ -6411,7 +6464,7 @@ class HIRToMIR:
 				if info is None:
 					return None
 				_, fty = info
-				return fty
+				return _canonical_forward_nominal(fty)
 		if isinstance(expr, H.HArrayLiteral):
 			elem_ty = self._infer_array_literal_elem_type(expr)
 			return self._type_table.new_array(elem_ty)

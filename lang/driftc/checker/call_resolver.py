@@ -1066,7 +1066,39 @@ def resolve_struct_ctor(
 	if len(field_names) != len(field_types):
 		ctx.diagnostics.append(ctx.tc_diag(message=f"internal: struct '{struct_name}' schema/type mismatch", severity="error", span=span))
 		return StructCtorResolveResult(struct_id, field_types, [], list(arg_exprs))
+	def _dealias_zero_param(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
+		seen = _seen if _seen is not None else set()
+		td = ctx.type_table.get(ty)
+		if td.kind is TypeKind.REF and td.param_types:
+			inner = _dealias_zero_param(td.param_types[0], _seen=seen)
+			return ctx.type_table.ensure_ref_mut(inner) if td.ref_mut else ctx.type_table.ensure_ref(inner)
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			elem = _dealias_zero_param(td.param_types[0], _seen=seen)
+			return ctx.type_table.new_array(elem)
+		inst = ctx.type_table.get_struct_instance(ty)
+		if inst is not None and inst.type_args:
+			new_args = [_dealias_zero_param(arg, _seen=seen) for arg in inst.type_args]
+			return ctx.type_table.ensure_struct_template(inst.base_id, new_args) if any(ctx.type_table.has_typevar(arg) for arg in new_args) else ctx.type_table.ensure_struct_instantiated(inst.base_id, new_args)
+		vinst = ctx.type_table.get_variant_instance(ty)
+		if vinst is not None and vinst.type_args:
+			new_args = [_dealias_zero_param(arg, _seen=seen) for arg in vinst.type_args]
+			return ctx.type_table.ensure_variant_template(vinst.base_id, new_args) if any(ctx.type_table.has_typevar(arg) for arg in new_args) else ctx.type_table.ensure_variant_instantiated(vinst.base_id, new_args)
+		mod = td.module_id
+		name = td.name
+		alias_def = ctx.type_table.lookup_type_alias(module_id=mod, name=name)
+		if alias_def is None:
+			return ty
+		alias_params, alias_target, _loc = alias_def
+		if alias_params:
+			return ty
+		alias_key = (mod, name)
+		if alias_key in seen:
+			return ty
+		resolved = resolve_opaque_type(alias_target, ctx.type_table, module_id=mod, type_params=None, allow_generic_base=True)
+		return _dealias_zero_param(resolved, _seen=seen | {alias_key})
 	def _same_type(a: TypeId, b: TypeId) -> bool:
+		a = _dealias_zero_param(a)
+		b = _dealias_zero_param(b)
 		if a == b:
 			return True
 		key_a = normalize_type_key(

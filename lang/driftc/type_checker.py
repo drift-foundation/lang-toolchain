@@ -1310,6 +1310,37 @@ class TypeChecker:
 				return None
 			return bool(pdef.ref_mut), pdef.param_types[0]
 
+		def _dealias_zero_param_type(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
+			seen = _seen if _seen is not None else set()
+			td = self.type_table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = _dealias_zero_param_type(td.param_types[0], _seen=seen)
+				return self.type_table.ensure_ref_mut(inner) if td.ref_mut else self.type_table.ensure_ref(inner)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				elem = _dealias_zero_param_type(td.param_types[0], _seen=seen)
+				return self.type_table.new_array(elem)
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None and inst.type_args:
+				new_args = [_dealias_zero_param_type(arg, _seen=seen) for arg in inst.type_args]
+				return self.type_table.ensure_struct_template(inst.base_id, new_args) if any(self.type_table.has_typevar(arg) for arg in new_args) else self.type_table.ensure_struct_instantiated(inst.base_id, new_args)
+			vinst = self.type_table.get_variant_instance(ty)
+			if vinst is not None and vinst.type_args:
+				new_args = [_dealias_zero_param_type(arg, _seen=seen) for arg in vinst.type_args]
+				return self.type_table.ensure_variant_template(vinst.base_id, new_args) if any(self.type_table.has_typevar(arg) for arg in new_args) else self.type_table.ensure_variant_instantiated(vinst.base_id, new_args)
+			mod = td.module_id
+			name = td.name
+			alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+			if alias_def is None:
+				return ty
+			alias_params, alias_target, _loc = alias_def
+			if alias_params:
+				return ty
+			alias_key = (mod, name)
+			if alias_key in seen:
+				return ty
+			resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
+			return _dealias_zero_param_type(resolved, _seen=seen | {alias_key})
+
 		def _coerce_args_for_params(params: list[TypeId], args: list[TypeId]) -> list[TypeId]:
 			if len(params) != len(args):
 				return list(args)
@@ -1341,14 +1372,16 @@ class TypeChecker:
 					param_def = self.type_table.get(param_ty)
 					if param_def.kind is TypeKind.INTERFACE and param_def.name in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
 						continue
-				if param_ty == arg_ty:
+				param_cmp = _dealias_zero_param_type(param_ty)
+				arg_cmp = _dealias_zero_param_type(arg_ty)
+				if param_cmp == arg_cmp:
 					continue
-				ref_info = _ref_param_info(param_ty)
-				if ref_info is not None and arg_ty == ref_info[1]:
+				ref_info = _ref_param_info(param_cmp)
+				if ref_info is not None and arg_cmp == ref_info[1]:
 					continue
-				param_def = self.type_table.get(param_ty)
-				arg_def = self.type_table.get(arg_ty)
-				if param_def.kind is TypeKind.REF and arg_def.kind is TypeKind.REF and arg_def.param_types and arg_def.param_types[0] == param_ty:
+				param_def = self.type_table.get(param_cmp)
+				arg_def = self.type_table.get(arg_cmp)
+				if param_def.kind is TypeKind.REF and arg_def.kind is TypeKind.REF and arg_def.param_types and arg_def.param_types[0] == param_cmp:
 					continue
 				return False
 			return True

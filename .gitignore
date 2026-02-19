@@ -22,3 +22,4 @@ dist/release/index.json
 *.seed
 *.seed.pgp
 .config/drift/keys/
+tmp/

@@ -171,6 +171,108 @@ def _remap_tid(tid_map: dict[int, int], tid: object) -> object:
 	return tid
 
 
+def _canonicalize_forward_nominal_type_id(
+	type_table: TypeTable,
+	ty_id: TypeId,
+	*,
+	_seen: set[tuple[str | None, str]] | None = None,
+) -> TypeId:
+	"""
+	Best-effort canonicalization for zero-parameter aliases/forward nominals.
+
+	This pass is boundary-facing hygiene: stage2/MIR may still carry forward
+	nominals for alias names, but MIR validation/codegen require concrete layout
+	types. We normalize recursively for wrapper shapes used at boundaries.
+	"""
+	td = type_table.get(ty_id)
+	seen = _seen if _seen is not None else set()
+	if td.kind is TypeKind.REF and td.param_types:
+		inner = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		if inner != td.param_types[0]:
+			return type_table.ensure_ref_mut(inner) if td.ref_mut else type_table.ensure_ref(inner)
+		return ty_id
+	if td.kind is TypeKind.ARRAY and td.param_types:
+		elem = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		if elem != td.param_types[0]:
+			return type_table.new_array(elem)
+		return ty_id
+	if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
+		ok_ty = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		err_ty = _canonicalize_forward_nominal_type_id(type_table, td.param_types[1], _seen=seen)
+		if ok_ty != td.param_types[0] or err_ty != td.param_types[1]:
+			return type_table.new_fnresult(ok_ty, err_ty)
+		return ty_id
+	if td.kind is TypeKind.FUNCTION and td.param_types:
+		new_params = [
+			_canonicalize_forward_nominal_type_id(type_table, p, _seen=seen) for p in td.param_types[:-1]
+		]
+		new_ret = _canonicalize_forward_nominal_type_id(type_table, td.param_types[-1], _seen=seen)
+		if new_params != td.param_types[:-1] or new_ret != td.param_types[-1]:
+			return type_table.new_function(tuple(new_params), new_ret)
+		return ty_id
+	if td.kind is not TypeKind.FORWARD_NOMINAL:
+		return ty_id
+	alias_key = (td.module_id, td.name)
+	if alias_key in seen:
+		return ty_id
+	alias_def = type_table.lookup_type_alias(module_id=td.module_id, name=td.name)
+	if alias_def is not None:
+		alias_params, alias_target, _loc = alias_def
+		if not alias_params:
+			resolved = resolve_opaque_type(
+				alias_target,
+				type_table,
+				module_id=td.module_id,
+				type_params=None,
+				allow_generic_base=True,
+			)
+			if resolved != ty_id:
+				return _canonicalize_forward_nominal_type_id(
+					type_table, resolved, _seen=seen | {alias_key}
+				)
+	resolved_nom = (
+		type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+		or type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+		or type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+	)
+	return resolved_nom if resolved_nom is not None else ty_id
+
+
+def _canonicalize_signature_type_ids(signatures_by_id: Mapping[FunctionId, FnSignature], type_table: TypeTable) -> None:
+	for sig in signatures_by_id.values():
+		sig.param_type_ids = [
+			_canonicalize_forward_nominal_type_id(type_table, ty_id) for ty_id in sig.param_type_ids
+		]
+		sig.return_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.return_type_id)
+
+
+def _canonicalize_mir_type_ids(mir_funcs_by_id: Mapping[FunctionId, M.MirFunc], type_table: TypeTable) -> None:
+	type_field_names = {"ty", "user_ret_type"}
+	for func in mir_funcs_by_id.values():
+		func.local_types = {
+			name: _canonicalize_forward_nominal_type_id(type_table, ty_id)
+			for name, ty_id in (getattr(func, "local_types", {}) or {}).items()
+		}
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				for attr_name, attr_value in vars(instr).items():
+					if isinstance(attr_value, int) and (attr_name in type_field_names or attr_name.endswith("_ty")):
+						setattr(
+							instr,
+							attr_name,
+							_canonicalize_forward_nominal_type_id(type_table, attr_value),
+						)
+					elif attr_name == "param_types" and isinstance(attr_value, list):
+						setattr(
+							instr,
+							attr_name,
+							[
+								_canonicalize_forward_nominal_type_id(type_table, ty_id)
+								for ty_id in attr_value
+							],
+						)
+
+
 def _find_trait_key(world: "TraitWorld", *, module: str, name: str) -> TraitKey | None:
 	keys = [key for key in world.traits.keys() if key.module == module and key.name == name]
 	if not keys:
@@ -5022,6 +5124,9 @@ def compile_stubbed_funcs(
 
 	with _timed("mir_validate"):
 		try:
+			if shared_type_table is not None:
+				_canonicalize_signature_type_ids(signatures_by_id, shared_type_table)
+				_canonicalize_mir_type_ids(mir_funcs_by_id, shared_type_table)
 			validate_mir_call_invariants(mir_funcs_by_id)
 			if shared_type_table is not None:
 				validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
