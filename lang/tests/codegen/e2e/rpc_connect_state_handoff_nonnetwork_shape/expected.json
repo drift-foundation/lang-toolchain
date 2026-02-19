@@ -1,0 +1,6 @@
+{
+  "description": "e2e: non-network connect-like return/bind handoff preserves nested state mutations",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: match ref scrutinee non-Copy by-value extraction rejected with checker diagnostic",
+  "diagnostics": [
+    {
+      "message_contains": "cannot copy value of type 'S<",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

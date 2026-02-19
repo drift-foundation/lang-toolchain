@@ -1,0 +1,4 @@
+{
+  "description": "e2e regression: CopyValue(String) must preserve canonical value ids across loop phi/backedge",
+  "exit_code": 0
+}

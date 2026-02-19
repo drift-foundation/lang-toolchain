@@ -1,0 +1,6 @@
+{
+  "description": "e2e regression: Result::Ok(move conn) must not drop moved source local before caller bind",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

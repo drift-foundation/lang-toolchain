@@ -837,6 +837,160 @@ class TypeChecker:
 						)
 					)
 
+	def validate_trait_impls(
+		self,
+		impls: Sequence[ImplMeta],
+		*,
+		signatures_by_id: Mapping[FunctionId, FnSignature],
+		trait_index: GlobalTraitIndex | None,
+		diagnostics: list[Diagnostic],
+	) -> None:
+		def _is_structurally_copy(tid: TypeId, *, seen: set[TypeId]) -> bool:
+			if tid in seen:
+				return False
+			seen.add(tid)
+			td = self.type_table.get(tid)
+			if td.kind is TypeKind.SCALAR:
+				return td.name != "String"
+			if td.kind in (TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION, TypeKind.VOID):
+				return True
+			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR):
+				return False
+			if td.kind is TypeKind.STRUCT:
+				inst = self.type_table.get_struct_instance(tid)
+				if inst is None:
+					return False
+				return all(_is_structurally_copy(fty, seen=seen) for fty in inst.field_types)
+			if td.kind is TypeKind.VARIANT:
+				inst = self.type_table.get_variant_instance(tid)
+				if inst is None:
+					return False
+				for arm in inst.arms:
+					for fty in arm.field_types:
+						if not _is_structurally_copy(fty, seen=seen):
+							return False
+				return True
+			return False
+
+		if trait_index is None:
+			return
+		for impl in impls:
+			trait_key = getattr(impl, "trait_key", None)
+			if trait_key is None:
+				continue
+			if getattr(trait_key, "module", None) == "std.core" and getattr(trait_key, "name", None) == "Copy":
+				if not str(getattr(impl, "def_module", "")).startswith(("std.", "lang.")) and not _is_structurally_copy(impl.target_type_id, seen=set()):
+					diagnostics.append(
+						_tc_diag(
+							message="core.Copy impl target must be structurally Copy in MVP",
+							code="E_COPY_IMPL_NONCOPY_TARGET",
+							severity="error",
+							span=impl.loc or Span(),
+						)
+					)
+			trait_def = trait_index.traits_by_id.get(trait_key)
+			if trait_def is None:
+				continue
+			method_sigs = {m.name: m for m in list(getattr(trait_def, "methods", []) or [])}
+			for method in impl.methods:
+				trait_method = method_sigs.get(method.name)
+				if trait_method is None:
+					continue
+				sig = signatures_by_id.get(method.fn_id)
+				if sig is None or sig.param_type_ids is None or sig.return_type_id is None:
+					continue
+				type_params: dict[str, TypeId] = {"Self": impl.target_type_id}
+				trait_param_names = list(getattr(trait_def, "type_params", []) or [])
+				trait_args = list(getattr(impl, "trait_args", []) or [])
+				for idx, tp_name in enumerate(trait_param_names):
+					if idx < len(trait_args):
+						type_params[tp_name] = trait_args[idx]
+				expected_params: list[TypeId] = []
+				for p in list(getattr(trait_method, "params", []) or []):
+					expected_params.append(
+						resolve_opaque_type(
+							p.type_expr,
+							self.type_table,
+							module_id=impl.def_module,
+							type_params=type_params,
+						)
+					)
+				expected_ret = resolve_opaque_type(
+					getattr(trait_method, "return_type", None),
+					self.type_table,
+					module_id=impl.def_module,
+					type_params=type_params,
+				)
+				if len(expected_params) != len(sig.param_type_ids):
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								f"trait impl method '{method.name}' parameter count does not match trait "
+								f"'{getattr(trait_key, 'module', None)}.{getattr(trait_key, 'name', None)}'"
+							),
+							code="E_TRAIT_METHOD_PARAM_COUNT",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
+					continue
+				param_mismatch = False
+				for idx, (want, have) in enumerate(zip(expected_params, sig.param_type_ids)):
+					if want != have:
+						param_mismatch = True
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									f"trait impl method '{method.name}' parameter {idx + 1} expects "
+									f"{self._pretty_type_name(want, current_module=impl.def_module)} but got "
+									f"{self._pretty_type_name(have, current_module=impl.def_module)}"
+								),
+								code="E_TRAIT_METHOD_PARAM_MISMATCH",
+								severity="error",
+								span=method.loc or impl.loc or Span(),
+							)
+						)
+						break
+				if param_mismatch:
+					continue
+				if expected_ret != sig.return_type_id:
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								f"trait impl method '{method.name}' return type expects "
+								f"{self._pretty_type_name(expected_ret, current_module=impl.def_module)} but got "
+								f"{self._pretty_type_name(sig.return_type_id, current_module=impl.def_module)}"
+							),
+							code="E_TRAIT_METHOD_RETURN_MISMATCH",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
+					continue
+				declared_nothrow = bool(getattr(trait_method, "declared_nothrow", False))
+				declared_throws = bool(getattr(trait_method, "declared_throws", False))
+				actual_can_throw = bool(getattr(sig, "declared_can_throw", False))
+				# Trait impl methods inherit trait nothrow when omitted in source:
+				# omitted marker => declared_can_throw defaults True, declared_throws=False.
+				# Preserve explicit `throws` mismatch reporting by only inheriting on omitted throws.
+				if declared_nothrow and not declared_throws and actual_can_throw and not bool(getattr(sig, "declared_throws", False)):
+					actual_can_throw = False
+				# Compatibility rule:
+				# - Trait `nothrow` methods require non-throwing impl methods.
+				# - Throw-capable trait methods may be implemented by either
+				#   throw-capable or nothrow impl methods.
+				if declared_nothrow and not declared_throws and actual_can_throw:
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								f"trait impl method '{method.name}' throw behavior does not match trait declaration"
+							),
+							code="E_TRAIT_METHOD_THROW_MISMATCH",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
+
 	def check_function(
 		self,
 		fn_id: FunctionId,

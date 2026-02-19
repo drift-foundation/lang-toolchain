@@ -270,6 +270,7 @@ class Checker:
 		self._bool_type = _find_named(TypeKind.SCALAR, "Bool") or self._type_table.ensure_bool()
 		self._string_type = _find_named(TypeKind.SCALAR, "String") or self._type_table.ensure_string()
 		self._uint_type = _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
+		self._uint64_type = _find_named(TypeKind.SCALAR, "Uint64") or self._type_table.ensure_uint64()
 		self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
 		self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
 		self._dv = _find_named(TypeKind.DIAGNOSTICVALUE, "DiagnosticValue") or self._type_table.ensure_diagnostic_value()

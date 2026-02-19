@@ -1,0 +1,47 @@
+module main
+
+import std.core as core;
+
+struct SessionState {
+	reusable: Bool,
+	autocommit_enabled: Bool,
+	in_transaction: Bool
+}
+
+struct FakeSession {
+	state: SessionState
+}
+
+struct FakeConnection {
+	session: FakeSession,
+	strict_reuse: Bool
+}
+
+fn _apply_connect_mutations(conn: &mut FakeConnection) nothrow -> Void {
+	conn.session.state.reusable = true;
+	conn.session.state.autocommit_enabled = false;
+	conn.session.state.in_transaction = false;
+}
+
+fn _connect_like() nothrow -> core.Result<FakeConnection, Int> {
+	var conn = FakeConnection(session = FakeSession(state = SessionState(reusable = false, autocommit_enabled = true, in_transaction = false)), strict_reuse = true);
+	_apply_connect_mutations(&mut conn);
+	if not conn.session.state.reusable { return core.Result::Err(101); }
+	if conn.session.state.autocommit_enabled { return core.Result::Err(102); }
+	if conn.session.state.in_transaction { return core.Result::Err(103); }
+	return core.Result::Ok(move conn);
+}
+
+fn main() nothrow -> Int {
+	match _connect_like() {
+		core.Result::Err(code) => { return code; },
+		core.Result::Ok(v) => {
+			var conn = move v;
+			if not conn.session.state.reusable { return 201; }
+			if conn.session.state.autocommit_enabled { return 202; }
+			if conn.session.state.in_transaction { return 203; }
+			if not conn.strict_reuse { return 204; }
+			return 0;
+		}
+	}
+}

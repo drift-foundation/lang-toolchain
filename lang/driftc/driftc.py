@@ -2323,6 +2323,20 @@ def compile_stubbed_funcs(
 					signatures_by_id=signatures_by_id,
 					diagnostics=type_diags,
 				)
+		if module_exports is not None:
+			trait_impls: list[ImplMeta] = []
+			for exp in module_exports.values():
+				if isinstance(exp, dict):
+					for impl in exp.get("impls", []) or []:
+						if isinstance(impl, ImplMeta):
+							trait_impls.append(impl)
+			if trait_impls:
+				type_checker.validate_trait_impls(
+					trait_impls,
+					signatures_by_id=signatures_by_id,
+					trait_index=trait_index,
+					diagnostics=type_diags,
+				)
 	typecheck_ok_by_fn: dict[FunctionId, bool] = {}
 	deferred_guard_diags_by_template: dict[FunctionKey, dict[tuple[object, str], list[Diagnostic]]] = {}
 	def _has_error(diags: list[Diagnostic]) -> bool:

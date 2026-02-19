@@ -1,0 +1,30 @@
+module main
+
+import std.core as core;
+
+fn next_value(i: Int) nothrow -> core.Result<String, Int> {
+        if i < 3 {
+                return core.Result::Ok("x");
+        }
+        return core.Result::Err(0);
+}
+
+fn main() nothrow -> Int {
+        var i = 0;
+        var last = "";
+        while i < 3 {
+                match next_value(i) {
+                        core.Result::Ok(v) => {
+                                last = v;
+                        },
+                        core.Result::Err(_) => {
+                                return 1;
+                        }
+                }
+                i = i + 1;
+        }
+        if last != "x" {
+                return 2;
+        }
+        return 0;
+}

@@ -1,0 +1,184 @@
+module main
+
+import std.core as core;
+
+const MODE_PENDING_OK: Int = 1;
+const MODE_DONE: Int = 5;
+
+struct OkPacket {
+	status_flags: Uint,
+	warnings: Uint
+}
+
+implement core.Copy for OkPacket {
+}
+
+struct WireSessionState {
+	autocommit_enabled: Bool,
+	in_transaction: Bool,
+	reusable: Bool,
+	last_status_flags: Uint,
+	last_warnings: Uint
+}
+
+struct WireSession {
+	is_closed: Bool,
+	active_statement: Bool,
+	state: WireSessionState
+}
+
+struct Statement {
+	session: &mut WireSession,
+	mode: Int,
+	pending_ok: OkPacket,
+	consumed_terminal: Bool
+}
+
+variant StatementEvent {
+	StatementEnd(value: OkPacket)
+}
+
+struct RpcConnection {
+	wire_session: WireSession,
+	strict_reuse: Bool
+}
+
+fn _apply_status(session: &mut WireSession, status: Uint, warnings: Uint) nothrow -> Void {
+	session.state.last_status_flags = status;
+	session.state.last_warnings = warnings;
+	session.state.autocommit_enabled = (status & cast<Uint>(2)) != cast<Uint>(0);
+	session.state.in_transaction = false;
+}
+
+fn _mark_dead(session: &mut WireSession) nothrow -> Void {
+	session.state.reusable = false;
+	session.is_closed = true;
+}
+
+fn _set_statement_terminal(statement: &mut Statement) nothrow -> Void {
+	statement.mode = MODE_DONE;
+	statement.consumed_terminal = true;
+	statement.session.active_statement = false;
+}
+
+fn query(session: &mut WireSession, autocommit_off: Bool) nothrow -> core.Result<Statement, Int> {
+	if session.is_closed { return core.Result::Err(1); }
+	if not session.state.reusable { return core.Result::Err(2); }
+	if session.active_statement { return core.Result::Err(3); }
+	session.active_statement = true;
+	var status = cast<Uint>(2);
+	if autocommit_off {
+		status = cast<Uint>(0);
+	}
+	var st = Statement(session = session, mode = MODE_PENDING_OK, pending_ok = OkPacket(status_flags = status, warnings = cast<Uint>(0)), consumed_terminal = false);
+	return core.Result::Ok(move st);
+}
+
+fn next_event(statement: &mut Statement) nothrow -> core.Result<StatementEvent, Int> {
+	if statement.consumed_terminal { return core.Result::Err(10); }
+	if statement.mode == MODE_PENDING_OK {
+		val ok = statement.pending_ok;
+		_apply_status(statement.session, ok.status_flags, ok.warnings);
+		_set_statement_terminal(statement);
+		return core.Result::Ok(StatementEvent::StatementEnd(ok));
+	}
+	_mark_dead(statement.session);
+	return core.Result::Err(11);
+}
+
+fn skip_remaining(statement: &mut Statement) nothrow -> core.Result<Void, Int> {
+	if statement.consumed_terminal { return core.Result::Ok(core.void_value()); }
+	while true {
+		match next_event(statement) {
+			core.Result::Ok(ev) => {
+				match ev {
+					StatementEvent::StatementEnd(_) => { return core.Result::Ok(core.void_value()); }
+				}
+			},
+			core.Result::Err(e) => { return core.Result::Err(e); }
+		}
+	}
+}
+
+implement core.Destructible for Statement {
+	pub fn destroy(var self: Statement) nothrow -> Void {
+		if self.consumed_terminal { return; }
+		match skip_remaining(&mut self) {
+			core.Result::Ok(_) => { return; },
+			core.Result::Err(_) => { _mark_dead(self.session); return; }
+		}
+	}
+}
+
+fn _query_expect_ok(session: &mut WireSession, autocommit_off: Bool) nothrow -> core.Result<OkPacket, Int> {
+	match query(session, autocommit_off) {
+		core.Result::Ok(stmt) => {
+			var statement = move stmt;
+			while true {
+				match next_event(&mut statement) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(ev) => {
+						match ev {
+							StatementEvent::StatementEnd(v) => { return core.Result::Ok(v); }
+						}
+					}
+				}
+			}
+		},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+}
+
+fn set_autocommit(session: &mut WireSession, enabled: Bool) nothrow -> core.Result<OkPacket, Int> {
+	if enabled { return _query_expect_ok(session, false); }
+	return _query_expect_ok(session, true);
+}
+
+fn _exec_expect_ok(conn: &mut RpcConnection) nothrow -> core.Result<Void, Int> {
+	match query(&mut conn.wire_session, false) {
+		core.Result::Ok(v) => {
+			var stmt = move v;
+			while true {
+				match next_event(&mut stmt) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(ev) => {
+						match ev {
+							StatementEvent::StatementEnd(_) => { return core.Result::Ok(core.void_value()); }
+						}
+					}
+				}
+			}
+		},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+}
+
+fn connect() nothrow -> core.Result<RpcConnection, Int> {
+	var conn = RpcConnection(wire_session = WireSession(is_closed = false, active_statement = false, state = WireSessionState(autocommit_enabled = true, in_transaction = false, reusable = true, last_status_flags = cast<Uint>(0), last_warnings = cast<Uint>(0))), strict_reuse = true);
+	match _exec_expect_ok(&mut conn) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	match set_autocommit(&mut conn.wire_session, false) {
+		core.Result::Ok(_) => { return core.Result::Ok(move conn); },
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+}
+
+fn session_state(session: &WireSession) nothrow -> WireSessionState {
+	return session.state;
+}
+
+fn main() nothrow -> Int {
+	match connect() {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(v) => {
+			var conn = move v;
+			val st = session_state(&conn.wire_session);
+			if not st.reusable { return 21; }
+			if st.autocommit_enabled { return 22; }
+			if st.in_transaction { return 23; }
+			return 0;
+		}
+	}
+}

@@ -4402,8 +4402,21 @@ def _lower_parsed_program_to_hir(
 				)
 			)
 			trait_method_declared_nothrow = False
-			if getattr(impl, "trait", None) is not None:
-				trait_mod = getattr(impl.trait, "module_id", None) or module_id
+			trait_lookup_key = impl_meta.trait_key
+			if trait_lookup_key is None and getattr(impl, "trait", None) is not None:
+				trait_lookup_key = trait_key_from_expr(
+					impl.trait,
+					default_module=module_id,
+					default_package=package_id,
+					module_packages=getattr(type_table, "module_packages", None),
+				)
+			if trait_lookup_key is not None:
+				trait_mod = trait_lookup_key.module
+				trait_name = trait_lookup_key.name
+			else:
+				trait_mod = getattr(impl.trait, "module_id", None) or module_id if getattr(impl, "trait", None) is not None else module_id
+				trait_name = getattr(impl.trait, "name", None) if getattr(impl, "trait", None) is not None else None
+			if getattr(impl, "trait", None) is not None and trait_name is not None:
 				trait_worlds_map = getattr(type_table, "trait_worlds", None)
 				trait_world = trait_worlds_map.get(trait_mod) if isinstance(trait_worlds_map, dict) else None
 				if trait_world is not None:
@@ -4411,7 +4424,7 @@ def _lower_parsed_program_to_hir(
 					for trait_key, trait_def in trait_defs.items():
 						if getattr(trait_key, "module", None) != trait_mod:
 							continue
-						if getattr(trait_key, "name", None) != impl.trait.name:
+						if getattr(trait_key, "name", None) != trait_name:
 							continue
 						for meth in list(getattr(trait_def, "methods", []) or []):
 							if meth.name == fn.name:
@@ -4420,8 +4433,7 @@ def _lower_parsed_program_to_hir(
 						if trait_method_declared_nothrow:
 							break
 			if getattr(impl, "trait", None) is not None and not trait_method_declared_nothrow:
-				trait_mod = getattr(impl.trait, "module_id", None) or module_id
-				trait_base_id = type_table.get_interface_base(module_id=trait_mod, name=impl.trait.name)
+				trait_base_id = type_table.get_interface_base(module_id=trait_mod, name=trait_name)
 				if trait_base_id is not None:
 					try:
 						trait_linear = type_table.interface_linearization(trait_base_id)

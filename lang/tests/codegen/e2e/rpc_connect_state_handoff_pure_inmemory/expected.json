@@ -1,0 +1,6 @@
+{
+  "description": "e2e: in-memory rpc connect state handoff keeps nested wire session mutations across Result::Ok bind",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

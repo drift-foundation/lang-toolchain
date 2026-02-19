@@ -65,6 +65,7 @@ pub struct UdpSocket {
 
 pub const NET_EINTR: Int = 4;
 pub const NET_EAGAIN: Int = 11;
+pub const MAIN_THREAD_IO_POLL_QUANTUM_MS: Int = 10;
 
 fn _deadline_from_timeout(timeout: conc.Duration) nothrow -> Int {
 	if timeout.millis <= 0 {
@@ -92,13 +93,24 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	if vt == 0 {
 		val remaining = _remaining_ms(deadline_ms);
 		if remaining > 0 {
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 		}
 		return;
 	}
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
 	thread.vt_park_until(deadline_ms);
 	return;
+}
+
+fn _park_main_thread_io(remaining: Int) nothrow -> Void {
+	if remaining <= 0 {
+		return;
+	}
+	var slice = remaining;
+	if slice > MAIN_THREAD_IO_POLL_QUANTUM_MS {
+		slice = MAIN_THREAD_IO_POLL_QUANTUM_MS;
+	}
+	thread.vt_park_until(slice);
 }
 
 pub fn socket_addr(ip: String, port: Int) nothrow -> SocketAddr {
@@ -144,7 +156,7 @@ pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<
 			if remaining <= 0 {
 				return core.Result::Err(NetError::WouldBlock());
 			}
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 			continue;
 		}
 		return core.Result::Err(NetError::Errno(err));
@@ -173,7 +185,7 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
@@ -203,7 +215,7 @@ pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result
 			if remaining <= 0 {
 				return core.Result::Err(NetError::WouldBlock());
 			}
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 			continue;
 		}
 		return core.Result::Err(NetError::Errno(err));
@@ -248,7 +260,7 @@ implement TcpStream {
 				}
 				val vt = thread.vt_current();
 				if vt == 0 {
-					thread.vt_park_until(remaining);
+					_park_main_thread_io(remaining);
 					continue;
 				}
 				_block_on_io(self.fd, 1, deadline);
@@ -282,7 +294,7 @@ implement TcpStream {
 				}
 				val vt = thread.vt_current();
 				if vt == 0 {
-					thread.vt_park_until(remaining);
+					_park_main_thread_io(remaining);
 					continue;
 				}
 				_block_on_io(self.fd, 4, deadline);
@@ -312,7 +324,7 @@ implement TcpStream {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			return core.Result::Err(NetError::Errno(err));
@@ -369,7 +381,7 @@ implement UdpSocket {
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 4, deadline);
@@ -403,7 +415,7 @@ implement UdpSocket {
 				}
 				val vt = thread.vt_current();
 				if vt == 0 {
-					thread.vt_park_until(remaining);
+					_park_main_thread_io(remaining);
 					continue;
 				}
 				_block_on_io(self.fd, 4, deadline);
@@ -438,7 +450,7 @@ implement UdpSocket {
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
@@ -473,7 +485,7 @@ implement UdpSocket {
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
@@ -503,7 +515,7 @@ implement UdpSocket {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			return core.Result::Err(NetError::Errno(err));

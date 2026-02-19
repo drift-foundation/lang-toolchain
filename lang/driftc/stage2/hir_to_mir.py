@@ -786,9 +786,15 @@ class HIRToMIR:
 					arm_scrut_local = f"__match_scrut_tmp{self.b.new_temp()}"
 					self.b.ensure_local(arm_scrut_local)
 					self._local_types[arm_scrut_local] = scrut_ty
-					if scrut_source_local is not None and not self._type_table.is_copy(scrut_ty):
+					source_local = scrut_source_local
+					if source_local is None and not self._type_table.is_copy(scrut_ty):
+						source_local = f"__match_scrut_src{self.b.new_temp()}"
+						self.b.ensure_local(source_local)
+						self._local_types[source_local] = scrut_ty
+						self.b.emit(M.StoreLocal(local=source_local, value=scrut_val))
+					if source_local is not None and not self._type_table.is_copy(scrut_ty):
 						arm_scrut_moved_in = self.b.new_temp()
-						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=scrut_source_local, ty=scrut_ty))
+						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=source_local, ty=scrut_ty))
 						self._local_types[arm_scrut_moved_in] = scrut_ty
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=arm_scrut_moved_in))
 					else:
@@ -819,13 +825,17 @@ class HIRToMIR:
 						field_indices = list(getattr(arm, "binder_field_indices", []) or [])
 						if len(field_indices) != len(arm.binders):
 							raise AssertionError("match binder field-index mapping missing (checker bug)")
-						if (not scrut_is_ref) and any(
-							(not self._type_table.is_copy(arm_def.field_types[int(fidx)]))
-							or self._needs_runtime_drop(arm_def.field_types[int(fidx)])
-							for fidx in field_indices
-						):
+						need_addr_binders = False
+						for fidx in field_indices:
+							if fidx < 0 or fidx >= len(arm_def.field_types):
+								raise AssertionError("match binder field index out of range (checker bug)")
+							f_ty = arm_def.field_types[fidx]
+							if (not self._type_table.is_copy(f_ty)) or self._needs_runtime_drop(f_ty):
+								need_addr_binders = True
+								break
+						if (not scrut_is_ref) and arm.binders and need_addr_binders:
 							_ensure_arm_scrut_ptr()
-
+						arm_binds_all_fields = len(field_indices) == len(arm_def.field_types)
 						for bname, fidx in zip(arm.binders, field_indices):
 							if fidx < 0 or fidx >= len(arm_def.field_types):
 								raise AssertionError("match binder field index out of range (checker bug)")
@@ -852,7 +862,7 @@ class HIRToMIR:
 								self._local_types[bname] = binder_ty
 								self.b.emit(M.StoreLocal(local=bname, value=field_val))
 							else:
-								if arm_scrut_ptr is not None and ((not self._type_table.is_copy(bty)) or self._needs_runtime_drop(bty)):
+								if arm_scrut_ptr is not None:
 									self.b.emit(
 										M.VariantGetFieldAddr(
 											dest=field_val,
@@ -866,7 +876,13 @@ class HIRToMIR:
 									field_moved = self.b.new_temp()
 									self.b.emit(M.LoadRef(dest=field_moved, ptr=field_val, inner_ty=bty))
 									self._local_types[field_moved] = bty
-									arm_scrut_payload_moved = True
+									if self._type_table.is_copy(bty):
+										copy_dest = self.b.new_temp()
+										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
+										self._local_types[copy_dest] = bty
+										field_moved = copy_dest
+									if bty != self._string_type and (arm_binds_all_fields or (not self._type_table.is_copy(bty)) or self._needs_runtime_drop(bty)):
+										arm_scrut_payload_moved = True
 								else:
 									self.b.emit(
 										M.VariantGetField(

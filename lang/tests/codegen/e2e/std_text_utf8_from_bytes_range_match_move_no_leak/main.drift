@@ -1,0 +1,36 @@
+module main
+
+import std.core as core;
+import std.text as text;
+
+fn decode_wrap(bytes: &Array<Byte>, start: Int, end: Int, label: String) nothrow -> core.Result<String, text.Utf8Error> {
+	match text.utf8_from_bytes_range(bytes, start, end) {
+		core.Result::Ok(s) => { return core.Result::Ok(move s); },
+		core.Result::Err(e) => { return core.Result::Err(text.Utf8Error(tag = "wrap-" + label + "-" + e.tag, offset = e.offset)); }
+	}
+}
+
+fn main() nothrow -> Int {
+	var bytes: Array<Byte> = [];
+	bytes.push(cast<Byte>(65));
+	bytes.push(cast<Byte>(66));
+	bytes.push(cast<Byte>(67));
+	bytes.push(cast<Byte>(0));
+	bytes.push(cast<Byte>(68));
+
+	var a = "";
+	var b = "";
+
+	match decode_wrap(&bytes, 0, 3, "a") {
+		core.Result::Ok(s) => { a = move s; },
+		core.Result::Err(_) => { return 11; }
+	}
+	match decode_wrap(&bytes, 4, 5, "b") {
+		core.Result::Ok(s) => { b = move s; },
+		core.Result::Err(_) => { return 12; }
+	}
+
+	if a.byte_length() != 3 { return 21; }
+	if b.byte_length() != 1 { return 22; }
+	return 0;
+}

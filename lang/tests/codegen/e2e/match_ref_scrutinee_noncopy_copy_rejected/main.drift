@@ -1,0 +1,25 @@
+module main
+
+variant R {
+	Ok(v: S),
+	Err(code: Int)
+}
+
+struct S {
+	text: String
+}
+
+fn mk() nothrow -> R {
+	return R::Ok(v = S(text = "x"));
+}
+
+fn main() nothrow -> Int {
+	val r = mk();
+	match &r {
+		R::Ok(v) => {
+			val copied = *v;
+			return 0;
+		},
+		R::Err(_) => { return 1; }
+	}
+}

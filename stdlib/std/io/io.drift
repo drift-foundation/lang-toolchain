@@ -362,6 +362,8 @@ fn _remaining_ms(deadline_ms: Int) nothrow -> Int {
 	return deadline_ms - now;
 }
 
+const MAIN_THREAD_IO_POLL_QUANTUM_MS: Int = 10;
+
 fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	if deadline_ms <= 0 {
 		return;
@@ -370,13 +372,24 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	if vt == 0 {
 		val remaining = _remaining_ms(deadline_ms);
 		if remaining > 0 {
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 		}
 		return;
 	}
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
 	thread.vt_park_until(deadline_ms);
 	return;
+}
+
+fn _park_main_thread_io(remaining: Int) nothrow -> Void {
+	if remaining <= 0 {
+		return;
+	}
+	var slice = remaining;
+	if slice > MAIN_THREAD_IO_POLL_QUANTUM_MS {
+		slice = MAIN_THREAD_IO_POLL_QUANTUM_MS;
+	}
+	thread.vt_park_until(slice);
 }
 
 pub fn buffer(len: Int) nothrow -> Buffer {
@@ -464,7 +477,7 @@ fn _file_open(path: String, opts: &FileOpenOptions, timeout: conc.Duration) noth
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 			continue;
 		}
 		return core.Result::Err(IoError::Errno(err));
@@ -495,7 +508,7 @@ fn _file_close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void,
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
-			thread.vt_park_until(remaining);
+			_park_main_thread_io(remaining);
 			continue;
 		}
 		return core.Result::Err(IoError::Errno(err));
@@ -601,7 +614,7 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
@@ -635,7 +648,7 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 4, deadline);
@@ -726,7 +739,7 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
@@ -808,7 +821,7 @@ fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> cor
 			}
 			val vt = thread.vt_current();
 			if vt == 0 {
-				thread.vt_park_until(remaining);
+				_park_main_thread_io(remaining);
 				continue;
 			}
 			_block_on_io(self.fd, 4, deadline);

@@ -1,0 +1,7 @@
+{
+  "description": "e2e matrix: Result payload bind/move/drop integrity across scalar/string/array/struct/nested shapes",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}
+

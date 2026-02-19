@@ -1,3 +1,89 @@
+## 2026-02-19 – `core.Copy` non-Copy target rejection (Defect #6)
+- Closed defect where `implement core.Copy for <struct>` could be accepted even when the target struct was not structurally Copy (for example, had `String` fields).
+- Checker fix:
+  - `lang/driftc/type_checker.py` now enforces structural-Copy validation for `core.Copy` impl targets and emits a normal user diagnostic when invalid.
+  - behavior now rejects invalid impls with: `core.Copy impl target must be structurally Copy in MVP`.
+- Regression pinned:
+  - `lang/tests/driver/test_trait_impl_signature_validation.py::test_copy_impl_on_noncopy_field_struct_is_rejected`.
+- Repro confirmation:
+  - `/tmp/repro_copy_string_forbidden.drift` now fails at the impl site (exit 1) instead of compiling/linking.
+
+## 2026-02-19 – Boundary hardening sweep (Result/Variant + trait impl contracts + main-thread IO pacing)
+- Consolidated multiple staged/uncommitted fixes and regressions across checker/stage2/LLVM/runtime-facing stdlib behavior.
+
+- LLVM/codegen boundary hardening:
+  - `lang/codegen/llvm/llvm_codegen.py`
+    - fixed forward-nominal recursive sizing in `_size_align_typeid(...)` so variant payload sizing is stable for aliased/forward nominal nested fields.
+    - canonicalized variant arm field type sizing in `_variant_layout(...)`.
+    - replaced many `insertvalue ... undef` aggregate seeds with `zeroinitializer` to remove undefined aggregate seed paths in emitted IR.
+  - Added regressions:
+    - `lang/tests/driver/test_variant_payload_forward_nominal_size.py`
+    - `lang/tests/driver/test_llvm_no_insertvalue_undef_seeds.py`
+
+- Match/binder lowering and Result payload regression coverage:
+  - `lang/driftc/stage2/hir_to_mir.py`
+    - hardened by-value binder extraction and scrutinee move/copy handling for non-Copy/runtime-drop payloads.
+    - stabilized binder addr-path extraction behavior and payload-moved tracking.
+  - Added/expanded regressions:
+    - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression`
+    - `lang/tests/codegen/e2e/rpc_connect_state_handoff_nonnetwork_shape`
+    - `lang/tests/codegen/e2e/rpc_connect_state_handoff_pure_inmemory`
+    - `lang/tests/codegen/e2e/copyvalue_string_loop_phi_regression`
+    - `lang/tests/codegen/e2e/match_ref_scrutinee_noncopy_copy_rejected`
+    - `lang/tests/codegen/e2e/std_text_utf8_from_bytes_range_match_move_no_leak`
+    - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py`
+
+- Boundary matrix expansion (prevent regression recurrence):
+  - Added driver matrix:
+    - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
+    - covers positive/negative Result payload and borrowed-aggregate boundary cases with non-internal diagnostic assertions.
+  - Added e2e matrix:
+    - `lang/tests/codegen/e2e/result_variant_payload_matrix`
+    - runtime payload bind/move/drop integrity across scalar/string/array/struct shapes.
+
+- Trait impl contract validation + inherited nothrow fix:
+  - `lang/driftc/driftc.py`
+    - validates trait impl signatures from `module_exports` in stubbed compile path.
+  - `lang/driftc/type_checker.py`
+    - added trait impl signature validator (param/return/throw behavior checks).
+    - fixed inherited-nothrow behavior for impl methods with omitted throw markers:
+      - omitted marker now inherits trait non-throwing contract while preserving explicit `throws` mismatch diagnostics.
+  - `lang/driftc/parser/__init__.py`
+    - trait-method nothrow lookup now uses resolved trait identity fallback (`trait_key_from_expr`) for impls where direct trait key is absent.
+  - Added regression:
+    - `lang/tests/driver/test_trait_impl_signature_validation.py`
+  - Verified fixes against:
+    - `lang/tests/driver/test_cmp_operator_resolution.py::test_eq_uses_std_core_cmp_without_std_algo`
+    - `lang/tests/driver/test_trait_impl_nothrow_inherits_interface.py::test_trait_impl_method_inherits_interface_nothrow_when_omitted`
+
+- stdlib runtime pacing under main-thread (non-VT) IO:
+  - `stdlib/std/io/io.drift`
+  - `stdlib/std/net/net.drift`
+  - introduced `MAIN_THREAD_IO_POLL_QUANTUM_MS` and `_park_main_thread_io(...)` to cap long parks in non-virtual-thread IO waits.
+  - all main-thread IO wait paths now use bounded slice parking instead of parking full remaining timeout in one step.
+
+## 2026-02-19 – Result::Ok aggregate payload corruption fix (LANGUAGE_BUG)
+- Fixed deterministic runtime state corruption on `Result::Ok` bind handoff (`EXIT:135` probe) caused by incorrect variant payload sizing in LLVM codegen.
+  - symptom:
+    - live probe (`connect_state_handoff_probe_regression_test`) returned wrong post-bind booleans despite pre-return checks passing in callee.
+    - ASAN/memcheck stayed clean, indicating semantic/lowering corruption rather than memory-safety trap.
+  - root cause:
+    - variant layout size model under-counted nested forward/alias nominal field sizes in some payload shapes.
+    - `_size_align_typeid(...)` could fall back to generic size for `FORWARD_NOMINAL` during recursive struct sizing, producing undersized payload words.
+  - fix:
+    - `lang/codegen/llvm/llvm_codegen.py`
+      - canonicalize/resolve `FORWARD_NOMINAL` in `_size_align_typeid(...)` before size/alignment calculation.
+      - keep arm field canonicalization in `_variant_layout(...)` so both direct and recursive sizing paths agree.
+- Regression-first coverage added:
+  - `lang/tests/driver/test_variant_payload_forward_nominal_size.py`
+    - asserts emitted variant payload words are sufficiently sized for a large forward-nominal alias payload in `Result<AliasStruct, Int>`.
+- Validation:
+  - local targeted driver/e2e regressions pass.
+  - host repro now passes:
+    - prior failure: `EXIT:135`
+    - after fix: `EXIT:0`
+    - memcheck clean (`0 errors`, `0 leaks`).
+
 ## 2026-02-19 – Checker call-signature UNKNOWN param handling fix (Array.push cross-module regression)
 - Fixed LANGUAGE_BUG where checker call-signature validation rejected valid intrinsic method calls when a CallInfo param slot remained `UNKNOWN`:
   - symptom:
@@ -1217,6 +1303,27 @@
 - Validation:
   - targeted e2e + stage2 tests pass.
   - regression passes under `DRIFT_ASAN=1` and `DRIFT_MEMCHECK=1`.
+
+## 2026-02-19 – Match handoff state corruption from Result::Ok binder extraction (LANGUAGE_BUG)
+- Pinned a deterministic e2e reproducer for live-observed state rollback after `Result::Ok(move conn)` bind:
+  - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression`.
+  - failure signature before fix: process exited `21` (post-bind state reverted).
+- Root-cause fix in `lang/driftc/stage2/hir_to_mir.py` (`_lower_match`):
+  - by-value match binders now always materialize/consume the arm-local scrutinee storage path instead of reading payload from the original scrutinee value path.
+  - full-field binder arms are treated as scrutinee-consuming for drop scheduling, preventing the payload from being dropped out of the scrutinee while still in active arm use.
+- Added/kept nearby non-network state-handoff coverage:
+  - `lang/tests/codegen/e2e/rpc_connect_state_handoff_pure_inmemory`
+  - `lang/tests/codegen/e2e/rpc_connect_state_handoff_nonnetwork_shape`
+- Validation:
+  - `result_ok_move_conn_source_drop_regression` now passes.
+  - nearby regressions pass in normal and ASAN mode:
+    - `treemap_entry_basic`
+    - `treemap_entry_invalidate`
+ - Boundary guardrail follow-up:
+   - added negative checker-path regression for unsupported by-value copy through ref-scrutinee binder:
+     - `lang/tests/codegen/e2e/match_ref_scrutinee_noncopy_copy_rejected`
+   - added stage2 contract-shape assertion test pinning binder extraction path:
+     - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py::test_match_by_value_binder_extracts_via_addr_path_not_value_copy`
 
 ## 2026-02-17 – Checker hardening for non-Copy array index reads (LANGUAGE_BUG)
 - Regression-first fix for internal crash path:

@@ -1,0 +1,24 @@
+module main
+
+import std.core as core;
+
+struct CopyPair(a: Int, b: Int);
+implement core.Copy for CopyPair {
+}
+
+struct NonCopy(msg: String);
+
+fn mk_i() nothrow -> core.Result<Int, Int> { return core.Result::Ok(7); }
+fn mk_s() nothrow -> core.Result<String, Int> { return core.Result::Ok("ok"); }
+fn mk_a() nothrow -> core.Result<Array<Byte>, Int> { return core.Result::Ok([cast<Byte>(1), cast<Byte>(2), cast<Byte>(3)]); }
+fn mk_c() nothrow -> core.Result<CopyPair, Int> { return core.Result::Ok(CopyPair(a = 9, b = 11)); }
+fn mk_n() nothrow -> core.Result<NonCopy, Int> { return core.Result::Ok(NonCopy(msg = "payload")); }
+
+fn main() nothrow -> Int {
+	match mk_i() { core.Result::Ok(v) => { if v != 7 { return 1; } }, core.Result::Err(_) => { return 2; } }
+	match mk_s() { core.Result::Ok(v) => { if v != "ok" { return 3; } }, core.Result::Err(_) => { return 4; } }
+	match mk_a() { core.Result::Ok(v) => { if v.len != 3 { return 5; } }, core.Result::Err(_) => { return 6; } }
+	match mk_c() { core.Result::Ok(v) => { if v.a != 9 or v.b != 11 { return 7; } }, core.Result::Err(_) => { return 8; } }
+	match mk_n() { core.Result::Ok(v) => { if v.msg != "payload" { return 9; } }, core.Result::Err(_) => { return 10; } }
+	return 0;
+}
