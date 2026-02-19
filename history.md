@@ -1,3 +1,20 @@
+## 2026-02-19 – Checker call-signature UNKNOWN param handling fix (Array.push cross-module regression)
+- Fixed LANGUAGE_BUG where checker call-signature validation rejected valid intrinsic method calls when a CallInfo param slot remained `UNKNOWN`:
+  - symptom:
+    - `argument 1 to lang.__intrinsic::__method::push has type __local__::mariadb.rpc.RpcArg, expected UNKNOWN`
+  - root cause:
+    - `check_call_signature(...)` treated `UNKNOWN` param/arg types as hard mismatches during shallow validation.
+  - fix:
+    - in `lang/driftc/checker/__init__.py`, skip strict mismatch checks when either side is `UNKNOWN`.
+- Added regression test:
+  - `lang/tests/driver/test_array_push_unknown_param_regression.py`
+  - pins cross-module variant element + `Array.push(...)` path (`Array<rpc.RpcArg>` with `rpc.arg_int(...)`) as compile-success.
+- Validation:
+  - new regression passes,
+  - nearby call-contract suite remains passing:
+    - `lang/tests/driver/test_callinfo_param_layout_contract.py`,
+  - reproduced `tmp/mariadb-rpc/tests/e2e/live_rpc_smoke_test.drift` compile path now passes with no diagnostics.
+
 ## 2026-02-19 – Alias-forward boundary canonicalization + match-binder deref checker fix
 - Fixed alias/forward-nominal leakage across checker→stage2→MIR boundary:
   - added centralized canonicalization in `lang/driftc/driftc.py`:

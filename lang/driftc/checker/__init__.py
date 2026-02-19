@@ -2270,6 +2270,8 @@ class Checker:
 		for idx, (arg_ty, param_ty) in enumerate(zip(arg_type_ids, param_types)):
 			if arg_ty is None or param_ty is None:
 				continue
+			if arg_ty == self._unknown_type or param_ty == self._unknown_type:
+				continue
 			if arg_ty != param_ty:
 				try:
 					arg_def = self._type_table.get(arg_ty)
