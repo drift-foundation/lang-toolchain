@@ -1,3 +1,35 @@
+## 2026-02-19 – Struct ref-field restricted MVP landed (single-origin borrowed aggregates)
+- Enabled struct ref fields in parser/type declarations (removed hard parser reject for `&T` / `&mut T` struct fields).
+- Landed checker-side borrowed-aggregate boundary enforcement for restricted MVP:
+  - return provenance enforcement for borrowed aggregates:
+    - allowed only when tied to reference-parameter origin,
+    - single-origin only,
+    - mutable ref fields require `&mut` param provenance,
+    - wrapper constructor returns supported for:
+      - `Result::Ok(borrowed_aggregate)`
+      - `Optional::Some(borrowed_aggregate)`.
+  - retaining-boundary enforcement:
+    - by-value borrowed-aggregate passing rejected by default on retaining generic/call boundaries,
+    - explicit non-retaining/by-ref paths allowed.
+  - container/global/escape guards in checker coverage:
+    - owning `Array<borrowed_aggregate>` rejected,
+    - escaping callback/lambda captures with borrowed aggregates rejected,
+    - registry/global retaining stores rejected through same retaining-boundary rule.
+- Landed positive+negative regression coverage for struct-ref-field contract:
+  - driver:
+    - `lang/tests/driver/test_struct_ref_field_return_rules.py`
+    - `lang/tests/driver/test_struct_ref_field_boundary_contract.py`
+    - `lang/tests/driver/test_loop_all_paths_return_no_internal.py`
+  - e2e:
+    - `lang/tests/codegen/e2e/struct_ref_field_result_return_ok`
+    - `lang/tests/codegen/e2e/struct_ref_field_array_store_rejected`
+    - `lang/tests/codegen/e2e/struct_ref_field_callback_capture_rejected`
+    - `lang/tests/codegen/e2e/struct_ref_field_registry_store_rejected`
+    - updated `lang/tests/codegen/e2e/struct_ref_field_rejected` to accepted behavior.
+- Boundary contract hardening for this feature:
+  - positive path pinned to reach IR/codegen without internal contract failures,
+  - negative paths pinned to fail in `typecheck` with non-internal diagnostics.
+
 ## 2026-02-18 – driftc wrapper regression pin for relative `-o` output paths
 - Added driver regression to lock relative output behavior when invoking wrapper from a non-repo working directory:
   - `lang/tests/driver/test_driftc_wrapper_env_modes.py::test_driftc_wrapper_relative_output_from_non_repo_cwd`.
