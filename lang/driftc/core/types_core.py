@@ -1336,7 +1336,7 @@ class TypeTable:
 			arm_inst = VariantArmInstance(tag=tag, name=arm.name, field_names=field_names, field_types=field_types)
 			arms.append(arm_inst)
 			by_name[arm.name] = arm_inst
-		needs_drop = any(self._type_needs_drop(fty) for arm in arms for fty in arm.field_types)
+		needs_drop = any(self.has_drop(fty) for arm in arms for fty in arm.field_types)
 		internal_tombstone_ctor: str | None = None
 		internal_tombstone_tag: int | None = None
 		if needs_drop:
@@ -1350,7 +1350,7 @@ class TypeTable:
 						f"tombstone_ctor '{ctor}' for variant '{schema.name}' must have no payload"
 					)
 				for fty in tombstone_arm.field_types:
-					if self._type_needs_drop(fty):
+					if self.has_drop(fty):
 						raise ValueError(
 							f"tombstone_ctor '{ctor}' for variant '{schema.name}' must be non-droppable"
 						)
@@ -1368,7 +1368,7 @@ class TypeTable:
 			internal_tombstone_tag=internal_tombstone_tag,
 		)
 
-	def _type_needs_drop(self, tid: TypeId) -> bool:
+	def has_drop(self, tid: TypeId) -> bool:
 		cached = self._needs_drop_cache.get(tid)
 		if cached is not None:
 			return cached
@@ -1383,33 +1383,42 @@ class TypeTable:
 			needs = td.name == "String"
 			self._needs_drop_cache[tid] = needs
 			return needs
+		if td.kind is TypeKind.ERROR:
+			self._needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
 			self._needs_drop_cache[tid] = True
 			return True
+		if td.kind is TypeKind.INTERFACE:
+			self._needs_drop_cache[tid] = True
+			return True
 		if td.kind is TypeKind.ARRAY:
-			needs = bool(td.param_types) and self._type_needs_drop(td.param_types[0])
+			needs = bool(td.param_types) and self.has_drop(td.param_types[0])
 			self._needs_drop_cache[tid] = needs
 			return needs
 		if td.kind is TypeKind.STRUCT:
 			inst = self.get_struct_instance(tid)
 			if inst is None:
 				return False
-			needs = any(self._type_needs_drop(fty) for fty in inst.field_types)
+			needs = any(self.has_drop(fty) for fty in inst.field_types)
 			self._needs_drop_cache[tid] = needs
 			return needs
 		if td.kind is TypeKind.VARIANT:
 			inst = self.get_variant_instance(tid)
 			if inst is None:
 				return False
-			needs = any(self._type_needs_drop(fty) for arm in inst.arms for fty in arm.field_types)
+			needs = any(self.has_drop(fty) for arm in inst.arms for fty in arm.field_types)
 			self._needs_drop_cache[tid] = needs
 			return needs
 		if td.param_types:
-			needs = any(self._type_needs_drop(pt) for pt in td.param_types)
+			needs = any(self.has_drop(pt) for pt in td.param_types)
 			self._needs_drop_cache[tid] = needs
 			return needs
 		self._needs_drop_cache[tid] = False
 		return False
+
+	def _type_needs_drop(self, tid: TypeId) -> bool:
+		return self.has_drop(tid)
 
 	def _define_struct_instance(
 		self,
@@ -2043,6 +2052,10 @@ class TypeTable:
 			td = self.get(tid)
 			if td.kind in {TypeKind.SCALAR, TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION, TypeKind.VOID}:
 				if td.kind is TypeKind.SCALAR and td.name == "String":
+					return False
+				if td.kind is TypeKind.REF and bool(td.ref_mut):
+					_assert_structural_cacheable(tid)
+					cache_structural[tid] = False
 					return False
 				ok = True
 				_assert_structural_cacheable(tid)

@@ -6,8 +6,59 @@ from typing import Callable, Mapping
 
 from lang.driftc.core.function_id import FunctionId, function_symbol
 from lang.driftc.checker import FnSignature
+from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang.driftc.stage2 import mir_nodes as M
+
+
+def _canonicalize_forward_nominal_type_id(
+	type_table: TypeTable,
+	ty_id: TypeId,
+	*,
+	_seen: set[tuple[str | None, str]] | None = None,
+) -> TypeId:
+	td = type_table.get(ty_id)
+	seen = _seen if _seen is not None else set()
+	if td.kind is TypeKind.REF and td.param_types:
+		inner = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		if inner != td.param_types[0]:
+			return type_table.ensure_ref_mut(inner) if td.ref_mut else type_table.ensure_ref(inner)
+		return ty_id
+	if td.kind is TypeKind.ARRAY and td.param_types:
+		elem = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		if elem != td.param_types[0]:
+			return type_table.new_array(elem)
+		return ty_id
+	if td.kind is TypeKind.FNRESULT and len(td.param_types) == 2:
+		ok_ty = _canonicalize_forward_nominal_type_id(type_table, td.param_types[0], _seen=seen)
+		err_ty = _canonicalize_forward_nominal_type_id(type_table, td.param_types[1], _seen=seen)
+		if ok_ty != td.param_types[0] or err_ty != td.param_types[1]:
+			return type_table.new_fnresult(ok_ty, err_ty)
+		return ty_id
+	if td.kind is not TypeKind.FORWARD_NOMINAL:
+		return ty_id
+	alias_key = (td.module_id, td.name)
+	if alias_key in seen:
+		return ty_id
+	alias_def = type_table.lookup_type_alias(module_id=td.module_id, name=td.name)
+	if alias_def is not None:
+		alias_params, alias_target, _loc = alias_def
+		if not alias_params:
+			resolved = resolve_opaque_type(
+				alias_target,
+				type_table,
+				module_id=td.module_id,
+				type_params=None,
+				allow_generic_base=True,
+			)
+			if resolved != ty_id:
+				return _canonicalize_forward_nominal_type_id(type_table, resolved, _seen=seen | {alias_key})
+	resolved_nom = (
+		type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+		or type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+		or type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+	)
+	return resolved_nom if resolved_nom is not None else ty_id
 
 
 def validate_mir_variant_field_invariants(
@@ -20,7 +71,7 @@ def validate_mir_variant_field_invariants(
 			for instr in block.instructions:
 				if not isinstance(instr, (M.VariantGetField, M.VariantGetFieldAddr)):
 					continue
-				variant_ty = instr.variant_ty
+				variant_ty = _canonicalize_forward_nominal_type_id(type_table, instr.variant_ty)
 				td = type_table.get(variant_ty)
 				if td.kind is not TypeKind.VARIANT:
 					raise AssertionError(
@@ -40,8 +91,9 @@ def validate_mir_variant_field_invariants(
 					raise AssertionError(
 						f"MIR invariant violation: {instr.__class__.__name__} field index out of range in {function_symbol(fn_id)}"
 					)
-				expected_ty = arm.field_types[instr.field_index]
-				if expected_ty != instr.field_ty:
+				expected_ty = _canonicalize_forward_nominal_type_id(type_table, arm.field_types[instr.field_index])
+				actual_ty = _canonicalize_forward_nominal_type_id(type_table, instr.field_ty)
+				if expected_ty != actual_ty:
 					raise AssertionError(
 						f"MIR invariant violation: {instr.__class__.__name__} field_ty mismatch in {function_symbol(fn_id)}"
 					)

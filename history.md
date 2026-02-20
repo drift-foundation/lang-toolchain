@@ -1525,3 +1525,23 @@
 - Completed optional LLVM verifier check for DV-drop helper path:
   - emitted IR from `diagnostic_value_object_nested_get` and verified with
     - `/usr/lib/llvm-20/bin/opt -passes=verify /tmp/dv_drop_verify.ll -disable-output` (pass).
+
+## 2026-02-20 – Cross-module alias variant ref payload MIR invariant fix (LANGUAGE_BUG)
+- Fixed internal compiler failure on alias-forwarded variant payload field address checks:
+  - failure signature before fix:
+    - `internal: MIR validation contract failure (validate_mir_variant_field_invariants) ... VariantGetFieldAddr field_ty mismatch`.
+  - repro shape:
+    - cross-module `pub type Cell = types.Cell` alias,
+    - `Result<&api.Cell, Int>` flow with `match` and variant payload access through alias.
+- Regression-first coverage added:
+  - `lang/tests/driver/test_alias_return_struct_field_assignment.py::test_cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invariant`.
+  - confirmed failing before fix; now passes.
+- Root-cause fix:
+  - `lang/driftc/mir_validate.py`
+  - `validate_mir_variant_field_invariants(...)` now canonicalizes alias/forward-nominal TypeIds before:
+    - variant-kind resolution from `variant_ty`,
+    - expected arm field type vs instruction `field_ty` equality checks.
+- Validation:
+  - new driver regression (pass)
+  - `lang/tests/stage2/test_mir_validate_variant_and_hygiene.py` (pass)
+  - original external repro command now compiles successfully.

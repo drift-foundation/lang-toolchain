@@ -581,6 +581,7 @@ class LlvmModuleBuilder:
 	_variant_types_by_key: Dict[str, str] = field(default_factory=dict)
 	array_drop_helpers: Dict[str, str] = field(default_factory=dict)
 	dv_drop_helper: str | None = None
+	iface_drop_helper: str | None = None
 	string_literal_cache: Dict[str, tuple[str, str, int]] = field(default_factory=dict)
 	iface_vtables: Dict[str, str] = field(default_factory=dict)
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
@@ -7286,6 +7287,10 @@ class _FuncBuilder:
 		cached = self._drop_cache.get(ty_id)
 		if cached is not None:
 			return cached
+		if hasattr(self.type_table, "has_drop"):
+			needs = bool(self.type_table.has_drop(ty_id))
+			self._drop_cache[ty_id] = needs
+			return needs
 		destructor_fns = getattr(self.type_table, "destructor_fns", None)
 		if isinstance(destructor_fns, dict) and destructor_fns.get(ty_id) is not None:
 			self._drop_cache[ty_id] = True
@@ -7293,46 +7298,6 @@ class _FuncBuilder:
 		td = self.type_table.get(ty_id)
 		if td.kind is TypeKind.SCALAR:
 			needs = td.name == "String"
-			self._drop_cache[ty_id] = needs
-			return needs
-		if td.kind is TypeKind.REF:
-			self._drop_cache[ty_id] = False
-			return False
-		if td.kind is TypeKind.ERROR:
-			self._drop_cache[ty_id] = True
-			return True
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			self._drop_cache[ty_id] = True
-			return True
-		if td.kind is TypeKind.INTERFACE:
-			self._drop_cache[ty_id] = True
-			return True
-		if hasattr(self.type_table, "is_destructible"):
-			try:
-				if bool(self.type_table.is_destructible(ty_id)):
-					self._drop_cache[ty_id] = True
-					return True
-			except Exception:
-				pass
-		if td.kind is TypeKind.ARRAY and td.param_types:
-			self._drop_cache[ty_id] = True
-			return True
-		if td.kind is TypeKind.STRUCT:
-			inst = self.type_table.get_struct_instance(ty_id)
-			if inst is not None:
-				needs = any(self._type_needs_drop(fty) for fty in inst.field_types)
-				self._drop_cache[ty_id] = needs
-				return needs
-		if td.kind is TypeKind.VARIANT:
-			inst = self.type_table.get_variant_instance(ty_id)
-			if inst is not None:
-				needs = any(
-					self._type_needs_drop(fty) for arm in inst.arms for fty in arm.field_types
-				)
-				self._drop_cache[ty_id] = needs
-				return needs
-		if td.param_types:
-			needs = any(self._type_needs_drop(pt) for pt in td.param_types)
 			self._drop_cache[ty_id] = needs
 			return needs
 		self._drop_cache[ty_id] = False
@@ -7389,61 +7354,8 @@ class _FuncBuilder:
 			return
 		if td.kind is TypeKind.INTERFACE:
 			iface_llty = self._llty(DRIFT_IFACE_TYPE)
-			data_tmp = self._fresh("iface_data")
-			vtable_tmp = self._fresh("iface_vtable")
-			inline_flag = self._fresh("iface_inline")
-			self.lines.append(f"  {data_tmp} = extractvalue {iface_llty} {value}, {DRIFT_IFACE_DATA_IDX}")
-			self.lines.append(f"  {vtable_tmp} = extractvalue {iface_llty} {value}, {DRIFT_IFACE_VTABLE_IDX}")
-			self.lines.append(f"  {inline_flag} = extractvalue {iface_llty} {value}, {DRIFT_IFACE_INLINE_FLAG_IDX}")
-			inline_bit = self._fresh("iface_inline_bit")
-			owns_bit = self._fresh("iface_owns_bit")
-			is_inline = self._fresh("iface_is_inline")
-			self.lines.append(f"  {inline_bit} = and i8 {inline_flag}, 1")
-			self.lines.append(f"  {owns_bit} = and i8 {inline_flag}, 2")
-			self.lines.append(f"  {is_inline} = icmp ne i8 {inline_bit}, 0")
-			inline_tmp = self._fresh("iface_inline_tmp")
-			self.lines.append(f"  {inline_tmp} = alloca {iface_llty}")
-			self.lines.append(f"  store {iface_llty} {value}, {iface_llty}* {inline_tmp}")
-			inline_field = self._fresh("iface_inline_field")
-			inline_word = self._fresh("iface_inline_word")
-			inline_i8 = self._fresh("iface_inline_i8")
-			inline_storage = f"[{DRIFT_IFACE_INLINE_WORDS} x {self._llty(DRIFT_USIZE_TYPE)}]"
-			self.lines.append(
-				f"  {inline_field} = getelementptr inbounds {iface_llty}, {iface_llty}* {inline_tmp}, i32 0, i32 {DRIFT_IFACE_INLINE_IDX}"
-			)
-			self.lines.append(
-				f"  {inline_word} = getelementptr inbounds {inline_storage}, {inline_storage}* {inline_field}, i32 0, i32 0"
-			)
-			self.lines.append(f"  {inline_i8} = bitcast {self._llty(DRIFT_USIZE_TYPE)}* {inline_word} to i8*")
-			data_eff = self._fresh("iface_data_eff")
-			self.lines.append(f"  {data_eff} = select i1 {is_inline}, i8* {inline_i8}, i8* {data_tmp}")
-			vtable_ptr = self._fresh("iface_vptr")
-			self.lines.append(f"  {vtable_ptr} = bitcast i8* {vtable_tmp} to i8**")
-			drop_slot = self._fresh("iface_drop_slot")
-			self.lines.append(f"  {drop_slot} = getelementptr inbounds i8*, i8** {vtable_ptr}, i32 0")
-			drop_ptr = self._fresh("iface_drop_ptr")
-			self.lines.append(f"  {drop_ptr} = load i8*, i8** {drop_slot}")
-			cond = self._fresh("iface_drop_has")
-			self.lines.append(f"  {cond} = icmp ne i8* {drop_ptr}, null")
-			call_block = self._fresh("iface_drop_call")
-			done_block = self._fresh("iface_drop_done")
-			self.lines.append(f"  br i1 {cond}, label {call_block}, label {done_block}")
-			self.lines.append(f"{call_block[1:]}:")
-			drop_fn = self._fresh("iface_drop_fn")
-			self.lines.append(f"  {drop_fn} = bitcast i8* {drop_ptr} to void (i8*)*")
-			self.lines.append(f"  call void {drop_fn}(i8* {data_eff}){call_dbg_suffix}")
-			self.lines.append(f"  br label {done_block}")
-			self.lines.append(f"{done_block[1:]}:")
-			self.module.needs_iface_helpers = True
-			free_cond = self._fresh("iface_needs_free")
-			free_block = self._fresh("iface_free")
-			free_done = self._fresh("iface_free_done")
-			self.lines.append(f"  {free_cond} = icmp ne i8 {owns_bit}, 0")
-			self.lines.append(f"  br i1 {free_cond}, label {free_block}, label {free_done}")
-			self.lines.append(f"{free_block[1:]}:")
-			self.lines.append(f"  call void @drift_iface_free(i8* {data_tmp}){call_dbg_suffix}")
-			self.lines.append(f"  br label {free_done}")
-			self.lines.append(f"{free_done[1:]}:")
+			helper = self._ensure_interface_drop_helper()
+			self.lines.append(f"  call void @{helper}({iface_llty} {value}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
@@ -7508,6 +7420,11 @@ class _FuncBuilder:
 				self.module.needs_dv_runtime = True
 				helper = self._ensure_dv_drop_helper()
 				lines.append(f"  call void @{helper}({DRIFT_DV_TYPE} {val})")
+				return
+			if td.kind is TypeKind.INTERFACE:
+				helper = self._ensure_interface_drop_helper()
+				iface_llty = self._llty(DRIFT_IFACE_TYPE)
+				lines.append(f"  call void @{helper}({iface_llty} {val})")
 				return
 			if td.kind is TypeKind.ARRAY and td.param_types:
 				inner_elem = td.param_types[0]
@@ -7658,6 +7575,53 @@ class _FuncBuilder:
 			f"  %tmp = alloca {DRIFT_DV_TYPE}",
 			f"  store {DRIFT_DV_TYPE} %src, {DRIFT_DV_TYPE}* %tmp",
 			f"  call void @drift_dv_release({DRIFT_DV_TYPE}* %tmp)",
+			"  ret void",
+			"}",
+		]
+		self.module.emit_func("\n".join(lines))
+		return name
+
+	def _ensure_interface_drop_helper(self) -> str:
+		name = self.module.iface_drop_helper
+		if name is not None:
+			return name
+		name = "__drift_iface_drop_helper"
+		self.module.iface_drop_helper = name
+		self.module.needs_iface_helpers = True
+		iface_llty = self._llty(DRIFT_IFACE_TYPE)
+		usize_llty = self._llty(DRIFT_USIZE_TYPE)
+		inline_storage = f"[{DRIFT_IFACE_INLINE_WORDS} x {usize_llty}]"
+		lines = [
+			f"define void @{name}({iface_llty} %src) {{",
+			"entry:",
+			f"  %iface_data = extractvalue {iface_llty} %src, {DRIFT_IFACE_DATA_IDX}",
+			f"  %iface_vtable = extractvalue {iface_llty} %src, {DRIFT_IFACE_VTABLE_IDX}",
+			f"  %iface_inline = extractvalue {iface_llty} %src, {DRIFT_IFACE_INLINE_FLAG_IDX}",
+			"  %iface_inline_bit = and i8 %iface_inline, 1",
+			"  %iface_owns_bit = and i8 %iface_inline, 2",
+			"  %iface_is_inline = icmp ne i8 %iface_inline_bit, 0",
+			f"  %iface_tmp = alloca {iface_llty}",
+			f"  store {iface_llty} %src, {iface_llty}* %iface_tmp",
+			f"  %iface_inline_field = getelementptr inbounds {iface_llty}, {iface_llty}* %iface_tmp, i32 0, i32 {DRIFT_IFACE_INLINE_IDX}",
+			f"  %iface_inline_word = getelementptr inbounds {inline_storage}, {inline_storage}* %iface_inline_field, i32 0, i32 0",
+			f"  %iface_inline_i8 = bitcast {usize_llty}* %iface_inline_word to i8*",
+			"  %iface_data_eff = select i1 %iface_is_inline, i8* %iface_inline_i8, i8* %iface_data",
+			"  %iface_vptr = bitcast i8* %iface_vtable to i8**",
+			"  %iface_drop_slot = getelementptr inbounds i8*, i8** %iface_vptr, i32 0",
+			"  %iface_drop_ptr = load i8*, i8** %iface_drop_slot",
+			"  %iface_has_drop = icmp ne i8* %iface_drop_ptr, null",
+			"  br i1 %iface_has_drop, label %iface_drop_call, label %iface_drop_done",
+			"iface_drop_call:",
+			"  %iface_drop_fn = bitcast i8* %iface_drop_ptr to void (i8*)*",
+			"  call void %iface_drop_fn(i8* %iface_data_eff)",
+			"  br label %iface_drop_done",
+			"iface_drop_done:",
+			"  %iface_needs_free = icmp ne i8 %iface_owns_bit, 0",
+			"  br i1 %iface_needs_free, label %iface_free, label %iface_free_done",
+			"iface_free:",
+			"  call void @drift_iface_free(i8* %iface_data)",
+			"  br label %iface_free_done",
+			"iface_free_done:",
 			"  ret void",
 			"}",
 		]

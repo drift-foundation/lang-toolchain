@@ -259,6 +259,81 @@ Stage2 alignment completed (reference):
   - array index path migrated to classifier output (removed local ad-hoc branching).
 - Rationale:
 
+- 2026-02-20: A2 (`TypeTable.has_drop`) completed with stabilization + A3 executed immediately after clean validation.
+  - A2 implementation:
+    - `lang/driftc/core/types_core.py`
+      - introduced public `TypeTable.has_drop(tid)` and migrated variant tombstone/drop checks to this API.
+      - kept compatibility shim `_type_needs_drop(...) -> has_drop(...)`.
+      - normalized array handling to element-driven drop requirement (no unconditional array-drop classification).
+      - tightened structural Copy semantics: mutable references (`&mut T`) are non-Copy in structural fallback.
+    - `lang/driftc/stage2/hir_to_mir.py`
+      - `_needs_runtime_drop(...)` now consumes `type_table.has_drop(...)` with `Copy` short-circuit to preserve transfer semantics.
+    - `lang/codegen/llvm/llvm_codegen.py`
+      - `_type_needs_drop(...)` now prefers `type_table.has_drop(...)` and uses existing local fallback only when needed.
+  - A3 implementation:
+    - `lang/driftc/driftc.py`
+      - MIR validator pipeline now reports validator-specific attribution in boundary diagnostics:
+        - `internal: MIR validation contract failure (validate_mir_call_invariants) (...)`
+        - and equivalent for each MIR validator stage.
+      - preserved phase/span handling via `_append_boundary_contract_diag(...)`.
+    - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py`
+      - pinned attribution with explicit assertion for `validate_mir_call_invariants` in emitted diagnostic message.
+  - Validation run (A2 + A3):
+    - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py` (pass)
+    - `lang/tests/driver/test_no_blank_span_fallbacks.py` (pass)
+    - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+    - `lang/tests/driver/test_alias_return_struct_field_assignment.py` (pass)
+    - `lang/codegen/llvm/tests/test_llvm_codegen_optional_ops.py` (pass)
+    - `lang/tests/driver/test_struct_ref_field_boundary_contract.py` (pass)
+    - `lang/tests/driver/test_struct_ref_field_borrow_alias_conflicts.py` (pass)
+    - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression` (pass)
+    - `lang/tests/codegen/e2e/struct_ref_field_result_ok_move_drop_once` (pass)
+
+- 2026-02-20: A1 started/completed (call contract seam expansion, non-behavioral centralization).
+  - Goal:
+    - reduce duplicated named-`HCall` CallInfo repair logic across checker and stage2 by moving it to `call_contract.py` as shared contract helper.
+  - Changes:
+    - `lang/driftc/call_contract.py`
+      - added `repair_named_hcall_callinfo(...)` with explicit policy knobs:
+        - `verify_target_sig_match`
+        - `allow_arity_fallback`
+        - `preserve_instantiated_target`
+        - `rewrite_sig_on_param_count_mismatch`
+      - added `_sig_matches_callsig(...)` internal helper.
+    - `lang/driftc/checker/__init__.py`
+      - `_repair_named_call_callinfo(...)` now delegates to shared `repair_named_hcall_callinfo(...)` with checker-equivalent policy.
+    - `lang/driftc/stage2/hir_to_mir.py`
+      - `_repair_named_hcall_callinfo(...)` now delegates to shared `repair_named_hcall_callinfo(...)` with stage2-equivalent policy (exact-sig preference + instantiated-target preservation + arity fallback).
+  - Validation run:
+    - `lang/tests/driver/test_callinfo_param_layout_contract.py` (pass)
+    - `lang/tests/driver/test_intrinsic_callinfo_diagnostics.py` (pass)
+    - `lang/tests/driver/test_driftc_emit_ir_stdlib_callinfo.py` (pass)
+    - `lang/tests/driver/test_instantiation_slot_separation_regression.py` (pass)
+    - `lang/tests/driver/test_test_build_only_callinfo.py` (pass)
+    - `lang/tests/stage2/test_deque_callinfo.py` (pass)
+
+- 2026-02-20: A4 completed (interface drop helper extraction in LLVM codegen).
+  - Goal:
+    - remove inline interface-drop lowering body from `_emit_drop_value(...)` and centralize it into a dedicated helper, mirroring existing array/DV helper pattern.
+  - Changes:
+    - `lang/codegen/llvm/llvm_codegen.py`
+      - added module cache field: `iface_drop_helper: str | None`.
+      - added `_ensure_interface_drop_helper()` that emits:
+        - interface drop callback dispatch via vtable,
+        - owned-allocation free path via `drift_iface_free`,
+        - single helper definition `@__drift_iface_drop_helper`.
+      - `_emit_drop_value(...)` for `TypeKind.INTERFACE` now emits a single helper call.
+      - array-drop helper local emitter now routes `TypeKind.INTERFACE` element drops through the same helper.
+  - Added regression:
+    - `lang/codegen/llvm/tests/test_llvm_codegen_iface_drop_helper.py`
+      - pins helper emission and use from function body.
+  - Validation run:
+    - `lang/codegen/llvm/tests/test_llvm_codegen_iface_drop_helper.py` (pass)
+    - `lang/codegen/llvm/tests/test_llvm_codegen_dv_drop_helper.py` (pass)
+    - `lang/codegen/llvm/tests/test_llvm_codegen_optional_ops.py` (pass)
+    - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression` (pass)
+    - `lang/tests/codegen/e2e/struct_ref_field_result_ok_move_drop_once` (pass)
+
 - 2026-02-20: Residual-risk follow-up (R4/R5) completed.
   - R5 (variant multi-field drop-in-branch runtime check):
     - Added e2e regression:
@@ -349,3 +424,23 @@ Follow-up (2026-02-20): direct-MIR Optional<String> payload regression
     - `struct_ref_field_result_ok_move_drop_once` (pass)
     - `maybe_assume_init_read_moves_out_no_leak` (pass)
     - `std_json_leak_stress_parse_loop` (pass)
+
+2026-02-20: LANGUAGE_BUG fix (cross-module alias variant payload ref path tripping MIR invariant)
+- Reported repro:
+  - `repro.types::Cell` variant, `repro.api::pub type Cell = types.Cell`, `Row::is_null` matching `Result<&api.Cell, Int>`.
+  - Failure: `internal: MIR validation contract failure (validate_mir_variant_field_invariants) ... VariantGetFieldAddr field_ty mismatch`.
+- Regression (pinned first):
+  - `lang/tests/driver/test_alias_return_struct_field_assignment.py::test_cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invariant`
+  - Confirmed failing before fix.
+- Root cause:
+  - MIR validator compared raw TypeIds for variant field payload type equality.
+  - Alias/forward-nominal canonicalization had been applied asymmetrically across MIR instruction fields vs variant arm schema TypeIds, producing false mismatch.
+- Fix:
+  - `lang/driftc/mir_validate.py`
+    - added local canonical forward-nominal/zero-param-alias resolver for validator-side comparisons.
+    - `validate_mir_variant_field_invariants(...)` now canonicalizes:
+      - `instr.variant_ty` before variant-kind lookup,
+      - expected arm field type and `instr.field_ty` before equality comparison.
+- Validation:
+  - `lang/tests/driver/test_alias_return_struct_field_assignment.py -k cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invariant` (pass)
+  - `lang/tests/stage2/test_mir_validate_variant_and_hygiene.py` (pass)

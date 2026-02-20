@@ -5214,40 +5214,73 @@ def compile_stubbed_funcs(
 		mir_funcs_by_id[spec.wrapper_fn_id] = builder.func
 
 	with _timed("mir_validate"):
-		try:
-			if shared_type_table is not None:
-				_canonicalize_signature_type_ids(signatures_by_id, shared_type_table)
-				_canonicalize_mir_type_ids(mir_funcs_by_id, shared_type_table)
-			validate_mir_call_invariants(mir_funcs_by_id)
-			validate_mir_basic_hygiene(mir_funcs_by_id)
-			if shared_type_table is not None:
-				validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
-				validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
-				validate_mir_variant_field_invariants(mir_funcs_by_id, shared_type_table)
-			validate_mir_array_alloc_invariants(mir_funcs_by_id)
-			validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
-			if shared_type_table is not None:
-				validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)
-			if shared_type_table is not None:
-				validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)
-			if shared_type_table is not None:
-				validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)
-		except AssertionError as err:
-			_append_boundary_contract_diag(
-				checked,
-				phase="mir_validate",
-				prefix="MIR validation contract failure",
-				err=err,
-				fn_id=FunctionId(module=entry_module, name=entry_name, ordinal=0),
-				signatures_by_id=signatures_by_id,
-				origin_by_fn_id=origin_by_fn_id,
+		def _run_mir_validator(name: str, action: Callable[[], None]) -> bool:
+			try:
+				action()
+				return True
+			except AssertionError as err:
+				_append_boundary_contract_diag(
+					checked,
+					phase="mir_validate",
+					prefix=f"MIR validation contract failure ({name})",
+					err=err,
+					fn_id=FunctionId(module=entry_module, name=entry_name, ordinal=0),
+					signatures_by_id=signatures_by_id,
+					origin_by_fn_id=origin_by_fn_id,
+				)
+				_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+				if return_checked:
+					if return_ssa:
+						return False
+					return False
+				return False
+
+		if shared_type_table is not None:
+			if not _run_mir_validator("canonicalize_signature_type_ids", lambda: _canonicalize_signature_type_ids(signatures_by_id, shared_type_table)):
+				if return_checked:
+					if return_ssa:
+						return {}, checked, None
+					return {}, checked
+				return {}
+			if not _run_mir_validator("canonicalize_mir_type_ids", lambda: _canonicalize_mir_type_ids(mir_funcs_by_id, shared_type_table)):
+				if return_checked:
+					if return_ssa:
+						return {}, checked, None
+					return {}, checked
+				return {}
+		validator_plan: list[tuple[str, Callable[[], None]]] = [
+			("validate_mir_call_invariants", lambda: validate_mir_call_invariants(mir_funcs_by_id)),
+			("validate_mir_basic_hygiene", lambda: validate_mir_basic_hygiene(mir_funcs_by_id)),
+		]
+		if shared_type_table is not None:
+			validator_plan.extend(
+				[
+					("validate_mir_call_types", lambda: validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)),
+					("validate_mir_concrete_layout_types", lambda: validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)),
+					("validate_mir_variant_field_invariants", lambda: validate_mir_variant_field_invariants(mir_funcs_by_id, shared_type_table)),
+				]
 			)
-			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
-			if return_checked:
-				if return_ssa:
-					return {}, checked, None
-				return {}, checked
-			return {}
+		validator_plan.extend(
+			[
+				("validate_mir_array_alloc_invariants", lambda: validate_mir_array_alloc_invariants(mir_funcs_by_id)),
+				("validate_mir_wrapping_u64_invariants", lambda: validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)),
+			]
+		)
+		if shared_type_table is not None:
+			validator_plan.extend(
+				[
+					("validate_mir_iface_init_invariants", lambda: validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)),
+					("validate_mir_array_copy_invariants", lambda: validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)),
+					("validate_mir_call_byvalue_moves", lambda: validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)),
+				]
+			)
+		for validator_name, validator_action in validator_plan:
+			if not _run_mir_validator(validator_name, validator_action):
+				if return_checked:
+					if return_ssa:
+						return {}, checked, None
+					return {}, checked
+				return {}
 	if shared_type_table is not None:
 		if drift_debug.enabled("ssa"):
 			import sys

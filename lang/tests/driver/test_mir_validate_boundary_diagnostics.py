@@ -52,6 +52,7 @@ fn main() nothrow -> Int {
 	errs = [d for d in checked.diagnostics if d.severity == "error"]
 	assert any(d.phase == "mir_validate" for d in errs), errs
 	assert any("forced mir validator failure" in d.message for d in errs), errs
+	assert any("validate_mir_call_invariants" in d.message for d in errs), errs
 	matches = [d for d in errs if "forced mir validator failure" in d.message]
 	assert matches
 	assert matches[0].span is not None

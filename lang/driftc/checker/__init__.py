@@ -40,7 +40,7 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeTable, TypeId, TypeKind, TypeParamId
 from lang.driftc.stage1.hir_utils import collect_catch_arms_from_block
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
-from lang.driftc.call_contract import call_arg_exprs_for_param_layout, call_contract_issues
+from lang.driftc.call_contract import call_arg_exprs_for_param_layout, call_contract_issues, repair_named_hcall_callinfo
 from lang.driftc.stage1.normalize import normalize_hir
 
 if TYPE_CHECKING:
@@ -2194,40 +2194,14 @@ class Checker:
 		info: CallInfo,
 		call_info_by_callsite_id: Mapping[int, CallInfo] | None,
 	) -> CallInfo:
-		from lang.driftc import stage1 as H
-		if not (isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar)):
-			return info
-		if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
-			return info
-		call_name = expr.fn.name
-		call_module = getattr(expr.fn, "module_id", None)
-		target = info.target.symbol
-		if target.name == call_name and (call_module is None or target.module == call_module):
-			return info
-		candidates: list[tuple[FunctionId, FnSignature]] = []
-		for fn_id, sig in self._signatures_by_id.items():
-			if fn_id.name != call_name:
-				continue
-			if isinstance(call_module, str) and fn_id.module != call_module:
-				continue
-			if sig.param_type_ids is None or sig.return_type_id is None:
-				continue
-			candidates.append((fn_id, sig))
-		if len(candidates) != 1:
-			return info
-		fn_id, sig = candidates[0]
-		use_template_sig = not bool(getattr(sig, "type_params", None))
-		repaired_sig = info.sig
-		if use_template_sig:
-			repaired_sig = CallSig(
-				param_types=tuple(sig.param_type_ids),
-				user_ret_type=sig.return_type_id,
-				can_throw=bool(sig.declared_can_throw),
-				includes_callee=bool(getattr(info.sig, "includes_callee", False)),
-			)
-		repaired = CallInfo(
-			target=CallTarget.direct(fn_id),
-			sig=repaired_sig,
+		repaired = repair_named_hcall_callinfo(
+			expr,
+			info,
+			self._signatures_by_id,
+			verify_target_sig_match=False,
+			allow_arity_fallback=False,
+			preserve_instantiated_target=False,
+			rewrite_sig_on_param_count_mismatch=False,
 		)
 		csid = getattr(expr, "callsite_id", None)
 		if isinstance(csid, int) and isinstance(call_info_by_callsite_id, dict):

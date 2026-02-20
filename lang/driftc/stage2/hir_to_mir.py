@@ -59,7 +59,7 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.closures import sort_captures
-from lang.driftc.call_contract import call_contract_issues
+from lang.driftc.call_contract import call_contract_issues, repair_named_hcall_callinfo
 from . import mir_nodes as M
 
 
@@ -346,52 +346,18 @@ class HIRToMIR:
 			if local_name not in self._local_types:
 				self._local_types[local_name] = ty
 
-	def _is_destructible_type(self, ty: TypeId) -> bool:
-		if ty == self._type_table.ensure_error():
-			return True
-		try:
-			return bool(self._type_table.is_destructible(ty))
-		except Exception:
-			return False
-
 	def _needs_runtime_drop(self, ty: TypeId) -> bool:
-		return self._needs_runtime_drop_inner(ty, set())
-
-	def _needs_runtime_drop_inner(self, ty: TypeId, seen: set[int]) -> bool:
 		if ty == self._unknown_type:
 			return False
-		tid = int(ty)
-		if tid in seen:
-			return False
-		seen.add(tid)
-		td = self._type_table.get(ty)
-		if td.kind is TypeKind.REF:
-			return False
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			return True
-		if td.kind is TypeKind.INTERFACE:
-			return True
-		if td.kind is TypeKind.ARRAY and td.param_types:
-			return self._needs_runtime_drop_inner(td.param_types[0], seen)
-		if td.kind is TypeKind.STRUCT:
-			inst = self._type_table.get_struct_instance(ty)
-			field_types = list(inst.field_types) if inst is not None else list(td.param_types)
-			for fty in field_types:
-				if self._needs_runtime_drop_inner(fty, seen):
-					return True
-		if td.kind is TypeKind.VARIANT:
-			inst = self._type_table.get_variant_instance(ty)
-			if inst is not None:
-				for arm in inst.arms:
-					for fty in arm.field_types:
-						if self._needs_runtime_drop_inner(fty, seen):
-							return True
 		try:
-			if self._type_table.copy_status(ty) is not True:
-				return True
+			if self._type_table.copy_status(ty) is True:
+				return False
 		except Exception:
 			pass
-		return self._is_destructible_type(ty)
+		try:
+			return bool(self._type_table.has_drop(ty))
+		except Exception:
+			return False
 
 	def _should_copy_value(self, ty: TypeId) -> bool:
 		return self._classify_value_transfer(ty) == "copy"
@@ -5607,63 +5573,15 @@ class HIRToMIR:
 		return None
 
 	def _repair_named_hcall_callinfo(self, expr: H.HExpr, info: CallInfo) -> CallInfo:
-		if not (isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar)):
-			return info
-		if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
-			return info
-		call_name = expr.fn.name
-		call_module = getattr(expr.fn, "module_id", None)
-		target = info.target.symbol
-		target_sig = self._signatures_by_id.get(target)
-		def _sig_matches_callsig(sig: FnSignature, call_sig: CallSig) -> bool:
-			params = tuple(sig.param_type_ids or [])
-			ret = sig.return_type_id
-			if ret is None:
-				return False
-			return params == tuple(call_sig.param_types) and ret == call_sig.user_ret_type
-		# Keep explicit instantiated targets stable: lowering receives concrete
-		# call-info from typecheck/rewrite and must not "repair" it back to the
-		# generic template by bare name/arity.
-		if (call_module is None or target.module == call_module) and target.name.startswith(f"{call_name}__inst__"):
-			if target_sig is None or _sig_matches_callsig(target_sig, info.sig):
-				return info
-		target_name_matches = target.name == call_name and (call_module is None or target.module == call_module)
-		if target_name_matches and target_sig is not None and _sig_matches_callsig(target_sig, info.sig):
-			return info
-		candidates: list[tuple[FunctionId, FnSignature]] = []
-		for fn_id, sig in self._signatures_by_id.items():
-			if fn_id.name != call_name:
-				continue
-			if isinstance(call_module, str) and fn_id.module != call_module:
-				continue
-			if sig.param_type_ids is None or sig.return_type_id is None:
-				continue
-			candidates.append((fn_id, sig))
-		exact = [
-			(fn_id, sig)
-			for fn_id, sig in candidates
-			if _sig_matches_callsig(sig, info.sig)
-		]
-		if len(exact) == 1:
-			fn_id, sig = exact[0]
-		else:
-			arity = [
-				(fn_id, sig)
-				for fn_id, sig in candidates
-				if len(sig.param_type_ids or []) == len(expr.args)
-			]
-			if len(arity) != 1:
-				return info
-			fn_id, sig = arity[0]
-		repaired_sig = info.sig
-		use_template_sig = not bool(getattr(sig, "type_params", None))
-		if use_template_sig or len(info.sig.param_types) != len(expr.args):
-			repaired_sig = CallSig(
-				param_types=tuple(sig.param_type_ids),
-				user_ret_type=sig.return_type_id,
-				can_throw=bool(sig.declared_can_throw),
-			)
-		return CallInfo(target=CallTarget.direct(fn_id), sig=repaired_sig)
+		return repair_named_hcall_callinfo(
+			expr,
+			info,
+			self._signatures_by_id,
+			verify_target_sig_match=True,
+			allow_arity_fallback=True,
+			preserve_instantiated_target=True,
+			rewrite_sig_on_param_count_mismatch=True,
+		)
 
 	def _call_info_for(self, expr: H.HCall) -> CallInfo:
 		info = self._call_info_for_expr_optional(expr)
