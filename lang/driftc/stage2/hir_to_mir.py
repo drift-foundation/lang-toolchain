@@ -355,8 +355,15 @@ class HIRToMIR:
 			return False
 
 	def _needs_runtime_drop(self, ty: TypeId) -> bool:
+		return self._needs_runtime_drop_inner(ty, set())
+
+	def _needs_runtime_drop_inner(self, ty: TypeId, seen: set[int]) -> bool:
 		if ty == self._unknown_type:
 			return False
+		tid = int(ty)
+		if tid in seen:
+			return False
+		seen.add(tid)
 		td = self._type_table.get(ty)
 		if td.kind is TypeKind.REF:
 			return False
@@ -364,6 +371,21 @@ class HIRToMIR:
 			return True
 		if td.kind is TypeKind.INTERFACE:
 			return True
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			return self._needs_runtime_drop_inner(td.param_types[0], seen)
+		if td.kind is TypeKind.STRUCT:
+			inst = self._type_table.get_struct_instance(ty)
+			field_types = list(inst.field_types) if inst is not None else list(td.param_types)
+			for fty in field_types:
+				if self._needs_runtime_drop_inner(fty, seen):
+					return True
+		if td.kind is TypeKind.VARIANT:
+			inst = self._type_table.get_variant_instance(ty)
+			if inst is not None:
+				for arm in inst.arms:
+					for fty in arm.field_types:
+						if self._needs_runtime_drop_inner(fty, seen):
+							return True
 		try:
 			if self._type_table.copy_status(ty) is not True:
 				return True
@@ -372,7 +394,31 @@ class HIRToMIR:
 		return self._is_destructible_type(ty)
 
 	def _should_copy_value(self, ty: TypeId) -> bool:
-		return self._type_table.copy_status(ty) is True and (not self._needs_runtime_drop(ty))
+		return self._classify_value_transfer(ty) == "copy"
+
+	def _classify_value_transfer(self, ty: TypeId, *, allow_unknown_typevar: bool = False) -> str:
+		"""
+		Single-source ownership transfer decision for lowered values.
+
+		Returns:
+		- "copy": value can be semantically copied at this boundary.
+		- "move": value must be moved (or consumed) to preserve ownership.
+		- "unknown": unresolved typevar (allowed only when explicitly requested).
+		"""
+		copy_status = self._type_table.copy_status(ty)
+		if copy_status is True:
+			# Copy is only safe as a transfer boundary when no runtime-owned
+			# substructure requires move/drop semantics.
+			return "copy" if not self._needs_runtime_drop(ty) else "move"
+		if copy_status is False:
+			return "move"
+		td = self._type_table.get(ty)
+		if td.kind is TypeKind.TYPEVAR and allow_unknown_typevar:
+			return "unknown"
+		# Keep transfer behavior safe when Copy status is unresolved for
+		# non-typevar nominal/alias paths: prefer move semantics over asserting.
+		# This avoids false internal failures while preserving ownership safety.
+		return "move"
 
 	def _push_scope(self, *, include_params: bool) -> None:
 		scope: list[str] = []
@@ -721,12 +767,18 @@ class HIRToMIR:
 
 		dispatch_block = self.b.new_block("match_dispatch")
 		join_block = self.b.new_block("match_join")
-		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
-			(arm, self.b.new_block(f"match_arm_{idx}")) for idx, arm in enumerate(expr.arms)
-		]
 
 		# Enter dispatch.
 		self.b.set_terminator(M.Goto(target=dispatch_block.name))
+
+		for arm in expr.arms:
+			if arm.ctor is None:
+				continue
+			if inst.arms_by_name.get(arm.ctor) is None:
+				raise AssertionError("unknown constructor in match reached MIR lowering (checker bug)")
+		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
+			(arm, self.b.new_block(f"match_arm_{idx}")) for idx, arm in enumerate(expr.arms)
+		]
 
 		# Dispatch: tag = VariantTag(scrutinee); chain IfTerminator tests in source order.
 		self.b.set_block(dispatch_block)
@@ -747,10 +799,6 @@ class HIRToMIR:
 				default_block = bb
 			else:
 				event_arms.append((arm, bb))
-		for arm, _bb in event_arms:
-			assert arm.ctor is not None
-			if inst.arms_by_name.get(arm.ctor) is None:
-				raise AssertionError("unknown constructor in match reached MIR lowering (checker bug)")
 
 		current_block = dispatch_block
 		for arm, bb in event_arms:
@@ -888,7 +936,16 @@ class HIRToMIR:
 										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
 										self._local_types[copy_dest] = bty
 										field_moved = copy_dest
-									arm_scrut_payload_moved = True
+									else:
+										tmp_local = f"__match_field_move_{self.b.new_temp()}"
+										self.b.ensure_local(tmp_local)
+										self._local_types[tmp_local] = bty
+										self.b.emit(M.StoreLocal(local=tmp_local, value=field_moved))
+										move_dest = self.b.new_temp()
+										self.b.emit(M.MoveOut(dest=move_dest, local=tmp_local, ty=bty))
+										self._local_types[move_dest] = bty
+										field_moved = move_dest
+										arm_scrut_payload_moved = True
 								else:
 									self.b.emit(
 										M.VariantGetField(
@@ -1826,19 +1883,18 @@ class HIRToMIR:
 		loaded = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=loaded, local=tmp_local))
 
-		copy_status = self._type_table.copy_status(elem_ty)
-		if copy_status is True:
+		transfer = self._classify_value_transfer(elem_ty, allow_unknown_typevar=True)
+		if transfer == "copy":
 			copy_dest = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copy_dest, value=loaded, ty=elem_ty))
 			self._local_types[copy_dest] = elem_ty
 			return copy_dest
-		if copy_status is None:
-			td = self._type_table.get(elem_ty)
-			if td.kind is TypeKind.TYPEVAR:
-				return loaded
-			raise AssertionError("MIR lowering invariant violated: unresolved Copy status for array index read")
+		if transfer == "unknown":
+			return loaded
 		td = self._type_table.get(elem_ty)
 		if td.kind is not TypeKind.TYPEVAR:
+			if self._type_table.copy_status(elem_ty) is True:
+				raise NotImplementedError("array index read requires trivially-copyable element type in MVP")
 			raise NotImplementedError("array index read requires Copy element type; borrow not supported in MVP")
 		return loaded
 

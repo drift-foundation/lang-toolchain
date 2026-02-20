@@ -1,0 +1,73 @@
+module main
+
+import std.core as core;
+
+variant Resp {
+	Copy(id: Int),
+	NonCopy(msg: String)
+}
+
+struct Tracker {
+	alive: &mut Bool,
+	drops: &mut Int
+}
+
+struct Conn {
+	resp: Resp,
+	tracker: Tracker
+}
+
+implement core.Destructible for Conn {
+	pub fn destroy(self: Conn) nothrow -> Void {
+		*self.tracker.alive = false;
+		*self.tracker.drops = *self.tracker.drops + 1;
+	}
+}
+
+fn make(copy_arm: Bool, alive: &mut Bool, drops: &mut Int) nothrow -> core.Result<Conn, Int> {
+	*alive = true;
+	*drops = 0;
+	var r = Resp::NonCopy(msg = "payload");
+	if copy_arm {
+		r = Resp::Copy(id = 7);
+	}
+	var c = Conn(resp = move r, tracker = Tracker(alive = alive, drops = drops));
+	return core.Result::Ok(move c);
+}
+
+fn check(copy_arm: Bool) nothrow -> Int {
+	var alive = false;
+	var drops = 0;
+	match make(copy_arm, &mut alive, &mut drops) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(v) => {
+			var conn = move v;
+			if not alive { return 11; }
+			if drops != 0 { return 12; }
+			match conn.resp {
+				Resp::Copy(id) => {
+					if not copy_arm { return 13; }
+					if id != 7 { return 14; }
+				},
+				Resp::NonCopy(_msg) => {
+					if copy_arm { return 15; }
+				}
+			}
+			if not alive { return 17; }
+			if drops != 0 { return 18; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = check(true);
+	if a != 0 {
+		return a;
+	}
+	val b = check(false);
+	if b != 0 {
+		return b;
+	}
+	return 0;
+}

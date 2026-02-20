@@ -1501,3 +1501,27 @@
   - coverage in `lang/tests/driver/test_import_module_not_found_hint.py`.
 - Justfile cleanup:
   - renamed/streamlined recipes (including final cleanup of old deploy-oriented naming).
+
+## 2026-02-20 – Concurrency queue-limit determinism + runtime race fix
+- Fixed runtime queue-limit admission race in worker dequeue path:
+  - `lang/language_runtime/posix/thread_runtime.c`
+  - moved `running` accounting to the locked dequeue transition (and balanced early-cancel decrements), so `drift_exec_submit` queue-limit checks see consistent `queue_len + running`.
+- Reworked queue-limit e2e to a deterministic direct-runtime submission shape:
+  - `lang/tests/codegen/e2e/concurrent_queue_limit_enforced/main.drift`
+  - validates second submit returns busy code under `queue_limit=1` without relying on wrapper-lifecycle timing.
+- Validation:
+  - `concurrent_queue_limit_enforced` (pass)
+  - `DRIFT_ASAN=1 concurrent_queue_limit_enforced` (pass)
+  - related concurrency checks: `concurrent_spawn_on_busy_timeout`, `concurrent_spawn_default_exec_busy`, `concurrent_default_executor_override` (pass).
+
+## 2026-02-20 – Code-review residual risk closure (R1/R4/R5)
+- Added mixed-payload multi-arm F1 regression:
+  - `lang/tests/codegen/e2e/result_ok_mixed_payload_arms_drop_ordering`
+  - covers `Result::Ok(Conn)` where nested variant has both `Copy(Int)` and `NonCopy(String)` arms; asserts lifetime/drop ordering across both arm paths.
+  - validated in normal, `DRIFT_ASAN=1`, and `DRIFT_MEMCHECK=1` (pass).
+- Added dedicated variant branch/drop stress regression:
+  - `lang/tests/codegen/e2e/variant_multifield_drop_in_branch`
+  - multi-field variant payload dropped from both `if`/`else` branch scopes in loop; normal + ASAN (pass).
+- Completed optional LLVM verifier check for DV-drop helper path:
+  - emitted IR from `diagnostic_value_object_nested_get` and verified with
+    - `/usr/lib/llvm-20/bin/opt -passes=verify /tmp/dv_drop_verify.ll -disable-output` (pass).

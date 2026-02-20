@@ -67,7 +67,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_INVOKE_TARGET_KIND",
-				message="internal: invoke CallInfo target must be INDIRECT (checker bug)",
+				message="invoke CallInfo target must be INDIRECT (checker bug)",
 				notes=(
 					f"target_kind={info.target.kind.name}",
 					f"callsite_id={getattr(expr, 'callsite_id', None)}",
@@ -79,7 +79,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_METHOD_CONSTRUCTOR_TARGET",
-				message="internal: method call CallInfo target must not be CONSTRUCTOR (checker bug)",
+				message="method call CallInfo target must not be CONSTRUCTOR (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
 				span=getattr(expr, "loc", Span()),
 			)
@@ -88,7 +88,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_INVOKE_INCLUDES_CALLEE",
-				message="internal: invoke CallInfo must not set includes_callee (checker bug)",
+				message="invoke CallInfo must not set includes_callee (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
 				span=getattr(expr, "loc", Span()),
 			)
@@ -98,7 +98,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_INCLUDES_CALLEE_INVALID",
-				message=f"internal: CallInfo includes_callee set on {call_kind} (checker bug)",
+				message=f"CallInfo includes_callee set on {call_kind} (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
 				span=getattr(expr, "loc", Span()),
 			)
@@ -113,7 +113,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_PARAM_LAYOUT",
-				message=f"internal: CallInfo param layout mismatch for {call_kind} (checker bug)",
+				message=f"CallInfo param layout mismatch for {call_kind} (checker bug)",
 				notes=(
 					target_note,
 					f"callsite_id={getattr(expr, 'callsite_id', None)} expected_params={expected} actual_params={actual}",

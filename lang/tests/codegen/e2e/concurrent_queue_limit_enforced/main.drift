@@ -1,37 +1,33 @@
 module m
 
-import std.concurrent as conc;
 import std.core as core;
 import lang.thread as thread;
 
 pub fn main() nothrow -> Int {
-	var b = conc.executor_policy_builder();
-	b.queue_limit(1);
-	b.min_threads(1);
-	b.max_threads(1);
-	var exec = b.build_executor();
-
-	var t1 = conc.spawn_on(exec, | | => { thread.vt_park_until(20); return 1; });
-	var ok1 = match t1 {
-		Ok(_t) => { true },
-		Err(_) => { false },
-		default => { false }
-	};
-	if not ok1 {
-		return 2;
+	val exec = thread.exec_create(1, 1, 1, 0, 0, 262144);
+	if exec == 0 {
+		return 10;
 	}
-	val t2 = conc.spawn_on(exec, | | => { return 2; });
-	var ok2 = match t2 {
-		Err(err) => { yield match err {
-				Busy => { true },
-				default => { false },
-			}
-		},
-		Ok(_t) => { false },
-		default => { false },
-	};
-	if ok2 {
+	val cb1: core.Callback0<Void> = core.callback0(| | => {
+		val deadline = thread.now_ms() + 20;
+		while thread.now_ms() < deadline {
+		}
+		return;
+	});
+	val h1 = thread.vt_spawn(cb1, exec);
+	val s1 = thread.exec_submit(exec, h1);
+	if s1 != 0 {
+		return 11;
+	}
+	thread.vt_park_until(1);
+	val cb2: core.Callback0<Void> = core.callback0(| | => { return; });
+	val h2 = thread.vt_spawn(cb2, exec);
+	val s2 = thread.exec_submit(exec, h2);
+	if s2 == 1 {
 		return 0;
 	}
-	return 1;
+	if s2 == 0 {
+		return 1;
+	}
+	return 12;
 }

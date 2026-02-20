@@ -42,7 +42,7 @@ def test_callinfo_param_layout_mismatch_for_indirect_method_reports_checker_bug(
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=1, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert any("internal: CallInfo param layout mismatch for method call (checker bug)" in d.message for d in errors)
+	assert any("CallInfo param layout mismatch for method call (checker bug)" in d.message for d in errors)
 
 
 def test_callinfo_includes_callee_on_call_reports_checker_bug() -> None:
@@ -58,7 +58,7 @@ def test_callinfo_includes_callee_on_call_reports_checker_bug() -> None:
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=2, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert any("internal: CallInfo includes_callee set on call (checker bug)" in d.message for d in errors)
+	assert any("CallInfo includes_callee set on call (checker bug)" in d.message for d in errors)
 
 
 def test_callinfo_param_layout_valid_for_direct_method_no_contract_error() -> None:
@@ -74,8 +74,8 @@ def test_callinfo_param_layout_valid_for_direct_method_no_contract_error() -> No
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=3, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert not any("internal: CallInfo param layout mismatch" in d.message for d in errors)
-	assert not any("internal: CallInfo includes_callee set on" in d.message for d in errors)
+	assert not any("CallInfo param layout mismatch" in d.message for d in errors)
+	assert not any("CallInfo includes_callee set on" in d.message for d in errors)
 
 
 def test_callinfo_param_layout_mismatch_for_invoke_reports_checker_bug() -> None:
@@ -91,7 +91,7 @@ def test_callinfo_param_layout_mismatch_for_invoke_reports_checker_bug() -> None
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=4, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	matches = [d for d in errors if "internal: CallInfo param layout mismatch for invoke (checker bug)" in d.message]
+	matches = [d for d in errors if "CallInfo param layout mismatch for invoke (checker bug)" in d.message]
 	assert matches
 	assert any("target_kind=INDIRECT" in note for note in (matches[0].notes or []))
 
@@ -110,7 +110,7 @@ def test_callinfo_param_layout_mismatch_for_constructor_call_reports_checker_bug
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=5, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	matches = [d for d in errors if "internal: CallInfo param layout mismatch for call (checker bug)" in d.message]
+	matches = [d for d in errors if "CallInfo param layout mismatch for call (checker bug)" in d.message]
 	assert matches
 	assert any("target_kind=CONSTRUCTOR" in note for note in (matches[0].notes or []))
 
@@ -128,7 +128,7 @@ def test_callinfo_target_shape_invoke_requires_indirect_target() -> None:
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=6, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert any("internal: invoke CallInfo target must be INDIRECT (checker bug)" in d.message for d in errors)
+	assert any("invoke CallInfo target must be INDIRECT (checker bug)" in d.message for d in errors)
 
 
 def test_callinfo_target_shape_allows_indirect_target_on_call() -> None:
@@ -144,7 +144,7 @@ def test_callinfo_target_shape_allows_indirect_target_on_call() -> None:
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=7, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert not any("internal: call CallInfo target must not be INDIRECT" in d.message for d in errors)
+	assert not any("call CallInfo target must not be INDIRECT" in d.message for d in errors)
 
 
 def test_callinfo_target_shape_allows_intrinsic_callback_target_on_call() -> None:
@@ -160,8 +160,8 @@ def test_callinfo_target_shape_allows_intrinsic_callback_target_on_call() -> Non
 	checker, fn_id = _checker_for(block=block, call_info=info, callsite_id=8, table=table)
 	checked = checker.check_by_id([fn_id])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert not any("internal: invoke CallInfo target must be INDIRECT" in d.message for d in errors)
-	assert not any("internal: call CallInfo target must not be INDIRECT" in d.message for d in errors)
+	assert not any("invoke CallInfo target must be INDIRECT" in d.message for d in errors)
+	assert not any("call CallInfo target must not be INDIRECT" in d.message for d in errors)
 
 
 def test_call_signature_type_mismatch_uses_symbolic_types_and_span() -> None:
@@ -211,7 +211,7 @@ def test_named_call_repairs_mismatched_direct_target_symbol_callinfo() -> None:
 	)
 	checked = checker.check_by_id([fn_main])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert not any("internal: CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors
+	assert not any("CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors
 
 
 def test_named_call_repair_preserves_instantiated_generic_sig() -> None:
@@ -247,4 +247,4 @@ def test_named_call_repair_preserves_instantiated_generic_sig() -> None:
 	checked = checker.check_by_id([fn_main])
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert not any("argument 0 to std.core::cell has type Bool, expected TypeVar<std.core::cell#0>" in d.message for d in errors), errors
-	assert not any("internal: CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors
+	assert not any("CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors

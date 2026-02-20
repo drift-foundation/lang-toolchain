@@ -1739,13 +1739,13 @@ class Checker:
 					is_err = self._is_error_subject(expr.subject.subject)
 					if is_err is None:
 						return None
-						if is_err:
-							idx_ty = self._infer_expr_type(expr.index)
-							if idx_ty is not None:
-								idx_def = self.table.get(idx_ty)
-								if idx_def.name != "String":
-									self.report_error_attr_key_not_string(getattr(expr.index, "loc", None))
-							return checker._dv
+					if is_err:
+						idx_ty = self._infer_expr_type(expr.index)
+						if idx_ty is not None:
+							idx_def = self.table.get(idx_ty)
+							if idx_def.name != "String":
+								self.report_error_attr_key_not_string(getattr(expr.index, "loc", None))
+						return checker._dv
 				subject_ty = self._infer_expr_type(expr.subject)
 				idx_ty = self._infer_expr_type(expr.index)
 				if idx_ty is not None and idx_ty != checker._int_type:

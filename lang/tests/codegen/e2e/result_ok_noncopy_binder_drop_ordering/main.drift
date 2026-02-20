@@ -1,0 +1,54 @@
+module main
+
+import std.core as core;
+
+struct SessionState {
+	reusable: Bool,
+	autocommit_enabled: Bool,
+	in_transaction: Bool
+}
+
+struct Session {
+	state: SessionState,
+	alive_flag: &mut Bool,
+	drop_count: &mut Int
+}
+
+struct Conn {
+	session: Session
+}
+
+implement core.Destructible for Session {
+	pub fn destroy(var self: Session) nothrow -> Void {
+		*self.alive_flag = false;
+		*self.drop_count = *self.drop_count + 1;
+		self.state.reusable = false;
+		self.state.autocommit_enabled = true;
+		self.state.in_transaction = false;
+	}
+}
+
+fn connect(flag: &mut Bool, drops: &mut Int) nothrow -> core.Result<Conn, Int> {
+	*flag = true;
+	*drops = 0;
+	var conn = Conn(session = Session(state = SessionState(reusable = true, autocommit_enabled = true, in_transaction = false), alive_flag = flag, drop_count = drops));
+	conn.session.state.autocommit_enabled = false;
+	return core.Result::Ok(move conn);
+}
+
+fn main() nothrow -> Int {
+	var alive = false;
+	var drops = 0;
+	match connect(&mut alive, &mut drops) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(v) => {
+			var conn = move v;
+			if not alive { return 21; }
+			if drops != 0 { return 22; }
+			if not conn.session.state.reusable { return 23; }
+			if conn.session.state.autocommit_enabled { return 24; }
+			if conn.session.state.in_transaction { return 25; }
+			return 0;
+		}
+	}
+}

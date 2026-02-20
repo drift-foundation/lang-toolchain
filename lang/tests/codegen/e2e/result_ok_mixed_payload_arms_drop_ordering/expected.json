@@ -1,0 +1,4 @@
+{
+  "description": "e2e: mixed copy/non-copy arm payloads preserve Result::Ok source lifetime and drop ordering",
+  "exit_code": 0
+}

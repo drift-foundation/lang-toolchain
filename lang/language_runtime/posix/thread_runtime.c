@@ -426,6 +426,7 @@ static void *drift_exec_worker(void *arg) {
 				exec->tail = NULL;
 			}
 			exec->queue_len--;
+			atomic_fetch_add(&exec->running, 1);
 		}
 		pthread_mutex_unlock(&exec->mu);
 		if (!node) {
@@ -445,6 +446,7 @@ static void *drift_exec_worker(void *arg) {
 				pthread_cond_broadcast(&vt->cv);
 				pthread_mutex_unlock(&vt->mu);
 			}
+			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
 		atomic_store(&vt->started, 1);
@@ -457,10 +459,10 @@ static void *drift_exec_worker(void *arg) {
 				pthread_cond_broadcast(&vt->cv);
 				pthread_mutex_unlock(&vt->mu);
 			}
+			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
-		atomic_fetch_add(&exec->running, 1);
 #ifdef __linux__
 		if (!vt->ctx_ready) {
 			getcontext(&vt->ctx);

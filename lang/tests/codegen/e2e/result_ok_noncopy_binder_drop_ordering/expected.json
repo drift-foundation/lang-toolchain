@@ -1,0 +1,4 @@
+{
+  "description": "e2e: non-copy Result::Ok binder preserves source lifetime in arm and drops once at arm exit",
+  "exit_code": 0
+}

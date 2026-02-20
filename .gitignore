@@ -23,3 +23,4 @@ dist/release/index.json
 *.seed.pgp
 .config/drift/keys/
 tmp/
+.claude-session

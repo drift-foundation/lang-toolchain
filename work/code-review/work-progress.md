@@ -146,5 +146,206 @@ Reviewer follow-up: Klaudia
     - `lang/tests/driver/test_intrinsic_callinfo_diagnostics.py` (pass)
     - `lang/tests/driver/test_index_diagnostics_spans.py` (pass)
     - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
-    - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py` (pass)
-    - `lang/tests/driver/test_codegen_boundary_diagnostics.py` (pass)
+	    - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py` (pass)
+	    - `lang/tests/driver/test_codegen_boundary_diagnostics.py` (pass)
+
+- 2026-02-20: Post-batch regression remediation (checker indexing + Result::Ok move/drop handoff).
+	  - LANGUAGE_BUG 1 (checker regression):
+	    - Symptom: unexpected checker diagnostics `array index must be an Int` in exception/error-param tests and tcp stress case.
+	    - Root cause: malformed indentation in `Error.attrs[...]` typing branch made string-key fast-path unreachable.
+	    - Fix:
+	      - `lang/driftc/checker/__init__.py`
+	      - corrected `HIndex` branch for `expr.subject.name == "attrs"` so `Error.attrs` key typing returns DV and does not fall through to array-index diagnostics.
+	    - Validation:
+	      - `lang/tests/codegen/e2e/exception_result_error_param_by_ref` (pass)
+	      - `lang/tests/codegen/e2e/exception_result_error_param_fully_qualified` (pass)
+	      - `lang/tests/codegen/e2e/exception_result_error_param_pass` (pass)
+	  - LANGUAGE_BUG 2 (stage2 move/drop handoff):
+	    - Symptom set:
+	      - `maybe_assume_init_read_moves_out_no_leak`, `std_json_leak_*` leaks
+	      - `result_ok_move_conn_source_drop_regression` state corruption (exit 21)
+	      - `rpc_connect_state_handoff_pure_inmemory`/`struct_ref_field_result_ok_move_drop_once` segfault/double-drop paths.
+	    - Root causes:
+	      - by-value non-Copy match binders were read from variant payload without consistent ownership transfer behavior.
+	      - copy/not-copy classification relied on non-transitive drop-need detection (struct/variant field containment not considered), misclassifying payloads like `Conn` as copyable.
+	    - Fixes:
+	      - `lang/driftc/stage2/hir_to_mir.py`
+	        - non-Copy binder extraction path now uses move semantics (`StoreLocal` + `MoveOut`) and marks arm payload ownership transfer.
+	        - scrutinee drop suppression for arms that moved payload ownership.
+	        - `_needs_runtime_drop` hardened to structural/transitive recursion via `_needs_runtime_drop_inner(...)` across arrays/structs/variants.
+	    - Added regression coverage:
+	      - `lang/tests/stage2/test_hir_to_mir_match_by_value_noncopy_move.py`
+	        - pins by-value non-Copy binder path to address extraction + move-out semantics on `Optional<String>::Some`.
+	    - Validation:
+	      - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py` (pass)
+	      - `lang/tests/stage2/test_hir_to_mir_match_by_value_noncopy_move.py` (pass)
+	      - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+	      - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression` (pass)
+	      - `lang/tests/codegen/e2e/rpc_connect_state_handoff_pure_inmemory` (pass)
+	      - `lang/tests/codegen/e2e/struct_ref_field_result_ok_move_drop_once` (pass)
+	      - `lang/tests/codegen/e2e/maybe_assume_init_read_moves_out_no_leak` (pass)
+	      - `lang/tests/codegen/e2e/std_json_leak_parse_string_loop` (pass)
+	      - `lang/tests/codegen/e2e/std_json_leak_stress_parse_loop` (pass)
+	      - `lang/tests/codegen/e2e/std_json_leak_stress_parse_loop_drop_only` (pass)
+	  - Note for review:
+	    - `lang/tests/codegen/e2e/std_net_tcp_stress_connections` is no longer failing with checker diagnostics; in this environment it exits `77` (runtime/sandbox behavior), which is orthogonal to the checker/lowering bugs above.
+
+- 2026-02-20: Ownership decision refactor pass (prep for Klaudia re-review).
+	  - Goal:
+	    - remove ad-hoc copy/move branching from stage2 hot paths and route decisions through one handler.
+	  - Changes:
+	    - `lang/driftc/stage2/hir_to_mir.py`
+	      - added `_classify_value_transfer(ty, allow_unknown_typevar=False) -> \"copy\"|\"move\"|\"unknown\"`.
+	      - `_should_copy_value(...)` is now a thin wrapper over classifier output.
+	      - array-index lowering now uses classifier output instead of inline `copy_status` branching.
+	  - Why it matters:
+	    - ownership-transfer behavior for aggregate payloads now has a single source of truth in stage2, reducing recurrence of divergent copyability logic.
+	  - Validation:
+	    - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py` (pass)
+	    - `lang/tests/stage2/test_hir_to_mir_match_by_value_noncopy_move.py` (pass)
+	    - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+	    - `lang/tests/codegen/e2e/result_ok_move_conn_source_drop_regression` (pass)
+	    - `lang/tests/codegen/e2e/rpc_connect_state_handoff_pure_inmemory` (pass)
+	    - `lang/tests/codegen/e2e/struct_ref_field_result_ok_move_drop_once` (pass)
+	    - `lang/tests/codegen/e2e/maybe_assume_init_read_moves_out_no_leak` (pass)
+	    - `lang/tests/codegen/e2e/std_json_leak_stress_parse_loop` (pass)
+
+## Codegen Aggregate Payload Decision Map (for Klaudia review)
+
+Context:
+- We observed recurring regressions from duplicated copyability decisions across stage2 and LLVM lowering.
+- Stage2 now has a centralized classifier (`_classify_value_transfer`) used by match/result/index paths.
+- LLVM side still had localized policy checks and now needs the same audit lens.
+
+Primary LLVM decision sites reviewed:
+
+1) `lang/codegen/llvm/llvm_codegen.py` — `VariantGetField` lowering path (~`_lower_instr`, around lines 2776-2810)
+- Previous behavior:
+  - ad-hoc `needs_semantic_copy` gate:
+    - only for `STRUCT` when `is_copy(field_ty)` and `not is_bitcopy(field_ty)`.
+- Risk:
+  - policy was shape-specific and disconnected from broader ownership/drop semantics.
+  - easy to miss other aggregate forms if support expands.
+- Decision/rationale:
+  - keep semantic-copy behavior for extracted payload binders, but move toward one classifier-style helper on LLVM side (mirroring stage2 centralization).
+  - rationale: payload extraction + subsequent scrutinee/source drop requires one ownership decision source to avoid alias/drop races.
+
+2) `lang/codegen/llvm/llvm_codegen.py` — `_emit_copy_value(...)` (~lines 7156+)
+- Behavior:
+  - semantic copy implementation for non-bitcopy Copy types.
+  - bitcopy short-circuit for trivially copyable values.
+- Decision/rationale:
+  - preserve as implementation primitive; do not encode policy here.
+  - rationale: this function should execute a requested copy, not decide whether a copy is legal/safe at a boundary.
+
+3) `lang/codegen/llvm/llvm_codegen.py` — `_type_needs_drop(...)` (~lines 7285+)
+- Behavior:
+  - recursive drop-need analysis across arrays/structs/variants and destructible metadata.
+- Decision/rationale:
+  - use as part of centralized ownership classification on LLVM side.
+  - rationale: drop-need is the critical discriminator for aggregate payload handoff safety.
+
+4) `lang/codegen/llvm/llvm_codegen.py` — CopyValue instruction lowering (~`_lower_instr`, around lines 1332+ and 2144+)
+- Behavior:
+  - respects `is_bitcopy` fast path, otherwise delegates to semantic copy implementation.
+- Decision/rationale:
+  - retain as execution path only; boundary legality should be decided before emitting `CopyValue`.
+
+Stage2 alignment completed (reference):
+- `lang/driftc/stage2/hir_to_mir.py`
+  - centralized transfer classifier:
+    - `_classify_value_transfer(ty, allow_unknown_typevar=False)`
+  - `_should_copy_value(...)` now delegates to classifier.
+  - array index path migrated to classifier output (removed local ad-hoc branching).
+- Rationale:
+
+- 2026-02-20: Residual-risk follow-up (R4/R5) completed.
+  - R5 (variant multi-field drop-in-branch runtime check):
+    - Added e2e regression:
+      - `lang/tests/codegen/e2e/variant_multifield_drop_in_branch/main.drift`
+      - `lang/tests/codegen/e2e/variant_multifield_drop_in_branch/expected.json`
+    - Scenario:
+      - multi-field variant arm (`Int`, `String`, `Array<Byte>`) created and matched inside both `if`/`else` branch scopes,
+      - repeated in a loop to exercise branch-local drop paths.
+    - Validation:
+      - `PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j 1 --debug variant_multifield_drop_in_branch` (pass)
+      - `DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j 1 --debug variant_multifield_drop_in_branch` (pass)
+  - R4 (DV drop LLVM verifier check):
+    - Emitted IR from DV-heavy program:
+      - `PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib --entry m::main lang/tests/codegen/e2e/diagnostic_value_object_nested_get/main.drift --emit-ir /tmp/dv_drop_verify.ll -o /tmp/dv_drop_verify.bin`
+    - Verified IR with LLVM new-pass-manager verifier:
+      - `/usr/lib/llvm-20/bin/opt -passes=verify /tmp/dv_drop_verify.ll -disable-output` (pass)
+
+- 2026-02-20: Residual-risk follow-up (R1) completed.
+  - R1 (F1 mixed copy/non-copy multi-arm coverage gap):
+    - Added e2e regression:
+      - `lang/tests/codegen/e2e/result_ok_mixed_payload_arms_drop_ordering/main.drift`
+      - `lang/tests/codegen/e2e/result_ok_mixed_payload_arms_drop_ordering/expected.json`
+    - Scenario:
+      - `Result::Ok(Conn)` where `Conn` contains `Resp` variant with mixed payload arms:
+        - `Copy(id: Int)` and `NonCopy(msg: String)`.
+      - Executes both arm paths (`check(true)` and `check(false)`) and asserts:
+        - source object stays alive (`alive=true`, `drops=0`) throughout arm body,
+        - arm discrimination is correct for both payload classes.
+    - Validation:
+      - `PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j 1 --debug result_ok_mixed_payload_arms_drop_ordering` (pass)
+      - `DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j 1 --debug result_ok_mixed_payload_arms_drop_ordering` (pass)
+      - `DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j 1 --debug result_ok_mixed_payload_arms_drop_ordering` (pass)
+
+- 2026-02-20: Status sync
+  - Remaining A1–A5 items are intentionally deferred as separate architectural work.
+  - Residual-risk execution items from Klaudia review are now closed (R1/R4/R5).
+  - one source of truth for copy/move/unknown decisions at MIR boundaries.
+
+Planned follow-up for LLVM parity:
+- Add LLVM-local transfer classifier helper (analogous to stage2) and route `VariantGetField` semantic-copy gate through it.
+- Keep `_emit_copy_value` and `_type_needs_drop` as primitives consumed by classifier logic.
+- Add one LLVM-focused regression that fails if non-bitcopy aggregate extraction bypasses semantic-copy when source is dropped in same scope.
+
+Status update (2026-02-20):
+- Completed LLVM parity centralization for payload extraction policy.
+  - `lang/codegen/llvm/llvm_codegen.py`
+    - added `_classify_payload_extract_transfer(ty_id)` as single-source ownership decision for by-value payload extracts.
+    - `VariantGetField` lowering now routes through classifier:
+      - `copy-semantic` -> load + `_emit_copy_value(...)`
+      - `copy-bitcopy` -> plain load
+      - `move`/`unknown` -> hard internal contract assertion (stage2/checker boundary bug)
+- Rationale:
+  - removes shape-specific inline heuristics (`struct && is_copy && !is_bitcopy`) from lowering hot path.
+  - aligns LLVM behavior with stage2’s centralized transfer-class model.
+- Validation:
+  - `lang/tests/driver/test_result_ok_copy_struct_string_retain.py` (pass)
+  - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+  - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py` (pass)
+  - `lang/tests/stage2/test_hir_to_mir_match_by_value_noncopy_move.py` (pass)
+  - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py` (pass)
+  - `lang/tests/driver/test_codegen_boundary_diagnostics.py` (pass)
+  - e2e:
+    - `result_ok_move_conn_source_drop_regression` (pass)
+    - `rpc_connect_state_handoff_pure_inmemory` (pass)
+    - `struct_ref_field_result_ok_move_drop_once` (pass)
+    - `maybe_assume_init_read_moves_out_no_leak` (pass)
+    - `std_json_leak_stress_parse_loop` (pass)
+
+Follow-up (2026-02-20): direct-MIR Optional<String> payload regression
+- Trigger:
+  - `lang/codegen/llvm/tests/test_llvm_codegen_optional_ops.py::test_optional_ops_round_trip_string_payload`
+  - failure: `VariantGetField reached LLVM with non-copy payload transfer class 'move'`
+- Root cause:
+  - LLVM classifier hard-asserted on `move` transfer class for `VariantGetField`.
+  - direct-MIR tests can still emit `VariantGetField` for non-Copy payloads (bypassing stage2 contract shaping).
+- Fix:
+  - `lang/codegen/llvm/llvm_codegen.py` `VariantGetField` now handles `move` class safely:
+    - load extracted value
+    - zero/tombstone source payload field in-place (`_emit_zero_value` + `store`)
+  - This preserves ownership safety and avoids double-drop when source variant is later dropped.
+- Validation:
+  - `lang/codegen/llvm/tests/test_llvm_codegen_optional_ops.py::test_optional_ops_round_trip_string_payload` (pass)
+  - `lang/tests/driver/test_result_ok_copy_struct_string_retain.py` (pass)
+  - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+  - e2e:
+    - `result_ok_move_conn_source_drop_regression` (pass)
+    - `rpc_connect_state_handoff_pure_inmemory` (pass)
+    - `struct_ref_field_result_ok_move_drop_once` (pass)
+    - `maybe_assume_init_read_moves_out_no_leak` (pass)
+    - `std_json_leak_stress_parse_loop` (pass)

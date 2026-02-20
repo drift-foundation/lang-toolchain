@@ -2773,24 +2773,8 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
 				self.value_types[dest] = "i1"
 			else:
-				# For non-bool payload fields, storage and value types are identical.
-				# Ownership is *not* always a raw bitcopy: for certain Copy aggregates
-				# (currently non-bitcopy structs), extracting a payload into a binder
-				# must perform semantic copy/retain before the source variant is dropped.
-				needs_semantic_copy = False
-				if self.type_table is not None:
-					td_field = self.type_table.get(instr.field_ty)
-					# Match binders over `Result::Ok(v)` lower through VariantGetField.
-					# For non-bitcopy Copy aggregates (e.g., struct with String fields),
-					# a raw load aliases the source payload; dropping the scrutinee then
-					# releases storage still used by `v`. Emit a semantic copy here.
-					if (
-						td_field.kind is TypeKind.STRUCT
-						and self.type_table.is_copy(instr.field_ty)
-						and not self.type_table.is_bitcopy(instr.field_ty)
-					):
-						needs_semantic_copy = True
-				if needs_semantic_copy:
+				transfer = self._classify_payload_extract_transfer(instr.field_ty)
+				if transfer == "copy-semantic":
 					loaded = self._fresh("field")
 					self.lines.append(f"  {loaded} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
 					self.value_types[loaded] = want_llty
@@ -2799,9 +2783,23 @@ class _FuncBuilder:
 					# value_map) so downstream drop/phi logic remains consistent.
 					self.lines.append(f"  {dest} = select i1 1, {emit_want_llty} {copied}, {emit_want_llty} {copied}")
 					self.value_types[dest] = want_llty
-				else:
+				elif transfer == "copy-bitcopy":
 					self.lines.append(f"  {dest} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
 					self.value_types[dest] = want_llty
+				elif transfer == "move":
+					# Fallback-safe move extraction for direct-MIR paths: load payload
+					# value and tombstone the source field so subsequent source drop
+					# does not double-release moved ownership.
+					self.lines.append(f"  {dest} = load {emit_want_llty}, {emit_want_llty}* {field_ptr}")
+					self.value_types[dest] = want_llty
+					zero = self._fresh("zero")
+					self._emit_zero_value(zero, instr.field_ty)
+					self.lines.append(f"  store {emit_want_llty} {zero}, {emit_want_llty}* {field_ptr}")
+				else:
+					raise AssertionError(
+						"internal: VariantGetField reached LLVM with non-copy payload transfer class "
+						f"'{transfer}' (stage2/checker bug)"
+					)
 		elif isinstance(instr, VariantGetFieldAddr):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: VariantGetFieldAddr requires a TypeTable")
@@ -8068,6 +8066,32 @@ class _FuncBuilder:
 
 	def _is_bool_storage_pair(self, *, value_llty: str, storage_llty: str) -> bool:
 		return storage_llty == "i8" and value_llty == "i1"
+
+	def _classify_payload_extract_transfer(self, ty_id: TypeId) -> str:
+		"""
+		Centralized ownership classification for by-value payload extraction.
+
+		Returns:
+		- "copy-bitcopy": plain load/bitcopy is sufficient
+		- "copy-semantic": must run semantic copy/retain before source drop
+		- "move": non-Copy payload (by-value extract path is invalid)
+		- "unknown": unresolved type variable (contract violation if reached)
+		"""
+		if self.type_table is None:
+			raise AssertionError("payload extract transfer classification requires TypeTable")
+		copy_status = self.type_table.copy_status(ty_id)
+		if copy_status is True:
+			if self.type_table.is_bitcopy(ty_id):
+				return "copy-bitcopy"
+			if self._type_needs_drop(ty_id):
+				return "copy-semantic"
+			return "copy-bitcopy"
+		if copy_status is False:
+			return "move"
+		td = self.type_table.get(ty_id)
+		if td.kind is TypeKind.TYPEVAR:
+			return "unknown"
+		raise AssertionError("internal: unresolved Copy status at LLVM payload extract boundary")
 
 	def _bool_to_storage(self, value: str) -> str:
 		tmp = self._fresh("bool8")

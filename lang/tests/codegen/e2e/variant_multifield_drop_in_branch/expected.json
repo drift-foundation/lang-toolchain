@@ -1,0 +1,4 @@
+{
+  "description": "e2e: multi-field variant drops cleanly when scoped inside branch arms",
+  "exit_code": 0
+}
