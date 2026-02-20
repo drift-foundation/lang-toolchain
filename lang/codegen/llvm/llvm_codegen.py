@@ -580,6 +580,7 @@ class LlvmModuleBuilder:
 	_struct_types_by_name: Dict[str, str] = field(default_factory=dict)
 	_variant_types_by_key: Dict[str, str] = field(default_factory=dict)
 	array_drop_helpers: Dict[str, str] = field(default_factory=dict)
+	dv_drop_helper: str | None = None
 	string_literal_cache: Dict[str, tuple[str, str, int]] = field(default_factory=dict)
 	iface_vtables: Dict[str, str] = field(default_factory=dict)
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
@@ -1894,7 +1895,7 @@ class _FuncBuilder:
 			val_llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 			self.value_types[src_val] = val_llty
 		val = src_val
-		if store_llty == "i8" and val_llty == "i1":
+		if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 			tmp = self._fresh("bool8")
 			self.lines.append(f"  {tmp} = zext i1 {val} to i8")
 			val = tmp
@@ -1924,7 +1925,7 @@ class _FuncBuilder:
 			alloca_id = self._ensure_local_storage(pname, store_llty)
 			assert self._entry_alloca_insert_index is not None
 			param_val = self._map_value(pname)
-			if store_llty == "i8" and val_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 				tmp = self._fresh("bool8")
 				self.lines.insert(self._entry_alloca_insert_index, f"  {tmp} = zext i1 {param_val} to i8")
 				self._entry_alloca_insert_index += 1
@@ -2625,7 +2626,7 @@ class _FuncBuilder:
 						f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
 						f"fields={field_lltys} args={arg_lltys}"
 					)
-				if field_store_llty == "i8" and field_val_llty == "i1":
+				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 					arg_val = self._bool_to_storage(arg_val)
 				emit_field_store_llty = self._llty(field_store_llty)
 				is_last = idx == len(field_types) - 1
@@ -2686,10 +2687,9 @@ class _FuncBuilder:
 					self.lines.append(
 						f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {idx}"
 					)
-					if store_llty == "i8" and want_llty == "i1":
-						ext = self._fresh("bool8")
-						self.lines.append(f"  {ext} = zext i1 {arg_val} to i8")
-						self.lines.append(f"  store i8 {ext}, i8* {field_ptr}")
+					if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
+						arg_val = self._bool_to_storage(arg_val)
+						self.lines.append(f"  store i8 {arg_val}, i8* {field_ptr}")
 					else:
 						self.lines.append(f"  store {store_llty} {arg_val}, {store_llty}* {field_ptr}")
 			dest = self._map_value(instr.dest)
@@ -2767,7 +2767,7 @@ class _FuncBuilder:
 			want_llty = arm_layout.field_lltys[instr.field_index]
 			emit_want_llty = self._llty(want_llty)
 			dest = self._map_value(instr.dest)
-			if store_llty == "i8" and want_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
 				raw = self._fresh("field8")
 				self.lines.append(f"  {raw} = load i8, i8* {field_ptr}")
 				self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
@@ -2838,7 +2838,7 @@ class _FuncBuilder:
 			store_llty = arm_layout.field_storage_lltys[instr.field_index]
 			want_llty = arm_layout.field_lltys[instr.field_index]
 			dest = self._map_value(instr.dest)
-			if store_llty == "i8" and want_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
 				# Bool references use storage form (i8*) in v1, matching Ref<Bool> ABI.
 				self.lines.append(f"  {dest} = bitcast i8* {field_ptr} to i8*")
 				self.value_types[dest] = "i8*"
@@ -2881,7 +2881,7 @@ class _FuncBuilder:
 			field_val_llty = self._llvm_type_for_typeid(instr.field_ty)
 			field_store_llty = self._llvm_storage_type_for_typeid(instr.field_ty)
 			dest = self._map_value(instr.dest)
-			if field_store_llty == "i8" and field_val_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 				raw = self._fresh("field8")
 				self.lines.append(f"  {raw} = extractvalue {struct_llty} {subject}, {instr.field_index}")
 				self._bool_from_storage(raw, dest=dest)
@@ -2897,7 +2897,7 @@ class _FuncBuilder:
 			emit_store_llty = self._llty(store_llty)
 			ptr_ty = f"{emit_store_llty}*"
 			dest = self._map_value(instr.dest)
-			if store_llty == "i8" and val_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 				raw = self._fresh("bool8")
 				self.lines.append(f"  {raw} = load i8, i8* {ptr}")
 				self._bool_from_storage(raw, dest=dest)
@@ -2921,7 +2921,7 @@ class _FuncBuilder:
 					raise NotImplementedError(
 						f"LLVM codegen v1: StoreRef value type mismatch (have {have}, expected {val_llty})"
 					)
-			if store_llty == "i8" and val_llty == "i1":
+			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 				val = self._bool_to_storage(val)
 			self.lines.append(f"  store {emit_store_llty} {val}, {ptr_ty} {ptr}")
 		elif isinstance(instr, BinaryOpInstr):
@@ -5823,72 +5823,7 @@ class _FuncBuilder:
 		"""
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: TypeTable required for variant lowering")
-		def _resolve_forward_nominal(tid: TypeId) -> TypeId:
-			seen: set[TypeId] = set()
-			cur = tid
-			while cur not in seen:
-				seen.add(cur)
-				td_cur = self.type_table.get(cur)
-				if td_cur.kind is not TypeKind.FORWARD_NOMINAL:
-					return cur
-				mod = td_cur.module_id
-				name = td_cur.name
-				alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
-				if alias_def is not None:
-					alias_params, alias_target, _loc = alias_def
-					if not alias_params:
-						resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
-						if resolved != cur:
-							cur = resolved
-							continue
-				nominal = (
-					self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
-					or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
-					or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=mod, name=name)
-				)
-				if nominal is not None and nominal != cur:
-					cur = nominal
-					continue
-				unique = (
-					self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
-					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
-					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
-				)
-				if unique is not None and unique != cur:
-					cur = unique
-					continue
-				return cur
-			return cur
-		def _canon(tid: TypeId) -> TypeId:
-			td_cur = self.type_table.get(tid)
-			if td_cur.kind is TypeKind.FORWARD_NOMINAL:
-				resolved = _resolve_forward_nominal(tid)
-				if resolved != tid:
-					return _canon(resolved)
-				return tid
-			if td_cur.kind is TypeKind.REF and td_cur.param_types:
-				inner = _canon(td_cur.param_types[0])
-				return self.type_table.ensure_ref_mut(inner) if td_cur.ref_mut else self.type_table.ensure_ref(inner)
-			if td_cur.kind is TypeKind.ARRAY and td_cur.param_types:
-				elem = _canon(td_cur.param_types[0])
-				return self.type_table.new_array(elem)
-			if td_cur.kind is TypeKind.RAW_PTR and td_cur.param_types:
-				inner = _canon(td_cur.param_types[0])
-				return self.type_table.new_ptr(inner, module_id=td_cur.module_id)
-			if td_cur.kind is TypeKind.STRUCT:
-				inst = self.type_table.get_struct_instance(tid)
-				if inst is not None and inst.type_args:
-					args = [_canon(arg) for arg in inst.type_args]
-					return self.type_table.ensure_struct_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_struct_instantiated(inst.base_id, args)
-				return tid
-			if td_cur.kind is TypeKind.VARIANT:
-				inst = self.type_table.get_variant_instance(tid)
-				if inst is not None and inst.type_args:
-					args = [_canon(arg) for arg in inst.type_args]
-					return self.type_table.ensure_variant_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_variant_instantiated(inst.base_id, args)
-				return tid
-			return tid
-		ty_id = _canon(ty_id)
+		ty_id = self._canonical_codegen_typeid(ty_id)
 		if ty_id in self._variant_layouts:
 			return self._variant_layouts[ty_id]
 		inst = self.type_table.get_variant_instance(ty_id)
@@ -5904,7 +5839,7 @@ class _FuncBuilder:
 			offset = 0
 			max_align = 1
 			for fty_raw in arm.field_types:
-				fty = _canon(fty_raw)
+				fty = self._canonical_codegen_typeid(fty_raw)
 				llty = self._llvm_type_for_typeid(fty)
 				emit_llty = self._llty(llty)
 				field_lltys.append(llty)
@@ -5956,6 +5891,77 @@ class _FuncBuilder:
 		self._variant_layouts[ty_id] = layout
 		return layout
 
+	def _resolve_forward_nominal_typeid(self, tid: TypeId) -> TypeId:
+		if self.type_table is None:
+			return tid
+		seen: set[TypeId] = set()
+		cur = tid
+		while cur not in seen:
+			seen.add(cur)
+			td_cur = self.type_table.get(cur)
+			if td_cur.kind is not TypeKind.FORWARD_NOMINAL:
+				return cur
+			mod = td_cur.module_id
+			name = td_cur.name
+			alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+			if alias_def is not None:
+				alias_params, alias_target, _loc = alias_def
+				if not alias_params:
+					resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
+					if resolved != cur:
+						cur = resolved
+						continue
+			nominal = (
+				self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
+				or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
+				or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=mod, name=name)
+			)
+			if nominal is not None and nominal != cur:
+				cur = nominal
+				continue
+			unique = (
+				self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
+				or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
+				or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
+			)
+			if unique is not None and unique != cur:
+				cur = unique
+				continue
+			return cur
+		return cur
+
+	def _canonical_codegen_typeid(self, tid: TypeId) -> TypeId:
+		if self.type_table is None:
+			return tid
+		td_cur = self.type_table.get(tid)
+		if td_cur.kind is TypeKind.FORWARD_NOMINAL:
+			resolved = self._resolve_forward_nominal_typeid(tid)
+			if resolved != tid:
+				return self._canonical_codegen_typeid(resolved)
+			return tid
+		if td_cur.kind is TypeKind.REF and td_cur.param_types:
+			inner = self._canonical_codegen_typeid(td_cur.param_types[0])
+			return self.type_table.ensure_ref_mut(inner) if td_cur.ref_mut else self.type_table.ensure_ref(inner)
+		if td_cur.kind is TypeKind.ARRAY and td_cur.param_types:
+			elem = self._canonical_codegen_typeid(td_cur.param_types[0])
+			return self.type_table.new_array(elem)
+		if td_cur.kind is TypeKind.RAW_PTR and td_cur.param_types:
+			inner = self._canonical_codegen_typeid(td_cur.param_types[0])
+			return self.type_table.new_ptr(inner, module_id=td_cur.module_id)
+		if td_cur.kind is TypeKind.STRUCT:
+			inst = self.type_table.get_struct_instance(tid)
+			if inst is not None and inst.type_args:
+				args = [self._canonical_codegen_typeid(arg) for arg in inst.type_args]
+				return self.type_table.ensure_struct_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_struct_instantiated(inst.base_id, args)
+			return tid
+		if td_cur.kind is TypeKind.VARIANT:
+			inst = self.type_table.get_variant_instance(tid)
+			if inst is not None and inst.type_args:
+				args = [self._canonical_codegen_typeid(arg) for arg in inst.type_args]
+				return self.type_table.ensure_variant_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_variant_instantiated(inst.base_id, args)
+			return tid
+		return tid
+
 	def _optional_variant_type(self, inner_tid: TypeId) -> TypeId:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: Optional lowering requires a TypeTable")
@@ -6000,10 +6006,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {idx}"
 				)
-				if store_llty == "i8" and want_llty == "i1":
-					ext = self._fresh("bool8")
-					self.lines.append(f"  {ext} = zext i1 {arg_val} to i8")
-					self.lines.append(f"  store i8 {ext}, i8* {field_ptr}")
+				if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
+					arg_val = self._bool_to_storage(arg_val)
+					self.lines.append(f"  store i8 {arg_val}, i8* {field_ptr}")
 				else:
 					self.lines.append(f"  store {store_llty} {arg_val}, {store_llty}* {field_ptr}")
 		out = self._fresh("variant_val")
@@ -6017,85 +6022,8 @@ class _FuncBuilder:
 
 		v1 supports Int (isize), String (%DriftString), and Array<T> (by value).
 		"""
-		def _resolve_forward_nominal(tid: TypeId) -> TypeId:
-			if self.type_table is None:
-				return tid
-			seen: set[TypeId] = set()
-			cur = tid
-			while cur not in seen:
-				seen.add(cur)
-				td_cur = self.type_table.get(cur)
-				if td_cur.kind is not TypeKind.FORWARD_NOMINAL:
-					return cur
-				mod = td_cur.module_id
-				name = td_cur.name
-				alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
-				if alias_def is not None:
-					alias_params, alias_target, _loc = alias_def
-					if not alias_params:
-						resolved = resolve_opaque_type(
-							alias_target,
-							self.type_table,
-							module_id=mod,
-							type_params=None,
-							allow_generic_base=True,
-						)
-						if resolved != cur:
-							cur = resolved
-							continue
-				nominal = (
-					self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
-					or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
-					or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=mod, name=name)
-				)
-				if nominal is not None and nominal != cur:
-					cur = nominal
-					continue
-				unique = (
-					self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=name)
-					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=name)
-					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=name)
-				)
-				if unique is not None and unique != cur:
-					cur = unique
-					continue
-				return cur
-			return cur
-
-		def _canonical_codegen_typeid(tid: TypeId) -> TypeId:
-			if self.type_table is None:
-				return tid
-			td_cur = self.type_table.get(tid)
-			if td_cur.kind is TypeKind.FORWARD_NOMINAL:
-				resolved = _resolve_forward_nominal(tid)
-				if resolved != tid:
-					return _canonical_codegen_typeid(resolved)
-				return tid
-			if td_cur.kind is TypeKind.REF and td_cur.param_types:
-				inner = _canonical_codegen_typeid(td_cur.param_types[0])
-				return self.type_table.ensure_ref_mut(inner) if td_cur.ref_mut else self.type_table.ensure_ref(inner)
-			if td_cur.kind is TypeKind.ARRAY and td_cur.param_types:
-				elem = _canonical_codegen_typeid(td_cur.param_types[0])
-				return self.type_table.new_array(elem)
-			if td_cur.kind is TypeKind.RAW_PTR and td_cur.param_types:
-				inner = _canonical_codegen_typeid(td_cur.param_types[0])
-				return self.type_table.new_ptr(inner, module_id=td_cur.module_id)
-			if td_cur.kind is TypeKind.STRUCT:
-				inst = self.type_table.get_struct_instance(tid)
-				if inst is not None and inst.type_args:
-					args = [_canonical_codegen_typeid(arg) for arg in inst.type_args]
-					return self.type_table.ensure_struct_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_struct_instantiated(inst.base_id, args)
-				return tid
-			if td_cur.kind is TypeKind.VARIANT:
-				inst = self.type_table.get_variant_instance(tid)
-				if inst is not None and inst.type_args:
-					args = [_canonical_codegen_typeid(arg) for arg in inst.type_args]
-					return self.type_table.ensure_variant_template(inst.base_id, args) if any(self.type_table.has_typevar(arg) for arg in args) else self.type_table.ensure_variant_instantiated(inst.base_id, args)
-				return tid
-			return tid
-
 		if self.type_table is not None:
-			ty_id = _canonical_codegen_typeid(ty_id)
+			ty_id = self._canonical_codegen_typeid(ty_id)
 			if self.type_table.is_void(ty_id):
 				# Void ok-payloads/params are represented as an unused i8 slot.
 				return "i8"
@@ -6618,7 +6546,7 @@ class _FuncBuilder:
 					self._emit_zero_value(field_val, fty)
 				store_llty = self._llvm_storage_type_for_typeid(fty)
 				emit_store_llty = self._llty(store_llty)
-				if store_llty == "i8" and self._llvm_type_for_typeid(fty) == "i1":
+				if self._is_bool_storage_pair(value_llty=self._llvm_type_for_typeid(fty), storage_llty=store_llty):
 					field_val = self._bool_to_storage(field_val)
 				out = self._fresh("tomb_struct") if idx != last_idx else self._fresh("tomb_struct_out")
 				self.lines.append(f"  {out} = insertvalue {llty} {cur}, {emit_store_llty} {field_val}, {idx}")
@@ -7288,7 +7216,7 @@ class _FuncBuilder:
 						self.lines.append(
 							f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {fidx}"
 						)
-						if store_llty == "i8" and want_llty == "i1":
+						if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
 							raw = self._fresh("field8")
 							self.lines.append(f"  {raw} = load i8, i8* {field_ptr}")
 							field_val = self._fresh("field")
@@ -7336,13 +7264,13 @@ class _FuncBuilder:
 				field_raw = self._fresh("copy_field_raw")
 				self.lines.append(f"  {field_raw} = extractvalue {llty} {value}, {idx}")
 				self.value_types[field_raw] = field_store_llty
-				if field_store_llty == "i8" and field_val_llty == "i1":
+				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 					field_val = self._bool_from_storage(field_raw)
 				else:
 					field_val = field_raw
 				copied = self._emit_copy_value(field_ty, field_val)
 				store_val = copied
-				if field_store_llty == "i8" and field_val_llty == "i1":
+				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 					store_val = self._bool_to_storage(copied)
 				tmp = self._fresh("copy_ins")
 				emit_field_store_llty = self._llty(field_store_llty)
@@ -7442,10 +7370,8 @@ class _FuncBuilder:
 			return
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
 			self.module.needs_dv_runtime = True
-			tmp_ptr = self._fresh("dv_drop_arg")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {value}, {DRIFT_DV_TYPE}* {tmp_ptr}")
-			self.lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr}){call_dbg_suffix}")
+			helper = self._ensure_dv_drop_helper()
+			self.lines.append(f"  call void @{helper}({DRIFT_DV_TYPE} {value}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]
@@ -7582,10 +7508,8 @@ class _FuncBuilder:
 				return
 			if td.kind is TypeKind.DIAGNOSTICVALUE:
 				self.module.needs_dv_runtime = True
-				tmp_ptr = fresh("dv_drop_arg")
-				lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-				lines.append(f"  store {DRIFT_DV_TYPE} {val}, {DRIFT_DV_TYPE}* {tmp_ptr}")
-				lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr})")
+				helper = self._ensure_dv_drop_helper()
+				lines.append(f"  call void @{helper}({DRIFT_DV_TYPE} {val})")
 				return
 			if td.kind is TypeKind.ARRAY and td.param_types:
 				inner_elem = td.param_types[0]
@@ -7663,7 +7587,7 @@ class _FuncBuilder:
 							lines.append(
 								f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {fidx}"
 							)
-							if store_llty == "i8" and want_llty == "i1":
+							if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
 								raw = fresh("field8")
 								lines.append(f"  {raw} = load i8, i8* {field_ptr}")
 								field_val = fresh("field")
@@ -7720,6 +7644,25 @@ class _FuncBuilder:
 		lines.append(f"{done_block[1:]}:")
 		lines.append("  ret void")
 		lines.append("}")
+		self.module.emit_func("\n".join(lines))
+		return name
+
+	def _ensure_dv_drop_helper(self) -> str:
+		name = self.module.dv_drop_helper
+		if name is not None:
+			return name
+		name = "__drift_dv_drop_helper"
+		self.module.dv_drop_helper = name
+		self.module.needs_dv_runtime = True
+		lines = [
+			f"define void @{name}({DRIFT_DV_TYPE} %src) {{",
+			"entry:",
+			f"  %tmp = alloca {DRIFT_DV_TYPE}",
+			f"  store {DRIFT_DV_TYPE} %src, {DRIFT_DV_TYPE}* %tmp",
+			f"  call void @drift_dv_release({DRIFT_DV_TYPE}* %tmp)",
+			"  ret void",
+			"}",
+		]
 		self.module.emit_func("\n".join(lines))
 		return name
 
@@ -8122,6 +8065,9 @@ class _FuncBuilder:
 			return False
 		td = self.type_table.get(ty_id)
 		return td.kind is TypeKind.SCALAR and td.name == "Bool"
+
+	def _is_bool_storage_pair(self, *, value_llty: str, storage_llty: str) -> bool:
+		return storage_llty == "i8" and value_llty == "i1"
 
 	def _bool_to_storage(self, value: str) -> str:
 		tmp = self._fresh("bool8")

@@ -494,7 +494,7 @@ class Checker:
 				if return_type_id is None or sig.param_type_ids is None:
 					diagnostics.append(
 						_chk_diag(
-							message=f"internal: signature for '{sig.name}' is missing TypeIds (checker bug)",
+							message=f"typecheck contract failure: signature for '{sig.name}' is missing TypeIds",
 							severity="error",
 							span=Span.from_loc(getattr(sig, "loc", None)),
 						)
@@ -502,7 +502,7 @@ class Checker:
 				if (sig.declared_can_throw is True) and error_type_id is None:
 					diagnostics.append(
 						_chk_diag(
-							message=f"internal: signature for '{sig.name}' missing error TypeId (checker bug)",
+							message=f"typecheck contract failure: signature for '{sig.name}' missing error TypeId",
 							severity="error",
 							span=Span.from_loc(getattr(sig, "loc", None)),
 						)
@@ -519,7 +519,7 @@ class Checker:
 			if declared_can_throw is None:
 				diagnostics.append(
 					_chk_diag(
-						message="internal: signature missing declared_can_throw (checker bug)",
+						message="typecheck contract failure: signature missing declared_can_throw",
 						code="E_INTERNAL_MISSING_DECLARED_CAN_THROW",
 						severity="error",
 						span=Span.from_loc(getattr(sig, "loc", None)),
@@ -1091,49 +1091,49 @@ class Checker:
 			self.cache[expr_id] = result
 			return result
 
-		def report_index_not_int(self) -> None:
+		def report_index_not_int(self, span: object | None = None) -> None:
 			self._append_diag(
 				_chk_diag(
 				message="array index must be an Int",
 					severity="error",
-					span=None,
+					span=Span.from_loc(span),
 				)
 			)
 
-		def report_error_attr_key_not_string(self) -> None:
+		def report_error_attr_key_not_string(self, span: object | None = None) -> None:
 			self._append_diag(
 				_chk_diag(
 					message="Error.attrs expects a String key",
 					severity="error",
-					span=None,
+					span=Span.from_loc(span),
 					code="E-ERROR-ATTR-KEY-NOT-STRING",
 				)
 			)
 
-		def report_index_subject_not_array(self) -> None:
+		def report_index_subject_not_array(self, span: object | None = None) -> None:
 			self._append_diag(
 				_chk_diag(
 					message="indexing requires an Array value",
 					severity="error",
-					span=None,
+					span=Span.from_loc(span),
 				)
 			)
 
-		def report_empty_array_literal(self) -> None:
+		def report_empty_array_literal(self, span: object | None = None) -> None:
 			self._append_diag(
 				_chk_diag(
 					message="empty array literal requires explicit type",
 					severity="error",
-					span=None,
+					span=Span.from_loc(span),
 				)
 			)
 
-		def report_mixed_array_literal(self) -> None:
+		def report_mixed_array_literal(self, span: object | None = None) -> None:
 			self._append_diag(
 				_chk_diag(
 					message="array literal elements do not have a consistent type",
 					severity="error",
-					span=None,
+					span=Span.from_loc(span),
 				)
 			)
 
@@ -1311,7 +1311,7 @@ class Checker:
 				if self.call_info_by_callsite_id is None:
 					self._append_diag(
 						_chk_diag(
-							message="internal: missing CallInfo map for call typing (checker bug)",
+								message="typecheck contract failure: missing CallInfo map for call typing",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -1323,7 +1323,7 @@ class Checker:
 					csid = getattr(expr, "callsite_id", None)
 					self._append_diag(
 						_chk_diag(
-							message=f"internal: missing CallInfo for call typing (checker bug) in {fn_name} (callsite_id={csid})",
+								message=f"typecheck contract failure: missing CallInfo for call typing in {fn_name} (callsite_id={csid})",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -1336,7 +1336,7 @@ class Checker:
 				if self.call_info_by_callsite_id is None:
 					self._append_diag(
 						_chk_diag(
-							message="internal: missing CallInfo map for call typing (checker bug)",
+								message="typecheck contract failure: missing CallInfo map for call typing",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -1348,7 +1348,7 @@ class Checker:
 					csid = getattr(expr, "callsite_id", None)
 					self._append_diag(
 						_chk_diag(
-							message=f"internal: missing CallInfo for call typing (checker bug) in {fn_name} (callsite_id={csid})",
+								message=f"typecheck contract failure: missing CallInfo for call typing in {fn_name} (callsite_id={csid})",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -1589,7 +1589,7 @@ class Checker:
 
 			if isinstance(expr, H.HArrayLiteral):
 				if not expr.elements:
-					self.report_empty_array_literal()
+					self.report_empty_array_literal(getattr(expr, "loc", None))
 					return None
 				elem_types: list[TypeId] = []
 				for el in expr.elements:
@@ -1601,7 +1601,7 @@ class Checker:
 				first = elem_types[0]
 				for el_ty in elem_types[1:]:
 					if el_ty != first:
-						self.report_mixed_array_literal()
+						self.report_mixed_array_literal(getattr(expr, "loc", None))
 						return self.table.new_array(checker._unknown_type)
 				return self.table.new_array(first)
 
@@ -1739,17 +1739,17 @@ class Checker:
 					is_err = self._is_error_subject(expr.subject.subject)
 					if is_err is None:
 						return None
-					if is_err:
-						idx_ty = self._infer_expr_type(expr.index)
-						if idx_ty is not None:
-							idx_def = self.table.get(idx_ty)
-							if idx_def.name != "String":
-								self.report_error_attr_key_not_string()
-						return checker._dv
+						if is_err:
+							idx_ty = self._infer_expr_type(expr.index)
+							if idx_ty is not None:
+								idx_def = self.table.get(idx_ty)
+								if idx_def.name != "String":
+									self.report_error_attr_key_not_string(getattr(expr.index, "loc", None))
+							return checker._dv
 				subject_ty = self._infer_expr_type(expr.subject)
 				idx_ty = self._infer_expr_type(expr.index)
 				if idx_ty is not None and idx_ty != checker._int_type:
-					self.report_index_not_int()
+					self.report_index_not_int(getattr(expr.index, "loc", None))
 				if subject_ty is None:
 					return None
 				td = self.table.get(subject_ty)
@@ -1788,7 +1788,7 @@ class Checker:
 								)
 							)
 					return elem_ty
-				self.report_index_subject_not_array()
+				self.report_index_subject_not_array(getattr(expr.subject, "loc", None))
 				return None
 			if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 				attempt_ty = self._infer_expr_type(expr.attempt)
@@ -2026,7 +2026,7 @@ class Checker:
 				if call_info_by_callsite_id is None:
 					diagnostics.append(
 						_chk_diag(
-							message="internal: missing CallInfo map for call validation (checker bug)",
+								message="typecheck contract failure: missing CallInfo map for call validation",
 							severity="error",
 							span=getattr(expr, "loc", None),
 						)
@@ -2043,15 +2043,15 @@ class Checker:
 						note = f"callsite_id={getattr(expr, 'callsite_id', None)} invoke"
 					if note is None:
 						note = f"callsite_id={getattr(expr, 'callsite_id', None)}"
-					diagnostics.append(_chk_diag(message="internal: missing CallInfo for call validation (checker bug)", severity="error", span=getattr(expr, "loc", None), notes=[note]))
+						diagnostics.append(_chk_diag(message="typecheck contract failure: missing CallInfo for call validation", severity="error", span=getattr(expr, "loc", None), notes=[note]))
 					return
 				info = self._repair_named_call_callinfo(expr, info, call_info_by_callsite_id)
 				_sig_info = current_fn.signature if current_fn is not None else None
 				_is_mir_bound = bool(_sig_info is not None and _sig_info.is_mir_bound)
 				if _is_mir_bound and info.target.kind is CallTargetKind.TRAIT:
-					msg = "internal: call resolved to trait target in typed mode (checker bug)"
+					msg = "typecheck contract failure: call resolved to trait target in typed mode"
 					if isinstance(expr, H.HMethodCall):
-						msg = "internal: method call resolved to trait target in typed mode (checker bug)"
+						msg = "typecheck contract failure: method call resolved to trait target in typed mode"
 					diagnostics.append(_chk_diag(message=msg, severity="error", span=getattr(expr, "loc", None)))
 					return
 				if not self._validate_callinfo_target_shape(expr, info, diagnostics):
@@ -2258,7 +2258,7 @@ class Checker:
 					_chk_diag(
 						message=issue.message,
 						severity="error",
-						span=getattr(expr, "loc", None),
+						span=issue.span,
 						notes=notes,
 					)
 				)
@@ -2277,7 +2277,7 @@ class Checker:
 					_chk_diag(
 						message=issue.message,
 						severity="error",
-						span=getattr(expr, "loc", None),
+						span=issue.span,
 						notes=list(issue.notes),
 					)
 				)
@@ -3381,7 +3381,7 @@ class Checker:
 					diagnostics.append(
 						_chk_diag(
 							message=(
-								"internal: SSA param arity does not match signature for "
+									"typecheck contract failure: SSA param arity does not match signature for "
 								f"{function_symbol(fn_id)} (ssa {len(ssa.func.params)} vs sig {len(sig.param_type_ids)})"
 							),
 							severity="error",
@@ -3414,7 +3414,7 @@ class Checker:
 							diagnostics.append(
 								_chk_diag(
 									message=(
-										"internal: missing can-throw classification for "
+											"typecheck contract failure: missing can-throw classification for "
 										f"{function_symbol(fn_id)}"
 									),
 									severity="error",
@@ -3749,7 +3749,7 @@ class Checker:
 									diagnostics.append(
 										_chk_diag(
 											message=(
-												"internal: SSA return type does not match declared signature "
+													"typecheck contract failure: SSA return type does not match declared signature "
 												f"for {function_symbol(fn_id)} in {block_name} "
 												f"({existing} vs {desired})"
 											),

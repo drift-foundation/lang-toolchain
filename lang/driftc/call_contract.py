@@ -1,10 +1,11 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 from lang.driftc import stage1 as H
+from lang.driftc.core.span import Span
 from lang.driftc.stage1.call_info import CallInfo, CallTargetKind
 
 
@@ -13,6 +14,7 @@ class CallContractIssue:
 	code: str
 	message: str
 	notes: tuple[str, ...] = ()
+	span: Span = field(default_factory=Span)
 
 
 def call_kind_label(expr: H.HExpr) -> str:
@@ -70,6 +72,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 					f"target_kind={info.target.kind.name}",
 					f"callsite_id={getattr(expr, 'callsite_id', None)}",
 				),
+				span=getattr(expr, "loc", Span()),
 			)
 		)
 	if isinstance(expr, H.HMethodCall) and info.target.kind is CallTargetKind.CONSTRUCTOR:
@@ -78,6 +81,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 				code="E_CALLINFO_METHOD_CONSTRUCTOR_TARGET",
 				message="internal: method call CallInfo target must not be CONSTRUCTOR (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
+				span=getattr(expr, "loc", Span()),
 			)
 		)
 	if isinstance(expr, H.HInvoke) and info.sig.includes_callee:
@@ -86,6 +90,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 				code="E_CALLINFO_INVOKE_INCLUDES_CALLEE",
 				message="internal: invoke CallInfo must not set includes_callee (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
+				span=getattr(expr, "loc", Span()),
 			)
 		)
 	if isinstance(expr, (H.HCall, H.HMethodCall)) and info.sig.includes_callee:
@@ -95,6 +100,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 				code="E_CALLINFO_INCLUDES_CALLEE_INVALID",
 				message=f"internal: CallInfo includes_callee set on {call_kind} (checker bug)",
 				notes=(f"callsite_id={getattr(expr, 'callsite_id', None)}",),
+				span=getattr(expr, "loc", Span()),
 			)
 		)
 	expected = call_expected_param_count(expr, info)
@@ -112,6 +118,7 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 					target_note,
 					f"callsite_id={getattr(expr, 'callsite_id', None)} expected_params={expected} actual_params={actual}",
 				),
+				span=getattr(expr, "loc", Span()),
 			)
 		)
 	return issues

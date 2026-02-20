@@ -1,3 +1,47 @@
+## 2026-02-20 – Code review remediation batch completed (Klaudia findings F2–F15)
+- Completed tracked remediation from `work/code-review/todo.md` with execution/status recorded in `work/code-review/work-progress.md`.
+
+- Batch 3 completed (borrow/copy semantics consolidation):
+  - `lang/driftc/borrow_checker_pass.py`
+    - added `HInvoke` coverage for Optional-ref loan origin tracking and ref-use traversal,
+    - extended `_borrow_from_optional_ref_call(...)` to peel nested chains (`HField`/`HIndex`/`HPlaceExpr`),
+    - added escape diagnostics for borrowed-capture lambdas in escaping call/invoke/method arg positions unless proven non-retaining.
+  - `lang/driftc/stage2/hir_to_mir.py`
+    - finished migration of stage2 boolean copy decisions to canonical `_should_copy_value(...)` helper where semantics match.
+  - Added regression:
+    - `lang/tests/borrow_checker/test_invoke_optional_ref_and_lambda_escape.py`.
+
+- Batch 4 completed (dedup/cleanup):
+  - F10:
+    - `lang/driftc/stage2/hir_to_mir.py` now pre-validates all non-default match constructors before dispatch-chain CFG emission.
+  - F12:
+    - `lang/codegen/llvm/llvm_codegen.py` now centralizes forward nominal resolution/canonicalization:
+      - `_resolve_forward_nominal_typeid(...)`
+      - `_canonical_codegen_typeid(...)`
+    - both `_variant_layout(...)` and `_llvm_type_for_typeid(...)` consume the same canonicalization path.
+  - F13:
+    - `lang/driftc/checker/__init__.py` checker-facing contract diagnostics no longer leak `internal:` prefixes.
+  - F15:
+    - `lang/codegen/llvm/llvm_codegen.py` now uses centralized bool-storage predicate helper:
+      - `_is_bool_storage_pair(...)`
+    - replaced ad-hoc `i1`↔`i8` checks across struct/variant construction, field extraction, ref load/store, copy, tombstone, and helper paths.
+  - F9 closure:
+    - variant layout arithmetic is now consumed from `_variant_layout(...)` metadata in drop/copy paths; no remaining duplicate payload-offset arithmetic path retained.
+
+- Validation highlights:
+  - borrow/stage2/codegen/driver focused suites all pass after changes:
+    - `lang/tests/borrow_checker/test_invoke_optional_ref_and_lambda_escape.py`
+    - `lang/tests/borrow_checker/test_lambda_capture_borrow_overlap.py`
+    - `lang/tests/borrow_checker/test_lambda_capture_borrow_overlap_method.py`
+    - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py`
+    - `lang/codegen/llvm/tests/test_llvm_codegen_dv_drop_helper.py`
+    - `lang/tests/driver/test_callinfo_param_layout_contract.py`
+    - `lang/tests/driver/test_intrinsic_callinfo_diagnostics.py`
+    - `lang/tests/driver/test_index_diagnostics_spans.py`
+    - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
+    - `lang/tests/driver/test_mir_validate_boundary_diagnostics.py`
+    - `lang/tests/driver/test_codegen_boundary_diagnostics.py`
+
 ## 2026-02-19 – CallInfo repair fix for generic direct-call signatures (`std.core::cell`)
 - Fixed checker regression where named direct-call CallInfo repair could overwrite instantiated generic call signatures with template `TypeVar` shapes.
   - symptom: valid calls like `core.cell(true)` failed with `argument 0 to std.core::cell has type Bool, expected TypeVar<std.core::cell#0>`.

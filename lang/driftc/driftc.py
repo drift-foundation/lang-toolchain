@@ -72,8 +72,10 @@ from lang.driftc.mir_validate import (
 	validate_mir_call_byvalue_moves,
 	validate_mir_call_invariants,
 	validate_mir_call_types,
+	validate_mir_basic_hygiene,
 	validate_mir_concrete_layout_types,
 	validate_mir_iface_init_invariants,
+	validate_mir_variant_field_invariants,
 	validate_mir_wrapping_u64_invariants,
 )
 from lang.driftc.checker.type_env_builder import build_minimal_checker_type_env
@@ -735,11 +737,46 @@ def _collect_call_nodes_by_id(root: H.HNode) -> dict[int, H.HExpr]:
 	return found
 
 
-def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
+def _intrinsic_contract_diag(
+	*,
+	code: str,
+	message: str,
+	span: object | None,
+	notes: list[str] | None = None,
+) -> Diagnostic:
+	return Diagnostic(
+		message=message,
+		code=code,
+		phase="typecheck",
+		severity="error",
+		span=Span.from_loc(span),
+		notes=list(notes or []),
+	)
+
+
+def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> list[Diagnostic]:
+	diags: list[Diagnostic] = []
+
+	def _emit(
+		*,
+		code: str,
+		message: str,
+		call: object | None,
+		notes: list[str] | None = None,
+	) -> None:
+		diags.append(
+			_intrinsic_contract_diag(
+				code=code,
+				message=message,
+				span=getattr(call, "loc", None),
+				notes=notes,
+			)
+		)
+
 	call_nodes = _collect_call_nodes_by_id(typed_fn.body)
 	call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
 	if not isinstance(call_info, dict):
-		return
+		return diags
 	callsite_to_nodes: dict[int, list[int]] = {}
 	for node_id, call in call_nodes.items():
 		csid = getattr(call, "callsite_id", None)
@@ -750,7 +787,16 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 			continue
 		kind = info.target.intrinsic
 		if kind is None:
-			raise AssertionError("intrinsic call missing kind (checker bug)")
+			_emit(
+				code="E_INTRINSIC_CALLINFO_MISSING_KIND",
+				message="intrinsic call missing kind in CallInfo",
+				call=None,
+				notes=[
+					f"fn={function_symbol(getattr(typed_fn, 'fn_id', None))}",
+					f"callsite_id={key}",
+				],
+			)
+			continue
 		node_ids = callsite_to_nodes.get(key) or []
 		call = None
 		if node_ids:
@@ -772,7 +818,17 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 						call = cand
 						break
 		if call is None:
-			raise AssertionError(f"intrinsic CallInfo without call node (checker bug): fn={function_symbol(getattr(typed_fn, 'fn_id', None))} callsite_id={key} kind={kind.value}")
+			_emit(
+				code="E_INTRINSIC_CALLINFO_MISSING_NODE",
+				message="intrinsic CallInfo is missing source call node",
+				call=None,
+				notes=[
+					f"fn={function_symbol(getattr(typed_fn, 'fn_id', None))}",
+					f"callsite_id={key}",
+					f"kind={kind.value}",
+				],
+			)
+			continue
 		kwargs = getattr(call, "kwargs", None) or []
 		if kind is IntrinsicKind.BYTE_LENGTH:
 			if not isinstance(call, (H.HCall, H.HMethodCall)):
@@ -783,15 +839,15 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 			if isinstance(call, H.HMethodCall) and call.method_name != "byte_length":
 				continue
 			if kwargs or len(call.args) != 1:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_BYTE_LENGTH", message=f"{kind.value}(...) expects 1 positional argument", call=call)
 			continue
 		if kind in (IntrinsicKind.WRAPPING_ADD_U64, IntrinsicKind.WRAPPING_MUL_U64):
 			if kwargs or len(call.args) != 2:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_WRAPPING_U64", message=f"{kind.value}(...) expects 2 positional arguments", call=call)
 			continue
 		if kind in (IntrinsicKind.STRING_EQ, IntrinsicKind.STRING_CONCAT):
 			if kwargs or len(call.args) != 2:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_STRING_OP", message=f"{kind.value}(...) expects 2 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.STRING_BYTE_AT:
 			if not isinstance(call, (H.HCall, H.HMethodCall)):
@@ -802,93 +858,98 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> None:
 			if isinstance(call, H.HMethodCall) and call.method_name != "string_byte_at":
 				continue
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("string_byte_at(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_STRING_BYTE_AT", message="string_byte_at(...) expects 2 positional arguments", call=call)
 			continue
 		if kind in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
 			if kwargs or len(call.args) != 1:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_CALLBACK", message=f"{kind.value}(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.TYPE_ID:
 			if kwargs or len(call.args) != 0:
-				raise AssertionError("type_id(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_TYPE_ID", message="type_id(...) expects 0 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.DROP_VALUE:
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("drop_value(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_DROP_VALUE", message="drop_value(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.SWAP:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("swap(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_SWAP", message="swap(...) expects 2 positional arguments", call=call)
 			if not all(isinstance(arg, getattr(H, "HBorrow")) and arg.is_mut for arg in call.args):
-				raise AssertionError("swap(...) requires &mut place operands (checker bug)")
+				_emit(code="E_INTRINSIC_SWAP_MUT_BORROW_REQUIRED", message="swap(...) requires &mut place operands", call=call)
 			continue
 		if kind is IntrinsicKind.REPLACE:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("replace(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_REPLACE", message="replace(...) expects 2 positional arguments", call=call)
 			if not (isinstance(call.args[0], getattr(H, "HBorrow")) and call.args[0].is_mut):
-				raise AssertionError("replace(...) requires &mut place target (checker bug)")
+				_emit(code="E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED", message="replace(...) requires &mut place target", call=call)
 			continue
 		if kind is IntrinsicKind.RAW_ALLOC:
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("alloc_uninit(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_ALLOC_UNINIT", message="alloc_uninit(...) expects 1 positional argument", call=call)
 			continue
 		if kind in (IntrinsicKind.RAWBUFFER_PTR, IntrinsicKind.RAWBUFFER_CAP):
 			if kwargs or len(call.args) != 1:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_RAWBUFFER_VIEW", message=f"{kind.value}(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.RAWBUFFER_FROM_PARTS:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("rawbuffer_from_parts(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_RAWBUFFER_FROM_PARTS", message="rawbuffer_from_parts(...) expects 2 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.RAW_DEALLOC:
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("dealloc(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_DEALLOC", message="dealloc(...) expects 1 positional argument", call=call)
 			continue
 		if kind in (IntrinsicKind.RAW_PTR_AT_REF, IntrinsicKind.RAW_PTR_AT_MUT):
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("ptr_at(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_AT", message="ptr_at(...) expects 2 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.RAW_WRITE:
 			if kwargs or len(call.args) != 3:
-				raise AssertionError("write(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_RAW_WRITE", message="write(...) expects 3 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.RAW_READ:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("read(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_RAW_READ", message="read(...) expects 2 positional arguments", call=call)
 			continue
 		if kind in (IntrinsicKind.PTR_FROM_REF, IntrinsicKind.PTR_FROM_REF_MUT):
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("ptr_from_ref(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_FROM_REF", message="ptr_from_ref(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.PTR_OFFSET:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("ptr_offset(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_OFFSET", message="ptr_offset(...) expects 2 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.PTR_READ:
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("ptr_read(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_READ", message="ptr_read(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.PTR_WRITE:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("ptr_write(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_WRITE", message="ptr_write(...) expects 2 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.PTR_IS_NULL:
 			if kwargs or len(call.args) != 1:
-				raise AssertionError("ptr_is_null(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_PTR_IS_NULL", message="ptr_is_null(...) expects 1 positional argument", call=call)
 			continue
 		if kind is IntrinsicKind.MAYBE_UNINIT:
 			if kwargs or len(call.args) != 0:
-				raise AssertionError("maybe_uninit(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_MAYBE_UNINIT", message="maybe_uninit(...) expects 0 positional arguments", call=call)
 			continue
 		if kind is IntrinsicKind.MAYBE_WRITE:
 			if kwargs or len(call.args) != 2:
-				raise AssertionError("maybe_write(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_MAYBE_WRITE", message="maybe_write(...) expects 2 positional arguments", call=call)
 			continue
 		if kind in (IntrinsicKind.MAYBE_ASSUME_INIT_REF, IntrinsicKind.MAYBE_ASSUME_INIT_MUT, IntrinsicKind.MAYBE_ASSUME_INIT_READ):
 			if kwargs or len(call.args) != 1:
-				raise AssertionError(f"{kind.value}(...) arity mismatch reached validation (checker bug)")
+				_emit(code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", message=f"{kind.value}(...) expects 1 positional argument", call=call)
 			continue
-		raise AssertionError(f"unknown intrinsic '{kind.value}' reached validation (checker bug)")
+		_emit(
+			code="E_INTRINSIC_CALLINFO_UNKNOWN_KIND",
+			message=f"unknown intrinsic '{kind.value}' in CallInfo validation",
+			call=call,
+		)
+	return diags
 
 
 def _typevar_callinfo_diags(
@@ -3766,8 +3827,16 @@ def compile_stubbed_funcs(
 				)
 			updated_callsite[csid] = info
 		typed_fn.call_info_by_callsite_id = updated_callsite
+	intrinsic_diags: list[Diagnostic] = []
 	for typed_fn in typed_fns_by_id.values():
-		_validate_intrinsic_callinfo(typed_fn)
+		intrinsic_diags.extend(_validate_intrinsic_callinfo(typed_fn))
+	if intrinsic_diags:
+		checked.diagnostics.extend(intrinsic_diags)
+		if return_checked:
+			if return_ssa:
+				return {}, checked, None
+			return {}, checked
+		return {}
 	if drift_debug.enabled("local_types_trace"):
 		for fn_id, typed_fn in typed_fns_by_id.items():
 			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
@@ -5150,9 +5219,11 @@ def compile_stubbed_funcs(
 				_canonicalize_signature_type_ids(signatures_by_id, shared_type_table)
 				_canonicalize_mir_type_ids(mir_funcs_by_id, shared_type_table)
 			validate_mir_call_invariants(mir_funcs_by_id)
+			validate_mir_basic_hygiene(mir_funcs_by_id)
 			if shared_type_table is not None:
 				validate_mir_call_types(mir_funcs_by_id, signatures_by_id, shared_type_table)
 				validate_mir_concrete_layout_types(mir_funcs_by_id, shared_type_table)
+				validate_mir_variant_field_invariants(mir_funcs_by_id, shared_type_table)
 			validate_mir_array_alloc_invariants(mir_funcs_by_id)
 			validate_mir_wrapping_u64_invariants(mir_funcs_by_id, shared_type_table)
 			if shared_type_table is not None:
@@ -7429,8 +7500,23 @@ def main(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 		return 1
 
+	intrinsic_diags: list[Diagnostic] = []
 	for typed_fn in typed_fns.values():
-		_validate_intrinsic_callinfo(typed_fn)
+		intrinsic_diags.extend(_validate_intrinsic_callinfo(typed_fn))
+	if intrinsic_diags:
+		_assert_all_phased(intrinsic_diags, context="typecheck")
+		if args.json:
+			payload = {
+				"exit_code": 1,
+				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in intrinsic_diags],
+			}
+			print(json.dumps(payload))
+			return 1
+		else:
+			for d in intrinsic_diags:
+				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+		return 1
 
 	# Borrow check each typed function (mandatory stage).
 	borrow_diags: list[Diagnostic] = []

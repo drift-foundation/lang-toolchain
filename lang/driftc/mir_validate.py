@@ -10,6 +10,156 @@ from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang.driftc.stage2 import mir_nodes as M
 
 
+def validate_mir_variant_field_invariants(
+	funcs: Mapping[FunctionId, M.MirFunc],
+	type_table: TypeTable,
+) -> None:
+	"""Ensure VariantGetField/VariantGetFieldAddr respect variant arm/field schema."""
+	for fn_id, func in funcs.items():
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				if not isinstance(instr, (M.VariantGetField, M.VariantGetFieldAddr)):
+					continue
+				variant_ty = instr.variant_ty
+				td = type_table.get(variant_ty)
+				if td.kind is not TypeKind.VARIANT:
+					raise AssertionError(
+						f"MIR invariant violation: {instr.__class__.__name__} variant_ty is not a variant in {function_symbol(fn_id)}"
+					)
+				inst = type_table.get_variant_instance(variant_ty)
+				if inst is None:
+					raise AssertionError(
+						f"MIR invariant violation: unresolved variant instance in {instr.__class__.__name__} for {function_symbol(fn_id)}"
+					)
+				arm = next((a for a in inst.arms if a.name == instr.ctor), None)
+				if arm is None:
+					raise AssertionError(
+						f"MIR invariant violation: {instr.__class__.__name__} ctor '{instr.ctor}' missing in {function_symbol(fn_id)}"
+					)
+				if instr.field_index < 0 or instr.field_index >= len(arm.field_types):
+					raise AssertionError(
+						f"MIR invariant violation: {instr.__class__.__name__} field index out of range in {function_symbol(fn_id)}"
+					)
+				expected_ty = arm.field_types[instr.field_index]
+				if expected_ty != instr.field_ty:
+					raise AssertionError(
+						f"MIR invariant violation: {instr.__class__.__name__} field_ty mismatch in {function_symbol(fn_id)}"
+					)
+
+
+def validate_mir_basic_hygiene(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
+	"""Ensure MIR operands refer to defined SSA values and declared locals."""
+	def _iter_values(value: object):
+		if isinstance(value, str):
+			yield value
+		elif isinstance(value, (list, tuple)):
+			for item in value:
+				yield from _iter_values(item)
+
+	for fn_id, func in funcs.items():
+		defined_values: set[str] = set()
+		defined_values.update(func.params)
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				dest = getattr(instr, "dest", None)
+				if isinstance(dest, str):
+					defined_values.add(dest)
+		declared_locals = set(func.params) | set(func.locals)
+
+		def _check_value(name: str, instr_name: str, field_name: str) -> None:
+			if name not in defined_values:
+				raise AssertionError(
+					f"MIR invariant violation: undefined SSA operand '{name}' in {instr_name}.{field_name} for {function_symbol(fn_id)}"
+				)
+
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				instr_name = instr.__class__.__name__
+				if isinstance(instr, M.DropValue):
+					_check_value(instr.value, instr_name, "value")
+				elif isinstance(instr, M.CopyValue):
+					_check_value(instr.value, instr_name, "value")
+				elif isinstance(instr, M.StoreLocal):
+					_check_value(instr.value, instr_name, "value")
+					if instr.local not in declared_locals:
+						raise AssertionError(
+							f"MIR invariant violation: unknown local '{instr.local}' in {instr_name}.local for {function_symbol(fn_id)}"
+						)
+				elif isinstance(instr, M.MoveOut):
+					if instr.local not in declared_locals:
+						raise AssertionError(
+							f"MIR invariant violation: unknown local '{instr.local}' in {instr_name}.local for {function_symbol(fn_id)}"
+						)
+				elif isinstance(instr, M.LoadRef):
+					_check_value(instr.ptr, instr_name, "ptr")
+				elif isinstance(instr, M.StoreRef):
+					_check_value(instr.ptr, instr_name, "ptr")
+					_check_value(instr.value, instr_name, "value")
+				elif isinstance(instr, M.BinaryOpInstr):
+					_check_value(instr.left, instr_name, "left")
+					_check_value(instr.right, instr_name, "right")
+				elif isinstance(instr, M.UnaryOpInstr):
+					_check_value(instr.operand, instr_name, "operand")
+				elif isinstance(instr, M.Call):
+					for arg in instr.args:
+						_check_value(arg, instr_name, "args")
+				elif isinstance(instr, M.CallIndirect):
+					_check_value(instr.callee, instr_name, "callee")
+					for arg in instr.args:
+						_check_value(arg, instr_name, "args")
+				elif isinstance(instr, M.CallIface):
+					_check_value(instr.iface, instr_name, "iface")
+					for arg in instr.args:
+						_check_value(arg, instr_name, "args")
+				elif isinstance(instr, M.VariantTag):
+					_check_value(instr.variant, instr_name, "variant")
+				elif isinstance(instr, M.VariantGetField):
+					_check_value(instr.variant, instr_name, "variant")
+				elif isinstance(instr, M.VariantGetFieldAddr):
+					_check_value(instr.variant_ref, instr_name, "variant_ref")
+				elif isinstance(instr, M.StructGetField):
+					_check_value(instr.subject, instr_name, "subject")
+				elif isinstance(instr, M.AddrOfField):
+					_check_value(instr.base_ptr, instr_name, "base_ptr")
+				elif isinstance(instr, M.LoadField):
+					_check_value(instr.subject, instr_name, "subject")
+				elif isinstance(instr, M.StoreField):
+					_check_value(instr.subject, instr_name, "subject")
+					_check_value(instr.value, instr_name, "value")
+				elif isinstance(instr, M.ArrayElemInit):
+					for val in _iter_values((instr.array, instr.index, instr.value)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayElemInitUnchecked):
+					for val in _iter_values((instr.array, instr.index, instr.value)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayElemAssign):
+					for val in _iter_values((instr.array, instr.index, instr.value)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayElemDrop):
+					for val in _iter_values((instr.array, instr.index)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayElemTake):
+					for val in _iter_values((instr.array, instr.index)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayDrop):
+					_check_value(instr.array, instr_name, "array")
+				elif isinstance(instr, M.ArrayDup):
+					_check_value(instr.array, instr_name, "array")
+				elif isinstance(instr, M.ArrayIndexLoad):
+					for val in _iter_values((instr.array, instr.index)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayIndexLoadUnchecked):
+					for val in _iter_values((instr.array, instr.index)):
+						_check_value(val, instr_name, "operand")
+				elif isinstance(instr, M.ArrayIndexStore):
+					for val in _iter_values((instr.array, instr.index, instr.value)):
+						_check_value(val, instr_name, "operand")
+			term = block.terminator
+			if isinstance(term, M.Return) and term.value is not None:
+				_check_value(term.value, "Return", "value")
+			elif isinstance(term, M.IfTerminator):
+				_check_value(term.cond, "IfTerminator", "cond")
+
 def validate_mir_call_invariants(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
 	"""Ensure MIR call instructions carry explicit can_throw flags and stable ids."""
 	for fn_id, func in funcs.items():

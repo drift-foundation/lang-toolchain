@@ -365,11 +365,14 @@ class HIRToMIR:
 		if td.kind is TypeKind.INTERFACE:
 			return True
 		try:
-			if not self._type_table.is_copy(ty):
+			if self._type_table.copy_status(ty) is not True:
 				return True
 		except Exception:
 			pass
 		return self._is_destructible_type(ty)
+
+	def _should_copy_value(self, ty: TypeId) -> bool:
+		return self._type_table.copy_status(ty) is True and (not self._needs_runtime_drop(ty))
 
 	def _push_scope(self, *, include_params: bool) -> None:
 		scope: list[str] = []
@@ -744,6 +747,10 @@ class HIRToMIR:
 				default_block = bb
 			else:
 				event_arms.append((arm, bb))
+		for arm, _bb in event_arms:
+			assert arm.ctor is not None
+			if inst.arms_by_name.get(arm.ctor) is None:
+				raise AssertionError("unknown constructor in match reached MIR lowering (checker bug)")
 
 		current_block = dispatch_block
 		for arm, bb in event_arms:
@@ -787,12 +794,12 @@ class HIRToMIR:
 					self.b.ensure_local(arm_scrut_local)
 					self._local_types[arm_scrut_local] = scrut_ty
 					source_local = scrut_source_local
-					if source_local is None and not self._type_table.is_copy(scrut_ty):
+					if source_local is None and not self._should_copy_value(scrut_ty):
 						source_local = f"__match_scrut_src{self.b.new_temp()}"
 						self.b.ensure_local(source_local)
 						self._local_types[source_local] = scrut_ty
 						self.b.emit(M.StoreLocal(local=source_local, value=scrut_val))
-					if source_local is not None and not self._type_table.is_copy(scrut_ty):
+					if source_local is not None and not self._should_copy_value(scrut_ty):
 						arm_scrut_moved_in = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=source_local, ty=scrut_ty))
 						self._local_types[arm_scrut_moved_in] = scrut_ty
@@ -830,7 +837,7 @@ class HIRToMIR:
 							if fidx < 0 or fidx >= len(arm_def.field_types):
 								raise AssertionError("match binder field index out of range (checker bug)")
 							f_ty = arm_def.field_types[fidx]
-							if (not self._type_table.is_copy(f_ty)) or self._needs_runtime_drop(f_ty):
+							if not self._should_copy_value(f_ty):
 								need_addr_binders = True
 								break
 						if (not scrut_is_ref) and arm.binders and need_addr_binders:
@@ -875,7 +882,7 @@ class HIRToMIR:
 									field_moved = self.b.new_temp()
 									self.b.emit(M.LoadRef(dest=field_moved, ptr=field_val, inner_ty=bty))
 									self._local_types[field_moved] = bty
-									payload_is_copy = self._type_table.is_copy(bty) and (not self._needs_runtime_drop(bty))
+									payload_is_copy = self._should_copy_value(bty)
 									if payload_is_copy:
 										copy_dest = self.b.new_temp()
 										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
@@ -1946,11 +1953,10 @@ class HIRToMIR:
 			val = self.lower_expr(elem_expr)
 			val_ty = self._infer_expr_type(elem_expr)
 			if val_ty is not None:
-				copy_status = self._type_table.copy_status(val_ty)
 				is_lvalue_elem = isinstance(elem_expr, H.HVar)
 				if hasattr(H, "HPlaceExpr") and isinstance(elem_expr, getattr(H, "HPlaceExpr")):
 					is_lvalue_elem = True
-				if copy_status is True and is_lvalue_elem and not isinstance(elem_expr, H.HMove):
+				if self._should_copy_value(val_ty) and is_lvalue_elem and not isinstance(elem_expr, H.HMove):
 					copy_dest = self.b.new_temp()
 					self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
 					self._local_types[copy_dest] = val_ty
@@ -3424,8 +3430,7 @@ class HIRToMIR:
 	def _array_index_load_value(self, *, elem_ty: TypeId, array: M.ValueId, index: M.ValueId) -> M.ValueId:
 		raw = self.b.new_temp()
 		self.b.emit(M.ArrayIndexLoad(dest=raw, elem_ty=elem_ty, array=array, index=index))
-		copy_status = self._type_table.copy_status(elem_ty)
-		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):
+		if self._should_copy_value(elem_ty) and not self._type_table.is_bitcopy(elem_ty):
 			copied = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copied, value=raw, ty=elem_ty))
 			return copied
@@ -4728,7 +4733,7 @@ class HIRToMIR:
 			return
 		if self._type_table.is_void(expr_ty):
 			return
-		if self._type_table.copy_status(expr_ty) is True:
+		if self._should_copy_value(expr_ty):
 			return
 		self.b.emit(M.DropValue(value=val, ty=expr_ty))
 
@@ -4928,8 +4933,7 @@ class HIRToMIR:
 					index_val = self.lower_expr(proj.index)
 					val_ty = self._infer_expr_type(stmt.value)
 					if val_ty is not None:
-						copy_status = self._type_table.copy_status(val_ty)
-						if copy_status is True and not isinstance(stmt.value, H.HMove):
+						if self._should_copy_value(val_ty) and not isinstance(stmt.value, H.HMove):
 							copy_dest = self.b.new_temp()
 							self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
 							self._local_types[copy_dest] = val_ty
@@ -5865,12 +5869,10 @@ class HIRToMIR:
 			if isinstance(base, H.HVar):
 				arg_ty = self._infer_expr_type(base)
 				if param_ty is not None:
-					param_copy = self._type_table.copy_status(param_ty)
-					if param_copy is False or param_copy is None:
+					if not self._should_copy_value(param_ty):
 						arg_ty = param_ty
 				if arg_ty is not None:
-					arg_copy = self._type_table.copy_status(arg_ty)
-					if arg_copy is False or arg_copy is None:
+					if not self._should_copy_value(arg_ty):
 						subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
 						self.b.ensure_local(subj_name)
 						moved_val = self.b.new_temp()
@@ -6262,8 +6264,7 @@ class HIRToMIR:
 		# Join: load ok from hidden local as the value of this expression.
 		self.b.set_block(join_block)
 		dest = self.b.new_temp()
-		ok_copy = self._type_table.copy_status(ok_ty)
-		if ok_copy is True:
+		if self._should_copy_value(ok_ty):
 			self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
 		else:
 			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))
@@ -6311,7 +6312,7 @@ class HIRToMIR:
 		if not self._type_table.is_void(ok_ty):
 			ok_val = self.b.new_temp()
 			self.b.emit(M.ResultOk(dest=ok_val, result=fnres_val))
-			if self._type_table.copy_status(ok_ty) is not True:
+			if not self._should_copy_value(ok_ty):
 				self.b.emit(M.DropValue(value=ok_val, ty=ok_ty))
 		self.b.set_terminator(M.Goto(target=join_block.name))
 

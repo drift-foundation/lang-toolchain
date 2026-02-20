@@ -182,6 +182,19 @@ class BorrowChecker:
 				if impl_target is None:
 					return None
 				return self._method_sig_by_key.get((impl_target, resolution.decl.name))
+		if isinstance(expr, H.HInvoke):
+			call_info = self._call_info_for_expr(expr)
+			if call_info is None:
+				return None
+			param_types = tuple(call_info.sig.param_types)
+			return FnSignature(
+				name="__invoke__",
+				param_type_ids=param_types,
+				param_types=param_types,
+				user_ret_type=call_info.sig.user_ret_type,
+				can_throw_raw=call_info.sig.can_throw,
+				throws_raw=call_info.sig.can_throw,
+			)
 		return None
 
 	def _intrinsic_name_for_call(self, expr: H.HCall) -> Optional[IntrinsicKind]:
@@ -306,6 +319,21 @@ class BorrowChecker:
 				temporary=True,
 				span=cap.span,
 			)
+
+	def _lambda_has_borrow_capture(self, lam: H.HLambda) -> bool:
+		self._check_lambda_captures(lam)
+		for cap in lam.captures:
+			if cap.kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT):
+				return True
+		return False
+
+	def _report_lambda_escape_if_borrowed(self, lam: H.HLambda, *, span: Span) -> None:
+		if not self._lambda_has_borrow_capture(lam):
+			return
+		self._diagnostic(
+			"closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+			span,
+		)
 
 	def _apply_lambda_capture_moves(self, state: _FlowState, lam: H.HLambda) -> None:
 		self._check_lambda_captures(lam)
@@ -1200,6 +1228,13 @@ class BorrowChecker:
 				for kw in node.kwargs:
 					_walk(kw.value)
 				return
+			if isinstance(node, H.HInvoke):
+				_walk(node.callee)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
 			if isinstance(node, H.HBinary):
 				_walk(node.left)
 				_walk(node.right)
@@ -1422,6 +1457,18 @@ class BorrowChecker:
 				place_expr = expr.args[0]
 		elif isinstance(expr, H.HMethodCall):
 			place_expr = expr.receiver
+		elif isinstance(expr, H.HInvoke):
+			if expr.args:
+				place_expr = expr.args[0]
+		elif isinstance(expr, H.HField):
+			self._borrow_from_optional_ref_call(state, expr.subject, dst_rid)
+			return
+		elif isinstance(expr, H.HIndex):
+			self._borrow_from_optional_ref_call(state, expr.subject, dst_rid)
+			return
+		elif hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+			self._borrow_from_optional_ref_call(state, expr.base, dst_rid)
+			return
 		if isinstance(place_expr, H.HBorrow):
 			place_expr = place_expr.subject
 		if place_expr is None:
@@ -1503,6 +1550,13 @@ class BorrowChecker:
 			return
 		if isinstance(expr, H.HMethodCall):
 			self._collect_ref_uses_in_expr(expr.receiver, bid, ref_uses, ref_use_spans)
+			for a in expr.args:
+				self._collect_ref_uses_in_expr(a, bid, ref_uses, ref_use_spans)
+			for kw in expr.kwargs:
+				self._collect_ref_uses_in_expr(kw.value, bid, ref_uses, ref_use_spans)
+			return
+		if isinstance(expr, H.HInvoke):
+			self._collect_ref_uses_in_expr(expr.callee, bid, ref_uses, ref_use_spans)
 			for a in expr.args:
 				self._collect_ref_uses_in_expr(a, bid, ref_uses, ref_use_spans)
 			for kw in expr.kwargs:
@@ -1801,6 +1855,14 @@ class BorrowChecker:
 					continue
 				param_idx = idx + param_offset
 				pty = param_types[param_idx] if (param_types and param_idx < len(param_types)) else None
+				if isinstance(arg, H.HLambda):
+					allow = False
+					if sig and sig.param_nonretaining:
+						pi = self._param_index_for_call(sig, arg_index=idx)
+						if pi is not None and pi < len(sig.param_nonretaining):
+							allow = sig.param_nonretaining[pi] is True
+					if not allow:
+						self._report_lambda_escape_if_borrowed(arg, span=getattr(arg, "loc", getattr(expr, "loc", Span())))
 				self._visit_call_arg_with_param(
 					state,
 					arg_expr=arg,
@@ -1813,6 +1875,12 @@ class BorrowChecker:
 					pty = param_types[kw_index]
 				else:
 					pty = None
+				if isinstance(kw.value, H.HLambda):
+					allow = False
+					if sig and sig.param_nonretaining and kw_index is not None and kw_index < len(sig.param_nonretaining):
+						allow = sig.param_nonretaining[kw_index] is True
+					if not allow:
+						self._report_lambda_escape_if_borrowed(kw.value, span=getattr(kw.value, "loc", getattr(expr, "loc", Span())))
 				self._visit_call_arg_with_param(
 					state,
 					arg_expr=kw.value,
@@ -1822,6 +1890,46 @@ class BorrowChecker:
 			if deferred_recv is not None:
 				recv_place, kind_to_use, span = deferred_recv
 				self._borrow_place(state, recv_place, kind_to_use, temporary=True, span=span)
+			new_loans = state.loans - pre_loans
+			state.loans -= {ln for ln in new_loans if ln.temporary}
+			return
+		if isinstance(expr, H.HInvoke):
+			pre_loans = set(state.loans)
+			sig = self._resolve_sig_for_call(expr)
+			self._visit_expr(state, expr.callee, consume=False, escapes=False)
+			call_info = self._call_info_for_expr(expr)
+			param_types = list(call_info.sig.param_types) if call_info is not None else None
+			for idx, arg in enumerate(expr.args):
+				pty = param_types[idx] if (param_types and idx < len(param_types)) else None
+				if isinstance(arg, H.HLambda):
+					allow = False
+					if sig and sig.param_nonretaining:
+						pi = self._param_index_for_call(sig, arg_index=idx)
+						if pi is not None and pi < len(sig.param_nonretaining):
+							allow = sig.param_nonretaining[pi] is True
+					if not allow:
+						self._report_lambda_escape_if_borrowed(arg, span=getattr(arg, "loc", getattr(expr, "loc", Span())))
+				self._visit_call_arg_with_param(
+					state,
+					arg_expr=arg,
+					param_ty=pty,
+					call_span=getattr(expr, "loc", Span()),
+				)
+			for kw in expr.kwargs:
+				kw_index = self._param_index_for_call(sig, kw_name=kw.name) if sig is not None else None
+				pty = param_types[kw_index] if (param_types and kw_index is not None and kw_index < len(param_types)) else None
+				if isinstance(kw.value, H.HLambda):
+					allow = False
+					if sig and sig.param_nonretaining and kw_index is not None and kw_index < len(sig.param_nonretaining):
+						allow = sig.param_nonretaining[kw_index] is True
+					if not allow:
+						self._report_lambda_escape_if_borrowed(kw.value, span=getattr(kw.value, "loc", getattr(expr, "loc", Span())))
+				self._visit_call_arg_with_param(
+					state,
+					arg_expr=kw.value,
+					param_ty=pty,
+					call_span=getattr(expr, "loc", Span()),
+				)
 			new_loans = state.loans - pre_loans
 			state.loans -= {ln for ln in new_loans if ln.temporary}
 			return
