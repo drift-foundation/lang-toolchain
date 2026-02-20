@@ -6,9 +6,6 @@ struct Payload {
 	msg: String
 }
 
-implement core.Copy for Payload {
-}
-
 fn wrap<T>(v: T) nothrow -> core.Result<T, Int> {
 	return core.Result::Ok(move v);
 }

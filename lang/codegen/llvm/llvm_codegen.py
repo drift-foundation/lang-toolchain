@@ -1327,6 +1327,15 @@ class _FuncBuilder:
 			for instr in block.instructions:
 				if isinstance(instr, AssignSSA):
 					self.aliases[instr.dest] = instr.src
+					continue
+				if isinstance(instr, CopyValue):
+					if self.type_table is None:
+						continue
+					# Bitcopy CopyValue lowers as a pure alias (no IR instruction).
+					# Pre-collect it so φ incoming values can resolve through copies
+					# defined in later-emitted predecessor blocks.
+					if self.type_table.is_bitcopy(instr.ty):
+						self.aliases[instr.dest] = instr.value
 
 	def _prime_type_ids(self) -> None:
 		if self.type_table is None:
@@ -7570,6 +7579,13 @@ class _FuncBuilder:
 			if td.kind is TypeKind.ERROR:
 				self.module.needs_error_runtime = True
 				lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {val})")
+				return
+			if td.kind is TypeKind.DIAGNOSTICVALUE:
+				self.module.needs_dv_runtime = True
+				tmp_ptr = fresh("dv_drop_arg")
+				lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+				lines.append(f"  store {DRIFT_DV_TYPE} {val}, {DRIFT_DV_TYPE}* {tmp_ptr}")
+				lines.append(f"  call void @drift_dv_release({DRIFT_DV_TYPE}* {tmp_ptr})")
 				return
 			if td.kind is TypeKind.ARRAY and td.param_types:
 				inner_elem = td.param_types[0]

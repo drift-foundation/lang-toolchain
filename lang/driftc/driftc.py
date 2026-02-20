@@ -2913,8 +2913,10 @@ def compile_stubbed_funcs(
 		inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
 		if not isinstance(inst_map, dict):
 			inst_map = {}
-		for csid in sorted(inst_map):
-			inst = inst_map[csid]
+		inst_map_by_node = getattr(typed_fn, "instantiations_by_node_id", None)
+		if not isinstance(inst_map_by_node, dict):
+			inst_map_by_node = {}
+		for inst in list(inst_map.values()) + list(inst_map_by_node.values()):
 			type_args = tuple(getattr(inst, "type_args", ()) or ())
 			if not type_args:
 				continue
@@ -3177,6 +3179,9 @@ def compile_stubbed_funcs(
 				_drain_instantiations()
 			if handle.status != "emitted":
 				continue
+			# Only true callsite ids are eligible for CallInfo target rewrite.
+			# Non-call instantiations (map literals/type applications) are tracked
+			# separately to avoid node_id collisions with callsite_id integers.
 			csid = key if isinstance(key, int) else None
 			info = call_info_map.get(csid) if csid is not None else None
 			if info is None:
@@ -3305,13 +3310,16 @@ def compile_stubbed_funcs(
 			if not isinstance(call_resolutions, dict):
 				continue
 			caller_mod = fn_id.module
-			node_to_callsite: dict[int, int] = {}
+			node_to_callsites: dict[int, list[int]] = {}
 			for expr in _collect_call_nodes_by_id(getattr(typed_fn, "body", H.HBlock(statements=[]))).values():
 				csid = getattr(expr, "callsite_id", None)
 				if isinstance(csid, int):
-					node_to_callsite[expr.node_id] = csid
+					node_to_callsites.setdefault(expr.node_id, []).append(csid)
 			for node_id, res in call_resolutions.items():
-				csid = node_to_callsite.get(node_id, -1)
+				csid_list = node_to_callsites.get(node_id) or []
+				if len(csid_list) != 1:
+					continue
+				csid = csid_list[0]
 				info_key = csid
 				if isinstance(res, MethodResolution):
 					if info_key in call_info_map:

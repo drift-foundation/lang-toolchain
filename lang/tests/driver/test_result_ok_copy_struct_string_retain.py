@@ -23,7 +23,7 @@ def _write_file(path: Path, content: str) -> None:
 	path.write_text(content)
 
 
-def test_result_ok_copy_struct_string_binding_emits_retain_in_main(
+def test_result_ok_struct_string_binding_does_not_emit_retain_in_main(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	mod_root = tmp_path / "mods"
@@ -36,9 +36,6 @@ import std.core as core;
 
 struct Payload {
 	msg: String
-}
-
-implement core.Copy for Payload {
 }
 
 fn make() nothrow -> core.Result<Payload, Int> {
@@ -69,4 +66,5 @@ fn main() nothrow -> Int {
 	main_end = ir.find("\n}", main_start)
 	assert main_end > main_start
 	main_ir = ir[main_start:main_end]
-	assert "@drift_string_retain(" in main_ir
+	assert "@drift_string_retain(" not in main_ir
+	assert "@drift_string_release(" in main_ir

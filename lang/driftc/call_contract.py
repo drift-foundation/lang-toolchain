@@ -101,12 +101,15 @@ def call_contract_issues(expr: H.HExpr, info: CallInfo) -> list[CallContractIssu
 	actual = len(info.sig.param_types)
 	if actual != expected:
 		call_kind = call_kind_label(expr)
+		target_note = f"target_kind={info.target.kind.name}"
+		if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
+			target_note = f"target_kind={info.target.kind.name} target_symbol={info.target.symbol.module}::{info.target.symbol.name}"
 		issues.append(
 			CallContractIssue(
 				code="E_CALLINFO_PARAM_LAYOUT",
 				message=f"internal: CallInfo param layout mismatch for {call_kind} (checker bug)",
 				notes=(
-					f"target_kind={info.target.kind.name}",
+					target_note,
 					f"callsite_id={getattr(expr, 'callsite_id', None)} expected_params={expected} actual_params={actual}",
 				),
 			)

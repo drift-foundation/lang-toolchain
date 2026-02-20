@@ -6,9 +6,6 @@ struct Payload {
 	msg: String
 }
 
-implement core.Copy for Payload {
-}
-
 fn make() nothrow -> Optional<Payload> {
 	return Optional::Some(Payload(msg = "hello"));
 }

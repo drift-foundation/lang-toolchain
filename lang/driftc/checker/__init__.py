@@ -39,7 +39,7 @@ from lang.driftc.checker.catch_arms import CatchArmInfo, validate_catch_arms
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeTable, TypeId, TypeKind, TypeParamId
 from lang.driftc.stage1.hir_utils import collect_catch_arms_from_block
-from lang.driftc.stage1.call_info import CallInfo, CallTargetKind, IntrinsicKind
+from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
 from lang.driftc.call_contract import call_arg_exprs_for_param_layout, call_contract_issues
 from lang.driftc.stage1.normalize import normalize_hir
 
@@ -2045,6 +2045,7 @@ class Checker:
 						note = f"callsite_id={getattr(expr, 'callsite_id', None)}"
 					diagnostics.append(_chk_diag(message="internal: missing CallInfo for call validation (checker bug)", severity="error", span=getattr(expr, "loc", None), notes=[note]))
 					return
+				info = self._repair_named_call_callinfo(expr, info, call_info_by_callsite_id)
 				_sig_info = current_fn.signature if current_fn is not None else None
 				_is_mir_bound = bool(_sig_info is not None and _sig_info.is_mir_bound)
 				if _is_mir_bound and info.target.kind is CallTargetKind.TRAIT:
@@ -2063,7 +2064,7 @@ class Checker:
 					for kw in getattr(expr, "kwargs", []) or []:
 						walk_expr(kw.value)
 					return
-				if not self._validate_callinfo_param_layout(expr, info, diagnostics):
+				if not self._validate_callinfo_param_layout(expr, info, diagnostics, current_fn=current_fn):
 					if isinstance(expr, H.HMethodCall):
 						walk_expr(expr.receiver)
 					elif isinstance(expr, H.HInvoke):
@@ -2092,6 +2093,7 @@ class Checker:
 				callee_name = None
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					callee_name = function_symbol(info.target.symbol)
+				before_len = len(diagnostics)
 				self.check_call_signature(
 					info.sig,
 					arg_type_ids,
@@ -2100,6 +2102,19 @@ class Checker:
 					callee_name=callee_name,
 					skip_type_check=skip_type_check,
 				)
+				if len(diagnostics) > before_len:
+					for d in diagnostics[before_len:]:
+						if d.severity != "error":
+							continue
+						notes = list(d.notes or [])
+						if current_fn is not None:
+							notes.append(f"fn={function_symbol(current_fn.fn_id)}")
+						notes.append(f"callsite_id={getattr(expr, 'callsite_id', None)}")
+						if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+							notes.append(f"call_name={expr.fn.name}")
+						elif isinstance(expr, H.HMethodCall):
+							notes.append(f"method_name={expr.method_name}")
+						d.notes = notes
 				if isinstance(expr, H.HMethodCall):
 					walk_expr(expr.receiver)
 				elif isinstance(expr, H.HInvoke):
@@ -2173,20 +2188,78 @@ class Checker:
 
 		walk_block(block)
 
+	def _repair_named_call_callinfo(
+		self,
+		expr: "H.HExpr",
+		info: CallInfo,
+		call_info_by_callsite_id: Mapping[int, CallInfo] | None,
+	) -> CallInfo:
+		from lang.driftc import stage1 as H
+		if not (isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar)):
+			return info
+		if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
+			return info
+		call_name = expr.fn.name
+		call_module = getattr(expr.fn, "module_id", None)
+		target = info.target.symbol
+		if target.name == call_name and (call_module is None or target.module == call_module):
+			return info
+		candidates: list[tuple[FunctionId, FnSignature]] = []
+		for fn_id, sig in self._signatures_by_id.items():
+			if fn_id.name != call_name:
+				continue
+			if isinstance(call_module, str) and fn_id.module != call_module:
+				continue
+			if sig.param_type_ids is None or sig.return_type_id is None:
+				continue
+			candidates.append((fn_id, sig))
+		if len(candidates) != 1:
+			return info
+		fn_id, sig = candidates[0]
+		use_template_sig = not bool(getattr(sig, "type_params", None))
+		repaired_sig = info.sig
+		if use_template_sig:
+			repaired_sig = CallSig(
+				param_types=tuple(sig.param_type_ids),
+				user_ret_type=sig.return_type_id,
+				can_throw=bool(sig.declared_can_throw),
+				includes_callee=bool(getattr(info.sig, "includes_callee", False)),
+			)
+		repaired = CallInfo(
+			target=CallTarget.direct(fn_id),
+			sig=repaired_sig,
+		)
+		csid = getattr(expr, "callsite_id", None)
+		if isinstance(csid, int) and isinstance(call_info_by_callsite_id, dict):
+			call_info_by_callsite_id[csid] = repaired
+		return repaired
+
 	def _validate_callinfo_param_layout(
 		self,
 		expr: "H.HExpr",
 		info: CallInfo,
 		diagnostics: List[Diagnostic],
+		*,
+		current_fn: Optional[FnInfo] = None,
 	) -> bool:
+		from lang.driftc import stage1 as H
 		for issue in call_contract_issues(expr, info):
 			if issue.code == "E_CALLINFO_PARAM_LAYOUT" or issue.code == "E_CALLINFO_INCLUDES_CALLEE_INVALID":
+				notes = list(issue.notes)
+				if current_fn is not None:
+					notes.append(f"fn={function_symbol(current_fn.fn_id)}")
+				if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
+					notes.append(f"call_name={expr.fn.name}")
+				elif isinstance(expr, H.HMethodCall):
+					notes.append(f"method_name={expr.method_name}")
+				elif isinstance(expr, H.HInvoke):
+					notes.append("invoke")
 				diagnostics.append(
 					_chk_diag(
 						message=issue.message,
 						severity="error",
 						span=getattr(expr, "loc", None),
-						notes=list(issue.notes),
+						notes=notes,
 					)
 				)
 				return False

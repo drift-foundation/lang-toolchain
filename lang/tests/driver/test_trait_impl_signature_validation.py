@@ -80,3 +80,24 @@ fn main() nothrow -> Int { return 0; }
 		d.code == "E_COPY_IMPL_NONCOPY_TARGET" and "core.Copy impl target must be structurally Copy in MVP" in (d.message or "")
 		for d in diagnostics
 	), diagnostics
+
+
+def test_copy_impl_allows_struct_with_repeated_uint_fields(tmp_path: Path) -> None:
+	diagnostics = _compile(
+		tmp_path,
+		"""
+module main
+import std.core as core;
+
+struct Pair {
+	a: Uint,
+	b: Uint
+}
+
+implement core.Copy for Pair {
+}
+
+fn main() nothrow -> Int { return 0; }
+""",
+	)
+	assert diagnostics == [], diagnostics

@@ -316,6 +316,35 @@ def test_call_info_emitted_for_direct_calls() -> None:
 		assert info.target.symbol == expected_ids.get(call.fn.name)
 
 
+def test_call_info_duplicate_callsite_ids_are_reassigned_per_call_node() -> None:
+	table = TypeTable()
+	tc = TypeChecker(table)
+	int_ty = table.ensure_int()
+	call_foo = H.HCall(fn=H.HVar("foo"), args=[H.HLiteralInt(1)], callsite_id=15)
+	call_bar = H.HCall(fn=H.HVar("bar"), args=[H.HLiteralInt(1), H.HLiteralInt(2), H.HLiteralInt(3)], callsite_id=15)
+	block = H.HBlock(statements=[H.HExprStmt(expr=call_foo), H.HExprStmt(expr=call_bar)])
+	fn_id = FunctionId(module="main", name="main", ordinal=0)
+	fn_id_foo = FunctionId(module="main", name="foo", ordinal=0)
+	fn_id_bar = FunctionId(module="main", name="bar", ordinal=0)
+	signatures_by_id = {
+		fn_id_foo: FnSignature(name="foo", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False),
+		fn_id_bar: FnSignature(name="bar", param_type_ids=[int_ty, int_ty, int_ty], return_type_id=int_ty, declared_can_throw=False),
+	}
+	registry = CallableRegistry()
+	registry.register_free_function(callable_id=1, name="foo", module_id=0, visibility=Visibility.public(), signature=CallableSignature(param_types=(int_ty,), result_type=int_ty), fn_id=fn_id_foo)
+	registry.register_free_function(callable_id=2, name="bar", module_id=0, visibility=Visibility.public(), signature=CallableSignature(param_types=(int_ty, int_ty, int_ty), result_type=int_ty), fn_id=fn_id_bar)
+	res = tc.check_function(fn_id, block, callable_registry=registry, signatures_by_id=signatures_by_id, visible_modules=(0,))
+	assert not any(d.severity == "error" for d in res.diagnostics), [d.message for d in res.diagnostics]
+	calls = _collect_direct_calls(block)
+	assert len(calls) == 2
+	callsite_ids = [int(getattr(c, "callsite_id", -1)) for c in calls]
+	assert len(set(callsite_ids)) == 2
+	for call in calls:
+		info = res.typed_fn.call_info_by_callsite_id.get(call.callsite_id)
+		assert info is not None
+		assert len(info.sig.param_types) == len(call.args)
+
+
 def test_call_info_emitted_for_invoke() -> None:
 	table = TypeTable()
 	tc = TypeChecker(table)

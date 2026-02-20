@@ -835,7 +835,6 @@ class HIRToMIR:
 								break
 						if (not scrut_is_ref) and arm.binders and need_addr_binders:
 							_ensure_arm_scrut_ptr()
-						arm_binds_all_fields = len(field_indices) == len(arm_def.field_types)
 						for bname, fidx in zip(arm.binders, field_indices):
 							if fidx < 0 or fidx >= len(arm_def.field_types):
 								raise AssertionError("match binder field index out of range (checker bug)")
@@ -876,13 +875,13 @@ class HIRToMIR:
 									field_moved = self.b.new_temp()
 									self.b.emit(M.LoadRef(dest=field_moved, ptr=field_val, inner_ty=bty))
 									self._local_types[field_moved] = bty
-									if self._type_table.is_copy(bty):
+									payload_is_copy = self._type_table.is_copy(bty) and (not self._needs_runtime_drop(bty))
+									if payload_is_copy:
 										copy_dest = self.b.new_temp()
 										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
 										self._local_types[copy_dest] = bty
 										field_moved = copy_dest
-									if bty != self._string_type and (arm_binds_all_fields or (not self._type_table.is_copy(bty)) or self._needs_runtime_drop(bty)):
-										arm_scrut_payload_moved = True
+									arm_scrut_payload_moved = True
 								else:
 									self.b.emit(
 										M.VariantGetField(
@@ -5538,8 +5537,73 @@ class HIRToMIR:
 	def _call_info_for_expr_optional(self, expr: H.HExpr) -> CallInfo | None:
 		csid = getattr(expr, "callsite_id", None)
 		if isinstance(csid, int):
-			return self._call_info_by_callsite_id.get(csid)
+			info = self._call_info_by_callsite_id.get(csid)
+			if info is None:
+				return None
+			repaired = self._repair_named_hcall_callinfo(expr, info)
+			if repaired is not info:
+				self._call_info_by_callsite_id[csid] = repaired
+			return repaired
 		return None
+
+	def _repair_named_hcall_callinfo(self, expr: H.HExpr, info: CallInfo) -> CallInfo:
+		if not (isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar)):
+			return info
+		if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
+			return info
+		call_name = expr.fn.name
+		call_module = getattr(expr.fn, "module_id", None)
+		target = info.target.symbol
+		target_sig = self._signatures_by_id.get(target)
+		def _sig_matches_callsig(sig: FnSignature, call_sig: CallSig) -> bool:
+			params = tuple(sig.param_type_ids or [])
+			ret = sig.return_type_id
+			if ret is None:
+				return False
+			return params == tuple(call_sig.param_types) and ret == call_sig.user_ret_type
+		# Keep explicit instantiated targets stable: lowering receives concrete
+		# call-info from typecheck/rewrite and must not "repair" it back to the
+		# generic template by bare name/arity.
+		if (call_module is None or target.module == call_module) and target.name.startswith(f"{call_name}__inst__"):
+			if target_sig is None or _sig_matches_callsig(target_sig, info.sig):
+				return info
+		target_name_matches = target.name == call_name and (call_module is None or target.module == call_module)
+		if target_name_matches and target_sig is not None and _sig_matches_callsig(target_sig, info.sig):
+			return info
+		candidates: list[tuple[FunctionId, FnSignature]] = []
+		for fn_id, sig in self._signatures_by_id.items():
+			if fn_id.name != call_name:
+				continue
+			if isinstance(call_module, str) and fn_id.module != call_module:
+				continue
+			if sig.param_type_ids is None or sig.return_type_id is None:
+				continue
+			candidates.append((fn_id, sig))
+		exact = [
+			(fn_id, sig)
+			for fn_id, sig in candidates
+			if _sig_matches_callsig(sig, info.sig)
+		]
+		if len(exact) == 1:
+			fn_id, sig = exact[0]
+		else:
+			arity = [
+				(fn_id, sig)
+				for fn_id, sig in candidates
+				if len(sig.param_type_ids or []) == len(expr.args)
+			]
+			if len(arity) != 1:
+				return info
+			fn_id, sig = arity[0]
+		repaired_sig = info.sig
+		use_template_sig = not bool(getattr(sig, "type_params", None))
+		if use_template_sig or len(info.sig.param_types) != len(expr.args):
+			repaired_sig = CallSig(
+				param_types=tuple(sig.param_type_ids),
+				user_ret_type=sig.return_type_id,
+				can_throw=bool(sig.declared_can_throw),
+			)
+		return CallInfo(target=CallTarget.direct(fn_id), sig=repaired_sig)
 
 	def _call_info_for(self, expr: H.HCall) -> CallInfo:
 		info = self._call_info_for_expr_optional(expr)

@@ -1,0 +1,27 @@
+module main
+
+import std.core as core;
+import std.codec as codec;
+
+fn main() nothrow -> Int {
+	val h = "4142";
+	var a: Array<Byte> = [];
+	match codec.hex_decode(&h) {
+		core.Result::Ok(v) => {
+			a = move v;
+		},
+		core.Result::Err(_) => {
+			return 10;
+		}
+	}
+	if a.len != 2 {
+		return 11;
+	}
+	if a[0] != cast<Byte>(65) {
+		return 12;
+	}
+	if a[1] != cast<Byte>(66) {
+		return 13;
+	}
+	return 0;
+}

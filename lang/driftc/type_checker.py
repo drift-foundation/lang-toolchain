@@ -172,6 +172,7 @@ class TypedFn:
 	call_resolutions: Dict[int, CallableDecl | MethodResolution] = field(default_factory=dict)
 	call_info_by_callsite_id: Dict[int, "CallInfo"] = field(default_factory=dict)
 	instantiations_by_callsite_id: Dict[int, "CallInstantiation"] = field(default_factory=dict)
+	instantiations_by_node_id: Dict[int, "CallInstantiation"] = field(default_factory=dict)
 	iface_coercions: Dict[int, TypeId] = field(default_factory=dict)
 	preseed_type_params: Dict[str, TypeId] = field(default_factory=dict)
 
@@ -845,10 +846,42 @@ class TypeChecker:
 		trait_index: GlobalTraitIndex | None,
 		diagnostics: list[Diagnostic],
 	) -> None:
+		def _dealias_zero_param_type(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
+			seen = _seen if _seen is not None else set()
+			td = self.type_table.get(ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = _dealias_zero_param_type(td.param_types[0], _seen=seen)
+				return self.type_table.ensure_ref_mut(inner) if td.ref_mut else self.type_table.ensure_ref(inner)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				elem = _dealias_zero_param_type(td.param_types[0], _seen=seen)
+				return self.type_table.new_array(elem)
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None and inst.type_args:
+				new_args = [_dealias_zero_param_type(arg, _seen=seen) for arg in inst.type_args]
+				if any(self.type_table.has_typevar(arg) for arg in new_args):
+					return self.type_table.ensure_struct_template(inst.base_id, new_args)
+				return self.type_table.ensure_struct_instantiated(inst.base_id, new_args)
+			vinst = self.type_table.get_variant_instance(ty)
+			if vinst is not None and vinst.type_args:
+				new_args = [_dealias_zero_param_type(arg, _seen=seen) for arg in vinst.type_args]
+				if any(self.type_table.has_typevar(arg) for arg in new_args):
+					return self.type_table.ensure_variant_template(vinst.base_id, new_args)
+				return self.type_table.ensure_variant_instantiated(vinst.base_id, new_args)
+			mod = td.module_id
+			name = td.name
+			alias_def = self.type_table.lookup_type_alias(module_id=mod, name=name)
+			if alias_def is None:
+				return ty
+			alias_params, alias_target, _loc = alias_def
+			if alias_params:
+				return ty
+			alias_key = (mod, name)
+			if alias_key in seen:
+				return ty
+			resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
+			return _dealias_zero_param_type(resolved, _seen=seen | {alias_key})
+
 		def _is_structurally_copy(tid: TypeId, *, seen: set[TypeId]) -> bool:
-			if tid in seen:
-				return False
-			seen.add(tid)
 			td = self.type_table.get(tid)
 			if td.kind is TypeKind.SCALAR:
 				return td.name != "String"
@@ -856,21 +889,27 @@ class TypeChecker:
 				return True
 			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR):
 				return False
-			if td.kind is TypeKind.STRUCT:
-				inst = self.type_table.get_struct_instance(tid)
-				if inst is None:
-					return False
-				return all(_is_structurally_copy(fty, seen=seen) for fty in inst.field_types)
-			if td.kind is TypeKind.VARIANT:
-				inst = self.type_table.get_variant_instance(tid)
-				if inst is None:
-					return False
-				for arm in inst.arms:
-					for fty in arm.field_types:
-						if not _is_structurally_copy(fty, seen=seen):
-							return False
-				return True
-			return False
+			if tid in seen:
+				return False
+			seen.add(tid)
+			try:
+				if td.kind is TypeKind.STRUCT:
+					inst = self.type_table.get_struct_instance(tid)
+					if inst is None:
+						return False
+					return all(_is_structurally_copy(fty, seen=seen) for fty in inst.field_types)
+				if td.kind is TypeKind.VARIANT:
+					inst = self.type_table.get_variant_instance(tid)
+					if inst is None:
+						return False
+					for arm in inst.arms:
+						for fty in arm.field_types:
+							if not _is_structurally_copy(fty, seen=seen):
+								return False
+					return True
+				return False
+			finally:
+				seen.discard(tid)
 
 		if trait_index is None:
 			return
@@ -891,6 +930,7 @@ class TypeChecker:
 			trait_def = trait_index.traits_by_id.get(trait_key)
 			if trait_def is None:
 				continue
+			trait_module_for_types = getattr(trait_key, "module", None) or getattr(trait_def, "module_id", None) or impl.def_module
 			method_sigs = {m.name: m for m in list(getattr(trait_def, "methods", []) or [])}
 			for method in impl.methods:
 				trait_method = method_sigs.get(method.name)
@@ -905,22 +945,24 @@ class TypeChecker:
 				for idx, tp_name in enumerate(trait_param_names):
 					if idx < len(trait_args):
 						type_params[tp_name] = trait_args[idx]
+				def _resolve_trait_method_type(raw_expr: object) -> TypeId:
+					expr_mod = getattr(raw_expr, "module_id", None)
+					expr_alias = getattr(raw_expr, "module_alias", None)
+					resolve_mod = expr_mod
+					if resolve_mod is None and isinstance(expr_alias, str) and expr_alias:
+						resolve_mod = expr_alias
+					if resolve_mod is None:
+						resolve_mod = trait_module_for_types
+					return resolve_opaque_type(
+						raw_expr,
+						self.type_table,
+						module_id=resolve_mod,
+						type_params=type_params,
+					)
 				expected_params: list[TypeId] = []
 				for p in list(getattr(trait_method, "params", []) or []):
-					expected_params.append(
-						resolve_opaque_type(
-							p.type_expr,
-							self.type_table,
-							module_id=impl.def_module,
-							type_params=type_params,
-						)
-					)
-				expected_ret = resolve_opaque_type(
-					getattr(trait_method, "return_type", None),
-					self.type_table,
-					module_id=impl.def_module,
-					type_params=type_params,
-				)
+					expected_params.append(_resolve_trait_method_type(p.type_expr))
+				expected_ret = _resolve_trait_method_type(getattr(trait_method, "return_type", None))
 				if len(expected_params) != len(sig.param_type_ids):
 					diagnostics.append(
 						_tc_diag(
@@ -936,7 +978,9 @@ class TypeChecker:
 					continue
 				param_mismatch = False
 				for idx, (want, have) in enumerate(zip(expected_params, sig.param_type_ids)):
-					if want != have:
+					want_cmp = _dealias_zero_param_type(want)
+					have_cmp = _dealias_zero_param_type(have)
+					if want_cmp != have_cmp:
 						param_mismatch = True
 						diagnostics.append(
 							_tc_diag(
@@ -953,7 +997,9 @@ class TypeChecker:
 						break
 				if param_mismatch:
 					continue
-				if expected_ret != sig.return_type_id:
+				expected_ret_cmp = _dealias_zero_param_type(expected_ret)
+				actual_ret_cmp = _dealias_zero_param_type(sig.return_type_id)
+				if expected_ret_cmp != actual_ret_cmp:
 					diagnostics.append(
 						_tc_diag(
 							message=(
@@ -1206,6 +1252,31 @@ class TypeChecker:
 			if not chain:
 				return None
 			return f"visible via: {_format_visibility_chain(chain)}"
+
+		def _record_call_info(expr: H.HExpr, info: CallInfo) -> int:
+			csid = getattr(expr, "callsite_id", None)
+			if not isinstance(csid, int):
+				csid = _alloc_callsite_id()
+				expr.callsite_id = csid
+			node_id = getattr(expr, "node_id", None)
+			owner = callsite_owner_node_id.get(csid)
+			existing = call_info_by_callsite_id.get(csid)
+			if owner is None and existing is None:
+				call_info_by_callsite_id[csid] = info
+				callsite_owner_node_id[csid] = int(node_id) if isinstance(node_id, int) else -1
+				return csid
+			if owner is not None and isinstance(node_id, int) and owner == node_id:
+				call_info_by_callsite_id[csid] = info
+				return csid
+			if existing == info:
+				if owner is None:
+					callsite_owner_node_id[csid] = int(node_id) if isinstance(node_id, int) else -1
+				return csid
+			new_csid = _alloc_callsite_id()
+			expr.callsite_id = new_csid
+			call_info_by_callsite_id[new_csid] = info
+			callsite_owner_node_id[new_csid] = int(node_id) if isinstance(node_id, int) else -1
+			return new_csid
 
 		module_ids_by_name: dict[str, ModuleId] = {}
 		for mod_id, chain in visibility_provenance.items():
@@ -1765,8 +1836,10 @@ class TypeChecker:
 		guard_outcomes: Dict[GuardKey, ProofStatus] = {}
 		call_resolutions: Dict[int, CallableDecl | MethodResolution] = {}
 		call_info_by_callsite_id: Dict[int, CallInfo] = {}
+		callsite_owner_node_id: Dict[int, int] = {}
 		fnptr_consts_by_node_id: Dict[int, tuple[FunctionRefId, CallSig]] = {}
 		instantiations_by_callsite_id: Dict[int, CallInstantiation] = {}
+		instantiations_by_node_id: Dict[int, CallInstantiation] = {}
 		trait_worlds = getattr(self.type_table, "trait_worlds", {}) or {}
 		def _world_has_trait_data(world: TraitWorld) -> bool:
 			return bool(
@@ -4558,7 +4631,7 @@ class TypeChecker:
 				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
-				call_info_by_callsite_id[csid] = info
+				csid = _record_call_info(expr, info)
 				if drift_debug.enabled("callsite"):
 					try:
 						fn = getattr(expr, "fn", None)
@@ -4615,7 +4688,7 @@ class TypeChecker:
 				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
-				call_info_by_callsite_id[csid] = info
+				_record_call_info(expr, info)
 			elif callable_registry is not None:
 				diagnostics.append(
 					_tc_diag(
@@ -4657,8 +4730,46 @@ class TypeChecker:
 				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
-				call_info_by_callsite_id[csid] = info
+				prev_csid = csid
+				csid = _record_call_info(expr, info)
+				if prev_csid != csid:
+					inst_prev = instantiations_by_callsite_id.pop(prev_csid, None)
+					if inst_prev is not None:
+						instantiations_by_callsite_id[csid] = inst_prev
 				inst = instantiations_by_callsite_id.get(csid)
+				if inst is None and isinstance(expr, H.HCall):
+					callee_expr = getattr(expr, "fn", None)
+					if isinstance(callee_expr, H.HTypeApply):
+						type_app_node_id = getattr(callee_expr, "node_id", None)
+						if isinstance(type_app_node_id, int):
+							inst_node = instantiations_by_node_id.get(type_app_node_id)
+							if inst_node is not None:
+								instantiations_by_callsite_id[csid] = inst_node
+								inst = inst_node
+				if inst is None and isinstance(expr, H.HCall):
+					explicit_type_args = list(getattr(expr, "type_args", None) or [])
+					if explicit_type_args:
+						target_sig = signatures_by_id.get(target) if signatures_by_id is not None else None
+						target_tparams = list(getattr(target_sig, "type_params", None) or [])
+						if target_tparams and len(explicit_type_args) == len(target_tparams):
+							type_arg_ids = [
+								resolve_opaque_type(
+									targ,
+									self.type_table,
+									module_id=current_module_name,
+									type_params=type_param_map,
+								)
+								for targ in explicit_type_args
+							]
+							if not any(self.type_table.has_typevar(tid) for tid in type_arg_ids):
+								record_instantiation(
+									callsite_id=csid,
+									target_fn_id=target,
+									impl_args=tuple(),
+									fn_args=tuple(type_arg_ids),
+									callsite_span=getattr(expr, "loc", None),
+								)
+								inst = instantiations_by_callsite_id.get(csid)
 				if inst is not None:
 					key = getattr(inst, "target_key", None)
 					type_args = tuple(getattr(inst, "type_args", ()) or ())
@@ -4687,6 +4798,7 @@ class TypeChecker:
 		def record_instantiation(
 			*,
 			callsite_id: int | None,
+			node_id: int | None = None,
 			target_fn_id: FunctionId | None,
 			impl_args: Tuple[TypeId, ...],
 			fn_args: Tuple[TypeId, ...],
@@ -4726,6 +4838,8 @@ class TypeChecker:
 							includes_callee=info.sig.includes_callee,
 						),
 					)
+			elif isinstance(node_id, int):
+				instantiations_by_node_id[node_id] = CallInstantiation(target_key=key, type_args=type_args)
 			elif callable_registry is not None:
 				diagnostics.append(
 					_tc_diag(
@@ -5876,7 +5990,8 @@ class TypeChecker:
 										key = function_keys_by_fn_id.get(decl.fn_id)
 										if key is not None:
 											record_instantiation(
-												callsite_id=expr.node_id,
+												callsite_id=getattr(expr, "callsite_id", None),
+												node_id=expr.node_id,
 												target_fn_id=decl.fn_id,
 												impl_args=tuple(),
 												fn_args=tuple(type_arg_ids),
@@ -7143,7 +7258,7 @@ class TypeChecker:
 								span=span,
 								note=note,
 							)
-						call_info_by_callsite_id[csid] = method_res.call_info
+						csid = _record_call_info(expr, method_res.call_info)
 						inst = instantiations_by_callsite_id.get(csid)
 						if inst is not None:
 							key = getattr(inst, "target_key", None)
@@ -7758,7 +7873,8 @@ class TypeChecker:
 					if insert_fn_id is None:
 						return
 					record_instantiation(
-						callsite_id=getattr(expr, "node_id", None),
+						callsite_id=getattr(expr, "callsite_id", None),
+						node_id=getattr(expr, "node_id", None),
 						target_fn_id=insert_fn_id,
 						impl_args=tuple(map_inst.type_args),
 						fn_args=(),
@@ -8794,6 +8910,7 @@ class TypeChecker:
 			call_resolutions=call_resolutions,
 			call_info_by_callsite_id=call_info_by_callsite_id,
 			instantiations_by_callsite_id=instantiations_by_callsite_id,
+			instantiations_by_node_id=instantiations_by_node_id,
 			iface_coercions=iface_coercions,
 			preseed_type_params=dict(preseed_type_params or {}),
 		)

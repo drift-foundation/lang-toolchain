@@ -1,3 +1,38 @@
+## 2026-02-19 – CallInfo repair fix for generic direct-call signatures (`std.core::cell`)
+- Fixed checker regression where named direct-call CallInfo repair could overwrite instantiated generic call signatures with template `TypeVar` shapes.
+  - symptom: valid calls like `core.cell(true)` failed with `argument 0 to std.core::cell has type Bool, expected TypeVar<std.core::cell#0>`.
+- Root-cause fix in `lang/driftc/checker/__init__.py`:
+  - `_repair_named_call_callinfo(...)` now preserves the existing instantiated `CallSig` when the repaired target is generic.
+  - full signature rewrite is limited to non-generic targets.
+- Regression added:
+  - `lang/tests/driver/test_callinfo_param_layout_contract.py::test_named_call_repair_preserves_instantiated_generic_sig`.
+- Validation:
+  - `/tmp/repro_cell_infer_bool.drift` compiles cleanly again (`exit_code: 0`).
+- Boundary Contract Guardrails check:
+  - positive regression added for the repaired generic call path:
+    - `lang/tests/driver/test_callinfo_param_layout_contract.py::test_named_call_repair_preserves_instantiated_generic_sig`.
+  - negative contract coverage remains pinned in the same suite (`E_CALLINFO_PARAM_LAYOUT` and related target-shape checks).
+  - no stage-boundary type-shape expansion in this change (checker CallInfo repair only), so no new stage2/MIR/LLVM boundary-shape updates were required.
+
+## 2026-02-19 – Structural `core.Copy` check false-negative for repeated scalar fields (LANGUAGE_BUG)
+- Fixed checker bug where structurally-Copy structs with repeated scalar fields (for example, two `Uint` fields) were rejected as non-Copy.
+  - symptom: `core.Copy impl target must be structurally Copy in MVP` for:
+    - `struct S { a: Uint, b: Uint }`.
+- Root-cause fix in `lang/driftc/type_checker.py` (`validate_trait_impls`):
+  - `_is_structurally_copy(...)` now performs scalar/primitive fast-path checks before recursion tracking.
+  - recursion tracking is now path-scoped (`seen.add(...)` with `finally: seen.discard(...)`) to avoid sibling-field false cycle hits.
+- Regression added:
+  - `lang/tests/driver/test_trait_impl_signature_validation.py::test_copy_impl_allows_struct_with_repeated_uint_fields`.
+- Validation:
+  - `lang/tests/driver/test_trait_impl_signature_validation.py` passes (3 tests).
+  - `/tmp/repro_copy_uint_should_compile.drift` now compiles (`exit_code: 0`).
+- Boundary Contract Guardrails check:
+  - positive regression added:
+    - `lang/tests/driver/test_trait_impl_signature_validation.py::test_copy_impl_allows_struct_with_repeated_uint_fields`.
+  - negative regression retained in the same suite:
+    - `lang/tests/driver/test_trait_impl_signature_validation.py::test_copy_impl_on_noncopy_field_struct_is_rejected`.
+  - change is checker-only policy validation (`validate_trait_impls`) and does not alter checker→MIR→LLVM payload/type boundary support.
+
 ## 2026-02-19 – `core.Copy` non-Copy target rejection (Defect #6)
 - Closed defect where `implement core.Copy for <struct>` could be accepted even when the target struct was not structurally Copy (for example, had `String` fields).
 - Checker fix:
@@ -1323,7 +1358,26 @@
    - added negative checker-path regression for unsupported by-value copy through ref-scrutinee binder:
      - `lang/tests/codegen/e2e/match_ref_scrutinee_noncopy_copy_rejected`
    - added stage2 contract-shape assertion test pinning binder extraction path:
-     - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py::test_match_by_value_binder_extracts_via_addr_path_not_value_copy`
+   - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py::test_match_by_value_binder_extracts_via_addr_path_not_value_copy`
+
+## 2026-02-20 – Match arm scrutinee-drop regression on Result::Ok payload binders (LANGUAGE_BUG)
+- Fixed a new stage2 ownership regression where by-value `Result::Ok(...)` binder extraction could still drop the arm scrutinee before arm-body execution.
+  - symptoms:
+    - `result_ok_move_conn_source_drop_regression` failed with exit `21` (state corruption from premature payload destruction).
+    - `struct_ref_field_result_ok_move_drop_once` failed with exit `11` (drop-once violation for borrowed aggregate payload path).
+- Root-cause fix in `lang/driftc/stage2/hir_to_mir.py` (`_lower_match` binder extraction path):
+  - when payload field is extracted via arm-local scrutinee address path (`VariantGetFieldAddr` + `LoadRef`), lowering now treats that payload extraction as scrutinee-consuming for cleanup ordering.
+  - this prevents pre-arm scrutinee drop from destructing the `Ok` payload while the binder/local arm value is still in active use.
+- Validation:
+  - targeted e2e:
+    - `result_ok_move_conn_source_drop_regression` (pass)
+    - `struct_ref_field_result_ok_move_drop_once` (pass)
+    - `result_ok_array_match_move_no_double_free` (pass)
+  - boundary guardrail tests:
+    - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py` (pass)
+    - `lang/tests/driver/test_codegen_boundary_diagnostics.py` (pass)
+    - `lang/tests/driver/test_codegen_preemit_boundary_diagnostics.py` (pass)
+    - `lang/tests/driver/test_result_ok_copy_struct_string_retain.py` (pass)
 
 ## 2026-02-17 – Checker hardening for non-Copy array index reads (LANGUAGE_BUG)
 - Regression-first fix for internal crash path:

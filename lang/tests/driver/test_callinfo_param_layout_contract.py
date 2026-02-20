@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 
 from lang.driftc import stage1 as H
-from lang.driftc.checker import Checker, FnSignature
+from lang.driftc.checker import Checker, FnSignature, TypeParam
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.span import Span
-from lang.driftc.core.types_core import TypeTable
+from lang.driftc.core.types_core import TypeParamId, TypeTable
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, IntrinsicKind
 
 
@@ -182,3 +182,69 @@ def test_call_signature_type_mismatch_uses_symbolic_types_and_span() -> None:
 	assert matches, errors
 	assert all(re.search(r"type \\d+, expected \\d+", d.message) is None for d in matches), matches
 	assert all(d.span.line is not None and d.span.column is not None for d in matches), matches
+
+
+def test_named_call_repairs_mismatched_direct_target_symbol_callinfo() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	call = H.HCall(fn=H.HVar(name="close", module_id="mariadb.rpc"), args=[H.HLiteralInt(value=1)])
+	call.callsite_id = 10
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	fn_main = FunctionId(module="main", name="main", ordinal=0)
+	fn_close = FunctionId(module="mariadb.rpc", name="close", ordinal=0)
+	fn_insert = FunctionId(module="std.containers", name="insert", ordinal=0)
+	sig_main = FnSignature(name="main", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)
+	sig_close = FnSignature(name="close", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False, module="mariadb.rpc")
+	sig_insert = FnSignature(name="insert", param_type_ids=[int_ty, int_ty, int_ty], return_type_id=int_ty, declared_can_throw=False, module="std.containers")
+	checker = Checker(
+		signatures_by_id={fn_main: sig_main, fn_close: sig_close, fn_insert: sig_insert},
+		hir_blocks_by_id={fn_main: block},
+		call_info_by_callsite_id={
+			fn_main: {
+				10: CallInfo(
+					target=CallTarget.direct(fn_insert),
+					sig=CallSig(param_types=(int_ty, int_ty, int_ty), user_ret_type=int_ty, can_throw=False),
+				)
+			}
+		},
+		type_table=table,
+	)
+	checked = checker.check_by_id([fn_main])
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert not any("internal: CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors
+
+
+def test_named_call_repair_preserves_instantiated_generic_sig() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	bool_ty = table.ensure_bool()
+	cell_ty = table.declare_struct("std.core", "Cell", ["value"], type_params=["T"])
+	tp_id = TypeParamId(owner=FunctionId(module="std.core", name="cell", ordinal=0), index=0)
+	tp_ty = table.ensure_typevar(tp_id, name="T")
+	cell_bool = table.ensure_struct_instantiated(cell_ty, [bool_ty])
+	call = H.HCall(fn=H.HVar(name="cell", module_id="std.core"), args=[H.HLiteralBool(value=True)])
+	call.callsite_id = 11
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	fn_main = FunctionId(module="main", name="main", ordinal=0)
+	fn_cell = FunctionId(module="std.core", name="cell", ordinal=0)
+	fn_bad = FunctionId(module="std.core", name="file_open", ordinal=0)
+	sig_main = FnSignature(name="main", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)
+	sig_cell = FnSignature(name="cell", type_params=[TypeParam(id=tp_id, name="T")], param_type_ids=[tp_ty], return_type_id=table.ensure_struct_template(cell_ty, [tp_ty]), declared_can_throw=False, module="std.core")
+	sig_bad = FnSignature(name="file_open", param_type_ids=[bool_ty], return_type_id=cell_bool, declared_can_throw=False, module="std.core")
+	checker = Checker(
+		signatures_by_id={fn_main: sig_main, fn_cell: sig_cell, fn_bad: sig_bad},
+		hir_blocks_by_id={fn_main: block},
+		call_info_by_callsite_id={
+			fn_main: {
+				11: CallInfo(
+					target=CallTarget.direct(fn_bad),
+					sig=CallSig(param_types=(bool_ty,), user_ret_type=cell_bool, can_throw=False),
+				)
+			}
+		},
+		type_table=table,
+	)
+	checked = checker.check_by_id([fn_main])
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert not any("argument 0 to std.core::cell has type Bool, expected TypeVar<std.core::cell#0>" in d.message for d in errors), errors
+	assert not any("internal: CallInfo param layout mismatch for call (checker bug)" in d.message for d in errors), errors

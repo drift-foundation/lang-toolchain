@@ -212,6 +212,118 @@ def test_method_call_rejects_constructor_call_target() -> None:
 		_lower_typed_callsite(block, call_info_by_callsite_id=call_info_by_callsite_id, type_table=table)
 
 
+def test_hcall_named_target_is_repaired_before_mir_call_emit() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	call = H.HCall(fn=H.HVar(name="close", module_id="mariadb.rpc"), args=[H.HLiteralInt(value=1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	fn_close = FunctionId(module="mariadb.rpc", name="close", ordinal=0)
+	fn_insert = FunctionId(module="std.containers", name="HashMapCore<K, V, B>::insert__inst__706ad1da3b2e9198", ordinal=0)
+	signatures = {
+		fn_close: FnSignature(name="close", module="mariadb.rpc", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False),
+		fn_insert: FnSignature(name="HashMapCore<K, V, B>::insert__inst__706ad1da3b2e9198", module="std.containers", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False),
+	}
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.direct(fn_insert),
+			sig=CallSig(param_types=(int_ty,), user_ret_type=int_ty, can_throw=False),
+		)
+	}
+	lower = _lower_typed_callsite(
+		block,
+		call_info_by_callsite_id=call_info_by_callsite_id,
+		type_table=table,
+		signatures_by_id=signatures,
+	)
+	calls = [
+		instr
+		for bb in lower.b.func.blocks.values()
+		for instr in bb.instructions
+		if isinstance(instr, Call)
+	]
+	assert calls
+	assert calls[0].fn_id == fn_close
+
+
+def test_hcall_named_target_repairs_same_name_wrong_ordinal_by_callsig_shape() -> None:
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	bool_ty = table.ensure_bool()
+	call = H.HCall(fn=H.HVar(name="close", module_id="mariadb.rpc"), args=[H.HLiteralInt(value=1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	fn_close_ok = FunctionId(module="mariadb.rpc", name="close", ordinal=0)
+	fn_close_wrong = FunctionId(module="mariadb.rpc", name="close", ordinal=1)
+	signatures = {
+		fn_close_ok: FnSignature(name="close", module="mariadb.rpc", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False),
+		fn_close_wrong: FnSignature(name="close", module="mariadb.rpc", param_type_ids=[int_ty], return_type_id=bool_ty, declared_can_throw=False),
+	}
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.direct(fn_close_wrong),
+			sig=CallSig(param_types=(int_ty,), user_ret_type=int_ty, can_throw=False),
+		)
+	}
+	lower = _lower_typed_callsite(
+		block,
+		call_info_by_callsite_id=call_info_by_callsite_id,
+		type_table=table,
+		signatures_by_id=signatures,
+	)
+	calls = [
+		instr
+		for bb in lower.b.func.blocks.values()
+		for instr in bb.instructions
+		if isinstance(instr, Call)
+	]
+	assert calls
+	assert calls[0].fn_id == fn_close_ok
+
+
+def test_hcall_named_target_keeps_instantiated_symbol() -> None:
+	table = TypeTable()
+	uint_ty = table.ensure_uint()
+	byte_ty = table.ensure_byte()
+	handle_byte_ty = table.declare_struct("std.sync", "Handle", ["raw"], type_params=["T"])
+	handle_byte_inst = table.ensure_struct_instantiated(handle_byte_ty, [byte_ty])
+	call = H.HCall(fn=H.HVar(name="handle", module_id="std.sync"), args=[H.HLiteralInt(value=1)])
+	block = H.HBlock(statements=[H.HExprStmt(expr=call), H.HReturn(value=H.HLiteralInt(value=0))])
+	assign_node_ids(block)
+	assign_callsite_ids(block)
+	assert isinstance(call.callsite_id, int)
+	fn_handle = FunctionId(module="std.sync", name="handle", ordinal=0)
+	fn_handle_inst = FunctionId(module="std.sync", name="handle__inst__ccb35f953bd05c02", ordinal=0)
+	signatures = {
+		fn_handle: FnSignature(name="handle", module="std.sync", param_type_ids=[uint_ty], return_type_id=handle_byte_ty, declared_can_throw=False),
+		fn_handle_inst: FnSignature(name="handle__inst__ccb35f953bd05c02", module="std.sync", param_type_ids=[uint_ty], return_type_id=handle_byte_inst, declared_can_throw=False),
+	}
+	call_info_by_callsite_id = {
+		call.callsite_id: CallInfo(
+			target=CallTarget.direct(fn_handle_inst),
+			sig=CallSig(param_types=(uint_ty,), user_ret_type=handle_byte_inst, can_throw=False),
+		)
+	}
+	lower = _lower_typed_callsite(
+		block,
+		call_info_by_callsite_id=call_info_by_callsite_id,
+		type_table=table,
+		signatures_by_id=signatures,
+	)
+	calls = [
+		instr
+		for bb in lower.b.func.blocks.values()
+		for instr in bb.instructions
+		if isinstance(instr, Call)
+	]
+	assert calls
+	assert calls[0].fn_id == fn_handle_inst
+
+
 def test_missing_call_info_in_control_flow_and_lambda() -> None:
 	call_if = H.HCall(fn=H.HVar("f"), args=[H.HLiteralInt(1)])
 	call_loop = H.HCall(fn=H.HVar("g"), args=[])
