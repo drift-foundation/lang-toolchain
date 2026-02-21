@@ -138,6 +138,66 @@ def test_named_kwargs_pass_through_typed_ctor_lowering() -> None:
 		"expected ConstructStruct in MIR output for named-kwargs constructor"
 
 
+def test_raw_kwargs_input_passes_typed_ctor_lowering() -> None:
+	"""Named kwargs on expr.kwargs (not normalized by checker) must lower.
+
+	This exercises the exact path that regressed: _lower_constructor_call
+	receives args=[], kwargs=[x=10, y=20], no ctor_arg_field_indices.
+	The kwargs-to-field lowering loop must place values in field order and
+	emit ConstructStruct.
+	"""
+	tt, struct_id, int_ty = _setup_struct_type_table()
+	block = HBlock(
+		statements=[
+			HReturn(
+				value=HCall(
+					fn=HVar("Point"),
+					args=[],
+					kwargs=[
+						HKwArg(name="y", value=HLiteralInt(20)),
+						HKwArg(name="x", value=HLiteralInt(10)),
+					],
+				)
+			),
+		]
+	)
+	builder = make_builder(FunctionId(module="main", name="test_func", ordinal=0))
+	hir_norm = normalize_hir(block)
+	assign_node_ids(hir_norm)
+	assign_callsite_ids(hir_norm)
+	call_info_by_callsite_id: dict[int, CallInfo] = {}
+
+	def _walk(expr):
+		if isinstance(expr, HCall):
+			csid = getattr(expr, "callsite_id", None)
+			if isinstance(csid, int):
+				info = CallInfo(
+					target=CallTarget.constructor_struct(
+						struct_id,
+						ctor_arg_field_indices=None,
+					),
+					sig=CallSig(param_types=(), user_ret_type=struct_id, can_throw=False),
+				)
+				call_info_by_callsite_id[csid] = info
+			for kw in list(expr.kwargs or []):
+				_walk(kw.value)
+
+	for stmt in hir_norm.statements:
+		if hasattr(stmt, "value") and stmt.value is not None:
+			_walk(stmt.value)
+
+	lowerer = HIRToMIR(
+		builder,
+		type_table=tt,
+		call_info_by_callsite_id=call_info_by_callsite_id,
+	)
+	lowerer.lower_block(hir_norm)
+	func = builder.func
+	entry = func.blocks[func.entry]
+	assert any(isinstance(op, ConstructStruct) for op in entry.instructions), \
+		"expected ConstructStruct in MIR output for raw kwargs constructor input"
+
+
 def test_positional_ctor_still_works() -> None:
 	"""Positional constructor args (the common path) still lower correctly."""
 	tt, struct_id, int_ty = _setup_struct_type_table()

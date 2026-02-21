@@ -80,6 +80,80 @@ Three review checklist items were ambiguous after Phase 5. Decisions agreed with
 
 ---
 
+## A1: `call_contract.py` single validation seam (2026-02-21)
+
+### Inventory (source → `call_contract.py`)
+
+| Concern | Previous owner | New owner | API |
+|---------|---------------|-----------|-----|
+| Intrinsic arity/kwargs/semantics | `driftc.py` (~120 lines of per-kind blocks) | `call_contract.py` | `intrinsic_call_issues()` + `INTRINSIC_ARITY_TABLE` (39 entries) |
+| Constructor shape (positional arity, named fields, duplicate/missing) | `hir_to_mir.py` (inline assertions) | `call_contract.py` | `ctor_call_issues()` + `CtorFieldSpec` |
+| Array method arity | `hir_to_mir.py` (12 inline assertions) | `call_contract.py` | `array_method_arity_issues()` + `ARRAY_METHOD_ARITY_TABLE` (12 entries) |
+| Generic kwargs rejection | `hir_to_mir.py` (4 inline assertions) | `call_contract.py` | `call_kwargs_issues()` |
+| Structural CallInfo shape (5 codes) | `call_contract.py` (unchanged) | `call_contract.py` | `call_contract_issues()` |
+
+**Unchanged (not moved):**
+- Lambda call kwargs/arity → checker (not CallInfo-based)
+- `check_call_signature` type check → checker (type-system concern)
+
+### Migrated slices
+
+**Slice 1 — Intrinsic arity + constructor shape:**
+- `driftc.py::_validate_intrinsic_callinfo`: replaced ~120 lines of per-intrinsic `if kind is IntrinsicKind.X: if kwargs or len(args) != N:` blocks with single `intrinsic_call_issues()` call (~15 lines). Kept BYTE_LENGTH/STRING_BYTE_AT name disambiguation and `E_INTRINSIC_CALLINFO_MISSING_KIND`/`_NODE`.
+- `hir_to_mir.py::_lower_intrinsic_call_expr`: added pre-flight `intrinsic_call_issues()` check (filters out `MUT_BORROW_REQUIRED`), removed kwargs+arity guards from ~16 intrinsic blocks.
+- `hir_to_mir.py::_visit_stmt_HExprStmt`: added pre-flight check, removed arity guards from SWAP, RAW_DEALLOC, RAW_WRITE, PTR_WRITE, DROP_VALUE.
+- `hir_to_mir.py` variant/struct ctor paths: replaced field validation assertions with `ctor_call_issues()`.
+- `IntrinsicSpec` frozen dataclass added with `expected_args`, `code`, `label`, `kwargs_allowed`.
+- `INTRINSIC_ARITY_TABLE`: 39 entries, one per `IntrinsicKind` member.
+- SWAP/REPLACE semantic checks (`E_INTRINSIC_SWAP_MUT_BORROW_REQUIRED`, `E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED`) included.
+
+**Slice 2 — Array method arity + remaining guards:**
+- `ARRAY_METHOD_ARITY_TABLE`: 12 entries (get, ref_at, pop, push, insert, remove, swap_remove, swap, set, clear, reserve, shrink_to_fit).
+- `hir_to_mir.py`: replaced all 12 array method arity assertions with `array_method_arity_issues()`.
+- `hir_to_mir.py`: replaced kwargs assertions for method calls, invoke, normal calls with `call_kwargs_issues()`.
+
+**Constructor kwargs fix (post-slice):**
+- `hir_to_mir.py::_lower_constructor_call`: removed unconditional `call_kwargs_issues("a constructor", ...)` rejection. Replaced with `ctor_call_issues()` validation + proper kwargs-to-field lowering. Removed redundant `ordered` reset in `ctor_arg_field_indices` branch.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `lang/driftc/call_contract.py` | Added `IntrinsicSpec`, `INTRINSIC_ARITY_TABLE`, `intrinsic_call_issues()`, `CtorFieldSpec`, `ctor_call_issues()`, `ARRAY_METHOD_ARITY_TABLE`, `array_method_arity_issues()`, `call_kwargs_issues()`; updated `__all__` |
+| `lang/driftc/driftc.py` | `_validate_intrinsic_callinfo`: ~120 lines → ~15 lines via `intrinsic_call_issues()` |
+| `lang/driftc/stage2/hir_to_mir.py` | Pre-flight intrinsic checks; ctor→`ctor_call_issues()`; array→`array_method_arity_issues()`; kwargs→`call_kwargs_issues()`; constructor kwargs fix |
+
+### Diagnostic wording/code changes
+
+No user-facing diagnostic codes or messages changed. All existing `E_INTRINSIC_*` codes preserved. New internal codes (`E_CTOR_ARITY_MISMATCH`, `E_CTOR_UNKNOWN_FIELD`, `E_CTOR_DUPLICATE_FIELD`, `E_CTOR_MISSING_FIELDS`, `E_ARRAY_METHOD_ARITY`, `E_CALL_KWARGS_REJECTED`) are assertion-path only (never reach user diagnostics in normal operation).
+
+### New tests
+
+| File | Tests |
+|------|-------|
+| `lang/tests/driver/test_intrinsic_call_contract.py` | 8 (arity mismatch, kwargs rejected, correct passes, unknown kind, swap/replace mut borrow, table completeness, span propagation) |
+| `lang/tests/driver/test_ctor_call_contract.py` | 6 (arity mismatch, unknown/duplicate/missing field, valid positional, valid named) |
+| `lang/tests/driver/test_array_method_contract.py` | 5 (get arity, pop correct, table completeness, kwargs rejected, kwargs empty) |
+| `lang/tests/driver/test_ctor_kwargs_mir_regression.py` | 3 (named kwargs pass typed lowering, positional still works, mixed positional+named fails with contract diagnostic) |
+
+### Targeted validation matrix
+
+```
+New contract tests (22):                   PASS
+Existing regression tests (13):            PASS
+Stage2 tests (86):                         PASS
+High-sensitivity non-regression (15):      PASS
+E2E regressions (2):                       PASS
+Post-slice grep (arity in driftc.py):      0 matches
+Post-slice grep (arity in hir_to_mir.py):  1 match (DV method handler — out of scope)
+```
+
+### Risk note
+
+One remaining `len(expr.args) != 1` in `hir_to_mir.py` line 3276 — DV (dictionary-like) `get` method handler. Not a call-contract concern; DV methods have their own lowering path. No follow-up needed.
+
+---
+
 ## Known limitations / hand-off items
 
 1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). The borrow checker's SCOPED acceptance path is fully exercised by unit tests but cannot be exercised e2e until the type system allows capturing lambdas in `Fn1`-bounded generic positions. Type system extension required; out of scope for A5.
