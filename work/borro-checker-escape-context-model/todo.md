@@ -65,6 +65,23 @@ Deliverables from Klaudia for each slice:
 3. Any diagnostic wording/code changes called out explicitly.
 4. Short risk note if remaining duplicate checks still exist (with follow-up owner).
 
+Immediate A1 follow-ups from review (must fix):
+1. **Typed constructor kwargs regression in stage2 (high):**
+   - `lang/driftc/stage2/hir_to_mir.py::_lower_constructor_call` currently calls `call_kwargs_issues("a constructor", kw_pairs, ...)`, which rejects kwargs unconditionally.
+   - This conflicts with MVP behavior (constructor kwargs are allowed) and existing diagnostic contract ("keyword arguments are only supported for constructors in MVP").
+   - Required fix: remove generic kwargs rejection for constructor calls in this path; keep constructor validation through `ctor_call_issues(...)` / ctor metadata only.
+
+2. **A1 progress traceability gap (medium):**
+   - `work-progress.md` currently reflects A5 completion but not A1 slice inventory/migration checkpoints.
+   - Required fix: add A1 section to `work-progress.md` with:
+     - inventory table (source owner -> `call_contract.py`),
+     - migrated slices with commit references,
+     - targeted validation matrix.
+
+3. **Regression additions required (A1 constructor path):**
+   - Add positive driver/e2e regression proving named constructor kwargs still pass through typed MIR constructor lowering.
+   - Add negative regression proving mixed positional+named constructor args fail with clear non-internal contract diagnostic.
+
 ---
 
 ## Appendix: Historical A5 Plan and Execution (Archived)

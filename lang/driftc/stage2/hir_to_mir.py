@@ -5806,13 +5806,23 @@ class HIRToMIR:
 		else:
 			raise AssertionError("constructor call missing variant/struct metadata (typecheck/call-info bug)")
 		ordered: list[M.ValueId | None] = [None] * len(field_types)
-		_kw_issues = call_kwargs_issues("a constructor", kw_pairs, span=getattr(expr, "loc", None))
-		if _kw_issues:
-			raise AssertionError(f"{_kw_issues[0].message}")
+		_ctor_issues = ctor_call_issues(len(pos_args), tuple(kw.name for kw in kw_pairs), CtorFieldSpec(field_names=tuple(field_names)), ctor_label="constructor", span=getattr(expr, "loc", None))
+		if _ctor_issues:
+			raise AssertionError(f"{_ctor_issues[0].message} reached MIR lowering")
+		if kw_pairs:
+			for kw in kw_pairs:
+				field_idx = field_names.index(kw.name)
+				field_ty = field_types[field_idx]
+				arg_val = self._lower_call_arg(kw.value, field_ty)
+				if arg_val is None:
+					if self._type_table.is_void(field_ty):
+						ordered[field_idx] = None
+						continue
+					raise AssertionError("Void-returning call used in expression context (checker bug)")
+				ordered[field_idx] = arg_val
 		if ctor_arg_field_indices is not None:
 			if len(pos_args) != len(ctor_arg_field_indices):
 				raise AssertionError("constructor arg mapping arity mismatch reached MIR lowering (checker bug)")
-			ordered = [None] * len(field_types)
 			for arg_expr, field_idx in zip(pos_args, ctor_arg_field_indices):
 				if field_idx < 0 or field_idx >= len(field_types):
 					raise AssertionError("constructor field index out of range (checker bug)")
@@ -5827,9 +5837,6 @@ class HIRToMIR:
 					raise AssertionError("Void-returning call used in expression context (checker bug)")
 				ordered[field_idx] = arg_val
 		else:
-			_ctor_issues = ctor_call_issues(len(pos_args), (), CtorFieldSpec(field_names=tuple(field_names)), ctor_label="constructor", span=getattr(expr, "loc", None))
-			if _ctor_issues:
-				raise AssertionError(f"{_ctor_issues[0].message} reached MIR lowering")
 			for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
 				arg_val = self._lower_call_arg(arg_expr, fty)
 				if arg_val is None:
