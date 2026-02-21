@@ -440,12 +440,16 @@ class BorrowChecker:
 
 		Returns True if:
 		- place is a function parameter (always live for the function's duration), OR
-		- place was let-bound before stmt_index in block_stmts.
+		- place was let-bound or assigned to before stmt_index in block_stmts.
 
-		Only inspects HLet statements in the DIRECT enclosing BasicBlock — not nested blocks
-		or predecessor blocks in the CFG. This is deliberately conservative (MVP rule, §3.6).
-		Patterns rejected by this check but provably safe at a deeper analysis level are
-		documented as known false positives; do not relax without a design change.
+		HAssign to a local (no projections) counts as a definition: if the local is assigned
+		in the direct block before the scope call, it was declared somewhere accessible and is
+		live for the block's duration.
+
+		Only inspects the DIRECT enclosing BasicBlock — not nested blocks or predecessor blocks
+		in the CFG. This is deliberately conservative (MVP rule, §3.6). Patterns rejected by
+		this check but provably safe at a deeper analysis level are documented as known false
+		positives; do not relax without a design change.
 		"""
 		if place.base.kind is PlaceKind.PARAM:
 			return True
@@ -454,6 +458,11 @@ class BorrowChecker:
 			if i >= stmt_index:
 				break
 			if isinstance(stmt, H.HLet) and getattr(stmt, "binding_id", None) == local_id:
+				return True
+			if (isinstance(stmt, H.HAssign)
+					and isinstance(stmt.target, H.HPlaceExpr)
+					and not stmt.target.projections
+					and getattr(stmt.target.base, "binding_id", None) == local_id):
 				return True
 		return False
 

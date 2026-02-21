@@ -1022,6 +1022,11 @@ PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
   merge time in this file
 - Multi-level nested blocks are not analyzed; only the direct enclosing block
   is checked for place definition
+- SCOPED borrow-acceptance is unit-tested but not fully exercisable e2e for
+  `conc.scope`-shaped APIs yet: current type-checker function-pointer coercion
+  rejects capturing lambdas in generic `Fn1`-bounded callback positions before
+  borrow-checker scope validation runs. This requires a separate type-checker
+  / coercion work item and is not part of Phase 5.
 
 ---
 

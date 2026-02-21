@@ -925,6 +925,36 @@ def test_scoped_spawn_nested_block_false_positive():
 	assert any(d.code == "E_ESCAPE_SCOPE" and d.phase == "borrow_check" for d in bc.diagnostics), bc.diagnostics
 
 
+def test_scoped_spawn_assigned_before_scope_accepted():
+	"""Phase 4 HAssign fix: x assigned (not let-bound) in the direct block before the scope call → accepted.
+
+	Models:
+	    var x: Int          // declared in a predecessor block (not in current BasicBlock)
+	    x = 42              // HAssign in current block before scope call
+	    val r = &x
+	    conc.scope(|_s| captures(ref r) => { ... })
+
+	Before the HAssign fix: _place_is_defined_before_stmt only checks HLet, so x is not found
+	→ false positive E_ESCAPE_SCOPE.
+	After the HAssign fix: HAssign to x is detected → True → no error.
+	"""
+	x_id, r_id = 1, 2
+	block_stmts = [
+		# HAssign for x (declared in predecessor block, assigned here before scope call)
+		H.HAssign(
+			target=H.HPlaceExpr(base=H.HVar(name="x", binding_id=x_id)),
+			value=H.HLiteralInt(42),
+		),
+		H.HLet(name="r", value=H.HBorrow(subject=H.HVar(name="x", binding_id=x_id), is_mut=False), binding_id=r_id, is_mutable=False),
+		# scope call conceptually at stmt index 2
+	]
+	bc, state, lam, place_x = _make_scope_checker_with_loan(x_id, r_id, block_stmts)
+	bc._current_stmt_index = 2
+	bc._current_block_stmts = block_stmts
+	bc._check_lambda_escape_level(lam, state, EscapeLevel.SCOPED, Span())
+	assert not any(d.severity == "error" for d in bc.diagnostics), bc.diagnostics
+
+
 def test_registry_set_dropper_static_annotation_rejected():
 	"""runtime_registry_set param 2 annotated STATIC; borrowed-capture lambda at index 2 → E_ESCAPE_STATIC."""
 	table = TypeTable()

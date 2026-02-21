@@ -274,10 +274,80 @@ borrowed_capture_interface_coercion_rejected e2e: ok (type-checker owned, phase=
 | `lang/tests/codegen/e2e/implicit_callback_borrowed_capture_rejected/expected.json` | Updated to borrow_check phase + E_ESCAPE_THREAD message |
 | `lang/tests/codegen/e2e/borrow_escape_spawn_rejected/` | New e2e test (main.drift + expected.json) |
 
+## Phase 4 — COMPLETE (2026-02-21)
+
+**Goal:** Implement real SCOPED scope-lifetime reasoning. Remove the SCOPED→LOCAL conservative bridge.
+
+**Changes landed:**
+
+- `lang/driftc/borrow_checker_pass.py`:
+  - Added `_current_stmt_index: Optional[int]` and `_current_block_stmts: Optional[list]` fields to `BorrowChecker`.
+  - Updated `_transfer_block` to save/restore these fields per-statement during block traversal.
+  - Added `E_ESCAPE_SCOPE` branch in `_report_escape_violation` (fires when `required >= SCOPED and < THREAD`).
+  - Added `_place_is_defined_before_stmt(place, stmt_index, block_stmts) -> bool` — conservative syntactic check: returns True if place is a PARAM, or was HLet-bound before `stmt_index` in the direct enclosing BasicBlock's statements. Only checks the direct block (MVP §3.6).
+  - Added `_check_lambda_scope_escape(lam, state, stmt_index, block_stmts, span) -> bool` — for each active loan whose ref_binding_id is a captured borrow, checks place validity in state and `_place_is_defined_before_stmt`. Emits E_ESCAPE_SCOPE on failure.
+  - Modified `_check_lambda_escape_level`: when `required == SCOPED and lambda_level == LOCAL and _current_stmt_index is not None`, calls `_check_lambda_scope_escape` before deciding to emit an error. If the scope check passes, adds capture loans and returns without error.
+
+- `lang/driftc/checker/__init__.py`:
+  - Removed SCOPED→LOCAL conservative bridge from `effective_param_escape_level`. SCOPED is now returned as-is.
+
+- `lang/tests/borrow_checker/test_escape_level_model.py`:
+  - Updated Phase 3a test from `test_scope_outer_closure_annotated_scoped_but_effective_local` to `test_scope_outer_closure_annotated_scoped_returns_scoped` (bridge removed; asserts SCOPED, not LOCAL).
+  - Added 3 new Phase 4 regression tests (written before implementation):
+    - `test_scoped_spawn_with_outlying_borrow_accepted` — borrow defined before scope call → no error
+    - `test_scoped_spawn_with_non_outlying_borrow_rejected` — borrow NOT defined before scope call → E_ESCAPE_SCOPE
+    - `test_scoped_spawn_nested_block_false_positive` — borrow in predecessor block (conservative) → E_ESCAPE_SCOPE
+
+- `lang/tests/codegen/e2e/borrow_escape_scope_accepted/` (new e2e test):
+  - `main.drift`: nothrow lambda `|_s: std.concurrent.Scope| nothrow => { return; }` passed to `conc.scope`; wrapped in `try { } catch e { }` to handle scope's non-nothrow throw signature; exits 0.
+  - `expected.json`: exit_code 0, no stderr/stdout.
+  - **Note on design:** The type checker's function-pointer coercion path rejects any capturing lambda (even `captures(copy x)`) when passed to a generic `F is Fn1<A, R>` parameter. This means borrow-capturing lambdas passed to `conc.scope` are rejected before the borrow checker runs. The e2e test therefore uses a captureless lambda; the SCOPED borrow acceptance path (the key Phase 4 outcome) is fully covered by the 3 unit tests above. The e2e test validates the end-to-end pipeline (parse → type-check → borrow-check → codegen → run) for the `conc.scope` code path.
+
+**Checkpoint result (2026-02-21):**
+```
+lang/tests/borrow_checker/: 88 passed (21 in test_escape_level_model.py)
+lang/tests/driver/test_explicit_capture_diagnostics.py: 10/10 passed
+lang/tests/driver/test_callinfo_param_layout_contract.py: 11/11 passed
+§9 high-sensitivity subset:
+  test_escape_level_model.py: 21/21 pass
+  test_invoke_optional_ref_and_lambda_escape.py: pass
+  test_lambda_capture_borrow_overlap.py: pass
+  test_lambda_capture_borrow_overlap_method.py: pass
+Phase 4 e2e quartet:
+  borrow_escape_scope_accepted: ok
+  borrow_escape_spawn_rejected: ok
+  result_ok_move_conn_source_drop_regression: ok
+  struct_ref_field_result_ok_move_drop_once: ok
+```
+
+---
+
+## Phase 4 — Post-review fix: HAssign in _place_is_defined_before_stmt (2026-02-21)
+
+**Reviewer finding:** todo.md spec said "let or assignment"; implementation only checked HLet.
+False positive: `var x` declared in a predecessor block but assigned in the current block before
+the scope call was incorrectly rejected with E_ESCAPE_SCOPE.
+
+**Fix (regression-first):**
+- New test `test_scoped_spawn_assigned_before_scope_accepted` added to `test_escape_level_model.py`
+  (confirmed fails before fix, passes after).
+- `_place_is_defined_before_stmt` in `borrow_checker_pass.py`: added HAssign branch —
+  if `stmt` is an HAssign to a simple local (no projections) with matching binding_id,
+  treat as a definition (return True).
+- Docstring updated to say "let-bound or assigned to".
+
+**Checkpoint (2026-02-21):**
+```
+lang/tests/borrow_checker/: 89 passed (22 in test_escape_level_model.py)
+Phase 4 e2e quartet: all ok (unchanged)
+```
+
+---
+
 ## Known limitations / hand-off items
 
-1. **Phase 4 (SCOPED scope reasoning) not implemented.** `effective_param_escape_level` maps SCOPED→LOCAL conservatively. The `std.concurrent::scope` param is annotated SCOPED, which means borrowed-capture lambdas passed to `scope` will be treated as LOCAL (accepted if they were otherwise LOCAL-safe). Full SCOPED validation requires Phase 4's `_place_is_defined_before_stmt` algorithm.
+1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). For the borrow checker's SCOPED acceptance to be exercisable end-to-end, the type checker needs to accept capturing lambdas in `Fn1`-bounded generic positions. This is a type system extension beyond Phase 4.
 
 2. **`param_nonretaining` not removed.** Full migration is Phase 5. The `effective_param_escape_level` bridge handles it.
 
-3. **HashMap/TreeMap/Deque iteration callbacks not annotated.** The spec mentions these as Phase 3b targets, but they currently use `param_nonretaining=True` set by `analyze_non_retaining_params` dynamically. The `effective_param_escape_level` bridge maps `param_nonretaining=True` → LOCAL, so they behave correctly without explicit `param_escape_level` annotations.
+3. **`_place_is_defined_before_stmt` is conservative (MVP §3.6).** Borrows defined in predecessor/nested blocks are rejected even if provably safe. Full dataflow-based lifetime reasoning is deferred.
