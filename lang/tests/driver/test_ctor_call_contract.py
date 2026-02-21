@@ -41,6 +41,14 @@ def test_ctor_call_issues_missing_field() -> None:
 	assert "z" in missing[0].message
 
 
+def test_ctor_call_issues_mixed_args() -> None:
+	"""Positional + named → E_CTOR_MIXED_ARGS."""
+	issues = ctor_call_issues(2, ("z",), _POINT, ctor_label="struct", span=Span())
+	assert len(issues) == 1
+	assert issues[0].code == "E_CTOR_MIXED_ARGS"
+	assert "mixing positional and named" in issues[0].message
+
+
 def test_ctor_call_issues_valid_positional_passes() -> None:
 	"""Correct positional → empty."""
 	issues = ctor_call_issues(3, (), _POINT, ctor_label="struct", span=Span())

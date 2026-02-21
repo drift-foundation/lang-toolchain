@@ -2414,8 +2414,10 @@ class HIRToMIR:
 				info = self._call_info_from_ufcs(expr)
 			if info is None:
 				raise AssertionError("missing CallInfo for qualified member call (checker bug)")
-			if getattr(expr, "kwargs", None) and info.target.kind is not CallTargetKind.CONSTRUCTOR:
-				raise AssertionError("keyword arguments reached MIR lowering for a UFCS call (checker bug)")
+			if info.target.kind is not CallTargetKind.CONSTRUCTOR:
+				_kw_issues = call_kwargs_issues("UFCS call", getattr(expr, "kwargs", None))
+				if _kw_issues:
+					raise AssertionError(f"{_kw_issues[0].message} reached MIR lowering")
 			if info.target.kind is CallTargetKind.INTRINSIC:
 				intrinsic = info.target.intrinsic
 				if intrinsic is None:
@@ -2460,7 +2462,7 @@ class HIRToMIR:
 					if struct_ty is not None:
 						info = None
 			if info is not None:
-				if getattr(expr, "kwargs", None) and info.target.kind is not CallTargetKind.CONSTRUCTOR:
+				if info.target.kind is not CallTargetKind.CONSTRUCTOR and call_kwargs_issues("a normal call", getattr(expr, "kwargs", None)):
 					cur_mod = self._current_module_name()
 					fn_module = getattr(expr.fn, "module_id", None)
 					if isinstance(fn_module, str):
@@ -2470,7 +2472,8 @@ class HIRToMIR:
 							kind=TypeKind.STRUCT, name=name
 						)
 					if struct_ty is None:
-						raise AssertionError("keyword arguments reached MIR lowering for a normal call (checker bug)")
+						_kw_issues = call_kwargs_issues("a normal call", getattr(expr, "kwargs", None))
+						raise AssertionError(f"{_kw_issues[0].message} reached MIR lowering")
 					info = None
 				if info is not None:
 					result = self._lower_call_with_info(expr, info)

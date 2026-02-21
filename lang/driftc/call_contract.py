@@ -331,12 +331,14 @@ def ctor_call_issues(
 				issues.append(CallContractIssue(
 					code="E_CTOR_UNKNOWN_FIELD",
 					message=f"unknown {ctor_label} ctor field '{name}' (checker bug)",
+					notes=(f"field={name}",),
 					span=_span,
 				))
 			elif name in seen:
 				issues.append(CallContractIssue(
 					code="E_CTOR_DUPLICATE_FIELD",
 					message=f"duplicate {ctor_label} ctor field '{name}' (checker bug)",
+					notes=(f"field={name}",),
 					span=_span,
 				))
 			else:
@@ -347,6 +349,7 @@ def ctor_call_issues(
 			issues.append(CallContractIssue(
 				code="E_CTOR_MISSING_FIELDS",
 				message=f"missing {ctor_label} ctor field(s): {', '.join(missing)} (checker bug)",
+				notes=tuple(f"field={f}" for f in missing),
 				span=_span,
 			))
 	else:

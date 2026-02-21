@@ -82,6 +82,98 @@ Immediate A1 follow-ups from review (must fix):
    - Add positive driver/e2e regression proving named constructor kwargs still pass through typed MIR constructor lowering.
    - Add negative regression proving mixed positional+named constructor args fail with clear non-internal contract diagnostic.
 
+### A1 Slice 3 — next concrete scope
+
+Goal: eliminate remaining duplicated call-shape logic outside `call_contract.py` for normal/method call argument layout checks.
+
+Required migration targets:
+1. Normal call argument layout checks still duplicated in checker/stage2:
+   - positional vs named mapping consistency,
+   - unknown keyword handling,
+   - duplicate keyword handling.
+2. Method call receiver-offset layout checks duplicated outside seam:
+   - parameter index/receiver offset consistency,
+   - method-call named argument mapping with receiver slot offset.
+3. Keep type-compatibility checks in checker (`check_call_signature`) untouched unless explicitly moved as a separate slice.
+
+Implementation rules for Slice 3:
+1. Add/extend `call_contract.py` APIs for the migrated layout checks (decision-only; no user-facing formatting).
+2. Replace old duplicate checks in checker/stage2 with calls to these APIs.
+3. Remove old duplicate branches immediately after migration (no dual-path).
+4. Route diagnostics through existing boundary wrappers with correct phase attribution.
+
+Slice 3 regression requirements (mandatory):
+1. Positive:
+   - valid mixed positional+named normal call shape compiles,
+   - valid method call shape with receiver offset compiles.
+2. Negative:
+   - duplicate keyword rejected,
+   - unknown keyword rejected,
+   - receiver offset/param-layout mismatch rejected with clear non-internal diagnostic.
+3. Diagnostic assertions:
+   - diagnostic code present and stable,
+   - phase is correct,
+   - span file/line/column present when source exists,
+   - message does not start with `internal:`.
+
+Slice 3 done-when checklist:
+- [ ] Migrated checks are centralized in `call_contract.py` and removed from ad-hoc call sites.
+- [ ] Positive + negative regressions for all migrated shapes are present.
+- [ ] Existing high-sensitivity subset remains green.
+- [ ] `work-progress.md` includes Slice 3 inventory/migration/test matrix with commit refs.
+
+Slice 3 validation commands:
+```
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_callinfo_param_layout_contract.py \
+    lang/tests/driver/test_intrinsic_call_contract.py \
+    lang/tests/driver/test_ctor_call_contract.py \
+    lang/tests/driver/test_array_method_contract.py \
+    -q
+
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
+    lang/tests/driver/test_struct_ref_field_boundary_contract.py \
+    -q
+
+just test-shard-1
+just test-shard-2
+```
+
+### Next candidate (gated, assessment-only): Fn1 coercion/type-check extension for SCOPED borrowed captures
+
+Purpose:
+- Evaluate feasibility of enabling the user scenario:
+  - capturing lambda with borrowed captures passed through `conc.scope`/`Fn1`-bounded generic callback path,
+  - so SCOPED acceptance is decided by borrow checker scope rules instead of being blocked in type-check coercion.
+
+Hard gate (must be true before any work starts):
+1. All prior A1 slices and agreed cleanup steps are complete and signed off.
+2. A1 regression matrix + high-sensitivity subset are green.
+3. Owner explicitly confirms this item is next.
+
+Important:
+- This section is **not** an implementation instruction.
+- Klaudia's immediate task is assessment only (scope + plan + risk), no code changes.
+
+Assessment deliverable required from Klaudia (before any coding):
+1. Scope analysis:
+   - exact checker/coercion paths to change for `Fn1`-bounded generic callback acceptance,
+   - how escape metadata is preserved/handed off to borrow checker.
+2. Risk analysis:
+   - regression risks to existing ownership boundaries (`spawn`, explicit `callback0(...)` coercion path, trait-object defaults).
+3. Test plan (regression-first):
+   - proposed positive/negative cases for SCOPED accept/reject,
+   - non-regression set that must remain green.
+4. Rollout plan:
+   - phased implementation slices,
+   - clear go/no-go criteria per slice.
+
+Go/no-go review checkpoint:
+- Team reviews Klaudia's assessment.
+- If all parties agree, item can be green-lit and converted into an implementation plan section.
+- If not, keep deferred with documented blockers.
+
 ---
 
 ## Appendix: Historical A5 Plan and Execution (Archived)
