@@ -5225,6 +5225,41 @@ def resolve_call_expr(
 		if ctx.record_call_resolution is not None:
 			ctx.record_call_resolution(expr, decl)
 		if sig_inst is not None:
+			# Precompute which param indices have Fn*-trait bounds so TP4
+			# can keep allow_capture_invoke=True only for those params.
+			_fn_bounded_params: set[int] = set()
+			if decl.fn_id is not None:
+				_req_pre = _require_for_fn(decl.fn_id)
+				if _req_pre is not None:
+					_sig_pre = ctx.signatures_by_id.get(decl.fn_id) if ctx.signatures_by_id is not None else None
+					_ptids_pre = list(getattr(_sig_pre, "param_type_ids", []) or []) if _sig_pre is not None else None
+					_FN_TRAITS = {"Fn0", "Fn1", "Fn2", "FnThrow0", "FnThrow1", "FnThrow2"}
+					if _ptids_pre is not None:
+						for _atom in _extract_conjunctive_facts(_req_pre):
+							if not isinstance(_atom, parser_ast.TraitIs):
+								continue
+							if getattr(_atom.trait, "name", None) not in _FN_TRAITS:
+								continue
+							_sn = _subject_name(_atom.subject)
+							_sid = _atom.subject if isinstance(_atom.subject, TypeParamId) else None
+							if _sn is None and _sid is None:
+								continue
+							for _pi, _tid in enumerate(_ptids_pre):
+								_td = ctx.type_table.get(_tid)
+								if _td.kind is not TypeKind.TYPEVAR:
+									continue
+								_tp_id = _td.type_param_id
+								if _sid is not None and _tp_id == _sid:
+									_fn_bounded_params.add(_pi)
+									break
+								if _sn is not None:
+									if ctx.type_param_names and _tp_id in ctx.type_param_names and ctx.type_param_names[_tp_id] == _sn:
+										_fn_bounded_params.add(_pi)
+										break
+									for _tp in list(getattr(_sig_pre, "type_params", []) or []):
+										if _tp.id == _tp_id and _tp.name == _sn:
+											_fn_bounded_params.add(_pi)
+											break
 			for idx, arg in enumerate(expr.args):
 				if not isinstance(arg, H.HLambda):
 					continue
@@ -5234,7 +5269,12 @@ def resolve_call_expr(
 				param_def = ctx.type_table.get(param_ty)
 				if param_def.kind is not TypeKind.FUNCTION:
 					continue
-				arg.allow_capture_invoke = False
+				# For Fn-trait-bounded generic params with borrowed captures,
+				# keep allow_capture_invoke=True so the borrow checker validates
+				# escape level via the SCOPED promotion path.
+				_has_ref_caps = getattr(arg, "explicit_captures", None) and any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
+				if not (_has_ref_caps and idx in _fn_bounded_params):
+					arg.allow_capture_invoke = False
 				arg.expected_fn_inferred = True
 				arg.expected_type_from_require = param_ty
 				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
@@ -5308,7 +5348,11 @@ def resolve_call_expr(
 							]
 							ret_ty = resolve_opaque_type(trait_args[2], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
 						arg_expected_type = ctx.type_table.ensure_function(param_tys, ret_ty, can_throw=can_throw)
-						arg.allow_capture_invoke = False
+						# For Fn-trait-bounded params with borrowed captures,
+						# keep allow_capture_invoke=True (borrow checker validates escape).
+						_has_ref_caps_tp5 = getattr(arg, "explicit_captures", None) and any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
+						if not _has_ref_caps_tp5:
+							arg.allow_capture_invoke = False
 						arg.expected_fn_inferred = True
 						arg.expected_type_from_require = arg_expected_type
 						arg_types[param_idx] = type_expr(arg, expected_type=arg_expected_type, used_as_value=False)

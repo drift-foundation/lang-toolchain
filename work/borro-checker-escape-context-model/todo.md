@@ -10,7 +10,8 @@ Status: A5 complete; this file now serves as active post-A5 guidance plus archiv
 
 Current priority:
 - **A1**: complete. `call_contract.py` is the single validation seam (Slices 1-4 done).
-- **Next (Klaudia):** start the **assessment-only** “Next candidate” below (no compiler code changes yet), then stop for review.
+- **F1**: complete (Fn-bounded borrowed-capture gate relaxation landed and narrowed with negative regression).
+- **Next (Klaudia):** execute **F2 e2e validation** and report go/no-go.
 
 A1 execution spec (expected compiler infra changes):
 1. Build an explicit inventory table of duplicated call-shape checks, with current owner + target owner:
@@ -178,12 +179,10 @@ PYTHONPATH=. ./.venv/bin/python3 -m pytest \
     -q
 ```
 
-### Next candidate (gated, assessment-only): Fn1 coercion/type-check extension for SCOPED borrowed captures
+### Next candidate: Fn1 SCOPED borrowed-capture F2 e2e validation
 
 Purpose:
-- Evaluate feasibility of enabling the user scenario:
-  - capturing lambda with borrowed captures passed through `conc.scope`/`Fn1`-bounded generic callback path,
-  - so SCOPED acceptance is decided by borrow checker scope rules instead of being blocked in type-check coercion.
+- Validate end-to-end (MIR + LLVM + runtime behavior) after F1, and close remaining e2e coverage gaps.
 
 Hard gate (must be true before any work starts):
 1. All prior A1 slices and agreed cleanup steps are complete and signed off.
@@ -191,55 +190,55 @@ Hard gate (must be true before any work starts):
 3. Owner explicitly confirms this item is next.
 
 Important:
-- Owner-approved mode: **fast path** (higher regression risk accepted), with strict regression-first gates.
-- Compiler changes are allowed in `type_checker.py` and/or `checker/call_resolver.py` if required by the chosen approach.
-- No stdlib/user-code workaround changes are allowed to mask compiler defects.
+- F1 compiler change is already in; F2 is primarily validation + targeted e2e additions.
+- Keep regression-first for any newly discovered LANGUAGE_BUG.
+- No stdlib/user-code workaround changes to mask compiler defects.
 
-Start-here instructions for Klaudia (implementation allowed):
-1. Keep the existing assessment section in `work/borro-checker-escape-context-model/work-progress.md` and add an `Implementation (fast path)` subsection.
-2. Land the first minimal failing regression before code changes:
-   - `scope` + borrowed capture through `Fn1`-bounded generic path fails today (pinned test).
-3. Implement the smallest viable fix path (resolver and/or type-check coercion gate), then immediately rerun:
-   - new failing regression,
-   - A5 boundary trio and callback coercion regressions.
-4. If first fix fails due to generic unification/call-shape issues, add a second pinned regression for that failure class before the next code change.
-5. Stop after slice F1 with updated results and risk notes in `work-progress.md`.
+Start-here instructions for Klaudia (F2):
+1. Add missing F2 e2e tests listed in `work-progress.md` (planned tests 3–7), with regression-first flow per test.
+2. Prioritize:
+   - `conc.scope` + borrowed capture accepted through full codegen/runtime.
+   - `conc.spawn` + borrowed capture still rejected with `E_ESCAPE_THREAD`.
+   - non-outliving SCOPED borrow rejected with `E_ESCAPE_SCOPE`.
+3. Re-run the non-regression matrix already pinned for A5/A1 boundary safety.
+4. Record exact pass/fail results and any newly discovered compiler defects in `work-progress.md`, then stop for review.
 
-Deliverable required from Klaudia for fast-path slice F1:
+Deliverable required from Klaudia for F2:
 1. Scope analysis:
    - exact checker/coercion paths to change for `Fn1`-bounded generic callback acceptance,
    - how escape metadata is preserved/handed off to borrow checker.
 2. Risk analysis:
    - regression risks to existing ownership boundaries (`spawn`, explicit `callback0(...)` coercion path, trait-object defaults).
-3. Regression-first test plan and results:
-   - positive SCOPED accept case,
-   - negative SCOPED reject case,
-   - THREAD reject remains enforced,
-   - callback/interface coercion safety path remains enforced.
+3. Regression-first test results:
+   - positive SCOPED accept e2e,
+   - negative SCOPED reject e2e,
+   - THREAD reject e2e still enforced,
+   - callback/interface coercion safety path still enforced.
 4. Rollout status:
-   - what landed in F1,
-   - what remains for F2,
-   - explicit go/no-go recommendation.
+   - what landed in F2,
+   - remaining gaps (if any),
+   - explicit go/no-go recommendation for closure.
 
-Mandatory regression matrix for F1 (must be green):
-1. New pinned regression for the target scenario (failing first, passing after fix).
+Mandatory regression matrix for F2 (must be green):
+1. Existing F1 driver regressions in `lang/tests/driver/test_fn1_scope_borrowed_capture.py`.
 2. `lang/tests/borrow_checker/test_escape_level_model.py`
 3. `lang/tests/codegen/e2e/runner.py -j4 borrow_escape_spawn_rejected borrow_escape_scope_accepted borrow_escape_thread_accepted implicit_callback_borrowed_capture_rejected borrowed_capture_interface_coercion_rejected`
 4. `lang/tests/driver/test_callinfo_param_layout_contract.py`
 5. `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
 6. `lang/tests/driver/test_struct_ref_field_boundary_contract.py`
 7. `lang/tests/driver/test_call_contract_ownership_guard.py`
+8. New F2 e2e tests added for planned cases 3–7 in `work-progress.md`.
 
-F1 tracking instruction (Klaudia):
-1. Before coding, copy the checklist template below into `work/borro-checker-escape-context-model/work-progress.md` under `Implementation (fast path)`.
+F2 tracking instruction (Klaudia):
+1. Copy/update a checklist block in `work/borro-checker-escape-context-model/work-progress.md` under a new `F2 Implementation` section.
 2. Update each checkbox and command result in that copied block as work proceeds.
 3. Keep the template in `todo.md` unchanged; progress lives in `work-progress.md`.
 
-F1 checklist template (copy to `work-progress.md`):
-- [ ] Added minimal failing regression for Fn1-bounded SCOPED borrowed-capture scenario (include file path + failing output).
-- [ ] Confirmed regression fails on current branch before fix.
-- [ ] Implemented smallest viable compiler fix (list touched files/functions).
-- [ ] Confirmed new regression passes after fix.
+F2 checklist template (copy to `work-progress.md`):
+- [ ] Added/updated F2 e2e test for SCOPED borrowed-capture accept (full codegen/runtime).
+- [ ] Added/updated F2 e2e test for SCOPED borrowed-capture non-outliving reject (`E_ESCAPE_SCOPE`).
+- [ ] Added/updated F2 e2e test for THREAD borrowed-capture reject (`E_ESCAPE_THREAD`).
+- [ ] Confirmed `lang/tests/driver/test_fn1_scope_borrowed_capture.py` passes.
 - [ ] Confirmed `test_escape_level_model.py` passes.
 - [ ] Confirmed A5 e2e boundary set passes:
   - `borrow_escape_spawn_rejected`
@@ -253,11 +252,11 @@ F1 checklist template (copy to `work-progress.md`):
   - `test_struct_ref_field_boundary_contract.py`
   - `test_call_contract_ownership_guard.py`
 - [ ] Documented any newly discovered regressions with minimal repro + subsystem guess.
-- [ ] Added F1 go/no-go recommendation (proceed to F2 or stop with blockers).
+- [ ] Added F2 go/no-go recommendation (close item or stop with blockers).
 
 Go/no-go review checkpoint:
-- Team reviews F1 implementation output and regression matrix.
-- If green, proceed to F2 coverage/cleanup.
+- Team reviews F2 implementation output and regression matrix.
+- If green, close this Fn1 SCOPED borrowed-capture item.
 - If not green, pause and document blocker regressions before additional code changes.
 
 ---
