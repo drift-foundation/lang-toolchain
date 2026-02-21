@@ -1,3 +1,22 @@
+## 2026-02-21 - A1 completed: call-shape validation centralized in `call_contract.py`
+- Completed A1 refactor so call-shape validation decisions are centralized in `lang/driftc/call_contract.py` across intrinsic calls, constructor shape, array method arity, generic kwargs rejection, and structural CallInfo checks.
+- Migrated duplicated validation branches from checker/stage2 to shared contract APIs:
+  - `intrinsic_call_issues(...)`
+  - `ctor_call_issues(...)`
+  - `array_method_arity_issues(...)`
+  - `call_kwargs_issues(...)`
+- Fixed constructor-kwargs regression in stage2 lowering:
+  - `lang/driftc/stage2/hir_to_mir.py::_lower_constructor_call` now validates constructor kwargs via ctor contract path instead of generic kwargs rejection.
+  - Added/updated regressions in `lang/tests/driver/test_ctor_kwargs_mir_regression.py`.
+- Finalized A1 Slice 4 residual cleanup:
+  - `lang/driftc/checker/call_resolver.py`: lambda kwargs rejection delegated to `call_kwargs_issues(...)`; array arity local map aligned with `ARRAY_METHOD_ARITY_TABLE`.
+  - `lang/driftc/stage2/hir_to_mir.py`: method kwargs assertion delegated to `call_kwargs_issues(...)`.
+- Added anti-regression ownership guard:
+  - `lang/tests/driver/test_call_contract_ownership_guard.py` prevents re-introduction of ad-hoc call-shape validation patterns outside the contract seam.
+- Outcome:
+  - A1 ownership map is now explicit in `work/borro-checker-escape-context-model/work-progress.md`.
+  - User-facing diagnostic wording remains stable while decision logic is centralized.
+
 ## 2026-02-21 - Borrow checker escape context model Phase 5 completed (A5 final)
 - Completed A5 Phase 5 cleanup and removed the `FnSignature.param_nonretaining` bridge; compiler now uses `param_escape_level` as the single source of escape-boundary truth.
 - Migrated remaining compiler paths to `param_escape_level`:

@@ -191,43 +191,74 @@ Hard gate (must be true before any work starts):
 3. Owner explicitly confirms this item is next.
 
 Important:
-- This section is **not** an implementation instruction.
-- Klaudia's immediate task is assessment only (scope + plan + risk), no code changes.
+- Owner-approved mode: **fast path** (higher regression risk accepted), with strict regression-first gates.
+- Compiler changes are allowed in `type_checker.py` and/or `checker/call_resolver.py` if required by the chosen approach.
+- No stdlib/user-code workaround changes are allowed to mask compiler defects.
 
-Start-here instructions for Klaudia (assessment-only):
-1. Create/update a dedicated assessment section in `work/borro-checker-escape-context-model/work-progress.md` titled:
-   - `Fn1 SCOPED Borrowed-Capture Assessment (no-code)`
-2. Produce a concrete path map with file/function anchors for the likely coercion/type-check touch points:
-   - `lang/driftc/type_checker.py`
-   - `lang/driftc/checker/call_resolver.py`
-   - `lang/driftc/checker/__init__.py`
-   - any other path discovered during analysis.
-3. Explicitly classify each touch point as one of:
-   - acceptance gate,
-   - metadata propagation,
-   - borrow-check enforcement dependency,
-   - out-of-scope/deferred.
-4. Propose a phased implementation plan (slice-by-slice) with go/no-go criteria per slice.
-5. List exact regression tests to add (positive + negative) and exact non-regression suites to run.
-6. Stop after writing the assessment and proposed plan; do not modify compiler behavior in this step.
+Start-here instructions for Klaudia (implementation allowed):
+1. Keep the existing assessment section in `work/borro-checker-escape-context-model/work-progress.md` and add an `Implementation (fast path)` subsection.
+2. Land the first minimal failing regression before code changes:
+   - `scope` + borrowed capture through `Fn1`-bounded generic path fails today (pinned test).
+3. Implement the smallest viable fix path (resolver and/or type-check coercion gate), then immediately rerun:
+   - new failing regression,
+   - A5 boundary trio and callback coercion regressions.
+4. If first fix fails due to generic unification/call-shape issues, add a second pinned regression for that failure class before the next code change.
+5. Stop after slice F1 with updated results and risk notes in `work-progress.md`.
 
-Assessment deliverable required from Klaudia (before any coding):
+Deliverable required from Klaudia for fast-path slice F1:
 1. Scope analysis:
    - exact checker/coercion paths to change for `Fn1`-bounded generic callback acceptance,
    - how escape metadata is preserved/handed off to borrow checker.
 2. Risk analysis:
    - regression risks to existing ownership boundaries (`spawn`, explicit `callback0(...)` coercion path, trait-object defaults).
-3. Test plan (regression-first):
-   - proposed positive/negative cases for SCOPED accept/reject,
-   - non-regression set that must remain green.
-4. Rollout plan:
-   - phased implementation slices,
-   - clear go/no-go criteria per slice.
+3. Regression-first test plan and results:
+   - positive SCOPED accept case,
+   - negative SCOPED reject case,
+   - THREAD reject remains enforced,
+   - callback/interface coercion safety path remains enforced.
+4. Rollout status:
+   - what landed in F1,
+   - what remains for F2,
+   - explicit go/no-go recommendation.
+
+Mandatory regression matrix for F1 (must be green):
+1. New pinned regression for the target scenario (failing first, passing after fix).
+2. `lang/tests/borrow_checker/test_escape_level_model.py`
+3. `lang/tests/codegen/e2e/runner.py -j4 borrow_escape_spawn_rejected borrow_escape_scope_accepted borrow_escape_thread_accepted implicit_callback_borrowed_capture_rejected borrowed_capture_interface_coercion_rejected`
+4. `lang/tests/driver/test_callinfo_param_layout_contract.py`
+5. `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
+6. `lang/tests/driver/test_struct_ref_field_boundary_contract.py`
+7. `lang/tests/driver/test_call_contract_ownership_guard.py`
+
+F1 tracking instruction (Klaudia):
+1. Before coding, copy the checklist template below into `work/borro-checker-escape-context-model/work-progress.md` under `Implementation (fast path)`.
+2. Update each checkbox and command result in that copied block as work proceeds.
+3. Keep the template in `todo.md` unchanged; progress lives in `work-progress.md`.
+
+F1 checklist template (copy to `work-progress.md`):
+- [ ] Added minimal failing regression for Fn1-bounded SCOPED borrowed-capture scenario (include file path + failing output).
+- [ ] Confirmed regression fails on current branch before fix.
+- [ ] Implemented smallest viable compiler fix (list touched files/functions).
+- [ ] Confirmed new regression passes after fix.
+- [ ] Confirmed `test_escape_level_model.py` passes.
+- [ ] Confirmed A5 e2e boundary set passes:
+  - `borrow_escape_spawn_rejected`
+  - `borrow_escape_scope_accepted`
+  - `borrow_escape_thread_accepted`
+  - `implicit_callback_borrowed_capture_rejected`
+  - `borrowed_capture_interface_coercion_rejected`
+- [ ] Confirmed boundary guard/contract tests pass:
+  - `test_callinfo_param_layout_contract.py`
+  - `test_boundary_matrix_result_variant_contract.py`
+  - `test_struct_ref_field_boundary_contract.py`
+  - `test_call_contract_ownership_guard.py`
+- [ ] Documented any newly discovered regressions with minimal repro + subsystem guess.
+- [ ] Added F1 go/no-go recommendation (proceed to F2 or stop with blockers).
 
 Go/no-go review checkpoint:
-- Team reviews Klaudia's assessment.
-- If all parties agree, item can be green-lit and converted into an implementation plan section.
-- If not, keep deferred with documented blockers.
+- Team reviews F1 implementation output and regression matrix.
+- If green, proceed to F2 coverage/cleanup.
+- If not green, pause and document blocker regressions before additional code changes.
 
 ---
 

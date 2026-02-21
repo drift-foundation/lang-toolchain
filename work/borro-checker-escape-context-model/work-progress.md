@@ -1,251 +1,361 @@
-# A5 Execution Notes — COMPLETE (2026-02-21)
+# Borrow Checker Escape Context Model — Work Progress
 
-All phases (0–5) implemented. Review checklist satisfied. Ready for owner sign-off.
-
----
-
-## Files changed (all phases)
-
-| File | Change |
-|------|--------|
-| `lang/driftc/borrow_checker.py` | Added `EscapeLevel(IntEnum)` enum; `max_escape: EscapeLevel = EscapeLevel.LOCAL` on `Loan` |
-| `lang/driftc/borrow_checker_pass.py` | `_clone_loans_from_ref` propagates `max_escape`; added `_captured_loan_binding_ids`, `_lambda_escape_level`, `_report_escape_violation` (E_ESCAPE_THREAD/SCOPE/STATIC/STORE), `_check_lambda_escape_level`, `_check_lambda_scope_escape`, `_place_is_defined_before_stmt` (HLet+HAssign), `_current_stmt_index`/`_current_block_stmts` fields, `_free_fn_escape_sig` cache + `_resolve_sig_for_call` fallback, `_is_callback_wrapper_call`, `_unwrap_callback_lambda`, HLet+HReturn v0 blanket escape check; replaced call-site dispatch in HCall/HMethodCall/HInvoke; removed `param_nonretaining` at 3 sites |
-| `lang/driftc/checker/__init__.py` | Added `param_escape_level` field and `effective_param_escape_level(i)` to `FnSignature`; removed SCOPED→LOCAL bridge; removed `param_nonretaining` field and fallback |
-| `lang/driftc/driftc.py` | Added `_STDLIB_ESCAPE_ANNOTATIONS` injection step (spawn/scope/vt_spawn/registry → THREAD/SCOPED/STATIC); removed callback0/1/2 entries after Phase 3c BLOCKER resolution |
-| `lang/driftc/stage1/lambda_validate.py` | Removed item 2 (escape enforcement); item 1 (capture discovery) only |
-| `lang/driftc/checker/call_resolver.py` | `_is_implicit_wrap=True` at 4 synthesis sites; borrow-capture guard in callback0 handler (typecheck-phase rejection for user-written `callback0(borrow_lambda)`) |
-| `lang/driftc/type_resolver.py` | Removed `param_nonretaining` local variable, param loop append, CALLBACK special case, constructor arg |
-| `lang/driftc/type_checker.py` | `_nonretaining_param_state`: reads `param_escape_level`; IMMEDIATE/LOCAL/SCOPED → True, THREAD/STATIC → False |
-| `lang/driftc/stage1/non_retaining_analysis.py` | Added `_pel_to_nr` + `_build_pel` helpers; writes `param_escape_level` instead of `param_nonretaining`; IMMEDIATE/LOCAL → True, THREAD/STATIC → False, SCOPED/None → None; `_build_pel` preserves stricter pre-seeded levels, clears stale ones on `v is False` |
-| `lang/tests/borrow_checker/test_escape_level_model.py` | New: 22 tests (Phases 0–4); see inventory below |
-| `lang/tests/stage1/test_lambda_validation.py` | Deleted 9 item-2 tests + 2 helpers; 7 item-1 tests retained |
-| `lang/tests/stage1/test_non_retaining_function_params.py` | Updated 4 assertions to `param_escape_level`; added 2 regressions (`test_pre_seeded_local_downgraded_to_retaining`, `test_immediate_level_treated_as_non_retaining`) |
-| `lang/tests/codegen/e2e/implicit_callback_borrowed_capture_rejected/expected.json` | Updated to phase="borrow_check" + E_ESCAPE_THREAD message |
-| `lang/tests/codegen/e2e/borrow_escape_spawn_rejected/` | New: borrowed capture to `conc.spawn` → E_ESCAPE_THREAD |
-| `lang/tests/codegen/e2e/borrow_escape_scope_accepted/` | New: captureless lambda to `conc.scope` → exit 0 |
-| `lang/tests/codegen/e2e/borrow_escape_thread_accepted/` | New: captureless lambda to `conc.spawn` + join → exit 0 |
+Author: Klaudia
+Current focus: Fn1 SCOPED borrowed-capture coercion (assessment → implementation)
 
 ---
 
-## Test inventory — `test_escape_level_model.py` (22 tests)
+## Completed work (reference only)
 
-**Phase 0 (3):** `test_escape_level_ordering`, `test_loan_default_max_escape`, `test_loan_max_escape_propagation`
+**A5 (escape context model):** All phases 0–5 complete. `EscapeLevel` enum, `Loan.max_escape`, `_check_lambda_scope_escape`, SCOPED/THREAD/STATIC boundary enforcement, `param_nonretaining` fully removed. 22 tests in `test_escape_level_model.py`. Review checklist satisfied.
 
-**Phase 1 (3):** `test_lambda_no_borrow_capture_is_static`, `test_lambda_ref_capture_is_local`, `test_lambda_mut_ref_capture_is_local`
-
-**Phase 2 (4):** `test_borrowed_capture_to_thread_param_rejected`, `test_borrowed_capture_to_local_param_accepted`, `test_no_borrow_capture_to_thread_accepted`, `test_check_block_spawn_thread_escape_rejected`
-
-**Phase 3a (3):** `test_scope_outer_closure_annotated_scoped_returns_scoped`, `test_sort_in_place_comparator_local_accepted`, `test_static_level_dry_run`
-
-**Phase 3b (4):** `test_trait_object_callback_unannotated_thread_default`, `test_hashmap_iter_callback_local_accepted`, `test_spawn_thread_annotation_rejected`, `test_registry_set_dropper_static_annotation_rejected`
-
-**Phase 3c (1):** `test_spawn_cb_ref_capture_caught_by_borrow_checker_directly`
-
-**Phase 4 (4):** `test_scoped_spawn_with_outlying_borrow_accepted`, `test_scoped_spawn_with_non_outlying_borrow_rejected`, `test_scoped_spawn_nested_block_false_positive` (pinned conservative false positive — must not be converted to accept), `test_scoped_spawn_assigned_before_scope_accepted`
+**A1 (call contract single seam):** Slices 1–4 complete. `call_contract.py` owns all call-shape decisions (arity, kwargs, ctor fields, intrinsic shape, array method arity). 37 contract/guard tests. Anti-regression guard (`test_call_contract_ownership_guard.py`) prevents drift.
 
 ---
 
-## Final checkpoint (2026-02-21)
+## Known limitations (carry-forward)
 
-```
-lang/tests/stage1/test_non_retaining_function_params.py: 7/7
-lang/tests/stage1/test_lambda_validation.py: 7/7
-lang/tests/borrow_checker/: 89 (22 in test_escape_level_model.py)
-lang/tests/driver/test_callinfo_param_layout_contract.py: 11/11
-lang/tests/driver/test_explicit_capture_diagnostics.py: 10/10
-lang/tests/driver/test_boundary_matrix_result_variant_contract.py: 4/4
-lang/tests/driver/test_struct_ref_field_boundary_contract.py: 8/8
-e2e:
-  borrow_escape_thread_accepted: ok
-  borrow_escape_spawn_rejected: ok
-  borrow_escape_scope_accepted: ok
-  result_ok_move_conn_source_drop_regression: ok
-  struct_ref_field_result_ok_move_drop_once: ok
-```
-
----
-
-## Post-Phase-5 gap closure (2026-02-21)
-
-Three review checklist items were ambiguous after Phase 5. Decisions agreed with owner:
-
-1. **`borrow_escape_static_rejected` e2e — resolved as driver-level.**
-   `test_registry_set_dropper_static_annotation_rejected` in `test_escape_level_model.py` covers E_ESCAPE_STATIC via a real STATIC-annotated stdlib sig. STATIC annotations target intrinsic-only paths not callable from user Drift source; an e2e shape would be brittle. No synthetic annotations added. Checklist updated.
-
-2. **THREAD accept e2e — added.**
-   `borrow_escape_thread_accepted/` — captureless lambda to `conc.spawn` + join, exit 0. Closes the THREAD boundary pair.
-
-3. **SCOPE reject e2e — deferred.**
-   Blocked by the Fn1 coercion limitation (known limitation 1 below). Reject path covered by unit tests. Checklist updated to reflect accept e2e + unit reject coverage.
-
----
-
-## A1: `call_contract.py` single validation seam (2026-02-21)
-
-### Inventory (source → `call_contract.py`)
-
-| Concern | Previous owner | New owner | API |
-|---------|---------------|-----------|-----|
-| Intrinsic arity/kwargs/semantics | `driftc.py` (~120 lines of per-kind blocks) | `call_contract.py` | `intrinsic_call_issues()` + `INTRINSIC_ARITY_TABLE` (39 entries) |
-| Constructor shape (positional arity, named fields, duplicate/missing) | `hir_to_mir.py` (inline assertions) | `call_contract.py` | `ctor_call_issues()` + `CtorFieldSpec` |
-| Array method arity | `hir_to_mir.py` (12 inline assertions) | `call_contract.py` | `array_method_arity_issues()` + `ARRAY_METHOD_ARITY_TABLE` (12 entries) |
-| Generic kwargs rejection | `hir_to_mir.py` (4 inline assertions) | `call_contract.py` | `call_kwargs_issues()` |
-| Structural CallInfo shape (5 codes) | `call_contract.py` (unchanged) | `call_contract.py` | `call_contract_issues()` |
-
-**Unchanged (not moved):**
-- Lambda call kwargs/arity → checker (not CallInfo-based)
-- `check_call_signature` type check → checker (type-system concern)
-
-### Migrated slices
-
-**Slice 1 — Intrinsic arity + constructor shape:**
-- `driftc.py::_validate_intrinsic_callinfo`: replaced ~120 lines of per-intrinsic `if kind is IntrinsicKind.X: if kwargs or len(args) != N:` blocks with single `intrinsic_call_issues()` call (~15 lines). Kept BYTE_LENGTH/STRING_BYTE_AT name disambiguation and `E_INTRINSIC_CALLINFO_MISSING_KIND`/`_NODE`.
-- `hir_to_mir.py::_lower_intrinsic_call_expr`: added pre-flight `intrinsic_call_issues()` check (filters out `MUT_BORROW_REQUIRED`), removed kwargs+arity guards from ~16 intrinsic blocks.
-- `hir_to_mir.py::_visit_stmt_HExprStmt`: added pre-flight check, removed arity guards from SWAP, RAW_DEALLOC, RAW_WRITE, PTR_WRITE, DROP_VALUE.
-- `hir_to_mir.py` variant/struct ctor paths: replaced field validation assertions with `ctor_call_issues()`.
-- `IntrinsicSpec` frozen dataclass added with `expected_args`, `code`, `label`, `kwargs_allowed`.
-- `INTRINSIC_ARITY_TABLE`: 39 entries, one per `IntrinsicKind` member.
-- SWAP/REPLACE semantic checks (`E_INTRINSIC_SWAP_MUT_BORROW_REQUIRED`, `E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED`) included.
-
-**Slice 2 — Array method arity + remaining guards:**
-- `ARRAY_METHOD_ARITY_TABLE`: 12 entries (get, ref_at, pop, push, insert, remove, swap_remove, swap, set, clear, reserve, shrink_to_fit).
-- `hir_to_mir.py`: replaced all 12 array method arity assertions with `array_method_arity_issues()`.
-- `hir_to_mir.py`: replaced kwargs assertions for method calls, invoke, normal calls with `call_kwargs_issues()`.
-
-**Constructor kwargs fix (post-slice):**
-- `hir_to_mir.py::_lower_constructor_call`: removed unconditional `call_kwargs_issues("a constructor", ...)` rejection. Replaced with `ctor_call_issues()` validation + proper kwargs-to-field lowering. Removed redundant `ordered` reset in `ctor_arg_field_indices` branch.
-
-**Slice 3 — Checker delegates call-shape decisions to `call_contract.py`:**
-- `checker/call_resolver.py`: 4 constructor validation sites migrated to `ctor_call_issues()`:
-  - Site 1 (qualified variant mixed-args, ~line 882): `E_CTOR_MIXED_ARGS` decision delegated; checker message "E-QMEM-MIXED-ARGS: ..." preserved.
-  - Site 2 (qualified variant field validation, ~line 952): unknown/duplicate field inline loop replaced; checker messages "E-QMEM-NO-FIELD: ..." / "E-QMEM-DUP-FIELD: ..." preserved. Per-kw spans preserved via `notes=(f"field={name}",)` on issues.
-  - Site 3 (struct ctor full validation, ~line 1129): mixed/arity/unknown/duplicate/missing all delegated; checker messages "cannot mix positional and named ..." / "unknown field '...' for struct '...'" / etc. preserved exactly.
-  - Site 4 (unqualified variant ctor, ~line 1224): same pattern as site 3; per-field missing diagnostics preserved (one per missing field).
-- `checker/call_resolver.py`: 5 kwargs rejection sites migrated to `call_kwargs_issues()`:
-  - Site 5 (method call, ~line 1441): "keyword arguments are not supported for method calls in MVP" preserved.
-  - Sites 6-8 (intrinsic kwargs, ~lines 3846/4172/4245): "{name} does not support keyword arguments" preserved.
-  - Site 9 (normal call, ~line 5116): "keyword arguments are only supported for constructors in MVP" preserved.
-- `hir_to_mir.py`: 2 ad-hoc kwargs guards migrated to `call_kwargs_issues()`:
-  - UFCS kwargs guard (~line 2417): now delegates decision, assertion message uses issue message.
-  - Normal-call kwargs guard (~line 2465): same pattern; struct-type fallback resolution preserved.
-- `call_contract.py`: added `notes=(f"field={name}",)` to `E_CTOR_UNKNOWN_FIELD`/`E_CTOR_DUPLICATE_FIELD` and `notes=tuple(f"field={f}" for f in missing)` to `E_CTOR_MISSING_FIELDS` — enables checker to extract field names for its own message formatting.
-
-### Files changed
-
-| File | Change |
-|------|--------|
-| `lang/driftc/call_contract.py` | Added `IntrinsicSpec`, `INTRINSIC_ARITY_TABLE`, `intrinsic_call_issues()`, `CtorFieldSpec`, `ctor_call_issues()`, `ARRAY_METHOD_ARITY_TABLE`, `array_method_arity_issues()`, `call_kwargs_issues()`; updated `__all__`; (Slice 3) added `notes` with field names to ctor field issues |
-| `lang/driftc/driftc.py` | `_validate_intrinsic_callinfo`: ~120 lines → ~15 lines via `intrinsic_call_issues()` |
-| `lang/driftc/stage2/hir_to_mir.py` | Pre-flight intrinsic checks; ctor→`ctor_call_issues()`; array→`array_method_arity_issues()`; kwargs→`call_kwargs_issues()`; constructor kwargs fix; (Slice 3) 2 ad-hoc kwargs guards → `call_kwargs_issues()` |
-| `lang/driftc/checker/call_resolver.py` | (Slice 3) Import `CtorFieldSpec`, `ctor_call_issues`, `call_kwargs_issues`; 4 ctor sites → `ctor_call_issues()` decision + checker-formatted messages; 5 kwargs sites → `call_kwargs_issues()` decision + checker-formatted messages |
-
-### Diagnostic wording/code changes
-
-No user-facing diagnostic codes or messages changed. All existing `E_INTRINSIC_*` codes preserved. All 12 checker diagnostic message assertions verified unchanged (exact wording preserved at all 9 migrated checker sites). New internal codes (`E_CTOR_ARITY_MISMATCH`, `E_CTOR_UNKNOWN_FIELD`, `E_CTOR_DUPLICATE_FIELD`, `E_CTOR_MISSING_FIELDS`, `E_CTOR_MIXED_ARGS`, `E_ARRAY_METHOD_ARITY`, `E_CALL_KWARGS_REJECTED`) are assertion-path only (never reach user diagnostics in normal operation).
-
-### New tests
-
-| File | Tests |
-|------|-------|
-| `lang/tests/driver/test_intrinsic_call_contract.py` | 8 (arity mismatch, kwargs rejected, correct passes, unknown kind, swap/replace mut borrow, table completeness, span propagation) |
-| `lang/tests/driver/test_ctor_call_contract.py` | 7 (arity mismatch, unknown/duplicate/missing field, mixed args, valid positional, valid named) |
-| `lang/tests/driver/test_array_method_contract.py` | 5 (get arity, pop correct, table completeness, kwargs rejected, kwargs empty) |
-| `lang/tests/driver/test_ctor_kwargs_mir_regression.py` | 4 (named kwargs pass typed lowering, raw kwargs input passes typed lowering, positional still works, mixed positional+named fails with contract diagnostic) |
-
-### Targeted validation matrix (Slices 1-2)
-
-```
-New contract tests (23):                   PASS
-Existing regression tests (13):            PASS
-Stage2 tests (86):                         PASS
-High-sensitivity non-regression (15):      PASS
-E2E regressions (2):                       PASS
-Post-slice grep (arity in driftc.py):      0 matches
-Post-slice grep (arity in hir_to_mir.py):  1 match (DV method handler — out of scope)
-```
-
-### Targeted validation matrix (Slice 3)
-
-```
-Ctor contract tests (7):                   PASS
-Checker diagnostic tests (18):             PASS  (exact messages preserved)
-A1 Slice 1-2 contract tests (17):          PASS
-High-sensitivity tests (26):               PASS
-Stage2 full (86):                          PASS
-E2E ctor diagnostics (5):                  PASS
-Post-slice grep (kw.name not in field_names in checker): 0 matches
-Post-slice grep (kw.name in seen in checker):            0 matches
-Post-slice grep (call_kwargs_issues in checker):         5 matches
-Post-slice grep (ctor_call_issues in checker):           3 matches
-```
-
-**Slice 4 — Finalization and anti-regression guard:**
-- Residual audit completed across `checker/`, `hir_to_mir.py`, `driftc.py`.
-- 2 in-scope residual items migrated:
-  - `checker/call_resolver.py:4388`: lambda kwargs rejection → `call_kwargs_issues("lambda calls", ...)`.
-  - `hir_to_mir.py:6033`: method call kwargs assertion → `call_kwargs_issues("method calls", ...)`.
-- 1 minor cleanup:
-  - `checker/call_resolver.py:1582`: inline array arity dict replaced with `{**ARRAY_METHOD_ARITY_TABLE, "range": 0, "range_mut": 0}` (checker extends shared table with 2 checker-specific entries).
-- Anti-regression guard test added: `lang/tests/driver/test_call_contract_ownership_guard.py` (3 tests).
-
-### Files changed (Slice 4 additions)
-
-| File | Change |
-|------|--------|
-| `lang/driftc/checker/call_resolver.py` | Lambda kwargs → `call_kwargs_issues()`; array arity dict → `ARRAY_METHOD_ARITY_TABLE` reference; added `ARRAY_METHOD_ARITY_TABLE` import |
-| `lang/driftc/stage2/hir_to_mir.py` | Method call kwargs assertion → `call_kwargs_issues()` |
-| `lang/tests/driver/test_call_contract_ownership_guard.py` | New: 3 anti-regression guard tests |
-
-### Targeted validation matrix (Slice 4)
-
-```
-A1 contract + guard tests (34):            PASS
-Checker diagnostic tests (18):             PASS
-High-sensitivity tests (15):               PASS
-Stage2 full (86):                          PASS
-```
-
-### Risk notes
-
-Slice 1-2: One remaining `len(expr.args) != 1` in `hir_to_mir.py` line 3276 — DV (dictionary-like) `get` method handler. Not a call-contract concern; DV methods have their own lowering path. No follow-up needed.
-
-Slice 3: Checker ctor sites interleave shape-checking with `ctor_arg_field_indices` building. After migration, `ctor_call_issues()` runs first (decision), then field-index building runs separately knowing the shape is valid. Structural change mitigated by 12 existing test assertions on exact messages + 5 e2e tests. Method call receiver-offset + named args is N/A (D6): methods reject all kwargs in MVP; no named-arg mapping exists.
-
-### A1 final ownership map
-
-| Concern | Owner | API / Location |
-|---------|-------|---------------|
-| Intrinsic arity + kwargs + semantic checks | `call_contract.py` | `intrinsic_call_issues()`, `INTRINSIC_ARITY_TABLE` |
-| Constructor shape (arity, fields, mixed args) | `call_contract.py` | `ctor_call_issues()`, `CtorFieldSpec` |
-| Array method arity | `call_contract.py` | `array_method_arity_issues()`, `ARRAY_METHOD_ARITY_TABLE` |
-| Generic kwargs rejection (decision) | `call_contract.py` | `call_kwargs_issues()` |
-| Structural CallInfo shape (5 codes) | `call_contract.py` | `call_contract_issues()` |
-| CallInfo repair for named calls | `call_contract.py` | `repair_named_hcall_callinfo()` |
-| Param layout / arg-expr alignment | `call_contract.py` | `call_arg_exprs_for_param_layout()`, `explicit_arg_param_types()` |
-
-**Intentionally out-of-scope (with rationale):**
-
-| Location | Pattern | Rationale |
-|----------|---------|-----------|
-| `checker/call_resolver.py:3872-3954` | Intrinsic arity checks (rawbuffer, maybe_uninit, etc.) | Type-resolution: checker needs arity to determine intrinsic kind and compute return types. Not shape validation. |
-| `checker/call_resolver.py:4249` | Callback arity `len(expr.args) != 1` | Type-checking level; determines callback trait resolution path. |
-| `checker/__init__.py:2017` | Lambda immediate-call param count | Lambda-specific; not general call-shape. |
-| `checker/__init__.py` kwargs accesses (14 sites) | `for kw in getattr(expr, "kwargs", [])` | CallInfo construction / param-type building, not validation. |
-| `checker/call_resolver.py:757` | Type alias param count | Type alias resolution, not call shape. |
-| `hir_to_mir.py:3279` | DV method `get` arity | DV methods have own lowering path; not call-contract concern. |
-| `hir_to_mir.py:6802` | Variant field count in type inference | Type inference resolution fallback; returns None on mismatch, not assertion. |
-| `driftc.py` kwargs accesses (12 sites) | `for kw in getattr(expr, "kwargs", [])` | Boundary diagnostic wrapping; reads kwargs for param-type lists, not shape validation. |
-
-**Anti-regression guard:** `test_call_contract_ownership_guard.py` (3 tests) prevents new ad-hoc duplication in checker and stage2.
-
-### A1 closure summary
-
-A1 is complete. `call_contract.py` is the single validation seam for call-shape decisions (arity, kwargs, ctor fields, intrinsic shape, array method arity, CallInfo structural shape). Checker and stage2 delegate decisions to `call_contract.py` and format their own diagnostics. All user-facing messages preserved unchanged. 37 contract/guard tests cover the seam. Anti-regression guard prevents drift.
-
----
-
-## Known limitations / hand-off items
-
-1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). The borrow checker's SCOPED acceptance path is fully exercised by unit tests but cannot be exercised e2e until the type system allows capturing lambdas in `Fn1`-bounded generic positions. Type system extension required; out of scope for A5.
+1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). The borrow checker's SCOPED acceptance path is fully exercised by unit tests but cannot be exercised e2e until the type system allows capturing lambdas in `Fn1`-bounded generic positions. **This is the target of the Fn1 assessment below.**
 
 2. **`_place_is_defined_before_stmt` is conservative (MVP §3.6).** Only the direct enclosing block is checked for place definition. Borrows defined in predecessor or nested blocks are rejected even if provably safe. Full dataflow-based lifetime reasoning is deferred. `test_scoped_spawn_nested_block_false_positive` is the pinned regression for this behavior.
+
+---
+
+## Fn1 SCOPED Borrowed-Capture Assessment
+
+Date: 2026-02-21
+Author: Klaudia
+Status: assessment complete; awaiting investigation verdicts and owner go/no-go before implementation.
+
+### 1. Problem statement
+
+User scenario that should work but currently fails:
+
+```drift
+var x = 42
+conc.scope(|s| [&x] => {
+    s.spawn(|| [&x] => { print(x) })
+})
+// x is alive here — scope completed, spawned tasks joined
+```
+
+The borrow checker's SCOPED acceptance path (Phase 4) is fully implemented and unit-tested. It validates that captured loans are alive across the scope call and accepts the lambda. However, the type checker **rejects the lambda before the borrow checker runs** because `conc.scope<F>(f: F) require F is Fn1<Scope, Void>` forces the lambda through function-pointer coercion, which unconditionally rejects any lambda with `ref`/`ref_mut` captures.
+
+### 2. Concrete path map (file/function anchors)
+
+The failure chain involves 4 files and 11 touch points:
+
+#### TP1 — stdlib declaration (context only)
+- **File:** `stdlib/std/concurrent/concurrent.drift:756`
+- **What:** `pub fn scope<F>(f: F) -> core.Result<Void, ConcurrencyError> require F is core.Fn1<Scope, Void>`
+- **Classification:** out-of-scope / context
+- **Notes:** The `require F is Fn1<...>` bound is what forces function-pointer coercion in the call resolver.
+
+#### TP2 — Initial lambda pre-typing (sets `allow_capture_invoke = True`)
+- **File:** `lang/driftc/checker/call_resolver.py:5122-5125`
+- **What:** All lambda args initially get `arg.allow_capture_invoke = True`.
+- **Classification:** metadata propagation
+- **Notes:** Correct initial value. Problem is the override later.
+
+#### TP3 — Pre-resolution require scanning (sets `allow_capture_invoke = True`)
+- **File:** `lang/driftc/checker/call_resolver.py:2270-2298`
+- **What:** Scans `require F is Fn1<A, R>` bounds, infers expected type from trait args, sets `arg.allow_capture_invoke = True`.
+- **Classification:** metadata propagation
+- **Notes:** Also correct. Sets up the expected function type for the lambda.
+
+#### TP4 — Post-resolution override (**THE REJECTION ROOT CAUSE**)
+- **File:** `lang/driftc/checker/call_resolver.py:5227-5240`
+- **What:** After resolution succeeds, iterates lambda args. If `sig_inst.param_types[idx]` has `kind == FUNCTION`, sets `arg.allow_capture_invoke = False` and re-types the lambda.
+- **Classification:** **acceptance gate (primary)**
+- **Notes:** This is the first of two override sites. The logic assumes that any `FUNCTION`-kinded parameter requires bare function-pointer coercion. There is no escape-level or Fn-trait awareness here.
+
+#### TP5 — Post-resolution require re-scan (**SECOND OVERRIDE**)
+- **File:** `lang/driftc/checker/call_resolver.py:5277-5314`
+- **What:** Re-scans `require` expressions. For each `Fn1`/`Fn2`/etc. bound, sets `arg.allow_capture_invoke = False` and re-types.
+- **Classification:** **acceptance gate (secondary)**
+- **Notes:** Second override. Even if TP4 were fixed, this loop would still force `allow_capture_invoke = False` for Fn-bounded params. Both sites must be addressed.
+
+#### TP6 — Type checker function-pointer coercion (**THE REJECTION SITE**)
+- **File:** `lang/driftc/type_checker.py:5495-5509`
+- **What:** When `allow_capture_invoke == False`, any lambda with `ref`/`ref_mut` captures is rejected with "closures with borrowed captures are non-escaping in v0".
+- **Classification:** **acceptance gate (enforcement)**
+- **Notes:** This is the point of rejection. The error message is emitted and the lambda is recorded as unknown type. The borrow checker never sees it.
+
+#### TP7 — Escape annotation injection (timing issue)
+- **File:** `lang/driftc/driftc.py:7292-7315`
+- **What:** Stamps `param_escape_level = [SCOPED]` on `scope`'s FnSignature. Runs **after** all type checking (line ~7244 is the last `type_checker.check_function` call).
+- **Classification:** **metadata propagation (timing)**
+- **Notes:** The escape annotation is not available to the call resolver at TP4/TP5 time. The resolver cannot condition the override on escape level.
+
+#### TP8 — Borrow checker SCOPED acceptance (never reached)
+- **File:** `lang/driftc/borrow_checker_pass.py:493-509` (`_check_lambda_escape_level`)
+- **File:** `lang/driftc/borrow_checker_pass.py:469-491` (`_check_lambda_scope_escape`)
+- **Classification:** **borrow-check enforcement dependency**
+- **Notes:** This is the target destination. If the lambda reaches the borrow checker with `SCOPED` required level, the SCOPED promotion path validates captured loans and accepts the lambda. Fully implemented and unit-tested (Phase 4).
+
+#### TP9 — `_nonretaining_param_state` (escape→nonretaining mapping)
+- **File:** `lang/driftc/type_checker.py:9337-9345`
+- **What:** Maps SCOPED → `True` (non-retaining) for borrowed-aggregate boundary checks.
+- **Classification:** out-of-scope (unrelated to `allow_capture_invoke`)
+- **Notes:** This is used for a different check (`_check_borrowed_arg_boundary`). It correctly recognizes SCOPED as non-retaining but does not influence the Fn1 coercion path.
+
+#### TP10 — Callback wrapper wrapping path
+- **File:** `lang/driftc/checker/call_resolver.py:5315-5354`
+- **What:** After re-typing, wraps lambda args in `callback0/1/2` calls for `Callback0/1/2`-typed params.
+- **Classification:** metadata propagation / potential alternative approach
+- **Notes:** Only triggers for `Callback`-typed params, not `Fn1`-typed. For `scope`'s `Fn1` bound, the resolved param is FUNCTION kind, not Callback schema. This path does not engage.
+
+#### TP11 — Borrow checker transparent wrapper propagation
+- **File:** `lang/driftc/borrow_checker_pass.py:1969-1979`
+- **What:** When an arg is a `callback0/1/2` wrapper call, the borrow checker unwraps it and propagates the outer call's escape level to the inner lambda.
+- **Classification:** borrow-check enforcement dependency / potential enabler
+- **Notes:** If the solution involves callback-wrapping the lambda for `Fn1`-bounded params, this path would propagate SCOPED to the inner lambda. Already works for Callback-typed params.
+
+### 3. Touch point classification summary
+
+| ID | Location | Classification |
+|----|----------|---------------|
+| TP1 | `concurrent.drift:756` | out-of-scope / context |
+| TP2 | `call_resolver.py:5122-5125` | metadata propagation |
+| TP3 | `call_resolver.py:2270-2298` | metadata propagation |
+| TP4 | `call_resolver.py:5227-5240` | **acceptance gate (primary)** |
+| TP5 | `call_resolver.py:5277-5314` | **acceptance gate (secondary)** |
+| TP6 | `type_checker.py:5495-5509` | **acceptance gate (enforcement)** |
+| TP7 | `driftc.py:7292-7315` | metadata propagation (timing) |
+| TP8 | `borrow_checker_pass.py:469-509` | borrow-check enforcement dependency |
+| TP9 | `type_checker.py:9337-9345` | out-of-scope |
+| TP10 | `call_resolver.py:5315-5354` | metadata propagation / alternative |
+| TP11 | `borrow_checker_pass.py:1969-1979` | borrow-check enforcement dependency |
+
+### 4. Root cause analysis
+
+There are two independent problems that must both be solved:
+
+**Problem A — `allow_capture_invoke` override:** The call resolver (TP4, TP5) unconditionally sets `allow_capture_invoke = False` for any param whose resolved type is `FUNCTION` kind. It does not distinguish between:
+- A generic `F is Fn1<A, R>` param with SCOPED/LOCAL escape annotation (safe for captures), and
+- A concrete function-pointer param (captures genuinely not allowed).
+
+**Problem B — Escape annotation timing:** The escape annotation for `scope` is stamped at TP7 (line 7298), which runs after all type checking completes. Even if TP4/TP5 wanted to condition the override on escape level, the escape annotation is not yet available on the FnSignature at resolution time.
+
+### 5. Design approaches (3 candidates)
+
+#### Approach A: Callback-wrap Fn1-bounded captures (recommended)
+
+**Idea:** When the call resolver processes a generic call with `require F is Fn1<...>` and the lambda arg has captures (explicit or discovered), wrap it in `callback1(lambda)` with `_is_implicit_wrap = True` instead of forcing function-pointer coercion.
+
+**How it works:**
+1. At TP4/TP5, detect that the param type comes from an `Fn1`/`Fn2` bound (the resolver already knows this — it scans `require` expressions).
+2. Instead of `allow_capture_invoke = False`, wrap the lambda in `callback1(lambda)` with `_is_implicit_wrap = True`.
+3. The type checker (TP6) sees `callback0/1/2(lambda)`, enters the callback handler (call_resolver.py:4287-4301), and because `_is_implicit_wrap = True`, the borrow-capture guard is skipped. `allow_capture_invoke = True` is set on the inner lambda. Typing succeeds.
+4. The borrow checker (TP11) unwraps the callback wrapper, reads the outer call's escape level (SCOPED for `scope`), and validates via `_check_lambda_scope_escape`.
+
+**Advantage:** Reuses existing callback-wrap + transparent-wrapper infrastructure (Phase 3c BLOCKER resolution). Minimal new code.
+
+**Risk:** The generic instantiation of `scope<F>` currently expects `F` to unify with a bare function type. A callback-wrapped lambda produces a `Callback1<Scope, Void>` type, not a function pointer. The generic instantiation may fail or need adjustment. This needs investigation.
+
+**Escape annotation timing:** Not a problem. The borrow checker runs after escape annotations are stamped. Only the callback wrapping decision needs to happen at type-check time, and that decision is based on `require F is Fn1<...>` (available) — not on escape level.
+
+#### Approach B: Non-retaining aware `allow_capture_invoke`
+
+**Idea:** At TP4/TP5, when the resolved function has `param_escape_level` data indicating non-retaining for this param, keep `allow_capture_invoke = True` instead of overriding to False.
+
+**Problem:** Blocked by Problem B (timing). The escape annotation is not on the FnSignature at type-check time. The non-retaining analysis (`analyze_non_retaining_params`) runs at line 7286, escape annotations at 7298 — both after type checking. The call resolver has no access to escape-level data.
+
+**Mitigation:** Move escape annotation injection earlier in the driver (before type checking), or hard-code Fn-trait-bounded params as "potentially non-retaining" at the call resolver level. Hard-coding is fragile. Moving annotations earlier requires careful analysis of ordering dependencies (non-retaining analysis depends on type-checked function bodies).
+
+**Risk:** Higher than Approach A. Touches the driver pipeline ordering, which has strict phase dependencies.
+
+#### Approach C: Split coercion gate from escape enforcement
+
+**Idea:** In the type checker (TP6), instead of unconditionally rejecting captures when `allow_capture_invoke = False`, add a weaker gate: accept captured lambdas if they will later be validated by the borrow checker. Emit a deferred marker instead of an error.
+
+**Problem:** Soundness. The type checker's rejection is a **safety net** — it prevents borrowed captures from reaching codegen in contexts where the borrow checker might not run (due to earlier errors or skip conditions). Removing the rejection without guaranteed borrow-checker coverage is unsound.
+
+**Risk:** Highest. Not recommended without a provable guarantee that the borrow checker always runs for deferred lambdas.
+
+### 6. Recommended phased implementation plan
+
+Based on the analysis, **Approach A (callback-wrap Fn1-bounded captures)** is recommended. It has the smallest blast radius, reuses existing infrastructure, and does not require driver pipeline changes.
+
+#### Phase F1 — Fn1-bounded callback wrapping (single slice)
+
+**Goal:** When a generic call has `require F is Fn1/Fn2/...` bound and the lambda arg has captures, wrap it in `callback1(lambda)` with `_is_implicit_wrap = True` so it bypasses the function-pointer coercion rejection.
+
+**Scope (files to change):**
+1. `lang/driftc/checker/call_resolver.py` — TP4 (lines 5227-5240) and TP5 (lines 5277-5314): detect Fn-trait-bounded params and wrap capturing lambdas instead of forcing `allow_capture_invoke = False`.
+2. Possibly `lang/driftc/checker/call_resolver.py` — generic instantiation logic: ensure `Callback1<A, R>` satisfies `require F is Fn1<A, R>` (may already work via trait implementation).
+
+**Files NOT changed:**
+- `type_checker.py` — existing `_is_implicit_wrap` guard in callback handler and `allow_capture_invoke = True` path handle this.
+- `borrow_checker_pass.py` — transparent wrapper propagation (TP11) already propagates escape level through callback wrappers.
+- `driftc.py` — escape annotations unchanged.
+
+**Go/no-go criteria before starting:**
+1. INV-1 resolved as "yes" (Callback1 satisfies Fn1 bound). If not, Approach B must be revisited.
+2. All A1 + A5 regression suites green on current branch.
+3. Owner confirms approach.
+
+**Risk:**
+- **Generic instantiation mismatch (medium):** If `scope<F>(f: F)` requires `F` to unify with a bare function type (not Callback1), the callback-wrapped lambda will fail type instantiation. Investigation needed. If blocked, a `Fn1`-aware coercion path must be added.
+- **Callback trait semantic difference (low):** `Callback1<A,R>` vs `Fn1<A,R>` may differ in throw semantics. `Fn1` implies nothrow; `Callback1` may imply throw. Need to check if `callback1` vs `callback_throw1` is correctly selected.
+- **Codegen shape (low):** MIR lowering for callback-wrapped args differs from bare function pointers. If `scope`'s generic instantiation expects a bare function pointer calling convention in codegen, the wrapper may cause a runtime failure. Needs e2e validation.
+
+**Phase F1 done-when criteria (exact artifacts):**
+
+1. **Regression-first gate:**
+   - [ ] Minimal failing regression test added **before** any compiler fix. Test: `test_fn1_bounded_scope_borrowed_capture_accepted` in `lang/tests/borrow_checker/test_escape_level_model.py`.
+   - [ ] Test exercises: `conc.scope`-shaped generic with `require F is Fn1<...>` + lambda with `ref`/`ref_mut` capture → currently fails with "closures with borrowed captures are non-escaping in v0".
+   - [ ] Test confirmed **failing** on current branch before fix (paste output or screenshot reference).
+
+2. **Compiler fix:**
+   - [ ] Smallest viable change applied (list every touched file + function name).
+   - [ ] Failing regression from step 1 now **passes** after fix.
+   - [ ] Fix is scoped to Fn-trait-bounded generic params with capturing lambdas only. Captureless lambdas and non-Fn-bounded params are unchanged.
+
+3. **Diagnostic wording preservation:**
+   - [ ] Zero change to existing A1 diagnostic wording (all 12 checker message assertions unchanged).
+   - [ ] Zero change to existing A5 E_ESCAPE_* diagnostic codes or messages.
+   - [ ] `borrowed_capture_interface_coercion_rejected` e2e still emits phase="typecheck" (type checker safety path preserved).
+
+4. **Mandatory regression matrix (all green):**
+   - [ ] `lang/tests/borrow_checker/test_escape_level_model.py` — all 22+ tests pass.
+   - [ ] A5 e2e boundary set:
+     - [ ] `borrow_escape_spawn_rejected`
+     - [ ] `borrow_escape_scope_accepted`
+     - [ ] `borrow_escape_thread_accepted`
+     - [ ] `implicit_callback_borrowed_capture_rejected`
+     - [ ] `borrowed_capture_interface_coercion_rejected`
+   - [ ] Boundary guard/contract tests:
+     - [ ] `test_callinfo_param_layout_contract.py`
+     - [ ] `test_boundary_matrix_result_variant_contract.py`
+     - [ ] `test_struct_ref_field_boundary_contract.py`
+     - [ ] `test_call_contract_ownership_guard.py`
+
+5. **Deliverables in `work-progress.md`:**
+   - [ ] Updated investigation verdicts (INV-1, INV-2, INV-3) with evidence.
+   - [ ] Files/functions changed listed.
+   - [ ] Pass/fail matrix with command output references.
+   - [ ] Any newly discovered regressions documented with minimal repro + subsystem guess.
+   - [ ] Explicit go/no-go recommendation for F2.
+
+#### Phase F2 — Validation and cleanup (follow-up if F1 succeeds)
+
+**Goal:** Stabilize the path with full e2e coverage and clean up any transitional hacks.
+
+**Scope:**
+1. Add e2e test for SCOPED reject (currently deferred — see known limitation 1).
+2. Verify no regression in existing callback/Fn1 patterns (non-capturing lambdas still work as bare function pointers).
+3. Document the callback-wrapping behavior for Fn-bounded generic params.
+
+### 7. Regression tests (planned)
+
+#### Positive (must-accept after fix):
+1. `test_scope_borrowed_capture_accepted_e2e`: `conc.scope(|s| [&x] => { s.spawn(|| [&x] => { print(x) }) })` where `x` is defined before the scope call → compiles and runs correctly.
+2. `test_fn1_bounded_generic_borrowed_capture_accepted`: Synthetic generic `fn apply<F>(f: F) require F is Fn1<Int, Void>` called with a lambda capturing `&x` where the callee is LOCAL-annotated → accepted by borrow checker.
+3. `test_scope_move_capture_still_accepted`: `conc.scope(|s| [x] => { ... })` (move capture, no borrow) → still works (no regression from wrapping changes).
+
+#### Negative (must-reject after fix):
+4. `test_scope_borrowed_capture_non_outliving_rejected`: `conc.scope(|s| => { var y = 42; s.spawn(|| [&y] => { ... }) })` → E_ESCAPE_SCOPE (y defined inside scope, does not outlive).
+5. `test_spawn_borrowed_capture_still_rejected`: `conc.spawn(|| [&x] => { ... })` → E_ESCAPE_THREAD (THREAD boundary, not SCOPED — no regression).
+6. `test_fn1_bounded_thread_annotated_rejected`: Generic `F is Fn1<...>` with THREAD annotation + borrowed capture → E_ESCAPE_THREAD.
+
+#### Non-regression suites (must stay green):
+```
+# Borrow checker full:
+PYTHONPATH=. ./.venv/bin/python3 -m pytest lang/tests/borrow_checker/ -q
+
+# Checker diagnostics:
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_call_ctor_diagnostics_span.py \
+    lang/tests/driver/test_call_function_diagnostics_span.py \
+    lang/tests/driver/test_callback_dynamic_dispatch.py \
+    -q
+
+# A5 boundary trio:
+PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
+    borrow_escape_spawn_rejected \
+    borrow_escape_scope_accepted \
+    borrow_escape_thread_accepted \
+    implicit_callback_borrowed_capture_rejected \
+    borrowed_capture_interface_coercion_rejected
+
+# High-sensitivity:
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_callinfo_param_layout_contract.py \
+    lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
+    lang/tests/driver/test_struct_ref_field_boundary_contract.py \
+    -q
+
+# A1 contract + guard:
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_ctor_call_contract.py \
+    lang/tests/driver/test_intrinsic_call_contract.py \
+    lang/tests/driver/test_array_method_contract.py \
+    lang/tests/driver/test_call_contract_ownership_guard.py \
+    -q
+```
+
+### 8. Risk analysis
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Generic instantiation rejects `Callback1` for `Fn1` bound | Medium | Blocks Approach A | Pre-investigation: check trait impl. If blocked, evaluate Approach B |
+| Callback wrapping changes codegen calling convention | Low | Runtime failure in e2e | Test with `borrow_escape_scope_accepted` extended to use captures |
+| Captureless Fn1 lambdas accidentally wrapped | Low | Performance regression (extra indirection) | Only wrap when captures are present; bare lambdas keep current path |
+| `borrowed_capture_interface_coercion_rejected` e2e regresses | Medium | Type checker's safety net bypassed | Carefully scope wrapping to Fn-trait-bounded generic params only — not direct Callback-typed params |
+| Non-retaining analysis ordering breaks | Low | Wrong escape levels | No driver ordering changes in Approach A |
+
+### 9. Investigation items (verdict checklist)
+
+#### INV-1: Does `Callback1<A, R>` satisfy `require F is Fn1<A, R>`?
+- **Question:** Check trait implementations in `std.core`. If Callback1 does not implement Fn1, generic instantiation will fail after callback-wrapping. This is the critical go/no-go gate for Approach A.
+- **Resolved:** [ ] yes / [ ] no
+- **Evidence:** _(link to grep/command output or file:line)_
+- **Owner:** Klaudia
+- **Date resolved:** —
+- **Verdict commands:**
+  ```
+  grep -n "implement.*Fn1.*for.*Callback1\|implement.*Callback1.*Fn1" stdlib/std/core/core.drift
+  grep -rn "Callback1" stdlib/std/core/ | head -20
+  ```
+
+#### INV-2: Calling convention difference (monomorphization shape)
+- **Question:** When `scope` is monomorphized with `F = Callback1<Scope, Void>` (after wrapping), the codegen may generate different calling code than for `F = fn(Scope) -> Void`. Does the generic body call `f.call(s)` via `Fn1.call`? If so, Callback1 must implement `Fn1.call`.
+- **Resolved:** [ ] yes / [ ] no
+- **Evidence:** _(link to grep/command output or file:line)_
+- **Owner:** Klaudia
+- **Date resolved:** —
+- **Verdict commands:**
+  ```
+  grep -n "\.call(" stdlib/std/concurrent/concurrent.drift | head -10
+  grep -n "Fn1" lang/driftc/checker/__init__.py | head -20
+  ```
+
+#### INV-3: Does `_wrap_explicit_capture_callbacks` already handle this?
+- **Question:** The fallback at line 5210 wraps lambdas when initial resolution fails. Does `scope(capturing_lambda)` trigger the fallback? If so, the wrapping may already occur for some shapes but the re-typing at TP4/TP5 undoes it.
+- **Resolved:** [ ] yes / [ ] no
+- **Evidence:** _(link to grep/command output or file:line)_
+- **Owner:** Klaudia
+- **Date resolved:** —
+- **Verdict commands:**
+  ```
+  # Static: trace control flow from line 5189 (resolution attempt) through 5210
+  # (_wrap_explicit_capture_callbacks call on ResolutionError) to 5227 (post-resolution
+  # override).  If resolution succeeds on the first try, the fallback never fires.
+  grep -n "_wrap_explicit_capture_callbacks\|ResolutionError" lang/driftc/checker/call_resolver.py | head -10
+
+  # Dynamic: run the existing borrow_escape_scope_accepted e2e with DRIFT_DEBUG_RESOLVER=1
+  # (if available) or add a one-line `print("WRAP_FALLBACK", expr.fn.name)` inside
+  # _wrap_explicit_capture_callbacks, run the e2e, then revert.  Capture output as evidence.
+  # Preferred: static trace above is sufficient if resolution path is unambiguous.
+  ```
+
+### 10. Recommendation
+
+**Approach A (callback-wrap Fn1-bounded captures)** is the recommended path, contingent on INV-1 being resolved as "yes". If Callback1 does not implement Fn1, Approach B (move escape annotation timing earlier) should be evaluated as the fallback.
+
+Implementation prerequisites:
+1. INV-1, INV-2, INV-3 resolved with verdicts filled in (section 9).
+2. Owner reviews this assessment and confirms the approach.
+3. All A1 + A5 regression suites are green.
+4. Phase F1 done-when criteria (section 6) used as the acceptance checklist.
