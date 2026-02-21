@@ -85,7 +85,6 @@ class FnSignature:
 	intrinsic_kind: IntrinsicKind | None = None
 	param_names: Optional[list[str]] = None
 	param_mutable: Optional[list[bool]] = None
-	param_nonretaining: Optional[list[Optional[bool]]] = None
 	param_escape_level: Optional[list[Optional["EscapeLevel"]]] = None
 	error_type_id: Optional[TypeId] = None  # resolved error TypeId
 	# Method metadata (set when the declaration comes from an `implement Type` block).
@@ -124,10 +123,6 @@ class FnSignature:
 			lvl = self.param_escape_level[i]
 			if lvl is not None:
 				return lvl
-		if self.param_nonretaining is not None and i < len(self.param_nonretaining):
-			nr = self.param_nonretaining[i]
-			if nr is True:
-				return EscapeLevel.LOCAL
 		return EscapeLevel.THREAD
 
 

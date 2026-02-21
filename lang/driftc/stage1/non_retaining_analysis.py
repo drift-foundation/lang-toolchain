@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace as dataclass_replace
 from typing import Mapping, Optional, Set, Tuple
 
+from lang.driftc.borrow_checker import EscapeLevel
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.types_core import TypeKind, TypeTable
@@ -28,19 +29,17 @@ def analyze_non_retaining_params(
 	type_table: Optional[TypeTable] = None,
 ) -> dict[FunctionId, FnSignature]:
 	"""
-	Compute param_nonretaining metadata for functions with bodies.
+	Compute param_escape_level (LOCAL) for callable params in functions with bodies.
 
 	The analysis is intentionally conservative:
 	- direct call uses are allowed (cb(...), cb.call(...))
 	- forwarding is allowed only to already-proven non-retaining params
-	- any alias/store/return/capture yields retaining
+	- any alias/store/return/capture yields retaining (param_escape_level stays None → THREAD default)
+
+	Params proven non-retaining get param_escape_level=LOCAL.
+	Retaining or unknown params get param_escape_level=None (THREAD default via effective_param_escape_level).
 	"""
-	working_sigs: dict[FunctionId, FnSignature] = {}
-	for fn_id, sig in signatures_by_id.items():
-		if sig.param_nonretaining is None:
-			working_sigs[fn_id] = sig
-		else:
-			working_sigs[fn_id] = dataclass_replace(sig, param_nonretaining=list(sig.param_nonretaining))
+	working_sigs: dict[FunctionId, FnSignature] = dict(signatures_by_id)
 
 	method_sig_by_key: dict[tuple[int, str], FnSignature] = {}
 	sig_id_by_obj: dict[int, FunctionId] = {id(sig): fn_id for fn_id, sig in working_sigs.items()}
@@ -94,8 +93,18 @@ def analyze_non_retaining_params(
 			return len(sig.param_types)
 		return 0
 
+	def _pel_to_nr(lvl: Optional[EscapeLevel]) -> Optional[bool]:
+		if lvl is EscapeLevel.LOCAL:
+			return True
+		if lvl in (EscapeLevel.THREAD, EscapeLevel.STATIC, EscapeLevel.IMMEDIATE):
+			return False
+		return None  # SCOPED or None → unknown
+
 	param_nonretaining_by_id: dict[FunctionId, list[Optional[bool]] | None] = {
-		fn_id: (list(sig.param_nonretaining) if sig.param_nonretaining is not None else None)
+		fn_id: (
+			[_pel_to_nr(lvl) for lvl in sig.param_escape_level]
+			if sig.param_escape_level is not None else None
+		)
 		for fn_id, sig in working_sigs.items()
 	}
 
@@ -426,8 +435,21 @@ def analyze_non_retaining_params(
 				continue
 			nr[idx] = internal_status.get((fn_id, idx))
 
+	def _build_pel(fn_id: FunctionId, sig: FnSignature) -> Optional[list[Optional[EscapeLevel]]]:
+		nr_list = param_nonretaining_by_id.get(fn_id)
+		if nr_list is None:
+			return sig.param_escape_level
+		base = list(sig.param_escape_level) if sig.param_escape_level is not None else [None] * len(nr_list)
+		while len(base) < len(nr_list):
+			base.append(None)
+		for i, v in enumerate(nr_list):
+			if v is True:
+				base[i] = EscapeLevel.LOCAL
+			# v is False or None: leave existing (None → THREAD default)
+		return base if any(x is not None for x in base) else None
+
 	return {
-		fn_id: dataclass_replace(sig, param_nonretaining=param_nonretaining_by_id.get(fn_id))
+		fn_id: dataclass_replace(sig, param_escape_level=_build_pel(fn_id, sig))
 		for fn_id, sig in working_sigs.items()
 	}
 

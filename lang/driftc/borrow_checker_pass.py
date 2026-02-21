@@ -191,7 +191,7 @@ class BorrowChecker:
 				if sig.is_method and sig.impl_target_type_id is not None:
 					key = (sig.impl_target_type_id, sig.method_name or sig.name)
 					self._method_sig_by_key[key] = sig
-				if not sig.is_method and (sig.param_escape_level or sig.param_nonretaining):
+				if not sig.is_method and sig.param_escape_level:
 					free_key: Tuple[Optional[str], str] = (fn_id.module, fn_id.name)
 					if free_key not in self._free_fn_escape_sig:
 						self._free_fn_escape_sig[free_key] = sig
@@ -1926,20 +1926,20 @@ class BorrowChecker:
 			if callee_is_value:
 				self._visit_expr(state, expr.fn, consume=False, escapes=False)
 			sig = self._resolve_sig_for_call(expr)
-			if sig and sig.param_nonretaining:
+			if sig and sig.param_escape_level:
 				for idx, arg in enumerate(expr.args):
 					param_index = self._param_index_for_call(sig, arg_index=idx)
-					if param_index is None or param_index >= len(sig.param_nonretaining):
+					if param_index is None:
 						continue
-					if sig.param_nonretaining[param_index] is not True:
+					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(arg, H.HLambda):
 						self._add_lambda_capture_loans(state, arg)
 				for kw in expr.kwargs:
 					param_index = self._param_index_for_call(sig, kw_name=kw.name)
-					if param_index is None or param_index >= len(sig.param_nonretaining):
+					if param_index is None:
 						continue
-					if sig.param_nonretaining[param_index] is not True:
+					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(kw.value, H.HLambda):
 						self._add_lambda_capture_loans(state, kw.value)
@@ -2015,20 +2015,20 @@ class BorrowChecker:
 		if isinstance(expr, H.HMethodCall):
 			pre_loans = set(state.loans)
 			sig = self._resolve_sig_for_call(expr)
-			if sig and sig.param_nonretaining:
+			if sig and sig.param_escape_level:
 				for idx, arg in enumerate(expr.args):
 					param_index = self._param_index_for_call(sig, arg_index=idx)
-					if param_index is None or param_index >= len(sig.param_nonretaining):
+					if param_index is None:
 						continue
-					if sig.param_nonretaining[param_index] is not True:
+					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(arg, H.HLambda):
 						self._add_lambda_capture_loans(state, arg)
 				for kw in expr.kwargs:
 					param_index = self._param_index_for_call(sig, kw_name=kw.name)
-					if param_index is None or param_index >= len(sig.param_nonretaining):
+					if param_index is None:
 						continue
-					if sig.param_nonretaining[param_index] is not True:
+					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(kw.value, H.HLambda):
 						self._add_lambda_capture_loans(state, kw.value)

@@ -9335,15 +9335,13 @@ class TypeChecker:
 			return arg_index
 
 		def _nonretaining_param_state(sig: FnSignature, param_index: int) -> Optional[bool]:
-			if sig.param_nonretaining is None:
-				return None
-			if param_index < 0 or param_index >= len(sig.param_nonretaining):
-				return None
-			state = sig.param_nonretaining[param_index]
-			if state is True:
-				return True
-			if state is False:
-				return False
+			from lang.driftc.borrow_checker import EscapeLevel
+			if sig.param_escape_level is not None and 0 <= param_index < len(sig.param_escape_level):
+				lvl = sig.param_escape_level[param_index]
+				if lvl is not None:
+					if lvl in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+						return True
+					return False  # THREAD, STATIC, IMMEDIATE → retaining
 			return None
 
 		def _check_borrowed_arg_boundary(

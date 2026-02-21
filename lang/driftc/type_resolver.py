@@ -116,7 +116,6 @@ def resolve_program_signatures(
 		param_names: list[str] = []
 		param_mutable: list[bool] = []
 		param_type_ids: list[TypeId] = []
-		param_nonretaining: list[Optional[bool]] = []
 
 		def _coerce_exception_nominal(ty: TypeId) -> TypeId:
 			"""
@@ -149,10 +148,6 @@ def resolve_program_signatures(
 				resolved_param = resolve_opaque_type(raw_ty, table, module_id=module_name, type_params=local_type_params)
 			resolved_param = _coerce_exception_nominal(resolved_param)
 			param_type_ids.append(resolved_param)
-			param_nonretaining.append(None)
-		if intrinsic_kind in {IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2}:
-			if param_nonretaining:
-				param_nonretaining[0] = False
 
 		# Return
 		raw_ret = getattr(decl, "return_type", None)
@@ -228,7 +223,6 @@ def resolve_program_signatures(
 			throws_events=throws,
 			param_names=param_names if param_names else None,
 			param_mutable=param_mutable if param_mutable else None,
-			param_nonretaining=param_nonretaining if param_nonretaining else None,
 			is_method=is_method,
 			self_mode=self_mode,
 			impl_target_type_id=impl_target_type_id,

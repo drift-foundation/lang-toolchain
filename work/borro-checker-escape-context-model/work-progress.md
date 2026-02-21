@@ -344,10 +344,84 @@ Phase 4 e2e quartet: all ok (unchanged)
 
 ---
 
+## Phase 5 — COMPLETE (2026-02-21)
+
+**Goal:** Remove `FnSignature.param_nonretaining` backward-compat bridge. Fully migrate to `param_escape_level`.
+
+**Pre-condition grep (source files only):**
+```
+grep -rn "param_nonretaining" lang/driftc/ lang/tests/ --include="*.py"
+→ lang/driftc/checker/__init__.py: 88 (field), 127-128 (bridge body)
+→ lang/driftc/borrow_checker_pass.py: 194, 1929-1942, 2018-2031
+→ lang/tests/stage1/test_non_retaining_function_params.py: 62, 71, 81, 92
+→ lang/driftc/type_checker.py: 9338-9342
+→ lang/driftc/type_resolver.py: 119, 152, 154-155, 231
+→ lang/driftc/stage1/non_retaining_analysis.py: producer (internal working var)
+```
+
+**Changes landed:**
+
+- `lang/driftc/stage1/non_retaining_analysis.py`:
+  - Added `EscapeLevel` import.
+  - Simplified `working_sigs` construction (removed mutable-copy for `param_nonretaining`).
+  - Changed `param_nonretaining_by_id` initialization to read from `sig.param_escape_level` (convert `LOCAL→True`, `THREAD/STATIC→False`, `None/SCOPED→None`).
+  - Changed final return to write `param_escape_level` instead of `param_nonretaining`:
+    `True → LOCAL`, `False/None → None` (THREAD default). Normalizes all-None to `None`.
+  - The internal working dict `param_nonretaining_by_id` remains a local variable (boolean state for the fixpoint analysis).
+
+- `lang/driftc/type_resolver.py`:
+  - Removed `param_nonretaining: list[Optional[bool]] = []` local variable.
+  - Removed `param_nonretaining.append(None)` in param loop.
+  - Removed CALLBACK intrinsic special case setting `param_nonretaining[0] = False` (escape handled by type-checker borrow-capture guard + borrow-checker transparent-wrapper propagation).
+  - Removed `param_nonretaining=...` from `FnSignature(...)` constructor call.
+
+- `lang/driftc/type_checker.py` (`_nonretaining_param_state`):
+  - Removed `param_nonretaining` read. Now reads `param_escape_level` directly:
+    `LOCAL/SCOPED → True` (non-retaining), `THREAD/STATIC/IMMEDIATE → False` (retaining), `None → None` (unknown).
+
+- `lang/driftc/borrow_checker_pass.py`:
+  - Line 194 (cache condition): removed `sig.param_nonretaining` from `(sig.param_escape_level or sig.param_nonretaining)` → now `sig.param_escape_level` only.
+  - Lines 1929-1945 (HCall pre-loan section): replaced `sig.param_nonretaining[i] is not True` check with `sig.effective_param_escape_level(i) not in (LOCAL, SCOPED)`. Condition also changed to `sig.param_escape_level` (was `sig.param_nonretaining`). Removed `>= len(sig.param_nonretaining)` bound check (effective_param_escape_level handles out-of-range internally).
+  - Lines 2018-2034 (HMethodCall pre-loan section): same migration.
+  - Note: SCOPED is now included in the pre-loan section, which correctly enables scope-escape checking for cases where the type-checker coercion restriction is lifted in future.
+
+- `lang/driftc/checker/__init__.py`:
+  - Removed `param_nonretaining: Optional[list[Optional[bool]]] = None` field from `FnSignature`.
+  - Removed `param_nonretaining` fallback from `effective_param_escape_level` (was lines 127-130).
+
+- `lang/tests/stage1/test_non_retaining_function_params.py`:
+  - Added `EscapeLevel` import.
+  - 3 `param_nonretaining == [True]` assertions → `param_escape_level == [EscapeLevel.LOCAL]`.
+  - 1 `param_nonretaining == [False]` assertion → `param_escape_level is None` (retaining params now produce all-None list which normalizes to None).
+
+**Post-removal grep (source only):**
+```
+grep -rn "param_nonretaining" lang/driftc/ lang/tests/ --include="*.py"
+→ Only lang/driftc/stage1/non_retaining_analysis.py: local variable param_nonretaining_by_id
+   (internal working state — NOT the FnSignature field)
+→ Zero external field accesses remaining
+```
+
+**Checkpoint result (2026-02-21):**
+```
+lang/tests/stage1/test_non_retaining_function_params.py: 5/5 passed
+lang/tests/borrow_checker/: 89 passed
+lang/tests/driver/test_callinfo_param_layout_contract.py: 11/11 passed
+lang/tests/driver/test_explicit_capture_diagnostics.py: 10/10 passed
+lang/tests/driver/test_boundary_matrix_result_variant_contract.py: 4/4 passed
+lang/tests/driver/test_struct_ref_field_boundary_contract.py: 8/8 passed
+Phase 4 e2e quartet:
+  borrow_escape_scope_accepted: ok
+  borrow_escape_spawn_rejected: ok
+  result_ok_move_conn_source_drop_regression: ok
+  struct_ref_field_result_ok_move_drop_once: ok
+lang/tests/stage1/test_lambda_validation.py: 7/7 passed
+```
+
+---
+
 ## Known limitations / hand-off items
 
-1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). For the borrow checker's SCOPED acceptance to be exercisable end-to-end, the type checker needs to accept capturing lambdas in `Fn1`-bounded generic positions. This is a type system extension beyond Phase 4.
+1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). For the borrow checker's SCOPED acceptance to be exercisable end-to-end, the type checker needs to accept capturing lambdas in `Fn1`-bounded generic positions. This is a type system extension beyond Phase 5.
 
-2. **`param_nonretaining` not removed.** Full migration is Phase 5. The `effective_param_escape_level` bridge handles it.
-
-3. **`_place_is_defined_before_stmt` is conservative (MVP §3.6).** Borrows defined in predecessor/nested blocks are rejected even if provably safe. Full dataflow-based lifetime reasoning is deferred.
+2. **`_place_is_defined_before_stmt` is conservative (MVP §3.6).** Borrows defined in predecessor/nested blocks are rejected even if provably safe. Full dataflow-based lifetime reasoning is deferred.

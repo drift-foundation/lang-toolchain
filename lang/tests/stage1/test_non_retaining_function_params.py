@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lang.driftc import stage1 as H
+from lang.driftc.borrow_checker import EscapeLevel
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.types_core import TypeTable
@@ -59,7 +60,7 @@ def test_fn_param_typeid_callable_direct_invoke() -> None:
 	sig = FnSignature(name="takes_fp", param_type_ids=[fn_ty], return_type_id=int_ty)
 	typed_fns = {fn_id: _typed_fn_with_direct_invoke(fn_id, param_name="f")}
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
-	assert sigs[fn_id].param_nonretaining == [True]
+	assert sigs[fn_id].param_escape_level == [EscapeLevel.LOCAL]
 
 
 def test_fn_param_raw_typeexpr_callable_direct_invoke() -> None:
@@ -68,7 +69,7 @@ def test_fn_param_raw_typeexpr_callable_direct_invoke() -> None:
 	sig = FnSignature(name="takes_fp", param_types=[raw])
 	typed_fns = {fn_id: _typed_fn_with_direct_invoke(fn_id, param_name="f")}
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig})
-	assert sigs[fn_id].param_nonretaining == [True]
+	assert sigs[fn_id].param_escape_level == [EscapeLevel.LOCAL]
 
 
 @pytest.mark.parametrize("ref_name", ["&", "&mut"])
@@ -78,7 +79,7 @@ def test_fn_param_raw_ref_wrapped_callable(ref_name: str) -> None:
 	sig = FnSignature(name="takes_fp", param_types=[raw])
 	typed_fns = {fn_id: _typed_fn_with_direct_invoke(fn_id, param_name="f")}
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig})
-	assert sigs[fn_id].param_nonretaining == [True]
+	assert sigs[fn_id].param_escape_level == [EscapeLevel.LOCAL]
 
 
 def test_fn_param_retain_marks_false() -> None:
@@ -89,4 +90,5 @@ def test_fn_param_retain_marks_false() -> None:
 	sig = FnSignature(name="takes_fp", param_type_ids=[fn_ty], return_type_id=int_ty)
 	typed_fns = {fn_id: _typed_fn_with_retain(fn_id, param_name="f")}
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
-	assert sigs[fn_id].param_nonretaining == [False]
+	# Retaining param: analysis cannot prove non-retaining → param_escape_level stays None (THREAD default)
+	assert sigs[fn_id].param_escape_level is None

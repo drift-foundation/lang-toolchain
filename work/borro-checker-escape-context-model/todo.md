@@ -1035,6 +1035,18 @@ PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
 **Goal:** Remove the `param_nonretaining` backward-compat bridge and all
 transitional helpers. The model is fully migrated to `param_escape_level`.
 
+**Start now (Klaudia) — required execution order:**
+1. Run the precondition grep gate exactly as written below; paste raw output in
+   `work-progress.md`.
+2. If any matches exist, migrate those call sites first; do not remove fields
+   while live usages remain.
+3. Remove `FnSignature.param_nonretaining` and bridge-only logic only after
+   step 2 is complete.
+4. Re-run the post-removal grep gate; all `param_nonretaining` matches must be zero.
+5. Run the Phase 5 checkpoint commands and record pass/fail matrix in
+   `work-progress.md`.
+6. Stop and hand off for review.
+
 **Pre-condition — must verify before any code removal:**
 ```
 # Must return zero matches before removal begins:
@@ -1285,6 +1297,13 @@ Before the branch is merged to main, the following must be true:
 - [ ] Q1 trait-object THREAD-default regression present in `test_escape_level_model.py`
 - [ ] `param_nonretaining` removed from `FnSignature` (Phase 5 complete)
 - [ ] Post-removal grep confirms zero `param_nonretaining` references in compiler and tests
+
+### Documentation Hygiene Rule (for future phase updates)
+
+When a post-review fix changes behavior/details of an already-written phase
+summary, update the original phase summary text to reflect final behavior (or
+add an explicit "superseded by post-review fix" note in that section). Do not
+leave contradictory pre-fix wording in the same document.
 - [ ] Q1–Q4 disposition recorded in this document (Q1 resolved; Q2–Q4 stances confirmed)
 - [ ] Phase 4 known limitations (conservative MVP false positives) documented
 - [ ] No `"internal:"` strings in new diagnostics
