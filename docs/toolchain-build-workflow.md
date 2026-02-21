@@ -32,6 +32,7 @@ The goal is to confirm your environment can run the full Drift pipeline (parser/
 - Python 3.13+
 - LLVM/Clang (repo notes currently recommend clang-15)
 - `just`
+- `ripgrep` (`rg`) (required by `just build` / `dist-publish-stdlib` stdlib source-file enumeration)
 - `pkg-config`
 - `libdw-dev`, `libunwind-dev`, `libelf-dev`
 - Optional: `ld.gold`

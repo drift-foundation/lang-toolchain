@@ -125,6 +125,7 @@ Build/test requirements (Linux):
 - LLVM/Clang (clang-15 recommended)
 - Gold linker (`ld.gold`) for `--gdb-index` support (optional)
 - `just` (task runner)
+- `ripgrep` (`rg`) for stdlib package publish/build recipes
 - `pkg-config`
 - `libdw-dev` (elfutils), `libunwind-dev`, `libelf-dev` (runtime stack traces)
 
