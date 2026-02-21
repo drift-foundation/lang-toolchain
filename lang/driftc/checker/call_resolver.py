@@ -2759,6 +2759,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					cb_name = "callback_throw2" if is_throw else "callback2"
 				cb_var = H.HVar(name=cb_name, module_id="std.core")
 				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+				cb_call._is_implicit_wrap = True
 				_alloc_callsite_id = getattr(ctx, "alloc_callsite_id", None)
 				if _alloc_callsite_id is not None:
 					cb_call.callsite_id = _alloc_callsite_id()
@@ -2800,6 +2801,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 							cb_name = "callback_throw2" if is_throw else "callback2"
 						cb_var = H.HVar(name=cb_name, module_id="std.core")
 						cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+						cb_call._is_implicit_wrap = True
 						_alloc_callsite_id = getattr(ctx, "alloc_callsite_id", None)
 						if _alloc_callsite_id is not None:
 							cb_call.callsite_id = _alloc_callsite_id()
@@ -4256,6 +4258,18 @@ def resolve_call_expr(
 		arg_expr = expr.args[0]
 		arg_expected_type: TypeId | None = None
 		if isinstance(arg_expr, H.HLambda):
+			# Guard: reject user-written callback0(lambda_with_borrow).  Implicit
+			# wraps (created by _wrap_explicit_capture_callbacks) skip this check;
+			# escape enforcement for those is deferred to the borrow checker.
+			if not getattr(expr, "_is_implicit_wrap", False):
+				_ec = getattr(arg_expr, "explicit_captures", None) or []
+				if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in _ec):
+					diagnostics.append(_tc_diag(
+						message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+						severity="error",
+						span=getattr(arg_expr, "loc", getattr(expr, "loc", Span())),
+					))
+					return record_expr(expr, ctx.unknown_ty)
 			arg_expr.allow_capture_invoke = True
 			arg_expr.capture_as_move = True
 			is_throw = expr.fn.name in ("callback_throw0", "callback_throw1", "callback_throw2")
@@ -5136,6 +5150,7 @@ def resolve_call_expr(
 					cb_name = "callback2"
 				cb_var = H.HVar(name=cb_name, module_id="std.core")
 				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+				cb_call._is_implicit_wrap = True
 				if ctx.alloc_callsite_id is not None:
 					cb_call.callsite_id = ctx.alloc_callsite_id()
 				if ctx.alloc_node_id is not None:
@@ -5303,6 +5318,7 @@ def resolve_call_expr(
 					cb_name = "callback_throw2" if is_throw else "callback2"
 				cb_var = H.HVar(name=cb_name, module_id="std.core")
 				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+				cb_call._is_implicit_wrap = True
 				if ctx.alloc_callsite_id is not None:
 					cb_call.callsite_id = ctx.alloc_callsite_id()
 				if ctx.alloc_node_id is not None:

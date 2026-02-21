@@ -6,6 +6,43 @@ Status: Approved as roadmap candidate — concerns addressed below, implementati
 
 ---
 
+## Reviewer Feedback (0–3b checkpoint)
+
+Reviewer: Codex  
+Date: 2026-02-20  
+Scope reviewed: Phase 0, Phase 1, Phase 2, Phase 3a, Phase 3b only
+
+Outcome: APPROVED for 0–3b.
+
+What was verified:
+- `EscapeLevel` + `Loan.max_escape` plumbing is present and coherent in:
+  - `lang/driftc/borrow_checker.py`
+  - `lang/driftc/borrow_checker_pass.py`
+- `FnSignature.param_escape_level` + conservative bridge
+  (`SCOPED -> LOCAL`) is implemented in:
+  - `lang/driftc/checker/__init__.py`
+- Call-site escape checks are wired for all three call shapes:
+  - `HCall`, `HMethodCall`, `HInvoke`
+  - in `lang/driftc/borrow_checker_pass.py`
+- stdlib escape annotation injection step is in place post non-retaining analysis:
+  - `lang/driftc/driftc.py`
+- No unintended Phase 4/5 semantic changes were introduced in the reviewed diffs.
+
+Targeted validation run by reviewer:
+- `lang/tests/borrow_checker/test_escape_level_model.py` (pass)
+- `lang/tests/stage1/test_lambda_validation.py` (pass)
+
+Non-blocking note:
+- One timing-sensitive e2e timeout was observed during concurrent full-suite runs.
+  This was treated as non-signal for the 0–3b gate while user-side full test runs
+  were active.
+
+Next gate:
+- Proceed to the next planned checkpoint only after user confirms full-suite
+  signal is clean for this branch.
+
+---
+
 ## 1. Background & Motivation
 
 ### 1.1 What A5 is
@@ -732,6 +769,146 @@ grep -rn "param_nonretaining" lang/driftc/ | grep -v "effective_param_escape_lev
 
 ---
 
+### Phase 3c — Transfer escape enforcement from lambda_validate to borrow checker
+
+**Goal:** Remove item 2 (escape-level enforcement) from `lambda_validate.py`,
+making the borrow checker the sole owner of escape semantics. After this phase,
+the borrow checker's E_ESCAPE_THREAD path is reachable via normal Drift
+compilation for the `spawn_cb` / `spawn` patterns, and the
+`borrow_escape_spawn_rejected` e2e test (planned in Phase 2's "Tests to add"
+list, blocked until now) can be written as a real end-to-end case.
+
+**Preconditions:** Phase 3b is stable. The borrow checker already catches
+`spawn_cb(&x capture)` via the Phase 2+3b THREAD annotation — lambda_validate.py
+merely intercepts first. Phase 3c removes that intercept.
+
+**Semantic change — must be understood before implementing:**
+
+After this phase, certain patterns that lambda_validate.py currently rejects will
+become accepted. This is CORRECT behavior:
+
+```drift
+// Currently rejected by lambda_validate.py (item 2) even though safe:
+var f = | | captures(&x) => { read x };
+f.call();   // local immediate call — borrow checker accepts this
+```
+
+lambda_validate.py's item 2 rejects all escaping REF/REF_MUT lambdas at the
+*assignment site*, not the *use site*. The borrow checker validates at the
+actual call-argument site and accepts the LOCAL case. The set of rejections
+narrows to: lambdas actually passed to THREAD/STATIC params (which is correct).
+
+**Explicit guard — do NOT touch:**
+
+`lang/driftc/type_checker.py` lines ~5495–5533. These check REF/REF_MUT
+captures in **function-pointer coercion** contexts (`Callback0`, `FnOnce` etc.)
+— a type-checker concern separate from escape enforcement. They remain in place.
+The `borrowed_capture_interface_coercion_rejected` e2e test is NOT affected by
+Phase 3c because it is caught by type_checker.py, not lambda_validate.py.
+
+**Changes:**
+
+1. `lang/driftc/stage1/lambda_validate.py`:
+   - Remove: `_emit_error`, `_resolve_sig_for_call`, `_param_index_for_call`,
+     `_allow_lambda_arg` functions
+   - In `_walk_expr` HLambda branch: remove `has_borrow` check + the
+     `if not allow_lambda and has_borrow: _emit_error(e.span)` block
+   - Remove `allow_lambda` parameter from `_walk_expr` (the whole traversal
+     collapses to: find nested lambdas, run `discover_captures`, report capture
+     diagnostics — nothing more)
+   - Keep: `discover_captures(e)` call and `diags.extend(res.diagnostics)` —
+     item 1 (capture validation) is unchanged
+
+2. `lang/tests/stage1/test_lambda_validation.py`:
+   The following 9 tests assert item 2 behavior and must be **deleted** (their
+   behavior either moves to the borrow checker or becomes accepted):
+   - `test_lambda_non_call_rejected`
+   - `test_lambda_nested_in_loop_rejected`
+   - `test_lambda_in_call_arg_rejected`
+   - `test_lambda_nested_in_try_body_rejected`
+   - `test_lambda_nested_in_catch_body_rejected`
+   - `test_lambda_nested_in_match_arm_rejected`
+   - `test_lambda_inside_place_projection_rejected`
+   - `test_lambda_in_method_call_arg_rejected_when_retaining`
+   - `test_lambda_in_method_call_arg_rejected_when_unresolved`
+
+   The remaining 5 tests cover item 1 (capture discovery / nonretaining-allow
+   positive cases) and must continue to pass:
+   - `test_immediate_call_lambda_allowed`
+   - `test_lambda_in_call_arg_allowed_for_nonretaining_param`
+   - `test_borrowed_capture_allowed_for_nonretaining_param`
+   - `test_lambda_immediate_call_nested_in_expr_allowed`
+   - `test_lambda_immediate_method_call_allowed`
+   - `test_lambda_non_call_allowed_without_borrow_capture`
+
+3. `lang/tests/codegen/e2e/implicit_callback_borrowed_capture_rejected/expected.json`:
+   Update `message_contains` from the lambda_validate.py message to the borrow
+   checker's E_ESCAPE_THREAD fragment (e.g., `"cannot be sent to a detached"`
+   or similar stable prefix per §3.7).
+
+4. Add `lang/tests/codegen/e2e/borrow_escape_spawn_rejected/` — now viable:
+   ```
+   main.drift: conc.spawn(| | captures(&x) => { ... })  // E_ESCAPE_THREAD
+   expected.json: { "message_contains": "E_ESCAPE_THREAD" }
+   ```
+
+**Regression-first gate (mandatory before removing item 2):**
+
+Before touching lambda_validate.py, add a borrow checker unit test that passes
+a `captures(&x)` lambda to a THREAD-annotated param and asserts E_ESCAPE_THREAD.
+This test must be GREEN with lambda_validate.py intact. If it is not green,
+the borrow checker does not yet cover the case — do not remove item 2.
+
+```
+lang/tests/borrow_checker/test_escape_level_model.py:
+  - test_spawn_cb_ref_capture_caught_by_borrow_checker_directly:
+      Construct HIR with spawn_cb THREAD-annotated sig + lambda with REF capture.
+      Assert E_ESCAPE_THREAD from borrow checker.
+      (Gate test — must pass before item 2 removal.)
+```
+
+**Checkpoint commands:**
+```
+PYTHONPATH=. ./.venv/bin/python3 -m pytest lang/tests/borrow_checker/ -q
+PYTHONPATH=. ./.venv/bin/python3 -m pytest lang/tests/stage1/test_lambda_validation.py -q
+PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
+    implicit_callback_borrowed_capture_rejected \
+    borrowed_capture_interface_coercion_rejected \
+    borrow_escape_spawn_rejected \
+    result_ok_move_conn_source_drop_regression \
+    struct_ref_field_result_ok_move_drop_once
+```
+
+**Regression checkpoint:**
+- Gate test passes before item 2 removal
+- `borrowed_capture_interface_coercion_rejected` still passes (type_checker.py catches it)
+- `implicit_callback_borrowed_capture_rejected` passes with new E_ESCAPE_THREAD message
+- `test_invoke_optional_ref_and_lambda_escape.py` passes (borrow checker unit tests unchanged)
+- `test_lambda_validation.py` has 7 tests remaining — all pass
+- New `borrow_escape_spawn_rejected` e2e passes
+
+**Reviewer findings (2026-02-20) — RESOLVED (2026-02-20):**
+
+1. ~~BLOCKER~~ RESOLVED via Option A: `borrowed_capture_interface_coercion_rejected` restored to type-checker ownership.
+   - `std.core::callback0/1/2` and `callback_throw0/1/2` removed from `_STDLIB_ESCAPE_ANNOTATIONS`.
+   - `_is_implicit_wrap=True` set on all 4 synthesized wrapper sites in `call_resolver.py`.
+   - Borrow-capture guard added to callback0 handler in `call_resolver.py`: rejects user-written `callback0(borrow_lambda)` at phase="typecheck"; implicit wraps bypass guard (escape enforced at outer call site by borrow checker).
+   - Transparent-wrapper propagation added in `borrow_checker_pass.py`: outer THREAD-annotated call (spawn) that receives `callback0(lambda)` arg propagates the THREAD level to the inner lambda.
+   - HLambda escape check in HCall gated with `not _is_callback_wrapper_call(expr)` to prevent double-reporting and false positives for the coercion path.
+   - Two pre-existing Phase 3c regressions also fixed: `val f = lambda_with_borrow` (HLet) and `return lambda_with_borrow` (HReturn) now emit the v0 blanket error via `_report_lambda_escape_if_borrowed`.
+
+2. DOC drift RESOLVED: `test_lambda_validation.py` text corrected — file has 7 tests (not 5), all passing.
+
+**Validation result:**
+- `borrowed_capture_interface_coercion_rejected` e2e: phase="typecheck" ✓
+- `borrow_escape_spawn_rejected` e2e: phase="borrow_check", E_ESCAPE_THREAD ✓
+- `implicit_callback_borrowed_capture_rejected` e2e: phase="borrow_check", E_ESCAPE_THREAD ✓
+- `lang/tests/borrow_checker/`: 85 passed ✓
+- `lang/tests/driver/test_explicit_capture_diagnostics.py`: 10/10 ✓
+- Phase 3c gate clear. Proceed to Phase 4 when ready.
+
+---
+
 ### Phase 4 — Structured scope lifetime reasoning
 
 **Goal:** Lift the conservative LOCAL bridge on `SCOPED` parameters. After this
@@ -894,17 +1071,25 @@ Phase 3a (minimal annotated set: spawn/scope/one LOCAL)
     ▼
 Phase 3b (full stdlib annotation sweep)
     │
-    ├──► Phase 4 (scope reasoning — SCOPED lifted from LOCAL) ─┐
-    │                                                           │
-    └───────────────────────────────────────────────────────────┼──► Phase 5 (cleanup)
-                                                                │
-                                                                ▼
-                                                          fully migrated
+    ▼
+Phase 3c (transfer escape enforcement: remove lambda_validate item 2)
+    │
+    ▼
+Phase 4 (scope reasoning — SCOPED lifted from LOCAL)
+    │
+    ▼
+Phase 5 (cleanup: remove param_nonretaining bridge)
+    │
+    ▼
+fully migrated
 ```
 
-Phases 0–3b are sequential. Phase 4 can be developed in parallel with
-validation after Phase 3b is stable (separate PR targeting the feature branch).
-Phase 5 requires both Phase 3b and Phase 4 to be merged and stable.
+Phases 0–3c are sequential. Phase 3c must follow 3b because 3b's THREAD
+annotations on stdlib functions are what makes the borrow checker catch the
+cases lambda_validate.py was catching — 3c removes that intercept only after
+3b proves coverage. Phase 4 follows 3c so that the borrow checker is the sole
+enforcer before scope reasoning is added. Phase 5 requires Phase 4 to be
+merged and stable.
 
 ---
 
@@ -1035,8 +1220,14 @@ PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
     borrow_escape_spawn_rejected \
     borrow_escape_static_rejected \
-    borrow_escape_scope_accepted
+    borrow_escape_scope_accepted \
+    implicit_callback_borrowed_capture_rejected
 ```
+
+Note: `implicit_callback_borrowed_capture_rejected` moves from lambda_validate
+to borrow checker ownership at Phase 3c; its expected.json is updated then.
+`borrowed_capture_interface_coercion_rejected` is NOT in this list — it remains
+owned by type_checker.py and is unaffected by A5.
 
 **Full suite (Phase 5 only):**
 ```
@@ -1087,6 +1278,7 @@ Before the branch is merged to main, the following must be true:
 - Phase 2: Klaudia review — focus on call-site wiring and diagnostic messages
 - Phase 3a: Klaudia review — first real stdlib annotations, diagnostic stability checkpoint
 - Phase 3b: Klaudia + owner review — full stdlib sweep, load-bearing contracts; STATIC audit required before merge
+- Phase 3c: Klaudia review — lambda_validate item 2 removal; gate test must be green; `test_lambda_validation.py` deletion confirmed
 - Phase 4: Klaudia review — scope lifetime reasoning (conservative MVP algorithm and its known limitations)
 - Phase 5: owner sign-off — removes a public field from FnSignature; grep verification required
 

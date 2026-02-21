@@ -1,5 +1,5 @@
 {
-  "description": "borrowed capture rejected when implicitly coerced to Callback",
+  "description": "borrowed capture rejected when passed to conc.spawn (E_ESCAPE_THREAD)",
   "exit_code": 1,
   "phase": "borrow_check",
   "stderr": "",

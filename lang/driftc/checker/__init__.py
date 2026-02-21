@@ -86,6 +86,7 @@ class FnSignature:
 	param_names: Optional[list[str]] = None
 	param_mutable: Optional[list[bool]] = None
 	param_nonretaining: Optional[list[Optional[bool]]] = None
+	param_escape_level: Optional[list[Optional["EscapeLevel"]]] = None
 	error_type_id: Optional[TypeId] = None  # resolved error TypeId
 	# Method metadata (set when the declaration comes from an `implement Type` block).
 	is_method: bool = False
@@ -116,6 +117,20 @@ class FnSignature:
 	def __post_init__(self) -> None:
 		if not self.is_mir_bound:
 			self.is_mir_bound = bool(self.is_instantiation or (not self.type_params and not self.impl_type_params))
+
+	def effective_param_escape_level(self, i: int) -> "EscapeLevel":
+		from lang.driftc.borrow_checker import EscapeLevel
+		if self.param_escape_level is not None and i < len(self.param_escape_level):
+			lvl = self.param_escape_level[i]
+			if lvl is not None:
+				if lvl == EscapeLevel.SCOPED:
+					return EscapeLevel.LOCAL  # conservative bridge until Phase 4
+				return lvl
+		if self.param_nonretaining is not None and i < len(self.param_nonretaining):
+			nr = self.param_nonretaining[i]
+			if nr is True:
+				return EscapeLevel.LOCAL
+		return EscapeLevel.THREAD
 
 
 @dataclass(frozen=True)

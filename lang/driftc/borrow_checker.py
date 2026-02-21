@@ -14,10 +14,20 @@ or CFG yet) and just answers:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, IntEnum, auto
 from typing import Callable, Tuple, Optional
 
 from lang.driftc import stage1 as H
+
+
+class EscapeLevel(IntEnum):
+	"""How far a closure/loan is allowed to escape its origin scope."""
+
+	IMMEDIATE = 0  # Never outlives the call — used only for immediately-invoked lambdas.
+	LOCAL = 1      # Stays within the enclosing function scope.
+	SCOPED = 2     # May be handed to a structured-concurrency scope (e.g., std.concurrent.scope).
+	THREAD = 3     # May be sent to a detached virtual thread.
+	STATIC = 4     # May be registered globally / used as a 'static callback.
 
 
 class IndexKind(Enum):

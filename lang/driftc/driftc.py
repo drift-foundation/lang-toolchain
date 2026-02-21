@@ -7390,6 +7390,31 @@ def main(argv: list[str] | None = None) -> int:
 		type_table=type_table,
 	)
 
+	# Phase 3a/3b: annotate known stdlib callable params with escape levels.
+	# Keyed by (module, name) → list of per-param EscapeLevel (None = no annotation).
+	# spawn*/vt_spawn receive callbacks that cross thread boundaries → THREAD.
+	# scope receives a structured-concurrency callable that never outlives the scope → SCOPED.
+	# runtime_registry_set/runtime_thread_registry_set store a dropper callback globally → STATIC.
+	from lang.driftc.borrow_checker import EscapeLevel as _EscapeLevel
+	_STDLIB_ESCAPE_ANNOTATIONS: dict[tuple[str, str], list] = {
+		# std.concurrent
+		("std.concurrent", "scope"): [_EscapeLevel.SCOPED],
+		("std.concurrent", "spawn"): [_EscapeLevel.THREAD],
+		("std.concurrent", "spawn_cb"): [_EscapeLevel.THREAD],
+		("std.concurrent", "spawn_on"): [None, _EscapeLevel.THREAD],
+		("std.concurrent", "spawn_future"): [_EscapeLevel.THREAD],
+		("std.concurrent", "spawn_future_on"): [None, _EscapeLevel.THREAD],
+		# lang.thread intrinsics
+		("lang.thread", "vt_spawn"): [_EscapeLevel.THREAD, None],
+		("lang.thread", "runtime_registry_set"): [None, None, _EscapeLevel.STATIC],
+		("lang.thread", "runtime_thread_registry_set"): [None, None, _EscapeLevel.STATIC],
+	}
+	for _fn_id, _sig in signatures_by_id_all.items():
+		_key = (_fn_id.module, _fn_id.name)
+		_levels = _STDLIB_ESCAPE_ANNOTATIONS.get(_key)
+		if _levels is not None and _sig.param_escape_level is None:
+			_sig.param_escape_level = list(_levels)
+
 	# Enforce non-escaping lambda rule after type resolution so method calls are visible.
 	lambda_diags: list[Diagnostic] = []
 	for _fn_id, typed_fn in typed_fns.items():
