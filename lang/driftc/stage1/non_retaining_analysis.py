@@ -444,10 +444,13 @@ def analyze_non_retaining_params(
 			base.append(None)
 		for i, v in enumerate(nr_list):
 			if v is True:
-				base[i] = EscapeLevel.LOCAL
+				existing = base[i]
+				if existing is None or existing.value > EscapeLevel.LOCAL.value:
+					base[i] = EscapeLevel.LOCAL  # promote unannotated/permissive slot to LOCAL
+				# else: existing is IMMEDIATE or LOCAL — preserve stricter annotation
 			elif v is False:
 				base[i] = None  # analysis proved retaining; clear any pre-seeded annotation
-			# v is None: leave existing (annotation unknown, preserve prior value)
+			# v is None: analysis inconclusive; leave existing annotation unchanged
 		return base if any(x is not None for x in base) else None
 
 	return {

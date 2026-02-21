@@ -114,13 +114,18 @@ def test_pre_seeded_local_downgraded_to_retaining() -> None:
 
 
 def test_immediate_level_treated_as_non_retaining() -> None:
-	"""Fix 1 regression: IMMEDIATE is the most restrictive non-escaping level.
-	A param annotated IMMEDIATE must be treated as non-retaining by _pel_to_nr
-	(initialisation path) and preserved as-is by _build_pel (analysis path).
+	"""Fix 1 + Fix 4 regression: IMMEDIATE is the most restrictive non-escaping level.
+
+	_pel_to_nr must treat IMMEDIATE as non-retaining (True) so it participates in the
+	fixpoint as a candidate for non-retaining classification.
+
+	_build_pel must preserve the stricter IMMEDIATE annotation when analysis confirms
+	non-retaining (v is True): IMMEDIATE.value (0) <= LOCAL.value (1), so the existing
+	annotation is kept rather than overwritten with LOCAL.
 
 	Concretely: if a sig enters with param_escape_level=[IMMEDIATE] and the function
-	body only calls the param directly (non-retaining), the output must keep IMMEDIATE
-	(not downgrade to LOCAL or clear to None).
+	body only calls the param directly (non-retaining), the output must preserve IMMEDIATE
+	(not normalize to LOCAL, not clear to None).
 	"""
 	table = TypeTable()
 	int_ty = table.ensure_int()
@@ -129,8 +134,5 @@ def test_immediate_level_treated_as_non_retaining() -> None:
 	sig = FnSignature(name="takes_fp", param_type_ids=[fn_ty], return_type_id=int_ty, param_escape_level=[EscapeLevel.IMMEDIATE])
 	typed_fns = {fn_id: _typed_fn_with_direct_invoke(fn_id, param_name="f")}
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
-	# IMMEDIATE pre-seeded; analysis confirms non-retaining (True); _build_pel sets LOCAL.
-	# IMMEDIATE → _pel_to_nr → True; fixpoint → True; _build_pel → LOCAL (analysis-proven value).
-	# This is correct: the analysis only knows "non-retaining", not the original IMMEDIATE.
-	# The important thing is that it's NOT None (which would mean retaining / THREAD default).
-	assert sigs[fn_id].param_escape_level == [EscapeLevel.LOCAL]
+	# IMMEDIATE → _pel_to_nr → True; fixpoint → True; _build_pel preserves IMMEDIATE (stricter than LOCAL)
+	assert sigs[fn_id].param_escape_level == [EscapeLevel.IMMEDIATE]

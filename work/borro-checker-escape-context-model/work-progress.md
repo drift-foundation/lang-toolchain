@@ -356,44 +356,55 @@ grep -rn "param_nonretaining" lang/driftc/ lang/tests/ --include="*.py"
 → lang/tests/stage1/test_non_retaining_function_params.py: 62, 71, 81, 92
 → lang/driftc/type_checker.py: 9338-9342
 → lang/driftc/type_resolver.py: 119, 152, 154-155, 231
-→ lang/driftc/stage1/non_retaining_analysis.py: producer (internal working var)
+→ lang/driftc/stage1/non_retaining_analysis.py: producer (internal working var only)
 ```
 
 **Changes landed:**
 
 - `lang/driftc/stage1/non_retaining_analysis.py`:
   - Added `EscapeLevel` import.
-  - Simplified `working_sigs` construction: `dict(signatures_by_id)` (removed mutable-copy branch that was only needed to make `param_nonretaining` mutable for in-place mutation).
-  - Added `_pel_to_nr(lvl) -> Optional[bool]` inner helper: converts an `EscapeLevel` to the boolean working state used by the fixpoint (`LOCAL→True`, `THREAD/STATIC/IMMEDIATE→False`, `None/SCOPED→None`).
+  - Simplified `working_sigs` construction: `dict(signatures_by_id)` (removed mutable-copy branch that was only needed to allow in-place mutation of `param_nonretaining` lists).
+  - Added `_pel_to_nr(lvl) -> Optional[bool]` inner helper: converts an `EscapeLevel` to the boolean working state used by the fixpoint.
+    - `IMMEDIATE` or `LOCAL` → `True` (non-retaining; IMMEDIATE is the most restrictive non-escaping level, not retaining).
+    - `THREAD` or `STATIC` → `False` (retaining).
+    - `SCOPED` or `None` → `None` (unknown; SCOPED carries structured-scope semantics the fixpoint doesn't model).
   - Changed `param_nonretaining_by_id` initialization to read from `sig.param_escape_level` via `_pel_to_nr` (was `list(sig.param_nonretaining)`).
-  - Added `_build_pel(fn_id, sig) -> Optional[list[Optional[EscapeLevel]]]` inner helper: converts computed boolean results back to escape levels at end of analysis (`True→LOCAL`, `False/None→leave as-is`). Normalizes all-None list to `None`.
+  - Added `_build_pel(fn_id, sig) -> Optional[list[Optional[EscapeLevel]]]` inner helper: converts fixpoint boolean results back to escape levels for output.
+    - `v is True`: promote to `LOCAL` only if slot is `None` or more permissive than LOCAL (value > 1, i.e. SCOPED/THREAD/STATIC). If slot already holds `IMMEDIATE` or `LOCAL` (value ≤ 1), preserve the stricter annotation.
+    - `v is False`: explicitly clear slot to `None` (THREAD default), removing any stale pre-seeded annotation (e.g. a pre-seeded LOCAL that analysis proved retaining).
+    - `v is None`: leave slot unchanged (analysis inconclusive; preserve prior annotation).
+    - Normalizes an all-`None` output list to `None` (field stays unset).
   - Changed final return to call `_build_pel` and write `param_escape_level` instead of `param_nonretaining`.
-  - The internal working dict `param_nonretaining_by_id` and helpers `_ensure_param_nonretaining`, `_target_status` remain unchanged — they work on the local boolean state throughout the fixpoint.
+  - Internal: `param_nonretaining_by_id`, `_ensure_param_nonretaining`, `_target_status` remain as local state throughout the fixpoint — only the field name on `FnSignature` changed.
 
 - `lang/driftc/type_resolver.py`:
   - Removed `param_nonretaining: list[Optional[bool]] = []` local variable.
   - Removed `param_nonretaining.append(None)` in param loop.
-  - Removed CALLBACK intrinsic special case setting `param_nonretaining[0] = False` (escape handled by type-checker borrow-capture guard + borrow-checker transparent-wrapper propagation).
+  - Removed CALLBACK intrinsic special case that set `param_nonretaining[0] = False` (escape enforcement for explicit `callback0(borrow_lambda)` is owned by the type-checker borrow-capture guard in `call_resolver.py`; implicit wraps are handled by the borrow-checker transparent-wrapper propagation).
   - Removed `param_nonretaining=...` from `FnSignature(...)` constructor call.
 
 - `lang/driftc/type_checker.py` (`_nonretaining_param_state`):
-  - Removed `param_nonretaining` read. Now reads `param_escape_level` directly:
-    `LOCAL/SCOPED → True` (non-retaining), `THREAD/STATIC/IMMEDIATE → False` (retaining), `None → None` (unknown).
+  - Removed `param_nonretaining` read. Now reads `param_escape_level` directly.
+  - `IMMEDIATE`, `LOCAL`, or `SCOPED` → `True` (non-retaining).
+  - `THREAD` or `STATIC` → `False` (retaining).
+  - `None` (unannotated) → `None` (unknown).
 
 - `lang/driftc/borrow_checker_pass.py`:
-  - Line 194 (cache condition): removed `sig.param_nonretaining` from `(sig.param_escape_level or sig.param_nonretaining)` → now `sig.param_escape_level` only.
-  - Lines 1929-1945 (HCall pre-loan section): replaced `sig.param_nonretaining[i] is not True` check with `sig.effective_param_escape_level(i) not in (LOCAL, SCOPED)`. Condition also changed to `sig.param_escape_level` (was `sig.param_nonretaining`). Removed `>= len(sig.param_nonretaining)` bound check (effective_param_escape_level handles out-of-range internally).
-  - Lines 2018-2034 (HMethodCall pre-loan section): same migration.
-  - Note: SCOPED is now included in the pre-loan section, which correctly enables scope-escape checking for cases where the type-checker coercion restriction is lifted in future.
+  - Line 194 (cache condition): `(sig.param_escape_level or sig.param_nonretaining)` → `sig.param_escape_level` only.
+  - Lines 1929-1945 (HCall pre-loan section): replaced `sig.param_nonretaining[i] is not True` guard with `sig.effective_param_escape_level(i) not in (LOCAL, SCOPED)`. Guard condition changed to `sig.param_escape_level`. Removed out-of-bounds check (handled internally by `effective_param_escape_level`). SCOPED now included alongside LOCAL so pre-loan setup works when the type-checker coercion restriction is eventually lifted.
+  - Lines 2018-2034 (HMethodCall pre-loan section): same migration as HCall.
 
 - `lang/driftc/checker/__init__.py`:
   - Removed `param_nonretaining: Optional[list[Optional[bool]]] = None` field from `FnSignature`.
-  - Removed `param_nonretaining` fallback from `effective_param_escape_level` (was lines 127-130).
+  - Removed `param_nonretaining` fallback block from `effective_param_escape_level` (was lines 127-130). Method now returns `THREAD` directly when `param_escape_level` has no entry for `i`.
 
 - `lang/tests/stage1/test_non_retaining_function_params.py`:
   - Added `EscapeLevel` import.
-  - 3 `param_nonretaining == [True]` assertions → `param_escape_level == [EscapeLevel.LOCAL]`.
-  - 1 `param_nonretaining == [False]` assertion → `param_escape_level is None` (retaining params now produce all-None list which normalizes to None).
+  - 3 existing assertions updated: `param_nonretaining == [True]` → `param_escape_level == [EscapeLevel.LOCAL]`.
+  - 1 existing assertion updated: `param_nonretaining == [False]` → `param_escape_level is None` (retaining result normalizes to None).
+  - 2 new regressions added:
+    - `test_pre_seeded_local_downgraded_to_retaining`: sig pre-seeded with `[LOCAL]`; body retains param; output must be `None`. Pins `_build_pel` `v is False` → clear behavior.
+    - `test_immediate_level_treated_as_non_retaining`: sig pre-seeded with `[IMMEDIATE]`; body has direct invoke; output must be `[IMMEDIATE]` (preserved — stricter than LOCAL). Pins `_pel_to_nr(IMMEDIATE) → True` and `_build_pel` preservation rule.
 
 **Post-removal grep (source only):**
 ```
@@ -405,7 +416,7 @@ grep -rn "param_nonretaining" lang/driftc/ lang/tests/ --include="*.py"
 
 **Checkpoint result (2026-02-21):**
 ```
-lang/tests/stage1/test_non_retaining_function_params.py: 5/5 passed
+lang/tests/stage1/test_non_retaining_function_params.py: 7/7 passed
 lang/tests/borrow_checker/: 89 passed
 lang/tests/driver/test_callinfo_param_layout_contract.py: 11/11 passed
 lang/tests/driver/test_explicit_capture_diagnostics.py: 10/10 passed
@@ -417,41 +428,6 @@ Phase 4 e2e quartet:
   result_ok_move_conn_source_drop_regression: ok
   struct_ref_field_result_ok_move_drop_once: ok
 lang/tests/stage1/test_lambda_validation.py: 7/7 passed
-```
-
----
-
-## Phase 5 — Post-review fixes (2026-02-21)
-
-Three findings from the reviewer's post-Phase-5 follow-up (recorded in todo.md):
-
-**Fix 1 — IMMEDIATE mapping bug (high):**
-
-- `lang/driftc/stage1/non_retaining_analysis.py` (`_pel_to_nr`):
-  - Before: `IMMEDIATE` grouped with `THREAD`/`STATIC` → `False` (retaining).
-  - After: `IMMEDIATE` grouped with `LOCAL` → `True` (non-retaining). IMMEDIATE is the most restrictive non-escaping level and must not be treated as retaining.
-
-- `lang/driftc/type_checker.py` (`_nonretaining_param_state`):
-  - Before: `LOCAL/SCOPED → True`, everything else → `False` (so IMMEDIATE → False).
-  - After: `IMMEDIATE/LOCAL/SCOPED → True`, `THREAD/STATIC → False`. Comment updated.
-
-**Fix 2 — Stale escape-level retention in `_build_pel` (medium):**
-
-- `lang/driftc/stage1/non_retaining_analysis.py` (`_build_pel`):
-  - Before: when analysis result `v is False` (retaining), slot left unchanged → a pre-seeded `LOCAL` survived.
-  - After: `elif v is False: base[i] = None` — explicitly clears any pre-seeded annotation when analysis proves retaining. Comment updated to distinguish `False` and `None` branches.
-
-**Fix 3 — Regression additions:**
-
-- `lang/tests/stage1/test_non_retaining_function_params.py`:
-  - `test_pre_seeded_local_downgraded_to_retaining`: sig enters with `param_escape_level=[LOCAL]`; body retains the param; output must be `None` (stale LOCAL cleared by fix 2).
-  - `test_immediate_level_treated_as_non_retaining`: sig enters with `param_escape_level=[IMMEDIATE]`; body has direct invoke; `_pel_to_nr(IMMEDIATE) → True` (fix 1 path exercised); output is `[LOCAL]` (analysis confirms non-retaining, not None/retaining).
-    - Note: analysis outputs `LOCAL` (not `IMMEDIATE`) because the body analysis only distinguishes retaining vs non-retaining. Pre-seeded IMMEDIATE is used as the initial `True` hint for the fixpoint, then overwritten with `LOCAL` on output. The test pins this behavior and confirms IMMEDIATE is not silently treated as retaining.
-
-**Checkpoint (2026-02-21):**
-```
-lang/tests/stage1/test_non_retaining_function_params.py: 7/7 passed
-lang/tests/borrow_checker/: 89 passed
 ```
 
 ---

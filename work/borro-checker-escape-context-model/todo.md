@@ -1105,6 +1105,15 @@ references in compiler and test sources.
    - Add a stage1 regression for pre-seeded LOCAL that is downgraded by analysis to retaining.
    - Add a regression that covers IMMEDIATE mapping behavior end-to-end through non-retaining analysis + boundary check.
 
+4. **Precision follow-up (medium): preserve stricter non-retaining levels when analysis is True**
+   - In `lang/driftc/stage1/non_retaining_analysis.py::_build_pel(...)`, `v is True` currently forces `EscapeLevel.LOCAL`.
+   - This is safe, but it discards stricter pre-seeded semantics (e.g. `IMMEDIATE`) and can reduce diagnostic precision/intent.
+   - Required adjustment: when `v is True`, preserve existing stricter non-retaining level if present; only set to `LOCAL` when slot is `None` (or equivalent unknown).
+
+5. **Test/doc hygiene follow-up (low): fix contradiction in IMMEDIATE regression wording**
+   - `lang/tests/stage1/test_non_retaining_function_params.py::test_immediate_level_treated_as_non_retaining` docstring currently says IMMEDIATE should be "preserved as-is", while assertion expects `[EscapeLevel.LOCAL]`.
+   - Required cleanup: align docstring/comments with intended behavior (either preserve IMMEDIATE by implementation, or keep LOCAL normalization and document that explicitly).
+
 ---
 
 ## 6. Phase Dependency Graph
