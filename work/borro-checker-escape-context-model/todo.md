@@ -1316,9 +1316,9 @@ Before the branch is merged to main, the following must be true:
 - [ ] `struct_ref_field_result_ok_move_drop_once` e2e passes
 - [ ] New E_ESCAPE_* diagnostic codes present in `test_escape_level_model.py`
       with positive and negative cases for each level
-- [ ] E2e pair (accept + reject) exists for THREAD boundary
-- [ ] E2e pair (accept + reject) exists for SCOPE boundary (Phase 4)
-- [ ] E2e for STATIC rejection
+- [ ] THREAD boundary coverage: explicit accept e2e (`borrow_escape_thread_accepted`) + explicit reject e2e (`borrow_escape_spawn_rejected`)
+- [ ] SCOPE boundary coverage: accept e2e (`borrow_escape_scope_accepted`) + reject unit tests in `test_escape_level_model.py`; scope-reject e2e deferred (blocked by Fn1 coercion limitation — see known limitations in work-progress.md)
+- [ ] STATIC boundary regression: driver-level coverage in `test_escape_level_model.py` (`test_registry_set_dropper_static_annotation_rejected`); e2e not required (STATIC annotations are on intrinsic-only paths not directly callable from user Drift source)
 - [ ] Q1 trait-object THREAD-default regression present in `test_escape_level_model.py`
 - [ ] `param_nonretaining` removed from `FnSignature` (Phase 5 complete)
 - [ ] Post-removal grep confirms zero `param_nonretaining` references in compiler and tests
@@ -1354,3 +1354,15 @@ leave contradictory pre-fix wording in the same document.
 **Merge strategy:** squash-per-phase into one PR per phase, all targeting the
 feature branch. Feature branch merges to main via a single reviewed PR after
 Phase 5 passes the review checklist above.
+
+---
+
+## Post-A5 Next Work (scheduled)
+
+After A5 sign-off, next architecture item is **A1: make `call_contract.py` the single validation seam**.
+
+Klaudia - next execution plan:
+1. Prepare a short inventory of call-shape/param-layout validations currently duplicated across checker/stage2/driver boundary surfaces.
+2. Propose consolidation into `call_contract.py` with explicit ownership boundaries (checker vs stage2 vs driver diagnostic wrapper).
+3. Land regression-first for one migrated slice (positive + negative contract tests), then continue slice-by-slice.
+4. Keep diagnostics non-internal and phase-attributed through existing boundary helpers.

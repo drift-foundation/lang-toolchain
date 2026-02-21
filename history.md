@@ -1,3 +1,22 @@
+## 2026-02-21 - Borrow checker escape context model Phase 5 completed (A5 final)
+- Completed A5 Phase 5 cleanup and removed the `FnSignature.param_nonretaining` bridge; compiler now uses `param_escape_level` as the single source of escape-boundary truth.
+- Migrated remaining compiler paths to `param_escape_level`:
+  - `lang/driftc/checker/__init__.py`: removed `param_nonretaining` field and bridge fallback.
+  - `lang/driftc/borrow_checker_pass.py`: removed `param_nonretaining` call-site gating and switched to `effective_param_escape_level(...)`.
+  - `lang/driftc/type_resolver.py`: removed signature construction writes for `param_nonretaining`.
+  - `lang/driftc/type_checker.py`: non-retaining boundary checks now derive from escape levels directly.
+  - `lang/driftc/stage1/non_retaining_analysis.py`: writes back to `param_escape_level` only.
+- Post-review fixes landed:
+  - Fixed IMMEDIATE classification so it is treated as non-retaining (not retaining) in both stage1 non-retaining analysis and checker boundary interpretation.
+  - Fixed stale pre-seeded annotation retention: when analysis proves retaining (`False`), prior escape annotation is explicitly cleared.
+  - Preserved stricter non-retaining annotation (`IMMEDIATE`) during analysis write-back instead of always normalizing to `LOCAL`.
+- Regression coverage extended in `lang/tests/stage1/test_non_retaining_function_params.py`:
+  - pre-seeded LOCAL downgraded to retaining,
+  - IMMEDIATE treated non-retaining and preserved when analysis confirms.
+- Documentation updated in `docs/design/drift-lang-spec.md`:
+  - closure borrowed-capture boundary rules now describe escape-level semantics (`IMMEDIATE/LOCAL/SCOPED/THREAD/STATIC`),
+  - explicit MVP limitations noted for generic `Fn1` coercion and conservative SCOPED proof.
+
 ## 2026-02-21 - Borrow checker escape context model Phases 0-4 completed (A5)
 - Completed A5 implementation phases 0-4 from `work/borro-checker-escape-context-model/work-progress.md`.
 

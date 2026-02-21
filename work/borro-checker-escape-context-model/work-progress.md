@@ -432,6 +432,32 @@ lang/tests/stage1/test_lambda_validation.py: 7/7 passed
 
 ---
 
+## Post-Phase-5 gap closure — COMPLETE (2026-02-21)
+
+**Review checklist gap analysis** identified three ambiguous items. Decisions agreed with owner:
+
+1. **`borrow_escape_static_rejected` e2e — resolved as driver-level.**
+   Phase 3b already landed `test_registry_set_dropper_static_annotation_rejected` in `test_escape_level_model.py` (real STATIC-annotated stdlib sig, E_ESCAPE_STATIC via check_block). STATIC annotations are on intrinsic-only paths not callable from user Drift source; e2e shape would be brittle. No synthetic stdlib annotations added. Checklist item updated to reflect driver-level coverage.
+
+2. **THREAD accept e2e — added.**
+   - New: `lang/tests/codegen/e2e/borrow_escape_thread_accepted/` — captureless lambda to `conc.spawn` + join, exit 0.
+   - Proves THREAD boundary accepts a lambda with no borrow captures.
+   - Checklist item updated: "explicit accept e2e + explicit reject e2e."
+
+3. **SCOPE reject e2e — deferred.**
+   Phase 4 spec only planned accept e2e; reject is fully covered by three unit tests (`test_scoped_spawn_with_non_outlying_borrow_rejected`, `test_scoped_spawn_nested_block_false_positive`, `test_scoped_spawn_assigned_before_scope_accepted`). A scope-reject e2e is blocked by the Fn1 coercion limitation (known limitation 1 below). Checklist item updated to reflect accept e2e + unit reject coverage.
+
+**Targeted validation (2026-02-21):**
+```
+borrow_escape_thread_accepted: ok
+borrow_escape_spawn_rejected:  ok
+borrow_escape_scope_accepted:  ok
+```
+
+**Section 10 checklist:** THREAD/SCOPE/STATIC items updated to match actual coverage. All remaining checklist items were already satisfied.
+
+---
+
 ## Known limitations / hand-off items
 
 1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). For the borrow checker's SCOPED acceptance to be exercisable end-to-end, the type checker needs to accept capturing lambdas in `Fn1`-bounded generic positions. This is a type system extension beyond Phase 5.

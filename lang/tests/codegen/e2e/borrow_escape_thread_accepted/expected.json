@@ -1,0 +1,6 @@
+{
+  "description": "e2e: borrow_escape_thread_accepted — captureless lambda passed to conc.spawn (THREAD param) accepted; no borrow captures, THREAD escape-level boundary verified end-to-end",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

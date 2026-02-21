@@ -3760,13 +3760,27 @@ Borrowed captures (`&x`, `&mut x`) are non-escaping. A closure with any borrowed
 captures:
 
 1. **Immediate call is allowed.**
-2. **Argument passing is allowed only if the callee is proven non-retaining** for that parameter.
+2. **Argument passing is checked against parameter escape level metadata**:
+   - `IMMEDIATE` / `LOCAL`: borrowed captures are allowed.
+   - `SCOPED`: borrowed captures are allowed only when the captured place is proven
+     defined before the scope call in the enclosing block (conservative MVP rule).
+   - `THREAD` / `STATIC`: borrowed captures are rejected.
 3. **Return/store is rejected** for borrowed-capture closures.
-4. **Unknown call sites are treated as retaining** and therefore rejected.
+4. **Unannotated call boundaries default to `THREAD` in MVP**, so borrowed-capture
+   arguments are rejected unless a stricter non-escaping level is proven.
 
-“Proven non-retaining” may come from body inspection (when the callee body is
-available) or compiler-emitted metadata for separately compiled units. Closures
-with only `copy`/`move` captures may escape.
+Escape-level metadata is inferred from available bodies for same-unit calls and
+may be supplied by compiler metadata for separately compiled units.
+
+Current MVP limitations:
+- For generic `Fn1`-bounded callback parameters (for example `conc.scope`-shaped
+  APIs), the current type-checker coercion path still rejects capturing lambdas
+  before borrow-checker SCOPED acceptance can run.
+- SCOPED lifetime proof is intentionally conservative and checks only the direct
+  enclosing block statement order; predecessor/nested-block safe cases may be
+  rejected.
+
+Closures with only `copy`/`move` captures may escape.
 
 ### 22.3. Lowering model
 

@@ -1,0 +1,13 @@
+module main
+
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	var t = conc.spawn(| | => { return 0; });
+	var r = t.join();
+	return match r {
+		Ok(_) => { 0 },
+		Err(_) => { 1 },
+		default => { 1 },
+	};
+}
