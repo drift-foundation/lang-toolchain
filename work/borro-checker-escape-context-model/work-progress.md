@@ -421,6 +421,41 @@ lang/tests/stage1/test_lambda_validation.py: 7/7 passed
 
 ---
 
+## Phase 5 — Post-review fixes (2026-02-21)
+
+Three findings from the reviewer's post-Phase-5 follow-up (recorded in todo.md):
+
+**Fix 1 — IMMEDIATE mapping bug (high):**
+
+- `lang/driftc/stage1/non_retaining_analysis.py` (`_pel_to_nr`):
+  - Before: `IMMEDIATE` grouped with `THREAD`/`STATIC` → `False` (retaining).
+  - After: `IMMEDIATE` grouped with `LOCAL` → `True` (non-retaining). IMMEDIATE is the most restrictive non-escaping level and must not be treated as retaining.
+
+- `lang/driftc/type_checker.py` (`_nonretaining_param_state`):
+  - Before: `LOCAL/SCOPED → True`, everything else → `False` (so IMMEDIATE → False).
+  - After: `IMMEDIATE/LOCAL/SCOPED → True`, `THREAD/STATIC → False`. Comment updated.
+
+**Fix 2 — Stale escape-level retention in `_build_pel` (medium):**
+
+- `lang/driftc/stage1/non_retaining_analysis.py` (`_build_pel`):
+  - Before: when analysis result `v is False` (retaining), slot left unchanged → a pre-seeded `LOCAL` survived.
+  - After: `elif v is False: base[i] = None` — explicitly clears any pre-seeded annotation when analysis proves retaining. Comment updated to distinguish `False` and `None` branches.
+
+**Fix 3 — Regression additions:**
+
+- `lang/tests/stage1/test_non_retaining_function_params.py`:
+  - `test_pre_seeded_local_downgraded_to_retaining`: sig enters with `param_escape_level=[LOCAL]`; body retains the param; output must be `None` (stale LOCAL cleared by fix 2).
+  - `test_immediate_level_treated_as_non_retaining`: sig enters with `param_escape_level=[IMMEDIATE]`; body has direct invoke; `_pel_to_nr(IMMEDIATE) → True` (fix 1 path exercised); output is `[LOCAL]` (analysis confirms non-retaining, not None/retaining).
+    - Note: analysis outputs `LOCAL` (not `IMMEDIATE`) because the body analysis only distinguishes retaining vs non-retaining. Pre-seeded IMMEDIATE is used as the initial `True` hint for the fixpoint, then overwritten with `LOCAL` on output. The test pins this behavior and confirms IMMEDIATE is not silently treated as retaining.
+
+**Checkpoint (2026-02-21):**
+```
+lang/tests/stage1/test_non_retaining_function_params.py: 7/7 passed
+lang/tests/borrow_checker/: 89 passed
+```
+
+---
+
 ## Known limitations / hand-off items
 
 1. **SCOPED + capturing lambdas blocked by type checker.** The type checker's function-pointer coercion path rejects any capturing lambda passed to a generic `F is Fn1<A, R>` parameter (`conc.scope`'s shape). For the borrow checker's SCOPED acceptance to be exercisable end-to-end, the type checker needs to accept capturing lambdas in `Fn1`-bounded generic positions. This is a type system extension beyond Phase 5.

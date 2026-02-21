@@ -19,6 +19,8 @@ git-reset BRANCH:
 	git fetch origin "${branch}"
 	git reset --hard "origin/${branch}"
 	git clean -ffd
+	echo "HEAD now at:"
+	git --no-pager log -1 --pretty='format:%H%n%h %s%nAuthor: %an <%ae>%nDate: %ad'
 
 # Full staged compiler tests
 test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test

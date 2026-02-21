@@ -94,9 +94,9 @@ def analyze_non_retaining_params(
 		return 0
 
 	def _pel_to_nr(lvl: Optional[EscapeLevel]) -> Optional[bool]:
-		if lvl is EscapeLevel.LOCAL:
-			return True
-		if lvl in (EscapeLevel.THREAD, EscapeLevel.STATIC, EscapeLevel.IMMEDIATE):
+		if lvl in (EscapeLevel.IMMEDIATE, EscapeLevel.LOCAL):
+			return True  # IMMEDIATE is most-restrictive non-escaping; LOCAL is non-retaining
+		if lvl in (EscapeLevel.THREAD, EscapeLevel.STATIC):
 			return False
 		return None  # SCOPED or None → unknown
 
@@ -445,7 +445,9 @@ def analyze_non_retaining_params(
 		for i, v in enumerate(nr_list):
 			if v is True:
 				base[i] = EscapeLevel.LOCAL
-			# v is False or None: leave existing (None → THREAD default)
+			elif v is False:
+				base[i] = None  # analysis proved retaining; clear any pre-seeded annotation
+			# v is None: leave existing (annotation unknown, preserve prior value)
 		return base if any(x is not None for x in base) else None
 
 	return {

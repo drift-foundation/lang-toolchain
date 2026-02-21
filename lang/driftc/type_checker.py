@@ -9339,9 +9339,9 @@ class TypeChecker:
 			if sig.param_escape_level is not None and 0 <= param_index < len(sig.param_escape_level):
 				lvl = sig.param_escape_level[param_index]
 				if lvl is not None:
-					if lvl in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					if lvl in (EscapeLevel.IMMEDIATE, EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						return True
-					return False  # THREAD, STATIC, IMMEDIATE → retaining
+					return False  # THREAD, STATIC → retaining
 			return None
 
 		def _check_borrowed_arg_boundary(

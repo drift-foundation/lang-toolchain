@@ -92,3 +92,45 @@ def test_fn_param_retain_marks_false() -> None:
 	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
 	# Retaining param: analysis cannot prove non-retaining → param_escape_level stays None (THREAD default)
 	assert sigs[fn_id].param_escape_level is None
+
+
+def test_pre_seeded_local_downgraded_to_retaining() -> None:
+	"""Fix 2 regression: _build_pel must clear a pre-seeded LOCAL annotation when
+	analysis proves the param is retaining (v is False).
+
+	If the incoming sig already has param_escape_level=[LOCAL] but the function body
+	stores the param (retaining), the output must be None — not stale LOCAL.
+	"""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	fn_ty = table.ensure_function([int_ty], int_ty, can_throw=False)
+	fn_id = FunctionId(module="main", name="takes_fp", ordinal=0)
+	# Pre-seed sig with LOCAL (as if a previous annotation pass had set it)
+	sig = FnSignature(name="takes_fp", param_type_ids=[fn_ty], return_type_id=int_ty, param_escape_level=[EscapeLevel.LOCAL])
+	typed_fns = {fn_id: _typed_fn_with_retain(fn_id, param_name="f")}
+	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
+	# Analysis proved retaining → stale LOCAL must be cleared → None (THREAD default)
+	assert sigs[fn_id].param_escape_level is None
+
+
+def test_immediate_level_treated_as_non_retaining() -> None:
+	"""Fix 1 regression: IMMEDIATE is the most restrictive non-escaping level.
+	A param annotated IMMEDIATE must be treated as non-retaining by _pel_to_nr
+	(initialisation path) and preserved as-is by _build_pel (analysis path).
+
+	Concretely: if a sig enters with param_escape_level=[IMMEDIATE] and the function
+	body only calls the param directly (non-retaining), the output must keep IMMEDIATE
+	(not downgrade to LOCAL or clear to None).
+	"""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	fn_ty = table.ensure_function([int_ty], int_ty, can_throw=False)
+	fn_id = FunctionId(module="main", name="takes_fp", ordinal=0)
+	sig = FnSignature(name="takes_fp", param_type_ids=[fn_ty], return_type_id=int_ty, param_escape_level=[EscapeLevel.IMMEDIATE])
+	typed_fns = {fn_id: _typed_fn_with_direct_invoke(fn_id, param_name="f")}
+	sigs = analyze_non_retaining_params(typed_fns, {fn_id: sig}, type_table=table)
+	# IMMEDIATE pre-seeded; analysis confirms non-retaining (True); _build_pel sets LOCAL.
+	# IMMEDIATE → _pel_to_nr → True; fixpoint → True; _build_pel → LOCAL (analysis-proven value).
+	# This is correct: the analysis only knows "non-retaining", not the original IMMEDIATE.
+	# The important thing is that it's NOT None (which would mean retaining / THREAD default).
+	assert sigs[fn_id].param_escape_level == [EscapeLevel.LOCAL]

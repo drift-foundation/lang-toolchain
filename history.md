@@ -1,3 +1,51 @@
+## 2026-02-21 - Borrow checker escape context model Phases 0-4 completed (A5)
+- Completed A5 implementation phases 0-4 from `work/borro-checker-escape-context-model/work-progress.md`.
+
+- Phase 0 (model plumbing):
+  - Added `EscapeLevel` enum in `lang/driftc/borrow_checker.py`.
+  - Added `Loan.max_escape` propagation in `lang/driftc/borrow_checker_pass.py`.
+  - Extended checker signatures with `param_escape_level` and `effective_param_escape_level(...)` in `lang/driftc/checker/__init__.py`.
+
+- Phase 1 (escape classification primitives):
+  - Added captured-loan analysis and lambda escape-level derivation in `lang/driftc/borrow_checker_pass.py`:
+    - `_captured_loan_binding_ids(...)`
+    - `_lambda_escape_level(...)`
+    - `_report_escape_violation(...)`
+    - `_check_lambda_escape_level(...)`
+  - Introduced `E_ESCAPE_THREAD`, `E_ESCAPE_STATIC`, and store-level reporting in borrow-check diagnostics.
+
+- Phase 2 (checker path integration):
+  - Routed HCall/HMethodCall/HInvoke lambda-argument checks through escape-level enforcement in `lang/driftc/borrow_checker_pass.py`.
+  - Added direct integration regression for spawn-style thread escape detection.
+
+- Phase 3a/3b (stdlib annotation rollout):
+  - Added stdlib escape-level annotation pass in `lang/driftc/driftc.py`.
+  - Annotated key APIs (`std.concurrent::*`, `lang.thread::*`) with THREAD/STATIC escape levels.
+  - Kept conservative fallback bridge to existing `param_nonretaining` behavior during migration.
+
+- Phase 3c (ownership transfer from lambda_validate to borrow checker):
+  - Removed lambda escape enforcement item from `lang/driftc/stage1/lambda_validate.py` (capture discovery retained).
+  - Added escape-signature fallback cache for unresolved intrinsic/free-function call paths in `lang/driftc/borrow_checker_pass.py`.
+  - Resolved callback-wrapper ownership conflict (Option A):
+    - restored typecheck-owned rejection for user-written `callback0(lambda_with_borrow)` in `lang/driftc/checker/call_resolver.py`,
+    - added transparent wrapper unwrapping/propagation in borrow checker for implicit callback wrappers.
+  - Restored v0 non-escaping guard for borrowed-capture lambdas in store/return paths.
+
+- Phase 4 (SCOPED enforcement with statement-order checks):
+  - Removed SCOPED->LOCAL bridge; SCOPED now enforced as distinct level.
+  - Added statement-context tracking and scope check helpers in `lang/driftc/borrow_checker_pass.py`:
+    - `_place_is_defined_before_stmt(...)`
+    - `_check_lambda_scope_escape(...)`
+  - Added `E_ESCAPE_SCOPE` diagnostics.
+  - Landed scoped acceptance/rejection tests, including conservative nested-block false-positive pin.
+
+- Regression coverage added/updated:
+  - `lang/tests/borrow_checker/test_escape_level_model.py` expanded to cover Phases 0-4 behavior (including SCOPED, THREAD, STATIC, and conservative scope limits).
+  - `lang/tests/codegen/e2e/borrow_escape_spawn_rejected` added.
+  - `lang/tests/codegen/e2e/borrow_escape_scope_accepted` added.
+  - Updated expected diagnostics for `lang/tests/codegen/e2e/implicit_callback_borrowed_capture_rejected`.
+  - Trimmed stage1 lambda-validation tests to capture-discovery-only scope after escape enforcement transfer.
+
 ## 2026-02-20 – Code review remediation batch completed (Klaudia findings F2–F15)
 - Completed tracked remediation from `work/code-review/todo.md` with execution/status recorded in `work/code-review/work-progress.md`.
 

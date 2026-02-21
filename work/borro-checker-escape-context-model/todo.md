@@ -1089,6 +1089,22 @@ just lang-codegen-test
 **Regression checkpoint:** Full suite passes. Zero remaining `param_nonretaining`
 references in compiler and test sources.
 
+**Post-Phase-5 reviewer follow-up (must-fix before sign-off):**
+1. **IMMEDIATE mapping bug (high):**
+   - `lang/driftc/stage1/non_retaining_analysis.py` currently maps `EscapeLevel.IMMEDIATE` to retaining (`False`) in `_pel_to_nr(...)`.
+   - `lang/driftc/type_checker.py` currently treats `EscapeLevel.IMMEDIATE` as retaining in `_nonretaining_param_state(...)`.
+   - This conflicts with the escape model: IMMEDIATE is the most restrictive non-escaping level and must not be treated as retaining.
+   - Required fix: align both sites so IMMEDIATE behaves as non-retaining (same class as LOCAL for boundary gating).
+
+2. **Potential stale escape-level retention in `_build_pel` (medium):**
+   - `lang/driftc/stage1/non_retaining_analysis.py::_build_pel(...)` only updates when fixpoint value is `True`; for `False`/`None` it leaves prior `base[i]` unchanged.
+   - If a slot is pre-seeded (e.g. LOCAL) and analysis proves retaining (`False`), stale LOCAL can survive.
+   - Required fix: handle `False` explicitly by clearing the slot (None / THREAD-default) or another explicit retaining-level representation.
+
+3. **Regression additions required:**
+   - Add a stage1 regression for pre-seeded LOCAL that is downgraded by analysis to retaining.
+   - Add a regression that covers IMMEDIATE mapping behavior end-to-end through non-retaining analysis + boundary check.
+
 ---
 
 ## 6. Phase Dependency Graph
