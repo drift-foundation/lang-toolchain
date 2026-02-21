@@ -123,8 +123,6 @@ class FnSignature:
 		if self.param_escape_level is not None and i < len(self.param_escape_level):
 			lvl = self.param_escape_level[i]
 			if lvl is not None:
-				if lvl == EscapeLevel.SCOPED:
-					return EscapeLevel.LOCAL  # conservative bridge until Phase 4
 				return lvl
 		if self.param_nonretaining is not None and i < len(self.param_nonretaining):
 			nr = self.param_nonretaining[i]

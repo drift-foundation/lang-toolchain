@@ -447,14 +447,19 @@ def test_check_block_spawn_thread_escape_rejected():
 
 # ===== Phase 3a tests =====
 
-def test_scope_outer_closure_annotated_scoped_but_effective_local():
-	"""FnSignature with param_escape_level=[SCOPED] → effective_param_escape_level(0) == LOCAL (conservative bridge)."""
+def test_scope_outer_closure_annotated_scoped_returns_scoped():
+	"""FnSignature with param_escape_level=[SCOPED] → effective_param_escape_level(0) == SCOPED.
+
+	Phase 3a created a conservative bridge: SCOPED→LOCAL. Phase 4 removes that bridge;
+	SCOPED params now return SCOPED directly, and the scope-lifetime reasoning in
+	_check_lambda_escape_level/_check_lambda_scope_escape provides the actual safety check.
+	"""
 	sig = FnSignature(
 		name="scope",
 		param_escape_level=[EscapeLevel.SCOPED],
 	)
 	level = sig.effective_param_escape_level(0)
-	assert level == EscapeLevel.LOCAL
+	assert level == EscapeLevel.SCOPED
 
 
 def test_sort_in_place_comparator_local_accepted():
@@ -797,6 +802,127 @@ def test_spawn_cb_ref_capture_caught_by_borrow_checker_directly():
 	)
 	diags = bc.check_block(body)
 	assert any(d.code == "E_ESCAPE_THREAD" and d.phase == "borrow_check" for d in diags), diags
+
+
+# ===== Phase 4 regression tests =====
+# These tests must FAIL before Phase 4 is implemented (SCOPED→LOCAL bridge still active
+# or SCOPED escape check absent) and PASS after Phase 4 lands.
+
+def _make_scope_checker_with_loan(x_id, r_id, block_stmts):
+	"""Build a BorrowChecker + state with a shared loan for x (ref_binding_id=r_id)."""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	ref_int_ty = table.ensure_ref(int_ty)
+	body = H.HBlock(statements=list(block_stmts))
+	assign_node_ids(body)
+	typed_fn = TypedFn(
+		fn_id=FunctionId(module="main", name="main", ordinal=0),
+		name="main",
+		params=[],
+		param_bindings=[],
+		locals=[x_id, r_id],
+		body=body,
+		expr_types={},
+		binding_for_var={},
+		binding_types={x_id: int_ty, r_id: ref_int_ty},
+		binding_names={x_id: "x", r_id: "r"},
+		binding_mutable={x_id: True, r_id: False},
+		call_info_by_callsite_id={},
+	)
+	from lang.driftc.borrow_checker import Place, PlaceBase, PlaceKind, PlaceState
+	from lang.driftc.borrow_checker_pass import _FlowState
+	bc = BorrowChecker.from_typed_fn(typed_fn, type_table=table, signatures_by_id={})
+	state = _FlowState()
+	base_x = PlaceBase(kind=PlaceKind.LOCAL, local_id=x_id, name="x")
+	base_r = PlaceBase(kind=PlaceKind.LOCAL, local_id=r_id, name="r")
+	place_x = Place(base=base_x, projections=())
+	place_r = Place(base=base_r, projections=())
+	state.place_states[place_x] = PlaceState.VALID
+	state.place_states[place_r] = PlaceState.VALID
+	loan = Loan(
+		place=place_x,
+		kind=LoanKind.SHARED,
+		temporary=False,
+		live_blocks=None,
+		origin_span=Span(),
+		ref_binding_id=r_id,
+		max_escape=EscapeLevel.LOCAL,
+	)
+	state.loans.add(loan)
+	lam = H.HLambda(params=[], body_expr=H.HVar(name="r", binding_id=r_id), body_block=H.HBlock(statements=[]))
+	return bc, state, lam, place_x
+
+
+def test_scoped_spawn_with_outlying_borrow_accepted():
+	"""Phase 4: &x borrow passed to SCOPED param; x defined before scope call in direct block → accepted.
+
+	Regression: must not emit any error once Phase 4 scope-level check is implemented.
+	Before Phase 4: direct call with required=SCOPED and no scope-check logic emits E_ESCAPE_STORE.
+	After Phase 4: _check_lambda_scope_escape succeeds → no error.
+	"""
+	x_id, r_id = 1, 2
+	block_stmts = [
+		H.HLet(name="x", value=H.HLiteralInt(1), binding_id=x_id, is_mutable=True),
+		H.HLet(name="r", value=H.HBorrow(subject=H.HVar(name="x", binding_id=x_id), is_mut=False), binding_id=r_id, is_mutable=False),
+		# scope call conceptually at stmt index 2
+	]
+	bc, state, lam, place_x = _make_scope_checker_with_loan(x_id, r_id, block_stmts)
+	# Simulate _transfer_block position: scope call is at stmt_index=2
+	bc._current_stmt_index = 2
+	bc._current_block_stmts = block_stmts
+	bc._check_lambda_escape_level(lam, state, EscapeLevel.SCOPED, Span())
+	assert not any(d.severity == "error" for d in bc.diagnostics), bc.diagnostics
+
+
+def test_scoped_spawn_with_non_outlying_borrow_rejected():
+	"""Phase 4: &x borrow passed to SCOPED param; x NOT defined before scope call → E_ESCAPE_SCOPE.
+
+	Simulates: conc.scope(|s| => { var x = 42; s.spawn(|| => { use x }) })
+	where x is defined inside the scope body, not in the outer function before the scope call.
+	The outer function sees the scope call at stmt 0 with no prior definition of x in the block.
+
+	Regression: must emit E_ESCAPE_SCOPE once Phase 4 is implemented.
+	Before Phase 4: emits E_ESCAPE_STORE (wrong code — bridge maps SCOPED→LOCAL so this test fails).
+	After Phase 4: emits E_ESCAPE_SCOPE.
+	"""
+	x_id, r_id = 1, 2
+	# block_stmts has NO HLet for x before index 0 (scope call is first stmt)
+	block_stmts = []
+	bc, state, lam, place_x = _make_scope_checker_with_loan(x_id, r_id, block_stmts)
+	bc._current_stmt_index = 0
+	bc._current_block_stmts = block_stmts
+	bc._check_lambda_escape_level(lam, state, EscapeLevel.SCOPED, Span())
+	assert any(d.code == "E_ESCAPE_SCOPE" and d.phase == "borrow_check" for d in bc.diagnostics), bc.diagnostics
+
+
+def test_scoped_spawn_nested_block_false_positive():
+	"""Phase 4 conservative MVP: x defined in a nested block, not the direct enclosing block → E_ESCAPE_SCOPE.
+
+	Even though this pattern is provably safe (x is in scope when the scope call executes),
+	_place_is_defined_before_stmt only checks the DIRECT enclosing BasicBlock's statements.
+	If x's HLet is in a different block (e.g., a predecessor block's statements in the CFG),
+	the check conservatively returns False.
+
+	This test documents intentional conservative behavior. Do not convert to an accept case
+	without a corresponding design change to _place_is_defined_before_stmt.
+
+	Before Phase 4: emits E_ESCAPE_STORE (no SCOPED handling).
+	After Phase 4: emits E_ESCAPE_SCOPE (conservative rejection).
+	"""
+	x_id, r_id = 1, 2
+	# block_stmts is the CURRENT BasicBlock's statements.
+	# It does NOT contain HLet for x — x was defined in a predecessor block
+	# (e.g., inside a nested HIR block that became a different BasicBlock in the CFG).
+	block_stmts = [
+		# Some other statement (not HLet for x or r) before scope call at idx 1
+		H.HExprStmt(expr=H.HLiteralInt(0)),
+		# scope call at stmt_index=1
+	]
+	bc, state, lam, place_x = _make_scope_checker_with_loan(x_id, r_id, block_stmts)
+	bc._current_stmt_index = 1
+	bc._current_block_stmts = block_stmts
+	bc._check_lambda_escape_level(lam, state, EscapeLevel.SCOPED, Span())
+	assert any(d.code == "E_ESCAPE_SCOPE" and d.phase == "borrow_check" for d in bc.diagnostics), bc.diagnostics
 
 
 def test_registry_set_dropper_static_annotation_rejected():

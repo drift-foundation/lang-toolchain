@@ -1,0 +1,6 @@
+{
+  "description": "e2e: borrow_escape_scope_accepted — nothrow lambda passed to conc.scope (SCOPED param) accepted; SCOPED escape-level path exercised end-to-end",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

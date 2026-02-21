@@ -945,6 +945,26 @@ control-flow analysis. See §3.6 for the algorithm and its explicit limitations.
 2. `lang/driftc/checker/__init__.py`:
    - Remove the conservative "treat SCOPED as LOCAL" fallback from Phase 3
 
+**Reviewer-approved execution checklist (post-3c):**
+1. Start Phase 4 from current 3c-clean state; do not mix in Phase 5 migration work.
+2. Implement only SCOPED reasoning in this phase:
+   - `_place_is_defined_before_stmt(...)`
+   - `_check_lambda_scope_escape(...)`
+   - SCOPED branch in `_check_lambda_escape_level(...)`
+3. Remove SCOPED→LOCAL bridge in `FnSignature.effective_param_escape_level`.
+4. Regression-first requirements for Phase 4:
+   - add positive scoped acceptance test,
+   - add negative scoped rejection test with `E_ESCAPE_SCOPE`,
+   - add/keep pinned known false-positive test (must remain negative until rule is intentionally relaxed).
+5. Validation gate before handoff:
+   - run full Phase 4 test list from this section,
+   - run §9 high-sensitivity subset,
+   - re-run 3c ownership trio:
+     - `borrow_escape_spawn_rejected`
+     - `implicit_callback_borrowed_capture_rejected`
+     - `borrowed_capture_interface_coercion_rejected`
+6. Update `work-progress.md` with exact files touched + pass/fail matrix, then stop and hand off for review.
+
 **Tests to add:**
 ```
 lang/tests/borrow_checker/test_escape_level_model.py (extend):

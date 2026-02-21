@@ -158,6 +158,8 @@ class BorrowChecker:
 	enable_auto_borrow: bool = True
 	_current_block_id: Optional[int] = field(init=False, default=None, repr=False)
 	_current_stmt_span: Optional[Span] = field(init=False, default=None, repr=False)
+	_current_stmt_index: Optional[int] = field(init=False, default=None, repr=False)
+	_current_block_stmts: Optional[list] = field(init=False, default=None, repr=False)
 	_ref_witness_in: Optional[Dict[int, Dict[int, Span]]] = field(init=False, default=None, repr=False)
 	_ref_live_after_stmt: Optional[Dict[int, List[Set[int]]]] = field(init=False, default=None, repr=False)
 	_ref_no_use_ids: Optional[Set[int]] = field(init=False, default=None, repr=False)
@@ -409,6 +411,9 @@ class BorrowChecker:
 		elif required >= EscapeLevel.THREAD:
 			code = "E_ESCAPE_THREAD"
 			msg = "closure captures borrowed value which cannot be sent to a detached virtual thread"
+		elif required >= EscapeLevel.SCOPED:
+			code = "E_ESCAPE_SCOPE"
+			msg = "closure captures borrowed value which may not outlive the structured scope"
 		else:
 			code = "E_ESCAPE_STORE"
 			msg = "closure captures borrowed value which cannot escape its original scope"
@@ -430,10 +435,66 @@ class BorrowChecker:
 			notes=notes,
 		))
 
+	def _place_is_defined_before_stmt(self, place: Place, stmt_index: int, block_stmts: list) -> bool:
+		"""Conservative syntactic check: is place provably alive across a call at stmt_index?
+
+		Returns True if:
+		- place is a function parameter (always live for the function's duration), OR
+		- place was let-bound before stmt_index in block_stmts.
+
+		Only inspects HLet statements in the DIRECT enclosing BasicBlock — not nested blocks
+		or predecessor blocks in the CFG. This is deliberately conservative (MVP rule, §3.6).
+		Patterns rejected by this check but provably safe at a deeper analysis level are
+		documented as known false positives; do not relax without a design change.
+		"""
+		if place.base.kind is PlaceKind.PARAM:
+			return True
+		local_id = place.base.local_id
+		for i, stmt in enumerate(block_stmts):
+			if i >= stmt_index:
+				break
+			if isinstance(stmt, H.HLet) and getattr(stmt, "binding_id", None) == local_id:
+				return True
+		return False
+
+	def _check_lambda_scope_escape(self, lam: H.HLambda, state: _FlowState, stmt_index: int, block_stmts: list, span: Span) -> bool:
+		"""Check whether a LOCAL lambda can safely be passed to a SCOPED param (§3.6).
+
+		For each captured loan:
+		1. The underlying place must be VALID in the current flow state.
+		2. The place must be defined before stmt_index in the direct enclosing BasicBlock
+		   (conservative proxy for 'will still exist after the scope returns').
+
+		Returns True if all captured loans pass both checks. Emits E_ESCAPE_SCOPE and
+		returns False on the first failure.
+		"""
+		capture_ids = self._captured_loan_binding_ids(lam)
+		for loan in state.loans:
+			if loan.ref_binding_id not in capture_ids:
+				continue
+			curr = self._state_for(state, loan.place)
+			if curr is not PlaceState.VALID:
+				self._report_escape_violation(lam, state, EscapeLevel.SCOPED, EscapeLevel.LOCAL, span)
+				return False
+			if not self._place_is_defined_before_stmt(loan.place, stmt_index, block_stmts):
+				self._report_escape_violation(lam, state, EscapeLevel.SCOPED, EscapeLevel.LOCAL, span)
+				return False
+		return True
+
 	def _check_lambda_escape_level(self, lam: H.HLambda, state: _FlowState, required: EscapeLevel, span: Span, from_unannotated: bool = False) -> None:
 		"""Validate that lam can satisfy required escape level; emit diagnostic if not."""
 		lambda_level = self._lambda_escape_level(lam, state)
 		if lambda_level < required:
+			if (required == EscapeLevel.SCOPED and lambda_level == EscapeLevel.LOCAL
+					and self._current_stmt_index is not None
+					and self._current_block_stmts is not None):
+				# SCOPED level: run scope-escape check before emitting an error.
+				# If the captured places are provably alive across the scope call, accept.
+				if self._check_lambda_scope_escape(lam, state, self._current_stmt_index, self._current_block_stmts, span):
+					self._add_lambda_capture_loans(state, lam)
+					return
+				# _check_lambda_scope_escape already emitted E_ESCAPE_SCOPE
+				return
 			self._report_escape_violation(lam, state, required, lambda_level, span, from_unannotated=from_unannotated)
 		elif required <= EscapeLevel.LOCAL:
 			self._add_lambda_capture_loans(state, lam)
@@ -2146,7 +2207,10 @@ class BorrowChecker:
 		"""
 		prev_block = self._current_block_id
 		prev_stmt_span = self._current_stmt_span
+		prev_stmt_index = self._current_stmt_index
+		prev_block_stmts = self._current_block_stmts
 		self._current_block_id = block.id
+		self._current_block_stmts = block.statements
 		try:
 			state = _FlowState(
 				place_states=dict(in_state.place_states),
@@ -2165,6 +2229,7 @@ class BorrowChecker:
 			for stmt_i, stmt in enumerate(block.statements):
 				stmt_loc = getattr(stmt, "loc", None)
 				self._current_stmt_span = stmt_loc if isinstance(stmt_loc, Span) else Span.from_loc(stmt_loc)
+				self._current_stmt_index = stmt_i
 				if isinstance(stmt, H.HLet):
 					if isinstance(stmt.value, H.HBorrow):
 						place = place_from_expr(stmt.value.subject, base_lookup=self.base_lookup)
@@ -2304,6 +2369,8 @@ class BorrowChecker:
 		finally:
 			self._current_block_id = prev_block
 			self._current_stmt_span = prev_stmt_span
+			self._current_stmt_index = prev_stmt_index
+			self._current_block_stmts = prev_block_stmts
 
 	def check_block(self, block: H.HBlock) -> List[Diagnostic]:
 		"""Run move tracking on a HIR block by building a CFG and flowing states."""

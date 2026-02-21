@@ -16,6 +16,15 @@ review-cleanup:
 test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test
 	@echo "lang tests: Success."
 
+# Shard 1: everything test runs except codegen.
+test-shard-1: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-gdb-test
+	@echo "lang test-shard-1: Success."
+
+# Shard 2: codegen e2e only.
+test-shard-2:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
+	@echo "lang test-shard-2: Success."
+
 # Local build/release prep (no implicit full test run).
 build: runtime-libs dist-publish-stdlib
 
@@ -289,40 +298,3 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 	mkdir -p build/pkg dist/release
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
-
-stage-for-review:
-	#!/usr/bin/env bash
-	staged_dir=staged
-	TODAY=$(date +'%Y-%m-%dT%H-%M-%S%Z')
-	COMBINED_NAME="combined_${TODAY}.txt"
-	rm -rf "$staged_dir"
-	mkdir -p "$staged_dir"
-	rm -f combined_*
-	git ls-files -m -o --exclude-standard | while IFS= read -r f; do
-		[ -f "$f" ] || continue
-		mkdir -p "$staged_dir/$(dirname "$f")"
-		cp -- "$f" "$staged_dir/$f"
-	done
-	mapfile -d '' files < <(find "$staged_dir/" -type f -print0 | sort -z)
-	{
-		echo "[==== AGENT INSTRUCTIONS ====]"
-		echo "Role: Act as a production-compiler reviewer for Drift."
-		echo "Primary constraints (in order): (1) semantic correctness + soundness, (2) adherence to and inspiration from: the Drift language spec (if you don't have it ask for it), modern languages like Rust, Java's Project Loom and POSIX C whenever our lang-spec is undrespecified, (3) determinism + reproducibility, (4) diagnostics quality/stability, (5) maintainability/extensibility, (6) performance (no hidden big-O or allocation cliffs)."
-		echo "Review requirements: For each change/claim, verify against invariants, spec rules, and edge cases; when unsure (missing spec context), say exactly what can’t be verified and what assumption you’re making."
-		echo "Output: Report only issues, risks, or better long-term alternatives. You can include Drift code snippets or pseudo code to illustrate solutions. If no issues, output “Reviewed and found no material issues to resolve.” and (optionally) a one-line checklist of what you verified. "
-		echo "Decision rule: If multiple solutions exist, recommend the cleanest long-term design even if it’s more work; avoid speculative refactors unless requested. Don't say: If you want a “clean long-term alternative” - we positively want only "clean long-term", provide the plan for executing it. "
-		echo "Style: concise, technical, no fluff."
-		echo "Date: ${TODAY}"
-		echo "[==== FILE LIST ====]"
-		printf '%s\n' "${files[@]}"
-		echo
-
-		# feed awk a NUL-separated list so xargs -0 is happy
-		printf '%s\0' "${files[@]}" |
-			xargs -0 awk '
-				FNR==1 { print "\n[==== File: " FILENAME " =====]" }
-				{ print }
-			'
-	} > $COMBINED_NAME
-
-	# rm -f staged.zip && zip -r staged.zip "$staged_dir"
