@@ -59,6 +59,7 @@ from lang.driftc.stage1 import closures as C
 from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.closures import sort_captures
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
+from lang.driftc.call_contract import intrinsic_call_issues
 from lang.driftc.stage1.lambda_validate import validate_lambdas_non_retaining
 from lang.driftc.stage1.non_retaining_analysis import analyze_non_retaining_params
 from lang.driftc.stage2 import HIRToMIR, make_builder, mir_nodes as M
@@ -830,125 +831,23 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> list[Diagnostic]:
 			)
 			continue
 		kwargs = getattr(call, "kwargs", None) or []
+		# Name disambiguation for overloaded intrinsics.
 		if kind is IntrinsicKind.BYTE_LENGTH:
 			if not isinstance(call, (H.HCall, H.HMethodCall)):
 				continue
-			if isinstance(call, H.HCall):
-				if not (isinstance(call.fn, H.HVar) and call.fn.name == "byte_length"):
-					continue
+			if isinstance(call, H.HCall) and not (isinstance(call.fn, H.HVar) and call.fn.name == "byte_length"):
+				continue
 			if isinstance(call, H.HMethodCall) and call.method_name != "byte_length":
 				continue
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_BYTE_LENGTH", message=f"{kind.value}(...) expects 1 positional argument", call=call)
-			continue
-		if kind in (IntrinsicKind.WRAPPING_ADD_U64, IntrinsicKind.WRAPPING_MUL_U64):
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_WRAPPING_U64", message=f"{kind.value}(...) expects 2 positional arguments", call=call)
-			continue
-		if kind in (IntrinsicKind.STRING_EQ, IntrinsicKind.STRING_CONCAT):
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_STRING_OP", message=f"{kind.value}(...) expects 2 positional arguments", call=call)
-			continue
 		if kind is IntrinsicKind.STRING_BYTE_AT:
 			if not isinstance(call, (H.HCall, H.HMethodCall)):
 				continue
-			if isinstance(call, H.HCall):
-				if not (isinstance(call.fn, H.HVar) and call.fn.name == "string_byte_at"):
-					continue
+			if isinstance(call, H.HCall) and not (isinstance(call.fn, H.HVar) and call.fn.name == "string_byte_at"):
+				continue
 			if isinstance(call, H.HMethodCall) and call.method_name != "string_byte_at":
 				continue
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_STRING_BYTE_AT", message="string_byte_at(...) expects 2 positional arguments", call=call)
-			continue
-		if kind in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_CALLBACK", message=f"{kind.value}(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.TYPE_ID:
-			if kwargs or len(call.args) != 0:
-				_emit(code="E_INTRINSIC_ARITY_TYPE_ID", message="type_id(...) expects 0 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.DROP_VALUE:
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_DROP_VALUE", message="drop_value(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.SWAP:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_SWAP", message="swap(...) expects 2 positional arguments", call=call)
-			if not all(isinstance(arg, getattr(H, "HBorrow")) and arg.is_mut for arg in call.args):
-				_emit(code="E_INTRINSIC_SWAP_MUT_BORROW_REQUIRED", message="swap(...) requires &mut place operands", call=call)
-			continue
-		if kind is IntrinsicKind.REPLACE:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_REPLACE", message="replace(...) expects 2 positional arguments", call=call)
-			if not (isinstance(call.args[0], getattr(H, "HBorrow")) and call.args[0].is_mut):
-				_emit(code="E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED", message="replace(...) requires &mut place target", call=call)
-			continue
-		if kind is IntrinsicKind.RAW_ALLOC:
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_ALLOC_UNINIT", message="alloc_uninit(...) expects 1 positional argument", call=call)
-			continue
-		if kind in (IntrinsicKind.RAWBUFFER_PTR, IntrinsicKind.RAWBUFFER_CAP):
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_RAWBUFFER_VIEW", message=f"{kind.value}(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.RAWBUFFER_FROM_PARTS:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_RAWBUFFER_FROM_PARTS", message="rawbuffer_from_parts(...) expects 2 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.RAW_DEALLOC:
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_DEALLOC", message="dealloc(...) expects 1 positional argument", call=call)
-			continue
-		if kind in (IntrinsicKind.RAW_PTR_AT_REF, IntrinsicKind.RAW_PTR_AT_MUT):
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_PTR_AT", message="ptr_at(...) expects 2 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.RAW_WRITE:
-			if kwargs or len(call.args) != 3:
-				_emit(code="E_INTRINSIC_ARITY_RAW_WRITE", message="write(...) expects 3 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.RAW_READ:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_RAW_READ", message="read(...) expects 2 positional arguments", call=call)
-			continue
-		if kind in (IntrinsicKind.PTR_FROM_REF, IntrinsicKind.PTR_FROM_REF_MUT):
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_PTR_FROM_REF", message="ptr_from_ref(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.PTR_OFFSET:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_PTR_OFFSET", message="ptr_offset(...) expects 2 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.PTR_READ:
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_PTR_READ", message="ptr_read(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.PTR_WRITE:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_PTR_WRITE", message="ptr_write(...) expects 2 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.PTR_IS_NULL:
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_PTR_IS_NULL", message="ptr_is_null(...) expects 1 positional argument", call=call)
-			continue
-		if kind is IntrinsicKind.MAYBE_UNINIT:
-			if kwargs or len(call.args) != 0:
-				_emit(code="E_INTRINSIC_ARITY_MAYBE_UNINIT", message="maybe_uninit(...) expects 0 positional arguments", call=call)
-			continue
-		if kind is IntrinsicKind.MAYBE_WRITE:
-			if kwargs or len(call.args) != 2:
-				_emit(code="E_INTRINSIC_ARITY_MAYBE_WRITE", message="maybe_write(...) expects 2 positional arguments", call=call)
-			continue
-		if kind in (IntrinsicKind.MAYBE_ASSUME_INIT_REF, IntrinsicKind.MAYBE_ASSUME_INIT_MUT, IntrinsicKind.MAYBE_ASSUME_INIT_READ):
-			if kwargs or len(call.args) != 1:
-				_emit(code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", message=f"{kind.value}(...) expects 1 positional argument", call=call)
-			continue
-		_emit(
-			code="E_INTRINSIC_CALLINFO_UNKNOWN_KIND",
-			message=f"unknown intrinsic '{kind.value}' in CallInfo validation",
-			call=call,
-		)
+		for issue in intrinsic_call_issues(kind, call, kwargs=kwargs):
+			_emit(code=issue.code, message=issue.message, call=call)
 	return diags
 
 

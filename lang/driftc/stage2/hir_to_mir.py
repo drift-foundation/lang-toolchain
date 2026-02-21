@@ -44,6 +44,7 @@ from lang.driftc.stage1.call_info import (
 	IntrinsicKind,
 	call_abi_ret_type,
 )
+from lang.driftc.call_contract import intrinsic_call_issues, CtorFieldSpec, ctor_call_issues, array_method_arity_issues, call_kwargs_issues
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId, FunctionRefId, FunctionRefKind, function_symbol
 from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID
@@ -2102,11 +2103,12 @@ class HIRToMIR:
 			raise AssertionError("write(...) used in expression context (checker bug)")
 		if intrinsic is IntrinsicKind.PTR_WRITE:
 			raise AssertionError("ptr_write(...) used in expression context (checker bug)")
+		# Pre-flight: validate arity/kwargs via call_contract (single seam).
+		_kwargs = getattr(expr, "kwargs", None) or []
+		_shape_issues = [i for i in intrinsic_call_issues(intrinsic, expr, kwargs=_kwargs) if "MUT_BORROW_REQUIRED" not in i.code]
+		if _shape_issues:
+			raise AssertionError(f"{_shape_issues[0].message} reached MIR lowering (checker bug)")
 		if intrinsic is IntrinsicKind.REPLACE:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("replace(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("replace(...) arity mismatch reached MIR lowering (checker bug)")
 			place_expr = expr.args[0]
 			if isinstance(place_expr, H.HBorrow) and place_expr.is_mut:
 				place_expr = place_expr_from_lvalue_expr(place_expr.subject)
@@ -2123,10 +2125,6 @@ class HIRToMIR:
 		if intrinsic is IntrinsicKind.MAYBE_UNINIT:
 			raise NotImplementedError("maybe_uninit intrinsic lowering is not implemented in MVP")
 		if intrinsic is IntrinsicKind.MAYBE_WRITE:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("maybe_write(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("maybe_write(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError("maybe_write(...) missing CallInfo (checker bug)")
 			ret_ty = info.sig.user_ret_type
@@ -2143,10 +2141,6 @@ class HIRToMIR:
 			self._local_types[slot] = ret_ty
 			return slot
 		if intrinsic in (IntrinsicKind.MAYBE_ASSUME_INIT_REF, IntrinsicKind.MAYBE_ASSUME_INIT_MUT):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{intrinsic.value}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError(f"{intrinsic.value}(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError(f"{intrinsic.value}(...) missing CallInfo (checker bug)")
 			ret_ty = info.sig.user_ret_type
@@ -2154,10 +2148,6 @@ class HIRToMIR:
 			self._local_types[slot] = ret_ty
 			return slot
 		if intrinsic is IntrinsicKind.MAYBE_ASSUME_INIT_READ:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("maybe_assume_init_read(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError("maybe_assume_init_read(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError("maybe_assume_init_read(...) missing CallInfo (checker bug)")
 			ret_ty = info.sig.user_ret_type
@@ -2176,10 +2166,6 @@ class HIRToMIR:
 			return dest
 		if intrinsic in (IntrinsicKind.WRAPPING_ADD_U64, IntrinsicKind.WRAPPING_MUL_U64):
 			name = intrinsic.value
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{name}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError(f"{name}(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or len(info.sig.param_types) != 2:
 				raise AssertionError(f"{name}(...) missing CallInfo types (checker bug)")
 			if info.sig.param_types[0] != self._uint64_type or info.sig.param_types[1] != self._uint64_type:
@@ -2194,10 +2180,6 @@ class HIRToMIR:
 			self._local_types[dest] = self._uint64_type
 			return dest
 		if intrinsic is IntrinsicKind.RAW_ALLOC:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("alloc_uninit(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError("alloc_uninit(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError("alloc_uninit(...) missing CallInfo (checker bug)")
 			raw_ty = info.sig.user_ret_type
@@ -2210,10 +2192,6 @@ class HIRToMIR:
 			self._local_types[dest] = raw_ty
 			return dest
 		if intrinsic in (IntrinsicKind.RAWBUFFER_PTR, IntrinsicKind.RAWBUFFER_CAP):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{intrinsic.value}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError(f"{intrinsic.value}(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError(f"{intrinsic.value}(...) missing CallInfo (checker bug)")
 			raw_param = self._unwrap_ref_type(info.sig.param_types[0])
@@ -2229,10 +2207,6 @@ class HIRToMIR:
 			self._local_types[dest] = field_ty
 			return dest
 		if intrinsic is IntrinsicKind.RAWBUFFER_FROM_PARTS:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("rawbuffer_from_parts(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("rawbuffer_from_parts(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError("rawbuffer_from_parts(...) missing CallInfo (checker bug)")
 			ptr_val = self.lower_expr(expr.args[0])
@@ -2242,10 +2216,6 @@ class HIRToMIR:
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic in (IntrinsicKind.RAW_PTR_AT_REF, IntrinsicKind.RAW_PTR_AT_MUT):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("ptr_at(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("ptr_at(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError("ptr_at(...) missing CallInfo (checker bug)")
 			raw_param = self._unwrap_ref_type(info.sig.param_types[0])
@@ -2259,10 +2229,6 @@ class HIRToMIR:
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic is IntrinsicKind.RAW_READ:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("read(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("read(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError("read(...) missing CallInfo (checker bug)")
 			raw_param = self._unwrap_ref_type(info.sig.param_types[0])
@@ -2276,10 +2242,6 @@ class HIRToMIR:
 			self._local_types[dest] = elem_ty
 			return dest
 		if intrinsic in (IntrinsicKind.PTR_FROM_REF, IntrinsicKind.PTR_FROM_REF_MUT):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("ptr_from_ref(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError("ptr_from_ref(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None:
 				raise AssertionError("ptr_from_ref(...) missing CallInfo (checker bug)")
 			src_val = self.lower_expr(expr.args[0])
@@ -2288,10 +2250,6 @@ class HIRToMIR:
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic is IntrinsicKind.PTR_OFFSET:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("ptr_offset(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("ptr_offset(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError("ptr_offset(...) missing CallInfo (checker bug)")
 			ptr_val = self.lower_expr(expr.args[0])
@@ -2304,10 +2262,6 @@ class HIRToMIR:
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic is IntrinsicKind.PTR_READ:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("ptr_read(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError("ptr_read(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError("ptr_read(...) missing CallInfo (checker bug)")
 			ptr_val = self.lower_expr(expr.args[0])
@@ -2319,10 +2273,6 @@ class HIRToMIR:
 			self._local_types[dest] = elem_ty
 			return dest
 		if intrinsic is IntrinsicKind.PTR_IS_NULL:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("ptr_is_null(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError("ptr_is_null(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or not info.sig.param_types:
 				raise AssertionError("ptr_is_null(...) missing CallInfo (checker bug)")
 			ptr_val = self.lower_expr(expr.args[0])
@@ -2332,10 +2282,6 @@ class HIRToMIR:
 			return dest
 		if intrinsic is IntrinsicKind.BYTE_LENGTH:
 			name = intrinsic.value
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{name}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError(f"{name}(...) arity mismatch reached MIR lowering (checker bug)")
 			arg_expr = expr.args[0]
 			arg_val = self.lower_expr(arg_expr)
 			arg_ty = None
@@ -2349,10 +2295,6 @@ class HIRToMIR:
 			return dest
 		if intrinsic is IntrinsicKind.STRING_BYTE_AT:
 			name = intrinsic.value
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{name}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError(f"{name}(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or len(info.sig.param_types) < 2:
 				raise AssertionError(f"{name}(...) missing CallInfo types (checker bug)")
 			if info.sig.param_types[0] != self._type_table.ensure_ref(self._string_type) or info.sig.param_types[1] != self._int_type:
@@ -2372,10 +2314,6 @@ class HIRToMIR:
 			self._local_types[dest] = self._byte_type
 			return dest
 		if intrinsic is IntrinsicKind.STRING_EQ:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("string_eq(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("string_eq(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or len(info.sig.param_types) < 2:
 				raise AssertionError("string_eq(...) missing CallInfo types (checker bug)")
 			if info.sig.param_types[0] != self._string_type or info.sig.param_types[1] != self._string_type:
@@ -2388,10 +2326,6 @@ class HIRToMIR:
 			self._local_types[dest] = self._bool_type
 			return dest
 		if intrinsic is IntrinsicKind.STRING_CONCAT:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("string_concat(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 2:
-				raise AssertionError("string_concat(...) arity mismatch reached MIR lowering (checker bug)")
 			if info is None or len(info.sig.param_types) < 2:
 				raise AssertionError("string_concat(...) missing CallInfo types (checker bug)")
 			if info.sig.param_types[0] != self._string_type or info.sig.param_types[1] != self._string_type:
@@ -2404,10 +2338,6 @@ class HIRToMIR:
 			self._local_types[dest] = self._string_type
 			return dest
 		if intrinsic in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
-			if getattr(expr, "kwargs", None):
-				raise AssertionError(f"{intrinsic.value}(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 1:
-				raise AssertionError(f"{intrinsic.value}(...) arity mismatch reached MIR lowering (checker bug)")
 			arg = expr.args[0]
 			if info is None:
 				raise AssertionError(f"{intrinsic.value}(...) missing CallInfo (checker bug)")
@@ -2448,10 +2378,6 @@ class HIRToMIR:
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic is IntrinsicKind.TYPE_ID:
-			if getattr(expr, "kwargs", None):
-				raise AssertionError("type_id(...) does not accept keyword arguments (checker bug)")
-			if len(expr.args) != 0:
-				raise AssertionError("type_id(...) arity mismatch reached MIR lowering (checker bug)")
 			type_arg_exprs = list(getattr(expr, "type_args", []) or [])
 			if len(type_arg_exprs) != 1:
 				raise AssertionError("type_id<T>() requires exactly one type argument (checker bug)")
@@ -2579,32 +2505,25 @@ class HIRToMIR:
 							raise AssertionError(
 								"keyword arguments reached MIR lowering for a constructor in typed mode (checker bug)"
 							)
-						if pos_args and kw_pairs:
-							raise AssertionError("variant constructor does not allow mixing positional and named arguments (checker bug)")
 
 						field_names = list(getattr(arm_def, "field_names", []) or [])
 						field_types = list(arm_def.field_types)
 						if len(field_names) != len(field_types):
 							raise AssertionError("variant ctor schema/type mismatch reached MIR lowering (checker bug)")
 
+						_ctor_issues = ctor_call_issues(len(pos_args), tuple(kw.name for kw in kw_pairs), CtorFieldSpec(field_names=tuple(field_names)), ctor_label="variant", span=getattr(expr, "loc", None))
+						if _ctor_issues:
+							raise AssertionError(f"{_ctor_issues[0].message} reached MIR lowering")
+
 						ordered: list[M.ValueId | None] = [None] * len(field_types)
 						# Evaluate arguments left-to-right as written, but pass them in field order.
 						if kw_pairs:
 							for kw in kw_pairs:
-								try:
-									field_idx = field_names.index(kw.name)
-								except ValueError as err:
-									raise AssertionError("unknown variant ctor field reached MIR lowering (checker bug)") from err
-								if ordered[field_idx] is not None:
-									raise AssertionError("duplicate variant ctor field reached MIR lowering (checker bug)")
+								field_idx = field_names.index(kw.name)
 								ordered[field_idx] = self.lower_expr(kw.value, expected_type=field_types[field_idx])
 						else:
-							if len(pos_args) != len(field_types):
-								raise AssertionError("variant constructor arity mismatch reached MIR lowering (checker bug)")
 							for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
 								ordered[idx] = self.lower_expr(arg_expr, expected_type=fty)
-						if any(v is None for v in ordered):
-							raise AssertionError("missing variant ctor field reached MIR lowering (checker bug)")
 						arg_vals = [v for v in ordered if v is not None]
 						dest = self.b.new_temp()
 						self.b.emit(M.ConstructVariant(dest=dest, variant_ty=expected, ctor=name, args=arg_vals))
@@ -2650,23 +2569,18 @@ class HIRToMIR:
 
 				pos_args = list(expr.args)
 				kw_pairs = list(getattr(expr, "kwargs", []) or [])
-				if len(pos_args) > len(field_types):
-					raise AssertionError("struct ctor arg count mismatch reached MIR lowering (checker bug)")
+
+				_ctor_issues = ctor_call_issues(len(pos_args), tuple(kw.name for kw in kw_pairs), CtorFieldSpec(field_names=tuple(field_names)), ctor_label="struct", span=getattr(expr, "loc", None))
+				if _ctor_issues:
+					raise AssertionError(f"{_ctor_issues[0].message} reached MIR lowering")
 
 				# Evaluate arguments left-to-right as written, but pass them in field order.
 				ordered: list[M.ValueId | None] = [None] * len(field_types)
 				for idx, arg_expr in enumerate(pos_args):
 					ordered[idx] = self.lower_expr(arg_expr, expected_type=field_types[idx])
 				for kw in kw_pairs:
-					try:
-						field_idx = field_names.index(kw.name)
-					except ValueError as err:
-						raise AssertionError("unknown struct ctor field reached MIR lowering (checker bug)") from err
-					if field_idx < len(pos_args) or ordered[field_idx] is not None:
-						raise AssertionError("duplicate struct ctor field reached MIR lowering (checker bug)")
+					field_idx = field_names.index(kw.name)
 					ordered[field_idx] = self.lower_expr(kw.value, expected_type=field_types[field_idx])
-				if any(v is None for v in ordered):
-					raise AssertionError("missing struct ctor field reached MIR lowering (checker bug)")
 				arg_vals = [v for v in ordered if v is not None]
 				dest = self.b.new_temp()
 				self.b.emit(M.ConstructStruct(dest=dest, struct_ty=struct_ty, args=arg_vals))
@@ -2674,8 +2588,9 @@ class HIRToMIR:
 				return dest
 		if not isinstance(expr.fn, H.HVar):
 			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
-		if getattr(expr, "kwargs", None):
-			raise AssertionError("keyword arguments reached MIR lowering for a normal call (checker bug)")
+		_kw_issues = call_kwargs_issues("a normal call", getattr(expr, "kwargs", None), span=getattr(expr, "loc", None))
+		if _kw_issues:
+			raise AssertionError(f"{_kw_issues[0].message}")
 		info = self._call_info_for(expr)
 		result = self._lower_call(expr)
 		if result is None:
@@ -2691,8 +2606,9 @@ class HIRToMIR:
 		return result
 
 	def _visit_expr_HInvoke(self, expr: H.HInvoke) -> M.ValueId:
-		if getattr(expr, "kwargs", None):
-			raise AssertionError("keyword arguments are not supported for value calls in MIR lowering (checker bug)")
+		_kw_issues = call_kwargs_issues("value calls", getattr(expr, "kwargs", None), span=getattr(expr, "loc", None))
+		if _kw_issues:
+			raise AssertionError(f"{_kw_issues[0].message}")
 		info = self._call_info_for_invoke(expr)
 		result = self._lower_invoke(expr)
 		if result is None:
@@ -3288,8 +3204,9 @@ class HIRToMIR:
 					lower._local_types[local_name] = decl_ty
 
 	def _visit_expr_HMethodCall(self, expr: H.HMethodCall) -> M.ValueId:
-		if getattr(expr, "kwargs", None):
-			raise AssertionError("keyword arguments for method calls are not supported in MIR lowering (checker bug)")
+		_kw_issues = call_kwargs_issues("method calls", getattr(expr, "kwargs", None), span=getattr(expr, "loc", None))
+		if _kw_issues:
+			raise AssertionError(f"{_kw_issues[0].message}")
 		if expr.method_name == "dup" and not expr.args:
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is not None:
@@ -3550,8 +3467,9 @@ class HIRToMIR:
 		if name == "get":
 			if not want_value:
 				return True, None
-			if len(expr.args) != 1:
-				raise AssertionError("Array.get arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues("get", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
@@ -3613,8 +3531,9 @@ class HIRToMIR:
 		if name == "ref_at":
 			if not want_value:
 				return True, None
-			if len(expr.args) != 1:
-				raise AssertionError("Array.ref_at arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues("ref_at", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			ptr = self.b.new_temp()
 			self.b.emit(
@@ -3630,8 +3549,9 @@ class HIRToMIR:
 			return True, ptr
 
 		if name == "pop":
-			if len(expr.args) != 0:
-				raise AssertionError("Array.pop arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues("pop", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			if not want_value:
 				return True, None
 			opt_ty = self._optional_variant_type(elem_ty)
@@ -3818,10 +3738,9 @@ class HIRToMIR:
 			return out, grew
 
 		if name in ("push", "insert"):
-			if name == "push" and len(expr.args) != 1:
-				raise AssertionError("Array.push arity mismatch reached MIR lowering (checker bug)")
-			if name == "insert" and len(expr.args) != 2:
-				raise AssertionError("Array.insert arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues(name, len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			val_arg = expr.args[-1]
 			val = self.lower_expr(val_arg, expected_type=elem_ty)
 			len_val = self.b.new_temp()
@@ -3915,8 +3834,9 @@ class HIRToMIR:
 			return True, None
 
 		if name in ("remove", "swap_remove"):
-			if len(expr.args) != 1:
-				raise AssertionError("Array remove/swap_remove arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues(name, len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			if not want_value:
 				return True, None
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
@@ -3984,8 +3904,9 @@ class HIRToMIR:
 			return True, val
 
 		if name == "swap":
-			if len(expr.args) != 2:
-				raise AssertionError("Array.swap arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues("swap", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			idx_a = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			idx_b = self.lower_expr(expr.args[1], expected_type=self._int_type)
 			# Bounds-check both indices.
@@ -4032,17 +3953,19 @@ class HIRToMIR:
 			return True, None
 
 		if name == "set":
-			if len(expr.args) != 2:
-				raise AssertionError("Array.set arity mismatch reached MIR lowering (checker bug)")
+			_arr_issues = array_method_arity_issues("set", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			val = self.lower_expr(expr.args[1], expected_type=elem_ty)
 			self.b.emit(M.ArrayIndexStore(elem_ty=elem_ty, array=array_val, index=idx_val, value=val))
 			return True, None
 
 		if name in ("clear", "reserve", "shrink_to_fit"):
+			_arr_issues = array_method_arity_issues(name, len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
 			if name == "clear":
-				if len(expr.args) != 0:
-					raise AssertionError("Array.clear arity mismatch reached MIR lowering (checker bug)")
 				len_val = self.b.new_temp()
 				self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 				next_gen = _next_gen(array_val)
@@ -4078,8 +4001,6 @@ class HIRToMIR:
 				return True, None
 
 			if name == "reserve":
-				if len(expr.args) != 1:
-					raise AssertionError("Array.reserve arity mismatch reached MIR lowering (checker bug)")
 				add_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 				zero = self._const_int(0)
 				neg = self.b.new_temp()
@@ -4118,8 +4039,6 @@ class HIRToMIR:
 				return True, None
 
 			# shrink_to_fit
-			if len(expr.args) != 0:
-				raise AssertionError("Array.shrink_to_fit arity mismatch reached MIR lowering (checker bug)")
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 			cap_val = self.b.new_temp()
@@ -4602,9 +4521,12 @@ class HIRToMIR:
 				intrinsic = info.target.intrinsic
 				if intrinsic is None:
 					raise AssertionError("intrinsic call missing name (typecheck/call-info bug)")
+				# Pre-flight: validate arity/kwargs via call_contract (single seam).
+				_kwargs = getattr(stmt.expr, "kwargs", None) or []
+				_shape_issues = [i for i in intrinsic_call_issues(intrinsic, stmt.expr, kwargs=_kwargs) if "MUT_BORROW_REQUIRED" not in i.code]
+				if _shape_issues:
+					raise AssertionError(f"{_shape_issues[0].message} reached MIR lowering (checker bug)")
 				if intrinsic is IntrinsicKind.SWAP:
-					if len(stmt.expr.args) != 2:
-						raise AssertionError("swap(a, b): arity mismatch reached MIR lowering (checker bug)")
 					a_expr = stmt.expr.args[0]
 					b_expr = stmt.expr.args[1]
 					if isinstance(a_expr, H.HBorrow) and a_expr.is_mut:
@@ -4631,16 +4553,12 @@ class HIRToMIR:
 					self.b.emit(M.StoreRef(ptr=b_ptr, value=a_val, inner_ty=b_ty))
 					return
 				if intrinsic is IntrinsicKind.RAW_DEALLOC:
-					if len(stmt.expr.args) != 1:
-						raise AssertionError("dealloc(buf): arity mismatch reached MIR lowering (checker bug)")
 					info = self._call_info_for(stmt.expr)
 					raw_param = self._unwrap_ref_type(info.sig.param_types[0]) if info.sig.param_types else self._unknown_type
 					buf_val = self.lower_expr(stmt.expr.args[0])
 					self.b.emit(M.RawBufferDealloc(buffer=buf_val, raw_ty=raw_param))
 					return
 				if intrinsic is IntrinsicKind.RAW_WRITE:
-					if len(stmt.expr.args) != 3:
-						raise AssertionError("write(buf, i, v): arity mismatch reached MIR lowering (checker bug)")
 					info = self._call_info_for(stmt.expr)
 					raw_param = self._unwrap_ref_type(info.sig.param_types[0]) if info.sig.param_types else self._unknown_type
 					elem_ty = self._raw_buffer_elem_type(raw_param)
@@ -4652,8 +4570,6 @@ class HIRToMIR:
 					self.b.emit(M.RawBufferWrite(buffer=buf_val, raw_ty=raw_param, elem_ty=elem_ty, index=idx_val, value=val_val))
 					return
 				if intrinsic is IntrinsicKind.PTR_WRITE:
-					if len(stmt.expr.args) != 2:
-						raise AssertionError("ptr_write(ptr, v): arity mismatch reached MIR lowering (checker bug)")
 					info = self._call_info_for(stmt.expr)
 					ptr_param = info.sig.param_types[0] if info.sig.param_types else self._unknown_type
 					elem_ty = self._raw_ptr_elem_type(ptr_param)
@@ -4664,8 +4580,6 @@ class HIRToMIR:
 					self.b.emit(M.PtrWrite(ptr=ptr_val, value=val_val, elem_ty=elem_ty))
 					return
 				if intrinsic is IntrinsicKind.DROP_VALUE:
-					if len(stmt.expr.args) != 1:
-						raise AssertionError("drop_value(v): arity mismatch reached MIR lowering (checker bug)")
 					info = self._call_info_for(stmt.expr)
 					param_ty = info.sig.param_types[0] if info.sig.param_types else self._unknown_type
 					val = self.lower_expr(stmt.expr.args[0])
@@ -5863,8 +5777,6 @@ class HIRToMIR:
 		ctor_arg_field_indices = info.target.ctor_arg_field_indices
 		pos_args = list(expr.args)
 		kw_pairs = list(getattr(expr, "kwargs", []) or [])
-		if pos_args and kw_pairs:
-			raise AssertionError("constructor does not allow mixing positional and named arguments (checker bug)")
 		if variant_ty is not None:
 			if ctor_name is None:
 				raise AssertionError("constructor call missing variant metadata (typecheck/call-info bug)")
@@ -5894,8 +5806,9 @@ class HIRToMIR:
 		else:
 			raise AssertionError("constructor call missing variant/struct metadata (typecheck/call-info bug)")
 		ordered: list[M.ValueId | None] = [None] * len(field_types)
-		if kw_pairs:
-			raise AssertionError("keyword arguments reached MIR lowering for a constructor (checker bug)")
+		_kw_issues = call_kwargs_issues("a constructor", kw_pairs, span=getattr(expr, "loc", None))
+		if _kw_issues:
+			raise AssertionError(f"{_kw_issues[0].message}")
 		if ctor_arg_field_indices is not None:
 			if len(pos_args) != len(ctor_arg_field_indices):
 				raise AssertionError("constructor arg mapping arity mismatch reached MIR lowering (checker bug)")
@@ -5914,8 +5827,9 @@ class HIRToMIR:
 					raise AssertionError("Void-returning call used in expression context (checker bug)")
 				ordered[field_idx] = arg_val
 		else:
-			if len(pos_args) != len(field_types):
-				raise AssertionError("constructor arity mismatch reached MIR lowering (checker bug)")
+			_ctor_issues = ctor_call_issues(len(pos_args), (), CtorFieldSpec(field_names=tuple(field_names)), ctor_label="constructor", span=getattr(expr, "loc", None))
+			if _ctor_issues:
+				raise AssertionError(f"{_ctor_issues[0].message} reached MIR lowering")
 			for idx, (arg_expr, fty) in enumerate(zip(pos_args, field_types)):
 				arg_val = self._lower_call_arg(arg_expr, fty)
 				if arg_val is None:

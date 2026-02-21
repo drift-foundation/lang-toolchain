@@ -1,10 +1,73 @@
-# Borrow Checker Escape Context Model — Design Document
+# Borrow Checker Escape Context Model — Active + Archive
 
 Author: Klaudia
 Date: 2026-02-20
-Status: Approved as roadmap candidate — concerns addressed below, implementation not started
+Status: A5 complete; this file now serves as active post-A5 guidance plus archived A5 plan/history.
 
 ---
+
+## Active Guidance (Post-A5)
+
+Current priority:
+- **A1**: make `call_contract.py` the single validation seam.
+
+A1 execution spec (expected compiler infra changes):
+1. Build an explicit inventory table of duplicated call-shape checks, with current owner + target owner:
+   - `lang/driftc/checker/__init__.py`
+   - `lang/driftc/stage2/hir_to_mir.py`
+   - `lang/driftc/driftc.py` boundary wrappers
+   - `lang/driftc/call_contract.py` (target single seam)
+2. Move validation logic into `lang/driftc/call_contract.py` in slices. First slice must include:
+   - positional vs named argument layout checks,
+   - missing/extra arg checks,
+   - duplicate keyword checks,
+   - method receiver-offset consistency checks.
+3. Enforce ownership split after each slice:
+   - `call_contract.py`: decision + normalized failure payload (no user-facing formatting).
+   - checker/stage2: call contract API only, no ad-hoc duplicate predicates.
+   - `driftc.py`: phase-attributed diagnostic wrapping only.
+4. Delete or route old duplicate checks immediately after each migrated slice (no dual-path drift).
+5. Keep all diagnostics user-facing (no `internal:` leak), with stable code + span.
+
+Carry-forward constraints:
+- Keep Boundary Contract Guardrails strict (positive + negative coverage for boundary-shape behavior changes).
+- Do not re-open completed A5 phases unless a new regression requires it.
+
+Exhaustive test coverage required for A1 sign-off:
+1. Contract unit/driver matrix (must include positive + negative for each shape):
+   - exact positional arity pass/fail,
+   - keyword-only pass/fail,
+   - mixed positional+keyword pass/fail,
+   - duplicate keyword fail,
+   - unknown keyword fail,
+   - method receiver slot alignment pass/fail,
+   - generic-call repaired signature pass/fail where applicable.
+2. Boundary diagnostics assertions (all required):
+   - code is stable/non-empty,
+   - phase attribution is correct (`typecheck`, `mir`, `codegen` as applicable),
+   - span file/line/column present when source exists,
+   - no message starts with `internal:`.
+3. High-sensitivity non-regression subset (must stay green):
+   - `lang/tests/driver/test_callinfo_param_layout_contract.py`
+   - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
+   - `lang/tests/driver/test_struct_ref_field_boundary_contract.py`
+   - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py`
+   - e2e:
+     - `result_ok_move_conn_source_drop_regression`
+     - `struct_ref_field_result_ok_move_drop_once`
+4. Full gate before handoff:
+   - `just test-shard-1`
+   - `just test-shard-2`
+
+Deliverables from Klaudia for each slice:
+1. Inventory diff (what moved, what removed, what remains).
+2. Regression list added/updated.
+3. Any diagnostic wording/code changes called out explicitly.
+4. Short risk note if remaining duplicate checks still exist (with follow-up owner).
+
+---
+
+## Appendix: Historical A5 Plan and Execution (Archived)
 
 ## Reviewer Feedback (0–3b checkpoint)
 
@@ -602,8 +665,9 @@ lang/tests/codegen/e2e/borrow_escape_spawn_rejected/:
   expected.json: compile error with E_ESCAPE_THREAD
 
 lang/tests/codegen/e2e/borrow_escape_static_rejected/:
-  main.drift: fn that tries to pass &T capture to a STATIC-annotated param
-  expected.json: compile error with E_ESCAPE_STATIC
+  superseded by final decision — STATIC boundary coverage is driver-level
+  (`test_registry_set_dropper_static_annotation_rejected`) because STATIC targets
+  are intrinsic/runtime-only and not stable for user-source e2e shapes.
 ```
 
 **Checkpoint commands:**
@@ -613,7 +677,6 @@ PYTHONPATH=. ./.venv/bin/python3 -m pytest lang/tests/borrow_checker/test_escape
 PYTHONPATH=. ./.venv/bin/python3 -m pytest lang/tests/driver/test_boundary_matrix_result_variant_contract.py -q
 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
     borrow_escape_spawn_rejected \
-    borrow_escape_static_rejected \
     result_ok_move_conn_source_drop_regression \
     struct_ref_field_result_ok_move_drop_once
 ```
@@ -1277,11 +1340,11 @@ PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
     struct_ref_field_result_ok_move_drop_once
 ```
 
-**New A5 thread/scope/static boundary cases (added as they land):**
+**A5 thread/scope/static boundary cases (final):**
 ```
 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py -j4 \
+    borrow_escape_thread_accepted \
     borrow_escape_spawn_rejected \
-    borrow_escape_static_rejected \
     borrow_escape_scope_accepted \
     implicit_callback_borrowed_capture_rejected
 ```
@@ -1290,6 +1353,13 @@ Note: `implicit_callback_borrowed_capture_rejected` moves from lambda_validate
 to borrow checker ownership at Phase 3c; its expected.json is updated then.
 `borrowed_capture_interface_coercion_rejected` is NOT in this list — it remains
 owned by type_checker.py and is unaffected by A5.
+
+**STATIC boundary (final):**
+```
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/borrow_checker/test_escape_level_model.py \
+    -k test_registry_set_dropper_static_annotation_rejected -q
+```
 
 **Full suite (Phase 5 only):**
 ```
@@ -1303,25 +1373,25 @@ just lang-codegen-test
 
 Before the branch is merged to main, the following must be true:
 
-- [ ] All `just test-e2e` cases pass
-- [ ] All `just lang-codegen-test` cases pass
-- [ ] All borrow checker unit tests pass
-- [ ] `test_invoke_optional_ref_and_lambda_escape.py` passes (may need message
+- [x] All `just test-e2e` cases pass
+- [x] All `just lang-codegen-test` cases pass
+- [x] All borrow checker unit tests pass
+- [x] `test_invoke_optional_ref_and_lambda_escape.py` passes (may need message
       string updates; not removal)
-- [ ] `test_lambda_capture_borrow_overlap.py` passes
-- [ ] `test_lambda_capture_borrow_overlap_method.py` passes
-- [ ] `test_boundary_matrix_result_variant_contract.py` passes (ref-field sensitivity)
-- [ ] `test_struct_ref_field_boundary_contract.py` passes (ref-field sensitivity)
-- [ ] `result_ok_move_conn_source_drop_regression` e2e passes
-- [ ] `struct_ref_field_result_ok_move_drop_once` e2e passes
-- [ ] New E_ESCAPE_* diagnostic codes present in `test_escape_level_model.py`
+- [x] `test_lambda_capture_borrow_overlap.py` passes
+- [x] `test_lambda_capture_borrow_overlap_method.py` passes
+- [x] `test_boundary_matrix_result_variant_contract.py` passes (ref-field sensitivity)
+- [x] `test_struct_ref_field_boundary_contract.py` passes (ref-field sensitivity)
+- [x] `result_ok_move_conn_source_drop_regression` e2e passes
+- [x] `struct_ref_field_result_ok_move_drop_once` e2e passes
+- [x] New E_ESCAPE_* diagnostic codes present in `test_escape_level_model.py`
       with positive and negative cases for each level
-- [ ] THREAD boundary coverage: explicit accept e2e (`borrow_escape_thread_accepted`) + explicit reject e2e (`borrow_escape_spawn_rejected`)
-- [ ] SCOPE boundary coverage: accept e2e (`borrow_escape_scope_accepted`) + reject unit tests in `test_escape_level_model.py`; scope-reject e2e deferred (blocked by Fn1 coercion limitation — see known limitations in work-progress.md)
-- [ ] STATIC boundary regression: driver-level coverage in `test_escape_level_model.py` (`test_registry_set_dropper_static_annotation_rejected`); e2e not required (STATIC annotations are on intrinsic-only paths not directly callable from user Drift source)
-- [ ] Q1 trait-object THREAD-default regression present in `test_escape_level_model.py`
-- [ ] `param_nonretaining` removed from `FnSignature` (Phase 5 complete)
-- [ ] Post-removal grep confirms zero `param_nonretaining` references in compiler and tests
+- [x] THREAD boundary coverage: explicit accept e2e (`borrow_escape_thread_accepted`) + explicit reject e2e (`borrow_escape_spawn_rejected`)
+- [x] SCOPE boundary coverage: accept e2e (`borrow_escape_scope_accepted`) + reject unit tests in `test_escape_level_model.py`; scope-reject e2e deferred (blocked by Fn1 coercion limitation — see known limitations in work-progress.md)
+- [x] STATIC boundary regression: driver-level coverage in `test_escape_level_model.py` (`test_registry_set_dropper_static_annotation_rejected`); e2e not required (STATIC annotations are on intrinsic-only paths not directly callable from user Drift source)
+- [x] Q1 trait-object THREAD-default regression present in `test_escape_level_model.py`
+- [x] `param_nonretaining` removed from `FnSignature` (Phase 5 complete)
+- [x] Post-removal grep confirms zero `param_nonretaining` references in compiler and tests
 
 ### Documentation Hygiene Rule (for future phase updates)
 
@@ -1329,11 +1399,11 @@ When a post-review fix changes behavior/details of an already-written phase
 summary, update the original phase summary text to reflect final behavior (or
 add an explicit "superseded by post-review fix" note in that section). Do not
 leave contradictory pre-fix wording in the same document.
-- [ ] Q1–Q4 disposition recorded in this document (Q1 resolved; Q2–Q4 stances confirmed)
-- [ ] Phase 4 known limitations (conservative MVP false positives) documented
-- [ ] No `"internal:"` strings in new diagnostics
-- [ ] All new diagnostic spans are non-None
-- [ ] Unannotated-param THREAD-default note present in E_ESCAPE_THREAD diagnostic
+- [x] Q1–Q4 disposition recorded in this document (Q1 resolved; Q2–Q4 stances confirmed)
+- [x] Phase 4 known limitations (conservative MVP false positives) documented
+- [x] No `"internal:"` strings in new diagnostics
+- [x] All new diagnostic spans are non-None
+- [x] Unannotated-param THREAD-default note present in E_ESCAPE_THREAD diagnostic
 
 ---
 
@@ -1356,13 +1426,3 @@ feature branch. Feature branch merges to main via a single reviewed PR after
 Phase 5 passes the review checklist above.
 
 ---
-
-## Post-A5 Next Work (scheduled)
-
-After A5 sign-off, next architecture item is **A1: make `call_contract.py` the single validation seam**.
-
-Klaudia - next execution plan:
-1. Prepare a short inventory of call-shape/param-layout validations currently duplicated across checker/stage2/driver boundary surfaces.
-2. Propose consolidation into `call_contract.py` with explicit ownership boundaries (checker vs stage2 vs driver diagnostic wrapper).
-3. Land regression-first for one migrated slice (positive + negative contract tests), then continue slice-by-slice.
-4. Keep diagnostics non-internal and phase-attributed through existing boundary helpers.
