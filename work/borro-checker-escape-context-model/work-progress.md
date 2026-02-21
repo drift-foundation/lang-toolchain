@@ -115,31 +115,47 @@ Three review checklist items were ambiguous after Phase 5. Decisions agreed with
 **Constructor kwargs fix (post-slice):**
 - `hir_to_mir.py::_lower_constructor_call`: removed unconditional `call_kwargs_issues("a constructor", ...)` rejection. Replaced with `ctor_call_issues()` validation + proper kwargs-to-field lowering. Removed redundant `ordered` reset in `ctor_arg_field_indices` branch.
 
+**Slice 3 — Checker delegates call-shape decisions to `call_contract.py`:**
+- `checker/call_resolver.py`: 4 constructor validation sites migrated to `ctor_call_issues()`:
+  - Site 1 (qualified variant mixed-args, ~line 882): `E_CTOR_MIXED_ARGS` decision delegated; checker message "E-QMEM-MIXED-ARGS: ..." preserved.
+  - Site 2 (qualified variant field validation, ~line 952): unknown/duplicate field inline loop replaced; checker messages "E-QMEM-NO-FIELD: ..." / "E-QMEM-DUP-FIELD: ..." preserved. Per-kw spans preserved via `notes=(f"field={name}",)` on issues.
+  - Site 3 (struct ctor full validation, ~line 1129): mixed/arity/unknown/duplicate/missing all delegated; checker messages "cannot mix positional and named ..." / "unknown field '...' for struct '...'" / etc. preserved exactly.
+  - Site 4 (unqualified variant ctor, ~line 1224): same pattern as site 3; per-field missing diagnostics preserved (one per missing field).
+- `checker/call_resolver.py`: 5 kwargs rejection sites migrated to `call_kwargs_issues()`:
+  - Site 5 (method call, ~line 1441): "keyword arguments are not supported for method calls in MVP" preserved.
+  - Sites 6-8 (intrinsic kwargs, ~lines 3846/4172/4245): "{name} does not support keyword arguments" preserved.
+  - Site 9 (normal call, ~line 5116): "keyword arguments are only supported for constructors in MVP" preserved.
+- `hir_to_mir.py`: 2 ad-hoc kwargs guards migrated to `call_kwargs_issues()`:
+  - UFCS kwargs guard (~line 2417): now delegates decision, assertion message uses issue message.
+  - Normal-call kwargs guard (~line 2465): same pattern; struct-type fallback resolution preserved.
+- `call_contract.py`: added `notes=(f"field={name}",)` to `E_CTOR_UNKNOWN_FIELD`/`E_CTOR_DUPLICATE_FIELD` and `notes=tuple(f"field={f}" for f in missing)` to `E_CTOR_MISSING_FIELDS` — enables checker to extract field names for its own message formatting.
+
 ### Files changed
 
 | File | Change |
 |------|--------|
-| `lang/driftc/call_contract.py` | Added `IntrinsicSpec`, `INTRINSIC_ARITY_TABLE`, `intrinsic_call_issues()`, `CtorFieldSpec`, `ctor_call_issues()`, `ARRAY_METHOD_ARITY_TABLE`, `array_method_arity_issues()`, `call_kwargs_issues()`; updated `__all__` |
+| `lang/driftc/call_contract.py` | Added `IntrinsicSpec`, `INTRINSIC_ARITY_TABLE`, `intrinsic_call_issues()`, `CtorFieldSpec`, `ctor_call_issues()`, `ARRAY_METHOD_ARITY_TABLE`, `array_method_arity_issues()`, `call_kwargs_issues()`; updated `__all__`; (Slice 3) added `notes` with field names to ctor field issues |
 | `lang/driftc/driftc.py` | `_validate_intrinsic_callinfo`: ~120 lines → ~15 lines via `intrinsic_call_issues()` |
-| `lang/driftc/stage2/hir_to_mir.py` | Pre-flight intrinsic checks; ctor→`ctor_call_issues()`; array→`array_method_arity_issues()`; kwargs→`call_kwargs_issues()`; constructor kwargs fix |
+| `lang/driftc/stage2/hir_to_mir.py` | Pre-flight intrinsic checks; ctor→`ctor_call_issues()`; array→`array_method_arity_issues()`; kwargs→`call_kwargs_issues()`; constructor kwargs fix; (Slice 3) 2 ad-hoc kwargs guards → `call_kwargs_issues()` |
+| `lang/driftc/checker/call_resolver.py` | (Slice 3) Import `CtorFieldSpec`, `ctor_call_issues`, `call_kwargs_issues`; 4 ctor sites → `ctor_call_issues()` decision + checker-formatted messages; 5 kwargs sites → `call_kwargs_issues()` decision + checker-formatted messages |
 
 ### Diagnostic wording/code changes
 
-No user-facing diagnostic codes or messages changed. All existing `E_INTRINSIC_*` codes preserved. New internal codes (`E_CTOR_ARITY_MISMATCH`, `E_CTOR_UNKNOWN_FIELD`, `E_CTOR_DUPLICATE_FIELD`, `E_CTOR_MISSING_FIELDS`, `E_ARRAY_METHOD_ARITY`, `E_CALL_KWARGS_REJECTED`) are assertion-path only (never reach user diagnostics in normal operation).
+No user-facing diagnostic codes or messages changed. All existing `E_INTRINSIC_*` codes preserved. All 12 checker diagnostic message assertions verified unchanged (exact wording preserved at all 9 migrated checker sites). New internal codes (`E_CTOR_ARITY_MISMATCH`, `E_CTOR_UNKNOWN_FIELD`, `E_CTOR_DUPLICATE_FIELD`, `E_CTOR_MISSING_FIELDS`, `E_CTOR_MIXED_ARGS`, `E_ARRAY_METHOD_ARITY`, `E_CALL_KWARGS_REJECTED`) are assertion-path only (never reach user diagnostics in normal operation).
 
 ### New tests
 
 | File | Tests |
 |------|-------|
 | `lang/tests/driver/test_intrinsic_call_contract.py` | 8 (arity mismatch, kwargs rejected, correct passes, unknown kind, swap/replace mut borrow, table completeness, span propagation) |
-| `lang/tests/driver/test_ctor_call_contract.py` | 6 (arity mismatch, unknown/duplicate/missing field, valid positional, valid named) |
+| `lang/tests/driver/test_ctor_call_contract.py` | 7 (arity mismatch, unknown/duplicate/missing field, mixed args, valid positional, valid named) |
 | `lang/tests/driver/test_array_method_contract.py` | 5 (get arity, pop correct, table completeness, kwargs rejected, kwargs empty) |
-| `lang/tests/driver/test_ctor_kwargs_mir_regression.py` | 3 (named kwargs pass typed lowering, positional still works, mixed positional+named fails with contract diagnostic) |
+| `lang/tests/driver/test_ctor_kwargs_mir_regression.py` | 4 (named kwargs pass typed lowering, raw kwargs input passes typed lowering, positional still works, mixed positional+named fails with contract diagnostic) |
 
-### Targeted validation matrix
+### Targeted validation matrix (Slices 1-2)
 
 ```
-New contract tests (22):                   PASS
+New contract tests (23):                   PASS
 Existing regression tests (13):            PASS
 Stage2 tests (86):                         PASS
 High-sensitivity non-regression (15):      PASS
@@ -148,9 +164,83 @@ Post-slice grep (arity in driftc.py):      0 matches
 Post-slice grep (arity in hir_to_mir.py):  1 match (DV method handler — out of scope)
 ```
 
-### Risk note
+### Targeted validation matrix (Slice 3)
 
-One remaining `len(expr.args) != 1` in `hir_to_mir.py` line 3276 — DV (dictionary-like) `get` method handler. Not a call-contract concern; DV methods have their own lowering path. No follow-up needed.
+```
+Ctor contract tests (7):                   PASS
+Checker diagnostic tests (18):             PASS  (exact messages preserved)
+A1 Slice 1-2 contract tests (17):          PASS
+High-sensitivity tests (26):               PASS
+Stage2 full (86):                          PASS
+E2E ctor diagnostics (5):                  PASS
+Post-slice grep (kw.name not in field_names in checker): 0 matches
+Post-slice grep (kw.name in seen in checker):            0 matches
+Post-slice grep (call_kwargs_issues in checker):         5 matches
+Post-slice grep (ctor_call_issues in checker):           3 matches
+```
+
+**Slice 4 — Finalization and anti-regression guard:**
+- Residual audit completed across `checker/`, `hir_to_mir.py`, `driftc.py`.
+- 2 in-scope residual items migrated:
+  - `checker/call_resolver.py:4388`: lambda kwargs rejection → `call_kwargs_issues("lambda calls", ...)`.
+  - `hir_to_mir.py:6033`: method call kwargs assertion → `call_kwargs_issues("method calls", ...)`.
+- 1 minor cleanup:
+  - `checker/call_resolver.py:1582`: inline array arity dict replaced with `{**ARRAY_METHOD_ARITY_TABLE, "range": 0, "range_mut": 0}` (checker extends shared table with 2 checker-specific entries).
+- Anti-regression guard test added: `lang/tests/driver/test_call_contract_ownership_guard.py` (3 tests).
+
+### Files changed (Slice 4 additions)
+
+| File | Change |
+|------|--------|
+| `lang/driftc/checker/call_resolver.py` | Lambda kwargs → `call_kwargs_issues()`; array arity dict → `ARRAY_METHOD_ARITY_TABLE` reference; added `ARRAY_METHOD_ARITY_TABLE` import |
+| `lang/driftc/stage2/hir_to_mir.py` | Method call kwargs assertion → `call_kwargs_issues()` |
+| `lang/tests/driver/test_call_contract_ownership_guard.py` | New: 3 anti-regression guard tests |
+
+### Targeted validation matrix (Slice 4)
+
+```
+A1 contract + guard tests (34):            PASS
+Checker diagnostic tests (18):             PASS
+High-sensitivity tests (15):               PASS
+Stage2 full (86):                          PASS
+```
+
+### Risk notes
+
+Slice 1-2: One remaining `len(expr.args) != 1` in `hir_to_mir.py` line 3276 — DV (dictionary-like) `get` method handler. Not a call-contract concern; DV methods have their own lowering path. No follow-up needed.
+
+Slice 3: Checker ctor sites interleave shape-checking with `ctor_arg_field_indices` building. After migration, `ctor_call_issues()` runs first (decision), then field-index building runs separately knowing the shape is valid. Structural change mitigated by 12 existing test assertions on exact messages + 5 e2e tests. Method call receiver-offset + named args is N/A (D6): methods reject all kwargs in MVP; no named-arg mapping exists.
+
+### A1 final ownership map
+
+| Concern | Owner | API / Location |
+|---------|-------|---------------|
+| Intrinsic arity + kwargs + semantic checks | `call_contract.py` | `intrinsic_call_issues()`, `INTRINSIC_ARITY_TABLE` |
+| Constructor shape (arity, fields, mixed args) | `call_contract.py` | `ctor_call_issues()`, `CtorFieldSpec` |
+| Array method arity | `call_contract.py` | `array_method_arity_issues()`, `ARRAY_METHOD_ARITY_TABLE` |
+| Generic kwargs rejection (decision) | `call_contract.py` | `call_kwargs_issues()` |
+| Structural CallInfo shape (5 codes) | `call_contract.py` | `call_contract_issues()` |
+| CallInfo repair for named calls | `call_contract.py` | `repair_named_hcall_callinfo()` |
+| Param layout / arg-expr alignment | `call_contract.py` | `call_arg_exprs_for_param_layout()`, `explicit_arg_param_types()` |
+
+**Intentionally out-of-scope (with rationale):**
+
+| Location | Pattern | Rationale |
+|----------|---------|-----------|
+| `checker/call_resolver.py:3872-3954` | Intrinsic arity checks (rawbuffer, maybe_uninit, etc.) | Type-resolution: checker needs arity to determine intrinsic kind and compute return types. Not shape validation. |
+| `checker/call_resolver.py:4249` | Callback arity `len(expr.args) != 1` | Type-checking level; determines callback trait resolution path. |
+| `checker/__init__.py:2017` | Lambda immediate-call param count | Lambda-specific; not general call-shape. |
+| `checker/__init__.py` kwargs accesses (14 sites) | `for kw in getattr(expr, "kwargs", [])` | CallInfo construction / param-type building, not validation. |
+| `checker/call_resolver.py:757` | Type alias param count | Type alias resolution, not call shape. |
+| `hir_to_mir.py:3279` | DV method `get` arity | DV methods have own lowering path; not call-contract concern. |
+| `hir_to_mir.py:6802` | Variant field count in type inference | Type inference resolution fallback; returns None on mismatch, not assertion. |
+| `driftc.py` kwargs accesses (12 sites) | `for kw in getattr(expr, "kwargs", [])` | Boundary diagnostic wrapping; reads kwargs for param-type lists, not shape validation. |
+
+**Anti-regression guard:** `test_call_contract_ownership_guard.py` (3 tests) prevents new ad-hoc duplication in checker and stage2.
+
+### A1 closure summary
+
+A1 is complete. `call_contract.py` is the single validation seam for call-shape decisions (arity, kwargs, ctor fields, intrinsic shape, array method arity, CallInfo structural shape). Checker and stage2 delegate decisions to `call_contract.py` and format their own diagnostics. All user-facing messages preserved unchanged. 37 contract/guard tests cover the seam. Anti-regression guard prevents drift.
 
 ---
 

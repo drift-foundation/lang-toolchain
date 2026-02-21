@@ -32,7 +32,7 @@ from lang.driftc.parser import ast as parser_ast
 from lang.driftc.stage1 import hir_nodes as H
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang.driftc.core.span import Span
-from lang.driftc.call_contract import CtorFieldSpec, ctor_call_issues, call_kwargs_issues
+from lang.driftc.call_contract import CtorFieldSpec, ctor_call_issues, call_kwargs_issues, ARRAY_METHOD_ARITY_TABLE
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 
 FIXED_WIDTH_TYPE_NAMES = {
@@ -1579,7 +1579,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if expr.method_name in ("range", "range_mut") and recv_place is None:
 				diagnostics.append(_tc_diag(message=f"Array.{expr.method_name}() requires an lvalue Array receiver", severity="error", span=getattr(expr, "loc", Span())))
 				return MethodCallResult(ctx.unknown_ty, None)
-			expected_args = {"push": 1, "pop": 0, "insert": 2, "remove": 1, "swap_remove": 1, "swap": 2, "clear": 0, "reserve": 1, "shrink_to_fit": 0, "range": 0, "range_mut": 0, "get": 1, "set": 2}
+			expected_args = {**ARRAY_METHOD_ARITY_TABLE, "range": 0, "range_mut": 0}
 			want = expected_args.get(expr.method_name)
 			if want is not None and len(expr.args) != want:
 				diagnostics.append(_tc_diag(message=f"Array.{expr.method_name}() expects {want} argument(s)", severity="error", span=getattr(expr, "loc", Span())))
@@ -4385,7 +4385,7 @@ def resolve_call_expr(
 
 	if isinstance(expr.fn, H.HLambda):
 		lam = expr.fn
-		if getattr(expr, "kwargs", None):
+		if call_kwargs_issues("lambda calls", getattr(expr, "kwargs", None)):
 			diagnostics.append(_tc_diag(message="keyword arguments are only supported for struct constructors in MVP", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types = [type_expr(a) for a in expr.args]

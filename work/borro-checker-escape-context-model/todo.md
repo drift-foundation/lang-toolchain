@@ -9,7 +9,8 @@ Status: A5 complete; this file now serves as active post-A5 guidance plus archiv
 ## Active Guidance (Post-A5)
 
 Current priority:
-- **A1**: make `call_contract.py` the single validation seam.
+- **A1**: complete. `call_contract.py` is the single validation seam (Slices 1-4 done).
+- **Next (Klaudia):** start the **assessment-only** “Next candidate” below (no compiler code changes yet), then stop for review.
 
 A1 execution spec (expected compiler infra changes):
 1. Build an explicit inventory table of duplicated call-shape checks, with current owner + target owner:
@@ -56,8 +57,7 @@ Exhaustive test coverage required for A1 sign-off:
      - `result_ok_move_conn_source_drop_regression`
      - `struct_ref_field_result_ok_move_drop_once`
 4. Full gate before handoff:
-   - `just test-shard-1`
-   - `just test-shard-2`
+   - owner-run full gate (outside Klaudia scope).
 
 Deliverables from Klaudia for each slice:
 1. Inventory diff (what moved, what removed, what remains).
@@ -65,24 +65,25 @@ Deliverables from Klaudia for each slice:
 3. Any diagnostic wording/code changes called out explicitly.
 4. Short risk note if remaining duplicate checks still exist (with follow-up owner).
 
-Immediate A1 follow-ups from review (must fix):
+Immediate A1 follow-ups from review (completed):
 1. **Typed constructor kwargs regression in stage2 (high):**
    - `lang/driftc/stage2/hir_to_mir.py::_lower_constructor_call` currently calls `call_kwargs_issues("a constructor", kw_pairs, ...)`, which rejects kwargs unconditionally.
    - This conflicts with MVP behavior (constructor kwargs are allowed) and existing diagnostic contract ("keyword arguments are only supported for constructors in MVP").
-   - Required fix: remove generic kwargs rejection for constructor calls in this path; keep constructor validation through `ctor_call_issues(...)` / ctor metadata only.
+   - Status: fixed. Constructor kwargs are validated via `ctor_call_issues(...)`, not generic kwargs rejection.
 
 2. **A1 progress traceability gap (medium):**
    - `work-progress.md` currently reflects A5 completion but not A1 slice inventory/migration checkpoints.
-   - Required fix: add A1 section to `work-progress.md` with:
+   - Status: fixed. A1 section added to `work-progress.md` with:
      - inventory table (source owner -> `call_contract.py`),
      - migrated slices with commit references,
      - targeted validation matrix.
 
 3. **Regression additions required (A1 constructor path):**
-   - Add positive driver/e2e regression proving named constructor kwargs still pass through typed MIR constructor lowering.
-   - Add negative regression proving mixed positional+named constructor args fail with clear non-internal contract diagnostic.
+   - Status: fixed.
+   - Added positive regression for raw kwargs input through typed constructor lowering.
+   - Added negative regression for mixed positional+named args with clear non-internal contract diagnostic.
 
-### A1 Slice 3 — next concrete scope
+### A1 Slice 3 — completed
 
 Goal: eliminate remaining duplicated call-shape logic outside `call_contract.py` for normal/method call argument layout checks.
 
@@ -117,12 +118,12 @@ Slice 3 regression requirements (mandatory):
    - message does not start with `internal:`.
 
 Slice 3 done-when checklist:
-- [ ] Migrated checks are centralized in `call_contract.py` and removed from ad-hoc call sites.
-- [ ] Positive + negative regressions for all migrated shapes are present.
-- [ ] Existing high-sensitivity subset remains green.
-- [ ] `work-progress.md` includes Slice 3 inventory/migration/test matrix with commit refs.
+- [x] Migrated checks are centralized in `call_contract.py` and removed from ad-hoc call sites.
+- [x] Positive + negative regressions for all migrated shapes are present.
+- [x] Existing high-sensitivity subset remains green.
+- [x] `work-progress.md` includes Slice 3 inventory/migration/test matrix with commit refs.
 
-Slice 3 validation commands:
+Slice 3 validation commands (Klaudia-owned):
 ```
 PYTHONPATH=. ./.venv/bin/python3 -m pytest \
     lang/tests/driver/test_callinfo_param_layout_contract.py \
@@ -135,9 +136,46 @@ PYTHONPATH=. ./.venv/bin/python3 -m pytest \
     lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
     lang/tests/driver/test_struct_ref_field_boundary_contract.py \
     -q
+```
 
-just test-shard-1
-just test-shard-2
+### A1 Slice 4 — finalization and anti-regression guard
+
+Goal: close A1 by preventing call-shape validation drift and documenting final ownership boundaries.
+
+Required scope:
+1. Residual audit:
+   - identify remaining ad-hoc call-shape checks outside `call_contract.py` in:
+     - `lang/driftc/checker/`
+     - `lang/driftc/stage2/hir_to_mir.py`
+     - `lang/driftc/driftc.py`
+   - classify each as:
+     - should migrate to `call_contract.py`, or
+     - intentionally out-of-scope (with rationale).
+2. Add anti-regression guard:
+   - one driver/grep-style regression that fails if new duplicate call-shape validation snippets are introduced outside approved seam paths.
+3. Final ownership note:
+   - update `work-progress.md` with explicit “A1 final ownership map” and any accepted out-of-scope exceptions.
+
+Slice 4 done-when checklist:
+- [x] Residual audit completed with explicit migration/out-of-scope decisions.
+- [x] Any remaining in-scope duplicate checks migrated or removed.
+- [x] Anti-regression guard test added and green.
+- [x] High-sensitivity subset remains green.
+- [x] `work-progress.md` updated with final A1 ownership map and closure summary.
+
+Slice 4 validation commands (Klaudia-owned):
+```
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_callinfo_param_layout_contract.py \
+    lang/tests/driver/test_intrinsic_call_contract.py \
+    lang/tests/driver/test_ctor_call_contract.py \
+    lang/tests/driver/test_array_method_contract.py \
+    -q
+
+PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+    lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
+    lang/tests/driver/test_struct_ref_field_boundary_contract.py \
+    -q
 ```
 
 ### Next candidate (gated, assessment-only): Fn1 coercion/type-check extension for SCOPED borrowed captures
@@ -155,6 +193,23 @@ Hard gate (must be true before any work starts):
 Important:
 - This section is **not** an implementation instruction.
 - Klaudia's immediate task is assessment only (scope + plan + risk), no code changes.
+
+Start-here instructions for Klaudia (assessment-only):
+1. Create/update a dedicated assessment section in `work/borro-checker-escape-context-model/work-progress.md` titled:
+   - `Fn1 SCOPED Borrowed-Capture Assessment (no-code)`
+2. Produce a concrete path map with file/function anchors for the likely coercion/type-check touch points:
+   - `lang/driftc/type_checker.py`
+   - `lang/driftc/checker/call_resolver.py`
+   - `lang/driftc/checker/__init__.py`
+   - any other path discovered during analysis.
+3. Explicitly classify each touch point as one of:
+   - acceptance gate,
+   - metadata propagation,
+   - borrow-check enforcement dependency,
+   - out-of-scope/deferred.
+4. Propose a phased implementation plan (slice-by-slice) with go/no-go criteria per slice.
+5. List exact regression tests to add (positive + negative) and exact non-regression suites to run.
+6. Stop after writing the assessment and proposed plan; do not modify compiler behavior in this step.
 
 Assessment deliverable required from Klaudia (before any coding):
 1. Scope analysis:

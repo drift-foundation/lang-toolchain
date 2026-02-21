@@ -6030,8 +6030,9 @@ class HIRToMIR:
 		Method calls are resolved using CallInfo (typed HIR); we do not re-resolve
 		or guess can-throw in stage2.
 		"""
-		if getattr(expr, "kwargs", None):
-			raise AssertionError("keyword arguments for method calls are not supported in MIR lowering (checker bug)")
+		_kw_issues = call_kwargs_issues("method calls", getattr(expr, "kwargs", None))
+		if _kw_issues:
+			raise AssertionError(f"{_kw_issues[0].message} reached MIR lowering")
 
 		if info.target.kind is CallTargetKind.INDIRECT:
 			recv_ty = self._infer_expr_type(expr.receiver)
