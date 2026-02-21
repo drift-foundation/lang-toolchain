@@ -363,11 +363,12 @@ grep -rn "param_nonretaining" lang/driftc/ lang/tests/ --include="*.py"
 
 - `lang/driftc/stage1/non_retaining_analysis.py`:
   - Added `EscapeLevel` import.
-  - Simplified `working_sigs` construction (removed mutable-copy for `param_nonretaining`).
-  - Changed `param_nonretaining_by_id` initialization to read from `sig.param_escape_level` (convert `LOCAL→True`, `THREAD/STATIC→False`, `None/SCOPED→None`).
-  - Changed final return to write `param_escape_level` instead of `param_nonretaining`:
-    `True → LOCAL`, `False/None → None` (THREAD default). Normalizes all-None to `None`.
-  - The internal working dict `param_nonretaining_by_id` remains a local variable (boolean state for the fixpoint analysis).
+  - Simplified `working_sigs` construction: `dict(signatures_by_id)` (removed mutable-copy branch that was only needed to make `param_nonretaining` mutable for in-place mutation).
+  - Added `_pel_to_nr(lvl) -> Optional[bool]` inner helper: converts an `EscapeLevel` to the boolean working state used by the fixpoint (`LOCAL→True`, `THREAD/STATIC/IMMEDIATE→False`, `None/SCOPED→None`).
+  - Changed `param_nonretaining_by_id` initialization to read from `sig.param_escape_level` via `_pel_to_nr` (was `list(sig.param_nonretaining)`).
+  - Added `_build_pel(fn_id, sig) -> Optional[list[Optional[EscapeLevel]]]` inner helper: converts computed boolean results back to escape levels at end of analysis (`True→LOCAL`, `False/None→leave as-is`). Normalizes all-None list to `None`.
+  - Changed final return to call `_build_pel` and write `param_escape_level` instead of `param_nonretaining`.
+  - The internal working dict `param_nonretaining_by_id` and helpers `_ensure_param_nonretaining`, `_target_status` remain unchanged — they work on the local boolean state throughout the fixpoint.
 
 - `lang/driftc/type_resolver.py`:
   - Removed `param_nonretaining: list[Optional[bool]] = []` local variable.

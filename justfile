@@ -12,6 +12,14 @@ deps-check:
 review-cleanup:
 	rm -f combined_*
 
+git-reset BRANCH:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	branch="{{BRANCH}}"
+	git fetch origin "${branch}"
+	git reset --hard "origin/${branch}"
+	git clean -ffd
+
 # Full staged compiler tests
 test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test
 	@echo "lang tests: Success."
