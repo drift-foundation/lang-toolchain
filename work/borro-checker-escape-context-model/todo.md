@@ -12,68 +12,60 @@ Status summary:
 - **A1** complete.
 - **F1** complete.
 - **F2-D1 Option B** complete.
+- **F2-D2** complete.
 
 This active section now tracks current execution scope and handoff guidance.
 Detailed completed execution steps are preserved in the archived section below.
 
-### Active Phase: B4 Regression Tightening
+### Completed Phase: F2-D2 Unknown-Typed Call Hardening (DONE)
+
+Summary: Hardened the template-call require-clause scope expansion path (`call_resolver.py:1864-1872`). The fallback that adds require-clause traits to `scope_traits` for type-param method resolution was initially name-only (`{"Fn0","Fn1",...}`), which could pull unintended traits from user modules with colliding names, and unconditionally expanded scope for all require-clause traits (breaking `use trait` semantics for user-defined traits).
+
+Final state:
+- Filter tightened to fully-qualified `(module, name)` identity: only `("std.core", "Fn0")` through `("std.core", "FnThrow2")`.
+- `test_trait_bound_does_not_expand_scope` — passes (user trait without `use trait` still rejected).
+- `test_std_core_fn1_require_auto_resolves_call` — positive: `std.core.Fn1` auto-resolves `.call()`.
+- `test_user_defined_fn1_does_not_auto_expand_scope` — negative: user-defined `m_fake.Fn1` does NOT auto-expand scope.
+- All B4 tests remain strict-zero-error and green (5/5).
+- Boundary contract tests green (12/12).
+- Full trait method resolution suite green (28/28).
+
+### Active Phase: Callable Coercion Assessment (analysis-only, no code)
 
 Objective:
-1. Close the remaining temporary allowance in the B4 acceptance regression.
-2. Preserve existing B4 behavior guarantees while tightening diagnostic signal.
+Assess and design uniform callable API support: function/functor/lambda storage in containers,
+deferred invocation, and coercion boundaries. Map required checker → stage2 → MIR/LLVM changes.
+Propose regression matrix and rollout slices.
 
 Scope (Klaudia):
-1. Work on:
-   - `lang/tests/driver/test_fn1_scope_borrowed_capture.py`
-   - Any directly required checker/stage2 files if needed to remove the unrelated diagnostics.
-2. Do not change archived A5 sections in this file.
-3. Do not add stdlib/user-code workaround changes.
-
-Execution requirements:
-1. Regression-first:
-   - keep current test shape as baseline,
-   - implement smallest compiler-side change required,
-   - tighten assertions only when signal is truly clean.
-2. Boundary guardrails remain strict:
-   - positive + negative coverage where boundary behavior changes,
-   - update stale comments/messages/tests if behavior changes,
-   - no user-facing diagnostics starting with `internal:`.
-3. Stop-and-report on first out-of-scope LANGUAGE_BUG with minimal repro.
+1. Analyze current callable surface (function pointers, Callback0/1/2, Fn0/1/2 traits, HLambda)
+   and identify gaps in:
+   - storage (containers, struct fields, arrays),
+   - deferred invocation (pass to function, return from function, store-then-call),
+   - coercion between callable kinds (lambda → Callback, Callback → Fn, fn ptr → Fn).
+2. Map required changes per compiler subsystem:
+   - checker (`call_resolver.py`, `type_checker.py`): coercion rules, type unification,
+   - stage2 (`hir_to_mir.py`): MIR lowering for stored/deferred callables,
+   - MIR/LLVM (`llvm_codegen.py`): calling conventions, env passing.
+3. Propose:
+   - regression matrix (positive + negative for each coercion edge),
+   - rollout slices with go/no-go gates,
+   - risk assessment per slice.
+4. Do not write code. Do not change any compiler or test files.
+5. Do not change archived sections in this file.
 
 Done-when checklist:
-- [ ] `test_borrowed_capture_lambda_to_fn_bounded_generic_accepted` no longer relies on the temporary known-preexisting diagnostic allowance.
-- [ ] Test still asserts B4 invariants:
-  - no borrowed-capture rejection,
-  - no `E_REQUIREMENT_NOT_SATISFIED`,
-  - no MIR callback-env assertion path.
-- [ ] Required touched regressions pass (recorded in `work-progress.md`).
-- [ ] Any new blocker is documented with repro + suspected subsystem.
-
-Validation subset (Klaudia-owned):
-```bash
-PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-  lang/tests/driver/test_fn1_scope_borrowed_capture.py -q
-
-PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-  lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
-  lang/tests/driver/test_struct_ref_field_boundary_contract.py -q
-```
+- [ ] Gap analysis covers: storage, deferred invocation, coercion edges.
+- [ ] Per-subsystem change map (checker, stage2, MIR/LLVM) with file/function anchors.
+- [ ] Regression matrix proposed (positive + negative for each boundary).
+- [ ] Rollout slices defined with go/no-go gates per slice.
+- [ ] Risk assessment per slice.
+- [ ] Assessment recorded in `work-progress.md` section 15.
+- [ ] No code changes.
 
 ### Open Follow-Ups (active)
 
-1. **Tighten temporary B4 regression allowance (required)**
-   - File: `lang/tests/driver/test_fn1_scope_borrowed_capture.py`
-   - Test: `test_borrowed_capture_lambda_to_fn_bounded_generic_accepted`
-   - Current state: allows a bounded set of unrelated pre-existing diagnostics.
-   - Required when cleanup window opens:
-     1. eliminate the underlying unrelated diagnostics,
-     2. tighten assertion policy to zero unexpected errors on the exercised path,
-     3. retain explicit B4 contract assertions:
-        - no borrowed-capture rejection,
-        - no `E_REQUIREMENT_NOT_SATISFIED`,
-        - no MIR callback-env assertion path.
-
-2. **Boundary guardrail continuity (always-on)**
+1. **Boundary guardrail continuity (always-on)**
    - Any boundary-shape change in this track must include:
      1. positive end-to-end regression,
      2. negative regression for rejected shape,

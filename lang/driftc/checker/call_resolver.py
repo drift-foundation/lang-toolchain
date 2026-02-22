@@ -1861,11 +1861,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			saw_method_in_scope = False
 			matching_traits: list[TraitKey] = []
 			scope_traits = traits_in_scope()
-			if not scope_traits and trait_type_args_by_key and (instantiation_mode or receiver_is_type_param):
-				scope_traits = list(trait_type_args_by_key.keys())
-			elif receiver_is_type_param and not instantiation_mode and trait_type_args_by_key:
+			_FN_SCOPE_TRAITS = {("std.core", "Fn0"), ("std.core", "Fn1"), ("std.core", "Fn2"), ("std.core", "FnThrow0"), ("std.core", "FnThrow1"), ("std.core", "FnThrow2")}
+			_fn_require_keys = [k for k in trait_type_args_by_key if (getattr(k, "module", None), getattr(k, "name", None)) in _FN_SCOPE_TRAITS] if trait_type_args_by_key else []
+			if not scope_traits and _fn_require_keys and (instantiation_mode or receiver_is_type_param):
+				scope_traits = list(_fn_require_keys)
+			elif receiver_is_type_param and not instantiation_mode and _fn_require_keys:
 				_existing_keys = {(getattr(t, "module", None), getattr(t, "name", None)) for t in scope_traits}
-				for _rk in trait_type_args_by_key.keys():
+				for _rk in _fn_require_keys:
 					if (getattr(_rk, "module", None), getattr(_rk, "name", None)) not in _existing_keys:
 						scope_traits.append(_rk)
 			for trait_key in scope_traits:

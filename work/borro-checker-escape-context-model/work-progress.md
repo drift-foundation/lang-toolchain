@@ -925,3 +925,45 @@ Files changed: `lang/tests/driver/test_fn1_scope_borrowed_capture.py` (tightened
 - A1 contracts: 24/24 passed
 - High-sensitivity: 14/14 passed
 - E2e (9 tests incl. scope_fn1_borrowed_capture_accepted): 9/9 passed
+
+---
+
+### 15. F2-D2: Unknown-Typed Call Hardening — COMPLETE
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** COMPLETE
+
+#### Problem
+
+The B4 hardening change at `call_resolver.py:1863-1870` added require-clause traits to `scope_traits` for type-param method resolution. This was needed for B4 (Fn1-bounded generic `.call()` resolution) but had two defects:
+
+1. **Scope expansion too broad:** ALL require-clause traits were added, not just Fn* traits. This broke the `use trait` scoping contract — a trait bound like `require T is Show` made `Show.show()` resolve even without `use trait Show;`. Caught by `test_trait_bound_does_not_expand_scope` (pre-existing negative regression).
+
+2. **Name-only filter insufficient:** Initial fix used bare name matching (`{"Fn0","Fn1",...}`), which could match user-defined traits with the same names in other modules.
+
+#### Fix applied
+
+**`call_resolver.py:1864-1865`** — Filter tightened to fully-qualified `(module, name)` identity:
+```python
+_FN_SCOPE_TRAITS = {("std.core", "Fn0"), ("std.core", "Fn1"), ("std.core", "Fn2"), ("std.core", "FnThrow0"), ("std.core", "FnThrow1"), ("std.core", "FnThrow2")}
+_fn_require_keys = [k for k in trait_type_args_by_key if (getattr(k, "module", None), getattr(k, "name", None)) in _FN_SCOPE_TRAITS]
+```
+
+Both branches (line 1866: empty scope_traits fallback; line 1868: type-param scope augmentation) now filter through `_fn_require_keys` instead of raw `trait_type_args_by_key`.
+
+#### Regressions added
+
+**`lang/tests/driver/test_trait_method_resolution.py`** — 2 new tests:
+1. `test_std_core_fn1_require_auto_resolves_call` — positive: `std.core.Fn1` in require clause auto-resolves `.call()` without `use trait`.
+2. `test_user_defined_fn1_does_not_auto_expand_scope` — negative: user-defined `m_fake.Fn1` with same trait shape does NOT auto-expand scope.
+
+#### Validation matrix
+
+- `test_trait_bound_does_not_expand_scope`: PASS (was failing before fix)
+- `test_trait_bound_with_use_trait_succeeds`: PASS
+- `test_std_core_fn1_require_auto_resolves_call`: PASS (new)
+- `test_user_defined_fn1_does_not_auto_expand_scope`: PASS (new)
+- Full trait method resolution suite: 28/28 passed
+- B4 regression tests: 5/5 passed
+- Boundary contract tests: 12/12 passed

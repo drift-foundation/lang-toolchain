@@ -1500,3 +1500,59 @@ fn bad() nothrow -> Int {
 		return_checked=True,
 	)
 	assert any("method 'show'" in d.message for d in bad_checked.diagnostics)
+
+
+def test_std_core_fn1_require_auto_resolves_call(tmp_path: Path) -> None:
+	"""std.core.Fn1 in require clause auto-expands scope for .call() resolution."""
+	files = {
+		Path("m_main.drift"): """
+module m_main
+
+import std.core as core;
+
+fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
+	f.call(42);
+}
+
+fn main() nothrow -> Int { return 0; }
+""",
+	}
+	result = _typecheck_named_fn(
+		tmp_path, files, module_name="m_main", fn_name="apply"
+	)
+	call_errors = [d for d in result.diagnostics if "no matching method 'call'" in (d.message or "")]
+	assert call_errors == [], f"std.core.Fn1 .call() must resolve via require-clause scope expansion: {call_errors}"
+
+
+def test_user_defined_fn1_does_not_auto_expand_scope(tmp_path: Path) -> None:
+	"""A user-defined trait named Fn1 must NOT be auto-injected into scope by the Fn* fallback."""
+	files = {
+		Path("m_fake.drift"): """
+module m_fake
+
+export { Fn1 };
+
+pub trait Fn1<A, R> {
+	fn call(self: Self, a: A) -> R
+}
+
+implement Fn1<Int, Int> for Int {
+	pub fn call(self: Int, a: Int) -> Int { return a; }
+}
+""",
+		Path("m_main.drift"): """
+module m_main
+
+import m_fake;
+
+fn apply<F>(f: F) -> Int require F is m_fake.Fn1<Int, Int> { return f.call(42); }
+
+fn main() nothrow -> Int { return apply<type Int>(1); }
+""",
+	}
+	result = _typecheck_named_fn(
+		tmp_path, files, module_name="m_main", fn_name="apply"
+	)
+	assert result.diagnostics
+	msgs = [d.message for d in result.diagnostics]
+	assert any("no matching method 'call'" in m for m in msgs), f"user-defined Fn1 must not auto-expand scope; expected 'no matching method' error, got: {msgs}"
