@@ -1,0 +1,9 @@
+{
+  "description": "fn-ptr return type mismatch in struct field — same arity but wrong return type, checker must reject",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "type mismatch"
+    }
+  ]
+}

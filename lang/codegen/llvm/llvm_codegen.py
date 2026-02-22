@@ -183,6 +183,7 @@ DRIFT_ERROR_CODE_TYPE = DRIFT_U64_TYPE
 DRIFT_STRING_TYPE = "%DriftString"
 DRIFT_IFACE_TYPE = "%DriftIface"
 DRIFT_CALLBACK_VTABLE_TYPE = "%DriftCallbackVTable"
+DRIFT_FAT_FNPTR_TYPE = "%DriftFatFnPtr"
 DRIFT_IFACE_INLINE_WORDS = 4
 DRIFT_IFACE_DATA_IDX = 0
 DRIFT_IFACE_VTABLE_IDX = 1
@@ -588,6 +589,8 @@ class LlvmModuleBuilder:
 	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
 	iface_vtable_sizes: Dict[str, int] = field(default_factory=dict)
 	nothrow_thunk_cache: Dict[tuple[str, str], str] = field(default_factory=dict)
+	fat_fnptr_wrap_thunks: Dict[str, str] = field(default_factory=dict)
+	fat_fnptr_fwd_thunks: Dict[str, str] = field(default_factory=dict)
 	_dbg_next_id: int = 0
 	_dbg_metadata: List[str] = field(default_factory=list)
 	_dbg_compile_unit_id: int | None = None
@@ -706,6 +709,7 @@ class LlvmModuleBuilder:
 				f"{FNRESULT_INT_ERROR} = type {{ i1, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
 				f"%DriftArrayHeader = type {{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, i8* }}",
+				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ i8*, i8* }}",
 			]
 		)
 		# Seed the canonical FnResult types for supported ok payloads.
@@ -763,6 +767,10 @@ class LlvmModuleBuilder:
 		struct_inst = type_table.get_struct_instance(ty_id)
 		field_types = list(struct_inst.field_types) if struct_inst is not None else list(td.param_types)
 		field_lltys = [map_type(ft) for ft in field_types]
+		for fi, ft in enumerate(field_types):
+			ftd = type_table.get(ft)
+			if ftd.kind is TypeKind.FUNCTION and ftd.fn_throws:
+				field_lltys[fi] = DRIFT_FAT_FNPTR_TYPE
 		body = ", ".join(field_lltys) if field_lltys else ""
 		self.type_decls.append(f"{llvm_name} = type {{ {body} }}")
 		return llvm_name
@@ -2622,13 +2630,32 @@ class _FuncBuilder:
 				field_val_llty = self._llvm_type_for_typeid(field_ty)
 				field_store_llty = self._llvm_storage_type_for_typeid(field_ty)
 				have = self.value_types.get(arg_val)
-				if have is not None and have != field_val_llty:
-					field_td = self.type_table.get(field_ty)
-					nothrow_llty = self._fn_ptr_lltype(list(field_td.param_types[:-1]), field_td.param_types[-1], can_throw=False) if (field_td.kind is TypeKind.FUNCTION and field_td.param_types) else None
-					if field_td.kind is TypeKind.FUNCTION and field_td.can_throw() and have == nothrow_llty and arg_val.startswith("@"):
+				field_td = self.type_table.get(field_ty)
+				is_throwing_fn_field = field_td.kind is TypeKind.FUNCTION and field_td.can_throw() and field_td.param_types
+				if is_throwing_fn_field:
+					nothrow_llty = self._fn_ptr_lltype(list(field_td.param_types[:-1]), field_td.param_types[-1], can_throw=False)
+					throwing_llty = self._fn_ptr_lltype(list(field_td.param_types[:-1]), field_td.param_types[-1], can_throw=True)
+					if have == nothrow_llty and arg_val.startswith("@"):
 						thunk_name = self._emit_nothrow_to_throwing_thunk(arg_val, field_ty)
-						arg_val = f"@{thunk_name}"
-						self.value_types[arg_val] = field_val_llty
+						adapter_sym = f"@{thunk_name}"
+						env_val = "null"
+					elif have == nothrow_llty:
+						thunk_name = self._ensure_generic_nothrow_wrap_thunk(field_ty)
+						adapter_sym = f"@{thunk_name}"
+						env_cast = self._fresh("env")
+						self.lines.append(f"  {env_cast} = bitcast {nothrow_llty} {arg_val} to i8*")
+						env_val = env_cast
+					elif have == throwing_llty:
+						thunk_name = self._ensure_generic_forward_thunk(field_ty)
+						adapter_sym = f"@{thunk_name}"
+						env_cast = self._fresh("env")
+						self.lines.append(f"  {env_cast} = bitcast {throwing_llty} {arg_val} to i8*")
+						env_val = env_cast
+					elif have is None:
+						raise AssertionError(
+							f"LLVM codegen: throwing fn-ptr struct field {idx} of {struct_def.name} has no tracked type for arg {arg_val}; "
+							f"expected nothrow ({nothrow_llty}) or throwing ({throwing_llty}) fn-ptr"
+						)
 					else:
 						field_lltys = [self._llvm_type_for_typeid(t) for t in field_types]
 						arg_lltys = [self.value_types.get(self._map_value(a)) for a in instr.args]
@@ -2636,9 +2663,23 @@ class _FuncBuilder:
 							f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
 							f"fields={field_lltys} args={arg_lltys}"
 						)
-				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
-					arg_val = self._bool_to_storage(arg_val)
-				emit_field_store_llty = self._llty(field_store_llty)
+					fat0 = self._fresh("fat")
+					fat1 = self._fresh("fat")
+					self.lines.append(f"  {fat0} = insertvalue {DRIFT_FAT_FNPTR_TYPE} zeroinitializer, i8* bitcast ({self._fat_adapter_sig(field_ty)} {adapter_sym} to i8*), 0")
+					self.lines.append(f"  {fat1} = insertvalue {DRIFT_FAT_FNPTR_TYPE} {fat0}, i8* {env_val}, 1")
+					arg_val = fat1
+					emit_field_store_llty = DRIFT_FAT_FNPTR_TYPE
+				else:
+					if have is not None and have != field_val_llty:
+						field_lltys = [self._llvm_type_for_typeid(t) for t in field_types]
+						arg_lltys = [self.value_types.get(self._map_value(a)) for a in instr.args]
+						raise NotImplementedError(
+							f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
+							f"fields={field_lltys} args={arg_lltys}"
+						)
+					if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
+						arg_val = self._bool_to_storage(arg_val)
+					emit_field_store_llty = self._llty(field_store_llty)
 				is_last = idx == len(field_types) - 1
 				tmp = self._map_value(instr.dest) if is_last else self._fresh("struct")
 				self.lines.append(
@@ -2888,12 +2929,17 @@ class _FuncBuilder:
 				)
 			field_val_llty = self._llvm_type_for_typeid(instr.field_ty)
 			field_store_llty = self._llvm_storage_type_for_typeid(instr.field_ty)
+			field_td = self.type_table.get(instr.field_ty)
+			is_fat_fn = field_td.kind is TypeKind.FUNCTION and field_td.can_throw()
 			dest = self._map_value(instr.dest)
 			if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 				raw = self._fresh("field8")
 				self.lines.append(f"  {raw} = extractvalue {struct_llty} {subject}, {instr.field_index}")
 				self._bool_from_storage(raw, dest=dest)
 				self.value_types[dest] = "i1"
+			elif is_fat_fn:
+				self.lines.append(f"  {dest} = extractvalue {struct_llty} {subject}, {instr.field_index}")
+				self.value_types[dest] = DRIFT_FAT_FNPTR_TYPE
 			else:
 				self.lines.append(f"  {dest} = extractvalue {struct_llty} {subject}, {instr.field_index}")
 				self.value_types[dest] = field_val_llty
@@ -4981,6 +5027,27 @@ class _FuncBuilder:
 		have_ty = self.value_types.get(callee_val)
 		if have_ty == DRIFT_IFACE_TYPE or have_ty == self._llty(DRIFT_IFACE_TYPE):
 			raise AssertionError("LLVM codegen v1: interface value in CallIndirect (MIR bug)")
+		if have_ty == DRIFT_FAT_FNPTR_TYPE:
+			adapter_i8 = self._fresh("adapter_i8")
+			env_val = self._fresh("env")
+			self.lines.append(f"  {adapter_i8} = extractvalue {DRIFT_FAT_FNPTR_TYPE} {callee_val}, 0")
+			self.lines.append(f"  {env_val} = extractvalue {DRIFT_FAT_FNPTR_TYPE} {callee_val}, 1")
+			adapter_ty = self._fat_adapter_sig_from_call(instr)
+			adapter_cast = self._fresh("adapter")
+			self.lines.append(f"  {adapter_cast} = bitcast i8* {adapter_i8} to {adapter_ty}")
+			arg_parts: list[str] = [f"i8* {env_val}"]
+			for ty_id, arg in zip(instr.param_types, instr.args):
+				llty = self._llvm_type_for_typeid(ty_id)
+				arg_val = self._map_value(arg)
+				arg_parts.append(f"{self._llty(llty)} {arg_val}")
+			args = ", ".join(arg_parts)
+			if instr.dest:
+				dest = self._map_value(instr.dest)
+				self.lines.append(f"  {dest} = call {emit_ret_llty} {adapter_cast}({args})")
+				self.value_types[dest] = ret_llty
+			else:
+				self.lines.append(f"  call {emit_ret_llty} {adapter_cast}({args})")
+			return
 		fn_ptr_ty = self._fn_ptr_lltype(instr.param_types, instr.user_ret_type, instr.can_throw)
 		if have_ty != fn_ptr_ty:
 			src_ty = have_ty or "i8*"
@@ -5103,6 +5170,33 @@ class _FuncBuilder:
 		arg_lltys = ", ".join(self._llty(self._llvm_type_for_typeid(t, allow_void_ok=True)) for t in param_types)
 		return f"{emit_ret_llty} ({arg_lltys})*"
 
+	def _fat_adapter_sig(self, field_ty: TypeId) -> str:
+		"""Return the LLVM function-pointer type for a fat fn-ptr adapter.
+
+		Adapters take ``i8* %env`` as first param followed by the user params
+		and return the throwing FnResult type.
+		"""
+		td = self.type_table.get(field_ty)
+		param_tids = list(td.param_types[:-1])
+		user_ret_tid = td.param_types[-1]
+		err_tid = self.type_table.ensure_error()
+		fnres_tid = self.type_table.ensure_fnresult(user_ret_tid, err_tid)
+		fnres_llty = self._llty(self._llvm_type_for_typeid(fnres_tid))
+		arg_lltys = ["i8*"]
+		for t in param_tids:
+			arg_lltys.append(self._llty(self._llvm_type_for_typeid(t, allow_void_ok=True)))
+		return f"{fnres_llty} ({', '.join(arg_lltys)})*"
+
+	def _fat_adapter_sig_from_call(self, instr: CallIndirect) -> str:
+		"""Build the adapter fn-ptr type from a CallIndirect instruction."""
+		err_tid = self.type_table.ensure_error()
+		fnres_tid = self.type_table.ensure_fnresult(instr.user_ret_type, err_tid)
+		fnres_llty = self._llty(self._llvm_type_for_typeid(fnres_tid))
+		arg_lltys = ["i8*"]
+		for t in instr.param_types:
+			arg_lltys.append(self._llty(self._llvm_type_for_typeid(t, allow_void_ok=True)))
+		return f"{fnres_llty} ({', '.join(arg_lltys)})*"
+
 	def _callback_thunk_ptr_llty(self, param_types: list[TypeId], user_ret_type: TypeId, can_throw: bool) -> str:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: callback thunks require a TypeTable")
@@ -5162,8 +5256,10 @@ class _FuncBuilder:
 		"""Emit a module-level thunk wrapping a nothrow fn to match a throwing fn-ptr ABI.
 
 		The thunk calls the nothrow function and wraps its return value in a
-		FnResult{is_err=false, ok=<result>, err=null}.  Returns the thunk LLVM
-		symbol name (without leading @).
+		FnResult{is_err=false, ok=<result>, err=null}.  The thunk takes an
+		``i8* %env`` first parameter (ignored) so it matches the fat fn-ptr
+		adapter calling convention.  Returns the thunk LLVM symbol name
+		(without leading @).
 		"""
 		td = self.type_table.get(field_ty)
 		param_tids = list(td.param_types[:-1])
@@ -5179,7 +5275,7 @@ class _FuncBuilder:
 			return cached
 		thunk_name = f"__fnthunk_{arg_sym.lstrip('@').replace('.', '_')}_{len(self.module.nothrow_thunk_cache)}"
 		self.module.nothrow_thunk_cache[cache_key] = thunk_name
-		arg_defs: list[str] = []
+		arg_defs: list[str] = ["i8* %env"]
 		call_args: list[str] = []
 		for idx, p_tid in enumerate(param_tids):
 			llty = self._llty(self._llvm_type_for_typeid(p_tid, allow_void_ok=True))
@@ -5199,6 +5295,90 @@ class _FuncBuilder:
 		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
 		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {ok_llty} {ok_val}, 1")
 		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
+		lines.append(f"  ret {fnres_llty} %res")
+		lines.append("}")
+		self.module.emit_func("\n".join(lines))
+		return thunk_name
+
+	def _ensure_generic_nothrow_wrap_thunk(self, field_ty: TypeId) -> str:
+		"""Emit (or return cached) a generic nothrow-to-throwing adapter thunk.
+
+		The adapter loads a nothrow callee from its ``i8* %env`` parameter,
+		calls it indirectly, and wraps the result in FnResult.  Cached per
+		signature shape so only one thunk exists per distinct fn-ptr type.
+		"""
+		td = self.type_table.get(field_ty)
+		param_tids = list(td.param_types[:-1])
+		user_ret_tid = td.param_types[-1]
+		nothrow_ret_llty = self._llty(self._llvm_type_for_typeid(user_ret_tid, allow_void_ok=True))
+		is_void_ret = self.type_table.is_void(user_ret_tid)
+		err_tid = self.type_table.ensure_error()
+		fnres_tid = self.type_table.ensure_fnresult(user_ret_tid, err_tid)
+		fnres_llty = self._llty(self._llvm_type_for_typeid(fnres_tid))
+		nothrow_ptr_ty = self._fn_ptr_lltype(param_tids, user_ret_tid, can_throw=False)
+		cache_key = self._fat_adapter_sig(field_ty)
+		cached = self.module.fat_fnptr_wrap_thunks.get(cache_key)
+		if cached is not None:
+			return cached
+		thunk_name = f"__fnthunk_generic_wrap_{len(self.module.fat_fnptr_wrap_thunks)}"
+		self.module.fat_fnptr_wrap_thunks[cache_key] = thunk_name
+		arg_defs: list[str] = ["i8* %env"]
+		call_args: list[str] = []
+		for idx, p_tid in enumerate(param_tids):
+			llty = self._llty(self._llvm_type_for_typeid(p_tid, allow_void_ok=True))
+			arg_defs.append(f"{llty} %a{idx}")
+			call_args.append(f"{llty} %a{idx}")
+		lines: list[str] = []
+		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
+		lines.append("entry:")
+		lines.append(f"  %callee = bitcast i8* %env to {nothrow_ptr_ty}")
+		if is_void_ret:
+			lines.append(f"  call void %callee({', '.join(call_args)})")
+			ok_val = "0"
+			ok_llty = "i8"
+		else:
+			lines.append(f"  %raw = call {nothrow_ret_llty} %callee({', '.join(call_args)})")
+			ok_val = "%raw"
+			ok_llty = nothrow_ret_llty
+		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {ok_llty} {ok_val}, 1")
+		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
+		lines.append(f"  ret {fnres_llty} %res")
+		lines.append("}")
+		self.module.emit_func("\n".join(lines))
+		return thunk_name
+
+	def _ensure_generic_forward_thunk(self, field_ty: TypeId) -> str:
+		"""Emit (or return cached) a generic throwing-to-throwing forward thunk.
+
+		The adapter loads a throwing callee from its ``i8* %env`` parameter
+		and forwards the call.  Used when storing an already-throwing fn-ptr
+		into a throwing struct field.  Cached per signature shape.
+		"""
+		td = self.type_table.get(field_ty)
+		param_tids = list(td.param_types[:-1])
+		user_ret_tid = td.param_types[-1]
+		err_tid = self.type_table.ensure_error()
+		fnres_tid = self.type_table.ensure_fnresult(user_ret_tid, err_tid)
+		fnres_llty = self._llty(self._llvm_type_for_typeid(fnres_tid))
+		throwing_ptr_ty = self._fn_ptr_lltype(param_tids, user_ret_tid, can_throw=True)
+		cache_key = self._fat_adapter_sig(field_ty)
+		cached = self.module.fat_fnptr_fwd_thunks.get(cache_key)
+		if cached is not None:
+			return cached
+		thunk_name = f"__fnthunk_forward_{len(self.module.fat_fnptr_fwd_thunks)}"
+		self.module.fat_fnptr_fwd_thunks[cache_key] = thunk_name
+		arg_defs: list[str] = ["i8* %env"]
+		call_args: list[str] = []
+		for idx, p_tid in enumerate(param_tids):
+			llty = self._llty(self._llvm_type_for_typeid(p_tid, allow_void_ok=True))
+			arg_defs.append(f"{llty} %a{idx}")
+			call_args.append(f"{llty} %a{idx}")
+		lines: list[str] = []
+		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
+		lines.append("entry:")
+		lines.append(f"  %callee = bitcast i8* %env to {throwing_ptr_ty}")
+		lines.append(f"  %res = call {fnres_llty} %callee({', '.join(call_args)})")
 		lines.append(f"  ret {fnres_llty} %res")
 		lines.append("}")
 		self.module.emit_func("\n".join(lines))

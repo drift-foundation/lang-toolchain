@@ -1,0 +1,12 @@
+module main
+
+struct Op {
+	apply: Fn(Int, Int) -> String
+}
+
+fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
+
+fn main() nothrow -> Int {
+	val op = Op(apply = add);
+	return 0;
+}

@@ -1,0 +1,28 @@
+module main
+
+struct MathOp {
+	apply: Fn(Int, Int) -> Int
+}
+
+fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
+fn sub(a: Int, b: Int) nothrow -> Int { return a - b; }
+
+fn swap(target: &mut Fn(Int, Int) nothrow -> Int) nothrow -> Void {
+	target = sub;
+}
+
+fn run() -> Int {
+	var f: Fn(Int, Int) nothrow -> Int = add;
+	swap(&mut f);
+	val op = MathOp(apply = f);
+	val g = op.apply;
+	val result = g(10, 3);
+	if result != 7 {
+		return 10;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

@@ -1,0 +1,12 @@
+module main
+
+struct Op {
+	apply: Fn(Int, Int) -> Int
+}
+
+fn concat(a: String, b: String) nothrow -> String { return a; }
+
+fn main() nothrow -> Int {
+	val op = Op(apply = concat);
+	return 0;
+}

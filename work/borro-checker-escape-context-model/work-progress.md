@@ -1,7 +1,7 @@
 # Borrow Checker Escape Context Model — Work Progress
 
 Author: Klaudia
-Current focus: Callable Coercion V4.5 — **Fn-Ptr ABI Thunk Implementation**
+Current focus: Callable Coercion V4.8 — **Uniform Runtime-Value Fn-Ptr Coercion (Fat Fn-Ptr)**
 
 ---
 
@@ -1664,3 +1664,165 @@ The address-taken local case is unreachable in practice today: fn-ptr locals tha
 - [x] Existing V4.5 positive/negative callable e2e remain green.
 - [x] Added boundary contract check for fn-ptr mismatch path (`callable_fn_ptr_arity_mismatch_struct_field_rejected`).
 - [x] `work-progress.md` updated with support matrix (§22.2) and rationale.
+
+### 23. V4.7: Extended Batch — Diagnostics + Guardrails + ABI-Path Hygiene
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** Complete.
+
+#### 23.1 Surface reachability finding
+
+`%`-prefixed fn-ptr source at ConstructStruct IS reachable from Drift surface code. When a fn-ptr local has its address taken via `&mut` (e.g. passed to `swap(&mut f)`), the local is stored in an alloca; subsequent reads produce SSA registers (`%tmp`) instead of global symbols (`@sym`).
+
+Test case: `callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported/main.drift` — `var f = add; swap(&mut f); MathOp(apply = f)`.
+
+This is an inherent limitation of compile-time thunking: the thunk body hardcodes a specific function symbol, but a runtime value loaded from an alloca is only known at runtime. Supporting this would require closure-style wrapping (captured fn-ptr + wrapper), which is a different representation from a bare fn-ptr and requires checker/type-system changes.
+
+**Resolution:** Pinned as unsupported (`skip: true`) with clear, non-internal diagnostic:
+```
+LLVM codegen: nothrow-to-throwing fn-ptr thunk requires a compile-time function symbol,
+but field 0 of struct MathOp received a runtime value; assign the nothrow function
+directly to the field instead of through a mutable reference
+```
+
+#### 23.2 Helper centralization
+
+Extracted `_try_nothrow_to_throwing_thunk(arg_val, have_llty, field_ty) -> str | None` from inline ConstructStruct logic. This helper encapsulates all guard checks (TypeKind.FUNCTION, can_throw, `@`-prefix, shape match) and thunk emission. Returns `None` when not thunkable — caller falls through to the appropriate error path.
+
+ConstructStruct now calls one helper + has two specific error paths:
+1. Nothrow-to-throwing with runtime value → actionable message naming the limitation.
+2. Other shape mismatch → existing generic contract error with type details.
+
+#### 23.3 Final support matrix (V4.5–V4.7)
+
+| Source shape | Drift surface pattern | Thunk supported | Guard | Test |
+|-------------|----------------------|-----------------|-------|------|
+| Direct symbol | `MathOp(apply = add)` | Yes | `@`-prefix + shape match | `callable_fn_ptr_throwing_field_nothrow_fn` |
+| Val-bound symbol | `val f = add; MathOp(apply = f)` | Yes | SSA resolves to `@sym` | `callable_fn_ptr_throwing_field_nothrow_fn_via_local` |
+| Var-reassigned symbol | `var f = add; f = sub; MathOp(apply = f)` | Yes | SSA resolves to final `@sym` | `callable_fn_ptr_throwing_field_nothrow_fn_via_var` |
+| Address-taken local | `swap(&mut f); MathOp(apply = f)` | No (pinned) | `@`-prefix rejects `%` registers | `..._via_refmut_unsupported` (skip) |
+| Arity mismatch | `Fn(Int,Int)->Int` ← 1-arg fn | No (checker) | Checker type mismatch | `callable_fn_ptr_arity_mismatch_struct_field_rejected` |
+| Param-type mismatch | `Fn(Int,Int)->Int` ← `Fn(String,String)->String` | No (checker) | Checker type mismatch | `callable_fn_ptr_param_type_mismatch_struct_field_rejected` |
+| Return-type mismatch | `Fn(Int,Int)->String` ← `fn()->Int` | No (checker) | Checker type mismatch | `callable_fn_ptr_return_type_mismatch_struct_field_rejected` |
+| Throwing→nothrow | `Fn(Int) nothrow -> Int` ← throwing fn | No (checker) | Checker type mismatch | `callable_throwing_fn_to_nothrow_field_rejected` |
+
+#### 23.4 Files touched
+
+| File | Change |
+|------|--------|
+| `lang/codegen/llvm/llvm_codegen.py` | Added `_try_nothrow_to_throwing_thunk` helper; ConstructStruct uses helper; added actionable diagnostic for runtime-value case |
+| `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported/` | **New** pinned surface-expressibility-limit test (skip=true) |
+| `lang/tests/codegen/e2e/callable_fn_ptr_param_type_mismatch_struct_field_rejected/` | **New** negative: same-arity wrong param types |
+| `lang/tests/codegen/e2e/callable_fn_ptr_return_type_mismatch_struct_field_rejected/` | **New** negative: return type mismatch |
+
+#### 23.5 Pass/fail matrix
+
+| Test | Result |
+|------|--------|
+| All 18 callable e2e tests (12 existing + 6 new) | **PASS** (18/18) |
+| A5 boundary tests (7/7) | **PASS** |
+| Borrow checker unit tests (90/90) | **PASS** |
+| LLVM codegen unit tests (66/66) | **PASS** |
+
+#### 23.6 Done-when checklist (V4.7)
+
+- [x] Non-symbol/unsupported-source regression added and pinned (`callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported`, skip=true).
+- [x] Diagnostic path for unsupported thunk source is explicit and non-internal (actionable message with workaround guidance).
+- [x] Callable boundary matrix expanded: param-type mismatch + return-type mismatch added.
+- [x] Positive matrix confirms supported storage/invocation across direct/local/var shapes (3 tests).
+- [x] Thunkability/mismatch decision path centralized to `_try_nothrow_to_throwing_thunk`.
+- [x] Existing callable positive/negative suite remains green (18/18).
+- [x] `work-progress.md` records before/after diagnostics, touched files, and final support matrix (§23.3).
+
+### 24. V4.8: Uniform Runtime-Value Fn-Ptr Coercion (Fat Fn-Ptr)
+
+#### 24.1 Problem
+
+V4.5-V4.7 only coerced nothrow fn-ptrs to throwing struct fields for **compile-time symbols** (`@add`). Runtime values (`%t4` from address-taken locals, branch results, return values) hit a `NotImplementedError` because a bare fn-ptr cannot capture the callee at runtime.
+
+#### 24.2 Solution: Fat fn-ptr representation
+
+Changed LLVM representation of **throwing fn-ptr struct fields** from a bare function pointer to a closure-like pair:
+
+```llvm
+%DriftFatFnPtr = type { i8*, i8* }   ; { adapter_fn_ptr, env_ptr }
+```
+
+Three cases at ConstructStruct:
+
+| Case | adapter | env | Example |
+|------|---------|-----|---------|
+| **Nothrow symbol** (`@add`) | `@__fnthunk_add_N` (dedicated, calls `@add` directly, ignores env) | `null` | `MathOp(apply = add)` |
+| **Nothrow runtime** (`%t4`) | `@__fnthunk_generic_wrap_N` (loads callee from env, calls indirectly, wraps in FnResult) | `bitcast %t4 to i8*` | `MathOp(apply = f)` after `swap(&mut f)` |
+| **Throwing value** (no coercion) | `@__fnthunk_forward_N` (loads callee from env, forwards call) | `bitcast %fn to i8*` | Storing a throwing fn into a throwing field |
+
+CallIndirect: when callee tracked type is `%DriftFatFnPtr`, decompose pair and call through adapter with env as first arg.
+
+#### 24.3 IR before/after
+
+**Before (V4.7)** — nothrow symbol direct thunk:
+```llvm
+; MathOp(apply = add)  →  bare fn-ptr field
+%t5 = insertvalue %Struct_MathOp zeroinitializer, %FnResult_Int_Error (i64, i64)* @__fnthunk_add_0, 0
+```
+
+**After (V4.8)** — fat fn-ptr with adapter:
+```llvm
+; MathOp(apply = add)  →  fat fn-ptr field
+%fat0 = insertvalue %DriftFatFnPtr zeroinitializer, i8* bitcast (%FnResult_Int_Error (i8*, i64, i64)* @__fnthunk_add_0 to i8*), 0
+%fat1 = insertvalue %DriftFatFnPtr %fat0, i8* null, 1
+%t5 = insertvalue %Struct_MathOp zeroinitializer, %DriftFatFnPtr %fat1, 0
+
+; CallIndirect through fat fn-ptr:
+%adapter_i8 = extractvalue %DriftFatFnPtr %callee, 0
+%env = extractvalue %DriftFatFnPtr %callee, 1
+%adapter = bitcast i8* %adapter_i8 to %FnResult_Int_Error (i8*, i64, i64)*
+%result = call %FnResult_Int_Error %adapter(i8* %env, i64 %a0, i64 %a1)
+```
+
+#### 24.4 Updated support matrix
+
+| Shape | Supported? | Mechanism | Test |
+|-------------|----------------------|-----------------|------|
+| Direct symbol | `MathOp(apply = add)` | Yes — dedicated thunk (env=null) | `callable_fn_ptr_throwing_field_nothrow_fn` |
+| Val-bound symbol | `val f = add; MathOp(apply = f)` | Yes — SSA resolves to `@sym` | `callable_fn_ptr_throwing_field_nothrow_fn_via_local` |
+| Var-reassigned symbol | `var f = add; f = sub; MathOp(apply = f)` | Yes — SSA resolves to final `@sym` | `callable_fn_ptr_throwing_field_nothrow_fn_via_var` |
+| Address-taken local | `swap(&mut f); MathOp(apply = f)` | **Yes — generic wrap thunk** | `callable_fn_ptr_throwing_field_nothrow_via_refmut` |
+| Branch/phi result | `pick(true); MathOp(apply = f)` | **Yes — generic wrap thunk** | `callable_fn_ptr_throwing_field_nothrow_via_branch` |
+| Arity mismatch | `Fn(Int,Int)->Int` ← 1-arg fn | No (checker) | `callable_fn_ptr_arity_mismatch_struct_field_rejected` |
+| Param-type mismatch | `Fn(Int,Int)->Int` ← `Fn(String,String)->String` | No (checker) | `callable_fn_ptr_param_type_mismatch_struct_field_rejected` |
+| Return-type mismatch | `Fn(Int,Int)->String` ← `fn()->Int` | No (checker) | `callable_fn_ptr_return_type_mismatch_struct_field_rejected` |
+| Throwing→nothrow | `Fn(Int) nothrow -> Int` ← throwing fn | No (checker) | `callable_throwing_fn_to_nothrow_field_rejected` |
+
+#### 24.5 Files touched
+
+| File | Change |
+|------|--------|
+| `lang/codegen/llvm/llvm_codegen.py` | Added `DRIFT_FAT_FNPTR_TYPE`; `%DriftFatFnPtr` type decl; `ensure_struct_type` replaces throwing fn fields with fat type; ConstructStruct builds fat pairs for all 3 cases; StructGetField tags fat extractions; CallIndirect decomposes fat pairs; `_emit_nothrow_to_throwing_thunk` gains `i8* %env` param; new `_ensure_generic_nothrow_wrap_thunk`, `_ensure_generic_forward_thunk`, `_fat_adapter_sig`, `_fat_adapter_sig_from_call`; removed `_try_nothrow_to_throwing_thunk` (dead after refactor) |
+| `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_via_refmut/` | **New** — renamed from `..._unsupported`, now expects exit_code=0 |
+| `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_via_branch/` | **New** — phi-produced fn-ptr stress test |
+
+#### 24.6 Pass/fail matrix
+
+| Test | Result |
+|------|--------|
+| 4 callable positive tests (3 existing + 1 new refmut) | **PASS** |
+| 1 callable branch stress test | **PASS** |
+| 4 callable negative tests | **PASS** |
+| LLVM codegen unit tests (66/66) | **PASS** |
+
+#### 24.7 Done-when checklist (V4.8)
+
+- [x] `%DriftFatFnPtr` type declared and used for throwing fn-ptr struct fields.
+- [x] Dedicated symbol thunks gain `i8* %env` first param to match fat adapter convention.
+- [x] Generic nothrow-wrap thunk emitted per signature shape (cached).
+- [x] Generic forward thunk emitted per signature shape (cached).
+- [x] ConstructStruct builds fat fn-ptr `{adapter, env}` for all three value cases.
+- [x] StructGetField tags fat fn-ptr extractions with `%DriftFatFnPtr`.
+- [x] CallIndirect decomposes fat fn-ptr and calls through adapter with env.
+- [x] `callable_fn_ptr_throwing_field_nothrow_via_refmut` (renamed) passes with exit_code=0.
+- [x] `callable_fn_ptr_throwing_field_nothrow_via_branch` new test passes.
+- [x] All 3 existing positive tests remain green.
+- [x] All 4 negative tests remain green.
+- [x] LLVM codegen unit tests (66/66) pass.
