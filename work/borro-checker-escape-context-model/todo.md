@@ -30,38 +30,79 @@ Final state:
 - Boundary contract tests green (12/12).
 - Full trait method resolution suite green (28/28).
 
-### Active Phase: Callable Coercion Assessment (analysis-only, no code)
+### Completed Phase: Callable Coercion V1 (DONE with C2 blocker)
+
+Precondition:
+1. Callable coercion assessment is complete in `work-progress.md` (section 16).
+2. Owner full-suite signal is green.
+
+Summary:
+1. C1, C3, C4 are passing and pinned with e2e coverage.
+2. Remaining blocker from V1: C2 (`Fn(...)` in struct field) is a pinned LANGUAGE_BUG in checker type unification.
+3. Owner-confirmed C4 fix landed with targeted borrow-check regression pin.
+
+### Active Phase: Callable Coercion V1.5 (C2 LANGUAGE_BUG resolution)
 
 Objective:
-Assess and design uniform callable API support: function/functor/lambda storage in containers,
-deferred invocation, and coercion boundaries. Map required checker → stage2 → MIR/LLVM changes.
-Propose regression matrix and rollout slices.
+1. Fix the checker defect where `Fn(...)` typed struct fields reject matching function values (`have fn, expected fn`).
+2. Keep existing callable-coercion coverage green (C1/C3/C4 + B4 safety set).
 
 Scope (Klaudia):
-1. Analyze current callable surface (function pointers, Callback0/1/2, Fn0/1/2 traits, HLambda)
-   and identify gaps in:
-   - storage (containers, struct fields, arrays),
-   - deferred invocation (pass to function, return from function, store-then-call),
-   - coercion between callable kinds (lambda → Callback, Callback → Fn, fn ptr → Fn).
-2. Map required changes per compiler subsystem:
-   - checker (`call_resolver.py`, `type_checker.py`): coercion rules, type unification,
-   - stage2 (`hir_to_mir.py`): MIR lowering for stored/deferred callables,
-   - MIR/LLVM (`llvm_codegen.py`): calling conventions, env passing.
-3. Propose:
-   - regression matrix (positive + negative for each coercion edge),
-   - rollout slices with go/no-go gates,
-   - risk assessment per slice.
-4. Do not write code. Do not change any compiler or test files.
-5. Do not change archived sections in this file.
+1. Regression-first for C2:
+   - keep/pin minimal failing repro (existing e2e case is acceptable),
+   - add a targeted driver regression if needed for checker-only signal.
+2. Fix root cause in checker type unification path (no stdlib/workaround changes).
+3. Unskip `callable_fn_ptr_in_struct_field` only after fix is confirmed.
+4. Do not change archived sections in this file.
+5. Batch policy: if V1.5 exits green, proceed immediately to V2 in the same work window (no separate handoff required).
+
+Execution rules:
+1. Regression-first and stop-on-bug:
+   - classify C2 as LANGUAGE_BUG and keep pinned repro path in `work-progress.md`,
+   - implement smallest checker-side fix,
+   - confirm positive + negative behavior post-fix.
+2. No semantic masking/workarounds in stdlib or user-facing code.
+3. Keep Boundary Contract Guardrails strict:
+   - add/adjust positive regression proving supported `Fn` struct-field shape works end-to-end,
+   - add/adjust negative regression for unsupported/mismatched callable assignment shape,
+   - update stale comments/tests/messages if boundary expectations change.
 
 Done-when checklist:
-- [ ] Gap analysis covers: storage, deferred invocation, coercion edges.
-- [ ] Per-subsystem change map (checker, stage2, MIR/LLVM) with file/function anchors.
-- [ ] Regression matrix proposed (positive + negative for each boundary).
-- [ ] Rollout slices defined with go/no-go gates per slice.
-- [ ] Risk assessment per slice.
-- [ ] Assessment recorded in `work-progress.md` section 15.
-- [ ] No code changes.
+- [ ] C2 regression is pinned and fails pre-fix.
+- [ ] Checker root cause fix is landed (no workaround).
+- [ ] `callable_fn_ptr_in_struct_field` unskipped and passing.
+- [ ] Existing callable/B4 boundary set remains green.
+- [ ] `work-progress.md` updated with repro, root cause, fix, and validation matrix.
+
+### Phase chaining: V1.5 -> V2 (batched execution approved)
+
+Auto-advance rule:
+1. After all V1.5 done-when items are green, continue directly with V2 without waiting for a new todo update.
+
+V2 objective:
+1. Land Tier-2 callable storage validation (C5-C8) from `work-progress.md` section 16:
+   - callback in array,
+   - callback drop in array (leak-safe),
+   - callback in hashmap value,
+   - composed callbacks (callback captures callback).
+
+V2 execution rules:
+1. Regression-first:
+   - add the target test,
+   - if it fails, pin minimal repro and suspected subsystem,
+   - apply smallest root-cause fix in compiler/runtime only if in scope.
+2. Keep Boundary Contract Guardrails strict:
+   - positive + negative coverage for any boundary-shape changes,
+   - align stale comments/tests/messages when behavior changes.
+3. Stop conditions:
+   - first out-of-scope LANGUAGE_BUG,
+   - or change-set no longer localized to declared callable-storage files.
+
+V2 done-when checklist:
+- [ ] C5-C8 tests are present and passing, or blocked cases are explicitly pinned as LANGUAGE_BUG with repro.
+- [ ] No semantic masking/workaround in stdlib/user code.
+- [ ] Existing callable/B4 high-sensitivity set remains green.
+- [ ] `work-progress.md` contains V2 pass/fail matrix and any blocker records.
 
 ### Open Follow-Ups (active)
 

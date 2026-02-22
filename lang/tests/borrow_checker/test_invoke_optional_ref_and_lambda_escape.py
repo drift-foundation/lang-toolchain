@@ -105,3 +105,44 @@ def test_invoke_rejects_escaping_lambda_with_borrowed_capture() -> None:
 	bc = BorrowChecker.from_typed_fn(typed_fn, type_table=table, signatures_by_id={})
 	diags = bc.check_block(typed_fn.body)
 	assert any("borrowed captures are non-escaping in v0" in d.message for d in diags), diags
+
+
+def test_invoke_sig_construction_uses_canonical_fnsignature_fields() -> None:
+	"""Pin that _resolve_sig_for_call for HInvoke produces a FnSignature with
+	correct canonical fields (return_type_id, declared_can_throw, declared_throws)
+	after the Phase 5 cleanup removed legacy field names."""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	unknown_ty = table.ensure_unknown()
+	fp_id = 1
+	r_id = 2
+	invoke = H.HInvoke(callee=H.HVar(name="fp", binding_id=fp_id), args=[H.HLiteralInt(42)], kwargs=[], callsite_id=301)
+	body = H.HBlock(
+		statements=[
+			H.HLet(name="fp", value=H.HLiteralInt(0), binding_id=fp_id, is_mutable=False),
+			H.HLet(name="r", value=invoke, binding_id=r_id, is_mutable=False),
+		]
+	)
+	assign_node_ids(body)
+	typed_fn = TypedFn(
+		fn_id=FunctionId(module="main", name="main", ordinal=0),
+		name="main",
+		params=[],
+		param_bindings=[],
+		locals=[fp_id, r_id],
+		body=body,
+		expr_types={},
+		binding_for_var={},
+		binding_types={fp_id: unknown_ty, r_id: int_ty},
+		binding_names={fp_id: "fp", r_id: "r"},
+		binding_mutable={fp_id: False, r_id: False},
+		call_info_by_callsite_id={
+			301: CallInfo(
+				target=CallTarget.indirect(callee_node_id=invoke.callee.node_id),
+				sig=CallSig(param_types=(int_ty,), user_ret_type=int_ty, can_throw=False, includes_callee=False),
+			)
+		},
+	)
+	bc = BorrowChecker.from_typed_fn(typed_fn, type_table=table, signatures_by_id={})
+	diags = bc.check_block(typed_fn.body)
+	assert diags == [], f"simple HInvoke with Int param should produce no borrow diagnostics: {diags}"

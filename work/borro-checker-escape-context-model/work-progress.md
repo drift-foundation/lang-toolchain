@@ -1243,7 +1243,7 @@ Confirmed: section 16.1–16.7 is assessment-only. No compiler files were edited
 
 **Date:** 2026-02-22
 **Author:** Klaudia
-**Status:** STOP — 2 of 4 tests blocked by pre-existing LANGUAGE_BUGs.
+**Status:** 3 of 4 passing; 1 blocked (C2).
 
 #### V1 results
 
@@ -1251,10 +1251,20 @@ Confirmed: section 16.1–16.7 is assessment-only. No compiler files were edited
 |---|------|--------|--------|
 | C1 | `callable_callback_in_struct_field` | **PASS** | Callback1 in struct field, invoked via field access. End-to-end. |
 | C2 | `callable_fn_ptr_in_struct_field` | **BLOCKED** | Checker: "struct field 'apply' type mismatch (have fn, expected fn)". Function pointer type unification fails in struct field position. |
-| C3 | `callable_callback_returned_from_generic` | **PASS** | Callback1 returned from function, invoked by caller. End-to-end. (Generic body `callback1(f)` where `f: F` is a separate gap — checker doesn't see generic `F` as function value.) |
-| C4 | `callable_fn_ptr_in_array` | **BLOCKED** | Borrow checker crash: `FnSignature.__init__() got unexpected keyword argument 'user_ret_type'` at `borrow_checker_pass.py:245`. Indirect call through array-indexed function pointer. |
+| C3 | `callable_callback_returned_from_generic` | **PASS** | Callback1 returned from non-generic function, invoked by caller. End-to-end. Description corrected per review finding: generic body `callback1(f)` where `f: F` is a separate gap not exercised here. |
+| C4 | `callable_fn_ptr_in_array` | **PASS** | Function pointers in Array, invoked by index. End-to-end. Owner-approved fix: stale kwarg in `_resolve_sig_for_call` (see fix details below). |
 
-#### Blockers documented
+#### C4 fix (owner-approved)
+
+**`borrow_checker_pass.py:245`** — `_resolve_sig_for_call` HInvoke branch: mapped stale `CallSig` field names to canonical `FnSignature` fields after Phase 5 cleanup:
+- `user_ret_type=` → `return_type_id=`
+- `can_throw_raw=` → `declared_can_throw=`
+- `throws_raw=` → `declared_throws=`
+- Removed spurious `param_types=` (not a `FnSignature` field; `param_type_ids=` is correct).
+
+**Targeted regression added:** `test_invoke_sig_construction_uses_canonical_fnsignature_fields` in `lang/tests/borrow_checker/test_invoke_optional_ref_and_lambda_escape.py` — pins that HInvoke `_resolve_sig_for_call` constructs a valid `FnSignature` with canonical fields. 3/3 tests in file pass.
+
+#### Blocker documented
 
 **LANGUAGE_BUG C2: function pointer type in struct field**
 - **Subsystem:** `type_checker.py` — struct field type unification
@@ -1268,28 +1278,16 @@ Confirmed: section 16.1–16.7 is assessment-only. No compiler files were edited
 - **Root cause (suspected):** Checker creates two distinct FUNCTION TypeIds for the same `Fn(Int,Int)->Int` signature — one from the struct field declaration, one from the function reference. Structural equality comparison fails.
 - **E2e test:** `callable_fn_ptr_in_struct_field/` — skip=true, documents blocker.
 
-**LANGUAGE_BUG C4: borrow checker crash on indirect call through array index**
-- **Subsystem:** `borrow_checker_pass.py:245` — `_resolve_sig_for_call`
-- **Minimal repro:**
-  ```drift
-  fn add1(x: Int) nothrow -> Int { return x + 1; }
-  fn main() nothrow -> Int { val fns = [add1]; return fns[0](10); }
-  ```
-- **Error:** `TypeError: FnSignature.__init__() got an unexpected keyword argument 'user_ret_type'`
-- **Root cause (suspected):** `_resolve_sig_for_call` constructs a `FnSignature` with `user_ret_type=` kwarg that was removed or renamed during A5 Phase 5 cleanup (param_nonretaining removal). The indirect-call path was not updated.
-- **E2e test:** `callable_fn_ptr_in_array/` — skip=true, documents blocker.
-
 #### Additional gap discovered
 
 **Generic body callback wrapping:** `callback1(f)` where `f: F` (generic param) fails with "callback1 expects a function value". The checker's callback intrinsic handler doesn't recognize generic type params as function values, even when `require F is Fn1<A,R>` is present. This is a separate gap from the callable storage assessment (related to F2-D1 generic callable architecture).
 
-#### V1 go/no-go
+#### V1 validation
 
-**STOP per V1 gate.** C2 and C4 have blockers. C1 and C3 pass and provide new regression coverage.
-
-Passing tests confirmed with full boundary suite (10/10):
+Passing tests confirmed with full boundary suite (12/12):
 - `callable_callback_in_struct_field` ✓
 - `callable_callback_returned_from_generic` ✓
+- `callable_fn_ptr_in_array` ✓
 - `invoke_byvalue_noncopy_callback_return` ✓
 - `borrow_escape_spawn_rejected` ✓
 - `borrow_escape_scope_accepted` ✓
@@ -1298,3 +1296,18 @@ Passing tests confirmed with full boundary suite (10/10):
 - `borrowed_capture_interface_coercion_rejected` ✓
 - `scope_fn1_borrowed_capture_accepted` ✓
 - `scope_fn1_move_capture_accepted` ✓
+- `result_ok_move_conn_source_drop_regression` ✓
+
+Borrow checker suite: 90/90 (89 existing + 1 new HInvoke regression).
+
+#### Files changed in V1
+
+**Compiler (owner-approved C4 fix only):**
+- `lang/driftc/borrow_checker_pass.py` — stale kwarg fix in `_resolve_sig_for_call` HInvoke branch
+
+**Tests:**
+- `lang/tests/codegen/e2e/callable_callback_in_struct_field/` — new (C1, passing)
+- `lang/tests/codegen/e2e/callable_fn_ptr_in_struct_field/` — new (C2, skip=true, blocker)
+- `lang/tests/codegen/e2e/callable_callback_returned_from_generic/` — new (C3, passing, description corrected)
+- `lang/tests/codegen/e2e/callable_fn_ptr_in_array/` — new (C4, passing after fix)
+- `lang/tests/borrow_checker/test_invoke_optional_ref_and_lambda_escape.py` — added `test_invoke_sig_construction_uses_canonical_fnsignature_fields`

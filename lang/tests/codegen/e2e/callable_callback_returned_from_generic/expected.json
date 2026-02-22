@@ -1,4 +1,4 @@
 {
-  "description": "e2e: Callback1 returned from generic function with Fn1 bound",
+  "description": "e2e: Callback1 returned from non-generic function, invoked by caller. Generic body callback wrapping (callback1(f) where f: F) is a separate gap — not exercised here.",
   "exit_code": 0
 }
