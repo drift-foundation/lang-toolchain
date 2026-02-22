@@ -1393,7 +1393,7 @@ Boundary contract tests: 26/26 pass.
 | # | Test | Result | Expected Error | Detail |
 |---|------|--------|----------------|--------|
 | C9 | `callable_capturing_lambda_not_fn_ptr` | **PASS** | "capturing lambdas cannot be coerced to function pointers" | Capturing lambda assigned to `Fn(Int) nothrow -> Int` type — correctly rejected. |
-| C10 | `callable_borrowed_capture_callback_thread_rejected` | **PASS** | "closures with borrowed captures are non-escaping in v0" | Borrowed capture boxed into `Callback0<Void>` — correctly rejected. |
+| C10 | `callable_borrowed_capture_callback_boxing_rejected` | **PASS** | "closures with borrowed captures are non-escaping in v0" | Borrowed capture boxed into `Callback0<Void>` — correctly rejected. |
 | C11 | `callable_callback_arity_mismatch` | **PASS** | "callback1 expects a function with 1 argument(s)" | Zero-arg function passed to `callback1()` — correctly rejected with arity error. |
 
 #### Full validation matrix (V1+V2+V3)
@@ -1408,7 +1408,7 @@ Boundary contract tests: 26/26 pass.
 - C7 `callable_callback_in_hashmap_value` ✓
 - C8 `callable_composed_callbacks` ✓
 - C9 `callable_capturing_lambda_not_fn_ptr` ✓ (negative)
-- C10 `callable_borrowed_capture_callback_thread_rejected` ✓ (negative)
+- C10 `callable_borrowed_capture_callback_boxing_rejected` ✓ (negative)
 - C11 `callable_callback_arity_mismatch` ✓ (negative)
 
 **A5 boundary + high-sensitivity e2e (7/7):**
@@ -1427,7 +1427,7 @@ Boundary contract tests: 26/26 pass.
 
 **Tests (new, negative coverage only):**
 - `lang/tests/codegen/e2e/callable_capturing_lambda_not_fn_ptr/` — new (C9, negative)
-- `lang/tests/codegen/e2e/callable_borrowed_capture_callback_thread_rejected/` — new (C10, negative)
+- `lang/tests/codegen/e2e/callable_borrowed_capture_callback_boxing_rejected/` — new (C10, negative)
 - `lang/tests/codegen/e2e/callable_callback_arity_mismatch/` — new (C11, negative)
 
 **No compiler files changed in V3.**
