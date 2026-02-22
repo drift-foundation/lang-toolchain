@@ -1,0 +1,5 @@
+{
+  "description": "BLOCKED: function pointer type in struct field — checker reports 'field type mismatch (have fn, expected fn)'. Subsystem: type_checker.py struct field type unification.",
+  "skip": true,
+  "exit_code": 0
+}

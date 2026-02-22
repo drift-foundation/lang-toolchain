@@ -1,0 +1,16 @@
+module main
+
+import std.core as core;
+
+fn triple(x: Int) nothrow -> Int { return x * 3; }
+
+fn make_tripler() nothrow -> core.Callback1<Int, Int> {
+	return core.callback1(triple);
+}
+
+fn main() nothrow -> Int {
+	var cb = make_tripler();
+	val result = cb.call(5);
+	if result != 15 { return 1; }
+	return 0;
+}

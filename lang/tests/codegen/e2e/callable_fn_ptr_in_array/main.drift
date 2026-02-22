@@ -1,0 +1,16 @@
+module main
+
+fn add1(x: Int) nothrow -> Int { return x + 1; }
+fn add2(x: Int) nothrow -> Int { return x + 2; }
+fn add3(x: Int) nothrow -> Int { return x + 3; }
+
+fn main() nothrow -> Int {
+	val fns = [add1, add2, add3];
+	val r0 = fns[0](10);
+	val r1 = fns[1](10);
+	val r2 = fns[2](10);
+	if r0 != 11 { return 1; }
+	if r1 != 12 { return 2; }
+	if r2 != 13 { return 3; }
+	return 0;
+}

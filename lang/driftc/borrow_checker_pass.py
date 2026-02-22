@@ -245,10 +245,9 @@ class BorrowChecker:
 			return FnSignature(
 				name="__invoke__",
 				param_type_ids=param_types,
-				param_types=param_types,
-				user_ret_type=call_info.sig.user_ret_type,
-				can_throw_raw=call_info.sig.can_throw,
-				throws_raw=call_info.sig.can_throw,
+				return_type_id=call_info.sig.user_ret_type,
+				declared_can_throw=call_info.sig.can_throw,
+				declared_throws=call_info.sig.can_throw,
 			)
 		return None
 

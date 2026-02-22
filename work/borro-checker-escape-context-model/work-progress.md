@@ -967,3 +967,334 @@ Both branches (line 1866: empty scope_traits fallback; line 1868: type-param sco
 - Full trait method resolution suite: 28/28 passed
 - B4 regression tests: 5/5 passed
 - Boundary contract tests: 12/12 passed
+
+---
+
+### 16. Callable Coercion Assessment (analysis-only, no code)
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** Assessment — awaiting owner review/approval.
+**Constraint:** No compiler behavior changes in this step.
+
+---
+
+#### 16.1 Current callable surface
+
+Drift has four callable kinds with distinct representations:
+
+| Kind | TypeKind | Representation | Captures | Invocation |
+|------|----------|---------------|----------|------------|
+| **Function pointer** | `FUNCTION` | Bare code pointer (`i8*`) | None | Direct call |
+| **Callback0/1/2** | `INTERFACE` | Fat pair: `{data: i8*, vtable: %DriftCallbackVTable*}` | Move/copy/borrow via heap env | Vtable dispatch (`CallIface`) |
+| **Fn0/1/2 trait** | (generic bound) | Erased at monomorphization; bound to FUNCTION or INTERFACE | Depends on binding | Depends on binding |
+| **Lambda (HLambda)** | N/A (HIR only) | Never reaches MIR directly | All kinds | Lowered to fn ptr or Callback before MIR |
+
+**Coercion edges (currently working):**
+
+```
+                    captureless                  capturing (B4)
+Lambda ──────────────────────> fn ptr         Lambda ──────────> callback_N() ──> Callback
+                                  │                                                  │
+                                  │ callback_N()                                     │
+                                  ▼                                                  │
+                              Callback ─────────────────────────────────────────────▶│
+                                  │                                                  │
+                                  │ solver structural match (B1)                     │
+                                  ▼                                                  ▼
+                            Fn* satisfied ◄──────────────────────────────────── Fn* satisfied
+```
+
+**E2e-validated patterns (from existing test suite):**
+
+| Pattern | Test | Status |
+|---------|------|--------|
+| Captureless lambda → fn ptr | multiple | ✓ |
+| Copy-capture lambda → Callback | `callback_move_capture_struct_string_drop` | ✓ |
+| Borrowed-capture lambda → Callback | `scope_fn1_borrowed_capture_accepted` | ✓ |
+| Callback stored in local var, invoked later | `callback_move_capture_struct_string_drop` | ✓ |
+| Callback passed as function param | `concurrent.spawn(cb)` | ✓ |
+| Callback returned from function | `invoke_byvalue_noncopy_callback_return` | ✓ |
+| Callback stored in struct field | `runtime.TypeBox.dropper` (stdlib) | ✓ (stdlib) |
+| Callback in nested callback | `callback_move_capture_nested_callback` (e2e) | ✓ |
+| Fn-bounded generic + capturing lambda | `scope_fn1_borrowed_capture_accepted` | ✓ (B4) |
+| Callback satisfies Fn* bound | `test_callback1_satisfies_fn1_require` | ✓ (B1) |
+
+---
+
+#### 16.2 Gap analysis
+
+##### G1: Callable storage in user-defined containers
+
+**Current state:** `Callback` values can be stored in struct fields (proven by `TypeBox.dropper` in stdlib). However, there are no user-facing e2e tests for this pattern, and no tests for storing callables in `Array<Callback0<T>>` or `HashMap<K, Callback1<A,R>>`.
+
+**Subsystem analysis:**
+- **Checker:** `Callback0<R>` is `TypeKind.INTERFACE`. Interface types are valid struct field types. Array generic parameter instantiation should work since `Array<T>` has no trait bound on `T` that would exclude interfaces. Needs verification.
+- **Stage2:** `ConstructStruct` + `GetField` handle interface-typed fields via `%DriftIface` LLVM type (already works for `TypeBox`).
+- **MIR/LLVM:** `%DriftIface` is a fixed-size struct (`{[4 x i64], i8*}` — 4 inline words + vtable ptr). It can be stored in any aggregate. Copy/move semantics follow interface conventions.
+
+**Gap severity:** LOW — likely already works; needs regression coverage only.
+
+##### G2: Callable storage in generic containers (Array, HashMap)
+
+**Current state:** No test stores a `Callback` in `Array` or `HashMap`. The type system should allow it (interfaces are valid generic args), but the container's `Copy`/`Destructible` trait requirements may interact.
+
+**Subsystem analysis:**
+- **Checker:** `Array<Callback0<Int>>` instantiation requires `T` parameter validation. `Array` doesn't require `Copy` for `T` (uses move semantics). Should pass.
+- **Stage2:** Array element storage uses generic `StoreField`/`LoadField` — should handle `%DriftIface`.
+- **MIR/LLVM:** Array elements are contiguous memory. `%DriftIface` has a known size. `alloc<Callback0<Int>>` should produce correct size.
+- **Risk:** `Destructible` impl for interfaces — does `drop_value<Callback0<Int>>` work? The interface value owns heap-allocated env data; dropping it must free the env. This is the main unknown.
+
+**Gap severity:** MEDIUM — type instantiation likely works; drop/cleanup needs verification.
+
+##### G3: Function pointer storage in containers/fields
+
+**Current state:** Function pointers are `TypeKind.FUNCTION`. Storing `Fn(Int) -> Int` in a struct field or `Array<Fn(Int) -> Int>` is untested.
+
+**Subsystem analysis:**
+- **Checker:** Function types can appear as struct field types (no prohibition). Generic instantiation with FUNCTION-kinded types may have edge cases.
+- **LLVM:** Function pointers are `i8*` — trivially storable.
+- **Risk:** Low. Function pointers are scalar values with no cleanup.
+
+**Gap severity:** LOW — needs regression coverage.
+
+##### G4: Fn-trait-bounded generic return
+
+**Current state:** A function can return `Callback0<R>` (proven: `invoke_byvalue_noncopy_callback_return`). But returning a trait-bounded `F is Fn1<A,R>` from a generic function is untested and likely doesn't work — the generic return would need to be monomorphized to a concrete type (FUNCTION or Callback), and the caller would need to know which.
+
+**Subsystem analysis:**
+- **Checker:** Return type is the generic `F`. Monomorphization binds `F` to FUNCTION or INTERFACE. Return value is typed accordingly.
+- **Stage2:** Return lowering handles both FUNCTION and INTERFACE typed values. Should work if monomorphization is correct.
+- **Risk:** This works implicitly through monomorphization. The caller knows `F = Callback1<A,R>` or `F = Fn(A) -> R` at the call site.
+
+**Gap severity:** LOW — likely works; needs targeted test.
+
+##### G5: Higher-order callable composition
+
+**Current state:** No test composes callables: e.g., `fn compose<F,G>(f: F, g: G) -> Callback1<A,C>` that chains `f` and `g`. This requires creating a new Callback from a lambda that captures other Callbacks.
+
+**Subsystem analysis:**
+- **Checker:** Lambda captures Callback values by move. The Callback has INTERFACE kind. `captures(move f)` where `f: Callback1<A,B>` should work (B4 handles borrowed captures; move captures were B2).
+- **Stage2:** Callback env stores the captured Callback value. The hidden function invokes it via `CallIface`.
+- **Risk:** Nested `CallIface` dispatch + env struct containing another `%DriftIface` value. Memory layout and drop ordering may need attention.
+
+**Gap severity:** MEDIUM — needs investigation of env struct layout with interface-typed captures.
+
+##### G6: Throwing callable ergonomics
+
+**Current state:** `callback0/1/2` intrinsics require `Fn0/1/2` (nothrow) lambdas. Throwing lambdas require `callback_throw0/1/2`. The user must choose the right wrapper based on whether the lambda throws. There is no automatic selection.
+
+**Subsystem analysis:**
+- **Checker:** The `callback0` handler (`call_resolver.py:4287-4301`) checks `Fn0` satisfaction. A throwing lambda satisfies `FnThrow0` but not `Fn0`. The error message is: "requires a nothrow function" (tested in `test_callback_dynamic_dispatch.py:220`).
+- **Auto-selection:** The checker could auto-select `callback_throw_N` when the lambda throws, but this changes the return type from `Callback0<R>` to `CallbackThrow0<R>`, which affects type unification at the call site.
+
+**Gap severity:** LOW (ergonomic, not correctness). Out of scope for this assessment.
+
+---
+
+#### 16.3 Per-subsystem change map
+
+##### Checker (`call_resolver.py`, `type_checker.py`)
+
+| Change | Anchor | Gap | Priority |
+|--------|--------|-----|----------|
+| Verify `Array<Callback0<Int>>` type instantiation | `type_checker.py` generic inst | G2 | HIGH |
+| Verify `Destructible` for interface types (drop semantics) | `type_checker.py` drop_value path | G2 | HIGH |
+| Verify struct field with FUNCTION-kinded type | `type_checker.py` struct field check | G3 | LOW |
+| No changes expected for G1 (already works) | — | G1 | — |
+
+##### Stage2 (`hir_to_mir.py`)
+
+| Change | Anchor | Gap | Priority |
+|--------|--------|-----|----------|
+| Verify `ConstructStruct` with INTERFACE-typed field | `hir_to_mir.py:ConstructStruct` | G1 | LOW (verify) |
+| Verify Array element store/load for INTERFACE-typed elements | `hir_to_mir.py` array lowering | G2 | MEDIUM (verify) |
+| Verify env struct with INTERFACE-typed capture (Callback in lambda capture) | `hir_to_mir.py:_lower_lambda_callback` env construction | G5 | MEDIUM |
+
+##### MIR/LLVM (`llvm_codegen.py`)
+
+| Change | Anchor | Gap | Priority |
+|--------|--------|-----|----------|
+| Verify `%DriftIface` in struct field GEP/load/store | `llvm_codegen.py:ConstructStruct` | G1 | LOW (verify) |
+| Verify `alloc<T>` size for `T = Callback0<Int>` (= `%DriftIface` size) | `llvm_codegen.py` alloc lowering | G2 | MEDIUM |
+| Verify `drop_value<Callback0<Int>>` frees env correctly | `llvm_codegen.py` type-directed destroy path | G2 | HIGH |
+| No changes expected for G3 (fn ptrs are `i8*`, trivially storable) | — | G3 | — |
+
+---
+
+#### 16.4 Regression matrix
+
+##### Tier 1: Verify-only (expected to work, need coverage)
+
+| # | Test | Shape | Expected | Gap |
+|---|------|-------|----------|-----|
+| C1 | `test_callback_in_struct_field_store_invoke` | `struct S { cb: Callback0<Int> }; val s = S(cb = callback0(...)); s.cb.call()` | Compiles + runs | G1 |
+| C2 | `test_fn_ptr_in_struct_field` | `struct S { f: Fn(Int) -> Int }; val s = S(f = add1); s.f(42)` | Compiles + runs | G3 |
+| C3 | `test_callback_returned_from_generic_fn` | `fn make<F,R>(f: F) -> Callback0<R> require F is Fn0<R> { return callback0(f); }` | Compiles + runs | G4 |
+| C4 | `test_fn_ptr_in_array` | `var arr: Array<Fn(Int) -> Int> = [add1, add2]; arr[0](1)` | Compiles + runs | G3 |
+
+##### Tier 2: Investigate (may need fixes)
+
+| # | Test | Shape | Expected | Gap |
+|---|------|-------|----------|-----|
+| C5 | `test_callback_in_array` | `var arr: Array<Callback0<Int>> = [...]; arr[0].call()` | Compiles + runs | G2 |
+| C6 | `test_callback_drop_in_array` | Array of callbacks goes out of scope → env freed | No leak | G2 |
+| C7 | `test_callback_in_hashmap_value` | `HashMap<String, Callback0<Int>>` → store + retrieve + invoke | Compiles + runs | G2 |
+| C8 | `test_composed_callbacks` | Lambda captures Callback by move, wraps in new Callback | Compiles + runs | G5 |
+
+##### Tier 3: Negative (must remain rejected)
+
+| # | Test | Shape | Expected | Gap |
+|---|------|-------|----------|-----|
+| C9 | `test_capturing_lambda_not_fn_ptr` | `var f: Fn(Int) -> Int = |x| captures(y) => x + y` | Error: "capturing lambdas cannot be coerced" | Existing |
+| C10 | `test_borrowed_capture_callback_thread_rejected` | `spawn(callback0(|...| captures(&x) => ...))` | E_ESCAPE_THREAD | Existing |
+| C11 | `test_callback_arity_mismatch` | `callback1(zero_arg_fn)` | Arity error | Existing |
+
+---
+
+#### 16.5 Rollout slices
+
+##### Slice V1: Verify-only coverage (no code changes expected)
+
+**Goal:** Add Tier 1 regression tests (C1–C4). If any fail, document the blocker and stop.
+
+**Files touched:** `lang/tests/codegen/e2e/` (new test directories only).
+
+**Go/no-go gate:**
+- All C1–C4 compile and run correctly → GO to V2.
+- Any failure → document blocker with subsystem + minimal repro, stop.
+
+**Estimated blast radius:** None (tests only).
+
+##### Slice V2: Container storage validation (may need fixes)
+
+**Goal:** Add Tier 2 tests (C5–C8). Investigate and fix any blockers.
+
+**Precondition:** V1 green.
+
+**Expected investigation areas:**
+- C5/C6: `Destructible` impl for `Callback0<Int>`. If `drop_value<Callback0<Int>>` doesn't work, fix in the type-directed destroy path (drop lowering), not in CallIface.
+- C7: HashMap requires `Hash` + `Equatable` on keys (String satisfies). Value type (`Callback0<Int>`) only needs `Destructible`. Same drop question as C5/C6.
+- C8: Env struct layout when capturing another `%DriftIface` value. Verify GEP offsets are correct for nested interface values.
+
+**Files potentially touched:**
+- `lang/codegen/llvm/llvm_codegen.py` — type-directed destroy / drop lowering for interface types (if missing)
+- `lang/driftc/type_checker.py` — `Destructible` proof for interfaces (if missing)
+- `lang/tests/codegen/e2e/` — new test directories
+
+**Boundary guardrail requirement (mandatory for V2):**
+- Every new supported shape requires one positive regression (compiles + runs correctly).
+- Every unsupported/invalid shape requires one negative regression (rejected with expected diagnostic).
+- If any behavior boundary changes, update stale contract comments/tests/messages.
+
+**Go/no-go gate:**
+- All C5–C8 pass (with any required fixes) → GO to V3.
+- Stop on first LANGUAGE_BUG outside callable-storage scope (document with minimal repro + subsystem).
+- Otherwise continue if change remains localized to declared files and passes targeted regression matrix.
+
+**Estimated blast radius:** Low–Medium (targeted fixes to drop lowering if needed).
+
+##### Slice V3: Negative coverage + final validation
+
+**Goal:** Add Tier 3 negative tests (C9–C11) — verify existing rejections are preserved. Run full regression suite.
+
+**Precondition:** V2 green.
+
+**Files touched:** `lang/tests/codegen/e2e/` or `lang/tests/driver/` (negative tests only).
+
+**Go/no-go gate:**
+- All C9–C11 correctly reject with expected diagnostics.
+- Full `just test-e2e` + `just lang-codegen-test` green.
+- No regressions in B4/A5/boundary suites.
+
+**Estimated blast radius:** None (tests only).
+
+---
+
+#### 16.6 Risk assessment
+
+| Risk | Likelihood | Impact | Slice | Mitigation |
+|------|------------|--------|-------|------------|
+| `drop_value<Callback0<Int>>` doesn't free env | Medium | HIGH (memory leak) | V2 | Verify type-directed destroy path (drop lowering) handles interface-typed values. Fix in drop lowering, NOT in `_lower_call_iface` — CallIface must not own destruction semantics. |
+| Array element size wrong for `%DriftIface` | Low | HIGH (memory corruption) | V2 | `%DriftIface` is fixed-size. Verify `sizeof` in alloc path. |
+| Callback in HashMap triggers Hash/Equatable constraint on value type | Low | LOW (type error, not unsound) | V2 | HashMap only requires Hash+Equatable on K, not V. Verify. |
+| Nested `%DriftIface` in env struct misaligns GEP | Low | HIGH (memory corruption) | V2 | Verify with C8 test. Fix env struct layout if needed. |
+| V1 tests reveal unexpected checker rejection | Low | MEDIUM (scope expansion) | V1 | Document blocker, stop. No speculative fixes. |
+
+---
+
+#### 16.7 Out of scope (explicit)
+
+1. **New TypeKind (CLOSURE)** — Option C from F2-D1 design. Deferred to future architecture revision.
+2. **Throwing callable auto-selection** — Ergonomic improvement (G6). Separate proposal.
+3. **Fn-trait user annotation syntax** — Language surface change. Separate proposal.
+4. **Devirtualization of Callback dispatch** — Optimization. Separate effort.
+5. **Stack-allocated callback env for SCOPED params** — Performance optimization. Separate effort.
+
+---
+
+#### 16.8 Verification: no code changes in assessment step
+
+Confirmed: section 16.1–16.7 is assessment-only. No compiler files were edited.
+
+---
+
+### 17. V1: Verify-Only Callable Storage Tests
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** STOP — 2 of 4 tests blocked by pre-existing LANGUAGE_BUGs.
+
+#### V1 results
+
+| # | Test | Result | Detail |
+|---|------|--------|--------|
+| C1 | `callable_callback_in_struct_field` | **PASS** | Callback1 in struct field, invoked via field access. End-to-end. |
+| C2 | `callable_fn_ptr_in_struct_field` | **BLOCKED** | Checker: "struct field 'apply' type mismatch (have fn, expected fn)". Function pointer type unification fails in struct field position. |
+| C3 | `callable_callback_returned_from_generic` | **PASS** | Callback1 returned from function, invoked by caller. End-to-end. (Generic body `callback1(f)` where `f: F` is a separate gap — checker doesn't see generic `F` as function value.) |
+| C4 | `callable_fn_ptr_in_array` | **BLOCKED** | Borrow checker crash: `FnSignature.__init__() got unexpected keyword argument 'user_ret_type'` at `borrow_checker_pass.py:245`. Indirect call through array-indexed function pointer. |
+
+#### Blockers documented
+
+**LANGUAGE_BUG C2: function pointer type in struct field**
+- **Subsystem:** `type_checker.py` — struct field type unification
+- **Minimal repro:**
+  ```drift
+  struct MathOp { apply: Fn(Int, Int) -> Int }
+  fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
+  fn main() nothrow -> Int { val op = MathOp(apply = add); return op.apply(3, 4); }
+  ```
+- **Error:** `struct 'MathOp' field 'apply' type mismatch (have fn, expected fn)`
+- **Root cause (suspected):** Checker creates two distinct FUNCTION TypeIds for the same `Fn(Int,Int)->Int` signature — one from the struct field declaration, one from the function reference. Structural equality comparison fails.
+- **E2e test:** `callable_fn_ptr_in_struct_field/` — skip=true, documents blocker.
+
+**LANGUAGE_BUG C4: borrow checker crash on indirect call through array index**
+- **Subsystem:** `borrow_checker_pass.py:245` — `_resolve_sig_for_call`
+- **Minimal repro:**
+  ```drift
+  fn add1(x: Int) nothrow -> Int { return x + 1; }
+  fn main() nothrow -> Int { val fns = [add1]; return fns[0](10); }
+  ```
+- **Error:** `TypeError: FnSignature.__init__() got an unexpected keyword argument 'user_ret_type'`
+- **Root cause (suspected):** `_resolve_sig_for_call` constructs a `FnSignature` with `user_ret_type=` kwarg that was removed or renamed during A5 Phase 5 cleanup (param_nonretaining removal). The indirect-call path was not updated.
+- **E2e test:** `callable_fn_ptr_in_array/` — skip=true, documents blocker.
+
+#### Additional gap discovered
+
+**Generic body callback wrapping:** `callback1(f)` where `f: F` (generic param) fails with "callback1 expects a function value". The checker's callback intrinsic handler doesn't recognize generic type params as function values, even when `require F is Fn1<A,R>` is present. This is a separate gap from the callable storage assessment (related to F2-D1 generic callable architecture).
+
+#### V1 go/no-go
+
+**STOP per V1 gate.** C2 and C4 have blockers. C1 and C3 pass and provide new regression coverage.
+
+Passing tests confirmed with full boundary suite (10/10):
+- `callable_callback_in_struct_field` ✓
+- `callable_callback_returned_from_generic` ✓
+- `invoke_byvalue_noncopy_callback_return` ✓
+- `borrow_escape_spawn_rejected` ✓
+- `borrow_escape_scope_accepted` ✓
+- `borrow_escape_thread_accepted` ✓
+- `implicit_callback_borrowed_capture_rejected` ✓
+- `borrowed_capture_interface_coercion_rejected` ✓
+- `scope_fn1_borrowed_capture_accepted` ✓
+- `scope_fn1_move_capture_accepted` ✓
