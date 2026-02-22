@@ -107,10 +107,6 @@ def test_callback1_satisfies_fn1_require(tmp_path: Path) -> None:
 
 	B1 regression: the trait solver must structurally recognise that
 	Callback1<A,R> satisfies the Fn1<A,R> require bound.
-
-	Note: "no matching method 'call' for receiver F" from generic-template
-	body checking is a pre-existing limitation (also present in test 1)
-	and is NOT a B1 regression.
 	"""
 	diags = _compile(tmp_path, """\
 module m
@@ -123,18 +119,14 @@ fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
 
 fn main() nothrow -> Int {
 	val cb: core.Callback1<Int, Void> = core.callback1(|_a: Int| nothrow => {});
-	apply(cb);
+	apply(move cb);
 	return 0;
 }
 """)
 	requirement_errors = [d for d in diags if d.severity == "error" and "E_REQUIREMENT_NOT_SATISFIED" in (d.code or "")]
 	assert requirement_errors == [], f"Callback1 must satisfy Fn1 require bound: {requirement_errors}"
-	# Guard: only known pre-existing errors may be present (generic-template
-	# body checking emits "no matching method 'call'" for unresolved type params).
 	errors = [d for d in diags if d.severity == "error"]
-	unexpected = [d for d in errors if "no matching method" not in (d.message or "")]
-	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
-	assert len(errors) <= 1, f"Error count exceeded known pre-existing (1): {[(d.code, d.message) for d in errors]}"
+	assert errors == [], f"Unexpected errors: {[(d.code, d.message) for d in errors]}"
 
 
 def test_copy_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) -> None:
@@ -164,13 +156,8 @@ fn main() nothrow -> Int {
 	assert capture_errors == [], f"Copy-capture lambda must not be rejected: {capture_errors}"
 	requirement_errors = [d for d in diags if d.severity == "error" and "E_REQUIREMENT_NOT_SATISFIED" in (d.code or "")]
 	assert requirement_errors == [], f"Callback must satisfy Fn1 require: {requirement_errors}"
-	# Guard: only known pre-existing errors may be present. Generic-template body
-	# checking emits "no matching method 'call'" and cascade "type mismatch".
-	_KNOWN_PREEXISTING = {"no matching method", "type mismatch"}
 	errors = [d for d in diags if d.severity == "error"]
-	unexpected = [d for d in errors if not any(frag in (d.message or "") for frag in _KNOWN_PREEXISTING)]
-	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
-	assert len(errors) <= 2, f"Error count exceeded known pre-existing (2): {[(d.code, d.message) for d in errors]}"
+	assert errors == [], f"Unexpected errors: {[(d.code, d.message) for d in errors]}"
 
 
 def test_borrowed_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) -> None:
@@ -197,7 +184,7 @@ fn main() nothrow -> Int {
 """)
 	# B4 targets: no "closures with borrowed captures" rejection;
 	# no "capturing lambdas" rejection; no E_REQUIREMENT_NOT_SATISFIED;
-	# no AssertionError from MIR lowering.
+	# no AssertionError from MIR lowering; zero errors.
 	borrowed_errors = [d for d in diags if "closures with borrowed captures" in (d.message or "")]
 	assert borrowed_errors == [], f"Borrowed-capture lambda must not be rejected: {borrowed_errors}"
 	capture_errors = [d for d in diags if d.severity == "error" and "capturing lambdas" in (d.message or "")]
@@ -206,9 +193,5 @@ fn main() nothrow -> Int {
 	assert requirement_errors == [], f"Callback must satisfy Fn1 require: {requirement_errors}"
 	assertion_errors = [d for d in diags if "borrowed capture in owned callback env" in (d.message or "")]
 	assert assertion_errors == [], f"MIR lowering must not reject borrowed callback env: {assertion_errors}"
-	# Guard: only known pre-existing errors may be present.
-	_KNOWN_PREEXISTING = {"no matching method", "type mismatch"}
 	errors = [d for d in diags if d.severity == "error"]
-	unexpected = [d for d in errors if not any(frag in (d.message or "") for frag in _KNOWN_PREEXISTING)]
-	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
-	assert len(errors) <= 2, f"Error count exceeded known pre-existing (2): {[(d.code, d.message) for d in errors]}"
+	assert errors == [], f"Unexpected errors: {[(d.code, d.message) for d in errors]}"

@@ -1528,7 +1528,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} expects {len(param_types)} argument(s)", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
 		for idx, (arg_ty, param_ty) in enumerate(zip(arg_types, param_types)):
-			if arg_ty is not None and arg_ty != param_ty:
+			if arg_ty is not None and arg_ty != param_ty and ctx.type_table.get(param_ty).kind is not TypeKind.UNKNOWN:
 				diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} argument {idx + 1} type mismatch", severity="error", span=getattr(expr.args[idx], "loc", getattr(expr, "loc", Span()))))
 				return MethodCallResult(ctx.unknown_ty, None)
 		info = _call_info_target(param_types, ret_ty, not bool(method_schema.declared_nothrow), CallTarget.indirect(getattr(expr, "node_id", None)))
@@ -1861,8 +1861,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			saw_method_in_scope = False
 			matching_traits: list[TraitKey] = []
 			scope_traits = traits_in_scope()
-			if instantiation_mode and not scope_traits and trait_type_args_by_key:
+			if not scope_traits and trait_type_args_by_key and (instantiation_mode or receiver_is_type_param):
 				scope_traits = list(trait_type_args_by_key.keys())
+			elif receiver_is_type_param and not instantiation_mode and trait_type_args_by_key:
+				_existing_keys = {(getattr(t, "module", None), getattr(t, "name", None)) for t in scope_traits}
+				for _rk in trait_type_args_by_key.keys():
+					if (getattr(_rk, "module", None), getattr(_rk, "name", None)) not in _existing_keys:
+						scope_traits.append(_rk)
 			for trait_key in scope_traits:
 				if ctx.trait_index.is_missing(trait_key):
 					raise ResolutionError(f"missing trait metadata for '{_trait_label(trait_key)}'", span=getattr(expr, "loc", Span()))

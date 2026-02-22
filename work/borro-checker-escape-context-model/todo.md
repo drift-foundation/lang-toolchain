@@ -8,290 +8,87 @@ Status: A5 complete; this file now serves as active post-A5 guidance plus archiv
 
 ## Active Guidance (Post-A5)
 
-Current priority:
-- **A1**: complete. `call_contract.py` is the single validation seam (Slices 1-4 done).
-- **F1**: complete (Fn-bounded borrowed-capture gate relaxation landed and narrowed with negative regression).
-- **F2-D1 Option B**: in progress; B1/B2 landed with regressions.
-- **Next (Klaudia):** execute final closeout slice for Option B focused on borrowed-capture callback env support and unskip closure criteria.
+Status summary:
+- **A1** complete.
+- **F1** complete.
+- **F2-D1 Option B** complete.
 
-### Objective framing (must stay explicit before choosing A/B/C)
+This active section now tracks current execution scope and handoff guidance.
+Detailed completed execution steps are preserved in the archived section below.
 
-Why this section exists:
-- We are selecting architecture for a long-lived callable model, not just patching one failing `conc.scope` case.
-- Option selection (A/B/C) must be judged against product-level callable requirements, not implementation convenience.
+### Active Phase: B4 Regression Tightening
 
-User-facing objective (north star):
-1. Provide a **uniform callable abstraction** for APIs that accept callables by signature (`FnN<Args..., R>` style).
-2. Callers can pass **functions, functor-like values, and lambdas** (capturing and non-capturing).
-3. APIs can **store many callables** in containers and invoke later (subscribe/publish, event dispatch, deferred work).
-4. Works across modules with stable type/behavior guarantees; implementer need not know concrete callable kind.
-5. Preserve safety/performance:
-   - borrow checker enforces escape/lifetime boundaries,
-   - stage2/MIR/LLVM can lower and execute correctly,
-   - non-capturing fast paths remain efficient.
+Objective:
+1. Close the remaining temporary allowance in the B4 acceptance regression.
+2. Preserve existing B4 behavior guarantees while tightening diagnostic signal.
 
-Design selection criteria (apply to A/B/C):
-1. Compatibility with heterogeneous callable storage + delayed invocation.
-2. Cross-module generic/polymorphic usability with stable call semantics.
-3. Performance profile (dispatch cost, allocation pressure, inlining opportunities).
-4. Boundary complexity/risk across checker -> stage2 -> MIR validate -> LLVM.
-5. Migration path from current implementation without semantic regressions.
+Scope (Klaudia):
+1. Work on:
+   - `lang/tests/driver/test_fn1_scope_borrowed_capture.py`
+   - Any directly required checker/stage2 files if needed to remove the unrelated diagnostics.
+2. Do not change archived A5 sections in this file.
+3. Do not add stdlib/user-code workaround changes.
 
-Compatibility guard (current understanding):
-1. Option A (closure types): compatible; strongest long-term flexibility/performance.
-2. Option B (`Fn1` for `Callback1` path): compatible as dynamic bridge; generally higher dispatch/indirection cost.
-3. Option C (fat function pointer): compatible only if modeled as full callable object (env + invoke + lifecycle), not raw fn ptr semantics.
+Execution requirements:
+1. Regression-first:
+   - keep current test shape as baseline,
+   - implement smallest compiler-side change required,
+   - tighten assertions only when signal is truly clean.
+2. Boundary guardrails remain strict:
+   - positive + negative coverage where boundary behavior changes,
+   - update stale comments/messages/tests if behavior changes,
+   - no user-facing diagnostics starting with `internal:`.
+3. Stop-and-report on first out-of-scope LANGUAGE_BUG with minimal repro.
 
-Decision (MVP):
-1. **Pin Option B** as the selected implementation path for the next phase.
-2. Rationale:
-   - best UX/implementation tradeoff now,
-   - unblocks uniform callable behavior for functions/functor-like values/lambdas through one polymorphic path,
-   - avoids high-risk monomorphization/ABI expansion in this cycle.
-3. Performance expectation:
-   - some constant-factor overhead from uniform indirection,
-   - acceptable for MVP; revisit A-style specialization later if profiling justifies it.
+Done-when checklist:
+- [ ] `test_borrowed_capture_lambda_to_fn_bounded_generic_accepted` no longer relies on the temporary known-preexisting diagnostic allowance.
+- [ ] Test still asserts B4 invariants:
+  - no borrowed-capture rejection,
+  - no `E_REQUIREMENT_NOT_SATISFIED`,
+  - no MIR callback-env assertion path.
+- [ ] Required touched regressions pass (recorded in `work-progress.md`).
+- [ ] Any new blocker is documented with repro + suspected subsystem.
 
-A1 execution spec (expected compiler infra changes):
-1. Build an explicit inventory table of duplicated call-shape checks, with current owner + target owner:
-   - `lang/driftc/checker/__init__.py`
-   - `lang/driftc/stage2/hir_to_mir.py`
-   - `lang/driftc/driftc.py` boundary wrappers
-   - `lang/driftc/call_contract.py` (target single seam)
-2. Move validation logic into `lang/driftc/call_contract.py` in slices. First slice must include:
-   - positional vs named argument layout checks,
-   - missing/extra arg checks,
-   - duplicate keyword checks,
-   - method receiver-offset consistency checks.
-3. Enforce ownership split after each slice:
-   - `call_contract.py`: decision + normalized failure payload (no user-facing formatting).
-   - checker/stage2: call contract API only, no ad-hoc duplicate predicates.
-   - `driftc.py`: phase-attributed diagnostic wrapping only.
-4. Delete or route old duplicate checks immediately after each migrated slice (no dual-path drift).
-5. Keep all diagnostics user-facing (no `internal:` leak), with stable code + span.
-
-Carry-forward constraints:
-- Keep Boundary Contract Guardrails strict (positive + negative coverage for boundary-shape behavior changes).
-- Do not re-open completed A5 phases unless a new regression requires it.
-
-Exhaustive test coverage required for A1 sign-off:
-1. Contract unit/driver matrix (must include positive + negative for each shape):
-   - exact positional arity pass/fail,
-   - keyword-only pass/fail,
-   - mixed positional+keyword pass/fail,
-   - duplicate keyword fail,
-   - unknown keyword fail,
-   - method receiver slot alignment pass/fail,
-   - generic-call repaired signature pass/fail where applicable.
-2. Boundary diagnostics assertions (all required):
-   - code is stable/non-empty,
-   - phase attribution is correct (`typecheck`, `mir`, `codegen` as applicable),
-   - span file/line/column present when source exists,
-   - no message starts with `internal:`.
-3. High-sensitivity non-regression subset (must stay green):
-   - `lang/tests/driver/test_callinfo_param_layout_contract.py`
-   - `lang/tests/driver/test_boundary_matrix_result_variant_contract.py`
-   - `lang/tests/driver/test_struct_ref_field_boundary_contract.py`
-   - `lang/tests/stage2/test_hir_to_mir_match_requires_binder_indices.py`
-   - e2e:
-     - `result_ok_move_conn_source_drop_regression`
-     - `struct_ref_field_result_ok_move_drop_once`
-4. Full gate before handoff:
-   - owner-run full gate (outside Klaudia scope).
-
-Deliverables from Klaudia for each slice:
-1. Inventory diff (what moved, what removed, what remains).
-2. Regression list added/updated.
-3. Any diagnostic wording/code changes called out explicitly.
-4. Short risk note if remaining duplicate checks still exist (with follow-up owner).
-
-Immediate A1 follow-ups from review (completed):
-1. **Typed constructor kwargs regression in stage2 (high):**
-   - `lang/driftc/stage2/hir_to_mir.py::_lower_constructor_call` currently calls `call_kwargs_issues("a constructor", kw_pairs, ...)`, which rejects kwargs unconditionally.
-   - This conflicts with MVP behavior (constructor kwargs are allowed) and existing diagnostic contract ("keyword arguments are only supported for constructors in MVP").
-   - Status: fixed. Constructor kwargs are validated via `ctor_call_issues(...)`, not generic kwargs rejection.
-
-2. **A1 progress traceability gap (medium):**
-   - `work-progress.md` currently reflects A5 completion but not A1 slice inventory/migration checkpoints.
-   - Status: fixed. A1 section added to `work-progress.md` with:
-     - inventory table (source owner -> `call_contract.py`),
-     - migrated slices with commit references,
-     - targeted validation matrix.
-
-3. **Regression additions required (A1 constructor path):**
-   - Status: fixed.
-   - Added positive regression for raw kwargs input through typed constructor lowering.
-   - Added negative regression for mixed positional+named args with clear non-internal contract diagnostic.
-
-### A1 Slice 3 — completed
-
-Goal: eliminate remaining duplicated call-shape logic outside `call_contract.py` for normal/method call argument layout checks.
-
-Required migration targets:
-1. Normal call argument layout checks still duplicated in checker/stage2:
-   - positional vs named mapping consistency,
-   - unknown keyword handling,
-   - duplicate keyword handling.
-2. Method call receiver-offset layout checks duplicated outside seam:
-   - parameter index/receiver offset consistency,
-   - method-call named argument mapping with receiver slot offset.
-3. Keep type-compatibility checks in checker (`check_call_signature`) untouched unless explicitly moved as a separate slice.
-
-Implementation rules for Slice 3:
-1. Add/extend `call_contract.py` APIs for the migrated layout checks (decision-only; no user-facing formatting).
-2. Replace old duplicate checks in checker/stage2 with calls to these APIs.
-3. Remove old duplicate branches immediately after migration (no dual-path).
-4. Route diagnostics through existing boundary wrappers with correct phase attribution.
-
-Slice 3 regression requirements (mandatory):
-1. Positive:
-   - valid mixed positional+named normal call shape compiles,
-   - valid method call shape with receiver offset compiles.
-2. Negative:
-   - duplicate keyword rejected,
-   - unknown keyword rejected,
-   - receiver offset/param-layout mismatch rejected with clear non-internal diagnostic.
-3. Diagnostic assertions:
-   - diagnostic code present and stable,
-   - phase is correct,
-   - span file/line/column present when source exists,
-   - message does not start with `internal:`.
-
-Slice 3 done-when checklist:
-- [x] Migrated checks are centralized in `call_contract.py` and removed from ad-hoc call sites.
-- [x] Positive + negative regressions for all migrated shapes are present.
-- [x] Existing high-sensitivity subset remains green.
-- [x] `work-progress.md` includes Slice 3 inventory/migration/test matrix with commit refs.
-
-Slice 3 validation commands (Klaudia-owned):
-```
+Validation subset (Klaudia-owned):
+```bash
 PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-    lang/tests/driver/test_callinfo_param_layout_contract.py \
-    lang/tests/driver/test_intrinsic_call_contract.py \
-    lang/tests/driver/test_ctor_call_contract.py \
-    lang/tests/driver/test_array_method_contract.py \
-    -q
+  lang/tests/driver/test_fn1_scope_borrowed_capture.py -q
 
 PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-    lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
-    lang/tests/driver/test_struct_ref_field_boundary_contract.py \
-    -q
+  lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
+  lang/tests/driver/test_struct_ref_field_boundary_contract.py -q
 ```
 
-### A1 Slice 4 — finalization and anti-regression guard
+### Open Follow-Ups (active)
 
-Goal: close A1 by preventing call-shape validation drift and documenting final ownership boundaries.
+1. **Tighten temporary B4 regression allowance (required)**
+   - File: `lang/tests/driver/test_fn1_scope_borrowed_capture.py`
+   - Test: `test_borrowed_capture_lambda_to_fn_bounded_generic_accepted`
+   - Current state: allows a bounded set of unrelated pre-existing diagnostics.
+   - Required when cleanup window opens:
+     1. eliminate the underlying unrelated diagnostics,
+     2. tighten assertion policy to zero unexpected errors on the exercised path,
+     3. retain explicit B4 contract assertions:
+        - no borrowed-capture rejection,
+        - no `E_REQUIREMENT_NOT_SATISFIED`,
+        - no MIR callback-env assertion path.
 
-Required scope:
-1. Residual audit:
-   - identify remaining ad-hoc call-shape checks outside `call_contract.py` in:
-     - `lang/driftc/checker/`
-     - `lang/driftc/stage2/hir_to_mir.py`
-     - `lang/driftc/driftc.py`
-   - classify each as:
-     - should migrate to `call_contract.py`, or
-     - intentionally out-of-scope (with rationale).
-2. Add anti-regression guard:
-   - one driver/grep-style regression that fails if new duplicate call-shape validation snippets are introduced outside approved seam paths.
-3. Final ownership note:
-   - update `work-progress.md` with explicit “A1 final ownership map” and any accepted out-of-scope exceptions.
+2. **Boundary guardrail continuity (always-on)**
+   - Any boundary-shape change in this track must include:
+     1. positive end-to-end regression,
+     2. negative regression for rejected shape,
+     3. alignment updates for stale comments/tests/messages.
+   - No user-facing diagnostics starting with `internal:`.
 
-Slice 4 done-when checklist:
-- [x] Residual audit completed with explicit migration/out-of-scope decisions.
-- [x] Any remaining in-scope duplicate checks migrated or removed.
-- [x] Anti-regression guard test added and green.
-- [x] High-sensitivity subset remains green.
-- [x] `work-progress.md` updated with final A1 ownership map and closure summary.
+### Handoff Rules (Klaudia)
 
-Slice 4 validation commands (Klaudia-owned):
-```
-PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-    lang/tests/driver/test_callinfo_param_layout_contract.py \
-    lang/tests/driver/test_intrinsic_call_contract.py \
-    lang/tests/driver/test_ctor_call_contract.py \
-    lang/tests/driver/test_array_method_contract.py \
-    -q
-
-PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-    lang/tests/driver/test_boundary_matrix_result_variant_contract.py \
-    lang/tests/driver/test_struct_ref_field_boundary_contract.py \
-    -q
-```
-
-### Next candidate: F2-D1 monomorphization/lambda-lowering design (assessment-only)
-
-Purpose:
-- Define the smallest viable compiler design to support capturing lambdas in `Fn*`-bounded generic call paths (the blocker behind skipped e2e tests).
-
-Hard gate (must be true before any work starts):
-1. All prior A1 slices and agreed cleanup steps are complete and signed off.
-2. A1 regression matrix + high-sensitivity subset are green.
-3. Owner explicitly confirms this item is next.
-
-Important:
-- **Option B is now selected for MVP execution.**
-- This section is no longer assessment-only; proceed with Option B implementation slices below.
-- Keep skipped e2e tests (`scope_fn1_borrowed_capture_accepted`, `scope_fn1_move_capture_accepted`) as pinned blocker docs.
-- No stdlib/user-code workaround changes.
-
-Start-here instructions for Klaudia (Option B closeout):
-1. Add a new section in `work-progress.md`: `F2-D1 Option B Implementation`.
-2. Execute regression-first:
-   - unskip one blocker repro with minimal failing signal,
-   - implement smallest Option B slice,
-   - rerun mandatory matrix.
-3. Implement/close slices (no big-bang):
-   - B1: trait/interface compatibility path (`Fn1` with `Callback1`) for target call shape,
-   - B2: checker/call-resolver path wiring for Fn-bounded captured lambdas through callback representation,
-   - B3: stage2/MIR/LLVM validation and cleanup,
-   - B4: borrowed-capture callback env path needed to unskip `scope_fn1_borrowed_capture_accepted`.
-4. After each slice, update `work-progress.md` with exact touched files/functions and pass/fail matrix.
-5. Stop on first LANGUAGE_BUG outside Option B scope and report with minimal repro.
-
-Deliverable required from Klaudia for Option B:
-1. Slice-by-slice implementation notes (B1/B2/B3) with touched file/function list.
-2. Boundary Contract Guardrails updates (positive + negative + stale-comment alignment).
-3. Regression matrix results after each slice.
-4. Explicit B4 status:
-   - either unskip borrowed-capture e2e with green run, or
-   - stop with pinned LANGUAGE_BUG and minimal repro if callback env borrowed captures remain blocked.
-5. Final go/no-go for closing F2-D1 blocker tests (unskip criteria).
-
-Mandatory check for this step:
-1. Keep both blocker e2e tests present; unskip only when behavior is implemented and green.
-2. Preserve existing safety boundaries:
-   - `borrowed_capture_interface_coercion_rejected` must remain rejected in typecheck path.
-   - `borrow_escape_spawn_rejected` must remain `E_ESCAPE_THREAD`.
-3. No diagnostic taxonomy regressions (`internal:` leaks, blank spans, phase mismatches).
-
-F2-D1 tracking instruction (Klaudia):
-1. Copy/update a checklist block in `work/borro-checker-escape-context-model/work-progress.md` under `F2-D1 Option B Implementation`.
-2. Update each checkbox and command result in that copied block as work proceeds.
-3. Keep the template in `todo.md` unchanged; progress lives in `work-progress.md`.
-
-F2-D1 Option B checklist template (copy to `work-progress.md`):
-- [ ] B1 slice landed with failing-first regression and pass confirmation.
-- [ ] B2 slice landed with failing-first regression and pass confirmation.
-- [ ] B3 slice landed with failing-first regression and pass confirmation.
-- [ ] B4 borrowed-capture callback env slice landed or pinned as separate LANGUAGE_BUG with minimal repro.
-- [ ] `scope_fn1_borrowed_capture_accepted` unskipped and passing.
-- [ ] `scope_fn1_move_capture_accepted` unskipped and passing or explicitly split with documented blocker.
-- [ ] Safety regressions remain green:
-  - `borrowed_capture_interface_coercion_rejected`
-  - `borrow_escape_spawn_rejected`
-  - `implicit_callback_borrowed_capture_rejected`
-- [ ] Boundary/contract suites green:
-  - `test_callinfo_param_layout_contract.py`
-  - `test_boundary_matrix_result_variant_contract.py`
-  - `test_struct_ref_field_boundary_contract.py`
-  - `test_call_contract_ownership_guard.py`
-- [ ] Any new blocker documented with minimal repro + subsystem guess.
-- [ ] Final go/no-go recommendation for closure.
-
-Go/no-go review checkpoint:
-- Team reviews Option B slice outputs and regression matrix.
-- If green (both scope_fn1 e2e paths resolved), close F2-D1 and remove blocker skips.
-- If not green, pause and document remaining architecture blockers.
+1. `todo.md` contains scope and required outcomes only.
+2. Execution progress, command logs, pass/fail matrix, and touched files belong in `work-progress.md`.
+3. On first likely LANGUAGE_BUG outside scope:
+   - stop implementation,
+   - pin minimal repro,
+   - record suspected subsystem,
+   - wait for direction.
 
 ---
 

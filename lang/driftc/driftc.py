@@ -4915,7 +4915,11 @@ def compile_stubbed_funcs(
 				builder.func.local_types[local_name] = unknown_ty
 		if builder.block.terminator is None:
 			if ret_val is None:
-				raise AssertionError("hidden lambda block must end with a value or return")
+				_ret_def = shared_type_table.get(spec.return_type_id) if shared_type_table is not None else None
+				if _ret_def is not None and _ret_def.kind is TypeKind.VOID:
+					ret_val = lower._void_value()
+				else:
+					raise AssertionError("hidden lambda block must end with a value or return")
 			if spec.can_throw:
 				ok_dest = builder.new_temp()
 				builder.emit(M.ConstructResultOk(dest=ok_dest, value=ret_val))
