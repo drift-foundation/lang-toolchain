@@ -1,0 +1,14 @@
+module main
+
+struct Op {
+	apply: Fn(Int) nothrow -> Int
+}
+
+fn maybe_fail(x: Int) -> Int {
+	return x + 1;
+}
+
+fn main() nothrow -> Int {
+	val op = Op(apply = maybe_fail);
+	return 0;
+}

@@ -9,7 +9,11 @@ fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
 fn run() -> Int {
 	val op = MathOp(apply = add);
 	val f = op.apply;
-	return f(3, 4);
+	val result = f(3, 4);
+	if result != 7 {
+		return 10;
+	}
+	return 0;
 }
 
 fn main() nothrow -> Int {

@@ -1,7 +1,7 @@
 # Borrow Checker Escape Context Model — Work Progress
 
 Author: Klaudia
-Current focus: Fn1 SCOPED borrowed-capture coercion — **Phase F1 complete**
+Current focus: Callable Coercion V4.5 — **Fn-Ptr ABI Thunk Implementation**
 
 ---
 
@@ -27,9 +27,9 @@ Date: 2026-02-21
 Author: Klaudia
 Status: **Phase F1 complete.** Revised approach implemented and validated.
 
-### 1. Problem statement
+### 1. Problem statement (historical context — resolved by F2-D1 Option B)
 
-User scenario that should work but currently fails:
+User scenario that should work but failed at time of writing (now resolved):
 
 ```drift
 var x = 42
@@ -1564,3 +1564,51 @@ The `ok` field for Void-returning FnResult uses `i8 0` (void-like placeholder, p
 - [x] Regression-first execution slice written (§20.6).
 - [x] C10 naming/coverage mismatch resolved (renamed to `callable_borrowed_capture_callback_boxing_rejected`).
 - [x] `work-progress.md` updated with design note and go/no-go recommendation (§20.7).
+
+### 21. V4.5: Fn-Ptr ABI Thunk Implementation
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** Complete.
+
+#### 21.1 Implementation summary
+
+Added `_emit_nothrow_to_throwing_thunk` helper to `llvm_codegen.py` (~40 lines). The thunk:
+1. Calls the original nothrow function with forwarded arguments.
+2. Wraps the return value into `FnResult{is_err=false, ok=<raw>, err=null}`.
+3. Returns the FnResult, matching the throwing fn-ptr ABI.
+
+Void-returning nothrow functions use `i8 0` as the ok placeholder.
+
+Thunks are module-level (`define internal`), cached per `(arg_sym, fnres_llty)` pair on `LlvmModuleBuilder.nothrow_thunk_cache`.
+
+#### 21.2 Wiring at ConstructStruct
+
+At the existing type-mismatch check (line ~2624), added detection: if the field is `TypeKind.FUNCTION` with `can_throw()=True` and the arg LLVM type differs, emit a thunk and substitute the thunk pointer. Non-function mismatches still raise the existing error.
+
+#### 21.3 Files touched
+
+| File | Change |
+|------|--------|
+| `lang/codegen/llvm/llvm_codegen.py` | Added `nothrow_thunk_cache` field on `LlvmModuleBuilder`; added `_emit_nothrow_to_throwing_thunk` method on `_FuncBuilder`; ConstructStruct handler: thunk-or-passthrough on type mismatch |
+| `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_fn/main.drift` | Updated to verify correct result value (exit 10 = wrong value) |
+| `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_fn/expected.json` | Removed `skip: true`; updated description |
+| `lang/tests/codegen/e2e/callable_throwing_fn_to_nothrow_field_rejected/` | **New** negative regression: throwing fn → nothrow field rejected with type mismatch |
+
+#### 21.4 Pass/fail matrix
+
+| Test | Result |
+|------|--------|
+| `callable_fn_ptr_throwing_field_nothrow_fn` (was skip) | **PASS** (exit 0) |
+| `callable_throwing_fn_to_nothrow_field_rejected` (new negative) | **PASS** (rejected) |
+| All 12 callable e2e tests | **PASS** (12/12) |
+| A5 boundary tests (7/7) | **PASS** |
+| Borrow checker unit tests (90/90) | **PASS** |
+| Driver boundary contract tests (12/12) | **PASS** |
+
+#### 21.5 Done-when checklist (V4.5)
+
+- [x] `callable_fn_ptr_throwing_field_nothrow_fn` unskipped and passing.
+- [x] New negative incompatibility regression added and passing (`callable_throwing_fn_to_nothrow_field_rejected`).
+- [x] Existing callable/B4/A5 high-sensitivity set remains green.
+- [x] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix.

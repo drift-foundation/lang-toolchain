@@ -114,10 +114,10 @@ Execution rules:
    - or change-set ceases to be localized to planned files.
 
 Done-when checklist:
-- [ ] `callable_fn_ptr_throwing_field_nothrow_fn` unskipped and passing.
-- [ ] New negative incompatibility regression added and passing.
-- [ ] Existing callable/B4/A5 high-sensitivity set remains green.
-- [ ] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix.
+- [x] `callable_fn_ptr_throwing_field_nothrow_fn` unskipped and passing.
+- [x] New negative incompatibility regression added and passing (`callable_throwing_fn_to_nothrow_field_rejected`).
+- [x] Existing callable/B4/A5 high-sensitivity set remains green.
+- [x] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix (§21).
 
 ### Plan Review Gate (owner)
 

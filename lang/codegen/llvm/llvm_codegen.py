@@ -587,6 +587,7 @@ class LlvmModuleBuilder:
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
 	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
 	iface_vtable_sizes: Dict[str, int] = field(default_factory=dict)
+	nothrow_thunk_cache: Dict[tuple[str, str], str] = field(default_factory=dict)
 	_dbg_next_id: int = 0
 	_dbg_metadata: List[str] = field(default_factory=list)
 	_dbg_compile_unit_id: int | None = None
@@ -2622,12 +2623,19 @@ class _FuncBuilder:
 				field_store_llty = self._llvm_storage_type_for_typeid(field_ty)
 				have = self.value_types.get(arg_val)
 				if have is not None and have != field_val_llty:
-					field_lltys = [self._llvm_type_for_typeid(t) for t in field_types]
-					arg_lltys = [self.value_types.get(self._map_value(a)) for a in instr.args]
-					raise NotImplementedError(
-						f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
-						f"fields={field_lltys} args={arg_lltys}"
-					)
+					field_td = self.type_table.get(field_ty)
+					nothrow_llty = self._fn_ptr_lltype(list(field_td.param_types[:-1]), field_td.param_types[-1], can_throw=False) if (field_td.kind is TypeKind.FUNCTION and field_td.param_types) else None
+					if field_td.kind is TypeKind.FUNCTION and field_td.can_throw() and have == nothrow_llty and arg_val.startswith("@"):
+						thunk_name = self._emit_nothrow_to_throwing_thunk(arg_val, field_ty)
+						arg_val = f"@{thunk_name}"
+						self.value_types[arg_val] = field_val_llty
+					else:
+						field_lltys = [self._llvm_type_for_typeid(t) for t in field_types]
+						arg_lltys = [self.value_types.get(self._map_value(a)) for a in instr.args]
+						raise NotImplementedError(
+							f"LLVM codegen v1: struct {struct_def.name} field {idx} type mismatch (have {have}, expected {field_val_llty}); "
+							f"fields={field_lltys} args={arg_lltys}"
+						)
 				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
 					arg_val = self._bool_to_storage(arg_val)
 				emit_field_store_llty = self._llty(field_store_llty)
@@ -5149,6 +5157,52 @@ class _FuncBuilder:
 			lines.append(f"  ret {emit_ret_llty} %res")
 		lines.append("}")
 		self.module.emit_func("\n".join(lines))
+
+	def _emit_nothrow_to_throwing_thunk(self, arg_sym: str, field_ty: TypeId) -> str:
+		"""Emit a module-level thunk wrapping a nothrow fn to match a throwing fn-ptr ABI.
+
+		The thunk calls the nothrow function and wraps its return value in a
+		FnResult{is_err=false, ok=<result>, err=null}.  Returns the thunk LLVM
+		symbol name (without leading @).
+		"""
+		td = self.type_table.get(field_ty)
+		param_tids = list(td.param_types[:-1])
+		user_ret_tid = td.param_types[-1]
+		nothrow_ret_llty = self._llty(self._llvm_type_for_typeid(user_ret_tid, allow_void_ok=True))
+		is_void_ret = self.type_table.is_void(user_ret_tid)
+		err_tid = self.type_table.ensure_error()
+		fnres_tid = self.type_table.ensure_fnresult(user_ret_tid, err_tid)
+		fnres_llty = self._llty(self._llvm_type_for_typeid(fnres_tid))
+		cache_key = (arg_sym, fnres_llty)
+		cached = self.module.nothrow_thunk_cache.get(cache_key)
+		if cached is not None:
+			return cached
+		thunk_name = f"__fnthunk_{arg_sym.lstrip('@').replace('.', '_')}_{len(self.module.nothrow_thunk_cache)}"
+		self.module.nothrow_thunk_cache[cache_key] = thunk_name
+		arg_defs: list[str] = []
+		call_args: list[str] = []
+		for idx, p_tid in enumerate(param_tids):
+			llty = self._llty(self._llvm_type_for_typeid(p_tid, allow_void_ok=True))
+			arg_defs.append(f"{llty} %a{idx}")
+			call_args.append(f"{llty} %a{idx}")
+		lines: list[str] = []
+		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
+		lines.append("entry:")
+		if is_void_ret:
+			lines.append(f"  call void {arg_sym}({', '.join(call_args)})")
+			ok_val = "0"
+			ok_llty = "i8"
+		else:
+			lines.append(f"  %raw = call {nothrow_ret_llty} {arg_sym}({', '.join(call_args)})")
+			ok_val = "%raw"
+			ok_llty = nothrow_ret_llty
+		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {ok_llty} {ok_val}, 1")
+		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
+		lines.append(f"  ret {fnres_llty} %res")
+		lines.append("}")
+		self.module.emit_func("\n".join(lines))
+		return thunk_name
 
 	def _emit_callback_drop_thunk(self, drop_name: str, env_ty: TypeId) -> None:
 		if self.type_table is None:

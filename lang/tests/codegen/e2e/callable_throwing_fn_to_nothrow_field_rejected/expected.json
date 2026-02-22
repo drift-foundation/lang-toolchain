@@ -1,0 +1,9 @@
+{
+  "description": "throwing function assigned to nothrow fn-typed struct field — checker must reject (nothrow is subtype of throwing, NOT the reverse)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "type mismatch"
+    }
+  ]
+}
