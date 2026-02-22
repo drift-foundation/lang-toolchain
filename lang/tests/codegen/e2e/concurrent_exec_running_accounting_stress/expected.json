@@ -1,0 +1,4 @@
+{
+  "description": "asserts exec.running returns to zero after mixed cancel/join load; exit 10 = running leaked",
+  "exit_code": 0
+}

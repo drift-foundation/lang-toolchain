@@ -24,6 +24,7 @@ export {
 	exec_create,
 	exec_submit,
 	exec_submit_test_override,
+	exec_get_running,
 	reactor_default_get,
 	reactor_default_set,
 	reactor_register_io,
@@ -85,6 +86,7 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn exec_create(min_threads: Int, max_threads: Int, queue_limit: Int, timeout_ms: Int, saturation: Int, stack_bytes: Int) nothrow -> ExecutorHandle;
 @intrinsic pub fn exec_submit(exec: ExecutorHandle, vt: VtHandle) nothrow -> Int;
 @intrinsic pub fn exec_submit_test_override(code: Int) nothrow -> Void;
+@intrinsic pub fn exec_get_running(exec: ExecutorHandle) nothrow -> Int;
 
 @intrinsic pub fn reactor_default_get() nothrow -> ReactorHandle;
 @intrinsic pub fn reactor_default_set(reactor: ReactorHandle) nothrow -> Void;

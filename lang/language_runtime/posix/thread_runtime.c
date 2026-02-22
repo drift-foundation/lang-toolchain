@@ -1295,6 +1295,14 @@ void drift_exec_submit_test_override(int64_t code) {
 	drift_exec_submit_override = code;
 }
 
+int64_t drift_exec_get_running(uint64_t exec) {
+	DriftExec *ex = (DriftExec *)exec;
+	if (!ex) {
+		return 0;
+	}
+	return (int64_t)atomic_load(&ex->running);
+}
+
 void drift_thread_drop(uint64_t vt) {
 	DriftVt *h = (DriftVt *)vt;
 	if (!h) {

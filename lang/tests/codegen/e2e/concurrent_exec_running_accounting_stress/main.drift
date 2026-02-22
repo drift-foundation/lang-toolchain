@@ -1,0 +1,80 @@
+module main
+
+import lang.thread as thread;
+import std.concurrent as conc;
+
+fn cancel_one() -> Int {
+	var t = conc.spawn(| | => {
+		conc.sleep(conc.Duration(millis = 1));
+		return 1;
+	});
+	t.cancel();
+	var res = t.join_timeout(conc.Duration(millis = 50));
+	return match res {
+		Err(err) => {
+			yield match err {
+				Cancelled => { 0 },
+				Timeout => { 0 },
+				default => { 20 },
+			}
+		},
+		Ok(_v) => { 0 },
+		default => { 21 },
+	};
+}
+
+fn normal_one() -> Int {
+	var t = conc.spawn(| | => {
+		return 42;
+	});
+	var res = t.join_timeout(conc.Duration(millis = 5000));
+	return match res {
+		Ok(_v) => { 0 },
+		Err(_) => { 30 },
+		default => { 31 },
+	};
+}
+
+fn run() -> Int {
+	val exec_handle = thread.exec_default_get();
+
+	var i = 0;
+	while i < 500 {
+		val rc = cancel_one();
+		if rc != 0 {
+			return rc;
+		}
+		i = i + 1;
+	}
+
+	i = 0;
+	while i < 100 {
+		val rc = normal_one();
+		if rc != 0 {
+			return rc;
+		}
+		i = i + 1;
+	}
+
+	i = 0;
+	while i < 500 {
+		val rc = cancel_one();
+		if rc != 0 {
+			return rc;
+		}
+		i = i + 1;
+	}
+
+	conc.sleep(conc.Duration(millis = 50));
+
+	val running = thread.exec_get_running(exec_handle);
+	if running != 0 {
+		return 10;
+	}
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}
