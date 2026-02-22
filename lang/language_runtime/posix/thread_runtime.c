@@ -435,6 +435,7 @@ static void *drift_exec_worker(void *arg) {
 		DriftVt *vt = node->vt;
 		free(node);
 		if (!vt) {
+			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
 		if (atomic_load(&vt->cancelled) && !atomic_load(&vt->started)) {

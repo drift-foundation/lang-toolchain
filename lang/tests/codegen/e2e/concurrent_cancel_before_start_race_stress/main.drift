@@ -14,22 +14,23 @@ fn one() -> Int {
 			yield match err {
 				Cancelled => { 0 },
 				Timeout => { 0 },
-				Closed => { 1 },
-				Busy => { 1 },
-				Failed(_) => { 1 },
-				default => { 1 },
+				Closed => { 12 },
+				Busy => { 13 },
+				Failed(_) => { 14 },
+				default => { 15 },
 			}
 		},
 		Ok(_v) => { 0 },
-		default => { 1 },
+		default => { 16 },
 	};
 }
 
 fn run() -> Int {
 	var i = 0;
 	while i < 3000 {
-		if one() != 0 {
-			return 1;
+		val rc = one();
+		if rc != 0 {
+			return rc;
 		}
 		i = i + 1;
 	}
