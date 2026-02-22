@@ -5269,15 +5269,17 @@ def resolve_call_expr(
 				param_def = ctx.type_table.get(param_ty)
 				if param_def.kind is not TypeKind.FUNCTION:
 					continue
-				# For Fn-trait-bounded generic params with borrowed captures,
-				# keep allow_capture_invoke=True so the borrow checker validates
-				# escape level via the SCOPED promotion path.
-				_has_ref_caps = getattr(arg, "explicit_captures", None) and any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
-				if not (_has_ref_caps and idx in _fn_bounded_params):
+				# For Fn-trait-bounded generic params with captures (any kind),
+				# keep allow_capture_invoke=True. Borrowed captures are validated
+				# by the borrow checker (SCOPED promotion). Copy/move captures
+				# are auto-wrapped in callback_N() by TP5 (B2 path).
+				_has_any_caps = bool(getattr(arg, "explicit_captures", None))
+				if not (_has_any_caps and idx in _fn_bounded_params):
 					arg.allow_capture_invoke = False
 				arg.expected_fn_inferred = True
 				arg.expected_type_from_require = param_ty
 				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
+			_b2_wrapped_params: dict[int, TypeId] = {}  # param_idx -> new Callback type
 			if decl.fn_id is not None and any(isinstance(a, H.HLambda) for a in expr.args):
 				req_expr = _require_for_fn(decl.fn_id)
 				if req_expr is not None:
@@ -5348,14 +5350,35 @@ def resolve_call_expr(
 							]
 							ret_ty = resolve_opaque_type(trait_args[2], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
 						arg_expected_type = ctx.type_table.ensure_function(param_tys, ret_ty, can_throw=can_throw)
-						# For Fn-trait-bounded params with borrowed captures,
-						# keep allow_capture_invoke=True (borrow checker validates escape).
-						_has_ref_caps_tp5 = getattr(arg, "explicit_captures", None) and any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
-						if not _has_ref_caps_tp5:
+						# For Fn-trait-bounded params with any captures,
+						# keep allow_capture_invoke=True. Borrowed captures validated
+						# by borrow checker; copy/move auto-wrapped in callback_N below.
+						_has_any_caps_tp5 = bool(getattr(arg, "explicit_captures", None))
+						if not _has_any_caps_tp5:
 							arg.allow_capture_invoke = False
 						arg.expected_fn_inferred = True
 						arg.expected_type_from_require = arg_expected_type
 						arg_types[param_idx] = type_expr(arg, expected_type=arg_expected_type, used_as_value=False)
+						# B2: auto-wrap non-borrowed capturing lambdas in callback_N()
+						# so F is instantiated as Callback (not fn ptr).
+						_has_nonref_caps = _has_any_caps_tp5 and not any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
+						if _has_nonref_caps:
+							if arity == 0:
+								_cb_name = "callback_throw0" if can_throw else "callback0"
+							elif arity == 1:
+								_cb_name = "callback_throw1" if can_throw else "callback1"
+							else:
+								_cb_name = "callback_throw2" if can_throw else "callback2"
+							_cb_var = H.HVar(name=_cb_name, module_id="std.core")
+							_cb_call = H.HCall(fn=_cb_var, args=[arg], kwargs=[])
+							_cb_call._is_implicit_wrap = True
+							if ctx.alloc_callsite_id is not None:
+								_cb_call.callsite_id = ctx.alloc_callsite_id()
+							if ctx.alloc_node_id is not None:
+								ctx.alloc_node_id(_cb_call)
+							expr.args[param_idx] = _cb_call
+							arg_types[param_idx] = type_expr(_cb_call, used_as_value=False)
+							_b2_wrapped_params[param_idx] = arg_types[param_idx]
 			for idx, arg in enumerate(expr.args):
 				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, module_ids_by_name, visibility_provenance) and arg.fn.name in ("callback0", "callback1", "callback2"):
 					continue
@@ -5396,6 +5419,19 @@ def resolve_call_expr(
 					ctx.alloc_node_id(cb_call)
 				expr.args[idx] = cb_call
 				arg_types[idx] = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
+		# B2: reconcile sig_inst param types with auto-wrapped callback args.
+		# After TP5 wrapping, some arg_types may be Callback while sig_inst
+		# still has the function pointer type. Update sig_inst to match.
+		_sig_param_types = list(sig_inst.param_types)
+		for _bi in range(min(len(_sig_param_types), len(arg_types))):
+			if arg_types[_bi] is None:
+				continue
+			_arg_d = ctx.type_table.get(arg_types[_bi])
+			_par_d = ctx.type_table.get(_sig_param_types[_bi])
+			if _arg_d.kind is TypeKind.INTERFACE and _par_d.kind is TypeKind.FUNCTION:
+				_sig_param_types[_bi] = arg_types[_bi]
+		if tuple(_sig_param_types) != sig_inst.param_types:
+			sig_inst = CallableSignature(param_types=tuple(_sig_param_types), result_type=sig_inst.result_type)
 		updated_types, had_autoborrow_error = _apply_autoborrow_args(
 			expr.args,
 			arg_types,
@@ -5420,6 +5456,30 @@ def resolve_call_expr(
 			record_call_info(expr, param_types=list(sig_inst.param_types), return_type=sig_inst.result_type, can_throw=call_can_throw, target=CallTarget.intrinsic(intrinsic_kind))
 			return record_expr(expr, sig_inst.result_type)
 		record_call_info(expr, param_types=list(sig_inst.param_types), return_type=sig_inst.result_type, can_throw=call_can_throw, target=CallTarget.direct(decl.fn_id))
+		# B2: update inst_subst args for wrapped callback params.
+		# After TP5 wraps a capturing lambda in callback_N(), the type param
+		# F should be Callback<A,R> not the function pointer type.
+		if _b2_wrapped_params and inst_subst is not None and decl.fn_id is not None:
+			_sig_for_tp = ctx.signatures_by_id.get(decl.fn_id) if ctx.signatures_by_id is not None else None
+			if _sig_for_tp is not None:
+				_ptids = list(getattr(_sig_for_tp, "param_type_ids", []) or [])
+				_tps = list(getattr(_sig_for_tp, "type_params", []) or [])
+				_new_args = list(inst_subst.args or [])
+				_changed = False
+				for _pi, _new_ty in _b2_wrapped_params.items():
+					if _pi >= len(_ptids):
+						continue
+					_td = ctx.type_table.get(_ptids[_pi])
+					if _td.kind is not TypeKind.TYPEVAR:
+						continue
+					_tp_id = _td.type_param_id
+					for _ti, _tp in enumerate(_tps):
+						if _tp.id == _tp_id and _ti < len(_new_args):
+							_new_args[_ti] = _new_ty
+							_changed = True
+							break
+				if _changed:
+					inst_subst = Subst(owner=inst_subst.owner, args=_new_args)
 		if ctx.record_instantiation is not None and inst_subst is not None and decl.fn_id is not None:
 			inst_args = tuple(inst_subst.args or [])
 			if inst_args and not any(ctx.type_table.has_typevar(t) for t in inst_args):

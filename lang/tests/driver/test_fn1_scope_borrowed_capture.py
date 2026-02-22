@@ -100,3 +100,74 @@ fn main() nothrow -> Int {
 	# (or the call should fail for other reasons — the lambda doesn't implement Marker).
 	errors = [d for d in diags if d.severity == "error"]
 	assert len(errors) > 0, "Non-Fn-bounded generic with borrowed capture must produce an error"
+
+
+def test_callback1_satisfies_fn1_require(tmp_path: Path) -> None:
+	"""Callback1<A,R> passed to generic F is Fn1<A,R> must be accepted.
+
+	B1 regression: the trait solver must structurally recognise that
+	Callback1<A,R> satisfies the Fn1<A,R> require bound.
+
+	Note: "no matching method 'call' for receiver F" from generic-template
+	body checking is a pre-existing limitation (also present in test 1)
+	and is NOT a B1 regression.
+	"""
+	diags = _compile(tmp_path, """\
+module m
+
+import std.core as core;
+
+fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
+	f.call(42);
+}
+
+fn main() nothrow -> Int {
+	val cb: core.Callback1<Int, Void> = core.callback1(|_a: Int| nothrow => {});
+	apply(cb);
+	return 0;
+}
+""")
+	requirement_errors = [d for d in diags if d.severity == "error" and "E_REQUIREMENT_NOT_SATISFIED" in (d.code or "")]
+	assert requirement_errors == [], f"Callback1 must satisfy Fn1 require bound: {requirement_errors}"
+	# Guard: only known pre-existing errors may be present (generic-template
+	# body checking emits "no matching method 'call'" for unresolved type params).
+	errors = [d for d in diags if d.severity == "error"]
+	unexpected = [d for d in errors if "no matching method" not in (d.message or "")]
+	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
+	assert len(errors) <= 1, f"Error count exceeded known pre-existing (1): {[(d.code, d.message) for d in errors]}"
+
+
+def test_copy_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) -> None:
+	"""Lambda with captures(copy x) passed to generic F is Fn1<A,R> must be accepted.
+
+	B2 regression: the checker must auto-wrap the capturing lambda in callback1()
+	so that F is instantiated as Callback1<A,R> (not fn ptr). The copy capture
+	avoids the borrowed-capture MIR limitation.
+	"""
+	diags = _compile(tmp_path, """\
+module m
+
+import std.core as core;
+
+fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
+	f.call(42);
+}
+
+fn main() nothrow -> Int {
+	val x: Int = 10;
+	apply(|_a| captures(copy x) nothrow => {});
+	return 0;
+}
+""")
+	# B2 targets: no "capturing lambdas" rejection; no E_REQUIREMENT_NOT_SATISFIED.
+	capture_errors = [d for d in diags if d.severity == "error" and "capturing lambdas" in (d.message or "")]
+	assert capture_errors == [], f"Copy-capture lambda must not be rejected: {capture_errors}"
+	requirement_errors = [d for d in diags if d.severity == "error" and "E_REQUIREMENT_NOT_SATISFIED" in (d.code or "")]
+	assert requirement_errors == [], f"Callback must satisfy Fn1 require: {requirement_errors}"
+	# Guard: only known pre-existing errors may be present. Generic-template body
+	# checking emits "no matching method 'call'" and cascade "type mismatch".
+	_KNOWN_PREEXISTING = {"no matching method", "type mismatch"}
+	errors = [d for d in diags if d.severity == "error"]
+	unexpected = [d for d in errors if not any(frag in (d.message or "") for frag in _KNOWN_PREEXISTING)]
+	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
+	assert len(errors) <= 2, f"Error count exceeded known pre-existing (2): {[(d.code, d.message) for d in errors]}"

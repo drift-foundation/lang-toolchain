@@ -1,6 +1,6 @@
 {
-  "description": "e2e: scope_fn1_copy_capture — lambda with captures(copy x) passed to Fn1-bounded generic. DESIRED: accepted through full codegen. BLOCKED: pre-existing limitation — capturing lambdas cannot be coerced to function pointers. Same root cause as F2-D1 (monomorphization gap for capturing lambdas in Fn-trait-bounded generics).",
-  "skip": true,
+  "description": "e2e: scope_fn1_copy_capture — lambda with captures(copy x) passed to Fn1-bounded generic. Accepted through full codegen via Option B (B2 auto-wrap in callback_N + inst_subst update).",
+  "skip": false,
   "exit_code": 0,
   "stderr": "",
   "stdout": ""

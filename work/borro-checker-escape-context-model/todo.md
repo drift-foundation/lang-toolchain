@@ -11,8 +11,46 @@ Status: A5 complete; this file now serves as active post-A5 guidance plus archiv
 Current priority:
 - **A1**: complete. `call_contract.py` is the single validation seam (Slices 1-4 done).
 - **F1**: complete (Fn-bounded borrowed-capture gate relaxation landed and narrowed with negative regression).
-- **F2**: complete as validation pass with **NO-GO for closure** due to blocker F2-D1 (monomorphization/lambda-lowering gap).
-- **Next (Klaudia):** execute a **separate assessment-only design pass** for F2-D1 (no compiler behavior changes yet).
+- **F2-D1 Option B**: in progress; B1/B2 landed with regressions.
+- **Next (Klaudia):** execute final closeout slice for Option B focused on borrowed-capture callback env support and unskip closure criteria.
+
+### Objective framing (must stay explicit before choosing A/B/C)
+
+Why this section exists:
+- We are selecting architecture for a long-lived callable model, not just patching one failing `conc.scope` case.
+- Option selection (A/B/C) must be judged against product-level callable requirements, not implementation convenience.
+
+User-facing objective (north star):
+1. Provide a **uniform callable abstraction** for APIs that accept callables by signature (`FnN<Args..., R>` style).
+2. Callers can pass **functions, functor-like values, and lambdas** (capturing and non-capturing).
+3. APIs can **store many callables** in containers and invoke later (subscribe/publish, event dispatch, deferred work).
+4. Works across modules with stable type/behavior guarantees; implementer need not know concrete callable kind.
+5. Preserve safety/performance:
+   - borrow checker enforces escape/lifetime boundaries,
+   - stage2/MIR/LLVM can lower and execute correctly,
+   - non-capturing fast paths remain efficient.
+
+Design selection criteria (apply to A/B/C):
+1. Compatibility with heterogeneous callable storage + delayed invocation.
+2. Cross-module generic/polymorphic usability with stable call semantics.
+3. Performance profile (dispatch cost, allocation pressure, inlining opportunities).
+4. Boundary complexity/risk across checker -> stage2 -> MIR validate -> LLVM.
+5. Migration path from current implementation without semantic regressions.
+
+Compatibility guard (current understanding):
+1. Option A (closure types): compatible; strongest long-term flexibility/performance.
+2. Option B (`Fn1` for `Callback1` path): compatible as dynamic bridge; generally higher dispatch/indirection cost.
+3. Option C (fat function pointer): compatible only if modeled as full callable object (env + invoke + lifecycle), not raw fn ptr semantics.
+
+Decision (MVP):
+1. **Pin Option B** as the selected implementation path for the next phase.
+2. Rationale:
+   - best UX/implementation tradeoff now,
+   - unblocks uniform callable behavior for functions/functor-like values/lambdas through one polymorphic path,
+   - avoids high-risk monomorphization/ABI expansion in this cycle.
+3. Performance expectation:
+   - some constant-factor overhead from uniform indirection,
+   - acceptable for MVP; revisit A-style specialization later if profiling justifies it.
 
 A1 execution spec (expected compiler infra changes):
 1. Build an explicit inventory table of duplicated call-shape checks, with current owner + target owner:
@@ -191,51 +229,69 @@ Hard gate (must be true before any work starts):
 3. Owner explicitly confirms this item is next.
 
 Important:
-- This section is assessment-only. Do not implement behavior changes in this step.
+- **Option B is now selected for MVP execution.**
+- This section is no longer assessment-only; proceed with Option B implementation slices below.
 - Keep skipped e2e tests (`scope_fn1_borrowed_capture_accepted`, `scope_fn1_move_capture_accepted`) as pinned blocker docs.
 - No stdlib/user-code workaround changes.
 
-Start-here instructions for Klaudia (F2-D1 assessment):
-1. Add a new section in `work-progress.md`: `F2-D1 Design Assessment (no-code)`.
-2. Compare concrete implementation options with file/function impact:
-   - Option A: closure type generation + `Fn*` impl for closure types,
-   - Option B: `Fn1` impl for `Callback1` (and related callback families),
-   - Option C: env-passing calling convention for Fn-bounded generic calls.
-3. For each option, provide:
-   - required checker/stage2/MIR/LLVM/runtime changes,
-   - boundary contract impact (checker -> stage2 -> MIR validate -> LLVM),
-   - regression-first plan (positive + negative + compatibility),
-   - migration/rollout risk and expected blast radius.
-4. Provide a recommended option with phased slices and go/no-go criteria per slice.
-5. Stop after assessment write-up; no code edits outside docs/work-tracking.
+Start-here instructions for Klaudia (Option B closeout):
+1. Add a new section in `work-progress.md`: `F2-D1 Option B Implementation`.
+2. Execute regression-first:
+   - unskip one blocker repro with minimal failing signal,
+   - implement smallest Option B slice,
+   - rerun mandatory matrix.
+3. Implement/close slices (no big-bang):
+   - B1: trait/interface compatibility path (`Fn1` with `Callback1`) for target call shape,
+   - B2: checker/call-resolver path wiring for Fn-bounded captured lambdas through callback representation,
+   - B3: stage2/MIR/LLVM validation and cleanup,
+   - B4: borrowed-capture callback env path needed to unskip `scope_fn1_borrowed_capture_accepted`.
+4. After each slice, update `work-progress.md` with exact touched files/functions and pass/fail matrix.
+5. Stop on first LANGUAGE_BUG outside Option B scope and report with minimal repro.
 
-Deliverable required from Klaudia for F2-D1 assessment:
-1. Option matrix with pros/cons and required subsystem changes.
-2. Boundary Contract Guardrails impact per option (explicit).
-3. Regression-first test strategy per option (including existing skipped e2e cases).
-4. Recommended plan with phased slices and estimated risk.
+Deliverable required from Klaudia for Option B:
+1. Slice-by-slice implementation notes (B1/B2/B3) with touched file/function list.
+2. Boundary Contract Guardrails updates (positive + negative + stale-comment alignment).
+3. Regression matrix results after each slice.
+4. Explicit B4 status:
+   - either unskip borrowed-capture e2e with green run, or
+   - stop with pinned LANGUAGE_BUG and minimal repro if callback env borrowed captures remain blocked.
+5. Final go/no-go for closing F2-D1 blocker tests (unskip criteria).
 
 Mandatory check for this step:
-1. Confirm the two skipped e2e blocker tests remain present and documented.
-2. No behavior-changing compiler diffs in this assessment step.
+1. Keep both blocker e2e tests present; unskip only when behavior is implemented and green.
+2. Preserve existing safety boundaries:
+   - `borrowed_capture_interface_coercion_rejected` must remain rejected in typecheck path.
+   - `borrow_escape_spawn_rejected` must remain `E_ESCAPE_THREAD`.
+3. No diagnostic taxonomy regressions (`internal:` leaks, blank spans, phase mismatches).
 
 F2-D1 tracking instruction (Klaudia):
-1. Copy/update a checklist block in `work/borro-checker-escape-context-model/work-progress.md` under `F2-D1 Design Assessment`.
+1. Copy/update a checklist block in `work/borro-checker-escape-context-model/work-progress.md` under `F2-D1 Option B Implementation`.
 2. Update each checkbox and command result in that copied block as work proceeds.
 3. Keep the template in `todo.md` unchanged; progress lives in `work-progress.md`.
 
-F2-D1 checklist template (copy to `work-progress.md`):
-- [ ] Option A/B/C design matrix completed with concrete file/function impacts.
-- [ ] Boundary Contract Guardrails impact documented for each option.
-- [ ] Regression-first test strategy drafted for each option.
-- [ ] Recommended option selected with phased implementation slices.
-- [ ] Go/no-go criteria defined per slice.
-- [ ] Explicit “no code changes in this step” verification recorded.
+F2-D1 Option B checklist template (copy to `work-progress.md`):
+- [ ] B1 slice landed with failing-first regression and pass confirmation.
+- [ ] B2 slice landed with failing-first regression and pass confirmation.
+- [ ] B3 slice landed with failing-first regression and pass confirmation.
+- [ ] B4 borrowed-capture callback env slice landed or pinned as separate LANGUAGE_BUG with minimal repro.
+- [ ] `scope_fn1_borrowed_capture_accepted` unskipped and passing.
+- [ ] `scope_fn1_move_capture_accepted` unskipped and passing or explicitly split with documented blocker.
+- [ ] Safety regressions remain green:
+  - `borrowed_capture_interface_coercion_rejected`
+  - `borrow_escape_spawn_rejected`
+  - `implicit_callback_borrowed_capture_rejected`
+- [ ] Boundary/contract suites green:
+  - `test_callinfo_param_layout_contract.py`
+  - `test_boundary_matrix_result_variant_contract.py`
+  - `test_struct_ref_field_boundary_contract.py`
+  - `test_call_contract_ownership_guard.py`
+- [ ] Any new blocker documented with minimal repro + subsystem guess.
+- [ ] Final go/no-go recommendation for closure.
 
 Go/no-go review checkpoint:
-- Team reviews F2-D1 assessment and selects one implementation option.
-- If green, convert selected option into implementation slices.
-- If not green, keep deferred with explicit blockers.
+- Team reviews Option B slice outputs and regression matrix.
+- If green (both scope_fn1 e2e paths resolved), close F2-D1 and remove blocker skips.
+- If not green, pause and document remaining architecture blockers.
 
 ---
 
