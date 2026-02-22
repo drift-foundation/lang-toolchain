@@ -1125,7 +1125,13 @@ def resolve_struct_ctor(
 		if ctx.type_table.has_typevar(a) or ctx.type_table.has_typevar(b):
 			if key_a.name == key_b.name and len(key_a.args) == len(key_b.args):
 				return True
-		return key_a == key_b
+		if key_a == key_b:
+			return True
+		# nothrow fn is assignable to throwing fn type (subtyping):
+		# Fn(...) nothrow -> R  ⊆  Fn(...) -> R
+		if key_a.name == "fn" and key_b.name == "fn" and key_a.args == key_b.args and key_a.fn_throws is False and key_b.fn_throws is True:
+			return True
+		return False
 	_struct_field_spec = CtorFieldSpec(field_names=tuple(field_names))
 	_struct_pre = ctor_call_issues(len(arg_exprs), tuple(kw.name for kw in kw_pairs), _struct_field_spec, ctor_label="struct", span=span)
 	_struct_pre_codes = {i.code for i in _struct_pre}

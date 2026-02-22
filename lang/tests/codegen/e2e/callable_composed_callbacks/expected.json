@@ -1,0 +1,4 @@
+{
+  "description": "e2e: lambda captures two Callback1 values by move, wraps in new Callback1 (nested interface in env struct)",
+  "exit_code": 0
+}

@@ -1,0 +1,23 @@
+module main
+
+import std.core as core;
+import std.containers as containers;
+
+fn double(x: Int) nothrow -> Int { return x * 2; }
+fn triple(x: Int) nothrow -> Int { return x * 3; }
+
+fn run() -> Int {
+	var m = containers.hash_map<type String, core.Callback1<Int, Int>>();
+	m.insert("double", core.callback1(double));
+	m.insert("triple", core.callback1(triple));
+	if m.len() != 2 { return 1; }
+	val k1 = "double";
+	if m.contains_key(&k1) != true { return 2; }
+	val k2 = "triple";
+	if m.contains_key(&k2) != true { return 3; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

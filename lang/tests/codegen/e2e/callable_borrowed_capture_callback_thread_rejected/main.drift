@@ -1,0 +1,9 @@
+module main
+
+import std.core as core;
+
+fn main() nothrow -> Int {
+	var x: Int = 42;
+	var cb: core.Callback0<Void> = core.callback0(| | captures(&x) => { val _y = x; return; });
+	return 0;
+}

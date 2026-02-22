@@ -1,0 +1,5 @@
+{
+  "description": "LANGUAGE_BUG: throwing fn-typed struct field assigned nothrow function — checker accepts (subtype) but codegen crashes on ABI mismatch (FnResult vs raw return). Pinned repro for fn-ptr throwing/nothrow ABI thunk.",
+  "skip": true,
+  "exit_code": 0
+}

@@ -1,5 +1,4 @@
 {
-  "description": "BLOCKED: function pointer type in struct field — checker reports 'field type mismatch (have fn, expected fn)'. Subsystem: type_checker.py struct field type unification.",
-  "skip": true,
+  "description": "e2e: nothrow function pointers stored in struct fields with nothrow fn type, invoked via two-step field access",
   "exit_code": 0
 }

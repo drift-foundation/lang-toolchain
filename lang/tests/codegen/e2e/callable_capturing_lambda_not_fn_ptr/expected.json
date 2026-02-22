@@ -1,0 +1,9 @@
+{
+  "description": "e2e negative: capturing lambda cannot be assigned to function pointer type",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "capturing lambdas cannot be coerced to function pointers"
+    }
+  ]
+}

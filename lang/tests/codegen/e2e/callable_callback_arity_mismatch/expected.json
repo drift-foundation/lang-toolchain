@@ -1,0 +1,9 @@
+{
+  "description": "e2e negative: callback1 rejects zero-arg function (arity mismatch)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "callback1 expects a function with 1 argument(s)"
+    }
+  ]
+}

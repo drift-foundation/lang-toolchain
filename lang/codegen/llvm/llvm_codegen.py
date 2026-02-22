@@ -6526,6 +6526,10 @@ class _FuncBuilder:
 			dest = self._fresh("tomb_arr")
 			self._emit_zero_value(dest, ty_id)
 			return dest
+		if td.kind is TypeKind.INTERFACE:
+			dest = self._fresh("tomb_iface")
+			self._emit_zero_value(dest, ty_id)
+			return dest
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
 			if inst is None:

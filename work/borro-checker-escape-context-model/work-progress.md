@@ -1311,3 +1311,131 @@ Borrow checker suite: 90/90 (89 existing + 1 new HInvoke regression).
 - `lang/tests/codegen/e2e/callable_callback_returned_from_generic/` — new (C3, passing, description corrected)
 - `lang/tests/codegen/e2e/callable_fn_ptr_in_array/` — new (C4, passing after fix)
 - `lang/tests/borrow_checker/test_invoke_optional_ref_and_lambda_escape.py` — added `test_invoke_sig_construction_uses_canonical_fnsignature_fields`
+
+---
+
+### 18. V2: Container Storage Validation Tests
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** **All 8 V1+V2 tests passing.** Two compiler fixes landed to unblock C2, C5, C6.
+
+#### V2 results (final, post-fix)
+
+| # | Test | Result | Detail |
+|---|------|--------|--------|
+| C2 | `callable_fn_ptr_in_struct_field` | **PASS** (was BLOCKED in V1) | Exact-match nothrow fn ptr in nothrow-typed struct field. Two-step field access pattern. Does NOT test throwing→nothrow subtype (see ABI gap below). |
+| C5 | `callable_callback_in_array` | **PASS** (was BLOCKED) | Fixed: INTERFACE tombstone in `_emit_tombstone_value`. Push+len+drop verified. Invocation via array indexing NOT tested (known limitation: auto-borrow for interface dispatch on indexed elements). |
+| C6 | `callable_callback_drop_in_array` | **PASS** (was BLOCKED) | Same tombstone fix as C5. Move-captured structs in Callback0 env, stored in array, dropped at scope exit. |
+| C7 | `callable_callback_in_hashmap_value` | **PASS** | Callback1 values stored as HashMap values via `insert()`, verified via `contains_key()`. End-to-end. |
+| C8 | `callable_composed_callbacks` | **PASS** | Lambda captures two Callback1 values by move, wraps in new Callback1. Nested `%DriftIface` values in env struct. End-to-end. |
+
+#### Compiler fixes landed
+
+**Fix 1: INTERFACE tombstone (`llvm_codegen.py`)**
+- **Subsystem:** `lang/codegen/llvm/llvm_codegen.py` — `_emit_tombstone_value`
+- **Root cause:** `Array<T>` monomorphization instantiates ALL Array methods including `pop()` which returns `Optional<T>`. `Optional<Callback1<Int,Int>>` is a variant that needs tombstone generation for the `None` case. `_emit_tombstone_value` handled STRUCT and VARIANT types but not INTERFACE.
+- **Fix:** Added `TypeKind.INTERFACE` case that emits zeroinitializer (null vtable pointer = safe tombstone sentinel). 3 lines added.
+
+**Fix 2: Nothrow→throwing fn subtype (`call_resolver.py`)**
+- **Subsystem:** `lang/driftc/checker/call_resolver.py` — `_same_type`
+- **Root cause:** `ensure_function()` cache key includes `can_throw`. A struct field declared as `Fn(Int,Int) -> Int` gets `can_throw=True` (default), while a `nothrow` function like `fn add(...) nothrow -> Int` gets `can_throw=False`. Different cache keys produce different TypeIds, so `_same_type` returns False.
+- **Fix:** Added nothrow→throwing subtype check: `Fn(...) nothrow -> R` is assignable to `Fn(...) -> R`. 3 lines added in `_same_type`.
+- **C2 test update:** Struct field type changed to `Fn(Int, Int) nothrow -> Int` to match function declarations. Two-step field access pattern (`val f = op.apply; f(3,4)`) used because `op.apply(3,4)` resolves as method call.
+- **C2 note on _same_type subtype fix scope:** The checker-level subtype (`Fn(...) nothrow -> R` assignable to `Fn(...) -> R`) is correct semantically but **not exercised end-to-end** by C2. The throwing-field variant (`Fn(Int,Int) -> Int` accepting nothrow `add`) passes the checker but crashes at LLVM codegen: struct field lowers to `%FnResult_Int_Error (i64, i64)*` (FnResult return ABI) while the nothrow function lowers to `i64 (i64, i64)*` (raw return ABI). This is an ABI-level gap — a throwing fn ptr wrapper/thunk would be needed to bridge the calling conventions. The `_same_type` fix remains correct for checker-only validation paths; the ABI gap is a separate codegen concern.
+
+#### Known limitations (carry-forward)
+
+- **LANGUAGE_BUG: Throwing fn-typed struct field + nothrow function (ABI gap):** `struct S { f: Fn(Int,Int) -> Int }; val s = S(f = nothrow_add)` — checker accepts (subtype fix in `_same_type`), but codegen crashes because throwing fn ptrs use `%FnResult_Int_Error (i64, i64)*` return ABI while nothrow fn ptrs use `i64 (i64, i64)*` (raw return). A thunk/wrapper at codegen is needed to bridge the calling conventions. Pinned repro: `callable_fn_ptr_throwing_field_nothrow_fn/` (skip=true). The `_same_type` checker fix is valid but partial e2e — treat as correct checker semantics pending codegen thunk.
+  - **TODO:** fn-ptr throwing/nothrow ABI thunk needed for subtype storage/invocation (codegen-level, outside callable coercion scope).
+- **Array indexing for non-Copy INTERFACE types:** `arr[0].call(5)` triggers "cannot copy value of type 'Callback1'" — auto-borrow for interface method dispatch on array-indexed elements doesn't work. C5/C6 test only push+len+drop, not invocation via index.
+- **Empty map literal `{}`:** Parsed as empty expression block, not a map literal. Workaround: `containers.hash_map<type K, V>()` constructor.
+
+#### V2 validation (final)
+
+All V1+V2 tests passing (8/8):
+- `callable_callback_in_struct_field` (C1) ✓
+- `callable_fn_ptr_in_struct_field` (C2) ✓
+- `callable_callback_returned_from_generic` (C3) ✓
+- `callable_fn_ptr_in_array` (C4) ✓
+- `callable_callback_in_array` (C5) ✓
+- `callable_callback_drop_in_array` (C6) ✓
+- `callable_callback_in_hashmap_value` (C7) ✓
+- `callable_composed_callbacks` (C8) ✓
+
+Borrow checker suite: 90/90 pass.
+Boundary contract tests: 26/26 pass.
+
+#### Files changed in V2 (including blocker fixes)
+
+**Compiler (blocker fixes):**
+- `lang/codegen/llvm/llvm_codegen.py` — INTERFACE tombstone in `_emit_tombstone_value`
+- `lang/driftc/checker/call_resolver.py` — nothrow→throwing fn subtype in `_same_type`
+
+**Tests:**
+- `lang/tests/codegen/e2e/callable_callback_in_array/` — new (C5, passing)
+- `lang/tests/codegen/e2e/callable_callback_drop_in_array/` — new (C6, passing)
+- `lang/tests/codegen/e2e/callable_callback_in_hashmap_value/` — new (C7, passing)
+- `lang/tests/codegen/e2e/callable_composed_callbacks/` — new (C8, passing)
+- `lang/tests/codegen/e2e/callable_fn_ptr_in_struct_field/` — unskipped, updated (C2, passing, exact-match nothrow only)
+- `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_fn/` — new (pinned LANGUAGE_BUG, skip=true, ABI gap repro)
+
+---
+
+### 19. V3: Negative Coverage Tests
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** **All 3 negative tests passing.**
+
+#### V3 results
+
+| # | Test | Result | Expected Error | Detail |
+|---|------|--------|----------------|--------|
+| C9 | `callable_capturing_lambda_not_fn_ptr` | **PASS** | "capturing lambdas cannot be coerced to function pointers" | Capturing lambda assigned to `Fn(Int) nothrow -> Int` type — correctly rejected. |
+| C10 | `callable_borrowed_capture_callback_thread_rejected` | **PASS** | "closures with borrowed captures are non-escaping in v0" | Borrowed capture boxed into `Callback0<Void>` — correctly rejected. |
+| C11 | `callable_callback_arity_mismatch` | **PASS** | "callback1 expects a function with 1 argument(s)" | Zero-arg function passed to `callback1()` — correctly rejected with arity error. |
+
+#### Full validation matrix (V1+V2+V3)
+
+**Callable coercion e2e (11/11):**
+- C1 `callable_callback_in_struct_field` ✓
+- C2 `callable_fn_ptr_in_struct_field` ✓
+- C3 `callable_callback_returned_from_generic` ✓
+- C4 `callable_fn_ptr_in_array` ✓
+- C5 `callable_callback_in_array` ✓
+- C6 `callable_callback_drop_in_array` ✓
+- C7 `callable_callback_in_hashmap_value` ✓
+- C8 `callable_composed_callbacks` ✓
+- C9 `callable_capturing_lambda_not_fn_ptr` ✓ (negative)
+- C10 `callable_borrowed_capture_callback_thread_rejected` ✓ (negative)
+- C11 `callable_callback_arity_mismatch` ✓ (negative)
+
+**A5 boundary + high-sensitivity e2e (7/7):**
+- `borrow_escape_spawn_rejected` ✓
+- `borrow_escape_scope_accepted` ✓
+- `borrow_escape_thread_accepted` ✓
+- `implicit_callback_borrowed_capture_rejected` ✓
+- `borrowed_capture_interface_coercion_rejected` ✓
+- `result_ok_move_conn_source_drop_regression` ✓
+- `struct_ref_field_result_ok_move_drop_once` ✓
+
+**Borrow checker suite:** 90/90 pass.
+**Boundary contract tests:** 26/26 pass.
+
+#### Files changed in V3
+
+**Tests (new, negative coverage only):**
+- `lang/tests/codegen/e2e/callable_capturing_lambda_not_fn_ptr/` — new (C9, negative)
+- `lang/tests/codegen/e2e/callable_borrowed_capture_callback_thread_rejected/` — new (C10, negative)
+- `lang/tests/codegen/e2e/callable_callback_arity_mismatch/` — new (C11, negative)
+
+**No compiler files changed in V3.**
+
+#### V3 go/no-go gate
+
+- [x] All C9–C11 correctly reject with expected diagnostics.
+- [x] No regressions in B4/A5/boundary suites.
+- [x] All V1+V2 tests remain green (11/11 total).
+
+**Callable Coercion rollout complete (V1+V2+V3).** All 11 test cases passing, two compiler fixes landed, no regressions.

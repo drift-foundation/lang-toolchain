@@ -1,0 +1,9 @@
+module main
+
+fn add1(x: Int) nothrow -> Int { return x + 1; }
+
+fn main() nothrow -> Int {
+	val y = 10;
+	var f: Fn(Int) nothrow -> Int = |x: Int| captures(copy y) nothrow => { return x + y; };
+	return f(5);
+}

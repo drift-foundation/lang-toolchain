@@ -1,0 +1,20 @@
+module main
+
+import std.core as core;
+
+fn double(x: Int) nothrow -> Int { return x * 2; }
+fn add1(x: Int) nothrow -> Int { return x + 1; }
+
+fn main() nothrow -> Int {
+	val cb_double = core.callback1(double);
+	val cb_add1 = core.callback1(add1);
+	var composed: core.Callback1<Int, Int> = core.callback1(|x: Int| captures(move cb_double, move cb_add1) nothrow => {
+		val mid = cb_double.call(x);
+		return cb_add1.call(mid);
+	});
+	val result = composed.call(5);
+	if result != 11 { return 1; }
+	val result2 = composed.call(10);
+	if result2 != 21 { return 2; }
+	return 0;
+}

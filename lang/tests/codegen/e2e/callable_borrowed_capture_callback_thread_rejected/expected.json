@@ -1,0 +1,9 @@
+{
+  "description": "e2e negative: borrowed capture rejected when boxed into Callback0 (non-escaping v0 rule)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "closures with borrowed captures are non-escaping in v0"
+    }
+  ]
+}

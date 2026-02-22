@@ -1,0 +1,4 @@
+{
+  "description": "e2e: Callback1 values stored as HashMap values, verified via contains_key",
+  "exit_code": 0
+}

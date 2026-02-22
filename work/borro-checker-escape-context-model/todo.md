@@ -127,6 +127,28 @@ V2 done-when checklist:
 
 ## Appendix: Historical A5 Plan and Execution (Archived)
 
+### Queued Follow-Up (post callable-coercion slices)
+
+**Feature:** Bare block statements (standalone lexical scopes)
+
+Why queue this:
+1. RAII-heavy code (mutex guards, transaction guards, temporary resources) needs ad-hoc early-drop scopes.
+2. Current MVP syntax does not allow standalone `{ ... }` as a statement; scope narrowing requires helper functions or control-flow wrappers.
+
+Scope sketch (future work, not active now):
+1. Parser:
+   - accept bare `{ ... }` as a statement form.
+2. HIR/checker:
+   - represent bare block as nested lexical scope with normal binding visibility/drop behavior.
+   - ensure borrow-check diagnostics/spans remain consistent across explicit nested scope boundaries.
+3. Lowering:
+   - lower bare block using existing block-lowering path (same scope/drop semantics as control-flow blocks).
+
+Guardrails for when this becomes active:
+1. Regression-first: add failing parser/checker/lowering tests first.
+2. Boundary coverage: positive (early-drop scope works) + negative (illegal escapes still rejected).
+3. No workaround rewrites in stdlib/user code as substitute for missing block scopes.
+
 ## Reviewer Feedback (0–3b checkpoint)
 
 Reviewer: Codex  

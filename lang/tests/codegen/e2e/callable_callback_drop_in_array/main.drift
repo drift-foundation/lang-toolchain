@@ -1,0 +1,19 @@
+module main
+
+import std.core as core;
+
+struct Adder {
+	base: Int
+}
+
+fn main() nothrow -> Int {
+	var arr: Array<core.Callback0<Int>> = [];
+	val a1 = Adder(base = 10);
+	val a2 = Adder(base = 20);
+	var c1 = core.callback0(| | captures(move a1) nothrow => { return a1.base; });
+	var c2 = core.callback0(| | captures(move a2) nothrow => { return a2.base; });
+	arr.push(move c1);
+	arr.push(move c2);
+	if arr.len != 2 { return 1; }
+	return 0;
+}

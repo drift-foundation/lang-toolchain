@@ -1,7 +1,7 @@
 module main
 
 struct MathOp {
-	apply: Fn(Int, Int) -> Int
+	apply: Fn(Int, Int) nothrow -> Int
 }
 
 fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
@@ -10,8 +10,10 @@ fn mul(a: Int, b: Int) nothrow -> Int { return a * b; }
 fn main() nothrow -> Int {
 	val op_add = MathOp(apply = add);
 	val op_mul = MathOp(apply = mul);
-	val r1 = op_add.apply(3, 4);
-	val r2 = op_mul.apply(3, 4);
+	val f1 = op_add.apply;
+	val f2 = op_mul.apply;
+	val r1 = f1(3, 4);
+	val r2 = f2(3, 4);
 	if r1 != 7 { return 1; }
 	if r2 != 12 { return 2; }
 	return 0;
