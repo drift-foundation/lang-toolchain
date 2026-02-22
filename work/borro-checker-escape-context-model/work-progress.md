@@ -15,7 +15,7 @@ Current focus: Fn1 SCOPED borrowed-capture coercion — **Phase F1 complete**
 
 ## Known limitations (carry-forward)
 
-1. **SCOPED + capturing lambdas — type checker gate lifted (F1).** The call resolver no longer overrides `allow_capture_invoke = False` for Fn-trait-bounded generic params with borrowed captures. The type checker accepts the lambda and the borrow checker validates escape level. **Resolved by Phase F1 (see section 11).** Remaining gap: no e2e test yet exercises `conc.scope` with a `captures(&x)` lambda through full codegen (Phase F2 scope).
+1. **SCOPED + capturing lambdas — type checker gate lifted (F1), MIR lowering blocked (F2-D1).** The call resolver no longer overrides `allow_capture_invoke = False` for Fn-trait-bounded generic params with borrowed captures. The type checker accepts the lambda. However, MIR lowering crashes: `NotImplementedError: No MIR lowering for expr HLambda` — generic monomorphization instantiates `F` to a function pointer type with no room for capture environments. See section 12 (F2-D1) for full analysis. The escape context model is complete; the remaining gap is in the monomorphization/lambda-lowering subsystem.
 
 2. **`_place_is_defined_before_stmt` is conservative (MVP §3.6).** Only the direct enclosing block is checked for place definition. Borrows defined in predecessor or nested blocks are rejected even if provably safe. Full dataflow-based lifetime reasoning is deferred. `test_scoped_spawn_nested_block_false_positive` is the pinned regression for this behavior.
 
@@ -385,3 +385,133 @@ None.
 - However, no e2e test yet exercises `conc.scope` with an actual `captures(&x)` lambda through full codegen. F2 should add this.
 - The borrow checker's SCOPED path is proven by 22 unit tests. The remaining gap is the end-to-end path through MIR lowering and LLVM codegen, which may surface issues with the lambda's capture environment struct layout or calling convention.
 - F2 scope should include: (1) e2e `conc.scope` + borrowed capture test, (2) verification that captureless Fn1 lambdas are unaffected, (3) negative e2e tests (spawn + borrowed capture → reject).
+
+---
+
+### 12. Phase F2 implementation
+
+**Date:** 2026-02-21
+**Author:** Klaudia
+**Status:** Complete — **STOP for review** (blocker found: F2-D1)
+
+#### F2 checklist (copied from todo.md template)
+
+- [x] Added/updated F2 e2e test for SCOPED borrowed-capture accept (full codegen/runtime).
+  - **BLOCKED by F2-D1.** Test created (`scope_fn1_borrowed_capture_accepted`) but marked `skip: true`. Lambda passes type checker (F1 fix works) but crashes at MIR lowering: `NotImplementedError: No MIR lowering for expr HLambda`. Root cause: monomorphization gap (see F2-D1 below).
+- [x] Added/updated F2 e2e test for SCOPED borrowed-capture non-outliving reject (`E_ESCAPE_SCOPE`).
+  - **N/A at e2e level.** E_ESCAPE_SCOPE requires synthetic MIR block layout not constructible from Drift source. Covered by 3 unit tests in `test_escape_level_model.py`.
+- [x] Added/updated F2 e2e test for THREAD borrowed-capture reject (`E_ESCAPE_THREAD`).
+  - **Already covered** by existing `borrow_escape_spawn_rejected` e2e test (5/5 passes). No additional test needed — `conc.spawn` uses `Callback0<T>`, not Fn-bounded generic. No stdlib function combines `F is Fn1<...>` with THREAD escape annotation.
+- [x] Confirmed `lang/tests/driver/test_fn1_scope_borrowed_capture.py` passes. (2/2)
+- [x] Confirmed `test_escape_level_model.py` passes. (22/22)
+- [x] Confirmed A5 e2e boundary set passes:
+  - `borrow_escape_spawn_rejected` — ok
+  - `borrow_escape_scope_accepted` — ok
+  - `borrow_escape_thread_accepted` — ok
+  - `implicit_callback_borrowed_capture_rejected` — ok
+  - `borrowed_capture_interface_coercion_rejected` — ok
+- [x] Confirmed boundary guard/contract tests pass:
+  - `test_callinfo_param_layout_contract.py` — 11 passed
+  - `test_boundary_matrix_result_variant_contract.py` — 4 passed
+  - `test_struct_ref_field_boundary_contract.py` — 8 passed
+  - `test_call_contract_ownership_guard.py` — 3 passed
+- [x] Confirmed full borrow checker suite: 89 passed
+- [x] Confirmed full stage2 suite: 86 passed
+- [x] Documented newly discovered compiler defect (F2-D1) with minimal repro + subsystem analysis.
+- [x] Added F2 go/no-go recommendation (see below).
+
+#### F2 scope analysis
+
+**Planned tests 3–7 assessment:**
+
+| # | Test | E2e feasibility | Status |
+|---|------|-----------------|--------|
+| 3 | `scope_fn1_borrowed_capture_accepted` — `conc.scope` + `captures(&x)` through full codegen | **Created, skip=true** — blocked by F2-D1 (MIR lowering crash) | **BLOCKED** |
+| 4 | `scope_fn1_move_capture_accepted` — `conc.scope` + `captures(copy x)` no regression | **Created, skip=true** — blocked by pre-existing limitation (capturing lambdas cannot be coerced to function pointers) | **BLOCKED** |
+| 5 | `scope_fn1_borrowed_capture_non_outliving_rejected` — E_ESCAPE_SCOPE | **Not constructible** at e2e level — requires synthetic MIR block layout; covered by `test_scoped_spawn_with_non_outlying_borrow_rejected` + `test_scoped_spawn_nested_block_false_positive` in unit tests | N/A (unit-level only) |
+| 6 | `spawn_borrowed_capture_still_rejected` — E_ESCAPE_THREAD | **Already covered** by existing `borrow_escape_spawn_rejected` e2e test (passes) | Confirmed |
+| 7 | `fn1_bounded_thread_annotated_rejected` — Fn1 + THREAD + borrowed capture | **Not constructible** — no stdlib function combines `F is Fn1<...>` bound with THREAD escape annotation; `conc.spawn` uses `Callback0<T>` (not Fn-bounded generic) | N/A (no stdlib surface) |
+
+**Why tests 5 and 7 are not constructible at e2e level:**
+
+- **Test 5:** E_ESCAPE_SCOPE requires a captured loan whose place is not defined before the scope call in the *direct enclosing MIR basic block*. At the Drift source level, lexical scoping ensures any referenceable variable is defined in an accessible scope. The conservative rejection only surfaces when MIR basic block boundaries split variable definitions from their use — a synthetic scenario already covered by 3 borrow checker unit tests.
+
+- **Test 7:** `conc.spawn` takes `core.Callback0<T>`, not a generic `F is Fn*`. `conc.scope` is the only stdlib function with `F is Fn1<...>` bound, and it has SCOPED (not THREAD) escape annotation. Creating a user-defined function with THREAD escape level would require the `analyze_non_retaining_params` driver phase to classify it as THREAD, which depends on internal thread-spawning behavior not expressible in user code.
+
+**Risk analysis for F2 (realized):**
+
+| Risk | Status | Outcome |
+|------|--------|---------|
+| Borrowed capture lambda fails at MIR lowering | **Realized** | F2-D1: `NotImplementedError: No MIR lowering for expr HLambda` |
+| Copy capture lambda regresses from F1 changes | **Confirmed pre-existing** | "capturing lambdas cannot be coerced to function pointers" — same root cause as F2-D1 |
+| Existing A5 boundary tests regress | **Retired** | All 5/5 pass, all guard/contract tests pass |
+
+#### F2-D1: Monomorphization gap for capturing lambdas in Fn-trait-bounded generics
+
+**Severity:** Blocker for `conc.scope` + captured lambda user scenario.
+
+**Minimal repro:**
+```drift
+module m
+import std.core as core;
+fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> { f.call(42); }
+fn main() nothrow -> Int {
+	var x: Int = 10;
+	apply(|_a| captures(&x) => {});
+	return 0;
+}
+```
+
+**What happens:**
+1. **Type checker:** Accepts the lambda (F1 fix works — `allow_capture_invoke` stays True for Fn*-bounded params with borrowed captures).
+2. **Borrow checker:** Would accept (SCOPED promotion path, proven by 22 unit tests).
+3. **MIR lowering:** Crashes with `NotImplementedError: No MIR lowering for expr HLambda` at `hir_to_mir.py:1039`.
+
+**Root cause chain:**
+
+1. **Surface:** `_lower_expr_raw` dispatches by HIR expression type. There is no `_visit_expr_HLambda` handler. HLambda is handled only in specific contexts: intrinsic args (line 2348), immediate calls (line 2407-2408), and `_lower_lambda_callback` (for callback0/1/2 wrapping). A bare HLambda as a non-intrinsic call arg falls through to `NotImplementedError`.
+
+2. **Structural:** The call resolver (TP4/TP5/TP10) transforms lambdas before MIR lowering in two ways:
+   - **Captureless:** Coerced to function pointer (`allow_capture_invoke = False` → type checker treats as fn ptr). No HLambda remains.
+   - **Callback-typed:** Wrapped in `callback0/1/2(lambda)` (TP10). The intrinsic handler extracts the lambda to a hidden function + env struct. HLambda is consumed.
+   - **Fn-bounded + captures (F1 case):** Neither path applies. The lambda keeps `allow_capture_invoke = True` (no fn ptr coercion) and the param is Fn1-typed, not Callback-typed (no TP10 wrapping). A bare HLambda with captures reaches MIR lowering.
+
+3. **Architectural (root cause):** Generic monomorphization instantiates `F` to a function pointer type (the lambda's inferred type). Function pointers are a single value — no room for capture environments. The monomorphized body of `apply` calls `f.call(42)` as a direct function call, expecting a single fn ptr argument. But a capturing lambda needs both a fn ptr AND an env ptr.
+
+   This is a variant of the problem Rust solves with unique closure types + Fn trait impls. Drift's monomorphization model doesn't generate unique types for capturing lambdas, so there's no way to carry capture environments through generic `F is Fn1<A,R>` parameters.
+
+**Why copy captures have the same limitation:**
+
+Copy-capturing lambdas (e.g., `captures(copy x)`) hit the same wall earlier — at the type checker. With `allow_capture_invoke = False` (F1 fix doesn't apply to copy captures), the type checker tries to coerce the lambda to a function pointer, which fails: "capturing lambdas cannot be coerced to function pointers". The F1 fix only relaxes the borrowed-capture-specific rejection message.
+
+**Relationship to INV-1 (Approach A):**
+
+This confirms that INV-1 (Callback1 doesn't implement Fn1) is the deeper blocker. Even if MIR lowering had an HLambda handler, the monomorphized call site would not pass the env pointer correctly. A correct fix requires one of:
+1. **Closure type generation:** Generate a unique type for each capturing lambda that carries the env struct. Add `implement Fn1 for <ClosureType>`. Monomorphize `apply` with the closure type.
+2. **Fn1 impl for Callback:** `implement Fn1 for Callback1`. Then callback-wrapping (Approach A) would work.
+3. **Env-passing calling convention:** Monomorphize Fn-bounded generics to pass an implicit env pointer alongside the function pointer.
+
+All three are significant architectural changes beyond F2 scope.
+
+**E2e tests added:**
+- `scope_fn1_borrowed_capture_accepted/` — skip=true, documents desired behavior + F2-D1 blocker.
+- `scope_fn1_move_capture_accepted/` — skip=true, documents desired behavior + pre-existing limitation.
+
+#### F2 go/no-go recommendation
+
+**NO-GO for closure.** F2 validation reveals F2-D1: the `conc.scope` + captured lambda user scenario is blocked at MIR lowering by a monomorphization architecture gap. The F1 type checker fix is correct and valuable (lifts the borrowed-capture rejection for Fn-bounded generics), but the end-to-end path requires additional compiler work beyond the escape context model.
+
+**What F1 accomplished (still valid):**
+- Type checker no longer rejects borrowed-capture lambdas for Fn*-bounded generic params. This is the correct semantic decision.
+- Borrow checker SCOPED/THREAD/STATIC enforcement is complete and proven by 22 unit tests.
+- All existing safety boundaries are preserved (spawn, callback coercion, interface boxing).
+
+**What remains:**
+- MIR lowering path for capturing lambdas as generic call args (F2-D1).
+- This is a monomorphization/calling convention issue, not an escape context model issue. Recommend filing separately under a compiler architecture item.
+
+**Recommended next action:**
+1. Keep F1 fix in place (correct semantic, no regressions).
+2. Keep skipped e2e tests as documentation of the desired behavior.
+3. File F2-D1 as a separate monomorphization item (outside borrow-checker-escape-context-model scope).
+4. Close the borrow-checker-escape-context-model work item — the escape context model is complete. The remaining gap is in the monomorphization/lambda-lowering subsystem.
