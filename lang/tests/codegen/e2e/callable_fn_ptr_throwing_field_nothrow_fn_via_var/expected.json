@@ -1,0 +1,4 @@
+{
+  "description": "nothrow fn assigned to mutable local (var), reassigned, then stored into throwing fn-typed struct field via thunk",
+  "exit_code": 0
+}

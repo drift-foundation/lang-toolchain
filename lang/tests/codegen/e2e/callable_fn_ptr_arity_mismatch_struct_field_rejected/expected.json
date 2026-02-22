@@ -1,0 +1,9 @@
+{
+  "description": "fn-ptr arity mismatch in struct field — 1-arg nothrow fn stored into 2-arg throwing field, checker must reject",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "type mismatch"
+    }
+  ]
+}

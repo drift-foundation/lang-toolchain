@@ -1,0 +1,22 @@
+module main
+
+struct MathOp {
+	apply: Fn(Int, Int) -> Int
+}
+
+fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
+
+fn run() -> Int {
+	val f = add;
+	val op = MathOp(apply = f);
+	val g = op.apply;
+	val result = g(3, 4);
+	if result != 7 {
+		return 10;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

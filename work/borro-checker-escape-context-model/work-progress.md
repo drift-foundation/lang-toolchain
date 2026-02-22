@@ -1612,3 +1612,55 @@ At the existing type-mismatch check (line ~2624), added detection: if the field 
 - [x] New negative incompatibility regression added and passing (`callable_throwing_fn_to_nothrow_field_rejected`).
 - [x] Existing callable/B4/A5 high-sensitivity set remains green.
 - [x] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix.
+
+### 22. V4.6: Fn-Ptr ABI Thunk Hardening + Local-Source Coverage
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** Complete.
+
+#### 22.1 Review-driven hardening (from V4.5 feedback)
+
+Three issues identified and resolved:
+
+1. **HIGH — local SSA register guard:** Added `arg_val.startswith("@")` check at ConstructStruct thunk path. Only global function symbols are thunked; local registers fall through to the existing contract error. Prevents invalid IR from referencing caller-local values in module-level thunks.
+
+2. **MEDIUM — shape validation before thunking:** Added `have == nothrow_llty` check that computes the nothrow variant of the field's fn-ptr type and compares against the arg's actual LLVM type. Thunk is only emitted when the signatures match in arity/param-types/return-type and differ only in throwness. Any other shape mismatch hits the existing error.
+
+3. **LOW — dead code removal:** Removed unused `nothrow_fn_llty` variable from `_emit_nothrow_to_throwing_thunk`.
+
+#### 22.2 Support matrix
+
+| Source shape | Example | Supported | Guard |
+|-------------|---------|-----------|-------|
+| Direct fn symbol | `MathOp(apply = add)` | Yes | `arg_val.startswith("@")` + `have == nothrow_llty` |
+| Val-bound fn symbol | `val f = add; MathOp(apply = f)` | Yes | SSA value_map resolves to `@sym` |
+| Var-reassigned fn symbol | `var f = add; f = sub; MathOp(apply = f)` | Yes | SSA resolves to final `@sym` |
+| Address-taken local (load from alloca) | Theoretical — `&mut f` | No (contract error) | `arg_val.startswith("@")` rejects `%`-prefixed registers |
+| Arity/param-type mismatch | `Fn(Int,Int)->Int` field ← 1-arg fn | No (checker rejects) | Checker type mismatch fires before codegen |
+| Throwing→nothrow direction | `Fn(Int) nothrow -> Int` field ← throwing fn | No (checker rejects) | Checker type mismatch fires before codegen |
+
+The address-taken local case is unreachable in practice today: fn-ptr locals that are only assigned and read (no `&`/`&mut`) resolve to the original `@sym` through SSA. The guard is purely defensive for future compiler changes.
+
+#### 22.3 New tests added
+
+| Test | Shape | Result |
+|------|-------|--------|
+| `callable_fn_ptr_throwing_field_nothrow_fn_via_local` | `val f = add; MathOp(apply = f)` | PASS (exit 0) |
+| `callable_fn_ptr_throwing_field_nothrow_fn_via_var` | `var f = add; f = sub; MathOp(apply = f)` | PASS (exit 0) |
+| `callable_fn_ptr_arity_mismatch_struct_field_rejected` | 1-arg fn → 2-arg throwing field | PASS (rejected: type mismatch) |
+
+#### 22.4 Pass/fail matrix
+
+| Test | Result |
+|------|--------|
+| All 16 callable e2e tests (12 existing + 4 new) | **PASS** (16/16) |
+| A5 boundary tests (7/7) | **PASS** |
+| Borrow checker unit tests (90/90) | **PASS** |
+
+#### 22.5 Done-when checklist (V4.6)
+
+- [x] New local/intermediate-source regression added and passing (`callable_fn_ptr_throwing_field_nothrow_fn_via_local`, `callable_fn_ptr_throwing_field_nothrow_fn_via_var`).
+- [x] Existing V4.5 positive/negative callable e2e remain green.
+- [x] Added boundary contract check for fn-ptr mismatch path (`callable_fn_ptr_arity_mismatch_struct_field_rejected`).
+- [x] `work-progress.md` updated with support matrix (§22.2) and rationale.

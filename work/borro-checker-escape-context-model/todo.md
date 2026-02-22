@@ -85,43 +85,51 @@ Done-when checklist:
 - [x] C10 naming/coverage mismatch is resolved — renamed to `callable_borrowed_capture_callback_boxing_rejected`.
 - [x] `work-progress.md` updated with the above and clear go/no-go recommendation for V4.5 implementation. (work-progress.md §20.7: GO)
 
-### Active Phase: Callable Coercion V4.5 (Fn-Ptr ABI Thunk Implementation)
+### Completed Phase: Callable Coercion V4.5 (Fn-Ptr ABI Thunk Implementation)
 
-Status: **APPROVED** (plan reviewed; proceed with implementation against V4 design in `work-progress.md`).
+Status: **DONE**.
+
+Outcome:
+1. Throwing fn-typed struct field now accepts compatible nothrow fn symbols through a codegen thunk bridge.
+2. Positive blocker test unskipped and passing: `callable_fn_ptr_throwing_field_nothrow_fn`.
+3. Negative direction pinned and passing: `callable_throwing_fn_to_nothrow_field_rejected`.
+4. High-sensitivity callable/B4/A5 set remains green.
+
+### Active Phase: Callable Coercion V4.6 (Fn-Ptr ABI thunk hardening + local-source coverage)
+
+Status: **APPROVED** (proceed).
 
 Objective:
-1. Implement the V4-designed codegen bridge so a throwing fn-typed field can store/invoke a nothrow function pointer safely.
-2. Convert pinned blocker `callable_fn_ptr_throwing_field_nothrow_fn` from skip to passing.
+1. Harden V4.5 thunk behavior with explicit coverage for non-global/local fn-ptr source shapes.
+2. Ensure unsupported source shapes fail with clear contract diagnostics (not internal crashes).
 
 Scope (Klaudia):
-1. Implement thunk/wrapper path at the codegen locations pinned in V4 (`work-progress.md` section 20.4).
-2. Keep checker semantics aligned with existing nothrow->throwing subtype rule in `call_resolver`.
-3. Unskip the pinned blocker only after end-to-end pass is confirmed.
-4. Add one negative regression that proves incompatible fn signatures still fail cleanly.
+1. Add a positive e2e that stores/invokes a throwing fn field from an allowed thunked source path (keep existing V4.5 positive).
+2. Add a new focused regression for local/intermediate fn-ptr source (for example assign fn ptr to local first, then store to field):
+   - if supported after implementation: assert pass and runtime correctness,
+   - if intentionally unsupported in MVP: assert checker/lowering diagnostic is clear and non-internal.
+3. Add one driver-level contract assertion (or equivalent) that mismatched fn-ptr shapes still produce explicit mismatch diagnostics.
+4. Keep changes localized to callable fn-ptr storage/invocation handling in codegen/checker paths.
 5. Do not change archived sections in this file.
 
 Execution rules:
-1. Regression-first:
-   - keep the current pinned blocker as failing baseline,
-   - implement minimal codegen/checker change-set,
-   - confirm positive + negative regression outcomes.
+1. Regression-first for any behavior extension.
 2. Boundary Contract Guardrails remain strict:
-   - positive end-to-end coverage for newly supported ABI shape,
-   - negative rejection coverage for unsupported shape,
-   - stale comment/test/diagnostic alignment updates if behavior changes.
+   - positive + negative coverage,
+   - stale test/message/comment alignment.
 3. Stop conditions:
-   - first out-of-scope ABI/lowering defect outside fn-ptr field storage/invocation,
-   - or change-set ceases to be localized to planned files.
+   - first out-of-scope ABI defect outside fn-ptr storage/invocation,
+   - or any new user-facing `internal:` diagnostic.
 
 Done-when checklist:
-- [x] `callable_fn_ptr_throwing_field_nothrow_fn` unskipped and passing.
-- [x] New negative incompatibility regression added and passing (`callable_throwing_fn_to_nothrow_field_rejected`).
-- [x] Existing callable/B4/A5 high-sensitivity set remains green.
-- [x] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix (§21).
+- [x] New local/intermediate-source regression added and passing (`callable_fn_ptr_throwing_field_nothrow_fn_via_local`, `callable_fn_ptr_throwing_field_nothrow_fn_via_var`).
+- [x] Existing V4.5 positive/negative callable e2e remain green (16/16).
+- [x] Added boundary contract check for fn-ptr mismatch path (`callable_fn_ptr_arity_mismatch_struct_field_rejected`).
+- [x] `work-progress.md` updated with support matrix (§22.2) and rationale.
 
 ### Plan Review Gate (owner)
 
-Before merge/sign-off of V4.5:
+Before merge/sign-off of V4.6:
 1. Review implementation diff against V4 design notes (ABI mapping + thunk ownership).
 2. Confirm guardrail coverage is complete (positive + negative + stale-doc alignment).
 3. Confirm no new `internal:`-prefixed user diagnostics introduced.

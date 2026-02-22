@@ -1,0 +1,16 @@
+module main
+
+struct Op {
+	apply: Fn(Int, Int) -> Int
+}
+
+fn inc(x: Int) nothrow -> Int { return x + 1; }
+
+fn run() -> Int {
+	val op = Op(apply = inc);
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

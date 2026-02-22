@@ -1,0 +1,4 @@
+{
+  "description": "nothrow fn assigned to local, then stored into throwing fn-typed struct field via thunk; invocation returns correct value",
+  "exit_code": 0
+}

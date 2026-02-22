@@ -1,3 +1,37 @@
+## 2026-02-22 - Runtime executor running-accounting hardening and stress pin
+- Fixed executor running-counter leak in runtime worker dequeue path:
+  - `lang/language_runtime/posix/thread_runtime.c`
+  - `drift_exec_worker(...)` now decrements `exec->running` on the null-task (`vt == NULL`) branch before continuing.
+- Added runtime visibility hook for accounting validation:
+  - `drift_exec_get_running(uint64_t exec) -> int64_t`
+  - wired through intrinsic path (`lang.thread.exec_get_running`) and LLVM codegen v1/v2.
+- Added high-signal stress regression:
+  - `lang/tests/codegen/e2e/concurrent_exec_running_accounting_stress/`
+  - mixes cancel-before-start and normal spawn/join loops, drains, then asserts `exec_get_running == 0`.
+  - dedicated failure code pin for running-counter leakage.
+- Improved diagnostics in existing flaky stress pair:
+  - `lang/tests/codegen/e2e/concurrent_cancel_before_start_race_stress/main.drift`
+  - `lang/tests/codegen/e2e/concurrent_cancel_before_start_race_stress_diagnostic/main.drift`
+  - error outcomes now return classified codes (`Closed/Busy/Failed/default`) instead of generic `1`.
+
+## 2026-02-22 - Callable coercion V4.5: throwing fn-field accepts nothrow fn via ABI thunk
+- Implemented codegen bridge for the pinned callable ABI gap:
+  - `lang/codegen/llvm/llvm_codegen.py`
+  - when storing into a throwing function-pointer struct field, codegen now emits an internal nothrow->throwing thunk that wraps raw return into `FnResult<ok, Error>`.
+- Hardened thunk activation to safe/explicit cases:
+  - only when field is throwing function type,
+  - only when source value type matches exact nothrow fn-ptr shape,
+  - only for module symbol sources (`@...`) to avoid invalid cross-function SSA capture.
+- Re-enabled and tightened positive e2e:
+  - `lang/tests/codegen/e2e/callable_fn_ptr_throwing_field_nothrow_fn/`
+  - unskipped; now asserts runtime result and exits `0`.
+- Added negative regression for incompatible direction:
+  - `lang/tests/codegen/e2e/callable_throwing_fn_to_nothrow_field_rejected/`
+  - asserts checker rejection (`type mismatch`) for assigning throwing fn into nothrow field.
+- Updated active planning/progress docs for V4.5 execution and guardrail tracking:
+  - `work/borro-checker-escape-context-model/todo.md`
+  - `work/borro-checker-escape-context-model/work-progress.md`
+
 ## 2026-02-21 - A1 completed: call-shape validation centralized in `call_contract.py`
 - Completed A1 refactor so call-shape validation decisions are centralized in `lang/driftc/call_contract.py` across intrinsic calls, constructor shape, array method arity, generic kwargs rejection, and structural CallInfo checks.
 - Migrated duplicated validation branches from checker/stage2 to shared contract APIs:
