@@ -41,68 +41,91 @@ Summary:
 2. Remaining blocker from V1: C2 (`Fn(...)` in struct field) is a pinned LANGUAGE_BUG in checker type unification.
 3. Owner-confirmed C4 fix landed with targeted borrow-check regression pin.
 
-### Active Phase: Callable Coercion V1.5 (C2 LANGUAGE_BUG resolution)
+### Completed Phases: Callable Coercion V1.5 + V2 + V3 (DONE)
+
+Summary:
+1. C2 checker-level defect resolved for exact-match fn-ptr struct field storage.
+2. V2 container callable coverage (C5-C8) landed with required fixes and regressions.
+3. V3 negative callable coverage (C9-C11) landed and passing.
+4. Remaining pinned LANGUAGE_BUG: throwing fn-typed field assigned nothrow fn (ABI mismatch; requires thunk/wrapper).
+
+### Completed Phase: Callable Coercion V4 (Fn-Ptr Throwing/Nothrow ABI Thunk Design + Repro Hardening)
 
 Objective:
-1. Fix the checker defect where `Fn(...)` typed struct fields reject matching function values (`have fn, expected fn`).
-2. Keep existing callable-coercion coverage green (C1/C3/C4 + B4 safety set).
+1. Convert the remaining ABI mismatch blocker into a precise implementation plan and hardened repro gate.
+2. Prepare execution-ready slice for codegen thunk/wrapper support without coding in this phase.
 
 Scope (Klaudia):
-1. Regression-first for C2:
-   - keep/pin minimal failing repro (existing e2e case is acceptable),
-   - add a targeted driver regression if needed for checker-only signal.
-2. Fix root cause in checker type unification path (no stdlib/workaround changes).
-3. Unskip `callable_fn_ptr_in_struct_field` only after fix is confirmed.
-4. Do not change archived sections in this file.
-5. Batch policy: if V1.5 exits green, proceed immediately to V2 in the same work window (no separate handoff required).
+1. Work from pinned repro: `callable_fn_ptr_throwing_field_nothrow_fn/` (currently skip=true).
+2. Produce an explicit ABI design note in `work-progress.md`:
+   - current LLVM signatures (throwing vs nothrow fn ptr),
+   - required thunk signature and call convention bridge,
+   - where thunk is emitted (codegen stage/function),
+   - how assignment/storage/invocation paths map to thunked value.
+3. Add/adjust regression plan:
+   - positive: throwing field accepts nothrow fn and runs end-to-end (after thunk),
+   - negative: incompatible fn signatures still reject with clear diagnostic.
+4. Clarify C10 naming mismatch:
+   - rename or document that `callable_borrowed_capture_callback_thread_rejected` currently covers callback boxing non-escape, not THREAD boundary.
+5. Do not implement thunk code in this phase.
+6. Do not change archived sections in this file.
 
 Execution rules:
-1. Regression-first and stop-on-bug:
-   - classify C2 as LANGUAGE_BUG and keep pinned repro path in `work-progress.md`,
-   - implement smallest checker-side fix,
-   - confirm positive + negative behavior post-fix.
-2. No semantic masking/workarounds in stdlib or user-facing code.
-3. Keep Boundary Contract Guardrails strict:
-   - add/adjust positive regression proving supported `Fn` struct-field shape works end-to-end,
-   - add/adjust negative regression for unsupported/mismatched callable assignment shape,
-   - update stale comments/tests/messages if boundary expectations change.
+1. Design-only phase:
+   - no compiler/runtime behavior changes,
+   - regression-first execution plan only.
+2. Keep Boundary Contract Guardrails strict in proposed plan:
+   - positive + negative + stale-comment/message alignment.
+3. Stop-and-report any newly discovered ABI side channel outside fn-ptr field storage/invocation scope.
 
 Done-when checklist:
-- [ ] C2 regression is pinned and fails pre-fix.
-- [ ] Checker root cause fix is landed (no workaround).
-- [ ] `callable_fn_ptr_in_struct_field` unskipped and passing.
-- [ ] Existing callable/B4 boundary set remains green.
-- [ ] `work-progress.md` updated with repro, root cause, fix, and validation matrix.
+- [x] ABI mismatch is specified with concrete before/after LLVM signature mapping. (work-progress.md §20.2–20.3)
+- [x] Thunk emission/ownership location is pinned to specific codegen functions. (work-progress.md §20.4)
+- [x] Regression-first execution slice is written (positive + negative + boundary checks). (work-progress.md §20.6)
+- [x] C10 naming/coverage mismatch is resolved — renamed to `callable_borrowed_capture_callback_boxing_rejected`.
+- [x] `work-progress.md` updated with the above and clear go/no-go recommendation for V4.5 implementation. (work-progress.md §20.7: GO)
 
-### Phase chaining: V1.5 -> V2 (batched execution approved)
+### Active Phase: Callable Coercion V4.5 (Fn-Ptr ABI Thunk Implementation)
 
-Auto-advance rule:
-1. After all V1.5 done-when items are green, continue directly with V2 without waiting for a new todo update.
+Status: **APPROVED** (plan reviewed; proceed with implementation against V4 design in `work-progress.md`).
 
-V2 objective:
-1. Land Tier-2 callable storage validation (C5-C8) from `work-progress.md` section 16:
-   - callback in array,
-   - callback drop in array (leak-safe),
-   - callback in hashmap value,
-   - composed callbacks (callback captures callback).
+Objective:
+1. Implement the V4-designed codegen bridge so a throwing fn-typed field can store/invoke a nothrow function pointer safely.
+2. Convert pinned blocker `callable_fn_ptr_throwing_field_nothrow_fn` from skip to passing.
 
-V2 execution rules:
+Scope (Klaudia):
+1. Implement thunk/wrapper path at the codegen locations pinned in V4 (`work-progress.md` section 20.4).
+2. Keep checker semantics aligned with existing nothrow->throwing subtype rule in `call_resolver`.
+3. Unskip the pinned blocker only after end-to-end pass is confirmed.
+4. Add one negative regression that proves incompatible fn signatures still fail cleanly.
+5. Do not change archived sections in this file.
+
+Execution rules:
 1. Regression-first:
-   - add the target test,
-   - if it fails, pin minimal repro and suspected subsystem,
-   - apply smallest root-cause fix in compiler/runtime only if in scope.
-2. Keep Boundary Contract Guardrails strict:
-   - positive + negative coverage for any boundary-shape changes,
-   - align stale comments/tests/messages when behavior changes.
+   - keep the current pinned blocker as failing baseline,
+   - implement minimal codegen/checker change-set,
+   - confirm positive + negative regression outcomes.
+2. Boundary Contract Guardrails remain strict:
+   - positive end-to-end coverage for newly supported ABI shape,
+   - negative rejection coverage for unsupported shape,
+   - stale comment/test/diagnostic alignment updates if behavior changes.
 3. Stop conditions:
-   - first out-of-scope LANGUAGE_BUG,
-   - or change-set no longer localized to declared callable-storage files.
+   - first out-of-scope ABI/lowering defect outside fn-ptr field storage/invocation,
+   - or change-set ceases to be localized to planned files.
 
-V2 done-when checklist:
-- [ ] C5-C8 tests are present and passing, or blocked cases are explicitly pinned as LANGUAGE_BUG with repro.
-- [ ] No semantic masking/workaround in stdlib/user code.
-- [ ] Existing callable/B4 high-sensitivity set remains green.
-- [ ] `work-progress.md` contains V2 pass/fail matrix and any blocker records.
+Done-when checklist:
+- [ ] `callable_fn_ptr_throwing_field_nothrow_fn` unskipped and passing.
+- [ ] New negative incompatibility regression added and passing.
+- [ ] Existing callable/B4/A5 high-sensitivity set remains green.
+- [ ] `work-progress.md` records before/after behavior, touched files, and pass/fail matrix.
+
+### Plan Review Gate (owner)
+
+Before merge/sign-off of V4.5:
+1. Review implementation diff against V4 design notes (ABI mapping + thunk ownership).
+2. Confirm guardrail coverage is complete (positive + negative + stale-doc alignment).
+3. Confirm no new `internal:`-prefixed user diagnostics introduced.
+4. Confirm no unresolved LANGUAGE_BUG remains hidden behind skip/workaround.
 
 ### Open Follow-Ups (active)
 

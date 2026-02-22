@@ -1439,3 +1439,128 @@ Boundary contract tests: 26/26 pass.
 - [x] All V1+V2 tests remain green (11/11 total).
 
 **Callable Coercion rollout complete (V1+V2+V3).** All 11 test cases passing, two compiler fixes landed, no regressions.
+
+---
+
+### 20. V4: Fn-Ptr Throwing/Nothrow ABI Thunk Design
+
+**Date:** 2026-02-22
+**Author:** Klaudia
+**Status:** Design-only (no compiler changes).
+
+#### 20.1 Problem statement
+
+A struct field declared `Fn(Int, Int) -> Int` (throwing, default) cannot store a `nothrow` function reference end-to-end. The checker accepts the assignment (subtype fix in `_same_type`), but LLVM codegen crashes because the two function pointer types have different return-type ABIs:
+
+| Function kind | LLVM function pointer type | Return ABI |
+|---------------|---------------------------|------------|
+| `Fn(Int,Int) -> Int` (throwing) | `%FnResult_Int_Error (i64, i64)*` | `{i1, i64, %DriftError*}` |
+| `fn add(...) nothrow -> Int` | `i64 (i64, i64)*` | `i64` |
+
+The crash fires at `ConstructStruct` (llvm_codegen.py:2626) when the struct field LLVM type doesn't match the argument LLVM type.
+
+Pinned repro: `callable_fn_ptr_throwing_field_nothrow_fn/` (skip=true).
+
+#### 20.2 Before/after LLVM signature mapping
+
+**Before (current — crashes):**
+```
+; Struct field type (throwing):
+%MathOp = type { %FnResult_Int_Error (i64, i64)* }
+
+; Function reference (nothrow):
+define i64 @add(i64 %a, i64 %b) { ... ret i64 ... }
+
+; ConstructStruct: tries to store i64(i64,i64)* into %FnResult_Int_Error(i64,i64)* slot
+; → type mismatch → crash
+```
+
+**After (with thunk):**
+```
+; Thunk wraps nothrow fn into throwing fn signature:
+define internal %FnResult_Int_Error @__fnthunk_add(i64 %a0, i64 %a1) {
+entry:
+  %raw = call i64 @add(i64 %a0, i64 %a1)
+  %res = insertvalue %FnResult_Int_Error { i1 false, i64 undef, %DriftError* null }, i64 %raw, 1
+  ret %FnResult_Int_Error %res
+}
+
+; ConstructStruct: stores @__fnthunk_add — types match
+%op = ... store %FnResult_Int_Error (i64, i64)* @__fnthunk_add ...
+```
+
+The thunk:
+1. Calls the original nothrow function with the same arguments.
+2. Wraps the raw return value into a `%FnResult_T_Error` with `is_err = false`, `ok = <raw result>`, `err = null`.
+3. Returns the FnResult — matching the throwing fn ptr ABI.
+
+#### 20.3 Void-returning nothrow→throwing thunk
+
+For `Fn() -> Void` (throwing) accepting a `fn() nothrow -> Void`:
+```
+define internal %FnResult_Void_Error @__fnthunk_void_fn() {
+entry:
+  call void @original_fn()
+  ret %FnResult_Void_Error { i1 false, i8 0, %DriftError* null }
+}
+```
+
+The `ok` field for Void-returning FnResult uses `i8 0` (void-like placeholder, per codegen convention at llvm_codegen.py:22-24).
+
+#### 20.4 Thunk emission location
+
+**Where:** `llvm_codegen.py`, in the `ConstructStruct` instruction handler (line ~2618), or factored into a new helper `_emit_nothrow_to_throwing_thunk(...)`.
+
+**When:** At the point where a FUNCTION-typed argument is being stored into a struct field, if the argument's `fn_throws` is `False` and the field's `fn_throws` is `True`, emit the thunk and substitute the thunk pointer for the original function pointer.
+
+**Ownership:** The thunk is a module-level function (emitted via `self.module.emit_func(...)`), not inlined. It is generated once per unique (source_fn, target_fn_type) pair. A cache (`_nothrow_thunk_cache: Dict[Tuple[str, str], str]`) deduplicates across multiple struct constructions using the same fn reference + target type.
+
+**Anchor functions in llvm_codegen.py:**
+- `_fn_ptr_lltype` (line 5062): produces the LLVM function pointer type string — used for both field type and thunk type.
+- `_emit_callback_thunk` (line 5094): existing thunk emission pattern for callback env capture — same structural pattern (define internal, call target, ret result) can be reused.
+- `ConstructStruct` handler (line 2618): insertion point for thunk-or-passthrough decision.
+
+**Alternative insertion point:** Instead of ConstructStruct only, the thunk could also be needed at:
+- Array element store (if `Array<Fn(...) -> T>` stores a nothrow fn) — but C4 tests show this works when both sides match, and the throwing/nothrow mismatch case is the same structural problem.
+- `CallIndirect` (line 4929): currently does a `bitcast` when types mismatch — this is **unsound** (caller and callee disagree on return type). After thunk support, this bitcast should be removed in favor of thunk wrapping.
+
+#### 20.5 Scope of change
+
+| File | Change | Lines |
+|------|--------|-------|
+| `llvm_codegen.py` | Add `_emit_nothrow_to_throwing_thunk(fn_name, param_types, user_ret_type) -> thunk_name` | New helper, ~20 lines |
+| `llvm_codegen.py` | ConstructStruct: detect fn_throws mismatch, emit thunk, substitute | ~10 lines at line 2618 |
+| `llvm_codegen.py` | Optional: remove unsound bitcast in `_lower_call_indirect` (line 4959) | ~5 lines |
+| `llvm_codegen.py` | Thunk cache field on `_FuncBuilder` or `_ModuleEmitter` | 1 line |
+
+**Not touched:** Checker, stage2, MIR, borrow checker, stdlib. This is a codegen-only change.
+
+#### 20.6 Regression-first execution plan
+
+**Positive (after thunk lands):**
+- Unskip `callable_fn_ptr_throwing_field_nothrow_fn/` — must compile and return 0.
+- Extend: invoke the stored fn ptr through the struct field and verify correct result value (not just compile).
+
+**Negative (must remain rejected):**
+- `callable_capturing_lambda_not_fn_ptr` (C9) — unchanged, checker rejects before codegen.
+- `callable_callback_arity_mismatch` (C11) — unchanged, checker rejects before codegen.
+- New negative: throwing fn assigned to nothrow-typed field — `struct S { f: Fn(Int) nothrow -> Int }; fn might_throw() -> Int { ... }` — checker should reject (nothrow field cannot accept throwing fn; subtype only goes one direction).
+
+**Boundary checks:**
+- All 11 existing callable e2e tests remain green.
+- A5 boundary + high-sensitivity set (7/7) remains green.
+- Borrow checker suite (90/90) remains green.
+
+#### 20.7 Go/no-go recommendation
+
+**GO for V4.5 implementation** — the thunk is a contained codegen addition (~35 lines) following an established pattern (`_emit_callback_thunk`). No checker/MIR/borrow-checker changes needed. Risk is low: the thunk is structurally identical to existing callback thunks, just without the env pointer.
+
+**Secondary concern (medium):** The `CallIndirect` bitcast at line 4959 is unsound if the caller and callee disagree on return type. After the thunk lands, audit `CallIndirect` to confirm no throwing/nothrow bitcasts remain. This is a cleanup item, not a blocker.
+
+#### 20.8 Done-when checklist (V4)
+
+- [x] ABI mismatch specified with concrete before/after LLVM signature mapping (§20.2–20.3).
+- [x] Thunk emission/ownership location pinned to specific codegen functions (§20.4).
+- [x] Regression-first execution slice written (§20.6).
+- [x] C10 naming/coverage mismatch resolved (renamed to `callable_borrowed_capture_callback_boxing_rejected`).
+- [x] `work-progress.md` updated with design note and go/no-go recommendation (§20.7).

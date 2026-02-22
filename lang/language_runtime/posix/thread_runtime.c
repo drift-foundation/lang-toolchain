@@ -439,26 +439,26 @@ static void *drift_exec_worker(void *arg) {
 		}
 		if (atomic_load(&vt->cancelled) && !atomic_load(&vt->started)) {
 			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+			pthread_mutex_lock(&vt->mu);
 			if (!atomic_exchange(&vt->completed, 1)) {
 				drift_drop_callback(&vt->cb);
-				pthread_mutex_lock(&vt->mu);
-				vt->park_token++;
-				pthread_cond_broadcast(&vt->cv);
-				pthread_mutex_unlock(&vt->mu);
 			}
+			vt->park_token++;
+			pthread_cond_broadcast(&vt->cv);
+			pthread_mutex_unlock(&vt->mu);
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
 		atomic_store(&vt->started, 1);
 		if (atomic_load(&vt->cancelled)) {
 			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+			pthread_mutex_lock(&vt->mu);
 			if (!atomic_exchange(&vt->completed, 1)) {
 				drift_drop_callback(&vt->cb);
-				pthread_mutex_lock(&vt->mu);
-				vt->park_token++;
-				pthread_cond_broadcast(&vt->cv);
-				pthread_mutex_unlock(&vt->mu);
 			}
+			vt->park_token++;
+			pthread_cond_broadcast(&vt->cv);
+			pthread_mutex_unlock(&vt->mu);
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
@@ -479,14 +479,14 @@ static void *drift_exec_worker(void *arg) {
 		drift_vt_tls_set(NULL);
 		int state = atomic_load(&vt->state);
 			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
-				int dropped_after_finish = atomic_load(&vt->dropped);
 				if (vt->stack) {
 					free(vt->stack);
 					vt->stack = NULL;
 					vt->stack_size = 0;
 				}
-				atomic_store(&vt->completed, 1);
 				pthread_mutex_lock(&vt->mu);
+				atomic_store(&vt->completed, 1);
+				int dropped_after_finish = atomic_load(&vt->dropped);
 				vt->park_token++;
 				pthread_cond_broadcast(&vt->cv);
 				pthread_mutex_unlock(&vt->mu);
@@ -498,9 +498,9 @@ static void *drift_exec_worker(void *arg) {
 		drift_vt_tls_set(vt);
 		drift_run_callback(&vt->cb, 0);
 		atomic_store(&vt->state, DRIFT_VT_FINISHED);
-			int dropped_after_finish = atomic_load(&vt->dropped);
-			atomic_store(&vt->completed, 1);
 			pthread_mutex_lock(&vt->mu);
+			atomic_store(&vt->completed, 1);
+			int dropped_after_finish = atomic_load(&vt->dropped);
 			vt->park_token++;
 			pthread_cond_broadcast(&vt->cv);
 			pthread_mutex_unlock(&vt->mu);
@@ -824,13 +824,13 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 		if (vt) {
 			if (!atomic_load(&vt->started)) {
 				atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+				pthread_mutex_lock(&vt->mu);
 				if (!atomic_exchange(&vt->completed, 1)) {
 					drift_drop_callback(&vt->cb);
-					pthread_mutex_lock(&vt->mu);
-					vt->park_token++;
-					pthread_cond_broadcast(&vt->cv);
-					pthread_mutex_unlock(&vt->mu);
 				}
+				vt->park_token++;
+				pthread_cond_broadcast(&vt->cv);
+				pthread_mutex_unlock(&vt->mu);
 			}
 			/* Ownership of VT allocations is centralized in the global VT registry.
 			 * Executor queue drain only finalizes queued work state/callback drop;
@@ -1299,26 +1299,26 @@ void drift_thread_drop(uint64_t vt) {
 	if (!h) {
 		return;
 	}
+	pthread_mutex_lock(&h->mu);
 	atomic_store(&h->dropped, 1);
-	if (atomic_load(&h->completed)) {
-		pthread_mutex_lock(&h->mu);
-		pthread_mutex_unlock(&h->mu);
+	int is_completed = atomic_load(&h->completed);
+	int is_started = atomic_load(&h->started);
+	if (!is_completed) {
+		atomic_store(&h->cancelled, 1);
+		h->park_token++;
+		pthread_cond_broadcast(&h->cv);
+	}
+	pthread_mutex_unlock(&h->mu);
+	if (is_completed) {
 		drift_vt_destroy(h);
 		return;
 	}
-	if (!atomic_load(&h->started) && h->exec == NULL) {
+	if (!is_started && h->exec == NULL) {
 		if (!atomic_exchange(&h->completed, 1)) {
 			drift_drop_callback(&h->cb);
 		}
 		drift_vt_destroy(h);
 		return;
-	}
-	if (atomic_load(&h->started)) {
-		atomic_store(&h->cancelled, 1);
-		pthread_mutex_lock(&h->mu);
-		h->park_token++;
-		pthread_cond_broadcast(&h->cv);
-		pthread_mutex_unlock(&h->mu);
 	}
 }
 
@@ -1338,13 +1338,13 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 	if (!atomic_load(&h->started)) {
 		atomic_store(&h->state, DRIFT_VT_CANCELLED);
 		if (h->exec == NULL) {
+			pthread_mutex_lock(&h->mu);
 			if (!atomic_exchange(&h->completed, 1)) {
 				drift_drop_callback(&h->cb);
-				pthread_mutex_lock(&h->mu);
-				h->park_token++;
-				pthread_cond_broadcast(&h->cv);
-				pthread_mutex_unlock(&h->mu);
 			}
+			h->park_token++;
+			pthread_cond_broadcast(&h->cv);
+			pthread_mutex_unlock(&h->mu);
 		}
 	}
 	return 0;
