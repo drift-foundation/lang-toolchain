@@ -5359,10 +5359,11 @@ def resolve_call_expr(
 						arg.expected_fn_inferred = True
 						arg.expected_type_from_require = arg_expected_type
 						arg_types[param_idx] = type_expr(arg, expected_type=arg_expected_type, used_as_value=False)
-						# B2: auto-wrap non-borrowed capturing lambdas in callback_N()
+						# B2/B4: auto-wrap capturing lambdas in callback_N()
 						# so F is instantiated as Callback (not fn ptr).
-						_has_nonref_caps = _has_any_caps_tp5 and not any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in arg.explicit_captures)
-						if _has_nonref_caps:
+						# Includes borrowed captures — the borrow checker validates
+						# escape levels; MIR callback env handles ref fields.
+						if _has_any_caps_tp5:
 							if arity == 0:
 								_cb_name = "callback_throw0" if can_throw else "callback0"
 							elif arity == 1:

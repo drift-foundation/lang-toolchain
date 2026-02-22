@@ -2972,8 +2972,9 @@ class HIRToMIR:
 			discover_captures(lam)
 		if lam.captures:
 			lam.captures = sort_captures(lam.captures)
-		if any(cap.kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT) for cap in (lam.captures or [])):
-			raise AssertionError("borrowed capture in owned callback env (compiler bug)")
+		# B4: borrowed captures in callback env are allowed — the borrow checker
+		# validates escape levels (SCOPED/LOCAL accept, THREAD/STATIC reject).
+		# The env code at lines 3000-3008 handles ref field storage/loading.
 
 		lambda_id = self._lambda_counter
 		self._lambda_counter += 1

@@ -171,3 +171,44 @@ fn main() nothrow -> Int {
 	unexpected = [d for d in errors if not any(frag in (d.message or "") for frag in _KNOWN_PREEXISTING)]
 	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
 	assert len(errors) <= 2, f"Error count exceeded known pre-existing (2): {[(d.code, d.message) for d in errors]}"
+
+
+def test_borrowed_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) -> None:
+	"""Lambda with captures(&x) passed to generic F is Fn1<A,R> must be accepted.
+
+	B4 regression: borrowed-capture lambdas are auto-wrapped in callback_N()
+	(same as B2 copy captures). The MIR callback env stores &T fields.
+	The borrow checker validates escape levels before MIR lowering.
+	"""
+	diags = _compile(tmp_path, """\
+module m
+
+import std.core as core;
+
+fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
+	f.call(42);
+}
+
+fn main() nothrow -> Int {
+	var x: Int = 10;
+	apply(|_a| captures(&x) nothrow => {});
+	return 0;
+}
+""")
+	# B4 targets: no "closures with borrowed captures" rejection;
+	# no "capturing lambdas" rejection; no E_REQUIREMENT_NOT_SATISFIED;
+	# no AssertionError from MIR lowering.
+	borrowed_errors = [d for d in diags if "closures with borrowed captures" in (d.message or "")]
+	assert borrowed_errors == [], f"Borrowed-capture lambda must not be rejected: {borrowed_errors}"
+	capture_errors = [d for d in diags if d.severity == "error" and "capturing lambdas" in (d.message or "")]
+	assert capture_errors == [], f"Capturing lambda must not be rejected: {capture_errors}"
+	requirement_errors = [d for d in diags if d.severity == "error" and "E_REQUIREMENT_NOT_SATISFIED" in (d.code or "")]
+	assert requirement_errors == [], f"Callback must satisfy Fn1 require: {requirement_errors}"
+	assertion_errors = [d for d in diags if "borrowed capture in owned callback env" in (d.message or "")]
+	assert assertion_errors == [], f"MIR lowering must not reject borrowed callback env: {assertion_errors}"
+	# Guard: only known pre-existing errors may be present.
+	_KNOWN_PREEXISTING = {"no matching method", "type mismatch"}
+	errors = [d for d in diags if d.severity == "error"]
+	unexpected = [d for d in errors if not any(frag in (d.message or "") for frag in _KNOWN_PREEXISTING)]
+	assert unexpected == [], f"Unexpected errors beyond known pre-existing: {[(d.code, d.message) for d in unexpected]}"
+	assert len(errors) <= 2, f"Error count exceeded known pre-existing (2): {[(d.code, d.message) for d in errors]}"

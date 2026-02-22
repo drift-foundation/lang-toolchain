@@ -1405,6 +1405,14 @@ references in compiler and test sources.
    - `lang/tests/stage1/test_non_retaining_function_params.py::test_immediate_level_treated_as_non_retaining` docstring currently says IMMEDIATE should be "preserved as-is", while assertion expects `[EscapeLevel.LOCAL]`.
    - Required cleanup: align docstring/comments with intended behavior (either preserve IMMEDIATE by implementation, or keep LOCAL normalization and document that explicitly).
 
+6. **Fn1 scoped-capture acceptance test tightening (medium): remove temporary known-preexisting allowance**
+   - `lang/tests/driver/test_fn1_scope_borrowed_capture.py::test_borrowed_capture_lambda_to_fn_bounded_generic_accepted` currently permits a bounded set of unrelated pre-existing diagnostics (`"no matching method"`, `"type mismatch"`) with a max-error count guard.
+   - This was acceptable during F2-D1 stabilization but must not remain indefinitely.
+   - Required follow-up at the next cleanup pass for this track:
+     1. Eliminate the underlying unrelated diagnostics.
+     2. Tighten the test to require zero unexpected errors for the exercised path.
+     3. Keep explicit assertions for the B4 contract signals (no borrowed-capture rejection, no requirement mismatch, no MIR callback-env assertion).
+
 ---
 
 ## 6. Phase Dependency Graph

@@ -1,6 +1,6 @@
 {
-  "description": "e2e: scope_fn1_borrowed_capture_accepted — lambda with captures(&x) passed to conc.scope (Fn1-bounded SCOPED param). DESIRED: accepted through full codegen. BLOCKED by F2-D1: MIR lowering has no HLambda handler for generic call args (monomorphization instantiates F to function pointer type, no room for capture env).",
-  "skip": true,
+  "description": "e2e: B4 — borrowed-capture lambda passed to conc.scope (Fn1-bounded SCOPED param). Exercises: TP5 callback wrapping, transparent-wrapper escape propagation, SCOPED acceptance, MIR borrowed-capture env.",
+  "skip": false,
   "exit_code": 0,
   "stderr": "",
   "stdout": ""
