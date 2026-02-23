@@ -1,48 +1,15 @@
 module main
 
 import std.containers as containers;
-import std.err;
 import std.iter as iter;
-
-fn next_once<I>(it: &mut I) -> Int require I is iter.SinglePassIterator<containers.TreeMapItemRef<Int, Int> > {
-	val _v = iter.SinglePassIterator::next(it);
-	return 1;
-}
+use trait iter.SinglePassIterator;
 
 fn run() -> Int {
 	var m = containers.tree_map<type Int, Int>();
 	m.insert(1, 1);
 	var it = m.iter();
 	m.insert(2, 2);
-	val out1 = try next_once(&mut it) catch std.err:IteratorInvalidated(_) {
-		0
-	} catch {
-		2
-	};
-	if out1 != 0 {
-		return 1;
-	}
-	var it2 = m.iter();
-	val k1 = 1;
-	val _g = m.get_mut(&k1);
-	val out2 = try next_once(&mut it2) catch std.err:IteratorInvalidated(_) {
-		3
-	} catch {
-		4
-	};
-	if out2 != 1 {
-		return 2;
-	}
-	var it3 = m.iter();
-	m.clear();
-	val out3 = try next_once(&mut it3) catch std.err:IteratorInvalidated(_) {
-		0
-	} catch {
-		5
-	};
-	if out3 != 0 {
-		return 3;
-	}
+	val _v = it.next();
 	return 0;
 }
 

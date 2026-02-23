@@ -8,7 +8,7 @@ struct CounterIter {
 }
 
 implement iter.SinglePassIterator<Int> for CounterIter {
-	pub fn next(self: &mut CounterIter) -> Optional<Int> {
+	pub fn next(self: &mut CounterIter) nothrow -> Optional<Int> {
 		if self.idx < 1 {
 			val out = self.idx;
 			self.idx = out + 1;
@@ -25,7 +25,7 @@ implement core.Copy for CounterIter {
 }
 
 implement iter.Iterable<CounterIter, Int, CounterIter> for CounterIter {
-	pub fn iter(self: CounterIter) -> CounterIter {
+	pub fn iter(self: CounterIter) nothrow -> CounterIter {
 		return self;
 	}
 }

@@ -1,41 +1,12 @@
 module main
 
-import std.err;
 import std.iter as iter;
-
-fn next_once<I>(it: &mut I) -> Int require I is iter.SinglePassIterator<&Int> {
-	val _v = iter.SinglePassIterator::next(it);
-	return 2;
-}
+use trait iter.SinglePassIterator;
 
 fn main() nothrow -> Int {
 	var arr = [1, 2];
 	var it = iter.Iterable::iter(&arr);
 	arr.push(3);
-	val out = try next_once(&mut it) catch std.err:IteratorInvalidated(e) {
-		val dv_c = e.attrs["container_id"];
-		val dv_o = e.attrs["op_id"];
-		val c = dv_c.as_string();
-		val o = dv_o.as_int();
-		val c_code = match c {
-			Some(s) => {
-				(s != "std.containers:Array") ? 10 : 0
-			},
-			None => {
-				11
-			},
-		};
-		val o_code = match o {
-			Some(v) => {
-				(v != 0) ? 12 : 0
-			},
-			None => {
-				13
-			},
-		};
-		(c_code != 0) ? c_code : ((o_code != 0) ? o_code : 0)
-	} catch {
-		99
-	};
-	return out;
+	val _v = it.next();
+	return 0;
 }

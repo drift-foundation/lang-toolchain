@@ -5,11 +5,11 @@ import std.iter as iter;
 use trait iter.SinglePassIterator;
 
 fn main() nothrow -> Int {
-	var s = containers.hash_set<type Int>();
-	s.insert(1);
-	s.insert(2);
-	var it = s.iter();
-	s.insert(3);
+	var m = containers.hash_map<type Int, Int>();
+	m.insert(1, 1);
+	m.insert(2, 2);
+	var it = m.iter();
+	m.clear();
 	val _v = it.next();
 	return 0;
 }

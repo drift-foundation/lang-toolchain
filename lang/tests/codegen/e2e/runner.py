@@ -327,6 +327,12 @@ def _compare_process_output(
 			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 		return msg
 	expect_stderr = expected.get("stderr", "")
+	stderr_contains = expected.get("stderr_contains")
+	if isinstance(stderr_contains, str) and stderr_contains not in stderr:
+		msg = f"FAIL (stderr missing expected fragment: {stderr_contains!r})"
+		if debug and (stdout or stderr):
+			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+		return msg
 	if expect_stderr != "__ANY__" and stderr != expect_stderr:
 		stderr_jsonl = expected.get("stderr_jsonl")
 		if isinstance(stderr_jsonl, list):

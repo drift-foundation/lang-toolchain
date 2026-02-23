@@ -2678,9 +2678,13 @@ class Checker:
 					finally:
 						ctx.report_unknown_names = prev_report_unknown
 			elif isinstance(stmt, H.HBlock):
+				saved_locals = dict(ctx.locals)
 				walk_block(stmt)
+				ctx.locals = saved_locals
 			elif hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+				saved_locals = dict(ctx.locals)
 				walk_block(stmt.block)
+				ctx.locals = saved_locals
 			# HBreak/HContinue carry no expressions.
 
 		def walk_block(hb: H.HBlock) -> None:

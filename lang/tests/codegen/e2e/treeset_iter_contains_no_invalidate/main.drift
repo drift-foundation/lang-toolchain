@@ -7,9 +7,23 @@ use trait iter.SinglePassIterator;
 fn run() -> Int {
 	var s = containers.tree_set<type Int>();
 	s.insert(1);
-	var it = s.iter();
 	s.insert(2);
-	val _v = it.next();
+	s.insert(3);
+	var it = s.iter();
+	val k1 = 1;
+	val _g = s.contains(&k1);
+	var count = 0;
+	var done = false;
+	while not done {
+		val nxt = it.next();
+		match nxt {
+			None => { done = true; },
+			Some(_) => {
+				count = count + 1;
+			}
+		}
+	}
+	if count != 3 { return 1; }
 	return 0;
 }
 

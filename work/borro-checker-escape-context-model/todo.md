@@ -204,6 +204,46 @@ Required regressions:
 2. Positive: stage2/CFG lowering test for `for` remains green with no throw contract mismatch.
 3. Negative: iterator invalidation path still fails deterministically (panic/assert path), but not as typed throw from `next()`.
 
+### Queued Phase: Checker `_walk_hir` lexical-scope hardening
+
+Status: **PLANNED** (pending approval).
+
+Background:
+- Adding `HBlock`-as-stmt traversal to `_walk_hir` exposed a latent scope leak: `ctx.locals` is a flat map with no save/restore around nested blocks.
+- Bindings introduced inside `if` arms, `loop` bodies, `try`/`catch` blocks, and `HBlock`/`HUnsafeBlock` statements leak to the parent scope in the checker's type-inference walk.
+- The for-count desugaring wraps its init binding in an `HBlock`; with correct traversal, the binding leaks out, hiding the "unknown name" diagnostic (`test_loop_init_name_out_of_scope_reports_unknown_name`).
+- `HBlock` and `HUnsafeBlock` already have save/restore (applied during bare-block work). This phase extends it to all remaining branch-walking sites.
+
+Objective:
+1. Every block-scoped traversal in `_walk_hir` saves/restores `ctx.locals` so inner bindings do not leak to the parent scope.
+2. Align checker name/type environment with the lexical scoping already enforced by stage1 and MIR.
+
+Scope (Klaudia):
+1. `_walk_hir` in `checker/__init__.py` — add `ctx.locals` save/restore around:
+   - `HIf` then_block and else_block
+   - `HLoop` body
+   - `HTry` body and catch arm blocks
+   - `HMatchExpr` arm blocks (if walked as statements)
+2. Regression tests for each site:
+   - positive: name defined only in one `if` arm does not resolve after `if`
+   - positive: loop-local name does not resolve after loop
+   - positive: catch-local name does not resolve after try
+3. Verify no false regressions in existing test suites — surface real issues, fix or document them.
+
+Execution rules:
+1. Regression-first mandatory.
+2. Expect surfaced issues: existing code/tests may currently pass due to leaked locals. Each surfaced failure is either:
+   - a real bug (test expectation was wrong / code was unsound) — fix the test or code, or
+   - a false positive from over-scoping — investigate and adjust.
+3. Boundary Contract Guardrails remain strict.
+
+Done-when checklist:
+- [ ] All block-walking sites in `_walk_hir` have save/restore for `ctx.locals`.
+- [ ] `test_loop_init_name_out_of_scope_reports_unknown_name` passes (already fixed).
+- [ ] Positive regressions for if-arm, loop-body, try/catch scope isolation added and passing.
+- [ ] Existing driver, checker, stage2, and e2e suites remain green (or surfaced failures resolved).
+- [ ] `work-progress.md` updated with touched files, behavior matrix, and surfaced issues.
+
 ### Handoff Rules (Klaudia)
 
 1. `todo.md` contains scope and required outcomes only.

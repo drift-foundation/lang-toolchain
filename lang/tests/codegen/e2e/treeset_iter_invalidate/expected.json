@@ -1,3 +1,5 @@
 {
-  "exit_code": 0
+  "exit_code": -6,
+  "stderr": "__ANY__",
+  "stderr_contains": "iterator invalidated: tree map modified during iteration"
 }

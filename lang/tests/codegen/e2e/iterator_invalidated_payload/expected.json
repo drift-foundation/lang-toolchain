@@ -1,6 +1,6 @@
 {
-  "description": "e2e: iterator invalidated payload",
-  "exit_code": 0,
-  "stderr": "",
-  "stdout": ""
+  "description": "e2e: iterator invalidation aborts via assert",
+  "exit_code": -6,
+  "stderr": "__ANY__",
+  "stderr_contains": "iterator invalidated: array modified during iteration"
 }

@@ -4,12 +4,16 @@ import std.containers as containers;
 import std.iter as iter;
 use trait iter.SinglePassIterator;
 
-fn main() nothrow -> Int {
-	var s = containers.hash_set<type Int>();
+fn run() -> Int {
+	var s = containers.tree_set<type Int>();
 	s.insert(1);
 	s.insert(2);
 	var it = s.iter();
-	s.insert(3);
+	s.clear();
 	val _v = it.next();
 	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
 }

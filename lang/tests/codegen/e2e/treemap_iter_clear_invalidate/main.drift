@@ -5,10 +5,11 @@ import std.iter as iter;
 use trait iter.SinglePassIterator;
 
 fn run() -> Int {
-	var s = containers.tree_set<type Int>();
-	s.insert(1);
-	var it = s.iter();
-	s.insert(2);
+	var m = containers.tree_map<type Int, Int>();
+	m.insert(1, 1);
+	m.insert(2, 2);
+	var it = m.iter();
+	m.clear();
 	val _v = it.next();
 	return 0;
 }

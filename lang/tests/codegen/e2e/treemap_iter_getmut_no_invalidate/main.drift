@@ -1,0 +1,31 @@
+module main
+
+import std.containers as containers;
+import std.iter as iter;
+use trait iter.SinglePassIterator;
+
+fn run() -> Int {
+	var m = containers.tree_map<type Int, Int>();
+	m.insert(1, 10);
+	m.insert(2, 20);
+	var it = m.iter();
+	val k1 = 1;
+	val _g = m.get_mut(&k1);
+	var count = 0;
+	var done = false;
+	while not done {
+		val nxt = it.next();
+		match nxt {
+			None => { done = true; },
+			Some(item) => {
+				count = count + 1;
+			}
+		}
+	}
+	if count != 2 { return 1; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

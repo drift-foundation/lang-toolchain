@@ -1,3 +1,5 @@
 {
-  "exit_code": 0
+  "exit_code": -6,
+  "stderr": "__ANY__",
+  "stderr_contains": "iterator invalidated: hash set modified during iteration"
 }

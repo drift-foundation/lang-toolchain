@@ -1826,3 +1826,13 @@ CallIndirect: when callee tracked type is `%DriftFatFnPtr`, decompose pair and c
 - [x] All 3 existing positive tests remain green.
 - [x] All 4 negative tests remain green.
 - [x] LLVM codegen unit tests (66/66) pass.
+
+---
+
+## Pre-existing e2e failure (not our regression)
+
+**Test:** `concurrent_cancel_prestart_does_not_execute_task`
+**Status:** Failing on `main` — confirmed not introduced by this branch.
+**Symptom:** exit code mismatch (expected 0, got non-zero).
+**Diagnostic:** `"cannot bind a Void value"` — appears to be a codegen/checker issue with void-typed bindings in the concurrent cancel path.
+**Verified:** `git stash && run test → same failure → git stash pop`. Failure predates all bare-block and iterator-nothrow work.

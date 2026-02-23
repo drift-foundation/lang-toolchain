@@ -1,13 +1,8 @@
 module main
 
 import std.containers as containers;
-import std.err;
 import std.iter as iter;
-
-fn next_once<I>(it: &mut I) -> Int require I is iter.SinglePassIterator<containers.TreeMapItemRef<Int, Int> > {
-	val _v = iter.SinglePassIterator::next(it);
-	return 1;
-}
+use trait iter.SinglePassIterator;
 
 fn run() -> Int {
 	var m = containers.tree_map<type Int, Int>();
@@ -16,26 +11,7 @@ fn run() -> Int {
 	val k2 = 2;
 	var e0 = m.entry_mut(&k2);
 	val _ins = e0.or_insert(2, 2);
-	val out1 = try next_once(&mut it) catch std.err:IteratorInvalidated(_) {
-		0
-	} catch {
-		2
-	};
-	if out1 != 0 {
-		return 1;
-	}
-	var it2 = m.iter();
-	val k1 = 1;
-	var e1 = m.entry_mut(&k1);
-	val _rm = e1.remove();
-	val out2 = try next_once(&mut it2) catch std.err:IteratorInvalidated(_) {
-		0
-	} catch {
-		3
-	};
-	if out2 != 0 {
-		return 2;
-	}
+	val _v = it.next();
 	return 0;
 }
 
