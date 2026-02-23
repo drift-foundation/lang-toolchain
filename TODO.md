@@ -47,6 +47,31 @@
     - Add user-facing inspection surface (or pin explicit no-surface policy) for `ctx_frames`.
 
 ## Post MVP
+[Macros]
+- User-defined macro system (currently built-in only: log.info!/debug!/error!).
+
+[String]
+- `char_length()` for grapheme-cluster counting (`byte_length()` only today).
+- String slice/span view types.
+
+[Interfaces]
+- Consuming receiver (`move self`) for interface methods.
+
+[Optional]
+- `Optional<T>` combinators (`is_some`, `unwrap_or`, `map`, `filter`).
+
+[Containers]
+- Trait-based collection literal desugaring (`CollectionLiteral`/`MapLiteral`).
+
+[Variants]
+- Recursive data types / `Box<T>` for owned indirection.
+
+[FFI / ABI]
+- Fixed-width primitive FFI type mappings documentation.
+
+[Types]
+- `Size` type for collection lengths/indices.
+
 [Concurrency]
 - Add ReentrantMutex (distinct from Mutex); define semantics and API surface.
 

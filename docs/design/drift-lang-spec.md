@@ -33,7 +33,7 @@ Passing by value consumes unless the type is `Copy` (in which case the compiler 
 
 ### 1.4. Zero-cost abstractions
 
-Drift’s abstractions compile down to what you would hand-write. Ownership, traits, interfaces, and concurrency are “pay for what you use.”
+Drift’s abstractions compile down to what you would hand-write. Ownership, traits, interfaces, and concurrency are "pay for what you use."
 
 ### 1.5. Ready out of the box, no hidden machinery
 
@@ -55,7 +55,7 @@ Drift expressions largely follow a C-style surface with explicit ownership rules
 - Explicit cast: `cast<T>(expr)` (strict; function-type casts only in v1)
 - Array literals: `[1, 2, 3]`
 - String concatenation uses `+`
-- Public String byte length is exposed as method `s.byte_length() -> Int` (UTF‑8 code units, not characters); a future `char_length` may count user-visible characters.
+- Public String byte length is exposed as method `s.byte_length() -> Int` (UTF‑8 code units, not characters).
 - Empty strings may be written as `""` or `String.EMPTY`. A convenience helper `is_empty(s: String) -> Bool` checks `s.byte_length() == 0`.
 - Program entry (v1): exactly one `main` function, returning `Int`, **declared `nothrow`**, with one of two signatures:
   - `fn main() nothrow -> Int`
@@ -91,18 +91,13 @@ Semantics:
 
 No thunking or adapter insertion occurs in this build; other cast targets are rejected.
 
-### 2.z. Macro direction (MVP + forward path)
+### 2.z. Macro direction
 
 Drift macro support is language-aware and **not** a C-style textual preprocessor.
 
-- **Current MVP direction:** parse source into AST first, then expand macro invocations into ordinary AST nodes **before type checking**.
+- Macros parse source into AST first, then expand macro invocations into ordinary AST nodes **before type checking**.
 - Expansion is deterministic and diagnostics are source-anchored at macro call sites and expanded nodes.
-- MVP macro support is compiler-owned/built-in only; user-defined macro systems are deferred.
-
-Forward compatibility path:
-
-- The language may add a later, typed/semantic macro tier that runs after type information is available.
-- This does not change the MVP model; it extends it with an additional expansion stage for macros that require semantic context.
+- Macro support is compiler-owned/built-in only (e.g., `log.info!`, `log.debug!`, `log.error!`).
 
 Design intent:
 
@@ -178,7 +173,7 @@ All modules compile down to a canonical Drift Module IR (DMIR) that can be crypt
 
 Function parameters are `val` by default (owned, immutable). Use `var` for mutable parameters: `fn id(var x: File) -> File { return move x; }`.
 
-### 3.2. Borrow traits and argument coercion (proposed)
+### 3.2. Borrow traits and argument coercion
 
 Drift supports **argument-only** coercions via borrow traits. This is intended to improve ergonomics for wrapper types (e.g., `Arc<Mutex<T>>`) without enabling method-receiver auto-deref.
 
@@ -195,9 +190,9 @@ Coercion rules (argument-only):
 - No coercion for by-value parameters (`T`).
 - No method-receiver auto-deref.
 
-**Statement terminators:** Simple statements end with `;`. Compound statements that carry a block (`if`/`while`/`for`/`try`/`match`) are self-terminating. Newlines are whitespace only. In a normal block, an expression statement must be a **postfix expression** (call, member access, index, literal, or name) and end with `;` to avoid ambiguity with statement-form `try`. In a value-producing block (e.g., lambda bodies, match arms, try/catch expression arms), the final expression must **not** end with `;`.
+**Statement terminators:** Simple statements end with `;`. Compound statements that carry a block (`if`/`while`/`for`/`try`/`match`) and standalone block statements (`{ ... }`) are self-terminating. Newlines are whitespace only. In a normal block, an expression statement must be a **postfix expression** (call, member access, index, literal, or name) and end with `;` to avoid ambiguity with statement-form `try`. In a value-producing block (e.g., lambda bodies, match arms, try/catch expression arms), the final expression must **not** end with `;`.
 
-### 3.1. Primitive palette (updated)
+### 3.1. Primitive palette
 
 | Type    | Description |
 |---------|-------------|
@@ -219,7 +214,7 @@ Coercion rules (argument-only):
 #### 3.1.2. String semantics (v1)
 
 - Storage is UTF-8; **bytewise** semantics:
-  - `s.byte_length() -> Int` returns the number of UTF-8 code units (bytes), not graphemes. A future `char_length` may count user-visible characters.
+  - `s.byte_length() -> Int` returns the number of UTF-8 code units (bytes), not graphemes.
   - Global `byte_length(...)` is internal-only (`std.*` implementation surface), not part of user-facing API.
   - Equality (`==`) is bytewise; no normalization or case folding.
 - Empty strings: `""` or `String.EMPTY`; `is_empty(s: String) -> Bool` checks `s.byte_length() == 0`.
@@ -231,7 +226,7 @@ Coercion rules (argument-only):
 Drift distinguishes between **natural-width** numeric primitives and **fixed-width** primitives.
 
 - **v1 uses pointer-sized carriers** for `Int`/`Uint` (isize/usize). This avoids wasting space on 32-bit targets and keeps arithmetic efficient.
-- `Size` is reserved for future revisions and **not** used for collection lengths/indices in v1. Collections use `Int` for lengths/capacities and indices (see chapter 12).
+- `Size` is not available in v1; collections use `Int` for lengths, capacities, and indices (see chapter 12).
 - `Float` is the target’s native floating-point type (most commonly IEEE-754 binary64; on some targets it may be binary32). The surface name remains `Float` regardless of width. Its bit-width/layout are target-defined; ABI stability is guaranteed within a target, not across different targets.
 - Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint64`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types (e.g., `ErrorCode = Uint64`); user code should use `Int`/`Uint`/`Float`.
 
@@ -242,10 +237,20 @@ Overflow:
 Conversions:
 - `Int`/`Uint`/`Float` conversions follow the usual widening/narrowing rules; narrowing or sign-changing conversions must be explicit and may fail at runtime if out of range.
 - Fixed-width conversions are reserved until the fixed-width primitives are enabled.
-- `Size` ↔ other ints follow the same rules when `Size` is introduced (reserved in v1). For v1, use `Uint` in place of `Size`.
+- `Size` is not available in v1; use `Uint` in place of `Size`.
 - Floating conversions follow IEEE-754 rules on supported targets; other targets use the platform’s native float behavior.
 
-### 3.2. Comments
+#### 3.1.3. Void semantics
+
+`Void` is the unit type. Functions declared `-> Void` return no meaningful value.
+
+- `Void` values may be bound (`val x = void_fn()`) and assigned (`x = void_fn()`). This is required for generic code where a type parameter may be instantiated with `Void` (e.g., `Result<Void, E>`, `Callback0<Void>`).
+- `Void` is `Copy` and has no destructor. At the ABI level it is represented as an unused `i8` slot.
+- Returning a non-`Void` value from a `Void` function is a compile-time error.
+- Explicitly declaring a binding with type annotation `Void` (`val x: Void = ...`) is a compile-time error.
+- `Void` values may not be used where a non-`Void` type is expected; normal type-mismatch rules apply.
+
+#### 3.1.4. Comments
 
 Drift supports two comment forms:
 
@@ -466,7 +471,7 @@ const OK: Bool = true;
 const GREETING: String = "hello";
 ```
 
-MVP rules (v1):
+Rules:
 
 - A `const` declaration is **top-level only** (not inside blocks).
 - A `const` must have an explicit type annotation.
@@ -489,7 +494,7 @@ Tooling/packaging note:
 
 `move x` transfers ownership of `x` without copying. After a move, `x` becomes invalid. Equivalent intent to `std::move(x)` in C++ but lighter and explicit.
 
-MVP restriction: `move` operands must be addressable local/parameter bindings. Moving out of projections (`move x.y`, `move a[i]`) is not supported yet.
+Restriction: `move` operands must be addressable local/parameter bindings. Moving out of projections (`move x.y`, `move a[i]`) is not supported in v1.
 
 ### 4.1. Core rules
 | Aspect | Description |
@@ -528,7 +533,7 @@ This design keeps ownership explicit: you opt *out* of move-only semantics only 
 
 ### 4.3. Opting into copying
 
-`Copy` is a marker trait defined in `std.core` (not auto-preluded). Use a qualified trait name (`std.core.Copy`) or import the module when writing trait requirements. A type is `Copy` when the compiler may duplicate it implicitly at duplication points; this must be **O(1)**. `Copy` does **not** imply “no drop”: some `Copy` types (e.g., `String`) require semantic copying with retain/release under the hood. The internal `BitCopy` predicate still controls memcpy fast paths.
+`Copy` is a marker trait defined in `std.core` (not auto-preluded). Use a qualified trait name (`std.core.Copy`) or import the module when writing trait requirements. A type is `Copy` when the compiler may duplicate it implicitly at duplication points; this must be **O(1)**. `Copy` does **not** imply "no drop": some `Copy` types (e.g., `String`) require semantic copying with retain/release under the hood. The internal `BitCopy` predicate still controls memcpy fast paths.
 
 ```drift
 struct Job { id: Int }
@@ -541,7 +546,7 @@ var b = a; // ✅ copies `a` because Job is Copy
 
 ### 4.4. Explicit copy expression
 
-Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. In MVP, the operand must be an **lvalue/place** (local/param/field/index). This works anywhere an expression is allowed (call arguments, closure captures, `val`/`var` bindings) and leaves the original binding usable. By-value passing **does** implicitly move non-`Copy` values in consuming positions; `copy` is how you make the intent to duplicate explicit.
+Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. The operand must be an **lvalue/place** (local/param/field/index). This works anywhere an expression is allowed (call arguments, closure captures, `val`/`var` bindings) and leaves the original binding usable. By-value passing **does** implicitly move non-`Copy` values in consuming positions; `copy` is how you make the intent to duplicate explicit.
 
 Copying still respects ownership rules: `self: &T` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
 
@@ -687,7 +692,7 @@ Traits in Drift describe **capabilities** a type *is capable of*.
 They are compile-time contracts, not inheritance hierarchies and not runtime polymorphism.
 
 Traits provide:
-- **Adjective-like descriptions** of capabilities (“Dup”, “Destructible”, “Debug”).
+- **Adjective-like descriptions** of capabilities ("Dup", "Destructible", "Debug").
 - **Static dispatch** — no vtables, zero runtime cost.
 - **Package-scoped implementations** — an impl is legal only if the trait or the receiver type head is defined in the current package.
 - **Type completeness checks** — types may *require* certain traits to exist.
@@ -955,7 +960,7 @@ fn dup_if_possible<T>(value: T) -> T {
 
 Traits become composable *properties* of types.
 
-**Trait-level `require` restriction (MVP):** when defining a trait, the `require`
+**Trait-level `require` restriction:** when defining a trait, the `require`
 clause is limited to **conjunctions** of `Self is Trait` (supertraits). `or` and
 `not` are not allowed in trait requirements until their semantics are specified.
 
@@ -1208,7 +1213,7 @@ borrowed views:
 trait Unborrowed { }
 ```
 
-Meaning: “borrowed” includes any type whose validity depends on an owner’s
+Meaning: "borrowed" includes any type whose validity depends on an owner’s
 lifetime (for example `&T`, `&mut T`, and borrowed view types such as slices).
 
 Guarantee: if `T is Unborrowed`, then values of `T` may be stored indefinitely
@@ -1221,8 +1226,7 @@ allowed so long as they do not embed borrows.
 
 Structural rules (compiler-known, auto-impl):
 - `&T` and `&mut T` are never `Unborrowed`.
-- Borrowed view types (for example `ByteSlice`, `MutByteSlice`, and future
-  string slices/spans) are never `Unborrowed`.
+- Borrowed view types (for example `ByteSlice`, `MutByteSlice`) are never `Unborrowed`.
 - Structs/variants/tuples/arrays are `Unborrowed` iff all field/element types
   are `Unborrowed`.
 - Generic containers are `Unborrowed` iff the container does not embed borrows
@@ -1246,7 +1250,7 @@ Traits are designed to:
   - RAII (`Destructible`)
   - formatting (`Debug`, `Display`)
   - serialization, hashing, comparison
-  - “marker” traits for POD or special behaviors
+  - "marker" traits for POD or special behaviors
 
 The trio of:
 
@@ -1297,7 +1301,6 @@ Drift differentiates between **methods** (eligible for dot-call syntax) and **fr
   - `T`: pass by value
   - `&T`: shared borrow
   - `&mut T`: exclusive/mutable borrow
-  - (future) `move T`: consuming receiver
   `self` is the idiomatic name for the receiver, but the role comes from position/mode, not spelling.
 - The receiver’s nominal type is implied by the `implement` header; there is no magic receiver outside an `implement` block.
 - `implement` headers must use the nominal type (`Point`, `Vec<Int>`, etc.), not a reference-qualified type (`&Point`, `&mut Point`); reference headers are rejected.
@@ -1637,7 +1640,7 @@ typed semantics.
 **Build targets vs compilation units.** Drift code is organized into **modules**
 (the language-level unit named by a module id and referenced by `import`).
 End users generally think in terms of producing an executable or a package
-artifact, not “building a module” directly.
+artifact, not "building a module" directly.
 
 - **Executable build**: resolve imports from source roots and package roots,
   compile all required modules, then link into a single executable with an entry
@@ -1679,7 +1682,7 @@ This separation avoids ambiguity and makes builds reproducible: source roots are
 Modules have an explicit **export set** and an explicit **visibility marker**
 (`pub`). All other top-level items are private to the defining module.
 
-MVP syntax:
+Syntax:
 
 ```drift
 export { foo, Point, Boom }
@@ -1857,7 +1860,25 @@ while i < 3 {
 - The body forms its own scope for local bindings; fresh bindings inside the loop shadow outer names and are re-created per iteration.
 - `break` exits the nearest enclosing loop; `continue` jumps to the next iteration (re-evaluating the condition).
 
-### 8.3. Ternary (`? :`) operator
+### 8.3. For loops and iterators
+
+```drift
+for item in collection {
+    process(item);
+}
+```
+
+- `for <name> in <expr> { <stmts> }` iterates over a value that implements the `Iterable` trait.
+- The desugaring creates an iterator via `.iter()` and calls `.next()` on each iteration until `None` is returned.
+- `break` and `continue` work as in `while` loops.
+- `for <name> in <start>..<end> { ... }` is the counting form; the loop variable is scoped to the loop body.
+
+**Iterator throw contract (normative):**
+
+- `SinglePassIterator.next()` and related advancement methods (`prev()` for bidirectional iterators) are `nothrow`. A `for` loop body may appear inside a `nothrow` function without triggering throw-contract diagnostics from the iteration machinery itself.
+- **Iterator invalidation** (e.g., modifying a container's structure during iteration) is treated as an invariant violation. Invalidated iterators abort the process via `assert`-style failure with a diagnostic message, not via a typed `throw` from `next()`. This is deterministic and non-recoverable.
+
+### 8.4. Ternary (`? :`) operator
 
 ```drift
 val label = is_error ? "error" : "ok";
@@ -1867,7 +1888,7 @@ val label = is_error ? "error" : "ok";
 - `then_expr` and `else_expr` must have the same type (checked at compile time).
 - Useful for concise branching without introducing additional block nesting; when control flow is complex, prefer a full `if/else`.
 
-### 8.4. Try/catch (expression and statement)
+### 8.5. Try/catch (expression and statement)
 
 **Expression form (`try expr catch …`):**
 
@@ -1887,7 +1908,7 @@ val routed = try parse(input) catch BadFormat(e) { 0 } catch { 1 };
   - `catch mod:EventName(e) { block }` — match a specific event from module `mod`, binder `e: Error`.
   - Unqualified event names resolve **only** to the current module (imports are not searched).
 - Multiple catch arms are allowed; event arms are tested in source order, then catch-all; if no arm matches and there is no catch-all, the error is rethrown.
-- Catch blocks in expression form may **not** contain `return`, `break`, `continue`, or `rethrow`; they must evaluate to a value whose type matches the attempt. Violation diagnostic: **E-TRYEXPR-CONTROLFLOW** (“control-flow statement not allowed in try-expression catch block; use statement try { ... } catch { ... } instead”).
+- Catch blocks in expression form may **not** contain `return`, `break`, `continue`, or `rethrow`; they must evaluate to a value whose type matches the attempt. Violation diagnostic: **E-TRYEXPR-CONTROLFLOW** ("control-flow statement not allowed in try-expression catch block; use statement try { ... } catch { ... } instead").
 - Event identity is by event name in source; lowering compares deterministic `event_code` constants derived from the fully-qualified event name (§14.1.1). The runtime never matches on strings.
 - The attempt is any value-producing expression. Applying `try` to a statically `nothrow` expression is a compile-time error.
 - This is sugar for a block-wrapped statement `try/catch` that returns the block’s value.
@@ -1948,7 +1969,7 @@ variant Maybe<T> {
 }
 ```
 
-Rules (MVP):
+Rules:
 
 - `@tombstone` is contextual: it is only recognized on variant arms.
 - At most one arm per variant may be marked `@tombstone`.
@@ -1975,13 +1996,13 @@ val success: Result<Int, String> = Ok(42);
 val failure: Result<Int, String> = Err("oops");
 ```
 
-MVP rules:
+Rules:
 
 - Constructors are **unqualified identifiers** (`Ok`, `Err`, `Some`, `None`).
 - Constructor arguments may be **positional** or **named**.
 - **Do not mix** positional and named arguments in the same call.
 - Named arguments bind to the **constructor field names**.
-- **Unknown** field names, **duplicate** field names, **missing** required fields, or **extra** positional arguments are errors (no defaults in MVP).
+- **Unknown** field names, **duplicate** field names, **missing** required fields, or **extra** positional arguments are errors (no defaults).
 - An **unqualified** constructor call in expression position requires an **expected variant type** from context (e.g., an annotation, a parameter type, or a function return type). If there is no expected type, the compiler rejects the call rather than guessing.
 - **Evaluation order:** constructor arguments are evaluated in **source order** (left-to-right) even when named; assignment into the canonical field order happens after evaluation.
 
@@ -2002,26 +2023,26 @@ val y = Optional<Int>::None(); // OK: explicit type arguments on the variant typ
 val z = Optional::None<type Int>(); // OK: explicit type arguments after the constructor name
 ```
 
-Rules (v1 MVP):
+Rules:
 
 - Syntax: `TypeRef::Ctor(args...)`.
 - `TypeRef` is a nominal type reference (a variant type name; module-qualified type names may be supported where type references are supported).
-- In MVP, only **variant constructors** may be referenced through `TypeRef::Ctor(...)`.
+- Only **variant constructors** may be referenced through `TypeRef::Ctor(...)`.
 - The constructor name must exist on the referenced variant type and the argument count must match the constructor’s fields.
 - Argument rules are the same as unqualified calls (positional or named, no mixing, named binds to field names).
 - Generic type arguments may be inferred from constructor arguments:
   - `Optional::Some(1)` infers `T = Int`.
   - If type arguments are underconstrained (e.g., `Optional::None()`), the compiler rejects the call unless an expected type provides them (e.g., via a return type or an explicit annotation).
 
-Type argument spelling (v1 MVP):
+Type argument spelling:
 
 - Either `TypeRef<T>::Ctor(...)` or `TypeRef::Ctor<type T>(...)` may be used to provide explicit type arguments for a generic variant.
 - At most one explicit type-argument list may appear in a qualified constructor call.
 - The explicit type-argument list always applies to the **variant type instantiation** (not to the constructor name itself). The two spellings are equivalent in v1.
 
-MVP restriction:
+Restriction:
 
-- `TypeRef::Ctor` is not a first-class value in MVP. For example, `val f = Optional::Some` is rejected; use a direct call `Optional::Some(...)`.
+- `TypeRef::Ctor` is not a first-class value. For example, `val f = Optional::Some` is rejected; use a direct call `Optional::Some(...)`.
 
 ### 10.4. Pattern matching and exhaustiveness
 
@@ -2098,7 +2119,7 @@ fn describe_lookup(id: Int, r: LookupResult<String>) -> String {
 
 ### 10.5. Recursive data
 
-Recursive variants require an explicit indirection strategy (e.g. references or a future owned `Box<T>` type) to break infinite size. This is deferred until the language has a stable story for recursive ownership and lifetime/escape rules.
+Recursive variants are not supported in v1. They require an explicit indirection strategy (e.g. references or an owned `Box<T>` type) to break infinite size.
 
 ### 10.6. Generics
 
@@ -2119,7 +2140,7 @@ fn make_pair(x: Int, y: Int) -> PairOrError<Int, String> {
 }
 ```
 
-**Generic functions (MVP in this revision).** Functions may declare type
+**Generic functions.** Functions may declare type
 parameters and be instantiated explicitly. Call-site type arguments require
 the `type` marker to avoid ambiguity with comparisons:
 
@@ -2176,7 +2197,7 @@ There is no safe-navigation operator (`?.`). Access requires explicit pattern ma
 ### 11.4. Parameters & return types
 
 - A parameter of type `T` cannot receive `None()`.
-- Use `Optional<T>` for “maybe” values.
+- Use `Optional<T>` for "maybe" values.
 - Returning `None()` from a function declared `-> T` is a compile error.
 
 ```drift
@@ -2227,10 +2248,6 @@ fn example() -> Void {
     }
 }
 
-### 11.8. Optional API (deferred)
-
-Helper methods/combinators on `Optional<T>` (e.g. `is_some`, `unwrap_or`) are expected to exist, but are deferred until the module/trait story is finalized. MVP code should use `match`.
-
 ---
 ## 12. `lang.array`, `ByteBuffer`, and array literals
 
@@ -2254,7 +2271,7 @@ val explicit: Array<Int> = [1, 2, 3]; // annotation still allowed when desired
 
 - `[expr1, expr2, ...]` constructs an `Array<T>` where every element shares the same type `T`. The compiler infers `T` from the elements.
 - Mixed-type literals (`[1, "two"]`) are rejected during type checking (compile-time error).
-- **MVP restriction:** non-empty array literals require `T` to be `Copy`. Empty literals (`[]`) are allowed only with an explicit `Array<T>` type annotation.
+- **Restriction:** non-empty array literals require `T` to be `Copy`. Empty literals (`[]`) are allowed only with an explicit `Array<T>` type annotation.
 - Empty literals are reserved for a future constructor; for now, call the stdlib helper once it lands.
 
 **Builtin Array (stepping stone).** `Array<T>` is a builtin container in v1 primarily to support literal syntax and a fixed ABI layout, but its semantics are aligned with the stdlib RawBuffer recipe: uninitialized capacity, initialized prefix `[0..len)`, move-out on pop/remove, and `gen` invalidation only on structural change. Indexing is specified as trait-based (operator lowering) so user containers can implement `[]` without being builtin. The long-term direction is: keep literal syntax as a compiler primitive that lowers to a typed literal payload, and move `Array<T>` into stdlib once the unsafe/Ptr story is fully stabilized; until then, the builtin must stay behaviorally equivalent to the RawBuffer-backed implementation to avoid drift.
@@ -2336,9 +2353,9 @@ fn copy_stream(src: InputStream, dst: OutputStream) -> Void {
 
 
 ### 12.2. Indexing, mutation, and borrowing
-#### 12.2.1. Borrowed element access (MVP)
+#### 12.2.1. Borrowed element access
 
-In MVP, `Array<T>` exposes **borrowed** element access via:
+`Array<T>` exposes **borrowed** element access via:
 
 ```drift
 fn get(self: &Array<T>, index: Int) -> Optional<&T>
@@ -2377,155 +2394,44 @@ Nested indexing works as expected (e.g., `matrix[row][col]`) as long as the root
 
 ## 13. Collection literals (arrays and maps)
 
-**Deferred (non-normative in MVP).** This section describes a future trait-based
-literal desugaring model. In MVP, array literals construct `Array<T>` directly (see §12),
-and map literal desugaring is not yet implemented. Treat the material below as a
-forward-looking design, not current behavior.
+### 13.1. Array literals
 
-Drift includes literal syntax for homogeneous arrays (`[a, b, ...]`) and maps (`{ key: value, ... }`).
-The syntax is part of the language grammar, but **literals never hard-wire a concrete container type**.
-Instead, they are desugared through trait hooks so projects can pick any backing collection.
+`[expr1, expr2, ...]` constructs an `Array<T>` directly (see §12). The compiler infers `T` from the elements; all elements must unify to a single type.
 
-### 13.1. Goals
+```drift
+val xs = [1, 2, 3];               // Array<Int>
+val names = ["Bob", "Alice"];      // Array<String>
+val explicit: Array<Int> = [1, 2]; // annotation allowed
+```
 
-1. **Ergonomics** — trivial programs should be able to write `val xs = [1, 2, 3]` without ceremony.
-2. **Flexibility** — large systems must be free to route literals into custom containers, including
-   arena-backed vectors, small-capacity stacks, or persistent maps.
+### 13.2. Map literals
 
-### 13.2. Syntax
+`{ key: value, ... }` constructs a map. Map literals are **target-directed**: the compiler uses the expected type from context to determine the concrete map type. When no expected type constrains a non-empty literal, the default target is `HashMap<K, V>` (backed by `std.containers.HashMapCore` with `DefaultBuildHasher`). Other map-like types (e.g., `TreeMap<K, V>`) may be targeted via type annotation. Empty map literals (`{}`) always require an expected type or explicit annotation; the compiler cannot infer a target type from zero entries.
 
-#### 13.2.1. Array literal
+```drift
+val scores = { "alice": 10, "bob": 20 };                // HashMap<String, Int>
+val tree: TreeMap<String, Int> = { "x": 1, "y": 2 };    // target-directed
+val empty: HashMap<String, Int> = {};                    // annotation required
+```
 
-`[expr1, expr2, ...]` constructs a homogeneous array literal. Example: `val xs = [1, 2, 3]`.
+Duplicate keys are allowed in the literal; the target type decides whether to keep the first value, last value, or reject duplicates.
 
-#### 13.2.2. Map literal
-
-`{ key: value, ... }` constructs a map literal. Example: `val user = { "name": "Ada", "age": 38 }`.
-
-Duplicate keys are allowed in the literal; the target type decides whether to keep the first value, last
-value, or reject duplicates.
-
-#### 13.2.3. Brace forms are disjoint
+### 13.3. Brace forms are disjoint
 
 Drift uses braces for two distinct constructs with disjoint syntax:
 
-- **Map literal:** `{ expr_key: expr_value, ... }` — keys and values are arbitrary expressions; desugars via `FromMapLiteral` (§13.3.2). Map literals **only** use `:`.
+- **Map literal:** `{ expr_key: expr_value, ... }` — keys and values are arbitrary expressions. Map literals **only** use `:`.
 - **Struct initializer:** `TypeName { field = expr, ... }` — `TypeName` resolves to a declared struct; fields are identifiers checked against the struct declaration; uses `=`.
 
-There is no ambiguous brace form: `{k: v}` is always a map literal; `Type { f = v }` is always a struct initializer (a “named field initializer”).
+There is no ambiguous brace form: `{k: v}` is always a map literal; `Type { f = v }` is always a struct initializer (a "named field initializer").
 
 Exceptions use **constructor syntax** (`ExcName(...)`) rather than braces (§14.3.2).
 
-### 13.3. Type resolution
-
-A literal `[exprs...]` or `{k: v, ...}` requires a *target* type `C`. Resolution happens in two phases:
-
-1. Infer the element type(s) from the literal body. Array literals require all expressions to unify to a
-   single element type `T`. Map literals infer key type `K` and value type `V` from their entries.
-2. Determine the target container type `C` from context. If no context constrains the literal, the
-   compiler falls back to the standard prelude types (`Array<T>` and `Map<K, V>`).
-
-#### 13.3.1. `FromArrayLiteral`
-
-A type `C` may accept array literals by implementing:
-
-```drift
-interface FromArrayLiteral<Element> {
-    static fn from_array_literal(items: Array<Element>) -> Self
-}
-```
-
-Desugaring of `[e1, e2, ...]` becomes:
-
-```drift
-C.from_array_literal(tmp_array)
-```
-
-Where `tmp_array` is an ephemeral `Array<T>` built by the compiler. If `C` does not implement the
-interface, the literal fails to type-check.
-
-#### 13.3.2. `FromMapLiteral`
-
-Map literals use a similar interface:
-
-```drift
-interface FromMapLiteral<Key, Value> {
-    static fn from_map_literal(entries: Array<(Key, Value)>) -> Self
-}
-```
-
-The compiler converts `{k1: v1, ...}` into `C.from_map_literal(tmp_entries)` where `tmp_entries` is an
-`Array<(K, V)>`.
-
-### 13.4. Standard implementations
-
-The prelude wires literals to the default collections:
-
-```drift
-implement<T> FromArrayLiteral<T> for Array<T> {
-    static fn from_array_literal(items: Array<T>) -> Array<T> {
-        return items;
-    }
-}
-
-implement<K, V> FromMapLiteral<K, V> for Map<K, V> {
-    static fn from_map_literal(entries: Array<(K, V)>) -> Map<K, V> {
-        val m = Map<K, V>();
-        for (k, v) in entries {
-            m.insert(k, v);
-        }
-        return m;
-    }
-}
-```
-
-This keeps “hello world” code terse:
-
-```drift
-fn main() nothrow -> Int {
-    println("hello, world");
-    return 0;
-}
-```
-
-### 13.5. Strict mode and overrides
-
-Projects may opt into a strict mode that disables implicit prelude imports. In that configuration:
-
-- Literal syntax still parses.
-- You must import the concrete collection types you want to accept literals.
-- If no suitable `FromArrayLiteral`/`FromMapLiteral` implementation is in scope, the literal fails.
-
-Custom containers can opt in by providing their own implementations:
-
-```drift
-struct SmallVec<T> { /* ... */ }
-
-implement<T> FromArrayLiteral<T> for SmallVec<T> {
-    static fn from_array_literal(items: Array<T>) -> SmallVec<T> {
-        var sv = SmallVec<T>();
-        for v in items { sv.push(v) }
-        return sv;
-    }
-}
-
-val fast: SmallVec<Int> = [1, 2, 3];
-```
-
-The same pattern applies to alternative map implementations.
-
-### 13.6. Diagnostics
+### 13.4. Diagnostics
 
 - `[1, "two"]` → error: element types do not unify.
-- `{}` without a target type → error when no default map is in scope.
-- `val s: SortedSet<Int> = [1, 2, 3]` → error unless `SortedSet<Int>` implements `FromArrayLiteral<Int>`.
-
-### 13.7. Summary
-
-- Literal syntax is fixed in the language, but its meaning is delegated to interfaces.
-- The prelude provides ready-to-use defaults (`Array`, `Map`).
-- Strict mode and custom containers can override the target type.
-- Errors are clear when element types disagree or no implementation is available.
+- `{}` without a target type → error: cannot infer target type for empty map literal; add a type annotation.
+- Mixed-type literals are rejected during type checking (compile-time error).
 
 
 ## 14. Exceptions and error context
@@ -2537,7 +2443,7 @@ Exceptions are **not** UI messages: they carry machine-friendly context (event n
 
 **Exceptions and `Result<T, Error>` coexist, with distinct roles (single semantic model).**
 - **Exceptions** are the surface mechanism for propagating failures: semantically, every can-throw computation produces a `Result<T, Error>`, and `throw` / `try` / `catch` are the structured syntax for constructing, inspecting, and propagating that result while capturing context. Implementations may realize propagation via unwinding within static modules, but the semantic model remains result-based.
-- **`Result<T, Error>`** is the value-level encoding of a potentially failing computation. It is explicit in signatures and ideal for “expected” failures where the caller stays in-band (`match`/pattern matching, pipelines, etc.).
+- **`Result<T, Error>`** is the value-level encoding of a potentially failing computation. It is explicit in signatures and ideal for "expected" failures where the caller stays in-band (`match`/pattern matching, pipelines, etc.).
 - Drift has one semantic error model: a can-throw computation produces a `Result<T, Error>` (conceptually), and `throw`/`try`/`catch` are surface sugar that construct, inspect, and propagate that `Result` while capturing context for debugging/logging.
 
 ### 14.1. Goals
@@ -2634,7 +2540,7 @@ throw InvalidOrder(order_id = order.id, code = "order.invalid");
 
 Runtime builds an `Error` with:
 - `event_code = hash(fqn)` (see §14.1.1)
-- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name—there is no special “primary payload” field; every value must implement the `Diagnostic` trait (§5.13.7))
+- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name—there is no special "primary payload" field; every value must implement the `Diagnostic` trait (§5.13.7))
 - empty ctx_frames (filled during unwind)
 - backtrace
 
@@ -2759,7 +2665,7 @@ When a function is part of a module’s exported interface (Chapter 7.2), the `R
 
 - Exported functions always use the `Result<T, Error>` calling convention on the wire, encoded as `{T, Error*}` or `Error*` at the ABI.
 - Callers in other modules must treat every exported function as potentially failing, even if its implementation never actually throws.
-- Internal, non-exported functions may be lowered more aggressively (for example, eliding the error channel when analysis proves “no throw”), but such optimizations must not change the behavior of exported entry points as seen through the module interface.
+- Internal, non-exported functions may be lowered more aggressively (for example, eliding the error channel when analysis proves "no throw"), but such optimizations must not change the behavior of exported entry points as seen through the module interface.
 
 **RAII and destruction semantics.**
 
@@ -2904,9 +2810,9 @@ In both cases, the file handle is safely released exactly once.
 
 - Deterministic RAII: owned values run their destructor at end of liveness—scope exit, early return, or after being consumed by a finalizer. No deferred GC-style cleanup.
 - Move-only by default: moving a value consumes it; the source binding becomes invalid and is not dropped there. Drop runs exactly once on the final owner.
-- Copy types opt in: only `Copy` types may be implicitly duplicated; they must provide an O(1), non-allocating duplication path. `Copy` does not imply “no drop” (e.g., `String` retains/releases on copy). The internal `BitCopy` predicate enables memcpy fast paths but is not user-visible.
+- Copy types opt in: only `Copy` types may be implicitly duplicated; they must provide an O(1), non-allocating duplication path. `Copy` does not imply "no drop" (e.g., `String` retains/releases on copy). The internal `BitCopy` predicate enables memcpy fast paths but is not user-visible.
 
-### 15.6. Unsafe code and raw pointers (MVP)
+### 15.6. Unsafe code and raw pointers
 
 Drift supports a minimal unsafe surface for C-API wrappers:
 
@@ -2916,7 +2822,7 @@ Drift supports a minimal unsafe surface for C-API wrappers:
 
 Raw pointers are represented by a distinct type `Ptr<T>`:
 
-- `Ptr<T>` requires `T` to be sized; fat pointers are not part of MVP.
+- `Ptr<T>` requires `T` to be sized; fat pointers are not supported in v1.
 - `Ptr<T>` is `Copy` and does not participate in borrow checking.
 - There are no implicit conversions between `Ptr<T>` and `&T` / `&mut T`.
 - Pointer read/write/offset operations are only permitted in unsafe contexts and are provided by `std.mem`.
@@ -3135,11 +3041,9 @@ fn reallocate(self: &mut RawBuffer<T>, new_cap: Int) @unsafe
 ### 17.5. Numeric types in FFI
 
 Drift distinguishes **natural-width** and **fixed-width** numeric primitives.
-Fixed-width primitives are **reserved in v1**; the FFI mappings below are future-facing examples and will be enabled once fixed-width scalars are implemented.
+Fixed-width primitives are internal to `lang.abi`; FFI type mapping documentation is pending.
 
 In v1, FFI bindings should use `Int`/`Uint` for C APIs that use implementation-defined widths (`int`, `size_t`, `ptrdiff_t`, `uintptr_t`).
-
-Fixed-width FFI examples (e.g., `int32_t` → `Int32`) are deferred to post-MVP documentation.
 ---
 
 ## 18. Standard I/O design (v1)
@@ -3659,7 +3563,7 @@ This pattern keeps the OS plugin ABI small and stable while preserving Drift’s
 
 - **Static modules** (Chapter 7, Chapter 20) are the core Drift unit of composition. They are compiled into a single image or via DMIR/DMP and may use the full error model and unwinding semantics.
 - **Plugins in the OS sense** are handled via **FFI**: a C-style ABI with opaque handles and explicit error codes, wrapped by static Drift modules.
-- The language does **not** define a separate “plugin module” kind or a first-class Drift-plugin ABI in this revision. Future revisions may introduce a higher-level Drift-to-Drift plugin profile if real-world experience justifies the added complexity.
+- The language does **not** define a separate "plugin module" kind or a first-class Drift-plugin ABI in this revision. Future revisions may introduce a higher-level Drift-to-Drift plugin profile if real-world experience justifies the added complexity.
 
 
 ## 22. Closures and callable traits
@@ -3763,22 +3667,24 @@ captures:
 2. **Argument passing is checked against parameter escape level metadata**:
    - `IMMEDIATE` / `LOCAL`: borrowed captures are allowed.
    - `SCOPED`: borrowed captures are allowed only when the captured place is proven
-     defined before the scope call in the enclosing block (conservative MVP rule).
+     defined before the scope call in the enclosing block (conservative rule).
    - `THREAD` / `STATIC`: borrowed captures are rejected.
 3. **Return/store is rejected** for borrowed-capture closures.
-4. **Unannotated call boundaries default to `THREAD` in MVP**, so borrowed-capture
+4. **Unannotated call boundaries default to `THREAD` in v1**, so borrowed-capture
    arguments are rejected unless a stricter non-escaping level is proven.
+   **Exception:** generic parameters bounded by `Fn1`/`FnN` traits infer `SCOPED`
+   escape level, so borrowed-capture closures passed to Fn-bounded params are
+   accepted without an explicit escape annotation.
 
 Escape-level metadata is inferred from available bodies for same-unit calls and
 may be supplied by compiler metadata for separately compiled units.
 
-Current MVP limitations:
-- For generic `Fn1`-bounded callback parameters (for example `conc.scope`-shaped
-  APIs), the current type-checker coercion path still rejects capturing lambdas
-  before borrow-checker SCOPED acceptance can run.
+Current limitations:
 - SCOPED lifetime proof is intentionally conservative and checks only the direct
   enclosing block statement order; predecessor/nested-block safe cases may be
   rejected.
+- The Fn-bounded SCOPED inference applies only to `Fn`/`FnMut`/`FnOnce` trait
+  bounds; non-Fn trait bounds (e.g., marker traits) do not trigger the relaxation.
 
 Closures with only `copy`/`move` captures may escape.
 
