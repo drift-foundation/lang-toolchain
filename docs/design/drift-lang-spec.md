@@ -428,11 +428,11 @@ Unqualified calls never resolve to methods. `name(args...)` is always a free-fun
 
 ### 3.9. Constants (`const`)
 
-Drift supports top-level constants via `const`. Constants are immutable,
-module-scoped bindings that are evaluated at compile time and embedded into
-uses (no runtime storage is required in v1).
+Drift supports constants via `const` at both module scope and block scope.
+Constants are immutable bindings whose value is known at compile time; each
+use site re-materializes the literal value (no runtime storage is allocated).
 
-Syntax:
+#### Module-scope constants
 
 ```drift
 const ANSWER: Int = 42;
@@ -440,17 +440,44 @@ const OK: Bool = true;
 const GREETING: String = "hello";
 ```
 
+#### Block-scope constants
+
+```drift
+fn example() nothrow -> Int {
+    const LIMIT: Int = 100;
+    const TAG: String = "ok";
+    return LIMIT;
+}
+```
+
+Block-scope constants follow the same initializer rules as module-scope
+constants but are scoped to the enclosing block (function body, `if`/`while`
+body, bare block). They are not exportable and do not participate in module
+interface resolution.
+
+Because each use re-materializes the literal, non-Copy types like `String`
+may be used at multiple sites without triggering move semantics:
+
+```drift
+const S: String = "data";
+process(S);   // fresh ConstString materialized
+process(S);   // another fresh ConstString — no use-after-move
+```
+
 Rules:
 
-- A `const` declaration is **top-level only** (not inside blocks).
 - A `const` must have an explicit type annotation.
 - The initializer must be a **compile-time literal**:
-  - `Int`, `Uint`, `Bool`, `String`, `Float` literals
+  - `Int`, `Uint`, `Bool`, `String`, `Float`, `Byte` literals
   - unary `+` / `-` applied to an integer/float literal
 - Non-literal expressions (`1 + 2`, calls, indexing, interpolation, etc.) are
   rejected in v1.
-- A `const` name is a value-namespace binding and participates in import/export
-  and conflict rules like other exported values.
+- Block-scope constants participate in the same shadowing rules as `val`: a
+  local `const` may shadow an outer `const`, `val`, or module-level `const`.
+- `pub const` is only valid at module scope; `pub` is a parse error inside a
+  block.
+- Module-scope `const` names participate in import/export and conflict rules
+  like other exported values.
 
 Tooling/packaging note:
 

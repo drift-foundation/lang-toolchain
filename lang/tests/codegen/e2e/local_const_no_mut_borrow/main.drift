@@ -1,0 +1,7 @@
+module main
+
+fn main() nothrow -> Int {
+	const X: Int = 42;
+	val r = &mut X;
+	return 0;
+}

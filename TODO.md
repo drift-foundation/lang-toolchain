@@ -76,6 +76,9 @@
 - Tuple types (`(T1, T2, ..., Tn)`) with destructuring, componentwise Copy, and pattern matching.
 - `Size` type for collection lengths/indices.
 
+[Const]
+- Composite const values (post-MVP): support aggregate constants such as `const Array<Int>` / `const Array<String>` with explicit const-eval and immutability/ownership rules (separate from local-const MVP literal-only support).
+
 [Concurrency]
 - Add ReentrantMutex (distinct from Mutex); define semantics and API surface.
 
@@ -84,9 +87,22 @@
 
 [Traits]
 - Compiler enforcement for `Send`/`Sync` trait bounds at spawn/thread-sharing boundaries.
+  - Auto-impl: `Send` if all fields are `Send`; `Sync` if all fields are `Sync` (structural derivation like `Copy`).
+  - Negative impls: types with interior mutability (`Cell`, raw pointers) must opt out explicitly.
+  - Enforcement points: `vt_spawn`, `scope`, and any API that transfers ownership cross-thread must require `T: Send`; shared-ref cross-thread access (`&T` across threads) must require `T: Sync`.
+  - `Arc<T>` is `Send + Sync` only when `T: Send + Sync`; `Mutex<T>` is `Sync` when `T: Send`.
+  - Likely approach: extend the checker's trait-bound resolution to propagate `Send`/`Sync` constraints at call sites that cross thread boundaries, reject at typecheck time if unsatisfied.
 - Compiler enforcement for `Unborrowed` marker trait (structural auto-impl checking).
 - Dynamic dispatch and trait bounds: pin surface syntax and type rules for trait bounds / trait objects.
 - `Array<String>.dup()` should require `String.dup()` and then lift `Array<T>.dup()` to `T: Dup` (out of MVP scope).
+
+[Move semantics]
+- Move of projected places (`move self.field`, `move x.inner`).
+  - Currently rejected with "move of a projected place is not supported in v1; move a local/param or use swap/replace".
+  - Requires partial-move tracking in the borrow checker: after `move x.field`, `x` is partially moved and only `x.field` is invalid (other fields remain accessible).
+  - Drop semantics: a partially-moved struct must not run its full destructor; only un-moved fields get dropped.
+  - MIR representation: likely needs a `PartialMove` node or per-field move flags on the owning local.
+  - Workaround today: `std.mem.replace`/`swap` to extract the field value while leaving the struct in a valid state.
 
 [Error handling]
   - DiagnosticValue payloads: design/implement a stable ownership/handle model for opaque/object/array payload kinds so they can be stored in `Error.attrs` without ABI/lifetime churn.

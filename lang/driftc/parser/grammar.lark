@@ -145,6 +145,8 @@ pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_de
 # - the declared type must match the initializer exactly,
 # - consts are values (not types) and may be exported/imported like functions.
 const_def: CONST NAME COLON type_expr EQUAL expr TERMINATOR
+# Block-scope constant declaration (no TERMINATOR — stmt rule adds it).
+local_const_stmt: CONST NAME COLON type_expr EQUAL expr
 type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 
 func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig require_clause? (block | TERMINATOR)
@@ -218,6 +220,7 @@ compound_stmt: if_stmt
              | block
 
 simple_stmt: let_stmt
+	           | local_const_stmt
 	           | return_stmt
 	           | assert_stmt
 	           | rethrow_stmt

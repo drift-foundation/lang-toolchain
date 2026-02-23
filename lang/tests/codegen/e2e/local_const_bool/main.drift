@@ -1,0 +1,9 @@
+module main
+
+fn main() nothrow -> Int {
+	const T: Bool = true;
+	if T {
+		return 1;
+	}
+	return 0;
+}

@@ -1,0 +1,9 @@
+{
+  "description": "e2e: local const rejects function call initializer",
+  "diagnostics": [
+    {
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

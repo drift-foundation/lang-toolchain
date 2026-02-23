@@ -330,6 +330,17 @@ class AstToHIR:
 			loc=self._as_span(getattr(stmt, "loc", None)),
 		)
 
+	def _visit_stmt_LocalConstStmt(self, stmt: ast.LocalConstStmt) -> H.HStmt:
+		"""Block-scope constant declaration."""
+		bid = self._alloc_binding(stmt.name)
+		return H.HLocalConst(
+			name=stmt.name,
+			declared_type_expr=getattr(stmt, "type_expr", None),
+			value=self.lower_expr(stmt.value),
+			binding_id=bid,
+			loc=self._as_span(getattr(stmt, "loc", None)),
+		)
+
 	def _visit_stmt_ReturnStmt(self, stmt: ast.ReturnStmt) -> H.HStmt:
 		"""Return with optional value."""
 		val = self.lower_expr(stmt.value) if stmt.value is not None else None

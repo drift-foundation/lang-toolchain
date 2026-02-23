@@ -1,0 +1,7 @@
+module main
+
+fn main() nothrow -> Int {
+	const A: Uint = 255;
+	const B: Uint = 15;
+	return cast<Int>(A & B);
+}

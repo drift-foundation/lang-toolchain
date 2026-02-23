@@ -125,6 +125,8 @@ class BorrowMaterializeRewriter:
 			return [H.HTry(body=body, catches=catches)]
 		if isinstance(stmt, (H.HBreak, H.HContinue, H.HRethrow)):
 			return [stmt]
+		if isinstance(stmt, H.HLocalConst):
+			return [stmt]  # literal value, no borrow materialization needed
 		raise NotImplementedError(f"BorrowMaterializeRewriter does not handle stmt {type(stmt).__name__}")
 
 	def _to_place(self, expr: H.HExpr) -> H.HPlaceExpr | None:

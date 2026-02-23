@@ -1,0 +1,6 @@
+{
+  "description": "e2e: local const String used at multiple consuming sites (non-Copy regression)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

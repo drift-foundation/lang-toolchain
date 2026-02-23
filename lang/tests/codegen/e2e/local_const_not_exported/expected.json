@@ -1,0 +1,10 @@
+{
+  "description": "e2e: pub const rejected in function scope (parse error)",
+  "diagnostics": [
+    {
+      "message_contains": "Unexpected token",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1
+}

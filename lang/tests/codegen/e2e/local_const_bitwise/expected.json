@@ -1,0 +1,6 @@
+{
+  "description": "e2e: local const in bitwise expression",
+  "exit_code": 15,
+  "stderr": "",
+  "stdout": ""
+}

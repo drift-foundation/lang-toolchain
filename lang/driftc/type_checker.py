@@ -21,7 +21,7 @@ from collections import ChainMap
 
 from dataclasses import dataclass, field, replace, fields, is_dataclass
 from enum import Enum, auto
-from typing import Dict, List, Optional, Mapping, Sequence, Tuple
+from typing import Dict, List, Optional, Mapping, Sequence, Set, Tuple
 
 from lang.driftc import stage1 as H
 from lang.driftc import debug as drift_debug
@@ -417,6 +417,8 @@ class TypeChecker:
 
 		def walk_stmt(stmt: H.HStmt) -> None:
 			bump(stmt)
+			if isinstance(stmt, H.HLocalConst):
+				return  # literal initializer, no expressions to walk
 			if isinstance(stmt, H.HLet):
 				walk_expr(stmt.value)
 				return
@@ -1332,6 +1334,9 @@ class TypeChecker:
 		# but we still track the origin kind to keep place reasoning explicit.
 		binding_place_kind: Dict[int, PlaceKind] = {}
 		pending_lambda_by_binding: Dict[int, H.HLambda] = {}
+		# Block-scope const binding ids: these re-materialize at each use site,
+		# so the Copy check is skipped (non-Copy types like String are allowed).
+		local_const_binding_ids: Set[int] = set()
 		# Track whether a binding was declared as &mut T (param-only for now).
 		binding_param_ref_mut: Dict[int, bool] = {}
 		if preseed_binding_place_kind:
@@ -2844,6 +2849,8 @@ class TypeChecker:
 			def stmt_can_throw(stmt: H.HStmt) -> bool:
 				if isinstance(stmt, (H.HThrow, H.HRethrow)):
 					return True
+				if isinstance(stmt, H.HLocalConst):
+					return False  # literal initializer
 				if isinstance(stmt, H.HExprStmt):
 					return expr_can_throw(stmt.expr)
 				if isinstance(stmt, H.HLet):
@@ -5239,7 +5246,9 @@ class TypeChecker:
 							if expr.binding_id is not None:
 								binding_for_var[expr.node_id] = expr.binding_id
 							ty_id = scope[expr.name]
-							_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
+							# Local consts re-materialize at each use site; skip Copy check.
+							if expr.binding_id is None or int(expr.binding_id) not in local_const_binding_ids:
+								_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
 							return record_expr(expr, ty_id)
 				# Function reference in value position (typed context preferred).
 				resolution = _resolve_function_reference_value(
@@ -8165,6 +8174,31 @@ class TypeChecker:
 			# Borrow conflicts are diagnosed within a single statement.
 			borrows_in_stmt.clear()
 			borrow_expr_ids_in_stmt.clear()
+			if isinstance(stmt, H.HLocalConst):
+				# Block-scope constant: register in scope, no storage.
+				if stmt.binding_id is None:
+					stmt.binding_id = self._alloc_local_id()
+				declared_ty = None
+				if getattr(stmt, "declared_type_expr", None) is not None:
+					try:
+						declared_ty = resolve_opaque_type(
+							stmt.declared_type_expr,
+							self.type_table,
+							module_id=current_module_name,
+							type_params=type_param_map,
+						)
+					except Exception:
+						declared_ty = None
+				if declared_ty is not None:
+					scope_env[-1][stmt.name] = declared_ty
+					scope_bindings[-1][stmt.name] = stmt.binding_id
+					binding_types[stmt.binding_id] = declared_ty
+					binding_names[stmt.binding_id] = stmt.name
+					binding_mutable[stmt.binding_id] = False
+					binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
+					# Mark as local const so use sites skip the Copy check.
+					local_const_binding_ids.add(int(stmt.binding_id))
+				return
 			if isinstance(stmt, H.HLet):
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()

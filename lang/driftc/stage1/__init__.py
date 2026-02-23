@@ -74,6 +74,7 @@ from .hir_nodes import (
 	HUnsafeBlock,
 	HExprStmt,
 	HLet,
+	HLocalConst,
 	HAssign,
 	HAugAssign,
 	HIf,

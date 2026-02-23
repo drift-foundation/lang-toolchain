@@ -725,6 +725,22 @@ class HLet(HStmt):
 
 
 @dataclass
+class HLocalConst(HStmt):
+	"""
+	Block-scope constant declaration.
+
+	Semantics: compile-time literal alias with no storage. Each use site
+	re-materializes the value as a MIR literal. The binding_id participates
+	in normal block scoping/shadowing but never maps to a local slot.
+	"""
+	name: str
+	declared_type_expr: object  # TypeExpr from parser
+	value: HExpr  # the literal expression (kept for checker validation)
+	binding_id: Optional[BindingId] = None
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HAssign(HStmt):
 	"""
 	Assignment to an addressable place.

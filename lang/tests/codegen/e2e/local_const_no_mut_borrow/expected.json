@@ -1,0 +1,10 @@
+{
+  "description": "e2e: &mut of local const rejected (immutable binding)",
+  "diagnostics": [
+    {
+      "message_contains": "cannot take &mut of an immutable binding",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

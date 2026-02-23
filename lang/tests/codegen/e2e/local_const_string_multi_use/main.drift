@@ -1,0 +1,14 @@
+module main
+
+fn len(s: String) nothrow -> Int {
+	return s.byte_length();
+}
+
+fn main() nothrow -> Int {
+	const S: String = "hi";
+	val a = len(S);
+	val b = len(S);
+	if a != 2 { return 1; }
+	if b != 2 { return 2; }
+	return 0;
+}

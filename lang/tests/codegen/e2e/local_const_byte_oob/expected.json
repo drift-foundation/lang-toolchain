@@ -1,0 +1,10 @@
+{
+  "description": "e2e: local const Byte out of range [0, 255]",
+  "diagnostics": [
+    {
+      "message_contains": "Byte literal out of range",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

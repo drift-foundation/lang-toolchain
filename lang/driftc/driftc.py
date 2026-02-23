@@ -2672,6 +2672,8 @@ def compile_stubbed_funcs(
 				return
 
 		def walk_stmt(stmt: H.HStmt) -> None:
+			if isinstance(stmt, H.HLocalConst):
+				return  # literal value
 			if isinstance(stmt, H.HLet):
 				walk_expr(stmt.value)
 				return
@@ -4249,7 +4251,9 @@ def compile_stubbed_funcs(
 				def _collect_local_names(obj: object) -> None:
 					if obj is None:
 						return
-					if isinstance(obj, H.HLet):
+					if isinstance(obj, H.HLocalConst):
+						local_names.add(obj.name)
+					elif isinstance(obj, H.HLet):
 						local_names.add(obj.name)
 					elif isinstance(obj, H.HMatchArm):
 						for name in obj.binders:
@@ -4382,6 +4386,8 @@ def compile_stubbed_funcs(
 			def _remap_lambda_local_collisions(block: H.HBlock, capture_ids: set[int]) -> None:
 				max_id = 0
 				for stmt in block.statements:
+					if isinstance(stmt, H.HLocalConst) and stmt.binding_id is not None:
+						max_id = max(max_id, int(stmt.binding_id))
 					if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
 						max_id = max(max_id, int(stmt.binding_id))
 				if capture_ids:
@@ -4452,7 +4458,13 @@ def compile_stubbed_funcs(
 							_scan_expr(kw.value)
 				def _scan_stmt(stmt: H.HStmt) -> None:
 					nonlocal max_id
-					if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
+					if isinstance(stmt, H.HLocalConst) and stmt.binding_id is not None:
+						bid = int(stmt.binding_id)
+						if bid in capture_ids:
+							max_id += 1
+							remap_by_name[(bid, stmt.name)] = max_id
+							stmt.binding_id = max_id
+					elif isinstance(stmt, H.HLet) and stmt.binding_id is not None:
 						bid = int(stmt.binding_id)
 						if bid in capture_ids:
 							max_id += 1
@@ -4572,7 +4584,9 @@ def compile_stubbed_funcs(
 								_remap_expr(arm.result)
 
 				def _remap_stmt(stmt: H.HStmt) -> None:
-					if isinstance(stmt, H.HLet):
+					if isinstance(stmt, H.HLocalConst):
+						pass  # literal value, no remapping needed
+					elif isinstance(stmt, H.HLet):
 						_remap_expr(stmt.value)
 					elif isinstance(stmt, H.HAssign):
 						_remap_expr(stmt.target)

@@ -439,6 +439,21 @@ class LetStmt(Stmt):
 
 
 @dataclass
+class LocalConstStmt(Stmt):
+	"""Block-scope constant declaration.
+
+	Syntax: const NAME: Type = <literal>;
+
+	Semantics: compile-time literal alias with no storage. Each use site
+	re-materializes the value as a MIR literal.
+	"""
+	name: str
+	type_expr: object  # TypeExpr
+	value: Expr
+	loc: Optional[object] = None
+
+
+@dataclass
 class AssignStmt(Stmt):
 	"""Assignment to an expression target."""
 	target: Expr

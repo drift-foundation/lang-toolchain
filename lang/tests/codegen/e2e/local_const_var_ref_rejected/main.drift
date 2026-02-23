@@ -1,0 +1,7 @@
+module main
+
+fn main() nothrow -> Int {
+	val y: Int = 1;
+	const X: Int = y;
+	return X;
+}

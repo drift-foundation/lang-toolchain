@@ -746,6 +746,15 @@ def _convert_assert(stmt: parser_ast.AssertStmt) -> s0.Stmt:
 	)
 
 
+def _convert_local_const(stmt: parser_ast.LocalConstStmt) -> s0.Stmt:
+	return s0.LocalConstStmt(
+		name=stmt.name,
+		type_expr=stmt.type_expr,
+		value=_convert_expr(stmt.value),
+		loc=Span.from_loc(stmt.loc),
+	)
+
+
 _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]] = {
 	parser_ast.ReturnStmt: _convert_return,
 	parser_ast.ExprStmt: _convert_expr_stmt,
@@ -766,6 +775,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.ImportStmt: _convert_import,
 	parser_ast.BlockStmt: _convert_block_stmt,
 	parser_ast.UnsafeBlockStmt: _convert_unsafe_block,
+	parser_ast.LocalConstStmt: _convert_local_const,
 }
 
 

@@ -166,6 +166,7 @@ class BorrowChecker:
 	_synthetic_ref_binding_ids: Set[int] = field(init=False, default_factory=set, repr=False)
 	_block_facts_in: Optional[Dict[int, Set[Tuple[int, int]]]] = field(init=False, default=None, repr=False)
 	_catch_binders_by_block: Dict[int, str] = field(init=False, default_factory=dict, repr=False)
+	local_const_binding_ids: Set[int] = field(default_factory=set)
 
 	def __post_init__(self) -> None:
 		# Ensure we always have a binding_id -> TypeId mapping to avoid repeated scans.
@@ -593,6 +594,27 @@ class BorrowChecker:
 				kind = PlaceKind.PARAM if local_id in param_ids else PlaceKind.LOCAL
 			return PlaceBase(kind, local_id, name)
 
+		# Collect local-const binding_ids from the HIR block.
+		local_const_bids: set[int] = set()
+		def _scan_for_local_consts(block: H.HBlock) -> None:
+			for stmt in block.statements:
+				if isinstance(stmt, H.HLocalConst) and stmt.binding_id is not None:
+					local_const_bids.add(int(stmt.binding_id))
+				elif isinstance(stmt, H.HIf):
+					_scan_for_local_consts(stmt.then_block)
+					if stmt.else_block:
+						_scan_for_local_consts(stmt.else_block)
+				elif isinstance(stmt, H.HLoop):
+					_scan_for_local_consts(stmt.body)
+				elif isinstance(stmt, H.HTry):
+					_scan_for_local_consts(stmt.body)
+					for arm in stmt.catches:
+						_scan_for_local_consts(arm.block)
+				elif isinstance(stmt, H.HBlock):
+					_scan_for_local_consts(stmt)
+		if isinstance(typed_fn.body, H.HBlock):
+			_scan_for_local_consts(typed_fn.body)
+
 		return cls(
 			type_table=type_table,
 			fn_types=fn_types,
@@ -605,6 +627,7 @@ class BorrowChecker:
 			base_lookup=base_lookup,
 			module_id=getattr(getattr(typed_fn, "fn_id", None), "module", None),
 			enable_auto_borrow=enable_auto_borrow,
+			local_const_binding_ids=local_const_bids,
 		)
 
 	def _is_copy(self, ty: Optional[TypeId]) -> bool:
@@ -657,6 +680,8 @@ class BorrowChecker:
 		state propagation.
 		"""
 		if place.base.kind is PlaceKind.GLOBAL:
+			return PlaceState.VALID
+		if place.base.local_id in self.local_const_binding_ids:
 			return PlaceState.VALID
 		if self.module_id is not None:
 			const_sym = f"{self.module_id}::{place.base.name}"
@@ -1560,7 +1585,10 @@ class BorrowChecker:
 
 	def _collect_binding_ids_for_name_in_block(self, block: H.HBlock, name: str, out: Set[int]) -> None:
 		for stmt in block.statements:
-			if isinstance(stmt, H.HLet):
+			if isinstance(stmt, H.HLocalConst):
+				if stmt.name == name and getattr(stmt, "binding_id", None) is not None:
+					out.add(int(stmt.binding_id))
+			elif isinstance(stmt, H.HLet):
 				if stmt.name == name and getattr(stmt, "binding_id", None) is not None:
 					out.add(int(stmt.binding_id))
 				self._collect_binding_ids_for_name_in_expr(stmt.value, name, out)

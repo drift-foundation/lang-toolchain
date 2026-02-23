@@ -47,6 +47,29 @@ if TYPE_CHECKING:
 	from lang.driftc import stage1 as H
 
 
+def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
+	"""Extract a compile-time literal value from an HIR expression, or None.
+
+	Unary '+' is elided during AST→HIR lowering, so only NEG needs handling.
+	"""
+	from lang.driftc import stage1 as H
+	if isinstance(expr, H.HLiteralInt):
+		return expr.value
+	if isinstance(expr, H.HLiteralFloat):
+		return expr.value
+	if isinstance(expr, H.HLiteralBool):
+		return expr.value
+	if isinstance(expr, H.HLiteralString):
+		return expr.value
+	if isinstance(expr, H.HUnary) and expr.op == H.UnaryOp.NEG:
+		inner = expr.expr
+		if isinstance(inner, H.HLiteralInt):
+			return -inner.value
+		if isinstance(inner, H.HLiteralFloat):
+			return -inner.value
+	return None
+
+
 @dataclass(frozen=True)
 class TypeParam:
 	"""Function type parameter descriptor."""
@@ -425,7 +448,9 @@ class Checker:
 							walk_expr(arm.result)
 
 			def walk_stmt(stmt: H.HStmt) -> None:
-				if isinstance(stmt, H.HLet):
+				if isinstance(stmt, H.HLocalConst):
+					walk_expr(stmt.value)
+				elif isinstance(stmt, H.HLet):
 					if stmt.value is not None:
 						walk_expr(stmt.value)
 				elif isinstance(stmt, H.HAssign):
@@ -1023,6 +1048,9 @@ class Checker:
 						walk_block(arm.block, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HReturn) and stmt.value is not None:
+					walk_expr(stmt.value, caught, catch_all)
+					continue
+				if isinstance(stmt, H.HLocalConst):
 					walk_expr(stmt.value, caught, catch_all)
 					continue
 				if isinstance(stmt, H.HLet):
@@ -2177,6 +2205,9 @@ class Checker:
 				if isinstance(stmt, H.HReturn) and stmt.value is not None:
 					walk_expr(stmt.value)
 					continue
+				if isinstance(stmt, H.HLocalConst):
+					walk_expr(stmt.value)
+					continue
 				if isinstance(stmt, H.HLet):
 					walk_expr(stmt.value)
 					continue
@@ -2575,7 +2606,67 @@ class Checker:
 		def walk_stmt(stmt: H.HStmt) -> None:
 			if on_stmt:
 				on_stmt(stmt, ctx)
-			if isinstance(stmt, H.HExprStmt):
+			if isinstance(stmt, H.HLocalConst):
+				# Local const: validate initializer is a compile-time literal,
+				# register binding type. No storage is allocated; each use site
+				# re-materializes the value as a MIR literal.
+				walk_expr(stmt.value)
+				decl_ty = None
+				if getattr(stmt, "declared_type_expr", None) is not None:
+					mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
+					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
+					if decl_ty is not None and stmt.binding_id is not None:
+						ctx.locals[int(stmt.binding_id)] = decl_ty
+				# Validate the initializer is a compile-time literal.
+				val = _eval_hir_const_value(stmt.value)
+				if val is None:
+					ctx._append_diag(
+						_chk_diag(
+							message=(
+								f"const '{stmt.name}' initializer must be a compile-time literal in v1 "
+								"(Int/Uint/Bool/String/Float, optionally with unary '+' or '-')"
+							),
+							severity="error",
+							span=getattr(stmt, "loc", Span()),
+						)
+					)
+				elif decl_ty is not None:
+					# Type-match validation (same as module const).
+					ok = False
+					tt = self._type_table
+					if decl_ty == tt.ensure_byte() and isinstance(val, int):
+						if val < 0 or val > 255:
+							ctx._append_diag(
+								_chk_diag(
+									message=f"const '{stmt.name}' Byte literal out of range [0, 255]",
+									severity="error",
+									span=getattr(stmt, "loc", Span()),
+								)
+							)
+						else:
+							ok = True
+					elif decl_ty == tt.ensure_int() and isinstance(val, int):
+						ok = True
+					elif decl_ty == tt.ensure_uint() and isinstance(val, int) and val >= 0:
+						ok = True
+					elif decl_ty == tt.ensure_uint64() and isinstance(val, int) and val >= 0:
+						ok = True
+					elif decl_ty == tt.ensure_bool() and isinstance(val, bool):
+						ok = True
+					elif decl_ty == tt.ensure_string() and isinstance(val, str):
+						ok = True
+					elif decl_ty == tt.ensure_float() and isinstance(val, (int, float)):
+						ok = True
+					if not ok:
+						ctx._append_diag(
+							_chk_diag(
+								message=f"const '{stmt.name}' declared type does not match initializer value",
+								severity="error",
+								span=getattr(stmt, "loc", Span()),
+							)
+						)
+				return
+			elif isinstance(stmt, H.HExprStmt):
 				walk_expr(stmt.expr)
 			elif isinstance(stmt, H.HLet):
 				walk_expr(stmt.value)
@@ -3153,6 +3244,13 @@ class Checker:
 						span=getattr(stmt.value, "loc", getattr(stmt, "loc", Span())),
 					)
 				)
+			return
+
+		if isinstance(stmt, H.HLocalConst):
+			# Local const: the main typed walk_stmt handles validation.
+			# Here we just infer the value type so any sub-expression
+			# diagnostics fire.
+			ctx.infer(stmt.value)
 			return
 
 		if isinstance(stmt, H.HLet):

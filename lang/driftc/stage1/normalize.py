@@ -40,6 +40,8 @@ class DVInitRewriter:
 			return H.HThrow(value=self._rewrite_expr(stmt.value))
 		if isinstance(stmt, H.HReturn):
 			return H.HReturn(value=self._rewrite_expr(stmt.value) if stmt.value is not None else None, loc=stmt.loc)
+		if isinstance(stmt, H.HLocalConst):
+			return stmt  # literal value, no rewriting needed
 		if isinstance(stmt, H.HLet):
 			return H.HLet(
 				name=stmt.name,
@@ -308,9 +310,13 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 	def _scan_block(b: H.HBlock) -> None:
 		nonlocal max_id
 		for stmt in b.statements:
+			if isinstance(stmt, H.HLocalConst) and stmt.binding_id is not None:
+				max_id = max(max_id, stmt.binding_id)
 			if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
 				max_id = max(max_id, stmt.binding_id)
-			if isinstance(stmt, H.HLet):
+			if isinstance(stmt, H.HLocalConst):
+				pass  # literal value, no sub-expressions to scan
+			elif isinstance(stmt, H.HLet):
 				_scan_expr(stmt.value)
 			elif isinstance(stmt, H.HAssign):
 				_scan_expr(stmt.target)
@@ -436,6 +442,12 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 		scope_stack.append({})
 		try:
 			for stmt in b.statements:
+				if isinstance(stmt, H.HLocalConst):
+					if stmt.binding_id is None:
+						stmt.binding_id = next_id
+						next_id += 1
+					_bind(stmt.name, stmt.binding_id)
+					continue
 				if isinstance(stmt, H.HLet):
 					_assign_expr(stmt.value)
 					if stmt.binding_id is None:

@@ -46,6 +46,7 @@ from .ast import (
     KwArg,
     LetStmt,
     Literal,
+    LocalConstStmt,
     Lambda,
     LambdaCapture,
     Located,
@@ -915,6 +916,25 @@ def _build_const_def(tree: Tree) -> "ConstDef":
 	)
 
 
+def _build_local_const_stmt(tree: Tree) -> "LocalConstStmt":
+	"""
+	Build a block-scope constant declaration.
+
+	Grammar:
+	  local_const_stmt: CONST NAME COLON type_expr EQUAL expr
+	"""
+	loc = _loc(tree)
+	name_tok = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+	type_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) == "type_expr")
+	expr_node = next(child for child in tree.children if isinstance(child, Tree) and _name(child) != "type_expr")
+	return LocalConstStmt(
+		loc=loc,
+		name=name_tok.value,
+		type_expr=_build_type_expr(type_node),
+		value=_build_expr(expr_node),
+	)
+
+
 def _build_type_alias_def(tree: Tree) -> "TypeAliasDef":
 	"""
 	Build a top-level type alias definition.
@@ -1704,6 +1724,8 @@ def _build_stmt(tree: Tree):
 		stmt_kind = _name(target)
 		if stmt_kind == "let_stmt":
 			return _build_let_stmt(target)
+		if stmt_kind == "local_const_stmt":
+			return _build_local_const_stmt(target)
 		if stmt_kind == "aug_assign_stmt":
 			return _build_aug_assign_stmt(target)
 		if stmt_kind == "assign_stmt":

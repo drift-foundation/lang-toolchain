@@ -1,0 +1,10 @@
+{
+  "description": "e2e: local const type mismatch between declared type and initializer",
+  "diagnostics": [
+    {
+      "message_contains": "declared type does not match initializer",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

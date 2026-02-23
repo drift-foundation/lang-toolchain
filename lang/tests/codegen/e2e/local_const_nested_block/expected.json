@@ -1,0 +1,6 @@
+{
+  "description": "e2e: local const inside nested if block",
+  "exit_code": 10,
+  "stderr": "",
+  "stdout": ""
+}

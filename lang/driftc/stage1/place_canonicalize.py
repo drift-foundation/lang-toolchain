@@ -131,6 +131,8 @@ class PlaceCanonicalizeRewriter:
 			return [H.HTry(body=body, catches=catches)]
 		if isinstance(stmt, (H.HBreak, H.HContinue, H.HRethrow)):
 			return [stmt]
+		if isinstance(stmt, H.HLocalConst):
+			return [stmt]  # literal value, no place canonicalization needed
 		raise NotImplementedError(f"PlaceCanonicalizeRewriter does not handle stmt {type(stmt).__name__}")
 
 	def _rewrite_expr(self, expr: H.HExpr) -> Tuple[List[H.HStmt], H.HExpr]:

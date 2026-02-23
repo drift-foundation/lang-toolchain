@@ -1,0 +1,10 @@
+{
+  "description": "e2e: local const rejects non-literal initializer",
+  "diagnostics": [
+    {
+      "message_contains": "initializer must be a compile-time literal",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

@@ -55,6 +55,9 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		lambda_local_names.add(p.name)
 
 	def _record_local_from_stmt(stmt: H.HStmt) -> None:
+		if isinstance(stmt, H.HLocalConst) and stmt.binding_id is not None:
+			lambda_local_ids.add(stmt.binding_id)
+			lambda_local_names.add(stmt.name)
 		if isinstance(stmt, H.HLet) and stmt.binding_id is not None:
 			lambda_local_ids.add(stmt.binding_id)
 			lambda_local_names.add(stmt.name)
@@ -205,6 +208,8 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 				_walk_stmt(st)
 		elif isinstance(s, H.HExprStmt):
 			_walk_expr(s.expr)
+		elif isinstance(s, H.HLocalConst):
+			pass  # literal value, no captures
 		elif isinstance(s, H.HLet):
 			_walk_expr(s.value)
 		elif isinstance(s, H.HAssign):

@@ -300,6 +300,9 @@ class HIRToMIR:
 			for name, ty in param_types.items():
 				if self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
+		# Block-scope constants: binding_id → (TypeId, value).
+		# Populated by _visit_stmt_HLocalConst; consulted by _visit_expr_HVar.
+		self._local_consts: dict[int, tuple[TypeId, object]] = {}
 		# Stage2 lowering is "assert-only" with respect to match pattern
 		# normalization: the typed checker is expected to populate
 		# `HMatchArm.binder_field_indices` once the scrutinee type is known.
@@ -1382,6 +1385,10 @@ class HIRToMIR:
 		return acc
 
 	def _visit_expr_HVar(self, expr: H.HVar) -> M.ValueId:
+		# Block-scope constants: emit a fresh MIR literal at each use site.
+		bid = getattr(expr, "binding_id", None)
+		if bid is not None and int(bid) in self._local_consts:
+			return self._emit_local_const(int(bid))
 		# Compile-time constants are lowered to immediate MIR constants (no runtime
 		# storage). Const symbols are represented as fully-qualified names:
 		#   "<module_id>::<NAME>"
@@ -2710,6 +2717,8 @@ class HIRToMIR:
 				return True
 			if isinstance(stmt, H.HExprStmt):
 				return expr_can_throw(stmt.expr)
+			if isinstance(stmt, H.HLocalConst):
+				return False  # literal initializer, never throws
 			if isinstance(stmt, H.HLet):
 				return expr_can_throw(stmt.value)
 			if isinstance(stmt, H.HAssign):
@@ -4720,6 +4729,55 @@ class HIRToMIR:
 		instr.span = span
 		self.b.emit(instr)
 
+	def _emit_local_const(self, bid: int) -> M.ValueId:
+		"""Emit a fresh MIR literal for a block-scope constant."""
+		ty_id, val = self._local_consts[bid]
+		dest = self.b.new_temp()
+		if ty_id == self._int_type:
+			self.b.emit(M.ConstInt(dest=dest, value=int(val)))
+		elif ty_id == self._uint_type:
+			self.b.emit(M.ConstUint(dest=dest, value=int(val)))
+		elif ty_id == self._uint64_type:
+			self.b.emit(M.ConstUint64(dest=dest, value=int(val)))
+		elif ty_id == self._bool_type:
+			self.b.emit(M.ConstBool(dest=dest, value=bool(val)))
+		elif ty_id == self._string_type:
+			self.b.emit(M.ConstString(dest=dest, value=str(val)))
+		elif ty_id == self._float_type:
+			self.b.emit(M.ConstFloat(dest=dest, value=float(val)))
+		elif ty_id == self._byte_type:
+			self.b.emit(M.ConstByte(dest=dest, value=int(val)))
+		else:
+			raise AssertionError(f"unsupported local const type (bid={bid})")
+		return dest
+
+	def _visit_stmt_HLocalConst(self, stmt: H.HLocalConst) -> None:
+		"""Record a block-scope constant for later inlining at use sites.
+
+		No local slot is allocated. Each HVar reference to this binding_id
+		will emit a fresh MIR literal (ConstInt/ConstString/etc.).
+		"""
+		from lang.driftc.checker import _eval_hir_const_value
+		val = _eval_hir_const_value(stmt.value)
+		if val is None:
+			return  # checker already diagnosed
+		decl_ty: TypeId | None = None
+		if getattr(stmt, "declared_type_expr", None) is not None:
+			try:
+				decl_ty = resolve_opaque_type(
+					stmt.declared_type_expr,
+					self._type_table,
+					module_id=self._current_module_name(),
+					type_params=self._type_param_subst or None,
+				)
+			except Exception:
+				decl_ty = None
+		if decl_ty is None:
+			return
+		bid = getattr(stmt, "binding_id", None)
+		if bid is not None:
+			self._local_consts[int(bid)] = (decl_ty, val)
+
 	def _visit_stmt_HLet(self, stmt: H.HLet) -> None:
 		prev_stmt_span = self._current_stmt_span
 		stmt_span = Span.from_loc(getattr(stmt, "loc", None))
@@ -6303,6 +6361,10 @@ class HIRToMIR:
 							if td.kind is TypeKind.REF and td.param_types:
 								return td.param_types[0]
 					return field_ty
+			# Block-scope constant: return its declared type directly.
+			_lc_bid = getattr(expr, "binding_id", None)
+			if _lc_bid is not None and int(_lc_bid) in self._local_consts:
+				return self._local_consts[int(_lc_bid)][0]
 			local_name = self._canonical_local(getattr(expr, "binding_id", None), expr.name)
 			local_ty = self._local_types.get(local_name)
 			if local_ty is not None:
@@ -6693,6 +6755,8 @@ class HIRToMIR:
 			if isinstance(stmt, H.HReturn) and stmt.value is not None:
 				walk_expr(stmt.value)
 				return
+			if isinstance(stmt, H.HLocalConst):
+				return  # literal value, no expressions to walk
 			if isinstance(stmt, H.HLet) and stmt.value is not None:
 				walk_expr(stmt.value)
 				return
@@ -6901,6 +6965,19 @@ class HIRToMIR:
 				const_ty, _ = const_val
 				init_value = self.lower_expr(expr.base, expected_type=const_ty)
 				local = f"__const_{expr.base.name}_{self.b.new_temp()}"
+				self.b.ensure_local(local)
+				self._local_types[local] = const_ty
+				self.b.emit(M.StoreLocal(local=local, value=init_value))
+				addr = self.b.new_temp()
+				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
+				return addr, const_ty
+		# Block-scope local const: materialize into a temporary and return its address.
+		if isinstance(expr.base, H.HVar) and expr.base.binding_id is not None:
+			bid = int(expr.base.binding_id)
+			if bid in self._local_consts:
+				const_ty, _ = self._local_consts[bid]
+				init_value = self._emit_local_const(bid)
+				local = f"__lconst_{expr.base.name}_{self.b.new_temp()}"
 				self.b.ensure_local(local)
 				self._local_types[local] = const_ty
 				self.b.emit(M.StoreLocal(local=local, value=init_value))

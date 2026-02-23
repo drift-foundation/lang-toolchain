@@ -1,0 +1,10 @@
+module main
+
+fn main() nothrow -> Int {
+	var result: Int = 0;
+	if true {
+		const A: Int = 10;
+		result = A;
+	}
+	return result;
+}

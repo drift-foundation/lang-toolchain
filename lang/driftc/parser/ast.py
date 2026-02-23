@@ -154,6 +154,14 @@ class LetStmt(Stmt):
 
 
 @dataclass
+class LocalConstStmt(Stmt):
+    loc: Located
+    name: str
+    type_expr: TypeExpr
+    value: "Expr"
+
+
+@dataclass
 class AssignStmt(Stmt):
     loc: Located
     target: "Expr"

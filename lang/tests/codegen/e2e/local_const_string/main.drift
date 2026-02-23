@@ -1,0 +1,7 @@
+module main
+
+fn main() nothrow -> Int {
+	const S: String = "hello";
+	val n = S.byte_length();
+	return n;
+}
