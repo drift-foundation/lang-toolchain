@@ -585,7 +585,7 @@ class TypeChecker:
 				if isinstance(method.return_type, GenericTypeExpr) and method.return_type.name == "Self":
 					diagnostics.append(
 						_tc_diag(
-							message=f"interface method '{method.name}' return type cannot be Self in MVP",
+							message=f"interface method '{method.name}' return type cannot be Self in v1",
 							severity="error",
 							span=None,
 						)
@@ -921,7 +921,7 @@ class TypeChecker:
 				if not str(getattr(impl, "def_module", "")).startswith(("std.", "lang.")) and not _is_structurally_copy(impl.target_type_id, seen=set()):
 					diagnostics.append(
 						_tc_diag(
-							message="core.Copy impl target must be structurally Copy in MVP",
+							message="core.Copy impl target must be structurally Copy in v1",
 							code="E_COPY_IMPL_NONCOPY_TARGET",
 							severity="error",
 							span=impl.loc or Span(),
@@ -5031,7 +5031,7 @@ class TypeChecker:
 						pretty = self.type_table.get(hole_ty).name if hole_ty is not None else "Unknown"
 						diagnostics.append(
 							_tc_diag(
-								message=f"E-FSTR-UNSUPPORTED-TYPE: f-string hole value is not formattable in MVP (have {pretty})",
+								message=f"E-FSTR-UNSUPPORTED-TYPE: f-string hole value is not formattable in v1 (have {pretty})",
 								severity="error",
 								span=getattr(hole, "loc", Span()),
 							)
@@ -5608,7 +5608,7 @@ class TypeChecker:
 					diagnostics.append(
 						_tc_diag(
 							message=(
-								"E-QMEM-NOT-CALLABLE: qualified member reference is not a first-class value in MVP; "
+								"E-QMEM-NOT-CALLABLE: qualified member reference is not a first-class value in v1; "
 								"call it directly (e.g. `Type::Ctor(...)`)"
 							),
 							severity="error",
@@ -6315,7 +6315,7 @@ class TypeChecker:
 												continue
 											field_indices.append(field_names.index(fname))
 								else:
-									# Positional binders (exact arity in MVP).
+									# Positional binders (exact arity in v1).
 									if len(arm.binders) != len(field_types):
 										diagnostics.append(
 											_tc_diag(
@@ -6369,7 +6369,7 @@ class TypeChecker:
 							if isinstance(last, H.HExprStmt):
 								arm_value_ty = type_expr(last.expr, expected_type=expected_type)
 							else:
-								# Allow diverging arms to omit a value in MVP. We treat a block as
+								# Allow diverging arms to omit a value in v1. We treat a block as
 								# diverging when it ends with a terminator statement.
 								diverges = isinstance(last, (H.HReturn, H.HBreak, H.HContinue, H.HThrow, H.HRethrow))
 								if not diverges:
@@ -6535,7 +6535,7 @@ class TypeChecker:
 					if expr.is_mut:
 						diagnostics.append(
 							_tc_diag(
-								message="borrow operand must be an addressable place in MVP (local/param or deref place)",
+								message="borrow operand must be an addressable place in v1 (local/param or deref place)",
 								severity="error",
 								span=borrow_span,
 							)
@@ -6722,7 +6722,7 @@ class TypeChecker:
 				if place is None:
 					diagnostics.append(
 						_tc_diag(
-							message="move operand must be an addressable place in MVP (local/param)",
+							message="move operand must be an addressable place in v1 (local/param)",
 							severity="error",
 							span=move_span,
 						)
@@ -6731,7 +6731,7 @@ class TypeChecker:
 				if place.projections:
 					diagnostics.append(
 						_tc_diag(
-							message="move of a projected place is not supported in MVP; move a local/param or use swap/replace",
+							message="move of a projected place is not supported in v1; move a local/param or use swap/replace",
 							severity="error",
 							span=move_span,
 						)
@@ -6784,7 +6784,7 @@ class TypeChecker:
 				if place is None:
 					diagnostics.append(
 						_tc_diag(
-							message="copy operand must be an addressable place in MVP (local/param/field/index)",
+							message="copy operand must be an addressable place in v1 (local/param/field/index)",
 							severity="error",
 							span=copy_span,
 						)
@@ -6876,7 +6876,7 @@ class TypeChecker:
 				if kw_pairs:
 					diagnostics.append(
 						_tc_diag(
-							message="keyword arguments are not supported on function values in MVP",
+							message="keyword arguments are not supported on function values in v1",
 							severity="error",
 							span=getattr(expr, "loc", Span()),
 						)
@@ -6931,7 +6931,7 @@ class TypeChecker:
 				if callable_kind is not None and callable_dyn_kind is not None and callee_def.kind in (callable_kind, callable_dyn_kind):
 					diagnostics.append(
 						_tc_diag(
-							message="calling Callback values is not supported yet; use FnN values in MVP",
+							message="calling Callback values is not supported yet; use FnN values in v1",
 							severity="error",
 							span=getattr(expr, "loc", Span()),
 						)
@@ -7832,7 +7832,7 @@ class TypeChecker:
 					if not copy_status:
 						diagnostics.append(
 							_tc_diag(
-								message="array literals require Copy element type in MVP",
+								message="array literals require Copy element type in v1",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
@@ -8307,7 +8307,7 @@ class TypeChecker:
 							if any(self.type_table.get(ft).kind is TypeKind.REF for ft in elem_fields):
 								diagnostics.append(
 									_tc_diag(
-										message="owning Array cannot contain borrowed aggregate element type in MVP",
+										message="owning Array cannot contain borrowed aggregate element type in v1",
 										severity="error",
 										span=getattr(stmt, "loc", Span()),
 									)
@@ -8538,7 +8538,7 @@ class TypeChecker:
 						pretty = self.type_table.get(tgt_ty).name if tgt_ty is not None else "Unknown"
 						diagnostics.append(
 							_tc_diag(
-								message=f"augmented assignment '{stmt.op}' is not supported for type '{pretty}' in MVP",
+								message=f"augmented assignment '{stmt.op}' is not supported for type '{pretty}' in v1",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
 							)
@@ -8548,7 +8548,7 @@ class TypeChecker:
 						pretty = self.type_table.get(tgt_ty).name if tgt_ty is not None else "Unknown"
 						diagnostics.append(
 							_tc_diag(
-								message=f"augmented assignment '{stmt.op}' is not supported for type '{pretty}' in MVP",
+								message=f"augmented assignment '{stmt.op}' is not supported for type '{pretty}' in v1",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
 							)

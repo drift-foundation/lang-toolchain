@@ -368,45 +368,14 @@ Rules:
 
 ---
 
-### 3.5. Tuple types and tuple expressions
-
-Drift supports **tuple types** as simple product types with unnamed fields. They are a single type written with parentheses:
-
-```drift
-(T1, T2, ..., Tn) // n >= 2; (T) is just T
-```
-
-- Elements may have different types.
-- A tuple is sized if all elements are sized.
-- Ownership is per element: moving a tuple moves each element; copying a tuple is allowed only if **all** elements implement `Copy`.
-- Tuples participate in traits/requirements componentwise; e.g., `(A, B)` is `Copy` iff both `A` and `B` are.
-
-Tuple **expressions** use the same shape:
-
-```drift
-val pair = (left, right);
-```
-
-Each element’s ownership flows into the tuple according to the expression used.
-
-Tuples can be **destructured** in bindings:
-
-```drift
-val (x, y) = bounds(); // moves the returned tuple; x and y bind its elements
-```
-
-Functions may return tuples or accept them as parameters, and tuple types appear in generics (e.g., `Fn2<Int, String, Bool>`). There is no implicit tuple splat/spread; tuple members are accessed via destructuring or pattern matching once supported.
-
----
-
-### 3.6. Borrow expressions
+### 3.5. Borrow expressions
 
 - `&v` produces a shared reference `&T` from an lvalue `v: T`.
 - `&mut v` produces an exclusive mutable reference `&mut T` from a mutable lvalue `v: T`.
 - Borrowing from temporaries (rvalues) is a compile-time error; bind to a local first.
 - The legacy `ref` / `ref mut` spelling is invalid.
 
-### 3.7. Call-site auto-borrowing (global rule)
+### 3.6. Call-site auto-borrowing (global rule)
 
 For parameters or receivers of type `&T` / `&mut T`, calling with an lvalue `v: T` auto-borrows:
 
@@ -415,7 +384,7 @@ For parameters or receivers of type `&T` / `&mut T`, calling with an lvalue `v: 
 
 Borrowing from rvalues (temporaries, moved values) is an error. The explicit forms `&v` / `&mut v` remain legal.
 
-### 3.8. Method receivers and overloading
+### 3.7. Method receivers and overloading
 
 Receivers inside an `implement` block are written with an explicit mode: `T` (by value), `&T` (shared borrow), or `&mut T` (exclusive borrow):
 
@@ -444,7 +413,7 @@ If a method does not need ownership, prefer borrowed receivers (`&T` / `&mut T`)
 
 ---
 
-### 3.9. Unqualified names inside method bodies (no implicit receiver)
+### 3.8. Unqualified names inside method bodies (no implicit receiver)
 
 Inside a method body, unqualified names resolve exactly the same way they do in free functions:
 
@@ -457,7 +426,7 @@ Unqualified calls never resolve to methods. `name(args...)` is always a free-fun
 
 ---
 
-### 3.10. Constants (`const`)
+### 3.9. Constants (`const`)
 
 Drift supports top-level constants via `const`. Constants are immutable,
 module-scoped bindings that are evaluated at compile time and embedded into
@@ -1198,6 +1167,8 @@ Implementing `Send` means a value may be moved to another thread. Implementing `
 
 The concurrency chapter (Chapter 19) references these bounds when describing virtual-thread movement and sharing.
 
+> **v1 status:** `Send` and `Sync` are spec-defined but not compiler-enforced in v1. No trait-bound checking occurs at spawn or thread-sharing boundaries.
+
 ---
 
 ### 5.14.1. Unborrowed marker trait
@@ -1234,6 +1205,8 @@ Structural rules (compiler-known, auto-impl):
 - Function pointers are `Unborrowed` when non-capturing.
 - Closures are `Unborrowed` iff they capture no borrows and all by-value
   captures are `Unborrowed`.
+
+> **v1 status:** `Unborrowed` is spec-defined but not compiler-enforced in v1. No structural auto-impl checking is performed.
 
 ---
 
@@ -1871,7 +1844,6 @@ for item in collection {
 - `for <name> in <expr> { <stmts> }` iterates over a value that implements the `Iterable` trait.
 - The desugaring creates an iterator via `.iter()` and calls `.next()` on each iteration until `None` is returned.
 - `break` and `continue` work as in `while` loops.
-- `for <name> in <start>..<end> { ... }` is the counting form; the loop variable is scoped to the loop body.
 
 **Iterator throw contract (normative):**
 
@@ -1932,10 +1904,37 @@ try {
 
 ## 9. Reserved keywords and operators
 
-Keywords and literals are reserved and cannot be used as identifiers (functions, variables, modules, structs, exceptions, etc.):  
-`fn`, `Fn`, `val`, `var`, `nothrow`, `if`, `else`, `while`, `break`, `continue`, `try`, `catch`, `throw`, `raise`, `return`, `exception`, `import`, `module`, `implement`, `pub`, `type`, `cast`, `true`, `false`, `not`, `and`, `or`, plus language/FFI/legacy keywords (`auto`, `pragma`, `bool`, `int`, `float`, `string`, `void`, `abstract`, `assert`, `boolean`, `byte`, `case`, `char`, `class`, `const`, `default`, `do`, `double`, `enum`, `extends`, `final`, `finally`, `for`, `goto`, `instanceof`, `interface`, `long`, `native`, `new`, `package`, `private`, `protected`, `public`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`, `this`, `throws`, `transient`, `volatile`).
+### 9.1. Language keywords
 
-**Operator tokens (reserved):** `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `and`, `or`, `not`, `? :`, `|>` (pipeline), `<<`, `>>`, indexing brackets `[]`, and member access `.`. These participate in precedence/associativity rules; identifiers cannot reuse them.
+The following identifiers are unconditionally reserved by the parser and cannot be used as user-defined names:
+
+`fn`, `val`, `var`, `const`, `pub`, `type`, `use`, `mut`, `struct`, `variant`, `trait`, `interface`, `exception`, `implement`, `if`, `else`, `while`, `for`, `break`, `continue`, `return`, `match`, `try`, `catch`, `throw`, `rethrow`, `raise`, `yield`, `cast`, `is`, `require`, `module`, `import`, `export`, `unsafe`, `nothrow`, `throws`, `move`, `copy`, `true`, `false`.
+
+> `move` and `copy` are also accepted as identifiers in binding positions (e.g., parameter names) via the `ident` grammar rule.
+
+### 9.2. Operator keywords
+
+These words function as operators in expression context:
+
+`and` (logical AND), `or` (logical OR), `not` (logical negation).
+
+### 9.3. Contextual keywords
+
+Reserved only in specific grammar positions; may appear as identifiers elsewhere:
+
+`captures` (closure capture list), `default` (match arm), `domain` (exception domain clause), `in` (for-loop binding), `as` (import/binding alias), `Fn` (function type annotation).
+
+Decorator markers: `@tombstone`, `@test_build_only`, `@intrinsic`.
+
+### 9.4. Reserved type names
+
+The following type names cannot be used for user-defined struct/variant/exception/trait names:
+
+`Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`, `DiagnosticValue`, `Array`, `Optional`, `FnResult`.
+
+### 9.5. Operator tokens
+
+`+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `? :`, `|>` (pipeline), `<<`, `>>`, indexing brackets `[]`, and member access `.`. These participate in precedence/associativity rules; identifiers cannot reuse them.
 
 ## 10. Variant types (`variant`)
 
@@ -3250,7 +3249,7 @@ Drift ships with a shared default reactor (epoll/kqueue/IOCP depending on platfo
 - Each virtual thread owns an independent call stack; RAII semantics run normally when the thread exits.
 - `join()` -> either the thread’s result or a `JoinError` capturing the propagated `Error`.
 - Parking/unparking is transparent to user code.
-- `Send`/`Sync` trait bounds govern which values may move across threads or be shared by reference.
+- `Send`/`Sync` trait bounds govern which values may move across threads or be shared by reference (spec-defined; not compiler-enforced in v1).
 
 ### 19.7. Intrinsics: `lang.thread`
 
@@ -3292,7 +3291,7 @@ This pattern mirrors `try/finally`: if any child throws, the scope cancels the r
 
 ### 19.9. Interaction with ownership & memory
 
-- Moves between threads require `Send`; shared borrows require `Sync`.
+- Moves between threads require `Send`; shared borrows require `Sync` (spec-defined; not compiler-enforced in v1).
 - Destructors run deterministically when each virtual thread ends, preserving RAII guarantees.
 - Containers backed by `RawBuffer` (`Array`, `Map`, etc.) behave identically on all threads.
 

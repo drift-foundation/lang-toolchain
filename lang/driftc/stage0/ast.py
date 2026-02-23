@@ -346,7 +346,7 @@ class MatchArm:
 	"""
 	Single `match` arm.
 
-	Patterns in MVP:
+	Patterns in v1:
 	- constructor pattern: `Ctor(b1, b2, ...)`
 	- zero-field constructor: `Ctor`
 	- default arm: `default`
@@ -376,7 +376,7 @@ class MatchArm:
 
 @dataclass
 class MatchExpr(Expr):
-	"""Expression-form `match` (expression-only in MVP)."""
+	"""Expression-form `match` (expression-only in v1)."""
 
 	scrutinee: Expr
 	arms: List[MatchArm]

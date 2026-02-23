@@ -3392,7 +3392,7 @@ def parse_drift_workspace_to_hir(
 				if struct_id is None:
 					diagnostics.append(
 						_p_diag(
-							message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in MVP",
+							message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in v1",
 							severity="error",
 							span=getattr(receiver, "loc", Span()),
 						)
@@ -3428,7 +3428,7 @@ def parse_drift_workspace_to_hir(
 			if member in ext_types:
 				diagnostics.append(
 					_p_diag(
-						message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in MVP",
+						message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in v1",
 						severity="error",
 						span=getattr(receiver, "loc", Span()),
 					)
@@ -3593,7 +3593,7 @@ def parse_drift_workspace_to_hir(
 					)
 					# Note: module-qualified type names are handled in type positions
 					# via TypeExpr.module_id. Expression-position `x.Point` without
-					# call is not a supported surface construct in MVP.
+					# call is not a supported surface construct in v1.
 				return expr
 
 			# Generic recursion for other expression shapes.
@@ -4006,7 +4006,7 @@ def _lower_parsed_program_to_hir(
 				_p_diag(
 					phase="parser",
 					message=(
-						f"const '{c.name}' initializer must be a compile-time literal in MVP "
+						f"const '{c.name}' initializer must be a compile-time literal in v1 "
 						"(Int/Uint/Bool/String/Float, optionally with unary '+' or '-')"
 					),
 					severity="error",

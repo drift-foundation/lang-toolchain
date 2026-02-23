@@ -494,7 +494,7 @@ lambda_body: expr
 
 // Type-level qualified member reference: `TypeRef::member`.
 //
-// This is intentionally narrow in MVP: the left-hand side is `base_type`
+// This is intentionally narrow in v1: the left-hand side is `base_type`
 // (a nominal type reference with optional type arguments), not an arbitrary
 // type expression.
 //

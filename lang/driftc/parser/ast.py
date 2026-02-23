@@ -577,7 +577,7 @@ class VariantField:
 	Example:
 	  Some(value: T)
 
-	`name` is the declared field name; patterns are positional-only in MVP, but
+	`name` is the declared field name; patterns are positional-only in v1, but
 	we keep names for clarity and future evolution.
 	"""
 

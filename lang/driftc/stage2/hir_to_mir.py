@@ -1861,8 +1861,8 @@ class HIRToMIR:
 		td = self._type_table.get(elem_ty)
 		if td.kind is not TypeKind.TYPEVAR:
 			if self._type_table.copy_status(elem_ty) is True:
-				raise NotImplementedError("array index read requires trivially-copyable element type in MVP")
-			raise NotImplementedError("array index read requires Copy element type; borrow not supported in MVP")
+				raise NotImplementedError("array index read requires trivially-copyable element type in v1")
+			raise NotImplementedError("array index read requires Copy element type; borrow not supported in v1")
 		return loaded
 
 	def _emit_index_error_throw(self, *, index_val: M.ValueId) -> None:
@@ -2123,7 +2123,7 @@ class HIRToMIR:
 			self._local_types[old_val] = inner_ty
 			return old_val
 		if intrinsic is IntrinsicKind.MAYBE_UNINIT:
-			raise NotImplementedError("maybe_uninit intrinsic lowering is not implemented in MVP")
+			raise NotImplementedError("maybe_uninit intrinsic lowering is not implemented in v1")
 		if intrinsic is IntrinsicKind.MAYBE_WRITE:
 			if info is None:
 				raise AssertionError("maybe_write(...) missing CallInfo (checker bug)")
@@ -2374,7 +2374,7 @@ class HIRToMIR:
 					)
 				)
 			else:
-				raise NotImplementedError(f"{intrinsic.value} requires a function pointer constant or lambda in MVP")
+				raise NotImplementedError(f"{intrinsic.value} requires a function pointer constant or lambda in v1")
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
 		if intrinsic is IntrinsicKind.TYPE_ID:
@@ -3427,7 +3427,7 @@ class HIRToMIR:
 		else:
 			place_expr = place_expr_from_lvalue_expr(expr.receiver)
 			if place_expr is None:
-				raise NotImplementedError("Array method requires an lvalue receiver in MVP")
+				raise NotImplementedError("Array method requires an lvalue receiver in v1")
 			recv_ptr, _inner = self._lower_addr_of_place(
 				place_expr,
 				is_mut=recv_is_mut,
@@ -6078,14 +6078,14 @@ class HIRToMIR:
 			else:
 				# Auto-borrow from an lvalue receiver. We support `HVar` and canonical
 				# `HPlaceExpr` receivers; other receiver expressions are not addressable
-				# in MVP.
+				# in v1.
 				place_expr = None
 				if hasattr(H, "HPlaceExpr") and isinstance(expr.receiver, getattr(H, "HPlaceExpr")):
 					place_expr = expr.receiver
 				elif isinstance(expr.receiver, H.HVar):
 					place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
 				if place_expr is None:
-					raise NotImplementedError("method auto-borrow requires an lvalue receiver in MVP")
+					raise NotImplementedError("method auto-borrow requires an lvalue receiver in v1")
 				receiver_arg, _inner = self._lower_addr_of_place(place_expr, is_mut=(self_mode == "ref_mut"))
 
 		arg_vals: list[M.ValueId] = [receiver_arg]

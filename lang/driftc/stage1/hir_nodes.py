@@ -480,7 +480,7 @@ class HMatchArm(HNode):
 @dataclass
 class HMatchExpr(HExpr):
 	"""
-	Expression-form `match` (expression-only in MVP).
+	Expression-form `match` (expression-only in v1).
 
 	The typed checker enforces:
 	- duplicate constructors are rejected,
@@ -712,7 +712,7 @@ class HLet(HStmt):
 
 	`is_mutable` tracks whether the binding was introduced via `var` (mutable)
 	or `val` (immutable). Borrowing/type-checking uses this to reject `&mut` of
-	immutable bindings in MVP.
+	immutable bindings in v1.
 	"""
 	name: str
 	value: HExpr

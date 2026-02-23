@@ -69,7 +69,11 @@
 [FFI / ABI]
 - Fixed-width primitive FFI type mappings documentation.
 
+[Loops]
+- Range syntax (`for i in start..end { }`) for counting-form for loops.
+
 [Types]
+- Tuple types (`(T1, T2, ..., Tn)`) with destructuring, componentwise Copy, and pattern matching.
 - `Size` type for collection lengths/indices.
 
 [Concurrency]
@@ -79,6 +83,8 @@
 - Start migrating Array into stdlib (define `struct Array<T>` and move compiler lowering to that ABI).
 
 [Traits]
+- Compiler enforcement for `Send`/`Sync` trait bounds at spawn/thread-sharing boundaries.
+- Compiler enforcement for `Unborrowed` marker trait (structural auto-impl checking).
 - Dynamic dispatch and trait bounds: pin surface syntax and type rules for trait bounds / trait objects.
 - `Array<String>.dup()` should require `String.dup()` and then lift `Array<T>.dup()` to `T: Dup` (out of MVP scope).
 

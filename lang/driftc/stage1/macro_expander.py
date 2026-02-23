@@ -14,10 +14,10 @@ def expand_macro_call(expr: ast.MacroCall) -> ast.Call:
 	- log.error!(logger, ev[, arg3[, arg4]]) -> log.macro_error(...)
 	"""
 	if getattr(expr, "kwargs", None):
-		raise ValueError("macro calls do not support keyword arguments in MVP")
+		raise ValueError("macro calls do not support keyword arguments in v1")
 	macro_suffix = _macro_call_suffix_name(expr.func)
 	if macro_suffix is None:
-		raise ValueError("unsupported macro call target in MVP")
+		raise ValueError("unsupported macro call target in v1")
 	if len(expr.args) < 2 or len(expr.args) > 4:
 		raise ValueError(f"macro '{macro_suffix}!' expects 2-4 positional args: (logger, ev[, arg3[, arg4]])")
 	rewrite = {

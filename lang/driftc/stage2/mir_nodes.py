@@ -379,7 +379,7 @@ class ConstructVariant(MInstr):
 	`ctor` is the constructor name (e.g. "Some", "None").
 
 	Design notes:
-	- Variants are *compiler-private ABI* in MVP. Lowering/codegen treat the
+	- Variants are *compiler-private ABI* in v1. Lowering/codegen treat the
 	  shared `TypeTable`'s `VariantInstance` data as authoritative for:
 	    - tag values (declaration order),
 	    - field types and arity per constructor.

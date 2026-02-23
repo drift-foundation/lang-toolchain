@@ -424,7 +424,7 @@ class BorrowChecker:
 				notes.append(f"captured borrow of `{name}` restricts escape level to {loan.max_escape.name}")
 				break
 		if from_unannotated:
-			notes.append("parameter has no escape-level annotation; treated as THREAD in MVP")
+			notes.append("parameter has no escape-level annotation; treated as THREAD in v1")
 		self.diagnostics.append(Diagnostic(
 			severity="error",
 			code=code,
@@ -823,7 +823,7 @@ class BorrowChecker:
 		if span.line is None and fallback_span is not None and fallback_span.line is not None:
 			span = fallback_span
 		self._diagnostic(
-			"move of a projected place is not supported in MVP; move a local/param or use swap/replace",
+			"move of a projected place is not supported in v1; move a local/param or use swap/replace",
 			span,
 			code="E_USE_AFTER_MOVE",
 		)
@@ -1841,7 +1841,7 @@ class BorrowChecker:
 		if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
 			place = place_from_expr(expr.subject, base_lookup=self.base_lookup)
 			if place is None:
-				self._diagnostic("copy operand must be an addressable place in MVP (local/param/field/index)", getattr(expr, "loc", Span()))
+				self._diagnostic("copy operand must be an addressable place in v1 (local/param/field/index)", getattr(expr, "loc", Span()))
 				return
 			ty = self._type_of_place(place)
 			if not self._is_copy(ty):

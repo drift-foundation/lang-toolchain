@@ -885,7 +885,7 @@ def resolve_variant_ctor(
 	if "E_CTOR_MIXED_ARGS" in _ctor_pre_codes:
 		ctx.diagnostics.append(
 			ctx.tc_diag(
-				message="E-QMEM-MIXED-ARGS: constructor calls cannot mix positional and named arguments in MVP",
+				message="E-QMEM-MIXED-ARGS: constructor calls cannot mix positional and named arguments in v1",
 				severity="error",
 				span=getattr(qm, "loc", Span()),
 			)
@@ -1446,7 +1446,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 
 	if call_kwargs_issues("method calls", getattr(expr, "kwargs", None)):
 		first = (getattr(expr, "kwargs", []) or [None])[0]
-		diagnostics.append(_tc_diag(message="keyword arguments are not supported for method calls in MVP", severity="error", span=_best_effort_span(first, expr)))
+		diagnostics.append(_tc_diag(message="keyword arguments are not supported for method calls in v1", severity="error", span=_best_effort_span(first, expr)))
 		return MethodCallResult(ctx.unknown_ty, None)
 
 	recv_ty = getattr(expr, "receiver_type_id", None)
@@ -1506,7 +1506,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			diagnostics.append(_tc_diag(message="interface method schema missing (compiler bug)", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
 		if call_type_args:
-			diagnostics.append(_tc_diag(message="interface methods do not accept type arguments in MVP", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
+			diagnostics.append(_tc_diag(message="interface methods do not accept type arguments in v1", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
 		try:
 			owner_id, method_schema = ctx.type_table.interface_method_lookup(base_id, expr.method_name)
@@ -1514,7 +1514,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			diagnostics.append(_tc_diag(message=f"unknown method '{expr.method_name}' on interface '{schema.name}'", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
 		if method_schema.type_params:
-			diagnostics.append(_tc_diag(message=f"interface method '{expr.method_name}' type parameters are not supported in MVP", severity="error", span=getattr(expr, "loc", Span())))
+			diagnostics.append(_tc_diag(message=f"interface method '{expr.method_name}' type parameters are not supported in v1", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
 		type_args = list(getattr(interface_inst, "type_args", []) or [])
 		try:
@@ -1550,7 +1550,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				reason = ctx.type_table.copy_unknown_reason(elem_ty)
 				diagnostics.append(
 					_tc_diag(
-						message=f"Array<T>.dup() requires element type to be Copy in MVP (Copy is unknown: {reason})",
+						message=f"Array<T>.dup() requires element type to be Copy in v1 (Copy is unknown: {reason})",
 						code="E-COPY-UNKNOWN",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
@@ -1560,7 +1560,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if not copy_status:
 				diagnostics.append(
 					_tc_diag(
-						message="Array<T>.dup() requires element type to be Copy in MVP",
+						message="Array<T>.dup() requires element type to be Copy in v1",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)
@@ -3727,7 +3727,7 @@ def resolve_call_expr(
 			diagnostics.append(_tc_diag(message="type arguments are not supported on lambda calls; apply them on the named function", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		if kw_pairs:
-			diagnostics.append(_tc_diag(message="keyword arguments are not supported on lambda calls in MVP", severity="error", span=getattr(expr, "loc", Span())))
+			diagnostics.append(_tc_diag(message="keyword arguments are not supported on lambda calls in v1", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		fn_params = [t if t is not None else ctx.unknown_ty for t in arg_types]
 		fn_ret = expected_type if expected_type is not None else ctx.unknown_ty
@@ -4399,7 +4399,7 @@ def resolve_call_expr(
 	if isinstance(expr.fn, H.HLambda):
 		lam = expr.fn
 		if call_kwargs_issues("lambda calls", getattr(expr, "kwargs", None)):
-			diagnostics.append(_tc_diag(message="keyword arguments are only supported for struct constructors in MVP", severity="error", span=getattr(expr, "loc", Span())))
+			diagnostics.append(_tc_diag(message="keyword arguments are only supported for struct constructors in v1", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types = [type_expr(a) for a in expr.args]
 		if len(arg_types) != len(lam.params):
@@ -4777,7 +4777,7 @@ def resolve_call_expr(
 				if getattr(schema, "module_id", None) not in (current_module_name, "lang.core"):
 					continue
 				if any(getattr(arm, "name", None) == expr.fn.name for arm in getattr(schema, "arms", []) or []):
-					diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in MVP", severity="error", span=getattr(expr, "loc", Span())))
+					diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1", severity="error", span=getattr(expr, "loc", Span())))
 					return record_expr(expr, ctx.unknown_ty)
 		struct_base = ctx.type_table.get_struct_base(module_id=expr.fn.module_id or current_module_name, name=expr.fn.name)
 		if struct_base is None:
@@ -5128,7 +5128,7 @@ def resolve_call_expr(
 			return winners[0][0], winners[0][1], winners[0][2], None
 		if call_kwargs_issues("constructors", kw_pairs):
 			first = (kw_pairs or [None])[0]
-			diagnostics.append(_tc_diag(message="keyword arguments are only supported for constructors in MVP", severity="error", span=_best_effort_span(first, expr)))
+			diagnostics.append(_tc_diag(message="keyword arguments are only supported for constructors in v1", severity="error", span=_best_effort_span(first, expr)))
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types: list[TypeId | None] = []
 		lambda_arg_indices: list[int] = []

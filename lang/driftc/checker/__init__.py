@@ -1280,7 +1280,7 @@ class Checker:
 					):
 						self._append_diag(
 							_chk_diag(
-								message="E-FSTR-UNSUPPORTED-TYPE: f-string hole type is not supported in MVP",
+								message="E-FSTR-UNSUPPORTED-TYPE: f-string hole type is not supported in v1",
 								severity="error",
 								span=getattr(hole, "loc", Span()),
 							)
@@ -1511,7 +1511,7 @@ class Checker:
 						if inst is not None and inst.base_id == base_ty and inst.type_args:
 							unify(args[0], inst.type_args[0])
 						return
-					# Other named nodes: we don't currently infer through them in MVP.
+					# Other named nodes: we don't currently infer through them in v1.
 
 				# Positional args only for MVP inference in the stub (named args are
 				# validated by the typed checker).
@@ -1575,7 +1575,7 @@ class Checker:
 					if left_def.kind in (TypeKind.VARIANT, TypeKind.INTERFACE, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT):
 						self._append_diag(
 							_chk_diag(
-								message="==/!= are only supported for Bool, Int, Float, String in MVP",
+								message="==/!= are only supported for Bool, Int, Float, String in v1",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 							)
@@ -2868,7 +2868,7 @@ class Checker:
 						)
 						field_indices = []
 			else:
-				# Positional binders (exact arity in MVP).
+				# Positional binders (exact arity in v1).
 				field_types = list(getattr(arm_def, "field_types", []) or [])
 				if len(arm.binders) != len(field_types):
 					ctx._append_diag(
