@@ -1,0 +1,5 @@
+{
+  "description": "for-loop in nothrow function compiles without throw diagnostics (nothrow next())",
+  "exit_code": 60,
+  "use_driftc_json": false
+}

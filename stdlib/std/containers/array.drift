@@ -97,7 +97,7 @@ implement<T> iter.Iterable<Array<T>, T, ArrayMoveIter<T>> for Array<T> require T
 }
 
 implement<T> iter.SinglePassIterator<T> for ArrayMoveIter<T> require T is core.Copy {
-	pub fn next(self: &mut ArrayMoveIter<T>) -> Optional<T> {
+	pub fn next(self: &mut ArrayMoveIter<T>) nothrow -> Optional<T> {
 		val i = self.idx;
 		if i < self.arr.len {
 			self.idx = i + 1;
@@ -139,10 +139,8 @@ implement<T> Array<T> {
 }
 
 implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {
-	pub fn next(self: &mut ArrayBorrowIter<T>) -> Optional<&T> {
-		if self.arr.gen != self.gen_snapshot {
-			err.throw_iterator_invalidated(ARRAY_CONTAINER_ID, err.IteratorOpId::Next());
-		}
+	pub fn next(self: &mut ArrayBorrowIter<T>) nothrow -> Optional<&T> {
+		assert(self.arr.gen == self.gen_snapshot, "iterator invalidated: array modified during iteration");
 		val len = self.arr.len;
 		if self.idx > len {
 			self.idx = len;
@@ -158,10 +156,8 @@ implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {
 }
 
 implement<T> iter.SinglePassIterator<&mut T> for ArrayBorrowMutIter<T> {
-	pub fn next(self: &mut ArrayBorrowMutIter<T>) -> Optional<&mut T> {
-		if self.arr.gen != self.gen_snapshot {
-			err.throw_iterator_invalidated(ARRAY_CONTAINER_ID, err.IteratorOpId::Next());
-		}
+	pub fn next(self: &mut ArrayBorrowMutIter<T>) nothrow -> Optional<&mut T> {
+		assert(self.arr.gen == self.gen_snapshot, "iterator invalidated: array modified during iteration");
 		val len = self.arr.len;
 		if self.idx > len {
 			self.idx = len;
@@ -183,10 +179,8 @@ implement<T> core.Copy for ArrayBorrowIter<T> {
 }
 
 implement<T> iter.BidirectionalIterator<&T> for ArrayBorrowIter<T> {
-	pub fn prev(self: &mut ArrayBorrowIter<T>) -> Optional<&T> {
-		if self.arr.gen != self.gen_snapshot {
-			err.throw_iterator_invalidated(ARRAY_CONTAINER_ID, err.IteratorOpId::Prev());
-		}
+	pub fn prev(self: &mut ArrayBorrowIter<T>) nothrow -> Optional<&T> {
+		assert(self.arr.gen == self.gen_snapshot, "iterator invalidated: array modified during iteration");
 		val len = self.arr.len;
 		if self.idx > len {
 			self.idx = len;
@@ -927,10 +921,8 @@ implement<K, V, B> core.Destructible for HashMapCore<K, V, B>
 }
 
 implement<K, V, B> iter.SinglePassIterator<HashMapItemRef<K, V>> for HashMapIter<K, V, B> {
-	pub fn next(self: &mut HashMapIter<K, V, B>) -> Optional<HashMapItemRef<K, V>> {
-		if self.map.gen != self.gen_snapshot {
-			err.throw_iterator_invalidated(HASH_MAP_CONTAINER_ID, err.IteratorOpId::Next());
-		}
+	pub fn next(self: &mut HashMapIter<K, V, B>) nothrow -> Optional<HashMapItemRef<K, V>> {
+		assert(self.map.gen == self.gen_snapshot, "iterator invalidated: hash map modified during iteration");
 		val cap = self.map.cap();
 		while self.idx < cap {
 			val i = self.idx;
@@ -1032,12 +1024,10 @@ implement<K, B> core.Destructible for HashSetCore<K, B>
 
 implement<K, B> iter.SinglePassIterator<&K> for HashSetIter<K, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
-	pub fn next(self: &mut HashSetIter<K, B>) -> Optional<&K>
+	pub fn next(self: &mut HashSetIter<K, B>) nothrow -> Optional<&K>
 		require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
 		val map = self.inner.map;
-		if map.gen != self.inner.gen_snapshot {
-			err.throw_iterator_invalidated(HASH_SET_CONTAINER_ID, err.IteratorOpId::Next());
-		}
+		assert(map.gen == self.inner.gen_snapshot, "iterator invalidated: hash set modified during iteration");
 		val cap = map.cap();
 		while self.inner.idx < cap {
 			val i = self.inner.idx;
@@ -1200,7 +1190,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		self.set_red_at(node, red);
 	}
 
-	fn push_left_spine(self: &TreeMap<K, V>, stack: &mut Array<Int>, start: Int) -> Void {
+	fn push_left_spine(self: &TreeMap<K, V>, stack: &mut Array<Int>, start: Int) nothrow -> Void {
 		var cur = start;
 		while cur >= 0 {
 			stack.push(cur);
@@ -1890,11 +1880,9 @@ implement<K, V> core.Destructible for TreeMap<K, V> require K is cmp.Comparable 
 }
 
 implement<K, V> iter.SinglePassIterator<TreeMapItemRef<K, V>> for TreeMapIter<K, V> {
-	pub fn next(self: &mut TreeMapIter<K, V>) -> Optional<TreeMapItemRef<K, V>> {
+	pub fn next(self: &mut TreeMapIter<K, V>) nothrow -> Optional<TreeMapItemRef<K, V>> {
 		val map = self.map;
-		if map.gen != self.gen_snapshot {
-			err.throw_iterator_invalidated(TREE_MAP_CONTAINER_ID, err.IteratorOpId::Next());
-		}
+		assert(map.gen == self.gen_snapshot, "iterator invalidated: tree map modified during iteration");
 		val top = self.stack.pop();
 		match top {
 			None => { return Optional::None(); },
@@ -1997,7 +1985,7 @@ implement<K> core.Destructible for TreeSet<K> require K is cmp.Comparable {
 }
 
 implement<K> iter.SinglePassIterator<&K> for TreeSetIter<K> {
-	pub fn next(self: &mut TreeSetIter<K>) -> Optional<&K> {
+	pub fn next(self: &mut TreeSetIter<K>) nothrow -> Optional<&K> {
 		val nxt = self.inner.next();
 		match nxt {
 			None => { return Optional<&K>::None(); },

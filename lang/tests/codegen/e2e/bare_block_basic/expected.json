@@ -1,0 +1,5 @@
+{
+  "description": "bare block statements compile and run with nested scopes",
+  "exit_code": 10,
+  "use_driftc_json": false
+}

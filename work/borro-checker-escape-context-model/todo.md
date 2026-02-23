@@ -108,115 +108,39 @@ Outcome:
    - `callable_fn_ptr_arity_mismatch_struct_field_rejected`
 4. Callable e2e set remains fully green.
 
-### Active Phase: Callable Coercion V4.7 (Extended batch: diagnostics + guardrails + ABI-path hygiene)
+### Completed Phase: Callable Coercion V4.7 (Extended batch: diagnostics + guardrails + ABI-path hygiene)
 
-Status: **APPROVED** (proceed).
+Status: **DONE**.
 
-Objective:
-1. Ensure unsupported fn-ptr source shapes (non-symbol / non-thunkable sources) fail with explicit, non-internal diagnostics.
-2. Tighten callable ABI mismatch diagnostics so users get actionable checker/lowering errors instead of generic internal mismatch output.
-3. Add broader callable ABI guardrails so this area is resilient against future refactors.
+Outcome:
+1. Non-symbol source reachability resolved: surface-reachable via `&mut` fn-ptr local.
+2. Diagnostic path for unsupported thunk source made explicit and non-internal.
+3. Callable boundary matrix expanded: param-type mismatch + return-type mismatch added.
+4. Positive matrix confirms supported storage/invocation across direct/local/var shapes (3 tests).
+5. Thunkability/mismatch decision path centralized to `_try_nothrow_to_throwing_thunk`.
+6. Existing callable positive/negative suite green (18/18).
 
-Scope (Klaudia):
-1. Investigate non-symbol (`%...`) fn-ptr source reachability from Drift surface code. If unreachable, do **not** build synthetic MIR-only tests in this phase; instead:
-   - document reachability result in support matrix,
-   - add/adjust a surface-level test that demonstrates current expressibility limits (for example, address-taken fn-ptr local rejection or equivalent).
-   If reachable, add focused regression and pin expected diagnostic behavior.
-2. Improve codegen/lowering failure path messaging for unsupported source thunking so user output is not generic `internal:` style.
-3. Add/extend callable boundary matrix tests (driver or e2e) for these negative contracts:
-   - unsupported source shape to throwing-field thunk path,
-   - param-type mismatch,
-   - return-type mismatch,
-   - throwness-direction mismatch (nothrow<-throwing reject).
-4. Add one positive matrix case proving supported nothrow->throwing storage/invocation still works across:
-   - direct symbol,
-   - local immutable alias,
-   - mutable local reassignment.
-5. Audit codegen entry points for struct-field callable storage and ensure decision logic is centralized (single helper for thunkability + mismatch classification).
-6. Keep existing V4.5/V4.6 positive paths unchanged.
-7. Do not change archived sections in this file.
+### Completed Phase: Callable Coercion V4.8 (Uniform runtime-value fn-ptr coercion)
 
-Execution rules:
-1. Regression-first for any diagnostic behavior changes.
-2. Boundary Contract Guardrails remain strict:
-   - positive path unchanged and revalidated,
-   - negative path diagnostic contract pinned.
-3. Stop conditions:
-   - first out-of-scope ABI defect outside fn-ptr storage/invocation,
-   - or change requires broad checker/type-system redesign.
-4. Diagnostics policy:
-   - no raw `internal:` diagnostics for these callable mismatch/source-shape paths,
-   - use stable phrasing fragments so tests can assert contracts without brittle full-message matching.
+Status: **DONE**.
 
-Done-when checklist:
-- [x] Non-symbol source reachability resolved: surface-reachable via `&mut` fn-ptr local. Pinned as unsupported with skip=true + actionable diagnostic (`callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported`).
-- [x] Diagnostic path for unsupported thunk source is explicit and non-internal (actionable message with workaround guidance).
-- [x] Callable boundary matrix expanded: param-type mismatch + return-type mismatch added.
-- [x] Positive matrix confirms supported storage/invocation across direct/local/var shapes (3 tests).
-- [x] Thunkability/mismatch decision path centralized to `_try_nothrow_to_throwing_thunk`.
-- [x] Existing callable positive/negative suite remains green (18/18).
-- [x] `work-progress.md` records before/after diagnostics, touched files, and final support matrix (§23).
-
-### Active Phase: Callable Coercion V4.8 (Uniform runtime-value fn-ptr coercion)
-
-Status: **APPROVED** (priority).
-
-Why this phase exists:
-1. Current behavior is non-uniform: nothrow->throwing fn-ptr coercion works for compile-time symbols, but fails for runtime fn-ptr values (for example `&mut`-routed locals).
-2. This is user-visible and will be perceived as "magic" rather than a coherent callable model.
-
-Objective:
-1. Support nothrow->throwing fn-ptr coercion uniformly for runtime fn-ptr values used in struct-field assignment.
-2. Remove the need for `skip` in `callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported`.
-
-Implementation guide (Klaudia):
-1. Regression-first:
-   - unskip `callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported` and confirm current fail baseline.
-   - keep existing V4.5/V4.6 positives and negatives as guardrails.
-2. Design and implement a runtime-value bridge:
-   - current symbol-thunk path hardcodes callee (`@sym`) and cannot represent `%tmp` runtime fn-ptr values.
-   - add a representation that can carry runtime-selected nothrow callee into a throwing-compatible callable slot.
-   - acceptable approaches:
-     - closure/callback-style adapter payload (callee pointer + adapter thunk), or
-     - equivalent fat-fn-ptr/runtime wrapper model.
-3. Keep boundary contracts explicit:
-   - still reject true signature mismatches (arity/param/return/throw direction) with clear diagnostics.
-   - do not relax checker type safety to force this through.
-4. Minimize blast radius:
-   - prefer localized changes in callable lowering/codegen for fn-ptr storage/invocation.
-   - avoid changing unrelated callback semantics.
-
-Mandatory tests for V4.8:
-1. `callable_fn_ptr_throwing_field_nothrow_via_refmut_unsupported` -> renamed/updated to passing (non-skip).
-2. Existing positives remain passing:
-   - `callable_fn_ptr_throwing_field_nothrow_fn`
-   - `callable_fn_ptr_throwing_field_nothrow_fn_via_local`
-   - `callable_fn_ptr_throwing_field_nothrow_fn_via_var`
-3. Existing negatives remain passing:
-   - `callable_fn_ptr_arity_mismatch_struct_field_rejected`
-   - `callable_fn_ptr_param_type_mismatch_struct_field_rejected`
-   - `callable_fn_ptr_return_type_mismatch_struct_field_rejected`
-   - `callable_throwing_fn_to_nothrow_field_rejected`
-4. Add one new stress-shaped callable test with runtime-selected callee path (branch/mutation) to prevent regression to symbol-only behavior.
-
-Execution rules:
-1. No `skip` accepted for the runtime-value coercion path in this phase.
-2. No workaround in stdlib/user code to hide compiler/runtime deficiency.
-3. If required representation change is broader than planned, stop and document minimal architecture delta before continuing.
-
-Done-when checklist:
-- [ ] Runtime-value nothrow->throwing field coercion works end-to-end (non-skip e2e).
-- [ ] Symbol-only limitation removed from support matrix.
-- [ ] Full callable positive/negative matrix remains green.
-- [ ] `work-progress.md` updated with before/after IR shape notes and touched boundaries.
+Outcome:
+1. Runtime nothrow→throwing fn-ptr coercion now works for all value shapes (compile-time symbols, runtime SSA values from `&mut`, branches, return values).
+2. Fat fn-ptr representation (`%DriftFatFnPtr = type { i8*, i8* }`) used for throwing fn-ptr struct fields — adapter + env pair.
+3. Three adapter thunk variants: dedicated symbol thunk, generic nothrow-wrap thunk, generic forward thunk.
+4. `callable_fn_ptr_throwing_field_nothrow_via_refmut` renamed from `_unsupported`, passes with exit_code=0.
+5. `callable_fn_ptr_throwing_field_nothrow_via_branch` new stress test passes.
+6. Full callable positive/negative matrix green (5 positive + 4 negative).
+7. LLVM codegen unit tests (66/66) pass.
 
 ### Plan Review Gate (owner)
 
-Before merge/sign-off of V4.7:
+Before merge/sign-off of V4.8:
 1. Review implementation diff against V4 design notes (ABI mapping + thunk ownership).
 2. Confirm guardrail coverage is complete (positive + negative + stale-doc alignment).
 3. Confirm no new `internal:`-prefixed user diagnostics introduced.
 4. Confirm no unresolved LANGUAGE_BUG remains hidden behind skip/workaround.
+5. Confirm fat fn-ptr representation is sound (no cache key collisions, no permissive type assumptions).
 
 ### Open Follow-Ups (active)
 
@@ -224,8 +148,61 @@ Before merge/sign-off of V4.7:
    - Any boundary-shape change in this track must include:
      1. positive end-to-end regression,
      2. negative regression for rejected shape,
-     3. alignment updates for stale comments/tests/messages.
+   3. alignment updates for stale comments/tests/messages.
    - No user-facing diagnostics starting with `internal:`.
+
+### Active Phase: Bare Block Statements (standalone lexical scopes)
+
+Status: **APPROVED** (queued next).
+
+Objective:
+1. Add standalone `{ ... }` block statements for explicit lexical narrowing/early-drop in RAII-heavy code.
+2. Preserve existing ownership/borrow/drop semantics and diagnostics quality.
+
+Scope (Klaudia):
+1. Parser:
+   - accept bare block as a statement form.
+2. HIR/checker:
+   - represent bare block as nested lexical scope with normal visibility/drop behavior.
+3. Lowering:
+   - lower via existing block-lowering path (no new semantic model).
+4. Regression-first tests:
+   - positive: early-drop scope behavior,
+   - negative: illegal escape/outliving still rejected.
+5. Keep changes localized to parser/checker/lowering for bare blocks only.
+
+Execution rules:
+1. Regression-first mandatory.
+2. Boundary Contract Guardrails remain strict:
+   - positive + negative + stale comment/test alignment.
+3. Stop if this requires broader control-flow/ownership redesign beyond bare-block syntax + scope plumbing.
+
+Done-when checklist:
+- [ ] Bare block syntax parses and lowers end-to-end.
+- [ ] Early-drop positive regression added and passing.
+- [ ] Escape/borrow negative regression added and passing.
+- [ ] Existing borrow/checker/codegen high-sensitivity suites remain green.
+- [ ] `work-progress.md` updated with touched files, behavior matrix, and residual limitations.
+
+### Formal Decision: Iterator `next()` throw contract (Option A)
+
+Status: **APPROVED** (language direction locked for MVP).
+
+Decision:
+1. `SinglePassIterator.next(self: &mut Self)` must be `nothrow` in MVP.
+2. `for`-loop desugaring must remain compatible with `nothrow` functions by default.
+3. Iterator invalidation checks are treated as invariant violations (panic/assert-style failure), not recoverable typed-throw flow through `next()`.
+
+Required implementation follow-up (Klaudia):
+1. Update iterator trait signature in stdlib to `nothrow`.
+2. Update impls to match the trait contract.
+3. Keep the checker throw analysis fix (no reverting walker correctness to hide the issue).
+4. Adjust affected tests to align with the new contract semantics.
+
+Required regressions:
+1. Positive: `for` in `nothrow` function compiles/runs without throw diagnostics.
+2. Positive: stage2/CFG lowering test for `for` remains green with no throw contract mismatch.
+3. Negative: iterator invalidation path still fails deterministically (panic/assert path), but not as typed throw from `next()`.
 
 ### Handoff Rules (Klaudia)
 

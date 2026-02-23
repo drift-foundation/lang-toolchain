@@ -461,6 +461,8 @@ class Checker:
 					walk_expr(getattr(stmt, "scrutinee", getattr(stmt, "subject", None)))
 					for arm in stmt.arms:
 						walk_block(arm.block)
+				elif isinstance(stmt, H.HBlock):
+					walk_block(stmt)
 
 			def walk_block(block: H.HBlock) -> None:
 				for stmt in block.statements:
@@ -1040,6 +1042,12 @@ class Checker:
 					continue
 				if isinstance(stmt, H.HExprStmt):
 					walk_expr(stmt.expr, caught, catch_all)
+					continue
+				if isinstance(stmt, H.HBlock):
+					walk_block(stmt, caught, catch_all)
+					continue
+				if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+					walk_block(stmt.block, caught, catch_all)
 					continue
 			# other statements: continue
 
@@ -2669,6 +2677,10 @@ class Checker:
 						walk_block(arm.block)
 					finally:
 						ctx.report_unknown_names = prev_report_unknown
+			elif isinstance(stmt, H.HBlock):
+				walk_block(stmt)
+			elif hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+				walk_block(stmt.block)
 			# HBreak/HContinue carry no expressions.
 
 		def walk_block(hb: H.HBlock) -> None:

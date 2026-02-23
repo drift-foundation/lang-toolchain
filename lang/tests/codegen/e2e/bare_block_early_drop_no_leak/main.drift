@@ -1,0 +1,11 @@
+fn main() nothrow -> Int {
+    var result = 0;
+    {
+        var xs: Array<Int> = [];
+        xs.push(1);
+        xs.push(2);
+        xs.push(3);
+        result = xs.len;
+    }
+    return result;
+}

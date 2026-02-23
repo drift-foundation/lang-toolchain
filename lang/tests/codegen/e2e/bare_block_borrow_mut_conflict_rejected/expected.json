@@ -1,0 +1,10 @@
+{
+  "description": "mutable borrow inside bare block conflicts with outer shared borrow",
+  "diagnostics": [
+    {
+      "message_contains": "cannot take mutable borrow while borrow active on 'x'",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

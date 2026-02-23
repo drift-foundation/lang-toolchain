@@ -17,14 +17,14 @@ pub trait Iterable<Src, Item, Iter> require Iter is SinglePassIterator<Item> {
 }
 
 pub trait SinglePassIterator<T> {
-	fn next(self: &mut Self) -> Optional<T>;
+	fn next(self: &mut Self) nothrow -> Optional<T>;
 }
 
 pub trait MultiPassIterator<T> require Self is SinglePassIterator<T>, Self is core.Copy {
 }
 
 pub trait BidirectionalIterator<T> require Self is MultiPassIterator<T> {
-	fn prev(self: &mut Self) -> Optional<T>;
+	fn prev(self: &mut Self) nothrow -> Optional<T>;
 }
 
 pub trait RandomAccessReadable<T> {
@@ -57,7 +57,7 @@ implement Iterable<&String, Byte, StringBytesIter> for &String {
 }
 
 implement SinglePassIterator<Byte> for StringBytesIter {
-	pub fn next(self: &mut StringBytesIter) -> Optional<Byte> {
+	pub fn next(self: &mut StringBytesIter) nothrow -> Optional<Byte> {
 		if self.idx >= self.len {
 			return Optional::None();
 		}

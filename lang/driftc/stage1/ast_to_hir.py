@@ -990,7 +990,8 @@ class AstToHIR:
 		return H.HIf(cond=cond, then_block=then_block, else_block=else_block, loc=self._as_span(getattr(stmt, "loc", None)))
 
 	def _visit_stmt_BlockStmt(self, stmt: ast.BlockStmt) -> H.HStmt:
-		return self.lower_block(stmt.block)
+		body = getattr(stmt, "body", None)
+		return self.lower_block(body if body is not None else stmt.block)
 
 	def _visit_stmt_UnsafeBlockStmt(self, stmt: ast.UnsafeBlockStmt) -> H.HStmt:
 		return H.HUnsafeBlock(block=self.lower_block(stmt.body))

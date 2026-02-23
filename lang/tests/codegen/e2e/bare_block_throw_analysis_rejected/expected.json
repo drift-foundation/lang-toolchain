@@ -1,0 +1,10 @@
+{
+  "description": "throwing call inside bare block detected by nothrow analysis",
+  "diagnostics": [
+    {
+      "message_contains": "declared nothrow but may throw",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

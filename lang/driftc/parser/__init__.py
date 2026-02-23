@@ -730,6 +730,10 @@ def _convert_import(stmt: parser_ast.ImportStmt) -> s0.Stmt:
 	return s0.ImportStmt(path=path, loc=Span.from_loc(stmt.loc))
 
 
+def _convert_block_stmt(stmt: parser_ast.BlockStmt) -> s0.Stmt:
+	return s0.BlockStmt(body=_convert_block(stmt.block), loc=Span.from_loc(stmt.loc))
+
+
 def _convert_unsafe_block(stmt: parser_ast.UnsafeBlockStmt) -> s0.Stmt:
 	return s0.UnsafeBlockStmt(body=_convert_block(stmt.block), loc=Span.from_loc(stmt.loc))
 
@@ -760,6 +764,7 @@ _STMT_DISPATCH: dict[type[parser_ast.Stmt], Callable[[parser_ast.Stmt], s0.Stmt]
 	parser_ast.TryStmt: _convert_try,
 	parser_ast.AssertStmt: _convert_assert,
 	parser_ast.ImportStmt: _convert_import,
+	parser_ast.BlockStmt: _convert_block_stmt,
 	parser_ast.UnsafeBlockStmt: _convert_unsafe_block,
 }
 
@@ -2685,6 +2690,9 @@ def parse_drift_workspace_to_hir(
 
 	def _resolve_types_in_block(path: Path, file_aliases: dict[str, str], blk: parser_ast.Block) -> None:
 		for st in getattr(blk, "statements", []) or []:
+			if isinstance(st, parser_ast.BlockStmt):
+				_resolve_types_in_block(path, file_aliases, st.block)
+				continue
 			if isinstance(st, parser_ast.UnsafeBlockStmt):
 				_resolve_types_in_block(path, file_aliases, st.block)
 				continue

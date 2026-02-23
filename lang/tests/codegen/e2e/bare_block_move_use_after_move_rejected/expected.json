@@ -1,0 +1,10 @@
+{
+  "description": "use after move rejected when move happens inside bare block",
+  "diagnostics": [
+    {
+      "message_contains": "use after move of 'x'",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

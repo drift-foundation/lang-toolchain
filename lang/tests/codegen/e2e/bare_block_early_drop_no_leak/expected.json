@@ -1,0 +1,6 @@
+{
+  "description": "array inside bare block is dropped at closing brace (RAII early-drop)",
+  "exit_code": 3,
+  "use_driftc_json": false,
+  "alloc_track_leak": true
+}

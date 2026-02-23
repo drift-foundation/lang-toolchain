@@ -563,6 +563,13 @@ class ContinueStmt(Stmt):
 
 
 @dataclass
+class BlockStmt(Stmt):
+	"""Bare block statement: { ... } — explicit lexical scope."""
+	body: List[Stmt]
+	loc: Optional[object] = None
+
+
+@dataclass
 class UnsafeBlockStmt(Stmt):
 	"""Unsafe block statement: unsafe { ... }."""
 	body: List[Stmt]
@@ -589,5 +596,5 @@ __all__ = [
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
 	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "MapEntry", "MapLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
-	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "ForCountStmt", "BreakStmt", "ContinueStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
+	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "ForCountStmt", "BreakStmt", "ContinueStmt", "BlockStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
 ]

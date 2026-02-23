@@ -1,0 +1,15 @@
+fn main() nothrow -> Int {
+    val x = 10;
+    {
+        val y = 20;
+        val z = x + y;
+    }
+    {
+        val a = 1;
+        {
+            val b = 2;
+            val c = a + b;
+        }
+    }
+    return x;
+}

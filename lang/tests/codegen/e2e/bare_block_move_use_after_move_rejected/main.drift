@@ -1,0 +1,11 @@
+fn consume(x: Int) nothrow -> Int {
+    return x;
+}
+
+fn main() nothrow -> Int {
+    var x = 42;
+    {
+        val y = move x;
+    }
+    return x;
+}

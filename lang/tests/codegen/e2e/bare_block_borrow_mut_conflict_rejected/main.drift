@@ -1,0 +1,8 @@
+fn main() nothrow -> Int {
+    var x = 1;
+    val r = &x;
+    {
+        val m = &mut x;
+    }
+    return 0;
+}

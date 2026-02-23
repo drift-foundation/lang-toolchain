@@ -1,0 +1,17 @@
+module main
+
+exception Boom()
+
+fn boom() -> Int {
+    throw Boom();
+}
+
+fn bad() nothrow -> Int {
+    {
+        return boom();
+    }
+}
+
+fn main() nothrow -> Int {
+    return 0;
+}

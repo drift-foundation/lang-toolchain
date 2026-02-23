@@ -407,7 +407,7 @@ implement JsonObject {
 }
 
 implement iter.SinglePassIterator<containers.HashMapItemRef<String, JsonNode>> for JsonEntriesIter {
-	pub fn next(self: &mut JsonEntriesIter) -> Optional<containers.HashMapItemRef<String, JsonNode>> {
+	pub fn next(self: &mut JsonEntriesIter) nothrow -> Optional<containers.HashMapItemRef<String, JsonNode>> {
 		match self {
 			JsonEntriesIter::Object(it) => {
 				return it.next();
