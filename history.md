@@ -1,3 +1,54 @@
+## 2026-02-23 - Void bindability fix for generic `T=Void` instantiation paths
+- Resolved LANGUAGE_BUG where instantiated generic bodies with `T=Void` produced checker error `cannot bind a Void value` in valid code paths.
+- Root cause was confirmed in instantiated function body analysis (not callsite/main collapse): local bind of a `Void`-typed value in generic code.
+- Compiler semantics updated so `Void` is treated as a bindable unit value in local bind/assign flow, while typed non-void mismatch diagnostics remain enforced.
+- Regression coverage:
+  - `lang/tests/codegen/e2e/concurrent_void_task_join_result_bind/` (pinned repro now passing)
+  - `lang/tests/driver/test_hidden_path_coverage.py`
+    - `test_generic_result_void_instantiation_allows_local_bind`
+    - `test_void_value_still_rejected_in_nonvoid_typed_context`
+  - Updated compatibility expectations in:
+    - `lang/tests/driver/test_void_semantics.py`
+    - `lang/tests/driver/test_hidden_path_coverage.py`
+
+## 2026-02-22 - Iterator invalidation semantics finalized and checker lexical-scope hardening
+- Finalized iterator contract direction for MVP (`next`/`prev` nothrow) and aligned invalidation behavior to deterministic abort/assert paths in runtime semantics.
+- Hardened checker lexical scoping in `_walk_hir` to prevent nested-block local leakage:
+  - `lang/driftc/checker/__init__.py`
+  - save/restore of `ctx.locals` added consistently for `if` arms, `loop`, `try` body/catches, and match arm traversal.
+- Rebalanced e2e invalidation tests to assert stable failure fragments and avoid brittle full-stderr matching:
+  - `lang/tests/codegen/e2e/runner.py` supports `stderr_contains`
+  - invalidation cases assert both `exit_code: -6` and specific invalidation message fragments.
+- Added positive non-invalidation coverage:
+  - `hashset_iter_basic`
+  - `hashmap_iter_getmut_no_invalidate`
+  - `treemap_iter_getmut_no_invalidate`
+  - `treeset_iter_contains_no_invalidate`
+
+## 2026-02-22 - Callable coercion V4.8 completed (runtime-value nothrow→throwing fn-ptr bridge)
+- Completed runtime-value fn-ptr coercion for throwing field storage via fat fn-ptr representation:
+  - `%DriftFatFnPtr = type { i8*, i8* }` (`adapter`, `env`)
+  - implemented in `lang/codegen/llvm/llvm_codegen.py`.
+- Added adapter/thunk coverage for all source shapes:
+  - symbol thunk path
+  - generic nothrow-wrap thunk
+  - generic forward thunk
+  - call indirect path decomposes fat pair and passes env first.
+- Expanded callable matrix coverage:
+  - positive:
+    - `callable_fn_ptr_throwing_field_nothrow_via_refmut` (now supported)
+    - `callable_fn_ptr_throwing_field_nothrow_via_branch`
+    - existing direct/local/var paths remain green
+  - negative:
+    - arity/param/return mismatch checks remain enforced
+    - throwing→nothrow rejection remains enforced.
+- LLVM codegen unit suite remained green during this phase.
+
+## 2026-02-22 - Bare block statements landed end-to-end
+- Added standalone bare block statement support (`{ ... }`) through parser → stage0 → checker/lowering flow.
+- Confirmed bare blocks use normal lexical scope/drop behavior (RAII early-drop semantics) via existing block-lowering scope push/pop.
+- Added/updated e2e coverage for bare-block behavior, including scope correctness and rejection paths for invalid borrow/move uses crossing block boundaries.
+
 ## 2026-02-22 - Runtime executor running-accounting hardening and stress pin
 - Fixed executor running-counter leak in runtime worker dequeue path:
   - `lang/language_runtime/posix/thread_runtime.c`
