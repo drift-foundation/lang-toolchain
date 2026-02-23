@@ -2,7 +2,7 @@
   "description": "e2e: indirect invoke by-value non-Copy projection",
   "diagnostics": [
     {
-      "message_contains": "move of a projected place is not supported in MVP; move a local/param or use swap/replace",
+      "message_contains": "move of a projected place is not supported in v1; move a local/param or use swap/replace",
       "phase": "borrowcheck"
     }
   ],

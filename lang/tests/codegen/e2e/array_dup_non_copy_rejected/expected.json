@@ -2,7 +2,7 @@
   "description": "e2e: array dup non-copy rejected",
   "diagnostics": [
     {
-      "message_contains": "Array<T>.dup() requires element type to be Copy in MVP"
+      "message_contains": "Array<T>.dup() requires element type to be Copy in v1"
     }
   ],
   "exit_code": 1,

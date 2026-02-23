@@ -405,7 +405,7 @@ fn main() nothrow -> Int {
 		return_checked=True,
 	)
 	msgs = [d.message for d in checked.diagnostics]
-	assert any("keyword arguments are not supported for method calls in MVP" in m for m in msgs)
+	assert any("keyword arguments are not supported for method calls in v1" in m for m in msgs)
 
 
 def test_callback_type_mismatch_rejected(tmp_path: Path) -> None:

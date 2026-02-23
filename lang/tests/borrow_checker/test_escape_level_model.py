@@ -570,7 +570,7 @@ def test_static_level_dry_run():
 # ===== Phase 3b tests =====
 
 def test_trait_object_callback_unannotated_thread_default():
-	"""Unannotated param defaults to THREAD; note says 'no escape-level annotation; treated as THREAD in MVP'."""
+	"""Unannotated param defaults to THREAD; note says 'no escape-level annotation; treated as THREAD in v1'."""
 	table = TypeTable()
 	int_ty = table.ensure_int()
 	ref_int_ty = table.ensure_ref(int_ty)

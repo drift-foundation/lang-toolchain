@@ -190,7 +190,7 @@ fn main() nothrow -> Int {
 """
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	proj_errors = [d for d in errors if "move of a projected place is not supported in MVP" in d.message]
+	proj_errors = [d for d in errors if "move of a projected place is not supported in v1" in d.message]
 	assert proj_errors, errors
 	assert all(d.phase == "borrowcheck" for d in proj_errors), proj_errors
 	assert all(d.span.line is not None and d.span.column is not None for d in proj_errors), proj_errors
@@ -279,7 +279,7 @@ fn main() nothrow -> Int {
 """
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	move_errors = [d for d in errors if "move operand must be an addressable place in MVP" in d.message]
+	move_errors = [d for d in errors if "move operand must be an addressable place in v1" in d.message]
 	assert move_errors, errors
 	assert all(d.phase == "typecheck" for d in move_errors), move_errors
 	assert all(d.span.line is not None and d.span.column is not None for d in move_errors), move_errors
@@ -342,7 +342,7 @@ fn main() nothrow -> Int {
 """
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	copy_errors = [d for d in errors if "copy operand must be an addressable place in MVP" in d.message]
+	copy_errors = [d for d in errors if "copy operand must be an addressable place in v1" in d.message]
 	assert copy_errors, errors
 	assert all(d.phase == "typecheck" for d in copy_errors), copy_errors
 	assert all(d.span.line is not None and d.span.column is not None for d in copy_errors), copy_errors

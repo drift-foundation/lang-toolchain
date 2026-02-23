@@ -3,7 +3,7 @@
   "diagnostics": [
     {
       "phase": "typecheck",
-      "message_contains": "==/!= are only supported for Bool, Int, Float, String in MVP"
+      "message_contains": "==/!= are only supported for Bool, Int, Float, String in v1"
     }
   ]
 }

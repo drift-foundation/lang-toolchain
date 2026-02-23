@@ -128,7 +128,7 @@ fn main() nothrow -> Int {
 """,
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert any("owning Array cannot contain borrowed aggregate element type in MVP" in d.message for d in errors), errors
+	assert any("owning Array cannot contain borrowed aggregate element type in v1" in d.message for d in errors), errors
 	assert any(d.phase == "typecheck" for d in errors), errors
 	_assert_no_internal_contract_errors(checked)
 

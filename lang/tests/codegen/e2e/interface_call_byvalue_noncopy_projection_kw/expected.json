@@ -1,8 +1,8 @@
 {
-  "description": "e2e: interface call kw args rejected in MVP",
+  "description": "e2e: interface call kw args rejected in v1",
   "diagnostics": [
     {
-      "message_contains": "keyword arguments are not supported for method calls in MVP",
+      "message_contains": "keyword arguments are not supported for method calls in v1",
       "phase": "typecheck"
     }
   ],

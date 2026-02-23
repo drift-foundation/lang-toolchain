@@ -77,7 +77,7 @@ fn main() nothrow -> Int { return 0; }
 """,
 	)
 	assert any(
-		d.code == "E_COPY_IMPL_NONCOPY_TARGET" and "core.Copy impl target must be structurally Copy in MVP" in (d.message or "")
+		d.code == "E_COPY_IMPL_NONCOPY_TARGET" and "core.Copy impl target must be structurally Copy in v1" in (d.message or "")
 		for d in diagnostics
 	), diagnostics
 

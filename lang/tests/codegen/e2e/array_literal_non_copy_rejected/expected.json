@@ -2,7 +2,7 @@
   "description": "array literal rejects non-Copy element type",
   "diagnostics": [
     {
-      "message_contains": "array literals require Copy element type in MVP",
+      "message_contains": "array literals require Copy element type in v1",
       "phase": "typecheck"
     }
   ],

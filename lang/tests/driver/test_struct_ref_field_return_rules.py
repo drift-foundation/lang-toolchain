@@ -210,7 +210,7 @@ fn main() nothrow -> Int {
 """,
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	matches = [d for d in errors if "owning Array cannot contain borrowed aggregate element type in MVP" in d.message]
+	matches = [d for d in errors if "owning Array cannot contain borrowed aggregate element type in v1" in d.message]
 	assert matches, errors
 
 

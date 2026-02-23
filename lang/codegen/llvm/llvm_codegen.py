@@ -787,7 +787,7 @@ class LlvmModuleBuilder:
 		"""
 		Ensure a concrete variant TypeId is declared as a named LLVM type.
 
-		Variant ABI is compiler-private in MVP, but we still want a stable,
+		Variant ABI is compiler-private in v1, but we still want a stable,
 		readable named type in the emitted module for debugging and to avoid
 		repeating literal struct types everywhere.
 
@@ -5483,7 +5483,7 @@ class _FuncBuilder:
 		self_ty = param_types[0]
 		self_def = self.type_table.get(self_ty)
 		if self_def.kind is not TypeKind.REF:
-			raise NotImplementedError("interface method self param must be &Self or &mut Self in MVP")
+			raise NotImplementedError("interface method self param must be &Self or &mut Self in v1")
 		ret_tid = user_ret_type
 		if can_throw:
 			err_tid = self.type_table.ensure_error()
@@ -6833,7 +6833,7 @@ class _FuncBuilder:
 				self.value_types[out] = variant_llty
 				return out
 			if arm.field_types:
-				raise AssertionError("internal: tombstone ctor payload must be empty in MVP")
+				raise AssertionError("internal: tombstone ctor payload must be empty in v1")
 			return self._emit_variant_value(ty_id, ctor, [])
 		raise NotImplementedError(f"LLVM codegen v1: tombstone unsupported for {td.kind.name}")
 
@@ -6861,7 +6861,7 @@ class _FuncBuilder:
 				return inst, ctor
 			raise AssertionError(f"internal: tombstone ctor '{ctor}' missing in variant instance")
 		if arm.field_types:
-			raise AssertionError("internal: tombstone ctor payload must be empty in MVP")
+			raise AssertionError("internal: tombstone ctor payload must be empty in v1")
 		return inst, ctor
 
 	def _fresh(self, hint: str = "tmp") -> str:

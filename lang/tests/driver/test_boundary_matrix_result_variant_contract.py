@@ -125,7 +125,7 @@ fn main() nothrow -> Int {
 	return 0;
 }
 """,
-			"owning Array cannot contain borrowed aggregate element type in MVP",
+			"owning Array cannot contain borrowed aggregate element type in v1",
 		),
 		(
 			"borrowed_aggregate_local_origin_return_rejected",

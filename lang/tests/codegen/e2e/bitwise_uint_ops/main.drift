@@ -2,7 +2,7 @@ module m
 
 fn main() nothrow -> Int{
 	// Uint can be introduced via a type annotation; the literal initializer is
-	// accepted in MVP to make Uint usable without casts.
+	// accepted in v1 to make Uint usable without casts.
 	var x: Uint = 6;
 	var y: Uint = 3;
 	var eight: Uint = 8;

@@ -92,7 +92,7 @@ fn main() nothrow -> Int {
 """,
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	matches = [d for d in errors if "keyword arguments are not supported for method calls in MVP" in d.message]
+	matches = [d for d in errors if "keyword arguments are not supported for method calls in v1" in d.message]
 	assert matches, errors
 	assert all(d.phase == "typecheck" for d in matches), matches
 	assert all(d.span.line is not None and d.span.column is not None for d in matches), matches
