@@ -238,11 +238,24 @@ Execution rules:
 3. Boundary Contract Guardrails remain strict.
 
 Done-when checklist:
-- [ ] All block-walking sites in `_walk_hir` have save/restore for `ctx.locals`.
-- [ ] `test_loop_init_name_out_of_scope_reports_unknown_name` passes (already fixed).
-- [ ] Positive regressions for if-arm, loop-body, try/catch scope isolation added and passing.
+- [x] All block-walking sites in `_walk_hir` have save/restore for `ctx.locals`.
+- [x] `test_loop_init_name_out_of_scope_reports_unknown_name` passes (already fixed).
+- [x] Positive regressions for if-arm, loop-body, try/catch scope isolation added and passing.
 - [ ] Existing driver, checker, stage2, and e2e suites remain green (or surfaced failures resolved).
 - [ ] `work-progress.md` updated with touched files, behavior matrix, and surfaced issues.
+
+### LANGUAGE_BUG: Void binding semantics in generic instantiation — FIXED
+
+Status: **DONE.**
+Owner: Klaudia
+
+Root cause: Not a CallInfo collapse — the "cannot bind a Void value" diagnostic fired inside instantiated generic function body (`VirtualThread<T>::join__inst__` with `T=Void`), where `var v = mem.read<type T>(...)` produced a Void-typed binding. Fix: made Void a first-class unit value by removing the hard bind/assign error paths from `_void_rules_on_stmt`.
+
+Done-when:
+- [x] `concurrent_void_task_join_result_bind` passes (exit 0).
+- [x] `concurrent_cancel_prestart_does_not_execute_task` passes (exit 0).
+- [x] No new checker regressions surfaced (4 pre-existing failures confirmed, no new ones).
+- [x] `work-progress.md` updated with root-cause trace and fix details.
 
 ### Handoff Rules (Klaudia)
 

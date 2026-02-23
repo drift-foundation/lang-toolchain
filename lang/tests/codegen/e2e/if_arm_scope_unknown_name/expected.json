@@ -1,0 +1,10 @@
+{
+  "description": "e2e: if-arm binding is scoped — not visible after if",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'x'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

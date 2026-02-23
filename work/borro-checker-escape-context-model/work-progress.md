@@ -1829,10 +1829,74 @@ CallIndirect: when callee tracked type is `%DriftFatFnPtr`, decompose pair and c
 
 ---
 
-## Pre-existing e2e failure (not our regression)
+## LANGUAGE_BUG: Void binding semantics in generic instantiation — FIXED
 
-**Test:** `concurrent_cancel_prestart_does_not_execute_task`
-**Status:** Failing on `main` — confirmed not introduced by this branch.
-**Symptom:** exit code mismatch (expected 0, got non-zero).
-**Diagnostic:** `"cannot bind a Void value"` — appears to be a codegen/checker issue with void-typed bindings in the concurrent cancel path.
-**Verified:** `git stash && run test → same failure → git stash pop`. Failure predates all bare-block and iterator-nothrow work.
+**Status:** Fixed. Void is now a first-class unit value in the checker.
+**Test (original):** `concurrent_cancel_prestart_does_not_execute_task`
+**Test (minimal repro):** `concurrent_void_task_join_result_bind`
+**Pre-existing:** Confirmed — failed identically on committed state (`git stash` verified).
+
+**Root cause (proven via tracing):**
+The diagnostic `"cannot bind a Void value"` did NOT fire in the user's `main()` function. It fired **inside the instantiated generic function body** `VirtualThread<T>::join__inst__7cfe05b863c23f3c` (module `std.concurrent`). When `T=Void`, the line `var v = mem.read<type T>(&mut self.result, 0)` at `stdlib/std/concurrent/concurrent.drift:574` produces a Void-typed binding. The checker's `_void_rules_on_stmt` handler rejected this as "cannot bind a Void value".
+
+This was NOT a CallInfo collapse or type substitution bug. The return type (`Result<Void, ConcurrencyError>`) was correctly computed. The error was a semantic policy issue: Void was treated as unbindable, which breaks valid generic code instantiated with `T=Void`.
+
+**Fix:** Made Void a first-class unit value by removing the hard error paths:
+- Removed `"cannot bind a Void value"` diagnostic from `_void_rules_on_stmt` HLet handler
+- Removed `"cannot assign a Void value"` diagnostic from `_void_rules_on_stmt` HAssign handler
+- Kept: `"cannot declare a binding of type Void"` (explicit annotation), `"cannot return a value from a Void function"` (wrong return type), void-in-expression checks
+
+**Why this is correct:**
+- Void is represented as `i8` throughout lowering and codegen — already a concrete value type
+- Stage2 emits `ConstVoid` + `StoreLocal` — works for all types including Void
+- Codegen handles void locals via SSA alias (non-address-taken) or `i8*` alloca (address-taken)
+- Generic code like `var v = read<Void>(...)` should work uniformly for all `T`
+
+**File changed:** `lang/driftc/checker/__init__.py` — `_void_rules_on_stmt` method
+
+**Validation:**
+- `concurrent_void_task_join_result_bind` — PASS (pinned regression)
+- `concurrent_cancel_prestart_does_not_execute_task` — PASS (original failing test)
+- `void_basic`, `void_return_value_error`, `void_throw`, `callback0_void_arity` — all PASS (existing void guardrails)
+
+---
+
+## Checker `_walk_hir` lexical-scope hardening
+
+Date: 2026-02-22
+Author: Klaudia
+Status: **Complete** — all block-walking sites scoped.
+
+### Problem
+
+`ctx.locals` in `_walk_hir` was a flat dict with no save/restore around nested block walks. Bindings introduced inside `if` arms, `loop` bodies, `try`/`catch` blocks, and `match` arms leaked to the parent scope. The for-count desugaring wrapping its init binding in `HBlock` was the first visible symptom (`test_loop_init_name_out_of_scope_reports_unknown_name`).
+
+### Changes
+
+**File:** `lang/driftc/checker/__init__.py`
+
+| Site | Lines (approx) | Change |
+|------|----------------|--------|
+| `HIf` then_block | ~2651-2653 | `saved_locals = dict(ctx.locals)` before, `ctx.locals = saved_locals` after |
+| `HIf` else_block | ~2655-2657 | Same pattern |
+| `HLoop` body | ~2663-2665 | Same pattern |
+| `HTry` body | ~2672-2674 | Same pattern |
+| `HTry` catch arms | ~2676-2683 | Same pattern (inside finally) |
+| `HBlock` (bare block) | ~2685-2687 | Already had save/restore (prior work) |
+| `HUnsafeBlock` | ~2689-2691 | Already had save/restore (prior work) |
+| `HMatchExpr` arms | ~2531-2572 | Changed from per-binder save to full `ctx.locals` save/restore |
+
+**Safety note:** `ctx.locals = saved_locals` is safe because nothing holds a long-lived reference to the dict object. All reads go through `ctx.locals[name]` or `ctx.locals.get(name)` at call time.
+
+### Regression tests added
+
+| Test | Verifies |
+|------|----------|
+| `if_arm_scope_unknown_name` | `val x` inside `if` arm → `return x` after → "unknown name 'x'" |
+| `loop_body_scope_unknown_name` | `val y` inside `while` body → `return y` after → "unknown name 'y'" |
+| `try_catch_scope_unknown_name` | `val z` inside `try` body → `return z` after → "unknown name 'z'" |
+| `for_count_loop_scope_unknown_name` | `var i` in for-count init → `return i` after → "unknown name 'i'" (prior work) |
+
+### Pre-existing failures surfaced (not our regression)
+
+- `test_uncaught_throw_infers_can_throw_without_diagnostic` (checker unit test): `"signature missing declared_can_throw"` internal contract diagnostic. Verified pre-existing via `git stash` test.

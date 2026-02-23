@@ -2528,7 +2528,7 @@ class Checker:
 				# a scoped view of locals that includes any pattern binders.
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
-					saved: dict[str, Optional[TypeId]] = {}
+					saved_locals = dict(ctx.locals)
 					# If the checker has normalized binder field indices, use scrutinee
 					# type to seed binder types. This keeps type inference for arm
 					# expressions meaningful for downstream validators.
@@ -2552,7 +2552,6 @@ class Checker:
 
 					field_indices = list(getattr(arm, "binder_field_indices", []) or [])
 					for idx, bname in enumerate(getattr(arm, "binders", []) or []):
-						saved[bname] = ctx.locals.get(bname)
 						bty = self._unknown_type
 						if arm_def is not None and idx < len(field_indices):
 							fidx = field_indices[idx]
@@ -2570,12 +2569,7 @@ class Checker:
 							walk_expr(arm.result)
 					finally:
 						ctx.report_unknown_names = prev_report_unknown
-
-					for bname, prev in saved.items():
-						if prev is None:
-							ctx.locals.pop(bname, None)
-						else:
-							ctx.locals[bname] = prev
+						ctx.locals = saved_locals
 			# literals/vars are leaf nodes
 
 		def walk_stmt(stmt: H.HStmt) -> None:
@@ -2654,29 +2648,39 @@ class Checker:
 					ctx.locals[stmt.target.name] = value_ty
 			elif isinstance(stmt, H.HIf):
 				walk_expr(stmt.cond)
+				saved_locals = dict(ctx.locals)
 				walk_block(stmt.then_block)
+				ctx.locals = saved_locals
 				if stmt.else_block:
+					saved_locals = dict(ctx.locals)
 					walk_block(stmt.else_block)
+					ctx.locals = saved_locals
 			elif hasattr(H, "HMatchExpr") and isinstance(stmt, getattr(H, "HMatchExpr")):
 				# Defensive: match is an expression node; it should appear under
 				# HExprStmt, but allow traversal if a legacy shape places it as a stmt.
 				walk_expr(stmt)
 			elif isinstance(stmt, H.HLoop):
+				saved_locals = dict(ctx.locals)
 				walk_block(stmt.body)
+				ctx.locals = saved_locals
 			elif isinstance(stmt, H.HReturn):
 				if stmt.value is not None:
 					walk_expr(stmt.value)
 			elif isinstance(stmt, H.HThrow):
 				walk_expr(stmt.value)
 			elif isinstance(stmt, H.HTry):
+				saved_locals = dict(ctx.locals)
 				walk_block(stmt.body)
+				ctx.locals = saved_locals
 				for arm in stmt.catches:
+					saved_locals = dict(ctx.locals)
 					prev_report_unknown = ctx.report_unknown_names
 					ctx.report_unknown_names = False
 					try:
 						walk_block(arm.block)
 					finally:
 						ctx.report_unknown_names = prev_report_unknown
+						ctx.locals = saved_locals
 			elif isinstance(stmt, H.HBlock):
 				saved_locals = dict(ctx.locals)
 				walk_block(stmt)
@@ -3172,26 +3176,10 @@ class Checker:
 					val_ty = decl_ty
 			if val_ty is None:
 				val_ty = ctx.infer(stmt.value)
-			if is_void(val_ty):
-				ctx._append_diag(
-					_chk_diag(
-						message="cannot bind a Void value",
-						severity="error",
-						span=getattr(stmt.value, "loc", getattr(stmt, "loc", Span())),
-					)
-				)
 			return
 
 		if isinstance(stmt, H.HAssign):
 			val_ty = ctx.infer(stmt.value)
-			if is_void(val_ty):
-				ctx._append_diag(
-					_chk_diag(
-						message="cannot assign a Void value",
-						severity="error",
-						span=getattr(stmt.value, "loc", getattr(stmt, "loc", Span())),
-					)
-				)
 			return
 
 	def _exception_init_rules_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:

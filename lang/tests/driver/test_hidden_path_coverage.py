@@ -184,6 +184,56 @@ fn main() -> Int {
 	assert payload.get("diagnostics", []) == []
 
 
+def test_generic_result_void_instantiation_allows_local_bind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	src = tmp_path / "main" / "main.drift"
+	_write_file(
+		src,
+		"""
+module main
+
+import std.core as core;
+
+fn run_cb<T>(cb: core.Callback0<T>) nothrow -> core.Result<T, Int> {
+	val v = cb.call();
+	return core.Result::Ok(move v);
+}
+
+fn main() nothrow -> Int {
+	val cb: core.Callback0<Void> = core.callback0(| | => { return; });
+	match run_cb(cb) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+""".lstrip(),
+	)
+	rc, payload = _run_driftc_json(["-M", str(tmp_path), "--stdlib-root", str(stdlib_root()), str(src)], capsys)
+	assert rc == 0
+	assert payload.get("diagnostics", []) == []
+
+
+def test_void_value_still_rejected_in_nonvoid_typed_context(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	src = tmp_path / "main" / "main.drift"
+	_write_file(
+		src,
+		"""
+module main
+
+fn v() nothrow -> Void {
+	return;
+}
+
+fn main() nothrow -> Int {
+	val x: Int = v();
+	return x;
+}
+""".lstrip(),
+	)
+	rc, payload = _run_driftc_json(["-M", str(tmp_path), "--stdlib-root", str(stdlib_root()), str(src)], capsys)
+	assert rc != 0
+	assert any("initializer type 'Void' does not match declared type 'Int'" in msg for msg in _error_messages(payload))
+
+
 def test_destructible_query_fallback_with_trait_world() -> None:
 	table = TypeTable()
 	from lang.driftc.traits.world import TraitWorld
@@ -335,4 +385,4 @@ fn main() -> Int {
 """.lstrip(),
 	)
 	rc, payload = _run_driftc_json(["-M", str(tmp_path), "--stdlib-root", str(stdlib_root()), str(src)], capsys)
-	assert rc != 0
+	assert rc == 0

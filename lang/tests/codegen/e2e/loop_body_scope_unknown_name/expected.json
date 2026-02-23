@@ -1,0 +1,10 @@
+{
+  "description": "e2e: loop-body binding is scoped — not visible after loop",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'y'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

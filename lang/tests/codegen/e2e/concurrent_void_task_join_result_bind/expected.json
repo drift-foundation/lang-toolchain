@@ -1,0 +1,4 @@
+{
+  "description": "LANGUAGE_BUG: binding Result<Void, ConcurrencyError> must not be rejected as Void",
+  "exit_code": 0
+}

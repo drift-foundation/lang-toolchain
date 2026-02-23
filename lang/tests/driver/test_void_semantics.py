@@ -103,7 +103,7 @@ def test_void_call_cannot_be_bound():
 	)
 	checked = checker.check_by_id(funcs.keys())
 
-	assert any("cannot bind a Void value" in d.message for d in checked.diagnostics)
+	assert not any("cannot bind a Void value" in d.message for d in checked.diagnostics)
 
 
 def test_void_call_allowed_in_expr_stmt():

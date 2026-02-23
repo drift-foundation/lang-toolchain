@@ -1,0 +1,10 @@
+{
+  "description": "e2e: try-body binding is scoped — not visible after try/catch",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'z'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}
