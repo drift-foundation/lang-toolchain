@@ -1,5 +1,6 @@
 {
   "description": "e2e: join_timeout nonzero returns Timeout",
+  "valgrind_suppress_fiber": true,
   "exit_code": 0,
   "stderr": "",
   "stdout": ""

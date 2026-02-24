@@ -1,3 +1,4 @@
 {
+  "valgrind_suppress_fiber": true,
   "exit_code": 0
 }

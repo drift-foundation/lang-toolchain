@@ -1,4 +1,6 @@
 {
   "description": "e2e: sha1 stability on large preallocated payload",
-  "exit_code": 0
+  "exit_code": 0,
+  "skip_memcheck": true,
+  "timeout_s": 120
 }

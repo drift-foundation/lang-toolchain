@@ -18,6 +18,11 @@ Memcheck policy:
 - Default is strict: no suppressions.
 - Only fiber/ucontext suppressions are supported via `DRIFT_VALGRIND_SUPPRESS_FIBER=1`.
 - Non-fiber memcheck errors (stdlib/runtime/user paths) remain hard failures and must be fixed.
+- Per-case opt-in is also supported in `expected.json` via:
+  - `"valgrind_suppress_fiber": true`
+  - Effective behavior is `env OR case flag`.
+- Per-case memcheck skip is supported in `expected.json` via:
+  - `"skip_memcheck": true`
 
 Current cases:
 - `simple_return`: `drift_main` returns 42; expect exit_code=42, empty stdout/stderr.

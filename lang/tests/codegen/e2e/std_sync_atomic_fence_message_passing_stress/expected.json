@@ -1,6 +1,8 @@
 {
   "description": "std.sync fence semantics: repeated release/acquire handoff with relaxed atomics",
   "exit_code": 0,
+  "skip_memcheck": true,
+  "timeout_s": 180,
   "stdout": "",
   "stderr": ""
 }

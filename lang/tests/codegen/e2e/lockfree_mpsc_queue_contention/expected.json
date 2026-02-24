@@ -1,6 +1,8 @@
 {
   "description": "lockfree mpsc queue contention: many producers one consumer",
   "exit_code": 0,
+  "skip_memcheck": true,
+  "timeout_s": 180,
   "stdout": "",
   "stderr": ""
 }

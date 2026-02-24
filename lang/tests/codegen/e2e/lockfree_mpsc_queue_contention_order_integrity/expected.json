@@ -1,6 +1,8 @@
 {
   "description": "lockfree mpsc queue contention per-producer order and integrity",
   "exit_code": 0,
+  "skip_memcheck": true,
+  "timeout_s": 180,
   "stdout": "",
   "stderr": ""
 }

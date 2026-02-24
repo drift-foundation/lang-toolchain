@@ -1,4 +1,5 @@
 {
   "description": "e2e: many short tasks join sum",
+  "valgrind_suppress_fiber": true,
   "exit_code": 0
 }

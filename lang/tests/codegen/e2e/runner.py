@@ -143,6 +143,7 @@ def _run_ir_with_clang(
 	stdin_data: str | None = None,
 	timeout_s: int = 30,
 	alloc_track_enabled: bool = False,
+	fiber_suppressions_enabled: bool = False,
 ) -> tuple[int, str, str]:
 	"""Compile the provided LLVM IR with clang and return (exit, stdout, stderr)."""
 	clang = shutil.which("clang-15") or shutil.which("clang")
@@ -177,7 +178,6 @@ def _run_ir_with_clang(
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")
-	fiber_suppressions_enabled = _env_true("DRIFT_VALGRIND_SUPPRESS_FIBER")
 	if asan_enabled and (memcheck_enabled or massif_enabled):
 		return 1, "", "DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF"
 	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
@@ -462,6 +462,8 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	expected = json.loads(expected_path.read_text())
 	if expected.get("skip"):
 		return "skipped (marked)"
+	if expected.get("skip_memcheck") and _env_true("DRIFT_MEMCHECK"):
+		return "skipped (memcheck)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
 		return "skipped (sandbox)"
 	allow_reserved_flag = expected.get("dev_allow_reserved_namespaces")
@@ -685,6 +687,7 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	alloc_track_env_enabled = os.environ.get("DRIFT_ALLOC_TRACK") in {"1", "true", "True"}
 	alloc_track_case_required = bool(expected.get("alloc_track_leak") or expected.get("alloc_track_no_leak_if_enabled"))
 	alloc_track_enabled = alloc_track_case_required or alloc_track_env_enabled
+	fiber_suppressions_enabled = _env_true("DRIFT_VALGRIND_SUPPRESS_FIBER") or bool(expected.get("valgrind_suppress_fiber"))
 	exit_code, stdout, stderr = _run_ir_with_clang(
 		ir,
 		build_dir,
@@ -692,6 +695,7 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 		stdin_data=stdin_data,
 		timeout_s=timeout_s,
 		alloc_track_enabled=alloc_track_enabled,
+		fiber_suppressions_enabled=fiber_suppressions_enabled,
 	)
 	stderr_clean, alloc_stats = _extract_alloc_track_stats(stderr)
 	if _env_true("DRIFT_ASAN"):

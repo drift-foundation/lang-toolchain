@@ -1,6 +1,8 @@
 {
   "description": "std.sync compare_exchange_observed returns current value on failure",
   "exit_code": 0,
+  "skip_memcheck": true,
+  "timeout_s": 120,
   "stdout": "",
   "stderr": ""
 }

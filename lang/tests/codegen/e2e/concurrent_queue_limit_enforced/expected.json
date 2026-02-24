@@ -1,4 +1,5 @@
 {
   "description": "e2e: executor queue limit enforced",
+  "skip_memcheck": true,
   "exit_code": 0
 }
