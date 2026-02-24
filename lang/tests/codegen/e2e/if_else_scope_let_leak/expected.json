@@ -1,0 +1,10 @@
+{
+  "description": "e2e: else-branch binding is scoped — not visible after if/else",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'y'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

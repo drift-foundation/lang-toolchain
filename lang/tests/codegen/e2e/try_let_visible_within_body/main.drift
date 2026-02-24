@@ -1,0 +1,14 @@
+fn helper() -> Int {
+	return 5;
+}
+
+fn main() nothrow -> Int {
+	var result = 0;
+	try {
+		val x = helper();
+		result = x;
+	} catch {
+		result = 0;
+	}
+	return result;
+}

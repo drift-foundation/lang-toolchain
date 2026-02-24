@@ -1,0 +1,10 @@
+{
+  "description": "e2e: bare block binding is scoped — not visible after block",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'block_val'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

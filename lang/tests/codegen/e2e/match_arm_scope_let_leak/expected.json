@@ -1,0 +1,10 @@
+{
+  "description": "e2e: match-arm binding is scoped — not visible after match",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'arm_local'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

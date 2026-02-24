@@ -1,0 +1,10 @@
+{
+  "description": "e2e: catch-arm binding does not leak after try/catch",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'arm1_val'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: catch binder is not visible after try/catch exits",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'e'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

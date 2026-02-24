@@ -1,0 +1,20 @@
+module main
+
+exception EvTest()
+
+fn fail() -> Int {
+	throw EvTest();
+}
+
+fn main() nothrow -> Int {
+	var result = 0;
+	try {
+		result = fail();
+	} catch EvTest(e) {
+		val moved = move e;
+		result = 42;
+	} catch {
+		result = 1;
+	}
+	return result;
+}

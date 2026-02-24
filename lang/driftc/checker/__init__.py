@@ -1077,7 +1077,15 @@ class Checker:
 				if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
 					walk_block(stmt.block, caught, catch_all)
 					continue
-			# other statements: continue
+				if isinstance(stmt, H.HAugAssign):
+					walk_expr(stmt.value, caught, catch_all)
+					continue
+				if hasattr(H, "HAssert") and isinstance(stmt, getattr(H, "HAssert")):
+					walk_expr(stmt.cond, caught, catch_all)
+					if stmt.msg is not None:
+						walk_expr(stmt.msg, caught, catch_all)
+					continue
+			# other statements (HBreak/HContinue): continue
 
 		walk_block(block)
 		return may_throw, (first_span or Span()), first_note
@@ -2508,6 +2516,15 @@ class Checker:
 		consistent environment.
 		"""
 		from lang.driftc import stage1 as H
+		from contextlib import contextmanager
+
+		@contextmanager
+		def _scoped_locals():
+			saved = dict(ctx.locals)
+			try:
+				yield
+			finally:
+				ctx.locals = saved
 
 		def walk_expr(expr: H.HExpr) -> None:
 			# Run inference for all expressions up front so shared diagnostics fire
@@ -2559,48 +2576,47 @@ class Checker:
 				# a scoped view of locals that includes any pattern binders.
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
-					saved_locals = dict(ctx.locals)
-					# If the checker has normalized binder field indices, use scrutinee
-					# type to seed binder types. This keeps type inference for arm
-					# expressions meaningful for downstream validators.
-					scrut_ty = ctx.infer(expr.scrutinee)
-					inst = None
-					scrut_ref_mut: bool | None = None
-					if scrut_ty is not None:
-						scrut_def = ctx.table.get(scrut_ty)
-						if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
-							inner = scrut_def.param_types[0]
-							inner_def = ctx.table.get(inner)
-							if inner_def.kind is TypeKind.VARIANT:
-								inst = ctx.table.get_variant_instance(inner)
-								scrut_ref_mut = bool(scrut_def.ref_mut)
-						elif scrut_def.kind is TypeKind.VARIANT:
-							inst = ctx.table.get_variant_instance(scrut_ty)
-					if inst is not None and arm.ctor is not None:
-						arm_def = inst.arms_by_name.get(arm.ctor)
-					else:
-						arm_def = None
+					with _scoped_locals():
+						# If the checker has normalized binder field indices, use scrutinee
+						# type to seed binder types. This keeps type inference for arm
+						# expressions meaningful for downstream validators.
+						scrut_ty = ctx.infer(expr.scrutinee)
+						inst = None
+						scrut_ref_mut: bool | None = None
+						if scrut_ty is not None:
+							scrut_def = ctx.table.get(scrut_ty)
+							if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+								inner = scrut_def.param_types[0]
+								inner_def = ctx.table.get(inner)
+								if inner_def.kind is TypeKind.VARIANT:
+									inst = ctx.table.get_variant_instance(inner)
+									scrut_ref_mut = bool(scrut_def.ref_mut)
+							elif scrut_def.kind is TypeKind.VARIANT:
+								inst = ctx.table.get_variant_instance(scrut_ty)
+						if inst is not None and arm.ctor is not None:
+							arm_def = inst.arms_by_name.get(arm.ctor)
+						else:
+							arm_def = None
 
-					field_indices = list(getattr(arm, "binder_field_indices", []) or [])
-					for idx, bname in enumerate(getattr(arm, "binders", []) or []):
-						bty = self._unknown_type
-						if arm_def is not None and idx < len(field_indices):
-							fidx = field_indices[idx]
-							if 0 <= fidx < len(arm_def.field_types):
-								bty = arm_def.field_types[fidx]
-								if scrut_ref_mut is not None:
-									bty = ctx.table.ensure_ref_mut(bty) if scrut_ref_mut else ctx.table.ensure_ref(bty)
-						ctx.locals[bname] = bty
+						field_indices = list(getattr(arm, "binder_field_indices", []) or [])
+						for idx, bname in enumerate(getattr(arm, "binders", []) or []):
+							bty = self._unknown_type
+							if arm_def is not None and idx < len(field_indices):
+								fidx = field_indices[idx]
+								if 0 <= fidx < len(arm_def.field_types):
+									bty = arm_def.field_types[fidx]
+									if scrut_ref_mut is not None:
+										bty = ctx.table.ensure_ref_mut(bty) if scrut_ref_mut else ctx.table.ensure_ref(bty)
+							ctx.locals[bname] = bty
 
-					prev_report_unknown = ctx.report_unknown_names
-					ctx.report_unknown_names = False
-					try:
-						walk_block(arm.block)
-						if getattr(arm, "result", None) is not None:
-							walk_expr(arm.result)
-					finally:
-						ctx.report_unknown_names = prev_report_unknown
-						ctx.locals = saved_locals
+						prev_report_unknown = ctx.report_unknown_names
+						ctx.report_unknown_names = False
+						try:
+							walk_block(arm.block)
+							if getattr(arm, "result", None) is not None:
+								walk_expr(arm.result)
+						finally:
+							ctx.report_unknown_names = prev_report_unknown
 			# literals/vars are leaf nodes
 
 		def walk_stmt(stmt: H.HStmt) -> None:
@@ -2739,48 +2755,44 @@ class Checker:
 					ctx.locals[stmt.target.name] = value_ty
 			elif isinstance(stmt, H.HIf):
 				walk_expr(stmt.cond)
-				saved_locals = dict(ctx.locals)
-				walk_block(stmt.then_block)
-				ctx.locals = saved_locals
+				with _scoped_locals():
+					walk_block(stmt.then_block)
 				if stmt.else_block:
-					saved_locals = dict(ctx.locals)
-					walk_block(stmt.else_block)
-					ctx.locals = saved_locals
+					with _scoped_locals():
+						walk_block(stmt.else_block)
 			elif hasattr(H, "HMatchExpr") and isinstance(stmt, getattr(H, "HMatchExpr")):
 				# Defensive: match is an expression node; it should appear under
 				# HExprStmt, but allow traversal if a legacy shape places it as a stmt.
 				walk_expr(stmt)
 			elif isinstance(stmt, H.HLoop):
-				saved_locals = dict(ctx.locals)
-				walk_block(stmt.body)
-				ctx.locals = saved_locals
+				with _scoped_locals():
+					walk_block(stmt.body)
 			elif isinstance(stmt, H.HReturn):
 				if stmt.value is not None:
 					walk_expr(stmt.value)
 			elif isinstance(stmt, H.HThrow):
 				walk_expr(stmt.value)
 			elif isinstance(stmt, H.HTry):
-				saved_locals = dict(ctx.locals)
-				walk_block(stmt.body)
-				ctx.locals = saved_locals
+				with _scoped_locals():
+					walk_block(stmt.body)
 				for arm in stmt.catches:
-					saved_locals = dict(ctx.locals)
-					prev_report_unknown = ctx.report_unknown_names
-					ctx.report_unknown_names = False
-					try:
+					with _scoped_locals():
+						if arm.binder:
+							ctx.locals[arm.binder] = self._type_table.ensure_error()
 						walk_block(arm.block)
-					finally:
-						ctx.report_unknown_names = prev_report_unknown
-						ctx.locals = saved_locals
 			elif isinstance(stmt, H.HBlock):
-				saved_locals = dict(ctx.locals)
-				walk_block(stmt)
-				ctx.locals = saved_locals
+				with _scoped_locals():
+					walk_block(stmt)
 			elif hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
-				saved_locals = dict(ctx.locals)
-				walk_block(stmt.block)
-				ctx.locals = saved_locals
-			# HBreak/HContinue carry no expressions.
+				with _scoped_locals():
+					walk_block(stmt.block)
+			elif isinstance(stmt, H.HAugAssign):
+				walk_expr(stmt.value)
+			elif hasattr(H, "HAssert") and isinstance(stmt, getattr(H, "HAssert")):
+				walk_expr(stmt.cond)
+				if stmt.msg is not None:
+					walk_expr(stmt.msg)
+			# HBreak/HContinue/HRethrow carry no expressions.
 
 		def walk_block(hb: H.HBlock) -> None:
 			for stmt in hb.statements:

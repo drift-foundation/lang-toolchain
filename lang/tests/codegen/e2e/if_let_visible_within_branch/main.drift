@@ -1,0 +1,7 @@
+fn main() nothrow -> Int {
+	if true {
+		val x = 10;
+		return x;
+	}
+	return 0;
+}

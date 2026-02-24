@@ -1,0 +1,10 @@
+{
+  "description": "e2e: local const in if body is scoped — not visible after if",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'kval'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

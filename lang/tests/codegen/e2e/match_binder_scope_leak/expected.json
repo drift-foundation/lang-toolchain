@@ -1,0 +1,10 @@
+{
+  "description": "e2e: match binder is scoped — not visible after match expression",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'v'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

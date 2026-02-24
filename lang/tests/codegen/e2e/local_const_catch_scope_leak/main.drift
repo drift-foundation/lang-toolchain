@@ -1,0 +1,14 @@
+module main
+
+fn helper() -> Int {
+	return 1;
+}
+
+fn main() nothrow -> Int {
+	try {
+		val _ = helper();
+	} catch {
+		const caught_c: Int = 88;
+	}
+	return caught_c;
+}

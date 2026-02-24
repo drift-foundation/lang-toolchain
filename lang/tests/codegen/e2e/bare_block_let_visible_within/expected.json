@@ -1,0 +1,6 @@
+{
+  "description": "e2e: val declared in bare block is visible within that block",
+  "exit_code": 22,
+  "stderr": "",
+  "stdout": ""
+}

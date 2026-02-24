@@ -1,0 +1,9 @@
+fn main() nothrow -> Int {
+	if true {
+		if true {
+			val inner = 5;
+		}
+		return inner;
+	}
+	return 0;
+}

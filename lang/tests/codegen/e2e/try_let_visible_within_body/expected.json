@@ -1,0 +1,6 @@
+{
+  "description": "e2e: val declared in try body is visible within try body",
+  "exit_code": 5,
+  "stderr": "",
+  "stdout": ""
+}

@@ -5285,7 +5285,7 @@ class TypeChecker:
 						return record_expr(expr, bid_ty)
 				diagnostics.append(
 					_tc_diag(
-						message=f"unknown variable '{expr.name}'",
+						message=f"unknown name '{expr.name}'",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)

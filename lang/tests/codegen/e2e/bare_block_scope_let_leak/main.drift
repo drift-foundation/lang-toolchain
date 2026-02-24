@@ -1,0 +1,6 @@
+fn main() nothrow -> Int {
+	{
+		val block_val = 55;
+	}
+	return block_val;
+}

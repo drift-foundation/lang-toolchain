@@ -1,0 +1,18 @@
+module main
+
+variant Color {
+	Red,
+	Blue,
+}
+
+fn main() nothrow -> Int {
+	val c: Color = Color::Red();
+	val _ = match c {
+		Red => {
+			val arm_local = 1;
+			arm_local
+		},
+		Blue => { 0 },
+	};
+	return arm_local;
+}

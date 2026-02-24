@@ -1,0 +1,10 @@
+{
+  "description": "e2e: local const in match arm is scoped — not visible after match",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'arm_c'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

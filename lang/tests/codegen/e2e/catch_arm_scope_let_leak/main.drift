@@ -1,0 +1,12 @@
+fn helper() -> Int {
+	return 1;
+}
+
+fn main() nothrow -> Int {
+	try {
+		val _ = helper();
+	} catch {
+		val caught_val = 7;
+	}
+	return caught_val;
+}

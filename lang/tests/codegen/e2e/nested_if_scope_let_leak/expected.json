@@ -1,0 +1,10 @@
+{
+  "description": "e2e: nested if-block binding is scoped — not visible in outer if",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'inner'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

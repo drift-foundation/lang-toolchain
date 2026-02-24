@@ -1,0 +1,19 @@
+module main
+
+exception EvA()
+exception EvB()
+
+fn fail() -> Int {
+	throw EvA();
+}
+
+fn main() nothrow -> Int {
+	var result = 0;
+	try fail() catch EvA {
+		val arm1_val = 10;
+		result = arm1_val;
+	} catch {
+		result = 0;
+	}
+	return arm1_val;
+}

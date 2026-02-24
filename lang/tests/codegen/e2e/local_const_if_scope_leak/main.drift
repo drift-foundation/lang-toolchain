@@ -1,0 +1,8 @@
+module main
+
+fn main() nothrow -> Int {
+	if true {
+		const kval: Int = 77;
+	}
+	return kval;
+}

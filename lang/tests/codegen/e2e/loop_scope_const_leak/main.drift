@@ -1,0 +1,10 @@
+module main
+
+fn main() nothrow -> Int {
+	var i = 0;
+	while i < 1 {
+		const cval: Int = 42;
+		i = i + 1;
+	}
+	return cval;
+}

@@ -1,0 +1,18 @@
+module main
+
+variant Maybe<T> {
+	Some(value: T),
+	None,
+}
+
+fn main() nothrow -> Int {
+	val m: Maybe<Int> = Maybe::Some(1);
+	val _ = match m {
+		Some(v) => {
+			const arm_c: Int = 50;
+			arm_c
+		},
+		None => { 0 },
+	};
+	return arm_c;
+}

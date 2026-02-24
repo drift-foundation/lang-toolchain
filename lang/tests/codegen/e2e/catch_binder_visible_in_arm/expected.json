@@ -1,0 +1,6 @@
+{
+  "description": "e2e: catch binder is visible and usable inside its catch arm",
+  "exit_code": 42,
+  "stderr": "",
+  "stdout": ""
+}

@@ -1,0 +1,8 @@
+fn main() nothrow -> Int {
+	var result = 0;
+	{
+		val x = 22;
+		result = x;
+	}
+	return result;
+}

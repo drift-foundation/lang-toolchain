@@ -1,0 +1,8 @@
+fn main() nothrow -> Int {
+	if true {
+		return 1;
+	} else {
+		val y = 99;
+	}
+	return y;
+}

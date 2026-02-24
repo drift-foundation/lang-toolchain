@@ -1,0 +1,6 @@
+{
+  "description": "e2e: val declared in loop body is visible within that iteration",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

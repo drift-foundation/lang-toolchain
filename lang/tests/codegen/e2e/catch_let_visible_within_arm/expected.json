@@ -1,0 +1,6 @@
+{
+  "description": "e2e: val declared in catch arm is visible within that arm",
+  "exit_code": 1,
+  "stderr": "",
+  "stdout": ""
+}

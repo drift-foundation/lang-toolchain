@@ -1,0 +1,10 @@
+{
+  "description": "e2e: const in loop body is scoped — not visible after loop",
+  "diagnostics": [
+    {
+      "message_contains": "unknown name 'cval'",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

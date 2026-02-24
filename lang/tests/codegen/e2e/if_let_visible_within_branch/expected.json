@@ -1,0 +1,6 @@
+{
+  "description": "e2e: val declared in if branch is visible within that branch",
+  "exit_code": 10,
+  "stderr": "",
+  "stdout": ""
+}
