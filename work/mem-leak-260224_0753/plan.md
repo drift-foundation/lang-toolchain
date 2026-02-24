@@ -82,41 +82,103 @@ store %Struct_main_Range %__arc2, %Struct_main_Range* %r__addr
 ret i64 %t85
 ```
 
-## Fix
+---
 
-### Primary fix: `types_core.py:1395-1398`
+## Fix 1: `types_core.py:1395-1397` — has_drop(Array) [APPLIED]
 
 ```python
 # BEFORE (wrong — only checks element drop):
 if td.kind is TypeKind.ARRAY:
     needs = bool(td.param_types) and self.has_drop(td.param_types[0])
+    self._needs_drop_cache[tid] = needs
+    return needs
 
 # AFTER (correct — array always needs drop for backing buffer):
 if td.kind is TypeKind.ARRAY:
-    needs = bool(td.param_types)
+    self._needs_drop_cache[tid] = True
+    return True
 ```
 
 This aligns `has_drop` with the ARC pass's `_type_needs_drop` (line 88-90 of `string_arc.py`) which already unconditionally returns True for all arrays.
 
-### Verification
+## Fix 2: `llvm_codegen.py:7856` — null-guard in interface drop helper [APPLIED]
 
-The LLVM codegen's `_emit_drop_value` already handles structs with array fields correctly (lines 7619-7631 → recursive field drop → lines 7598-7613 for arrays → `drift_free_array`). The only issue is the early-exit guard at line 7568. Once `has_drop` returns the correct value, the existing codegen logic will emit the right cleanup code.
+Added vtable null check at the top of `_ensure_interface_drop_helper()`. When `iface_vtable` is null (zeroed interface value), the helper jumps directly to `iface_free_done`, skipping both the drop function call and the `drift_iface_free` call.
 
-### Blast radius
+**Intentional defensive behavior**: if a malformed value had `vtable=null` but owned heap data, that data would leak rather than crash. This is acceptable — the guard exists for crash-avoidance on zero-initialized values, not for handling arbitrary malformed state.
 
-- `has_drop` is used broadly: type_checker, codegen, MIR lowering
-- Changing it affects which types are considered "needing destruction"
-- `Array<Int>` (and `Array<Uint>`, `Array<Bool>`, etc.) will now correctly report `has_drop = True`
-- Structs/variants containing such arrays will transitively report `has_drop = True`
-- This is the correct semantic — it was already correct in the ARC pass but inconsistent in `types_core`
+## Fix 3: `string_arc.py` — drop-before-reassign for destructibles [APPLIED]
 
-### Tests to run
+Sweep found that destructible locals (structs/variants containing arrays) lacked drop-before-reassign on StoreLocal, unlike array locals (line 735-738) and string locals (line 802-812).
 
-- `algo_sort_range_basic` and `algo_swap_sanity` under `DRIFT_MEMCHECK=1` (should now pass)
-- All other `algo_sort_*` tests (should remain passing)
-- Full e2e suite to catch regressions from broader `has_drop` change
-- Any test involving struct-with-array or variant-with-array patterns
+### Three-tier model
 
-## Collateral: ARC pass redundancy note
+Destructible locals are partitioned by `_is_nullsafe_drop`:
 
-The ARC pass (`string_arc.py`) maintains its own `_type_needs_drop` that diverges from `types_core.has_drop`. After the fix, these should be consistent. Consider consolidating to a single source of truth in a future cleanup.
+- **Nullsafe types** (plain structs whose fields recursively resolve to Array/String/Interface/Error — no explicit `destructor_fns`): zero-initialized in the entry block, unconditional drop-before-reassign. Structurally identical to the array/string paths. No conditional-init gap.
+
+- **Non-nullsafe types** (Arc, Mutex, types with `destructor_fns`): NOT zero-initialized. Drop-before-reassign is gated by `initialized_destructibles` (seeded from `assigned_in[block]`, definite-init intersection semantics). Conservative: at merge points after conditional init, first StoreLocal won't drop old value — potential leak on the initialized-path subset. Acceptable because these types use RAII-style init-at-declaration in practice.
+
+- **Arrays / Strings**: unchanged, handled by existing paths (`_drop_array_local`, `_release_local`).
+
+---
+
+## Sweep findings
+
+### Safety sweep of all drop predicates across codebase
+
+| File | Function | Array handling | Status |
+|------|----------|---------------|--------|
+| `types_core.py` | `has_drop()` | **FIXED** → True | Applied |
+| `string_arc.py` | `_type_needs_drop()` | Correct (unconditional True) | OK |
+| `hir_to_mir.py` | `_needs_runtime_drop()` | Delegates to `has_drop()` | OK (inherits fix) |
+| `llvm_codegen.py` | `_type_needs_drop()` | Delegates to `has_drop()` via Tier 1 | OK (inherits fix) |
+| `llvm_codegen.py` | `_type_needs_drop()` Tier 3 fallback | **Incomplete** — defaults False for non-SCALAR | LOW — unreachable in v1 |
+
+### Drop-before-reassign coverage
+
+| Local type | StoreLocal drop | Status |
+|------------|----------------|--------|
+| `array_locals` (bare arrays) | `_drop_array_local` (line 735) | OK |
+| `string_locals` | `_release_local` (line 802) | OK |
+| `destructible_locals` (structs/variants with drop fields) | **FIXED** → `_drop_destructible_local` (line 739) | Applied |
+
+### MIR lowering (`hir_to_mir.py`) — all paths safe
+
+- `_register_drop_local` — now correctly registers Array-containing types
+- `_emit_scope_drops` — return/break/continue all call cleanup
+- Move semantics — `_moved_locals` tracking unaffected
+- Copy semantics — Array remains non-Copy (`copy_status` returns False)
+- Match binder extraction — now correctly registers array binders for drop
+
+---
+
+## Verification (targeted, all under DRIFT_MEMCHECK=1)
+
+| Test | Result |
+|------|--------|
+| `struct_array_field_drop` (new regression) | ok |
+| `struct_array_reassign_drop` (new regression) | ok |
+| `algo_sort_range_basic` (was failing) | ok |
+| `algo_swap_sanity` (was failing) | ok |
+| `algo_sort_random` (negative control) | ok |
+| `algo_sort_duplicates` (negative control) | ok |
+| `algo_sort_sorted` (negative control) | ok |
+| `algo_sort_reverse` (negative control) | ok |
+| `array_reassign_drop` (negative control) | ok |
+| `callback_arc_mutex_full_mutation` (regression check) | ok |
+| `callback_move_capture_arc_lifetime` (regression check) | ok |
+| `callback_move_capture_nested_callback` (regression check) | ok |
+| `callback_move_capture_replace_state` (regression check) | ok |
+
+**Pending**: Full e2e suite on farm.
+
+---
+
+## Follow-up (not in this branch)
+
+1. **Codegen fallback hardening**: `llvm_codegen.py:7557-7563` Tier 3 fallback defaults to False for non-SCALAR. Currently unreachable (Tier 1 always fires in v1 path), but should be made fail-loud or aligned with `types_core.has_drop`.
+
+2. **ARC / types_core consolidation**: `string_arc.py` maintains its own `_type_needs_drop` that is now consistent with `types_core.has_drop`, but having two sources of truth is fragile. Consider consolidating.
+
+3. **Interface drop null-safety**: Interface/callback drop helpers crash on zeroed values. Arrays and strings are null-safe. Consider adding a null guard to the interface drop helper for robustness.

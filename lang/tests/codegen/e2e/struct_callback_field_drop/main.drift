@@ -1,0 +1,17 @@
+module main
+
+import std.core as core;
+
+fn noop() nothrow -> Int {
+	return 0;
+}
+
+struct Holder {
+	cb: core.Callback0<Int>
+}
+
+fn main() nothrow -> Int {
+	var h = Holder(cb = core.callback0(noop));
+	h = Holder(cb = core.callback0(noop));
+	return h.cb.call();
+}

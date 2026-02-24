@@ -125,6 +125,44 @@ def insert_string_arc(
 			return False
 		return type_table.get(tid).kind is TypeKind.ERROR
 
+	_dtor_fns = getattr(type_table, "destructor_fns", None) or {}
+	_nullsafe_drop_cache: Dict[TypeId, bool] = {}
+
+	def _is_nullsafe_drop(tid: TypeId) -> bool:
+		cached = _nullsafe_drop_cache.get(tid)
+		if cached is not None:
+			return cached
+		if tid in _dtor_fns:
+			_nullsafe_drop_cache[tid] = False
+			return False
+		td = type_table.get(tid)
+		if td.kind is TypeKind.SCALAR:
+			_nullsafe_drop_cache[tid] = True
+			return True
+		if td.kind is TypeKind.ARRAY:
+			_nullsafe_drop_cache[tid] = True
+			return True
+		if td.kind is TypeKind.ERROR:
+			_nullsafe_drop_cache[tid] = True
+			return True
+		if td.kind is TypeKind.INTERFACE:
+			_nullsafe_drop_cache[tid] = True
+			return True
+		if td.kind is TypeKind.STRUCT:
+			inst = type_table.get_struct_instance(tid)
+			if inst is not None:
+				safe = all(_is_nullsafe_drop(fty) for fty in inst.field_types if _type_needs_drop(fty))
+				_nullsafe_drop_cache[tid] = safe
+				return safe
+		if td.kind is TypeKind.VARIANT:
+			inst = type_table.get_variant_instance(tid)
+			if inst is not None:
+				safe = all(_is_nullsafe_drop(fty) for arm in inst.arms for fty in arm.field_types if _type_needs_drop(fty))
+				_nullsafe_drop_cache[tid] = safe
+				return safe
+		_nullsafe_drop_cache[tid] = False
+		return False
+
 	destructible_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
@@ -133,6 +171,7 @@ def insert_string_arc(
 		if name not in array_locals
 		if _is_destructible_tid(local_types.get(name))
 	}
+	nullsafe_destructible_locals: Set[str] = {name for name in destructible_locals if _is_nullsafe_drop(local_types[name])}
 
 	def _is_string_value(val: str) -> bool:
 		return _is_string_tid(local_types.get(val))
@@ -647,7 +686,7 @@ def insert_string_arc(
 			for local in func.locals:
 				if local in func.params:
 					continue
-				if local not in destructible_locals:
+				if local not in nullsafe_destructible_locals:
 					continue
 				dest_ty = local_types.get(local)
 				if dest_ty is None:
@@ -740,6 +779,7 @@ def insert_string_arc(
 				locals_used |= _collect_return_source_locals(prod.value, seen_vals)
 			return locals_used
 
+		initialized_destructibles: Set[str] = set(assigned_in.get(block.name, set())) & (destructible_locals - nullsafe_destructible_locals)
 		for instr in block.instructions:
 			if isinstance(instr, M.StoreLocal):
 				moved_out_locals.discard(instr.local)
@@ -748,8 +788,14 @@ def insert_string_arc(
 				_drop_array_local(instr.local, new_instrs)
 				new_instrs.append(instr)
 				continue
-			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
+			if isinstance(instr, M.StoreLocal) and instr.local in nullsafe_destructible_locals:
 				_drop_destructible_local(instr.local, new_instrs)
+				new_instrs.append(instr)
+				continue
+			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
+				if instr.local in initialized_destructibles:
+					_drop_destructible_local(instr.local, new_instrs)
+				initialized_destructibles.add(instr.local)
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.MoveOut):

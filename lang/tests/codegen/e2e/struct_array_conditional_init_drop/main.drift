@@ -1,0 +1,13 @@
+module main
+
+struct Wrapper { data: Array<Int> }
+
+fn main() nothrow -> Int {
+	var w = Wrapper(data = [10, 20]);
+	val cond = w.data[0];
+	if cond > 0 {
+		w = Wrapper(data = [30, 40]);
+	}
+	val result = w.data[0] + w.data[1];
+	return result;
+}

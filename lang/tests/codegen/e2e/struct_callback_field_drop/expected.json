@@ -1,0 +1,6 @@
+{
+  "description": "e2e: struct with Callback field drops old value on reassignment (null-safe interface drop)",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}
