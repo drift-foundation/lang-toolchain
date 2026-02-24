@@ -1,0 +1,23 @@
+module m
+
+fn make_array() nothrow -> Array<Int> {
+	return [10, 20, 30];
+}
+
+fn array_sum(a: &Array<Int>) nothrow -> Int {
+	var total = 0;
+	var i = 0;
+	while i < a.len {
+		total = total + a[i];
+		i = i + 1;
+	}
+	return total;
+}
+
+pub fn main() nothrow -> Int {
+	val s = array_sum(&make_array());
+	if s != 60 {
+		return 1;
+	}
+	return 0;
+}

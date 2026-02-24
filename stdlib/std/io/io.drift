@@ -416,7 +416,21 @@ pub fn buffer_len_mut(self: &mut Buffer) nothrow -> Int {
 }
 
 pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
-	self.len = len;
+	var target = len;
+	if target < 0 {
+		target = 0;
+	}
+	if target > self.cap {
+		target = self.cap;
+	}
+	if target > self.len {
+		var j = self.len;
+		while j < target {
+			mem.write<type Byte>(&mut self.buf, j, cast<Byte>(0));
+			j = j + 1;
+		}
+	}
+	self.len = target;
 }
 
 pub fn buffer_ptr(self: &Buffer) nothrow -> mem.Ptr<Byte> {
@@ -428,6 +442,13 @@ pub fn buffer_ptr_mut(self: &mut Buffer) nothrow -> mem.Ptr<Byte> {
 }
 
 pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
+	if i > self.len {
+		var j = self.len;
+		while j < i {
+			mem.write<type Byte>(&mut self.buf, j, cast<Byte>(0));
+			j = j + 1;
+		}
+	}
 	mem.write<type Byte>(&mut self.buf, i, v);
 	val new_len = i + 1;
 	if new_len > self.len {

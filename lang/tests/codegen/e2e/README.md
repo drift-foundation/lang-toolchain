@@ -10,8 +10,14 @@ Useful runner env toggles:
 - `DRIFT_ALLOC_TRACK=1` — enable allocator tracking and leak checks for configured cases.
 - `DRIFT_MEMCHECK=1` — run binaries under valgrind memcheck.
 - `DRIFT_MASSIF=1` — run binaries under valgrind massif.
+- `DRIFT_VALGRIND_SUPPRESS_FIBER=1` — opt-in suppressions for known valgrind false positives from fiber/ucontext stack switching.
 - `DRIFT_ASAN=1` — compile+run binaries with AddressSanitizer (`-fsanitize=address -g`).
   - `DRIFT_ASAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`.
+
+Memcheck policy:
+- Default is strict: no suppressions.
+- Only fiber/ucontext suppressions are supported via `DRIFT_VALGRIND_SUPPRESS_FIBER=1`.
+- Non-fiber memcheck errors (stdlib/runtime/user paths) remain hard failures and must be fixed.
 
 Current cases:
 - `simple_return`: `drift_main` returns 42; expect exit_code=42, empty stdout/stderr.

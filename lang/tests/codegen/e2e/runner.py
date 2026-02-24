@@ -53,6 +53,8 @@ from lang.language_runtime import (
 ROOT = Path(__file__).resolve().parents[4]
 _BUILD_ROOT_DEFAULT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
 _BUILD_ROOT_ENV = os.environ.get("DRIFT_E2E_BUILD_ROOT")
+_VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "e2e" / "valgrind"
+_VALGRIND_FIBER_SUPPRESSIONS = _VALGRIND_DIR / "fiber_context.supp"
 if _BUILD_ROOT_ENV:
 	BUILD_ROOT = Path(_BUILD_ROOT_ENV)
 else:
@@ -129,6 +131,8 @@ def _preflight_runtime_mode_error() -> str | None:
 		)
 	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
 		return "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
+	if (memcheck_enabled or massif_enabled) and _env_true("DRIFT_VALGRIND_SUPPRESS_FIBER") and not _VALGRIND_FIBER_SUPPRESSIONS.exists():
+		return f"fiber suppression file not found: {_VALGRIND_FIBER_SUPPRESSIONS}"
 	return None
 
 
@@ -173,10 +177,13 @@ def _run_ir_with_clang(
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")
+	fiber_suppressions_enabled = _env_true("DRIFT_VALGRIND_SUPPRESS_FIBER")
 	if asan_enabled and (memcheck_enabled or massif_enabled):
 		return 1, "", "DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF"
 	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
 		return 1, "", "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
+	if (memcheck_enabled or massif_enabled) and fiber_suppressions_enabled and not _VALGRIND_FIBER_SUPPRESSIONS.exists():
+		return 1, "", f"fiber suppression file not found: {_VALGRIND_FIBER_SUPPRESSIONS}"
 
 	try:
 		c_defs: list[str] = []
@@ -271,6 +278,9 @@ def _run_ir_with_clang(
 			run_timeout_s = max(timeout_s, 30) * 2
 			run_env["ASAN_OPTIONS"] = _asan_options_with_defaults(run_env.get("ASAN_OPTIONS"))
 		if memcheck_enabled:
+			valgrind_suppressions: list[str] = []
+			if fiber_suppressions_enabled:
+				valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 			run_timeout_s = max(timeout_s, 30) * 10
 			run_cmd = [
 				"valgrind",
@@ -279,14 +289,19 @@ def _run_ir_with_clang(
 				"--show-leak-kinds=definite,indirect,possible,reachable",
 				"--errors-for-leak-kinds=definite,indirect",
 				"--error-exitcode=97",
+				*valgrind_suppressions,
 				f"--log-file={str(build_dir / 'valgrind-memcheck.log')}",
 				*run_cmd,
 			]
 		elif massif_enabled:
+			valgrind_suppressions = []
+			if fiber_suppressions_enabled:
+				valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 			run_timeout_s = max(timeout_s, 30) * 6
 			run_cmd = [
 				"valgrind",
 				"--tool=massif",
+				*valgrind_suppressions,
 				f"--massif-out-file={str(build_dir / 'valgrind-massif.out')}",
 				f"--log-file={str(build_dir / 'valgrind-massif.log')}",
 				*run_cmd,

@@ -1769,3 +1769,47 @@
   - new driver regression (pass)
   - `lang/tests/stage2/test_mir_validate_variant_and_hygiene.py` (pass)
   - original external repro command now compiles successfully.
+
+## 2026-02-24 – Memcheck policy hardening + stdlib safe-buffer invariants
+- Added explicit valgrind fiber-suppression mode in e2e runner (opt-in, strict default):
+  - `lang/tests/codegen/e2e/runner.py`
+  - new env toggle: `DRIFT_VALGRIND_SUPPRESS_FIBER=1`
+  - behavior:
+    - default memcheck/massif remains strict (no suppressions),
+    - when enabled, runner passes `--suppressions=lang/tests/codegen/e2e/valgrind/fiber_context.supp`,
+    - preflight fails clearly if suppression file is requested but missing.
+  - docs updated:
+    - `lang/tests/codegen/e2e/README.md`.
+  - suppression file added:
+    - `lang/tests/codegen/e2e/valgrind/fiber_context.supp`
+    - scoped to known ucontext/swapcontext/fiber-runtime valgrind noise.
+
+- Fixed stdlib safe API invariant violation in sparse buffer writes:
+  - `stdlib/std/io/io.drift:430` (`buffer_write`)
+  - now zero-fills `[len, i)` before advancing `len` on sparse index writes, preventing uninitialized bytes from being exposed by safe write paths.
+  - regression added:
+    - `lang/tests/codegen/e2e/std_io_buffer_sparse_write_zeroed`.
+
+- Fixed stdlib safe API invariant violation in length-setting path:
+  - `stdlib/std/io/io.drift:418` (`buffer_set_len`)
+  - now:
+    - clamps target length into `[0, cap]`,
+    - zero-fills growth region `[old_len, target)`,
+    - assigns `self.len = target`.
+  - closes over-cap growth path that previously could set `len=cap` without initializing the newly exposed region.
+  - regression added/extended:
+    - `lang/tests/codegen/e2e/std_io_buffer_set_len_zeroed`
+    - covers growth zero-fill, shrink behavior, negative clamp, over-cap clamp + zero validation.
+
+- Fixed compiler ARC cleanup gap for internal borrow temporaries used in chains:
+  - `lang/driftc/stage2/string_arc.py`
+  - included `__borrow_tmp*` locals in:
+    - `destructible_locals` tracking (Logger leak path),
+    - `array_locals` tracking (defensive fallback path).
+  - added guardrail comment at `array_locals` filter documenting this as Stage 2 fallback when Stage 1 borrow materialization assumptions break.
+  - effect:
+    - `std_log_mvp_smoke` leak path resolved (borrow-temp-owned Logger clone state now dropped).
+
+- Classification and policy outcome:
+  - non-fiber memcheck findings in safe stdlib paths are treated as real bugs, not suppressible noise;
+  - only fiber/ucontext valgrind false-positive class is suppressible, and only via explicit opt-in.

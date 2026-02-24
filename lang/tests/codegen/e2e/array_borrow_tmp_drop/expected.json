@@ -1,0 +1,6 @@
+{
+  "description": "e2e: array-typed borrow temp from rvalue borrow is properly dropped",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

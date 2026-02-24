@@ -1,0 +1,6 @@
+{
+  "description": "e2e: buffer_write zero-fills gap bytes on sparse index write",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

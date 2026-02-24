@@ -1,0 +1,6 @@
+{
+  "description": "e2e: buffer_set_len zero-fills growth region, clamps to [0, cap]",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

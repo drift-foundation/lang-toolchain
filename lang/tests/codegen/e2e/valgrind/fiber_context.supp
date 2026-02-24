@@ -1,0 +1,388 @@
+# Suppressions for known valgrind noise in ucontext/swapcontext fiber switching paths.
+# This file is opt-in via DRIFT_VALGRIND_SUPPRESS_FIBER=1.
+#
+# The Drift fiber runtime uses ucontext-allocated stacks for virtual threads.
+# Valgrind cannot track register state across swapcontext/makecontext transitions,
+# causing false positives: uninitialised bits from fiber-switched registers propagate
+# into every glibc callee (mutex, condvar, TLS, etc.) on the fiber stack.
+
+# --- swapcontext / makecontext / getcontext (top-of-stack, no runtime frame above) ---
+
+{
+	drift_fiber_swapcontext_addr4
+	Memcheck:Addr4
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_addr8
+	Memcheck:Addr8
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_addr1
+	Memcheck:Addr1
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_cond
+	Memcheck:Cond
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_value8
+	Memcheck:Value8
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_param_set
+	Memcheck:Param
+	rt_sigprocmask(set)
+	fun:swapcontext
+}
+
+{
+	drift_fiber_swapcontext_param_oldset
+	Memcheck:Param
+	rt_sigprocmask(oldset)
+	fun:swapcontext
+}
+
+{
+	drift_fiber_makecontext_cond
+	Memcheck:Cond
+	fun:makecontext
+}
+
+{
+	drift_fiber_getcontext_cond
+	Memcheck:Cond
+	fun:getcontext
+}
+
+# --- drift_exec_worker call stack (broad — catches all glibc callees) ---
+
+{
+	drift_exec_worker_callee_value8
+	Memcheck:Value8
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_exec_worker_callee_cond
+	Memcheck:Cond
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_exec_worker_callee_addr8
+	Memcheck:Addr8
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_exec_worker_callee_addr4
+	Memcheck:Addr4
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_exec_worker_callee_addr1
+	Memcheck:Addr1
+	...
+	fun:drift_exec_worker
+}
+
+# --- drift_vt_fiber_entry call stack (broad — catches all callees on fiber stacks) ---
+
+{
+	drift_fiber_entry_callee_value8
+	Memcheck:Value8
+	...
+	fun:drift_vt_fiber_entry
+}
+
+{
+	drift_fiber_entry_callee_cond
+	Memcheck:Cond
+	...
+	fun:drift_vt_fiber_entry
+}
+
+{
+	drift_fiber_entry_callee_addr8
+	Memcheck:Addr8
+	...
+	fun:drift_vt_fiber_entry
+}
+
+{
+	drift_fiber_entry_callee_addr4
+	Memcheck:Addr4
+	...
+	fun:drift_vt_fiber_entry
+}
+
+{
+	drift_fiber_entry_callee_addr1
+	Memcheck:Addr1
+	...
+	fun:drift_vt_fiber_entry
+}
+
+# --- drift_exec_destroy / shutdown (main thread joining fiber worker threads) ---
+
+{
+	drift_exec_destroy_callee_value8
+	Memcheck:Value8
+	...
+	fun:drift_exec_destroy_internal
+}
+
+{
+	drift_exec_destroy_callee_cond
+	Memcheck:Cond
+	...
+	fun:drift_exec_destroy_internal
+}
+
+{
+	drift_exec_destroy_callee_param_futex
+	Memcheck:Param
+	futex(futex)
+	...
+	fun:drift_exec_destroy_internal
+}
+
+{
+	drift_exec_destroy_callee_param_futex_val
+	Memcheck:Param
+	futex(val)
+	...
+	fun:drift_exec_destroy_internal
+}
+
+{
+	drift_exec_shutdown_callee_cond
+	Memcheck:Cond
+	...
+	fun:drift_exec_shutdown_default_atexit
+}
+
+# --- futex syscall params from fiber-switched stacks ---
+
+{
+	drift_exec_worker_futex_param
+	Memcheck:Param
+	futex(futex)
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_exec_worker_futex_val_param
+	Memcheck:Param
+	futex(val)
+	...
+	fun:drift_exec_worker
+}
+
+{
+	drift_fiber_entry_futex_param
+	Memcheck:Param
+	futex(futex)
+	...
+	fun:drift_vt_fiber_entry
+}
+
+# --- glibc process-exit cleanup of fiber worker thread stacks ---
+# __libc_freeres → __nptl_free_stacks / _dl_deallocate_tls operates on
+# thread stacks that held fiber-switched contexts. No Drift runtime frame
+# remains in the stack at exit time.
+
+{
+	drift_nptl_free_stacks_value8
+	Memcheck:Value8
+	...
+	fun:__nptl_free_stacks
+}
+
+{
+	drift_nptl_free_stacks_cond
+	Memcheck:Cond
+	...
+	fun:__nptl_free_stacks
+}
+
+{
+	drift_nptl_free_stacks_param_munmap_start
+	Memcheck:Param
+	munmap(start)
+	...
+	fun:__nptl_free_stacks
+}
+
+{
+	drift_nptl_free_stacks_param_munmap_length
+	Memcheck:Param
+	munmap(length)
+	...
+	fun:__nptl_free_stacks
+}
+
+# --- glibc thread teardown syscall params ---
+
+{
+	drift_thread_teardown_rt_sigprocmask_param
+	Memcheck:Param
+	rt_sigprocmask(set)
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_madvise_start_param
+	Memcheck:Param
+	madvise(start)
+	...
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_madvise_length_param
+	Memcheck:Param
+	madvise(length)
+	...
+	fun:start_thread
+	fun:clone
+}
+
+# --- glibc thread teardown (TLS dealloc, stack unmap, etc.) ---
+# These fire during pthread teardown of fiber worker threads. The uninitialised
+# bits originate from fiber-switched register state but surface in glibc internals
+# after drift_exec_worker has already returned.
+
+{
+	drift_thread_teardown_start_thread_value8
+	Memcheck:Value8
+	...
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_start_thread_cond
+	Memcheck:Cond
+	...
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_start_thread_addr8
+	Memcheck:Addr8
+	...
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_start_thread_addr4
+	Memcheck:Addr4
+	...
+	fun:start_thread
+	fun:clone
+}
+
+{
+	drift_thread_teardown_futex_param
+	Memcheck:Param
+	futex(futex)
+	...
+	fun:start_thread
+	fun:clone
+}
+
+# --- Closure/lambda bodies running on fiber stacks ---
+# When a lambda runs on a fiber worker thread via swapcontext, valgrind cannot
+# unwind through the context switch. The error stack shows only the lambda frame
+# with no drift_exec_worker/drift_vt_fiber_entry above it. The capture array was
+# allocated on the spawning thread and accessed on the fiber thread; valgrind flags
+# the cross-context reads as invalid.
+
+{
+	drift_fiber_lambda_cb_spawn_addr8
+	Memcheck:Addr8
+	fun:*__lambda_cb_spawn*
+}
+
+{
+	drift_fiber_lambda_cb_spawn_addr4
+	Memcheck:Addr4
+	fun:*__lambda_cb_spawn*
+}
+
+{
+	drift_fiber_lambda_cb_spawn_addr1
+	Memcheck:Addr1
+	fun:*__lambda_cb_spawn*
+}
+
+{
+	drift_fiber_lambda_cb_spawn_value8
+	Memcheck:Value8
+	fun:*__lambda_cb_spawn*
+}
+
+{
+	drift_fiber_cb_drop_addr8
+	Memcheck:Addr8
+	fun:__drift_cb_drop_*
+}
+
+{
+	drift_fiber_cb_drop_addr4
+	Memcheck:Addr4
+	fun:__drift_cb_drop_*
+}
+
+{
+	drift_fiber_cb_drop_addr1
+	Memcheck:Addr1
+	fun:__drift_cb_drop_*
+}
+
+{
+	drift_fiber_cb_drop_value8
+	Memcheck:Value8
+	fun:__drift_cb_drop_*
+}
+
+# --- pthread_setspecific (may appear without runtime frame in truncated stacks) ---
+
+{
+	drift_fiber_setspecific_addr8
+	Memcheck:Addr8
+	fun:pthread_setspecific*
+}
+
+{
+	drift_fiber_setspecific_addr1
+	Memcheck:Addr1
+	fun:pthread_setspecific*
+}
+
+{
+	drift_fiber_setspecific_value8
+	Memcheck:Value8
+	fun:pthread_setspecific*
+}

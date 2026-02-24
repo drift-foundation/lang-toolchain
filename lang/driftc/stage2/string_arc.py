@@ -107,10 +107,13 @@ def insert_string_arc(
 		_type_needs_drop_cache[tid] = False
 		return False
 
+	# __borrow_tmp: Stage 1 (borrow_materialize.py) normally materialises rvalue
+	# borrows into __tmp_borrow* locals that get scope-based drops.  This Stage 2
+	# inclusion is a defensive fallback in case that assumption breaks.
 	array_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
-		if (not name.startswith("__")) or name.startswith("__match_binder_")
+		if (not name.startswith("__")) or name.startswith("__match_binder_") or name.startswith("__borrow_tmp")
 		if (tid := local_types.get(name)) is not None
 		and type_table.get(tid).kind is TypeKind.ARRAY
 	}
@@ -163,10 +166,11 @@ def insert_string_arc(
 		_nullsafe_drop_cache[tid] = False
 		return False
 
+	# __borrow_tmp: defensive fallback — see comment above array_locals.
 	destructible_locals: Set[str] = {
 		name
 		for name in (list(func.params) + list(func.locals))
-		if (not name.startswith("__")) or name.startswith("__match_binder_") or _is_error_tid(local_types.get(name))
+		if (not name.startswith("__")) or name.startswith("__match_binder_") or name.startswith("__borrow_tmp") or _is_error_tid(local_types.get(name))
 		if name not in string_locals
 		if name not in array_locals
 		if _is_destructible_tid(local_types.get(name))
