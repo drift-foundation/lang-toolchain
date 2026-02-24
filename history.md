@@ -1,3 +1,31 @@
+## 2026-02-24 - Function-scope `const` landed with module-parity typing and rematerialization semantics
+- Added block-scope `const` declarations (`const NAME: Type = expr;`) end-to-end across parser -> stage0 -> stage1 -> checker -> stage2.
+  - parser/grammar/AST:
+    - `lang/driftc/parser/grammar.lark` (`local_const_stmt` + `simple_stmt` integration)
+    - `lang/driftc/parser/parser.py` (`_build_local_const_stmt`)
+    - `lang/driftc/parser/ast.py` (`LocalConstStmt`)
+    - `lang/driftc/parser/__init__.py` (stage0 conversion dispatch)
+    - `lang/driftc/stage0/ast.py` (`LocalConstStmt`)
+  - stage1/HIR:
+    - `lang/driftc/stage1/ast_to_hir.py` (`HLocalConst` lowering)
+    - `lang/driftc/stage1/hir_nodes.py` (`HLocalConst`)
+    - pass plumbing updates in normalize/place/capture/borrow-materialize paths.
+- Semantics implemented as compile-time literal alias with no local storage:
+  - checker validates local-const initializer literal/type constraints.
+  - stage2 records local const values by `binding_id` and emits fresh MIR constants at each use site.
+  - critical invariant preserved: local const references do not lower to `LoadLocal`; non-Copy literals (for example `String`) are reusable across multiple use sites.
+- Parity hardening with module-scope const validation:
+  - aligned strict literal type checks for Int/Uint/Uint64/Byte/Bool/Float/String.
+  - removed local/module drift where `Float` accepted integer literals in one path.
+  - enforced bool exclusion from integer-family const declarations consistently (`Int/Uint/Uint64/Byte`).
+  - normalized parser const validation chain structure for readability/consistency.
+- Coverage added for local consts (`lang/tests/codegen/e2e/local_const_*`), including:
+  - positive: int/uint/byte/bool/float/string, unary negative, nested block scope, bitwise usage, module-shadowing, and multi-use `String` const.
+  - negative: non-literal initializer, call initializer, var-ref initializer, type mismatch, byte out-of-range, not-exported local const, and mut-borrow rejection.
+- Spec/TODO tracking:
+  - local const support and semantics reflected in `docs/design/drift-lang-spec.md`.
+  - post-MVP composite const follow-up captured in `TODO.md` (`[Const]` composite const values).
+
 ## 2026-02-23 - Void bindability fix for generic `T=Void` instantiation paths
 - Resolved LANGUAGE_BUG where instantiated generic bodies with `T=Void` produced checker error `cannot bind a Void value` in valid code paths.
 - Root cause was confirmed in instantiated function body analysis (not callsite/main collapse): local bind of a `Void`-typed value in generic code.
