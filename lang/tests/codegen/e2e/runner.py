@@ -112,6 +112,26 @@ def _physical_cpu_count_linux() -> int | None:
 	return None
 
 
+def _preflight_runtime_mode_error() -> str | None:
+	"""Return a user-facing preflight error for invalid runtime-mode env combos."""
+	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
+	massif_enabled = _env_true("DRIFT_MASSIF")
+	asan_enabled = _env_true("DRIFT_ASAN")
+	if asan_enabled and (memcheck_enabled or massif_enabled):
+		return (
+			"invalid runtime mode: DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF; "
+			"unset one mode and rerun"
+		)
+	if memcheck_enabled and massif_enabled:
+		return (
+			"invalid runtime mode: DRIFT_MEMCHECK and DRIFT_MASSIF are mutually exclusive; "
+			"choose one and rerun"
+		)
+	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
+		return "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
+	return None
+
+
 def _run_ir_with_clang(
 	ir: str,
 	build_dir: Path,
@@ -816,6 +836,10 @@ def main(argv: Iterable[str] | None = None) -> int:
 		help="Remove the effective build root directory at the end of the run",
 	)
 	args = ap.parse_args(argv)
+	preflight_err = _preflight_runtime_mode_error()
+	if preflight_err is not None:
+		print(f"[codegen e2e] preflight: {preflight_err}", file=sys.stderr)
+		return 2
 	start_time = time.monotonic() if args.summarize else None
 	if args.debug:
 		print(f"[codegen e2e] build root: {BUILD_ROOT}", file=sys.stderr)

@@ -1,3 +1,28 @@
+## 2026-02-24 - Lexical-scope hardening completed in checker walk paths
+- Hardened checker lexical scoping in `lang/driftc/checker/__init__.py` by introducing a scoped locals context (`_scoped_locals`) and replacing repeated manual save/restore logic across block-introducing constructs.
+- Updated `_walk_hir` traversal to use scoped-local isolation for:
+  - `HIf` (then/else),
+  - `HLoop`,
+  - `HTry` (body + each catch arm),
+  - `HBlock`,
+  - `HUnsafeBlock`,
+  - `HMatchExpr` arm traversal.
+- Implemented catch-binder typing in checker walk path:
+  - catch binders are now seeded as `Error` (`ensure_error()`) inside each catch arm scope,
+  - removed prior catch-arm `report_unknown_names` suppression for `_walk_hir`.
+- Completed walker coverage audit and fixed missing statement handling:
+  - added `HAugAssign` and `HAssert` expression walking to both main checker walk and throw-analysis walk,
+  - documented `HRethrow` as a leaf in main walk path.
+- Normalized unknown-name diagnostic wording in type checker:
+  - `lang/driftc/type_checker.py` now emits `unknown name '{name}'` (aligned with checker diagnostics).
+- Added comprehensive e2e regression matrix for scope behavior under `lang/tests/codegen/e2e/`:
+  - 14 negative scope-leak cases,
+  - 8 positive in-scope visibility cases,
+  - including explicit catch-binder visibility/leak coverage (`catch_binder_visible_in_arm`, `catch_binder_scope_leak`) and local-const scope leak checks in if/loop/catch/match contexts.
+- Validation status:
+  - targeted regression set green,
+  - full test pass confirmed for this batch.
+
 ## 2026-02-24 - Function-scope `const` landed with module-parity typing and rematerialization semantics
 - Added block-scope `const` declarations (`const NAME: Type = expr;`) end-to-end across parser -> stage0 -> stage1 -> checker -> stage2.
   - parser/grammar/AST:
