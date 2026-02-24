@@ -2634,7 +2634,7 @@ class Checker:
 					# Type-match validation (same as module const).
 					ok = False
 					tt = self._type_table
-					if decl_ty == tt.ensure_byte() and isinstance(val, int):
+					if decl_ty == tt.ensure_byte() and isinstance(val, int) and not isinstance(val, bool):
 						if val < 0 or val > 255:
 							ctx._append_diag(
 								_chk_diag(
@@ -2645,17 +2645,17 @@ class Checker:
 							)
 						else:
 							ok = True
-					elif decl_ty == tt.ensure_int() and isinstance(val, int):
+					elif decl_ty == tt.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
 						ok = True
-					elif decl_ty == tt.ensure_uint() and isinstance(val, int) and val >= 0:
+					elif decl_ty == tt.ensure_uint() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
 						ok = True
-					elif decl_ty == tt.ensure_uint64() and isinstance(val, int) and val >= 0:
+					elif decl_ty == tt.ensure_uint64() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
 						ok = True
 					elif decl_ty == tt.ensure_bool() and isinstance(val, bool):
 						ok = True
 					elif decl_ty == tt.ensure_string() and isinstance(val, str):
 						ok = True
-					elif decl_ty == tt.ensure_float() and isinstance(val, (int, float)):
+					elif decl_ty == tt.ensure_float() and isinstance(val, float):
 						ok = True
 					if not ok:
 						ctx._append_diag(

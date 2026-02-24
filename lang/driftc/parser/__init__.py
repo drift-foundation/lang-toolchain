@@ -4030,7 +4030,7 @@ def _lower_parsed_program_to_hir(
 		# and packages must be able to embed them deterministically without
 		# re-running the evaluator.
 		ok = False
-		if decl_ty == type_table.ensure_byte() and isinstance(val, int):
+		if decl_ty == type_table.ensure_byte() and isinstance(val, int) and not isinstance(val, bool):
 			if val < 0 or val > 255:
 				diagnostics.append(
 					_p_diag(
@@ -4042,11 +4042,11 @@ def _lower_parsed_program_to_hir(
 				)
 				continue
 			ok = True
-		if decl_ty == type_table.ensure_int() and isinstance(val, int):
+		elif decl_ty == type_table.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
 			ok = True
-		elif decl_ty == type_table.ensure_uint() and isinstance(val, int) and val >= 0:
+		elif decl_ty == type_table.ensure_uint() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
 			ok = True
-		elif decl_ty == type_table.ensure_uint64() and isinstance(val, int) and val >= 0:
+		elif decl_ty == type_table.ensure_uint64() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
 			ok = True
 		elif decl_ty == type_table.ensure_bool() and isinstance(val, bool):
 			ok = True
