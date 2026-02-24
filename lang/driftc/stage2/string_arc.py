@@ -644,6 +644,18 @@ def insert_string_arc(
 				new_instrs.append(M.ZeroValue(dest=zero, ty=arr_ty))
 				new_instrs.append(M.StoreLocal(local=local, value=zero))
 				local_types[zero] = arr_ty
+			for local in func.locals:
+				if local in func.params:
+					continue
+				if local not in destructible_locals:
+					continue
+				dest_ty = local_types.get(local)
+				if dest_ty is None:
+					continue
+				zero = _new_temp()
+				new_instrs.append(M.ZeroValue(dest=zero, ty=dest_ty))
+				new_instrs.append(M.StoreLocal(local=local, value=zero))
+				local_types[zero] = dest_ty
 		# Count uses in this block for temp string values.
 		use_counts: Dict[str, int] = {}
 		producers: Dict[str, M.MInstr] = {}
@@ -734,6 +746,10 @@ def insert_string_arc(
 				explicitly_dropped_locals.discard(instr.local)
 			if isinstance(instr, M.StoreLocal) and instr.local in array_locals:
 				_drop_array_local(instr.local, new_instrs)
+				new_instrs.append(instr)
+				continue
+			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
+				_drop_destructible_local(instr.local, new_instrs)
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.MoveOut):

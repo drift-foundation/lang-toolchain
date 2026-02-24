@@ -1,0 +1,6 @@
+{
+  "description": "e2e: struct with Array<Int> field is properly dropped at function exit",
+  "exit_code": 30,
+  "stdout": "",
+  "stderr": ""
+}

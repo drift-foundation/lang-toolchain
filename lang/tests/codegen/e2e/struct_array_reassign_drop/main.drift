@@ -1,0 +1,9 @@
+module main
+
+struct Wrapper { data: Array<Int> }
+
+fn main() nothrow -> Int {
+	var w = Wrapper(data = [10, 20]);
+	w = Wrapper(data = [30, 40]);
+	return w.data[0] + w.data[1];
+}

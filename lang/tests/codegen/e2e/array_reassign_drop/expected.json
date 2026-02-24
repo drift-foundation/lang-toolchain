@@ -1,0 +1,6 @@
+{
+  "description": "e2e: bare array drops old value on reassignment",
+  "exit_code": 70,
+  "stdout": "",
+  "stderr": ""
+}

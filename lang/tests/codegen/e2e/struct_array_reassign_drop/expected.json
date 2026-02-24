@@ -1,0 +1,6 @@
+{
+  "description": "e2e: struct with Array field drops old value on reassignment",
+  "exit_code": 70,
+  "stdout": "",
+  "stderr": ""
+}
