@@ -603,6 +603,7 @@ class LlvmModuleBuilder:
 	_dbg_empty_md_id: int | None = None
 	_dbg_module_flag_ids: tuple[int, int] | None = None
 	_dbg_type_ids: Dict[TypeId, int] = field(default_factory=dict)
+	_global_ctors: List[str] = field(default_factory=list)
 	_dbg_expression_id: int | None = None
 	needs_dbg_intrinsics: bool = False
 
@@ -910,12 +911,9 @@ class LlvmModuleBuilder:
 		process ABI. Err-mapping is not yet implemented; the wrapper simply
 		truncates the isize return to i32 for exit.
 		"""
-		from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
-		abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 		lines = [
 			"define i32 @main() {",
 			"entry:",
-			f"  call void @{abi_sym}()",
 		]
 		if install_process_preamble:
 			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
@@ -928,7 +926,6 @@ class LlvmModuleBuilder:
 			]
 		)
 		self.funcs.append("\n".join(lines))
-		self._abi_version_sym = abi_sym
 
 	def emit_argv_entry_wrapper(self, user_main: str, array_type: str, install_process_preamble: bool = False) -> None:
 		"""
@@ -937,18 +934,14 @@ class LlvmModuleBuilder:
 		Builds Array<String> via the runtime helper and truncates the isize Int
 		result to i32 for the process exit code.
 		"""
-		from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
-		abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 		self.needs_argv_helper = True
 		self.array_string_type = array_type
 		lines = [
 			"define i32 @main(i32 %argc, i8** %argv) {",
 			"entry:",
-			f"  call void @{abi_sym}()",
 		]
 		if install_process_preamble:
 			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
-		self._abi_version_sym = abi_sym
 		lines.extend(
 			[
 				"  %arr.ptr = alloca %DriftArrayHeader",
@@ -969,6 +962,17 @@ class LlvmModuleBuilder:
 			]
 		)
 		self.funcs.append("\n".join(lines))
+
+	def emit_abi_stamp(self) -> None:
+		"""Register the ABI version marker via an LLVM module-level constructor.
+
+		This ensures every codegen unit carries the stamp regardless of whether
+		an OS entry wrapper is emitted.  Safe to call more than once (idempotent)."""
+		if getattr(self, "_abi_version_sym", None):
+			return
+		from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
+		self._abi_version_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
+		self._global_ctors.append("@__drift_abi_check")
 
 	def render(self) -> str:
 		lines: List[str] = []
@@ -1219,6 +1223,17 @@ class LlvmModuleBuilder:
 			)
 		if getattr(self, "_abi_version_sym", None):
 			lines.append(f"declare void @{self._abi_version_sym}()")
+			lines.append("")
+			lines.append("define internal void @__drift_abi_check() {")
+			lines.append("entry:")
+			lines.append(f"  call void @{self._abi_version_sym}()")
+			lines.append("  ret void")
+			lines.append("}")
+			lines.append("")
+		if self._global_ctors:
+			n = len(self._global_ctors)
+			entries = ", ".join(f"{{ i32, void ()*, i8* }} {{ i32 65535, void ()* {fn}, i8* null }}" for fn in self._global_ctors)
+			lines.append(f"@llvm.global_ctors = appending global [{n} x {{ i32, void ()*, i8* }}] [{entries}]")
 			lines.append("")
 		lines.extend(self.funcs)
 		if self.debug_enabled and self._dbg_compile_unit_id is not None:

@@ -2,7 +2,7 @@
 
 Date: 2026-02-25
 Owner: compiler team
-Status: planned
+Status: completed (2026-02-25)
 
 ## 1. Problem statement
 `driftc`, `libdrift_rt.a`, and stdlib artifacts can drift in version. When compiler-generated ABI expectations and runtime-provided ABI differ, failures currently show up as runtime crashes or opaque behavior instead of deterministic build-time errors.
@@ -125,6 +125,25 @@ Feature is complete when all are true:
 3. Link mismatch regression fails deterministically with clear symbol evidence.
 4. Matching versions pass full relevant compile/link tests.
 5. Docs/history updated with policy and bump guidance.
+
+## 12. Implementation outcome (completed)
+- Phase A complete:
+  - runtime marker symbol exported from `lang/language_runtime/abi_version_stamp.c`
+  - runtime build injects `-DDRIFT_RT_ABI_VERSION=<N>` from `lang/driftc/driftc_versions.py`
+  - all runtime archive variants include the marker.
+- Phase B complete:
+  - compiler emits ABI marker reference in production entrypoint-linked code paths.
+  - implementation uses module ctor registration for stamped modules.
+- Phase C complete:
+  - driver appends ABI mismatch hint when linker stderr contains `__drift_rt_abi_version_`.
+- Phase D complete:
+  - ABI stamping and bump guidance documented in `docs/design/drift-lang-abi.md` and agent policy (`AGENTS.md`).
+- §11 complete:
+  - `driftc --version` / `-V` outputs compiler version, ABI version, git SHA (when available), license, and foundation.
+
+### Final contract note
+- Stamp emission is intentionally tied to code paths that are expected to link against runtime (entrypoint-enforced or argv-wrapper paths).
+- Helper-only IR paths used by bare-clang unit tests remain unstamped to avoid introducing runtime-link dependency into low-level tests.
 
 ## 10. Nice-to-have follow-up
 - Extend mechanism to also stamp stdlib package ABI compatibility if/when stdlib binary ABI gets independently versioned.

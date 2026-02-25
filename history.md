@@ -70,6 +70,9 @@
 - Added/updated regressions:
   - `lang/tests/driver/test_abi_version_stamp.py` verifies IR marker presence and mismatch link failure contract.
   - Phase C hint test is intentionally predicate-level (validated on real mismatch linker stderr), with full driver interception e2e deferred due to harness complexity.
+- Finalized stamp scope:
+  - runtime-linked/entrypoint-enforced codegen paths emit ABI stamp,
+  - helper-only bare-clang IR paths remain unstamped to preserve low-level test independence from runtime archives.
   - `docs/design/drift-lang-spec.md` updated for:
     - cast semantics scope (runtime now; const-cast semantics noted as forward-looking),
     - fixed-width reservation exception for `Uint64`,

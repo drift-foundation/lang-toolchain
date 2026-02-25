@@ -5479,9 +5479,11 @@ def compile_to_llvm_ir_for_tests(
 				rename_map[entry_id] = "drift_main"
 				argv_wrapper = "drift_main"
 
-	# For main::main without argv, rename body to drift_main so the
-	# OS entry wrapper (@main) can call it without symbol collision.
-	if argv_wrapper is None and entry_id is not None and entry_id.module == "main" and entry_id.name == "main":
+	# For main::main without argv, only force drift_main + OS wrapper when
+	# entrypoint enforcement is requested (CLI/real-build path). Driver/unit
+	# helper callers rely on historical behavior where plain main() stays as
+	# user function unless argv-wrapper shape is required.
+	if enforce_entrypoint and argv_wrapper is None and entry_id is not None and entry_id.module == "main" and entry_id.name == "main":
 		rename_map[entry_id] = "drift_main"
 
 	fn_infos = dict(checked.fn_infos_by_id)
@@ -5530,13 +5532,17 @@ def compile_to_llvm_ir_for_tests(
 		)
 		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 		return "", checked
+	if enforce_entrypoint or argv_wrapper is not None:
+		module.emit_abi_stamp()
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
 		for fn_id in fn_infos.keys()
 	)
-	# Always emit a thin OS wrapper (@main) so the ABI version stamp is
-	# present.  For main::main the body was renamed to drift_main above.
-	if argv_wrapper is None:
+	# Emit OS wrapper for:
+	# - argv entry shape (always), or
+	# - explicit entrypoint-enforced path (CLI/real-build behavior).
+	# Keep plain helper codegen paths wrapper-free for historical IR contracts.
+	if enforce_entrypoint and argv_wrapper is None:
 		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
 		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
 	return module.render(), checked
@@ -8239,6 +8245,7 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
+		module.emit_abi_stamp()
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(

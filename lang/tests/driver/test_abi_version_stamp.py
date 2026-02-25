@@ -24,7 +24,7 @@ from lang.tests.support.module_packages import mk_module
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _compile_simple_program(tmp_path: Path) -> str:
+def _compile_simple_program(tmp_path: Path, *, enforce_entrypoint: bool = False) -> str:
 	"""Compile a trivial main program and return LLVM IR text."""
 	(tmp_path / "app").mkdir(parents=True, exist_ok=True)
 	(tmp_path / "app" / "main.drift").write_text(
@@ -50,6 +50,7 @@ def _compile_simple_program(tmp_path: Path) -> str:
 		type_table=type_table,
 		module_exports=module_exports,
 		module_deps=module_deps,
+		enforce_entrypoint=enforce_entrypoint,
 	)
 	assert not checked.diagnostics
 	assert ir
@@ -58,15 +59,31 @@ def _compile_simple_program(tmp_path: Path) -> str:
 
 def test_ir_contains_abi_version_call(tmp_path: Path) -> None:
 	"""Generated IR must contain a call to the ABI version marker."""
-	ir = _compile_simple_program(tmp_path)
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 	assert f"call void @{abi_sym}()" in ir, f"ABI marker call not found in IR"
 	assert f"declare void @{abi_sym}()" in ir, f"ABI marker declaration not found in IR"
 
 
+def test_abi_stamp_absent_without_wrapper(tmp_path: Path) -> None:
+	"""Helper path (enforce_entrypoint=False) omits ABI stamp and OS wrapper."""
+	ir = _compile_simple_program(tmp_path)
+	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
+	assert f"call void @{abi_sym}()" not in ir
+	assert "define i32 @main()" not in ir
+
+
+def test_abi_stamp_present_with_wrapper(tmp_path: Path) -> None:
+	"""Production wrapper path (enforce_entrypoint=True) contains ABI marker and OS wrapper."""
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
+	assert f"call void @{abi_sym}()" in ir
+	assert "define i32 @main()" in ir
+
+
 def test_abi_version_mismatch_link_failure(tmp_path: Path) -> None:
 	"""Patching IR to reference wrong ABI version must cause a link failure."""
-	ir = _compile_simple_program(tmp_path)
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 	assert abi_sym in ir
 	bogus_version = DRIFT_RT_ABI_VERSION + 999
@@ -108,7 +125,7 @@ def test_abi_version_mismatch_link_failure(tmp_path: Path) -> None:
 
 def test_abi_mismatch_driver_hint(tmp_path: Path) -> None:
 	"""Phase C: driftc driver emits ABI compatibility hint on version mismatch."""
-	ir = _compile_simple_program(tmp_path)
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 	bogus_version = DRIFT_RT_ABI_VERSION + 999
 	bogus_sym = f"__drift_rt_abi_version_{bogus_version}"
