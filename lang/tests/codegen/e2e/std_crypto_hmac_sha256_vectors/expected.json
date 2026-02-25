@@ -1,0 +1,4 @@
+{
+  "description": "e2e: HMAC-SHA256 RFC 4231 vectors — short key, ASCII key, over-block-size key",
+  "exit_code": 0
+}

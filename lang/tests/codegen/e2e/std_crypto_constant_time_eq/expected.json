@@ -1,0 +1,4 @@
+{
+  "description": "e2e: constant_time_eq correctness — equal, unequal, length mismatch, empty",
+  "exit_code": 0
+}

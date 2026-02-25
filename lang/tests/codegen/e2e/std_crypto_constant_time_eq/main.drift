@@ -1,0 +1,75 @@
+module m
+
+import std.crypto as crypto;
+
+pub fn main() nothrow -> Int {
+	var a: Array<Byte> = [];
+	a.push(cast<Byte>(1));
+	a.push(cast<Byte>(2));
+	a.push(cast<Byte>(3));
+
+	var b: Array<Byte> = [];
+	b.push(cast<Byte>(1));
+	b.push(cast<Byte>(2));
+	b.push(cast<Byte>(3));
+
+	if not crypto.constant_time_eq(&a, &b) {
+		return 1;
+	}
+
+	var c: Array<Byte> = [];
+	c.push(cast<Byte>(1));
+	c.push(cast<Byte>(2));
+	c.push(cast<Byte>(4));
+
+	if crypto.constant_time_eq(&a, &c) {
+		return 2;
+	}
+
+	var d: Array<Byte> = [];
+	d.push(cast<Byte>(1));
+	d.push(cast<Byte>(2));
+
+	if crypto.constant_time_eq(&a, &d) {
+		return 3;
+	}
+
+	var e1: Array<Byte> = [];
+	var e2: Array<Byte> = [];
+
+	if not crypto.constant_time_eq(&e1, &e2) {
+		return 4;
+	}
+
+	if crypto.constant_time_eq(&e1, &a) {
+		return 5;
+	}
+
+	var f: Array<Byte> = [];
+	f.push(cast<Byte>(0));
+	f.push(cast<Byte>(0));
+	f.push(cast<Byte>(0));
+
+	var g: Array<Byte> = [];
+	g.push(cast<Byte>(0));
+	g.push(cast<Byte>(0));
+	g.push(cast<Byte>(1));
+
+	if crypto.constant_time_eq(&f, &g) {
+		return 6;
+	}
+
+	var h: Array<Byte> = [];
+	h.push(cast<Byte>(255));
+	h.push(cast<Byte>(255));
+
+	var j: Array<Byte> = [];
+	j.push(cast<Byte>(255));
+	j.push(cast<Byte>(255));
+
+	if not crypto.constant_time_eq(&h, &j) {
+		return 7;
+	}
+
+	return 0;
+}

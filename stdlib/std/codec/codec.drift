@@ -14,6 +14,8 @@ export {
 	base64_encode,
 	base64_decode,
 	base64_decoder,
+	base64url_encode,
+	base64url_decode,
 	base32_encode,
 	base32_decode,
 	base32_decoder
@@ -254,6 +256,170 @@ pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
 
 pub fn base32_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 	return _base32_decode_impl(s, false, false);
+}
+
+pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	if n <= 0 {
+		return "";
+	}
+	val full_groups = n / 3;
+	val rem = n % 3;
+	var out_len = full_groups * 4;
+	if rem == 1 {
+		out_len = out_len + 2;
+	}
+	if rem == 2 {
+		out_len = out_len + 3;
+	}
+	var out = io.buffer(out_len);
+	var i = 0;
+	var o = 0;
+	while i + 2 < n {
+		val b0 = _byte_u8(bytes[i]);
+		val b1 = _byte_u8(bytes[i + 1]);
+		val b2 = _byte_u8(bytes[i + 2]);
+		val c0 = (b0 / 4) % 64;
+		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
+		val c2 = ((b1 % 16) * 4 + (b2 / 64)) % 64;
+		val c3 = b2 % 64;
+		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
+		io.buffer_write(&mut out, o + 2, _b64url_alphabet_byte(c2));
+		io.buffer_write(&mut out, o + 3, _b64url_alphabet_byte(c3));
+		i = i + 3;
+		o = o + 4;
+	}
+	if rem == 1 {
+		val b0 = _byte_u8(bytes[i]);
+		val c0 = (b0 / 4) % 64;
+		val c1 = ((b0 % 4) * 16) % 64;
+		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
+	}
+	if rem == 2 {
+		val b0 = _byte_u8(bytes[i]);
+		val b1 = _byte_u8(bytes[i + 1]);
+		val c0 = (b0 / 4) % 64;
+		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
+		val c2 = ((b1 % 16) * 4) % 64;
+		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
+		io.buffer_write(&mut out, o + 2, _b64url_alphabet_byte(c2));
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+}
+
+pub fn base64url_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
+	val n = s.byte_length();
+	if n == 0 {
+		var empty: Array<Byte> = [];
+		return core.Result::Ok(move empty);
+	}
+	if n % 4 == 1 {
+		return core.Result::Err(CodecError(tag = "base64url-invalid-length", offset = n));
+	}
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i + 3 < n {
+		val b0 = core.string_byte_at(s, i);
+		val b1 = core.string_byte_at(s, i + 1);
+		val b2 = core.string_byte_at(s, i + 2);
+		val b3 = core.string_byte_at(s, i + 3);
+		if _byte_u8(b0) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i));
+		}
+		if _byte_u8(b1) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 1));
+		}
+		if _byte_u8(b2) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 2));
+		}
+		if _byte_u8(b3) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 3));
+		}
+		val v0 = _b64url_value(b0);
+		val v1 = _b64url_value(b1);
+		val v2 = _b64url_value(b2);
+		val v3 = _b64url_value(b3);
+		if v0 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i));
+		}
+		if v1 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 1));
+		}
+		if v2 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 2));
+		}
+		if v3 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 3));
+		}
+		val o0 = (v0 * 4 + (v1 / 16)) % 256;
+		val o1 = ((v1 % 16) * 16 + (v2 / 4)) % 256;
+		val o2 = ((v2 % 4) * 64 + v3) % 256;
+		out.push(cast<Byte>(o0));
+		out.push(cast<Byte>(o1));
+		out.push(cast<Byte>(o2));
+		i = i + 4;
+	}
+	val tail = n - i;
+	if tail == 2 {
+		val b0 = core.string_byte_at(s, i);
+		val b1 = core.string_byte_at(s, i + 1);
+		if _byte_u8(b0) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i));
+		}
+		if _byte_u8(b1) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 1));
+		}
+		val v0 = _b64url_value(b0);
+		val v1 = _b64url_value(b1);
+		if v0 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i));
+		}
+		if v1 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 1));
+		}
+		if v1 % 16 != 0 {
+			return core.Result::Err(CodecError(tag = "base64url-non-canonical", offset = i + 1));
+		}
+		val o0 = (v0 * 4 + (v1 / 16)) % 256;
+		out.push(cast<Byte>(o0));
+	}
+	if tail == 3 {
+		val b0 = core.string_byte_at(s, i);
+		val b1 = core.string_byte_at(s, i + 1);
+		val b2 = core.string_byte_at(s, i + 2);
+		if _byte_u8(b0) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i));
+		}
+		if _byte_u8(b1) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 1));
+		}
+		if _byte_u8(b2) == 61 {
+			return core.Result::Err(CodecError(tag = "base64url-padding-rejected", offset = i + 2));
+		}
+		val v0 = _b64url_value(b0);
+		val v1 = _b64url_value(b1);
+		val v2 = _b64url_value(b2);
+		if v0 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i));
+		}
+		if v1 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 1));
+		}
+		if v2 == -1 {
+			return core.Result::Err(CodecError(tag = "base64url-invalid-char", offset = i + 2));
+		}
+		if v2 % 4 != 0 {
+			return core.Result::Err(CodecError(tag = "base64url-non-canonical", offset = i + 2));
+		}
+		val o0 = (v0 * 4 + (v1 / 16)) % 256;
+		val o1 = ((v1 % 16) * 16 + (v2 / 4)) % 256;
+		out.push(cast<Byte>(o0));
+		out.push(cast<Byte>(o1));
+	}
+	return core.Result::Ok(move out);
 }
 
 fn _hex_decode_impl(s: &String, allow_whitespace: Bool, allow_prefix_0x: Bool) nothrow -> core.Result<Array<Byte>, CodecError> {
@@ -533,6 +699,30 @@ fn _b64_value(b: Byte, allow_url_safe: Bool) nothrow -> Int {
 	}
 	if v == 61 {
 		return -2;
+	}
+	return -1;
+}
+
+fn _b64url_alphabet_byte(v: Int) nothrow -> Byte {
+	return core.string_byte_at("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", v);
+}
+
+fn _b64url_value(b: Byte) nothrow -> Int {
+	val v = _byte_u8(b);
+	if v >= 65 and v <= 90 {
+		return v - 65;
+	}
+	if v >= 97 and v <= 122 {
+		return v - 97 + 26;
+	}
+	if v >= 48 and v <= 57 {
+		return v - 48 + 52;
+	}
+	if v == 45 {
+		return 62;
+	}
+	if v == 95 {
+		return 63;
 	}
 	return -1;
 }
