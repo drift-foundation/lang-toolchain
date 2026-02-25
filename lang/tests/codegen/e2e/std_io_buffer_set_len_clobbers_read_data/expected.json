@@ -1,0 +1,4 @@
+{
+  "description": "e2e: buffer_set_len must not zero-fill bytes already written by io_read (regression for TcpStream read data clobber)",
+  "exit_code": 0
+}

@@ -433,6 +433,22 @@ pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
 	self.len = target;
 }
 
+// Set buffer length after a successful read syscall that already
+// wrote `len` bytes into the raw pointer.  Unlike buffer_set_len
+// this does NOT zero-fill the region, because the bytes are already
+// populated by the kernel.  Callers: InputStream.input_read (inline),
+// TcpStream.read, UdpSocket.recv_from / recv_from_v6.
+pub fn buffer_commit_read(self: &mut Buffer, len: Int) nothrow -> Void {
+	var target = len;
+	if target < 0 {
+		target = 0;
+	}
+	if target > self.cap {
+		target = self.cap;
+	}
+	self.len = target;
+}
+
 pub fn buffer_ptr(self: &Buffer) nothrow -> mem.Ptr<Byte> {
 	return mem.rawbuffer_ptr<type Byte>(&self.buf);
 }

@@ -243,7 +243,7 @@ implement TcpStream {
 		while true {
 			val n = thread.io_read(self.fd, ptr, len);
 			if n >= 0 {
-				io.buffer_set_len(buf, n);
+				io.buffer_commit_read(buf, n);
 				return core.Result::Ok(n);
 			}
 			val err = thread.io_errno();
@@ -433,7 +433,7 @@ implement UdpSocket {
 		while true {
 			val n = thread.net_udp_recv_from(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
 			if n >= 0 {
-				io.buffer_set_len(buf, n);
+				io.buffer_commit_read(buf, n);
 				return core.Result::Ok(n);
 			}
 			val err = thread.io_errno();
@@ -468,7 +468,7 @@ implement UdpSocket {
 		while true {
 			val n = thread.net_udp_recv_from_v6(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
 			if n >= 0 {
-				io.buffer_set_len(buf, n);
+				io.buffer_commit_read(buf, n);
 				return core.Result::Ok(n);
 			}
 			val err = thread.io_errno();
