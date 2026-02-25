@@ -1606,6 +1606,10 @@ class Checker:
 					if expr.op in comparison_ops:
 						return checker._bool_type
 					return checker._int_type
+				if left_ty == checker._uint_type and right_ty == checker._uint_type:
+					if expr.op in comparison_ops:
+						return checker._bool_type
+					return checker._uint_type
 				if expr.op in (H.BinaryOp.EQ, H.BinaryOp.NE) and left_ty is not None and right_ty is not None and left_ty == right_ty:
 					left_def = self.table.get(left_ty)
 					if left_def.kind in (TypeKind.VARIANT, TypeKind.INTERFACE, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT):
@@ -1638,6 +1642,16 @@ class Checker:
 						return sub_ty
 					return None
 				return sub_ty
+
+			if hasattr(H, "HCast") and isinstance(expr, getattr(H, "HCast")):
+				te = getattr(expr, "target_type_expr", None)
+				if te is not None:
+					mod = getattr(getattr(self.current_fn, "signature", None), "module", None) if self.current_fn and self.current_fn.signature else None
+					try:
+						return checker._resolve_typeexpr(te, module_id=mod)
+					except (KeyError, AttributeError, TypeError):
+						pass
+				return None
 
 			if isinstance(expr, H.HArrayLiteral):
 				if not expr.elements:
