@@ -22,6 +22,47 @@
   - all four pass under `DRIFT_ASAN=1`,
   - all four pass under `DRIFT_MEMCHECK=1`.
 
+## 2026-02-25 - language enhancement batch completed (crypto feedback Items 1-4)
+- Completed `work/lang-enhancment-260224/plan.md` Item 1-4 sequence with compiler-first fixes and stdlib cleanup.
+
+- Item 1 (LANGUAGE_BUG) - checker Uint inference:
+  - `lang/driftc/checker/__init__.py`
+  - added `Uint op Uint -> Uint` inference for supported binary operators (shift/bitwise/arithmetic),
+  - added `HCast` target-type inference in `_infer_expr_type` so `cast<Uint>(...)` participates in inference chains.
+  - Result: removed need for defensive `: Uint` annotations in valid Uint-heavy code.
+
+- Item 2 (LANGUAGE_BUG) - match binder payload typing:
+  - verified binder payload propagation in checker walk path is active and stable for Result/variant payload use.
+  - regression coverage added for binder payload access patterns (including direct indexing path).
+
+- Item 3 (language enhancement) - Uint literal suffix + const array support:
+  - End-to-end pipeline added:
+    - parser grammar: `UINT_LIT`
+    - parser AST: `UintLiteral`
+    - stage1 HIR: `HLiteralUint`
+    - stage2 MIR: `ConstUint` / `ConstArray`
+    - LLVM: const arrays lowered as read-only globals.
+  - Introduced `_UintConst` tagged const-eval wrapper in parser/checker const validation to preserve Uint-origin and prevent Int-erasure acceptance.
+  - Added target-aware Uint bounds using `TypeTable.word_bits`/`uint_max`:
+    - `Uint` now validates against target word size (`--target-word-bits`),
+    - `Uint64` remains fixed 64-bit (`[0, 2^64-1]`).
+  - Replaced signed-integer literal token usage in expression parsing path to fix no-space subtraction regressions (`5-1`, `5u-1u`).
+  - Consolidated const validation through shared `validate_const_value(...)` path in `lang/driftc/types_core.py` to remove parser/checker drift.
+
+- Item 4 (post-fix cleanup) - stdlib crypto modernization using new language support:
+  - `stdlib/std/crypto/crypto.drift`
+  - removed forced `: Uint` local annotations in `_ror32`,
+  - replaced 64-branch `_sha256_k(...)` selector with `const SHA256_K: Array<Uint> = [...]`,
+  - compression loop now uses `SHA256_K[t]`,
+  - removed `U32_MOD` usage in favor of bitwise equivalents (`& U32_MASK`, `>> 32`) for target-safe behavior.
+  - Outcome: crypto/codec vectors remain byte-identical; targeted revalidation suite green.
+
+- Spec sync for this batch:
+  - `docs/design/drift-lang-spec.md` updated for:
+    - cast semantics scope (runtime now; const-cast semantics noted as forward-looking),
+    - fixed-width reservation exception for `Uint64`,
+    - `u`-suffix semantics as general expression form (not declaration-only).
+
 ## 2026-02-24 - Lexical-scope hardening completed in checker walk paths
 - Hardened checker lexical scoping in `lang/driftc/checker/__init__.py` by introducing a scoped locals context (`_scoped_locals`) and replacing repeated manual save/restore logic across block-introducing constructs.
 - Updated `_walk_hir` traversal to use scoped-local isolation for:

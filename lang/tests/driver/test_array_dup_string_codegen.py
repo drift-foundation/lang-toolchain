@@ -128,4 +128,5 @@ fn main() nothrow -> Int {
 	assert "drift_bounds_check" not in main_ir
 	assert "drift_error_new" in main_ir
 	assert "drift_error_add_attr_dv" in main_ir
-	assert "-1" in main_ir
+	# Negative literal is lowered as `sub i64 0, <const>` (unary negation).
+	assert "sub i64 0," in main_ir
