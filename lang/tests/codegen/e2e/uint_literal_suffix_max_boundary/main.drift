@@ -1,0 +1,8 @@
+module main
+
+const MAX: Uint = 18446744073709551615u;
+const ZERO: Uint = 0u;
+
+fn main() nothrow -> Int{
+	return cast<Int>(ZERO);
+}

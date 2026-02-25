@@ -1,0 +1,7 @@
+module main
+
+const X: Int = 1u;
+
+fn main() nothrow -> Int{
+	return 0;
+}

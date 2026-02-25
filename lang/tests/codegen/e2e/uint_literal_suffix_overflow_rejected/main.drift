@@ -1,0 +1,7 @@
+module main
+
+const X: Uint = 18446744073709551616u;
+
+fn main() nothrow -> Int{
+	return cast<Int>(X);
+}

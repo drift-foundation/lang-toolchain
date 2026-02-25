@@ -327,6 +327,13 @@ class Literal(Expr):
 
 
 @dataclass
+class UintLiteral(Expr):
+    """Unsigned integer literal with `u` suffix (e.g. `42u`)."""
+    loc: Located
+    value: int
+
+
+@dataclass
 class Name(Expr):
     loc: Located
     ident: str

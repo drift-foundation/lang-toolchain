@@ -101,6 +101,7 @@ from lang.driftc.stage2 import (
 	VariantGetFieldAddr,
 	StructGetField,
 	ConstructDV,
+	ConstArray,
 	ConstBool,
 	ConstVoid,
 	ConstInt,
@@ -584,6 +585,7 @@ class LlvmModuleBuilder:
 	dv_drop_helper: str | None = None
 	iface_drop_helper: str | None = None
 	string_literal_cache: Dict[str, tuple[str, str, int]] = field(default_factory=dict)
+	const_array_cache: Dict[tuple, tuple[str, str, int]] = field(default_factory=dict)
 	iface_vtables: Dict[str, str] = field(default_factory=dict)
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
 	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
@@ -2227,6 +2229,8 @@ class _FuncBuilder:
 			self._lower_array_set_len(instr)
 		elif isinstance(instr, ArraySetGen):
 			self._lower_array_set_gen(instr)
+		elif isinstance(instr, ConstArray):
+			self._lower_const_array(instr)
 		elif isinstance(instr, ArrayLit):
 			self._lower_array_lit(instr)
 		elif isinstance(instr, ArrayElemInit):
@@ -7104,6 +7108,52 @@ class _FuncBuilder:
 		"""Best-effort lookup of an LLVM type string for a value id."""
 		name = self._map_value(value_id)
 		return self.value_types.get(name)
+
+	def _lower_const_array(self, instr: ConstArray) -> None:
+		"""Lower ConstArray: emit a read-only LLVM global and build a DriftArrayHeader."""
+		import struct
+		dest = self._map_value(instr.dest)
+		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
+		arr_llty = self._llvm_array_header_type()
+		count = len(instr.values)
+		is_bool = self._is_bool_type(instr.elem_ty)
+		is_float = False
+		if self.type_table is not None:
+			td = self.type_table.get(instr.elem_ty)
+			is_float = td.kind is TypeKind.SCALAR and td.name == "Float"
+		# Build cache key for dedup
+		cache_key = (int(instr.elem_ty), tuple(instr.values))
+		cached = self.module.const_array_cache.get(cache_key)
+		if cached is not None:
+			global_name, arr_type_str, cached_count = cached
+		else:
+			global_name = f"@.carr{len(self.module.consts)}"
+			arr_type_str = f"[{count} x {self._llty(elem_llty)}]"
+			# Format element values
+			parts = []
+			for v in instr.values:
+				if is_bool:
+					parts.append(f"i8 {1 if v else 0}")
+				elif is_float:
+					raw = struct.pack(">d", float(v))
+					parts.append(f"double 0x{raw.hex().upper()}")
+				else:
+					parts.append(f"{self._llty(elem_llty)} {v}")
+			init = ", ".join(parts)
+			self.module.consts.append(f"{global_name} = private unnamed_addr constant {arr_type_str} [{init}]")
+			self.module.const_array_cache[cache_key] = (global_name, arr_type_str, count)
+		# Build data pointer: bitcast global to i8*
+		data_ptr = self._fresh("cadata")
+		self.lines.append(f"  {data_ptr} = bitcast {arr_type_str}* {global_name} to i8*")
+		# Build %DriftArrayHeader struct
+		tmp0 = self._fresh("carh0")
+		self.lines.append(f"  {tmp0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {count}, {ARRAY_LEN_IDX}")
+		tmp1 = self._fresh("carh1")
+		self.lines.append(f"  {tmp1} = insertvalue {arr_llty} {tmp0}, {self._llty(DRIFT_INT_TYPE)} {count}, {ARRAY_CAP_IDX}")
+		tmp2 = self._fresh("carh2")
+		self.lines.append(f"  {tmp2} = insertvalue {arr_llty} {tmp1}, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_GEN_IDX}")
+		self.lines.append(f"  {dest} = insertvalue {arr_llty} {tmp2}, i8* {data_ptr}, {ARRAY_PTR_IDX}")
+		self.value_types[dest] = arr_llty
 
 	def _lower_array_lit(self, instr: ArrayLit) -> None:
 		"""Lower ArrayLit by allocating, storing elements, and building the header struct."""

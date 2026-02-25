@@ -540,6 +540,15 @@ class StoreIndex(MInstr):
 
 
 @dataclass
+class ConstArray(MInstr):
+	"""dest = const array from compile-time scalar data.
+	Codegen emits a read-only LLVM global + DriftArrayHeader."""
+	dest: ValueId
+	elem_ty: TypeId
+	values: list  # Python scalars (int/float/bool)
+
+
+@dataclass
 class ArrayLit(MInstr):
 	"""dest = Array literal of the given element type."""
 	dest: ValueId
@@ -1226,6 +1235,7 @@ __all__ = [
 	"StoreField",
 	"LoadIndex",
 	"StoreIndex",
+	"ConstArray",
 	"ArrayLit",
 	"ArrayAlloc",
 	"ArrayElemInit",

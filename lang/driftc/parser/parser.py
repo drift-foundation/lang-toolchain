@@ -85,6 +85,7 @@ from .ast import (
     ContinueStmt,
     UnsafeBlockStmt,
     Unary,
+    UintLiteral,
     FString,
     FStringHole,
     VariantDef,
@@ -2606,6 +2607,9 @@ def _build_expr(node) -> Expr:
         return Name(loc=_loc(node), ident=ident_token.value)
     if name == "placeholder":
         return Placeholder(loc=_loc(node))
+    if name == "uint_lit":
+        raw = node.children[0].value
+        return UintLiteral(loc=_loc(node), value=int(raw[:-1]))
     if name == "int_lit":
         return Literal(loc=_loc(node), value=int(node.children[0].value))
     if name == "float_lit":

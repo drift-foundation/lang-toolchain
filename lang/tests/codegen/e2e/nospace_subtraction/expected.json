@@ -1,0 +1,4 @@
+{
+  "description": "e2e: no-space subtraction for Int and Uint literals",
+  "exit_code": 11
+}

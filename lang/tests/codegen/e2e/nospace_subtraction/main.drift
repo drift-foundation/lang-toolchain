@@ -1,0 +1,7 @@
+module main
+
+fn main() nothrow -> Int{
+	val a = 10-3;
+	val b = 5u-1u;
+	return a + cast<Int>(b);
+}

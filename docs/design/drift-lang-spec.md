@@ -83,13 +83,17 @@ Semantics:
 
 ### 2.y. Explicit cast expression
 
-`cast<T>(expr)` is an explicit, compile-time checked cast. In v1, `cast` is **strict** and supported only for function types; it is primarily used to disambiguate overloads when taking a function reference:
+`cast<T>(expr)` is an explicit, compile-time checked conversion.
+
+**Numeric casts** — `cast<T>(expr)` between integer/float types is narrowing-permissive: the compiler must not reject an explicit narrowing cast solely due to overflow risk. For integer-to-integer casts where the target width is N bits, the result is `expr mod 2^N` (low N bits retained); signedness is interpreted by the target type after truncation. This applies to runtime values; `const` initializers currently require literal-only expressions and do not support `cast<T>(...)` (see §3.9), but when const-expr evaluation gains cast support, these same truncation semantics will apply. Float-to-int and int-to-float edge-case behavior is implementation-defined per target; tests should pin current behavior for stability.
+
+**Function casts** — `cast<T>(expr)` where T is a function type disambiguates overloads when taking a function reference:
 
 ```drift
   val f = cast<Fn(Int) nothrow -> Int>(abs);
 ```
 
-No thunking or adapter insertion occurs in this build; other cast targets are rejected.
+No thunking or adapter insertion occurs; unsupported cast shapes are rejected.
 
 ### 2.z. Macro direction
 
@@ -228,14 +232,17 @@ Drift distinguishes between **natural-width** numeric primitives and **fixed-wid
 - **v1 uses pointer-sized carriers** for `Int`/`Uint` (isize/usize). This avoids wasting space on 32-bit targets and keeps arithmetic efficient.
 - `Size` is not available in v1; collections use `Int` for lengths, capacities, and indices (see chapter 12).
 - `Float` is the target’s native floating-point type (most commonly IEEE-754 binary64; on some targets it may be binary32). The surface name remains `Float` regardless of width. Its bit-width/layout are target-defined; ABI stability is guaranteed within a target, not across different targets.
-- Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint64`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types (e.g., `ErrorCode = Uint64`); user code should use `Int`/`Uint`/`Float`.
+- Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint32`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types; user code should use `Int`/`Uint`/`Float`. **Exception:** `Uint64` is available in user code for `const` declarations, typed literals, and expressions where a fixed 64-bit unsigned width is required regardless of target word size (e.g., cryptographic constants, hash computations).
 
 Overflow:
 - Fixed-width integers use modular two’s-complement wraparound.
 - Natural-width integers: debug builds should trap on overflow; release builds may wrap unless the implementation guarantees trapping. Checked helpers (`checked_add`, etc.) may exist in stdlib.
 
 Conversions:
-- `Int`/`Uint`/`Float` conversions follow the usual widening/narrowing rules; narrowing or sign-changing conversions must be explicit and may fail at runtime if out of range.
+- **Explicit casts are narrowing-permissive.** `cast<T>(x)` is a forceful conversion that may truncate/wrap when `T` has smaller range/width. The compiler must not reject explicit narrowing casts solely due to overflow risk. For integer-to-integer casts where target width is N bits, the result is `x mod 2^N`. Signedness is interpreted by the target type after truncation.
+- **Typed literals and `const` declarations are strict.** Typed literals (e.g. `123u`) and `const` declarations enforce exact range validation for the declared type. Out-of-range literals are rejected at compile time. This is separate from cast semantics: `const x: Uint = 184467...u` is rejected if out of range, but `cast<Uint>(large_value)` is allowed truncation per cast rule (once const-expr evaluation supports casts; currently v1 rejects non-literal const initializers).
+- **Checked conversions (future).** `std.num` will provide checked conversion APIs (e.g. `to_uint_checked(x: Int) -> Result<Uint, ConversionError>`) that fail on out-of-range instead of truncating.
+- **Diagnostics.** No overflow diagnostic for explicit `cast<T>(...)` narrowing. Diagnostics are emitted for: invalid cast shape/type category, invalid typed literal ranges, and invalid checked conversion calls (when provided).
 - Fixed-width conversions are reserved until the fixed-width primitives are enabled.
 - `Size` is not available in v1; use `Uint` in place of `Size`.
 - Floating conversions follow IEEE-754 rules on supported targets; other targets use the platform’s native float behavior.
@@ -438,6 +445,8 @@ use site re-materializes the literal value (no runtime storage is allocated).
 const ANSWER: Int = 42;
 const OK: Bool = true;
 const GREETING: String = "hello";
+const MASK: Uint = 4294967295u;
+const TABLE: Array<Uint> = [1116352408u, 1899447441u, 3049323471u];
 ```
 
 #### Block-scope constants
@@ -446,7 +455,8 @@ const GREETING: String = "hello";
 fn example() nothrow -> Int {
     const LIMIT: Int = 100;
     const TAG: String = "ok";
-    return LIMIT;
+    const WEIGHTS: Array<Int> = [10, 20, 30];
+    return WEIGHTS[1];
 }
 ```
 
@@ -468,10 +478,22 @@ Rules:
 
 - A `const` must have an explicit type annotation.
 - The initializer must be a **compile-time literal**:
-  - `Int`, `Uint`, `Bool`, `String`, `Float`, `Byte` literals
+  - `Int`, `Uint`, `Uint64`, `Bool`, `String`, `Float`, `Byte` literals
+  - `Uint` literals with `u` suffix: `42u`, `0u`, `4294967295u`
   - unary `+` / `-` applied to an integer/float literal
+  - `Array<T>` literals where `T` is a scalar type (`Int`/`Uint`/`Uint64`/`Byte`/`Float`/`Bool`) and all elements are compile-time literals; empty arrays are rejected
 - Non-literal expressions (`1 + 2`, calls, indexing, interpolation, etc.) are
   rejected in v1.
+- **Literal range validation is strict.** Typed literals and `const` initializers
+  must fit within the declared type's range. Out-of-range values are rejected at
+  compile time:
+  - `Byte`: `[0, 255]`
+  - `Uint`: `[0, 2^W-1]` where W is the target word size (e.g. 64 or 32)
+  - `Uint64`: `[0, 2^64-1]`
+  - A `u`-suffix literal (e.g. `42u`) is a `Uint`-typed expression and may appear anywhere an expression is valid. Assigning or binding a `u`-suffix literal to an incompatible declared type (e.g. `const x: Int = 42u`) is a type error.
+- Const arrays are backed by read-only LLVM globals. Each use site materializes
+  a `DriftArrayHeader` pointing at the shared global. `.len` works; mutation is
+  not allowed.
 - Block-scope constants participate in the same shadowing rules as `val`: a
   local `const` may shadow an outer `const`, `val`, or module-level `const`.
 - `pub const` is only valid at module scope; `pub` is a parse error inside a

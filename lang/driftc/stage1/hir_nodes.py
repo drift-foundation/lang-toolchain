@@ -238,6 +238,13 @@ class HLiteralBool(HExpr):
 
 
 @dataclass
+class HLiteralUint(HExpr):
+	"""Unsigned integer literal (from `u` suffix, e.g. `42u`)."""
+	value: int
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HLiteralFloat(HExpr):
 	"""
 	Float literal (as parsed).
@@ -823,7 +830,7 @@ __all__ = [
 	"HNode", "HExpr", "HStmt",
 	"UnaryOp", "BinaryOp",
 	"HVar", "HTraitExpr", "HTraitSubject", "HSelfRef", "HTypeNameRef", "HTraitIs", "HTraitAnd", "HTraitOr", "HTraitNot",
-	"HLiteralInt", "HLiteralString", "HLiteralBool", "HLiteralFloat",
+	"HLiteralInt", "HLiteralUint", "HLiteralString", "HLiteralBool", "HLiteralFloat",
 	"HFString", "HFStringHole",
 	"HParam", "HLambda",
 	"HCall", "HInvoke", "HFnPtrConst", "HMethodCall", "HTernary", "HResultOk",

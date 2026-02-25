@@ -6062,6 +6062,7 @@ def main(argv: list[str] | None = None) -> int:
 		package_id=package_id,
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),
+		word_bits=getattr(args, "target_word_bits", None),
 	)
 	func_hirs, signatures, fn_ids_by_name = flatten_modules(modules)
 	origin_by_fn_id: dict[FunctionId, Path] = {}

@@ -7,7 +7,6 @@ export {
 	constant_time_eq
 };
 
-const U32_MOD: Uint = 4294967296;
 const U32_MASK: Uint = 4294967295;
 const H0_INIT: Uint = 1732584193;
 const H1_INIT: Uint = 4023233417;
@@ -16,13 +15,13 @@ const H3_INIT: Uint = 271733878;
 const H4_INIT: Uint = 3285377520;
 
 fn _u32(x: Uint) nothrow -> Uint {
-	return x % U32_MOD;
+	return x & U32_MASK;
 }
 
 fn _ror32(x: Uint, n: Int) nothrow -> Uint {
-	val v: Uint = _u32(x);
-	val r: Uint = v >> cast<Uint>(n);
-	val l: Uint = _u32(v << cast<Uint>(32 - n));
+	val v = _u32(x);
+	val r = v >> cast<Uint>(n);
+	val l = _u32(v << cast<Uint>(32 - n));
 	return _u32(r | l);
 }
 
@@ -58,73 +57,24 @@ pub fn constant_time_eq(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Bool {
 	return diff == cast<Uint>(0);
 }
 
-fn _sha256_k(i: Int) nothrow -> Uint {
-	if i == 0 { return cast<Uint>(1116352408); }
-	if i == 1 { return cast<Uint>(1899447441); }
-	if i == 2 { return cast<Uint>(3049323471); }
-	if i == 3 { return cast<Uint>(3921009573); }
-	if i == 4 { return cast<Uint>(961987163); }
-	if i == 5 { return cast<Uint>(1508970993); }
-	if i == 6 { return cast<Uint>(2453635748); }
-	if i == 7 { return cast<Uint>(2870763221); }
-	if i == 8 { return cast<Uint>(3624381080); }
-	if i == 9 { return cast<Uint>(310598401); }
-	if i == 10 { return cast<Uint>(607225278); }
-	if i == 11 { return cast<Uint>(1426881987); }
-	if i == 12 { return cast<Uint>(1925078388); }
-	if i == 13 { return cast<Uint>(2162078206); }
-	if i == 14 { return cast<Uint>(2614888103); }
-	if i == 15 { return cast<Uint>(3248222580); }
-	if i == 16 { return cast<Uint>(3835390401); }
-	if i == 17 { return cast<Uint>(4022224774); }
-	if i == 18 { return cast<Uint>(264347078); }
-	if i == 19 { return cast<Uint>(604807628); }
-	if i == 20 { return cast<Uint>(770255983); }
-	if i == 21 { return cast<Uint>(1249150122); }
-	if i == 22 { return cast<Uint>(1555081692); }
-	if i == 23 { return cast<Uint>(1996064986); }
-	if i == 24 { return cast<Uint>(2554220882); }
-	if i == 25 { return cast<Uint>(2821834349); }
-	if i == 26 { return cast<Uint>(2952996808); }
-	if i == 27 { return cast<Uint>(3210313671); }
-	if i == 28 { return cast<Uint>(3336571891); }
-	if i == 29 { return cast<Uint>(3584528711); }
-	if i == 30 { return cast<Uint>(113926993); }
-	if i == 31 { return cast<Uint>(338241895); }
-	if i == 32 { return cast<Uint>(666307205); }
-	if i == 33 { return cast<Uint>(773529912); }
-	if i == 34 { return cast<Uint>(1294757372); }
-	if i == 35 { return cast<Uint>(1396182291); }
-	if i == 36 { return cast<Uint>(1695183700); }
-	if i == 37 { return cast<Uint>(1986661051); }
-	if i == 38 { return cast<Uint>(2177026350); }
-	if i == 39 { return cast<Uint>(2456956037); }
-	if i == 40 { return cast<Uint>(2730485921); }
-	if i == 41 { return cast<Uint>(2820302411); }
-	if i == 42 { return cast<Uint>(3259730800); }
-	if i == 43 { return cast<Uint>(3345764771); }
-	if i == 44 { return cast<Uint>(3516065817); }
-	if i == 45 { return cast<Uint>(3600352804); }
-	if i == 46 { return cast<Uint>(4094571909); }
-	if i == 47 { return cast<Uint>(275423344); }
-	if i == 48 { return cast<Uint>(430227734); }
-	if i == 49 { return cast<Uint>(506948616); }
-	if i == 50 { return cast<Uint>(659060556); }
-	if i == 51 { return cast<Uint>(883997877); }
-	if i == 52 { return cast<Uint>(958139571); }
-	if i == 53 { return cast<Uint>(1322822218); }
-	if i == 54 { return cast<Uint>(1537002063); }
-	if i == 55 { return cast<Uint>(1747873779); }
-	if i == 56 { return cast<Uint>(1955562222); }
-	if i == 57 { return cast<Uint>(2024104815); }
-	if i == 58 { return cast<Uint>(2227730452); }
-	if i == 59 { return cast<Uint>(2361852424); }
-	if i == 60 { return cast<Uint>(2428436474); }
-	if i == 61 { return cast<Uint>(2756734187); }
-	if i == 62 { return cast<Uint>(3204031479); }
-	if i == 63 { return cast<Uint>(3329325298); }
-	return cast<Uint>(0);
-}
+const SHA256_K: Array<Uint> = [
+	1116352408u, 1899447441u, 3049323471u, 3921009573u,
+	961987163u, 1508970993u, 2453635748u, 2870763221u,
+	3624381080u, 310598401u, 607225278u, 1426881987u,
+	1925078388u, 2162078206u, 2614888103u, 3248222580u,
+	3835390401u, 4022224774u, 264347078u, 604807628u,
+	770255983u, 1249150122u, 1555081692u, 1996064986u,
+	2554220882u, 2821834349u, 2952996808u, 3210313671u,
+	3336571891u, 3584528711u, 113926993u, 338241895u,
+	666307205u, 773529912u, 1294757372u, 1396182291u,
+	1695183700u, 1986661051u, 2177026350u, 2456956037u,
+	2730485921u, 2820302411u, 3259730800u, 3345764771u,
+	3516065817u, 3600352804u, 4094571909u, 275423344u,
+	430227734u, 506948616u, 659060556u, 883997877u,
+	958139571u, 1322822218u, 1537002063u, 1747873779u,
+	1955562222u, 2024104815u, 2227730452u, 2361852424u,
+	2428436474u, 2756734187u, 3204031479u, 3329325298u
+];
 
 pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
@@ -139,8 +89,8 @@ pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	while msg.len % 64 != 56 {
 		msg.push(cast<Byte>(0));
 	}
-	val hi = bit_len / U32_MOD;
-	val lo = bit_len % U32_MOD;
+	val hi = bit_len >> cast<Uint>(32);
+	val lo = bit_len & U32_MASK;
 	_append_u32_be(&mut msg, hi);
 	_append_u32_be(&mut msg, lo);
 
@@ -192,7 +142,7 @@ pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 		while t < 64 {
 			val sig1 = _ror32(e, 6) ^ _ror32(e, 11) ^ _ror32(e, 25);
 			val ch = (e & f) ^ ((e ^ U32_MASK) & g);
-			val temp1 = _u32(hh + sig1 + ch + _sha256_k(t) + w[t]);
+			val temp1 = _u32(hh + sig1 + ch + SHA256_K[t] + w[t]);
 			val sig0 = _ror32(a, 2) ^ _ror32(a, 13) ^ _ror32(a, 22);
 			val maj = (a & b) ^ (a & c) ^ (b & c);
 			val temp2 = _u32(sig0 + maj);
@@ -279,8 +229,8 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	while msg.len % 64 != 56 {
 		msg.push(cast<Byte>(0));
 	}
-	val hi = bit_len / U32_MOD;
-	val lo = bit_len % U32_MOD;
+	val hi = bit_len >> cast<Uint>(32);
+	val lo = bit_len & U32_MASK;
 	_append_u32_be(&mut msg, hi);
 	_append_u32_be(&mut msg, lo);
 

@@ -1,0 +1,7 @@
+module main
+
+const TABLE: Array<Int> = [10, 20, 30];
+
+fn main() nothrow -> Int{
+	return TABLE[1];
+}

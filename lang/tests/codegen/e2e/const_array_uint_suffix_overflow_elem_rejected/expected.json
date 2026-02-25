@@ -1,0 +1,11 @@
+{
+  "description": "e2e: const array Uint element overflow (2^64) rejected",
+  "diagnostics": [
+    {
+      "message_contains": "declared type does not match initializer value",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

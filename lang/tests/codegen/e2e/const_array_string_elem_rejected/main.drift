@@ -1,0 +1,7 @@
+module main
+
+const T: Array<String> = ["a", "b"];
+
+fn main() nothrow -> Int{
+	return 0;
+}

@@ -1,0 +1,11 @@
+{
+  "description": "e2e: Uint suffix elements in Int const array rejected",
+  "diagnostics": [
+    {
+      "message_contains": "declared type does not match initializer value",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

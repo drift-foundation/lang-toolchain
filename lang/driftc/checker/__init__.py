@@ -47,6 +47,8 @@ if TYPE_CHECKING:
 	from lang.driftc import stage1 as H
 
 
+from lang.driftc.core.types_core import UintConst as _UintConst, validate_const_value as _validate_const
+
 def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
 	"""Extract a compile-time literal value from an HIR expression, or None.
 
@@ -61,12 +63,22 @@ def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
 		return expr.value
 	if isinstance(expr, H.HLiteralString):
 		return expr.value
+	if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
+		return _UintConst(expr.value)
 	if isinstance(expr, H.HUnary) and expr.op == H.UnaryOp.NEG:
 		inner = expr.expr
 		if isinstance(inner, H.HLiteralInt):
 			return -inner.value
 		if isinstance(inner, H.HLiteralFloat):
 			return -inner.value
+	if isinstance(expr, H.HArrayLiteral):
+		vals = []
+		for elem in expr.elements:
+			v = _eval_hir_const_value(elem)
+			if v is None:
+				return None
+			vals.append(v)
+		return vals
 	return None
 
 
@@ -1264,6 +1276,8 @@ class Checker:
 
 			if isinstance(expr, H.HLiteralInt):
 				return checker._int_type
+			if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
+				return checker._uint_type
 			if hasattr(H, "HLiteralFloat") and isinstance(expr, getattr(H, "HLiteralFloat")):
 				return checker._float_type
 			if isinstance(expr, H.HLiteralBool):
@@ -2661,40 +2675,9 @@ class Checker:
 						)
 					)
 				elif decl_ty is not None:
-					# Type-match validation (same as module const).
-					ok = False
-					tt = self._type_table
-					if decl_ty == tt.ensure_byte() and isinstance(val, int) and not isinstance(val, bool):
-						if val < 0 or val > 255:
-							ctx._append_diag(
-								_chk_diag(
-									message=f"const '{stmt.name}' Byte literal out of range [0, 255]",
-									severity="error",
-									span=getattr(stmt, "loc", Span()),
-								)
-							)
-						else:
-							ok = True
-					elif decl_ty == tt.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
-						ok = True
-					elif decl_ty == tt.ensure_uint() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-						ok = True
-					elif decl_ty == tt.ensure_uint64() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-						ok = True
-					elif decl_ty == tt.ensure_bool() and isinstance(val, bool):
-						ok = True
-					elif decl_ty == tt.ensure_string() and isinstance(val, str):
-						ok = True
-					elif decl_ty == tt.ensure_float() and isinstance(val, float):
-						ok = True
+					ok, val, err = _validate_const(self._type_table, stmt.name, decl_ty, val)
 					if not ok:
-						ctx._append_diag(
-							_chk_diag(
-								message=f"const '{stmt.name}' declared type does not match initializer value",
-								severity="error",
-								span=getattr(stmt, "loc", Span()),
-							)
-						)
+						ctx._append_diag(_chk_diag(message=err, severity="error", span=getattr(stmt, "loc", Span())))
 				return
 			elif isinstance(stmt, H.HExprStmt):
 				walk_expr(stmt.expr)

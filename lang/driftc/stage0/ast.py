@@ -100,6 +100,13 @@ class Literal(Expr):
 
 
 @dataclass
+class UintLiteral(Expr):
+	"""Unsigned integer literal with `u` suffix (e.g. `42u`)."""
+	value: int
+	loc: Optional[object] = None
+
+
+@dataclass
 class Name(Expr):
 	"""Identifier reference."""
 	ident: str
@@ -607,7 +614,7 @@ class RethrowStmt(Stmt):
 __all__ = [
 	"Node", "Expr", "Stmt",
 	"TraitExpr", "TraitSubject", "SelfRef", "TypeNameRef", "TraitIs", "TraitAnd", "TraitOr", "TraitNot",
-	"Literal", "Name", "Placeholder", "Attr", "QualifiedMember",
+	"Literal", "UintLiteral", "Name", "Placeholder", "Attr", "QualifiedMember",
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
 	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "MapEntry", "MapLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",

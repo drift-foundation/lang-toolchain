@@ -1,0 +1,11 @@
+{
+  "description": "e2e: local const Uint suffix literal rejected for Int type",
+  "diagnostics": [
+    {
+      "message_contains": "declared type does not match initializer value",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

@@ -1,0 +1,11 @@
+{
+  "description": "e2e: empty const array rejected",
+  "diagnostics": [
+    {
+      "message_contains": "const array must have at least one element",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

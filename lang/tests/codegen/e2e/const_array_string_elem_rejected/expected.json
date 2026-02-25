@@ -1,0 +1,11 @@
+{
+  "description": "e2e: const array string elements rejected",
+  "diagnostics": [
+    {
+      "message_contains": "const array element type must be a scalar (Int/Uint/Uint64/Byte/Float/Bool)",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

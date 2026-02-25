@@ -1,5 +1,19 @@
 # Drift development history
 
+## 2026-02-25
+- Language enhancement batch (branch `lang-enhancment-260224`): Items 1-4 from crypto implementation feedback.
+- Item 1: Checker now infers `Uint` result types for binary operations (shift, bitwise, arithmetic) parallel to existing `Int` inference, eliminating forced `: Uint` annotations.
+- Item 2: Match binder payload types now propagate correctly in checker context, enabling direct indexed access on variant/result payloads.
+- Item 3: Added `u`-suffix for Uint literals (`42u`) and `const` array support (`const K: Array<Uint> = [...]`) backed by read-only LLVM globals.
+  - Full pipeline: grammar (`UINT_LIT`) → AST (`UintLiteral`) → HIR (`HLiteralUint`) → MIR (`ConstUint`/`ConstArray`) → LLVM codegen.
+  - `_UintConst` tagged wrapper preserves Uint origin through const evaluation (prevents type erasure to Int).
+  - Strict literal range validation: Uint bounded by target word size (`TypeTable.uint_max`), Uint64 bounded by `[0, 2^64-1]`.
+  - Grammar: replaced `SIGNED_INT` with unsigned `INT` terminal to fix no-space subtraction (`5-1`, `5u-1u`).
+  - Shared `validate_const_value()` in `types_core.py` eliminates parser/checker const validation duplication.
+  - 18 e2e tests: 7 positive (suffix, const arrays, nospace subtraction, max boundary, cast truncation pin) + 11 negative (overflow, type mismatch, empty array, non-literal, string elements).
+- Item 4: Stdlib cleanup — removed `_ror32` forced type annotations, replaced 64-branch `_sha256_k()` if-chain with `const SHA256_K: Array<Uint>` table lookup, eliminated `U32_MOD` constant (replaced with bitwise `& U32_MASK` / `>> 32`). All 10 crypto/codec e2e vectors pass byte-identical.
+- Spec updates: added Numeric Conversion Policy (`docs/design/spec-change-requests/drift-numeric-conversion-policy.md`) and applied to `drift-lang-spec.md` — §2.y (cast semantics), §3.1.1 (conversion policy), §3.9 (const rules, u-suffix, const arrays). Uint64 exempted from fixed-width reservation for user code.
+
 ## 2026-02-18
 - Added initial `std.cli` argument parser API (`ArgParser`, `ParsedArgs`, `CliError`) with flags, string/int options, required-option enforcement, positional arguments (including trailing multiple), `--` terminator handling, and deterministic error tags for invalid/duplicate/missing inputs.
 - Added CLI e2e coverage for both success and rejection paths: basic parse flow, help request, unknown option, missing required option/positional, invalid int option, duplicate option, unsupported short clusters, and double-dash positional mode.

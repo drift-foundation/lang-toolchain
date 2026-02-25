@@ -1,0 +1,8 @@
+module main
+
+fn main() nothrow -> Int{
+	val big: Int = 4294967303;
+	val truncated: Uint = cast<Uint>(big);
+	val low_byte: Int = cast<Int>(truncated % cast<Uint>(256));
+	return low_byte;
+}

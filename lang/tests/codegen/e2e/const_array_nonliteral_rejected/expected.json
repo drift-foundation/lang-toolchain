@@ -1,0 +1,11 @@
+{
+  "description": "e2e: const array with non-literal element rejected",
+  "diagnostics": [
+    {
+      "message_contains": "initializer must be a compile-time literal",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

@@ -270,6 +270,10 @@ class AstToHIR:
 			return H.HLiteralString(value=str(expr.value), loc=loc)
 		raise NotImplementedError(f"Literal of unsupported type: {type(expr.value).__name__}")
 
+	def _visit_expr_UintLiteral(self, expr: ast.UintLiteral) -> H.HExpr:
+		loc = self._as_span(getattr(expr, "loc", None))
+		return H.HLiteralUint(value=int(expr.value), loc=loc)
+
 	def _as_span(self, loc: object | None) -> Span:
 		"""
 		Best-effort location normalization for HIR nodes.

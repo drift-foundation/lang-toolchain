@@ -1121,6 +1121,12 @@ class HIRToMIR:
 			self._local_types[dest] = self._int_type
 		return dest
 
+	def _visit_expr_HLiteralUint(self, expr) -> M.ValueId:
+		dest = self.b.new_temp()
+		self.b.emit(M.ConstUint(dest=dest, value=expr.value))
+		self._local_types[dest] = self._uint_type
+		return dest
+
 	def _visit_expr_HLiteralFloat(self, expr: H.HLiteralFloat) -> M.ValueId:
 		"""
 		Lower a Float literal.
@@ -1432,6 +1438,13 @@ class HIRToMIR:
 			if ty_id == self._byte_type:
 				self.b.emit(M.ConstByte(dest=dest, value=int(val)))
 				return dest
+			if isinstance(val, list):
+				td = self._type_table.get(ty_id)
+				if td.kind is TypeKind.ARRAY and td.param_types:
+					elem_ty = td.param_types[0]
+					self.b.emit(M.ConstArray(dest=dest, elem_ty=elem_ty, values=list(val)))
+					self._local_types[dest] = ty_id
+					return dest
 			raise AssertionError("unsupported const type reached MIR lowering (checker/package bug)")
 		if self._typed_mode == "strict" and expr.binding_id is None and expr.module_id is None:
 			raise AssertionError("typed_mode strict: missing binding_id for local read (checker bug)")
@@ -4733,6 +4746,14 @@ class HIRToMIR:
 		"""Emit a fresh MIR literal for a block-scope constant."""
 		ty_id, val = self._local_consts[bid]
 		dest = self.b.new_temp()
+		if isinstance(val, list):
+			td = self._type_table.get(ty_id)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				elem_ty = td.param_types[0]
+				self.b.emit(M.ConstArray(dest=dest, elem_ty=elem_ty, values=list(val)))
+				self._local_types[dest] = ty_id
+				return dest
+			raise AssertionError(f"unsupported local const array type (bid={bid})")
 		if ty_id == self._int_type:
 			self.b.emit(M.ConstInt(dest=dest, value=int(val)))
 		elif ty_id == self._uint_type:
@@ -6320,6 +6341,8 @@ class HIRToMIR:
 				return resolved_nom
 			return ty
 
+		if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
+			return self._uint_type
 		if isinstance(expr, H.HLiteralInt):
 			known = None
 			if self._expr_types and self._typed_mode != "none":
@@ -6331,6 +6354,8 @@ class HIRToMIR:
 				if known_def.kind is TypeKind.SCALAR and known_def.name in ("Int", "Uint", "Uint64", "Byte"):
 					return known
 			return self._int_type
+		if hasattr(H, "HLiteralUint") and isinstance(expr, H.HLiteralUint):
+			return self._uint_type
 		if isinstance(expr, H.HCast):
 			if self._expr_types and self._typed_mode != "none":
 				known = self._expr_types.get(expr.node_id)

@@ -387,6 +387,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 
 	if isinstance(expr, parser_ast.Literal):
 		return s0.Literal(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
+	if hasattr(parser_ast, "UintLiteral") and isinstance(expr, parser_ast.UintLiteral):
+		return s0.UintLiteral(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Name):
 		return s0.Name(ident=expr.ident, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.TraitIs):
@@ -949,7 +951,7 @@ def _is_expr_block_missing_value_error(err: UnexpectedInput) -> bool:
 		return False
 	expr_starters = {
 		"NAME",
-		"SIGNED_INT",
+		"INT",
 		"FLOAT",
 		"STRING",
 		"TRUE",
@@ -1434,6 +1436,7 @@ def parse_drift_workspace_to_hir(
 	package_id: str | None = None,
 	stdlib_root: Path | None = None,
 	test_build_only: bool = False,
+	word_bits: int | None = None,
 	) -> Tuple[
 	Dict[str, ModuleLowered],
 	"TypeTable",
@@ -2957,7 +2960,10 @@ def parse_drift_workspace_to_hir(
 		return {}, table, {}, {}, {}, diagnostics
 
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
-	shared_type_table = TypeTable()
+	_tt_kwargs: dict = {}
+	if word_bits is not None:
+		_tt_kwargs["word_bits"] = word_bits
+	shared_type_table = TypeTable(**_tt_kwargs)
 	if package_id is not None:
 		shared_type_table.package_id = package_id
 	local_pkg = package_id or "__local__"
@@ -3997,15 +4003,27 @@ def _lower_parsed_program_to_hir(
 	# to a numeric literal). We evaluate them here so later phases can
 	# treat const references as typed literals without requiring whole-program
 	# evaluation infrastructure.
+	from lang.driftc.core.types_core import UintConst as _UintConst, validate_const_value as _validate_const
+
 	def _eval_const_value(expr: parser_ast.Expr) -> object | None:
 		if isinstance(expr, parser_ast.Literal):
 			return expr.value
+		if hasattr(parser_ast, "UintLiteral") and isinstance(expr, parser_ast.UintLiteral):
+			return _UintConst(expr.value)
 		if isinstance(expr, parser_ast.Unary) and getattr(expr, "op", None) in ("-", "+"):
 			inner = getattr(expr, "operand", None)
 			if isinstance(inner, parser_ast.Literal) and isinstance(inner.value, (int, float)):
 				if getattr(expr, "op", None) == "-":
 					return -inner.value
 				return inner.value
+		if isinstance(expr, parser_ast.ArrayLiteral):
+			vals = []
+			for elem in expr.elements:
+				v = _eval_const_value(elem)
+				if v is None:
+					return None
+				vals.append(v)
+			return vals
 		return None
 
 	for c in getattr(prog, "consts", []) or []:
@@ -4024,45 +4042,9 @@ def _lower_parsed_program_to_hir(
 				)
 			)
 			continue
-		# Enforce that the declared type matches the literal kind exactly.
-		#
-		# Consts are intentionally strict: they form part of the module interface,
-		# and packages must be able to embed them deterministically without
-		# re-running the evaluator.
-		ok = False
-		if decl_ty == type_table.ensure_byte() and isinstance(val, int) and not isinstance(val, bool):
-			if val < 0 or val > 255:
-				diagnostics.append(
-					_p_diag(
-						phase="parser",
-						message=f"const '{c.name}' Byte literal out of range [0, 255]",
-						severity="error",
-						span=Span.from_loc(getattr(c, "loc", None)),
-					)
-				)
-				continue
-			ok = True
-		elif decl_ty == type_table.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
-			ok = True
-		elif decl_ty == type_table.ensure_uint() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-			ok = True
-		elif decl_ty == type_table.ensure_uint64() and isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-			ok = True
-		elif decl_ty == type_table.ensure_bool() and isinstance(val, bool):
-			ok = True
-		elif decl_ty == type_table.ensure_string() and isinstance(val, str):
-			ok = True
-		elif decl_ty == type_table.ensure_float() and isinstance(val, float):
-			ok = True
+		ok, val, err = _validate_const(type_table, c.name, decl_ty, val)
 		if not ok:
-			diagnostics.append(
-				_p_diag(
-					phase="parser",
-					message=f"const '{c.name}' declared type does not match initializer value",
-					severity="error",
-					span=Span.from_loc(getattr(c, "loc", None)),
-				)
-			)
+			diagnostics.append(_p_diag(phase="parser", message=err, severity="error", span=Span.from_loc(getattr(c, "loc", None))))
 			continue
 		type_table.define_const(module_id=module_id, name=c.name, type_id=decl_ty, value=val)
 	# Prelude: `Optional<T>` is required for iterator-style `for` desugaring and

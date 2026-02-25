@@ -1,0 +1,11 @@
+{
+  "description": "e2e: module const Uint literal overflow (2^64) rejected",
+  "diagnostics": [
+    {
+      "message_contains": "Uint literal out of range [0, 2^64-1]",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

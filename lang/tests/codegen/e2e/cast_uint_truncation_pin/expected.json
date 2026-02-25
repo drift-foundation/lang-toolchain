@@ -1,0 +1,6 @@
+{
+  "description": "e2e: cast<Uint> truncation pin — cast<Uint>(2^32+7) retains value on 64-bit, low byte is 7",
+  "exit_code": 7,
+  "stderr": "",
+  "stdout": ""
+}

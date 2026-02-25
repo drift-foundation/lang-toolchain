@@ -1,0 +1,6 @@
+module main
+
+fn main() nothrow -> Int{
+	const T: Array<Int> = [1, 2, 3];
+	return T[0] + T[2];
+}

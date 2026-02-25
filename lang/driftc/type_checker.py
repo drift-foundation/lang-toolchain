@@ -5001,6 +5001,12 @@ class TypeChecker:
 				if expected_type == self.type_table.ensure_byte():
 					return record_expr(expr, expected_type)
 				return record_expr(expr, self._int)
+			if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
+				_uint_max = self.type_table.uint_max
+				_uint_bits = self.type_table.word_bits
+				if expr.value < 0 or expr.value > _uint_max:
+					diagnostics.append(_tc_diag(message=f"Uint literal {expr.value}u is out of range [0, 2^{_uint_bits}-1]", code="E-UINT-OVERFLOW", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, self._uint)
 			if hasattr(H, "HLiteralFloat") and isinstance(expr, getattr(H, "HLiteralFloat")):
 				return record_expr(expr, self._float)
 			if isinstance(expr, H.HLiteralBool):
@@ -8034,6 +8040,8 @@ class TypeChecker:
 						continue
 					if isinstance(val_expr, (H.HLiteralInt, H.HLiteralBool, H.HLiteralString)):
 						continue
+					if hasattr(H, "HLiteralUint") and isinstance(val_expr, getattr(H, "HLiteralUint")):
+						continue
 					if isinstance(val_expr, H.HDVInit):
 						continue
 					if val_nom_ty in (self._int, self._uint, self._bool, self._string, self._float):
@@ -8282,9 +8290,10 @@ class TypeChecker:
 								record_iface_coercion(stmt.value, declared_ty)
 						else:
 							is_int_lit = isinstance(stmt.value, H.HLiteralInt)
+							is_uint_lit = hasattr(H, "HLiteralUint") and isinstance(stmt.value, getattr(H, "HLiteralUint"))
 							decl_name = self.type_table.get(declared_ty).name
 							inf_name = self.type_table.get(inferred_ty).name
-							if not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int"):
+							if not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int") and not (is_uint_lit and decl_name == "Uint" and inf_name == "Uint"):
 								diagnostics.append(
 									_tc_diag(
 										message=f"initializer type '{inf_name}' does not match declared type '{decl_name}'",

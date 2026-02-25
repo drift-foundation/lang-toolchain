@@ -1,0 +1,6 @@
+{
+  "description": "e2e: uint literal suffix (42u)",
+  "exit_code": 42,
+  "stderr": "",
+  "stdout": ""
+}

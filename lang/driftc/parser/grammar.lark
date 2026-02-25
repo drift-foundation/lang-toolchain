@@ -5,7 +5,13 @@
 // Give identifiers a lower priority than keyword terminals so the basic lexer
 // prefers `and`, `or`, `val`, etc. as their own tokens instead of `NAME`.
 NAME.0: /(?!type\b)(?!pub\b)(?!use\b)[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
-%import common.SIGNED_INT
+// Integer literal: unsigned digits only. Unary '-' is parsed as a separate
+// operator so that `5-1` lexes as INT MINUS INT rather than INT SIGNED_INT.
+INT: /[0-9]+/
+// Unsigned integer literal with 'u' suffix: `42u`, `0u`, `1116352408u`.
+// Priority 2 ensures the lexer matches `42u` as UINT_LIT before INT
+// can consume the digits and NAME can consume the trailing `u`.
+UINT_LIT.2: /[0-9]+u/
 // Float literals: decimal only, digits on both sides of '.', optional exponent.
 // Important: float literals never include a leading sign; unary '-' is parsed separately.
 FLOAT.2: /[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?/
@@ -550,7 +556,8 @@ call_arg: NAME EQUAL expr -> kwarg
         | expr
 
 literal: FLOAT        -> float_lit
-       | SIGNED_INT   -> int_lit
+       | UINT_LIT     -> uint_lit
+       | INT          -> int_lit
        | STRING       -> str_lit
        | FSTRING_PREFIX STRING -> fstr_lit
        | "true"      -> true_lit

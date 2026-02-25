@@ -1,0 +1,4 @@
+{
+  "description": "e2e: Uint literal at max boundary (2^64-1) accepted, 0u accepted",
+  "exit_code": 0
+}

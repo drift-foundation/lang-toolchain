@@ -259,9 +259,11 @@ class TypeTable:
 	and function types. It can be extended as the checker grows.
 	"""
 
-	def __init__(self) -> None:
+	def __init__(self, *, word_bits: int = 64) -> None:
 		self._defs: Dict[TypeId, TypeDef] = {}
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"
+		# Target word size in bits. Uint is target-width; Uint64 is always 64-bit.
+		self.word_bits: int = word_bits
 		# Package identity for module-scoped type keys.
 		self.package_id: str | None = None
 		self.module_packages: dict[str, str] = {}
@@ -1675,6 +1677,11 @@ class TypeTable:
 			self._uint64_type = self.new_scalar("Uint64")  # type: ignore[attr-defined]
 		return self._uint64_type  # type: ignore[attr-defined]
 
+	@property
+	def uint_max(self) -> int:
+		"""Maximum value for target-width Uint."""
+		return (1 << self.word_bits) - 1
+
 	def ensure_byte(self) -> TypeId:
 		"""Return a stable Byte TypeId, creating it once."""
 		if getattr(self, "_byte_type", None) is None:
@@ -2457,4 +2464,87 @@ __all__ = [
 	"VariantSchema",
 	"VariantArmInstance",
 	"VariantInstance",
+	"UintConst",
+	"validate_const_value",
 ]
+
+
+class UintConst:
+	"""Tagged wrapper preserving Uint origin through const evaluation.
+
+	When _eval_const_value / _eval_hir_const_value encounters a u-suffixed
+	literal, it wraps the raw int so that downstream validation can
+	distinguish `42u` (Uint) from `42` (Int).
+	"""
+	__slots__ = ('value',)
+	def __init__(self, v: int):
+		self.value = v
+
+
+def validate_const_value(tt: "TypeTable", name: str, decl_ty: TypeId, val: object):
+	"""Validate and coerce a compile-time const value against its declared type.
+
+	Returns ``(True, coerced_val, None)`` on success or
+	``(False, val, error_msg)`` on failure.  The caller is responsible for
+	converting *error_msg* into a phase-appropriate diagnostic.
+	"""
+	ok = False
+	if decl_ty == tt.ensure_byte() and isinstance(val, int) and not isinstance(val, bool):
+		if val < 0 or val > 255:
+			return (False, val, f"const '{name}' Byte literal out of range [0, 255]")
+		ok = True
+	elif decl_ty == tt.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
+		ok = True
+	elif decl_ty == tt.ensure_uint() and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, UintConst)):
+		if isinstance(val, UintConst):
+			val = val.value
+		if val > tt.uint_max:
+			return (False, val, f"const '{name}' Uint literal out of range [0, 2^{tt.word_bits}-1]")
+		ok = True
+	elif decl_ty == tt.ensure_uint64() and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, UintConst)):
+		if isinstance(val, UintConst):
+			val = val.value
+		if val > 0xFFFFFFFFFFFFFFFF:
+			return (False, val, f"const '{name}' Uint64 literal out of range [0, 2^64-1]")
+		ok = True
+	elif decl_ty == tt.ensure_bool() and isinstance(val, bool):
+		ok = True
+	elif decl_ty == tt.ensure_string() and isinstance(val, str):
+		ok = True
+	elif decl_ty == tt.ensure_float() and isinstance(val, float):
+		ok = True
+	elif isinstance(val, list):
+		td = tt.get(decl_ty)
+		if td.kind is not TypeKind.ARRAY or not td.param_types:
+			return (False, val, f"const '{name}' declared type does not match initializer value")
+		elem_ty = td.param_types[0]
+		scalar_set = {tt.ensure_int(), tt.ensure_uint(), tt.ensure_uint64(), tt.ensure_byte(), tt.ensure_float(), tt.ensure_bool()}
+		if elem_ty not in scalar_set:
+			return (False, val, f"const '{name}' const array element type must be a scalar (Int/Uint/Uint64/Byte/Float/Bool)")
+		if not val:
+			return (False, val, f"const '{name}' const array must have at least one element")
+		for i, ev in enumerate(val):
+			if elem_ty == tt.ensure_int() and isinstance(ev, int) and not isinstance(ev, bool):
+				pass
+			elif elem_ty == tt.ensure_uint() and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, UintConst)):
+				raw = ev.value if isinstance(ev, UintConst) else ev
+				if raw > tt.uint_max:
+					return (False, val, f"const '{name}' declared type does not match initializer value")
+				val[i] = raw
+			elif elem_ty == tt.ensure_uint64() and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, UintConst)):
+				raw = ev.value if isinstance(ev, UintConst) else ev
+				if raw > 0xFFFFFFFFFFFFFFFF:
+					return (False, val, f"const '{name}' declared type does not match initializer value")
+				val[i] = raw
+			elif elem_ty == tt.ensure_byte() and isinstance(ev, int) and not isinstance(ev, bool) and 0 <= ev <= 255:
+				pass
+			elif elem_ty == tt.ensure_float() and isinstance(ev, (int, float)) and not isinstance(ev, bool):
+				val[i] = float(ev)
+			elif elem_ty == tt.ensure_bool() and isinstance(ev, bool):
+				pass
+			else:
+				return (False, val, f"const '{name}' declared type does not match initializer value")
+		ok = True
+	if not ok:
+		return (False, val, f"const '{name}' declared type does not match initializer value")
+	return (True, val, None)
