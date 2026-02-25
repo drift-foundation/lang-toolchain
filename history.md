@@ -58,6 +58,18 @@
   - Outcome: crypto/codec vectors remain byte-identical; targeted revalidation suite green.
 
 - Spec sync for this batch:
+
+## 2026-02-25 - compiler/runtime ABI stamping and version metadata closeout
+- Completed `work/compiler-ver-stamping/plan.md` Phases A-D:
+  - single source of truth in `lang/driftc/driftc_versions.py` (`DRIFT_RT_ABI_VERSION`)
+  - runtime ABI marker symbol export in all runtime archive variants (`__drift_rt_abi_version_<N>`)
+  - codegen entry-wrapper ABI marker call emission
+  - driver mismatch hint appended on linker errors containing ABI marker symbol.
+- Added compiler metadata output:
+  - `driftc --version` / `-V` prints compiler version, ABI version, git SHA (when available), license (`GPL-3.0`), and supervising body (`The Drift Language Foundation`).
+- Added/updated regressions:
+  - `lang/tests/driver/test_abi_version_stamp.py` verifies IR marker presence and mismatch link failure contract.
+  - Phase C hint test is intentionally predicate-level (validated on real mismatch linker stderr), with full driver interception e2e deferred due to harness complexity.
   - `docs/design/drift-lang-spec.md` updated for:
     - cast semantics scope (runtime now; const-cast semantics noted as forward-looking),
     - fixed-width reservation exception for `Uint64`,

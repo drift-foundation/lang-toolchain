@@ -52,6 +52,31 @@ def _target_word_bits(target_word_bits: int | None) -> int:
 		raise ValueError("target word size is required; pass --target-word-bits")
 	return target_word_bits
 
+
+def _version_string() -> str:
+	"""Build the driftc --version output."""
+	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	git_sha = ""
+	try:
+		res = subprocess.run(
+			["git", "rev-parse", "--short", "HEAD"],
+			capture_output=True, text=True, cwd=ROOT, timeout=5,
+		)
+		if res.returncode == 0:
+			git_sha = res.stdout.strip()
+	except Exception:
+		pass
+	parts = [
+		f"driftc {DRIFTC_VERSION}",
+		f"abi {DRIFT_RT_ABI_VERSION}",
+	]
+	if git_sha:
+		parts.append(f"git {git_sha}")
+	parts.append("license GPL-3.0")
+	parts.append("The Drift Language Foundation")
+	return " | ".join(parts)
+
+
 from lang.driftc import stage1 as H
 from lang.driftc.stage1 import assign_callsite_ids, assign_node_ids
 from lang.driftc.stage1 import normalize_hir
@@ -5454,6 +5479,11 @@ def compile_to_llvm_ir_for_tests(
 				rename_map[entry_id] = "drift_main"
 				argv_wrapper = "drift_main"
 
+	# For main::main without argv, rename body to drift_main so the
+	# OS entry wrapper (@main) can call it without symbol collision.
+	if argv_wrapper is None and entry_id is not None and entry_id.module == "main" and entry_id.name == "main":
+		rename_map[entry_id] = "drift_main"
+
 	fn_infos = dict(checked.fn_infos_by_id)
 	try:
 		_validate_codegen_contract(
@@ -5504,11 +5534,10 @@ def compile_to_llvm_ir_for_tests(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
 		for fn_id in fn_infos.keys()
 	)
-	# If the entry is already called "main" and has no argv wrapper, do not emit
-	# a wrapper that would call itself; otherwise emit a thin OS wrapper that
-	# calls the entry.
-	if argv_wrapper is None and not (entry_module == "main" and entry_name == "main"):
-		entry_sym = function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}"
+	# Always emit a thin OS wrapper (@main) so the ABI version stamp is
+	# present.  For main::main the body was renamed to drift_main above.
+	if argv_wrapper is None:
+		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
 		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
 	return module.render(), checked
 
@@ -5626,6 +5655,11 @@ def main(argv: list[str] | None = None) -> int:
 	With --json, prints structured diagnostics (phase/message/severity/file/line/column)
 	and an exit_code; otherwise prints human-readable messages to stderr.
 	"""
+	# Handle --version before argparse so it works without required positional args.
+	raw_argv = argv if argv is not None else sys.argv[1:]
+	if "--version" in raw_argv or "-V" in raw_argv:
+		print(_version_string())
+		return 0
 	parser = argparse.ArgumentParser(description="lang driftc stub")
 	parser.add_argument("source", type=Path, nargs="+", help="Path(s) to Drift source file(s)")
 	parser.add_argument(
@@ -8476,10 +8510,16 @@ def main(argv: list[str] | None = None) -> int:
 	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:
 		msg = f"clang failed: {link_res.stderr.strip()}"
+		abi_hint = ""
+		if "__drift_rt_abi_version_" in link_res.stderr:
+			from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION as _abi_ver
+			abi_hint = f"\nhint: driftc targets runtime ABI v{_abi_ver}; linked runtime provides a different ABI. Rebuild runtime/std artifacts (just runtime-libs)."
 		if args.json:
-			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg + abi_hint, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
 		else:
 			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			if abi_hint:
+				print(abi_hint, file=sys.stderr)
 		return 1
 
 	if args.json:

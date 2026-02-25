@@ -23,6 +23,8 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "io_runtime.c",
 		base / "posix" / "thread_runtime.c",
 		base / "posix" / "assert_runtime.c",
+		# ABI version stamp for link-time compatibility guard.
+		base / "abi_version_stamp.c",
 		# Diagnostic/Error runtime lives alongside lang/ for now; include it so
 		# e2e codegen links DV/exception helpers.
 		runtime / "diagnostic_runtime.c",
@@ -110,11 +112,17 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 		except Exception:
 			pass
 		deps = _runtime_deps(root)
+		# ABI version constant also drives rebuild (change → force recompile).
+		abi_ver_file = root / "lang" / "driftc" / "driftc_versions.py"
+		if abi_ver_file.exists():
+			deps.append(abi_ver_file)
 		if not _needs_rebuild(archive_path, deps):
 			return archive_path
+		# Read ABI version from the single source of truth.
+		from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
 		include_dirs = get_runtime_include_dirs(root)
 		cflags: list[str] = []
-		cdefs: list[str] = []
+		cdefs: list[str] = [f"-DDRIFT_RT_ABI_VERSION={DRIFT_RT_ABI_VERSION}"]
 		if variant == "debug":
 			cflags.extend(["-g"])
 		elif variant == "asan":

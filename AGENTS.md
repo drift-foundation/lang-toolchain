@@ -60,4 +60,5 @@
 		3. Update stale contract comments/messages/tests that describe supported boundary shapes.
 - Do not leave contradictory tests/comments (example forbidden state: behavior supports `Array<T>` but negative tests/docs still claim arrays are unsupported).
 - Prefer central boundary checks and diagnostics over scattered ad-hoc guards.
+- ABI boundary changes (runtime-exported helper signatures, data layouts crossing the compiler/runtime boundary, calling conventions, ownership/drop contracts) require bumping `DRIFT_RT_ABI_VERSION` in `lang/driftc/driftc_versions.py` and adding/updating the mismatch regression in `lang/tests/driver/test_abi_version_stamp.py`.
 

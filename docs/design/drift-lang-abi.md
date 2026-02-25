@@ -415,6 +415,43 @@ ABI-compatible changes:
 * Adding new internal calling conventions for non-exported functions
 * Adding new scalar types (as long as existing ones are unchanged)
 
+## 7.1 ABI version stamping (link-time guard)
+
+The compiler and runtime use a link-time ABI compatibility guard to fail deterministically at build time when their ABI expectations disagree.
+
+### Mechanism
+
+1. **Single source of truth:** `lang/driftc/driftc_versions.py` defines `DRIFT_RT_ABI_VERSION` (monotonic integer).
+2. **Runtime side:** `lang/language_runtime/abi_version_stamp.c` exports a strong symbol `__drift_rt_abi_version_<N>` (compiled into all runtime archive variants via `-DDRIFT_RT_ABI_VERSION=N`).
+3. **Compiler side:** The codegen entry wrapper (`@main`) emits `call void @__drift_rt_abi_version_<N>()` using the same constant.
+4. **Link contract:** If compiler and runtime agree on `<N>`, linking succeeds. On mismatch the linker reports an unresolved symbol — fast, deterministic, no runtime crash.
+
+### When to bump
+
+Bump `DRIFT_RT_ABI_VERSION` when changing any compiler/runtime boundary contract:
+
+* Runtime-exported helper signatures consumed by codegen
+* Data layouts crossing the boundary (struct/variant/frame payload ABI)
+* Calling convention or return packing between generated code and runtime
+* Ownership/drop contract changes that alter boundary behavior
+
+Do **not** bump for pure internal refactors with no boundary change.
+
+### Driver diagnostics
+
+When the `driftc` driver detects `__drift_rt_abi_version_` in linker error output, it appends a hint:
+
+```
+hint: driftc targets runtime ABI vN; linked runtime provides a different ABI.
+      Rebuild runtime/std artifacts (just runtime-libs).
+```
+
+### Contributor guidance
+
+* After making an ABI-breaking change, bump the integer in `lang/driftc/driftc_versions.py`.
+* Rebuild all runtime archive variants (`just runtime-libs`).
+* Add or update positive and negative regression tests in `lang/tests/driver/test_abi_version_stamp.py`.
+
 ---
 
 # 8. Appendix: Example C header (v1)
