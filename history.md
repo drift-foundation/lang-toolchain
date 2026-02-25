@@ -1,3 +1,27 @@
+## 2026-02-25 - stdlib crypto/codec JWT-foundation primitives landed
+- Added new `std.crypto` primitives in `stdlib/std/crypto/crypto.drift`:
+  - `constant_time_eq(&Array<Byte>, &Array<Byte>) -> Bool`
+  - `sha256(&Array<Byte>) -> Array<Byte>` (pure Drift, 32-byte digest)
+  - `hmac_sha256(&Array<Byte>, &Array<Byte>) -> Array<Byte>` (RFC2104 key reduction/padding flow)
+- Extended `std.codec` in `stdlib/std/codec/codec.drift` with strict URL-safe Base64 APIs:
+  - `base64url_encode(&Array<Byte>) -> String` (RFC4648 URL-safe alphabet, unpadded)
+  - `base64url_decode(&String) -> Result<Array<Byte>, CodecError>` (strict)
+- Base64url strictness/diagnostics hardening:
+  - rejects invalid length (`len % 4 == 1`) with deterministic offset,
+  - rejects `=` padding in URL-safe decode path,
+  - rejects non-URL-safe characters (including `+` and `/`),
+  - rejects non-canonical tail encodings (unused bits must be zero),
+  - returns precise offending-byte offsets for padding and character diagnostics.
+- Added new codegen e2e coverage:
+  - `lang/tests/codegen/e2e/std_crypto_constant_time_eq/`
+  - `lang/tests/codegen/e2e/std_crypto_sha256_vectors/`
+  - `lang/tests/codegen/e2e/std_crypto_hmac_sha256_vectors/`
+  - `lang/tests/codegen/e2e/std_codec_base64url_strict/`
+- Verification:
+  - all four new tests pass under normal run,
+  - all four pass under `DRIFT_ASAN=1`,
+  - all four pass under `DRIFT_MEMCHECK=1`.
+
 ## 2026-02-24 - Lexical-scope hardening completed in checker walk paths
 - Hardened checker lexical scoping in `lang/driftc/checker/__init__.py` by introducing a scoped locals context (`_scoped_locals`) and replacing repeated manual save/restore logic across block-introducing constructs.
 - Updated `_walk_hir` traversal to use scoped-local isolation for:
