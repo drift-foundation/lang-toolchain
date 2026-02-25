@@ -5539,10 +5539,12 @@ def compile_to_llvm_ir_for_tests(
 		for fn_id in fn_infos.keys()
 	)
 	# Emit OS wrapper for:
-	# - argv entry shape (always), or
-	# - explicit entrypoint-enforced path (CLI/real-build behavior).
-	# Keep plain helper codegen paths wrapper-free for historical IR contracts.
-	if enforce_entrypoint and argv_wrapper is None:
+	# - explicit entrypoint-enforced path (CLI/real-build), or
+	# - driver/unit-test paths that pre-name their entry "drift_main"
+	#   (historical convention: they need a runnable binary).
+	# Skip for helper codegen paths where entry is the raw "main" symbol
+	# and enforce_entrypoint is not set.
+	if argv_wrapper is None and entry_id is not None and (enforce_entrypoint or entry_name == "drift_main"):
 		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
 		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
 	return module.render(), checked

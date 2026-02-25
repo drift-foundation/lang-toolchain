@@ -61,7 +61,7 @@ fn main() nothrow -> Int {
 	)
 	assert rc == 0, payload
 	ir = ir_path.read_text()
-	main_start = ir.find("define i64 @main()")
+	main_start = ir.find("define i64 @drift_main()")
 	assert main_start >= 0
 	main_end = ir.find("\n}", main_start)
 	assert main_end > main_start
