@@ -7652,10 +7652,13 @@ class _FuncBuilder:
 		if isinstance(destructor_fns, dict):
 			fn_id = destructor_fns.get(ty_id)
 			if fn_id is not None:
-				llty = self._llvm_type_for_typeid(ty_id)
-				sym = function_symbol(fn_id)
-				self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
-				return
+				if getattr(self.func, "fn_id", None) != fn_id:
+					llty = self._llvm_type_for_typeid(ty_id)
+					sym = function_symbol(fn_id)
+					self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
+					return
+				# Inside destroy() for this type — skip recursive call,
+				# fall through to field-by-field drops.
 		td = self.type_table.get(ty_id)
 		llty = self._llvm_type_for_typeid(ty_id)
 		if td.kind is TypeKind.SCALAR and td.name == "String":

@@ -1,0 +1,93 @@
+module m
+
+variant Foo {
+	Bar(value: Array<Int>),
+}
+
+variant Event {
+	Ok(data: Array<Int>),
+	Err(code: Int),
+	Empty,
+}
+
+// Case 1: single-ctor variant, wildcard binder
+fn case1_single_ctor_wildcard() nothrow -> Void {
+	var xs: Array<Int> = [1, 2, 3];
+	val f = Foo::Bar(move xs);
+	match f {
+		Foo::Bar(_) => {},
+	}
+}
+
+// Case 2: multi-ctor variant, wildcard binder on owned-payload arm
+fn case2_multi_ctor_wildcard() nothrow -> Void {
+	var xs: Array<Int> = [4, 5, 6];
+	val e = Event::Ok(move xs);
+	match e {
+		Event::Ok(_) => {},
+		Event::Err(_) => {},
+		Event::Empty => {},
+	}
+}
+
+// Case 3: multi-ctor variant, catch-all wildcard arm catches owned payload
+fn case3_catchall_wildcard() nothrow -> Void {
+	var xs: Array<Int> = [7, 8, 9];
+	val e = Event::Ok(move xs);
+	match e {
+		Event::Err(_) => {},
+		default => {},
+	}
+}
+
+// Case 4: multi-ctor variant, wildcard binder inside loop
+fn case4_loop_wildcard() nothrow -> Void {
+	var i = 0;
+	while i < 3 {
+		var xs: Array<Int> = [10, 11, 12];
+		val e = Event::Ok(move xs);
+		match e {
+			Event::Ok(_) => {},
+			Event::Err(_) => {},
+			Event::Empty => {},
+		}
+		i = i + 1;
+	}
+}
+
+// Case 5: multi-field ctor, only some fields bound, rest wildcarded
+variant MultiField {
+	Row(id: Int, data: Array<Int>, name: Array<Int>),
+	Done,
+}
+
+fn case5_partial_bind() nothrow -> Void {
+	var d: Array<Int> = [20, 21];
+	var n: Array<Int> = [30, 31];
+	val mf = MultiField::Row(42, move d, move n);
+	match mf {
+		MultiField::Row(_, _, _) => {},
+		MultiField::Done => {},
+	}
+}
+
+// Case 6: multi-field ctor, bind one, wildcard the owned ones
+fn case6_bind_one_wildcard_owned() nothrow -> Void {
+	var d: Array<Int> = [40, 41];
+	var n: Array<Int> = [50, 51];
+	val mf = MultiField::Row(99, move d, move n);
+	match mf {
+		MultiField::Row(id, _, _) => {},
+		MultiField::Done => {},
+	}
+}
+
+pub fn main() nothrow -> Int {
+	case1_single_ctor_wildcard();
+	case2_multi_ctor_wildcard();
+	case3_catchall_wildcard();
+	case4_loop_wildcard();
+	case5_partial_bind();
+	case6_bind_one_wildcard_owned();
+	return 0;
+}

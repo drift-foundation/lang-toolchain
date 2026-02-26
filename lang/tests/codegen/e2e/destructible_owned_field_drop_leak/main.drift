@@ -1,0 +1,21 @@
+module m
+
+import std.core as core;
+
+struct Leaky {
+	data: Array<Int>,
+	counter: Int,
+}
+
+implement core.Destructible for Leaky {
+	pub fn destroy(var self: Leaky) nothrow -> Void {
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	var xs: Array<Int> = [1, 2, 3];
+	val s = Leaky(data = move xs, counter = 42);
+	// s goes out of scope → destroy() called → data must still be freed
+	return 0;
+}

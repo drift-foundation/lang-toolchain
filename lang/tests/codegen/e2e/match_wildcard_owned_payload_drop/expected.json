@@ -1,0 +1,5 @@
+{
+  "description": "e2e: match wildcard binder on owned variant payload must drop the payload (positive coverage, no leak)",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

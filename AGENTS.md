@@ -61,4 +61,9 @@
 - Do not leave contradictory tests/comments (example forbidden state: behavior supports `Array<T>` but negative tests/docs still claim arrays are unsupported).
 - Prefer central boundary checks and diagnostics over scattered ad-hoc guards.
 - ABI boundary changes (runtime-exported helper signatures, data layouts crossing the compiler/runtime boundary, calling conventions, ownership/drop contracts) require bumping `DRIFT_RT_ABI_VERSION` in `lang/driftc/driftc_versions.py` and adding/updating the mismatch regression in `lang/tests/driver/test_abi_version_stamp.py`.
-
+- ABI bump decision rule:
+		- If a fix changes only internal lowering/analysis behavior (no boundary signature/layout/call-convention change), do **not** bump ABI.
+		- If any compiler/runtime boundary shape changes, bump ABI in the same patch and update the mismatch regression.
+- Compiler versioning rule:
+		- Behavior-changing compiler/toolchain fixes that do not change ABI boundary shape must still bump compiler minor version (`DRIFTC_VERSION`).
+		- ABI shape changes require both: compiler version bump and ABI version bump.

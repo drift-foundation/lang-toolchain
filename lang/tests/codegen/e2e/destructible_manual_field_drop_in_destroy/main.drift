@@ -1,0 +1,29 @@
+module m
+
+import std.core as core;
+
+struct Drainer {
+	data: Array<Int>,
+	label: Array<Int>,
+	counter: Int,
+}
+
+implement core.Destructible for Drainer {
+	pub fn destroy(var self: Drainer) nothrow -> Void {
+		// Prior workaround pattern: manually drop owned fields before returning.
+		// After the codegen fix, the caller emits field drops post-destroy().
+		// If this body ALSO drops fields, we get a double free.
+		var empty1: Array<Int> = [];
+		self.data = move empty1;
+		var empty2: Array<Int> = [];
+		self.label = move empty2;
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	var d: Array<Int> = [1, 2, 3];
+	var l: Array<Int> = [4, 5];
+	val s = Drainer(data = move d, label = move l, counter = 99);
+	return 0;
+}

@@ -1,0 +1,5 @@
+{
+  "description": "e2e: destroy() that manually drops owned fields must not double-free after caller-side field drop glue",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

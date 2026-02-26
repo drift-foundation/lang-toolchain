@@ -1,0 +1,5 @@
+{
+  "description": "e2e: struct with Destructible impl must drop owned fields after destroy() returns (no leak)",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

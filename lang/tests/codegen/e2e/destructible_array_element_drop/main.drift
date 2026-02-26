@@ -1,0 +1,27 @@
+module m
+
+import std.core as core;
+
+struct Item {
+	payload: Array<Int>,
+	tag: Int,
+}
+
+implement core.Destructible for Item {
+	pub fn destroy(var self: Item) nothrow -> Void {
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	var a: Array<Int> = [10, 20, 30];
+	var b: Array<Int> = [40, 50];
+	var item1 = Item(payload = move a, tag = 1);
+	var item2 = Item(payload = move b, tag = 2);
+	var items: Array<Item> = [];
+	items.push(move item1);
+	items.push(move item2);
+	// items goes out of scope → array drop helper iterates elements →
+	// calls destroy() per element → fields must be freed
+	return 0;
+}

@@ -292,9 +292,6 @@ class HIRToMIR:
 		self._current_fn_can_throw: bool | None = self._can_throw_by_id.get(current_fn_id) if current_fn_id else None
 		self._ret_type = return_type
 		self._suppress_drop_glue = False
-		if current_fn_id is not None:
-			if "Destructible::destroy" in function_symbol(current_fn_id):
-				self._suppress_drop_glue = True
 		self._param_drop_locals: list[str] = []
 		if param_types:
 			for name, ty in param_types.items():

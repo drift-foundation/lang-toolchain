@@ -1,0 +1,5 @@
+{
+  "description": "e2e: Array<DestructibleStruct> must drop each element's owned fields via destroy() (no leak)",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}
