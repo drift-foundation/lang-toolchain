@@ -291,10 +291,17 @@ class HIRToMIR:
 		self._can_throw_by_id: dict[FunctionId, bool] = dict(can_throw_by_id) if can_throw_by_id else {}
 		self._current_fn_can_throw: bool | None = self._can_throw_by_id.get(current_fn_id) if current_fn_id else None
 		self._ret_type = return_type
-		self._suppress_drop_glue = False
+		self._destroy_self_param: str | None = None
+		if current_fn_id is not None:
+			if "Destructible::destroy" in function_symbol(current_fn_id):
+				sig = self._signatures_by_id.get(current_fn_id)
+				if sig is not None and sig.param_names:
+					self._destroy_self_param = sig.param_names[0]
 		self._param_drop_locals: list[str] = []
 		if param_types:
 			for name, ty in param_types.items():
+				if name == self._destroy_self_param:
+					continue
 				if self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
 		# Block-scope constants: binding_id → (TypeId, value).
@@ -403,8 +410,6 @@ class HIRToMIR:
 		self._scope_stack.pop()
 
 	def _register_drop_local(self, local_name: str, ty: TypeId) -> None:
-		if self._suppress_drop_glue:
-			return
 		if not self._scope_stack:
 			return
 		if not self._needs_runtime_drop(ty):
@@ -477,8 +482,6 @@ class HIRToMIR:
 			self.b.emit(M.ErrorAddLocalDV(error=err_val, frame=frame_val, key=key_val, value=dv))
 
 	def _emit_scope_drops(self, *, scope_index: int) -> None:
-		if self._suppress_drop_glue:
-			return
 		if not self._scope_stack:
 			return
 		if scope_index < 0:
@@ -4607,6 +4610,12 @@ class HIRToMIR:
 					param_ty = info.sig.param_types[0] if info.sig.param_types else self._unknown_type
 					val = self.lower_expr(stmt.expr.args[0])
 					self.b.emit(M.DropValue(value=val, ty=param_ty))
+					# Mark source local as consumed so scope drops skip it.
+					arg0 = stmt.expr.args[0]
+					if isinstance(arg0, H.HVar):
+						self._moved_locals.add(self._canonical_local(getattr(arg0, "binding_id", None), arg0.name))
+					elif isinstance(arg0, H.HPlaceExpr) and not arg0.projections and isinstance(arg0.base, H.HVar):
+						self._moved_locals.add(self._canonical_local(getattr(arg0.base, "binding_id", None), arg0.base.name))
 					return
 				self.lower_expr(stmt.expr)
 				return

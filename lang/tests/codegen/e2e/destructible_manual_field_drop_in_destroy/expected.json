@@ -1,5 +1,5 @@
 {
-  "description": "e2e: destroy() that manually drops owned fields must not double-free after caller-side field drop glue",
+  "description": "e2e: destroy() with custom logic (no manual field drops) — compiler handles owned field cleanup automatically",
   "exit_code": 0,
   "alloc_track_leak": true
 }

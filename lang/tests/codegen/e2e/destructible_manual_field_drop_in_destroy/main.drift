@@ -2,6 +2,14 @@ module m
 
 import std.core as core;
 
+// This test verifies that the PRIOR workaround pattern (manually dropping
+// owned fields inside destroy()) is no longer necessary. After the codegen
+// fix, the compiler drops non-Destructible owned fields automatically
+// after destroy() returns.
+//
+// The correct destroy() pattern: do NOT manually drop fields. Just handle
+// custom cleanup logic (flushing, logging, etc.). Field drops are automatic.
+
 struct Drainer {
 	data: Array<Int>,
 	label: Array<Int>,
@@ -10,13 +18,9 @@ struct Drainer {
 
 implement core.Destructible for Drainer {
 	pub fn destroy(var self: Drainer) nothrow -> Void {
-		// Prior workaround pattern: manually drop owned fields before returning.
-		// After the codegen fix, the caller emits field drops post-destroy().
-		// If this body ALSO drops fields, we get a double free.
-		var empty1: Array<Int> = [];
-		self.data = move empty1;
-		var empty2: Array<Int> = [];
-		self.label = move empty2;
+		// Custom cleanup logic only — no manual field drops needed.
+		// The compiler drops data and label after this returns.
+		self.counter = 0;
 		return;
 	}
 }

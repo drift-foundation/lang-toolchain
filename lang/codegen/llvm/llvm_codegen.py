@@ -7652,13 +7652,34 @@ class _FuncBuilder:
 		if isinstance(destructor_fns, dict):
 			fn_id = destructor_fns.get(ty_id)
 			if fn_id is not None:
-				if getattr(self.func, "fn_id", None) != fn_id:
+				# Guard: if we are inside this type's own destroy(), do NOT
+				# call it recursively. This is defense-in-depth — MIR already
+				# excludes the self param from scope drops, but this guard
+				# protects against future MIR changes.
+				if getattr(self.func, "fn_id", None) == fn_id:
+					pass  # fall through to struct field drops below
+				else:
 					llty = self._llvm_type_for_typeid(ty_id)
 					sym = function_symbol(fn_id)
 					self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
+					# After destroy(), drop non-Destructible owned fields.
+					# Fields with their own Destructible impl are destroy()'s
+					# responsibility — dropping them here would double-free.
+					td_post = self.type_table.get(ty_id)
+					if td_post.kind is TypeKind.STRUCT:
+						inst = self.type_table.get_struct_instance(ty_id)
+						if inst is not None:
+							for idx, field_ty in enumerate(inst.field_types):
+								if not self._type_needs_drop(field_ty):
+									continue
+								if isinstance(destructor_fns, dict) and destructor_fns.get(field_ty) is not None:
+									continue
+								field_llty = self._llvm_type_for_typeid(field_ty)
+								field_val = self._fresh("drop_field")
+								self.lines.append(f"  {field_val} = extractvalue {llty} {value}, {idx}")
+								self.value_types[field_val] = field_llty
+								self._emit_drop_value(field_ty, field_val)
 					return
-				# Inside destroy() for this type — skip recursive call,
-				# fall through to field-by-field drops.
 		td = self.type_table.get(ty_id)
 		llty = self._llvm_type_for_typeid(ty_id)
 		if td.kind is TypeKind.SCALAR and td.name == "String":
@@ -7745,6 +7766,19 @@ class _FuncBuilder:
 				if fn_id is not None:
 					sym = function_symbol(fn_id)
 					lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {val})")
+					if td.kind is TypeKind.STRUCT:
+						inst = self.type_table.get_struct_instance(ty_id)
+						if inst is not None:
+							for fidx, field_ty in enumerate(inst.field_types):
+								if not self._type_needs_drop(field_ty):
+									continue
+								if isinstance(destructor_fns, dict) and destructor_fns.get(field_ty) is not None:
+									continue
+								field_llty = self._llvm_type_for_typeid(field_ty)
+								field_val = fresh("field")
+								lines.append(f"  {field_val} = extractvalue {llty} {val}, {fidx}")
+								value_types[field_val] = field_llty
+								emit_drop(field_ty, field_val)
 					return
 			if td.kind is TypeKind.SCALAR and td.name == "String":
 				self.module.needs_string_release = True
