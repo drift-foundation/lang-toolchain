@@ -1,0 +1,4 @@
+{
+  "description": "e2e: return <void-method-call> evaluates side effects (method-call form, nothrow + throws)",
+  "exit_code": 0
+}

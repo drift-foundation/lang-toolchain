@@ -1,0 +1,4 @@
+{
+  "description": "e2e: control — separate call + bare return executes side effects (must stay green)",
+  "exit_code": 0
+}

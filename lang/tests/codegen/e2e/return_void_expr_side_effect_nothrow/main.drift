@@ -1,0 +1,26 @@
+module m
+
+// REGRESSION: return <void-expr> in a nothrow Void function must evaluate
+// the expression for side effects before returning.
+
+struct Counter {
+	n: Int,
+}
+
+fn bump(c: &mut Counter) nothrow -> Void {
+	c.n = c.n + 1;
+	return;
+}
+
+fn do_work(c: &mut Counter) nothrow -> Void {
+	return bump(c);
+}
+
+pub fn main() nothrow -> Int {
+	var c = Counter(n = 0);
+	do_work(&mut c);
+	if c.n != 1 { return 1; }
+	do_work(&mut c);
+	if c.n != 2 { return 2; }
+	return 0;
+}

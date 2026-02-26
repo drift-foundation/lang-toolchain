@@ -1,0 +1,36 @@
+module m
+
+// CONTROL: separate call + bare return always works. This must stay green
+// regardless of the return-void-expr fix.
+
+struct Counter {
+	n: Int,
+}
+
+fn bump(c: &mut Counter) nothrow -> Void {
+	c.n = c.n + 1;
+	return;
+}
+
+fn do_work_separate(c: &mut Counter) nothrow -> Void {
+	bump(c);
+	return;
+}
+
+fn do_work_throws(c: &mut Counter) -> Void {
+	bump(c);
+	return;
+}
+
+fn run() -> Int {
+	var c = Counter(n = 0);
+	do_work_separate(&mut c);
+	if c.n != 1 { return 1; }
+	do_work_throws(&mut c);
+	if c.n != 2 { return 2; }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

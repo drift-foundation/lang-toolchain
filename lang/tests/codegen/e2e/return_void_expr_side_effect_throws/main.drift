@@ -1,0 +1,30 @@
+module m
+
+// REGRESSION: return <void-expr> in a throws Void function must evaluate
+// the expression for side effects (can-throw path wraps in Result::Ok).
+
+struct Counter {
+	n: Int,
+}
+
+fn bump(c: &mut Counter) -> Void {
+	c.n = c.n + 1;
+	return;
+}
+
+fn do_work(c: &mut Counter) -> Void {
+	return bump(c);
+}
+
+fn run() -> Int {
+	var c = Counter(n = 0);
+	do_work(&mut c);
+	if c.n != 1 { return 1; }
+	do_work(&mut c);
+	if c.n != 2 { return 2; }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

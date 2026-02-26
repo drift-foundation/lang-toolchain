@@ -1,3 +1,25 @@
+## 2026-02-26 - LANGUAGE_BUG fix: `return <void-expr>` side effects were skipped in MIR lowering
+- Fixed a Stage2 lowering defect where `return <void-expr>` did not evaluate the expression in `Void`-returning functions.
+  - Impacted pattern: `return f(&mut x, ...);` when `f` returns `Void`.
+  - Symptom: side effects were lost (and could surface as state corruption/crash in downstream code paths).
+- Root cause:
+  - `lang/driftc/stage2/hir_to_mir.py::_visit_stmt_HReturn` treated `Void` return expressions as type-only and emitted `Return` directly without lowering/evaluating the expression.
+  - Affected both branches:
+    - nothrow `Void` return path,
+    - can-throw `Void` return path (`Result::Ok(Void)` construction).
+- Fix:
+  - In both `Void` return-expression branches, evaluate the expression as a statement before return emission:
+    - `self.lower_stmt(H.HExprStmt(expr=stmt.value))`
+  - Location: `lang/driftc/stage2/hir_to_mir.py` (around `_visit_stmt_HReturn` void-expression handling).
+  - This preserves call/mutation side effects while keeping return typing/terminator behavior unchanged.
+- Regression coverage added:
+  - `lang/tests/codegen/e2e/return_void_expr_side_effect_nothrow/`
+  - `lang/tests/codegen/e2e/return_void_expr_side_effect_throws/`
+  - `lang/tests/codegen/e2e/return_void_expr_side_effect_control/`
+- Validation status:
+  - new regressions pass,
+  - related void/return suites and destructible-drop regressions remain green.
+
 ## 2026-02-25 - stdlib crypto/codec JWT-foundation primitives landed
 - Added new `std.crypto` primitives in `stdlib/std/crypto/crypto.drift`:
   - `constant_time_eq(&Array<Byte>, &Array<Byte>) -> Bool`

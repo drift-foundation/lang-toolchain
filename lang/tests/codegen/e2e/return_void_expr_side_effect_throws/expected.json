@@ -1,0 +1,4 @@
+{
+  "description": "e2e: return <void-expr> in throws Void fn must execute side effects (Result::Ok wrapping path)",
+  "exit_code": 0
+}

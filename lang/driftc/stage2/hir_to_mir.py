@@ -5068,6 +5068,7 @@ class HIRToMIR:
 				if stmt.value is not None:
 					val_ty = self._infer_expr_type(stmt.value)
 					if val_ty is None or self._type_table.is_void(val_ty):
+						self.lower_stmt(H.HExprStmt(expr=stmt.value))
 						self._emit_scope_drops(scope_index=0)
 						term = M.Return(value=None)
 						if ret_span != Span():
@@ -5097,6 +5098,7 @@ class HIRToMIR:
 			if stmt.value is not None:
 				val_ty = self._infer_expr_type(stmt.value)
 				if val_ty is None or self._type_table.is_void(val_ty):
+					self.lower_stmt(H.HExprStmt(expr=stmt.value))
 					res_val = self.b.new_temp()
 					self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
 					self._emit_scope_drops(scope_index=0)

@@ -1,0 +1,4 @@
+{
+  "description": "e2e: return <void-expr> in nothrow Void fn must execute side effects (regression for skipped void return expression)",
+  "exit_code": 0
+}
