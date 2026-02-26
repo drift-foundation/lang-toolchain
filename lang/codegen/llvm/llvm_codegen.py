@@ -7696,6 +7696,10 @@ class _FuncBuilder:
 					# After destroy(), drop non-Destructible owned fields.
 					# Fields with their own Destructible impl are destroy()'s
 					# responsibility — dropping them here would double-free.
+					# NOTE: logic duplicated between _emit_drop_value and
+					# _ensure_array_drop_helper.emit_drop. Keep destroy+post-
+					# destroy-field-drop semantics identical; update paired
+					# regressions when changing either site.
 					td_post = self.type_table.get(ty_id)
 					if td_post.kind is TypeKind.STRUCT:
 						inst = self.type_table.get_struct_instance(ty_id)
@@ -7797,6 +7801,11 @@ class _FuncBuilder:
 				if fn_id is not None:
 					sym = function_symbol(fn_id)
 					lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {val})")
+					# Post-destroy non-Destructible field drops.
+					# NOTE: logic duplicated between _emit_drop_value and
+					# _ensure_array_drop_helper.emit_drop. Keep destroy+post-
+					# destroy-field-drop semantics identical; update paired
+					# regressions when changing either site.
 					if td.kind is TypeKind.STRUCT:
 						inst = self.type_table.get_struct_instance(ty_id)
 						if inst is not None:
