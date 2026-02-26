@@ -7683,25 +7683,15 @@ class _FuncBuilder:
 		if isinstance(destructor_fns, dict):
 			fn_id = destructor_fns.get(ty_id)
 			if fn_id is not None:
-				# Guard: if we are inside this type's own destroy(), do NOT
-				# call it recursively. This is defense-in-depth — MIR already
-				# excludes the self param from scope drops, but this guard
-				# protects against future MIR changes.
 				if getattr(self.func, "fn_id", None) == fn_id:
-					pass  # fall through to struct field drops below
-				else:
+					# Inside destroy(): self's scope-drop lands here.
+					# Drop only non-Destructible owned fields — fields
+					# with their own destroy are that impl's responsibility.
+					# {value} is the LIVE post-mutation self (read from
+					# the local at scope exit), so this is UAF-safe.
 					llty = self._llvm_type_for_typeid(ty_id)
-					sym = function_symbol(fn_id)
-					self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
-					# After destroy(), drop non-Destructible owned fields.
-					# Fields with their own Destructible impl are destroy()'s
-					# responsibility — dropping them here would double-free.
-					# NOTE: logic duplicated between _emit_drop_value and
-					# _ensure_array_drop_helper.emit_drop. Keep destroy+post-
-					# destroy-field-drop semantics identical; update paired
-					# regressions when changing either site.
-					td_post = self.type_table.get(ty_id)
-					if td_post.kind is TypeKind.STRUCT:
+					td_self = self.type_table.get(ty_id)
+					if td_self.kind is TypeKind.STRUCT:
 						inst = self.type_table.get_struct_instance(ty_id)
 						if inst is not None:
 							for idx, field_ty in enumerate(inst.field_types):
@@ -7714,6 +7704,16 @@ class _FuncBuilder:
 								self.lines.append(f"  {field_val} = extractvalue {llty} {value}, {idx}")
 								self.value_types[field_val] = field_llty
 								self._emit_drop_value(field_ty, field_val)
+					return
+				else:
+					# Caller-side: just call destroy().  Field cleanup
+					# happens inside destroy's own scope-exit drops (the
+					# branch above).  We must NOT extractvalue from
+					# {value} — it is the pre-call SSA snapshot and may
+					# hold freed pointers (stale-SSA UAF).
+					llty = self._llvm_type_for_typeid(ty_id)
+					sym = function_symbol(fn_id)
+					self.lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {value}){call_dbg_suffix}")
 					return
 		td = self.type_table.get(ty_id)
 		llty = self._llvm_type_for_typeid(ty_id)
@@ -7799,26 +7799,11 @@ class _FuncBuilder:
 			if isinstance(destructor_fns, dict):
 				fn_id = destructor_fns.get(ty_id)
 				if fn_id is not None:
+					# Just call destroy(); field cleanup is handled inside
+					# destroy's own scope drops.  Do NOT extractvalue from
+					# {val} — it is the pre-call SSA snapshot (stale UAF).
 					sym = function_symbol(fn_id)
 					lines.append(f"  call void {_llvm_fn_sym(sym)}({llty} {val})")
-					# Post-destroy non-Destructible field drops.
-					# NOTE: logic duplicated between _emit_drop_value and
-					# _ensure_array_drop_helper.emit_drop. Keep destroy+post-
-					# destroy-field-drop semantics identical; update paired
-					# regressions when changing either site.
-					if td.kind is TypeKind.STRUCT:
-						inst = self.type_table.get_struct_instance(ty_id)
-						if inst is not None:
-							for fidx, field_ty in enumerate(inst.field_types):
-								if not self._type_needs_drop(field_ty):
-									continue
-								if isinstance(destructor_fns, dict) and destructor_fns.get(field_ty) is not None:
-									continue
-								field_llty = self._llvm_type_for_typeid(field_ty)
-								field_val = fresh("field")
-								lines.append(f"  {field_val} = extractvalue {llty} {val}, {fidx}")
-								value_types[field_val] = field_llty
-								emit_drop(field_ty, field_val)
 					return
 			if td.kind is TypeKind.SCALAR and td.name == "String":
 				self.module.needs_string_release = True

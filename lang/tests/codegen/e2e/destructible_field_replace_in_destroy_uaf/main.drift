@@ -1,0 +1,39 @@
+module m
+
+import std.core as core;
+
+// REGRESSION: post-destroy caller-side field drop reads stale SSA snapshot.
+//
+// When destroy() internally replaces an owned Array<String> field (via a
+// function that takes &mut self), the old array backing is freed inside
+// destroy's callee.  But the compiler's post-destroy extractvalue uses the
+// pre-call SSA value — which still holds the old (freed) pointer → UAF.
+//
+// Minimal reproduction of mariadb-wire-proto Statement drop crash.
+
+struct Holder {
+	items: Array<String>,
+	tag: Int,
+}
+
+fn replace_items(h: &mut Holder) nothrow -> Void {
+	// This drops old h.items (freeing backing), stores a new array.
+	h.items = ["x", "y"];
+	return;
+}
+
+implement core.Destructible for Holder {
+	pub fn destroy(var self: Holder) nothrow -> Void {
+		// Calls through &mut self, replacing the owned Array<String> field.
+		replace_items(&mut self);
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val h = Holder(items = ["a", "b", "c"], tag = 42);
+	// h goes out of scope here.
+	// Compiler emits: destroy(h), then extractvalue(h, 0) → array drop.
+	// Bug: extractvalue uses stale pre-destroy value, reads freed pointer.
+	return 0;
+}

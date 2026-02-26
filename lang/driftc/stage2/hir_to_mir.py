@@ -291,17 +291,13 @@ class HIRToMIR:
 		self._can_throw_by_id: dict[FunctionId, bool] = dict(can_throw_by_id) if can_throw_by_id else {}
 		self._current_fn_can_throw: bool | None = self._can_throw_by_id.get(current_fn_id) if current_fn_id else None
 		self._ret_type = return_type
-		self._destroy_self_param: str | None = None
-		if current_fn_id is not None:
-			if "Destructible::destroy" in function_symbol(current_fn_id):
-				sig = self._signatures_by_id.get(current_fn_id)
-				if sig is not None and sig.param_names:
-					self._destroy_self_param = sig.param_names[0]
+		# In destroy(), self IS included in _param_drop_locals so that
+		# scope-exit drops self using the LIVE post-mutation value.
+		# The codegen guard (fn_id match) prevents recursive destroy()
+		# and instead emits plain field drops for non-Destructible fields.
 		self._param_drop_locals: list[str] = []
 		if param_types:
 			for name, ty in param_types.items():
-				if name == self._destroy_self_param:
-					continue
 				if self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
 		# Block-scope constants: binding_id → (TypeId, value).

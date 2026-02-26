@@ -1,0 +1,4 @@
+{
+  "description": "e2e: destroy() that replaces an Array<String> field must not UAF on post-destroy field drop (stale SSA snapshot regression)",
+  "exit_code": 0
+}

@@ -1,3 +1,24 @@
+## 2026-02-26 - LANGUAGE_BUG fix: stale-SSA post-destroy field drop UAF
+- Fixed a codegen ownership bug where caller-side post-`destroy()` field drops used `extractvalue` on the pre-call SSA snapshot.
+  - If `destroy()` mutated/replaced owned fields (for example via `&mut self` helper calls), caller-side `extractvalue` observed stale pointers and could read/free already-freed memory (UAF/double-free).
+  - Real-world manifestation matched mariadb `Statement` auto-drain path with `Array<ColumnDef>` / nested `String` payloads under memcheck.
+- Root cause:
+  - `lang/codegen/llvm/llvm_codegen.py` performed:
+    1. call `destroy(self_snapshot)`,
+    2. then caller-side post-destroy field extraction/drop from the same pre-call SSA value.
+  - For mutated fields, this snapshot was stale.
+- Fix model:
+  - `destroy()` now owns field cleanup via its own scope-exit drop path using the live local `self` state.
+  - Caller-side `_emit_drop_value` for Destructible values now calls `destroy()` and returns (no post-call field extraction).
+  - Inside-destroy guard (`fn_id` match) emits filtered non-Destructible field drops and prevents recursive `destroy()` calls.
+  - Stage2 includes `self` in `_param_drop_locals` for `destroy()` so scope-exit emits `MoveOut(self)+DropValue(self)` on the live post-mutation value.
+- Files:
+  - `lang/driftc/stage2/hir_to_mir.py`
+  - `lang/codegen/llvm/llvm_codegen.py`
+- Regression added:
+  - `lang/tests/codegen/e2e/destructible_field_replace_in_destroy_uaf/`
+  - Pins the exact stale-SSA class: `destroy()` replaces `Array<String>` field via `&mut self` helper; expected clean exit (`0`) with no UAF.
+
 ## 2026-02-26 - LANGUAGE_BUG fix: `return <void-expr>` side effects were skipped in MIR lowering
 - Fixed a Stage2 lowering defect where `return <void-expr>` did not evaluate the expression in `Void`-returning functions.
   - Impacted pattern: `return f(&mut x, ...);` when `f` returns `Void`.
