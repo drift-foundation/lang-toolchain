@@ -17,6 +17,12 @@
 - Added `driftc --version` (`-V`): outputs compiler version, ABI version, git SHA, license, and supervising body. Version constants (`DRIFTC_VERSION`, `DRIFT_RT_ABI_VERSION`) live in `lang/driftc/driftc_versions.py`.
 - ABI stamping plan closeout (`work/compiler-ver-stamping/plan.md`): Phases A-D completed plus `§11` (`--version`). Kept Phase C hint regression at predicate-level (real mismatch stderr contains `__drift_rt_abi_version_`) by design; full driver interception test was intentionally deferred due to disproportionate harness complexity.
 - Finalized stamp scope for test ergonomics: production/runtime-linked entrypoint paths are stamped; helper-only bare-clang IR paths remain unstamped to avoid forcing runtime archive linkage in low-level LLVM tests.
+- Added `std.time` epoch accessors for JWT NumericDate support:
+  - `utc_unix_seconds(&UtcTimestamp) -> Int`
+  - `utc_unix_seconds_now() -> Int`
+  - `utc_unix_millis(&UtcTimestamp) -> Int`
+  with signed UTC semantics and deterministic truncation-toward-zero behavior for seconds conversion.
+- Added e2e coverage: `lang/tests/codegen/e2e/std_time_epoch_accessors/` (fixed timestamp checks, `now()` plausibility, pre-1970 negative epoch conversion, epoch boundary).
 
 ## 2026-02-18
 - Added initial `std.cli` argument parser API (`ArgParser`, `ParsedArgs`, `CliError`) with flags, string/int options, required-option enforcement, positional arguments (including trailing multiple), `--` terminator handling, and deterministic error tags for invalid/duplicate/missing inputs.

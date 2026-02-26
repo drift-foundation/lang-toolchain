@@ -1,0 +1,4 @@
+{
+  "description": "e2e: UtcTimestamp epoch accessors (utc_unix_seconds, utc_unix_seconds_now, utc_unix_millis) with pre-1970 truncation-toward-zero",
+  "exit_code": 0
+}

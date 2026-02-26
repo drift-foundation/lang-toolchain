@@ -73,6 +73,19 @@
 - Finalized stamp scope:
   - runtime-linked/entrypoint-enforced codegen paths emit ABI stamp,
   - helper-only bare-clang IR paths remain unstamped to preserve low-level test independence from runtime archives.
+
+## 2026-02-25 - std.time epoch accessor MVP for JWT NumericDate
+- Added public UTC epoch accessors in `stdlib/std/time/time.drift`:
+  - `utc_unix_seconds(ts: &UtcTimestamp) nothrow -> Int`
+  - `utc_unix_seconds_now() nothrow -> Int`
+  - `utc_unix_millis(ts: &UtcTimestamp) nothrow -> Int`
+- Accessors provide signed `Int` epoch values and deterministic seconds conversion via integer truncation toward zero.
+- Added e2e regression `lang/tests/codegen/e2e/std_time_epoch_accessors/` covering:
+  - known fixed timestamp conversion,
+  - current-time seconds plausibility,
+  - sub-second truncation behavior,
+  - pre-1970 negative epoch conversion (`-1500ms -> -1s`),
+  - exact epoch boundary (`0`).
   - `docs/design/drift-lang-spec.md` updated for:
     - cast semantics scope (runtime now; const-cast semantics noted as forward-looking),
     - fixed-width reservation exception for `Uint64`,
