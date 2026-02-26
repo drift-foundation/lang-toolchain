@@ -186,3 +186,88 @@ def test_driftc_version_output() -> None:
 	assert f"abi {DRIFT_RT_ABI_VERSION}" in out
 	assert "GPL-3.0" in out
 	assert "The Drift Language Foundation" in out
+
+
+def _decode_provenance_payload(ir: str) -> str:
+	"""Extract and decode the @__drift_compiler_build byte array from IR text."""
+	for line in ir.split("\n"):
+		if "@__drift_compiler_build" not in line:
+			continue
+		# Parse "i8 NNN" values from the constant array.
+		import re
+		byte_vals = [int(m) for m in re.findall(r"i8\s+(\d+)", line)]
+		# Strip trailing NUL.
+		if byte_vals and byte_vals[-1] == 0:
+			byte_vals = byte_vals[:-1]
+		return bytes(byte_vals).decode("utf-8")
+	return ""
+
+
+def test_ir_contains_compiler_provenance(tmp_path: Path) -> None:
+	"""Generated IR must contain a compiler provenance constant with required fields."""
+	from lang.driftc.driftc_versions import DRIFTC_VERSION
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	assert "@__drift_compiler_build" in ir, "compiler provenance global not found in IR"
+	payload = _decode_provenance_payload(ir)
+	assert f"driftc {DRIFTC_VERSION}" in payload, f"DRIFTC_VERSION not in provenance: {payload!r}"
+	assert f"abi {DRIFT_RT_ABI_VERSION}" in payload, f"ABI version not in provenance: {payload!r}"
+	assert "word " in payload, f"target word_bits not in provenance: {payload!r}"
+
+
+def test_compiler_provenance_present_without_wrapper(tmp_path: Path) -> None:
+	"""Provenance is emitted even on helper path (no entry wrapper)."""
+	ir = _compile_simple_program(tmp_path)
+	assert "@__drift_compiler_build" in ir, "provenance should be present on helper path"
+
+
+def test_abi_stamp_unchanged_with_provenance(tmp_path: Path) -> None:
+	"""Provenance addition must not alter ABI stamp behavior."""
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
+	assert f"call void @{abi_sym}()" in ir, "ABI stamp call missing"
+	assert "@__drift_compiler_build" in ir, "provenance missing"
+
+
+def _link_flags_for_lib(name: str) -> list[str]:
+	"""Return linker flag for a system library if available."""
+	for d in [Path("/usr/lib"), Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib64")]:
+		if (d / f"lib{name}.so").exists() or (d / f"lib{name}.a").exists():
+			return [f"-l{name}"]
+	return []
+
+
+def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
+	"""Provenance string must be discoverable in the linked binary via strings(1)."""
+	from lang.driftc.driftc_versions import DRIFTC_VERSION
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	clang = shutil.which("clang-15") or shutil.which("clang")
+	assert clang, "clang not available"
+	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
+	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
+	ir_path = tmp_path / "provenance.ll"
+	bin_path = tmp_path / "provenance.out"
+	ir_path.write_text(ir)
+	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	link_cmd = [
+		clang, "-pthread",
+		"-x", "ir", str(ir_path),
+		"-x", "none", str(archive),
+		*link_libs,
+		"-Wl,--as-needed",
+		"-o", str(bin_path),
+	]
+	result = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
+	assert result.returncode == 0, f"link failed: {result.stderr[:500]}"
+	assert bin_path.exists()
+	strings_bin = shutil.which("strings")
+	assert strings_bin, "strings(1) not available"
+	strings_result = subprocess.run(
+		[strings_bin, str(bin_path)],
+		capture_output=True, text=True, timeout=10,
+	)
+	assert strings_result.returncode == 0
+	found = [line for line in strings_result.stdout.splitlines() if f"driftc {DRIFTC_VERSION}" in line]
+	assert found, (
+		f"provenance string 'driftc {DRIFTC_VERSION}' not found in linked binary; "
+		f"strings output has {len(strings_result.stdout.splitlines())} lines"
+	)

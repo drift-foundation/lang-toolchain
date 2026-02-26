@@ -604,6 +604,7 @@ class LlvmModuleBuilder:
 	_dbg_module_flag_ids: tuple[int, int] | None = None
 	_dbg_type_ids: Dict[TypeId, int] = field(default_factory=dict)
 	_global_ctors: List[str] = field(default_factory=list)
+	_llvm_used: List[str] = field(default_factory=list)
 	_dbg_expression_id: int | None = None
 	needs_dbg_intrinsics: bool = False
 
@@ -974,6 +975,31 @@ class LlvmModuleBuilder:
 		self._abi_version_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 		self._global_ctors.append("@__drift_abi_check")
 
+	def emit_compiler_provenance(self, *, git_sha: str = "", build_profile: str = "") -> None:
+		"""Emit a diagnostic-only compiler provenance constant into the module.
+
+		The global uses internal linkage so nm(1) can resolve the symbol,
+		and is registered in @llvm.used to survive optimization and linking."""
+		if getattr(self, "_compiler_provenance_emitted", False):
+			return
+		self._compiler_provenance_emitted = True
+		from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+		fields = [
+			f"driftc {DRIFTC_VERSION}",
+			f"abi {DRIFT_RT_ABI_VERSION}",
+			f"word {self.word_bits}",
+		]
+		if git_sha:
+			fields.append(f"git {git_sha}")
+		if build_profile:
+			fields.append(f"profile {build_profile}")
+		payload = " | ".join(fields)
+		encoded = list(payload.encode("utf-8")) + [0]
+		n = len(encoded)
+		byte_csv = ", ".join(f"i8 {b}" for b in encoded)
+		self.consts.append(f'@__drift_compiler_build = internal constant [{n} x i8] [{byte_csv}], align 1')
+		self._llvm_used.append(f'i8* getelementptr inbounds ([{n} x i8], [{n} x i8]* @__drift_compiler_build, i32 0, i32 0)')
+
 	def render(self) -> str:
 		lines: List[str] = []
 		lines.extend(self.type_decls)
@@ -1234,6 +1260,11 @@ class LlvmModuleBuilder:
 			n = len(self._global_ctors)
 			entries = ", ".join(f"{{ i32, void ()*, i8* }} {{ i32 65535, void ()* {fn}, i8* null }}" for fn in self._global_ctors)
 			lines.append(f"@llvm.global_ctors = appending global [{n} x {{ i32, void ()*, i8* }}] [{entries}]")
+			lines.append("")
+		if self._llvm_used:
+			n = len(self._llvm_used)
+			entries = ", ".join(self._llvm_used)
+			lines.append(f'@llvm.used = appending global [{n} x i8*] [{entries}], section "llvm.metadata"')
 			lines.append("")
 		lines.extend(self.funcs)
 		if self.debug_enabled and self._dbg_compile_unit_id is not None:

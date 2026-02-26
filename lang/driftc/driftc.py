@@ -53,19 +53,24 @@ def _target_word_bits(target_word_bits: int | None) -> int:
 	return target_word_bits
 
 
-def _version_string() -> str:
-	"""Build the driftc --version output."""
-	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
-	git_sha = ""
+def _git_short_sha() -> str:
+	"""Return the short git SHA of HEAD, or empty string on failure."""
 	try:
 		res = subprocess.run(
 			["git", "rev-parse", "--short", "HEAD"],
 			capture_output=True, text=True, cwd=ROOT, timeout=5,
 		)
 		if res.returncode == 0:
-			git_sha = res.stdout.strip()
+			return res.stdout.strip()
 	except Exception:
 		pass
+	return ""
+
+
+def _version_string() -> str:
+	"""Build the driftc --version output."""
+	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	git_sha = _git_short_sha()
 	parts = [
 		f"driftc {DRIFTC_VERSION}",
 		f"abi {DRIFT_RT_ABI_VERSION}",
@@ -5534,6 +5539,7 @@ def compile_to_llvm_ir_for_tests(
 		return "", checked
 	if enforce_entrypoint or argv_wrapper is not None:
 		module.emit_abi_stamp()
+	module.emit_compiler_provenance(git_sha=_git_short_sha())
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
 		for fn_id in fn_infos.keys()
@@ -8248,6 +8254,8 @@ def main(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		module.emit_abi_stamp()
+		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("debug" if debug_enabled else "release")
+		module.emit_compiler_provenance(git_sha=_git_short_sha(), build_profile=_build_profile)
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(
