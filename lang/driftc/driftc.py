@@ -5524,6 +5524,7 @@ def compile_to_llvm_ir_for_tests(
 			argv_wrapper=argv_wrapper,
 			word_bits=host_word_bits(),
 			debug_enabled=debug_enabled,
+			provenance_git_sha=_git_short_sha(),
 		)
 	except AssertionError as err:
 		_append_boundary_contract_diag(
@@ -5539,7 +5540,6 @@ def compile_to_llvm_ir_for_tests(
 		return "", checked
 	if enforce_entrypoint or argv_wrapper is not None:
 		module.emit_abi_stamp()
-	module.emit_compiler_provenance(git_sha=_git_short_sha())
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
 		for fn_id in fn_infos.keys()
@@ -8227,6 +8227,7 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
 
+		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("debug" if debug_enabled else "release")
 		try:
 			_validate_codegen_contract(
 				mir_all,
@@ -8245,6 +8246,8 @@ def main(argv: list[str] | None = None) -> int:
 				argv_wrapper=None,
 				word_bits=_target_word_bits(args.target_word_bits),
 				debug_enabled=debug_enabled,
+				provenance_git_sha=_git_short_sha(),
+				provenance_build_profile=_build_profile,
 			)
 		except AssertionError as err:
 			msg = f"internal: LLVM lowering contract failure ({err})"
@@ -8254,8 +8257,6 @@ def main(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		module.emit_abi_stamp()
-		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("debug" if debug_enabled else "release")
-		module.emit_compiler_provenance(git_sha=_git_short_sha(), build_profile=_build_profile)
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(

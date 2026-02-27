@@ -1,0 +1,4 @@
+{
+  "description": "std.text.substring byte-level extraction with bounds checking",
+  "exit_code": 0
+}

@@ -1,0 +1,4 @@
+{
+  "description": "std.meta.compiler_info_pairs returns structured provenance tags",
+  "exit_code": 0
+}

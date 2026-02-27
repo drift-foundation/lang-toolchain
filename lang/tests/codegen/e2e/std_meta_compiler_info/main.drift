@@ -1,0 +1,56 @@
+module main
+
+import std.core as core;
+import std.meta as meta;
+
+fn contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val hn = haystack.byte_length();
+	val nn = needle.byte_length();
+	if nn == 0 {
+		return true;
+	}
+	if hn < nn {
+		return false;
+	}
+	var i = 0;
+	while i <= hn - nn {
+		var j = 0;
+		var ok = true;
+		while j < nn {
+			val a = core.string_byte_at(haystack, i + j);
+			val b = core.string_byte_at(needle, j);
+			if a != b {
+				ok = false;
+				j = nn;
+			} else {
+				j = j + 1;
+			}
+		}
+		if ok {
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+fn main() nothrow -> Int {
+	val info = meta.compiler_info();
+	val k_driftc = "driftc";
+	if !contains(&info, &k_driftc) {
+		return 1;
+	}
+	val k_abi = "abi";
+	if !contains(&info, &k_abi) {
+		return 2;
+	}
+	val k_word = "word";
+	if !contains(&info, &k_word) {
+		return 3;
+	}
+	val k_build_utc = "build_utc";
+	if !contains(&info, &k_build_utc) {
+		return 4;
+	}
+	return 0;
+}

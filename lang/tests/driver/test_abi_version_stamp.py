@@ -212,6 +212,7 @@ def test_ir_contains_compiler_provenance(tmp_path: Path) -> None:
 	assert f"driftc {DRIFTC_VERSION}" in payload, f"DRIFTC_VERSION not in provenance: {payload!r}"
 	assert f"abi {DRIFT_RT_ABI_VERSION}" in payload, f"ABI version not in provenance: {payload!r}"
 	assert "word " in payload, f"target word_bits not in provenance: {payload!r}"
+	assert "build_utc " in payload, f"build_utc not in provenance: {payload!r}"
 
 
 def test_compiler_provenance_present_without_wrapper(tmp_path: Path) -> None:
@@ -226,6 +227,36 @@ def test_abi_stamp_unchanged_with_provenance(tmp_path: Path) -> None:
 	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 	assert f"call void @{abi_sym}()" in ir, "ABI stamp call missing"
 	assert "@__drift_compiler_build" in ir, "provenance missing"
+
+
+def test_compiler_provenance_grammar(tmp_path: Path) -> None:
+	"""Validate the frozen compiler_info() grammar contract on the provenance payload."""
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	payload = _decode_provenance_payload(ir)
+	assert payload, "provenance payload is empty"
+
+	# Split on " | " delimiter.
+	segments = payload.split(" | ")
+	assert len(segments) >= 4, f"expected >= 4 segments, got {len(segments)}: {payload!r}"
+
+	required_keys = {"driftc", "abi", "word", "build_utc"}
+	found_keys: set[str] = set()
+
+	for seg in segments:
+		assert seg, f"empty segment in provenance: {payload!r}"
+		# Each segment must have form "<key> <value>" (first space splits).
+		space_idx = seg.find(" ")
+		assert space_idx > 0, f"segment has no space delimiter: {seg!r}"
+		key = seg[:space_idx]
+		value = seg[space_idx + 1:]
+		# Keys are [a-z_]+ only.
+		assert re.fullmatch(r"[a-z_]+", key), f"key {key!r} violates [a-z_]+ grammar"
+		# Values are non-empty.
+		assert value, f"empty value for key {key!r} in provenance"
+		found_keys.add(key)
+
+	missing = required_keys - found_keys
+	assert not missing, f"missing required keys {missing} in provenance: {payload!r}"
 
 
 def _link_flags_for_lib(name: str) -> list[str]:

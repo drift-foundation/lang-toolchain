@@ -1,6 +1,17 @@
 # Drift development history
 
+## 2026-02-26
+- Added UTC build timestamp (`build_utc`) to compiler provenance string embedded in every compiled binary (`@__drift_compiler_build`).
+- Added `std.meta::compiler_info()` compile-time intrinsic that returns the full provenance string (version, ABI, word size, git SHA, build profile, build timestamp) as a `String`.
+- Moved `emit_compiler_provenance()` before function lowering so the intrinsic and the embedded constant carry identical content.
+- Bumped `DRIFTC_VERSION` to `0.7.0-dev` (new intrinsic = API surface change).
+- Added e2e coverage: `lang/tests/codegen/e2e/std_meta_compiler_info/` (substring checks for all provenance fields).
+
 ## 2026-02-27
+- Added `std.text.TextError` struct (with `Diagnostic` impl) and `substring(s, start, len)` function for byte-level substring extraction with overflow-safe bounds checking.
+- Added `std.meta.CompilerTag` struct (key/value accessors) and `compiler_info_pairs()` pure-Drift parser that splits the `compiler_info()` provenance string into structured key-value pairs.
+- Froze the `compiler_info()` grammar as a formal contract: `item (" | " item)*` where each item is `<key> <value>` with `[a-z_]+` keys. Added `test_compiler_provenance_grammar` golden test validating the contract on every compiled binary.
+- Added e2e coverage: `std_text_substring/` (happy path slices + error paths) and `std_meta_compiler_info_pairs/` (array length, deterministic key order, non-empty assertions).
 - Bumped compiler version to `0.6.0-dev` for behavior-changing toolchain fixes without ABI boundary changes (`DRIFT_RT_ABI_VERSION` remains `1`).
 - Fixed cross-module drop resolution for `FORWARD_NOMINAL` type references that could suppress nested payload destruction in variant/array paths.
   - `TypeTable.has_drop()` now resolves `FORWARD_NOMINAL` before drop classification.

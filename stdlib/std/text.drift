@@ -9,7 +9,9 @@ export {
 	TokenConsumer,
 	Utf8Error,
 	utf8_from_bytes,
-	utf8_from_bytes_range
+	utf8_from_bytes_range,
+	TextError,
+	substring
 };
 
 pub variant TokenizeAction {
@@ -224,4 +226,32 @@ pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow 
 		i = i + 1;
 	}
 	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b)));
+}
+
+pub struct TextError {
+	pub tag: String,
+	pub offset: Int
+}
+
+implement core.Diagnostic for TextError {
+	pub fn to_diag(self: &TextError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String, TextError> {
+	val n = s.byte_length();
+	if start < 0 or len < 0 or start > n or len > n - start {
+		return core.Result::Err(TextError(tag = "out-of-bounds", offset = start));
+	}
+	if len == 0 {
+		return core.Result::Ok("");
+	}
+	var b = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), len));
 }

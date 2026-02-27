@@ -316,6 +316,8 @@ def lower_module_to_llvm(
 	word_bits: int | None = None,
 	float_bits: int | None = None,
 	debug_enabled: bool = True,
+	provenance_git_sha: str = "",
+	provenance_build_profile: str = "",
 ) -> LlvmModuleBuilder:
 	"""
 	Lower a set of SSA functions to an LLVM module.
@@ -328,6 +330,7 @@ def lower_module_to_llvm(
 	if word_bits is None:
 		raise AssertionError("LLVM codegen requires explicit word_bits")
 	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
+	mod.emit_compiler_provenance(git_sha=provenance_git_sha, build_profile=provenance_build_profile)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
@@ -716,6 +719,7 @@ class LlvmModuleBuilder:
 				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ i8*, i8* }}",
 			]
 		)
+		self._compiler_provenance_payload = ""
 		# Seed the canonical FnResult types for supported ok payloads.
 		self._fnresult_types_by_key["Int"] = FNRESULT_INT_ERROR
 		self._fnresult_ok_llty_by_type[FNRESULT_INT_ERROR] = DRIFT_INT_TYPE
@@ -975,7 +979,7 @@ class LlvmModuleBuilder:
 		self._abi_version_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 		self._global_ctors.append("@__drift_abi_check")
 
-	def emit_compiler_provenance(self, *, git_sha: str = "", build_profile: str = "") -> None:
+	def emit_compiler_provenance(self, *, git_sha: str = "", build_profile: str = "", build_utc: str = "") -> None:
 		"""Emit a diagnostic-only compiler provenance constant into the module.
 
 		The global uses internal linkage so nm(1) can resolve the symbol,
@@ -984,6 +988,9 @@ class LlvmModuleBuilder:
 			return
 		self._compiler_provenance_emitted = True
 		from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+		if not build_utc:
+			import datetime
+			build_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 		fields = [
 			f"driftc {DRIFTC_VERSION}",
 			f"abi {DRIFT_RT_ABI_VERSION}",
@@ -993,7 +1000,9 @@ class LlvmModuleBuilder:
 			fields.append(f"git {git_sha}")
 		if build_profile:
 			fields.append(f"profile {build_profile}")
+		fields.append(f"build_utc {build_utc}")
 		payload = " | ".join(fields)
+		self._compiler_provenance_payload = payload
 		encoded = list(payload.encode("utf-8")) + [0]
 		n = len(encoded)
 		byte_csv = ", ".join(f"i8 {b}" for b in encoded)
@@ -3495,7 +3504,7 @@ class _FuncBuilder:
 		self.lines.append(f"  {dest} = insertvalue {DRIFT_STRING_TYPE} {tmp0}, i8* {ptr}, 1")
 		self.value_types[dest] = DRIFT_STRING_TYPE
 
-	def _emit_string_literal_value(self, value: str) -> str:
+	def _emit_string_literal_value(self, value: str, *, dest_name: str = "") -> str:
 		utf8_bytes = value.encode("utf-8")
 		size = len(utf8_bytes)
 		cache = self.module.string_literal_cache
@@ -3517,7 +3526,7 @@ class _FuncBuilder:
 		)
 		tmp0 = self._fresh("str0")
 		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {size}, 0")
-		dest = self._fresh("str")
+		dest = dest_name or self._fresh("str")
 		self.lines.append(f"  {dest} = insertvalue {DRIFT_STRING_TYPE} {tmp0}, i8* {ptr}, 1")
 		self.value_types[dest] = DRIFT_STRING_TYPE
 		return dest
@@ -3563,6 +3572,16 @@ class _FuncBuilder:
 				self.lines.append(f"  {tmp1} = insertvalue {self._llty(ret_llty)} {tmp0}, {DRIFT_STRING_TYPE} {file_v}, 1")
 				self.lines.append(f"  {dest} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
 				self.value_types[dest] = ret_llty
+				return
+			if instr.fn_id.name == "compiler_info":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: compiler_info expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: compiler_info result must be captured")
+				payload = self.module._compiler_provenance_payload
+				if not payload:
+					raise NotImplementedError("LLVM codegen v1: compiler_info requires provenance (emit_compiler_provenance not called)")
+				self._emit_string_literal_value(payload, dest_name=dest)
 				return
 		if instr.fn_id.module == "lang.thread":
 			if instr.fn_id.name == "vt_spawn":

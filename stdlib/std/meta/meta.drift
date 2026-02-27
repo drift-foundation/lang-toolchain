@@ -1,6 +1,9 @@
 module std.meta
 
-export { Caller, caller };
+import std.core as core;
+import std.text as text;
+
+export { Caller, caller, compiler_info, CompilerTag, compiler_info_pairs };
 
 pub struct Caller {
 	module_id_v: String,
@@ -31,3 +34,78 @@ implement Caller {
 }
 
 @intrinsic pub fn caller() nothrow -> Caller;
+
+@intrinsic pub fn compiler_info() nothrow -> String;
+
+pub struct CompilerTag {
+	key_v: String,
+	value_v: String
+}
+
+implement CompilerTag {
+	pub fn key(self: &CompilerTag) nothrow -> &String {
+		return &self.key_v;
+	}
+
+	pub fn value(self: &CompilerTag) nothrow -> &String {
+		return &self.value_v;
+	}
+}
+
+pub fn compiler_info_pairs() nothrow -> Array<CompilerTag> {
+	val info = compiler_info();
+	val n = info.byte_length();
+	var result = Array<type CompilerTag>::with_capacity(8);
+	var seg_start = 0;
+	var i = 0;
+	while i < n {
+		var at_delim = false;
+		if i + 2 < n {
+			if core.string_byte_at(&info, i) == cast<Byte>(32) {
+				if core.string_byte_at(&info, i + 1) == cast<Byte>(124) {
+					if core.string_byte_at(&info, i + 2) == cast<Byte>(32) {
+						at_delim = true;
+					}
+				}
+			}
+		}
+		if at_delim {
+			_parse_tag(&info, seg_start, i, &mut result);
+			seg_start = i + 3;
+			i = i + 3;
+		} else {
+			i = i + 1;
+		}
+	}
+	_parse_tag(&info, seg_start, n, &mut result);
+	return move result;
+}
+
+fn _parse_tag(info: &String, start: Int, end: Int, out: &mut Array<CompilerTag>) nothrow -> Void {
+	val seg_len = end - start;
+	if seg_len <= 0 {
+		return;
+	}
+	var sp = start;
+	while sp < end {
+		if core.string_byte_at(info, sp) == cast<Byte>(32) {
+			match text.substring(info, start, sp - start) {
+				core.Result::Ok(k) => {
+					val val_start = sp + 1;
+					val val_len = end - val_start;
+					if val_len > 0 {
+						match text.substring(info, val_start, val_len) {
+							core.Result::Ok(v) => {
+								out.push(CompilerTag(key_v = k, value_v = v));
+							},
+							core.Result::Err(_) => { }
+						}
+					}
+				},
+				core.Result::Err(_) => { }
+			}
+			return;
+		}
+		sp = sp + 1;
+	}
+}
