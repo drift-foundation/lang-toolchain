@@ -1,0 +1,6 @@
+{
+  "description": "e2e: variant with Array<Cell> payload must be fully dropped in match + loop lifecycle across modules (no leak)",
+  "exit_code": 0,
+  "alloc_track_leak": true,
+  "module_paths": ["."]
+}

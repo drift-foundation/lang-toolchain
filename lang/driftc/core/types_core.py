@@ -1375,6 +1375,22 @@ class TypeTable:
 		if cached is not None:
 			return cached
 		td = self.get(tid)
+		if td.kind is TypeKind.FORWARD_NOMINAL:
+			resolved = (
+				self.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+				or self.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+				or self.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+			)
+			if resolved is None:
+				resolved = (
+					self.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=td.name)
+					or self.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=td.name)
+					or self.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=td.name)
+				)
+			if resolved is not None and resolved != tid:
+				needs = self.has_drop(resolved)
+				self._needs_drop_cache[tid] = needs
+				return needs
 		if td.kind in {TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION}:
 			self._needs_drop_cache[tid] = False
 			return False

@@ -1,0 +1,88 @@
+module proto
+
+import std.core as core;
+import types;
+
+export { WireEvent, RpcRow, RpcEvent, Statement, next_event, skip_remaining, rpc_next_event };
+
+// Wire-level event with raw Array<types.Cell> payload
+pub variant WireEvent {
+	Row(value: Array<types.Cell>),
+	ResultSetEnd,
+	StatementEnd,
+}
+
+// RPC-level wrapper struct around the row data
+pub struct RpcRow {
+	pub values: Array<types.Cell>,
+}
+
+// RPC-level event with struct-wrapped payload
+pub variant RpcEvent {
+	Row(value: RpcRow),
+	ResultSetEnd,
+	StatementEnd,
+}
+
+pub struct Statement {
+	pub remaining: Int,
+}
+
+// Wire-level next_event returns WireEvent
+fn wire_next_event(stmt: &mut Statement) nothrow -> core.Result<WireEvent, String> {
+	if stmt.remaining <= 0 {
+		return core.Result::Ok(WireEvent::StatementEnd());
+	}
+	stmt.remaining = stmt.remaining - 1;
+	var row: Array<types.Cell> = [];
+	row.push(types.Cell::Text("col_a"));
+	row.push(types.Cell::Text("col_b"));
+	return core.Result::Ok(WireEvent::Row(move row));
+}
+
+// RPC-level next_event wraps wire events into RpcEvent (like mariadb.rpc::RpcStatement::next_event)
+pub fn rpc_next_event(stmt: &mut Statement) nothrow -> core.Result<RpcEvent, String> {
+	match wire_next_event(stmt) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(v) => {
+			match v {
+				WireEvent::Row(v2) => {
+					var row = move v2;
+					return core.Result::Ok(RpcEvent::Row(RpcRow(values = move row)));
+				},
+				WireEvent::ResultSetEnd => { return core.Result::Ok(RpcEvent::ResultSetEnd()); },
+				WireEvent::StatementEnd => { return core.Result::Ok(RpcEvent::StatementEnd()); },
+			}
+		}
+	}
+}
+
+// Wire-level next_event for direct use
+pub fn next_event(stmt: &mut Statement) nothrow -> core.Result<WireEvent, String> {
+	return wire_next_event(stmt);
+}
+
+pub fn skip_remaining(stmt: &mut Statement) nothrow -> core.Result<Void, String> {
+	while true {
+		match wire_next_event(stmt) {
+			core.Result::Ok(ev) => {
+				match ev {
+					WireEvent::Row(_) => {},
+					WireEvent::ResultSetEnd => {},
+					WireEvent::StatementEnd => { return core.Result::Ok(core.void_value()); },
+				}
+			},
+			core.Result::Err(e) => { return core.Result::Err(e); }
+		}
+	}
+}
+
+implement core.Destructible for Statement {
+	pub fn destroy(var self: Statement) nothrow -> Void {
+		if self.remaining <= 0 { return; }
+		match skip_remaining(&mut self) {
+			core.Result::Ok(_) => { return; },
+			core.Result::Err(_) => { return; }
+		}
+	}
+}

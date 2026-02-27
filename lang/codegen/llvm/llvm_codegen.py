@@ -7650,6 +7650,7 @@ class _FuncBuilder:
 	def _type_needs_drop(self, ty_id: TypeId) -> bool:
 		if self.type_table is None:
 			raise AssertionError("drop requires a TypeTable")
+		ty_id = self._resolve_forward_nominal_typeid(ty_id)
 		cached = self._drop_cache.get(ty_id)
 		if cached is not None:
 			return cached
@@ -7677,6 +7678,7 @@ class _FuncBuilder:
 	def _emit_drop_value(self, ty_id: TypeId, value: str) -> None:
 		if self.type_table is None:
 			raise AssertionError("drop requires a TypeTable")
+		ty_id = self._resolve_forward_nominal_typeid(ty_id)
 		if not self._type_needs_drop(ty_id):
 			return
 		call_dbg_suffix = ""
@@ -7785,6 +7787,7 @@ class _FuncBuilder:
 	def _ensure_array_drop_helper(self, elem_ty: TypeId) -> str:
 		if self.type_table is None:
 			raise AssertionError("array drop helper requires a TypeTable")
+		elem_ty = self._resolve_forward_nominal_typeid(elem_ty)
 		key = self._type_key(elem_ty)
 		name = f"__drift_array_drop_{key}"
 		if name in self.module.array_drop_helpers:
@@ -7801,6 +7804,7 @@ class _FuncBuilder:
 			return f"%{prefix}{tmp_counter}"
 
 		def emit_drop(ty_id: TypeId, val: str) -> None:
+			ty_id = self._resolve_forward_nominal_typeid(ty_id)
 			td = self.type_table.get(ty_id)
 			llty = self._llvm_type_for_typeid(ty_id)
 			destructor_fns = getattr(self.type_table, "destructor_fns", None)

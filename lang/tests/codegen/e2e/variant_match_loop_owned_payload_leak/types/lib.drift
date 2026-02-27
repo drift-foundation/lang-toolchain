@@ -1,0 +1,11 @@
+module types
+
+export { Cell };
+
+// Cell lives in its own module so that when proto imports it,
+// the type table creates a FORWARD_NOMINAL reference that must
+// be resolved during drop codegen.
+pub variant Cell {
+	Null,
+	Text(value: String),
+}

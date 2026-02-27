@@ -1,3 +1,25 @@
+## 2026-02-27 - LANGUAGE_BUG fix: FORWARD_NOMINAL drop resolution for cross-module variant payloads
+- Fixed a cross-module drop-lifetime bug where payload element types represented as `FORWARD_NOMINAL` were treated as non-droppable in drop codegen paths.
+  - Real-world symptom: leak-only memcheck failures in mariadb live RPC flows (`next_event`/`skip_remaining`) with leaked `Array<...>` buffers and nested `String` payloads.
+  - Root cause: unresolved forward-nominal element type in drop classification caused per-element drop helpers not to run, so only backing buffers were freed.
+- TypeTable fix:
+  - `lang/driftc/core/types_core.py::has_drop(...)` now resolves `FORWARD_NOMINAL` to concrete `STRUCT`/`VARIANT`/`INTERFACE` before computing drop requirement.
+  - Resolved result is cached in `_needs_drop_cache` for the forward id.
+- LLVM codegen fix (unified resolver; no duplicate resolver paths):
+  - `lang/codegen/llvm/llvm_codegen.py` now resolves forward-nominal type IDs via `_resolve_forward_nominal_typeid(...)` in drop-critical sites:
+    - `_type_needs_drop(...)`
+    - `_emit_drop_value(...)`
+    - `_ensure_array_drop_helper(...)`
+    - inner `emit_drop(...)` used by array drop helper generation
+- Regression added:
+  - `lang/tests/codegen/e2e/variant_match_loop_owned_payload_leak/`
+  - Cross-module setup (`types.Cell` imported by `proto`) with four lifecycle patterns:
+    - auto-drain via `Destructible::destroy`
+    - explicit `skip_remaining`
+    - loop/bound payload drain
+    - drain-expect-end helper path
+  - alloc-tracked leak assertion enabled (`alloc_track_leak: true`).
+
 ## 2026-02-26 - LANGUAGE_BUG fix: stale-SSA post-destroy field drop UAF
 - Fixed a codegen ownership bug where caller-side post-`destroy()` field drops used `extractvalue` on the pre-call SSA snapshot.
   - If `destroy()` mutated/replaced owned fields (for example via `&mut self` helper calls), caller-side `extractvalue` observed stale pointers and could read/free already-freed memory (UAF/double-free).

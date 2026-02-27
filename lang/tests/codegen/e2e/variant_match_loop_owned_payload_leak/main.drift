@@ -1,0 +1,87 @@
+module main
+
+import std.core as core;
+import proto;
+
+// Pattern 1: consume one row via RPC wrapper, let Destructible auto-drain the rest
+fn scenario_drop_auto_drain() nothrow -> Int {
+	var stmt = proto.Statement(remaining = 3);
+	match proto.rpc_next_event(&mut stmt) {
+		core.Result::Ok(ev) => {
+			match ev {
+				proto.RpcEvent::Row(row) => {
+					if row.values.len != 2 { return 1; }
+				},
+				default => { return 2; },
+			}
+		},
+		core.Result::Err(_) => { return 3; }
+	}
+	return 0;
+}
+
+// Pattern 2: explicit skip_remaining (wildcard drops via wire-level events)
+fn scenario_explicit_skip() nothrow -> Int {
+	var stmt = proto.Statement(remaining = 3);
+	match proto.skip_remaining(&mut stmt) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 10; }
+	}
+}
+
+// Pattern 3: loop drain with bound RPC binder (struct-wrapped Array<Cell>)
+fn scenario_loop_drain_bind() nothrow -> Int {
+	var stmt = proto.Statement(remaining = 3);
+	var total = 0;
+	while true {
+		match proto.rpc_next_event(&mut stmt) {
+			core.Result::Err(_) => { break; },
+			core.Result::Ok(ev) => {
+				match ev {
+					proto.RpcEvent::Row(row) => { total = total + row.values.len; },
+					proto.RpcEvent::ResultSetEnd => {},
+					proto.RpcEvent::StatementEnd => { break; },
+				}
+			}
+		}
+	}
+	if total != 6 { return 20; }
+	return 0;
+}
+
+// Pattern 4: _drain_expect_statement_end pattern (single call, nested Result+RpcEvent match)
+fn drain_expect_end(stmt: &mut proto.Statement) nothrow -> Int {
+	while true {
+		match proto.rpc_next_event(stmt) {
+			core.Result::Err(_) => { return 100; },
+			core.Result::Ok(ev) => {
+				match ev {
+					proto.RpcEvent::Row(_) => {},
+					proto.RpcEvent::ResultSetEnd => {},
+					proto.RpcEvent::StatementEnd => { return 0; },
+				}
+			}
+		}
+	}
+}
+
+fn scenario_drain_expect_end() nothrow -> Int {
+	var stmt = proto.Statement(remaining = 3);
+	return drain_expect_end(&mut stmt);
+}
+
+pub fn main() nothrow -> Int {
+	val a = scenario_drop_auto_drain();
+	if a != 0 { return a; }
+
+	val b = scenario_explicit_skip();
+	if b != 0 { return b; }
+
+	val c = scenario_loop_drain_bind();
+	if c != 0 { return c; }
+
+	val d = scenario_drain_expect_end();
+	if d != 0 { return d; }
+
+	return 0;
+}
