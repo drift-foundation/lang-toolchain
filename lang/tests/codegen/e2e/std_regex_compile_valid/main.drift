@@ -1,0 +1,272 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn expect_ok(pattern: &String, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return fail_code; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// --- Literals ---
+	rc = expect_ok(&"abc", 1);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"x", 2);
+	if rc != 0 { return rc; }
+
+	// --- Dot ---
+	rc = expect_ok(&"a.b", 3);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"...", 4);
+	if rc != 0 { return rc; }
+
+	// --- Anchors ---
+	rc = expect_ok(&"^abc$", 5);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"^$", 6);
+	if rc != 0 { return rc; }
+
+	// --- Quantifiers ---
+	rc = expect_ok(&"a*", 10);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"a+", 11);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"a?", 12);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"a*b+c?", 13);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&".+", 14);
+	if rc != 0 { return rc; }
+
+	// --- Groups ---
+	rc = expect_ok(&"(abc)", 20);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"(a)(b)", 21);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"((a))", 22);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"(a*)", 23);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"(a)+", 24);
+	if rc != 0 { return rc; }
+
+	// --- Alternation ---
+	rc = expect_ok(&"a|b", 30);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"a|b|c", 31);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"(a|b)c", 32);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"ab|cd|ef", 33);
+	if rc != 0 { return rc; }
+
+	// --- Character classes ---
+	rc = expect_ok(&"[abc]", 40);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[a-z]", 41);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[^abc]", 42);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[a-zA-Z0-9]", 43);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[\\]]", 44);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[\\-]", 45);
+	if rc != 0 { return rc; }
+
+	// --- Escape sequences ---
+	rc = expect_ok(&"\\d", 50);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\D", 51);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\w+", 52);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\W", 53);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\s", 54);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\S", 55);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\t\\n\\r", 56);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\.", 57);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"\\^\\$\\(\\)\\[\\]\\|\\*\\+\\?\\\\", 58);
+	if rc != 0 { return rc; }
+
+	// --- Shorthand classes inside [] ---
+	rc = expect_ok(&"[\\d]", 60);
+	if rc != 0 { return rc; }
+
+	rc = expect_ok(&"[\\w\\s]", 61);
+	if rc != 0 { return rc; }
+
+	// --- Structural: single literal unwraps to Literal, not Group ---
+	val p_x = "x";
+	match regex.compile(&p_x) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Literal(byte_val) => {
+					if cast<Int>(byte_val) != 120 { return 70; }
+				},
+				default => { return 71; }
+			}
+		},
+		core.Result::Err(_) => { return 72; }
+	}
+
+	// --- Structural: "ab" produces Group with 2 Literal children ---
+	val p_ab = "ab";
+	match regex.compile(&p_ab) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Group(children) => {
+					if children.len != 2 { return 73; }
+				},
+				default => { return 74; }
+			}
+		},
+		core.Result::Err(_) => { return 75; }
+	}
+
+	// --- Structural: "a|b" produces Alternation with 2 branches ---
+	val p_alt = "a|b";
+	match regex.compile(&p_alt) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Alternation(branches) => {
+					if branches.len != 2 { return 76; }
+				},
+				default => { return 77; }
+			}
+		},
+		core.Result::Err(_) => { return 78; }
+	}
+
+	// --- Structural: "a*" produces Repeat with Star ---
+	val p_star = "a*";
+	match regex.compile(&p_star) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Repeat(child, quant) => {
+					if child.len != 1 { return 79; }
+					match quant {
+						regex.Quantifier::Star => { },
+						default => { return 80; }
+					}
+				},
+				default => { return 81; }
+			}
+		},
+		core.Result::Err(_) => { return 82; }
+	}
+
+	// --- Structural: "\d" produces Class(negated=false, 1 range) ---
+	val p_d = "\\d";
+	match regex.compile(&p_d) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Class(cls) => {
+					if cls.negated { return 83; }
+					if cls.ranges.len != 1 { return 84; }
+					if cast<Int>(cls.ranges[0].lo) != 48 { return 85; }
+					if cast<Int>(cls.ranges[0].hi) != 57 { return 86; }
+				},
+				default => { return 87; }
+			}
+		},
+		core.Result::Err(_) => { return 88; }
+	}
+
+	// --- Structural: "\w" produces Class with 4 ranges ---
+	val p_w = "\\w";
+	match regex.compile(&p_w) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Class(cls) => {
+					if cls.negated { return 89; }
+					if cls.ranges.len != 4 { return 90; }
+				},
+				default => { return 91; }
+			}
+		},
+		core.Result::Err(_) => { return 92; }
+	}
+
+	// --- Structural: "\D" produces Class(negated=true) ---
+	val p_D = "\\D";
+	match regex.compile(&p_D) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Class(cls) => {
+					if !cls.negated { return 93; }
+				},
+				default => { return 94; }
+			}
+		},
+		core.Result::Err(_) => { return 95; }
+	}
+
+	// --- Structural: "[a-z]" produces Class with 1 range, lo=97 hi=122 ---
+	val p_az = "[a-z]";
+	match regex.compile(&p_az) {
+		core.Result::Ok(re) => {
+			match re.root {
+				regex.RegexNode::Class(cls) => {
+					if cls.negated { return 96; }
+					if cls.ranges.len != 1 { return 97; }
+					if cast<Int>(cls.ranges[0].lo) != 97 { return 98; }
+					if cast<Int>(cls.ranges[0].hi) != 122 { return 99; }
+				},
+				default => { return 100; }
+			}
+		},
+		core.Result::Err(_) => { return 101; }
+	}
+
+	return 0;
+}

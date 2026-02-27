@@ -1,0 +1,142 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn expect_err(pattern: &String, expected_tag: &String, expected_offset: Int, fail_base: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(_) => { return fail_base; },
+		core.Result::Err(e) => {
+			if !str_eq(&e.tag, expected_tag) { return fail_base + 1; }
+			if e.offset != expected_offset { return fail_base + 2; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// --- unclosed-group: "(" → offset 1 (at EOF) ---
+	val t_ug = "unclosed-group";
+	val p1 = "(";
+	rc = expect_err(&p1, &t_ug, 1, 10);
+	if rc != 0 { return rc; }
+
+	// --- unclosed-group: "(abc" → offset 4 ---
+	val p2 = "(abc";
+	rc = expect_err(&p2, &t_ug, 4, 13);
+	if rc != 0 { return rc; }
+
+	// --- unclosed-group: "((a)" → offset 4 (outer unclosed) ---
+	val p3 = "((a)";
+	rc = expect_err(&p3, &t_ug, 4, 16);
+	if rc != 0 { return rc; }
+
+	// --- unexpected-char: ")" → offset 0 ---
+	// ')' without matching '(' is caught by the compile() wrapper as
+	// "unexpected-char" (the sequence parser sees ')' and breaks without
+	// consuming, then compile() notices the input is not fully consumed).
+	val t_uc2 = "unexpected-char";
+	val p4 = ")";
+	rc = expect_err(&p4, &t_uc2, 0, 20);
+	if rc != 0 { return rc; }
+
+	// --- dangling-quantifier: "*" → offset 0 ---
+	val t_dq = "dangling-quantifier";
+	val p5 = "*";
+	rc = expect_err(&p5, &t_dq, 0, 30);
+	if rc != 0 { return rc; }
+
+	// --- dangling-quantifier: "+" → offset 0 ---
+	val p6 = "+";
+	rc = expect_err(&p6, &t_dq, 0, 33);
+	if rc != 0 { return rc; }
+
+	// --- dangling-quantifier: "?" → offset 0 ---
+	val p7 = "?";
+	rc = expect_err(&p7, &t_dq, 0, 36);
+	if rc != 0 { return rc; }
+
+	// --- trailing-backslash: "\" → offset 0 ---
+	val t_tb = "trailing-backslash";
+	val p8 = "\\";
+	rc = expect_err(&p8, &t_tb, 0, 40);
+	if rc != 0 { return rc; }
+
+	// --- trailing-backslash: "a\" → offset 1 ---
+	val p9 = "a\\";
+	rc = expect_err(&p9, &t_tb, 1, 43);
+	if rc != 0 { return rc; }
+
+	// --- invalid-escape: "\a" → offset 0 ---
+	val t_ie = "invalid-escape";
+	val p10 = "\\a";
+	rc = expect_err(&p10, &t_ie, 0, 50);
+	if rc != 0 { return rc; }
+
+	// --- invalid-escape: "\z" → offset 0 ---
+	val p11 = "\\z";
+	rc = expect_err(&p11, &t_ie, 0, 53);
+	if rc != 0 { return rc; }
+
+	// --- invalid-escape: "\1" → offset 0 (no backrefs) ---
+	val p12 = "\\1";
+	rc = expect_err(&p12, &t_ie, 0, 56);
+	if rc != 0 { return rc; }
+
+	// --- unclosed-class: "[abc" → offset 0 ---
+	val t_uc = "unclosed-class";
+	val p13 = "[abc";
+	rc = expect_err(&p13, &t_uc, 0, 60);
+	if rc != 0 { return rc; }
+
+	// --- unclosed-class: "[" → offset 0 ---
+	val p14 = "[";
+	rc = expect_err(&p14, &t_uc, 0, 63);
+	if rc != 0 { return rc; }
+
+	// --- "[]" is NOT empty-class: first-char rule makes ']' a literal member,
+	// then EOF → unclosed-class (POSIX-compatible). ---
+	val p15 = "[]";
+	rc = expect_err(&p15, &t_uc, 0, 70);
+	if rc != 0 { return rc; }
+
+	// --- reversed-range: "[z-a]" → offset 3 ---
+	val t_rr = "reversed-range";
+	val p16 = "[z-a]";
+	rc = expect_err(&p16, &t_rr, 3, 80);
+	if rc != 0 { return rc; }
+
+	// --- trailing-backslash-in-class: "[\\" → offset 1 ---
+	val t_tbc = "trailing-backslash-in-class";
+	val p17 = "[\\";
+	rc = expect_err(&p17, &t_tbc, 1, 90);
+	if rc != 0 { return rc; }
+
+	// --- invalid-escape-in-class: "[\a]" → offset 1 ---
+	val t_iec = "invalid-escape-in-class";
+	val p18 = "[\\a]";
+	rc = expect_err(&p18, &t_iec, 1, 100);
+	if rc != 0 { return rc; }
+
+	// --- dangling-quantifier after group: "()*" should succeed (quantifier on group)
+	// but "|*" has dangling quantifier on empty alt branch ---
+	val p19 = "a|*";
+	rc = expect_err(&p19, &t_dq, 2, 110);
+	if rc != 0 { return rc; }
+
+	return 0;
+}

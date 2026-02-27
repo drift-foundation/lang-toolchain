@@ -2801,9 +2801,19 @@ class _FuncBuilder:
 					arg_val = self._map_value(arg)
 					have = self.value_types.get(arg_val)
 					if have is not None and have != want_llty:
-						raise NotImplementedError(
-							f"LLVM codegen v1: ConstructVariant field {idx} type mismatch (have {have}, expected {want_llty})"
-						)
+						# Auto-load pointer-to-value for small scalar fields (Byte, Bool).
+						# This handles the case where MIR passes a VariantGetFieldAddr result
+						# (pointer) directly to ConstructVariant (which expects a value).
+						if have == f"{want_llty}*":
+							loaded = self._fresh("autoload")
+							self.lines.append(f"  {loaded} = load {want_llty}, {want_llty}* {arg_val}")
+							self.value_map[arg] = loaded
+							self.value_types[loaded] = want_llty
+							arg_val = loaded
+						else:
+							raise NotImplementedError(
+								f"LLVM codegen v1: ConstructVariant field {idx} type mismatch (have {have}, expected {want_llty})"
+							)
 					field_ptr = self._fresh("fieldptr")
 					self.lines.append(
 						f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {idx}"

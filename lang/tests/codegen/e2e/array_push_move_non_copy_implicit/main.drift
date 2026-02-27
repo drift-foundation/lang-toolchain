@@ -1,0 +1,71 @@
+module main
+
+import std.core as core;
+
+// Regression: array push/insert of non-Copy values must move (tombstone the
+// source local) so the caller's scope-drop doesn't double-free.
+// Before the fix, `lower_expr` (bitcopy) was used instead of
+// `_lower_call_arg` (MoveOut) for push/insert value arguments.
+
+variant Wrapper {
+	Leaf(tag: Int),
+	Branch(children: Array<Wrapper>),
+	@tombstone Tombstone
+}
+
+fn make_branch(a: Int, b: Int) nothrow -> Wrapper {
+	var kids = Array<type Wrapper>::with_capacity(2);
+	// Push non-Copy Wrapper values without explicit `move` —
+	// the compiler must implicitly move-out from the locals.
+	val w1 = Wrapper::Leaf(tag = a);
+	val w2 = Wrapper::Leaf(tag = b);
+	kids.push(w1);
+	kids.push(w2);
+	return Wrapper::Branch(children = move kids);
+}
+
+fn leaf_tag(w: &Wrapper) nothrow -> Int {
+	match w {
+		Wrapper::Leaf(tag) => { return *tag; },
+		default => { return 0 - 1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	// Build a Branch(children=[Leaf(10), Leaf(20)]).
+	val node = make_branch(10, 20);
+
+	// Verify structure.
+	match node {
+		Wrapper::Branch(children) => {
+			if children.len != 2 { return 1; }
+			if leaf_tag(&children[0]) != 10 { return 2; }
+			if leaf_tag(&children[1]) != 20 { return 3; }
+		},
+		default => { return 4; }
+	}
+
+	// Push non-Copy into a fresh array and pop it back — round trip.
+	var arr = Array<type Wrapper>::with_capacity(2);
+	val w3 = Wrapper::Leaf(tag = 42);
+	arr.push(w3);
+	val popped = arr.pop();
+	match popped {
+		Optional::Some(v) => {
+			if leaf_tag(&v) != 42 { return 5; }
+		},
+		Optional::None() => { return 6; }
+	}
+
+	// Insert non-Copy at index 0 (implicit move).
+	var arr2 = Array<type Wrapper>::with_capacity(2);
+	val w4 = Wrapper::Leaf(tag = 77);
+	val w5 = Wrapper::Leaf(tag = 88);
+	arr2.push(w4);
+	arr2.insert(0, w5);
+	if arr2.len != 2 { return 7; }
+	if leaf_tag(&arr2[0]) != 88 { return 8; }
+	if leaf_tag(&arr2[1]) != 77 { return 9; }
+
+	return 0;
+}

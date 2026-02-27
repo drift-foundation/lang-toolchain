@@ -1,0 +1,4 @@
+{
+  "description": "std.regex.is_match search semantics: empty pattern, literals, search-anywhere behavior",
+  "exit_code": 0
+}

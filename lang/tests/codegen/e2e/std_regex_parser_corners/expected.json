@@ -1,0 +1,4 @@
+{
+  "description": "std.regex parser high-risk corner cases: nesting, class edges, anchors, empty patterns",
+  "exit_code": 0
+}

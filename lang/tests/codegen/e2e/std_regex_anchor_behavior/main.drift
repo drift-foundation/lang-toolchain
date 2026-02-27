@@ -1,0 +1,95 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			val got = regex.is_match(&re, input);
+			if got != expected { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// --- §2: ^a$ full match ---
+	rc = check(&"^a$", &"a", true, 1);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a$", &"aa", false, 3);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a$", &"ba", false, 5);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a$", &"ab", false, 7);
+	if rc != 0 { return rc; }
+
+	// --- §2: ^a prefix anchor ---
+	rc = check(&"^a", &"abc", true, 9);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a", &"ba", false, 11);
+	if rc != 0 { return rc; }
+
+	// --- §2: a$ suffix anchor ---
+	rc = check(&"a$", &"ba", true, 13);
+	if rc != 0 { return rc; }
+
+	rc = check(&"a$", &"ab", false, 15);
+	if rc != 0 { return rc; }
+
+	// --- §2: mixed anchors in alternation ---
+	rc = check(&"^a|b$", &"abc", true, 17);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a|b$", &"xb", true, 19);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a|b$", &"xay", false, 21);
+	if rc != 0 { return rc; }
+
+	// --- anchors in groups ---
+	rc = check(&"(^a|b$)", &"abc", true, 23);
+	if rc != 0 { return rc; }
+
+	rc = check(&"(^a|b$)", &"xb", true, 25);
+	if rc != 0 { return rc; }
+
+	rc = check(&"(^a|b$)", &"xay", false, 27);
+	if rc != 0 { return rc; }
+
+	// --- ^$ matches empty string ---
+	rc = check(&"^$", &"", true, 29);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^$", &"a", false, 31);
+	if rc != 0 { return rc; }
+
+	// --- ^abc$ full string ---
+	rc = check(&"^abc$", &"abc", true, 33);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^abc$", &"xabc", false, 35);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^abc$", &"abcx", false, 37);
+	if rc != 0 { return rc; }
+
+	// --- anchor with quantifier ---
+	rc = check(&"^a+$", &"aaa", true, 39);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a+$", &"aab", false, 41);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^a+$", &"", false, 43);
+	if rc != 0 { return rc; }
+
+	return 0;
+}

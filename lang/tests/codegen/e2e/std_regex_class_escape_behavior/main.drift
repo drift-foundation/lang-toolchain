@@ -1,0 +1,145 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			val got = regex.is_match(&re, input);
+			if got != expected { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, input) {
+				Optional::Some(m) => {
+					if m.start != exp_start { return fail_code; }
+					if m.end != exp_end { return fail_code + 1; }
+					return 0;
+				},
+				Optional::None() => { return fail_code + 2; }
+			}
+		},
+		core.Result::Err(_) => { return fail_code + 3; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// --- §5: character class [a-z] ---
+	rc = check(&"^[a-z]+$", &"hello", true, 1);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[a-z]+$", &"Hello", false, 3);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[a-z]+$", &"hello1", false, 5);
+	if rc != 0 { return rc; }
+
+	// --- §5: negated class [^a-z] ---
+	rc = check(&"^[^a-z]+$", &"123", true, 7);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[^a-z]+$", &"12a3", false, 9);
+	if rc != 0 { return rc; }
+
+	// --- §5: word-like class [a-zA-Z0-9_] ---
+	rc = check(&"^[a-zA-Z0-9_]+$", &"hello_World_42", true, 11);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[a-zA-Z0-9_]+$", &"hello world", false, 13);
+	if rc != 0 { return rc; }
+
+	// --- §5: escaped class literals [\-\]] ---
+	rc = check(&"^[\\-]+$", &"---", true, 15);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[\\]]+$", &"]]]", true, 17);
+	if rc != 0 { return rc; }
+
+	// --- §5: shorthands inside class [\d] [\w\s] ---
+	rc = check(&"^[\\d]+$", &"12345", true, 19);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[\\d]+$", &"12a45", false, 21);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^[\\w\\s]+$", &"hello world", true, 23);
+	if rc != 0 { return rc; }
+
+	// --- §6: \d+ matches digits ---
+	rc = check(&"^\\d+$", &"12345", true, 30);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\d+$", &"12a45", false, 32);
+	if rc != 0 { return rc; }
+
+	rc = check(&"\\d+", &"abc123def", true, 34);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"\\d+", &"abc123def", 3, 6, 36);
+	if rc != 0 { return rc; }
+
+	// --- §6: \D+ matches non-digits ---
+	rc = check(&"^\\D+$", &"abc", true, 40);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\D+$", &"abc1", false, 42);
+	if rc != 0 { return rc; }
+
+	// --- §6: \w+ matches word chars ---
+	rc = check(&"^\\w+$", &"hello_42", true, 50);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\w+$", &"hello 42", false, 52);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"\\w+", &"  hello  ", 2, 7, 54);
+	if rc != 0 { return rc; }
+
+	// --- §6: \W+ matches non-word chars ---
+	rc = check(&"^\\W+$", &"  !@  ", true, 58);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\W+$", &" a ", false, 60);
+	if rc != 0 { return rc; }
+
+	// --- §6: \s+ matches whitespace ---
+	rc = check(&"^\\s+$", &"  \t\n", true, 70);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\s+$", &" a ", false, 72);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"\\s+", &"hello world", 5, 6, 74);
+	if rc != 0 { return rc; }
+
+	// --- §6: \S+ matches non-whitespace ---
+	rc = check(&"^\\S+$", &"hello", true, 78);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\S+$", &"hello world", false, 80);
+	if rc != 0 { return rc; }
+
+	// --- §6: escaped metachar literals ---
+	rc = check(&"^\\*\\+\\?$", &"*+?", true, 90);
+	if rc != 0 { return rc; }
+
+	rc = check(&"^\\*\\+\\?$", &"abc", false, 92);
+	if rc != 0 { return rc; }
+
+	rc = check(&"\\.", &"a.b", true, 94);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"\\.", &"a.b", 1, 2, 96);
+	if rc != 0 { return rc; }
+
+	return 0;
+}

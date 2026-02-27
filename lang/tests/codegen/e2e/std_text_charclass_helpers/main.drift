@@ -1,0 +1,58 @@
+module main
+
+import std.text as text;
+
+fn main() nothrow -> Int {
+	// --- is_digit positive: '0' (48) through '9' (57) ---
+	if !text.is_digit(cast<Byte>(48)) { return 1; }
+	if !text.is_digit(cast<Byte>(53)) { return 2; }
+	if !text.is_digit(cast<Byte>(57)) { return 3; }
+
+	// --- is_digit negative ---
+	if text.is_digit(cast<Byte>(47)) { return 4; }
+	if text.is_digit(cast<Byte>(58)) { return 5; }
+	if text.is_digit(cast<Byte>(65)) { return 6; }
+	if text.is_digit(cast<Byte>(0)) { return 7; }
+
+	// --- is_alpha positive: 'A' (65), 'Z' (90), 'a' (97), 'z' (122) ---
+	if !text.is_alpha(cast<Byte>(65)) { return 10; }
+	if !text.is_alpha(cast<Byte>(90)) { return 11; }
+	if !text.is_alpha(cast<Byte>(97)) { return 12; }
+	if !text.is_alpha(cast<Byte>(122)) { return 13; }
+	if !text.is_alpha(cast<Byte>(77)) { return 14; }
+
+	// --- is_alpha negative ---
+	if text.is_alpha(cast<Byte>(64)) { return 15; }
+	if text.is_alpha(cast<Byte>(91)) { return 16; }
+	if text.is_alpha(cast<Byte>(96)) { return 17; }
+	if text.is_alpha(cast<Byte>(123)) { return 18; }
+	if text.is_alpha(cast<Byte>(48)) { return 19; }
+	if text.is_alpha(cast<Byte>(32)) { return 20; }
+
+	// --- is_alnum positive: union of digit + alpha ---
+	if !text.is_alnum(cast<Byte>(48)) { return 30; }
+	if !text.is_alnum(cast<Byte>(57)) { return 31; }
+	if !text.is_alnum(cast<Byte>(65)) { return 32; }
+	if !text.is_alnum(cast<Byte>(122)) { return 33; }
+
+	// --- is_alnum negative ---
+	if text.is_alnum(cast<Byte>(32)) { return 34; }
+	if text.is_alnum(cast<Byte>(33)) { return 35; }
+	if text.is_alnum(cast<Byte>(95)) { return 36; }
+	if text.is_alnum(cast<Byte>(0)) { return 37; }
+
+	// --- is_space positive: SP (32), TAB (9), LF (10), CR (13) ---
+	if !text.is_space(cast<Byte>(32)) { return 40; }
+	if !text.is_space(cast<Byte>(9)) { return 41; }
+	if !text.is_space(cast<Byte>(10)) { return 42; }
+	if !text.is_space(cast<Byte>(13)) { return 43; }
+
+	// --- is_space negative ---
+	if text.is_space(cast<Byte>(11)) { return 44; }
+	if text.is_space(cast<Byte>(12)) { return 45; }
+	if text.is_space(cast<Byte>(0)) { return 46; }
+	if text.is_space(cast<Byte>(65)) { return 47; }
+	if text.is_space(cast<Byte>(48)) { return 48; }
+
+	return 0;
+}

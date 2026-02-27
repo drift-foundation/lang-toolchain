@@ -1,0 +1,4 @@
+{
+  "description": "std.regex zero-length match semantics: empty pattern, a*, anchors produce correct empty matches",
+  "exit_code": 0
+}

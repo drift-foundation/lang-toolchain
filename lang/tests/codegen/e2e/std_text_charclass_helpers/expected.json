@@ -1,0 +1,4 @@
+{
+  "description": "std.text character classification helpers (is_digit, is_alpha, is_alnum, is_space)",
+  "exit_code": 0
+}

@@ -727,6 +727,40 @@ class HIRToMIR:
 		if isinstance(expr.scrutinee, H.HVar):
 			scrut_source_local = self._canonical_local(getattr(expr.scrutinee, "binding_id", None), expr.scrutinee.name)
 
+		# When the scrutinee is a field access on a local (e.g. `match re.root`),
+		# the StructGetField extracted the variant as an SSA copy without moving
+		# ownership from the struct local.  Each match arm will copy the scrutinee
+		# value into its own temp for binder extraction and drop, but the original
+		# struct local still holds the same variant value.  To prevent double-free
+		# when the struct local is later dropped, tombstone the field in the
+		# struct's local storage now that the value has been extracted.
+		if (
+			isinstance(expr.scrutinee, H.HField)
+			and isinstance(expr.scrutinee.subject, H.HVar)
+			and scrut_ty is not None
+			and not scrut_is_ref
+			and not self._should_copy_value(scrut_ty)
+		):
+			owner_var = expr.scrutinee.subject
+			owner_local = self._canonical_local(getattr(owner_var, "binding_id", None), owner_var.name)
+			owner_ty = self._local_types.get(owner_local)
+			if owner_ty is not None:
+				owner_def = self._type_table.get(owner_ty)
+				if owner_def.kind is TypeKind.STRUCT:
+					field_info = self._type_table.struct_field(owner_ty, expr.scrutinee.name)
+					if field_info is not None:
+						field_idx, field_ty = field_info
+						owner_ptr = self.b.new_temp()
+						self.b.emit(M.AddrOfLocal(dest=owner_ptr, local=owner_local, is_mut=True))
+						self._local_types[owner_ptr] = self._type_table.ensure_ref_mut(owner_ty)
+						field_ptr = self.b.new_temp()
+						self.b.emit(M.AddrOfField(dest=field_ptr, base_ptr=owner_ptr, struct_ty=owner_ty, field_index=field_idx, field_ty=field_ty, is_mut=True))
+						self._local_types[field_ptr] = self._type_table.ensure_ref_mut(field_ty)
+						zero_val = self.b.new_temp()
+						self.b.emit(M.ZeroValue(dest=zero_val, ty=field_ty))
+						self._local_types[zero_val] = field_ty
+						self.b.emit(M.StoreRef(ptr=field_ptr, value=zero_val, inner_ty=field_ty))
+
 		# Optional hidden local for the match result when used as a value.
 		result_local: str | None = None
 		if want_value:
@@ -3778,7 +3812,7 @@ class HIRToMIR:
 			if _arr_issues:
 				raise AssertionError(_arr_issues[0].message)
 			val_arg = expr.args[-1]
-			val = self.lower_expr(val_arg, expected_type=elem_ty)
+			val = self._lower_call_arg(val_arg, elem_ty)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 			cap_val = self.b.new_temp()

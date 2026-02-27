@@ -1,0 +1,96 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, input) {
+				Optional::Some(m) => {
+					if m.start != exp_start { return fail_code; }
+					if m.end != exp_end { return fail_code + 1; }
+					return 0;
+				},
+				Optional::None() => { return fail_code + 2; }
+			}
+		},
+		core.Result::Err(_) => { return fail_code + 3; }
+	}
+}
+
+fn check_none(pattern: &String, input: &String, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, input) {
+				Optional::Some(_) => { return fail_code; },
+				Optional::None() => { return 0; }
+			}
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// --- §7: no match → None ---
+	rc = check_none(&"xyz", &"abc", 1);
+	if rc != 0 { return rc; }
+
+	rc = check_none(&"a", &"", 3);
+	if rc != 0 { return rc; }
+
+	// --- §7: single match, correct offsets ---
+	rc = check_match(&"abc", &"abc", 0, 3, 5);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"abc", &"xabc", 1, 4, 9);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"abc", &"xabcy", 1, 4, 13);
+	if rc != 0 { return rc; }
+
+	// --- §7: multiple possible matches → earliest start ---
+	rc = check_match(&"a", &"xaxax", 1, 2, 17);
+	if rc != 0 { return rc; }
+
+	// --- §7: longest match at same start (greedy) ---
+	rc = check_match(&"a+", &"aaa", 0, 3, 21);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"a*b", &"aaab", 0, 4, 25);
+	if rc != 0 { return rc; }
+
+	// --- dot matching ---
+	rc = check_match(&".+", &"abc", 0, 3, 29);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"a.c", &"xxaxcxx", 2, 5, 33);
+	if rc != 0 { return rc; }
+
+	// --- anchored matches ---
+	rc = check_match(&"^abc", &"abcdef", 0, 3, 37);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"def$", &"abcdef", 3, 6, 41);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"^abc$", &"abc", 0, 3, 45);
+	if rc != 0 { return rc; }
+
+	// --- alternation: find first branch that matches ---
+	rc = check_match(&"cat|dog", &"the dog ran", 4, 7, 49);
+	if rc != 0 { return rc; }
+
+	rc = check_match(&"cat|dog", &"the cat ran", 4, 7, 53);
+	if rc != 0 { return rc; }
+
+	// --- §9: UTF-8 byte indexing —
+	// "café" is c(1) a(1) f(1) é(2) = 5 bytes
+	// pattern "f." should match f + first byte of é, at byte offsets 2..4
+	rc = check_match(&"f.", &"caf\xC3\xA9", 2, 4, 57);
+	if rc != 0 { return rc; }
+
+	return 0;
+}

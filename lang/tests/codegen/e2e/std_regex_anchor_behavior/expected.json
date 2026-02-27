@@ -1,0 +1,4 @@
+{
+  "description": "std.regex anchor behavior: ^, $, mixed anchors in groups and alternation",
+  "exit_code": 0
+}

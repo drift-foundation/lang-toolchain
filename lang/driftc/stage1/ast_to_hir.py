@@ -859,6 +859,12 @@ class AstToHIR:
 						)
 					)
 				return H.HMatchExpr(scrutinee=_rename_expr(e.scrutinee, mapping), arms=renamed_arms, loc=e.loc)
+			if isinstance(e, H.HCast):
+				return H.HCast(target_type_expr=e.target_type_expr, value=_rename_expr(e.value, mapping), loc=e.loc)
+			if isinstance(e, H.HResultOk):
+				return H.HResultOk(value=_rename_expr(e.value, mapping))
+			if isinstance(e, H.HDVInit):
+				return H.HDVInit(dv_type_name=e.dv_type_name, args=[_rename_expr(a, mapping) for a in e.args])
 			if hasattr(H, "HQualifiedMember") and isinstance(e, getattr(H, "HQualifiedMember")):
 				return e
 			return e
@@ -903,6 +909,9 @@ class AstToHIR:
 				if st.else_block is not None:
 					else_block, _ = _rename_block(st.else_block, mapping)
 				return (H.HIf(cond=_rename_expr(st.cond, mapping), then_block=then_block, else_block=else_block), mapping)
+			if isinstance(st, H.HLoop):
+				body_block, _ = _rename_block(st.body, mapping)
+				return (H.HLoop(body=body_block), mapping)
 			return (st, mapping)
 
 		def _rename_block(block: H.HBlock, mapping: dict[str, str]) -> tuple[H.HBlock, dict[str, str]]:

@@ -11,7 +11,11 @@ export {
 	utf8_from_bytes,
 	utf8_from_bytes_range,
 	TextError,
-	substring
+	substring,
+	is_digit,
+	is_alpha,
+	is_alnum,
+	is_space
 };
 
 pub variant TokenizeAction {
@@ -254,4 +258,20 @@ pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String
 		i = i + 1;
 	}
 	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), len));
+}
+
+pub fn is_digit(b: Byte) nothrow -> Bool {
+	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
+}
+
+pub fn is_alpha(b: Byte) nothrow -> Bool {
+	return (b >= cast<Byte>(65) and b <= cast<Byte>(90)) or (b >= cast<Byte>(97) and b <= cast<Byte>(122));
+}
+
+pub fn is_alnum(b: Byte) nothrow -> Bool {
+	return is_digit(b) or is_alpha(b);
+}
+
+pub fn is_space(b: Byte) nothrow -> Bool {
+	return b == cast<Byte>(32) or b == cast<Byte>(9) or b == cast<Byte>(10) or b == cast<Byte>(13);
 }

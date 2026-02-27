@@ -1,0 +1,27 @@
+// Regression: variant with Byte payload field must codegen correctly.
+// ConstructVariant was emitting i8* (pointer) instead of i8 (value).
+
+import std.core as core;
+
+variant Token {
+	Char(b: Byte),
+	Eof,
+	@tombstone Tombstone
+}
+
+implement core.Copy for Token {
+}
+
+fn byte_of(t: Token) nothrow -> Int {
+	return match t {
+		Token::Char(b) => { cast<Int>(b) },
+		default => { 0 - 1 }
+	};
+}
+
+fn main() nothrow -> Int {
+	val t = Token::Char(b = cast<Byte>(65));
+	val v = byte_of(t);
+	if v != 65 { return 1; }
+	return 0;
+}

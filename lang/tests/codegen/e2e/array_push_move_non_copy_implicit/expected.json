@@ -1,0 +1,6 @@
+{
+  "description": "Regression: Array.push/insert must implicitly move non-Copy values (no double-free)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

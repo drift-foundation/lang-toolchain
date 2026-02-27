@@ -1,0 +1,13 @@
+module main
+import std.core as core;
+import std.regex as regex;
+
+fn main() nothrow -> Int {
+	val pat = "a*";
+	match regex.compile(&pat) {
+		core.Result::Ok(re) => {
+			return 0;
+		},
+		core.Result::Err(_) => { return 1; }
+	}
+}

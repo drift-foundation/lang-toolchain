@@ -1,0 +1,9 @@
+module main
+import std.core as core;
+import std.regex as regex;
+fn main() nothrow -> Int {
+	match regex.compile(&"a*") {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}

@@ -1,0 +1,918 @@
+module std.regex
+
+import std.core as core;
+import std.text as text;
+
+export {
+	Regex,
+	RegexError,
+	RegexMatch,
+	RegexNode,
+	CharClass,
+	CharRange,
+	Quantifier,
+	AnchorKind,
+	_NfaOp,
+	_NfaProg,
+	compile,
+	is_match,
+	find_first,
+	_node_size,
+	_emit_node,
+	_nfa_compile,
+	_make_bitmap,
+	_clear_bitmap,
+	_add_state,
+	_byte_matches,
+	_try_match_at
+};
+
+// ---------------------------------------------------------------------------
+// Public error type
+// ---------------------------------------------------------------------------
+
+pub struct RegexError {
+	pub tag: String,
+	pub offset: Int
+}
+
+implement core.Diagnostic for RegexError {
+	pub fn to_diag(self: &RegexError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Public match result
+// ---------------------------------------------------------------------------
+
+pub struct RegexMatch {
+	pub start: Int,
+	pub end: Int
+}
+
+implement core.Copy for RegexMatch {
+}
+
+// ---------------------------------------------------------------------------
+// AST types
+//
+// FROZEN CONTRACT — NFA lowering depends on these invariants:
+//
+//   Precedence (tightest binds first):
+//     1. Atom        — Literal, Dot, Anchor, Class, grouped sub-expr
+//     2. Quantifier  — Repeat wraps exactly one atom (child.len == 1)
+//     3. Concat      — Group.children: flat left-to-right array, never nested
+//     4. Alternation — Alternation.branches: flat array, never nested
+//
+//   Structural:
+//     - Single-element sequences unwrap: a sequence of one atom produces
+//       the atom directly, not Group([atom]).
+//     - Empty sequences produce Group(children=[]) (zero-length match).
+//     - Repeat.child is a 1-element array (not a bare node) because
+//       RegexNode is not Copy; the array provides owned storage.
+//     - Alternation is only emitted when 2+ branches exist.
+//
+//   Escape normalization (stable — NFA may pattern-match on these):
+//     \d  → Class(negated=false, ranges=[(48,57)])
+//     \D  → Class(negated=true,  ranges=[(48,57)])
+//     \w  → Class(negated=false, ranges=[(65,90),(97,122),(48,57),(95,95)])
+//     \W  → Class(negated=true,  ranges=[(65,90),(97,122),(48,57),(95,95)])
+//     \s  → Class(negated=false, ranges=[(32,32),(9,9),(10,10),(13,13)])
+//     \S  → Class(negated=true,  ranges=[(32,32),(9,9),(10,10),(13,13)])
+//     \t  → Literal(9)   \n → Literal(10)   \r → Literal(13)
+//
+//   Error tags (offset = byte position in pattern):
+//     unclosed-group, unclosed-class, empty-class, dangling-quantifier,
+//     trailing-backslash, trailing-backslash-in-class, invalid-escape,
+//     invalid-escape-in-class, reversed-range, incomplete-range,
+//     unexpected-paren, unexpected-char
+// ---------------------------------------------------------------------------
+
+pub variant AnchorKind {
+	Start,
+	End,
+	@tombstone Tombstone
+}
+
+implement core.Copy for AnchorKind {
+}
+
+pub struct CharRange {
+	pub lo: Byte,
+	pub hi: Byte
+}
+
+implement core.Copy for CharRange {
+}
+
+pub struct CharClass {
+	pub negated: Bool,
+	pub ranges: Array<CharRange>
+}
+
+pub variant Quantifier {
+	Star,
+	Plus,
+	Question,
+	@tombstone Tombstone
+}
+
+implement core.Copy for Quantifier {
+}
+
+pub variant RegexNode {
+	Literal(byte_val: Byte),
+	Dot,
+	Anchor(kind: AnchorKind),
+	Class(cls: CharClass),
+	Group(children: Array<RegexNode>),
+	Alternation(branches: Array<RegexNode>),
+	Repeat(child: Array<RegexNode>, quant: Quantifier),
+	@tombstone Tombstone
+}
+
+pub struct Regex {
+	pub root: RegexNode,
+	nfa: _NfaProg
+}
+
+// ---------------------------------------------------------------------------
+// Parser — single-pass recursive descent over pattern bytes
+// ---------------------------------------------------------------------------
+
+struct Parser {
+	src: String,
+	len: Int,
+	pos: Int
+}
+
+fn _new_parser(pattern: &String) nothrow -> Parser {
+	return Parser(src = *pattern, len = pattern.byte_length(), pos = 0);
+}
+
+fn _peek(p: &mut Parser) nothrow -> Int {
+	if p.pos >= p.len {
+		return 0 - 1;
+	}
+	return cast<Int>(core.string_byte_at(&p.src, p.pos));
+}
+
+fn _advance(p: &mut Parser) nothrow -> Byte {
+	val b = core.string_byte_at(&p.src, p.pos);
+	p.pos = p.pos + 1;
+	return b;
+}
+
+fn _at_end(p: &mut Parser) nothrow -> Bool {
+	return p.pos >= p.len;
+}
+
+fn _err(tag: &String, offset: Int) nothrow -> core.Result<RegexNode, RegexError> {
+	return core.Result::Err(RegexError(tag = *tag, offset = offset));
+}
+
+// ---------------------------------------------------------------------------
+// Top-level entry: parse alternation
+// ---------------------------------------------------------------------------
+
+pub fn compile(pattern: &String) nothrow -> core.Result<Regex, RegexError> {
+	var p = _new_parser(pattern);
+	match _parse_alternation(&mut p) {
+		core.Result::Ok(node) => {
+			if not _at_end(&mut p) {
+				val tag = "unexpected-char";
+				return core.Result::Err(RegexError(tag = tag, offset = p.pos));
+			}
+			val nfa = _nfa_compile(&node);
+			return core.Result::Ok(Regex(root = node, nfa = move nfa));
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		}
+	}
+}
+
+// alternation = sequence ('|' sequence)*
+fn _parse_alternation(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	match _parse_sequence(p) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(first) => {
+			if _peek(p) != 124 {
+				return core.Result::Ok(first);
+			}
+			var branches = Array<type RegexNode>::with_capacity(4);
+			branches.push(first);
+			while _peek(p) == 124 {
+				p.pos = p.pos + 1;
+				match _parse_sequence(p) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(branch) => {
+						branches.push(branch);
+					}
+				}
+			}
+			return core.Result::Ok(RegexNode::Alternation(branches = move branches));
+		}
+	}
+}
+
+// sequence = quantified*
+fn _parse_sequence(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	var children = Array<type RegexNode>::with_capacity(8);
+	while not _at_end(p) {
+		val ch = _peek(p);
+		// Stop at alternation pipe or closing paren.
+		if ch == 124 or ch == 41 {
+			break;
+		}
+		match _parse_quantified(p) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(node) => {
+				children.push(node);
+			}
+		}
+	}
+	if children.len == 1 {
+		// Unwrap single-element group to keep AST lean.
+		match children.pop() {
+			Optional::Some(only) => { return core.Result::Ok(only); },
+			Optional::None() => { }
+		}
+	}
+	return core.Result::Ok(RegexNode::Group(children = move children));
+}
+
+// quantified = atom ('*' | '+' | '?')?
+fn _parse_quantified(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	match _parse_atom(p) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(atom) => {
+			if _at_end(p) {
+				return core.Result::Ok(atom);
+			}
+			val ch = _peek(p);
+			if ch == 42 {
+				p.pos = p.pos + 1;
+				var wrap = Array<type RegexNode>::with_capacity(1);
+				wrap.push(atom);
+				return core.Result::Ok(RegexNode::Repeat(child = move wrap, quant = Quantifier::Star()));
+			}
+			if ch == 43 {
+				p.pos = p.pos + 1;
+				var wrap = Array<type RegexNode>::with_capacity(1);
+				wrap.push(atom);
+				return core.Result::Ok(RegexNode::Repeat(child = move wrap, quant = Quantifier::Plus()));
+			}
+			if ch == 63 {
+				p.pos = p.pos + 1;
+				var wrap = Array<type RegexNode>::with_capacity(1);
+				wrap.push(atom);
+				return core.Result::Ok(RegexNode::Repeat(child = move wrap, quant = Quantifier::Question()));
+			}
+			return core.Result::Ok(atom);
+		}
+	}
+}
+
+// atom = '.' | '^' | '$' | '(' alternation ')' | '[' charclass ']' | '\\' escape | literal
+fn _parse_atom(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	val ch = _peek(p);
+
+	// Dot: any character.
+	if ch == 46 {
+		p.pos = p.pos + 1;
+		return core.Result::Ok(RegexNode::Dot());
+	}
+
+	// Caret: start anchor.
+	if ch == 94 {
+		p.pos = p.pos + 1;
+		return core.Result::Ok(RegexNode::Anchor(kind = AnchorKind::Start()));
+	}
+
+	// Dollar: end anchor.
+	if ch == 36 {
+		p.pos = p.pos + 1;
+		return core.Result::Ok(RegexNode::Anchor(kind = AnchorKind::End()));
+	}
+
+	// Open paren: grouped sub-expression.
+	if ch == 40 {
+		p.pos = p.pos + 1;
+		match _parse_alternation(p) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(inner) => {
+				if _at_end(p) or _peek(p) != 41 {
+					val tag = "unclosed-group";
+					return _err(&tag, p.pos);
+				}
+				p.pos = p.pos + 1;
+				return core.Result::Ok(inner);
+			}
+		}
+	}
+
+	// Open bracket: character class.
+	if ch == 91 {
+		return _parse_char_class(p);
+	}
+
+	// Backslash: escape sequence.
+	if ch == 92 {
+		return _parse_escape(p);
+	}
+
+	// Bare closing paren without matching open.
+	if ch == 41 {
+		val tag = "unexpected-paren";
+		return _err(&tag, p.pos);
+	}
+
+	// Bare quantifier with no preceding atom.
+	if ch == 42 or ch == 43 or ch == 63 {
+		val tag = "dangling-quantifier";
+		return _err(&tag, p.pos);
+	}
+
+	// Literal byte.
+	val b = _advance(p);
+	return core.Result::Ok(RegexNode::Literal(byte_val = b));
+}
+
+// ---------------------------------------------------------------------------
+// Escape sequences: \d \D \w \W \s \S and metachar literals
+// ---------------------------------------------------------------------------
+
+fn _parse_escape(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	val start = p.pos;
+	p.pos = p.pos + 1;
+	if _at_end(p) {
+		val tag = "trailing-backslash";
+		return _err(&tag, start);
+	}
+	val ch = cast<Int>(_advance(p));
+
+	// \d  → [0-9]
+	if ch == 100 {
+		return core.Result::Ok(_class_digit(false));
+	}
+	// \D  → [^0-9]
+	if ch == 68 {
+		return core.Result::Ok(_class_digit(true));
+	}
+	// \w  → [A-Za-z0-9_]
+	if ch == 119 {
+		return core.Result::Ok(_class_word(false));
+	}
+	// \W  → [^A-Za-z0-9_]
+	if ch == 87 {
+		return core.Result::Ok(_class_word(true));
+	}
+	// \s  → [ \t\n\r]
+	if ch == 115 {
+		return core.Result::Ok(_class_space(false));
+	}
+	// \S  → [^ \t\n\r]
+	if ch == 83 {
+		return core.Result::Ok(_class_space(true));
+	}
+
+	// \t
+	if ch == 116 {
+		return core.Result::Ok(RegexNode::Literal(byte_val = cast<Byte>(9)));
+	}
+	// \n
+	if ch == 110 {
+		return core.Result::Ok(RegexNode::Literal(byte_val = cast<Byte>(10)));
+	}
+	// \r
+	if ch == 114 {
+		return core.Result::Ok(RegexNode::Literal(byte_val = cast<Byte>(13)));
+	}
+
+	// Metacharacter literal escapes: \. \^ \$ \( \) \[ \] \| \* \+ \? \\
+	if ch == 46 or ch == 94 or ch == 36 or ch == 40 or ch == 41 or ch == 91 or ch == 93 or ch == 124 or ch == 42 or ch == 43 or ch == 63 or ch == 92 {
+		return core.Result::Ok(RegexNode::Literal(byte_val = cast<Byte>(ch)));
+	}
+
+	val tag = "invalid-escape";
+	return _err(&tag, start);
+}
+
+// ---------------------------------------------------------------------------
+// Built-in character class constructors
+// ---------------------------------------------------------------------------
+
+fn _class_digit(neg: Bool) nothrow -> RegexNode {
+	var ranges = Array<type CharRange>::with_capacity(1);
+	ranges.push(CharRange(lo = cast<Byte>(48), hi = cast<Byte>(57)));
+	return RegexNode::Class(cls = CharClass(negated = neg, ranges = move ranges));
+}
+
+fn _class_word(neg: Bool) nothrow -> RegexNode {
+	var ranges = Array<type CharRange>::with_capacity(4);
+	ranges.push(CharRange(lo = cast<Byte>(65), hi = cast<Byte>(90)));
+	ranges.push(CharRange(lo = cast<Byte>(97), hi = cast<Byte>(122)));
+	ranges.push(CharRange(lo = cast<Byte>(48), hi = cast<Byte>(57)));
+	ranges.push(CharRange(lo = cast<Byte>(95), hi = cast<Byte>(95)));
+	return RegexNode::Class(cls = CharClass(negated = neg, ranges = move ranges));
+}
+
+fn _class_space(neg: Bool) nothrow -> RegexNode {
+	var ranges = Array<type CharRange>::with_capacity(4);
+	ranges.push(CharRange(lo = cast<Byte>(32), hi = cast<Byte>(32)));
+	ranges.push(CharRange(lo = cast<Byte>(9), hi = cast<Byte>(9)));
+	ranges.push(CharRange(lo = cast<Byte>(10), hi = cast<Byte>(10)));
+	ranges.push(CharRange(lo = cast<Byte>(13), hi = cast<Byte>(13)));
+	return RegexNode::Class(cls = CharClass(negated = neg, ranges = move ranges));
+}
+
+// ---------------------------------------------------------------------------
+// Character class parsing: [abc], [a-z], [^...], [\d], etc.
+// ---------------------------------------------------------------------------
+
+fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
+	val start = p.pos;
+	p.pos = p.pos + 1;
+
+	var negated = false;
+	if not _at_end(p) and _peek(p) == 94 {
+		negated = true;
+		p.pos = p.pos + 1;
+	}
+
+	var ranges = Array<type CharRange>::with_capacity(4);
+	var first = true;
+
+	while not _at_end(p) and (_peek(p) != 93 or first) {
+		first = false;
+		val ch = _peek(p);
+
+		// Escape inside class.
+		if ch == 92 {
+			p.pos = p.pos + 1;
+			if _at_end(p) {
+				val tag = "trailing-backslash-in-class";
+				return _err(&tag, p.pos - 1);
+			}
+			val esc = cast<Int>(_advance(p));
+			// Shorthand classes inside []: \d \w \s and their negations.
+			if esc == 100 {
+				ranges.push(CharRange(lo = cast<Byte>(48), hi = cast<Byte>(57)));
+				continue;
+			}
+			if esc == 119 {
+				ranges.push(CharRange(lo = cast<Byte>(65), hi = cast<Byte>(90)));
+				ranges.push(CharRange(lo = cast<Byte>(97), hi = cast<Byte>(122)));
+				ranges.push(CharRange(lo = cast<Byte>(48), hi = cast<Byte>(57)));
+				ranges.push(CharRange(lo = cast<Byte>(95), hi = cast<Byte>(95)));
+				continue;
+			}
+			if esc == 115 {
+				ranges.push(CharRange(lo = cast<Byte>(32), hi = cast<Byte>(32)));
+				ranges.push(CharRange(lo = cast<Byte>(9), hi = cast<Byte>(9)));
+				ranges.push(CharRange(lo = cast<Byte>(10), hi = cast<Byte>(10)));
+				ranges.push(CharRange(lo = cast<Byte>(13), hi = cast<Byte>(13)));
+				continue;
+			}
+			// \t \n \r inside class.
+			if esc == 116 {
+				match _maybe_range(p, cast<Byte>(9), &mut ranges) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(_) => { continue; }
+				}
+			}
+			if esc == 110 {
+				match _maybe_range(p, cast<Byte>(10), &mut ranges) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(_) => { continue; }
+				}
+			}
+			if esc == 114 {
+				match _maybe_range(p, cast<Byte>(13), &mut ranges) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(_) => { continue; }
+				}
+			}
+			// Metachar escapes inside class: \] \\ \^ \-
+			if esc == 93 or esc == 92 or esc == 94 or esc == 45 {
+				match _maybe_range(p, cast<Byte>(esc), &mut ranges) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(_) => { continue; }
+				}
+			}
+			val tag = "invalid-escape-in-class";
+			return _err(&tag, p.pos - 2);
+		}
+
+		// Regular byte — might be start of a range (a-z).
+		val lo = _advance(p);
+		match _maybe_range(p, lo, &mut ranges) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(_) => { }
+		}
+	}
+
+	if _at_end(p) {
+		val tag = "unclosed-class";
+		return _err(&tag, start);
+	}
+	p.pos = p.pos + 1;
+
+	if ranges.len == 0 {
+		val tag = "empty-class";
+		return _err(&tag, start);
+	}
+
+	return core.Result::Ok(RegexNode::Class(cls = CharClass(negated = negated, ranges = move ranges)));
+}
+
+// Check for '-' after a byte to form a range; otherwise push as singleton.
+fn _maybe_range(p: &mut Parser, lo: Byte, ranges: &mut Array<CharRange>) nothrow -> core.Result<Void, RegexError> {
+	if not _at_end(p) and _peek(p) == 45 {
+		// Peek ahead: if next-next is ']' or end, treat '-' as literal.
+		if p.pos + 1 < p.len and cast<Int>(core.string_byte_at(&p.src, p.pos + 1)) != 93 {
+			p.pos = p.pos + 1;
+			if _at_end(p) {
+				val tag = "incomplete-range";
+				return core.Result::Err(RegexError(tag = tag, offset = p.pos));
+			}
+			val hi_ch = _peek(p);
+			var hi = cast<Byte>(0);
+			// Handle escape on the high end of a range.
+			if hi_ch == 92 {
+				p.pos = p.pos + 1;
+				if _at_end(p) {
+					val tag = "trailing-backslash-in-class";
+					return core.Result::Err(RegexError(tag = tag, offset = p.pos - 1));
+				}
+				val esc = cast<Int>(_advance(p));
+				if esc == 116 { hi = cast<Byte>(9); }
+				else { if esc == 110 { hi = cast<Byte>(10); }
+				else { if esc == 114 { hi = cast<Byte>(13); }
+				else { if esc == 93 or esc == 92 or esc == 94 or esc == 45 { hi = cast<Byte>(esc); }
+				else {
+					val tag = "invalid-escape-in-class";
+					return core.Result::Err(RegexError(tag = tag, offset = p.pos - 2));
+				} } } }
+			} else {
+				hi = _advance(p);
+			}
+			if cast<Int>(lo) > cast<Int>(hi) {
+				val tag = "reversed-range";
+				return core.Result::Err(RegexError(tag = tag, offset = p.pos - 1));
+			}
+			ranges.push(CharRange(lo = lo, hi = hi));
+			return core.Result::Ok(core.void_value());
+		}
+	}
+	ranges.push(CharRange(lo = lo, hi = lo));
+	return core.Result::Ok(core.void_value());
+}
+
+// ---------------------------------------------------------------------------
+// NFA instruction set (private)
+// ---------------------------------------------------------------------------
+
+pub variant _NfaOp {
+	ByteMatch(b: Byte),
+	AnyByte,
+	Ranges(range_start: Int, range_count: Int, negated: Bool),
+	Split(a: Int, b: Int),
+	Jump(target: Int),
+	AssertStart,
+	AssertEnd,
+	Accept,
+	@tombstone Tombstone
+}
+
+implement core.Copy for _NfaOp {
+}
+
+// NFA program: instruction array + side table of ranges for Ranges ops.
+pub struct _NfaProg {
+	ops: Array<_NfaOp>,
+	ranges: Array<CharRange>
+}
+
+// ---------------------------------------------------------------------------
+// NFA compiler: RegexNode AST → _NfaOp instruction array
+//
+// Uses pre-computed instruction sizes to emit absolute jump targets
+// without backpatching.
+// ---------------------------------------------------------------------------
+
+pub fn _node_size(node: &RegexNode) nothrow -> Int {
+	match node {
+		Literal(_) => { return 1; },
+		Dot => { return 1; },
+		RegexNode::Anchor(_) => { return 1; },
+		RegexNode::Class(_) => { return 1; },
+		RegexNode::Group(children) => {
+			var total = 0;
+			var i = 0;
+			while i < children.len {
+				total = total + _node_size(&children[i]);
+				i = i + 1;
+			}
+			return total;
+		},
+		RegexNode::Alternation(branches) => {
+			if branches.len == 0 { return 0; }
+			var total = 0;
+			var i = 0;
+			while i < branches.len {
+				total = total + _node_size(&branches[i]);
+				i = i + 1;
+			}
+			if branches.len > 1 {
+				total = total + 2 * (branches.len - 1);
+			}
+			return total;
+		},
+		RegexNode::Repeat(child, quant) => {
+			val cs = _node_size(&child[0]);
+			match quant {
+				Quantifier::Star => { return cs + 2; },
+				Quantifier::Plus => { return cs + 1; },
+				Quantifier::Question => { return cs + 1; },
+				default => { return 0; }
+			}
+			return 0;
+		},
+		default => { return 0; }
+	}
+	return 0;
+}
+
+pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
+	match node {
+		Literal(byte_val) => {
+			nfa.ops.push(_NfaOp::ByteMatch(b = byte_val));
+		},
+		Dot => {
+			nfa.ops.push(_NfaOp::AnyByte());
+		},
+		RegexNode::Anchor(kind) => {
+			match kind {
+				AnchorKind::Start => { nfa.ops.push(_NfaOp::AssertStart()); },
+				AnchorKind::End => { nfa.ops.push(_NfaOp::AssertEnd()); },
+				default => { }
+			}
+		},
+		RegexNode::Class(cls) => {
+			val rs = nfa.ranges.len;
+			var ri = 0;
+			while ri < cls.ranges.len {
+				nfa.ranges.push(cls.ranges[ri]);
+				ri = ri + 1;
+			}
+			nfa.ops.push(_NfaOp::Ranges(range_start = rs, range_count = cls.ranges.len, negated = cls.negated));
+		},
+		RegexNode::Group(children) => {
+			var i = 0;
+			while i < children.len {
+				_emit_node(&children[i], nfa);
+				i = i + 1;
+			}
+		},
+		RegexNode::Alternation(branches) => {
+			val n = branches.len;
+			if n == 0 {
+				// empty alternation — nothing to emit
+			} else { if n == 1 {
+				_emit_node(&branches[0], nfa);
+			} else {
+				// Pre-compute branch sizes for absolute target calculation.
+				var sizes = Array<type Int>::with_capacity(n);
+				var si = 0;
+				while si < n {
+					sizes.push(_node_size(&branches[si]));
+					si = si + 1;
+				}
+				// end_pos = current_pos + sum(sizes) + 2*(n-1)
+				var total = 0;
+				si = 0;
+				while si < n { total = total + sizes[si]; si = si + 1; }
+				total = total + 2 * (n - 1);
+				val end_pos = nfa.ops.len + total;
+				// Emit branches 0..n-2, each wrapped in Split + Jump.
+				var bi = 0;
+				while bi < n - 1 {
+					val body_start = nfa.ops.len + 1;
+					val after_jump = body_start + sizes[bi] + 1;
+					nfa.ops.push(_NfaOp::Split(a = body_start, b = after_jump));
+					_emit_node(&branches[bi], nfa);
+					nfa.ops.push(_NfaOp::Jump(target = end_pos));
+					bi = bi + 1;
+				}
+				// Last branch — no wrapper.
+				_emit_node(&branches[n - 1], nfa);
+			} }
+		},
+		RegexNode::Repeat(child, quant) => {
+			val child_size = _node_size(&child[0]);
+			match quant {
+				Quantifier::Star => {
+					// Split(body, after) | body | Jump(split)
+					val split_pos = nfa.ops.len;
+					val body_start = split_pos + 1;
+					val after = body_start + child_size + 1;
+					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
+					_emit_node(&child[0], nfa);
+					nfa.ops.push(_NfaOp::Jump(target = split_pos));
+				},
+				Quantifier::Plus => {
+					// body | Split(body, after)
+					val body_start = nfa.ops.len;
+					_emit_node(&child[0], nfa);
+					val after = nfa.ops.len + 1;
+					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
+				},
+				Quantifier::Question => {
+					// Split(body, after) | body
+					val body_start = nfa.ops.len + 1;
+					val after = body_start + child_size;
+					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
+					_emit_node(&child[0], nfa);
+				},
+				default => { }
+			}
+		},
+		default => { }
+	}
+}
+
+pub fn _nfa_compile(root: &RegexNode) nothrow -> _NfaProg {
+	var nfa = _NfaProg(
+		ops = Array<type _NfaOp>::with_capacity(_node_size(root) + 1),
+		ranges = Array<type CharRange>::with_capacity(16)
+	);
+	_emit_node(root, &mut nfa);
+	nfa.ops.push(_NfaOp::Accept());
+	return move nfa;
+}
+
+// ---------------------------------------------------------------------------
+// NFA executor — Thompson simulation
+//
+// Epsilon closure via recursive _add_state; byte matching per step.
+// _try_match_at returns the longest match end from a fixed start, or -1.
+// ---------------------------------------------------------------------------
+
+pub fn _make_bitmap(n: Int) nothrow -> Array<Bool> {
+	var a = Array<type Bool>::with_capacity(n);
+	var i = 0;
+	while i < n { a.push(false); i = i + 1; }
+	return move a;
+}
+
+pub fn _clear_bitmap(a: &mut Array<Bool>, n: Int) nothrow -> Void {
+	var i = 0;
+	while i < n { a[i] = false; i = i + 1; }
+}
+
+// Recursively follow epsilon transitions (Split, Jump, assertions) and
+// collect consuming instructions into clist.
+pub fn _add_state(nfa: &_NfaProg, bitmap: &mut Array<Bool>, clist: &mut Array<Int>, pc: Int, pos: Int, input_len: Int) nothrow -> Void {
+	if pc >= 0 and pc < nfa.ops.len and not bitmap[pc] {
+		bitmap[pc] = true;
+		val op = nfa.ops[pc];
+		match op {
+			_NfaOp::Split(a, b) => {
+				_add_state(nfa, bitmap, clist, a, pos, input_len);
+				_add_state(nfa, bitmap, clist, b, pos, input_len);
+			},
+			_NfaOp::Jump(target) => {
+				_add_state(nfa, bitmap, clist, target, pos, input_len);
+			},
+			_NfaOp::AssertStart => {
+				if pos == 0 {
+					_add_state(nfa, bitmap, clist, pc + 1, pos, input_len);
+				}
+			},
+			_NfaOp::AssertEnd => {
+				if pos == input_len {
+					_add_state(nfa, bitmap, clist, pc + 1, pos, input_len);
+				}
+			},
+			_NfaOp::ByteMatch(_) => { clist.push(pc); },
+			_NfaOp::AnyByte => { clist.push(pc); },
+			_NfaOp::Ranges(_, _, _) => { clist.push(pc); },
+			_NfaOp::Accept => { clist.push(pc); },
+			default => { }
+		}
+	}
+}
+
+pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
+	val op = nfa.ops[pc];
+	match op {
+		_NfaOp::ByteMatch(expected) => {
+			return b == expected;
+		},
+		_NfaOp::AnyByte => {
+			return true;
+		},
+		_NfaOp::Ranges(range_start, range_count, negated) => {
+			var found = false;
+			var i = 0;
+			while i < range_count {
+				val r = nfa.ranges[range_start + i];
+				if b >= r.lo and b <= r.hi {
+					found = true;
+					break;
+				}
+				i = i + 1;
+			}
+			if negated { return not found; }
+			return found;
+		},
+		_NfaOp::Split(_, _) => { return false; },
+		_NfaOp::Jump(_) => { return false; },
+		_NfaOp::AssertStart => { return false; },
+		_NfaOp::AssertEnd => { return false; },
+		_NfaOp::Accept => { return false; },
+		default => { return false; }
+	}
+}
+
+// Run NFA from a fixed start position; return longest match end or -1.
+pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int {
+	val input_len = input.byte_length();
+	val prog_len = nfa.ops.len;
+	val accept_pc = prog_len - 1;
+
+	var bitmap = _make_bitmap(prog_len);
+	var clist = Array<type Int>::with_capacity(prog_len);
+	_add_state(nfa, &mut bitmap, &mut clist, 0, start, input_len);
+
+	var best_end = 0 - 1;
+	if bitmap[accept_pc] {
+		best_end = start;
+	}
+
+	var pos = start;
+	while pos < input_len and clist.len > 0 {
+		val b = core.string_byte_at(input, pos);
+
+		// Step: advance each consuming state that matches this byte.
+		var seeds = Array<type Int>::with_capacity(clist.len);
+		var ci = 0;
+		while ci < clist.len {
+			if _byte_matches(nfa, clist[ci], b) {
+				seeds.push(clist[ci] + 1);
+			}
+			ci = ci + 1;
+		}
+
+		// Rebuild state set from seeds.
+		_clear_bitmap(&mut bitmap, prog_len);
+		clist = Array<type Int>::with_capacity(prog_len);
+		var si = 0;
+		while si < seeds.len {
+			_add_state(nfa, &mut bitmap, &mut clist, seeds[si], pos + 1, input_len);
+			si = si + 1;
+		}
+
+		if bitmap[accept_pc] {
+			best_end = pos + 1;
+		}
+		pos = pos + 1;
+	}
+
+	return best_end;
+}
+
+// ---------------------------------------------------------------------------
+// Public match API — search semantics
+//
+// is_match: returns true if pattern matches anywhere in input.
+// find_first: returns leftmost match (greedy — longest at that start).
+// ---------------------------------------------------------------------------
+
+pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
+	val input_len = input.byte_length();
+	var start = 0;
+	while start <= input_len {
+		if _try_match_at(&re.nfa, input, start) >= 0 {
+			return true;
+		}
+		start = start + 1;
+	}
+	return false;
+}
+
+pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
+	val input_len = input.byte_length();
+	var start = 0;
+	while start <= input_len {
+		val end = _try_match_at(&re.nfa, input, start);
+		if end >= 0 {
+			return Optional::Some(RegexMatch(start = start, end = end));
+		}
+		start = start + 1;
+	}
+	return Optional::None();
+}
