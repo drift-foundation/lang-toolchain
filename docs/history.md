@@ -1,5 +1,12 @@
 # Drift development history
 
+## 2026-02-27
+- Bumped compiler version to `0.6.0-dev` for behavior-changing toolchain fixes without ABI boundary changes (`DRIFT_RT_ABI_VERSION` remains `1`).
+- Fixed cross-module drop resolution for `FORWARD_NOMINAL` type references that could suppress nested payload destruction in variant/array paths.
+  - `TypeTable.has_drop()` now resolves `FORWARD_NOMINAL` before drop classification.
+  - LLVM drop paths now resolve `FORWARD_NOMINAL` consistently in `_type_needs_drop`, `_emit_drop_value`, `_ensure_array_drop_helper`, and helper-local `emit_drop`.
+- Added regression coverage for cross-module owned payload lifecycle in `lang/tests/codegen/e2e/variant_match_loop_owned_payload_leak/` with alloc tracking and loop/skip/drain patterns to pin the leak class.
+
 ## 2026-02-25
 - Language enhancement batch (branch `lang-enhancment-260224`): Items 1-4 from crypto implementation feedback.
 - Item 1: Checker now infers `Uint` result types for binary operations (shift, bitwise, arithmetic) parallel to existing `Int` inference, eliminating forced `: Uint` annotations.

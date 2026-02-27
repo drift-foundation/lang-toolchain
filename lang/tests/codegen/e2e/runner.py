@@ -53,7 +53,7 @@ from lang.language_runtime import (
 ROOT = Path(__file__).resolve().parents[4]
 _BUILD_ROOT_DEFAULT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
 _BUILD_ROOT_ENV = os.environ.get("DRIFT_E2E_BUILD_ROOT")
-_VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "e2e" / "valgrind"
+_VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "valgrind"
 _VALGRIND_FIBER_SUPPRESSIONS = _VALGRIND_DIR / "fiber_context.supp"
 if _BUILD_ROOT_ENV:
 	BUILD_ROOT = Path(_BUILD_ROOT_ENV)

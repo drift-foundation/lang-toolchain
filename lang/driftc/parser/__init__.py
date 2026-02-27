@@ -995,7 +995,15 @@ def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 		return "trait propositions are only allowed in require clauses or if guards"
 	if code == "E_EXPR_BLOCK_MISSING_VALUE":
 		return "expression block must end with a value expression; return is not allowed in expression-form blocks"
-	return str(err)
+	raw = str(err)
+	expected = set(getattr(err, "expected", None) or [])
+	top_level_kws = {"MODULE", "STRUCT", "FN_KW", "VARIANT", "IMPORT", "TRAIT", "IMPLEMENT", "EXCEPTION"}
+	if expected & top_level_kws:
+		line = getattr(err, "line", None)
+		col = getattr(err, "column", None)
+		loc = f" at line {line}, column {col}" if line is not None else ""
+		return f"input is not valid Drift source; verify this is a text .drift file (parse detail{loc}: {raw})"
+	return raw
 
 
 def _missing_import_module_message(
