@@ -7653,14 +7653,19 @@ class _FuncBuilder:
 		cached = self._drop_cache.get(ty_id)
 		if cached is not None:
 			return cached
-		if hasattr(self.type_table, "has_drop"):
-			needs = bool(self.type_table.has_drop(ty_id))
-			self._drop_cache[ty_id] = needs
-			return needs
+		# Check destructor_fns first — authoritative for Destructible impls
+		# registered via module exports (has_drop may miss user-defined impls
+		# because the trait prover's _destructible_query can fail to resolve
+		# them, and has_drop's own cache may be stale from pre-codegen
+		# phases where destructor_fns wasn't installed yet).
 		destructor_fns = getattr(self.type_table, "destructor_fns", None)
 		if isinstance(destructor_fns, dict) and destructor_fns.get(ty_id) is not None:
 			self._drop_cache[ty_id] = True
 			return True
+		if hasattr(self.type_table, "has_drop"):
+			needs = bool(self.type_table.has_drop(ty_id))
+			self._drop_cache[ty_id] = needs
+			return needs
 		td = self.type_table.get(ty_id)
 		if td.kind is TypeKind.SCALAR:
 			needs = td.name == "String"
@@ -7685,10 +7690,15 @@ class _FuncBuilder:
 			if fn_id is not None:
 				if getattr(self.func, "fn_id", None) == fn_id:
 					# Inside destroy(): self's scope-drop lands here.
-					# Drop only non-Destructible owned fields — fields
-					# with their own destroy are that impl's responsibility.
-					# {value} is the LIVE post-mutation self (read from
-					# the local at scope exit), so this is UAF-safe.
+					# Drop ALL owned fields using the LIVE post-mutation
+					# value (read from self at scope exit).
+					#
+					# We call _emit_drop_value (real destroy) on each
+					# field so that nested Destructible fields (e.g.
+					# VirtualThread, MutexGuard) execute their destroy()
+					# side effects.  Container wrappers (HashSetCore,
+					# TreeSet) must delegate cleanup to their inner
+					# Destructible field's destroy — not manually dealloc.
 					llty = self._llvm_type_for_typeid(ty_id)
 					td_self = self.type_table.get(ty_id)
 					if td_self.kind is TypeKind.STRUCT:
@@ -7696,8 +7706,6 @@ class _FuncBuilder:
 						if inst is not None:
 							for idx, field_ty in enumerate(inst.field_types):
 								if not self._type_needs_drop(field_ty):
-									continue
-								if isinstance(destructor_fns, dict) and destructor_fns.get(field_ty) is not None:
 									continue
 								field_llty = self._llvm_type_for_typeid(field_ty)
 								field_val = self._fresh("drop_field")

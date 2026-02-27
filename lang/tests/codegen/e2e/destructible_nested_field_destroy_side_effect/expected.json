@@ -1,0 +1,5 @@
+{
+  "description": "e2e: nested Destructible field's destroy() side effects must execute when parent destroy epilogue drops it",
+  "exit_code": 0,
+  "stdout": "INNER_DESTROY\n"
+}

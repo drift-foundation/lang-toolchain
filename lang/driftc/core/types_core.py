@@ -1921,6 +1921,11 @@ class TypeTable:
 		self._destructible_query_allow_fallback = bool(allow_fallback)  # type: ignore[attr-defined]
 		if hasattr(self, "_destructible_cache"):
 			self._destructible_cache.clear()  # type: ignore[attr-defined]
+		# Also invalidate has_drop cache — it depends on is_destructible
+		# which just changed.  Stale False entries would prevent runtime
+		# drops for user-defined Destructible types.
+		if hasattr(self, "_needs_drop_cache"):
+			self._needs_drop_cache.clear()  # type: ignore[attr-defined]
 
 	def is_copy(self, ty: TypeId) -> bool:
 		"""Return True if `ty` is Copy under MVP structural rules."""

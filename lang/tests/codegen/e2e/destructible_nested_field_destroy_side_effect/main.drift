@@ -1,0 +1,39 @@
+module m
+
+import std.core as core;
+import lang.thread as thread;
+
+// REGRESSION: nested Destructible field's destroy() must execute its
+// real side effects when the parent's destroy epilogue drops it.
+//
+// Inner::destroy() prints "INNER_DESTROY" via thread.console_writeln.
+// If the epilogue bypasses destroy() (structural drop), the print
+// never happens and stdout is empty.
+
+struct Inner {
+	tag: Int,
+}
+
+implement core.Destructible for Inner {
+	pub fn destroy(var self: Inner) nothrow -> Void {
+		thread.console_writeln("INNER_DESTROY");
+		return;
+	}
+}
+
+struct Outer {
+	inner: Inner,
+	label: Int,
+}
+
+implement core.Destructible for Outer {
+	pub fn destroy(var self: Outer) nothrow -> Void {
+		// No-op body; epilogue must drop self.inner via Inner::destroy().
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val outer = Outer(inner = Inner(tag = 1), label = 99);
+	return 0;
+}

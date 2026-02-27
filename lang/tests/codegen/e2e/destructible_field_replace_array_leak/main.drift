@@ -1,0 +1,47 @@
+module m
+
+import std.core as core;
+
+// REGRESSION: Destructible struct whose destroy() replaces an owned
+// Array<Int> field via a helper call chain.  The replacement array
+// must be freed — no leak.
+//
+// Mirrors mariadb-wire-proto Statement pattern: destroy() calls
+// skip_remaining → next_event → allocates new columns array.
+
+struct Statement {
+	columns: Array<Int>,
+	mode: Int,
+}
+
+fn _init_from_first(st: &mut Statement) nothrow -> Void {
+	// Replace the columns array — old is dropped, new is stored.
+	st.columns = [10, 20];
+	st.mode = 5;
+	return;
+}
+
+fn skip_remaining(st: &mut Statement) nothrow -> Void {
+	if st.mode == 5 { return; }
+	_init_from_first(st);
+	return;
+}
+
+implement core.Destructible for Statement {
+	pub fn destroy(var self: Statement) nothrow -> Void {
+		skip_remaining(&mut self);
+		return;
+	}
+}
+
+fn run() nothrow -> Int {
+	var st = Statement(columns = [1, 2, 3], mode = 1);
+	if st.columns.len != 3 { return 1; }
+	// st goes out of scope → destroy() → skip_remaining → _init_from_first
+	// replaces columns.  Replacement array must be freed by epilogue.
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	return run();
+}

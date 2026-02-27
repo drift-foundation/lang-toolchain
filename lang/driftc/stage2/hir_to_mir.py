@@ -300,6 +300,11 @@ class HIRToMIR:
 			for name, ty in param_types.items():
 				if self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
+				elif self._type_is_destructible(ty):
+					# Destructible types that are also Copy still need
+					# scope-exit drops so the codegen inside-destroy
+					# epilogue can drop their fields.
+					self._param_drop_locals.append(name)
 		# Block-scope constants: binding_id → (TypeId, value).
 		# Populated by _visit_stmt_HLocalConst; consulted by _visit_expr_HVar.
 		self._local_consts: dict[int, tuple[TypeId, object]] = {}
@@ -349,6 +354,13 @@ class HIRToMIR:
 			local_name = self._canonical_local(bid, name)
 			if local_name not in self._local_types:
 				self._local_types[local_name] = ty
+
+	def _type_is_destructible(self, ty: TypeId) -> bool:
+		"""Check if the type implements Destructible (has a destroy())."""
+		try:
+			return bool(self._type_table.is_destructible(ty))
+		except Exception:
+			return False
 
 	def _needs_runtime_drop(self, ty: TypeId) -> bool:
 		if ty == self._unknown_type:
@@ -408,7 +420,7 @@ class HIRToMIR:
 	def _register_drop_local(self, local_name: str, ty: TypeId) -> None:
 		if not self._scope_stack:
 			return
-		if not self._needs_runtime_drop(ty):
+		if not self._needs_runtime_drop(ty) and not self._type_is_destructible(ty):
 			return
 		scope = self._scope_stack[-1]
 		if local_name in scope:
@@ -487,7 +499,9 @@ class HIRToMIR:
 				if local in self._moved_locals:
 					continue
 				ty = self._local_types.get(local)
-				if ty is None or not self._needs_runtime_drop(ty):
+				if ty is None:
+					continue
+				if not self._needs_runtime_drop(ty) and not self._type_is_destructible(ty):
 					continue
 				tmp = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))

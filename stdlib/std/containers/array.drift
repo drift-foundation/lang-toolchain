@@ -1006,19 +1006,11 @@ implement<K, B> HashSetCore<K, B>
 implement<K, B> core.Destructible for HashSetCore<K, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
 	pub fn destroy(var self: HashSetCore<K, B>) nothrow -> Void {
-		self.map.clear();
-		val kptr = mem.rawbuffer_ptr<type mem.MaybeUninit<K>>(&self.map.keys);
-		val kcap = mem.rawbuffer_cap<type mem.MaybeUninit<K>>(&self.map.keys);
-		var ktmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<K>>(kptr, kcap);
-		mem.dealloc<type mem.MaybeUninit<K>>(ktmp);
-		val vptr = mem.rawbuffer_ptr<type mem.MaybeUninit<Bool>>(&self.map.values);
-		val vcap = mem.rawbuffer_cap<type mem.MaybeUninit<Bool>>(&self.map.values);
-		var vtmp = mem.rawbuffer_from_parts<type mem.MaybeUninit<Bool>>(vptr, vcap);
-		mem.dealloc<type mem.MaybeUninit<Bool>>(vtmp);
-		val sptr = mem.rawbuffer_ptr<type Int>(&self.map.states);
-		val scap = mem.rawbuffer_cap<type Int>(&self.map.states);
-		var stmp = mem.rawbuffer_from_parts<type Int>(sptr, scap);
-		mem.dealloc<type Int>(stmp);
+		// Delegate to HashMapCore::destroy via epilogue field drop.
+		// Do NOT manually dealloc map internals here — the epilogue
+		// calls _emit_drop_value(self.map) which invokes
+		// HashMapCore::destroy() to handle clear + dealloc.
+		return;
 	}
 }
 
@@ -1952,35 +1944,11 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 
 implement<K> core.Destructible for TreeSet<K> require K is cmp.Comparable {
 	pub fn destroy(var self: TreeSet<K>) nothrow -> Void {
-		self.map.clear();
-		val kptr = mem.rawbuffer_ptr<type K>(&self.map.keys);
-		val kcap = mem.rawbuffer_cap<type K>(&self.map.keys);
-		var ktmp = mem.rawbuffer_from_parts<type K>(kptr, kcap);
-		mem.dealloc<type K>(ktmp);
-		val vptr = mem.rawbuffer_ptr<type Bool>(&self.map.values);
-		val vcap = mem.rawbuffer_cap<type Bool>(&self.map.values);
-		var vtmp = mem.rawbuffer_from_parts<type Bool>(vptr, vcap);
-		mem.dealloc<type Bool>(vtmp);
-		val lptr = mem.rawbuffer_ptr<type Int>(&self.map.lefts);
-		val lcap = mem.rawbuffer_cap<type Int>(&self.map.lefts);
-		var ltmp = mem.rawbuffer_from_parts<type Int>(lptr, lcap);
-		mem.dealloc<type Int>(ltmp);
-		val rptr = mem.rawbuffer_ptr<type Int>(&self.map.rights);
-		val rcap = mem.rawbuffer_cap<type Int>(&self.map.rights);
-		var rtmp = mem.rawbuffer_from_parts<type Int>(rptr, rcap);
-		mem.dealloc<type Int>(rtmp);
-		val pptr = mem.rawbuffer_ptr<type Int>(&self.map.parents);
-		val pcap = mem.rawbuffer_cap<type Int>(&self.map.parents);
-		var ptmp = mem.rawbuffer_from_parts<type Int>(pptr, pcap);
-		mem.dealloc<type Int>(ptmp);
-		val redptr = mem.rawbuffer_ptr<type Bool>(&self.map.reds);
-		val redcap = mem.rawbuffer_cap<type Bool>(&self.map.reds);
-		var redtmp = mem.rawbuffer_from_parts<type Bool>(redptr, redcap);
-		mem.dealloc<type Bool>(redtmp);
-		val fptr = mem.rawbuffer_ptr<type Int>(&self.map.free_next);
-		val fcap = mem.rawbuffer_cap<type Int>(&self.map.free_next);
-		var ftmp = mem.rawbuffer_from_parts<type Int>(fptr, fcap);
-		mem.dealloc<type Int>(ftmp);
+		// Delegate to TreeMap::destroy via epilogue field drop.
+		// Do NOT manually dealloc map internals here — the epilogue
+		// calls _emit_drop_value(self.map) which invokes
+		// TreeMap::destroy() to handle clear + dealloc.
+		return;
 	}
 }
 
