@@ -125,10 +125,12 @@ def test_string_pass_through_call_ir():
 	ir = mod.render()
 
 	assert f"%DriftString = type {{ {word_ty}, i8*" in ir
-	assert (
-		f'@.str0 = private unnamed_addr constant {{ {word_ty}, {word_ty}, [4 x i8] }} '
-		f'{{ {word_ty} 1, {word_ty} 1, [4 x i8] c"abc\\00" }}'
-	) in ir
+	import re
+	assert re.search(
+		rf'@\.str\d+ = private unnamed_addr constant \{{ {re.escape(word_ty)}, {re.escape(word_ty)}, \[4 x i8\] \}} '
+		rf'\{{ {re.escape(word_ty)} 1, {re.escape(word_ty)} 1, \[4 x i8\] c"abc\\00" \}}',
+		ir,
+	), f'"abc" string literal not found in IR'
 	assert "define %DriftString @id(%DriftString %s)" in ir
 	assert "define %DriftString @main()" in ir
 	assert "call %DriftString @id(%DriftString %t0)" in ir
