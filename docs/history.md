@@ -1,5 +1,14 @@
 # Drift development history
 
+## 2026-02-28
+- Completed `std.regex` v1 Phase D/E closeout:
+  - Added `replace_first` and `replace_all` (literal replacement, non-overlapping left-to-right).
+  - Added `_find_from` (offset-based first-match search) and `_substr` (nothrow byte-slice helper for replacement assembly).
+  - Enforced zero-length-match forward progress in `replace_all` by advancing one byte on empty matches to prevent infinite loops.
+- Added replacement stress guards in `std_regex_replace`: long-input replace-all, greedy whole-string replacement, repeated pair replacements, empty-pattern insertion behavior, zero-length `a*` progression, and replace-first-on-long-input.
+- Completed regex hardening passes with clean instrumentation runs (no ASAN errors and no memcheck leak/error exits) across regex + charclass + regression suites.
+- Marked `work/regex-stdlib/plan.md` phases A–E and completion criteria as complete.
+
 ## 2026-02-26
 - Added UTC build timestamp (`build_utc`) to compiler provenance string embedded in every compiled binary (`@__drift_compiler_build`).
 - Added `std.meta::compiler_info()` compile-time intrinsic that returns the full provenance string (version, ABI, word size, git SHA, build profile, build timestamp) as a `String`.

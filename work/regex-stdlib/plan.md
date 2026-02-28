@@ -4,7 +4,7 @@
 Add practical regex capability to stdlib with explicit safety/performance bounds, starting with a research gate on `std.text` parser primitives.
 
 ## 1) Phase-1 Gate: Research + Gap Review (Klaudia)
-Status: `in_progress`
+Status: `complete`
 
 ### 1.1 Required deliverable
 Create `work/regex-stdlib/research.md` before implementation starts.
@@ -29,7 +29,7 @@ Must include:
 - `RegexError` stays distinct from `TextError` (separate error domains).
 
 ## 2) MVP Scope (v1)
-Status: `pending`
+Status: `complete`
 
 ### 2.1 Included syntax
 - Literals
@@ -48,7 +48,7 @@ Status: `pending`
 - Unicode property classes
 
 ## 3) API Contract (updated per review)
-Status: `pending`
+Status: `complete`
 
 Module target: `stdlib/std/regex/regex.drift`
 
@@ -68,7 +68,7 @@ Notes:
 - `find_all` is explicitly deferred to v2 unless Phase D requires public exposure.
 
 ## 4) Semantics to freeze before Phase C
-Status: `pending`
+Status: `complete` — frozen and tested in std_regex_zero_length_progress + std_regex_replace
 
 ### 4.1 Empty-match contract (must be documented + tested)
 - `compile("")` is valid.
@@ -81,7 +81,7 @@ Status: `pending`
 - Byte offsets (UTF-8 byte semantics), not codepoint offsets.
 
 ## 5) Architecture + Ownership
-Status: `pending`
+Status: `complete`
 
 ### 5.1 Execution model
 - Pattern parse -> AST
@@ -96,7 +96,7 @@ Status: `pending`
 ## 6) Implementation Phases
 
 ### Phase A: std.text helper batch + tokenizer
-Status: `pending`
+Status: `complete`
 - Add approved helper primitives to `std.text` (initial agreed batch):
   - `is_digit(Byte) -> Bool`
   - `is_alpha(Byte) -> Bool`
@@ -107,54 +107,65 @@ Status: `pending`
 - Add tokenizer tests for escapes, classes, malformed tokens.
 
 ### Phase B: parser + AST
-Status: `pending`
+Status: `complete`
 - Implement precedence-aware parser (`|`, concat, quantifiers).
 - Emit `RegexError` with exact byte offset.
 - Add valid/invalid pattern tests.
 
 ### Phase C: compiler + matcher
-Status: `pending`
+Status: `complete`
 - Lower AST to executable program.
 - Implement `is_match` and `find_first`.
 - Freeze and test empty-match behavior from §4.
 
 ### Phase D: replacement
-Status: `pending`
-- Implement `replace_first` and `replace_all`.
-- Add forward-progress guard for zero-length matches in replace loops.
-- Decide whether `find_all` stays deferred or gets added.
+Status: `complete`
+- Implemented `replace_first` and `replace_all` with literal replacement semantics.
+- Forward-progress guard for zero-length matches: advance cursor by 1 byte on empty match.
+- `find_all` stays deferred to v2.
+- Added `_find_from` (search from offset) and `_substr` (nothrow substring via io.buffer) helpers.
 
 ### Phase E: hardening
-Status: `pending`
-- ASAN/MEMCHECK for regex suites.
-- Stress/perf guards for adversarial inputs.
-- Document complexity and v1 exclusions.
+Status: `complete`
+- All 9 regex e2e suites + charclass helpers pass clean under ASAN (`DRIFT_ASAN=1`).
+- All 9 regex e2e suites + charclass helpers pass clean under valgrind memcheck (`DRIFT_MEMCHECK=1`).
+- Stress guards added to `std_regex_replace`: 200-byte replace_all, .+ greedy on long input, 100-repeat two-char replace, empty-pattern on 50 bytes (51 insertions), a* zero-length on 100 bytes, replace_first on 200 bytes.
+- v1 exclusions documented in §2.2; complexity is O(n*m) backtracking engine with no pathological-input guard beyond forward-progress for empty matches.
 
 ## 7) Testing Plan (expanded)
-Status: `pending`
+Status: `complete`
 
-### 7.1 Regex tests
-- `lang/tests/codegen/e2e/std_regex_compile_errors/`
-- `lang/tests/codegen/e2e/std_regex_is_match_basic/`
-- `lang/tests/codegen/e2e/std_regex_find_first/`
-- `lang/tests/codegen/e2e/std_regex_replace/`
-- `lang/tests/codegen/e2e/std_regex_empty_match_contract/`
-- `lang/tests/codegen/e2e/std_regex_stress_guard/`
+### 7.1 Regex tests (actual suites)
+- `lang/tests/codegen/e2e/std_regex_compile_valid/` — valid pattern compilation
+- `lang/tests/codegen/e2e/std_regex_compile_errors/` — invalid pattern error tags + offsets
+- `lang/tests/codegen/e2e/std_regex_is_match_semantics/` — is_match across pattern types
+- `lang/tests/codegen/e2e/std_regex_find_first_offsets/` — find_first byte offset correctness
+- `lang/tests/codegen/e2e/std_regex_anchor_behavior/` — ^/$ anchor semantics
+- `lang/tests/codegen/e2e/std_regex_quantifier_behavior/` — *, +, ? greedy semantics
+- `lang/tests/codegen/e2e/std_regex_class_escape_behavior/` — char classes + escape sequences
+- `lang/tests/codegen/e2e/std_regex_zero_length_progress/` — empty-match forward progress
+- `lang/tests/codegen/e2e/std_regex_parser_corners/` — parser corner cases via node inspection
+- `lang/tests/codegen/e2e/std_regex_replace/` — replace_first + replace_all + stress guards
 
-### 7.2 std.text helper tests (new public API coverage)
+### 7.2 std.text helper tests
 - `lang/tests/codegen/e2e/std_text_charclass_helpers/`
-- Cover positive/negative samples for `is_digit/is_alpha/is_alnum/is_space`.
+- Covers positive/negative samples for `is_digit/is_alpha/is_alnum/is_space`.
+
+### 7.3 Compiler regression tests (discovered during regex work)
+- `lang/tests/codegen/e2e/array_push_move_non_copy_implicit/` — non-Copy Array.push/insert move semantics
+- `lang/tests/codegen/e2e/match_qualified_binder_local/` — match binder rename in loops/casts
 
 ## 8) Versioning + docs
-Status: `pending`
+Status: `complete`
 
-- Public stdlib API expansion in `std.text`/`std.regex` requires `DRIFTC_VERSION` minor bump when landed.
-- ABI bump not expected unless compiler/runtime boundary shape changes.
-- Update `docs/history.md` for each landed phase.
+- DRIFTC_VERSION bumped from 0.8.0-dev → 0.9.0-dev (in `lang/driftc/driftc_versions.py`).
+- `docs/history.md` updated with all fixes and std.regex stdlib entry.
 
 ## 9) Completion Criteria
-- `research.md` completed and approved (Phase-1 gate).
-- Phase A helper APIs + tests merged.
-- Regex MVP APIs implemented with frozen empty-match semantics.
-- ASAN/MEMCHECK clean for regex and new text-helper suites.
-- History/version updates completed per policy.
+- [x] `research.md` completed and approved (Phase-1 gate).
+- [x] Phase A helper APIs + tests merged.
+- [x] Regex MVP APIs implemented with frozen empty-match semantics.
+- [x] ASAN/MEMCHECK clean for regex and new text-helper suites.
+- [x] History/version updates completed per policy.
+
+**All completion criteria met. std.regex v1 is ready for review.**

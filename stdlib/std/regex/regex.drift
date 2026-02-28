@@ -1,6 +1,7 @@
 module std.regex
 
 import std.core as core;
+import std.io as io;
 import std.text as text;
 
 export {
@@ -17,6 +18,8 @@ export {
 	compile,
 	is_match,
 	find_first,
+	replace_first,
+	replace_all,
 	_node_size,
 	_emit_node,
 	_nfa_compile,
@@ -24,7 +27,9 @@ export {
 	_clear_bitmap,
 	_add_state,
 	_byte_matches,
-	_try_match_at
+	_try_match_at,
+	_find_from,
+	_substr
 };
 
 // ---------------------------------------------------------------------------
@@ -905,8 +910,13 @@ pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 }
 
 pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
+	return _find_from(re, input, 0);
+}
+
+// Search for the first match starting at byte offset `from`.
+pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
 	val input_len = input.byte_length();
-	var start = 0;
+	var start = from;
 	while start <= input_len {
 		val end = _try_match_at(&re.nfa, input, start);
 		if end >= 0 {
@@ -915,4 +925,87 @@ pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
 		start = start + 1;
 	}
 	return Optional::None();
+}
+
+// ---------------------------------------------------------------------------
+// Substring helper (nothrow, no Result) — caller must ensure valid bounds.
+// Returns "" when len == 0.  Uses io.buffer for byte-level copy.
+// ---------------------------------------------------------------------------
+
+pub fn _substr(s: &String, start: Int, len: Int) nothrow -> String {
+	if len == 0 {
+		return "";
+	}
+	var b = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), len);
+}
+
+// ---------------------------------------------------------------------------
+// Replacement API — literal replacement, non-overlapping, left-to-right
+//
+// Semantics (frozen):
+//   - Literal replacement only (no backrefs/capture interpolation).
+//   - Non-overlapping, left-to-right scan.
+//   - Zero-length matches advance cursor by 1 byte (forward-progress rule).
+//   - Empty pattern: replace_all inserts `repl` before every byte and after
+//     the last byte (N+1 insertions for N-byte input).
+//   - Empty replacement: equivalent to deleting matched text.
+//   - Empty input + empty pattern: replace_all returns `repl` (one match).
+// ---------------------------------------------------------------------------
+
+pub fn replace_first(re: &Regex, input: &String, repl: &String) nothrow -> String {
+	match _find_from(re, input, 0) {
+		Optional::Some(m) => {
+			val input_len = input.byte_length();
+			val prefix = _substr(input, 0, m.start);
+			val suffix = _substr(input, m.end, input_len - m.end);
+			return prefix + *repl + suffix;
+		},
+		Optional::None() => {
+			return *input;
+		}
+	}
+}
+
+pub fn replace_all(re: &Regex, input: &String, repl: &String) nothrow -> String {
+	val input_len = input.byte_length();
+	var result = "";
+	var cursor = 0;
+	while cursor <= input_len {
+		match _find_from(re, input, cursor) {
+			Optional::Some(m) => {
+				// Append text between previous cursor and match start.
+				if m.start > cursor {
+					result = result + _substr(input, cursor, m.start - cursor);
+				}
+				// Append replacement.
+				result = result + *repl;
+				// Forward-progress rule: if the match is zero-length,
+				// advance cursor by 1 byte to avoid infinite loop.
+				if m.end == m.start {
+					// Copy the byte at the current position (if any)
+					// before advancing past it.
+					if cursor < input_len {
+						result = result + _substr(input, cursor, 1);
+					}
+					cursor = cursor + 1;
+				} else {
+					cursor = m.end;
+				}
+			},
+			Optional::None() => {
+				// No more matches — append the remaining input.
+				if cursor < input_len {
+					result = result + _substr(input, cursor, input_len - cursor);
+				}
+				break;
+			}
+		}
+	}
+	return result;
 }
