@@ -1,0 +1,238 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn repeat_char(ch: Byte, n: Int) nothrow -> String {
+	var s = "";
+	var i = 0;
+	while i < n {
+		s = s + core.byte_to_string(ch);
+		i = i + 1;
+	}
+	return s;
+}
+
+fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			if regex.is_match(&re, input) != expected { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			val got = regex.replace_all(&re, input, repl);
+			if !str_eq(&got, expected) { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// =================================================================
+	// Adversarial pattern/input pairs for regression detection.
+	//
+	// These test pathological cases that can cause exponential blowup
+	// in naive backtracking engines. The Thompson NFA engine should
+	// handle these in polynomial time. Sizes are kept moderate (N=30..80)
+	// to stay fast even under valgrind while still catching regressions.
+	// =================================================================
+
+	// -------------------------------------------------------------------
+	// §1 — Classic a?^N a^N: the canonical backtracking killer
+	//
+	// Pattern: a?a?a?...a?aaa...a (N a?'s followed by N a's)
+	// Input: "aaa...a" (N a's)
+	//
+	// Backtracking engine: O(2^N). Thompson NFA: O(N^2) or O(N*M).
+	// N=30 should complete in <1s for Thompson, hang for backtracking.
+	// -------------------------------------------------------------------
+
+	val n1 = 30;
+	// Build pattern: "a?" repeated n1 times + "a" repeated n1 times.
+	var pat1 = "";
+	var i = 0;
+	while i < n1 {
+		pat1 = pat1 + "a?";
+		i = i + 1;
+	}
+	i = 0;
+	while i < n1 {
+		pat1 = pat1 + "a";
+		i = i + 1;
+	}
+	val inp1 = repeat_char(cast<Byte>(97), n1);
+
+	rc = check_is_match(&pat1, &inp1, true, 10);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §2 — (a+)+ on non-matching suffix: nested quantifier pathological
+	//
+	// Pattern: (a+)+b
+	// Input: "aaa...a" (no trailing b) — must fail, but backtracking
+	// explores exponentially many partitions.
+	// -------------------------------------------------------------------
+
+	val n2 = 25;
+	val inp2 = repeat_char(cast<Byte>(97), n2);
+	rc = check_is_match(&"(a+)+b", &inp2, false, 20);
+	if rc != 0 { return rc; }
+
+	// Same but with a trailing b → should match.
+	val inp2b = repeat_char(cast<Byte>(97), n2) + "b";
+	rc = check_is_match(&"(a+)+b", &inp2b, true, 22);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §3 — (a|a)* on long input: exponential split exploration
+	//
+	// Both branches of alternation match 'a'; NFA must handle 2^N
+	// paths gracefully via state deduplication.
+	// -------------------------------------------------------------------
+
+	val n3 = 50;
+	val inp3 = repeat_char(cast<Byte>(97), n3);
+	rc = check_is_match(&"(a|a)*", &inp3, true, 30);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §4 — .*.*.*b on long non-matching input
+	//
+	// Three greedy .* operators must all synchronize to find 'b'.
+	// Without it, all three consume everything and fail.
+	// -------------------------------------------------------------------
+
+	val n4 = 60;
+	val inp4 = repeat_char(cast<Byte>(97), n4);
+	rc = check_is_match(&".*.*.*b", &inp4, false, 40);
+	if rc != 0 { return rc; }
+
+	// With trailing b → should match.
+	val inp4b = repeat_char(cast<Byte>(97), n4) + "b";
+	rc = check_is_match(&".*.*.*b", &inp4b, true, 42);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §5 — (a*)*b on long non-matching input
+	//
+	// Nested Kleene star. Each position has O(1) NFA states but the
+	// state space must not blow up.
+	// -------------------------------------------------------------------
+
+	val n5 = 40;
+	val inp5 = repeat_char(cast<Byte>(97), n5);
+	rc = check_is_match(&"(a*)*b", &inp5, false, 50);
+	if rc != 0 { return rc; }
+
+	val inp5b = repeat_char(cast<Byte>(97), n5) + "b";
+	rc = check_is_match(&"(a*)*b", &inp5b, true, 52);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §6 — replace_all with adversarial zero-length matches
+	//
+	// Empty pattern on 80-byte input: 81 zero-length match insertions.
+	// Tests that forward-progress guard works at scale without blowup.
+	// -------------------------------------------------------------------
+
+	val n6 = 80;
+	val inp6 = repeat_char(cast<Byte>(97), n6);
+	match regex.compile(&"") {
+		core.Result::Ok(re) => {
+			val got = regex.replace_all(&re, &inp6, &"-");
+			// Expected length: n6 + (n6+1) = 80 + 81 = 161 bytes.
+			if got.byte_length() != 161 { return 60; }
+			// First byte should be '-'.
+			if core.string_byte_at(&got, 0) != cast<Byte>(45) { return 61; }
+			// Second byte should be 'a'.
+			if core.string_byte_at(&got, 1) != cast<Byte>(97) { return 62; }
+			// Last byte should be '-'.
+			if core.string_byte_at(&got, 160) != cast<Byte>(45) { return 63; }
+		},
+		core.Result::Err(_) => { return 64; }
+	}
+
+	// -------------------------------------------------------------------
+	// §7 — Alternation with partially overlapping long branches
+	//
+	// (aaaa|aab|a) on "aab": leftmost-longest should pick "aab" at 0..3.
+	// Tests that alternation doesn't short-circuit on first branch match
+	// when a longer branch also matches.
+	// -------------------------------------------------------------------
+
+	rc = check_is_match(&"aaaa|aab|a", &"aab", true, 70);
+	if rc != 0 { return rc; }
+
+	// find_first should select "aab" (0..3), not "a" (0..1).
+	match regex.compile(&"aaaa|aab|a") {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, &"aab") {
+				Optional::Some(m) => {
+					if m.start != 0 { return 72; }
+					if m.end != 3 { return 73; }
+				},
+				Optional::None() => { return 74; }
+			}
+		},
+		core.Result::Err(_) => { return 75; }
+	}
+
+	// -------------------------------------------------------------------
+	// §8 — replace_all with quantifier-heavy pattern on moderate input
+	//
+	// [a-z]+ on "abc123def456ghi" replaces letter runs.
+	// =================================================================
+
+	val mixed = "abc123def456ghi";
+	rc = check_replace_all(&"[a-z]+", &mixed, &"_", &"_123_456_", 80);
+	if rc != 0 { return rc; }
+
+	// [0-9]+ replaces digit runs.
+	rc = check_replace_all(&"[0-9]+", &mixed, &"#", &"abc#def#ghi", 82);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §9 — Dot-star sandwich on longer input
+	//
+	// a.*z on "a<50 bytes>z" — must scan through all bytes.
+	// -------------------------------------------------------------------
+
+	val n9 = 50;
+	val inp9 = "a" + repeat_char(cast<Byte>(120), n9) + "z";
+
+	match regex.compile(&"a.*z") {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, &inp9) {
+				Optional::Some(m) => {
+					if m.start != 0 { return 90; }
+					if m.end != n9 + 2 { return 91; }
+				},
+				Optional::None() => { return 92; }
+			}
+		},
+		core.Result::Err(_) => { return 93; }
+	}
+
+	return 0;
+}

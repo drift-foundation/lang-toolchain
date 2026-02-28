@@ -1,0 +1,6 @@
+{
+  "description": "e2e: character class parser edge cases (literal -, ], ^, escapes)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

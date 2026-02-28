@@ -80,6 +80,37 @@ Status: `complete` — frozen and tested in std_regex_zero_length_progress + std
 - `start` inclusive, `end` exclusive.
 - Byte offsets (UTF-8 byte semantics), not codepoint offsets.
 
+### 4.3 Match selection rule (frozen — pinned in std_regex_gotchas_greediness)
+- `find_first` returns the **leftmost** match position. At that position, the **longest** possible match is selected (greedy). This is the "leftmost-longest" rule.
+- Start positions are tried left-to-right (0, 1, 2, ...).
+- At the first start that yields any match, `_try_match_at` returns the longest match end.
+- Shorter matches at the same start are never returned.
+- Matches at later start positions are never considered once an earlier start matches (even if zero-length).
+- **Alternation**: Thompson NFA explores all branches simultaneously and returns the longest overall match, not the first-branch match. Branch order does not affect which match is selected.
+
+### 4.4 Greediness contract (frozen — pinned in std_regex_gotchas_greediness)
+- `*`, `+`, `?` are all greedy. There are no non-greedy/lazy quantifiers in v1.
+- `Split(a=body, b=skip)` tries body first (greedy preference).
+- `a.*b` on input with multiple b's matches to the **last** b (not the first).
+- `a?` prefers matching `a` over zero-length when `a` is available.
+
+### 4.5 Character class edge semantics (frozen — pinned in std_regex_gotchas_class_edges)
+- `-` at start of class → literal hyphen.
+- `-` at end of class (before `]`) → literal hyphen.
+- `-` between two chars → range (lo-hi).
+- `\-` anywhere → literal hyphen (escaped).
+- `]` as first character after `[` or `[^` → literal `]`.
+- `\]` anywhere → literal `]`.
+- `^` immediately after `[` → negation.
+- `^` elsewhere in class → literal caret.
+
+### 4.6 Byte-offset guarantees (frozen — pinned in std_regex_gotchas_utf8_offsets)
+- All offsets (`RegexMatch.start`, `RegexMatch.end`) are byte offsets into the UTF-8 encoded string, NOT codepoint indices.
+- Dot (`.`) matches one byte, not one codepoint.
+- Character classes match single bytes.
+- `replace_*` preserves byte-offset accounting; replacement text is spliced at byte boundaries.
+- Operating on multibyte characters may produce invalid UTF-8 (this is by design — regex operates on raw bytes).
+
 ## 5) Architecture + Ownership
 Status: `complete`
 
@@ -146,6 +177,11 @@ Status: `complete`
 - `lang/tests/codegen/e2e/std_regex_zero_length_progress/` — empty-match forward progress
 - `lang/tests/codegen/e2e/std_regex_parser_corners/` — parser corner cases via node inspection
 - `lang/tests/codegen/e2e/std_regex_replace/` — replace_first + replace_all + stress guards
+- `lang/tests/codegen/e2e/std_regex_gotchas_greediness/` — greediness tie-break + match-selection contract pin
+- `lang/tests/codegen/e2e/std_regex_gotchas_class_edges/` — character class parser edge cases (-, ], ^, escapes)
+- `lang/tests/codegen/e2e/std_regex_gotchas_utf8_offsets/` — UTF-8 byte-offset correctness for find/replace
+- `lang/tests/codegen/e2e/std_regex_stress_compile_growth/` — compile-time growth (large alternation/concat)
+- `lang/tests/codegen/e2e/std_regex_stress_adversarial/` — adversarial pattern/input pairs for regression detection
 
 ### 7.2 std.text helper tests
 - `lang/tests/codegen/e2e/std_text_charclass_helpers/`

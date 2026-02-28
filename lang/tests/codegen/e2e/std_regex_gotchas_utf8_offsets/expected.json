@@ -1,0 +1,6 @@
+{
+  "description": "e2e: UTF-8 byte-offset correctness for find/replace on multibyte input",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

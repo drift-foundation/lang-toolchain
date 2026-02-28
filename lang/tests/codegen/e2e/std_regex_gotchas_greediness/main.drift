@@ -1,0 +1,224 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, input) {
+				Optional::Some(m) => {
+					if m.start != exp_start { return fail_code; }
+					if m.end != exp_end { return fail_code + 1; }
+					return 0;
+				},
+				Optional::None() => { return fail_code + 2; }
+			}
+		},
+		core.Result::Err(_) => { return fail_code + 3; }
+	}
+}
+
+fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			if regex.is_match(&re, input) != expected { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			val got = regex.replace_all(&re, input, repl);
+			if !str_eq(&got, expected) { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// =================================================================
+	// FROZEN CONTRACT: Match selection rule
+	//
+	//   find_first returns the LEFTMOST match position. At that position,
+	//   the LONGEST possible match is selected (greedy). This is the
+	//   "leftmost-longest" rule. Specifically:
+	//
+	//     1. Start positions are tried left-to-right (0, 1, 2, ...).
+	//     2. At the first start position that yields any match,
+	//        _try_match_at returns the longest match end (greedy).
+	//     3. Shorter matches at the same start are never returned.
+	//     4. Matches at later start positions are never considered.
+	//
+	//   Alternation: at a fixed start position, the Thompson NFA
+	//   explores all branches simultaneously and returns the longest
+	//   overall match, not the first-branch match.
+	// =================================================================
+
+	// -------------------------------------------------------------------
+	// §1 — .* greediness: multiple possible endpoints
+	// -------------------------------------------------------------------
+
+	// a.*b on "aXbYb": greedy .* consumes maximally → match is 0..5 (whole string).
+	rc = check_match(&"a.*b", &"aXbYb", 0, 5, 10);
+	if rc != 0 { return rc; }
+
+	// a.*b on "aXbYbZ": greedy .* extends to last b → match is 0..5.
+	rc = check_match(&"a.*b", &"aXbYbZ", 0, 5, 14);
+	if rc != 0 { return rc; }
+
+	// a.*?b would be non-greedy (not supported in v1) — but a.b is fixed-length.
+	// a.b on "aXbYb": first match at 0..3 (not 2..5).
+	rc = check_match(&"a.b", &"aXbYb", 0, 3, 18);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §2 — Star greediness on character class
+	// -------------------------------------------------------------------
+
+	// [a-z]* on "abcDEF": greedy → consumes "abc" (3 bytes), stops at D.
+	rc = check_match(&"[a-z]+", &"abcDEF", 0, 3, 22);
+	if rc != 0 { return rc; }
+
+	// [a-z]* on "ABCdef": starts at 3 (first lowercase), greedy → 3..6.
+	rc = check_match(&"[a-z]+", &"ABCdef", 3, 6, 26);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §3 — Greedy quantifier: longest at leftmost start
+	// -------------------------------------------------------------------
+
+	// a+ on "baaab": leftmost a at 1, greedy → consumes all a's → 1..4.
+	rc = check_match(&"a+", &"baaab", 1, 4, 30);
+	if rc != 0 { return rc; }
+
+	// .+ on "abc": greedy → entire string → 0..3.
+	rc = check_match(&".+", &"abc", 0, 3, 34);
+	if rc != 0 { return rc; }
+
+	// a.*a on "aXaYa": greedy .* → match is 0..5 (first a to last a).
+	rc = check_match(&"a.*a", &"aXaYa", 0, 5, 38);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §4 — Alternation tie-breaking: leftmost-longest, not first-branch
+	// -------------------------------------------------------------------
+
+	// ab|abc on "xabc": at start 1, both "ab" and "abc" match.
+	// Thompson NFA explores both simultaneously; longest wins → 1..4.
+	rc = check_match(&"ab|abc", &"xabc", 1, 4, 42);
+	if rc != 0 { return rc; }
+
+	// a|ab on "xab": at start 1, branch "a" matches 1..2, branch "ab" matches 1..3.
+	// Leftmost-longest → 1..3.
+	rc = check_match(&"a|ab", &"xab", 1, 3, 46);
+	if rc != 0 { return rc; }
+
+	// cat|catfish on "xcatfishy": "cat" matches 1..4, "catfish" matches 1..8.
+	// Leftmost-longest → 1..8.
+	rc = check_match(&"cat|catfish", &"xcatfishy", 1, 8, 50);
+	if rc != 0 { return rc; }
+
+	// Reverse order: catfish|cat — same result due to Thompson NFA.
+	rc = check_match(&"catfish|cat", &"xcatfishy", 1, 8, 54);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §5 — Alternation: leftmost start wins over longer later match
+	// -------------------------------------------------------------------
+
+	// a|bbb on "abbb": "a" matches at 0..1, "bbb" would match at 1..4.
+	// Leftmost start wins → 0..1.
+	rc = check_match(&"a|bbb", &"abbb", 0, 1, 58);
+	if rc != 0 { return rc; }
+
+	// bbb|a on "abbb": still leftmost start wins → "a" at 0..1.
+	rc = check_match(&"bbb|a", &"abbb", 0, 1, 62);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §6 — Star vs Plus: zero-length match possibility
+	// -------------------------------------------------------------------
+
+	// a* on "bbb": at position 0, a* matches zero-length → 0..0.
+	rc = check_match(&"a*", &"bbb", 0, 0, 66);
+	if rc != 0 { return rc; }
+
+	// a+ on "bbb": no match at any position.
+	rc = check_is_match(&"a+", &"bbb", false, 70);
+	if rc != 0 { return rc; }
+
+	// a* on "baab": at position 0, zero-length match → 0..0 (leftmost).
+	// NOT 1..3 (which would be longer but at a later start).
+	rc = check_match(&"a*", &"baab", 0, 0, 72);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §7 — Grouped quantifier greediness
+	// -------------------------------------------------------------------
+
+	// (ab)+ on "ababab": greedy → consumes all three "ab" → 0..6.
+	rc = check_match(&"(ab)+", &"ababab", 0, 6, 76);
+	if rc != 0 { return rc; }
+
+	// (ab)+ on "xababx": leftmost at 1, greedy → 1..5.
+	rc = check_match(&"(ab)+", &"xababx", 1, 5, 80);
+	if rc != 0 { return rc; }
+
+	// (a|b)+ on "aabb": greedy → consumes everything → 0..4.
+	rc = check_match(&"(a|b)+", &"aabb", 0, 4, 84);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §8 — Greediness in replace_all: non-overlapping left-to-right
+	// -------------------------------------------------------------------
+
+	// a+ replace on "aabaa": first match 0..2 ("aa"), then 3..5 ("aa").
+	rc = check_replace_all(&"a+", &"aabaa", &"X", &"XbX", 88);
+	if rc != 0 { return rc; }
+
+	// .* replace on "abc": greedy matches entire string, then zero-length at end.
+	// Result: "X" (whole string replaced) + "X" (zero-length at pos 3) = "XX".
+	rc = check_replace_all(&".*", &"abc", &"X", &"XX", 90);
+	if rc != 0 { return rc; }
+
+	// .+ replace on "abc": greedy matches "abc", no further match.
+	rc = check_replace_all(&".+", &"abc", &"X", &"X", 92);
+	if rc != 0 { return rc; }
+
+	// -------------------------------------------------------------------
+	// §9 — Question mark greediness
+	// -------------------------------------------------------------------
+
+	// a? on "aa": greedy → matches "a" at 0..1 (not zero-length).
+	rc = check_match(&"a?", &"aa", 0, 1, 94);
+	if rc != 0 { return rc; }
+
+	// ab? on "a": b is optional, greedy tries b first but fails → match "a" at 0..1.
+	rc = check_match(&"ab?", &"a", 0, 1, 98);
+	if rc != 0 { return rc; }
+
+	// ab? on "ab": greedy → matches "ab" at 0..2.
+	rc = check_match(&"ab?", &"ab", 0, 2, 102);
+	if rc != 0 { return rc; }
+
+	return 0;
+}

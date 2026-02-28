@@ -1,0 +1,6 @@
+{
+  "description": "e2e: regex compile-time growth stress (long alternation/concat patterns)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

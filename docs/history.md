@@ -8,6 +8,18 @@
 - Added replacement stress guards in `std_regex_replace`: long-input replace-all, greedy whole-string replacement, repeated pair replacements, empty-pattern insertion behavior, zero-length `a*` progression, and replace-first-on-long-input.
 - Completed regex hardening passes with clean instrumentation runs (no ASAN errors and no memcheck leak/error exits) across regex + charclass + regression suites.
 - Marked `work/regex-stdlib/plan.md` phases A–E and completion criteria as complete.
+- Added gotcha-focused conformance/stress coverage for `std.regex`:
+  - `std_regex_gotchas_greediness`
+  - `std_regex_gotchas_class_edges`
+  - `std_regex_gotchas_utf8_offsets`
+  - `std_regex_stress_compile_growth`
+  - `std_regex_stress_adversarial`
+- Frozen contracts pinned by tests and plan updates:
+  - match selection: leftmost-longest
+  - quantifiers: greedy only (`*`, `+`, `?`), no lazy mode in v1
+  - class edge rules for `-`, `]`, `^`
+  - byte-offset semantics for matching/replacement behavior
+- Bumped compiler version to `0.10.0-dev`; ABI remains `1`.
 
 ## 2026-02-26
 - Added UTC build timestamp (`build_utc`) to compiler provenance string embedded in every compiled binary (`@__drift_compiler_build`).

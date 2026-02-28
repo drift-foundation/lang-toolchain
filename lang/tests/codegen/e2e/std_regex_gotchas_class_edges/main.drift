@@ -1,0 +1,237 @@
+module main
+
+import std.core as core;
+import std.regex as regex;
+
+fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			match regex.find_first(&re, input) {
+				Optional::Some(m) => {
+					if m.start != exp_start { return fail_code; }
+					if m.end != exp_end { return fail_code + 1; }
+					return 0;
+				},
+				Optional::None() => { return fail_code + 2; }
+			}
+		},
+		core.Result::Err(_) => { return fail_code + 3; }
+	}
+}
+
+fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(re) => {
+			if regex.is_match(&re, input) != expected { return fail_code; }
+			return 0;
+		},
+		core.Result::Err(_) => { return fail_code + 1; }
+	}
+}
+
+fn check_compile_err(pattern: &String, exp_tag: &String, fail_code: Int) nothrow -> Int {
+	match regex.compile(pattern) {
+		core.Result::Ok(_) => { return fail_code; },
+		core.Result::Err(e) => {
+			if !str_eq(&e.tag, exp_tag) { return fail_code + 1; }
+			return 0;
+		}
+	}
+}
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	var rc = 0;
+
+	// =================================================================
+	// §1 — Literal hyphen (-) placement inside character classes
+	//
+	// FROZEN CONTRACT:
+	//   - `-` at start of class → literal hyphen
+	//   - `-` at end of class (before `]`) → literal hyphen
+	//   - `-` between two chars → range (lo-hi)
+	//   - `\-` anywhere → literal hyphen (escaped)
+	// =================================================================
+
+	// Hyphen at start: [-abc] matches '-', 'a', 'b', 'c'.
+	rc = check_is_match(&"[-abc]", &"-", true, 10);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[-abc]", &"a", true, 12);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[-abc]", &"x", false, 14);
+	if rc != 0 { return rc; }
+
+	// Hyphen at end: [abc-] matches '-', 'a', 'b', 'c'.
+	rc = check_is_match(&"[abc-]", &"-", true, 16);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[abc-]", &"c", true, 18);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[abc-]", &"x", false, 20);
+	if rc != 0 { return rc; }
+
+	// Hyphen in middle: [a-z] is a range.
+	rc = check_is_match(&"[a-z]", &"m", true, 22);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a-z]", &"A", false, 24);
+	if rc != 0 { return rc; }
+
+	// Escaped hyphen: [a\-z] matches 'a', '-', 'z' (NOT range).
+	rc = check_is_match(&"[a\\-z]", &"-", true, 26);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\-z]", &"a", true, 28);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\-z]", &"z", true, 30);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\-z]", &"m", false, 32);
+	if rc != 0 { return rc; }
+
+	// =================================================================
+	// §2 — Literal ] inside character classes
+	//
+	// FROZEN CONTRACT:
+	//   - `]` as first character after `[` or `[^` → literal `]`
+	//   - `\]` anywhere → literal `]`
+	//   - `]` elsewhere → closes the class
+	// =================================================================
+
+	// ] as first char: []abc] matches ']', 'a', 'b', 'c'.
+	rc = check_is_match(&"[]abc]", &"]", true, 40);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[]abc]", &"a", true, 42);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[]abc]", &"x", false, 44);
+	if rc != 0 { return rc; }
+
+	// ] as first char after negation: [^]abc] matches anything except ']','a','b','c'.
+	rc = check_is_match(&"[^]abc]", &"x", true, 46);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[^]abc]", &"]", false, 48);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[^]abc]", &"a", false, 50);
+	if rc != 0 { return rc; }
+
+	// Escaped ] inside class: [a\]b] matches 'a', ']', 'b'.
+	rc = check_is_match(&"[a\\]b]", &"]", true, 52);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\]b]", &"a", true, 54);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\]b]", &"x", false, 56);
+	if rc != 0 { return rc; }
+
+	// =================================================================
+	// §3 — Caret (^) inside character classes
+	//
+	// FROZEN CONTRACT:
+	//   - `^` immediately after `[` → negation
+	//   - `^` elsewhere in class → literal caret
+	//   - `\^` anywhere → literal caret
+	// =================================================================
+
+	// ^ as negation: [^a] matches anything except 'a'.
+	rc = check_is_match(&"[^a]", &"b", true, 60);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[^a]", &"a", false, 62);
+	if rc != 0 { return rc; }
+
+	// ^ not first: [a^b] matches 'a', '^', 'b'.
+	rc = check_is_match(&"[a^b]", &"^", true, 64);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a^b]", &"a", true, 66);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a^b]", &"x", false, 68);
+	if rc != 0 { return rc; }
+
+	// Escaped ^ inside class: [a\^b] matches 'a', '^', 'b'.
+	rc = check_is_match(&"[a\\^b]", &"^", true, 70);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\^b]", &"x", false, 72);
+	if rc != 0 { return rc; }
+
+	// =================================================================
+	// §4 — Escaped metachars inside character classes
+	// =================================================================
+
+	// \\  inside class: [a\\b] matches 'a', '\', 'b'.
+	rc = check_is_match(&"[a\\\\b]", &"\\", true, 80);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\\\b]", &"a", true, 82);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[a\\\\b]", &"x", false, 84);
+	if rc != 0 { return rc; }
+
+	// \d inside class: [\da-f] matches digits and a-f (hex chars).
+	rc = check_is_match(&"[\\da-f]", &"5", true, 86);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\da-f]", &"c", true, 88);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\da-f]", &"g", false, 90);
+	if rc != 0 { return rc; }
+
+	// \w inside class: [\w.] matches word chars plus dot.
+	rc = check_is_match(&"[\\w.]", &"a", true, 92);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\w.]", &".", true, 94);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\w.]", &"!", false, 96);
+	if rc != 0 { return rc; }
+
+	// \s inside class: [\sa] matches whitespace plus 'a'.
+	rc = check_is_match(&"[\\sa]", &" ", true, 98);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\sa]", &"a", true, 100);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[\\sa]", &"b", false, 102);
+	if rc != 0 { return rc; }
+
+	// =================================================================
+	// §5 — Combined edge cases and offset verification
+	// =================================================================
+
+	// Class with ], -, ^ all together: []^-] matches ']', '^', '-'.
+	rc = check_is_match(&"[]^-]", &"]", true, 110);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[]^-]", &"^", true, 112);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[]^-]", &"-", true, 114);
+	if rc != 0 { return rc; }
+	rc = check_is_match(&"[]^-]", &"a", false, 116);
+	if rc != 0 { return rc; }
+
+	// find_first offset check on class match.
+	// [abc]+ on "xxabcxx" → match at 2..5.
+	rc = check_match(&"[abc]+", &"xxabcxx", 2, 5, 120);
+	if rc != 0 { return rc; }
+
+	// =================================================================
+	// §6 — Compile errors for invalid class constructs
+	// =================================================================
+
+	// Reversed range: [z-a] → error.
+	rc = check_compile_err(&"[z-a]", &"reversed-range", 130);
+	if rc != 0 { return rc; }
+
+	// Unclosed class: [abc → error.
+	rc = check_compile_err(&"[abc", &"unclosed-class", 132);
+	if rc != 0 { return rc; }
+
+	// Trailing backslash in class: [a\ → error.
+	rc = check_compile_err(&"[a\\", &"trailing-backslash-in-class", 134);
+	if rc != 0 { return rc; }
+
+	// Invalid escape in class: [a\q] → error.
+	rc = check_compile_err(&"[a\\q]", &"invalid-escape-in-class", 136);
+	if rc != 0 { return rc; }
+
+	return 0;
+}
