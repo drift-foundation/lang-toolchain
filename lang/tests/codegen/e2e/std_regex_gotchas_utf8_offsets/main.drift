@@ -163,14 +163,15 @@ fn main() nothrow -> Int {
 
 	// Replace "." (first byte) with "Z" in "ü": result = "Z" + second byte of ü.
 	// This produces invalid UTF-8, which is fine — regex operates on bytes.
-	val uu_replaced = regex.replace_first(
-		&({match regex.compile(&".") { core.Result::Ok(re) => { re }, core.Result::Err(_) => { return 64; } }}),
-		&uu,
-		&"Z"
-	);
-	// Result should be 2 bytes: 'Z' (0x5A) + 0xBC (continuation byte).
-	if uu_replaced.byte_length() != 2 { return 65; }
-	if core.string_byte_at(&uu_replaced, 0) != cast<Byte>(90) { return 66; }
+	match regex.compile(&".") {
+		core.Result::Ok(re_dot) => {
+			val uu_replaced = regex.replace_first(&re_dot, &uu, &"Z");
+			// Result should be 2 bytes: 'Z' (0x5A) + 0xBC (continuation byte).
+			if uu_replaced.byte_length() != 2 { return 65; }
+			if core.string_byte_at(&uu_replaced, 0) != cast<Byte>(90) { return 66; }
+		},
+		core.Result::Err(_) => { return 64; }
+	}
 
 	// -------------------------------------------------------------------
 	// §5 — replace_all on multibyte input: byte accounting
@@ -195,16 +196,17 @@ fn main() nothrow -> Int {
 	// Empty pattern on "ü" (2 bytes): inserts between each byte + at ends.
 	// 3 insertions: "-" + byte0 + "-" + byte1 + "-"
 	// = "-\xC3-\xBC-" (5 bytes total).
-	val uu_empty_repl = regex.replace_all(
-		&({match regex.compile(&"") { core.Result::Ok(re) => { re }, core.Result::Err(_) => { return 76; } }}),
-		&uu,
-		&"-"
-	);
-	if uu_empty_repl.byte_length() != 5 { return 77; }
-	// Check: first byte should be '-' (0x2D).
-	if core.string_byte_at(&uu_empty_repl, 0) != cast<Byte>(45) { return 78; }
-	// Second byte should be 0xC3 (first byte of ü).
-	if core.string_byte_at(&uu_empty_repl, 1) != cast<Byte>(195) { return 79; }
+	match regex.compile(&"") {
+		core.Result::Ok(re_empty) => {
+			val uu_empty_repl = regex.replace_all(&re_empty, &uu, &"-");
+			if uu_empty_repl.byte_length() != 5 { return 77; }
+			// Check: first byte should be '-' (0x2D).
+			if core.string_byte_at(&uu_empty_repl, 0) != cast<Byte>(45) { return 78; }
+			// Second byte should be 0xC3 (first byte of ü).
+			if core.string_byte_at(&uu_empty_repl, 1) != cast<Byte>(195) { return 79; }
+		},
+		core.Result::Err(_) => { return 76; }
+	}
 
 	// -------------------------------------------------------------------
 	// §7 — 4-byte UTF-8 character (emoji)

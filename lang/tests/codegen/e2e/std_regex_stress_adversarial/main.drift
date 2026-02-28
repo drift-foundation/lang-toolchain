@@ -1,6 +1,7 @@
 module main
 
 import std.core as core;
+import std.io as io;
 import std.regex as regex;
 
 fn str_eq(a: &String, b: &String) nothrow -> Bool {
@@ -15,11 +16,17 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
+fn byte_to_string(ch: Byte) nothrow -> String {
+	var b = io.buffer(1);
+	io.buffer_write(&mut b, 0, ch);
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 1);
+}
+
 fn repeat_char(ch: Byte, n: Int) nothrow -> String {
 	var s = "";
 	var i = 0;
 	while i < n {
-		s = s + core.byte_to_string(ch);
+		s = s + byte_to_string(ch);
 		i = i + 1;
 	}
 	return s;

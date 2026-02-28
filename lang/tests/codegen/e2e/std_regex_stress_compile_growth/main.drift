@@ -1,7 +1,14 @@
 module main
 
 import std.core as core;
+import std.io as io;
 import std.regex as regex;
+
+fn byte_to_string(ch: Byte) nothrow -> String {
+	var b = io.buffer(1);
+	io.buffer_write(&mut b, 0, ch);
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 1);
+}
 
 fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	val an = a.byte_length();
@@ -55,7 +62,7 @@ fn main() nothrow -> Int {
 	var alt50 = "";
 	var i = 0;
 	while i < 26 {
-		val ch = core.byte_to_string(cast<Byte>(97 + i));
+		val ch = byte_to_string(cast<Byte>(97 + i));
 		if i > 0 { alt50 = alt50 + "|"; }
 		alt50 = alt50 + "a" + ch;
 		i = i + 1;
@@ -63,7 +70,7 @@ fn main() nothrow -> Int {
 	// Add 24 more branches: ba through bx.
 	i = 0;
 	while i < 24 {
-		val ch = core.byte_to_string(cast<Byte>(97 + i));
+		val ch = byte_to_string(cast<Byte>(97 + i));
 		alt50 = alt50 + "|b" + ch;
 		i = i + 1;
 	}
@@ -93,25 +100,25 @@ fn main() nothrow -> Int {
 	i = 0;
 	while i < 26 {
 		if i > 0 { alt100 = alt100 + "|"; }
-		alt100 = alt100 + core.byte_to_string(cast<Byte>(97 + i));
+		alt100 = alt100 + byte_to_string(cast<Byte>(97 + i));
 		i = i + 1;
 	}
 	// A-Z (26)
 	i = 0;
 	while i < 26 {
-		alt100 = alt100 + "|" + core.byte_to_string(cast<Byte>(65 + i));
+		alt100 = alt100 + "|" + byte_to_string(cast<Byte>(65 + i));
 		i = i + 1;
 	}
 	// 0-9 (10)
 	i = 0;
 	while i < 10 {
-		alt100 = alt100 + "|" + core.byte_to_string(cast<Byte>(48 + i));
+		alt100 = alt100 + "|" + byte_to_string(cast<Byte>(48 + i));
 		i = i + 1;
 	}
 	// Pad with literal strings to reach ~100: "aa" through "al" (38 more → total 100).
 	i = 0;
 	while i < 38 {
-		val ch = core.byte_to_string(cast<Byte>(97 + (i % 26)));
+		val ch = byte_to_string(cast<Byte>(97 + (i % 26)));
 		alt100 = alt100 + "|a" + ch;
 		i = i + 1;
 	}
@@ -134,7 +141,7 @@ fn main() nothrow -> Int {
 	var long_inp = "";
 	i = 0;
 	while i < 100 {
-		val ch = core.byte_to_string(cast<Byte>(97 + (i % 3)));
+		val ch = byte_to_string(cast<Byte>(97 + (i % 3)));
 		long_pat = long_pat + ch;
 		long_inp = long_inp + ch;
 		i = i + 1;
@@ -147,7 +154,7 @@ fn main() nothrow -> Int {
 	var short_inp = "";
 	i = 0;
 	while i < 99 {
-		val ch = core.byte_to_string(cast<Byte>(97 + (i % 3)));
+		val ch = byte_to_string(cast<Byte>(97 + (i % 3)));
 		short_inp = short_inp + ch;
 		i = i + 1;
 	}
