@@ -1,0 +1,10 @@
+{
+  "description": "e2e: taking &mut through shared ref remains rejected after call-site reborrow",
+  "diagnostics": [
+    {
+      "message_contains": "cannot take &mut through *p unless p is a mutable reference"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

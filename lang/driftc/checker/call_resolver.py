@@ -1491,6 +1491,14 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			return MethodCallResult(fn_sig_ret, None)
 		for want, have in zip(fn_sig_params, arg_types):
 			if have is not None and want != have:
+				# Implicit reborrow: allow &mut T where &T is expected.
+				have_def = ctx.type_table.get(have)
+				want_def = ctx.type_table.get(want)
+				if (have_def.kind is TypeKind.REF and want_def.kind is TypeKind.REF
+						and have_def.ref_mut is True and want_def.ref_mut is False
+						and have_def.param_types and want_def.param_types
+						and have_def.param_types[0] == want_def.param_types[0]):
+					continue
 				diagnostics.append(_tc_diag(message=f"function value argument type mismatch (have {ctx.type_table.get(have).name}, expected {ctx.type_table.get(want).name})", severity="error", span=getattr(expr, "loc", Span())))
 		call_can_throw = recv_nominal_def.can_throw()
 		target_id = getattr(expr.receiver, "node_id", None)
@@ -1535,6 +1543,14 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			return MethodCallResult(ctx.unknown_ty, None)
 		for idx, (arg_ty, param_ty) in enumerate(zip(arg_types, param_types)):
 			if arg_ty is not None and arg_ty != param_ty and ctx.type_table.get(param_ty).kind is not TypeKind.UNKNOWN:
+				# Implicit reborrow: allow &mut T where &T is expected.
+				arg_def = ctx.type_table.get(arg_ty)
+				param_def = ctx.type_table.get(param_ty)
+				if (arg_def.kind is TypeKind.REF and param_def.kind is TypeKind.REF
+						and arg_def.ref_mut is True and param_def.ref_mut is False
+						and arg_def.param_types and param_def.param_types
+						and arg_def.param_types[0] == param_def.param_types[0]):
+					continue
 				diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} argument {idx + 1} type mismatch", severity="error", span=getattr(expr.args[idx], "loc", getattr(expr, "loc", Span()))))
 				return MethodCallResult(ctx.unknown_ty, None)
 		info = _call_info_target(param_types, ret_ty, not bool(method_schema.declared_nothrow), CallTarget.indirect(getattr(expr, "node_id", None)))
