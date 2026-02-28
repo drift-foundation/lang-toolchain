@@ -1626,6 +1626,10 @@ class TypeTable:
 				field_names=list(td.field_names),
 				field_types=list(field_types),
 			)
+			# Field types changed from Unknown placeholders to concrete types;
+			# invalidate the has_drop cache so that any stale False entries
+			# (computed while fields were still Unknown) are recomputed.
+			self._needs_drop_cache.pop(struct_id, None)
 
 	def struct_field(self, struct_id: TypeId, field_name: str) -> tuple[int, TypeId] | None:
 		"""Return (field_index, field_type_id) for a struct field, or None."""
@@ -2102,6 +2106,12 @@ class TypeTable:
 					if drift_debug.enabled("copy_cache"):
 						print(f"[drift:debug][copy_cache] struct_no_instance ty={tid} name={td.name} module={td.module_id}", file=sys.stderr)
 					return False
+				# A Destructible struct is never Copy — its destructor
+				# must run exactly once, regardless of field layout.
+				if self.is_destructible(tid):
+					_assert_structural_cacheable(tid)
+					cache_structural[tid] = False
+					return False
 				ok = all(_is_copy_structural(f) for f in inst.field_types)
 				_assert_structural_cacheable(tid)
 				cache_structural[tid] = ok
@@ -2131,6 +2141,14 @@ class TypeTable:
 			if res is not None:
 				cache_proof[ty] = bool(res)
 				return cache_proof[ty]
+			# A type that implements Destructible cannot be Copy — its
+			# destructor must run exactly once, so ownership semantics
+			# require move.  Check before the structural fallback to
+			# prevent RawBuffer-wrapping types (Arc, Mutex, etc.) from
+			# being misclassified as Copy based on field layout alone.
+			if self.is_destructible(ty):
+				cache_proof[ty] = False
+				return False
 			if _eligible_structural_fallback(ty):
 				if drift_debug.enabled("copy_fallback"):
 					td = self.get(ty)

@@ -1,5 +1,19 @@
 # Drift development history
 
+## 2026-03-03
+- Fixed a type-system ownership bug in `lang/driftc/core/types_core.py`: structural `Copy` analysis could misclassify `Destructible` structs as `Copy` if their field layout looked scalar/copyable (for example `Arc<T>` wrapping `RawBuffer`). This caused MIR scope-exit drop glue to be skipped for enclosing structs and leaked destructor-managed resources.
+- Hardened `TypeTable` copy/drop classification in three places:
+  - `_is_copy_structural(...)` now rejects `Destructible` structs before field-recursive structural analysis.
+  - `copy_status(...)` now rejects `Destructible` types before structural fallback when the copy query hook defers.
+  - `define_struct_fields(...)` now invalidates `_needs_drop_cache` when placeholder field types are replaced by concrete types, preventing stale no-drop results.
+- Root-caused and fixed the Arc-in-struct leak shape reported by the web framework team: a struct containing `Arc<T>` and later accessed through its field path could be misclassified as `Copy`, preventing destructor emission and leaking the Arc backing allocation. Regression: `arc_struct_field_get_drop_leak`.
+- Added direct driver-level contract coverage in `test_destructible_not_copy_contract.py`:
+  - `test_arc_copy_status_is_false`
+  - `test_struct_containing_arc_copy_status_is_false`
+  - `test_destructible_implies_not_copy`
+  These pin the invariant `is_destructible(T) => copy_status(T) is not True`.
+- Bumped compiler version to `0.13.0-dev`; ABI remains `1`.
+
 ## 2026-03-02
 - Fixed can-throw interface call lowering for `Void` returns (`lang/driftc/stage2/hir_to_mir.py`): `_lower_iface_call` previously checked `is_void(user_ret_type)` before `can_throw`, returning `None` for can-throw `Void` interface calls instead of an `FnResult<Void, Error>` wrapper. Reordered the logic to handle `can_throw` first, matching the indirect-call path. Regression: `iface_canthrow_void_stmt`.
 - Fixed SSA type-environment propagation for `CallIface` in `lang/driftc/checker/__init__.py`: interface-call destinations were previously left `Unknown` because `build_type_env_from_ssa` handled `Call` and `CallIndirect` but not `CallIface`. This broke downstream `ResultErr` / `ConstructResultErr` typing and throw-check validation. Regression: `iface_canthrow_err_propagation`.

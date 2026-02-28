@@ -1,0 +1,104 @@
+module main
+
+import std.core as core;
+import std.concurrent as conc;
+import std.sync as sync;
+
+struct Handle {
+	stopped: conc.Arc<sync.AtomicBool>,
+	value: Int
+}
+
+fn new_handle() nothrow -> Handle {
+	return Handle(stopped = conc.arc(sync.atomic_bool(false)), value = 0);
+}
+
+fn clone_handle(h: &Handle) nothrow -> Handle {
+	return Handle(stopped = h.stopped.clone(), value = h.value);
+}
+
+fn wait_on(handle: Handle) nothrow -> Int {
+	val flag = handle.stopped.get();
+	while !flag.load(sync.MemoryOrder::Acquire()) {
+		conc.sleep(conc.Duration(millis = 10));
+	}
+	return 0;
+}
+
+fn consume(handle: Handle) nothrow -> Int {
+	val flag = handle.stopped.get();
+	if flag.load(sync.MemoryOrder::Acquire()) {
+		return 1;
+	}
+	return 0;
+}
+
+// Section 1: struct dropped without .get() on Arc field — no leak.
+fn scenario_no_get() nothrow -> Int {
+	var h = new_handle();
+	var caller = clone_handle(&h);
+	var sv = conc.spawn_cb(| | captures(move h) => {
+		return consume(move h);
+	});
+	match sv.join() {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 102; }
+		}
+	}
+	return 0;
+}
+
+// Section 2: bare Arc, clone, spawn, caller calls .get() — no leak.
+fn wait_on_bare(a: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val flag = a.get();
+	while !flag.load(sync.MemoryOrder::Acquire()) {
+		conc.sleep(conc.Duration(millis = 10));
+	}
+	return 0;
+}
+
+fn scenario_bare_arc() nothrow -> Int {
+	var a = conc.arc(sync.atomic_bool(false));
+	var a2 = a.clone();
+	var sv = conc.spawn_cb(| | captures(move a) => {
+		return wait_on_bare(move a);
+	});
+	val flag = a2.get();
+	flag.store(true, sync.MemoryOrder::Release());
+	match sv.join() {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 202; }
+		}
+	}
+	return 0;
+}
+
+// Section 3: Arc-in-struct, caller calls .get() on struct field — was BUG, now fixed.
+fn scenario_struct_get() nothrow -> Int {
+	var h = new_handle();
+	var caller = clone_handle(&h);
+	var sv = conc.spawn_cb(| | captures(move h) => {
+		return wait_on(move h);
+	});
+	val flag = caller.stopped.get();
+	flag.store(true, sync.MemoryOrder::Release());
+	match sv.join() {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 302; }
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_no_get();
+	if a != 0 { return a; }
+	val b = scenario_bare_arc();
+	if b != 0 { return b; }
+	val c = scenario_struct_get();
+	if c != 0 { return c; }
+	return 0;
+}
