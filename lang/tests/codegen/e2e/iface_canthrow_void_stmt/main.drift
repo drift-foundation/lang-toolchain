@@ -1,0 +1,49 @@
+module main
+
+import std.core as core;
+
+// Pin: can-throw void interface call in statement position.
+//
+// _lower_iface_call must check can_throw before is_void. A can-throw
+// call always produces a FnResult<T, Error> wrapper even when T=Void.
+// If the void check runs first, fnres_val is None and MIR lowering
+// hits: assert fnres_val is not None.
+
+fn noop(n: Int) -> Void {
+	return;
+}
+
+fn invoke_void(cb: core.CallbackThrow1<Int, Void>) -> Void {
+	cb.call(42);
+}
+
+fn thrower(n: Int) -> Void {
+	if n < 0 {
+		throw std.err:ResultError(dv = core.DiagnosticValue::Int(n));
+	}
+}
+
+fn invoke_and_check(cb: core.CallbackThrow1<Int, Void>) -> Int {
+	cb.call(1);
+	cb.call(2);
+	return 0;
+}
+
+fn run() -> Int {
+	// Section 1: basic void can-throw iface call.
+	invoke_void(core.callback_throw1(noop));
+
+	// Section 2: multiple void can-throw iface calls in sequence.
+	val r = invoke_and_check(core.callback_throw1(noop));
+	if r != 0 { return 1; }
+
+	// Section 3: void can-throw iface call that actually throws.
+	invoke_void(core.callback_throw1(thrower));
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r = try run() catch { 99 };
+	if r != 0 { return r; }
+	return 0;
+}

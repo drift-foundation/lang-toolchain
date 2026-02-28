@@ -3441,6 +3441,7 @@ class Checker:
 			ResultErr,
 			Call,
 			CallIndirect,
+			CallIface,
 			FnPtrConst,
 			ConstInt,
 			ConstBool,
@@ -3743,6 +3744,18 @@ class Checker:
 								value_types[(fn_id, dest)] = dest_ty
 								changed = True
 						elif isinstance(instr, CallIndirect) and dest is not None:
+							if instr.can_throw:
+								ok_ty = instr.user_ret_type or self._unknown_type
+								err_ty = self._error_type
+								dest_ty = self._type_table.ensure_fnresult(ok_ty, err_ty)
+							else:
+								dest_ty = instr.user_ret_type or self._unknown_type
+								if is_void_tid(dest_ty):
+									continue
+							if value_types.get((fn_id, dest)) != dest_ty:
+								value_types[(fn_id, dest)] = dest_ty
+								changed = True
+						elif isinstance(instr, CallIface) and dest is not None:
 							if instr.can_throw:
 								ok_ty = instr.user_ret_type or self._unknown_type
 								err_ty = self._error_type

@@ -1,0 +1,67 @@
+module main
+
+import std.core as core;
+
+// Pin: CallIface must contribute FnResult<ok, Error> to the SSA type
+// env so downstream ResultErr/ConstructResultErr carry correct types.
+//
+// Without the CallIface handler in build_type_env_from_ssa, the
+// interface call dest gets Unknown type. Then ResultErr extracts an
+// Unknown-typed error, and ConstructResultErr wraps it into
+// FnResult<ok, Unknown> instead of FnResult<ok, Error>. The throw
+// checks reject: "mismatched parts: expected (ok, Error) but got
+// (ok, Unknown)".
+//
+// This test exercises the error-propagation path: a can-throw
+// interface call inside a can-throw function, where the inner error
+// must be correctly typed to propagate out.
+
+fn identity(n: Int) -> Int {
+	return n;
+}
+
+fn fallible_identity(n: Int) -> Int {
+	if n < 0 {
+		throw std.err:ResultError(dv = core.DiagnosticValue::Int(n));
+	}
+	return n;
+}
+
+// Inner function calls a can-throw interface method and propagates
+// any error to its caller. The CallIface dest must be typed as
+// FnResult<Int, Error> so the error leg carries Error, not Unknown.
+fn call_through_iface(cb: core.CallbackThrow1<Int, Int>, n: Int) -> Int {
+	val r = cb.call(n);
+	return r;
+}
+
+// Same but with Void return: exercises both the void-stmt ordering
+// fix AND the type env propagation for the error leg.
+fn call_void_iface(cb: core.CallbackThrow1<Int, Void>, n: Int) -> Void {
+	cb.call(n);
+}
+
+fn noop(n: Int) -> Void {
+	return;
+}
+
+fn run() -> Int {
+	// Section 1: non-void can-throw iface call, no error.
+	val r1 = call_through_iface(core.callback_throw1(identity), 42);
+	if r1 != 42 { return 1; }
+
+	// Section 2: non-void can-throw iface call, error propagated.
+	val r2 = call_through_iface(core.callback_throw1(fallible_identity), 10);
+	if r2 != 10 { return 2; }
+
+	// Section 3: void can-throw iface call, error propagated.
+	call_void_iface(core.callback_throw1(noop), 5);
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r = try run() catch { 99 };
+	if r != 0 { return r; }
+	return 0;
+}

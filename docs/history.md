@@ -1,5 +1,12 @@
 # Drift development history
 
+## 2026-03-02
+- Fixed can-throw interface call lowering for `Void` returns (`lang/driftc/stage2/hir_to_mir.py`): `_lower_iface_call` previously checked `is_void(user_ret_type)` before `can_throw`, returning `None` for can-throw `Void` interface calls instead of an `FnResult<Void, Error>` wrapper. Reordered the logic to handle `can_throw` first, matching the indirect-call path. Regression: `iface_canthrow_void_stmt`.
+- Fixed SSA type-environment propagation for `CallIface` in `lang/driftc/checker/__init__.py`: interface-call destinations were previously left `Unknown` because `build_type_env_from_ssa` handled `Call` and `CallIndirect` but not `CallIface`. This broke downstream `ResultErr` / `ConstructResultErr` typing and throw-check validation. Regression: `iface_canthrow_err_propagation`.
+- Fixed a pre-existing Python shadowing bug in `lang/driftc/driftc.py`: local `import sys` statements inside `compile_stubbed_funcs` could trigger `UnboundLocalError` on earlier `sys.stderr` debug prints. Debug-only imports are now aliased.
+- The above fixes root-caused and cleared `std_net_tcp_stress_connections`.
+- Bumped compiler version to `0.12.0-dev`; ABI remains `1`.
+
 ## 2026-03-01
 - Added call-boundary shared reborrow ergonomics in the checker/type checker: immediate call arguments of type `&mut T` are now accepted where parameters require `&T`, including callback dispatch paths. The implementation is intentionally narrow and limited to call argument matching (`lang/driftc/checker/__init__.py`, `lang/driftc/type_checker.py`); no lowering or ABI changes were required.
 - Added positive e2e coverage for shared reborrow at direct call sites and callback calls: `reborrow_mut_to_shared_call_site`, `reborrow_mut_to_shared_callback`.

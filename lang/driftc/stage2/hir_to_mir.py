@@ -6122,6 +6122,21 @@ class HIRToMIR:
 			self._local_types[dest] = view_map.get(owner_base, iface_ty)
 			iface_val = dest
 		slot_index = self._type_table.interface_method_vtable_slot(iface_base, owner_base, method_name)
+		if info.sig.can_throw:
+			dest = self.b.new_temp()
+			self.b.emit(
+				M.CallIface(
+					dest=dest,
+					iface=iface_val,
+					args=arg_vals,
+					param_types=param_types,
+					user_ret_type=info.sig.user_ret_type,
+					can_throw=True,
+					slot_index=slot_index,
+				)
+			)
+			self._local_types[dest] = call_abi_ret_type(info.sig, self._type_table)
+			return dest
 		if self._type_table.is_void(info.sig.user_ret_type):
 			self.b.emit(
 				M.CallIface(
@@ -6130,7 +6145,7 @@ class HIRToMIR:
 					args=arg_vals,
 					param_types=param_types,
 					user_ret_type=info.sig.user_ret_type,
-					can_throw=info.sig.can_throw,
+					can_throw=False,
 					slot_index=slot_index,
 				)
 			)
@@ -6143,7 +6158,7 @@ class HIRToMIR:
 				args=arg_vals,
 				param_types=param_types,
 				user_ret_type=info.sig.user_ret_type,
-				can_throw=info.sig.can_throw,
+				can_throw=False,
 				slot_index=slot_index,
 			)
 		)

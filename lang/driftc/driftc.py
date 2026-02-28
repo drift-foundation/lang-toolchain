@@ -2492,8 +2492,9 @@ def compile_stubbed_funcs(
 	with _timed("typecheck"):
 		for fn_id, hir_norm in normalized_hirs_by_id.items():
 			if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
+				import sys as _try_auto_sys2
 				sig_dbg = signatures_by_id.get(fn_id)
-				print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=sys.stderr)
+				print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=_try_auto_sys2.stderr)
 			_typecheck_fn(fn_id, hir_norm)
 	if type_checker.defaulted_phase_count() != 0:
 		raise AssertionError(
@@ -2582,14 +2583,14 @@ def compile_stubbed_funcs(
 					return
 			_walk_expr_ids_typed(block)
 	if drift_debug.enabled("ssa"):
-		import sys
+		import sys as _ssa_dbg_sys
 		for fn_id, block in normalized_hirs_by_id.items():
 			if getattr(fn_id, "module", None) != "main":
 				continue
 			for stmt in block.statements:
 				if isinstance(stmt, H.HReturn):
 					span = Span.from_loc(getattr(stmt, "loc", None))
-					print(f"[drift:debug][hir] return loc={span}", file=sys.stderr)
+					print(f"[drift:debug][hir] return loc={span}", file=_ssa_dbg_sys.stderr)
 
 	# Instantiation phase: clone generic templates into concrete instantiations
 	# and rewrite call targets.
