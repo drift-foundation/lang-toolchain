@@ -13,7 +13,7 @@ fn handler1(f: &Foo, n: Int) nothrow -> Int {
 	return f.x + n;
 }
 
-fn dispatch1(cb: &core.Callback2<Int, &Foo, Int>) nothrow -> Int {
+fn dispatch1(cb: core.Callback2<&Foo, Int, Int>) nothrow -> Int {
 	var f = Foo(x = 10);
 	return cb.call(&mut f, 5);
 }
@@ -24,7 +24,7 @@ fn handler2(req: &Request, resp: &mut Response) nothrow -> Int {
 	return req.path.byte_length();
 }
 
-fn dispatch2(cb: &core.Callback2<Int, &Request, &mut Response>) nothrow -> Int {
+fn dispatch2(cb: core.Callback2<&Request, &mut Response, Int>) nothrow -> Int {
 	var req = Request(path = "/api");
 	var resp = Response(status = 0);
 	val r = cb.call(&mut req, &mut resp);
@@ -36,36 +36,32 @@ fn handler3(f: &Foo) nothrow -> Int {
 	return f.x * 2;
 }
 
-fn dispatch3(cb: &core.Callback1<Int, &Foo>) nothrow -> Int {
+fn dispatch3(cb: core.Callback1<&Foo, Int>) nothrow -> Int {
 	var f = Foo(x = 7);
 	return cb.call(&mut f);
 }
 
-// 4 - Nested: dispatch function itself takes &mut callback ref.
-fn dispatch4(cb: &core.Callback2<Int, &Foo, Int>) nothrow -> Int {
+// 4 - Nested: dispatch function itself takes callback by value.
+fn dispatch4(cb: core.Callback2<&Foo, Int, Int>) nothrow -> Int {
 	var f = Foo(x = 3);
 	return cb.call(&mut f, 100);
 }
 
 fn main() nothrow -> Int {
 	// 1 - basic Callback2: &mut Foo where &Foo expected.
-	var cb1 = core.callback2(handler1);
-	val r1 = dispatch1(&cb1);
+	val r1 = dispatch1(core.callback2(handler1));
 	if r1 != 15 { return 1; }
 
 	// 2 - mixed: &mut Request (coerced to &) + &mut Response (stays &mut).
-	var cb2 = core.callback2(handler2);
-	val r2 = dispatch2(&cb2);
+	val r2 = dispatch2(core.callback2(handler2));
 	if r2 != 204 { return 2; }
 
 	// 3 - Callback1: &mut Foo where &Foo expected.
-	var cb3 = core.callback1(handler3);
-	val r3 = dispatch3(&cb3);
+	val r3 = dispatch3(core.callback1(handler3));
 	if r3 != 14 { return 3; }
 
 	// 4 - Nested call through dispatch.
-	var cb4 = core.callback2(handler1);
-	val r4 = dispatch4(&cb4);
+	val r4 = dispatch4(core.callback2(handler1));
 	if r4 != 103 { return 4; }
 
 	return 0;
