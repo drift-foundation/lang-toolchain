@@ -1788,9 +1788,10 @@ def compile_stubbed_funcs(
 				return False
 		return _Timing()
 	if drift_debug.enabled("try_auto"):
+		import sys as _try_auto_sys
 		for fn_id, sig in signatures_by_id.items():
 			if getattr(fn_id, "module", None) == "m":
-				print(f"[try_auto] precheck sig {function_symbol(fn_id)} declared_throws={getattr(sig, 'declared_throws', None)}", file=sys.stderr)
+				print(f"[try_auto] precheck sig {function_symbol(fn_id)} declared_throws={getattr(sig, 'declared_throws', None)}", file=_try_auto_sys.stderr)
 	_required_modules: set[str] = {fid.module for fid in func_hirs_by_id.keys() if isinstance(fid, FunctionId)}
 	_required_modules.update({fid.module for fid in signatures_by_id.keys() if isinstance(fid, FunctionId)})
 	if module_exports:

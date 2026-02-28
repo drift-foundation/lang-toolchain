@@ -109,12 +109,32 @@ if (
 
 This allows `_args_match_params` to accept `&mut T` arguments where `&T` parameters are expected, so overload resolution doesn't reject the match. The actual coercion at the LLVM level is a no-op since both `&T` and `&mut T` are `T*` pointers.
 
-### Why these two touch points are sufficient
+**Touch point 3: Call resolver — interface method dispatch** (`call_resolver.py:1536-1545`)
 
-1. **Shallow checker** gates whether the call is accepted or rejected with a diagnostic — must allow the coercion or compilation fails.
-2. **`_args_match_params`** gates overload resolution — must return `True` or the call candidate is rejected.
-3. **`_apply_autoborrow_args`** (touch point 3 from research) does not need changes because once `_args_match_params` allows the match, `_apply_autoborrow_args` handles the coercion via the existing `_try_borrow_coerce` path (synthesizes `.borrow()` call, which works via receiver coercion at type_checker.py:3804).
-4. **`_can_borrow_coerce` in call_resolver.py** (touch point 4) does not need changes — it handles Borrow trait-based overload ranking, not the fundamental accept/reject decision.
+The primary type-checking for Callback/interface `.call()` happens in `resolve_method_call`, not in `check_call_signature`. This inline check runs during the typecheck phase, before `_validate_calls`. Added the same reborrow coercion:
+
+```python
+# Implicit reborrow: allow &mut T where &T is expected.
+arg_def = ctx.type_table.get(arg_ty)
+param_def = ctx.type_table.get(param_ty)
+if (arg_def.kind is TypeKind.REF and param_def.kind is TypeKind.REF
+        and arg_def.ref_mut is True and param_def.ref_mut is False
+        and arg_def.param_types and param_def.param_types
+        and arg_def.param_types[0] == param_def.param_types[0]):
+    continue
+```
+
+**Touch point 4: Call resolver — function-value `.call()` dispatch** (`call_resolver.py:1492-1501`)
+
+Same inline type-equality check for `recv_nominal_def.kind is TypeKind.FUNCTION` path. Added the same coercion.
+
+### Why these four touch points are needed
+
+1. **Shallow checker `check_call_signature`** — secondary validation pass on all call nodes. Without the coercion, emits a diagnostic even if earlier phases accepted the call.
+2. **`_args_match_params`** — overload resolution predicate. Must return `True` or the call candidate is rejected.
+3. **`resolve_method_call` interface dispatch** — primary type-check for `cb.call(...)` on Callback/interface types. Runs during the typecheck phase, before `check_call_signature`. This was the root cause of the farm failure.
+4. **`resolve_method_call` function-value dispatch** — same for bare function-value `.call()`.
+5. **`_apply_autoborrow_args`** does not need changes — once the above gates allow the match, it handles coercion via the existing `_try_borrow_coerce` path.
 
 ### Testing — all pass
 
@@ -173,7 +193,7 @@ Options:
 
 ### What IS correctly rejected (verified)
 
-Taking `&mut` of a field through a shared reference is correctly rejected. For example, `val p = &mut (*f).x;` where `f: &Foo` produces: "cannot take &mut through *f unless f is a mutable reference". This is the fundamental soundness invariant — shared references don't allow mutable sub-borrows.
+Taking `&mut` of a field through a shared reference is correctly rejected. For example, `val p = &mut (*f).x;` where `f: &Foo` produces: "cannot take &mut through *p unless p is a mutable reference". This is the fundamental soundness invariant — shared references don't allow mutable sub-borrows.
 
 **Negative regression test:** `reborrow_mut_through_shared_ref_rejected` pins this rejection.
 
@@ -187,7 +207,7 @@ Taking `&mut` of a field through a shared reference is correctly rejected. For e
 - **Assignment position**: `val r: &Foo = &mut f;` compiles. (Pre-existing, not introduced by this patch.)
 
 **Not supported (correctly rejected):**
-- **Mutable sub-borrow through shared ref**: `&mut (*f).x` where `f: &Foo` is rejected with "cannot take &mut through *f unless f is a mutable reference". Shared references cannot be used to create mutable sub-borrows of their fields.
+- **Mutable sub-borrow through shared ref**: `&mut (*f).x` where `f: &Foo` is rejected with "cannot take &mut through *p unless p is a mutable reference". Shared references cannot be used to create mutable sub-borrows of their fields.
 
 **Mechanism:**
 - At the checker level, the coercion is recognized by comparing `TypeKind.REF` + `ref_mut` flags + inner type equality.
@@ -195,6 +215,6 @@ Taking `&mut` of a field through a shared reference is correctly rejected. For e
 - The coercion is non-escaping in spirit: it temporarily views a mutable reference as shared. The mutable reference remains valid and the caller retains ownership.
 
 **Scope of this patch:**
-- Only two checker gates were opened: `check_call_signature` (shallow) and `_args_match_params` (deep overload resolution).
+- Four checker gates were opened: `check_call_signature` (shallow), `_args_match_params` (deep overload resolution), `resolve_method_call` interface dispatch, and `resolve_method_call` function-value dispatch.
 - No changes to `_apply_autoborrow_args`, `_can_borrow_coerce`, return-type checking, assignment checking, or unification.
 - The call-site coercion now works uniformly: direct calls, method calls, and interface dispatch (Callback/CallbackThrow).
