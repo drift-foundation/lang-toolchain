@@ -1,12 +1,7 @@
 module main
 
-struct Foo {
-	val x: Int
-}
+struct Foo(x: Int);
 
-// Negative regression: taking &mut of a field through a shared reference
-// must remain rejected. The call-site reborrow (&mut T → &T) does NOT
-// imply that shared references can be upgraded to mutable sub-borrows.
 fn bad(f: &Foo) nothrow -> Int {
 	val p = &mut (*f).x;
 	*p = 99;

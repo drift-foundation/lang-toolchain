@@ -2,19 +2,13 @@ module main
 
 import std.core as core;
 
-struct Foo {
-	val x: Int
-}
+struct Foo(x: Int);
 
-struct Request {
-	val path: String
-}
+struct Request(path: String);
 
-struct Response {
-	val status: Int
-}
+struct Response(status: Int);
 
-// §1 — Callback2: pass &mut T where callback param is &T.
+// 1 - Callback2: pass &mut T where callback param is &T.
 fn handler1(f: &Foo, n: Int) nothrow -> Int {
 	return f.x + n;
 }
@@ -24,7 +18,7 @@ fn dispatch1(cb: &core.Callback2<Int, &Foo, Int>) nothrow -> Int {
 	return cb.call(&mut f, 5);
 }
 
-// §2 — Callback2 with two ref params, one &mut passed where & expected.
+// 2 - Callback2 with two ref params, one &mut passed where & expected.
 fn handler2(req: &Request, resp: &mut Response) nothrow -> Int {
 	resp.status = 200;
 	return req.path.byte_length();
@@ -37,7 +31,7 @@ fn dispatch2(cb: &core.Callback2<Int, &Request, &mut Response>) nothrow -> Int {
 	return r + resp.status;
 }
 
-// §3 — Callback1: single &mut where & expected.
+// 3 - Callback1: single &mut where & expected.
 fn handler3(f: &Foo) nothrow -> Int {
 	return f.x * 2;
 }
@@ -47,27 +41,31 @@ fn dispatch3(cb: &core.Callback1<Int, &Foo>) nothrow -> Int {
 	return cb.call(&mut f);
 }
 
-// §4 — Nested: dispatch function itself takes &mut callback ref.
+// 4 - Nested: dispatch function itself takes &mut callback ref.
 fn dispatch4(cb: &core.Callback2<Int, &Foo, Int>) nothrow -> Int {
 	var f = Foo(x = 3);
 	return cb.call(&mut f, 100);
 }
 
 fn main() nothrow -> Int {
-	// §1 — basic Callback2: &mut Foo where &Foo expected.
-	val r1 = dispatch1(&handler1);
+	// 1 - basic Callback2: &mut Foo where &Foo expected.
+	var cb1 = core.callback2(handler1);
+	val r1 = dispatch1(&cb1);
 	if r1 != 15 { return 1; }
 
-	// §2 — mixed: &mut Request (coerced to &) + &mut Response (stays &mut).
-	val r2 = dispatch2(&handler2);
+	// 2 - mixed: &mut Request (coerced to &) + &mut Response (stays &mut).
+	var cb2 = core.callback2(handler2);
+	val r2 = dispatch2(&cb2);
 	if r2 != 204 { return 2; }
 
-	// §3 — Callback1: &mut Foo where &Foo expected.
-	val r3 = dispatch3(&handler3);
+	// 3 - Callback1: &mut Foo where &Foo expected.
+	var cb3 = core.callback1(handler3);
+	val r3 = dispatch3(&cb3);
 	if r3 != 14 { return 3; }
 
-	// §4 — Nested call through dispatch.
-	val r4 = dispatch4(&handler1);
+	// 4 - Nested call through dispatch.
+	var cb4 = core.callback2(handler1);
+	val r4 = dispatch4(&cb4);
 	if r4 != 103 { return 4; }
 
 	return 0;
