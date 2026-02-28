@@ -2410,6 +2410,15 @@ class Checker:
 				except Exception:
 					arg_def = None
 					param_def = None
+				# Implicit reborrow: allow &mut T where &T is expected.
+				if (
+					arg_def is not None and param_def is not None
+					and arg_def.kind is TypeKind.REF and param_def.kind is TypeKind.REF
+					and arg_def.ref_mut is True and param_def.ref_mut is False
+					and arg_def.param_types and param_def.param_types
+					and arg_def.param_types[0] == param_def.param_types[0]
+				):
+					continue
 				if param_def is not None and param_def.kind is TypeKind.INTERFACE:
 					# Owned interface coercion: concrete implementation values are
 					# coercible to interface-typed parameters.

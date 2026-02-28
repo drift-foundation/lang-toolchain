@@ -1,0 +1,74 @@
+module main
+
+import std.core as core;
+
+struct Foo {
+	val x: Int
+}
+
+struct Request {
+	val path: String
+}
+
+// §1 — Basic: fn taking &T, called with &mut.
+fn takes_shared_ref(f: &Foo) nothrow -> Int {
+	return f.x;
+}
+
+// §2 — Two args, both &mut passed where & expected.
+fn takes_two_refs(a: &Foo, b: &Foo) nothrow -> Int {
+	return a.x + b.x;
+}
+
+// §3 — fn taking &String.
+fn string_len(s: &String) nothrow -> Int {
+	return s.byte_length();
+}
+
+// §4 — Cross-struct: fn takes &Request.
+fn handle_request(req: &Request) nothrow -> Int {
+	return req.path.byte_length();
+}
+
+// §5 — Generic-like: fn takes &T where T has a field accessed via ref.
+fn get_x(f: &Foo) nothrow -> Int {
+	return f.x;
+}
+
+// §6 — Chained: result of one fn call (which returns &T) used as arg.
+fn identity_ref(f: &Foo) nothrow -> &Foo {
+	return f;
+}
+
+fn main() nothrow -> Int {
+	var f = Foo(x = 10);
+
+	// §1 — basic: pass &mut where & is expected.
+	val r1 = takes_shared_ref(&mut f);
+	if r1 != 10 { return 1; }
+
+	// §2 — two args, both &mut.
+	var g = Foo(x = 20);
+	val r2 = takes_two_refs(&mut f, &mut g);
+	if r2 != 30 { return 2; }
+
+	// §3 — mixed: one &, one &mut.
+	val r3 = takes_two_refs(&f, &mut g);
+	if r3 != 30 { return 3; }
+
+	// §4 — &mut String where &String expected.
+	var s = "hello";
+	val r4 = string_len(&mut s);
+	if r4 != 5 { return 4; }
+
+	// §5 — &mut Request where &Request expected.
+	var req = Request(path = "/api");
+	val r5 = handle_request(&mut req);
+	if r5 != 4 { return 5; }
+
+	// §6 — Return position: &mut Foo returned where &Foo expected.
+	val r6 = identity_ref(&mut f);
+	if r6.x != 10 { return 6; }
+
+	return 0;
+}

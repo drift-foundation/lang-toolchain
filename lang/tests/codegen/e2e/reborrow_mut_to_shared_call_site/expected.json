@@ -1,0 +1,6 @@
+{
+  "description": "e2e: implicit reborrow &mut T to &T at call site",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

@@ -1,5 +1,12 @@
 # Drift development history
 
+## 2026-03-01
+- Added call-boundary shared reborrow ergonomics in the checker/type checker: immediate call arguments of type `&mut T` are now accepted where parameters require `&T`, including callback dispatch paths. The implementation is intentionally narrow and limited to call argument matching (`lang/driftc/checker/__init__.py`, `lang/driftc/type_checker.py`); no lowering or ABI changes were required.
+- Added positive e2e coverage for shared reborrow at direct call sites and callback calls: `reborrow_mut_to_shared_call_site`, `reborrow_mut_to_shared_callback`.
+- Added negative soundness regression `reborrow_mut_through_shared_ref_rejected`, pinning that mutable sub-borrows through shared references remain rejected (`cannot take &mut through *f unless f is a mutable reference`).
+- During validation, return-position `&mut T -> &T` coercion was confirmed to be pre-existing behavior rather than introduced by this patch; this update only formalizes the immediate call-boundary case.
+- Bumped compiler version to `0.11.0-dev`; ABI remains `1`.
+
 ## 2026-02-28
 - Completed `std.regex` v1 Phase D/E closeout:
   - Added `replace_first` and `replace_all` (literal replacement, non-overlapping left-to-right).

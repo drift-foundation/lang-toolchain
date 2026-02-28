@@ -1613,6 +1613,14 @@ class TypeChecker:
 				arg_def = self.type_table.get(arg_cmp)
 				if param_def.kind is TypeKind.REF and arg_def.kind is TypeKind.REF and arg_def.param_types and arg_def.param_types[0] == param_cmp:
 					continue
+				# Implicit reborrow: &mut T matches where &T is expected.
+				if (
+					arg_def.kind is TypeKind.REF and param_def.kind is TypeKind.REF
+					and arg_def.ref_mut is True and param_def.ref_mut is False
+					and arg_def.param_types and param_def.param_types
+					and arg_def.param_types[0] == param_def.param_types[0]
+				):
+					continue
 				return False
 			return True
 
