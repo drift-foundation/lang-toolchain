@@ -1,6 +1,18 @@
 # Drift development history
 
 ## 2026-03-03
+- Added expression-form `unsafe { expr }` to the language:
+  - grammar now supports `unsafe_expr: UNSAFE value_block` in expression position
+  - parser/stage0/stage1 introduce `UnsafeExpr` / `HUnsafeExpr`
+  - type checker propagates `unsafe_context=True` through the expression body/result and preserves existing `--allow-unsafe` gating
+  - MIR lowering treats `HUnsafeExpr` as a transparent block-then-result expression
+- Updated all affected HIR walkers/rewriters/validators to descend into `HUnsafeExpr`, including borrow materialization, place canonicalization, normalization, capture discovery, lambda validation, non-retaining analysis, typed HIR validation, checker walks, and `driftc.py` helper traversals.
+- Closed a pre-existing test harness blind spot in `rawbuffer_read_write`: `expected.json` used `"expect"` instead of `"exit_code"`, so the parse failure from missing expression-form `unsafe` was passing vacuously. The test now genuinely exercises value-position unsafe calls.
+- Added e2e coverage:
+  - `unsafe_expr_basic`
+  - `unsafe_expr_requires_flag`
+  - fixed `rawbuffer_read_write`
+- Bumped compiler version to `0.14.0-dev`; ABI remains `1`.
 - Fixed a type-system ownership bug in `lang/driftc/core/types_core.py`: structural `Copy` analysis could misclassify `Destructible` structs as `Copy` if their field layout looked scalar/copyable (for example `Arc<T>` wrapping `RawBuffer`). This caused MIR scope-exit drop glue to be skipped for enclosing structs and leaked destructor-managed resources.
 - Hardened `TypeTable` copy/drop classification in three places:
   - `_is_copy_structural(...)` now rejects `Destructible` structs before field-recursive structural analysis.
