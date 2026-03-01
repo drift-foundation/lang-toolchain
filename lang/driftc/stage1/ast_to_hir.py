@@ -839,6 +839,10 @@ class AstToHIR:
 						)
 					)
 				return H.HTryExpr(attempt=_rename_expr(e.attempt, mapping), arms=renamed_arms, loc=e.loc)
+			if isinstance(e, H.HUnsafeExpr):
+				renamed_body, after_map = _rename_block(e.body, mapping)
+				renamed_result = _rename_expr(e.result, after_map)
+				return H.HUnsafeExpr(body=renamed_body, result=renamed_result, loc=e.loc)
 			if isinstance(e, H.HMatchExpr):
 				renamed_arms: list[H.HMatchArm] = []
 				for arm in e.arms:
@@ -1019,6 +1023,17 @@ class AstToHIR:
 
 	def _visit_stmt_UnsafeBlockStmt(self, stmt: ast.UnsafeBlockStmt) -> H.HStmt:
 		return H.HUnsafeBlock(block=self.lower_block(stmt.body))
+
+	def _visit_expr_UnsafeExpr(self, expr: ast.UnsafeExpr) -> H.HExpr:
+		stmts = list(expr.body)
+		result_expr = None
+		if stmts and isinstance(stmts[-1], ast.ExprStmt):
+			last = stmts.pop()
+			result_expr = self.lower_expr(last.expr)
+		body = self.lower_block(stmts)
+		if result_expr is None:
+			result_expr = H.HLiteralInt(value=0, loc=Span())
+		return H.HUnsafeExpr(body=body, result=result_expr, loc=self._as_span(getattr(expr, "loc", None)))
 
 	def _visit_stmt_TryStmt(self, stmt: ast.TryStmt) -> H.HStmt:
 		"""

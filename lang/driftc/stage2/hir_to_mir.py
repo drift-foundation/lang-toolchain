@@ -2738,6 +2738,8 @@ class HIRToMIR:
 					if arm.result is not None and expr_can_throw(arm.result):
 						return True
 				return False
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				return block_can_throw(expr.body) or expr_can_throw(expr.result)
 			if isinstance(expr, H.HLambda):
 				return self._lambda_can_throw(expr)
 			if isinstance(expr, H.HResultOk):
@@ -4759,6 +4761,10 @@ class HIRToMIR:
 		"""
 		self.lower_block(stmt)
 
+	def _visit_expr_HUnsafeExpr(self, expr: H.HUnsafeExpr) -> "M.ValueId":
+		self.lower_block(expr.body)
+		return self.lower_expr(expr.result)
+
 	def _visit_stmt_HUnsafeBlock(self, stmt: H.HUnsafeBlock) -> None:
 		self.lower_block(stmt.block)
 
@@ -6742,6 +6748,8 @@ class HIRToMIR:
 						return self._optional_variant_type(self._dv_type)
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			return self._infer_expr_type(expr.attempt)
+		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			return self._infer_expr_type(expr.result)
 		return None
 
 	def _infer_capture_type(self, expr: H.HExpr, key: C.HCaptureKey) -> TypeId | None:
@@ -6803,6 +6811,10 @@ class HIRToMIR:
 					walk_block(arm.block)
 					if arm.result is not None:
 						walk_expr(arm.result)
+				return
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				walk_block(expr.body)
+				walk_expr(expr.result)
 				return
 			if isinstance(expr, H.HMatchExpr):
 				walk_expr(expr.subject)

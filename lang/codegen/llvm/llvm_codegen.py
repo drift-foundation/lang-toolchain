@@ -4251,6 +4251,39 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "array_byte_alloc_uninit":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: array_byte_alloc_uninit expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: array_byte_alloc_uninit result must be captured")
+				n_val = self._map_value(instr.args[0])
+				self.module.needs_array_helpers = True
+				arr_llty = self._llvm_array_header_type()
+				tmp_alloc = self._fresh("arr")
+				self.lines.append(
+					f"  {tmp_alloc} = call i8* @drift_alloc_array({self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} {n_val}, {self._llty(DRIFT_INT_TYPE)} {n_val})"
+				)
+				tmp0 = self._fresh("arrh0")
+				tmp1 = self._fresh("arrh1")
+				tmp2 = self._fresh("arrh2")
+				self.lines.append(f"  {tmp0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {n_val}, {ARRAY_LEN_IDX}")
+				self.lines.append(f"  {tmp1} = insertvalue {arr_llty} {tmp0}, {self._llty(DRIFT_INT_TYPE)} {n_val}, {ARRAY_CAP_IDX}")
+				self.lines.append(f"  {tmp2} = insertvalue {arr_llty} {tmp1}, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_GEN_IDX}")
+				self.lines.append(f"  {dest} = insertvalue {arr_llty} {tmp2}, i8* {tmp_alloc}, {ARRAY_PTR_IDX}")
+				self.value_types[dest] = arr_llty
+				return
+			if instr.fn_id.name == "array_byte_as_mut_ptr":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: array_byte_as_mut_ptr expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: array_byte_as_mut_ptr result must be captured")
+				ref_val = self._map_value(instr.args[0])
+				arr_llty = self._llvm_array_header_type()
+				tmp_arr = self._fresh("arr_load")
+				self.lines.append(f"  {tmp_arr} = load {arr_llty}, {arr_llty}* {ref_val}")
+				self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
+				self.value_types[dest] = "i8*"
+				return
 		_atomic_intrinsic_names = {
 			"atomic_load_bool", "atomic_store_bool", "atomic_exchange_bool", "atomic_compare_exchange_bool", "atomic_compare_exchange_observed_bool",
 			"atomic_load_int", "atomic_store_int", "atomic_exchange_int", "atomic_compare_exchange_int", "atomic_compare_exchange_observed_int", "atomic_fetch_add_int", "atomic_fetch_sub_int",

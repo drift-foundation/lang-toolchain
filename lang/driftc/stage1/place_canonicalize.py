@@ -316,6 +316,10 @@ class PlaceCanonicalizeRewriter:
 					)
 				)
 			return [], H.HTryExpr(attempt=attempt, arms=new_arms, loc=expr.loc)
+		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			body = self.rewrite_block(expr.body)
+			_, result = self._rewrite_expr(expr.result)
+			return [], H.HUnsafeExpr(body=body, result=result, loc=expr.loc)
 
 		# Default: leave unchanged.
 		return [], expr

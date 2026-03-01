@@ -830,6 +830,12 @@ class TryCatchExpr(Expr):
 
 
 @dataclass
+class UnsafeExpr(Expr):
+	loc: Located
+	block: Block
+
+
+@dataclass
 class Ternary(Expr):
     loc: Located
     condition: Expr

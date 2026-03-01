@@ -55,6 +55,10 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 		if hasattr(H, "HUnsafeBlock") and isinstance(node, getattr(H, "HUnsafeBlock")):
 			_scan_calls(node.block)
 			return
+		if hasattr(H, "HUnsafeExpr") and isinstance(node, getattr(H, "HUnsafeExpr")):
+			_scan_calls(node.body)
+			_scan_calls(node.result)
+			return
 		for field_name in getattr(node, "__dataclass_fields__", {}) or {}:
 			val = getattr(node, field_name, None)
 			if isinstance(val, (H.HExpr, H.HBlock)):
@@ -141,6 +145,10 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 			return
 		if hasattr(H, "HUnsafeBlock") and isinstance(node, getattr(H, "HUnsafeBlock")):
 			_walk_node(node.block)
+			return
+		if hasattr(H, "HUnsafeExpr") and isinstance(node, getattr(H, "HUnsafeExpr")):
+			_walk_node(node.body)
+			_walk_node(node.result)
 			return
 		for field_name in getattr(node, "__dataclass_fields__", {}) or {}:
 			val = getattr(node, field_name, None)

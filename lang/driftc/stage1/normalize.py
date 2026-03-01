@@ -194,6 +194,8 @@ class DVInitRewriter:
 					)
 				)
 			return H.HTryExpr(attempt=self._rewrite_expr(expr.attempt), arms=new_arms)
+		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			return H.HUnsafeExpr(body=self.rewrite_block(expr.body), result=self._rewrite_expr(expr.result), loc=getattr(expr, "loc", None))
 		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 			new_arms = []
 			for arm in expr.arms:
@@ -300,6 +302,9 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 				_scan_block(arm.block)
 				if arm.result is not None:
 					_scan_expr(arm.result)
+		elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			_scan_block(expr.body)
+			_scan_expr(expr.result)
 		elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 			_scan_expr(expr.scrutinee)
 			for arm in expr.arms:
@@ -430,6 +435,9 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 				_assign_block(arm.block)
 				if arm.result is not None:
 					_assign_expr(arm.result)
+		elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			_assign_block(expr.body)
+			_assign_expr(expr.result)
 		elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 			_assign_expr(expr.scrutinee)
 			for arm in expr.arms:

@@ -2695,6 +2695,10 @@ def compile_stubbed_funcs(
 					if arm.result is not None:
 						walk_expr(arm.result)
 				return
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				walk_block(expr.body)
+				walk_expr(expr.result)
+				return
 			if isinstance(expr, H.HMatchExpr):
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
@@ -4439,6 +4443,10 @@ def compile_stubbed_funcs(
 								_scan_stmt(s)
 							if arm.result is not None:
 								_scan_expr(arm.result)
+					elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+						for s in expr.body.statements:
+							_scan_stmt(s)
+						_scan_expr(expr.result)
 					elif isinstance(expr, H.HCall):
 						_scan_expr(expr.fn)
 						for a in expr.args:
@@ -4607,6 +4615,10 @@ def compile_stubbed_funcs(
 								_remap_stmt(s)
 							if arm.result is not None:
 								_remap_expr(arm.result)
+					elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+						for s in expr.body.statements:
+							_remap_stmt(s)
+						_remap_expr(expr.result)
 					elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 						_remap_expr(expr.scrutinee)
 						for arm in expr.arms:

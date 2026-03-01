@@ -286,6 +286,11 @@ def analyze_non_retaining_params(
 					if arm.result is not None:
 						_walk_expr(arm.result)
 				return
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				for st in expr.body.statements:
+					_walk_stmt(st)
+				_walk_expr(expr.result)
+				return
 			if isinstance(expr, H.HMethodCall):
 				callee_idx = None
 				if expr.method_name == "call":

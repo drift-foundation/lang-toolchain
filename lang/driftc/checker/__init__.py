@@ -450,6 +450,9 @@ class Checker:
 						walk_block(arm.block)
 						if getattr(arm, "result", None) is not None:
 							walk_expr(arm.result)
+				elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+					walk_block(expr.body)
+					walk_expr(expr.result)
 				elif getattr(H, "HBlockExpr", None) is not None and isinstance(expr, H.HBlockExpr):
 					walk_block(expr.block)
 				elif isinstance(expr, H.HMatchExpr):
@@ -991,6 +994,9 @@ class Checker:
 					walk_block(arm.block, caught_events, catch_all)
 					if arm.result is not None:
 						walk_expr(arm.result, caught_events, catch_all)
+			elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				walk_block(expr.body, caught_events, catch_all)
+				walk_expr(expr.result, caught_events, catch_all)
 			elif isinstance(expr, H.HResultOk):
 				walk_expr(expr.value, caught_events, catch_all)
 			elif isinstance(expr, H.HBinary):
@@ -1870,6 +1876,8 @@ class Checker:
 					return elem_ty
 				self.report_index_subject_not_array(getattr(expr.subject, "loc", None))
 				return None
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				return self._infer_expr_type(expr.result)
 			if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 				attempt_ty = self._infer_expr_type(expr.attempt)
 				if attempt_ty is not None and self.table.is_void(attempt_ty):
@@ -2228,6 +2236,9 @@ class Checker:
 					walk_block(arm.block)
 					if getattr(arm, "result", None) is not None:
 						walk_expr(arm.result)
+			elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				walk_block(expr.body)
+				walk_expr(expr.result)
 			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
@@ -2654,6 +2665,10 @@ class Checker:
 								walk_expr(arm.result)
 						finally:
 							ctx.report_unknown_names = prev_report_unknown
+			elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				with _scoped_locals():
+					walk_block(expr.body)
+					walk_expr(expr.result)
 			# literals/vars are leaf nodes
 
 		def walk_stmt(stmt: H.HStmt) -> None:

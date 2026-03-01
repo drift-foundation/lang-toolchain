@@ -1,0 +1,10 @@
+module main
+
+import lang.thread as thread;
+
+fn main() nothrow -> Int {
+	// Both calls must be rejected without an unsafe block.
+	var buf = thread.array_byte_alloc_uninit(4);
+	val ptr = thread.array_byte_as_mut_ptr(&mut buf);
+	return 0;
+}

@@ -564,6 +564,11 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			catch_arms=catch_arms,
 			loc=Span.from_loc(getattr(expr, "loc", None)),
 		)
+	if isinstance(expr, parser_ast.UnsafeExpr):
+		return s0.UnsafeExpr(
+			body=_convert_block(expr.block),
+			loc=Span.from_loc(getattr(expr, "loc", None)),
+		)
 	if isinstance(expr, parser_ast.MatchExpr):
 		arms = [
 			s0.MatchArm(
@@ -2762,6 +2767,9 @@ def parse_drift_workspace_to_hir(
 					_resolve_types_in_expr(expr.attempt)
 					for arm in getattr(expr, "catch_arms", []) or []:
 						_resolve_types_in_block(path, file_aliases, arm.block)
+					return
+				if isinstance(expr, parser_ast.UnsafeExpr):
+					_resolve_types_in_block(path, file_aliases, expr.block)
 					return
 				if isinstance(expr, parser_ast.YieldExpr):
 					_resolve_types_in_expr(expr.value)

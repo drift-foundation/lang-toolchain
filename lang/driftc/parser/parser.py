@@ -84,6 +84,7 @@ from .ast import (
     BreakStmt,
     ContinueStmt,
     UnsafeBlockStmt,
+    UnsafeExpr,
     Unary,
     UintLiteral,
     FString,
@@ -2451,6 +2452,11 @@ def _build_expr(node) -> Expr:
         return _fold_chain(node, "logic_or_tail")
     if name == "try_catch_expr":
         return _build_try_catch_expr(node)
+    if name == "unsafe_expr":
+        vb_node = next((c for c in node.children if isinstance(c, Tree) and _name(c) == "value_block"), None)
+        if vb_node is None:
+            raise ValueError("unsafe_expr missing value_block")
+        return UnsafeExpr(loc=_loc(node), block=_build_value_block(vb_node))
     if name == "match_expr":
         return _build_match_expr(node, arm_node_names=("match_expr_arm",))
     if name == "ternary":

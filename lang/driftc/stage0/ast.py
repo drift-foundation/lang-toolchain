@@ -599,6 +599,13 @@ class UnsafeBlockStmt(Stmt):
 
 
 @dataclass
+class UnsafeExpr(Expr):
+	"""Expression-form unsafe block: unsafe { stmts; expr }."""
+	body: List[Stmt]
+	loc: Optional[object] = None
+
+
+@dataclass
 class ThrowStmt(Stmt):
 	"""Throw statement placeholder."""
 	value: Expr
@@ -616,7 +623,7 @@ __all__ = [
 	"TraitExpr", "TraitSubject", "SelfRef", "TypeNameRef", "TraitIs", "TraitAnd", "TraitOr", "TraitNot",
 	"Literal", "UintLiteral", "Name", "Placeholder", "Attr", "QualifiedMember",
 	"Param", "KwArg", "Call", "TypeApp", "Lambda", "Block",
-	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "MapEntry", "MapLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "Ternary", "YieldExpr",
+	"Binary", "Unary", "Move", "Index", "ArrayLiteral", "MapEntry", "MapLiteral", "ExceptionCtor", "CatchExprArm", "TryCatchExpr", "UnsafeExpr", "Ternary", "YieldExpr",
 	"LetStmt", "AssignStmt", "AugAssignStmt", "IfStmt", "ReturnStmt", "RaiseStmt", "ExprStmt", "ImportStmt",
 	"AssertStmt", "TryStmt", "WhileStmt", "ForStmt", "ForCountStmt", "BreakStmt", "ContinueStmt", "BlockStmt", "UnsafeBlockStmt", "ThrowStmt", "RethrowStmt",
 ]

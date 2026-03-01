@@ -1,0 +1,8 @@
+module main
+
+import lang.thread as thread;
+
+fn main() nothrow -> Int {
+	var buf = thread.array_byte_alloc_uninit(-1);
+	return 0;
+}

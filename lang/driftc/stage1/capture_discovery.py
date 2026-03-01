@@ -182,6 +182,11 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 					if isinstance(proj, H.HPlaceIndex):
 						_walk_expr(proj.index)
 			return
+		if hasattr(H, "HUnsafeExpr") and isinstance(e, getattr(H, "HUnsafeExpr")):
+			for st in e.body.statements:
+				_walk_stmt(st)
+			_walk_expr(e.result)
+			return
 		# Traverse children
 		for child in _iter_expr_children(e):
 			_walk_expr(child)

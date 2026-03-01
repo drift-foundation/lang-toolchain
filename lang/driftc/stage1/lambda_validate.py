@@ -107,6 +107,11 @@ def validate_lambdas_non_retaining(
 				if arm.result is not None:
 					_walk_expr(arm.result)
 			return
+		if hasattr(H, "HUnsafeExpr") and isinstance(e, getattr(H, "HUnsafeExpr")):
+			for stmt in e.body.statements:
+				_walk_stmt(stmt)
+			_walk_expr(e.result)
+			return
 		if isinstance(e, H.HTernary):
 			_walk_expr(e.cond)
 			_walk_expr(e.then_expr)

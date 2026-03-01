@@ -706,6 +706,14 @@ class HUnsafeBlock(HStmt):
 
 
 @dataclass
+class HUnsafeExpr(HExpr):
+	"""Expression-form unsafe block. Yields the value of the inner expression."""
+	body: HBlock
+	result: HExpr
+	loc: Span = field(default_factory=Span)
+
+
+@dataclass
 class HExprStmt(HStmt):
 	"""Expression used as a statement (value discarded)."""
 	expr: HExpr

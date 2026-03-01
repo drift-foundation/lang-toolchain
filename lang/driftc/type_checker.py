@@ -407,6 +407,10 @@ class TypeChecker:
 					if arm.result is not None:
 						walk_expr(arm.result)
 				return
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				walk_block(expr.body)
+				walk_expr(expr.result)
+				return
 			if isinstance(expr, H.HMatchExpr):
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
@@ -2825,6 +2829,8 @@ class TypeChecker:
 						if arm.result is not None and expr_can_throw(arm.result):
 							return True
 					return False
+				if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+					return block_can_throw(expr.body) or expr_can_throw(expr.result)
 				if isinstance(expr, H.HLambda):
 					return _lambda_can_throw(expr, call_info)
 				if isinstance(expr, H.HResultOk):
@@ -4940,6 +4946,7 @@ class TypeChecker:
 		) -> TypeId:
 			nonlocal return_type
 			nonlocal catch_depth
+			nonlocal unsafe_context
 			def _resolve_struct_field_type(struct_id: TypeId, field_name: str) -> tuple[int, TypeId] | None:
 				info = self.type_table.struct_field(struct_id, field_name)
 				if info is not None:
@@ -6514,6 +6521,9 @@ class TypeChecker:
 						return any(_contains_move(a) for a in node.args)
 					if isinstance(node, H.HExceptionInit):
 						return any(_contains_move(a) for a in node.pos_args) or any(_contains_move(k.value) for k in node.kw_args)
+					# NOTE: body scan only checks HExprStmt, so moves inside HLet/HAssign
+					# within block-expression bodies are not detected. Shared limitation
+					# across HTryExpr, HUnsafeExpr, and any future block-expression form.
 					if isinstance(node, getattr(H, "HTryExpr", ())):
 						if _contains_move(node.attempt):
 							return True
@@ -6523,6 +6533,8 @@ class TypeChecker:
 							if arm.result is not None and _contains_move(arm.result):
 								return True
 						return False
+					if isinstance(node, getattr(H, "HUnsafeExpr", ())):
+						return any(_contains_move(s.expr) for s in node.body.statements if isinstance(s, H.HExprStmt)) or _contains_move(node.result)
 					return False
 
 				if expr.is_mut and _contains_move(expr.subject):
@@ -7003,7 +7015,23 @@ class TypeChecker:
 						scope_bindings.pop()
 						catch_depth -= 1
 				return record_expr(expr, result_ty or self._unknown)
-	
+
+			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+				if not unsafe_allowed_module:
+					diagnostics.append(_tc_diag(message="unsafe block requires --allow-unsafe", severity="error", span=getattr(expr, "loc", Span())))
+				prev_unsafe = unsafe_context
+				unsafe_context = True
+				scope_env.append(dict())
+				scope_bindings.append(dict())
+				try:
+					type_block_in_scope(expr.body)
+					result_ty = type_expr(expr.result)
+				finally:
+					unsafe_context = prev_unsafe
+					scope_env.pop()
+					scope_bindings.pop()
+				return record_expr(expr, result_ty)
+
 			if isinstance(expr, H.HMethodCall):
 				if isinstance(expr.receiver, H.HVar) and expr.receiver.binding_id is None:
 					recv_name = getattr(expr.receiver, "name", None)

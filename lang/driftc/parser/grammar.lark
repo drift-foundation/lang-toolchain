@@ -473,6 +473,7 @@ primary: literal
        | lambda_expr
        | array_literal
        | map_literal
+       | unsafe_expr
 
 cast_expr: CAST LT type_expr GT "(" expr ")"
 
@@ -562,4 +563,5 @@ literal: FLOAT        -> float_lit
        | FSTRING_PREFIX STRING -> fstr_lit
        | "true"      -> true_lit
        | "false"     -> false_lit
-unsafe_block: UNSAFE block
+unsafe_block.2: UNSAFE block
+unsafe_expr: UNSAFE value_block

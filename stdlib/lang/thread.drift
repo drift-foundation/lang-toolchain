@@ -61,7 +61,9 @@ export {
 	runtime_registry_get,
 	runtime_thread_registry_set,
 	runtime_thread_registry_contains,
-	runtime_thread_registry_get
+	runtime_thread_registry_get,
+	array_byte_alloc_uninit,
+	array_byte_as_mut_ptr
 };
 
 pub type VtHandle = Int;
@@ -125,3 +127,5 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn runtime_thread_registry_set(type_tag: Uint64, ptr: mem.Ptr<Byte>, dropper: core.Callback1<mem.Ptr<Byte>, Void>) nothrow -> Int;
 @intrinsic pub fn runtime_thread_registry_contains(type_tag: Uint64) nothrow -> Int;
 @intrinsic pub fn runtime_thread_registry_get(type_tag: Uint64) nothrow -> mem.Ptr<Byte>;
+@intrinsic pub unsafe fn array_byte_alloc_uninit(n: Int) nothrow -> Array<Byte>;
+@intrinsic pub unsafe fn array_byte_as_mut_ptr(a: &mut Array<Byte>) nothrow -> mem.Ptr<Byte>;

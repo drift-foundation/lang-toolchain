@@ -200,6 +200,9 @@ class BorrowMaterializeRewriter:
 			return any(self._contains_move(a) for a in expr.pos_args) or any(
 				self._contains_move(k.value) for k in expr.kw_args
 			)
+		# NOTE: body scan only checks HExprStmt, so moves inside HLet/HAssign
+		# within block-expression bodies are not detected. Shared limitation
+		# across HTryExpr, HUnsafeExpr, and any future block-expression form.
 		if isinstance(expr, getattr(H, "HTryExpr", ())):
 			if self._contains_move(expr.attempt):
 				return True
@@ -211,6 +214,8 @@ class BorrowMaterializeRewriter:
 				if arm.result is not None and self._contains_move(arm.result):
 					return True
 			return False
+		if isinstance(expr, getattr(H, "HUnsafeExpr", ())):
+			return any(self._contains_move(s.expr) for s in expr.body.statements if isinstance(s, H.HExprStmt)) or self._contains_move(expr.result)
 		return False
 
 	def _rewrite_expr(self, expr: H.HExpr) -> Tuple[List[H.HStmt], H.HExpr]:
@@ -446,5 +451,11 @@ class BorrowMaterializeRewriter:
 					)
 				)
 			return pfx_attempt, H.HTryExpr(attempt=attempt, arms=new_arms, loc=expr.loc)
+		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			body = self.rewrite_block(expr.body)
+			rpfx, result = self._rewrite_expr(expr.result)
+			if rpfx:
+				body = H.HBlock(statements=body.statements + rpfx)
+			return [], H.HUnsafeExpr(body=body, result=result, loc=expr.loc)
 		# Leave other expressions unchanged (or handled by other normalizers).
 		return [], expr
