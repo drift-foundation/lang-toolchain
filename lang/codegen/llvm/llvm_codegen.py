@@ -1153,6 +1153,7 @@ class LlvmModuleBuilder:
 					f"declare void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()",
 					f"declare void @drift_test_timerfd_set({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_random_fill(i8*, {self._llty(DRIFT_INT_TYPE)})",
 					"",
 				]
 			)
@@ -4283,6 +4284,19 @@ class _FuncBuilder:
 				self.lines.append(f"  {tmp_arr} = load {arr_llty}, {arr_llty}* {ref_val}")
 				self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
 				self.value_types[dest] = "i8*"
+				return
+			if instr.fn_id.name == "random_fill":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: random_fill expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: random_fill result must be captured")
+				buf_val = self._map_value(instr.args[0])
+				len_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_random_fill(i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 		_atomic_intrinsic_names = {
 			"atomic_load_bool", "atomic_store_bool", "atomic_exchange_bool", "atomic_compare_exchange_bool", "atomic_compare_exchange_observed_bool",

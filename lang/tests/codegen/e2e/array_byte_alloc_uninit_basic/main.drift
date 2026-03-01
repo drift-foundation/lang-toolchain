@@ -5,13 +5,13 @@ import std.mem as mem;
 
 fn main() nothrow -> Int {
 	// Test 1: n=0 returns empty array
-	var empty = thread.array_byte_alloc_uninit(0);
+	var empty = unsafe { thread.array_byte_alloc_uninit(0) };
 	if empty.len != 0 { return 1; }
 
 	// Test 2: n=4, write through ptr, read back via indexing
-	var buf = thread.array_byte_alloc_uninit(4);
+	var buf = unsafe { thread.array_byte_alloc_uninit(4) };
 	if buf.len != 4 { return 2; }
-	val ptr = thread.array_byte_as_mut_ptr(&mut buf);
+	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };
 	mem.ptr_write<type Byte>(ptr, cast<Byte>(170));
 	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 1), cast<Byte>(187));
 	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 2), cast<Byte>(204));

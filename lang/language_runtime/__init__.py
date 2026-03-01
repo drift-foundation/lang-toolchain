@@ -23,6 +23,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "io_runtime.c",
 		base / "posix" / "thread_runtime.c",
 		base / "posix" / "assert_runtime.c",
+		base / "random_runtime.c",
 		# ABI version stamp for link-time compatibility guard.
 		base / "abi_version_stamp.c",
 		# Diagnostic/Error runtime lives alongside lang/ for now; include it so

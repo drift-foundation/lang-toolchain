@@ -1,6 +1,17 @@
 # Drift development history
 
 ## 2026-03-03
+- Added Linux-backed secure random bytes support:
+  - new stdlib API `std.random.random_secure_bytes(n: Int) -> Result<Array<Byte>, RandomError>`
+  - new `RandomError { tag: String, errno: Int }` diagnostic type
+  - wrapper validates negative length in stdlib, returns `Err("invalid-length", 0)`, returns `Ok([])` for zero length, and maps runtime failures to `Err("os-random-failed", errno)`
+- Added byte-fill runtime helper `drift_random_fill` implemented via `getrandom(2)` with EINTR retry loop (`lang/language_runtime/random_runtime.c`, `random_runtime.h`), exposed to stdlib through interim `lang.thread` unsafe intrinsic `random_fill`.
+- This changes the compiler/runtime boundary by adding a new runtime-exported helper signature, so the runtime ABI version was bumped to `2`.
+- Added e2e coverage:
+  - `std_random_secure_bytes_basic`
+  - `std_random_secure_bytes_invalid_len`
+  along with the previously reviewed byte-array-init regressions used by the implementation.
+- Bumped compiler version to `0.15.0-dev`; ABI is now `2`.
 - Added expression-form `unsafe { expr }` to the language:
   - grammar now supports `unsafe_expr: UNSAFE value_block` in expression position
   - parser/stage0/stage1 introduce `UnsafeExpr` / `HUnsafeExpr`

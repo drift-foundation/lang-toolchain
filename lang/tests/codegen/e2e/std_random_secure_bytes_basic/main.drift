@@ -1,0 +1,50 @@
+module std.random.test
+
+import std.core as core;
+import std.random as random;
+
+fn main() nothrow -> Int {
+	// Test 1: n=0 returns Ok with empty array
+	val r0 = random.random_secure_bytes(0);
+	match r0 {
+		core.Result::Ok(arr) => { if arr.len != 0 { return 1; } },
+		core.Result::Err(_) => { return 2; }
+	}
+
+	// Test 2: n=1 returns Ok with 1-byte array
+	val r1 = random.random_secure_bytes(1);
+	match r1 {
+		core.Result::Ok(arr) => { if arr.len != 1 { return 10; } },
+		core.Result::Err(_) => { return 11; }
+	}
+
+	// Test 3: n=32 returns Ok with 32-byte array
+	val r32 = random.random_secure_bytes(32);
+	match r32 {
+		core.Result::Ok(arr) => { if arr.len != 32 { return 20; } },
+		core.Result::Err(_) => { return 21; }
+	}
+
+	// Test 4: two consecutive 32-byte calls are not byte-identical (smoke check)
+	val ra = random.random_secure_bytes(32);
+	val rb = random.random_secure_bytes(32);
+	var a_arr: Array<Byte> = [];
+	var b_arr: Array<Byte> = [];
+	match ra {
+		core.Result::Ok(arr) => { a_arr = move arr; },
+		core.Result::Err(_) => { return 30; }
+	}
+	match rb {
+		core.Result::Ok(arr) => { b_arr = move arr; },
+		core.Result::Err(_) => { return 31; }
+	}
+	var same = true;
+	var i = 0;
+	while i < 32 {
+		if a_arr[i] != b_arr[i] { same = false; }
+		i = i + 1;
+	}
+	if same { return 40; }
+
+	return 0;
+}

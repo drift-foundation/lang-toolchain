@@ -1,0 +1,38 @@
+module std.random
+
+import std.core as core;
+import std.mem as mem;
+import lang.thread as thread;
+
+export {
+	RandomError,
+	random_secure_bytes
+};
+
+pub struct RandomError {
+	pub tag: String,
+	pub errno: Int
+}
+
+implement core.Diagnostic for RandomError {
+	pub fn to_diag(self: &RandomError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub fn random_secure_bytes(n: Int) nothrow -> core.Result<Array<Byte>, RandomError> {
+	if n < 0 {
+		return core.Result::Err(RandomError(tag = "invalid-length", errno = 0));
+	}
+	if n == 0 {
+		var empty: Array<Byte> = [];
+		return core.Result::Ok(move empty);
+	}
+	var buf = unsafe { thread.array_byte_alloc_uninit(n) };
+	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };
+	val rc = unsafe { thread.random_fill(ptr, n) };
+	if rc != 0 {
+		return core.Result::Err(RandomError(tag = "os-random-failed", errno = 0 - rc));
+	}
+	return core.Result::Ok(move buf);
+}

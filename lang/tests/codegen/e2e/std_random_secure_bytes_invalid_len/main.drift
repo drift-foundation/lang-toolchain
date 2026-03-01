@@ -1,0 +1,17 @@
+module std.random.test
+
+import std.core as core;
+import std.random as random;
+
+fn main() nothrow -> Int {
+	val r = random.random_secure_bytes(-1);
+	match r {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-length" { return 2; }
+			if e.errno != 0 { return 3; }
+		}
+	}
+
+	return 0;
+}
