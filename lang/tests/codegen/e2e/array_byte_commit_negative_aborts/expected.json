@@ -1,0 +1,5 @@
+{
+  "exit_code": -6,
+  "stderr": "__ANY__",
+  "stderr_contains": "drift_array_byte_commit_init_len: invalid commit length"
+}

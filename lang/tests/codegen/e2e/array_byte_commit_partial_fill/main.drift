@@ -1,0 +1,21 @@
+module main
+
+import lang.thread as thread;
+import std.mem as mem;
+
+fn main() nothrow -> Int {
+	// Alloc cap 8, write only first 3 bytes, commit len 3.
+	var buf = unsafe { thread.array_byte_alloc_uninit(8) };
+	if buf.len != 0 { return 1; }
+	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };
+	mem.ptr_write<type Byte>(ptr, cast<Byte>(10));
+	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 1), cast<Byte>(20));
+	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 2), cast<Byte>(30));
+	unsafe { thread.array_byte_commit_init_len(&mut buf, 3); }
+	if buf.len != 3 { return 2; }
+	if buf[0] != cast<Byte>(10) { return 10; }
+	if buf[1] != cast<Byte>(20) { return 11; }
+	if buf[2] != cast<Byte>(30) { return 12; }
+
+	return 0;
+}

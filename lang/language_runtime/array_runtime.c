@@ -85,6 +85,14 @@ void drift_iface_free(void *data) {
 	drift_free_array(data);
 }
 
+void drift_array_byte_commit_init_len(DriftArrayHeader *arr, drift_isize len) {
+	if (len < 0 || len > arr->cap) {
+		fprintf(stderr, "drift_array_byte_commit_init_len: invalid commit length (len=%td cap=%td)\n", len, arr->cap);
+		abort();
+	}
+	arr->len = len;
+}
+
 void drift_bounds_check(struct DriftString container_id, drift_isize idx, drift_isize len) {
 	if (idx < 0 || idx >= len) {
 		drift_bounds_check_fail(container_id, idx, len);

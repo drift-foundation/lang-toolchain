@@ -4,24 +4,26 @@ import lang.thread as thread;
 import std.mem as mem;
 
 fn main() nothrow -> Int {
-	// Test 1: n=0 returns empty array
+	// Test 1: n=0 returns array with len=0, cap=0
 	var empty = unsafe { thread.array_byte_alloc_uninit(0) };
 	if empty.len != 0 { return 1; }
 
-	// Test 2: n=4, write through ptr, read back via indexing
+	// Test 2: n=4 alloc produces len=0, cap=4; commit sets len
 	var buf = unsafe { thread.array_byte_alloc_uninit(4) };
-	if buf.len != 4 { return 2; }
+	if buf.len != 0 { return 2; }
 	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };
 	mem.ptr_write<type Byte>(ptr, cast<Byte>(170));
 	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 1), cast<Byte>(187));
 	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 2), cast<Byte>(204));
 	mem.ptr_write<type Byte>(mem.ptr_offset<type Byte>(ptr, 3), cast<Byte>(221));
+	unsafe { thread.array_byte_commit_init_len(&mut buf, 4); }
+	if buf.len != 4 { return 3; }
 	if buf[0] != cast<Byte>(170) { return 10; }
 	if buf[1] != cast<Byte>(187) { return 11; }
 	if buf[2] != cast<Byte>(204) { return 12; }
 	if buf[3] != cast<Byte>(221) { return 13; }
 
-	// Test 3: move after fill preserves length
+	// Test 3: move after commit preserves length
 	val moved = move buf;
 	if moved.len != 4 { return 21; }
 

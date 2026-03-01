@@ -24,6 +24,7 @@ void drift_cb_env_free(void *data);
 void *drift_iface_alloc(size_t size, size_t align);
 void drift_iface_free(void *data);
 void drift_bounds_check(struct DriftString container_id, drift_isize idx, drift_isize len);
+void drift_array_byte_commit_init_len(DriftArrayHeader *arr, drift_isize len);
 __attribute__((noreturn))
 void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, drift_isize len);
 

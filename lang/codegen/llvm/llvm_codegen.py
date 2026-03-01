@@ -1032,6 +1032,7 @@ class LlvmModuleBuilder:
 					"declare void @drift_cb_env_free(i8*)",
 					f"declare void @drift_bounds_check({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_bounds_check_fail({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_array_byte_commit_init_len(%DriftArrayHeader*, {self._llty(DRIFT_INT_TYPE)})",
 					"",
 				]
 			)
@@ -4262,12 +4263,12 @@ class _FuncBuilder:
 				arr_llty = self._llvm_array_header_type()
 				tmp_alloc = self._fresh("arr")
 				self.lines.append(
-					f"  {tmp_alloc} = call i8* @drift_alloc_array({self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} {n_val}, {self._llty(DRIFT_INT_TYPE)} {n_val})"
+					f"  {tmp_alloc} = call i8* @drift_alloc_array({self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_USIZE_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} 0, {self._llty(DRIFT_INT_TYPE)} {n_val})"
 				)
 				tmp0 = self._fresh("arrh0")
 				tmp1 = self._fresh("arrh1")
 				tmp2 = self._fresh("arrh2")
-				self.lines.append(f"  {tmp0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {n_val}, {ARRAY_LEN_IDX}")
+				self.lines.append(f"  {tmp0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_LEN_IDX}")
 				self.lines.append(f"  {tmp1} = insertvalue {arr_llty} {tmp0}, {self._llty(DRIFT_INT_TYPE)} {n_val}, {ARRAY_CAP_IDX}")
 				self.lines.append(f"  {tmp2} = insertvalue {arr_llty} {tmp1}, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_GEN_IDX}")
 				self.lines.append(f"  {dest} = insertvalue {arr_llty} {tmp2}, i8* {tmp_alloc}, {ARRAY_PTR_IDX}")
@@ -4284,6 +4285,19 @@ class _FuncBuilder:
 				self.lines.append(f"  {tmp_arr} = load {arr_llty}, {arr_llty}* {ref_val}")
 				self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
 				self.value_types[dest] = "i8*"
+				return
+			if instr.fn_id.name == "array_byte_commit_init_len":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: array_byte_commit_init_len expects 2 args, got {len(instr.args)}")
+				ref_val = self._map_value(instr.args[0])
+				len_val = self._map_value(instr.args[1])
+				arr_llty = self._llvm_array_header_type()
+				self.module.needs_array_helpers = True
+				self.lines.append(
+					f"  call void @drift_array_byte_commit_init_len({arr_llty}* {ref_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				if dest:
+					raise NotImplementedError("LLVM codegen v1: array_byte_commit_init_len returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "random_fill":
 				if len(instr.args) != 2:

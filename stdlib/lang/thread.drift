@@ -64,6 +64,7 @@ export {
 	runtime_thread_registry_get,
 	array_byte_alloc_uninit,
 	array_byte_as_mut_ptr,
+	array_byte_commit_init_len,
 	random_fill
 };
 
@@ -130,4 +131,5 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn runtime_thread_registry_get(type_tag: Uint64) nothrow -> mem.Ptr<Byte>;
 @intrinsic pub unsafe fn array_byte_alloc_uninit(n: Int) nothrow -> Array<Byte>;
 @intrinsic pub unsafe fn array_byte_as_mut_ptr(a: &mut Array<Byte>) nothrow -> mem.Ptr<Byte>;
+@intrinsic pub unsafe fn array_byte_commit_init_len(a: &mut Array<Byte>, len: Int) nothrow -> Void;
 @intrinsic pub unsafe fn random_fill(buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
