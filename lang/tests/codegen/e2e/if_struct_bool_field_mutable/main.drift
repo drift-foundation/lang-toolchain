@@ -1,0 +1,58 @@
+module m
+
+pub struct Parsed {
+	pub value: Int,
+	pub flag: Bool
+}
+
+fn check_val_from_mut(parsed: Parsed) nothrow -> Int {
+	var p = move parsed;
+	val f = p.flag;
+	if f {
+		return 1;
+	}
+	return 0;
+}
+
+fn check_direct_field(parsed: Parsed) nothrow -> Int {
+	var p = move parsed;
+	if p.flag {
+		return 1;
+	}
+	return 0;
+}
+
+fn check_ref_field(p: &Parsed) nothrow -> Int {
+	if p.flag {
+		return 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// val-from-mut: true path
+	val t1 = Parsed(value = 1, flag = true);
+	if check_val_from_mut(move t1) != 1 { return 1; }
+
+	// val-from-mut: false path
+	val f1 = Parsed(value = 2, flag = false);
+	if check_val_from_mut(move f1) != 0 { return 2; }
+
+	// direct field on mut var: true path
+	val t2 = Parsed(value = 3, flag = true);
+	if check_direct_field(move t2) != 1 { return 3; }
+
+	// direct field on mut var: false path
+	val f2 = Parsed(value = 4, flag = false);
+	if check_direct_field(move f2) != 0 { return 4; }
+
+	// ref field: true path
+	val t3 = Parsed(value = 5, flag = true);
+	if check_ref_field(&t3) != 1 { return 5; }
+
+	// ref field: false path
+	val f3 = Parsed(value = 6, flag = false);
+	if check_ref_field(&f3) != 0 { return 6; }
+
+	return 0;
+}

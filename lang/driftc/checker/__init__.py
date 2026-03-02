@@ -1383,6 +1383,31 @@ class Checker:
 				# `move <place>` yields the underlying value type (best-effort).
 				return self._infer_expr_type(expr.subject)
 
+			if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+				base_ty = self._infer_expr_type(expr.base) if expr.base is not None else None
+				if base_ty is None:
+					return None
+				cur_ty = base_ty
+				for proj in expr.projections:
+					cur_def = self.table.get(cur_ty)
+					if cur_def.kind is TypeKind.REF and cur_def.param_types:
+						cur_ty = cur_def.param_types[0]
+						cur_def = self.table.get(cur_ty)
+					if isinstance(proj, H.HPlaceField):
+						if cur_def.kind is TypeKind.STRUCT:
+							info = self.table.struct_field(cur_ty, proj.name)
+							if info is not None:
+								_, cur_ty = info
+							else:
+								return None
+						elif proj.name in ("len", "cap", "capacity"):
+							return checker._len_cap_result_type(cur_ty)
+						else:
+							return None
+					else:
+						return None
+				return cur_ty
+
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HVar):
 				if self.call_info_by_callsite_id is None:
 					self._append_diag(
