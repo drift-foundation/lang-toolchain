@@ -1,6 +1,16 @@
 # Drift development history
 
 ## 2026-03-03
+- Fixed a loop-induced fiber stack overflow in LLVM codegen for interface/callback-heavy paths such as `.on_error()` dispatch:
+  - `lang/codegen/llvm/llvm_codegen.py` previously emitted `%DriftIface` allocas in non-entry blocks, so loop iterations accumulated stack space until function return.
+  - Added `_ensure_iface_tmp_alloca()` to create a single reusable entry-block `%DriftIface` slot and routed temporary interface construction through it (`_lower_construct_iface`, `_lower_construct_iface_value`, `_lower_iface_upcast`, registry-set call paths, and interface inline-data extraction).
+  - This stops per-iteration stack growth for repeated callback/interface lowering inside loops.
+- Hardened Linux fiber stacks in `lang/language_runtime/posix/thread_runtime.c`:
+  - fiber stacks now prefer `mmap` with a `PROT_NONE` guard page at the low end, converting future stack overflows into clean faults instead of silent heap corruption,
+  - added `stack_is_mmap` so stack teardown dispatches correctly to `munmap` vs `free`,
+  - if `mprotect` fails, the mmap region is discarded and allocation falls back to `malloc`.
+- Added/validated regression coverage through the keep-alive VT loopback benchmark and callback/closure/interface/result-on_error suites; high-iteration `.on_error()` loop paths no longer overflow the fiber stack.
+- Bumped compiler version to `0.19.0-dev`; ABI remains `2`.
 - Added Linux-backed secure random bytes support:
   - new stdlib API `std.random.random_secure_bytes(n: Int) -> Result<Array<Byte>, RandomError>`
   - new `RandomError { tag: String, errno: Int }` diagnostic type

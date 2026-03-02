@@ -1,0 +1,7 @@
+{
+  "description": "perf: VT TCP loopback baseline benchmark (regression/crash guard)",
+  "exit_code": 0,
+  "sandbox_blocks": true,
+  "timeout_s": 60,
+  "stderr": "__ANY__"
+}

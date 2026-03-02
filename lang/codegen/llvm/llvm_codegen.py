@@ -1353,6 +1353,7 @@ class _FuncBuilder:
 	local_allocas: Dict[str, str] = field(default_factory=dict)
 	# Insertion point in `self.lines` for entry-block allocas/stores.
 	_entry_alloca_insert_index: int | None = None
+	_iface_tmp_alloca: str | None = None
 	string_type_id: Optional[TypeId] = None
 	int_type_id: Optional[TypeId] = None
 	bool_type_id: Optional[TypeId] = None
@@ -1930,6 +1931,25 @@ class _FuncBuilder:
 			)
 			self._entry_alloca_insert_index += 1
 		return alloca_id
+
+	def _ensure_iface_tmp_alloca(self) -> str:
+		"""Return an entry-block alloca for building DriftIface temporaries.
+
+		A single slot is reused across all ConstructIface/ConstructIfaceValue/
+		IfaceUpcast lowerings in a function.  Each use fills then immediately
+		loads the slot, so there is no lifetime overlap.  Placing the alloca
+		in the entry block avoids stack growth when these instructions appear
+		inside loops.
+		"""
+		if self._iface_tmp_alloca is not None:
+			return self._iface_tmp_alloca
+		assert self._entry_alloca_insert_index is not None
+		name = self._fresh("iface_tmp_entry")
+		emit_ty = self._llty(DRIFT_IFACE_TYPE)
+		self.lines.insert(self._entry_alloca_insert_index, f"  {name} = alloca {emit_ty}")
+		self._entry_alloca_insert_index += 1
+		self._iface_tmp_alloca = name
+		return name
 
 	def _dbg_keepalive_alloca_name(self, local: str) -> str:
 		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in local)
@@ -3995,8 +4015,7 @@ class _FuncBuilder:
 				ptr_val = self._map_value(instr.args[1])
 				dropper_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				dropper_addr = self._fresh("registry_dropper_addr")
-				self.lines.append(f"  {dropper_addr} = alloca {DRIFT_IFACE_TYPE}")
+				dropper_addr = self._ensure_iface_tmp_alloca()
 				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
 				self.value_types[dest] = DRIFT_INT_TYPE
@@ -4010,8 +4029,7 @@ class _FuncBuilder:
 				ptr_val = self._map_value(instr.args[1])
 				dropper_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				dropper_addr = self._fresh("registry_dropper_addr")
-				self.lines.append(f"  {dropper_addr} = alloca {DRIFT_IFACE_TYPE}")
+				dropper_addr = self._ensure_iface_tmp_alloca()
 				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
 				self.value_types[dest] = DRIFT_INT_TYPE
@@ -5257,8 +5275,7 @@ class _FuncBuilder:
 		is_inline = self._fresh("iface_is_inline")
 		self.lines.append(f"  {inline_bit} = and i8 {inline_flag}, 1")
 		self.lines.append(f"  {is_inline} = icmp ne i8 {inline_bit}, 0")
-		inline_tmp = self._fresh("iface_inline_tmp")
-		self.lines.append(f"  {inline_tmp} = alloca {emit_iface_llty}")
+		inline_tmp = self._ensure_iface_tmp_alloca()
 		self.lines.append(f"  store {emit_iface_llty} {iface_val}, {emit_iface_llty}* {inline_tmp}")
 		inline_field = self._fresh("iface_inline_field")
 		inline_word = self._fresh("iface_inline_word")
@@ -5785,8 +5802,7 @@ class _FuncBuilder:
 			data_i8 = "null"
 		vtable_i8 = self._fresh("vtable_i8")
 		self.lines.append(f"  {vtable_i8} = bitcast {DRIFT_CALLBACK_VTABLE_TYPE}* @{vtable_name} to i8*")
-		tmp_ptr = self._fresh("iface_tmp")
-		self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_IFACE_TYPE}")
+		tmp_ptr = self._ensure_iface_tmp_alloca()
 		self.lines.append(f"  store {DRIFT_IFACE_TYPE} zeroinitializer, {DRIFT_IFACE_TYPE}* {tmp_ptr}")
 		data_ptr = self._fresh("iface_data_ptr")
 		self.lines.append(
@@ -5817,8 +5833,7 @@ class _FuncBuilder:
 		size, align = self._size_align_typeid(instr.value_ty)
 		inline_bytes = (self.module.word_bits // 8) * DRIFT_IFACE_INLINE_WORDS
 		inline_ok = size <= inline_bytes and align <= (self.module.word_bits // 8)
-		tmp_ptr = self._fresh("iface_tmp")
-		self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_IFACE_TYPE}")
+		tmp_ptr = self._ensure_iface_tmp_alloca()
 		self.lines.append(f"  store {DRIFT_IFACE_TYPE} zeroinitializer, {DRIFT_IFACE_TYPE}* {tmp_ptr}")
 		vtable_i8 = self._fresh("vtable_i8")
 		vtable_llty = f"[{slot_count} x i8*]"
@@ -5894,8 +5909,7 @@ class _FuncBuilder:
 		offset_i8 = self._fresh("iface_vtable_i8")
 		self.lines.append(f"  {offset_i8} = bitcast i8** {offset_ptr} to i8*")
 		dest = self._map_value(instr.dest)
-		tmp_ptr = self._fresh("iface_tmp")
-		self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_IFACE_TYPE}")
+		tmp_ptr = self._ensure_iface_tmp_alloca()
 		self.lines.append(f"  store {DRIFT_IFACE_TYPE} {iface_val}, {DRIFT_IFACE_TYPE}* {tmp_ptr}")
 		vtable_slot = self._fresh("iface_vtable_ptr")
 		self.lines.append(

@@ -14,10 +14,30 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
 #include "string_runtime.h"
+
+/* Free a fiber stack.  When is_mmap is true the region was obtained via
+ * mmap with a guard page one page below stack_ptr; otherwise it was a
+ * plain malloc allocation. */
+static void drift_fiber_stack_free(void *stack_ptr, size_t stack_size, int is_mmap) {
+	if (!stack_ptr) return;
+#ifdef __linux__
+	if (is_mmap) {
+		size_t page_sz = (size_t)sysconf(_SC_PAGESIZE);
+		void *map_base = (char *)stack_ptr - page_sz;
+		munmap(map_base, stack_size + page_sz);
+		return;
+	}
+#else
+	(void)is_mmap;
+#endif
+	free(stack_ptr);
+	(void)stack_size;
+}
 
 // Drift interface value layout (ABI v1):
 // { i8*, i8*, [4 x i64], i8 }
@@ -50,6 +70,7 @@ typedef struct DriftVt {
 	// Stack is allocated/freed by the worker thread (single owner).
 	void *stack;
 	size_t stack_size;
+	int stack_is_mmap;  // 1 = mmap+guard page, 0 = malloc
 #ifdef __linux__
 	ucontext_t ctx;
 	// Context is initialized once by the worker thread (single-writer).
@@ -192,7 +213,7 @@ static void drift_vt_destroy(DriftVt *h) {
 	pthread_mutex_destroy(&h->mu);
 	pthread_cond_destroy(&h->cv);
 	if (h->stack) {
-		free(h->stack);
+		drift_fiber_stack_free(h->stack, h->stack_size, h->stack_is_mmap);
 		h->stack = NULL;
 		h->stack_size = 0;
 	}
@@ -221,7 +242,7 @@ static void drift_vt_registry_cleanup_atexit(void) {
 		pthread_mutex_destroy(&cur->mu);
 		pthread_cond_destroy(&cur->cv);
 		if (cur->stack) {
-			free(cur->stack);
+			drift_fiber_stack_free(cur->stack, cur->stack_size, cur->stack_is_mmap);
 			cur->stack = NULL;
 			cur->stack_size = 0;
 		}
@@ -248,6 +269,14 @@ typedef struct ReactorWatch {
 	struct ReactorWatch *next;
 } ReactorWatch;
 
+#define REACTOR_WATCH_SLOTS 256
+
+typedef struct ReactorWatchSlot {
+	_Atomic uint32_t events;      /* 0 = slot unused */
+	_Atomic uint64_t vt;
+	atomic_int epoll_registered;  /* 1 = fd is in epoll set (may be disarmed by ONESHOT) */
+} ReactorWatchSlot;
+
 typedef struct Reactor {
 	int epoll_fd;
 	int wake_fd;
@@ -255,6 +284,9 @@ typedef struct Reactor {
 	pthread_cond_t cv;
 	ReactorTimer *timers;
 	ReactorWatch *watches;
+	ReactorWatchSlot watch_slots[REACTOR_WATCH_SLOTS];
+	atomic_int reactor_polling;
+	atomic_int timer_seq;
 	int stopping;
 	pthread_t thread;
 	int thread_started;
@@ -269,12 +301,26 @@ static void drift_reactor_forget_vt(DriftVt *vt) {
 	if (!r || !vt) {
 		return;
 	}
+	uint64_t vt_val = (uint64_t)vt;
+	/* Scan slot-based watches.  Use CAS on vt to avoid clearing a slot
+	 * that was concurrently re-registered for a different VT. */
+	for (int i = 0; i < REACTOR_WATCH_SLOTS; i++) {
+		ReactorWatchSlot *slot = &r->watch_slots[i];
+		uint64_t expected = vt_val;
+		if (atomic_compare_exchange_strong(&slot->vt, &expected, 0)) {
+			atomic_store(&slot->events, 0);
+			if (atomic_load(&slot->epoll_registered) && r->epoll_fd >= 0) {
+				epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, i, NULL);
+				atomic_store(&slot->epoll_registered, 0);
+			}
+		}
+	}
 	pthread_mutex_lock(&r->mu);
 	ReactorTimer *tp = NULL;
 	ReactorTimer *tc = r->timers;
 	while (tc) {
 		ReactorTimer *tn = tc->next;
-		if (tc->vt == (uint64_t)vt) {
+		if (tc->vt == vt_val) {
 			if (tp) {
 				tp->next = tn;
 			} else {
@@ -290,7 +336,7 @@ static void drift_reactor_forget_vt(DriftVt *vt) {
 	ReactorWatch *wc = r->watches;
 	while (wc) {
 		ReactorWatch *wn = wc->next;
-		if (wc->vt == (uint64_t)vt) {
+		if (wc->vt == vt_val) {
 			if (wp) {
 				wp->next = wn;
 			} else {
@@ -469,7 +515,24 @@ static void *drift_exec_worker(void *arg) {
 			getcontext(&vt->ctx);
 			vt->ctx.uc_link = &sched_ctx;
 			vt->stack_size = exec->stack_bytes;
-			vt->stack = malloc(vt->stack_size);
+			/* Use mmap with a guard page at the bottom to detect stack overflow.
+			 * The guard page (PROT_NONE) will cause SIGSEGV if the fiber stack
+			 * overflows, instead of silently corrupting adjacent heap metadata. */
+			size_t page_sz = (size_t)sysconf(_SC_PAGESIZE);
+			size_t map_sz = vt->stack_size + page_sz;
+			void *map = mmap(NULL, map_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			if (map == MAP_FAILED) {
+				vt->stack = malloc(vt->stack_size);
+				vt->stack_is_mmap = 0;
+			} else if (mprotect(map, page_sz, PROT_NONE) != 0) {
+				/* Guard page failed; release the mapping and fall back to malloc. */
+				munmap(map, map_sz);
+				vt->stack = malloc(vt->stack_size);
+				vt->stack_is_mmap = 0;
+			} else {
+				vt->stack = (char *)map + page_sz;
+				vt->stack_is_mmap = 1;
+			}
 			vt->ctx.uc_stack.ss_sp = vt->stack;
 			vt->ctx.uc_stack.ss_size = vt->stack_size;
 			vt->ctx_ready = 1;
@@ -481,7 +544,7 @@ static void *drift_exec_worker(void *arg) {
 		int state = atomic_load(&vt->state);
 			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
 				if (vt->stack) {
-					free(vt->stack);
+					drift_fiber_stack_free(vt->stack, vt->stack_size, vt->stack_is_mmap);
 					vt->stack = NULL;
 					vt->stack_size = 0;
 				}
@@ -523,8 +586,10 @@ static void drift_reactor_wake(Reactor *r) {
 	if (!r || r->wake_fd < 0) {
 		return;
 	}
-	uint64_t one = 1;
-	(void)write(r->wake_fd, &one, sizeof(one));
+	if (atomic_exchange(&r->reactor_polling, 0)) {
+		uint64_t one = 1;
+		(void)write(r->wake_fd, &one, sizeof(one));
+	}
 #else
 	(void)r;
 #endif
@@ -569,6 +634,7 @@ static void drift_reactor_add_timer(Reactor *r, int64_t deadline_ms, uint64_t vt
 	t->vt = vt;
 	t->next = r->timers;
 	r->timers = t;
+	atomic_fetch_add(&r->timer_seq, 1);
 }
 
 static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTimer **out) {
@@ -622,9 +688,25 @@ static void *drift_reactor_thread_entry(void *arg) {
 				timeout_ms = (int)delta;
 			}
 		}
+		int tseq = atomic_load(&r->timer_seq);
 		pthread_mutex_unlock(&r->mu);
 
+		atomic_store(&r->reactor_polling, 1);
+		/* Re-check stopping after publishing polling=1 to close the race
+		 * with drift_reactor_destroy's force-wake. */
+		if (r->stopping) {
+			atomic_store(&r->reactor_polling, 0);
+			break;
+		}
+		/* If a timer was added between timeout computation and polling=1,
+		 * drift_reactor_wake may have been skipped.  Re-loop to recompute
+		 * the timeout with the new timer's deadline. */
+		if (atomic_load(&r->timer_seq) != tseq) {
+			atomic_store(&r->reactor_polling, 0);
+			continue;
+		}
 		int n = epoll_wait(r->epoll_fd, events, 16, timeout_ms);
+		atomic_store(&r->reactor_polling, 0);
 		if (n < 0 && errno != EINTR) {
 			continue;
 		}
@@ -636,15 +718,24 @@ static void *drift_reactor_thread_entry(void *arg) {
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
 					continue;
 				}
-				pthread_mutex_lock(&r->mu);
-				ReactorWatch *w = drift_reactor_take_watch(r, fd);
-				uint64_t vt = w ? w->vt : 0;
-				pthread_mutex_unlock(&r->mu);
-				if (w) {
-					free(w);
-				}
-				if (r->epoll_fd >= 0) {
-					epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+				uint64_t vt = 0;
+				if (fd >= 0 && fd < REACTOR_WATCH_SLOTS) {
+					ReactorWatchSlot *slot = &r->watch_slots[fd];
+					vt = atomic_load(&slot->vt);
+					atomic_store(&slot->events, 0);
+					atomic_store(&slot->vt, 0);
+					/* EPOLLONESHOT already disarmed; no EPOLL_CTL_DEL needed. */
+				} else {
+					pthread_mutex_lock(&r->mu);
+					ReactorWatch *w = drift_reactor_take_watch(r, fd);
+					vt = w ? w->vt : 0;
+					pthread_mutex_unlock(&r->mu);
+					if (w) {
+						free(w);
+					}
+					if (r->epoll_fd >= 0) {
+						epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+					}
 				}
 				if (vt != 0) {
 					drift_thread_unpark(vt);
@@ -678,6 +769,9 @@ static Reactor *drift_reactor_create(void) {
 	r->wake_fd = -1;
 	pthread_mutex_init(&r->mu, NULL);
 	pthread_cond_init(&r->cv, NULL);
+	/* calloc zeroes all fields including watch_slots. */
+	atomic_store(&r->reactor_polling, 0);
+	atomic_store(&r->timer_seq, 0);
 #ifdef __linux__
 	r->epoll_fd = epoll_create1(0);
 	r->wake_fd = eventfd(0, EFD_NONBLOCK);
@@ -701,7 +795,13 @@ static void drift_reactor_destroy(Reactor *r) {
 	pthread_mutex_lock(&r->mu);
 	r->stopping = 1;
 	pthread_mutex_unlock(&r->mu);
-	drift_reactor_wake(r);
+	/* Force-wake: unconditionally write eventfd so the reactor exits
+	 * epoll_wait even if it hasn't set reactor_polling yet. */
+	atomic_store(&r->reactor_polling, 0);
+	if (r->wake_fd >= 0) {
+		uint64_t one = 1;
+		(void)write(r->wake_fd, &one, sizeof(one));
+	}
 #ifdef __linux__
 	if (r->thread_started) {
 		pthread_join(r->thread, NULL);
@@ -1004,6 +1104,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	atomic_store(&vt->state, DRIFT_VT_NEW);
 	vt->stack = NULL;
 	vt->stack_size = 0;
+	vt->stack_is_mmap = 0;
 #ifdef __linux__
 	vt->ctx_ready = 0;
 #endif
@@ -1386,31 +1487,57 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 	if (!r) {
 		return;
 	}
-	pthread_mutex_lock(&r->mu);
-	ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
-	int existed = (w != NULL);
-	if (!w) {
-		w = (ReactorWatch *)malloc(sizeof(ReactorWatch));
-		if (!w) {
-			pthread_mutex_unlock(&r->mu);
-			return;
+	int ifd = (int)fd;
+	if (ifd >= 0 && ifd < REACTOR_WATCH_SLOTS) {
+		ReactorWatchSlot *slot = &r->watch_slots[ifd];
+		atomic_store(&slot->events, (uint32_t)interest);
+		atomic_store(&slot->vt, vt);
+		if (r->epoll_fd >= 0) {
+			struct epoll_event ev;
+			ev.events = (uint32_t)interest | EPOLLET | EPOLLONESHOT;
+			ev.data.fd = ifd;
+			if (atomic_load(&slot->epoll_registered)) {
+				/* Rearm.  If fd was closed+reopened (kernel removed it
+				 * from epoll), MOD fails; fall back to ADD. */
+				if (epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, ifd, &ev) != 0) {
+					epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, ifd, &ev);
+				}
+			} else {
+				epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, ifd, &ev);
+				atomic_store(&slot->epoll_registered, 1);
+			}
 		}
-		w->fd = (int)fd;
-		w->events = (uint32_t)interest;
-		w->vt = vt;
-		w->next = r->watches;
-		r->watches = w;
 	} else {
-		w->events = (uint32_t)interest;
-		w->vt = vt;
-	}
-	pthread_mutex_unlock(&r->mu);
-	if (r->epoll_fd >= 0) {
-		struct epoll_event ev;
-		ev.events = (uint32_t)interest;
-		ev.data.fd = (int)fd;
-		int op = existed ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-		epoll_ctl(r->epoll_fd, op, (int)fd, &ev);
+		pthread_mutex_lock(&r->mu);
+		ReactorWatch *w = drift_reactor_find_watch(r, ifd);
+		int existed = (w != NULL);
+		if (!w) {
+			w = (ReactorWatch *)malloc(sizeof(ReactorWatch));
+			if (!w) {
+				pthread_mutex_unlock(&r->mu);
+				if (deadline_ms > 0) {
+					drift_reactor_register_timer(deadline_ms, vt);
+				}
+				drift_reactor_wake(r);
+				return;
+			}
+			w->fd = ifd;
+			w->events = (uint32_t)interest;
+			w->vt = vt;
+			w->next = r->watches;
+			r->watches = w;
+		} else {
+			w->events = (uint32_t)interest;
+			w->vt = vt;
+		}
+		pthread_mutex_unlock(&r->mu);
+		if (r->epoll_fd >= 0) {
+			struct epoll_event ev;
+			ev.events = (uint32_t)interest;
+			ev.data.fd = ifd;
+			int op = existed ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+			epoll_ctl(r->epoll_fd, op, ifd, &ev);
+		}
 	}
 	if (deadline_ms > 0) {
 		drift_reactor_register_timer(deadline_ms, vt);
