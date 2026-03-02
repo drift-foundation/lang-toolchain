@@ -18,6 +18,16 @@
 #include <unistd.h>
 #endif
 
+#ifdef NVALGRIND
+#define VALGRIND_STACK_REGISTER(start, end) (0)
+#define VALGRIND_STACK_DEREGISTER(id) do {} while(0)
+#elif __has_include(<valgrind/valgrind.h>)
+#include <valgrind/valgrind.h>
+#else
+#define VALGRIND_STACK_REGISTER(start, end) (0)
+#define VALGRIND_STACK_DEREGISTER(id) do {} while(0)
+#endif
+
 #include "string_runtime.h"
 
 /* Free a fiber stack.  When is_mmap is true the region was obtained via
@@ -71,6 +81,7 @@ typedef struct DriftVt {
 	void *stack;
 	size_t stack_size;
 	int stack_is_mmap;  // 1 = mmap+guard page, 0 = malloc
+	unsigned valgrind_stack_id;
 #ifdef __linux__
 	ucontext_t ctx;
 	// Context is initialized once by the worker thread (single-writer).
@@ -213,6 +224,7 @@ static void drift_vt_destroy(DriftVt *h) {
 	pthread_mutex_destroy(&h->mu);
 	pthread_cond_destroy(&h->cv);
 	if (h->stack) {
+		VALGRIND_STACK_DEREGISTER(h->valgrind_stack_id);
 		drift_fiber_stack_free(h->stack, h->stack_size, h->stack_is_mmap);
 		h->stack = NULL;
 		h->stack_size = 0;
@@ -242,6 +254,7 @@ static void drift_vt_registry_cleanup_atexit(void) {
 		pthread_mutex_destroy(&cur->mu);
 		pthread_cond_destroy(&cur->cv);
 		if (cur->stack) {
+			VALGRIND_STACK_DEREGISTER(cur->valgrind_stack_id);
 			drift_fiber_stack_free(cur->stack, cur->stack_size, cur->stack_is_mmap);
 			cur->stack = NULL;
 			cur->stack_size = 0;
@@ -533,6 +546,10 @@ static void *drift_exec_worker(void *arg) {
 				vt->stack = (char *)map + page_sz;
 				vt->stack_is_mmap = 1;
 			}
+			if (vt->stack) {
+				vt->valgrind_stack_id = VALGRIND_STACK_REGISTER(
+					vt->stack, (char *)vt->stack + vt->stack_size);
+			}
 			vt->ctx.uc_stack.ss_sp = vt->stack;
 			vt->ctx.uc_stack.ss_size = vt->stack_size;
 			vt->ctx_ready = 1;
@@ -544,6 +561,7 @@ static void *drift_exec_worker(void *arg) {
 		int state = atomic_load(&vt->state);
 			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
 				if (vt->stack) {
+					VALGRIND_STACK_DEREGISTER(vt->valgrind_stack_id);
 					drift_fiber_stack_free(vt->stack, vt->stack_size, vt->stack_is_mmap);
 					vt->stack = NULL;
 					vt->stack_size = 0;
