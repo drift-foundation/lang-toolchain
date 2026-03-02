@@ -350,8 +350,9 @@ def _compare_process_output(
 			return True
 		return expected_obj == actual_obj
 
-	if exit_code != expected.get("exit_code", 0):
-		msg = f"FAIL (exit {exit_code}, expected {expected.get('exit_code', 0)})"
+	expected_exit = expected.get("exit_code", 0)
+	if exit_code != expected_exit:
+		msg = f"FAIL (exit {exit_code}, expected {expected_exit})"
 		if debug and (stdout or stderr):
 			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 		return msg

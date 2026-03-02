@@ -1,0 +1,7 @@
+module m
+
+fn main() nothrow -> Int {
+	var a = [10, 20, 30];
+	val _ = a[3];
+	return 0;
+}

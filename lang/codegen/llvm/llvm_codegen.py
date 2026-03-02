@@ -126,6 +126,7 @@ from lang.driftc.stage2 import (
 	ConstructError,
 	ErrorAddAttrDV,
 	ErrorAddLocalDV,
+	ErrorRaise,
 	ErrorEvent,
 	ConstructResultErr,
 	ConstructResultOk,
@@ -1215,6 +1216,7 @@ class LlvmModuleBuilder:
 				]
 			)
 		if self.needs_error_runtime:
+			self.needs_llvm_trap = True
 			lines.extend(
 				[
 					f"define weak {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event) {{",
@@ -1237,6 +1239,7 @@ class LlvmModuleBuilder:
 					"entry:",
 					"  ret void",
 					"}",
+					f"declare void @drift_error_raise({DRIFT_ERROR_PTR})",
 				]
 			)
 			lines.append("")
@@ -3297,6 +3300,10 @@ class _FuncBuilder:
 			self.lines.append(
 				f"  call void @drift_error_add_local_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val}, {DRIFT_DV_TYPE}* {tmp_ptr})"
 			)
+		elif isinstance(instr, ErrorRaise):
+			self.module.needs_error_runtime = True
+			err_val = self._map_value(instr.error)
+			self.lines.append(f"  call void @drift_error_raise({DRIFT_ERROR_PTR} {err_val})")
 		elif isinstance(instr, ErrorEvent):
 			dest = self._map_value(instr.dest)
 			err_val = self._map_value(instr.error)

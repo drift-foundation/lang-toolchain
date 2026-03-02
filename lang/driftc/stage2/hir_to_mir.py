@@ -5347,15 +5347,10 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
 			if self._fn_can_throw() is not True:
-				# Defensive invariant: earlier stages guarantee that non-can-throw
-				# functions cannot let an Error escape. However, MIR lowering cannot
-				# always prove that a dispatch "else" path is unreachable (e.g., a
-				# try/catch without a catch-all in a non-throwing function).
-				#
-				# Do not crash the compiler here. Instead, encode the invariant into
-				# MIR so LLVM can emit an `unreachable` and tests can still build the
-				# full pipeline. If this path is ever taken at runtime, it's a bug in
-				# the front-end/checker.
+				# Nothrow function with no try context: the error cannot propagate
+				# via FnResult. Call drift_error_raise (which aborts) so the
+				# process terminates cleanly instead of hitting UB.
+				self.b.emit(M.ErrorRaise(error=err_val))
 				self.b.set_terminator(M.Unreachable())
 				return
 			res_val = self.b.new_temp()

@@ -406,6 +406,8 @@ def insert_string_arc(
 			yield instr.frame
 			yield instr.key
 			yield instr.value
+		elif isinstance(instr, M.ErrorRaise):
+			yield instr.error
 		elif isinstance(instr, M.ErrorAttrsGetDV):
 			yield instr.error
 			yield instr.key
@@ -1063,6 +1065,10 @@ def insert_string_arc(
 						key = _ensure_owned(key, owned_values, new_instrs)
 						_note_use(key, consume=True)
 				new_instrs.append(M.ErrorAddLocalDV(error=instr.error, frame=frame, key=key, value=instr.value))
+				continue
+
+			if isinstance(instr, M.ErrorRaise):
+				new_instrs.append(instr)
 				continue
 
 			if isinstance(instr, M.ErrorCapturesGetDV):

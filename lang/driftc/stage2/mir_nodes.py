@@ -923,6 +923,12 @@ class ErrorAddLocalDV(MInstr):
 
 
 @dataclass
+class ErrorRaise(MInstr):
+	"""Raise an error via drift_error_raise (noreturn). Used in nothrow context."""
+	error: ValueId
+
+
+@dataclass
 class ConstructResultOk(MInstr):
 	"""
 	Construct FnResult.Ok(value).
@@ -1269,6 +1275,7 @@ __all__ = [
 	"ConstructError",
 	"ErrorAddAttrDV",
 	"ErrorAddLocalDV",
+	"ErrorRaise",
 	"ConstructResultOk",
 	"ConstructResultErr",
 	"ResultIsErr",
