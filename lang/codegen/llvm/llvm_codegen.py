@@ -7101,11 +7101,10 @@ class _FuncBuilder:
 				return
 			raise NotImplementedError("LLVM codegen v1: neg only supported on Int/Float")
 		if instr.op is UnaryOp.BIT_NOT:
-			# Bitwise not on Uint only.
-			if ty != DRIFT_USIZE_TYPE:
-				raise AssertionError("LLVM codegen v1: bitwise not requires Uint")
-			self.lines.append(f"  {dest} = xor {self._llty(DRIFT_USIZE_TYPE)} {operand}, -1")
-			self.value_types[dest] = DRIFT_USIZE_TYPE
+			if ty not in (DRIFT_USIZE_TYPE, DRIFT_U64_TYPE):
+				raise AssertionError(f"LLVM codegen v1: bitwise not requires Uint or Uint64 (have {ty})")
+			self.lines.append(f"  {dest} = xor {self._llty(ty)} {operand}, -1")
+			self.value_types[dest] = ty
 			return
 		raise NotImplementedError(f"LLVM codegen v1: unsupported unary op {instr.op}")
 
@@ -7214,12 +7213,16 @@ class _FuncBuilder:
 			left_ty = right_ty
 		bitwise_ops = {BinaryOp.BIT_AND, BinaryOp.BIT_OR, BinaryOp.BIT_XOR, BinaryOp.SHL, BinaryOp.SHR}
 		if instr.op in bitwise_ops:
-			if left_ty != DRIFT_USIZE_TYPE or right_ty != DRIFT_USIZE_TYPE:
+			if left_ty == DRIFT_USIZE_TYPE and right_ty == DRIFT_USIZE_TYPE:
+				int_ty = DRIFT_USIZE_TYPE
+				unsigned = True
+			elif left_ty == DRIFT_U64_TYPE and right_ty == DRIFT_U64_TYPE:
+				int_ty = DRIFT_U64_TYPE
+				unsigned = True
+			else:
 				raise AssertionError(
-					f"LLVM codegen v1: bitwise ops require Uint operands (have {left_ty}, {right_ty})"
+					f"LLVM codegen v1: bitwise ops require matched Uint or Uint64 operands (have {left_ty}, {right_ty})"
 				)
-			int_ty = DRIFT_USIZE_TYPE
-			unsigned = True
 		elif left_ty == DRIFT_INT_TYPE and right_ty == DRIFT_INT_TYPE:
 			int_ty = DRIFT_INT_TYPE
 			unsigned = False

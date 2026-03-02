@@ -1,0 +1,52 @@
+module m
+
+fn main() nothrow -> Int {
+	var a: Uint64 = 255u64;
+	var b: Uint64 = 15u64;
+
+	// AND: 255 & 15 = 15
+	var r1: Uint64 = a & b;
+	if r1 != 15u64 { return 1; }
+
+	// OR: 15 | 240 = 255
+	var r2: Uint64 = b | 240u64;
+	if r2 != 255u64 { return 2; }
+
+	// XOR: 255 ^ 255 = 0
+	var r3: Uint64 = a ^ a;
+	if r3 != 0u64 { return 3; }
+
+	// SHL: 1 << 10 = 1024
+	var one: Uint64 = 1u64;
+	var r4: Uint64 = one << 10u64;
+	if r4 != 1024u64 { return 4; }
+
+	// SHR: 1024 >> 10 = 1
+	var r5: Uint64 = r4 >> 10u64;
+	if r5 != one { return 5; }
+
+	// BIT_NOT: ~0 = all-ones
+	var zero: Uint64 = 0u64;
+	var all_ones: Uint64 = ~zero;
+	var low: Uint64 = all_ones & 255u64;
+	if low != 255u64 { return 6; }
+	// Top byte (shift right 56) should also be 255 — proves full 64-bit NOT
+	var high: Uint64 = all_ones >> 56u64;
+	if high != 255u64 { return 7; }
+
+	// Augmented bitwise assignment: &= |= ^= <<= >>=
+	var x: Uint64 = 255u64;
+	x &= 15u64;
+	if x != 15u64 { return 8; }
+	x |= 240u64;
+	if x != 255u64 { return 9; }
+	x ^= 255u64;
+	if x != 0u64 { return 10; }
+	x = 1u64;
+	x <<= 10u64;
+	if x != 1024u64 { return 11; }
+	x >>= 10u64;
+	if x != 1u64 { return 12; }
+
+	return 0;
+}

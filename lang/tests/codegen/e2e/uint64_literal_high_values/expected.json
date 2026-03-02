@@ -1,0 +1,6 @@
+{
+  "description": "e2e: u64 literal suffix — high values above 2^32, max u64",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

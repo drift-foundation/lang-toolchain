@@ -389,6 +389,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.Literal(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if hasattr(parser_ast, "UintLiteral") and isinstance(expr, parser_ast.UintLiteral):
 		return s0.UintLiteral(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
+	if hasattr(parser_ast, "Uint64Literal") and isinstance(expr, parser_ast.Uint64Literal):
+		return s0.Uint64Literal(value=expr.value, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Name):
 		return s0.Name(ident=expr.ident, loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.TraitIs):
@@ -4019,13 +4021,15 @@ def _lower_parsed_program_to_hir(
 	# to a numeric literal). We evaluate them here so later phases can
 	# treat const references as typed literals without requiring whole-program
 	# evaluation infrastructure.
-	from lang.driftc.core.types_core import UintConst as _UintConst, validate_const_value as _validate_const
+	from lang.driftc.core.types_core import UintConst as _UintConst, Uint64Const as _Uint64Const, validate_const_value as _validate_const
 
 	def _eval_const_value(expr: parser_ast.Expr) -> object | None:
 		if isinstance(expr, parser_ast.Literal):
 			return expr.value
 		if hasattr(parser_ast, "UintLiteral") and isinstance(expr, parser_ast.UintLiteral):
 			return _UintConst(expr.value)
+		if hasattr(parser_ast, "Uint64Literal") and isinstance(expr, parser_ast.Uint64Literal):
+			return _Uint64Const(expr.value)
 		if isinstance(expr, parser_ast.Unary) and getattr(expr, "op", None) in ("-", "+"):
 			inner = getattr(expr, "operand", None)
 			if isinstance(inner, parser_ast.Literal) and isinstance(inner.value, (int, float)):

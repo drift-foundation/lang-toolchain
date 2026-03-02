@@ -1,0 +1,31 @@
+module m
+
+fn main() nothrow -> Int {
+	// Values above 2^32 — proves full 64-bit width
+	var big: Uint64 = 4294967296u64;
+	if big != 4294967296u64 { return 1; }
+
+	// Max u64
+	var max: Uint64 = 18446744073709551615u64;
+	var low: Uint64 = max & 255u64;
+	if low != 255u64 { return 2; }
+
+	// Top byte of max — shift right 56
+	var high: Uint64 = max >> 56u64;
+	if high != 255u64 { return 3; }
+
+	// NOT of max = 0
+	var zero: Uint64 = ~max;
+	if zero != 0u64 { return 4; }
+
+	// Shift 1 to bit 32 position
+	var bit32: Uint64 = 1u64 << 32u64;
+	if bit32 != 4294967296u64 { return 5; }
+
+	// Mask upper 32 bits
+	var mask: Uint64 = 18446744069414584320u64;
+	var upper: Uint64 = max & mask;
+	if upper != mask { return 6; }
+
+	return 0;
+}

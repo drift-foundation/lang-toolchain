@@ -48,8 +48,8 @@ FIXED_WIDTH_TYPE_NAMES = {
 	"Uint8",
 	"Uint16",
 	"Uint32",
-	"Uint64",
-	"u64",
+	# Uint64/u64 deliberately excluded: available in user code for portable
+	# 64-bit unsigned arithmetic (crypto, hashing, bit manipulation).
 	"F32",
 	"F64",
 	"Float32",
@@ -5022,6 +5022,10 @@ class TypeChecker:
 				if expr.value < 0 or expr.value > _uint_max:
 					diagnostics.append(_tc_diag(message=f"Uint literal {expr.value}u is out of range [0, 2^{_uint_bits}-1]", code="E-UINT-OVERFLOW", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, self._uint)
+			if hasattr(H, "HLiteralUint64") and isinstance(expr, getattr(H, "HLiteralUint64")):
+				if expr.value < 0 or expr.value > 0xFFFFFFFFFFFFFFFF:
+					diagnostics.append(_tc_diag(message=f"Uint64 literal {expr.value}u64 is out of range [0, 2^64-1]", code="E-UINT64-OVERFLOW", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, self._uint64)
 			if hasattr(H, "HLiteralFloat") and isinstance(expr, getattr(H, "HLiteralFloat")):
 				return record_expr(expr, self._float)
 			if isinstance(expr, H.HLiteralBool):
@@ -7655,6 +7659,10 @@ class TypeChecker:
 			if isinstance(expr, H.HUnary):
 				sub_ty = type_expr(expr.expr, used_as_value=(expr.op is not H.UnaryOp.DEREF))
 				if expr.op is H.UnaryOp.NEG:
+					if sub_ty in (self._uint, self._uint64):
+						_ty_name = "Uint64" if sub_ty == self._uint64 else "Uint"
+						diagnostics.append(_tc_diag(message=f"unary negation is not supported on unsigned type {_ty_name}", code="E-NEG-UNSIGNED", severity="error", span=getattr(expr, "loc", Span())))
+						return record_expr(expr, self._unknown)
 					return record_expr(expr, sub_ty if sub_ty in (self._int, self._float) else self._unknown)
 				if expr.op in (H.UnaryOp.NOT,):
 					return record_expr(expr, self._bool)
@@ -8078,6 +8086,8 @@ class TypeChecker:
 						continue
 					if hasattr(H, "HLiteralUint") and isinstance(val_expr, getattr(H, "HLiteralUint")):
 						continue
+					if hasattr(H, "HLiteralUint64") and isinstance(val_expr, getattr(H, "HLiteralUint64")):
+						continue
 					if isinstance(val_expr, H.HDVInit):
 						continue
 					if val_nom_ty in (self._int, self._uint, self._bool, self._string, self._float):
@@ -8327,9 +8337,12 @@ class TypeChecker:
 						else:
 							is_int_lit = isinstance(stmt.value, H.HLiteralInt)
 							is_uint_lit = hasattr(H, "HLiteralUint") and isinstance(stmt.value, getattr(H, "HLiteralUint"))
+							is_uint64_lit = hasattr(H, "HLiteralUint64") and isinstance(stmt.value, getattr(H, "HLiteralUint64"))
 							decl_name = self.type_table.get(declared_ty).name
 							inf_name = self.type_table.get(inferred_ty).name
-							if not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int") and not (is_uint_lit and decl_name == "Uint" and inf_name == "Uint"):
+							if inferred_ty == self._unknown:
+								pass  # upstream error already poisoned the expression; suppress cascading mismatch
+							elif not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int") and not (is_uint_lit and decl_name == "Uint" and inf_name == "Uint") and not (is_uint64_lit and decl_name == "Uint64" and inf_name == "Uint64"):
 								diagnostics.append(
 									_tc_diag(
 										message=f"initializer type '{inf_name}' does not match declared type '{decl_name}'",
@@ -8633,11 +8646,11 @@ class TypeChecker:
 							)
 						)
 				elif stmt.op in bit_ops:
-					if tgt_ty != self._uint:
+					if tgt_ty not in (self._uint, self._uint64):
 						pretty = self.type_table.get(tgt_ty).name if tgt_ty is not None else "Unknown"
 						diagnostics.append(
 							_tc_diag(
-								message=f"bitwise augmented assignment requires Uint operands (have '{pretty}')",
+								message=f"bitwise augmented assignment requires Uint or Uint64 operands (have '{pretty}')",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
 							)

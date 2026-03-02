@@ -1,0 +1,6 @@
+{
+  "description": "e2e: uint64 bitwise ops in user code (AND, OR, XOR, SHL, SHR, NOT, augmented assignment)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

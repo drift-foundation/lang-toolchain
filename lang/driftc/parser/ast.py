@@ -334,6 +334,13 @@ class UintLiteral(Expr):
 
 
 @dataclass
+class Uint64Literal(Expr):
+    """Unsigned 64-bit integer literal with `u64` suffix (e.g. `42u64`)."""
+    loc: Located
+    value: int
+
+
+@dataclass
 class Name(Expr):
     loc: Located
     ident: str

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: negative u64 literal (-1u64) rejected with explicit diagnostic",
+  "diagnostics": [
+    {
+      "message_contains": "unary negation is not supported on unsigned type Uint64"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: mixed Uint/Uint64 bitwise rejected",
+  "diagnostics": [
+    {
+      "message_contains": "bitwise operators require Uint or Uint64 operands"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

@@ -107,6 +107,13 @@ class UintLiteral(Expr):
 
 
 @dataclass
+class Uint64Literal(Expr):
+	"""Unsigned 64-bit integer literal with `u64` suffix (e.g. `42u64`)."""
+	value: int
+	loc: Optional[object] = None
+
+
+@dataclass
 class Name(Expr):
 	"""Identifier reference."""
 	ident: str

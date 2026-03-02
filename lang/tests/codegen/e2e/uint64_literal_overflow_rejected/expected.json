@@ -1,0 +1,10 @@
+{
+  "description": "e2e: u64 literal overflow (2^64) rejected",
+  "diagnostics": [
+    {
+      "message_contains": "Uint64 literal 18446744073709551616u64 is out of range"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

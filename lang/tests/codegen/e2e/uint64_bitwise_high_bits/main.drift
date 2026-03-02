@@ -1,0 +1,40 @@
+module m
+
+fn main() nothrow -> Int {
+	var one: Uint64 = 1u64;
+	var high: Uint64 = one << 40u64;
+
+	// AND with itself preserves
+	var r1: Uint64 = high & high;
+	if r1 != high { return 1; }
+
+	// Shift back: (1 << 40) >> 40 = 1
+	var r2: Uint64 = high >> 40u64;
+	if r2 != one { return 2; }
+
+	// XOR two values above 2^32
+	var a: Uint64 = 1u64 << 33u64;
+	var b: Uint64 = 1u64 << 34u64;
+	var x: Uint64 = a ^ b;
+	var expected: Uint64 = a | b;
+	if x != expected { return 3; }
+
+	// AND mask in upper half
+	var r3: Uint64 = x & a;
+	if r3 != a { return 4; }
+
+	// Bitwise NOT on high pattern: ~(1<<40)
+	var not_high: Uint64 = ~high;
+	var bit40: Uint64 = not_high & high;
+	if bit40 != 0u64 { return 5; }
+	var low_bit: Uint64 = not_high & one;
+	if low_bit != one { return 6; }
+
+	// Augmented assignment with high bits
+	var y: Uint64 = 1u64 << 40u64;
+	y |= 1u64 << 41u64;
+	var check: Uint64 = y >> 40u64;
+	if check != 3u64 { return 7; }
+
+	return 0;
+}

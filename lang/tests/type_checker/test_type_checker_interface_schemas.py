@@ -33,7 +33,7 @@ def test_interface_method_fixed_width_rejected_in_user_module(tmp_path: Path) ->
 module m_main
 
 interface I {
-	fn f(x: Uint64) -> Uint64
+	fn f(x: Int64) -> Int64
 }
 
 fn main() nothrow -> Int { return 0; }

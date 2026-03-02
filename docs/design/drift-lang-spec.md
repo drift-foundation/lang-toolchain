@@ -206,7 +206,8 @@ Coercion rules (argument-only):
 | `Size`  | (Reserved for future revisions) Natural-width unsigned; not used for collection lengths/indices in v1. |
 | `Float` | Target-native floating-point scalar (IEEE-754 binary32 or binary64 on supported targets). |
 | `Int8`, `Int16`, `Int32`, `Int64` | Fixed-width signed integers, exactly 8/16/32/64-bit two’s-complement (**reserved in v1; allowed only in `lang.abi.*`**). |
-| `Uint8`, `Uint16`, `Uint32`, `Uint64` | Fixed-width unsigned integers, exactly 8/16/32/64-bit (**reserved in v1; allowed only in `lang.abi.*`**). |
+| `Uint8`, `Uint16`, `Uint32` | Fixed-width unsigned integers, exactly 8/16/32-bit (**reserved in v1; allowed only in `lang.abi.*`**). |
+| `Uint64` | Fixed-width unsigned 64-bit integer. Available in all user code for portable 64-bit unsigned arithmetic (crypto, hashing, bit manipulation). Supports all bitwise operators (`&`, `\|`, `^`, `~`, `<<`, `>>`) and their augmented-assignment forms. |
 | `F32`, `F64` | IEEE-754 binary32 and binary64 floating-point types (**reserved in v1; allowed only in `lang.abi.*`**). |
 | `Byte` | Unsigned 8-bit value (v1 surface scalar; `Uint8` is reserved); used for byte buffers and FFI. |
 | `String` | Immutable UTF-8 string (shared backing). |
@@ -232,7 +233,7 @@ Drift distinguishes between **natural-width** numeric primitives and **fixed-wid
 - **v1 uses pointer-sized carriers** for `Int`/`Uint` (isize/usize). This avoids wasting space on 32-bit targets and keeps arithmetic efficient.
 - `Size` is not available in v1; collections use `Int` for lengths, capacities, and indices (see chapter 12).
 - `Float` is the target’s native floating-point type (most commonly IEEE-754 binary64; on some targets it may be binary32). The surface name remains `Float` regardless of width. Its bit-width/layout are target-defined; ABI stability is guaranteed within a target, not across different targets.
-- Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint32`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types; user code should use `Int`/`Uint`/`Float`. **Exception:** `Uint64` is available in user code for `const` declarations, typed literals, and expressions where a fixed 64-bit unsigned width is required regardless of target word size (e.g., cryptographic constants, hash computations).
+- Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint32`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types; user code should use `Int`/`Uint`/`Float`. `Uint64` is **not** subject to this reservation — it is a general-purpose surface type available in all user code, supporting arithmetic, bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), augmented assignment (`&=`, `|=`, `^=`, `<<=`, `>>=`), comparisons, and `cast<Uint64>(...)`. Use it wherever a portable fixed-width 64-bit unsigned integer is needed (cryptographic constants, hash computations, bit manipulation).
 
 Overflow:
 - Fixed-width integers use modular two’s-complement wraparound.
@@ -240,7 +241,7 @@ Overflow:
 
 Conversions:
 - **Explicit casts are narrowing-permissive.** `cast<T>(x)` is a forceful conversion that may truncate/wrap when `T` has smaller range/width. The compiler must not reject explicit narrowing casts solely due to overflow risk. For integer-to-integer casts where target width is N bits, the result is `x mod 2^N`. Signedness is interpreted by the target type after truncation.
-- **Typed literals and `const` declarations are strict.** Typed literals (e.g. `123u`) and `const` declarations enforce exact range validation for the declared type. Out-of-range literals are rejected at compile time. This is separate from cast semantics: `const x: Uint = 184467...u` is rejected if out of range, but `cast<Uint>(large_value)` is allowed truncation per cast rule (once const-expr evaluation supports casts; currently v1 rejects non-literal const initializers).
+- **Typed literals and `const` declarations are strict.** Typed literals (e.g. `123u`, `42u64`) and `const` declarations enforce exact range validation for the declared type. Out-of-range literals are rejected at compile time. This is separate from cast semantics: `const x: Uint = 184467...u` is rejected if out of range, but `cast<Uint>(large_value)` is allowed truncation per cast rule (once const-expr evaluation supports casts; currently v1 rejects non-literal const initializers).
 - **Checked conversions (future).** `std.num` will provide checked conversion APIs (e.g. `to_uint_checked(x: Int) -> Result<Uint, ConversionError>`) that fail on out-of-range instead of truncating.
 - **Diagnostics.** No overflow diagnostic for explicit `cast<T>(...)` narrowing. Diagnostics are emitted for: invalid cast shape/type category, invalid typed literal ranges, and invalid checked conversion calls (when provided).
 - Fixed-width conversions are reserved until the fixed-width primitives are enabled.
@@ -480,6 +481,7 @@ Rules:
 - The initializer must be a **compile-time literal**:
   - `Int`, `Uint`, `Uint64`, `Bool`, `String`, `Float`, `Byte` literals
   - `Uint` literals with `u` suffix: `42u`, `0u`, `4294967295u`
+  - `Uint64` literals with `u64` suffix: `42u64`, `0u64`, `18446744073709551615u64`
   - unary `+` / `-` applied to an integer/float literal
   - `Array<T>` literals where `T` is a scalar type (`Int`/`Uint`/`Uint64`/`Byte`/`Float`/`Bool`) and all elements are compile-time literals; empty arrays are rejected
 - Non-literal expressions (`1 + 2`, calls, indexing, interpolation, etc.) are
@@ -491,6 +493,7 @@ Rules:
   - `Uint`: `[0, 2^W-1]` where W is the target word size (e.g. 64 or 32)
   - `Uint64`: `[0, 2^64-1]`
   - A `u`-suffix literal (e.g. `42u`) is a `Uint`-typed expression and may appear anywhere an expression is valid. Assigning or binding a `u`-suffix literal to an incompatible declared type (e.g. `const x: Int = 42u`) is a type error.
+  - A `u64`-suffix literal (e.g. `42u64`) is a `Uint64`-typed expression. It follows the same rules as `u`-suffix literals but targets the 64-bit unsigned type. `u64` literals may not be used where `Uint` is expected, and vice versa — no implicit coercion between `Uint` and `Uint64`. Unary negation on `u64` literals (e.g. `-1u64`) is a compile-time error (`E-NEG-UNSIGNED`).
 - Const arrays are backed by read-only LLVM globals. Each use site materializes
   a `DriftArrayHeader` pointing at the shared global. `.len` works; mutation is
   not allowed.

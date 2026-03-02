@@ -1,10 +1,20 @@
 module std.crypto
 
+import std.core as core;
+
 export {
 	sha1,
 	sha256,
+	sha384,
+	sha512,
 	hmac_sha256,
-	constant_time_eq
+	hkdf_extract_sha256,
+	hkdf_expand_sha256,
+	hkdf_sha256,
+	chacha20_poly1305_encrypt,
+	chacha20_poly1305_decrypt,
+	constant_time_eq,
+	CryptoError
 };
 
 const U32_MASK: Uint = 4294967295;
@@ -34,6 +44,10 @@ fn _rol32(x: Uint, n: Int) nothrow -> Uint {
 
 fn _u8(b: Byte) nothrow -> Uint {
 	return cast<Uint>(b);
+}
+
+fn _u8_64(b: Byte) nothrow -> Uint64 {
+	return cast<Uint64>(b);
 }
 
 fn _append_u32_be(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
@@ -315,4 +329,602 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	_append_u32_be(&mut out, h3);
 	_append_u32_be(&mut out, h4);
 	return move out;
+}
+
+pub struct CryptoError {
+	pub tag: String,
+	pub errno: Int
+}
+
+implement core.Diagnostic for CryptoError {
+	pub fn to_diag(self: &CryptoError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+const U64_MASK: Uint64 = 255u64;
+
+fn _ror64(x: Uint64, n: Int) nothrow -> Uint64 {
+	val r = x >> cast<Uint64>(n);
+	val l = x << cast<Uint64>(64 - n);
+	return r | l;
+}
+
+fn _append_u64_be(out: &mut Array<Byte>, x: Uint64) nothrow -> Void {
+	out.push(cast<Byte>((x >> 56u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 48u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 40u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 32u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 24u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 16u64) & U64_MASK));
+	out.push(cast<Byte>((x >> 8u64) & U64_MASK));
+	out.push(cast<Byte>(x & U64_MASK));
+}
+
+fn _load_u64_be(data: &Array<Byte>, off: Int) nothrow -> Uint64 {
+	return (_u8_64(data[off]) << 56u64) | (_u8_64(data[off + 1]) << 48u64) | (_u8_64(data[off + 2]) << 40u64) | (_u8_64(data[off + 3]) << 32u64) | (_u8_64(data[off + 4]) << 24u64) | (_u8_64(data[off + 5]) << 16u64) | (_u8_64(data[off + 6]) << 8u64) | _u8_64(data[off + 7]);
+}
+
+// SHA-512 round constants: first 80 primes, cube root fractional parts as u64.
+// Source: FIPS 180-4 section 4.2.3.
+const SHA512_K: Array<Uint64> = [
+	4794697086780616226, 8158064640168781261, 13096744586834688815, 16840607885511220156,
+	4131703408338449720, 6480981068601479193, 10538285296894168987, 12329834152419229976,
+	15566598209576043074, 1334009975649890238, 2608012711638119052, 6128411473006802146,
+	8268148722764581231, 9286055187155687089, 11230858885718282805, 13951009754708518548,
+	16472876342353939154, 17275323862435702243, 1135362057144423861, 2597628984639134821,
+	3308224258029322869, 5365058923640841347, 6679025012923562964, 8573033837759648693,
+	10970295158949994411, 12119686244451234320, 12683024718118986047, 13788192230050041572,
+	14330467153632333762, 15395433587784984357, 489312712824947311, 1452737877330783856,
+	2861767655752347644, 3322285676063803686, 5560940570517711597, 5996557281743188959,
+	7280758554555802590, 8532644243296465576, 9350256976987008742, 10552545826968843579,
+	11727347734174303076, 12113106623233404929, 14000437183269869457, 14369950271660146224,
+	15101387698204529176, 15463397548674623760, 17586052441742319658, 1182934255886127544,
+	1847814050463011016, 2177327727835720531, 2830643537854262169, 3796741975233480872,
+	4115178125766777443, 5681478168544905931, 6601373596472566643, 7507060721942968483,
+	8399075790359081724, 8693463985226723168, 9568029438360202098, 10144078919501101548,
+	10430055236837252648, 11840083180663258601, 13761210420658862357, 14299343276471374635,
+	14566680578165727644, 15097957966210449927, 16922976911328602910, 17689382322260857208,
+	500013540394364858, 748580250866718886, 1242879168328830382, 1977374033974150939,
+	2944078676154940804, 3659926193048069267, 4368137639120453308, 4836135668995329356,
+	5532061633213252278, 6448918945643986474, 6902733635092675308, 7801388544844847127
+];
+
+fn _sha512_core(bytes: &Array<Byte>, iv0: Uint64, iv1: Uint64, iv2: Uint64, iv3: Uint64, iv4: Uint64, iv5: Uint64, iv6: Uint64, iv7: Uint64) nothrow -> Array<Uint64> {
+	var msg = Array<type Byte>::with_capacity(bytes.len + 144);
+	var i = 0;
+	while i < bytes.len {
+		msg.push(bytes[i]);
+		i = i + 1;
+	}
+	val mlen = msg.len;
+	val bit_len = cast<Uint64>(mlen) * 8u64;
+	msg.push(cast<Byte>(128));
+	while msg.len % 128 != 112 {
+		msg.push(cast<Byte>(0));
+	}
+	_append_u64_be(&mut msg, 0u64);
+	_append_u64_be(&mut msg, bit_len);
+
+	var h0 = iv0;
+	var h1 = iv1;
+	var h2 = iv2;
+	var h3 = iv3;
+	var h4 = iv4;
+	var h5 = iv5;
+	var h6 = iv6;
+	var h7 = iv7;
+
+	var chunk = 0;
+	while chunk < msg.len {
+		var w = Array<type Uint64>::with_capacity(80);
+		var t = 0;
+		while t < 80 {
+			w.push(0u64);
+			t = t + 1;
+		}
+		t = 0;
+		while t < 16 {
+			w[t] = _load_u64_be(&msg, chunk + t * 8);
+			t = t + 1;
+		}
+		t = 16;
+		while t < 80 {
+			val s0 = _ror64(w[t - 15], 1) ^ _ror64(w[t - 15], 8) ^ (w[t - 15] >> 7u64);
+			val s1 = _ror64(w[t - 2], 19) ^ _ror64(w[t - 2], 61) ^ (w[t - 2] >> 6u64);
+			w[t] = w[t - 16] + s0 + w[t - 7] + s1;
+			t = t + 1;
+		}
+
+		var a = h0;
+		var b = h1;
+		var c = h2;
+		var d = h3;
+		var e = h4;
+		var f = h5;
+		var g = h6;
+		var hh = h7;
+
+		t = 0;
+		while t < 80 {
+			val sig1 = _ror64(e, 14) ^ _ror64(e, 18) ^ _ror64(e, 41);
+			val ch = (e & f) ^ ((~e) & g);
+			val temp1 = hh + sig1 + ch + SHA512_K[t] + w[t];
+			val sig0 = _ror64(a, 28) ^ _ror64(a, 34) ^ _ror64(a, 39);
+			val maj = (a & b) ^ (a & c) ^ (b & c);
+			val temp2 = sig0 + maj;
+			hh = g;
+			g = f;
+			f = e;
+			e = d + temp1;
+			d = c;
+			c = b;
+			b = a;
+			a = temp1 + temp2;
+			t = t + 1;
+		}
+
+		h0 = h0 + a;
+		h1 = h1 + b;
+		h2 = h2 + c;
+		h3 = h3 + d;
+		h4 = h4 + e;
+		h5 = h5 + f;
+		h6 = h6 + g;
+		h7 = h7 + hh;
+		chunk = chunk + 128;
+	}
+
+	var state = Array<type Uint64>::with_capacity(8);
+	state.push(h0);
+	state.push(h1);
+	state.push(h2);
+	state.push(h3);
+	state.push(h4);
+	state.push(h5);
+	state.push(h6);
+	state.push(h7);
+	return move state;
+}
+
+pub fn sha512(bytes: &Array<Byte>) nothrow -> Array<Byte> {
+	val state = _sha512_core(bytes, 7640891576956012808u64, 13503953896175478587u64, 4354685564936845355u64, 11912009170470909681u64, 5840696475078001361u64, 11170449401992604703u64, 2270897969802886507u64, 6620516959819538809u64);
+	var out = Array<type Byte>::with_capacity(64);
+	var si = 0;
+	while si < 8 {
+		_append_u64_be(&mut out, state[si]);
+		si = si + 1;
+	}
+	return move out;
+}
+
+pub fn sha384(bytes: &Array<Byte>) nothrow -> Array<Byte> {
+	val state = _sha512_core(bytes, 14680500436340154072u64, 7105036623409894663u64, 10473403895298186519u64, 1526699215303891257u64, 7436329637833083697u64, 10282925794625328401u64, 15784041429090275239u64, 5167115440072839076u64);
+	var out = Array<type Byte>::with_capacity(48);
+	var si = 0;
+	while si < 6 {
+		_append_u64_be(&mut out, state[si]);
+		si = si + 1;
+	}
+	return move out;
+}
+
+pub fn hkdf_extract_sha256(salt: &Array<Byte>, ikm: &Array<Byte>) nothrow -> Array<Byte> {
+	if salt.len == 0 {
+		var zero_salt = Array<type Byte>::with_capacity(32);
+		var zi = 0;
+		while zi < 32 {
+			zero_salt.push(cast<Byte>(0));
+			zi = zi + 1;
+		}
+		return hmac_sha256(&zero_salt, ikm);
+	}
+	return hmac_sha256(salt, ikm);
+}
+
+pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothrow -> core.Result<Array<Byte>, CryptoError> {
+	if len < 0 or len > 8160 {
+		return core.Result::Err(CryptoError(tag = "invalid-output-length", errno = 0));
+	}
+	if len == 0 {
+		var empty: Array<Byte> = [];
+		return core.Result::Ok(move empty);
+	}
+	val n = (len + 31) / 32;
+	var okm = Array<type Byte>::with_capacity(len);
+	var prev: Array<Byte> = [];
+	var counter = 1;
+	while counter <= n {
+		var hmac_input = Array<type Byte>::with_capacity(prev.len + info.len + 1);
+		var pi = 0;
+		while pi < prev.len {
+			hmac_input.push(prev[pi]);
+			pi = pi + 1;
+		}
+		var ii = 0;
+		while ii < info.len {
+			hmac_input.push(info[ii]);
+			ii = ii + 1;
+		}
+		hmac_input.push(cast<Byte>(counter));
+		val block = hmac_sha256(prk, &hmac_input);
+		var bi = 0;
+		val remaining = len - okm.len;
+		var take = 32;
+		if remaining < 32 { take = remaining; }
+		while bi < take {
+			okm.push(block[bi]);
+			bi = bi + 1;
+		}
+		prev = move block;
+		counter = counter + 1;
+	}
+	return core.Result::Ok(move okm);
+}
+
+pub fn hkdf_sha256(salt: &Array<Byte>, ikm: &Array<Byte>, info: &Array<Byte>, len: Int) nothrow -> core.Result<Array<Byte>, CryptoError> {
+	val prk = hkdf_extract_sha256(salt, ikm);
+	return hkdf_expand_sha256(&prk, info, len);
+}
+
+fn _load_u32_le(data: &Array<Byte>, off: Int) nothrow -> Uint {
+	return _u8(data[off]) | (_u8(data[off + 1]) << cast<Uint>(8)) | (_u8(data[off + 2]) << cast<Uint>(16)) | (_u8(data[off + 3]) << cast<Uint>(24));
+}
+
+fn _chacha20_quarter_round(s: &mut Array<Uint>, a: Int, b: Int, c: Int, d: Int) nothrow -> Void {
+	s[a] = _u32(s[a] + s[b]); s[d] = _rol32(s[d] ^ s[a], 16);
+	s[c] = _u32(s[c] + s[d]); s[b] = _rol32(s[b] ^ s[c], 12);
+	s[a] = _u32(s[a] + s[b]); s[d] = _rol32(s[d] ^ s[a], 8);
+	s[c] = _u32(s[c] + s[d]); s[b] = _rol32(s[b] ^ s[c], 7);
+}
+
+fn _chacha20_block(key: &Array<Byte>, counter: Uint, nonce: &Array<Byte>) nothrow -> Array<Byte> {
+	var state = Array<type Uint>::with_capacity(16);
+	state.push(cast<Uint>(1634760805)); state.push(cast<Uint>(857760878));
+	state.push(cast<Uint>(2036477234)); state.push(cast<Uint>(1797285236));
+	var ki = 0;
+	while ki < 8 {
+		state.push(_load_u32_le(key, ki * 4));
+		ki = ki + 1;
+	}
+	state.push(counter);
+	state.push(_load_u32_le(nonce, 0));
+	state.push(_load_u32_le(nonce, 4));
+	state.push(_load_u32_le(nonce, 8));
+
+	var working = Array<type Uint>::with_capacity(16);
+	var ci = 0;
+	while ci < 16 {
+		working.push(state[ci]);
+		ci = ci + 1;
+	}
+
+	var round = 0;
+	while round < 10 {
+		_chacha20_quarter_round(&mut working, 0, 4, 8, 12);
+		_chacha20_quarter_round(&mut working, 1, 5, 9, 13);
+		_chacha20_quarter_round(&mut working, 2, 6, 10, 14);
+		_chacha20_quarter_round(&mut working, 3, 7, 11, 15);
+		_chacha20_quarter_round(&mut working, 0, 5, 10, 15);
+		_chacha20_quarter_round(&mut working, 1, 6, 11, 12);
+		_chacha20_quarter_round(&mut working, 2, 7, 8, 13);
+		_chacha20_quarter_round(&mut working, 3, 4, 9, 14);
+		round = round + 1;
+	}
+
+	var out = Array<type Byte>::with_capacity(64);
+	var oi = 0;
+	while oi < 16 {
+		val v = _u32(working[oi] + state[oi]);
+		out.push(cast<Byte>(v & cast<Uint>(255)));
+		out.push(cast<Byte>((v >> cast<Uint>(8)) & cast<Uint>(255)));
+		out.push(cast<Byte>((v >> cast<Uint>(16)) & cast<Uint>(255)));
+		out.push(cast<Byte>((v >> cast<Uint>(24)) & cast<Uint>(255)));
+		oi = oi + 1;
+	}
+	return move out;
+}
+
+fn _chacha20_encrypt(key: &Array<Byte>, initial_counter: Uint, nonce: &Array<Byte>, plaintext: &Array<Byte>) nothrow -> Array<Byte> {
+	var out = Array<type Byte>::with_capacity(plaintext.len);
+	var pos = 0;
+	var counter = initial_counter;
+	while pos < plaintext.len {
+		val block = _chacha20_block(key, counter, nonce);
+		var bi = 0;
+		while bi < 64 and pos < plaintext.len {
+			out.push(cast<Byte>(cast<Uint>(plaintext[pos]) ^ cast<Uint>(block[bi])));
+			bi = bi + 1;
+			pos = pos + 1;
+		}
+		counter = _u32(counter + cast<Uint>(1));
+	}
+	return move out;
+}
+
+// Poly1305 MAC using 26-bit radix limbs.
+// Each accumulator/r limb is <=26 bits, so a*r products fit in <=52 bits,
+// and sums of 5 products stay well under 64 bits.
+// Limb values and final reduction use Uint (32-bit safe); multiply-accumulate
+// products use Uint64 to hold the full intermediate range.
+const LIMB26_MASK: Uint = 67108863u;
+const LIMB26_MASK64: Uint64 = 67108863u64;
+
+fn _poly1305_mac(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> {
+	val t0 = _load_u32_le(key, 0);
+	val t1 = _load_u32_le(key, 4);
+	val t2 = _load_u32_le(key, 8);
+	val t3 = _load_u32_le(key, 12);
+	val r0 = t0 & cast<Uint>(67108863);
+	val r1 = ((t0 >> cast<Uint>(26)) | (t1 << cast<Uint>(6))) & cast<Uint>(67108611);
+	val r2 = ((t1 >> cast<Uint>(20)) | (t2 << cast<Uint>(12))) & cast<Uint>(67092735);
+	val r3 = ((t2 >> cast<Uint>(14)) | (t3 << cast<Uint>(18))) & cast<Uint>(66076671);
+	val r4 = (t3 >> cast<Uint>(8)) & cast<Uint>(1048575);
+	val s1 = r1 * cast<Uint>(5);
+	val s2 = r2 * cast<Uint>(5);
+	val s3 = r3 * cast<Uint>(5);
+	val s4 = r4 * cast<Uint>(5);
+	val pad0 = _load_u32_le(key, 16);
+	val pad1 = _load_u32_le(key, 20);
+	val pad2 = _load_u32_le(key, 24);
+	val pad3 = _load_u32_le(key, 28);
+
+	// Widen r/s limbs to Uint64 for multiply-accumulate.
+	val r0w = cast<Uint64>(r0); val r1w = cast<Uint64>(r1); val r2w = cast<Uint64>(r2); val r3w = cast<Uint64>(r3); val r4w = cast<Uint64>(r4);
+	val s1w = cast<Uint64>(s1); val s2w = cast<Uint64>(s2); val s3w = cast<Uint64>(s3); val s4w = cast<Uint64>(s4);
+
+	var h0: Uint = cast<Uint>(0);
+	var h1: Uint = cast<Uint>(0);
+	var h2: Uint = cast<Uint>(0);
+	var h3: Uint = cast<Uint>(0);
+	var h4: Uint = cast<Uint>(0);
+
+	var pos = 0;
+	while pos < msg.len {
+		var block_len = 16;
+		if msg.len - pos < 16 { block_len = msg.len - pos; }
+		var n0: Uint = cast<Uint>(0);
+		var n1: Uint = cast<Uint>(0);
+		var n2: Uint = cast<Uint>(0);
+		var n3: Uint = cast<Uint>(0);
+		var bi = 0;
+		while bi < block_len {
+			val byte_val = _u8(msg[pos + bi]);
+			val word_idx = bi / 4;
+			val bit_pos = cast<Uint>((bi % 4) * 8);
+			if word_idx == 0 { n0 = n0 | (byte_val << bit_pos); }
+			else { if word_idx == 1 { n1 = n1 | (byte_val << bit_pos); }
+			else { if word_idx == 2 { n2 = n2 | (byte_val << bit_pos); }
+			else { n3 = n3 | (byte_val << bit_pos); } } }
+			bi = bi + 1;
+		}
+		var hibit: Uint = cast<Uint>(0);
+		if block_len == 16 {
+			hibit = cast<Uint>(1);
+		} else {
+			val word_idx = block_len / 4;
+			val bit_pos = cast<Uint>((block_len % 4) * 8);
+			if word_idx == 0 { n0 = n0 | (cast<Uint>(1) << bit_pos); }
+			else { if word_idx == 1 { n1 = n1 | (cast<Uint>(1) << bit_pos); }
+			else { if word_idx == 2 { n2 = n2 | (cast<Uint>(1) << bit_pos); }
+			else { n3 = n3 | (cast<Uint>(1) << bit_pos); } } }
+		}
+		h0 = h0 + (_u32(n0) & LIMB26_MASK);
+		h1 = h1 + (((_u32(n0) >> cast<Uint>(26)) | (_u32(n1) << cast<Uint>(6))) & LIMB26_MASK);
+		h2 = h2 + (((_u32(n1) >> cast<Uint>(20)) | (_u32(n2) << cast<Uint>(12))) & LIMB26_MASK);
+		h3 = h3 + (((_u32(n2) >> cast<Uint>(14)) | (_u32(n3) << cast<Uint>(18))) & LIMB26_MASK);
+		h4 = h4 + ((_u32(n3) >> cast<Uint>(8)) | (hibit << cast<Uint>(24)));
+
+		// Multiply-accumulate in Uint64 to hold up to ~55-bit products.
+		val h0w = cast<Uint64>(h0); val h1w = cast<Uint64>(h1); val h2w = cast<Uint64>(h2); val h3w = cast<Uint64>(h3); val h4w = cast<Uint64>(h4);
+		val d0 = h0w * r0w + h1w * s4w + h2w * s3w + h3w * s2w + h4w * s1w;
+		val d1 = h0w * r1w + h1w * r0w + h2w * s4w + h3w * s3w + h4w * s2w;
+		val d2 = h0w * r2w + h1w * r1w + h2w * r0w + h3w * s4w + h4w * s3w;
+		val d3 = h0w * r3w + h1w * r2w + h2w * r1w + h3w * r0w + h4w * s4w;
+		val d4 = h0w * r4w + h1w * r3w + h2w * r2w + h3w * r1w + h4w * r0w;
+
+		// Carry reduction back to 26-bit limbs (in Uint64, then narrow to Uint).
+		var c64: Uint64 = d0 >> 26u64;
+		h0 = cast<Uint>(d0 & LIMB26_MASK64);
+		val e1 = d1 + c64; c64 = e1 >> 26u64;
+		h1 = cast<Uint>(e1 & LIMB26_MASK64);
+		val e2 = d2 + c64; c64 = e2 >> 26u64;
+		h2 = cast<Uint>(e2 & LIMB26_MASK64);
+		val e3 = d3 + c64; c64 = e3 >> 26u64;
+		h3 = cast<Uint>(e3 & LIMB26_MASK64);
+		val e4 = d4 + c64; c64 = e4 >> 26u64;
+		h4 = cast<Uint>(e4 & LIMB26_MASK64);
+		h0 = h0 + cast<Uint>(c64) * cast<Uint>(5);
+		var c: Uint = h0 >> cast<Uint>(26);
+		h0 = h0 & LIMB26_MASK;
+		h1 = h1 + c;
+
+		pos = pos + 16;
+	}
+
+	var fc: Uint = h1 >> cast<Uint>(26);
+	h1 = h1 & LIMB26_MASK;
+	h2 = h2 + fc;
+	fc = h2 >> cast<Uint>(26);
+	h2 = h2 & LIMB26_MASK;
+	h3 = h3 + fc;
+	fc = h3 >> cast<Uint>(26);
+	h3 = h3 & LIMB26_MASK;
+	h4 = h4 + fc;
+	fc = h4 >> cast<Uint>(26);
+	h4 = h4 & LIMB26_MASK;
+	h0 = h0 + fc * cast<Uint>(5);
+	fc = h0 >> cast<Uint>(26);
+	h0 = h0 & LIMB26_MASK;
+	h1 = h1 + fc;
+
+	var g0 = h0 + cast<Uint>(5);
+	fc = g0 >> cast<Uint>(26);
+	g0 = g0 & LIMB26_MASK;
+	var g1 = h1 + fc;
+	fc = g1 >> cast<Uint>(26);
+	g1 = g1 & LIMB26_MASK;
+	var g2 = h2 + fc;
+	fc = g2 >> cast<Uint>(26);
+	g2 = g2 & LIMB26_MASK;
+	var g3 = h3 + fc;
+	fc = g3 >> cast<Uint>(26);
+	g3 = g3 & LIMB26_MASK;
+	var g4 = h4 + fc;
+	if (g4 >> cast<Uint>(26)) > cast<Uint>(0) {
+		h0 = g0;
+		h1 = g1;
+		h2 = g2;
+		h3 = g3;
+		h4 = g4 & LIMB26_MASK;
+	}
+
+	// Final addition with pad uses Uint64 for the carry chain across 32-bit words.
+	val f0 = cast<Uint64>((h0 | (h1 << cast<Uint>(26))) & U32_MASK);
+	val f1 = cast<Uint64>(((h1 >> cast<Uint>(6)) | (h2 << cast<Uint>(20))) & U32_MASK);
+	val f2 = cast<Uint64>(((h2 >> cast<Uint>(12)) | (h3 << cast<Uint>(14))) & U32_MASK);
+	val f3 = cast<Uint64>(((h3 >> cast<Uint>(18)) | (h4 << cast<Uint>(8))) & U32_MASK);
+
+	var acc0: Uint64 = f0 + cast<Uint64>(_u32(pad0));
+	val acc0c: Uint64 = acc0 >> 32u64;
+	var acc1: Uint64 = f1 + cast<Uint64>(_u32(pad1)) + acc0c;
+	val acc1c: Uint64 = acc1 >> 32u64;
+	var acc2: Uint64 = f2 + cast<Uint64>(_u32(pad2)) + acc1c;
+	val acc2c: Uint64 = acc2 >> 32u64;
+	var acc3: Uint64 = f3 + cast<Uint64>(_u32(pad3)) + acc2c;
+
+	var tag = Array<type Byte>::with_capacity(16);
+	tag.push(cast<Byte>(acc0 & 255u64));
+	tag.push(cast<Byte>((acc0 >> 8u64) & 255u64));
+	tag.push(cast<Byte>((acc0 >> 16u64) & 255u64));
+	tag.push(cast<Byte>((acc0 >> 24u64) & 255u64));
+	tag.push(cast<Byte>(acc1 & 255u64));
+	tag.push(cast<Byte>((acc1 >> 8u64) & 255u64));
+	tag.push(cast<Byte>((acc1 >> 16u64) & 255u64));
+	tag.push(cast<Byte>((acc1 >> 24u64) & 255u64));
+	tag.push(cast<Byte>(acc2 & 255u64));
+	tag.push(cast<Byte>((acc2 >> 8u64) & 255u64));
+	tag.push(cast<Byte>((acc2 >> 16u64) & 255u64));
+	tag.push(cast<Byte>((acc2 >> 24u64) & 255u64));
+	tag.push(cast<Byte>(acc3 & 255u64));
+	tag.push(cast<Byte>((acc3 >> 8u64) & 255u64));
+	tag.push(cast<Byte>((acc3 >> 16u64) & 255u64));
+	tag.push(cast<Byte>((acc3 >> 24u64) & 255u64));
+	return move tag;
+}
+
+fn _pad16(out: &mut Array<Byte>, len: Int) nothrow -> Void {
+	val rem = len % 16;
+	if rem != 0 {
+		var pi = 0;
+		while pi < 16 - rem {
+			out.push(cast<Byte>(0));
+			pi = pi + 1;
+		}
+	}
+}
+
+fn _append_u64_le(out: &mut Array<Byte>, v: Uint64) nothrow -> Void {
+	out.push(cast<Byte>(v & U64_MASK));
+	out.push(cast<Byte>((v >> 8u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 16u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 24u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 32u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 40u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 48u64) & U64_MASK));
+	out.push(cast<Byte>((v >> 56u64) & U64_MASK));
+}
+
+fn _poly1305_construct_data(aad: &Array<Byte>, ciphertext: &Array<Byte>) nothrow -> Array<Byte> {
+	var mac_data = Array<type Byte>::with_capacity(aad.len + 16 + ciphertext.len + 16 + 16);
+	var ai = 0;
+	while ai < aad.len {
+		mac_data.push(aad[ai]);
+		ai = ai + 1;
+	}
+	_pad16(&mut mac_data, aad.len);
+	var ci = 0;
+	while ci < ciphertext.len {
+		mac_data.push(ciphertext[ci]);
+		ci = ci + 1;
+	}
+	_pad16(&mut mac_data, ciphertext.len);
+	_append_u64_le(&mut mac_data, cast<Uint64>(aad.len));
+	_append_u64_le(&mut mac_data, cast<Uint64>(ciphertext.len));
+
+	return move mac_data;
+}
+
+pub fn chacha20_poly1305_encrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &Array<Byte>, plaintext: &Array<Byte>) nothrow -> core.Result<Array<Byte>, CryptoError> {
+	if key.len != 32 {
+		return core.Result::Err(CryptoError(tag = "invalid-key-length", errno = 0));
+	}
+	if nonce.len != 12 {
+		return core.Result::Err(CryptoError(tag = "invalid-nonce-length", errno = 0));
+	}
+	val poly_key_block = _chacha20_block(key, cast<Uint>(0), nonce);
+	var poly_key = Array<type Byte>::with_capacity(32);
+	var pki = 0;
+	while pki < 32 {
+		poly_key.push(poly_key_block[pki]);
+		pki = pki + 1;
+	}
+	val ciphertext = _chacha20_encrypt(key, cast<Uint>(1), nonce, plaintext);
+	val mac_data = _poly1305_construct_data(aad, &ciphertext);
+	val tag = _poly1305_mac(&poly_key, &mac_data);
+
+	var out = Array<type Byte>::with_capacity(ciphertext.len + 16);
+	var ci = 0;
+	while ci < ciphertext.len {
+		out.push(ciphertext[ci]);
+		ci = ci + 1;
+	}
+	var ti = 0;
+	while ti < 16 {
+		out.push(tag[ti]);
+		ti = ti + 1;
+	}
+	return core.Result::Ok(move out);
+}
+
+pub fn chacha20_poly1305_decrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &Array<Byte>, ciphertext_and_tag: &Array<Byte>) nothrow -> core.Result<Array<Byte>, CryptoError> {
+	if key.len != 32 {
+		return core.Result::Err(CryptoError(tag = "invalid-key-length", errno = 0));
+	}
+	if nonce.len != 12 {
+		return core.Result::Err(CryptoError(tag = "invalid-nonce-length", errno = 0));
+	}
+	if ciphertext_and_tag.len < 16 {
+		return core.Result::Err(CryptoError(tag = "auth-failed", errno = 0));
+	}
+	val ct_len = ciphertext_and_tag.len - 16;
+	var ciphertext = Array<type Byte>::with_capacity(ct_len);
+	var ci = 0;
+	while ci < ct_len {
+		ciphertext.push(ciphertext_and_tag[ci]);
+		ci = ci + 1;
+	}
+	var received_tag = Array<type Byte>::with_capacity(16);
+	var ri = 0;
+	while ri < 16 {
+		received_tag.push(ciphertext_and_tag[ct_len + ri]);
+		ri = ri + 1;
+	}
+
+	val poly_key_block = _chacha20_block(key, cast<Uint>(0), nonce);
+	var poly_key = Array<type Byte>::with_capacity(32);
+	var pki = 0;
+	while pki < 32 {
+		poly_key.push(poly_key_block[pki]);
+		pki = pki + 1;
+	}
+	val mac_data = _poly1305_construct_data(aad, &ciphertext);
+	val computed_tag = _poly1305_mac(&poly_key, &mac_data);
+
+	if !constant_time_eq(&computed_tag, &received_tag) {
+		return core.Result::Err(CryptoError(tag = "auth-failed", errno = 0));
+	}
+
+	val plaintext = _chacha20_encrypt(key, cast<Uint>(1), nonce, &ciphertext);
+	return core.Result::Ok(move plaintext);
 }

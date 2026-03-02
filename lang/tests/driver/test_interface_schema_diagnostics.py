@@ -19,7 +19,7 @@ def test_driver_reports_interface_schema_fixed_width_diagnostic():
 				params=[
 					InterfaceParamSchema(name="value", type_expr=GenericTypeExpr(name="Int", args=[]))
 				],
-				return_type=GenericTypeExpr(name="Uint64", args=[]),
+				return_type=GenericTypeExpr(name="Int64", args=[]),
 			)
 		],
 	)

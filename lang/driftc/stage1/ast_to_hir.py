@@ -274,6 +274,10 @@ class AstToHIR:
 		loc = self._as_span(getattr(expr, "loc", None))
 		return H.HLiteralUint(value=int(expr.value), loc=loc)
 
+	def _visit_expr_Uint64Literal(self, expr: ast.Uint64Literal) -> H.HExpr:
+		loc = self._as_span(getattr(expr, "loc", None))
+		return H.HLiteralUint64(value=int(expr.value), loc=loc)
+
 	def _as_span(self, loc: object | None) -> Span:
 		"""
 		Best-effort location normalization for HIR nodes.

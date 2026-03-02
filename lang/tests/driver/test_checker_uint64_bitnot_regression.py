@@ -7,7 +7,8 @@ from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 
 
-def test_checker_uint64_bitnot_reports_user_diagnostic_not_internal(tmp_path: Path) -> None:
+def test_uint64_bitnot_compiles_and_emits_i64(tmp_path: Path) -> None:
+	"""Uint64 bitwise NOT compiles in ordinary user code and emits i64 ops."""
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
@@ -31,7 +32,7 @@ fn main() nothrow -> Int {
 	)
 	assert diagnostics == []
 	func_hirs, signatures, _ = flatten_modules(modules)
-	_ir, checked = compile_to_llvm_ir_for_tests(
+	ir, checked = compile_to_llvm_ir_for_tests(
 		func_hirs=func_hirs,
 		signatures=signatures,
 		exc_env=exception_catalog,
@@ -41,5 +42,7 @@ fn main() nothrow -> Int {
 		module_deps=module_deps,
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
-	assert any("bitwise operators require Uint operands" in (d.message or "") for d in errors), errors
-	assert not any((d.message or "").startswith("internal:") for d in errors), errors
+	assert errors == [], f"expected no errors, got {errors}"
+	assert ir is not None, "expected IR output"
+	# Verify the BIT_NOT actually operates on i64, not silently falling back to i-word-width.
+	assert "xor i64" in ir, f"expected 'xor i64' in IR for Uint64 bitnot, IR snippet: {ir[:2000]}"

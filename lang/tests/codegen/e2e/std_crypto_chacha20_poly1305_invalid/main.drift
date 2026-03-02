@@ -1,0 +1,143 @@
+module m
+
+import std.core as core;
+import std.crypto as crypto;
+import std.codec as codec;
+
+fn _push_ascii(out: &mut Array<Byte>, s: &String) nothrow -> Void {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+}
+
+fn _hex_bytes(hex: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	val r = codec.hex_decode(hex);
+	match r {
+		core.Result::Ok(bytes) => {
+			var i = 0;
+			while i < bytes.len {
+				out.push(bytes[i]);
+				i = i + 1;
+			}
+		},
+		core.Result::Err(_) => { }
+	}
+	return move out;
+}
+
+pub fn main() nothrow -> Int {
+	var good_key: Array<Byte> = [];
+	var ki = 0;
+	while ki < 32 { good_key.push(cast<Byte>(0)); ki = ki + 1; }
+	var good_nonce: Array<Byte> = [];
+	var ni = 0;
+	while ni < 12 { good_nonce.push(cast<Byte>(0)); ni = ni + 1; }
+	var empty: Array<Byte> = [];
+	var hello: Array<Byte> = [];
+	_push_ascii(&mut hello, "hello");
+
+	// 1. Invalid key length (encrypt) — too short
+	var short_key: Array<Byte> = [];
+	var si = 0;
+	while si < 16 { short_key.push(cast<Byte>(0)); si = si + 1; }
+	val r1 = crypto.chacha20_poly1305_encrypt(&short_key, &good_nonce, &empty, &hello);
+	match r1 {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-key-length" { return 2; }
+		}
+	}
+
+	// 2. Invalid key length (decrypt)
+	val r2 = crypto.chacha20_poly1305_decrypt(&short_key, &good_nonce, &empty, &hello);
+	match r2 {
+		core.Result::Ok(_) => { return 3; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-key-length" { return 4; }
+		}
+	}
+
+	// 3. Invalid nonce length (encrypt)
+	var short_nonce: Array<Byte> = [];
+	si = 0;
+	while si < 8 { short_nonce.push(cast<Byte>(0)); si = si + 1; }
+	val r3 = crypto.chacha20_poly1305_encrypt(&good_key, &short_nonce, &empty, &hello);
+	match r3 {
+		core.Result::Ok(_) => { return 5; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-nonce-length" { return 6; }
+		}
+	}
+
+	// 4. Invalid nonce length (decrypt)
+	val r4 = crypto.chacha20_poly1305_decrypt(&good_key, &short_nonce, &empty, &hello);
+	match r4 {
+		core.Result::Ok(_) => { return 7; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-nonce-length" { return 8; }
+		}
+	}
+
+	// 5. Auth failure: tampered ciphertext
+	val ct_good = _hex_bytes("f7628bd23adce962340b6fd6a0a4d1fe736f29456f");
+	var ct_tampered: Array<Byte> = [];
+	var ti = 0;
+	while ti < ct_good.len {
+		ct_tampered.push(ct_good[ti]);
+		ti = ti + 1;
+	}
+	ct_tampered[0] = cast<Byte>(cast<Uint>(ct_tampered[0]) ^ cast<Uint>(1));
+	val r5 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &empty, &ct_tampered);
+	match r5 {
+		core.Result::Ok(_) => { return 9; },
+		core.Result::Err(e) => {
+			if e.tag != "auth-failed" { return 10; }
+		}
+	}
+
+	// 6. Auth failure: tampered tag
+	var ct_bad_tag: Array<Byte> = [];
+	ti = 0;
+	while ti < ct_good.len {
+		ct_bad_tag.push(ct_good[ti]);
+		ti = ti + 1;
+	}
+	val last_idx = ct_bad_tag.len - 1;
+	ct_bad_tag[last_idx] = cast<Byte>(cast<Uint>(ct_bad_tag[last_idx]) ^ cast<Uint>(1));
+	val r6 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &empty, &ct_bad_tag);
+	match r6 {
+		core.Result::Ok(_) => { return 11; },
+		core.Result::Err(e) => {
+			if e.tag != "auth-failed" { return 12; }
+		}
+	}
+
+	// 7. Ciphertext too short (< 16 bytes)
+	var too_short: Array<Byte> = [];
+	si = 0;
+	while si < 15 { too_short.push(cast<Byte>(0)); si = si + 1; }
+	val r7 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &empty, &too_short);
+	match r7 {
+		core.Result::Ok(_) => { return 13; },
+		core.Result::Err(e) => {
+			if e.tag != "auth-failed" { return 14; }
+		}
+	}
+
+	// 8. Wrong AAD causes auth failure
+	var wrong_aad: Array<Byte> = [];
+	wrong_aad.push(cast<Byte>(99));
+	val r8 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &wrong_aad, &ct_good);
+	match r8 {
+		core.Result::Ok(_) => { return 15; },
+		core.Result::Err(e) => {
+			if e.tag != "auth-failed" { return 16; }
+		}
+	}
+
+	return 0;
+}

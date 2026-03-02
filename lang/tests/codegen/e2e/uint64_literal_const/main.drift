@@ -1,0 +1,22 @@
+module m
+
+const SHIFT_AMT: Uint64 = 8u64;
+const MASK_BYTE: Uint64 = 255u64;
+const VALS: Array<Uint64> = [1u64, 2u64, 4u64];
+
+fn main() nothrow -> Int {
+	// Use const in expression
+	var x: Uint64 = 1u64 << SHIFT_AMT;
+	if x != 256u64 { return 1; }
+
+	// Const mask
+	var y: Uint64 = 511u64 & MASK_BYTE;
+	if y != 255u64 { return 2; }
+
+	// Const array element access
+	if VALS[0] != 1u64 { return 3; }
+	if VALS[1] != 2u64 { return 4; }
+	if VALS[2] != 4u64 { return 5; }
+
+	return 0;
+}

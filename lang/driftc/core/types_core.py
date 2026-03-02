@@ -2504,6 +2504,7 @@ __all__ = [
 	"VariantArmInstance",
 	"VariantInstance",
 	"UintConst",
+	"Uint64Const",
 	"validate_const_value",
 ]
 
@@ -2514,6 +2515,18 @@ class UintConst:
 	When _eval_const_value / _eval_hir_const_value encounters a u-suffixed
 	literal, it wraps the raw int so that downstream validation can
 	distinguish `42u` (Uint) from `42` (Int).
+	"""
+	__slots__ = ('value',)
+	def __init__(self, v: int):
+		self.value = v
+
+
+class Uint64Const:
+	"""Tagged wrapper preserving Uint64 origin through const evaluation.
+
+	When _eval_const_value / _eval_hir_const_value encounters a u64-suffixed
+	literal, it wraps the raw int so that downstream validation can
+	distinguish `42u64` (Uint64) from `42` (Int) and `42u` (Uint).
 	"""
 	__slots__ = ('value',)
 	def __init__(self, v: int):
@@ -2534,14 +2547,14 @@ def validate_const_value(tt: "TypeTable", name: str, decl_ty: TypeId, val: objec
 		ok = True
 	elif decl_ty == tt.ensure_int() and isinstance(val, int) and not isinstance(val, bool):
 		ok = True
-	elif decl_ty == tt.ensure_uint() and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, UintConst)):
+	elif decl_ty == tt.ensure_uint() and not isinstance(val, Uint64Const) and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, UintConst)):
 		if isinstance(val, UintConst):
 			val = val.value
 		if val > tt.uint_max:
 			return (False, val, f"const '{name}' Uint literal out of range [0, 2^{tt.word_bits}-1]")
 		ok = True
-	elif decl_ty == tt.ensure_uint64() and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, UintConst)):
-		if isinstance(val, UintConst):
+	elif decl_ty == tt.ensure_uint64() and ((isinstance(val, int) and not isinstance(val, bool) and val >= 0) or isinstance(val, (UintConst, Uint64Const))):
+		if isinstance(val, (UintConst, Uint64Const)):
 			val = val.value
 		if val > 0xFFFFFFFFFFFFFFFF:
 			return (False, val, f"const '{name}' Uint64 literal out of range [0, 2^64-1]")
@@ -2565,13 +2578,13 @@ def validate_const_value(tt: "TypeTable", name: str, decl_ty: TypeId, val: objec
 		for i, ev in enumerate(val):
 			if elem_ty == tt.ensure_int() and isinstance(ev, int) and not isinstance(ev, bool):
 				pass
-			elif elem_ty == tt.ensure_uint() and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, UintConst)):
+			elif elem_ty == tt.ensure_uint() and not isinstance(ev, Uint64Const) and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, UintConst)):
 				raw = ev.value if isinstance(ev, UintConst) else ev
 				if raw > tt.uint_max:
 					return (False, val, f"const '{name}' declared type does not match initializer value")
 				val[i] = raw
-			elif elem_ty == tt.ensure_uint64() and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, UintConst)):
-				raw = ev.value if isinstance(ev, UintConst) else ev
+			elif elem_ty == tt.ensure_uint64() and ((isinstance(ev, int) and not isinstance(ev, bool) and ev >= 0) or isinstance(ev, (UintConst, Uint64Const))):
+				raw = ev.value if isinstance(ev, (UintConst, Uint64Const)) else ev
 				if raw > 0xFFFFFFFFFFFFFFFF:
 					return (False, val, f"const '{name}' declared type does not match initializer value")
 				val[i] = raw

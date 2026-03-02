@@ -1,0 +1,7 @@
+module m
+
+fn main() nothrow -> Int {
+	var a: Uint = 1u;
+	var b: Uint64 = 1u64;
+	return cast<Int>(a + b);
+}

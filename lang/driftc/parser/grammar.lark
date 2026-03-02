@@ -11,6 +11,7 @@ INT: /[0-9]+/
 // Unsigned integer literal with 'u' suffix: `42u`, `0u`, `1116352408u`.
 // Priority 2 ensures the lexer matches `42u` as UINT_LIT before INT
 // can consume the digits and NAME can consume the trailing `u`.
+UINT64_LIT.3: /[0-9]+u64/
 UINT_LIT.2: /[0-9]+u/
 // Float literals: decimal only, digits on both sides of '.', optional exponent.
 // Important: float literals never include a leading sign; unary '-' is parsed separately.
@@ -557,6 +558,7 @@ call_arg: NAME EQUAL expr -> kwarg
         | expr
 
 literal: FLOAT        -> float_lit
+       | UINT64_LIT   -> uint64_lit
        | UINT_LIT     -> uint_lit
        | INT          -> int_lit
        | STRING       -> str_lit

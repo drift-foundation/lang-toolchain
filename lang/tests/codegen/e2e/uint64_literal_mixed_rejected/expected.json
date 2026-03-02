@@ -1,0 +1,10 @@
+{
+  "description": "e2e: mixed Uint + Uint64 arithmetic rejected",
+  "diagnostics": [
+    {
+      "message_contains": "arithmetic operators require matching"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

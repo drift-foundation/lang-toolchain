@@ -87,6 +87,7 @@ from .ast import (
     UnsafeExpr,
     Unary,
     UintLiteral,
+    Uint64Literal,
     FString,
     FStringHole,
     VariantDef,
@@ -2613,6 +2614,9 @@ def _build_expr(node) -> Expr:
         return Name(loc=_loc(node), ident=ident_token.value)
     if name == "placeholder":
         return Placeholder(loc=_loc(node))
+    if name == "uint64_lit":
+        raw = node.children[0].value
+        return Uint64Literal(loc=_loc(node), value=int(raw[:-3]))
     if name == "uint_lit":
         raw = node.children[0].value
         return UintLiteral(loc=_loc(node), value=int(raw[:-1]))

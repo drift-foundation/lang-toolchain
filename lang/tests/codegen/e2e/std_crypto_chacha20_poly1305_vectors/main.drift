@@ -1,0 +1,129 @@
+module m
+
+import std.core as core;
+import std.crypto as crypto;
+import std.codec as codec;
+
+fn _hex_bytes(hex: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	val r = codec.hex_decode(hex);
+	match r {
+		core.Result::Ok(bytes) => {
+			var i = 0;
+			while i < bytes.len {
+				out.push(bytes[i]);
+				i = i + 1;
+			}
+		},
+		core.Result::Err(_) => { }
+	}
+	return move out;
+}
+
+fn _push_ascii(out: &mut Array<Byte>, s: &String) nothrow -> Void {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	// 1. Encrypt with zero key, "hello" plaintext, no AAD
+	var zero_key: Array<Byte> = [];
+	var zi = 0;
+	while zi < 32 { zero_key.push(cast<Byte>(0)); zi = zi + 1; }
+	var zero_nonce: Array<Byte> = [];
+	zi = 0;
+	while zi < 12 { zero_nonce.push(cast<Byte>(0)); zi = zi + 1; }
+	var empty_aad: Array<Byte> = [];
+	var hello: Array<Byte> = [];
+	_push_ascii(&mut hello, "hello");
+
+	val r1 = crypto.chacha20_poly1305_encrypt(&zero_key, &zero_nonce, &empty_aad, &hello);
+	match r1 {
+		core.Result::Ok(ct) => {
+			if ct.len != 21 { return 1; }
+			if codec.hex_encode(&ct) != "f7628bd23adce962340b6fd6a0a4d1fe736f29456f" { return 2; }
+		},
+		core.Result::Err(_) => { return 3; }
+	}
+
+	// 2. Decrypt the ciphertext back
+	val ct1 = _hex_bytes("f7628bd23adce962340b6fd6a0a4d1fe736f29456f");
+	val r2 = crypto.chacha20_poly1305_decrypt(&zero_key, &zero_nonce, &empty_aad, &ct1);
+	match r2 {
+		core.Result::Ok(pt) => {
+			if pt.len != 5 { return 4; }
+			var expected: Array<Byte> = [];
+			_push_ascii(&mut expected, "hello");
+			if !crypto.constant_time_eq(&pt, &expected) { return 5; }
+		},
+		core.Result::Err(_) => { return 6; }
+	}
+
+	// 3. Encrypt with AAD
+	var key3: Array<Byte> = [];
+	var i3 = 0;
+	while i3 < 32 { key3.push(cast<Byte>(i3)); i3 = i3 + 1; }
+	var nonce3: Array<Byte> = [];
+	i3 = 0;
+	while i3 < 12 { nonce3.push(cast<Byte>(i3)); i3 = i3 + 1; }
+	val aad3 = _hex_bytes("50515253");
+	val pt3 = _hex_bytes("0102030405");
+
+	val r3 = crypto.chacha20_poly1305_encrypt(&key3, &nonce3, &aad3, &pt3);
+	match r3 {
+		core.Result::Ok(ct) => {
+			if ct.len != 21 { return 7; }
+			if codec.hex_encode(&ct) != "88f90b042c7a2b9bb12d6f257a08c2899e0285cb01" { return 8; }
+		},
+		core.Result::Err(_) => { return 9; }
+	}
+
+	// 4. Decrypt with AAD
+	val ct3_bytes = _hex_bytes("88f90b042c7a2b9bb12d6f257a08c2899e0285cb01");
+	val r4 = crypto.chacha20_poly1305_decrypt(&key3, &nonce3, &aad3, &ct3_bytes);
+	match r4 {
+		core.Result::Ok(pt) => {
+			if !crypto.constant_time_eq(&pt, &pt3) { return 10; }
+		},
+		core.Result::Err(_) => { return 11; }
+	}
+
+	// 5. Empty plaintext
+	val r5 = crypto.chacha20_poly1305_encrypt(&zero_key, &zero_nonce, &empty_aad, &empty_aad);
+	match r5 {
+		core.Result::Ok(ct) => {
+			if ct.len != 16 { return 12; }
+			if codec.hex_encode(&ct) != "4eb972c9a8fb3a1b382bb4d36f5ffad1" { return 13; }
+		},
+		core.Result::Err(_) => { return 14; }
+	}
+
+	// 6. Decrypt empty ciphertext (tag only)
+	val ct5 = _hex_bytes("4eb972c9a8fb3a1b382bb4d36f5ffad1");
+	val r6 = crypto.chacha20_poly1305_decrypt(&zero_key, &zero_nonce, &empty_aad, &ct5);
+	match r6 {
+		core.Result::Ok(pt) => {
+			if pt.len != 0 { return 15; }
+		},
+		core.Result::Err(_) => { return 16; }
+	}
+
+	// 7. Determinism: encrypt same inputs twice
+	val r7 = crypto.chacha20_poly1305_encrypt(&zero_key, &zero_nonce, &empty_aad, &hello);
+	match r7 {
+		core.Result::Ok(ct) => {
+			if codec.hex_encode(&ct) != "f7628bd23adce962340b6fd6a0a4d1fe736f29456f" { return 17; }
+		},
+		core.Result::Err(_) => { return 18; }
+	}
+
+	// 8. Non-mutation: inputs unchanged after encrypt
+	if hello.len != 5 { return 19; }
+	if zero_key.len != 32 { return 20; }
+
+	return 0;
+}

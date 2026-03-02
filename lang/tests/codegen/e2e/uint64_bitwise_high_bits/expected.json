@@ -1,0 +1,6 @@
+{
+  "description": "e2e: uint64 bitwise upper-32-bit correctness in user code",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

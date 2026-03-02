@@ -223,7 +223,7 @@ class BorrowMaterializeRewriter:
 			return [], expr
 		if hasattr(H, "HQualifiedMember") and isinstance(expr, getattr(H, "HQualifiedMember")):
 			return [], expr
-		if isinstance(expr, (H.HLiteralInt, H.HLiteralUint, H.HLiteralFloat, H.HLiteralString, H.HLiteralBool)):
+		if isinstance(expr, (H.HLiteralInt, H.HLiteralUint, H.HLiteralUint64, H.HLiteralFloat, H.HLiteralString, H.HLiteralBool)):
 			return [], expr
 		if isinstance(expr, H.HCall):
 			pfx_fn, fn = self._rewrite_expr(expr.fn)

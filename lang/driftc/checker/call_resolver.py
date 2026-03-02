@@ -43,8 +43,8 @@ FIXED_WIDTH_TYPE_NAMES = {
 	"Uint8",
 	"Uint16",
 	"Uint32",
-	"Uint64",
-	"u64",
+	# Uint64/u64 deliberately excluded: available in user code for portable
+	# 64-bit unsigned arithmetic (crypto, hashing, bit manipulation).
 	"F32",
 	"F64",
 	"Float32",

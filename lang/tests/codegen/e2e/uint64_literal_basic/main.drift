@@ -1,0 +1,44 @@
+module m
+
+fn main() nothrow -> Int {
+	var a: Uint64 = 0u64;
+	var b: Uint64 = 1u64;
+	var c: Uint64 = 255u64;
+
+	// Arithmetic
+	var sum: Uint64 = b + c;
+	if sum != 256u64 { return 1; }
+	var prod: Uint64 = c * 2u64;
+	if prod != 510u64 { return 2; }
+
+	// Bitwise AND
+	var r1: Uint64 = c & 15u64;
+	if r1 != 15u64 { return 3; }
+
+	// Bitwise OR
+	var r2: Uint64 = 15u64 | 240u64;
+	if r2 != 255u64 { return 4; }
+
+	// Bitwise XOR
+	var r3: Uint64 = c ^ c;
+	if r3 != 0u64 { return 5; }
+
+	// Bitwise NOT
+	var all_ones: Uint64 = ~a;
+	var low: Uint64 = all_ones & 255u64;
+	if low != 255u64 { return 6; }
+
+	// Shift left/right
+	var r4: Uint64 = 1u64 << 10u64;
+	if r4 != 1024u64 { return 7; }
+	var r5: Uint64 = r4 >> 10u64;
+	if r5 != 1u64 { return 8; }
+
+	// Comparison
+	if 1u64 == 2u64 { return 9; }
+	if 1u64 != 1u64 { return 10; }
+	if 2u64 < 1u64 { return 11; }
+	if 1u64 > 2u64 { return 12; }
+
+	return 0;
+}

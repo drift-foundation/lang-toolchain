@@ -1171,6 +1171,12 @@ class HIRToMIR:
 		self._local_types[dest] = self._uint_type
 		return dest
 
+	def _visit_expr_HLiteralUint64(self, expr) -> M.ValueId:
+		dest = self.b.new_temp()
+		self.b.emit(M.ConstUint64(dest=dest, value=expr.value))
+		self._local_types[dest] = self._uint64_type
+		return dest
+
 	def _visit_expr_HLiteralFloat(self, expr: H.HLiteralFloat) -> M.ValueId:
 		"""
 		Lower a Float literal.
@@ -6416,6 +6422,8 @@ class HIRToMIR:
 
 		if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
 			return self._uint_type
+		if hasattr(H, "HLiteralUint64") and isinstance(expr, getattr(H, "HLiteralUint64")):
+			return self._uint64_type
 		if isinstance(expr, H.HLiteralInt):
 			known = None
 			if self._expr_types and self._typed_mode != "none":
@@ -6429,6 +6437,8 @@ class HIRToMIR:
 			return self._int_type
 		if hasattr(H, "HLiteralUint") and isinstance(expr, H.HLiteralUint):
 			return self._uint_type
+		if hasattr(H, "HLiteralUint64") and isinstance(expr, H.HLiteralUint64):
+			return self._uint64_type
 		if isinstance(expr, H.HCast):
 			if self._expr_types and self._typed_mode != "none":
 				known = self._expr_types.get(expr.node_id)
@@ -6634,7 +6644,7 @@ class HIRToMIR:
 			if expr.op is H.UnaryOp.NEG:
 				return inner if inner in (self._int_type, self._float_type) else None
 			if expr.op is H.UnaryOp.BIT_NOT:
-				return inner if inner == self._uint_type else None
+				return inner if inner in (self._uint_type, self._uint64_type) else None
 		if isinstance(expr, H.HBinary):
 			# Minimal numeric/boolean inference to support:
 			#   - materialized temporaries (`val tmp = 1 + 2; &tmp`)
@@ -6656,7 +6666,7 @@ class HIRToMIR:
 				H.BinaryOp.SHL,
 				H.BinaryOp.SHR,
 			):
-				if left == right and left in (self._int_type, self._float_type, self._uint_type):
+				if left == right and left in (self._int_type, self._float_type, self._uint_type, self._uint64_type):
 					return left
 				return None
 			# Comparisons return Bool when both sides are comparable scalars.

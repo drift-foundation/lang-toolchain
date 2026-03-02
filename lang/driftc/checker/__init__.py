@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 	from lang.driftc import stage1 as H
 
 
-from lang.driftc.core.types_core import UintConst as _UintConst, validate_const_value as _validate_const
+from lang.driftc.core.types_core import UintConst as _UintConst, Uint64Const as _Uint64Const, validate_const_value as _validate_const
 
 def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
 	"""Extract a compile-time literal value from an HIR expression, or None.
@@ -65,6 +65,8 @@ def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
 		return expr.value
 	if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
 		return _UintConst(expr.value)
+	if hasattr(H, "HLiteralUint64") and isinstance(expr, getattr(H, "HLiteralUint64")):
+		return _Uint64Const(expr.value)
 	if isinstance(expr, H.HUnary) and expr.op == H.UnaryOp.NEG:
 		inner = expr.expr
 		if isinstance(inner, H.HLiteralInt):
@@ -1284,6 +1286,8 @@ class Checker:
 				return checker._int_type
 			if hasattr(H, "HLiteralUint") and isinstance(expr, getattr(H, "HLiteralUint")):
 				return checker._uint_type
+			if hasattr(H, "HLiteralUint64") and isinstance(expr, getattr(H, "HLiteralUint64")):
+				return checker._uint64_type
 			if hasattr(H, "HLiteralFloat") and isinstance(expr, getattr(H, "HLiteralFloat")):
 				return checker._float_type
 			if isinstance(expr, H.HLiteralBool):
@@ -1630,6 +1634,10 @@ class Checker:
 					if expr.op in comparison_ops:
 						return checker._bool_type
 					return checker._uint_type
+				if left_ty == checker._uint64_type and right_ty == checker._uint64_type:
+					if expr.op in comparison_ops:
+						return checker._bool_type
+					return checker._uint64_type
 				if expr.op in (H.BinaryOp.EQ, H.BinaryOp.NE) and left_ty is not None and right_ty is not None and left_ty == right_ty:
 					left_def = self.table.get(left_ty)
 					if left_def.kind in (TypeKind.VARIANT, TypeKind.INTERFACE, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT):
@@ -3061,7 +3069,7 @@ class Checker:
 		"""
 		Validate bitwise operators and shifts.
 
-		MVP rule: `~`, `&`, `|`, `^`, `<<`, `>>` require `Uint` operands.
+		MVP rule: `~`, `&`, `|`, `^`, `<<`, `>>` require `Uint` or `Uint64` operands.
 		"""
 		from lang.driftc import stage1 as H
 
@@ -3069,10 +3077,10 @@ class Checker:
 
 		if isinstance(expr, H.HUnary) and expr.op is H.UnaryOp.BIT_NOT:
 			inner_ty = ctx.infer(expr.expr)
-			if inner_ty is not None and inner_ty != uint_ty:
+			if inner_ty is not None and inner_ty not in (uint_ty, self._uint64_type):
 				ctx._append_diag(
 					_chk_diag(
-						message="bitwise operators require Uint operands",
+						message="bitwise operators require Uint or Uint64 operands",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)
@@ -3088,10 +3096,10 @@ class Checker:
 		):
 			left_ty = ctx.infer(expr.left)
 			right_ty = ctx.infer(expr.right)
-			if left_ty is not None and right_ty is not None and (left_ty != uint_ty or right_ty != uint_ty):
+			if left_ty is not None and right_ty is not None and not (left_ty == right_ty and left_ty in (uint_ty, self._uint64_type)):
 				ctx._append_diag(
 					_chk_diag(
-						message="bitwise operators require Uint operands",
+						message="bitwise operators require Uint or Uint64 operands",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)
