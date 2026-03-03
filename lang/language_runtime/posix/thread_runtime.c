@@ -292,6 +292,7 @@ typedef struct Reactor {
 	int stopping;
 	pthread_t thread;
 	int thread_started;
+	atomic_int in_wait;
 } Reactor;
 
 static Reactor *drift_default_reactor_ptr = NULL;
@@ -604,6 +605,9 @@ static void drift_reactor_wake(Reactor *r) {
 	if (!r || r->wake_fd < 0) {
 		return;
 	}
+	if (!atomic_exchange_explicit(&r->in_wait, 0, memory_order_relaxed)) {
+		return;
+	}
 	uint64_t one = 1;
 	(void)write(r->wake_fd, &one, sizeof(one));
 #else
@@ -703,9 +707,11 @@ static void *drift_reactor_thread_entry(void *arg) {
 				timeout_ms = (int)delta;
 			}
 		}
+		atomic_store_explicit(&r->in_wait, 1, memory_order_relaxed);
 		pthread_mutex_unlock(&r->mu);
 
 		int n = epoll_wait(r->epoll_fd, events, 16, timeout_ms);
+		atomic_store_explicit(&r->in_wait, 0, memory_order_relaxed);
 		if (n < 0 && errno != EINTR) {
 			continue;
 		}
@@ -1547,7 +1553,6 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 	if (deadline_ms > 0) {
 		drift_reactor_register_timer(deadline_ms, vt);
 	}
-	drift_reactor_wake(r);
 #else
 	(void)fd;
 	(void)interest;

@@ -1,6 +1,12 @@
 # Drift development history
 
 ## 2026-03-03
+- Reduced redundant reactor wake traffic in `lang/language_runtime/posix/thread_runtime.c`:
+  - `drift_reactor_register_io()` no longer wakes the reactor directly after `epoll_ctl`; timed I/O relies on `drift_reactor_register_timer()` to trigger the wake path when deadline changes matter,
+  - added `in_wait` tracking so `drift_reactor_wake()` only writes to the wake `eventfd` when the reactor is actually blocked in `epoll_wait`,
+  - reactor loop now publishes/clears `in_wait` around `epoll_wait`, allowing multiple concurrent wakers to coalesce to a single wake write per wait cycle.
+- Validation showed a large reduction in worker-side eventfd writes and reactor-side wake-fd drains with no throughput regression on the VT loopback benchmark; this was a focused wake-path optimization with no ABI change.
+- Bumped compiler version to `0.25.0-dev`; ABI remains `3`.
 - Refined `--optimized` build policy:
   - `--optimized` now produces a clean optimized build (`-O2`) without `-g` and without `--gdb-index`,
   - `--optimized --debug-info` remains the explicit opt-in for debuggable optimized output,
