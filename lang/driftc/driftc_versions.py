@@ -9,4 +9,4 @@
 # Do not bump for pure internal refactors with no boundary change.
 
 DRIFTC_VERSION: str = "0.22.0-dev"
-DRIFT_RT_ABI_VERSION: int = 2
+DRIFT_RT_ABI_VERSION: int = 3

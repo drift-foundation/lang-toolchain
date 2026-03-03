@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <string.h>
 
@@ -300,4 +301,19 @@ int64_t drift_net_udp_recv_from_v6(int64_t fd, void *buf, int64_t len, DriftStri
 	}
 	*out_port = (int64_t)ntohs(addr.sin6_port);
 	return (int64_t)n;
+}
+
+int64_t drift_net_set_nodelay(int64_t fd, int64_t enabled) {
+	int val = (int)enabled;
+	if (setsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val)) < 0)
+		return -1;
+	return 0;
+}
+
+int64_t drift_net_get_nodelay(int64_t fd) {
+	int val = 0;
+	socklen_t len = sizeof(val);
+	if (getsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &val, &len) < 0)
+		return -1;
+	return (int64_t)val;
 }

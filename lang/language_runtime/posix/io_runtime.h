@@ -22,5 +22,7 @@ int64_t drift_net_udp_send_to(int64_t fd, DriftString *ip, int64_t port, const v
 int64_t drift_net_udp_send_to_v6(int64_t fd, DriftString *ip, int64_t port, const void *buf, int64_t len);
 int64_t drift_net_udp_recv_from(int64_t fd, void *buf, int64_t len, DriftString *out_ip, int64_t *out_port);
 int64_t drift_net_udp_recv_from_v6(int64_t fd, void *buf, int64_t len, DriftString *out_ip, int64_t *out_port);
+int64_t drift_net_set_nodelay(int64_t fd, int64_t enabled);
+int64_t drift_net_get_nodelay(int64_t fd);
 
 #endif  // DRIFT_IO_RUNTIME_H

@@ -109,6 +109,49 @@ def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 	assert "declare i64 @drift_random_fill(i8*, i64)" in ir, "random_fill runtime helper declaration missing from IR"
 
 
+def test_ir_declares_nodelay_runtime_helpers(tmp_path: Path) -> None:
+	"""Generated IR for TCP_NODELAY must declare both runtime helpers."""
+	(tmp_path / "main.drift").write_text(
+		"module std.net.test_nodelay_ir\n\n"
+		"import lang.thread as thread;\n\n"
+		"fn main() nothrow -> Int {\n"
+		"\tval r = thread.net_set_nodelay(3, 1);\n"
+		"\tval g = thread.net_get_nodelay(3);\n"
+		"\treturn r + g;\n"
+		"}\n"
+	)
+	module_packages: dict = {}
+	mk_module(module_packages, "std.net.test_nodelay_ir", "std")
+	drift_files = sorted(tmp_path.rglob("*.drift"))
+	modules, type_table, exception_catalog, module_exports, module_deps, diags = parse_drift_workspace_to_hir(
+		drift_files,
+		module_paths=[tmp_path],
+		external_module_packages=module_packages,
+		package_id="std",
+		stdlib_root=stdlib_root(),
+		test_build_only=True,
+	)
+	assert not diags
+	func_hirs, signatures, _fn_ids_by_name = flatten_modules(modules)
+	from lang.driftc.core.function_id import function_symbol
+	main_ids = [fn_id for fn_id in signatures if fn_id.name == "main" and not signatures[fn_id].is_method]
+	assert main_ids, "no main function found"
+	entry = function_symbol(main_ids[0])
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exception_catalog,
+		entry=entry,
+		type_table=type_table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+	)
+	assert not checked.diagnostics, checked.diagnostics
+	assert ir
+	assert "declare i64 @drift_net_set_nodelay(i64, i64)" in ir, "drift_net_set_nodelay runtime helper declaration missing from IR"
+	assert "declare i64 @drift_net_get_nodelay(i64)" in ir, "drift_net_get_nodelay runtime helper declaration missing from IR"
+
+
 def test_abi_stamp_absent_without_wrapper(tmp_path: Path) -> None:
 	"""Helper path (enforce_entrypoint=False) omits ABI stamp and OS wrapper."""
 	ir = _compile_simple_program(tmp_path)

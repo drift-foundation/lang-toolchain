@@ -1,0 +1,72 @@
+module m
+
+import std.concurrent as conc;
+import std.net as net;
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val io_t = conc.Duration(millis = 1000);
+	var lr = net.listen(&addr, io_t);
+	match lr {
+		Ok(l) => {
+			val port = l.test_local_port();
+			var t = conc.spawn(| | captures(copy port, copy io_t) => {
+				var caddr = net.socket_addr("127.0.0.1", port);
+				var cr = net.connect(&caddr, io_t);
+				match cr {
+					Ok(s) => {
+						var sr = s.set_nodelay(true);
+						match sr {
+							Ok(_) => { },
+							Err(_) => { return 2; },
+							default => { return 3; }
+						}
+						var nr = s.nodelay();
+						match nr {
+							Ok(v) => {
+								if !v { return 4; }
+							},
+							Err(_) => { return 5; },
+							default => { return 6; }
+						}
+						var sr2 = s.set_nodelay(false);
+						match sr2 {
+							Ok(_) => { },
+							Err(_) => { return 7; },
+							default => { return 8; }
+						}
+						var nr2 = s.nodelay();
+						match nr2 {
+							Ok(v2) => {
+								if v2 { return 9; }
+							},
+							Err(_) => { return 10; },
+							default => { return 11; }
+						}
+						val _ = s.close(io_t);
+						return 1;
+					},
+					Err(_) => { return 12; },
+					default => { return 13; }
+				}
+			});
+			var ar = net.accept(&l, io_t);
+			match ar {
+				Ok(s2) => {
+					val _ = s2.close(io_t);
+				},
+				Err(_) => { return 14; },
+				default => { return 15; }
+			}
+			var tr = t.join();
+			match tr {
+				Ok(_) => { },
+				Err(_) => { return 16; },
+				default => { return 17; }
+			}
+			return 0;
+		},
+		Err(_) => { return 18; },
+		default => { return 19; }
+	}
+}

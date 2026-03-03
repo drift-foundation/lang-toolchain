@@ -332,6 +332,25 @@ implement TcpStream {
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+	pub fn set_nodelay(self: &TcpStream, enabled: Bool) nothrow -> core.Result<Void, NetError> {
+		val flag = enabled ? 1 : 0;
+		val r = thread.net_set_nodelay(self.fd, flag);
+		if r < 0 {
+			val err = thread.io_errno();
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Ok(core.void_value());
+	}
+
+	pub fn nodelay(self: &TcpStream) nothrow -> core.Result<Bool, NetError> {
+		val r = thread.net_get_nodelay(self.fd);
+		if r < 0 {
+			val err = thread.io_errno();
+			return core.Result::Err(NetError::Errno(err));
+		}
+		return core.Result::Ok(r != 0);
+	}
+
 	@test_build_only
 	pub fn test_signal(self: &TcpStream, value: Int) nothrow -> Void {
 		thread.test_eventfd_write(self.fd, value);

@@ -1142,6 +1142,8 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind_v6({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
@@ -4164,6 +4166,31 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "net_set_nodelay":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_set_nodelay expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_set_nodelay result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				enabled_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {enabled_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_get_nodelay":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_get_nodelay expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_get_nodelay result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "net_udp_local_port":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: net_udp_local_port expects 1 arg, got {len(instr.args)}")
@@ -4903,6 +4930,31 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				self.lines.append(
 					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_set_nodelay":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: net_set_nodelay expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_set_nodelay result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				enabled_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {enabled_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_get_nodelay":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: net_get_nodelay expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_get_nodelay result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return

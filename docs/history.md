@@ -1,6 +1,16 @@
 # Drift development history
 
 ## 2026-03-03
+- Added `TCP_NODELAY` control to `std.net.TcpStream`:
+  - new stdlib APIs `set_nodelay(enabled: Bool) -> Result<Void, NetError>` and `nodelay() -> Result<Bool, NetError>` in `stdlib/std/net/net.drift`,
+  - new POSIX runtime helpers `drift_net_set_nodelay` / `drift_net_get_nodelay` in `lang/language_runtime/posix/io_runtime.c`,
+  - new `lang.thread` intrinsics `net_set_nodelay` / `net_get_nodelay`,
+  - LLVM lowering/declarations added in `lang/codegen/llvm/llvm_codegen.py`.
+- This expands the compiler/runtime boundary with new runtime-exported helper signatures, so the runtime ABI version was bumped to `3`.
+- Added e2e coverage:
+  - `std_net_tcp_nodelay_toggle`
+  - `std_net_tcp_nodelay_roundtrip`
+- Bumped compiler version to `0.22.0-dev`; ABI is now `3`.
 - Fixed a loop-induced fiber stack overflow in LLVM codegen for interface/callback-heavy paths such as `.on_error()` dispatch:
   - `lang/codegen/llvm/llvm_codegen.py` previously emitted `%DriftIface` allocas in non-entry blocks, so loop iterations accumulated stack space until function return.
   - Added `_ensure_iface_tmp_alloca()` to create a single reusable entry-block `%DriftIface` slot and routed temporary interface construction through it (`_lower_construct_iface`, `_lower_construct_iface_value`, `_lower_iface_upcast`, registry-set call paths, and interface inline-data extraction).

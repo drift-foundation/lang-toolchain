@@ -54,6 +54,8 @@ export {
 	net_udp_send_to_v6,
 	net_udp_recv_from,
 	net_udp_recv_from_v6,
+	net_set_nodelay,
+	net_get_nodelay,
 	runtime_global_registry_ptr,
 	runtime_thread_registry_ptr,
 	runtime_registry_set,
@@ -114,6 +116,8 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn net_accept(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_connect(ip: &String, port: Int) nothrow -> Int;
 @intrinsic pub fn net_listener_port(fd: Int) nothrow -> Int;
+@intrinsic pub fn net_set_nodelay(fd: Int, enabled: Int) nothrow -> Int;
+@intrinsic pub fn net_get_nodelay(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_udp_local_port(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_udp_bind(ip: &String, port: Int) nothrow -> Int;
 @intrinsic pub fn net_udp_bind_v6(ip: &String, port: Int) nothrow -> Int;
