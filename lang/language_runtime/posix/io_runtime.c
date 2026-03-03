@@ -20,7 +20,22 @@ int64_t drift_io_open(DriftString path, int64_t flags, int64_t mode) {
 	return (int64_t)fd;
 }
 
+extern void drift_reactor_forget_fd(int fd);
+
 int64_t drift_io_close(int64_t fd) {
+	/* Remove the persistent reactor watch BEFORE close().  Reverse order
+	 * would be unsafe: close() frees the fd number, another thread can
+	 * immediately recycle it via accept()/socket()/open(), and a late
+	 * forget_fd() would destroy the new connection's watch.
+	 *
+	 * If close() subsequently fails:
+	 *   EBADF  — fd was already invalid; no watch should exist anyway.
+	 *   EINTR  — on Linux, close() consumes the fd even on EINTR (the
+	 *            fd is gone regardless), so freeing the watch is correct.
+	 * In both cases register_io() on a later EAGAIN would malloc a fresh
+	 * watch and EPOLL_CTL_ADD, degrading to the old per-op path for that
+	 * one operation — safe, just slightly slower. */
+	drift_reactor_forget_fd((int)fd);
 	int rc = close((int)fd);
 	return (int64_t)rc;
 }

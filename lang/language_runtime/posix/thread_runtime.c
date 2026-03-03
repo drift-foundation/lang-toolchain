@@ -693,8 +693,9 @@ static void *drift_reactor_thread_entry(void *arg) {
 					continue;
 				}
 				pthread_mutex_lock(&r->mu);
-				ReactorWatch *w = drift_reactor_take_watch(r, fd);
+				ReactorWatch *w = drift_reactor_find_watch(r, fd);
 				uint64_t vt = w ? w->vt : 0;
+				if (w) { w->vt = 0; w->events = 0; }
 				/* I/O completed — cancel the timeout timer(s) for this VT
 				 * to prevent unbounded timer list growth.  Without this,
 				 * stale timers accumulate O(n) with I/O ops and the
@@ -714,11 +715,9 @@ static void *drift_reactor_thread_entry(void *arg) {
 					}
 				}
 				pthread_mutex_unlock(&r->mu);
-				if (w) {
-					free(w);
-				}
-				if (r->epoll_fd >= 0) {
-					epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+				if (w && r->epoll_fd >= 0) {
+					struct epoll_event ev; ev.events = 0; ev.data.fd = fd;
+					epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, fd, &ev);
 				}
 				if (vt != 0) {
 					drift_thread_unpark(vt);
@@ -1448,6 +1447,25 @@ void drift_reactor_default_set(uint64_t reactor) {
 	drift_default_reactor_ptr = (Reactor *)reactor;
 }
 
+void drift_reactor_forget_fd(int fd) {
+	Reactor *r = drift_default_reactor_ptr;
+	if (!r) return;
+	pthread_mutex_lock(&r->mu);
+	ReactorWatch *prev = NULL;
+	ReactorWatch *cur = r->watches;
+	while (cur) {
+		if (cur->fd == fd) {
+			if (prev) prev->next = cur->next;
+			else r->watches = cur->next;
+			free(cur);
+			break;
+		}
+		prev = cur;
+		cur = cur->next;
+	}
+	pthread_mutex_unlock(&r->mu);
+}
+
 void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint64_t deadline_ms) {
 #ifdef __linux__
 	Reactor *r = (Reactor *)drift_reactor_default_get();
@@ -1484,8 +1502,13 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		struct epoll_event ev;
 		ev.events = (uint32_t)interest;
 		ev.data.fd = (int)fd;
-		int op = existed ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-		epoll_ctl(r->epoll_fd, op, (int)fd, &ev);
+		if (existed) {
+			if (epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, (int)fd, &ev) != 0 && errno == ENOENT) {
+				epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
+			}
+		} else {
+			epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
+		}
 	}
 	if (deadline_ms > 0) {
 		drift_reactor_register_timer(deadline_ms, vt);
