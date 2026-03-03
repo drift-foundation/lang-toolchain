@@ -359,6 +359,8 @@ typedef struct ExecNode {
 	struct ExecNode *next;
 } ExecNode;
 
+#define EXEC_NODE_FREELIST_CAP 16
+
 typedef struct DriftExec {
 	pthread_mutex_t mu;
 	pthread_cond_t cv;
@@ -374,7 +376,30 @@ typedef struct DriftExec {
 	int destroyed;
 	struct DriftExec *reg_prev;
 	struct DriftExec *reg_next;
+	ExecNode *node_freelist;
+	int node_freelist_len;
 } DriftExec;
+
+/* ExecNode freelist helpers.  Caller must hold exec->mu. */
+static ExecNode *exec_node_alloc(DriftExec *exec) {
+	if (exec->node_freelist) {
+		ExecNode *n = exec->node_freelist;
+		exec->node_freelist = n->next;
+		exec->node_freelist_len--;
+		return n;
+	}
+	return (ExecNode *)malloc(sizeof(ExecNode));
+}
+
+static void exec_node_release(DriftExec *exec, ExecNode *node) {
+	if (exec->node_freelist_len < EXEC_NODE_FREELIST_CAP) {
+		node->next = exec->node_freelist;
+		exec->node_freelist = node;
+		exec->node_freelist_len++;
+	} else {
+		free(node);
+	}
+}
 
 static __thread DriftExec *drift_exec_tls = NULL;
 static pthread_mutex_t drift_exec_registry_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -454,6 +479,7 @@ static void *drift_exec_worker(void *arg) {
 			break;
 		}
 		ExecNode *node = exec->head;
+		DriftVt *vt = NULL;
 		if (node) {
 			exec->head = node->next;
 			if (!exec->head) {
@@ -461,15 +487,14 @@ static void *drift_exec_worker(void *arg) {
 			}
 			exec->queue_len--;
 			atomic_fetch_add(&exec->running, 1);
+			vt = node->vt;
+			exec_node_release(exec, node);
 		}
 		pthread_mutex_unlock(&exec->mu);
-		if (!node) {
-			continue;
-		}
-		DriftVt *vt = node->vt;
-		free(node);
 		if (!vt) {
-			atomic_fetch_sub(&exec->running, 1);
+			if (node) {
+				atomic_fetch_sub(&exec->running, 1);
+			}
 			continue;
 		}
 		if (atomic_load(&vt->cancelled) && !atomic_load(&vt->started)) {
@@ -915,6 +940,15 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 		free(node);
 		node = next;
 	}
+	/* Drain the ExecNode freelist. */
+	ExecNode *fl = exec->node_freelist;
+	exec->node_freelist = NULL;
+	exec->node_freelist_len = 0;
+	while (fl) {
+		ExecNode *fn = fl->next;
+		free(fl);
+		fl = fn;
+	}
 	pthread_cond_destroy(&exec->cv);
 	pthread_mutex_destroy(&exec->mu);
 	free(exec->threads);
@@ -1003,7 +1037,7 @@ static void drift_vt_fiber_entry(uintptr_t arg) {
 #endif
 
 static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt) {
-	ExecNode *node = (ExecNode *)malloc(sizeof(ExecNode));
+	ExecNode *node = exec_node_alloc(exec);
 	if (!node) {
 		return;
 	}
@@ -1039,7 +1073,7 @@ static int drift_exec_remove_vt_locked(DriftExec *exec, DriftVt *vt) {
 			if (exec->queue_len > 0) {
 				exec->queue_len--;
 			}
-			free(cur);
+			exec_node_release(exec, cur);
 			return 1;
 		}
 		prev = cur;

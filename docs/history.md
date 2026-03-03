@@ -1,6 +1,14 @@
 # Drift development history
 
 ## 2026-03-03
+- Added a bounded per-executor `ExecNode` freelist in `lang/language_runtime/posix/thread_runtime.c` to reuse executor queue nodes across park/unpark cycles:
+  - `DriftExec` now keeps a small LIFO freelist of `ExecNode` instances,
+  - enqueue paths (`drift_exec_submit`, `drift_thread_unpark`) allocate from the freelist before falling back to `malloc`,
+  - dequeue/removal paths recycle nodes back into the freelist under `exec->mu`,
+  - executor teardown now drains both the queue and the freelist.
+- This reduces hot-path allocator churn in VT scheduling without changing queue semantics or the compiler/runtime ABI.
+- Validation showed allocator traffic dropped substantially in the loopback benchmark while throughput stayed effectively unchanged, confirming this is a low-risk cleanup rather than a major throughput win.
+- Bumped compiler version to `0.23.0-dev`; ABI remains `3`.
 - Added `TCP_NODELAY` control to `std.net.TcpStream`:
   - new stdlib APIs `set_nodelay(enabled: Bool) -> Result<Void, NetError>` and `nodelay() -> Result<Bool, NetError>` in `stdlib/std/net/net.drift`,
   - new POSIX runtime helpers `drift_net_set_nodelay` / `drift_net_get_nodelay` in `lang/language_runtime/posix/io_runtime.c`,
