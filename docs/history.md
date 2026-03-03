@@ -1,6 +1,17 @@
 # Drift development history
 
 ## 2026-03-03
+- Hardened the codegen e2e runner timeout path in `lang/tests/codegen/e2e/runner.py`:
+  - added `_disarm_alarm(...)` so late `SIGALRM` delivery during cleanup cannot escape without cancelling the alarm and restoring the prior handler,
+  - `_run_case_worker(...)` now always converts timeouts into named `(case, FAIL)` results even when the alarm fires during cleanup,
+  - `_run_case_chunk(...)` now catches escaped worker exceptions and records them against the active case instead of crashing the whole future,
+  - raised the default per-case timeout from `30s` to `40s` for less brittle parallel e2e runs under heavier build+run load.
+- Added targeted driver coverage in `lang/tests/driver/test_codegen_e2e_runner_any.py` for:
+  - named timeout reporting,
+  - late-timeout cleanup/disarm behavior,
+  - non-contamination of the next case in the same chunk,
+  - chunk-level exception containment and continued execution.
+- Bumped compiler version to `0.26.0-dev`; ABI remains `3`.
 - Reduced redundant reactor wake traffic in `lang/language_runtime/posix/thread_runtime.c`:
   - `drift_reactor_register_io()` no longer wakes the reactor directly after `epoll_ctl`; timed I/O relies on `drift_reactor_register_timer()` to trigger the wake path when deadline changes matter,
   - added `in_wait` tracking so `drift_reactor_wake()` only writes to the wake `eventfd` when the reactor is actually blocked in `epoll_wait`,

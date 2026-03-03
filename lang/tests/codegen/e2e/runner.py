@@ -772,41 +772,62 @@ def _run_case_with_timeout(case_dir: Path, timeout_s: int, debug: bool = False) 
 	except TimeoutError:
 		return f"FAIL (timeout after {effective_timeout}s)"
 	finally:
-		signal.alarm(0)
-		if old_handler is not None:
-			signal.signal(signal.SIGALRM, old_handler)
+		_disarm_alarm(old_handler)
+
+
+def _disarm_alarm(old_handler) -> None:
+	"""Neutralize any pending SIGALRM and restore the previous handler.
+
+	Safe to call even if no alarm is active.  Uses SIG_IGN to prevent a
+	late signal from raising during the disarm sequence itself.
+	"""
+	signal.signal(signal.SIGALRM, signal.SIG_IGN)
+	signal.alarm(0)
+	if old_handler is not None:
+		signal.signal(signal.SIGALRM, old_handler)
 
 
 def _run_case_worker(case_dir: str, timeout_s: int, debug: bool) -> tuple[str, str]:
 	path = Path(case_dir)
 	effective_timeout = _effective_case_timeout(path, timeout_s)
 	old_handler = None
-	if effective_timeout:
-		def _on_timeout(signum, frame) -> None:
-			raise TimeoutError(f"timeout after {effective_timeout}s")
-		old_handler = signal.signal(signal.SIGALRM, _on_timeout)
-		signal.alarm(effective_timeout)
 	try:
-		status = _run_case(path, effective_timeout, debug=debug)
-	except TimeoutError:
-		return path.name, f"FAIL (timeout after {effective_timeout}s)"
-	except Exception as err:  # pragma: no cover - worker guardrail
-		if debug:
-			trace = traceback.format_exc()
-			return path.name, f"FAIL (worker exception: {err})\n{trace}"
-		return path.name, f"FAIL (worker exception: {err})"
-	finally:
 		if effective_timeout:
-			signal.alarm(0)
-			if old_handler is not None:
-				signal.signal(signal.SIGALRM, old_handler)
-	return path.name, status
+			def _on_timeout(signum, frame) -> None:
+				raise TimeoutError(f"timeout after {effective_timeout}s")
+			old_handler = signal.signal(signal.SIGALRM, _on_timeout)
+			signal.alarm(effective_timeout)
+		try:
+			status = _run_case(path, effective_timeout, debug=debug)
+		except TimeoutError:
+			return path.name, f"FAIL (timeout after {effective_timeout}s)"
+		except Exception as err:  # pragma: no cover - worker guardrail
+			if debug:
+				trace = traceback.format_exc()
+				return path.name, f"FAIL (worker exception: {err})\n{trace}"
+			return path.name, f"FAIL (worker exception: {err})"
+		finally:
+			if effective_timeout:
+				_disarm_alarm(old_handler)
+		return path.name, status
+	except TimeoutError:
+		if effective_timeout:
+			_disarm_alarm(old_handler)
+		return path.name, f"FAIL (timeout after {effective_timeout}s)"
 
 
 def _run_case_chunk(case_dirs: list[str], timeout_s: int, debug: bool) -> list[tuple[str, str]]:
 	results: list[tuple[str, str]] = []
 	for case_dir in case_dirs:
-		results.append(_run_case_worker(case_dir, timeout_s, debug))
+		try:
+			results.append(_run_case_worker(case_dir, timeout_s, debug))
+		except Exception as err:
+			name = Path(case_dir).name
+			if debug:
+				trace = traceback.format_exc()
+				results.append((name, f"FAIL (chunk exception: {err})\n{trace}"))
+			else:
+				results.append((name, f"FAIL (chunk exception: {err})"))
 	return results
 
 
@@ -838,8 +859,8 @@ def main(argv: Iterable[str] | None = None) -> int:
 	ap.add_argument(
 		"--timeout",
 		type=int,
-		default=30,
-		help="Per-case timeout in seconds (default: 30)",
+		default=40,
+		help="Per-case timeout in seconds (default: 40)",
 	)
 	ap.add_argument(
 		"--debug",
