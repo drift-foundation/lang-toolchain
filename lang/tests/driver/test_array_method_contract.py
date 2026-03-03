@@ -25,7 +25,7 @@ def test_array_pop_correct_arity() -> None:
 
 def test_array_method_table_covers_known_methods() -> None:
 	"""All documented array methods must be present."""
-	expected = {"get", "ref_at", "pop", "push", "insert", "remove", "swap_remove", "swap", "set", "clear", "reserve", "shrink_to_fit"}
+	expected = {"get", "ref_at", "pop", "push", "insert", "remove", "swap_remove", "swap", "set", "clear", "reserve", "shrink_to_fit", "extend", "truncate", "remove_range"}
 	assert set(ARRAY_METHOD_ARITY_TABLE.keys()) == expected
 
 
