@@ -276,7 +276,7 @@ runtime-libs CLANG="":
 		echo "clang not found (pass CLANG=... or install clang/clang-15)" >&2
 		exit 1
 	fi
-	DRIFT_RUNTIME_CLANG="${clang_bin}" PYTHONPATH=. ./.venv/bin/python3 -c "from pathlib import Path; import os; from lang.language_runtime import build_runtime_archive; root=Path('.').resolve(); clang=os.environ['DRIFT_RUNTIME_CLANG']; [print(build_runtime_archive(root, clang=clang, variant=v)) for v in ('default','debug','asan','alloc_track')]"
+	DRIFT_RUNTIME_CLANG="${clang_bin}" PYTHONPATH=. ./.venv/bin/python3 -c "from pathlib import Path; import os; from lang.language_runtime import build_runtime_archive; root=Path('.').resolve(); clang=os.environ['DRIFT_RUNTIME_CLANG']; [print(build_runtime_archive(root, clang=clang, variant=v)) for v in ('default','debug','asan','alloc_track','optimized')]"
 
 # Build stdlib package and publish into local dist/release repo (signed by default).
 # Key resolution priority: explicit SIGN_KEY arg, then DRIFT_SIGN_KEY_FILE.

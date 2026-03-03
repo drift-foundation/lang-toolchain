@@ -213,6 +213,7 @@ def _run_ir_with_clang(
 					debug_enabled=False,
 					asan_enabled=asan_enabled,
 					alloc_track_enabled=alloc_track_enabled,
+					optimized=False,
 				)
 				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 			except Exception as ex:

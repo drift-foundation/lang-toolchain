@@ -5755,6 +5755,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
 	parser.add_argument("-g", "--debug-info", action="store_true", help="Emit debug info in generated LLVM (DWARF)")
 	parser.add_argument("--no-debug-info", action="store_true", help="Disable debug info emission")
+	parser.add_argument("--optimized", action="store_true", help="Compile with -O2 optimization (selects optimized runtime archive)")
 	parser.add_argument("--linker", choices=["ld", "gold"], default=None, help="Select linker (default: prefer gold if available)")
 	parser.add_argument(
 		"--target-word-bits",
@@ -5796,6 +5797,7 @@ def main(argv: list[str] | None = None) -> int:
 		help="Enable @test_build_only declarations (tests only)",
 	)
 	args = parser.parse_args(argv)
+	optimized = getattr(args, "optimized", False)
 	debug_enabled = True
 	if args.no_debug_info:
 		debug_enabled = False
@@ -8241,7 +8243,7 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
 
-		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("debug" if debug_enabled else "release")
+		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("optimized" if optimized else ("debug" if debug_enabled else "default"))
 		try:
 			_validate_codegen_contract(
 				mir_all,
@@ -8410,6 +8412,7 @@ def main(argv: list[str] | None = None) -> int:
 	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
 	asan_enabled = _env_true("DRIFT_ASAN")
 	asan_flags = ["-fsanitize=address", "-g"] if asan_enabled else []
+	opt_flags = ["-O2"] if optimized else []
 	runtime_archive: str | None = None
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
@@ -8417,6 +8420,7 @@ def main(argv: list[str] | None = None) -> int:
 			debug_enabled=debug_enabled,
 			asan_enabled=asan_enabled,
 			alloc_track_enabled=False,
+			optimized=optimized,
 		)
 		archive_path = runtime_archive_path(ROOT, variant=variant)
 		if not archive_path.exists():
@@ -8437,6 +8441,7 @@ def main(argv: list[str] | None = None) -> int:
 			clang,
 			*linker_flags,
 			*asan_flags,
+			*opt_flags,
 			"-c",
 			"-x",
 			"ir",
@@ -8467,6 +8472,7 @@ def main(argv: list[str] | None = None) -> int:
 					clang,
 					*linker_flags,
 					*asan_flags,
+					*opt_flags,
 					"-c",
 					"-x",
 					"c",
@@ -8493,6 +8499,7 @@ def main(argv: list[str] | None = None) -> int:
 			clang,
 			*linker_flags,
 			*asan_flags,
+			*opt_flags,
 			str(ir_obj),
 			*rt_inputs,
 			*link_libs,
@@ -8507,6 +8514,7 @@ def main(argv: list[str] | None = None) -> int:
 				clang,
 				*linker_flags,
 				*asan_flags,
+				*opt_flags,
 				"-x",
 				"ir",
 				str(ir_path),
@@ -8523,6 +8531,7 @@ def main(argv: list[str] | None = None) -> int:
 				clang,
 				*linker_flags,
 				*asan_flags,
+				*opt_flags,
 				"-x",
 				"ir",
 				str(ir_path),
