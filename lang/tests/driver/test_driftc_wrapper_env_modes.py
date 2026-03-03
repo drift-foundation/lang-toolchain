@@ -193,13 +193,15 @@ def test_optimized_flag_adds_o2_to_clang(tmp_path: Path) -> None:
 	stderr = cp.stderr or ""
 	assert "[driftc] link:" in stderr
 	assert "-O2" in stderr
-	# Policy: --optimized keeps debug info by default (debug_enabled=True).
-	assert "-g" in stderr
+	# Policy: --optimized suppresses debug info by default.
+	link_line = [l for l in stderr.splitlines() if "[driftc] link:" in l]
+	assert link_line, "expected [driftc] link: line in stderr"
+	assert " -g " not in link_line[0] and " -g\n" not in link_line[0]
 	assert out.exists()
 
 
-def test_optimized_no_debug_info(tmp_path: Path) -> None:
-	"""--optimized --no-debug-info takes the release code path (no -g)."""
+def test_optimized_debug_info_override(tmp_path: Path) -> None:
+	"""--optimized --debug-info re-enables debug info (explicit override)."""
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"\n".join(
@@ -230,14 +232,13 @@ def test_optimized_no_debug_info(tmp_path: Path) -> None:
 	env = dict(os.environ)
 	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
-	cp = _run_wrapper(["--optimized", "--no-debug-info", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
+	cp = _run_wrapper(["--optimized", "--debug-info", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr
 	stderr = cp.stderr or ""
-	link_line = [l for l in stderr.splitlines() if "[driftc] link:" in l]
-	assert link_line, "expected [driftc] link: line in stderr"
-	assert "-O2" in link_line[0]
-	# No -g in the link command when --no-debug-info is passed.
-	assert " -g " not in link_line[0] and " -g\n" not in link_line[0]
+	assert "[driftc] link:" in stderr
+	assert "-O2" in stderr
+	# Explicit --debug-info restores -g even with --optimized.
+	assert "-g" in stderr
 	assert out.exists()
 
 

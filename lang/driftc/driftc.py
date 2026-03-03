@@ -5798,7 +5798,7 @@ def main(argv: list[str] | None = None) -> int:
 	)
 	args = parser.parse_args(argv)
 	optimized = getattr(args, "optimized", False)
-	debug_enabled = True
+	debug_enabled = not optimized
 	if args.no_debug_info:
 		debug_enabled = False
 	if args.debug_info:

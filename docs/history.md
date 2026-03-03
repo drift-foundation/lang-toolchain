@@ -1,6 +1,14 @@
 # Drift development history
 
 ## 2026-03-03
+- Refined `--optimized` build policy:
+  - `--optimized` now produces a clean optimized build (`-O2`) without `-g` and without `--gdb-index`,
+  - `--optimized --debug-info` remains the explicit opt-in for debuggable optimized output,
+  - compiler provenance/build profile continues to report `optimized` for this mode, while the non-optimized fallback profile remains `default`.
+- Updated driver coverage in `lang/tests/driver/test_driftc_wrapper_env_modes.py` to pin:
+  - `--optimized` => `-O2` and no `-g`
+  - `--optimized --debug-info` => `-O2` plus `-g`
+- Bumped compiler version to `0.24.0-dev`; ABI remains `3`.
 - Added a bounded per-executor `ExecNode` freelist in `lang/language_runtime/posix/thread_runtime.c` to reuse executor queue nodes across park/unpark cycles:
   - `DriftExec` now keeps a small LIFO freelist of `ExecNode` instances,
   - enqueue paths (`drift_exec_submit`, `drift_thread_unpark`) allocate from the freelist before falling back to `malloc`,
