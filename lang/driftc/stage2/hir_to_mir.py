@@ -3481,6 +3481,9 @@ class HIRToMIR:
 			"set",
 			"range",
 			"range_mut",
+			"extend",
+			"truncate",
+			"remove_range",
 		):
 			return False, None
 
@@ -4136,6 +4139,308 @@ class HIRToMIR:
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 			self.b.set_block(skip_block)
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(join_block)
+			return True, None
+
+		if name == "extend":
+			# Copy-only bulk append: extend(src: &Array<T>)
+			_arr_issues = array_method_arity_issues("extend", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
+			src_val = self.lower_expr(expr.args[0])
+			src_len = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=src_len, array=src_val))
+			zero = self._const_int(0)
+			is_empty = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=is_empty, op=H.BinaryOp.EQ, left=src_len, right=zero))
+			skip_block = self.b.new_block("array_extend_skip")
+			do_block = self.b.new_block("array_extend_do")
+			join_block = self.b.new_block("array_extend_join")
+			self.b.set_terminator(M.IfTerminator(cond=is_empty, then_target=skip_block.name, else_target=do_block.name))
+
+			self.b.set_block(skip_block)
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(do_block)
+			len_val = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
+			cap_val = self.b.new_temp()
+			self.b.emit(M.ArrayCap(dest=cap_val, array=array_val))
+			next_gen = _next_gen(array_val)
+			array_val2, _grew = ensure_capacity(array_val, len_val=len_val, cap_val=cap_val, extra=src_len)
+			# Copy loop: i from 0 to src_len
+			idx_local = self._addr_taken_local("__array_ext_i", self._int_type, self._const_int(0))
+			self.b.emit(M.StoreLocal(local=idx_local, value=zero))
+			cond_block = self.b.new_block("array_extend_cond")
+			body_block = self.b.new_block("array_extend_body")
+			exit_block = self.b.new_block("array_extend_exit")
+			self.b.set_terminator(M.Goto(target=cond_block.name))
+
+			self.b.set_block(cond_block)
+			cur = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=cur, local=idx_local))
+			lt = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=lt, op=H.BinaryOp.LT, left=cur, right=src_len))
+			self.b.set_terminator(M.IfTerminator(cond=lt, then_target=body_block.name, else_target=exit_block.name))
+
+			self.b.set_block(body_block)
+			elem = self.b.new_temp()
+			self.b.emit(M.ArrayIndexLoad(dest=elem, elem_ty=elem_ty, array=src_val, index=cur))
+			self._local_types[elem] = elem_ty
+			dest_idx = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=dest_idx, op=H.BinaryOp.ADD, left=len_val, right=cur))
+			self.b.emit(M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=array_val2, index=dest_idx, value=elem))
+			one = self._const_int(1)
+			next_i = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=next_i, op=H.BinaryOp.ADD, left=cur, right=one))
+			self.b.emit(M.StoreLocal(local=idx_local, value=next_i))
+			self.b.set_terminator(M.Goto(target=cond_block.name))
+
+			self.b.set_block(exit_block)
+			new_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=new_len, op=H.BinaryOp.ADD, left=len_val, right=src_len))
+			new_arr = self.b.new_temp()
+			self.b.emit(M.ArraySetLen(dest=new_arr, array=array_val2, length=new_len))
+			new_arr_gen = _set_gen(new_arr, next_gen)
+			self.b.emit(M.StoreRef(ptr=recv_ptr, value=new_arr_gen, inner_ty=array_ty))
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(join_block)
+			return True, None
+
+		if name == "truncate":
+			_arr_issues = array_method_arity_issues("truncate", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
+			new_len_arg = self.lower_expr(expr.args[0], expected_type=self._int_type)
+			len_val = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
+			next_gen = _next_gen(array_val)
+			zero = self._const_int(0)
+			# Clamp: new_len = max(0, min(new_len_arg, len_val))
+			clamped_local = self._addr_taken_local("__array_trunc_nl", self._int_type, self._const_int(0))
+			neg_cond = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=neg_cond, op=H.BinaryOp.LT, left=new_len_arg, right=zero))
+			clamp_zero_block = self.b.new_block("array_trunc_clamp0")
+			clamp_min_block = self.b.new_block("array_trunc_clampmin")
+			clamp_join_block = self.b.new_block("array_trunc_clampjoin")
+			self.b.set_terminator(M.IfTerminator(cond=neg_cond, then_target=clamp_zero_block.name, else_target=clamp_min_block.name))
+
+			self.b.set_block(clamp_zero_block)
+			self.b.emit(M.StoreLocal(local=clamped_local, value=zero))
+			self.b.set_terminator(M.Goto(target=clamp_join_block.name))
+
+			self.b.set_block(clamp_min_block)
+			gt_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=gt_len, op=H.BinaryOp.GT, left=new_len_arg, right=len_val))
+			use_len_block = self.b.new_block("array_trunc_uselen")
+			use_arg_block = self.b.new_block("array_trunc_usearg")
+			self.b.set_terminator(M.IfTerminator(cond=gt_len, then_target=use_len_block.name, else_target=use_arg_block.name))
+
+			self.b.set_block(use_len_block)
+			self.b.emit(M.StoreLocal(local=clamped_local, value=len_val))
+			self.b.set_terminator(M.Goto(target=clamp_join_block.name))
+
+			self.b.set_block(use_arg_block)
+			self.b.emit(M.StoreLocal(local=clamped_local, value=new_len_arg))
+			self.b.set_terminator(M.Goto(target=clamp_join_block.name))
+
+			self.b.set_block(clamp_join_block)
+			clamped_val = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=clamped_val, local=clamped_local))
+			# If clamped == len, no-op
+			eq_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=eq_len, op=H.BinaryOp.EQ, left=clamped_val, right=len_val))
+			noop_block = self.b.new_block("array_trunc_noop")
+			drop_block = self.b.new_block("array_trunc_drop")
+			join_block = self.b.new_block("array_trunc_join")
+			self.b.set_terminator(M.IfTerminator(cond=eq_len, then_target=noop_block.name, else_target=drop_block.name))
+
+			self.b.set_block(noop_block)
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(drop_block)
+			# Drop loop: i from clamped_val to len_val
+			idx_local = self._addr_taken_local("__array_trunc_i", self._int_type, self._const_int(0))
+			self.b.emit(M.StoreLocal(local=idx_local, value=clamped_val))
+			cond_block = self.b.new_block("array_trunc_cond")
+			body_block = self.b.new_block("array_trunc_body")
+			exit_block = self.b.new_block("array_trunc_exit")
+			self.b.set_terminator(M.Goto(target=cond_block.name))
+
+			self.b.set_block(cond_block)
+			cur = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=cur, local=idx_local))
+			lt = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=lt, op=H.BinaryOp.LT, left=cur, right=len_val))
+			self.b.set_terminator(M.IfTerminator(cond=lt, then_target=body_block.name, else_target=exit_block.name))
+
+			self.b.set_block(body_block)
+			self.b.emit(M.ArrayElemDrop(elem_ty=elem_ty, array=array_val, index=cur))
+			one = self._const_int(1)
+			next_i = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=next_i, op=H.BinaryOp.ADD, left=cur, right=one))
+			self.b.emit(M.StoreLocal(local=idx_local, value=next_i))
+			self.b.set_terminator(M.Goto(target=cond_block.name))
+
+			self.b.set_block(exit_block)
+			new_arr = self.b.new_temp()
+			self.b.emit(M.ArraySetLen(dest=new_arr, array=array_val, length=clamped_val))
+			new_arr_gen = _set_gen(new_arr, next_gen)
+			self.b.emit(M.StoreRef(ptr=recv_ptr, value=new_arr_gen, inner_ty=array_ty))
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(join_block)
+			return True, None
+
+		if name == "remove_range":
+			_arr_issues = array_method_arity_issues("remove_range", len(expr.args), span=getattr(expr, "loc", None))
+			if _arr_issues:
+				raise AssertionError(_arr_issues[0].message)
+			start_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
+			self._local_types[start_val] = self._int_type
+			end_val = self.lower_expr(expr.args[1], expected_type=self._int_type)
+			self._local_types[end_val] = self._int_type
+			len_val = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
+			self._local_types[len_val] = self._int_type
+			zero = self._const_int(0)
+
+			def _rr_abort(msg: str) -> None:
+				false_val = self.b.new_temp()
+				self.b.emit(M.ConstBool(dest=false_val, value=False))
+				file_val = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=file_val, value="<array>"))
+				line_val = self._const_int(0)
+				expr_val = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=expr_val, value="remove_range"))
+				msg_val = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=msg_val, value=msg))
+				self.b.emit(M.AssertLoc(cond=false_val, file=file_val, line=line_val, expr=expr_val, msg=msg_val))
+				self.b.set_terminator(M.Unreachable())
+
+			# Validate: start >= 0
+			bad_start_neg = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=bad_start_neg, op=H.BinaryOp.LT, left=start_val, right=zero))
+			abort1_block = self.b.new_block("array_rr_abort1")
+			check2_block = self.b.new_block("array_rr_check2")
+			self.b.set_terminator(M.IfTerminator(cond=bad_start_neg, then_target=abort1_block.name, else_target=check2_block.name))
+			self.b.set_block(abort1_block)
+			_rr_abort("start must be >= 0")
+
+			# Validate: end >= 0
+			self.b.set_block(check2_block)
+			bad_end_neg = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=bad_end_neg, op=H.BinaryOp.LT, left=end_val, right=zero))
+			abort2_block = self.b.new_block("array_rr_abort2")
+			check3_block = self.b.new_block("array_rr_check3")
+			self.b.set_terminator(M.IfTerminator(cond=bad_end_neg, then_target=abort2_block.name, else_target=check3_block.name))
+			self.b.set_block(abort2_block)
+			_rr_abort("end must be >= 0")
+
+			# Validate: start <= end
+			self.b.set_block(check3_block)
+			bad_order = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=bad_order, op=H.BinaryOp.GT, left=start_val, right=end_val))
+			abort3_block = self.b.new_block("array_rr_abort3")
+			check4_block = self.b.new_block("array_rr_check4")
+			self.b.set_terminator(M.IfTerminator(cond=bad_order, then_target=abort3_block.name, else_target=check4_block.name))
+			self.b.set_block(abort3_block)
+			_rr_abort("start must be <= end")
+
+			# Validate: end <= len
+			self.b.set_block(check4_block)
+			bad_end_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=bad_end_len, op=H.BinaryOp.GT, left=end_val, right=len_val))
+			abort4_block = self.b.new_block("array_rr_abort4")
+			valid_block = self.b.new_block("array_rr_valid")
+			self.b.set_terminator(M.IfTerminator(cond=bad_end_len, then_target=abort4_block.name, else_target=valid_block.name))
+			self.b.set_block(abort4_block)
+			_rr_abort("end must be <= len")
+
+			self.b.set_block(valid_block)
+			# If start == end, no-op
+			eq_empty = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=eq_empty, op=H.BinaryOp.EQ, left=start_val, right=end_val))
+			noop_block = self.b.new_block("array_rr_noop")
+			work_block = self.b.new_block("array_rr_work")
+			join_block = self.b.new_block("array_rr_join")
+			self.b.set_terminator(M.IfTerminator(cond=eq_empty, then_target=noop_block.name, else_target=work_block.name))
+
+			self.b.set_block(noop_block)
+			self.b.set_terminator(M.Goto(target=join_block.name))
+
+			self.b.set_block(work_block)
+			next_gen = _next_gen(array_val)
+			# Drop loop: i from start to end
+			drop_idx_local = self._addr_taken_local("__array_rr_di", self._int_type, self._const_int(0))
+			self.b.emit(M.StoreLocal(local=drop_idx_local, value=start_val))
+			drop_cond = self.b.new_block("array_rr_dcond")
+			drop_body = self.b.new_block("array_rr_dbody")
+			drop_exit = self.b.new_block("array_rr_dexit")
+			self.b.set_terminator(M.Goto(target=drop_cond.name))
+
+			self.b.set_block(drop_cond)
+			dcur = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=dcur, local=drop_idx_local))
+			dlt = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=dlt, op=H.BinaryOp.LT, left=dcur, right=end_val))
+			self.b.set_terminator(M.IfTerminator(cond=dlt, then_target=drop_body.name, else_target=drop_exit.name))
+
+			self.b.set_block(drop_body)
+			self.b.emit(M.ArrayElemDrop(elem_ty=elem_ty, array=array_val, index=dcur))
+			one = self._const_int(1)
+			dnext = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=dnext, op=H.BinaryOp.ADD, left=dcur, right=one))
+			self._local_types[dnext] = self._int_type
+			self.b.emit(M.StoreLocal(local=drop_idx_local, value=dnext))
+			self.b.set_terminator(M.Goto(target=drop_cond.name))
+
+			self.b.set_block(drop_exit)
+			# Shift loop: i from end to len, move elem to start + (i - end)
+			shift_idx_local = self._addr_taken_local("__array_rr_si", self._int_type, self._const_int(0))
+			self.b.emit(M.StoreLocal(local=shift_idx_local, value=end_val))
+			shift_cond = self.b.new_block("array_rr_scond")
+			shift_body = self.b.new_block("array_rr_sbody")
+			shift_exit = self.b.new_block("array_rr_sexit")
+			self.b.set_terminator(M.Goto(target=shift_cond.name))
+
+			self.b.set_block(shift_cond)
+			scur = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=scur, local=shift_idx_local))
+			slt = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=slt, op=H.BinaryOp.LT, left=scur, right=len_val))
+			self.b.set_terminator(M.IfTerminator(cond=slt, then_target=shift_body.name, else_target=shift_exit.name))
+
+			self.b.set_block(shift_body)
+			elem = self._array_elem_take_value(elem_ty=elem_ty, array=array_val, index=scur)
+			offset = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=offset, op=H.BinaryOp.SUB, left=scur, right=end_val))
+			self._local_types[offset] = self._int_type
+			dest_idx = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=dest_idx, op=H.BinaryOp.ADD, left=start_val, right=offset))
+			self._local_types[dest_idx] = self._int_type
+			self.b.emit(M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=array_val, index=dest_idx, value=elem))
+			one_s = self._const_int(1)
+			snext = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=snext, op=H.BinaryOp.ADD, left=scur, right=one_s))
+			self._local_types[snext] = self._int_type
+			self.b.emit(M.StoreLocal(local=shift_idx_local, value=snext))
+			self.b.set_terminator(M.Goto(target=shift_cond.name))
+
+			self.b.set_block(shift_exit)
+			removed_count = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=removed_count, op=H.BinaryOp.SUB, left=end_val, right=start_val))
+			self._local_types[removed_count] = self._int_type
+			new_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=new_len, op=H.BinaryOp.SUB, left=len_val, right=removed_count))
+			self._local_types[new_len] = self._int_type
+			new_arr = self.b.new_temp()
+			self.b.emit(M.ArraySetLen(dest=new_arr, array=array_val, length=new_len))
+			new_arr_gen = _set_gen(new_arr, next_gen)
+			self.b.emit(M.StoreRef(ptr=recv_ptr, value=new_arr_gen, inner_ty=array_ty))
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 			self.b.set_block(join_block)

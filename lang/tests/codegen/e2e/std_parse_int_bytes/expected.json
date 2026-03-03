@@ -1,0 +1,6 @@
+{
+  "description": "e2e: parse_int_bytes / parse_uint_bytes — byte buffer integer parsing without temporary String",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

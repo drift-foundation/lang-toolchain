@@ -1,0 +1,51 @@
+module m
+
+pub fn main() nothrow -> Int {
+	// Test 1: truncate to smaller length
+	var a: Array<Int> = [10, 20, 30, 40, 50];
+	a.truncate(3);
+	if a.len != 3 {
+		return 1;
+	}
+	if a[0] != 10 {
+		return 2;
+	}
+	if a[2] != 30 {
+		return 3;
+	}
+
+	// Test 2: truncate to same length (no-op)
+	a.truncate(3);
+	if a.len != 3 {
+		return 4;
+	}
+
+	// Test 3: truncate to zero
+	a.truncate(0);
+	if a.len != 0 {
+		return 5;
+	}
+
+	// Test 4: truncate with value larger than len (clamped to len)
+	var b: Array<Int> = [1, 2, 3];
+	b.truncate(100);
+	if b.len != 3 {
+		return 6;
+	}
+
+	// Test 5: truncate negative (clamped to 0)
+	var c: Array<Int> = [1, 2, 3];
+	c.truncate(-1);
+	if c.len != 0 {
+		return 7;
+	}
+
+	// Test 6: truncate empty array
+	var d: Array<Int> = [];
+	d.truncate(0);
+	if d.len != 0 {
+		return 8;
+	}
+
+	return 0;
+}

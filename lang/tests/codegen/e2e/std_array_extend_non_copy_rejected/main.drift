@@ -1,0 +1,19 @@
+module m
+
+import std.core as core;
+
+pub struct Owned {
+	value: Int
+}
+
+implement core.Destructible for Owned {
+	pub fn destroy(var self: Owned) nothrow -> Void {
+	}
+}
+
+pub fn main() nothrow -> Int {
+	var a: Array<Owned> = [];
+	val src: Array<Owned> = [];
+	a.extend(&src);
+	return 0;
+}

@@ -1,0 +1,6 @@
+{
+  "description": "e2e: buffer_write_string appends string bytes into buffer",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

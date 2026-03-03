@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Array.remove_range with rejection semantics for invalid ranges",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

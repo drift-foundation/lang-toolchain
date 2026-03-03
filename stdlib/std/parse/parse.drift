@@ -7,7 +7,9 @@ export {
 	parse_bool,
 	parse_int,
 	parse_uint,
-	parse_float
+	parse_float,
+	parse_int_bytes,
+	parse_uint_bytes
 };
 
 pub struct ParseError {
@@ -314,4 +316,85 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 		value = -value;
 	}
 	return core.Result::Ok(value);
+}
+
+pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Int, ParseError> {
+	val len = end;
+	if start < 0 or end < start or end > bytes.len {
+		return core.Result::Err(ParseError(tag = "invalid-range", offset = start));
+	}
+	if start >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = start));
+	}
+	var i = start;
+	var neg = false;
+	val first = bytes[i];
+	if first == cast<Byte>(45) {
+		neg = true;
+		i = i + 1;
+	} else {
+		if first == cast<Byte>(43) {
+			i = i + 1;
+		}
+	}
+	if i >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	var acc = 0;
+	while i < len {
+		val b = bytes[i];
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
+		}
+		val d = _digit_to_int(b);
+		if neg {
+			if acc < (INT_MIN + d) / 10 {
+				return core.Result::Err(ParseError(tag = "underflow", offset = i));
+			}
+			acc = acc * 10 - d;
+		} else {
+			if acc > (INT_MAX - d) / 10 {
+				return core.Result::Err(ParseError(tag = "overflow", offset = i));
+			}
+			acc = acc * 10 + d;
+		}
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
+}
+
+pub fn parse_uint_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Uint, ParseError> {
+	val len = end;
+	if start < 0 or end < start or end > bytes.len {
+		return core.Result::Err(ParseError(tag = "invalid-range", offset = start));
+	}
+	if start >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = start));
+	}
+	var i = start;
+	val first = bytes[i];
+	if first == cast<Byte>(43) {
+		i = i + 1;
+	}
+	if i >= len {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
+	}
+	if first == cast<Byte>(45) {
+		return core.Result::Err(ParseError(tag = "invalid-datatype", offset = start));
+	}
+	val uint_max: Uint = cast<Uint>(18446744073709551615);
+	var acc: Uint = cast<Uint>(0);
+	while i < len {
+		val b = bytes[i];
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
+		}
+		val d = _digit_to_uint(b);
+		if acc > (uint_max - d) / cast<Uint>(10) {
+			return core.Result::Err(ParseError(tag = "overflow", offset = i));
+		}
+		acc = acc * cast<Uint>(10) + d;
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
 }

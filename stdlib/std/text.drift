@@ -2,6 +2,7 @@ module std.text
 
 import std.core as core;
 import std.io as io;
+import std.mem as mem;
 
 export {
 	TokenizeAction,
@@ -15,7 +16,12 @@ export {
 	is_digit,
 	is_alpha,
 	is_alnum,
-	is_space
+	is_space,
+	StringBuilder,
+	string_builder,
+	sb_append_string,
+	sb_len,
+	sb_build
 };
 
 pub variant TokenizeAction {
@@ -274,4 +280,88 @@ pub fn is_alnum(b: Byte) nothrow -> Bool {
 
 pub fn is_space(b: Byte) nothrow -> Bool {
 	return b == cast<Byte>(32) or b == cast<Byte>(9) or b == cast<Byte>(10) or b == cast<Byte>(13);
+}
+
+pub struct StringBuilder {
+	buf: mem.RawBuffer<Byte>,
+	cap: Int,
+	len: Int
+}
+
+implement core.Destructible for StringBuilder {
+	pub fn destroy(var self: StringBuilder) nothrow -> Void {
+		if self.cap > 0 {
+			val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
+			val cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+			var tmp = mem.rawbuffer_from_parts<type Byte>(ptr, cap);
+			mem.dealloc<type Byte>(tmp);
+		}
+	}
+}
+
+pub fn string_builder(initial_cap: Int) nothrow -> StringBuilder {
+	var cap = initial_cap;
+	if cap < 16 {
+		cap = 16;
+	}
+	unsafe {
+		var b = mem.alloc_uninit<type Byte>(cap);
+		return StringBuilder(buf = move b, cap = cap, len = 0);
+	}
+}
+
+fn _sb_grow(self: &mut StringBuilder, needed: Int) nothrow -> Void {
+	val cur_cap = self.cap;
+	val cur_len = self.len;
+	var new_cap = cur_cap * 2;
+	if new_cap < needed {
+		new_cap = needed;
+	}
+	unsafe {
+		var new_buf = mem.alloc_uninit<type Byte>(new_cap);
+		var i = 0;
+		while i < cur_len {
+			val b = mem.read<type Byte>(&mut self.buf, i);
+			mem.write<type Byte>(&mut new_buf, i, b);
+			i = i + 1;
+		}
+		if cur_cap > 0 {
+			val old_ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
+			val old_cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+			var old_tmp = mem.rawbuffer_from_parts<type Byte>(old_ptr, old_cap);
+			mem.dealloc<type Byte>(old_tmp);
+		}
+		self.buf = move new_buf;
+		self.cap = new_cap;
+	}
+}
+
+pub fn sb_append_string(self: &mut StringBuilder, s: &String) nothrow -> Void {
+	val n = s.byte_length();
+	if n == 0 {
+		return;
+	}
+	val needed = self.len + n;
+	if needed > self.cap {
+		_sb_grow(self, needed);
+	}
+	val base = self.len;
+	var i = 0;
+	while i < n {
+		mem.write<type Byte>(&mut self.buf, base + i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	self.len = base + n;
+}
+
+pub fn sb_len(self: &StringBuilder) nothrow -> Int {
+	return self.len;
+}
+
+pub fn sb_build(self: &mut StringBuilder) nothrow -> String {
+	if self.len == 0 {
+		return "";
+	}
+	val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
+	return core.string_from_utf8_bytes(ptr, self.len);
 }

@@ -379,6 +379,9 @@ ARRAY_METHOD_ARITY_TABLE: dict[str, int] = {
 	"clear": 0,
 	"reserve": 1,
 	"shrink_to_fit": 0,
+	"extend": 1,
+	"truncate": 1,
+	"remove_range": 2,
 }
 
 

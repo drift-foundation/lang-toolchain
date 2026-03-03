@@ -28,6 +28,8 @@ export {
 	buffer_len_mut,
 	buffer_set_len,
 	buffer_write,
+	buffer_write_bytes,
+	buffer_write_string,
 	buffer_read,
 	file_from_fd,
 	stdin,
@@ -474,6 +476,26 @@ pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
 
 pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
 	return mem.read<type Byte>(&mut self.buf, i);
+}
+
+pub fn buffer_write_bytes(self: &mut Buffer, src: &Array<Byte>) nothrow -> Void {
+	val n = src.len;
+	var i = 0;
+	while i < n {
+		mem.write<type Byte>(&mut self.buf, self.len + i, src[i]);
+		i = i + 1;
+	}
+	self.len = self.len + n;
+}
+
+pub fn buffer_write_string(self: &mut Buffer, s: &String) nothrow -> Void {
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		mem.write<type Byte>(&mut self.buf, self.len + i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	self.len = self.len + n;
 }
 
 fn _file_open(path: String, opts: &FileOpenOptions, timeout: conc.Duration) nothrow -> core.Result<File, IoError> {

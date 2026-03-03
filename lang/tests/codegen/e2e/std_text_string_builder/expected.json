@@ -1,0 +1,6 @@
+{
+  "description": "e2e: StringBuilder with string-only append surface, UTF-8 safe",
+  "exit_code": 0,
+  "stdout": "abcdefghijabcdefghijabcdefghij\n",
+  "stderr": ""
+}

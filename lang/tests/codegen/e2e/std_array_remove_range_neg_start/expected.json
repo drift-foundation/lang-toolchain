@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Array.remove_range() aborts when start < 0",
+  "exit_code": -6,
+  "stderr": "__ANY__",
+  "stderr_contains": "start must be >= 0"
+}

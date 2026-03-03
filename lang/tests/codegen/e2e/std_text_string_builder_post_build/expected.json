@@ -1,0 +1,4 @@
+{
+  "description": "e2e: StringBuilder remains usable after sb_build; repeated build is stable",
+  "exit_code": 0
+}

@@ -1,0 +1,83 @@
+module m
+
+pub fn main() nothrow -> Int {
+	// Test 1: remove middle range
+	var a: Array<Int> = [10, 20, 30, 40, 50];
+	a.remove_range(1, 3);
+	if a.len != 3 {
+		return 1;
+	}
+	if a[0] != 10 {
+		return 2;
+	}
+	if a[1] != 40 {
+		return 3;
+	}
+	if a[2] != 50 {
+		return 4;
+	}
+
+	// Test 2: remove prefix
+	var b: Array<Int> = [10, 20, 30, 40];
+	b.remove_range(0, 2);
+	if b.len != 2 {
+		return 5;
+	}
+	if b[0] != 30 {
+		return 6;
+	}
+	if b[1] != 40 {
+		return 7;
+	}
+
+	// Test 3: remove suffix
+	var c: Array<Int> = [10, 20, 30, 40];
+	c.remove_range(2, 4);
+	if c.len != 2 {
+		return 8;
+	}
+	if c[0] != 10 {
+		return 9;
+	}
+	if c[1] != 20 {
+		return 10;
+	}
+
+	// Test 4: empty range (no-op) — start == end
+	var d: Array<Int> = [10, 20, 30];
+	d.remove_range(1, 1);
+	if d.len != 3 {
+		return 11;
+	}
+	if d[1] != 20 {
+		return 12;
+	}
+
+	// Test 5: remove entire array
+	var e: Array<Int> = [10, 20, 30];
+	e.remove_range(0, 3);
+	if e.len != 0 {
+		return 13;
+	}
+
+	// Test 6: remaining elements in correct order after middle remove
+	var f: Array<Int> = [1, 2, 3, 4, 5, 6, 7, 8];
+	f.remove_range(2, 6);
+	if f.len != 4 {
+		return 14;
+	}
+	if f[0] != 1 {
+		return 15;
+	}
+	if f[1] != 2 {
+		return 16;
+	}
+	if f[2] != 7 {
+		return 17;
+	}
+	if f[3] != 8 {
+		return 18;
+	}
+
+	return 0;
+}

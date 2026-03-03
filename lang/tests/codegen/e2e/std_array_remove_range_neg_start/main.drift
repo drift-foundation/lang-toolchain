@@ -1,0 +1,7 @@
+module m
+
+pub fn main() nothrow -> Int {
+	var a: Array<Int> = [1, 2, 3, 4, 5];
+	a.remove_range(-1, 2);
+	return 0;
+}

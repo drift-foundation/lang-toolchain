@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Array.truncate reduces length and drops trailing elements",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,0 +1,10 @@
+{
+  "description": "e2e: Array<T>.extend() rejects non-Copy element types at typecheck",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "extend() requires element type to be Copy",
+      "phase": "typecheck"
+    }
+  ]
+}

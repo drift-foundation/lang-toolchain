@@ -1,0 +1,99 @@
+module m
+
+import std.core as core;
+import std.parse as p;
+
+pub fn main() nothrow -> Int {
+	// Test 1: positive integer from byte range
+	// "12345" as bytes
+	val bytes1: Array<Byte> = [cast<Byte>(49), cast<Byte>(50), cast<Byte>(51), cast<Byte>(52), cast<Byte>(53)];
+	match p.parse_int_bytes(&bytes1, 0, 5) {
+		core.Result::Ok(v) => {
+			if v != 12345 {
+				return 1;
+			}
+		},
+		core.Result::Err(_) => { return 2; },
+		default => { return 3; }
+	}
+
+	// Test 2: zero
+	// "0" as bytes
+	val bytes2: Array<Byte> = [cast<Byte>(48)];
+	match p.parse_int_bytes(&bytes2, 0, 1) {
+		core.Result::Ok(v) => {
+			if v != 0 {
+				return 4;
+			}
+		},
+		core.Result::Err(_) => { return 5; },
+		default => { return 6; }
+	}
+
+	// Test 3: negative number
+	// "-42" as bytes
+	val bytes3: Array<Byte> = [cast<Byte>(45), cast<Byte>(52), cast<Byte>(50)];
+	match p.parse_int_bytes(&bytes3, 0, 3) {
+		core.Result::Ok(v) => {
+			if v != -42 {
+				return 7;
+			}
+		},
+		core.Result::Err(_) => { return 8; },
+		default => { return 9; }
+	}
+
+	// Test 4: invalid bytes → error
+	// "1a2" as bytes
+	val bytes4: Array<Byte> = [cast<Byte>(49), cast<Byte>(97), cast<Byte>(50)];
+	match p.parse_int_bytes(&bytes4, 0, 3) {
+		core.Result::Ok(_) => { return 10; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-digit" {
+				return 11;
+			}
+		},
+		default => { return 12; }
+	}
+
+	// Test 5: sub-range parsing — parse middle of buffer
+	// "xx42yy" → parse bytes[2..4] = "42"
+	val bytes5: Array<Byte> = [cast<Byte>(120), cast<Byte>(120), cast<Byte>(52), cast<Byte>(50), cast<Byte>(121), cast<Byte>(121)];
+	match p.parse_int_bytes(&bytes5, 2, 4) {
+		core.Result::Ok(v) => {
+			if v != 42 {
+				return 13;
+			}
+		},
+		core.Result::Err(_) => { return 14; },
+		default => { return 15; }
+	}
+
+	// Test 6: parse_uint_bytes basic
+	// "9876" as bytes
+	val bytes6: Array<Byte> = [cast<Byte>(57), cast<Byte>(56), cast<Byte>(55), cast<Byte>(54)];
+	match p.parse_uint_bytes(&bytes6, 0, 4) {
+		core.Result::Ok(v) => {
+			if v != cast<Uint>(9876) {
+				return 16;
+			}
+		},
+		core.Result::Err(_) => { return 17; },
+		default => { return 18; }
+	}
+
+	// Test 7: parse_uint_bytes rejects negative
+	// "-5" as bytes
+	val bytes7: Array<Byte> = [cast<Byte>(45), cast<Byte>(53)];
+	match p.parse_uint_bytes(&bytes7, 0, 2) {
+		core.Result::Ok(_) => { return 19; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-datatype" {
+				return 20;
+			}
+		},
+		default => { return 21; }
+	}
+
+	return 0;
+}

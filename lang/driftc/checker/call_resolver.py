@@ -1585,13 +1585,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			info = _call_info([recv_ty], recv_nominal, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(recv_nominal, info)
 
-	if expr.method_name in ("push", "pop", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range", "range_mut", "get", "set"):
+	if expr.method_name in ("push", "pop", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range", "range_mut", "get", "set", "extend", "truncate", "remove_range"):
 		recv_nominal = _unwrap_ref_type(recv_ty)
 		recv_def = ctx.type_table.get(recv_nominal)
 		if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
 			elem_ty = recv_def.param_types[0]
 			recv_place = _receiver_place(expr.receiver)
-			needs_mut = expr.method_name in ("push", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range_mut", "set", "pop")
+			needs_mut = expr.method_name in ("push", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range_mut", "set", "pop", "extend", "truncate", "remove_range")
 			if needs_mut and not _receiver_can_mut_borrow(expr.receiver, recv_place, recv_ty):
 				diagnostics.append(_tc_diag(message=f"Array.{expr.method_name}() requires a mutable Array receiver", severity="error", span=getattr(expr, "loc", Span())))
 				return MethodCallResult(ctx.unknown_ty, None)
@@ -1606,6 +1606,15 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if want is not None and len(expr.args) != want:
 				diagnostics.append(_tc_diag(message=f"Array.{expr.method_name}() expects {want} argument(s)", severity="error", span=getattr(expr, "loc", Span())))
 				return MethodCallResult(ctx.unknown_ty, None)
+			if expr.method_name == "extend":
+				copy_status = ctx.type_table.copy_status(elem_ty)
+				if copy_status is None:
+					reason = ctx.type_table.copy_unknown_reason(elem_ty)
+					diagnostics.append(_tc_diag(message=f"Array<T>.extend() requires element type to be Copy (Copy is unknown: {reason})", code="E-COPY-UNKNOWN", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None)
+				if not copy_status:
+					diagnostics.append(_tc_diag(message="Array<T>.extend() requires element type to be Copy", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None)
 			def _has_unknown(tid: TypeId) -> bool:
 				td_local = ctx.type_table.get(tid)
 				if td_local.kind is TypeKind.UNKNOWN:
