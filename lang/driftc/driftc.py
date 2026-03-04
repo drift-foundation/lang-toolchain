@@ -145,8 +145,8 @@ from lang.driftc.traits.solver import Env as TraitEnv, ProofStatus, prove_is
 from lang.codegen.llvm import lower_module_to_llvm
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.language_runtime import (
+	build_runtime_archive,
 	get_runtime_sources,
-	runtime_archive_path,
 	runtime_archive_mode,
 	runtime_archive_variant,
 )
@@ -8422,12 +8422,10 @@ def main(argv: list[str] | None = None) -> int:
 			alloc_track_enabled=False,
 			optimized=optimized,
 		)
-		archive_path = runtime_archive_path(ROOT, variant=variant)
-		if not archive_path.exists():
-			msg = (
-				f"runtime archive missing in archive mode: {archive_path} "
-				f"(prebuild with 'just runtime-libs' or set DRIFT_RUNTIME_LINK_MODE=source)"
-			)
+		try:
+			archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)
+		except Exception as ex:
+			msg = f"runtime archive build failed in archive mode: {ex}"
 			if args.json:
 				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
 			else:

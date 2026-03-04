@@ -1,6 +1,10 @@
 # Drift development history
 
 ## 2026-03-04
+- Fixed archive-mode runtime linking robustness in `lang/driftc/driftc.py`:
+  - `driftc` now calls `build_runtime_archive(...)` on demand in `DRIFT_RUNTIME_LINK_MODE=archive` instead of failing immediately when `libdrift_rt.a` is missing/stale,
+  - this removes the manual prebuild dependency for driver flows and prevents false failures after runtime ABI/version bumps when cache state is out of date.
+- Bumped compiler version to `0.27.2-dev`; ABI remains `4`.
 - Landed ET persistent registration MVP with bounded fairness/replay across compiler + runtime + stdlib:
   - runtime now uses one-time `EPOLL_CTL_ADD` with persistent `EPOLLET` registration and per-direction watch state (`read_vt`/`write_vt`, `pending_read`/`pending_write`) in `lang/language_runtime/posix/thread_runtime.c`,
   - added ET replay/fairness runtime helpers `drift_reactor_check_pending` and `drift_reactor_io_charge`,
