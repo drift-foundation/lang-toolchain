@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef __linux__
-#include <ucontext.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
@@ -29,6 +28,9 @@
 #endif
 
 #include "string_runtime.h"
+#ifdef __linux__
+#include "posix/drift_context.h"
+#endif
 
 /* Free a fiber stack.  When is_mmap is true the region was obtained via
  * mmap with a guard page one page below stack_ptr; otherwise it was a
@@ -83,7 +85,7 @@ typedef struct DriftVt {
 	int stack_is_mmap;  // 1 = mmap+guard page, 0 = malloc
 	unsigned valgrind_stack_id;
 #ifdef __linux__
-	ucontext_t ctx;
+	DriftContext ctx;
 	// Context is initialized once by the worker thread (single-writer).
 	int ctx_ready;
 #endif
@@ -282,6 +284,12 @@ typedef struct ReactorWatch {
 	struct ReactorWatch *next;
 } ReactorWatch;
 
+/* Poll ownership: exactly one thread calls epoll_wait at a time.
+ * POLL_OWNER_REACTOR (default): reactor thread owns epoll_wait.
+ * POLL_OWNER_WORKER: the single idle worker owns epoll_wait. */
+#define POLL_OWNER_REACTOR 0
+#define POLL_OWNER_WORKER  1
+
 typedef struct Reactor {
 	int epoll_fd;
 	int wake_fd;
@@ -293,6 +301,7 @@ typedef struct Reactor {
 	pthread_t thread;
 	int thread_started;
 	atomic_int in_wait;
+	atomic_int poll_owner;
 } Reactor;
 
 static Reactor *drift_default_reactor_ptr = NULL;
@@ -438,7 +447,7 @@ static void drift_exec_registry_remove(DriftExec *exec) {
 	pthread_mutex_unlock(&drift_exec_registry_mu);
 }
 #ifdef __linux__
-static __thread ucontext_t *drift_sched_ctx = NULL;
+static __thread DriftContext *drift_sched_ctx = NULL;
 #endif
 
 static int64_t drift_now_ms(void) {
@@ -463,15 +472,211 @@ static DriftVt *drift_vt_tls_get(void) {
 	return (DriftVt *)pthread_getspecific(drift_vt_tls_key);
 }
 
+#ifdef __linux__
+static ReactorWatch *drift_reactor_find_watch(Reactor *r, int fd);
+static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTimer **out);
+static int64_t drift_now_ms(void);
+#endif
+
+static void drift_worker_vt_finish(DriftVt *vt) {
+	if (vt->stack) {
+		VALGRIND_STACK_DEREGISTER(vt->valgrind_stack_id);
+		drift_fiber_stack_free(vt->stack, vt->stack_size, vt->stack_is_mmap);
+		vt->stack = NULL;
+		vt->stack_size = 0;
+	}
+	pthread_mutex_lock(&vt->mu);
+	atomic_store(&vt->completed, 1);
+	int dropped_after_finish = atomic_load(&vt->dropped);
+	vt->park_token++;
+	pthread_cond_broadcast(&vt->cv);
+	pthread_mutex_unlock(&vt->mu);
+	if (dropped_after_finish) {
+		drift_vt_destroy(vt);
+	}
+}
+
+/* Phase A: worker-side polling.  When the single worker's run queue is empty,
+ * the worker claims poll ownership and calls epoll_wait directly, resuming
+ * I/O-ready VTs without the reactor → executor cross-thread handoff.
+ *
+ * Returns 1 if the worker handled at least one event (caller should re-check
+ * the run queue), 0 if it should fall through to condvar_wait. */
+#ifdef __linux__
+static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
+	Reactor *r = drift_default_reactor_ptr;
+	if (!r || r->epoll_fd < 0 || exec->threads_count != 1) return 0;
+
+	/* W2: CAS poll_owner from REACTOR to WORKER. */
+	int expected = POLL_OWNER_REACTOR;
+	if (!atomic_compare_exchange_strong(&r->poll_owner, &expected, POLL_OWNER_WORKER)) {
+		return 0;
+	}
+
+	/* W3: publish in_wait before releasing exec->mu so any concurrent
+	 * drift_reactor_wake sees us and writes to wake_fd. */
+	atomic_store_explicit(&r->in_wait, 1, memory_order_release);
+	pthread_mutex_unlock(&exec->mu);
+
+	int did_work = 0;
+	struct epoll_event events[16];
+
+	for (;;) {
+		/* W4: compute epoll timeout from timer list. */
+		int timeout_ms = -1;
+		pthread_mutex_lock(&r->mu);
+		if (r->timers) {
+			int64_t now_ms = drift_now_ms();
+			int64_t min_deadline = r->timers->deadline_ms;
+			for (ReactorTimer *t = r->timers; t; t = t->next) {
+				if (t->deadline_ms < min_deadline)
+					min_deadline = t->deadline_ms;
+			}
+			int64_t delta = min_deadline - now_ms;
+			if (delta <= 0) timeout_ms = 0;
+			else if (delta > INT32_MAX) timeout_ms = INT32_MAX;
+			else timeout_ms = (int)delta;
+		}
+		pthread_mutex_unlock(&r->mu);
+
+		/* W5: Publish in_wait before re-checking the run queue.  Any
+		 * concurrent drift_reactor_wake after our check will see
+		 * in_wait=1 and write to wake_fd, so epoll_wait returns.
+		 * Without this, a timer collected by the reactor between the
+		 * previous W8 check and here could enqueue work while in_wait
+		 * was 0 — the wake would be lost and epoll_wait(-1) blocks
+		 * forever. */
+		atomic_store_explicit(&r->in_wait, 1, memory_order_release);
+		pthread_mutex_lock(&exec->mu);
+		if (exec->head || exec->shutting_down) {
+			atomic_store_explicit(&r->in_wait, 0, memory_order_relaxed);
+			goto release_poll;
+		}
+		pthread_mutex_unlock(&exec->mu);
+		int n = epoll_wait(r->epoll_fd, events, 16, timeout_ms);
+		/* W6 */
+		atomic_store_explicit(&r->in_wait, 0, memory_order_relaxed);
+
+		if (n < 0 && errno == EINTR) {
+			/* Check if we should exit poll mode. */
+			pthread_mutex_lock(&exec->mu);
+			if (exec->head || exec->shutting_down) {
+				goto release_poll;
+			}
+			pthread_mutex_unlock(&exec->mu);
+			continue;
+		}
+
+		/* W7: process events. */
+		if (n > 0) {
+			for (int i = 0; i < n; i++) {
+				int fd = events[i].data.fd;
+				if (fd == r->wake_fd) {
+					uint64_t buf;
+					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
+					continue;
+				}
+				/* IO event: resolve watch, cancel timers, set state — all
+				 * under r->mu (Race 1 fix, transition T4b). */
+				pthread_mutex_lock(&r->mu);
+				ReactorWatch *w = drift_reactor_find_watch(r, fd);
+				uint64_t vt_id = w ? w->vt : 0;
+				DriftVt *io_vt = (w && w->vt) ? (DriftVt *)w->vt : NULL;
+				if (w) { w->vt = 0; w->events = 0; }
+				if (vt_id != 0) {
+					ReactorTimer *tp = NULL;
+					ReactorTimer *tc = r->timers;
+					while (tc) {
+						ReactorTimer *tn = tc->next;
+						if (tc->vt == vt_id) {
+							if (tp) tp->next = tn; else r->timers = tn;
+							free(tc);
+						} else { tp = tc; }
+						tc = tn;
+					}
+				}
+				/* T4b: set state to RUNNING under r->mu — prevents Race 1
+				 * (timer fires while worker resolves same VT from epoll). */
+				if (io_vt && atomic_load(&io_vt->state) == DRIFT_VT_PARKED) {
+					io_vt->park_token++;
+					atomic_store(&io_vt->state, DRIFT_VT_RUNNING);
+				} else {
+					io_vt = NULL;
+				}
+				pthread_mutex_unlock(&r->mu);
+				/* Disarm fd. */
+				if (w && r->epoll_fd >= 0) {
+					struct epoll_event disarm; disarm.events = 0; disarm.data.fd = fd;
+					epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, fd, &disarm);
+				}
+				if (!io_vt) continue;
+				/* Resume VT directly. */
+				drift_vt_tls_set(io_vt);
+				drift_swapcontext(sched_ctx, &io_vt->ctx);
+				drift_vt_tls_set(NULL);
+				did_work = 1;
+				int st = atomic_load(&io_vt->state);
+				if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) {
+					drift_worker_vt_finish(io_vt);
+				}
+			}
+		}
+
+		/* W7 timeout path: collect expired timers. */
+		pthread_mutex_lock(&r->mu);
+		ReactorTimer *ready = NULL;
+		drift_reactor_collect_timers(r, drift_now_ms(), &ready);
+		pthread_mutex_unlock(&r->mu);
+		while (ready) {
+			ReactorTimer *next = ready->next;
+			if (ready->vt != 0) {
+				drift_thread_unpark(ready->vt);
+			}
+			free(ready);
+			ready = next;
+		}
+
+		/* W8: re-check run queue and shutdown before going back to poll. */
+		pthread_mutex_lock(&exec->mu);
+		if (exec->head || exec->shutting_down) {
+			goto release_poll;
+		}
+		pthread_mutex_unlock(&exec->mu);
+	}
+
+release_poll:
+	/* W9: release poll ownership.  Caller holds exec->mu. */
+	atomic_store(&r->poll_owner, POLL_OWNER_REACTOR);
+	/* Wake reactor so it resumes epoll_wait. */
+	pthread_cond_signal(&r->cv);
+	return did_work;
+}
+#endif
+
 static void *drift_exec_worker(void *arg) {
 	DriftExec *exec = (DriftExec *)arg;
 	drift_exec_tls = exec;
 #ifdef __linux__
-	ucontext_t sched_ctx;
+	DriftContext sched_ctx;
 	drift_sched_ctx = &sched_ctx;
 #endif
 	while (1) {
 		pthread_mutex_lock(&exec->mu);
+#ifdef __linux__
+		/* Phase A: if queue is empty and single-worker, claim poll ownership
+		 * and call epoll_wait directly.  Re-check head under exec->mu (W1). */
+		if (!exec->head && !exec->shutting_down && exec->threads_count == 1) {
+			int polled = drift_worker_poll(exec, &sched_ctx);
+			/* Returns with exec->mu held. */
+			if (polled) {
+				/* Handled work; re-check queue at loop top. */
+				pthread_mutex_unlock(&exec->mu);
+				continue;
+			}
+			/* drift_worker_poll returned 0 with exec->mu held —
+			 * either CAS failed or no events.  Fall through to condvar. */
+		}
+#endif
 		while (!exec->head && !exec->shutting_down) {
 			pthread_cond_wait(&exec->cv, &exec->mu);
 		}
@@ -526,8 +731,6 @@ static void *drift_exec_worker(void *arg) {
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 #ifdef __linux__
 		if (!vt->ctx_ready) {
-			getcontext(&vt->ctx);
-			vt->ctx.uc_link = &sched_ctx;
 			vt->stack_size = exec->stack_bytes;
 			/* Use mmap with a guard page at the bottom to detect stack overflow.
 			 * The guard page (PROT_NONE) will cause SIGSEGV if the fiber stack
@@ -551,32 +754,16 @@ static void *drift_exec_worker(void *arg) {
 				vt->valgrind_stack_id = VALGRIND_STACK_REGISTER(
 					vt->stack, (char *)vt->stack + vt->stack_size);
 			}
-			vt->ctx.uc_stack.ss_sp = vt->stack;
-			vt->ctx.uc_stack.ss_size = vt->stack_size;
 			vt->ctx_ready = 1;
-			makecontext(&vt->ctx, (void (*)())drift_vt_fiber_entry, 1, (uintptr_t)vt);
+			drift_makecontext(&vt->ctx, (char *)vt->stack + vt->stack_size, drift_vt_fiber_entry, (uintptr_t)vt);
 		}
 		drift_vt_tls_set(vt);
-		swapcontext(&sched_ctx, &vt->ctx);
+		drift_swapcontext(&sched_ctx, &vt->ctx);
 		drift_vt_tls_set(NULL);
 		int state = atomic_load(&vt->state);
-			if ((state == DRIFT_VT_FINISHED) || (state == DRIFT_VT_CANCELLED)) {
-				if (vt->stack) {
-					VALGRIND_STACK_DEREGISTER(vt->valgrind_stack_id);
-					drift_fiber_stack_free(vt->stack, vt->stack_size, vt->stack_is_mmap);
-					vt->stack = NULL;
-					vt->stack_size = 0;
-				}
-				pthread_mutex_lock(&vt->mu);
-				atomic_store(&vt->completed, 1);
-				int dropped_after_finish = atomic_load(&vt->dropped);
-				vt->park_token++;
-				pthread_cond_broadcast(&vt->cv);
-				pthread_mutex_unlock(&vt->mu);
-				if (dropped_after_finish) {
-					drift_vt_destroy(vt);
-				}
-			}
+		if (state == DRIFT_VT_FINISHED || state == DRIFT_VT_CANCELLED) {
+			drift_worker_vt_finish(vt);
+		}
 #else
 		drift_vt_tls_set(vt);
 		drift_run_callback(&vt->cb, 0);
@@ -679,11 +866,16 @@ static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTime
 	*out = ready;
 }
 
+/* Forward declaration: drift_exec_enqueue is defined after drift_vt_fiber_entry
+ * but used in the reactor I/O path (T4a). */
+static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt);
+
 #ifdef __linux__
 static void *drift_reactor_thread_entry(void *arg) {
 	Reactor *r = (Reactor *)arg;
 	struct epoll_event events[16];
 	while (1) {
+		/* R1: compute timeout from timer list. */
 		int timeout_ms = -1;
 		pthread_mutex_lock(&r->mu);
 		if (r->stopping) {
@@ -707,11 +899,48 @@ static void *drift_reactor_thread_entry(void *arg) {
 				timeout_ms = (int)delta;
 			}
 		}
-		atomic_store_explicit(&r->in_wait, 1, memory_order_relaxed);
-		pthread_mutex_unlock(&r->mu);
 
-		int n = epoll_wait(r->epoll_fd, events, 16, timeout_ms);
-		atomic_store_explicit(&r->in_wait, 0, memory_order_relaxed);
+		/* R2: check poll_owner.  If worker owns epoll, yield to condvar. */
+		int n = 0;
+		if (atomic_load(&r->poll_owner) == POLL_OWNER_WORKER) {
+			/* Worker owns epoll_wait.  Wait on condvar for either:
+			 * - timer deadline (timedwait)
+			 * - worker releases poll (signals r->cv)
+			 * - stopping (checked at loop top) */
+			if (timeout_ms < 0) {
+				/* No timers: sleep up to 1s, re-check poll_owner. */
+				struct timespec ts;
+				clock_gettime(CLOCK_REALTIME, &ts);
+				ts.tv_sec += 1;
+				pthread_cond_timedwait(&r->cv, &r->mu, &ts);
+			} else if (timeout_ms > 0) {
+				struct timespec ts;
+				clock_gettime(CLOCK_REALTIME, &ts);
+				ts.tv_sec += timeout_ms / 1000;
+				ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+				if (ts.tv_nsec >= 1000000000L) {
+					ts.tv_sec += 1;
+					ts.tv_nsec -= 1000000000L;
+				}
+				pthread_cond_timedwait(&r->cv, &r->mu, &ts);
+			}
+			/* timeout_ms == 0: don't wait, just process timers immediately. */
+			pthread_mutex_unlock(&r->mu);
+		} else {
+			/* R3: reactor owns epoll_wait — existing behavior.
+			 * Set in_wait BEFORE releasing mu so any concurrent
+			 * drift_reactor_wake (e.g. from timer registration)
+			 * sees in_wait=1 and writes to wake_fd. */
+			atomic_store_explicit(&r->in_wait, 1, memory_order_release);
+			pthread_mutex_unlock(&r->mu);
+			n = epoll_wait(r->epoll_fd, events, 16, timeout_ms);
+			/* Only clear in_wait if the worker hasn't claimed poll
+			 * ownership while we were in epoll_wait.  If poll_owner
+			 * is now WORKER, in_wait belongs to the worker (set at
+			 * W3/W5) — clearing it would lose wake_fd wakes. */
+			if (atomic_load(&r->poll_owner) == POLL_OWNER_REACTOR)
+				atomic_store_explicit(&r->in_wait, 0, memory_order_relaxed);
+		}
 		if (n < 0 && errno != EINTR) {
 			continue;
 		}
@@ -723,14 +952,15 @@ static void *drift_reactor_thread_entry(void *arg) {
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
 					continue;
 				}
+				/* T4a: resolve watch, cancel timers, transition state — all
+				 * under r->mu, matching T4b in the worker path.  This
+				 * prevents a concurrent unpark (e.g. from another code
+				 * path) from seeing PARKED and double-enqueuing. */
 				pthread_mutex_lock(&r->mu);
 				ReactorWatch *w = drift_reactor_find_watch(r, fd);
 				uint64_t vt = w ? w->vt : 0;
+				DriftVt *io_vt = (w && w->vt) ? (DriftVt *)w->vt : NULL;
 				if (w) { w->vt = 0; w->events = 0; }
-				/* I/O completed — cancel the timeout timer(s) for this VT
-				 * to prevent unbounded timer list growth.  Without this,
-				 * stale timers accumulate O(n) with I/O ops and the
-				 * reactor's O(n) scans become O(n²) total. */
 				if (vt != 0) {
 					ReactorTimer *tp = NULL;
 					ReactorTimer *tc = r->timers;
@@ -745,13 +975,24 @@ static void *drift_reactor_thread_entry(void *arg) {
 						tc = tn;
 					}
 				}
+				/* Transition PARKED → READY under r->mu.  If the VT is
+				 * no longer PARKED (e.g. already unparked by a timer on
+				 * a previous iteration), skip the enqueue. */
+				if (io_vt && atomic_load(&io_vt->state) == DRIFT_VT_PARKED) {
+					atomic_store(&io_vt->state, DRIFT_VT_READY);
+				} else {
+					io_vt = NULL;
+				}
 				pthread_mutex_unlock(&r->mu);
 				if (w && r->epoll_fd >= 0) {
 					struct epoll_event ev; ev.events = 0; ev.data.fd = fd;
 					epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, fd, &ev);
 				}
-				if (vt != 0) {
-					drift_thread_unpark(vt);
+				if (io_vt && io_vt->exec) {
+					pthread_mutex_lock(&io_vt->exec->mu);
+					drift_exec_enqueue(io_vt->exec, io_vt);
+					pthread_mutex_unlock(&io_vt->exec->mu);
+					drift_reactor_wake(r);
 				}
 			}
 		}
@@ -805,7 +1046,19 @@ static void drift_reactor_destroy(Reactor *r) {
 	pthread_mutex_lock(&r->mu);
 	r->stopping = 1;
 	pthread_mutex_unlock(&r->mu);
-	drift_reactor_wake(r);
+	/* Force-write to wake_fd unconditionally.  drift_reactor_wake is
+	 * guarded by in_wait which may be 0 if the reactor is between its
+	 * stopping check and epoll_wait entry.  The eventfd counter is
+	 * persistent, so even if the reactor hasn't entered epoll_wait yet,
+	 * the write ensures the subsequent epoll_wait returns immediately. */
+#ifdef __linux__
+	if (r->wake_fd >= 0) {
+		uint64_t one = 1;
+		(void)write(r->wake_fd, &one, sizeof(one));
+	}
+#endif
+	/* Also signal condvar in case the reactor is in R2 (poll_owner=WORKER). */
+	pthread_cond_signal(&r->cv);
 #ifdef __linux__
 	if (r->thread_started) {
 		pthread_join(r->thread, NULL);
@@ -914,6 +1167,9 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 	exec->shutting_down = 1;
 	pthread_cond_broadcast(&exec->cv);
 	pthread_mutex_unlock(&exec->mu);
+	/* Wake worker if it is in poll mode (epoll_wait). */
+	Reactor *r = drift_default_reactor_ptr;
+	if (r) drift_reactor_wake(r);
 	for (int i = 0; i < exec->threads_count; i++) {
 		pthread_join(exec->threads[i], NULL);
 	}
@@ -1036,8 +1292,10 @@ static void drift_vt_fiber_entry(uintptr_t arg) {
 	drift_run_callback(&vt->cb, 0);
 	atomic_store(&vt->state, DRIFT_VT_FINISHED);
 	drift_vt_tls_set(NULL);
+	/* Swap back to the current worker's scheduler context via TLS.
+	 * This is correct even if the VT migrated between workers. */
 	if (drift_sched_ctx) {
-		swapcontext(&vt->ctx, drift_sched_ctx);
+		drift_swapcontext(&vt->ctx, drift_sched_ctx);
 	}
 }
 #endif
@@ -1227,7 +1485,7 @@ void drift_thread_park(uint64_t reason) {
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
-		swapcontext(&vt->ctx, drift_sched_ctx);
+		drift_swapcontext(&vt->ctx, drift_sched_ctx);
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1273,7 +1531,7 @@ void drift_thread_park_until(int64_t deadline_ms) {
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
-		swapcontext(&vt->ctx, drift_sched_ctx);
+		drift_swapcontext(&vt->ctx, drift_sched_ctx);
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1318,6 +1576,9 @@ void drift_thread_unpark(uint64_t vt) {
 		pthread_mutex_lock(&h->exec->mu);
 		drift_exec_enqueue(h->exec, h);
 		pthread_mutex_unlock(&h->exec->mu);
+		/* Wake worker if it is in poll mode (epoll_wait instead of condvar). */
+		Reactor *r = drift_default_reactor_ptr;
+		if (r) drift_reactor_wake(r);
 		return;
 	}
 	atomic_store(&h->state, DRIFT_VT_READY);

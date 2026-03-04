@@ -2,13 +2,25 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
 
+def _check_supported_target() -> None:
+	"""Verify the build target is supported by the VT runtime."""
+	if sys.platform != "linux" or platform.machine() != "x86_64":
+		raise RuntimeError(
+			"Drift VT runtime requires x86_64 Linux "
+			f"(current: {sys.platform}/{platform.machine()})"
+		)
+
+
 def get_runtime_sources(root: Path) -> List[Path]:
+	_check_supported_target()
 	base = root / "lang" / "language_runtime"
 	runtime = root / "lang" / "compiler_infra"
 	return [
@@ -22,6 +34,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "atomic_runtime.c",
 		base / "posix" / "io_runtime.c",
 		base / "posix" / "thread_runtime.c",
+		base / "posix" / "drift_context.S",
 		base / "posix" / "assert_runtime.c",
 		base / "random_runtime.c",
 		# ABI version stamp for link-time compatibility guard.
@@ -73,6 +86,7 @@ def _runtime_deps(root: Path) -> List[Path]:
 	infra = root / "lang" / "compiler_infra"
 	deps = get_runtime_sources(root)
 	deps.extend(base.rglob("*.h"))
+	deps.extend(base.rglob("*.S"))
 	deps.extend(infra.glob("*.h"))
 	return deps
 
@@ -138,9 +152,15 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 		obj_paths: list[Path] = []
 		for src in get_runtime_sources(root):
 			rel = src.relative_to(root)
-			obj_name = str(rel).replace("/", "__").replace(".c", ".o")
+			src_str = str(rel)
+			if src_str.endswith(".S"):
+				obj_name = src_str.replace("/", "__").replace(".S", ".o")
+				lang_flag = ["-x", "assembler-with-cpp"]
+			else:
+				obj_name = src_str.replace("/", "__").replace(".c", ".o")
+				lang_flag = ["-x", "c"]
 			obj_path = obj_dir / obj_name
-			cmd = [clang, "-c", "-x", "c", *cflags, *cdefs]
+			cmd = [clang, "-c", *lang_flag, *cflags, *cdefs]
 			for inc in include_dirs:
 				cmd.extend(["-I", str(inc)])
 			cmd.extend(["-o", str(obj_path), str(src)])

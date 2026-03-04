@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-03
+- Implemented Phase A worker-side polling in `lang/language_runtime/posix/thread_runtime.c` for the single-worker executor case:
+  - when the executor run queue is empty, the worker can claim `poll_owner` and call `epoll_wait(...)` directly instead of waiting for the separate reactor->executor handoff,
+  - ready I/O VTs can then be resumed directly by the worker on the hot path,
+  - the reactor now falls back to timer expiry / shutdown / non-worker poll ownership paths instead of always owning `epoll_wait`.
+- Added an explicit poll-owner protocol around `poll_owner` and `in_wait`:
+  - worker-side polling publishes `in_wait` before entering `epoll_wait`,
+  - `drift_thread_unpark(...)` now wakes a worker that is sleeping in poll mode,
+  - reactor and worker poll paths avoid stomping each other's wake state.
+- Replaced glibc `getcontext`/`makecontext`/`swapcontext` with a custom x86_64 Linux VT context switch:
+  - added `lang/language_runtime/posix/drift_context.h`
+  - added `lang/language_runtime/posix/drift_context.S`
+  - removed per-switch signal-mask churn from the VT fast path
+  - `drift_vt_fiber_entry(...)` now returns via the current worker TLS scheduler context instead of a scheduler context captured at VT initialization time.
+- Fixed the Phase A correctness issues uncovered during implementation:
+  - worker lost-wake window around queue re-check vs `epoll_wait`,
+  - reactor `in_wait` stomping while worker owned poll,
+  - reactor shutdown hang when `wake_fd` wake was guarded by `in_wait`,
+  - aligned reactor-owned I/O completion (T4a) with worker-owned I/O completion (T4b): watch resolution, timer cancellation, and parked-VT state transition now happen under `r->mu` before enqueue/resume.
+- Added explicit host-based runtime target gating for the new VT backend in `lang/language_runtime/__init__.py`:
+  - current supported host/runtime combination is `x86_64 Linux`,
+  - unsupported hosts fail early with a clear runtime-build error,
+  - no `ucontext` fallback remains.
+- Validation:
+  - Phase A stayed within the intended scope (single-worker only, level-triggered epoll, no `EPOLLONESHOT`, no `EPOLLET`, no broader reactor rewrite),
+  - benchmark results showed substantial raw VT improvement over the pre-Phase-A baseline in both debug and optimized configurations,
+  - targeted concurrent/perf/TCP e2e coverage remained green and ASAN stayed clean on the exercised paths.
+- Measured a temporary raw-VT timer-path bypass experiment (`DRIFT_EXP_NO_IO_TIMER=1`) to test whether per-I/O timer-node allocation/cancellation was still a meaningful raw-TCP bottleneck. The experiment skipped `drift_reactor_register_timer(...)` inside `drift_reactor_register_io(...)`, intentionally removing timed-I/O timeout protection only for benchmark purposes. Result: raw loopback moved by only about `0.36 us/iter` (`~2.3%`, within noise), and syscall counts were effectively unchanged. Conclusion: timer-node churn is no longer a meaningful suspect for the remaining raw-TCP gap; the bigger remaining costs are in reactor→executor handoff and epoll control churn. This was an experiment only and is not intended to land as a runtime behavior change.
 - Hardened the codegen e2e runner timeout path in `lang/tests/codegen/e2e/runner.py`:
   - added `_disarm_alarm(...)` so late `SIGALRM` delivery during cleanup cannot escape without cancelling the alarm and restoring the prior handler,
   - `_run_case_worker(...)` now always converts timeouts into named `(case, FAIL)` results even when the alarm fires during cleanup,
