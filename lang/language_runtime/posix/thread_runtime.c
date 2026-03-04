@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef __linux__
+#include <ucontext.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
@@ -20,17 +21,24 @@
 #ifdef NVALGRIND
 #define VALGRIND_STACK_REGISTER(start, end) (0)
 #define VALGRIND_STACK_DEREGISTER(id) do {} while(0)
+#define RUNNING_ON_VALGRIND 0
 #elif __has_include(<valgrind/valgrind.h>)
 #include <valgrind/valgrind.h>
 #else
 #define VALGRIND_STACK_REGISTER(start, end) (0)
 #define VALGRIND_STACK_DEREGISTER(id) do {} while(0)
+#define RUNNING_ON_VALGRIND 0
 #endif
 
 #include "string_runtime.h"
 #ifdef __linux__
 #include "posix/drift_context.h"
 #endif
+
+/* When running under Valgrind, fall back to glibc swapcontext/makecontext.
+ * Valgrind's VEX JIT cannot follow raw %rsp manipulation in drift_swapcontext
+ * and crashes with an internal SIGSEGV.  Detected once at executor creation. */
+static int drift_valgrind_mode = 0;
 
 /* Free a fiber stack.  When is_mmap is true the region was obtained via
  * mmap with a guard page one page below stack_ptr; otherwise it was a
@@ -86,6 +94,7 @@ typedef struct DriftVt {
 	unsigned valgrind_stack_id;
 #ifdef __linux__
 	DriftContext ctx;
+	ucontext_t ctx_uc;  /* Valgrind fallback — used when drift_valgrind_mode. */
 	// Context is initialized once by the worker thread (single-writer).
 	int ctx_ready;
 #endif
@@ -448,6 +457,7 @@ static void drift_exec_registry_remove(DriftExec *exec) {
 }
 #ifdef __linux__
 static __thread DriftContext *drift_sched_ctx = NULL;
+static __thread ucontext_t *drift_sched_ctx_uc = NULL;
 #endif
 
 static int64_t drift_now_ms(void) {
@@ -612,7 +622,10 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 				if (!io_vt) continue;
 				/* Resume VT directly. */
 				drift_vt_tls_set(io_vt);
-				drift_swapcontext(sched_ctx, &io_vt->ctx);
+				if (drift_valgrind_mode)
+					swapcontext(drift_sched_ctx_uc, &io_vt->ctx_uc);
+				else
+					drift_swapcontext(sched_ctx, &io_vt->ctx);
 				drift_vt_tls_set(NULL);
 				did_work = 1;
 				int st = atomic_load(&io_vt->state);
@@ -659,6 +672,8 @@ static void *drift_exec_worker(void *arg) {
 #ifdef __linux__
 	DriftContext sched_ctx;
 	drift_sched_ctx = &sched_ctx;
+	ucontext_t sched_ctx_uc;
+	drift_sched_ctx_uc = &sched_ctx_uc;
 #endif
 	while (1) {
 		pthread_mutex_lock(&exec->mu);
@@ -755,10 +770,21 @@ static void *drift_exec_worker(void *arg) {
 					vt->stack, (char *)vt->stack + vt->stack_size);
 			}
 			vt->ctx_ready = 1;
-			drift_makecontext(&vt->ctx, (char *)vt->stack + vt->stack_size, drift_vt_fiber_entry, (uintptr_t)vt);
+			if (drift_valgrind_mode) {
+				getcontext(&vt->ctx_uc);
+				vt->ctx_uc.uc_link = NULL;  /* fiber_entry swaps back via TLS */
+				vt->ctx_uc.uc_stack.ss_sp = vt->stack;
+				vt->ctx_uc.uc_stack.ss_size = vt->stack_size;
+				makecontext(&vt->ctx_uc, (void (*)())drift_vt_fiber_entry, 1, (uintptr_t)vt);
+			} else {
+				drift_makecontext(&vt->ctx, (char *)vt->stack + vt->stack_size, drift_vt_fiber_entry, (uintptr_t)vt);
+			}
 		}
 		drift_vt_tls_set(vt);
-		drift_swapcontext(&sched_ctx, &vt->ctx);
+		if (drift_valgrind_mode)
+			swapcontext(&sched_ctx_uc, &vt->ctx_uc);
+		else
+			drift_swapcontext(&sched_ctx, &vt->ctx);
 		drift_vt_tls_set(NULL);
 		int state = atomic_load(&vt->state);
 		if (state == DRIFT_VT_FINISHED || state == DRIFT_VT_CANCELLED) {
@@ -950,6 +976,15 @@ static void *drift_reactor_thread_entry(void *arg) {
 				if (fd == r->wake_fd) {
 					uint64_t buf;
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
+					/* If the worker owns poll, this wake was likely
+					 * intended for the worker — re-signal so the
+					 * worker's epoll_wait sees it.  The reactor will
+					 * exit to R2 condvar on the next loop iteration,
+					 * ending the brief overlap period. */
+					if (atomic_load(&r->poll_owner) == POLL_OWNER_WORKER) {
+						uint64_t one = 1;
+						(void)write(r->wake_fd, &one, sizeof(one));
+					}
 					continue;
 				}
 				/* T4a: resolve watch, cancel timers, transition state — all
@@ -1111,6 +1146,12 @@ static void drift_reactor_init_once(void) {
 
 static DriftExec *drift_exec_create_internal(int64_t min_threads, int64_t max_threads, int64_t queue_limit, int64_t stack_bytes) {
 	(void)min_threads;
+	/* Detect Valgrind once before spawning worker threads. */
+	static int drift_valgrind_checked = 0;
+	if (!drift_valgrind_checked) {
+		drift_valgrind_mode = RUNNING_ON_VALGRIND ? 1 : 0;
+		drift_valgrind_checked = 1;
+	}
 	if (max_threads <= 0) {
 		max_threads = 1;
 	}
@@ -1292,10 +1333,15 @@ static void drift_vt_fiber_entry(uintptr_t arg) {
 	drift_run_callback(&vt->cb, 0);
 	atomic_store(&vt->state, DRIFT_VT_FINISHED);
 	drift_vt_tls_set(NULL);
-	/* Swap back to the current worker's scheduler context via TLS.
-	 * This is correct even if the VT migrated between workers. */
-	if (drift_sched_ctx) {
-		drift_swapcontext(&vt->ctx, drift_sched_ctx);
+	/* Swap back to the *current* worker's scheduler context via TLS.
+	 * Must be explicit on both paths — uc_link targets the initializing
+	 * worker, which may differ from the worker executing this VT now. */
+	if (drift_valgrind_mode) {
+		if (drift_sched_ctx_uc)
+			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
+	} else {
+		if (drift_sched_ctx)
+			drift_swapcontext(&vt->ctx, drift_sched_ctx);
 	}
 }
 #endif
@@ -1485,7 +1531,10 @@ void drift_thread_park(uint64_t reason) {
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
-		drift_swapcontext(&vt->ctx, drift_sched_ctx);
+		if (drift_valgrind_mode)
+			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
+		else
+			drift_swapcontext(&vt->ctx, drift_sched_ctx);
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1531,7 +1580,10 @@ void drift_thread_park_until(int64_t deadline_ms) {
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
-		drift_swapcontext(&vt->ctx, drift_sched_ctx);
+		if (drift_valgrind_mode)
+			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
+		else
+			drift_swapcontext(&vt->ctx, drift_sched_ctx);
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1643,6 +1695,11 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 	h->exec = ex;
 	drift_exec_enqueue(ex, h);
 	pthread_mutex_unlock(&ex->mu);
+	/* Wake worker if it is in poll mode (epoll_wait instead of condvar).
+	 * Without this, the condvar signal from drift_exec_enqueue is lost
+	 * when the worker owns epoll — identical to drift_thread_unpark. */
+	Reactor *r = drift_default_reactor_ptr;
+	if (r) drift_reactor_wake(r);
 	return 0;
 }
 

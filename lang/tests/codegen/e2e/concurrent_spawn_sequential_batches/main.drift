@@ -1,0 +1,73 @@
+module main
+
+import std.concurrent as conc;
+import std.console as console;
+import std.core as core;
+import std.net as net;
+import std.err;
+
+fn code_from_error(e: std.err.ResultError) nothrow -> Int {
+	val dv = e.attrs["dv"];
+	val opt = dv.as_int();
+	match opt {
+		Some(v) => { return v; },
+		None => { return 90; }
+	}
+}
+
+fn server_task(listener: net.TcpListener, timeout: conc.Duration) -> Int {
+	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -2); });
+	val _ = s.close(timeout);
+	return 0;
+}
+
+fn client_task(port: Int, timeout: conc.Duration) -> Int {
+	var caddr = net.socket_addr("127.0.0.1", port);
+	val cs = net.connect(&caddr, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -3); });
+	val _ = cs.close(timeout);
+	return 0;
+}
+
+fn run() -> Int {
+	val io_t = conc.Duration(millis = 5000);
+	// Batch 1: TCP listen + connect on VTs (forces reactor init + I/O).
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -1); });
+	val port = listener.local_port();
+	var server = conc.spawn(| | captures(move listener, copy io_t) => {
+		return try server_task(move listener, io_t) catch std.err:ResultError(e) {
+			code_from_error(e)
+		} catch { 91 };
+	});
+	var client = conc.spawn(| | captures(copy port, copy io_t) => {
+		return try client_task(port, io_t) catch std.err:ResultError(e) {
+			code_from_error(e)
+		} catch { 92 };
+	});
+	val cr = client.join().on_error(|_e| => { throw std.err:ResultError(dv = 50); });
+	if cr != 0 { return cr; }
+	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(dv = 51); });
+	if sr != 0 { return sr; }
+	console.eprintln("batch1");
+	// After batch 1, the reactor is alive and the worker is idle.
+	// The worker may enter poll mode (epoll_wait).  Batch 2's
+	// exec_submit must wake it — without the fix, the condvar signal
+	// is lost and the program hangs.
+	var vt2 = conc.spawn(| | => {
+		console.eprintln("batch2");
+		return 0;
+	});
+	val r2 = vt2.join().on_error(|_e| => { throw std.err:ResultError(dv = 60); });
+	if r2 != 0 { return r2; }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r = try run() catch std.err:ResultError(e) {
+		1000 + code_from_error(e)
+	} catch { -777 };
+	if r == 0 {
+		console.println("done");
+	}
+	return r;
+}

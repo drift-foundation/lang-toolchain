@@ -1,0 +1,6 @@
+{
+  "description": "e2e: sequential VT batches must wake worker from poll mode after I/O",
+  "exit_code": 0,
+  "stderr": "batch1\nbatch2\n",
+  "stdout": "done\n"
+}

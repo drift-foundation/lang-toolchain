@@ -14,11 +14,16 @@
   - added `lang/language_runtime/posix/drift_context.S`
   - removed per-switch signal-mask churn from the VT fast path
   - `drift_vt_fiber_entry(...)` now returns via the current worker TLS scheduler context instead of a scheduler context captured at VT initialization time.
+- Added a Valgrind-only compatibility path for the VT runtime:
+  - runtime detects `RUNNING_ON_VALGRIND` once at executor creation,
+  - Valgrind mode falls back to glibc `getcontext` / `makecontext` / `swapcontext` because Valgrind cannot safely interpret the raw `%rsp` manipulation in the custom assembly path,
+  - the Valgrind path still returns through the current TLS scheduler context rather than relying on `uc_link`.
 - Fixed the Phase A correctness issues uncovered during implementation:
   - worker lost-wake window around queue re-check vs `epoll_wait`,
   - reactor `in_wait` stomping while worker owned poll,
   - reactor shutdown hang when `wake_fd` wake was guarded by `in_wait`,
-  - aligned reactor-owned I/O completion (T4a) with worker-owned I/O completion (T4b): watch resolution, timer cancellation, and parked-VT state transition now happen under `r->mu` before enqueue/resume.
+  - aligned reactor-owned I/O completion (T4a) with worker-owned I/O completion (T4b): watch resolution, timer cancellation, and parked-VT state transition now happen under `r->mu` before enqueue/resume,
+  - fixed the spawn-after-poll hang by making `drift_exec_submit(...)` wake a worker sleeping in poll mode and by re-signaling `wake_fd` if the reactor drains a wake intended for the worker during the brief overlap window. Regression: `concurrent_spawn_sequential_batches`.
 - Added explicit host-based runtime target gating for the new VT backend in `lang/language_runtime/__init__.py`:
   - current supported host/runtime combination is `x86_64 Linux`,
   - unsupported hosts fail early with a clear runtime-build error,
@@ -26,7 +31,10 @@
 - Validation:
   - Phase A stayed within the intended scope (single-worker only, level-triggered epoll, no `EPOLLONESHOT`, no `EPOLLET`, no broader reactor rewrite),
   - benchmark results showed substantial raw VT improvement over the pre-Phase-A baseline in both debug and optimized configurations,
-  - targeted concurrent/perf/TCP e2e coverage remained green and ASAN stayed clean on the exercised paths.
+  - targeted concurrent/perf/TCP e2e coverage remained green,
+  - ASAN stayed clean on the exercised paths,
+  - MEMCHECK validation passes through the Valgrind fallback path.
+- Bumped compiler version to `0.27.0-dev`; ABI remains `3`.
 - Measured a temporary raw-VT timer-path bypass experiment (`DRIFT_EXP_NO_IO_TIMER=1`) to test whether per-I/O timer-node allocation/cancellation was still a meaningful raw-TCP bottleneck. The experiment skipped `drift_reactor_register_timer(...)` inside `drift_reactor_register_io(...)`, intentionally removing timed-I/O timeout protection only for benchmark purposes. Result: raw loopback moved by only about `0.36 us/iter` (`~2.3%`, within noise), and syscall counts were effectively unchanged. Conclusion: timer-node churn is no longer a meaningful suspect for the remaining raw-TCP gap; the bigger remaining costs are in reactor→executor handoff and epoll control churn. This was an experiment only and is not intended to land as a runtime behavior change.
 - Hardened the codegen e2e runner timeout path in `lang/tests/codegen/e2e/runner.py`:
   - added `_disarm_alarm(...)` so late `SIGALRM` delivery during cleanup cannot escape without cancelling the alarm and restoring the prior handler,
@@ -38,7 +46,6 @@
   - late-timeout cleanup/disarm behavior,
   - non-contamination of the next case in the same chunk,
   - chunk-level exception containment and continued execution.
-- Bumped compiler version to `0.26.0-dev`; ABI remains `3`.
 - Reduced redundant reactor wake traffic in `lang/language_runtime/posix/thread_runtime.c`:
   - `drift_reactor_register_io()` no longer wakes the reactor directly after `epoll_ctl`; timed I/O relies on `drift_reactor_register_timer()` to trigger the wake path when deadline changes matter,
   - added `in_wait` tracking so `drift_reactor_wake()` only writes to the wake `eventfd` when the reactor is actually blocked in `epoll_wait`,
