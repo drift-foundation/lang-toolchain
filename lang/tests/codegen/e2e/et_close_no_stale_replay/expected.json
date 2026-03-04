@@ -1,0 +1,5 @@
+{
+  "description": "e2e: ET close clears watch state, no stale replay on fd reuse",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

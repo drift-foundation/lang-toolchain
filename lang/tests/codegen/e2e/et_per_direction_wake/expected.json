@@ -1,0 +1,5 @@
+{
+  "description": "e2e: ET per-direction read/write waiter independence",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

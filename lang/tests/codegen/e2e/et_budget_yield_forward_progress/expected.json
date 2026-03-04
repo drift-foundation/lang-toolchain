@@ -1,0 +1,5 @@
+{
+  "description": "e2e: ET budget-yield allows forward progress beyond 64KB",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

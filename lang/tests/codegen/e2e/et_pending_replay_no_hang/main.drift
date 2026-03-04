@@ -1,0 +1,82 @@
+module main
+
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+// ET pending-replay regression: verify that _block_on_io returns immediately
+// when the fd already has a pending-ready edge, rather than parking and hanging.
+//
+// Strategy: write multiple small payloads back-to-back on the server side
+// without waiting for the client to consume each one. Under ET, the first
+// read consumes the edge. Subsequent reads should succeed via pending replay
+// (data in kernel buffer but no new edge notification) or via immediate
+// kernel readiness. If the pending replay path is broken, the second read
+// would hang indefinitely (no new edge arrives).
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val io_t = conc.Duration(millis = 3000);
+	var lr = net.listen(&addr, io_t);
+	match lr {
+		Ok(l) => {
+			val port = l.test_local_port();
+			var server = conc.spawn(| | captures(copy port, copy io_t) => {
+				var caddr = net.socket_addr("127.0.0.1", port);
+				var cr = net.connect(&caddr, io_t);
+				match cr {
+					Ok(s) => {
+						// Write 3 payloads back-to-back without waiting.
+						var wbuf = io.buffer(8);
+						io.buffer_write(&mut wbuf, 0, cast<Byte>(65));
+						var i = 0;
+						while i < 3 {
+							val wr = s.write(&wbuf, io_t);
+							match wr {
+								Ok(_) => { },
+								Err(_) => { return 20 + i; },
+								default => { return 30 + i; }
+							}
+							i = i + 1;
+						}
+						val _ = s.close(io_t);
+						return 0;
+					},
+					Err(_) => { return 10; },
+					default => { return 11; }
+				}
+			});
+			var ar = net.accept(&l, io_t);
+			match ar {
+				Ok(s2) => {
+					// Read 3 payloads. Under broken ET, the 2nd or 3rd
+					// read would hang (no new edge, pending not replayed).
+					var rbuf = io.buffer(8);
+					var ri = 0;
+					while ri < 3 {
+						val rr = s2.read(&mut rbuf, io_t);
+						match rr {
+							Ok(_) => { },
+							Err(_) => { return 40 + ri; },
+							default => { return 50 + ri; }
+						}
+						ri = ri + 1;
+					}
+					val _ = s2.close(io_t);
+				},
+				Err(_) => { return 60; },
+				default => { return 61; }
+			}
+			var tr = server.join();
+			match tr {
+				Ok(v) => { if v != 0 { return 100 + v; } },
+				Err(_) => { return 70; },
+				default => { return 71; }
+			}
+			return 0;
+		},
+		Err(_) => { return 80; },
+		default => { return 81; }
+	}
+}

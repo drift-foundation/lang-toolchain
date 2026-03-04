@@ -193,3 +193,15 @@ Intrinsics:
 - the reactor unparks the VT when the fd is ready (or deadline elapses)
 
 User code calls std.io/std.net methods with an explicit timeout. Those methods may park the current VT and return `WouldBlock` on timeout. The boundary helper keeps the implementation VT‑friendly while preserving a synchronous API surface.
+
+## Runtime target boundary
+
+The concurrency model described in this document has a concrete implementation
+boundary: the custom VT backend (fiber context switch, `epoll` reactor,
+worker-side polling) is currently supported on **x86_64 Linux only**. There is
+no general-purpose `ucontext` or `kqueue` fallback; the Valgrind compatibility
+path is a tooling-specific shim, not a portability layer. Target selection is
+currently enforced by a host-based check, which is not sufficient for
+cross-compilation. See
+[drift-runtime-targets.md](drift-runtime-targets.md) for the full support
+policy, enforcement mechanism, and future requirements.

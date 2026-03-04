@@ -1,0 +1,90 @@
+module main
+
+import std.concurrent as conc;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+
+// ET close/forget regression: verify that closing an fd clears all ET watch
+// state and that a new connection on a potentially reused fd number does not
+// see stale pending_read/pending_write from the old watch.
+//
+// Strategy: open and close 3 sequential connections in a loop. Each does a
+// write+read roundtrip. If close does not properly EPOLL_CTL_DEL + clear
+// watch state, the second or third connection may see stale pending flags
+// from the prior connection and misbehave (wrong data, hang, or crash).
+
+pub fn main() nothrow -> Int {
+	var addr = net.socket_addr("127.0.0.1", 0);
+	val io_t = conc.Duration(millis = 3000);
+	var lr = net.listen(&addr, io_t);
+	match lr {
+		Ok(l) => {
+			val port = l.test_local_port();
+			var round = 0;
+			while round < 3 {
+				var client = conc.spawn(| | captures(copy port, copy io_t, copy round) => {
+					var caddr = net.socket_addr("127.0.0.1", port);
+					var cr = net.connect(&caddr, io_t);
+					match cr {
+						Ok(s) => {
+							var wbuf = io.buffer(8);
+							io.buffer_write(&mut wbuf, 0, cast<Byte>(round + 1));
+							val wr = s.write(&wbuf, io_t);
+							match wr {
+								Ok(_) => { },
+								Err(_) => { return 10 + round; },
+								default => { return 20 + round; }
+							}
+							var rbuf = io.buffer(8);
+							val rr = s.read(&mut rbuf, io_t);
+							match rr {
+								Ok(n) => {
+									if n <= 0 { return 30 + round; }
+								},
+								Err(_) => { return 50 + round; },
+								default => { return 60 + round; }
+							}
+							val _ = s.close(io_t);
+							return 0;
+						},
+						Err(_) => { return 70 + round; },
+						default => { return 80 + round; }
+					}
+				});
+				// Server: accept, read, echo, close.
+				var ar = net.accept(&l, io_t);
+				match ar {
+					Ok(s2) => {
+						var rbuf = io.buffer(8);
+						val rr = s2.read(&mut rbuf, io_t);
+						match rr {
+							Ok(n) => { if n <= 0 { return 90 + round; } },
+							Err(_) => { return 100 + round; },
+							default => { return 110 + round; }
+						}
+						val wr = s2.write(&rbuf, io_t);
+						match wr {
+							Ok(_) => { },
+							Err(_) => { return 120 + round; },
+							default => { return 130 + round; }
+						}
+						val _ = s2.close(io_t);
+					},
+					Err(_) => { return 140 + round; },
+					default => { return 150 + round; }
+				}
+				var tr = client.join();
+				match tr {
+					Ok(v) => { if v != 0 { return 200 + v; } },
+					Err(_) => { return 160 + round; },
+					default => { return 170 + round; }
+				}
+				round = round + 1;
+			}
+			return 0;
+		},
+		Err(_) => { return 180; },
+		default => { return 181; }
+	}
+}

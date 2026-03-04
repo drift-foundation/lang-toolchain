@@ -105,6 +105,7 @@ typedef struct DriftVt {
 	struct DriftVt *reg_prev;
 	struct DriftVt *reg_next;
 	struct DriftRuntimeRegistryEntry *thread_registry_head;
+	int64_t io_bytes_since_yield;   /* ET fairness: cumulative successful IO since last yield */
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -286,10 +287,18 @@ typedef struct ReactorTimer {
 	struct ReactorTimer *next;
 } ReactorTimer;
 
+/* Fairness budget: max bytes a VT may drain per scheduler turn before
+ * yielding.  Prevents a single hot fd from starving other VTs under
+ * edge-triggered epoll.  Internal constant — not user-configurable. */
+#define DRIFT_IO_BUDGET_BYTES 65536
+
 typedef struct ReactorWatch {
 	int fd;
-	uint32_t events;
-	uint64_t vt;
+	uint32_t events;          /* kernel interest mask (set once on EPOLL_CTL_ADD) */
+	uint64_t read_vt;         /* VT parked for EPOLLIN, or 0 */
+	uint64_t write_vt;        /* VT parked for EPOLLOUT, or 0 */
+	uint8_t  pending_read;    /* 1 = fd readable, edge not yet consumed to EAGAIN */
+	uint8_t  pending_write;   /* 1 = fd writable, edge not yet consumed to EAGAIN */
 	struct ReactorWatch *next;
 } ReactorWatch;
 
@@ -339,21 +348,17 @@ static void drift_reactor_forget_vt(DriftVt *vt) {
 		}
 		tc = tn;
 	}
-	ReactorWatch *wp = NULL;
 	ReactorWatch *wc = r->watches;
 	while (wc) {
-		ReactorWatch *wn = wc->next;
-		if (wc->vt == (uint64_t)vt) {
-			if (wp) {
-				wp->next = wn;
-			} else {
-				r->watches = wn;
-			}
-			free(wc);
-		} else {
-			wp = wc;
+		if (wc->read_vt == (uint64_t)vt) {
+			wc->read_vt = 0;
+			wc->pending_read = 0;
 		}
-		wc = wn;
+		if (wc->write_vt == (uint64_t)vt) {
+			wc->write_vt = 0;
+			wc->pending_write = 0;
+		}
+		wc = wc->next;
 	}
 	pthread_mutex_unlock(&r->mu);
 #else
@@ -512,6 +517,8 @@ static void drift_worker_vt_finish(DriftVt *vt) {
  *
  * Returns 1 if the worker handled at least one event (caller should re-check
  * the run queue), 0 if it should fall through to condvar_wait. */
+static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt);
+
 #ifdef __linux__
 static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 	Reactor *r = drift_default_reactor_ptr;
@@ -586,51 +593,82 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
 					continue;
 				}
-				/* IO event: resolve watch, cancel timers, set state — all
-				 * under r->mu (Race 1 fix, transition T4b). */
+				/* T4b: ET per-direction resolution under r->mu. */
+				uint32_t ev = events[i].events;
 				pthread_mutex_lock(&r->mu);
 				ReactorWatch *w = drift_reactor_find_watch(r, fd);
-				uint64_t vt_id = w ? w->vt : 0;
-				DriftVt *io_vt = (w && w->vt) ? (DriftVt *)w->vt : NULL;
-				if (w) { w->vt = 0; w->events = 0; }
-				if (vt_id != 0) {
-					ReactorTimer *tp = NULL;
-					ReactorTimer *tc = r->timers;
-					while (tc) {
-						ReactorTimer *tn = tc->next;
-						if (tc->vt == vt_id) {
-							if (tp) tp->next = tn; else r->timers = tn;
-							free(tc);
-						} else { tp = tc; }
-						tc = tn;
+				DriftVt *direct_vt = NULL;
+				DriftVt *enqueue_vt = NULL;
+				if (w) {
+					/* Resolve read direction. */
+					if ((ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) && w->read_vt) {
+						DriftVt *rv = (DriftVt *)w->read_vt;
+						w->read_vt = 0;
+						if (atomic_load(&rv->state) == DRIFT_VT_PARKED) {
+							ReactorTimer *tp = NULL;
+							ReactorTimer *tc = r->timers;
+							while (tc) {
+								ReactorTimer *tn = tc->next;
+								if (tc->vt == (uint64_t)rv) {
+									if (tp) tp->next = tn; else r->timers = tn;
+									free(tc);
+								} else { tp = tc; }
+								tc = tn;
+							}
+							rv->park_token++;
+							atomic_store(&rv->state, DRIFT_VT_RUNNING);
+							direct_vt = rv;
+						}
+					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
+						w->pending_read = 1;
+					}
+					/* Resolve write direction. */
+					if ((ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) && w->write_vt) {
+						DriftVt *wv = (DriftVt *)w->write_vt;
+						w->write_vt = 0;
+						if (atomic_load(&wv->state) == DRIFT_VT_PARKED) {
+							ReactorTimer *tp = NULL;
+							ReactorTimer *tc = r->timers;
+							while (tc) {
+								ReactorTimer *tn = tc->next;
+								if (tc->vt == (uint64_t)wv) {
+									if (tp) tp->next = tn; else r->timers = tn;
+									free(tc);
+								} else { tp = tc; }
+								tc = tn;
+							}
+							if (!direct_vt) {
+								wv->park_token++;
+								atomic_store(&wv->state, DRIFT_VT_RUNNING);
+								direct_vt = wv;
+							} else if (wv != direct_vt) {
+								atomic_store(&wv->state, DRIFT_VT_READY);
+								enqueue_vt = wv;
+							}
+						}
+					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
+						w->pending_write = 1;
 					}
 				}
-				/* T4b: set state to RUNNING under r->mu — prevents Race 1
-				 * (timer fires while worker resolves same VT from epoll). */
-				if (io_vt && atomic_load(&io_vt->state) == DRIFT_VT_PARKED) {
-					io_vt->park_token++;
-					atomic_store(&io_vt->state, DRIFT_VT_RUNNING);
-				} else {
-					io_vt = NULL;
-				}
 				pthread_mutex_unlock(&r->mu);
-				/* Disarm fd. */
-				if (w && r->epoll_fd >= 0) {
-					struct epoll_event disarm; disarm.events = 0; disarm.data.fd = fd;
-					epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, fd, &disarm);
+				/* No disarm — persistent ET registration. */
+				if (enqueue_vt && enqueue_vt->exec) {
+					pthread_mutex_lock(&enqueue_vt->exec->mu);
+					drift_exec_enqueue(enqueue_vt->exec, enqueue_vt);
+					pthread_mutex_unlock(&enqueue_vt->exec->mu);
 				}
-				if (!io_vt) continue;
+				if (!direct_vt) continue;
 				/* Resume VT directly. */
-				drift_vt_tls_set(io_vt);
+				drift_vt_tls_set(direct_vt);
 				if (drift_valgrind_mode)
-					swapcontext(drift_sched_ctx_uc, &io_vt->ctx_uc);
+					swapcontext(drift_sched_ctx_uc, &direct_vt->ctx_uc);
 				else
-					drift_swapcontext(sched_ctx, &io_vt->ctx);
+					drift_swapcontext(sched_ctx, &direct_vt->ctx);
 				drift_vt_tls_set(NULL);
 				did_work = 1;
-				int st = atomic_load(&io_vt->state);
+				int st = atomic_load(&direct_vt->state);
 				if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) {
-					drift_worker_vt_finish(io_vt);
+					drift_worker_vt_finish(direct_vt);
 				}
 			}
 		}
@@ -987,46 +1025,70 @@ static void *drift_reactor_thread_entry(void *arg) {
 					}
 					continue;
 				}
-				/* T4a: resolve watch, cancel timers, transition state — all
-				 * under r->mu, matching T4b in the worker path.  This
-				 * prevents a concurrent unpark (e.g. from another code
-				 * path) from seeing PARKED and double-enqueuing. */
+				/* T4a: ET per-direction resolution under r->mu. */
+				uint32_t ev = events[i].events;
 				pthread_mutex_lock(&r->mu);
 				ReactorWatch *w = drift_reactor_find_watch(r, fd);
-				uint64_t vt = w ? w->vt : 0;
-				DriftVt *io_vt = (w && w->vt) ? (DriftVt *)w->vt : NULL;
-				if (w) { w->vt = 0; w->events = 0; }
-				if (vt != 0) {
-					ReactorTimer *tp = NULL;
-					ReactorTimer *tc = r->timers;
-					while (tc) {
-						ReactorTimer *tn = tc->next;
-						if (tc->vt == vt) {
-							if (tp) tp->next = tn; else r->timers = tn;
-							free(tc);
-						} else {
-							tp = tc;
+				DriftVt *read_io_vt = NULL;
+				DriftVt *write_io_vt = NULL;
+				if (w) {
+					/* Resolve read direction. */
+					if ((ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) && w->read_vt) {
+						DriftVt *rv = (DriftVt *)w->read_vt;
+						w->read_vt = 0;
+						uint64_t rv_id = (uint64_t)rv;
+						ReactorTimer *tp = NULL;
+						ReactorTimer *tc = r->timers;
+						while (tc) {
+							ReactorTimer *tn = tc->next;
+							if (tc->vt == rv_id) {
+								if (tp) tp->next = tn; else r->timers = tn;
+								free(tc);
+							} else { tp = tc; }
+							tc = tn;
 						}
-						tc = tn;
+						if (atomic_load(&rv->state) == DRIFT_VT_PARKED) {
+							atomic_store(&rv->state, DRIFT_VT_READY);
+							read_io_vt = rv;
+						}
+					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
+						w->pending_read = 1;
+					}
+					/* Resolve write direction. */
+					if ((ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) && w->write_vt) {
+						DriftVt *wv = (DriftVt *)w->write_vt;
+						w->write_vt = 0;
+						uint64_t wv_id = (uint64_t)wv;
+						ReactorTimer *tp = NULL;
+						ReactorTimer *tc = r->timers;
+						while (tc) {
+							ReactorTimer *tn = tc->next;
+							if (tc->vt == wv_id) {
+								if (tp) tp->next = tn; else r->timers = tn;
+								free(tc);
+							} else { tp = tc; }
+							tc = tn;
+						}
+						if (atomic_load(&wv->state) == DRIFT_VT_PARKED) {
+							atomic_store(&wv->state, DRIFT_VT_READY);
+							write_io_vt = wv;
+						}
+					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
+						w->pending_write = 1;
 					}
 				}
-				/* Transition PARKED → READY under r->mu.  If the VT is
-				 * no longer PARKED (e.g. already unparked by a timer on
-				 * a previous iteration), skip the enqueue. */
-				if (io_vt && atomic_load(&io_vt->state) == DRIFT_VT_PARKED) {
-					atomic_store(&io_vt->state, DRIFT_VT_READY);
-				} else {
-					io_vt = NULL;
-				}
 				pthread_mutex_unlock(&r->mu);
-				if (w && r->epoll_fd >= 0) {
-					struct epoll_event ev; ev.events = 0; ev.data.fd = fd;
-					epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, fd, &ev);
+				/* No disarm — persistent ET registration. */
+				if (read_io_vt && read_io_vt->exec) {
+					pthread_mutex_lock(&read_io_vt->exec->mu);
+					drift_exec_enqueue(read_io_vt->exec, read_io_vt);
+					pthread_mutex_unlock(&read_io_vt->exec->mu);
+					drift_reactor_wake(r);
 				}
-				if (io_vt && io_vt->exec) {
-					pthread_mutex_lock(&io_vt->exec->mu);
-					drift_exec_enqueue(io_vt->exec, io_vt);
-					pthread_mutex_unlock(&io_vt->exec->mu);
+				if (write_io_vt && write_io_vt->exec && write_io_vt != read_io_vt) {
+					pthread_mutex_lock(&write_io_vt->exec->mu);
+					drift_exec_enqueue(write_io_vt->exec, write_io_vt);
+					pthread_mutex_unlock(&write_io_vt->exec->mu);
 					drift_reactor_wake(r);
 				}
 			}
@@ -1433,6 +1495,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->reg_prev = NULL;
 	vt->reg_next = NULL;
 	vt->thread_registry_head = NULL;
+	vt->io_bytes_since_yield = 0;
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -1535,6 +1598,7 @@ void drift_thread_park(uint64_t reason) {
 			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
 		else
 			drift_swapcontext(&vt->ctx, drift_sched_ctx);
+		vt->io_bytes_since_yield = 0;
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1547,6 +1611,7 @@ void drift_thread_park(uint64_t reason) {
 	if (vt->park_token > 0) {
 		vt->park_token--;
 	}
+	vt->io_bytes_since_yield = 0;
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	pthread_mutex_unlock(&vt->mu);
 }
@@ -1584,6 +1649,7 @@ void drift_thread_park_until(int64_t deadline_ms) {
 			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
 		else
 			drift_swapcontext(&vt->ctx, drift_sched_ctx);
+		vt->io_bytes_since_yield = 0;
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 		return;
 	}
@@ -1611,6 +1677,7 @@ void drift_thread_park_until(int64_t deadline_ms) {
 	if (vt->park_token > 0) {
 		vt->park_token--;
 	}
+	vt->io_bytes_since_yield = 0;
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	pthread_mutex_unlock(&vt->mu);
 }
@@ -1809,12 +1876,23 @@ void drift_reactor_forget_fd(int fd) {
 	Reactor *r = drift_default_reactor_ptr;
 	if (!r) return;
 	pthread_mutex_lock(&r->mu);
+	/* Explicit EPOLL_CTL_DEL before unlink.  Under persistent ET registration
+	 * the fd stays in the epoll set for its entire lifetime; we must remove
+	 * it before close() to avoid stale-fd races if the fd number is reused. */
+	if (r->epoll_fd >= 0) {
+		epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+	}
 	ReactorWatch *prev = NULL;
 	ReactorWatch *cur = r->watches;
 	while (cur) {
 		if (cur->fd == fd) {
 			if (prev) prev->next = cur->next;
 			else r->watches = cur->next;
+			/* Clear all per-direction state before free. */
+			cur->read_vt = 0;
+			cur->write_vt = 0;
+			cur->pending_read = 0;
+			cur->pending_write = 0;
 			free(cur);
 			break;
 		}
@@ -1847,26 +1925,28 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 			return;
 		}
 		w->fd = (int)fd;
-		w->events = (uint32_t)interest;
-		w->vt = vt;
+		w->events = EPOLLET | EPOLLIN | EPOLLOUT;
+		w->read_vt = 0;
+		w->write_vt = 0;
+		w->pending_read = 0;
+		w->pending_write = 0;
 		w->next = r->watches;
 		r->watches = w;
-	} else {
-		w->events = (uint32_t)interest;
-		w->vt = vt;
+	}
+	/* Set the waiter for the requested direction. */
+	if ((uint32_t)interest & EPOLLIN) {
+		w->read_vt = vt;
+	} else if ((uint32_t)interest & EPOLLOUT) {
+		w->write_vt = vt;
 	}
 	pthread_mutex_unlock(&r->mu);
-	if (r->epoll_fd >= 0) {
+	/* Persistent ET: EPOLL_CTL_ADD once on first registration.
+	 * No hot-path epoll_ctl on subsequent calls. */
+	if (!existed && r->epoll_fd >= 0) {
 		struct epoll_event ev;
-		ev.events = (uint32_t)interest;
+		ev.events = EPOLLET | EPOLLIN | EPOLLOUT;
 		ev.data.fd = (int)fd;
-		if (existed) {
-			if (epoll_ctl(r->epoll_fd, EPOLL_CTL_MOD, (int)fd, &ev) != 0 && errno == ENOENT) {
-				epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
-			}
-		} else {
-			epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
-		}
+		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
 	}
 	if (deadline_ms > 0) {
 		drift_reactor_register_timer(deadline_ms, vt);
@@ -1876,6 +1956,78 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 	(void)interest;
 	(void)vt;
 	(void)deadline_ms;
+#endif
+}
+
+/* ET fairness: check and clear pending-ready for a direction.
+ * Returns 1 if pending was set (caller should retry IO, not park).
+ * Called from stdlib _block_on_io on EAGAIN path. */
+int64_t drift_reactor_check_pending(int64_t fd, int64_t direction) {
+#ifdef __linux__
+	Reactor *r = drift_default_reactor_ptr;
+	if (!r) return 0;
+	int result = 0;
+	pthread_mutex_lock(&r->mu);
+	ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
+	if (w) {
+		if (((uint32_t)direction & EPOLLIN) && w->pending_read) {
+			w->pending_read = 0;
+			result = 1;
+		} else if (((uint32_t)direction & EPOLLOUT) && w->pending_write) {
+			w->pending_write = 0;
+			result = 1;
+		}
+	}
+	pthread_mutex_unlock(&r->mu);
+	return (int64_t)result;
+#else
+	(void)fd; (void)direction;
+	return 0;
+#endif
+}
+
+/* ET fairness: charge bytes to the current VT's drain budget.
+ * If the budget is exceeded, sets pending-ready on the watch,
+ * re-enqueues the VT, and yields to the scheduler (swapcontext).
+ * Returns 1 if a yield occurred, 0 otherwise.
+ * Called from stdlib after each successful io_read/io_write. */
+int64_t drift_reactor_io_charge(int64_t fd, int64_t direction, int64_t bytes) {
+#ifdef __linux__
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt || bytes <= 0) return 0;
+	vt->io_bytes_since_yield += bytes;
+	if (vt->io_bytes_since_yield < DRIFT_IO_BUDGET_BYTES) return 0;
+
+	/* Budget exceeded — set pending, reset counter, yield. */
+	Reactor *r = drift_default_reactor_ptr;
+	if (r) {
+		pthread_mutex_lock(&r->mu);
+		ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
+		if (w) {
+			if ((uint32_t)direction & EPOLLIN)  w->pending_read  = 1;
+			if ((uint32_t)direction & EPOLLOUT) w->pending_write = 1;
+		}
+		pthread_mutex_unlock(&r->mu);
+	}
+	vt->io_bytes_since_yield = 0;
+
+	/* Re-enqueue self and yield to scheduler. */
+	DriftExec *exec = vt->exec;
+	if (!exec || !drift_sched_ctx) return 0;
+	atomic_store(&vt->state, DRIFT_VT_READY);
+	pthread_mutex_lock(&exec->mu);
+	drift_exec_enqueue(exec, vt);
+	pthread_mutex_unlock(&exec->mu);
+	if (r) drift_reactor_wake(r);
+	if (drift_valgrind_mode)
+		swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
+	else
+		drift_swapcontext(&vt->ctx, drift_sched_ctx);
+	atomic_store(&vt->state, DRIFT_VT_RUNNING);
+	return 1;
+#else
+	(void)fd; (void)direction; (void)bytes;
+	return 0;
 #endif
 }
 

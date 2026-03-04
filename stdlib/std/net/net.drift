@@ -97,6 +97,11 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 		}
 		return;
 	}
+	// ET replay: if an edge is pending for this direction (budget yield
+	// or spurious event while no waiter), skip park and retry IO.
+	if thread.reactor_check_pending(fd, interest) != 0 {
+		return;
+	}
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
 	thread.vt_park_until(deadline_ms);
 	return;
@@ -244,6 +249,7 @@ implement TcpStream {
 			val n = thread.io_read(self.fd, ptr, len);
 			if n >= 0 {
 				io.buffer_commit_read(buf, n);
+				thread.reactor_io_charge(self.fd, 1, n);
 				return core.Result::Ok(n);
 			}
 			val err = thread.io_errno();
@@ -278,6 +284,7 @@ implement TcpStream {
 		while true {
 			val n = thread.io_write(self.fd, ptr, len);
 			if n >= 0 {
+				thread.reactor_io_charge(self.fd, 4, n);
 				return core.Result::Ok(n);
 			}
 			val err = thread.io_errno();

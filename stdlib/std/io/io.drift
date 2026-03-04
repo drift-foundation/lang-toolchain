@@ -378,6 +378,11 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 		}
 		return;
 	}
+	// ET replay: if an edge is pending for this direction (budget yield
+	// or spurious event while no waiter), skip park and retry IO.
+	if thread.reactor_check_pending(fd, interest) != 0 {
+		return;
+	}
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
 	thread.vt_park_until(deadline_ms);
 	return;
@@ -657,6 +662,7 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 		val n = thread.io_read(self.fd, ptr, len);
 		if n >= 0 {
 			buf.len = n;
+			thread.reactor_io_charge(self.fd, 1, n);
 			return core.Result::Ok(n);
 		}
 		val err = thread.io_errno();
@@ -691,6 +697,7 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 	while true {
 		val n = thread.io_write(self.fd, ptr, len);
 		if n >= 0 {
+			thread.reactor_io_charge(self.fd, 4, n);
 			return core.Result::Ok(n);
 		}
 		val err = thread.io_errno();
@@ -782,6 +789,7 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 		val n = thread.io_read(self.fd, ptr, len);
 		if n >= 0 {
 			buf.len = n;
+			thread.reactor_io_charge(self.fd, 1, n);
 			return core.Result::Ok(n);
 		}
 		val err = thread.io_errno();
@@ -864,6 +872,7 @@ fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> cor
 	while true {
 		val n = thread.io_write(self.fd, ptr, len);
 		if n >= 0 {
+			thread.reactor_io_charge(self.fd, 4, n);
 			return core.Result::Ok(n);
 		}
 		val err = thread.io_errno();

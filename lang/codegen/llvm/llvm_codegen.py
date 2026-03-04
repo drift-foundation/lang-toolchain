@@ -1124,6 +1124,8 @@ class LlvmModuleBuilder:
 					f"declare void @drift_reactor_default_set({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_reactor_register_io({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_reactor_register_timer({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)}, i8*, {self._llty(DRIFT_INT_TYPE)})",
@@ -3873,6 +3875,29 @@ class _FuncBuilder:
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: reactor_register_timer returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "reactor_check_pending":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_check_pending expects 2 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				dir_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: reactor_check_pending result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "reactor_io_charge":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_io_charge expects 3 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				dir_val = self._map_value(instr.args[1])
+				bytes_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: reactor_io_charge result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "test_eventfd_create":
 				if len(instr.args) != 0:
 					raise NotImplementedError(f"LLVM codegen v1: test_eventfd_create expects 0 args, got {len(instr.args)}")
@@ -5103,6 +5128,29 @@ class _FuncBuilder:
 				)
 				if dest:
 					raise NotImplementedError("LLVM codegen v1: reactor_register_timer returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "reactor_check_pending":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_check_pending expects 2 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				dir_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: reactor_check_pending result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "reactor_io_charge":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_io_charge expects 3 args, got {len(instr.args)}")
+				fd_val = self._map_value(instr.args[0])
+				dir_val = self._map_value(instr.args[1])
+				bytes_val = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: reactor_io_charge result must be captured")
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
+				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			ret_tid = callee_info.signature.return_type_id
 			if instr.can_throw:

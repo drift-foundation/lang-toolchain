@@ -1,5 +1,23 @@
 # Drift development history
 
+## 2026-03-04
+- Landed ET persistent registration MVP with bounded fairness/replay across compiler + runtime + stdlib:
+  - runtime now uses one-time `EPOLL_CTL_ADD` with persistent `EPOLLET` registration and per-direction watch state (`read_vt`/`write_vt`, `pending_read`/`pending_write`) in `lang/language_runtime/posix/thread_runtime.c`,
+  - added ET replay/fairness runtime helpers `drift_reactor_check_pending` and `drift_reactor_io_charge`,
+  - wired new intrinsics in `stdlib/lang/thread.drift` and LLVM lowering/declarations in `lang/codegen/llvm/llvm_codegen.py`,
+  - stdlib I/O paths in `stdlib/std/net/net.drift` and `stdlib/std/io/io.drift` now use pending-ready replay before park and charge per-VT I/O budget on successful reads/writes.
+- Added ET-focused correctness regressions: `et_pending_replay_no_hang`, `et_per_direction_wake`, `et_budget_yield_forward_progress`, and `et_close_no_stale_replay`.
+- ABI/versions:
+  - bumped compiler version to `0.27.1-dev`,
+  - bumped runtime ABI to `4` due to new runtime-exported helper signatures,
+  - added driver ABI declaration regression `test_ir_declares_reactor_et_helpers` in `lang/tests/driver/test_abi_version_stamp.py`.
+- Benchmarks (optimized, 5000 iters, team baseline run):
+  - `Go raw TCP`: `113,636 req/s`, `Go net/http`: `45,871 req/s`,
+  - `Drift baseline-vt`: `121,951 req/s`, `Drift baseline-health`: `79,365 req/s`,
+  - result: Drift now leads on both measured paths in this benchmark setup.
+- Added `docs/design/drift-runtime-targets.md`: documents the current VT runtime support boundary (x86_64 Linux only), how it is enforced (host-based gating in `__init__.py`), why host-based gating is insufficient for cross-compilation, and what target-triple-based selection will require.
+- Updated `docs/design/drift-concurrency.md` with a cross-reference noting the concrete implementation boundary of the concurrency model described there.
+
 ## 2026-03-03
 - Implemented Phase A worker-side polling in `lang/language_runtime/posix/thread_runtime.c` for the single-worker executor case:
   - when the executor run queue is empty, the worker can claim `poll_owner` and call `epoll_wait(...)` directly instead of waiting for the separate reactor->executor handoff,

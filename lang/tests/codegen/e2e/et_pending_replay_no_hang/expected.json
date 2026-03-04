@@ -1,0 +1,5 @@
+{
+  "description": "e2e: ET pending-replay path does not hang on buffered data",
+  "sandbox_blocks": true,
+  "exit_code": 0
+}

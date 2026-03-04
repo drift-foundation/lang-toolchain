@@ -29,6 +29,8 @@ export {
 	reactor_default_set,
 	reactor_register_io,
 	reactor_register_timer,
+	reactor_check_pending,
+	reactor_io_charge,
 	test_eventfd_create,
 	test_eventfd_write,
 	test_timerfd_create,
@@ -98,6 +100,8 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn reactor_default_set(reactor: ReactorHandle) nothrow -> Void;
 @intrinsic pub fn reactor_register_io(fd: Int, interest: Int, vt: VtHandle, deadline_ms: Int) nothrow -> Void;
 @intrinsic pub fn reactor_register_timer(deadline_ms: Int, vt: VtHandle) nothrow -> Void;
+@intrinsic pub fn reactor_check_pending(fd: Int, direction: Int) nothrow -> Int;
+@intrinsic pub fn reactor_io_charge(fd: Int, direction: Int, bytes: Int) nothrow -> Int;
 @intrinsic pub fn test_eventfd_create() nothrow -> Int;
 @intrinsic pub fn test_eventfd_write(fd: Int, value: Int) nothrow -> Void;
 @intrinsic pub fn test_timerfd_create() nothrow -> Int;
