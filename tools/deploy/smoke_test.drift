@@ -1,0 +1,8 @@
+module main
+
+import std.console as console;
+
+pub fn main() nothrow -> Int {
+	console.println("drift deploy smoke ok");
+	return 42;
+}

@@ -1,6 +1,19 @@
 # Drift development history
 
 ## 2026-03-04
+- Added signed deployment tooling for isolated downstream compiler/runtime usage:
+  - new `just deploy DEST=...`, `just deploy-print-env DEST=...`, and `just deploy-verify DEST=... PUBKEY=...` flows,
+  - new deploy scripts under `tools/deploy/` that build a versioned distribution (`bin/lib/doc/examples`), run a smoke compile+run check, produce a hash manifest, sign `manifest.json`, self-verify, then publish with atomic `current` symlink switch.
+- Deploy trust model hardening:
+  - signing is mandatory (no unsigned deploy path),
+  - external trust roots only (no key material shipped in deployed tree),
+  - `deploy-verify` checks signature + per-file SHA-256 hashes + unsigned file detection,
+  - Ed25519 key type enforced for both signing and verification paths,
+  - self-verify is mandatory for both signer modes (custom signer now requires `DRIFT_DEPLOY_VERIFY_PUBKEY`).
+- Improved first-time deploy docs for teams/users:
+  - added explicit prerequisites and verification steps to deployed `doc/README.md`,
+  - clarified no-repo-checkout usage with prerequisite caveats,
+  - added hello-world example flow in `examples/`.
 - Fixed archive-mode runtime linking robustness in `lang/driftc/driftc.py`:
   - `driftc` now calls `build_runtime_archive(...)` on demand in `DRIFT_RUNTIME_LINK_MODE=archive` instead of failing immediately when `libdrift_rt.a` is missing/stale,
   - this removes the manual prebuild dependency for driver flows and prevents false failures after runtime ABI/version bumps when cache state is out of date.

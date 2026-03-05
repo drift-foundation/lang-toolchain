@@ -308,3 +308,24 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 	mkdir -p build/pkg dist/release
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
+
+# Deploy a versioned, self-contained Drift distribution to DEST.
+deploy DEST:
+	tools/deploy/deploy.sh "{{DEST}}"
+
+# Print shell env lines for an existing deployment.
+deploy-print-env DEST:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	dest="{{DEST}}"
+	if [[ ! -L "${dest}/current" ]]; then
+		echo "error: no deployment found at ${dest} (missing 'current' symlink)" >&2
+		exit 1
+	fi
+	resolved="$(readlink "${dest}/current")"
+	echo "# Drift distribution: ${resolved}"
+	echo "export PATH=\"${dest}/current/bin:\$PATH\""
+
+# Verify a deployed Drift distribution against an external trusted pubkey.
+deploy-verify DEST PUBKEY:
+	tools/deploy/deploy-verify.sh "{{DEST}}" "{{PUBKEY}}"
