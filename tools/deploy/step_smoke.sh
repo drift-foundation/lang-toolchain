@@ -31,7 +31,7 @@ fi
 # Verify required Python packages are available in the target interpreter.
 echo "[deploy] checking Python prerequisites (${SMOKE_PYTHON})..."
 MISSING_DEPS=""
-for dep in lark llvmlite; do
+for dep in lark llvmlite cryptography; do
 	if ! "${SMOKE_PYTHON}" -c "import ${dep}" 2>/dev/null; then
 		MISSING_DEPS="${MISSING_DEPS} ${dep}"
 	fi

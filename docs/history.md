@@ -1,5 +1,14 @@
 # Drift development history
 
+## 2026-03-05 (deploy prereq fix)
+- Downstream rollout fix: deployed toolchain docs/checks now include Python `cryptography` as a required prerequisite for signed-package verification paths.
+  - Updated deployed README generation in `tools/deploy/step_bundle.sh`:
+    - prerequisites table now lists `cryptography`,
+    - environment verify snippet now imports `lark`, `llvmlite`, and `cryptography`.
+  - Updated deploy smoke prerequisite gate in `tools/deploy/step_smoke.sh` to require `cryptography` in the target interpreter.
+  - Updated wrapper prerequisite note in `tools/deploy/driftc-wrapper.sh` to match runtime requirements.
+- Bumped compiler version to `0.27.6-dev`; ABI remains `4`.
+
 ## 2026-03-05 (follow-up)
 - Fixed a checker regression introduced during template-fingerprint stabilization:
   - restored alias-aware trait/type qualification in `lang/driftc/traits/world.py` (`module_id` or `module_alias`) so trait-guard conjunction scoping remains valid.

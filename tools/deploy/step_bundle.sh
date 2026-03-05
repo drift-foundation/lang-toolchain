@@ -69,12 +69,13 @@ The Drift compiler requires these host tools:
 | Python 3 | 3.10+ | Compiler runtime |
 | lark | any | Parser library (`pip install lark`) |
 | llvmlite | 0.41+ | LLVM IR generation (`pip install llvmlite`) |
+| cryptography | any | Package signature verification (`pip install cryptography`) |
 | clang | 15+ | Linker / native codegen |
 
 Verify your environment:
 
 ```bash
-python3 -c "import lark, llvmlite; print('ok')"
+python3 -c "import lark, llvmlite, cryptography; print('ok')"
 clang --version   # or clang-15 --version
 ```
 

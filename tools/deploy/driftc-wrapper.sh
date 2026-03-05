@@ -7,7 +7,7 @@
 # The stdlib is loaded from a signed DMIR package (lib/stdlib/std.dmp).
 # Signature verification uses the bundled core trust store automatically.
 #
-# Prerequisites: Python 3.10+ with lark and llvmlite packages, clang linker.
+# Prerequisites: Python 3.10+ with lark, llvmlite, and cryptography packages, clang linker.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
