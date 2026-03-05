@@ -252,6 +252,35 @@ This checks:
 2. SHA-256 hashes of every file listed in the manifest against disk
 3. No unsigned files exist outside the manifest
 
+## Create a deploy signing key (first-time setup)
+
+If you do not already have a deploy signing key, create one:
+
+```bash
+mkdir -p ~/.config/drift/keys
+chmod 700 ~/.config/drift ~/.config/drift/keys
+
+openssl genpkey -algorithm Ed25519 -out ~/.config/drift/keys/deploy-ed25519.pem
+chmod 600 ~/.config/drift/keys/deploy-ed25519.pem
+
+openssl pkey -in ~/.config/drift/keys/deploy-ed25519.pem -pubout \
+  -out ~/.config/drift/keys/deploy-ed25519.pub.pem
+chmod 644 ~/.config/drift/keys/deploy-ed25519.pub.pem
+```
+
+Use the private key for deployment signing:
+
+```bash
+export DRIFT_DEPLOY_SIGN_KEY="$HOME/.config/drift/keys/deploy-ed25519.pem"
+just deploy /path/to/deploy-root
+```
+
+Consumers verify with the trusted public key (managed out-of-band):
+
+```bash
+just deploy-verify DEST=/path/to/deploy-root PUBKEY="$HOME/.config/drift/keys/deploy-ed25519.pub.pem"
+```
+
 ## Trust layers
 
 Drift deployments can have two independent signature layers:
@@ -265,6 +294,22 @@ Drift deployments can have two independent signature layers:
 These layers are complementary, not redundant.  Upstream signatures establish
 origin authenticity; deploy signatures establish integrity/provenance of your
 internal distribution endpoint.
+
+## Actors and trust boundaries
+
+Use this simple 3-actor model:
+
+1. Publisher
+   - Produces and signs upstream artifacts (packages/toolchain releases).
+2. Distributor
+   - Downloads/approves upstream artifacts, builds internal deployment bundles,
+     and signs the deploy manifest for internal distribution.
+3. User (consumer)
+   - Verifies distributor signatures before activating a deployment, then uses
+     the deployed compiler/runtime for day-to-day builds.
+
+In other words: publisher proves origin, distributor proves internal deployment
+integrity, user verifies before use.
 
 Trusted keys are managed out-of-band.  The `sign_key_fingerprint` field
 in `manifest.json` is informational (SHA-256 of the DER public key) —

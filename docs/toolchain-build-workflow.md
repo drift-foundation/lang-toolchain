@@ -37,6 +37,22 @@ different questions:
 These are complementary. Upstream signatures prove origin; deploy signatures
 prove integrity/provenance of your internal distribution endpoint.
 
+### Actors and trust boundaries
+
+For day-to-day operations, use this 3-actor model:
+
+1. Publisher
+   - Signs upstream packages/toolchain artifacts.
+2. Distributor
+   - Approves upstream artifacts, deploys them internally, and signs internal
+     deployment manifests.
+3. User (consumer)
+   - Verifies distributor signatures before activation/use, then compiles with
+     the deployed toolchain.
+
+Publisher signatures answer “who created this artifact?”.
+Distributor signatures answer “is this internal deployment exactly what we approved?”.
+
 ## 1. Bootstrap & validate (fresh clone)
 
 The goal is to confirm your environment can run the full Drift pipeline (parser/checker/MIR/LLVM/codegen/runtime tests) before writing code.
