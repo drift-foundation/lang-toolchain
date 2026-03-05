@@ -689,7 +689,19 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			if td.kind is TypeKind.FORWARD_NOMINAL:
 				if td.module_id is None:
 					raise ValueError(f"package FORWARD_NOMINAL '{td.name}' missing module_id")
-				k = ("nominal", td.kind.name, pkg_id, mid, td.name)
+				# Resolve to the concrete type's canonical key when a concrete
+				# definition exists in the same package.  FORWARD_NOMINAL entries
+				# are cross-module references; without this unification the
+				# FORWARD_NOMINAL and its concrete counterpart would receive
+				# different host TypeIds causing type confusion in package MIR.
+				resolved_kind: str | None = None
+				for other_tid, other_td in pkg.defs.items():
+					if other_tid == tid:
+						continue
+					if other_td.module_id == td.module_id and other_td.name == td.name and other_td.kind in (TypeKind.STRUCT, TypeKind.INTERFACE, TypeKind.VARIANT):
+						resolved_kind = other_td.kind.name
+						break
+				k = ("nominal", resolved_kind or td.kind.name, pkg_id, mid, td.name)
 				memo[tid] = k
 				return k
 			if td.kind is TypeKind.INTERFACE:
@@ -974,6 +986,15 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				name=nk.name,
 			)
 
+	# Populate struct base schemas with field type expressions before
+	# remaining_keys processing — ensure_struct_instantiated needs
+	# schema.fields to evaluate field types for generic instances.
+	for nk in sorted(merged_struct_schemas.keys(), key=lambda k: (k.package_id or "", k.module_id or "", k.name)):
+		mid = nk.module_id or ""
+		host_tid = host.require_nominal(kind=TypeKind.STRUCT, module_id=mid, name=nk.name)
+		field_schemas, _type_params = merged_struct_schemas[nk]
+		host.define_struct_schema_fields(host_tid, list(field_schemas))
+
 	all_keys: set[TypeKey] = set()
 	for tid_keys in pkg_tid_to_key:
 		all_keys.update(tid_keys.values())
@@ -1213,6 +1234,8 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			return all(_type_key_compatible(a, b) for a, b in zip(lhs, rhs))
 		return lhs == rhs
 
+	# Finalize non-generic struct field types (schema fields already populated
+	# before remaining_keys processing above).
 	for nk in sorted(merged_struct_schemas.keys(), key=lambda k: (k.package_id or "", k.module_id or "", k.name)):
 		mid = nk.module_id or ""
 		host_tid = host.require_nominal(kind=TypeKind.STRUCT, module_id=mid, name=nk.name)
@@ -1220,8 +1243,6 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		if h_td.kind is not TypeKind.STRUCT:
 			raise ValueError(f"expected STRUCT for '{mid}:{nk.name}' after import")
 		field_schemas, type_params = merged_struct_schemas[nk]
-		# If host struct already had field types defined, require exact match.
-		host.define_struct_schema_fields(host_tid, list(field_schemas))
 		if not type_params:
 			field_types = [
 				host._eval_generic_type_expr(f.type_expr, [], module_id=mid) for f in field_schemas

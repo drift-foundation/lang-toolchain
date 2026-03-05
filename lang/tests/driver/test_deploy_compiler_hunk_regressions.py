@@ -1,0 +1,636 @@
+# vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+"""Regression tests for compiler hunks required by the deploy pipeline.
+
+K9: Call-graph BFS pruning preserves reachable destructor/drop paths.
+K4: Template fingerprint mismatch emits observable diagnostic (not silent).
+K7: Malformed method receiver metadata is still caught by the checker.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from lang.driftc.driftc import main as driftc_main
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _write_file(path: Path, text: str) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+
+
+def _emit_pkg_args(package_id: str) -> list[str]:
+	return [
+		"--package-id", package_id,
+		"--package-version", "0.0.0",
+		"--package-target", "test-target",
+	]
+
+
+def _empty_stdlib_root(tmp_path: Path) -> Path:
+	d = tmp_path / "_empty_stdlib"
+	d.mkdir(parents=True, exist_ok=True)
+	return d
+
+
+def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, dict]:
+	rc = driftc_main(argv + ["--json"])
+	out = capsys.readouterr().out
+	payload = json.loads(out) if out.strip() else {}
+	return rc, payload
+
+
+# ── K9: Call-graph BFS preserves reachable drop paths ────────────────
+
+
+def _emit_chain_pkg(tmp_path: Path) -> Path:
+	"""Emit a package with a function call chain (A calls B)."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "chain"
+	_write_file(
+		mod_dir / "chain.drift",
+		"""\
+module acme.chain
+
+export { entry };
+
+fn helper(x: Int) nothrow -> Int {
+	return x + 1;
+}
+
+pub fn entry(x: Int) nothrow -> Int {
+	return helper(x);
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.chain.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "chain.drift"),
+		*_emit_pkg_args("acme.chain"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build chain package"
+	return pkg_path
+
+
+def test_k9_reachable_drop_path_preserved(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K9 regression: BFS pruning must preserve transitively-reachable package
+	functions.
+
+	User code calls a package function that internally calls another package
+	function.  If BFS over-prunes, the internal helper is missing and codegen
+	or linking fails.
+	"""
+	pkg_path = _emit_chain_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.chain as chain;
+
+fn main() nothrow -> Int {
+	return chain.entry(41);
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc == 0, f"expected success (call chain reachable); diagnostics: {payload.get('diagnostics', [])}"
+	assert (tmp_path / "out.ll").exists()
+
+
+# ── K4: Template fingerprint mismatch is surfaced ────────────────────
+
+
+def _emit_generic_pkg(tmp_path: Path) -> Path:
+	"""Emit a package containing a generic function."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "genlib"
+	_write_file(
+		mod_dir / "genlib.drift",
+		"""\
+module acme.genlib
+
+export { identity };
+
+pub fn identity<T>(x: T) nothrow -> T {
+	return x;
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.genlib.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "genlib.drift"),
+		*_emit_pkg_args("acme.genlib"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build generic package"
+	return pkg_path
+
+
+def test_k4_fingerprint_mismatch_emits_note(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	"""K4 regression: when a template's decl fingerprint doesn't match, a note
+	must be emitted to stderr so the mismatch is observable.
+
+	We build a package with a generic template, then monkeypatch the fingerprint
+	computation to return a different value during consumption, forcing a mismatch.
+	"""
+	pkg_path = _emit_generic_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.genlib as genlib;
+
+fn main() nothrow -> Int {
+	return genlib.identity<Int>(42);
+}
+""",
+	)
+
+	# Monkeypatch compute_template_decl_fingerprint in driftc module to return
+	# a wrong fingerprint.  This must be done AFTER package emission (above)
+	# so the package itself has correct fingerprints, but the consumer's
+	# recomputation produces a mismatch.
+	import lang.driftc.driftc as _driftc_mod
+	_orig = _driftc_mod.compute_template_decl_fingerprint
+
+	def _broken_fingerprint(*args, **kwargs):
+		fp, layout = _orig(*args, **kwargs)
+		return ("WRONG_" + fp, layout)
+
+	monkeypatch.setattr(_driftc_mod, "compute_template_decl_fingerprint", _broken_fingerprint)
+
+	# Capture stderr where the note is emitted.
+	rc = driftc_main([
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dev",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--json",
+	])
+	captured = capsys.readouterr()
+	# The note should appear on stderr regardless of compilation success/failure.
+	assert "fingerprint mismatch" in captured.err, (
+		f"expected 'fingerprint mismatch' note on stderr; got:\n{captured.err}"
+	)
+
+
+# ── K7: Malformed method receiver metadata still fails ───────────────
+
+
+def test_k7_local_bad_receiver_caught(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K7 regression: method receiver validation is active for locally-compiled code.
+
+	A method declaring `self: Int` instead of `self: &Foo` must be flagged.
+	This proves the receiver validation code path is not disabled by the
+	package-origin bypass (which only applies to loc=None + module_packages).
+	"""
+	src = tmp_path / "main.drift"
+	_write_file(
+		src,
+		"""\
+module main
+
+struct Foo { x: Int }
+
+implement Foo {
+	pub fn bad(self: Int) nothrow -> Int {
+		return 0;
+	}
+}
+
+fn main() nothrow -> Int {
+	return 0;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(tmp_path),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--dev",
+			str(src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0, "expected receiver validation error"
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "receiver type" in messages.lower() or "must be" in messages.lower(), (
+		f"expected receiver type error; got: {messages}"
+	)
+
+
+def test_k7_receiver_bypass_condition_is_narrowed() -> None:
+	"""K7 regression: the receiver validation bypass requires BOTH conditions:
+	loc is None AND module is in module_packages.
+
+	This is a code-level assertion that the narrowed bypass condition is
+	correctly expressed in the checker source.  If someone broadens the
+	bypass (e.g., removes the module_packages check), this test fails.
+	"""
+	import inspect
+	from lang.driftc import checker
+
+	# Find the check_by_id method source and verify the bypass condition.
+	source = inspect.getsource(checker.Checker.check_by_id)
+
+	# The bypass must check BOTH conditions: loc is None AND module_packages.
+	# A broad bypass (just loc is None) would be detected by the absence of
+	# module_packages in the condition.
+	assert "module_packages" in source, (
+		"receiver bypass must check module_packages, not just loc"
+	)
+	assert "_skip_pkg_receiver" in source, (
+		"receiver bypass must use the _skip_pkg_receiver flag"
+	)
+
+
+# ── K7: Behavioral negative test — malformed external receiver ───────
+
+
+def test_k7_external_bad_receiver_not_bypassed() -> None:
+	"""K7 regression (behavioral): a signature with loc=None whose module is
+	NOT in module_packages must still fail receiver validation.
+
+	This proves the narrowed bypass actually works at runtime — not just in
+	source text.  We construct a Checker directly with a crafted FnSignature
+	that has loc=None, is_method=True, wrong receiver type, and a module that
+	is not registered in module_packages.  The checker must emit a receiver
+	type error.
+	"""
+	from lang.driftc.checker import Checker, FnSignature
+	from lang.driftc.core.function_id import FunctionId
+	from lang.driftc.core.types_core import TypeTable
+	from lang.driftc.stage1.hir_nodes import HBlock
+
+	tt = TypeTable()
+	int_type = tt.ensure_int()
+	void_type = tt.ensure_void()
+	foo_type = tt.declare_struct("pkg.external", "Foo", ["x"])
+	tt.define_struct_fields(foo_type, [int_type])
+
+	# Module NOT in module_packages — bypass must NOT activate.
+	fn_id = FunctionId(module="pkg.external", name="bad", ordinal=0)
+
+	sig = FnSignature(
+		name="bad",
+		loc=None,                    # no source location (package-origin)
+		is_method=True,
+		self_mode="value",
+		param_type_ids=[int_type],   # WRONG — should be foo_type
+		param_names=["self"],
+		return_type_id=void_type,
+		impl_target_type_id=foo_type,
+		declared_can_throw=False,
+	)
+
+	empty_block = HBlock(statements=[])
+
+	checker = Checker(
+		signatures_by_id={fn_id: sig},
+		hir_blocks_by_id={fn_id: empty_block},
+		type_table=tt,
+		call_info_by_callsite_id={fn_id: {}},
+	)
+	result = checker.check_by_id([fn_id])
+
+	# Must have a receiver type error diagnostic.
+	messages = " ".join(d.message for d in result.diagnostics)
+	assert "receiver type" in messages.lower(), (
+		f"expected receiver type error for non-bypassed external sig; got: {messages}"
+	)
+
+
+def test_k7_external_bad_receiver_bypassed_when_in_module_packages() -> None:
+	"""K7 regression (behavioral, positive): a signature with loc=None whose
+	module IS in module_packages must be bypassed — no receiver error.
+
+	This confirms the bypass activates correctly when both conditions are met.
+	"""
+	from lang.driftc.checker import Checker, FnSignature
+	from lang.driftc.core.function_id import FunctionId
+	from lang.driftc.core.types_core import TypeTable
+	from lang.driftc.stage1.hir_nodes import HBlock
+
+	tt = TypeTable()
+	int_type = tt.ensure_int()
+	void_type = tt.ensure_void()
+	foo_type = tt.declare_struct("pkg.external", "Foo", ["x"])
+	tt.define_struct_fields(foo_type, [int_type])
+
+	# Register module in module_packages — bypass SHOULD activate.
+	tt.module_packages["pkg.external"] = "acme.pkg"
+
+	fn_id = FunctionId(module="pkg.external", name="bad", ordinal=0)
+
+	sig = FnSignature(
+		name="bad",
+		loc=None,                    # no source location (package-origin)
+		is_method=True,
+		self_mode="value",
+		param_type_ids=[int_type],   # wrong receiver, but bypass should skip check
+		param_names=["self"],
+		return_type_id=void_type,
+		impl_target_type_id=foo_type,
+		declared_can_throw=False,
+	)
+
+	empty_block = HBlock(statements=[])
+
+	checker = Checker(
+		signatures_by_id={fn_id: sig},
+		hir_blocks_by_id={fn_id: empty_block},
+		type_table=tt,
+		call_info_by_callsite_id={fn_id: {}},
+	)
+	result = checker.check_by_id([fn_id])
+
+	# Must NOT have a receiver type error — bypass is active.
+	receiver_errors = [
+		d for d in result.diagnostics
+		if "receiver type" in d.message.lower()
+	]
+	assert not receiver_errors, (
+		f"expected NO receiver error when module is in module_packages; got: "
+		f"{[d.message for d in receiver_errors]}"
+	)
+
+
+# ── K4: Template import failure classification regressions ───────────
+
+
+def _corrupt_pkg_payload(
+	pkg_path: Path,
+	module_id: str,
+	mutator,
+) -> None:
+	"""Load a package, corrupt its payload via `mutator`, and rewrite it.
+
+	`mutator(payload_obj)` receives the parsed payload JSON dict and must
+	mutate it in-place.  The package is rewritten with updated hashes.
+	"""
+	from lang.driftc.packages.dmir_pkg_v0 import (
+		canonical_json_bytes, sha256_hex, write_dmir_pkg_v0,
+	)
+	from lang.driftc.packages.provider_v0 import load_package_v0
+
+	pkg = load_package_v0(pkg_path)
+	manifest = dict(pkg.manifest)
+
+	# Find the payload blob sha for the target module.
+	mod_entry = None
+	for m in manifest["modules"]:
+		if m["module_id"] == module_id:
+			mod_entry = m
+			break
+	assert mod_entry is not None, f"module {module_id} not found in package"
+
+	old_payload_sha = mod_entry["payload_blob"].split("sha256:", 1)[1]
+	raw_payload = pkg.blobs_by_sha256[old_payload_sha]
+	payload_obj = json.loads(raw_payload.decode("utf-8"))
+
+	mutator(payload_obj)
+
+	new_payload_bytes = canonical_json_bytes(payload_obj)
+	new_payload_sha = sha256_hex(new_payload_bytes)
+
+	# Rebuild blob maps, replacing old payload with corrupted version.
+	blobs: dict[str, bytes] = {}
+	blob_types: dict[str, int] = {}
+	blob_names: dict[str, str] = {}
+	for entry in pkg.toc:
+		if entry.sha256 == old_payload_sha:
+			blobs[new_payload_sha] = new_payload_bytes
+			blob_types[new_payload_sha] = entry.type
+			blob_names[new_payload_sha] = entry.name
+		else:
+			blobs[entry.sha256] = pkg.blobs_by_sha256[entry.sha256]
+			blob_types[entry.sha256] = entry.type
+			blob_names[entry.sha256] = entry.name
+
+	# Update manifest blob references.
+	mod_entry["payload_blob"] = f"sha256:{new_payload_sha}"
+	old_blobs = manifest["blobs"]
+	old_key = f"sha256:{old_payload_sha}"
+	new_key = f"sha256:{new_payload_sha}"
+	new_blobs = {}
+	for k, v in old_blobs.items():
+		if k == old_key:
+			new_blobs[new_key] = v
+		else:
+			new_blobs[k] = v
+	manifest["blobs"] = new_blobs
+
+	write_dmir_pkg_v0(
+		pkg_path,
+		manifest_obj=manifest,
+		blobs=blobs,
+		blob_types=blob_types,
+		blob_names=blob_names,
+	)
+
+
+def _consumer_src(tmp_path: Path) -> Path:
+	"""Write a minimal consumer that imports the generic package."""
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.genlib as genlib;
+
+fn main() nothrow -> Int {
+	return genlib.identity<Int>(42);
+}
+""",
+	)
+	return main_src
+
+
+def _consume_pkg(tmp_path: Path, pkg_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, dict, str]:
+	"""Compile a consumer against the (possibly corrupted) package.
+
+	Returns (rc, json_payload, stderr).
+	"""
+	main_src = _consumer_src(tmp_path)
+	pkg_root = pkg_path.parent
+	rc = driftc_main([
+		"-M", str(main_src.parent),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dev",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--json",
+	])
+	captured = capsys.readouterr()
+	payload = json.loads(captured.out) if captured.out.strip() else {}
+	return rc, payload, captured.err
+
+
+def test_k4_hard_error_non_dict_template_entry(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	"""K4 regression: a non-dict entry in generic_templates is structural
+	corruption and must produce a hard error."""
+	pkg_path = _emit_generic_pkg(tmp_path)
+
+	import lang.driftc.driftc as _driftc_mod
+	_orig_decode = _driftc_mod.decode_generic_templates
+
+	def _inject_non_dict(templates_obj):
+		result = _orig_decode(templates_obj)
+		# Inject a non-dict entry to simulate corruption bypassing the decoder.
+		result.insert(0, "CORRUPT")
+		return result
+
+	monkeypatch.setattr(_driftc_mod, "decode_generic_templates", _inject_non_dict)
+
+	rc, payload, stderr = _consume_pkg(tmp_path, pkg_path, capsys)
+	assert rc == 1, f"expected hard error; got rc={rc}"
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "not a dict" in messages, f"expected 'not a dict' diagnostic; got: {messages}"
+
+
+def test_k4_hard_error_missing_fn_id(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K4 regression: a TemplateHIR-v1 entry missing fn_id is structural
+	corruption and must produce a hard error."""
+	pkg_path = _emit_generic_pkg(tmp_path)
+
+	def _remove_fn_id(payload_obj):
+		templates = payload_obj.get("generic_templates", [])
+		for t in templates:
+			if isinstance(t, dict) and t.get("ir_kind") == "TemplateHIR-v1":
+				t.pop("fn_id", None)
+				break
+
+	_corrupt_pkg_payload(pkg_path, "acme.genlib", _remove_fn_id)
+
+	rc, payload, stderr = _consume_pkg(tmp_path, pkg_path, capsys)
+	assert rc == 1, f"expected hard error; got rc={rc}"
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "missing fn_id" in messages, f"expected 'missing fn_id' diagnostic; got: {messages}"
+
+
+def test_k4_hard_error_layout_mismatch(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K4 regression: generic_param_layout that doesn't match type_params
+	counts is structural corruption and must produce a hard error."""
+	pkg_path = _emit_generic_pkg(tmp_path)
+
+	def _break_layout(payload_obj):
+		templates = payload_obj.get("generic_templates", [])
+		for t in templates:
+			if isinstance(t, dict) and t.get("ir_kind") == "TemplateHIR-v1":
+				t["generic_param_layout"] = []
+				break
+
+	_corrupt_pkg_payload(pkg_path, "acme.genlib", _break_layout)
+
+	rc, payload, stderr = _consume_pkg(tmp_path, pkg_path, capsys)
+	assert rc == 1, f"expected hard error; got rc={rc}"
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "layout mismatch" in messages, f"expected 'layout mismatch' diagnostic; got: {messages}"
+
+
+def test_k4_soft_skip_unknown_ir_kind(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K4 regression: unknown ir_kind is a soft skip (forward compat) but
+	must emit a note to stderr for observability."""
+	pkg_path = _emit_generic_pkg(tmp_path)
+
+	def _set_unknown_ir_kind(payload_obj):
+		templates = payload_obj.get("generic_templates", [])
+		for t in templates:
+			if isinstance(t, dict):
+				t["ir_kind"] = "TemplateHIR-v99"
+
+	_corrupt_pkg_payload(pkg_path, "acme.genlib", _set_unknown_ir_kind)
+
+	# Consumer must NOT instantiate the generic — the template is skipped.
+	# Use a consumer that imports the package but only calls non-generic code.
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+fn main() nothrow -> Int {
+	return 0;
+}
+""",
+	)
+	pkg_root = pkg_path.parent
+	rc = driftc_main([
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dev",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--json",
+	])
+	captured = capsys.readouterr()
+	assert rc == 0, f"expected soft skip (success); got rc={rc}, stderr={captured.err}"
+	assert "unknown template ir_kind" in captured.err, (
+		f"expected 'unknown template ir_kind' note on stderr; got:\n{captured.err}"
+	)

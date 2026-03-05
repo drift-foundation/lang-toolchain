@@ -1083,12 +1083,13 @@ def decode_generic_templates(generic_templates_obj: Any) -> list[dict[str, Any]]
 	if not isinstance(generic_templates_obj, list):
 		return []
 	from lang.driftc.stage1 import hir_nodes as H  # local import
+	from lang.driftc.stage1 import closures as closures_mod  # local import
 	from lang.driftc.parser import ast as parser_ast  # local import
 	from lang.driftc.core import function_id as fn_id_mod  # local import
 	from lang.driftc.core import span as span_mod  # local import
 
-	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod)
-	enums = build_enum_registry(H, fn_id_mod)
+	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod)
+	enums = build_enum_registry(H, fn_id_mod, closures_mod)
 	out: list[dict[str, Any]] = []
 	for entry in generic_templates_obj:
 		if not isinstance(entry, dict):

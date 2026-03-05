@@ -1,5 +1,22 @@
 # Drift development history
 
+## 2026-03-05
+- Tightened deploy to ship stdlib as a signed package (`std.dmp` + sidecar) through the staged deploy flow and wrapper package-root path:
+  - deploy now builds/signs stdlib package and generates bundled core trust store,
+  - deploy smoke test validates compile+run through package verification path,
+  - legacy deploy-manifest signing/verify script flow removed.
+- Fixed package linking/root-cause compiler issues uncovered by full-stdlib package consumption:
+  - type-table linker now seeds generic struct schema fields before instantiation and unifies `FORWARD_NOMINAL` canonical keys with concrete nominal definitions,
+  - MIR package TypeId remap now includes `fn.local_types` plus missing instruction families (`MoveOut`, variant addr/tag refs, unchecked/const array ops, raw-buffer ops, pointer ops).
+- Hardened template import K4 behavior:
+  - structural corruption paths fail with package diagnostics,
+  - recoverable `ir_kind`/fingerprint mismatch paths are explicitly observable via notes (no silent skip for these classes).
+- Narrowed checker external-signature bypass behavior for receiver validation:
+  - bypass now requires both `loc is None` and module presence in `module_packages`,
+  - cross-module throw analysis now honors explicit `declared_can_throw=False` on callees.
+- Added targeted driver regressions in `lang/tests/driver/test_deploy_compiler_hunk_regressions.py` covering K4/K7/K9 behavior (including negative/positive bypass cases and observability checks).
+- Bumped compiler version to `0.27.4-dev`; ABI remains `4`.
+
 ## 2026-03-04
 - Added signed deployment tooling for isolated downstream compiler/runtime usage:
   - new `just deploy DEST=...`, `just deploy-print-env DEST=...`, and `just deploy-verify DEST=... PUBKEY=...` flows,

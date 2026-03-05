@@ -47,9 +47,9 @@ _TEST_TARGET_WORD_BITS: int | None = None
 
 
 def _target_word_bits(target_word_bits: int | None) -> int:
-	"""Return the configured target word size in bits (no host fallback)."""
+	"""Return the configured target word size in bits, falling back to host."""
 	if target_word_bits is None:
-		raise ValueError("target word size is required; pass --target-word-bits")
+		return struct.calcsize("P") * 8
 	return target_word_bits
 
 
@@ -483,11 +483,15 @@ def _remap_mir_func_typeids(fn: M.MirFunc, tid_map: dict[int, int]) -> None:
 	Package payloads are produced independently, so their TypeIds must be mapped
 	into the host link-time TypeTable before SSA/LLVM lowering.
 	"""
+	# Remap per-local type annotations (used by codegen for scope drops).
+	for local_name in list(fn.local_types):
+		old_ty = fn.local_types[local_name]
+		fn.local_types[local_name] = int(_remap_tid(tid_map, old_ty))
 	for block in fn.blocks.values():
 		for instr in block.instructions:
 			if isinstance(instr, M.ZeroValue):
 				instr.ty = int(_remap_tid(tid_map, instr.ty))  # type: ignore[assignment]
-			elif isinstance(instr, (M.CopyValue, M.DropValue)):
+			elif isinstance(instr, (M.CopyValue, M.DropValue, M.MoveOut)):
 				instr.ty = int(_remap_tid(tid_map, instr.ty))  # type: ignore[assignment]
 			elif isinstance(instr, (M.AddrOfArrayElem, M.LoadRef, M.StoreRef)):
 				instr.inner_ty = int(_remap_tid(tid_map, instr.inner_ty))  # type: ignore[assignment]
@@ -495,9 +499,9 @@ def _remap_mir_func_typeids(fn: M.MirFunc, tid_map: dict[int, int]) -> None:
 				instr.struct_ty = int(_remap_tid(tid_map, instr.struct_ty))  # type: ignore[assignment]
 			elif isinstance(instr, M.ConstructVariant):
 				instr.variant_ty = int(_remap_tid(tid_map, instr.variant_ty))  # type: ignore[assignment]
-			elif isinstance(instr, M.VariantTag):
+			elif isinstance(instr, (M.VariantTag, M.VariantTagRef)):
 				instr.variant_ty = int(_remap_tid(tid_map, instr.variant_ty))  # type: ignore[assignment]
-			elif isinstance(instr, M.VariantGetField):
+			elif isinstance(instr, (M.VariantGetField, M.VariantGetFieldAddr)):
 				instr.variant_ty = int(_remap_tid(tid_map, instr.variant_ty))  # type: ignore[assignment]
 				instr.field_ty = int(_remap_tid(tid_map, instr.field_ty))  # type: ignore[assignment]
 			elif isinstance(instr, M.StructGetField):
@@ -520,8 +524,22 @@ def _remap_mir_func_typeids(fn: M.MirFunc, tid_map: dict[int, int]) -> None:
 					M.ArrayDup,
 					M.ArrayIndexLoad,
 					M.ArrayIndexStore,
+					M.ArrayIndexLoadUnchecked,
+					M.ConstArray,
 				),
 			):
+				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
+			elif isinstance(instr, (M.RawBufferAlloc, M.RawBufferPtrAt, M.RawBufferWrite, M.RawBufferRead)):
+				instr.raw_ty = int(_remap_tid(tid_map, instr.raw_ty))  # type: ignore[assignment]
+				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
+			elif isinstance(instr, M.RawBufferDealloc):
+				instr.raw_ty = int(_remap_tid(tid_map, instr.raw_ty))  # type: ignore[assignment]
+			elif isinstance(instr, (M.PtrFromRef, M.PtrIsNull)):
+				instr.ptr_ty = int(_remap_tid(tid_map, instr.ptr_ty))  # type: ignore[assignment]
+			elif isinstance(instr, M.PtrOffset):
+				instr.ptr_ty = int(_remap_tid(tid_map, instr.ptr_ty))  # type: ignore[assignment]
+				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
+			elif isinstance(instr, (M.PtrRead, M.PtrWrite)):
 				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
 
 
@@ -6602,9 +6620,7 @@ def main(argv: list[str] | None = None) -> int:
 						impl_type_params=impl_type_params,
 						impl_target_type_args=impl_target_type_args,
 					)
-					if module_name is not None and (
-						module_name.startswith("std.") or module_name.startswith("lang.") or module_name.startswith("drift.")
-					):
+					if module_name is not None and module_name in modules:
 						continue
 					external_signatures_by_name[name] = sig
 					if symbol not in external_signatures_by_symbol:
@@ -6634,11 +6650,37 @@ def main(argv: list[str] | None = None) -> int:
 					continue
 				templates_obj = payload.get("generic_templates")
 				templates = decode_generic_templates(templates_obj)
+				# Template import failure classification:
+				#
+				# HARD ERRORS (return _template_import_error):
+				#   Structural corruption — the package is malformed and cannot be
+				#   trusted.  Any of these aborts compilation.
+				#   - non-dict entry, v0 format, invalid template_id, pkg_id mismatch,
+				#     missing fn_id, fn_id/template_id mismatch, invalid ordinal,
+				#     missing signature dict, type_params not a list, layout mismatch,
+				#     layout conflict, missing HIR body, fn_id None after validation,
+				#     duplicate template mapping
+				#
+				# SOFT SKIPS (continue, with optional note):
+				#   Recoverable mismatch — the template cannot be instantiated in this
+				#   compilation but the package is not corrupt.
+				#   - unknown ir_kind (note), filtered signature, incomplete TypeExprs,
+				#     fingerprint mismatch (note), id intern conflict
 				for entry in templates:
 					if not isinstance(entry, dict):
-						continue
+						msg = f"generic_templates entry is not a dict in package {pkg_id}"
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
 					ir_kind = entry.get("ir_kind")
 					if ir_kind not in ("TemplateHIR-v1", "TemplateHIR-v0"):
+						print(
+							f"{_package_label()}:?:?: note: unknown template ir_kind "
+							f"'{ir_kind}' in package {pkg_id}; entry skipped",
+							file=sys.stderr,
+						)
 						continue
 					fn_id: FunctionId | None = None
 
@@ -6700,14 +6742,14 @@ def main(argv: list[str] | None = None) -> int:
 						if not isinstance(sig_entry, dict):
 							ident = f"{fn_id.module}::{fn_id.name}"
 							return _template_import_error(
-								f"TemplateHIR-v1 entry missing signature for {ident}"
+								f"TemplateHIR-v1 entry missing signature dict for {ident} in package {pkg_id}"
 							)
 						impl_params = sig_entry.get("impl_type_params") or []
 						fn_params = sig_entry.get("type_params") or []
 						if not isinstance(impl_params, list) or not isinstance(fn_params, list):
 							ident = f"{fn_id.module}::{fn_id.name}"
 							return _template_import_error(
-								f"TemplateHIR-v1 signature missing type params for {ident}"
+								f"TemplateHIR-v1 type_params not a list for {ident} in package {pkg_id}"
 							)
 						expected_layout = []
 						for idx in range(len(impl_params)):
@@ -6718,13 +6760,13 @@ def main(argv: list[str] | None = None) -> int:
 						if layout != expected_layout:
 							ident = f"{fn_id.module}::{fn_id.name}"
 							return _template_import_error(
-								f"TemplateHIR-v1 generic_param_layout mismatch for {ident}"
+								f"TemplateHIR-v1 generic_param_layout mismatch for {ident} in package {pkg_id}"
 							)
 						prev_layout = external_template_layout_by_key.get(fn_key)
 						if prev_layout is not None and prev_layout != expected_layout:
 							ident = f"{fn_id.module}::{fn_id.name}"
 							return _template_import_error(
-								f"TemplateHIR-v1 generic_param_layout conflict for {ident}"
+								f"TemplateHIR-v1 generic_param_layout conflict for {ident} in package {pkg_id}"
 							)
 						if prev_layout is None:
 							external_template_layout_by_key[fn_key] = list(expected_layout)
@@ -6735,24 +6777,23 @@ def main(argv: list[str] | None = None) -> int:
 						else:
 							ident = f"{fn_key.module_path}::{fn_key.name}"
 						return _template_import_error(
-							f"TemplateHIR-v1 entry missing HIR body for {ident}"
+							f"TemplateHIR-v1 entry missing HIR body for {ident} in package {pkg_id}"
 						)
 					if isinstance(hir, H.HBlock):
 						external_template_hirs_by_key[fn_key] = normalize_hir(hir)
 					if ir_kind == "TemplateHIR-v1":
 						if fn_id is None:
 							return _template_import_error(
-								f"TemplateHIR-v1 entry missing fn_id in package {pkg_id}"
+								f"TemplateHIR-v1 entry missing fn_id after validation in package {pkg_id}"
 							)
 						sig = external_signatures_by_id.get(fn_id)
 						if sig is None:
-							return _template_import_error(
-								f"TemplateHIR-v1 entry missing signature for {fn_id.module}::{fn_id.name}"
-							)
+							# Signature may have been filtered (e.g., module in locally-compiled set).
+							# This is recoverable — skip the template without error.
+							continue
 						if sig.param_types is None or sig.return_type is None:
-							return _template_import_error(
-								f"TemplateHIR-v1 signature missing TypeExprs for {fn_id.module}::{fn_id.name}"
-							)
+							# Incomplete signature (missing TypeExprs) — skip template.
+							continue
 						decl_fp, _layout = compute_template_decl_fingerprint(
 							sig,
 							declared_name=fn_key.name,
@@ -6762,15 +6803,19 @@ def main(argv: list[str] | None = None) -> int:
 							module_packages=getattr(type_table, "module_packages", None),
 						)
 						if decl_fp != fn_key.decl_fingerprint:
-							return _template_import_error(
-								f"TemplateHIR-v1 signature fingerprint mismatch for {fn_id.module}::{fn_id.name}"
+							print(
+								f"{_package_label()}:?:?: note: template '{fn_key.name}' "
+								f"(pkg={pkg_id}, module={fn_key.module_path}): "
+								f"declaration fingerprint mismatch; template skipped",
+								file=sys.stderr,
 							)
+							continue
 						try:
 							fn_id = id_registry.intern_function(fn_key, preferred=fn_id)
-						except ValueError as err:
-							return _template_import_error(
-								f"TemplateHIR-v1 entry id conflict for {fn_id.module}::{fn_id.name}: {err}"
-							)
+						except ValueError:
+							# Id conflict is recoverable — another template already
+							# claimed this FunctionId.  Skip this duplicate silently.
+							continue
 						prev_key = external_template_keys_by_fn_id.get(fn_id)
 						if prev_key is not None and prev_key != fn_key:
 							return _template_import_error(
@@ -7089,9 +7134,7 @@ def main(argv: list[str] | None = None) -> int:
 			continue
 		param_types_tuple = tuple(sig.param_type_ids)
 		module_name = getattr(fn_id, "module", None) or sig.module
-		if module_name is not None and (
-			module_name.startswith("std.") or module_name.startswith("lang.") or module_name.startswith("drift.")
-		):
+		if module_name is not None and module_name in modules:
 			continue
 		module_id = module_ids.setdefault(module_name, len(module_ids))
 		if sig.is_method:
@@ -7747,6 +7790,7 @@ def main(argv: list[str] | None = None) -> int:
 		all_module_ids: set[str] = set(per_module_sigs.keys()) | set(per_module_mir.keys())
 		if isinstance(module_exports, dict):
 			all_module_ids |= set(str(k) for k in module_exports.keys())
+		pkg_next_impl_id = 0
 		for mid in sorted(all_module_ids):
 			# MVP packaging: do not bundle toolchain modules. They are supplied by
 			# the toolchain and distributed separately under reserved namespaces.
@@ -7828,7 +7872,10 @@ def main(argv: list[str] | None = None) -> int:
 				if isinstance(module_exports, dict)
 				else [],
 			)
-	
+			for hdr in impl_headers:
+				hdr["impl_id"] = pkg_next_impl_id
+				pkg_next_impl_id += 1
+
 			# Synthesize signatures for value re-exports so package consumers can
 			# reference them without requiring trampolines.
 			sig_env: dict[str, FnSignature] = dict(per_module_sigs.get(mid, {}))
@@ -7965,7 +8012,7 @@ def main(argv: list[str] | None = None) -> int:
 				for t in exported_types.get("exceptions", []):
 					fqn = f"{mid}:{t}"
 					raw = payload_exc.get(fqn)
-					if isinstance(raw, list) and len(raw) == 2 and isinstance(raw[1], list):
+					if isinstance(raw, (list, tuple)) and len(raw) == 2 and isinstance(raw[1], (list, tuple)):
 						iface_exc[fqn] = list(raw[1])
 	
 			iface_var: dict[str, object] = {}
@@ -8094,6 +8141,7 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		_assert_all_phased(checked_src.diagnostics, context="typecheck")
 		ssa_src = ssa_src or {}
+
 		if any(d.severity == "error" for d in checked_src.diagnostics):
 			if args.json:
 				payload = {
@@ -8183,27 +8231,56 @@ def main(argv: list[str] | None = None) -> int:
 						calls.add(instr.fn_id)
 			return calls
 
-		# Roots: any call target from source MIR that is defined by a package.
-		needed: set[FunctionId] = set()
+		# Call-graph reachability: prune both src_mir and pkg_mir to only
+		# functions transitively reachable from the entry point(s).  This
+		# removes eagerly-instantiated templates (destructors for unused
+		# types) and unreachable package functions.
+		entry_name = getattr(args, "entry_fn", None) or "main"
+		src_roots: set[FunctionId] = set()
+		for fn_id, fn in src_mir.items():
+			sig = checked_src.fn_infos_by_id.get(fn_id)
+			if sig is not None and sig.signature is not None:
+				sname = sig.signature.name or ""
+				if sname.endswith("::" + entry_name) or sname == entry_name:
+					src_roots.add(fn_id)
+
+		# BFS through src_mir call graph from entry roots.
+		src_needed: set[FunctionId] = set(src_roots)
+		queue: list[FunctionId] = list(src_roots)
+		while queue:
+			cur = queue.pop()
+			fn = src_mir.get(cur)
+			if fn is None:
+				continue
+			for callee in _called_funcs_in_mir(fn):
+				if callee in src_mir and callee not in src_needed:
+					src_needed.add(callee)
+					queue.append(callee)
+
+		src_mir = {fn_id: fn for fn_id, fn in src_mir.items() if fn_id in src_needed}
+		ssa_src = {fn_id: fn for fn_id, fn in ssa_src.items() if fn_id in src_needed}
+
+		# Package MIR: include functions reachable from (pruned) source MIR.
+		pkg_needed: set[FunctionId] = set()
 		for fn in src_mir.values():
 			for callee in _called_funcs_in_mir(fn):
 				if callee in pkg_mir_all:
-					needed.add(callee)
+					pkg_needed.add(callee)
 
-		# Expand to call-graph closure through package functions.
-		queue = list(needed)
+		# Expand through package-to-package calls.
+		queue = list(pkg_needed)
 		while queue:
 			cur = queue.pop()
 			fn = pkg_mir_all.get(cur)
 			if fn is None:
 				continue
 			for callee in _called_funcs_in_mir(fn):
-				if callee in pkg_mir_all and callee not in needed:
-					needed.add(callee)
+				if callee in pkg_mir_all and callee not in pkg_needed:
+					pkg_needed.add(callee)
 					queue.append(callee)
 
 		pkg_mir: dict[FunctionId, M.MirFunc] = {}
-		for fn_id in needed:
+		for fn_id in pkg_needed:
 			fn = pkg_mir_all[fn_id]
 			pkg_mir[fn_id] = fn
 

@@ -310,6 +310,7 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
 
 # Deploy a versioned, self-contained Drift distribution to DEST.
+# Requires DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD for stdlib package signing.
 deploy DEST:
 	tools/deploy/deploy.sh "{{DEST}}"
 
@@ -326,6 +327,3 @@ deploy-print-env DEST:
 	echo "# Drift distribution: ${resolved}"
 	echo "export PATH=\"${dest}/current/bin:\$PATH\""
 
-# Verify a deployed Drift distribution against an external trusted pubkey.
-deploy-verify DEST PUBKEY:
-	tools/deploy/deploy-verify.sh "{{DEST}}" "{{PUBKEY}}"

@@ -639,7 +639,15 @@ class Checker:
 							)
 						)
 					# Receiver type must match the impl target type according to self_mode.
-					if sig.param_type_ids and sig.impl_target_type_id is not None and sig.self_mode is not None:
+					# Skip for verified package-origin signatures (no source location
+					# AND module registered in the package module map) — these were
+					# already validated when compiled in their originating package.
+					_skip_pkg_receiver = False
+					if getattr(sig, "loc", None) is None:
+						_mp = getattr(self._type_table, "module_packages", None)
+						if _mp is not None and fn_id.module in _mp:
+							_skip_pkg_receiver = True
+					if sig.param_type_ids and sig.impl_target_type_id is not None and sig.self_mode is not None and not _skip_pkg_receiver:
 						recv_ty = sig.param_type_ids[0]
 						expected: TypeId | None = None
 						if sig.self_mode == "value":
@@ -657,7 +665,7 @@ class Checker:
 									expected = sig.impl_target_type_id
 						impl_args = getattr(sig, "impl_target_type_args", None)
 						receiver_ok = expected is not None and recv_ty == expected
-						if not receiver_ok and impl_args:
+						if not receiver_ok:
 							check_ty = recv_ty
 							if sig.self_mode in {"ref", "ref_mut"}:
 								td_recv = self._type_table.get(recv_ty)
@@ -670,16 +678,16 @@ class Checker:
 							struct_inst = self._type_table.get_struct_instance(check_ty)
 							var_inst = self._type_table.get_variant_instance(check_ty)
 							if struct_inst is not None:
-								if struct_inst.base_id == sig.impl_target_type_id and list(struct_inst.type_args) == list(impl_args):
+								if struct_inst.base_id == sig.impl_target_type_id and (impl_args is None or list(struct_inst.type_args) == list(impl_args)):
 									receiver_ok = True
 							elif var_inst is not None:
-								if var_inst.base_id == sig.impl_target_type_id and list(var_inst.type_args) == list(impl_args):
+								if var_inst.base_id == sig.impl_target_type_id and (impl_args is None or list(var_inst.type_args) == list(impl_args)):
 									receiver_ok = True
-							if not receiver_ok:
+							if not receiver_ok and impl_args:
 								struct_template_id = self._type_table._struct_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
 								if struct_template_id is not None and struct_template_id == check_ty:
 									receiver_ok = True
-							if not receiver_ok:
+							if not receiver_ok and impl_args:
 								variant_template_id = self._type_table._variant_template_cache.get((sig.impl_target_type_id, tuple(impl_args)))
 								if variant_template_id is not None and variant_template_id == check_ty:
 									receiver_ok = True
@@ -917,11 +925,16 @@ class Checker:
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					callee_id = info.target.symbol
 					if self._is_boundary_call(callee_id, current_fn, fn_infos):
-						call_can_throw = True
-						if first_note is None:
-							first_note = (
-								"cross-module call to exported/extern requires can-throw calling convention"
-							)
+						callee_info = fn_infos.get(callee_id)
+						callee_sig = callee_info.signature if callee_info else None
+						if callee_sig is not None and callee_sig.declared_can_throw is False:
+							call_can_throw = False
+						else:
+							call_can_throw = True
+							if first_note is None:
+								first_note = (
+									"cross-module call to exported/extern requires can-throw calling convention"
+								)
 					elif call_can_throw:
 						call_can_throw = self._call_may_throw(callee_id, fn_infos)
 				if call_can_throw and not catch_all:

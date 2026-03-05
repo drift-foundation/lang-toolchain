@@ -4,6 +4,9 @@
 # This script is installed to <deploy>/bin/driftc and resolves all paths
 # relative to its own location so the distribution is fully relocatable.
 #
+# The stdlib is loaded from a signed DMIR package (lib/stdlib/std.dmp).
+# Signature verification uses the bundled core trust store automatically.
+#
 # Prerequisites: Python 3.10+ with lark and llvmlite packages, clang linker.
 set -euo pipefail
 
@@ -30,7 +33,13 @@ if [[ -z "${PYTHON}" ]]; then
 	exit 127
 fi
 
+# Build argument list: stdlib from signed package, optional user trust store.
+DRIFTC_ARGS=(--package-root "${DIST_ROOT}/lib/stdlib")
+if [[ -n "${DRIFT_TRUST_STORE:-}" && -f "${DRIFT_TRUST_STORE}" ]]; then
+	DRIFTC_ARGS+=(--trust-store "${DRIFT_TRUST_STORE}")
+fi
+
 # Use -m with PYTHONSAFEPATH=1 to prevent CWD from appearing in sys.path.
 # This ensures Python resolves lang.driftc from PYTHONPATH (deployed tree)
 # even when invoked from a directory containing its own lang/ package.
-exec "${PYTHON}" -m lang.driftc --stdlib-root "${DIST_ROOT}/lib/stdlib" "$@"
+exec "${PYTHON}" -m lang.driftc "${DRIFTC_ARGS[@]}" "$@"
