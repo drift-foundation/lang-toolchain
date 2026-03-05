@@ -1,5 +1,19 @@
 # Drift development history
 
+## 2026-03-05 (K11/K12 package variant fixes)
+- Fixed two package-consumption regressions affecting downstream projects:
+  - K11: tombstone metadata preservation across package type-table linking.
+    - `lang/driftc/packages/type_table_link_v0.py` now preserves `tombstone_ctor` when declaring linked variant schemas.
+    - This removes false `E-MATCH-NONEXHAUSTIVE ... missing: Tombstone` behavior caused by lost tombstone metadata on linked variants.
+  - K12: generic variant constructor inference for package-loaded modules.
+    - `lang/driftc/core/type_resolve_common.py` now preserves unresolved generic nominals with known module origin as parameterized `FORWARD_NOMINAL` instead of collapsing to `Unknown`.
+    - `lang/driftc/driftc.py` post-link canonicalization now instantiates parameterized forward nominals when concrete bases are available, and canonicalizes signature `param`/`return`/`error` type ids.
+- Added targeted regressions in `lang/tests/driver/test_deploy_compiler_hunk_regressions.py`:
+  - K11 tombstone/exhaustiveness coverage,
+  - K12 positive package variant ctor inference,
+  - K12 negative unresolved generic nominal diagnostics.
+- Bumped compiler version to `0.27.8-dev`; ABI remains `4`.
+
 ## 2026-03-05 (module-qualified ctor fix)
 - LANGUAGE_BUG fix: module-qualified constructor calls for package-loaded modules could be incorrectly rejected at parser time with:
   - `module-qualified constructor call 'x.Type(...)' is only supported for structs in v1`

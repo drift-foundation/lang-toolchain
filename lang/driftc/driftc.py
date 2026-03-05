@@ -269,6 +269,18 @@ def _canonicalize_forward_nominal_type_id(
 		or type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
 		or type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
 	)
+	if resolved_nom is not None and td.param_types:
+		canon_args = [_canonicalize_forward_nominal_type_id(type_table, a, _seen=seen) for a in td.param_types]
+		try:
+			if resolved_nom in type_table.variant_schemas:
+				return type_table.ensure_variant_instantiated(resolved_nom, canon_args)
+			if resolved_nom in type_table.struct_bases:
+				return type_table.ensure_struct_instantiated(resolved_nom, canon_args)
+			if resolved_nom in type_table.interface_bases:
+				return type_table.ensure_interface_instantiated(resolved_nom, canon_args)
+		except ValueError:
+			return ty_id
+		return ty_id
 	return resolved_nom if resolved_nom is not None else ty_id
 
 
@@ -278,6 +290,8 @@ def _canonicalize_signature_type_ids(signatures_by_id: Mapping[FunctionId, FnSig
 			_canonicalize_forward_nominal_type_id(type_table, ty_id) for ty_id in sig.param_type_ids
 		]
 		sig.return_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.return_type_id)
+		if sig.error_type_id is not None:
+			sig.error_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.error_type_id)
 
 
 def _canonicalize_mir_type_ids(mir_funcs_by_id: Mapping[FunctionId, M.MirFunc], type_table: TypeTable) -> None:
@@ -6364,6 +6378,8 @@ def main(argv: list[str] | None = None) -> int:
 			if isinstance(mod, str) and isinstance(name, str):
 				pkg = getattr(type_table, "module_packages", {}).get(mod, getattr(type_table, "package_id", None))
 				id_registry.intern_type(TypeKey(package_id=pkg, module=mod, name=name, args=()), preferred=base_id)
+
+		_canonicalize_signature_type_ids(base_signatures_by_id, type_table)
 
 	# If package roots were provided, merge package signatures into the signature
 	# environment so type checking can validate calls to imported functions.

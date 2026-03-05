@@ -924,7 +924,7 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				if host_schema is None or host_schema != schema:
 					raise ValueError(f"variant schema collision for '{schema.module_id}:{schema.name}'")
 			else:
-				host.declare_variant(schema.module_id, schema.name, schema.type_params, schema.arms)
+				host.declare_variant(schema.module_id, schema.name, schema.type_params, schema.arms, tombstone_ctor=schema.tombstone_ctor)
 		elif nk.kind is TypeKind.INTERFACE:
 			type_params, methods, parents = merged_interface_schemas[nk]
 			base_id = host.get_interface_base(module_id=mid, name=nk.name)

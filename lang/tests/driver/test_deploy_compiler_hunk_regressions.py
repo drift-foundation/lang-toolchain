@@ -5,6 +5,8 @@ K9: Call-graph BFS pruning preserves reachable destructor/drop paths.
 K4: Template fingerprint mismatch emits observable diagnostic (not silent).
 K4: Stdlib template fingerprint stability (self-deploy roundtrip).
 K7: Malformed method receiver metadata is still caught by the checker.
+K11: Package-consumed variant tombstone metadata preservation.
+K12: Package-consumed generic variant constructor inference.
 """
 from __future__ import annotations
 
@@ -968,3 +970,388 @@ fn main() nothrow -> Int {
 	assert rc == 0, "module-qualified external struct ctor should compile from package-root"
 	captured = capsys.readouterr()
 	assert "module-qualified constructor call 'conc.Duration(...)' is only supported for structs in v1" not in captured.err
+
+
+# ── K11: Package-consumed variant tombstone metadata preservation ─────
+
+
+def _emit_tombstone_variant_pkg(tmp_path: Path) -> Path:
+	"""Emit a package containing a variant with a @tombstone arm."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "result"
+	_write_file(
+		mod_dir / "result.drift",
+		"""\
+module acme.result
+
+export { Outcome };
+
+pub variant Outcome<T, E> {
+	Ok(value: T),
+	Err(err: E),
+	@tombstone Tombstone
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.result.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "result.drift"),
+		*_emit_pkg_args("acme.result"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build tombstone variant package"
+	return pkg_path
+
+
+def test_k11_tombstone_match_exhaustiveness(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K11 regression: matching Ok/Err on a variant with @tombstone must be
+	exhaustive — tombstone is internal and pruned from the required set.
+
+	Without tombstone metadata, the type checker sees a 3-arm variant and
+	reports E-MATCH-NONEXHAUSTIVE (missing: Tombstone).
+	"""
+	src = tmp_path / "src"
+	mod_dir = src / "acme" / "result"
+	_write_file(
+		mod_dir / "result.drift",
+		"""\
+module acme.result
+
+export { Outcome };
+
+pub variant Outcome<T, E> {
+	Ok(value: T),
+	Err(err: E),
+	@tombstone Tombstone
+}
+""",
+	)
+	main_src = src / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.result as result;
+
+fn check(o: result.Outcome<Int, Int>) nothrow -> Int {
+	return match o {
+		result.Outcome::Ok(value) => { value },
+		result.Outcome::Err(err) => { err },
+	};
+}
+
+fn main() nothrow -> Int {
+	val o: result.Outcome<Int, Int> = result.Outcome::Ok(42);
+	return check(move o);
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(src),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--dev",
+			str(main_src),
+			str(mod_dir / "result.drift"),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "NONEXHAUSTIVE" not in messages, (
+		f"expected exhaustive match (tombstone pruned); got: {messages}"
+	)
+	assert "Tombstone" not in messages, (
+		f"tombstone leaked into diagnostics: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+def test_k11_tombstone_result_inference(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K11 regression: constructing and using a Result-like variant with
+	@tombstone must not fail type argument inference.
+
+	Without tombstone metadata, constructor analysis may be destabilised
+	and produce 'cannot infer type arguments' errors.
+	"""
+	src = tmp_path / "src"
+	mod_dir = src / "acme" / "result"
+	_write_file(
+		mod_dir / "result.drift",
+		"""\
+module acme.result
+
+export { Outcome };
+
+pub variant Outcome<T, E> {
+	Ok(value: T),
+	Err(err: E),
+	@tombstone Tombstone
+}
+""",
+	)
+	main_src = src / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.result as result;
+
+fn get_ok() nothrow -> result.Outcome<Int, Int> {
+	return result.Outcome::Ok(42);
+}
+
+fn get_err() nothrow -> result.Outcome<Int, Int> {
+	return result.Outcome::Err(1);
+}
+
+fn main() nothrow -> Int {
+	val ok = get_ok();
+	val err = get_err();
+	val v1 = match ok {
+		result.Outcome::Ok(value) => { value },
+		result.Outcome::Err(err) => { err },
+	};
+	val v2 = match err {
+		result.Outcome::Ok(value) => { value },
+		result.Outcome::Err(err) => { err },
+	};
+	return v1 + v2;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(src),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--dev",
+			str(main_src),
+			str(mod_dir / "result.drift"),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "cannot infer" not in messages.lower(), (
+		f"type inference failed for variant with tombstone: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+def test_k11_tombstone_schema_preserved_after_link(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K11 regression (unit): after type-table link, the host variant schema
+	for a package-consumed variant must preserve tombstone_ctor metadata.
+
+	This directly asserts the linker fix — without it, tombstone_ctor is
+	None on the host side even though the package schema has it.
+	"""
+	from lang.driftc.core.types_core import TypeTable
+	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.type_table_link_v0 import import_type_tables_and_build_typeid_maps
+
+	pkg_path = _emit_tombstone_variant_pkg(tmp_path)
+	_ = capsys.readouterr()
+	pkg = load_package_v0(pkg_path)
+
+	# Extract the raw type_table dict from the package payload
+	# (same as driftc.py does when collecting pkg_tt_objs).
+	pkg_tt_obj = None
+	for _mid, mod in pkg.modules_by_id.items():
+		tt = mod.payload.get("type_table")
+		if isinstance(tt, dict):
+			pkg_tt_obj = tt
+			break
+	assert pkg_tt_obj is not None, "no type_table in package payload"
+
+	# Verify the package payload encodes tombstone_ctor.
+	raw_variant_schemas = pkg_tt_obj.get("variant_schemas", {})
+	pkg_has_tombstone = False
+	for _base_id_str, schema_obj in raw_variant_schemas.items():
+		if schema_obj.get("name") == "Outcome":
+			assert schema_obj.get("tombstone_ctor") == "Tombstone", (
+				f"package payload variant schema missing tombstone_ctor: {schema_obj}"
+			)
+			pkg_has_tombstone = True
+			break
+	assert pkg_has_tombstone, "Outcome variant_schema not found in package payload"
+
+	# Link into a fresh host type table.
+	host = TypeTable()
+	_tid_maps = import_type_tables_and_build_typeid_maps(
+		[pkg_tt_obj],
+		host=host,
+	)
+
+	# Find the linked Outcome variant in the host and assert tombstone_ctor.
+	host_variant_found = False
+	for _base_id, schema in host.variant_schemas.items():
+		if schema.name == "Outcome" and schema.module_id == "acme.result":
+			assert schema.tombstone_ctor == "Tombstone", (
+				f"host schema lost tombstone_ctor after link: {schema}"
+			)
+			host_variant_found = True
+			break
+	assert host_variant_found, "Outcome variant not found in host type table after link"
+
+
+# ── K12: Package-consumed generic variant constructor inference ───────
+
+
+def _emit_generic_variant_pkg(tmp_path: Path) -> Path:
+	"""Emit a package containing a generic variant (no tombstone)."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "result"
+	_write_file(
+		mod_dir / "result.drift",
+		"""\
+module acme.result
+
+export { Outcome };
+
+pub variant Outcome<T, E> {
+	Ok(value: T),
+	Err(err: E)
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.result.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "result.drift"),
+		*_emit_pkg_args("acme.result"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build generic variant package"
+	return pkg_path
+
+
+def test_k12_package_variant_ctor_inference(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K12 regression: constructing a generic variant from a package-consumed
+	module must infer type arguments from the function return type.
+
+	Root cause: at parse-time the type table has no variant schema for
+	package-consumed modules, so resolve_opaque_type returned Unknown for
+	parameterised types like Outcome<Int, Int>.  The return type collapsed
+	to Unknown, making variant-constructor inference fail with:
+	  'cannot infer type arguments for variant Result'
+
+	Fix: resolve_opaque_type now emits a parameterised FORWARD_NOMINAL
+	for unknown generic nominals with a known origin module, and
+	_canonicalize_signature_type_ids resolves them after type-table
+	linking.
+	"""
+	pkg_path = _emit_generic_variant_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.result as result;
+
+fn get_ok() nothrow -> result.Outcome<Int, Int> {
+	return result.Outcome::Ok(42);
+}
+
+fn get_err() nothrow -> result.Outcome<Int, Int> {
+	return result.Outcome::Err(1);
+}
+
+fn main() nothrow -> Int {
+	val o: result.Outcome<Int, Int> = get_ok();
+	return 0;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "cannot infer" not in messages.lower(), (
+		f"type inference failed for package-consumed variant ctor: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+def test_k12_unresolvable_generic_nominal_errors(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K12 negative: referencing a generic type that does not exist in a
+	package-consumed module must produce a clear error — not silently pass
+	or crash due to an unresolved forward nominal.
+	"""
+	pkg_path = _emit_generic_variant_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.result as result;
+
+fn get() nothrow -> result.Widget<Int> {
+	return result.Widget::Make(42);
+}
+
+fn main() nothrow -> Int {
+	return 0;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	assert rc != 0, "expected compilation to fail for non-existent generic type"
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "Widget" in messages, (
+		f"error should mention the unresolved type name 'Widget'; got: {messages}"
+	)

@@ -164,6 +164,13 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 					except ValueError:
 						return table.ensure_unknown()
 			if name not in {"Array", "Optional", "FnResult", "fn"}:
+				if origin_mod is not None:
+					arg_mod = module_id if module_id is not None else origin_mod
+					arg_ids = [
+						resolve_opaque_type(a, table, module_id=arg_mod, type_params=type_params, alias_stack=alias_stack)
+						for a in list(args)
+					]
+					return table._add(TypeKind.FORWARD_NOMINAL, name, arg_ids, module_id=origin_mod, register_named=False)
 				return table.ensure_unknown()
 		if name == "FnResult":
 			ok = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod, type_params=type_params, alias_stack=alias_stack)
