@@ -30,7 +30,7 @@ from lang.driftc.core.types_core import TypeDef, TypeId, TypeParamId, TypeTable
 from lang.driftc.parser import ast as parser_ast
 from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex
 from lang.driftc.core.function_key import FunctionKey, function_key_to_obj
-from lang.driftc.traits.world import trait_key_from_expr
+from lang.driftc.traits.world import TraitKey
 
 
 def _float64_bits_hex(value: float) -> str:
@@ -705,6 +705,16 @@ def _canonical_trait_expr(
 ) -> dict[str, Any] | None:
 	if expr is None:
 		return None
+	def _trait_key_from_expr_canonical(typ: parser_ast.TypeExpr) -> TraitKey:
+		# Canonical identity for package fingerprinting must use resolved
+		# module_id/default_module, never import aliases.
+		module = getattr(typ, "module_id", None)
+		if module is None:
+			module = default_module
+		pkg = None
+		if module is not None:
+			pkg = (module_packages or {}).get(module, default_package)
+		return TraitKey(package_id=pkg, module=module, name=typ.name)
 	def _subject_name(subject: object) -> str | None:
 		if isinstance(subject, parser_ast.SelfRef):
 			return "Self"
@@ -724,12 +734,7 @@ def _canonical_trait_expr(
 			subj_obj = {"var": param_type_map[subject]}
 		else:
 			subj_obj = {"name": str(subject)}
-		trait_key = trait_key_from_expr(
-			expr.trait,
-			default_module=default_module,
-			default_package=default_package,
-			module_packages=module_packages,
-		)
+		trait_key = _trait_key_from_expr_canonical(expr.trait)
 		return {
 			"kind": "is",
 			"subject": subj_obj,

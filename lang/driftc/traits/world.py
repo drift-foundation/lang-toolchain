@@ -89,7 +89,7 @@ class TraitWorld:
 
 
 def _qual_from_type_expr(typ: parser_ast.TypeExpr) -> Optional[str]:
-	return getattr(typ, "module_id", None)
+	return getattr(typ, "module_id", None) or getattr(typ, "module_alias", None)
 
 
 BUILTIN_TYPE_NAMES = {"Int", "Bool", "String", "Uint", "Uint64", "Byte", "Float", "Void", "Error", "DiagnosticValue"}

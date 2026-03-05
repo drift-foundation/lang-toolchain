@@ -1,5 +1,19 @@
 # Drift development history
 
+## 2026-03-05 (follow-up)
+- Fixed a checker regression introduced during template-fingerprint stabilization:
+  - restored alias-aware trait/type qualification in `lang/driftc/traits/world.py` (`module_id` or `module_alias`) so trait-guard conjunction scoping remains valid.
+- Kept template fingerprint canonicalization strict and local to package fingerprinting:
+  - `lang/driftc/packages/provisional_dmir_v0.py` now canonicalizes trait identity for fingerprinting via resolved module identity (`module_id`/default module), not import alias text.
+  - This preserves the stdlib deploy fingerprint fix while avoiding global checker behavior drift.
+- Deploy CLI ergonomics hardened:
+  - `tools/deploy/deploy.sh` now supports `--dest/-d`, `--python/-p`, `--help`, plus `just deploy -- ...` passthrough compatibility and robust path normalization.
+  - `justfile` deploy recipe is now a thin passthrough (`deploy *ARGS`) so script and `just` behavior stay aligned.
+- Added/validated regressions for both sides:
+  - trait guard scoping driver regression (`test_trait_guard_conjunction_adds_scope`) passes,
+  - K4 stdlib fingerprint stability/consume regressions remain green.
+- Bumped compiler version to `0.27.5-dev`; ABI remains `4`.
+
 ## 2026-03-05
 - Tightened deploy to ship stdlib as a signed package (`std.dmp` + sidecar) through the staged deploy flow and wrapper package-root path:
   - deploy now builds/signs stdlib package and generates bundled core trust store,
