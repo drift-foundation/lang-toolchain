@@ -898,3 +898,73 @@ fn main() nothrow -> Int {
 	assert "fingerprint mismatch" not in captured.err, (
 		f"unexpected fingerprint mismatch note in stderr:\n{captured.err}"
 	)
+
+
+def test_k10_module_qualified_struct_ctor_from_package(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""Regression: module-qualified struct ctor calls must work for external
+	modules loaded from package-root.
+
+	This pins the mariadb reported failure:
+	  conc.Duration(millis = ...)
+	which was incorrectly rejected in parser as non-struct when stdlib was
+	consumed from package artifacts. The core bug is in package-root
+	module-qualified constructor resolution, so this test uses a non-reserved
+	external package fixture.
+	"""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "concurrent"
+	_write_file(
+		mod_dir / "concurrent.drift",
+		"""\
+module acme.concurrent
+
+export { Duration };
+
+pub struct Duration {
+	pub millis: Int
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.concurrent.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "concurrent.drift"),
+		*_emit_pkg_args("acme.concurrent"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.concurrent package fixture"
+	pkg_root = pkg_path.parent
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.concurrent as conc;
+
+fn main() nothrow -> Int {
+	val d1 = conc.Duration(millis = 1);
+	val d2 = conc.Duration(millis = d1.millis + 1);
+	return d2.millis;
+}
+""",
+	)
+
+	rc = driftc_main([
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dev",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+	])
+	assert rc == 0, "module-qualified external struct ctor should compile from package-root"
+	captured = capsys.readouterr()
+	assert "module-qualified constructor call 'conc.Duration(...)' is only supported for structs in v1" not in captured.err

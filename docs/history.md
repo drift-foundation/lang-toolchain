@@ -1,5 +1,20 @@
 # Drift development history
 
+## 2026-03-05 (module-qualified ctor fix)
+- LANGUAGE_BUG fix: module-qualified constructor calls for package-loaded modules could be incorrectly rejected at parser time with:
+  - `module-qualified constructor call 'x.Type(...)' is only supported for structs in v1`
+  even when the target type is a real exported struct.
+- Root cause:
+  - parser-side module-qualified ctor rewrite in `lang/driftc/parser/__init__.py` performed an early `shared_type_table.get_nominal(STRUCT, ...)` check.
+  - For external/package-root modules, struct nominals are not guaranteed to be predeclared at that point, causing false negatives.
+- Fix:
+  - removed the premature parser-time struct-id gate in the module-qualified ctor rewrite path,
+  - preserved deterministic rewrite to module-qualified call target and deferred nominal/type validation to later compilation phases where package symbols are fully loaded.
+- Regression added:
+  - `lang/tests/driver/test_deploy_compiler_hunk_regressions.py::test_k10_module_qualified_struct_ctor_from_package`
+  - Builds an external package with `Duration` struct and verifies `conc.Duration(...)` compiles via `--package-root`.
+- Bumped compiler version to `0.27.7-dev`; ABI remains `4`.
+
 ## 2026-03-05 (deploy prereq fix)
 - Downstream rollout fix: deployed toolchain docs/checks now include Python `cryptography` as a required prerequisite for signed-package verification paths.
   - Updated deployed README generation in `tools/deploy/step_bundle.sh`:

@@ -3422,16 +3422,6 @@ def parse_drift_workspace_to_hir(
 			if ctor_target is not None:
 				# Constructor call through a module alias. MVP supports only struct ctors.
 				def_mod, def_name = ctor_target
-				struct_id = shared_type_table.get_nominal(kind=TypeKind.STRUCT, module_id=def_mod, name=def_name)
-				if struct_id is None:
-					diagnostics.append(
-						_p_diag(
-							message=f"module-qualified constructor call '{alias}.{member}(...)' is only supported for structs in v1",
-							severity="error",
-							span=getattr(receiver, "loc", Span()),
-						)
-					)
-					return None
 				# Record the target module id so later phases can resolve the
 				# constructor deterministically even when multiple modules define
 				# the same short type name.
