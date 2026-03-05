@@ -25,33 +25,14 @@ export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
 
 ## Trust layers (important)
 
-There are two different signature checks in our workflow, and they answer
-different questions:
+For most users, use this simple model:
 
-1. Upstream publisher signature (package/toolchain source authenticity)
-   - Confirms the artifact from upstream is signed by an allowed publisher key.
-2. Internal deploy signature (installer/deploy attestation)
-   - Confirms the exact internal deployment bundle (for example `~/opt/drift/current`)
-     is what your team approved and published.
+1. Publisher signs upstream packages/toolchain artifacts.
+2. User verifies signatures and hashes before use.
+3. `deploy` installs a local runnable bundle (for example `~/opt/drift/current`).
 
-These are complementary. Upstream signatures prove origin; deploy signatures
-prove integrity/provenance of your internal distribution endpoint.
-
-### Actors and trust boundaries
-
-For day-to-day operations, use this 3-actor model:
-
-1. Publisher
-   - Signs upstream packages/toolchain artifacts.
-2. Distributor
-   - Approves upstream artifacts, deploys them internally, and signs internal
-     deployment manifests.
-3. User (consumer)
-   - Verifies distributor signatures before activation/use, then compiles with
-     the deployed toolchain.
-
-Publisher signatures answer “who created this artifact?”.
-Distributor signatures answer “is this internal deployment exactly what we approved?”.
+Some teams may add internal deploy signing as an optional extra attestation
+layer, but early adopters can safely start with publisher-signature verification.
 
 ## 1. Bootstrap & validate (fresh clone)
 

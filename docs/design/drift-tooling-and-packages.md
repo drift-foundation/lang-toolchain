@@ -71,19 +71,16 @@ Pinned defaults (MVP):
 - Repository discovery configuration (`drift-sources.json`)
 - Publisher tooling: building and signing repository indexes
 
-### 2.4 Trust layers across package and deploy flows
+### 2.4 Trust model for early adopters
 
-Drift installations commonly use two signature layers:
+Default flow:
 
-1. Upstream publisher signatures
-   - Verified in package/toolchain consumption flows to establish source authenticity.
-2. Internal deploy signatures
-   - Verified when consuming an internally deployed toolchain bundle to establish
-     installer/deployment attestation for the internal endpoint.
+1. Publisher signs packages/toolchain artifacts.
+2. User verifies those signatures (and hashes) before use.
+3. Deploy/install tooling assembles local runnable bundles for convenience.
 
-Both may be required in enterprise/team environments. They are not duplicates:
-upstream signatures prove origin; deploy signatures prove integrity/provenance
-of the internally distributed bundle that users execute.
+Teams that need stricter internal controls may add deploy-time attestation as an
+extra layer, but it is optional relative to the baseline publisher-signature model.
 
 ### 2.3 Debug logging (compiler)
 

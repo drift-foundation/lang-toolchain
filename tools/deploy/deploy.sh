@@ -283,33 +283,14 @@ just deploy-verify DEST=/path/to/deploy-root PUBKEY="$HOME/.config/drift/keys/de
 
 ## Trust layers
 
-Drift deployments can have two independent signature layers:
+Early-adopter model (recommended):
 
-1. Upstream publisher signature (source authenticity)
-   - Proves the toolchain/package received from upstream is authentic.
-2. Internal deploy signature (installer/deploy attestation)
-   - Proves the exact deployed bundle your team uses (`<dest>/current`) is what
-     your internal deploy process approved and published.
+1. Publisher signs upstream artifacts (source authenticity).
+2. User verifies signatures/hashes before using downloaded artifacts.
+3. `deploy` assembles a local runnable bundle (`<dest>/current`) for convenience.
 
-These layers are complementary, not redundant.  Upstream signatures establish
-origin authenticity; deploy signatures establish integrity/provenance of your
-internal distribution endpoint.
-
-## Actors and trust boundaries
-
-Use this simple 3-actor model:
-
-1. Publisher
-   - Produces and signs upstream artifacts (packages/toolchain releases).
-2. Distributor
-   - Downloads/approves upstream artifacts, builds internal deployment bundles,
-     and signs the deploy manifest for internal distribution.
-3. User (consumer)
-   - Verifies distributor signatures before activating a deployment, then uses
-     the deployed compiler/runtime for day-to-day builds.
-
-In other words: publisher proves origin, distributor proves internal deployment
-integrity, user verifies before use.
+If your team also signs deploy bundles internally, treat that as an optional
+additional attestation layer on top of publisher verification.
 
 Trusted keys are managed out-of-band.  The `sign_key_fingerprint` field
 in `manifest.json` is informational (SHA-256 of the DER public key) —
