@@ -3,10 +3,12 @@
 
 K9: Call-graph BFS pruning preserves reachable destructor/drop paths.
 K4: Template fingerprint mismatch emits observable diagnostic (not silent).
+K4: Stdlib template fingerprint stability (self-deploy roundtrip).
 K7: Malformed method receiver metadata is still caught by the checker.
 """
 from __future__ import annotations
 
+import glob as _glob_mod
 import json
 import sys
 from pathlib import Path
@@ -633,4 +635,266 @@ fn main() nothrow -> Int {
 	assert rc == 0, f"expected soft skip (success); got rc={rc}, stderr={captured.err}"
 	assert "unknown template ir_kind" in captured.err, (
 		f"expected 'unknown template ir_kind' note on stderr; got:\n{captured.err}"
+	)
+
+
+# ── K4: Stdlib template fingerprint stability ────────────────────────
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_STDLIB_DIR = _REPO_ROOT / "stdlib"
+
+
+def _build_stdlib_package(tmp_path: Path) -> Path:
+	"""Compile the full stdlib into a package (unsigned, --dev)."""
+	stdlib_files = sorted(_glob_mod.glob(str(_STDLIB_DIR / "**" / "*.drift"), recursive=True))
+	assert len(stdlib_files) > 0, f"no stdlib .drift files found under {_STDLIB_DIR}"
+	pkg_path = tmp_path / "pkgs" / "std.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(_STDLIB_DIR),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		*stdlib_files,
+		"--package-id", "std",
+		"--package-version", "0.0.0-test",
+		"--package-target", "test-target",
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, f"failed to build stdlib package (rc={rc})"
+	return pkg_path
+
+
+def test_k4_stdlib_self_deploy_fingerprint_stability(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K4 regression: every template in the stdlib package must have a decl
+	fingerprint that survives the emit→decode→recompute roundtrip.
+
+	This pins the specific bug where HashSetIter<K, B>::…::next had a
+	fingerprint mismatch at consume-time.  The test builds the stdlib
+	package, loads it, reconstructs signatures from the decoded payload
+	(same path as driftc consume-time), recomputes the fingerprint, and
+	asserts equality with the stored value.
+	"""
+	from lang.driftc.checker import FnSignature, TypeParam
+	from lang.driftc.core.types_core import TypeParamId
+	from lang.driftc.core.function_id import FunctionId
+	from lang.driftc.core.function_key import function_key_from_obj
+	from lang.driftc.packages.provisional_dmir_v0 import (
+		compute_template_decl_fingerprint,
+		decode_generic_templates,
+		decode_trait_expr,
+		decode_type_expr,
+	)
+	from lang.driftc.packages.provider_v0 import load_package_v0
+
+	pkg_path = _build_stdlib_package(tmp_path)
+	_ = capsys.readouterr()  # drain captured output from build
+	pkg = load_package_v0(pkg_path)
+
+	assert "std.containers" in pkg.modules_by_id, (
+		f"std.containers not found in package; modules: {list(pkg.modules_by_id.keys())}"
+	)
+	payload = pkg.modules_by_id["std.containers"].payload
+	templates_obj = payload.get("generic_templates")
+	assert isinstance(templates_obj, list) and len(templates_obj) > 0, (
+		"std.containers has no generic_templates in payload"
+	)
+
+	templates = decode_generic_templates(templates_obj)
+	mismatches: list[str] = []
+	hashset_iter_seen = False
+
+	for entry in templates:
+		if not isinstance(entry, dict):
+			continue
+		template_id = entry.get("template_id")
+		fn_key = function_key_from_obj(template_id)
+		if fn_key is None:
+			continue
+		stored_fp = fn_key.decl_fingerprint
+		name = fn_key.name
+
+		if "HashSetIter" in name and "next" in name:
+			hashset_iter_seen = True
+
+		# Reconstruct a minimal FnSignature from the decoded signature entry,
+		# mirroring the consume-time path in driftc.py.
+		sig_entry = entry.get("signature")
+		if not isinstance(sig_entry, dict):
+			continue
+
+		# Decode param_types.
+		param_types_raw = sig_entry.get("param_types")
+		param_types = None
+		if isinstance(param_types_raw, list):
+			decoded_pts = []
+			ok = True
+			for pt in param_types_raw:
+				te = decode_type_expr(pt)
+				if te is None:
+					ok = False
+					break
+				decoded_pts.append(te)
+			if ok:
+				param_types = decoded_pts
+
+		return_type = None
+		return_raw = sig_entry.get("return_type")
+		if return_raw is not None:
+			return_type = decode_type_expr(return_raw)
+
+		if param_types is None or return_type is None:
+			continue
+
+		# Build type_params / impl_type_params from the signature entry.
+		dummy_fn_id = FunctionId(module=fn_key.module_path, name=fn_key.name, ordinal=0)
+		type_params = []
+		for idx, tp_name in enumerate(sig_entry.get("type_params") or []):
+			tp_id = TypeParamId(owner=dummy_fn_id, index=idx)
+			type_params.append(TypeParam(id=tp_id, name=tp_name))
+		impl_type_params = []
+		for idx, tp_name in enumerate(sig_entry.get("impl_type_params") or []):
+			tp_id = TypeParamId(owner=dummy_fn_id, index=idx)
+			impl_type_params.append(TypeParam(id=tp_id, name=tp_name))
+
+		sig = FnSignature(
+			name=name,
+			is_method=bool(sig_entry.get("is_method", False)),
+			self_mode=sig_entry.get("self_mode"),
+			param_types=param_types,
+			return_type=return_type,
+			type_params=type_params,
+			impl_type_params=impl_type_params,
+		)
+
+		req = entry.get("require")
+		decl_fp, _layout = compute_template_decl_fingerprint(
+			sig,
+			declared_name=name,
+			module_id=fn_key.module_path,
+			require_expr=req if req is not None else None,
+			default_package="std",
+			module_packages=None,
+		)
+		if decl_fp != stored_fp:
+			mismatches.append(
+				f"  {name}: stored={stored_fp[:16]}… computed={decl_fp[:16]}…"
+			)
+
+	assert hashset_iter_seen, (
+		"HashSetIter…next template not found in std.containers templates"
+	)
+	assert not mismatches, (
+		f"fingerprint roundtrip mismatches in std.containers ({len(mismatches)}):\n"
+		+ "\n".join(mismatches)
+	)
+
+
+def test_k4_stdlib_deploy_consume_no_fingerprint_mismatch(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K4 regression (deploy-path): consuming the stdlib package must not
+	emit any fingerprint mismatch notes.
+
+	This directly pins the user-visible bug: when a consumer imports
+	std.containers and uses HashSet, the template import path must not
+	skip any templates due to fingerprint mismatch.
+
+	The test has two layers:
+	1. Direct fingerprint verification for the specific HashSetIter…next
+	   template key (bypasses display-name dedup masking).
+	2. Full compile of a consumer that uses HashSet, asserting no
+	   fingerprint-mismatch notes on stderr.
+	"""
+	from lang.driftc.checker import FnSignature, TypeParam
+	from lang.driftc.core.types_core import TypeParamId
+	from lang.driftc.core.function_id import FunctionId
+	from lang.driftc.core.function_key import function_key_from_obj
+	from lang.driftc.packages.provisional_dmir_v0 import (
+		compute_template_decl_fingerprint,
+		decode_generic_templates,
+		decode_type_expr,
+	)
+	from lang.driftc.packages.provider_v0 import load_package_v0
+
+	pkg_path = _build_stdlib_package(tmp_path)
+	_ = capsys.readouterr()  # drain build output
+
+	# Layer 1: directly verify HashSetIter…next fingerprint roundtrips.
+	pkg = load_package_v0(pkg_path)
+	payload = pkg.modules_by_id["std.containers"].payload
+	templates = decode_generic_templates(payload.get("generic_templates"))
+	target_entry = None
+	for entry in templates:
+		if not isinstance(entry, dict):
+			continue
+		fk = function_key_from_obj(entry.get("template_id"))
+		if fk is not None and "HashSetIter" in fk.name and "next" in fk.name:
+			target_entry = entry
+			break
+	assert target_entry is not None, (
+		"HashSetIter…next template not found in std.containers payload"
+	)
+	fk = function_key_from_obj(target_entry["template_id"])
+	sig_entry = target_entry["signature"]
+	pts = [decode_type_expr(p) for p in sig_entry.get("param_types", [])]
+	ret = decode_type_expr(sig_entry.get("return_type"))
+	dummy_fn_id = FunctionId(module=fk.module_path, name=fk.name, ordinal=0)
+	tps = [TypeParam(id=TypeParamId(owner=dummy_fn_id, index=i), name=n) for i, n in enumerate(sig_entry.get("type_params") or [])]
+	itps = [TypeParam(id=TypeParamId(owner=dummy_fn_id, index=i), name=n) for i, n in enumerate(sig_entry.get("impl_type_params") or [])]
+	sig = FnSignature(
+		name=fk.name,
+		is_method=bool(sig_entry.get("is_method", False)),
+		self_mode=sig_entry.get("self_mode"),
+		param_types=pts,
+		return_type=ret,
+		type_params=tps,
+		impl_type_params=itps,
+	)
+	req = target_entry.get("require")
+	decl_fp, _ = compute_template_decl_fingerprint(
+		sig,
+		declared_name=fk.name,
+		module_id=fk.module_path,
+		require_expr=req if req is not None else None,
+		default_package="std",
+		module_packages=None,
+	)
+	assert decl_fp == fk.decl_fingerprint, (
+		f"HashSetIter…next fingerprint mismatch at consume-time: "
+		f"stored={fk.decl_fingerprint[:16]}… computed={decl_fp[:16]}…"
+	)
+
+	# Layer 2: full consumer compile — no fingerprint mismatch notes on stderr.
+	pkg_root = pkg_path.parent
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import std.containers as containers;
+
+fn main() nothrow -> Int {
+	var s = containers.HashSet<Int>.new();
+	s.insert(1);
+	return 0;
+}
+""",
+	)
+
+	rc = driftc_main([
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dev",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+	])
+	captured = capsys.readouterr()
+	assert "fingerprint mismatch" not in captured.err, (
+		f"unexpected fingerprint mismatch note in stderr:\n{captured.err}"
 	)

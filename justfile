@@ -309,10 +309,13 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
 
-# Deploy a versioned, self-contained Drift distribution to DEST.
-# Requires DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD for stdlib package signing.
-deploy DEST:
-	tools/deploy/deploy.sh "{{DEST}}"
+# Deploy a versioned, self-contained Drift distribution.
+# Pass args through to tools/deploy/deploy.sh.
+# Examples:
+#   just deploy -- --dest "$HOME/opt/drift"
+#   just deploy -- "$HOME/opt/drift" --python "$PWD/.venv/bin/python3"
+deploy *ARGS:
+	tools/deploy/deploy.sh {{ARGS}}
 
 # Print shell env lines for an existing deployment.
 deploy-print-env DEST:
@@ -326,4 +329,3 @@ deploy-print-env DEST:
 	resolved="$(readlink "${dest}/current")"
 	echo "# Drift distribution: ${resolved}"
 	echo "export PATH=\"${dest}/current/bin:\$PATH\""
-

@@ -886,6 +886,73 @@ def compute_template_decl_fingerprint(
 	return decl_fp, generic_param_layout
 
 
+def compute_template_decl_fingerprint_debug(
+	sig: FnSignature,
+	*,
+	declared_name: str,
+	module_id: str,
+	require_expr: parser_ast.TraitExpr | None,
+	default_package: str | None = None,
+	module_packages: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+	"""Debug variant: return pre-hash components for fingerprint diagnostics.
+
+	Returns a dict with keys:
+	- fingerprint_obj: the canonical dict fed to _decl_fingerprint
+	- require_canonical: the canonical require clause dict (or "none")
+	- layout_hash: the generic_param_layout_hash
+	- generic_param_layout: the layout list
+	- decl_fingerprint: the final hash
+	"""
+	type_param_names = [p.name for p in getattr(sig, "type_params", []) or []]
+	impl_type_param_names = [p.name for p in getattr(sig, "impl_type_params", []) or []]
+	param_type_map = _build_type_param_map(sig, impl_type_param_names, type_param_names)
+	generic_param_layout = _generic_param_layout(impl_type_param_names, type_param_names)
+	layout_hash = sha256_hex(canonical_json_bytes(generic_param_layout))
+	require_fp = _require_fingerprint(
+		require_expr,
+		default_module=module_id,
+		default_package=default_package,
+		module_packages=module_packages,
+		param_type_map=param_type_map,
+	)
+	# Build the fingerprint_obj explicitly (mirrors _decl_fingerprint).
+	param_types = []
+	for p in list(getattr(sig, "param_types", []) or []):
+		param_types.append(_canonical_type_expr(p, default_module=module_id, param_type_map=param_type_map))
+	fingerprint_obj = {
+		"kind": "method" if getattr(sig, "is_method", False) else "function",
+		"module": module_id,
+		"name": declared_name,
+		"arity": len(param_types),
+		"param_types": param_types,
+		"receiver_mode": getattr(sig, "self_mode", None),
+		"trait_key": _method_trait_key(declared_name),
+		"impl_receiver_head": _impl_receiver_head(declared_name),
+		"generic_param_layout_hash": layout_hash,
+		"require_fingerprint": require_fp,
+	}
+	decl_fp = sha256_hex(canonical_json_bytes(fingerprint_obj))
+	# Require canonical form for diffing.
+	if require_expr is not None:
+		require_canonical = _canonical_trait_expr(
+			require_expr,
+			default_module=module_id,
+			default_package=default_package,
+			module_packages=module_packages,
+			param_type_map=param_type_map,
+		)
+	else:
+		require_canonical = None
+	return {
+		"fingerprint_obj": fingerprint_obj,
+		"require_canonical": require_canonical,
+		"layout_hash": layout_hash,
+		"generic_param_layout": generic_param_layout,
+		"decl_fingerprint": decl_fp,
+	}
+
+
 def encode_generic_templates(
 	*,
 	package_id: str,
@@ -945,6 +1012,23 @@ def encode_generic_templates(
 			default_package=package_id,
 			module_packages=module_packages,
 		)
+		if os.environ.get("DRIFTC_DEBUG_FINGERPRINT") == "1":
+			import json as _json, sys as _sys
+			_dbg = compute_template_decl_fingerprint_debug(
+				sig,
+				declared_name=name,
+				module_id=module_id,
+				require_expr=req_expr,
+				default_package=package_id,
+				module_packages=module_packages,
+			)
+			print(
+				f"  [emit-time] template={name} module={module_id}\n"
+				f"  [emit-time] decl_fp={decl_fp}\n"
+				f"  [emit-time] fingerprint_obj={_json.dumps(_dbg['fingerprint_obj'], indent=2, default=str)}\n"
+				f"  [emit-time] require_canonical={_json.dumps(_dbg['require_canonical'], indent=2, default=str)}",
+				file=_sys.stderr,
+			)
 		template_id = function_key_to_obj(
 			FunctionKey(
 				package_id=package_id,

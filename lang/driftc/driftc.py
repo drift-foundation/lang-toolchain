@@ -168,6 +168,7 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	decode_trait_expr,
 	decode_type_expr,
 	compute_template_decl_fingerprint,
+	compute_template_decl_fingerprint_debug,
 	encode_generic_templates,
 	encode_module_payload_v0,
 	encode_span,
@@ -6809,6 +6810,23 @@ def main(argv: list[str] | None = None) -> int:
 								f"declaration fingerprint mismatch; template skipped",
 								file=sys.stderr,
 							)
+							if os.environ.get("DRIFTC_DEBUG_FINGERPRINT") == "1":
+								import json as _json
+								_dbg = compute_template_decl_fingerprint_debug(
+									sig,
+									declared_name=fn_key.name,
+									module_id=fn_key.module_path,
+									require_expr=req if req is not None else None,
+									default_package=pkg_id,
+									module_packages=getattr(type_table, "module_packages", None),
+								)
+								print(
+									f"  [consume-time] stored_fp={fn_key.decl_fingerprint}\n"
+									f"  [consume-time] computed_fp={_dbg['decl_fingerprint']}\n"
+									f"  [consume-time] fingerprint_obj={_json.dumps(_dbg['fingerprint_obj'], indent=2, default=str)}\n"
+									f"  [consume-time] require_canonical={_json.dumps(_dbg['require_canonical'], indent=2, default=str)}",
+									file=sys.stderr,
+								)
 							continue
 						try:
 							fn_id = id_registry.intern_function(fn_key, preferred=fn_id)

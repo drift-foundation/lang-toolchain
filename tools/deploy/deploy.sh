@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Drift distribution deploy — thin orchestrator.
 #
-# Usage: tools/deploy/deploy.sh <DEST>
+# Usage:
+#   tools/deploy/deploy.sh --dest <DEST> [--python <PYTHON>]
+#   tools/deploy/deploy.sh <DEST> [PYTHON=/path/to/python3]
 #
 # Builds a versioned, self-contained Drift distribution under DEST:
 #   DEST/drift-<VERSION>+abi<ABI>/  (bin, lib, doc, examples)
@@ -19,16 +21,110 @@ set -euo pipefail
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${DEPLOY_DIR}/../.." && pwd)"
 
+usage() {
+	cat >&2 <<'USAGE_EOF'
+usage:
+  tools/deploy/deploy.sh --dest <DEST> [--python <PYTHON>]
+  tools/deploy/deploy.sh <DEST> [PYTHON=/path/to/python3]
+
+options:
+  -d, --dest <DEST>      Deploy destination root (required)
+  -p, --python <PYTHON>  Python interpreter for smoke/prereq checks (optional)
+  -h, --help             Show this help
+USAGE_EOF
+}
+
 # ── Args ──────────────────────────────────────────────────────────────
-if [[ $# -lt 1 ]]; then
-	echo "usage: $0 <DEST>" >&2
-	exit 1
+DEST_ARG=""
+PYTHON_ARG=""
+# `just deploy -- ...` forwards a leading `--`; drop it for normal parsing.
+if [[ $# -gt 0 && "$1" == "--" ]]; then
+	shift
+fi
+if [[ $# -eq 1 && "$1" != -* ]]; then
+	DEST_ARG="$1"
+else
+	PARSED="$(getopt -o d:p:h --long dest:,python:,help -- "$@")" || {
+		usage
+		exit 2
+	}
+	eval set -- "${PARSED}"
+	while true; do
+		case "$1" in
+			-d|--dest)
+				DEST_ARG="$2"
+				shift 2
+				;;
+			-p|--python)
+				PYTHON_ARG="$2"
+				shift 2
+				;;
+			-h|--help)
+				usage
+				exit 0
+				;;
+			--)
+				shift
+				break
+				;;
+			*)
+				usage
+				exit 2
+				;;
+		esac
+	done
+	for tok in "$@"; do
+		case "${tok}" in
+			-h|--help)
+				usage
+				exit 0
+				;;
+			DEST=*)
+				DEST_ARG="${tok#DEST=}"
+				;;
+			PYTHON=*)
+				PYTHON_ARG="${tok#PYTHON=}"
+				;;
+			*)
+				if [[ -z "${DEST_ARG}" ]]; then
+					DEST_ARG="${tok}"
+				else
+					echo "error: unexpected positional argument: ${tok}" >&2
+					usage
+					exit 2
+				fi
+				;;
+		esac
+	done
+fi
+if [[ -z "${DEST_ARG}" ]]; then
+	echo "error: destination is required" >&2
+	usage
+	exit 2
+fi
+if [[ -n "${PYTHON_ARG}" ]]; then
+	export DRIFT_PYTHON="${PYTHON_ARG}"
 fi
 
-DEST="$(cd "$(dirname "$1")" 2>/dev/null && pwd)/$(basename "$1")" || {
-	mkdir -p "$1"
-	DEST="$(cd "$1" && pwd)"
-}
+# Normalize destination path without relying on parent existence.
+# Supports:
+# - "~" and "~/..."
+# - relative paths (resolved against current working directory)
+# - absolute paths
+DEST_RAW="${DEST_ARG}"
+if [[ "${DEST_RAW}" == "~" ]]; then
+	DEST_RAW="${HOME}"
+elif [[ "${DEST_RAW}" == "~/"* ]]; then
+	DEST_RAW="${HOME}/${DEST_RAW#"~/"}"
+fi
+if [[ "${DEST_RAW}" != /* ]]; then
+	DEST_RAW="${PWD}/${DEST_RAW}"
+fi
+# Trim trailing slash (except root).
+DEST="${DEST_RAW%/}"
+if [[ -z "${DEST}" ]]; then
+	DEST="/"
+fi
 
 # ── Signing key ───────────────────────────────────────────────────────
 if [[ -z "${DRIFT_SIGN_KEY_FILE:-}" && -z "${DRIFT_SIGN_KEY_CMD:-}" ]]; then
