@@ -23,6 +23,20 @@ export DRIFT_TOOL="$PWD/bin/drift"
 export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
 ```
 
+## Trust layers (important)
+
+There are two different signature checks in our workflow, and they answer
+different questions:
+
+1. Upstream publisher signature (package/toolchain source authenticity)
+   - Confirms the artifact from upstream is signed by an allowed publisher key.
+2. Internal deploy signature (installer/deploy attestation)
+   - Confirms the exact internal deployment bundle (for example `~/opt/drift/current`)
+     is what your team approved and published.
+
+These are complementary. Upstream signatures prove origin; deploy signatures
+prove integrity/provenance of your internal distribution endpoint.
+
 ## 1. Bootstrap & validate (fresh clone)
 
 The goal is to confirm your environment can run the full Drift pipeline (parser/checker/MIR/LLVM/codegen/runtime tests) before writing code.

@@ -252,6 +252,20 @@ This checks:
 2. SHA-256 hashes of every file listed in the manifest against disk
 3. No unsigned files exist outside the manifest
 
+## Trust layers
+
+Drift deployments can have two independent signature layers:
+
+1. Upstream publisher signature (source authenticity)
+   - Proves the toolchain/package received from upstream is authentic.
+2. Internal deploy signature (installer/deploy attestation)
+   - Proves the exact deployed bundle your team uses (`<dest>/current`) is what
+     your internal deploy process approved and published.
+
+These layers are complementary, not redundant.  Upstream signatures establish
+origin authenticity; deploy signatures establish integrity/provenance of your
+internal distribution endpoint.
+
 Trusted keys are managed out-of-band.  The `sign_key_fingerprint` field
 in `manifest.json` is informational (SHA-256 of the DER public key) —
 it is NOT a trust source, but can be used for operator cross-checks.
