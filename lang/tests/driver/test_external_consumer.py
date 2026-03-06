@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -462,6 +465,151 @@ fn main() nothrow -> Int {
 	)
 	assert "fingerprint mismatch" not in stderr, f"unexpected fingerprint mismatch note in stderr:\n{stderr}"
 	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+# ── K16: Package-consumer symbol completeness (integrated) ───────────
+
+
+def _audit_ir_symbols(ir: str) -> tuple[set[str], set[str], set[str]]:
+	"""Collect called, defined, and declared symbols from LLVM IR.
+
+	Returns (called, defined, declared).  A called symbol that is neither
+	defined nor declared is an undefined internal target.
+	"""
+	# Match both @"quoted-name" and @plain_name forms after call/invoke.
+	called = set(re.findall(r'(?:call|invoke)\s+[^@]*@"([^"]+)"', ir))
+	called |= set(re.findall(r'(?:call|invoke)\s+[^@]*@([a-zA-Z_][\w.]*)', ir))
+	defined = set(re.findall(r'define\s+[^@]*@"([^"]+)"', ir))
+	defined |= set(re.findall(r'define\s+[^@]*@([a-zA-Z_][\w.]*)', ir))
+	declared = set(re.findall(r'declare\s+[^@]*@"([^"]+)"', ir))
+	declared |= set(re.findall(r'declare\s+[^@]*@([a-zA-Z_][\w.]*)', ir))
+	return called, defined, declared
+
+
+_CONSUMER_E2E_SOURCE = """\
+module runner
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	var c = util.Counter(value = 0);
+	c.increment();
+	c.increment();
+	c.increment();
+	val n = c.get();
+	val color_val = util.describe_color(util.Color::Blue(n));
+	val o: util.Outcome<Int, Int> = util.Outcome::Ok(color_val);
+	return match o {
+		util.Outcome::Ok(value) => { value },
+		util.Outcome::Err(err) => { err },
+	};
+}
+"""
+
+
+@pytest.mark.parametrize("optimized", [False, True], ids=["debug", "optimized"])
+def test_ext_package_consumer_e2e(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+	optimized: bool,
+) -> None:
+	"""K16 integrated: signed-package consumer must compile, link, and run.
+
+	Exercises in a single pass:
+	  K16a  – nothrow method wrapper synthesis (Counter.get — byte_length
+	          pattern: nothrow method returning Int across boundary)
+	  K16b  – OS entry wrapper via --entry runner::main
+	  K10   – module-qualified struct ctor (util.Counter)
+	  K11   – tombstone exhaustiveness (Outcome match)
+	  K12   – generic variant ctor inference (Outcome::Ok)
+	  K13   – nothrow boundary call (increment/get/make_counter)
+
+	Stages verified:
+	  1. IR symbol completeness (no unresolved internal targets)
+	  2. Object links with clang
+	  3. Binary runs and returns expected exit code
+	  4. Debug and optimized modes (parametrized)
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	pkg = _build_signed_acme_pkg(tmp_path)
+	_ = capsys.readouterr()
+
+	# ── Compile ──────────────────────────────────────────────────────
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "runner.drift"
+	_write_file(main_src, _CONSUMER_E2E_SOURCE)
+	extra_args = ["--optimized"] if optimized else []
+	argv = [
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg.pkg_root),
+		"--dev",
+		"--dev-core-trust-store", str(pkg.core_trust_path),
+		"--trust-store", str(pkg.trust_path),
+		"--entry", "runner::main",
+		*extra_args,
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--json",
+	]
+	rc = driftc_main(argv)
+	captured = capsys.readouterr()
+	payload = json.loads(captured.out) if captured.out.strip() else {}
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert rc == 0, f"compilation failed: {messages}"
+
+	ir = (tmp_path / "out.ll").read_text()
+
+	# ── Stage 1: IR symbol completeness ──────────────────────────────
+	called, defined, declared = _audit_ir_symbols(ir)
+	available = defined | declared
+	undefined = called - available
+	assert not undefined, f"undefined symbols in IR: {undefined}"
+
+	# K16a pinned: wrapper symbols specifically must be *defined*.
+	wrap_refs = {s for s in called if "__wrap_method" in s}
+	wrap_defs = {s for s in defined if "__wrap_method" in s}
+	assert wrap_refs, "expected wrapper call targets in IR (nothrow method boundary)"
+	assert not (wrap_refs - wrap_defs), f"undefined wrapper symbols in IR: {wrap_refs - wrap_defs}"
+
+	# K16b pinned: OS entry wrapper.
+	assert "define i32 @main" in ir, "package-consumer IR must contain a C main entry point"
+
+	# ── Stage 2: Link ────────────────────────────────────────────────
+	clang = shutil.which("clang-15") or shutil.which("clang")
+	if clang is None:
+		pytest.skip("clang not available for link+run stage")
+
+	build_dir = tmp_path / "build"
+	build_dir.mkdir(parents=True, exist_ok=True)
+	ir_path = build_dir / "program.ll"
+	bin_path = build_dir / "a.out"
+
+	# Provide stubs for drift runtime symbols (normally from the runtime
+	# archive).  llvm.* intrinsics are handled by LLVM and need no stubs.
+	patched_ir = ir
+	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(([^)]*)\))', patched_ir):
+		full, ret_ty, name, params = m.group(1), m.group(2), m.group(3), m.group(4)
+		body = "ret void" if ret_ty == "void" else "unreachable"
+		patched_ir = patched_ir.replace(full, f"define {ret_ty} {name}({params}) {{\n  {body}\n}}")
+	ir_path.write_text(patched_ir)
+
+	compile_res = subprocess.run(
+		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		capture_output=True, text=True,
+	)
+	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
+
+	# ── Stage 3: Run ─────────────────────────────────────────────────
+	run_res = subprocess.run(
+		[str(bin_path)], capture_output=True, text=True, timeout=10,
+	)
+	# Counter(0) → 3 increments → get()=3 → Blue(3) → describe_color=3
+	# → Outcome::Ok(3) → match=3 → exit code 3
+	assert run_res.returncode == 3, (
+		f"expected exit code 3, got {run_res.returncode}"
+		f"\nstdout: {run_res.stdout}\nstderr: {run_res.stderr}"
+	)
 
 
 # ── Security negatives ───────────────────────────────────────────────

@@ -8267,11 +8267,23 @@ def main(argv: list[str] | None = None) -> int:
 						calls.add(instr.fn_id)
 			return calls
 
+		# Build wrapper → target map from signatures already registered by
+		# compile_stubbed_funcs (which called _inject_method_boundary_wrappers
+		# internally and registered wrapper *signatures* but not MIR bodies).
+		wrapper_target_by_id: dict[FunctionId, FunctionId] = {}
+		wrapper_sigs: dict[FunctionId, FnSignature] = {}
+		for fn_id, info in checked_src.fn_infos_by_id.items():
+			sig = info.signature
+			if sig is None:
+				continue
+			if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
+				wrapper_target_by_id[fn_id] = sig.wraps_target_fn_id
+				wrapper_sigs[fn_id] = sig
+
 		# Call-graph reachability: prune both src_mir and pkg_mir to only
 		# functions transitively reachable from the entry point(s).  This
 		# removes eagerly-instantiated templates (destructors for unused
 		# types) and unreachable package functions.
-		entry_name = getattr(args, "entry_fn", None) or "main"
 		src_roots: set[FunctionId] = set()
 		for fn_id, fn in src_mir.items():
 			sig = checked_src.fn_infos_by_id.get(fn_id)
@@ -8297,11 +8309,21 @@ def main(argv: list[str] | None = None) -> int:
 		ssa_src = {fn_id: fn for fn_id, fn in ssa_src.items() if fn_id in src_needed}
 
 		# Package MIR: include functions reachable from (pruned) source MIR.
+		# When source calls a wrapper (e.g. __wrap_method::Counter::get),
+		# that wrapper won't exist in pkg_mir_all — it needs to be
+		# synthesised later. But its *target* (the original method) is in
+		# pkg_mir_all and must be pulled in.
 		pkg_needed: set[FunctionId] = set()
+		wrappers_needed: set[FunctionId] = set()
 		for fn in src_mir.values():
 			for callee in _called_funcs_in_mir(fn):
 				if callee in pkg_mir_all:
 					pkg_needed.add(callee)
+				elif callee in wrapper_target_by_id:
+					wrappers_needed.add(callee)
+					target = wrapper_target_by_id[callee]
+					if target in pkg_mir_all:
+						pkg_needed.add(target)
 
 		# Expand through package-to-package calls.
 		queue = list(pkg_needed)
@@ -8343,10 +8365,37 @@ def main(argv: list[str] | None = None) -> int:
 		ssa_all = dict(pkg_ssa)
 		ssa_all.update(ssa_src)
 
+		# Synthesise wrapper MIR/SSA for boundary-called wrappers that have
+		# no MIR body in the package (the package only ships the original
+		# method; the checker upgraded calls to __wrap_method:: targets).
+		for wrap_id in wrappers_needed:
+			if wrap_id in mir_all:
+				continue
+			wrap_sig = wrapper_sigs.get(wrap_id)
+			if wrap_sig is None or wrap_sig.param_type_ids is None:
+				continue
+			param_names = list(wrap_sig.param_names or [])
+			if len(param_names) != len(wrap_sig.param_type_ids):
+				param_names = [f"p{i}" for i in range(len(wrap_sig.param_type_ids))]
+			builder = make_builder(wrap_id)
+			builder.func.params = list(param_names)
+			call_dest: M.ValueId | None
+			if checked_src.type_table is not None and checked_src.type_table.is_void(wrap_sig.return_type_id):
+				call_dest = None
+			else:
+				call_dest = builder.new_temp()
+			builder.emit(M.Call(dest=call_dest, fn_id=wrapper_target_by_id[wrap_id], args=param_names, can_throw=False))
+			ok_dest = builder.new_temp()
+			builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
+			builder.set_terminator(M.Return(value=ok_dest))
+			mir_all[wrap_id] = builder.func
+			ssa_all[wrap_id] = MirToSSA().run(builder.func)
+
 		# FnInfos: include source + package signatures so codegen can type calls.
 		fn_infos = dict(checked_src.fn_infos_by_id)
 		pkg_sig_env: dict[FunctionId, FnSignature] = dict(pkg_sigs_by_id)
 		all_sig_env = dict(pkg_sig_env)
+		all_sig_env.update(wrapper_sigs)
 		for fn_id, info in checked_src.fn_infos_by_id.items():
 			if info.signature is None:
 				continue
@@ -8355,6 +8404,16 @@ def main(argv: list[str] | None = None) -> int:
 			if fn_id in fn_infos:
 				continue
 			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
+
+		# Entry point detection and rename for package-consumer path.
+		rename_map: dict[FunctionId, str] = {}
+		entry_id: FunctionId | None = None
+		for fn_id in mir_all:
+			if fn_id.module == entry_module and fn_id.name == entry_name:
+				entry_id = fn_id
+				break
+		if entry_id is not None:
+			rename_map[entry_id] = "drift_main"
 
 		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("optimized" if optimized else ("debug" if debug_enabled else "default"))
 		try:
@@ -8371,7 +8430,7 @@ def main(argv: list[str] | None = None) -> int:
 				fn_infos,
 				type_table=checked_src.type_table,
 				module_exports=module_exports,
-				rename_map={},
+				rename_map=rename_map,
 				argv_wrapper=None,
 				word_bits=_target_word_bits(args.target_word_bits),
 				debug_enabled=debug_enabled,
@@ -8386,6 +8445,13 @@ def main(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		module.emit_abi_stamp()
+		if entry_id is not None:
+			entry_sym = rename_map.get(entry_id, function_symbol(entry_id))
+			install_process_preamble_available = any(
+				fid.module == "std.io" and fid.name == "install_process_preamble"
+				for fid in fn_infos.keys()
+			)
+			module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(
