@@ -195,6 +195,17 @@ lang-borrow-test:
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
 	fi
 
+# External consumer fleet (signed package path, K4/K10-K14 guards).
+ext-consumer-test:
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver/test_external_consumer.py
+
+# Nightly: consumer fleet + hunk regressions + stdlib package (with ASAN).
+ext-consumer-test-nightly:
+	PYTHONPATH=. DRIFT_ASAN=1 ./.venv/bin/python3 -m pytest -v \
+		lang/tests/driver/test_external_consumer.py \
+		lang/tests/driver/test_deploy_compiler_hunk_regressions.py \
+		lang/tests/driver/test_deploy_stdlib_package.py
+
 # Build examples (lang.driftc)
 make-example EXAMPLE:
 	#!/usr/bin/env bash

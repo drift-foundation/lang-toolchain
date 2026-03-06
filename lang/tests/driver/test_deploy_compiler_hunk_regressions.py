@@ -8,6 +8,7 @@ K7: Malformed method receiver metadata is still caught by the checker.
 K11: Package-consumed variant tombstone metadata preservation.
 K12: Package-consumed generic variant constructor inference.
 K13: Boundary-call nothrow analysis must not over-approximate.
+K14: --entry module::fn must be plumbed to deployed/package compile path.
 """
 from __future__ import annotations
 
@@ -1549,5 +1550,55 @@ fn main() nothrow -> Int {
 	messages = " ".join(d.get("message", "") for d in diags)
 	assert "may throw" not in messages, (
 		f"nothrow method call via wrapper path should not poison caller: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+# ── K14: --entry plumbing in deployed path ─────────────────────────────
+
+
+def test_k14_entry_flag_honored_with_packages(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K14 regression: --entry pkg.mod::main must be forwarded to the
+	deployed compile path (loaded_pkgs branch) so that validate_entrypoint
+	finds the correct entry function instead of defaulting to main::main.
+	"""
+	pkg_path = _emit_nothrow_method_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "runner.drift"
+	_write_file(
+		main_src,
+		"""\
+module runner
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	val c = util.make_counter(7);
+	return c.value;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			"--entry", "runner::main",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "missing entry point" not in messages, (
+		f"--entry runner::main should be honored in deployed path: {messages}"
 	)
 	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"

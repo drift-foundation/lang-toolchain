@@ -8172,6 +8172,8 @@ def main(argv: list[str] | None = None) -> int:
 			external_missing_traits=external_missing_traits,
 			external_missing_impl_modules=external_missing_impl_modules,
 			enforce_entrypoint=True,
+			entry_module=entry_module,
+			entry_name=entry_name,
 		)
 		_assert_all_phased(checked_src.diagnostics, context="typecheck")
 		ssa_src = ssa_src or {}
