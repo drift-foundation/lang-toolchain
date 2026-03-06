@@ -50,6 +50,15 @@ from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID, RAW_BUFFER_CONTAI
 from lang.driftc.impl_index import ImplMeta
 from lang.driftc.type_resolver import resolve_opaque_type
 
+# Implicit runtime dependencies of the OS entry wrapper.  The package-
+# consumer BFS must seed these into mir_all so their bodies are lowered and
+# the codegen body-rename produces the __impl symbols that the wrapper calls.
+# Keyed by the flag name passed to emit_entry_wrapper / emit_argv_entry_wrapper;
+# values are (module, name) pairs matched against FunctionId fields.
+ENTRY_WRAPPER_IMPLICIT_DEPS: dict[str, tuple[str, str]] = {
+	"install_process_preamble": ("std.io", "install_process_preamble"),
+}
+
 ARRAY_LEN_IDX = 0
 ARRAY_CAP_IDX = 1
 ARRAY_GEN_IDX = 2

@@ -612,6 +612,149 @@ def test_ext_package_consumer_e2e(
 	)
 
 
+# ── K17: std.io preamble symbol resolution ───────────────────────────
+
+
+def _build_signed_std_io_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
+	"""Build a signed std.dmp with a minimal std.io module."""
+	build = tmp_path / "std_build"
+	mod_dir = build / "std" / "io"
+	_write_file(
+		mod_dir / "io.drift",
+		"""\
+module std.io
+
+export { install_process_preamble };
+
+pub fn install_process_preamble() nothrow -> Bool {
+	return true;
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "std.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "io.drift"),
+		*_emit_pkg_args("std"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build std.io package fixture"
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	return pkg_path
+
+
+def test_ext_preamble_symbol_resolved(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""K17: when std.dmp is in --package-root, the entry wrapper calls
+	std.io::install_process_preamble__impl.  That __impl symbol is a
+	codegen artifact created when the function body is lowered — so the
+	function must be pulled into mir_all even though no source code calls
+	it directly.
+
+	Without the fix the IR contains an undefined
+	@"std.io::install_process_preamble__impl" call target.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	pkg = _build_signed_acme_pkg(tmp_path)
+	_ = capsys.readouterr()
+
+	# Build a std.dmp alongside acme.util.dmp in the same --package-root.
+	_build_signed_std_io_pkg(tmp_path, keys=pkg.keys)
+	_ = capsys.readouterr()
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "runner.drift"
+	_write_file(
+		main_src,
+		"""\
+module runner
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	val c = util.make_counter(5);
+	return c.value;
+}
+""",
+	)
+
+	argv = [
+		"-M", str(consumer),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--package-root", str(pkg.pkg_root),
+		"--dev",
+		"--dev-core-trust-store", str(pkg.core_trust_path),
+		"--trust-store", str(pkg.trust_path),
+		"--entry", "runner::main",
+		str(main_src),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--json",
+	]
+	rc = driftc_main(argv)
+	captured = capsys.readouterr()
+	payload = json.loads(captured.out) if captured.out.strip() else {}
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert rc == 0, f"compilation failed: {messages}"
+
+	ir = (tmp_path / "out.ll").read_text()
+
+	# The entry wrapper must call install_process_preamble__impl, and
+	# that symbol must be defined (not just declared) in the IR.
+	assert "install_process_preamble" in ir, (
+		"expected install_process_preamble reference in IR "
+		"(std.dmp present → preamble should be wired)"
+	)
+	called, defined, declared = _audit_ir_symbols(ir)
+	impl_refs = {s for s in called if "install_process_preamble" in s}
+	impl_defs = {s for s in defined if "install_process_preamble" in s}
+	undefined_impl = impl_refs - (defined | declared)
+	assert not undefined_impl, (
+		f"undefined std.io preamble symbols in IR: {undefined_impl}"
+	)
+
+	# Full symbol audit (same as K16 e2e).
+	available = defined | declared
+	undefined = called - available
+	assert not undefined, f"undefined symbols in IR: {undefined}"
+
+	# Link + run.
+	clang = shutil.which("clang-15") or shutil.which("clang")
+	if clang is None:
+		pytest.skip("clang not available for link+run stage")
+
+	build_dir = tmp_path / "build"
+	build_dir.mkdir(parents=True, exist_ok=True)
+	ir_path = build_dir / "program.ll"
+	bin_path = build_dir / "a.out"
+	patched_ir = ir
+	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(([^)]*)\))', patched_ir):
+		full, ret_ty, name, params = m.group(1), m.group(2), m.group(3), m.group(4)
+		body = "ret void" if ret_ty == "void" else "unreachable"
+		patched_ir = patched_ir.replace(full, f"define {ret_ty} {name}({params}) {{\n  {body}\n}}")
+	ir_path.write_text(patched_ir)
+
+	compile_res = subprocess.run(
+		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		capture_output=True, text=True,
+	)
+	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
+
+	run_res = subprocess.run(
+		[str(bin_path)], capture_output=True, text=True, timeout=10,
+	)
+	assert run_res.returncode == 5, (
+		f"expected exit code 5, got {run_res.returncode}"
+		f"\nstdout: {run_res.stdout}\nstderr: {run_res.stderr}"
+	)
+
+
 # ── Security negatives ───────────────────────────────────────────────
 
 

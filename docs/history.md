@@ -1,5 +1,17 @@
 # Drift development history
 
+## 2026-03-05 (K16/K17 package-consumer codegen completeness)
+- Fixed package-consumer codegen omissions that surfaced as undefined symbols and missing entry wiring in downstream signed-package usage:
+  - K16: package wrapper targets (`__wrap_method::*`) referenced by source MIR are now included/synthesized in the package-consumer path so IR does not reference undefined wrapper symbols.
+  - K16: deployed/package entry handling now honors parsed `--entry <module>::<name>` values in codegen symbol mapping and emits linkable C `main` wrapper output.
+  - K17: entry-wrapper implicit dependency handling now uses a codegen-declared dependency map (`ENTRY_WRAPPER_IMPLICIT_DEPS`) to seed package BFS and compute availability flags from actually-lowered MIR, preventing undefined `std.io::install_process_preamble__impl`.
+- Added/extended external-consumer regressions in `lang/tests/driver/test_external_consumer.py` to pin:
+  - wrapper symbol completeness in emitted IR,
+  - entry wrapper/link completeness (`define i32 @main`, link/run),
+  - preamble-symbol resolution in signed-package consume mode.
+- Validated collateral remains green across external-consumer, deploy-hunk, and stdlib-package regression suites.
+- Bumped compiler version to `0.27.10-dev`; ABI remains `4`.
+
 ## 2026-03-05 (K13 boundary nothrow fix)
 - Fixed nothrow semantic analysis regression for cross-module/package calls in `lang/driftc/checker/__init__.py`:
   - boundary `HCall` no longer unconditionally poisons semantic throw analysis for explicitly `declared_can_throw=False` callees,

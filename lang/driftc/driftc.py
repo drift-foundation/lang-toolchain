@@ -142,7 +142,7 @@ from lang.driftc.traits.enforce import collect_used_type_keys, enforce_struct_re
 from lang.driftc.traits.linked_world import build_require_env, link_trait_worlds, LinkedWorld, RequireEnv
 from lang.driftc.traits.world import TypeKey, TraitKey, type_key_from_typeid
 from lang.driftc.traits.solver import Env as TraitEnv, ProofStatus, prove_is
-from lang.codegen.llvm import lower_module_to_llvm
+from lang.codegen.llvm import lower_module_to_llvm, ENTRY_WRAPPER_IMPLICIT_DEPS
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.language_runtime import (
 	build_runtime_archive,
@@ -8325,6 +8325,17 @@ def main(argv: list[str] | None = None) -> int:
 					if target in pkg_mir_all:
 						pkg_needed.add(target)
 
+		# The OS entry wrapper emits calls to runtime helpers (e.g.
+		# install_process_preamble__impl) whose __impl symbols are codegen
+		# body-rename artifacts.  These functions are never referenced from
+		# source MIR, so BFS won't reach them.  Seed them explicitly so
+		# codegen can lower their bodies and produce the __impl symbols.
+		for dep_module, dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
+			for fn_id in pkg_mir_all:
+				if fn_id.module == dep_module and fn_id.name == dep_name:
+					pkg_needed.add(fn_id)
+					break
+
 		# Expand through package-to-package calls.
 		queue = list(pkg_needed)
 		while queue:
@@ -8447,11 +8458,11 @@ def main(argv: list[str] | None = None) -> int:
 		module.emit_abi_stamp()
 		if entry_id is not None:
 			entry_sym = rename_map.get(entry_id, function_symbol(entry_id))
-			install_process_preamble_available = any(
-				fid.module == "std.io" and fid.name == "install_process_preamble"
-				for fid in fn_infos.keys()
-			)
-			module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
+			wrapper_dep_flags = {
+				flag: any(fid.module == dep_mod and fid.name == dep_name for fid in mir_all)
+				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
+			}
+			module.emit_entry_wrapper(entry_sym, **wrapper_dep_flags)
 		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(
