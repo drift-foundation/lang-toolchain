@@ -50,9 +50,12 @@ from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID, RAW_BUFFER_CONTAI
 from lang.driftc.impl_index import ImplMeta
 from lang.driftc.type_resolver import resolve_opaque_type
 
-# Implicit runtime dependencies of the OS entry wrapper.  The package-
-# consumer BFS must seed these into mir_all so their bodies are lowered and
-# the codegen body-rename produces the __impl symbols that the wrapper calls.
+# Implicit runtime dependencies of the OS entry wrapper.  The entry wrapper
+# calls these as __impl symbols (codegen body-rename artifacts), so they must
+# be present in the lowered MIR for their bodies to be emitted.  In the
+# package-consumer path the caller checks mir_all for availability; do NOT
+# force-seed these into the BFS — their transitive closures pull in heavy
+# generic instantiations that the LLVM codegen cannot represent (K18).
 # Keyed by the flag name passed to emit_entry_wrapper / emit_argv_entry_wrapper;
 # values are (module, name) pairs matched against FunctionId fields.
 ENTRY_WRAPPER_IMPLICIT_DEPS: dict[str, tuple[str, str]] = {
@@ -342,9 +345,13 @@ def lower_module_to_llvm(
 	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
 	mod.emit_compiler_provenance(git_sha=provenance_git_sha, build_profile=provenance_build_profile)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
+	# Check lowered MIR (not fn_infos) for preamble availability — the
+	# function must have a body in `funcs` so codegen produces the __impl
+	# symbol.  Checking fn_infos would be True even when the function was
+	# BFS-pruned (K17/K18).
 	install_process_preamble_available = any(
 		fn_id.module == "std.io" and fn_id.name == "install_process_preamble"
-		for fn_id in fn_infos.keys()
+		for fn_id in funcs
 	)
 
 	# --- ABI-boundary export wrappers (Milestone 4) --------------------------

@@ -612,7 +612,7 @@ def test_ext_package_consumer_e2e(
 	)
 
 
-# ── K17: std.io preamble symbol resolution ───────────────────────────
+# ── K18: preamble not force-seeded (supersedes K17) ──────────────────
 
 
 def _build_signed_std_io_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
@@ -648,17 +648,23 @@ pub fn install_process_preamble() nothrow -> Bool {
 	return pkg_path
 
 
-def test_ext_preamble_symbol_resolved(
+def test_ext_preamble_not_force_seeded(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-	"""K17: when std.dmp is in --package-root, the entry wrapper calls
-	std.io::install_process_preamble__impl.  That __impl symbol is a
-	codegen artifact created when the function body is lowered — so the
-	function must be pulled into mir_all even though no source code calls
-	it directly.
+	"""K18: install_process_preamble must NOT be force-seeded into the BFS
+	when the consumer does not transitively import std.io.
 
-	Without the fix the IR contains an undefined
-	@"std.io::install_process_preamble__impl" call target.
+	The K17 fix force-seeded install_process_preamble into pkg_needed so its
+	body would be lowered (producing the __impl symbol the entry wrapper calls).
+	However, install_process_preamble's transitive closure pulls in heavy
+	generic instantiations (GlobalRegistry::set<T>, mem alloc/write/read,
+	core.callback1, core.drop_value) whose types the LLVM codegen cannot
+	represent in the package-consumer context — causing NotImplementedError
+	in deploy smoke.
+
+	Fix: remove the BFS force-seeding.  The entry wrapper's preamble call
+	is gated on a mir_all availability check, so it is correctly omitted
+	when the function is not naturally reachable.
 	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
 	pkg = _build_signed_acme_pkg(tmp_path)
@@ -705,21 +711,17 @@ fn main() nothrow -> Int {
 
 	ir = (tmp_path / "out.ll").read_text()
 
-	# The entry wrapper must call install_process_preamble__impl, and
-	# that symbol must be defined (not just declared) in the IR.
-	assert "install_process_preamble" in ir, (
-		"expected install_process_preamble reference in IR "
-		"(std.dmp present → preamble should be wired)"
-	)
-	called, defined, declared = _audit_ir_symbols(ir)
-	impl_refs = {s for s in called if "install_process_preamble" in s}
-	impl_defs = {s for s in defined if "install_process_preamble" in s}
-	undefined_impl = impl_refs - (defined | declared)
-	assert not undefined_impl, (
-		f"undefined std.io preamble symbols in IR: {undefined_impl}"
+	# The consumer does NOT import std.io, so install_process_preamble
+	# must NOT be in the IR — neither as a definition nor as a call target.
+	# If it is present, the BFS is force-seeding it, which pulls in the
+	# heavy transitive closure that breaks LLVM codegen (K18).
+	assert "install_process_preamble" not in ir, (
+		"install_process_preamble found in IR but consumer does not import std.io — "
+		"BFS force-seeding is leaking unreachable package functions (K18 regression)"
 	)
 
-	# Full symbol audit (same as K16 e2e).
+	# Full symbol audit: no undefined call targets.
+	called, defined, declared = _audit_ir_symbols(ir)
 	available = defined | declared
 	undefined = called - available
 	assert not undefined, f"undefined symbols in IR: {undefined}"

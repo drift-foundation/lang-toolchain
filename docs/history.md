@@ -1,5 +1,17 @@
 # Drift development history
 
+## 2026-03-05 (K18 package-consumer preamble reachability correction)
+- Fixed deploy/package-consumer codegen regression where forced BFS seeding of entry-wrapper preamble dependencies pulled in unsupported heavy transitive generic instantiations (e.g. `std.runtime::GlobalRegistry::set<...>`), causing LLVM lowering failures in deploy smoke.
+- Removed forced preamble dependency seeding from package BFS in `lang/driftc/driftc.py`; entry-wrapper preamble emission now depends on actual lowered MIR availability.
+- Added/updated external-consumer regression coverage to pin K18 behavior:
+  - when consumer call graph does not naturally reach `std.io::install_process_preamble`, it is not leaked into emitted IR via force-seeding.
+- Validated suites remain green:
+  - `lang/tests/driver/test_external_consumer.py`,
+  - `lang/tests/driver/test_deploy_compiler_hunk_regressions.py`,
+  - `lang/tests/driver/test_deploy_stdlib_package.py`,
+  - deploy smoke via `just deploy -- --dest ... --python ...`.
+- Bumped compiler version to `0.27.11-dev`; ABI remains `4`.
+
 ## 2026-03-05 (K16/K17 package-consumer codegen completeness)
 - Fixed package-consumer codegen omissions that surfaced as undefined symbols and missing entry wiring in downstream signed-package usage:
   - K16: package wrapper targets (`__wrap_method::*`) referenced by source MIR are now included/synthesized in the package-consumer path so IR does not reference undefined wrapper symbols.

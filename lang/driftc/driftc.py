@@ -8325,16 +8325,14 @@ def main(argv: list[str] | None = None) -> int:
 					if target in pkg_mir_all:
 						pkg_needed.add(target)
 
-		# The OS entry wrapper emits calls to runtime helpers (e.g.
-		# install_process_preamble__impl) whose __impl symbols are codegen
-		# body-rename artifacts.  These functions are never referenced from
-		# source MIR, so BFS won't reach them.  Seed them explicitly so
-		# codegen can lower their bodies and produce the __impl symbols.
-		for dep_module, dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
-			for fn_id in pkg_mir_all:
-				if fn_id.module == dep_module and fn_id.name == dep_name:
-					pkg_needed.add(fn_id)
-					break
+		# NOTE (K18): Do NOT force-seed ENTRY_WRAPPER_IMPLICIT_DEPS into
+		# the BFS here.  install_process_preamble's transitive closure
+		# includes heavy generic instantiations (GlobalRegistry::set<T>,
+		# mem alloc/write, callbacks, drop impls) whose types may not be
+		# representable by the LLVM codegen in the package-consumer context.
+		# The availability check below (mir_all scan) correctly omits the
+		# preamble call from the entry wrapper when the function isn't
+		# naturally reachable through the consumer's call graph.
 
 		# Expand through package-to-package calls.
 		queue = list(pkg_needed)
