@@ -1,5 +1,16 @@
 # Drift development history
 
+## 2026-03-05 (K13 boundary nothrow fix)
+- Fixed nothrow semantic analysis regression for cross-module/package calls in `lang/driftc/checker/__init__.py`:
+  - boundary `HCall` no longer unconditionally poisons semantic throw analysis for explicitly `declared_can_throw=False` callees,
+  - method-call wrapper paths now look through `wraps_target_fn_id` so ABI wrappers do not mask underlying nothrow declarations (both `fn_info` and signature fallback paths).
+- Preserved ABI boundary behavior (`can_throw` calling convention remains enforced where required); this change is semantic checker behavior only.
+- Validated with targeted regressions:
+  - K13 direct boundary nothrow call isolation,
+  - K13 wrapper look-through isolation,
+  - plus no collateral across K7/K11/K12 suites.
+- Bumped compiler version to `0.27.9-dev`; ABI remains `4`.
+
 ## 2026-03-05 (K11/K12 package variant fixes)
 - Fixed two package-consumption regressions affecting downstream projects:
   - K11: tombstone metadata preservation across package type-table linking.

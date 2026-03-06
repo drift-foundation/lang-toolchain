@@ -7,6 +7,7 @@ K4: Stdlib template fingerprint stability (self-deploy roundtrip).
 K7: Malformed method receiver metadata is still caught by the checker.
 K11: Package-consumed variant tombstone metadata preservation.
 K12: Package-consumed generic variant constructor inference.
+K13: Boundary-call nothrow analysis must not over-approximate.
 """
 from __future__ import annotations
 
@@ -1355,3 +1356,198 @@ fn main() nothrow -> Int {
 	assert "Widget" in messages, (
 		f"error should mention the unresolved type name 'Widget'; got: {messages}"
 	)
+
+
+# ── K13: Boundary-call nothrow analysis ──────────────────────────────
+
+
+def _emit_nothrow_method_pkg(tmp_path: Path) -> Path:
+	"""Emit a package with a struct + nothrow method."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "util"
+	_write_file(
+		mod_dir / "util.drift",
+		"""\
+module acme.util
+
+export { Counter, make_counter };
+
+pub struct Counter {
+	pub value: Int
+}
+
+implement Counter {
+	pub fn increment(self: &mut Counter) nothrow -> Void {
+		self.value = self.value + 1;
+	}
+
+	pub fn get(self: &Counter) nothrow -> Int {
+		return self.value;
+	}
+}
+
+pub fn make_counter(start: Int) nothrow -> Counter {
+	return Counter(value = start);
+}
+""",
+	)
+	pkg_path = tmp_path / "pkgs" / "acme.util.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "util.drift"),
+		*_emit_pkg_args("acme.util"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.util package"
+	return pkg_path
+
+
+def test_k13_boundary_nothrow_direct_call(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K13 regression: a nothrow function calling a nothrow package function
+	must not be flagged as 'may throw'.
+
+	The boundary-call path in the checker must not unconditionally force
+	call_can_throw=True for exported boundary calls — it should respect
+	the callee's declared nothrow semantics.
+	"""
+	pkg_path = _emit_nothrow_method_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	var c = util.make_counter(0);
+	c.increment();
+	return c.get();
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "may throw" not in messages, (
+		f"nothrow-to-nothrow boundary call should not be flagged: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+def test_k13_boundary_nothrow_direct_call_does_not_poison(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K13-a: a nothrow caller invoking ONLY a nothrow free function across
+	a package boundary must compile without 'may throw'.
+
+	This isolates the HCall boundary path in the checker — no method
+	wrappers involved.
+	"""
+	pkg_path = _emit_nothrow_method_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	val c = util.make_counter(42);
+	return c.value;
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "may throw" not in messages, (
+		f"nothrow direct call to nothrow free function should not poison caller: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"
+
+
+def test_k13_wrapper_path_preserves_nothrow(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""K13-b: a nothrow caller invoking ONLY nothrow methods across a
+	package boundary must compile without 'may throw'.
+
+	This isolates the HMethodCall wrapper path — the checker must look
+	through wraps_target_fn_id to the wrapped method's declared_can_throw.
+	"""
+	pkg_path = _emit_nothrow_method_pkg(tmp_path)
+	pkg_root = pkg_path.parent
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(
+		main_src,
+		"""\
+module main
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	var c = util.Counter(value = 0);
+	c.increment();
+	c.increment();
+	return c.get();
+}
+""",
+	)
+
+	rc, payload = _run_driftc_json(
+		[
+			"-M", str(consumer),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(pkg_root),
+			"--allow-unsigned-from", str(pkg_root),
+			"--dev",
+			str(main_src),
+			"--emit-ir", str(tmp_path / "out.ll"),
+		],
+		capsys,
+	)
+	diags = payload.get("diagnostics", [])
+	messages = " ".join(d.get("message", "") for d in diags)
+	assert "may throw" not in messages, (
+		f"nothrow method call via wrapper path should not poison caller: {messages}"
+	)
+	assert rc == 0, f"expected successful compilation; diagnostics: {messages}"

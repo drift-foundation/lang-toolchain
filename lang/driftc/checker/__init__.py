@@ -930,8 +930,9 @@ class Checker:
 						if callee_sig is not None and callee_sig.declared_can_throw is False:
 							call_can_throw = False
 						else:
-							call_can_throw = True
-							if first_note is None:
+							# Keep call_can_throw from info.sig.can_throw;
+							# do not unconditionally force True.
+							if call_can_throw and first_note is None:
 								first_note = (
 									"cross-module call to exported/extern requires can-throw calling convention"
 								)
@@ -962,9 +963,31 @@ class Checker:
 					fn_info = fn_infos.get(info.target.symbol)
 					if call_can_throw and fn_info is not None:
 						if fn_info.signature is not None and fn_info.signature.declared_can_throw is not None:
-							call_can_throw = bool(fn_info.signature.declared_can_throw)
+							# If target is an ABI wrapper, look through to
+							# the wrapped method's declared_can_throw.
+							wrapped_fn_id = getattr(fn_info.signature, "wraps_target_fn_id", None)
+							if wrapped_fn_id is not None:
+								wrapped_sig = self._signatures_by_id.get(wrapped_fn_id)
+								if wrapped_sig is not None and wrapped_sig.declared_can_throw is False:
+									call_can_throw = False
+								else:
+									call_can_throw = bool(fn_info.signature.declared_can_throw)
+							else:
+								call_can_throw = bool(fn_info.signature.declared_can_throw)
 						elif fn_info.declared_can_throw is not None:
 							call_can_throw = bool(fn_info.declared_can_throw)
+					elif call_can_throw and fn_info is None:
+						# Target not in fn_infos (package method or ABI
+						# wrapper).  Fall back to signature metadata,
+						# following wraps_target_fn_id for wrappers.
+						callee_sig = self._signatures_by_id.get(info.target.symbol)
+						if callee_sig is not None:
+							if callee_sig.declared_can_throw is False:
+								call_can_throw = False
+							elif getattr(callee_sig, "wraps_target_fn_id", None) is not None:
+								wrapped_sig = self._signatures_by_id.get(callee_sig.wraps_target_fn_id)
+								if wrapped_sig is not None and wrapped_sig.declared_can_throw is False:
+									call_can_throw = False
 				if call_can_throw and not catch_all:
 					may_throw = True
 					if first_span is None:
