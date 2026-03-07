@@ -1,3 +1,5 @@
+module m
+
 // Regression: match binder rename must descend into while-loop bodies
 // (HLoop) and cast expressions (HCast) inside match arm bodies.
 

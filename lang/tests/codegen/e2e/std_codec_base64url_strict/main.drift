@@ -1,3 +1,5 @@
+module m
+
 import std.core as core;
 import std.codec as codec;
 

@@ -2786,8 +2786,14 @@ class TypeChecker:
 					return False
 				if info.target.kind is CallTargetKind.DIRECT and signatures_by_id is not None and info.target.symbol is not None:
 					sig = signatures_by_id.get(info.target.symbol)
-					if sig is not None and not bool(getattr(sig, "declared_can_throw", False)):
-						return False
+					if sig is not None:
+						if not bool(getattr(sig, "declared_can_throw", False)):
+							return False
+						wrapped = getattr(sig, "wraps_target_fn_id", None)
+						if wrapped is not None:
+							inner = signatures_by_id.get(wrapped)
+							if inner is not None and not bool(getattr(inner, "declared_can_throw", False)):
+								return False
 				return True
 			def expr_can_throw(expr: H.HExpr) -> bool:
 				if isinstance(expr, H.HCall):

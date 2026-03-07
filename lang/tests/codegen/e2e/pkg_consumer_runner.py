@@ -356,6 +356,7 @@ def _run_case(
 	run_args = expected.get("args", [])
 	stdin_data = expected.get("stdin")
 	case_timeout = expected.get("timeout_s", timeout_s)
+	compiler_flags = expected.get("compiler_flags") or []
 
 	mod_name = _module_name(case_dir)
 	entry = f"{mod_name}::main"
@@ -379,6 +380,7 @@ def _run_case(
 		"--entry", entry,
 		"--emit-ir", str(ir_path),
 		"--json",
+		*compiler_flags,
 		*drift_files,
 	])
 

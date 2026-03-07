@@ -299,7 +299,7 @@ def _canonicalize_struct_field_type_ids(type_table: TypeTable) -> None:
 	and StructInstance.field_types so codegen sees consistent TypeIds between
 	struct field definitions and expressions that produce values for those fields."""
 	# Non-generic struct TypeDefs: param_types holds field TypeIds directly
-	for ty_id, td in type_table._defs.items():
+	for ty_id, td in list(type_table._defs.items()):
 		if td.kind is not TypeKind.STRUCT:
 			continue
 		for i, fty in enumerate(td.param_types):
@@ -307,7 +307,7 @@ def _canonicalize_struct_field_type_ids(type_table: TypeTable) -> None:
 			if canon != fty:
 				td.param_types[i] = canon
 	# Generic struct instances: field_types is list[TypeId]
-	for inst_id, inst in type_table.struct_instances.items():
+	for inst_id, inst in list(type_table.struct_instances.items()):
 		ft = inst.field_types
 		for i, fty in enumerate(ft):
 			canon = _canonicalize_forward_nominal_type_id(type_table, fty)
@@ -1485,6 +1485,72 @@ def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
 	return calls
 
 
+def _seed_destroy_type_graph(
+	*,
+	initial_dropped_types: set[int],
+	destructor_fns: dict[int, FunctionId],
+	mir_pool: dict[FunctionId, M.MirFunc],
+	needed: set[FunctionId],
+	type_table: TypeTable,
+	fn_infos: Mapping[FunctionId, FnInfo],
+	pkg_sigs: Mapping[FunctionId, FnSignature] | None = None,
+	pre_seeded_destroyers: set[FunctionId] | None = None,
+) -> None:
+	"""Walk the type graph (struct fields + variant arm payloads) and destroy
+	function bodies in a fixpoint loop to seed all transitively-needed
+	destroyer functions into *needed*.
+
+	Used by both source-side and package-side BFS in the package-consumer
+	path so the logic stays in one place (K39).
+	"""
+	destroy_queue: list[FunctionId] = list(pre_seeded_destroyers or ())
+	type_queue: list[int] = list(initial_dropped_types)
+	visited_types: set[int] = set(initial_dropped_types)
+	for ty_id, fn_id in destructor_fns.items():
+		if fn_id in needed and ty_id not in visited_types:
+			visited_types.add(ty_id)
+			type_queue.append(ty_id)
+	while type_queue or destroy_queue:
+		while type_queue:
+			ty = type_queue.pop()
+			ty_destroy = destructor_fns.get(ty)
+			if ty_destroy is not None and ty_destroy in mir_pool and ty_destroy not in needed:
+				needed.add(ty_destroy)
+				destroy_queue.append(ty_destroy)
+			inst = type_table.get_struct_instance(ty)
+			if inst is not None:
+				for field_ty in inst.field_types:
+					if field_ty not in visited_types:
+						visited_types.add(field_ty)
+						type_queue.append(field_ty)
+			vinst = type_table.get_variant_instance(ty)
+			if vinst is not None:
+				for arm in vinst.arms:
+					for field_ty in arm.field_types:
+						if field_ty not in visited_types:
+							visited_types.add(field_ty)
+							type_queue.append(field_ty)
+		while destroy_queue:
+			cur = destroy_queue.pop()
+			fn = mir_pool.get(cur)
+			if fn is None:
+				continue
+			for callee in _called_funcs_in_mir(fn):
+				if callee in mir_pool and callee not in needed:
+					needed.add(callee)
+					destroy_queue.append(callee)
+			for block in fn.blocks.values():
+				for instr in block.instructions:
+					if isinstance(instr, M.DropValue):
+						destroy_id = destructor_fns.get(instr.ty) or _resolve_destroy_fn_for_type(instr.ty, fn_infos, pkg_sigs)
+						if destroy_id is not None and destroy_id in mir_pool and destroy_id not in needed:
+							needed.add(destroy_id)
+							destroy_queue.append(destroy_id)
+						if instr.ty not in visited_types:
+							visited_types.add(instr.ty)
+							type_queue.append(instr.ty)
+
+
 def _build_package_consumer_unit(
 	*,
 	loaded_pkgs: list,
@@ -1603,6 +1669,7 @@ def _build_package_consumer_unit(
 	# Phase 1: Seed from MIR-level DropValue instructions.
 	_src_destroy_queue: list[FunctionId] = []
 	_dropped_types: set[int] = set()
+	_phase1_destroyers: set[FunctionId] = set()
 	for fn in (src_mir[fid] for fid in list(src_needed) if fid in src_mir):
 		for block in fn.blocks.values():
 			for instr in block.instructions:
@@ -1611,47 +1678,18 @@ def _build_package_consumer_unit(
 					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id)
 					if destroy_id is not None and destroy_id in src_mir and destroy_id not in src_needed:
 						src_needed.add(destroy_id)
-						_src_destroy_queue.append(destroy_id)
-	# Phase 2: Seed field-level destroyers.  Codegen recursively drops struct
-	# fields, so any Destructible field type needs its destroyer in src_needed.
-	# Walk the type graph starting from dropped types + seeded destroyer types.
+						_phase1_destroyers.add(destroy_id)
+	# Phase 2+3 (K39): Type graph walk + destroy body transitive closure.
 	destructor_fns = getattr(type_table, 'destructor_fns', None) or {}
-	_type_queue: list[int] = list(_dropped_types)
-	_visited_types: set[int] = set(_dropped_types)
-	for ty_id, fn_id in destructor_fns.items():
-		if fn_id in src_needed and ty_id not in _visited_types:
-			_visited_types.add(ty_id)
-			_type_queue.append(ty_id)
-	while _type_queue:
-		ty = _type_queue.pop()
-		inst = type_table.get_struct_instance(ty)
-		if inst is not None:
-			for field_ty in inst.field_types:
-				field_destroy = destructor_fns.get(field_ty)
-				if field_destroy is not None and field_destroy in src_mir and field_destroy not in src_needed:
-					src_needed.add(field_destroy)
-					_src_destroy_queue.append(field_destroy)
-				if field_ty not in _visited_types:
-					_visited_types.add(field_ty)
-					_type_queue.append(field_ty)
-	# Phase 3: Transitive closure — follow calls + nested DropValues from
-	# newly-seeded destroy functions.
-	while _src_destroy_queue:
-		cur = _src_destroy_queue.pop()
-		fn = src_mir.get(cur)
-		if fn is None:
-			continue
-		for callee in _called_funcs_in_mir(fn):
-			if callee in src_mir and callee not in src_needed:
-				src_needed.add(callee)
-				_src_destroy_queue.append(callee)
-		for block in fn.blocks.values():
-			for instr in block.instructions:
-				if isinstance(instr, M.DropValue):
-					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id)
-					if destroy_id is not None and destroy_id in src_mir and destroy_id not in src_needed:
-						src_needed.add(destroy_id)
-						_src_destroy_queue.append(destroy_id)
+	_seed_destroy_type_graph(
+		initial_dropped_types=_dropped_types,
+		destructor_fns=destructor_fns,
+		mir_pool=src_mir,
+		needed=src_needed,
+		type_table=type_table,
+		fn_infos=checked_src.fn_infos_by_id,
+		pre_seeded_destroyers=_phase1_destroyers,
+	)
 	# K29: Seed interface impl methods for ConstructIfaceValue boxing.
 	# ConstructIfaceValue has no fn_ref — vtable thunks referencing impl
 	# methods are generated at codegen time.  We must seed the impl methods
@@ -1709,30 +1747,27 @@ def _build_package_consumer_unit(
 				pkg_needed.add(callee)
 				queue.append(callee)
 
-	# Seed destroy impls for DropValue types.
+	# Seed destroy impls for DropValue types (package-side K39).
 	_all_reachable = dict(src_mir)
 	for fid in pkg_needed:
 		fn = pkg_mir_all.get(fid)
 		if fn is not None:
 			_all_reachable[fid] = fn
-	_destroy_queue: list[FunctionId] = []
+	_pkg_dropped_types: set[int] = set()
 	for fn in _all_reachable.values():
 		for block in fn.blocks.values():
 			for instr in block.instructions:
 				if isinstance(instr, M.DropValue):
-					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id, pkg_sigs_by_id)
-					if destroy_id is not None and destroy_id in pkg_mir_all and destroy_id not in pkg_needed:
-						pkg_needed.add(destroy_id)
-						_destroy_queue.append(destroy_id)
-	while _destroy_queue:
-		cur = _destroy_queue.pop()
-		fn = pkg_mir_all.get(cur)
-		if fn is None:
-			continue
-		for callee in _called_funcs_in_mir(fn):
-			if callee in pkg_mir_all and callee not in pkg_needed:
-				pkg_needed.add(callee)
-				_destroy_queue.append(callee)
+					_pkg_dropped_types.add(instr.ty)
+	_seed_destroy_type_graph(
+		initial_dropped_types=_pkg_dropped_types,
+		destructor_fns=destructor_fns,
+		mir_pool=pkg_mir_all,
+		needed=pkg_needed,
+		type_table=type_table,
+		fn_infos=checked_src.fn_infos_by_id,
+		pkg_sigs=pkg_sigs_by_id,
+	)
 
 	# K26: Seed interface impl methods so vtable entries have bodies available.
 	# For each non-generic trait impl from external packages, add method
@@ -1758,6 +1793,39 @@ def _build_package_consumer_unit(
 				if callee in pkg_mir_all and callee not in pkg_needed:
 					pkg_needed.add(callee)
 					_iface_queue.append(callee)
+
+	# K40: Conditionally include preamble functions that codegen injects into
+	# entry wrappers.  These are not called from MIR — codegen emits them
+	# directly — so BFS from user code never discovers them.
+	#
+	# Walk the preamble's transitive closure with a bounded BFS (max 64
+	# new functions).  If the closure exceeds the bound, abort the seed
+	# entirely — this prevents K18-class explosions where heavy generic
+	# instantiations get pulled in.  The current preamble closure is ~5
+	# functions (install_process_stdio + 3x GlobalRegistry::set<T>).
+	_K40_MAX_CLOSURE = 64
+	for _dep_mod, _dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
+		for fn_id in list(pkg_mir_all):
+			if fn_id.module == _dep_mod and fn_id.name == _dep_name and fn_id not in pkg_needed:
+				_preamble_closure: set[FunctionId] = {fn_id}
+				_preamble_queue: list[FunctionId] = [fn_id]
+				_closure_ok = True
+				while _preamble_queue:
+					cur = _preamble_queue.pop()
+					fn = pkg_mir_all.get(cur)
+					if fn is None:
+						continue
+					for callee in _called_funcs_in_mir(fn):
+						if callee in pkg_mir_all and callee not in pkg_needed and callee not in _preamble_closure:
+							_preamble_closure.add(callee)
+							if len(_preamble_closure) > _K40_MAX_CLOSURE:
+								_closure_ok = False
+								_preamble_queue.clear()
+								break
+							_preamble_queue.append(callee)
+				if _closure_ok:
+					pkg_needed.update(_preamble_closure)
+				break
 
 	pkg_mir: dict[FunctionId, M.MirFunc] = {fn_id: pkg_mir_all[fn_id] for fn_id in pkg_needed}
 	pkg_fn_infos: dict[FunctionId, FnInfo] = {}
@@ -2690,6 +2758,10 @@ def compile_stubbed_funcs(
 			mod_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
 			if isinstance(mod_name, str) and mod_name.startswith("std."):
 				unsafe_trusted_modules.add(mod_name)
+	if allow_unsafe and module_deps:
+		for mod_id in module_deps.keys():
+			if isinstance(mod_id, str):
+				unsafe_trusted_modules.add(mod_id)
 	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True)
 	callable_registry = CallableRegistry()
 	module_ids: dict[object, int] = {None: 0}
@@ -2839,6 +2911,35 @@ def compile_stubbed_funcs(
 				requires_by_fn_id[fn_id] = req
 	linked_world, require_env = _build_linked_world(shared_type_table)
 	_install_destructor_fns(shared_type_table, linked_world, module_exports)
+	# K39: Early registration of non-generic Destructible impls from packages.
+	# _install_destructor_fns only sees local module_exports; package impls
+	# (e.g. TypeBox::destroy) are in external_impl_metas.  Generic impls
+	# (e.g. ScopeGuard<T>::destroy) are handled later in the instantiation
+	# code where _request_instantiation is available.
+	if external_impl_metas and shared_type_table is not None and linked_world is not None:
+		destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
+		if destructible_key is not None:
+			ext_destructor_fns = getattr(shared_type_table, "destructor_fns", None) or {}
+			for impl in external_impl_metas:
+				if not isinstance(impl, ImplMeta):
+					continue
+				if impl.trait_key != destructible_key:
+					continue
+				target_type_id = getattr(impl, "target_type_id", None)
+				if not isinstance(target_type_id, int):
+					continue
+				if shared_type_table.has_typevar(target_type_id):
+					continue
+				method_fn_id: FunctionId | None = None
+				for method in impl.methods:
+					if method.name == "destroy":
+						method_fn_id = method.fn_id
+						break
+				if method_fn_id is None:
+					continue
+				ext_destructor_fns[target_type_id] = method_fn_id
+			if ext_destructor_fns:
+				shared_type_table.destructor_fns = ext_destructor_fns
 
 	def _declared_name_from_fn_id(fn_id: FunctionId, module_id: str) -> str:
 		sym = function_symbol(fn_id)
@@ -3611,49 +3712,64 @@ def compile_stubbed_funcs(
 		return handle
 
 	destructor_fns: dict[TypeId, FunctionId] = {}
-	if shared_type_table is not None and module_exports is not None and linked_world is not None:
+	# K39: Track generic Destructible impls for post-instantiation rescan.
+	# At this point struct_instances may not yet contain all concrete types
+	# (e.g. ScopeGuard<Int>) — those are created during _drain_instantiations.
+	_generic_destructible_impls: list[tuple[TypeId, FunctionId]] = []  # (base_id, template_destroy_fn_id)
+	if shared_type_table is not None and linked_world is not None:
 		destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
 		if destructible_key is not None:
-			for exp in module_exports.values():
-				if not isinstance(exp, dict):
+			# Collect all ImplMeta objects: from module_exports + external_impl_metas.
+			_all_impls: list[ImplMeta] = []
+			if module_exports is not None:
+				for exp in module_exports.values():
+					if not isinstance(exp, dict):
+						continue
+					impls = exp.get("impls")
+					if not isinstance(impls, list):
+						continue
+					for impl in impls:
+						if isinstance(impl, ImplMeta):
+							_all_impls.append(impl)
+			# K39: Also scan external_impl_metas — package Destructible impls
+			# (e.g. ScopeGuard<T>::destroy) live here, not in module_exports.
+			if external_impl_metas:
+				for impl in external_impl_metas:
+					if isinstance(impl, ImplMeta):
+						_all_impls.append(impl)
+			for impl in _all_impls:
+				if impl.trait_key != destructible_key:
 					continue
-				impls = exp.get("impls")
-				if not isinstance(impls, list):
+				target_type_id = getattr(impl, "target_type_id", None)
+				if not isinstance(target_type_id, int):
 					continue
-				for impl in impls:
-					if not isinstance(impl, ImplMeta):
-						continue
-					if impl.trait_key != destructible_key:
-						continue
-					target_type_id = getattr(impl, "target_type_id", None)
-					if not isinstance(target_type_id, int):
-						continue
-					method_fn_id: FunctionId | None = None
-					for method in impl.methods:
-						if method.name == "destroy":
-							method_fn_id = method.fn_id
-							break
-					if method_fn_id is None:
-						continue
-					if shared_type_table.has_typevar(target_type_id):
-						base_id: TypeId | None = None
-						inst = shared_type_table.get_struct_instance(target_type_id)
-						if inst is not None:
-							base_id = inst.base_id
-						else:
-							base_id = target_type_id
-						for inst_id, inst in shared_type_table.struct_instances.items():
-							if inst.base_id != base_id:
-								continue
-							if shared_type_table.has_typevar(inst_id):
-								continue
-							key = function_keys_by_fn_id.get(method_fn_id)
-							if key is None:
-								continue
-							handle = _request_instantiation(key, tuple(inst.type_args))
-							destructor_fns[inst_id] = handle.fn_id
-						continue
-					destructor_fns[target_type_id] = method_fn_id
+				method_fn_id: FunctionId | None = None
+				for method in impl.methods:
+					if method.name == "destroy":
+						method_fn_id = method.fn_id
+						break
+				if method_fn_id is None:
+					continue
+				if shared_type_table.has_typevar(target_type_id):
+					base_id: TypeId | None = None
+					inst = shared_type_table.get_struct_instance(target_type_id)
+					if inst is not None:
+						base_id = inst.base_id
+					else:
+						base_id = target_type_id
+					_generic_destructible_impls.append((base_id, method_fn_id))
+					for inst_id, inst in shared_type_table.struct_instances.items():
+						if inst.base_id != base_id:
+							continue
+						if shared_type_table.has_typevar(inst_id):
+							continue
+						key = function_keys_by_fn_id.get(method_fn_id)
+						if key is None:
+							continue
+						handle = _request_instantiation(key, tuple(inst.type_args))
+						destructor_fns[inst_id] = handle.fn_id
+					continue
+				destructor_fns[target_type_id] = method_fn_id
 	if destructor_fns and shared_type_table is not None:
 		shared_type_table.destructor_fns = destructor_fns
 
@@ -4023,6 +4139,30 @@ def compile_stubbed_funcs(
 						_walk_expr_ids(obj[key])
 					return
 			_walk_expr_ids(block)
+
+	# K39: Post-instantiation rescan for generic Destructible impls.
+	# After all _drain_instantiations() rounds, struct_instances may contain
+	# new concrete types (e.g. ScopeGuard<Int>) that weren't present during
+	# the initial destructor_fns population.  Re-scan and register them.
+	if _generic_destructible_impls and shared_type_table is not None:
+		_k39_added = 0
+		for base_id, method_fn_id in _generic_destructible_impls:
+			for inst_id, inst in shared_type_table.struct_instances.items():
+				if inst.base_id != base_id:
+					continue
+				if shared_type_table.has_typevar(inst_id):
+					continue
+				if inst_id in destructor_fns:
+					continue
+				key = function_keys_by_fn_id.get(method_fn_id)
+				if key is None:
+					continue
+				handle = _request_instantiation(key, tuple(inst.type_args))
+				destructor_fns[inst_id] = handle.fn_id
+				_k39_added += 1
+		if _k39_added > 0:
+			_drain_instantiations()
+			shared_type_table.destructor_fns = destructor_fns
 
 	if emit_instantiation_index is not None:
 		entries: list[dict[str, object]] = []
@@ -7809,6 +7949,10 @@ def main(argv: list[str] | None = None) -> int:
 	if not unsafe_trusted_modules and module_exports is not None:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str) and mod_id.startswith("std."):
+				unsafe_trusted_modules.add(mod_id)
+	if getattr(args, "allow_unsafe", False) and module_exports is not None:
+		for mod_id in module_exports.keys():
+			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
 	type_checker = TypeChecker(type_table=type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules)
 	callable_registry = CallableRegistry()

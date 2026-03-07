@@ -213,7 +213,7 @@ ext-e2e-report:
 # Package-consumer e2e: blocking smoke subset (CI gate).
 ext-e2e-smoke:
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py \
-		--blocking --only-cases result_ok_array_match_move_no_double_free,array_push_move_non_copy_implicit,array_pop_move_out_non_copy,match_wildcard_owned_payload_drop,abi_entrypoint_cross_module_call,abi_entrypoint_cross_module_struct_ok,std_core_string_from_utf8_bytes_api
+		--blocking --only-cases result_ok_array_match_move_no_double_free,array_push_move_non_copy_implicit,array_pop_move_out_non_copy,match_wildcard_owned_payload_drop,abi_entrypoint_cross_module_call,abi_entrypoint_cross_module_struct_ok,std_core_string_from_utf8_bytes_api,std_runtime_scoped_stack_basic,std_io_preamble_installs_stdio,try_wrap_result_err_twice_min
 
 # Package-consumer e2e: ASAN variant (nightly).
 ext-e2e-asan:

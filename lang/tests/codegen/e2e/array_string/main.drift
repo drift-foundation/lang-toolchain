@@ -1,3 +1,5 @@
+module m
+
 import std.console as console;
 
 fn main() nothrow -> Int{

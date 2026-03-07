@@ -1,5 +1,8 @@
 {
   "exit_code": -6,
   "stderr": "__ANY__",
-  "stderr_contains": "drift_alloc_array: negative len/cap"
+  "stderr_contains": "drift_alloc_array: negative len/cap",
+  "compiler_flags": [
+    "--allow-unsafe"
+  ]
 }

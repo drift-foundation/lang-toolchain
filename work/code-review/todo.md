@@ -1,8 +1,8 @@
 # Cross-Package Defect Synthesis Report
 
 **Date**: 2026-03-07
-**Scope**: K10–K36 + ext-e2e-report (995 total tests through signed-package consumer path)
-**Current state**: 836/995 pass (84.0%), adjusted 836/874 = 95.6% (excl 94 infra + 9 unsafe + 18 skipped)
+**Scope**: K10–K40 + ext-e2e-report (559 test cases through signed-package consumer path)
+**Current state**: 532/558 pass (95.3%), remaining: 19 compile-check + 7 compile-codegen + 0 link + 0 runtime
 
 ---
 
@@ -42,6 +42,11 @@
 | K36 | checker/visibility | Package module methods not visible to consumer code | `visible_modules_by_name` BFS only traverses source module deps and reexports. Package modules (e.g., `std.core.copy` defining `String::byte_length`) not included → `_candidate_visible` returns False → "method exists but is not visible here". Fix: add all `external_module_packages` keys to the `visible` set during BFS construction. Also fixes `HashMap::get` visibility in JSON tests | Yes |
 | K37 | checker/call_resolver | FORWARD_NOMINAL canonicalization for generic package types | Four interlocking bugs: (a) `receiver_nominal` in call_resolver.py stayed FORWARD_NOMINAL after `_struct_base_and_args` → method candidates filtered out; (b) `ImplDef.type_params` empty at two creation sites → trait solver skipped generic impls (Copy, etc.); (c) `check_call_signature` failed FORWARD_NOMINAL vs canonical TypeId comparison for struct constructors; (d) `_canonicalize_struct_field_type_ids` iterated wrong data structures (dict vs list). Fix: canonicalize receiver at resolution, propagate type_params, add FORWARD_NOMINAL equivalence in check_call_signature, rewrite struct field canonicalization for `TypeDef.param_types` (list) and `StructInstance.field_types` (list) | Yes |
 | K38 | core/types_core | Primitive types (RAW_PTR, SCALAR, etc.) unresolvable for Copy status | `copy_status` with `_copy_query` hook returned None for primitives when no Copy trait impl existed in trait world. `_eligible_structural_fallback` only allowed STRUCT/VARIANT. Primitive types have deterministic Copy status from their kind — RAW_PTR is always Copy, VOID is always Copy, etc. Fix: add structural fallback bypass for primitive type kinds before STRUCT/VARIANT check | Yes |
+
+| K39 | codegen/BFS | Destructible::destroy not emitted for types nested in variant payloads or package-only functions | Three interlocking issues: (a) `external_impl_metas` not scanned for Destructible impls (only `module_exports`); (b) BFS Phase 2 type graph walk only followed struct fields via `get_struct_instance`, not variant arm payloads via `get_variant_instance` — `HashMapCore<String, JsonNode, DefaultBuildHasher>` inside `JsonNode::Object` was invisible; (c) Phase 2+3 not interleaved — types discovered in destroy function bodies (via DropValue) couldn't feed back into type graph walk; (d) package-side BFS had no type graph walk at all — types only in package function params/locals (e.g., `HashMapCore<String, Int, DefaultBuildHasher>` in `std.log::_emit`) missed. Fix: add variant traversal, merge Phase 2+3 into fixpoint loop, mirror type graph walk in package BFS. **+63 tests** (all JSON/HashMap link failures) | Yes |
+| K40 | codegen/BFS | Preamble functions (`install_process_preamble`) not emitted in package-consumer path | Preamble functions are injected by codegen into entry wrappers at LLVM emission time, not called from MIR. BFS from user code never discovers them. Fix: explicitly seed `ENTRY_WRAPPER_IMPLICIT_DEPS` into `pkg_needed` with transitive closure walk. **+2 tests** (preamble runtime failures) | Yes |
+| K41 | type_checker | Lambda nothrow analysis resolves boundary wrapper instead of original method | `_lambda_can_throw` / `_treat_can_throw` checks `declared_can_throw` on the resolved target. In package path, auto-borrow methods (e.g. `Arc::borrow_mut`) resolve to `__wrap_method::` wrapper which has `declared_can_throw=True`. Fix: when target is a wrapper (`wraps_target_fn_id` set), check the wrapped function's `declared_can_throw` instead. **+1 test** (`callback_move_capture_nested_callback`). Three other lambda tests now pass initial type-check but fail in `compile_stubbed_funcs` with a different bug (K42). | Yes |
+| K42 | driftc/compile_stubbed_funcs | `conc.lock(arc)` trait auto-borrow fails in compile_stubbed_funcs | `compile_stubbed_funcs` builds its own callable_registry and trait world. `BorrowMut<Mutex<T>> for Arc<Mutex<T>>` auto-borrow doesn't resolve for free function arg coercion, causing "no matching overload for function 'lock'" in the MIR compilation pass. Initial type-check (line 8296) passes; only the second type-check inside compile_stubbed_funcs fails. Affects: callback_move_capture_{arc_lifetime,replace_state}, effective_drift_emitter_example, callback_arc_mutex_full_mutation (**4 tests**) | Yes |
 
 **All bugs are package-only.** The local/source compilation path is unaffected.
 
@@ -286,7 +291,7 @@ Current smoke set (7 cases) should expand to include:
 ### Medium term (next 1-2 weeks)
 
 6. **Option A hardening** (MIR transform gate, remap validator, FnResult validator) — prevents regression in fixed areas
-7. **`module declaration required` (28 cases)** — these tests lack `module` declarations. Either add declarations to tests or make the package runner handle bare modules. Low priority since these aren't package bugs.
+7. **`module declaration required` (28 cases)** — ✅ DONE. Added explicit `module m` to all 28 test files. **Decision (pinned)**: no runner-side injection of module declarations — package-consumer tests must reflect real source text exactly so line numbers, diagnostics, and compiler inputs stay aligned with what is on disk.
 8. **`MemoryOrder` export (28 cases)** — `std.sync` re-exports `MemoryOrder` from `lang.atomic`. Package export doesn't preserve re-export chains. Fix in package serialization.
 9. **HashMap/HashSet method resolution (31+5+4+3=43 cases)** — `insert`/`len`/`get` not found. Related to generic container methods not resolving through package path. Investigate whether this is a K20-like signature issue or a missing export.
 
@@ -307,6 +312,15 @@ Current smoke set (7 cases) should expand to include:
 | After K25 (ext module visibility) | 67.7% | 376/555 |
 | After K26 (interface impl vtable) | 67.6% | 379/561 |
 | After K27 (intrinsic can_throw audit, 40+ handlers) | 71.2% | 708/995 |
-| After link fixes (fn ptr, lambda emission) | ~74% | ~735/995 |
-| After compile-check fixes (HashMap/MemoryOrder) | ~80% | ~795/995 |
-| Steady state (VT/unsafe/deep-generic excluded) | ~85% | ~845/995 |
+| After K30-K38 (checker/type-link/codegen fixes) | 76.9% | 430/559 |
+| After K39+K40 (BFS destroy+preamble+variant walk) | 88.7% | 496/559 |
+| After module-m + unsafe + dict-iter + K41 lambda nothrow | 95.3% | 532/558 |
+| **Remaining 26 failures** | | |
+| — Parser unsupported syntax (7): bare match arms, qualified trait calls, while-in-try | NOT package-specific | Exclude or fix parser |
+| — Expression block return (2): `return` in expr blocks | NOT package-specific | Exclude or fix |
+| — Test code bug (2): `core.Error` (primitive), `buffer_commit_read` (not exported) | NOT package-specific | Fix test/export |
+| — array_byte codegen crash (7): K27-class intrinsic FnResult wrapping | Package-only | Codegen fix needed |
+| — K42 lock/auto-borrow (4): trait auto-borrow in compile_stubbed_funcs | Package-only | Deep trait resolution fix |
+| — MIR invariant (2): array copy invariant in diagnostic tests | Package-only | Investigate |
+| — Package-path semantic (2): ambiguous trait req (hashmap_iter_empty), Result type inference | Package-only | Investigate |
+| Estimated ceiling (excl parser/expr-block/test-bug) | ~97.9% | ~536/547 |

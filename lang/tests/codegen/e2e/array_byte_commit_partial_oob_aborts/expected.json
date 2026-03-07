@@ -1,4 +1,7 @@
 {
   "exit_code": -6,
-  "stderr": "__ANY__"
+  "stderr": "__ANY__",
+  "compiler_flags": [
+    "--allow-unsafe"
+  ]
 }

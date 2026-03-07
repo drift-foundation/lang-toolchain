@@ -53,9 +53,10 @@ from lang.driftc.type_resolver import resolve_opaque_type
 # Implicit runtime dependencies of the OS entry wrapper.  The entry wrapper
 # calls these as __impl symbols (codegen body-rename artifacts), so they must
 # be present in the lowered MIR for their bodies to be emitted.  In the
-# package-consumer path the caller checks mir_all for availability; do NOT
-# force-seed these into the BFS — their transitive closures pull in heavy
-# generic instantiations that the LLVM codegen cannot represent (K18).
+# package-consumer path, _build_package_consumer_unit conditionally seeds
+# these into pkg_needed ONLY when all their callees are already reachable
+# through the user program's natural BFS (K40).  No transitive closure
+# walk — avoids K18-class explosions from heavy generic instantiations.
 # Keyed by the flag name passed to emit_entry_wrapper / emit_argv_entry_wrapper;
 # values are (module, name) pairs matched against FunctionId fields.
 ENTRY_WRAPPER_IMPLICIT_DEPS: dict[str, tuple[str, str]] = {

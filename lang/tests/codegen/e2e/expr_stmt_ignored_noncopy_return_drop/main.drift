@@ -1,3 +1,5 @@
+module m
+
 import std.core;
 
 fn mk() nothrow -> Optional<String> {

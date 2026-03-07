@@ -1,1 +1,1 @@
-{"exit_code": 124}
+{"exit_code": 124, "compiler_flags": ["--allow-unsafe"]}

@@ -1,3 +1,5 @@
+module m
+
 import std.codec as codec;
 import std.crypto as crypto;
 import std.core as core;
