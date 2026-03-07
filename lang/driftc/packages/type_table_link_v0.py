@@ -81,6 +81,7 @@ class DecodedTypeTable:
 	exception_schemas: dict[str, tuple[str, list[str]]]
 	variant_schemas: dict[TypeId, VariantSchema]
 	provided_nominals: set[tuple[TypeKind, str, str]]
+	type_aliases: list[tuple[str, str, list[str], GenericTypeExpr]]
 
 
 def _decode_kind(name: str) -> TypeKind:
@@ -123,6 +124,26 @@ def _decode_generic_type_expr(obj: Any) -> GenericTypeExpr:
 		else:
 			fn_throws = True
 	return GenericTypeExpr(name=name, args=args, param_index=param_index, module_id=module_id, fn_throws=fn_throws)
+
+
+def _decode_alias_target(obj: Any) -> GenericTypeExpr:
+	"""Decode a type alias target expression (name-based type params, no param_index)."""
+	if not isinstance(obj, dict):
+		raise ValueError("invalid type alias target encoding")
+	name = obj.get("name", "")
+	if not isinstance(name, str):
+		raise ValueError("invalid type alias target name")
+	module_id = obj.get("module_id")
+	if module_id is not None and not isinstance(module_id, str):
+		raise ValueError("invalid type alias target module_id")
+	args_obj = obj.get("args")
+	args: list[GenericTypeExpr] = []
+	if args_obj is not None:
+		if not isinstance(args_obj, list):
+			raise ValueError("invalid type alias target args")
+		args = [_decode_alias_target(a) for a in args_obj]
+	fn_throws = name == "fn"
+	return GenericTypeExpr(name=name, args=args, param_index=None, module_id=module_id, fn_throws=fn_throws)
 
 
 def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
@@ -494,6 +515,23 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		if not module_id:
 			raise ValueError("invalid provided_nominals entry")
 		provided_nominals.add((kind, module_id, name))
+
+	type_aliases_obj = obj.get("type_aliases")
+	type_aliases: list[tuple[str, str, list[str], GenericTypeExpr]] = []
+	if type_aliases_obj is not None:
+		if not isinstance(type_aliases_obj, list):
+			raise ValueError("invalid type_table.type_aliases")
+		for entry in type_aliases_obj:
+			if not isinstance(entry, dict):
+				raise ValueError("invalid type_aliases entry")
+			a_mid = entry.get("module_id")
+			a_name = entry.get("name")
+			a_params = entry.get("type_params")
+			a_target = entry.get("target")
+			if not isinstance(a_mid, str) or not isinstance(a_name, str) or not isinstance(a_params, list):
+				raise ValueError("invalid type_aliases entry fields")
+			type_aliases.append((a_mid, a_name, [str(p) for p in a_params], _decode_alias_target(a_target)))
+
 	return DecodedTypeTable(
 		package_id=pkg_id,
 		defs=defs,
@@ -504,6 +542,7 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		exception_schemas=exception_schemas,
 		variant_schemas=variant_schemas,
 		provided_nominals=provided_nominals,
+		type_aliases=type_aliases,
 	)
 
 
@@ -1233,6 +1272,14 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				return False
 			return all(_type_key_compatible(a, b) for a, b in zip(lhs, rhs))
 		return lhs == rhs
+
+	# Import type aliases from packages before struct/variant finalization so
+	# that field type expressions referencing aliases (e.g. HashMap<K, V>)
+	# resolve during _eval_generic_type_expr.
+	for pkg in pkgs:
+		for a_mid, a_name, a_params, a_target in pkg.type_aliases:
+			if host.lookup_type_alias(module_id=a_mid, name=a_name) is None:
+				host.define_type_alias(module_id=a_mid, name=a_name, type_params=a_params, target=a_target)
 
 	# Finalize non-generic struct field types (schema fields already populated
 	# before remaining_keys processing above).

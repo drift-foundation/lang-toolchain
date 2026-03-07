@@ -505,6 +505,8 @@ def resolve_nonvariant_qualified_static_call(
 			impl_subst = ctx.match_impl_type_args(template_args=impl_target_type_args, recv_args=list(base_args), impl_type_params=impl_type_params)
 			if impl_subst is None:
 				continue
+		if impl_subst is None and base_args and list(_impl_args) != list(base_args):
+			continue
 		if impl_subst is not None:
 			param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
 			ret_tid = apply_subst(ret_tid, impl_subst, ctx.type_table)
@@ -1745,6 +1747,27 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			recv_ty = ctx.type_table.ensure_typevar(recv_ty, name=_tp_name)
 		receiver_nominal = _unwrap_ref_type(recv_ty)
 		receiver_base, receiver_args = _struct_base_and_args(receiver_nominal)
+		# K26: canonicalize FORWARD_NOMINAL receiver to concrete struct/variant instance
+		# so downstream receiver_compat and get_struct_instance work with canonical TypeIds.
+		if receiver_base is not None and receiver_args:
+			_fwd_def = ctx.type_table.get(receiver_nominal)
+			if _fwd_def.kind is TypeKind.FORWARD_NOMINAL:
+				try:
+					_canonical = ctx.type_table.ensure_struct_instantiated(receiver_base, list(receiver_args))
+				except (ValueError, KeyError):
+					try:
+						_canonical = ctx.type_table.ensure_variant_instantiated(receiver_base, list(receiver_args))
+					except (ValueError, KeyError):
+						_canonical = receiver_nominal
+				if _canonical != receiver_nominal:
+					_old_nominal = receiver_nominal
+					receiver_nominal = _canonical
+					if recv_ty == _old_nominal:
+						recv_ty = _canonical
+					else:
+						_rty_def = ctx.type_table.get(recv_ty)
+						if _rty_def.kind is TypeKind.REF and _rty_def.param_types and _rty_def.param_types[0] == _old_nominal:
+							recv_ty = ctx.type_table.ensure_ref(_canonical) if not _rty_def.ref_mut else ctx.type_table.ensure_ref_mut(_canonical)
 		if receiver_args is None:
 			recv_nominal_def = ctx.type_table.get(receiver_nominal)
 			if recv_nominal_def.kind is TypeKind.ARRAY and recv_nominal_def.param_types:
@@ -2063,7 +2086,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						mapped.append(m)
 				visible_modules_for_methods = tuple(mapped)
 			visible_modules_set = set(visible_modules_for_methods)
-			ignore_visibility = getattr(expr, "origin", None) in ("for_iter", "for_next")
+			ignore_visibility = getattr(expr, "origin", None) in ("for_iter", "for_next", "wrapper_call")
 			def _collect_method_candidates(base_tid: TypeId) -> list[CallableDecl]:
 				if ctx.callable_registry is None:
 					return []
@@ -2155,9 +2178,17 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if trait_key_for_cand is not None and ctx.trait_index is not None and ctx.trait_index.is_missing(trait_key_for_cand):
 					raise ResolutionError(f"missing trait metadata for '{_trait_label(trait_key_for_cand)}'", span=getattr(expr, "loc", Span()))
 				if trait_key_for_cand is not None:
-					if trait_key_for_cand in traits_in_scope_set:
-						if ignore_visibility or _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module):
-							trait_candidates.append(cand)
+					# Trait-in-scope gate: compiler-generated calls (wrapper_call,
+					# for_iter, for_next) bypass because they target known-valid
+					# methods from the package compilation context.
+					if not (ignore_visibility or trait_key_for_cand in traits_in_scope_set):
+						continue
+					# Module visibility: for user-written code, also require
+					# the impl-defining module is visible (K36 ensures package
+					# modules are in the visible set).  Compiler-generated calls
+					# bypass since the defining module may be internal to the package.
+					if ignore_visibility or _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module):
+						trait_candidates.append(cand)
 					continue
 				is_visible = True if ignore_visibility else _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module)
 				if cand.kind is CallableKind.METHOD_INHERENT:
@@ -2435,8 +2466,8 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						impl_subst = Subst(owner=impl_type_params[0].id.owner, args=list(receiver_args))
 					if impl_subst is None and impl_type_params and receiver_inst_args is not None and len(impl_type_params) == len(receiver_inst_args):
 						impl_subst = Subst(owner=impl_type_params[0].id.owner, args=list(receiver_inst_args))
-				if impl_subst is not None:
-					param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
+					if impl_subst is not None:
+						param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
 				if subst_for_receiver is not None:
 					param_type_ids = [apply_subst(p, subst_for_receiver, ctx.type_table) for p in param_type_ids]
 				param_types_for_receiver.append((cand, sig, param_type_ids, impl_subst))

@@ -947,3 +947,128 @@ fn main() nothrow -> Int {
 	diags = payload.get("diagnostics", [])
 	messages = " ".join(d.get("message", "") for d in diags)
 	assert "unsigned" in messages.lower() or "sidecar" in messages.lower() or "signature" in messages.lower(), f"expected unsigned/signature rejection, got: {messages}"
+
+
+# ── K25-guard: non-stdlib package visibility is package-generic ──────
+
+
+_ACME_VIS_SOURCE = """\
+module acme.vis
+
+export { Showable, Wrapper, wrap_and_show };
+
+pub trait Showable {
+	fn show(self: &Self) nothrow -> Int;
+}
+
+pub struct Wrapper<T> {
+	pub inner: T
+}
+
+implement<T> Wrapper<T> {
+	pub fn get(self: &Wrapper<T>) nothrow -> Int {
+		return 0;
+	}
+
+	fn _private_helper(self: &Wrapper<T>) nothrow -> Int {
+		return 42;
+	}
+}
+
+pub fn wrap_and_show<T>(item: T) nothrow -> Wrapper<T> {
+	return Wrapper(inner = move item);
+}
+"""
+
+
+def _build_signed_acme_vis_pkg(tmp_path: Path) -> _SignedPkg:
+	"""Build a signed acme.vis package with trait + generic struct."""
+	build = tmp_path / "pkg_build"
+	mod_dir = build / "acme" / "vis"
+	_write_file(mod_dir / "vis.drift", _ACME_VIS_SOURCE)
+
+	pkg_path = tmp_path / "pkgs" / "acme.vis.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "vis.drift"),
+		*_emit_pkg_args("acme.vis"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.vis package fixture"
+
+	keys = _gen_keys()
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+	core_trust_path = tmp_path / "core_trust.json"
+	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+	return _SignedPkg(
+		pkg_path=pkg_path,
+		pkg_root=pkg_path.parent,
+		keys=keys,
+		trust_path=trust_path,
+		core_trust_path=core_trust_path,
+	)
+
+
+def test_ext_nonlib_method_visibility(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""K25-guard: non-stdlib external package methods must be visible to
+	consumer code.  Proves K25 visibility fix is package-generic, not
+	std.*-specific.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	pkg = _build_signed_acme_vis_pkg(tmp_path)
+	_ = capsys.readouterr()
+
+	rc, payload, messages, _stderr = _compile_consumer(
+		tmp_path, capsys, pkg=pkg,
+		source="""\
+module main
+
+import acme.vis as vis;
+
+fn main() nothrow -> Int {
+	val w = vis.wrap_and_show(42);
+	return w.get();
+}
+""",
+	)
+	assert rc == 0, f"non-stdlib package method call should compile: {messages}"
+
+
+def test_ext_nonlib_private_method_rejected(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""K25-guard: non-stdlib external package private methods must still be
+	rejected.  Proves K25 broadening does not leak private APIs from
+	non-stdlib packages.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	pkg = _build_signed_acme_vis_pkg(tmp_path)
+	_ = capsys.readouterr()
+
+	rc, payload, messages, _stderr = _compile_consumer(
+		tmp_path, capsys, pkg=pkg,
+		source="""\
+module main
+
+import acme.vis as vis;
+
+fn main() nothrow -> Int {
+	val w = vis.wrap_and_show(42);
+	return w._private_helper();
+}
+""",
+	)
+	assert rc != 0, f"private method on non-stdlib package type should be rejected"
+	assert "_private_helper" in messages, f"expected rejection mentioning _private_helper, got: {messages}"

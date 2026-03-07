@@ -3882,6 +3882,36 @@ class TypeChecker:
 			)
 			return _dealias_zero_param(resolved, _seen=seen | {alias_key})
 
+		def _resolve_forward_nominal(ty: TypeId) -> TypeId:
+			"""K26: resolve FORWARD_NOMINAL TypeId to its concrete counterpart."""
+			td = self.type_table.get(ty)
+			if td.kind is not TypeKind.FORWARD_NOMINAL:
+				return ty
+			# Try exact module match first, then cross-module lookup for package types.
+			resolved_nom = (
+				self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+				or self.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+				or self.type_table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+			)
+			if resolved_nom is None or resolved_nom == ty:
+				resolved_nom = (
+					self.type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=td.name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=td.name)
+					or self.type_table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=td.name)
+				)
+			if resolved_nom is None or resolved_nom == ty:
+				return ty
+			if td.param_types:
+				canon_args = [_resolve_forward_nominal(a) for a in td.param_types]
+				try:
+					if resolved_nom in self.type_table.struct_bases:
+						return self.type_table.ensure_struct_instantiated(resolved_nom, canon_args)
+					if resolved_nom in getattr(self.type_table, "variant_schemas", {}):
+						return self.type_table.ensure_variant_instantiated(resolved_nom, canon_args)
+				except (ValueError, KeyError):
+					return ty
+			return resolved_nom
+
 		def _struct_base_and_args(ty: TypeId) -> tuple[TypeId, list[TypeId]]:
 			inst = self.type_table.get_struct_instance(ty)
 			if inst is not None:
@@ -3892,6 +3922,13 @@ class TypeChecker:
 			td = self.type_table.get(ty)
 			if td.kind is TypeKind.ARRAY and td.param_types:
 				return self.type_table.array_base_id(), [td.param_types[0]]
+			# K26: FORWARD_NOMINAL types from package-consumer parsing may not
+			# have been resolved to their concrete struct/variant counterparts.
+			# Resolve them here so method lookup can find generic impl methods.
+			if td.kind is TypeKind.FORWARD_NOMINAL:
+				resolved = _resolve_forward_nominal(ty)
+				if resolved != ty:
+					return _struct_base_and_args(resolved)
 			if td.kind is TypeKind.STRUCT:
 				param_ids = self.type_table.get_struct_type_param_ids(ty)
 				if param_ids:

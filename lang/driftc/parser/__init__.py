@@ -1448,6 +1448,7 @@ def parse_drift_workspace_to_hir(
 	module_paths: list[Path] | None = None,
 	external_module_exports: dict[str, dict[str, object]] | None = None,
 	external_module_packages: dict[str, str] | None = None,
+	external_exception_schemas: dict[str, tuple[str, list[str]]] | None = None,
 	package_id: str | None = None,
 	stdlib_root: Path | None = None,
 	test_build_only: bool = False,
@@ -3003,6 +3004,15 @@ def parse_drift_workspace_to_hir(
 	shared_type_table.module_packages.setdefault("lang.core", "lang.core" if has_stdlib else local_pkg)
 	shared_type_table.module_packages.setdefault("lang.__internal", local_pkg)
 	_prime_builtins(shared_type_table)
+	# Pre-populate exception schemas from loaded packages so that exception types
+	# referenced in function signatures (e.g. `e: err.ResultError`) are resolved
+	# as Error rather than FORWARD_NOMINAL during signature resolution.
+	if external_exception_schemas:
+		prev_exc = getattr(shared_type_table, "exception_schemas", None)
+		if not isinstance(prev_exc, dict):
+			prev_exc = {}
+		prev_exc.update(external_exception_schemas)
+		shared_type_table.exception_schemas = prev_exc
 	# Pre-declare all nominal type names across the workspace before lowering any
 	# individual module.
 	#

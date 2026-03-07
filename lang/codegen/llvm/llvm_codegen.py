@@ -910,7 +910,7 @@ class LlvmModuleBuilder:
 		"""Declare and cache a named FnResult type for the given ok payload."""
 		if ok_key in self._fnresult_types_by_key:
 			return self._fnresult_types_by_key[ok_key]
-		type_name = name or f"%FnResult_{ok_key}_Error"
+		type_name = name or f"%FnResult_{ok_key.lstrip('%')}_Error"
 		emit_ok_llty = self._llty(ok_llty)
 		self.type_decls.append(f"{type_name} = type {{ i1, {emit_ok_llty}, {DRIFT_ERROR_PTR} }}")
 		self._fnresult_types_by_key[ok_key] = type_name
@@ -3604,8 +3604,13 @@ class _FuncBuilder:
 			ptr_val = self._map_value(instr.args[0])
 			len_val = self._map_value(instr.args[1])
 			self.module.needs_string_from_utf8_bytes = True
-			self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})")
-			self.value_types[dest] = DRIFT_STRING_TYPE
+			if instr.can_throw:
+				raw_str = self._fresh("sfub_raw")
+				self.lines.append(f"  {raw_str} = call {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})")
+				self._wrap_ok_fnresult(raw_str, DRIFT_STRING_TYPE, dest, hint="sfub_ok")
+			else:
+				self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_from_utf8_bytes(i8* {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})")
+				self.value_types[dest] = DRIFT_STRING_TYPE
 			return
 		if instr.fn_id.module == "std.meta":
 			if instr.fn_id.name == "caller":
@@ -3625,12 +3630,21 @@ class _FuncBuilder:
 				line_n = int(line_n) if isinstance(line_n, int) else 0
 				module_v = self._emit_string_literal_value(module_s)
 				file_v = self._emit_string_literal_value(file_s)
-				tmp0 = self._fresh("caller0")
-				self.lines.append(f"  {tmp0} = insertvalue {self._llty(ret_llty)} zeroinitializer, {DRIFT_STRING_TYPE} {module_v}, 0")
-				tmp1 = self._fresh("caller1")
-				self.lines.append(f"  {tmp1} = insertvalue {self._llty(ret_llty)} {tmp0}, {DRIFT_STRING_TYPE} {file_v}, 1")
-				self.lines.append(f"  {dest} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
-				self.value_types[dest] = ret_llty
+				if instr.can_throw:
+					raw_caller = self._fresh("caller_raw")
+					tmp0 = self._fresh("caller0")
+					self.lines.append(f"  {tmp0} = insertvalue {self._llty(ret_llty)} zeroinitializer, {DRIFT_STRING_TYPE} {module_v}, 0")
+					tmp1 = self._fresh("caller1")
+					self.lines.append(f"  {tmp1} = insertvalue {self._llty(ret_llty)} {tmp0}, {DRIFT_STRING_TYPE} {file_v}, 1")
+					self.lines.append(f"  {raw_caller} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
+					self._wrap_ok_fnresult(raw_caller, ret_llty, dest, hint="caller_ok")
+				else:
+					tmp0 = self._fresh("caller0")
+					self.lines.append(f"  {tmp0} = insertvalue {self._llty(ret_llty)} zeroinitializer, {DRIFT_STRING_TYPE} {module_v}, 0")
+					tmp1 = self._fresh("caller1")
+					self.lines.append(f"  {tmp1} = insertvalue {self._llty(ret_llty)} {tmp0}, {DRIFT_STRING_TYPE} {file_v}, 1")
+					self.lines.append(f"  {dest} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
+					self.value_types[dest] = ret_llty
 				return
 			if instr.fn_id.name == "compiler_info":
 				if len(instr.args) != 0:
@@ -3640,7 +3654,12 @@ class _FuncBuilder:
 				payload = self.module._compiler_provenance_payload
 				if not payload:
 					raise NotImplementedError("LLVM codegen v1: compiler_info requires provenance (emit_compiler_provenance not called)")
-				self._emit_string_literal_value(payload, dest_name=dest)
+				if instr.can_throw:
+					raw = self._fresh("ci_raw")
+					self._emit_string_literal_value(payload, dest_name=raw)
+					self._wrap_ok_fnresult(raw, DRIFT_STRING_TYPE, dest, hint="ci_ok")
+				else:
+					self._emit_string_literal_value(payload, dest_name=dest)
 				return
 		if instr.fn_id.module == "lang.thread":
 			if instr.fn_id.name == "vt_spawn":
@@ -3660,10 +3679,17 @@ class _FuncBuilder:
 				cb_addr = self._fresh("cb_addr")
 				self.lines.append(f"  {cb_addr} = alloca {self._llty(cb_llty)}")
 				self.lines.append(f"  store {self._llty(cb_llty)} {cb_val}, {self._llty(cb_llty)}* {cb_addr}")
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_spawn({self._llty(cb_llty)}* {cb_addr}, {self._llty(DRIFT_INT_TYPE)} {exec_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("spawn_raw")
+					self.lines.append(
+						f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_spawn({self._llty(cb_llty)}* {cb_addr}, {self._llty(DRIFT_INT_TYPE)} {exec_val})"
+					)
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="spawn_ok")
+				else:
+					self.lines.append(
+						f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_spawn({self._llty(cb_llty)}* {cb_addr}, {self._llty(DRIFT_INT_TYPE)} {exec_val})"
+					)
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_join":
 				if len(instr.args) != 1:
@@ -3671,7 +3697,9 @@ class _FuncBuilder:
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_join({self._llty(DRIFT_INT_TYPE)} {vt_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vj_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_join returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_join_timeout":
@@ -3682,10 +3710,17 @@ class _FuncBuilder:
 				vt_val = self._map_value(instr.args[0])
 				timeout_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_join_timeout({self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {timeout_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("jt_raw")
+					self.lines.append(
+						f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_join_timeout({self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {timeout_val})"
+					)
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="jt_ok")
+				else:
+					self.lines.append(
+						f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_join_timeout({self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {timeout_val})"
+					)
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_is_completed":
 				if len(instr.args) != 1:
@@ -3694,10 +3729,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: vt_is_completed result must be captured")
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_completed({self._llty(DRIFT_INT_TYPE)} {vt_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("vic_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_completed({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="vic_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_completed({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_cancel":
 				if len(instr.args) != 1:
@@ -3706,10 +3744,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: vt_cancel result must be captured")
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_cancel({self._llty(DRIFT_INT_TYPE)} {vt_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("vc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_cancel({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="vc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_cancel({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_drop":
 				if len(instr.args) != 1:
@@ -3717,7 +3758,9 @@ class _FuncBuilder:
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_drop({self._llty(DRIFT_INT_TYPE)} {vt_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vd_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_drop returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_current":
@@ -3726,8 +3769,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: vt_current result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("vtc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="vtc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_park":
 				if len(instr.args) != 1:
@@ -3735,7 +3783,9 @@ class _FuncBuilder:
 				reason_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_park({self._llty(DRIFT_INT_TYPE)} {reason_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vp_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_park_until":
@@ -3744,7 +3794,9 @@ class _FuncBuilder:
 				deadline_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_park_until({self._llty(DRIFT_INT_TYPE)} {deadline_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vpu_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_unpark":
@@ -3753,24 +3805,38 @@ class _FuncBuilder:
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)} {vt_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vu_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_unpark returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "now_ms":
+				self.module.needs_thread_runtime = True
 				if len(instr.args) != 0:
 					raise NotImplementedError(f"LLVM codegen v1: now_ms expects 0 args, got {len(instr.args)}")
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: now_ms result must be captured")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_ms = self._fresh("nms_raw")
+					self.lines.append(f"  {raw_ms} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+					self._wrap_ok_fnresult(raw_ms, DRIFT_INT_TYPE, dest, hint="nms_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "now_utc_ms":
+				self.module.needs_thread_runtime = True
 				if len(instr.args) != 0:
 					raise NotImplementedError(f"LLVM codegen v1: now_utc_ms expects 0 args, got {len(instr.args)}")
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_utc = self._fresh("nutc_raw")
+					self.lines.append(f"  {raw_utc} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self._wrap_ok_fnresult(raw_utc, DRIFT_INT_TYPE, dest, hint="nutc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_default_get":
 				if len(instr.args) != 0:
@@ -3778,8 +3844,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: exec_default_get result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_exec = self._fresh("edg_raw")
+					self.lines.append(f"  {raw_exec} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
+					self._wrap_ok_fnresult(raw_exec, DRIFT_INT_TYPE, dest, hint="edg_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_default_set":
 				if len(instr.args) != 1:
@@ -3787,7 +3858,9 @@ class _FuncBuilder:
 				exec_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)} {exec_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="eds_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: exec_default_set returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_create":
@@ -3800,15 +3873,17 @@ class _FuncBuilder:
 				saturation = self._map_value(instr.args[4])
 				stack_bytes = self._map_value(instr.args[5])
 				self.module.needs_thread_runtime = True
+				_ec_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
 				if dest is None:
-					self.lines.append(
-						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
-					)
+					self.lines.append(f"  {_ec_call}")
 					return
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)} {min_threads}, {self._llty(DRIFT_INT_TYPE)} {max_threads}, {self._llty(DRIFT_INT_TYPE)} {queue_limit}, {self._llty(DRIFT_INT_TYPE)} {timeout_ms}, {self._llty(DRIFT_INT_TYPE)} {saturation}, {self._llty(DRIFT_INT_TYPE)} {stack_bytes})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ec_raw")
+					self.lines.append(f"  {raw} = {_ec_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ec_ok")
+				else:
+					self.lines.append(f"  {dest} = {_ec_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_submit":
 				if len(instr.args) != 2:
@@ -3816,26 +3891,30 @@ class _FuncBuilder:
 				exec_val = self._map_value(instr.args[0])
 				vt_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
+				_es_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)} {exec_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
 				if dest is None:
-					self.lines.append(
-						f"  call {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)} {exec_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
-					)
+					self.lines.append(f"  {_es_call}")
 					return
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)} {exec_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("es_raw")
+					self.lines.append(f"  {raw} = {_es_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="es_ok")
+				else:
+					self.lines.append(f"  {dest} = {_es_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_submit_test_override":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: exec_submit_test_override expects 1 arg, got {len(instr.args)}")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: exec_submit_test_override returns Void; result cannot be captured")
 				code_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(
 					f"  call void @drift_exec_submit_test_override({self._llty(DRIFT_INT_TYPE)} {code_val})"
 				)
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="esto_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: exec_submit_test_override returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_get_running":
 				if len(instr.args) != 1:
@@ -3844,8 +3923,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: exec_get_running result must be captured")
 				exec_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_get_running({self._llty(DRIFT_INT_TYPE)} {exec_val})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("egr_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_get_running({self._llty(DRIFT_INT_TYPE)} {exec_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="egr_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_get_running({self._llty(DRIFT_INT_TYPE)} {exec_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "reactor_default_get":
 				if len(instr.args) != 0:
@@ -3853,8 +3937,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: reactor_default_get result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("rdg_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rdg_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "reactor_default_set":
 				if len(instr.args) != 1:
@@ -3862,7 +3951,9 @@ class _FuncBuilder:
 				reactor_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_reactor_default_set({self._llty(DRIFT_INT_TYPE)} {reactor_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="rds_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: reactor_default_set returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "reactor_register_io":
@@ -3876,7 +3967,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  call void @drift_reactor_register_io({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {interest_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val}, {self._llty(DRIFT_INT_TYPE)} {deadline_val})"
 				)
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="rri_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: reactor_register_io returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "reactor_register_timer":
@@ -3888,7 +3981,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  call void @drift_reactor_register_timer({self._llty(DRIFT_INT_TYPE)} {deadline_val}, {self._llty(DRIFT_INT_TYPE)} {vt_val})"
 				)
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="rrt_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: reactor_register_timer returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "reactor_check_pending":
@@ -3899,8 +3994,13 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: reactor_check_pending result must be captured")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("rcp_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rcp_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "reactor_io_charge":
 				if len(instr.args) != 3:
@@ -3911,8 +4011,13 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: reactor_io_charge result must be captured")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ric_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ric_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_eventfd_create":
 				if len(instr.args) != 0:
@@ -3920,8 +4025,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: test_eventfd_create result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("tec_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="tec_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_eventfd_write":
 				if len(instr.args) != 2:
@@ -3932,7 +4042,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  call void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {val_val})"
 				)
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="tew_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: test_eventfd_write returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "test_timerfd_create":
@@ -3941,8 +4053,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: test_timerfd_create result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ttc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ttc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_timerfd_set":
 				if len(instr.args) != 2:
@@ -3953,7 +4070,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  call void @drift_test_timerfd_set({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {delay_val})"
 				)
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="tts_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: test_timerfd_set returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "io_open":
@@ -3965,10 +4084,14 @@ class _FuncBuilder:
 				flags_val = self._map_value(instr.args[1])
 				mode_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE} {path_val}, {self._llty(DRIFT_INT_TYPE)} {flags_val}, {self._llty(DRIFT_INT_TYPE)} {mode_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_io_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE} {path_val}, {self._llty(DRIFT_INT_TYPE)} {flags_val}, {self._llty(DRIFT_INT_TYPE)} {mode_val})"
+				if instr.can_throw:
+					raw = self._fresh("ioo_raw")
+					self.lines.append(f"  {raw} = {_io_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ioo_ok")
+				else:
+					self.lines.append(f"  {dest} = {_io_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "io_close":
 				if len(instr.args) != 1:
@@ -3977,10 +4100,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: io_close result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ioc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ioc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "io_read":
 				if len(instr.args) != 3:
@@ -3991,10 +4117,14 @@ class _FuncBuilder:
 				buf_val = self._map_value(instr.args[1])
 				len_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_ir_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				if instr.can_throw:
+					raw = self._fresh("ior_raw")
+					self.lines.append(f"  {raw} = {_ir_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ior_ok")
+				else:
+					self.lines.append(f"  {dest} = {_ir_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "io_write":
 				if len(instr.args) != 3:
@@ -4005,10 +4135,14 @@ class _FuncBuilder:
 				buf_val = self._map_value(instr.args[1])
 				len_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_iw_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)} {fd_val}, i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				if instr.can_throw:
+					raw = self._fresh("iow_raw")
+					self.lines.append(f"  {raw} = {_iw_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="iow_ok")
+				else:
+					self.lines.append(f"  {dest} = {_iw_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "io_errno":
 				if len(instr.args) != 0:
@@ -4016,8 +4150,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: io_errno result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ioe_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ioe_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "io_set_nonblocking":
 				if len(instr.args) != 1:
@@ -4026,10 +4165,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: io_set_nonblocking result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("iosn_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="iosn_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "runtime_global_registry_ptr":
 				if len(instr.args) != 0:
@@ -4037,8 +4179,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: runtime_global_registry_ptr result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call i8* @drift_runtime_global_registry_ptr()")
-				self.value_types[dest] = "i8*"
+				if instr.can_throw:
+					raw = self._fresh("rgrp_raw")
+					self.lines.append(f"  {raw} = call i8* @drift_runtime_global_registry_ptr()")
+					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rgrp_ok")
+				else:
+					self.lines.append(f"  {dest} = call i8* @drift_runtime_global_registry_ptr()")
+					self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "runtime_thread_registry_ptr":
 				if len(instr.args) != 0:
@@ -4046,8 +4193,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_ptr result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_ptr()")
-				self.value_types[dest] = "i8*"
+				if instr.can_throw:
+					raw = self._fresh("rtrp_raw")
+					self.lines.append(f"  {raw} = call i8* @drift_runtime_thread_registry_ptr()")
+					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rtrp_ok")
+				else:
+					self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_ptr()")
+					self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "runtime_registry_set":
 				if len(instr.args) != 3:
@@ -4060,8 +4212,14 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				dropper_addr = self._ensure_iface_tmp_alloca()
 				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_rrs_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})"
+				if instr.can_throw:
+					raw = self._fresh("rrs_raw")
+					self.lines.append(f"  {raw} = {_rrs_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rrs_ok")
+				else:
+					self.lines.append(f"  {dest} = {_rrs_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "runtime_thread_registry_set":
 				if len(instr.args) != 3:
@@ -4074,8 +4232,14 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				dropper_addr = self._ensure_iface_tmp_alloca()
 				self.lines.append(f"  store {DRIFT_IFACE_TYPE} {dropper_val}, {DRIFT_IFACE_TYPE}* {dropper_addr}")
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_rtrs_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_set(i64 {tag_val}, i8* {ptr_val}, {DRIFT_IFACE_TYPE}* byval({DRIFT_IFACE_TYPE}) align {self.module.word_bits // 8} {dropper_addr})"
+				if instr.can_throw:
+					raw = self._fresh("rtrs_raw")
+					self.lines.append(f"  {raw} = {_rtrs_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rtrs_ok")
+				else:
+					self.lines.append(f"  {dest} = {_rtrs_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "runtime_registry_contains":
 				if len(instr.args) != 1:
@@ -4084,8 +4248,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: runtime_registry_contains result must be captured")
 				tag_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64 {tag_val})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("rrc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64 {tag_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rrc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_contains(i64 {tag_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "runtime_thread_registry_contains":
 				if len(instr.args) != 1:
@@ -4094,8 +4263,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_contains result must be captured")
 				tag_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_contains(i64 {tag_val})")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("rtrc_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_contains(i64 {tag_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="rtrc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_runtime_thread_registry_contains(i64 {tag_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "runtime_registry_get":
 				if len(instr.args) != 1:
@@ -4104,8 +4278,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: runtime_registry_get result must be captured")
 				tag_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
-				self.value_types[dest] = "i8*"
+				if instr.can_throw:
+					raw = self._fresh("rrg_raw")
+					self.lines.append(f"  {raw} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
+					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rrg_ok")
+				else:
+					self.lines.append(f"  {dest} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
+					self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "runtime_thread_registry_get":
 				if len(instr.args) != 1:
@@ -4114,8 +4293,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: runtime_thread_registry_get result must be captured")
 				tag_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
-				self.value_types[dest] = "i8*"
+				if instr.can_throw:
+					raw = self._fresh("rtrg_raw")
+					self.lines.append(f"  {raw} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
+					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rtrg_ok")
+				else:
+					self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
+					self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "console_write":
 				if len(instr.args) != 1:
@@ -4124,8 +4308,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_write({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_write returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cw_ok")
 				return
 			if instr.fn_id.name == "console_writeln":
 				if len(instr.args) != 1:
@@ -4134,8 +4318,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_writeln({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_writeln returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cwl_ok")
 				return
 			if instr.fn_id.name == "console_eprint":
 				if len(instr.args) != 1:
@@ -4144,8 +4328,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_eprint({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_eprint returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cep_ok")
 				return
 			if instr.fn_id.name == "console_eprintln":
 				if len(instr.args) != 1:
@@ -4154,8 +4338,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_eprintln({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_eprintln returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cepl_ok")
 				return
 			if instr.fn_id.name == "net_listen":
 				if len(instr.args) != 2:
@@ -4165,10 +4349,14 @@ class _FuncBuilder:
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_nl_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				if instr.can_throw:
+					raw = self._fresh("nl_raw")
+					self.lines.append(f"  {raw} = {_nl_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nl_ok")
+				else:
+					self.lines.append(f"  {dest} = {_nl_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_accept":
 				if len(instr.args) != 1:
@@ -4177,10 +4365,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: net_accept result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("na_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="na_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_connect":
 				if len(instr.args) != 2:
@@ -4190,10 +4381,14 @@ class _FuncBuilder:
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_nc_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				if instr.can_throw:
+					raw = self._fresh("nc_raw")
+					self.lines.append(f"  {raw} = {_nc_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nc_ok")
+				else:
+					self.lines.append(f"  {dest} = {_nc_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_listener_port":
 				if len(instr.args) != 1:
@@ -4202,10 +4397,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: net_listener_port result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("nlp_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nlp_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_set_nodelay":
 				if len(instr.args) != 2:
@@ -4215,10 +4413,14 @@ class _FuncBuilder:
 				fd_val = self._map_value(instr.args[0])
 				enabled_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {enabled_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_nsn_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {enabled_val})"
+				if instr.can_throw:
+					raw = self._fresh("nsn_raw")
+					self.lines.append(f"  {raw} = {_nsn_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nsn_ok")
+				else:
+					self.lines.append(f"  {dest} = {_nsn_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_get_nodelay":
 				if len(instr.args) != 1:
@@ -4227,10 +4429,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: net_get_nodelay result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("ngn_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="ngn_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_udp_local_port":
 				if len(instr.args) != 1:
@@ -4239,10 +4444,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: net_udp_local_port result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("nulp_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nulp_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_udp_local_port":
 				if len(instr.args) != 1:
@@ -4251,10 +4459,13 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: net_udp_local_port result must be captured")
 				fd_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw = self._fresh("nulp_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nulp_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_udp_bind":
 				if len(instr.args) != 2:
@@ -4264,10 +4475,14 @@ class _FuncBuilder:
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_nub_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				if instr.can_throw:
+					raw = self._fresh("nub_raw")
+					self.lines.append(f"  {raw} = {_nub_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nub_ok")
+				else:
+					self.lines.append(f"  {dest} = {_nub_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_udp_bind_v6":
 				if len(instr.args) != 2:
@@ -4277,10 +4492,14 @@ class _FuncBuilder:
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind_v6({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
-				)
-				self.value_types[dest] = DRIFT_INT_TYPE
+				_nubv_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_bind_v6({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				if instr.can_throw:
+					raw = self._fresh("nubv_raw")
+					self.lines.append(f"  {raw} = {_nubv_call}")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="nubv_ok")
+				else:
+					self.lines.append(f"  {dest} = {_nubv_call}")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_udp_send_to":
 				if len(instr.args) != 5:
@@ -4755,8 +4974,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: now_ms result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_ms = self._fresh("nms_raw")
+					self.lines.append(f"  {raw_ms} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+					self._wrap_ok_fnresult(raw_ms, DRIFT_INT_TYPE, dest, hint="nms_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "now_utc_ms":
 				if len(instr.args) != 0:
@@ -4764,8 +4988,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_utc = self._fresh("nutc_raw")
+					self.lines.append(f"  {raw_utc} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self._wrap_ok_fnresult(raw_utc, DRIFT_INT_TYPE, dest, hint="nutc_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_eventfd_create":
 				if len(instr.args) != 0:
@@ -4891,8 +5120,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_write({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_write returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cw_ok")
 				return
 			if instr.fn_id.name == "console_writeln":
 				if len(instr.args) != 1:
@@ -4901,8 +5130,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_writeln({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_writeln returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cwl_ok")
 				return
 			if instr.fn_id.name == "console_eprint":
 				if len(instr.args) != 1:
@@ -4911,8 +5140,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_eprint({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_eprint returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cep_ok")
 				return
 			if instr.fn_id.name == "console_eprintln":
 				if len(instr.args) != 1:
@@ -4921,8 +5150,8 @@ class _FuncBuilder:
 				self.module.needs_console_runtime = True
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_console_eprintln({DRIFT_STRING_TYPE} {text_val})")
-				if dest:
-					raise NotImplementedError("LLVM codegen v1: console_eprintln returns Void; result cannot be captured")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="cepl_ok")
 				return
 			if instr.fn_id.name == "net_listen":
 				if len(instr.args) != 2:
@@ -5005,7 +5234,9 @@ class _FuncBuilder:
 				reason_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_park({self._llty(DRIFT_INT_TYPE)} {reason_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vp_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_park_until":
@@ -5014,7 +5245,9 @@ class _FuncBuilder:
 				deadline_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_park_until({self._llty(DRIFT_INT_TYPE)} {deadline_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vpu_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_unpark":
@@ -5023,7 +5256,9 @@ class _FuncBuilder:
 				vt_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)} {vt_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vu_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_unpark returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_default_get":
@@ -5032,8 +5267,13 @@ class _FuncBuilder:
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: exec_default_get result must be captured")
 				self.module.needs_thread_runtime = True
-				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
-				self.value_types[dest] = DRIFT_INT_TYPE
+				if instr.can_throw:
+					raw_exec = self._fresh("edg_raw")
+					self.lines.append(f"  {raw_exec} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
+					self._wrap_ok_fnresult(raw_exec, DRIFT_INT_TYPE, dest, hint="edg_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()")
+					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_default_set":
 				if len(instr.args) != 1:
@@ -5041,7 +5281,9 @@ class _FuncBuilder:
 				exec_val = self._map_value(instr.args[0])
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  call void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)} {exec_val})")
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="eds_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: exec_default_set returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_create":
@@ -7156,6 +7398,28 @@ class _FuncBuilder:
 		self.tmp_counter += 1
 		return f"%{hint}{self.tmp_counter}"
 
+	def _wrap_ok_fnresult(self, raw_val: str | None, ok_llty: str, dest: str, *, hint: str = "okwrap") -> None:
+		"""Wrap a raw intrinsic result into an ok FnResult at `dest`.
+
+		For void results, pass raw_val=None and ok_llty="i8" (Void uses i8 placeholder).
+		Emits insertvalue chain: { i1 0, <ok_val>, %DriftError* null }.
+		"""
+		ok_key = ok_llty
+		for lbl, lt in [("Int", self._llty(DRIFT_INT_TYPE)), ("String", DRIFT_STRING_TYPE), ("Void", "i8")]:
+			if self._llty(ok_llty) == self._llty(lt):
+				ok_key = lbl
+				break
+		fnres_llty = self.module._declare_fnresult_named_type(ok_key, ok_llty)
+		tmp0 = self._fresh(f"{hint}0")
+		self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		if raw_val is not None:
+			tmp1 = self._fresh(f"{hint}1")
+			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {self._llty(ok_llty)} {raw_val}, 1")
+			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} null, 2")
+		else:
+			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp0}, {DRIFT_ERROR_PTR} null, 2")
+		self.value_types[dest] = fnres_llty
+
 	def _map_value(self, mir_id: str) -> str:
 		# Resolve aliases (AssignSSA) before mapping to an LLVM name.
 		root = mir_id
@@ -8078,6 +8342,7 @@ class _FuncBuilder:
 					lines.append(f"  {arr_ptr} = bitcast i8* {arr_data} to {inner_llty}*")
 					helper = self._ensure_array_drop_helper(inner_elem)
 					lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} {arr_len}, {inner_llty}* {arr_ptr})")
+				self.module.needs_array_helpers = True
 				lines.append(f"  call void @drift_free_array(i8* {arr_data})")
 				return
 			if td.kind is TypeKind.STRUCT:

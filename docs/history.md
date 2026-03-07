@@ -1,5 +1,32 @@
 # Drift development history
 
+## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
+- Continued Option B structural work to reduce local vs package-consumer divergence:
+  - extracted shared `CompilationUnit`/`_emit_codegen` pipeline pieces in `lang/driftc/driftc.py`,
+  - moved package-consumer unit assembly into `_build_package_consumer_unit`,
+  - extended package BFS reachability to include `ConstructIface` call edges and seeded required destroy paths via shared resolver.
+- Hardened package TypeId remap path:
+  - completed `_remap_mir_func_typeids` coverage for previously missing instructions (`CastScalar`, `ConstructIface`, `ConstructIfaceValue`, `CallIndirect`, `CallIface`),
+  - added `_validate_remap_completeness` with stale-key + missing-key detection and package type-universe checks (decoded from package type tables),
+  - included `fn.local_types` in remap validation.
+- Improved package signature/call registration behavior:
+  - unified callable-registry registration helper,
+  - preserved wrapper exclusion and improved monomorphized/generic dedup handling with normalized receiver matching.
+- Added package-consumer e2e infrastructure and new pinned regressions:
+  - new runner `lang/tests/codegen/e2e/pkg_consumer_runner.py`,
+  - new `just` targets: `ext-e2e-report`, `ext-e2e-smoke`, `ext-e2e-asan`,
+  - new package-path visibility/trait-scope regressions under `lang/tests/codegen/e2e/`.
+- K24/K25 follow-up hardening:
+  - preserved `HMethodCall.origin` through stage1 rewriters,
+  - restored trait candidate visibility gating while keeping explicit compiler-origin bypasses (`wrapper_call`, `for_iter`, `for_next`),
+  - documented current external trait-scope/module-visibility fallback as temporary with DMIR-v1 removal target.
+- Additional package/codegen fixes landed in this WIP window:
+  - intrinsic `can_throw` FnResult wrapping expanded and centralized in LLVM codegen,
+  - fixed package `FORWARD_NOMINAL` canonicalization/impl-type-parameter propagation issues affecting generic method/trait resolution,
+  - added primitive `Copy` structural fallback for deterministic scalar/pointer/function/void/ref cases.
+- Status snapshot from external-consumer reporting improved substantially during this window (from low-30% range to mid/high-60% raw, low/mid-70% adjusted), with `ext-e2e-smoke` remaining green at latest checkpoints.
+- No compiler version bump in this WIP entry (versioning deferred until stabilization point).
+
 ## 2026-03-05 (K18 package-consumer preamble reachability correction)
 - Fixed deploy/package-consumer codegen regression where forced BFS seeding of entry-wrapper preamble dependencies pulled in unsupported heavy transitive generic instantiations (e.g. `std.runtime::GlobalRegistry::set<...>`), causing LLVM lowering failures in deploy smoke.
 - Removed forced preamble dependency seeding from package BFS in `lang/driftc/driftc.py`; entry-wrapper preamble emission now depends on actual lowered MIR availability.

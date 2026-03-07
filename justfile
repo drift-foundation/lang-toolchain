@@ -206,6 +206,19 @@ ext-consumer-test-nightly:
 		lang/tests/driver/test_deploy_compiler_hunk_regressions.py \
 		lang/tests/driver/test_deploy_stdlib_package.py
 
+# Package-consumer e2e: report-only (all stdlib-importing tests through signed package path).
+ext-e2e-report:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --summarize
+
+# Package-consumer e2e: blocking smoke subset (CI gate).
+ext-e2e-smoke:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py \
+		--blocking --only-cases result_ok_array_match_move_no_double_free,array_push_move_non_copy_implicit,array_pop_move_out_non_copy,match_wildcard_owned_payload_drop,abi_entrypoint_cross_module_call,abi_entrypoint_cross_module_struct_ok,std_core_string_from_utf8_bytes_api
+
+# Package-consumer e2e: ASAN variant (nightly).
+ext-e2e-asan:
+	DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --summarize
+
 # Build examples (lang.driftc)
 make-example EXAMPLE:
 	#!/usr/bin/env bash

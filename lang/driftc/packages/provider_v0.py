@@ -670,6 +670,7 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 			type_variants: list[str] = []
 			type_excs: list[str] = []
 			type_interfaces: list[str] = []
+			type_aliases: list[str] = []
 			if isinstance(types, dict):
 				if isinstance(types.get("structs"), list):
 					type_structs = [str(x) for x in types.get("structs") if isinstance(x, str)]
@@ -679,6 +680,8 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 					type_excs = [str(x) for x in types.get("exceptions") if isinstance(x, str)]
 				if isinstance(types.get("interfaces"), list):
 					type_interfaces = [str(x) for x in types.get("interfaces") if isinstance(x, str)]
+				if isinstance(types.get("aliases"), list):
+					type_aliases = [str(x) for x in types.get("aliases") if isinstance(x, str)]
 			out[mid] = {
 				"values": set(values) if isinstance(values, list) else set(),
 				"types": {
@@ -686,6 +689,7 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 					"variants": set(type_variants),
 					"exceptions": set(type_excs),
 					"interfaces": set(type_interfaces),
+					"aliases": set(type_aliases),
 				},
 				"traits": set(traits) if isinstance(traits, list) else set(),
 				"consts": set(consts) if isinstance(consts, list) else set(),

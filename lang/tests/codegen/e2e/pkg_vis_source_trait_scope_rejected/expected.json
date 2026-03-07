@@ -1,0 +1,10 @@
+{
+  "description": "K25-guard: source module must still fail when calling trait method iter() without 'use trait Iterable' in scope. K25 broadening only applies to external package module re-instantiation, not user source code.",
+  "module_paths": ["."],
+  "diagnostics": [
+    {
+      "message_contains": "iter"
+    }
+  ],
+  "exit_code": 1
+}

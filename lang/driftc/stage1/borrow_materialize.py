@@ -291,6 +291,7 @@ class BorrowMaterializeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				origin=getattr(expr, "origin", None),
 				loc=getattr(expr, "loc", Span()),
 			)
 			mc.callsite_id = getattr(expr, "callsite_id", None)

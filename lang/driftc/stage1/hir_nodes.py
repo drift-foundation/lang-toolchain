@@ -397,6 +397,7 @@ class HMethodCall(HExpr):
 	kwargs: List["HKwArg"] = field(default_factory=list)
 	type_args: Optional[list["HTypeExpr"]] = None
 	callsite_id: Optional[int] = None
+	origin: str | None = None
 	loc: Span = field(default_factory=Span)
 
 

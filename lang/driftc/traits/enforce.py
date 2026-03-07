@@ -483,16 +483,15 @@ def enforce_fn_requires(
 			if bindings:
 				for tp_id, ty_id in bindings.items():
 					tp_name = type_param_names.get(tp_id)
-					if tp_id in subjects or tp_name in subjects:
-						key = normalize_type_key(
-							type_key_from_typeid(type_table, ty_id),
-							module_name=module_name,
-							default_package=require_env.default_package,
-							module_packages=require_env.module_packages,
-						)
-						subst[tp_id] = key
-						if tp_name:
-							subst[tp_name] = key
+					key = normalize_type_key(
+						type_key_from_typeid(type_table, ty_id),
+						module_name=module_name,
+						default_package=require_env.default_package,
+						module_packages=require_env.module_packages,
+					)
+					subst[tp_id] = key
+					if tp_name:
+						subst[tp_name] = key
 				for tp in type_params:
 					ty_id = bindings.get(tp.id)
 					if ty_id is None:

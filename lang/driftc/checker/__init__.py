@@ -856,13 +856,20 @@ class Checker:
 		)
 
 	def _call_may_throw(self, callee_id: FunctionId, fn_infos: Mapping[FunctionId, FnInfo]) -> bool:
-		"""Determine if a call to `callee_id` may throw, based on FnInfo."""
+		"""Determine if a call to `callee_id` may throw, based on FnInfo.
+
+		For non-boundary calls this uses *inferred_may_throw* — the semantic
+		answer computed by walking the callee's body. FnSignature.declared_can_throw
+		is an ABI flag (True for all non-nothrow functions) and must not be
+		used to decide whether a call site actually throws.
+		"""
 		info = fn_infos.get(callee_id)
 		if info is None:
 			return False
-		# Prefer explicit declared_can_throw; fall back to inferred flag.
-		if info.declared_can_throw:
-			return True
+		# K30: Use inferred_may_throw for the semantic question.
+		# Only explicit `nothrow` (declared_can_throw=False on signature)
+		# can force non-throwing — and that's already handled by the
+		# boundary-call path in _function_may_throw.
 		return info.inferred_may_throw
 
 	def _is_boundary_call(
@@ -922,6 +929,20 @@ class Checker:
 						f"BUG: missing CallInfo for call during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})"
 					)
 				call_can_throw = bool(info.sig.can_throw)
+				# K30: For inline lambda calls, walk the lambda body directly
+				# instead of trusting the ABI-level can_throw (which may be
+				# conservatively True when the body only calls nothrow wrappers).
+				if call_can_throw and isinstance(expr.fn, H.HLambda):
+					lam = expr.fn
+					if lam.body_block is not None:
+						walk_block(lam.body_block, caught_events, catch_all)
+					if lam.body_expr is not None:
+						walk_expr(lam.body_expr, caught_events, catch_all)
+					for arg in expr.args:
+						walk_expr(arg, caught_events, catch_all)
+					for kw in getattr(expr, "kwargs", []) or []:
+						walk_expr(kw.value, caught_events, catch_all)
+					return
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					callee_id = info.target.symbol
 					if self._is_boundary_call(callee_id, current_fn, fn_infos):
@@ -938,6 +959,26 @@ class Checker:
 								)
 					elif call_can_throw:
 						call_can_throw = self._call_may_throw(callee_id, fn_infos)
+				elif call_can_throw and info.target.kind is getattr(CallTargetKind, "TRAIT", None):
+					# K30: For generic trait calls, check if the trait method is
+					# declared nothrow.  All impls must honour the nothrow contract,
+					# so if the trait method itself is nothrow, the call is nothrow.
+					trait_key = info.target.trait_key
+					method_name = info.target.method_name
+					if trait_key is not None and method_name is not None:
+						trait_module = getattr(trait_key, "module", None)
+						# Scan signatures for matching non-wrapper trait method in this module.
+						for _sid, _sig in self._signatures_by_id.items():
+							if getattr(_sig, "method_name", None) != method_name:
+								continue
+							if getattr(_sid, "module", None) != trait_module:
+								continue
+							if getattr(_sig, "is_wrapper", False):
+								continue
+							# Found a matching non-wrapper impl. Check declared_can_throw.
+							if _sig.declared_can_throw is False:
+								call_can_throw = False
+							break
 				if call_can_throw and not catch_all:
 					may_throw = True
 					if first_span is None:
@@ -962,20 +1003,18 @@ class Checker:
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					fn_info = fn_infos.get(info.target.symbol)
 					if call_can_throw and fn_info is not None:
-						if fn_info.signature is not None and fn_info.signature.declared_can_throw is not None:
-							# If target is an ABI wrapper, look through to
-							# the wrapped method's declared_can_throw.
-							wrapped_fn_id = getattr(fn_info.signature, "wraps_target_fn_id", None)
-							if wrapped_fn_id is not None:
-								wrapped_sig = self._signatures_by_id.get(wrapped_fn_id)
-								if wrapped_sig is not None and wrapped_sig.declared_can_throw is False:
-									call_can_throw = False
-								else:
-									call_can_throw = bool(fn_info.signature.declared_can_throw)
+						# K30: For non-boundary direct method calls, use
+						# inferred_may_throw (semantic answer). For ABI wrappers,
+						# look through to the wrapped method's annotation.
+						wrapped_fn_id = getattr(fn_info.signature, "wraps_target_fn_id", None) if fn_info.signature else None
+						if wrapped_fn_id is not None:
+							wrapped_sig = self._signatures_by_id.get(wrapped_fn_id)
+							if wrapped_sig is not None and wrapped_sig.declared_can_throw is False:
+								call_can_throw = False
 							else:
-								call_can_throw = bool(fn_info.signature.declared_can_throw)
-						elif fn_info.declared_can_throw is not None:
-							call_can_throw = bool(fn_info.declared_can_throw)
+								call_can_throw = fn_info.inferred_may_throw
+						else:
+							call_can_throw = fn_info.inferred_may_throw
 					elif call_can_throw and fn_info is None:
 						# Target not in fn_infos (package method or ABI
 						# wrapper).  Fall back to signature metadata,
@@ -1009,13 +1048,24 @@ class Checker:
 					raise AssertionError(
 						f"BUG: missing CallInfo for invoke during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})"
 					)
-				if info.sig.can_throw and not catch_all:
-					may_throw = True
-					if first_span is None:
-						first_span = Span.from_loc(getattr(expr, "loc", None))
-					if first_note is None:
-						first_note = "call may throw"
-				walk_expr(expr.callee, caught_events, catch_all)
+				# K30: For inline lambda invocations, the ABI-level can_throw
+				# may be conservatively True even when the body is semantically
+				# nothrow (e.g. lambda calls nothrow package wrappers).  Walk
+				# the lambda body directly so the walker can inspect each call.
+				if isinstance(expr.callee, H.HLambda):
+					lam = expr.callee
+					if lam.body_block is not None:
+						walk_block(lam.body_block, caught_events, catch_all)
+					if lam.body_expr is not None:
+						walk_expr(lam.body_expr, caught_events, catch_all)
+				else:
+					if info.sig.can_throw and not catch_all:
+						may_throw = True
+						if first_span is None:
+							first_span = Span.from_loc(getattr(expr, "loc", None))
+						if first_note is None:
+							first_note = "call may throw"
+					walk_expr(expr.callee, caught_events, catch_all)
 				for arg in expr.args:
 					walk_expr(arg, caught_events, catch_all)
 				for kw in getattr(expr, "kwargs", []) or []:
@@ -2421,6 +2471,27 @@ class Checker:
 				return False
 		return True
 
+	def _canonicalize_forward_nominal(self, ty: TypeId) -> TypeId:
+		"""K26: resolve FORWARD_NOMINAL TypeId to its concrete struct/variant counterpart."""
+		td = self._type_table.get(ty)
+		if td.kind is not TypeKind.FORWARD_NOMINAL:
+			return ty
+		resolved = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name) or self._type_table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+		if resolved is None or resolved == ty:
+			resolved = self._type_table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=td.name) or self._type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=td.name)
+		if resolved is None or resolved == ty:
+			return ty
+		if td.param_types:
+			canon_args = [self._canonicalize_forward_nominal(a) for a in td.param_types]
+			try:
+				if resolved in self._type_table.struct_bases:
+					return self._type_table.ensure_struct_instantiated(resolved, canon_args)
+				if resolved in getattr(self._type_table, "variant_schemas", {}):
+					return self._type_table.ensure_variant_instantiated(resolved, canon_args)
+			except (ValueError, KeyError):
+				return ty
+		return resolved
+
 	def check_call_signature(
 		self,
 		callee: FnInfo | FnSignature | "CallSig",
@@ -2490,6 +2561,18 @@ class Checker:
 				except Exception:
 					arg_def = None
 					param_def = None
+				# K26: FORWARD_NOMINAL types from package imports may differ in TypeId
+				# from their concrete struct/variant counterparts but represent the same
+				# type.  Resolve both sides and compare structurally.
+				if arg_def is not None and param_def is not None:
+					_a = arg_ty
+					_p = param_ty
+					if arg_def.kind is TypeKind.FORWARD_NOMINAL:
+						_a = self._canonicalize_forward_nominal(arg_ty)
+					if param_def.kind is TypeKind.FORWARD_NOMINAL:
+						_p = self._canonicalize_forward_nominal(param_ty)
+					if _a == _p:
+						continue
 				# Implicit reborrow: allow &mut T where &T is expected.
 				if (
 					arg_def is not None and param_def is not None

@@ -1,0 +1,6 @@
+{
+  "description": "K26: interface impl vtable must be populated for external package trait impls (Sink for StdErrSink). Codegen needs remapped target_type_ids in external_impl_metas.",
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": ""
+}

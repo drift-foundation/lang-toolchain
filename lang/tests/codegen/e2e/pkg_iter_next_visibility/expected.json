@@ -1,0 +1,7 @@
+{
+  "description": "K24: trait method iter/next must be visible through package boundary",
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": "",
+  "stdout": ""
+}

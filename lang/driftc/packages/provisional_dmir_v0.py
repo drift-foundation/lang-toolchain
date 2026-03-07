@@ -394,6 +394,17 @@ def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
 			"fn_throws": expr.fn_throws_raw(),
 		}
 
+	def _encode_alias_target(expr: object) -> dict[str, Any]:
+		"""Encode a type alias target (parser TypeExpr or GenericTypeExpr) for serialization."""
+		name = getattr(expr, "name", "") or ""
+		args = getattr(expr, "args", []) or []
+		module_id = getattr(expr, "module_id", None)
+		return {
+			"name": name,
+			"args": [_encode_alias_target(a) for a in args],
+			"module_id": module_id,
+		}
+
 	def _encode_variant_schema(schema: Any) -> dict[str, Any]:
 		# `VariantSchema` / `VariantArmSchema` / `VariantFieldSchema` are dataclasses,
 		# but we encode them manually so the payload stays stable even if we later
@@ -516,6 +527,20 @@ def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
 			}
 		)
 
+	# Type aliases (module-scoped).
+	type_aliases_entries: list[dict[str, Any]] = []
+	for (alias_mid, alias_name), (alias_params, alias_target, _loc) in sorted(table.type_aliases.items()):
+		if alias_mid is None:
+			continue
+		if alias_target is None:
+			continue
+		type_aliases_entries.append({
+			"module_id": alias_mid,
+			"name": alias_name,
+			"type_params": list(alias_params),
+			"target": _encode_alias_target(alias_target),
+		})
+
 	provided_nominals: list[dict[str, Any]] = []
 	seen_provided: set[tuple[str, str, str]] = set()
 	for key in sorted(
@@ -546,6 +571,7 @@ def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
 		"exception_schemas": {k: v for k, v in sorted(table.exception_schemas.items())},
 		"variant_schemas": variant_schemas,
 		"provided_nominals": provided_nominals,
+		"type_aliases": type_aliases_entries,
 	}
 
 
@@ -1083,28 +1109,44 @@ def encode_module_payload_v0(
 	tt_obj = encode_type_table(type_table, package_id=package_id)
 	consts: list[str] = list(exported_consts or [])
 	const_table: dict[str, Any] = {}
+	exported_const_set: set[str] = set(consts)
+	def _encode_const_value(sym: str, val: object) -> Any:
+		if isinstance(val, bool):
+			return bool(val)
+		if isinstance(val, int):
+			return int(val)
+		if isinstance(val, float):
+			return float(val)
+		if isinstance(val, str):
+			return str(val)
+		raise ValueError(f"internal: unsupported const value type for '{sym}': {type(val).__name__}")
 	for name in consts:
 		sym = f"{module_id}::{name}"
 		entry = type_table.lookup_const(sym)
 		if entry is None:
 			raise ValueError(f"internal: exported const '{sym}' missing from TypeTable const table")
 		ty_id, val = entry
-		if isinstance(val, bool):
-			enc_val: Any = bool(val)
-		elif isinstance(val, int):
-			enc_val = int(val)
-		elif isinstance(val, float):
-			enc_val = float(val)
-		elif isinstance(val, str):
-			enc_val = str(val)
-		else:
-			raise ValueError(f"internal: unsupported const value type for '{sym}': {type(val).__name__}")
-		const_table[name] = {"type_id": int(ty_id), "value": enc_val}
+		const_table[name] = {"type_id": int(ty_id), "value": _encode_const_value(sym, val)}
+	# Include ALL module constants (including private ones) so that generic
+	# template re-instantiation in the consumer can resolve module-scoped
+	# constant references (e.g. HASH_MAP_STATE_EMPTY inside HashMapCore methods).
+	internal_const_table: dict[str, Any] = {}
+	prefix = f"{module_id}::"
+	for sym, (ty_id, val) in sorted(type_table.consts.items()):
+		if not sym.startswith(prefix):
+			continue
+		cname = sym[len(prefix):]
+		if cname in exported_const_set:
+			continue
+		if not isinstance(val, (bool, int, float, str)):
+			continue
+		internal_const_table[cname] = {"type_id": int(ty_id), "value": _encode_const_value(sym, val)}
 	types_obj = {
 		"structs": list(exported_types.get("structs", [])),
 		"variants": list(exported_types.get("variants", [])),
 		"exceptions": list(exported_types.get("exceptions", [])),
 		"interfaces": list(exported_types.get("interfaces", [])),
+		"aliases": list(exported_types.get("aliases", [])),
 	}
 	reexports_obj = reexports if isinstance(reexports, dict) else {}
 	trait_meta_obj = list(trait_metadata or [])
@@ -1124,6 +1166,7 @@ def encode_module_payload_v0(
 		"trait_metadata": _to_jsonable(trait_meta_obj),
 		"impl_headers": _to_jsonable(impl_headers_obj),
 		"consts": const_table,
+		"internal_consts": internal_const_table,
 		"type_table": tt_obj,
 		"type_table_fingerprint": type_table_fingerprint(tt_obj),
 		"signatures": encode_signatures(signatures, module_id=module_id),

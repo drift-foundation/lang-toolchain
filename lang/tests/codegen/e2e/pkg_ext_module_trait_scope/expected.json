@@ -1,0 +1,6 @@
+{
+  "description": "K25: external module trait scope + visibility must be populated for generic template re-instantiation (iter/next in std.log._attrs_json). Codegen crash is separate pre-existing issue.",
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr_contains": "\"ev\":\"ev\""
+}

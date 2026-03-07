@@ -118,6 +118,8 @@ class DVInitRewriter:
 					H.HKwArg(name=kw.name, value=self._rewrite_expr(kw.value))
 					for kw in getattr(expr, "kwargs", []) or []
 				],
+				type_args=getattr(expr, "type_args", None),
+				origin=getattr(expr, "origin", None),
 				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HInvoke):

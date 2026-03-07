@@ -2149,6 +2149,11 @@ class TypeTable:
 			if self.is_destructible(ty):
 				cache_proof[ty] = False
 				return False
+			# Primitive types (SCALAR, RAW_PTR, VOID, FUNCTION, REF) have
+			# deterministic Copy status from their kind alone — no trait
+			# impl needed.  Fall through to structural check directly.
+			if td.kind in {TypeKind.SCALAR, TypeKind.RAW_PTR, TypeKind.VOID, TypeKind.FUNCTION, TypeKind.REF}:
+				return _is_copy_structural(ty)
 			if _eligible_structural_fallback(ty):
 				if drift_debug.enabled("copy_fallback"):
 					td = self.get(ty)

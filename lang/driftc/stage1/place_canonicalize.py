@@ -216,6 +216,7 @@ class PlaceCanonicalizeRewriter:
 				args=new_args,
 				kwargs=new_kwargs,
 				type_args=getattr(expr, "type_args", None),
+				origin=getattr(expr, "origin", None),
 				loc=getattr(expr, "loc", Span()),
 			)
 		if isinstance(expr, H.HField):

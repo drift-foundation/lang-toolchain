@@ -176,7 +176,7 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	encode_type_expr,
 	type_table_fingerprint,
 )
-from lang.driftc.packages.type_table_link_v0 import import_type_tables_and_build_typeid_maps
+from lang.driftc.packages.type_table_link_v0 import decode_type_table_obj, import_type_tables_and_build_typeid_maps
 from lang.driftc.packages.provider_v0 import (
 	PackageTrustPolicy,
 	collect_external_exports,
@@ -292,6 +292,32 @@ def _canonicalize_signature_type_ids(signatures_by_id: Mapping[FunctionId, FnSig
 		sig.return_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.return_type_id)
 		if sig.error_type_id is not None:
 			sig.error_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.error_type_id)
+
+
+def _canonicalize_struct_field_type_ids(type_table: TypeTable) -> None:
+	"""K26: canonicalize FORWARD_NOMINAL TypeIds in struct TypeDef.param_types
+	and StructInstance.field_types so codegen sees consistent TypeIds between
+	struct field definitions and expressions that produce values for those fields."""
+	# Non-generic struct TypeDefs: param_types holds field TypeIds directly
+	for ty_id, td in type_table._defs.items():
+		if td.kind is not TypeKind.STRUCT:
+			continue
+		for i, fty in enumerate(td.param_types):
+			canon = _canonicalize_forward_nominal_type_id(type_table, fty)
+			if canon != fty:
+				td.param_types[i] = canon
+	# Generic struct instances: field_types is list[TypeId]
+	for inst_id, inst in type_table.struct_instances.items():
+		ft = inst.field_types
+		for i, fty in enumerate(ft):
+			canon = _canonicalize_forward_nominal_type_id(type_table, fty)
+			if canon != fty:
+				ft[i] = canon
+	# Invalidate copy_status cache since field types may have changed
+	if hasattr(type_table, "_copy_cache_proof"):
+		type_table._copy_cache_proof.clear()  # type: ignore[attr-defined]
+	if hasattr(type_table, "_copy_cache_structural"):
+		type_table._copy_cache_structural.clear()  # type: ignore[attr-defined]
 
 
 def _canonicalize_mir_type_ids(mir_funcs_by_id: Mapping[FunctionId, M.MirFunc], type_table: TypeTable) -> None:
@@ -556,6 +582,152 @@ def _remap_mir_func_typeids(fn: M.MirFunc, tid_map: dict[int, int]) -> None:
 				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
 			elif isinstance(instr, (M.PtrRead, M.PtrWrite)):
 				instr.elem_ty = int(_remap_tid(tid_map, instr.elem_ty))  # type: ignore[assignment]
+			elif isinstance(instr, M.CastScalar):
+				instr.src_ty = int(_remap_tid(tid_map, instr.src_ty))  # type: ignore[assignment]
+				instr.dst_ty = int(_remap_tid(tid_map, instr.dst_ty))  # type: ignore[assignment]
+			elif isinstance(instr, M.ConstructIface):
+				instr.iface_ty = int(_remap_tid(tid_map, instr.iface_ty))  # type: ignore[assignment]
+				if instr.data_ty is not None:
+					instr.data_ty = int(_remap_tid(tid_map, instr.data_ty))  # type: ignore[assignment]
+				if instr.env_ty is not None:
+					instr.env_ty = int(_remap_tid(tid_map, instr.env_ty))  # type: ignore[assignment]
+				instr.call_sig = CallSig(
+					param_types=tuple(int(_remap_tid(tid_map, t)) for t in instr.call_sig.param_types),
+					user_ret_type=int(_remap_tid(tid_map, instr.call_sig.user_ret_type)),
+					can_throw=instr.call_sig.can_throw,
+					includes_callee=instr.call_sig.includes_callee,
+				)
+			elif isinstance(instr, M.ConstructIfaceValue):
+				instr.iface_ty = int(_remap_tid(tid_map, instr.iface_ty))  # type: ignore[assignment]
+				instr.value_ty = int(_remap_tid(tid_map, instr.value_ty))  # type: ignore[assignment]
+			elif isinstance(instr, M.CallIndirect):
+				instr.param_types = [int(_remap_tid(tid_map, t)) for t in instr.param_types]  # type: ignore[assignment]
+				instr.user_ret_type = int(_remap_tid(tid_map, instr.user_ret_type))  # type: ignore[assignment]
+			elif isinstance(instr, M.CallIface):
+				instr.param_types = [int(_remap_tid(tid_map, t)) for t in instr.param_types]  # type: ignore[assignment]
+				instr.user_ret_type = int(_remap_tid(tid_map, instr.user_ret_type))  # type: ignore[assignment]
+
+
+# TypeId-bearing fields per MIR instruction type, for remap validation.
+_TYPEID_FIELDS: dict[type, list[str]] = {
+	M.ZeroValue: ["ty"],
+	M.CopyValue: ["ty"],
+	M.DropValue: ["ty"],
+	M.MoveOut: ["ty"],
+	M.AddrOfArrayElem: ["inner_ty"],
+	M.LoadRef: ["inner_ty"],
+	M.StoreRef: ["inner_ty"],
+	M.ConstructStruct: ["struct_ty"],
+	M.ConstructVariant: ["variant_ty"],
+	M.VariantTag: ["variant_ty"],
+	M.VariantTagRef: ["variant_ty"],
+	M.VariantGetField: ["variant_ty", "field_ty"],
+	M.VariantGetFieldAddr: ["variant_ty", "field_ty"],
+	M.StructGetField: ["struct_ty", "field_ty"],
+	M.AddrOfField: ["struct_ty", "field_ty"],
+	M.ArrayLit: ["elem_ty"],
+	M.ArrayAlloc: ["elem_ty"],
+	M.ArrayElemInit: ["elem_ty"],
+	M.ArrayElemInitUnchecked: ["elem_ty"],
+	M.ArrayElemAssign: ["elem_ty"],
+	M.ArrayElemDrop: ["elem_ty"],
+	M.ArrayElemTake: ["elem_ty"],
+	M.ArrayDrop: ["elem_ty"],
+	M.ArrayDup: ["elem_ty"],
+	M.ArrayIndexLoad: ["elem_ty"],
+	M.ArrayIndexStore: ["elem_ty"],
+	M.ArrayIndexLoadUnchecked: ["elem_ty"],
+	M.ConstArray: ["elem_ty"],
+	M.RawBufferAlloc: ["raw_ty", "elem_ty"],
+	M.RawBufferPtrAt: ["raw_ty", "elem_ty"],
+	M.RawBufferWrite: ["raw_ty", "elem_ty"],
+	M.RawBufferRead: ["raw_ty", "elem_ty"],
+	M.RawBufferDealloc: ["raw_ty"],
+	M.PtrFromRef: ["ptr_ty"],
+	M.PtrIsNull: ["ptr_ty"],
+	M.PtrOffset: ["ptr_ty", "elem_ty"],
+	M.PtrRead: ["elem_ty"],
+	M.PtrWrite: ["elem_ty"],
+	M.CastScalar: ["src_ty", "dst_ty"],
+	M.ConstructIface: ["iface_ty", "data_ty", "env_ty"],
+	M.ConstructIfaceValue: ["iface_ty", "value_ty"],
+	M.CallIndirect: ["param_types", "user_ret_type"],
+	M.CallIface: ["param_types", "user_ret_type"],
+}
+
+
+def _validate_remap_completeness(fn: M.MirFunc, tid_map: dict[int, int], type_table: TypeTable, *, pkg_tid_universe: frozenset[int] | None = None) -> None:
+	"""Assert all TypeId-bearing fields in a remapped MIR function are valid host TypeIds.
+
+	Two layers of defence:
+
+	1. **Stale-key detection** — a TypeId that IS in tid_map.keys() with a
+	   different target value but still appears unrewritten is a missed remap.
+	   (Catches the host-id collision class of bugs.)
+
+	2. **Missing-key detection** — a TypeId that belongs to the package type
+	   universe (pkg_tid_universe, i.e. the full set of TypeIds from the
+	   decoded package type table) but was never entered into tid_map at all.
+	   Without this check, such a TypeId would be silently treated as a
+	   host-native ID even though it originated in the package.
+
+	When ``pkg_tid_universe`` is not supplied, falls back to tid_map.keys()
+	(equivalent coverage to the stale-key check alone).
+	"""
+	# Valid remap output values — any TypeId that IS the target of a remap is a
+	# legitimate host TypeId that may appear post-remap.
+	remap_outputs = frozenset(tid_map.values())
+	# Stale package TypeIds: keys that map to a different value AND whose
+	# numeric value is NOT itself a valid remap output.  A package TypeId whose
+	# numeric value happens to coincide with a host TypeId that is the remap
+	# target of some other package TypeId is NOT stale — it can legitimately
+	# appear after remapping another entry.
+	stale_pkg_tids = {k for k, v in tid_map.items() if k != v and k not in remap_outputs}
+	# Full package TypeId universe — includes TypeIds that might not have made
+	# it into tid_map (missing-key scenario).  Any TypeId from this set that
+	# survives post-remap AND is not itself a valid remap output is invalid.
+	universe = pkg_tid_universe if pkg_tid_universe is not None else frozenset(tid_map.keys())
+	def _is_valid_post_remap(tid: int) -> bool:
+		if tid in stale_pkg_tids:
+			return False
+		# If the TypeId belongs to the package universe but was never entered
+		# into tid_map AND is not a valid remap output, it was never remapped.
+		if tid in universe and tid not in tid_map and tid not in remap_outputs:
+			return False
+		return True
+
+	def _check_tid(tid: int, fn_id: FunctionId, instr_idx: int, field_name: str) -> None:
+		if not _is_valid_post_remap(tid):
+			raise AssertionError(
+				f"remap completeness: fn={function_symbol(fn_id)} "
+				f"instr_idx={instr_idx} field={field_name} bad_tid={tid}"
+			)
+
+	for local_name, tid in fn.local_types.items():
+		if isinstance(tid, int):
+			_check_tid(tid, fn.fn_id, -1, f"local_types[{local_name}]")
+
+	for block in fn.blocks.values():
+		for instr_idx, instr in enumerate(block.instructions):
+			field_names = _TYPEID_FIELDS.get(type(instr))
+			if field_names is None:
+				continue
+			for field_name in field_names:
+				val = getattr(instr, field_name, None)
+				if val is None:
+					continue
+				tids = val if isinstance(val, (list, tuple)) else [val]
+				for tid in tids:
+					if isinstance(tid, int):
+						_check_tid(tid, fn.fn_id, instr_idx, field_name)
+			# Also validate CallSig inside ConstructIface.
+			if isinstance(instr, M.ConstructIface):
+				for st in instr.call_sig.param_types:
+					if isinstance(st, int):
+						_check_tid(st, fn.fn_id, instr_idx, "call_sig.param_types")
+				rt = instr.call_sig.user_ret_type
+				if isinstance(rt, int):
+					_check_tid(rt, fn.fn_id, instr_idx, "call_sig.user_ret_type")
 
 
 def _inject_prelude(
@@ -581,11 +753,11 @@ def _prelude_exports() -> dict[str, object]:
 	"""
 	return {
 		"values": [],
-		"types": {"structs": [], "variants": [], "exceptions": [], "interfaces": []},
+		"types": {"structs": [], "variants": [], "exceptions": [], "interfaces": [], "aliases": []},
 		"consts": [],
 		"traits": [],
 		"reexports": {
-			"types": {"structs": {}, "variants": {}, "exceptions": {}, "interfaces": {}},
+			"types": {"structs": {}, "variants": {}, "exceptions": {}, "interfaces": {}, "aliases": {}},
 			"consts": {},
 			"traits": {},
 		},
@@ -1176,6 +1348,41 @@ def _append_boundary_contract_diag(
 	)
 
 
+@dataclass
+class CompilationUnit:
+	"""Input bundle for the shared codegen entry point (_emit_codegen)."""
+	mir_funcs: dict[FunctionId, M.MirFunc]
+	ssa_funcs: dict[FunctionId, MirToSSA.SsaFunc]
+	fn_infos: dict[FunctionId, FnInfo]
+	type_table: TypeTable
+	rename_map: dict[FunctionId, str]
+	entry_id: FunctionId | None
+	wrapper_dep_flags: dict[str, bool]
+
+
+def _resolve_destroy_fn_for_type(
+	drop_ty: int,
+	fn_infos: Mapping[FunctionId, FnInfo],
+	pkg_sigs: Mapping[FunctionId, FnSignature] | None = None,
+) -> FunctionId | None:
+	"""Find the Destructible::destroy impl fn_id for a given TypeId."""
+	for fn_id, info in fn_infos.items():
+		sig = info.signature
+		if sig is None:
+			continue
+		if sig.method_name != "destroy":
+			continue
+		if sig.impl_target_type_id == drop_ty:
+			return fn_id
+	if pkg_sigs is not None:
+		for fn_id, sig in pkg_sigs.items():
+			if sig.method_name != "destroy":
+				continue
+			if sig.impl_target_type_id == drop_ty:
+				return fn_id
+	return None
+
+
 def _validate_codegen_contract(
 	mir_funcs: Mapping[FunctionId, M.MirFunc],
 	ssa_funcs: Mapping[FunctionId, MirToSSA.SsaFunc] | None,
@@ -1212,8 +1419,428 @@ def _validate_codegen_contract(
 					raise AssertionError(
 						f"codegen contract: unknown call target {function_symbol(instr.fn_id)} in {function_symbol(fn.fn_id)}"
 					)
+				if isinstance(instr, M.ConstructIface) and instr.fn_ref.fn_id not in fn_infos:
+					raise AssertionError(
+						f"codegen contract: unknown ConstructIface target {function_symbol(instr.fn_ref.fn_id)} in {function_symbol(fn.fn_id)}"
+					)
 	# Placeholder for future debug-info contract hardening.
 	_ = debug_enabled
+
+
+def _emit_codegen(
+	unit: CompilationUnit,
+	*,
+	module_exports: Mapping[str, dict[str, object]] | None = None,
+	word_bits: int,
+	debug_enabled: bool = True,
+	provenance_git_sha: str = "",
+	provenance_build_profile: str = "default",
+) -> str:
+	"""Shared codegen entry: validate contract, lower to LLVM IR, emit wrappers, render."""
+	assert unit.type_table is not None, "_emit_codegen: CompilationUnit.type_table is None"
+	_validate_codegen_contract(unit.mir_funcs, unit.ssa_funcs, unit.fn_infos, unit.type_table, debug_enabled=debug_enabled)
+	# K31: detect main(argv: Array<String>) and use argv_entry_wrapper.
+	argv_wrapper: str | None = None
+	if unit.entry_id is not None:
+		entry_info = unit.fn_infos.get(unit.entry_id)
+		if entry_info and entry_info.signature and entry_info.signature.param_type_ids and unit.type_table is not None:
+			if len(entry_info.signature.param_type_ids) == 1:
+				param_ty = entry_info.signature.param_type_ids[0]
+				td = unit.type_table.get(param_ty)
+				if td.kind.name == "ARRAY" and td.param_types:
+					elem_td = unit.type_table.get(td.param_types[0])
+					if elem_td.name == "String":
+						argv_wrapper = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
+	module = lower_module_to_llvm(
+		unit.mir_funcs,
+		unit.ssa_funcs,
+		unit.fn_infos,
+		type_table=unit.type_table,
+		module_exports=module_exports,
+		rename_map=unit.rename_map,
+		argv_wrapper=argv_wrapper,
+		word_bits=word_bits,
+		debug_enabled=debug_enabled,
+		provenance_git_sha=provenance_git_sha,
+		provenance_build_profile=provenance_build_profile,
+	)
+	module.emit_abi_stamp()
+	if unit.entry_id is not None and argv_wrapper is None:
+		entry_sym = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
+		module.emit_entry_wrapper(entry_sym, **unit.wrapper_dep_flags)
+	return module.render()
+
+
+def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
+	"""Return the set of function IDs directly referenced by MIR instructions."""
+	calls: set[FunctionId] = set()
+	for block in fn.blocks.values():
+		for instr in block.instructions:
+			if isinstance(instr, M.Call):
+				calls.add(instr.fn_id)
+			elif isinstance(instr, M.ConstructIface):
+				calls.add(instr.fn_ref.fn_id)
+			elif isinstance(instr, M.FnPtrConst):
+				calls.add(instr.fn_ref.fn_id)
+	return calls
+
+
+def _build_package_consumer_unit(
+	*,
+	loaded_pkgs: list,
+	pkg_typeid_maps: dict,
+	pkg_tid_universes: dict[Path, frozenset[int]],
+	type_table: TypeTable,
+	checked_src: CheckedProgramById,
+	src_mir: dict[FunctionId, M.MirFunc],
+	ssa_src: dict[FunctionId, MirToSSA.SsaFunc],
+	entry_module: str,
+	entry_name: str,
+	external_impl_metas: list | None = None,
+) -> CompilationUnit:
+	"""Build a CompilationUnit for the package-consumer path.
+
+	Decodes package MIR, remaps TypeIds, runs BFS reachability, synthesises
+	wrappers, merges source + package, and returns a ready-to-emit unit.
+	"""
+	pkg_mir_all: dict[FunctionId, M.MirFunc] = {}
+	pkg_sigs_by_id: dict[FunctionId, FnSignature] = {}
+	for pkg in loaded_pkgs:
+		tid_map = pkg_typeid_maps.get(pkg.path, {})
+		for _mid, mod in pkg.modules_by_id.items():
+			payload = mod.payload
+			if not isinstance(payload, dict):
+				continue
+			if payload.get("payload_kind") != "provisional-dmir" or payload.get("payload_version") != 0:
+				raise AssertionError(f"unsupported package payload kind/version")
+			sigs_obj = payload.get("signatures")
+			name_to_fn_id: dict[str, FunctionId] = {}
+			if isinstance(sigs_obj, dict):
+				for name, sd in sigs_obj.items():
+					if not isinstance(sd, dict):
+						continue
+					fn_id_obj = sd.get("fn_id")
+					fn_id = function_id_from_obj(fn_id_obj)
+					if fn_id is not None:
+						name_to_fn_id[str(name)] = fn_id
+			mir_obj = payload.get("mir_funcs")
+			if isinstance(mir_obj, dict):
+				for fn_id, fn in decode_mir_funcs(mir_obj, name_to_fn_id=name_to_fn_id).items():
+					if isinstance(fn, M.MirFunc):
+						_remap_mir_func_typeids(fn, tid_map)
+						if tid_map:
+							_validate_remap_completeness(fn, tid_map, type_table, pkg_tid_universe=pkg_tid_universes.get(pkg.path))
+						pkg_mir_all[fn_id] = fn
+			if isinstance(sigs_obj, dict):
+				for name, sd in sigs_obj.items():
+					if not isinstance(sd, dict):
+						continue
+					fn_id_obj = sd.get("fn_id")
+					fn_id = function_id_from_obj(fn_id_obj)
+					if fn_id is None or fn_id in pkg_sigs_by_id:
+						continue
+					param_type_ids = sd.get("param_type_ids")
+					if isinstance(param_type_ids, list):
+						param_type_ids = [tid_map.get(int(x), int(x)) for x in param_type_ids]
+					ret_tid = sd.get("return_type_id")
+					if isinstance(ret_tid, int):
+						ret_tid = tid_map.get(ret_tid, ret_tid)
+					impl_tid = sd.get("impl_target_type_id")
+					if isinstance(impl_tid, int):
+						impl_tid = tid_map.get(impl_tid, impl_tid)
+					pkg_sigs_by_id[fn_id] = FnSignature(
+						name=str(sd.get("name") or name),
+						module=sd.get("module"),
+						method_name=sd.get("method_name"),
+						param_names=sd.get("param_names"),
+						param_type_ids=param_type_ids,
+						return_type_id=ret_tid,
+						declared_can_throw=sd.get("declared_can_throw"),
+						is_method=bool(sd.get("is_method", False)),
+						self_mode=sd.get("self_mode"),
+						impl_target_type_id=impl_tid,
+						is_pub=bool(sd.get("is_pub", False)),
+						is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
+					)
+
+	# Wrapper → target map from checker-registered boundary wrappers.
+	wrapper_target_by_id: dict[FunctionId, FunctionId] = {}
+	wrapper_sigs: dict[FunctionId, FnSignature] = {}
+	for fn_id, info in checked_src.fn_infos_by_id.items():
+		sig = info.signature
+		if sig is None:
+			continue
+		if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
+			wrapper_target_by_id[fn_id] = sig.wraps_target_fn_id
+			wrapper_sigs[fn_id] = sig
+
+	# BFS: prune source MIR to entry-reachable functions.
+	src_roots: set[FunctionId] = set()
+	for fn_id in src_mir:
+		sig_info = checked_src.fn_infos_by_id.get(fn_id)
+		if sig_info is not None and sig_info.signature is not None:
+			sname = sig_info.signature.name or ""
+			if sname.endswith("::" + entry_name) or sname == entry_name:
+				src_roots.add(fn_id)
+	src_needed: set[FunctionId] = set(src_roots)
+	queue: list[FunctionId] = list(src_roots)
+	while queue:
+		cur = queue.pop()
+		fn = src_mir.get(cur)
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in src_mir and callee not in src_needed:
+				src_needed.add(callee)
+				queue.append(callee)
+	# Seed source-module destroy impls.  Codegen's _emit_drop_value generates
+	# destroy calls at codegen time (not MIR level) — both for top-level
+	# DropValue instructions AND recursively for struct field drops.  We must
+	# ensure every source-module destroyer whose type is transitively reachable
+	# through struct/variant field decomposition of any dropped type is in
+	# src_needed.
+	#
+	# Phase 1: Seed from MIR-level DropValue instructions.
+	_src_destroy_queue: list[FunctionId] = []
+	_dropped_types: set[int] = set()
+	for fn in (src_mir[fid] for fid in list(src_needed) if fid in src_mir):
+		for block in fn.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.DropValue):
+					_dropped_types.add(instr.ty)
+					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id)
+					if destroy_id is not None and destroy_id in src_mir and destroy_id not in src_needed:
+						src_needed.add(destroy_id)
+						_src_destroy_queue.append(destroy_id)
+	# Phase 2: Seed field-level destroyers.  Codegen recursively drops struct
+	# fields, so any Destructible field type needs its destroyer in src_needed.
+	# Walk the type graph starting from dropped types + seeded destroyer types.
+	destructor_fns = getattr(type_table, 'destructor_fns', None) or {}
+	_type_queue: list[int] = list(_dropped_types)
+	_visited_types: set[int] = set(_dropped_types)
+	for ty_id, fn_id in destructor_fns.items():
+		if fn_id in src_needed and ty_id not in _visited_types:
+			_visited_types.add(ty_id)
+			_type_queue.append(ty_id)
+	while _type_queue:
+		ty = _type_queue.pop()
+		inst = type_table.get_struct_instance(ty)
+		if inst is not None:
+			for field_ty in inst.field_types:
+				field_destroy = destructor_fns.get(field_ty)
+				if field_destroy is not None and field_destroy in src_mir and field_destroy not in src_needed:
+					src_needed.add(field_destroy)
+					_src_destroy_queue.append(field_destroy)
+				if field_ty not in _visited_types:
+					_visited_types.add(field_ty)
+					_type_queue.append(field_ty)
+	# Phase 3: Transitive closure — follow calls + nested DropValues from
+	# newly-seeded destroy functions.
+	while _src_destroy_queue:
+		cur = _src_destroy_queue.pop()
+		fn = src_mir.get(cur)
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in src_mir and callee not in src_needed:
+				src_needed.add(callee)
+				_src_destroy_queue.append(callee)
+		for block in fn.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.DropValue):
+					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id)
+					if destroy_id is not None and destroy_id in src_mir and destroy_id not in src_needed:
+						src_needed.add(destroy_id)
+						_src_destroy_queue.append(destroy_id)
+	# K29: Seed interface impl methods for ConstructIfaceValue boxing.
+	# ConstructIfaceValue has no fn_ref — vtable thunks referencing impl
+	# methods are generated at codegen time.  We must seed the impl methods
+	# into src_needed here so their bodies survive BFS pruning.
+	_iface_value_tys: set[int] = set()
+	for fn in (src_mir[fid] for fid in list(src_needed) if fid in src_mir):
+		for block in fn.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.ConstructIfaceValue):
+					_iface_value_tys.add(instr.value_ty)
+	if _iface_value_tys:
+		_iface_impl_queue: list[FunctionId] = []
+		for fn_id, info in checked_src.fn_infos_by_id.items():
+			sig = info.signature
+			if sig is None or not sig.is_method:
+				continue
+			if sig.impl_target_type_id in _iface_value_tys and fn_id in src_mir and fn_id not in src_needed:
+				src_needed.add(fn_id)
+				_iface_impl_queue.append(fn_id)
+		while _iface_impl_queue:
+			cur = _iface_impl_queue.pop()
+			fn = src_mir.get(cur)
+			if fn is None:
+				continue
+			for callee in _called_funcs_in_mir(fn):
+				if callee in src_mir and callee not in src_needed:
+					src_needed.add(callee)
+					_iface_impl_queue.append(callee)
+
+	src_mir = {fn_id: fn for fn_id, fn in src_mir.items() if fn_id in src_needed}
+	ssa_src = {fn_id: fn for fn_id, fn in ssa_src.items() if fn_id in src_needed}
+
+	# Package MIR: include functions reachable from source.
+	pkg_needed: set[FunctionId] = set()
+	wrappers_needed: set[FunctionId] = set()
+	for fn in src_mir.values():
+		for callee in _called_funcs_in_mir(fn):
+			if callee in pkg_mir_all:
+				pkg_needed.add(callee)
+			elif callee in wrapper_target_by_id:
+				wrappers_needed.add(callee)
+				target = wrapper_target_by_id[callee]
+				if target in pkg_mir_all:
+					pkg_needed.add(target)
+
+	# Expand through package-to-package calls.
+	queue = list(pkg_needed)
+	while queue:
+		cur = queue.pop()
+		fn = pkg_mir_all.get(cur)
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in pkg_mir_all and callee not in pkg_needed:
+				pkg_needed.add(callee)
+				queue.append(callee)
+
+	# Seed destroy impls for DropValue types.
+	_all_reachable = dict(src_mir)
+	for fid in pkg_needed:
+		fn = pkg_mir_all.get(fid)
+		if fn is not None:
+			_all_reachable[fid] = fn
+	_destroy_queue: list[FunctionId] = []
+	for fn in _all_reachable.values():
+		for block in fn.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.DropValue):
+					destroy_id = _resolve_destroy_fn_for_type(instr.ty, checked_src.fn_infos_by_id, pkg_sigs_by_id)
+					if destroy_id is not None and destroy_id in pkg_mir_all and destroy_id not in pkg_needed:
+						pkg_needed.add(destroy_id)
+						_destroy_queue.append(destroy_id)
+	while _destroy_queue:
+		cur = _destroy_queue.pop()
+		fn = pkg_mir_all.get(cur)
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in pkg_mir_all and callee not in pkg_needed:
+				pkg_needed.add(callee)
+				_destroy_queue.append(callee)
+
+	# K26: Seed interface impl methods so vtable entries have bodies available.
+	# For each non-generic trait impl from external packages, add method
+	# FunctionIds to pkg_needed if they have MIR in the package.
+	if external_impl_metas:
+		_iface_queue: list[FunctionId] = []
+		for impl in external_impl_metas:
+			if getattr(impl, "trait_key", None) is None:
+				continue
+			if getattr(impl, "impl_type_params", None):
+				continue
+			for method in getattr(impl, "methods", []) or []:
+				fn_id = getattr(method, "fn_id", None)
+				if fn_id is not None and fn_id in pkg_mir_all and fn_id not in pkg_needed:
+					pkg_needed.add(fn_id)
+					_iface_queue.append(fn_id)
+		while _iface_queue:
+			cur = _iface_queue.pop()
+			fn = pkg_mir_all.get(cur)
+			if fn is None:
+				continue
+			for callee in _called_funcs_in_mir(fn):
+				if callee in pkg_mir_all and callee not in pkg_needed:
+					pkg_needed.add(callee)
+					_iface_queue.append(callee)
+
+	pkg_mir: dict[FunctionId, M.MirFunc] = {fn_id: pkg_mir_all[fn_id] for fn_id in pkg_needed}
+	pkg_fn_infos: dict[FunctionId, FnInfo] = {}
+	for fn_id, sig in pkg_sigs_by_id.items():
+		if fn_id not in pkg_fn_infos:
+			pkg_fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
+
+	pkg_ssa: dict[FunctionId, MirToSSA.SsaFunc] = {}
+	for fn_id, fn in pkg_mir.items():
+		pkg_ssa[fn_id] = MirToSSA().run(fn)
+
+	# Merge (source wins on symbol conflicts).
+	mir_all = dict(pkg_mir)
+	mir_all.update(src_mir)
+	ssa_all = dict(pkg_ssa)
+	ssa_all.update(ssa_src)
+
+	# Synthesise wrapper MIR/SSA.
+	for wrap_id in wrappers_needed:
+		if wrap_id in mir_all:
+			continue
+		wrap_sig = wrapper_sigs.get(wrap_id)
+		if wrap_sig is None or wrap_sig.param_type_ids is None:
+			continue
+		param_names = list(wrap_sig.param_names or [])
+		if len(param_names) != len(wrap_sig.param_type_ids):
+			param_names = [f"p{i}" for i in range(len(wrap_sig.param_type_ids))]
+		builder = make_builder(wrap_id)
+		builder.func.params = list(param_names)
+		call_dest: M.ValueId | None
+		target_id = wrapper_target_by_id[wrap_id]
+		target_sig = pkg_sigs_by_id.get(target_id)
+		if target_sig is None:
+			_ti = checked_src.fn_infos_by_id.get(target_id)
+			if _ti is not None:
+				target_sig = _ti.signature
+		target_ret = target_sig.return_type_id if target_sig is not None else wrap_sig.return_type_id
+		if type_table is not None and type_table.is_void(target_ret):
+			call_dest = None
+		else:
+			call_dest = builder.new_temp()
+		builder.emit(M.Call(dest=call_dest, fn_id=wrapper_target_by_id[wrap_id], args=param_names, can_throw=False))
+		ok_dest = builder.new_temp()
+		builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
+		builder.set_terminator(M.Return(value=ok_dest))
+		mir_all[wrap_id] = builder.func
+		ssa_all[wrap_id] = MirToSSA().run(builder.func)
+
+	# FnInfos: source + package + wrapper.
+	fn_infos = dict(checked_src.fn_infos_by_id)
+	all_sig_env: dict[FunctionId, FnSignature] = dict(pkg_sigs_by_id)
+	all_sig_env.update(wrapper_sigs)
+	for fn_id, info in checked_src.fn_infos_by_id.items():
+		if info.signature is not None:
+			all_sig_env[fn_id] = info.signature
+	for fn_id, sig in all_sig_env.items():
+		if fn_id not in fn_infos:
+			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
+
+	# Entry point detection.
+	rename_map: dict[FunctionId, str] = {}
+	entry_id: FunctionId | None = None
+	for fn_id in mir_all:
+		if fn_id.module == entry_module and fn_id.name == entry_name:
+			entry_id = fn_id
+			break
+	if entry_id is not None:
+		rename_map[entry_id] = "drift_main"
+
+	wrapper_dep_flags = {
+		flag: any(fid.module == dep_mod and fid.name == dep_name for fid in mir_all)
+		for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
+	}
+
+	return CompilationUnit(
+		mir_funcs=mir_all,
+		ssa_funcs=ssa_all,
+		fn_infos=fn_infos,
+		type_table=type_table,
+		rename_map=rename_map,
+		entry_id=entry_id,
+		wrapper_dep_flags=wrapper_dep_flags,
+	)
 
 
 def _sig_declared_can_throw(sig: FnSignature) -> bool:
@@ -1334,6 +1961,7 @@ def _encode_impl_headers_for_module(
 	*,
 	module_id: str,
 	impls: list[object] | None,
+	package_id: str | None = None,
 ) -> list[dict[str, object]]:
 	if not impls:
 		return []
@@ -1359,6 +1987,21 @@ def _encode_impl_headers_for_module(
 					"module": trait_mod,
 					"name": trait_name,
 				}
+		# K26: For same-module trait impls, trait_key is None because the
+		# interface is already in the type table.  Fall back to trait_expr
+		# (the raw TypeExpr from the source) to preserve trait identity in
+		# the DMIR so consumers can build vtable indices.
+		if trait_obj is None:
+			trait_expr_raw = getattr(impl, "trait_expr", None)
+			if trait_expr_raw is not None:
+				te_name = getattr(trait_expr_raw, "name", None)
+				te_mod = getattr(trait_expr_raw, "module_id", None) or module_id
+				if isinstance(te_name, str) and te_name:
+					trait_obj = {
+						"package_id": package_id,
+						"module": te_mod,
+						"name": te_name,
+					}
 		trait_expr = getattr(impl, "trait_expr", None)
 		if trait_expr is not None:
 			for arg in list(getattr(trait_expr, "args", []) or []):
@@ -1976,6 +2619,8 @@ def compile_stubbed_funcs(
 		existing = derived_signatures_by_id.get(fn_id) or base_signatures_by_id.get(fn_id)
 		if existing is not None:
 			if existing != sig:
+				if fn_id in base_signatures_by_id:
+					return
 				raise AssertionError(f"signature collision for '{function_symbol(fn_id)}'")
 			return
 		_record_signature_provenance(fn_id, sig)
@@ -2113,12 +2758,15 @@ def compile_stubbed_funcs(
 				world = _ensure_world(getattr(key, "module", None))
 				world.traits.setdefault(key, trait_def)
 
+		# Collect all consumed package IDs so that their trait impls are
+		# trusted (validated at package build time). The orphan rule only
+		# applies to impls the *consumer* defines, not to upstream impls.
+		_consumed_pkgs: set[str | None] = {default_package}
+		if module_packages:
+			_consumed_pkgs.update(module_packages.values())
 		if external_impl_metas:
 			for impl in external_impl_metas:
 				if getattr(impl, "trait_key", None) is None:
-					continue
-				impl_pkg = _module_package(getattr(impl, "def_module", None))
-				if impl_pkg != default_package:
 					continue
 				target_expr = getattr(impl, "target_expr", None)
 				if target_expr is None:
@@ -2134,9 +2782,10 @@ def compile_stubbed_funcs(
 				local_pkg = default_package
 				trait_pkg = getattr(impl.trait_key, "package_id", None) or local_pkg
 				target_pkg = getattr(head_key, "package_id", None) or local_pkg
-				def _is_local(pkg: str | None) -> bool:
-					return pkg is None or pkg == local_pkg
-				if not _is_local(trait_pkg) and not _is_local(target_pkg):
+				impl_pkg = _module_package(getattr(impl, "def_module", None))
+				def _is_local_or_consumed(pkg: str | None) -> bool:
+					return pkg is None or pkg == local_pkg or pkg in _consumed_pkgs
+				if not _is_local_or_consumed(trait_pkg) and not _is_local_or_consumed(target_pkg):
 					trait_world_diags.append(
 						Diagnostic(
 							message=(
@@ -2172,6 +2821,7 @@ def compile_stubbed_funcs(
 					target_head=head_key,
 					methods=[],
 					require=getattr(impl, "require_expr", None),
+					type_params=list(getattr(impl, "impl_type_params", []) or []),
 					loc=getattr(impl, "loc", None),
 				)
 				impl_id = len(world.impls)
@@ -2244,6 +2894,10 @@ def compile_stubbed_funcs(
 			return inner
 		if td.kind is TypeKind.ARRAY:
 			return shared_type_table.array_base_id()
+		if td.kind is TypeKind.STRUCT:
+			inst = shared_type_table.get_struct_instance(impl_tid)
+			if inst is not None:
+				return inst.base_id
 		if td.kind is TypeKind.VARIANT:
 			inst = shared_type_table.get_variant_instance(impl_tid)
 			if inst is not None:
@@ -2255,11 +2909,21 @@ def compile_stubbed_funcs(
 		if sig.param_types is None or sig.return_type is None:
 			return None
 		return CallableTemplateSignature(param_types=tuple(sig.param_types), result_type=sig.return_type)
+	# K20: pre-compute generic method keys to suppress __inst__ monomorphizations.
+	_local_generic_method_keys: set[tuple[int | None, str | None]] = set()
+	for _fid, _sig in signatures_by_id.items():
+		if _sig.is_method and (_sig.type_params or getattr(_sig, "impl_type_params", [])):
+			_local_generic_method_keys.add((_registry_impl_target_type_id(_sig.impl_target_type_id), _sig.method_name))
 	for fn_id, sig in signatures_by_id.items():
 		if sig.return_type_id is None:
 			continue
 		if getattr(sig, "is_wrapper", False):
 			continue
+		# K20: skip __inst__ monomorphized sigs when generic template exists.
+		if "__inst__" in (fn_id.name or "") and sig.is_method and not (sig.type_params or getattr(sig, "impl_type_params", [])):
+			norm_recv = _registry_impl_target_type_id(sig.impl_target_type_id)
+			if (norm_recv, sig.method_name) in _local_generic_method_keys:
+				continue
 		module_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
 		module_id = module_ids.setdefault(module_name, len(module_ids))
 		param_types_tuple = tuple(sig.param_type_ids or [])
@@ -2337,11 +3001,22 @@ def compile_stubbed_funcs(
 			for module_id in external_missing_impl_modules:
 				trait_impl_index.mark_missing_module(module_ids.setdefault(module_id, len(module_ids)))
 		trait_scope_by_module = {}
+		all_trait_keys: list[object] | None = None
 		for mod, exp in module_exports.items():
 			if isinstance(exp, dict):
-				scope = exp.get("trait_scope", [])
+				scope = exp.get("trait_scope", None)
 				if isinstance(scope, list):
 					trait_scope_by_module[mod] = scope
+				elif scope is None:
+					# K25 TEMPORARY FALLBACK — remove when DMIR serializes trait_scope.
+					# External package modules lack trait_scope in DMIR.
+					# Populate with all known traits — scope was validated at
+					# package build time, so re-validation is unnecessary.
+					# Removal target: DMIR v1 freeze (serialize per-module trait_scope
+					# in package metadata; reconstruct exact scope on load).
+					if all_trait_keys is None:
+						all_trait_keys = list(trait_index.traits_by_id.keys()) if trait_index is not None else []
+					trait_scope_by_module[mod] = all_trait_keys
 	typed_fns_by_id: dict[FunctionId, object] = {}
 	type_diags: list[Diagnostic] = []
 	if trait_world_diags:
@@ -2413,7 +3088,7 @@ def compile_stubbed_funcs(
 				return set()
 			targets: set[str] = set()
 			type_reexp = reexp.get("types") if isinstance(reexp.get("types"), dict) else {}
-			for kind in ("structs", "variants", "exceptions", "interfaces"):
+			for kind in ("structs", "variants", "exceptions", "interfaces", "aliases"):
 				entries = type_reexp.get(kind) if isinstance(type_reexp, dict) else None
 				if not isinstance(entries, dict):
 					continue
@@ -2445,6 +3120,7 @@ def compile_stubbed_funcs(
 							targets.add(tgt)
 			return targets
 
+		all_module_names: set[str] | None = None
 		for mod_name in module_deps.keys():
 			imports = set(module_deps.get(mod_name, set()))
 			visible = {mod_name}
@@ -2462,6 +3138,19 @@ def compile_stubbed_funcs(
 					visible.add(tgt)
 					queue.append(tgt)
 			visible_module_names_by_name[mod_name] = visible
+		# K25 TEMPORARY FALLBACK — remove when DMIR serializes module import graph.
+		# External package modules are absent from module_deps (their
+		# import graph is not available in DMIR).  Give them visibility to
+		# all modules — their dependencies were validated at package build
+		# time.
+		# Removal target: DMIR v1 freeze (serialize per-module import graph
+		# in package metadata; reconstruct exact visible_module_names on load).
+		if isinstance(module_exports, dict):
+			for mod_name in module_exports:
+				if mod_name not in visible_module_names_by_name:
+					if all_module_names is None:
+						all_module_names = set(module_exports.keys()) | set(module_deps.keys())
+					visible_module_names_by_name[mod_name] = set(all_module_names)
 	def _typecheck_fn(fn_id: FunctionId, hir_norm: H.HBlock) -> None:
 		sig = signatures_by_id.get(fn_id)
 		param_types: dict[str, "TypeId"] = {}
@@ -2646,6 +3335,7 @@ def compile_stubbed_funcs(
 		args = [H.HVar(name=name) for name in param_names[1:]]
 		method_name = getattr(wrap_sig, "method_name", None) or wrap_sig.name
 		call_expr = H.HMethodCall(receiver=receiver, method_name=method_name, args=args)
+		call_expr.origin = "wrapper_call"
 		is_void = bool(wrap_sig.return_type_id is not None and shared_type_table.is_void(wrap_sig.return_type_id))
 		if is_void:
 			block = H.HBlock(statements=[H.HExprStmt(expr=call_expr), H.HReturn(value=None)])
@@ -3803,17 +4493,31 @@ def compile_stubbed_funcs(
 		return None
 	# Align call info can-throw flags with inferred callee throw modes so MIR
 	# lowering uses a consistent ABI for direct calls.
-	for typed_fn in typed_fns_by_id.values():
+	# K30: For re-instantiated generic templates (caller and target in same
+	# package module), use callee's declared_can_throw directly.  The checker
+	# may set can_throw=True on calls to nothrow package functions (boundary
+	# wrapper assumption), but intra-module calls go to the raw impl, not the
+	# wrapper.  Cross-module calls to exported entrypoints keep the checker's
+	# can_throw because a boundary wrapper will intercept them.
+	for fn_id_iter, typed_fn in typed_fns_by_id.items():
 		callsite_map = getattr(typed_fn, "call_info_by_callsite_id", None)
 		if not isinstance(callsite_map, dict):
 			continue
+		caller_module = getattr(fn_id_iter, "module", None)
 		updated_callsite: dict[int, CallInfo] = {}
 		for csid, info in callsite_map.items():
 			call_can_throw = info.sig.can_throw
 			if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 				target_info = checked.fn_infos_by_id.get(info.target.symbol)
 				if target_info is not None:
-					call_can_throw = call_can_throw or bool(target_info.declared_can_throw)
+					target_module = getattr(info.target.symbol, "module", None)
+					same_module = caller_module is not None and caller_module == target_module
+					target_sig = target_info.signature
+					is_boundary_target = target_sig is not None and target_sig.is_exported_entrypoint
+					if same_module or not is_boundary_target:
+						call_can_throw = bool(target_info.declared_can_throw)
+					else:
+						call_can_throw = call_can_throw or bool(target_info.declared_can_throw)
 			if call_can_throw != info.sig.can_throw:
 				info = CallInfo(
 					target=info.target,
@@ -5270,6 +5974,7 @@ def compile_stubbed_funcs(
 						return {}, checked, None
 					return {}, checked
 				return {}
+			_canonicalize_struct_field_type_ids(shared_type_table)
 		validator_plan: list[tuple[str, Callable[[], None]]] = [
 			("validate_mir_call_invariants", lambda: validate_mir_call_invariants(mir_funcs_by_id)),
 			("validate_mir_basic_hygiene", lambda: validate_mir_basic_hygiene(mir_funcs_by_id)),
@@ -6150,12 +6855,31 @@ def main(argv: list[str] | None = None) -> int:
 				if isinstance(mid, str):
 					external_module_packages.setdefault(mid, pkg_id)
 
+	# Extract exception schemas from loaded packages so that exception types
+	# referenced in function signatures are resolved as Error during parsing.
+	external_exception_schemas: dict[str, tuple[str, list[str]]] = {}
+	if loaded_pkgs:
+		for pkg in loaded_pkgs:
+			for _mid, mod in pkg.modules_by_id.items():
+				payload = mod.payload
+				if not isinstance(payload, dict):
+					continue
+				payload_tt = payload.get("type_table")
+				if not isinstance(payload_tt, dict):
+					continue
+				pkg_exc = payload_tt.get("exception_schemas")
+				if isinstance(pkg_exc, dict):
+					for fqn, schema in pkg_exc.items():
+						if isinstance(schema, (list, tuple)) and len(schema) == 2:
+							external_exception_schemas.setdefault(fqn, (str(schema[0]), [str(f) for f in schema[1]]))
+
 	package_id = str(args.package_id) if args.package_id else None
 	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
 		source_paths,
 		module_paths=module_paths,
 		external_module_exports=external_exports,
 		external_module_packages=external_module_packages,
+		external_exception_schemas=external_exception_schemas or None,
 		package_id=package_id,
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),
@@ -6304,6 +7028,7 @@ def main(argv: list[str] | None = None) -> int:
 	# into the host TypeTable. This allows package consumption without requiring
 	# identical TypeId assignment across independently-produced artifacts.
 	pkg_typeid_maps: dict[Path, dict[int, int]] = {}
+	pkg_tid_universes: dict[Path, frozenset[int]] = {}
 	if loaded_pkgs:
 		pkg_paths: list[Path] = []
 		pkg_tt_objs: list[dict[str, Any]] = []
@@ -6364,8 +7089,9 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
-		for path, tid_map in zip(pkg_paths, maps):
+		for path, tid_map, tt_obj in zip(pkg_paths, maps, pkg_tt_objs):
 			pkg_typeid_maps[path] = tid_map
+			pkg_tid_universes[path] = frozenset(decode_type_table_obj(tt_obj).defs.keys())
 		for base_id, schema in getattr(type_table, "struct_bases", {}).items():
 			mod = getattr(schema, "module_id", None)
 			name = getattr(schema, "name", None)
@@ -6380,6 +7106,13 @@ def main(argv: list[str] | None = None) -> int:
 				id_registry.intern_type(TypeKey(package_id=pkg, module=mod, name=name, args=()), preferred=base_id)
 
 		_canonicalize_signature_type_ids(base_signatures_by_id, type_table)
+		_canonicalize_struct_field_type_ids(type_table)
+		# Populate exception_catalog with event codes from loaded packages so that
+		# catch handlers in consumer code emit correct event codes for package exceptions.
+		from lang.driftc.core.event_codes import event_code as _event_code
+		for fqn in external_exception_schemas:
+			if fqn not in exception_catalog:
+				exception_catalog[fqn] = _event_code(fqn)
 
 	# If package roots were provided, merge package signatures into the signature
 	# environment so type checking can validate calls to imported functions.
@@ -6657,6 +7390,16 @@ def main(argv: list[str] | None = None) -> int:
 			id_registry=id_registry,
 		)
 
+		# K26: Interface types (e.g., Sink) don't appear in trait_metadata
+		# because they're registered in the type table, not the trait world.
+		# Mark their trait_keys as "missing" so trait index validation doesn't
+		# reject impl references to interface-based traits.
+		_trait_def_keys = {getattr(td, "key", None) for td in external_trait_defs}
+		for impl in external_impl_metas:
+			tk = getattr(impl, "trait_key", None)
+			if tk is not None and tk not in _trait_def_keys:
+				external_missing_traits.add(tk)
+
 		for pkg in loaded_pkgs:
 			pkg_id = pkg.manifest.get("package_id")
 			if not isinstance(pkg_id, str) or not pkg_id:
@@ -6902,6 +7645,7 @@ def main(argv: list[str] | None = None) -> int:
 						target_head=head_key,
 						methods=[],
 						require=getattr(impl, "require_expr", None),
+						type_params=list(getattr(impl, "impl_type_params", []) or []),
 						loc=getattr(impl, "loc", None),
 					)
 				)
@@ -6930,7 +7674,12 @@ def main(argv: list[str] | None = None) -> int:
 					continue
 				consts_obj = payload.get("consts")
 				if not isinstance(consts_obj, dict):
-					continue
+					consts_obj = {}
+				# Also import internal (non-exported) constants so generic template
+				# re-instantiation can resolve module-scoped constant references.
+				internal_consts_obj = payload.get("internal_consts")
+				if isinstance(internal_consts_obj, dict):
+					consts_obj = {**consts_obj, **internal_consts_obj}
 				for cname, entry in consts_obj.items():
 					if not isinstance(cname, str) or not cname:
 						continue
@@ -7076,6 +7825,14 @@ def main(argv: list[str] | None = None) -> int:
 			return inner
 		if td.kind is TypeKind.ARRAY:
 			return type_table.array_base_id()
+		if td.kind is TypeKind.STRUCT:
+			inst = type_table.get_struct_instance(impl_tid)
+			if inst is not None:
+				return inst.base_id
+		if td.kind is TypeKind.VARIANT:
+			inst = type_table.get_variant_instance(impl_tid)
+			if inst is not None:
+				return inst.base_id
 		return impl_tid
 	def _template_sig_for(sig: FnSignature) -> CallableTemplateSignature | None:
 		if not (sig.type_params or getattr(sig, "impl_type_params", [])):
@@ -7094,142 +7851,122 @@ def main(argv: list[str] | None = None) -> int:
 	)
 	display_name_by_id = {fn_id: _display_name_for_fn_id(fn_id) for fn_id in signatures_by_id_all.keys()}
 
-	for fn_id, sig in signatures_by_id.items():
-		if sig.param_type_ids is None or sig.return_type_id is None:
-			continue
-		if getattr(sig, "is_wrapper", False):
-			continue
-		param_types_tuple = tuple(sig.param_type_ids)
-		module_name = getattr(fn_id, "module", None) or sig.module
-		module_id = module_ids.setdefault(module_name, len(module_ids))
-		if sig.is_method:
-			if sig.impl_target_type_id is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"method '{display_name_by_id.get(fn_id, sig.name)}' missing receiver metadata (impl target/self_mode)",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
-					)
-				)
-				continue
-			if sig.self_mode is None:
-				continue
-			self_mode = {
-				"value": SelfMode.SELF_BY_VALUE,
-				"ref": SelfMode.SELF_BY_REF,
-				"ref_mut": SelfMode.SELF_BY_REF_MUT,
-			}.get(sig.self_mode)
-			if self_mode is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"method '{display_name_by_id.get(fn_id, sig.name)}' has unsupported self_mode '{sig.self_mode}'",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
-					)
-				)
-				continue
-			callable_registry.register_inherent_method(
-				callable_id=next_callable_id,
-				name=sig.method_name or sig.name,
-				module_id=module_id,
-				visibility=Visibility.public() if sig.is_pub else Visibility.private(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
-				fn_id=fn_id,
-				impl_id=next_callable_id,
-				impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
-				self_mode=self_mode,
-				is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
-			)
-			next_callable_id += 1
-		else:
-			callable_registry.register_free_function(
-				callable_id=next_callable_id,
-				name=fn_id.name,
-				module_id=module_id,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				fn_id=fn_id,
-				is_generic=bool(sig.type_params),
-			)
-			next_callable_id += 1
+	# Pre-compute generic method keys from ALL signatures (local + external)
+	# so K20 __inst__ dedup works regardless of which registration call sees the sig.
+	_all_generic_method_keys: set[tuple[int | None, str | None]] = set()
+	for _fid, _sig in signatures_by_id.items():
+		if _sig.is_method and (_sig.type_params or getattr(_sig, "impl_type_params", [])):
+			_all_generic_method_keys.add((_registry_impl_target_type_id(_sig.impl_target_type_id), _sig.method_name))
+	for _fid, _sig in external_signatures_by_id.items():
+		if _sig.is_method and (_sig.type_params or getattr(_sig, "impl_type_params", [])):
+			_all_generic_method_keys.add((_registry_impl_target_type_id(_sig.impl_target_type_id), _sig.method_name))
 
-	for fn_id, sig in external_signatures_by_id.items():
-		if callable_registry.get_by_fn_id(fn_id) is not None:
-			continue
-		sig_name = display_name_by_id.get(fn_id, _display_name_for_fn_id(fn_id))
-		if sig.param_type_ids is None or sig.return_type_id is None:
-			continue
-		param_types_tuple = tuple(sig.param_type_ids)
-		module_name = getattr(fn_id, "module", None) or sig.module
-		if module_name is not None and module_name in modules:
-			continue
-		module_id = module_ids.setdefault(module_name, len(module_ids))
-		if sig.is_method:
-			if sig.impl_target_type_id is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"method '{sig_name}' missing receiver metadata (impl target/self_mode)",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
+	def _register_signatures_in_callable_registry(
+		sigs: Mapping[FunctionId, FnSignature],
+		*,
+		is_external: bool = False,
+		skip_modules: set[str] | None = None,
+	) -> None:
+		"""Register signatures into callable_registry with deterministic precedence.
+
+		Priority: exact concrete match > generic template > wrapper (never).
+		Skips wrappers (is_wrapper=True) and __inst__ monomorphizations when a
+		generic template exists for the same (impl_target_type_id, method_name).
+		"""
+		nonlocal next_callable_id
+		generic_method_keys = _all_generic_method_keys
+		for fn_id, sig in sigs.items():
+			if is_external and callable_registry.get_by_fn_id(fn_id) is not None:
+				continue
+			if getattr(sig, "is_wrapper", False):
+				continue
+			if sig.param_type_ids is None or sig.return_type_id is None:
+				continue
+			# K20: skip __inst__ monomorphized sigs when generic template exists.
+			# Only skip sigs that are themselves non-generic (true monomorphizations,
+			# not generic templates that happen to have __inst__ in the name).
+			if "__inst__" in (fn_id.name or "") and sig.is_method and not (sig.type_params or getattr(sig, "impl_type_params", [])):
+				norm_recv = _registry_impl_target_type_id(sig.impl_target_type_id)
+				key = (norm_recv, sig.method_name)
+				if key in generic_method_keys:
+					continue
+			module_name = getattr(fn_id, "module", None) or sig.module
+			if is_external and skip_modules and module_name is not None and module_name in skip_modules:
+				continue
+			param_types_tuple = tuple(sig.param_type_ids)
+			module_id = module_ids.setdefault(module_name, len(module_ids))
+			sig_name = display_name_by_id.get(fn_id, _display_name_for_fn_id(fn_id))
+			if sig.is_method:
+				if sig.impl_target_type_id is None:
+					type_diags.append(
+						Diagnostic(
+							message=f"method '{sig_name}' missing receiver metadata (impl target/self_mode)",
+							severity="error",
+							phase="typecheck",
+							span=getattr(sig, "loc", None),
+						)
 					)
-				)
-				continue
-			if sig.self_mode is None:
-				continue
-			self_mode = {
-				"value": SelfMode.SELF_BY_VALUE,
-				"ref": SelfMode.SELF_BY_REF,
-				"ref_mut": SelfMode.SELF_BY_REF_MUT,
-			}.get(sig.self_mode)
-			if self_mode is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"method '{sig_name}' has unsupported self_mode '{sig.self_mode}'",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
+					continue
+				if sig.self_mode is None:
+					continue
+				self_mode = {
+					"value": SelfMode.SELF_BY_VALUE,
+					"ref": SelfMode.SELF_BY_REF,
+					"ref_mut": SelfMode.SELF_BY_REF_MUT,
+				}.get(sig.self_mode)
+				if self_mode is None:
+					type_diags.append(
+						Diagnostic(
+							message=f"method '{sig_name}' has unsupported self_mode '{sig.self_mode}'",
+							severity="error",
+							phase="typecheck",
+							span=getattr(sig, "loc", None),
+						)
 					)
+					continue
+				visibility = Visibility.public() if sig.is_pub else Visibility.private()
+				callable_registry.register_inherent_method(
+					callable_id=next_callable_id,
+					name=sig.method_name or sig.name,
+					module_id=module_id,
+					visibility=visibility,
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					template_signature=_template_sig_for(sig),
+					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
+					template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
+					fn_id=fn_id,
+					impl_id=next_callable_id,
+					impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
+					self_mode=self_mode,
+					is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
 				)
-				continue
-			callable_registry.register_inherent_method(
-				callable_id=next_callable_id,
-				name=sig.method_name or sig_name,
-				module_id=module_id,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
-				fn_id=fn_id,
-				impl_id=next_callable_id,
-				impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
-				self_mode=self_mode,
-				is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
-			)
-			next_callable_id += 1
-		else:
-			callable_registry.register_free_function(
-				callable_id=next_callable_id,
-				name=fn_id.name,
-				module_id=module_id,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				fn_id=fn_id,
-				is_generic=bool(sig.type_params),
-			)
-			next_callable_id += 1
+				next_callable_id += 1
+			else:
+				callable_registry.register_free_function(
+					callable_id=next_callable_id,
+					name=fn_id.name,
+					module_id=module_id,
+					visibility=Visibility.public(),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					template_signature=_template_sig_for(sig),
+					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
+					fn_id=fn_id,
+					is_generic=bool(sig.type_params),
+				)
+				next_callable_id += 1
+
+	_register_signatures_in_callable_registry(signatures_by_id)
+	_register_signatures_in_callable_registry(external_signatures_by_id, is_external=True, skip_modules=modules)
 
 	# candidate_signatures_for_diag removed; no name-keyed fallback map
+
+	# Contract: no wrapper sigs should be in the registry.
+	for _entry in callable_registry._entries.values() if hasattr(callable_registry, "_entries") else []:
+		_efid = getattr(_entry, "fn_id", None)
+		if _efid is not None:
+			_esig = signatures_by_id_all.get(_efid)
+			if _esig is not None and getattr(_esig, "is_wrapper", False):
+				raise AssertionError(f"registry contract: wrapper sig '{function_symbol(_efid)}' leaked into callable_registry")
 
 	def _collect_reexport_targets(mod: str) -> set[str]:
 		exp = module_exports.get(mod) if isinstance(module_exports, dict) else None
@@ -7242,7 +7979,7 @@ def main(argv: list[str] | None = None) -> int:
 			return set()
 		targets: set[str] = set()
 		type_reexp = reexp.get("types") if isinstance(reexp.get("types"), dict) else {}
-		for kind in ("structs", "variants", "exceptions", "interfaces"):
+		for kind in ("structs", "variants", "exceptions", "interfaces", "aliases"):
 			entries = type_reexp.get(kind) if isinstance(type_reexp, dict) else None
 			if not isinstance(entries, dict):
 				continue
@@ -7321,6 +8058,12 @@ def main(argv: list[str] | None = None) -> int:
 				for prelude in sorted(prelude_modules):
 					best.setdefault(prelude, (mod_name, prelude))
 				visible |= prelude_modules
+			# Package modules are always visible to consumer modules because all
+			# public methods are available through the package interface.
+			if external_module_packages:
+				for pkg_mod in external_module_packages:
+					best.setdefault(pkg_mod, (mod_name, pkg_mod))
+				visible |= set(external_module_packages.keys())
 			visible_module_names_by_name[mod_name] = visible
 			visibility_provenance_by_name[mod_name] = best
 			visible_ids_list = []
@@ -7605,7 +8348,7 @@ def main(argv: list[str] | None = None) -> int:
 				typed_fn,
 				type_table,
 				module_name=module_name,
-				signatures=signatures_by_id,
+				signatures=signatures_by_id_all,
 				visible_modules=visible_modules,
 			)
 			trait_diags.extend(res.diagnostics)
@@ -7878,6 +8621,7 @@ def main(argv: list[str] | None = None) -> int:
 				"variants": list(exported_types_obj.get("variants", [])) if isinstance(exported_types_obj.get("variants"), list) else [],
 				"exceptions": list(exported_types_obj.get("exceptions", [])) if isinstance(exported_types_obj.get("exceptions"), list) else [],
 				"interfaces": list(exported_types_obj.get("interfaces", [])) if isinstance(exported_types_obj.get("interfaces"), list) else [],
+				"aliases": list(exported_types_obj.get("aliases", [])) if isinstance(exported_types_obj.get("aliases"), list) else [],
 			}
 			exported_traits: list[str] = (
 				list(exported_traits_obj) if isinstance(exported_traits_obj, (list, set, tuple)) else []
@@ -7905,6 +8649,7 @@ def main(argv: list[str] | None = None) -> int:
 				impls=list(module_exports.get(mid, {}).get("impls", []))
 				if isinstance(module_exports, dict)
 				else [],
+				package_id=package_id,
 			)
 			for hdr in impl_headers:
 				hdr["impl_id"] = pkg_next_impl_id
@@ -8070,7 +8815,7 @@ def main(argv: list[str] | None = None) -> int:
 					"exports",
 					{
 						"values": [],
-						"types": {"structs": [], "variants": [], "exceptions": [], "interfaces": []},
+						"types": {"structs": [], "variants": [], "exceptions": [], "interfaces": [], "aliases": []},
 						"consts": [],
 						"traits": [],
 					},
@@ -8191,256 +8936,39 @@ def main(argv: list[str] | None = None) -> int:
 					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 			return 1
 
-		# Decode package MIR payloads. We intentionally do not blindly embed all
-		# loaded package modules; instead we include only the call-graph closure
-		# reachable from the source module(s). This keeps builds predictable and
-		# avoids unnecessary collisions/work.
-		pkg_mir_all: dict[FunctionId, M.MirFunc] = {}
-		pkg_sigs_by_id: dict[FunctionId, FnSignature] = {}
-		for pkg in loaded_pkgs:
-			tid_map = pkg_typeid_maps.get(pkg.path, {})
-			for _mid, mod in pkg.modules_by_id.items():
-				payload = mod.payload
-				if not isinstance(payload, dict):
-					continue
-				if payload.get("payload_kind") != "provisional-dmir" or payload.get("payload_version") != 0:
-					msg = f"unsupported package payload kind/version in {_package_label()}"
-					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
-					else:
-						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
-					return 1
-				sigs_obj = payload.get("signatures")
-				name_to_fn_id: dict[str, FunctionId] = {}
-				if isinstance(sigs_obj, dict):
-					for name, sd in sigs_obj.items():
-						if not isinstance(sd, dict):
-							continue
-						fn_id_obj = sd.get("fn_id")
-						fn_id = function_id_from_obj(fn_id_obj)
-						if fn_id is not None:
-							name_to_fn_id[str(name)] = fn_id
-				mir_obj = payload.get("mir_funcs")
-				if isinstance(mir_obj, dict):
-					for fn_id, fn in decode_mir_funcs(mir_obj, name_to_fn_id=name_to_fn_id).items():
-						if isinstance(fn, M.MirFunc):
-							_remap_mir_func_typeids(fn, tid_map)
-							pkg_mir_all[fn_id] = fn
-				if isinstance(sigs_obj, dict):
-					for name, sd in sigs_obj.items():
-						if not isinstance(sd, dict):
-							continue
-						fn_id_obj = sd.get("fn_id")
-						fn_id = function_id_from_obj(fn_id_obj)
-						if fn_id is None or fn_id in pkg_sigs_by_id:
-							continue
-						param_type_ids = sd.get("param_type_ids")
-						if isinstance(param_type_ids, list):
-							param_type_ids = [tid_map.get(int(x), int(x)) for x in param_type_ids]
-						ret_tid = sd.get("return_type_id")
-						if isinstance(ret_tid, int):
-							ret_tid = tid_map.get(ret_tid, ret_tid)
-						impl_tid = sd.get("impl_target_type_id")
-						if isinstance(impl_tid, int):
-							impl_tid = tid_map.get(impl_tid, impl_tid)
-						pkg_sigs_by_id[fn_id] = FnSignature(
-							name=str(sd.get("name") or name),
-							module=sd.get("module"),
-							method_name=sd.get("method_name"),
-							param_names=sd.get("param_names"),
-						param_type_ids=param_type_ids,
-						return_type_id=ret_tid,
-						declared_can_throw=sd.get("declared_can_throw"),
-						is_method=bool(sd.get("is_method", False)),
-						self_mode=sd.get("self_mode"),
-						impl_target_type_id=impl_tid,
-						is_pub=bool(sd.get("is_pub", False)),
-						is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
-						)
-
-		# SSA for package functions (required for LLVM lowering v1).
-		def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
-			calls: set[FunctionId] = set()
-			for block in fn.blocks.values():
-				for instr in block.instructions:
-					if isinstance(instr, M.Call):
-						calls.add(instr.fn_id)
-			return calls
-
-		# Build wrapper → target map from signatures already registered by
-		# compile_stubbed_funcs (which called _inject_method_boundary_wrappers
-		# internally and registered wrapper *signatures* but not MIR bodies).
-		wrapper_target_by_id: dict[FunctionId, FunctionId] = {}
-		wrapper_sigs: dict[FunctionId, FnSignature] = {}
-		for fn_id, info in checked_src.fn_infos_by_id.items():
-			sig = info.signature
-			if sig is None:
-				continue
-			if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
-				wrapper_target_by_id[fn_id] = sig.wraps_target_fn_id
-				wrapper_sigs[fn_id] = sig
-
-		# Call-graph reachability: prune both src_mir and pkg_mir to only
-		# functions transitively reachable from the entry point(s).  This
-		# removes eagerly-instantiated templates (destructors for unused
-		# types) and unreachable package functions.
-		src_roots: set[FunctionId] = set()
-		for fn_id, fn in src_mir.items():
-			sig = checked_src.fn_infos_by_id.get(fn_id)
-			if sig is not None and sig.signature is not None:
-				sname = sig.signature.name or ""
-				if sname.endswith("::" + entry_name) or sname == entry_name:
-					src_roots.add(fn_id)
-
-		# BFS through src_mir call graph from entry roots.
-		src_needed: set[FunctionId] = set(src_roots)
-		queue: list[FunctionId] = list(src_roots)
-		while queue:
-			cur = queue.pop()
-			fn = src_mir.get(cur)
-			if fn is None:
-				continue
-			for callee in _called_funcs_in_mir(fn):
-				if callee in src_mir and callee not in src_needed:
-					src_needed.add(callee)
-					queue.append(callee)
-
-		src_mir = {fn_id: fn for fn_id, fn in src_mir.items() if fn_id in src_needed}
-		ssa_src = {fn_id: fn for fn_id, fn in ssa_src.items() if fn_id in src_needed}
-
-		# Package MIR: include functions reachable from (pruned) source MIR.
-		# When source calls a wrapper (e.g. __wrap_method::Counter::get),
-		# that wrapper won't exist in pkg_mir_all — it needs to be
-		# synthesised later. But its *target* (the original method) is in
-		# pkg_mir_all and must be pulled in.
-		pkg_needed: set[FunctionId] = set()
-		wrappers_needed: set[FunctionId] = set()
-		for fn in src_mir.values():
-			for callee in _called_funcs_in_mir(fn):
-				if callee in pkg_mir_all:
-					pkg_needed.add(callee)
-				elif callee in wrapper_target_by_id:
-					wrappers_needed.add(callee)
-					target = wrapper_target_by_id[callee]
-					if target in pkg_mir_all:
-						pkg_needed.add(target)
-
-		# NOTE (K18): Do NOT force-seed ENTRY_WRAPPER_IMPLICIT_DEPS into
-		# the BFS here.  install_process_preamble's transitive closure
-		# includes heavy generic instantiations (GlobalRegistry::set<T>,
-		# mem alloc/write, callbacks, drop impls) whose types may not be
-		# representable by the LLVM codegen in the package-consumer context.
-		# The availability check below (mir_all scan) correctly omits the
-		# preamble call from the entry wrapper when the function isn't
-		# naturally reachable through the consumer's call graph.
-
-		# Expand through package-to-package calls.
-		queue = list(pkg_needed)
-		while queue:
-			cur = queue.pop()
-			fn = pkg_mir_all.get(cur)
-			if fn is None:
-				continue
-			for callee in _called_funcs_in_mir(fn):
-				if callee in pkg_mir_all and callee not in pkg_needed:
-					pkg_needed.add(callee)
-					queue.append(callee)
-
-		pkg_mir: dict[FunctionId, M.MirFunc] = {}
-		for fn_id in pkg_needed:
-			fn = pkg_mir_all[fn_id]
-			pkg_mir[fn_id] = fn
-
-		if checked_src.type_table is not None:
-			pkg_fn_infos: dict[FunctionId, FnInfo] = {}
-			for fn_id, sig in pkg_sigs_by_id.items():
-				if fn_id in pkg_fn_infos:
-					continue
-				pkg_fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
-			for fn_id, fn in pkg_mir.items():
-				pkg_mir[fn_id] = insert_string_arc(
-					fn,
-					type_table=checked_src.type_table,
-					fn_infos=pkg_fn_infos,
-				)
-
-		pkg_ssa: dict[FunctionId, MirToSSA.SsaFunc] = {}
-		for fn_id, fn in pkg_mir.items():
-			pkg_ssa[fn_id] = MirToSSA().run(fn)
-
-		# Merge (source wins on symbol conflicts).
-		mir_all = dict(pkg_mir)
-		mir_all.update(src_mir)
-		ssa_all = dict(pkg_ssa)
-		ssa_all.update(ssa_src)
-
-		# Synthesise wrapper MIR/SSA for boundary-called wrappers that have
-		# no MIR body in the package (the package only ships the original
-		# method; the checker upgraded calls to __wrap_method:: targets).
-		for wrap_id in wrappers_needed:
-			if wrap_id in mir_all:
-				continue
-			wrap_sig = wrapper_sigs.get(wrap_id)
-			if wrap_sig is None or wrap_sig.param_type_ids is None:
-				continue
-			param_names = list(wrap_sig.param_names or [])
-			if len(param_names) != len(wrap_sig.param_type_ids):
-				param_names = [f"p{i}" for i in range(len(wrap_sig.param_type_ids))]
-			builder = make_builder(wrap_id)
-			builder.func.params = list(param_names)
-			call_dest: M.ValueId | None
-			if checked_src.type_table is not None and checked_src.type_table.is_void(wrap_sig.return_type_id):
-				call_dest = None
-			else:
-				call_dest = builder.new_temp()
-			builder.emit(M.Call(dest=call_dest, fn_id=wrapper_target_by_id[wrap_id], args=param_names, can_throw=False))
-			ok_dest = builder.new_temp()
-			builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
-			builder.set_terminator(M.Return(value=ok_dest))
-			mir_all[wrap_id] = builder.func
-			ssa_all[wrap_id] = MirToSSA().run(builder.func)
-
-		# FnInfos: include source + package signatures so codegen can type calls.
-		fn_infos = dict(checked_src.fn_infos_by_id)
-		pkg_sig_env: dict[FunctionId, FnSignature] = dict(pkg_sigs_by_id)
-		all_sig_env = dict(pkg_sig_env)
-		all_sig_env.update(wrapper_sigs)
-		for fn_id, info in checked_src.fn_infos_by_id.items():
-			if info.signature is None:
-				continue
-			all_sig_env[fn_id] = info.signature
-		for fn_id, sig in all_sig_env.items():
-			if fn_id in fn_infos:
-				continue
-			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
-
-		# Entry point detection and rename for package-consumer path.
-		rename_map: dict[FunctionId, str] = {}
-		entry_id: FunctionId | None = None
-		for fn_id in mir_all:
-			if fn_id.module == entry_module and fn_id.name == entry_name:
-				entry_id = fn_id
-				break
-		if entry_id is not None:
-			rename_map[entry_id] = "drift_main"
-
+		unit = _build_package_consumer_unit(
+			loaded_pkgs=loaded_pkgs,
+			pkg_typeid_maps=pkg_typeid_maps,
+			pkg_tid_universes=pkg_tid_universes,
+			type_table=type_table,
+			checked_src=checked_src,
+			src_mir=src_mir,
+			ssa_src=ssa_src,
+			entry_module=entry_module,
+			entry_name=entry_name,
+			external_impl_metas=external_impl_metas,
+		)
 		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("optimized" if optimized else ("debug" if debug_enabled else "default"))
+		# K26: Inject external_impl_metas into combined_exports so that
+		# _build_interface_impl_index can find trait impls for vtable
+		# emission during codegen.  This must happen AFTER type-checking
+		# (compile_stubbed_funcs) to avoid false type-mismatch errors
+		# from un-remapped TypeIds.
+		if combined_exports is not None and external_impl_metas:
+			for impl in external_impl_metas:
+				mod = getattr(impl, "def_module", None)
+				if mod is not None and mod in combined_exports:
+					exp = combined_exports[mod]
+					if isinstance(exp, dict):
+						existing = exp.get("impls")
+						if isinstance(existing, list):
+							existing.append(impl)
+						else:
+							exp["impls"] = [impl]
 		try:
-			_validate_codegen_contract(
-				mir_all,
-				ssa_all,
-				fn_infos,
-				checked_src.type_table,
-				debug_enabled=debug_enabled,
-			)
-			module = lower_module_to_llvm(
-				mir_all,
-				ssa_all,
-				fn_infos,
-				type_table=checked_src.type_table,
-				module_exports=module_exports,
-				rename_map=rename_map,
-				argv_wrapper=None,
+			ir = _emit_codegen(
+				unit,
+				module_exports=combined_exports,
 				word_bits=_target_word_bits(args.target_word_bits),
 				debug_enabled=debug_enabled,
 				provenance_git_sha=_git_short_sha(),
@@ -8453,15 +8981,6 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
-		module.emit_abi_stamp()
-		if entry_id is not None:
-			entry_sym = rename_map.get(entry_id, function_symbol(entry_id))
-			wrapper_dep_flags = {
-				flag: any(fid.module == dep_mod and fid.name == dep_name for fid in mir_all)
-				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
-			}
-			module.emit_entry_wrapper(entry_sym, **wrapper_dep_flags)
-		ir = module.render()
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(
 			func_hirs=func_hirs_by_id,
