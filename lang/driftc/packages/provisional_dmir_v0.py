@@ -642,6 +642,7 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 			"param_type_ids": list(sig.param_type_ids or []) if sig.param_type_ids is not None else None,
 			"return_type_id": sig.return_type_id,
 			"declared_can_throw": sig.declared_can_throw,
+			"declared_unsafe": bool(getattr(sig, "declared_unsafe", False)),
 			"is_exported_entrypoint": bool(getattr(sig, "is_exported_entrypoint", False)),
 			"type_params": type_param_names,
 			"impl_type_params": impl_type_param_names,

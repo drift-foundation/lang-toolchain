@@ -2496,6 +2496,7 @@ class Pass1State:
 	unsafe_trusted_modules: set  # set[str]
 	function_keys_by_fn_id: dict  # FunctionId -> FunctionKey
 	visibility_provenance_by_id: dict  # int -> tuple[str, ...]
+	lambda_fn_specs: dict | None = None  # FunctionId -> LambdaFnSpec from Pass 1 type checker
 
 
 def compile_stubbed_funcs(
@@ -2869,6 +2870,10 @@ def compile_stubbed_funcs(
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
 	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True)
+	# K42: seed Pass 1 lambda_fn_specs into the new TypeChecker so that
+	# captureless lambda function bodies are generated during MIR lowering.
+	if pass1_state is not None and pass1_state.lambda_fn_specs:
+		type_checker._lambda_fn_specs.update(pass1_state.lambda_fn_specs)
 	# Phase 6: only allocate callable_registry / module_ids / visibility_provenance
 	# when pass1_state is absent — under pass1_state these are immediately
 	# overwritten from the driver's state (lines 3087-3104).
@@ -6154,7 +6159,8 @@ def compile_stubbed_funcs(
 			return {}
 
 	type_diag_len = len(type_diags)
-	for spec in type_checker.lambda_fn_specs():
+	_all_lambda_specs = list(type_checker.lambda_fn_specs())
+	for spec in _all_lambda_specs:
 		if spec.fn_id in mir_funcs_by_id:
 			continue
 		lam = copy.deepcopy(spec.lambda_expr)
@@ -7733,6 +7739,7 @@ def main(argv: list[str] | None = None) -> int:
 						param_type_ids=param_type_ids,
 						return_type_id=ret_tid,
 						declared_can_throw=sd.get("declared_can_throw"),
+						declared_unsafe=bool(sd.get("declared_unsafe", False)) or None,
 						is_intrinsic=is_intrinsic,
 						intrinsic_kind=intrinsic_kind,
 						is_method=bool(sd.get("is_method", False)),
@@ -8942,6 +8949,7 @@ def main(argv: list[str] | None = None) -> int:
 			template_keys_by_fn_id=external_template_keys_by_fn_id,
 			emit_instantiation_index=args.emit_instantiation_index,
 			enforce_entrypoint=bool(args.output or args.emit_ir),
+			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
 		)
 		_assert_all_phased(checked_pkg.diagnostics, context="typecheck")
 		if any(d.severity == "error" for d in checked_pkg.diagnostics):
@@ -9421,6 +9429,7 @@ def main(argv: list[str] | None = None) -> int:
 			unsafe_trusted_modules=unsafe_trusted_modules,
 			function_keys_by_fn_id=pass1_function_keys,
 			visibility_provenance_by_id=_p1_vis_prov_by_id,
+			lambda_fn_specs=dict(type_checker._lambda_fn_specs) if type_checker._lambda_fn_specs else None,
 		)
 		src_mir, checked_src, ssa_src = compile_stubbed_funcs(
 			func_hirs=normalized_hirs_by_id,

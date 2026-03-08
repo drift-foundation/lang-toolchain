@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-07
 **Scope**: K10–K40 + ext-e2e-report (559 test cases through signed-package consumer path)
-**Current state**: 545/558 pass (97.5%), remaining: 10 compile-check + 0 compile-codegen + 0 link + 4 runtime (2 newly exposed, 2 K42-@test_build_only)
+**Current state**: 556/561 pass (99.1%), remaining: 2 runtime (stdlib bugs, pinned/deferred)
 
 ---
 
@@ -317,18 +317,20 @@ Current smoke set (7 cases) should expand to include:
 | After K39+K40 (BFS destroy+preamble+variant walk) | 88.7% | 496/559 |
 | After module-m + unsafe + dict-iter + K41 + K27+ | 96.4% | 538/558 |
 | After K18 guard + bucket(a) test fixes + stdlib export | 97.5% | 545/558 |
-| **Remaining 14 failures (=1 of which was in prior 19)** | | |
-| **(a) Newly exposed runtime issues (2 — NOT package-specific):** | | |
+| **Remaining 2 failures + 3 skipped (556/561 = 99.1%) — all K42 RESOLVED** | | |
+| **(a) Newly exposed runtime issues (2 — NOT package-specific, pinned/deferred):** | | |
 | — `array_range_reserve_noop_invalidates`: reserve(n<=cap) still invalidates range | No | Stdlib behavior bug |
 | — `deque_range_sort_binary_search_wrap`: binary_search returns None on sorted deque | Maybe | Investigate |
-| **(b) K42 class — duplicate compile_stubbed_funcs state (10):** | | |
-| — K42 lock/auto-borrow (4): trait auto-borrow diverges in second-pass callable_registry | Yes | Converge pipeline |
-| — K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True | Yes | Converge pipeline (see K43 below) |
-| — MIR invariant (2): array copy invariant — Copy status diverges in second pass | Yes | Converge pipeline |
-| — Package-path semantic (1): ambiguous trait req (hashmap_iter_empty) | Yes | Converge pipeline |
-| — K42 @test_build_only visibility (2): __test_invalidate invisible in second pass | Yes | Converge pipeline |
+| **(b) K42 class — duplicate compile_stubbed_funcs state (10→3 remaining):** | | |
+| — ~~K42 lock/auto-borrow (4)~~ **RESOLVED** — root cause same as borrow_escape: Pass 1 `_lambda_fn_specs` not forwarded to CSF TypeChecker. Lambda specs for captureless lambdas (used in `conc.scope`, `conc.lock`) lost, causing MIR FnPtrConst with no function body. Fix: `Pass1State.lambda_fn_specs` field + seeding. | Yes | Fixed |
+| — ~~K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True~~ **RESOLVED** — already fixed in Phase 1a: call site at line 9456 passes `allow_unsafe=bool(getattr(args, "allow_unsafe", False))` instead of defaulting to True. `array_byte_alloc_uninit_requires_unsafe` now correctly rejects unsafe calls in package-consumer path. | Yes | Fixed |
+| — ~~MIR invariant (2): array copy invariant~~ **RESOLVED** — root cause: `_visit_expr_HArrayLiteral` only emitted CopyValue for lvalue elements (`is_lvalue_elem` guard); rvalue elements (function call results like `diagnostic_entry(...)`) bypassed CopyValue. Fix: removed `is_lvalue_elem` guard so all Copy (non-bitcopy) elements get CopyValue. Also removed stale early K42 canonicalization at line 5072. | Yes | Fixed |
+| — ~~Package-path semantic (1): result generic variant inference~~ **RESOLVED** — two interlocking bugs: (a) `apply_subst` in `type_subst.py` had no FORWARD_NOMINAL handler — when return type `Result<T, Int>` was FORWARD_NOMINAL, substitution T→Payload produced new param_types but discarded them (no kind-match fallthrough); fix: added FORWARD_NOMINAL handler that resolves to canonical VARIANT/STRUCT/INTERFACE base and instantiates. (b) `resolve_variant_ctor` in `call_resolver.py` received FORWARD_NOMINAL expected_type for variant ctor calls — `instantiate_sig` couldn't unify VARIANT ctor return with FORWARD_NOMINAL expected; fix: canonicalize FORWARD_NOMINAL expected_type to VARIANT template/instance before inference. | Yes | Fixed |
+| — ~~Package-path semantic (1): ambiguous trait req (hashmap_iter_empty)~~ **RESOLVED** — side-effect of `apply_subst` FORWARD_NOMINAL fix in `type_subst.py` | Yes | Fixed |
+| — ~~K42 @test_build_only visibility (2): __test_invalidate invisible in second pass~~ **RESOLVED** — not actually a visibility issue. `__test_invalidate()` (wrapper: `declared_can_throw=True`) was called outside try/catch in `nothrow main`. Fix: moved `__test_invalidate()` inside try block in both test fixtures. Semantically equivalent — invalidation must precede swap regardless of position. | Yes | Fixed |
+| — ~~borrow_escape_scope_accepted (1): lambda fnptr codegen~~ **RESOLVED** — two interlocking bugs: (a) Pass 1 TypeChecker's `_lambda_fn_specs` not forwarded to `compile_stubbed_funcs`'s TypeChecker — captureless lambda `__lambda_fn_main_7` had FnPtrConst in MIR but no function body/signature generated. Fix: added `lambda_fn_specs` field to `Pass1State`, seed into CSF's TypeChecker. (b) `enforce.py` `fn_throws` cross-check — package wrapper signatures annotated `can_throw=True` on closure types, making `Fn1` trait proof fail for nothrow lambdas. Fix: cross-check instantiation type args against actual argument types. | Yes | Fixed |
 | **(c) K42 class — generic variant inference (1):** | | |
-| — result_generic_ok_copy_struct_string_match_return_no_leak | Yes | Converge pipeline |
+| — ~~result_generic_ok_copy_struct_string_match_return_no_leak~~ **RESOLVED** (see b above) | Yes | Fixed |
 
 ---
 

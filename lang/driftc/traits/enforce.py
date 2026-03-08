@@ -418,6 +418,27 @@ def enforce_fn_requires(
 			inst = instantiations_by_callsite_id.get(callsite_id) if callsite_id is not None else None
 			if inst is not None and len(inst.type_args) == len(type_params):
 				bindings = {tp.id: inst.type_args[idx] for idx, tp in enumerate(type_params)}
+				# K42: cross-check instantiation type args against actual argument
+				# types for FUNCTION-typed bindings. Package wrapper signatures may
+				# annotate can_throw=True on FUNCTION types, but the actual closure
+				# argument may be nothrow. Prefer the actual argument's can_throw.
+				if sig and sig.param_type_ids and arg_type_ids:
+					for idx, tp in enumerate(type_params):
+						bound_ty = bindings.get(tp.id)
+						if bound_ty is None:
+							continue
+						# Find which param position corresponds to this type param
+						for pidx, pty in enumerate(sig.param_type_ids):
+							if pidx >= len(arg_type_ids):
+								break
+							ptd = type_table.get(pty)
+							if ptd.kind is TypeKind.TYPEVAR and ptd.type_param_id == tp.id:
+								actual_ty = arg_type_ids[pidx]
+								if actual_ty != bound_ty:
+									btd = type_table.get(bound_ty)
+									atd = type_table.get(actual_ty)
+									if btd.kind is TypeKind.FUNCTION and atd.kind is TypeKind.FUNCTION and btd.param_types == atd.param_types and btd.can_throw() != atd.can_throw():
+										bindings[tp.id] = actual_ty
 			elif type_args and len(type_args) == len(type_params):
 				bindings = {}
 				for idx, tp in enumerate(type_params):

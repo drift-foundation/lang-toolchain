@@ -893,6 +893,25 @@ def resolve_variant_ctor(
 			)
 		)
 		return None
+	# K42: canonicalize FORWARD_NOMINAL expected_type to actual VARIANT so
+	# that instantiate_sig can unify the constructor return type with the
+	# expected type and the fallback can find the variant instance.
+	if expected_type is not None:
+		_etd = ctx.type_table.get(expected_type)
+		if _etd.kind is TypeKind.FORWARD_NOMINAL and _etd.param_types:
+			_resolved_base = (
+				ctx.type_table.get_nominal(kind=TypeKind.VARIANT, module_id=_etd.module_id, name=_etd.name)
+				or ctx.type_table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=_etd.name)
+			)
+			if _resolved_base is not None:
+				_has_tv = any(ctx.type_table.has_typevar(p) for p in _etd.param_types)
+				try:
+					if _has_tv:
+						expected_type = ctx.type_table.ensure_variant_template(_resolved_base, list(_etd.param_types))
+					else:
+						expected_type = ctx.type_table.ensure_variant_instantiated(_resolved_base, list(_etd.param_types))
+				except (ValueError, KeyError):
+					pass
 	inst_res = ctx.instantiate_sig(
 		sig=ctor_sig,
 		arg_types=arg_types,

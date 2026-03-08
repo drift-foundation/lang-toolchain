@@ -10,9 +10,9 @@ var dq = containers.deque<type Int>();
 	dq.push_back(1);
 	dq.push_back(2);
 	var r = dq.range_mut();
-	r.__test_invalidate();
 	var out = 0;
 	try {
+		r.__test_invalidate();
 		r.swap(0, 0);
 	} catch std.err:IteratorInvalidated(e) {
 		val dv_c = e.attrs["container_id"];

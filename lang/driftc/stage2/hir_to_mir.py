@@ -2046,10 +2046,7 @@ class HIRToMIR:
 			val = self.lower_expr(elem_expr)
 			val_ty = self._infer_expr_type(elem_expr)
 			if val_ty is not None:
-				is_lvalue_elem = isinstance(elem_expr, H.HVar)
-				if hasattr(H, "HPlaceExpr") and isinstance(elem_expr, getattr(H, "HPlaceExpr")):
-					is_lvalue_elem = True
-				if self._should_copy_value(val_ty) and is_lvalue_elem and not isinstance(elem_expr, H.HMove):
+				if self._should_copy_value(val_ty) and not isinstance(elem_expr, H.HMove):
 					copy_dest = self.b.new_temp()
 					self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
 					self._local_types[copy_dest] = val_ty

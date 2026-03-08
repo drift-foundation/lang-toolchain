@@ -8,9 +8,9 @@ use trait iter.RandomAccessPermutable;
 fn main() nothrow -> Int {
 	var arr = [1, 2];
 	var r = arr.range_mut();
-	r.__test_invalidate();
 	var out = 0;
 	try {
+		r.__test_invalidate();
 		r.swap(0, 0);
 	} catch std.err:IteratorInvalidated(e) {
 		val dv_c = e.attrs["container_id"];

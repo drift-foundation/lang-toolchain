@@ -67,6 +67,33 @@ def apply_subst(type_id: TypeId, subst: Subst, table: TypeTable) -> TypeId:
 					return table.ensure_interface_template(inst.base_id, list(new_args))
 				return table.ensure_interface_instantiated(inst.base_id, list(new_args))
 			return type_id
+	if td.kind is TypeKind.FORWARD_NOMINAL and td.param_types:
+		new_params = [apply_subst(p, subst, table) for p in td.param_types]
+		if new_params == td.param_types:
+			return type_id
+		resolved_base = (
+			table.get_nominal(kind=TypeKind.VARIANT, module_id=td.module_id, name=td.name)
+			or table.get_nominal(kind=TypeKind.STRUCT, module_id=td.module_id, name=td.name)
+			or table.get_nominal(kind=TypeKind.INTERFACE, module_id=td.module_id, name=td.name)
+		)
+		if resolved_base is None:
+			resolved_base = (
+				table.find_unique_nominal_by_name(kind=TypeKind.VARIANT, name=td.name)
+				or table.find_unique_nominal_by_name(kind=TypeKind.STRUCT, name=td.name)
+				or table.find_unique_nominal_by_name(kind=TypeKind.INTERFACE, name=td.name)
+			)
+		if resolved_base is not None:
+			has_typevar = any(table.has_typevar(a) for a in new_params)
+			try:
+				if resolved_base in getattr(table, "variant_schemas", {}):
+					return table.ensure_variant_template(resolved_base, list(new_params)) if has_typevar else table.ensure_variant_instantiated(resolved_base, list(new_params))
+				if resolved_base in getattr(table, "struct_bases", {}):
+					return table.ensure_struct_template(resolved_base, list(new_params)) if has_typevar else table.ensure_struct_instantiated(resolved_base, list(new_params))
+				if resolved_base in getattr(table, "interface_bases", {}):
+					return table.ensure_interface_template(resolved_base, list(new_params)) if has_typevar else table.ensure_interface_instantiated(resolved_base, list(new_params))
+			except (ValueError, KeyError):
+				return type_id
+		return type_id
 	if not td.param_types:
 		return type_id
 	new_params = [apply_subst(p, subst, table) for p in td.param_types]
