@@ -3262,12 +3262,7 @@ def compile_stubbed_funcs(
 					if isinstance(scope, list):
 						trait_scope_by_module[mod] = scope
 					elif scope is None:
-						# K25 TEMPORARY FALLBACK — remove when DMIR serializes trait_scope.
-						# External package modules lack trait_scope in DMIR.
-						# Populate with all known traits — scope was validated at
-						# package build time, so re-validation is unnecessary.
-						# Removal target: DMIR v1 freeze (serialize per-module trait_scope
-						# in package metadata; reconstruct exact scope on load).
+						# K25 backward-compat fallback for old packages without trait_scope.
 						if all_trait_keys is None:
 							all_trait_keys = list(trait_index.traits_by_id.keys()) if trait_index is not None else []
 						trait_scope_by_module[mod] = all_trait_keys
@@ -8509,10 +8504,9 @@ def main(argv: list[str] | None = None) -> int:
 					trait_scope_by_module[mod_name] = list(scope)
 				else:
 					trait_scope_by_module[mod_name] = []
-	# K25 fallback (TEMPORARY — removal-targeted once DMIR serializes trait_scope):
-	# External package modules lack trait_scope in DMIR.  Populate with all
-	# known traits so generic re-instantiations from package modules can
-	# resolve trait methods during consumer compilation.
+	# K25: External package modules — use deserialized trait_scope from DMIR
+	# when available.  Backward-compat fallback for pre-trait_scope packages:
+	# populate with all known traits (scope was validated at build time).
 	if isinstance(external_exports, dict):
 		_all_trait_keys: list[object] | None = None
 		for mod_name, exp in external_exports.items():
@@ -8523,6 +8517,7 @@ def main(argv: list[str] | None = None) -> int:
 				if isinstance(scope, list):
 					trait_scope_by_module[mod_name] = list(scope)
 				else:
+					# K25 backward-compat fallback for old packages without trait_scope.
 					if _all_trait_keys is None:
 						_all_trait_keys = list(global_trait_index.traits_by_id.keys()) if global_trait_index is not None else []
 					trait_scope_by_module[mod_name] = _all_trait_keys
@@ -9173,6 +9168,11 @@ def main(argv: list[str] | None = None) -> int:
 				if not getattr(sig, "is_exported_entrypoint", False):
 					sig_env[sym] = replace(sig, is_exported_entrypoint=True)
 	
+			_raw_trait_scope = mexp.get("trait_scope", [])
+			_trait_scope_dicts: list[dict[str, Any]] = []
+			if isinstance(_raw_trait_scope, list):
+				for _tk in _raw_trait_scope:
+					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
 			payload_obj = encode_module_payload_v0(
 				package_id=package_id,
 				module_id=mid,
@@ -9194,6 +9194,7 @@ def main(argv: list[str] | None = None) -> int:
 				reexports=reexports_obj,
 				trait_metadata=trait_metadata,
 				impl_headers=impl_headers,
+				trait_scope=_trait_scope_dicts,
 			)
 	
 			# Module interface (package interface table v0).
@@ -9287,6 +9288,7 @@ def main(argv: list[str] | None = None) -> int:
 				"consts": payload_obj.get("consts", {}) if isinstance(payload_obj, dict) else {},
 				"trait_metadata": payload_obj.get("trait_metadata", []) if isinstance(payload_obj, dict) else [],
 				"impl_headers": payload_obj.get("impl_headers", []) if isinstance(payload_obj, dict) else [],
+				"trait_scope": payload_obj.get("trait_scope", []) if isinstance(payload_obj, dict) else [],
 			}
 			iface_bytes = canonical_json_bytes(iface_obj)
 			iface_sha = sha256_hex(iface_bytes)

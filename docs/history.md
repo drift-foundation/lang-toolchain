@@ -36,6 +36,7 @@
   - removed the separate `ext-e2e-asan` target in favor of `DRIFT_ASAN=1` execution mode on existing targets.
 - Post-convergence regression cleanup:
   - fixed missing driver-side K25 trait-scope fallback for external package modules so Pass 1 and `compile_stubbed_funcs` use the same temporary scope broadening during generic re-instantiation,
+  - serialized per-module `trait_scope` into DMIR payload/interface and reconstructed it on package load, so newly-built packages no longer depend on the broad K25 fallback for trait scope,
   - fixed package-consumer destroy reachability for nested generic/container element types by extending `_seed_destroy_type_graph` to walk `TypeDef.param_types`,
   - fixed package-side generic destructor discovery by using a combined source+package MIR pool for destroy seeding and dispatching discovered destroyers back into the correct needed set,
   - restored full function-key parity checking (fingerprint + package/module/name identity),
@@ -45,7 +46,7 @@
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.13-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.14-dev`; ABI remains `4`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

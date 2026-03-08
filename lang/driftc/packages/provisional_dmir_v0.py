@@ -1104,6 +1104,7 @@ def encode_module_payload_v0(
 	reexports: dict[str, Any] | None = None,
 	trait_metadata: list[dict[str, Any]] | None = None,
 	impl_headers: list[dict[str, Any]] | None = None,
+	trait_scope: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
 	"""Build the provisional payload object (not yet canonical-JSON encoded)."""
 	tt_obj = encode_type_table(type_table, package_id=package_id)
@@ -1172,6 +1173,7 @@ def encode_module_payload_v0(
 		"signatures": encode_signatures(signatures, module_id=module_id),
 		"generic_templates": _to_jsonable(list(generic_templates or [])),
 		"mir_funcs": {name: _to_jsonable(mir_funcs[name]) for name in sorted(mir_funcs.keys())},
+		"trait_scope": list(trait_scope) if trait_scope is not None else [],
 	}
 
 

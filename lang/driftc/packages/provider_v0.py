@@ -21,6 +21,7 @@ from lang.driftc.packages.dmir_pkg_v0 import LoadedPackage, load_dmir_pkg_v0
 from lang.driftc.packages.signature_v0 import verify_package_signatures
 from lang.driftc.packages.trust_v0 import TrustStore
 from lang.driftc.core.function_id import function_id_from_obj, function_symbol
+from lang.driftc.traits.world import TraitKey
 
 
 def discover_package_files(package_roots: list[Path]) -> list[Path]:
@@ -682,6 +683,13 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 					type_interfaces = [str(x) for x in types.get("interfaces") if isinstance(x, str)]
 				if isinstance(types.get("aliases"), list):
 					type_aliases = [str(x) for x in types.get("aliases") if isinstance(x, str)]
+			_raw_ts = mod.interface.get("trait_scope") if isinstance(mod.interface, dict) else None
+			_trait_scope_keys: list[TraitKey] | None = None
+			if isinstance(_raw_ts, list):
+				_trait_scope_keys = []
+				for _entry in _raw_ts:
+					if isinstance(_entry, dict) and "name" in _entry:
+						_trait_scope_keys.append(TraitKey(package_id=_entry.get("package_id"), module=_entry.get("module"), name=_entry["name"]))
 			out[mid] = {
 				"values": set(values) if isinstance(values, list) else set(),
 				"types": {
@@ -695,4 +703,6 @@ def collect_external_exports(packages: list[LoadedPackage]) -> dict[str, dict[st
 				"consts": set(consts) if isinstance(consts, list) else set(),
 				"reexports": reexports if isinstance(reexports, dict) else {},
 			}
+			if _trait_scope_keys is not None:
+				out[mid]["trait_scope"] = _trait_scope_keys
 	return out
