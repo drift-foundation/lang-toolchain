@@ -1798,13 +1798,24 @@ def _build_package_consumer_unit(
 	# entry wrappers.  These are not called from MIR — codegen emits them
 	# directly — so BFS from user code never discovers them.
 	#
+	# Guard (K18): only seed a preamble dep if the consumer already naturally
+	# reaches something in its module — otherwise we leak unreachable package
+	# functions into the IR.
+	#
 	# Walk the preamble's transitive closure with a bounded BFS (max 64
 	# new functions).  If the closure exceeds the bound, abort the seed
 	# entirely — this prevents K18-class explosions where heavy generic
 	# instantiations get pulled in.  The current preamble closure is ~5
 	# functions (install_process_stdio + 3x GlobalRegistry::set<T>).
 	_K40_MAX_CLOSURE = 64
+	_naturally_reachable_modules: set[str] = set()
+	for fid in pkg_needed:
+		_naturally_reachable_modules.add(fid.module)
+	for fid in src_needed:
+		_naturally_reachable_modules.add(fid.module)
 	for _dep_mod, _dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
+		if _dep_mod not in _naturally_reachable_modules:
+			continue
 		for fn_id in list(pkg_mir_all):
 			if fn_id.module == _dep_mod and fn_id.name == _dep_name and fn_id not in pkg_needed:
 				_preamble_closure: set[FunctionId] = {fn_id}

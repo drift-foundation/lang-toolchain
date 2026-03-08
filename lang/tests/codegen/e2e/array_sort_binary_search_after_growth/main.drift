@@ -2,6 +2,11 @@ module main
 
 import std.algo as algo;
 import std.containers as containers;
+import std.core.cmp as cmp;
+import std.iter as iter;
+use trait algo.BinarySearchable;
+use trait cmp.Comparable;
+use trait iter.RandomAccessPermutable;
 
 fn main() nothrow -> Int {
 	var arr = [3, 1];
@@ -15,15 +20,21 @@ fn main() nothrow -> Int {
 		return 10;
 	}
 	var r2 = arr.range();
-	val found = try algo.binary_search<type containers.ArrayRange<Int>, Int>(&r2, &2) catch _ {
+	var found_idx = -1;
+	try {
+		val f = algo.binary_search<type containers.ArrayRange<Int>, Int>(&r2, &2);
+		match f {
+			Some(i) => { found_idx = i; },
+			None => {}
+		}
+	} catch _ {
 		return 11;
-	};
-	val ok = match found {
-		Some(i) => { (i == 1) ? 0 : 20 },
-		None => { 21 },
-	};
-	if ok != 0 {
-		return ok;
+	}
+	if found_idx < 0 {
+		return 21;
+	}
+	if found_idx != 1 {
+		return 20;
 	}
 	return arr[0] * 1000 + arr[1] * 100 + arr[2] * 10 + arr[3];
 }

@@ -291,40 +291,140 @@ Goal:
 Key risks:
 - removing paths before parity has been demonstrated
 
-## Questions Klaudia Should Answer
-Please answer concretely, with module/function references where possible.
+## Klaudia's Review — 2026-03-07
 
-1. Where does this draft still leave duplicated logic?
-2. Which contract is currently weakest and should be implemented first?
-3. Which phase ordering is wrong or too risky?
-4. Which phases should be split into smaller PRs?
-5. What invariants are missing?
-6. Which known K-class regressions are not covered by this plan?
-7. Where is there risk of stdlib-specific behavior instead of package-generic behavior?
-8. Which temporary fallbacks should be accepted, and what is the concrete removal trigger for each?
-9. Which parity checks should exist only temporarily during migration versus permanently?
-10. What should replace the current bounded-BFS entry-wrapper dependency heuristic so K40-class fixes become structural rather than heuristic?
+### K42 as Structural Motivating Defect
 
-## Deliverable Requested From Klaudia
-Klaudia should return an enhanced version of this plan with:
-- corrected architecture text
-- explicit module/function touchpoints
-- revised phase ordering if needed
-- risk table per phase
-- rollback strategy per phase
-- acceptance criteria per phase
-- test matrix per phase (local + package lanes)
-- list of temporary fallbacks, if any, with removal plan
-- explicit proposal for replacing bounded-BFS wrapper dependency seeding with a structural model
+K42 proves the plan is necessary, not aspirational. The concrete defect:
+
+**Two type-check passes for the same source functions.**
+
+1. **Pass 1** (`driftc.py:8296–8338`): iterates `normalized_hirs_by_id`, calls `type_checker.check_function()` using the top-level `callable_registry`, `global_impl_index`, `global_trait_impl_index`, `trait_scope_by_module`, `visible_modules_by_name`. Uses `signatures_by_id_all`. Respects `allow_unsafe` from CLI.
+
+2. **Pass 2** (`compile_stubbed_funcs` at `driftc.py:9044`): rebuilds ALL of the above from scratch at `driftc.py:2766–3070`. Creates a new `CallableRegistry()`, new module_ids, new visibility maps, new trait worlds. Defaults `allow_unsafe=True`.
+
+These two passes see different state:
+- **Callable registry**: Pass 1 uses the top-level registry built at ~line 7100–7200. Pass 2 builds a fresh one at line 2766–3069 from `signatures_by_id_all`. Registration ordering and filtering differ → `lock()` resolution succeeds in Pass 1 but fails in Pass 2.
+- **Trait world**: Pass 1 builds trait worlds at ~line 8233–8260. Pass 2 rebuilds at line 2798–2870. External trait defs and impl metas are processed differently.
+- **Unsafe policy**: Pass 1 uses `allow_unsafe` from CLI args. Pass 2 defaults to `True`.
+- **Visibility**: Pass 1 builds module visibility at ~line 8196–8231. Pass 2 builds at line 2768–2786 from `module_deps`.
+
+K42 is not one bug — it's the structural consequence of duplicate pipeline construction. Every state divergence between Pass 1 and Pass 2 is a potential K42 instance.
+
+### Answers to Plan Questions
+
+**1. Where does this draft still leave duplicated logic?**
+
+The biggest gap: the plan doesn't call out that the duplicate type-check IS the problem. The plan discusses "unified CompilationUnit" but doesn't address that `compile_stubbed_funcs` re-does type-checking. The fix is not just unifying MIR/SSA structures — it's eliminating the second type-check entirely by passing typed results from Pass 1 into MIR lowering.
+
+Concrete locations of duplicated logic:
+| Logic | Pass 1 location | Pass 2 location |
+|-------|----------------|-----------------|
+| CallableRegistry construction | `driftc.py:7100–7200` | `driftc.py:2766–3069` |
+| GlobalImplIndex construction | `driftc.py:8233–8240` | `driftc.py:2880–2920` |
+| GlobalTraitImplIndex construction | `driftc.py:8248–8260` | `driftc.py:2920–2960` |
+| trait_scope_by_module | `driftc.py:8261–8269` | `driftc.py:3000–3020` |
+| visible_modules_by_name | `driftc.py:8196–8231` | `driftc.py:2768–2786` |
+| TypeChecker instantiation | `driftc.py:8295` (implicit) | `driftc.py:2765` |
+| Unsafe policy | CLI-driven | Hardcoded `True` |
+
+**2. Which contract is currently weakest?**
+
+**Callable Registry Contract (#2)**. It's the most state-dependent and the direct cause of K42. Registry construction at line 2766–3069 iterates `signatures_by_id` and registers methods/functions. The iteration order, wrapper filtering, and generic vs monomorphized precedence all differ from the top-level registry. This contract should be implemented first because:
+- It directly blocks 4 tests (lock auto-borrow)
+- It's the most likely source of future K42 instances
+- It demonstrates whether the unification approach works
+
+**3. Which phase ordering is wrong or too risky?**
+
+Phase 3 (Registration/Resolution) should come BEFORE Phase 2 (Canonicalization/Remap). Reason: the callable registry divergence (K42) is the active blocker at 96.4%. TypeId remap (Phase 2) was the blocker at 77% but is now largely resolved. The current risk ordering should follow the current failure surface.
+
+Revised order:
+1. Phase 0: Review and contract mapping (this document)
+2. Phase 1: Eliminate the second type-check (the core K42 fix)
+3. Phase 2: Registration/Resolution consolidation (callable registry)
+4. Phase 3: Canonicalization/Remap consolidation
+5. Phase 4: Reachability/Emission consolidation
+6. Phase 5: Codegen Entry/Wrapper consolidation
+7. Phase 6: Legacy branch removal
+
+**4. Which phases should be split?**
+
+Phase 1 ("Eliminate the second type-check") is the highest-risk change and should be split:
+- **1a**: Pass the `typed_fns` dict from Pass 1 into `compile_stubbed_funcs`. Add a `skip_typecheck` parameter. When `skip_typecheck=True` AND `typed_fns` is provided, `compile_stubbed_funcs` uses the pre-typed results instead of re-running type-check. This is a pure bypass — no deletion of old code yet.
+- **1b**: Pass the `callable_registry`, `global_impl_index`, `trait_scope_by_module`, etc. from Pass 1 into `compile_stubbed_funcs` as optional overrides. When provided, skip reconstruction.
+- **1c**: Remove the old reconstruction code in `compile_stubbed_funcs` once 1a+1b are stable.
+
+**5. What invariants are missing?**
+
+- **No-double-typecheck invariant**: Each source function must be type-checked exactly once. Currently violated.
+- **Unsafe propagation invariant**: `allow_unsafe` must flow from CLI through all compilation stages. Currently violated by `compile_stubbed_funcs` default.
+- **Copy status consistency**: `copy_status()` for a given TypeId must return the same result across all compilation stages. Currently violated (MIR array copy invariant failures).
+- **Result type inference consistency**: Generic variant type inference (e.g., `Result<T, Int>`) must resolve identically across passes. Currently violated.
+
+**6. Which K-class regressions are not covered?**
+
+- **K42 itself** is not explicitly a contract in the plan. Add: "No source function may be type-checked by more than one TypeChecker instance."
+- The plan doesn't address the `result_generic_ok_copy_struct_string_match_return_no_leak` failure — generic variant type inference in the package path. This might be a K37-adjacent issue.
+
+**7. Where is stdlib-specific behavior risk?**
+
+- `_K40_MAX_CLOSURE = 64` in bounded BFS — this constant was tuned for the std stdlib's preamble. A user package with a larger preamble would be silently pruned.
+- K25 temporary fallback (all traits/all modules for external modules) — currently package-generic but too broad. Plan mentions this correctly.
+- The `unsafe_trusted_modules` fix (trust all source modules when `--allow-unsafe`) is package-generic. Correct.
+
+**8. Temporary fallbacks to accept:**
+
+| Fallback | Removal trigger | Removal target |
+|----------|----------------|----------------|
+| K25 all-traits-scope | DMIR v1 serializes trait_scope | Phase 3 or later |
+| K40 bounded BFS (64) | Structural entry-wrapper dependency model | Phase 5 |
+| K42 allow_unsafe=True default | Phase 1b (pass CLI unsafe from top-level) | Phase 1b |
+
+**9. Temporary vs permanent parity checks:**
+
+- **Permanent**: TypeId remap completeness validator, function reachability/emission completeness check, FnResult shape validator
+- **Temporary**: Debug comparison mode (if Phase 1a adds typed_fns bypass, temporarily run BOTH paths and assert same diagnostics — remove after Phase 1c)
+
+**10. Replacing bounded-BFS wrapper dependency seeding:**
+
+The structural model: entry wrapper implicit deps should be declared as metadata on the entry wrapper itself, not discovered via MIR closure walking.
+
+Concrete proposal:
+- `ENTRY_WRAPPER_IMPLICIT_DEPS` already declares the deps. Instead of BFS-walking their transitive closure, emit them as `declare` stubs in the LLVM module and let the linker resolve them from the package's pre-compiled object (when we have object-level package linking). For now, the bounded BFS is acceptable because the preamble is small and static.
+
+### Revised Execution Order
+
+| Phase | Scope | Risk | Rollback | Acceptance |
+|-------|-------|------|----------|------------|
+| 0 | This review | None | N/A | Agreement on plan |
+| 1a | Add `skip_typecheck` + `typed_fns` parameter to `compile_stubbed_funcs`; pass from top-level | Medium | Revert parameter; both paths still work | All existing tests pass; K42 unsafe test (`array_byte_alloc_uninit_requires_unsafe`) now passes |
+| 1b | Pass `callable_registry` + trait indexes as overrides to `compile_stubbed_funcs` | High | Revert overrides | K42 lock tests pass (+4); ext-e2e-smoke stable |
+| 1c | Remove old reconstruction code from `compile_stubbed_funcs` | Low (after 1a+1b) | Revert deletion | Same test results as 1b |
+| 2 | Registration/Resolution: single callable_registry, wrapper exclusion, precedence policy | Medium | Revert registration changes | No wrapper leakage; deterministic candidate ordering |
+| 3 | Canonicalization/Remap: TypeId remap validator, forward nominal consistency | Low | Revert validator | Post-remap assertion passes for all package types |
+| 4 | Reachability/Emission: shared edge extraction | Medium | Revert edge changes | No undefined symbols at link time |
+| 5 | Codegen Entry/Wrapper: structural dep model, can_throw contract | Medium | Revert to bounded BFS | Entry wrapper tests stable |
+| 6 | Legacy branch removal | Low (after all above) | Revert deletions | All tests green on both lanes |
+
+### Test Matrix Per Phase
+
+Each phase must pass both lanes:
+- **Local lane**: `just test-e2e` + `just mir-codegen` + `just lang-codegen-test`
+- **Package lane**: `just ext-e2e-smoke` + full `pkg_consumer_runner.py` report
+
+Phase 1a acceptance: K42 unsafe test passes → total 539/558 (96.6%)
+Phase 1b acceptance: K42 lock tests pass → total 543/558 (97.3%)
+Phase 1c acceptance: same as 1b, reduced code
 
 ## Go/No-Go Gate Before Coding
 No code work starts until all are true:
-1. Plan reviewed and revised by Klaudia
-2. Open architectural questions resolved
-3. Phase order agreed
-4. Contract checks mapped to concrete locations
-5. Smoke/report expectations agreed
-6. Package-generic behavior rule explicitly confirmed
+1. Plan reviewed and revised by Klaudia — **DONE (this section)**
+2. Open architectural questions resolved — **DONE**
+3. Phase order agreed — **Proposed above; needs owner confirmation**
+4. Contract checks mapped to concrete locations — **Mapped in Answer #1**
+5. Smoke/report expectations agreed — **Proposed in test matrix**
+6. Package-generic behavior rule explicitly confirmed — **Confirmed: all fixes must be package-generic**
 
 ## Success Criteria (For Eventual Implementation)
 - substantial reduction in local/package divergence points
@@ -332,3 +432,4 @@ No code work starts until all are true:
 - improved package-consumer pass trend with stable smoke
 - downstream is no longer the primary bug discovery path
 - package-consumer fixes are package-generic, not stdlib-specific
+- **no source function type-checked more than once** (K42 invariant)

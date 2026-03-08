@@ -31,6 +31,7 @@ export {
 	buffer_write_bytes,
 	buffer_write_string,
 	buffer_read,
+	buffer_commit_read,
 	file_from_fd,
 	stdin,
 	stdout,

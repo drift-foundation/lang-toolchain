@@ -1,15 +1,17 @@
 module main
 
 import std.err;
+import std.containers;
 import std.iter as iter;
+use trait iter.RandomAccessPermutable;
 
-fn main() -> Int {
+fn main() nothrow -> Int {
 	var arr = [1, 2];
 	var r = arr.range_mut();
 	r.__test_invalidate();
-	val out = try {
-		iter.RandomAccessPermutable::swap(&mut r, 0, 0);
-		0
+	var out = 0;
+	try {
+		r.swap(0, 0);
 	} catch std.err:IteratorInvalidated(e) {
 		val dv_c = e.attrs["container_id"];
 		val dv_o = e.attrs["op_id"];
@@ -31,9 +33,9 @@ fn main() -> Int {
 				13
 			},
 		};
-		(c_code != 0) ? c_code : ((o_code != 0) ? o_code : 0)
+		out = (c_code != 0) ? c_code : ((o_code != 0) ? o_code : 0);
 	} catch {
-		99
-	};
+		out = 99;
+	}
 	return out;
 }

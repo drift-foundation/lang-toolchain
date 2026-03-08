@@ -4,7 +4,7 @@ import std.core as core;
 import std.io as io;
 
 fn main() nothrow -> Int {
-	val r: core.Result<Int, core.Error> = core.Result::Ok(1);
+	val r: core.Result<Int, Error> = core.Result::Ok(1);
 	match r {
 		Ok(v) => {
 			var buf = io.buffer(1);

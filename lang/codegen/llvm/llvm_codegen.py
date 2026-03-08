@@ -4581,11 +4581,16 @@ class _FuncBuilder:
 				tmp0 = self._fresh("arrh0")
 				tmp1 = self._fresh("arrh1")
 				tmp2 = self._fresh("arrh2")
+				raw_arr = self._fresh("arrh3") if instr.can_throw else dest
 				self.lines.append(f"  {tmp0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_LEN_IDX}")
 				self.lines.append(f"  {tmp1} = insertvalue {arr_llty} {tmp0}, {self._llty(DRIFT_INT_TYPE)} {n_val}, {ARRAY_CAP_IDX}")
 				self.lines.append(f"  {tmp2} = insertvalue {arr_llty} {tmp1}, {self._llty(DRIFT_INT_TYPE)} 0, {ARRAY_GEN_IDX}")
-				self.lines.append(f"  {dest} = insertvalue {arr_llty} {tmp2}, i8* {tmp_alloc}, {ARRAY_PTR_IDX}")
-				self.value_types[dest] = arr_llty
+				self.lines.append(f"  {raw_arr} = insertvalue {arr_llty} {tmp2}, i8* {tmp_alloc}, {ARRAY_PTR_IDX}")
+				if instr.can_throw:
+					self.value_types[raw_arr] = arr_llty
+					self._wrap_ok_fnresult(raw_arr, arr_llty, dest, hint="abau_ok")
+				else:
+					self.value_types[dest] = arr_llty
 				return
 			if instr.fn_id.name == "array_byte_as_mut_ptr":
 				if len(instr.args) != 1:
@@ -4596,8 +4601,14 @@ class _FuncBuilder:
 				arr_llty = self._llvm_array_header_type()
 				tmp_arr = self._fresh("arr_load")
 				self.lines.append(f"  {tmp_arr} = load {arr_llty}, {arr_llty}* {ref_val}")
-				self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
-				self.value_types[dest] = "i8*"
+				if instr.can_throw:
+					raw_ptr = self._fresh("abamp_raw")
+					self.lines.append(f"  {raw_ptr} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
+					self.value_types[raw_ptr] = "i8*"
+					self._wrap_ok_fnresult(raw_ptr, "i8*", dest, hint="abamp_ok")
+				else:
+					self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
+					self.value_types[dest] = "i8*"
 				return
 			if instr.fn_id.name == "array_byte_commit_init_len":
 				if len(instr.args) != 2:
@@ -4609,7 +4620,9 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  call void @drift_array_byte_commit_init_len({arr_llty}* {ref_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
 				)
-				if dest:
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="abcil_ok")
+				elif dest:
 					raise NotImplementedError("LLVM codegen v1: array_byte_commit_init_len returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "random_fill":
@@ -7410,6 +7423,8 @@ class _FuncBuilder:
 			if self._llty(ok_llty) == self._llty(lt):
 				ok_key = lbl
 				break
+		if "*" in ok_key:
+			ok_key = ok_key.replace("*", "Ptr")
 		fnres_llty = self.module._declare_fnresult_named_type(ok_key, ok_llty)
 		tmp0 = self._fresh(f"{hint}0")
 		self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")

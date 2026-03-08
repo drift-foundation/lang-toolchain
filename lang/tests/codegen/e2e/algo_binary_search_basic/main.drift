@@ -1,13 +1,19 @@
 module main
 
 import std.algo as algo;
+import std.containers as containers;
+import std.core.cmp as cmp;
+import std.iter as iter;
+use trait algo.BinarySearchable;
+use trait cmp.Comparable;
+use trait iter.RandomAccessReadable;
 
-fn main() -> Int {
+fn main() nothrow -> Int {
 	var arr = [1, 3, 5, 7, 9];
 	var r = arr.range();
-	val idx = algo.binary_search(&r, &5);
+	val idx = algo.binary_search<type containers.ArrayRange<Int>, Int>(&r, &5);
 	return match idx {
-		Some(i) => i,
-		None => -1,
+		Some(i) => { i },
+		None => { -1 },
 	};
 }

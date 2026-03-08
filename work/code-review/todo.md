@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-07
 **Scope**: K10–K40 + ext-e2e-report (559 test cases through signed-package consumer path)
-**Current state**: 532/558 pass (95.3%), remaining: 19 compile-check + 7 compile-codegen + 0 link + 0 runtime
+**Current state**: 545/558 pass (97.5%), remaining: 10 compile-check + 0 compile-codegen + 0 link + 4 runtime (2 newly exposed, 2 K42-@test_build_only)
 
 ---
 
@@ -47,6 +47,7 @@
 | K40 | codegen/BFS | Preamble functions (`install_process_preamble`) not emitted in package-consumer path | Preamble functions are injected by codegen into entry wrappers at LLVM emission time, not called from MIR. BFS from user code never discovers them. Fix: explicitly seed `ENTRY_WRAPPER_IMPLICIT_DEPS` into `pkg_needed` with transitive closure walk. **+2 tests** (preamble runtime failures) | Yes |
 | K41 | type_checker | Lambda nothrow analysis resolves boundary wrapper instead of original method | `_lambda_can_throw` / `_treat_can_throw` checks `declared_can_throw` on the resolved target. In package path, auto-borrow methods (e.g. `Arc::borrow_mut`) resolve to `__wrap_method::` wrapper which has `declared_can_throw=True`. Fix: when target is a wrapper (`wraps_target_fn_id` set), check the wrapped function's `declared_can_throw` instead. **+1 test** (`callback_move_capture_nested_callback`). Three other lambda tests now pass initial type-check but fail in `compile_stubbed_funcs` with a different bug (K42). | Yes |
 | K42 | driftc/compile_stubbed_funcs | `conc.lock(arc)` trait auto-borrow fails in compile_stubbed_funcs | `compile_stubbed_funcs` builds its own callable_registry and trait world. `BorrowMut<Mutex<T>> for Arc<Mutex<T>>` auto-borrow doesn't resolve for free function arg coercion, causing "no matching overload for function 'lock'" in the MIR compilation pass. Initial type-check (line 8296) passes; only the second type-check inside compile_stubbed_funcs fails. Affects: callback_move_capture_{arc_lifetime,replace_state}, effective_drift_emitter_example, callback_arc_mutex_full_mutation (**4 tests**) | Yes |
+| K27+ | codegen/intrinsic | array_byte intrinsic FnResult wrapping | `array_byte_alloc_uninit`, `array_byte_as_mut_ptr`, `array_byte_commit_init_len` intrinsics didn't wrap results in FnResult when `can_throw=True` from boundary wrappers. Fix: add `if instr.can_throw:` + `_wrap_ok_fnresult` to all 3 handlers. Also fixed LLVM type name sanitization (`*` → `Ptr` in ok_key). **+7 tests** (all array_byte codegen crashes resolved). Exposed 1 pre-existing issue: `array_byte_alloc_uninit_requires_unsafe` now fails as "expected compile failure but got success" because `compile_stubbed_funcs` defaults `allow_unsafe=True` — another K42-class symptom. | Yes |
 
 **All bugs are package-only.** The local/source compilation path is unaffected.
 
@@ -314,13 +315,17 @@ Current smoke set (7 cases) should expand to include:
 | After K27 (intrinsic can_throw audit, 40+ handlers) | 71.2% | 708/995 |
 | After K30-K38 (checker/type-link/codegen fixes) | 76.9% | 430/559 |
 | After K39+K40 (BFS destroy+preamble+variant walk) | 88.7% | 496/559 |
-| After module-m + unsafe + dict-iter + K41 lambda nothrow | 95.3% | 532/558 |
-| **Remaining 26 failures** | | |
-| — Parser unsupported syntax (7): bare match arms, qualified trait calls, while-in-try | NOT package-specific | Exclude or fix parser |
-| — Expression block return (2): `return` in expr blocks | NOT package-specific | Exclude or fix |
-| — Test code bug (2): `core.Error` (primitive), `buffer_commit_read` (not exported) | NOT package-specific | Fix test/export |
-| — array_byte codegen crash (7): K27-class intrinsic FnResult wrapping | Package-only | Codegen fix needed |
-| — K42 lock/auto-borrow (4): trait auto-borrow in compile_stubbed_funcs | Package-only | Deep trait resolution fix |
-| — MIR invariant (2): array copy invariant in diagnostic tests | Package-only | Investigate |
-| — Package-path semantic (2): ambiguous trait req (hashmap_iter_empty), Result type inference | Package-only | Investigate |
-| Estimated ceiling (excl parser/expr-block/test-bug) | ~97.9% | ~536/547 |
+| After module-m + unsafe + dict-iter + K41 + K27+ | 96.4% | 538/558 |
+| After K18 guard + bucket(a) test fixes + stdlib export | 97.5% | 545/558 |
+| **Remaining 14 failures (=1 of which was in prior 19)** | | |
+| **(a) Newly exposed runtime issues (2 — NOT package-specific):** | | |
+| — `array_range_reserve_noop_invalidates`: reserve(n<=cap) still invalidates range | No | Stdlib behavior bug |
+| — `deque_range_sort_binary_search_wrap`: binary_search returns None on sorted deque | Maybe | Investigate |
+| **(b) K42 class — duplicate compile_stubbed_funcs state (10):** | | |
+| — K42 lock/auto-borrow (4): trait auto-borrow diverges in second-pass callable_registry | Yes | Converge pipeline |
+| — K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True | Yes | Converge pipeline |
+| — MIR invariant (2): array copy invariant — Copy status diverges in second pass | Yes | Converge pipeline |
+| — Package-path semantic (1): ambiguous trait req (hashmap_iter_empty) | Yes | Converge pipeline |
+| — K42 @test_build_only visibility (2): __test_invalidate invisible in second pass | Yes | Converge pipeline |
+| **(c) K42 class — generic variant inference (1):** | | |
+| — result_generic_ok_copy_struct_string_match_return_no_leak | Yes | Converge pipeline |

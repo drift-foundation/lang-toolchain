@@ -1,3 +1,4 @@
 {
-  "expect": 2
+  "expect": 2,
+  "exit_code": 2
 }

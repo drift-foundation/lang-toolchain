@@ -2,6 +2,13 @@ module main
 
 import std.algo as algo;
 import std.containers as containers;
+import std.core.cmp as cmp;
+import std.iter as iter;
+import std.err;
+use trait algo.BinarySearchable;
+use trait cmp.Comparable;
+use trait iter.RandomAccessPermutable;
+use trait iter.RandomAccessReadable;
 
 fn main() nothrow -> Int {
 var dq = containers.deque<type Int>();
@@ -14,17 +21,24 @@ var dq = containers.deque<type Int>();
 	dq.push_back(2);
 	dq.push_back(1);
 	var rm = dq.range_mut();
-	algo.sort_in_place(&mut rm);
+	algo.sort_in_place<type containers.DequeRangeMut<Int>, Int>(&mut rm);
 	var r = dq.range();
-	val idx = algo.binary_search(&r, &5);
-	val out = match idx {
-		Some(i) => {
-			val got = try { *dq.at(i) } catch std.err:IndexError(_) { -1 } catch { -1 };
-			(got == 5) ? 0 : 1
-		},
-		None => {
-			2
-		},
-	};
-	return out;
+	val idx = algo.binary_search<type containers.DequeRange<Int>, Int>(&r, &5);
+	var found_idx = -1;
+	match idx {
+		Some(i) => { found_idx = i; },
+		None => {}
+	}
+	if found_idx < 0 {
+		return 2;
+	}
+	var got = -1;
+	try {
+		got = *dq.at(found_idx);
+	} catch std.err:IndexError(_) {
+		got = -1;
+	} catch {
+		got = -1;
+	}
+	return (got == 5) ? 0 : 1;
 }
