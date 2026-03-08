@@ -2467,6 +2467,9 @@ def compile_stubbed_funcs(
 	entry_module: str = "main",
 	entry_name: str = "main",
 	allow_unsafe: bool = True,
+	# Phase 1a: accept pre-typed functions from Pass 1 to skip duplicate type-check.
+	skip_typecheck: bool = False,
+	typed_fns_from_pass1: Mapping[FunctionId, object] | None = None,
 ) -> (
 	Dict[FunctionId, M.MirFunc]
 	| tuple[Dict[FunctionId, M.MirFunc], CheckedProgramById]
@@ -3323,17 +3326,23 @@ def compile_stubbed_funcs(
 				deferred_guard_diags_by_template[fn_key] = dict(deferred)
 		typed_fns_by_id[fn_id] = result.typed_fn
 
-	with _timed("typecheck"):
-		for fn_id, hir_norm in normalized_hirs_by_id.items():
-			if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
-				import sys as _try_auto_sys2
-				sig_dbg = signatures_by_id.get(fn_id)
-				print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=_try_auto_sys2.stderr)
-			_typecheck_fn(fn_id, hir_norm)
-	if type_checker.defaulted_phase_count() != 0:
-		raise AssertionError(
-			f"typecheck diagnostics missing phase (defaulted={type_checker.defaulted_phase_count()})"
-		)
+	if skip_typecheck and typed_fns_from_pass1 is not None:
+		# Phase 1a: reuse pre-typed results from Pass 1 instead of re-running type-check.
+		typed_fns_by_id.update(typed_fns_from_pass1)
+		for fn_id in typed_fns_from_pass1:
+			typecheck_ok_by_fn[fn_id] = True
+	else:
+		with _timed("typecheck"):
+			for fn_id, hir_norm in normalized_hirs_by_id.items():
+				if drift_debug.enabled("try_auto") and getattr(fn_id, "module", None) == "m":
+					import sys as _try_auto_sys2
+					sig_dbg = signatures_by_id.get(fn_id)
+					print(f"[try_auto] pre-typecheck {function_symbol(fn_id)} sig_id={id(sig_dbg)} declared_throws={getattr(sig_dbg, 'declared_throws', None)} sig_map_id={id(signatures_by_id)} sig_map_type={type(signatures_by_id).__name__}", file=_try_auto_sys2.stderr)
+				_typecheck_fn(fn_id, hir_norm)
+		if type_checker.defaulted_phase_count() != 0:
+			raise AssertionError(
+				f"typecheck diagnostics missing phase (defaulted={type_checker.defaulted_phase_count()})"
+			)
 
 	# Use the type-checked HIR directly so callsite ids stay aligned with CallInfo.
 	# Pre-typecheck normalization already produced canonical forms; the checker
@@ -9074,6 +9083,7 @@ def main(argv: list[str] | None = None) -> int:
 			enforce_entrypoint=True,
 			entry_module=entry_module,
 			entry_name=entry_name,
+			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
 		)
 		_assert_all_phased(checked_src.diagnostics, context="typecheck")
 		ssa_src = ssa_src or {}

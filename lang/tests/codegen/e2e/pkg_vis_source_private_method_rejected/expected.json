@@ -1,5 +1,6 @@
 {
   "description": "K25-guard: source module must still fail when calling private/non-exported method from package module. K25 broadening must not leak private APIs to consumer code.",
+  "package_consumer_only": true,
   "module_paths": ["."],
   "diagnostics": [
     {

@@ -323,9 +323,72 @@ Current smoke set (7 cases) should expand to include:
 | — `deque_range_sort_binary_search_wrap`: binary_search returns None on sorted deque | Maybe | Investigate |
 | **(b) K42 class — duplicate compile_stubbed_funcs state (10):** | | |
 | — K42 lock/auto-borrow (4): trait auto-borrow diverges in second-pass callable_registry | Yes | Converge pipeline |
-| — K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True | Yes | Converge pipeline |
+| — K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True | Yes | Converge pipeline (see K43 below) |
 | — MIR invariant (2): array copy invariant — Copy status diverges in second pass | Yes | Converge pipeline |
 | — Package-path semantic (1): ambiguous trait req (hashmap_iter_empty) | Yes | Converge pipeline |
 | — K42 @test_build_only visibility (2): __test_invalidate invisible in second pass | Yes | Converge pipeline |
 | **(c) K42 class — generic variant inference (1):** | | |
 | — result_generic_ok_copy_struct_string_match_return_no_leak | Yes | Converge pipeline |
+
+---
+
+## 7. Phase 1a Report (2026-03-07)
+
+### Changes made
+1. **`driftc.py` — `compile_stubbed_funcs` signature**: Added `skip_typecheck: bool = False` and `typed_fns_from_pass1: Mapping[FunctionId, object] | None = None` parameters (lines 2470-2472). Added conditional bypass logic at the type-check loop (lines 3329-3344): when both params provided, pre-populates `typed_fns_by_id` and `typecheck_ok_by_fn` from Pass 1 results.
+2. **`driftc.py` — call site** (line 9086): Added `allow_unsafe=bool(getattr(args, "allow_unsafe", False))` to propagate CLI unsafe flag instead of defaulting to `True`.
+
+### What was NOT activated
+The `skip_typecheck=True` bypass is NOT passed at the call site. Attempting it caused 545→319 regression (226 test failures). Root cause: `type_checker.check_function()` accumulates critical side-effect state — `thunk_specs()`, `lambda_fn_specs()`, CallInfo — consumed downstream by generic instantiation (line 3993), lambda emission (line 5971), and thunk emission (line 5899). Skipping type-check deprives these downstream consumers of their input.
+
+### K43: `declared_unsafe` missing from package function signature serialization
+The K42 unsafe test (`array_byte_alloc_uninit_requires_unsafe`) cannot pass via `allow_unsafe` propagation alone. The unsafe marker IS serialized for interface method schemas (`provisional_dmir_v0.py:523`, `type_table_link_v0.py:357` — `is_unsafe` field). However, it is NOT serialized in `encode_signatures()`, which is the path that external function signatures rely on for package-consumer compilation. External function signatures loaded from packages never carry `declared_unsafe`, so neither Pass 1 nor Pass 2 can detect unsafe calls to package functions. This is a package signature serialization gap (K43), not a type-check pass issue.
+
+### Score delta
+- Before: 545/559 (97.5%)
+- After: 545/559 (97.5%) — no change
+- The `allow_unsafe` call-site fix is correct but has no observable effect because K43 blocks it
+
+### Phase 1a acceptance vs plan
+Plan acceptance was: "K42 unsafe test passes → total 539/558 (96.6%)". This cannot be met because:
+1. K43 (declared_unsafe not in DMIR) blocks the unsafe test regardless of allow_unsafe propagation
+2. skip_typecheck bypass breaks 226 tests due to type_checker side-effect dependency
+
+### Revised Phase 1a/1b boundary
+The original Phase 1a/1b split assumed typed_fns could be passed independently of callable_registry state. This is incorrect — the type_checker accumulates thunk/lambda specs during check_function that are consumed later. The correct split:
+
+- **Phase 1a (done)**: Signature + bypass scaffolding in place; `allow_unsafe` propagation fix applied. No behavioral change.
+- **Phase 1b (revised)**: Must pass the ENTIRE type_checker object (or its accumulated state: thunk_specs, lambda_fn_specs, CallInfo) from Pass 1 into `compile_stubbed_funcs`, not just typed_fns. Alternatively, share a single TypeChecker instance between Pass 1 and compile_stubbed_funcs.
+- **K43 prerequisite**: Serialize `declared_unsafe` in DMIR before the unsafe test can pass.
+
+---
+
+## 8. Farm Regression Review (2026-03-07)
+
+### Classification
+
+| Test | Exit/Expected | Classification | Path | Root cause |
+|------|--------------|---------------|------|------------|
+| `array_range_reserve_noop_invalidates` | 10/0 | Pre-existing stdlib runtime bug | Both (local+pkg) | `reserve(n <= cap)` still invalidates iterator ranges even when capacity doesn't change. Local-path link+run confirms exit 10. Not related to package work. |
+| `deque_range_sort_binary_search_wrap` | 2/0 | Pre-existing stdlib runtime bug | Both (local+pkg) | `binary_search` returns `None` on sorted deque with wraparound layout. Local-path link+run confirms exit 2. Not related to package work. |
+| `pkg_vis_source_private_method_rejected` | missing diag | Package-runner-only test | Package-only | Test requires package-consumer context. On local path, parser fails on `c.TreeMap::new<Int, Int>()` (generic type param `<` ambiguity) before the `__test_validate` visibility check is reached. Passes on `pkg_consumer_runner.py`. Local runner cannot exercise the intended negative. Fix: mark package-runner-only. |
+| `optional_on_none_try_block_no_catch_rejected` | 0/1 | **LANGUAGE_BUG** (nothrow analysis) | Both (local+pkg) | `try { ... }` without `catch` passes empty catches to `HTry`. MIR lowerer at `hir_to_mir.py:5704` inlines body without try wrapping. Throw analysis at `checker/__init__.py:1147` correctly sets `catch_all=False` for empty catches. However, the `throw` is inside a lambda arg to `on_none(| | => { throw ... })`, and the throw analysis doesn't walk lambda argument bodies — it relies on `on_none`'s `can_throw` from CallInfo. The nothrow inference fixpoint fails to propagate can-throw through `on_none` (which takes `CallbackThrow0<T>` and calls `f.call()` which is NOT nothrow). Verified on clean HEAD: same exit 0. |
+| `result_on_error_try_block_no_catch_rejected` | 0/1 | **LANGUAGE_BUG** (nothrow analysis) | Both (local+pkg) | Same root cause as `optional_on_none_try_block_no_catch_rejected` — `Result::on_error` with throwing lambda in bare `try {}` block. Verified on clean HEAD: same exit 0. |
+
+### Verdicts
+
+1. **`array_range_reserve_noop_invalidates`** — Pre-existing stdlib runtime bug. Deferred until current structural phase checkpoint completes. Not blocking one-pipeline work.
+2. **`deque_range_sort_binary_search_wrap`** — Pre-existing stdlib runtime bug. Deferred until current structural phase checkpoint completes. Not blocking one-pipeline work.
+3. **`pkg_vis_source_private_method_rejected`** — Package-runner-only test. Passes on `pkg_consumer_runner.py`. Marked for local-runner exclusion. No compiler bug.
+4. **`optional_on_none_try_block_no_catch_rejected`** — **LANGUAGE_BUG**. Subsystem: checker / nothrow analysis. Tests pinned as failing semantic regressions. Root cause investigation and fix required per LANGUAGE_BUG protocol.
+5. **`result_on_error_try_block_no_catch_rejected`** — **LANGUAGE_BUG**. Same subsystem and root cause as #4.
+
+### Actions
+
+- **No compiler regression from recent package-path work.** All 5 failures reproduce on clean HEAD.
+- Items 1-2: stdlib runtime bugs, deferred past structural phase checkpoint.
+- Item 3: mark package-runner-only in expected.json.
+- Items 4-5: LANGUAGE_BUG — **FIXED**.
+  - **Root cause**: Nothrow fixpoint termination bug in `checker/__init__.py` (line 772). The fixpoint set `changed = True` only when `info.declared_can_throw` flipped from falsy to `True`. For functions like `on_none` whose `declared_can_throw` was already `True` (from the missing-annotation fallback at line 581), a change in `inferred_may_throw` from `False` to `True` did NOT trigger re-iteration. If `main` was processed before `on_none` in the first (and only) iteration, `on_none.inferred_may_throw` was still `False`, so `main` saw `call_can_throw = False` for the `on_none` call and concluded `may_throw = False`.
+  - **Fix**: Track `inferred_may_throw` changes to drive the fixpoint: set `changed = True` whenever any function's `inferred_may_throw` flips from `False` to `True`, regardless of `declared_can_throw` status. This ensures callers get re-evaluated when a callee's inferred throw status changes.
+  - **Verification**: Both `optional_on_none_try_block_no_catch_rejected` and `result_on_error_try_block_no_catch_rejected` now correctly reject with "declared nothrow but may throw". 10 additional nothrow-related e2e tests + 6 driver tests all pass.

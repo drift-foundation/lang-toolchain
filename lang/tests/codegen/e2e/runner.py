@@ -464,6 +464,8 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	expected = json.loads(expected_path.read_text())
 	if expected.get("skip"):
 		return "skipped (marked)"
+	if expected.get("package_consumer_only"):
+		return "skipped (package-consumer-only)"
 	if expected.get("skip_memcheck") and _env_true("DRIFT_MEMCHECK"):
 		return "skipped (memcheck)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):

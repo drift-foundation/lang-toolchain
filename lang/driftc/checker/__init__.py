@@ -760,7 +760,10 @@ class Checker:
 				first_throw_span_by_fn.setdefault(fn_id, throw_span)
 				if throw_note:
 					first_throw_note_by_fn.setdefault(fn_id, throw_note)
+				old_inferred = info.inferred_may_throw
 				info.inferred_may_throw = may_throw
+				if may_throw and not old_inferred:
+					changed = True
 				explicit = info.signature.declared_can_throw if info.signature is not None else None
 				# Legacy test shim: `declared_can_throw` map is treated as an explicit
 				# annotation.
@@ -771,7 +774,6 @@ class Checker:
 					continue
 				if may_throw and not info.declared_can_throw:
 					info.declared_can_throw = True
-					changed = True
 
 		# Emit diagnostics for explicit nothrow signatures that still may throw.
 		for fn_id, info in fn_infos.items():
