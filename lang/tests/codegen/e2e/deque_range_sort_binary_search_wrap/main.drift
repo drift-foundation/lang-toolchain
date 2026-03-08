@@ -10,7 +10,7 @@ use trait cmp.Comparable;
 use trait iter.RandomAccessPermutable;
 use trait iter.RandomAccessReadable;
 
-fn main() nothrow -> Int {
+fn run() -> Int {
 var dq = containers.deque<type Int>();
 	dq.push_back(4);
 	dq.push_back(5);
@@ -42,3 +42,5 @@ var dq = containers.deque<type Int>();
 	}
 	return (got == 5) ? 0 : 1;
 }
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }

@@ -8,7 +8,7 @@ use trait algo.BinarySearchable;
 use trait cmp.Comparable;
 use trait iter.RandomAccessReadable;
 
-fn main() nothrow -> Int {
+fn run() -> Int {
 	var arr = [1, 2, 2, 2, 3];
 	var r = arr.range();
 	val idx = algo.binary_search<type containers.ArrayRange<Int>, Int>(&r, &2);
@@ -19,3 +19,5 @@ fn main() nothrow -> Int {
 		None => { 11 },
 	};
 }
+
+fn main() nothrow -> Int { return try run() catch { 99 }; }
