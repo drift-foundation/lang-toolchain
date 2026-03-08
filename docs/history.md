@@ -34,12 +34,18 @@
   - added `ext-e2e-boundary` as a package-consumer boundary regression slice,
   - folded `ext-e2e-smoke` and `ext-e2e-boundary` into `just test` for everyday CI/dev confidence,
   - removed the separate `ext-e2e-asan` target in favor of `DRIFT_ASAN=1` execution mode on existing targets.
+- Post-convergence regression cleanup:
+  - fixed missing driver-side K25 trait-scope fallback for external package modules so Pass 1 and `compile_stubbed_funcs` use the same temporary scope broadening during generic re-instantiation,
+  - fixed package-consumer destroy reachability for nested generic/container element types by extending `_seed_destroy_type_graph` to walk `TypeDef.param_types`,
+  - fixed package-side generic destructor discovery by using a combined source+package MIR pool for destroy seeding and dispatching discovered destroyers back into the correct needed set,
+  - restored full function-key parity checking (fingerprint + package/module/name identity),
+  - renamed the compact package-consumer regression slice from `ext-e2e-parity` to `ext-e2e-boundary` for accuracy and removed the non-parity `pkg_vis_source_private_method_rejected` fixture from that target.
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.12-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.13-dev`; ABI remains `4`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

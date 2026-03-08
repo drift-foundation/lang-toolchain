@@ -1530,6 +1530,13 @@ def _seed_destroy_type_graph(
 						if field_ty not in visited_types:
 							visited_types.add(field_ty)
 							type_queue.append(field_ty)
+			# Walk ARRAY/OPTIONAL/RESULT element types for transitive destroyers.
+			td = type_table.get(ty)
+			if td.param_types:
+				for child_ty in td.param_types:
+					if child_ty not in visited_types:
+						visited_types.add(child_ty)
+						type_queue.append(child_ty)
 		while destroy_queue:
 			cur = destroy_queue.pop()
 			fn = mir_pool.get(cur)
@@ -1719,6 +1726,8 @@ def _build_package_consumer_unit(
 					src_needed.add(callee)
 					_iface_impl_queue.append(callee)
 
+	_src_mir_full = src_mir
+	_ssa_src_full = ssa_src
 	src_mir = {fn_id: fn for fn_id, fn in src_mir.items() if fn_id in src_needed}
 	ssa_src = {fn_id: fn for fn_id, fn in ssa_src.items() if fn_id in src_needed}
 
@@ -1747,7 +1756,12 @@ def _build_package_consumer_unit(
 				pkg_needed.add(callee)
 				queue.append(callee)
 
-	# Seed destroy impls for DropValue types (package-side K39).
+	# Seed destroy impls for DropValue types (package-side + source-side K39).
+	# The combined pool includes both pkg_mir_all AND _src_mir_full because
+	# generic destroy instantiations (e.g. VirtualThread<T>::destroy) are
+	# produced by compile_stubbed_funcs and live in src_mir, but the DropValue
+	# for their types may only appear in package MIR (e.g. FutureGroup::join_all
+	# drops VirtualThread internally through Array element drops).
 	_all_reachable = dict(src_mir)
 	for fid in pkg_needed:
 		fn = pkg_mir_all.get(fid)
@@ -1759,15 +1773,31 @@ def _build_package_consumer_unit(
 			for instr in block.instructions:
 				if isinstance(instr, M.DropValue):
 					_pkg_dropped_types.add(instr.ty)
+	# Combined pool: pkg MIR + full source MIR (pre-BFS-filter).
+	# Seeding populates _combined_needed; the caller dispatches into the
+	# correct ownership set (pkg_needed vs src_needed) below.
+	_combined_mir_pool: dict[FunctionId, M.MirFunc] = dict(pkg_mir_all)
+	_combined_mir_pool.update(_src_mir_full)
+	_combined_needed: set[FunctionId] = set()
 	_seed_destroy_type_graph(
 		initial_dropped_types=_pkg_dropped_types,
 		destructor_fns=destructor_fns,
-		mir_pool=pkg_mir_all,
-		needed=pkg_needed,
+		mir_pool=_combined_mir_pool,
+		needed=_combined_needed,
 		type_table=type_table,
 		fn_infos=checked_src.fn_infos_by_id,
 		pkg_sigs=pkg_sigs_by_id,
 	)
+	for _cn_fid in _combined_needed:
+		if _cn_fid in pkg_mir_all:
+			pkg_needed.add(_cn_fid)
+		elif _cn_fid in _src_mir_full:
+			if _cn_fid not in src_needed:
+				src_needed.add(_cn_fid)
+				src_mir[_cn_fid] = _src_mir_full[_cn_fid]
+				_ssa_entry = _ssa_src_full.get(_cn_fid)
+				if _ssa_entry is not None:
+					ssa_src[_cn_fid] = _ssa_entry
 
 	# K26: Seed interface impl methods so vtable entries have bodies available.
 	# For each non-generic trait impl from external packages, add method
@@ -4231,7 +4261,7 @@ def compile_stubbed_funcs(
 			typed_fns_by_id[inst_fn_id] = inst_result.typed_fn
 			_queue_instantiations(inst_result.typed_fn)
 			handle.status = "emitted"
-	
+
 	_drain_instantiations()
 	def _rewrite_call_targets(typed_fn: object, block: H.HBlock) -> None:
 		call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
@@ -8479,6 +8509,23 @@ def main(argv: list[str] | None = None) -> int:
 					trait_scope_by_module[mod_name] = list(scope)
 				else:
 					trait_scope_by_module[mod_name] = []
+	# K25 fallback (TEMPORARY — removal-targeted once DMIR serializes trait_scope):
+	# External package modules lack trait_scope in DMIR.  Populate with all
+	# known traits so generic re-instantiations from package modules can
+	# resolve trait methods during consumer compilation.
+	if isinstance(external_exports, dict):
+		_all_trait_keys: list[object] | None = None
+		for mod_name, exp in external_exports.items():
+			if mod_name in trait_scope_by_module:
+				continue
+			if isinstance(exp, dict):
+				scope = exp.get("trait_scope", None)
+				if isinstance(scope, list):
+					trait_scope_by_module[mod_name] = list(scope)
+				else:
+					if _all_trait_keys is None:
+						_all_trait_keys = list(global_trait_index.traits_by_id.keys()) if global_trait_index is not None else []
+					trait_scope_by_module[mod_name] = _all_trait_keys
 	visible_modules_by_name_set = {
 		mod: set(visible) for mod, visible in visible_module_names_by_name.items()
 	}
