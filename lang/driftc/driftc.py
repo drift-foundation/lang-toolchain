@@ -2440,6 +2440,34 @@ def _apply_stdlib_escape_annotations(signatures_by_id: Mapping) -> None:
 			_sig.param_escape_level = list(_levels)
 
 
+@dataclass
+class Pass1State:
+	"""Resolution infrastructure from the driver's Pass 1 type-check.
+
+	When provided to compile_stubbed_funcs, the function uses these objects
+	instead of rebuilding its own callable registry, trait indices, module
+	visibility, etc.  This eliminates K42-class divergences where two
+	independently-constructed registries produce different method resolution.
+
+	Source function type-check is also skipped (typed_fns are reused).
+	Generic instantiation and lambda type-check still run, using the shared state.
+	"""
+	typed_fns: dict  # FunctionId -> TypedFn
+	callable_registry: object  # CallableRegistry
+	impl_index: object  # GlobalImplIndex
+	trait_index: object  # GlobalTraitIndex
+	trait_impl_index: object  # GlobalTraitImplIndex
+	trait_scope_by_module: dict  # str -> list[trait_key]
+	linked_world: object  # LinkedWorld
+	require_env: object  # RequireEnv
+	visible_module_names_by_name: dict  # str -> set[str]
+	module_ids: dict  # object -> int
+	method_wrapper_specs: list  # list[MethodWrapperSpec]
+	unsafe_trusted_modules: set  # set[str]
+	function_keys_by_fn_id: dict  # FunctionId -> FunctionKey
+	visibility_provenance_by_id: dict  # int -> tuple[str, ...]
+
+
 def compile_stubbed_funcs(
 	func_hirs: Mapping[FunctionId | str, H.HBlock],
 	declared_can_throw: Mapping[FunctionId | str, bool] | None = None,
@@ -2467,9 +2495,9 @@ def compile_stubbed_funcs(
 	entry_module: str = "main",
 	entry_name: str = "main",
 	allow_unsafe: bool = True,
-	# Phase 1a: accept pre-typed functions from Pass 1 to skip duplicate type-check.
-	skip_typecheck: bool = False,
-	typed_fns_from_pass1: Mapping[FunctionId, object] | None = None,
+	# Phase 1 (converge-one-pipeline): accept resolution state from the
+	# driver to eliminate duplicate registry construction and type-check.
+	pass1_state: "Pass1State | None" = None,
 ) -> (
 	Dict[FunctionId, M.MirFunc]
 	| tuple[Dict[FunctionId, M.MirFunc], CheckedProgramById]
@@ -2594,7 +2622,23 @@ def compile_stubbed_funcs(
 		def _fallback_destructible(_tid: int) -> bool | None:
 			return None
 		shared_type_table.set_destructible_query(_fallback_destructible, allow_fallback=True)
-	if not signatures_by_id:
+	if pass1_state is not None and signatures_by_id:
+		# Phase 4 (converge-one-pipeline): signatures from the driver are already
+		# resolved with TypeIds and can_throw.  Skip the expensive resolution loop
+		# but fill missing error_type_id for can-throw sigs (package signatures
+		# don't serialize error_type_id).
+		_p4_resolved: dict[FunctionId, FnSignature] = {}
+		for fn_id, sig in signatures_by_id.items():
+			err_id = sig.error_type_id
+			if sig.declared_can_throw is not False and err_id is None:
+				err_id = shared_type_table.ensure_error()
+				_p4_resolved[fn_id] = replace(sig, error_type_id=err_id)
+		if _p4_resolved:
+			base_signatures_by_id = dict(signatures_by_id)
+			base_signatures_by_id.update(_p4_resolved)
+		else:
+			base_signatures_by_id = dict(signatures_by_id)
+	elif not signatures_by_id:
 		shared_type_table, base_signatures_by_id = resolve_program_signatures(
 			_fake_decls_from_hirs(func_hirs_by_id),
 			table=shared_type_table,
@@ -2708,20 +2752,33 @@ def compile_stubbed_funcs(
 		_record_signature_provenance(fn_id, sig)
 		derived_signatures_by_id[fn_id] = sig
 
-	method_wrapper_specs, wrapper_errors = _inject_method_boundary_wrappers(
-		signatures_by_id=base_signatures_by_id,
-		existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
-		register_derived=_register_derived_signature_precheck,
-		type_table=shared_type_table,
-	)
-	if wrapper_errors:
-		raise ValueError(wrapper_errors[0])
+	if pass1_state is not None:
+		# Phase 4 (converge-one-pipeline): wrapper signatures are already in
+		# base_signatures_by_id (flattened from the driver's ChainMap), so
+		# injection would return empty specs.  Reuse the driver's specs for
+		# downstream wrapper MIR synthesis.
+		method_wrapper_specs = pass1_state.method_wrapper_specs
+	else:
+		method_wrapper_specs, wrapper_errors = _inject_method_boundary_wrappers(
+			signatures_by_id=base_signatures_by_id,
+			existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
+			register_derived=_register_derived_signature_precheck,
+			type_table=shared_type_table,
+		)
+		if wrapper_errors:
+			raise ValueError(wrapper_errors[0])
 
-	# Normalize before typecheck so the checker sees canonical HIR for diagnostics.
-	with _timed("normalize_hir"):
-		normalized_hirs_by_id: dict[FunctionId, H.HBlock] = {
-			fn_id: normalize_hir(hir_block) for fn_id, hir_block in func_hirs_by_id.items()
-		}
+	if pass1_state is not None:
+		# Phase 4 (converge-one-pipeline): the driver already normalized HIR
+		# at Pass 1 (line 8012).  The caller passes normalized HIR directly,
+		# so skip the redundant O(n) normalize_hir traversal.
+		normalized_hirs_by_id = dict(func_hirs_by_id)
+	else:
+		# Normalize before typecheck so the checker sees canonical HIR for diagnostics.
+		with _timed("normalize_hir"):
+			normalized_hirs_by_id: dict[FunctionId, H.HBlock] = {
+				fn_id: normalize_hir(hir_block) for fn_id, hir_block in func_hirs_by_id.items()
+			}
 	if drift_debug.enabled("local_types_trace"):
 		for fn_id, block in normalized_hirs_by_id.items():
 			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
@@ -2758,41 +2815,55 @@ def compile_stubbed_funcs(
 			_walk_expr_ids(block)
 
 	# candidate_signatures_for_diag removed; no name-keyed fallback map
-	unsafe_trusted_modules = set()
-	if shared_type_table is not None:
-		for mod_id, pkg_id in (getattr(shared_type_table, "module_packages", {}) or {}).items():
-			if pkg_id == "std":
-				unsafe_trusted_modules.add(mod_id)
-	if not unsafe_trusted_modules and module_exports is not None:
-		for mod_id in module_exports.keys():
-			if isinstance(mod_id, str) and mod_id.startswith("std."):
-				unsafe_trusted_modules.add(mod_id)
-	if not unsafe_trusted_modules:
-		for fn_id, sig in signatures_by_id.items():
-			mod_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
-			if isinstance(mod_name, str) and mod_name.startswith("std."):
-				unsafe_trusted_modules.add(mod_name)
+	if pass1_state is not None:
+		# Phase 4 (converge-one-pipeline): reuse the driver's unsafe_trusted_modules
+		# set, which was built from the same type_table and module_exports.
+		unsafe_trusted_modules = pass1_state.unsafe_trusted_modules
+	else:
+		unsafe_trusted_modules = set()
+		if shared_type_table is not None:
+			for mod_id, pkg_id in (getattr(shared_type_table, "module_packages", {}) or {}).items():
+				if pkg_id == "std":
+					unsafe_trusted_modules.add(mod_id)
+		if not unsafe_trusted_modules and module_exports is not None:
+			for mod_id in module_exports.keys():
+				if isinstance(mod_id, str) and mod_id.startswith("std."):
+					unsafe_trusted_modules.add(mod_id)
+		if not unsafe_trusted_modules:
+			for fn_id, sig in signatures_by_id.items():
+				mod_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
+				if isinstance(mod_name, str) and mod_name.startswith("std."):
+					unsafe_trusted_modules.add(mod_name)
 	if allow_unsafe and module_deps:
 		for mod_id in module_deps.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
 	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True)
-	callable_registry = CallableRegistry()
-	module_ids: dict[object, int] = {None: 0}
-	if module_deps:
-		all_mods = set(module_deps.keys())
-		for deps in module_deps.values():
-			all_mods |= set(deps)
-		for mid in sorted(all_mods):
-			module_ids.setdefault(mid, len(module_ids))
+	# Phase 6: only allocate callable_registry / module_ids / visibility_provenance
+	# when pass1_state is absent — under pass1_state these are immediately
+	# overwritten from the driver's state (lines 3087-3104).
+	if pass1_state is not None:
+		callable_registry = pass1_state.callable_registry
+		module_ids = pass1_state.module_ids
+		visibility_provenance_by_id = pass1_state.visibility_provenance_by_id
 	else:
-		for fn_id in signatures_by_id.keys():
-			module_ids.setdefault(getattr(fn_id, "module", None), len(module_ids))
-	visibility_provenance_by_id: dict[int, tuple[str, ...]] = {}
-	for mod_name, mod_id in module_ids.items():
-		if mod_name is None:
-			continue
-		visibility_provenance_by_id[int(mod_id)] = (str(mod_name),)
+		callable_registry = CallableRegistry()
+		module_ids: dict[object, int] = {None: 0}
+		visibility_provenance_by_id: dict[int, tuple[str, ...]] = {}
+	if pass1_state is None:
+		if module_deps:
+			all_mods = set(module_deps.keys())
+			for deps in module_deps.values():
+				all_mods |= set(deps)
+			for mid in sorted(all_mods):
+				module_ids.setdefault(mid, len(module_ids))
+		else:
+			for fn_id in signatures_by_id.keys():
+				module_ids.setdefault(getattr(fn_id, "module", None), len(module_ids))
+		for mod_name, mod_id in module_ids.items():
+			if mod_name is None:
+				continue
+			visibility_provenance_by_id[int(mod_id)] = (str(mod_name),)
 	def _module_id_with_visibility(name: object) -> int:
 		mod_id = module_ids.setdefault(name, len(module_ids))
 		if name is not None and int(mod_id) not in visibility_provenance_by_id:
@@ -2809,6 +2880,11 @@ def compile_stubbed_funcs(
 	requires_by_fn_id: dict[FunctionId, object] = {}
 	trait_worlds = getattr(shared_type_table, "trait_worlds", {}) if shared_type_table is not None else {}
 	trait_world_diags: list[Diagnostic] = []
+	# Phase 3: when pass1_state is provided, shared_type_table.trait_worlds
+	# was already populated by Pass 1 (main:7817-7868).  Skip the merge
+	# mutations but still run the orphan-impl diagnostic check so that
+	# diagnostics parity is unchanged.
+	_skip_trait_merge = pass1_state is not None
 	if shared_type_table is not None and (external_trait_defs or external_impl_metas):
 		from lang.driftc.traits.world import TraitWorld, ImplDef, type_key_from_expr
 
@@ -2836,7 +2912,7 @@ def compile_stubbed_funcs(
 				trait_worlds[key] = world
 			return world
 
-		if external_trait_defs:
+		if not _skip_trait_merge and external_trait_defs:
 			for trait_def in external_trait_defs:
 				key = getattr(trait_def, "key", None)
 				if key is None:
@@ -2857,7 +2933,6 @@ def compile_stubbed_funcs(
 				target_expr = getattr(impl, "target_expr", None)
 				if target_expr is None:
 					continue
-				world = _ensure_world(getattr(impl, "def_module", None))
 				target_key = type_key_from_expr(
 					target_expr,
 					default_module=getattr(impl, "def_module", None),
@@ -2886,6 +2961,9 @@ def compile_stubbed_funcs(
 						)
 					)
 					continue
+				if _skip_trait_merge:
+					continue
+				world = _ensure_world(getattr(impl, "def_module", None))
 				existing_ids = world.impls_by_trait_target.get((impl.trait_key, head_key), [])
 				impl_trait_args = tuple(
 					type_key_from_typeid(shared_type_table, tid)
@@ -2916,44 +2994,57 @@ def compile_stubbed_funcs(
 				world.impls_by_target_head.setdefault(impl_def.target_head, []).append(impl_id)
 				world.impls_by_trait_target.setdefault((impl_def.trait, impl_def.target_head), []).append(impl_id)
 
-		shared_type_table.trait_worlds = trait_worlds
-		if hasattr(shared_type_table, "_global_trait_world"):
-			delattr(shared_type_table, "_global_trait_world")
-	if isinstance(trait_worlds, dict):
+		if not _skip_trait_merge:
+			shared_type_table.trait_worlds = trait_worlds
+			if hasattr(shared_type_table, "_global_trait_world"):
+				delattr(shared_type_table, "_global_trait_world")
+	# Phase 5: requires_by_fn_id is only consumed by the function_keys extension
+	# loop (line 3065).  When pass1_state provides function_keys_by_fn_id,
+	# that loop is skipped, so this population is also unnecessary.
+	if pass1_state is None and isinstance(trait_worlds, dict):
 		for world in trait_worlds.values():
 			for fn_id, req in getattr(world, "requires_by_fn", {}).items():
 				requires_by_fn_id[fn_id] = req
-	linked_world, require_env = _build_linked_world(shared_type_table)
-	_install_destructor_fns(shared_type_table, linked_world, module_exports)
-	# K39: Early registration of non-generic Destructible impls from packages.
-	# _install_destructor_fns only sees local module_exports; package impls
-	# (e.g. TypeBox::destroy) are in external_impl_metas.  Generic impls
-	# (e.g. ScopeGuard<T>::destroy) are handled later in the instantiation
-	# code where _request_instantiation is available.
-	if external_impl_metas and shared_type_table is not None and linked_world is not None:
-		destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
-		if destructible_key is not None:
-			ext_destructor_fns = getattr(shared_type_table, "destructor_fns", None) or {}
-			for impl in external_impl_metas:
-				if not isinstance(impl, ImplMeta):
-					continue
-				if impl.trait_key != destructible_key:
-					continue
-				target_type_id = getattr(impl, "target_type_id", None)
-				if not isinstance(target_type_id, int):
-					continue
-				if shared_type_table.has_typevar(target_type_id):
-					continue
-				method_fn_id: FunctionId | None = None
-				for method in impl.methods:
-					if method.name == "destroy":
-						method_fn_id = method.fn_id
-						break
-				if method_fn_id is None:
-					continue
-				ext_destructor_fns[target_type_id] = method_fn_id
-			if ext_destructor_fns:
-				shared_type_table.destructor_fns = ext_destructor_fns
+	if pass1_state is not None:
+		linked_world = pass1_state.linked_world
+		require_env = pass1_state.require_env
+	else:
+		linked_world, require_env = _build_linked_world(shared_type_table)
+	# Phase 6: when pass1_state is provided, the driver already called
+	# _install_destructor_fns + K39 on the shared type_table before
+	# constructing Pass1State.  Skip to avoid _install_destructor_fns
+	# replacing type_table.destructor_fns (which would clobber K39 entries).
+	if pass1_state is None:
+		_install_destructor_fns(shared_type_table, linked_world, module_exports)
+		# K39: Early registration of non-generic Destructible impls from packages.
+		# _install_destructor_fns only sees local module_exports; package impls
+		# (e.g. TypeBox::destroy) are in external_impl_metas.  Generic impls
+		# (e.g. ScopeGuard<T>::destroy) are handled later in the instantiation
+		# code where _request_instantiation is available.
+		if external_impl_metas and shared_type_table is not None and linked_world is not None:
+			destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
+			if destructible_key is not None:
+				ext_destructor_fns = getattr(shared_type_table, "destructor_fns", None) or {}
+				for impl in external_impl_metas:
+					if not isinstance(impl, ImplMeta):
+						continue
+					if impl.trait_key != destructible_key:
+						continue
+					target_type_id = getattr(impl, "target_type_id", None)
+					if not isinstance(target_type_id, int):
+						continue
+					if shared_type_table.has_typevar(target_type_id):
+						continue
+					method_fn_id: FunctionId | None = None
+					for method in impl.methods:
+						if method.name == "destroy":
+							method_fn_id = method.fn_id
+							break
+					if method_fn_id is None:
+						continue
+					ext_destructor_fns[target_type_id] = method_fn_id
+				if ext_destructor_fns:
+					shared_type_table.destructor_fns = ext_destructor_fns
 
 	def _declared_name_from_fn_id(fn_id: FunctionId, module_id: str) -> str:
 		sym = function_symbol(fn_id)
@@ -2967,190 +3058,197 @@ def compile_stubbed_funcs(
 				name = base
 		return name
 
-	local_package_id = package_id
-	default_package = getattr(shared_type_table, "package_id", None) or package_id
-	module_packages = getattr(shared_type_table, "module_packages", None)
-	for fn_id, sig in signatures_by_id.items():
-		if not (getattr(sig, "type_params", []) or getattr(sig, "impl_type_params", [])):
-			continue
-		if fn_id in function_keys_by_fn_id:
-			continue
-		module_id = getattr(sig, "module", None) or getattr(fn_id, "module", None) or "main"
-		declared_name = _declared_name_from_fn_id(fn_id, module_id)
-		if sig.param_types is None or sig.return_type is None:
-			raise ValueError(
-				f"TemplateHIR-v1 requires TypeExpr signatures for '{function_symbol(fn_id)}'"
+	if pass1_state is not None:
+		# Phase 5 (converge-one-pipeline): reuse the driver's function_keys_by_fn_id
+		# which covers ALL generic signatures (wrappers + non-wrappers), skipping
+		# the O(n) compute_template_decl_fingerprint loop below.
+		function_keys_by_fn_id.update(pass1_state.function_keys_by_fn_id)
+	else:
+		local_package_id = package_id
+		default_package = getattr(shared_type_table, "package_id", None) or package_id
+		module_packages = getattr(shared_type_table, "module_packages", None)
+		for fn_id, sig in signatures_by_id.items():
+			if not (getattr(sig, "type_params", []) or getattr(sig, "impl_type_params", [])):
+				continue
+			if fn_id in function_keys_by_fn_id:
+				continue
+			module_id = getattr(sig, "module", None) or getattr(fn_id, "module", None) or "main"
+			declared_name = _declared_name_from_fn_id(fn_id, module_id)
+			if sig.param_types is None or sig.return_type is None:
+				raise ValueError(
+					f"TemplateHIR-v1 requires TypeExpr signatures for '{function_symbol(fn_id)}'"
+				)
+			req_expr = requires_by_fn_id.get(fn_id)
+			decl_fp, _layout = compute_template_decl_fingerprint(
+				sig,
+				declared_name=declared_name,
+				module_id=module_id,
+				require_expr=req_expr if req_expr is not None else None,
+				default_package=default_package,
+				module_packages=module_packages,
 			)
-		req_expr = requires_by_fn_id.get(fn_id)
-		decl_fp, _layout = compute_template_decl_fingerprint(
-			sig,
-			declared_name=declared_name,
-			module_id=module_id,
-			require_expr=req_expr if req_expr is not None else None,
-			default_package=default_package,
-			module_packages=module_packages,
-		)
-		function_keys_by_fn_id[fn_id] = FunctionKey(
-			package_id=local_package_id,
-			module_path=module_id,
-			name=declared_name,
-			decl_fingerprint=decl_fp,
-		)
-	next_callable_id = 1
-	def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:
-		if impl_tid is None or shared_type_table is None:
-			return impl_tid
-		td = shared_type_table.get(impl_tid)
-		if td.kind is TypeKind.REF and td.param_types:
-			inner = td.param_types[0]
-			inner_def = shared_type_table.get(inner)
-			if inner_def.kind is TypeKind.ARRAY:
+			function_keys_by_fn_id[fn_id] = FunctionKey(
+				package_id=local_package_id,
+				module_path=module_id,
+				name=declared_name,
+				decl_fingerprint=decl_fp,
+			)
+	# Phase 2 (converge-one-pipeline): skip callable_registry population,
+	# trait/impl index construction, and module visibility setup when
+	# pass1_state provides them.
+	# Phase 6: callable_registry, module_ids, visibility_provenance_by_id
+	# are already assigned from pass1_state at the top (line 2845).
+	if pass1_state is not None:
+		impl_index = pass1_state.impl_index
+		trait_index = pass1_state.trait_index
+		trait_impl_index = pass1_state.trait_impl_index
+		trait_scope_by_module = pass1_state.trait_scope_by_module
+		visible_module_names_by_name = pass1_state.visible_module_names_by_name
+	else:
+		next_callable_id = 1
+		def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:
+			if impl_tid is None or shared_type_table is None:
+				return impl_tid
+			td = shared_type_table.get(impl_tid)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner = td.param_types[0]
+				inner_def = shared_type_table.get(inner)
+				if inner_def.kind is TypeKind.ARRAY:
+					return shared_type_table.array_base_id()
+				return inner
+			if td.kind is TypeKind.ARRAY:
 				return shared_type_table.array_base_id()
-			return inner
-		if td.kind is TypeKind.ARRAY:
-			return shared_type_table.array_base_id()
-		if td.kind is TypeKind.STRUCT:
-			inst = shared_type_table.get_struct_instance(impl_tid)
-			if inst is not None:
-				return inst.base_id
-		if td.kind is TypeKind.VARIANT:
-			inst = shared_type_table.get_variant_instance(impl_tid)
-			if inst is not None:
-				return inst.base_id
-		return impl_tid
-	def _template_sig_for(sig: FnSignature) -> CallableTemplateSignature | None:
-		if not (sig.type_params or getattr(sig, "impl_type_params", [])):
-			return None
-		if sig.param_types is None or sig.return_type is None:
-			return None
-		return CallableTemplateSignature(param_types=tuple(sig.param_types), result_type=sig.return_type)
-	# K20: pre-compute generic method keys to suppress __inst__ monomorphizations.
-	_local_generic_method_keys: set[tuple[int | None, str | None]] = set()
-	for _fid, _sig in signatures_by_id.items():
-		if _sig.is_method and (_sig.type_params or getattr(_sig, "impl_type_params", [])):
-			_local_generic_method_keys.add((_registry_impl_target_type_id(_sig.impl_target_type_id), _sig.method_name))
-	for fn_id, sig in signatures_by_id.items():
-		if sig.return_type_id is None:
-			continue
-		if getattr(sig, "is_wrapper", False):
-			continue
-		# K20: skip __inst__ monomorphized sigs when generic template exists.
-		if "__inst__" in (fn_id.name or "") and sig.is_method and not (sig.type_params or getattr(sig, "impl_type_params", [])):
-			norm_recv = _registry_impl_target_type_id(sig.impl_target_type_id)
-			if (norm_recv, sig.method_name) in _local_generic_method_keys:
+			if td.kind is TypeKind.STRUCT:
+				inst = shared_type_table.get_struct_instance(impl_tid)
+				if inst is not None:
+					return inst.base_id
+			if td.kind is TypeKind.VARIANT:
+				inst = shared_type_table.get_variant_instance(impl_tid)
+				if inst is not None:
+					return inst.base_id
+			return impl_tid
+		def _template_sig_for(sig: FnSignature) -> CallableTemplateSignature | None:
+			if not (sig.type_params or getattr(sig, "impl_type_params", [])):
+				return None
+			if sig.param_types is None or sig.return_type is None:
+				return None
+			return CallableTemplateSignature(param_types=tuple(sig.param_types), result_type=sig.return_type)
+		# K20: pre-compute generic method keys to suppress __inst__ monomorphizations.
+		_local_generic_method_keys: set[tuple[int | None, str | None]] = set()
+		for _fid, _sig in signatures_by_id.items():
+			if _sig.is_method and (_sig.type_params or getattr(_sig, "impl_type_params", [])):
+				_local_generic_method_keys.add((_registry_impl_target_type_id(_sig.impl_target_type_id), _sig.method_name))
+		for fn_id, sig in signatures_by_id.items():
+			if sig.return_type_id is None:
 				continue
-		module_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
-		module_id = module_ids.setdefault(module_name, len(module_ids))
-		param_types_tuple = tuple(sig.param_type_ids or [])
-		if sig.is_method:
-			if sig.impl_target_type_id is None or sig.self_mode is None:
+			if getattr(sig, "is_wrapper", False):
 				continue
-			self_mode = {
-				"value": SelfMode.SELF_BY_VALUE,
-				"ref": SelfMode.SELF_BY_REF,
-				"ref_mut": SelfMode.SELF_BY_REF_MUT,
-			}.get(sig.self_mode)
-			if self_mode is None:
-				continue
-			callable_registry.register_inherent_method(
-				callable_id=next_callable_id,
-				name=sig.method_name or sig.name,
-				module_id=module_id,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
-				fn_id=fn_id,
-				impl_id=next_callable_id,
-				impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
-				self_mode=self_mode,
-				is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
+			# K20: skip __inst__ monomorphized sigs when generic template exists.
+			if "__inst__" in (fn_id.name or "") and sig.is_method and not (sig.type_params or getattr(sig, "impl_type_params", [])):
+				norm_recv = _registry_impl_target_type_id(sig.impl_target_type_id)
+				if (norm_recv, sig.method_name) in _local_generic_method_keys:
+					continue
+			module_name = getattr(fn_id, "module", None) or getattr(sig, "module", None)
+			module_id = module_ids.setdefault(module_name, len(module_ids))
+			param_types_tuple = tuple(sig.param_type_ids or [])
+			if sig.is_method:
+				if sig.impl_target_type_id is None or sig.self_mode is None:
+					continue
+				self_mode = {
+					"value": SelfMode.SELF_BY_VALUE,
+					"ref": SelfMode.SELF_BY_REF,
+					"ref_mut": SelfMode.SELF_BY_REF_MUT,
+				}.get(sig.self_mode)
+				if self_mode is None:
+					continue
+				callable_registry.register_inherent_method(
+					callable_id=next_callable_id,
+					name=sig.method_name or sig.name,
+					module_id=module_id,
+					visibility=Visibility.public(),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					template_signature=_template_sig_for(sig),
+					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
+					template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
+					fn_id=fn_id,
+					impl_id=next_callable_id,
+					impl_target_type_id=_registry_impl_target_type_id(sig.impl_target_type_id),
+					self_mode=self_mode,
+					is_generic=bool(sig.type_params or getattr(sig, "impl_type_params", [])),
+				)
+				next_callable_id += 1
+			else:
+				callable_registry.register_free_function(
+					callable_id=next_callable_id,
+					name=fn_id.name,
+					module_id=module_id,
+					visibility=Visibility.public(),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					template_signature=_template_sig_for(sig),
+					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
+					fn_id=fn_id,
+					is_generic=bool(sig.type_params),
+				)
+				next_callable_id += 1
+		# Optional method/trait resolution support when module exports/deps are available.
+		impl_index = None
+		trait_index = None
+		trait_impl_index = None
+		trait_scope_by_module: dict[str, list] | None = None
+		if module_exports is not None:
+			impl_index = GlobalImplIndex.from_module_exports(
+				module_exports=dict(module_exports),
+				type_table=shared_type_table,
+				module_ids=module_ids,
 			)
-			next_callable_id += 1
-		else:
-			callable_registry.register_free_function(
-				callable_id=next_callable_id,
-				name=fn_id.name,
-				module_id=module_id,
-				visibility=Visibility.public(),
-				signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
-				template_signature=_template_sig_for(sig),
-				template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
-				fn_id=fn_id,
-				is_generic=bool(sig.type_params),
+			trait_index = GlobalTraitIndex.from_trait_worlds(getattr(shared_type_table, "trait_worlds", None))
+			trait_impl_index = GlobalTraitImplIndex.from_module_exports(
+				module_exports=dict(module_exports),
+				type_table=shared_type_table,
+				module_ids=module_ids,
 			)
-			next_callable_id += 1
-	# Optional method/trait resolution support when module exports/deps are available.
-	impl_index = None
-	trait_index = None
-	trait_impl_index = None
-	trait_scope_by_module: dict[str, list] | None = None
-	if module_exports is not None:
-		impl_index = GlobalImplIndex.from_module_exports(
-			module_exports=dict(module_exports),
-			type_table=shared_type_table,
-			module_ids=module_ids,
-		)
-		trait_index = GlobalTraitIndex.from_trait_worlds(getattr(shared_type_table, "trait_worlds", None))
-		trait_impl_index = GlobalTraitImplIndex.from_module_exports(
-			module_exports=dict(module_exports),
-			type_table=shared_type_table,
-			module_ids=module_ids,
-		)
-		if external_impl_metas:
-			for impl in external_impl_metas:
-				if getattr(impl, "trait_key", None) is None and impl_index is not None:
-					impl_index.add_impl(impl=impl, type_table=shared_type_table, module_ids=module_ids)
-				if getattr(impl, "trait_key", None) is not None and trait_impl_index is not None:
-					trait_impl_index.add_impl(impl=impl, type_table=shared_type_table, module_ids=module_ids)
-		if external_trait_defs and trait_index is not None:
-			for trait_def in external_trait_defs:
-				if hasattr(trait_def, "key"):
-					trait_index.add_trait(trait_def.key, trait_def)
-		if external_missing_traits and trait_index is not None:
-			for missing_trait in external_missing_traits:
-				if hasattr(missing_trait, "module") and hasattr(missing_trait, "name"):
-					trait_index.mark_missing(missing_trait)
-		if external_missing_impl_modules and trait_impl_index is not None:
-			for module_id in external_missing_impl_modules:
-				trait_impl_index.mark_missing_module(module_ids.setdefault(module_id, len(module_ids)))
-		trait_scope_by_module = {}
-		all_trait_keys: list[object] | None = None
-		for mod, exp in module_exports.items():
-			if isinstance(exp, dict):
-				scope = exp.get("trait_scope", None)
-				if isinstance(scope, list):
-					trait_scope_by_module[mod] = scope
-				elif scope is None:
-					# K25 TEMPORARY FALLBACK — remove when DMIR serializes trait_scope.
-					# External package modules lack trait_scope in DMIR.
-					# Populate with all known traits — scope was validated at
-					# package build time, so re-validation is unnecessary.
-					# Removal target: DMIR v1 freeze (serialize per-module trait_scope
-					# in package metadata; reconstruct exact scope on load).
-					if all_trait_keys is None:
-						all_trait_keys = list(trait_index.traits_by_id.keys()) if trait_index is not None else []
-					trait_scope_by_module[mod] = all_trait_keys
+			if external_impl_metas:
+				for impl in external_impl_metas:
+					if getattr(impl, "trait_key", None) is None and impl_index is not None:
+						impl_index.add_impl(impl=impl, type_table=shared_type_table, module_ids=module_ids)
+					if getattr(impl, "trait_key", None) is not None and trait_impl_index is not None:
+						trait_impl_index.add_impl(impl=impl, type_table=shared_type_table, module_ids=module_ids)
+			if external_trait_defs and trait_index is not None:
+				for trait_def in external_trait_defs:
+					if hasattr(trait_def, "key"):
+						trait_index.add_trait(trait_def.key, trait_def)
+			if external_missing_traits and trait_index is not None:
+				for missing_trait in external_missing_traits:
+					if hasattr(missing_trait, "module") and hasattr(missing_trait, "name"):
+						trait_index.mark_missing(missing_trait)
+			if external_missing_impl_modules and trait_impl_index is not None:
+				for module_id in external_missing_impl_modules:
+					trait_impl_index.mark_missing_module(module_ids.setdefault(module_id, len(module_ids)))
+			trait_scope_by_module = {}
+			all_trait_keys: list[object] | None = None
+			for mod, exp in module_exports.items():
+				if isinstance(exp, dict):
+					scope = exp.get("trait_scope", None)
+					if isinstance(scope, list):
+						trait_scope_by_module[mod] = scope
+					elif scope is None:
+						# K25 TEMPORARY FALLBACK — remove when DMIR serializes trait_scope.
+						# External package modules lack trait_scope in DMIR.
+						# Populate with all known traits — scope was validated at
+						# package build time, so re-validation is unnecessary.
+						# Removal target: DMIR v1 freeze (serialize per-module trait_scope
+						# in package metadata; reconstruct exact scope on load).
+						if all_trait_keys is None:
+							all_trait_keys = list(trait_index.traits_by_id.keys()) if trait_index is not None else []
+						trait_scope_by_module[mod] = all_trait_keys
 	typed_fns_by_id: dict[FunctionId, object] = {}
 	type_diags: list[Diagnostic] = []
 	if trait_world_diags:
 		type_diags.extend(trait_world_diags)
 	if shared_type_table is not None:
-		type_checker.validate_interface_schemas(diagnostics=type_diags)
-		if module_exports is not None:
-			interface_impls: list[ImplMeta] = []
-			for exp in module_exports.values():
-				if isinstance(exp, dict):
-					for impl in exp.get("impls", []) or []:
-						if isinstance(impl, ImplMeta):
-							interface_impls.append(impl)
-			if interface_impls:
-				type_checker.validate_interface_impls(
-					interface_impls,
-					signatures_by_id=signatures_by_id,
-					diagnostics=type_diags,
-				)
+		# Phase 3: Pass 1 already called validate_interface_schemas (main:8063).
+		if pass1_state is None:
+			type_checker.validate_interface_schemas(diagnostics=type_diags)
 		if module_exports is not None:
 			interface_impls: list[ImplMeta] = []
 			for exp in module_exports.values():
@@ -3182,18 +3280,19 @@ def compile_stubbed_funcs(
 	deferred_guard_diags_by_template: dict[FunctionKey, dict[tuple[object, str], list[Diagnostic]]] = {}
 	def _has_error(diags: list[Diagnostic]) -> bool:
 		return any(getattr(d, "severity", None) == "error" for d in diags)
-	visible_module_names_by_name: dict[str, set[str]] = {}
-	prelude_modules: set[str] = set()
-	if prelude_enabled:
-		for fn_id in signatures_by_id.keys():
-			if fn_id.module == "lang.core":
-				prelude_modules.add("lang.core")
-				break
-		if isinstance(module_exports, dict):
-			for std_mod in ("std.iter", "std.containers"):
-				if std_mod in module_exports:
-					prelude_modules.add(std_mod)
-	if module_deps is not None:
+	if pass1_state is None:
+		visible_module_names_by_name: dict[str, set[str]] = {}
+		prelude_modules: set[str] = set()
+		if prelude_enabled:
+			for fn_id in signatures_by_id.keys():
+				if fn_id.module == "lang.core":
+					prelude_modules.add("lang.core")
+					break
+			if isinstance(module_exports, dict):
+				for std_mod in ("std.iter", "std.containers"):
+					if std_mod in module_exports:
+						prelude_modules.add(std_mod)
+	if pass1_state is None and module_deps is not None:
 		def _collect_reexport_targets(mod: str) -> set[str]:
 			exp = module_exports.get(mod) if isinstance(module_exports, dict) else None
 			if not isinstance(exp, dict):
@@ -3326,11 +3425,104 @@ def compile_stubbed_funcs(
 				deferred_guard_diags_by_template[fn_key] = dict(deferred)
 		typed_fns_by_id[fn_id] = result.typed_fn
 
-	if skip_typecheck and typed_fns_from_pass1 is not None:
-		# Phase 1a: reuse pre-typed results from Pass 1 instead of re-running type-check.
-		typed_fns_by_id.update(typed_fns_from_pass1)
-		for fn_id in typed_fns_from_pass1:
+	if pass1_state is not None:
+		# Phase 1: reuse pre-typed results from the driver's Pass 1.
+		typed_fns_by_id.update(pass1_state.typed_fns)
+		for fn_id in pass1_state.typed_fns:
 			typecheck_ok_by_fn[fn_id] = True
+		# Convergence parity assertions: verify shared state matches what
+		# independent construction would produce.  Gated behind debug flag.
+		if drift_debug.enabled("convergence_parity"):
+			import sys as _cp_sys
+			_cp_errors: list[str] = []
+			# 1. Function keys parity: recompute from signatures, compare.
+			_cp_fkeys: dict[FunctionId, FunctionKey] = {}
+			if isinstance(template_keys_by_fn_id, dict):
+				_cp_fkeys.update(template_keys_by_fn_id)
+			_cp_requires: dict[FunctionId, object] = {}
+			_cp_tw = getattr(shared_type_table, "trait_worlds", {}) if shared_type_table is not None else {}
+			if isinstance(_cp_tw, dict):
+				for _cp_w in _cp_tw.values():
+					for _cp_fid, _cp_req in getattr(_cp_w, "requires_by_fn", {}).items():
+						_cp_requires[_cp_fid] = _cp_req
+			_cp_default_pkg = getattr(shared_type_table, "package_id", None) or package_id
+			_cp_mod_pkgs = getattr(shared_type_table, "module_packages", None)
+			for _cp_fid, _cp_sig in signatures_by_id.items():
+				if not (getattr(_cp_sig, "type_params", []) or getattr(_cp_sig, "impl_type_params", [])):
+					continue
+				if _cp_fid in _cp_fkeys:
+					continue
+				if _cp_sig.param_types is None or _cp_sig.return_type is None:
+					continue
+				_cp_mid = getattr(_cp_sig, "module", None) or getattr(_cp_fid, "module", None) or "main"
+				_cp_name = _declared_name_from_fn_id(_cp_fid, _cp_mid)
+				_cp_req = _cp_requires.get(_cp_fid)
+				_cp_fp, _ = compute_template_decl_fingerprint(
+					_cp_sig, declared_name=_cp_name, module_id=_cp_mid,
+					require_expr=_cp_req if _cp_req is not None else None,
+					default_package=_cp_default_pkg, module_packages=_cp_mod_pkgs,
+				)
+				_cp_fkeys[_cp_fid] = FunctionKey(
+					package_id=package_id, module_path=_cp_mid,
+					name=_cp_name, decl_fingerprint=_cp_fp,
+				)
+			for _cp_fid, _cp_key in _cp_fkeys.items():
+				_cp_shared = function_keys_by_fn_id.get(_cp_fid)
+				if _cp_shared is None:
+					_cp_errors.append(f"function_key missing for {function_symbol(_cp_fid)}")
+				else:
+					if _cp_shared.decl_fingerprint != _cp_key.decl_fingerprint:
+						_cp_errors.append(f"function_key fingerprint mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.decl_fingerprint} recomputed={_cp_key.decl_fingerprint}")
+					if _cp_shared.package_id != _cp_key.package_id:
+						_cp_errors.append(f"function_key package_id mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.package_id!r} recomputed={_cp_key.package_id!r}")
+					if _cp_shared.module_path != _cp_key.module_path:
+						_cp_errors.append(f"function_key module_path mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.module_path!r} recomputed={_cp_key.module_path!r}")
+					if _cp_shared.name != _cp_key.name:
+						_cp_errors.append(f"function_key name mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.name!r} recomputed={_cp_key.name!r}")
+			# 2. Wrapper injection parity: confirm injection would produce empty specs.
+			_cp_wrapper_specs, _cp_wrapper_errs = _inject_method_boundary_wrappers(
+				signatures_by_id=base_signatures_by_id,
+				existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
+				register_derived=lambda _fid, _sig: None,
+				type_table=shared_type_table,
+			)
+			if _cp_wrapper_specs:
+				_cp_errors.append(f"wrapper injection not empty under pass1_state: {len(_cp_wrapper_specs)} specs would be created")
+			# 3. Signature resolution parity: verify pass1 sigs match what
+			#    resolution would produce (TypeIds, error_type_id, can_throw).
+			for _cp_fid, _cp_sig in base_signatures_by_id.items():
+				if _cp_sig.declared_can_throw is not False and _cp_sig.error_type_id is None:
+					_cp_errors.append(f"signature {_cp_sig.name} still missing error_type_id after fixup")
+				if _cp_sig.param_type_ids is None and _cp_sig.param_types is not None:
+					_cp_errors.append(f"signature {_cp_sig.name} has param_types but no param_type_ids")
+			# 4. Visibility provenance parity: spot-check module_ids coverage.
+			for _cp_mod, _cp_mid in module_ids.items():
+				if _cp_mod is not None and int(_cp_mid) not in visibility_provenance_by_id:
+					_cp_errors.append(f"visibility_provenance_by_id missing mod_id={_cp_mid} for module '{_cp_mod}'")
+			# 5. Destructor registration parity: verify destructor_fns populated.
+			_cp_dfns = getattr(shared_type_table, "destructor_fns", None) or {}
+			if module_exports is not None and linked_world is not None:
+				_cp_dk = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
+				if _cp_dk is not None:
+					for _cp_exp in module_exports.values():
+						if not isinstance(_cp_exp, dict):
+							continue
+						for _cp_impl in (_cp_exp.get("impls") or []):
+							if not isinstance(_cp_impl, ImplMeta):
+								continue
+							if _cp_impl.trait_key != _cp_dk:
+								continue
+							_cp_ttid = getattr(_cp_impl, "target_type_id", None)
+							if isinstance(_cp_ttid, int) and not shared_type_table.has_typevar(_cp_ttid):
+								if _cp_ttid not in _cp_dfns:
+									_cp_errors.append(f"destructor_fns missing target_type_id={_cp_ttid}")
+			if _cp_errors:
+				print(f"[drift:debug][convergence_parity] FAIL: {len(_cp_errors)} parity errors", file=_cp_sys.stderr)
+				for _cp_e in _cp_errors:
+					print(f"  - {_cp_e}", file=_cp_sys.stderr)
+				raise AssertionError(f"convergence parity check failed: {_cp_errors[0]} (and {len(_cp_errors)-1} more)" if len(_cp_errors) > 1 else f"convergence parity check failed: {_cp_errors[0]}")
+			else:
+				print(f"[drift:debug][convergence_parity] OK: all 5 checks passed", file=_cp_sys.stderr)
 	else:
 		with _timed("typecheck"):
 			for fn_id, hir_norm in normalized_hirs_by_id.items():
@@ -8312,6 +8504,62 @@ def main(argv: list[str] | None = None) -> int:
 	signatures_by_id_all.update(external_signatures_by_id)
 	linked_world, require_env = _build_linked_world(type_table)
 
+	# K42 + Phase 5: build function_keys_by_fn_id for Pass 1 covering ALL
+	# generic signatures (wrappers + non-wrappers).  This serves two purposes:
+	# 1. record_instantiation needs keys to store CallInstantiation records
+	# 2. Phase 5 shares function_keys via Pass1State so compile_stubbed_funcs
+	#    can skip its own O(n) compute_template_decl_fingerprint loop.
+	#
+	# INVARIANT: external_template_keys_by_fn_id already contains correct
+	# keys for all external non-wrapper generic templates (populated from
+	# DMIR TemplateHIR-v1 entries during package loading).  The fallback
+	# loop below only synthesizes keys for fn_ids NOT already present,
+	# which at this point are local consumer generics and wrapper methods.
+	# For these, package_id is the local consumer package — correct because
+	# they are defined in the current compilation unit.  If this assumption
+	# changes (e.g. external non-wrapper generics missing from DMIR), the
+	# fallback must derive per-signature package_id from module_packages.
+	pass1_function_keys: dict[FunctionId, FunctionKey] = dict(external_template_keys_by_fn_id)
+	_p1_default_package = getattr(type_table, "package_id", None) or package_id
+	_p1_module_packages = getattr(type_table, "module_packages", None)
+	# Build requires_by_fn_id from trait_worlds for fingerprint computation.
+	_p1_requires_by_fn_id: dict[FunctionId, object] = {}
+	_p1_trait_worlds = getattr(type_table, "trait_worlds", {}) if type_table is not None else {}
+	if isinstance(_p1_trait_worlds, dict):
+		for _p1_world in _p1_trait_worlds.values():
+			for _p1_fid, _p1_req in getattr(_p1_world, "requires_by_fn", {}).items():
+				_p1_requires_by_fn_id[_p1_fid] = _p1_req
+	for _p1_fn_id, _p1_sig in signatures_by_id_all.items():
+		if not (getattr(_p1_sig, "type_params", []) or getattr(_p1_sig, "impl_type_params", [])):
+			continue
+		if _p1_fn_id in pass1_function_keys:
+			continue
+		if _p1_sig.param_types is None or _p1_sig.return_type is None:
+			continue
+		_p1_module_id = getattr(_p1_sig, "module", None) or getattr(_p1_fn_id, "module", None) or "main"
+		_p1_sym = function_symbol(_p1_fn_id)
+		_p1_prefix = f"{_p1_module_id}::"
+		_p1_name = _p1_sym[len(_p1_prefix):] if _p1_sym.startswith(_p1_prefix) else _p1_sym
+		if "#" in _p1_name:
+			_p1_base, _p1_ord = _p1_name.rsplit("#", 1)
+			if _p1_ord.isdigit():
+				_p1_name = _p1_base
+		_p1_req_expr = _p1_requires_by_fn_id.get(_p1_fn_id)
+		_p1_fp, _ = compute_template_decl_fingerprint(
+			_p1_sig,
+			declared_name=_p1_name,
+			module_id=_p1_module_id,
+			require_expr=_p1_req_expr if _p1_req_expr is not None else None,
+			default_package=_p1_default_package,
+			module_packages=_p1_module_packages,
+		)
+		pass1_function_keys[_p1_fn_id] = FunctionKey(
+			package_id=package_id,
+			module_path=_p1_module_id,
+			name=_p1_name,
+			decl_fingerprint=_p1_fp,
+		)
+
 	typed_fns: dict[FunctionId, object] = {}
 	for fn_id, hir_block in normalized_hirs_by_id.items():
 		# Build param type map from signatures when available.
@@ -8354,6 +8602,7 @@ def main(argv: list[str] | None = None) -> int:
 			visibility_provenance=visibility_by_id,
 			visibility_imports=direct_imports,
 			signatures_by_id=signatures_by_id_all,
+			function_keys_by_fn_id=pass1_function_keys,
 		)
 		type_diags.extend(result.diagnostics)
 		typed_fns[fn_id] = result.typed_fn
@@ -9061,8 +9310,69 @@ def main(argv: list[str] | None = None) -> int:
 			combined_exports = dict(external_exports or {})
 			if isinstance(module_exports, dict):
 				combined_exports.update(module_exports)
+		# Phase 6: install destructor_fns on the shared type_table before
+		# Pass1State so compile_stubbed_funcs can skip this under pass1_state.
+		# INVARIANT: _install_destructor_fns replaces type_table.destructor_fns
+		# entirely, then K39 extends it.  Both must run before Pass1State and
+		# both must be skipped in CSF to avoid the replace clobbering K39 entries.
+		_install_destructor_fns(type_table, linked_world, combined_exports)
+		if external_impl_metas and type_table is not None and linked_world is not None:
+			_p6_destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
+			if _p6_destructible_key is not None:
+				_p6_ext_dfns = getattr(type_table, "destructor_fns", None) or {}
+				for _p6_impl in external_impl_metas:
+					if not isinstance(_p6_impl, ImplMeta):
+						continue
+					if _p6_impl.trait_key != _p6_destructible_key:
+						continue
+					_p6_target_tid = getattr(_p6_impl, "target_type_id", None)
+					if not isinstance(_p6_target_tid, int):
+						continue
+					if type_table.has_typevar(_p6_target_tid):
+						continue
+					_p6_method_fn_id: FunctionId | None = None
+					for _p6_m in _p6_impl.methods:
+						if _p6_m.name == "destroy":
+							_p6_method_fn_id = _p6_m.fn_id
+							break
+					if _p6_method_fn_id is None:
+						continue
+					_p6_ext_dfns[_p6_target_tid] = _p6_method_fn_id
+				if _p6_ext_dfns:
+					type_table.destructor_fns = _p6_ext_dfns
+		# K42: construct Pass1State to eliminate duplicate resolution in
+		# compile_stubbed_funcs — reuse typed_fns + resolution infrastructure.
+		# Phase 6: precompute visibility_provenance_by_id so CSF doesn't need
+		# to reconstruct it from visibility_provenance_by_name + module_ids.
+		_p1_vis_prov_by_id: dict[int, tuple[str, ...]] = {}
+		for _p1vp_name, _p1vp_id in module_ids.items():
+			if _p1vp_name is not None:
+				_p1_vis_prov_by_id[int(_p1vp_id)] = (str(_p1vp_name),)
+		for _p1vp_name, _p1vp_prov in visibility_provenance_by_name.items():
+			_p1vp_id = module_ids.get(_p1vp_name)
+			if _p1vp_id is not None:
+				for _p1vp_other, _p1vp_chain in _p1vp_prov.items():
+					_p1vp_other_id = module_ids.get(_p1vp_other)
+					if _p1vp_other_id is not None:
+						_p1_vis_prov_by_id[int(_p1vp_other_id)] = _p1vp_chain
+		_p1_state = Pass1State(
+			typed_fns=typed_fns,
+			callable_registry=callable_registry,
+			impl_index=global_impl_index,
+			trait_index=global_trait_index,
+			trait_impl_index=global_trait_impl_index,
+			trait_scope_by_module=trait_scope_by_module,
+			linked_world=linked_world,
+			require_env=require_env,
+			visible_module_names_by_name=visible_module_names_by_name,
+			module_ids=module_ids,
+			method_wrapper_specs=method_wrapper_specs,
+			unsafe_trusted_modules=unsafe_trusted_modules,
+			function_keys_by_fn_id=pass1_function_keys,
+			visibility_provenance_by_id=_p1_vis_prov_by_id,
+		)
 		src_mir, checked_src, ssa_src = compile_stubbed_funcs(
-			func_hirs=func_hirs_by_id,
+			func_hirs=normalized_hirs_by_id,
 			signatures=signatures_by_id_all,
 			exc_env=exception_catalog,
 			module_exports=combined_exports,
@@ -9084,6 +9394,7 @@ def main(argv: list[str] | None = None) -> int:
 			entry_module=entry_module,
 			entry_name=entry_name,
 			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
+			pass1_state=_p1_state,
 		)
 		_assert_all_phased(checked_src.diagnostics, context="typecheck")
 		ssa_src = ssa_src or {}

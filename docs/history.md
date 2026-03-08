@@ -1,5 +1,46 @@
 # Drift development history
 
+## 2026-03-08 (Option B convergence finished)
+- Finished the structural convergence work between driver Pass 1 and `compile_stubbed_funcs` for package-consumer compilation.
+- Shared all duplicated material resolution/setup state through `Pass1State`, including:
+  - typed functions and resolution infrastructure,
+  - function/template keys,
+  - callable registry / impl index / trait indexes,
+  - trait scope / linked world / require environment,
+  - module ids / visibility provenance,
+  - wrapper specs / unsafe-trusted-module set.
+- Removed or guarded duplicated second-pass work in `compile_stubbed_funcs` across Phases 1-6:
+  - source typecheck loop,
+  - callable-registry / index construction,
+  - trait-world merge mutations,
+  - source-HIR normalization,
+  - wrapper injection scan,
+  - generic function-key fingerprint loop,
+  - destructor setup and K39 package destructible registration,
+  - repeated allocations and visibility-provenance reconstruction.
+- Preserved intentionally unique work under `pass1_state`:
+  - orphan/interface/trait validation paths,
+  - generic instantiation,
+  - lambda/thunk/wrapper MIR synthesis,
+  - MIR lowering, SSA, and throw checks,
+  - cheap/debug bookkeeping.
+- Cleaned up final convergence leftovers:
+  - removed redundant duplicate `validate_interface_impls` call,
+  - removed dead `Pass1State.visibility_provenance_by_name` after precomputing `visibility_provenance_by_id`,
+  - documented invariants around fallback function-key ownership and one-time destructor registration ordering.
+- Added post-convergence parity/test-target hardening:
+  - introduced convergence parity assertions gated by `DRIFT_DEBUG=convergence_parity` to verify shared function-key identity, wrapper injection emptiness under `pass1_state`, signature `error_type_id` completeness, visibility-provenance coverage, and destructor registration coverage,
+  - added `test_convergence_parity_pass1_state` in `lang/tests/driver/test_external_consumer.py`,
+  - added `ext-e2e-boundary` as a package-consumer boundary regression slice,
+  - folded `ext-e2e-smoke` and `ext-e2e-boundary` into `just test` for everyday CI/dev confidence,
+  - removed the separate `ext-e2e-asan` target in favor of `DRIFT_ASAN=1` execution mode on existing targets.
+- Validation snapshot after convergence:
+  - external consumer driver `16/16`,
+  - Stage2 `86/86`,
+  - checker `33/33` (with known pre-existing exclusions tracked separately),
+  - package-consumer e2e green at the convergence checkpoint.
+- Compiler version bumped to `0.27.12-dev`; ABI remains `4`.
+
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:
   - extracted shared `CompilationUnit`/`_emit_codegen` pipeline pieces in `lang/driftc/driftc.py`,
@@ -14,7 +55,7 @@
   - preserved wrapper exclusion and improved monomorphized/generic dedup handling with normalized receiver matching.
 - Added package-consumer e2e infrastructure and new pinned regressions:
   - new runner `lang/tests/codegen/e2e/pkg_consumer_runner.py`,
-  - new `just` targets: `ext-e2e-report`, `ext-e2e-smoke`, `ext-e2e-asan`,
+  - new `just` targets: `ext-e2e-report`, `ext-e2e-smoke`, `ext-e2e-boundary` (ASAN via `DRIFT_ASAN=1` env var),
   - new package-path visibility/trait-scope regressions under `lang/tests/codegen/e2e/`.
 - K24/K25 follow-up hardening:
   - preserved `HMethodCall.origin` through stage1 rewriters,

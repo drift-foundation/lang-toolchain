@@ -1072,3 +1072,43 @@ fn main() nothrow -> Int {
 	)
 	assert rc != 0, f"private method on non-stdlib package type should be rejected"
 	assert "_private_helper" in messages, f"expected rejection mentioning _private_helper, got: {messages}"
+
+
+# ── Convergence parity ──────────────────────────────────────────────
+
+
+def test_convergence_parity_pass1_state(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""Convergence proof: Pass1State parity assertions pass on a representative
+	package-consumer compilation.  Exercises function keys, wrapper injection,
+	signature resolution, visibility provenance, and destructor registration
+	parity checks (same 5 checks as DRIFT_DEBUG=convergence_parity).
+
+	If this test fails, the local and package-consumer codepaths have diverged.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	monkeypatch.setenv("DRIFT_DEBUG", '{"convergence_parity": true}')
+	# Reset cached debug flags so the monkeypatched env is picked up.
+	from lang.driftc import debug as drift_debug
+	drift_debug._cached_flags = None
+	try:
+		pkg = _build_signed_acme_pkg(tmp_path)
+		_ = capsys.readouterr()
+		rc, payload, messages, _stderr = _compile_consumer(
+			tmp_path, capsys, pkg=pkg,
+			entry="runner::main",
+			source="""\
+module runner
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	val c = util.make_counter(7);
+	return c.value;
+}
+""",
+		)
+		assert rc == 0, f"convergence parity compilation failed: {messages}"
+	finally:
+		drift_debug._cached_flags = None

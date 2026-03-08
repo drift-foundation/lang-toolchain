@@ -53,6 +53,19 @@ SMOKE_CASES = [
 	"abi_entrypoint_cross_module_call",
 	"abi_entrypoint_cross_module_struct_ok",
 	"std_core_string_from_utf8_bytes_api",
+	"std_runtime_scoped_stack_basic",
+	"std_io_preamble_installs_stdio",
+	"try_wrap_result_err_twice_min",
+]
+
+# Package-boundary regression cases: exercise codepaths that only exist
+# in the signed-package consumer pipeline (trait scope through boundary,
+# vtable population for external impls, visibility negatives).
+BOUNDARY_CASES = [
+	"pkg_iter_next_visibility",                    # K24: trait method visibility through package boundary
+	"pkg_ext_module_trait_scope",                  # K25: external module trait scope for generic re-instantiation (pre-existing bug, not in CI gate)
+	"pkg_vis_source_trait_scope_rejected",         # K25-guard: unscoped trait call still rejected
+	"pkg_iface_impl_vtable",                       # K26: interface impl vtable populated for external impls
 ]
 
 

@@ -394,3 +394,299 @@ The original Phase 1a/1b split assumed typed_fns could be passed independently o
   - **Verification**: Both `optional_on_none_try_block_no_catch_rejected` and `result_on_error_try_block_no_catch_rejected` now correctly reject with "declared nothrow but may throw". 10 additional nothrow-related e2e tests + 6 driver tests all pass.
   - **Consequence**: Nothrow fixpoint fix correctly exposed 3 tests calling `algo.binary_search`/`sort_in_place` from `nothrow main` without try/catch. These stdlib functions call trait methods (`compare_key`, `compare_at`, `swap`) that throw on bounds errors — they genuinely can throw. Fix: wrap algo calls in `try run() catch { 99 }` pattern. Tests fixed: `algo_binary_search_basic`, `algo_binary_search_duplicates`, `deque_range_sort_binary_search_wrap`.
   - **Post-fix score**: 990/995 e2e (3 skipped pkg-consumer-only, 2 pre-existing runtime bugs: `array_range_reserve_noop_invalidates` exit 10, `deque_range_sort_binary_search_wrap` exit 2). Driver: 716/716.
+
+## 9. Converge-One-Pipeline Phase 1 Investigation (2026-03-07)
+
+### Baseline frozen
+- e2e: 990/995 (3 skipped pkg-consumer-only, 2 pre-existing runtime bugs)
+- driver: 716/716
+- stage1-4: 195/195 (excluding packages/traits tests with pre-existing failures)
+- Deferred runtime bugs: `array_range_reserve_noop_invalidates`, `deque_range_sort_binary_search_wrap`
+
+### Phase 1 blocking finding: CORRECTED — missing instantiation records, not type resolution
+
+**Previous diagnosis was wrong.** The method resolution itself works correctly in both passes — `impl_subst` and `subst_for_receiver` properly substitute `T→Int`, producing concrete `&Wrapper<Int>` params in the CallInfo. Both passes resolve identically. Confirmed via runtime tracing: `has_tv=False`, `coerced_tv=False` in both Pass 1 and Pass 2.
+
+**Actual root cause: missing `function_keys_by_fn_id` in Pass 1 type-check → no instantiation records.**
+
+The flow:
+1. When `resolve_method_call` upgrades to boundary wrapper (`__wrap_method::Wrapper<T>::get`), `record_instantiation` is called with `target_fn_id=wrapper_fn_id` and `impl_args=(Int,)`.
+2. `record_instantiation` (`type_checker.py:4871`) needs `function_keys_by_fn_id.get(target_fn_id)` to get the FunctionKey. If the key is not found, the instantiation is **silently dropped** (line 4873-4874: `if key is None: return`).
+3. **Pass 1** (`driftc.py:8387-8405`): does NOT pass `function_keys_by_fn_id` to `check_function` at all. `function_keys_by_fn_id` defaults to None → `record_instantiation` returns at line 4871 → **no instantiation records stored** in typed_fns.
+4. **Pass 2** (`compile_stubbed_funcs`): builds its own `function_keys_by_fn_id` (line 2831) which includes wrapper functions (line 2998-3023 iterates ALL generic signatures including wrappers). Passes it to `check_function` (line 3356) → instantiation records ARE stored → concrete wrapper IS created.
+5. **Phase 1 activated**: typed_fns from Pass 1 (no instantiation records) are reused. `_queue_instantiations` (line 3860) finds no entries → no concrete `__wrap_method::Wrapper<Int>::get` → codegen hits generic TYPEVAR → error.
+
+**Why wrappers are particularly affected:** The DMIR template index explicitly skips wrappers (`provisional_dmir_v0.py:1013-1014: if getattr(sig, "is_wrapper", False): continue`). So `external_template_keys_by_fn_id` never contains wrapper function keys. Only `compile_stubbed_funcs`'s locally-built `function_keys_by_fn_id` (which iterates all signatures including wrappers) has them.
+
+### Fix applied: build and pass `function_keys_by_fn_id` in Pass 1 + activate Phase 1
+
+**Hunk 1** (`driftc.py`, after `linked_world, require_env = _build_linked_world(type_table)` in `main`):
+- Build `pass1_function_keys: dict[FunctionId, FunctionKey]` starting from `external_template_keys_by_fn_id`
+- Iterate only **wrapper** signatures (`is_wrapper=True`) in `signatures_by_id_all`, compute `FunctionKey` via `compute_template_decl_fingerprint` for any not already present
+- Non-wrapper external templates already have correct keys in `external_template_keys_by_fn_id`; local consumer generics (if any) would need proper `require_expr` + `package_id` derivation
+- Wrappers never have require clauses, so `require_expr=None` is correct; `package_id` matches `compile_stubbed_funcs`'s `local_package_id`
+
+**Hunk 2** (`driftc.py`, `check_function` call in Pass 1 type-check loop):
+- Added `function_keys_by_fn_id=pass1_function_keys` kwarg
+
+**Hunk 3** (`driftc.py`, `compile_stubbed_funcs` call at package consumer codegen):
+- Construct `Pass1State(typed_fns=typed_fns, callable_registry=callable_registry, ...)` from all driver Pass 1 state
+- Pass `pass1_state=_p1_state` to `compile_stubbed_funcs`
+
+### Verification
+- `test_ext_nonlib_method_visibility`: PASS (the K42 regression — generic wrapper method on concrete receiver)
+- All 16 `test_external_consumer.py` tests: PASS
+- `pkg_iter_next_visibility` (e2e): PASS
+- `pkg_iface_impl_vtable`, `pkg_vis_source_private_method_rejected`, `pkg_vis_source_trait_scope_rejected` (e2e): PASS
+- `pkg_ext_module_trait_scope`: FAIL (pre-existing, unrelated — iterator trait scope visibility issue, not caused by this change)
+
+### Before/after resolved types
+Both passes always resolved identically — `has_tv=False`, substitution correct. The issue was never resolution divergence; it was **missing instantiation records**:
+- **Before fix**: Pass 1 typed_fns have empty `instantiations_by_callsite_id` → `_queue_instantiations` finds nothing → no concrete `__wrap_method::Wrapper<Int>::get` created → codegen hits TYPEVAR
+- **After fix**: Pass 1 typed_fns have proper `CallInstantiation(target_key=FunctionKey(...), type_args=(Int,))` → `_queue_instantiations` queues concrete wrapper → codegen succeeds
+
+### Phase 1 status: ACTIVATED
+- `Pass1State` dataclass at `driftc.py:2443` — bundles typed_fns + callable_registry + all resolution state
+- `pass1_state` parameter on `compile_stubbed_funcs` — now passed from driver
+- Override logic at `driftc.py:3162` — replaces locally-built state with pass1_state
+- Typecheck skip at `driftc.py:3377` — uses pass1_state.typed_fns instead of re-running type-check
+- Pinned regression: `test_ext_nonlib_method_visibility` (existing test covers the exact K42 scenario)
+
+### Phase 2: skip most duplicate second-pass construction
+
+**Changes in `compile_stubbed_funcs`:**
+
+1. **`_build_linked_world` guard (line 2952)**: When pass1_state provides linked_world/require_env, skips the expensive `_build_linked_world(shared_type_table)` call (trait world linking + copy/destructible queries). `_install_destructor_fns` still runs, using the pass1_state.linked_world.
+
+2. **Callable registry + trait/impl index construction (lines 3028+) guarded**: The entire callable_registry population loop (iterating all signatures, registering methods/free functions) and all three trait/impl index constructions (`GlobalImplIndex`, `GlobalTraitIndex`, `GlobalTraitImplIndex`) + trait_scope_by_module are now inside `else` — only built when pass1_state is absent.
+
+3. **Module IDs + visibility provenance (lines 2806-2830) guarded**: Initial `module_ids` dict construction and `visibility_provenance_by_id` population skipped when pass1_state provides them.
+
+4. **`visible_module_names_by_name` + prelude construction (lines 3238-3321) guarded**: Module visibility BFS, prelude injection, and K25 fallback all skipped when pass1_state provides the map.
+
+5. **Source function type-check loop (line 3386-3402) skipped**: Already Phase 1 — typed_fns reused from pass1_state.
+
+**What is now skipped (with stdlib ~1018 fn defs, ~30 modules):**
+- CallableRegistry population (~1018 registrations)
+- 3 trait/impl indices from module_exports + external metadata
+- LinkedWorld construction (full trait world linking)
+- visible_module_names_by_name BFS per module
+- module_ids + visibility provenance construction
+- Source function type-check (N consumer functions)
+
+**What still runs under pass1_state (classified):**
+
+*Intentionally kept (needed for correctness):*
+- TypeChecker construction (line 2804): needed for lambda/thunk/instantiation type-checking that happens later
+- `requires_by_fn_id` population from trait_worlds (lines 2948-2951): needed for `function_keys_by_fn_id` fingerprint computation
+- `_install_destructor_fns` + K39 destructor processing: modifies shared_type_table.destructor_fns for MIR scope drops
+- `function_keys_by_fn_id` extension loop: needed for template instantiation
+- Generic instantiation / `_drain_instantiations`
+- Lambda/thunk/wrapper spec lowering
+- MIR lowering, validation, string ARC insertion, SSA construction
+
+*Phase 3 — now resolved:*
+- **External trait/impl merge mutations into shared_type_table.trait_worlds**: Guarded behind `_skip_trait_merge = pass1_state is not None`. When pass1_state is provided, external_trait_defs merge (2865-2871) and impl_def insertion (2929-2943) are skipped. Orphan-impl diagnostic check (2900-2914) still runs — preserves diagnostics parity. `requires_by_fn_id` population (2948-2951) remains unconditional, reading from shared_type_table.trait_worlds which Pass 1 already populated.
+- **`validate_interface_schemas` (line 3201)**: Guarded behind `pass1_state is None`. Pass 1 already calls this at main:8063.
+- **`validate_interface_impls` and `validate_trait_impls`**: NOT guarded — these are unique to compile_stubbed_funcs (Pass 1 does NOT run them). They remain needed for interface/trait impl contract checking.
+- **Note**: `validate_interface_impls` appears to be called twice (lines 3202-3214 and 3215-3227) — pre-existing duplicate, not introduced or changed here.
+
+**Verification:** 16/16 driver tests pass. 4/4 e2e pkg consumer tests pass.
+
+### Phase 4: skip remaining early-stage duplication in compile_stubbed_funcs
+
+**Changes in `compile_stubbed_funcs`:**
+
+1. **Signature resolution loop (lines 2628-2675) guarded**: When pass1_state provides pre-resolved signatures from the driver, skip the O(n) `resolve_opaque_type` loop over all signatures. A lightweight fixup pass still runs to fill missing `error_type_id` on can-throw signatures (package serialization doesn't persist error_type_id).
+
+2. **`_inject_method_boundary_wrappers` (line 2743) guarded**: Under pass1_state, wrapper signatures are already in `base_signatures_by_id` (flattened from the driver's ChainMap). Injection would return empty specs since all wrapper_ids are in `existing_ids`. Instead, reuse `pass1_state.method_wrapper_specs` for downstream wrapper MIR synthesis (lines 3668, 6123).
+
+3. **HIR normalization (lines 2752-2758) guarded**: The driver already normalizes HIR at Pass 1 (main:8012). The call site now passes `normalized_hirs_by_id` instead of raw `func_hirs_by_id`. compile_stubbed_funcs skips the redundant `normalize_hir` traversal and uses the input directly.
+
+4. **`unsafe_trusted_modules` construction (lines 2806-2822) guarded**: Reuses `pass1_state.unsafe_trusted_modules` from the driver, which is built from the same type_table and module_exports.
+
+**Pass1State extensions:**
+- Added `method_wrapper_specs: list` — list[MethodWrapperSpec] from driver's wrapper injection
+- Added `unsafe_trusted_modules: set` — set[str] from driver's unsafe module computation
+
+**Driver call site change (line 9203):**
+- `func_hirs=normalized_hirs_by_id` instead of `func_hirs=func_hirs_by_id` — passes pre-normalized HIR when pass1_state is active
+
+**What is now skipped (cumulative Phases 1-4, with stdlib ~1018 fn defs):**
+- Signature resolution: O(n) `resolve_opaque_type` calls per param + return + error per sig
+- Wrapper injection: O(n) scan over all signatures + FnSignature creation
+- HIR normalization: O(n) `normalize_hir` traversal over all function bodies
+- unsafe_trusted_modules: O(n) scan over module_packages + module_exports + signatures
+- (Phase 1) Source function type-check: N consumer functions
+- (Phase 2) CallableRegistry population, trait/impl indices, LinkedWorld, module IDs/visibility BFS
+- (Phase 3) Trait world merge mutations, validate_interface_schemas
+
+**What still runs under pass1_state (remaining):**
+- TypeChecker construction (line 2828): needed for lambda/thunk/instantiation type-checking
+- Signature provenance recording (lines 2683-2713): debug instrumentation, only active with `type_prov` debug flag
+- `_ensure_module_packages` (lines 2714-2720): ensures module→package mappings, cheap
+- `_register_derived_signature_precheck` definition + ChainMap assembly: O(1) setup
+- error_type_id fixup on can-throw sigs (Phase 4 lightweight pass): O(n) but only `replace()` on sigs with missing error_type_id
+- Orphan-impl diagnostic check: preserves diagnostics parity
+- `requires_by_fn_id` population from trait_worlds
+- `function_keys_by_fn_id` extension loop
+- Generic instantiation / `_drain_instantiations`
+- Lambda/thunk/wrapper spec lowering
+- MIR lowering, validation, string ARC insertion, SSA construction
+
+**Verification:** 16/16 driver tests pass. 86/86 stage2 tests pass. pkg_iter_next_visibility e2e: PASS.
+
+### Phase 5: share function_keys_by_fn_id from driver
+
+**Problem:** compile_stubbed_funcs builds `function_keys_by_fn_id` (lines 3047-3072) by iterating ALL generic signatures and calling `compute_template_decl_fingerprint` for each. The driver already does this at Pass 1 (lines 8402-8450) but previously only for wrapper signatures.
+
+**Changes:**
+
+1. **Driver pass1_function_keys extended to ALL generics (lines 8412-8456)**: Removed the `is_wrapper` gate. Now iterates all generic signatures in `signatures_by_id_all`, building `requires_by_fn_id` from `type_table.trait_worlds` for fingerprint computation. Previously `require_expr=None` was only correct for wrappers; now uses `_p1_requires_by_fn_id.get(fn_id)` for correct require expressions on non-wrapper generics.
+
+**Invariant (package_id in synthesized keys):** The fallback loop uses `package_id=package_id` (the local consumer package). This is correct because `external_template_keys_by_fn_id` already covers all external non-wrapper generics (from DMIR TemplateHIR-v1 entries). The `if _p1_fn_id in pass1_function_keys: continue` guard ensures the fallback only fires for fn_ids NOT already keyed — i.e. local consumer generics and wrapper methods, which are by definition in the local package. If external non-wrapper generics ever become missing from DMIR, the fallback must derive per-signature package_id from module_packages.
+
+2. **Pass1State extended**: Added `function_keys_by_fn_id: dict` field.
+
+3. **`function_keys_by_fn_id` extension loop guarded (compile_stubbed_funcs line 3047)**: When pass1_state provides keys, `function_keys_by_fn_id.update(pass1_state.function_keys_by_fn_id)` replaces the O(n) fingerprint loop.
+
+4. **`requires_by_fn_id` population guarded (line 2993)**: Only consumed by the function_keys extension loop. When that loop is skipped, the trait_worlds iteration is also skipped.
+
+**What is now additionally skipped under pass1_state:**
+- `compute_template_decl_fingerprint` per generic signature (expensive: walks type expressions, computes hashes)
+- `requires_by_fn_id` population from trait_worlds
+- `_declared_name_from_fn_id` + `FunctionKey` construction per generic
+
+**Remaining non-guarded work in compile_stubbed_funcs under pass1_state:**
+- TypeChecker construction: needed for lambda/thunk/instantiation type-checking
+- Signature provenance recording: debug-only, gated on `type_prov` flag
+- `_ensure_module_packages`: cheap module→package mapping
+- error_type_id fixup: lightweight O(n) on can-throw sigs only
+- Orphan-impl diagnostic check: preserves diagnostics parity
+- `_install_destructor_fns` + K39 destructor processing: correctness-critical
+- `validate_interface_impls` / `validate_trait_impls`: unique to compile_stubbed_funcs (not duplicated with driver)
+- Generic instantiation, lambda/thunk lowering, MIR lowering, SSA construction: core pipeline work
+
+**Assessment:** The remaining items are either correctness-critical (unique to compile_stubbed_funcs, not duplicated with the driver), cheap/debug-only, or core pipeline work that must run regardless. There is no further duplicated-state reduction to achieve — all duplicated resolution/construction from the driver's Pass 1 is now shared via Pass1State.
+
+**Verification:** 16/16 driver tests pass. 86/86 stage2 tests pass. pkg_iter_next_visibility e2e: PASS.
+
+### Phase 6: structural convergence — eliminate wasted allocations, precompute visibility provenance, move destructor registration to driver
+
+**Changes:**
+
+1. **Eliminate wasted allocations (CSF lines 2842-2844)**: Under pass1_state, `CallableRegistry()`, `{None: 0}`, and `{}` were allocated then immediately overwritten from pass1_state at lines 3095-3112. Moved the pass1_state assignment of `callable_registry`, `module_ids`, `visibility_provenance_by_id` to the top of the initialization block (line 2845), before any code that uses them.
+
+2. **Precompute `visibility_provenance_by_id` in driver**: Previously, CSF reconstructed this int-keyed map from `visibility_provenance_by_name` + `module_ids` (O(m²) nested iteration). Now precomputed in the driver before Pass1State construction and passed directly via `Pass1State.visibility_provenance_by_id`. The 10-line reconstruction loop in CSF is eliminated.
+
+3. **Move `_install_destructor_fns` + K39 to driver**: Both now execute in the driver before Pass1State construction. CSF guards both under `pass1_state is None`.
+
+   **INVARIANT (destructor_fns ordering):** `_install_destructor_fns` REPLACES `type_table.destructor_fns` entirely (line 499: `type_table.destructor_fns = destructor_fns`). K39 then EXTENDS the dict with external package Destructible impls. If CSF called `_install_destructor_fns` after the driver already ran both, the replace would clobber K39 entries. The guard ensures both run exactly once — either in the driver (pass1_state path) or in CSF (standalone path).
+
+**What is now additionally skipped under pass1_state:**
+- `CallableRegistry()` allocation (immediately overwritten)
+- `module_ids = {None: 0}` allocation (immediately overwritten)
+- `visibility_provenance_by_id` reconstruction from name→chain data (O(m²))
+- `_install_destructor_fns` call (already on shared type_table)
+- K39 external Destructible impl registration (already on shared type_table)
+
+**Remaining non-guarded work in compile_stubbed_funcs under pass1_state:**
+- TypeChecker construction: needed for lambda/thunk/instantiation type-checking during MIR lowering
+- Signature provenance recording: debug-only, gated on `type_prov` flag
+- `_ensure_module_packages`: cheap module→package mapping
+- error_type_id fixup: lightweight, only on can-throw sigs with missing error_type_id
+- Orphan-impl diagnostic check: preserves diagnostics parity (unique to CSF)
+- `validate_interface_impls` / `validate_trait_impls`: unique to CSF, not duplicated with driver
+- Generic instantiation, lambda/thunk lowering, MIR lowering, SSA construction: core pipeline
+
+**Convergence assessment:** All duplicated state between the driver's Pass 1 and compile_stubbed_funcs is now shared via Pass1State. The remaining work is either unique to CSF (validations, destructor registration now moved), debug-only, or core pipeline. No further convergence is achievable without fundamentally restructuring compile_stubbed_funcs (e.g., splitting it into separate phases or inlining it into the driver).
+
+**Verification:** 16/16 driver tests pass. 86/86 stage2 tests pass. pkg_iter_next_visibility e2e: PASS.
+
+### Convergence freeze (2026-03-08)
+
+**Cleanup:** Removed `visibility_provenance_by_name` from Pass1State. It was only consumed by the visibility_provenance_by_id reconstruction loop (Phase 6 replaced with precomputed field). Confirmed zero remaining references to `pass1_state.visibility_provenance_by_name` in CSF.
+
+**Final Pass1State shape (14 fields):**
+```
+typed_fns                      # Phase 1: pre-typed function results
+callable_registry              # Phase 2: method/fn resolution registry
+impl_index                     # Phase 2: GlobalImplIndex
+trait_index                    # Phase 2: GlobalTraitIndex
+trait_impl_index               # Phase 2: GlobalTraitImplIndex
+trait_scope_by_module          # Phase 2: per-module trait scope
+linked_world                   # Phase 2: LinkedWorld (trait world linking)
+require_env                    # Phase 2: RequireEnv
+visible_module_names_by_name   # Phase 2: module visibility graph
+module_ids                     # Phase 2: module name → int mapping
+method_wrapper_specs           # Phase 4: wrapper MIR synthesis specs
+unsafe_trusted_modules         # Phase 4: set of std/unsafe-allowed modules
+function_keys_by_fn_id         # Phase 5: FunctionId → FunctionKey (all generics)
+visibility_provenance_by_id    # Phase 6: int → provenance chain
+```
+
+**Guard map (16 guards in compile_stubbed_funcs):**
+
+| Line | Phase | Skips |
+|------|-------|-------|
+| 2625 | 4 | Signature resolution loop (fills error_type_id only) |
+| 2755 | 4 | Wrapper injection scan |
+| 2771 | 4 | HIR normalization |
+| 2818 | 4 | unsafe_trusted_modules build |
+| 2845 | 6 | Wasted allocations (callable_registry, module_ids, vis_prov) |
+| 2853 | 2 | module_ids from module_deps |
+| 2887 | 3 | Trait-world merge mutations |
+| 3004 | 5 | requires_by_fn_id population |
+| 3008 | 2 | _build_linked_world |
+| 3017 | 6 | _install_destructor_fns + K39 |
+| 3061 | 5 | function_keys extension loop |
+| 3101 | 2 | impl/trait indices, trait_scope, visible_modules |
+| 3250 | 3 | validate_interface_schemas |
+| 3283 | 2 | visible_module_names_by_name construction |
+| 3295 | 2 | module visibility BFS |
+| 3428 | 1 | Source function type-check loop |
+
+**Remaining CSF work under pass1_state (intentional, not duplicated):**
+
+*Unique validation (CSF-only, not in driver):*
+- TypeChecker construction for lambda/thunk/instantiation checking
+- orphan-impl diagnostic check (E-IMPL-ORPHAN)
+- validate_interface_impls (interface impl contract adherence)
+- validate_trait_impls (trait impl contract adherence)
+
+*Core lowering pipeline:*
+- generic instantiation / _drain_instantiations
+- lambda/thunk/wrapper MIR synthesis
+- HIR→MIR lowering
+- SSA construction
+- throw checks
+
+*Cheap/debug:*
+- signature provenance recording (debug flag only)
+- _ensure_module_packages (O(m) module→package mapping)
+- error_type_id fixup (O(n) on can-throw sigs with missing error_type_id)
+
+**Verification (convergence freeze):**
+- External consumer driver suite: 17/17 PASS (16 original + 1 convergence_parity)
+- Stage2 tests: 86/86 PASS
+- Checker tests: 33/33 PASS (5 pre-existing excluded)
+- Package consumer e2e boundary: 3/3 PASS (pkg_iter_next_visibility, pkg_vis_source_trait_scope_rejected, pkg_iface_impl_vtable)
+- Package consumer e2e smoke: 10/10 PASS
+- No new local/package divergence detected
+
+**Convergence parity assertions (5 checks, all PASS across 11 pkg-consumer compilations):**
+1. Function keys: recomputed fingerprints match shared function_keys_by_fn_id
+2. Wrapper injection: re-running _inject_method_boundary_wrappers produces empty specs
+3. Signature resolution: all can-throw sigs have error_type_id populated
+4. Visibility provenance: module_ids fully covered by visibility_provenance_by_id
+5. Destructor registration: destructor_fns populated for all Destructible impl targets
+
+**Excluded from boundary CI (pre-existing LANGUAGE_BUG):**
+- pkg_ext_module_trait_scope (K25): external module trait-scope re-instantiation not fully working yet
+- pkg_vis_source_private_method_rejected: local runner hits parser error on fixture syntax, not a real boundary case
+
+**Test target cleanup (post-convergence):**
+- Removed: `ext-e2e-asan` justfile target (ASAN now via env var: `DRIFT_ASAN=1 just ext-e2e-smoke`)
+- Added: `ext-e2e-boundary` justfile target (3 blocking package-boundary regression cases)
+- Updated: `just test` now includes `ext-e2e-smoke` + `ext-e2e-boundary` for everyday CI
+- Note: `ext-e2e-boundary` is a package-consumer regression slice, not a cross-lane parity target

@@ -22,8 +22,8 @@ git-reset BRANCH:
 	echo "HEAD now at:"
 	git --no-pager log -1 --pretty='format:%H%n%h %s%nAuthor: %an <%ae>%nDate: %ad'
 
-# Full staged compiler tests
-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test
+# Full staged compiler tests + package-consumer smoke + boundary regressions.
+test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test ext-e2e-smoke ext-e2e-boundary
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
@@ -211,13 +211,21 @@ ext-e2e-report:
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --summarize
 
 # Package-consumer e2e: blocking smoke subset (CI gate).
+# ASAN: DRIFT_ASAN=1 just ext-e2e-smoke
 ext-e2e-smoke:
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py \
 		--blocking --only-cases result_ok_array_match_move_no_double_free,array_push_move_non_copy_implicit,array_pop_move_out_non_copy,match_wildcard_owned_payload_drop,abi_entrypoint_cross_module_call,abi_entrypoint_cross_module_struct_ok,std_core_string_from_utf8_bytes_api,std_runtime_scoped_stack_basic,std_io_preamble_installs_stdio,try_wrap_result_err_twice_min
 
-# Package-consumer e2e: ASAN variant (nightly).
-ext-e2e-asan:
-	DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --summarize
+# Package-consumer boundary regressions (CI gate).
+# Cases that exercise package-specific codepaths (trait scope through boundary,
+# vtable population for external impls, visibility negatives).
+# NOT a cross-lane parity target — only runs pkg_consumer_runner.
+# Excluded: pkg_ext_module_trait_scope (K25 — pre-existing LANGUAGE_BUG)
+# Excluded: pkg_vis_source_private_method_rejected (local runner hits parser error on fixture syntax, not a real boundary case)
+# ASAN: DRIFT_ASAN=1 just ext-e2e-boundary
+ext-e2e-boundary:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py \
+		--blocking --only-cases pkg_iter_next_visibility,pkg_vis_source_trait_scope_rejected,pkg_iface_impl_vtable
 
 # Build examples (lang.driftc)
 make-example EXAMPLE:
