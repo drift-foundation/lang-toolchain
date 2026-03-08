@@ -7723,6 +7723,7 @@ def main(argv: list[str] | None = None) -> int:
 							intrinsic_kind = None
 					is_intrinsic = bool(sd.get("is_intrinsic", False)) or intrinsic_kind is not None
 
+					_is_inst = "__inst__" in name and not type_params and not impl_type_params
 					sig = FnSignature(
 						name=name,
 						module=module_name,
@@ -7746,6 +7747,7 @@ def main(argv: list[str] | None = None) -> int:
 						type_params=type_params,
 						impl_type_params=impl_type_params,
 						impl_target_type_args=impl_target_type_args,
+						is_instantiation=_is_inst,
 					)
 					if module_name is not None and module_name in modules:
 						continue

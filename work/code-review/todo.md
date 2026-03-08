@@ -682,7 +682,7 @@ visibility_provenance_by_id    # Phase 6: int → provenance chain
 5. Destructor registration: destructor_fns populated for all Destructible impl targets
 
 **Excluded from boundary CI (pre-existing LANGUAGE_BUG):**
-- pkg_ext_module_trait_scope (K25): external module trait-scope re-instantiation not fully working yet
+- pkg_ext_module_trait_scope (K25): **RESOLVED** — root cause was `is_instantiation=False` on DMIR-loaded `__inst__` signatures. Fix: set `is_instantiation=True` during external signature decode for concrete monomorphizations (`__inst__` + no type_params). Secondary fix: trait_scope serialized in DMIR interface blob (forward-looking, not the proximate cause). All 9 K25 failures (8 std_log_* + pkg_ext_module_trait_scope) now pass.
 - pkg_vis_source_private_method_rejected: local runner hits parser error on fixture syntax, not a real boundary case
 
 **Test target cleanup (post-convergence):**
