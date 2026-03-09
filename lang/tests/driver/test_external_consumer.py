@@ -1112,3 +1112,100 @@ fn main() nothrow -> Int {
 		assert rc == 0, f"convergence parity compilation failed: {messages}"
 	finally:
 		drift_debug._cached_flags = None
+
+
+# ── TypeId normalization: external sig preserves linked TypeIds ────
+
+
+_ACME_GENERIC_SOURCE = """\
+module acme.generic
+
+export { Wrapper, make_wrapper, try_unwrap };
+
+pub struct Wrapper<T> {
+	pub inner: T
+}
+
+pub fn make_wrapper(value: Int) nothrow -> Wrapper<Int> {
+	return Wrapper(inner = value);
+}
+
+pub fn try_unwrap(w: Wrapper<Int>) nothrow -> Int {
+	return w.inner;
+}
+"""
+
+
+def _build_signed_generic_pkg(tmp_path: Path) -> _SignedPkg:
+	"""Build a signed acme.generic package with Wrapper<T>."""
+	build = tmp_path / "pkg_build_gen"
+	mod_dir = build / "acme" / "generic"
+	_write_file(mod_dir / "generic.drift", _ACME_GENERIC_SOURCE)
+
+	pkg_path = tmp_path / "pkgs_gen" / "acme.generic.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		str(mod_dir / "generic.drift"),
+		*_emit_pkg_args("acme.generic"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.generic package fixture"
+
+	keys = _gen_keys()
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+	core_trust_path = tmp_path / "core_trust_gen.json"
+	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+
+	trust_path = tmp_path / "trust_gen.json"
+	_write_trust_store(trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+	return _SignedPkg(
+		pkg_path=pkg_path,
+		pkg_root=pkg_path.parent,
+		keys=keys,
+		trust_path=trust_path,
+		core_trust_path=core_trust_path,
+	)
+
+
+def test_ext_sig_preserves_linked_typeids(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""Phase 1 TypeId normalization: when DMIR provides serialized TypeIds,
+	the external signature must preserve the linked/canonical ids rather
+	than diverging through resolve_opaque_type.  Verifies that Path A
+	(external_signatures_by_id) and Path B (pkg_sigs_by_id) produce
+	convergent return_type_ids for the same fn_id.
+
+	This test catches the divergence earlier than a downstream wrapper or
+	codegen failure.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	monkeypatch.setenv("DRIFT_DEBUG_TYPEID_DIVERGENCE", "1")
+	pkg = _build_signed_generic_pkg(tmp_path)
+	_ = capsys.readouterr()
+
+	rc, payload, messages, stderr = _compile_consumer(
+		tmp_path, capsys, pkg=pkg,
+		source="""\
+module main
+
+import acme.generic as gen;
+
+fn main() nothrow -> Int {
+	val w = gen.make_wrapper(42);
+	return gen.try_unwrap(move w);
+}
+""",
+	)
+	# Under DRIFT_DEBUG_TYPEID_DIVERGENCE=1, any TypeId divergence between
+	# Path A (external_signatures_by_id) and Path B (pkg_sigs_by_id) or
+	# between FnInfo and signature raises AssertionError, which the compiler
+	# catches and converts to a diagnostic with rc != 0.
+	assert rc == 0, f"TypeId divergence assertion fired or compilation failed; diagnostics: {messages}"

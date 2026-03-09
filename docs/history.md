@@ -47,12 +47,18 @@
   - generalized runtime-drop classification for `DiagnosticValue` containment so values are moved instead of copied when they transitively contain DV-owned runtime resources (direct DV, struct fields, variant payloads, and generic/container param types), fixing the remaining memcheck leak in `diagnostic_value_object_nested_get_no_leak`.
   - reconciled package wrapper-target `return_type_id` values with checker-produced signatures for package-consumer `__wrap_method` emission, fixing `FnResult` part mismatches on generic wrapper returns across the package boundary (for example `Optional<V>` / iterator `next()` wrappers in downstream rpc consumers).
   - resynced `FnInfo.return_type_id` / `FnInfo.error_type_id` with canonicalized signature TypeIds after `compile_stubbed_funcs` mutates signatures in place, fixing a second package-consumer `__wrap_method` `FnResult` mismatch where throw/type-aware checks were comparing stale pre-canonicalization FnInfo ids against canonical signature ids.
+  - landed TypeId normalization Phase 1 hardening:
+    - added a post-link `FORWARD_NOMINAL` sweep in the package linker so surviving cross-package forward nominals are rebound to already-allocated concrete host nominal ids when available,
+    - made external signature construction prefer `tid_map`-derived numeric TypeIds as authoritative for concrete signatures, using `resolve_opaque_type` only as fallback when serialized ids are absent or still forward-nominal,
+    - canonicalized external signatures after construction as a safety net,
+    - added debug-gated divergence assertions for package-signature vs checker-signature return ids and for `FnInfo` vs signature return/error ids after resync,
+    - added `test_ext_sig_preserves_linked_typeids` to pin external-signature TypeId convergence under the package-consumer path.
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.19-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.20-dev`; ABI remains `4`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

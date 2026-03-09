@@ -1947,6 +1947,23 @@ def _build_package_consumer_unit(
 		if fn_id not in fn_infos:
 			fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_sig_declared_can_throw(sig))
 
+	# Assert pkg_sigs_by_id ↔ checked_src TypeId convergence (debug mode).
+	if os.environ.get("DRIFT_DEBUG_TYPEID_DIVERGENCE") == "1":
+		_da_divergences: list[str] = []
+		for _da_fn_id, _da_pkg_sig in pkg_sigs_by_id.items():
+			_da_src_info = checked_src.fn_infos_by_id.get(_da_fn_id)
+			if _da_src_info is not None and _da_src_info.signature is not None:
+				_da_src_ret = _da_src_info.signature.return_type_id
+				_da_pkg_ret = _da_pkg_sig.return_type_id
+				if _da_src_ret != _da_pkg_ret:
+					_da_src_td = type_table.get(_da_src_ret)
+					_da_pkg_td = type_table.get(_da_pkg_ret)
+					_da_src_desc = f"{_da_src_td.kind.name}:{_da_src_td.name}" if _da_src_td else "?"
+					_da_pkg_desc = f"{_da_pkg_td.kind.name}:{_da_pkg_td.name}" if _da_pkg_td else "?"
+					_da_divergences.append(f"fn={_da_fn_id} pkg_ret={_da_pkg_ret}({_da_pkg_desc}) src_ret={_da_src_ret}({_da_src_desc})")
+		if _da_divergences:
+			raise AssertionError(f"[typeid-divergence] all_sig_env: {len(_da_divergences)} divergence(s):\n" + "\n".join(_da_divergences))
+
 	# Entry point detection.
 	rename_map: dict[FunctionId, str] = {}
 	entry_id: FunctionId | None = None
@@ -6393,6 +6410,19 @@ def compile_stubbed_funcs(
 						_ri_info.return_type_id = _ri_sig.return_type_id
 					if _ri_info.error_type_id != _ri_sig.error_type_id:
 						_ri_info.error_type_id = _ri_sig.error_type_id
+		# Assert FnInfo ↔ signature convergence after resync (debug mode).
+		if os.environ.get("DRIFT_DEBUG_TYPEID_DIVERGENCE") == "1":
+			_da2_divergences: list[str] = []
+			for _da2_fn_id, _da2_info in checked.fn_infos_by_id.items():
+				_da2_sig = _da2_info.signature
+				if _da2_sig is not None:
+					if _da2_info.return_type_id != _da2_sig.return_type_id:
+						_da2_divergences.append(f"fn={_da2_fn_id} info.ret={_da2_info.return_type_id} sig.ret={_da2_sig.return_type_id}")
+					if _da2_info.error_type_id != _da2_sig.error_type_id:
+						_da2_divergences.append(f"fn={_da2_fn_id} info.err={_da2_info.error_type_id} sig.err={_da2_sig.error_type_id}")
+			if _da2_divergences:
+				raise AssertionError(f"[typeid-divergence] post-resync: {len(_da2_divergences)} divergence(s):\n" + "\n".join(_da2_divergences))
+
 		validator_plan: list[tuple[str, Callable[[], None]]] = [
 			("validate_mir_call_invariants", lambda: validate_mir_call_invariants(mir_funcs_by_id)),
 			("validate_mir_basic_hygiene", lambda: validate_mir_basic_hygiene(mir_funcs_by_id)),
@@ -7733,6 +7763,13 @@ def main(argv: list[str] | None = None) -> int:
 
 					param_types_raw = sd.get("param_types")
 					param_types: list[object] | None = None
+					# For generic templates (has type_params), resolve_opaque_type
+					# must be used — it resolves TypeExpr with type variable bindings
+					# that tid_map numeric ids don't carry.  For concrete (non-generic)
+					# signatures, prefer tid_map-remapped ids when available and
+					# concrete; only fall back to resolve_opaque_type when DMIR did not
+					# serialize numeric ids or the tid_map id is FORWARD_NOMINAL.
+					_has_type_params = bool(type_params) or bool(impl_type_params)
 					if isinstance(param_types_raw, list):
 						decoded: list[object] = []
 						ok = True
@@ -7744,17 +7781,29 @@ def main(argv: list[str] | None = None) -> int:
 							decoded.append(te)
 						if ok:
 							param_types = decoded
-							param_type_ids = [
-								resolve_opaque_type(t, type_table, module_id=module_name, type_params=type_param_map)
-								for t in decoded
-							]
+							if _has_type_params or not isinstance(param_type_ids, list) or len(param_type_ids) != len(decoded):
+								param_type_ids = [
+									resolve_opaque_type(t, type_table, module_id=module_name, type_params=type_param_map)
+									for t in decoded
+								]
+							else:
+								for _pi, _pt in enumerate(decoded):
+									_existing = param_type_ids[_pi]
+									_td = type_table.get(_existing)
+									if _td is None or _td.kind is TypeKind.FORWARD_NOMINAL:
+										param_type_ids[_pi] = resolve_opaque_type(_pt, type_table, module_id=module_name, type_params=type_param_map)
 
 					return_type = None
 					return_raw = sd.get("return_type")
 					if return_raw is not None:
 						return_type = decode_type_expr(return_raw)
 						if return_type is not None:
-							ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
+							if _has_type_params:
+								ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
+							else:
+								_ret_td = type_table.get(ret_tid) if isinstance(ret_tid, int) else None
+								if not isinstance(ret_tid, int) or _ret_td is None or _ret_td.kind is TypeKind.FORWARD_NOMINAL:
+									ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
 					intrinsic_kind = None
 					intrinsic_kind_raw = sd.get("intrinsic_kind")
 					if isinstance(intrinsic_kind_raw, str):
@@ -7798,6 +7847,10 @@ def main(argv: list[str] | None = None) -> int:
 						external_signatures_by_symbol[symbol] = sig
 					if fn_id not in external_signatures_by_id:
 						external_signatures_by_id[fn_id] = sig
+
+		# Canonicalize any remaining FORWARD_NOMINAL TypeIds in external sigs
+		# (safety net for resolve_opaque_type fallback path).
+		_canonicalize_signature_type_ids(external_signatures_by_id, type_table)
 
 		(
 			external_trait_defs,

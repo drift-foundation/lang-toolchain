@@ -37,8 +37,11 @@ package payloads (`payload["type_table"]`).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+_DEBUG_LINK = os.environ.get("DRIFT_DEBUG_TYPEID_DIVERGENCE") == "1"
 
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.core.function_id import FunctionId, function_id_from_obj
@@ -1082,6 +1085,9 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			if k not in key_to_host:
 				_kind, kind_s, _pkg_id, mid, name = k
 				if kind_s == TypeKind.FORWARD_NOMINAL.name:
+					# Try to resolve to an existing concrete type first.
+					# ensure_named checks for existing concrete types before
+					# creating a new FORWARD_NOMINAL.
 					key_to_host[k] = host.ensure_named(name, module_id=(mid or None))
 				else:
 					key_to_host[k] = host.require_nominal(kind=TypeKind[kind_s], module_id=(mid or None), name=name)
@@ -1145,6 +1151,37 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			key_to_host[k] = host.ensure_typevar(param_id, name=display_name)
 		else:
 			raise ValueError(f"unsupported type key in package linker: {k!r}")
+
+	# Post-link FORWARD_NOMINAL resolution sweep.  After all packages'
+	# types are allocated, scan key_to_host for FORWARD_NOMINAL nominal
+	# keys that now have a concrete counterpart allocated from another
+	# package.  Look up by (module_id, name) across all allocated nominal
+	# keys.  This works from the linker's own nominal-key-derived index
+	# rather than a module/name-only TypeTable lookup; if two packages
+	# define the same (module_id, name), the first concrete entry wins
+	# via setdefault — no global uniqueness is assumed.
+	_concrete_kinds = frozenset({"STRUCT", "VARIANT", "INTERFACE", "SCALAR"})
+	# Build index: (module_id, name) → host_tid for concrete nominals.
+	_concrete_by_identity: dict[tuple[str | None, str], TypeId] = {}
+	for _ck, _cv in key_to_host.items():
+		if not isinstance(_ck, tuple) or len(_ck) < 5 or _ck[0] != "nominal":
+			continue
+		if _ck[1] in _concrete_kinds:
+			_mid_ck, _name_ck = _ck[3], _ck[4]
+			_concrete_by_identity.setdefault((_mid_ck, _name_ck), _cv)
+	# Resolve FORWARD_NOMINAL keys via the index.
+	for k in list(key_to_host):
+		if not isinstance(k, tuple) or len(k) < 5 or k[0] != "nominal":
+			continue
+		if k[1] != TypeKind.FORWARD_NOMINAL.name:
+			continue
+		_fn_mid, _fn_name = k[3], k[4]
+		concrete_tid = _concrete_by_identity.get((_fn_mid, _fn_name))
+		if concrete_tid is not None:
+			key_to_host[k] = concrete_tid
+		elif _DEBUG_LINK:
+			import sys
+			print(f"[type_table_link] FORWARD_NOMINAL survived post-link sweep: key={k!r} host_tid={key_to_host[k]}", file=sys.stderr)
 
 	# Finalize struct field types deterministically (names + types).
 	host_default_pkg = getattr(host, "package_id", None)
