@@ -23,7 +23,7 @@ var dq = containers.deque<type Int>();
 	var rm = dq.range_mut();
 	algo.sort_in_place<type containers.DequeRangeMut<Int>, Int>(&mut rm);
 	var r = dq.range();
-	val idx = algo.binary_search<type containers.DequeRange<Int>, Int>(&r, &5);
+	val idx = algo.binary_search<type containers.DequeRange<Int>, Int>(&r, &3);
 	var found_idx = -1;
 	match idx {
 		Some(i) => { found_idx = i; },
@@ -40,7 +40,7 @@ var dq = containers.deque<type Int>();
 	} catch {
 		got = -1;
 	}
-	return (got == 5) ? 0 : 1;
+	return (got == 3) ? 0 : 1;
 }
 
 fn main() nothrow -> Int { return try run() catch { 99 }; }

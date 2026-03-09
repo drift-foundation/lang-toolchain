@@ -4079,14 +4079,16 @@ class HIRToMIR:
 				return True, None
 
 			if name == "reserve":
-				add_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
-				zero = self._const_int(0)
-				neg = self.b.new_temp()
-				self.b.emit(M.BinaryOpInstr(dest=neg, op=H.BinaryOp.LE, left=add_val, right=zero))
+				# reserve(n) = ensure total capacity >= n (no-op if cap already >= n)
+				requested_cap = self.lower_expr(expr.args[0], expected_type=self._int_type)
+				cap_val = self.b.new_temp()
+				self.b.emit(M.ArrayCap(dest=cap_val, array=array_val))
+				already_ok = self.b.new_temp()
+				self.b.emit(M.BinaryOpInstr(dest=already_ok, op=H.BinaryOp.LE, left=requested_cap, right=cap_val))
 				skip_block = self.b.new_block("array_reserve_skip")
 				do_block = self.b.new_block("array_reserve_do")
 				join_block = self.b.new_block("array_reserve_join")
-				self.b.set_terminator(M.IfTerminator(cond=neg, then_target=skip_block.name, else_target=do_block.name))
+				self.b.set_terminator(M.IfTerminator(cond=already_ok, then_target=skip_block.name, else_target=do_block.name))
 
 				self.b.set_block(skip_block)
 				self.b.set_terminator(M.Goto(target=join_block.name))
@@ -4094,10 +4096,10 @@ class HIRToMIR:
 				self.b.set_block(do_block)
 				len_val = self.b.new_temp()
 				self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
-				cap_val = self.b.new_temp()
-				self.b.emit(M.ArrayCap(dest=cap_val, array=array_val))
 				next_gen = _next_gen(array_val)
-				new_arr, grew = ensure_capacity(array_val, len_val=len_val, cap_val=cap_val, extra=add_val)
+				extra = self.b.new_temp()
+				self.b.emit(M.BinaryOpInstr(dest=extra, op=H.BinaryOp.SUB, left=requested_cap, right=len_val))
+				new_arr, grew = ensure_capacity(array_val, len_val=len_val, cap_val=cap_val, extra=extra)
 				bump_block = self.b.new_block("array_reserve_bump")
 				store_block = self.b.new_block("array_reserve_store")
 				self.b.set_terminator(

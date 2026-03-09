@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-07
 **Scope**: K10–K40 + ext-e2e-report (559 test cases through signed-package consumer path)
-**Current state**: 556/561 pass (99.1%), remaining: 2 runtime (stdlib bugs, pinned/deferred)
+**Current state**: 558/561 pass (100% non-skip), remaining: 3 skips only
 
 ---
 
@@ -317,10 +317,10 @@ Current smoke set (7 cases) should expand to include:
 | After K39+K40 (BFS destroy+preamble+variant walk) | 88.7% | 496/559 |
 | After module-m + unsafe + dict-iter + K41 + K27+ | 96.4% | 538/558 |
 | After K18 guard + bucket(a) test fixes + stdlib export | 97.5% | 545/558 |
-| **Remaining 2 failures + 3 skipped (556/561 = 99.1%) — all K42 RESOLVED** | | |
-| **(a) Newly exposed runtime issues (2 — NOT package-specific, pinned/deferred):** | | |
-| — `array_range_reserve_noop_invalidates`: reserve(n<=cap) still invalidates range | No | Stdlib behavior bug |
-| — `deque_range_sort_binary_search_wrap`: binary_search returns None on sorted deque | Maybe | Investigate |
+| **0 failures, 3 skipped (558/561 = 100% non-skip) — ALL RESOLVED** | | |
+| **(a) ~~Newly exposed runtime issues (2)~~ RESOLVED:** | | |
+| — ~~`array_range_reserve_noop_invalidates`~~ **RESOLVED** — `reserve(n)` MIR lowering treated arg as "additional capacity" (`ensure_capacity(extra=n)` computing `need = len + n`), but API semantics is "ensure total capacity ≥ n". Fix: compare `requested_cap > cap` as skip condition; compute `extra = requested_cap - len` before calling `ensure_capacity`. | No | Fixed |
+| — ~~`deque_range_sort_binary_search_wrap`~~ **RESOLVED** — test bug: searched for value 5 which was popped from deque before sort. After pop_front(4), pop_front(5), push_back(3,2,1), deque=[6,3,2,1]; sort→[1,2,3,6]. Value 5 not present. Fix: changed search target to 3 (present in sorted deque). | No | Fixed (test) |
 | **(b) K42 class — duplicate compile_stubbed_funcs state (10→3 remaining):** | | |
 | — ~~K42 lock/auto-borrow (4)~~ **RESOLVED** — root cause same as borrow_escape: Pass 1 `_lambda_fn_specs` not forwarded to CSF TypeChecker. Lambda specs for captureless lambdas (used in `conc.scope`, `conc.lock`) lost, causing MIR FnPtrConst with no function body. Fix: `Pass1State.lambda_fn_specs` field + seeding. | Yes | Fixed |
 | — ~~K42 unsafe default (1): compile_stubbed_funcs defaults allow_unsafe=True~~ **RESOLVED** — already fixed in Phase 1a: call site at line 9456 passes `allow_unsafe=bool(getattr(args, "allow_unsafe", False))` instead of defaulting to True. `array_byte_alloc_uninit_requires_unsafe` now correctly rejects unsafe calls in package-consumer path. | Yes | Fixed |
