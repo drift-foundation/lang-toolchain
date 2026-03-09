@@ -45,12 +45,13 @@
   - fixed `Array.reserve(n)` lowering to use total-capacity semantics instead of incorrectly treating `n` as extra capacity, removing false iterator invalidation on no-op reserve calls,
   - corrected `deque_range_sort_binary_search_wrap` to search for an element that is actually present after the fixture’s `pop_front` operations,
   - generalized runtime-drop classification for `DiagnosticValue` containment so values are moved instead of copied when they transitively contain DV-owned runtime resources (direct DV, struct fields, variant payloads, and generic/container param types), fixing the remaining memcheck leak in `diagnostic_value_object_nested_get_no_leak`.
+  - reconciled package wrapper-target `return_type_id` values with checker-produced signatures for package-consumer `__wrap_method` emission, fixing `FnResult` part mismatches on generic wrapper returns across the package boundary (for example `Optional<V>` / iterator `next()` wrappers in downstream rpc consumers).
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.17-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.18-dev`; ABI remains `4`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

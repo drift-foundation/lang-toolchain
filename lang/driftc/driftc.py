@@ -1647,6 +1647,27 @@ def _build_package_consumer_unit(
 			wrapper_target_by_id[fn_id] = sig.wraps_target_fn_id
 			wrapper_sigs[fn_id] = sig
 
+	# Reconcile pkg_sigs_by_id return_type_ids with checked_src targets.
+	# The checker phase may create fresh struct/variant instantiation TypeIds
+	# (e.g., a new Arc<T> entry) that differ from the DMIR+tid_map remapped
+	# TypeId for the same logical type.  The wrapper sig (from checked_src)
+	# uses the checker's TypeId.  Codegen's ConstructResultOk resolves the
+	# FnResult ok payload from the wrapper's signature, while the Call result
+	# type comes from the target's signature in all_sig_env.  When checked_src
+	# overwrites pkg_sigs_by_id in all_sig_env (line ~1923), the types align
+	# for functions IN checked_src.  But if a target is only in pkg_sigs_by_id
+	# (not in checked_src), the divergence causes an ok-payload type mismatch.
+	# Fix: update pkg_sigs_by_id entries to use the checker's return_type_id
+	# when the checker processed that function.
+	for target_id in wrapper_target_by_id.values():
+		if target_id in pkg_sigs_by_id:
+			checker_info = checked_src.fn_infos_by_id.get(target_id)
+			if checker_info is not None and checker_info.signature is not None:
+				checker_ret = checker_info.signature.return_type_id
+				pkg_ret = pkg_sigs_by_id[target_id].return_type_id
+				if checker_ret is not None and pkg_ret is not None and checker_ret != pkg_ret:
+					pkg_sigs_by_id[target_id].return_type_id = checker_ret
+
 	# BFS: prune source MIR to entry-reachable functions.
 	src_roots: set[FunctionId] = set()
 	for fn_id in src_mir:

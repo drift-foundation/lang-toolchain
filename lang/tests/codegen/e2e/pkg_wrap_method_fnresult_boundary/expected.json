@@ -1,0 +1,8 @@
+{
+  "description": "LANGUAGE_BUG: __wrap_method FnResult parts mismatch — nothrow method wrapper with generic return type across package boundary must not trigger FnResult ok-type divergence between FnInfo (pre-canonicalization) and TypeEnv (post-canonicalization).",
+  "package_consumer_only": true,
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": "",
+  "stdout": ""
+}
