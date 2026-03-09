@@ -6379,6 +6379,20 @@ def compile_stubbed_funcs(
 					return {}, checked
 				return {}
 			_canonicalize_struct_field_type_ids(shared_type_table)
+			# Resync FnInfo.return_type_id / error_type_id with the canonical
+			# signature values.  check_by_id copies these by VALUE from the sig
+			# at construction time.  _canonicalize_signature_type_ids mutates the
+			# sig objects in place, leaving FnInfo's copies stale.  TypeEnv reads
+			# the (now-canonical) sig, but throw_checks reads the FnInfo field —
+			# divergence triggers "FnResult mismatched parts" on wrapper methods
+			# whose target return type included a FORWARD_NOMINAL alias.
+			for _ri_fn_id, _ri_info in checked.fn_infos_by_id.items():
+				_ri_sig = _ri_info.signature
+				if _ri_sig is not None:
+					if _ri_info.return_type_id != _ri_sig.return_type_id:
+						_ri_info.return_type_id = _ri_sig.return_type_id
+					if _ri_info.error_type_id != _ri_sig.error_type_id:
+						_ri_info.error_type_id = _ri_sig.error_type_id
 		validator_plan: list[tuple[str, Callable[[], None]]] = [
 			("validate_mir_call_invariants", lambda: validate_mir_call_invariants(mir_funcs_by_id)),
 			("validate_mir_basic_hygiene", lambda: validate_mir_basic_hygiene(mir_funcs_by_id)),
