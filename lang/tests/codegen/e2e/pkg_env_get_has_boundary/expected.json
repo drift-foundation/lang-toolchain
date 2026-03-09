@@ -1,0 +1,8 @@
+{
+  "description": "std.env get/has must work through signed package boundary (new runtime helpers drift_env_get/drift_env_has)",
+  "package_consumer_only": true,
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": "",
+  "stdout": ""
+}

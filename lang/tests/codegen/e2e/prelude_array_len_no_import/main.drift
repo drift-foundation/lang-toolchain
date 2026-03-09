@@ -1,0 +1,22 @@
+module main
+
+// Regression: Array.iter() and basic array operations must be visible without
+// importing std.iter or std.containers explicitly. These are prelude modules
+// and their methods on builtin types must always be in scope.
+
+fn main() nothrow -> Int {
+	val arr = [10, 20, 30];
+	if arr.len != 3 {
+		return 1;
+	}
+	// Array<T>::with_capacity is from std.containers (prelude).
+	var buf = Array<Int>::with_capacity(8);
+	buf.push(42);
+	if buf.len != 1 {
+		return 2;
+	}
+	if buf[0] != 42 {
+		return 3;
+	}
+	return 0;
+}

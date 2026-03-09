@@ -1,0 +1,17 @@
+module main
+
+// Regression: String.byte_length() must be visible without importing std.core.
+// The implement String { byte_length } block lives in std.core, but String is a
+// builtin type and its core methods must be prelude-visible.
+
+fn main() nothrow -> Int {
+	val s = "hello";
+	if s.byte_length() != 5 {
+		return 1;
+	}
+	val empty = "";
+	if empty.byte_length() != 0 {
+		return 2;
+	}
+	return 0;
+}

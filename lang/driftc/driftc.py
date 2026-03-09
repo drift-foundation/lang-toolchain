@@ -8514,6 +8514,10 @@ def main(argv: list[str] | None = None) -> int:
 				if fn_id.module == "lang.core":
 					prelude_modules.add("lang.core")
 					break
+			if isinstance(module_exports, dict):
+				for std_mod in ("std.iter", "std.containers"):
+					if std_mod in module_exports:
+						prelude_modules.add(std_mod)
 		for mod_name in module_deps.keys():
 			imports = set(module_deps.get(mod_name, set()))
 			best: dict[str, tuple[str, ...]] = {mod_name: (mod_name,)}

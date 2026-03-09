@@ -53,12 +53,22 @@
     - canonicalized external signatures after construction as a safety net,
     - added debug-gated divergence assertions for package-signature vs checker-signature return ids and for `FnInfo` vs signature return/error ids after resync,
     - added `test_ext_sig_preserves_linked_typeids` to pin external-signature TypeId convergence under the package-consumer path.
+  - added read-only process environment access as `std.env`:
+    - new public stdlib API `std.env.get(String) -> Optional<String>` and `std.env.has(String) -> Bool`,
+    - new runtime helpers `drift_env_get` / `drift_env_has` with LLVM declarations and `lang.thread` intrinsics,
+    - new e2e coverage for set/unset lookup, raw-helper validity on unset values, boolean presence checks, and signed package-consumer boundary usage.
+  - fixed the initial raw env-helper contract leak by removing the invalid `{-1, NULL}` sentinel from `drift_env_get`:
+    - unset now returns a valid empty `DriftString`,
+    - `std.env.get` uses the two-call pattern (`env_has_raw` then `env_get_raw`) to preserve unset vs empty-string semantics without violating `String` invariants.
+  - added narrow prelude visibility for builtin-type methods from core stdlib implementation modules:
+    - methods like `String.byte_length()` and core `Array` methods now resolve without explicit import of their defining module,
+    - visibility is gated by both builtin/prelude receiver type identity and known stdlib source modules, so user-defined `implement String { ... }` blocks do not gain implicit cross-module visibility.
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.20-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.22-dev`; ABI is `5`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

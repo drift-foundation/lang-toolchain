@@ -69,7 +69,9 @@ export {
 	array_byte_alloc_uninit,
 	array_byte_as_mut_ptr,
 	array_byte_commit_init_len,
-	random_fill
+	random_fill,
+	env_get_raw,
+	env_has_raw
 };
 
 pub type VtHandle = Int;
@@ -141,3 +143,5 @@ pub type ReactorHandle = Int;
 @intrinsic pub unsafe fn array_byte_as_mut_ptr(a: &mut Array<Byte>) nothrow -> mem.Ptr<Byte>;
 @intrinsic pub unsafe fn array_byte_commit_init_len(a: &mut Array<Byte>, len: Int) nothrow -> Void;
 @intrinsic pub unsafe fn random_fill(buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
+@intrinsic pub fn env_get_raw(name: String) nothrow -> String;
+@intrinsic pub fn env_has_raw(name: String) nothrow -> Int;

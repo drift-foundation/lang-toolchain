@@ -195,6 +195,50 @@ def test_ir_declares_reactor_et_helpers(tmp_path: Path) -> None:
 	assert "declare i64 @drift_reactor_io_charge(i64, i64, i64)" in ir, "drift_reactor_io_charge runtime helper declaration missing from IR"
 
 
+def test_ir_declares_env_runtime_helpers(tmp_path: Path) -> None:
+	"""Generated IR for env access must declare both runtime helpers."""
+	(tmp_path / "main.drift").write_text(
+		"module std.env.test_env_ir\n\n"
+		"import lang.thread as thread;\n\n"
+		"fn main() nothrow -> Int {\n"
+		"\tval name = \"HOME\";\n"
+		"\tval raw = thread.env_get_raw(name);\n"
+		"\tval h = thread.env_has_raw(\"HOME\");\n"
+		"\treturn h;\n"
+		"}\n"
+	)
+	module_packages: dict = {}
+	mk_module(module_packages, "std.env.test_env_ir", "std")
+	drift_files = sorted(tmp_path.rglob("*.drift"))
+	modules, type_table, exception_catalog, module_exports, module_deps, diags = parse_drift_workspace_to_hir(
+		drift_files,
+		module_paths=[tmp_path],
+		external_module_packages=module_packages,
+		package_id="std",
+		stdlib_root=stdlib_root(),
+		test_build_only=True,
+	)
+	assert not diags
+	func_hirs, signatures, _fn_ids_by_name = flatten_modules(modules)
+	from lang.driftc.core.function_id import function_symbol
+	main_ids = [fn_id for fn_id in signatures if fn_id.name == "main" and not signatures[fn_id].is_method]
+	assert main_ids, "no main function found"
+	entry = function_symbol(main_ids[0])
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exception_catalog,
+		entry=entry,
+		type_table=type_table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+	)
+	assert not checked.diagnostics, checked.diagnostics
+	assert ir
+	assert "declare %DriftString @drift_env_get(%DriftString)" in ir, "drift_env_get runtime helper declaration missing from IR"
+	assert "declare i64 @drift_env_has(%DriftString)" in ir, "drift_env_has runtime helper declaration missing from IR"
+
+
 def test_abi_stamp_absent_without_wrapper(tmp_path: Path) -> None:
 	"""Helper path (enforce_entrypoint=False) omits ABI stamp and OS wrapper."""
 	ir = _compile_simple_program(tmp_path)

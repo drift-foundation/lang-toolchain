@@ -1,0 +1,15 @@
+module main
+
+import std.env as env;
+
+fn main() nothrow -> Int {
+	// HOME is always set.
+	if !env.has("HOME") {
+		return 1;
+	}
+	// This variable should never be set.
+	if env.has("DRIFT_E2E_TEST_UNSET_VAR_XYZ_99") {
+		return 2;
+	}
+	return 0;
+}

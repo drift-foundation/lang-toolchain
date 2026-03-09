@@ -1177,6 +1177,8 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()",
 					f"declare void @drift_test_timerfd_set({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_random_fill(i8*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {DRIFT_STRING_TYPE} @drift_env_get({DRIFT_STRING_TYPE})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE})",
 					"",
 				]
 			)
@@ -4635,6 +4637,30 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				self.lines.append(
 					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_random_fill(i8* {buf_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "env_get_raw":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: env_get_raw expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: env_get_raw result must be captured")
+				name_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_env_get({DRIFT_STRING_TYPE} {name_val})"
+				)
+				self.value_types[dest] = DRIFT_STRING_TYPE
+				return
+			if instr.fn_id.name == "env_has_raw":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: env_has_raw expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: env_has_raw result must be captured")
+				name_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE} {name_val})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return

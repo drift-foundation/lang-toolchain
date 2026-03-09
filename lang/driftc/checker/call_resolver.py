@@ -129,6 +129,34 @@ def _candidate_visible(cand: CallableDecl, *, visible_modules_set: set, current_
 	return (cand.module_id in visible_modules_set and cand.visibility.is_public) or (current_module_id is not None and cand.module_id == current_module_id)
 
 
+# Prelude visibility for pub methods on builtin/prelude types.
+#
+# Builtin types (String, Int, Array, Optional, …) are always available without
+# import.  Their core methods — defined in known stdlib modules — must also be
+# visible without an explicit import.  The predicate gates on BOTH the target
+# type (module_id in {None, "lang.core"}) AND the defining module (must be a
+# known stdlib implementation module).  This prevents user-defined
+# `implement String { … }` blocks from gaining unintended cross-module
+# visibility.
+_PRELUDE_TYPE_MODULES: frozenset[str | None] = frozenset({None, "lang.core"})
+_PRELUDE_METHOD_SOURCE_MODULES: frozenset[str] = frozenset({"std.core", "std.iter", "std.containers", "lang.core"})
+
+def _is_prelude_type_method(cand: CallableDecl, type_table: object) -> bool:
+	if cand.impl_target_type_id is None or not cand.visibility.is_public:
+		return False
+	fn_id = cand.fn_id
+	if fn_id is None:
+		return False
+	cand_module = getattr(fn_id, "module", None)
+	if cand_module not in _PRELUDE_METHOD_SOURCE_MODULES:
+		return False
+	try:
+		td = type_table.get(cand.impl_target_type_id)
+	except (KeyError, IndexError):
+		return False
+	return td.module_id in _PRELUDE_TYPE_MODULES
+
+
 @dataclass(frozen=True)
 class VariantCtorResolveResult:
 	inst_return: TypeId
@@ -2206,10 +2234,10 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					# the impl-defining module is visible (K36 ensures package
 					# modules are in the visible set).  Compiler-generated calls
 					# bypass since the defining module may be internal to the package.
-					if ignore_visibility or _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module):
+					if ignore_visibility or _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module) or _is_prelude_type_method(cand, ctx.type_table):
 						trait_candidates.append(cand)
 					continue
-				is_visible = True if ignore_visibility else _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module)
+				is_visible = True if ignore_visibility else (_candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module) or _is_prelude_type_method(cand, ctx.type_table))
 				if cand.kind is CallableKind.METHOD_INHERENT:
 					if is_visible:
 						inherent_candidates.append(cand)
@@ -2598,7 +2626,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					visible_modules_set = set(visible_modules)
 					hidden_not_visible = [
 						cand for cand in hidden
-						if not _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module)
+						if not (_candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module) or _is_prelude_type_method(cand, ctx.type_table))
 					]
 					if hidden_not_visible:
 						hidden_decl = hidden_not_visible[0]

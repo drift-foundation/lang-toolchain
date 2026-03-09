@@ -37,6 +37,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "drift_context.S",
 		base / "posix" / "assert_runtime.c",
 		base / "random_runtime.c",
+		base / "env_runtime.c",
 		# ABI version stamp for link-time compatibility guard.
 		base / "abi_version_stamp.c",
 		# Diagnostic/Error runtime lives alongside lang/ for now; include it so
