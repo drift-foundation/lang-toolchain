@@ -365,6 +365,8 @@ class HIRToMIR:
 	def _needs_runtime_drop(self, ty: TypeId) -> bool:
 		if ty == self._unknown_type:
 			return False
+		if self._contains_dv_transitive(ty, set()):
+			return True
 		try:
 			if self._type_table.copy_status(ty) is True:
 				return False
@@ -374,6 +376,32 @@ class HIRToMIR:
 			return bool(self._type_table.has_drop(ty))
 		except Exception:
 			return False
+
+	def _contains_dv_transitive(self, ty: TypeId, visited: set[TypeId]) -> bool:
+		if ty in visited:
+			return False
+		visited.add(ty)
+		td = self._type_table.get(ty)
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			return True
+		if td.kind is TypeKind.STRUCT:
+			inst = self._type_table.get_struct_instance(ty)
+			if inst is not None:
+				for ft in inst.field_types:
+					if self._contains_dv_transitive(ft, visited):
+						return True
+		if td.kind is TypeKind.VARIANT:
+			inst = self._type_table.get_variant_instance(ty)
+			if inst is not None:
+				for arm in inst.arms:
+					for ft in arm.field_types:
+						if self._contains_dv_transitive(ft, visited):
+							return True
+		if td.param_types:
+			for pt in td.param_types:
+				if self._contains_dv_transitive(pt, visited):
+					return True
+		return False
 
 	def _should_copy_value(self, ty: TypeId) -> bool:
 		return self._classify_value_transfer(ty) == "copy"

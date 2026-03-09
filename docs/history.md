@@ -43,13 +43,14 @@
   - restored full function-key parity checking (fingerprint + package/module/name identity),
   - renamed the compact package-consumer regression slice from `ext-e2e-parity` to `ext-e2e-boundary` for accuracy and removed the non-parity `pkg_vis_source_private_method_rejected` fixture from that target,
   - fixed `Array.reserve(n)` lowering to use total-capacity semantics instead of incorrectly treating `n` as extra capacity, removing false iterator invalidation on no-op reserve calls,
-  - corrected `deque_range_sort_binary_search_wrap` to search for an element that is actually present after the fixture’s `pop_front` operations.
+  - corrected `deque_range_sort_binary_search_wrap` to search for an element that is actually present after the fixture’s `pop_front` operations,
+  - generalized runtime-drop classification for `DiagnosticValue` containment so values are moved instead of copied when they transitively contain DV-owned runtime resources (direct DV, struct fields, variant payloads, and generic/container param types), fixing the remaining memcheck leak in `diagnostic_value_object_nested_get_no_leak`.
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.16-dev`; ABI remains `4`.
+- Compiler version bumped to `0.27.17-dev`; ABI remains `4`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

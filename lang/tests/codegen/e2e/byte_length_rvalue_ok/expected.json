@@ -1,6 +1,5 @@
 {
   "description": "e2e: byte length rvalue ok",
   "diagnostics": [],
-  "exit_code": 0,
-  "use_driftc_json": false
+  "exit_code": 0
 }
