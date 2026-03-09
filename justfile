@@ -199,12 +199,15 @@ lang-borrow-test:
 ext-consumer-test:
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver/test_external_consumer.py
 
-# Nightly: consumer fleet + hunk regressions + stdlib package (with ASAN).
+# Nightly: full driver suite + complete package-consumer e2e (blocking).
+# ASAN: DRIFT_ASAN=1 just ext-consumer-test-nightly
 ext-consumer-test-nightly:
-	PYTHONPATH=. DRIFT_ASAN=1 ./.venv/bin/python3 -m pytest -v \
-		lang/tests/driver/test_external_consumer.py \
-		lang/tests/driver/test_deploy_compiler_hunk_regressions.py \
-		lang/tests/driver/test_deploy_stdlib_package.py
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" -v lang/tests/driver; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
+	fi
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --blocking --summarize
 
 # Package-consumer e2e: report-only (all stdlib-importing tests through signed package path).
 ext-e2e-report:
