@@ -14,7 +14,7 @@ set -euo pipefail
 : "${CLANG:?}"
 
 mkdir -p "${DIST}/bin" "${DIST}/lib/runtime" "${DIST}/lib/compiler" "${DIST}/lib/stdlib" \
-         "${DIST}/doc" "${DIST}/examples"
+         "${DIST}/lib/python_vendor" "${DIST}/doc" "${DIST}/examples"
 
 # bin/ — wrapper
 cp "${REPO_ROOT}/tools/deploy/driftc-wrapper.sh" "${DIST}/bin/driftc"
@@ -42,6 +42,11 @@ touch "${DIST}/lib/compiler/lang/__init__.py"
 		cp "${f}" "${target}"
 	done)
 
+# lib/python_vendor/ — bundled third-party Python runtime deps
+(cd "${REPO_ROOT}" && PYTHONPATH=. ./.venv/bin/python3 tools/deploy/vendor_python_deps.py \
+	--dest "${DIST}/lib/python_vendor" \
+	lark llvmlite cryptography)
+
 # lib/runtime/ — pre-built archives for all variants
 for variant in default debug asan alloc_track optimized; do
 	src="${REPO_ROOT}/build/runtime_libs/${variant}/libdrift_rt.a"
@@ -67,15 +72,12 @@ The Drift compiler requires these host tools:
 | Dependency | Version | Purpose |
 |------------|---------|---------|
 | Python 3 | 3.10+ | Compiler runtime |
-| lark | any | Parser library (`pip install lark`) |
-| llvmlite | 0.41+ | LLVM IR generation (`pip install llvmlite`) |
-| cryptography | any | Package signature verification (`pip install cryptography`) |
 | clang | 15+ | Linker / native codegen |
 
 Verify your environment:
 
 ```bash
-python3 -c "import lark, llvmlite, cryptography; print('ok')"
+python3 --version
 clang --version   # or clang-15 --version
 ```
 
@@ -91,9 +93,10 @@ driftc my_program.drift -o my_program
 
 ## Using the compiler
 
-`bin/driftc` is a wrapper that locates the stdlib package and runtime archives
-relative to its own path.  No repo checkout or PYTHONPATH setup is needed —
-only the prerequisites above.
+`bin/driftc` is a wrapper that locates the stdlib package, vendored Python
+dependencies, and runtime archives relative to its own path. No repo checkout,
+ambient `pip install`, or PYTHONPATH setup is needed — only the prerequisites
+above.
 
 ### Stdlib integrity
 

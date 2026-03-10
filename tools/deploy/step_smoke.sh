@@ -28,23 +28,8 @@ if [[ -z "${SMOKE_PYTHON}" ]]; then
 	exit 1
 fi
 
-# Verify required Python packages are available in the target interpreter.
-echo "[deploy] checking Python prerequisites (${SMOKE_PYTHON})..."
-MISSING_DEPS=""
-for dep in lark llvmlite cryptography; do
-	if ! "${SMOKE_PYTHON}" -c "import ${dep}" 2>/dev/null; then
-		MISSING_DEPS="${MISSING_DEPS} ${dep}"
-	fi
-done
-if [[ -n "${MISSING_DEPS}" ]]; then
-	echo "error: target Python (${SMOKE_PYTHON}) is missing required packages:${MISSING_DEPS}" >&2
-	echo "  install with: ${SMOKE_PYTHON} -m pip install${MISSING_DEPS}" >&2
-	echo "  or set DRIFT_PYTHON to a Python that has them" >&2
-	exit 1
-fi
-
-echo "[deploy] running smoke test..."
-"${DIST}/bin/driftc" "${SMOKE_SRC}" -o "${SMOKE_BIN}" 2>&1 | tail -5
+echo "[deploy] running smoke test with deployed Python bundle..."
+DRIFT_PYTHON="${SMOKE_PYTHON}" "${DIST}/bin/driftc" "${SMOKE_SRC}" -o "${SMOKE_BIN}" 2>&1 | tail -5
 SMOKE_EXIT=0
 "${SMOKE_BIN}" > "${STAGE}/smoke_stdout" 2>&1 || SMOKE_EXIT=$?
 

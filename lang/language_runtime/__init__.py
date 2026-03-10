@@ -119,6 +119,13 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 	obj_dir = build_root / "objs"
 	archive_path = build_root / "libdrift_rt.a"
 	lock_path = build_root / ".build.lock"
+	deps = _runtime_deps(root)
+	# ABI version constant also drives rebuild (change → force recompile).
+	abi_ver_file = root / "lang" / "driftc" / "driftc_versions.py"
+	if abi_ver_file.exists():
+		deps.append(abi_ver_file)
+	if not _needs_rebuild(archive_path, deps):
+		return archive_path
 	build_root.mkdir(parents=True, exist_ok=True)
 	obj_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,11 +136,6 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 			fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 		except Exception:
 			pass
-		deps = _runtime_deps(root)
-		# ABI version constant also drives rebuild (change → force recompile).
-		abi_ver_file = root / "lang" / "driftc" / "driftc_versions.py"
-		if abi_ver_file.exists():
-			deps.append(abi_ver_file)
 		if not _needs_rebuild(archive_path, deps):
 			return archive_path
 		# Read ABI version from the single source of truth.

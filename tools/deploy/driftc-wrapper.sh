@@ -7,14 +7,14 @@
 # The stdlib is loaded from a signed DMIR package (lib/stdlib/std.dmp).
 # Signature verification uses the bundled core trust store automatically.
 #
-# Prerequisites: Python 3.10+ with lark, llvmlite, and cryptography packages, clang linker.
+# Prerequisites: Python 3.10+ and clang linker.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Compiler sources live under lib/compiler/ in the deployed tree.
-export PYTHONPATH="${DIST_ROOT}/lib/compiler"
+# Compiler sources and vendored Python deps live inside the deployed tree.
+export PYTHONPATH="${DIST_ROOT}/lib/python_vendor:${DIST_ROOT}/lib/compiler"
 
 # Prevent CWD from shadowing deployed compiler modules (e.g. if run from
 # a repo checkout that also has a lang/ package).
@@ -39,7 +39,6 @@ if [[ -n "${DRIFT_TRUST_STORE:-}" && -f "${DRIFT_TRUST_STORE}" ]]; then
 	DRIFTC_ARGS+=(--trust-store "${DRIFT_TRUST_STORE}")
 fi
 
-# Use -m with PYTHONSAFEPATH=1 to prevent CWD from appearing in sys.path.
-# This ensures Python resolves lang.driftc from PYTHONPATH (deployed tree)
-# even when invoked from a directory containing its own lang/ package.
-exec "${PYTHON}" -m lang.driftc "${DRIFTC_ARGS[@]}" "$@"
+# Run in isolated site-disabled mode so the deployed toolchain does not
+# depend on ambient Python packages from the caller environment.
+exec "${PYTHON}" -S -m lang.driftc "${DRIFTC_ARGS[@]}" "$@"

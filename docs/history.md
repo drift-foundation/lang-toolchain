@@ -1,5 +1,20 @@
 # Drift development history
 
+## 2026-03-10
+- Fixed a deploy/toolchain read-only install bug where deployed `bin/driftc` in runtime-archive mode tried to create lock/build directories under the installed `lib/runtime` tree:
+  - `build_runtime_archive()` now returns an existing up-to-date `libdrift_rt.a` before creating build directories or acquiring the archive lock,
+  - deployed/runtime-archive use now consumes the prebuilt archive from the install tree as a read-only input instead of treating the deployed tree as a writable cache.
+- Added a deploy regression that makes the staged deployed runtime tree read-only and verifies wrapper compilation succeeds without creating `.build.lock` or other mutable state under the install path.
+- Bumped compiler version to `0.27.25-dev`; ABI remains `5`.
+
+## 2026-03-10
+- Fixed a deploy/toolchain self-sufficiency bug where the published `bin/driftc` wrapper still depended on ambient Python packages from the caller environment:
+  - deploy now vendors the compiler's required Python distribution closure into `lib/python_vendor`,
+  - the deployed wrapper now runs Python in `-S` mode and resolves both compiler modules and vendored dependencies from the deployed tree,
+  - deploy smoke now validates the bundled Python-dependency path instead of prechecking for host-installed `lark`/`llvmlite`/`cryptography`.
+- Added a deploy regression that exercises the bundled wrapper under a site-disabled Python interpreter and verifies compilation succeeds using only the deployed tree.
+- Bumped compiler version to `0.27.24-dev`; ABI remains `5`.
+
 ## 2026-03-08 (Option B convergence finished)
 - Finished the structural convergence work between driver Pass 1 and `compile_stubbed_funcs` for package-consumer compilation.
 - Shared all duplicated material resolution/setup state through `Pass1State`, including:
