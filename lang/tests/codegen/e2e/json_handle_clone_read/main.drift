@@ -1,0 +1,35 @@
+module main
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"x\":100}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			val handle2 = handle.clone();
+			val k = "x";
+			match handle.get(&k) {
+				Optional::Some(h) => {
+					match h.as_int() {
+						Optional::Some(v) => { if v != 100 { return 1; } },
+						Optional::None() => { return 2; }
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			match handle2.get(&k) {
+				Optional::Some(h) => {
+					match h.as_int() {
+						Optional::Some(v) => { if v != 100 { return 4; } },
+						Optional::None() => { return 5; }
+					}
+				},
+				Optional::None() => { return 6; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 7; }
+	}
+}

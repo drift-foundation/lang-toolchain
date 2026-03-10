@@ -1,0 +1,38 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"k\":\"v\",\"n\":7}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			val handle2 = handle.clone();
+			val k1 = "k";
+			match handle.get(&k1) {
+				Optional::Some(h) => {
+					match h.as_string() {
+						Optional::Some(s) => { if s != "v" { return 1; } },
+						Optional::None() => { return 2; }
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			val k2 = "n";
+			match handle2.get(&k2) {
+				Optional::Some(h) => {
+					match h.as_int() {
+						Optional::Some(v) => { if v != 7 { return 4; } },
+						Optional::None() => { return 5; }
+					}
+				},
+				Optional::None() => { return 6; }
+			}
+			val enc = handle.encode_compact();
+			if enc.byte_length() < 5 { return 7; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 8; }
+	}
+}

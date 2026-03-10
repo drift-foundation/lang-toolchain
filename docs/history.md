@@ -63,12 +63,18 @@
   - added narrow prelude visibility for builtin-type methods from core stdlib implementation modules:
     - methods like `String.byte_length()` and core `Array` methods now resolve without explicit import of their defining module,
     - visibility is gated by both builtin/prelude receiver type identity and known stdlib source modules, so user-defined `implement String { ... }` blocks do not gain implicit cross-module visibility.
+  - added additive shared JSON support without changing existing `JsonNode` semantics:
+    - introduced `std.json.JsonHandle` as a read-only shared root handle backed by `Arc<JsonNode>`,
+    - added `std.json.share(JsonNode) -> JsonHandle` and `JsonHandle.clone()` for O(1) whole-tree sharing,
+    - added read-only handle accessors and `JsonHandle.encode_compact()` for root-handle caching/use in framework layers,
+    - added `JsonNode.clone_deep()` and `JsonHandle.clone_deep()` for explicit O(N) owned subtree/tree extraction without semantic masking,
+    - added local and package-consumer regressions covering share/access, clone/read, encode parity, missing access, and deep-copy from both root and borrowed sub-node paths.
 - Validation snapshot after convergence:
   - external consumer driver `16/16`,
   - Stage2 `86/86`,
   - checker `33/33` (with known pre-existing exclusions tracked separately),
   - package-consumer e2e green at the convergence checkpoint.
-- Compiler version bumped to `0.27.22-dev`; ABI is `5`.
+- Compiler version bumped to `0.27.23-dev`; ABI is `5`.
 
 ## 2026-03-07 (Option B WIP: package-consumer unification and parity hardening)
 - Continued Option B structural work to reduce local vs package-consumer divergence:

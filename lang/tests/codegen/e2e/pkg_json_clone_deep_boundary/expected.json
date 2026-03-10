@@ -1,0 +1,7 @@
+{
+  "description": "package-consumer: JsonNode.clone_deep and JsonHandle.clone_deep through signed package boundary",
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": "",
+  "stdout": ""
+}

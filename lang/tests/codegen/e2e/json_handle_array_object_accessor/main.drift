@@ -1,0 +1,47 @@
+module main
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"arr\":[1,2,3],\"obj\":{\"nested\":true}}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			val k1 = "arr";
+			match handle.get(&k1) {
+				Optional::Some(arr_node) => {
+					match arr_node.as_array() {
+						Optional::Some(arr) => {
+							if arr.len != 3 { return 1; }
+						},
+						Optional::None() => { return 2; }
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			val k2 = "obj";
+			match handle.get(&k2) {
+				Optional::Some(obj_node) => {
+					match obj_node.as_object() {
+						Optional::Some(_) => {},
+						Optional::None() => { return 4; }
+					}
+					val k3 = "nested";
+					match obj_node.get(&k3) {
+						Optional::Some(nested) => {
+							match nested.as_bool() {
+								Optional::Some(v) => { if not v { return 5; } },
+								Optional::None() => { return 6; }
+							}
+						},
+						Optional::None() => { return 7; }
+					}
+				},
+				Optional::None() => { return 8; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 9; }
+	}
+}

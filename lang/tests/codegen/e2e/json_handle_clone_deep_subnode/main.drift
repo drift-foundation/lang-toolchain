@@ -1,0 +1,24 @@
+module main
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"items\":[10,20,30]}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			val k = "items";
+			match handle.get(&k) {
+				Optional::Some(sub) => {
+					val cloned = sub.clone_deep();
+					val enc = json.encode_compact(&cloned);
+					if enc != "[10,20,30]" { return 1; }
+					return 0;
+				},
+				Optional::None() => { return 2; }
+			}
+		},
+		core.Result::Err(_) => { return 3; }
+	}
+}

@@ -1,0 +1,38 @@
+module main
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"a\":1}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			// Missing key returns None.
+			val k1 = "missing";
+			match handle.get(&k1) {
+				Optional::Some(_) => { return 1; },
+				Optional::None() => {}
+			}
+			// get on non-object (number node) returns None.
+			val k2 = "a";
+			match handle.get(&k2) {
+				Optional::Some(h) => {
+					val k3 = "sub";
+					match h.get(&k3) {
+						Optional::Some(_) => { return 2; },
+						Optional::None() => {}
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			// as_string on object returns None.
+			match handle.as_string() {
+				Optional::Some(_) => { return 4; },
+				Optional::None() => {}
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 5; }
+	}
+}

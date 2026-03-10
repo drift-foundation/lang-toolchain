@@ -1,0 +1,58 @@
+module main
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"name\":\"drift\",\"version\":42,\"active\":true,\"empty\":null}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			val k1 = "name";
+			match handle.get(&k1) {
+				Optional::Some(h) => {
+					match h.as_string() {
+						Optional::Some(s) => {
+							if s != "drift" { return 1; }
+						},
+						Optional::None() => { return 2; }
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			val k2 = "version";
+			match handle.get(&k2) {
+				Optional::Some(h) => {
+					match h.as_int() {
+						Optional::Some(v) => {
+							if v != 42 { return 4; }
+						},
+						Optional::None() => { return 5; }
+					}
+				},
+				Optional::None() => { return 6; }
+			}
+			val k3 = "active";
+			match handle.get(&k3) {
+				Optional::Some(h) => {
+					match h.as_bool() {
+						Optional::Some(v) => {
+							if not v { return 7; }
+						},
+						Optional::None() => { return 8; }
+					}
+				},
+				Optional::None() => { return 9; }
+			}
+			val k4 = "empty";
+			match handle.get(&k4) {
+				Optional::Some(h) => {
+					if not h.is_null() { return 10; }
+				},
+				Optional::None() => { return 11; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 12; }
+	}
+}

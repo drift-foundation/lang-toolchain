@@ -1,0 +1,36 @@
+module m
+
+import std.json as json;
+import std.core as core;
+
+fn main() nothrow -> Int {
+	val text = "{\"x\":[1,2]}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			val handle = json.share(move node);
+			// clone_deep from handle root.
+			val root_copy = handle.clone_deep();
+			val k = "x";
+			match root_copy.get(&k) {
+				Optional::Some(arr_node) => {
+					match arr_node.as_array() {
+						Optional::Some(arr) => { if arr.len != 2 { return 1; } },
+						Optional::None() => { return 2; }
+					}
+				},
+				Optional::None() => { return 3; }
+			}
+			// clone_deep from borrowed sub-node.
+			match handle.get(&k) {
+				Optional::Some(sub) => {
+					val sub_copy = sub.clone_deep();
+					val enc = json.encode_compact(&sub_copy);
+					if enc != "[1,2]" { return 4; }
+				},
+				Optional::None() => { return 5; }
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 6; }
+	}
+}

@@ -6,6 +6,7 @@ import std.core.hash as hash;
 import std.parse as parse_std;
 import std.iter as iter;
 import std.mem as mem;
+import std.concurrent as concurrent;
 
 use trait iter.SinglePassIterator;
 
@@ -19,6 +20,7 @@ export {
 	JsonConfig,
 	JsonConfigBuilder,
 	JsonEntriesIter,
+	JsonHandle,
 	new_array,
 	new_object,
 	config_builder,
@@ -26,7 +28,8 @@ export {
 	encode_compact,
 	encode_with_config,
 	encode_compact_with_config,
-	parse
+	parse,
+	share
 };
 
 pub exception JsonError(tag: String, offset: Int, line: Int, col: Int, path: String, key: String);
@@ -358,6 +361,10 @@ implement JsonNode {
 			Object(fields) => { return Optional::Some(JsonObject(move fields)); },
 			default => { return Optional<JsonObject>::None(); }
 		}
+	}
+
+	pub fn clone_deep(self: &JsonNode) nothrow -> JsonNode {
+		return _clone_deep_impl(self);
 	}
 }
 
@@ -996,4 +1003,108 @@ fn _encode_node(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
 
 fn _encode_node(node: JsonNode, cfg: &JsonConfig) nothrow -> String {
 	return _encode_node(&node, cfg);
+}
+
+// ── JsonHandle: shared, read-only, Arc-backed JSON tree ──────────────
+//
+// Wraps Arc<JsonNode>.  clone() is O(1) (refcount increment).
+// share() is O(1) (single Arc allocation wrapping the whole tree).
+// Read-only accessors delegate to the inner &JsonNode.
+
+pub struct JsonHandle {
+	data: concurrent.Arc<JsonNode>
+}
+
+pub fn share(node: JsonNode) nothrow -> JsonHandle {
+	return JsonHandle(data = concurrent.arc<type JsonNode>(move node));
+}
+
+implement JsonHandle {
+	pub fn clone(self: &JsonHandle) nothrow -> JsonHandle {
+		return JsonHandle(data = self.data.clone());
+	}
+
+	pub fn node(self: &JsonHandle) nothrow -> &JsonNode {
+		return self.data.get();
+	}
+
+	pub fn is_null(self: &JsonHandle) nothrow -> Bool {
+		val n = self.data.get();
+		return n.is_null();
+	}
+
+	pub fn get(self: &JsonHandle, key: &String) nothrow -> Optional<&JsonNode> {
+		val n = self.data.get();
+		return n.get(key);
+	}
+
+	pub fn as_string(self: &JsonHandle) nothrow -> Optional<String> {
+		val n = self.data.get();
+		return n.as_string();
+	}
+
+	pub fn as_int(self: &JsonHandle) nothrow -> Optional<Int> {
+		val n = self.data.get();
+		return n.as_int();
+	}
+
+	pub fn as_bool(self: &JsonHandle) nothrow -> Optional<Bool> {
+		val n = self.data.get();
+		return n.as_bool();
+	}
+
+	pub fn as_array(self: &JsonHandle) nothrow -> Optional<&Array<JsonNode>> {
+		val n = self.data.get();
+		return n.as_array();
+	}
+
+	pub fn as_object(self: &JsonHandle) nothrow -> Optional<&containers.HashMap<String, std.json.JsonNode>> {
+		val n = self.data.get();
+		return n.as_object();
+	}
+
+	pub fn encode_compact(self: &JsonHandle) nothrow -> String {
+		val n = self.data.get();
+		return _encode_node(n, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+	}
+
+	pub fn clone_deep(self: &JsonHandle) nothrow -> JsonNode {
+		val n = self.data.get();
+		return _clone_deep_impl(n);
+	}
+}
+
+fn _clone_deep_impl(node: &JsonNode) nothrow -> JsonNode {
+	match node {
+		JsonNode::Null => { return JsonNode::Null(); },
+		JsonNode::Bool(v) => { return JsonNode::Bool(*v); },
+		JsonNode::Number(raw) => { return JsonNode::Number(*raw); },
+		JsonNode::String(v) => { return JsonNode::String(*v); },
+		JsonNode::Array(values) => {
+			var out: Array<JsonNode> = [];
+			var i = 0;
+			while i < values.len {
+				var c = _clone_deep_impl(&values[i]);
+				out.push(move c);
+				i = i + 1;
+			}
+			return JsonNode::Array(move out);
+		},
+		JsonNode::Object(fields) => {
+			var out = containers.hash_map<type String, std.json.JsonNode>();
+			var it = fields.iter();
+			while true {
+				match it.next() {
+					Some(item) => {
+						var k = *item.key;
+						var v = _clone_deep_impl(item.value);
+						out.insert(move k, move v);
+					},
+					None => { break; }
+				}
+			}
+			return JsonNode::Object(move out);
+		},
+		default => { return JsonNode::Null(); }
+	}
 }
