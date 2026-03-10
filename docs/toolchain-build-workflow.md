@@ -40,13 +40,18 @@ The goal is to confirm your environment can run the full Drift pipeline (parser/
 
 ### 1.1 Install prerequisites (Linux)
 
+Install these host packages up front for a normal full build/test workflow:
+
 - Python 3.13+
-- LLVM/Clang (repo notes currently recommend clang-15)
+- `python3-venv`
 - `just`
-- `ripgrep` (`rg`) (required by `just build` / `dist-publish-stdlib` stdlib source-file enumeration)
+- LLVM/Clang (`clang` on PATH; clang-20 recommended)
 - `pkg-config`
+- `binutils-gold` (`ld.gold`)
 - `libdw-dev`, `libunwind-dev`, `libelf-dev`
-- Optional: `ld.gold`
+- `ripgrep` (`rg`) (needed by stdlib package build/publish recipes)
+
+Then create the venv, install Python deps, and run `just deps-check` as the final wiring check.
 
 ### 1.2 Create virtualenv and install Python deps
 
@@ -54,6 +59,13 @@ The goal is to confirm your environment can run the full Drift pipeline (parser/
 python3 -m venv .venv
 ./.venv/bin/python3 -m pip install -U pip
 ./.venv/bin/python3 -m pip install -r requirements.txt
+```
+
+If you want the repo tasks to use a specific clang explicitly, set:
+
+```bash
+export CLANG_BIN=clang-20
+export CLANG=clang-20
 ```
 
 ### 1.3 Quick CLI sanity
@@ -68,6 +80,8 @@ $DRIFT_TOOL --help
 ```bash
 just deps-check
 ```
+
+If `deps-check` still reports something missing after the package list above, install the missing host dependency and rerun it before moving on.
 
 ### 1.5 Run complete compiler + codegen test flow
 

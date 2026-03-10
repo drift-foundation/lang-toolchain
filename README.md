@@ -50,9 +50,9 @@ Drift is a systems programming language focused on deterministic resource manage
 - Development history: [docs/history.md](docs/history.md)
 - Project TODO/roadmap: [TODO.md](TODO.md)
 - Toolchain:
-  - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM 15).
+  - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM).
   - `just test-e2e` — runs e2e programs through the SSA backend and compares outputs.
-  - `just mir-codegen` — lowers simple MIR samples to an object, links with clang-15, and runs the binary.
+  - `just mir-codegen` — lowers simple MIR samples to an object, links with clang, and runs the binary.
   - `lang/codegen/codegen_runner.py` — next compiler e2e runner using `lang.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/lang-e2e` by default (configurable with `--root`).
 
 ## Quick Tour
@@ -122,11 +122,14 @@ just mir-codegen
 Build/test requirements (Linux):
 
 - Python 3.13+
-- LLVM/Clang (clang-15 recommended)
-- Gold linker (`ld.gold`) for `--gdb-index` support (optional)
+- `python3-venv`
+- LLVM/Clang (`clang` on PATH; clang-20 recommended)
 - `just` (task runner)
-- `ripgrep` (`rg`) for stdlib package publish/build recipes
 - `pkg-config`
-- `libdw-dev` (elfutils), `libunwind-dev`, `libelf-dev` (runtime stack traces)
+- `binutils-gold` (`ld.gold`)
+- `libdw-dev` (elfutils), `libunwind-dev`, `libelf-dev`
+- `ripgrep` (`rg`) for stdlib package publish/build recipes
+
+After installing those, create the venv and run `just deps-check` to verify the machine is fully wired for the current runtime/test flow.
 
 See the full language specification in [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md).
