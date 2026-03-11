@@ -146,7 +146,7 @@ def _run_ir_with_clang(
 	fiber_suppressions_enabled: bool = False,
 ) -> tuple[int, str, str]:
 	"""Compile the provided LLVM IR with clang and return (exit, stdout, stderr)."""
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		return 1, "", "clang not available"
 

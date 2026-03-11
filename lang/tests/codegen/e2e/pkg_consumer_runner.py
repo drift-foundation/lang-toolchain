@@ -241,7 +241,7 @@ def _link_and_run(
 	Returns (link_error, exit_code, stdout, stderr).
 	link_error is None on success, otherwise a string describing the failure.
 	"""
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		return "clang not available", 1, "", ""
 

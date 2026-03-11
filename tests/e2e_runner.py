@@ -27,7 +27,7 @@ def _have_llvmlite() -> bool:
 
 
 def _find_clang() -> str | None:
-    for name in ("clang-15", "clang"):
+    for name in ("clang",):
         path = shutil.which(name)
         if path:
             return path

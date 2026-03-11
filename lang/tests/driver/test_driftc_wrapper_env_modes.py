@@ -111,7 +111,7 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 			os.environ.pop("DRIFT_ASAN", None)
 		else:
 			os.environ["DRIFT_ASAN"] = "1"
-		clang = subprocess.run(["/bin/bash", "-lc", "command -v clang-15 || command -v clang"], text=True, capture_output=True).stdout.strip()
+		clang = subprocess.run(["/bin/bash", "-lc", "command -v clang"], text=True, capture_output=True).stdout.strip()
 		assert clang
 		build_runtime_archive(_repo_root(), clang=clang, variant=variant)
 	finally:
@@ -174,7 +174,7 @@ def test_optimized_flag_adds_o2_to_clang(tmp_path: Path) -> None:
 	)
 	out = tmp_path / "a.out"
 	cache_dir = tmp_path / "runtime_cache"
-	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang-15 || command -v clang"], text=True, capture_output=True).stdout.strip()
+	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang"], text=True, capture_output=True).stdout.strip()
 	assert clang
 	prev_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
 	try:
@@ -218,7 +218,7 @@ def test_optimized_debug_info_override(tmp_path: Path) -> None:
 	)
 	out = tmp_path / "a.out"
 	cache_dir = tmp_path / "runtime_cache"
-	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang-15 || command -v clang"], text=True, capture_output=True).stdout.strip()
+	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang"], text=True, capture_output=True).stdout.strip()
 	assert clang
 	prev_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
 	try:
@@ -251,7 +251,7 @@ def test_optimized_runtime_archive_variant() -> None:
 
 
 def test_build_runtime_archive_optimized(tmp_path: Path) -> None:
-	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang-15 || command -v clang"], text=True, capture_output=True).stdout.strip()
+	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang"], text=True, capture_output=True).stdout.strip()
 	assert clang
 	prev_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
 	cache_dir = tmp_path / "runtime_cache"

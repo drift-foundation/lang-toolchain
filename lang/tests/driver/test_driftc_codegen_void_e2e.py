@@ -20,7 +20,7 @@ BUILD_ROOT = Path("build/tests/lang/driftc_codegen_void")
 
 
 def _run_ir_with_clang(ir: str) -> int:
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		raise RuntimeError("clang not available")
 

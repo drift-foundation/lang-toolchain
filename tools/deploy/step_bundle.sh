@@ -85,7 +85,7 @@ interpreter and all third-party dependencies.
 Verify your environment:
 
 ```bash
-clang --version   # or clang-15 --version
+clang --version
 ```
 
 ## Quick start

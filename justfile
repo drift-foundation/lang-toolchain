@@ -1,6 +1,6 @@
 set shell := ["bash", "-lc"]
 set quiet
-CLANG_BIN := "clang-15"
+CLANG_BIN := "clang"
 PYTEST_AUTO_JOBS := `PYTHONPATH=. ./.venv/bin/python3 tools/pytest_jobs.py`
 
 # Default task: run deps check then full staged compiler tests.
@@ -191,7 +191,7 @@ lang-codegen-test-pex:
 		echo "  install: ./.venv/bin/pip install pex" >&2
 		exit 1
 	fi
-	CLANG="$(command -v clang-15 2>/dev/null || command -v clang 2>/dev/null || true)"
+	CLANG="$(command -v clang 2>/dev/null || true)"
 	if [[ -z "${CLANG}" ]]; then
 		echo "error: clang not found in PATH" >&2
 		exit 1
@@ -343,10 +343,10 @@ runtime-libs CLANG="":
 	set -euo pipefail
 	clang_bin="{{CLANG}}"
 	if [[ -z "${clang_bin}" ]]; then
-		clang_bin="$(command -v clang-15 || command -v clang || true)"
+		clang_bin="$(command -v clang || true)"
 	fi
 	if [[ -z "${clang_bin}" ]]; then
-		echo "clang not found (pass CLANG=... or install clang/clang-15)" >&2
+		echo "clang not found (pass CLANG=... or install clang)" >&2
 		exit 1
 	fi
 	DRIFT_RUNTIME_CLANG="${clang_bin}" PYTHONPATH=. ./.venv/bin/python3 -c "from pathlib import Path; import os; from lang.language_runtime import build_runtime_archive; root=Path('.').resolve(); clang=os.environ['DRIFT_RUNTIME_CLANG']; [print(build_runtime_archive(root, clang=clang, variant=v)) for v in ('default','debug','asan','alloc_track','optimized')]"

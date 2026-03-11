@@ -166,7 +166,7 @@ def _build_pex_binary(dist: Path) -> None:
 
 def _bundle_compiler_sources(dist: Path) -> None:
 	"""Run step_bundle.sh to populate lib/compiler/ and lib/runtime/."""
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not found"
 	env = dict(os.environ)
 	env["REPO_ROOT"] = str(ROOT)

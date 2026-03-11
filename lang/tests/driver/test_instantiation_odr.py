@@ -49,7 +49,7 @@ def _read_inst_index(path: Path) -> list[dict[str, object]]:
 
 
 def _compile_ir_with_clang(ir_path: Path, bin_path: Path) -> None:
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		raise RuntimeError("clang not available")
 	res = subprocess.run(

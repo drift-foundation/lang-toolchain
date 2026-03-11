@@ -32,37 +32,9 @@ ROOT = Path(__file__).resolve().parents[4]
 CASE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 STDLIB_DIR = ROOT / "stdlib"
 
-# Cases that rely on in-process-only features and cannot pass through the CLI.
-# These are not PEX-specific; they also fail with bin/driftc.
-#   - test_build_only:  stdlib test-only methods (__test_validate, etc.)
-#   - cli_codegen_gap:  compile_to_llvm_ir_for_tests differs from CLI IR
-#   - unexported_sym:   uses internal/unexported stdlib symbols
-#   - parser_gap:       parser path differs between in-process and CLI
-CLI_KNOWN_SKIP: set[str] = {
-	# test_build_only methods not visible via CLI
-	"array_range_swap_invalidated",
-	"deque_range_swap_invalidated",
-	"treemap_rb_invariants",
-	"treemap_rb_stress",
-	# in-process codegen differs from CLI codegen
-	"borrow_nll_branch_field_write_ok",
-	"borrow_nll_disjoint_field_after_branch_ok",
-	"borrow_nll_loop_borrow_does_not_leak",
-	# multi-file cycle cases need all sources, runner passes only main.drift
-	"cycle_direct",
-	"cycle_indirect_3way",
-	# parser differences between in-process and CLI
-	"import_shadowing_local_decl",
-	"local_fn_then_import_conflict",
-	# uses unexported stdlib symbols
-	"std_io_block_on_read_timeout",
-	"std_io_block_on_write_timeout",
-	"std_io_nonblocking_wouldblock",
-	"std_io_read_wouldblock_then_success",
-	"std_io_stdin_line_edge_matrix",
-	# diagnostic depends on path-inferred module ID
-	"module_id_invalid_inferred_from_path",
-}
+# Cases that cannot pass through the CLI path.
+# Goal: keep this set empty.  Any entry here needs a documented reason.
+CLI_KNOWN_SKIP: set[str] = set()
 
 
 # ── Link + run helpers ──────────────────────────────────────────────
@@ -87,7 +59,7 @@ def _link_and_run(
 		runtime_archive_variant,
 	)
 
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		return "clang not found", 1, "", ""
 
@@ -239,7 +211,13 @@ def _run_case(
 	if not drift_files:
 		return case_name, "skipped (no sources)"
 
-	has_diags = bool(expected.get("diagnostics"))
+	# Distinguish three cases:
+	# - diagnostics key absent → compile+run case (verify binary output)
+	# - diagnostics key is [] → compile-success-only (verify zero diagnostics, no binary run)
+	# - diagnostics key is [...] → diagnostic case (verify specific diagnostics)
+	raw_diags = expected.get("diagnostics")
+	has_diags = raw_diags is not None and len(raw_diags) > 0
+	compile_only = raw_diags is not None and len(raw_diags) == 0
 	expected_exit = expected.get("exit_code", 0)
 	module_paths = expected.get("module_paths") or []
 	run_args = expected.get("args", [])
@@ -261,9 +239,11 @@ def _run_case(
 	# ── Build compile command ───────────────────────────────────
 	cmd: list[str] = [driftc_bin]
 
-	# Module paths — only use workspace mode (-M) when sources have
-	# module declarations; files without declarations use single-file mode.
-	if has_module_decl:
+	# Module paths — use workspace mode (-M) when sources have module
+	# declarations, OR when expected.json explicitly specifies module_paths
+	# (diagnostic cases may intentionally lack declarations to test that
+	# the compiler rejects them in workspace mode).
+	if has_module_decl or (has_diags and module_paths):
 		for mp in module_paths:
 			cmd.extend(["-M", str(case_dir / mp)])
 		if not module_paths:
@@ -272,7 +252,7 @@ def _run_case(
 	# Always provide stdlib source root — even cases that don't explicitly
 	# import std.* need the prelude for builtin methods (byte_length, etc.).
 	cmd.extend(["--stdlib-root", str(STDLIB_DIR)])
-	cmd.append("--dev")
+	cmd.extend(["--dev", "--test-build-only"])
 	if has_module_decl:
 		cmd.extend(["--entry", f"{mod_name}::main"])
 	cmd.extend(compiler_flags)
@@ -321,6 +301,29 @@ def _run_case(
 
 		return case_name, "ok"
 
+	# ── Compile-success-only cases (diagnostics: []) ───────────
+	# The in-process runner short-circuits when expected diagnostics is an
+	# empty list — it verifies compilation succeeds with zero diagnostics
+	# and never runs the binary.  Mirror that behavior here.
+	if compile_only:
+		compile_check_cmd = list(cmd) + ["--json", *drift_files]
+		try:
+			res = subprocess.run(compile_check_cmd, capture_output=True, text=True, timeout=case_timeout, env=compile_env)
+		except subprocess.TimeoutExpired:
+			return case_name, "FAIL (compile timeout)"
+		try:
+			payload = json.loads(res.stdout) if res.stdout.strip() else {}
+		except json.JSONDecodeError:
+			payload = {}
+		actual_exit = payload.get("exit_code", res.returncode)
+		if actual_exit != expected_exit:
+			return case_name, f"FAIL (compile exit {actual_exit} != expected {expected_exit})"
+		diags = payload.get("diagnostics", [])
+		if diags:
+			msg = "; ".join(d.get("message", "") for d in diags[:3])
+			return case_name, f"FAIL (unexpected diagnostics: {msg[:200]})"
+		return case_name, "ok"
+
 	# ── Compile-to-IR cases ─────────────────────────────────────
 	ir_path = case_build / "out.ll"
 	cmd.extend(["--emit-ir", str(ir_path), "--json", *drift_files])
@@ -331,6 +334,16 @@ def _run_case(
 		return case_name, "FAIL (compile timeout)"
 
 	if res.returncode != 0:
+		# Cases that expect compile failure (exit_code != 0 with no diagnostics
+		# key) are satisfied by any non-zero compile exit code.
+		if expected_exit != 0 and not has_diags:
+			try:
+				payload = json.loads(res.stdout) if res.stdout.strip() else {}
+			except json.JSONDecodeError:
+				payload = {}
+			actual_exit = payload.get("exit_code", res.returncode)
+			if actual_exit == expected_exit:
+				return case_name, "ok"
 		try:
 			payload = json.loads(res.stdout) if res.stdout.strip() else {}
 		except json.JSONDecodeError:

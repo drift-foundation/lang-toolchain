@@ -128,7 +128,7 @@ fn main() nothrow -> Int {
 def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not found"
 
 	# Build PEX executable first.

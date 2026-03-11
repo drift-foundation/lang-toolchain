@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _find_clang() -> str | None:
-    for name in ("clang-15", "clang"):
+    for name in ("clang",):
         path = shutil.which(name)
         if path:
             return path

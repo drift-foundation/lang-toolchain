@@ -9663,7 +9663,7 @@ def main(argv: list[str] | None = None) -> int:
 			print(json.dumps({"exit_code": 0, "diagnostics": []}))
 		return 0
 
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		msg = "clang not available for code generation"
 		if args.json:

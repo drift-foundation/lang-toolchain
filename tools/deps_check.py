@@ -39,9 +39,9 @@ def main() -> int:
 	ap.add_argument("--quiet", action="store_true", help="suppress success output")
 	args = ap.parse_args()
 
-	clang = _check_cmd("clang-15") or _check_cmd("clang")
+	clang = _check_cmd("clang")
 	if clang is None:
-		return _fail("clang (clang-15 preferred) not found in PATH")
+		return _fail("clang not found in PATH")
 
 	if _check_cmd("pkg-config") is None:
 		return _fail("pkg-config not found in PATH")

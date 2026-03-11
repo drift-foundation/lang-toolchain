@@ -13,7 +13,7 @@ Each test case lives under `lang/codegen/ir_cases/<case>/` and should contain:
 
 Build artifacts are written to `build/tests/lang/<case>/` to keep them
 isolated from lang/ tests. The runner compiles `ir.ll` with clang (env
-`CLANG_BIN`, default clang-15, then clang) and compares exit/stdout/stderr.
+`CLANG_BIN`, default clang) and compares exit/stdout/stderr.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ Run a single codegen IR case:
 	if not ir_path.exists():
 		return "FAIL (missing ir.ll; wire codegen to emit it)"
 
-	clang_bin: Optional[str] = os.environ.get("CLANG_BIN") or "clang-15"
+	clang_bin: Optional[str] = os.environ.get("CLANG_BIN") or "clang"
 	clang = shutil.which(clang_bin) or shutil.which("clang")
 	if clang is None:
 		return "FAIL (clang not found)"

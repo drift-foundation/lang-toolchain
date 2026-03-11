@@ -22,7 +22,7 @@ BUILD_ROOT = Path("build/tests/lang/driftc_codegen_scalar")
 
 def _run_ir_with_clang(ir: str) -> int:
 	"""Compile the provided LLVM IR with clang and return the process exit code."""
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		raise RuntimeError("clang not available")
 

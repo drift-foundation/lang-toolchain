@@ -27,7 +27,7 @@ def _write_file(path: Path, text: str) -> None:
 def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp_path: Path) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not found"
 	env = dict(os.environ)
 	env["REPO_ROOT"] = str(ROOT)

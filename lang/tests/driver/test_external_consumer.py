@@ -576,7 +576,7 @@ def test_ext_package_consumer_e2e(
 	assert "define i32 @main" in ir, "package-consumer IR must contain a C main entry point"
 
 	# ── Stage 2: Link ────────────────────────────────────────────────
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		pytest.skip("clang not available for link+run stage")
 
@@ -727,7 +727,7 @@ fn main() nothrow -> Int {
 	assert not undefined, f"undefined symbols in IR: {undefined}"
 
 	# Link + run.
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	if clang is None:
 		pytest.skip("clang not available for link+run stage")
 

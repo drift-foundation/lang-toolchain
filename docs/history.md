@@ -1,5 +1,13 @@
 # Drift development history
 
+## 2026-03-11
+- Completed PEX CLI parity follow-up for the codegen/e2e path:
+  - removed the remaining `CLI_KNOWN_SKIP` cases so the PEX CLI runner now reaches full parity for the supported fleet,
+  - corrected the `cycle_direct` and `cycle_indirect_3way` fixtures so they assert real `import cycle detected` diagnostics instead of accidentally passing on case-sensitive export-name errors,
+  - confirmed the cycle cases pass in both the in-process runner and the PEX CLI runner with the intended parser diagnostics.
+- Current parity snapshot: `999 passed`, `14 skipped`, `0 failed`; the remaining skips are non-parity paths (`use_driftc_json=false`, `package_consumer_only`), not CLI gaps.
+- Bumped compiler version to `0.27.27-dev`; ABI remains `5`.
+
 ## 2026-03-10
 - Switched deploy packaging to a `PEX --scie eager` compiler entrypoint:
   - `just deploy` now builds a self-contained `bin/driftc` executable instead of publishing the shell-wrapper plus `lib/python_vendor` layout,

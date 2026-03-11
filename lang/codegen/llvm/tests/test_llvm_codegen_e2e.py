@@ -32,7 +32,7 @@ def _run_ir_and_get_exit(ir: str) -> int:
 	"""
 	BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 
-	clang_bin: Optional[str] = os.environ.get("CLANG_BIN") or "clang-15"
+	clang_bin: Optional[str] = os.environ.get("CLANG_BIN") or "clang"
 	clang = shutil.which(clang_bin) or shutil.which("clang")
 	if clang is None:
 		raise RuntimeError("clang not available")

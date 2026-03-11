@@ -154,7 +154,7 @@ echo "[deploy] commit:   ${GIT_COMMIT}"
 echo "[deploy] dest:     ${DEST}/${VERSION_DIR}"
 
 # ── Prerequisite checks ──────────────────────────────────────────────
-export CLANG="$(command -v clang-15 2>/dev/null || command -v clang 2>/dev/null || true)"
+export CLANG="$(command -v clang 2>/dev/null || true)"
 if [[ -z "${CLANG}" ]]; then
 	echo "error: clang not found in PATH" >&2
 	exit 1

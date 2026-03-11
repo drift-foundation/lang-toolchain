@@ -1,5 +1,11 @@
 {
   "description": "e2e: cycle direct",
   "exit_code": 1,
-  "phase": "parser"
+  "phase": "parser",
+  "diagnostics": [
+    {
+      "phase": "parser",
+      "message_contains": "import cycle detected"
+    }
+  ]
 }

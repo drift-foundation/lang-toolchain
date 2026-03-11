@@ -270,7 +270,7 @@ def test_abi_version_mismatch_link_failure(tmp_path: Path) -> None:
 	)
 	assert bogus_sym in patched_ir
 
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not available"
 
 	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
@@ -321,7 +321,7 @@ def test_abi_mismatch_driver_hint(tmp_path: Path) -> None:
 	#
 	# Instead, verify the Phase C detection predicate against real linker
 	# stderr produced by the mismatch test above.
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not available"
 	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
@@ -445,7 +445,7 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 	"""Provenance string must be discoverable in the linked binary via strings(1)."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
-	clang = shutil.which("clang-15") or shutil.which("clang")
+	clang = shutil.which("clang")
 	assert clang, "clang not available"
 	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
