@@ -10,10 +10,11 @@
 #   DEST/current -> drift-<VERSION>+abi<ABI>  (atomic symlink)
 #
 # Steps (each is a standalone script under tools/deploy/):
-#   1. step_bundle.sh    — stage compiler, runtime, wrapper, docs
-#   2. step_stdlib_pkg.sh — build + sign stdlib package, core trust store
-#   3. step_smoke.sh     — compile + run smoke test using deployed paths
-#   4. step_publish.sh   — atomic publish + symlink switch
+#   1. step_build_pex.sh  — build PEX --scie eager executable (bin/driftc)
+#   2. step_bundle.sh     — stage compiler sources, runtime archives, docs
+#   3. step_stdlib_pkg.sh — build + sign stdlib package, core trust store
+#   4. step_smoke.sh      — compile + run smoke test using deployed paths
+#   5. step_publish.sh    — atomic publish + symlink switch
 #
 # Requires DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD for stdlib signing.
 set -euo pipefail
@@ -152,10 +153,18 @@ echo "[deploy] abi:      ${ABI_VERSION}"
 echo "[deploy] commit:   ${GIT_COMMIT}"
 echo "[deploy] dest:     ${DEST}/${VERSION_DIR}"
 
-# ── Detect clang ──────────────────────────────────────────────────────
+# ── Prerequisite checks ──────────────────────────────────────────────
 export CLANG="$(command -v clang-15 2>/dev/null || command -v clang 2>/dev/null || true)"
 if [[ -z "${CLANG}" ]]; then
-	echo "error: clang not found" >&2
+	echo "error: clang not found in PATH" >&2
+	exit 1
+fi
+
+PEX_CMD="${REPO_ROOT}/.venv/bin/pex"
+if [[ ! -x "${PEX_CMD}" ]]; then
+	echo "error: pex not found at ${PEX_CMD}" >&2
+	echo "  install into the project venv:" >&2
+	echo "    ./.venv/bin/pip install pex" >&2
 	exit 1
 fi
 
@@ -180,6 +189,7 @@ export REPO_ROOT
 export DEST
 
 # ── Steps ─────────────────────────────────────────────────────────────
+"${DEPLOY_DIR}/step_build_pex.sh"
 "${DEPLOY_DIR}/step_bundle.sh"
 "${DEPLOY_DIR}/step_stdlib_pkg.sh"
 "${DEPLOY_DIR}/step_smoke.sh"

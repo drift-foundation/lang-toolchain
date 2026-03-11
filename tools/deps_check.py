@@ -87,6 +87,11 @@ def main() -> int:
 		if "#0" not in stderr and "drift_assert_loc" not in stderr:
 			return _fail("stacktrace missing; no frame output detected")
 
+	# pex — required for deploy (PEX --scie eager packaging).
+	venv_pex = ROOT / ".venv" / "bin" / "pex"
+	if not venv_pex.exists():
+		_warn("pex not installed in .venv (needed for deploy); install: ./.venv/bin/pip install pex")
+
 	if not args.quiet:
 		print("deps-check: ok")
 	return 0

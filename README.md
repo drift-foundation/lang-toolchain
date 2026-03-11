@@ -129,6 +129,7 @@ Build/test requirements (Linux):
 - `binutils-gold` (`ld.gold`)
 - `libdw-dev` (elfutils), `libunwind-dev`, `libelf-dev`
 - `ripgrep` (`rg`) for stdlib package publish/build recipes
+- `pex` (Python package; deploy only) — install into the project venv: `./.venv/bin/pip install pex`
 
 After installing those, create the venv and run `just deps-check` to verify the machine is fully wired for the current runtime/test flow.
 

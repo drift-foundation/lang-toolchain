@@ -1,15 +1,21 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import stat
 import subprocess
-import base64
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+_skip_no_pex = pytest.mark.skipif(
+	shutil.which("pex") is None and not (ROOT / ".venv" / "bin" / "pex").exists(),
+	reason="pex not installed; deployed bundle requires PEX --scie eager",
+)
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -17,19 +23,7 @@ def _write_file(path: Path, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
-def _write_no_site_python(tmp_path: Path) -> Path:
-	shim = tmp_path / "python-no-site.sh"
-	_write_file(
-		shim,
-		"""#!/usr/bin/env bash
-set -euo pipefail
-exec python3 -S "$@"
-""",
-	)
-	shim.chmod(0o755)
-	return shim
-
-
+@_skip_no_pex
 def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp_path: Path) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
@@ -38,12 +32,24 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp
 	env = dict(os.environ)
 	env["REPO_ROOT"] = str(ROOT)
 	env["DIST"] = str(dist)
-	env["CLANG"] = clang
 	env["STAGE"] = str(tmp_path / "stage")
 	env["DRIFTC_VERSION"] = "0.0.0-test"
 	key_path = tmp_path / "deploy.key"
 	key_path.write_text(base64.b64encode(os.urandom(32)).decode("ascii") + "\n", encoding="utf-8")
 	env["DRIFT_SIGN_KEY_FILE"] = str(key_path)
+	env["CLANG"] = clang
+
+	# Build PEX executable first.
+	pex_build = subprocess.run(
+		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
+		text=True,
+		capture_output=True,
+		env=env,
+		timeout=300,
+	)
+	assert pex_build.returncode == 0, pex_build.stderr
+
+	# Bundle compiler sources and runtime archives.
 	bundle = subprocess.run(
 		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_bundle.sh")],
 		text=True,
@@ -79,12 +85,12 @@ fn main() nothrow -> Int {
 		else:
 			path.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
-	no_site_python = _write_no_site_python(tmp_path)
 	run_env = dict(os.environ)
-	run_env["DRIFT_PYTHON"] = str(no_site_python)
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+		run_env.pop(key, None)
+	run_env["HOME"] = str(tmp_path / "home")
 	result = subprocess.run(
 		[
-			"/bin/bash",
 			str(dist / "bin" / "driftc"),
 			"--target-word-bits", "64",
 			"-M", str(tmp_path),

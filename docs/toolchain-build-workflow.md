@@ -53,6 +53,12 @@ Install these host packages up front for a normal full build/test workflow:
 
 Then create the venv, install Python deps, and run `just deps-check` as the final wiring check.
 
+For **deploy** (`just deploy`), you also need `pex` in the project venv:
+
+```bash
+./.venv/bin/pip install pex
+```
+
 ### 1.2 Create virtualenv and install Python deps
 
 ```bash

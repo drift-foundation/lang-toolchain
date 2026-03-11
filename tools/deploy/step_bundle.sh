@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploy step: bundle compiler, runtime, wrapper, docs, examples into staged tree.
+# Deploy step: bundle compiler sources, PEX executable, runtime archives, docs,
+# and examples into staged tree.
 #
 # Inputs (env):
 #   REPO_ROOT       — repository root
@@ -7,20 +8,28 @@
 #   CLANG           — path to clang binary
 #
 # Creates the staged layout under DIST with everything except stdlib package.
+# The PEX --scie eager executable is built by step_build_pex.sh (called from
+# the orchestrator before this step).
 set -euo pipefail
 
 : "${REPO_ROOT:?}"
 : "${DIST:?}"
 : "${CLANG:?}"
 
-mkdir -p "${DIST}/bin" "${DIST}/lib/runtime" "${DIST}/lib/compiler" "${DIST}/lib/stdlib" \
-         "${DIST}/lib/python_vendor" "${DIST}/doc" "${DIST}/examples"
+mkdir -p "${DIST}/lib/runtime" "${DIST}/lib/compiler" "${DIST}/lib/stdlib" \
+         "${DIST}/doc" "${DIST}/examples"
 
-# bin/ — wrapper
-cp "${REPO_ROOT}/tools/deploy/driftc-wrapper.sh" "${DIST}/bin/driftc"
-chmod +x "${DIST}/bin/driftc"
+# bin/driftc — PEX --scie eager executable is built by step_build_pex.sh.
+# Verify it exists.
+if [[ ! -x "${DIST}/bin/driftc" ]]; then
+	echo "error: ${DIST}/bin/driftc not found; step_build_pex.sh must run first" >&2
+	exit 1
+fi
 
-# lib/compiler/ — compiler Python sources (lang/ tree)
+# lib/compiler/ — compiler Python sources (lang/ tree) + non-Python assets.
+# These remain on-disk so __file__-relative lookups (grammar.lark,
+# core_trust.json, C/H/S runtime sources) resolve correctly.  The PEX entry
+# point adds this directory to sys.path at runtime.
 for pkg in lang/driftc lang/codegen lang/compiler_infra lang/language_runtime; do
 	src="${REPO_ROOT}/${pkg}"
 	dst="${DIST}/lib/compiler/${pkg}"
@@ -34,6 +43,7 @@ for pkg in lang/driftc lang/codegen lang/compiler_infra lang/language_runtime; d
 	fi
 done
 touch "${DIST}/lib/compiler/lang/__init__.py"
+# C/H/S sources for runtime archive builds (needed if re-compiling in source mode).
 (cd "${REPO_ROOT}" && find lang/language_runtime lang/compiler_infra \
 	\( -name '*.c' -o -name '*.h' -o -name '*.S' \) -print0 | \
 	while IFS= read -r -d '' f; do
@@ -41,11 +51,6 @@ touch "${DIST}/lib/compiler/lang/__init__.py"
 		mkdir -p "$(dirname "${target}")"
 		cp "${f}" "${target}"
 	done)
-
-# lib/python_vendor/ — bundled third-party Python runtime deps
-(cd "${REPO_ROOT}" && PYTHONPATH=. ./.venv/bin/python3 tools/deploy/vendor_python_deps.py \
-	--dest "${DIST}/lib/python_vendor" \
-	lark llvmlite cryptography)
 
 # lib/runtime/ — pre-built archives for all variants
 for variant in default debug asan alloc_track optimized; do
@@ -67,21 +72,21 @@ cat > "${DIST}/doc/README.md" <<'DOC_EOF'
 
 ## Prerequisites
 
-The Drift compiler requires these host tools:
+The Drift compiler requires:
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Python 3 | 3.10+ | Compiler runtime |
 | clang | 15+ | Linker / native codegen |
+
+No host Python installation is required — the deployed `bin/driftc` is a
+self-contained PEX --scie eager executable that embeds its own Python
+interpreter and all third-party dependencies.
 
 Verify your environment:
 
 ```bash
-python3 --version
 clang --version   # or clang-15 --version
 ```
-
-Set `DRIFT_PYTHON` to override which Python interpreter the compiler uses.
 
 ## Quick start
 
@@ -93,10 +98,13 @@ driftc my_program.drift -o my_program
 
 ## Using the compiler
 
-`bin/driftc` is a wrapper that locates the stdlib package, vendored Python
-dependencies, and runtime archives relative to its own path. No repo checkout,
-ambient `pip install`, or PYTHONPATH setup is needed — only the prerequisites
-above.
+`bin/driftc` is a PEX --scie eager executable that bundles:
+- An embedded CPython interpreter
+- All third-party Python dependencies (lark, llvmlite, cryptography)
+
+The compiler sources, runtime archives, and signed stdlib package live in
+`lib/` and are resolved relative to the executable's path.  No repo checkout,
+ambient `pip install`, or PYTHONPATH setup is needed — only clang.
 
 ### Stdlib integrity
 
@@ -119,9 +127,9 @@ Tampered or unsigned stdlib packages are rejected.
 
 | Variable | Purpose |
 |----------|---------|
-| `DRIFT_PYTHON` | Override Python interpreter (default: `python3`) |
 | `DRIFT_ASAN` | Set to `1` to link with AddressSanitizer runtime |
 | `DRIFT_TRUST_STORE` | Path to trust store JSON for user/third-party packages |
+| `SCIE_BASE` | Override scie cache directory (default: `~/.cache/nce`) |
 
 ## ABI compatibility
 
@@ -146,14 +154,21 @@ export PATH="<dest>/drift-0.27.0-dev+abi3/bin:$PATH"
 
 ## Deploy semantics
 
-`deploy.sh` orchestrates four step scripts:
+`deploy.sh` orchestrates five step scripts:
 
-1. `step_bundle.sh` — copy compiler, runtime, wrapper, docs into staged tree
-2. `step_stdlib_pkg.sh` — build, sign, and install stdlib package + core trust store
-3. `step_smoke.sh` — compile and run smoke test using only deployed paths
-4. `step_publish.sh` — atomically publish staged tree and switch `current` symlink
+1. `step_build_pex.sh` — build PEX --scie eager executable
+2. `step_bundle.sh` — copy compiler sources, runtime archives, docs into staged tree
+3. `step_stdlib_pkg.sh` — build, sign, and install stdlib package + core trust store
+4. `step_smoke.sh` — compile and run smoke test using only deployed paths
+5. `step_publish.sh` — atomically publish staged tree and switch `current` symlink
 
 If any step fails, deploy exits non-zero and does not publish a partial install.
+
+## First-run scie extraction
+
+On first invocation, the scie executable extracts its embedded Python
+interpreter to a per-user cache (`~/.cache/nce/` by default).  Subsequent
+runs reuse the cache.  Override the cache location with `SCIE_BASE`.
 DOC_EOF
 
 # examples/

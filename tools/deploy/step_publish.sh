@@ -42,6 +42,7 @@ cat > "${DIST}/lib/manifest.json" <<MANIFEST_EOF
   "build_utc": "${BUILD_UTC:-unknown}",
   "host_platform": "${HOST_PLATFORM:-unknown}",
   "host_arch": "${HOST_ARCH:-unknown}",
+  "entrypoint": "pex-scie-eager",
   "runtime_variants": [${RUNTIME_VARIANTS}]
 }
 MANIFEST_EOF

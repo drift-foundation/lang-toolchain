@@ -17,8 +17,14 @@ from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.packages.signature_v0 import compute_ed25519_kid
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+_skip_no_pex = pytest.mark.skipif(
+	shutil.which("pex") is None and not (ROOT / ".venv" / "bin" / "pex").exists(),
+	reason="pex not installed; deployed bundle requires PEX --scie eager",
+)
 
 
 def _b64(data: bytes) -> str:
@@ -118,27 +124,27 @@ fn main() nothrow -> Int {
 	return src
 
 
-def _write_no_site_python(tmp_path: Path) -> Path:
-	shim = tmp_path / "python-no-site.sh"
-	_write_file(
-		shim,
-		f"""#!/usr/bin/env bash
-set -euo pipefail
-exec {sys.executable} -S "$@"
-""",
-	)
-	shim.chmod(0o755)
-	return shim
-
-
+@_skip_no_pex
 def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
 	clang = shutil.which("clang-15") or shutil.which("clang")
 	assert clang, "clang not found"
+
+	# Build PEX executable first.
 	env = dict(os.environ)
 	env["REPO_ROOT"] = str(ROOT)
 	env["DIST"] = str(dist)
+	pex_build = subprocess.run(
+		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
+		text=True,
+		capture_output=True,
+		env=env,
+		timeout=300,
+	)
+	assert pex_build.returncode == 0, pex_build.stderr
+
+	# Bundle compiler sources and runtime archives.
 	env["CLANG"] = clang
 	bundle = subprocess.run(
 		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_bundle.sh")],
@@ -162,13 +168,13 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) 
 
 	src = _write_consumer(tmp_path)
 	out_ir = tmp_path / "out.ll"
-	no_site_python = _write_no_site_python(tmp_path)
+	# Run with stripped environment — no ambient Python packages.
 	run_env = dict(os.environ)
-	run_env["DRIFT_PYTHON"] = str(no_site_python)
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+		run_env.pop(key, None)
 	run_env["HOME"] = str(tmp_path / "home")
 	result = subprocess.run(
 		[
-			"/bin/bash",
 			str(dist / "bin" / "driftc"),
 			"-M", str(src.parent),
 			str(src),

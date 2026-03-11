@@ -5,9 +5,8 @@
 #   DIST            — staged distribution directory
 #   REPO_ROOT       — repository root (for smoke source)
 #   STAGE           — staging scratch directory (for temp binaries)
-#   DRIFT_PYTHON    — (optional) Python interpreter override
 #
-# Exercises the full signed-package path: wrapper → compiler → package
+# Exercises the full signed-package path: PEX entry → compiler → package
 # load → signature verification → compile → link → run.
 set -euo pipefail
 
@@ -18,18 +17,8 @@ set -euo pipefail
 SMOKE_SRC="${REPO_ROOT}/tools/deploy/smoke_test.drift"
 SMOKE_BIN="${STAGE}/smoke_test_bin"
 
-# Resolve the Python the wrapper will use (same logic as wrapper).
-SMOKE_PYTHON="${DRIFT_PYTHON:-}"
-if [[ -z "${SMOKE_PYTHON}" ]]; then
-	SMOKE_PYTHON="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-fi
-if [[ -z "${SMOKE_PYTHON}" ]]; then
-	echo "error: python3 not found; set DRIFT_PYTHON or add python3 to PATH" >&2
-	exit 1
-fi
-
-echo "[deploy] running smoke test with deployed Python bundle..."
-DRIFT_PYTHON="${SMOKE_PYTHON}" "${DIST}/bin/driftc" "${SMOKE_SRC}" -o "${SMOKE_BIN}" 2>&1 | tail -5
+echo "[deploy] running smoke test with deployed PEX executable..."
+"${DIST}/bin/driftc" "${SMOKE_SRC}" -o "${SMOKE_BIN}" 2>&1 | tail -5
 SMOKE_EXIT=0
 "${SMOKE_BIN}" > "${STAGE}/smoke_stdout" 2>&1 || SMOKE_EXIT=$?
 

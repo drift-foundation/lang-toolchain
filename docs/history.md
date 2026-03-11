@@ -1,6 +1,14 @@
 # Drift development history
 
 ## 2026-03-10
+- Switched deploy packaging to a `PEX --scie eager` compiler entrypoint:
+  - `just deploy` now builds a self-contained `bin/driftc` executable instead of publishing the shell-wrapper plus `lib/python_vendor` layout,
+  - deployed compiler use no longer requires a host Python interpreter or ambient Python packages,
+  - staged deploy validation now covers the PEX/scie artifact directly, including self-sufficiency, signed stdlib usage, read-only install-tree behavior, runtime archive linking, and symlinked entry resolution.
+- Recorded the new deployed artifact shape in the manifest/deploy metadata and updated deploy docs to reflect the embedded-interpreter model and larger artifact-size tradeoff.
+- Bumped compiler version to `0.27.26-dev`; ABI remains `5`.
+
+## 2026-03-10
 - Fixed a deploy/toolchain read-only install bug where deployed `bin/driftc` in runtime-archive mode tried to create lock/build directories under the installed `lib/runtime` tree:
   - `build_runtime_archive()` now returns an existing up-to-date `libdrift_rt.a` before creating build directories or acquiring the archive lock,
   - deployed/runtime-archive use now consumes the prebuilt archive from the install tree as a read-only input instead of treating the deployed tree as a writable cache.
