@@ -1,5 +1,4 @@
 {
   "description": "nothrow fn-ptr from phi/branch (runtime value) stored into throwing fn-typed struct field via fat fn-ptr coercion",
-  "exit_code": 0,
-  "use_driftc_json": false
+  "exit_code": 0
 }

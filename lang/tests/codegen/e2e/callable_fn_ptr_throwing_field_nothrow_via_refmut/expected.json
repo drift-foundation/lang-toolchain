@@ -1,5 +1,4 @@
 {
   "description": "nothrow fn-ptr through &mut local produces runtime value; fat fn-ptr coercion wraps via generic adapter thunk",
-  "exit_code": 0,
-  "use_driftc_json": false
+  "exit_code": 0
 }

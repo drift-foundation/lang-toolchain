@@ -10,6 +10,5 @@
       "phase": "typecheck"
     }
   ],
-  "exit_code": 1,
-  "use_driftc_json": false
+  "exit_code": 1
 }
