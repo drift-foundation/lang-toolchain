@@ -175,6 +175,44 @@ lang-codegen-test:
 	# Run Drift-source e2e cases (per-case dirs under lang/tests/codegen/e2e).
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
 
+# Run e2e codegen suite through a locally-staged PEX --scie eager artifact.
+# Builds the PEX binary + compiler layout in build/pex-staging/, then
+# runs each e2e case by invoking the PEX binary via subprocess.
+# Requires: pex (in .venv), clang.  Does not require just deploy.
+lang-codegen-test-pex:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	STAGING="$PWD/build/pex-staging"
+	rm -rf "${STAGING}"
+	mkdir -p "${STAGING}/bin"
+	PEX_CMD="./.venv/bin/pex"
+	if [[ ! -x "${PEX_CMD}" ]]; then
+		echo "error: pex not found at ${PEX_CMD}" >&2
+		echo "  install: ./.venv/bin/pip install pex" >&2
+		exit 1
+	fi
+	CLANG="$(command -v clang-15 2>/dev/null || command -v clang 2>/dev/null || true)"
+	if [[ -z "${CLANG}" ]]; then
+		echo "error: clang not found in PATH" >&2
+		exit 1
+	fi
+	echo "[pex-e2e] building PEX artifact in ${STAGING}..."
+	export REPO_ROOT="$PWD" DIST="${STAGING}" CLANG="${CLANG}"
+	bash tools/deploy/step_build_pex.sh
+	bash tools/deploy/step_bundle.sh
+	# Write a minimal empty core trust store so the PEX binary does not
+	# fail on load_core_trust_store().  The local PEX e2e uses --stdlib-root
+	# (source mode, not signed packages), so no real trust entries are needed.
+	mkdir -p "${STAGING}/lib/compiler/lang/driftc/packages"
+	printf '{"format":"drift-trust","version":0,"keys":{},"namespaces":{},"revoked":[]}' \
+		> "${STAGING}/lib/compiler/lang/driftc/packages/core_trust.json"
+	echo "[pex-e2e] running e2e suite through PEX artifact..."
+	rm -rf build/tests/pex_e2e
+	PEX_E2E_JOBS="${PEX_E2E_JOBS:-$(( $(nproc 2>/dev/null || echo 4) / 2 ))}"
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pex_e2e_runner.py \
+		--driftc "${STAGING}/bin/driftc" --summarize --blocking \
+		-j "${PEX_E2E_JOBS}"
+
 lang-gdb-test:
 	DRIFT_GDB_TEST=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/gdb/test_gdb_runner.py
 
