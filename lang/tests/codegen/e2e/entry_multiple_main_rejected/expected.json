@@ -2,12 +2,8 @@
   "description": "e2e: entry multiple main rejected",
   "diagnostics": [
     {
-      "message_contains": "duplicate entry point definition for 'main'",
-      "phase": "typecheck"
-    },
-    {
-      "message_contains": "previous definition of 'main' is here",
-      "phase": "typecheck"
+      "message_contains": "multiple source files declare module 'main'",
+      "phase": "parser"
     }
   ],
   "exit_code": 1

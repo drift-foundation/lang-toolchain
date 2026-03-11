@@ -1,6 +1,15 @@
 # Drift development history
 
 ## 2026-03-11
+- Finished PEX CLI/e2e JSON parity cleanup for the supported codegen fleet:
+  - added the missing `--emit-ir` diagnostic-path behavior in the e2e runners so entrypoint validation cases exercise the same validating pipeline stages under JSON mode,
+  - corrected reserved-namespace rejection coverage by omitting `--dev` for cases that intentionally assert reserved-module diagnostics,
+  - aligned `duplicate_main` and `entry_multiple_main_rejected` fixture expectations with the actual CLI parser-phase diagnostics,
+  - removed obsolete `use_driftc_json=false` special-casing from the historical-artifact cases that are now covered correctly through the JSON/PEX path.
+- Final PEX e2e snapshot: `1013` total, `1008` passed, `5` skipped, `0` failed; the remaining skips are the real `package_consumer_only` boundary, not parity debt.
+- Bumped compiler version to `0.27.28-dev`; ABI remains `5`.
+
+## 2026-03-11
 - Completed PEX CLI parity follow-up for the codegen/e2e path:
   - removed the remaining `CLI_KNOWN_SKIP` cases so the PEX CLI runner now reaches full parity for the supported fleet,
   - corrected the `cycle_direct` and `cycle_indirect_3way` fixtures so they assert real `import cycle detected` diagnostics instead of accidentally passing on case-sensitive export-name errors,

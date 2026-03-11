@@ -252,14 +252,27 @@ def _run_case(
 	# Always provide stdlib source root — even cases that don't explicitly
 	# import std.* need the prelude for builtin methods (byte_length, etc.).
 	cmd.extend(["--stdlib-root", str(STDLIB_DIR)])
-	cmd.extend(["--dev", "--test-build-only"])
+	# --dev bypasses reserved namespace enforcement; omit it when the case
+	# explicitly tests reserved namespace rejection (mirroring runner.py's
+	# allow_reserved logic).
+	expects_reserved = any(
+		isinstance(d, dict) and "reserved module namespace" in str(d.get("message_contains", ""))
+		for d in (raw_diags or [])
+	)
+	if not expects_reserved:
+		cmd.append("--dev")
+	cmd.append("--test-build-only")
 	if has_module_decl:
 		cmd.extend(["--entry", f"{mod_name}::main"])
 	cmd.extend(compiler_flags)
 
 	# ── Diagnostic cases ────────────────────────────────────────
 	if has_diags:
-		cmd.extend(["--json", *drift_files])
+		# Use --emit-ir so the compiler runs the full pipeline (including
+		# entrypoint validation and namespace checks that only fire during
+		# codegen).  The IR output is discarded; we only inspect diagnostics.
+		diag_ir = case_build / "diag_check.ll"
+		cmd.extend(["--emit-ir", str(diag_ir), "--json", *drift_files])
 		try:
 			res = subprocess.run(cmd, capture_output=True, text=True, timeout=case_timeout, env=compile_env)
 		except subprocess.TimeoutExpired:

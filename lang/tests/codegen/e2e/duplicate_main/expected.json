@@ -2,12 +2,8 @@
   "description": "e2e: duplicate main",
   "diagnostics": [
     {
-      "message_contains": "duplicate entry point definition for 'main'",
-      "phase": "typecheck"
-    },
-    {
-      "message_contains": "previous definition of 'main' is here",
-      "phase": "typecheck"
+      "message_contains": "duplicate function signature for 'main'",
+      "phase": "parser"
     }
   ],
   "exit_code": 1

@@ -500,12 +500,18 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 				return False
 			return True
 
+		# Use --emit-ir so the compiler runs the full pipeline (including
+		# entrypoint validation and namespace checks that only fire during
+		# codegen).  The IR output is discarded; we only inspect diagnostics.
+		diag_ir = BUILD_ROOT / case_dir.name / "diag_check.ll"
+		diag_ir.parent.mkdir(parents=True, exist_ok=True)
 		cmd = [
 			str(Path(sys.executable)),
 			"-m",
 			"lang.driftc.driftc",
 			*module_args,
 			*[str(p) for p in drift_files],
+			"--emit-ir", str(diag_ir),
 			"--json",
 		]
 		stdlib_path = stdlib_root()
