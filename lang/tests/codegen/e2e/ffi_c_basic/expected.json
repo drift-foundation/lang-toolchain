@@ -3,5 +3,6 @@
   "exit_code": 26,
   "stderr": "",
   "stdout": "",
-  "c_sources": ["helper.c"]
+  "c_sources": ["helper.c"],
+  "compiler_flags": ["--allow-unsafe"]
 }

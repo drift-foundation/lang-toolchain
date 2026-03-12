@@ -47,6 +47,7 @@ def _link_and_run(
 	argv: list[str] | None = None,
 	stdin_data: str | None = None,
 	timeout_s: int = 60,
+	extra_objects: list[Path] | None = None,
 ) -> tuple[str | None, int, str, str]:
 	"""Compile IR with clang, link with runtime archive, and run the binary.
 
@@ -106,6 +107,7 @@ def _link_and_run(
 			clang, "-pthread", *link_flags,
 			"-x", "ir", str(ir_path),
 			"-x", "none", archive,
+			*(str(o) for o in (extra_objects or [])),
 			*link_libs, "-Wl,--as-needed", "-o", str(bin_path),
 		]
 	else:
@@ -115,6 +117,7 @@ def _link_and_run(
 			"-I", str(runtime_include),
 			"-x", "ir", str(ir_path),
 			"-x", "c", *(str(p) for p in runtime_sources),
+			*(str(o) for o in (extra_objects or [])),
 			*link_libs, "-Wl,--as-needed", "-o", str(bin_path),
 		]
 
@@ -224,6 +227,7 @@ def _run_case(
 	stdin_data = expected.get("stdin")
 	case_timeout = expected.get("timeout_s", timeout_s)
 	compiler_flags = expected.get("compiler_flags") or []
+	c_sources = expected.get("c_sources") or []
 
 	case_build = build_root / case_name
 	case_build.mkdir(parents=True, exist_ok=True)
@@ -235,6 +239,25 @@ def _run_case(
 	# embedded interpreter to import repo-local modules instead of
 	# the bundled ones, leading to cryptic bootstrap failures.
 	compile_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+	# ── Compile companion C sources ────────────────────────────
+	extra_objects: list[Path] = []
+	if c_sources:
+		clang = shutil.which("clang")
+		if clang is None:
+			return case_name, "FAIL (clang not available for C helper compilation)"
+		for c_name in c_sources:
+			c_path = case_dir / c_name
+			if not c_path.exists():
+				return case_name, f"FAIL (c_sources: {c_name} not found in case dir)"
+			obj_path = case_build / (c_path.stem + ".o")
+			c_res = subprocess.run(
+				[clang, "-c", str(c_path), "-o", str(obj_path)],
+				capture_output=True, text=True, cwd=ROOT, timeout=30,
+			)
+			if c_res.returncode != 0:
+				return case_name, f"FAIL (c compile {c_name}: {c_res.stderr[:200]})"
+			extra_objects.append(obj_path)
 
 	# ── Build compile command ───────────────────────────────────
 	cmd: list[str] = [driftc_bin]
@@ -374,6 +397,7 @@ def _run_case(
 		argv=run_args,
 		stdin_data=stdin_data,
 		timeout_s=case_timeout,
+		extra_objects=extra_objects,
 	)
 	if link_err is not None:
 		return case_name, f"FAIL (link: {link_err[:200]})"
