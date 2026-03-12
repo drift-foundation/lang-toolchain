@@ -4663,10 +4663,17 @@ class TypeChecker:
 			if target.kind is CallTargetKind.DIRECT and target.symbol is not None and signatures_by_id is not None and getattr(expr, "loc", None) is not None:
 				sig = signatures_by_id.get(target.symbol)
 				if sig is not None and bool(getattr(sig, "declared_unsafe", False)):
-					if not unsafe_allowed_module and not allow_unsafe_without_block_local:
-						diagnostics.append(_tc_diag(message="unsafe call requires --allow-unsafe", severity="error", span=getattr(expr, "loc", Span())))
-					elif not unsafe_context and not allow_unsafe_without_block_local:
-						diagnostics.append(_tc_diag(message="unsafe call requires unsafe block", severity="error", span=getattr(expr, "loc", Span())))
+					_is_extern_c_call = bool(getattr(sig, "is_extern_c", False))
+					_in_unsafe_block = bool(unsafe_context)
+					if not _in_unsafe_block and not allow_unsafe_without_block_local:
+						# Call is not in an unsafe block — that is the primary error.
+						if _is_extern_c_call:
+							diagnostics.append(_tc_diag(message="call to extern C function requires unsafe block", severity="error", span=getattr(expr, "loc", Span())))
+						else:
+							diagnostics.append(_tc_diag(message="unsafe call requires unsafe block", severity="error", span=getattr(expr, "loc", Span())))
+					elif _in_unsafe_block and not unsafe_allowed_module and not allow_unsafe_without_block_local:
+						# Call is in an unsafe block but --allow-unsafe is missing.
+						diagnostics.append(_tc_diag(message="unsafe block requires --allow-unsafe", severity="error", span=getattr(expr, "loc", Span())))
 			if target.kind is CallTargetKind.DIRECT and target.symbol is not None and signatures_by_id is not None:
 				sig = signatures_by_id.get(target.symbol)
 				if _force_boundary_can_throw(sig, target.symbol):

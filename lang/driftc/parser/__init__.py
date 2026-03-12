@@ -853,6 +853,7 @@ class _FrontendDecl:
 		self.loc = loc
 		self.is_pub = is_pub
 		self.is_extern = False
+		self.is_extern_c = False
 		self.is_intrinsic = False
 		self.is_method = is_method
 		self.self_mode = self_mode
@@ -901,6 +902,7 @@ def _decl_from_parser_fn(
 		impl_owner,
 	)
 	decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
+	decl.is_extern_c = bool(getattr(fn, "is_extern_c", False))
 	return decl
 
 
@@ -4552,8 +4554,10 @@ def _lower_parsed_program_to_hir(
 	# Build signatures with resolved TypeIds from parser decls.
 	from lang.driftc.type_resolver import resolve_program_signatures
 
-	type_table, sigs = resolve_program_signatures(decls, table=type_table)
+	type_table, sigs, ffi_diags = resolve_program_signatures(decls, table=type_table)
 	signatures.update(sigs)
+	for msg in ffi_diags:
+		diagnostics.append(_p_diag(message=msg, severity="error"))
 	# Normalize any exception-named forward nominals in signatures to Error so
 	# helpers can accept exception types in annotations.
 	def _coerce_exception_nominal(tid: TypeId) -> TypeId:

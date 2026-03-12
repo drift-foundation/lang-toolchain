@@ -768,6 +768,98 @@ class QualifiedMemberParseError(ValueError):
 		self.loc = loc
 
 
+def _build_extern_fn(tree: Tree) -> FunctionDef:
+	"""Build a FunctionDef from an `extern_fn` or `extern_fn_item` rule."""
+	loc = _loc(tree)
+	children = list(tree.children)
+	idx = 0
+
+	# For extern_fn: EXTERN STRING FN_KW ident "(" [params] ")" NOTHROW return_sig
+	# For extern_fn_item: FN_KW ident "(" [params] ")" NOTHROW return_sig
+	is_item = _name(tree) == "extern_fn_item"
+
+	abi_string: str | None = None
+	if not is_item:
+		# Skip EXTERN token
+		if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "EXTERN":
+			idx += 1
+		# Extract ABI string literal
+		if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "STRING":
+			abi_string = _decode_string_token(children[idx])
+			idx += 1
+
+	if abi_string is not None and abi_string != "C":
+		raise ModuleDeclError(
+			f"unsupported extern ABI \"{abi_string}\"; only \"C\" is supported",
+			loc=loc,
+		)
+
+	# Skip FN_KW
+	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "FN_KW":
+		idx += 1
+
+	# Name
+	name_token = _unwrap_ident(children[idx])
+	idx += 1
+	orig_name = name_token.value
+
+	# Params
+	params: List[Param] = []
+	if idx < len(children) and isinstance(children[idx], Tree) and _name(children[idx]) == "params":
+		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
+		idx += 1
+
+	# NOTHROW (required)
+	declared_nothrow = False
+	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
+		declared_nothrow = True
+		idx += 1
+
+	if not declared_nothrow:
+		raise ModuleDeclError(
+			"extern C functions must be declared nothrow",
+			loc=loc,
+		)
+
+	# return_sig
+	return_sig = children[idx]
+	type_child = next(child for child in return_sig.children if isinstance(child, Tree))
+	return_type = _build_type_expr(type_child)
+
+	return FunctionDef(
+		name=orig_name,
+		orig_name=orig_name,
+		type_params=[],
+		type_param_locs=[],
+		params=params,
+		return_type=return_type,
+		declared_nothrow=True,
+		declared_throws=False,
+		is_unsafe=False,
+		body=Block(statements=[]),
+		loc=loc,
+		is_extern_c=True,
+		extern_abi="C",
+	)
+
+
+def _build_extern_block(tree: Tree, abi_string: str) -> List[FunctionDef]:
+	"""Build multiple FunctionDefs from an `extern_block` rule."""
+	if abi_string != "C":
+		raise ModuleDeclError(
+			f"unsupported extern ABI \"{abi_string}\"; only \"C\" is supported",
+			loc=_loc(tree),
+		)
+	fns: List[FunctionDef] = []
+	for child in tree.children:
+		if isinstance(child, Tree) and _name(child) == "extern_fn_item":
+			fn = _build_extern_fn(child)
+			fn.is_extern_c = True
+			fn.extern_abi = "C"
+			fns.append(fn)
+	return fns
+
+
 def _build_program(tree: Tree) -> Program:
 	functions: List[FunctionDef] = []
 	consts: List["ConstDef"] = []
@@ -866,6 +958,17 @@ def _build_program(tree: Tree) -> Program:
 			if_def.is_pub = is_pub
 			if_def.test_build_only = is_test_only
 			interfaces.append(if_def)
+		elif kind == "extern_fn":
+			fn = _build_extern_fn(child)
+			fn.test_build_only = is_test_only
+			functions.append(fn)
+		elif kind == "extern_block":
+			# Extract ABI string from the extern_block tree
+			abi_tok = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
+			abi_str = _decode_string_token(abi_tok) if abi_tok is not None else "C"
+			for fn in _build_extern_block(child, abi_str):
+				fn.test_build_only = is_test_only
+				functions.append(fn)
 		else:
 			stmt = _build_stmt(child)
 			if stmt is None:

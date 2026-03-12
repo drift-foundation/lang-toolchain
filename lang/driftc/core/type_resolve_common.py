@@ -97,6 +97,15 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 				alias_stack=alias_stack,
 			)
 			return table.new_ptr(inner, module_id=origin_mod)
+		if name == "RawPtr":
+			inner = resolve_opaque_type(
+				args[0] if args else None,
+				table,
+				module_id=origin_mod,
+				type_params=type_params,
+				alias_stack=alias_stack,
+			)
+			return table.new_ptr(inner, module_id=origin_mod)
 		if name == "Void":
 			return table.ensure_void()
 		if not args:

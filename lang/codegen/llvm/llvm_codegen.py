@@ -319,6 +319,42 @@ def _build_interface_impl_index(
 	return index
 
 
+def _extern_c_llvm_type(ty_id: TypeId, type_table: Optional[TypeTable], mod: "LlvmModuleBuilder") -> str:
+	"""Map a TypeId to an LLVM type string for extern "C" declarations.
+
+	Supports the subset of types valid in C FFI signatures: scalars, pointers,
+	and Void.  Falls back to isize (pointer-sized int) for unknown types so
+	that opaque handles round-trip safely.
+	"""
+	if type_table is not None:
+		if type_table.is_void(ty_id):
+			return "i8"  # void param slot (unused)
+		td = type_table.get(ty_id)
+		if td.kind is TypeKind.SCALAR:
+			_MAP = {
+				"Int": DRIFT_INT_TYPE,
+				"Uint": DRIFT_USIZE_TYPE,
+				"Uint64": DRIFT_U64_TYPE,
+				"u64": DRIFT_U64_TYPE,
+				"Bool": "i1",
+				"Byte": "i8",
+				"Float": "double",
+			}
+			if td.name in _MAP:
+				return _MAP[td.name]
+		if td.kind is TypeKind.RAW_PTR:
+			return "i8*"
+		if td.kind is TypeKind.REF:
+			return "i8*"
+		# FORWARD_NOMINAL arises before full type normalization (e.g. RawPtr<T>).
+		if td.kind is TypeKind.FORWARD_NOMINAL and td.name == "RawPtr":
+			return "i8*"
+		if td.kind is TypeKind.FORWARD_NOMINAL and td.name == "Ref":
+			return "i8*"
+	# Fallback: pointer-sized integer.
+	return DRIFT_INT_TYPE
+
+
 def lower_module_to_llvm(
 	funcs: Mapping[FunctionId, MirFunc],
 	ssa_funcs: Mapping[FunctionId, SsaFunc],
@@ -409,6 +445,10 @@ def lower_module_to_llvm(
 		fn_info = fn_infos[fn_id]
 		if fn_info.signature is not None and getattr(fn_info.signature, "is_intrinsic", False):
 			# Intrinsics lower to dedicated MIR/LLVM ops; skip empty stubs.
+			continue
+		if fn_info.signature is not None and getattr(fn_info.signature, "is_extern_c", False):
+			# extern "C" functions have no Drift body; emit a bare declare.
+			mod.add_extern_c_declare(fn_info, type_table)
 			continue
 		builder = _FuncBuilder(
 			func=mir_func,
@@ -628,6 +668,7 @@ class LlvmModuleBuilder:
 	_llvm_used: List[str] = field(default_factory=list)
 	_dbg_expression_id: int | None = None
 	needs_dbg_intrinsics: bool = False
+	_extern_c_declares: List[str] = field(default_factory=list)
 
 	def _llty(self, ty: str) -> str:
 		if ty in (DRIFT_INT_TYPE, DRIFT_USIZE_TYPE):
@@ -922,6 +963,32 @@ class LlvmModuleBuilder:
 
 	def emit_func(self, text: str) -> None:
 		self.funcs.append(text)
+
+	def add_extern_c_declare(self, fn_info: FnInfo, type_table: Optional[TypeTable] = None) -> None:
+		"""Emit a bare ``declare`` for an ``extern "C"`` function."""
+		sig = fn_info.signature
+		if sig is None:
+			return
+		# Build a lightweight type-mapper so we can resolve TypeId → LLVM type.
+		# We only need _llvm_type_for_typeid which lives on _FuncBuilder, but the
+		# module already carries _llty and word_bits.  For the extern-C declare we
+		# need a minimal _FuncBuilder just for type mapping.
+		param_parts: list[str] = []
+		param_tids = list(sig.param_type_ids or [])
+		for tid in param_tids:
+			llty = _extern_c_llvm_type(tid, type_table, self)
+			param_parts.append(self._llty(llty))
+		params_str = ", ".join(param_parts)
+		ret_tid = sig.return_type_id
+		if ret_tid is not None and type_table is not None and type_table.is_void(ret_tid):
+			ret_llty_str = "void"
+		elif ret_tid is not None:
+			ret_llty_str = self._llty(_extern_c_llvm_type(ret_tid, type_table, self))
+		else:
+			ret_llty_str = "void"
+		# Use the raw function name (no Drift mangling) as the C symbol.
+		c_symbol = sig.name
+		self._extern_c_declares.append(f"declare {ret_llty_str} @{c_symbol}({params_str})")
 
 	def ensure_comdat(self, name: str) -> None:
 		self.comdats.add(name)
@@ -1302,6 +1369,9 @@ class LlvmModuleBuilder:
 			n = len(self._llvm_used)
 			entries = ", ".join(self._llvm_used)
 			lines.append(f'@llvm.used = appending global [{n} x i8*] [{entries}], section "llvm.metadata"')
+			lines.append("")
+		if self._extern_c_declares:
+			lines.extend(self._extern_c_declares)
 			lines.append("")
 		lines.extend(self.funcs)
 		if self.debug_enabled and self._dbg_compile_unit_id is not None:
@@ -3599,6 +3669,34 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest) if instr.dest else None
 		callee_info = self.fn_infos.get(instr.fn_id)
 		callee_sym = function_symbol(instr.fn_id)
+		# ---- extern "C" fast-path: direct C ABI call, no FnResult wrapping ----
+		callee_sig = callee_info.signature if callee_info is not None else None
+		if callee_sig is not None and getattr(callee_sig, "is_extern_c", False):
+			c_symbol = callee_sig.name
+			param_tids = list(callee_sig.param_type_ids or [])
+			arg_parts: list[str] = []
+			for i, tid in enumerate(param_tids):
+				llty = self._llty(_extern_c_llvm_type(tid, self.type_table, self.module))
+				val = self._map_value(instr.args[i])
+				arg_parts.append(f"{llty} {val}")
+			args_str = ", ".join(arg_parts)
+			ret_tid = callee_sig.return_type_id
+			is_void = ret_tid is None or (self.type_table is not None and self.type_table.is_void(ret_tid))
+			if is_void:
+				self.lines.append(f"  call void @{c_symbol}({args_str})")
+				if dest is not None:
+					# Void-returning extern C called in a value context (e.g. FnResult
+					# wrap for a can_throw nothrow extern).  Produce a dummy i8 0.
+					self.lines.append(f"  {dest} = add i8 0, 0")
+					self.value_types[dest] = "i8"
+			else:
+				ret_llty = self._llty(_extern_c_llvm_type(ret_tid, self.type_table, self.module))
+				if dest is None:
+					self.lines.append(f"  call {ret_llty} @{c_symbol}({args_str})")
+				else:
+					self.lines.append(f"  {dest} = call {ret_llty} @{c_symbol}({args_str})")
+					self.value_types[dest] = _extern_c_llvm_type(ret_tid, self.type_table, self.module)
+			return
 		if instr.fn_id.module == "std.core" and instr.fn_id.name == "string_from_utf8_bytes":
 			if len(instr.args) != 2:
 				raise NotImplementedError(f"LLVM codegen v1: string_from_utf8_bytes expects 2 args, got {len(instr.args)}")

@@ -105,6 +105,7 @@ RETHROW.2: /rethrow\b/
 ARROW: "->"
 FATARROW: "=>"
 UNSAFE.2: /unsafe\b/
+EXTERN.2: /extern\b/
 EXCEPTION.2: /exception\b/
 TRAIT.2: /trait\b/
 INTERFACE.2: /interface\b/
@@ -139,6 +140,8 @@ ident: NAME | MOVE | COPY
      | test_build_only_marker? trait_def
      | test_build_only_marker? interface_def
      | test_build_only_marker? implement_def
+     | test_build_only_marker? extern_fn TERMINATOR
+     | test_build_only_marker? extern_block
      | use_trait_stmt TERMINATOR
      | import_stmt TERMINATOR
      | export_stmt TERMINATOR
@@ -157,6 +160,9 @@ local_const_stmt: CONST NAME COLON type_expr EQUAL expr
 type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 
 func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig require_clause? (block | TERMINATOR)
+extern_fn: EXTERN STRING FN_KW ident "(" [params] ")" NOTHROW return_sig
+extern_block: EXTERN STRING "{" (extern_fn_item TERMINATOR?)* "}"
+extern_fn_item: FN_KW ident "(" [params] ")" NOTHROW return_sig
 return_sig: ARROW type_expr
 
 params: param (COMMA param)*

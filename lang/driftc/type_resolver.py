@@ -58,6 +58,7 @@ def resolve_program_signatures(
 	table.ensure_void()
 
 	signatures: dict[FunctionId, FnSignature] = {}
+	func_decls_list = list(func_decls)
 
 	def _intrinsic_kind_for_name(name: str) -> IntrinsicKind | None:
 		try:
@@ -66,7 +67,7 @@ def resolve_program_signatures(
 			return None
 
 	name_ord: dict[tuple[str, str], int] = {}
-	for decl in func_decls:
+	for decl in func_decls_list:
 		name = getattr(decl, "name")
 		module_name = getattr(decl, "module", None)
 		fn_id = getattr(decl, "fn_id", None)
@@ -77,6 +78,7 @@ def resolve_program_signatures(
 			fn_id = FunctionId(module=module_name or "main", name=name, ordinal=ordinal)
 		decl_loc = getattr(decl, "loc", None)
 		is_extern = bool(getattr(decl, "is_extern", False))
+		is_extern_c = bool(getattr(decl, "is_extern_c", False))
 		is_intrinsic = bool(getattr(decl, "is_intrinsic", False))
 		intrinsic_kind = None
 		if is_intrinsic:
@@ -160,7 +162,7 @@ def resolve_program_signatures(
 		throws = _throws_from_decl(decl)
 		declared_nothrow = bool(getattr(decl, "declared_nothrow", False))
 		declared_throws = bool(getattr(decl, "declared_throws", False))
-		declared_unsafe = bool(getattr(decl, "is_unsafe", False))
+		declared_unsafe = bool(getattr(decl, "is_unsafe", False)) or is_extern_c
 		# Surface ABI rule: nothrow is the only way to force a non-throwing ABI.
 		declared_can_throw = not declared_nothrow
 		# Note: throws_events are for validation only; they do not change ABI.
@@ -215,6 +217,7 @@ def resolve_program_signatures(
 			declared_throws=declared_throws,
 			declared_unsafe=declared_unsafe,
 			is_extern=is_extern,
+			is_extern_c=is_extern_c,
 			is_intrinsic=is_intrinsic,
 			intrinsic_kind=intrinsic_kind,
 			# Legacy/raw fields for compatibility
@@ -232,7 +235,126 @@ def resolve_program_signatures(
 			module=module_name,
 		)
 
-	return table, signatures
+	# Validate FFI-safe types on extern "C" signatures.
+	ffi_diagnostics: list[str] = []
+	for fn_id, sig in signatures.items():
+		if not sig.is_extern_c:
+			continue
+		# Find the original decl for raw TypeExpr access.
+		decl_match = None
+		for d in func_decls_list:
+			d_name = getattr(d, "name", None)
+			if d_name == sig.name and bool(getattr(d, "is_extern_c", False)):
+				decl_match = d
+				break
+		_validate_ffi_safe_signature(sig, table, ffi_diagnostics, decl=decl_match)
+	return table, signatures, ffi_diagnostics
+
+
+# Types considered FFI-safe for extern "C" signatures.
+_FFI_SAFE_SCALAR_NAMES: frozenset[str] = frozenset({
+	"Int", "UInt", "Uint", "Uint64", "Byte", "Bool", "Float",
+})
+
+# Type names NOT safe for FFI (regardless of TypeId resolution).
+_FFI_UNSAFE_NAMES: frozenset[str] = frozenset({
+	"String", "Array", "Fn", "FnResult", "Optional",
+})
+
+
+def _is_ffi_safe_type_name(name: str) -> bool:
+	"""Return True if a raw type name is FFI-safe."""
+	if name in _FFI_SAFE_SCALAR_NAMES:
+		return True
+	if name in ("Void", "RawPtr"):
+		return True
+	return False
+
+
+def _is_ffi_safe_type(tid: TypeId, table: TypeTable) -> bool:
+	"""Return True if *tid* is allowed in an extern C signature."""
+	td = table.get(tid)
+	if td is None:
+		return False
+	name = td.name
+	kind = td.kind
+	# Skip Unknown — those are unresolved and will be validated elsewhere.
+	if kind is TypeKind.UNKNOWN:
+		return True
+	if name in _FFI_SAFE_SCALAR_NAMES:
+		return True
+	if name == "Void" or kind is TypeKind.VOID:
+		return True
+	if name == "RawPtr" or kind is TypeKind.RAW_PTR:
+		return True
+	return False
+
+
+def _validate_ffi_safe_signature(
+	sig: FnSignature,
+	table: TypeTable,
+	diagnostics: list[str],
+	*,
+	decl: object | None = None,
+) -> None:
+	"""Reject non-FFI-safe param/return types on an extern C function."""
+	# Validate param types using raw TypeExpr names when available.
+	raw_params = list(getattr(decl, "params", []) or []) if decl is not None else []
+	if sig.param_type_ids:
+		param_names = sig.param_names or [f"param{i}" for i in range(len(sig.param_type_ids))]
+		for i, tid in enumerate(sig.param_type_ids):
+			pname = param_names[i] if i < len(param_names) else f"param{i}"
+			# Void is only valid as a return type, not a parameter type.
+			if i < len(raw_params):
+				raw_p = raw_params[i]
+				te = getattr(raw_p, "type_expr", None)
+				if te is not None:
+					type_name = getattr(te, "name", "")
+					if type_name == "Void":
+						diagnostics.append(
+							f"type 'Void' is not valid as a parameter type in extern C signature of '{sig.name}' (parameter '{pname}')"
+						)
+						continue
+			if tid is not None:
+				td = table.get(tid)
+				if td is not None and (td.name == "Void" or td.kind is TypeKind.VOID):
+					diagnostics.append(
+						f"type 'Void' is not valid as a parameter type in extern C signature of '{sig.name}' (parameter '{pname}')"
+					)
+					continue
+			# Check TypeExpr name directly for more reliable validation.
+			if i < len(raw_params):
+				raw_p = raw_params[i]
+				te = getattr(raw_p, "type_expr", None)
+				if te is not None:
+					type_name = getattr(te, "name", "")
+					if type_name and not _is_ffi_safe_type_name(type_name):
+						diagnostics.append(
+							f"type '{type_name}' is not FFI-safe in extern C signature of '{sig.name}' (parameter '{pname}')"
+						)
+						continue
+			# Fallback: check resolved TypeId.
+			if tid is not None and not _is_ffi_safe_type(tid, table):
+				td = table.get(tid)
+				type_name = td.name if td is not None else str(tid)
+				diagnostics.append(
+					f"type '{type_name}' is not FFI-safe in extern C signature of '{sig.name}' (parameter '{pname}')"
+				)
+	# Validate return type.
+	raw_ret = getattr(decl, "return_type", None) if decl is not None else None
+	if raw_ret is not None:
+		ret_name = getattr(raw_ret, "name", "")
+		if ret_name and not _is_ffi_safe_type_name(ret_name):
+			diagnostics.append(
+				f"type '{ret_name}' is not FFI-safe in extern C signature of '{sig.name}' (return type)"
+			)
+			return
+	if sig.return_type_id is not None and not _is_ffi_safe_type(sig.return_type_id, table):
+		td = table.get(sig.return_type_id)
+		type_name = td.name if td is not None else str(sig.return_type_id)
+		diagnostics.append(
+			f"type '{type_name}' is not FFI-safe in extern C signature of '{sig.name}' (return type)"
+		)
 
 
 def _throws_from_decl(decl: object) -> Tuple[str, ...]:

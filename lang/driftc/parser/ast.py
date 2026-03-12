@@ -243,6 +243,8 @@ class FunctionDef:
 	is_pub: bool = False
 	test_build_only: bool = False
 	is_intrinsic: bool = False
+	is_extern_c: bool = False
+	extern_abi: str | None = None
 	type_param_locs: List[Located] = field(default_factory=list)
 	require: Optional["RequireClause"] = None
 	is_method: bool = False

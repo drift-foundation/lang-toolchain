@@ -2708,7 +2708,7 @@ def compile_stubbed_funcs(
 		else:
 			base_signatures_by_id = dict(signatures_by_id)
 	elif not signatures_by_id:
-		shared_type_table, base_signatures_by_id = resolve_program_signatures(
+		shared_type_table, base_signatures_by_id, _ffi_diags = resolve_program_signatures(
 			_fake_decls_from_hirs(func_hirs_by_id),
 			table=shared_type_table,
 		)
@@ -5122,7 +5122,7 @@ def compile_stubbed_funcs(
 		if sig is not None and sig.param_type_ids is not None and param_names:
 			param_types = {pname: pty for pname, pty in zip(param_names, sig.param_type_ids)}
 		builder.func.params = list(param_names)
-		if sig is not None and getattr(sig, "is_intrinsic", False):
+		if sig is not None and (getattr(sig, "is_intrinsic", False) or getattr(sig, "is_extern_c", False)):
 			mir_funcs_by_id[fn_id] = builder.func
 			continue
 		if sig is not None and sig.param_type_ids is not None:
@@ -6982,6 +6982,12 @@ def main(argv: list[str] | None = None) -> int:
 		action="store_true",
 		help="Enable @test_build_only declarations (tests only)",
 	)
+	parser.add_argument("--link-lib", action="append", default=[], metavar="LIB",
+		help="Link against library (passes -l<LIB> to linker)")
+	parser.add_argument("--link-search", action="append", default=[], metavar="DIR",
+		help="Add library search path (passes -L<DIR> to linker)")
+	parser.add_argument("--link-obj", action="append", default=[], metavar="FILE",
+		help="Link additional object file")
 	args = parser.parse_args(argv)
 	optimized = getattr(args, "optimized", False)
 	debug_enabled = not optimized
@@ -9880,6 +9886,12 @@ def main(argv: list[str] | None = None) -> int:
 				"-o",
 				str(args.output),
 			]
+	for obj in getattr(args, 'link_obj', []):
+		link_cmd.append(obj)
+	for search_path in getattr(args, 'link_search', []):
+		link_cmd.extend(["-L", search_path])
+	for lib in getattr(args, 'link_lib', []):
+		link_cmd.extend([f"-l{lib}"])
 	print("[driftc] link:", " ".join(link_cmd), file=sys.stderr)
 	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:

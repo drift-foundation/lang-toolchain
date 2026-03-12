@@ -2520,6 +2520,9 @@ class HIRToMIR:
 				return self._lower_intrinsic_call_expr(expr, intrinsic, info=info)
 			result = self._lower_call_with_info(expr, info)
 			if result is None:
+				expected = self._current_expected_type()
+				if expected is not None and self._type_table.is_void(expected):
+					return self._void_value()
 				raise AssertionError("Void-returning call used in expression context (checker bug)")
 			if info.sig.can_throw:
 				ok_tid = info.sig.user_ret_type
@@ -2692,6 +2695,9 @@ class HIRToMIR:
 		info = self._call_info_for(expr)
 		result = self._lower_call(expr)
 		if result is None:
+			expected = self._current_expected_type()
+			if expected is not None and self._type_table.is_void(expected):
+				return self._void_value()
 			raise AssertionError("Void-returning call used in expression context (checker bug)")
 		# Calls to can-throw functions are always "checked": they either produce the
 		# ok payload value or propagate an Error into the nearest try (or out of the
@@ -5101,6 +5107,17 @@ class HIRToMIR:
 
 	def _visit_expr_HUnsafeExpr(self, expr: H.HUnsafeExpr) -> "M.ValueId":
 		self.lower_block(expr.body)
+		# If the result expression is a void-returning call, lower it for
+		# side effects only and return a void value.  This avoids the
+		# "Void-returning call used in expression context" assertion when
+		# an unsafe block wraps a void extern-C call in statement position.
+		if isinstance(expr.result, H.HCall):
+			info = self._call_info_for_expr_optional(expr.result)
+			if info is None:
+				info = self._call_info_for(expr.result)
+			if info is not None and self._type_table.is_void(info.sig.user_ret_type):
+				self._lower_call(expr.result)
+				return self._void_value()
 		return self.lower_expr(expr.result)
 
 	def _visit_stmt_HUnsafeBlock(self, stmt: H.HUnsafeBlock) -> None:

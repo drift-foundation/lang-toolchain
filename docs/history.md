@@ -1,6 +1,19 @@
 # Drift development history
 
 ## 2026-03-11
+- Implemented C FFI MVP (`extern "C"`):
+  - Parser: `extern "C" fn name(params) nothrow -> RetType;` and block form `extern "C" { ... }` syntax via Lark grammar extensions.
+  - Type resolver: FFI-safe type validation rejects non-scalar types (String, Array, Fn, etc.) in extern C signatures; diagnostics returned as structured errors.
+  - Checker: `unsafe` block required at call sites for extern C functions; `nothrow` required on declarations.
+  - MIR: void-returning extern C calls in unsafe blocks now lower correctly (fixed assertion in expression context).
+  - Type system: `RawPtr<T>` recognized as a user-facing alias for the internal `Ptr<T>` type from any module context.
+  - LLVM codegen: extern C functions emit `declare` instead of `define`; calls use direct ABI without FnResult wrapping.
+  - Linker CLI: `--link-lib`, `--link-search`, `--link-obj` flags for specifying libraries and object files.
+  - Supported FFI-safe types: Int, UInt, Uint64, Byte, Bool, Float, RawPtr<T>, Void.
+  - End-to-end test suite: 6 positive tests (libc abs, custom C lib, void return, block syntax, RawPtr, link-lib) and 5 negative tests (String rejected, throws rejected, missing nothrow, unsafe required, bad ABI string).
+- Bumped compiler version to `0.27.29-dev`; ABI remains `5`.
+
+## 2026-03-11
 - Finished PEX CLI/e2e JSON parity cleanup for the supported codegen fleet:
   - added the missing `--emit-ir` diagnostic-path behavior in the e2e runners so entrypoint validation cases exercise the same validating pipeline stages under JSON mode,
   - corrected reserved-namespace rejection coverage by omitting `--dev` for cases that intentionally assert reserved-module diagnostics,

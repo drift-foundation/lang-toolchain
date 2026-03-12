@@ -118,6 +118,7 @@ class FnSignature:
 	declared_throws: bool = False
 	declared_unsafe: Optional[bool] = None
 	is_extern: bool = False
+	is_extern_c: bool = False
 	is_intrinsic: bool = False
 	intrinsic_kind: IntrinsicKind | None = None
 	param_names: Optional[list[str]] = None
