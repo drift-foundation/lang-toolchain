@@ -2865,18 +2865,21 @@ In both cases, the file handle is safely released exactly once.
 
 ### 15.6. Unsafe code and raw pointers
 
-Drift supports a minimal unsafe surface for C-API wrappers:
+Drift supports a minimal unsafe surface for C-API wrappers and FFI:
 
 - `unsafe fn` declares an unsafe function; it may perform unsafe operations.
 - `unsafe { ... }` blocks permit calling unsafe functions inside safe ones.
 - Unsafe syntax is accepted only when the compiler is invoked with `--allow-unsafe`; otherwise it is a compile-time error.
+- Calls to `extern "C"` functions require an `unsafe` block at the call site (see §21).
 
-Raw pointers are represented by a distinct type `Ptr<T>`:
+Raw pointers are represented by a distinct type `Ptr<T>`, with a user-facing alias `RawPtr<T>`:
 
-- `Ptr<T>` requires `T` to be sized; fat pointers are not supported in v1.
-- `Ptr<T>` is `Copy` and does not participate in borrow checking.
+- `RawPtr<T>` is the user-facing name; it resolves to the internal `Ptr<T>`.
+- `Ptr<T>` / `RawPtr<T>` requires `T` to be sized; fat pointers are not supported in v1.
+- `Ptr<T>` / `RawPtr<T>` is `Copy` and does not participate in borrow checking.
 - There are no implicit conversions between `Ptr<T>` and `&T` / `&mut T`.
 - Pointer read/write/offset operations are only permitted in unsafe contexts and are provided by `std.mem`.
+- `RawPtr<T>` is FFI-safe and maps to an opaque pointer (`void *` / `i8*`) at the C ABI boundary (see §17.5, §21).
 
 ## 16. Memory model
 
@@ -3091,10 +3094,43 @@ fn reallocate(self: &mut RawBuffer<T>, new_cap: Int) @unsafe
 
 ### 17.5. Numeric types in FFI
 
-Drift distinguishes **natural-width** and **fixed-width** numeric primitives.
-Fixed-width primitives are internal to `lang.abi`; FFI type mapping documentation is pending.
+Drift distinguishes **natural-width** and **fixed-width** numeric primitives. The C FFI MVP (§21) supports a specific subset of types at the ABI boundary.
 
-In v1, FFI bindings should use `Int`/`Uint` for C APIs that use implementation-defined widths (`int`, `size_t`, `ptrdiff_t`, `uintptr_t`).
+#### 17.5.1. FFI-safe type mapping (MVP)
+
+The following types are permitted in `extern "C"` function signatures:
+
+| Drift type    | C equivalent                  | LLVM IR type | Notes                        |
+|---------------|-------------------------------|-------------|------------------------------|
+| `Int`         | `ptrdiff_t` / `intptr_t`      | `iN` (word) | Natural-width signed integer |
+| `Uint`        | `size_t` / `uintptr_t`        | `iN` (word) | Natural-width unsigned       |
+| `Uint64`      | `uint64_t`                    | `i64`       | Explicit 64-bit unsigned     |
+| `Byte`        | `uint8_t` / `char`            | `i8`        | Single byte                  |
+| `Bool`        | `_Bool` / `uint8_t`           | `i1`        | Boolean                      |
+| `Float`       | `double`                      | `double`    | IEEE 754 double              |
+| `RawPtr<T>`   | `void *`                      | `ptr`       | Opaque pointer               |
+| `Void`        | `void`                        | `void`      | Return type only             |
+
+`Void` is valid only as a return type; it is rejected as a parameter type.
+
+#### 17.5.2. Types not FFI-safe (MVP)
+
+The following types are **not** permitted in `extern "C"` signatures. The compiler rejects them with a diagnostic:
+
+- `String` — managed, reference-counted; no stable C layout
+- `Array<T>` — managed container with internal header
+- `Fn(…) -> R` — Drift callable; no C function-pointer equivalent in the MVP
+- `FnResult<T>` — internal error-handling wrapper
+- `Optional<T>` — tagged union with Drift-specific layout
+- Drift `struct` and `variant` types — no stable C layout guarantee
+- Any type not in the FFI-safe table above
+
+#### 17.5.3. Numeric width guidance
+
+- Use `Int` / `Uint` for C APIs that use implementation-defined widths (`size_t`, `ptrdiff_t`, `uintptr_t`, etc.).
+- Use `Uint64` for C APIs that use explicit `uint64_t`.
+- Fixed-width primitives beyond `Uint64` and `Byte` (e.g., `Int32`, `Uint16`) are internal to `lang.abi` and are not yet exposed in the user-facing FFI surface.
+
 ---
 
 ## 18. Standard I/O design (v1)
@@ -3533,88 +3569,125 @@ the language-level meaning of imports.
 
 
 
-## 21. Plugin-style extension via FFI
+## 21. C foreign function interface (FFI)
 
-Drift’s core module system is **static**: modules are compiled into a single image (either directly from source or via DMIR/DMP), and their interfaces are described by the export list in DMIR (Chapter 20). All exported functions use the can‑throw boundary convention (conceptually `Result<T, Error>` / `{T, Error*}`) and exceptions may propagate across static module boundaries (Chapter 14.7).
+Drift provides a minimal C FFI surface for calling external C functions from Drift code. This is the **MVP** implementation; it covers declaration-only interop with scalar-typed C functions. Higher-level features (callbacks, struct layout sharing, dynamic plugin loading) are not yet implemented.
 
-Dynamic, OS-level plugins (shared libraries such as `.so`, `.dll`, `.dylib`) are treated as **FFI**, not as first-class Drift modules:
+### 21.1. Extern declarations
 
-- They use a C-style ABI.
-- They are loaded with the host platform’s dynamic loader (`dlopen`/`dlsym`, `LoadLibrary`, etc.).
-- Their public surface is a small, explicit C API (opaque handles, error codes), described in C headers rather than Drift `module` declarations.
+An `extern "C"` declaration introduces a C-linkage function that the compiler emits as a bare LLVM `declare` (no Drift name mangling). The function has no body in Drift; it is resolved by the linker.
 
-Drift code interacts with such plugins by:
-
-1. Defining an FFI surface in a dedicated `lang.abi.*` or application-specific FFI module.
-   Fixed-width primitives are allowed **only** in `lang.abi.*` in v1:
-
-   ```drift
-   // Example: plugin FFI surface
-   extern "C" struct PluginApi {
-       version: Uint32,
-       init: extern "C" Fn() -> Int32,
-       shutdown: extern "C" Fn() -> Int32,
-       do_work: extern "C" Fn(handle: PluginHandle, req: &RequestC, resp: &mut ResponseC) -> Int32
-   }
-
-   extern "C"
-   fn plugin_get_api(expected_version: Uint32) -> &PluginApi
-   ```
-
-2. Writing a **static Drift module** that wraps this C API in normal Drift functions and types:
-
-   ```drift
-   module host.plugins.example
-
-   export {
-       fn do_work(req: Request) -> Result<Response, Error>
-   }
-
-   fn do_work(req: Request) -> Result<Response, Error> {
-       // call into the .so via FFI, map Int32 error codes to Drift Error, etc.
-   }
-   ```
-
-3. Treating the FFI boundary like any other C interop:
-
-   - No unwinding crosses the `.so` boundary.
-   - Failures are communicated as **values** (e.g., integer error codes, small tagged enums).
-   - Opaque handles are used for plugin-owned state; the host never relies on plugin internal layout.
-
-### 21.1. Error handling at the FFI plugin boundary
-
-At the OS-level plugin boundary:
-
-- Drift’s `Error` type and unwinding **must not** cross into or out of a `.so`.
-- Plugin APIs must return errors as ABI-stable primitives (e.g., `Int32` error codes in `lang.abi.*`, or a small `enum` marked as FFI-safe).
-- Hosts are responsible for mapping these codes into Drift’s `Error` values at the wrapper layer (static modules).
-
-Example:
+**Single declaration form:**
 
 ```drift
-extern "C"
-fn plugin_do_work(api: &PluginApi, req: &RequestC, resp: &mut ResponseC) -> Int32
+extern "C" fn abs(x: Int) nothrow -> Int;
+```
 
-fn do_work(req: Request) -> Result<Response, Error> {
-    var req_c = to_c_request(req);
-    var resp_c = ResponseC.zero();
+**Block form** for multiple declarations sharing the same ABI:
 
-    val code = plugin_do_work(api, &req_c, &resp_c);
-    if code == 0 {
-        return Ok(from_c_response(resp_c));
-    }
-    // convert error code to Drift Error
-    return Err(make_plugin_error(code));
+```drift
+extern "C" {
+    fn abs(x: Int) nothrow -> Int;
+    fn sqrt(x: Float) nothrow -> Float;
 }
 ```
 
-This pattern keeps the OS plugin ABI small and stable while preserving Drift’s richer error model inside the static world.
+**Syntax rules:**
 
-### 21.2. Summary
+- The ABI string must be `"C"`. No other ABI strings are accepted; the compiler rejects unknown ABI identifiers.
+- All extern declarations must include `nothrow`. Drift’s exception model (`throws`) is not permitted on extern functions — unwinding must never cross the C boundary.
+- Extern declarations have no function body.
+- Type parameters are not supported on extern functions.
+- The `unsafe` modifier is not valid on the declaration itself (it is required at the *call site*).
+
+### 21.2. FFI-safe types
+
+Only the type subset listed in §17.5.1 is permitted in extern signatures. The compiler validates each parameter and return type and rejects non-FFI-safe types with a diagnostic. See §17.5 for the full mapping table and restrictions.
+
+### 21.3. Safety contract
+
+Calls to `extern "C"` functions are **unsafe** operations:
+
+```drift
+extern "C" fn abs(x: Int) nothrow -> Int;
+
+fn example() nothrow -> Int {
+    // Requires unsafe block:
+    val result: Int = unsafe { abs(-42) };
+    return result;
+}
+```
+
+**Rules:**
+
+- Every call site must be wrapped in an `unsafe { ... }` block.
+- The source file must be compiled with `--allow-unsafe`; without it, `unsafe` blocks are rejected.
+- The programmer is responsible for ensuring that arguments satisfy the C function’s preconditions (valid pointers, correct sizes, etc.). The compiler performs no runtime checks beyond type matching.
+
+### 21.4. No unwinding across the C boundary
+
+- Drift’s `Error` type and stack unwinding **must not** cross into or out of C code.
+- `extern "C"` functions are `nothrow` by contract. If the C function aborts or invokes undefined behavior, Drift provides no recovery mechanism.
+- Errors from C code should be communicated as return values (error codes, sentinel values) and mapped to Drift’s `Error` type in a wrapper function.
+
+**Error wrapping pattern:**
+
+```drift
+extern "C" fn c_operation(handle: RawPtr<Byte>, buf: RawPtr<Byte>, len: Int) nothrow -> Int;
+
+fn operation(handle: RawPtr<Byte>, data: RawPtr<Byte>, len: Int) -> Int {
+    val code: Int = unsafe { c_operation(handle, data, len) };
+    if code < 0 {
+        throw Error("c_operation failed", code);
+    }
+    return code;
+}
+```
+
+### 21.5. Linker integration
+
+External C functions must be resolved at link time. The compiler provides three flags for specifying link inputs:
+
+| Flag             | Effect                               | Example                              |
+|------------------|--------------------------------------|--------------------------------------|
+| `--link-lib`     | Link against a system library (`-l`) | `--link-lib m` (links `-lm`)        |
+| `--link-search`  | Add a library search path (`-L`)     | `--link-search /opt/lib`            |
+| `--link-obj`     | Link an additional object file       | `--link-obj helper.o`               |
+
+All three flags may be specified multiple times. They are passed directly to the linker without modification.
+
+**Example — calling a custom C helper:**
+
+```bash
+# Compile the C helper
+clang -c helper.c -o helper.o
+
+# Compile Drift source with the object linked in
+driftc --link-obj helper.o --allow-unsafe main.drift
+```
+
+### 21.6. MVP scope and future directions
+
+This section documents the **shipped MVP** as of 0.27.29-dev. The following are explicitly **not supported** in this revision:
+
+- `extern "C" struct` — no C-layout struct declarations
+- `extern "C" Fn(…)` — no C function pointer types
+- Variadic functions (`...`)
+- Callbacks from C into Drift
+- Dynamic library loading (`dlopen`/`dlsym`) as a language feature
+- Fixed-width integer types beyond `Uint64` and `Byte` in user-facing FFI signatures
+- `&T` / `&mut T` parameters in extern signatures (references are not FFI-safe)
+
+**Plugin-style extension** (OS-level shared libraries) is a future goal built on top of this foundation. The language does not define a separate "plugin module" kind or a first-class plugin ABI in this revision. Future revisions may add:
+
+- C-layout struct declarations for sharing data structures across the boundary
+- C function pointer types for callbacks
+- A higher-level Drift-to-Drift plugin profile if real-world experience justifies it
+
+### 21.7. Static modules vs FFI
 
 - **Static modules** (Chapter 7, Chapter 20) are the core Drift unit of composition. They are compiled into a single image or via DMIR/DMP and may use the full error model and unwinding semantics.
-- **Plugins in the OS sense** are handled via **FFI**: a C-style ABI with opaque handles and explicit error codes, wrapped by static Drift modules.
-- The language does **not** define a separate "plugin module" kind or a first-class Drift-plugin ABI in this revision. Future revisions may introduce a higher-level Drift-to-Drift plugin profile if real-world experience justifies the added complexity.
+- **C FFI** is for calling into external C code with a restricted type surface and explicit safety boundaries, wrapped by static Drift modules that present a safe interface to the rest of the program.
 
 
 ## 22. Closures and callable traits

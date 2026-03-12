@@ -632,6 +632,26 @@ The codegen e2e runner (`lang/tests/codegen/e2e/runner.py`) supports environment
   - runner defaults `ASAN_OPTIONS` to include `detect_leaks=0` and `halt_on_error=1` unless explicitly provided.
   - incompatible with `DRIFT_MEMCHECK` and `DRIFT_MASSIF` in the same run.
 
+### 19.5 C FFI linker flags
+
+When compiling Drift code that uses `extern "C"` declarations, the following flags control link-time resolution of external symbols:
+
+| Flag             | Semantics                                     | Linker equivalent |
+|------------------|-----------------------------------------------|-------------------|
+| `--link-lib LIB` | Link against a named library                  | `-l<LIB>`        |
+| `--link-search DIR` | Add a library search directory             | `-L<DIR>`        |
+| `--link-obj FILE`| Link an additional object file                 | (passed directly) |
+
+All three accept multiple occurrences (append semantics). Values are passed through to the linker without validation.
+
+**Example:**
+
+```bash
+driftc --link-obj helper.o --link-lib m --link-search /opt/mylib --allow-unsafe main.drift
+```
+
+The `--allow-unsafe` flag is also required when the source contains `unsafe` blocks (mandatory for `extern "C"` call sites). See language spec §15.6 and §21.
+
 Rules:
 - Direct `bin/driftc` mode:
   - supports `DRIFT_ASAN=1` for compile/link sanitization.
