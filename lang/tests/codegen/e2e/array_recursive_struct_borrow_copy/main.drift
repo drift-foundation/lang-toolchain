@@ -1,0 +1,32 @@
+module main
+
+struct Node(children: Array<Node>);
+struct Config(node: Node, count: Int);
+
+implement Config {
+    fn with_count(self: &Config, n: Int) nothrow -> Config {
+        return Config(self.node, n);
+    }
+}
+
+fn leaf() nothrow -> Node {
+    var kids: Array<Node> = [];
+    return Node(move kids);
+}
+
+fn one() nothrow -> Node {
+    var kids: Array<Node> = [];
+    kids.push(leaf());
+    return Node(move kids);
+}
+
+fn main() nothrow -> Int {
+    var i = 0;
+    while i < 100 {
+        val tmp = Config(one(), 0);
+        val cfg = tmp.with_count(1);
+        if cfg.node.children.len != 1 { return 97; }
+        i = i + 1;
+    }
+    return 3;
+}

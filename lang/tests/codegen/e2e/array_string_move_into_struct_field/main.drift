@@ -1,0 +1,24 @@
+module main
+
+struct Config(names: Array<String>, count: Int);
+
+implement Config {
+    fn with_names(self: &Config, items: Array<String>) nothrow -> Config {
+        return Config(move items, self.count);
+    }
+
+    fn with_count(self: &Config, n: Int) nothrow -> Config {
+        return Config(self.names, n);
+    }
+}
+
+fn main() nothrow -> Int {
+    var protos: Array<String> = [];
+    protos.push("alpha");
+    protos.push("beta");
+    protos.push("gamma");
+
+    var empty: Array<String> = [];
+    val cfg = Config(move empty, 0).with_names(move protos).with_count(99);
+    return cfg.names.len;
+}

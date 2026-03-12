@@ -232,6 +232,11 @@ class HIRToMIR:
 		# Stack of scopes; each scope stores locals that need drop at scope exit.
 		self._scope_stack: list[list[str]] = []
 		self._moved_locals: set[str] = set()
+		# SSA temps produced by reading a non-bitcopy field from a &T
+		# (aliased pointers into the borrowed struct's memory).  These MUST
+		# be deep-copied before any ownership transfer (struct/variant
+		# construction, return, variable binding) to prevent double-free.
+		self._ref_field_temps: set[str] = set()
 		self._current_stmt_span: Span | None = None
 		# Stack of try contexts for nested try/catch (innermost on top).
 		self._try_stack: list["_TryCtx"] = []
@@ -403,6 +408,38 @@ class HIRToMIR:
 					return True
 		return False
 
+	def _can_inline_copy(self, ty: TypeId, visiting: set[TypeId]) -> bool:
+		"""Check whether a type's copy can be fully inlined at compile time.
+		Returns False for self-referential types that would require a
+		recursive runtime clone (which we don't yet support)."""
+		if self._type_table.is_bitcopy(ty):
+			return True
+		if ty in visiting:
+			return False
+		visiting.add(ty)
+		td = self._type_table.get(ty)
+		if td.kind is TypeKind.SCALAR and td.name == "String":
+			return True
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			return self._can_inline_copy(td.param_types[0], visiting)
+		if td.kind is TypeKind.STRUCT:
+			inst = self._type_table.get_struct_instance(ty)
+			if inst is not None:
+				for ft in inst.field_types:
+					if not self._can_inline_copy(ft, visiting):
+						return False
+			return True
+		if td.kind is TypeKind.VARIANT:
+			inst = self._type_table.get_variant_instance(ty)
+			if inst is not None:
+				for arm in inst.arms:
+					for ft in arm.field_types:
+						if not self._can_inline_copy(ft, visiting):
+							return False
+			return True
+		# For other types (FORWARD_NOMINAL, TYPEVAR, etc.) be conservative.
+		return False
+
 	def _should_copy_value(self, ty: TypeId) -> bool:
 		return self._classify_value_transfer(ty) == "copy"
 
@@ -429,6 +466,31 @@ class HIRToMIR:
 		# non-typevar nominal/alias paths: prefer move semantics over asserting.
 		# This avoids false internal failures while preserving ownership safety.
 		return "move"
+
+	def _copy_if_ref_alias(self, value: M.ValueId, ty: TypeId) -> M.ValueId:
+		"""If *value* is an aliased temp from a &T field read, emit a deep copy
+		so the caller receives a freshly-owned value.  Otherwise return *value*
+		unchanged.  This must be called at every ownership-transfer boundary
+		(struct/variant construction, return, variable binding, call args)."""
+		if value not in self._ref_field_temps:
+			return value
+		self._ref_field_temps.discard(value)
+		if self._type_table.is_bitcopy(ty):
+			return value
+		td = self._type_table.get(ty)
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			dup = self.b.new_temp()
+			self.b.emit(M.ArrayDup(dest=dup, elem_ty=td.param_types[0], array=value))
+			self._local_types[dup] = ty
+			return dup
+		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT) or (
+			td.kind is TypeKind.SCALAR and td.name == "String"
+		):
+			copy = self.b.new_temp()
+			self.b.emit(M.CopyValue(dest=copy, value=value, ty=ty))
+			self._local_types[copy] = ty
+			return copy
+		return value
 
 	def _push_scope(self, *, include_params: bool) -> None:
 		scope: list[str] = []
@@ -746,6 +808,10 @@ class HIRToMIR:
 				scrut_ref_mut = bool(scrut_def.ref_mut)
 				scrut_ref_val = scrut_val
 				scrut_ty = scrut_def.param_types[0]
+		# Deep-copy aliased ref-field temps before using as match scrutinee
+		# (the match machinery stores and drops the scrutinee value).
+		if scrut_ty is not None:
+			scrut_val = self._copy_if_ref_alias(scrut_val, scrut_ty)
 		if scrut_ty is None or self._type_table.get(scrut_ty).kind is not TypeKind.VARIANT:
 			raise AssertionError("match scrutinee must have a concrete variant type (checker bug)")
 		inst = self._type_table.get_variant_instance(scrut_ty)
@@ -1749,6 +1815,7 @@ class HIRToMIR:
 		if subj_ty is None:
 			raise AssertionError("field subject type unknown in MIR lowering (checker bug)")
 		sub_def = self._type_table.get(subj_ty)
+		loaded_from_ref = False
 		if sub_def.kind is TypeKind.REF and sub_def.param_types:
 			inner_ty = sub_def.param_types[0]
 			loaded = self.b.new_temp()
@@ -1756,6 +1823,7 @@ class HIRToMIR:
 			subject = loaded
 			subj_ty = inner_ty
 			sub_def = self._type_table.get(subj_ty)
+			loaded_from_ref = True
 		if expr.name in ("len", "cap", "capacity", "gen") and sub_def.kind is TypeKind.STRUCT:
 			info = self._type_table.struct_field(subj_ty, expr.name)
 			if info is not None:
@@ -1816,6 +1884,15 @@ class HIRToMIR:
 				field_ty=field_ty,
 			)
 		)
+		# When reading an owned field from a borrowed struct (&T), the
+		# extractvalue is an aliased bitcopy of the original's data.
+		# Mark the temp so that ownership-transfer sites (struct/variant
+		# construction, return, variable binding) emit a deep copy.
+		# We do NOT copy eagerly here — transient uses (chained field
+		# access, .len, comparisons) are safe without a copy and would
+		# otherwise leak the intermediate allocation.
+		if loaded_from_ref and not self._type_table.is_bitcopy(field_ty):
+			self._ref_field_temps.add(dest)
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
@@ -2678,10 +2755,12 @@ class HIRToMIR:
 				# Evaluate arguments left-to-right as written, but pass them in field order.
 				ordered: list[M.ValueId | None] = [None] * len(field_types)
 				for idx, arg_expr in enumerate(pos_args):
-					ordered[idx] = self.lower_expr(arg_expr, expected_type=field_types[idx])
+					val = self.lower_expr(arg_expr, expected_type=field_types[idx])
+					ordered[idx] = self._copy_if_ref_alias(val, field_types[idx])
 				for kw in kw_pairs:
 					field_idx = field_names.index(kw.name)
-					ordered[field_idx] = self.lower_expr(kw.value, expected_type=field_types[field_idx])
+					val = self.lower_expr(kw.value, expected_type=field_types[field_idx])
+					ordered[field_idx] = self._copy_if_ref_alias(val, field_types[field_idx])
 				arg_vals = [v for v in ordered if v is not None]
 				dest = self.b.new_temp()
 				self.b.emit(M.ConstructStruct(dest=dest, struct_ty=struct_ty, args=arg_vals))
@@ -5247,6 +5326,10 @@ class HIRToMIR:
 			bid_ty = self._binding_types.get(int(bid))
 			if bid_ty is not None and self._type_table.get(bid_ty).kind is not TypeKind.UNKNOWN:
 				val_ty = bid_ty
+		# Deep-copy aliased ref-field temps before binding to a local
+		# (the local will be dropped at scope exit).
+		if val_ty is not None:
+			val = self._copy_if_ref_alias(val, val_ty)
 		if val_ty is not None:
 			self._local_types[local_name] = val_ty
 			self._register_drop_local(local_name, val_ty)
@@ -5289,6 +5372,10 @@ class HIRToMIR:
 
 	def _visit_stmt_HAssign(self, stmt: H.HAssign) -> None:
 		val = self.lower_expr(stmt.value)
+		# Deep-copy aliased ref-field temps before assignment.
+		assign_ty = self._infer_expr_type(stmt.value)
+		if assign_ty is not None:
+			val = self._copy_if_ref_alias(val, assign_ty)
 		# Stage1 normalization must canonicalize assignment targets to `HPlaceExpr`.
 		# This keeps stage2 lowering lvalue handling single-path and prevents
 		# re-deriving place structure from arbitrary expression trees.
@@ -5490,6 +5577,8 @@ class HIRToMIR:
 			if stmt.value is None:
 				raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
 			val = self.lower_expr(stmt.value, expected_type=self._ret_type)
+			if self._ret_type is not None:
+				val = self._copy_if_ref_alias(val, self._ret_type)
 			self._emit_scope_drops(scope_index=0)
 			term = M.Return(value=val)
 			if ret_span != Span():
@@ -5524,6 +5613,8 @@ class HIRToMIR:
 		if stmt.value is None:
 			raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
 		val = self.lower_expr(stmt.value, expected_type=self._ret_type)
+		if self._ret_type is not None:
+			val = self._copy_if_ref_alias(val, self._ret_type)
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
 		self._emit_scope_drops(scope_index=0)
@@ -6259,7 +6350,13 @@ class HIRToMIR:
 						self._local_types[moved_val] = arg_ty
 						self._moved_locals.add(subj_name)
 						return moved_val
-		return self.lower_expr(arg, expected_type=param_ty)
+		val = self.lower_expr(arg, expected_type=param_ty)
+		# If the arg was an aliased ref-field temp, deep-copy before passing
+		# ownership to the callee (struct/variant ctor, function call).
+		arg_ty = param_ty or self._infer_expr_type(arg)
+		if arg_ty is not None:
+			val = self._copy_if_ref_alias(val, arg_ty)
+		return val
 
 	def _lower_constructor_call(self, expr: H.HCall, info: CallInfo) -> M.ValueId:
 		variant_ty = info.target.variant_type_id

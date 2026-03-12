@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Array<nested-struct-with-String> borrowed copy through chained builder",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

@@ -1,0 +1,43 @@
+module main
+
+variant Tree {
+    Leaf(xs: Array<String>),
+    Kids(children: Array<Tree>),
+}
+
+struct Config(tree: Tree, count: Int);
+
+implement Config {
+    fn with_count(self: &Config, n: Int) nothrow -> Config {
+        return Config(self.tree, n);
+    }
+}
+
+fn leaf() nothrow -> Tree {
+    var xs: Array<String> = [];
+    xs.push("alpha");
+    xs.push("beta");
+    return Tree::Leaf(move xs);
+}
+
+fn one() nothrow -> Tree {
+    var kids: Array<Tree> = [];
+    kids.push(leaf());
+    return Tree::Kids(move kids);
+}
+
+fn main() nothrow -> Int {
+    var i = 0;
+    while i < 100 {
+        val tmp = Config(one(), 0);
+        val cfg = tmp.with_count(1);
+        match cfg.tree {
+            Tree::Kids(children) => {
+                if children.len != 1 { return 97; }
+            },
+            Tree::Leaf(xs) => { return 98; }
+        }
+        i = i + 1;
+    }
+    return 3;
+}

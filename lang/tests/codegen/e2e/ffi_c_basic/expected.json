@@ -1,0 +1,7 @@
+{
+  "description": "e2e: extern C FFI basic — call custom C helpers via extern \"C\" fn",
+  "exit_code": 26,
+  "stderr": "",
+  "stdout": "",
+  "c_sources": ["helper.c"]
+}

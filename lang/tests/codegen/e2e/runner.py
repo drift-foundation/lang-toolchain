@@ -144,6 +144,7 @@ def _run_ir_with_clang(
 	timeout_s: int = 30,
 	alloc_track_enabled: bool = False,
 	fiber_suppressions_enabled: bool = False,
+	extra_objects: list[Path] | None = None,
 ) -> tuple[int, str, str]:
 	"""Compile the provided LLVM IR with clang and return (exit, stdout, stderr)."""
 	clang = shutil.which("clang")
@@ -218,6 +219,7 @@ def _run_ir_with_clang(
 				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 			except Exception as ex:
 				return 1, "", f"runtime archive build failed in archive mode: {ex}"
+		extra_obj_args = [str(p) for p in (extra_objects or [])]
 		if rt_mode == "archive":
 			compile_cmd = [
 				clang,
@@ -229,6 +231,7 @@ def _run_ir_with_clang(
 				"-x",
 				"none",
 				runtime_archive,
+				*extra_obj_args,
 				*link_flags,
 				*link_libs,
 				*link_wrap_flags,
@@ -250,6 +253,7 @@ def _run_ir_with_clang(
 				"-x",
 				"c",
 				*(str(p) for p in runtime_sources),
+				*extra_obj_args,
 				*link_flags,
 				*link_libs,
 				*link_wrap_flags,
@@ -694,6 +698,28 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	stdin_data = expected.get("stdin")
 	if needs_argv and not run_args:
 		return "FAIL (argv main requires args in expected.json)"
+
+	# Compile companion C sources declared in expected.json "c_sources".
+	extra_objects: list[Path] = []
+	c_sources = expected.get("c_sources") or []
+	if c_sources:
+		clang = shutil.which("clang")
+		if clang is None:
+			return "FAIL (clang not available for C helper compilation)"
+		build_dir.mkdir(parents=True, exist_ok=True)
+		for c_name in c_sources:
+			c_path = case_dir / c_name
+			if not c_path.exists():
+				return f"FAIL (c_sources: {c_name} not found in case dir)"
+			obj_path = build_dir / (c_path.stem + ".o")
+			c_res = subprocess.run(
+				[clang, "-c", str(c_path), "-o", str(obj_path)],
+				capture_output=True, text=True, cwd=ROOT, timeout=30,
+			)
+			if c_res.returncode != 0:
+				return f"FAIL (C compile {c_name}: {c_res.stderr.strip()})"
+			extra_objects.append(obj_path)
+
 	alloc_track_env_enabled = os.environ.get("DRIFT_ALLOC_TRACK") in {"1", "true", "True"}
 	alloc_track_case_required = bool(expected.get("alloc_track_leak") or expected.get("alloc_track_no_leak_if_enabled"))
 	alloc_track_enabled = alloc_track_case_required or alloc_track_env_enabled
@@ -706,6 +732,7 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 		timeout_s=timeout_s,
 		alloc_track_enabled=alloc_track_enabled,
 		fiber_suppressions_enabled=fiber_suppressions_enabled,
+		extra_objects=extra_objects,
 	)
 	stderr_clean, alloc_stats = _extract_alloc_track_stats(stderr)
 	if _env_true("DRIFT_ASAN"):

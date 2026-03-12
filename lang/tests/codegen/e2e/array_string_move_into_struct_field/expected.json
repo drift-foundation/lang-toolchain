@@ -1,0 +1,6 @@
+{
+  "description": "e2e: Array<String> moved into struct field through chained builder method",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

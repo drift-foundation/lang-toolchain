@@ -1,5 +1,17 @@
 # Drift development history
 
+## 2026-03-12
+- Fixed borrowed-struct owned-field aliasing/double-free in stage2/LLVM lowering:
+  - reading owned fields from `&T` now marks aliased temps at field-read sites instead of eagerly cloning them,
+  - deep copies are emitted only at real ownership-transfer boundaries (constructor args, call args, returns, local binding/reassignment, match scrutinee),
+  - recursive owned copies are handled through generated LLVM clone helpers for `Struct`, `Array`, and `Variant`, including self-referential shapes.
+- Added/updated regressions covering:
+  - `Array<String>` moved through a chained builder into a struct field,
+  - deep nested borrowed-copy through array/struct ownership,
+  - recursive struct and recursive variant borrowed-copy cases.
+- Verified green both normally and under `DRIFT_MEMCHECK=1`.
+- Bumped compiler version to `0.27.30-dev`; ABI remains `5`.
+
 ## 2026-03-11
 - Implemented C FFI MVP (`extern "C"`):
   - Parser: `extern "C" fn name(params) nothrow -> RetType;` and block form `extern "C" { ... }` syntax via Lark grammar extensions.

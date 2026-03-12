@@ -1,0 +1,26 @@
+module main
+
+struct S4(s: String);
+struct S3(inner: S4);
+struct S2(inner: S3);
+struct S1(inner: S2);
+
+struct Config(items: Array<S1>, count: Int);
+
+implement Config {
+    fn with_count(self: &Config, n: Int) nothrow -> Config {
+        return Config(self.items, n);
+    }
+}
+
+fn main() nothrow -> Int {
+    var arr: Array<S1> = [];
+    arr.push(S1(S2(S3(S4("abc")))));
+    arr.push(S1(S2(S3(S4("def")))));
+    arr.push(S1(S2(S3(S4("ghi")))));
+
+    var empty: Array<S1> = [];
+    val cfg = Config(move empty, 0).with_count(1);
+    val cfg2 = Config(move arr, 0).with_count(99);
+    return cfg2.items.len;
+}

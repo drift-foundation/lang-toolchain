@@ -643,6 +643,7 @@ class LlvmModuleBuilder:
 	_struct_types_by_name: Dict[str, str] = field(default_factory=dict)
 	_variant_types_by_key: Dict[str, str] = field(default_factory=dict)
 	array_drop_helpers: Dict[str, str] = field(default_factory=dict)
+	clone_helpers: Dict[str, str] = field(default_factory=dict)
 	dv_drop_helper: str | None = None
 	iface_drop_helper: str | None = None
 	string_literal_cache: Dict[str, tuple[str, str, int]] = field(default_factory=dict)
@@ -1466,6 +1467,11 @@ class _FuncBuilder:
 	_dbg_keepalive_allocas: Dict[str, str] = field(default_factory=dict)
 	_dbg_keepalive_storage_types: Dict[str, str] = field(default_factory=dict)
 	_dbg_entry_anchor_emitted: bool = False
+	# Maps MIR block name → actual LLVM block name at the time the terminator
+	# is emitted.  Instructions that generate new LLVM blocks (e.g. ArrayDup,
+	# variant copy) update _current_effective_block so the mapping is correct.
+	_block_exit_names: Dict[str, str] = field(default_factory=dict)
+	_current_effective_block: str | None = None
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
@@ -1487,6 +1493,10 @@ class _FuncBuilder:
 			order = [self.func.entry] + [b for b in order if b != self.func.entry]
 		for block_name in order:
 			self._emit_block(block_name)
+		# Fix up PHI predecessor labels: instructions that generate new LLVM
+		# basic blocks (ArrayDup, variant copy) may have changed the effective
+		# exit block for a MIR block, making PHI references stale.
+		self._fixup_phi_predecessors()
 		self.lines.append("}")
 		return "\n".join(self.lines)
 
@@ -2137,6 +2147,7 @@ class _FuncBuilder:
 	def _emit_block(self, block_name: str) -> None:
 		# Track current block name so instruction-level helpers can consult SSA maps.
 		self._current_block_name = block_name
+		self._current_effective_block = block_name
 		block = self.func.blocks[block_name]
 		self.lines.append(f"{block.name}:")
 		# Emit phi nodes first.
@@ -2160,8 +2171,12 @@ class _FuncBuilder:
 		self._lower_term(block.terminator)
 		if len(self.lines) > term_start:
 			self._attach_dbg(term_start, block.terminator)
+		# Record the effective LLVM block that holds the terminator, so PHI
+		# fixup can replace stale predecessor labels.
+		self._block_exit_names[block_name] = self._current_effective_block
 		# Best-effort cleanup; not strictly necessary.
 		self._current_block_name = None
+		self._current_effective_block = None
 
 	def _attach_dbg(self, line_index: int, instr: object) -> None:
 		if not self.module.debug_enabled:
@@ -2215,6 +2230,25 @@ class _FuncBuilder:
 		self.value_types[dest] = phi_ty
 		emit_phi_ty = self._llty(phi_ty)
 		self.lines.append(f"  {dest} = phi {emit_phi_ty} {joined}")
+
+	def _fixup_phi_predecessors(self) -> None:
+		"""Rewrite PHI predecessor labels that were invalidated by instructions
+		generating new LLVM basic blocks within a MIR block."""
+		renames = {k: v for k, v in self._block_exit_names.items() if k != v}
+		if not renames:
+			return
+		import re
+		for idx, line in enumerate(self.lines):
+			if " = phi " not in line:
+				continue
+			changed = False
+			for mir_name, llvm_name in renames.items():
+				old_label = f"%{mir_name} ]"
+				if old_label in line:
+					line = line.replace(old_label, f"%{llvm_name} ]")
+					changed = True
+			if changed:
+				self.lines[idx] = line
 
 	def _lower_instr(self, instr: object, instr_index: int | None = None) -> None:
 		if isinstance(instr, ConstInt):
@@ -8053,13 +8087,22 @@ class _FuncBuilder:
 		"""Lower ArrayDup by allocating a new buffer and copying elements."""
 		dest = self._map_value(instr.dest)
 		array = self._map_value(instr.array)
-		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
+		result = self._emit_array_dup_value(instr.elem_ty, array, dest_hint=dest)
+		if result != dest:
+			self.value_map[instr.dest] = result
+			if result in self.value_types:
+				self.value_types[dest] = self.value_types[result]
+
+	def _emit_array_dup_value(self, elem_ty_id: "TypeId", array: str, dest_hint: str | None = None) -> str:
+		"""Emit an array duplication returning the new array header value."""
+		dest = dest_hint if dest_hint is not None else self._fresh("arr_dup")
+		elem_llty = self._llvm_array_elem_type(elem_ty_id)
 		arr_llty = self._llvm_array_header_type()
-		elem_size, elem_align = self._array_elem_layout(instr.elem_ty, elem_llty)
+		elem_size, elem_align = self._array_elem_layout(elem_ty_id, elem_llty)
 		self.module.needs_array_helpers = True
 		bitcopy = True
 		if self.type_table is not None:
-			bitcopy = self.type_table.is_bitcopy(instr.elem_ty)
+			bitcopy = self.type_table.is_bitcopy(elem_ty_id)
 		# Extract len, cap, gen, data
 		len_tmp = self._fresh("len")
 		cap_tmp = self._fresh("cap")
@@ -8105,6 +8148,8 @@ class _FuncBuilder:
 			)
 			self.lines.append(f"  br label {after_block}")
 			self.lines.append(f"{after_block[1:]}:")
+			if self._current_effective_block is not None:
+				self._current_effective_block = after_block[1:]
 		else:
 			# Element-wise copy for non-bitcopy Copy types.
 			idx_ptr = self._fresh("idx_ptr")
@@ -8133,13 +8178,15 @@ class _FuncBuilder:
 			)
 			src_val = self._fresh("src_val")
 			self.lines.append(f"  {src_val} = load {elem_llty}, {elem_llty}* {src_ptr}")
-			copied_val = self._emit_copy_value(instr.elem_ty, src_val)
+			copied_val = self._emit_copy_value(elem_ty_id, src_val)
 			self.lines.append(f"  store {elem_llty} {copied_val}, {elem_llty}* {dst_ptr}")
 			next_val = self._fresh("idx_next")
 			self.lines.append(f"  {next_val} = add {self._llty(DRIFT_INT_TYPE)} {idx_val2}, 1")
 			self.lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} {next_val}, {self._llty(DRIFT_INT_TYPE)}* {idx_ptr}")
 			self.lines.append(f"  br label {cond_block}")
 			self.lines.append(f"{done_block[1:]}:")
+			if self._current_effective_block is not None:
+				self._current_effective_block = done_block[1:]
 		# Build the array struct {len, cap, gen, data}
 		tmp0 = self._fresh("arrh0")
 		tmp1 = self._fresh("arrh1")
@@ -8149,6 +8196,9 @@ class _FuncBuilder:
 		self.lines.append(f"  {tmp2} = insertvalue {arr_llty} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {gen_tmp}, {ARRAY_GEN_IDX}")
 		self.lines.append(f"  {dest} = insertvalue {arr_llty} {tmp2}, i8* {tmp_alloc}, {ARRAY_PTR_IDX}")
 		self.value_types[dest] = arr_llty
+		return dest
+
+	_copy_visiting: set | None = None
 
 	def _emit_copy_value(self, ty_id: TypeId, value: str, dest_hint: str | None = None) -> str:
 		"""
@@ -8158,6 +8208,25 @@ class _FuncBuilder:
 			raise AssertionError("CopyValue requires a TypeTable")
 		if self.type_table.is_bitcopy(ty_id):
 			return value
+		# Cycle detection for self-referential types (e.g. struct Foo(items: Array<Foo>)).
+		# When a cycle is detected, delegate to a standalone clone helper function
+		# that handles the recursion via normal function calls.
+		if self._copy_visiting is None:
+			self._copy_visiting = set()
+		if ty_id in self._copy_visiting:
+			helper = self._ensure_clone_helper(ty_id)
+			llty = self._llvm_type_for_typeid(ty_id)
+			out = dest_hint if dest_hint is not None else self._fresh("clone")
+			self.lines.append(f"  {out} = call {llty} @{helper}({llty} {value})")
+			self.value_types[out] = llty
+			return out
+		self._copy_visiting.add(ty_id)
+		try:
+			return self._emit_copy_value_inner(ty_id, value, dest_hint)
+		finally:
+			self._copy_visiting.discard(ty_id)
+
+	def _emit_copy_value_inner(self, ty_id: TypeId, value: str, dest_hint: str | None = None) -> str:
 		td = self.type_table.get(ty_id)
 		llty = self._llvm_type_for_typeid(ty_id)
 		if td.kind is TypeKind.SCALAR and td.name == "String":
@@ -8167,6 +8236,8 @@ class _FuncBuilder:
 			self.lines.append(f"  {out} = call {DRIFT_STRING_TYPE} @drift_string_retain({DRIFT_STRING_TYPE} {value})")
 			self.value_types[out] = DRIFT_STRING_TYPE
 			return out
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			return self._emit_array_dup_value(td.param_types[0], value, dest_hint=dest_hint)
 		if td.kind is TypeKind.VARIANT:
 			inst = self.type_table.get_variant_instance(ty_id)
 			if inst is None:
@@ -8239,6 +8310,8 @@ class _FuncBuilder:
 			self.lines.append("  call void @llvm.trap()")
 			self.lines.append("  unreachable")
 			self.lines.append(f"{done_block[1:]}:")
+			if self._current_effective_block is not None:
+				self._current_effective_block = done_block[1:]
 			out = self._fresh("var_out")
 			self.lines.append(f"  {out} = load {variant_llty}, {variant_llty}* {result_ptr}")
 			self.value_types[out] = variant_llty
@@ -8280,6 +8353,291 @@ class _FuncBuilder:
 		if td.kind is TypeKind.FNRESULT:
 			raise NotImplementedError("LLVM codegen v1: CopyValue on FnResult is invalid (FnResult is not Copy)")
 		raise NotImplementedError(f"LLVM codegen v1: copy not supported for {td.kind.name}")
+
+	def _ensure_clone_helper(self, ty_id: TypeId) -> str:
+		"""Generate a standalone recursive clone function for a type.
+		Used for self-referential types that cannot be inline-copied."""
+		key = self._type_key(ty_id)
+		name = f"__drift_clone_{key}"
+		if name in self.module.clone_helpers:
+			return name
+		# Register BEFORE generating body to break recursion:
+		# the body may call _ensure_clone_helper for the same type,
+		# which will find the name already registered.
+		self.module.clone_helpers[name] = name
+		llty = self._llvm_type_for_typeid(ty_id)
+		emit_llty = self._llty(llty)
+		td = self.type_table.get(ty_id)
+
+		lines: list[str] = []
+		tmp_counter = 0
+
+		def fresh(prefix: str) -> str:
+			nonlocal tmp_counter
+			tmp_counter += 1
+			return f"%{prefix}{tmp_counter}"
+
+		def emit_clone(inner_ty: TypeId, val: str) -> str:
+			"""Emit a clone of val, returning the cloned SSA value."""
+			if self.type_table.is_bitcopy(inner_ty):
+				return val
+			inner_td = self.type_table.get(inner_ty)
+			inner_llty = self._llvm_type_for_typeid(inner_ty)
+			emit_inner_llty = self._llty(inner_llty)
+			if inner_td.kind is TypeKind.SCALAR and inner_td.name == "String":
+				self.module.needs_string_retain = True
+				out = fresh("str_retain")
+				lines.append(f"  {out} = call {DRIFT_STRING_TYPE} @drift_string_retain({DRIFT_STRING_TYPE} {val})")
+				return out
+			# For types that already have (or are being generated as) a clone
+			# helper, emit a call to break the recursion.
+			inner_key = self._type_key(inner_ty)
+			inner_helper_name = f"__drift_clone_{inner_key}"
+			if inner_helper_name in self.module.clone_helpers:
+				out = fresh("clone")
+				lines.append(f"  {out} = call {emit_inner_llty} @{inner_helper_name}({emit_inner_llty} {val})")
+				return out
+			if inner_td.kind is TypeKind.ARRAY and inner_td.param_types:
+				return emit_array_clone(inner_ty, inner_td.param_types[0], val)
+			if inner_td.kind is TypeKind.STRUCT:
+				return emit_struct_clone(inner_ty, val)
+			# For other non-bitcopy types, delegate to a clone helper.
+			helper = self._ensure_clone_helper(inner_ty)
+			out = fresh("clone")
+			lines.append(f"  {out} = call {emit_inner_llty} @{helper}({emit_inner_llty} {val})")
+			return out
+
+		def emit_struct_clone(struct_ty: TypeId, val: str) -> str:
+			struct_llty = self._llvm_type_for_typeid(struct_ty)
+			inst = self.type_table.get_struct_instance(struct_ty)
+			if inst is None:
+				return val
+			current = "zeroinitializer"
+			for idx, field_ty in enumerate(inst.field_types):
+				field_val_llty = self._llvm_type_for_typeid(field_ty)
+				field_store_llty = self._llvm_storage_type_for_typeid(field_ty)
+				raw = fresh("f")
+				lines.append(f"  {raw} = extractvalue {struct_llty} {val}, {idx}")
+				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
+					bval = fresh("fb")
+					lines.append(f"  {bval} = icmp ne i8 {raw}, 0")
+					copied = emit_clone(field_ty, bval)
+					store_val = fresh("bs")
+					lines.append(f"  {store_val} = zext i1 {copied} to i8")
+				else:
+					copied = emit_clone(field_ty, raw)
+					store_val = copied
+				emit_store_llty = self._llty(field_store_llty)
+				ins = fresh("ins")
+				lines.append(f"  {ins} = insertvalue {struct_llty} {current}, {emit_store_llty} {store_val}, {idx}")
+				current = ins
+			return current
+
+		def emit_array_clone(arr_ty: TypeId, elem_ty: TypeId, val: str) -> str:
+			arr_llty = self._llvm_array_header_type()
+			elem_llty = self._llvm_array_elem_type(elem_ty)
+			elem_size, elem_align = self._array_elem_layout(elem_ty, elem_llty)
+			self.module.needs_array_helpers = True
+
+			len_v = fresh("len")
+			cap_v = fresh("cap")
+			gen_v = fresh("gen")
+			data_v = fresh("data")
+			lines.append(f"  {len_v} = extractvalue {arr_llty} {val}, {ARRAY_LEN_IDX}")
+			lines.append(f"  {cap_v} = extractvalue {arr_llty} {val}, {ARRAY_CAP_IDX}")
+			lines.append(f"  {gen_v} = extractvalue {arr_llty} {val}, {ARRAY_GEN_IDX}")
+			lines.append(f"  {data_v} = extractvalue {arr_llty} {val}, {ARRAY_PTR_IDX}")
+			src_ptr = fresh("src_ptr")
+			lines.append(f"  {src_ptr} = bitcast i8* {data_v} to {elem_llty}*")
+
+			alloc = fresh("alloc")
+			lines.append(
+				f"  {alloc} = call i8* @drift_alloc_array("
+				f"{self._llty(DRIFT_USIZE_TYPE)} {elem_size}, "
+				f"{self._llty(DRIFT_USIZE_TYPE)} {elem_align}, "
+				f"{self._llty(DRIFT_INT_TYPE)} {len_v}, "
+				f"{self._llty(DRIFT_INT_TYPE)} {cap_v})"
+			)
+			dst_base = fresh("dst_base")
+			lines.append(f"  {dst_base} = bitcast i8* {alloc} to {elem_llty}*")
+
+			bitcopy = self.type_table.is_bitcopy(elem_ty)
+			if bitcopy:
+				self.module.needs_memcpy = True
+				is_zero = fresh("is_zero")
+				lines.append(f"  {is_zero} = icmp eq {self._llty(DRIFT_INT_TYPE)} {len_v}, 0")
+				zero_lbl = fresh("zero")
+				copy_lbl = fresh("copy")
+				done_lbl = fresh("done")
+				lines.append(f"  br i1 {is_zero}, label {zero_lbl}, label {copy_lbl}")
+				lines.append(f"{zero_lbl[1:]}:")
+				lines.append(f"  br label {done_lbl}")
+				lines.append(f"{copy_lbl[1:]}:")
+				nbytes = fresh("nbytes")
+				lines.append(f"  {nbytes} = mul {self._llty(DRIFT_INT_TYPE)} {len_v}, {elem_size}")
+				si = fresh("si")
+				di = fresh("di")
+				lines.append(f"  {si} = bitcast {elem_llty}* {src_ptr} to i8*")
+				lines.append(f"  {di} = bitcast {elem_llty}* {dst_base} to i8*")
+				lines.append(f"  call void @llvm.memcpy.p0i8.p0i8.i64(i8* {di}, i8* {si}, i64 {nbytes}, i1 false)")
+				lines.append(f"  br label {done_lbl}")
+				lines.append(f"{done_lbl[1:]}:")
+			else:
+				idx_ptr = fresh("idx_ptr")
+				lines.append(f"  {idx_ptr} = alloca {self._llty(DRIFT_INT_TYPE)}")
+				lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} 0, {self._llty(DRIFT_INT_TYPE)}* {idx_ptr}")
+				cond_lbl = fresh("cond")
+				body_lbl = fresh("body")
+				done_lbl = fresh("done")
+				lines.append(f"  br label {cond_lbl}")
+				lines.append(f"{cond_lbl[1:]}:")
+				iv = fresh("iv")
+				lines.append(f"  {iv} = load {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}* {idx_ptr}")
+				cmp = fresh("cmp")
+				lines.append(f"  {cmp} = icmp slt {self._llty(DRIFT_INT_TYPE)} {iv}, {len_v}")
+				lines.append(f"  br i1 {cmp}, label {body_lbl}, label {done_lbl}")
+				lines.append(f"{body_lbl[1:]}:")
+				iv2 = fresh("iv2")
+				lines.append(f"  {iv2} = load {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}* {idx_ptr}")
+				sp = fresh("sp")
+				dp = fresh("dp")
+				lines.append(f"  {sp} = getelementptr inbounds {elem_llty}, {elem_llty}* {src_ptr}, {self._llty(DRIFT_INT_TYPE)} {iv2}")
+				lines.append(f"  {dp} = getelementptr inbounds {elem_llty}, {elem_llty}* {dst_base}, {self._llty(DRIFT_INT_TYPE)} {iv2}")
+				sv = fresh("sv")
+				lines.append(f"  {sv} = load {elem_llty}, {elem_llty}* {sp}")
+				cv = emit_clone(elem_ty, sv)
+				lines.append(f"  store {elem_llty} {cv}, {elem_llty}* {dp}")
+				nv = fresh("nv")
+				lines.append(f"  {nv} = add {self._llty(DRIFT_INT_TYPE)} {iv2}, 1")
+				lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} {nv}, {self._llty(DRIFT_INT_TYPE)}* {idx_ptr}")
+				lines.append(f"  br label {cond_lbl}")
+				lines.append(f"{done_lbl[1:]}:")
+
+			h0 = fresh("h")
+			h1 = fresh("h")
+			h2 = fresh("h")
+			out = fresh("arr_out")
+			lines.append(f"  {h0} = insertvalue {arr_llty} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {len_v}, {ARRAY_LEN_IDX}")
+			lines.append(f"  {h1} = insertvalue {arr_llty} {h0}, {self._llty(DRIFT_INT_TYPE)} {cap_v}, {ARRAY_CAP_IDX}")
+			lines.append(f"  {h2} = insertvalue {arr_llty} {h1}, {self._llty(DRIFT_INT_TYPE)} {gen_v}, {ARRAY_GEN_IDX}")
+			lines.append(f"  {out} = insertvalue {arr_llty} {h2}, i8* {alloc}, {ARRAY_PTR_IDX}")
+			return out
+
+		def emit_variant_clone(var_ty: TypeId, val: str) -> str:
+			inst = self.type_table.get_variant_instance(var_ty)
+			if inst is None:
+				return val
+			layout = self._variant_layout(var_ty)
+			variant_llty_str = layout.llvm_ty
+			field_types_by_ctor = {arm.name: arm.field_types for arm in inst.arms}
+			tag_v = fresh("tag")
+			lines.append(f"  {tag_v} = extractvalue {variant_llty_str} {val}, 0")
+			result_ptr = fresh("vptr")
+			lines.append(f"  {result_ptr} = alloca {variant_llty_str}")
+			done_lbl = fresh("vdone")
+			default_lbl = fresh("vbad")
+			arm_info: list[tuple[str, str, object]] = []  # (label, ctor_name, arm_layout)
+			for ctor_name, arm_layout in layout.arms:
+				lbl = fresh(f"varm_{ctor_name.lower()}")
+				arm_info.append((lbl, ctor_name, arm_layout))
+			case_specs = " ".join(
+				f"i8 {al.tag}, label {lbl}" for lbl, _, al in arm_info
+			)
+			lines.append(f"  switch i8 {tag_v}, label {default_lbl} [ {case_specs} ]")
+			for lbl, ctor_name, arm_layout in arm_info:
+				lines.append(f"{lbl[1:]}:")
+				tmp_ptr = fresh("vtmp")
+				lines.append(f"  {tmp_ptr} = alloca {variant_llty_str}")
+				lines.append(f"  store {variant_llty_str} {val}, {variant_llty_str}* {tmp_ptr}")
+				args: list[str] = []
+				if arm_layout.payload_struct_llty:
+					pw_ptr = fresh("pw")
+					lines.append(
+						f"  {pw_ptr} = getelementptr inbounds {variant_llty_str}, {variant_llty_str}* {tmp_ptr}, i32 0, i32 2"
+					)
+					pi8 = fresh("pi8")
+					lines.append(
+						f"  {pi8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {pw_ptr} to i8*"
+					)
+					ps_ptr = fresh("ps")
+					lines.append(
+						f"  {ps_ptr} = bitcast i8* {pi8} to {arm_layout.payload_struct_llty}*"
+					)
+					for fidx, (want_llty, store_llty) in enumerate(
+						zip(arm_layout.field_lltys, arm_layout.field_storage_lltys)
+					):
+						fp = fresh("fp")
+						lines.append(
+							f"  {fp} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {ps_ptr}, i32 0, i32 {fidx}"
+						)
+						if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
+							raw8 = fresh("f8")
+							lines.append(f"  {raw8} = load i8, i8* {fp}")
+							fv = fresh("fb")
+							lines.append(f"  {fv} = icmp ne i8 {raw8}, 0")
+							copied = emit_clone(field_types_by_ctor.get(ctor_name, [])[fidx], fv)
+							sv = fresh("bs")
+							lines.append(f"  {sv} = zext i1 {copied} to i8")
+							args.append(sv)
+						else:
+							ewl = self._llty(want_llty)
+							fv = fresh("fv")
+							lines.append(f"  {fv} = load {ewl}, {ewl}* {fp}")
+							field_ty = field_types_by_ctor.get(ctor_name, [])[fidx]
+							copied = emit_clone(field_ty, fv)
+							args.append(copied)
+				# Reconstruct variant value for this arm.
+				# Use alloca + store approach (same as _emit_variant_value).
+				out_ptr = fresh("optr")
+				lines.append(f"  {out_ptr} = alloca {variant_llty_str}")
+				lines.append(f"  store {variant_llty_str} zeroinitializer, {variant_llty_str}* {out_ptr}")
+				tag_p = fresh("tp")
+				lines.append(f"  {tag_p} = getelementptr inbounds {variant_llty_str}, {variant_llty_str}* {out_ptr}, i32 0, i32 0")
+				lines.append(f"  store i8 {arm_layout.tag}, i8* {tag_p}")
+				if arm_layout.field_storage_lltys and args:
+					opw = fresh("opw")
+					lines.append(f"  {opw} = getelementptr inbounds {variant_llty_str}, {variant_llty_str}* {out_ptr}, i32 0, i32 2")
+					opi8 = fresh("opi8")
+					lines.append(f"  {opi8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {opw} to i8*")
+					ops = fresh("ops")
+					lines.append(f"  {ops} = bitcast i8* {opi8} to {arm_layout.payload_struct_llty}*")
+					for aidx, (arg_val, store_llty) in enumerate(
+						zip(args, arm_layout.field_storage_lltys)
+					):
+						afp = fresh("afp")
+						lines.append(f"  {afp} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {ops}, i32 0, i32 {aidx}")
+						lines.append(f"  store {store_llty} {arg_val}, {store_llty}* {afp}")
+				ov = fresh("ov")
+				lines.append(f"  {ov} = load {variant_llty_str}, {variant_llty_str}* {out_ptr}")
+				lines.append(f"  store {variant_llty_str} {ov}, {variant_llty_str}* {result_ptr}")
+				lines.append(f"  br label {done_lbl}")
+			# Default: unreachable tag
+			lines.append(f"{default_lbl[1:]}:")
+			self.module.needs_llvm_trap = True
+			lines.append("  call void @llvm.trap()")
+			lines.append("  unreachable")
+			lines.append(f"{done_lbl[1:]}:")
+			out = fresh("vout")
+			lines.append(f"  {out} = load {variant_llty_str}, {variant_llty_str}* {result_ptr}")
+			return out
+
+		# Generate the function body based on type kind.
+		lines.append(f"define private {emit_llty} @{name}({emit_llty} %src) {{")
+		lines.append("entry:")
+		if td.kind is TypeKind.STRUCT:
+			result = emit_struct_clone(ty_id, "%src")
+		elif td.kind is TypeKind.ARRAY and td.param_types:
+			result = emit_array_clone(ty_id, td.param_types[0], "%src")
+		elif td.kind is TypeKind.VARIANT:
+			result = emit_variant_clone(ty_id, "%src")
+		else:
+			raise NotImplementedError(
+				f"LLVM codegen v1: clone helper not supported for {td.kind.name}"
+			)
+		lines.append(f"  ret {emit_llty} {result}")
+		lines.append("}")
+		self.module.emit_func("\n".join(lines))
+		return name
 
 	def _type_needs_drop(self, ty_id: TypeId) -> bool:
 		if self.type_table is None:

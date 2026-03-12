@@ -1,0 +1,6 @@
+{
+  "description": "e2e: self-referential struct (Node with Array<Node>) borrowed copy through builder",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

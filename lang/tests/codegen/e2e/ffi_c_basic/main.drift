@@ -1,0 +1,8 @@
+extern "C" fn add_ints(a: Int, b: Int) nothrow -> Int;
+extern "C" fn mul_int(x: Int, factor: Int) nothrow -> Int;
+
+fn main() nothrow -> Int {
+    val sum: Int = unsafe { add_ints(10, 3) };
+    val result: Int = unsafe { mul_int(sum, 2) };
+    return result;
+}
