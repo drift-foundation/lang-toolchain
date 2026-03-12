@@ -1,0 +1,23 @@
+module main
+
+struct Builder(protocols: Array<String>, count: Int);
+struct Config(protocols: Array<String>);
+
+fn build(builder: Builder) nothrow -> Config {
+    val ap = builder.protocols;
+    return Config(ap);
+}
+
+fn main() nothrow -> Int {
+    var i = 0;
+    while i < 100 {
+        var protos: Array<String> = [];
+        protos.push("h2");
+        protos.push("http/1.1");
+        val b = Builder(move protos, 42);
+        val cfg = build(b);
+        if cfg.protocols.len != 2 { return 97; }
+        i = i + 1;
+    }
+    return 3;
+}

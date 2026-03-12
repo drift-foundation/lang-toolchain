@@ -1,0 +1,6 @@
+{
+  "description": "e2e: owned field extraction from owned struct param must move/copy, not alias",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

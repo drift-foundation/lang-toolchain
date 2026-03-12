@@ -1,6 +1,14 @@
 # Drift development history
 
 ## 2026-03-12
+- Fixed owned-struct field extraction aliasing/double-free follow-up in stage2 lowering:
+  - non-bitcopy `StructGetField` results from owned struct locals/params are now tracked as aliased temps, not just `&T` field reads,
+  - the lazy copy-at-consumption path now covers the TLS-style `val ap = builder.protocols; return Config(ap);` ownership transfer without double-free,
+  - match scrutinee handling keeps the existing tombstone path for owned-local field reads while still deep-copying true alias cases.
+- Added upstream e2e regression `owned_field_extract_double_free` for owned field extraction from an owned parameter, and kept the borrowed/recursive ownership regressions green under both normal runs and `DRIFT_MEMCHECK=1`.
+- Bumped compiler version to `0.27.31-dev`; ABI remains `5`.
+
+## 2026-03-12
 - Fixed borrowed-struct owned-field aliasing/double-free in stage2/LLVM lowering:
   - reading owned fields from `&T` now marks aliased temps at field-read sites instead of eagerly cloning them,
   - deep copies are emitted only at real ownership-transfer boundaries (constructor args, call args, returns, local binding/reassignment, match scrutinee),

@@ -808,10 +808,23 @@ class HIRToMIR:
 				scrut_ref_mut = bool(scrut_def.ref_mut)
 				scrut_ref_val = scrut_val
 				scrut_ty = scrut_def.param_types[0]
-		# Deep-copy aliased ref-field temps before using as match scrutinee
-		# (the match machinery stores and drops the scrutinee value).
+		# The match machinery already handles aliased owned-local field reads
+		# via tombstoning (zeroing the field in the source struct, lines below).
+		# We only need to deep-copy when that mechanism cannot apply — i.e.,
+		# when the scrutinee was read from a ref (&T), not an owned local.
 		if scrut_ty is not None:
-			scrut_val = self._copy_if_ref_alias(scrut_val, scrut_ty)
+			_scrut_tombstone_applies = False
+			if (
+				isinstance(expr.scrutinee, H.HField)
+				and isinstance(expr.scrutinee.subject, H.HVar)
+			):
+				_subj_ty = self._infer_expr_type(expr.scrutinee.subject)
+				if _subj_ty is not None:
+					_subj_def = self._type_table.get(_subj_ty)
+					if _subj_def.kind is TypeKind.STRUCT:
+						_scrut_tombstone_applies = True
+			if not _scrut_tombstone_applies:
+				scrut_val = self._copy_if_ref_alias(scrut_val, scrut_ty)
 		if scrut_ty is None or self._type_table.get(scrut_ty).kind is not TypeKind.VARIANT:
 			raise AssertionError("match scrutinee must have a concrete variant type (checker bug)")
 		inst = self._type_table.get_variant_instance(scrut_ty)
@@ -1884,15 +1897,28 @@ class HIRToMIR:
 				field_ty=field_ty,
 			)
 		)
-		# When reading an owned field from a borrowed struct (&T), the
-		# extractvalue is an aliased bitcopy of the original's data.
-		# Mark the temp so that ownership-transfer sites (struct/variant
-		# construction, return, variable binding) emit a deep copy.
-		# We do NOT copy eagerly here — transient uses (chained field
-		# access, .len, comparisons) are safe without a copy and would
-		# otherwise leak the intermediate allocation.
-		if loaded_from_ref and not self._type_table.is_bitcopy(field_ty):
-			self._ref_field_temps.add(dest)
+		# StructGetField (LLVM extractvalue) produces an aliased bitcopy of
+		# the source's data.  For non-bitcopy fields this means the result
+		# shares the backing allocation with the source.  If the source
+		# will be dropped (it's a local/param, a &T deref, or itself an
+		# aliased temp), the extracted value is a dangerous alias that must
+		# be deep-copied before any ownership transfer.
+		#
+		# We mark the temp here so that consumption sites (struct/variant
+		# construction, return, variable binding, call args) emit a copy.
+		# Transient uses (chained .len, comparisons) are safe without a
+		# copy and would otherwise leak the intermediate allocation.
+		if not self._type_table.is_bitcopy(field_ty):
+			subject_is_alias = loaded_from_ref or subject in self._ref_field_temps
+			if not subject_is_alias:
+				# Check if the subject was loaded from a local/param that
+				# will be dropped at scope exit (owned struct field read).
+				if isinstance(expr.subject, H.HVar):
+					subject_is_alias = True
+				elif hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")) and not expr.subject.projections:
+					subject_is_alias = True
+			if subject_is_alias:
+				self._ref_field_temps.add(dest)
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
