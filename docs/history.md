@@ -1,6 +1,13 @@
 # Drift development history
 
 ## 2026-03-13
+- **stdlib: TcpStream.raw_fd()**: added `pub fn raw_fd(self: &TcpStream) nothrow -> Int`
+  to `std.net.TcpStream`. Returns the underlying file descriptor without consuming
+  ownership — borrowed fd observation only. The `fd` field remains private.
+  - Added regression test `std_net_tcp_stream_raw_fd`.
+- Bumped compiler version to `0.27.38-dev`; ABI remains `5`.
+
+## 2026-03-13
 - **Extern C cross-module visibility**: `pub extern "C" fn` and `pub extern "C" { ... }`
   are now valid declaration forms. Public extern C declarations can be exported and
   imported across modules like normal functions. Codegen preserves bare C symbol

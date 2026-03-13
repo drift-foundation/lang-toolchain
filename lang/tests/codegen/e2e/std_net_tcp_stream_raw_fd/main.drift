@@ -1,0 +1,13 @@
+module m
+
+import std.net as net;
+
+@test_build_only
+pub fn main() nothrow -> Int {
+	val stream = net.test_tcp_stream();
+	val fd = stream.raw_fd();
+	if fd < 0 {
+		return 1;
+	}
+	return 0;
+}
