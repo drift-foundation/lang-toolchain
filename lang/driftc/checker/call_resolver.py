@@ -38,11 +38,11 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 FIXED_WIDTH_TYPE_NAMES = {
 	"Int8",
 	"Int16",
-	"Int32",
+	# Int32 deliberately excluded: available in user code for C FFI interop.
 	"Int64",
 	"Uint8",
 	"Uint16",
-	"Uint32",
+	# Uint32 deliberately excluded: available in user code for C FFI interop.
 	# Uint64/u64 deliberately excluded: available in user code for portable
 	# 64-bit unsigned arithmetic (crypto, hashing, bit manipulation).
 	"F32",
@@ -752,6 +752,10 @@ def resolve_variant_ctor(
 			return ctx.uint64_ty
 		if name == "Byte":
 			return ctx.byte_ty
+		if name == "Int32":
+			return ctx.type_table.ensure_int32()
+		if name == "Uint32":
+			return ctx.type_table.ensure_uint32()
 		if name == "Bool":
 			return ctx.bool_ty
 		if name == "Float":

@@ -205,8 +205,10 @@ Coercion rules (argument-only):
 | `Uint`  | Unsigned integer of the platform’s natural word size. Same bit-width as `Int`. |
 | `Size`  | (Reserved for future revisions) Natural-width unsigned; not used for collection lengths/indices in v1. |
 | `Float` | Target-native floating-point scalar (IEEE-754 binary32 or binary64 on supported targets). |
-| `Int8`, `Int16`, `Int32`, `Int64` | Fixed-width signed integers, exactly 8/16/32/64-bit two’s-complement (**reserved in v1; allowed only in `lang.abi.*`**). |
-| `Uint8`, `Uint16`, `Uint32` | Fixed-width unsigned integers, exactly 8/16/32-bit (**reserved in v1; allowed only in `lang.abi.*`**). |
+| `Int32` | Fixed-width signed 32-bit integer. Available in all user code for C FFI interop (`int` in C). Supports casts to/from other numeric scalars. |
+| `Uint32` | Fixed-width unsigned 32-bit integer. Available in all user code for C FFI interop (`unsigned int` in C). Supports casts to/from other numeric scalars. |
+| `Int8`, `Int16`, `Int64` | Fixed-width signed integers, exactly 8/16/64-bit two’s-complement (**reserved in v1; allowed only in `lang.abi.*`**). |
+| `Uint8`, `Uint16` | Fixed-width unsigned integers, exactly 8/16-bit (**reserved in v1; allowed only in `lang.abi.*`**). |
 | `Uint64` | Fixed-width unsigned 64-bit integer. Available in all user code for portable 64-bit unsigned arithmetic (crypto, hashing, bit manipulation). Supports all bitwise operators (`&`, `\|`, `^`, `~`, `<<`, `>>`) and their augmented-assignment forms. |
 | `F32`, `F64` | IEEE-754 binary32 and binary64 floating-point types (**reserved in v1; allowed only in `lang.abi.*`**). |
 | `Byte` | Unsigned 8-bit value (v1 surface scalar; `Uint8` is reserved); used for byte buffers and FFI. |
@@ -228,12 +230,20 @@ Coercion rules (argument-only):
 
 #### 3.1.1. Integer and float semantics
 
+**Literal forms:**
+
+- Decimal integers: `42`, `0`, `1000000`
+- Hexadecimal integers: `0xFF`, `0x00200000`, `0XAB` (case-insensitive prefix)
+- Unsigned suffix: `42u`, `0xFFu` (Uint literal)
+- Unsigned 64-bit suffix: `42u64`, `0x10u64` (Uint64 literal)
+- Float: `3.14`, `1.0e10`, `2.5E-3` (decimal only; no hex float)
+
 Drift distinguishes between **natural-width** numeric primitives and **fixed-width** primitives.
 
 - **v1 uses pointer-sized carriers** for `Int`/`Uint` (isize/usize). This avoids wasting space on 32-bit targets and keeps arithmetic efficient.
 - `Size` is not available in v1; collections use `Int` for lengths, capacities, and indices (see chapter 12).
 - `Float` is the target’s native floating-point type (most commonly IEEE-754 binary64; on some targets it may be binary32). The surface name remains `Float` regardless of width. Its bit-width/layout are target-defined; ABI stability is guaranteed within a target, not across different targets.
-- Fixed-width primitives (`Int8`…`Int64`, `Uint8`…`Uint32`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types; user code should use `Int`/`Uint`/`Float`. `Uint64` is **not** subject to this reservation — it is a general-purpose surface type available in all user code, supporting arithmetic, bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), augmented assignment (`&=`, `|=`, `^=`, `<<=`, `>>=`), comparisons, and `cast<Uint64>(...)`. Use it wherever a portable fixed-width 64-bit unsigned integer is needed (cryptographic constants, hash computations, bit manipulation).
+- Fixed-width primitives (`Int8`, `Int16`, `Int64`, `Uint8`, `Uint16`, `F32`, `F64`) are **reserved in v1**. They are used only in ABI/FFI modules and internal compiler/runtime types; user code should use `Int`/`Uint`/`Float`. The following fixed-width types are **available in user code**: `Int32` and `Uint32` (for C FFI interop where `int`/`unsigned int` are 32-bit), and `Uint64` (for portable 64-bit unsigned arithmetic). All three support casts (`cast<Int32>(...)`, etc.) to/from other numeric scalars. `Uint64` additionally supports arithmetic, bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), augmented assignment (`&=`, `|=`, `^=`, `<<=`, `>>=`), and comparisons.
 
 Overflow:
 - Fixed-width integers use modular two’s-complement wraparound.
@@ -3104,6 +3114,8 @@ The following types are permitted in `extern "C"` function signatures:
 |---------------|-------------------------------|-------------|------------------------------|
 | `Int`         | `ptrdiff_t` / `intptr_t`      | `iN` (word) | Natural-width signed integer |
 | `Uint`        | `size_t` / `uintptr_t`        | `iN` (word) | Natural-width unsigned       |
+| `Int32`       | `int` / `int32_t`             | `i32`       | Fixed-width 32-bit signed    |
+| `Uint32`      | `unsigned int` / `uint32_t`   | `i32`       | Fixed-width 32-bit unsigned  |
 | `Uint64`      | `uint64_t`                    | `i64`       | Explicit 64-bit unsigned     |
 | `Byte`        | `uint8_t` / `char`            | `i8`        | Single byte                  |
 | `Bool`        | `_Bool` / `uint8_t`           | `i1`        | Boolean                      |
@@ -3128,8 +3140,9 @@ The following types are **not** permitted in `extern "C"` signatures. The compil
 #### 17.5.3. Numeric width guidance
 
 - Use `Int` / `Uint` for C APIs that use implementation-defined widths (`size_t`, `ptrdiff_t`, `uintptr_t`, etc.).
+- Use `Int32` / `Uint32` for C APIs that use `int` / `unsigned int` (32-bit on all major platforms). This is the correct choice for most POSIX and OpenSSL APIs.
 - Use `Uint64` for C APIs that use explicit `uint64_t`.
-- Fixed-width primitives beyond `Uint64` and `Byte` (e.g., `Int32`, `Uint16`) are internal to `lang.abi` and are not yet exposed in the user-facing FFI surface.
+- `Int32`, `Uint32`, and `Uint64` are available in user code. Other fixed-width primitives (e.g., `Int8`, `Int16`, `Uint16`) are internal to `lang.abi` and are not yet exposed.
 
 ---
 
@@ -3675,7 +3688,7 @@ This section documents the **shipped MVP** as of 0.27.29-dev. The following are 
 - Variadic functions (`...`)
 - Callbacks from C into Drift
 - Dynamic library loading (`dlopen`/`dlsym`) as a language feature
-- Fixed-width integer types beyond `Uint64` and `Byte` in user-facing FFI signatures
+- Fixed-width integer types beyond `Int32`, `Uint32`, `Uint64`, and `Byte` in user-facing FFI signatures
 - `&T` / `&mut T` parameters in extern signatures (references are not FFI-safe)
 
 **Plugin-style extension** (OS-level shared libraries) is a future goal built on top of this foundation. The language does not define a separate "plugin module" kind or a first-class plugin ABI in this revision. Future revisions may add:

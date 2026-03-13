@@ -1697,6 +1697,18 @@ class TypeTable:
 			self._uint64_type = self.new_scalar("Uint64")  # type: ignore[attr-defined]
 		return self._uint64_type  # type: ignore[attr-defined]
 
+	def ensure_int32(self) -> TypeId:
+		"""Return a stable Int32 TypeId, creating it once."""
+		if getattr(self, "_int32_type", None) is None:
+			self._int32_type = self.new_scalar("Int32")  # type: ignore[attr-defined]
+		return self._int32_type  # type: ignore[attr-defined]
+
+	def ensure_uint32(self) -> TypeId:
+		"""Return a stable Uint32 TypeId, creating it once."""
+		if getattr(self, "_uint32_type", None) is None:
+			self._uint32_type = self.new_scalar("Uint32")  # type: ignore[attr-defined]
+		return self._uint32_type  # type: ignore[attr-defined]
+
 	@property
 	def uint_max(self) -> int:
 		"""Maximum value for target-width Uint."""

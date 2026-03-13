@@ -1,0 +1,10 @@
+module main
+fn main() nothrow -> Int {
+    val a = 010;
+    val b = 007;
+    val c = 00;
+    if a != 10 { return 97; }
+    if b != 7 { return 98; }
+    if c != 0 { return 96; }
+    return 3;
+}

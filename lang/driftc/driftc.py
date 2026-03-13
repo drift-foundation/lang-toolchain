@@ -380,6 +380,11 @@ def _install_copy_query(type_table: TypeTable, linked_world: LinkedWorld) -> Non
 			return False if td.ref_mut else True
 		if td.kind is TypeKind.FUNCTION:
 			return True
+		# Primitive scalar types are inherently Copy (except String which is
+		# reference-counted). This covers built-in numeric types like Int32,
+		# Uint32, etc. that may not have explicit Copy trait implementations.
+		if td.kind is TypeKind.SCALAR and td.name != "String":
+			return True
 		try:
 			subject = type_key_from_typeid(type_table, tid)
 		except Exception:

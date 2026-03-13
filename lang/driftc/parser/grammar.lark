@@ -7,12 +7,13 @@
 NAME.0: /(?!type\b)(?!pub\b)(?!use\b)[A-Za-z][A-Za-z0-9_]*/ | /_[A-Za-z0-9_]*(?<!__)/
 // Integer literal: unsigned digits only. Unary '-' is parsed as a separate
 // operator so that `5-1` lexes as INT MINUS INT rather than INT SIGNED_INT.
-INT: /[0-9]+/
-// Unsigned integer literal with 'u' suffix: `42u`, `0u`, `1116352408u`.
+// Accepts decimal (123) and hexadecimal (0x1A3F) forms.
+INT: /0[xX][0-9A-Fa-f]+/ | /[0-9]+/
+// Unsigned integer literal with 'u' suffix: `42u`, `0u`, `0xFFu`.
 // Priority 2 ensures the lexer matches `42u` as UINT_LIT before INT
 // can consume the digits and NAME can consume the trailing `u`.
-UINT64_LIT.3: /[0-9]+u64/
-UINT_LIT.2: /[0-9]+u/
+UINT64_LIT.3: /0[xX][0-9A-Fa-f]+u64/ | /[0-9]+u64/
+UINT_LIT.2: /0[xX][0-9A-Fa-f]+u/ | /[0-9]+u/
 // Float literals: decimal only, digits on both sides of '.', optional exponent.
 // Important: float literals never include a leading sign; unary '-' is parsed separately.
 FLOAT.2: /[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?/

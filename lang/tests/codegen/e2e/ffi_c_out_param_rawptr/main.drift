@@ -1,0 +1,15 @@
+module main
+
+extern "C" fn write_int(out: RawPtr<Int32>, value: Int32) nothrow -> Void;
+extern "C" fn get_alpn_selected(
+    ssl: RawPtr<Byte>,
+    out_data: RawPtr<RawPtr<Byte> >,
+    out_len: RawPtr<Uint32>
+) nothrow -> Void;
+
+fn main() nothrow -> Int {
+    // Verify RawPtr<RawPtr<Byte> >, RawPtr<Int32>, RawPtr<Uint32>
+    // compile in extern C signatures. Actual calls require valid
+    // pointers from std.mem — tested separately by TLS team.
+    return 3;
+}

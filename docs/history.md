@@ -1,6 +1,26 @@
 # Drift development history
 
 ## 2026-03-12
+- Fixed the hex-literal parser follow-up so integer parsing now selects base explicitly:
+  - `0x` / `0X` literals parse as hexadecimal,
+  - all other integer literals parse as decimal,
+  - leading-zero decimals like `010` no longer crash the parser via Python `int(..., 0)`.
+- Bumped compiler version to `0.27.33-dev`; ABI remains `5`.
+
+## 2026-03-12
+- FFI follow-up: hex integer literals, Int32/Uint32, out-parameter pattern:
+  - Parser: extended INT/UINT_LIT/UINT64_LIT tokens to accept hexadecimal form (`0xFF`, `0x00200000u`, `0x10u64`).
+  - Type system: `Int32` and `Uint32` are now first-class scalar types available in user code (removed from fixed-width reserved set).
+  - FFI validator: `Int32` and `Uint32` accepted in `extern "C"` signatures; map to `i32` in LLVM IR.
+  - Checker: `cast<Int32>(...)` / `cast<Uint32>(...)` supported; Int32/Uint32 recognized as Copy.
+  - MIR: scalar cast lowering extended for Int32/Uint32 (trunc/sext between 32-bit and word-width).
+  - LLVM codegen: Int32/Uint32 map to `i32` in type resolution, extern C declarations, and scalar cast info.
+  - PEX e2e runner: added `c_sources` support for compiling/linking C helper files (mirrors runner.py).
+  - Added e2e tests: `hex_integer_literals`, `ffi_c_int32_uint32`, `ffi_c_out_param_rawptr`.
+  - Updated language spec: §3.1 literal forms, §3.1.1 fixed-width availability, §17.5 FFI type table, §21.6 scope.
+- Bumped compiler version to `0.27.32-dev`; ABI remains `5`.
+
+## 2026-03-12
 - Fixed owned-struct field extraction aliasing/double-free follow-up in stage2 lowering:
   - non-bitcopy `StructGetField` results from owned struct locals/params are now tracked as aliased temps, not just `&T` field reads,
   - the lazy copy-at-consumption path now covers the TLS-style `val ap = builder.protocols; return Config(ap);` ownership transfer without double-free,

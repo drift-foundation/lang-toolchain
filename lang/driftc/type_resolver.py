@@ -254,6 +254,7 @@ def resolve_program_signatures(
 # Types considered FFI-safe for extern "C" signatures.
 _FFI_SAFE_SCALAR_NAMES: frozenset[str] = frozenset({
 	"Int", "UInt", "Uint", "Uint64", "Byte", "Bool", "Float",
+	"Int32", "Uint32",
 })
 
 # Type names NOT safe for FFI (regardless of TypeId resolution).

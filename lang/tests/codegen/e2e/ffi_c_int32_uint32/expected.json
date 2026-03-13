@@ -1,0 +1,8 @@
+{
+  "description": "e2e: extern C FFI with Int32/Uint32 fixed-width types",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": "",
+  "c_sources": ["helper.c"],
+  "compiler_flags": ["--allow-unsafe"]
+}

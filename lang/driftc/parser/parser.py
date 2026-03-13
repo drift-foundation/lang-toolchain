@@ -2719,12 +2719,15 @@ def _build_expr(node) -> Expr:
         return Placeholder(loc=_loc(node))
     if name == "uint64_lit":
         raw = node.children[0].value
-        return Uint64Literal(loc=_loc(node), value=int(raw[:-3]))
+        digits = raw[:-3]
+        return Uint64Literal(loc=_loc(node), value=int(digits, 16 if digits[:2] in ("0x", "0X") else 10))
     if name == "uint_lit":
         raw = node.children[0].value
-        return UintLiteral(loc=_loc(node), value=int(raw[:-1]))
+        digits = raw[:-1]
+        return UintLiteral(loc=_loc(node), value=int(digits, 16 if digits[:2] in ("0x", "0X") else 10))
     if name == "int_lit":
-        return Literal(loc=_loc(node), value=int(node.children[0].value))
+        raw = node.children[0].value
+        return Literal(loc=_loc(node), value=int(raw, 16 if raw[:2] in ("0x", "0X") else 10))
     if name == "float_lit":
         return Literal(loc=_loc(node), value=float(node.children[0].value))
     if name == "str_lit":

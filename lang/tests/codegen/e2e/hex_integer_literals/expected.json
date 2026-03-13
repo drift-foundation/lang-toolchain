@@ -1,0 +1,6 @@
+{
+  "description": "e2e: hex integer literals (0xFF, 0x00200000, 0XAB, 0xFFu, 0x10u64)",
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": ""
+}

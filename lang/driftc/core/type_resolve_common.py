@@ -210,6 +210,10 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 			return table.ensure_uint()
 		if name == "Uint64":
 			return table.ensure_uint64()
+		if name == "Int32":
+			return table.ensure_int32()
+		if name == "Uint32":
+			return table.ensure_uint32()
 		if name == "Int":
 			return table.ensure_int()
 		if name == "Byte":

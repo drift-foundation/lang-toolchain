@@ -1,0 +1,21 @@
+module main
+
+fn main() nothrow -> Int {
+    val a = 0xFF;
+    val b = 0x00200000;
+    val c = 0x0303;
+    if a != 255 { return 97; }
+    if b != 2097152 { return 98; }
+    if c != 771 { return 99; }
+
+    // hex with uppercase
+    val d = 0XAB;
+    if d != 171 { return 96; }
+
+    // hex unsigned
+    val e = 0xFFu;
+    val f = 0x10u64;
+    if f != 16 { return 95; }
+
+    return 3;
+}

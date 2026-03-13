@@ -1312,7 +1312,7 @@ class HIRToMIR:
 		return dest
 
 	def _visit_expr_HCast(self, expr: H.HCast) -> M.ValueId:
-		allowed_scalar_names = ("Int", "Uint", "Uint64", "Byte", "Bool")
+		allowed_scalar_names = ("Int", "Uint", "Uint64", "Int32", "Uint32", "Byte", "Bool")
 
 		def _format_type_expr(te: object | None) -> str:
 			if te is None:

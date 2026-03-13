@@ -43,11 +43,13 @@ from lang.driftc.instantiation.key import build_instantiation_key, instantiation
 FIXED_WIDTH_TYPE_NAMES = {
 	"Int8",
 	"Int16",
-	"Int32",
+	# Int32 deliberately excluded: available in user code for C FFI interop
+	# (C `int` is 32-bit on all major platforms).
 	"Int64",
 	"Uint8",
 	"Uint16",
-	"Uint32",
+	# Uint32 deliberately excluded: available in user code for C FFI interop
+	# (C `unsigned int` is 32-bit on all major platforms).
 	# Uint64/u64 deliberately excluded: available in user code for portable
 	# 64-bit unsigned arithmetic (crypto, hashing, bit manipulation).
 	"F32",
@@ -5208,14 +5210,14 @@ class TypeChecker:
 						)
 					)
 					return record_expr(expr, self._unknown)
-				if target_def.kind is TypeKind.SCALAR and target_def.name in ("Int", "Uint", "Uint64", "Byte", "Bool"):
+				if target_def.kind is TypeKind.SCALAR and target_def.name in ("Int", "Uint", "Uint64", "Int32", "Uint32", "Byte", "Bool"):
 					inner_ty = type_expr(expr.value, expected_type=None)
 					if inner_ty is None:
 						return record_expr(expr, self._unknown)
 					inner_def = self.type_table.get(inner_ty)
 					if target_def.name == "Uint" and inner_def.kind is TypeKind.RAW_PTR:
 						return record_expr(expr, target_ty)
-					if inner_def.kind is TypeKind.SCALAR and inner_def.name in ("Int", "Uint", "Uint64", "Byte", "Bool"):
+					if inner_def.kind is TypeKind.SCALAR and inner_def.name in ("Int", "Uint", "Uint64", "Int32", "Uint32", "Byte", "Bool"):
 						return record_expr(expr, target_ty)
 					inner_pretty = self._pretty_type_name(inner_ty, current_module=current_module_name)
 					target_pretty = self._pretty_type_name(target_ty, current_module=current_module_name)
@@ -5803,6 +5805,10 @@ class TypeChecker:
 						return self._uint
 					if name == "Byte":
 						return self.type_table.ensure_byte()
+					if name == "Int32":
+						return self.type_table.ensure_int32()
+					if name == "Uint32":
+						return self.type_table.ensure_uint32()
 					if name == "Bool":
 						return self._bool
 					if name == "Float":

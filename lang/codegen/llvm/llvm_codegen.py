@@ -336,6 +336,8 @@ def _extern_c_llvm_type(ty_id: TypeId, type_table: Optional[TypeTable], mod: "Ll
 				"Uint": DRIFT_USIZE_TYPE,
 				"Uint64": DRIFT_U64_TYPE,
 				"u64": DRIFT_U64_TYPE,
+				"Int32": "i32",
+				"Uint32": "i32",
 				"Bool": "i1",
 				"Byte": "i8",
 				"Float": "double",
@@ -6998,6 +7000,8 @@ class _FuncBuilder:
 				return DRIFT_USIZE_TYPE
 			if td.kind is TypeKind.SCALAR and td.name in ("Uint64", "u64"):
 				return DRIFT_U64_TYPE
+			if td.kind is TypeKind.SCALAR and td.name in ("Int32", "Uint32"):
+				return "i32"
 			if td.kind is TypeKind.SCALAR and td.name == "Bool":
 				return "i1"
 			if td.kind is TypeKind.SCALAR and td.name == "Byte":
@@ -7226,6 +7230,10 @@ class _FuncBuilder:
 			return (DRIFT_USIZE_TYPE, self.module.word_bits, False)
 		if td.name == "Uint64":
 			return (DRIFT_U64_TYPE, 64, False)
+		if td.name == "Int32":
+			return ("i32", 32, True)
+		if td.name == "Uint32":
+			return ("i32", 32, False)
 		if td.name == "Byte":
 			return ("i8", 8, False)
 		if td.name == "Bool":
