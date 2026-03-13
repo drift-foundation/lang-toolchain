@@ -1,0 +1,25 @@
+module m
+
+pub fn main() nothrow -> Int {
+	// push: Copy non-bitcopy (String) without explicit move
+	var arr: Array<String> = [];
+	val name = "hello";
+	arr.push(name);
+	arr.push(name);
+	if arr.len != 2 { return 1; }
+
+	// insert: Copy non-bitcopy at index 1
+	arr.insert(1, name);
+	if arr.len != 3 { return 2; }
+
+	// extend: Copy non-bitcopy bulk append
+	val src: Array<String> = ["x", "y"];
+	arr.extend(&src);
+	if arr.len != 5 { return 3; }
+
+	// name still valid after all operations (String is Copy)
+	arr.push(name);
+	if arr.len != 6 { return 4; }
+
+	return 0;
+}

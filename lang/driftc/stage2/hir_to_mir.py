@@ -3595,6 +3595,22 @@ class HIRToMIR:
 		self._local_types[dest] = elem_ty
 		return dest
 
+	def _ensure_array_elem_copy(self, val: M.ValueId, elem_ty: TypeId) -> M.ValueId:
+		"""Wrap *val* in CopyValue when the element type is Copy but non-bitcopy.
+
+		Array store MIR instructions (ArrayElemInit*, ArrayIndexStore) require
+		that Copy non-bitcopy values are explicitly copied so the runtime can
+		perform the correct retain/refcount operation.  Bitcopy types and
+		non-Copy types do not need this wrapping.
+		"""
+		copy_status = self._type_table.copy_status(elem_ty)
+		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):
+			copy_dest = self.b.new_temp()
+			self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=elem_ty))
+			self._local_types[copy_dest] = elem_ty
+			return copy_dest
+		return val
+
 	def _lower_array_intrinsic_method(
 		self,
 		expr: H.HMethodCall,
@@ -3960,6 +3976,7 @@ class HIRToMIR:
 				raise AssertionError(_arr_issues[0].message)
 			val_arg = expr.args[-1]
 			val = self._lower_call_arg(val_arg, elem_ty)
+			val = self._ensure_array_elem_copy(val, elem_ty)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 			cap_val = self.b.new_temp()
@@ -4175,6 +4192,7 @@ class HIRToMIR:
 				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			val = self.lower_expr(expr.args[1], expected_type=elem_ty)
+			val = self._ensure_array_elem_copy(val, elem_ty)
 			self.b.emit(M.ArrayIndexStore(elem_ty=elem_ty, array=array_val, index=idx_val, value=val))
 			return True, None
 
@@ -4327,6 +4345,7 @@ class HIRToMIR:
 			elem = self.b.new_temp()
 			self.b.emit(M.ArrayIndexLoad(dest=elem, elem_ty=elem_ty, array=src_val, index=cur))
 			self._local_types[elem] = elem_ty
+			elem = self._ensure_array_elem_copy(elem, elem_ty)
 			dest_idx = self.b.new_temp()
 			self.b.emit(M.BinaryOpInstr(dest=dest_idx, op=H.BinaryOp.ADD, left=len_val, right=cur))
 			self.b.emit(M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=array_val2, index=dest_idx, value=elem))

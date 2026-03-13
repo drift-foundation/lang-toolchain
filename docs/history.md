@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-03-13
+- **Fixed LANGUAGE_BUG: Array<String>.push(name) MIR validation failure**:
+  `arr.push(name)` for Copy non-bitcopy element types (e.g., String) failed
+  MIR validation because the lowering did not emit `CopyValue` before the
+  array store instruction. The MIR validator requires that array stores of
+  Copy non-bitcopy values are explicitly wrapped in `CopyValue` to ensure
+  correct retain/refcount semantics at runtime.
+  - Root cause: `_lower_call_arg` correctly identifies String as "copy" but
+    does not emit `CopyValue` — it was designed for function call args, not
+    array storage which has its own MIR invariants.
+  - Fix: added `_ensure_array_elem_copy` helper in `hir_to_mir.py` that wraps
+    values in `CopyValue` when the element type is Copy but non-bitcopy.
+    Applied to `push`, `insert`, `set`, and `extend` lowering paths.
+  - Affects all Copy non-bitcopy element types in container methods, not just
+    String. Bitcopy types (Int, Bool, etc.) and non-Copy types are unaffected.
+  - Not limited to `--entry` mode; the bug occurs in any compilation path.
+  - Added regression test `array_push_string_no_move`.
+- Bumped compiler version to `0.27.39-dev`; ABI remains `5`.
+
+## 2026-03-13
 - **stdlib: TcpStream.raw_fd()**: added `pub fn raw_fd(self: &TcpStream) nothrow -> Int`
   to `std.net.TcpStream`. Returns the underlying file descriptor without consuming
   ownership — borrowed fd observation only. The `fd` field remains private.
