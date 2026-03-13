@@ -1,0 +1,9 @@
+module main
+
+import ffimod;
+
+fn main() nothrow -> Int {
+    val sum = unsafe { ffimod.add_ints(30, 7) };
+    val prod = unsafe { ffimod.mul_ints(sum, 1) };
+    return prod;
+}

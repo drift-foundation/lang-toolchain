@@ -1,0 +1,8 @@
+module main
+
+import mylib;
+
+fn main() nothrow -> Int {
+    val result: Int32 = unsafe { mylib.add_ints(cast<Int32>(30), cast<Int32>(7)) };
+    return cast<Int>(result);
+}

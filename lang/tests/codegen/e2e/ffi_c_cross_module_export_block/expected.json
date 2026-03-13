@@ -1,0 +1,9 @@
+{
+  "description": "e2e: cross-module pub extern C block form with multi-fn import",
+  "exit_code": 37,
+  "stderr": "",
+  "stdout": "",
+  "c_sources": ["helper.c"],
+  "compiler_flags": ["--allow-unsafe"],
+  "module_paths": ["."]
+}

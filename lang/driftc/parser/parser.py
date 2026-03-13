@@ -960,6 +960,7 @@ def _build_program(tree: Tree) -> Program:
 			interfaces.append(if_def)
 		elif kind == "extern_fn":
 			fn = _build_extern_fn(child)
+			fn.is_pub = is_pub
 			fn.test_build_only = is_test_only
 			functions.append(fn)
 		elif kind == "extern_block":
@@ -967,6 +968,7 @@ def _build_program(tree: Tree) -> Program:
 			abi_tok = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
 			abi_str = _decode_string_token(abi_tok) if abi_tok is not None else "C"
 			for fn in _build_extern_block(child, abi_str):
+				fn.is_pub = is_pub
 				fn.test_build_only = is_test_only
 				functions.append(fn)
 		else:

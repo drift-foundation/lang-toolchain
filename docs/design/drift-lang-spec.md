@@ -3612,6 +3612,7 @@ extern "C" {
 - Extern declarations have no function body.
 - Type parameters are not supported on extern functions.
 - The `unsafe` modifier is not valid on the declaration itself (it is required at the *call site*).
+- Both forms accept the `pub` modifier for cross-module visibility (see §21.6).
 
 ### 21.2. FFI-safe types
 
@@ -3679,7 +3680,41 @@ clang -c helper.c -o helper.o
 driftc --link-obj helper.o --allow-unsafe main.drift
 ```
 
-### 21.6. MVP scope and future directions
+### 21.6. Cross-module visibility
+
+Extern `"C"` declarations participate in the standard Drift visibility and import system. The `pub` modifier makes an extern declaration visible to importing modules:
+
+```drift
+// internal/ffi.drift
+module internal.ffi
+
+pub extern "C" fn SSL_new(ctx: RawPtr<Byte>) nothrow -> RawPtr<Byte>;
+pub extern "C" fn SSL_free(ssl: RawPtr<Byte>) nothrow -> Void;
+
+export { SSL_new, SSL_free };
+```
+
+```drift
+// internal/ssl.drift
+module internal.ssl
+
+import internal.ffi;
+
+fn create_session(ctx: RawPtr<Byte>) nothrow -> RawPtr<Byte> {
+    return unsafe { internal.ffi.SSL_new(ctx) };
+}
+```
+
+**Visibility model:**
+
+- `pub extern "C" fn …` makes the declaration importable by sibling modules.
+- `extern "C" fn …` (without `pub`) is module-private — only callable within the declaring module.
+- `pub extern "C" { … }` applies `pub` to all declarations in the block.
+- `export { … }` lists work with pub extern C names like any other public symbol.
+- Codegen always preserves bare C symbol identity — no module-qualified names, no entrypoint boundary wrappers.
+- The intended architecture is: centralize raw FFI declarations in an internal module, build Drift-native wrappers in sibling modules, expose only safe Drift API to downstream consumers.
+
+### 21.7. Scope and future directions
 
 This section documents the **shipped MVP** as of 0.27.29-dev. The following are explicitly **not supported** in this revision:
 

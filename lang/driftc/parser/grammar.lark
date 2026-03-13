@@ -147,7 +147,7 @@ ident: NAME | MOVE | COPY
      | import_stmt TERMINATOR
      | export_stmt TERMINATOR
 
-pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_def | variant_def | trait_def | interface_def | implement_def)
+pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_def | variant_def | trait_def | interface_def | implement_def | extern_fn TERMINATOR | extern_block)
 
 # Top-level constant definition.
 #

@@ -1,6 +1,18 @@
 # Drift development history
 
 ## 2026-03-13
+- **Extern C cross-module visibility**: `pub extern "C" fn` and `pub extern "C" { ... }`
+  are now valid declaration forms. Public extern C declarations can be exported and
+  imported across modules like normal functions. Codegen preserves bare C symbol
+  identity — no module-qualified names, no entrypoint wrappers.
+  - Grammar: added `extern_fn TERMINATOR` and `extern_block` to `pub_item` rule.
+  - Parser: propagates `is_pub` to extern C FunctionDefs.
+  - Workspace loader: extern C signatures skip `is_exported_entrypoint` (no wrapper
+    generation) and preserve bare C symbol name.
+  - Added regression tests: `ffi_c_cross_module_import`, `ffi_c_cross_module_export_block`.
+- Bumped compiler version to `0.27.37-dev`; ABI remains `5`.
+
+## 2026-03-13
 - Fixed two LANGUAGE_BUGs blocking TLS team FFI work:
   1. **Extern C symbol mangling in non-main modules**: `sig.name` was being
      module-qualified (e.g., `repro_mod::puts` instead of `puts`) by the

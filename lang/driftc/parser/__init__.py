@@ -3202,7 +3202,14 @@ def parse_drift_workspace_to_hir(
 			local_name = fn_id.name
 			# Mark module-interface entry points early so downstream phases can
 			# enforce visibility and (later) ABI-boundary rules consistently.
-			is_exported = (local_name in local_free_fns) and (local_name in exported_values) and (local_name != "main")
+			# extern "C" declarations are never exported entrypoints — they have
+			# no Drift body to wrap, and callers invoke the bare C symbol directly.
+			is_exported = (
+				(local_name in local_free_fns)
+				and (local_name in exported_values)
+				and (local_name != "main")
+				and not sig.is_extern_c
+			)
 			# extern "C" functions must keep their bare C symbol name — do not
 			# module-qualify them, or the LLVM declare/call will emit an
 			# invalid mangled name like @repro_mod::puts instead of @puts.
