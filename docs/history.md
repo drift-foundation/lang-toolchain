@@ -1,11 +1,14 @@
 # Drift development history
 
 ## 2026-03-12
-- Fixed void-returning extern C calls with `RawPtr<T>` by-value args:
-  - `copy_status` now treats `RAW_PTR` as Copy in the authoritative type-table path,
-  - MIR validation no longer incorrectly requires `MoveOut` for `RawPtr<Byte>` arguments on void-return extern C calls,
-  - added regression coverage for `alloc_byte(...) -> RawPtr<Byte>` followed by `free_byte(ptr) -> Void` in both driver and codegen/e2e paths.
-- Bumped compiler version to `0.27.34-dev`; ABI remains `5`.
+- Fixed void-returning extern C calls with `RawPtr<T>` by-value args (proof cache fix):
+  - Root cause: `_query_copy` in driftc.py lacked a `RAW_PTR` early-return, so trait
+    resolution returned REFUTED → proof cache stored `False` → structural fallback
+    in `copy_status()` was never reached.
+  - Fix: added `if td.kind is TypeKind.RAW_PTR: return True` to `_query_copy`, matching
+    the existing FUNCTION/SCALAR/REF early-returns.
+  - Added regression test `ffi_c_void_rawptr_arg` (alloc_byte → free_byte round-trip).
+- Bumped compiler version to `0.27.35-dev`; ABI remains `5`.
 
 ## 2026-03-12
 - Fixed the hex-literal parser follow-up so integer parsing now selects base explicitly:

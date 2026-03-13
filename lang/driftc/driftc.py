@@ -380,6 +380,10 @@ def _install_copy_query(type_table: TypeTable, linked_world: LinkedWorld) -> Non
 			return False if td.ref_mut else True
 		if td.kind is TypeKind.FUNCTION:
 			return True
+		# Raw pointers are inherently Copy — they are plain machine-word
+		# addresses with no ownership semantics.
+		if td.kind is TypeKind.RAW_PTR:
+			return True
 		# Primitive scalar types are inherently Copy (except String which is
 		# reference-counted). This covers built-in numeric types like Int32,
 		# Uint32, etc. that may not have explicit Copy trait implementations.
