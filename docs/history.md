@@ -1,6 +1,13 @@
 # Drift development history
 
 ## 2026-03-12
+- Fixed void-returning extern C calls with `RawPtr<T>` by-value args:
+  - `copy_status` now treats `RAW_PTR` as Copy in the authoritative type-table path,
+  - MIR validation no longer incorrectly requires `MoveOut` for `RawPtr<Byte>` arguments on void-return extern C calls,
+  - added regression coverage for `alloc_byte(...) -> RawPtr<Byte>` followed by `free_byte(ptr) -> Void` in both driver and codegen/e2e paths.
+- Bumped compiler version to `0.27.34-dev`; ABI remains `5`.
+
+## 2026-03-12
 - Fixed the hex-literal parser follow-up so integer parsing now selects base explicitly:
   - `0x` / `0X` literals parse as hexadecimal,
   - all other integer literals parse as decimal,

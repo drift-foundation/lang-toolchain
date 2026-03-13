@@ -1,0 +1,8 @@
+{
+  "description": "e2e: void-returning extern C call with RawPtr<Byte> arg",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "",
+  "c_sources": ["helper.c"],
+  "compiler_flags": ["--allow-unsafe"]
+}

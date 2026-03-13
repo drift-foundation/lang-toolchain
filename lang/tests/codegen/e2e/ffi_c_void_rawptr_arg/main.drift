@@ -1,0 +1,10 @@
+module main
+
+extern "C" fn free_byte(ptr: RawPtr<Byte>) nothrow -> Void;
+extern "C" fn alloc_byte(b: Byte) nothrow -> RawPtr<Byte>;
+
+fn main() nothrow -> Int {
+    val ptr: RawPtr<Byte> = unsafe { alloc_byte(cast<Byte>(0u)) };
+    unsafe { free_byte(ptr) };
+    return 0;
+}
