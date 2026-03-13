@@ -3203,7 +3203,11 @@ def parse_drift_workspace_to_hir(
 			# Mark module-interface entry points early so downstream phases can
 			# enforce visibility and (later) ABI-boundary rules consistently.
 			is_exported = (local_name in local_free_fns) and (local_name in exported_values) and (local_name != "main")
-			updated_sig = replace(sig, name=function_symbol(fn_id), is_exported_entrypoint=is_exported)
+			# extern "C" functions must keep their bare C symbol name — do not
+			# module-qualify them, or the LLVM declare/call will emit an
+			# invalid mangled name like @repro_mod::puts instead of @puts.
+			display_name = sig.name if sig.is_extern_c else function_symbol(fn_id)
+			updated_sig = replace(sig, name=display_name, is_exported_entrypoint=is_exported)
 			all_sigs[fn_id] = updated_sig
 			module_sigs[fn_id] = updated_sig
 

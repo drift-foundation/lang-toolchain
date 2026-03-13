@@ -1,5 +1,22 @@
 # Drift development history
 
+## 2026-03-13
+- Fixed two LANGUAGE_BUGs blocking TLS team FFI work:
+  1. **Extern C symbol mangling in non-main modules**: `sig.name` was being
+     module-qualified (e.g., `repro_mod::puts` instead of `puts`) by the
+     workspace loader's `replace(sig, name=function_symbol(fn_id), ...)` call.
+     Fix: skip module qualification for `is_extern_c` signatures.
+     File: `lang/driftc/parser/__init__.py` line ~3206.
+  2. **Inline `ptr_from_ref(&arr[0])` in multi-arg call**: `StoreLocal` for
+     address-taken locals unconditionally applied `_bool_to_storage` (zext i1 → i8)
+     when `store_llty == "i8"`, but Byte values are also i8. This produced
+     invalid IR (`zext i1 %byte_val to i8`).
+     Fix: guard with `_is_bool_storage_pair` to only convert when the value is
+     actually i1 (Bool), not i8 (Byte).
+     File: `lang/codegen/llvm/llvm_codegen.py` line ~2758.
+- Added regression tests: `ffi_c_extern_nonmain_module`, `ffi_c_inline_ptrref_multiarg`.
+- Bumped compiler version to `0.27.36-dev`; ABI remains `5`.
+
 ## 2026-03-12
 - Fixed void-returning extern C calls with `RawPtr<T>` by-value args (proof cache fix):
   - Root cause: `_query_copy` in driftc.py lacked a `RAW_PTR` early-return, so trait

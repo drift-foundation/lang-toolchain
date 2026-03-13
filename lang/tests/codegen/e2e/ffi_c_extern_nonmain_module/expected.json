@@ -1,0 +1,7 @@
+{
+  "description": "e2e: extern C symbol in non-main module emits bare C symbol name",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

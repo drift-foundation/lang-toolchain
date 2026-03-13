@@ -1,0 +1,20 @@
+module main
+
+import std.mem as mem;
+
+extern "C" fn takes_two_ptrs(a: RawPtr<Byte>, b: RawPtr<Byte>) nothrow -> Int32;
+
+fn _null_ptr() nothrow -> RawPtr<Byte> {
+    return cast<RawPtr<Byte> >(cast<Uint>(0));
+}
+
+fn main() nothrow -> Int {
+    unsafe {
+        var arr: Array<Byte> = [];
+        arr.push(cast<Byte>(104));
+        arr.push(cast<Byte>(0));
+        // BUG: inline ptr_from_ref as first argument, null as second.
+        val r = cast<Int>(takes_two_ptrs(mem.ptr_from_ref(&arr[0]), _null_ptr()));
+    }
+    return 0;
+}

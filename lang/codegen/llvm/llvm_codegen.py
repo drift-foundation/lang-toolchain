@@ -2755,7 +2755,8 @@ class _FuncBuilder:
 						)
 					store_llty = "i8" if val_llty == "i1" else val_llty
 				alloca_id = self._ensure_local_storage(instr.local, store_llty)
-				if store_llty == "i8":
+				val_llty_actual = self.value_types.get(val, store_llty)
+				if self._is_bool_storage_pair(value_llty=val_llty_actual, storage_llty=store_llty):
 					val = self._bool_to_storage(val)
 				emit_store_llty = self._llty(store_llty)
 				self.lines.append(f"  store {emit_store_llty} {val}, {emit_store_llty}* %{alloca_id}")
