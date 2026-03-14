@@ -3660,3 +3660,121 @@ fn main() nothrow -> Int{
 		]
 	)
 	assert rc != 0
+
+
+def test_driftc_multi_package_impl_id_no_collision(tmp_path: Path) -> None:
+	"""Consuming two packages that each have implement blocks must not crash.
+
+	Regression: package-local impl_ids are sequential-from-zero within each
+	package.  When two packages are loaded, their impl_ids can collide in the
+	global id_registry if the consumer passes them through as preferred ids.
+	The fix: let the registry assign fresh global ids instead of forcing
+	package-local values.
+	"""
+	# --- Package A: struct + implement ---
+	_write_file(
+		tmp_path / "pkg_a" / "lib.drift",
+		"""
+module pkg_a.lib
+
+export { make_a };
+
+struct FooA {
+    x: Int;
+}
+
+implement FooA {
+    fn get_x(self: &FooA) nothrow -> Int {
+        return self.x;
+    }
+}
+
+pub fn make_a() nothrow -> Int {
+    val f = FooA(x = 1);
+    return f.get_x();
+}
+""".lstrip(),
+	)
+	pkg_a = tmp_path / "pkgs" / "pkg_a.dmp"
+	pkg_a.parent.mkdir(parents=True, exist_ok=True)
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "pkg_a" / "lib.drift"),
+				*_emit_pkg_args("pkg-a"),
+				"--emit-package",
+				str(pkg_a),
+			]
+		)
+		== 0
+	)
+
+	# --- Package B: struct + implement ---
+	_write_file(
+		tmp_path / "pkg_b" / "lib.drift",
+		"""
+module pkg_b.lib
+
+export { make_b };
+
+struct FooB {
+    y: Int;
+}
+
+implement FooB {
+    fn get_y(self: &FooB) nothrow -> Int {
+        return self.y;
+    }
+}
+
+pub fn make_b() nothrow -> Int {
+    val f = FooB(y = 2);
+    return f.get_y();
+}
+""".lstrip(),
+	)
+	pkg_b = tmp_path / "pkgs" / "pkg_b.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "pkg_b" / "lib.drift"),
+				*_emit_pkg_args("pkg-b"),
+				"--emit-package",
+				str(pkg_b),
+			]
+		)
+		== 0
+	)
+
+	# --- Consumer importing both packages ---
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import pkg_a.lib as a;
+import pkg_b.lib as b;
+
+fn main() nothrow -> Int {
+    return a.make_a() + b.make_b();
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path / "pkgs"),
+			"--allow-unsigned-from",
+			str(tmp_path / "pkgs"),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "multi-package consumption with implement blocks must not crash"

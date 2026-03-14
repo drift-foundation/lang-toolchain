@@ -1,5 +1,24 @@
 # Drift development history
 
+## 2026-03-14
+- **Fixed LANGUAGE_BUG: multi-package impl_id collision**:
+  Consuming two or more packages that each contain `implement` blocks crashed
+  with `ValueError: impl id already interned with a different key` in
+  `id_registry.py`.  This affected any deployed binary where stdlib is loaded
+  as a pre-compiled package (`std.dmp` via `--package-root`).
+  - Root cause: package serialization assigns impl_ids as sequential counters
+    starting from 0 within each package (`pkg_next_impl_id` in `driftc.py`).
+    The consumer passed these package-local ids via `preferred=impl_id` to
+    `id_registry.intern_impl()`, which expects globally unique ids.  When two
+    packages both have impl_id=0 for different impl blocks, the registry
+    raises a collision error.
+  - Fix: drop `preferred=` from `intern_impl()` call at the package-consumer
+    site — let the registry assign fresh global ids instead of forcing
+    package-local values.
+  - Added regression test `test_driftc_multi_package_impl_id_no_collision`
+    (builds two packages with implement blocks, consumes both).
+- Bumped compiler version to `0.27.43-dev`; ABI remains `5`.
+
 ## 2026-03-13
 - **Fixed LANGUAGE_BUG: package-consumer extern C symbol mangling**:
   Extern C declarations consumed from a `.dmp` package emitted module-qualified

@@ -2471,7 +2471,10 @@ def _collect_external_trait_and_impl_metadata(
 						target_head=target_head,
 						decl_fingerprint=decl_fp,
 					)
-					id_registry.intern_impl(impl_key, preferred=impl_id)
+					# Package-local impl_ids are sequential-from-zero within each
+					# package and are NOT globally unique.  Let the registry assign
+					# a fresh global id instead of forcing the package-local value.
+					impl_id = id_registry.intern_impl(impl_key)
 				impl_metas.append(
 					ImplMeta(
 						impl_id=impl_id,
