@@ -1,6 +1,20 @@
 # Drift development history
 
 ## 2026-03-13
+- **Fixed LANGUAGE_BUG: extern C package codegen crash**:
+  Extern C declarations consumed from a `.dmp` package crashed LLVM codegen
+  with `NotImplementedError: unsupported terminator NoneType` because the
+  `is_extern_c` flag was not round-tripped through the package pipeline.
+  - Root cause: `encode_signatures()` in `provisional_dmir_v0.py` did not
+    serialize `is_extern_c`; `FnSignature(...)` reconstruction in `driftc.py`
+    (two sites) did not deserialize it. Without this flag, codegen tried to
+    emit a body for what should be an extern `declare`.
+  - Fix: serialize `is_extern_c` in `provisional_dmir_v0.py`; deserialize at
+    both reconstruction sites in `driftc.py`.
+  - Added regression test `test_driftc_can_consume_package_with_extern_c_declarations`.
+- Bumped compiler version to `0.27.41-dev`; ABI remains `5`.
+
+## 2026-03-13
 - **Fixed LANGUAGE_BUG: Array<String>.push(name) MIR validation failure**:
   `arr.push(name)` for Copy non-bitcopy element types (e.g., String) failed
   MIR validation because the lowering did not emit `CopyValue` before the

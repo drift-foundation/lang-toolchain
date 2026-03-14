@@ -1643,6 +1643,7 @@ def _build_package_consumer_unit(
 						impl_target_type_id=impl_tid,
 						is_pub=bool(sd.get("is_pub", False)),
 						is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
+						is_extern_c=bool(sd.get("is_extern_c", False)),
 					)
 
 	# Wrapper → target map from checker-registered boundary wrappers.
@@ -7848,6 +7849,7 @@ def main(argv: list[str] | None = None) -> int:
 						is_wrapper=bool(sd.get("is_wrapper", False)),
 						wraps_target_fn_id=wraps_fn_id,
 						is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
+						is_extern_c=bool(sd.get("is_extern_c", False)),
 						param_types=param_types,
 						return_type=return_type,
 						type_params=type_params,

@@ -3407,6 +3407,67 @@ fn main() nothrow -> Int{ return 0 }
 	assert payload["diagnostics"][0]["phase"] == "package"
 	assert "must not be a method" in payload["diagnostics"][0]["message"]
 
+def test_driftc_can_consume_package_with_extern_c_declarations(tmp_path: Path) -> None:
+	"""Package containing extern C declarations must not crash consumer codegen."""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { wrapper };
+
+extern "C" fn abs(x: Int32) nothrow -> Int32;
+
+pub fn wrapper(x: Int32) nothrow -> Int32 {
+	return unsafe { abs(x) };
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				"--allow-unsafe",
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import lib as lib;
+
+fn main() nothrow -> Int {
+	val _r = lib.wrapper(cast<Int32>(42));
+	return 0;
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0
+
+
 def test_driftc_can_consume_package_exporting_int32_uint32(tmp_path: Path) -> None:
 	"""Package exports functions using Int32/Uint32 scalars; consumer imports and calls them."""
 	_write_file(
