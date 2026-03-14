@@ -3849,3 +3849,68 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0, "RawPtr<T> field + Destructible impl must not crash package consumer"
+
+
+def test_driftc_package_stdlib_method_call_wrapper(tmp_path: Path) -> None:
+	"""Package body calling a stdlib method must link in the consumer.
+
+	Regression: package MIR references __wrap_method stubs for stdlib methods
+	(e.g., String::byte_length).  The consumer must synthesize those wrapper
+	stubs AND include the underlying stdlib method body in the IR.
+	"""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+import std.core as core;
+
+export { string_len };
+
+pub fn string_len(s: String) nothrow -> Int {
+    return s.byte_length();
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import std.core as core;
+import lib as lib;
+
+fn main() nothrow -> Int {
+    return lib.string_len("hello");
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "package calling stdlib method must link in consumer"

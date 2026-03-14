@@ -1774,8 +1774,16 @@ def _build_package_consumer_unit(
 				target = wrapper_target_by_id[callee]
 				if target in pkg_mir_all:
 					pkg_needed.add(target)
+				elif target in _src_mir_full and target not in src_needed:
+					src_needed.add(target)
+					src_mir[target] = _src_mir_full[target]
+					_ssa_entry = _ssa_src_full.get(target)
+					if _ssa_entry is not None:
+						ssa_src[target] = _ssa_entry
 
-	# Expand through package-to-package calls.
+	# Expand through package-to-package calls.  Also detect wrapper
+	# references in package MIR — package bodies may call __wrap_method
+	# stubs for stdlib methods that the consumer must synthesize.
 	queue = list(pkg_needed)
 	while queue:
 		cur = queue.pop()
@@ -1786,6 +1794,18 @@ def _build_package_consumer_unit(
 			if callee in pkg_mir_all and callee not in pkg_needed:
 				pkg_needed.add(callee)
 				queue.append(callee)
+			elif callee in wrapper_target_by_id and callee not in wrappers_needed:
+				wrappers_needed.add(callee)
+				target = wrapper_target_by_id[callee]
+				if target in pkg_mir_all and target not in pkg_needed:
+					pkg_needed.add(target)
+					queue.append(target)
+				elif target in _src_mir_full and target not in src_needed:
+					src_needed.add(target)
+					src_mir[target] = _src_mir_full[target]
+					_ssa_entry = _ssa_src_full.get(target)
+					if _ssa_entry is not None:
+						ssa_src[target] = _ssa_entry
 
 	# Seed destroy impls for DropValue types (package-side + source-side K39).
 	# The combined pool includes both pkg_mir_all AND _src_mir_full because
@@ -7871,6 +7891,21 @@ def main(argv: list[str] | None = None) -> int:
 		# Canonicalize any remaining FORWARD_NOMINAL TypeIds in external sigs
 		# (safety net for resolve_opaque_type fallback path).
 		_canonicalize_signature_type_ids(external_signatures_by_id, type_table)
+
+		# Inject method boundary wrappers for external (package/stdlib) methods.
+		# The first injection (above) only covers source-file methods.  When the
+		# consumer emits package MIR that calls __wrap_method stubs for stdlib
+		# methods, those wrapper signatures must also exist in derived_signatures_by_id
+		# so _build_package_consumer_unit can synthesize the stub bodies.
+		_ext_wrapper_specs, _ext_wrapper_errors = _inject_method_boundary_wrappers(
+			signatures_by_id=external_signatures_by_id,
+			existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()) | set(external_signatures_by_id.keys()),
+			register_derived=_register_derived_signature_cli,
+			type_table=type_table,
+		)
+		method_wrapper_specs.extend(_ext_wrapper_specs)
+		if _ext_wrapper_errors:
+			wrapper_errors.extend(_ext_wrapper_errors)
 
 		(
 			external_trait_defs,

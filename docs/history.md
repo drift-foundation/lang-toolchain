@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed LANGUAGE_BUG: __wrap_method stubs not emitted for stdlib method calls
+  in packaged code**:
+  When a package body calls a method on a stdlib type (e.g., `String.byte_length()`),
+  the consumer's IR references `__wrap_method` stubs that were never defined,
+  causing a link-time failure.
+  - Root cause (two gaps):
+    1. `_inject_method_boundary_wrappers` only ran on source-file signatures
+       (`base_signatures_by_id`), not external/stdlib signatures.  Wrapper
+       declarations for stdlib methods were never created in the consumer.
+    2. The package BFS expansion loop (`_build_package_consumer_unit`) only
+       checked `pkg_mir_all` for callees, not `wrapper_target_by_id`.  Wrapper
+       references in package MIR were never added to `wrappers_needed`.
+    3. When wrapper targets were in source MIR (stdlib compiled from source),
+       they were not seeded into `src_needed`, so BFS pruning removed them.
+  - Fix:
+    - Add second `_inject_method_boundary_wrappers` call after
+      `external_signatures_by_id` is populated (CLI path, after line 7881).
+    - In BFS expansion, detect wrapper references in package MIR and add them
+      to `wrappers_needed`.
+    - Seed wrapper targets from `_src_mir_full` into `src_needed` when the
+      target is a source-compiled function (e.g., stdlib method).
+  - Boundary sweep:
+    - Source path: unaffected (all modules compiled together).
+    - Package-consumer path: **fixed**.
+    - Multi-package: covered by existing test.
+    - Stdlib methods (`String.byte_length`): **fixed** — regression test.
+    - Non-stdlib package methods: covered (wrapper synthesis already worked for
+      methods in `base_signatures_by_id`).
+  - Added regression test `test_driftc_package_stdlib_method_call_wrapper`.
+- Bumped compiler version to `0.27.45-dev`; ABI remains `5`.
+
 - **Fixed LANGUAGE_BUG: RawPtr<T> field TypeId remapping in package consumer**:
   Consuming a package containing a struct with a `RawPtr<T>` field and a
   `Destructible` impl crashed codegen with `unsupported param type id 1`
