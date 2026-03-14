@@ -1,6 +1,30 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed LANGUAGE_BUG: RawPtr<T> field TypeId remapping in package consumer**:
+  Consuming a package containing a struct with a `RawPtr<T>` field and a
+  `Destructible` impl crashed codegen with `unsupported param type id 1`
+  (UNKNOWN sentinel).
+  - Root cause: `_eval_generic_type_expr` in `types_core.py` handled `Ptr`
+    (internal name, `module_id="std.mem"`) but not `RawPtr` (user-facing alias,
+    no module_id).  When the package struct schema stores the field type as
+    `GenericTypeExpr(name="RawPtr", ...)`, the evaluator fell through to
+    nominal lookup, failed to find a struct named `RawPtr`, and returned
+    `ensure_unknown()`.  This left the struct's field types as UNKNOWN
+    placeholders, crashing codegen when the `Destructible::destroy` body
+    referenced the struct.
+  - Fix: add `RawPtr` handler in `_eval_generic_type_expr` that delegates to
+    `new_ptr()`, matching the existing `resolve_opaque_type` behavior.
+  - Boundary sweep:
+    - Source path: unaffected (field types resolved via `resolve_opaque_type`).
+    - Package-consumer path: fixed (`_eval_generic_type_expr` now handles RawPtr).
+    - Multi-package: verified (existing test passes).
+    - Adjacent constructed types: `Array<T>`, `&T`, `&mut T` already handled.
+    - Trait/impl/destructor: Destructible is the trigger path; inherent impls
+      and no-impl cases are unaffected (struct field resolution is the issue).
+  - Added regression test `test_driftc_package_rawptr_field_with_destructible`.
+- Bumped compiler version to `0.27.44-dev`; ABI remains `5`.
+
 - **Fixed LANGUAGE_BUG: multi-package impl_id collision**:
   Consuming two or more packages that each contain `implement` blocks crashed
   with `ValueError: impl id already interned with a different key` in

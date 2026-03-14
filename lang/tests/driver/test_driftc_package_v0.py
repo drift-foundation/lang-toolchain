@@ -3778,3 +3778,74 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0, "multi-package consumption with implement blocks must not crash"
+
+
+def test_driftc_package_rawptr_field_with_destructible(tmp_path: Path) -> None:
+	"""Package struct with RawPtr<T> field + Destructible impl must not crash consumer.
+
+	Regression: _eval_generic_type_expr handled Ptr (internal name from std.mem)
+	but not RawPtr (user-facing alias).  When the struct schema's GenericTypeExpr
+	stores "RawPtr", the field type degrades to Unknown, crashing codegen when
+	the Destructible::destroy method body references the struct.
+	"""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+import std.core as core;
+
+export { Wrapper };
+
+pub struct Wrapper {
+    pub handle: RawPtr<Byte>;
+}
+
+implement core.Destructible for Wrapper {
+    pub fn destroy(var self: Wrapper) nothrow -> Void {}
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				"--allow-unsafe",
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import std.core as core;
+import lib as lib;
+
+fn main() nothrow -> Int {
+    return 0;
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "RawPtr<T> field + Destructible impl must not crash package consumer"

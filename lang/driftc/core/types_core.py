@@ -1511,6 +1511,14 @@ class TypeTable:
 				return self.ensure_unknown()
 			inner = self._eval_generic_type_expr(expr.args[0], type_args, module_id=module_id)
 			return self.new_ptr(inner, module_id=origin_mod)
+		if name == "RawPtr":
+			if not expr.args:
+				return self.ensure_unknown()
+			inner = self._eval_generic_type_expr(expr.args[0], type_args, module_id=module_id)
+			# RawPtr is a user-facing alias for the internal Ptr constructor.
+			# Always use the canonical "std.mem" origin so the resulting
+			# TypeKind.RAW_PTR is identical to one produced via the Ptr path.
+			return self.new_ptr(inner, module_id="std.mem")
 		# Module-scoped type aliases may appear in schema-time expressions
 		# (for example, variant payload fields using `containers.HashMap<...>`).
 		# Expand aliases here so instantiations do not degrade to Unknown.
