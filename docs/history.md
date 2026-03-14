@@ -1,6 +1,43 @@
 # Drift development history
 
 ## 2026-03-14
+- **Implemented `drift deploy` MVP orchestration**:
+  Added the first real implementation of the standardized deploy tool for
+  downstream Drift artifacts.
+  - New tool modules:
+    - `tools/drift_deploy/manifest.py`: `drift-package.json` loading and
+      validation for the project + artifacts schema, including license
+      inheritance and `package`-cannot-depend-on-`app` validation.
+    - `tools/drift_deploy/drift_deploy.py`: main orchestrator for
+      manifest loading, artifact selection, topological ordering,
+      resolution/lock integration, per-artifact build → sign → asset copy
+      → smoke → publish pipeline, staging lifecycle, and atomic publish.
+    - `tools/drift_deploy/staged_trust.py`: staged trust overlay generation
+      for smoke (`baseline trust + staged signer`).
+    - `tools/drift_deploy/sidecar.py`: app provenance sidecar
+      (`<app>.meta.json`) emission from the resolved graph.
+  - Added test coverage for the new tooling:
+    - `tools/drift_deploy/test_manifest.py`
+    - `tools/drift_deploy/test_deploy.py`
+    - `tools/drift_deploy/test_resolver.py`
+  - Tool behavior implemented in MVP:
+    - multi-artifact manifest parsing
+    - topological artifact ordering with circular-dependency detection
+    - lock/resolution integration
+    - conflict hard-fail propagation before compiler invocation
+    - staged trust overlay for smoke
+    - package/app publish layout handling
+    - app provenance sidecar emission
+  - Contract-tightening fixes during implementation:
+    - manifest `modules` are now passed through as real build inputs
+    - `--target` now applies to app builds as well as package builds
+    - unimplemented `--sign-key-cmd` was removed from the CLI instead of
+      being silently ignored
+  - Infrastructure cleanup:
+    - renamed `tools/drift-deploy/` → `tools/drift_deploy/` for Python
+      package compatibility
+    - added `tools/__init__.py`
+
 - **Consumer dependency version selection with --dep (0.27.48-dev)**:
   Exact consumer version selection for multi-version package roots.
   - New consumer flag: `--dep <PKG>@<VERSION>` (repeatable) selects the exact
