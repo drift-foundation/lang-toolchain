@@ -1,4 +1,4 @@
-# drift-deploy: Standardized Package Deploy Tool
+# drift deploy: Standardized Package Deploy Tool
 
 ## Problem
 
@@ -24,7 +24,7 @@ same rigor without copying the orchestrator.
 
 ## Goal
 
-One standard `drift-deploy` tool that downstream projects use by providing:
+One standard `drift deploy` tool that downstream projects use by providing:
 
 1. A project manifest (`drift-package.json`) — the authoritative source
    of project identity and per-artifact build/deploy configuration.
@@ -73,7 +73,7 @@ gets built, not just what gets deployed.  The rationale:
   change at the same cadence and for the same reasons.
 - Separating "what to build" from "what to deploy" creates a second
   coordination surface (Makefile/justfile must agree with manifest).
-- The tool should be invocable with `drift-deploy --dest <dest>` and
+- The tool should be invocable with `drift deploy --dest <dest>` and
   nothing else — all build inputs come from the manifest.
 - This is the same model as `package.json` (npm), `Cargo.toml`
   (Rust), and `pyproject.toml` (Python): identity + build inputs +
@@ -213,7 +213,7 @@ tool does not sign app binaries or produce `.sig` sidecars for them.
 Apps are not consumed as packages by other builds — they are
 end-user executables.  The trust model for app distribution (binary
 signing, notarization, code signing certificates) is outside the
-scope of `drift-deploy`.  If app signing is needed, it is the
+scope of `drift deploy`.  If app signing is needed, it is the
 responsibility of the deployment environment, not the package tool.
 This is a deliberate MVP scope boundary: package signing
 authenticates the package contract consumed by `driftc`; app
@@ -288,7 +288,7 @@ concepts are reserved for the future indirection model.
 ### Version source rule
 
 `drift-package.json` is the standard version source for all artifacts
-using `drift-deploy`.
+using `drift deploy`.
 
 - The tool reads `name` and `version` from each artifact and passes
   them to `driftc` (e.g., `--package-id <name> --package-version
@@ -313,8 +313,8 @@ One file, per-artifact values, no drift.
 - If `schema_version` is higher than the tool understands, the tool
   fails with a clear error:
   `error: drift-package.json schema_version 3 is not supported by this
-  version of drift-deploy (supports up to version 1). Upgrade
-  drift-deploy.`
+  version of drift deploy (supports up to version 1). Upgrade
+  drift deploy.`
 - The tool does not attempt to guess, partially parse, or fall back
   when it encounters an unknown schema version.  Fail clearly, not
   silently.
@@ -378,10 +378,10 @@ Native dependency metadata has two homes, serving two audiences:
 
 1. **`drift-package.json`** — the author's source-of-truth declaration,
    per artifact.  Human-readable, version-controlled, used by
-   `drift-deploy` during the build.
+   `drift deploy` during the build.
 
 2. **Inside the `.dmp` manifest** — the machine-readable contract for
-   consumers.  `drift-deploy` copies the artifact's `native_deps` into
+   consumers.  `drift deploy` copies the artifact's `native_deps` into
    the `.dmp` package manifest at build time.
 
 The `.dmp` manifest is inside the signed payload.  This means native
@@ -507,7 +507,7 @@ New `driftc` flags for `--emit-package`:
 --package-dep <NAME>=<VER> Declare Drift package dependency (repeatable)
 ```
 
-`drift-deploy` passes these flags automatically based on each artifact's
+`drift deploy` passes these flags automatically based on each artifact's
 configuration in `drift-package.json`.
 
 ### Signing / trust separation
@@ -717,7 +717,7 @@ adds artifact-specific coverage on top of that guarantee.
 
 | Smoke tier                     | What it validates                                | Who provides it  | How enforced     |
 |--------------------------------|--------------------------------------------------|------------------|------------------|
-| Built-in baseline              | Packaging, signing, consumer compile/link/run    | `drift-deploy`   | Tool-enforced    |
+| Built-in baseline              | Packaging, signing, consumer compile/link/run    | `drift deploy`   | Tool-enforced    |
 | Custom (`smoke_command`)       | Public API surface, integration semantics        | Artifact author  | Author-attested  |
 
 ### Staged environment contract
@@ -761,14 +761,14 @@ must compose with the rest of the signed-package trust environment.
 
 #### Composition model: overlay trust
 
-`drift-deploy` generates a **staged trust store** that merges the
+`drift deploy` generates a **staged trust store** that merges the
 staged signer with a baseline trust set:
 
 1. After signing the staged `.dmp`, the tool extracts the public key
    from the signing key.
 
 2. If a baseline trust store exists (via `--trust-store` on the
-   `drift-deploy` CLI, or `$DRIFT_TRUST_STORE` env var), the tool
+   `drift deploy` CLI, or `$DRIFT_TRUST_STORE` env var), the tool
    copies it and adds the staged signer as an additional trusted
    entry.  If no baseline trust store is provided, the staged trust
    store contains only the staged signer (sufficient when the smoke
@@ -799,7 +799,7 @@ signer**.  This means:
 
 | Trust context       | What it is                                          | Who owns it         |
 |---------------------|-----------------------------------------------------|---------------------|
-| Staged trust        | Temporary overlay: baseline + staged signer         | `drift-deploy` tool |
+| Staged trust        | Temporary overlay: baseline + staged signer         | `drift deploy` tool |
 | Baseline trust      | Pre-existing trust for packages in the package root | Deploy operator     |
 | Consumer trust      | Real consumer-side `drift/trust.json`               | Package consumer    |
 
@@ -813,12 +813,12 @@ Staged trust is scoped to the smoke phase:
 #### CLI interaction
 
 ```
-drift-deploy --dest /deploy \
+drift deploy --dest /deploy \
              --trust-store /deploy/drift/trust.json \
              ...
 ```
 
-`--trust-store` tells `drift-deploy` where the baseline trust is.
+`--trust-store` tells `drift deploy` where the baseline trust is.
 The tool overlays the staged signer onto this baseline to produce
 `$DRIFT_STAGED_TRUST`.  If `--trust-store` is omitted and
 `$DRIFT_TRUST_STORE` is not set, the staged trust contains only
@@ -1031,7 +1031,7 @@ Selection rules:
 This keeps version selection explicit and predictable.  There is no
 implicit resolution, no "latest" heuristic, and no version range
 matching at the compiler level.  (Version range matching is a
-tool-level concern for `drift-deploy` when resolving `package_deps`
+tool-level concern for `drift deploy` when resolving `package_deps`
 during build.)
 
 Rollback is a consumer-side version pin change:
@@ -1052,7 +1052,7 @@ Rollback is a consumer-side version pin change:
 ### CLI
 
 ```
-drift-deploy [--manifest <path>] [--dest <path>] [--app-dest <path>]
+drift deploy [--manifest <path>] [--dest <path>] [--app-dest <path>]
              [--package-root <path>] [--artifact <name>]
              [--driftc <path>]
              [--sign-key-file <path> | --sign-key-cmd <cmd>]
@@ -1083,7 +1083,7 @@ dependencies to actual `.dmp` packages.  `--package-root` specifies
 where the tool looks for external packages:
 
 ```
-drift-deploy --dest /deploy --package-root /deploy consumer-project/
+drift deploy --dest /deploy --package-root /deploy consumer-project/
 ```
 
 Resolution rules:
@@ -1094,14 +1094,6 @@ Resolution rules:
   `--dest` value.  This means the publish destination doubles as the
   dependency source — a natural model when all packages are published
   to the same library root.
-- The tool resolves each `package_deps` entry by scanning
-  `<root>/<package>/<version>/` directories for a version satisfying
-  the constraint.
-- If no version satisfying the constraint is found in any root, the
-  tool fails with a clear error:
-  `error: artifact 'tls-tool': package dependency 'net.tls ^0.3.0' not satisfied (searched: /deploy)`
-- If multiple versions satisfy the constraint, the tool picks the
-  highest matching version (standard semver resolution).
 - Intra-manifest dependencies (where one artifact depends on another
   artifact in the same manifest) are resolved from the staged output,
   not from the package root.  This ensures the build uses the
@@ -1118,6 +1110,146 @@ the dependency source differs from the publish destination (e.g.,
 building against a staging copy of dependencies while publishing to
 production).
 
+### Range resolution algorithm
+
+The resolution algorithm converts declared `package_deps` constraints
+into exact versions.  It runs inside `drift deploy` — the compiler
+(`driftc`) never resolves ranges.
+
+The algorithm is **constraint-aggregation + highest-satisfying-all**.
+It is fully order-independent: the same set of constraints and the
+same set of available packages always produces the same resolved
+graph, regardless of filesystem ordering, `--package-root` ordering,
+or `package_deps` array ordering in manifests.
+
+#### Phase 1: Discovery (build package index)
+
+The tool scans each `--package-root` for `.dmp` files (recursive
+glob, same as `driftc`).  It loads each `.dmp` header and manifest
+to extract `package_id`, `package_version`, and `package_deps`,
+building an index:
+
+```
+{package_id → [{version, path, sha256_of_dmp_bytes}]}
+```
+
+If the same `package_id` + `package_version` pair appears in
+multiple roots, the tool keeps the entry from the **first
+`--package-root`** in CLI order.  This is the only ordering
+dependency in the algorithm, and it is explicit: CLI flag order
+is user-controlled and reproducible.  If the same pair appears
+twice within a single root (duplicate `.dmp` files), the tool
+fails:
+`error: duplicate package 'net.tls' version '0.3.2' found in <root>`
+
+#### Phase 2: Constraint aggregation and selection
+
+The algorithm operates on a constraint map:
+`{package_id → [constraint_entry]}`, where each constraint entry
+records the semver range and its source (which package/artifact
+introduced it).
+
+```
+1.  Initialize constraint_map from the artifact's direct
+    package_deps.  Each entry's source is "artifact '<name>'".
+
+2.  Initialize resolved = {} (package_id → exact version).
+    Initialize work_queue = set of package_ids in constraint_map.
+
+3.  While work_queue is non-empty:
+
+    a.  Pop the lexicographically smallest package_id from the
+        work_queue.  (Lexicographic ordering is the determinism
+        guarantee — it replaces BFS traversal order with a
+        content-derived order that is independent of discovery
+        or insertion sequence.)
+
+    b.  Collect ALL constraints on this package_id from
+        constraint_map.
+
+    c.  Find the highest version in the package index that
+        satisfies ALL constraints simultaneously.
+
+    d.  If no version satisfies all constraints → error:
+        error: conflicting constraints on 'acme.crypto':
+          artifact 'tls-tool' requires acme.crypto ^0.9.0
+          net.tls 0.3.2 requires acme.crypto ^1.0.0
+          no version satisfies all constraints
+
+    e.  If this package_id is already in resolved:
+        - If the resolved version still satisfies all
+          constraints (including any newly added ones) → skip,
+          no change needed.
+        - If the resolved version no longer satisfies → this
+          means a later transitive constraint invalidated an
+          earlier selection.  The tool fails with the same
+          conflict error as (d).  (This cannot happen in a
+          correctly converging run because we aggregate before
+          selecting, but it is the safety check.)
+
+    f.  Record: resolved[package_id] = selected version.
+
+    g.  Load the selected .dmp's package_deps.  For each
+        transitive dep:
+        - Add a constraint entry to constraint_map (source:
+          "<package_id> <version>").
+        - If the target package_id is not yet in resolved,
+          add it to work_queue.
+        - If the target package_id IS already in resolved,
+          verify that the resolved version satisfies the new
+          constraint.  If not → conflict error.  If yes →
+          skip (no re-resolution needed).
+
+4.  Return resolved.
+```
+
+**Conflict is a hard build failure**.  If resolution fails at any
+step (d, e, or g), the artifact build stops immediately.  No
+lockfile is written or partially updated.  No `--dep` flags are
+emitted.  No `driftc` invocation occurs — codegen and linking
+never start for an artifact with an unresolved or conflicting
+dependency graph.  This is not a warning, not a deferred
+runtime/link-time check, and not a partial result.  The tool
+exits non-zero with the conflict diagnostic before any compiler
+work begins for that artifact.
+
+**Why this is deterministic**: the only ordering choice is step 3a
+(lexicographic pop from work_queue).  All other operations — index
+lookup, constraint satisfaction, version comparison — are pure
+functions of their inputs.  Two runs with the same package index
+and the same `drift-package.json` will always produce the same
+resolved map.
+
+**Why "aggregate then select" instead of "first-seen-wins"**: with
+first-seen-wins, the traversal order determines the outcome.  If
+package A's constraint selects `foo 1.3.0` and package B's constraint
+would allow `foo 1.5.0`, the result depends on whether A or B is
+processed first.  By aggregating all constraints and selecting the
+highest version satisfying all of them, the result is independent of
+processing order.  This also means a later transitive constraint
+cannot produce a *higher* version than one that would have been
+selected otherwise — the aggregation only narrows the candidate set,
+never widens it.
+
+**No implicit "latest" heuristic beyond constraint satisfaction**:
+the tool selects the highest version *that satisfies all accumulated
+constraints*.  If only one version satisfies, it is selected
+regardless of whether it is the "latest."  If multiple satisfy, the
+highest is chosen — this matches npm/cargo/pub behavior and is
+appropriate because the constraint already encodes compatibility
+intent, and highest-within-constraint gets the latest compatible
+bugfixes.  The lock file pins the exact selection; re-resolution
+only happens on explicit `--update-lock`.
+
+**The MVP does not attempt split-version resolution** (diamond
+dependencies at different major versions coexisting).  This is a
+future extension if the ecosystem grows large enough to need it.
+
+**Per-artifact resolution**: each artifact in the manifest gets its
+own resolved graph.  Two artifacts in the same project may depend on
+different versions of the same package (they are independent build
+units).  The lock file records one section per artifact.
+
 ### Resolved dependency recording: `drift-lock.json`
 
 After resolving all `package_deps` constraints, the tool writes a
@@ -1130,16 +1262,29 @@ Lock file location: `drift-lock.json` next to `drift-package.json`.
 ```json
 {
   "schema_version": 1,
-  "resolved": {
+  "artifacts": {
     "net.tls": {
-      "version": "0.3.2",
-      "source": "/deploy/net.tls/0.3.2/net.tls.dmp",
-      "integrity": "sha256:<hex>"
+      "resolved": {
+        "acme.crypto": {
+          "version": "0.9.0",
+          "integrity": "sha256:<hex>",
+          "dep_type": "direct"
+        }
+      }
     },
-    "acme.crypto": {
-      "version": "0.9.0",
-      "source": "/deploy/acme.crypto/0.9.0/acme.crypto.dmp",
-      "integrity": "sha256:<hex>"
+    "tls-tool": {
+      "resolved": {
+        "net.tls": {
+          "version": "0.3.2",
+          "integrity": "sha256:<hex>",
+          "dep_type": "direct"
+        },
+        "acme.crypto": {
+          "version": "0.9.0",
+          "integrity": "sha256:<hex>",
+          "dep_type": "transitive"
+        }
+      }
     }
   }
 }
@@ -1148,16 +1293,51 @@ Lock file location: `drift-lock.json` next to `drift-package.json`.
 | Field        | Description                                               |
 |--------------|-----------------------------------------------------------|
 | `version`    | Exact resolved version                                    |
-| `source`     | Absolute path to the `.dmp` at resolution time            |
-| `integrity`  | SHA-256 hash of the `.dmp` file contents                  |
+| `integrity`  | `"sha256:<hex>"` — SHA-256 of the raw `.dmp` file bytes   |
+| `dep_type`   | `"direct"` or `"transitive"` — origin of the dependency  |
+
+#### Integrity model
+
+The `integrity` field is the hex-encoded SHA-256 digest of the
+**entire `.dmp` file contents** (the raw bytes on disk, not the
+manifest JSON or any extracted sub-object).  This is the same
+object that Ed25519 signatures cover, so integrity verification
+and signature verification agree on what "the package" is.
+
+**How the tool finds the artifact to verify**: on lock load, the
+tool scans `--package-root` directories (same discovery as
+resolution), building the package index `{package_id → [{version,
+path, sha256}]}`.  For each lock entry, it looks up `package_id`
++ `version` in the index.  If found, it compares the index's
+`sha256` (computed during discovery) against the lock's
+`integrity` value.  If they differ:
+`error: locked dependency 'net.tls' integrity mismatch (expected sha256:abc..., got sha256:def...)`
+
+**Duplicate package_id + version across roots**: the package
+index keeps only the entry from the **first `--package-root`** in
+CLI order (same rule as resolution; see Phase 1 above).  The lock
+integrity is verified against whichever `.dmp` the index selects.
+If a team changes which root provides a package, a hash mismatch
+will surface — this is intentional, because the `.dmp` bytes may
+differ even if the version string is the same.
+
+**No source path in the lock file**: `source` (absolute path) is
+deliberately not recorded.  The lock file is version-controlled
+and shared across machines; absolute paths are machine-local and
+would cause spurious diffs.  The tool re-discovers the `.dmp` by
+scanning `--package-root` for the matching `package_id` +
+`version` pair at build time.
+
+`dep_type` is informational: it lets humans and tools understand
+why a package is in the graph.  It does not affect resolution.
 
 Lock file behavior:
 
 - **If `drift-lock.json` exists**: the tool uses it as the
-  authoritative resolution.  It loads the exact versions listed.
-  If a listed version is no longer present in the package root,
-  the tool fails:
-  `error: locked dependency 'net.tls' version '0.3.2' not found under /deploy`
+  authoritative resolution.  For each artifact, it loads the exact
+  versions listed.  If a listed version is no longer present in any
+  package root, the tool fails:
+  `error: locked dependency 'net.tls' version '0.3.2' not found under package roots`
   If the `.dmp` hash does not match the `integrity` value, the
   tool fails:
   `error: locked dependency 'net.tls' integrity mismatch (expected sha256:abc..., got sha256:def...)`
@@ -1171,16 +1351,16 @@ Lock file behavior:
 - **Lock file is checked into version control**: it is a project
   artifact, not a build cache.  CI builds use the lock file to get
   deterministic builds.
+- **Lock–manifest consistency**: on load, the tool verifies that
+  every direct `package_deps` entry declared in the manifest has a
+  corresponding entry in the lock file.  If the manifest adds a new
+  dependency not present in the lock, the tool fails:
+  `error: dependency 'foo' declared in drift-package.json but not present in drift-lock.json; run drift deploy --update-lock`
+  This prevents partial locks from silently passing.
 
-The lock file records only direct and transitive Drift package
-dependencies, not native deps (native library versions are system
-state, not resolvable by the tool).
-
-Transitive resolution: if `net.tls` itself declares `package_deps`
-in its `.dmp` manifest, the tool resolves those transitively and
-records all resolved packages (direct and transitive) in the lock
-file.  The lock file is a flat map of all resolved packages, not a
-tree — the dependency graph is implicit in the `.dmp` manifests.
+The lock file records only Drift package dependencies, not native
+deps (native library versions are system state, not resolvable by
+the tool).
 
 This gives downstream consumers three ways to get the same graph:
 
@@ -1190,17 +1370,177 @@ This gives downstream consumers three ways to get the same graph:
 3. **Delete `drift-lock.json`**: fresh resolution from current
    package root state.
 
+### `--dep` expansion: lock → compiler
+
+The lock file does not feed into the compiler directly.  Instead,
+`drift deploy` expands the resolved graph into repeated `--dep`
+flags on the `driftc` command line:
+
+```
+# drift deploy reads drift-lock.json for artifact 'tls-tool' and expands:
+driftc --package-root /deploy \
+       --dep net.tls@0.3.2 \
+       --dep acme.crypto@0.9.0 \
+       --stdlib-root /deploy/stdlib \
+       -o build/tls-tool \
+       src/main.drift
+```
+
+This is a mechanical expansion: for each entry in the artifact's
+`resolved` map, emit `--dep <name>@<version>`.  The compiler's
+existing `--dep` selection logic (post-load filtering) ensures
+exactly those versions are used.
+
+**Why expansion, not direct lock consumption by `driftc`**:
+
+- The compiler should not contain lock-file parsing or range
+  resolution logic.  It is a compiler, not a package manager.
+- `--dep` is the stable, minimal interface between the tool and
+  the compiler.  The lock file format can evolve independently.
+- Users who do not use `drift deploy` can still pass `--dep` flags
+  directly — the compiler does not require a lock file.
+- The expansion is fully inspectable: the `[driftc] link:` stderr
+  line and `--dep` flags are visible in build logs.
+
+**Future extension**: if the `--dep` flag list becomes unwieldy for
+very large dependency graphs, a later enhancement could add
+`--dep-file <path>` to `driftc` — a file containing one
+`<name>@<version>` per line.  This is additive and does not change
+the contract.
+
+### User-facing workflow
+
+The concrete intended flow for a downstream project:
+
+```
+1. Author writes drift-package.json
+   ┌─────────────────────────────────────────┐
+   │ {                                       │
+   │   "project": { "name": "my-app" },      │
+   │   "artifacts": [{                       │
+   │     "name": "my-app",                   │
+   │     "version": "1.0.0",                 │
+   │     "kind": "app",                      │
+   │     "package_deps": [                   │
+   │       {"name": "net.tls", "version": "^0.3.0"}, │
+   │       {"name": "web", "version": "^1.0.0"}      │
+   │     ]                                   │
+   │   }]                                    │
+   │ }                                       │
+   └─────────────────────────────────────────┘
+   This expresses declared intent: "I need tls ≥0.3.0 <0.4.0
+   and web ≥1.0.0 <2.0.0".  These are constraints, not exact
+   versions.
+
+2. First drift deploy resolves constraints
+   $ drift deploy --dest /deploy --package-root /deploy .
+
+   The tool scans /deploy for .dmp packages, finds:
+     net.tls 0.3.2, net.tls 0.3.4, web 1.0.0, web 1.1.0
+   Resolves: net.tls → 0.3.4 (highest ^0.3.0), web → 1.1.0
+   Writes drift-lock.json recording the exact graph.
+
+3. drift-lock.json is checked into version control
+   $ git add drift-lock.json && git commit
+
+   From this point, all team members and CI get the same
+   exact dependency versions.
+
+4. Subsequent builds reuse the lock
+   $ drift deploy --dest /deploy --package-root /deploy .
+
+   The tool reads drift-lock.json, verifies integrity, and
+   passes --dep net.tls@0.3.4 --dep web@1.1.0 to driftc.
+   No re-resolution.  Same graph, same binary.
+
+5. Updating dependencies
+   $ drift deploy --update-lock --dest /deploy --package-root /deploy .
+
+   The tool ignores the existing lock, re-resolves from the
+   package root (maybe net.tls 0.3.5 was published), writes a
+   new drift-lock.json.  Author reviews the diff and commits.
+```
+
+**Where declared intent ends and exact resolved graph begins**:
+
+| Layer                  | Contains                              | Who writes it         |
+|------------------------|---------------------------------------|-----------------------|
+| `drift-package.json`   | Version range constraints (`^0.3.0`)  | Project author        |
+| `drift-lock.json`      | Exact resolved versions (`0.3.4`)     | `drift deploy` tool   |
+| `--dep` flags          | Exact versions passed to compiler     | `drift deploy` tool   |
+| `.dmp` manifest        | Declared constraints of the package   | Package producer       |
+| App sidecar `.meta.json` | Exact graph used to build the binary | `drift deploy` tool   |
+
+The author declares constraints.  The tool resolves them once and
+records the exact graph.  The compiler consumes exact versions only.
+There is never ambiguity about which version was used.
+
+### App provenance sidecar
+
+After building an app artifact, `drift deploy` writes a sidecar
+metadata file alongside the binary:
+
+```
+<app-dest>/<app>/<version>/
+  <app>
+  <app>.meta.json
+```
+
+The sidecar records the exact resolved graph used to build the app:
+
+```json
+{
+  "schema_version": 1,
+  "app": "my-app",
+  "version": "1.0.0",
+  "target": "x86_64-linux-gnu",
+  "compiler_version": "0.27.48-dev",
+  "built_at": "2026-03-14T18:30:00Z",
+  "resolved_deps": {
+    "net.tls": {
+      "version": "0.3.4",
+      "integrity": "sha256:<hex>"
+    },
+    "web": {
+      "version": "1.1.0",
+      "integrity": "sha256:<hex>"
+    },
+    "acme.crypto": {
+      "version": "0.9.0",
+      "integrity": "sha256:<hex>"
+    }
+  }
+}
+```
+
+This is the operational/audit artifact.  Given a published app, an
+operator can inspect `<app>.meta.json` to see exactly what package
+graph the binary was built against — not just declared constraints,
+but exact consumed versions with integrity hashes.
+
+The sidecar is written from the same resolved graph used for `--dep`
+expansion, so it is guaranteed to match the actual build.
+
+**MVP scope**: the sidecar is emitted by `drift deploy` for app
+artifacts.  It is not embedded in the binary.  Binary-embedded
+provenance is a later enhancement for single-file interrogation.
+
+**Package artifacts do not get a sidecar**: their dependencies are
+already recorded in the signed `.dmp` manifest (`package_deps`) and
+in `drift-lock.json`.  The sidecar is specifically for apps, which
+are unsigned binaries without manifest metadata.
+
 ### Artifact selection
 
-By default, `drift-deploy` builds and deploys **all** artifacts in
+By default, `drift deploy` builds and deploys **all** artifacts in
 the manifest.  The `--artifact` flag selects specific artifacts:
 
 ```
 # Deploy only net.tls:
-drift-deploy --dest /deploy --artifact net.tls
+drift deploy --dest /deploy --artifact net.tls
 
 # Deploy two specific artifacts:
-drift-deploy --dest /deploy --app-dest /apps \
+drift deploy --dest /deploy --app-dest /apps \
              --artifact net.tls --artifact tls-tool
 ```
 
@@ -1297,7 +1637,7 @@ hint: package 'net.tls' (v0.3.0) requires native library 'ssl' (-lssl).
 |----------------------------------------|-----------------------------------------------------|
 | Manifest missing or invalid JSON       | `error: drift-package.json not found / parse error`  |
 | `schema_version` missing               | `error: drift-package.json missing required field 'schema_version'` |
-| `schema_version` unsupported           | `error: drift-package.json schema_version <N> is not supported by this version of drift-deploy` |
+| `schema_version` unsupported           | `error: drift-package.json schema_version <N> is not supported by this version of drift deploy` |
 | Required field missing                 | `error: artifact 'net.tls': missing required field 'entry_module'` |
 | Duplicate artifact name                | `error: duplicate artifact name 'net.tls' in drift-package.json` |
 | Unknown artifact kind                  | `error: artifact 'foo': unknown kind 'service'`     |
@@ -1311,9 +1651,12 @@ hint: package 'net.tls' (v0.3.0) requires native library 'ssl' (-lssl).
 | Smoke command fails (non-zero exit)    | `error: artifact 'net.tls': smoke command failed (exit <N>); not publishing` |
 | Smoke command not specified            | `note: artifact 'net.tls': no smoke_command configured; running built-in default smoke` |
 | Publish destination not writable       | `error: cannot write to <dest>`                      |
-| Locked version not found               | `error: locked dependency 'net.tls' version '0.3.2' not found under /deploy` |
-| Locked integrity mismatch              | `error: locked dependency 'net.tls' integrity mismatch` |
+| Locked version not found               | `error: locked dependency 'net.tls' version '0.3.2' not found under package roots` |
+| Locked integrity mismatch              | `error: locked dependency 'net.tls' integrity mismatch (expected sha256:abc..., got sha256:def...)` |
 | Lock file written                      | `note: wrote drift-lock.json (3 packages resolved)` |
+| Lock missing declared dep              | `error: dependency 'foo' declared in drift-package.json but not present in drift-lock.json; run drift deploy --update-lock` |
+| Dependency unsatisfied                 | `error: artifact 'tls-tool': package dependency 'net.tls ^0.3.0' not satisfied (searched: /deploy)` |
+| Transitive conflict                    | `error: conflicting constraints on 'acme.crypto': net.tls requires ^0.9.0, web requires ^1.0.0` |
 | Unknown `native_deps.schema_version`   | `warning: native_deps schema_version <N> is newer than supported; some metadata may be ignored` |
 
 ---
@@ -1321,10 +1664,10 @@ hint: package 'net.tls' (v0.3.0) requires native library 'ssl' (-lssl).
 ## 9. Comparison with Current Deploy Pipeline
 
 The existing compiler/stdlib deploy pipeline is the compiler distribution
-deploy.  It is NOT replaced by `drift-deploy`.  The two serve different
+deploy.  It is NOT replaced by `drift deploy`.  The two serve different
 purposes:
 
-| Aspect           | Compiler deploy pipeline            | `drift-deploy` (new)           |
+| Aspect           | Compiler deploy pipeline            | `drift deploy` (new)           |
 |------------------|-------------------------------------|--------------------------------|
 | What it deploys  | Compiler + stdlib + runtime         | Downstream user packages + apps |
 | PEX build        | yes                                 | no                             |
@@ -1335,7 +1678,7 @@ purposes:
 | Multi-artifact   | no (single pipeline)                | yes (per-artifact in manifest) |
 | Who uses it      | Drift maintainers                   | Downstream project authors     |
 
-`drift-deploy` standardizes what downstream project authors do.  It
+`drift deploy` standardizes what downstream project authors do.  It
 inherits the staging → smoke → atomic publish pattern from the compiler
 deploy pipeline but makes it generic, manifest-driven, and
 multi-artifact.
@@ -1373,7 +1716,7 @@ Deliverables:
 6. **Link-time diagnostic enrichment** — enrich linker failures with
    package-declared library hints.
 
-7. **`drift-deploy` tool** — reads `drift-package.json`, orchestrates
+7. **`drift deploy` tool** — reads `drift-package.json`, orchestrates
    per-artifact build → sign → asset copy → stage → smoke → publish.
    Fixed smoke env contract.  Asset staging into `assets/` subdirectory.
    `--artifact` selection.  Artifact build ordering from dependency graph.
@@ -1397,9 +1740,8 @@ Deliverables:
 - `min_version` on native deps
 - `pre_build_command` in manifest
 - `consumers` field for automatic consumer compile tests
-- `drift-deploy publish --registry <url>` for registry-based distribution
+- `drift deploy publish --registry <url>` for registry-based distribution
 - Manifest `extends` for shared base configuration
-- Lock file format for reproducible `package_deps` resolution
 - Additional artifact kinds (e.g., `service`, `plugin`)
 
 ---
@@ -1445,12 +1787,20 @@ Deliverables:
 | `test_deploy_package_root_defaults_to_dest`      | No `--package-root` → uses `--dest` as dependency source |
 | `test_deploy_package_root_unresolved_dep_fails`  | Unsatisfied `package_deps` constraint → clear error  |
 | `test_deploy_intra_manifest_dep_uses_staged`     | Intra-manifest dep resolves from staged output, not package root |
-| `test_deploy_lock_file_written`                  | First deploy writes `drift-lock.json` with resolved versions |
+| `test_deploy_lock_file_written`                  | First deploy writes `drift-lock.json` with resolved versions and integrity |
 | `test_deploy_lock_file_deterministic`            | Subsequent deploy with lock file uses exact locked versions |
 | `test_deploy_lock_file_missing_version_fails`    | Locked version no longer in package root → clear error |
 | `test_deploy_lock_file_integrity_mismatch_fails` | `.dmp` hash changed since lock → clear error |
 | `test_deploy_update_lock_re_resolves`            | `--update-lock` ignores existing lock and picks highest matching |
-| `test_deploy_lock_file_transitive`               | Transitive deps recorded in lock file |
+| `test_deploy_lock_file_transitive`               | Transitive deps recorded in lock file with `dep_type: "transitive"` |
+| `test_deploy_lock_manifest_consistency`          | New manifest dep not in lock → error with `--update-lock` hint |
+| `test_deploy_lock_per_artifact`                  | Two artifacts with different deps → separate resolved sections |
+| `test_deploy_resolution_highest_compatible`      | Multiple versions satisfy `^0.3.0` → highest selected |
+| `test_deploy_resolution_unsatisfied_fails`       | No version satisfies constraint → clear error |
+| `test_deploy_resolution_transitive_conflict`     | Conflicting transitive constraints → clear error listing both |
+| `test_deploy_dep_expansion`                      | Lock file entries expand to `--dep` flags on driftc invocation |
+| `test_deploy_app_sidecar_written`                | App artifact produces `<app>.meta.json` with resolved graph |
+| `test_deploy_app_sidecar_matches_lock`           | Sidecar `resolved_deps` matches lock file entries |
 | `test_deploy_smoke_pass_publishes`               | Smoke exit 0 → artifacts appear at destination      |
 | `test_deploy_smoke_fail_no_publish`              | Smoke exit 1 → destination unchanged                |
 | `test_deploy_smoke_env_contract`                 | Smoke command receives all `DRIFT_STAGED_*` and `DRIFT_ARTIFACT_*` vars |
@@ -1512,10 +1862,20 @@ Deliverables:
 | `--package-root` dependency resolution       | yes |        |
 | `drift-lock.json` resolved dependency graph  | yes |        |
 | `--update-lock` re-resolution               | yes |        |
+| Range resolution (highest compatible)        | yes |        |
+| Transitive dependency resolution             | yes |        |
+| Transitive conflict detection                | yes |        |
+| Lock–manifest consistency check              | yes |        |
+| Lock → `--dep` expansion                    | yes |        |
+| Per-artifact resolution                      | yes |        |
+| App provenance sidecar `.meta.json`          | yes |        |
 | `--app-dest` for app publish                 | yes |        |
 | `--dry-run`                                  | yes |        |
 | `--skip-smoke`                               | yes |        |
 | `assets` in manifest and publish layout      | yes |        |
+| `--dep-file` for large dep graphs           |     | yes    |
+| Split-version (diamond) dependency resolution |     | yes    |
+| Binary-embedded provenance                   |     | yes    |
 | `pkg_config` integration                     |     | yes    |
 | `platform`-conditional library names         |     | yes    |
 | `required` field / optional native deps       |     | yes    |
@@ -1536,11 +1896,13 @@ Deliverables:
 | `lang/driftc/driftc.py`                       | `--native-link-lib` arg; `--package-dep` arg; `--dep` arg; manifest emission; consumer auto-link; diagnostic enrichment; `--no-package-native-deps` |
 | `lang/driftc/packages/dmir_pkg_v0.py`         | `NativeDepEntry`, `PackageDepEntry` dataclasses; parse from manifest; add to `LoadedPackage` |
 | `lang/driftc/packages/provider_v0.py`         | Pass through `native_deps` and `package_deps` in load path |
-| `tools/drift-deploy/`                         | New tool: manifest parser, orchestrator, smoke runner, publisher |
-| `tools/drift-deploy/drift_deploy.py`          | Main entry point, artifact selection, build ordering       |
-| `tools/drift-deploy/manifest.py`              | `drift-package.json` schema + validator (project + artifacts) |
-| `tools/drift-deploy/lockfile.py`              | `drift-lock.json` read/write/verify, resolution, integrity check |
-| `tools/drift-deploy/staged_trust.py`          | Staged trust store generation and cleanup                 |
+| `tools/drift_deploy/`                         | New tool: manifest parser, orchestrator, smoke runner, publisher |
+| `tools/drift_deploy/drift_deploy.py`          | Main entry point, artifact selection, build ordering       |
+| `tools/drift_deploy/manifest.py`              | `drift-package.json` schema + validator (project + artifacts) |
+| `tools/drift_deploy/lockfile.py`              | `drift-lock.json` read/write/verify, integrity check      |
+| `tools/drift_deploy/resolver.py`              | Range resolution, transitive walk, conflict detection, `--dep` expansion |
+| `tools/drift_deploy/sidecar.py`               | App provenance sidecar `.meta.json` emission              |
+| `tools/drift_deploy/staged_trust.py`          | Staged trust store generation and cleanup                 |
 | `lang/tests/driver/test_driftc_package_v0.py` | Native dep and package dep compiler-level tests           |
 | `lang/tests/driver/test_drift_deploy.py`      | Deploy tool integration tests (multi-artifact)            |
 | `docs/history.md`                             | Changelog entry                                           |
