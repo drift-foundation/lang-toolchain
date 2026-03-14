@@ -3466,6 +3466,15 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0
+	# Extern C declarations must use bare C symbol names, not module-qualified.
+	ir_text = (tmp_path / "out.ll").read_text()
+	assert "declare i32 @abs(i32)" in ir_text, (
+		"expected bare @abs declare in consumer IR; "
+		f"got mangled name instead:\n{[l for l in ir_text.splitlines() if 'abs' in l]}"
+	)
+	assert "lib::abs" not in ir_text, (
+		"consumer IR must not contain module-qualified extern C symbol 'lib::abs'"
+	)
 
 
 def test_driftc_can_consume_package_exporting_int32_uint32(tmp_path: Path) -> None:

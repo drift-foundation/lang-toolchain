@@ -1,6 +1,23 @@
 # Drift development history
 
 ## 2026-03-13
+- **Fixed LANGUAGE_BUG: package-consumer extern C symbol mangling**:
+  Extern C declarations consumed from a `.dmp` package emitted module-qualified
+  LLVM symbols like `@lib::abs(i32)` instead of bare C symbols like `@abs(i32)`.
+  This is the package-consumer analogue of the source-file extern-C mangling bug
+  fixed in 0.27.36-dev.
+  - Root cause: workspace-loader package signature reconstruction (`driftc.py`
+    line ~7647) unconditionally module-qualifies bare names via
+    `name = f"{module_name}::{name}"`. This is correct for Drift functions but
+    wrong for extern C declarations, which must preserve their bare C symbol
+    identity for correct LLVM `declare`/`call` emission.
+  - Fix: skip module-qualification when `sd.get("is_extern_c")` is true.
+  - Source-file path confirmed clean (13/13 FFI tests pass).
+  - Extended regression test to assert `declare i32 @abs(i32)` in consumer IR
+    and reject `lib::abs`.
+- Bumped compiler version to `0.27.42-dev`; ABI remains `5`.
+
+## 2026-03-13
 - **Fixed LANGUAGE_BUG: extern C package codegen crash**:
   Extern C declarations consumed from a `.dmp` package crashed LLVM codegen
   with `NotImplementedError: unsupported terminator NoneType` because the

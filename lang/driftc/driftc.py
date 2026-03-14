@@ -7644,7 +7644,7 @@ def main(argv: list[str] | None = None) -> int:
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
-					if module_name is not None and "::" not in name:
+					if module_name is not None and "::" not in name and not bool(sd.get("is_extern_c", False)):
 						name = f"{module_name}::{name}"
 					if "is_pub" not in sd:
 						msg = f"package signature '{name}' missing is_pub; signatures must include is_pub"
