@@ -20,6 +20,22 @@
 - Bumped compiler version to `0.27.39-dev`; ABI remains `5`.
 
 ## 2026-03-13
+- **Fixed LANGUAGE_BUG: Int32/Uint32 package serialization failure**:
+  Packages exporting functions with Int32/Uint32 parameter or return types
+  failed at consumer import with "package SCALAR 'Int32' missing module_id".
+  - Root cause: Int32/Uint32 were added as user-facing scalar types in
+    0.27.32-dev, but the package serialization/deserialization path was not
+    updated — `_builtin_type_id()` and `ensure_builtin()` in
+    `type_table_link_v0.py` lacked entries for Int32/Uint32.
+  - Also fixed: `_BUILTIN_TYPE_NAMES` in `provisional_dmir_v0.py` was missing
+    Uint64, Byte, Int32, Uint32 (Uint64/Byte were latent; Int32/Uint32 were
+    active failures).
+  - Also fixed: `_host_type_key_for_tid()` builtin set and FnResult ok-type
+    lowering in `llvm_codegen.py` for i32 returns through entrypoint wrappers.
+  - Added regression test `test_driftc_can_consume_package_exporting_int32_uint32`.
+- Bumped compiler version to `0.27.40-dev`; ABI remains `5`.
+
+## 2026-03-13
 - **stdlib: TcpStream.raw_fd()**: added `pub fn raw_fd(self: &TcpStream) nothrow -> Int`
   to `std.net.TcpStream`. Returns the underlying file descriptor without consuming
   ownership — borrowed fd observation only. The `fd` field remains private.

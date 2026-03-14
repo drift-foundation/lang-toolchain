@@ -6544,7 +6544,7 @@ class _FuncBuilder:
 		if ty == DRIFT_IFACE_TYPE:
 			self.lines.append(f"  ret {DRIFT_IFACE_TYPE} {val}")
 			return
-		if ty in (DRIFT_INT_TYPE, DRIFT_UINT_TYPE, DRIFT_U64_TYPE, "i1", "i8"):
+		if ty in (DRIFT_INT_TYPE, DRIFT_UINT_TYPE, DRIFT_U64_TYPE, "i1", "i8", "i32"):
 			self.lines.append(f"  ret {self._llty(ty)} {val}")
 			return
 		if ty in ("double", "float"):
@@ -7152,6 +7152,8 @@ class _FuncBuilder:
 			return "i8", key
 		if td.kind is TypeKind.SCALAR and td.name == "Float":
 			return self._llvm_float_type(), key
+		if td.kind is TypeKind.SCALAR and td.name in ("Int32", "Uint32"):
+			return "i32", key
 		if td.kind is TypeKind.VOID:
 			return "i8", key
 		if td.kind is TypeKind.REF:

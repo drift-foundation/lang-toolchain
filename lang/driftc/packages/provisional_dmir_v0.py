@@ -133,6 +133,10 @@ def from_jsonable(obj: Any, *, dataclasses_by_name: Mapping[str, type], enums_by
 _BUILTIN_TYPE_NAMES = {
 	"Int",
 	"Uint",
+	"Uint64",
+	"Int32",
+	"Uint32",
+	"Byte",
 	"Bool",
 	"Float",
 	"String",

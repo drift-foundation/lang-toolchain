@@ -3407,6 +3407,132 @@ fn main() nothrow -> Int{ return 0 }
 	assert payload["diagnostics"][0]["phase"] == "package"
 	assert "must not be a method" in payload["diagnostics"][0]["message"]
 
+def test_driftc_can_consume_package_exporting_int32_uint32(tmp_path: Path) -> None:
+	"""Package exports functions using Int32/Uint32 scalars; consumer imports and calls them."""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { identity32, identityu32 };
+
+pub fn identity32(a: Int32) nothrow -> Int32 {
+	return a;
+}
+
+pub fn identityu32(a: Uint32) nothrow -> Uint32 {
+	return a;
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import lib as lib;
+
+fn main() nothrow -> Int {
+	val r = lib.identity32(cast<Int32>(37));
+	val u = lib.identityu32(cast<Uint32>(13));
+	return cast<Int>(r) + cast<Int>(u);
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0
+
+
+def test_driftc_can_consume_package_exporting_uint64_byte(tmp_path: Path) -> None:
+	"""Package exports functions using Uint64/Byte scalars; consumer imports and calls them."""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+export { identity_u64, identity_byte };
+
+pub fn identity_u64(a: Uint64) nothrow -> Uint64 {
+	return a;
+}
+
+pub fn identity_byte(a: Byte) nothrow -> Byte {
+	return a;
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import lib as lib;
+
+fn main() nothrow -> Int {
+	val u = lib.identity_u64(cast<Uint64>(42));
+	val b = lib.identity_byte(cast<Byte>(7));
+	return cast<Int>(u) + cast<Int>(b);
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0
+
+
 def test_driftc_require_signatures_rejects_unsigned_packages(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",

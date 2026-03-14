@@ -575,6 +575,10 @@ def _builtin_type_id(host: TypeTable, td: DecodedTypeDef) -> TypeId | None:
 			return host.ensure_float()
 		if name == "String":
 			return host.ensure_string()
+		if name == "Int32":
+			return host.ensure_int32()
+		if name == "Uint32":
+			return host.ensure_uint32()
 	if td.kind is TypeKind.VOID:
 		return host.ensure_void()
 	if td.kind is TypeKind.ERROR and td.name == "Error":
@@ -907,6 +911,10 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				return host.ensure_float()
 			if name == "String":
 				return host.ensure_string()
+			if name == "Int32":
+				return host.ensure_int32()
+			if name == "Uint32":
+				return host.ensure_uint32()
 		if kind is TypeKind.VOID:
 			return host.ensure_void()
 		if kind is TypeKind.ERROR and name == "Error":
@@ -1201,7 +1209,7 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		td = host.get(tid)
 		if td.kind is TypeKind.SCALAR and td.module_id is None:
 			builtin_name = _canonical_builtin_name(td.name)
-			if builtin_name in {"Int", "Uint", "Uint64", "Byte", "Bool", "Float", "String"}:
+			if builtin_name in {"Int", "Uint", "Uint64", "Byte", "Bool", "Float", "String", "Int32", "Uint32"}:
 				k = ("builtin", TypeKind.SCALAR.name, builtin_name)
 				host_key_memo[tid] = k
 				return k
