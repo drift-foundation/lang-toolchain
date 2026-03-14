@@ -7058,6 +7058,14 @@ def main(argv: list[str] | None = None) -> int:
 		help="Add library search path (passes -L<DIR> to linker)")
 	parser.add_argument("--link-obj", action="append", default=[], metavar="FILE",
 		help="Link additional object file")
+	parser.add_argument("--native-link-lib", action="append", default=[], metavar="LIB",
+		help="Declare native library dependency in emitted package (repeatable; --emit-package only)")
+	parser.add_argument("--package-dep", action="append", default=[], metavar="NAME=VERSION",
+		help="Declare Drift package dependency in emitted package (repeatable; --emit-package only)")
+	parser.add_argument("--no-package-native-deps", action="store_true",
+		help="Suppress auto-linking of native deps declared by consumed packages")
+	parser.add_argument("--dep", action="append", default=[], metavar="PKG@VERSION",
+		help="Select exact dependency version for consumed package (repeatable; e.g., --dep net.tls@0.3.0)")
 	args = parser.parse_args(argv)
 	optimized = getattr(args, "optimized", False)
 	debug_enabled = not optimized
@@ -7244,6 +7252,78 @@ def main(argv: list[str] | None = None) -> int:
 		# packages by the module ids they provide, which is a content-derived key and
 		# independent of filesystem paths.
 		loaded_pkgs.sort(key=lambda p: tuple(sorted(p.modules_by_id.keys())))
+
+		# Version selection: --dep pins.
+		_version_pins: dict[str, str] = {}
+		for _pin_spec in getattr(args, "dep", []):
+			if "@" not in _pin_spec:
+				msg = f"--dep requires PKG@VERSION format, got: {_pin_spec}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			_pin_name, _pin_ver = _pin_spec.split("@", 1)
+			if not _pin_name or not _pin_ver:
+				msg = f"--dep requires non-empty PKG and VERSION, got: {_pin_spec}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			if _pin_name in _version_pins:
+				msg = f"--dep specified twice for '{_pin_name}'"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			_version_pins[_pin_name] = _pin_ver
+		if loaded_pkgs:
+			# Group loaded packages by package_id.
+			_pkgs_by_id: dict[str, list] = {}
+			for _pkg in loaded_pkgs:
+				_pid = _pkg.manifest.get("package_id", "")
+				_pkgs_by_id.setdefault(_pid, []).append(_pkg)
+			# Apply pins and check for ambiguous multi-version.
+			_filtered: list = []
+			_used_pins: set[str] = set()
+			for _pid, _pkg_list in _pkgs_by_id.items():
+				if _pid in _version_pins:
+					_used_pins.add(_pid)
+					_want_ver = _version_pins[_pid]
+					_matched = [p for p in _pkg_list if p.manifest.get("package_version") == _want_ver]
+					if not _matched:
+						_available = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
+						msg = f"package '{_pid}' version '{_want_ver}' not found under package roots (available: {', '.join(_available)})"
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
+					_filtered.extend(_matched)
+				else:
+					# Unpinned: check for ambiguous multi-version.
+					_versions = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
+					if len(_versions) > 1:
+						msg = f"multiple versions of '{_pid}' found ({', '.join(_versions)}); use --dep {_pid}@<version> to select"
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
+					_filtered.extend(_pkg_list)
+			# Check for pins that didn't match any discovered package.
+			_unmatched_pins = set(_version_pins.keys()) - _used_pins
+			if _unmatched_pins:
+				for _upin in sorted(_unmatched_pins):
+					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			loaded_pkgs = _filtered
 
 		# Enforce "single version per package id per build".
 		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)
@@ -9512,6 +9592,29 @@ def main(argv: list[str] | None = None) -> int:
 				}
 			)
 	
+		# Build native_deps manifest section from --native-link-lib flags.
+		_native_deps_section: dict[str, object] | None = None
+		if getattr(args, "native_link_lib", []):
+			_native_deps_section = {
+				"schema_version": 1,
+				"link_libs": [{"lib": lib} for lib in args.native_link_lib],
+			}
+
+		# Build package_deps manifest section from --package-dep flags.
+		_package_deps_list: list[dict[str, str]] | None = None
+		if getattr(args, "package_dep", []):
+			_package_deps_list = []
+			for dep_str in args.package_dep:
+				if "=" not in dep_str:
+					msg = f"--package-dep requires NAME=VERSION format, got: {dep_str}"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				dep_name, dep_ver = dep_str.split("=", 1)
+				_package_deps_list.append({"name": dep_name, "version": dep_ver})
+
 		manifest_obj: dict[str, object] = {
 			"format": "dmir-pkg",
 			"format_version": 0,
@@ -9527,6 +9630,10 @@ def main(argv: list[str] | None = None) -> int:
 			"modules": manifest_modules,
 			"blobs": manifest_blobs,
 		}
+		if _native_deps_section is not None:
+			manifest_obj["native_deps"] = _native_deps_section
+		if _package_deps_list is not None:
+			manifest_obj["package_deps"] = _package_deps_list
 	
 		write_dmir_pkg_v0(
 			args.emit_package,
@@ -9978,6 +10085,21 @@ def main(argv: list[str] | None = None) -> int:
 		link_cmd.extend(["-L", search_path])
 	for lib in getattr(args, 'link_lib', []):
 		link_cmd.extend([f"-l{lib}"])
+	# Consumer auto-link: append native deps from loaded packages (after user --link-lib).
+	_pkg_native_libs: list[str] = []
+	_pkg_native_lib_sources: dict[str, tuple[str, str]] = {}  # lib -> (pkg_id, pkg_ver)
+	if loaded_pkgs and not getattr(args, 'no_package_native_deps', False):
+		_seen_libs: set[str] = set()
+		for _lpkg in loaded_pkgs:
+			_pkg_id = _lpkg.manifest.get("package_id", "?")
+			_pkg_ver = _lpkg.manifest.get("package_version", "?")
+			for _ndep in _lpkg.native_deps:
+				if _ndep.lib not in _seen_libs:
+					_seen_libs.add(_ndep.lib)
+					_pkg_native_libs.append(_ndep.lib)
+					_pkg_native_lib_sources[_ndep.lib] = (_pkg_id, _pkg_ver)
+		for _plib in _pkg_native_libs:
+			link_cmd.extend([f"-l{_plib}"])
 	print("[driftc] link:", " ".join(link_cmd), file=sys.stderr)
 	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:
@@ -9986,6 +10108,13 @@ def main(argv: list[str] | None = None) -> int:
 		if "__drift_rt_abi_version_" in link_res.stderr:
 			from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION as _abi_ver
 			abi_hint = f"\nhint: driftc targets runtime ABI v{_abi_ver}; linked runtime provides a different ABI. Rebuild runtime/std artifacts (just runtime-libs)."
+		# Diagnostic enrichment: hint about package-declared native libs.
+		_native_dep_hints: list[str] = []
+		for _plib, (_src_id, _src_ver) in _pkg_native_lib_sources.items():
+			if f"-l{_plib}" in link_res.stderr:
+				_native_dep_hints.append(f"hint: package '{_src_id}' (v{_src_ver}) requires native library '{_plib}' (-l{_plib}).\n      Install the development package for your distribution, or pass --link-search <dir> to specify the library location.")
+		if _native_dep_hints:
+			abi_hint += "\n" + "\n".join(_native_dep_hints)
 		if args.json:
 			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg + abi_hint, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
 		else:

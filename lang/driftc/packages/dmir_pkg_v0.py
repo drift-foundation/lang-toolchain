@@ -82,6 +82,61 @@ class PackageModule:
 
 
 @dataclass(frozen=True)
+class NativeDepEntry:
+	"""A native library dependency declared by a package (linker token)."""
+	lib: str
+
+
+@dataclass(frozen=True)
+class PackageDepEntry:
+	"""A Drift package dependency declared by a package."""
+	name: str
+	version: str  # semver constraint string
+
+
+def _parse_native_deps(manifest: dict[str, Any]) -> list[NativeDepEntry]:
+	"""Extract native_deps from a .dmp manifest.  Returns [] if absent; raises on malformed."""
+	nd = manifest.get("native_deps")
+	if nd is None:
+		return []
+	if not isinstance(nd, dict):
+		raise ValueError("native_deps must be an object")
+	link_libs = nd.get("link_libs")
+	if not isinstance(link_libs, list):
+		raise ValueError("native_deps.link_libs must be an array")
+	result: list[NativeDepEntry] = []
+	for i, entry in enumerate(link_libs):
+		if not isinstance(entry, dict):
+			raise ValueError(f"native_deps.link_libs[{i}] must be an object")
+		lib = entry.get("lib")
+		if not isinstance(lib, str) or not lib:
+			raise ValueError(f"native_deps.link_libs[{i}].lib must be a non-empty string")
+		result.append(NativeDepEntry(lib=lib))
+	return result
+
+
+def _parse_package_deps(manifest: dict[str, Any]) -> list[PackageDepEntry]:
+	"""Extract package_deps from a .dmp manifest.  Returns [] if absent; raises on malformed."""
+	pd = manifest.get("package_deps")
+	if pd is None:
+		return []
+	if not isinstance(pd, list):
+		raise ValueError("package_deps must be an array")
+	result: list[PackageDepEntry] = []
+	for i, entry in enumerate(pd):
+		if not isinstance(entry, dict):
+			raise ValueError(f"package_deps[{i}] must be an object")
+		name = entry.get("name")
+		if not isinstance(name, str) or not name:
+			raise ValueError(f"package_deps[{i}].name must be a non-empty string")
+		version = entry.get("version")
+		if not isinstance(version, str) or not version:
+			raise ValueError(f"package_deps[{i}].version must be a non-empty string")
+		result.append(PackageDepEntry(name=name, version=version))
+	return result
+
+
+@dataclass(frozen=True)
 class LoadedPackage:
 	"""A fully verified, decoded package container."""
 
@@ -90,6 +145,8 @@ class LoadedPackage:
 	toc: list[TocEntry]
 	modules_by_id: dict[str, PackageModule]
 	blobs_by_sha256: dict[str, bytes]
+	native_deps: list[NativeDepEntry]
+	package_deps: list[PackageDepEntry]
 
 
 def _encode_name_prefix(name: str) -> tuple[int, bytes]:
@@ -306,4 +363,6 @@ Verification steps:
 		toc=list(entries),
 		modules_by_id=modules_by_id,
 		blobs_by_sha256=blobs_by_sha,
+		native_deps=_parse_native_deps(manifest_obj),
+		package_deps=_parse_package_deps(manifest_obj),
 	)

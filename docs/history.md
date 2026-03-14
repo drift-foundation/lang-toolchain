@@ -1,6 +1,56 @@
 # Drift development history
 
 ## 2026-03-14
+- **Consumer dependency version selection with --dep (0.27.48-dev)**:
+  Exact consumer version selection for multi-version package roots.
+  - New consumer flag: `--dep <PKG>@<VERSION>` (repeatable) selects the exact
+    version of a consumed package dependency.  When multiple versions of a
+    package exist under `--package-root`, the dep pin selects exactly one.
+  - Version selection rules (enforced before the existing "single version per
+    package id" check):
+    - Pinned: loads exactly the specified version; errors if not found with
+      `(available: ...)` hint.
+    - Unpinned, single version: loads it without error.
+    - Unpinned, multiple versions: errors with
+      `use --dep <pkg>@<version> to select` hint.
+  - The compiler never silently picks the "highest" or "newest" version.
+  - Tests added:
+    - `test_package_version_pin_selects`
+    - `test_package_version_missing_fails`
+    - `test_package_version_ambiguous_fails`
+    - `test_package_version_single_unambiguous`
+    - `test_dep_malformed_rejected`
+    - `test_dep_duplicate_rejected`
+
+- **Native dependency metadata and package dependency declarations (0.27.47-dev)**:
+  Producer-side and consumer-side support for declaring and consuming native
+  library dependencies and Drift package dependencies in `.dmp` packages.
+  - New `driftc --emit-package` flags:
+    - `--native-link-lib <LIB>` (repeatable): declares a native library dependency.
+      Written into the `.dmp` manifest as `native_deps.link_libs[].lib`.
+    - `--package-dep <NAME>=<VERSION>` (repeatable): declares a Drift package
+      dependency with semver constraint.  Written into the `.dmp` manifest as
+      `package_deps[].{name, version}`.
+  - New consumer flag: `--no-package-native-deps` suppresses auto-linking of
+    native deps declared by consumed packages.
+  - Consumer auto-link: when loading packages, `driftc` reads `native_deps`
+    from each `.dmp` manifest, deduplicates by library name, and appends
+    `-l<lib>` flags to the link command after user-specified `--link-lib` flags.
+  - Link-time diagnostic enrichment: when the linker fails referencing a library
+    declared by a loaded package, `driftc` emits a hint identifying the package
+    and library.
+  - Data model: `NativeDepEntry(lib)` and `PackageDepEntry(name, version)`
+    dataclasses added to `LoadedPackage`.
+  - Both `native_deps` and `package_deps` are inside the signed `.dmp` payload —
+    modifying them invalidates the Ed25519 signature.
+  - Tests added:
+    - `test_native_deps_manifest_roundtrip`
+    - `test_native_deps_absent_is_empty`
+    - `test_package_deps_manifest_roundtrip`
+    - `test_package_deps_absent_is_empty`
+    - `test_package_dep_bad_format_rejected`
+    - `test_native_deps_and_package_deps_combined`
+
 - **Fixed LANGUAGE_BUG: destroy-body wrapper reachability in package consumer**:
   When a `Destructible::destroy` body in a packaged struct calls a stdlib method
   (e.g., `self.name.byte_length()`), the consumer failed to link because the

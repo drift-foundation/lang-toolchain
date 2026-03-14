@@ -4062,3 +4062,493 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0, "destroy body transitive package target must link in consumer"
+
+
+# ---------------------------------------------------------------------------
+# Native dependency metadata tests (0.27.47-dev)
+# ---------------------------------------------------------------------------
+
+
+def test_native_deps_manifest_roundtrip(tmp_path: Path) -> None:
+	"""Build a package with --native-link-lib, load it, verify native_deps in manifest."""
+	pkg_path = tmp_path / "lib.dmp"
+	module_dir = tmp_path / "acme" / "lib"
+	_write_file(
+		module_dir / "lib.drift",
+		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			str(module_dir / "lib.drift"),
+			*_emit_pkg_args("acme.lib"),
+			"--native-link-lib",
+			"ssl",
+			"--native-link-lib",
+			"crypto",
+			"--emit-package",
+			str(pkg_path),
+		]
+	)
+	assert rc == 0, "emit-package with --native-link-lib should succeed"
+	loaded = load_package_v0(pkg_path)
+	assert len(loaded.native_deps) == 2
+	assert loaded.native_deps[0].lib == "ssl"
+	assert loaded.native_deps[1].lib == "crypto"
+	# Verify manifest structure
+	nd = loaded.manifest.get("native_deps")
+	assert isinstance(nd, dict)
+	assert nd["schema_version"] == 1
+	assert len(nd["link_libs"]) == 2
+
+
+def test_native_deps_absent_is_empty(tmp_path: Path) -> None:
+	"""Load a package without native_deps — defaults to empty list."""
+	pkg_path = _emit_lib_pkg(tmp_path)
+	loaded = load_package_v0(pkg_path)
+	assert loaded.native_deps == []
+
+
+def test_package_deps_manifest_roundtrip(tmp_path: Path) -> None:
+	"""Build a package with --package-dep, load it, verify package_deps in manifest."""
+	pkg_path = tmp_path / "lib.dmp"
+	module_dir = tmp_path / "acme" / "lib"
+	_write_file(
+		module_dir / "lib.drift",
+		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			str(module_dir / "lib.drift"),
+			*_emit_pkg_args("acme.lib"),
+			"--package-dep",
+			"net.tls=^0.3.0",
+			"--package-dep",
+			"acme.crypto=~1.0.0",
+			"--emit-package",
+			str(pkg_path),
+		]
+	)
+	assert rc == 0, "emit-package with --package-dep should succeed"
+	loaded = load_package_v0(pkg_path)
+	assert len(loaded.package_deps) == 2
+	assert loaded.package_deps[0].name == "net.tls"
+	assert loaded.package_deps[0].version == "^0.3.0"
+	assert loaded.package_deps[1].name == "acme.crypto"
+	assert loaded.package_deps[1].version == "~1.0.0"
+	# Verify manifest structure
+	pd = loaded.manifest.get("package_deps")
+	assert isinstance(pd, list)
+	assert len(pd) == 2
+
+
+# ── Consumer auto-link behavior tests ────────────────────────────────────────
+# These test the link-time behavior when consuming packages that declare
+# native_deps.  They require subprocess + clang (skipped if unavailable).
+
+import shutil
+import subprocess
+import sys
+import tempfile
+
+_ROOT = Path(__file__).resolve().parents[3]
+_STDLIB = _ROOT / "stdlib"
+_CONSUMER_BUILD = Path("build/tests/pkg_consumer")
+
+
+def _emit_lib_pkg_with_native_deps(
+	tmp_path: Path,
+	native_libs: list[str],
+	*,
+	module_id: str = "acme.lib",
+) -> Path:
+	"""Emit a .dmp package that declares native_deps with given link_libs."""
+	module_dir = tmp_path.joinpath(*module_id.split("."))
+	_write_file(
+		module_dir / "lib.drift",
+		f"module {module_id}\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
+	)
+	pkg_path = tmp_path / "lib.dmp"
+	args = [
+		"-M",
+		str(tmp_path),
+		str(module_dir / "lib.drift"),
+		*_emit_pkg_args(module_id),
+		"--emit-package",
+		str(pkg_path),
+	]
+	for lib in native_libs:
+		args.extend(["--native-link-lib", lib])
+	rc = driftc_main(args)
+	assert rc == 0, f"emit-package with native deps should succeed (rc={rc})"
+	return pkg_path
+
+
+def _run_consumer_link(
+	tmp_path: Path,
+	pkg_dir: Path,
+	*,
+	extra_args: list[str] | None = None,
+) -> subprocess.CompletedProcess:
+	"""
+	Compile a consumer program that imports from a package, triggering the link path.
+
+	Returns the CompletedProcess so callers can inspect stderr for the link command.
+	The link may fail (e.g. missing native lib) — that's expected for some tests.
+	"""
+	clang = shutil.which("clang")
+	if clang is None:
+		pytest.skip("clang not available")
+
+	_CONSUMER_BUILD.mkdir(parents=True, exist_ok=True)
+	work = Path(tempfile.mkdtemp(prefix="pkg-consumer-", dir=_CONSUMER_BUILD))
+
+	_write_file(
+		work / "main.drift",
+		"module main\n\nimport acme.lib as lib;\n\nfn main() nothrow -> Int {\n\treturn lib.add(1, 2);\n}\n",
+	)
+
+	bin_path = work / "a.out"
+	cmd = [
+		sys.executable,
+		"-m", "lang.driftc",
+		"--stdlib-root", str(_STDLIB),
+		"--dev",
+		"--package-root", str(pkg_dir),
+		"--allow-unsigned-from", str(pkg_dir),
+		"-o", str(bin_path),
+		str(work / "main.drift"),
+	]
+	if extra_args:
+		cmd.extend(extra_args)
+
+	env = {"PYTHONPATH": ".", "PATH": subprocess.check_output(["bash", "-lc", "echo $PATH"], text=True).strip()}
+	return subprocess.run(cmd, capture_output=True, text=True, cwd=str(_ROOT), env=env)
+
+
+def _extract_link_line(stderr: str) -> str | None:
+	"""Extract the '[driftc] link:' line from stderr."""
+	for line in stderr.splitlines():
+		if line.startswith("[driftc] link:"):
+			return line
+	return None
+
+
+class TestConsumerAutoLink:
+	"""Consumer-side tests for native_deps auto-link, opt-out, and diagnostics."""
+
+	def test_auto_link_appends_native_libs(self, tmp_path: Path) -> None:
+		"""Consumer auto-link appends -l<lib> from package native_deps to link command."""
+		pkgs = tmp_path / "pkgs"
+		pkgs.mkdir()
+		_emit_lib_pkg_with_native_deps(pkgs, ["testdummylib_a", "testdummylib_b"])
+
+		res = _run_consumer_link(tmp_path, pkgs)
+		link_line = _extract_link_line(res.stderr)
+		assert link_line is not None, f"expected [driftc] link: line in stderr:\n{res.stderr}"
+		assert "-ltestdummylib_a" in link_line, f"expected -ltestdummylib_a in link line: {link_line}"
+		assert "-ltestdummylib_b" in link_line, f"expected -ltestdummylib_b in link line: {link_line}"
+
+	def test_no_package_native_deps_suppresses_auto_link(self, tmp_path: Path) -> None:
+		"""--no-package-native-deps suppresses auto-link of package-declared native libs."""
+		pkgs = tmp_path / "pkgs"
+		pkgs.mkdir()
+		_emit_lib_pkg_with_native_deps(pkgs, ["testdummylib_a", "testdummylib_b"])
+
+		res = _run_consumer_link(tmp_path, pkgs, extra_args=["--no-package-native-deps"])
+		link_line = _extract_link_line(res.stderr)
+		assert link_line is not None, f"expected [driftc] link: line in stderr:\n{res.stderr}"
+		assert "-ltestdummylib_a" not in link_line, f"did not expect -ltestdummylib_a in link line: {link_line}"
+		assert "-ltestdummylib_b" not in link_line, f"did not expect -ltestdummylib_b in link line: {link_line}"
+
+	def test_diagnostic_enrichment_on_link_failure(self, tmp_path: Path) -> None:
+		"""Link failure with package-declared native lib produces diagnostic hint identifying the source package."""
+		pkgs = tmp_path / "pkgs"
+		pkgs.mkdir()
+		_emit_lib_pkg_with_native_deps(pkgs, ["nonexistent_drift_test_lib_xyz"])
+
+		res = _run_consumer_link(tmp_path, pkgs)
+		# Link should fail because the library doesn't exist.
+		assert res.returncode != 0, "expected link failure for nonexistent library"
+		# The diagnostic hint should identify the package and library.
+		assert "nonexistent_drift_test_lib_xyz" in res.stderr, f"expected library name in stderr:\n{res.stderr}"
+		assert "acme.lib" in res.stderr, f"expected package id 'acme.lib' in diagnostic hint:\n{res.stderr}"
+
+
+def test_package_deps_absent_is_empty(tmp_path: Path) -> None:
+	"""Load a package without package_deps — defaults to empty list."""
+	pkg_path = _emit_lib_pkg(tmp_path)
+	loaded = load_package_v0(pkg_path)
+	assert loaded.package_deps == []
+
+
+def test_package_dep_bad_format_rejected(tmp_path: Path) -> None:
+	"""--package-dep without = separator is rejected."""
+	module_dir = tmp_path / "acme" / "lib"
+	_write_file(
+		module_dir / "lib.drift",
+		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			str(module_dir / "lib.drift"),
+			*_emit_pkg_args("acme.lib"),
+			"--package-dep",
+			"net.tls",
+			"--emit-package",
+			str(tmp_path / "lib.dmp"),
+		]
+	)
+	assert rc == 1, "--package-dep without =VERSION should fail"
+
+
+def test_native_deps_and_package_deps_combined(tmp_path: Path) -> None:
+	"""Build a package with both native and package deps."""
+	pkg_path = tmp_path / "lib.dmp"
+	module_dir = tmp_path / "acme" / "lib"
+	_write_file(
+		module_dir / "lib.drift",
+		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			str(module_dir / "lib.drift"),
+			*_emit_pkg_args("acme.lib"),
+			"--native-link-lib",
+			"ssl",
+			"--package-dep",
+			"net.tls=^0.3.0",
+			"--emit-package",
+			str(pkg_path),
+		]
+	)
+	assert rc == 0
+	loaded = load_package_v0(pkg_path)
+	assert len(loaded.native_deps) == 1
+	assert loaded.native_deps[0].lib == "ssl"
+	assert len(loaded.package_deps) == 1
+	assert loaded.package_deps[0].name == "net.tls"
+
+
+# ── Version selection tests ──────────────────────────────────────────────────
+
+
+def _emit_versioned_pkg(
+	src_root: Path,
+	pkg_out: Path,
+	*,
+	module_id: str = "acme.lib",
+	version: str = "0.0.0",
+) -> Path:
+	"""Emit a .dmp package with a specific version."""
+	module_dir = src_root.joinpath(*module_id.split("."))
+	_write_file(
+		module_dir / "lib.drift",
+		f"module {module_id}\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
+	)
+	pkg_out.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main(
+		[
+			"-M",
+			str(src_root),
+			str(module_dir / "lib.drift"),
+			"--package-id",
+			module_id,
+			"--package-version",
+			version,
+			"--package-target",
+			"test-target",
+			"--emit-package",
+			str(pkg_out),
+		]
+	)
+	assert rc == 0, f"emit-package for {module_id}@{version} should succeed (rc={rc})"
+	return pkg_out
+
+
+def test_package_version_pin_selects(tmp_path: Path) -> None:
+	"""--dep net.tls@0.3.0 loads exactly that version from a multi-version root."""
+	pkgs = tmp_path / "pkgs"
+	src1 = tmp_path / "src1"
+	src2 = tmp_path / "src2"
+	_emit_versioned_pkg(src1, pkgs / "tls_020.dmp", module_id="net.tls", version="0.2.0")
+	_emit_versioned_pkg(src2, pkgs / "tls_030.dmp", module_id="net.tls", version="0.3.0")
+
+	# With pin, should succeed (emit-ir to avoid needing clang).
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.0",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, "version-pinned consumer should compile successfully"
+	assert ir_out.exists()
+
+
+def test_package_version_missing_fails(tmp_path: Path) -> None:
+	"""--dep for nonexistent version produces a clear error."""
+	pkgs = tmp_path / "pkgs"
+	src = tmp_path / "src"
+	_emit_versioned_pkg(src, pkgs / "tls_030.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.4.0",
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 1, "pinning to nonexistent version should fail"
+
+
+def test_package_version_ambiguous_fails(tmp_path: Path) -> None:
+	"""Multiple versions without --dep produces a clear error listing versions."""
+	pkgs = tmp_path / "pkgs"
+	src1 = tmp_path / "src1"
+	src2 = tmp_path / "src2"
+	_emit_versioned_pkg(src1, pkgs / "tls_020.dmp", module_id="net.tls", version="0.2.0")
+	_emit_versioned_pkg(src2, pkgs / "tls_030.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 1, "ambiguous multi-version without pin should fail"
+
+
+def test_package_version_single_unambiguous(tmp_path: Path) -> None:
+	"""Single version present, no --dep — loads it without error."""
+	pkgs = tmp_path / "pkgs"
+	src = tmp_path / "src"
+	_emit_versioned_pkg(src, pkgs / "tls.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, "single-version package should load without a pin"
+	assert ir_out.exists()
+
+
+def test_dep_malformed_rejected(tmp_path: Path) -> None:
+	"""--dep without @VERSION is rejected."""
+	pkgs = tmp_path / "pkgs"
+	src = tmp_path / "src"
+	_emit_versioned_pkg(src, pkgs / "tls.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls",
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 1, "--dep without @VERSION should fail"
+
+
+def test_dep_duplicate_rejected(tmp_path: Path) -> None:
+	"""--dep specified twice for the same package is rejected."""
+	pkgs = tmp_path / "pkgs"
+	src = tmp_path / "src"
+	_emit_versioned_pkg(src, pkgs / "tls.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.0",
+			"--dep",
+			"net.tls@0.2.0",
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 1, "duplicate --dep for same package should fail"

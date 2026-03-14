@@ -992,32 +992,39 @@ Multiple packages under the same `<dest>` do not collide.
 
 When multiple versions of a package exist under the library root,
 the consumer must specify which version to use.  Version selection
-is expressed via `--package-version` flags on the `driftc` command
-line:
+is expressed via `--dep` flags on the `driftc` command line:
 
 ```
 driftc --package-root /deploy \
-       --package-version net.tls=0.3.0 \
-       --package-version acme.crypto=0.9.0 \
+       --dep net.tls@0.3.0 \
+       --dep acme.crypto@0.9.0 \
        consumer.drift
 ```
 
-`--package-version <package>=<version>` is a repeatable flag that
-pins a specific package to a specific version.  The compiler uses
-these pins to resolve `<root>/<package>/<version>/` paths.
+`--dep <package>@<version>` is a repeatable flag that selects
+an exact dependency version for a consumed package.  The compiler
+discovers all `.dmp` files under the package root, loads them,
+then filters by the dep selection (post-load filtering).
+
+> **Implementation note (0.27.48-dev):** The plan originally
+> specified `--package-version` for this flag, but that name
+> conflicts with the existing producer-side `--package-version`
+> (the SemVer string for `--emit-package`).  The consumer flag
+> is `--dep` — short, clearly directional (consumed dependency,
+> not produced artifact), and uses `@` for package-version
+> association.
 
 Selection rules:
 
-- If `--package-version` is specified for a package, the compiler
-  loads exactly that version.  If the version directory does not
-  exist, compilation fails with a clear error:
-  `error: package 'net.tls' version '0.4.0' not found under /deploy`
-- If `--package-version` is **not** specified for a package and only
-  one version exists under `<root>/<package>/`, the compiler loads
-  that version (unambiguous single-version case).
-- If `--package-version` is not specified and **multiple** versions
-  exist, compilation fails with a clear error:
-  `error: multiple versions of 'net.tls' found (0.2.0, 0.3.0); use --package-version net.tls=<version> to select`
+- If `--dep` is specified for a package, the compiler loads
+  exactly that version.  If the version is not found among loaded
+  packages, compilation fails with a clear error:
+  `error: package 'net.tls' version '0.4.0' not found under package roots (available: 0.3.0)`
+- If `--dep` is **not** specified for a package and only one
+  version exists, the compiler loads it (unambiguous single-version case).
+- If `--dep` is not specified and **multiple** versions exist,
+  compilation fails with a clear error:
+  `error: multiple versions of 'net.tls' found (0.2.0, 0.3.0); use --dep net.tls@<version> to select`
 - The compiler never silently picks the "highest" or "newest"
   version.  Ambiguous version state is always an error.
 
@@ -1030,8 +1037,8 @@ during build.)
 Rollback is a consumer-side version pin change:
 
 ```
-# Before: --package-version net.tls=0.3.0
-# After:  --package-version net.tls=0.2.0
+# Before: --dep net.tls@0.3.0
+# After:  --dep net.tls@0.2.0
 ```
 
 - If the version directory already exists, it is backed up before
@@ -1413,10 +1420,12 @@ Deliverables:
 | `test_native_deps_missing_lib_diagnostic`        | Linker failure includes enriched hint with package name and library |
 | `test_package_deps_manifest_roundtrip`           | Build package with `--package-dep`, load it, verify `package_deps` in manifest |
 | `test_package_deps_absent_is_empty`              | Load package without `package_deps` — defaults to empty list |
-| `test_package_version_pin_selects`               | `--package-version net.tls=0.3.0` loads exactly that version |
-| `test_package_version_missing_fails`             | `--package-version` for nonexistent version → clear error |
-| `test_package_version_ambiguous_fails`           | Multiple versions, no `--package-version` → clear error listing versions |
-| `test_package_version_single_unambiguous`        | Single version present, no `--package-version` → loads it |
+| `test_package_version_pin_selects`               | `--dep net.tls@0.3.0` loads exactly that version |
+| `test_package_version_missing_fails`             | `--dep` for nonexistent version → clear error |
+| `test_package_version_ambiguous_fails`           | Multiple versions, no `--dep` → clear error listing versions |
+| `test_package_version_single_unambiguous`        | Single version present, no `--dep` → loads it |
+| `test_dep_malformed_rejected`                    | `--dep net.tls` (no `@VERSION`) → rejected |
+| `test_dep_duplicate_rejected`                    | `--dep` specified twice for same package → rejected |
 
 ### Deploy tool tests
 
@@ -1497,7 +1506,7 @@ Deliverables:
 | Atomic publish, version-pinned only          | yes |        |
 | Built-in baseline smoke (tool-enforced)      | yes |        |
 | Custom smoke as author-attested tier 2       | yes |        |
-| `--package-version` consumer version pinning | yes |        |
+| `--dep` consumer dependency version selection | yes |        |
 | Staged trust store for smoke                 | yes |        |
 | `--artifact` selector                        | yes |        |
 | `--package-root` dependency resolution       | yes |        |
@@ -1524,7 +1533,7 @@ Deliverables:
 
 | File / Location                               | Change                                                    |
 |-----------------------------------------------|-----------------------------------------------------------|
-| `lang/driftc/driftc.py`                       | `--native-link-lib` arg; `--package-dep` arg; `--package-version` arg; manifest emission; consumer auto-link; diagnostic enrichment; `--no-package-native-deps` |
+| `lang/driftc/driftc.py`                       | `--native-link-lib` arg; `--package-dep` arg; `--dep` arg; manifest emission; consumer auto-link; diagnostic enrichment; `--no-package-native-deps` |
 | `lang/driftc/packages/dmir_pkg_v0.py`         | `NativeDepEntry`, `PackageDepEntry` dataclasses; parse from manifest; add to `LoadedPackage` |
 | `lang/driftc/packages/provider_v0.py`         | Pass through `native_deps` and `package_deps` in load path |
 | `tools/drift-deploy/`                         | New tool: manifest parser, orchestrator, smoke runner, publisher |
