@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed `drift deploy` package namespace and target defaults (0.27.50-dev)**:
+  Tightened the deploy tool against the first real downstream package smoke/build
+  issues reported by TLS.
+  - Added artifact field `module_namespace`:
+    - optional explicit module namespace for Drift source/module imports
+    - default derivation replaces hyphens with underscores
+      (for example `net-tls` → `net_tls`)
+    - used for generated smoke-consumer imports and staged trust namespace
+      authorization
+    - package/artifact `name` remains the package id / published identity
+  - Default target changed to `drift-dev` when `--target` is not specified:
+    - aligns the deploy tool with the development toolchain/package target
+      expectation instead of defaulting to `x86_64-linux-gnu`
+  - Regression additions:
+    - manifest/default/override validation for `module_namespace`
+    - smoke-consumer generation using module namespace rather than package id
+    - staged trust namespace generation using module namespace
+    - default-target and explicit-target override coverage
+
 - **Fixed downstream `drift deploy` blockers (0.27.49-dev)**:
   Tightened the new deploy tool based on first real downstream package use
   (`net-tls`).

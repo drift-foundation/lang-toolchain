@@ -46,6 +46,7 @@ class Artifact:
 	assets: list[str] = field(default_factory=list)
 	smoke_command: list[str] | None = None
 	unsafe: bool = False
+	module_namespace: str = ""  # set during parsing; defaults to name with hyphens → underscores
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,15 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 	if not isinstance(unsafe, bool):
 		raise ManifestError(f"{ctx}: 'unsafe' must be a boolean")
 
+	# module_namespace (optional, defaults to name with hyphens → underscores)
+	raw_ns = obj.get("module_namespace")
+	if raw_ns is not None:
+		if not isinstance(raw_ns, str) or not raw_ns:
+			raise ManifestError(f"{ctx}: 'module_namespace' must be a non-empty string")
+		module_namespace = raw_ns
+	else:
+		module_namespace = name.replace("-", "_")
+
 	return Artifact(
 		kind=kind,
 		name=name,
@@ -230,4 +240,5 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 		assets=assets,
 		smoke_command=smoke_command,
 		unsafe=unsafe,
+		module_namespace=module_namespace,
 	)

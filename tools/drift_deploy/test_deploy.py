@@ -591,3 +591,157 @@ class TestBuildSubprocessWiring:
 			)
 		cmd = mock_run.call_args[0][0]
 		assert "--allow-unsafe" in cmd
+
+
+# ── Module namespace regressions ─────────────────────────────────────
+
+
+class TestModuleNamespace:
+	"""
+	Regression: package name (net-tls) != Drift module namespace (net_tls).
+
+	The deploy tool must use the module namespace — not the package name —
+	for smoke consumer imports and trust namespace authorization.
+	"""
+
+	def test_default_derives_from_name(self) -> None:
+		"""Hyphens in name are converted to underscores by default."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "net-tls",
+					"version": "0.2.0",
+					"description": "TLS",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+				}],
+			}))
+			m = load_manifest(path)
+			assert m.artifacts[0].name == "net-tls"
+			assert m.artifacts[0].module_namespace == "net_tls"
+
+	def test_explicit_overrides_default(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "net-tls",
+					"version": "0.2.0",
+					"description": "TLS",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+					"module_namespace": "tls_lib",
+				}],
+			}))
+			m = load_manifest(path)
+			assert m.artifacts[0].module_namespace == "tls_lib"
+
+	def test_no_hyphens_identity(self) -> None:
+		"""Name without hyphens: module_namespace == name."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "net.tls",
+					"version": "0.2.0",
+					"description": "TLS",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+				}],
+			}))
+			m = load_manifest(path)
+			assert m.artifacts[0].module_namespace == "net.tls"
+
+	def test_invalid_rejected(self) -> None:
+		from tools.drift_deploy.manifest import ManifestError
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "x",
+					"version": "1.0.0",
+					"description": "x",
+					"entry_module": "x.drift",
+					"modules": ["x/"],
+					"module_namespace": "",
+				}],
+			}))
+			with pytest.raises(ManifestError, match="module_namespace"):
+				load_manifest(path)
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_smoke_consumer_uses_module_namespace(self, mock_run: MagicMock) -> None:
+		"""
+		Baseline smoke generates 'import net_tls', not 'import net-tls'.
+		"""
+		art = Artifact(
+			kind="package", name="net-tls", version="0.2.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="net_tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			_run_baseline_smoke_package(
+				art, driftc=Path("/fake/driftc"),
+				staged_install=staged,
+				staged_pkg_root=Path(tmpdir) / "pkgroot",
+				staged_trust=None,
+			)
+			# The smoke function writes consumer source to
+			# staged_install.parent / _smoke_<name> / smoke_consumer.drift
+			consumer_path = staged.parent / f"_smoke_{art.name}" / "smoke_consumer.drift"
+			assert consumer_path.exists(), f"consumer source not found at {consumer_path}"
+			consumer_src = consumer_path.read_text()
+			assert "import net_tls" in consumer_src
+			assert "import net-tls" not in consumer_src
+
+	def test_staged_trust_uses_module_namespace(self) -> None:
+		"""Trust namespace should be net_tls.*, not net-tls.*."""
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		with tempfile.TemporaryDirectory() as tmpdir:
+			out = Path(tmpdir) / "trust.json"
+			build_staged_trust(
+				baseline_trust_path=None,
+				signer_pubkey_raw=b"\x01" * 32,
+				artifact_namespace="net_tls",  # module_namespace, not name
+				out_path=out,
+			)
+			data = json.loads(out.read_text())
+			assert "net_tls.*" in data["namespaces"]
+			assert "net_tls" in data["namespaces"]
+			# Hyphens should NOT appear.
+			assert "net-tls.*" not in data["namespaces"]
+			assert "net-tls" not in data["namespaces"]
+
+
+# ── Target default regression ────────────────────────────────────────
+
+
+class TestTargetDefault:
+	def test_default_is_drift_dev(self) -> None:
+		"""Default target must be drift-dev, matching stdlib and ABI convention."""
+		from tools.drift_deploy.drift_deploy import _resolve_target
+		p = build_arg_parser()
+		args = p.parse_args([])
+		assert _resolve_target(args) == "drift-dev"
+
+	def test_explicit_override(self) -> None:
+		from tools.drift_deploy.drift_deploy import _resolve_target
+		p = build_arg_parser()
+		args = p.parse_args(["--target", "aarch64-linux-gnu"])
+		assert _resolve_target(args) == "aarch64-linux-gnu"

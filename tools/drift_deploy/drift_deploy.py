@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -109,12 +108,17 @@ def _resolve_driftc(args: argparse.Namespace) -> Path:
 
 
 def _resolve_target(args: argparse.Namespace) -> str:
+	"""
+	Resolve target triple.
+
+	Default is 'drift-dev' — the standard target for all current Drift
+	packages and the stdlib. This matches the ABI fingerprint target
+	used by the compiler's deploy pipeline (tools/deploy/step_stdlib_pkg.sh).
+	Pass --target explicitly for cross-compilation or non-standard targets.
+	"""
 	if args.target:
 		return args.target
-	machine = platform.machine()
-	arch_map = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
-	arch = arch_map.get(machine, machine)
-	return f"{arch}-linux-gnu"
+	return "drift-dev"
 
 
 def _resolve_sign_key(args: argparse.Namespace) -> Path | None:
@@ -475,9 +479,11 @@ def _run_baseline_smoke_package(
 	smoke_dir.mkdir(parents=True, exist_ok=True)
 
 	consumer_src = smoke_dir / "smoke_consumer.drift"
-	# Minimal consumer: import the package module.
+	# Minimal consumer: import using module namespace (not package name).
+	# Package name may have hyphens (net-tls) but Drift identifiers use
+	# underscores (net_tls).
 	consumer_src.write_text(
-		f'import {art.name}\nfn main() {{}}\n',
+		f'import {art.module_namespace}\nfn main() {{}}\n',
 		encoding="utf-8",
 	)
 
@@ -727,7 +733,7 @@ def _deploy_artifact(
 			build_staged_trust(
 				baseline_trust_path=baseline_trust,
 				signer_pubkey_raw=pubkey,
-				artifact_namespace=art.name,
+				artifact_namespace=art.module_namespace,
 				out_path=staged_trust_path,
 			)
 		except Exception as e:
