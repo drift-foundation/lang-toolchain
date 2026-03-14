@@ -119,3 +119,13 @@
   - Sharper index/identity mismatch errors (print claimed vs observed identity, signer, source id, mismatch axis).
   - `drift doctor` (sources, index sanity, trust graph, lock/cache consistency, toolchain compatibility).
   - `drift fetch --json` (machine-readable resolution/verification report for CI/IDE).
+- Future package manifest dependency graph:
+  - Add `package_deps` alongside `native_deps` in `drift-package.json`.
+  - Use npm-style semver range syntax for package deps (`^`, `~`, exact, explicit ranges), not exact-only matching.
+  - Keep package metadata logical only: package identity + version constraint in the manifest; location/resolution remains a tool/environment concern.
+  - Initial resolution backend can stay directory-based package roots; do not assume a central registry, fetch flow, or hosted source model.
+  - Keep dependency classes distinct:
+    - `package_deps` = Drift package dependencies resolved from package roots.
+    - `native_deps` = native/system linker dependencies resolved by the system linker.
+  - Intended future enablement: transitive dependency validation, recursive dependency discovery from `.dmp` manifests, and dependency-class-specific diagnostics.
+  - Non-goals for this future direction: no registry requirement, no fetch protocol, no lockfile work, no `.dmp` format changes, no expansion of the current deploy MVP.
