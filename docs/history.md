@@ -1,6 +1,35 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed LANGUAGE_BUG: destroy-body wrapper reachability in package consumer**:
+  When a `Destructible::destroy` body in a packaged struct calls a stdlib method
+  (e.g., `self.name.byte_length()`), the consumer failed to link because the
+  `__wrap_method` stub and its underlying target were not discovered.
+  - Root cause: destroy-body functions are seeded into `pkg_needed` AFTER the
+    main BFS loop (via the destroy type graph).  The BFS wrapper-detection logic
+    only runs during the main loop, so wrapper references in post-BFS-seeded
+    functions were never discovered.
+  - Fix: add a final transitive reachability pass (worklist-based, not single
+    snapshot) that runs after ALL post-BFS seeding phases (destroy type graph,
+    K26 interface impl methods, K40 preamble).  The pass computes transitive
+    closure: newly discovered package targets are queued and scanned for their
+    own callees and wrapper references, matching the main BFS contract.
+  - Boundary sweep:
+    - Exported-function root: covered by existing `test_driftc_package_stdlib_method_call_wrapper`.
+    - Destroy-body root (special root): **fixed** — regression test added.
+    - Destroy-body → package helper → stdlib method (transitive): **fixed** — regression test added.
+    - Trait impl methods: covered by same final pass (scans all `pkg_needed`).
+    - Multi-package: covered by existing tests.
+    - Source path: unaffected (all modules compiled together).
+  - Roots tested:
+    1. Exported function root (0.27.45-dev existing test).
+    2. `core.Destructible::destroy` special root — direct stdlib call (new regression).
+    3. `core.Destructible::destroy` special root — transitive via package helper (new regression).
+  - Added regression tests:
+    - `test_driftc_package_destroy_body_stdlib_method_wrapper`
+    - `test_driftc_package_destroy_body_transitive_pkg_target`
+- Bumped compiler version to `0.27.46-dev`; ABI remains `5`.
+
 - **Fixed LANGUAGE_BUG: __wrap_method stubs not emitted for stdlib method calls
   in packaged code**:
   When a package body calls a method on a stdlib type (e.g., `String.byte_length()`),

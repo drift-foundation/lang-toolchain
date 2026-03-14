@@ -3914,3 +3914,151 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0, "package calling stdlib method must link in consumer"
+
+
+def test_driftc_package_destroy_body_stdlib_method_wrapper(tmp_path: Path) -> None:
+	"""Destroy body calling stdlib method must link in the consumer.
+
+	Regression: wrapper stubs referenced from a Destructible::destroy body
+	are seeded AFTER the main BFS loop (via the destroy type graph).  A
+	final wrapper-discovery pass must scan post-BFS pkg_needed functions
+	so their __wrap_method references are included.
+	"""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+import std.core as core;
+
+export { Wrapper };
+
+pub struct Wrapper {
+    pub name: String;
+}
+
+implement core.Destructible for Wrapper {
+    pub fn destroy(var self: Wrapper) nothrow -> Void {
+        val _len = self.name.byte_length();
+    }
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import std.core as core;
+import lib as lib;
+
+fn main() nothrow -> Int {
+    return 0;
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "destroy body calling stdlib method must link in consumer"
+
+
+def test_driftc_package_destroy_body_transitive_pkg_target(tmp_path: Path) -> None:
+	"""Destroy body calling package helper that itself calls stdlib method.
+
+	Regression: the final post-BFS reachability pass must compute transitive
+	closure.  If a destroy body calls a package-internal helper, and that
+	helper calls a stdlib method via a __wrap_method stub, both the helper
+	AND the wrapper target must be pulled in transitively.
+	"""
+	_write_file(
+		tmp_path / "lib" / "lib.drift",
+		"""
+module lib
+
+import std.core as core;
+
+export { Wrapper };
+
+pub struct Wrapper {
+    pub name: String;
+}
+
+fn name_len(s: String) nothrow -> Int {
+    return s.byte_length();
+}
+
+implement core.Destructible for Wrapper {
+    pub fn destroy(var self: Wrapper) nothrow -> Void {
+        val _len = name_len(self.name);
+    }
+}
+""".lstrip(),
+	)
+	pkg = tmp_path / "lib.dmp"
+	assert (
+		driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(tmp_path / "lib" / "lib.drift"),
+				*_emit_pkg_args("lib"),
+				"--emit-package",
+				str(pkg),
+			]
+		)
+		== 0
+	)
+
+	_write_file(
+		tmp_path / "main.drift",
+		"""
+module main
+
+import std.core as core;
+import lib as lib;
+
+fn main() nothrow -> Int {
+    return 0;
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(tmp_path),
+			"--package-root",
+			str(tmp_path),
+			"--allow-unsigned-from",
+			str(tmp_path),
+			str(tmp_path / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "destroy body transitive package target must link in consumer"

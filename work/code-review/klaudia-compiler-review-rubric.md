@@ -149,6 +149,32 @@ Use the relevant checklist depending on patch type.
 - Prefer e2e for end-to-end language/runtime/package behavior.
 - Use driver tests for package/import/codegen/load path isolation where e2e is unnecessarily heavy.
 
+### Special-root coverage rule
+
+For fixes affecting package-consumer reachability, wrapper emission, BFS
+seeding, or link completeness:
+
+- The regression set MUST include:
+  1. One exported-function-root case.
+  2. One non-exported special-root case, when such a root exists in the
+     affected bug class.
+
+- Special roots include:
+  - `core.Destructible::destroy`
+  - Trait impl methods
+  - Inherent impl methods discovered through metadata rather than direct
+    exported reachability
+  - Generated/synthesized wrapper targets
+
+- Explicitly state which roots were tested in the boundary sweep section.
+- Do not infer special-root coverage from ordinary-root coverage.
+- If special roots are not covered, call that out as an unchecked adjacent
+  path rather than implying the bug class is fully closed.
+
+Rationale: the 0.27.45-dev wrapper fix covered exported-function roots but
+left `Destructible::destroy` roots broken — the exact "ordinary path fixed,
+special impl/destructor path still broken" pattern this rule prevents.
+
 ## Pushback rules during review
 
 Push back if any of the following are true:

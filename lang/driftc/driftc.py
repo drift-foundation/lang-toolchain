@@ -1807,6 +1807,10 @@ def _build_package_consumer_unit(
 					if _ssa_entry is not None:
 						ssa_src[target] = _ssa_entry
 
+	# Snapshot pkg_needed before post-BFS seeding so the final transitive
+	# pass can identify which functions were added by the seeding phases.
+	_pre_seed_pkg_needed = set(pkg_needed)
+
 	# Seed destroy impls for DropValue types (package-side + source-side K39).
 	# The combined pool includes both pkg_mir_all AND _src_mir_full because
 	# generic destroy instantiations (e.g. VirtualThread<T>::destroy) are
@@ -1918,6 +1922,39 @@ def _build_package_consumer_unit(
 				if _closure_ok:
 					pkg_needed.update(_preamble_closure)
 				break
+
+	# Final transitive reachability pass: destroy bodies, trait impl methods,
+	# and preamble functions are seeded into pkg_needed AFTER the main BFS
+	# loop.  Those post-BFS seeds may call package functions or reference
+	# __wrap_method stubs whose targets were BFS-pruned.  Use a worklist
+	# (like the main BFS) to compute transitive closure over the newly
+	# seeded entries and anything they pull in.
+	_post_queue: list[FunctionId] = [fid for fid in pkg_needed if fid not in _pre_seed_pkg_needed]
+	_post_visited: set[FunctionId] = set()
+	while _post_queue:
+		fid = _post_queue.pop()
+		if fid in _post_visited:
+			continue
+		_post_visited.add(fid)
+		fn = pkg_mir_all.get(fid)
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in pkg_mir_all and callee not in pkg_needed:
+				pkg_needed.add(callee)
+				_post_queue.append(callee)
+			elif callee in wrapper_target_by_id and callee not in wrappers_needed:
+				wrappers_needed.add(callee)
+				target = wrapper_target_by_id[callee]
+				if target in pkg_mir_all and target not in pkg_needed:
+					pkg_needed.add(target)
+					_post_queue.append(target)
+				elif target in _src_mir_full and target not in src_needed:
+					src_needed.add(target)
+					src_mir[target] = _src_mir_full[target]
+					_ssa_entry = _ssa_src_full.get(target)
+					if _ssa_entry is not None:
+						ssa_src[target] = _ssa_entry
 
 	pkg_mir: dict[FunctionId, M.MirFunc] = {fn_id: pkg_mir_all[fn_id] for fn_id in pkg_needed}
 	pkg_fn_infos: dict[FunctionId, FnInfo] = {}
