@@ -45,6 +45,7 @@ class Artifact:
 	native_deps: list[NativeDep] = field(default_factory=list)
 	assets: list[str] = field(default_factory=list)
 	smoke_command: list[str] | None = None
+	unsafe: bool = False
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,11 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 			raise ManifestError(f"{ctx}: 'smoke_command' must not be empty")
 		smoke_command = raw_smoke
 
+	# unsafe (optional, default false)
+	unsafe = obj.get("unsafe", False)
+	if not isinstance(unsafe, bool):
+		raise ManifestError(f"{ctx}: 'unsafe' must be a boolean")
+
 	return Artifact(
 		kind=kind,
 		name=name,
@@ -223,4 +229,5 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 		native_deps=native_deps,
 		assets=assets,
 		smoke_command=smoke_command,
+		unsafe=unsafe,
 	)

@@ -11,11 +11,17 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 from tools.drift_deploy.drift_deploy import (
 	DeployError,
+	_build_app,
+	_build_package,
+	_clean_env,
+	_run_baseline_smoke_package,
+	_SCRUB_ENV_KEYS,
 	_topo_sort_artifacts,
 	_resolve_or_load_lock,
 	build_arg_parser,
@@ -335,3 +341,253 @@ class TestStagedTrust:
 			assert "acme.*" in data["namespaces"]
 			# New namespace added.
 			assert "net.tls.*" in data["namespaces"]
+
+
+# ── PYTHONPATH scrubbing ────────────────────────────────────────────
+
+
+class TestCleanEnv:
+	"""
+	Regression: PYTHONPATH must not leak into driftc subprocess calls.
+
+	When drift deploy is invoked via
+	  PYTHONPATH=/path/to/drift-lang python3 -m tools.drift_deploy.drift_deploy
+	the PYTHONPATH leaks into child driftc (PEX) invocations, causing it
+	to pick up unbundled lang/ modules and crash with ModuleNotFoundError.
+	"""
+
+	def test_pythonpath_scrubbed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setenv("PYTHONPATH", "/some/path")
+		monkeypatch.setenv("PATH", "/usr/bin:/bin")
+		env = _clean_env()
+		assert "PYTHONPATH" not in env
+		assert "PATH" in env
+
+	def test_pythonhome_scrubbed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setenv("PYTHONHOME", "/some/venv")
+		env = _clean_env()
+		assert "PYTHONHOME" not in env
+
+	def test_other_vars_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setenv("MY_CUSTOM_VAR", "hello")
+		env = _clean_env()
+		assert env["MY_CUSTOM_VAR"] == "hello"
+
+	def test_scrub_keys_constant(self) -> None:
+		"""Ensure the scrub set is what we expect."""
+		assert "PYTHONPATH" in _SCRUB_ENV_KEYS
+		assert "PYTHONHOME" in _SCRUB_ENV_KEYS
+
+
+# ── Manifest unsafe field ───────────────────────────────────────────
+
+
+class TestUnsafeField:
+	def test_unsafe_default_false(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "safe.pkg",
+					"version": "1.0.0",
+					"description": "Safe package",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+				}],
+			}))
+			m = load_manifest(path)
+			assert m.artifacts[0].unsafe is False
+
+	def test_unsafe_true(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "ffi.pkg",
+					"version": "1.0.0",
+					"description": "FFI package",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+					"native_deps": [{"lib": "ssl"}],
+					"unsafe": True,
+				}],
+			}))
+			m = load_manifest(path)
+			assert m.artifacts[0].unsafe is True
+
+	def test_unsafe_non_bool_rejected(self) -> None:
+		from tools.drift_deploy.manifest import ManifestError
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "drift-package.json"
+			path.write_text(json.dumps({
+				"schema_version": 1,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package",
+					"name": "bad.pkg",
+					"version": "1.0.0",
+					"description": "Bad",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/"],
+					"unsafe": "yes",
+				}],
+			}))
+			with pytest.raises(ManifestError, match="unsafe"):
+				load_manifest(path)
+
+
+# ── Subprocess wiring regressions ───────────────────────────────────
+
+def _make_art(*, unsafe: bool = False, native_deps: list | None = None) -> Artifact:
+	"""Build an Artifact for subprocess-wiring tests."""
+	from tools.drift_deploy.manifest import NativeDep
+	return Artifact(
+		kind="package",
+		name="test.pkg",
+		version="1.0.0",
+		description="Test",
+		license="MIT",
+		entry_module="src/lib.drift",
+		modules=["src/"],
+		native_deps=[NativeDep(lib=n) for n in (native_deps or [])],
+		unsafe=unsafe,
+	)
+
+
+def _fake_run_ok(*args, **kwargs):
+	"""subprocess.run replacement that succeeds."""
+	m = MagicMock()
+	m.returncode = 0
+	m.stdout = ""
+	m.stderr = ""
+	return m
+
+
+class TestBuildSubprocessWiring:
+	"""
+	Pin that _build_package / _build_app pass the right env and flags
+	to subprocess.run — not just that the helpers exist.
+	"""
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_package_scrubs_pythonpath(
+		self, mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""_build_package must pass env= with PYTHONPATH removed."""
+		monkeypatch.setenv("PYTHONPATH", "/poisoned")
+		art = _make_art()
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_package(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		call_kwargs = mock_run.call_args
+		env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+		assert env is not None, "subprocess.run must be called with explicit env="
+		assert "PYTHONPATH" not in env
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_app_scrubs_pythonpath(
+		self, mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""_build_app must pass env= with PYTHONPATH removed."""
+		monkeypatch.setenv("PYTHONPATH", "/poisoned")
+		art = Artifact(
+			kind="app", name="myapp", version="1.0.0",
+			description="App", license="MIT",
+			entry_module="src/main.drift", modules=["src/"],
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_app(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		call_kwargs = mock_run.call_args
+		env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+		assert env is not None
+		assert "PYTHONPATH" not in env
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_smoke_package_scrubs_pythonpath(
+		self, mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""_run_baseline_smoke_package must pass env= with PYTHONPATH removed."""
+		monkeypatch.setenv("PYTHONPATH", "/poisoned")
+		art = _make_art()
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			_run_baseline_smoke_package(
+				art, driftc=Path("/fake/driftc"),
+				staged_install=staged,
+				staged_pkg_root=Path(tmpdir) / "pkgroot",
+				staged_trust=None,
+			)
+		# Check the first subprocess.run call (compile).
+		call_kwargs = mock_run.call_args_list[0]
+		env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+		assert env is not None
+		assert "PYTHONPATH" not in env
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_package_unsafe_appends_allow_unsafe(
+		self, mock_run: MagicMock,
+	) -> None:
+		"""_build_package with unsafe=True must pass --allow-unsafe to driftc."""
+		art = _make_art(unsafe=True)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_package(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		cmd = mock_run.call_args[0][0]
+		assert "--allow-unsafe" in cmd
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_package_safe_omits_allow_unsafe(
+		self, mock_run: MagicMock,
+	) -> None:
+		"""_build_package with unsafe=False must NOT pass --allow-unsafe."""
+		art = _make_art(unsafe=False)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_package(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		cmd = mock_run.call_args[0][0]
+		assert "--allow-unsafe" not in cmd
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_app_unsafe_appends_allow_unsafe(
+		self, mock_run: MagicMock,
+	) -> None:
+		"""_build_app with unsafe=True must pass --allow-unsafe."""
+		art = Artifact(
+			kind="app", name="myapp", version="1.0.0",
+			description="App", license="MIT",
+			entry_module="src/main.drift", modules=["src/"],
+			unsafe=True,
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_app(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		cmd = mock_run.call_args[0][0]
+		assert "--allow-unsafe" in cmd

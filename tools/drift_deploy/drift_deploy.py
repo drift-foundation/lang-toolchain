@@ -48,6 +48,19 @@ class DeployError(Exception):
 	pass
 
 
+# ── Subprocess environment ───────────────────────────────────────────
+
+# Keys to scrub from child process environments. PYTHONPATH leaks the
+# deploy tool's import roots into PEX-based driftc, causing it to pick
+# up unbundled lang/ modules and crash with ModuleNotFoundError.
+_SCRUB_ENV_KEYS = frozenset({"PYTHONPATH", "PYTHONHOME"})
+
+
+def _clean_env() -> dict[str, str]:
+	"""Build a clean environment for driftc subprocess calls."""
+	return {k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_KEYS}
+
+
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -132,7 +145,7 @@ def _get_compiler_version(driftc: Path) -> str:
 	try:
 		result = subprocess.run(
 			[str(driftc), "--version"],
-			capture_output=True, text=True, timeout=10,
+			capture_output=True, text=True, timeout=10, env=_clean_env(),
 		)
 		# driftc --version outputs "driftc X.Y.Z-dev" or similar.
 		for line in result.stdout.strip().splitlines():
@@ -321,6 +334,10 @@ def _build_package(
 	for pr in package_roots:
 		cmd.extend(["--package-root", str(pr)])
 
+	# Unsafe support for FFI packages.
+	if art.unsafe:
+		cmd.append("--allow-unsafe")
+
 	# Source inputs: entry module + declared module paths.
 	cmd.append(str(manifest_dir / art.entry_module))
 	for mod_path in art.modules:
@@ -328,7 +345,7 @@ def _build_package(
 		if str(resolved_mod) != str(manifest_dir / art.entry_module):
 			cmd.append(str(resolved_mod))
 
-	result = subprocess.run(cmd, capture_output=True, text=True)
+	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
 	if result.returncode != 0:
 		raise DeployError(
 			f"build failed for package '{art.name}':\n"
@@ -366,6 +383,10 @@ def _build_app(
 	for nd in art.native_deps:
 		cmd.extend(["--link-lib", nd.lib])
 
+	# Unsafe support for FFI apps.
+	if art.unsafe:
+		cmd.append("--allow-unsafe")
+
 	# Source inputs: entry module + declared module paths.
 	cmd.append(str(manifest_dir / art.entry_module))
 	for mod_path in art.modules:
@@ -373,7 +394,7 @@ def _build_app(
 		if str(resolved_mod) != str(manifest_dir / art.entry_module):
 			cmd.append(str(resolved_mod))
 
-	result = subprocess.run(cmd, capture_output=True, text=True)
+	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
 	if result.returncode != 0:
 		raise DeployError(
 			f"build failed for app '{art.name}':\n"
@@ -473,9 +494,11 @@ def _run_baseline_smoke_package(
 
 	has_native = bool(art.native_deps)
 
+	clean = _clean_env()
+
 	if has_native:
 		# Compile + link + run.
-		result = subprocess.run(cmd, capture_output=True, text=True)
+		result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 		if result.returncode != 0:
 			raise DeployError(
 				f"baseline smoke failed for '{art.name}' (compile+link):\n"
@@ -483,7 +506,8 @@ def _run_baseline_smoke_package(
 			)
 		# Run.
 		run_result = subprocess.run(
-			[str(consumer_bin)], capture_output=True, text=True, timeout=30,
+			[str(consumer_bin)], capture_output=True, text=True,
+			timeout=30, env=clean,
 		)
 		if run_result.returncode != 0:
 			raise DeployError(
@@ -493,11 +517,11 @@ def _run_baseline_smoke_package(
 	else:
 		# Compile only (--test-build-only if available, else just compile).
 		cmd.append("--test-build-only")
-		result = subprocess.run(cmd, capture_output=True, text=True)
+		result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 		if result.returncode != 0:
 			# Retry without --test-build-only in case it's not supported.
 			cmd.remove("--test-build-only")
-			result = subprocess.run(cmd, capture_output=True, text=True)
+			result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 			if result.returncode != 0:
 				raise DeployError(
 					f"baseline smoke failed for '{art.name}' (compile):\n"
@@ -510,16 +534,27 @@ def _run_baseline_smoke_app(
 	*,
 	staged_bin: Path,
 ) -> None:
-	"""Built-in baseline smoke for app artifacts: run the binary."""
+	"""
+	Built-in baseline smoke for app artifacts.
+
+	MVP contract: verify the binary exists and is runnable (not crashed).
+	The app was already compiled and linked during the build step, so the
+	baseline smoke checks that the produced binary can execute without
+	crashing (signal death). Exit codes 0 and non-zero are both accepted
+	since the binary may not support --help.
+
+	This is intentionally weaker than "compile + link + run" — compile
+	and link already happened in _build_app. The smoke confirms the
+	artifact is a valid executable.
+	"""
 	if not staged_bin.exists():
 		raise DeployError(f"baseline smoke: staged binary not found: {staged_bin}")
 
 	result = subprocess.run(
 		[str(staged_bin), "--help"],
-		capture_output=True, text=True, timeout=30,
+		capture_output=True, text=True, timeout=30, env=_clean_env(),
 	)
-	# Accept exit 0 or exit 1 (--help may not be implemented).
-	# But crash (signal) is a failure.
+	# Accept any exit code >= 0. Signal death (returncode < 0) = crash.
 	if result.returncode < 0:
 		raise DeployError(
 			f"baseline smoke failed for app '{art.name}' (crashed with signal {-result.returncode}):\n"

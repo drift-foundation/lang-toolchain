@@ -1,6 +1,30 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed downstream `drift deploy` blockers (0.27.49-dev)**:
+  Tightened the new deploy tool based on first real downstream package use
+  (`net-tls`).
+  - Subprocess environment scrubbing:
+    - child `driftc` invocations now scrub `PYTHONPATH` and `PYTHONHOME`
+      so PEX-based compilers do not pick up repo-local Python modules from
+      the deploy-tool launch environment.
+  - Artifact-level unsafe support:
+    - added manifest field `unsafe: true`
+    - `drift deploy` now passes `--allow-unsafe` for artifacts that opt in
+      instead of forcing FFI-heavy packages to bypass the tool
+  - App smoke contract clarified:
+    - MVP app baseline smoke is now explicitly “binary exists and runs
+      without crashing,” rather than implying a stronger recompilation step
+      than the implementation actually performs
+  - Confirmed target-word-bits behavior:
+    - current compiler behavior uses host word size fallback rather than
+      inferring from target triple; same-architecture builds remain correct
+      for common downstream use
+  - Regression additions:
+    - env scrubbing helper coverage (`PYTHONPATH`, `PYTHONHOME`,
+      preserved env vars)
+    - manifest `unsafe` parsing/validation coverage
+
 - **Implemented `drift deploy` MVP orchestration**:
   Added the first real implementation of the standardized deploy tool for
   downstream Drift artifacts.
