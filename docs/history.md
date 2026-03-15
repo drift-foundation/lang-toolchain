@@ -1,6 +1,29 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed `drift deploy` staged smoke root symlink write-through (0.27.55-dev)**:
+  Fixed a deploy-tool bug where smoke staging could follow symlinked package
+  roots back into the real publish destination before publish.
+  - Root cause:
+    - when `staged_pkg_root/<pkg>` was a symlink to the destination package
+      directory, staging the newly built version for smoke created
+      `<dest>/<pkg>/<new-version>/` directly in the real destination
+  - Fix:
+    - before staging the just-built package for smoke, if
+      `staged_pkg_root/<pkg>` is a symlink, it is replaced with a real
+      directory
+    - old visible versions are re-linked individually into that real staging
+      directory
+    - the new version is then staged there as a real directory
+  - Result:
+    - smoke sees both old and new versions under the staged package root
+    - the real destination is never mutated before publish
+    - exact-version smoke resolution finds the just-built version correctly
+  - Added regression coverage for:
+    - replacing a symlinked staged package dir with a real directory
+    - preserving old staged-visible versions
+    - staging the new version without polluting the real destination
+
 - **Fixed `drift deploy` self-upgrade build isolation (0.27.54-dev)**:
   Prevented source builds from accidentally consuming older published versions
   of the same package from the publish destination during deploy.
