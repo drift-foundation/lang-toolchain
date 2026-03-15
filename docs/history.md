@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-14
+- **Added deploy-time native library path resolver hints (0.27.52-dev)**:
+  Standardized how `drift deploy` accepts machine-local native library search
+  path hints without embedding them in package metadata or signed `.dmp`
+  contents.
+  - Added three deploy-time resolver inputs for native library search paths:
+    - `DRIFT_NATIVE_LIB_PATH` environment variable (colon-separated, lowest priority)
+    - `drift-deploy-config.json` with `{"native_lib_paths": [...]}` (middle priority)
+    - `--native-lib-path <DIR>` CLI flag (repeatable, highest priority)
+  - Precedence is `env -> config -> CLI`, with all lists concatenated in that
+    order so CLI-provided `--link-search` paths appear last and take highest
+    linker priority.
+  - Integrated resolver hints into `drift deploy` build and smoke flows:
+    - `_build_package`
+    - `_build_app`
+    - `_run_baseline_smoke_package`
+    - all pass the resolved paths to `driftc` via `--link-search`
+  - Kept the package/environment boundary intact:
+    - no new native search-path field in `drift-package.json`
+    - no native search-path data embedded in signed package metadata
+  - Added regression coverage for:
+    - each input source in isolation
+    - env/config/CLI precedence merge
+    - empty/missing config behavior
+    - invalid config diagnostics
+    - build/app/smoke subprocess wiring
+    - no-paths negative case
+
 - **Required semicolons on `module` declarations and fixed checker CallInfo bug (0.27.51-dev)**:
   Tightened the language surface and fixed a checker pipeline crash uncovered
   during the semicolon cleanup.

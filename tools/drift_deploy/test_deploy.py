@@ -8,6 +8,7 @@ and the per-artifact pipeline contract.
 
 from __future__ import annotations
 
+import argparse
 import json
 import tempfile
 from pathlib import Path
@@ -20,6 +21,7 @@ from tools.drift_deploy.drift_deploy import (
 	_build_app,
 	_build_package,
 	_clean_env,
+	_resolve_native_lib_paths,
 	_run_baseline_smoke_package,
 	_SCRUB_ENV_KEYS,
 	_topo_sort_artifacts,
@@ -834,3 +836,154 @@ class TestSmokeConsumerSource:
 		# parse_program should not raise on valid syntax.
 		tree = parse_program(source, filename="smoke_consumer.drift")
 		assert tree is not None
+
+
+# ── Native library search paths ─────────────────────────────────────
+
+
+class TestNativeLibPaths:
+	"""
+	Resolver-input native library search paths: env, config, CLI.
+
+	These paths are NOT recorded in package metadata — they are
+	deploy-time resolver hints passed as --link-search to driftc.
+	"""
+
+	def _make_args(self, *extra_argv: str) -> argparse.Namespace:
+		p = build_arg_parser()
+		return p.parse_args(list(extra_argv))
+
+	def test_cli_flag_parsed(self) -> None:
+		args = self._make_args("--native-lib-path", "/opt/ssl/lib", "--native-lib-path", "/usr/local/lib")
+		assert args.native_lib_path == [Path("/opt/ssl/lib"), Path("/usr/local/lib")]
+
+	def test_cli_only(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args("--native-lib-path", "/a", "--native-lib-path", "/b")
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == [Path("/a"), Path("/b")]
+
+	def test_env_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/env/a:/env/b")
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args()
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == [Path("/env/a"), Path("/env/b")]
+
+	def test_config_only(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text(json.dumps({"native_lib_paths": ["/cfg/x", "/cfg/y"]}))
+			args = self._make_args()
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == [Path("/cfg/x"), Path("/cfg/y")]
+
+	def test_precedence_env_config_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""All three sources merge: env first (lowest), config middle, CLI last (highest)."""
+		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/env")
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text(json.dumps({"native_lib_paths": ["/cfg"]}))
+			args = self._make_args("--native-lib-path", "/cli")
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == [Path("/env"), Path("/cfg"), Path("/cli")]
+
+	def test_empty_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "")
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args()
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == []
+
+	def test_no_config_file_ok(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args()
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == []
+
+	def test_bad_config_raises(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text("not json")
+			args = self._make_args()
+			with pytest.raises(DeployError, match="failed to read"):
+				_resolve_native_lib_paths(args, Path(tmpdir))
+
+	def test_config_bad_type_raises(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text(json.dumps({"native_lib_paths": "not-a-list"}))
+			args = self._make_args()
+			with pytest.raises(DeployError, match="must be an array"):
+				_resolve_native_lib_paths(args, Path(tmpdir))
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_package_passes_link_search(self, mock_run: MagicMock) -> None:
+		art = _make_art(native_deps=["ssl"])
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_package(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+				native_lib_paths=[Path("/opt/openssl/lib")],
+			)
+		cmd = mock_run.call_args[0][0]
+		assert "--link-search" in cmd
+		idx = cmd.index("--link-search")
+		assert cmd[idx + 1] == "/opt/openssl/lib"
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_build_app_passes_link_search(self, mock_run: MagicMock) -> None:
+		art = Artifact(
+			kind="app", name="myapp", version="1.0.0",
+			description="App", license="MIT",
+			entry_module="src/main.drift", modules=["src/"],
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_app(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+				native_lib_paths=[Path("/opt/openssl/lib"), Path("/usr/local/lib")],
+			)
+		cmd = mock_run.call_args[0][0]
+		# Both paths should appear.
+		indices = [i for i, x in enumerate(cmd) if x == "--link-search"]
+		assert len(indices) == 2
+		assert cmd[indices[0] + 1] == "/opt/openssl/lib"
+		assert cmd[indices[1] + 1] == "/usr/local/lib"
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_smoke_passes_link_search(self, mock_run: MagicMock) -> None:
+		art = _make_art(native_deps=["ssl"])
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			_run_baseline_smoke_package(
+				art, driftc=Path("/fake/driftc"),
+				staged_install=staged,
+				staged_pkg_root=Path(tmpdir) / "pkgroot",
+				staged_trust=None,
+				native_lib_paths=[Path("/opt/openssl/lib")],
+			)
+		# Check the compile call.
+		cmd = mock_run.call_args_list[0][0][0]
+		assert "--link-search" in cmd
+		idx = cmd.index("--link-search")
+		assert cmd[idx + 1] == "/opt/openssl/lib"
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_no_native_lib_paths_no_link_search(self, mock_run: MagicMock) -> None:
+		"""When no native_lib_paths, no --link-search flags should appear."""
+		art = _make_art()
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			_build_package(
+				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
+				resolved={}, staged_install=staged, manifest_dir=Path(tmpdir),
+				package_roots=[],
+			)
+		cmd = mock_run.call_args[0][0]
+		assert "--link-search" not in cmd

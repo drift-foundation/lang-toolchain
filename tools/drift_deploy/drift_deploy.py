@@ -86,6 +86,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Baseline trust store for smoke overlay (default: $DRIFT_TRUST_STORE)")
 	p.add_argument("--target", type=str, default=None,
 		help="Target triple (default: host triple)")
+	p.add_argument("--native-lib-path", type=Path, action="append", default=None,
+		help="Native library search path for linker (repeatable; also: $DRIFT_NATIVE_LIB_PATH, drift-deploy-config.json)")
 	p.add_argument("--update-lock", action="store_true",
 		help="Re-resolve all package_deps and rewrite drift-lock.json")
 	p.add_argument("--skip-smoke", action="store_true",
@@ -143,6 +145,52 @@ def _resolve_trust_store(args: argparse.Namespace) -> Path | None:
 	if env_path:
 		return Path(env_path)
 	return None
+
+
+def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> list[Path]:
+	"""
+	Merge native library search paths from three sources.
+
+	Precedence (lowest to highest):
+	  1. $DRIFT_NATIVE_LIB_PATH (colon-separated)
+	  2. drift-deploy-config.json "native_lib_paths"
+	  3. --native-lib-path CLI flags
+
+	All sources are concatenated in order. The linker processes -L flags
+	left-to-right, so highest-priority paths appear last.
+	"""
+	result: list[Path] = []
+
+	# 1. Environment variable (lowest priority).
+	env_val = os.environ.get("DRIFT_NATIVE_LIB_PATH", "")
+	if env_val:
+		for p in env_val.split(":"):
+			p = p.strip()
+			if p:
+				result.append(Path(p))
+
+	# 2. Config file.
+	config_path = manifest_dir / "drift-deploy-config.json"
+	if config_path.exists():
+		try:
+			config = json.loads(config_path.read_text(encoding="utf-8"))
+		except (json.JSONDecodeError, OSError) as e:
+			raise DeployError(f"failed to read {config_path}: {e}")
+		if not isinstance(config, dict):
+			raise DeployError(f"{config_path} must be a JSON object")
+		raw_paths = config.get("native_lib_paths", [])
+		if not isinstance(raw_paths, list):
+			raise DeployError(f"{config_path}: 'native_lib_paths' must be an array")
+		for entry in raw_paths:
+			if not isinstance(entry, str) or not entry:
+				raise DeployError(f"{config_path}: 'native_lib_paths' entries must be non-empty strings")
+			result.append(Path(entry))
+
+	# 3. CLI flags (highest priority).
+	if args.native_lib_path:
+		result.extend(args.native_lib_path)
+
+	return result
 
 
 def _get_compiler_version(driftc: Path) -> str:
@@ -310,6 +358,7 @@ def _build_package(
 	staged_install: Path,
 	manifest_dir: Path,
 	package_roots: list[Path],
+	native_lib_paths: list[Path] | None = None,
 ) -> Path:
 	"""Build a package artifact. Returns path to staged .dmp."""
 	out_dmp = staged_install / f"{art.name}.dmp"
@@ -342,6 +391,10 @@ def _build_package(
 	if art.unsafe:
 		cmd.append("--allow-unsafe")
 
+	# Native library search paths (resolver input, not package metadata).
+	for nlp in (native_lib_paths or []):
+		cmd.extend(["--link-search", str(nlp)])
+
 	# Source inputs: entry module + declared module paths.
 	cmd.append(str(manifest_dir / art.entry_module))
 	for mod_path in art.modules:
@@ -369,6 +422,7 @@ def _build_app(
 	staged_install: Path,
 	manifest_dir: Path,
 	package_roots: list[Path],
+	native_lib_paths: list[Path] | None = None,
 ) -> Path:
 	"""Build an app artifact. Returns path to staged binary."""
 	out_bin = staged_install / art.name
@@ -390,6 +444,10 @@ def _build_app(
 	# Unsafe support for FFI apps.
 	if art.unsafe:
 		cmd.append("--allow-unsafe")
+
+	# Native library search paths (resolver input, not package metadata).
+	for nlp in (native_lib_paths or []):
+		cmd.extend(["--link-search", str(nlp)])
 
 	# Source inputs: entry module + declared module paths.
 	cmd.append(str(manifest_dir / art.entry_module))
@@ -472,6 +530,7 @@ def _run_baseline_smoke_package(
 	staged_install: Path,
 	staged_pkg_root: Path,
 	staged_trust: Path | None,
+	native_lib_paths: list[Path] | None = None,
 ) -> None:
 	"""Built-in baseline smoke for package artifacts."""
 	# Generate a trivial consumer that imports the staged package.
@@ -502,6 +561,9 @@ def _run_baseline_smoke_package(
 	]
 	if staged_trust:
 		cmd.extend(["--trust-store", str(staged_trust)])
+	# Native library search paths for smoke link step.
+	for nlp in (native_lib_paths or []):
+		cmd.extend(["--link-search", str(nlp)])
 	cmd.append(str(consumer_src))
 
 	has_native = bool(art.native_deps)
@@ -682,6 +744,7 @@ def _deploy_artifact(
 	dry_run: bool,
 	compiler_version: str,
 	staged_pkg_root: Path,
+	native_lib_paths: list[Path] | None = None,
 ) -> None:
 	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
 	staged_install = stage_dir / art.name / art.version
@@ -696,6 +759,7 @@ def _deploy_artifact(
 			staged_install=staged_install,
 			manifest_dir=manifest_dir,
 			package_roots=package_roots,
+			native_lib_paths=native_lib_paths,
 		)
 	else:
 		bin_path = _build_app(
@@ -706,6 +770,7 @@ def _deploy_artifact(
 			staged_install=staged_install,
 			manifest_dir=manifest_dir,
 			package_roots=package_roots,
+			native_lib_paths=native_lib_paths,
 		)
 
 	# ── Step 2: Sign (package only) ──
@@ -771,6 +836,7 @@ def _deploy_artifact(
 				staged_install=staged_install,
 				staged_pkg_root=staged_pkg_root,
 				staged_trust=staged_trust_path,
+				native_lib_paths=native_lib_paths,
 			)
 		else:
 			_run_baseline_smoke_app(art, staged_bin=staged_install / art.name)
@@ -870,6 +936,9 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# Package roots: default to --dest.
 	package_roots = args.package_root or ([args.dest] if args.dest else [])
 
+	# Native library search paths (env + config + CLI).
+	native_lib_paths = _resolve_native_lib_paths(args, manifest_dir)
+
 	# Signing key required for package artifacts.
 	if has_packages and sign_key is None:
 		raise DeployError(
@@ -938,6 +1007,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				dry_run=args.dry_run,
 				compiler_version=compiler_version,
 				staged_pkg_root=staged_pkg_root,
+				native_lib_paths=native_lib_paths,
 			)
 	finally:
 		# Clean up staging directory.
