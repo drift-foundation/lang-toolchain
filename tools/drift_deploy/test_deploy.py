@@ -22,6 +22,8 @@ from tools.drift_deploy.drift_deploy import (
 	_build_package,
 	_clean_env,
 	_deploy_artifact,
+	_extract_dep_namespaces,
+	_resolve_artifact_deps,
 	_resolve_native_lib_paths,
 	_run_baseline_smoke_package,
 	_SCRUB_ENV_KEYS,
@@ -1436,3 +1438,89 @@ class TestBuildSelfExclusion:
 			assert not any(f.name == "net-tls.dmp" for f in stale_contents), (
 				"built .dmp must not leak into dest through stale symlink"
 			)
+
+
+# ── Intra-project dep resolution ────────────────────────────────────
+
+
+class TestIntraProjectDeps:
+	"""
+	When B depends on co-deployed A, resolution must find A's .dmp
+	in staged_pkg_root after A has been built (not fail upfront).
+	"""
+
+	@patch("tools.drift_deploy.drift_deploy.build_package_index")
+	def test_resolve_artifact_deps_finds_staged_package(
+		self, mock_index: MagicMock,
+	) -> None:
+		"""_resolve_artifact_deps resolves from a fresh package index."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		with tempfile.TemporaryDirectory() as tmpdir:
+			# Simulate a .dmp for integrity (sha256 must match).
+			dmp = Path(tmpdir) / "net-crypto.dmp"
+			dmp.write_bytes(b"fake-dmp-content")
+			import hashlib
+			sha = hashlib.sha256(b"fake-dmp-content").hexdigest()
+			mock_index.return_value = {
+				"net-crypto": [
+					PackageEntry(
+						package_id="net-crypto",
+						version=parse_version("0.1.0"),
+						path=dmp,
+						sha256=sha,
+						package_deps=[],
+					),
+				],
+			}
+			art = Artifact(
+				kind="package", name="net-tls", version="0.1.0",
+				description="", license="", entry_module="net.tls",
+				modules=["net.tls"], module_namespace="net.tls",
+				package_deps=[PackageDep(name="net-crypto", version="^0.1.0")],
+			)
+			resolved = _resolve_artifact_deps(
+				art,
+				package_roots=[Path(tmpdir)],
+				lock_path=Path(tmpdir) / "drift-lock.json",
+				update_lock=True,
+				existing_lock=None,
+			)
+			assert "net-crypto" in resolved
+			assert resolved["net-crypto"].version == "0.1.0"
+			# Verify index was built with the provided package_roots.
+			mock_index.assert_called_once_with([Path(tmpdir)])
+
+
+# ── Dep namespace extraction ────────────────────────────────────────
+
+
+class TestExtractDepNamespaces:
+	"""_extract_dep_namespaces reads module_ids from .dmp files."""
+
+	@patch("lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0")
+	def test_extracts_module_ids(self, mock_load: MagicMock) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			pkg_dir = staged / "net-crypto" / "0.1.0"
+			pkg_dir.mkdir(parents=True)
+			# Create a dummy .dmp file (content doesn't matter, loader is mocked).
+			(pkg_dir / "net-crypto.dmp").write_bytes(b"fake")
+			pkg = MagicMock()
+			pkg.manifest = {
+				"modules": [
+					{"module_id": "net.crypto"},
+					{"module_id": "net.crypto.aes"},
+				],
+			}
+			mock_load.return_value = pkg
+			ns = _extract_dep_namespaces("net-crypto", staged)
+			assert "net.crypto" in ns
+			assert "net.crypto.aes" in ns
+
+	def test_missing_package_returns_empty(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			ns = _extract_dep_namespaces("nonexistent", staged)
+			assert ns == []

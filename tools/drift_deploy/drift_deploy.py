@@ -289,6 +289,11 @@ def _resolve_or_load_lock(
 
 	Returns {artifact_name → {package_id → ResolvedDep}}.
 	Artifacts with no package_deps get an empty dict.
+
+	NOTE: this resolves ALL artifacts upfront using the current package_roots.
+	For intra-project dependencies (package B depends on co-deployed package A),
+	use _resolve_artifact_deps() per-artifact in the deploy loop instead —
+	by then, topo-sorted predecessors have been built into staged_pkg_root.
 	"""
 	lock_path = manifest_path.parent / "drift-lock.json"
 
@@ -366,6 +371,59 @@ def _resolve_or_load_lock(
 			result[art.name] = {}
 
 	return result
+
+
+def _resolve_artifact_deps(
+	art: Artifact,
+	*,
+	package_roots: list[Path],
+	lock_path: Path,
+	update_lock: bool,
+	existing_lock: dict[str, dict[str, ResolvedDep]] | None,
+) -> dict[str, ResolvedDep]:
+	"""
+	Resolve dependencies for a single artifact.
+
+	Called per-artifact in the deploy loop so that intra-project
+	dependencies (earlier topo-sorted artifacts already built into
+	staged_pkg_root) are discoverable.
+	"""
+	if not art.package_deps:
+		return {}
+
+	direct_deps = [(dep.name, dep.version) for dep in art.package_deps]
+
+	if existing_lock is not None and not update_lock:
+		if art.name not in existing_lock:
+			raise DeployError(
+				f"artifact '{art.name}' not found in {lock_path}; "
+				f"run with --update-lock to re-resolve"
+			)
+		locked = existing_lock[art.name]
+		for dep_name, _dep_ver in direct_deps:
+			if dep_name not in locked:
+				raise DeployError(
+					f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
+					f"run with --update-lock to re-resolve"
+				)
+		pkg_index = build_package_index(package_roots)
+		errors = verify_lock_integrity(locked, pkg_index)
+		if errors:
+			raise DeployError(
+				f"artifact '{art.name}': lock integrity check failed:\n"
+				+ "\n".join(f"  {e}" for e in errors)
+			)
+		return locked
+
+	# Resolve from scratch — rebuild index to pick up newly-built packages.
+	pkg_index = build_package_index(package_roots)
+	try:
+		return resolve_artifact(
+			art.name, direct_deps, pkg_index,
+			searched_roots=package_roots,
+		)
+	except ResolutionError as e:
+		raise DeployError(str(e))
 
 
 # ── Build ────────────────────────────────────────────────────────────
@@ -487,6 +545,40 @@ def _build_app(
 		)
 
 	return out_bin
+
+
+# ── Dependency namespace discovery ───────────────────────────────────
+
+
+def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
+	"""
+	Extract module namespaces from a dependency's .dmp files.
+
+	Scans staged_pkg_root/<pkg_id>/ for .dmp files and reads their
+	module_id entries to discover which namespaces need trust authorization.
+	"""
+	namespaces: set[str] = set()
+	pkg_dir = staged_pkg_root / pkg_id
+	if not pkg_dir.exists():
+		return []
+	import os
+	for dirpath, _, filenames in os.walk(str(pkg_dir), followlinks=True):
+		for fname in filenames:
+			if not fname.endswith(".dmp"):
+				continue
+			dmp_path = Path(dirpath) / fname
+			try:
+				from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
+				pkg = load_dmir_pkg_v0(dmp_path)
+				modules = pkg.manifest.get("modules", [])
+				for m in modules:
+					if isinstance(m, dict):
+						mid = m.get("module_id")
+						if isinstance(mid, str) and mid:
+							namespaces.add(mid)
+			except Exception:
+				continue
+	return sorted(namespaces)
 
 
 # ── Sign ─────────────────────────────────────────────────────────────
@@ -864,12 +956,20 @@ def _deploy_artifact(
 			pubkey = extract_pubkey_from_seed(sign_key)
 			staged_trust_path = stage_dir / "drift" / "trust.json"
 			# Collect dependency namespaces for smoke trust authorization.
+			# Two sources: (1) co-deployed artifacts from this manifest,
+			# (2) already-published deps discovered from .dmp module_ids.
 			dep_ns_list: list[str] = []
-			if dep_namespace_map and resolved:
+			if resolved:
 				for dep_pkg_id in resolved:
-					ns = dep_namespace_map.get(dep_pkg_id)
-					if ns:
-						dep_ns_list.append(ns)
+					# Co-deployed dep: namespace known from manifest.
+					if dep_namespace_map and dep_pkg_id in dep_namespace_map:
+						dep_ns_list.append(dep_namespace_map[dep_pkg_id])
+					else:
+						# Already-published dep: extract module namespaces
+						# from the .dmp in the staged package root.
+						dep_ns_list.extend(
+							_extract_dep_namespaces(dep_pkg_id, staged_pkg_root)
+						)
 			build_staged_trust(
 				baseline_trust_path=baseline_trust,
 				signer_pubkey_raw=pubkey,
@@ -1026,12 +1126,6 @@ def _run_impl(args: argparse.Namespace) -> int:
 	if args.app_dest:
 		print(f"  app-dest: {args.app_dest}")
 
-	# ── Resolution / lock ──
-	resolved_map = _resolve_or_load_lock(
-		manifest, artifacts, args.manifest.resolve(),
-		package_roots, args.update_lock,
-	)
-
 	# ── Per-artifact pipeline ──
 	stage_dir = Path(tempfile.mkdtemp(
 		prefix=".drift-deploy-staging.",
@@ -1056,13 +1150,36 @@ def _run_impl(args: argparse.Namespace) -> int:
 		a.name: a.module_namespace for a in artifacts if a.kind == "package"
 	}
 
+	# ── Resolution / lock (per-artifact, lazy) ──
+	# Resolve deps per-artifact in topo order so that intra-project deps
+	# (earlier artifacts already built into staged_pkg_root) are discoverable.
+	lock_path = args.manifest.resolve().parent / "drift-lock.json"
+	existing_lock: dict[str, dict[str, ResolvedDep]] | None = None
+	need_resolution = any(a.package_deps for a in artifacts)
+	if need_resolution and lock_path.exists() and not args.update_lock:
+		try:
+			existing_lock = read_lock(lock_path)
+		except ValueError as e:
+			raise DeployError(f"failed to read {lock_path}: {e}")
+
+	resolved_map: dict[str, dict[str, ResolvedDep]] = {}
+
 	try:
 		for art in artifacts:
 			print(f"\n{'='*60}")
 			print(f"artifact: {art.name} ({art.kind}) v{art.version}")
 			print(f"{'='*60}")
 
-			resolved = resolved_map.get(art.name, {})
+			# Resolve this artifact's deps now — staged_pkg_root contains
+			# .dmp files from earlier topo-sorted artifacts.
+			resolved = _resolve_artifact_deps(
+				art,
+				package_roots=[staged_pkg_root] + package_roots,
+				lock_path=lock_path,
+				update_lock=args.update_lock,
+				existing_lock=existing_lock,
+			)
+			resolved_map[art.name] = resolved
 			if resolved:
 				print(f"  resolved deps: {', '.join(f'{k}@{v.version}' for k, v in sorted(resolved.items()))}")
 
@@ -1085,6 +1202,11 @@ def _run_impl(args: argparse.Namespace) -> int:
 				native_lib_paths=native_lib_paths,
 				dep_namespace_map=dep_namespace_map,
 			)
+
+		# Write lock file after all artifacts are resolved and deployed.
+		lock_artifacts = {name: deps for name, deps in resolved_map.items() if deps}
+		if lock_artifacts:
+			write_lock(lock_path, lock_artifacts)
 	finally:
 		# Clean up staging directory.
 		shutil.rmtree(str(stage_dir), ignore_errors=True)

@@ -1,6 +1,30 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed intra-project deploy resolution and smoke trust for published deps (0.27.59)**:
+  Tightened `drift deploy` for multi-package projects where one artifact depends
+  on another artifact from the same manifest, and for smoke runs that consume
+  already-published signed dependencies from package roots.
+  - Intra-project resolution fix:
+    - dependency resolution no longer happens only once upfront before any
+      artifacts are built
+    - `drift deploy` now resolves package dependencies per artifact in topo
+      order, just before build, so earlier staged artifacts are visible to later
+      dependents in the same deploy run
+    - lock writing still happens after all artifacts complete
+  - Smoke trust fix for already-published dependencies:
+    - staged trust overlays now authorize dependency namespaces from two sources:
+      - co-deployed package artifacts in the current manifest
+      - already-published package dependencies discovered from `.dmp` module ids
+        under the staged package root
+    - this removes the need for manual trust workarounds when smoke compiles an
+      artifact against signed dependencies already present in the package root
+  - Added regression coverage for:
+    - per-artifact staged dependency resolution
+    - dependency namespace extraction from `.dmp`
+    - missing-package handling during namespace extraction
+    - staged trust dependency authorization
+
 - **Fixed cross-package schema TypeDef lookup and staged trust dependency authorization (0.27.58)**:
   Fixed a compiler package-consumption bug for cross-package nominal types and
   a deploy-tool smoke trust gap for co-deployed package dependencies.
