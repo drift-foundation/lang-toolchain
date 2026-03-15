@@ -21,6 +21,7 @@ from tools.drift_deploy.drift_deploy import (
 	_build_app,
 	_build_package,
 	_clean_env,
+	_deploy_artifact,
 	_resolve_native_lib_paths,
 	_run_baseline_smoke_package,
 	_SCRUB_ENV_KEYS,
@@ -1021,3 +1022,212 @@ class TestNativeLibPaths:
 			args = self._make_args("--native-lib-path", "/abs/cli")
 			result = _resolve_native_lib_paths(args, Path(tmpdir))
 			assert result == [Path("/abs/env"), Path("/abs/cfg"), Path("/abs/cli")]
+
+
+# ── Self-upgrade / build isolation ──────────────────────────────────
+
+
+class TestBuildSelfExclusion:
+	"""
+	Regression: building artifact X must not see a prior published X.
+
+	When --dest already contains an older version of the same package,
+	the build step must not expose that package root to the compiler.
+	Otherwise the compiler resolves the old signed package, demands
+	trust authorization, and fails — even though we're building from
+	source, not consuming ourselves.
+	"""
+
+	@staticmethod
+	def _fake_run_creates_dmp(args, **kwargs):
+		"""subprocess.run replacement that creates expected .dmp output."""
+		cmd = args if isinstance(args, list) else [args]
+		# If --emit-package is in the command, create the output file.
+		for i, arg in enumerate(cmd):
+			if arg == "--emit-package" and i + 1 < len(cmd):
+				out_path = Path(cmd[i + 1])
+				out_path.parent.mkdir(parents=True, exist_ok=True)
+				out_path.write_bytes(b"fake-dmp")
+		m = MagicMock()
+		m.returncode = 0
+		m.stdout = ""
+		m.stderr = ""
+		return m
+
+	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_build_does_not_see_own_prior_version(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""
+		Simulate deploying net-tls 0.3.0 to a dest that already has
+		net-tls 0.2.0. The build command must not include a package
+		root that contains net-tls.
+		"""
+		from tools.drift_deploy.manifest import NativeDep
+
+		art = Artifact(
+			kind="package", name="net-tls", version="0.3.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			native_deps=[NativeDep(lib="ssl")],
+			unsafe=True,
+			module_namespace="net_tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			# Simulate dest with prior published version.
+			prior = tmpdir_p / "dest" / "net-tls" / "0.2.0"
+			prior.mkdir(parents=True)
+			(prior / "net-tls.dmp").write_bytes(b"old-pkg")
+
+			# Also put an external dep that should still be visible.
+			ext_dep = tmpdir_p / "dest" / "std.core" / "1.0.0"
+			ext_dep.mkdir(parents=True)
+			(ext_dep / "std.core.dmp").write_bytes(b"core-pkg")
+
+			# Set up staged package root with symlinks (as _run_impl does).
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+
+			dest = tmpdir_p / "dest"
+			# Mirror dest into staged_pkg_root (same as _run_impl).
+			for pkg_dir in sorted(dest.iterdir()):
+				if pkg_dir.is_dir():
+					link = staged_pkg_root / pkg_dir.name
+					if not link.exists():
+						link.symlink_to(pkg_dir.resolve())
+
+			# Create source dir with entry module.
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			# _sign_package needs to return a path that exists.
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=True,
+					dry_run=True,
+					compiler_version="0.27.53-dev",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			# Inspect the build command (first subprocess.run call).
+			build_call = mock_run.call_args_list[0]
+			cmd = build_call[0][0]
+
+			# Collect all --package-root values from the build command.
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(cmd):
+				if arg == "--package-root" and i + 1 < len(cmd):
+					pkg_roots_in_cmd.append(cmd[i + 1])
+
+			# The build root must NOT contain a net-tls directory.
+			for pr in pkg_roots_in_cmd:
+				net_tls_dir = Path(pr) / "net-tls"
+				assert not net_tls_dir.exists(), (
+					f"build --package-root {pr} exposes prior net-tls; "
+					f"source build must not consume its own older published version"
+				)
+
+			# But external deps (std.core) must still be reachable.
+			reachable = any(
+				(Path(pr) / "std.core").exists() for pr in pkg_roots_in_cmd
+			)
+			assert reachable, "external deps must still be visible through build package root"
+
+	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_build_does_not_pass_raw_dest_as_package_root(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""
+		The raw --dest path must not appear as a --package-root in the
+		build command. Only the filtered build root should be used.
+		"""
+		art = Artifact(
+			kind="package", name="my.pkg", version="1.0.0",
+			description="Test", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="my_pkg",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+			dest = tmpdir_p / "dest"
+			dest.mkdir()
+
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=True,
+					dry_run=True,
+					compiler_version="0.27.53-dev",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			build_call = mock_run.call_args_list[0]
+			cmd = build_call[0][0]
+
+			# Raw dest must not appear in --package-root args.
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(cmd):
+				if arg == "--package-root" and i + 1 < len(cmd):
+					pkg_roots_in_cmd.append(cmd[i + 1])
+
+			assert str(dest) not in pkg_roots_in_cmd, (
+				f"raw dest {dest} must not be passed as --package-root to build; "
+				f"got: {pkg_roots_in_cmd}"
+			)
+			assert str(staged_pkg_root) not in pkg_roots_in_cmd, (
+				f"raw staged_pkg_root must not be passed as --package-root to build; "
+				f"only the filtered build root should be used"
+			)

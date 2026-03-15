@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed `drift deploy` self-upgrade build isolation (0.27.54-dev)**:
+  Prevented source builds from accidentally consuming older published versions
+  of the same package from the publish destination during deploy.
+  - Build step now uses a per-artifact filtered package root
+    (`_build_pkgroot_<name>`) instead of passing raw destination roots through
+    to `driftc`.
+  - The filtered build root mirrors visible package roots but excludes the
+    artifact currently being built, so:
+    - older published versions of the same package are not visible during
+      source build
+    - external dependencies remain visible
+  - Raw `--dest` and raw staged package roots are no longer passed as build-time
+    `--package-root` compiler inputs.
+  - Smoke continues to use the staged package root after the just-built artifact
+    has been signed and added.
+  - Added regressions for:
+    - excluding a prior published version of the same package during build
+    - ensuring raw destination/staged roots are not passed as build package roots
+
 - **Rejected relative native library search paths in `drift deploy` (0.27.53-dev)**:
   Tightened the deploy-time native library path resolver so machine-local
   search hints fail fast instead of producing confusing linker failures later.
