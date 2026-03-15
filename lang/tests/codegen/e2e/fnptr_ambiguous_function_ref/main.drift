@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn abs(x: Int) nothrow -> Int {
 	if x < 0 {

@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Point(x: Int);
 struct Other(x: Int);

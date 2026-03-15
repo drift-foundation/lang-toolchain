@@ -33,7 +33,7 @@ def test_unqualified_call_prefers_free_function_over_method(tmp_path: Path, caps
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 fn write() -> Int { return 1; }
 
@@ -61,7 +61,7 @@ def test_unqualified_call_does_not_resolve_to_method(tmp_path: Path, capsys: pyt
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 struct Foo { }
 
@@ -88,7 +88,7 @@ def test_local_binding_shadows_free_function(tmp_path: Path, capsys: pytest.Capt
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 fn write() -> Int { return 1; }
 

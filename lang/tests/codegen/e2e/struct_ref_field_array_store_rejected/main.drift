@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);

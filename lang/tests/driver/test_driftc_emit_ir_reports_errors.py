@@ -26,7 +26,7 @@ def test_emit_ir_reports_errors(tmp_path: Path, capsys: pytest.CaptureFixture[st
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return "bad";

@@ -1,4 +1,4 @@
-module b.geom
+module b.geom;
 
 export { Point, make };
 

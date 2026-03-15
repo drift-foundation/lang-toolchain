@@ -34,7 +34,7 @@ def _diag_messages(payload: dict) -> list[str]:
 
 def test_macro_unknown_path_reports_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.log as log;
 
@@ -52,7 +52,7 @@ fn main() nothrow -> Int {
 
 def test_macro_wrong_arity_reports_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.log as log;
 
@@ -70,7 +70,7 @@ fn main() nothrow -> Int {
 
 def test_macro_kwargs_rejected_reports_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.log as log;
 

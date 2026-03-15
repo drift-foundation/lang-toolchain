@@ -11,7 +11,7 @@ def test_hidden_lambda_ref_capture_local_type_is_ref(tmp_path: Path) -> None:
 	source = tmp_path / "main.drift"
 	source.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 
 		import std.core as core;
 

@@ -1,4 +1,4 @@
-module b
+module b;
 import c as c;
 export { bFn };
 pub fn bFn() -> Int { return c.cFn(); }

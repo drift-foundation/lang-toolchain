@@ -12,14 +12,14 @@ def test_alias_return_assigns_into_struct_field_without_mismatch(tmp_path: Path)
 	main_src = tmp_path / "main.drift"
 	wire_types_src.write_text(textwrap.dedent(
 		"""
-		module wire.types
+		module wire.types;
 		pub struct S { pub x: Int }
 		export { S };
 		"""
 	))
 	wire_src.write_text(textwrap.dedent(
 		"""
-		module wire
+		module wire;
 		import wire.types as types;
 		pub type S = types.S;
 		export { S, mk };
@@ -28,7 +28,7 @@ def test_alias_return_assigns_into_struct_field_without_mismatch(tmp_path: Path)
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import wire as wire;
 		struct C { pub s: wire.S }
 		pub fn main() nothrow -> Int {
@@ -63,14 +63,14 @@ def test_alias_to_missing_nominal_reports_user_diagnostic_not_internal(tmp_path:
 	main_src = tmp_path / "main.drift"
 	wire_src.write_text(textwrap.dedent(
 		"""
-		module wire
+		module wire;
 		pub type S = missing.Nope;
 		export { S };
 		"""
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import wire as wire;
 		struct C { pub s: wire.S }
 		pub fn main() nothrow -> Int { return 0; }
@@ -107,7 +107,7 @@ def test_cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invarian
 	main_src = tmp_path / "main.drift"
 	types_src.write_text(textwrap.dedent(
 		"""
-		module repro.types
+		module repro.types;
 		export { Cell };
 		pub variant Cell {
 			Null,
@@ -117,7 +117,7 @@ def test_cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invarian
 	))
 	api_src.write_text(textwrap.dedent(
 		"""
-		module repro.api
+		module repro.api;
 		import repro.types as types;
 		export { Cell, cell_is_null, cell_text };
 		pub type Cell = types.Cell;
@@ -137,7 +137,7 @@ def test_cross_module_alias_variant_ref_payload_match_does_not_trip_mir_invarian
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import std.core as core;
 		import repro.api as api;
 		struct Row {

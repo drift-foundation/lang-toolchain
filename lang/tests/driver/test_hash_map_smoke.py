@@ -33,7 +33,7 @@ def test_hash_map_int_smoke(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.containers as containers;
 
@@ -60,7 +60,7 @@ def test_hash_map_string_smoke(tmp_path: Path, capsys: pytest.CaptureFixture[str
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.containers as containers;
 

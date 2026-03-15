@@ -1,4 +1,4 @@
-module std.mem.test_unsafe_expr
+module std.mem.test_unsafe_expr;
 
 import std.mem as mem;
 

@@ -1,4 +1,4 @@
-module main
+module main;
 
 import std.log as log;
 import std.runtime as rt;

@@ -114,7 +114,7 @@ def test_overloads_across_modules_with_qualified_calls(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "a" / "lib.drift",
 		"""
-module a
+module a;
 
 export { f };
 
@@ -125,7 +125,7 @@ pub fn f(x: String) -> Int { return 2; }
 	_write_file(
 		mod_root / "b" / "main.drift",
 		"""
-module b
+module b;
 
 import a;
 

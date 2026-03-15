@@ -14,7 +14,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def test_match_stmt_missing_return_repro(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.io as io;
 import std.core as core;

@@ -14,7 +14,7 @@ def _write_file(path: Path, content: str) -> None:
 def test_orphan_impl_rejected_in_sources(tmp_path: Path) -> None:
 	files = {
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_a;
 import m_b;

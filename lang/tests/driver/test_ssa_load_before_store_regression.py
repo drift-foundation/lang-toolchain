@@ -29,7 +29,7 @@ def test_emit_ir_while_capture_move_in_loop_no_ssa_crash(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 
@@ -72,7 +72,7 @@ def test_emit_ir_callback_move_capture_byvalue_call_no_mir_invariant_failure(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 

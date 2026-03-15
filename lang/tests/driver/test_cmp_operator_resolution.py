@@ -41,7 +41,7 @@ def test_eq_uses_std_core_cmp_without_std_algo(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 import std.core as core;

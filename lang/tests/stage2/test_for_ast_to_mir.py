@@ -27,7 +27,7 @@ def test_for_ast_lowered_to_mir_cfg(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 	fn main() nothrow -> Int {
 		val xs = [1, 2, 3];

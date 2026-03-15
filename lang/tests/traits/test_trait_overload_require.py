@@ -71,4 +71,6 @@ fn main(x: S) -> Int { return f(x); }
 	"""
 	)
 	res = _typecheck_main_with_registry(src)
-	assert any("requirement not satisfied" in d.message for d in res.diagnostics)
+	# Type checker now enforces require clauses during overload resolution:
+	# unmet require eliminates the overload, producing "no matching overload".
+	assert any("no matching overload" in d.message for d in res.diagnostics)

@@ -10,7 +10,7 @@ def test_atomic_store_uint_struct_field_ref_codegen(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import lang.atomic as atomic;
 
 		struct S { a: atomic.AtomicUint }
@@ -47,7 +47,7 @@ def test_atomic_uint_field_ref_intrinsics_codegen_surface(tmp_path: Path) -> Non
 	src = tmp_path / "main.drift"
 	src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import lang.atomic as atomic;
 
 		struct S { a: atomic.AtomicUint }

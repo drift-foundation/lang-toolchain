@@ -1,4 +1,4 @@
-module main
+module main;
 // Planned: module roots + module-id inference rules must ensure deterministic resolution.
 fn main() nothrow -> Int{ return 0; }
 

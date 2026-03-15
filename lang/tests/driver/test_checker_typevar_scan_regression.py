@@ -35,7 +35,7 @@ def test_generic_index_read_typevar_scan_does_not_crash(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn head<T>(xs: Array<T>) nothrow -> T {
 	return xs[0];
@@ -54,7 +54,7 @@ def test_generic_nested_index_read_typevar_scan_does_not_crash(tmp_path: Path) -
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn head_nested<T>(xss: Array<Array<T>>) nothrow -> Array<T> {
 	return xss[0];

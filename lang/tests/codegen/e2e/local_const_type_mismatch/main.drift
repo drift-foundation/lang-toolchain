@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn main() nothrow -> Int {
 	const X: String = 42;

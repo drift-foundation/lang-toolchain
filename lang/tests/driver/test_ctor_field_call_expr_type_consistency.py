@@ -24,7 +24,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def _module_src_inline() -> str:
 	return f"""
-module main
+module main;
 
 import lang.atomic as atomic;
 
@@ -58,7 +58,7 @@ fn main() nothrow -> Int {{
 
 def _module_src_temp() -> str:
 	return """
-module main
+module main;
 
 import lang.atomic as atomic;
 

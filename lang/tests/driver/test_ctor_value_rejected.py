@@ -14,7 +14,7 @@ def test_ctor_value_reference_rejected(tmp_path: Path) -> None:
 	main.parent.mkdir(parents=True, exist_ok=True)
 	main.write_text(
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 

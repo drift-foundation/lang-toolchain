@@ -1,4 +1,4 @@
-module m
+module m;
 
 interface Sink {
 	fn write(self: &Self) nothrow -> Int;

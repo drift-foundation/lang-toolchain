@@ -52,7 +52,7 @@ def _build(tmp_path: Path, content: str):
 
 
 PROGRAM = """\
-module m_main
+module m_main;
 
 import std.concurrent as conc;
 import std.sync as sync;

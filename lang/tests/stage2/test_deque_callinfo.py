@@ -18,7 +18,7 @@ def test_deque_callinfo_intrinsics_ok(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.containers as containers;
 

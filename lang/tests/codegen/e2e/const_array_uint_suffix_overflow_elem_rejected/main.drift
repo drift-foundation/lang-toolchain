@@ -1,4 +1,4 @@
-module main
+module main;
 
 const T: Array<Uint> = [1u, 18446744073709551616u, 3u];
 

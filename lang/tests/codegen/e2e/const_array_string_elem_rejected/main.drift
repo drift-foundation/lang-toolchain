@@ -1,4 +1,4 @@
-module main
+module main;
 
 const T: Array<String> = ["a", "b"];
 

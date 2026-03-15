@@ -1,4 +1,4 @@
-module proto
+module proto;
 
 import std.core as core;
 import types;

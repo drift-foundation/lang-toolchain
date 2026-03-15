@@ -45,7 +45,7 @@ def test_link_variant_instantiation_round_trips() -> None:
 				"module_id": "lang.core",
 				"name": "Optional",
 				"type_params": ["T"],
-				"tombstone_ctor": "None",
+				"tombstone_ctor": "Tombstone",
 				"arms": [
 					{"name": "None", "fields": []},
 					{
@@ -57,6 +57,7 @@ def test_link_variant_instantiation_round_trips() -> None:
 							}
 						],
 					},
+					{"name": "Tombstone", "fields": []},
 				],
 			}
 		},

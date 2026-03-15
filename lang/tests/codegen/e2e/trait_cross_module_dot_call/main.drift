@@ -1,4 +1,4 @@
-module main
+module main;
 
 import m_box;
 import m_trait as t;

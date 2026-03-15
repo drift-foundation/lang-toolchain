@@ -30,7 +30,7 @@ def test_result_ok_struct_string_binding_does_not_emit_retain_in_main(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 

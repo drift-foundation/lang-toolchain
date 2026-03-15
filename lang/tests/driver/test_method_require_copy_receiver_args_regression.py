@@ -33,7 +33,7 @@ def test_method_require_copy_on_generic_param_reports_diag_instead_of_crash(tmp_
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 

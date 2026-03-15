@@ -1,4 +1,4 @@
-module b
+module b;
 export { foo };
 pub fn foo() -> Int { return 2; }
 

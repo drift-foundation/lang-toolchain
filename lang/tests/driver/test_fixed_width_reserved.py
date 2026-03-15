@@ -31,7 +31,7 @@ def _parse_workspace(tmp_path: Path, files: dict[Path, str]):
 def test_fixed_width_rejected_in_user_module(tmp_path: Path) -> None:
 	files = {
 		Path("main.drift"): """
-module main
+module main;
 
 	fn main() nothrow -> Int{
 		val x: Uint8 = cast<Uint8>(1);
@@ -53,7 +53,7 @@ module main
 def test_fixed_width_allowed_in_lang_abi(tmp_path: Path) -> None:
 	files = {
 		Path("lang/abi/net/lib.drift"): """
-module lang.abi.net
+module lang.abi.net;
 
 fn takes(x: Uint8) nothrow -> Int{
 	return 0;
@@ -71,7 +71,7 @@ fn takes(x: Uint8) nothrow -> Int{
 def test_byte_allowed_in_user_module(tmp_path: Path) -> None:
 	files = {
 		Path("main.drift"): """
-module main
+module main;
 
 fn main() nothrow -> Int{
 	val b: Byte = 0;

@@ -19,7 +19,7 @@ def test_hidden_lambda_capture_locals_do_not_collide(tmp_path: Path) -> None:
 	source = tmp_path / "main.drift"
 	source.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 
 		import std.concurrent as conc;
 		import std.core as core;

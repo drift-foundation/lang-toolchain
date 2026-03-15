@@ -1,4 +1,4 @@
-module main
+module main;
 
 implement Int {
 	fn bump(self: &mut Int) -> Void { }

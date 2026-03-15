@@ -1,4 +1,4 @@
-module main
+module main;
 
 import m_api;
 import m_box;

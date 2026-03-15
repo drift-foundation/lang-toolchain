@@ -139,7 +139,7 @@ def test_parse_throw_stmt(tmp_path: Path):
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 exception Boom()
 

@@ -11,7 +11,7 @@ def test_single_entry_missing_import_reports_actionable_hint(tmp_path: Path) -> 
 	b = tmp_path / "b.drift"
 	a.write_text(
 		"""
-module main
+module main;
 
 import b as b;
 
@@ -23,7 +23,7 @@ fn main() nothrow -> Int {
 	)
 	b.write_text(
 		"""
-module b
+module b;
 
 pub fn answer() nothrow -> Int {
 	return 42;

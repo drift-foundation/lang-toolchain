@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn main() nothrow -> Int{
 	const T: Array<Int> = [1, 2, 3];

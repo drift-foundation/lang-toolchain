@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from lang.driftc.checker import Checker, FnSignature
 from lang.driftc.core.function_id import FunctionId
+from lang.driftc.core.types_core import TypeTable
 from lang.driftc.checker.catch_arms import CatchArmInfo
 import pytest
 
@@ -27,6 +28,7 @@ def test_checker_infers_fnresult_and_declared_events_from_signature():
 			param_type_ids=[],
 			return_type_id=fnresult_ty,
 			error_type_id=err_ty,
+			declared_can_throw=True,
 		),
 	}
 	checked = Checker(
@@ -77,7 +79,12 @@ def test_checker_validates_catch_arms_and_accumulates_diagnostics():
 
 
 def test_checker_method_call_missing_callinfo_is_bug():
-	"""Method calls require CallInfo when provided to the checker."""
+	"""Method calls require CallInfo when provided to the checker.
+
+	When a method call's CallInfo is missing during nothrow analysis, the checker
+	emits an E_INTERNAL_MISSING_CALLINFO diagnostic (pipeline bug surfaced as a
+	recoverable error, not an assertion crash).
+	"""
 	from lang.driftc.core.function_id import FunctionId
 	from lang.driftc import stage1 as H
 
@@ -94,11 +101,14 @@ def test_checker_method_call_missing_callinfo_is_bug():
 	)
 	hir.statements[0].expr.node_id = 1
 	fn_id = FunctionId(module="main", name="main", ordinal=0)
-	signatures = {fn_id: FnSignature(name="main", return_type="Int")}
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	signatures = {fn_id: FnSignature(name="main", return_type="Int", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)}
 	checker = Checker(
 		signatures_by_id=signatures,
 		hir_blocks_by_id={fn_id: hir},
 		call_info_by_callsite_id={fn_id: {}},
+		type_table=table,
 	)
 	checked = checker.check_by_id([fn_id])
 	assert any(

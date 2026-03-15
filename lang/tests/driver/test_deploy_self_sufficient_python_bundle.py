@@ -85,7 +85,7 @@ def _build_std_package(tmp_path: Path) -> Path:
 	module_dir = build_dir / "std" / "testlib"
 	_write_file(
 		module_dir / "testlib.drift",
-		"""module std.testlib
+		"""module std.testlib;
 
 export { ANSWER };
 
@@ -112,7 +112,7 @@ def _write_consumer(tmp_path: Path) -> Path:
 	src = tmp_path / "consumer" / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 import std.testlib as testlib;
 

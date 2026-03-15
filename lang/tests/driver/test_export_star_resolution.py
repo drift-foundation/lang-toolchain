@@ -28,7 +28,7 @@ def test_export_non_pub_rejected(tmp_path: Path) -> None:
 		root,
 		"m/lib.drift",
 		"""
-module m
+module m;
 
 fn helper() -> Int { return 0; }
 export { helper };
@@ -44,7 +44,7 @@ def test_export_star_unknown_module_rejected(tmp_path: Path) -> None:
 		root,
 		"m/lib.drift",
 		"""
-module m
+module m;
 
 export { missing.* };
 """,
@@ -59,7 +59,7 @@ def test_export_star_collision_rejected(tmp_path: Path) -> None:
 		root,
 		"a/lib.drift",
 		"""
-module a
+module a;
 
 pub fn x() -> Int { return 1; }
 export { x };
@@ -69,7 +69,7 @@ export { x };
 		root,
 		"b/lib.drift",
 		"""
-module b
+module b;
 
 pub fn x() -> Int { return 2; }
 export { x };
@@ -79,7 +79,7 @@ export { x };
 		root,
 		"m/lib.drift",
 		"""
-module m
+module m;
 
 export { a.*, b.* };
 """,
@@ -94,7 +94,7 @@ def test_export_star_explicit_collision_rejected(tmp_path: Path) -> None:
 		root,
 		"a/lib.drift",
 		"""
-module a
+module a;
 
 pub fn x() -> Int { return 1; }
 export { x };
@@ -104,7 +104,7 @@ export { x };
 		root,
 		"m/lib.drift",
 		"""
-module m
+module m;
 
 pub fn x() -> Int { return 2; }
 export { a.*, x };

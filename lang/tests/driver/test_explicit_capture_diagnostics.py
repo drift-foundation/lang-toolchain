@@ -35,7 +35,7 @@ def test_explicit_capture_missing_root_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
@@ -53,7 +53,7 @@ def test_explicit_capture_duplicate_root_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
@@ -70,7 +70,7 @@ def test_explicit_capture_param_collision_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
@@ -87,7 +87,7 @@ def test_explicit_capture_shared_write_requires_mut_capture(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	var x = 1;
@@ -104,7 +104,7 @@ def test_explicit_capture_borrow_escape_via_store_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	var x = 1;
@@ -122,7 +122,7 @@ def test_explicit_capture_borrow_escape_via_return_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn make() -> Int {
 	var x = 1;
@@ -143,7 +143,7 @@ def test_explicit_capture_borrow_escape_via_call_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn sink<T>(cb: T) -> Int {
 	return 0;
@@ -164,7 +164,7 @@ def test_explicit_capture_value_escape_allowed(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
@@ -181,7 +181,7 @@ def test_explicit_capture_copy_non_copyable_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 struct Box { value: Array<Int> }
 
@@ -201,7 +201,7 @@ def test_explicit_empty_captures_allows_lambda_param_usage(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	return (|x: Int| captures() => { return x; })(1);

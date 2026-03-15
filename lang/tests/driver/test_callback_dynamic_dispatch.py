@@ -124,7 +124,7 @@ def test_callback_dynamic_dispatch(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -187,7 +187,7 @@ def test_callback_requires_nothrow_function(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -225,7 +225,7 @@ def test_callback_arity_mismatch(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -263,7 +263,7 @@ def test_callback_rejects_non_function_value(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -297,7 +297,7 @@ def test_callback_rejects_type_args(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -336,7 +336,7 @@ def test_callback_call_is_nothrow(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -374,7 +374,7 @@ def test_callback_call_rejects_kwargs(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -413,7 +413,7 @@ def test_callback_type_mismatch_rejected(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 

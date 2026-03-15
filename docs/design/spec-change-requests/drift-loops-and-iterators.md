@@ -30,7 +30,7 @@ All `for` loops are implemented in terms of a unified trait pair:
 Iteration traits live in the standard library:
 
 ```drift
-module std.iter
+module std.iter;
 
 trait Iterator<Item> {
     fn next(self: &mut Self) -> Optional<Item>
@@ -46,7 +46,7 @@ trait Iterable<Item, Iter>
 The prelude re-exports them:
 
 ```drift
-module std.prelude
+module std.prelude;
 
 export std.iter.{Iterator, Iterable}
 ```

@@ -10,7 +10,7 @@ def test_match_ref_variant_binder_deref_infers_payload_types(tmp_path: Path) -> 
 	src = tmp_path / "main.drift"
 	src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 
 		variant Arg {
 			Bool(value: Bool),
@@ -58,7 +58,7 @@ def test_match_value_variant_binder_deref_reports_user_error_not_internal(tmp_pa
 	src = tmp_path / "main.drift"
 	src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 
 		variant Arg {
 			Int(value: Int)

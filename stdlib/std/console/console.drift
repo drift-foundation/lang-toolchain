@@ -1,4 +1,4 @@
-module std.console
+module std.console;
 
 import std.core as core;
 import std.io as io;

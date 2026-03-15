@@ -35,7 +35,7 @@ def test_noncopy_byvalue_direct_call_from_val_is_allowed(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct Blob {
 	xs: Array<Int>
@@ -59,7 +59,7 @@ def test_noncopy_byvalue_indirect_call_from_val_is_allowed(tmp_path: Path) -> No
 	checked = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct Blob {
 	xs: Array<Int>
@@ -84,7 +84,7 @@ def test_noncopy_byvalue_interface_call_from_val_is_allowed(tmp_path: Path) -> N
 	checked = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct Blob {
 	xs: Array<Int>

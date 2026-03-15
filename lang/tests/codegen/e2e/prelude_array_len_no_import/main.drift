@@ -1,4 +1,4 @@
-module main
+module main;
 
 // Regression: Array.iter() and basic array operations must be visible without
 // importing std.iter or std.containers explicitly. These are prelude modules

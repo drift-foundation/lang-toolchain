@@ -23,7 +23,7 @@ def test_type_param_receiver_trait_method_uses_require_type_args(tmp_path: Path)
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 trait BinarySearchable<T> { fn compare_key(self: &Self, i: Int, key: &T) -> Int; }
 use trait BinarySearchable;

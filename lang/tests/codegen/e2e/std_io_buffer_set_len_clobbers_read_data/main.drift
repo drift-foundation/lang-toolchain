@@ -1,4 +1,4 @@
-module m
+module m;
 import std.io as io;
 import std.mem as mem;
 import lang.thread as thread;

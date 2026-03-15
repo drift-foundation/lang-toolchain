@@ -27,7 +27,7 @@ def test_interface_schema_round_trip() -> None:
 	keys = [k for k in decoded.interface_schemas.keys() if k.module_id == "m" and k.name == "Callback1"]
 	assert len(keys) == 1
 	key = keys[0]
-	type_params, methods, _base_id = decoded.interface_schemas[key]
+	type_params, methods, _parents, _base_id = decoded.interface_schemas[key]
 	assert type_params == ["A", "R"]
 	assert len(methods) == 1
 	out = methods[0]

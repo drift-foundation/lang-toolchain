@@ -41,7 +41,7 @@ def test_comparable_requires_equatable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -67,7 +67,7 @@ def test_binary_search_requires_binarysearchable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 import std.core.cmp as cmp;
@@ -104,7 +104,7 @@ def test_binary_search_callable_with_random_access_readable(tmp_path: Path) -> N
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -171,7 +171,7 @@ def test_binary_search_requires_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 import std.core.cmp as cmp;
@@ -212,7 +212,7 @@ def test_binary_search_missing_both_capability_and_comparable(tmp_path: Path) ->
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -249,7 +249,7 @@ def test_sort_in_place_requires_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -281,7 +281,7 @@ def test_min_max_require_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -306,7 +306,7 @@ def test_sort_in_place_compiles_for_non_copy_t(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 struct NonCopy { data: Array<Int> }
 struct Range { n: Int }
@@ -347,7 +347,7 @@ def test_sort_in_place_missing_both_capability_and_comparable(tmp_path: Path) ->
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -381,7 +381,7 @@ def test_min_max_require_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -405,7 +405,7 @@ def test_array_binary_search_unavailable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 
@@ -431,7 +431,7 @@ def test_array_sort_in_place_unavailable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core.cmp as cmp;
 

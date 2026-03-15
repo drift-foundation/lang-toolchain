@@ -44,7 +44,7 @@ def test_struct_ref_field_mut_self_alias_direct_rejected(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -74,7 +74,7 @@ def test_struct_ref_field_mut_self_alias_if_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -107,7 +107,7 @@ def test_struct_ref_field_mut_self_alias_match_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -140,7 +140,7 @@ def test_struct_ref_field_mut_self_alias_loop_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);

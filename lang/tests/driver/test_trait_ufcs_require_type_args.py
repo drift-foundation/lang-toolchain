@@ -41,7 +41,7 @@ def test_ufcs_trait_call_with_require_type_args_compiles(tmp_path: Path) -> None
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.algo as algo;
 
@@ -62,7 +62,7 @@ def test_trait_impl_with_type_args_resolves(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 trait Marker { }
 
@@ -92,7 +92,7 @@ def test_trait_impl_with_mismatched_type_args_fails(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 trait Marker { }
 

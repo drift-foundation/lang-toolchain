@@ -136,7 +136,7 @@ def test_drift_doctor_vendor_missing_artifact_deep(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -228,7 +228,7 @@ def test_drift_doctor_cache_divergence_detected(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 

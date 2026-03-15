@@ -707,7 +707,7 @@ class TestModuleNamespace:
 			consumer_path = staged.parent / f"_smoke_{art.name}" / "smoke_consumer.drift"
 			assert consumer_path.exists(), f"consumer source not found at {consumer_path}"
 			consumer_src = consumer_path.read_text()
-			assert "import net_tls" in consumer_src
+			assert "import net_tls;" in consumer_src
 			assert "import net-tls" not in consumer_src
 
 	def test_staged_trust_uses_module_namespace(self) -> None:
@@ -745,3 +745,92 @@ class TestTargetDefault:
 		p = build_arg_parser()
 		args = p.parse_args(["--target", "aarch64-linux-gnu"])
 		assert _resolve_target(args) == "aarch64-linux-gnu"
+
+
+# ── Smoke consumer source shape ──────────────────────────────────────
+
+
+class TestSmokeConsumerSource:
+	"""
+	Pin the generated baseline smoke consumer as a valid Drift program.
+
+	The consumer must have: module declaration, semicoloned import using
+	module_namespace, nothrow main returning Int, and a return statement.
+	"""
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_source_shape(self, mock_run: MagicMock) -> None:
+		art = Artifact(
+			kind="package", name="net-tls", version="0.2.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="net_tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			_run_baseline_smoke_package(
+				art, driftc=Path("/fake/driftc"),
+				staged_install=staged,
+				staged_pkg_root=Path(tmpdir) / "pkgroot",
+				staged_trust=None,
+			)
+			src = (staged.parent / f"_smoke_{art.name}" / "smoke_consumer.drift").read_text()
+
+		# Module declaration with semicolon.
+		assert src.startswith("module main;\n")
+		# Import with semicolon, using module_namespace.
+		assert "import net_tls;\n" in src
+		# Valid main signature.
+		assert "fn main() nothrow -> Int {" in src
+		# Return statement.
+		assert "return 0;" in src
+
+	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
+	def test_source_shape_dotted_namespace(self, mock_run: MagicMock) -> None:
+		"""Dotted module namespace (net.tls) also produces valid source."""
+		art = Artifact(
+			kind="package", name="net.tls", version="0.3.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="net.tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			staged = Path(tmpdir) / "staged"
+			staged.mkdir()
+			_run_baseline_smoke_package(
+				art, driftc=Path("/fake/driftc"),
+				staged_install=staged,
+				staged_pkg_root=Path(tmpdir) / "pkgroot",
+				staged_trust=None,
+			)
+			src = (staged.parent / f"_smoke_{art.name}" / "smoke_consumer.drift").read_text()
+
+		assert "import net.tls;\n" in src
+		assert "fn main() nothrow -> Int {" in src
+
+	def test_source_parses_through_drift_parser(self) -> None:
+		"""
+		Verify the generated source is syntactically valid Drift.
+
+		Runs the real parser (not the full compiler) to catch syntax
+		regressions without needing a full driftc invocation.
+		"""
+		try:
+			from lang.driftc.parser.parser import parse_program
+		except ImportError:
+			pytest.skip("parser not available in this environment")
+
+		# Generate the source the same way the deploy tool does.
+		source = (
+			'module main;\n'
+			'\n'
+			'import net_tls;\n'
+			'\n'
+			'fn main() nothrow -> Int {\n'
+			'\treturn 0;\n'
+			'}\n'
+		)
+		# parse_program should not raise on valid syntax.
+		tree = parse_program(source, filename="smoke_consumer.drift")
+		assert tree is not None

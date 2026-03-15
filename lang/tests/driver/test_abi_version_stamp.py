@@ -28,7 +28,7 @@ def _compile_simple_program(tmp_path: Path, *, enforce_entrypoint: bool = False)
 	"""Compile a trivial main program and return LLVM IR text."""
 	(tmp_path / "app").mkdir(parents=True, exist_ok=True)
 	(tmp_path / "app" / "main.drift").write_text(
-		"module main\n\nfn main() nothrow -> Int {\n\treturn 0;\n}\n"
+		"module main;\n\nfn main() nothrow -> Int {\n\treturn 0;\n}\n"
 	)
 	module_packages: dict = {}
 	mk_module(module_packages, "main", "app")
@@ -68,7 +68,7 @@ def test_ir_contains_abi_version_call(tmp_path: Path) -> None:
 def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 	"""Generated IR for secure random bytes must declare the runtime fill helper."""
 	(tmp_path / "main.drift").write_text(
-		"module std.random.test_fill_ir\n\n"
+		"module std.random.test_fill_ir;\n\n"
 		"import std.mem as mem;\n"
 		"import lang.thread as thread;\n\n"
 		"fn main() nothrow -> Int {\n"
@@ -112,7 +112,7 @@ def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 def test_ir_declares_nodelay_runtime_helpers(tmp_path: Path) -> None:
 	"""Generated IR for TCP_NODELAY must declare both runtime helpers."""
 	(tmp_path / "main.drift").write_text(
-		"module std.net.test_nodelay_ir\n\n"
+		"module std.net.test_nodelay_ir;\n\n"
 		"import lang.thread as thread;\n\n"
 		"fn main() nothrow -> Int {\n"
 		"\tval r = thread.net_set_nodelay(3, 1);\n"
@@ -155,7 +155,7 @@ def test_ir_declares_nodelay_runtime_helpers(tmp_path: Path) -> None:
 def test_ir_declares_reactor_et_helpers(tmp_path: Path) -> None:
 	"""Generated IR for ET reactor helpers must declare both runtime symbols."""
 	(tmp_path / "main.drift").write_text(
-		"module std.net.test_reactor_et_ir\n\n"
+		"module std.net.test_reactor_et_ir;\n\n"
 		"import lang.thread as thread;\n\n"
 		"fn main() nothrow -> Int {\n"
 		"\tval p = thread.reactor_check_pending(3, 1);\n"
@@ -198,7 +198,7 @@ def test_ir_declares_reactor_et_helpers(tmp_path: Path) -> None:
 def test_ir_declares_env_runtime_helpers(tmp_path: Path) -> None:
 	"""Generated IR for env access must declare both runtime helpers."""
 	(tmp_path / "main.drift").write_text(
-		"module std.env.test_env_ir\n\n"
+		"module std.env.test_env_ir;\n\n"
 		"import lang.thread as thread;\n\n"
 		"fn main() nothrow -> Int {\n"
 		"\tval name = \"HOME\";\n"

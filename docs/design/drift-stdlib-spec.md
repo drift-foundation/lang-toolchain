@@ -18,7 +18,7 @@ collections, algorithms, and error events referenced by language lowering.
 
 ### Iterable
 ```drift
-module std.iter
+module std.iter;
 
 trait Iterable<Src, Item, Iter> {
 	fn iter(src: Src) returns Iter
@@ -179,7 +179,7 @@ Overflow must never trap, even in debug builds, so hash behavior stays stable.
 
 ### Comparison traits
 ```drift
-module std.core.cmp
+module std.core.cmp;
 
 trait Equatable {
 	fn eq(self: &Self, other: &Self) returns Bool
@@ -219,7 +219,7 @@ tracked below for MVP:
 
 ### Algorithm-specific capability traits
 ```drift
-module std.algo
+module std.algo;
 
 trait BinarySearchable<T> require Self is std.iter.RandomAccessReadable<T> {
 	fn compare_key(self: &Self, i: Int, key: &T) returns Int
@@ -241,7 +241,7 @@ globals. It defines a process-wide global registry and a per-thread registry.
 Core API sketch:
 
 ```drift
-module std.runtime
+module std.runtime;
 
 struct GlobalRegistry
 struct ThreadLocalRegistry
@@ -283,7 +283,7 @@ Semantics and invariants:
 ### MemoryOrder
 
 ```drift
-module std.sync
+module std.sync;
 
 enum MemoryOrder {
     Relaxed,
@@ -511,7 +511,7 @@ Notes:
 ### Unsafe pointer surface (user-unsafe)
 
 ```drift
-module std.mem
+module std.mem;
 
 type Ptr<T>
 

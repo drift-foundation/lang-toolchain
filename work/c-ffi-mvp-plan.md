@@ -37,7 +37,7 @@ buffers — all representable as `RawPtr<Byte>`, `Int`, and `RawPtr<Byte>`.
 ### 1.2 Syntax
 
 ```drift
-module tls
+module tls;
 
 // Single declaration
 extern "C" fn SSL_library_init() nothrow -> Int;
@@ -100,7 +100,7 @@ These are also expressible in `driftc.json` project config:
 Typical usage pattern:
 
 ```drift
-module tls
+module tls;
 
 extern "C" {
     fn SSL_CTX_new(method: RawPtr<Byte>) nothrow -> RawPtr<Byte>;
@@ -414,7 +414,7 @@ Cross-platform link-lib configuration is post-MVP.
 With the MVP, a user can write:
 
 ```drift
-module tls
+module tls;
 
 extern "C" {
     fn OPENSSL_init_ssl(opts: Uint64, settings: RawPtr<Byte>) nothrow -> Int;

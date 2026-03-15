@@ -42,7 +42,7 @@ def test_optional_ctor_expected_type_and_explicit_ok(tmp_path: Path, capsys: pyt
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() -> Int {
 	val a: Optional<Int> = Optional::None();
@@ -84,7 +84,7 @@ def test_generic_impl_array_literal_fuzz_fixed_seed(tmp_path: Path, capsys: pyte
 		src,
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				"struct Box<T> {",
 				"\titems: Array<T>",
@@ -119,7 +119,7 @@ def test_optional_ctor_without_expected_type_errors(tmp_path: Path, capsys: pyte
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() -> Int {
 	val x = Optional::None();
@@ -137,7 +137,7 @@ def test_alias_chain_ctor_call_context(tmp_path: Path, capsys: pytest.CaptureFix
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 type Maybe<T> = Optional<T>;
 type MaybeInt = Maybe<Int>;
@@ -163,7 +163,7 @@ def test_iter_and_intrinsic_paths_nothrow(tmp_path: Path, capsys: pytest.Capture
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.iter as iter;
 
@@ -189,7 +189,7 @@ def test_generic_result_void_instantiation_allows_local_bind(tmp_path: Path, cap
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -217,7 +217,7 @@ def test_void_value_still_rejected_in_nonvoid_typed_context(tmp_path: Path, caps
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn v() nothrow -> Void {
 	return;
@@ -264,7 +264,7 @@ def test_alias_resolution_fuzz_fixed_seed(tmp_path: Path, capsys: pytest.Capture
 		src,
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				*aliases,
 				"",
@@ -286,7 +286,7 @@ def test_generic_impl_indexing_has_no_instantiation_errors(tmp_path: Path, capsy
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() -> Int {
 	return 0;
@@ -303,7 +303,7 @@ def test_generic_use_site_error_is_reported(tmp_path: Path, capsys: pytest.Captu
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 struct Box { x: Int }
 
@@ -327,7 +327,7 @@ def test_drop_glue_instantiates_arc(tmp_path: Path, capsys: pytest.CaptureFixtur
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 import std.core as core;
@@ -349,7 +349,7 @@ def test_drop_glue_instantiates_mutex_guard(tmp_path: Path, capsys: pytest.Captu
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 import std.core as core;
@@ -372,7 +372,7 @@ def test_drop_value_expr_context_errors(tmp_path: Path, capsys: pytest.CaptureFi
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 import std.core as core;

@@ -1,4 +1,4 @@
-module main
+module main;
 
 // Regression: String.byte_length() must be visible without importing std.core.
 // The implement String { byte_length } block lives in std.core, but String is a

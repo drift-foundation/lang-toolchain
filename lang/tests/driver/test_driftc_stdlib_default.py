@@ -22,7 +22,7 @@ def test_driftc_uses_default_stdlib_root(tmp_path: Path, capsys: pytest.CaptureF
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"	return 0;",
@@ -43,7 +43,7 @@ def test_driftc_rejects_reserved_namespace_outside_stdlib_root(
 	src.write_text(
 		"\n".join(
 			[
-				"module std.fake",
+				"module std.fake;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"	return 0;",

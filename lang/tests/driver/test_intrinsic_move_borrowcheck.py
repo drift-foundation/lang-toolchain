@@ -11,7 +11,7 @@ def test_replace_consumes_noncopy_arg_and_rejects_later_borrow(tmp_path: Path) -
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 import std.mem as mem;
 

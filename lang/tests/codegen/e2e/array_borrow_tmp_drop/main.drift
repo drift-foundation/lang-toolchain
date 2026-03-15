@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn make_array() nothrow -> Array<Int> {
 	return [10, 20, 30];

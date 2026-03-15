@@ -138,7 +138,7 @@ def _typecheck_main(src: str, tmp_path: Path) -> list[object]:
 def test_struct_type_param_require_satisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 
@@ -161,7 +161,7 @@ fn main() nothrow -> Int{
 def test_struct_type_param_require_unsatisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 
@@ -185,7 +185,7 @@ fn main() nothrow -> Int{
 def test_struct_require_non_generic_unsatisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Destructible { fn destroy(self: Self) -> Void }
 
@@ -205,7 +205,7 @@ fn main() nothrow -> Int{
 def test_struct_require_does_not_fire_on_missing_type_args(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 
@@ -227,7 +227,7 @@ fn main() nothrow -> Int{
 def test_function_require_satisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -250,7 +250,7 @@ fn main() nothrow -> Int{
 def test_function_require_unsatisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -273,7 +273,7 @@ fn main() nothrow -> Int{
 def test_struct_require_and_satisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -296,7 +296,7 @@ fn main() nothrow -> Int{
 def test_struct_require_and_unsatisfied(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -319,7 +319,7 @@ fn main() nothrow -> Int{
 def test_impl_require_filters_candidates(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Hashable { fn hash(self: Self) -> Int }
 
@@ -346,7 +346,7 @@ fn main() nothrow -> Int{
 
 def test_function_require_or_satisfied(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -363,7 +363,7 @@ fn main() nothrow -> Int{ return id<type Int>(1); }
 
 def test_function_require_or_unsatisfied(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }
@@ -378,7 +378,7 @@ fn main() nothrow -> Int{ return id<type Int>(1); }
 
 def test_function_require_not_unsatisfied(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 

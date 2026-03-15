@@ -1,4 +1,4 @@
-module std.time
+module std.time;
 
 import std.core as core;
 import std.format as format;

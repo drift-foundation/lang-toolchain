@@ -26,7 +26,7 @@ def test_rawbuffer_intrinsics_restricted_to_trusted_modules(tmp_path: Path, caps
 	_write_file(
 		mod_root / "std" / "mem" / "mem.drift",
 		"""
-module std.mem
+module std.mem;
 
 export { RawBuffer, alloc_uninit, dealloc, ptr_at_ref, ptr_at_mut, write, read };
 
@@ -43,7 +43,7 @@ pub struct RawBuffer<T> { }
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.mem as mem;
 

@@ -14,7 +14,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def test_match_stmt_all_arms_return_ok(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -50,7 +50,7 @@ fn main() nothrow -> Int {
 
 def test_match_stmt_nonreturning_arm_then_return_ok(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -83,7 +83,7 @@ fn main() nothrow -> Int {
 
 def test_match_stmt_fallthrough_after_match_ok(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -117,7 +117,7 @@ fn main() nothrow -> Int {
 
 def test_match_stmt_nested_match_in_arm_no_return_ok(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.core as core;
 

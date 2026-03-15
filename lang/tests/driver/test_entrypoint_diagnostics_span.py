@@ -11,7 +11,7 @@ def test_missing_entrypoint_reports_span(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn helper() nothrow -> Int {
 	return 0;
@@ -47,7 +47,7 @@ def test_duplicate_entrypoint_reports_span(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	return 0;

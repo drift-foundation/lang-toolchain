@@ -33,7 +33,7 @@ def test_expected_type_propagates_into_method_arg_call(tmp_path: Path, capsys: p
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 import lang.thread as thread;

@@ -147,7 +147,7 @@ Create a simple app:
 ```bash
 mkdir -p sandbox/hello
 cat > sandbox/hello/main.drift <<'DRIFT'
-module main
+module main;
 
 fn main() nothrow -> Int {
     return 0;
@@ -178,7 +178,7 @@ Create a tiny library module:
 ```bash
 mkdir -p sandbox/libmath
 cat > sandbox/libmath/mathlib.drift <<'DRIFT'
-module mathlib
+module mathlib;
 
 export { add };
 
@@ -204,7 +204,7 @@ Create an app that imports the packaged module:
 ```bash
 mkdir -p sandbox/app_unsigned
 cat > sandbox/app_unsigned/main.drift <<'DRIFT'
-module main
+module main;
 
 import mathlib as mathlib;
 

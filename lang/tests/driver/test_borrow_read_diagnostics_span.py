@@ -35,7 +35,7 @@ def test_use_after_move_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
@@ -59,7 +59,7 @@ def test_use_of_uninitialized_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var x: Int = 0;
@@ -79,7 +79,7 @@ def test_cannot_read_while_mutably_borrowed_reports_span(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn read(r: &Int) nothrow -> Int {
 	return r;
@@ -103,7 +103,7 @@ def test_cannot_move_while_borrowed_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
@@ -128,7 +128,7 @@ def test_cannot_borrow_from_moved_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
@@ -153,7 +153,7 @@ def test_cannot_read_while_mutably_borrowed_without_reborrow_reports_span(tmp_pa
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var x = 0;

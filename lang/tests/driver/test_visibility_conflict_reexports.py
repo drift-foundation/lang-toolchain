@@ -26,7 +26,7 @@ def test_conflict_detection_respects_reexport_visibility(tmp_path: Path, capsys:
 	_write_file(
 		root / "m_types" / "lib.drift",
 		"""
-module m_types
+module m_types;
 
 export { Box };
 
@@ -36,7 +36,7 @@ pub struct Box { pub value: Int }
 	_write_file(
 		root / "m_impl_b" / "lib.drift",
 		"""
-module m_impl_b
+module m_impl_b;
 
 import m_types;
 
@@ -52,7 +52,7 @@ implement m_types.Box {
 	_write_file(
 		root / "m_impl_c" / "lib.drift",
 		"""
-module m_impl_c
+module m_impl_c;
 
 import m_types;
 
@@ -64,7 +64,7 @@ implement m_types.Box {
 	_write_file(
 		root / "m_a" / "lib.drift",
 		"""
-module m_a
+module m_a;
 
 export { m_impl_b.* };
 """,
@@ -72,7 +72,7 @@ export { m_impl_b.* };
 	_write_file(
 		root / "m_main" / "main.drift",
 		"""
-module m_main
+module m_main;
 
 import m_a;
 import m_impl_c;
@@ -96,7 +96,7 @@ def test_trait_reexport_visibility_includes_impl_module(tmp_path: Path, capsys: 
 	_write_file(
 		root / "m_types" / "lib.drift",
 		"""
-module m_types
+module m_types;
 
 export { Box };
 
@@ -106,7 +106,7 @@ pub struct Box { pub value: Int }
 	_write_file(
 		root / "m_impl" / "lib.drift",
 		"""
-module m_impl
+module m_impl;
 
 import m_types;
 
@@ -122,7 +122,7 @@ implement Show for m_types.Box {
 	_write_file(
 		root / "m_api" / "lib.drift",
 		"""
-module m_api
+module m_api;
 
 export { m_impl.* };
 """,
@@ -130,7 +130,7 @@ export { m_impl.* };
 	_write_file(
 		root / "m_main" / "main.drift",
 		"""
-module m_main
+module m_main;
 
 import m_api;
 import m_types;

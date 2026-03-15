@@ -35,7 +35,7 @@ def test_lambda_declared_nothrow_but_throws_reports_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 exception Boom()
 
@@ -59,7 +59,7 @@ def test_lambda_can_throw_rejected_for_nothrow_param(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
 	source = """
-module m_main
+module m_main;
 
 exception Boom()
 

@@ -10,7 +10,7 @@ def test_module_qualified_zero_field_ctor_no_expected_type(tmp_path: Path) -> No
 	main_src = tmp_path / "main.drift"
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		pub fn main() nothrow -> Int {
 			val _op = std.err.IteratorOpId::Next();
 			return 0;

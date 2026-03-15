@@ -35,7 +35,7 @@ def test_call_arity_mismatch_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
@@ -55,7 +55,7 @@ def test_call_type_mismatch_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
@@ -75,7 +75,7 @@ def test_method_keyword_args_rejected_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S {}
 

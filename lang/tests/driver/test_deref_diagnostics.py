@@ -34,7 +34,7 @@ def test_deref_requires_reference_value(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	val x = 1;
@@ -51,7 +51,7 @@ def test_deref_of_noncopy_from_ref_requires_copy(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Box {
 	xs: Array<Int>

@@ -23,7 +23,7 @@ def test_drift_sign_produces_sidecar_accepted_by_driftc(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -69,7 +69,7 @@ def test_drift_sign_uses_env_key_file_when_key_flag_missing(tmp_path: Path) -> N
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -129,7 +129,7 @@ def test_drift_sign_uses_env_key_cmd_when_key_flag_missing(tmp_path: Path) -> No
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -229,7 +229,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 

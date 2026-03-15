@@ -6,7 +6,7 @@ from lang.driftc.parser.parser import parse_program
 
 def test_parse_program_collects_imports_exports_and_functions():
 	source = """
-module a.b
+module a.b;
 export { foo, Bar, c.d.* };
 import c.d as cd;
 

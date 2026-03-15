@@ -7,7 +7,7 @@ def _parse(tmp_path: Path, *, test_build_only: bool) -> dict[str, object]:
 	source = tmp_path / "main.drift"
 	source.write_text(
 		"""
-module m_main
+module m_main;
 
 @test_build_only
 fn __test_helper() -> Int { return 1; }

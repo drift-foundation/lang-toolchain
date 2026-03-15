@@ -29,7 +29,7 @@ def test_callback_generic_typeapp_inside_generic_fn_codegen(
 	_write_file(
 		main_path,
 		"""
-module main
+module main;
 
 import std.core as core;
 

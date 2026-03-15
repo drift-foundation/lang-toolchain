@@ -42,7 +42,7 @@ def test_for_on_non_iterable_reports_error(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	for x in 1 { x; }
@@ -57,7 +57,7 @@ def test_next_on_non_iterator_reports_error(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 
@@ -75,7 +75,7 @@ def test_iterable_ufcs_reports_generic_error(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 
@@ -93,7 +93,7 @@ def test_for_without_stdlib_root_is_not_iterable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
@@ -110,7 +110,7 @@ def test_for_iter_result_without_iterator_impl_reports_error(tmp_path: Path) -> 
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 
@@ -135,7 +135,7 @@ def test_for_ignores_local_iterable_names(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 trait Iterable<T> { fn iter(self: &Self) -> Int; }
 trait SinglePassIterator<T> { fn next(self: &mut Self) -> Int; }
@@ -154,7 +154,7 @@ def test_for_over_function_returned_array_compiles(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn make() nothrow -> Array<Int> { return [1, 2, 3]; }
 
@@ -171,7 +171,7 @@ def test_for_over_borrowed_function_return_does_not_consume(tmp_path: Path) -> N
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn make() nothrow -> Array<Int> { return [1, 2, 3]; }
 
@@ -189,7 +189,7 @@ def test_for_over_owned_array_compiles(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
@@ -205,7 +205,7 @@ def test_for_over_borrowed_array_compiles(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
@@ -221,7 +221,7 @@ def test_for_over_owned_array_consumes_non_copy(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var a = [1, 2, 3];
@@ -239,7 +239,7 @@ def test_for_over_borrowed_array_does_not_consume(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
@@ -257,7 +257,7 @@ def test_method_receiver_borrowcheck_ref_and_mut(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 struct Box { value: Int }
 
@@ -282,7 +282,7 @@ def test_array_borrow_then_write_same_index_rejected(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
@@ -300,7 +300,7 @@ def test_array_borrow_then_write_disjoint_index_ok(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
@@ -318,7 +318,7 @@ def test_by_value_call_consumes_non_copy(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn consume(xs: Array<Int>) nothrow -> Int { return 0; }
 
@@ -338,7 +338,7 @@ def test_for_owned_array_borrows_non_copy(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn consume(xs: Array<Array<Int>>) nothrow -> Int {
 	for x in xs { x; }
@@ -357,7 +357,7 @@ def test_for_mut_array_is_iterable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var xs = [1, 2, 3];
@@ -375,7 +375,7 @@ def test_mut_iter_next_while_borrowed_is_error(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 import std.containers as containers;
@@ -397,7 +397,7 @@ def test_mut_iter_next_after_drop_is_ok(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 import std.containers as containers;
@@ -427,7 +427,7 @@ def test_borrowed_array_elem_same_index_write_rejected(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() -> Int {
 	var xs = [1, 2];

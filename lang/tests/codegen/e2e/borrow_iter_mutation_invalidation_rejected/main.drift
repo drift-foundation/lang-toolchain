@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn main() nothrow -> Int {
 	var arr = [1, 2];

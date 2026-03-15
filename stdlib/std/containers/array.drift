@@ -1,4 +1,4 @@
-module std.containers
+module std.containers;
 
 import std.iter as iter;
 import std.core as core;

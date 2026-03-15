@@ -15,7 +15,7 @@ struct File { }
 implement Debug for File { fn fmt(self: File) -> String { return ""; } }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	env = Env(default_module="main")
 	subst = {"Self": TypeKey(package_id=None, module="main", name="File", args=())}
 	res = prove_is(world, env, subst, "Self", TraitKey(package_id=None, module="main", name="Debug"))
@@ -29,7 +29,7 @@ trait Debug { fn fmt(self: Int) -> String }
 struct File { }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	env = Env(default_module="main")
 	subst = {"Self": TypeKey(package_id=None, module="main", name="File", args=())}
 	res = prove_is(world, env, subst, "Self", TraitKey(package_id=None, module="main", name="Debug"))
@@ -45,7 +45,7 @@ struct File { }
 implement A for File require Self is B { fn a(self: File) -> Int { return 0; } }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	env = Env(default_module="main")
 	subst = {"Self": TypeKey(package_id=None, module="main", name="File", args=())}
 	res = prove_is(world, env, subst, "Self", TraitKey(package_id=None, module="main", name="A"))
@@ -58,7 +58,7 @@ def test_solver_not_is_unknown_without_subst() -> None:
 trait A { fn a(self: Int) -> Int }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	env = Env(default_module="main")
 	expr = parser_ast.TraitNot(
 		loc=parser_ast.Located(line=1, column=1),
@@ -79,7 +79,7 @@ trait A { fn a(self: Int) -> Int }
 struct File { }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	env = Env(default_module="main")
 	subst = {"Self": TypeKey(package_id=None, module="main", name="File", args=())}
 	expr = parser_ast.TraitNot(
@@ -122,7 +122,7 @@ def test_solver_assumptions_short_circuit() -> None:
 trait A { fn a(self: Int) -> Int }
 """
 	)
-	world = build_trait_world(prog)
+	world = build_trait_world(prog, diag_phase="test")
 	subj = "T"
 	trait_key = TraitKey(package_id=None, module="main", name="A")
 	env = Env(default_module="main", assumed_true={(subj, trait_key)})

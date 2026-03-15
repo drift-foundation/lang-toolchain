@@ -1,4 +1,4 @@
-module std.runtime
+module std.runtime;
 
 import std.core as core;
 import std.mem as mem;

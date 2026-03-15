@@ -16,7 +16,7 @@ def test_workspace_parse_smoke(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int { return 0; }
 """.lstrip(),
@@ -36,7 +36,7 @@ def test_workspace_parse_order_is_deterministic(tmp_path: Path) -> None:
 	_write_file(
 		a,
 		"""
-module main
+module main;
 
 fn dup() nothrow -> Int { return 1; }
 """.lstrip(),
@@ -44,7 +44,7 @@ fn dup() nothrow -> Int { return 1; }
 	_write_file(
 		b,
 		"""
-module main
+module main;
 
 fn dup() nothrow -> Int { return 2; }
 """.lstrip(),

@@ -24,7 +24,7 @@ def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tup
 
 def test_owned_for_consumes_array_in_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.containers;
 

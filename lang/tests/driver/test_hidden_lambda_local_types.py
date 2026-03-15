@@ -10,7 +10,7 @@ def test_hidden_lambda_local_types_for_try_temps(tmp_path: Path) -> None:
 	source = tmp_path / "main.drift"
 	source.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 
 		import std.concurrent as conc;
 

@@ -31,7 +31,7 @@ def test_emit_ir_with_stdlib_import_has_no_internal_callinfo_errors(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.net as net;
 

@@ -1,4 +1,4 @@
-module ffimod
+module ffimod;
 
 pub extern "C" {
     fn add_ints(a: Int, b: Int) nothrow -> Int;

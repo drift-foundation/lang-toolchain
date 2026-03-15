@@ -41,7 +41,7 @@ def test_struct_ref_field_result_return_reaches_codegen_boundary(tmp_path: Path)
 	ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -76,7 +76,7 @@ def test_struct_ref_field_result_return_via_local_wrapper_reaches_codegen_bounda
 	ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -113,7 +113,7 @@ def test_struct_ref_field_array_store_rejected_at_checker_boundary(tmp_path: Pat
 	_ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -137,7 +137,7 @@ def test_struct_ref_field_local_return_rejected_at_checker_boundary(tmp_path: Pa
 	_ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -164,7 +164,7 @@ def test_struct_ref_field_callback_capture_rejected_at_checker_boundary(tmp_path
 	_ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -194,7 +194,7 @@ def test_struct_ref_field_hashmap_store_rejected_at_checker_boundary(tmp_path: P
 	_ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.containers as containers;
 
@@ -220,7 +220,7 @@ def test_struct_ref_field_treemap_store_rejected_at_checker_boundary(tmp_path: P
 	_ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.containers as containers;
 
@@ -246,7 +246,7 @@ def test_struct_ref_field_treemap_entry_receiver_not_false_positive(tmp_path: Pa
 	ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.containers as containers;
 

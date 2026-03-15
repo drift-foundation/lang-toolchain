@@ -1,4 +1,4 @@
-module main
+module main;
 
 	import std.concurrent as conc;
 	import std.core as core;

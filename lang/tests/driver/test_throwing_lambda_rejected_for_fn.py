@@ -40,7 +40,7 @@ def test_throwing_lambda_rejected_for_fn1(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 

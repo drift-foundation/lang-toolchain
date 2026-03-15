@@ -29,7 +29,7 @@ def test_emit_ir_map_literal_move_value_no_noncanonical_move_assert(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.log as log;
 import std.concurrent as conc;

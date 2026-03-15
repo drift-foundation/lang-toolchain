@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn bump(counter: &mut Int) nothrow -> Bool {
   *counter = *counter + 1;

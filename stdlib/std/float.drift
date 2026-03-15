@@ -1,4 +1,4 @@
-module std.float
+module std.float;
 
 import std.format as format;
 

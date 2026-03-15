@@ -20,7 +20,7 @@ def test_call_noncopy_moves_local(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 struct Box { s: String }
 

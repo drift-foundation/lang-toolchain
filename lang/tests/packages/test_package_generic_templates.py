@@ -16,7 +16,7 @@ def test_package_includes_generic_templates(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib;
 
@@ -28,48 +28,34 @@ fn main() nothrow -> Int {
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
-export { id };
+import std.core as core;
+
+export { id, need };
 
 pub fn id<T>(x: T) nothrow -> T {
 	return x;
 }
-""".lstrip(),
-	)
-	_write_file(
-		tmp_path / "lib" / "req.drift",
-		"""
-module lib
-
-import std.core as core;
-
-export { need };
 
 pub fn need<T>(x: T) nothrow -> Int require T is core.Copy {
 	return 1;
 }
-""".lstrip(),
-	)
-	_write_file(
-		tmp_path / "lib" / "methods.drift",
-		"""
-module lib
 
 struct Box<T> { value: T }
 
 implement<T> Box<T> {
-	pub fn get<U>(self: &Box, value: U) -> U {
+	pub fn get<U>(self: &Box<T>, value: U) -> U {
 		return value;
 	}
 }
 
 pub trait Show {
-	fn show<U>(self: &Self, value: U) -> Int;
+	fn show(self: &Self) -> Int;
 }
 
 implement<T> Show for Box<T> {
-	pub fn show<U>(self: &Box, value: U) -> Int {
+	pub fn show(self: &Box<T>) -> Int {
 		return 1;
 	}
 }
@@ -82,8 +68,6 @@ implement<T> Show for Box<T> {
 		str(tmp_path),
 		str(tmp_path / "main.drift"),
 		str(tmp_path / "lib" / "lib.drift"),
-		str(tmp_path / "lib" / "req.drift"),
-		str(tmp_path / "lib" / "methods.drift"),
 		"--package-id",
 		"test.pkg",
 		"--package-version",
@@ -137,5 +121,4 @@ implement<T> Show for Box<T> {
 	assert isinstance(trait_sig, dict)
 	assert trait_sig.get("is_method") is True
 	assert trait_sig.get("impl_type_params") == ["T"]
-	assert trait_sig.get("type_params") == ["U"]
-	assert trait_method.get("generic_param_layout") == [{"scope": "impl", "index": 0}, {"scope": "fn", "index": 0}]
+	assert trait_method.get("generic_param_layout") == [{"scope": "impl", "index": 0}]

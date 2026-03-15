@@ -26,7 +26,7 @@ def _write_std_mem_modules(tmp_path: Path) -> list[Path]:
 	_write_file(
 		mod_root / "std" / "mem" / "mem.drift",
 		"""
-module std.mem
+module std.mem;
 
 export { swap, replace };
 
@@ -43,7 +43,7 @@ def test_swap_requires_import(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	var x: Int = 1;
@@ -66,7 +66,7 @@ def test_std_mem_swap_is_intrinsic(tmp_path: Path, capsys: pytest.CaptureFixture
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module std.mem.test
+module std.mem.test;
 
 import std.mem as mem;
 

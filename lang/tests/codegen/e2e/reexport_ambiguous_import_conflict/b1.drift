@@ -1,4 +1,4 @@
-module b_part1
+module b_part1;
 import a as a;
 
 export { a.* };

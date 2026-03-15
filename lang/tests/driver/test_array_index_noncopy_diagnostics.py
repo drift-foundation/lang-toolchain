@@ -35,7 +35,7 @@ def test_noncopy_array_index_read_reports_user_diag_with_span(tmp_path: Path) ->
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Cell {
 	xs: Array<Int>
@@ -63,7 +63,7 @@ def test_noncopy_array_index_read_nested_array_reports_user_diag_with_span(tmp_p
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var xs: Array<Array<Int>> = [];

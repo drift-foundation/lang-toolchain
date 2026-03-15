@@ -11,7 +11,7 @@ def test_array_push_cross_module_variant_arg_does_not_require_unknown_param(tmp_
 	main_src = tmp_path / "main.drift"
 	rpc_src.write_text(textwrap.dedent(
 		"""
-		module mariadb.rpc
+		module mariadb.rpc;
 		pub variant RpcArg { Int(value: Int) }
 		pub fn arg_int(v: Int) nothrow -> RpcArg { return RpcArg::Int(v); }
 		pub fn new_args() nothrow -> Array<RpcArg> { var args: Array<RpcArg> = []; return move args; }
@@ -20,7 +20,7 @@ def test_array_push_cross_module_variant_arg_does_not_require_unknown_param(tmp_
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import mariadb.rpc as rpc;
 		fn main() nothrow -> Int {
 			var args: Array<rpc.RpcArg> = [];

@@ -22,7 +22,7 @@ def test_callinfo_collected_inside_try_blocks(tmp_path: Path, capsys: pytest.Cap
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"struct S { v: Int }",
 				"implement S {",
 				"	fn get(self: &S) nothrow -> Int {",
@@ -54,7 +54,7 @@ def test_callinfo_for_inline_lambda_callsite(tmp_path: Path, capsys: pytest.Capt
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"fn main() nothrow -> Int {",
 				"	val v = (|x| => x + 1)(1);",
 				"	return v;",

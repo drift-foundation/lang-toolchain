@@ -9,7 +9,7 @@ def test_fstring_unbalanced_brace_reports_diagnostic(tmp_path: Path) -> None:
 	src = tmp_path / "bad_unbalanced.drift"
 	src.write_text(
 		"""
-module m
+module m;
 import std.console as console;
 
 fn main() -> Int {
@@ -27,7 +27,7 @@ def test_fstring_empty_hole_reports_diagnostic(tmp_path: Path) -> None:
 	src = tmp_path / "bad_empty_hole.drift"
 	src.write_text(
 		"""
-module m
+module m;
 import std.console as console;
 
 fn main() -> Int {
@@ -45,7 +45,7 @@ def test_fstring_nested_braces_in_spec_reports_diagnostic(tmp_path: Path) -> Non
 	src = tmp_path / "bad_nested_spec.drift"
 	src.write_text(
 		"""
-module m
+module m;
 import std.console as console;
 
 fn main() -> Int {

@@ -7,7 +7,7 @@ from lang.driftc.parser import parser as p
 def test_parse_pub_top_level_decls() -> None:
 	prog = p.parse_program(
 		"""
-module m
+module m;
 
 pub fn f() -> Int { return 0; }
 fn g() -> Int { return 1; }

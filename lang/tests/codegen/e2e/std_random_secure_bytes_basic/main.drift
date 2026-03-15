@@ -1,4 +1,4 @@
-module std.random.test
+module std.random.test;
 
 import std.core as core;
 import std.random as random;

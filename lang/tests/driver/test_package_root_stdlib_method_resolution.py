@@ -13,7 +13,7 @@ def test_package_root_does_not_duplicate_std_methods(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -57,7 +57,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import std.containers as containers;
 

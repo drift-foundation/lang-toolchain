@@ -55,7 +55,7 @@ def test_fn1_bounded_scope_borrowed_capture_accepted(tmp_path: Path) -> None:
 	captures are non-escaping in v0".
 	"""
 	diags = _compile(tmp_path, """\
-module m
+module m;
 
 import std.core as core;
 
@@ -80,7 +80,7 @@ def test_non_fn_bounded_generic_borrowed_capture_still_rejected(tmp_path: Path) 
 	params get the allow_capture_invoke=True treatment.
 	"""
 	diags = _compile(tmp_path, """\
-module m
+module m;
 
 import std.core as core;
 
@@ -109,7 +109,7 @@ def test_callback1_satisfies_fn1_require(tmp_path: Path) -> None:
 	Callback1<A,R> satisfies the Fn1<A,R> require bound.
 	"""
 	diags = _compile(tmp_path, """\
-module m
+module m;
 
 import std.core as core;
 
@@ -137,7 +137,7 @@ def test_copy_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) -> N
 	avoids the borrowed-capture MIR limitation.
 	"""
 	diags = _compile(tmp_path, """\
-module m
+module m;
 
 import std.core as core;
 
@@ -168,7 +168,7 @@ def test_borrowed_capture_lambda_to_fn_bounded_generic_accepted(tmp_path: Path) 
 	The borrow checker validates escape levels before MIR lowering.
 	"""
 	diags = _compile(tmp_path, """\
-module m
+module m;
 
 import std.core as core;
 

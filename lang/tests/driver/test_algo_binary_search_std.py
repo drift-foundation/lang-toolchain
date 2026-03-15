@@ -41,7 +41,7 @@ def test_std_binary_search_requires_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.algo as algo;
 import std.iter as iter;
@@ -74,7 +74,7 @@ def test_std_binary_search_key_type_mismatch(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.algo as algo;
 

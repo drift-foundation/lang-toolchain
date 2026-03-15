@@ -33,7 +33,7 @@ def test_std_text_tokenizer_api_smoke(tmp_path: Path, capsys: pytest.CaptureFixt
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.text as text;
 

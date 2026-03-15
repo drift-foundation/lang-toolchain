@@ -1,4 +1,4 @@
-module main
+module main;
 
 pub const X: Int = 1;
 

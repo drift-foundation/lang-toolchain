@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Node(children: Array<Node>);
 struct Config(node: Node, count: Int);

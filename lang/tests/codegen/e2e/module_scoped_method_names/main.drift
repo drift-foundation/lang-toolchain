@@ -1,4 +1,4 @@
-module main
+module main;
 
 import a.geom as ag;
 import b.geom as bg;

@@ -49,7 +49,7 @@ def test_cross_module_exported_call_uses_wrapper_not_impl(tmp_path: Path) -> Non
 	(tmp_path / "acme" / "point" / "lib.drift").write_text(
 		"\n".join(
 			[
-				"module acme.point",
+				"module acme.point;",
 				"",
 				"export { Point, make_point };",
 				"",
@@ -65,7 +65,7 @@ def test_cross_module_exported_call_uses_wrapper_not_impl(tmp_path: Path) -> Non
 	(tmp_path / "main.drift").write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				"import acme.point as ap;",
 				"",
@@ -113,7 +113,7 @@ def test_cross_module_exported_call_uses_throw_abi(tmp_path: Path) -> None:
 	(tmp_path / "acme" / "lib" / "lib.drift").write_text(
 		"\n".join(
 			[
-				"module acme.lib",
+				"module acme.lib;",
 				"",
 				"export { get_value };",
 				"",
@@ -127,7 +127,7 @@ def test_cross_module_exported_call_uses_throw_abi(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				"import acme.lib as lib;",
 				"",
@@ -174,7 +174,7 @@ def test_generic_instantiation_uses_throw_abi(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				"fn id<T>(x: T) -> T {",
 				"\treturn x;",
@@ -225,7 +225,7 @@ def test_cross_module_generic_method_uses_wrapper_throw_abi(tmp_path: Path) -> N
 	(tmp_path / "acme" / "box" / "lib.drift").write_text(
 		"\n".join(
 			[
-				"module acme.box",
+				"module acme.box;",
 				"",
 				"export { Box, make };",
 				"",
@@ -247,7 +247,7 @@ def test_cross_module_generic_method_uses_wrapper_throw_abi(tmp_path: Path) -> N
 	(tmp_path / "main.drift").write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"",
 				"import acme.box as box;",
 				"",

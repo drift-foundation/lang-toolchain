@@ -34,7 +34,7 @@ def test_valid_drift_syntax_error_does_not_say_invalid_input(tmp_path: Path) -> 
 	f = tmp_path / "main.drift"
 	f.write_text(
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	val x = 42

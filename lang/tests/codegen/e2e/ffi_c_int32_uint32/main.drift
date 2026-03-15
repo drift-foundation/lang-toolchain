@@ -1,4 +1,4 @@
-module main
+module main;
 
 extern "C" fn add_i32(a: Int32, b: Int32) nothrow -> Int32;
 extern "C" fn mul_u32(x: Uint32, factor: Uint32) nothrow -> Uint32;

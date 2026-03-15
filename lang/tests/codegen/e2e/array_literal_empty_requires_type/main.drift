@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn main() -> Int {
 	val xs = [];

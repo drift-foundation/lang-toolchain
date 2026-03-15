@@ -51,7 +51,7 @@ def _assert_no_internal(errors: list) -> None:
 		(
 			"result_scalar_string_array_struct_copy_noncopy_and_nested_ok",
 			"""
-module m
+module m;
 import std.core as core;
 
 struct CopyPair(a: Int, b: Int);
@@ -91,7 +91,7 @@ fn main() nothrow -> Int {
 		(
 			"result_with_borrowed_aggregate_ok",
 			"""
-module m
+module m;
 import std.core as core;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -114,7 +114,7 @@ fn main() nothrow -> Int {
 		(
 			"borrowed_aggregate_array_store_rejected",
 			"""
-module m
+module m;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 fn main() nothrow -> Int {
@@ -130,7 +130,7 @@ fn main() nothrow -> Int {
 		(
 			"borrowed_aggregate_local_origin_return_rejected",
 			"""
-module m
+module m;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 fn bad() nothrow -> Statement {

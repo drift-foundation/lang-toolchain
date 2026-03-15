@@ -299,7 +299,7 @@ def test_method_resolution_failure_reports_diagnostic(tmp_path, capsys: pytest.C
 	src = tmp_path / "bad_method.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 struct Point { }
 
@@ -325,7 +325,7 @@ def test_cross_module_trait_dot_call_e2e(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_box" / "lib.drift",
 		"""
-module m_box
+module m_box;
 
 export { Box };
 
@@ -335,7 +335,7 @@ pub struct Box { pub value: Int }
 	_write_file(
 		mod_root / "m_trait" / "lib.drift",
 		"""
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -351,7 +351,7 @@ implement Show for m_box.Box {
 	_write_file(
 		mod_root / "m_main" / "main.drift",
 		"""
-module m_main
+module m_main;
 
 import m_box;
 import m_trait as t;
@@ -378,7 +378,7 @@ def test_cross_module_trait_ufcs_e2e(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_box" / "lib.drift",
 		"""
-module m_box
+module m_box;
 
 export { Box };
 
@@ -388,7 +388,7 @@ pub struct Box { pub value: Int }
 	_write_file(
 		mod_root / "m_trait" / "lib.drift",
 		"""
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -404,7 +404,7 @@ implement Show for m_box.Box {
 	_write_file(
 		mod_root / "m_main" / "main.drift",
 		"""
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -424,7 +424,7 @@ def test_receiver_prefers_ref_mut_over_ref(tmp_path: Path) -> None:
 	main_block, call_resolutions, _signatures = _resolve_main_block(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub struct Box { pub value: Int }
 
@@ -450,7 +450,7 @@ def test_receiver_prefers_ref_mut_over_value(tmp_path: Path) -> None:
 	main_block, call_resolutions, _signatures = _resolve_main_block(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub struct Box { pub value: Int }
 
@@ -476,7 +476,7 @@ def test_receiver_rvalue_prefers_value(tmp_path: Path) -> None:
 	main_block, call_resolutions, _signatures = _resolve_main_block(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub struct Box { pub value: Int }
 
@@ -503,7 +503,7 @@ def test_inherent_require_prefers_trait_dependency(tmp_path: Path) -> None:
 	main_block, result, _signatures, _module_exports, type_table = _resolve_main_with_meta(
 		tmp_path,
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -545,7 +545,7 @@ def test_inherent_require_incomparable_is_ambiguous(tmp_path: Path) -> None:
 	_main_block, result, _signatures, _module_exports, _type_table = _resolve_main_with_meta(
 		tmp_path,
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -578,7 +578,7 @@ def test_trait_impl_require_prefers_trait_dependency(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "m_lib" / "lib.drift",
 		"""
-module m_lib
+module m_lib;
 
 import std.core as core;
 
@@ -599,7 +599,7 @@ implement core.Copy for Item { }
 	_write_file(
 		tmp_path / "m_impl_a" / "lib.drift",
 		"""
-module m_impl_a
+module m_impl_a;
 
 import m_lib;
 
@@ -611,7 +611,7 @@ implement<T> m_lib.Show for m_lib.Box<T> require T is m_lib.Debug {
 	_write_file(
 		tmp_path / "m_impl_b" / "lib.drift",
 		"""
-module m_impl_b
+module m_impl_b;
 
 import m_lib;
 
@@ -623,7 +623,7 @@ implement<T> m_lib.Show for m_lib.Box<T> require T is m_lib.Printable {
 	main_block, result, _signatures, module_exports, _type_table = _resolve_main_with_meta(
 		tmp_path,
 		"""
-module main
+module main;
 
 import m_lib;
 import m_impl_a;

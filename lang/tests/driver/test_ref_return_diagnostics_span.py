@@ -35,7 +35,7 @@ def test_return_ref_local_rejected_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn bad() nothrow -> &Int {
 	val x = 1;
@@ -59,7 +59,7 @@ def test_return_mut_ref_from_shared_param_rejected_reports_span(tmp_path: Path) 
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn bad(x: &Int) nothrow -> &mut Int {
 	return x;

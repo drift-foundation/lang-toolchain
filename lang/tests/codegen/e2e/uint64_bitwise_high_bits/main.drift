@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var one: Uint64 = 1u64;

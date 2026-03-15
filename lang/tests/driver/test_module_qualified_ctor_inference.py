@@ -37,7 +37,7 @@ def _compile_source(src: str, tmp_path: Path):
 
 def test_non_generic_module_qualified_ctor_without_expected_type_ok(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 import std.concurrent as conc;
 import std.err as err;
@@ -54,7 +54,7 @@ fn main() nothrow -> Int {
 
 def test_generic_module_qualified_ctor_requires_expected_type(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 import std.core as core;
 import std.concurrent as conc;
@@ -71,7 +71,7 @@ fn main() nothrow -> Int {
 
 def test_generic_module_qualified_ctor_with_explicit_type_args_ok(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 import std.core as core;
 

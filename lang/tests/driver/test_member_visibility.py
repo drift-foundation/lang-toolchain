@@ -42,7 +42,7 @@ def test_private_field_access_is_error(tmp_path: Path) -> None:
 		tmp_path,
 		{
 			Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { Point, make };
 
@@ -56,7 +56,7 @@ pub fn make() nothrow -> Point {
 }
 """,
 			Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as lib;
 
@@ -77,7 +77,7 @@ def test_private_field_access_through_borrow_is_error(tmp_path: Path) -> None:
 		tmp_path,
 		{
 			Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { Point, make };
 
@@ -91,7 +91,7 @@ pub fn make() nothrow -> Point {
 }
 """,
 			Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as lib;
 
@@ -114,7 +114,7 @@ def test_public_field_access_is_ok(tmp_path: Path) -> None:
 		tmp_path,
 		{
 			Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { Point, make };
 
@@ -128,7 +128,7 @@ pub fn make() nothrow -> Point {
 }
 """,
 			Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as lib;
 
@@ -147,7 +147,7 @@ def test_private_field_in_constructor_is_error(tmp_path: Path) -> None:
 		tmp_path,
 		{
 			Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { Point };
 
@@ -157,7 +157,7 @@ pub struct Point {
 }
 """,
 			Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as lib;
 
@@ -176,7 +176,7 @@ def test_exported_value_using_private_type_is_error(tmp_path: Path) -> None:
 		tmp_path,
 		{
 			Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { make };
 
@@ -187,7 +187,7 @@ pub fn make() nothrow -> Hidden {
 }
 """,
 			Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as lib;
 

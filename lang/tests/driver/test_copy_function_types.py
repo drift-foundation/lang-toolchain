@@ -41,7 +41,7 @@ def test_function_types_are_copy(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn foo() nothrow -> Int { return 0; }
 

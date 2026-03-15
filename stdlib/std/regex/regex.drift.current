@@ -1,4 +1,4 @@
-module std.regex
+module std.regex;
 
 import std.core as core;
 import std.text as text;

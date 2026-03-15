@@ -41,7 +41,7 @@ def test_std_sort_in_place_allows_non_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.algo as algo;
 import std.iter as iter;
@@ -72,7 +72,7 @@ def test_std_sort_in_place_requires_permutable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.algo as algo;
 import std.iter as iter;

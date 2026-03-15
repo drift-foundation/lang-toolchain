@@ -11,7 +11,7 @@ from lang.driftc.parser import parser as p
 def test_parse_export_single_name() -> None:
 	prog = p.parse_program(
 		"""
-module m
+module m;
 export { a };
 """
 	)
@@ -24,7 +24,7 @@ export { a };
 def test_parse_export_multiple_names() -> None:
 	prog = p.parse_program(
 		"""
-module m
+module m;
 export { a, b };
 """
 	)
@@ -38,7 +38,7 @@ def test_export_trailing_comma_rejected() -> None:
 	with pytest.raises(UnexpectedInput):
 		p.parse_program(
 			"""
-module m
+module m;
 export { a, };
 """
 		)

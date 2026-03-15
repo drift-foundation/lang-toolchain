@@ -30,14 +30,14 @@ def _parse_workspace(tmp_path: Path, files: dict[Path, str]):
 def test_use_trait_resolves_and_records_scope(tmp_path: Path) -> None:
 	files = {
 		Path("m_traits/lib.drift"): """
-module m_traits
+module m_traits;
 
 export { Show };
 
 pub trait Show { fn show(self: Int) -> Int }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_traits as t;
 
@@ -57,14 +57,14 @@ fn main() nothrow -> Int{ return 0; }
 def test_use_trait_unknown_trait_is_error(tmp_path: Path) -> None:
 	files = {
 		Path("m_traits/lib.drift"): """
-module m_traits
+module m_traits;
 
 export { Show };
 
 pub trait Show { fn show(self: Int) -> Int }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_traits;
 
@@ -82,12 +82,12 @@ fn main() nothrow -> Int{ return 0; }
 def test_use_trait_requires_export(tmp_path: Path) -> None:
 	files = {
 		Path("m_traits/lib.drift"): """
-module m_traits
+module m_traits;
 
 pub trait Show { fn show(self: Int) -> Int }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_traits;
 
@@ -107,14 +107,14 @@ fn main() nothrow -> Int{ return 0; }
 def test_use_trait_requires_import_alias(tmp_path: Path) -> None:
 	files = {
 		Path("m_traits/lib.drift"): """
-module m_traits
+module m_traits;
 
 export { Show };
 
 pub trait Show { fn show(self: Int) -> Int }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 use trait missing.Show;
 
@@ -134,7 +134,7 @@ def test_use_trait_requires_workspace_pipeline_in_single_module_loader(tmp_path:
 	_write_file(
 		file_a,
 		"""
-module m_main
+module m_main;
 
 import m_traits;
 
@@ -146,7 +146,7 @@ fn main() nothrow -> Int{ return 0; }
 	_write_file(
 		file_b,
 		"""
-module m_main
+module m_main;
 
 fn other() nothrow -> Int{ return 1; }
 """,
@@ -164,7 +164,7 @@ def test_multi_file_single_module_loader_is_error(tmp_path: Path) -> None:
 	_write_file(
 		file_a,
 		"""
-module m_main
+module m_main;
 
 fn a() nothrow -> Int{ return 1; }
 """,
@@ -172,7 +172,7 @@ fn a() nothrow -> Int{ return 1; }
 	_write_file(
 		file_b,
 		"""
-module m_main
+module m_main;
 
 fn b() nothrow -> Int{ return 2; }
 """,

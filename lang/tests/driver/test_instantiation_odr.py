@@ -93,7 +93,7 @@ def _emit_generic_pkg(tmp_path: Path, *, module_id: str, pkg_name: str, require:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ id, Show }};
 pub trait Show {{
@@ -126,7 +126,7 @@ def _emit_box_pkg(tmp_path: Path, *, module_id: str, pkg_name: str) -> Path:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Box, make }};
 
@@ -165,7 +165,7 @@ def _emit_box_get_pkg(tmp_path: Path, *, module_id: str, pkg_name: str) -> Path:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Box, make }};
 
@@ -204,7 +204,7 @@ def _emit_box_id_pkg(tmp_path: Path, *, module_id: str, pkg_name: str) -> Path:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Box, make }};
 
@@ -243,7 +243,7 @@ def _emit_box_show_pkg(tmp_path: Path, *, module_id: str, pkg_name: str) -> Path
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Box, make, Show, Debug }};
 
@@ -325,7 +325,7 @@ def test_instantiation_index_marks_comdat_linkonce(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn id<T>(var x: T) nothrow -> T { return move x; }
 
@@ -362,7 +362,7 @@ def test_instantiation_missing_template_reports_error(tmp_path: Path, capsys: py
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.gen as gen;
 
@@ -398,7 +398,7 @@ def test_instantiation_constraint_failure_reports_error(tmp_path: Path, capsys: 
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.req as req;
 
@@ -446,7 +446,7 @@ def test_instantiation_dedup_across_packages(tmp_path: Path) -> None:
 	_write_file(
 		a_src,
 		"""
-module acme.a
+module acme.a;
 
 import acme.common as common;
 export { a };
@@ -485,7 +485,7 @@ pub fn a() -> Int {
 	_write_file(
 		b_src,
 		"""
-module acme.b
+module acme.b;
 
 import acme.common as common;
 export { b };
@@ -530,7 +530,7 @@ pub fn b() -> Int {
 	_write_file(
 		root_src,
 		"""
-module main
+module main;
 
 import acme.a as a;
 import acme.b as b;
@@ -581,7 +581,7 @@ def test_generic_function_infers_type_args_across_modules(tmp_path: Path) -> Non
 	_write_file(
 		user_mod_a,
 		"""
-module acme.user_a
+module acme.user_a;
 
 import acme.lib as lib;
 export { run_a };
@@ -594,7 +594,7 @@ pub fn run_a() -> Int {
 	_write_file(
 		user_mod_b,
 		"""
-module acme.user_b
+module acme.user_b;
 
 import acme.lib as lib;
 export { run_b };
@@ -644,7 +644,7 @@ def test_impl_generic_method_instantiated_across_packages(tmp_path: Path) -> Non
 	_write_file(
 		user_src,
 		"""
-module acme.user
+module acme.user;
 
 import acme.box as box;
 export { run };
@@ -692,7 +692,7 @@ def test_impl_generic_method_infers_type_args_across_packages(tmp_path: Path) ->
 	_write_file(
 		user_src,
 		"""
-module acme.user
+module acme.user;
 
 import acme.box as box;
 export { run };
@@ -741,7 +741,7 @@ def test_impl_method_type_params_instantiated_across_packages(tmp_path: Path) ->
 	_write_file(
 		user_mod_a,
 		"""
-module acme.user_a
+module acme.user_a;
 
 import acme.box as box;
 export { run_a };
@@ -755,7 +755,7 @@ pub fn run_a() -> Int {
 	_write_file(
 		user_mod_b,
 		"""
-module acme.user_b
+module acme.user_b;
 
 import acme.box as box;
 export { run_b };
@@ -811,7 +811,7 @@ def test_trait_generic_method_instantiated_across_packages(tmp_path: Path) -> No
 	_write_file(
 		user_src,
 		"""
-module acme.user
+module acme.user;
 
 import acme.box as box;
 export { run };
@@ -860,7 +860,7 @@ def test_trait_generic_method_dedup_across_modules_in_package(tmp_path: Path) ->
 	_write_file(
 		user_mod_a,
 		"""
-module acme.user_a
+module acme.user_a;
 
 import acme.box as box;
 export { run_a };
@@ -875,7 +875,7 @@ pub fn run_a() -> Int {
 	_write_file(
 		user_mod_b,
 		"""
-module acme.user_b
+module acme.user_b;
 
 import acme.box as box;
 export { run_b };

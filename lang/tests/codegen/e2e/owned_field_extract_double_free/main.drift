@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Builder(protocols: Array<String>, count: Int);
 struct Config(protocols: Array<String>);

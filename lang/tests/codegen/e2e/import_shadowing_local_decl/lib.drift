@@ -1,4 +1,4 @@
-module lib
+module lib;
 export { add };
 pub fn add() -> Int { return 1; }
 

@@ -40,7 +40,7 @@ def test_arith_mismatch_int_byte_reports_diag(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	val b = cast<Byte>(2);

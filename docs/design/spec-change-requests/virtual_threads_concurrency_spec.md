@@ -106,7 +106,7 @@ From top to bottom:
 ### 3.1. Virtual-thread spawning
 
 ```drift
-module std.concurrent
+module std.concurrent;
 
 struct VirtualThread<T>
     // opaque
@@ -154,7 +154,7 @@ Semantics:
 ### 3.2. Scoped/structured concurrency
 
 ```drift
-module std.concurrent
+module std.concurrent;
 
 struct Scope {
     // opaque
@@ -200,7 +200,7 @@ Semantics:
 ### 3.3. Blocking I/O (sockets)
 
 ```drift
-module std.net
+module std.net;
 
 struct TcpListener {
     // opaque
@@ -260,7 +260,7 @@ Semantics:
 ### 3.4. Sleep and timers
 
 ```drift
-module std.concurrent
+module std.concurrent;
 
 struct Duration { /* ... */ }
 
@@ -292,7 +292,7 @@ These APIs are **not** public, but are treated as language/runtime intrinsics. T
 Conceptual functions (actual linkage: `extern "C"` or similar):
 
 ```drift
-module lang.thread
+module lang.thread;
 
 // Opaque handle to a virtual thread.
 struct VThreadHandle { /* ... */ }
@@ -331,7 +331,7 @@ Normative requirements:
 ### 4.2. I/O and timers
 
 ```drift
-module lang.thread
+module lang.thread;
 
 // Register interest in I/O readiness for fd and associate a VT to be unparked.
 extern fn register_io(fd: Int, events: Int, vt: VThreadHandle) -> Int
@@ -362,7 +362,7 @@ All stdlib blocking I/O must go through a small internal helper that knows wheth
 Internal shape (not public):
 
 ```drift
-module runtime.io
+module runtime.io;
 
 fn block_on_io<F, R>(op: F) -> R
     where F is Callback0<R>
@@ -407,7 +407,7 @@ Notes:
 ### 5.2. Stdlib integration example (`TcpStream.read`)
 
 ```drift
-module std.net
+module std.net;
 
 struct TcpStream {
     fd: Int  // file descriptor
@@ -776,7 +776,7 @@ Normative requirement:
 ### 8.1. Drift-side API
 
 ```drift
-module std.concurrent
+module std.concurrent;
 
 struct ExecutorPolicy {
     // opaque builder

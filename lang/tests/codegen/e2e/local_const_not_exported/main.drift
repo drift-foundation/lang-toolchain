@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn main() nothrow -> Int {
 	pub const X: Int = 1;

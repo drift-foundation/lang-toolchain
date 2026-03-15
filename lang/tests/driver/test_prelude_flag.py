@@ -25,7 +25,7 @@ def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tup
 
 def test_default_rejects_unqualified_println(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	println("ok");
@@ -43,7 +43,7 @@ fn main() nothrow -> Int{
 
 def test_no_prelude_also_rejects_unqualified_println(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	println("ok");
@@ -61,7 +61,7 @@ fn main() nothrow -> Int{
 
 def test_no_prelude_explicit_import_allows_println(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.console as console;
 
@@ -79,7 +79,7 @@ fn main() nothrow -> Int{
 
 def test_explicit_import_allows_eprint_variants(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.console as console;
 
@@ -98,7 +98,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_stream_handles_are_copyable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 
@@ -120,7 +120,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_configured_builder_path_compiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 import std.concurrent as conc;
@@ -142,7 +142,7 @@ fn main() nothrow -> Int{
 
 def test_std_core_string_from_utf8_bytes_compiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.core as core;
 import std.io as io;
@@ -168,7 +168,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_configured_read_line_compiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 
@@ -187,7 +187,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_file_builder_path_compiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 import std.concurrent as conc;
@@ -213,7 +213,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_builder_fluent_chain_compiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 import std.concurrent as conc;
@@ -243,7 +243,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_error_code_helpers_compile(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 
@@ -262,7 +262,7 @@ fn main() nothrow -> Int{
 
 def test_std_io_file_builder_append_mode_chain_no_hang(tmp_path: Path) -> None:
 	main_src = """
-module m_main
+module m_main;
 
 import std.io as io;
 import std.concurrent as conc;

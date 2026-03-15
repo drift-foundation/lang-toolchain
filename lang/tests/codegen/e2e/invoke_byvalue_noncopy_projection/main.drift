@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Payload {
 	xs: Array<Int>

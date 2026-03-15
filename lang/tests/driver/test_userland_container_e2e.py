@@ -41,7 +41,7 @@ def test_userland_vec_container_e2e(tmp_path: Path) -> None:
 	_write_file(
 		vec_src,
 		"""
-module acme.vec
+module acme.vec;
 
 export { Vec, Show };
 
@@ -68,7 +68,7 @@ implement<T> Show for Vec<T> {
 	_write_file(
 		app_src,
 		"""
-module acme.app
+module acme.app;
 
 import acme.vec as vec;
 use trait vec.Show;

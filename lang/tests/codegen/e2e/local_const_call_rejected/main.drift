@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn foo() nothrow -> Int {
 	return 42;

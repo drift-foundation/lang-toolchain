@@ -45,7 +45,7 @@ def _build_registry(signatures: dict) -> tuple[CallableRegistry, dict[object, in
 def test_trait_enforce_lambda_arg_infers_fn0(tmp_path: Path) -> None:
 	files = {
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import std.concurrent as conc;
 

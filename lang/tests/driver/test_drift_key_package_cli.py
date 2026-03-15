@@ -73,7 +73,7 @@ def test_drift_package_inspect_signers_sig_dmp_index(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 

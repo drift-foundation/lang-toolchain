@@ -1,4 +1,4 @@
-module main
+module main;
 
 import lang.thread as thread;
 import std.mem as mem;

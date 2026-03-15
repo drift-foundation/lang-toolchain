@@ -1,4 +1,4 @@
-module main
+module main;
 
 extern "C" fn free_byte(ptr: RawPtr<Byte>) nothrow -> Void;
 extern "C" fn alloc_byte(b: Byte) nothrow -> RawPtr<Byte>;

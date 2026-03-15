@@ -289,7 +289,7 @@ Console helpers are provided by the standard module `std.console` and must be
 imported explicitly.
 
 ```drift
-module std.console
+module std.console;
 
 /// Writes UTF-8 text to the process standard output.
 /// Does not append a newline.
@@ -2929,7 +2929,7 @@ Only standard library `@unsafe` code touches these helpers.
 The runtime exposes three allocation primitives to the standard library:
 
 ```drift
-module lang.abi
+module lang.abi;
 
 struct RawBuffer { /* opaque */ }
 struct Layout { size: Int, align: Int }
@@ -3357,7 +3357,7 @@ Drift ships with a shared default reactor (epoll/kqueue/IOCP depending on platfo
 At the bottom layer the runtime exposes a minimal intrinsic surface to the standard library:
 
 ```drift
-module lang.thread
+module lang.thread;
 
 @intrinsic fn vt_spawn(entry: core.Callback0<Void>, exec: ExecutorHandle) nothrow -> VtHandle;
 @intrinsic fn vt_park() -> Void;
@@ -3686,7 +3686,7 @@ Extern `"C"` declarations participate in the standard Drift visibility and impor
 
 ```drift
 // internal/ffi.drift
-module internal.ffi
+module internal.ffi;
 
 pub extern "C" fn SSL_new(ctx: RawPtr<Byte>) nothrow -> RawPtr<Byte>;
 pub extern "C" fn SSL_free(ssl: RawPtr<Byte>) nothrow -> Void;
@@ -3696,7 +3696,7 @@ export { SSL_new, SSL_free };
 
 ```drift
 // internal/ssl.drift
-module internal.ssl
+module internal.ssl;
 
 import internal.ffi;
 

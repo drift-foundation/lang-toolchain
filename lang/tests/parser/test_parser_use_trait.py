@@ -7,7 +7,7 @@ from lang.driftc.parser import parser as p
 def test_parse_use_trait_records_trait_ref() -> None:
 	prog = p.parse_program(
 		"""
-module m_main
+module m_main;
 
 use trait m_traits.Show;
 

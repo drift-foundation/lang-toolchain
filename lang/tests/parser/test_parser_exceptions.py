@@ -12,7 +12,7 @@ def test_exception_decl_yields_event_code(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module foo.bar
+module foo.bar;
 
 exception EvtA(code: Int)
 

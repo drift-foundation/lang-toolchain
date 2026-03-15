@@ -28,7 +28,7 @@ def test_return_disallowed_in_match_expr_value_arm_reports_targeted_diagnostic(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 import std.core as core;
 

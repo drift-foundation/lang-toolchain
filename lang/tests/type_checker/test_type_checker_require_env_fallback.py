@@ -23,7 +23,7 @@ def test_require_env_fallback_uses_linked_world(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 trait Readable<T> { fn len(self: &Self) -> Int; }
 use trait Readable;

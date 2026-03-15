@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn bump(p: &mut Int, by: Int) nothrow -> Int {
 	*p += by;

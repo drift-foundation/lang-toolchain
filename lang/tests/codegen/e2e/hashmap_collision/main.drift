@@ -1,4 +1,4 @@
-module main
+module main;
 
 import std.containers as containers;
 import std.core as core;

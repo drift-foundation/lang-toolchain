@@ -1,4 +1,4 @@
-module std.net
+module std.net;
 
 import std.core as core;
 import std.io as io;

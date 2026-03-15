@@ -68,7 +68,7 @@ def test_trait_guard_positive_typechecks(tmp_path: Path) -> None:
 	_write_file(
 		path,
 		"""
-module main
+module main;
 
 trait Show { fn show(self: &Self) -> Int }
 

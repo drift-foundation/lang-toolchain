@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn len(s: String) nothrow -> Int {
 	return s.byte_length();

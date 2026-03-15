@@ -35,7 +35,7 @@ def test_noncopy_field_projection_from_borrow_is_rejected(tmp_path: Path) -> Non
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Payload {
 	xs: Array<Int>
@@ -67,7 +67,7 @@ def test_copy_nested_field_projection_from_borrow_is_allowed(tmp_path: Path) -> 
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Inner {
 	n: Int
@@ -95,7 +95,7 @@ def test_owned_noncopy_field_replace_extract_is_allowed(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.mem as mem;
 
@@ -129,7 +129,7 @@ def test_nested_noncopy_projection_from_borrow_reports_span(tmp_path: Path) -> N
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Payload {
 	xs: Array<Int>
@@ -167,7 +167,7 @@ def test_owned_nested_noncopy_projection_byvalue_call_rejected_with_span(tmp_pat
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Payload {
 	xs: Array<Int>
@@ -200,7 +200,7 @@ def test_owned_nested_noncopy_projection_replace_extract_is_allowed(tmp_path: Pa
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.mem as mem;
 
@@ -234,7 +234,7 @@ def test_borrowed_index_noncopy_projection_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Payload {
 	xs: Array<Int>
@@ -270,7 +270,7 @@ def test_move_non_place_operand_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	val x = move (1 + 2);
@@ -289,7 +289,7 @@ def test_borrow_conflict_in_same_statement_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn f(a: &mut Array<Int>, b: &Array<Int>) nothrow -> Int {
 	return b.len;
@@ -312,7 +312,7 @@ def test_move_from_reference_type_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
@@ -333,7 +333,7 @@ def test_copy_non_place_operand_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	val x = copy (1 + 2);
@@ -352,7 +352,7 @@ def test_borrow_mut_immutable_binding_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	val xs: Array<Int> = [];
@@ -372,7 +372,7 @@ def test_borrow_mut_through_shared_ref_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var xs: Array<Int> = [];

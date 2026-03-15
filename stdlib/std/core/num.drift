@@ -1,4 +1,4 @@
-module std.core.num
+module std.core.num;
 
 export {
 	wrapping_add_u64,

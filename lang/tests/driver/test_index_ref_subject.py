@@ -34,7 +34,7 @@ def test_index_on_ref_array_subject_is_allowed(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn first(xs: &Array<Int>) nothrow -> Int {
 	return xs[0];

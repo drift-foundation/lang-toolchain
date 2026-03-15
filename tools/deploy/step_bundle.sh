@@ -173,7 +173,7 @@ DOC_EOF
 
 # examples/
 cat > "${DIST}/examples/hello.drift" <<'EXAMPLE_EOF'
-module main
+module main;
 
 import std.console as console;
 

@@ -29,7 +29,7 @@ def test_trait_impl_method_inherits_interface_nothrow_when_omitted(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.containers as containers;
 import std.core as core;

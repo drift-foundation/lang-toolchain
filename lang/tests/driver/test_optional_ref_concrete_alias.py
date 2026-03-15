@@ -26,7 +26,7 @@ def test_concrete_optional_ref_instantiation_compiles(tmp_path: Path, capsys: py
 	_write_file(
 		root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 variant Opt<T> {
 	None,
@@ -61,7 +61,7 @@ def test_alias_type_in_variant_field_schema_compiles(tmp_path: Path, capsys: pyt
 	_write_file(
 		root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 variant Opt<T> {
 	None,

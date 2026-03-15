@@ -1,4 +1,4 @@
-module a
+module a;
 
 pub struct Point { pub x: Int, pub y: Int }
 

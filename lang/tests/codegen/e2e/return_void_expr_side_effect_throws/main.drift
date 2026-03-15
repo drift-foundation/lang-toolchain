@@ -1,4 +1,4 @@
-module m
+module m;
 
 // REGRESSION: return <void-expr> in a throws Void function must evaluate
 // the expression for side effects (can-throw path wraps in Result::Ok).

@@ -1,4 +1,4 @@
-module m
+module m;
 
 // REGRESSION: return <void-expr> in a nothrow Void function must evaluate
 // the expression for side effects before returning.

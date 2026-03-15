@@ -33,7 +33,7 @@ def test_nothrow_method_call_on_rvalue_receiver_is_not_marked_throwing(tmp_path:
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 struct Inner { value: Int }
 

@@ -42,7 +42,7 @@ def test_lambda_return_inferred_in_callback0(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 

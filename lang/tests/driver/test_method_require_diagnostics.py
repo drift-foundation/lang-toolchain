@@ -136,7 +136,7 @@ def _typecheck_main(files: dict[Path, str], *, main_module: str, tmp_path: Path)
 def test_method_require_failure_reports_obligation(tmp_path: Path) -> None:
 	files = {
 		Path("m/lib.drift"): """
-module m
+module m;
 
 pub trait Hashable { fn hash(self: Self) -> Int }
 
@@ -153,7 +153,7 @@ implement<T> Hashable for Box<T> require T is Hashable {
 export { Hashable, Box };
 """,
 		Path("main/main.drift"): """
-module main
+module main;
 
 import m;
 use trait m.Hashable;

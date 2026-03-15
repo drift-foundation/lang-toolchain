@@ -27,7 +27,7 @@ def test_result_variant_payload_is_sized_for_forward_nominal_ok_arm(tmp_path: Pa
 	_write_file(
 		mod_root / "wire" / "types.drift",
 		"""
-module wire.types
+module wire.types;
 
 pub struct Payload {
 	pub a: Int,
@@ -45,7 +45,7 @@ export { Payload };
 	_write_file(
 		mod_root / "wire" / "lib.drift",
 		"""
-module wire
+module wire;
 
 import std.core as core;
 import wire.types as types;
@@ -61,7 +61,7 @@ pub fn mk() nothrow -> core.Result<P, Int> {
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 import wire as wire;

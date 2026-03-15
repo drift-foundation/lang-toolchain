@@ -125,7 +125,7 @@ def _typecheck_main(src: str, tmp_path: Path) -> list[object]:
 def test_require_commas_enforced(tmp_path: Path) -> None:
 	diags = _typecheck_main(
 		"""
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 trait Debug { fn debug(self: Self) -> Int }

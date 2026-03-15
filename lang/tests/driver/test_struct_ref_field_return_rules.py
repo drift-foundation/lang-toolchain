@@ -35,7 +35,7 @@ def test_borrowed_aggregate_return_single_origin_allowed(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -63,7 +63,7 @@ def test_borrowed_aggregate_return_single_origin_via_local_wrapper_allowed(tmp_p
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -93,7 +93,7 @@ def test_borrowed_aggregate_return_from_local_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -118,7 +118,7 @@ def test_borrowed_aggregate_return_from_local_binding_rejected(tmp_path: Path) -
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -144,7 +144,7 @@ def test_borrowed_aggregate_return_multi_origin_rejected(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct PairRefs(a: &Int, b: &Int);
 
@@ -169,7 +169,7 @@ def test_borrowed_aggregate_pass_through_generic_default_retaining_rejected(tmp_
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -195,7 +195,7 @@ def test_borrowed_aggregate_store_in_array_push_rejected(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -218,7 +218,7 @@ def test_borrowed_aggregate_pass_by_ref_param_allowed(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct Session(id: Int);
 struct Statement(session: &mut Session);
@@ -246,7 +246,7 @@ def test_borrowed_aggregate_callback_capture_escape_rejected(tmp_path: Path) -> 
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.core as core;
 
@@ -275,7 +275,7 @@ def test_borrowed_aggregate_registry_store_rejected(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.runtime as rt;
 

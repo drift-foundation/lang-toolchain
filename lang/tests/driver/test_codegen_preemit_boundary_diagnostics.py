@@ -14,7 +14,7 @@ def test_codegen_preemit_contract_failure_is_diagnostic_not_assert(tmp_path: Pat
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	return 0;

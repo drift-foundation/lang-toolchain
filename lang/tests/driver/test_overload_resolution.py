@@ -108,7 +108,7 @@ def test_overloads_in_module(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m" / "lib.drift",
 		"""
-module m
+module m;
 
 export { f };
 
@@ -119,7 +119,7 @@ pub fn f(x: String) -> Int { return 2; }
 	_write_file(
 		mod_root / "main.drift",
 		"""
-module main
+module main;
 
 import m as m;
 

@@ -25,7 +25,7 @@ def test_throw_emits_captured_locals_into_error_frames(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 exception E(code: Int)
 

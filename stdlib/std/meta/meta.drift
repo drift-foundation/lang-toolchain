@@ -1,4 +1,4 @@
-module std.meta
+module std.meta;
 
 import std.core as core;
 import std.text as text;

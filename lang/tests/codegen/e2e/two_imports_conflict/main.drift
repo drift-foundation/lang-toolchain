@@ -1,4 +1,4 @@
-module main
+module main;
 import lib as m;
 import other as m;
 

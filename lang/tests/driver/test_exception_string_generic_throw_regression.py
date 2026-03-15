@@ -33,7 +33,7 @@ def test_generic_throw_exception_string_field_compiles(tmp_path: Path, capsys: p
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 exception E(tag: String)
 
@@ -60,7 +60,7 @@ def test_generic_throw_exception_string_field_after_optional_ref_match_compiles(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 exception E(tag: String)
 

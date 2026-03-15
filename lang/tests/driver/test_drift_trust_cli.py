@@ -23,7 +23,7 @@ def test_drift_trust_revoke_blocks_package_consumption(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -119,7 +119,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -193,7 +193,7 @@ def test_drift_trust_import_sidecar_adds_key_to_namespace(tmp_path: Path) -> Non
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { id };
 

@@ -1,4 +1,4 @@
-module std.tests.hash_wrap
+module std.tests.hash_wrap;
 
 import std.core.hash as hash;
 import std.core.num as num;

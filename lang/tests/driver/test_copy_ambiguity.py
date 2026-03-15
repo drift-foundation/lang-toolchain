@@ -40,7 +40,7 @@ def test_copy_ambiguity_is_not_satisfied(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 

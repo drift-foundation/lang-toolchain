@@ -11,7 +11,7 @@ def test_workspace_module_named_std_is_not_stdlib(tmp_path: Path) -> None:
 	src.write_text(
 		"\n".join(
 			[
-				"module std.fake",
+				"module std.fake;",
 				"fn ping() nothrow -> Int {",
 				"	return 1;",
 				"}",

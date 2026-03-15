@@ -31,7 +31,7 @@ def test_missing_semicolon_in_block_reports_error(tmp_path: Path, capsys: pytest
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	val a: Int = 1
@@ -51,7 +51,7 @@ def test_missing_semicolon_after_return_try_catch_reports_error(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 	exception Boom()
 
@@ -74,7 +74,7 @@ def test_value_block_allows_trailing_expr_without_semicolon(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 exception Boom()
 import std.console as console;
@@ -100,7 +100,7 @@ def test_compound_stmt_does_not_require_semicolon(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	while true {
@@ -123,7 +123,7 @@ def test_semicolon_after_compound_stmt_is_error(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	while true { break; };
@@ -141,7 +141,7 @@ def test_match_expr_and_stmt_ok(tmp_path: Path, capsys: pytest.CaptureFixture[st
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 variant Flag {
 	On,
@@ -176,7 +176,7 @@ def test_match_missing_comma_reports_error(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 variant Flag {
 	On,
@@ -205,7 +205,7 @@ def test_match_stmt_semicolon_is_error(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 variant Flag {
 	On,
@@ -235,7 +235,7 @@ def test_match_stmt_value_arm_is_error(
 	_write_file(
 		src,
 		"""
-module main
+module main;
 
 variant Flag {
 	On,

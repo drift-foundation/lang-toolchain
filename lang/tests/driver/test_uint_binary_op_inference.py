@@ -51,7 +51,7 @@ def test_uint_shift_result_inferred_for_bitwise(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var u: Uint = cast<Uint>(255);
@@ -74,7 +74,7 @@ def test_uint_xor_result_inferred(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(170);
@@ -99,7 +99,7 @@ def test_uint_add_sub_result_inferred(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(100);
@@ -124,7 +124,7 @@ def test_uint_mul_div_mod_result_inferred(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(200);

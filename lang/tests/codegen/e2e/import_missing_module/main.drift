@@ -1,4 +1,4 @@
-module main
+module main;
 import does_not_exist as does_not_exist;
 
 

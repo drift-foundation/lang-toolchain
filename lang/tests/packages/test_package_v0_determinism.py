@@ -1,7 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
-import zipfile
 from pathlib import Path
 
 from lang.driftc.driftc import main as driftc_main, host_word_bits
@@ -31,24 +30,24 @@ def test_emit_package_is_deterministic(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
 fn main() nothrow -> Int{
-	return lib.add(40, 2)
+	return lib.add(40, 2);
 }
 """.lstrip(),
 	)
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
 pub fn add(a: Int, b: Int) -> Int {
-	return a + b
+	return a + b;
 }
 """.lstrip(),
 	)
@@ -66,18 +65,17 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert b1 == b2
 
 	# Sanity: the artifact contains a deterministic manifest with the pinned markers.
-	with zipfile.ZipFile(out1) as zf:
-		manifest = zf.read("manifest.json").decode("utf-8")
-		assert "\"payload_kind\":\"provisional-dmir\"" in manifest
-		assert "\"payload_version\":0" in manifest
-		assert "\"unstable_format\":true" in manifest
+	pkg = load_package_v0(out1)
+	assert pkg.manifest["payload_kind"] == "provisional-dmir"
+	assert pkg.manifest["payload_version"] == 0
+	assert pkg.manifest["unstable_format"] is True
 
 
 def test_manifest_reports_iface_inline_bytes(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int{
 	return 0;

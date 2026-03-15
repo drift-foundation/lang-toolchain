@@ -121,7 +121,7 @@ def _emit_pkg_args(package_id: str) -> list[str]:
 
 
 _ACME_UTIL_SOURCE = """\
-module acme.util
+module acme.util;
 
 export { Counter, make_counter, Color, describe_color, Outcome };
 
@@ -273,7 +273,7 @@ def test_ext_entry_plumbing(
 		tmp_path, capsys, pkg=pkg,
 		entry="runner::main",
 		source="""\
-module runner
+module runner;
 
 import acme.util as util;
 
@@ -300,7 +300,7 @@ def test_ext_variant_ctor_inference(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -335,7 +335,7 @@ def test_ext_tombstone_exhaustiveness(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -370,7 +370,7 @@ def test_ext_boundary_nothrow_direct(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -397,7 +397,7 @@ def test_ext_boundary_nothrow_wrapper(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -426,7 +426,7 @@ def test_ext_module_qualified_ctor(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -454,7 +454,7 @@ def test_ext_template_fingerprint_clean(
 	rc, payload, messages, stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -487,7 +487,7 @@ def _audit_ir_symbols(ir: str) -> tuple[set[str], set[str], set[str]]:
 
 
 _CONSUMER_E2E_SOURCE = """\
-module runner
+module runner;
 
 import acme.util as util;
 
@@ -622,7 +622,7 @@ def _build_signed_std_io_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
 	_write_file(
 		mod_dir / "io.drift",
 		"""\
-module std.io
+module std.io;
 
 export { install_process_preamble };
 
@@ -679,7 +679,7 @@ def test_ext_preamble_not_force_seeded(
 	_write_file(
 		main_src,
 		"""\
-module runner
+module runner;
 
 import acme.util as util;
 
@@ -775,7 +775,7 @@ def test_ext_unsigned_package_rejected(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -805,7 +805,7 @@ def test_ext_tampered_package_rejected(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -825,7 +825,7 @@ def _build_std_testlib_package(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "testlib.drift",
 		"""\
-module std.testlib
+module std.testlib;
 
 export { ANSWER };
 
@@ -867,7 +867,7 @@ def test_ext_reserved_ns_unsigned_rejected(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import std.testlib as testlib;
 
@@ -918,7 +918,7 @@ def test_ext_unsigned_override_no_reserved_bypass(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import std.testlib as testlib;
 
@@ -953,7 +953,7 @@ fn main() nothrow -> Int {
 
 
 _ACME_VIS_SOURCE = """\
-module acme.vis
+module acme.vis;
 
 export { Showable, Wrapper, wrap_and_show };
 
@@ -1033,7 +1033,7 @@ def test_ext_nonlib_method_visibility(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.vis as vis;
 
@@ -1060,7 +1060,7 @@ def test_ext_nonlib_private_method_rejected(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.vis as vis;
 
@@ -1099,7 +1099,7 @@ def test_convergence_parity_pass1_state(
 			tmp_path, capsys, pkg=pkg,
 			entry="runner::main",
 			source="""\
-module runner
+module runner;
 
 import acme.util as util;
 
@@ -1118,7 +1118,7 @@ fn main() nothrow -> Int {
 
 
 _ACME_GENERIC_SOURCE = """\
-module acme.generic
+module acme.generic;
 
 export { Wrapper, make_wrapper, try_unwrap };
 
@@ -1194,7 +1194,7 @@ def test_ext_sig_preserves_linked_typeids(
 	rc, payload, messages, stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		source="""\
-module main
+module main;
 
 import acme.generic as gen;
 

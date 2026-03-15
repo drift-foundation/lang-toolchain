@@ -1,4 +1,4 @@
-module m
+module m;
 
 const SHIFT_AMT: Uint64 = 8u64;
 const MASK_BYTE: Uint64 = 255u64;

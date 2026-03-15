@@ -29,7 +29,7 @@ def test_callback1_accepts_generic_nothrow_typeapp(
 	_write_file(
 		main_path,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 

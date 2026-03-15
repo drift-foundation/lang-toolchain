@@ -194,7 +194,7 @@ def _resolve_main_block(tmp_path: Path, sources: dict[Path, str]) -> tuple[H.HBl
 def test_test_build_only_method_callinfo_is_direct(tmp_path: Path) -> None:
 	sources = {
 		Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { Foo, make };
 
@@ -210,7 +210,7 @@ pub fn make() nothrow -> Foo {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib;
 

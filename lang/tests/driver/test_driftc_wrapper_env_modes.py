@@ -39,7 +39,7 @@ def test_driftc_wrapper_asan_adds_sanitize_flags(tmp_path: Path) -> None:
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"\treturn 0;",
@@ -65,7 +65,7 @@ def test_driftc_wrapper_runtime_archive_mode_links_static_runtime(tmp_path: Path
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"	return 0;",
@@ -90,7 +90,7 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"	return 0;",
@@ -140,7 +140,7 @@ def test_driftc_wrapper_relative_output_from_non_repo_cwd(tmp_path: Path) -> Non
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"	return 0;",
@@ -162,7 +162,7 @@ def test_optimized_flag_adds_o2_to_clang(tmp_path: Path) -> None:
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"\treturn 0;",
@@ -206,7 +206,7 @@ def test_optimized_debug_info_override(tmp_path: Path) -> None:
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"import std.core;",
 				"fn main() nothrow -> Int {",
 				"\treturn 0;",

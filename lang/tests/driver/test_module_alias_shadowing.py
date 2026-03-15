@@ -33,7 +33,7 @@ def test_value_binding_cannot_shadow_module_alias(tmp_path: Path, capsys: pytest
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.mem as mem;
 

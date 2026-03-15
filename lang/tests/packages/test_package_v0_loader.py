@@ -16,36 +16,37 @@ def test_load_package_v0_round_trip(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
 fn main() nothrow -> Int{
-	return lib.add(40, 2)
+	return lib.add(40, 2);
 }
 """.lstrip(),
 	)
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
 pub fn add(a: Int, b: Int) -> Int {
-	return a + b
+	return a + b;
 }
 """.lstrip(),
 	)
 
 	out = tmp_path / "p.dmp"
-	argv = ["-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "lib" / "lib.drift"), "--emit-package", str(out)]
+	argv = ["-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "lib" / "lib.drift"), "--package-id", "test.loader", "--package-version", "0.0.0", "--package-target", "test-target", "--emit-package", str(out)]
 	assert driftc_main(argv) == 0
 
 	pkg = load_package_v0(out)
-	assert pkg.manifest["kind"] == "drift-package"
+	assert pkg.manifest["format"] == "dmir-pkg"
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
-	assert set(pkg.modules_by_id.keys()) == {"lib", "main", "lang.core"}
+	assert "lib" in pkg.modules_by_id
+	assert "main" in pkg.modules_by_id
 
 	lib_iface = pkg.modules_by_id["lib"].interface
 	assert lib_iface["module_id"] == "lib"

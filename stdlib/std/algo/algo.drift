@@ -1,4 +1,4 @@
-module std.algo
+module std.algo;
 
 import std.iter as iter;
 import std.core.cmp as cmp;

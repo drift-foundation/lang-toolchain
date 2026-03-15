@@ -1,4 +1,4 @@
-module main
+module main;
 
 extern "C" fn write_int(out: RawPtr<Int32>, value: Int32) nothrow -> Void;
 extern "C" fn get_alpn_selected(

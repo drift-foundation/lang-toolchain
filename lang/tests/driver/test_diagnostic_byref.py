@@ -38,7 +38,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_diagnostic_byref_impl_allows_noncopy(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Diagnostic;

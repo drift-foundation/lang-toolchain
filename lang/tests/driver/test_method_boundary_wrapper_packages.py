@@ -35,7 +35,7 @@ def _emit_method_pkg(tmp_path: Path, *, module_id: str, package_id: str) -> Path
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ S, make }};
 
@@ -78,7 +78,7 @@ def _emit_method_fnparam_pkg(tmp_path: Path, *, module_id: str, package_id: str)
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ S, make }};
 
@@ -318,7 +318,7 @@ def test_cross_package_method_call_uses_wrapper_fn_id(tmp_path: Path) -> None:
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import acme.pointm as P;
 
@@ -433,7 +433,7 @@ def test_package_method_fn_param_signature_roundtrip(tmp_path: Path) -> None:
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import acme.fnparam as P;
 
@@ -537,7 +537,7 @@ def test_std_method_call_nothrow_not_boundary(tmp_path: Path) -> None:
 	_write_file(
 		src_root / "std" / "foo.drift",
 		"""
-module std.foo
+module std.foo;
 
 export { S };
 
@@ -551,7 +551,7 @@ implement S {
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import std.foo as foo;
 

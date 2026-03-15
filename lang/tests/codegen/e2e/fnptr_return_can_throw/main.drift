@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn g(x: Int) nothrow -> Int { return x; }
 

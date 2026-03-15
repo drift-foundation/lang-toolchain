@@ -1,4 +1,4 @@
-module b
+module b;
 
 export { add };
 

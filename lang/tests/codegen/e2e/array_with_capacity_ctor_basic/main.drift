@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn main() nothrow -> Int {
 	var xs = Array<type Int>::with_capacity(8);

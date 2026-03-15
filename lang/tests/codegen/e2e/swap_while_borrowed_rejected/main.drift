@@ -1,4 +1,4 @@
-module std.mem.test
+module std.mem.test;
 
 import std.mem as mem;
 struct Point(x: Int, y: Int);

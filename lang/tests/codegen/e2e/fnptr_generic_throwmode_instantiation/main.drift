@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn apply<T>(f: Fn(T) nothrow -> T, x: T) nothrow -> T {
 	return f(x);

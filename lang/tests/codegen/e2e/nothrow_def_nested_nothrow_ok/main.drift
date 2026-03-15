@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn inner() nothrow -> Int {
 	return 2;

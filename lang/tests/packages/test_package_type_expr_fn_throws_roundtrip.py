@@ -52,6 +52,7 @@ def test_decode_type_expr_rejects_null_can_throw() -> None:
 
 def test_decode_type_table_rejects_null_fn_throws() -> None:
 	obj = {
+		"package_id": "test",
 		"defs": {
 			"1": {
 				"kind": "FUNCTION",
@@ -62,7 +63,12 @@ def test_decode_type_table_rejects_null_fn_throws() -> None:
 				"fn_throws": None,
 				"field_names": None,
 			}
-		}
+		},
+		"struct_schemas": [],
+		"struct_instances": [],
+		"exception_schemas": {},
+		"variant_schemas": {},
+		"provided_nominals": [],
 	}
 	with pytest.raises(ValueError, match="fn_throws"):
 		decode_type_table_obj(obj)

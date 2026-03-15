@@ -1,4 +1,4 @@
-module main
+module main;
 
 fn add1(x: Int) nothrow -> Int { return x + 1; }
 fn add2(x: Int) nothrow -> Int { return x + 2; }

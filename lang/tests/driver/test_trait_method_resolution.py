@@ -265,7 +265,7 @@ def _typecheck_named_fn(
 def test_trait_dot_call_succeeds_with_use_trait(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
@@ -280,7 +280,7 @@ implement Show for Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box as box;
 use trait box.Show;
@@ -305,7 +305,7 @@ fn main() nothrow -> Int{
 def test_trait_dot_call_requires_use_trait_same_module(tmp_path: Path) -> None:
 	files = {
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 struct S(x: Int);
 
@@ -334,7 +334,7 @@ fn main() nothrow -> Int{
 def test_trait_dot_call_with_use_trait_same_module(tmp_path: Path) -> None:
 	files = {
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 struct S(x: Int);
 
@@ -363,14 +363,14 @@ fn main() nothrow -> Int{
 def test_use_trait_external_module_path_without_import_alias(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -385,7 +385,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box as box;
 import m_trait as t;
@@ -411,7 +411,7 @@ fn main() nothrow -> Int{
 def test_use_trait_unknown_trait_is_error(tmp_path: Path) -> None:
 	files = {
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 use trait NotATrait;
 
@@ -437,7 +437,7 @@ fn main() nothrow -> Int{
 def test_use_trait_unknown_module_path_is_error(tmp_path: Path) -> None:
 	files = {
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 use trait missing.mod.Show;
 
@@ -463,7 +463,7 @@ fn main() nothrow -> Int{
 def test_trait_method_infers_method_type_params(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
@@ -478,7 +478,7 @@ pub fn map<U>(self: &Box<T>, var x: U) -> U { return move x; }
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box as box;
 use trait box.MapOne;
@@ -521,7 +521,7 @@ fn main() nothrow -> Int{
 def test_trait_not_in_scope_is_not_found(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
@@ -536,7 +536,7 @@ implement Show for Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box as box;
 
@@ -557,7 +557,7 @@ import m_box as box;
 def test_inherent_beats_trait_method(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
@@ -568,7 +568,7 @@ implement Box<Int> {
 }
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -583,7 +583,7 @@ implement Tag for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -608,14 +608,14 @@ fn main() nothrow -> Int{
 def test_trait_ambiguity_reports_modules(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_a.drift"): """
-module m_a
+module m_a;
 
 import m_box;
 
@@ -630,7 +630,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_b.drift"): """
-module m_b
+module m_b;
 
 import m_box;
 
@@ -645,7 +645,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_a;
@@ -670,14 +670,14 @@ fn main() nothrow -> Int{
 def test_trait_require_blocks_candidate(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -700,7 +700,7 @@ implement Show for m_box.Box<String> require String is Hashable {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -724,14 +724,14 @@ fn main() nothrow -> Int{
 def test_trait_private_impl_not_visible_across_modules(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -742,7 +742,7 @@ pub trait Show {
 export { Show };
 """,
 		Path("m_impl.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 import m_trait;
@@ -752,7 +752,7 @@ implement m_trait.Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -777,14 +777,14 @@ fn main() nothrow -> Int{
 def test_trait_same_trait_multiple_impls_ambiguous(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -795,7 +795,7 @@ pub trait Show {
 export { Show };
 """,
 		Path("m_a.drift"): """
-module m_a
+module m_a;
 
 import m_box;
 import m_trait;
@@ -805,7 +805,7 @@ implement m_trait.Show for m_box.Box<Int> {
 }
 """,
 		Path("m_b.drift"): """
-module m_b
+module m_b;
 
 import m_box;
 import m_trait;
@@ -815,7 +815,7 @@ implement m_trait.Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -840,7 +840,7 @@ fn main() nothrow -> Int{
 def test_trait_bound_does_not_expand_scope(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show };
 
@@ -853,7 +853,7 @@ implement Show for Int {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_trait;
 
@@ -873,7 +873,7 @@ fn main() nothrow -> Int{ return f<type Int>(1); }
 def test_trait_bound_with_use_trait_succeeds(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show };
 
@@ -886,7 +886,7 @@ implement Show for Int {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_trait;
 use trait m_trait.Show;
@@ -905,7 +905,7 @@ fn main() nothrow -> Int{ return f<type Int>(1); }
 def test_trait_bound_enforced_at_call_site(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show };
 
@@ -918,7 +918,7 @@ implement Show for Int {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_trait;
 use trait m_trait.Show;
@@ -940,14 +940,14 @@ fn main() nothrow -> Int{ return f<type String>("s"); }
 def test_ufcs_call_without_use_trait(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -962,7 +962,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -982,14 +982,14 @@ fn main() nothrow -> Int{
 def test_ufcs_disambiguates_traits(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_a.drift"): """
-module m_a
+module m_a;
 
 import m_box;
 
@@ -1004,7 +1004,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_b.drift"): """
-module m_b
+module m_b;
 
 import m_box;
 
@@ -1019,7 +1019,7 @@ implement Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_a;
@@ -1040,14 +1040,14 @@ fn main() nothrow -> Int{
 def test_ufcs_respects_method_visibility(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -1058,7 +1058,7 @@ pub trait Show {
 export { Show };
 """,
 		Path("m_impl.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 import m_trait;
@@ -1068,7 +1068,7 @@ implement m_trait.Show for m_box.Box<Int> {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -1091,7 +1091,7 @@ fn main() nothrow -> Int{
 def test_visibility_filter_applies_to_inherent_and_trait_candidates(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box { pub value: Int }
 
@@ -1102,7 +1102,7 @@ implement Box {
 }
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -1113,7 +1113,7 @@ pub trait Show {
 export { Show };
 """,
 		Path("m_impl.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 import m_trait;
@@ -1123,7 +1123,7 @@ implement m_trait.Show for m_box.Box {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -1148,14 +1148,14 @@ fn main() nothrow -> Int{
 def test_ufcs_respects_requirements(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
 export { Box };
 """,
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -1178,7 +1178,7 @@ implement Show for m_box.Box<String> require String is Hashable {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_trait;
@@ -1201,14 +1201,14 @@ fn main() nothrow -> Int{
 def test_ufcs_requires_exported_trait(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 pub trait Show {
 	fn show(self: Self) -> Int
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_trait;
 
@@ -1234,14 +1234,14 @@ fn main() nothrow -> Int{
 def test_trait_impl_index_dedupes_duplicate_impls(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_trait/lib.drift"): """
-module m_trait
+module m_trait;
 
 import m_box;
 
@@ -1250,7 +1250,7 @@ export { Show };
 pub trait Show { fn show(self: m_box.Box<Int>) -> Int }
 """,
 		Path("m_impl/lib.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 import m_trait as t;
@@ -1292,14 +1292,14 @@ implement t.Show for m_box.Box<Int> {
 def test_missing_trait_metadata_is_hard_error(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_traits/lib.drift"): """
-module m_traits
+module m_traits;
 
 import m_box;
 
@@ -1308,7 +1308,7 @@ export { Show };
 pub trait Show { fn show(self: m_box.Box<Int>) -> Int }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_traits as t;
@@ -1377,7 +1377,7 @@ fn main() nothrow -> Int{
 def test_use_trait_is_module_scoped(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 
 pub struct Box<T> { pub value: T }
 
@@ -1392,7 +1392,7 @@ implement Show for Box<Int> {
 }
 """,
 		Path("m_main_ok.drift"): """
-module m_main_ok
+module m_main_ok;
 
 import m_box;
 
@@ -1404,7 +1404,7 @@ fn ok() nothrow -> Int{
 }
 """,
 		Path("m_main_fail.drift"): """
-module m_main_fail
+module m_main_fail;
 
 import m_box;
 
@@ -1423,7 +1423,7 @@ fn fail() nothrow -> Int{
 def test_use_trait_module_scope_applies_to_captureless_lambda(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 pub struct Point { pub value: Int }
 
@@ -1436,7 +1436,7 @@ implement Show for Point {
 }
 """,
 		Path("m_main_good.drift"): """
-module m_main_good
+module m_main_good;
 
 import m_box;
 
@@ -1449,7 +1449,7 @@ fn good() nothrow -> Int {
 }
 """,
 		Path("m_main_bad.drift"): """
-module m_main_bad
+module m_main_bad;
 
 import m_box;
 
@@ -1506,7 +1506,7 @@ def test_std_core_fn1_require_auto_resolves_call(tmp_path: Path) -> None:
 	"""std.core.Fn1 in require clause auto-expands scope for .call() resolution."""
 	files = {
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import std.core as core;
 
@@ -1528,7 +1528,7 @@ def test_user_defined_fn1_does_not_auto_expand_scope(tmp_path: Path) -> None:
 	"""A user-defined trait named Fn1 must NOT be auto-injected into scope by the Fn* fallback."""
 	files = {
 		Path("m_fake.drift"): """
-module m_fake
+module m_fake;
 
 export { Fn1 };
 
@@ -1541,7 +1541,7 @@ implement Fn1<Int, Int> for Int {
 }
 """,
 		Path("m_main.drift"): """
-module m_main
+module m_main;
 
 import m_fake;
 

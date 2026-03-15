@@ -1,4 +1,4 @@
-module main
+module main;
 
 import std.err as err;
 import std.core as core;

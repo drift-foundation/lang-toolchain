@@ -33,7 +33,7 @@ def test_std_json_hashmap_object_model_compiles_without_noncopy_errors(tmp_path:
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.json as json;
 import std.containers as containers;
@@ -65,7 +65,7 @@ def test_std_json_legacy_node_mutation_helpers_are_rejected(tmp_path: Path, caps
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.json as json;
 

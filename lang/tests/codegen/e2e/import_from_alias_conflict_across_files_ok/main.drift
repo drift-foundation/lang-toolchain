@@ -1,4 +1,4 @@
-module main
+module main;
 
 import m_a as a;
 import m_b as b;

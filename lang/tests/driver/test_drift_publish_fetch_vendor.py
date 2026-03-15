@@ -32,7 +32,7 @@ def test_phase5_e2e_smoke_dir_source(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -146,7 +146,7 @@ def test_drift_publish_fetch_vendor_round_trip(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -264,7 +264,7 @@ by (priority, source_id), not by file order or scan order.
 		_write_file(
 			tmp_path / "lib" / "lib.drift",
 			f"""
-module lib
+module lib;
 
 export {{ add }};
 
@@ -346,7 +346,7 @@ def test_drift_fetch_rejects_ambiguous_identity_across_sources_unlocked(tmp_path
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -408,7 +408,7 @@ def test_drift_fetch_json_success_is_strict_json_only(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -471,7 +471,7 @@ def test_drift_fetch_json_failure_ambiguous_identity(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -588,7 +588,7 @@ def test_drift_vendor_skips_bad_entries_and_refuses_lock_with_json_report(tmp_pa
 	_write_file(
 		tmp_path / "a" / "a.drift",
 		"""
-module a
+module a;
 
 export { add };
 
@@ -600,7 +600,7 @@ pub fn add(x: Int, y: Int) -> Int {
 	_write_file(
 		tmp_path / "b" / "b.drift",
 		"""
-module b
+module b;
 
 export { add };
 
@@ -707,7 +707,7 @@ def test_drift_fetch_lock_mode_emits_structured_error_code_on_sha_mismatch(tmp_p
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -780,7 +780,7 @@ def test_drift_fetch_rejects_sha_mismatch_between_index_and_bytes(tmp_path: Path
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -840,7 +840,7 @@ def test_drift_fetch_rejects_identity_mismatch_in_index(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -944,7 +944,7 @@ package id.
 		_write_file(
 			tmp_path / "lib" / "lib.drift",
 			f"""
-module lib
+module lib;
 
 export {{ add }};
 

@@ -1,4 +1,4 @@
-module acme.boom
+module acme.boom;
 
 export { boom };
 

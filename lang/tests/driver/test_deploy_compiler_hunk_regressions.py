@@ -61,7 +61,7 @@ def _emit_chain_pkg(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "chain.drift",
 		"""\
-module acme.chain
+module acme.chain;
 
 export { entry };
 
@@ -106,7 +106,7 @@ def test_k9_reachable_drop_path_preserved(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.chain as chain;
 
@@ -142,7 +142,7 @@ def _emit_generic_pkg(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "genlib.drift",
 		"""\
-module acme.genlib
+module acme.genlib;
 
 export { identity };
 
@@ -182,7 +182,7 @@ def test_k4_fingerprint_mismatch_emits_note(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.genlib as genlib;
 
@@ -239,7 +239,7 @@ def test_k7_local_bad_receiver_caught(
 	_write_file(
 		src,
 		"""\
-module main
+module main;
 
 struct Foo { x: Int }
 
@@ -490,7 +490,7 @@ def _consumer_src(tmp_path: Path) -> Path:
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.genlib as genlib;
 
@@ -617,7 +617,7 @@ def test_k4_soft_skip_unknown_ir_kind(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -877,7 +877,7 @@ def test_k4_stdlib_deploy_consume_no_fingerprint_mismatch(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import std.containers as containers;
 
@@ -922,7 +922,7 @@ def test_k10_module_qualified_struct_ctor_from_package(
 	_write_file(
 		mod_dir / "concurrent.drift",
 		"""\
-module acme.concurrent
+module acme.concurrent;
 
 export { Duration };
 
@@ -948,7 +948,7 @@ pub struct Duration {
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.concurrent as conc;
 
@@ -984,7 +984,7 @@ def _emit_tombstone_variant_pkg(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "result.drift",
 		"""\
-module acme.result
+module acme.result;
 
 export { Outcome };
 
@@ -1023,7 +1023,7 @@ def test_k11_tombstone_match_exhaustiveness(
 	_write_file(
 		mod_dir / "result.drift",
 		"""\
-module acme.result
+module acme.result;
 
 export { Outcome };
 
@@ -1038,7 +1038,7 @@ pub variant Outcome<T, E> {
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.result as result;
 
@@ -1092,7 +1092,7 @@ def test_k11_tombstone_result_inference(
 	_write_file(
 		mod_dir / "result.drift",
 		"""\
-module acme.result
+module acme.result;
 
 export { Outcome };
 
@@ -1107,7 +1107,7 @@ pub variant Outcome<T, E> {
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.result as result;
 
@@ -1222,7 +1222,7 @@ def _emit_generic_variant_pkg(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "result.drift",
 		"""\
-module acme.result
+module acme.result;
 
 export { Outcome };
 
@@ -1271,7 +1271,7 @@ def test_k12_package_variant_ctor_inference(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.result as result;
 
@@ -1325,7 +1325,7 @@ def test_k12_unresolvable_generic_nominal_errors(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.result as result;
 
@@ -1369,7 +1369,7 @@ def _emit_nothrow_method_pkg(tmp_path: Path) -> Path:
 	_write_file(
 		mod_dir / "util.drift",
 		"""\
-module acme.util
+module acme.util;
 
 export { Counter, make_counter };
 
@@ -1424,7 +1424,7 @@ def test_k13_boundary_nothrow_direct_call(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -1473,7 +1473,7 @@ def test_k13_boundary_nothrow_direct_call_does_not_poison(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -1521,7 +1521,7 @@ def test_k13_wrapper_path_preserves_nothrow(
 	_write_file(
 		main_src,
 		"""\
-module main
+module main;
 
 import acme.util as util;
 
@@ -1572,7 +1572,7 @@ def test_k14_entry_flag_honored_with_packages(
 	_write_file(
 		main_src,
 		"""\
-module runner
+module runner;
 
 import acme.util as util;
 

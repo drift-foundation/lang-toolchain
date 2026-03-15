@@ -1,4 +1,4 @@
-module m_box
+module m_box;
 
 export { Box, make_box };
 

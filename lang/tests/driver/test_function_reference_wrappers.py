@@ -34,14 +34,14 @@ def _parse_workspace(tmp_path: Path, files: dict[Path, str]):
 def test_exported_function_reference_uses_wrapper_symbol(tmp_path: Path) -> None:
 	files = {
 		Path("mod_a/lib.drift"): """
-module mod_a
+module mod_a;
 
 export { id };
 
 pub fn id(x: Int) -> Int { return x; }
 """,
 		Path("mod_b/main.drift"): """
-module mod_b
+module mod_b;
 
 import mod_a as A;
 

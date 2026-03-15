@@ -33,7 +33,7 @@ def test_interface_value_dispatch_compiles(tmp_path: Path, capsys: pytest.Captur
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 interface Action {
 	fn run(self: &Self, x: Int) nothrow -> Int;
@@ -66,7 +66,7 @@ def test_interface_ufcs_dispatch_reports_explicit_unsupported_error(tmp_path: Pa
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 interface Action {
 	fn run(self: &Self, x: Int) nothrow -> Int;

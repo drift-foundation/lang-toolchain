@@ -35,7 +35,7 @@ def test_struct_ctor_unknown_field_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S { a: Int }
 
@@ -56,7 +56,7 @@ def test_struct_ctor_missing_field_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S { a: Int, b: Int }
 
@@ -77,7 +77,7 @@ def test_non_ctor_keyword_args_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
@@ -97,7 +97,7 @@ def test_struct_ctor_duplicate_field_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S { a: Int }
 
@@ -118,7 +118,7 @@ def test_struct_ctor_mixed_positional_named_reports_span(tmp_path: Path) -> None
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S { a: Int }
 
@@ -139,7 +139,7 @@ def test_variant_ctor_unknown_field_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 variant V {
 	A(x: Int),
@@ -164,7 +164,7 @@ def test_variant_ctor_missing_field_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 variant V {
 	A(x: Int, y: Int),

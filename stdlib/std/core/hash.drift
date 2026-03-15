@@ -1,4 +1,4 @@
-module std.core.hash
+module std.core.hash;
 
 import std.core.num as num;
 

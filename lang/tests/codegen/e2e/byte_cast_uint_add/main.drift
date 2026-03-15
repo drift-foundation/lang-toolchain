@@ -1,4 +1,4 @@
-module m
+module m;
 
 pub fn main() nothrow -> Int {
 	val b = cast<Byte>(65);

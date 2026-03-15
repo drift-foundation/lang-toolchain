@@ -39,7 +39,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_optional_on_none_accepts_throwing_lambda(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 

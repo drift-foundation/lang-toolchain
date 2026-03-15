@@ -30,7 +30,7 @@ def test_interface_method_fixed_width_rejected_in_user_module(tmp_path: Path) ->
 	modules, type_table, exc_catalog, module_exports, module_deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 interface I {
 	fn f(x: Int64) -> Int64
@@ -57,7 +57,7 @@ def test_interface_method_duplicate_param_names(tmp_path: Path) -> None:
 	modules, type_table, exc_catalog, module_exports, module_deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 interface I {
 	fn f(x: Int, x: Int) -> Int

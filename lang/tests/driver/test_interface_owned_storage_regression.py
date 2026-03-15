@@ -33,7 +33,7 @@ def test_interface_field_ctor_accepts_concrete_impl_by_move(tmp_path: Path, caps
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 interface Sink {
 	fn write(self: &Self) nothrow -> Int;
@@ -73,7 +73,7 @@ def test_interface_field_assignment_accepts_moved_interface_value(tmp_path: Path
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 interface Sink {
 	fn write(self: &Self) nothrow -> Int;

@@ -1,4 +1,4 @@
-module repro_mod
+module repro_mod;
 
 extern "C" fn puts(s: RawPtr<Byte>) nothrow -> Int32;
 

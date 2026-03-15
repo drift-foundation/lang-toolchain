@@ -31,7 +31,7 @@ def test_instantiation_preserves_callinfo_for_qualified_variant_ctor(
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.concurrent as conc;
 import std.core as core;

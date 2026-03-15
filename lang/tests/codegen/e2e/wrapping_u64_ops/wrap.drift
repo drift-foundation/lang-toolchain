@@ -1,4 +1,4 @@
-module std.tests.wrap
+module std.tests.wrap;
 
 import std.core.num as num;
 

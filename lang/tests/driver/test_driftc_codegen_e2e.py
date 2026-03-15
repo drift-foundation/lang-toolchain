@@ -125,7 +125,7 @@ def test_driftc_codegen_callback_indirect(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Callback1,
@@ -151,7 +151,7 @@ pub interface Callback1<A, R> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -193,7 +193,7 @@ def test_driftc_codegen_callback_indirect_zero_and_two_args(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Callback0,
@@ -226,7 +226,7 @@ pub interface Callback2<A, B, R> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -271,7 +271,7 @@ def test_driftc_codegen_callback_arc_mutex_stub(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Copy,
@@ -311,7 +311,7 @@ implement Copy for Void { }
 	mem_src = tmp_path / "mem.drift"
 	mem_src.write_text(
 		"""
-module std.mem
+module std.mem;
 
 export { Ptr, RawBuffer, alloc_uninit, dealloc, ptr_at_ref, ptr_at_mut, write, read };
 
@@ -340,7 +340,7 @@ implement<T> core.Copy for RawBuffer<T> { }
 	conc_src = tmp_path / "concurrent.drift"
 	conc_src.write_text(
 		"""
-module std.concurrent
+module std.concurrent;
 
 export { Arc, Mutex, MutexGuard, StateMachine, arc, mutex };
 
@@ -448,7 +448,7 @@ implement core.Destructible for Arc<Mutex<StateMachine>> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 import std.concurrent as conc;
@@ -508,7 +508,7 @@ def test_driftc_codegen_callback_stored_in_struct(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Callback1,
@@ -534,7 +534,7 @@ pub interface Callback1<A, R> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -594,7 +594,7 @@ def test_driftc_codegen_callback_param(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Callback1,
@@ -620,7 +620,7 @@ pub interface Callback1<A, R> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -679,7 +679,7 @@ def test_driftc_codegen_callback_param_zero_and_two_args(tmp_path: Path):
 	core_src = tmp_path / "core.drift"
 	core_src.write_text(
 		"""
-module std.core
+module std.core;
 
 export {
 	Callback0,
@@ -712,7 +712,7 @@ pub interface Callback2<A, B, R> {
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 import std.core as core;
 

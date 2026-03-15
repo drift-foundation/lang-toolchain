@@ -479,11 +479,17 @@ def _run_baseline_smoke_package(
 	smoke_dir.mkdir(parents=True, exist_ok=True)
 
 	consumer_src = smoke_dir / "smoke_consumer.drift"
-	# Minimal consumer: import using module namespace (not package name).
-	# Package name may have hyphens (net-tls) but Drift identifiers use
-	# underscores (net_tls).
+	# Generate a valid minimal Drift program that imports the staged package.
+	# Uses module_namespace (not package name) — hyphens are not valid
+	# Drift identifiers (net-tls → net_tls).
 	consumer_src.write_text(
-		f'import {art.module_namespace}\nfn main() {{}}\n',
+		f'module main;\n'
+		f'\n'
+		f'import {art.module_namespace};\n'
+		f'\n'
+		f'fn main() nothrow -> Int {{\n'
+		f'\treturn 0;\n'
+		f'}}\n',
 		encoding="utf-8",
 	)
 

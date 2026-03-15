@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn main() nothrow -> Int {
 	// Values above 2^32 — proves full 64-bit width

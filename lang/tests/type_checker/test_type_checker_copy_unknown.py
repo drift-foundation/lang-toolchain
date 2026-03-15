@@ -41,7 +41,7 @@ def _check_fn(src: str, fn_name: str, tmp_path: Path) -> list:
 def test_copy_unknown_in_generic_explicit_copy(tmp_path: Path) -> None:
 	diags = _check_fn(
 		"""
-module m_main
+module m_main;
 
 fn mk<T>(x: T) -> Int {
 	val y = copy x;
@@ -57,7 +57,7 @@ fn mk<T>(x: T) -> Int {
 def test_copy_unknown_in_array_dup_generic(tmp_path: Path) -> None:
 	diags = _check_fn(
 		"""
-module m_main
+module m_main;
 
 fn mk<T>(xs: Array<T>) -> Int {
 	val ys = xs.dup();

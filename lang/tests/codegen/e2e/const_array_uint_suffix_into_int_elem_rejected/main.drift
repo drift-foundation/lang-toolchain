@@ -1,4 +1,4 @@
-module main
+module main;
 
 const T: Array<Int> = [1u, 2u, 3u];
 

@@ -22,7 +22,7 @@ def test_method_signatures_have_receiver_metadata_workspace_and_single_file(tmp_
 	_write(
 		src,
 		"""
-module m
+module m;
 
 struct Point(x: Int, y: Int);
 

@@ -1,4 +1,4 @@
-module std.format
+module std.format;
 
 export {
 	format_bool,

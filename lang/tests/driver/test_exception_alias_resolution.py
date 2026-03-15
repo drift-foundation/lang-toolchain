@@ -18,7 +18,7 @@ def test_exception_alias_resolution(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 import std.core as core;
 import std.err as err;

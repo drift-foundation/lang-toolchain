@@ -41,7 +41,7 @@ def test_multipass_requires_copy(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 

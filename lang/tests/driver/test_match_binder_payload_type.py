@@ -51,7 +51,7 @@ def test_result_ok_binder_array_len(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 import std.codec as codec;
 import std.core as core;
 
@@ -82,7 +82,7 @@ def test_result_ok_binder_array_index(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 import std.codec as codec;
 import std.core as core;
 
@@ -115,7 +115,7 @@ def test_result_err_binder_field_access(tmp_path: Path) -> None:
 	diags = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 import std.codec as codec;
 import std.core as core;
 

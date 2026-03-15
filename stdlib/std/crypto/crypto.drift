@@ -1,4 +1,4 @@
-module std.crypto
+module std.crypto;
 
 import std.core as core;
 

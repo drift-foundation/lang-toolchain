@@ -1,4 +1,4 @@
-module std.text
+module std.text;
 
 import std.core as core;
 import std.io as io;

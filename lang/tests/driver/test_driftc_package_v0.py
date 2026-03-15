@@ -135,7 +135,7 @@ def _emit_lib_pkg(tmp_path: Path, *, module_id: str = "acme.lib") -> Path:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -166,7 +166,7 @@ def _emit_main_pkg(tmp_path: Path, *, module_id: str = "dep", package_id: str = 
 	_write_file(
 		module_dir / "main.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ main }};
 
@@ -197,7 +197,7 @@ def _emit_main_method_pkg(tmp_path: Path, *, module_id: str = "dep", package_id:
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ S }};
 
@@ -232,7 +232,7 @@ def _emit_hidden_fn_pkg(tmp_path: Path, *, module_id: str = "acme.hidden") -> Pa
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -267,7 +267,7 @@ def _emit_pub_hidden_fn_pkg(tmp_path: Path, *, module_id: str = "acme.hiddenpub"
 	_write_file(
 		module_dir / "lib.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -309,7 +309,7 @@ def _emit_star_reexport_pkg(
 	_write_file(
 		core_dir / "lib.drift",
 		f"""
-module {core_id}
+module {core_id};
 
 export {{ add }};
 
@@ -321,7 +321,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 	_write_file(
 		api_dir / "lib.drift",
 		f"""
-module {api_id}
+module {api_id};
 
 export {{ {core_id}.* }};
 """.lstrip(),
@@ -349,7 +349,7 @@ def _emit_const_pkg(tmp_path: Path, *, module_id: str = "acme.consts") -> Path:
 	_write_file(
 		module_dir / "consts.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ ANSWER }};
 
@@ -378,7 +378,7 @@ def _emit_point_type_only_pkg(tmp_path: Path, *, module_id: str = "acme.point") 
 	_write_file(
 		module_dir / "point.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Point }};
 
@@ -417,7 +417,7 @@ def _emit_point_pkg(tmp_path: Path, *, module_id: str) -> Path:
 	_write_file(
 		module_dir / "point.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Point, make }};
 
@@ -475,7 +475,7 @@ def _emit_optional_variant_pkg(
 	_write_file(
 		module_dir / "opt.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Maybe, foo }};
 
@@ -516,7 +516,7 @@ is emitted into the package.
 	_write_file(
 		module_dir / "exc.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ Boom }};
 
@@ -615,7 +615,7 @@ def test_emit_package_is_deterministic(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -627,7 +627,7 @@ fn main() nothrow -> Int{
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -680,7 +680,7 @@ def test_emit_package_is_deterministic_with_permuted_package_roots(tmp_path: Pat
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import acme.liba as liba;
 import acme.optb as optb;
@@ -747,7 +747,7 @@ def test_emit_package_is_deterministic_with_changed_package_filenames(tmp_path: 
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import acme.liba as liba;
 import acme.optb as optb;
@@ -815,7 +815,7 @@ def test_emit_package_is_deterministic_with_three_packages_and_derived_types(tmp
 	_write_file(
 		src_root / "main.drift",
 		"""
-module main
+module main;
 
 import acme.geom as g;
 
@@ -871,7 +871,7 @@ def test_load_package_v0_round_trip(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -883,7 +883,7 @@ fn main() nothrow -> Int{
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -919,7 +919,7 @@ def test_load_package_rejects_bad_blob_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -959,7 +959,7 @@ def test_load_package_rejects_bad_manifest_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -992,7 +992,7 @@ def test_load_package_rejects_bad_toc_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -1025,7 +1025,7 @@ def test_load_package_rejects_duplicate_toc_blob_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -1085,7 +1085,7 @@ def test_driftc_rejects_duplicate_module_id_across_packages(tmp_path: Path) -> N
 		_write_file(
 			root / "lib" / "lib.drift",
 			f"""
-module lib
+module lib;
 
 export {{ add }};
 
@@ -1112,7 +1112,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -1144,7 +1144,7 @@ def test_driftc_can_consume_package_with_additional_types_via_type_table_linking
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { S, make };
 
@@ -1173,7 +1173,7 @@ pub fn make() nothrow -> S {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -1208,7 +1208,7 @@ def test_driftc_rejects_dependency_main_entrypoint(tmp_path: Path, capsys: pytes
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1239,7 +1239,7 @@ def test_driftc_allows_dependency_method_named_main(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1276,7 +1276,7 @@ def test_driftc_rejects_duplicate_module_ids_across_packages(
 		_write_file(
 			module_dir / "mod.drift",
 			f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -1303,7 +1303,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1340,7 +1340,7 @@ def test_driftc_rejects_unsigned_reserved_namespace_package(
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1354,7 +1354,7 @@ fn main() nothrow -> Int {
 		_write_file(
 			module_dir / "evil.drift",
 			f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -1429,7 +1429,7 @@ def test_driftc_reserved_namespace_requires_core_trust_keys(
 	_write_file(
 		module_dir / "evil.drift",
 		f"""
-module {module_id}
+module {module_id};
 
 export {{ add }};
 
@@ -1457,7 +1457,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1533,7 +1533,7 @@ def test_driftc_dev_core_trust_requires_dev_flag(
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -1563,7 +1563,7 @@ def test_package_embedding_includes_only_call_graph_closure(tmp_path: Path) -> N
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -1594,7 +1594,7 @@ fn unused() nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -1642,7 +1642,7 @@ def test_driftc_rejects_unsigned_package_outside_allowlist(tmp_path: Path) -> No
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -1671,7 +1671,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -1699,7 +1699,7 @@ def test_driftc_missing_explicit_trust_store_is_reported_as_diagnostic(tmp_path:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int{
 	return 0;
@@ -1735,7 +1735,7 @@ def test_driftc_accepts_signed_package_when_required(tmp_path: Path, capsys: pyt
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -1841,7 +1841,7 @@ def test_driftc_rejects_signature_missing_module_in_strict_mode(tmp_path: Path, 
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badmod as badmod;
 
@@ -1881,7 +1881,7 @@ def test_driftc_rejects_missing_sidecar_when_signatures_required(tmp_path: Path,
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -1918,7 +1918,7 @@ def test_driftc_rejects_malformed_signature_sidecar_json(tmp_path: Path, capsys:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -1956,7 +1956,7 @@ def test_driftc_rejects_sidecar_package_sha_mismatch(tmp_path: Path, capsys: pyt
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2001,7 +2001,7 @@ def test_driftc_rejects_manifest_tamper_when_signatures_required(
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2040,7 +2040,7 @@ def test_driftc_rejects_sidecar_invalid_base64(tmp_path: Path, capsys: pytest.Ca
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2079,7 +2079,7 @@ def test_driftc_rejects_sidecar_wrong_sig_length(tmp_path: Path, capsys: pytest.
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2124,7 +2124,7 @@ def test_driftc_rejects_signed_package_when_kid_revoked(tmp_path: Path, capsys: 
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2196,7 +2196,7 @@ def test_driftc_accepts_if_any_signature_entry_is_valid(tmp_path: Path, capsys: 
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2253,7 +2253,7 @@ def test_driftc_rejects_valid_signature_when_kid_not_trusted(tmp_path: Path, cap
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2316,7 +2316,7 @@ def test_driftc_rejects_valid_signature_when_namespace_disallows_kid(tmp_path: P
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2355,7 +2355,7 @@ def test_driftc_rejects_sidecar_wrong_pubkey_length(tmp_path: Path, capsys: pyte
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2394,7 +2394,7 @@ def test_driftc_rejects_sidecar_invalid_pubkey_base64(tmp_path: Path, capsys: py
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.lib as lib;
 
@@ -2427,7 +2427,7 @@ def test_driftc_rejects_unsigned_package_without_manifest_marker(tmp_path: Path)
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -2465,7 +2465,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -2497,7 +2497,7 @@ def test_driftc_can_consume_package_exporting_generic_variant_optional(tmp_path:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.opt as opt;
 
@@ -2542,7 +2542,7 @@ def test_driftc_rejects_variant_schema_collision_between_source_and_package(tmp_
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 // Collides by name with the package's `Maybe<T>` schema.
 variant Maybe<T> {
@@ -2586,7 +2586,7 @@ def test_driftc_rejects_variant_schema_collision_between_packages(tmp_path: Path
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int{
 	return 0;
@@ -2621,7 +2621,7 @@ def test_driftc_rejects_import_of_non_exported_value_from_package(tmp_path: Path
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.hidden as hidden;
 
@@ -2657,7 +2657,7 @@ def test_driftc_rejects_import_of_pub_but_not_exported_value_from_package(tmp_pa
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.hiddenpub as hidden;
 
@@ -2694,7 +2694,7 @@ def test_driftc_can_consume_package_with_export_star(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.api as api;
 
@@ -2727,7 +2727,7 @@ def test_driftc_allows_import_of_exported_const_from_package(tmp_path: Path, cap
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.consts as consts;
 
@@ -2764,7 +2764,7 @@ def test_driftc_allows_import_of_exported_type_but_rejects_non_exported_value_fr
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.point as point;
 
@@ -2802,7 +2802,7 @@ def test_driftc_allows_two_modules_with_same_struct_name_from_packages(tmp_path:
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import a.geom as ag;
 import b.geom as bg;
@@ -2903,7 +2903,7 @@ def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badiface as badiface;
 
@@ -2987,7 +2987,7 @@ def test_driftc_rejects_package_with_exported_value_missing_interface_signature(
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badiface2 as badiface2;
 
@@ -3076,7 +3076,7 @@ def test_driftc_rejects_package_with_exports_mismatch_between_interface_and_payl
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badiface3 as badiface3;
 
@@ -3158,7 +3158,7 @@ Interface completeness: exported exceptions must have interface schema entries.
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badexc as badexc;
 
@@ -3239,7 +3239,7 @@ Interface completeness: exported variants must have interface schema entries.
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import acme.badvar as badvar;
 
@@ -3276,7 +3276,7 @@ MVP guardrail: exported methods are forbidden.
 	_write_file(
 		tmp_path / "m" / "lib.drift",
 		"""
-module m
+module m;
 
 export { Point };
 
@@ -3383,7 +3383,7 @@ fn dummy() nothrow -> Int { return 0; }
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int{ return 0 }
 """.lstrip(),
@@ -3412,7 +3412,7 @@ def test_driftc_can_consume_package_with_extern_c_declarations(tmp_path: Path) -
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { wrapper };
 
@@ -3442,7 +3442,7 @@ pub fn wrapper(x: Int32) nothrow -> Int32 {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -3482,7 +3482,7 @@ def test_driftc_can_consume_package_exporting_int32_uint32(tmp_path: Path) -> No
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { identity32, identityu32 };
 
@@ -3513,7 +3513,7 @@ pub fn identityu32(a: Uint32) nothrow -> Uint32 {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -3545,7 +3545,7 @@ def test_driftc_can_consume_package_exporting_uint64_byte(tmp_path: Path) -> Non
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { identity_u64, identity_byte };
 
@@ -3576,7 +3576,7 @@ pub fn identity_byte(a: Byte) nothrow -> Byte {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -3607,7 +3607,7 @@ def test_driftc_require_signatures_rejects_unsigned_packages(tmp_path: Path) -> 
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -3636,7 +3636,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
@@ -3675,7 +3675,7 @@ def test_driftc_multi_package_impl_id_no_collision(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "pkg_a" / "lib.drift",
 		"""
-module pkg_a.lib
+module pkg_a.lib;
 
 export { make_a };
 
@@ -3715,7 +3715,7 @@ pub fn make_a() nothrow -> Int {
 	_write_file(
 		tmp_path / "pkg_b" / "lib.drift",
 		"""
-module pkg_b.lib
+module pkg_b.lib;
 
 export { make_b };
 
@@ -3754,7 +3754,7 @@ pub fn make_b() nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import pkg_a.lib as a;
 import pkg_b.lib as b;
@@ -3791,7 +3791,7 @@ def test_driftc_package_rawptr_field_with_destructible(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 import std.core as core;
 
@@ -3825,7 +3825,7 @@ implement core.Destructible for Wrapper {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 import lib as lib;
@@ -3861,7 +3861,7 @@ def test_driftc_package_stdlib_method_call_wrapper(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 import std.core as core;
 
@@ -3890,7 +3890,7 @@ pub fn string_len(s: String) nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 import lib as lib;
@@ -3927,7 +3927,7 @@ def test_driftc_package_destroy_body_stdlib_method_wrapper(tmp_path: Path) -> No
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 import std.core as core;
 
@@ -3962,7 +3962,7 @@ implement core.Destructible for Wrapper {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 import lib as lib;
@@ -3999,7 +3999,7 @@ def test_driftc_package_destroy_body_transitive_pkg_target(tmp_path: Path) -> No
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 import std.core as core;
 
@@ -4038,7 +4038,7 @@ implement core.Destructible for Wrapper {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import std.core as core;
 import lib as lib;
@@ -4075,7 +4075,7 @@ def test_native_deps_manifest_roundtrip(tmp_path: Path) -> None:
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
 		module_dir / "lib.drift",
-		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+		"module acme.lib;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4116,7 +4116,7 @@ def test_package_deps_manifest_roundtrip(tmp_path: Path) -> None:
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
 		module_dir / "lib.drift",
-		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+		"module acme.lib;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4169,7 +4169,7 @@ def _emit_lib_pkg_with_native_deps(
 	module_dir = tmp_path.joinpath(*module_id.split("."))
 	_write_file(
 		module_dir / "lib.drift",
-		f"module {module_id}\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
+		f"module {module_id};\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
 	)
 	pkg_path = tmp_path / "lib.dmp"
 	args = [
@@ -4208,7 +4208,7 @@ def _run_consumer_link(
 
 	_write_file(
 		work / "main.drift",
-		"module main\n\nimport acme.lib as lib;\n\nfn main() nothrow -> Int {\n\treturn lib.add(1, 2);\n}\n",
+		"module main;\n\nimport acme.lib as lib;\n\nfn main() nothrow -> Int {\n\treturn lib.add(1, 2);\n}\n",
 	)
 
 	bin_path = work / "a.out"
@@ -4290,7 +4290,7 @@ def test_package_dep_bad_format_rejected(tmp_path: Path) -> None:
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
 		module_dir / "lib.drift",
-		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+		"module acme.lib;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4313,7 +4313,7 @@ def test_native_deps_and_package_deps_combined(tmp_path: Path) -> None:
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
 		module_dir / "lib.drift",
-		"module acme.lib\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+		"module acme.lib;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4351,7 +4351,7 @@ def _emit_versioned_pkg(
 	module_dir = src_root.joinpath(*module_id.split("."))
 	_write_file(
 		module_dir / "lib.drift",
-		f"module {module_id}\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
+		f"module {module_id};\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
 	)
 	pkg_out.parent.mkdir(parents=True, exist_ok=True)
 	rc = driftc_main(
@@ -4385,7 +4385,7 @@ def test_package_version_pin_selects(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4416,7 +4416,7 @@ def test_package_version_missing_fails(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4447,7 +4447,7 @@ def test_package_version_ambiguous_fails(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4474,7 +4474,7 @@ def test_package_version_single_unambiguous(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4503,7 +4503,7 @@ def test_dep_malformed_rejected(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4532,7 +4532,7 @@ def test_dep_duplicate_rejected(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[

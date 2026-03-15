@@ -35,7 +35,7 @@ def test_autoborrow_shared_receiver_allows_rvalue_place_chain(tmp_path: Path, ca
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 struct Inner { value: Int }
 
@@ -64,7 +64,7 @@ def test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion(tmp_p
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 struct Builder { x: Int }
 

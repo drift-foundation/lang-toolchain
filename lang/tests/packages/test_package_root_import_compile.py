@@ -16,7 +16,7 @@ def test_import_from_package_root_compiles_to_ir(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -47,7 +47,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 

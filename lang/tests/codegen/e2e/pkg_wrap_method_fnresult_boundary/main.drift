@@ -1,4 +1,4 @@
-module m
+module m;
 
 import std.containers as c;
 import std.iter as iter;

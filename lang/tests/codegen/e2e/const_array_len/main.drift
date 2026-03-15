@@ -1,4 +1,4 @@
-module main
+module main;
 
 const TABLE: Array<Int> = [10, 20, 30, 40, 50];
 

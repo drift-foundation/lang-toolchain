@@ -31,7 +31,7 @@ def test_droppable_variant_without_tombstone_is_allowed(tmp_path: Path) -> None:
 	_resolve(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 variant Maybe<T> {
 	Some(value: T),

@@ -23,8 +23,8 @@ from lang.driftc.core.types_core import TypeTable
 
 def test_uncaught_throw_infers_can_throw_without_diagnostic():
 	"""
-	A function with an uncaught throw is inferred can-throw even when the
-	signature does not explicitly opt into throwing.
+	A function declared can-throw with an uncaught throw is processed without
+	diagnostics. The checker infers `inferred_may_throw=True`.
 	"""
 	func_hirs = {
 		"f": H.HBlock(
@@ -35,8 +35,9 @@ def test_uncaught_throw_infers_can_throw_without_diagnostic():
 	}
 	table = TypeTable()
 	int_ty = table.ensure_int()
+	err_ty = table.ensure_error()
 	table.exception_schemas = {"m:Boom": ("m:Boom", [])}
-	signatures = {"f": FnSignature(name="f", param_type_ids=[], return_type_id=int_ty)}
+	signatures = {"f": FnSignature(name="f", param_type_ids=[], return_type_id=int_ty, declared_can_throw=True, error_type_id=err_ty)}
 	fn_id = FunctionId(module="main", name="f", ordinal=0)
 	checker = Checker(
 		signatures_by_id={fn_id: signatures["f"]},
@@ -47,6 +48,7 @@ def test_uncaught_throw_infers_can_throw_without_diagnostic():
 	)
 	checked = checker.check_by_id([fn_id])
 	assert checked.fn_infos_by_id[fn_id].declared_can_throw is True
+	assert checked.fn_infos_by_id[fn_id].inferred_may_throw is True
 	assert not checked.diagnostics
 
 

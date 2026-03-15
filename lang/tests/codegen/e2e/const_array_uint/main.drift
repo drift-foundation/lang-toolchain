@@ -1,4 +1,4 @@
-module main
+module main;
 
 const K: Array<Uint> = [42u, 99u, 7u];
 

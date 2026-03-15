@@ -35,7 +35,7 @@ def test_autoborrow_mut_param_rvalue_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn f(x: &mut Int) nothrow -> Int { return 0; }
 
@@ -56,7 +56,7 @@ def test_autoborrow_mut_receiver_rvalue_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 struct S { v: Int }
 

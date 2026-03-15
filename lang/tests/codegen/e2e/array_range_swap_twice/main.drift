@@ -1,4 +1,4 @@
-module main
+module main;
 
 import std.iter as iter;
 use trait iter.RandomAccessPermutable;

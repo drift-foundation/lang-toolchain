@@ -11,7 +11,7 @@ def test_module_const_ref_place_does_not_hit_binding_id_contract(tmp_path: Path)
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 const S: String = "abc";
 
@@ -52,7 +52,7 @@ def test_module_const_and_borrowed_field_in_constructor_args_compile(tmp_path: P
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 const USER: String = "root";
 
@@ -107,7 +107,7 @@ def test_mut_borrow_of_module_const_reports_checker_error_not_internal(tmp_path:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 const S: String = "abc";
 

@@ -28,7 +28,7 @@ def test_trait_proposition_rejected_in_value_position(tmp_path: Path) -> None:
 	diags = _parse_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub trait Debug { fn debug(self: &Self) -> Int; }
 
@@ -46,7 +46,7 @@ def test_trait_proposition_allowed_in_if_guard(tmp_path: Path) -> None:
 	diags = _parse_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub trait Debug { fn debug(self: &Self) -> Int; }
 
@@ -65,7 +65,7 @@ def test_trait_proposition_allowed_in_require_clause(tmp_path: Path) -> None:
 	diags = _parse_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 pub trait Debug { fn debug(self: &Self) -> Int; }
 

@@ -10,7 +10,7 @@ def test_variant_ctor_alias_resolves(tmp_path: Path) -> None:
 	main_src = tmp_path / "main.drift"
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import std.err as err;
 		pub fn main() nothrow -> Int {
 			val _op = err.IteratorOpId::Next();

@@ -32,7 +32,7 @@ This file defines the lexical rules, precedence, and productions for Drift. It i
 Top-level:
 ```
 Program      ::= (ModuleDecl | Item | TERMINATOR)*
-ModuleDecl   ::= "module" ModulePath
+ModuleDecl   ::= "module" ModulePath TERMINATOR
 ModulePath   ::= Ident ("." Ident)*
 Ident        ::= NAME | "move" | "copy"
 ```

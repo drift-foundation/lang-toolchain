@@ -25,7 +25,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_catch_unknown_event_reports_diagnostic(tmp_path: Path) -> None:
 	_, checked, _fn_ids_by_name = _compile_source(
 		"""
-module main
+module main;
 
 exception Boom()
 
@@ -50,7 +50,7 @@ fn main() -> Int {
 def test_declared_exception_enables_catch(tmp_path: Path) -> None:
 	mir_funcs, checked, fn_ids_by_name = _compile_source(
 		"""
-module main
+module main;
 
 exception Boom(msg: String)
 

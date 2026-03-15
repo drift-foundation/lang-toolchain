@@ -14,7 +14,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def test_match_ref_scrutinee_ok(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 fn main() nothrow -> Int{
 	val o = Optional::Some(1);

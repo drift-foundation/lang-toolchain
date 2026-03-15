@@ -34,7 +34,7 @@ def test_array_index_requires_int(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
@@ -52,7 +52,7 @@ def test_indexing_requires_array_value(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	val x = 1;

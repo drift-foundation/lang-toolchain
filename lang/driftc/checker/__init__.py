@@ -752,12 +752,13 @@ class Checker:
 				if not callinfo_ok_by_fn.get(fn_id, True):
 					continue
 				call_info_by_callsite_id = self._call_info_by_callsite_id.get(fn_id)
-				may_throw, throw_span, throw_note = self._function_may_throw(
+				may_throw, throw_span, throw_note, callinfo_diags = self._function_may_throw(
 					hir_block,
 					fn_infos,
 					fn_id,
 					call_info_by_callsite_id,
 				)
+				diagnostics.extend(callinfo_diags)
 				first_throw_span_by_fn.setdefault(fn_id, throw_span)
 				if throw_note:
 					first_throw_note_by_fn.setdefault(fn_id, throw_note)
@@ -904,7 +905,7 @@ class Checker:
 		*,
 		unknown_calls_throw: bool = False,
 		indexing_throws: bool = False,
-	) -> tuple[bool, Span, str | None]:  # type: ignore[name-defined]
+	) -> tuple[bool, Span, str | None, list[Diagnostic]]:  # type: ignore[name-defined]
 		"""
 		Walk a HIR block and conservatively decide if it may throw.
 
@@ -916,6 +917,7 @@ class Checker:
 		may_throw = False
 		first_span: Span | None = None
 		first_note: str | None = None
+		missing_callinfo_diags: list[Diagnostic] = []
 
 		def walk_expr(expr: H.HExpr, caught_events: set[str] | None, catch_all: bool) -> None:
 			nonlocal may_throw
@@ -994,14 +996,36 @@ class Checker:
 					walk_expr(kw.value, caught_events, catch_all)
 			elif isinstance(expr, H.HMethodCall):
 				if call_info_by_callsite_id is None:
-					raise AssertionError(
-						f"BUG: missing CallInfo map for method call during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})"
+					missing_callinfo_diags.append(
+						_chk_diag(
+							message=f"BUG: missing CallInfo map for method call during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})",
+							code="E_INTERNAL_MISSING_CALLINFO",
+							severity="error",
+							span=Span.from_loc(getattr(expr, "loc", None)),
+						)
 					)
+					# Conservative: treat as may-throw when CallInfo is unavailable.
+					may_throw = True
+					walk_expr(expr.receiver, caught_events, catch_all)
+					for arg in expr.args:
+						walk_expr(arg, caught_events, catch_all)
+					return
 				info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
 				if info is None:
-					raise AssertionError(
-						f"BUG: missing CallInfo for method call during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})"
+					missing_callinfo_diags.append(
+						_chk_diag(
+							message=f"BUG: missing CallInfo for method call during nothrow analysis (callsite_id={getattr(expr, 'callsite_id', None)})",
+							code="E_INTERNAL_MISSING_CALLINFO",
+							severity="error",
+							span=Span.from_loc(getattr(expr, "loc", None)),
+						)
 					)
+					# Conservative: treat as may-throw when CallInfo is unavailable.
+					may_throw = True
+					walk_expr(expr.receiver, caught_events, catch_all)
+					for arg in expr.args:
+						walk_expr(arg, caught_events, catch_all)
+					return
 				call_can_throw = info.sig.can_throw
 				if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
 					fn_info = fn_infos.get(info.target.symbol)
@@ -1197,7 +1221,7 @@ class Checker:
 			# other statements (HBreak/HContinue): continue
 
 		walk_block(block)
-		return may_throw, (first_span or Span()), first_note
+		return may_throw, (first_span or Span()), first_note, missing_callinfo_diags
 
 	def _expr_may_throw(
 		self,
@@ -1212,7 +1236,7 @@ class Checker:
 		from lang.driftc import stage1 as H
 
 		block = H.HBlock(statements=[H.HExprStmt(expr=expr)])
-		may_throw, _span, _note = self._function_may_throw(
+		may_throw, _span, _note, _callinfo_diags = self._function_may_throw(
 			block,
 			fn_infos,
 			current_fn,

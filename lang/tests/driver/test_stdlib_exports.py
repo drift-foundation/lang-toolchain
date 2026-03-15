@@ -18,7 +18,7 @@ def test_stdlib_exports_include_array_borrow_iter(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_main/main.drift",
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int { return 0; }
 """,
@@ -48,7 +48,7 @@ def test_stdlib_exports_include_hash_traits(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_main/main.drift",
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int { return 0; }
 """,
@@ -77,7 +77,7 @@ def test_stdlib_exports_include_callback_traits_and_interfaces(tmp_path: Path) -
 	_write_file(
 		mod_root / "m_main/main.drift",
 		"""
-module m_main
+module m_main;
 
 fn main() nothrow -> Int { return 0; }
 """,

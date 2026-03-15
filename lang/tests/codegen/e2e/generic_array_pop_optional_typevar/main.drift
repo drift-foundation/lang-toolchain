@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Bag<T> {
 	items: Array<T>

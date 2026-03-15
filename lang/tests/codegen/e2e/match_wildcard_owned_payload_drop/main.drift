@@ -1,4 +1,4 @@
-module m
+module m;
 
 variant Foo {
 	Bar(value: Array<Int>),

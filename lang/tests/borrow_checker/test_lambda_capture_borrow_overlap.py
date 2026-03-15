@@ -37,7 +37,7 @@ def _borrow_diags(src: str, *, tmp_path: Path) -> list[object]:
 def test_capture_shared_conflicts_with_mut_arg(tmp_path: Path) -> None:
 	diags = _borrow_diags(
 		"""
-module main
+module main;
 
 fn main() -> Int {
 	var x: Int = 1;
@@ -52,7 +52,7 @@ fn main() -> Int {
 def test_capture_mut_conflicts_with_shared_arg(tmp_path: Path) -> None:
 	diags = _borrow_diags(
 		"""
-module main
+module main;
 
 fn main() -> Int {
 	var x: Int = 1;
@@ -67,7 +67,7 @@ fn main() -> Int {
 def test_capture_field_conflicts_with_mut_arg(tmp_path: Path) -> None:
 	diags = _borrow_diags(
 		"""
-module main
+module main;
 
 struct S(f: Int, g: Int);
 fn main() -> Int {
@@ -83,7 +83,7 @@ fn main() -> Int {
 def test_capture_field_disjoint_mut_arg_ok(tmp_path: Path) -> None:
 	diags = _borrow_diags(
 		"""
-module main
+module main;
 
 struct S(f: Int, g: Int);
 fn main() -> Int {

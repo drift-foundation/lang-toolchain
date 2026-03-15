@@ -38,7 +38,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_assert_condition_requires_bool(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	assert(1);
@@ -54,7 +54,7 @@ fn main() nothrow -> Int {
 def test_assert_message_requires_string(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	assert(true, 123);

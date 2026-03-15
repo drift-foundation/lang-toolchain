@@ -1,4 +1,4 @@
-module m
+module m;
 
 // Regression: variant with Byte payload field must codegen correctly.
 // ConstructVariant was emitting i8* (pointer) instead of i8 (value).

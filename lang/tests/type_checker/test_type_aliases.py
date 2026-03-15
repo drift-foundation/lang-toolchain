@@ -30,7 +30,7 @@ def test_type_alias_basic(tmp_path: Path) -> None:
 	modules, type_table, exc_catalog, module_exports, module_deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 type MyInt = Int;
 
@@ -58,7 +58,7 @@ def test_type_alias_nested_and_generic(tmp_path: Path) -> None:
 	modules, type_table, exc_catalog, module_exports, module_deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 type MyInt = Int;
 type Pair<T> = Array<T>;
@@ -89,7 +89,7 @@ def test_type_alias_cycle_diagnostic(tmp_path: Path) -> None:
 	_mods, _table, _exc, _exports, _deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 type A = B;
 type B = A;

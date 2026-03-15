@@ -38,7 +38,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_try_trait_method_requires_use_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -57,7 +57,7 @@ import std.core as core;
 def test_try_trait_method_succeeds_with_use_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;
@@ -77,7 +77,7 @@ use trait core.Diagnostic;
 def test_try_trait_method_on_ref_succeeds_with_use_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;
@@ -97,7 +97,7 @@ use trait core.Diagnostic;
 def test_try_trait_requires_diagnostic_impl(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;
@@ -123,7 +123,7 @@ pub variant MyErr {
 def test_try_trait_into_try_uses_err_type_for_result_variant(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 import std.net as net;
@@ -143,7 +143,7 @@ use trait core.Diagnostic;
 def test_try_trait_accepts_diagnostic_impl(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;

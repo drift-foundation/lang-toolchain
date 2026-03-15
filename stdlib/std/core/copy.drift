@@ -1,4 +1,4 @@
-module std.core
+module std.core;
 
 import std.core.hash as hash;
 import std.mem as mem;

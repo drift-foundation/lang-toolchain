@@ -159,7 +159,7 @@ def _diag_snapshot(diags: list[object]) -> list[dict[str, object]]:
 def test_golden_requirement_not_satisfied(tmp_path: Path) -> None:
 	files = {
 		Path("main.drift"): """
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 
@@ -187,7 +187,7 @@ fn f(x: Box<Int>) -> Int{ return 0; }
 def test_golden_guard_not_decidable(tmp_path: Path) -> None:
 	files = {
 		Path("main.drift"): """
-module main
+module main;
 
 trait Show { fn show(self: Self) -> Int }
 
@@ -212,7 +212,7 @@ def test_golden_orphan_impl_parser_phase(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_main.drift",
 		"""
-module m_main
+module m_main;
 import m_a;
 import m_b;
 
@@ -251,7 +251,7 @@ def test_golden_overlapping_impls_parser_phase(tmp_path: Path) -> None:
 	_write_file(
 		mod_root / "m_main.drift",
 		"""
-module m_main
+module m_main;
 
 trait Debug { fn fmt(self: Self) -> Int }
 struct Box<T> { value: T }
@@ -279,26 +279,26 @@ implement Debug for Box<U> { fn fmt(self: Box<U>) -> Int { return 2; } }
 def test_golden_trait_method_ambiguity_message(tmp_path: Path) -> None:
 	files = {
 		Path("m_box.drift"): """
-module m_box
+module m_box;
 pub struct Box<T> { pub value: T }
 export { Box };
 """,
 		Path("m_a.drift"): """
-module m_a
+module m_a;
 import m_box;
 pub trait Show { fn show(self: m_box.Box<Int>) -> Int }
 export { Show };
 implement Show for m_box.Box<Int> { pub fn show(self: m_box.Box<Int>) -> Int { return 1; } }
 """,
 		Path("m_b.drift"): """
-module m_b
+module m_b;
 import m_box;
 pub trait Show { fn show(self: m_box.Box<Int>) -> Int }
 export { Show };
 implement Show for m_box.Box<Int> { pub fn show(self: m_box.Box<Int>) -> Int { return 2; } }
 """,
 		Path("main.drift"): """
-module main
+module main;
 import m_box;
 import m_a;
 import m_b;

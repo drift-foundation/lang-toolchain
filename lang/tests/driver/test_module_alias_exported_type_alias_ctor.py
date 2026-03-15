@@ -12,7 +12,7 @@ def test_module_alias_exported_type_alias_struct_ctor_resolves(tmp_path: Path) -
 	main_src = tmp_path / "main.drift"
 	other_src.write_text(textwrap.dedent(
 		"""
-		module m_other
+		module m_other;
 		pub struct Y {
 			pub v: Int
 		}
@@ -21,7 +21,7 @@ def test_module_alias_exported_type_alias_struct_ctor_resolves(tmp_path: Path) -
 	))
 	api_src.write_text(textwrap.dedent(
 		"""
-		module m_api
+		module m_api;
 		import m_other as other;
 		pub type X = other.Y;
 		export { X };
@@ -29,7 +29,7 @@ def test_module_alias_exported_type_alias_struct_ctor_resolves(tmp_path: Path) -
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import m_api as api;
 		pub fn main() nothrow -> Int {
 			val x = api.X(v = 7);

@@ -28,7 +28,7 @@ def test_require_rejects_value_subject_under_or(tmp_path: Path) -> None:
 	diags = _parse_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 trait A { fn a(self: Self) -> Int }
 trait B { fn b(self: Self) -> Int }
@@ -46,7 +46,7 @@ def test_require_rejects_self_under_not(tmp_path: Path) -> None:
 	diags = _parse_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 trait A { fn a(self: Self) -> Int }
 

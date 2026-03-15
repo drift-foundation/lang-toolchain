@@ -33,14 +33,14 @@ def test_call_abi_error_type_is_canonical_across_modules(tmp_path: Path) -> None
 	mod_b = tmp_path / "b.drift"
 	mod_a.write_text(
 		"""
-module a
+module a;
 fn boom() -> Int { return 1; }
 fn main() -> Int { return boom(); }
 """.lstrip()
 	)
 	mod_b.write_text(
 		"""
-module b
+module b;
 fn boom() -> Int { return 2; }
 fn main() -> Int { return boom(); }
 """.lstrip()

@@ -1,4 +1,4 @@
-module m
+module m;
 
 import std.concurrent as conc;
 import std.io as io;

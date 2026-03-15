@@ -1,4 +1,4 @@
-module main
+module main;
 
 variant Maybe<T> {
 	Some(value: T),

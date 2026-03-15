@@ -247,7 +247,7 @@ def _resolve_main_block(
 def test_method_resolution_cross_module_success(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
@@ -258,7 +258,7 @@ implement<T> Box<T> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 
@@ -282,14 +282,14 @@ fn main() nothrow -> Int{
 def test_module_alias_call_resolves_as_free_call(tmp_path: Path) -> None:
 	files = {
 		Path("m_lib/lib.drift"): """
-module m_lib
+module m_lib;
 
 export { spawn };
 
 pub fn spawn() nothrow -> Int { return 1; }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_lib as conc;
 
@@ -314,14 +314,14 @@ fn main() nothrow -> Int {
 def test_method_resolution_ambiguity_across_modules(tmp_path: Path) -> None:
 	files = {
 		Path("m_types/lib.drift"): """
-module m_types
+module m_types;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_a/lib.drift"): """
-module m_a
+module m_a;
 
 import m_types;
 
@@ -330,7 +330,7 @@ implement m_types.Box<Int> {
 }
 """,
 		Path("m_b/lib.drift"): """
-module m_b
+module m_b;
 
 import m_types;
 
@@ -339,7 +339,7 @@ implement m_types.Box<Int> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_types;
 import m_a;
@@ -412,14 +412,14 @@ fn main() nothrow -> Int{
 def test_method_visibility_controls_candidates(tmp_path: Path) -> None:
 	files = {
 		Path("m_types/lib.drift"): """
-module m_types
+module m_types;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_a/lib.drift"): """
-module m_a
+module m_a;
 
 import m_types;
 
@@ -428,7 +428,7 @@ implement m_types.Box<Int> {
 }
 """,
 		Path("m_b/lib.drift"): """
-module m_b
+module m_b;
 
 import m_types;
 
@@ -437,7 +437,7 @@ implement m_types.Box<Int> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_types;
 import m_a;
@@ -462,14 +462,14 @@ fn main() nothrow -> Int{
 def test_local_impl_wins_over_unimported_impl(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_impl/lib.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 
@@ -478,7 +478,7 @@ implement m_box.Box<Int> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 
@@ -506,14 +506,14 @@ fn main() nothrow -> Int{
 def test_private_method_not_visible_across_modules(tmp_path: Path) -> None:
 	files = {
 		Path("m_types/lib.drift"): """
-module m_types
+module m_types;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_impl/lib.drift"): """
-module m_impl
+module m_impl;
 
 import m_types;
 
@@ -522,7 +522,7 @@ implement m_types.Box<Int> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_types;
 import m_impl;
@@ -584,14 +584,14 @@ fn main() nothrow -> Int{
 def test_method_resolution_generic_impl_across_modules(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
 pub struct Box<T> { pub value: T }
 """,
 		Path("m_impl/lib.drift"): """
-module m_impl
+module m_impl;
 
 import m_box;
 
@@ -600,7 +600,7 @@ implement<T> m_box.Box<Array<T>> {
 }
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_box;
 import m_impl;
@@ -625,7 +625,7 @@ fn main() nothrow -> Int{
 def test_duplicate_method_signature_in_single_module_is_error(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 
@@ -666,14 +666,14 @@ implement Box<Int> {
 def test_ambiguity_notes_include_visibility_chain(tmp_path: Path, capsys) -> None:
 	files = {
 		Path("m_types/lib.drift"): """
-module m_types
+module m_types;
 
 export { Box };
 
 pub struct Box { pub value: Int }
 """,
 		Path("m_impl_a/lib.drift"): """
-module m_impl_a
+module m_impl_a;
 
 import m_types;
 
@@ -686,7 +686,7 @@ implement m_types.Box {
 }
 """,
 		Path("m_impl_b/lib.drift"): """
-module m_impl_b
+module m_impl_b;
 
 import m_types;
 
@@ -699,12 +699,12 @@ implement m_types.Box {
 }
 """,
 		Path("m_api/lib.drift"): """
-module m_api
+module m_api;
 
 export { m_impl_a.*, m_impl_b.* };
 """,
 		Path("m_main/main.drift"): """
-module m_main
+module m_main;
 
 import m_api;
 import m_types;
@@ -734,7 +734,7 @@ fn main() nothrow -> Int{
 def test_cross_module_method_call_uses_boundary_wrapper(tmp_path: Path) -> None:
 	files = {
 		Path("mod_a/lib.drift"): """
-module mod_a
+module mod_a;
 
 export { Point };
 
@@ -745,7 +745,7 @@ implement Point {
 }
 """,
 		Path("mod_b/main.drift"): """
-module mod_b
+module mod_b;
 
 import mod_a as A;
 
@@ -851,7 +851,7 @@ fn main() nothrow -> Int{
 def test_impl_index_keeps_overloaded_methods(tmp_path: Path) -> None:
 	files = {
 		Path("m_box/lib.drift"): """
-module m_box
+module m_box;
 
 export { Box };
 

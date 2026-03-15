@@ -35,7 +35,7 @@ def test_while_true_nested_match_all_paths_return_no_internal(tmp_path: Path) ->
 	ir, checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn pick(flag: Int) nothrow -> Int {
 	while true {

@@ -11,7 +11,7 @@ def test_module_alias_qualified_call_resolves(tmp_path: Path) -> None:
 	main_src = tmp_path / "main.drift"
 	util_src.write_text(textwrap.dedent(
 		"""
-		module m_util
+		module m_util;
 		pub fn add(a: Int, b: Int) nothrow -> Int {
 			return a + b;
 		}
@@ -19,7 +19,7 @@ def test_module_alias_qualified_call_resolves(tmp_path: Path) -> None:
 	))
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import m_util as util;
 		pub fn main() nothrow -> Int {
 			return util.add(2, 3);

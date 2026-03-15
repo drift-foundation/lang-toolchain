@@ -1,6 +1,28 @@
 # Drift development history
 
 ## 2026-03-14
+- **Required semicolons on `module` declarations and fixed checker CallInfo bug (0.27.51-dev)**:
+  Tightened the language surface and fixed a checker pipeline crash uncovered
+  during the semicolon cleanup.
+  - `module` declarations now require a trailing semicolon:
+    - parser grammar changed from accepting bare `module foo` to requiring
+      `module foo;`
+    - added parser regressions for accepted semicoloned forms and rejection of
+      missing-semicolon module declarations
+    - swept deploy-generated smoke source, docs, examples, stdlib, and tests
+      to the semicoloned form
+  - `drift deploy` package smoke now emits canonical semicoloned module syntax
+    in the generated consumer source.
+  - Fixed checker missing-CallInfo handling:
+    - missing method-call `CallInfo` during nothrow analysis no longer crashes
+      with `AssertionError`
+    - checker now emits recoverable `E_INTERNAL_MISSING_CALLINFO` diagnostics
+      and conservatively treats the call as may-throw
+  - Test follow-up cleanup:
+    - updated trait/checker/package tests for current parser and API contracts
+    - tightened trait-enforcement helpers so only the known inline
+      trait-require diagnostics are tolerated; unexpected diagnostics still fail
+
 - **Fixed `drift deploy` package namespace and target defaults (0.27.50-dev)**:
   Tightened the deploy tool against the first real downstream package smoke/build
   issues reported by TLS.

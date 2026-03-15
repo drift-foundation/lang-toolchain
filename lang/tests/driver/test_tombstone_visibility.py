@@ -37,7 +37,7 @@ def _compile_source(src: str, tmp_path: Path):
 
 def test_tombstone_ctor_is_not_constructible(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 variant Maybe<T> {
 	@tombstone Tombstone,
@@ -56,7 +56,7 @@ fn main() nothrow -> Int {
 
 def test_tombstone_ctor_is_not_matchable(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 variant Maybe<T> {
 	@tombstone Tombstone,

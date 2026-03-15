@@ -1,4 +1,4 @@
-module std.parse
+module std.parse;
 
 import std.core as core;
 

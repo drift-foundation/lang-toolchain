@@ -37,7 +37,7 @@ def test_driftc_accepts_sidecar_when_any_signature_valid_and_allowed(tmp_path: P
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
@@ -128,7 +128,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 

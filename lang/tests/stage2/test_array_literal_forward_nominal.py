@@ -20,7 +20,7 @@ def test_array_literal_forward_nominal_copy_allowed(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 	fn main() nothrow -> Int {
 		val pairs = [Pair(a = 1, b = 2), Pair(a = 3, b = 4)];
@@ -64,7 +64,7 @@ def test_array_literal_forward_nominal_non_copy_rejected(tmp_path: Path) -> None
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 	fn main() nothrow -> Int {
 		val files = [File(data = [1, 2]), File(data = [3, 4])];
@@ -100,7 +100,7 @@ def test_array_literal_typevar_copy_unknown(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 	fn mk<T>(x: T) nothrow -> Int {
 		val xs = [x];
@@ -141,7 +141,7 @@ def test_array_literal_forward_generic_wrapper_no_non_copy(tmp_path: Path) -> No
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 	fn mk<T>(x: T) nothrow -> Int {
 		val xs = [x];

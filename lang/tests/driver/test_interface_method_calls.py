@@ -18,7 +18,7 @@ def test_interface_method_call_on_impl_type(tmp_path: Path) -> None:
 	_write_file(
 		src,
 		"""
-module m_main
+module m_main;
 
 interface I {
 	fn call(self: &Self, v: Int) nothrow -> Int;

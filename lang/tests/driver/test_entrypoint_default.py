@@ -10,7 +10,7 @@ def test_entrypoint_falls_back_to_unique_main_module(tmp_path: Path) -> None:
 	src = tmp_path / "foo.drift"
 	src.write_text(textwrap.dedent(
 		"""
-		module foo
+		module foo;
 		pub fn main(argv: Array<String>) nothrow -> Int {
 			return 0;
 		}

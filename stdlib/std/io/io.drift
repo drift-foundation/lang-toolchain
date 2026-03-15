@@ -1,4 +1,4 @@
-module std.io
+module std.io;
 
 import std.core as core;
 import std.mem as mem;

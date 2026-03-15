@@ -1,4 +1,4 @@
-module main
+module main;
 
 pub fn add(x: Int) nothrow -> Int {
 	return x + 1;

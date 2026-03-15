@@ -35,7 +35,7 @@ def test_noncall_instantiation_slots_do_not_clobber_callsite_callinfo(tmp_path: 
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 import std.containers as containers;
 

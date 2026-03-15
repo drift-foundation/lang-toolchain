@@ -58,7 +58,7 @@ def test_move_var_param_allowed(tmp_path: Path) -> None:
 	diags = _typecheck_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct File { fd: Int }
 
@@ -74,7 +74,7 @@ def test_move_val_param_allowed(tmp_path: Path) -> None:
 	diags = _typecheck_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct File { fd: Int }
 
@@ -90,7 +90,7 @@ def test_move_self_allowed(tmp_path: Path) -> None:
 	diags = _typecheck_workspace(
 		tmp_path,
 		"""
-module main
+module main;
 
 struct Token { id: Int }
 

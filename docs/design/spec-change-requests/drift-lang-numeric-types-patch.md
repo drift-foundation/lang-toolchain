@@ -214,7 +214,7 @@ Bitmasks are one of the few common cases where explicit integer widths matter in
 `std.bits` defines a set of aliases for unsigned integer types:
 
 ```drift
-module std.bits
+module std.bits;
 
 // Natural-width mask: same width as Uint
 type Bits = Uint

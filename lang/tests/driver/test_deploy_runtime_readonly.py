@@ -70,7 +70,7 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 fn main() nothrow -> Int {
 	return 0;

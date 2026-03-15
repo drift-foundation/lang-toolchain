@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct Inner(arr: Array<Int>);
 struct Wrap(inner: Inner);

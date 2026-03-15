@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from lang.driftc.core.function_id import FunctionId
+from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import (
 	BasicBlock,
 	BinaryOpInstr,
@@ -15,6 +16,10 @@ from lang.driftc.checker import Checker, FnSignature
 
 def test_checker_builds_type_env_from_ssa():
 	"""Checker should build a CheckerTypeEnv from SSA using signature TypeIds."""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	err_ty = table.ensure_error()
+
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -33,11 +38,12 @@ def test_checker_builds_type_env_from_ssa():
 	ssa = MirToSSA().run(mir_func)
 
 	fn_id = FunctionId(module="main", name="f", ordinal=0)
-	signatures = {fn_id: FnSignature(name="f", return_type="Int", declared_can_throw=True)}
+	signatures = {fn_id: FnSignature(name="f", return_type="Int", declared_can_throw=True, param_type_ids=[], return_type_id=int_ty, error_type_id=err_ty)}
 	checker = Checker(
 		signatures_by_id=signatures,
 		hir_blocks_by_id={},
 		call_info_by_callsite_id={},
+		type_table=table,
 	)
 	checked = checker.check_by_id([fn_id])
 
@@ -51,6 +57,9 @@ def test_checker_types_basic_numeric_ops():
 	"""
 	Checker SSA typing should propagate scalar types through simple ops.
 	"""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -71,11 +80,12 @@ def test_checker_types_basic_numeric_ops():
 	ssa = MirToSSA().run(mir_func)
 
 	fn_id = FunctionId(module="main", name="add", ordinal=0)
-	signatures = {fn_id: FnSignature(name="add", return_type="Int")}
+	signatures = {fn_id: FnSignature(name="add", return_type="Int", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)}
 	checker = Checker(
 		signatures_by_id=signatures,
 		hir_blocks_by_id={},
 		call_info_by_callsite_id={},
+		type_table=table,
 	)
 	checker.check_by_id([fn_id])
 
@@ -93,6 +103,9 @@ def test_checker_type_env_ignores_void_calls():
 	"""
 	SSA typing should not assign types to dests of void-returning calls.
 	"""
+	table = TypeTable()
+	void_ty = table.ensure_void()
+
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -105,9 +118,10 @@ def test_checker_type_env_ignores_void_calls():
 
 	fn_id = FunctionId(module="main", name="noop", ordinal=0)
 	checker = Checker(
-		signatures_by_id={fn_id: FnSignature(name="noop", return_type_id=None, return_type="Void")},
+		signatures_by_id={fn_id: FnSignature(name="noop", return_type_id=void_ty, return_type="Void", param_type_ids=[], declared_can_throw=False)},
 		hir_blocks_by_id={},
 		call_info_by_callsite_id={},
+		type_table=table,
 	)
 	checker.check_by_id([fn_id])
 

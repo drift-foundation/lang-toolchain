@@ -14,7 +14,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def test_lambda_capture_duration_no_ssa_load_before_store(tmp_path: Path, capsys) -> None:
 	source = """
-module m_main
+module m_main;
 
 import std.concurrent as conc;
 import std.core as core;

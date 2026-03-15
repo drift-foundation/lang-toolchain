@@ -35,7 +35,7 @@ def test_assign_while_borrowed_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn read(r: &Int) nothrow -> Int {
 	return r;
@@ -60,7 +60,7 @@ def test_augassign_while_borrowed_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,
 		"""
-module m
+module m;
 
 fn read(r: &Int) nothrow -> Int {
 	return r;

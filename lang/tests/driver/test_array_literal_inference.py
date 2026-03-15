@@ -15,7 +15,7 @@ def _write_file(path: Path, content: str) -> None:
 
 def test_empty_array_literal_requires_type_annotation(tmp_path: Path) -> None:
 	src = """
-module main
+module main;
 
 fn main() -> Int {
     val xs = [];

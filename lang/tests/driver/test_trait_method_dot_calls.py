@@ -41,7 +41,7 @@ def test_trait_dot_call_on_type_param_requires_use_trait(tmp_path: Path) -> None
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 
@@ -70,7 +70,7 @@ def test_trait_dot_call_on_type_param_with_use_trait(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 import std.iter as iter;
 

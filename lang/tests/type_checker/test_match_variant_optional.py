@@ -30,7 +30,7 @@ def test_match_optional_scrutinee_is_variant(tmp_path: Path) -> None:
 	modules, type_table, exc_catalog, module_exports, module_deps, diagnostics = _compile(
 		tmp_path,
 		"""
-module m_main
+module m_main;
 
 fn run() -> Int {
 	val opt = Optional::Some(1);

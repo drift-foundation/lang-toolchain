@@ -1,4 +1,4 @@
-module std.random
+module std.random;
 
 import std.core as core;
 import std.mem as mem;

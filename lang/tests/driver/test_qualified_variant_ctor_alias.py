@@ -10,7 +10,7 @@ def test_module_alias_qualified_variant_ctor_resolves(tmp_path: Path) -> None:
 	main_src = tmp_path / "main.drift"
 	main_src.write_text(textwrap.dedent(
 		"""
-		module main
+		module main;
 		import std.concurrent as conc;
 		pub fn main() nothrow -> Int {
 			val _p = conc.SaturationPolicy::ReturnBusy();

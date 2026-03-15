@@ -1,4 +1,4 @@
-module types
+module types;
 
 export { Cell };
 

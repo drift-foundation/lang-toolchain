@@ -40,7 +40,7 @@ def test_destructible_impl_wrong_self_param_is_rejected(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 import std.core as core;
 
 struct Session { v: Int }
@@ -65,7 +65,7 @@ def test_copy_impl_on_noncopy_field_struct_is_rejected(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 import std.core as core;
 
 struct BadCopy { v: String }
@@ -86,7 +86,7 @@ def test_copy_impl_allows_struct_with_repeated_uint_fields(tmp_path: Path) -> No
 	diagnostics = _compile(
 		tmp_path,
 		"""
-module main
+module main;
 import std.core as core;
 
 struct Pair {

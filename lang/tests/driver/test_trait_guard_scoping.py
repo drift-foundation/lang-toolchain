@@ -161,7 +161,7 @@ def _typecheck_named_fn(
 def test_trait_guard_conjunction_adds_scope(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show, Debug };
 
@@ -172,7 +172,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 1; } }
 implement Debug for Int { pub fn debug(self: Int) -> Int { return 2; } }
 """,
 		Path("main.drift"): """
-module main
+module main;
 
 import m_trait;
 use trait m_trait.Show;
@@ -200,7 +200,7 @@ fn f<T>(x: T) -> Int {
 def test_trait_guard_or_does_not_add_scope(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show, Debug };
 
@@ -210,7 +210,7 @@ pub trait Debug { fn debug(self: Self) -> Int }
 implement Show for Int { pub fn show(self: Int) -> Int { return 1; } }
 """,
 		Path("main.drift"): """
-module main
+module main;
 
 import m_trait;
 use trait m_trait.Show;
@@ -237,7 +237,7 @@ fn f<T>(x: T) -> Int {
 def test_trait_guard_not_does_not_add_scope(tmp_path: Path) -> None:
 	files = {
 		Path("m_trait.drift"): """
-module m_trait
+module m_trait;
 
 export { Show };
 
@@ -246,7 +246,7 @@ pub trait Show { fn show(self: Self) -> Int }
 implement Show for Int { pub fn show(self: Int) -> Int { return 1; } }
 """,
 		Path("main.drift"): """
-module main
+module main;
 
 import m_trait;
 use trait m_trait.Show;

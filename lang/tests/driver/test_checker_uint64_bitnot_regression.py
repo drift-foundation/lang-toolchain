@@ -12,7 +12,7 @@ def test_uint64_bitnot_compiles_and_emits_i64(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module main
+module main;
 
 fn main() nothrow -> Int {
 	var x: Uint64 = cast<Uint64>(1);

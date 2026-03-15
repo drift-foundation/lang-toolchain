@@ -1,4 +1,4 @@
-module main
+module main;
 
 interface Adder {
 	fn add(self: &Self, v: Int) nothrow -> Int;

@@ -1,4 +1,4 @@
-module std.cli
+module std.cli;
 
 import std.core as core;
 import std.parse as parse_std;

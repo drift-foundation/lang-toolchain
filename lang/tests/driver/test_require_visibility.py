@@ -26,7 +26,7 @@ def _write_require_modules(tmp_path: Path, *, import_impls: bool) -> list[Path]:
 	_write_file(
 		mod_root / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { Show, id };
 
@@ -42,7 +42,7 @@ pub fn id<T>(var x: T) nothrow -> T require T is Show {
 	_write_file(
 		mod_root / "types" / "types.drift",
 		"""
-module types
+module types;
 
 export { Bad };
 
@@ -52,7 +52,7 @@ pub struct Bad { pub x: Int }
 	_write_file(
 		mod_root / "impls" / "impls.drift",
 		"""
-module impls
+module impls;
 
 import lib;
 import types;
@@ -66,7 +66,7 @@ implement lib.Show for types.Bad {
 	_write_file(
 		mod_root / "main" / "main.drift",
 		f"""
-module main
+module main;
 
 import lib;
 import types;

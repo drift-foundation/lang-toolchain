@@ -127,7 +127,7 @@ BLOCK_COMMENT: /\/\*([^*]|\*(?!\/))*\*\//
 
 program: (module_decl | item | TERMINATOR)*
 
-module_decl: MODULE module_path
+module_decl: MODULE module_path TERMINATOR
 module_path: NAME (DOT NAME)*
 ident: NAME | MOVE | COPY
 

@@ -16,7 +16,7 @@ def test_codegen_boundary_failure_is_diagnostic_not_assert(tmp_path: Path, monke
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -64,7 +64,7 @@ def test_codegen_pipeline_surfaces_mir_lowering_contract_failure_as_diagnostic(
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn add1(v: Int) nothrow -> Int {
 	return v + 1;
@@ -133,7 +133,7 @@ def test_codegen_pipeline_allows_fnresult_array_ok_payload(tmp_path: Path) -> No
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn mk() nothrow -> Array<Byte> {
 	var out: Array<Byte> = [];

@@ -1,8 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
-import zipfile
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -102,24 +100,34 @@ def test_load_package_rejects_bad_blob_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { add };
 
 pub fn add(a: Int, b: Int) -> Int {
-	return a + b
+	return a + b;
 }
 """.lstrip(),
 	)
 	pkg = tmp_path / "lib.dmp"
 	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "lib" / "lib.drift"), *_emit_pkg_args("lib"), "--emit-package", str(pkg)]) == 0
 
-	# Corrupt the manifest in-place (still valid JSON but changes bytes).
-	with zipfile.ZipFile(pkg, "a") as zf:
-		manifest = zf.read("manifest.json").decode("utf-8")
-		zf.writestr("manifest.json", manifest.replace("\"unsigned\":true", "\"unsigned\":false"))
+	# Corrupt a blob byte in-place so its SHA256 no longer matches the TOC.
+	data = pkg.read_bytes()
+	header_bytes = data[: dmir_pkg_v0.HEADER_SIZE_V0]
+	(
+		_magic, _version, _flags, _header_size,
+		manifest_len, _manifest_sha,
+		toc_len, _toc_entry_size, _toc_sha, _reserved,
+	) = dmir_pkg_v0._HEADER_STRUCT.unpack(header_bytes)
+	blob_start = dmir_pkg_v0.HEADER_SIZE_V0 + int(manifest_len) + (int(toc_len) * dmir_pkg_v0.TOC_ENTRY_SIZE_V0)
+	assert blob_start < len(data), "no blob region to corrupt"
+	# Flip one byte in the first blob.
+	corrupted = bytearray(data)
+	corrupted[blob_start] ^= 0xFF
+	pkg.write_bytes(bytes(corrupted))
 
-	with pytest.raises(ValueError, match="blob sha256 mismatch|manifest references unknown blob"):
+	with pytest.raises(ValueError, match="blob sha256 mismatch"):
 		load_package_v0(pkg)
 
 
@@ -130,12 +138,12 @@ def test_driftc_rejects_duplicate_module_id_across_packages(tmp_path: Path) -> N
 		_write_file(
 			root / "lib" / "lib.drift",
 			f"""
-module lib
+module lib;
 
 export {{ add }};
 
-fn add(a: Int, b: Int) -> Int {{
-	return a + b + {n}
+pub fn add(a: Int, b: Int) -> Int {{
+	return a + b + {n};
 }}
 """.lstrip(),
 		)
@@ -146,12 +154,12 @@ fn add(a: Int, b: Int) -> Int {{
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
 fn main() nothrow -> Int{
-	return lib.add(40, 2)
+	return lib.add(40, 2);
 }
 """.lstrip(),
 	)
@@ -177,12 +185,12 @@ def test_driftc_rejects_type_table_fingerprint_mismatch(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
 		"""
-module lib
+module lib;
 
 export { f };
 
 pub fn f() -> Float {
-	return 1.0
+	return 1.0;
 }
 """.lstrip(),
 	)
@@ -194,13 +202,13 @@ pub fn f() -> Float {
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib as lib;
 
 fn main() nothrow -> Int{
-	val x = lib.f()
-	return 0
+	val x = lib.f();
+	return 0;
 }
 """.lstrip(),
 	)
@@ -226,7 +234,7 @@ def test_driftc_rejects_abi_fingerprint_mismatch_across_packages(tmp_path: Path,
 		_write_file(
 			root / "lib" / "lib.drift",
 			f"""
-module lib{n}
+module lib{n};
 
 export {{ add }};
 
@@ -264,7 +272,7 @@ pub fn add(a: Int, b: Int) -> Int {{
 	_write_file(
 		tmp_path / "main.drift",
 		"""
-module main
+module main;
 
 import lib1 as lib1;
 import lib2 as lib2;

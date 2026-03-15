@@ -116,7 +116,7 @@ def _build_std_package(tmp_path: Path) -> Path:
 	module_dir = build_dir / "std" / "testlib"
 	_write_file(
 		module_dir / "testlib.drift",
-		"""module std.testlib
+		"""module std.testlib;
 
 export { ANSWER };
 
@@ -221,7 +221,7 @@ def _write_consumer(tmp_path: Path) -> Path:
 	src = tmp_path / "consumer" / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 import std.testlib as testlib;
 
@@ -305,7 +305,7 @@ def test_pex_deployed_readonly_install_tree(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -398,7 +398,7 @@ def test_pex_deployed_runtime_archive_link(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 fn main() nothrow -> Int {
 	return 7;
@@ -450,7 +450,7 @@ def test_pex_entry_resolves_deploy_root_through_symlink(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
-		"""module main
+		"""module main;
 
 fn main() nothrow -> Int {
 	return 0;

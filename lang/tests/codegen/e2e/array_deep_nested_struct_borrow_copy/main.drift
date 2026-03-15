@@ -1,4 +1,4 @@
-module main
+module main;
 
 struct S4(s: String);
 struct S3(inner: S4);

@@ -38,7 +38,7 @@ def _compile_source(src: str, tmp_path: Path):
 def test_try_block_result_stmt_requires_try_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -64,7 +64,7 @@ fn main() nothrow -> Int {
 def test_try_block_result_stmt_autounwrap_with_try_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;
@@ -90,7 +90,7 @@ fn main() nothrow -> Int {
 def test_try_block_without_catch_autounwrap_with_try_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;
@@ -114,7 +114,7 @@ fn main() -> Int {
 def test_try_block_without_catch_requires_try_trait(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 
@@ -138,7 +138,7 @@ fn main() -> Int {
 def test_try_block_autounwrap_stmt_sets_callsite_id(tmp_path: Path) -> None:
 	diagnostics = _compile_source(
 		"""
-module main
+module main;
 
 import std.core as core;
 use trait core.Try;

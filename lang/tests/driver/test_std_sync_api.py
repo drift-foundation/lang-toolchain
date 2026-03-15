@@ -33,7 +33,7 @@ def test_std_sync_atomic_bool_fetch_sub_rejected(tmp_path: Path, capsys: pytest.
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.sync as sync;
 

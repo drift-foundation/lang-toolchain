@@ -33,7 +33,7 @@ def test_std_log_builder_and_calls_compile(tmp_path: Path, capsys: pytest.Captur
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.log as log;
 import std.concurrent as conc;
@@ -79,7 +79,7 @@ def test_std_log_inline_map_literal_attrs_infers_value_type(tmp_path: Path, caps
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.log as log;
 
@@ -104,7 +104,7 @@ def test_std_log_user_type_can_be_attr_via_debuggable_impl(tmp_path: Path, capsy
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.log as log;
 

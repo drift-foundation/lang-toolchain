@@ -1,4 +1,4 @@
-module m
+module m;
 
 fn len_of(bytes: &Array<Byte>) nothrow -> Int {
 	return bytes.len;

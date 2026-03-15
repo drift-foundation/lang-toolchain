@@ -1,4 +1,4 @@
-module main
+module main;
 
 import std.algo as algo;
 import std.containers as containers;

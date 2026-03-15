@@ -16,7 +16,7 @@ def test_mir_validate_boundary_failure_is_diagnostic_not_assert(tmp_path: Path, 
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn main() nothrow -> Int {
 	return 0;
@@ -64,7 +64,7 @@ def test_mir_lowering_contract_failure_is_diagnostic_not_assert(tmp_path: Path, 
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-module m
+module m;
 
 fn add1(v: Int) nothrow -> Int {
 	return v + 1;

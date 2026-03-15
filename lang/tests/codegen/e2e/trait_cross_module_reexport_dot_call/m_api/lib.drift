@@ -1,4 +1,4 @@
-module m_api
+module m_api;
 
 import m_impl;
 

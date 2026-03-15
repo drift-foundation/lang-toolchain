@@ -29,7 +29,7 @@ def test_hash_map_compile_has_no_internal_ssa_return_mismatch_for_equatable_noth
 	_write_file(
 		mod_root / "main" / "main.drift",
 		"""
-module main
+module main;
 
 import std.containers as containers;
 import std.core as core;

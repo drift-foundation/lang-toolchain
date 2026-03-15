@@ -25,7 +25,7 @@ def test_qualified_member_ctor_resolves_core_variant(tmp_path: Path) -> None:
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"fn main() nothrow -> Void {",
 				"	val a: Optional<Int> = Optional::None();",
 				"	val b: Optional<Int> = Optional::Some(1);",
@@ -51,7 +51,7 @@ def test_qualified_member_ctor_requires_expected_type(tmp_path: Path, capsys: py
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"fn main() nothrow -> Void {",
 				"	val x = Optional::None();",
 				"	_ = x;",
@@ -72,7 +72,7 @@ def test_qualified_member_ctor_rejects_missing_ctor(tmp_path: Path, capsys: pyte
 	src.write_text(
 		"\n".join(
 			[
-				"module main",
+				"module main;",
 				"fn main() nothrow -> Void {",
 				"	val x: Optional<Int> = Optional::Bogus();",
 				"	_ = x;",

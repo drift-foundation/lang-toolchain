@@ -1,4 +1,4 @@
-module acme.lib
+module acme.lib;
 
 export { make };
 

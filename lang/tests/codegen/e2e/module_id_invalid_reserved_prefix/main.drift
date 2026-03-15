@@ -1,2 +1,2 @@
-module std.foo
+module std.foo;
 fn main() nothrow -> Int{ return 0; }
