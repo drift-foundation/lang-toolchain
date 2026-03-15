@@ -1,6 +1,32 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed cross-package schema TypeDef lookup and staged trust dependency authorization (0.27.58)**:
+  Fixed a compiler package-consumption bug for cross-package nominal types and
+  a deploy-tool smoke trust gap for co-deployed package dependencies.
+  - Compiler/package fix:
+    - resolved a package type-table validation bug where struct/interface
+      schemas referencing dependency-defined nominal types could fail with:
+      `missing STRUCT TypeDef in package type table`
+    - root cause was validating schema base types by full nominal identity
+      including a package id that can differ between original source package
+      and consuming package normalization
+    - `lang/driftc/packages/type_table_link_v0.py` now validates candidate
+      struct/interface TypeDefs by `(module_id, name)` inside the package type
+      table, while still checking `base_id` membership and concrete base-def
+      identity for correctness
+    - added regression coverage for a multi-package struct roundtrip where one
+      packaged library exposes a type defined in another package
+  - Deploy/smoke trust fix:
+    - staged trust overlays now authorize resolved co-deployed dependency
+      namespaces in addition to the artifact’s own namespace
+    - fixes smoke compilation for artifacts whose package dependencies are
+      signed with the same key and staged in the same deploy run
+    - `tools/drift_deploy/staged_trust.py` gained dependency namespace support
+      and `drift_deploy.py` now threads resolved dependency namespaces into the
+      staged trust builder
+    - added deploy regression coverage for dependency namespace authorization
+
 - **Fixed symlinked package-root discovery in compiler and deploy resolver (0.27.57)**:
   Fixed package discovery so staged/build package roots constructed with
   symlinks are traversed correctly.

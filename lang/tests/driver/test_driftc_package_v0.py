@@ -1663,6 +1663,103 @@ def test_discover_package_files_follows_symlinked_dirs(tmp_path: Path) -> None:
 	assert found[0].name == "web-jwt.dmp"
 
 
+def test_package_struct_from_submodule_roundtrips(tmp_path: Path) -> None:
+	"""
+	Regression: struct types declared in sub-modules must survive package
+	serialization/deserialization. If the struct_schema references a type
+	but the STRUCT TypeDef is missing from the package type table, the
+	consumer fails with 'missing STRUCT TypeDef in package type table'.
+	"""
+	# Build library package with struct in a sub-module.
+	lib_root = tmp_path / "lib_src"
+	# --- Package A: errors library with struct in sub-module ---
+	err_root = tmp_path / "err_src"
+	_write_file(
+		err_root / "web" / "jwt" / "errors" / "errors.drift",
+		"""
+module web.jwt.errors;
+
+export { JwtConfigError };
+
+pub struct JwtConfigError {
+	pub code: Int,
+}
+""".lstrip(),
+	)
+	err_pkg = tmp_path / "pkg" / "web-jwt-errors" / "0.1.0" / "web-jwt-errors.dmp"
+	err_pkg.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"-M", str(err_root),
+		str(err_root / "web" / "jwt" / "errors" / "errors.drift"),
+		"--package-id", "web-jwt-errors",
+		"--package-version", "0.1.0",
+		"--package-target", "test",
+		"--emit-package", str(err_pkg),
+	])
+	assert rc == 0, "errors package build should succeed"
+
+	# --- Package B: jwt library that depends on errors package ---
+	lib_root = tmp_path / "lib_src"
+	_write_file(
+		lib_root / "web" / "jwt" / "jwt.drift",
+		"""
+module web.jwt;
+
+import web.jwt.errors as errors;
+
+export { make_error };
+
+pub fn make_error() nothrow -> errors.JwtConfigError {
+	return errors.JwtConfigError(code = 42);
+}
+""".lstrip(),
+	)
+	pkg_root = tmp_path / "pkg"
+	jwt_pkg = pkg_root / "web-jwt" / "0.1.0" / "web-jwt.dmp"
+	jwt_pkg.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"-M", str(lib_root),
+		str(lib_root / "web" / "jwt" / "jwt.drift"),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dep", "web-jwt-errors@0.1.0",
+		"--package-id", "web-jwt",
+		"--package-version", "0.1.0",
+		"--package-target", "test",
+		"--emit-package", str(jwt_pkg),
+	])
+	assert rc == 0, "jwt package build (consuming errors pkg) should succeed"
+
+	# --- Consumer: imports web.jwt (which re-exports errors struct) ---
+	consumer_root = tmp_path / "consumer_src"
+	_write_file(
+		consumer_root / "main.drift",
+		"""
+module main;
+
+import web.jwt as jwt;
+
+fn main() nothrow -> Int {
+	val e = jwt.make_error();
+	return e.code;
+}
+""".lstrip(),
+	)
+	rc = driftc_main([
+		"-M", str(consumer_root),
+		str(consumer_root / "main.drift"),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dep", "web-jwt@0.1.0",
+		"--dep", "web-jwt-errors@0.1.0",
+		"--test-build-only",
+	])
+	assert rc == 0, (
+		"consumer build should succeed — struct types from dependency "
+		"sub-modules must be present in package type table"
+	)
+
+
 def test_driftc_rejects_unsigned_package_outside_allowlist(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",

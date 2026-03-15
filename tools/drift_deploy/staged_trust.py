@@ -25,18 +25,21 @@ def build_staged_trust(
 	signer_pubkey_raw: bytes,
 	artifact_namespace: str,
 	out_path: Path,
+	dep_namespaces: list[str] | None = None,
 ) -> None:
 	"""
 	Build a staged trust store for smoke validation.
 
 	Merges the baseline trust store (if any) with the staged signer's
-	public key, authorized for `artifact_namespace.*`.
+	public key, authorized for `artifact_namespace.*` and any
+	dependency namespaces needed for smoke compilation.
 
 	Args:
 		baseline_trust_path: Path to existing trust.json (or None).
 		signer_pubkey_raw: 32-byte Ed25519 public key of the signer.
 		artifact_namespace: Package namespace to authorize (e.g., "net.tls").
 		out_path: Where to write the staged trust.json.
+		dep_namespaces: Additional namespaces to authorize (resolved deps).
 	"""
 	# Load baseline or start empty.
 	if baseline_trust_path and baseline_trust_path.exists():
@@ -78,6 +81,19 @@ def build_staged_trust(
 	if kid not in exact_kids:
 		exact_kids.append(kid)
 	namespaces[artifact_namespace] = exact_kids
+
+	# Authorize dependency namespaces (co-deployed packages signed with
+	# the same key that the smoke compile needs to verify).
+	for dep_ns in (dep_namespaces or []):
+		dep_pattern = f"{dep_ns}.*"
+		dep_kids = namespaces.get(dep_pattern, [])
+		if kid not in dep_kids:
+			dep_kids.append(kid)
+		namespaces[dep_pattern] = dep_kids
+		dep_exact = namespaces.get(dep_ns, [])
+		if kid not in dep_exact:
+			dep_exact.append(kid)
+		namespaces[dep_ns] = dep_exact
 
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 	out_path.write_text(

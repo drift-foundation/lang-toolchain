@@ -731,6 +731,32 @@ class TestModuleNamespace:
 			assert "net-tls.*" not in data["namespaces"]
 			assert "net-tls" not in data["namespaces"]
 
+	def test_staged_trust_authorizes_dep_namespaces(self) -> None:
+		"""Smoke trust must authorize dependency namespaces, not just the artifact's own."""
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		with tempfile.TemporaryDirectory() as tmpdir:
+			out = Path(tmpdir) / "trust.json"
+			build_staged_trust(
+				baseline_trust_path=None,
+				signer_pubkey_raw=b"\x01" * 32,
+				artifact_namespace="net.tls",
+				out_path=out,
+				dep_namespaces=["net.crypto", "acme.util"],
+			)
+			data = json.loads(out.read_text())
+			# Own namespace authorized.
+			assert "net.tls.*" in data["namespaces"]
+			assert "net.tls" in data["namespaces"]
+			# Dependency namespaces authorized.
+			assert "net.crypto.*" in data["namespaces"]
+			assert "net.crypto" in data["namespaces"]
+			assert "acme.util.*" in data["namespaces"]
+			assert "acme.util" in data["namespaces"]
+			# All use the same key.
+			kid = list(data["keys"].keys())[0]
+			assert kid in data["namespaces"]["net.crypto.*"]
+			assert kid in data["namespaces"]["acme.util.*"]
+
 
 # ── Target default regression ────────────────────────────────────────
 

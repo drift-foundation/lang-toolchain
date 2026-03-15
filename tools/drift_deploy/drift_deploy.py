@@ -767,6 +767,7 @@ def _deploy_artifact(
 	compiler_version: str,
 	staged_pkg_root: Path,
 	native_lib_paths: list[Path] | None = None,
+	dep_namespace_map: dict[str, str] | None = None,
 ) -> None:
 	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
 	staged_install = stage_dir / art.name / art.version
@@ -862,11 +863,19 @@ def _deploy_artifact(
 		try:
 			pubkey = extract_pubkey_from_seed(sign_key)
 			staged_trust_path = stage_dir / "drift" / "trust.json"
+			# Collect dependency namespaces for smoke trust authorization.
+			dep_ns_list: list[str] = []
+			if dep_namespace_map and resolved:
+				for dep_pkg_id in resolved:
+					ns = dep_namespace_map.get(dep_pkg_id)
+					if ns:
+						dep_ns_list.append(ns)
 			build_staged_trust(
 				baseline_trust_path=baseline_trust,
 				signer_pubkey_raw=pubkey,
 				artifact_namespace=art.module_namespace,
 				out_path=staged_trust_path,
+				dep_namespaces=dep_ns_list,
 			)
 		except Exception as e:
 			raise DeployError(f"staged trust generation failed: {e}")
@@ -1042,6 +1051,11 @@ def _run_impl(args: argparse.Namespace) -> int:
 					if not target_link.exists():
 						target_link.symlink_to(pkg_dir.resolve())
 
+	# Build mapping from package name → module_namespace for co-deployed deps.
+	dep_namespace_map: dict[str, str] = {
+		a.name: a.module_namespace for a in artifacts if a.kind == "package"
+	}
+
 	try:
 		for art in artifacts:
 			print(f"\n{'='*60}")
@@ -1069,6 +1083,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				compiler_version=compiler_version,
 				staged_pkg_root=staged_pkg_root,
 				native_lib_paths=native_lib_paths,
+				dep_namespace_map=dep_namespace_map,
 			)
 	finally:
 		# Clean up staging directory.

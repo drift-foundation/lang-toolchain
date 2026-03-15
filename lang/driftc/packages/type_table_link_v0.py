@@ -833,16 +833,18 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	# Phase A: merge/validate struct schemas with full field typing.
 	merged_struct_schemas: dict[NominalKey, tuple[list[StructFieldSchema], list[str]]] = {}
 	for pkg_idx, pkg in enumerate(pkgs):
-		pkg_struct_ids: dict[NominalKey, list[TypeId]] = {}
+		# Index STRUCT TypeDefs by (module_id, name) rather than full NominalKey.
+		# The package_id in the struct_schema's NominalKey reflects the *original*
+		# source package, but _normalized_pkg_id_for_module uses the *consuming*
+		# package's id — these differ for cross-package dependency types.
+		pkg_struct_ids: dict[tuple[str, str], list[TypeId]] = {}
 		for tid, td in pkg.defs.items():
 			if td.kind is TypeKind.STRUCT:
 				if td.module_id is None:
 					raise ValueError(f"package STRUCT '{td.name}' missing module_id")
-				pkg_id = _normalized_pkg_id_for_module(pkg.package_id, td.module_id)
-				key = NominalKey(package_id=pkg_id, module_id=td.module_id, name=td.name, kind=TypeKind.STRUCT)
-				pkg_struct_ids.setdefault(key, []).append(tid)
+				pkg_struct_ids.setdefault((td.module_id, td.name), []).append(tid)
 		for key, (field_schemas, type_params, base_id) in pkg.struct_schemas.items():
-			candidates = pkg_struct_ids.get(key)
+			candidates = pkg_struct_ids.get((key.module_id, key.name))
 			if not candidates:
 				raise ValueError(f"struct schema '{key.module_id}:{key.name}' missing STRUCT TypeDef in package type table")
 			if base_id not in candidates:
@@ -861,16 +863,15 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	# Phase A: merge/validate interface schemas by nominal identity.
 	merged_interface_schemas: dict[NominalKey, tuple[list[str], list[InterfaceMethodSchema], list[GenericTypeExpr]]] = {}
 	for pkg_idx, pkg in enumerate(pkgs):
-		pkg_interface_ids: dict[NominalKey, list[TypeId]] = {}
+		# Same (module_id, name) indexing as struct schemas — see comment above.
+		pkg_interface_ids: dict[tuple[str, str], list[TypeId]] = {}
 		for tid, td in pkg.defs.items():
 			if td.kind is TypeKind.INTERFACE:
 				if td.module_id is None:
 					raise ValueError(f"package INTERFACE '{td.name}' missing module_id")
-				pkg_id = _normalized_pkg_id_for_module(pkg.package_id, td.module_id)
-				key = NominalKey(package_id=pkg_id, module_id=td.module_id, name=td.name, kind=TypeKind.INTERFACE)
-				pkg_interface_ids.setdefault(key, []).append(tid)
+				pkg_interface_ids.setdefault((td.module_id, td.name), []).append(tid)
 		for key, (type_params, methods, parents, base_id) in pkg.interface_schemas.items():
-			candidates = pkg_interface_ids.get(key)
+			candidates = pkg_interface_ids.get((key.module_id, key.name))
 			if not candidates:
 				raise ValueError(f"interface schema '{key.module_id}:{key.name}' missing INTERFACE TypeDef in package type table")
 			if base_id not in candidates:
