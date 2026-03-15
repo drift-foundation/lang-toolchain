@@ -1,6 +1,27 @@
 # Drift development history
 
 ## 2026-03-14
+- **Deduplicated physically identical packages across staged and raw roots in `drift deploy` resolution (0.27.62)**:
+  Prevented false duplicate-package errors when the staged package root
+  symlinked into the same destination root that was also indexed directly.
+  - Root cause:
+    - dependency resolution indexed both the staged package root and the raw
+      destination/package roots
+    - both roots could discover the same physical `.dmp` file, once through a
+      symlinked staged path and once directly through the destination path
+    - resolver duplicate detection keyed only by `package_id@version` and root
+      attribution, so the same physical file could be mistaken for a duplicate
+      package within one root
+  - Fix:
+    - package indexing now deduplicates discovered `.dmp` files by resolved
+      physical path before manifest loading and duplicate-package checks
+    - real duplicate packages within a single root still fail
+    - distinct files in different roots still follow first-root-wins behavior
+  - Added regression coverage for:
+    - the same physical `.dmp` reachable through staged symlink + direct root
+    - real duplicate `package_id@version` files in the same root
+    - same `package_id@version` in different roots preserving first-root-wins
+
 - **Filtered smoke package roots to artifact + resolved deps only in `drift deploy` (0.27.61)**:
   Prevented unrelated visible packages in shared library roots from blocking
   smoke compilation via eager trust verification.

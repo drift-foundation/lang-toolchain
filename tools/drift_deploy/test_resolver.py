@@ -28,6 +28,7 @@ from tools.drift_deploy.resolver import (
 	PackageEntry,
 	ResolutionError,
 	ResolvedDep,
+	build_package_index,
 	resolve_artifact,
 )
 from tools.drift_deploy.semver import (
@@ -359,3 +360,106 @@ class TestLockFile:
 		errors = verify_lock_integrity(lock_deps, pkg_index)
 		assert len(errors) == 1
 		assert "not found" in errors[0]
+
+
+# ── Package index: symlink dedup ─────────────────────────────────────
+
+
+class TestBuildPackageIndexDedup:
+	"""
+	Regression: when staged root symlinks into dest and dest is also
+	a package root, the same physical .dmp is discoverable through
+	both paths.  build_package_index must index it once, not raise
+	a duplicate-package error.
+	"""
+
+	def test_symlinked_roots_dedup_same_physical_file(self) -> None:
+		"""Same .dmp reachable via symlink and direct path → indexed once."""
+		import os
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			base = Path(tmpdir)
+			dest = base / "dest"
+			staged = base / "staged"
+			dest.mkdir()
+			staged.mkdir()
+
+			# Create a real .dmp in dest.
+			dmp = dest / "net-tls-0.2.0.dmp"
+			dmp.write_bytes(b"fake")  # content doesn't matter, we mock loader
+
+			# Staged root symlinks the .dmp into itself.
+			link = staged / "net-tls-0.2.0.dmp"
+			os.symlink(str(dmp), str(link))
+
+			manifests_returned = []
+
+			def fake_loader(path: Path) -> dict:
+				manifests_returned.append(path)
+				return {
+					"package_id": "net.tls",
+					"package_version": "0.2.0",
+					"package_deps": [],
+				}
+
+			# Both roots index the same physical file.
+			idx = build_package_index([staged, dest], load_manifest=fake_loader)
+
+			# Should be indexed exactly once (not raise duplicate-package error).
+			assert "net.tls" in idx
+			assert len(idx["net.tls"]) == 1
+			assert idx["net.tls"][0].version == parse_version("0.2.0")
+			# Loader called only once (second path skipped by physical dedup).
+			assert len(manifests_returned) == 1
+
+	def test_real_duplicates_in_same_root_still_error(self) -> None:
+		"""Two distinct physical files with same pkg@version in same root → error."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			base = Path(tmpdir)
+			root = base / "packages"
+			root.mkdir()
+
+			# Two distinct physical files for same package+version.
+			dmp1 = root / "net-tls-a.dmp"
+			dmp2 = root / "net-tls-b.dmp"
+			dmp1.write_bytes(b"file1")
+			dmp2.write_bytes(b"file2")
+
+			def fake_loader(path: Path) -> dict:
+				return {
+					"package_id": "net.tls",
+					"package_version": "0.2.0",
+					"package_deps": [],
+				}
+
+			with pytest.raises(ResolutionError, match="duplicate package"):
+				build_package_index([root], load_manifest=fake_loader)
+
+	def test_same_pkg_version_in_different_roots_first_wins(self) -> None:
+		"""Same pkg@version in two roots (distinct files) → first root wins, no error."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			base = Path(tmpdir)
+			root1 = base / "root1"
+			root2 = base / "root2"
+			root1.mkdir()
+			root2.mkdir()
+
+			dmp1 = root1 / "net-tls.dmp"
+			dmp2 = root2 / "net-tls.dmp"
+			dmp1.write_bytes(b"first")
+			dmp2.write_bytes(b"second")
+
+			call_count = [0]
+
+			def fake_loader(path: Path) -> dict:
+				call_count[0] += 1
+				return {
+					"package_id": "net.tls",
+					"package_version": "0.2.0",
+					"package_deps": [],
+				}
+
+			idx = build_package_index([root1, root2], load_manifest=fake_loader)
+			assert len(idx["net.tls"]) == 1
+			# Both files loaded (different physical paths), but second skipped by root priority.
+			assert call_count[0] == 2

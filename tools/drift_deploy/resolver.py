@@ -79,6 +79,7 @@ def build_package_index(
 
 	index: dict[str, list[PackageEntry]] = {}
 	seen: dict[tuple[str, str], Path] = {}  # (pkg_id, version_str) → first root
+	seen_real_paths: set[str] = set()  # resolved physical paths (dedup symlinks)
 
 	for root in package_roots:
 		if not root.exists():
@@ -95,6 +96,15 @@ def build_package_index(
 		for dmp_path in dmp_files:
 			if not dmp_path.is_file():
 				continue
+
+			# Deduplicate by resolved physical path. When the staged
+			# package root symlinks into dest and dest is also a package
+			# root, the same .dmp is reachable through both paths.
+			real_path = str(dmp_path.resolve())
+			if real_path in seen_real_paths:
+				continue
+			seen_real_paths.add(real_path)
+
 			try:
 				manifest = load_manifest(dmp_path)
 			except Exception:
