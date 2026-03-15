@@ -1,6 +1,31 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed stale same-version smoke staging in `drift deploy` (0.27.56-dev)**:
+  Closed a remaining edge case in staged smoke isolation when the destination
+  already contained a stale directory for the same version being built.
+  - Root cause:
+    - when rebuilding a real staged package directory from a symlinked
+      destination package dir, the re-link loop could re-link the version
+      currently being built if a stale `<dest>/<pkg>/<version>/` already
+      existed
+    - that caused the staged current version to become a symlink to the stale
+      destination entry, shadowing the just-built package and allowing write-
+      through into the real destination before publish
+  - Fix:
+    - the re-link loop now explicitly skips `art.version`
+    - any stale staged entry for `art.version` is removed before creating the
+      fresh real staged directory
+  - Result:
+    - `staged_pkg_root/<pkg>/<current-version>` is always a real staged
+      directory for the just-built artifact
+    - older versions remain visible via re-linked entries
+    - the real destination is not polluted before publish, even when a stale
+      same-version dir already exists there
+  - Added regression coverage for:
+    - stale same-version destination dir not shadowing the staged build
+    - preventing `.dmp` write-through into destination before publish
+
 - **Fixed `drift deploy` staged smoke root symlink write-through (0.27.55-dev)**:
   Fixed a deploy-tool bug where smoke staging could follow symlinked package
   roots back into the real publish destination before publish.

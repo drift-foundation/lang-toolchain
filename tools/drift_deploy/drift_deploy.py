@@ -832,14 +832,23 @@ def _deploy_artifact(
 			link_target = art_pkg_dir.resolve()
 			art_pkg_dir.unlink()
 			art_pkg_dir.mkdir(parents=True, exist_ok=True)
-			# Re-link old versions from the original target.
+			# Re-link old versions from the original target, but skip
+			# the version we're currently building — a stale directory
+			# from a prior failed deploy would create a dangling symlink
+			# that shadows the real staged copy.
 			if link_target.is_dir():
 				for ver_dir in sorted(link_target.iterdir()):
-					if ver_dir.is_dir():
+					if ver_dir.is_dir() and ver_dir.name != art.version:
 						ver_link = art_pkg_dir / ver_dir.name
 						if not ver_link.exists():
 							ver_link.symlink_to(ver_dir.resolve())
 		smoke_pkg_dir = art_pkg_dir / art.version
+		# Remove any stale entry (symlink or empty dir) for this version.
+		if smoke_pkg_dir.is_symlink() or smoke_pkg_dir.exists():
+			if smoke_pkg_dir.is_symlink():
+				smoke_pkg_dir.unlink()
+			elif smoke_pkg_dir.is_dir():
+				shutil.rmtree(str(smoke_pkg_dir))
 		smoke_pkg_dir.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(str(dmp_path), str(smoke_pkg_dir / dmp_path.name))
 		if sig_path:

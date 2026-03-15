@@ -1321,3 +1321,92 @@ class TestBuildSelfExclusion:
 			assert not (dest / "net-tls" / "0.3.0").exists(), (
 				"dest must not be polluted with new version before publish"
 			)
+
+	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_stale_version_dir_does_not_shadow_staged_build(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""
+		Regression: a stale 0.3.0 directory at the dest (from a prior
+		failed deploy) must not be symlinked into the staged root,
+		shadowing the just-built .dmp. The re-link loop must skip
+		art.version.
+		"""
+		from tools.drift_deploy.manifest import NativeDep
+
+		art = Artifact(
+			kind="package", name="net-tls", version="0.3.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			native_deps=[NativeDep(lib="ssl")],
+			unsafe=True,
+			module_namespace="net_tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			# Dest with prior version AND stale version being built.
+			dest = tmpdir_p / "dest"
+			(dest / "net-tls" / "0.2.0").mkdir(parents=True)
+			(dest / "net-tls" / "0.2.0" / "net-tls.dmp").write_bytes(b"old-pkg")
+			# Stale 0.3.0 from a prior failed deploy.
+			(dest / "net-tls" / "0.3.0").mkdir(parents=True)
+
+			# Staged pkg root with symlink.
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			(staged_pkg_root / "net-tls").symlink_to((dest / "net-tls").resolve())
+
+			# Manifest dir.
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp):
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=True,
+					dry_run=True,
+					compiler_version="0.27.55-dev",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			art_dir = staged_pkg_root / "net-tls"
+
+			# 0.3.0 must be a real directory (not a symlink to stale dest).
+			new_ver = art_dir / "0.3.0"
+			assert new_ver.is_dir()
+			assert not new_ver.is_symlink(), (
+				"staged 0.3.0 must be a real directory, not a symlink to stale dest"
+			)
+			assert (new_ver / "net-tls.dmp").exists(), (
+				"just-built .dmp must be in staged 0.3.0"
+			)
+
+			# The .dmp must NOT have been written through a symlink into dest.
+			stale_dest = dest / "net-tls" / "0.3.0"
+			stale_contents = list(stale_dest.iterdir()) if stale_dest.exists() else []
+			assert not any(f.name == "net-tls.dmp" for f in stale_contents), (
+				"built .dmp must not leak into dest through stale symlink"
+			)
