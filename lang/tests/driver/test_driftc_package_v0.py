@@ -1638,6 +1638,31 @@ def test_discover_package_files_accepts_package_file_path(tmp_path: Path) -> Non
 	assert discover_package_files([pkg]) == [pkg]
 
 
+def test_discover_package_files_follows_symlinked_dirs(tmp_path: Path) -> None:
+	"""
+	Regression: package discovery must follow symlinked directories.
+
+	drift deploy constructs staged/build package roots using symlinks.
+	Path.rglob() does not follow symlinks, so packages reachable only
+	through symlinked directories were invisible to the compiler.
+	"""
+	# Real package location (e.g. ~/opt/drift/libs/web-jwt/0.1.0/).
+	real_dir = tmp_path / "real" / "web-jwt" / "0.1.0"
+	real_dir.mkdir(parents=True)
+	dmp = real_dir / "web-jwt.dmp"
+	dmp.write_bytes(b"fake-dmp")
+
+	# Staged package root with symlink (as drift deploy creates).
+	staged_root = tmp_path / "staged"
+	staged_root.mkdir()
+	(staged_root / "web-jwt").symlink_to(tmp_path / "real" / "web-jwt")
+
+	# Discovery must find the .dmp through the symlink.
+	found = discover_package_files([staged_root])
+	assert len(found) == 1, f"expected 1 package, found {len(found)}: {found}"
+	assert found[0].name == "web-jwt.dmp"
+
+
 def test_driftc_rejects_unsigned_package_outside_allowlist(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",

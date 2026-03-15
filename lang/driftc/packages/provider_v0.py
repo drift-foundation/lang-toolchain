@@ -30,7 +30,13 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 
 	MVP rule: any `*.dmp` file under a root is considered a package artifact.
 	The returned list is deterministic.
+
+	Uses os.walk with followlinks=True so that symlinked directories
+	(as created by drift deploy's staged/build package roots) are
+	traversed correctly.
 	"""
+	import os
+
 	out: set[Path] = set()
 	for root in package_roots:
 		if not root.exists():
@@ -39,9 +45,10 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 			if root.suffix == ".dmp":
 				out.add(root)
 			continue
-		for p in sorted(root.rglob("*.dmp")):
-			if p.is_file():
-				out.add(p)
+		for dirpath, _dirnames, filenames in os.walk(root, followlinks=True):
+			for fname in filenames:
+				if fname.endswith(".dmp"):
+					out.add(Path(dirpath) / fname)
 	return sorted(out)
 
 

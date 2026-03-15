@@ -1,6 +1,24 @@
 # Drift development history
 
 ## 2026-03-14
+- **Fixed symlinked package-root discovery in compiler and deploy resolver (0.27.57)**:
+  Fixed package discovery so staged/build package roots constructed with
+  symlinks are traversed correctly.
+  - Root cause:
+    - compiler package discovery used `Path.rglob("*.dmp")`, which does not
+      follow symlinked directories
+    - `drift deploy` constructs staged/build package roots using symlinks, so
+      package dependencies reachable only through those symlinks could be
+      invisible during build
+  - Fixes:
+    - `lang/driftc/packages/provider_v0.py` now uses
+      `os.walk(..., followlinks=True)` for package discovery
+    - `tools/drift_deploy/resolver.py` now uses the same traversal rule for
+      deploy-time package indexing
+  - Determinism is preserved by sorting discovered package paths.
+  - Added regression coverage for package discovery through symlinked staged
+    roots.
+
 - **Fixed stale same-version smoke staging in `drift deploy` (0.27.56-dev)**:
   Closed a remaining edge case in staged smoke isolation when the destination
   already contained a stale directory for the same version being built.

@@ -83,7 +83,15 @@ def build_package_index(
 	for root in package_roots:
 		if not root.exists():
 			continue
-		dmp_files = sorted(root.rglob("*.dmp")) if root.is_dir() else ([root] if root.suffix == ".dmp" else [])
+		if root.is_dir():
+			import os
+			dmp_files = sorted(
+				Path(dp) / fn
+				for dp, _, fns in os.walk(root, followlinks=True)
+				for fn in fns if fn.endswith(".dmp")
+			)
+		else:
+			dmp_files = [root] if root.suffix == ".dmp" else []
 		for dmp_path in dmp_files:
 			if not dmp_path.is_file():
 				continue
