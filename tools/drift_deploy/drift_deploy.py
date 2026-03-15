@@ -865,17 +865,24 @@ def _deploy_artifact(
 	staged_install = stage_dir / art.name / art.version
 
 	# ── Step 1: Build ──
-	# Build a per-artifact package root that excludes the artifact being
-	# built. Without this, a prior published version of the same package
-	# under --dest (or staged_pkg_root) would be visible to the compiler,
-	# causing self-resolution and spurious trust failures on upgrade.
+	# Build a per-artifact package root containing ONLY resolved
+	# dependencies. Two filters:
+	#  1. Exclude the artifact being built (self-consumption prevention).
+	#  2. Exclude unrelated packages (trust-failure prevention: the
+	#     compiler verifies ALL packages under --package-root, not just
+	#     consumed ones — unrelated signed packages whose namespaces
+	#     aren't in the trust store would block the build).
 	build_pkg_root = stage_dir / f"_build_pkgroot_{art.name}"
 	build_pkg_root.mkdir(parents=True, exist_ok=True)
+	resolved_pkg_ids: set[str] = set(resolved.keys())
 	for entry in staged_pkg_root.iterdir():
-		if entry.name != art.name:
-			link = build_pkg_root / entry.name
-			if not link.exists():
-				link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
+		if entry.name == art.name:
+			continue
+		if entry.name not in resolved_pkg_ids:
+			continue
+		link = build_pkg_root / entry.name
+		if not link.exists():
+			link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
 
 	if art.kind == "package":
 		dmp_path = _build_package(

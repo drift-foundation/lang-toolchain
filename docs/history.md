@@ -1,6 +1,24 @@
 # Drift development history
 
 ## 2026-03-14
+- **Filtered build package roots to resolved deps only in `drift deploy` (0.27.60)**:
+  Prevented unrelated visible packages in shared library roots from blocking
+  package builds via eager trust verification.
+  - Root cause:
+    - the per-artifact build package root previously symlinked every visible
+      package from the staged package root except the artifact being built
+    - the compiler eagerly loads and trust-verifies all packages under
+      `--package-root`, not just those actually consumed by the current build
+    - unrelated signed packages with namespaces absent from the current trust
+      store could therefore fail otherwise unrelated package builds
+  - Fix:
+    - build package roots now include only the package ids from the resolved
+      dependency set for the artifact being built
+    - existing self-exclusion remains in place
+    - zero-dependency artifacts therefore build with an empty build package root
+  - Added regression coverage ensuring unrelated visible packages and the
+    artifact itself are both excluded from the build package root
+
 - **Fixed intra-project deploy resolution and smoke trust for published deps (0.27.59)**:
   Tightened `drift deploy` for multi-package projects where one artifact depends
   on another artifact from the same manifest, and for smoke runs that consume

@@ -1172,19 +1172,19 @@ class TestBuildSelfExclusion:
 				if arg == "--package-root" and i + 1 < len(cmd):
 					pkg_roots_in_cmd.append(cmd[i + 1])
 
-			# The build root must NOT contain a net-tls directory.
+			# The build root must NOT contain a net-tls directory
+			# (self-exclusion) OR std.core (unrelated — not a resolved dep).
 			for pr in pkg_roots_in_cmd:
 				net_tls_dir = Path(pr) / "net-tls"
 				assert not net_tls_dir.exists(), (
 					f"build --package-root {pr} exposes prior net-tls; "
 					f"source build must not consume its own older published version"
 				)
-
-			# But external deps (std.core) must still be reachable.
-			reachable = any(
-				(Path(pr) / "std.core").exists() for pr in pkg_roots_in_cmd
-			)
-			assert reachable, "external deps must still be visible through build package root"
+				std_core_dir = Path(pr) / "std.core"
+				assert not std_core_dir.exists(), (
+					f"build --package-root {pr} exposes unrelated std.core; "
+					f"build root must only contain resolved deps"
+				)
 
 	@patch("tools.drift_deploy.drift_deploy._sign_package")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
@@ -1438,6 +1438,93 @@ class TestBuildSelfExclusion:
 			assert not any(f.name == "net-tls.dmp" for f in stale_contents), (
 				"built .dmp must not leak into dest through stale symlink"
 			)
+
+	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_build_root_excludes_unrelated_packages(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""
+		Regression: unrelated signed packages in the shared library root
+		must NOT be symlinked into the build package root. The compiler
+		verifies all packages under --package-root against the trust store;
+		untrusted unrelated packages would block the build.
+		"""
+		# web-jwt has no deps, shared root has unrelated net-tls.
+		art = Artifact(
+			kind="package", name="web-jwt", version="0.1.0",
+			description="JWT", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="web.jwt",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			# Shared library root with unrelated package.
+			dest = tmpdir_p / "dest"
+			(dest / "net-tls" / "0.3.1").mkdir(parents=True)
+			(dest / "net-tls" / "0.3.1" / "net-tls.dmp").write_bytes(b"tls")
+			(dest / "web-jwt" / "0.1.0").mkdir(parents=True)
+			(dest / "web-jwt" / "0.1.0" / "web-jwt.dmp").write_bytes(b"jwt")
+
+			# Staged package root mirroring dest.
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			for pkg_dir in sorted(dest.iterdir()):
+				if pkg_dir.is_dir():
+					(staged_pkg_root / pkg_dir.name).symlink_to(pkg_dir.resolve())
+
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},  # web-jwt has no deps
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=True,
+					dry_run=True,
+					compiler_version="0.27.59",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			build_call = mock_run.call_args_list[0]
+			cmd = build_call[0][0]
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(cmd):
+				if arg == "--package-root" and i + 1 < len(cmd):
+					pkg_roots_in_cmd.append(cmd[i + 1])
+
+			# Build root must NOT contain net-tls (unrelated package).
+			for pr in pkg_roots_in_cmd:
+				assert not (Path(pr) / "net-tls").exists(), (
+					f"build root {pr} exposes unrelated net-tls; "
+					f"only resolved deps should be in the build package root"
+				)
+			# Build root must NOT contain web-jwt (self-exclusion).
+			for pr in pkg_roots_in_cmd:
+				assert not (Path(pr) / "web-jwt").exists(), (
+					f"build root {pr} exposes self (web-jwt)"
+				)
 
 
 # ── Intra-project dep resolution ────────────────────────────────────
