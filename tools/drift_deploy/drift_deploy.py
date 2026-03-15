@@ -1003,6 +1003,30 @@ def _deploy_artifact(
 		)
 
 	# ── Step 5: Smoke ──
+	# Build a filtered smoke package root containing only the artifact
+	# itself and its resolved deps. The compiler eagerly verifies all
+	# packages under --package-root, so unrelated signed packages with
+	# untrusted namespaces would block smoke compilation. This root is
+	# used for both baseline and custom smoke (via DRIFT_STAGED_PKG_ROOT).
+	smoke_pkg_root = stage_dir / f"_smoke_pkgroot_{art.name}"
+	smoke_pkg_root.mkdir(parents=True, exist_ok=True)
+	if art.kind == "package":
+		art_in_staged = staged_pkg_root / art.name
+		if art_in_staged.exists():
+			smoke_art_link = smoke_pkg_root / art.name
+			if not smoke_art_link.exists():
+				smoke_art_link.symlink_to(
+					art_in_staged.resolve() if art_in_staged.is_symlink() else art_in_staged
+				)
+	for dep_pkg_id in (resolved or {}):
+		dep_in_staged = staged_pkg_root / dep_pkg_id
+		if dep_in_staged.exists():
+			dep_link = smoke_pkg_root / dep_pkg_id
+			if not dep_link.exists():
+				dep_link.symlink_to(
+					dep_in_staged.resolve() if dep_in_staged.is_symlink() else dep_in_staged
+				)
+
 	if skip_smoke:
 		print(f"  warning: --skip-smoke: smoke skipped for '{art.name}'", file=sys.stderr)
 	else:
@@ -1011,7 +1035,7 @@ def _deploy_artifact(
 				art,
 				driftc=driftc,
 				staged_install=staged_install,
-				staged_pkg_root=staged_pkg_root,
+				staged_pkg_root=smoke_pkg_root,
 				staged_trust=staged_trust_path,
 				native_lib_paths=native_lib_paths,
 			)
@@ -1022,7 +1046,7 @@ def _deploy_artifact(
 		smoke_env = dict(os.environ)
 		smoke_env.update({
 			"DRIFT_STAGE_DIR": str(stage_dir),
-			"DRIFT_STAGED_PKG_ROOT": str(staged_pkg_root),
+			"DRIFT_STAGED_PKG_ROOT": str(smoke_pkg_root),
 			"DRIFT_STAGED_INSTALL": str(staged_install),
 			"DRIFT_STAGED_DRIFTC": str(driftc),
 			"DRIFT_ARTIFACT_NAME": art.name,

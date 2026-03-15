@@ -1526,6 +1526,90 @@ class TestBuildSelfExclusion:
 					f"build root {pr} exposes self (web-jwt)"
 				)
 
+	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_smoke_root_excludes_unrelated_packages(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""
+		Regression: the smoke --package-root must only contain the artifact
+		and its resolved deps, not unrelated packages from the shared dest.
+		"""
+		art = Artifact(
+			kind="package", name="web-jwt", version="0.1.0",
+			description="JWT", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="web.jwt",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			# Shared library root with unrelated package.
+			dest = tmpdir_p / "dest"
+			(dest / "net-tls" / "0.3.1").mkdir(parents=True)
+			(dest / "net-tls" / "0.3.1" / "net-tls.dmp").write_bytes(b"tls")
+
+			# Staged package root mirroring dest.
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			for pkg_dir in sorted(dest.iterdir()):
+				if pkg_dir.is_dir():
+					(staged_pkg_root / pkg_dir.name).symlink_to(pkg_dir.resolve())
+
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=False,
+					dry_run=True,
+					compiler_version="0.27.60",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			# Find the smoke compile call (second subprocess.run, after build).
+			assert len(mock_run.call_args_list) >= 2, "expected build + smoke calls"
+			smoke_call = mock_run.call_args_list[1]
+			cmd = smoke_call[0][0]
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(cmd):
+				if arg == "--package-root" and i + 1 < len(cmd):
+					pkg_roots_in_cmd.append(cmd[i + 1])
+
+			# Smoke root must NOT contain net-tls.
+			for pr in pkg_roots_in_cmd:
+				assert not (Path(pr) / "net-tls").exists(), (
+					f"smoke root {pr} exposes unrelated net-tls; "
+					f"only the artifact + resolved deps should be visible"
+				)
+			# Smoke root MUST contain web-jwt (the artifact being smoked).
+			any_has_jwt = any(
+				(Path(pr) / "web-jwt").exists() for pr in pkg_roots_in_cmd
+			)
+			assert any_has_jwt, "smoke root must contain the artifact being smoked"
+
 
 # ── Intra-project dep resolution ────────────────────────────────────
 

@@ -1,6 +1,27 @@
 # Drift development history
 
 ## 2026-03-14
+- **Filtered smoke package roots to artifact + resolved deps only in `drift deploy` (0.27.61)**:
+  Prevented unrelated visible packages in shared library roots from blocking
+  smoke compilation via eager trust verification.
+  - Root cause:
+    - after the build-root isolation fix, the smoke path still passed a broad
+      staged package root to both baseline and custom smoke
+    - the compiler eagerly loads and trust-verifies all packages under
+      `--package-root`, not just those actually consumed by the smoke compile
+    - unrelated signed packages visible in the shared destination root could
+      therefore still fail smoke for otherwise unrelated artifacts
+  - Fix:
+    - `drift deploy` now builds a filtered per-artifact smoke package root
+    - that smoke root contains only:
+      - the artifact being smoked
+      - its resolved package dependencies
+    - unrelated packages are excluded from both baseline and custom smoke
+    - `DRIFT_STAGED_PKG_ROOT` for custom smoke now points at the filtered
+      smoke root instead of the broad staged root
+  - Added regression coverage ensuring smoke roots exclude unrelated packages
+    while still exposing the current artifact and its resolved dependencies
+
 - **Filtered build package roots to resolved deps only in `drift deploy` (0.27.60)**:
   Prevented unrelated visible packages in shared library roots from blocking
   package builds via eager trust verification.
