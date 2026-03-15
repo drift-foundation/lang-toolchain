@@ -158,6 +158,10 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 
 	All sources are concatenated in order. The linker processes -L flags
 	left-to-right, so highest-priority paths appear last.
+
+	All paths must be absolute. Relative paths are rejected because build
+	and smoke steps run from staging/temp directories, making relative
+	paths ambiguous and fragile.
 	"""
 	result: list[Path] = []
 
@@ -167,7 +171,13 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 		for p in env_val.split(":"):
 			p = p.strip()
 			if p:
-				result.append(Path(p))
+				pp = Path(p)
+				if not pp.is_absolute():
+					raise DeployError(
+						f"$DRIFT_NATIVE_LIB_PATH: relative path '{p}' not allowed; "
+						f"absolute paths are required for native library search hints"
+					)
+				result.append(pp)
 
 	# 2. Config file.
 	config_path = manifest_dir / "drift-deploy-config.json"
@@ -184,10 +194,22 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 		for entry in raw_paths:
 			if not isinstance(entry, str) or not entry:
 				raise DeployError(f"{config_path}: 'native_lib_paths' entries must be non-empty strings")
-			result.append(Path(entry))
+			ep = Path(entry)
+			if not ep.is_absolute():
+				raise DeployError(
+					f"{config_path}: relative path '{entry}' not allowed in 'native_lib_paths'; "
+					f"absolute paths are required for native library search hints"
+				)
+			result.append(ep)
 
 	# 3. CLI flags (highest priority).
 	if args.native_lib_path:
+		for nlp in args.native_lib_path:
+			if not nlp.is_absolute():
+				raise DeployError(
+					f"--native-lib-path: relative path '{nlp}' not allowed; "
+					f"absolute paths are required for native library search hints"
+				)
 		result.extend(args.native_lib_path)
 
 	return result

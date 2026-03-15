@@ -987,3 +987,37 @@ class TestNativeLibPaths:
 			)
 		cmd = mock_run.call_args[0][0]
 		assert "--link-search" not in cmd
+
+	def test_relative_path_in_env_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Relative path in $DRIFT_NATIVE_LIB_PATH must be rejected early."""
+		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "relative/lib")
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args()
+			with pytest.raises(DeployError, match="absolute paths are required"):
+				_resolve_native_lib_paths(args, Path(tmpdir))
+
+	def test_relative_path_in_config_rejected(self) -> None:
+		"""Relative path in drift-deploy-config.json must be rejected early."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text(json.dumps({"native_lib_paths": ["relative/lib"]}))
+			args = self._make_args()
+			with pytest.raises(DeployError, match="absolute paths are required"):
+				_resolve_native_lib_paths(args, Path(tmpdir))
+
+	def test_relative_path_in_cli_rejected(self) -> None:
+		"""Relative path via --native-lib-path must be rejected early."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			args = self._make_args("--native-lib-path", "relative/lib")
+			with pytest.raises(DeployError, match="absolute paths are required"):
+				_resolve_native_lib_paths(args, Path(tmpdir))
+
+	def test_absolute_paths_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""Absolute paths from all three sources should be accepted normally."""
+		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/abs/env")
+		with tempfile.TemporaryDirectory() as tmpdir:
+			config = Path(tmpdir) / "drift-deploy-config.json"
+			config.write_text(json.dumps({"native_lib_paths": ["/abs/cfg"]}))
+			args = self._make_args("--native-lib-path", "/abs/cli")
+			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			assert result == [Path("/abs/env"), Path("/abs/cfg"), Path("/abs/cli")]

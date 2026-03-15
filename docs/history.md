@@ -1,6 +1,20 @@
 # Drift development history
 
 ## 2026-03-14
+- **Rejected relative native library search paths in `drift deploy` (0.27.53-dev)**:
+  Tightened the deploy-time native library path resolver so machine-local
+  search hints fail fast instead of producing confusing linker failures later.
+  - All three resolver input channels now require absolute paths:
+    - `DRIFT_NATIVE_LIB_PATH`
+    - `drift-deploy-config.json` `native_lib_paths`
+    - `--native-lib-path`
+  - Relative paths are rejected during input resolution with a clear error
+    stating that absolute paths are required for native library search hints.
+  - Absolute paths continue to work normally.
+  - Added regression coverage for:
+    - relative path rejection in env/config/CLI
+    - absolute path acceptance
+
 - **Added deploy-time native library path resolver hints (0.27.52-dev)**:
   Standardized how `drift deploy` accepts machine-local native library search
   path hints without embedding them in package metadata or signed `.dmp`
