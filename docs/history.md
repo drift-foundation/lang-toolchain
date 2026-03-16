@@ -1,5 +1,32 @@
 # Drift development history
 
+## 2026-03-15
+- **Switched published packages to compressed `.zdmp` distribution and pinned smoke dependency versions (0.27.63)**:
+  Made compressed package distribution the standard published form and fixed
+  baseline smoke to compile against the same exact resolved dependency graph as
+  build.
+  - Compressed package distribution:
+    - published package artifacts are now `<name>.zdmp` with sidecar
+      `<name>.sig`
+    - `.zdmp` is a zstd-compressed wrapper around the canonical uncompressed
+      DMIR-PKG bytes
+    - signatures continue to cover the uncompressed package payload
+    - compiler package discovery, provider loading, deploy resolver indexing,
+      and tooling-side manifest readers now accept `.zdmp`
+    - decompressed package bytes are cached locally by uncompressed sha256
+      under `~/.cache/drift/pkg/v0/`
+    - cache writes are atomic to avoid partial reads under concurrent use
+  - Smoke dependency pinning:
+    - baseline smoke now passes `--dep <pkg>@<version>` for each resolved
+      dependency in addition to the artifact itself
+    - this prevents smoke-only version ambiguity when multiple versions of a
+      dependency are visible under the smoke package root
+  - Added regression coverage for:
+    - `.zdmp` compression/decompression and cache behavior
+    - `.zdmp` discovery and loading in compiler/provider/resolver paths
+    - deploy staging/publish output as `.zdmp` + `.sig`
+    - smoke command dependency pinning against resolved versions
+
 ## 2026-03-14
 - **Deduplicated physically identical packages across staged and raw roots in `drift deploy` resolution (0.27.62)**:
   Prevented false duplicate-package errors when the staged package root

@@ -6,7 +6,7 @@ Pinned policy:
 - Signature scheme (v1): Ed25519.
 - Public keys are encoded as base64 of raw 32-byte keys.
 - Signatures are encoded as base64 of raw 64-byte signatures.
-- The sidecar file is JSON, named `<pkg>.dmp.sig` (e.g. `pkg.dmp.sig`).
+- The sidecar file is JSON, named `<pkg>.sig` (e.g. `foo.sig`).
 - Signatures cover the *exact bytes* of the uncompressed DMIR-PKG container.
   If the package is transported compressed (e.g. `.zst`), it must be
   decompressed before verification. Compression is not part of the signed
@@ -73,7 +73,7 @@ class SigFile:
 
 def load_sig_sidecar(path: Path) -> SigFile:
 	"""
-	Load and validate a `.dmp.sig` sidecar.
+	Load and validate a `.sig` sidecar.
 
 	Minimal schema (pinned):
 	{
@@ -190,7 +190,7 @@ def verify_package_signatures(
 						f"unsigned package is not permitted for reserved module namespace '{mid}'"
 					)
 
-	sig_path = Path(str(pkg_path) + ".sig")
+	sig_path = pkg_path.with_suffix(".sig")
 	if not sig_path.exists():
 		if allow_unsigned:
 			return

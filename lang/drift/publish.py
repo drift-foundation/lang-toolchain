@@ -22,7 +22,7 @@ def publish_packages_v0(opts: PublishOptions) -> None:
 	"""
 Publish one or more packages into a directory "repository".
 
-This is an offline operation: it copies `.dmp` + optional `.dmp.sig` sidecar and
+This is an offline operation: it copies `.dmp` + optional `.sig` sidecar and
 updates `index.json` under `dest_dir`.
 
 Pinned MVP rule: one version per package_id in a repository.
@@ -43,7 +43,7 @@ Pinned MVP rule: one version per package_id in a repository.
 		pkg_bytes = pkg_path.read_bytes()
 		pkg_sha = f"sha256:{sha256_hex(pkg_bytes)}"
 
-		sidecar_path = Path(str(pkg_path) + ".sig")
+		sidecar_path = pkg_path.with_suffix(".sig")
 		signers: list[str] = []
 		unsigned = False
 		if sidecar_path.exists():
@@ -57,7 +57,8 @@ Pinned MVP rule: one version per package_id in a repository.
 		# Use a deterministic filename in the repository.
 		base_name = f"{ident.package_id}-{ident.package_version}-{ident.target}.dmp"
 		out_pkg = dest / base_name
-		out_sig = dest / (base_name + ".sig")
+		sig_base = base_name.rsplit(".", 1)[0] + ".sig"
+		out_sig = dest / sig_base
 
 		shutil.copyfile(pkg_path, out_pkg)
 		if sidecar_path.exists():

@@ -228,6 +228,140 @@ def _read_exact(f, n: int) -> bytes:
 	return data
 
 
+def _load_dmir_pkg_v0_impl(f, file_size: int, source_path: Path) -> LoadedPackage:
+	"""
+	Core DMIR-PKG v0 loading from a file-like object.
+
+	`f` must support read() and seek(). `file_size` is the total size
+	of the data (used for offset validation). `source_path` is recorded
+	in the returned LoadedPackage for diagnostics.
+	"""
+	header_bytes = _read_exact(f, HEADER_SIZE_V0)
+	(
+		magic,
+		version,
+		flags,
+		header_size,
+		manifest_len,
+		manifest_sha,
+		toc_len,
+		toc_entry_size,
+		toc_sha,
+		_reserved,
+	) = _HEADER_STRUCT.unpack(header_bytes)
+	if magic != MAGIC:
+		raise ValueError("invalid package magic")
+	if version != VERSION:
+		raise ValueError(f"unsupported package version {version}")
+	if flags != 0:
+		raise ValueError("unsupported package flags")
+	if header_size != HEADER_SIZE_V0:
+		raise ValueError("unsupported header size")
+	if toc_entry_size != TOC_ENTRY_SIZE_V0:
+		raise ValueError("unsupported toc entry size")
+
+	manifest_bytes = _read_exact(f, int(manifest_len))
+	if sha256_bytes(manifest_bytes) != manifest_sha:
+		raise ValueError("manifest sha256 mismatch")
+
+	toc_bytes = _read_exact(f, int(toc_len) * TOC_ENTRY_SIZE_V0)
+	if sha256_bytes(toc_bytes) != toc_sha:
+		raise ValueError("toc sha256 mismatch")
+
+	# Parse TOC.
+	entries: list[TocEntry] = []
+	seen_shas: set[str] = set()
+	for i in range(int(toc_len)):
+		chunk = toc_bytes[i * TOC_ENTRY_SIZE_V0 : (i + 1) * TOC_ENTRY_SIZE_V0]
+		blob_sha, offset, length, typ, _eflags, name_len, name_raw = _TOC_ENTRY_STRUCT.unpack(chunk)
+		sha = blob_sha.hex()
+		if sha in seen_shas:
+			raise ValueError(f"duplicate blob sha256 in toc: {sha}")
+		seen_shas.add(sha)
+		name_prefix = name_raw[: int(name_len)]
+		try:
+			name = name_prefix.decode("utf-8")
+		except Exception:
+			name = ""
+		entries.append(TocEntry(sha256=sha, offset=int(offset), length=int(length), type=int(typ), name=name))
+
+	# Validate offsets are in-range and non-overlapping.
+	sorted_by_offset = sorted(entries, key=lambda e: e.offset)
+	prev_end = HEADER_SIZE_V0 + int(manifest_len) + (int(toc_len) * TOC_ENTRY_SIZE_V0)
+	for e in sorted_by_offset:
+		if e.offset < prev_end:
+			raise ValueError("blob offsets overlap or point into header/manifest/toc")
+		end = e.offset + e.length
+		if end > file_size:
+			raise ValueError("blob offset out of range")
+		prev_end = end
+
+	manifest_obj = json.loads(manifest_bytes.decode("utf-8"))
+	if not isinstance(manifest_obj, dict):
+		raise ValueError("manifest must be a JSON object")
+
+	# Build sha -> bytes map and verify per-entry hashes.
+	blobs_by_sha: dict[str, bytes] = {}
+	for e in entries:
+		f.seek(e.offset)
+		data = _read_exact(f, e.length)
+		if sha256_hex(data) != e.sha256:
+			raise ValueError(f"blob sha256 mismatch for {e.sha256}")
+		blobs_by_sha[e.sha256] = data
+
+	# Cross-check manifest <-> toc.
+	manifest_blobs = manifest_obj.get("blobs")
+	if not isinstance(manifest_blobs, dict):
+		raise ValueError("manifest missing 'blobs' map")
+	manifest_blob_shas = {k.split("sha256:", 1)[1] if isinstance(k, str) and k.startswith("sha256:") else str(k) for k in manifest_blobs.keys()}
+	toc_blob_shas = {e.sha256 for e in entries}
+	missing = manifest_blob_shas - toc_blob_shas
+	extra = toc_blob_shas - manifest_blob_shas
+	if missing:
+		raise ValueError(f"manifest references missing blob(s): {sorted(missing)}")
+	if extra:
+		raise ValueError(f"toc contains unreferenced blob(s): {sorted(extra)}")
+
+	# Decode modules.
+	modules_by_id: dict[str, PackageModule] = {}
+	mod_list = manifest_obj.get("modules")
+	if not isinstance(mod_list, list):
+		raise ValueError("manifest missing 'modules' list")
+	for m in mod_list:
+		if not isinstance(m, dict):
+			raise ValueError("invalid module entry in manifest")
+		mid = m.get("module_id")
+		if not isinstance(mid, str):
+			raise ValueError("module entry missing module_id")
+		iface_ref = m.get("interface_blob")
+		payload_ref = m.get("payload_blob")
+		if not isinstance(iface_ref, str) or not iface_ref.startswith("sha256:"):
+			raise ValueError(f"module '{mid}' missing interface_blob reference")
+		if not isinstance(payload_ref, str) or not payload_ref.startswith("sha256:"):
+			raise ValueError(f"module '{mid}' missing payload_blob reference")
+		iface_sha = iface_ref.split("sha256:", 1)[1]
+		payload_sha = payload_ref.split("sha256:", 1)[1]
+		iface_bytes = blobs_by_sha.get(iface_sha)
+		payload_bytes = blobs_by_sha.get(payload_sha)
+		if iface_bytes is None or payload_bytes is None:
+			raise ValueError(f"module '{mid}' references missing blobs")
+		interface_obj = json.loads(iface_bytes.decode("utf-8"))
+		payload_obj = json.loads(payload_bytes.decode("utf-8"))
+		if not isinstance(interface_obj, dict) or not isinstance(payload_obj, dict):
+			raise ValueError(f"module '{mid}' blobs must decode to JSON objects")
+		modules_by_id[mid] = PackageModule(module_id=mid, interface=interface_obj, payload=payload_obj)
+
+	return LoadedPackage(
+		path=source_path,
+		manifest=dict(manifest_obj),
+		toc=list(entries),
+		modules_by_id=modules_by_id,
+		blobs_by_sha256=blobs_by_sha,
+		native_deps=_parse_native_deps(manifest_obj),
+		package_deps=_parse_package_deps(manifest_obj),
+	)
+
+
 def load_dmir_pkg_v0(path: Path) -> LoadedPackage:
 	"""
 	Load a DMIR-PKG v0 container and verify integrity.
@@ -241,128 +375,16 @@ Verification steps:
 	- manifest references match TOC (strict: TOC must not contain unreferenced blobs)
 	"""
 	with path.open("rb") as f:
-		header_bytes = _read_exact(f, HEADER_SIZE_V0)
-		(
-			magic,
-			version,
-			flags,
-			header_size,
-			manifest_len,
-			manifest_sha,
-			toc_len,
-			toc_entry_size,
-			toc_sha,
-			_reserved,
-		) = _HEADER_STRUCT.unpack(header_bytes)
-		if magic != MAGIC:
-			raise ValueError("invalid package magic")
-		if version != VERSION:
-			raise ValueError(f"unsupported package version {version}")
-		if flags != 0:
-			raise ValueError("unsupported package flags")
-		if header_size != HEADER_SIZE_V0:
-			raise ValueError("unsupported header size")
-		if toc_entry_size != TOC_ENTRY_SIZE_V0:
-			raise ValueError("unsupported toc entry size")
+		return _load_dmir_pkg_v0_impl(f, path.stat().st_size, path)
 
-		manifest_bytes = _read_exact(f, int(manifest_len))
-		if sha256_bytes(manifest_bytes) != manifest_sha:
-			raise ValueError("manifest sha256 mismatch")
 
-		toc_bytes = _read_exact(f, int(toc_len) * TOC_ENTRY_SIZE_V0)
-		if sha256_bytes(toc_bytes) != toc_sha:
-			raise ValueError("toc sha256 mismatch")
+def load_dmir_pkg_v0_from_bytes(data: bytes, source_path: Path | None = None) -> LoadedPackage:
+	"""
+	Load a DMIR-PKG v0 container from in-memory bytes.
 
-		# Parse TOC.
-		entries: list[TocEntry] = []
-		seen_shas: set[str] = set()
-		for i in range(int(toc_len)):
-			chunk = toc_bytes[i * TOC_ENTRY_SIZE_V0 : (i + 1) * TOC_ENTRY_SIZE_V0]
-			blob_sha, offset, length, typ, _eflags, name_len, name_raw = _TOC_ENTRY_STRUCT.unpack(chunk)
-			sha = blob_sha.hex()
-			if sha in seen_shas:
-				raise ValueError(f"duplicate blob sha256 in toc: {sha}")
-			seen_shas.add(sha)
-			name_prefix = name_raw[: int(name_len)]
-			try:
-				name = name_prefix.decode("utf-8")
-			except Exception:
-				name = ""
-			entries.append(TocEntry(sha256=sha, offset=int(offset), length=int(length), type=int(typ), name=name))
-
-		# Validate offsets are in-range and non-overlapping.
-		file_size = path.stat().st_size
-		sorted_by_offset = sorted(entries, key=lambda e: e.offset)
-		prev_end = HEADER_SIZE_V0 + int(manifest_len) + (int(toc_len) * TOC_ENTRY_SIZE_V0)
-		for e in sorted_by_offset:
-			if e.offset < prev_end:
-				raise ValueError("blob offsets overlap or point into header/manifest/toc")
-			end = e.offset + e.length
-			if end > file_size:
-				raise ValueError("blob offset out of range")
-			prev_end = end
-
-		manifest_obj = json.loads(manifest_bytes.decode("utf-8"))
-		if not isinstance(manifest_obj, dict):
-			raise ValueError("manifest must be a JSON object")
-
-		# Build sha -> bytes map and verify per-entry hashes.
-		blobs_by_sha: dict[str, bytes] = {}
-		for e in entries:
-			f.seek(e.offset)
-			data = _read_exact(f, e.length)
-			if sha256_hex(data) != e.sha256:
-				raise ValueError(f"blob sha256 mismatch for {e.sha256}")
-			blobs_by_sha[e.sha256] = data
-
-		# Cross-check manifest <-> toc.
-		manifest_blobs = manifest_obj.get("blobs")
-		if not isinstance(manifest_blobs, dict):
-			raise ValueError("manifest missing 'blobs' map")
-		manifest_blob_shas = {k.split("sha256:", 1)[1] if isinstance(k, str) and k.startswith("sha256:") else str(k) for k in manifest_blobs.keys()}
-		toc_blob_shas = {e.sha256 for e in entries}
-		missing = manifest_blob_shas - toc_blob_shas
-		extra = toc_blob_shas - manifest_blob_shas
-		if missing:
-			raise ValueError(f"manifest references missing blob(s): {sorted(missing)}")
-		if extra:
-			raise ValueError(f"toc contains unreferenced blob(s): {sorted(extra)}")
-
-		# Decode modules.
-		modules_by_id: dict[str, PackageModule] = {}
-		mod_list = manifest_obj.get("modules")
-		if not isinstance(mod_list, list):
-			raise ValueError("manifest missing 'modules' list")
-		for m in mod_list:
-			if not isinstance(m, dict):
-				raise ValueError("invalid module entry in manifest")
-			mid = m.get("module_id")
-			if not isinstance(mid, str):
-				raise ValueError("module entry missing module_id")
-			iface_ref = m.get("interface_blob")
-			payload_ref = m.get("payload_blob")
-			if not isinstance(iface_ref, str) or not iface_ref.startswith("sha256:"):
-				raise ValueError(f"module '{mid}' missing interface_blob reference")
-			if not isinstance(payload_ref, str) or not payload_ref.startswith("sha256:"):
-				raise ValueError(f"module '{mid}' missing payload_blob reference")
-			iface_sha = iface_ref.split("sha256:", 1)[1]
-			payload_sha = payload_ref.split("sha256:", 1)[1]
-			iface_bytes = blobs_by_sha.get(iface_sha)
-			payload_bytes = blobs_by_sha.get(payload_sha)
-			if iface_bytes is None or payload_bytes is None:
-				raise ValueError(f"module '{mid}' references missing blobs")
-			interface_obj = json.loads(iface_bytes.decode("utf-8"))
-			payload_obj = json.loads(payload_bytes.decode("utf-8"))
-			if not isinstance(interface_obj, dict) or not isinstance(payload_obj, dict):
-				raise ValueError(f"module '{mid}' blobs must decode to JSON objects")
-			modules_by_id[mid] = PackageModule(module_id=mid, interface=interface_obj, payload=payload_obj)
-
-	return LoadedPackage(
-		path=path,
-		manifest=dict(manifest_obj),
-		toc=list(entries),
-		modules_by_id=modules_by_id,
-		blobs_by_sha256=blobs_by_sha,
-		native_deps=_parse_native_deps(manifest_obj),
-		package_deps=_parse_package_deps(manifest_obj),
-	)
+	Same verification as load_dmir_pkg_v0 but operates on bytes instead
+	of a file path.  Used for loading decompressed .zdmp content.
+	"""
+	import io
+	f = io.BytesIO(data)
+	return _load_dmir_pkg_v0_impl(f, len(data), source_path or Path("<bytes>"))

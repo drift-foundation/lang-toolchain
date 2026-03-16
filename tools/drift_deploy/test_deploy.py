@@ -1339,7 +1339,7 @@ class TestBuildSelfExclusion:
 			# New version must exist.
 			new_ver = art_dir / "0.3.0"
 			assert new_ver.is_dir(), "new version 0.3.0 must be staged for smoke"
-			assert (new_ver / "net-tls.dmp").exists(), "built .dmp must be in staged 0.3.0"
+			assert (new_ver / "net-tls.zdmp").exists(), "built .zdmp must be in staged 0.3.0"
 
 			# Old version must still be reachable (symlinked).
 			old_ver = art_dir / "0.2.0"
@@ -1428,15 +1428,15 @@ class TestBuildSelfExclusion:
 			assert not new_ver.is_symlink(), (
 				"staged 0.3.0 must be a real directory, not a symlink to stale dest"
 			)
-			assert (new_ver / "net-tls.dmp").exists(), (
-				"just-built .dmp must be in staged 0.3.0"
+			assert (new_ver / "net-tls.zdmp").exists(), (
+				"just-built .zdmp must be in staged 0.3.0"
 			)
 
-			# The .dmp must NOT have been written through a symlink into dest.
+			# The .zdmp must NOT have been written through a symlink into dest.
 			stale_dest = dest / "net-tls" / "0.3.0"
 			stale_contents = list(stale_dest.iterdir()) if stale_dest.exists() else []
-			assert not any(f.name == "net-tls.dmp" for f in stale_contents), (
-				"built .dmp must not leak into dest through stale symlink"
+			assert not any(f.name == "net-tls.zdmp" for f in stale_contents), (
+				"built .zdmp must not leak into dest through stale symlink"
 			)
 
 	@patch("tools.drift_deploy.drift_deploy._sign_package")
@@ -1695,3 +1695,182 @@ class TestExtractDepNamespaces:
 			staged.mkdir()
 			ns = _extract_dep_namespaces("nonexistent", staged)
 			assert ns == []
+
+
+# ── Smoke dep pinning ────────────────────────────────────────────────
+
+
+class TestSmokeDepPinning:
+	"""
+	Regression: baseline smoke must pin resolved dependency versions.
+
+	When the smoke package root exposes multiple versions of a
+	transitive dependency, the compiler fails with an ambiguity error
+	unless --dep pins select the exact version.  Build already resolves
+	the correct dependency graph; smoke must use the same pins.
+	"""
+
+	def test_smoke_pins_resolved_deps(self) -> None:
+		"""Smoke command includes --dep for each resolved dependency."""
+		from tools.drift_deploy.manifest import NativeDep
+
+		art = Artifact(
+			kind="package", name="web-client", version="0.1.0",
+			description="Web", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="web_client",
+		)
+		resolved = {
+			"net-tls": ResolvedDep(version="0.3.1", integrity="sha256:aa", dep_type="direct"),
+			"acme.crypto": ResolvedDep(version="0.9.0", integrity="sha256:bb", dep_type="transitive"),
+		}
+
+		calls: list[list[str]] = []
+
+		def fake_run(args, **kwargs):
+			cmd = args if isinstance(args, list) else [args]
+			calls.append(cmd)
+			# Create .dmp if --emit-package is present.
+			for i, arg in enumerate(cmd):
+				if arg == "--emit-package" and i + 1 < len(cmd):
+					out = Path(cmd[i + 1])
+					out.parent.mkdir(parents=True, exist_ok=True)
+					out.write_bytes(b"fake-dmp")
+			m = MagicMock()
+			m.returncode = 0
+			m.stdout = ""
+			m.stderr = ""
+			return m
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			base = Path(tmpdir)
+			stage_dir = base / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			manifest_dir = base / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+
+			with patch("tools.drift_deploy.drift_deploy._sign_package", return_value=sig_path), \
+				patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32), \
+				patch("tools.drift_deploy.staged_trust.build_staged_trust"), \
+				patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=fake_run):
+
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved=resolved,
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root],
+					dest=base / "dest",
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=False,
+					dry_run=True,
+					compiler_version="0.27.62",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			# Find the smoke command (second subprocess.run call — first is build).
+			assert len(calls) >= 2, f"expected at least 2 subprocess calls, got {len(calls)}"
+			smoke_cmd = calls[1]
+
+			# Collect all --dep values from the smoke command.
+			dep_pins: list[str] = []
+			for i, arg in enumerate(smoke_cmd):
+				if arg == "--dep" and i + 1 < len(smoke_cmd):
+					dep_pins.append(smoke_cmd[i + 1])
+
+			# Must include the artifact itself.
+			assert "web-client@0.1.0" in dep_pins, (
+				f"smoke must pin the artifact itself; got --dep values: {dep_pins}"
+			)
+			# Must include all resolved deps.
+			assert "net-tls@0.3.1" in dep_pins, (
+				f"smoke must pin resolved dep net-tls@0.3.1; got --dep values: {dep_pins}"
+			)
+			assert "acme.crypto@0.9.0" in dep_pins, (
+				f"smoke must pin resolved dep acme.crypto@0.9.0; got --dep values: {dep_pins}"
+			)
+
+	def test_smoke_no_deps_pins_only_artifact(self) -> None:
+		"""When no deps are resolved, smoke only pins the artifact itself."""
+		art = Artifact(
+			kind="package", name="util-log", version="1.0.0",
+			description="Log", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="util_log",
+		)
+
+		calls: list[list[str]] = []
+
+		def fake_run(args, **kwargs):
+			cmd = args if isinstance(args, list) else [args]
+			calls.append(cmd)
+			for i, arg in enumerate(cmd):
+				if arg == "--emit-package" and i + 1 < len(cmd):
+					out = Path(cmd[i + 1])
+					out.parent.mkdir(parents=True, exist_ok=True)
+					out.write_bytes(b"fake-dmp")
+			m = MagicMock()
+			m.returncode = 0
+			m.stdout = ""
+			m.stderr = ""
+			return m
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			base = Path(tmpdir)
+			stage_dir = base / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			manifest_dir = base / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+
+			with patch("tools.drift_deploy.drift_deploy._sign_package", return_value=sig_path), \
+				patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32), \
+				patch("tools.drift_deploy.staged_trust.build_staged_trust"), \
+				patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=fake_run):
+
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root],
+					dest=base / "dest",
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=False,
+					dry_run=True,
+					compiler_version="0.27.62",
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			assert len(calls) >= 2
+			smoke_cmd = calls[1]
+
+			dep_pins: list[str] = []
+			for i, arg in enumerate(smoke_cmd):
+				if arg == "--dep" and i + 1 < len(smoke_cmd):
+					dep_pins.append(smoke_cmd[i + 1])
+
+			assert dep_pins == ["util-log@1.0.0"], (
+				f"with no resolved deps, smoke should only pin the artifact; got: {dep_pins}"
+			)

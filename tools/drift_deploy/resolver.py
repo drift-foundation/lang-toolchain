@@ -48,6 +48,16 @@ class ResolutionError(Exception):
 
 
 def _sha256_file(path: Path) -> str:
+	"""
+	Compute sha256 of the canonical (uncompressed) package bytes.
+
+	For .zdmp files, decompresses first — the hash identity is always
+	the uncompressed payload, matching signature semantics.
+	"""
+	if path.suffix == ".zdmp":
+		from lang.driftc.packages.zdmp import decompress_zdmp
+		raw = decompress_zdmp(path.read_bytes())
+		return hashlib.sha256(raw).hexdigest()
 	h = hashlib.sha256()
 	with path.open("rb") as f:
 		while True:
@@ -72,8 +82,13 @@ def build_package_index(
 	If None, uses the dmir_pkg_v0 loader.
 	"""
 	if load_manifest is None:
-		from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
+		from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0, load_dmir_pkg_v0_from_bytes
 		def load_manifest(path: Path) -> dict[str, Any]:
+			if path.suffix == ".zdmp":
+				from lang.driftc.packages.zdmp import decompress_zdmp
+				raw = decompress_zdmp(path.read_bytes())
+				pkg = load_dmir_pkg_v0_from_bytes(raw, source_path=path)
+				return pkg.manifest
 			pkg = load_dmir_pkg_v0(path)
 			return pkg.manifest
 
@@ -86,13 +101,23 @@ def build_package_index(
 			continue
 		if root.is_dir():
 			import os
-			dmp_files = sorted(
+			all_pkg_files = sorted(
 				Path(dp) / fn
 				for dp, _, fns in os.walk(root, followlinks=True)
-				for fn in fns if fn.endswith(".dmp")
+				for fn in fns if fn.endswith(".zdmp") or fn.endswith(".dmp")
 			)
+			# Deduplicate: when both foo.zdmp and foo.dmp exist in the
+			# same directory, keep only .zdmp.
+			zdmp_stems: set[tuple[str, str]] = set()
+			for p in all_pkg_files:
+				if p.suffix == ".zdmp":
+					zdmp_stems.add((str(p.parent), p.stem))
+			dmp_files = [
+				p for p in all_pkg_files
+				if p.suffix != ".dmp" or (str(p.parent), p.stem) not in zdmp_stems
+			]
 		else:
-			dmp_files = [root] if root.suffix == ".dmp" else []
+			dmp_files = [root] if root.suffix in (".zdmp", ".dmp") else []
 		for dmp_path in dmp_files:
 			if not dmp_path.is_file():
 				continue

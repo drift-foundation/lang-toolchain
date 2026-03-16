@@ -138,16 +138,19 @@ def plan_trust_import(opts: TrustImportOptions) -> tuple[Path, str, str | None]:
 	sidecar_path = source
 	package_id: str | None = None
 	if source.suffix == ".sig":
-		base = Path(str(source)[:-4])
-		if base.suffix == ".dmp" and base.exists():
-			ident = read_identity_v0(base)
-			package_id = ident.package_id
-	if source.suffix == ".dmp":
+		# Try to find sibling package (.zdmp or .dmp) for identity.
+		for ext in (".zdmp", ".dmp"):
+			base = source.with_suffix(ext)
+			if base.exists():
+				ident = read_identity_v0(base)
+				package_id = ident.package_id
+				break
+	if source.suffix in (".dmp", ".zdmp"):
 		ident = read_identity_v0(source)
 		package_id = ident.package_id
-		sidecar_path = Path(str(source) + ".sig")
+		sidecar_path = source.with_suffix(".sig")
 	if sidecar_path.suffix != ".sig":
-		raise ValueError("trust import expects a .sig sidecar or a .dmp package path")
+		raise ValueError("trust import expects a .sig sidecar or a .dmp/.zdmp package path")
 	if not sidecar_path.exists():
 		raise ValueError(f"signature sidecar not found: {sidecar_path}")
 	namespace = opts.namespace

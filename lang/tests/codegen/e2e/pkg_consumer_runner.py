@@ -193,7 +193,7 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 	sig_raw = priv.sign(pkg_bytes)
 	pkg_sha_hex = sha256(pkg_bytes).hexdigest()
 
-	sig_sidecar = Path(str(pkg_path) + ".sig")
+	sig_sidecar = pkg_path.with_suffix(".sig")
 	sig_obj = {
 		"format": "dmir-pkg-sig",
 		"version": 0,

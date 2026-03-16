@@ -577,7 +577,7 @@ def _write_sig_sidecar(
 	sigs = [entry]
 	if extra_entries:
 		sigs.extend(extra_entries)
-	sidecar = Path(str(pkg_path) + ".sig")
+	sidecar = pkg_path.with_suffix(".sig")
 	obj = {
 		"format": "dmir-pkg-sig",
 		"version": 0,
@@ -2035,7 +2035,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_malformed_signature_sidecar_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
-	Path(str(signed.pkg_path) + ".sig").write_text("{", encoding="utf-8")
+	signed.pkg_path.with_suffix(".sig").write_text("{", encoding="utf-8")
 
 	_write_file(
 		tmp_path / "main.drift",
@@ -2154,7 +2154,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_sidecar_invalid_base64(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
-	sidecar = Path(str(signed.pkg_path) + ".sig")
+	sidecar = signed.pkg_path.with_suffix(".sig")
 	obj = json.loads(sidecar.read_text(encoding="utf-8"))
 	obj["signatures"][0]["sig"] = "!!!"
 	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
@@ -2193,7 +2193,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_sidecar_wrong_sig_length(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
-	sidecar = Path(str(signed.pkg_path) + ".sig")
+	sidecar = signed.pkg_path.with_suffix(".sig")
 	obj = json.loads(sidecar.read_text(encoding="utf-8"))
 	obj["signatures"][0]["sig"] = _b64(b"\0" * 63)
 	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
@@ -2469,7 +2469,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_sidecar_wrong_pubkey_length(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
-	sidecar = Path(str(signed.pkg_path) + ".sig")
+	sidecar = signed.pkg_path.with_suffix(".sig")
 	obj = json.loads(sidecar.read_text(encoding="utf-8"))
 	obj["signatures"][0]["pubkey"] = _b64(b"\0" * 31)
 	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
@@ -2508,7 +2508,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_sidecar_invalid_pubkey_base64(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	signed = _make_signed_package(tmp_path)
-	sidecar = Path(str(signed.pkg_path) + ".sig")
+	sidecar = signed.pkg_path.with_suffix(".sig")
 	obj = json.loads(sidecar.read_text(encoding="utf-8"))
 	obj["signatures"][0]["pubkey"] = "!!!"
 	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")

@@ -86,7 +86,7 @@ pub fn add(a: Int, b: Int) -> Int {
 		text=True,
 	)
 	assert sign.returncode == 0, sign.stderr
-	sidecar = Path(str(pkg) + ".sig")
+	sidecar = pkg.with_suffix(".sig")
 	sig_obj = json.loads(sidecar.read_text(encoding="utf-8"))
 	pub_b64 = sig_obj["signatures"][0].get("pubkey")
 	assert isinstance(pub_b64, str)
@@ -260,7 +260,7 @@ pub fn id(x: Int) -> Int {
 			"--trust-store",
 			str(trust_path),
 			"--yes",
-			str(Path(str(pkg) + ".sig")),
+			str(pkg.with_suffix(".sig")),
 			"--json",
 		],
 		cwd=str(repo_root),

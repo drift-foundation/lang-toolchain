@@ -58,7 +58,7 @@ def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[s
 
 
 def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str) -> None:
-	sidecar = Path(str(pkg_path) + ".sig")
+	sidecar = pkg_path.with_suffix(".sig")
 	obj = {
 		"format": "dmir-pkg-sig",
 		"version": 0,

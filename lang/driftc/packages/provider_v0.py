@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from lang.driftc.packages.dmir_pkg_v0 import LoadedPackage, load_dmir_pkg_v0
+from lang.driftc.packages.dmir_pkg_v0 import LoadedPackage, load_dmir_pkg_v0, load_dmir_pkg_v0_from_bytes
 from lang.driftc.packages.signature_v0 import verify_package_signatures
 from lang.driftc.packages.trust_v0 import TrustStore
 from lang.driftc.core.function_id import function_id_from_obj, function_symbol
@@ -28,8 +28,12 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 	"""
 	Discover package artifacts under package roots.
 
-	MVP rule: any `*.dmp` file under a root is considered a package artifact.
-	The returned list is deterministic.
+	Accepts both `.zdmp` (compressed, standard distribution form) and
+	`.dmp` (uncompressed, build intermediate) files.  When both exist
+	for the same stem in the same directory, `.zdmp` takes priority and
+	the `.dmp` is excluded.
+
+	The returned list is deterministic (sorted).
 
 	Uses os.walk with followlinks=True so that symlinked directories
 	(as created by drift deploy's staged/build package roots) are
@@ -42,18 +46,37 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 		if not root.exists():
 			continue
 		if root.is_file():
-			if root.suffix == ".dmp":
+			if root.suffix in (".zdmp", ".dmp"):
 				out.add(root)
 			continue
 		for dirpath, _dirnames, filenames in os.walk(root, followlinks=True):
 			for fname in filenames:
-				if fname.endswith(".dmp"):
+				if fname.endswith(".zdmp") or fname.endswith(".dmp"):
 					out.add(Path(dirpath) / fname)
+
+	# Deduplicate: when both foo.zdmp and foo.dmp exist in the same
+	# directory, keep only the .zdmp.
+	zdmp_stems: set[tuple[str, str]] = set()  # (dirpath, stem)
+	for p in out:
+		if p.suffix == ".zdmp":
+			zdmp_stems.add((str(p.parent), p.stem))
+	out = {
+		p for p in out
+		if p.suffix != ".dmp" or (str(p.parent), p.stem) not in zdmp_stems
+	}
+
 	return sorted(out)
 
 
 def load_package_v0(path: Path) -> LoadedPackage:
-	"""Load and verify a DMIR-PKG v0 artifact (integrity only)."""
+	"""Load and verify a DMIR-PKG v0 artifact (integrity only).
+
+	Handles both `.zdmp` (compressed) and `.dmp` (uncompressed) files.
+	"""
+	if path.suffix == ".zdmp":
+		from lang.driftc.packages.zdmp import load_zdmp_cached
+		raw_bytes = load_zdmp_cached(path, expected_sha256=None)
+		return load_dmir_pkg_v0_from_bytes(raw_bytes, source_path=path)
 	return load_dmir_pkg_v0(path)
 
 
@@ -605,14 +628,48 @@ class PackageTrustPolicy:
 	allow_unsigned_roots: list[Path]
 
 
+def _read_sig_sha256(pkg_path: Path) -> str | None:
+	"""
+	Try to read the expected uncompressed sha256 from the .sig sidecar.
+
+	Returns the hex digest string or None if the sidecar doesn't exist
+	or can't be parsed.  Used to enable cache lookups for .zdmp files.
+	"""
+	sig_path = pkg_path.with_suffix(".sig")
+	if not sig_path.exists():
+		return None
+	try:
+		import json
+		obj = json.loads(sig_path.read_text(encoding="utf-8"))
+		sha_field = obj.get("package_sha256", "")
+		if isinstance(sha_field, str) and sha_field.startswith("sha256:"):
+			return sha_field.split("sha256:", 1)[1]
+	except Exception:
+		pass
+	return None
+
+
 def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_bytes: bytes | None = None) -> LoadedPackage:
 	"""
 	Load a package and enforce signature/trust policy.
 
+	Handles both `.zdmp` (compressed) and `.dmp` (uncompressed) files.
+	For `.zdmp`: decompresses via cache, then parses + verifies against
+	the uncompressed bytes (signature covers canonical uncompressed payload).
+
 	`pkg_bytes` is an optional optimization: callers that already read the bytes
 	(for hashing) can provide them to avoid a second read.
 	"""
-	pkg = load_dmir_pkg_v0(path)
+	if path.suffix == ".zdmp":
+		from lang.driftc.packages.zdmp import load_zdmp_cached
+		expected_sha = _read_sig_sha256(path)
+		raw_bytes = load_zdmp_cached(path, expected_sha256=expected_sha)
+		pkg = load_dmir_pkg_v0_from_bytes(raw_bytes, source_path=path)
+		data = raw_bytes
+	else:
+		pkg = load_dmir_pkg_v0(path)
+		data = pkg_bytes if pkg_bytes is not None else path.read_bytes()
+
 	# Package identity fields (pinned): required for dependency resolution and for
 	# driftc to enforce "single version per package id per build".
 	pkg_id = pkg.manifest.get("package_id")
@@ -624,7 +681,6 @@ def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_b
 		raise ValueError("package manifest missing package_version")
 	if not isinstance(pkg_target, str) or not pkg_target:
 		raise ValueError("package manifest missing target")
-	data = pkg_bytes if pkg_bytes is not None else path.read_bytes()
 	verify_package_signatures(
 		pkg_path=path,
 		pkg_bytes=data,

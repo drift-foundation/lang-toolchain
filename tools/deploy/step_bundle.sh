@@ -109,7 +109,7 @@ ambient `pip install`, or PYTHONPATH setup is needed — only clang.
 ### Stdlib integrity
 
 The standard library is shipped as a signed DMIR package (`lib/stdlib/std.dmp`)
-with a detached signature sidecar (`lib/stdlib/std.dmp.sig`).  The compiler
+with a detached signature sidecar (`lib/stdlib/std.sig`).  The compiler
 verifies the signature against the bundled core trust store at compile time.
 Tampered or unsigned stdlib packages are rejected.
 

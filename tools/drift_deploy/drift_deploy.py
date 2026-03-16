@@ -552,10 +552,11 @@ def _build_app(
 
 def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
 	"""
-	Extract module namespaces from a dependency's .dmp files.
+	Extract module namespaces from a dependency's package files.
 
-	Scans staged_pkg_root/<pkg_id>/ for .dmp files and reads their
-	module_id entries to discover which namespaces need trust authorization.
+	Scans staged_pkg_root/<pkg_id>/ for .zdmp and .dmp files and reads
+	their module_id entries to discover which namespaces need trust
+	authorization.
 	"""
 	namespaces: set[str] = set()
 	pkg_dir = staged_pkg_root / pkg_id
@@ -564,12 +565,18 @@ def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
 	import os
 	for dirpath, _, filenames in os.walk(str(pkg_dir), followlinks=True):
 		for fname in filenames:
-			if not fname.endswith(".dmp"):
+			if not fname.endswith(".zdmp") and not fname.endswith(".dmp"):
 				continue
-			dmp_path = Path(dirpath) / fname
+			pkg_path = Path(dirpath) / fname
 			try:
-				from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
-				pkg = load_dmir_pkg_v0(dmp_path)
+				if pkg_path.suffix == ".zdmp":
+					from lang.driftc.packages.zdmp import decompress_zdmp
+					from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0_from_bytes
+					raw = decompress_zdmp(pkg_path.read_bytes())
+					pkg = load_dmir_pkg_v0_from_bytes(raw, source_path=pkg_path)
+				else:
+					from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
+					pkg = load_dmir_pkg_v0(pkg_path)
 				modules = pkg.manifest.get("modules", [])
 				for m in modules:
 					if isinstance(m, dict):
@@ -589,10 +596,10 @@ def _sign_package(
 	*,
 	sign_key: Path,
 ) -> Path:
-	"""Sign a .dmp and produce .dmp.sig. Returns path to sidecar."""
+	"""Sign a .dmp and produce .sig sidecar. Returns path to sidecar."""
 	from lang.drift.sign import SignOptions, sign_package_v0
 
-	sig_path = dmp_path.parent / f"{dmp_path.name}.sig"
+	sig_path = dmp_path.parent / f"{dmp_path.stem}.sig"
 	sign_package_v0(SignOptions(
 		package_path=dmp_path,
 		key_seed_path=sign_key,
@@ -644,6 +651,7 @@ def _run_baseline_smoke_package(
 	staged_install: Path,
 	staged_pkg_root: Path,
 	staged_trust: Path | None,
+	resolved: dict[str, ResolvedDep] | None = None,
 	native_lib_paths: list[Path] | None = None,
 ) -> None:
 	"""Built-in baseline smoke for package artifacts."""
@@ -673,6 +681,12 @@ def _run_baseline_smoke_package(
 		"--package-root", str(staged_pkg_root),
 		f"--dep", f"{art.name}@{art.version}",
 	]
+	# Pin resolved dependency versions — smoke must use the same exact
+	# version selection as build.  Without these pins, the compiler may
+	# see multiple versions of a transitive dependency in the smoke
+	# package root and fail with an ambiguity error.
+	for dep_id, dep in sorted((resolved or {}).items()):
+		cmd.extend(["--dep", f"{dep_id}@{dep.version}"])
 	if staged_trust:
 		cmd.extend(["--trust-store", str(staged_trust)])
 	# Native library search paths for smoke link step.
@@ -919,8 +933,18 @@ def _deploy_artifact(
 			)
 		sig_path = _sign_package(dmp_path, sign_key=sign_key)
 
+		# Compress the signed .dmp → .zdmp for distribution.
+		# Signature covers the uncompressed bytes (already signed above).
+		from lang.driftc.packages.zdmp import compress_to_zdmp
+		raw_bytes = dmp_path.read_bytes()
+		zdmp_bytes = compress_to_zdmp(raw_bytes)
+		zdmp_path = dmp_path.with_suffix(".zdmp")
+		zdmp_path.write_bytes(zdmp_bytes)
+		# Remove raw .dmp from staged install — only .zdmp is published.
+		dmp_path.unlink()
+
 		# Set up staged package root layout for smoke.
-		# Layout: staged_pkg_root/<name>/<version>/<name>.dmp (+.sig)
+		# Layout: staged_pkg_root/<name>/<version>/<name>.zdmp (+.sig)
 		#
 		# If staged_pkg_root/<name> is a symlink (pointing to the old dest
 		# from the pre-loop mirror), replace it with a real directory that
@@ -950,7 +974,7 @@ def _deploy_artifact(
 			elif smoke_pkg_dir.is_dir():
 				shutil.rmtree(str(smoke_pkg_dir))
 		smoke_pkg_dir.mkdir(parents=True, exist_ok=True)
-		shutil.copy2(str(dmp_path), str(smoke_pkg_dir / dmp_path.name))
+		shutil.copy2(str(zdmp_path), str(smoke_pkg_dir / zdmp_path.name))
 		if sig_path:
 			shutil.copy2(str(sig_path), str(smoke_pkg_dir / sig_path.name))
 
@@ -1037,6 +1061,7 @@ def _deploy_artifact(
 				staged_install=staged_install,
 				staged_pkg_root=smoke_pkg_root,
 				staged_trust=staged_trust_path,
+				resolved=resolved,
 				native_lib_paths=native_lib_paths,
 			)
 		else:
@@ -1054,7 +1079,7 @@ def _deploy_artifact(
 			"DRIFT_ARTIFACT_KIND": art.kind,
 		})
 		if art.kind == "package":
-			smoke_env["DRIFT_STAGED_PKG"] = str(dmp_path)
+			smoke_env["DRIFT_STAGED_PKG"] = str(zdmp_path)
 			if sig_path:
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
 		else:

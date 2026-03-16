@@ -117,7 +117,7 @@ pub fn add(a: Int, b: Int) -> Int {
 
 	cp = _run_drift(["sign", str(pkg), "--key", str(key), "--include-pubkey"])
 	assert cp.returncode == 0, cp.stderr
-	sig = Path(str(pkg) + ".sig")
+	sig = pkg.with_suffix(".sig")
 	assert sig.exists()
 
 	cp = _run_drift(["package", "inspect-signers", str(sig), "--json"])

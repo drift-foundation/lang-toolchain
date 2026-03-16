@@ -53,8 +53,17 @@ class PackageFormatError(ValueError):
 	pass
 
 
+def _decompress_if_zdmp(pkg_path: Path, data: bytes) -> bytes:
+	"""Decompress .zdmp bytes to raw DMIR-PKG bytes; pass through .dmp as-is."""
+	if pkg_path.suffix == ".zdmp":
+		import zstandard
+		dctx = zstandard.ZstdDecompressor()
+		return dctx.decompress(data)
+	return data
+
+
 def read_manifest_v0(pkg_path: Path) -> dict[str, Any]:
-	data = pkg_path.read_bytes()
+	data = _decompress_if_zdmp(pkg_path, pkg_path.read_bytes())
 	if len(data) < HEADER_SIZE_V0:
 		raise PackageFormatError("package file too small for header")
 

@@ -122,7 +122,7 @@ pub fn add(a: Int, b: Int) -> Int {
 		env=env,
 	)
 	assert res.returncode == 0, res.stderr
-	assert Path(str(pkg) + ".sig").exists()
+	assert pkg.with_suffix(".sig").exists()
 
 
 def test_drift_sign_uses_env_key_cmd_when_key_flag_missing(tmp_path: Path) -> None:
@@ -182,7 +182,7 @@ pub fn add(a: Int, b: Int) -> Int {
 		env=env,
 	)
 	assert res.returncode == 0, res.stderr
-	assert Path(str(pkg) + ".sig").exists()
+	assert pkg.with_suffix(".sig").exists()
 
 	# Generate a deterministic key seed file (base64 raw 32 bytes).
 	seed32 = os.urandom(32)
@@ -200,7 +200,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	)
 	assert res.returncode == 0, res.stderr
 
-	sig_path = Path(str(pkg) + ".sig")
+	sig_path = pkg.with_suffix(".sig")
 	assert sig_path.exists()
 
 	# Create a minimal project trust store that trusts the signer for `lib`.

@@ -81,8 +81,8 @@ def _inspect_signers(path: Path, package_id: str | None) -> dict[str, object]:
 			"package_sha256": sf.package_sha256,
 			"signers": sorted({s.kid for s in sf.signatures}),
 		}
-	if path.suffix == ".dmp":
-		sig_path = Path(str(path) + ".sig")
+	if path.suffix in (".dmp", ".zdmp"):
+		sig_path = path.with_suffix(".sig")
 		if not sig_path.exists():
 			raise ValueError(f"missing sidecar for package: {sig_path}")
 		sf = load_sig_sidecar_v0(sig_path)
@@ -112,14 +112,14 @@ def _inspect_signers(path: Path, package_id: str | None) -> dict[str, object]:
 			"signers": sorted({str(s) for s in signers}),
 			"signed": bool(raw.get("signed", False)),
 		}
-	raise ValueError("unsupported input path: expected .dmp, .sig, or index.json")
+	raise ValueError("unsupported input path: expected .dmp, .zdmp, .sig, or index.json")
 
 
 def _build_parser() -> argparse.ArgumentParser:
 	p = argparse.ArgumentParser(prog="drift", description="Drift tooling (package signing, publishing, etc.)")
 	sub = p.add_subparsers(dest="cmd", required=True)
 
-	sign = sub.add_parser("sign", help="Sign a DMIR-PKG package (.dmp) by writing a .dmp.sig sidecar")
+	sign = sub.add_parser("sign", help="Sign a DMIR-PKG package (.dmp) by writing a .sig sidecar")
 	sign.add_argument("package", type=Path, help="Path to pkg.dmp")
 	sign.add_argument(
 		"--key",
@@ -195,7 +195,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 	trust_import.add_argument("--namespace", type=str, default=None, help="Module namespace override (default: <package_id>.*)")
 	trust_import.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
-	trust_import.add_argument("source", type=Path, help="Path to pkg.dmp.sig or pkg.dmp (uses sibling .sig)")
+	trust_import.add_argument("source", type=Path, help="Path to pkg.sig, pkg.dmp, or pkg.zdmp (uses sibling .sig)")
 	trust_import.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
 	trust_revoke = trust_sub.add_parser("revoke", help="Revoke a trusted signing key id (kid)")
@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
 
 	if args.cmd == "sign":
 		pkg_path: Path = args.package
-		out: Path = args.out if args.out is not None else Path(str(pkg_path) + ".sig")
+		out: Path = args.out if args.out is not None else pkg_path.with_suffix(".sig")
 		key_seed_path: Path | None = None
 		key_seed_text: str | None = None
 		if args.key is not None:

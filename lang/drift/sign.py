@@ -70,7 +70,7 @@ def _load_sig_sidecar_obj(path: Path) -> dict[str, Any]:
 
 def load_sig_sidecar_v0(path: Path) -> SigSidecarV0:
 	"""
-Load a `pkg.dmp.sig` sidecar file.
+Load a `pkg.sig` sidecar file.
 
 This is pure parsing/validation; it does not consult trust policy.
 	"""

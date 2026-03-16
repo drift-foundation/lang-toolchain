@@ -189,7 +189,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	key_seed.write_text(base64.b64encode(seed).decode("ascii") + "\n", encoding="utf-8")
 	cp = _run_drift(["sign", str(pkg), "--key", str(key_seed)])
 	assert cp.returncode == 0, cp.stderr
-	assert Path(str(pkg) + ".sig").exists()
+	assert pkg.with_suffix(".sig").exists()
 
 	# Publish to a local directory repository.
 	repo = tmp_path / "repo"

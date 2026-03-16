@@ -68,7 +68,7 @@ def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: b
 	entry: dict = {"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw)}
 	if pub_b64 is not None:
 		entry["pubkey"] = pub_b64
-	sidecar = Path(str(pkg_path) + ".sig")
+	sidecar = pkg_path.with_suffix(".sig")
 	obj = {
 		"format": "dmir-pkg-sig",
 		"version": 0,

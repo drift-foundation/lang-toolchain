@@ -11,7 +11,7 @@
 #
 # Outputs:
 #   ${DIST}/lib/stdlib/std.dmp
-#   ${DIST}/lib/stdlib/std.dmp.sig
+#   ${DIST}/lib/stdlib/std.sig
 #   ${DIST}/lib/compiler/lang/driftc/packages/core_trust.json
 set -euo pipefail
 
@@ -56,7 +56,8 @@ echo "[deploy] signing stdlib package..."
 (cd "${REPO_ROOT}" && PYTHONPATH=. ./.venv/bin/python3 -m lang.drift sign \
 	"${STDLIB_DMP}" --include-pubkey)
 
-if [[ ! -f "${STDLIB_DMP}.sig" ]]; then
+STDLIB_SIG="${STAGE}/std.sig"
+if [[ ! -f "${STDLIB_SIG}" ]]; then
 	echo "error: signing produced no sidecar" >&2
 	exit 1
 fi
@@ -64,20 +65,20 @@ fi
 # ── Install ──────────────────────────────────────────────────────────
 mkdir -p "${DIST}/lib/stdlib"
 cp "${STDLIB_DMP}" "${DIST}/lib/stdlib/std.dmp"
-cp "${STDLIB_DMP}.sig" "${DIST}/lib/stdlib/std.dmp.sig"
+cp "${STDLIB_SIG}" "${DIST}/lib/stdlib/std.sig"
 
 # ── Generate core trust store ────────────────────────────────────────
 echo "[deploy] generating core trust store..."
 CORE_TRUST="${DIST}/lib/compiler/lang/driftc/packages/core_trust.json"
 (cd "${REPO_ROOT}" && PYTHONPATH=. ./.venv/bin/python3 \
 	tools/deploy/gen_trust_store.py \
-	--sidecar "${STDLIB_DMP}.sig" \
+	--sidecar "${STDLIB_SIG}" \
 	--namespaces "std.*,lang.*,drift.*" \
 	--output "${CORE_TRUST}")
 
 # ── Verify outputs ───────────────────────────────────────────────────
 fail=0
-for f in "${DIST}/lib/stdlib/std.dmp" "${DIST}/lib/stdlib/std.dmp.sig" "${CORE_TRUST}"; do
+for f in "${DIST}/lib/stdlib/std.dmp" "${DIST}/lib/stdlib/std.sig" "${CORE_TRUST}"; do
 	if [[ ! -f "${f}" ]]; then
 		echo "error: expected output not found: ${f}" >&2
 		fail=1
