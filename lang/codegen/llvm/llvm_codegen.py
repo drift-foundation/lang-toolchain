@@ -99,6 +99,7 @@ from lang.driftc.stage2 import (
 	PtrRead,
 	PtrWrite,
 	PtrIsNull,
+	PtrAsMutRef,
 	AssignSSA,
 	BinaryOpInstr,
 	WrappingAddU64,
@@ -2499,6 +2500,8 @@ class _FuncBuilder:
 			self._lower_ptr_write(instr)
 		elif isinstance(instr, PtrIsNull):
 			self._lower_ptr_is_null(instr)
+		elif isinstance(instr, PtrAsMutRef):
+			self._lower_ptr_as_mut_ref(instr)
 		elif isinstance(instr, StringLen):
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
@@ -9424,6 +9427,14 @@ class _FuncBuilder:
 		ptr_llty = self._llvm_type_for_typeid(instr.ptr_ty)
 		self.lines.append(f"  {dest} = icmp eq {ptr_llty} {ptr_val}, null")
 		self.value_types[dest] = "i1"
+
+	def _lower_ptr_as_mut_ref(self, instr: PtrAsMutRef) -> None:
+		src_val = self._map_value(instr.src)
+		dest = self._map_value(instr.dest)
+		ref_llty = self._llvm_type_for_typeid(instr.ref_ty)
+		src_llty = self.value_types.get(src_val, ref_llty)
+		self.lines.append(f"  {dest} = bitcast {src_llty} {src_val} to {ref_llty}")
+		self.value_types[dest] = ref_llty
 
 	def _llvm_array_header_type(self) -> str:
 		return "%DriftArrayHeader"

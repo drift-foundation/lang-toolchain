@@ -188,7 +188,8 @@ pub struct Mutex<T> {
 }
 
 pub struct MutexGuard<T> {
-	m: &mut Mutex<T>
+	mtx: &Mutex<T>,
+	value_ptr: mem.Ptr<T>
 }
 
 pub fn arc<T>(var value: T) nothrow -> Arc<T> {
@@ -271,27 +272,37 @@ pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
 	return Mutex<type T>(locked = atomic_bool(false), value = value);
 }
 
-pub fn lock<T>(m: &mut Mutex<T>) nothrow -> MutexGuard<T> {
+pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
 	while not atomic.atomic_compare_exchange_bool(&m.locked, false, true, 1, 0) {
 	}
-	return MutexGuard<type T>(m = m);
+	unsafe {
+		val vp = mem.ptr_from_ref<type T>(&m.value);
+		return MutexGuard<type T>(mtx = m, value_ptr = vp);
+	}
 }
 
 pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
-	return &mut g.m.value;
+	unsafe {
+		return mem.ptr_as_mut_ref<type T>(g.value_ptr);
+	}
 }
 
 implement<T> Mutex<T> {
-	pub fn lock(self: &mut Mutex<T>) nothrow -> MutexGuard<T> {
+	pub fn lock(self: &Mutex<T>) nothrow -> MutexGuard<T> {
 		while not atomic.atomic_compare_exchange_bool(&self.locked, false, true, 1, 0) {
 		}
-		return MutexGuard<type T>(m = self);
+		unsafe {
+			val vp = mem.ptr_from_ref<type T>(&self.value);
+			return MutexGuard<type T>(mtx = self, value_ptr = vp);
+		}
 	}
 }
 
 implement<T> MutexGuard<T> {
 	pub fn get_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
-		return &mut self.m.value;
+		unsafe {
+			return mem.ptr_as_mut_ref<type T>(self.value_ptr);
+		}
 	}
 }
 
@@ -303,7 +314,7 @@ implement<T> core.BorrowMut<T> for MutexGuard<T> {
 
 implement<T> core.Destructible for MutexGuard<T> {
 	pub fn destroy(self: MutexGuard<T>) nothrow -> Void {
-		atomic.atomic_store_bool(&self.m.locked, false, 2);
+		atomic.atomic_store_bool(&self.mtx.locked, false, 2);
 	}
 }
 

@@ -164,6 +164,21 @@ def _build_pex_binary(dist: Path) -> None:
 	assert result.returncode == 0, f"PEX build failed:\nstdout={result.stdout}\nstderr={result.stderr}"
 
 
+def _build_deploy_pex_binary(dist: Path) -> None:
+	"""Build a PEX --scie eager executable at dist/bin/drift."""
+	env = dict(os.environ)
+	env["REPO_ROOT"] = str(ROOT)
+	env["DIST"] = str(dist)
+	result = subprocess.run(
+		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
+		text=True,
+		capture_output=True,
+		env=env,
+		timeout=300,
+	)
+	assert result.returncode == 0, f"deploy PEX build failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+
+
 def _bundle_compiler_sources(dist: Path) -> None:
 	"""Run step_bundle.sh to populate lib/compiler/ and lib/runtime/."""
 	clang = shutil.which("clang")
@@ -187,6 +202,7 @@ def _setup_deploy_tree(tmp_path: Path) -> Path:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
 	_build_pex_binary(dist)
+	_build_deploy_pex_binary(dist)
 	_bundle_compiler_sources(dist)
 	return dist
 

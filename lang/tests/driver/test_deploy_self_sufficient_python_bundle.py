@@ -131,7 +131,7 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) 
 	clang = shutil.which("clang")
 	assert clang, "clang not found"
 
-	# Build PEX executable first.
+	# Build PEX executables first.
 	env = dict(os.environ)
 	env["REPO_ROOT"] = str(ROOT)
 	env["DIST"] = str(dist)
@@ -143,6 +143,14 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) 
 		timeout=300,
 	)
 	assert pex_build.returncode == 0, pex_build.stderr
+	deploy_pex_build = subprocess.run(
+		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
+		text=True,
+		capture_output=True,
+		env=env,
+		timeout=300,
+	)
+	assert deploy_pex_build.returncode == 0, deploy_pex_build.stderr
 
 	# Bundle compiler sources and runtime archives.
 	env["CLANG"] = clang

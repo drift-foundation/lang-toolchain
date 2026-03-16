@@ -1,6 +1,6 @@
 module std.mem;
 
-export { Ptr, RawBuffer, MaybeUninit, alloc_uninit, dealloc, capacity, rawbuffer_ptr, rawbuffer_cap, rawbuffer_from_parts, ptr_at_ref, ptr_at_mut, write, read, ptr_from_ref, ptr_from_ref_mut, ptr_offset, ptr_read, ptr_write, ptr_is_null, replace, swap, maybe_uninit, maybe_write, maybe_assume_init_ref, maybe_assume_init_mut, maybe_assume_init_read };
+export { Ptr, RawBuffer, MaybeUninit, alloc_uninit, dealloc, capacity, rawbuffer_ptr, rawbuffer_cap, rawbuffer_from_parts, ptr_at_ref, ptr_at_mut, write, read, ptr_from_ref, ptr_from_ref_mut, ptr_as_mut_ref, ptr_offset, ptr_read, ptr_write, ptr_is_null, replace, swap, maybe_uninit, maybe_write, maybe_assume_init_ref, maybe_assume_init_mut, maybe_assume_init_read };
 
 pub struct RawBuffer<T> {
 	ptr: Ptr<Byte>
@@ -50,6 +50,8 @@ pub fn capacity<T>(buf: &RawBuffer<T>) nothrow -> Int {
 @intrinsic pub unsafe fn ptr_write<T>(p: Ptr<T>, v: T) -> Void;
 
 @intrinsic pub unsafe fn ptr_is_null<T>(p: Ptr<T>) -> Bool;
+
+@intrinsic pub unsafe fn ptr_as_mut_ref<T>(p: Ptr<T>) nothrow -> &mut T;
 
 @intrinsic pub fn replace<T>(ptr: &mut T, v: T) -> T;
 

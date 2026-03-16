@@ -356,7 +356,7 @@ import std.core as core;
 
 fn main() -> Int {
 	var m = conc.mutex(1);
-	var g = conc.lock(&mut m);
+	var g = conc.lock(&m);
 	core.drop_value(g);
 	return 0;
 }

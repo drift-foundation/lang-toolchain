@@ -29,7 +29,8 @@ implement EventBus {
 }
 
 fn on_x(e: &mut Event) nothrow -> Void {
-	var g = conc.lock(e.state.get_mut());
+	val mtx = e.state.get();
+	var g = mtx.lock();
 	g.get_mut().on_signal_x(e.v);
 	e.v = g.get_mut().state;
 }

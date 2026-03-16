@@ -39,7 +39,7 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp
 	env["DRIFT_SIGN_KEY_FILE"] = str(key_path)
 	env["CLANG"] = clang
 
-	# Build PEX executable first.
+	# Build PEX executables first.
 	pex_build = subprocess.run(
 		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
 		text=True,
@@ -48,6 +48,14 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp
 		timeout=300,
 	)
 	assert pex_build.returncode == 0, pex_build.stderr
+	deploy_pex_build = subprocess.run(
+		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
+		text=True,
+		capture_output=True,
+		env=env,
+		timeout=300,
+	)
+	assert deploy_pex_build.returncode == 0, deploy_pex_build.stderr
 
 	# Bundle compiler sources and runtime archives.
 	bundle = subprocess.run(

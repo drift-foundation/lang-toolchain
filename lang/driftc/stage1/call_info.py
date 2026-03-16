@@ -62,6 +62,7 @@ class IntrinsicKind(Enum):
 	PTR_READ = "ptr_read"
 	PTR_WRITE = "ptr_write"
 	PTR_IS_NULL = "ptr_is_null"
+	PTR_AS_MUT_REF = "ptr_as_mut_ref"
 	MAYBE_UNINIT = "maybe_uninit"
 	MAYBE_WRITE = "maybe_write"
 	MAYBE_ASSUME_INIT_REF = "maybe_assume_init_ref"

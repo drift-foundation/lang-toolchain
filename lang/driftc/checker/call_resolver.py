@@ -4175,7 +4175,7 @@ def resolve_call_expr(
 				intrinsic_kind = IntrinsicKind.SWAP
 				record_call_info(expr, param_types=param_types, return_type=ret_ty, can_throw=False, target=CallTarget.intrinsic(intrinsic_kind))
 				return record_expr(expr, ret_ty)
-			if expr.fn.name in ("ptr_from_ref", "ptr_from_ref_mut", "ptr_offset", "ptr_read", "ptr_write", "ptr_is_null"):
+			if expr.fn.name in ("ptr_from_ref", "ptr_from_ref_mut", "ptr_offset", "ptr_read", "ptr_write", "ptr_is_null", "ptr_as_mut_ref"):
 				t_elem = None
 				if expr.fn.name in ("ptr_from_ref", "ptr_from_ref_mut"):
 					if len(arg_types_local) != 1:
@@ -4235,6 +4235,17 @@ def resolve_call_expr(
 					param_types = [ctx.type_table.new_ptr(t_elem, module_id="std.mem")]
 					ret_ty = ctx.bool_ty
 					intrinsic_kind = IntrinsicKind.PTR_IS_NULL
+				elif expr.fn.name == "ptr_as_mut_ref":
+					if len(arg_types_local) != 1:
+						diagnostics.append(_tc_diag(message="ptr_as_mut_ref expects exactly one argument", severity="error", span=getattr(expr, "loc", Span())))
+						return record_expr(expr, ctx.unknown_ty)
+					t_elem = _raw_ptr_elem_type(arg_types_local[0], ctx.type_table)
+					if t_elem is None:
+						diagnostics.append(_tc_diag(message="ptr_as_mut_ref expects Ptr<T> as the first argument", severity="error", span=getattr(expr, "loc", Span())))
+						return record_expr(expr, ctx.unknown_ty)
+					param_types = [ctx.type_table.new_ptr(t_elem, module_id="std.mem")]
+					ret_ty = ctx.type_table.ensure_ref_mut(t_elem)
+					intrinsic_kind = IntrinsicKind.PTR_AS_MUT_REF
 			else:
 				t_elem = _rawbuffer_elem_type(arg_types_local[0])
 				if t_elem is None and type_arg_ids:

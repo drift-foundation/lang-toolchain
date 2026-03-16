@@ -1,5 +1,33 @@
 # Drift development history
 
+## 2026-03-16
+- **Made `Mutex.lock()` work through shared references via `ptr_as_mut_ref` (0.27.68)**:
+  Fixed the stdlib/compiler restriction that prevented the normal
+  `Arc<Mutex<T>>` shared-handle pattern from working through `&self`.
+  - Problem:
+    - `Mutex<T>.lock()` previously required `&mut Mutex<T>`
+    - `Arc<T>.get()` provides `&T`, so `Arc<Mutex<T>>` could not be locked
+      through a shared handle
+    - downstream APIs such as `web.client.Session` were therefore forced into
+      `&mut Session` shapes even though the intended model is cheap shared
+      handles with interior mutable state
+  - Fix:
+    - added `std.mem.ptr_as_mut_ref<T>(Ptr<T>) -> &mut T` as the general unsafe
+      interior-mutability primitive
+    - wired the intrinsic through checker, MIR lowering, and LLVM lowering
+    - changed `std.concurrent.Mutex.lock()` to take `&self`
+    - updated `MutexGuard<T>` to retain a shared mutex reference plus a raw
+      value pointer, and derive mutable access through `ptr_as_mut_ref`
+  - Added regression coverage for:
+    - `Arc<Mutex<T>>` shared-handle locking and mutation through cloned handles
+    - `ptr_as_mut_ref` remaining unavailable outside `unsafe`
+    - existing mutex/arc mutation flows continuing to work
+  - Deploy test integration:
+    - preserved the strict deployed-tooling invariant that `step_bundle.sh`
+      requires the packaged `bin/drift`
+    - updated deploy/PEX test helpers to build the tooling PEX before bundle
+      so tests continue to model the real deploy pipeline
+
 ## 2026-03-15
 - **Ignored same-package published artifacts during source builds (0.27.66)**:
   Fixed a compiler package-resolution bug where building package `X` from

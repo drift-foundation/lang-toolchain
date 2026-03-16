@@ -239,6 +239,7 @@ INTRINSIC_ARITY_TABLE: dict[IntrinsicKind, IntrinsicSpec] = {
 	IntrinsicKind.PTR_READ: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_PTR_READ", label="ptr_read"),
 	IntrinsicKind.PTR_WRITE: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_PTR_WRITE", label="ptr_write"),
 	IntrinsicKind.PTR_IS_NULL: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_PTR_IS_NULL", label="ptr_is_null"),
+	IntrinsicKind.PTR_AS_MUT_REF: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_PTR_AS_MUT_REF", label="ptr_as_mut_ref"),
 	IntrinsicKind.MAYBE_UNINIT: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_MAYBE_UNINIT", label="maybe_uninit"),
 	IntrinsicKind.MAYBE_WRITE: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_MAYBE_WRITE", label="maybe_write"),
 	IntrinsicKind.MAYBE_ASSUME_INIT_REF: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", label="maybe_assume_init_ref"),

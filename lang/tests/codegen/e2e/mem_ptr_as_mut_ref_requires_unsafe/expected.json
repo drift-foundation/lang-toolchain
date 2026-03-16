@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "message_contains": "unsafe",
+      "phase": "typecheck"
+    }
+  ],
+  "exit_code": 1
+}

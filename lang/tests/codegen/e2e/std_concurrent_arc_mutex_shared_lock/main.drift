@@ -1,0 +1,30 @@
+module main;
+
+import std.concurrent as conc;
+
+struct Counter {
+	n: Int
+}
+
+implement Counter {
+	pub fn add(self: &mut Counter, v: Int) nothrow -> Void {
+		self.n = self.n + v;
+	}
+}
+
+fn bump(handle: &conc.Mutex<Counter>, v: Int) nothrow -> Void {
+	var g = handle.lock();
+	g.get_mut().add(v);
+}
+
+fn main() nothrow -> Int {
+	var m = conc.mutex(Counter(n = 30));
+	var a = conc.arc(m);
+	var b = a.clone();
+	val ha = a.get();
+	val hb = b.get();
+	bump(ha, 5);
+	bump(hb, 7);
+	var g = ha.lock();
+	return g.get_mut().n;
+}

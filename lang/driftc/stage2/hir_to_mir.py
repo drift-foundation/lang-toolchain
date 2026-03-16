@@ -2478,6 +2478,14 @@ class HIRToMIR:
 			self.b.emit(M.PtrIsNull(dest=dest, ptr=ptr_val, ptr_ty=info.sig.param_types[0]))
 			self._local_types[dest] = self._bool_type
 			return dest
+		if intrinsic is IntrinsicKind.PTR_AS_MUT_REF:
+			if info is None:
+				raise AssertionError("ptr_as_mut_ref(...) missing CallInfo (checker bug)")
+			src_val = self.lower_expr(expr.args[0])
+			dest = self.b.new_temp()
+			self.b.emit(M.PtrAsMutRef(dest=dest, src=src_val, ref_ty=info.sig.user_ret_type))
+			self._local_types[dest] = info.sig.user_ret_type
+			return dest
 		if intrinsic is IntrinsicKind.BYTE_LENGTH:
 			name = intrinsic.value
 			arg_expr = expr.args[0]

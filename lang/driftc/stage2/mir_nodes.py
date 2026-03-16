@@ -782,6 +782,14 @@ class PtrIsNull(MInstr):
 
 
 @dataclass
+class PtrAsMutRef(MInstr):
+	"""dest = ptr as &mut T (interior mutability cast)."""
+	dest: ValueId
+	src: ValueId
+	ref_ty: TypeId
+
+
+@dataclass
 class StringLen(MInstr):
 	"""dest = len(string) as Int."""
 	dest: ValueId
