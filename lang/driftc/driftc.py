@@ -7218,6 +7218,13 @@ def main(argv: list[str] | None = None) -> int:
 		)
 
 		package_files = discover_package_files(list(args.package_roots))
+		# Self-exclusion: when building package X from source (--package-id X),
+		# skip any discovered package file whose stem matches X.  This prevents
+		# previously-published copies of the current package from being loaded
+		# or trust-verified — they are irrelevant to a source build.
+		_self_pkg_id = str(args.package_id) if args.package_id else None
+		if _self_pkg_id:
+			package_files = [p for p in package_files if p.stem != _self_pkg_id]
 		for pkg_path in package_files:
 			# Integrity + trust verification happens here, before any package
 			# metadata is used for import resolution.
@@ -7324,6 +7331,16 @@ def main(argv: list[str] | None = None) -> int:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 			loaded_pkgs = _filtered
+
+		# Post-load self-exclusion (defense-in-depth): if a package file was
+		# named differently than its package_id, the stem-based pre-filter
+		# above would miss it.  Drop any loaded package whose package_id
+		# matches the one being compiled from source.
+		if _self_pkg_id and loaded_pkgs:
+			loaded_pkgs = [
+				p for p in loaded_pkgs
+				if p.manifest.get("package_id") != _self_pkg_id
+			]
 
 		# Enforce "single version per package id per build".
 		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)

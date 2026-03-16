@@ -1209,3 +1209,372 @@ fn main() nothrow -> Int {
 	# between FnInfo and signature raises AssertionError, which the compiler
 	# catches and converts to a diagnostic with rc != 0.
 	assert rc == 0, f"TypeId divergence assertion fired or compilation failed; diagnostics: {messages}"
+
+
+# ── Source-wins-over-package regression ─────────────────────────────
+
+
+class TestSourceWinsOverPackage:
+	"""
+	Regression: when building package X from source (--package-id X) and the
+	--package-root also contains a previously-published copy of X, the compiler
+	must ignore X's published artifacts entirely — they are never loaded or
+	trust-verified.  Unrelated packages in the same root remain consumable.
+
+	The exclusion is identity-based (--package-id matches package_id in
+	the published artifact), not overlap-based.
+	"""
+
+	def test_source_wins_over_same_namespace_package(
+		self,
+		tmp_path: Path,
+		capsys: pytest.CaptureFixture[str],
+		monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""
+		Build source modules for acme.util.  The --package-root contains both:
+		  - acme.util.dmp (same namespace as source — should be ignored)
+		  - acme.other.dmp (truly external dependency — should be consumed)
+
+		The compiler must not error; the source modules must win and acme.other
+		must remain importable.
+		"""
+		monkeypatch.setenv("HOME", str(tmp_path / "home"))
+		keys = _gen_keys()
+
+		# 1. Build acme.util package (will be the "stale published" copy).
+		build_util = tmp_path / "build_util"
+		_write_file(build_util / "src" / "util.drift", _ACME_UTIL_SOURCE)
+		util_pkg_path = tmp_path / "pkgroot" / "acme.util.dmp"
+		util_pkg_path.parent.mkdir(parents=True, exist_ok=True)
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_util),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_util / "src" / "util.drift"),
+			*_emit_pkg_args("acme.util"),
+			"--emit-package", str(util_pkg_path),
+		])
+		assert rc == 0, "failed to build acme.util package"
+		_ = capsys.readouterr()
+
+		# Sign acme.util.
+		util_bytes = util_pkg_path.read_bytes()
+		sig_raw = keys.priv.sign(util_bytes)
+		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+		# 2. Build acme.other package (truly external dep).
+		build_other = tmp_path / "build_other"
+		_write_file(build_other / "src" / "other.drift", """\
+module acme.other;
+
+export { helper };
+
+pub fn helper() nothrow -> Int {
+	return 99;
+}
+""")
+		other_pkg_path = tmp_path / "pkgroot" / "acme.other.dmp"
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_other),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_other / "src" / "other.drift"),
+			*_emit_pkg_args("acme.other"),
+			"--emit-package", str(other_pkg_path),
+		])
+		assert rc == 0, "failed to build acme.other package"
+		_ = capsys.readouterr()
+
+		# Sign acme.other.
+		other_bytes = other_pkg_path.read_bytes()
+		sig_raw = keys.priv.sign(other_bytes)
+		_write_sig_sidecar(other_pkg_path, pkg_bytes=other_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+		# 3. Write trust stores.
+		core_trust = tmp_path / "core_trust.json"
+		_write_trust_store(core_trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+		trust = tmp_path / "trust.json"
+		_write_trust_store(trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+		# 4. Compile source for acme.util, consuming acme.other from package root.
+		#    Package root contains BOTH acme.util.dmp and acme.other.dmp.
+		#    --package-id acme.util tells the compiler this is a source build
+		#    of acme.util — the published acme.util.dmp must be skipped entirely.
+		src_dir = tmp_path / "src"
+		_write_file(src_dir / "acme" / "util" / "util.drift", _ACME_UTIL_SOURCE)
+		_write_file(src_dir / "main.drift", """\
+module main;
+
+import acme.util as util;
+import acme.other as other;
+
+fn main() nothrow -> Int {
+	val c = util.make_counter(other.helper());
+	return c.value;
+}
+""")
+		rc = driftc_main([
+			"-M", str(src_dir),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(tmp_path / "pkgroot"),
+			"--package-id", "acme.util",
+			"--dev",
+			"--dev-core-trust-store", str(core_trust),
+			"--trust-store", str(trust),
+			str(src_dir / "acme" / "util" / "util.drift"),
+			str(src_dir / "main.drift"),
+			"--test-build-only",
+		])
+		out, err = capsys.readouterr()
+		assert rc == 0, f"source-wins build failed; stderr: {err}"
+		assert "override" not in err.lower()
+
+	def test_source_wins_without_test_build_only(
+		self,
+		tmp_path: Path,
+		capsys: pytest.CaptureFixture[str],
+		monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""
+		Same as above but without --test-build-only, exercising the real
+		compilation path including type-table linking.  The published copy
+		of acme.util must be skipped before load/verify — not just filtered
+		after loading.
+		"""
+		monkeypatch.setenv("HOME", str(tmp_path / "home"))
+		keys = _gen_keys()
+
+		# Build + sign acme.util package (stale published copy).
+		build_util = tmp_path / "build_util"
+		_write_file(build_util / "src" / "util.drift", _ACME_UTIL_SOURCE)
+		util_pkg_path = tmp_path / "pkgroot" / "acme.util.dmp"
+		util_pkg_path.parent.mkdir(parents=True, exist_ok=True)
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_util),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_util / "src" / "util.drift"),
+			*_emit_pkg_args("acme.util"),
+			"--emit-package", str(util_pkg_path),
+		])
+		assert rc == 0
+		_ = capsys.readouterr()
+		util_bytes = util_pkg_path.read_bytes()
+		sig_raw = keys.priv.sign(util_bytes)
+		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+		# Trust stores.
+		core_trust = tmp_path / "core_trust.json"
+		_write_trust_store(core_trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+		trust = tmp_path / "trust.json"
+		_write_trust_store(trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+		# Source build of acme.util — package root contains acme.util.dmp.
+		src_dir = tmp_path / "src"
+		_write_file(src_dir / "acme" / "util" / "util.drift", _ACME_UTIL_SOURCE)
+		_write_file(src_dir / "main.drift", """\
+module main;
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	return util.make_counter(0).value;
+}
+""")
+		rc = driftc_main([
+			"-M", str(src_dir),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(tmp_path / "pkgroot"),
+			"--package-id", "acme.util",
+			"--dev",
+			"--dev-core-trust-store", str(core_trust),
+			"--trust-store", str(trust),
+			str(src_dir / "acme" / "util" / "util.drift"),
+			str(src_dir / "main.drift"),
+			"--json",
+			"-o", str(tmp_path / "out.bin"),
+		])
+		out, err = capsys.readouterr()
+		assert rc == 0, (
+			f"source-wins build failed without --test-build-only; "
+			f"stderr: {err}\nstdout: {out}"
+		)
+
+	def test_unrelated_package_still_consumed(
+		self,
+		tmp_path: Path,
+		capsys: pytest.CaptureFixture[str],
+		monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""
+		Self-exclusion only drops the current package (--package-id).
+		Unrelated packages in the same --package-root must still be loaded,
+		verified, and importable.
+		"""
+		monkeypatch.setenv("HOME", str(tmp_path / "home"))
+		keys = _gen_keys()
+
+		# Build and sign acme.other (external dep).
+		build_other = tmp_path / "build_other"
+		_write_file(build_other / "src" / "other.drift", """\
+module acme.other;
+
+export { helper };
+
+pub fn helper() nothrow -> Int {
+	return 42;
+}
+""")
+		pkg_path = tmp_path / "pkgroot" / "acme.other.dmp"
+		pkg_path.parent.mkdir(parents=True, exist_ok=True)
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_other),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_other / "src" / "other.drift"),
+			*_emit_pkg_args("acme.other"),
+			"--emit-package", str(pkg_path),
+		])
+		assert rc == 0
+		_ = capsys.readouterr()
+		pkg_bytes = pkg_path.read_bytes()
+		sig_raw = keys.priv.sign(pkg_bytes)
+		_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+		# Build and sign acme.local (will conflict with source).
+		build_local = tmp_path / "build_local"
+		_write_file(build_local / "src" / "local.drift", """\
+module acme.local;
+
+export { local_fn };
+
+pub fn local_fn() nothrow -> Int {
+	return 0;
+}
+""")
+		local_pkg_path = tmp_path / "pkgroot" / "acme.local.dmp"
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_local),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_local / "src" / "local.drift"),
+			*_emit_pkg_args("acme.local"),
+			"--emit-package", str(local_pkg_path),
+		])
+		assert rc == 0
+		_ = capsys.readouterr()
+		local_bytes = local_pkg_path.read_bytes()
+		sig_raw = keys.priv.sign(local_bytes)
+		_write_sig_sidecar(local_pkg_path, pkg_bytes=local_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+
+		# Trust stores.
+		core_trust = tmp_path / "core_trust.json"
+		_write_trust_store(core_trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+		trust = tmp_path / "trust.json"
+		_write_trust_store(trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+		# Compile acme.local from source, consuming acme.other from package.
+		src_dir = tmp_path / "src"
+		_write_file(src_dir / "acme" / "local" / "local.drift", """\
+module acme.local;
+
+export { local_fn };
+
+pub fn local_fn() nothrow -> Int {
+	return 0;
+}
+""")
+		_write_file(src_dir / "main.drift", """\
+module main;
+
+import acme.local as local;
+import acme.other as other;
+
+fn main() nothrow -> Int {
+	return local.local_fn() + other.helper();
+}
+""")
+		rc = driftc_main([
+			"-M", str(src_dir),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(tmp_path / "pkgroot"),
+			"--package-id", "acme.local",
+			"--dev",
+			"--dev-core-trust-store", str(core_trust),
+			"--trust-store", str(trust),
+			str(src_dir / "acme" / "local" / "local.drift"),
+			str(src_dir / "main.drift"),
+			"--test-build-only",
+		])
+		out, err = capsys.readouterr()
+		assert rc == 0, f"source + external package build failed; stderr: {err}"
+
+	def test_untrusted_self_package_skipped_before_verify(
+		self,
+		tmp_path: Path,
+		capsys: pytest.CaptureFixture[str],
+		monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""
+		Pin: self-exclusion happens before load/verify.  A published copy of
+		the current package that is unsigned (would fail trust verification)
+		must not break the source build — it should never be loaded at all.
+		"""
+		monkeypatch.setenv("HOME", str(tmp_path / "home"))
+		keys = _gen_keys()
+
+		# Build acme.util package but do NOT sign it.
+		build_util = tmp_path / "build_util"
+		_write_file(build_util / "src" / "util.drift", _ACME_UTIL_SOURCE)
+		util_pkg_path = tmp_path / "pkgroot" / "acme.util.dmp"
+		util_pkg_path.parent.mkdir(parents=True, exist_ok=True)
+		rc = driftc_main([
+			"--dev",
+			"-M", str(build_util),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			str(build_util / "src" / "util.drift"),
+			*_emit_pkg_args("acme.util"),
+			"--emit-package", str(util_pkg_path),
+		])
+		assert rc == 0
+		_ = capsys.readouterr()
+		# Deliberately no signature sidecar — loading would fail.
+
+		# Trust stores (trust acme.* so that acme.util WOULD fail verify
+		# if loaded, since it has no .sig).
+		core_trust = tmp_path / "core_trust.json"
+		_write_trust_store(core_trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
+		trust = tmp_path / "trust.json"
+		_write_trust_store(trust, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["acme.*"])
+
+		# Source build with --package-id acme.util.  The unsigned published
+		# copy must be skipped entirely — not loaded, not verified.
+		src_dir = tmp_path / "src"
+		_write_file(src_dir / "acme" / "util" / "util.drift", _ACME_UTIL_SOURCE)
+		_write_file(src_dir / "main.drift", """\
+module main;
+
+import acme.util as util;
+
+fn main() nothrow -> Int {
+	return util.make_counter(0).value;
+}
+""")
+		rc = driftc_main([
+			"-M", str(src_dir),
+			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+			"--package-root", str(tmp_path / "pkgroot"),
+			"--package-id", "acme.util",
+			"--dev",
+			"--dev-core-trust-store", str(core_trust),
+			"--trust-store", str(trust),
+			str(src_dir / "acme" / "util" / "util.drift"),
+			str(src_dir / "main.drift"),
+			"--test-build-only",
+		])
+		out, err = capsys.readouterr()
+		assert rc == 0, (
+			f"unsigned self-package should be skipped before verify; "
+			f"stderr: {err}"
+		)

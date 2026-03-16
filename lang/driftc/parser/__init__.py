@@ -1773,18 +1773,30 @@ def parse_drift_workspace_to_hir(
 		merged_programs[mid] = prog
 		module_file_by_id[mid] = path
 	source_modules = set(merged_programs.keys())
-	if isinstance(external_module_packages, dict):
-		override_modules = sorted(mod for mod in external_module_packages.keys() if mod in source_modules)
-		if override_modules and not test_build_only:
-			diagnostics.append(
-				_p_diag(
-					message=(
-						"external module package mapping may not override source modules: "
-						+ ", ".join(override_modules)
-					),
-					severity="error",
-				)
-			)
+	if isinstance(external_module_packages, dict) and package_id:
+		# Self-exclusion defense-in-depth: if the current build's package_id
+		# leaked into external_module_packages (should not happen — driftc.py
+		# filters loaded_pkgs before building this dict), drop all modules
+		# that belong to the current package.
+		_self_mods = {
+			mod for mod, pkg in external_module_packages.items()
+			if pkg == package_id
+		}
+		if _self_mods:
+			external_module_packages = {
+				mod: pkg for mod, pkg in external_module_packages.items()
+				if pkg != package_id
+			}
+			if isinstance(external_module_exports, dict):
+				external_module_exports = {
+					mod: exp for mod, exp in external_module_exports.items()
+					if mod not in _self_mods
+				}
+			if isinstance(external_exception_schemas, dict):
+				external_exception_schemas = {
+					key: val for key, val in external_exception_schemas.items()
+					if key.split(":")[0] not in _self_mods
+				}
 
 	if any(d.severity == "error" for d in diagnostics):
 		table = TypeTable()

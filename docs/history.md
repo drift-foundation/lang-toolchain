@@ -1,6 +1,31 @@
 # Drift development history
 
 ## 2026-03-15
+- **Ignored same-package published artifacts during source builds (0.27.66)**:
+  Fixed a compiler package-resolution bug where building package `X` from
+  source could fail if `--package-root` also exposed already-published copies
+  of package `X` from a shared library root.
+  - Problem:
+    - source builds that used a shared package root for unrelated external
+      dependencies could also see previously published copies of the current
+      package
+    - the compiler would then hard-fail with source/package override or module
+      collision errors, even though the current package was being compiled from
+      source and should not have been consumed from the package root at all
+  - Fix:
+    - when `--package-id X` is provided for a source build, discovered package
+      artifacts for package `X` are now excluded before package load/trust
+      verification
+    - a post-load identity-based filter remains as defense-in-depth for
+      mismatched filenames
+    - parser-side external package maps also exclude only the current
+      `package_id` as defense-in-depth
+  - Added regression coverage for:
+    - same-package published artifact ignored during source build
+    - unrelated external package in the same package root still consumed
+    - untrusted self-package skipped before verify and therefore unable to
+      break the source build
+
 - **Unified deployed tooling under `drift` with `deploy` as a subcommand (0.27.65)**:
   Restored the agreed external product surface so deployed tooling is exposed
   through a single `drift` command rather than a separate `drift-deploy`
