@@ -26,9 +26,9 @@ if [[ ! -x "${DIST}/bin/driftc" ]]; then
 	exit 1
 fi
 
-# bin/drift-deploy — PEX --scie eager executable built by step_build_deploy_pex.sh.
-if [[ ! -x "${DIST}/bin/drift-deploy" ]]; then
-	echo "error: ${DIST}/bin/drift-deploy not found; step_build_deploy_pex.sh must run first" >&2
+# bin/drift — PEX --scie eager executable built by step_build_deploy_pex.sh.
+if [[ ! -x "${DIST}/bin/drift" ]]; then
+	echo "error: ${DIST}/bin/drift not found; step_build_deploy_pex.sh must run first" >&2
 	exit 1
 fi
 
@@ -108,14 +108,17 @@ driftc my_program.drift -o my_program
 - An embedded CPython interpreter
 - All third-party Python dependencies (lark, llvmlite, cryptography, zstandard)
 
-## Deploy tool
+## Drift CLI tool
 
-\`bin/drift-deploy\` is a self-contained PEX --scie eager executable for
-building, signing, and publishing Drift packages.  It bundles its own
-Python interpreter and runtime dependencies (cryptography, zstandard).
+\`bin/drift\` is a self-contained PEX --scie eager executable providing
+the Drift tooling CLI (package signing, publishing, trust management,
+and deploy).  It bundles its own Python interpreter and runtime
+dependencies (cryptography, zstandard).
 
 \`\`\`bash
-drift-deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+drift sign my-pkg.dmp --key signing.seed
+drift trust list --trust-store trust.json
 \`\`\`
 
 The compiler sources, runtime archives, and signed stdlib package live in
@@ -165,18 +168,19 @@ and continue to work independently.
 # And updates:    <dest>/current -> drift-<version>+abi<N>
 
 # To pin to an older version:
-export PATH="<dest>/drift-0.27.0-dev+abi3/bin:$PATH"
+export PATH="<dest>/drift-0.27.0+abi5/bin:$PATH"
 ```
 
 ## Deploy semantics
 
-`deploy.sh` orchestrates five step scripts:
+`deploy.sh` orchestrates six step scripts:
 
-1. `step_build_pex.sh` — build PEX --scie eager executable
-2. `step_bundle.sh` — copy compiler sources, runtime archives, docs into staged tree
-3. `step_stdlib_pkg.sh` — build, sign, and install stdlib package + core trust store
-4. `step_smoke.sh` — compile and run smoke test using only deployed paths
-5. `step_publish.sh` — atomically publish staged tree and switch `current` symlink
+1. `step_build_pex.sh` — build PEX --scie eager executable (bin/driftc)
+2. `step_build_deploy_pex.sh` — build PEX --scie eager executable (bin/drift)
+3. `step_bundle.sh` — copy compiler sources, runtime archives, docs into staged tree
+4. `step_stdlib_pkg.sh` — build, sign, and install stdlib package + core trust store
+5. `step_smoke.sh` — compile and run smoke test using only deployed paths
+6. `step_publish.sh` — atomically publish staged tree and switch `current` symlink
 
 If any step fails, deploy exits non-zero and does not publish a partial install.
 

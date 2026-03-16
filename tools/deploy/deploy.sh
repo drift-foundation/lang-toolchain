@@ -11,7 +11,7 @@
 #
 # Steps (each is a standalone script under tools/deploy/):
 #   1. step_build_pex.sh        — build PEX --scie eager executable (bin/driftc)
-#   2. step_build_deploy_pex.sh — build PEX --scie eager executable (bin/drift-deploy)
+#   2. step_build_deploy_pex.sh — build PEX --scie eager executable (bin/drift)
 #   3. step_bundle.sh           — stage compiler sources, runtime archives, docs
 #   4. step_stdlib_pkg.sh       — build + sign stdlib package, core trust store
 #   5. step_smoke.sh            — compile + run smoke test using deployed paths

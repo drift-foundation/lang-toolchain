@@ -1892,6 +1892,13 @@ class TestDeployPexEntry:
 		assert hasattr(mod, "main"), "deploy_pex_entry must define main()"
 		assert callable(mod.main)
 
+	def test_cli_deploy_subcommand(self) -> None:
+		"""'drift deploy --help' works through lang.drift.cli dispatch."""
+		from lang.drift.cli import main as cli_main
+		with pytest.raises(SystemExit) as exc_info:
+			cli_main(["deploy", "--help"])
+		assert exc_info.value.code == 0
+
 	def test_build_script_exists(self) -> None:
 		"""step_build_deploy_pex.sh must exist and be executable."""
 		import os

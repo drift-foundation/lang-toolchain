@@ -299,10 +299,19 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg_signers.add_argument("path", type=Path, help="Path to .sig, .dmp, or index.json")
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+
+	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	return p
 
 
 def main(argv: list[str] | None = None) -> int:
+	effective_argv = argv if argv is not None else sys.argv[1:]
+
+	# Intercept "deploy" before argparse — deploy has its own arg parser.
+	if effective_argv and effective_argv[0] == "deploy":
+		from tools.drift_deploy.drift_deploy import run as deploy_run
+		return deploy_run(effective_argv[1:])
+
 	p = _build_parser()
 	args = p.parse_args(argv)
 

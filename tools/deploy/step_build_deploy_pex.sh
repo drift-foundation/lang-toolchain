@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Deploy step: build PEX --scie eager executable for drift-deploy.
+# Deploy step: build PEX --scie eager executable for the drift CLI.
 #
 # Inputs (env):
 #   REPO_ROOT       — repository root
 #   DIST            — staged distribution directory
 #
-# Produces ${DIST}/bin/drift-deploy as a self-contained PEX --scie eager
-# binary that embeds CPython and all required Python dependencies.
+# Produces ${DIST}/bin/drift as a self-contained PEX --scie eager binary
+# that embeds CPython and all required Python dependencies.
 #
-# The tools.drift_deploy package is baked into the PEX.  Deferred imports
-# from lang.* (sign, crypto, zdmp, dmir_pkg_v0) are resolved at runtime
-# via lib/compiler/ on sys.path (set up by the entry point).
+# The PEX bundles tools.drift_deploy (for "drift deploy") and depends on
+# lang.* (for all other subcommands) being available in lib/compiler/
+# on sys.path (set up by the entry point).
 set -euo pipefail
 
 : "${REPO_ROOT:?}"
@@ -80,7 +80,7 @@ done
 # ── Build PEX ───────────────────────────────────────────────────────
 mkdir -p "${DIST}/bin"
 
-echo "[deploy] building drift-deploy PEX --scie eager executable (deps: ${CRYPTO_REQ}, ${ZSTD_REQ})..."
+echo "[deploy] building drift CLI PEX --scie eager executable (deps: ${CRYPTO_REQ}, ${ZSTD_REQ})..."
 "${PEX_CMD}" \
 	"${CRYPTO_REQ}" \
 	"${ZSTD_REQ}" \
@@ -89,7 +89,7 @@ echo "[deploy] building drift-deploy PEX --scie eager executable (deps: ${CRYPTO
 	--scie eager \
 	--scie-python-version "${PYTHON_VERSION}" \
 	--python "${VENV}/bin/python3" \
-	-o "${DIST}/bin/drift-deploy"
+	-o "${DIST}/bin/drift"
 
-chmod +x "${DIST}/bin/drift-deploy"
-echo "[deploy] drift-deploy PEX executable built: ${DIST}/bin/drift-deploy"
+chmod +x "${DIST}/bin/drift"
+echo "[deploy] drift CLI PEX executable built: ${DIST}/bin/drift"

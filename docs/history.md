@@ -1,6 +1,26 @@
 # Drift development history
 
 ## 2026-03-15
+- **Unified deployed tooling under `drift` with `deploy` as a subcommand (0.27.65)**:
+  Restored the agreed external product surface so deployed tooling is exposed
+  through a single `drift` command rather than a separate `drift-deploy`
+  binary.
+  - External command surface:
+    - deployed tooling binary is now `bin/drift`
+    - deploy is invoked as `drift deploy ...`
+    - `drift sign`, `drift trust`, `drift publish`, and other tooling
+      subcommands continue through the same binary
+  - Internal dispatch:
+    - the deployed PEX entry point dispatches `drift deploy ...` directly to
+      `tools.drift_deploy.drift_deploy.run()`
+    - all other subcommands continue through `lang.drift.cli`
+    - `lang.drift.cli` also intercepts `deploy` before argparse as a fallback
+  - Packaging/docs:
+    - deployment packaging now installs `bin/drift` instead of
+      `bin/drift-deploy`
+    - bundled deployment docs/examples were updated to use the unified command
+      surface and corrected to the six-step deploy pipeline
+
 - **Packaged `drift-deploy` as a self-contained PEX tool (0.27.64)**:
   Shipped `drift-deploy` as a first-class deployed binary instead of relying
   on source-tree module execution from a repo-local Python environment.

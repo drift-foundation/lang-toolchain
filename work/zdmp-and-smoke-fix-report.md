@@ -150,24 +150,41 @@ use --dep net-tls@<version> to select
 
 ### Fix
 
-`drift deploy` now ships as a self-contained PEX --scie eager binary (`bin/drift-deploy`) alongside the compiler (`bin/driftc`). No PYTHONPATH, no source-tree access, no manual `pip install` required.
+The Drift tooling CLI now ships as a single self-contained PEX --scie eager binary (`bin/drift`) alongside the compiler (`bin/driftc`). The `deploy` subcommand is part of the unified `drift` command surface. No PYTHONPATH, no source-tree access, no manual `pip install` required.
+
+### Deployed binaries
+
+| Binary | Purpose |
+|--------|---------|
+| `bin/driftc` | Compiler (PEX --scie eager) |
+| `bin/drift` | Tooling CLI: sign, trust, publish, fetch, doctor, vendor, **deploy** (PEX --scie eager) |
+
+### Dispatch
+
+```
+drift deploy ...  → tools.drift_deploy.drift_deploy.run()  (intercepted before argparse)
+drift sign ...    → lang.drift.cli.main()
+drift trust ...   → lang.drift.cli.main()
+drift <other> ... → lang.drift.cli.main()
+```
 
 ### What changed
 
 | File | Change |
 |------|--------|
-| `tools/deploy/deploy_pex_entry.py` | **New** — PEX entry point for drift-deploy; resolves `lib/compiler/` for deferred `lang.*` imports |
-| `tools/deploy/step_build_deploy_pex.sh` | **New** — PEX build script; bundles `cryptography` + `zstandard` + `tools.drift_deploy.*` |
+| `tools/deploy/deploy_pex_entry.py` | **New** — unified PEX entry point for `drift`; dispatches `deploy` to tools.drift_deploy, everything else to lang.drift.cli |
+| `tools/deploy/step_build_deploy_pex.sh` | **New** — PEX build script; bundles `cryptography` + `zstandard` + `tools.drift_deploy.*`, produces `bin/drift` |
 | `tools/deploy/deploy.sh` | Added `step_build_deploy_pex.sh` as step 2 in deploy pipeline |
 | `tools/deploy/step_build_pex.sh` | Added `zstandard` to compiler PEX deps |
-| `tools/deploy/step_bundle.sh` | Added `lang/drift` to bundled compiler sources; added `bin/drift-deploy` existence check; updated docs |
+| `tools/deploy/step_bundle.sh` | Added `lang/drift` to bundled compiler sources; added `bin/drift` existence check; updated docs |
 | `tools/deploy/pex_entry.py` | Docstring: lists `zstandard` in bundled deps |
+| `lang/drift/cli.py` | Added `deploy` subcommand to parser; intercepts `deploy` before argparse and delegates to `tools.drift_deploy.drift_deploy.run()` |
 | `lang/driftc/packages/zdmp.py` | Defensive diagnostic if `zstandard` is missing |
 | `lang/drift/dmir_pkg_v0.py` | `.zdmp` support in tooling-side `read_manifest_v0`; defensive diagnostic |
 | `lang/driftc/packages/provider_v0.py` | `load_package_v0()` now handles `.zdmp` (was only `load_package_v0_with_policy`) |
-| `justfile` | `lang-codegen-test-pex` builds drift-deploy PEX alongside driftc PEX |
+| `justfile` | `lang-codegen-test-pex` builds drift CLI PEX alongside driftc PEX |
 
-### PEX contents
+### PEX contents (`bin/drift`)
 
 | Component | Source |
 |-----------|--------|
@@ -185,7 +202,7 @@ PYTHONPATH="${DRIFT_LANG_ROOT}" "${DRIFT_LANG_ROOT}/.venv/bin/python3" \
   -m tools.drift_deploy.drift_deploy --driftc "${DRIFTC}" ...
 
 # After (self-contained):
-drift-deploy --driftc "${DRIFTC}" --dest ~/opt/drift/libs ...
+drift deploy --driftc "${DRIFTC}" --dest ~/opt/drift/libs ...
 ```
 
 ### Atomic write fix (cache)
@@ -196,10 +213,12 @@ Cache writes in `zdmp.py` are now atomic: `tempfile.mkstemp` → `os.write` → 
 
 | Check | Result |
 |-------|--------|
-| PEX build | Produces 130 MB self-contained `bin/drift-deploy` |
-| Clean-env `--help` | Works with `env -i` (no PYTHONPATH, no repo) |
+| PEX build | Produces self-contained `bin/drift` |
+| Clean-env `drift deploy --help` | Works with `env -i` (no PYTHONPATH, no repo) |
 | `zstandard` available | Module-level import succeeds inside PEX |
 | `lang.*` deferred imports | Resolved via `lib/compiler/` at runtime |
+| `drift deploy` dispatch | Routed to `tools.drift_deploy.drift_deploy.run()` |
+| `drift sign --help` | Routed to `lang.drift.cli.main()` |
 
 ---
 
@@ -208,11 +227,11 @@ Cache writes in `zdmp.py` are now atomic: `tempfile.mkstemp` → `os.write` → 
 | Suite | Tests | Result |
 |-------|-------|--------|
 | zdmp unit tests | 10 | pass |
-| Deploy tests | 68 | pass |
+| Deploy tests | 69 | pass |
 | Resolver tests | 26 | pass |
 | Sign CLI tests | 3 | pass |
 | Trust CLI tests | 2 | pass |
-| **Total** | **109** | **pass** |
+| **Total** | **110** | **pass** |
 
 ---
 
