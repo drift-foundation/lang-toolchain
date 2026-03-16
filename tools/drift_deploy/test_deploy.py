@@ -355,10 +355,10 @@ class TestCleanEnv:
 	"""
 	Regression: PYTHONPATH must not leak into driftc subprocess calls.
 
-	When drift deploy is invoked via
-	  PYTHONPATH=/path/to/drift-lang python3 -m tools.drift_deploy.drift_deploy
-	the PYTHONPATH leaks into child driftc (PEX) invocations, causing it
-	to pick up unbundled lang/ modules and crash with ModuleNotFoundError.
+	When drift deploy is invoked via the drift-deploy PEX binary (or via
+	legacy PYTHONPATH invocation), PYTHONPATH must not leak into child
+	driftc (PEX) invocations, causing it to pick up unbundled lang/
+	modules and crash with ModuleNotFoundError.
 	"""
 
 	def test_pythonpath_scrubbed(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1874,3 +1874,27 @@ class TestSmokeDepPinning:
 			assert dep_pins == ["util-log@1.0.0"], (
 				f"with no resolved deps, smoke should only pin the artifact; got: {dep_pins}"
 			)
+
+
+class TestDeployPexEntry:
+	"""Verify the drift-deploy PEX entry point is importable and well-formed."""
+
+	def test_entry_point_importable(self) -> None:
+		"""deploy_pex_entry.main must be importable from the repo tree."""
+		import importlib.util
+		entry_path = Path(__file__).resolve().parents[2] / "tools" / "deploy" / "deploy_pex_entry.py"
+		assert entry_path.exists(), f"entry point not found: {entry_path}"
+		spec = importlib.util.spec_from_file_location("deploy_pex_entry", entry_path)
+		assert spec is not None
+		mod = importlib.util.module_from_spec(spec)
+		# Don't execute — just verify the module loads and has main().
+		spec.loader.exec_module(mod)  # type: ignore[union-attr]
+		assert hasattr(mod, "main"), "deploy_pex_entry must define main()"
+		assert callable(mod.main)
+
+	def test_build_script_exists(self) -> None:
+		"""step_build_deploy_pex.sh must exist and be executable."""
+		import os
+		script = Path(__file__).resolve().parents[2] / "tools" / "deploy" / "step_build_deploy_pex.sh"
+		assert script.exists(), f"build script not found: {script}"
+		assert os.access(script, os.X_OK), f"build script not executable: {script}"

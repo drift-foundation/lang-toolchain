@@ -16,7 +16,7 @@ Resource layout assumed (relative to the executable at <dist>/bin/driftc):
   <dist>/lib/stdlib/       — signed stdlib package (std.dmp + std.sig)
 
 The PEX itself bundles the Python interpreter (--scie eager) and third-party
-dependencies (lark, llvmlite, cryptography).  The compiler sources remain in
+dependencies (lark, llvmlite, cryptography, zstandard).  The compiler sources remain in
 lib/compiler/ so that __file__-relative resource lookups (grammar.lark,
 core_trust.json, C/H/S sources for runtime archive rebuilds) continue to
 resolve correctly.

@@ -199,6 +199,7 @@ lang-codegen-test-pex:
 	echo "[pex-e2e] building PEX artifact in ${STAGING}..."
 	export REPO_ROOT="$PWD" DIST="${STAGING}" CLANG="${CLANG}"
 	bash tools/deploy/step_build_pex.sh
+	bash tools/deploy/step_build_deploy_pex.sh
 	bash tools/deploy/step_bundle.sh
 	# Write a minimal empty core trust store so the PEX binary does not
 	# fail on load_core_trust_store().  The local PEX e2e uses --stdlib-root

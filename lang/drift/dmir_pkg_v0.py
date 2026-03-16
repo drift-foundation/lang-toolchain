@@ -56,7 +56,13 @@ class PackageFormatError(ValueError):
 def _decompress_if_zdmp(pkg_path: Path, data: bytes) -> bytes:
 	"""Decompress .zdmp bytes to raw DMIR-PKG bytes; pass through .dmp as-is."""
 	if pkg_path.suffix == ".zdmp":
-		import zstandard
+		try:
+			import zstandard
+		except ModuleNotFoundError as err:
+			raise ModuleNotFoundError(
+				"zstandard is required to load compressed packages (.zdmp). "
+				"Install it with: pip install 'zstandard>=0.23.0'"
+			) from err
 		dctx = zstandard.ZstdDecompressor()
 		return dctx.decompress(data)
 	return data

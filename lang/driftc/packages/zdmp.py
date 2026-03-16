@@ -28,7 +28,13 @@ import os
 import tempfile
 from pathlib import Path
 
-import zstandard
+try:
+	import zstandard
+except ModuleNotFoundError as _err:
+	raise ModuleNotFoundError(
+		"zstandard is required to load compressed packages (.zdmp). "
+		"Install it with: pip install 'zstandard>=0.23.0'"
+	) from _err
 
 # ── Pinned compression settings ──────────────────────────────────────
 

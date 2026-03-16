@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-03-15
+- **Packaged `drift-deploy` as a self-contained PEX tool (0.27.64)**:
+  Shipped `drift-deploy` as a first-class deployed binary instead of relying
+  on source-tree module execution from a repo-local Python environment.
+  - Tool packaging:
+    - added a dedicated `bin/drift-deploy` PEX --scie eager executable
+    - bundles required runtime dependencies including `cryptography` and
+      `zstandard`
+    - resolves deferred `lang.*` imports from the deployed `lib/compiler/`
+      tree at runtime
+  - Deploy pipeline integration:
+    - deploy now builds and verifies both `bin/driftc` and `bin/drift-deploy`
+    - bundle/docs were updated to describe `drift-deploy` as a self-contained
+      downstream tool
+  - Follow-up hardening included in the same batch:
+    - generic package loading now accepts `.zdmp`
+    - tooling-side manifest/identity readers now accept `.zdmp`
+    - decompressed `.zdmp` cache writes are atomic to avoid partial reads under
+      concurrent use
+
 - **Switched published packages to compressed `.zdmp` distribution and pinned smoke dependency versions (0.27.63)**:
   Made compressed package distribution the standard published form and fixed
   baseline smoke to compile against the same exact resolved dependency graph as

@@ -2,10 +2,11 @@
 
 ## Overview
 
-Two changes shipping together:
+Three changes shipping together:
 
 1. **Compressed package distribution (.zdmp)** — hard cutover from `.dmp` to zstd-compressed `.zdmp` as the published package format, with `.sig` sidecar naming.
 2. **Smoke dep pinning fix** — baseline smoke now passes `--dep` pins for all resolved dependencies, not just the artifact being smoked.
+3. **Self-contained drift-deploy PEX** — `drift deploy` ships as a self-contained PEX --scie eager binary, eliminating the PYTHONPATH + source-tree dependency.
 
 ---
 
@@ -138,6 +139,80 @@ use --dep net-tls@<version> to select
 | Trust CLI tests | 2 | pass |
 | Package consumer e2e | 77 | pass |
 | **Total** | **195** | **pass** |
+
+---
+
+## 3. Self-Contained drift-deploy PEX
+
+### Problem
+
+`drift deploy` was invoked via `PYTHONPATH=<repo> python3 -m tools.drift_deploy.drift_deploy`, requiring the drift-lang source tree and a manually-refreshed `.venv` on the downstream machine. When `.zdmp` became the default published format, `zstandard` was added to `requirements.txt` but downstream venvs weren't refreshed, causing `ModuleNotFoundError: No module named 'zstandard'` during package compression.
+
+### Fix
+
+`drift deploy` now ships as a self-contained PEX --scie eager binary (`bin/drift-deploy`) alongside the compiler (`bin/driftc`). No PYTHONPATH, no source-tree access, no manual `pip install` required.
+
+### What changed
+
+| File | Change |
+|------|--------|
+| `tools/deploy/deploy_pex_entry.py` | **New** — PEX entry point for drift-deploy; resolves `lib/compiler/` for deferred `lang.*` imports |
+| `tools/deploy/step_build_deploy_pex.sh` | **New** — PEX build script; bundles `cryptography` + `zstandard` + `tools.drift_deploy.*` |
+| `tools/deploy/deploy.sh` | Added `step_build_deploy_pex.sh` as step 2 in deploy pipeline |
+| `tools/deploy/step_build_pex.sh` | Added `zstandard` to compiler PEX deps |
+| `tools/deploy/step_bundle.sh` | Added `lang/drift` to bundled compiler sources; added `bin/drift-deploy` existence check; updated docs |
+| `tools/deploy/pex_entry.py` | Docstring: lists `zstandard` in bundled deps |
+| `lang/driftc/packages/zdmp.py` | Defensive diagnostic if `zstandard` is missing |
+| `lang/drift/dmir_pkg_v0.py` | `.zdmp` support in tooling-side `read_manifest_v0`; defensive diagnostic |
+| `lang/driftc/packages/provider_v0.py` | `load_package_v0()` now handles `.zdmp` (was only `load_package_v0_with_policy`) |
+| `justfile` | `lang-codegen-test-pex` builds drift-deploy PEX alongside driftc PEX |
+
+### PEX contents
+
+| Component | Source |
+|-----------|--------|
+| Python interpreter | Embedded (--scie eager) |
+| `tools.drift_deploy.*` | Baked into PEX (non-test .py files) |
+| `cryptography` | Bundled third-party dep |
+| `zstandard` | Bundled third-party dep |
+| `lang.drift.*`, `lang.driftc.*` | Resolved at runtime from `lib/compiler/` on sys.path |
+
+### Downstream invocation (new)
+
+```bash
+# Before (broken by stale venv):
+PYTHONPATH="${DRIFT_LANG_ROOT}" "${DRIFT_LANG_ROOT}/.venv/bin/python3" \
+  -m tools.drift_deploy.drift_deploy --driftc "${DRIFTC}" ...
+
+# After (self-contained):
+drift-deploy --driftc "${DRIFTC}" --dest ~/opt/drift/libs ...
+```
+
+### Atomic write fix (cache)
+
+Cache writes in `zdmp.py` are now atomic: `tempfile.mkstemp` → `os.write` → `os.close` → `os.replace`. Concurrent compiler/test jobs can no longer observe partial cache files.
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| PEX build | Produces 130 MB self-contained `bin/drift-deploy` |
+| Clean-env `--help` | Works with `env -i` (no PYTHONPATH, no repo) |
+| `zstandard` available | Module-level import succeeds inside PEX |
+| `lang.*` deferred imports | Resolved via `lib/compiler/` at runtime |
+
+---
+
+## Test results
+
+| Suite | Tests | Result |
+|-------|-------|--------|
+| zdmp unit tests | 10 | pass |
+| Deploy tests | 68 | pass |
+| Resolver tests | 26 | pass |
+| Sign CLI tests | 3 | pass |
+| Trust CLI tests | 2 | pass |
+| **Total** | **109** | **pass** |
 
 ---
 

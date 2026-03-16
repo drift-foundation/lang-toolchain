@@ -26,11 +26,17 @@ if [[ ! -x "${DIST}/bin/driftc" ]]; then
 	exit 1
 fi
 
+# bin/drift-deploy — PEX --scie eager executable built by step_build_deploy_pex.sh.
+if [[ ! -x "${DIST}/bin/drift-deploy" ]]; then
+	echo "error: ${DIST}/bin/drift-deploy not found; step_build_deploy_pex.sh must run first" >&2
+	exit 1
+fi
+
 # lib/compiler/ — compiler Python sources (lang/ tree) + non-Python assets.
 # These remain on-disk so __file__-relative lookups (grammar.lark,
 # core_trust.json, C/H/S runtime sources) resolve correctly.  The PEX entry
 # point adds this directory to sys.path at runtime.
-for pkg in lang/driftc lang/codegen lang/compiler_infra lang/language_runtime; do
+for pkg in lang/driftc lang/drift lang/codegen lang/compiler_infra lang/language_runtime; do
 	src="${REPO_ROOT}/${pkg}"
 	dst="${DIST}/lib/compiler/${pkg}"
 	if [[ -d "${src}" ]]; then
@@ -100,7 +106,17 @@ driftc my_program.drift -o my_program
 
 `bin/driftc` is a PEX --scie eager executable that bundles:
 - An embedded CPython interpreter
-- All third-party Python dependencies (lark, llvmlite, cryptography)
+- All third-party Python dependencies (lark, llvmlite, cryptography, zstandard)
+
+## Deploy tool
+
+\`bin/drift-deploy\` is a self-contained PEX --scie eager executable for
+building, signing, and publishing Drift packages.  It bundles its own
+Python interpreter and runtime dependencies (cryptography, zstandard).
+
+\`\`\`bash
+drift-deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+\`\`\`
 
 The compiler sources, runtime archives, and signed stdlib package live in
 `lib/` and are resolved relative to the executable's path.  No repo checkout,

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Deploy step: build PEX --scie eager executable for driftc.
+# Deploy step: build PEX --scie eager executable for drift-deploy.
 #
 # Inputs (env):
 #   REPO_ROOT       — repository root
 #   DIST            — staged distribution directory
 #
-# Produces ${DIST}/bin/driftc as a self-contained PEX --scie eager binary
-# that embeds CPython and all third-party Python dependencies.
+# Produces ${DIST}/bin/drift-deploy as a self-contained PEX --scie eager
+# binary that embeds CPython and all required Python dependencies.
 #
-# The compiler sources are NOT included in the PEX; they remain in
-# lib/compiler/ and are added to sys.path by the entry point at runtime.
+# The tools.drift_deploy package is baked into the PEX.  Deferred imports
+# from lang.* (sign, crypto, zdmp, dmir_pkg_v0) are resolved at runtime
+# via lib/compiler/ on sys.path (set up by the entry point).
 set -euo pipefail
 
 : "${REPO_ROOT:?}"
@@ -39,38 +40,56 @@ _read_req_version() {
 	if [[ -n "${line}" ]]; then
 		echo "${line}"
 	else
-		echo "${pkg}"
+		# Fall back to >= constraint if present.
+		line="$(grep -i "^${pkg}>=" "${req_file}" | head -1)" || true
+		if [[ -n "${line}" ]]; then
+			echo "${line}"
+		else
+			echo "${pkg}"
+		fi
 	fi
 }
 
-LARK_REQ="$(_read_req_version lark)"
-LLVMLITE_REQ="$(_read_req_version llvmlite)"
 CRYPTO_REQ="$(_read_req_version cryptography)"
 ZSTD_REQ="$(_read_req_version zstandard)"
 
 # ── Detect Python version for scie ──────────────────────────────────
 PYTHON_VERSION="$("${VENV}/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
-# ── Build PEX entry point source directory ──────────────────────────
+# ── Stage source directories for PEX ────────────────────────────────
+# PEX needs the tools.drift_deploy package and the entry point.
 ENTRY_DIR="$(mktemp -d)"
 trap 'rm -rf "${ENTRY_DIR}"' RETURN
-cp "${REPO_ROOT}/tools/deploy/pex_entry.py" "${ENTRY_DIR}/"
+
+# Entry point.
+cp "${REPO_ROOT}/tools/deploy/deploy_pex_entry.py" "${ENTRY_DIR}/"
+
+# tools.drift_deploy package (exclude tests).
+mkdir -p "${ENTRY_DIR}/tools/drift_deploy"
+cp "${REPO_ROOT}/tools/__init__.py" "${ENTRY_DIR}/tools/" 2>/dev/null || \
+	touch "${ENTRY_DIR}/tools/__init__.py"
+for f in "${REPO_ROOT}/tools/drift_deploy/"*.py; do
+	fname="$(basename "${f}")"
+	# Skip test files — not needed at runtime.
+	case "${fname}" in
+		test_*.py) continue ;;
+	esac
+	cp "${f}" "${ENTRY_DIR}/tools/drift_deploy/"
+done
 
 # ── Build PEX ───────────────────────────────────────────────────────
 mkdir -p "${DIST}/bin"
 
-echo "[deploy] building PEX --scie eager executable (deps: ${LARK_REQ}, ${LLVMLITE_REQ}, ${CRYPTO_REQ}, ${ZSTD_REQ})..."
+echo "[deploy] building drift-deploy PEX --scie eager executable (deps: ${CRYPTO_REQ}, ${ZSTD_REQ})..."
 "${PEX_CMD}" \
-	"${LARK_REQ}" \
-	"${LLVMLITE_REQ}" \
 	"${CRYPTO_REQ}" \
 	"${ZSTD_REQ}" \
 	-D "${ENTRY_DIR}" \
-	-e pex_entry:main \
+	-e deploy_pex_entry:main \
 	--scie eager \
 	--scie-python-version "${PYTHON_VERSION}" \
 	--python "${VENV}/bin/python3" \
-	-o "${DIST}/bin/driftc"
+	-o "${DIST}/bin/drift-deploy"
 
-chmod +x "${DIST}/bin/driftc"
-echo "[deploy] PEX executable built: ${DIST}/bin/driftc"
+chmod +x "${DIST}/bin/drift-deploy"
+echo "[deploy] drift-deploy PEX executable built: ${DIST}/bin/drift-deploy"

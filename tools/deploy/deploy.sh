@@ -10,11 +10,12 @@
 #   DEST/current -> drift-<VERSION>+abi<ABI>  (atomic symlink)
 #
 # Steps (each is a standalone script under tools/deploy/):
-#   1. step_build_pex.sh  — build PEX --scie eager executable (bin/driftc)
-#   2. step_bundle.sh     — stage compiler sources, runtime archives, docs
-#   3. step_stdlib_pkg.sh — build + sign stdlib package, core trust store
-#   4. step_smoke.sh      — compile + run smoke test using deployed paths
-#   5. step_publish.sh    — atomic publish + symlink switch
+#   1. step_build_pex.sh        — build PEX --scie eager executable (bin/driftc)
+#   2. step_build_deploy_pex.sh — build PEX --scie eager executable (bin/drift-deploy)
+#   3. step_bundle.sh           — stage compiler sources, runtime archives, docs
+#   4. step_stdlib_pkg.sh       — build + sign stdlib package, core trust store
+#   5. step_smoke.sh            — compile + run smoke test using deployed paths
+#   6. step_publish.sh          — atomic publish + symlink switch
 #
 # Requires DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD for stdlib signing.
 set -euo pipefail
@@ -190,6 +191,7 @@ export DEST
 
 # ── Steps ─────────────────────────────────────────────────────────────
 "${DEPLOY_DIR}/step_build_pex.sh"
+"${DEPLOY_DIR}/step_build_deploy_pex.sh"
 "${DEPLOY_DIR}/step_bundle.sh"
 "${DEPLOY_DIR}/step_stdlib_pkg.sh"
 "${DEPLOY_DIR}/step_smoke.sh"
