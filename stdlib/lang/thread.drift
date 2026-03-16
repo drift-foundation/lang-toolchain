@@ -120,7 +120,7 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn console_eprintln(text: String) nothrow -> Void;
 @intrinsic pub fn net_listen(ip: &String, port: Int) nothrow -> Int;
 @intrinsic pub fn net_accept(fd: Int) nothrow -> Int;
-@intrinsic pub fn net_connect(ip: &String, port: Int) nothrow -> Int;
+@intrinsic pub fn net_connect(ip: &String, port: Int, deadline_ms: Int) nothrow -> Int;
 @intrinsic pub fn net_listener_port(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_set_nodelay(fd: Int, enabled: Int) nothrow -> Int;
 @intrinsic pub fn net_get_nodelay(fd: Int) nothrow -> Int;

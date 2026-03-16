@@ -13,7 +13,7 @@ int64_t drift_io_errno(void);
 int64_t drift_io_set_nonblocking(int64_t fd);
 int64_t drift_net_listen(DriftString *ip, int64_t port);
 int64_t drift_net_accept(int64_t fd);
-int64_t drift_net_connect(DriftString *ip, int64_t port);
+int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms);
 int64_t drift_net_listener_port(int64_t fd);
 int64_t drift_net_udp_local_port(int64_t fd);
 int64_t drift_net_udp_bind(DriftString *ip, int64_t port);

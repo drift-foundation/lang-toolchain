@@ -1230,7 +1230,7 @@ class LlvmModuleBuilder:
 					f"declare i8* @drift_runtime_thread_registry_get(i64)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listen({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}*, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)})",
@@ -4515,14 +4515,15 @@ class _FuncBuilder:
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_connect":
-				if len(instr.args) != 2:
-					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 2 args, got {len(instr.args)}")
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 3 args, got {len(instr.args)}")
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: net_connect result must be captured")
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
+				deadline_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
-				_nc_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+				_nc_call = f"call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val}, {self._llty(DRIFT_INT_TYPE)} {deadline_val})"
 				if instr.can_throw:
 					raw = self._fresh("nc_raw")
 					self.lines.append(f"  {raw} = {_nc_call}")
@@ -5357,15 +5358,16 @@ class _FuncBuilder:
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_connect":
-				if len(instr.args) != 2:
-					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 2 args, got {len(instr.args)}")
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: net_connect expects 3 args, got {len(instr.args)}")
 				if dest is None:
 					raise NotImplementedError("LLVM codegen v1: net_connect result must be captured")
 				ip_val = self._map_value(instr.args[0])
 				port_val = self._map_value(instr.args[1])
+				deadline_val = self._map_value(instr.args[2])
 				self.module.needs_thread_runtime = True
 				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val})"
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_connect({DRIFT_STRING_TYPE}* {ip_val}, {self._llty(DRIFT_INT_TYPE)} {port_val}, {self._llty(DRIFT_INT_TYPE)} {deadline_val})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return

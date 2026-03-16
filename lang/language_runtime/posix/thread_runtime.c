@@ -9,6 +9,11 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #ifdef __linux__
 #include <ucontext.h>
 #include <sys/epoll.h>
@@ -2270,4 +2275,309 @@ void *drift_runtime_thread_registry_get(uint64_t type_tag) {
 		cur = cur->next;
 	}
 	return NULL;
+}
+
+/* Remove all reactor timers for a given VT.  Called on the happy path
+ * of blocking-job completion so stale deadline timers do not fire
+ * spurious unparks later. */
+static void drift_reactor_cancel_vt_timers(uint64_t vt_id) {
+#ifdef __linux__
+	Reactor *r = (Reactor *)atomic_load(&drift_default_reactor);
+	if (!r) return;
+	pthread_mutex_lock(&r->mu);
+	ReactorTimer *tp = NULL;
+	ReactorTimer *tc = r->timers;
+	while (tc) {
+		ReactorTimer *tn = tc->next;
+		if (tc->vt == vt_id) {
+			if (tp) tp->next = tn; else r->timers = tn;
+			free(tc);
+		} else {
+			tp = tc;
+		}
+		tc = tn;
+	}
+	pthread_mutex_unlock(&r->mu);
+#else
+	(void)vt_id;
+#endif
+}
+
+/* ================================================================
+ * Generic blocking-job offload pool
+ * ================================================================ */
+
+typedef struct DriftBlockingJob {
+	void (*job_fn)(struct DriftBlockingJob *job);
+	void (*destroy_fn)(struct DriftBlockingJob *job);
+	uint64_t vt;
+	atomic_int completed;
+	atomic_int expired;
+	int error;
+	struct DriftBlockingJob *next;
+} DriftBlockingJob;
+
+typedef struct DriftBlockingPool {
+	pthread_mutex_t mu;
+	pthread_cond_t cv;
+	DriftBlockingJob *queue_head;
+	DriftBlockingJob *queue_tail;
+	int queue_len;
+	int queue_limit;
+	int stopping;
+	int worker_count;
+	pthread_t *workers;
+} DriftBlockingPool;
+
+#define DRIFT_BLOCKING_POOL_WORKERS 4
+#define DRIFT_BLOCKING_POOL_QUEUE_LIMIT 64
+
+static DriftBlockingPool *drift_blocking_pool_ptr = NULL;
+static pthread_once_t drift_blocking_pool_once = PTHREAD_ONCE_INIT;
+
+static void *drift_blocking_worker(void *arg) {
+	DriftBlockingPool *pool = (DriftBlockingPool *)arg;
+	while (1) {
+		pthread_mutex_lock(&pool->mu);
+		while (!pool->stopping && pool->queue_head == NULL) {
+			pthread_cond_wait(&pool->cv, &pool->mu);
+		}
+		if (pool->stopping && pool->queue_head == NULL) {
+			pthread_mutex_unlock(&pool->mu);
+			return NULL;
+		}
+		DriftBlockingJob *job = pool->queue_head;
+		pool->queue_head = job->next;
+		if (pool->queue_head == NULL) {
+			pool->queue_tail = NULL;
+		}
+		pool->queue_len--;
+		job->next = NULL;
+		pthread_mutex_unlock(&pool->mu);
+
+		job->job_fn(job);
+		atomic_store(&job->completed, 1);
+
+		if (atomic_load(&job->expired)) {
+			job->destroy_fn(job);
+		} else {
+			drift_thread_unpark(job->vt);
+		}
+	}
+	return NULL;
+}
+
+static void drift_blocking_pool_shutdown(void) {
+	DriftBlockingPool *pool = drift_blocking_pool_ptr;
+	if (!pool) return;
+	pthread_mutex_lock(&pool->mu);
+	pool->stopping = 1;
+	pthread_cond_broadcast(&pool->cv);
+	pthread_mutex_unlock(&pool->mu);
+	for (int i = 0; i < pool->worker_count; i++) {
+		pthread_join(pool->workers[i], NULL);
+	}
+	/* Drain remaining jobs. */
+	DriftBlockingJob *j = pool->queue_head;
+	while (j) {
+		DriftBlockingJob *next = j->next;
+		j->destroy_fn(j);
+		j = next;
+	}
+	free(pool->workers);
+	pthread_mutex_destroy(&pool->mu);
+	pthread_cond_destroy(&pool->cv);
+	free(pool);
+	drift_blocking_pool_ptr = NULL;
+}
+
+static void drift_blocking_pool_init(void) {
+	DriftBlockingPool *pool = calloc(1, sizeof(DriftBlockingPool));
+	if (!pool) return;
+	pthread_mutex_init(&pool->mu, NULL);
+	pthread_cond_init(&pool->cv, NULL);
+	pool->queue_limit = DRIFT_BLOCKING_POOL_QUEUE_LIMIT;
+	pool->worker_count = DRIFT_BLOCKING_POOL_WORKERS;
+	pool->workers = calloc((size_t)pool->worker_count, sizeof(pthread_t));
+	for (int i = 0; i < pool->worker_count; i++) {
+		pthread_create(&pool->workers[i], NULL, drift_blocking_worker, pool);
+	}
+	drift_blocking_pool_ptr = pool;
+	atexit(drift_blocking_pool_shutdown);
+}
+
+static int64_t drift_blocking_submit(DriftBlockingJob *job) {
+	pthread_once(&drift_blocking_pool_once, drift_blocking_pool_init);
+	DriftBlockingPool *pool = drift_blocking_pool_ptr;
+	if (!pool) return -1;
+	pthread_mutex_lock(&pool->mu);
+	if (pool->queue_len >= pool->queue_limit || pool->stopping) {
+		pthread_mutex_unlock(&pool->mu);
+		return -1;
+	}
+	job->next = NULL;
+	if (pool->queue_tail) {
+		pool->queue_tail->next = job;
+	} else {
+		pool->queue_head = job;
+	}
+	pool->queue_tail = job;
+	pool->queue_len++;
+	pthread_cond_signal(&pool->cv);
+	pthread_mutex_unlock(&pool->mu);
+	return 0;
+}
+
+/* ================================================================
+ * DNS resolve consumer (first blocking-job consumer)
+ * ================================================================ */
+
+typedef struct DriftResolveJob {
+	DriftBlockingJob base;
+	char *hostname;
+	int port;
+	struct sockaddr_storage addr;
+	socklen_t addrlen;
+} DriftResolveJob;
+
+static void drift_resolve_job_destroy(DriftBlockingJob *base) {
+	DriftResolveJob *job = (DriftResolveJob *)base;
+	free(job->hostname);
+	free(job);
+}
+
+static void drift_resolve_job_fn(DriftBlockingJob *base) {
+	DriftResolveJob *job = (DriftResolveJob *)base;
+	struct addrinfo hints = {0}, *res = NULL;
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	char port_str[8];
+	snprintf(port_str, sizeof(port_str), "%d", job->port);
+	int rc = getaddrinfo(job->hostname, port_str, &hints, &res);
+	free(job->hostname);
+	job->hostname = NULL;
+	if (rc != 0 || !res) {
+		base->error = (rc != 0) ? rc : -1;
+		if (res) freeaddrinfo(res);
+		return;
+	}
+	memcpy(&job->addr, res->ai_addr, res->ai_addrlen);
+	job->addrlen = res->ai_addrlen;
+	freeaddrinfo(res);
+	base->error = 0;
+}
+
+/* Blocking resolve for main-thread path. */
+static int drift_resolve_blocking(const char *hostname, int port,
+                                  struct sockaddr_storage *addr,
+                                  socklen_t *addrlen) {
+	struct addrinfo hints = {0}, *res = NULL;
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	char port_str[8];
+	snprintf(port_str, sizeof(port_str), "%d", port);
+	int rc = getaddrinfo(hostname, port_str, &hints, &res);
+	if (rc != 0 || !res) {
+		if (res) freeaddrinfo(res);
+		return -1;
+	}
+	memcpy(addr, res->ai_addr, res->ai_addrlen);
+	*addrlen = res->ai_addrlen;
+	freeaddrinfo(res);
+	return 0;
+}
+
+/* Shared helper: create non-blocking socket and connect to resolved address. */
+static int64_t drift_connect_to_addr(struct sockaddr_storage *sa, socklen_t addrlen) {
+	int fd = socket(sa->ss_family, SOCK_STREAM, 0);
+	if (fd < 0) return -1;
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		int err = errno;
+		close(fd);
+		errno = err;
+		return -1;
+	}
+	int rc = connect(fd, (struct sockaddr *)sa, addrlen);
+	if (rc < 0 && errno != EINPROGRESS) {
+		int err = errno;
+		close(fd);
+		errno = err;
+		return -1;
+	}
+	return fd;
+}
+
+int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms) {
+	char *host = drift_string_to_cstr(*ip);
+
+	/* Fast path: IPv4 literal — no DNS, no pool. */
+	struct sockaddr_in a4;
+	memset(&a4, 0, sizeof(a4));
+	a4.sin_family = AF_INET;
+	a4.sin_port = htons((uint16_t)port);
+	if (inet_pton(AF_INET, host, &a4.sin_addr) == 1) {
+		free(host);
+		struct sockaddr_storage sa;
+		memcpy(&sa, &a4, sizeof(a4));
+		return drift_connect_to_addr(&sa, sizeof(a4));
+	}
+
+	/* Hostname path. */
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) {
+		/* Main thread: block directly in getaddrinfo. */
+		struct sockaddr_storage addr;
+		socklen_t addrlen;
+		int rc = drift_resolve_blocking(host, (int)port, &addr, &addrlen);
+		free(host);
+		if (rc != 0) { errno = EINVAL; return -1; }
+		return drift_connect_to_addr(&addr, addrlen);
+	}
+
+	/* VT path: submit to blocking pool. */
+	DriftResolveJob *rj = calloc(1, sizeof(DriftResolveJob));
+	if (!rj) { free(host); errno = ENOMEM; return -1; }
+	rj->base.job_fn = drift_resolve_job_fn;
+	rj->base.destroy_fn = drift_resolve_job_destroy;
+	rj->base.vt = (uint64_t)vt;
+	rj->hostname = host;  /* ownership transferred */
+	rj->port = (int)port;
+
+	int64_t submit_rc = drift_blocking_submit(&rj->base);
+	if (submit_rc != 0) {
+		free(rj->hostname);
+		free(rj);
+		errno = EAGAIN;
+		return -1;
+	}
+
+	/* Register caller's deadline as reactor timer, then park. */
+	if (deadline_ms > 0) {
+		drift_reactor_register_timer((uint64_t)deadline_ms, (uint64_t)vt);
+	}
+	drift_thread_park(0);
+
+	/* Resumed — check result. */
+	if (atomic_load(&rj->base.completed)) {
+		/* Cancel the deadline timer so it does not fire a spurious
+		 * unpark later while this VT is parked for something else. */
+		if (deadline_ms > 0) {
+			drift_reactor_cancel_vt_timers((uint64_t)vt);
+		}
+		if (rj->base.error != 0) {
+			rj->base.destroy_fn(&rj->base);
+			errno = EINVAL;
+			return -1;
+		}
+		struct sockaddr_storage addr;
+		memcpy(&addr, &rj->addr, rj->addrlen);
+		socklen_t addrlen = rj->addrlen;
+		rj->base.destroy_fn(&rj->base);
+		return drift_connect_to_addr(&addr, addrlen);
+	}
+	/* Timed out — transfer ownership to worker. */
+	atomic_store(&rj->base.expired, 1);
+	errno = EAGAIN;
+	return -1;
 }

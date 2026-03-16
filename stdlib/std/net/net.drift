@@ -204,7 +204,7 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
-		val fd = thread.net_connect(&addr.ip, addr.port);
+		val fd = thread.net_connect(&addr.ip, addr.port, deadline);
 		if fd >= 0 {
 			return core.Result::Ok(TcpStream(fd = fd));
 		}

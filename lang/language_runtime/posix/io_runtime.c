@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -122,39 +123,6 @@ int64_t drift_net_accept(int64_t fd) {
 		return -1;
 	}
 	return client_fd;
-}
-
-int64_t drift_net_connect(DriftString *ip, int64_t port) {
-	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) {
-		return -1;
-	}
-	if (drift_set_nonblocking(fd) < 0) {
-		int err = errno;
-		close(fd);
-		errno = err;
-		return -1;
-	}
-	char *ip_cstr = drift_string_to_cstr(*ip);
-	struct sockaddr_in addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons((uint16_t)port);
-	if (inet_pton(AF_INET, ip_cstr, &addr.sin_addr) <= 0) {
-		free(ip_cstr);
-		close(fd);
-		errno = EINVAL;
-		return -1;
-	}
-	free(ip_cstr);
-	int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
-	if (rc < 0 && errno != EINPROGRESS) {
-		int err = errno;
-		close(fd);
-		errno = err;
-		return -1;
-	}
-	return fd;
 }
 
 int64_t drift_net_listener_port(int64_t fd) {
