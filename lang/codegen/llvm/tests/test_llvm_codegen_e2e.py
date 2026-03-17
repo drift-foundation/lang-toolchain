@@ -79,7 +79,7 @@ def test_e2e_scalar_main_returns_42():
 	fn_infos = {fn_id: FnInfo(fn_id=fn_id, name="drift_main", declared_can_throw=False, return_type_id=int_ty)}
 
 	mod = lower_module_to_llvm({fn_id: mir}, {fn_id: ssa}, fn_infos, word_bits=host_word_bits())
-	mod.emit_entry_wrapper("drift_main")
+	mod.emit_entry_wrapper("drift_main", root_vt=False)
 	ir = mod.render()
 
 	exit_code = _run_ir_and_get_exit(ir)
@@ -124,7 +124,7 @@ def test_e2e_fnresult_callee_ok_path():
 		{callee_id: callee_ssa, main_id: main_ssa},
 		fn_infos,
 		type_table=table, word_bits=host_word_bits())
-	mod.emit_entry_wrapper("drift_main")
+	mod.emit_entry_wrapper("drift_main", root_vt=False)
 	ir = mod.render()
 
 	exit_code = _run_ir_and_get_exit(ir)

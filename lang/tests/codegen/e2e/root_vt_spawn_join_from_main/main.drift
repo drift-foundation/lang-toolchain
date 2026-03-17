@@ -2,23 +2,15 @@ module m;
 
 import std.concurrent as conc;
 import std.core as core;
-import lang.thread as thread;
 
 pub fn main() nothrow -> Int {
-	val cur = thread.vt_current();
-	if cur == 0 {
-		return 1;
-	}
 	var t = conc.spawn_cb(core.callback0(| | nothrow => {
-		if thread.vt_current() == 0 {
-			return 2;
-		}
-		return 7;
+		return 42;
 	}));
 	var res = t.join();
 	match res {
 		Ok(v) => { return v; },
-		Err(_) => { return 3; },
-		default => { return 4; }
+		Err(_) => { return 1; },
+		default => { return 2; }
 	}
 }

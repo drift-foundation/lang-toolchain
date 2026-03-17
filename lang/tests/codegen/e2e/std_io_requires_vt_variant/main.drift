@@ -1,0 +1,18 @@
+module m;
+
+import std.io as io;
+import std.core as core;
+
+// Verify IoError::RequiresVirtualThread variant exists and matches.
+fn run() -> Int {
+	val err: io.IoError = io.IoError::RequiresVirtualThread();
+	match err {
+		RequiresVirtualThread => {},
+		default => { return 1; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

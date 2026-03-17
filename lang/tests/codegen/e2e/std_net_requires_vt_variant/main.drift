@@ -1,0 +1,35 @@
+module m;
+
+import std.net as net;
+import std.core as core;
+
+// Verify RequiresVirtualThread variant exists and matches correctly.
+fn run() -> Int {
+	val err: net.NetError = net.NetError::RequiresVirtualThread();
+	match err {
+		RequiresVirtualThread => {},
+		default => { return 1; }
+	}
+
+	// Verify WouldBlock still works.
+	val err2: net.NetError = net.NetError::WouldBlock();
+	match err2 {
+		WouldBlock => {},
+		default => { return 2; }
+	}
+
+	// Verify Errno still works.
+	val err3: net.NetError = net.NetError::Errno(42);
+	match err3 {
+		Errno(code) => {
+			if code != 42 { return 3; }
+		},
+		default => { return 4; }
+	}
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

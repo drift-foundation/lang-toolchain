@@ -4,6 +4,7 @@ import std.sync as sync;
 import std.concurrent as conc;
 import std.containers as containers;
 import std.core as core;
+import lang.thread as thread;
 
 struct Node { v: Int }
 
@@ -13,6 +14,7 @@ fn producer(q: conc.Arc<sync.MpscQueue<Node>>, base: Uint, n: Int) nothrow -> In
 		val v = base + cast<Uint>(i);
 		val queue_ref = q.get();
 		while not queue_ref.push(sync.handle<type Node>(v)) {
+			thread.vt_yield();
 		}
 		i = i + 1;
 	}
@@ -38,7 +40,7 @@ fn run() -> Int {
 		val queue_ref = q.get();
 		match queue_ref.pop() {
 			Some(_) => { seen = seen + 1; },
-			default => {}
+			default => { thread.vt_yield(); }
 		}
 	}
 	while true {

@@ -3,10 +3,12 @@ module m;
 import std.sync as sync;
 import std.concurrent as conc;
 import std.core as core;
+import lang.thread as thread;
 
 fn writer(cell: conc.Arc<sync.AtomicUint>, start: conc.Arc<sync.AtomicBool>, done: conc.Arc<sync.AtomicBool>) nothrow -> Int {
 	val start_ref = start.get();
 	while not start_ref.load(sync.MemoryOrder::Acquire()) {
+		thread.vt_yield();
 	}
 	val cell_ref = cell.get();
 	cell_ref.store(cast<Uint>(2), sync.MemoryOrder::Release());
@@ -29,6 +31,7 @@ fn run() -> Int {
 	start_ref.store(true, sync.MemoryOrder::Release());
 	val done_ref = done.get();
 	while not done_ref.load(sync.MemoryOrder::Acquire()) {
+		thread.vt_yield();
 	}
 
 	val cell_ref = cell.get();

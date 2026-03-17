@@ -35,7 +35,8 @@ pub struct SocketAddrV6 {
 
 pub variant NetError {
 	Errno(code: Int),
-	WouldBlock
+	WouldBlock,
+	RequiresVirtualThread
 }
 
 implement core.Diagnostic for NetError {
@@ -46,6 +47,9 @@ implement core.Diagnostic for NetError {
 			},
 			WouldBlock => {
 				DiagnosticValue::Int(-1)
+			},
+			RequiresVirtualThread => {
+				DiagnosticValue::Int(-2)
 			}
 		};
 	}
@@ -91,10 +95,6 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	}
 	val vt = thread.vt_current();
 	if vt == 0 {
-		val remaining = _remaining_ms(deadline_ms);
-		if remaining > 0 {
-			_park_main_thread_io(remaining);
-		}
 		return;
 	}
 	// ET replay: if an edge is pending for this direction (budget yield
@@ -170,6 +170,9 @@ pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<
 }
 
 pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(NetError::RequiresVirtualThread());
+	}
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
 		val fd = thread.net_accept(self.fd);
@@ -188,11 +191,6 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 			if remaining <= 0 {
 				return core.Result::Err(NetError::WouldBlock());
 			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
-				continue;
-			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
@@ -202,6 +200,9 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 }
 
 pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(NetError::RequiresVirtualThread());
+	}
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
 		val fd = thread.net_connect(&addr.ip, addr.port, deadline);
@@ -220,7 +221,7 @@ pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result
 			if remaining <= 0 {
 				return core.Result::Err(NetError::WouldBlock());
 			}
-			_park_main_thread_io(remaining);
+			thread.vt_yield();
 			continue;
 		}
 		return core.Result::Err(NetError::Errno(err));
@@ -242,6 +243,9 @@ pub fn test_tcp_listener() nothrow -> TcpListener {
 
 implement TcpStream {
 	pub fn read(self: &TcpStream, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
 		val deadline = _deadline_from_timeout(timeout);
@@ -264,11 +268,6 @@ implement TcpStream {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				val vt = thread.vt_current();
-				if vt == 0 {
-					_park_main_thread_io(remaining);
-					continue;
-				}
 				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
@@ -278,6 +277,9 @@ implement TcpStream {
 	}
 
 	pub fn write(self: &TcpStream, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
 		val deadline = _deadline_from_timeout(timeout);
@@ -299,11 +301,6 @@ implement TcpStream {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				val vt = thread.vt_current();
-				if vt == 0 {
-					_park_main_thread_io(remaining);
-					continue;
-				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
@@ -313,6 +310,9 @@ implement TcpStream {
 	}
 
 	pub fn close(self: &TcpStream, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
 			val r = thread.io_close(self.fd);
@@ -331,7 +331,7 @@ implement TcpStream {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				_park_main_thread_io(remaining);
+				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
 			return core.Result::Err(NetError::Errno(err));
@@ -389,10 +389,13 @@ implement TcpListener {
 
 implement UdpSocket {
 	pub fn send_to(self: &UdpSocket, addr: &SocketAddr, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
 		val deadline = _deadline_from_timeout(timeout);
-	while true {
+		while true {
 			val n = thread.net_udp_send_to(self.fd, &addr.ip, addr.port, ptr, len);
 			if n >= 0 {
 				return core.Result::Ok(n);
@@ -401,28 +404,26 @@ implement UdpSocket {
 			if err == NET_EINTR {
 				continue;
 			}
-		if err == NET_EAGAIN {
-			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val remaining = _remaining_ms(deadline);
-			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
+			if err == NET_EAGAIN {
+				if deadline <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				val remaining = _remaining_ms(deadline);
+				if remaining <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			_block_on_io(self.fd, 4, deadline);
-			continue;
-		}
 			return core.Result::Err(NetError::Errno(err));
 		}
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
 	pub fn send_to_v6(self: &UdpSocket, addr: &SocketAddrV6, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
 		val deadline = _deadline_from_timeout(timeout);
@@ -443,11 +444,6 @@ implement UdpSocket {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				val vt = thread.vt_current();
-				if vt == 0 {
-					_park_main_thread_io(remaining);
-					continue;
-				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
@@ -457,6 +453,9 @@ implement UdpSocket {
 	}
 
 	pub fn recv_from(self: &UdpSocket, addr_out: &mut SocketAddr, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
 		val deadline = _deadline_from_timeout(timeout);
@@ -470,28 +469,26 @@ implement UdpSocket {
 			if err == NET_EINTR {
 				continue;
 			}
-		if err == NET_EAGAIN {
-			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val remaining = _remaining_ms(deadline);
-			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
+			if err == NET_EAGAIN {
+				if deadline <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				val remaining = _remaining_ms(deadline);
+				if remaining <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
-			_block_on_io(self.fd, 1, deadline);
-			continue;
-		}
 			return core.Result::Err(NetError::Errno(err));
 		}
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
 	pub fn recv_from_v6(self: &UdpSocket, addr_out: &mut SocketAddrV6, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
 		val deadline = _deadline_from_timeout(timeout);
@@ -505,28 +502,26 @@ implement UdpSocket {
 			if err == NET_EINTR {
 				continue;
 			}
-		if err == NET_EAGAIN {
-			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val remaining = _remaining_ms(deadline);
-			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
+			if err == NET_EAGAIN {
+				if deadline <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				val remaining = _remaining_ms(deadline);
+				if remaining <= 0 {
+					return core.Result::Err(NetError::WouldBlock());
+				}
+				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
-			_block_on_io(self.fd, 1, deadline);
-			continue;
-		}
 			return core.Result::Err(NetError::Errno(err));
 		}
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
 	pub fn close(self: &UdpSocket, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError::RequiresVirtualThread());
+		}
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
 			val r = thread.io_close(self.fd);
@@ -545,7 +540,7 @@ implement UdpSocket {
 				if remaining <= 0 {
 					return core.Result::Err(NetError::WouldBlock());
 				}
-				_park_main_thread_io(remaining);
+				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
 			return core.Result::Err(NetError::Errno(err));

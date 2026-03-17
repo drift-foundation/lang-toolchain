@@ -111,6 +111,7 @@ typedef struct DriftVt {
 	struct DriftVt *reg_next;
 	struct DriftRuntimeRegistryEntry *thread_registry_head;
 	int64_t io_bytes_since_yield;   /* ET fairness: cumulative successful IO since last yield */
+	uint64_t join_waiter;           /* VT handle to unpark on completion, or 0 */
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -381,7 +382,13 @@ static void drift_drop_callback(DriftIface *cb);
 static void drift_vt_fiber_entry(uintptr_t arg);
 #endif
 void drift_thread_unpark(uint64_t vt);
+void drift_thread_park(uint64_t reason);
 void drift_reactor_register_timer(uint64_t deadline_ms, uint64_t vt);
+static void drift_reactor_cancel_vt_timers(uint64_t vt_id);
+uint64_t drift_exec_default_get(void);
+uint64_t drift_reactor_default_get(void);
+uint64_t drift_exec_submit(uint64_t exec, uint64_t vt);
+uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec);
 
 typedef struct ExecNode {
 	DriftVt *vt;
@@ -509,8 +516,13 @@ static void drift_worker_vt_finish(DriftVt *vt) {
 	atomic_store(&vt->completed, 1);
 	int dropped_after_finish = atomic_load(&vt->dropped);
 	vt->park_token++;
+	uint64_t waiter = vt->join_waiter;
+	vt->join_waiter = 0;
 	pthread_cond_broadcast(&vt->cv);
 	pthread_mutex_unlock(&vt->mu);
+	if (waiter != 0) {
+		drift_thread_unpark(waiter);
+	}
 	if (dropped_after_finish) {
 		drift_vt_destroy(vt);
 	}
@@ -768,8 +780,11 @@ static void *drift_exec_worker(void *arg) {
 				drift_drop_callback(&vt->cb);
 			}
 			vt->park_token++;
+			uint64_t w1 = vt->join_waiter;
+			vt->join_waiter = 0;
 			pthread_cond_broadcast(&vt->cv);
 			pthread_mutex_unlock(&vt->mu);
+			if (w1 != 0) drift_thread_unpark(w1);
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
@@ -781,15 +796,19 @@ static void *drift_exec_worker(void *arg) {
 				drift_drop_callback(&vt->cb);
 			}
 			vt->park_token++;
+			uint64_t w2 = vt->join_waiter;
+			vt->join_waiter = 0;
 			pthread_cond_broadcast(&vt->cv);
 			pthread_mutex_unlock(&vt->mu);
+			if (w2 != 0) drift_thread_unpark(w2);
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 #ifdef __linux__
 		if (!vt->ctx_ready) {
-			vt->stack_size = exec->stack_bytes;
+			if (vt->stack_size == 0)
+				vt->stack_size = exec->stack_bytes;
 			/* Use mmap with a guard page at the bottom to detect stack overflow.
 			 * The guard page (PROT_NONE) will cause SIGSEGV if the fiber stack
 			 * overflows, instead of silently corrupting adjacent heap metadata. */
@@ -1501,6 +1520,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->reg_next = NULL;
 	vt->thread_registry_head = NULL;
 	vt->io_bytes_since_yield = 0;
+	vt->join_waiter = 0;
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -1510,6 +1530,53 @@ void drift_thread_join(uint64_t vt) {
 	if (h == NULL) {
 		return;
 	}
+
+	/* Fast path: already completed. */
+	if (atomic_load(&h->completed)) {
+		drift_vt_destroy(h);
+		return;
+	}
+
+	DriftVt *caller = drift_vt_tls_get();
+	if (caller && drift_sched_ctx) {
+		/* VT-aware cooperative join: park this VT, let worker run child.
+		 * Loop because the waiter may be resumed for reasons other than
+		 * target completion (e.g., spurious unpark).  But if the *caller*
+		 * is cancelled, drift_thread_park returns immediately without
+		 * blocking (the cancelled check at its top), so we must escape
+		 * to avoid a livelock. */
+		for (;;) {
+			pthread_mutex_lock(&h->mu);
+			if (atomic_load(&h->completed)) {
+				pthread_mutex_unlock(&h->mu);
+				drift_vt_destroy(h);
+				return;
+			}
+			h->join_waiter = (uint64_t)caller;
+			pthread_mutex_unlock(&h->mu);
+
+			drift_thread_park(0);  /* context-swap to scheduler */
+
+			if (atomic_load(&h->completed)) {
+				drift_vt_destroy(h);
+				return;
+			}
+			/* Caller cancelled — abandon the join.  Clear waiter so the
+			 * child's finish path doesn't unpark a stale handle.  The
+			 * child VT is not destroyed; it will be reclaimed by the
+			 * VT registry cleanup at shutdown. */
+			if (atomic_load(&caller->cancelled)) {
+				pthread_mutex_lock(&h->mu);
+				if (h->join_waiter == (uint64_t)caller)
+					h->join_waiter = 0;
+				pthread_mutex_unlock(&h->mu);
+				return;
+			}
+			/* Spurious wake — re-register and park again. */
+		}
+	}
+
+	/* Non-VT path: hard condvar wait (OS main thread, blocking pool, etc). */
 	pthread_mutex_lock(&h->mu);
 	while (!atomic_load(&h->completed)) {
 		pthread_cond_wait(&h->cv, &h->mu);
@@ -1535,14 +1602,43 @@ uint64_t drift_thread_join_timeout(uint64_t vt, int64_t timeout_ms) {
 		return 1;
 	}
 	if (atomic_load(&h->completed)) {
-		pthread_mutex_lock(&h->mu);
-		pthread_mutex_unlock(&h->mu);
 		drift_vt_destroy(h);
 		return 0;
 	}
 	if (atomic_load(&h->cancelled)) {
 		return 1;
 	}
+
+	DriftVt *caller = drift_vt_tls_get();
+	if (caller && drift_sched_ctx) {
+		/* VT-aware cooperative join with timeout. */
+		pthread_mutex_lock(&h->mu);
+		if (atomic_load(&h->completed)) {
+			pthread_mutex_unlock(&h->mu);
+			drift_vt_destroy(h);
+			return 0;
+		}
+		h->join_waiter = (uint64_t)caller;
+		pthread_mutex_unlock(&h->mu);
+
+		int64_t deadline = drift_now_ms() + timeout_ms;
+		drift_reactor_register_timer((uint64_t)deadline, (uint64_t)caller);
+		drift_thread_park(0);
+
+		/* Resumed: check outcome. */
+		if (atomic_load(&h->completed)) {
+			drift_reactor_cancel_vt_timers((uint64_t)caller);
+			drift_vt_destroy(h);
+			return 0;  /* joined successfully */
+		}
+		/* Timeout: clear waiter, don't destroy. */
+		pthread_mutex_lock(&h->mu);
+		h->join_waiter = 0;
+		pthread_mutex_unlock(&h->mu);
+		return 1;  /* timeout */
+	}
+
+	/* Non-VT path: existing condvar timedwait. */
 	struct timespec ts;
 	if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
 		return 1;
@@ -1619,6 +1715,34 @@ void drift_thread_park(uint64_t reason) {
 	vt->io_bytes_since_yield = 0;
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	pthread_mutex_unlock(&vt->mu);
+}
+
+void drift_thread_yield(void) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) {
+		sched_yield();
+		return;
+	}
+#ifdef __linux__
+	if (drift_sched_ctx) {
+		/* Re-enqueue self so the scheduler can pick another VT first.
+		 * Stay in READY state (not PARKED) so we don't need an unpark. */
+		if (vt->exec) {
+			pthread_mutex_lock(&vt->exec->mu);
+			drift_exec_enqueue(vt->exec, vt);
+			pthread_mutex_unlock(&vt->exec->mu);
+		}
+		atomic_store(&vt->state, DRIFT_VT_READY);
+		if (drift_valgrind_mode)
+			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
+		else
+			drift_swapcontext(&vt->ctx, drift_sched_ctx);
+		vt->io_bytes_since_yield = 0;
+		atomic_store(&vt->state, DRIFT_VT_RUNNING);
+		return;
+	}
+#endif
+	sched_yield();
 }
 
 void drift_thread_park_until(int64_t deadline_ms) {
@@ -1856,11 +1980,63 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 				drift_drop_callback(&h->cb);
 			}
 			h->park_token++;
+			uint64_t waiter = h->join_waiter;
+			h->join_waiter = 0;
 			pthread_cond_broadcast(&h->cv);
 			pthread_mutex_unlock(&h->mu);
+			if (waiter != 0) {
+				drift_thread_unpark(waiter);
+			}
 		}
 	}
 	return 0;
+}
+
+/* ---------- Root VT: run user main on a VT fiber ---------- */
+
+static int64_t drift_root_vt_result = 0;
+static int64_t (*drift_root_vt_fn)(void) = NULL;
+
+static void drift_root_vt_call(void *data) {
+	(void)data;
+	drift_root_vt_result = drift_root_vt_fn();
+}
+
+static DriftCallbackVTable drift_root_vt_vtable = {
+	.drop = NULL,
+	.call = (void *)drift_root_vt_call,
+};
+
+int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
+	drift_root_vt_fn = user_main;
+	drift_root_vt_result = 0;
+
+	/* Eagerly init default executor.  Reactor is lazy — initialized on
+	 * first I/O or timer use.  Eager reactor init would start the reactor
+	 * thread unconditionally, which is wasteful for non-I/O programs and
+	 * can cause symbol-collision issues (e.g., user-defined `read` fn
+	 * overriding libc read in the reactor epoll loop). */
+	uint64_t exec = drift_exec_default_get();
+
+	/* Construct minimal DriftIface for root VT callback. */
+	DriftIface cb;
+	memset(&cb, 0, sizeof(cb));
+	cb.vtable = (void *)&drift_root_vt_vtable;
+
+	/* Create and submit root VT.  Pre-set a large stack (8 MiB) to match
+	 * OS thread defaults — user main may use deep recursion or large
+	 * stack-allocated structs.  Spawned child VTs keep the executor's
+	 * default (256 KiB) unless overridden. */
+	uint64_t root_vt = drift_thread_spawn(&cb, exec);
+	((DriftVt *)root_vt)->stack_size = 8388608;  /* 8 MiB */
+	drift_exec_submit(exec, root_vt);
+
+	/* Block OS main thread until root VT completes.
+	 * This uses the non-VT condvar path in drift_thread_join
+	 * since the OS main thread has no VT TLS set. */
+	drift_thread_join(root_vt);
+
+	return drift_root_vt_result;
 }
 
 uint64_t drift_reactor_default_get(void) {

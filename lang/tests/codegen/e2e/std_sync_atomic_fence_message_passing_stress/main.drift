@@ -3,6 +3,7 @@ module m;
 import std.sync as sync;
 import std.concurrent as conc;
 import std.core as core;
+import lang.thread as thread;
 
 struct Shared {
 	data: sync.AtomicInt,
@@ -24,6 +25,7 @@ fn run_once(value: Int) -> Int {
 	val s = shared.get();
 	var spins = 0;
 	while s.flag.load(sync.MemoryOrder::Relaxed()) == 0 {
+		thread.vt_yield();
 		spins = spins + 1;
 		if spins > 100000000 {
 			return 1;

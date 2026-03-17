@@ -75,7 +75,7 @@ def test_driftc_codegen_scalar_main():
 	}
 	signatures = {"drift_main": FnSignature(name="drift_main", return_type="Int", declared_can_throw=False)}
 
-	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
+	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main", root_vt=False)
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 42
 
@@ -116,7 +116,7 @@ def test_driftc_codegen_can_throw_callee_ok():
 		"drift_main": FnSignature(name="drift_main", return_type="Int", declared_can_throw=False),
 	}
 
-	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main")
+	ir, _ = compile_to_llvm_ir_for_tests(func_hirs=func_hirs, signatures=signatures, entry="drift_main", root_vt=False)
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 1
 
@@ -181,6 +181,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	vtable_lines = [line for line in ir.splitlines() if "getelementptr inbounds i8*, i8**" in line]
@@ -261,6 +262,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	exit_code = _run_ir_with_clang(ir)
@@ -498,6 +500,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	assert "@drift_alloc_array" in ir
@@ -568,6 +571,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	main_ir = _extract_llvm_function(ir, "drift_main")
@@ -653,6 +657,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	needles = [
@@ -753,6 +758,7 @@ fn drift_main() nothrow -> Int {
 		module_exports=module_exports,
 		module_deps=module_deps,
 		prelude_enabled=False,
+		root_vt=False,
 	)
 	assert checked.diagnostics == []
 	exit_code = _run_ir_with_clang(ir)

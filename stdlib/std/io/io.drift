@@ -70,7 +70,8 @@ pub variant IoInterest {
 }
 
 pub variant IoError {
-	Errno(code: Int)
+	Errno(code: Int),
+	RequiresVirtualThread
 }
 
 implement core.Diagnostic for IoError {
@@ -78,6 +79,9 @@ implement core.Diagnostic for IoError {
 		return match self {
 			Errno(code) => {
 				DiagnosticValue::Int(*code)
+			},
+			RequiresVirtualThread => {
+				DiagnosticValue::Int(-2)
 			}
 		};
 	}
@@ -310,7 +314,8 @@ pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
 
 pub fn io_error_code(e: IoError) nothrow -> Int {
 	return match e {
-		Errno(code) => { code }
+		Errno(code) => { code },
+		RequiresVirtualThread => { -2 }
 	};
 }
 
@@ -373,10 +378,6 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	}
 	val vt = thread.vt_current();
 	if vt == 0 {
-		val remaining = _remaining_ms(deadline_ms);
-		if remaining > 0 {
-			_park_main_thread_io(remaining);
-		}
 		return;
 	}
 	// ET replay: if an edge is pending for this direction (budget yield
@@ -656,6 +657,9 @@ implement OutputStreamBuilder {
 }
 
 pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(IoError::RequiresVirtualThread());
+	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
 	val deadline = _deadline_from_timeout(timeout);
@@ -678,11 +682,6 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
 			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
-				continue;
-			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
@@ -692,6 +691,9 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 }
 
 pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(IoError::RequiresVirtualThread());
+	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
 	val deadline = _deadline_from_timeout(timeout);
@@ -712,11 +714,6 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
-				continue;
 			}
 			_block_on_io(self.fd, 4, deadline);
 			continue;
@@ -783,6 +780,9 @@ implement ConfiguredFile {
 }
 
 fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(IoError::RequiresVirtualThread());
+	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
 	val deadline = _deadline_from_timeout(timeout);
@@ -804,11 +804,6 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
-				continue;
 			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
@@ -867,6 +862,9 @@ pub fn input_read_line(self: &InputStream, timeout: conc.Duration, max_line_byte
 }
 
 fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
+	if thread.vt_current() == 0 {
+		return core.Result::Err(IoError::RequiresVirtualThread());
+	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
 	val deadline = _deadline_from_timeout(timeout);
@@ -887,11 +885,6 @@ fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> cor
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
 				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
-			}
-			val vt = thread.vt_current();
-			if vt == 0 {
-				_park_main_thread_io(remaining);
-				continue;
 			}
 			_block_on_io(self.fd, 4, deadline);
 			continue;

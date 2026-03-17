@@ -588,9 +588,15 @@ def test_ext_package_consumer_e2e(
 	# Provide stubs for drift runtime symbols (normally from the runtime
 	# archive).  llvm.* intrinsics are handled by LLVM and need no stubs.
 	patched_ir = ir
-	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(([^)]*)\))', patched_ir):
+	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(((?:[^()]*|\([^()]*\))*)\))', patched_ir):
 		full, ret_ty, name, params = m.group(1), m.group(2), m.group(3), m.group(4)
-		body = "ret void" if ret_ty == "void" else "unreachable"
+		if name == "@drift_run_main_on_vt":
+			# Forward-call the function-pointer arg so user main runs.
+			body = f"%r = call {ret_ty} %0()\n  ret {ret_ty} %r"
+		elif ret_ty == "void":
+			body = "ret void"
+		else:
+			body = "unreachable"
 		patched_ir = patched_ir.replace(full, f"define {ret_ty} {name}({params}) {{\n  {body}\n}}")
 	ir_path.write_text(patched_ir)
 
@@ -736,9 +742,15 @@ fn main() nothrow -> Int {
 	ir_path = build_dir / "program.ll"
 	bin_path = build_dir / "a.out"
 	patched_ir = ir
-	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(([^)]*)\))', patched_ir):
+	for m in re.finditer(r'(declare\s+(\S+)\s+(@(?:drift_|__drift_)\w+)\(((?:[^()]*|\([^()]*\))*)\))', patched_ir):
 		full, ret_ty, name, params = m.group(1), m.group(2), m.group(3), m.group(4)
-		body = "ret void" if ret_ty == "void" else "unreachable"
+		if name == "@drift_run_main_on_vt":
+			# Forward-call the function-pointer arg so user main runs.
+			body = f"%r = call {ret_ty} %0()\n  ret {ret_ty} %r"
+		elif ret_ty == "void":
+			body = "ret void"
+		else:
+			body = "unreachable"
 		patched_ir = patched_ir.replace(full, f"define {ret_ty} {name}({params}) {{\n  {body}\n}}")
 	ir_path.write_text(patched_ir)
 

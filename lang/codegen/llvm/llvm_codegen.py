@@ -631,6 +631,7 @@ class LlvmModuleBuilder:
 	needs_string_release: bool = False
 	needs_memcpy: bool = False
 	needs_argv_helper: bool = False
+	needs_run_main_on_vt: bool = False
 	needs_console_runtime: bool = False
 	needs_thread_runtime: bool = False
 	needs_atomic_runtime: bool = False
@@ -997,13 +998,13 @@ class LlvmModuleBuilder:
 	def ensure_comdat(self, name: str) -> None:
 		self.comdats.add(name)
 
-	def emit_entry_wrapper(self, drift_main: str = "drift_main", install_process_preamble: bool = False) -> None:
+	def emit_entry_wrapper(self, drift_main: str = "drift_main", install_process_preamble: bool = False, root_vt: bool = True) -> None:
 		"""
 		Emit a tiny OS entrypoint wrapper that calls `@drift_main` and truncs to i32.
 
-		This keeps the Drift ABI (isize Int, FnResult later) distinct from the
-		process ABI. Err-mapping is not yet implemented; the wrapper simply
-		truncates the isize return to i32 for exit.
+		When root_vt=True (default), wraps the call through drift_run_main_on_vt
+		so user main executes on a VT fiber.  When root_vt=False, calls drift_main
+		directly (for codegen unit tests that don't link the C runtime).
 		"""
 		lines = [
 			"define i32 @main() {",
@@ -1011,33 +1012,49 @@ class LlvmModuleBuilder:
 		]
 		if install_process_preamble:
 			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
-		lines.extend(
-			[
-				f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(drift_main)}()",
-				f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
-				"  ret i32 %trunc",
-				"}",
-			]
-		)
+		if root_vt:
+			self.needs_run_main_on_vt = True
+			lines.extend(
+				[
+					f"  %ret = call {self._llty(DRIFT_INT_TYPE)} @drift_run_main_on_vt({self._llty(DRIFT_INT_TYPE)} ()* {_llvm_fn_sym(drift_main)})",
+					f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+					"  ret i32 %trunc",
+					"}",
+				]
+			)
+		else:
+			lines.extend(
+				[
+					f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(drift_main)}()",
+					f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+					"  ret i32 %trunc",
+					"}",
+				]
+			)
 		self.funcs.append("\n".join(lines))
 
-	def emit_argv_entry_wrapper(self, user_main: str, array_type: str, install_process_preamble: bool = False) -> None:
+	def emit_argv_entry_wrapper(self, user_main: str, array_type: str, install_process_preamble: bool = False, root_vt: bool = True) -> None:
 		"""
 		Emit an OS entry for `main(argv: Array<String>) -> Int`.
 
-		Builds Array<String> via the runtime helper and truncates the isize Int
-		result to i32 for the process exit code.
+		When root_vt=True (default), emits a thunk that captures argc/argv in
+		globals and routes through drift_run_main_on_vt so user main runs on a VT.
 		"""
 		self.needs_argv_helper = True
 		self.array_string_type = array_type
-		lines = [
-			"define i32 @main(i32 %argc, i8** %argv) {",
-			"entry:",
-		]
-		if install_process_preamble:
-			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
-		lines.extend(
-			[
+
+		if root_vt:
+			self.needs_run_main_on_vt = True
+			# Emit globals for passing argc/argv into the thunk.
+			self.consts.append(f"@drift_root_argc = internal global i32 0")
+			self.consts.append(f"@drift_root_argv = internal global i8** null")
+
+			# Emit thunk: reads argc/argv from globals, builds array, calls user main.
+			thunk_lines = [
+				f"define internal {self._llty(DRIFT_INT_TYPE)} @drift_main_argv_thunk() {{",
+				"entry:",
+				"  %argc = load i32, i32* @drift_root_argc",
+				"  %argv = load i8**, i8*** @drift_root_argv",
 				"  %arr.ptr = alloca %DriftArrayHeader",
 				"  call void @drift_build_argv(%DriftArrayHeader* %arr.ptr, i32 %argc, i8** %argv)",
 				"  %arr = load %DriftArrayHeader, %DriftArrayHeader* %arr.ptr",
@@ -1050,12 +1067,56 @@ class LlvmModuleBuilder:
 				f"  %tmp2 = insertvalue {array_type} %tmp1, {self._llty(DRIFT_INT_TYPE)} %gen, {ARRAY_GEN_IDX}",
 				f"  %argv_typed = insertvalue {array_type} %tmp2, i8* %data_raw, {ARRAY_PTR_IDX}",
 				f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(user_main)}({array_type} %argv_typed)",
-				f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
-				"  ret i32 %trunc",
+				f"  ret {self._llty(DRIFT_INT_TYPE)} %ret",
 				"}",
 			]
-		)
-		self.funcs.append("\n".join(lines))
+			self.funcs.append("\n".join(thunk_lines))
+
+			# Emit @main that stores argc/argv and routes through root VT.
+			lines = [
+				"define i32 @main(i32 %argc, i8** %argv) {",
+				"entry:",
+				"  store i32 %argc, i32* @drift_root_argc",
+				"  store i8** %argv, i8*** @drift_root_argv",
+			]
+			if install_process_preamble:
+				lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
+			lines.extend(
+				[
+					f"  %ret = call {self._llty(DRIFT_INT_TYPE)} @drift_run_main_on_vt({self._llty(DRIFT_INT_TYPE)} ()* @drift_main_argv_thunk)",
+					f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+					"  ret i32 %trunc",
+					"}",
+				]
+			)
+			self.funcs.append("\n".join(lines))
+		else:
+			lines = [
+				"define i32 @main(i32 %argc, i8** %argv) {",
+				"entry:",
+			]
+			if install_process_preamble:
+				lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
+			lines.extend(
+				[
+					"  %arr.ptr = alloca %DriftArrayHeader",
+					"  call void @drift_build_argv(%DriftArrayHeader* %arr.ptr, i32 %argc, i8** %argv)",
+					"  %arr = load %DriftArrayHeader, %DriftArrayHeader* %arr.ptr",
+					f"  %len = extractvalue %DriftArrayHeader %arr, {ARRAY_LEN_IDX}",
+					f"  %cap = extractvalue %DriftArrayHeader %arr, {ARRAY_CAP_IDX}",
+					f"  %gen = extractvalue %DriftArrayHeader %arr, {ARRAY_GEN_IDX}",
+					f"  %data_raw = extractvalue %DriftArrayHeader %arr, {ARRAY_PTR_IDX}",
+					f"  %tmp0 = insertvalue {array_type} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} %len, {ARRAY_LEN_IDX}",
+					f"  %tmp1 = insertvalue {array_type} %tmp0, {self._llty(DRIFT_INT_TYPE)} %cap, {ARRAY_CAP_IDX}",
+					f"  %tmp2 = insertvalue {array_type} %tmp1, {self._llty(DRIFT_INT_TYPE)} %gen, {ARRAY_GEN_IDX}",
+					f"  %argv_typed = insertvalue {array_type} %tmp2, i8* %data_raw, {ARRAY_PTR_IDX}",
+					f"  %ret = call {self._llty(DRIFT_INT_TYPE)} {_llvm_fn_sym(user_main)}({array_type} %argv_typed)",
+					f"  %trunc = trunc {self._llty(DRIFT_INT_TYPE)} %ret to i32",
+					"  ret i32 %trunc",
+					"}",
+				]
+			)
+			self.funcs.append("\n".join(lines))
 
 	def emit_abi_stamp(self) -> None:
 		"""Register the ABI version marker via an LLVM module-level constructor.
@@ -1112,6 +1173,9 @@ class LlvmModuleBuilder:
 		if self.needs_argv_helper:
 			array_type = self.array_string_type or f"{{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, i8* }}"
 			lines.append("declare void @drift_build_argv(%DriftArrayHeader*, i32, i8**)")
+			lines.append("")
+		if self.needs_run_main_on_vt:
+			lines.append(f"declare {self._llty(DRIFT_INT_TYPE)} @drift_run_main_on_vt({self._llty(DRIFT_INT_TYPE)} ()*)")
 			lines.append("")
 		if self.needs_array_helpers:
 			lines.extend(
@@ -1204,6 +1268,7 @@ class LlvmModuleBuilder:
 					f"declare void @drift_thread_park({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_thread_park_until({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)})",
+					"declare void @drift_thread_yield()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()",
 					f"declare void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)})",
 				f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
@@ -3951,6 +4016,14 @@ class _FuncBuilder:
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_unpark returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "vt_yield":
+				self.module.needs_thread_runtime = True
+				self.lines.append("  call void @drift_thread_yield()")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vy_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_yield returns Void; result cannot be captured")
+				return
 			if instr.fn_id.name == "now_ms":
 				self.module.needs_thread_runtime = True
 				if len(instr.args) != 0:
@@ -5440,6 +5513,14 @@ class _FuncBuilder:
 					self._wrap_ok_fnresult(None, "i8", dest, hint="vu_ok")
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_unpark returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_yield":
+				self.module.needs_thread_runtime = True
+				self.lines.append("  call void @drift_thread_yield()")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vy_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_yield returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "exec_default_get":
 				if len(instr.args) != 0:

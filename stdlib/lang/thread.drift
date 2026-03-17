@@ -17,6 +17,7 @@ export {
 	vt_park,
 	vt_park_until,
 	vt_unpark,
+	vt_yield,
 	now_ms,
 	now_utc_ms,
 	exec_default_get,
@@ -88,6 +89,7 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_park(reason: Int) nothrow -> Void;
 @intrinsic pub fn vt_park_until(deadline_ms: Int) nothrow -> Void;
 @intrinsic pub fn vt_unpark(vt: VtHandle) nothrow -> Void;
+@intrinsic pub fn vt_yield() nothrow -> Void;
 @intrinsic pub fn now_ms() nothrow -> Int;
 @intrinsic pub fn now_utc_ms() nothrow -> Int;
 

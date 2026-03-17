@@ -1,6 +1,45 @@
 # Drift development history
 
 ## 2026-03-16
+- **Ran user `main` inside a root VT from startup and hardened VT-only runtime contracts (0.27.69, ABI 6)**:
+  Removed the user-visible semantic split between top-level `main` and normal
+  VT execution by routing generated entry wrappers through a new runtime helper
+  that runs user `main` on a root VT.
+  - Root-VT startup:
+    - generated OS entry wrappers now call `drift_run_main_on_vt(...)`
+    - user `main` runs on a VT fiber from startup, while the OS main thread
+      bootstraps the runtime and waits for root-VT completion
+    - root VT uses a larger 8 MiB stack, while normal spawned VTs keep the
+      executor default stack size
+  - Runtime / scheduler changes:
+    - added cooperative `vt_join` / `vt_join_timeout` behavior when called
+      from VT context so joining child VTs from root `main` does not block the
+      worker thread
+    - added `vt_yield()` as an explicit cooperative yield primitive for
+      single-worker interleaving in spin-based tests and workloads
+    - preserved the single-worker poll-owner optimization by keeping the
+      default executor at one worker
+  - Boundary/versioning:
+    - added new runtime-exported helper `drift_run_main_on_vt`, so the runtime
+      ABI was bumped from `5` to `6`
+    - compiler version bumped to `0.27.69`
+  - VT-only contract hardening:
+    - added `NetError::RequiresVirtualThread` and
+      `IoError::RequiresVirtualThread`
+    - VT-integrated timeout/reactor APIs in `std.net` and `std.io` now fail
+      explicitly outside VT context instead of silently degrading to weaker
+      non-VT behavior
+    - intentionally kept low-level runtime primitives and semantically-valid
+      blocking fallbacks unchanged where the fallback still preserves contract
+  - Test/runner updates:
+    - added root-VT regressions for top-level VT execution and spawn+join from
+      `main`
+    - added non-VT harness regressions for `RequiresVirtualThread` behavior,
+      then removed those harness-only tests and runner hooks after deciding not
+      to keep a non-production e2e lane
+    - updated direct-IR helper/codegen tests to opt out of the production
+      root-VT wrapper when compiling standalone LLVM IR without the runtime
+
 - **Made `Mutex.lock()` work through shared references via `ptr_as_mut_ref` (0.27.68)**:
   Fixed the stdlib/compiler restriction that prevented the normal
   `Arc<Mutex<T>>` shared-handle pattern from working through `&self`.

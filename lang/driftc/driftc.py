@@ -6639,6 +6639,7 @@ def compile_to_llvm_ir_for_tests(
 	enforce_entrypoint: bool = False,
 	reserved_namespace_policy: ReservedNamespacePolicy = ReservedNamespacePolicy.ALLOW_DEV,
 	debug_enabled: bool = True,
+	root_vt: bool = True,
 ) -> tuple[str, CheckedProgramById]:
 	"""
 	End-to-end helper: HIR -> MIR -> throw checks -> SSA -> LLVM IR for tests.
@@ -6822,7 +6823,7 @@ def compile_to_llvm_ir_for_tests(
 	# and enforce_entrypoint is not set.
 	if argv_wrapper is None and entry_id is not None and (enforce_entrypoint or entry_name == "drift_main"):
 		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
-		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available)
+		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available, root_vt=root_vt)
 	return module.render(), checked
 
 

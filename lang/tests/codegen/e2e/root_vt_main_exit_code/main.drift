@@ -1,0 +1,8 @@
+module m;
+
+import lang.thread as thread;
+
+pub fn main() nothrow -> Int {
+	if thread.vt_current() == 0 { return 1; }
+	return 42;
+}

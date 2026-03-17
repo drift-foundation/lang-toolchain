@@ -85,7 +85,8 @@ def test_driftc_codegen_void_call_in_main():
 	}
 
 	ir, _ = compile_to_llvm_ir_for_tests(
-		func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table
+		func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table,
+		root_vt=False,
 	)
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 3
@@ -133,7 +134,8 @@ def test_driftc_codegen_nonvoid_negative_bare_return_raises():
 	}
 
 	ir, checked = compile_to_llvm_ir_for_tests(
-		func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table
+		func_hirs=func_hirs, signatures=signatures, entry="drift_main", type_table=table,
+		root_vt=False,
 	)
 	assert ir == ""
 	assert any("non-void function must return a value" in d.message for d in checked.diagnostics)

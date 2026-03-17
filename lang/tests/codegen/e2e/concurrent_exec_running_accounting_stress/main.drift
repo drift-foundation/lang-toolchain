@@ -68,7 +68,8 @@ fn run() -> Int {
 	conc.sleep(conc.Duration(millis = 50));
 
 	val running = thread.exec_get_running(exec_handle);
-	if running != 0 {
+	// With main running on a root VT, the root VT itself counts as 1.
+	if running != 1 {
 		return 10;
 	}
 
