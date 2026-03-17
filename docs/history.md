@@ -1,6 +1,39 @@
 # Drift development history
 
 ## 2026-03-17
+- **Made `--package-root` explicit-only via `--dep` allowlisting (0.27.72, ABI 6)**:
+  Fixed a package-loading bug where `--package-root` discovered and loaded
+  every package under the root, allowing unrelated deployed packages to collide
+  with local source builds.
+  - Problem:
+    - package discovery/load previously pulled in all package artifacts found
+      under `--package-root`
+    - `--dep` was applied too late, only as a version-selection step after
+      packages had already been discovered, trust-verified, and loaded
+    - shared package roots could therefore inject unrelated packages, including
+      already-deployed copies of the package currently being built from source
+  - Fix:
+    - `--dep` is now parsed before package discovery and acts as an allowlist
+      for package-root consumption
+    - `--package-root` without at least one `--dep` is now rejected instead of
+      implicitly loading everything under the root
+    - added lightweight `peek_package_id()` manifest peeking so unrelated
+      packages can be filtered out before trust verification and full package
+      loading
+    - preserved the mixed `.zdmp` → `.dmp` sibling fallback during the
+      pre-filtered package scan path
+  - Added regression coverage for:
+    - ignoring unrelated deployed packages not listed in `--dep`
+    - ignoring deployed copies of the current source package during local
+      source builds
+    - exact-version selection still working for requested multi-version deps
+    - malformed unrelated packages being ignored instead of breaking the build
+    - rejecting `--package-root` usage without explicit `--dep` entries
+  - Versioning:
+    - compiler version is `0.27.72`
+    - ABI remains `6` because this changes compiler package-loading behavior
+      only, not a compiler/runtime boundary shape
+
 - **Restored correct atexit ordering under root-VT execution (0.27.71, ABI 6)**:
   Fixed a root-VT teardown regression where runtime worker threads could still
   be alive at process-exit time, causing third-party worker-thread TLS

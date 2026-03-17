@@ -7218,17 +7218,75 @@ def main(argv: list[str] | None = None) -> int:
 			allow_unsigned_roots=allow_unsigned_roots,
 		)
 
-		package_files = discover_package_files(list(args.package_roots))
-		# Self-exclusion: when building package X from source (--package-id X),
-		# skip any discovered package file whose stem matches X.  This prevents
-		# previously-published copies of the current package from being loaded
-		# or trust-verified — they are irrelevant to a source build.
+		# ── Parse --dep before discovery ──────────────────────────────
+		# --dep is the exclusive allowlist: only listed packages are
+		# discovered, loaded, and trust-verified from --package-root.
+		# --package-root without --dep is an error.
+		_version_pins: dict[str, str] = {}
+		for _pin_spec in getattr(args, "dep", []):
+			if "@" not in _pin_spec:
+				msg = f"--dep requires PKG@VERSION format, got: {_pin_spec}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			_pin_name, _pin_ver = _pin_spec.split("@", 1)
+			if not _pin_name or not _pin_ver:
+				msg = f"--dep requires non-empty PKG and VERSION, got: {_pin_spec}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			if _pin_name in _version_pins:
+				msg = f"--dep specified twice for '{_pin_name}'"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			_version_pins[_pin_name] = _pin_ver
+
+		if not _version_pins:
+			msg = "--package-root requires at least one --dep PKG@VERSION"
+			if args.json:
+				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+			else:
+				print(f"error: {msg}", file=sys.stderr)
+			return 1
+
+		_dep_allowlist: set[str] = set(_version_pins.keys())
 		_self_pkg_id = str(args.package_id) if args.package_id else None
-		if _self_pkg_id:
-			package_files = [p for p in package_files if p.stem != _self_pkg_id]
-		for pkg_path in package_files:
-			# Integrity + trust verification happens here, before any package
-			# metadata is used for import resolution.
+
+		# ── Discover + pre-filter before load ─────────────────────────
+		# Only discover and load packages whose package_id is in the
+		# --dep allowlist.  Unrelated packages are never loaded, never
+		# trust-verified, and cannot fail or collide with the build.
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
+		package_files = discover_package_files(list(args.package_roots))
+		_candidate_files: list[Path] = []
+		for _pf in package_files:
+			_peeked_id = peek_package_id(_pf)
+			if _peeked_id is None and _pf.suffix == ".zdmp":
+				# Corrupt .zdmp — try .dmp sibling (discover_package_files
+				# may have filtered it out during .zdmp dedup).
+				_dmp_sibling = _pf.with_suffix(".dmp")
+				if _dmp_sibling.exists():
+					_peeked_id = peek_package_id(_dmp_sibling)
+					if _peeked_id is not None:
+						_pf = _dmp_sibling  # use the .dmp for loading
+			if _peeked_id is None:
+				continue  # unreadable metadata — skip silently
+			if _peeked_id not in _dep_allowlist:
+				continue  # not a requested dependency
+			if _self_pkg_id and _peeked_id == _self_pkg_id:
+				continue  # self-exclusion (source build of this package)
+			_candidate_files.append(_pf)
+
+		for pkg_path in _candidate_files:
+			# Integrity + trust verification happens here, only for
+			# packages that matched the --dep allowlist.
 			try:
 				loaded_pkgs.append(load_package_v0_with_policy(pkg_path, policy=policy))
 			except (ValueError, OSError) as err:
@@ -7284,39 +7342,12 @@ def main(argv: list[str] | None = None) -> int:
 		# independent of filesystem paths.
 		loaded_pkgs.sort(key=lambda p: tuple(sorted(p.modules_by_id.keys())))
 
-		# Version selection: --dep pins.
-		_version_pins: dict[str, str] = {}
-		for _pin_spec in getattr(args, "dep", []):
-			if "@" not in _pin_spec:
-				msg = f"--dep requires PKG@VERSION format, got: {_pin_spec}"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
-				else:
-					print(f"error: {msg}", file=sys.stderr)
-				return 1
-			_pin_name, _pin_ver = _pin_spec.split("@", 1)
-			if not _pin_name or not _pin_ver:
-				msg = f"--dep requires non-empty PKG and VERSION, got: {_pin_spec}"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
-				else:
-					print(f"error: {msg}", file=sys.stderr)
-				return 1
-			if _pin_name in _version_pins:
-				msg = f"--dep specified twice for '{_pin_name}'"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
-				else:
-					print(f"error: {msg}", file=sys.stderr)
-				return 1
-			_version_pins[_pin_name] = _pin_ver
+		# ── Version selection on loaded (allowlisted) packages ────────
 		if loaded_pkgs:
-			# Group loaded packages by package_id.
 			_pkgs_by_id: dict[str, list] = {}
 			for _pkg in loaded_pkgs:
 				_pid = _pkg.manifest.get("package_id", "")
 				_pkgs_by_id.setdefault(_pid, []).append(_pkg)
-			# Apply pins and check for ambiguous multi-version.
 			_filtered: list = []
 			_used_pins: set[str] = set()
 			for _pid, _pkg_list in _pkgs_by_id.items():
@@ -7333,17 +7364,8 @@ def main(argv: list[str] | None = None) -> int:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					_filtered.extend(_matched)
-				else:
-					# Unpinned: check for ambiguous multi-version.
-					_versions = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
-					if len(_versions) > 1:
-						msg = f"multiple versions of '{_pid}' found ({', '.join(_versions)}); use --dep {_pid}@<version> to select"
-						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-						else:
-							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-						return 1
-					_filtered.extend(_pkg_list)
+				# else: package_id matched allowlist but wasn't in _version_pins
+				# — should not happen since _dep_allowlist == _version_pins.keys()
 			# Check for pins that didn't match any discovered package.
 			_unmatched_pins = set(_version_pins.keys()) - _used_pins
 			if _unmatched_pins:
@@ -7355,16 +7377,15 @@ def main(argv: list[str] | None = None) -> int:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 			loaded_pkgs = _filtered
-
-		# Post-load self-exclusion (defense-in-depth): if a package file was
-		# named differently than its package_id, the stem-based pre-filter
-		# above would miss it.  Drop any loaded package whose package_id
-		# matches the one being compiled from source.
-		if _self_pkg_id and loaded_pkgs:
-			loaded_pkgs = [
-				p for p in loaded_pkgs
-				if p.manifest.get("package_id") != _self_pkg_id
-			]
+		else:
+			# No packages loaded — all pins unmatched.
+			for _upin in sorted(_version_pins.keys()):
+				msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+				else:
+					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+			return 1
 
 		# Enforce "single version per package id per build".
 		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)

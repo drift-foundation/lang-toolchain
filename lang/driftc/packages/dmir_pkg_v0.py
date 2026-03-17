@@ -388,3 +388,37 @@ def load_dmir_pkg_v0_from_bytes(data: bytes, source_path: Path | None = None) ->
 	import io
 	f = io.BytesIO(data)
 	return _load_dmir_pkg_v0_impl(f, len(data), source_path or Path("<bytes>"))
+
+
+def peek_package_id(path: Path) -> str | None:
+	"""Read only the header + manifest of a .dmp/.zdmp to extract package_id.
+
+	Returns the package_id string, or None if the file cannot be read or
+	does not contain a valid package_id.  Does NOT verify blob integrity,
+	trust signatures, or load module payloads — this is a cheap metadata
+	peek used to decide whether a package file is relevant before doing
+	the full load.
+
+	For .zdmp files, decompresses the content first (uses the zdmp cache).
+	"""
+	try:
+		if path.suffix == ".zdmp":
+			from lang.driftc.packages.zdmp import decompress_zdmp
+			raw = decompress_zdmp(path.read_bytes())
+		else:
+			raw = path.read_bytes()
+		if len(raw) < HEADER_SIZE_V0:
+			return None
+		header = _HEADER_STRUCT.unpack(raw[:HEADER_SIZE_V0])
+		magic, version, flags, header_size, manifest_len = header[0], header[1], header[2], header[3], header[4]
+		if magic != MAGIC or version != VERSION:
+			return None
+		end = HEADER_SIZE_V0 + int(manifest_len)
+		if end > len(raw):
+			return None
+		manifest_bytes = raw[HEADER_SIZE_V0:end]
+		manifest = json.loads(manifest_bytes)
+		pid = manifest.get("package_id")
+		return pid if isinstance(pid, str) else None
+	except Exception:
+		return None

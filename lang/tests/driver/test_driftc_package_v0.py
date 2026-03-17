@@ -714,6 +714,10 @@ fn main() nothrow -> Int{
 		str(pkgs_a),
 		"--allow-unsigned-from",
 		str(pkgs_b),
+		"--dep",
+		"acme.liba@0.0.0",
+		"--dep",
+		"acme.optb@0.0.0",
 	]
 	argv_ba = argv_common + [
 		"--package-root",
@@ -724,6 +728,10 @@ fn main() nothrow -> Int{
 		str(pkgs_a),
 		"--allow-unsigned-from",
 		str(pkgs_b),
+		"--dep",
+		"acme.liba@0.0.0",
+		"--dep",
+		"acme.optb@0.0.0",
 	]
 
 	assert driftc_main(argv_ab + [*_emit_pkg_args("test.determinism"), "--emit-package", str(out1)]) == 0
@@ -778,6 +786,10 @@ fn main() nothrow -> Int{
 		str(pkgs),
 		"--allow-unsigned-from",
 		str(pkgs),
+		"--dep",
+		"acme.liba@0.0.0",
+		"--dep",
+		"acme.optb@0.0.0",
 		*_emit_pkg_args("test.determinism"),
 		"--emit-package",
 	]
@@ -848,6 +860,12 @@ fn main() nothrow -> Int{
 		str(pkgs),
 		"--allow-unsigned-from",
 		str(pkgs),
+		"--dep",
+		"acme.liba@0.0.0",
+		"--dep",
+		"acme.geom@0.0.0",
+		"--dep",
+		"acme.opt@0.0.0",
 		*_emit_pkg_args("test.determinism"),
 		"--emit-package",
 	]
@@ -1129,6 +1147,10 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"test.lib1@0.0.0",
+			"--dep",
+			"test.lib2@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1195,6 +1217,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1223,6 +1247,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"dep.main@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1254,6 +1280,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"dep.method@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1323,6 +1351,10 @@ fn main() nothrow -> Int {
 			str(pkgs_a),
 			"--allow-unsigned-from",
 			str(pkgs_b),
+			"--dep",
+			"pkg.a@0.0.0",
+			"--dep",
+			"pkg.b@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1387,6 +1419,12 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 				str(pkg_root),
 				"--allow-unsigned-from",
 				str(pkg_root),
+				"--dep",
+				"std.evil@0.0.0",
+				"--dep",
+				"lang.evil@0.0.0",
+				"--dep",
+				"drift.evil@0.0.0",
 				str(tmp_path / "main.drift"),
 				"--emit-ir",
 				str(tmp_path / "out.ll"),
@@ -1477,6 +1515,8 @@ fn main() nothrow -> Int {
 			str(pkg_root),
 			"--allow-unsigned-from",
 			str(pkg_root),
+			"--dep",
+			"std.evil@0.0.0",
 			"--dev",
 			"--dev-core-trust-store",
 			str(core_trust_path),
@@ -1504,6 +1544,8 @@ fn main() nothrow -> Int {
 			str(pkg_root),
 			"--allow-unsigned-from",
 			str(pkg_root),
+			"--dep",
+			"std.evil@0.0.0",
 			"--dev",
 			"--dev-core-trust-store",
 			str(core_trust_path),
@@ -1613,6 +1655,8 @@ fn main() nothrow -> Int{
 				str(tmp_path),
 				"--allow-unsigned-from",
 				str(tmp_path),
+				"--dep",
+				"lib@0.0.0",
 				str(tmp_path / "main.drift"),
 				"--emit-ir",
 				str(ir_path),
@@ -1809,6 +1853,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(pkg_root),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -1874,6 +1920,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -1979,6 +2027,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.badmod@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2018,6 +2068,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2055,6 +2107,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2093,6 +2147,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2138,6 +2194,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2177,6 +2235,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2216,6 +2276,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2261,6 +2323,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2333,6 +2397,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2390,6 +2456,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2453,6 +2521,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -2492,6 +2562,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2531,6 +2603,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(signed.trust_path),
 			"--require-signatures",
@@ -2604,6 +2678,8 @@ fn main() nothrow -> Int{
 			str(pkg_root),
 			"--allow-unsigned-from",
 			str(pkg_root),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2647,6 +2723,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.opt@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(ir_path),
@@ -2687,6 +2765,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.opt@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2724,6 +2804,10 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"test.opt_a@0.0.0",
+			"--dep",
+			"test.opt_b@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2761,6 +2845,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.hidden@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2797,6 +2883,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.hiddenpub@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2834,6 +2922,8 @@ fn main() nothrow -> Int{
 				str(pkg_root),
 				"--allow-unsigned-from",
 				str(pkg_root),
+				"--dep",
+				"acme@0.0.0",
 				str(tmp_path / "main.drift"),
 				"--emit-ir",
 				str(tmp_path / "out.ll"),
@@ -2867,6 +2957,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.consts@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2905,6 +2997,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.point@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -2949,6 +3043,10 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"a.geom@0.0.0",
+			"--dep",
+			"b.geom@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3043,6 +3141,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.badiface@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3126,6 +3226,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.badiface2@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3215,6 +3317,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.badiface3@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3297,6 +3401,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.badexc@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3379,6 +3485,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"acme.badvar@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3518,6 +3626,8 @@ fn main() nothrow -> Int{ return 0 }
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"m@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3582,6 +3692,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3654,6 +3766,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3717,6 +3831,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3775,6 +3891,8 @@ fn main() nothrow -> Int{
 			str(pkg_root),
 			"--allow-unsigned-from",
 			str(pkg_root),
+			"--dep",
+			"lib@0.0.0",
 			"--require-signatures",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
@@ -3894,6 +4012,10 @@ fn main() nothrow -> Int {
 			str(tmp_path / "pkgs"),
 			"--allow-unsigned-from",
 			str(tmp_path / "pkgs"),
+			"--dep",
+			"pkg-a@0.0.0",
+			"--dep",
+			"pkg-b@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -3965,6 +4087,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -4030,6 +4154,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -4102,6 +4228,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -4178,6 +4306,8 @@ fn main() nothrow -> Int {
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep",
+			"lib@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),
@@ -4341,6 +4471,8 @@ def _run_consumer_link(
 		"--dev",
 		"--package-root", str(pkg_dir),
 		"--allow-unsigned-from", str(pkg_dir),
+		"--dep",
+		"acme.lib@0.0.0",
 		"-o", str(bin_path),
 		str(work / "main.drift"),
 	]
@@ -4558,8 +4690,8 @@ def test_package_version_missing_fails(tmp_path: Path) -> None:
 	assert rc == 1, "pinning to nonexistent version should fail"
 
 
-def test_package_version_ambiguous_fails(tmp_path: Path) -> None:
-	"""Multiple versions without --dep produces a clear error listing versions."""
+def test_package_version_ambiguous_without_dep_fails(tmp_path: Path) -> None:
+	"""--package-root without --dep is rejected (even with packages present)."""
 	pkgs = tmp_path / "pkgs"
 	src1 = tmp_path / "src1"
 	src2 = tmp_path / "src2"
@@ -4584,11 +4716,11 @@ def test_package_version_ambiguous_fails(tmp_path: Path) -> None:
 			str(tmp_path / "out.ll"),
 		]
 	)
-	assert rc == 1, "ambiguous multi-version without pin should fail"
+	assert rc == 1, "--package-root without --dep should fail"
 
 
-def test_package_version_single_unambiguous(tmp_path: Path) -> None:
-	"""Single version present, no --dep — loads it without error."""
+def test_package_version_single_with_dep(tmp_path: Path) -> None:
+	"""Single version present, --dep pins it — loads correctly."""
 	pkgs = tmp_path / "pkgs"
 	src = tmp_path / "src"
 	_emit_versioned_pkg(src, pkgs / "tls.dmp", module_id="net.tls", version="0.3.0")
@@ -4608,11 +4740,13 @@ def test_package_version_single_unambiguous(tmp_path: Path) -> None:
 			str(pkgs),
 			"--allow-unsigned-from",
 			str(pkgs),
+			"--dep",
+			"net.tls@0.3.0",
 			"--emit-ir",
 			str(ir_out),
 		]
 	)
-	assert rc == 0, "single-version package should load without a pin"
+	assert rc == 0, "single-version package with --dep should load"
 	assert ir_out.exists()
 
 
@@ -4720,6 +4854,8 @@ fn main() nothrow -> Int {
 			str(consumer_dir),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -4780,6 +4916,8 @@ fn main() nothrow -> Int {
 			str(consumer_dir),
 			"--package-root",
 			str(pkg_root),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -4838,6 +4976,8 @@ fn main() nothrow -> Int {
 			str(consumer_dir),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -4903,6 +5043,8 @@ fn main() nothrow -> Int {
 			str(consumer_dir),
 			"--package-root",
 			str(pkg_root),
+			"--dep",
+			"acme.lib@0.0.0",
 			"--trust-store",
 			str(trust_path),
 			"--require-signatures",
@@ -4912,3 +5054,271 @@ fn main() nothrow -> Int {
 		]
 	)
 	assert rc == 0, "valid .zdmp must not be shadowed by stale .dmp"
+
+
+# ── --dep as package-loading allowlist ──────────────────────────────
+
+
+def _emit_versioned_multi_module_pkg(
+	src_root: Path,
+	pkg_out: Path,
+	*,
+	package_id: str,
+	module_ids: list[str],
+	version: str = "0.0.0",
+) -> Path:
+	"""Emit a .dmp package with multiple modules."""
+	for mid in module_ids:
+		module_dir = src_root.joinpath(*mid.split("."))
+		_write_file(
+			module_dir / "lib.drift",
+			f"module {mid};\n\nexport {{ add }};\n\npub fn add(a: Int, b: Int) nothrow -> Int {{\n\treturn a + b;\n}}\n",
+		)
+	pkg_out.parent.mkdir(parents=True, exist_ok=True)
+	source_files = []
+	for mid in module_ids:
+		module_dir = src_root.joinpath(*mid.split("."))
+		source_files.append(str(module_dir / "lib.drift"))
+	rc = driftc_main(
+		[
+			"-M",
+			str(src_root),
+			*source_files,
+			"--package-id",
+			package_id,
+			"--package-version",
+			version,
+			"--package-target",
+			"test-target",
+			"--emit-package",
+			str(pkg_out),
+		]
+	)
+	assert rc == 0, f"emit-package for {package_id}@{version} should succeed (rc={rc})"
+	return pkg_out
+
+
+def test_dep_allowlist_ignores_unrelated_packages(tmp_path: Path) -> None:
+	"""--dep should be an allowlist: only listed packages are loaded from
+	--package-root.  Unrelated packages in the same root must be ignored.
+
+	Regression: driftc loaded every package under --package-root, causing
+	module ID collisions when the root contained a deployed copy of the
+	package being compiled from source.
+	"""
+	pkgs = tmp_path / "pkgs"
+
+	# Package A: deployed web-client containing web.client.cookie module.
+	# This is the SAME module id as our source — loading it causes a collision.
+	src_a = tmp_path / "src_a"
+	_emit_versioned_multi_module_pkg(
+		src_a, pkgs / "web_client.dmp",
+		package_id="web-client", module_ids=["web.client.cookie"],
+		version="0.2.0",
+	)
+
+	# Package B: the intended dependency.
+	src_b = tmp_path / "src_b"
+	_emit_versioned_pkg(src_b, pkgs / "net_tls.dmp", module_id="net.tls", version="0.3.3")
+
+	# Package C: unrelated, also in the root.
+	src_c = tmp_path / "src_c"
+	_emit_versioned_pkg(src_c, pkgs / "web_jwt.dmp", module_id="web.jwt", version="0.2.0")
+
+	# Compile a main program that uses web.client.cookie as local source
+	# and depends on net.tls from the package root.
+	# The package root also contains a deployed web-client with the SAME
+	# module id — without --dep allowlisting, the compiler loads it and
+	# hits a module ID collision.
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "web" / "client" / "cookie.drift",
+		"module web.client.cookie;\n\nimport net.tls as tls;\n\nexport { wrap };\n\npub fn wrap(x: Int) nothrow -> Int {\n\treturn tls.add(x, 1);\n}\n",
+	)
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport web.client.cookie as cookie;\n\nfn main() nothrow -> Int {\n\treturn cookie.wrap(5);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			str(consumer_src / "web" / "client" / "cookie.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.3",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, (
+		"--dep net.tls@0.3.3 should load only net.tls; "
+		"web-client and web.jwt in the root must be ignored"
+	)
+	assert ir_out.exists()
+	assert ir_out.exists()
+
+
+def test_dep_allowlist_self_package_with_package_id(tmp_path: Path) -> None:
+	"""When compiling with --package-id, the deployed copy is excluded by
+	both --dep allowlist AND self-exclusion.  Belt-and-suspenders."""
+	pkgs = tmp_path / "pkgs"
+
+	# Deploy web-client 0.2.0 with module web.client.cookie to shared root.
+	src_deployed = tmp_path / "src_deployed"
+	_emit_versioned_multi_module_pkg(
+		src_deployed, pkgs / "web_client.dmp",
+		package_id="web-client", module_ids=["web.client.cookie"],
+		version="0.2.0",
+	)
+
+	# Also deploy the intended dependency.
+	src_dep = tmp_path / "src_dep"
+	_emit_versioned_pkg(src_dep, pkgs / "net_tls.dmp", module_id="net.tls", version="0.3.3")
+
+	# Compile web.client.cookie from source with --package-id web-client.
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "web" / "client" / "cookie.drift",
+		"module web.client.cookie;\n\nimport net.tls as tls;\n\nexport { wrap };\n\npub fn wrap(x: Int) nothrow -> Int {\n\treturn tls.add(x, 1);\n}\n",
+	)
+	pkg_out = tmp_path / "out.dmp"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "web" / "client" / "cookie.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.3",
+			"--package-id",
+			"web-client",
+			"--package-version",
+			"0.3.0",
+			"--package-target",
+			"test-target",
+			"--emit-package",
+			str(pkg_out),
+		]
+	)
+	assert rc == 0, (
+		"deployed web-client in package root must not collide "
+		"with web.client.cookie source being compiled"
+	)
+
+
+def test_dep_allowlist_multi_version_still_pins(tmp_path: Path) -> None:
+	"""When --dep is present, multi-version packages for a requested dep
+	still require exact version selection."""
+	pkgs = tmp_path / "pkgs"
+	src1 = tmp_path / "src1"
+	src2 = tmp_path / "src2"
+	_emit_versioned_pkg(src1, pkgs / "tls_020.dmp", module_id="net.tls", version="0.2.0")
+	_emit_versioned_pkg(src2, pkgs / "tls_030.dmp", module_id="net.tls", version="0.3.0")
+
+	# Also place an unrelated package that should be ignored.
+	src_unrelated = tmp_path / "src_unrelated"
+	_emit_versioned_pkg(src_unrelated, pkgs / "web_jwt.dmp", module_id="web.jwt", version="0.1.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.0",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, "version-pinned dep with unrelated packages in root should succeed"
+	assert ir_out.exists()
+
+
+def test_package_root_without_dep_is_rejected(tmp_path: Path) -> None:
+	"""--package-root without --dep is an error — explicit deps required."""
+	pkgs = tmp_path / "pkgs"
+	src1 = tmp_path / "src1"
+	_emit_versioned_pkg(src1, pkgs / "tls.dmp", module_id="net.tls", version="0.3.0")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 1, "--package-root without --dep should be rejected"
+
+
+def test_dep_allowlist_malformed_unrelated_package_ignored(tmp_path: Path) -> None:
+	"""Malformed/untrusted unrelated packages under the root do not affect
+	the build when not listed in --dep.  The compiler should never attempt
+	to load, decompress, or trust-verify them."""
+	pkgs = tmp_path / "pkgs"
+	pkgs.mkdir(parents=True, exist_ok=True)
+
+	# Good dependency.
+	src_dep = tmp_path / "src_dep"
+	_emit_versioned_pkg(src_dep, pkgs / "net_tls.dmp", module_id="net.tls", version="0.3.3")
+
+	# Garbage file that looks like a package but is corrupt.
+	(pkgs / "corrupted.dmp").write_bytes(b"NOT A VALID DMIR PACKAGE AT ALL")
+	# Another garbage .zdmp.
+	(pkgs / "broken.zdmp").write_bytes(b"\x00\x00\x00garbage zstd frame")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.3",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, (
+		"malformed unrelated packages in root must not affect "
+		"the build when not listed in --dep"
+	)
+	assert ir_out.exists()
