@@ -107,7 +107,7 @@ def build_package_index(
 				for fn in fns if fn.endswith(".zdmp") or fn.endswith(".dmp")
 			)
 			# Deduplicate: when both foo.zdmp and foo.dmp exist in the
-			# same directory, keep only .zdmp.
+			# same directory, keep only .zdmp (published compressed form).
 			zdmp_stems: set[tuple[str, str]] = set()
 			for p in all_pkg_files:
 				if p.suffix == ".zdmp":
@@ -133,7 +133,19 @@ def build_package_index(
 			try:
 				manifest = load_manifest(dmp_path)
 			except Exception:
-				continue  # skip unreadable packages
+				# If a .zdmp failed, try .dmp sibling as fallback.
+				if dmp_path.suffix == ".zdmp":
+					dmp_sibling = dmp_path.with_suffix(".dmp")
+					if dmp_sibling.exists():
+						try:
+							manifest = load_manifest(dmp_sibling)
+							dmp_path = dmp_sibling
+						except Exception:
+							continue
+					else:
+						continue
+				else:
+					continue
 			pkg_id = manifest.get("package_id")
 			pkg_ver_str = manifest.get("package_version")
 			if not isinstance(pkg_id, str) or not isinstance(pkg_ver_str, str):

@@ -1,5 +1,37 @@
 # Drift development history
 
+## 2026-03-17
+- **Hardened mixed `.dmp` / `.zdmp` package loading and resolver fallback (0.27.70, ABI 6)**:
+  Fixed a package-consumption regression where valid uncompressed `.dmp`
+  packages could be shadowed by corrupt or stale `.zdmp` siblings after the
+  compressed-package rollout.
+  - Problem:
+    - package discovery correctly accepted both `.dmp` and `.zdmp`, but mixed
+      directories with both forms exposed brittle precedence behavior
+    - a corrupt `.zdmp` could shadow a valid `.dmp` and break direct
+      `--emit-package` → sign → consume workflows
+    - resolver/indexing behavior was inconsistent with compiler/provider
+      loading in the same mixed-directory case
+  - Fix:
+    - package discovery again prefers `.zdmp` as the published distribution
+      form when both artifacts exist with the same stem
+    - provider-side loading now falls back from a corrupt `.zdmp` to a `.dmp`
+      sibling only for actual zstd decompression failures
+    - resolver/indexing now applies the same fallback logic so mixed-directory
+      package roots behave consistently across compile and deploy resolution
+    - package-load exception handling now produces diagnostics instead of raw
+      crashes on unreadable/corrupt package artifacts
+  - Added regression coverage for:
+    - signed raw `.dmp` consumption via `--package-root`
+    - signed `.zdmp` consumption via `--package-root`
+    - corrupt `.zdmp` + valid `.dmp` sibling falling back to `.dmp`
+    - valid `.zdmp` not being shadowed by a stale `.dmp`
+    - deploy resolver fallback from corrupt `.zdmp` to `.dmp` sibling
+  - Versioning:
+    - compiler version is `0.27.70`
+    - ABI remains `6` because this is package-loader/resolver behavior only,
+      not a compiler/runtime boundary-shape change
+
 ## 2026-03-16
 - **Ran user `main` inside a root VT from startup and hardened VT-only runtime contracts (0.27.69, ABI 6)**:
   Removed the user-visible semantic split between top-level `main` and normal

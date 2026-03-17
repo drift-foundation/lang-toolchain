@@ -463,3 +463,38 @@ class TestBuildPackageIndexDedup:
 			assert len(idx["net.tls"]) == 1
 			# Both files loaded (different physical paths), but second skipped by root priority.
 			assert call_count[0] == 2
+
+	def test_corrupt_zdmp_falls_back_to_dmp_sibling(self) -> None:
+		"""Corrupt .zdmp + valid .dmp sibling → resolver indexes from .dmp."""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0, canonical_json_bytes
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+
+			# Write a valid .dmp using the real container format.
+			manifest_obj = {
+				"format": "dmir-pkg",
+				"format_version": 0,
+				"package_id": "acme.lib",
+				"package_version": "1.0.0",
+				"target": "test-target",
+				"abi_fingerprint": "test",
+				"unsigned": True,
+				"unstable_format": True,
+				"payload_kind": "provisional-dmir",
+				"payload_version": 0,
+				"modules": [],
+				"blobs": {},
+			}
+			dmp = root / "lib.dmp"
+			write_dmir_pkg_v0(dmp, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+
+			# Place a corrupt .zdmp with the same stem.
+			zdmp = root / "lib.zdmp"
+			zdmp.write_bytes(b"NOT VALID ZSTD DATA")
+
+			# Default loader (no mock): exercises real zdmp fallback.
+			idx = build_package_index([root])
+			assert "acme.lib" in idx
+			assert len(idx["acme.lib"]) == 1
+			assert idx["acme.lib"][0].version == parse_version("1.0.0")

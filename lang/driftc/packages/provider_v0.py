@@ -55,7 +55,9 @@ def discover_package_files(package_roots: list[Path]) -> list[Path]:
 					out.add(Path(dirpath) / fname)
 
 	# Deduplicate: when both foo.zdmp and foo.dmp exist in the same
-	# directory, keep only the .zdmp.
+	# directory, keep only the .zdmp (published compressed form).
+	# If the .zdmp turns out to be corrupt at load time, the loader
+	# falls back to the .dmp sibling (see load_package_v0_with_policy).
 	zdmp_stems: set[tuple[str, str]] = set()  # (dirpath, stem)
 	for p in out:
 		if p.suffix == ".zdmp":
@@ -656,16 +658,35 @@ def load_package_v0_with_policy(path: Path, *, policy: PackageTrustPolicy, pkg_b
 	Handles both `.zdmp` (compressed) and `.dmp` (uncompressed) files.
 	For `.zdmp`: decompresses via cache, then parses + verifies against
 	the uncompressed bytes (signature covers canonical uncompressed payload).
+	If `.zdmp` decompression fails, falls back to a `.dmp` sibling if one exists.
 
 	`pkg_bytes` is an optional optimization: callers that already read the bytes
 	(for hashing) can provide them to avoid a second read.
 	"""
 	if path.suffix == ".zdmp":
 		from lang.driftc.packages.zdmp import load_zdmp_cached
-		expected_sha = _read_sig_sha256(path)
-		raw_bytes = load_zdmp_cached(path, expected_sha256=expected_sha)
-		pkg = load_dmir_pkg_v0_from_bytes(raw_bytes, source_path=path)
-		data = raw_bytes
+		try:
+			import zstandard as _zstd
+			_ZstdError: type = _zstd.ZstdError
+		except (ImportError, AttributeError):
+			_ZstdError = type(None)  # unreachable fallback
+		try:
+			expected_sha = _read_sig_sha256(path)
+			raw_bytes = load_zdmp_cached(path, expected_sha256=expected_sha)
+			pkg = load_dmir_pkg_v0_from_bytes(raw_bytes, source_path=path)
+			data = raw_bytes
+		except _ZstdError:
+			# Zstd decompression failed (corrupt frame) — try .dmp sibling.
+			# This handles the case where a stale/corrupt .zdmp exists
+			# alongside a valid .dmp (e.g. after a partial deploy).
+			# Intentionally narrow: sha/integrity mismatches and container
+			# parse errors are real failures and must not be silenced.
+			dmp_sibling = path.with_suffix(".dmp")
+			if not dmp_sibling.exists():
+				raise  # no fallback available, re-raise original error
+			pkg = load_dmir_pkg_v0(dmp_sibling)
+			data = pkg_bytes if pkg_bytes is not None else dmp_sibling.read_bytes()
+			path = dmp_sibling  # use .dmp path for signature lookup below
 	else:
 		pkg = load_dmir_pkg_v0(path)
 		data = pkg_bytes if pkg_bytes is not None else path.read_bytes()

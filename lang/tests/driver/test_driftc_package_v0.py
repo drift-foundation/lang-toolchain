@@ -4674,3 +4674,241 @@ def test_dep_duplicate_rejected(tmp_path: Path) -> None:
 		]
 	)
 	assert rc == 1, "duplicate --dep for same package should fail"
+
+
+# ── Raw .dmp / compressed .zdmp consumption regression ─────────────
+
+
+def test_signed_dmp_can_be_consumed_via_package_root(tmp_path: Path) -> None:
+	"""Regression: raw .dmp emitted by --emit-package, signed, consumed.
+
+	TLS team reported ZstdError when consuming uncompressed .dmp packages
+	on 0.27.69.  This test pins that the raw .dmp → sign → consume path
+	works end-to-end.
+	"""
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = _public_key_bytes(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+
+	# Emit a signed .dmp package.
+	pkg_path = _emit_lib_pkg(tmp_path)
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
+
+	# Consumer source.
+	consumer_dir = tmp_path / "consumer"
+	_write_file(
+		consumer_dir / "main.drift",
+		"""
+module main;
+
+import acme.lib as lib;
+
+fn main() nothrow -> Int {
+	return try lib.add(1, 2) catch { 0 };
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_dir),
+			"--package-root",
+			str(tmp_path),
+			"--trust-store",
+			str(trust_path),
+			"--require-signatures",
+			str(consumer_dir / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "signed .dmp consumption must succeed"
+
+
+def test_signed_zdmp_can_be_consumed_via_package_root(tmp_path: Path) -> None:
+	"""Regression: .dmp compressed to .zdmp (deploy pipeline), signed, consumed.
+
+	Exercises the .zdmp decompression path in load_package_v0_with_policy.
+	"""
+	from lang.driftc.packages.zdmp import compress_to_zdmp
+
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = _public_key_bytes(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+
+	# Emit a .dmp, then compress to .zdmp (mimicking drift deploy).
+	dmp_path = _emit_lib_pkg(tmp_path)
+	raw_bytes = dmp_path.read_bytes()
+	zdmp_bytes = compress_to_zdmp(raw_bytes)
+
+	pkg_root = tmp_path / "pkgs"
+	pkg_root.mkdir(parents=True, exist_ok=True)
+	zdmp_path = pkg_root / "lib.zdmp"
+	zdmp_path.write_bytes(zdmp_bytes)
+
+	# Sign covers uncompressed bytes (matching deploy pipeline).
+	sig_raw = priv.sign(raw_bytes)
+	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw)
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
+
+	# Consumer source.
+	consumer_dir = tmp_path / "consumer"
+	_write_file(
+		consumer_dir / "main.drift",
+		"""
+module main;
+
+import acme.lib as lib;
+
+fn main() nothrow -> Int {
+	return try lib.add(1, 2) catch { 0 };
+}
+""".lstrip(),
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_dir),
+			"--package-root",
+			str(pkg_root),
+			"--trust-store",
+			str(trust_path),
+			"--require-signatures",
+			str(consumer_dir / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "signed .zdmp consumption must succeed"
+
+
+def test_dmp_not_shadowed_by_stale_zdmp_in_same_dir(tmp_path: Path) -> None:
+	"""Regression: stale .zdmp in the same directory silently shadows valid .dmp.
+
+	discover_package_files dedup prefers .zdmp over .dmp when both share
+	a stem.  If the .zdmp is stale/corrupt, the loader falls back to the
+	.dmp sibling instead of crashing with ZstdError.
+	"""
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = _public_key_bytes(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+
+	# Emit a valid signed .dmp.
+	pkg_path = _emit_lib_pkg(tmp_path)
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = priv.sign(pkg_bytes)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+
+	# Place a stale/corrupt .zdmp with the same stem alongside the .dmp.
+	stale_zdmp = pkg_path.with_suffix(".zdmp")
+	stale_zdmp.write_bytes(b"NOT VALID ZSTD DATA")
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
+
+	# Consumer source.
+	consumer_dir = tmp_path / "consumer"
+	_write_file(
+		consumer_dir / "main.drift",
+		"""
+module main;
+
+import acme.lib as lib;
+
+fn main() nothrow -> Int {
+	return try lib.add(1, 2) catch { 0 };
+}
+""".lstrip(),
+	)
+	# This should succeed: the valid .dmp should be consumable even when
+	# a stale .zdmp exists alongside it.
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_dir),
+			"--package-root",
+			str(tmp_path),
+			"--trust-store",
+			str(trust_path),
+			"--require-signatures",
+			str(consumer_dir / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "valid .dmp must not be shadowed by corrupt .zdmp"
+
+
+def test_valid_zdmp_not_shadowed_by_stale_dmp_in_same_dir(tmp_path: Path) -> None:
+	"""Mirror regression: valid published .zdmp must not be ignored when a stale .dmp coexists.
+
+	The dedup prefers .zdmp.  A stale .dmp with the same stem must not
+	override the published .zdmp.
+	"""
+	from lang.driftc.packages.zdmp import compress_to_zdmp
+
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = _public_key_bytes(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+
+	# Emit a .dmp, compress to .zdmp, sign the uncompressed bytes.
+	dmp_path = _emit_lib_pkg(tmp_path)
+	raw_bytes = dmp_path.read_bytes()
+	zdmp_bytes = compress_to_zdmp(raw_bytes)
+
+	pkg_root = tmp_path / "pkgs"
+	pkg_root.mkdir(parents=True, exist_ok=True)
+	zdmp_path = pkg_root / "lib.zdmp"
+	zdmp_path.write_bytes(zdmp_bytes)
+
+	sig_raw = priv.sign(raw_bytes)
+	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw)
+
+	# Place a stale/corrupt .dmp with the same stem alongside the .zdmp.
+	stale_dmp = pkg_root / "lib.dmp"
+	stale_dmp.write_bytes(b"NOT A VALID DMIR PACKAGE")
+
+	trust_path = tmp_path / "trust.json"
+	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
+
+	# Consumer source.
+	consumer_dir = tmp_path / "consumer"
+	_write_file(
+		consumer_dir / "main.drift",
+		"""
+module main;
+
+import acme.lib as lib;
+
+fn main() nothrow -> Int {
+	return try lib.add(1, 2) catch { 0 };
+}
+""".lstrip(),
+	)
+	# Valid .zdmp must be consumed; stale .dmp must not shadow it.
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_dir),
+			"--package-root",
+			str(pkg_root),
+			"--trust-store",
+			str(trust_path),
+			"--require-signatures",
+			str(consumer_dir / "main.drift"),
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc == 0, "valid .zdmp must not be shadowed by stale .dmp"

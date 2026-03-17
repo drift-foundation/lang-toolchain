@@ -7231,8 +7231,31 @@ def main(argv: list[str] | None = None) -> int:
 			# metadata is used for import resolution.
 			try:
 				loaded_pkgs.append(load_package_v0_with_policy(pkg_path, policy=policy))
-			except ValueError as err:
+			except (ValueError, OSError) as err:
 				msg = str(err)
+				if args.json:
+					print(
+						json.dumps(
+							{
+								"exit_code": 1,
+								"diagnostics": [
+									{
+										"phase": "package",
+										"message": msg,
+										"severity": "error",
+										"file": "<package>",
+										"line": None,
+										"column": None,
+									}
+								],
+							}
+						)
+					)
+				else:
+					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			except Exception as err:
+				msg = f"failed to load package '{pkg_path}': {err}"
 				if args.json:
 					print(
 						json.dumps(
