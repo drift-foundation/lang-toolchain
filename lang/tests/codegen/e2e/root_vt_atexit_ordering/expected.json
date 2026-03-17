@@ -1,0 +1,7 @@
+{
+  "description": "e2e: atexit ordering — worker TLS destructors fire before atexit handlers under root VT",
+  "exit_code": 0,
+  "stderr": "",
+  "c_sources": ["helper.c"],
+  "compiler_flags": ["--allow-unsafe"]
+}

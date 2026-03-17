@@ -2036,6 +2036,23 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	 * since the OS main thread has no VT TLS set. */
 	drift_thread_join(root_vt);
 
+	/* Tear down runtime threads before returning to @main.
+	 *
+	 * Under ABI 5, user main returned on the OS main thread with no
+	 * runtime worker threads alive.  Under ABI 6, the executor worker
+	 * thread is still alive (idle on its condvar) after the root VT
+	 * completes.  If we leave it alive, the atexit firing order becomes:
+	 *
+	 *   1. Third-party atexit (e.g., OPENSSL_cleanup) — frees globals
+	 *   2. Executor atexit — joins worker — worker TLS destructors fire
+	 *      but library globals are already freed → leaked per-thread state
+	 *
+	 * By shutting down the executor here, worker TLS destructors fire
+	 * while third-party libraries are still initialized.  The executor
+	 * and reactor atexit handlers become no-ops. */
+	drift_reactor_shutdown_default_atexit();
+	drift_exec_shutdown_default_atexit();
+
 	return drift_root_vt_result;
 }
 

@@ -1,0 +1,12 @@
+extern "C" fn atexit_test_init() nothrow -> Int;
+extern "C" fn atexit_test_touch() nothrow -> Int;
+
+pub fn main() nothrow -> Int {
+	val init_err: Int = unsafe { atexit_test_init() };
+	if init_err != 0 { return 1; }
+	// Called from root VT — runs on the executor worker thread.
+	// Sets pthread_key TLS that must be destroyed BEFORE atexit fires.
+	val touch_err: Int = unsafe { atexit_test_touch() };
+	if touch_err != 0 { return 2; }
+	return 0;
+}

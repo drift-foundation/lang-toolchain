@@ -1,6 +1,34 @@
 # Drift development history
 
 ## 2026-03-17
+- **Restored correct atexit ordering under root-VT execution (0.27.71, ABI 6)**:
+  Fixed a root-VT teardown regression where runtime worker threads could still
+  be alive at process-exit time, causing third-party worker-thread TLS
+  destructors to run during `atexit` after library-global cleanup had already
+  begun.
+  - Problem:
+    - ABI 6 root-VT startup introduced a new teardown ordering where the
+      executor worker thread could outlive `drift_run_main_on_vt()`
+    - under Valgrind memcheck, this showed up as leaked OpenSSL process-global
+      state because OpenSSL relies on normal `atexit` cleanup ordering
+    - the regression was not specific to OpenSSL; any library depending on
+      normal process-exit ordering for worker TLS/global cleanup could be
+      affected
+  - Fix:
+    - `drift_run_main_on_vt()` now explicitly shuts down the default reactor
+      and executor after the root VT finishes and before returning to the OS
+      entry wrapper
+    - this restores ABI 5-equivalent process teardown semantics for runtime
+      threads under root-VT execution
+  - Added regression coverage for:
+    - worker-thread TLS destructors firing before `atexit` handlers under the
+      root-VT startup path, using a focused FFI helper-based e2e regression
+      that runs in normal test recipes without Valgrind
+  - Versioning:
+    - compiler version is `0.27.71`
+    - ABI remains `6` because this changes runtime teardown ordering only, not
+      compiler/runtime boundary shape
+
 - **Hardened mixed `.dmp` / `.zdmp` package loading and resolver fallback (0.27.70, ABI 6)**:
   Fixed a package-consumption regression where valid uncompressed `.dmp`
   packages could be shadowed by corrupt or stale `.zdmp` siblings after the
