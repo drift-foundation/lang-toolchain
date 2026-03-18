@@ -1,6 +1,28 @@
 # Drift development history
 
 ## 2026-03-17
+- **Published author profiles inside versioned artifact directories (0.27.81, ABI 6)**:
+  Adjusted the package deploy layout so the public publisher identity travels
+  with the exact published artifact version rather than as a loose file at the
+  destination root.
+  - Change:
+    - `drift deploy` now publishes the declared author profile as
+      `.author-profile` inside the versioned artifact directory
+    - example:
+      `.../net-tls/0.3.4/.author-profile`
+    - consumer trust is now naturally version-scoped through the published
+      artifact directory, for example:
+      `drift trust ~/opt/drift/libs/net-tls/0.3.4/.author-profile`
+  - Why:
+    - keeps publisher identity colocated with the exact package version being
+      distributed
+    - avoids a looser top-level publication path that is easier to separate
+      from the actual artifact bytes/signature sidecars
+  - Versioning:
+    - compiler version is `0.27.81`
+    - ABI remains `6` because this changes deploy layout/workflow behavior
+      only, not a compiler/runtime boundary shape
+
 - **Clarified author-profile namespace prompts and allowed org-only publisher identity (0.27.79, ABI 6)**:
   Followed up the new author-profile trust workflow by fixing misleading
   namespace wording in publisher onboarding and relaxing publisher identity

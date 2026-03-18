@@ -766,6 +766,7 @@ def _deploy_artifact(
 	staged_pkg_root: Path,
 	native_lib_paths: list[Path] | None = None,
 	dep_namespace_map: dict[str, str] | None = None,
+	author_profile_path: Path | None = None,
 ) -> None:
 	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
 	staged_install = stage_dir / art.name / art.version
@@ -903,8 +904,10 @@ def _deploy_artifact(
 		except Exception as e:
 			raise DeployError(f"staged trust generation failed: {e}")
 
-	# ── Step 3: Assets ──
+	# ── Step 3: Assets + author profile ──
 	_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
+	if author_profile_path:
+		shutil.copy2(str(author_profile_path), str(staged_install / ".author-profile"))
 
 	# ── Step 4: App sidecar ──
 	if art.kind == "app" and resolved:
@@ -1169,13 +1172,8 @@ def _run_impl(args: argparse.Namespace) -> int:
 				staged_pkg_root=staged_pkg_root,
 				native_lib_paths=native_lib_paths,
 				dep_namespace_map=dep_namespace_map,
+				author_profile_path=author_profile_path,
 			)
-
-		# ── Publish author profile ──
-		if not args.dry_run and args.dest:
-			pub_ap = args.dest / author_profile_path.name
-			shutil.copy2(str(author_profile_path), str(pub_ap))
-			print(f"  published author profile: {pub_ap}")
 
 	finally:
 		# Clean up staging directory.
