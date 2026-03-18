@@ -1,6 +1,26 @@
 # Drift development history
 
 ## 2026-03-17
+- **Fixed `just` deploy recipe Python `-c` continuation bug (0.27.78, ABI 6)**:
+  Fixed a deploy-recipe regression where a `python3 -c` helper embedded in the
+  `justfile` was split across adjacent shell-quoted lines, causing only the
+  first string to be executed and the rest to be passed as unused argv data.
+  - Problem:
+    - shell backslash continuation with adjacent single-quoted strings like
+      `python3 -c 'string1' 'string2'` does not concatenate into one Python
+      program
+    - Python executes only the first `-c` string and treats later strings as
+      `sys.argv[...]`, so the intended deploy helper silently became a no-op
+  - Fix:
+    - collapsed the embedded `python3 -c` helper to a single-line command
+      string compatible with `justfile` parsing rules
+    - avoided heredoc/multiline alternatives because `just` does not support
+      them cleanly in recipe bodies
+  - Versioning:
+    - compiler version is `0.27.78`
+    - ABI remains `6` because this changes recipe/tooling behavior only, not a
+      compiler/runtime boundary shape
+
 - **Introduced `drift init` publisher onboarding and `.author-profile` trust workflow (0.27.77, ABI 6)**:
   Reworked the package trust UX around publisher onboarding and consumer trust
   decisions, removing low-level trust-creation flows and replacing the old

@@ -54,7 +54,10 @@ class Project:
 	"""Project-level metadata."""
 	name: str
 	license: str
-	author_profile: str | None = None  # relative path to .author-profile
+	# Relative path to .author-profile file.  Optional in the manifest schema
+	# (tools that only read metadata don't need it), but required by drift deploy
+	# for all publishable projects.
+	author_profile: str | None = None
 
 
 @dataclass(frozen=True)

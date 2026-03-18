@@ -327,25 +327,44 @@ drift prepare --manifest drift-package.json --dest ~/opt/drift/libs
 This resolves all package dependencies and writes `drift-lock.json`.
 Review the lock, then commit it alongside your manifest.
 
-### 6.2 Deploy (build, sign, smoke, publish)
+### 6.2 Declare author profile in manifest
+
+Every publishable project must declare its author profile in `drift-package.json`:
+
+```json
+{
+  "schema_version": 1,
+  "project": {
+    "name": "acme-libs",
+    "license": "MIT",
+    "author_profile": "acme.author-profile"
+  },
+  "artifacts": [...]
+}
+```
+
+Deploy will fail if `project.author_profile` is missing or the file does not exist.
+
+### 6.3 Deploy (build, sign, smoke, publish)
 
 ```bash
 drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
-and publishes all artifacts. It also publishes any `.author-profile` files
-from the project directory alongside the released packages.
+and publishes all artifacts plus the declared `.author-profile`.
 
 Deploy is read-only with respect to tracked project files — it does not
 rewrite `drift-lock.json` or other repo-managed metadata.
 
-### 6.3 Intended workflow
+### 6.4 Intended workflow
 
-1. Edit `drift-package.json` (versions, deps, etc.)
-2. `drift prepare` — resolve deps, write lock
-3. Review changes, commit manifest + lock
-4. `drift deploy` — build and publish from committed state
+1. `drift init` — create signing key + author profile (once per project)
+2. Set `project.author_profile` in `drift-package.json`
+3. Edit manifest (versions, deps, etc.)
+4. `drift prepare` — resolve deps, write lock
+5. Review changes, commit manifest + lock + author profile
+6. `drift deploy` — build and publish from committed state
 
 ## 7. Revoke key (negative check)
 

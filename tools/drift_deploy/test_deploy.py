@@ -1840,69 +1840,128 @@ class TestSmokeDepPinning:
 
 
 class TestAuthorProfilePublish:
-	"""Verify deploy publishes the manifest-declared author profile."""
+	"""Verify deploy enforces and publishes the manifest-declared author profile.
 
-	def test_declared_profile_copied_to_dest(self) -> None:
-		"""project.author_profile in manifest → file published to dest."""
-		from tools.drift_deploy.manifest import Project
+	These tests exercise the real deploy entry point (run()) so the
+	regression protects actual behavior, not a hand-restated copy.
+	"""
+
+	def _write_manifest(self, tmpdir: Path, *, author_profile: str | None = None) -> Path:
+		"""Write a minimal drift-package.json with an optional author_profile."""
+		project: dict = {"name": "test", "license": "MIT"}
+		if author_profile is not None:
+			project["author_profile"] = author_profile
+		manifest = {
+			"schema_version": 1,
+			"project": project,
+			"artifacts": [{
+				"kind": "package",
+				"name": "test.pkg",
+				"version": "0.1.0",
+				"description": "test",
+				"license": "MIT",
+				"entry_module": "lib.drift",
+				"modules": ["lib.drift"],
+			}],
+		}
+		path = tmpdir / "drift-package.json"
+		import json as _json
+		path.write_text(_json.dumps(manifest))
+		return path
+
+	def test_missing_profile_declaration_fails_deploy(self) -> None:
+		"""No project.author_profile → deploy fails with clear message."""
+		from tools.drift_deploy.drift_deploy import run
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_dir = Path(tmpdir) / "project"
-			manifest_dir.mkdir()
+			manifest_path = self._write_manifest(Path(tmpdir))
 			dest = Path(tmpdir) / "dest"
 			dest.mkdir()
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+			])
+			assert rc == 1  # DeployError caught by run()
 
-			profile = manifest_dir / "acme.author-profile"
-			profile.write_text('{"format":"author-profile","version":0}')
+	def test_declared_but_missing_file_fails_deploy(self) -> None:
+		"""project.author_profile declared but file doesn't exist → deploy fails."""
+		from tools.drift_deploy.drift_deploy import run
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(
+				Path(tmpdir), author_profile="missing.author-profile",
+			)
+			dest = Path(tmpdir) / "dest"
+			dest.mkdir()
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+			])
+			assert rc == 1  # DeployError: file not found
 
-			project = Project(name="test", license="MIT", author_profile="acme.author-profile")
-
-			# Simulate the publish logic from _run_impl.
-			import shutil
-			if project.author_profile:
-				ap = manifest_dir / project.author_profile
-				shutil.copy2(str(ap), str(dest / ap.name))
-
+	@patch("tools.drift_deploy.drift_deploy._deploy_artifact")
+	@patch("tools.drift_deploy.drift_deploy._resolve_driftc")
+	@patch("tools.drift_deploy.drift_deploy._get_compiler_version")
+	def test_declared_profile_published_to_dest(
+		self,
+		mock_version: MagicMock,
+		mock_driftc: MagicMock,
+		mock_deploy_art: MagicMock,
+	) -> None:
+		"""Declared author profile is copied to --dest during deploy."""
+		mock_version.return_value = "0.0.0-test"
+		mock_driftc.return_value = Path("/fake/driftc")
+		from tools.drift_deploy.drift_deploy import run
+		with tempfile.TemporaryDirectory() as tmpdir:
+			td = Path(tmpdir)
+			manifest_path = self._write_manifest(
+				td, author_profile="acme.author-profile",
+			)
+			(td / "acme.author-profile").write_text('{"format":"author-profile"}')
+			# Signing key needed for package artifacts.
+			key_path = td / "key.seed"
+			import base64 as _b64, os as _os
+			key_path.write_text(_b64.b64encode(_os.urandom(32)).decode() + "\n")
+			dest = td / "dest"
+			dest.mkdir()
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(key_path),
+			])
+			assert rc == 0
 			assert (dest / "acme.author-profile").exists()
-			assert (dest / "acme.author-profile").read_text() == profile.read_text()
+			assert (dest / "acme.author-profile").read_text() == '{"format":"author-profile"}'
 
-	def test_no_declared_profile_no_publish(self) -> None:
-		"""No project.author_profile → nothing published, no error."""
-		from tools.drift_deploy.manifest import Project
-		project = Project(name="test", license="MIT", author_profile=None)
-		assert project.author_profile is None
-
-	def test_declared_but_missing_raises(self) -> None:
-		"""project.author_profile points to nonexistent file → DeployError."""
-		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_dir = Path(tmpdir)
-			ap_path = manifest_dir / "missing.author-profile"
-			# File does not exist.
-			assert not ap_path.exists()
-			with pytest.raises(Exception):
-				if not ap_path.exists():
-					raise DeployError(
-						f"project.author_profile declared but file not found: {ap_path}"
-					)
-
-	def test_stale_profiles_not_published(self) -> None:
+	@patch("tools.drift_deploy.drift_deploy._deploy_artifact")
+	@patch("tools.drift_deploy.drift_deploy._resolve_driftc")
+	@patch("tools.drift_deploy.drift_deploy._get_compiler_version")
+	def test_stale_profiles_not_published(
+		self,
+		mock_version: MagicMock,
+		mock_driftc: MagicMock,
+		mock_deploy_art: MagicMock,
+	) -> None:
 		"""Only the declared profile is published, not other .author-profile files."""
-		from tools.drift_deploy.manifest import Project
+		mock_version.return_value = "0.0.0-test"
+		mock_driftc.return_value = Path("/fake/driftc")
+		from tools.drift_deploy.drift_deploy import run
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_dir = Path(tmpdir)
-			dest = Path(tmpdir) / "dest"
+			td = Path(tmpdir)
+			manifest_path = self._write_manifest(
+				td, author_profile="acme.author-profile",
+			)
+			(td / "acme.author-profile").write_text("declared")
+			(td / "stale.author-profile").write_text("stale")
+			key_path = td / "key.seed"
+			import base64 as _b64, os as _os
+			key_path.write_text(_b64.b64encode(_os.urandom(32)).decode() + "\n")
+			dest = td / "dest"
 			dest.mkdir()
-
-			# Two profiles exist, but only one is declared.
-			(manifest_dir / "acme.author-profile").write_text("declared")
-			(manifest_dir / "stale.author-profile").write_text("stale")
-
-			project = Project(name="test", license="MIT", author_profile="acme.author-profile")
-
-			import shutil
-			if project.author_profile:
-				ap = manifest_dir / project.author_profile
-				shutil.copy2(str(ap), str(dest / ap.name))
-
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(key_path),
+			])
+			assert rc == 0
 			assert (dest / "acme.author-profile").exists()
 			assert not (dest / "stale.author-profile").exists()
 

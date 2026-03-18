@@ -1044,6 +1044,22 @@ def _run_impl(args: argparse.Namespace) -> int:
 	if has_apps and not args.app_dest:
 		raise DeployError("--app-dest required when manifest contains app artifacts")
 
+	# Publisher identity required for all deployable projects.
+	# project.author_profile is optional in the manifest schema (other tools
+	# may load manifests without needing it), but drift deploy enforces it:
+	# every published project must have an explicit author identity.
+	if not manifest.project.author_profile:
+		raise DeployError(
+			"publisher identity missing: set 'project.author_profile' in "
+			"drift-package.json (run 'drift init' to create an author profile)"
+		)
+	author_profile_path = manifest_dir / manifest.project.author_profile
+	if not author_profile_path.exists():
+		raise DeployError(
+			f"project.author_profile declared as '{manifest.project.author_profile}' "
+			f"but file not found: {author_profile_path}"
+		)
+
 	# Resolve toolchain.
 	driftc = _resolve_driftc(args)
 	target = _resolve_target(args)
@@ -1156,17 +1172,9 @@ def _run_impl(args: argparse.Namespace) -> int:
 			)
 
 		# ── Publish author profile ──
-		# If the manifest declares project.author_profile, publish exactly
-		# that file into the destination root.
-		if not args.dry_run and args.dest and manifest.project.author_profile:
-			ap = manifest_dir / manifest.project.author_profile
-			if not ap.exists():
-				raise DeployError(
-					f"project.author_profile declared as '{manifest.project.author_profile}' "
-					f"but file not found: {ap}"
-				)
-			pub_ap = args.dest / ap.name
-			shutil.copy2(str(ap), str(pub_ap))
+		if not args.dry_run and args.dest:
+			pub_ap = args.dest / author_profile_path.name
+			shutil.copy2(str(author_profile_path), str(pub_ap))
 			print(f"  published author profile: {pub_ap}")
 
 	finally:

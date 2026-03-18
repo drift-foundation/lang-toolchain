@@ -191,13 +191,7 @@ lang-codegen-test-pex:
 		exit 1
 	fi
 	echo "[pex-e2e] building PEX artifact in ${STAGING}..."
-	PYTHONPATH=. DEPLOY_DIST="${STAGING}" ./.venv/bin/python3 -c \
-		'import os; from pathlib import Path; '\
-		'from tools.deploy.steps.pex import build_driftc_pex, build_drift_pex; '\
-		'from tools.deploy.steps.bundle import bundle_compiler, bundle_runtime_archives; '\
-		'repo = Path(".").resolve(); dist = Path(os.environ["DEPLOY_DIST"]); '\
-		'build_driftc_pex(repo, dist); build_drift_pex(repo, dist); '\
-		'bundle_compiler(repo, dist); bundle_runtime_archives(repo, dist)'
+	PYTHONPATH=. DEPLOY_DIST="${STAGING}" ./.venv/bin/python3 -c 'import os; from pathlib import Path; from tools.deploy.steps.pex import build_driftc_pex, build_drift_pex; from tools.deploy.steps.bundle import bundle_compiler, bundle_runtime_archives; repo = Path(".").resolve(); dist = Path(os.environ["DEPLOY_DIST"]); build_driftc_pex(repo, dist); build_drift_pex(repo, dist); bundle_compiler(repo, dist); bundle_runtime_archives(repo, dist)'
 	# Write a minimal empty core trust store so the PEX binary does not
 	# fail on load_core_trust_store().  The local PEX e2e uses --stdlib-root
 	# (source mode, not signed packages), so no real trust entries are needed.
