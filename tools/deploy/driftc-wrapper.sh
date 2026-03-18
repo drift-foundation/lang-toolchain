@@ -34,7 +34,12 @@ if [[ -z "${PYTHON}" ]]; then
 fi
 
 # Build argument list: stdlib from signed package, optional user trust store.
+# Read stdlib dep spec from deploy-time metadata (std@<version>).
+STDLIB_DEP_FILE="${DIST_ROOT}/lib/stdlib/stdlib_dep.txt"
 DRIFTC_ARGS=(--package-root "${DIST_ROOT}/lib/stdlib")
+if [[ -f "${STDLIB_DEP_FILE}" ]]; then
+	DRIFTC_ARGS+=(--dep "$(cat "${STDLIB_DEP_FILE}")")
+fi
 if [[ -n "${DRIFT_TRUST_STORE:-}" && -f "${DRIFT_TRUST_STORE}" ]]; then
 	DRIFTC_ARGS+=(--trust-store "${DRIFT_TRUST_STORE}")
 fi

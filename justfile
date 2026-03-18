@@ -185,22 +185,19 @@ lang-codegen-test-pex:
 	STAGING="$PWD/build/pex-staging"
 	rm -rf "${STAGING}"
 	mkdir -p "${STAGING}/bin"
-	PEX_CMD="./.venv/bin/pex"
-	if [[ ! -x "${PEX_CMD}" ]]; then
-		echo "error: pex not found at ${PEX_CMD}" >&2
-		echo "  install: ./.venv/bin/pip install pex" >&2
-		exit 1
-	fi
 	CLANG="$(command -v clang 2>/dev/null || true)"
 	if [[ -z "${CLANG}" ]]; then
 		echo "error: clang not found in PATH" >&2
 		exit 1
 	fi
 	echo "[pex-e2e] building PEX artifact in ${STAGING}..."
-	export REPO_ROOT="$PWD" DIST="${STAGING}" CLANG="${CLANG}"
-	bash tools/deploy/step_build_pex.sh
-	bash tools/deploy/step_build_deploy_pex.sh
-	bash tools/deploy/step_bundle.sh
+	PYTHONPATH=. DEPLOY_DIST="${STAGING}" ./.venv/bin/python3 -c \
+		'import os; from pathlib import Path; '\
+		'from tools.deploy.steps.pex import build_driftc_pex, build_drift_pex; '\
+		'from tools.deploy.steps.bundle import bundle_compiler, bundle_runtime_archives; '\
+		'repo = Path(".").resolve(); dist = Path(os.environ["DEPLOY_DIST"]); '\
+		'build_driftc_pex(repo, dist); build_drift_pex(repo, dist); '\
+		'bundle_compiler(repo, dist); bundle_runtime_archives(repo, dist)'
 	# Write a minimal empty core trust store so the PEX binary does not
 	# fail on load_core_trust_store().  The local PEX e2e uses --stdlib-root
 	# (source mode, not signed packages), so no real trust entries are needed.
@@ -384,12 +381,11 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
 
 # Deploy a versioned, self-contained Drift distribution.
-# Pass args through to tools/deploy/deploy.sh.
 # Examples:
-#   just deploy -- --dest "$HOME/opt/drift"
-#   just deploy -- "$HOME/opt/drift" --python "$PWD/.venv/bin/python3"
+#   just deploy --dest ~/opt/drift
+#   just deploy --dest ~/opt/drift --python .venv/bin/python3
 deploy *ARGS:
-	tools/deploy/deploy.sh {{ARGS}}
+	PYTHONPATH=. ./.venv/bin/python3 tools/deploy/deploy.py {{ARGS}}
 
 # Print shell env lines for an existing deployment.
 deploy-print-env DEST:

@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
+from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
+from tools.deploy.steps.stdlib import build_and_install_stdlib
+
 ROOT = Path(__file__).resolve().parents[3]
 
 _skip_no_pex = pytest.mark.skipif(
@@ -29,51 +33,32 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp
 	dist.mkdir(parents=True, exist_ok=True)
 	clang = shutil.which("clang")
 	assert clang, "clang not found"
-	env = dict(os.environ)
-	env["REPO_ROOT"] = str(ROOT)
-	env["DIST"] = str(dist)
-	env["STAGE"] = str(tmp_path / "stage")
-	env["DRIFTC_VERSION"] = "0.0.0-test"
+
+	# Signing key for stdlib package.
 	key_path = tmp_path / "deploy.key"
 	key_path.write_text(base64.b64encode(os.urandom(32)).decode("ascii") + "\n", encoding="utf-8")
-	env["DRIFT_SIGN_KEY_FILE"] = str(key_path)
-	env["CLANG"] = clang
+	old_sign_key = os.environ.get("DRIFT_SIGN_KEY_FILE")
+	os.environ["DRIFT_SIGN_KEY_FILE"] = str(key_path)
 
-	# Build PEX executables first.
-	pex_build = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert pex_build.returncode == 0, pex_build.stderr
-	deploy_pex_build = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert deploy_pex_build.returncode == 0, deploy_pex_build.stderr
+	try:
+		# Build PEX executables.
+		build_driftc_pex(ROOT, dist)
+		build_drift_pex(ROOT, dist)
 
-	# Bundle compiler sources and runtime archives.
-	bundle = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_bundle.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=180,
-	)
-	assert bundle.returncode == 0, bundle.stderr
-	stdlib_pkg = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_stdlib_pkg.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=180,
-	)
-	assert stdlib_pkg.returncode == 0, stdlib_pkg.stderr
+		# Bundle compiler sources and runtime archives.
+		bundle_compiler(ROOT, dist)
+		bundle_runtime_archives(ROOT, dist)
+		bundle_docs_and_examples(dist)
+
+		# Build, sign, and install stdlib + core trust store.
+		stage = tmp_path / "stage"
+		stage.mkdir(parents=True, exist_ok=True)
+		build_and_install_stdlib(ROOT, stage, dist, "0.0.0-test")
+	finally:
+		if old_sign_key is None:
+			os.environ.pop("DRIFT_SIGN_KEY_FILE", None)
+		else:
+			os.environ["DRIFT_SIGN_KEY_FILE"] = old_sign_key
 
 	src = tmp_path / "main.drift"
 	_write_file(

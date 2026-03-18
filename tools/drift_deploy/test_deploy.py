@@ -1899,9 +1899,9 @@ class TestDeployPexEntry:
 			cli_main(["deploy", "--help"])
 		assert exc_info.value.code == 0
 
-	def test_build_script_exists(self) -> None:
-		"""step_build_deploy_pex.sh must exist and be executable."""
-		import os
-		script = Path(__file__).resolve().parents[2] / "tools" / "deploy" / "step_build_deploy_pex.sh"
-		assert script.exists(), f"build script not found: {script}"
-		assert os.access(script, os.X_OK), f"build script not executable: {script}"
+	def test_pex_step_module_exists(self) -> None:
+		"""steps/pex.py must exist and export build_drift_pex."""
+		mod_path = Path(__file__).resolve().parents[2] / "tools" / "deploy" / "steps" / "pex.py"
+		assert mod_path.exists(), f"pex step module not found: {mod_path}"
+		from tools.deploy.steps.pex import build_drift_pex
+		assert callable(build_drift_pex)

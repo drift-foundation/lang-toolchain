@@ -422,3 +422,33 @@ def peek_package_id(path: Path) -> str | None:
 		return pid if isinstance(pid, str) else None
 	except Exception:
 		return None
+
+
+def peek_package_id_and_version(path: Path) -> tuple[str, str] | None:
+	"""Read only the header + manifest to extract (package_id, package_version).
+
+	Returns (package_id, package_version) or None.  Same lightweight peek
+	as peek_package_id but includes the version string.
+	"""
+	try:
+		if path.suffix == ".zdmp":
+			from lang.driftc.packages.zdmp import decompress_zdmp
+			raw = decompress_zdmp(path.read_bytes())
+		else:
+			raw = path.read_bytes()
+		if len(raw) < HEADER_SIZE_V0:
+			return None
+		header = _HEADER_STRUCT.unpack(raw[:HEADER_SIZE_V0])
+		if header[0] != MAGIC or header[1] != VERSION:
+			return None
+		end = HEADER_SIZE_V0 + int(header[4])
+		if end > len(raw):
+			return None
+		manifest = json.loads(raw[HEADER_SIZE_V0:end])
+		pid = manifest.get("package_id")
+		pver = manifest.get("package_version")
+		if isinstance(pid, str) and isinstance(pver, str):
+			return (pid, pver)
+		return None
+	except Exception:
+		return None

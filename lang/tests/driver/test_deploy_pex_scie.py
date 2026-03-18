@@ -4,7 +4,7 @@ Staged PEX --scie eager deploy artifact regression tests.
 
 Validates the deployed bin/driftc PEX executable in an isolated temporary
 staged layout.  These tests exercise artifact behavior that external consumers
-care about, without invoking step_publish.sh or mutating any persistent
+care about, without invoking the publish step or mutating any persistent
 deploy location.
 
 Coverage:
@@ -19,7 +19,7 @@ Coverage:
 Out of scope:
 
   - Real publish to ~/opt/drift
-  - current symlink switching via step_publish.sh
+  - current symlink switching via publish step
   - Long-lived machine-global deploy state
 
 Runnable directly via pytest without a prior just deploy.
@@ -45,6 +45,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
+from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -139,62 +141,21 @@ pub const ANSWER: Int = 42;
 	return pkg_path
 
 
-def _pex_cmd() -> str:
-	"""Return path to pex binary."""
-	venv_pex = ROOT / ".venv" / "bin" / "pex"
-	if venv_pex.exists():
-		return str(venv_pex)
-	pex = shutil.which("pex")
-	assert pex is not None, "pex not found"
-	return pex
-
-
 def _build_pex_binary(dist: Path) -> None:
 	"""Build a PEX --scie eager executable at dist/bin/driftc."""
-	env = dict(os.environ)
-	env["REPO_ROOT"] = str(ROOT)
-	env["DIST"] = str(dist)
-	result = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert result.returncode == 0, f"PEX build failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+	build_driftc_pex(ROOT, dist)
 
 
 def _build_deploy_pex_binary(dist: Path) -> None:
 	"""Build a PEX --scie eager executable at dist/bin/drift."""
-	env = dict(os.environ)
-	env["REPO_ROOT"] = str(ROOT)
-	env["DIST"] = str(dist)
-	result = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert result.returncode == 0, f"deploy PEX build failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+	build_drift_pex(ROOT, dist)
 
 
 def _bundle_compiler_sources(dist: Path) -> None:
-	"""Run step_bundle.sh to populate lib/compiler/ and lib/runtime/."""
-	clang = shutil.which("clang")
-	assert clang, "clang not found"
-	env = dict(os.environ)
-	env["REPO_ROOT"] = str(ROOT)
-	env["DIST"] = str(dist)
-	env["CLANG"] = clang
-	result = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_bundle.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=180,
-	)
-	assert result.returncode == 0, f"bundle failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+	"""Bundle compiler sources, runtime archives, and docs into dist."""
+	bundle_compiler(ROOT, dist)
+	bundle_runtime_archives(ROOT, dist)
+	bundle_docs_and_examples(dist)
 
 
 def _setup_deploy_tree(tmp_path: Path) -> Path:

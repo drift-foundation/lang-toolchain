@@ -29,6 +29,20 @@ import sys
 from pathlib import Path
 
 
+def _peek_stdlib_dep(stdlib_dir: Path) -> str | None:
+	"""Return 'std@<version>' by peeking at the stdlib .dmp/.zdmp manifest."""
+	try:
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version
+		for p in sorted(stdlib_dir.iterdir()):
+			if p.suffix in (".zdmp", ".dmp") and p.is_file():
+				result = peek_package_id_and_version(p)
+				if result is not None:
+					return f"{result[0]}@{result[1]}"
+	except Exception:
+		pass
+	return None
+
+
 def main() -> None:
 	# Resolve the deploy tree root from the real path of this executable.
 	# For scie binaries, sys.argv[0] is the path to the scie executable.
@@ -60,10 +74,16 @@ def main() -> None:
 	# Build driftc argument list.
 	args = list(sys.argv[1:])
 
-	# Inject --package-root for the signed stdlib package.
+	# Inject --package-root and --dep for the signed stdlib package.
+	# The --dep flag satisfies the 0.27.72+ contract that --package-root
+	# requires explicit --dep entries for every consumed package.
 	stdlib_dir = dist_root / "lib" / "stdlib"
 	if stdlib_dir.is_dir():
-		args = ["--package-root", str(stdlib_dir)] + args
+		stdlib_prefix = ["--package-root", str(stdlib_dir)]
+		_stdlib_dep = _peek_stdlib_dep(stdlib_dir)
+		if _stdlib_dep:
+			stdlib_prefix.extend(["--dep", _stdlib_dep])
+		args = stdlib_prefix + args
 
 	# Forward optional user trust store.
 	trust_store = os.environ.get("DRIFT_TRUST_STORE", "")

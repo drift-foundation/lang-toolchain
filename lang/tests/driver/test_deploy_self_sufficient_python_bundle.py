@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from hashlib import sha256
 from pathlib import Path
 
@@ -16,6 +15,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
+from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
 
 import pytest
 
@@ -131,37 +132,14 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) 
 	clang = shutil.which("clang")
 	assert clang, "clang not found"
 
-	# Build PEX executables first.
-	env = dict(os.environ)
-	env["REPO_ROOT"] = str(ROOT)
-	env["DIST"] = str(dist)
-	pex_build = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert pex_build.returncode == 0, pex_build.stderr
-	deploy_pex_build = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_build_deploy_pex.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=300,
-	)
-	assert deploy_pex_build.returncode == 0, deploy_pex_build.stderr
+	# Build PEX executables.
+	build_driftc_pex(ROOT, dist)
+	build_drift_pex(ROOT, dist)
 
 	# Bundle compiler sources and runtime archives.
-	env["CLANG"] = clang
-	bundle = subprocess.run(
-		["/bin/bash", str(ROOT / "tools" / "deploy" / "step_bundle.sh")],
-		text=True,
-		capture_output=True,
-		env=env,
-		timeout=180,
-	)
-	assert bundle.returncode == 0, bundle.stderr
+	bundle_compiler(ROOT, dist)
+	bundle_runtime_archives(ROOT, dist)
+	bundle_docs_and_examples(dist)
 
 	priv, kid, pub_b64 = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)

@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-17
+- **Moved deploy orchestration to Python and removed shell deploy entrypoints (0.27.73, ABI 6)**:
+  Refactored compiler deploy from a shell-script pipeline into a Python-owned
+  orchestration path with one implementation language and one entrypoint.
+  - Problem:
+    - deploy behavior and metadata had grown across multiple shell scripts and
+      Python helpers
+    - semantic rules such as stdlib package dependency metadata were being
+      duplicated across shell and Python paths
+    - tests and internal callers still depended on deleted shell-step
+      subprocesses even after the Python migration direction was chosen
+  - Fix:
+    - removed the shell deploy entrypoint and made Python the only deploy
+      orchestration path
+    - migrated deploy steps into Python modules with a single source of truth
+      for deploy sequencing and stdlib package metadata
+    - updated tests and internal callers to invoke Python step functions
+      directly instead of subprocessing shell scripts
+    - cleaned up stale references to deleted shell deploy steps
+  - Intentional behavior change:
+    - deploy CLI shape is now Python-native and no longer preserves old shell
+      wrapper argument quirks
+    - deploy outputs, staged layout, and deploy semantics remain unchanged
+  - Versioning:
+    - compiler version is `0.27.73`
+    - ABI remains `6` because this is deploy-tooling/orchestration only, not a
+      compiler/runtime boundary-shape change
+
 - **Made `--package-root` explicit-only via `--dep` allowlisting (0.27.72, ABI 6)**:
   Fixed a package-loading bug where `--package-root` discovered and loaded
   every package under the root, allowing unrelated deployed packages to collide

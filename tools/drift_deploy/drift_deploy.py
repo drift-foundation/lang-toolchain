@@ -115,7 +115,7 @@ def _resolve_target(args: argparse.Namespace) -> str:
 
 	Default is 'drift-dev' — the standard target for all current Drift
 	packages and the stdlib. This matches the ABI fingerprint target
-	used by the compiler's deploy pipeline (tools/deploy/step_stdlib_pkg.sh).
+	used by the compiler's deploy pipeline (tools/deploy/steps/stdlib.py).
 	Pass --target explicitly for cross-compilation or non-standard targets.
 	"""
 	if args.target:
