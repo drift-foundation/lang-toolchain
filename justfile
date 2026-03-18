@@ -385,7 +385,14 @@ dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
 #   just deploy --dest ~/opt/drift
 #   just deploy --dest ~/opt/drift --python .venv/bin/python3
 deploy *ARGS:
-	PYTHONPATH=. ./.venv/bin/python3 tools/deploy/deploy.py {{ARGS}}
+	#!/usr/bin/env bash
+	set -euo pipefail
+	args=({{ARGS}})
+	# Strip leading '--' so "just deploy -- --dest ..." works.
+	if [[ ${#args[@]} -gt 0 && "${args[0]}" == "--" ]]; then
+		args=("${args[@]:1}")
+	fi
+	PYTHONPATH=. exec ./.venv/bin/python3 tools/deploy/deploy.py "${args[@]}"
 
 # Print shell env lines for an existing deployment.
 deploy-print-env DEST:
