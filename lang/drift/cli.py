@@ -125,11 +125,11 @@ def _init_interactive(args: argparse.Namespace) -> int:
 	print("  They are informational — trust is verified by key fingerprint.")
 	print("  At least one of name or organization is required.\n")
 
-	name = args.name if args.name is not None else _prompt("Display name")
+	name = args.name if args.name is not None else _prompt("Author name")
 	org = args.org if args.org is not None else _prompt("Organization")
 	if not name and not org:
 		print("    At least one of name or organization is required.", file=sys.stderr)
-		name = _prompt("Display name", required=True)
+		name = _prompt("Author name", required=True)
 	email = args.email if args.email is not None else _prompt("Email")
 	url = args.url if args.url is not None else _prompt("Website")
 
@@ -459,7 +459,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	init = sub.add_parser("init", help="Set up package publishing (signing key + author profile)")
 	init.add_argument("--key", type=Path, default=None,
 		help="Path to Ed25519 signing key seed (default: $DRIFT_SIGN_KEY_FILE)")
-	init.add_argument("--name", type=str, default=None, help="Publisher display name")
+	init.add_argument("--name", type=str, default=None, help="Author name")
 	init.add_argument("--org", type=str, default=None, help="Organization or project name")
 	init.add_argument("--email", type=str, default=None, help="Contact email")
 	init.add_argument("--url", type=str, default=None, help="Website URL")
