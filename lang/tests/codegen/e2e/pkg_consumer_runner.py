@@ -45,6 +45,10 @@ PHASE_LINK = "link"
 PHASE_RUNTIME = "runtime"
 PHASE_RUNTIME_ASAN = "runtime-asan"
 
+# Version used when building the test std package.  The --dep filter on the
+# consumer compile must match exactly, so keep these in sync.
+_STD_PACKAGE_VERSION = "0.0.0-test"
+
 SMOKE_CASES = [
 	"result_ok_array_match_move_no_double_free",
 	"array_push_move_non_copy_implicit",
@@ -167,7 +171,7 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 		"--stdlib-root", str(empty_stdlib),
 		*stdlib_files,
 		"--package-id", "std",
-		"--package-version", "0.0.0-test",
+		"--package-version", _STD_PACKAGE_VERSION,
 		"--package-target", "test-target",
 		"--emit-package", str(pkg_path),
 		"--test-build-only",
@@ -387,6 +391,7 @@ def _run_case(
 	argv.extend([
 		"--stdlib-root", empty_stdlib,
 		"--package-root", pkg_root,
+		"--dep", f"std@{_STD_PACKAGE_VERSION}",
 		"--trust-store", trust_path,
 		"--dev-core-trust-store", core_trust_path,
 		"--dev",

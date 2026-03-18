@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-03-17
+- **Aligned ext-e2e package consumers with explicit stdlib `--dep` requirements (0.27.76, ABI 6)**:
+  Fixed external e2e smoke/package-consumer harnesses that still passed
+  `--package-root` without the explicit stdlib dependency pin required after
+  the `0.27.72` package-root contract change.
+  - Problem:
+    - shared external-consumer smoke/package runner code still constructed
+      compiler invocations with `--package-root` but no `--dep std@<version>`
+    - affected compile-check suites therefore failed early at package-root
+      argument validation instead of reaching their real assertions
+  - Fix:
+    - updated the shared package-consumer runner to pass the explicit stdlib
+      dependency pin alongside `--package-root`
+    - extracted a single stdlib package-version constant so package-consumer
+      harnesses do not drift from the deployed/package-root contract again
+  - Versioning:
+    - compiler version is `0.27.76`
+    - ABI remains `6` because this changes test/harness invocation behavior
+      only, not a compiler/runtime boundary shape
+
 - **Reduced deploy-driver resource retention under ASAN/xdist test runs (0.27.75, ABI 6)**:
   Fixed a driver-suite stability regression where deploy/PEX tests retained
   multiple full staged distributions and scie extraction caches across the
