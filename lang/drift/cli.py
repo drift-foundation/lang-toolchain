@@ -122,18 +122,23 @@ def _init_interactive(args: argparse.Namespace) -> int:
 	# ── Publisher details ──
 	print("Publisher details")
 	print("  Consumers see these when deciding whether to trust your packages.")
-	print("  They are informational — trust is verified by key fingerprint.\n")
+	print("  They are informational — trust is verified by key fingerprint.")
+	print("  At least one of name or organization is required.\n")
 
-	name = args.name or _prompt("Display name", required=True)
+	name = args.name if args.name is not None else _prompt("Display name")
 	org = args.org if args.org is not None else _prompt("Organization")
+	if not name and not org:
+		print("    At least one of name or organization is required.", file=sys.stderr)
+		name = _prompt("Display name", required=True)
 	email = args.email if args.email is not None else _prompt("Email")
 	url = args.url if args.url is not None else _prompt("Website")
 
 	# ── Namespaces ──
 	print("\nNamespaces")
-	print("  Which package namespaces will this key sign for?")
+	print("  Which Drift module namespaces will this key sign for?")
+	print("  These must match the module names consumers import, not package ids.")
 	print("  Consumers authorize trust per-namespace, so be specific.")
-	print('  Examples: "acme.*" (all acme packages), "acme.crypto" (one package)\n')
+	print('  Examples: "acme.*" (all acme modules), "net_tls.*" (note: underscores, not hyphens)\n')
 
 	namespaces: list[str] = list(args.namespace) if args.namespace else []
 	if not namespaces:
@@ -165,10 +170,12 @@ def _init_interactive(args: argparse.Namespace) -> int:
 
 	# ── Summary + confirmation ──
 	print(f"\nSummary")
-	pub_line = f"  Publisher:  {name}"
-	if org:
-		pub_line += f" ({org})"
-	print(pub_line)
+	if name and org:
+		print(f"  Publisher:  {name} ({org})")
+	elif org:
+		print(f"  Publisher:  {org}")
+	else:
+		print(f"  Publisher:  {name}")
 	if email:
 		print(f"  Email:      {email}")
 	if url:
@@ -224,8 +231,8 @@ def _init_noninteractive(args: argparse.Namespace) -> int:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
 
-	if not args.name:
-		print("error: --name is required in non-interactive mode", file=sys.stderr)
+	if not args.name and not args.org:
+		print("error: at least one of --name or --org is required", file=sys.stderr)
 		return 1
 	if not args.namespace:
 		print("error: --namespace is required in non-interactive mode", file=sys.stderr)
@@ -236,14 +243,14 @@ def _init_noninteractive(args: argparse.Namespace) -> int:
 
 	profile = create_author_profile(
 		pubkey_raw=pub_raw,
-		name=args.name,
+		name=args.name or "",
 		org=args.org or "",
 		email=args.email or "",
 		url=args.url or "",
 		namespaces=list(args.namespace),
 	)
 
-	out_path = args.out or Path(_slugify(args.org or args.name) + ".author-profile")
+	out_path = args.out or Path(_slugify(args.org or args.name or "publisher") + ".author-profile")
 	if out_path.exists() and not args.yes:
 		print(f"error: output file already exists: {out_path}; pass --yes to overwrite", file=sys.stderr)
 		return 1
@@ -275,10 +282,12 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 
 	# Display profile contents.
 	print(f"\ndrift trust — review author profile\n")
-	pub_line = f"  Publisher:  {profile.name}"
-	if profile.org:
-		pub_line += f" ({profile.org})"
-	print(pub_line)
+	if profile.name and profile.org:
+		print(f"  Publisher:  {profile.name} ({profile.org})")
+	elif profile.org:
+		print(f"  Publisher:  {profile.org}")
+	else:
+		print(f"  Publisher:  {profile.name}")
 	if profile.email:
 		print(f"  Email:      {profile.email}")
 	if profile.url:
@@ -455,7 +464,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	init.add_argument("--email", type=str, default=None, help="Contact email")
 	init.add_argument("--url", type=str, default=None, help="Website URL")
 	init.add_argument("--namespace", type=str, action="append", default=None,
-		help="Namespace this key signs for (repeatable)")
+		help="Drift module namespace this key signs for, e.g. 'acme.*' (repeatable)")
 	init.add_argument("--out", type=Path, default=None, help="Output author profile path")
 	init.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 

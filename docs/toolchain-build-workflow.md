@@ -124,7 +124,7 @@ This guides you through:
 
 1. **Signing key** — if no key exists, offers to generate one at `~/.config/drift/keys/default.seed`.
 2. **Publisher details** — display name, organization, email, website (informational, not cryptographic).
-3. **Namespaces** — which package namespaces this key will sign for (e.g. `acme.*`).
+3. **Namespaces** — which Drift module namespaces this key will sign for (e.g. `acme.*`, `net_tls.*`). These must match the module names consumers import, not hyphenated package ids.
 4. **Author profile** — writes a `.author-profile` file you share with consumers.
 
 The private signing key stays local. The `.author-profile` is derived from the

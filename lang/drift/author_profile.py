@@ -51,8 +51,8 @@ def create_author_profile(
 	"""Create an AuthorProfile from a raw Ed25519 public key."""
 	if len(pubkey_raw) != 32:
 		raise ValueError("ed25519 public key must be 32 bytes")
-	if not name:
-		raise ValueError("publisher name is required")
+	if not name and not org:
+		raise ValueError("at least one of name or org is required")
 	if not namespaces:
 		raise ValueError("at least one namespace is required")
 	kid = compute_ed25519_kid(pubkey_raw)
@@ -145,8 +145,13 @@ def load_author_profile(path: Path) -> AuthorProfile:
 	if not isinstance(publisher, dict):
 		raise ValueError("author profile missing 'publisher' object")
 	name = publisher.get("name", "")
-	if not isinstance(name, str) or not name:
-		raise ValueError("author profile requires non-empty 'publisher.name'")
+	if not isinstance(name, str):
+		raise ValueError("author profile 'publisher.name' must be a string")
+	p_org = publisher.get("org", "")
+	if not isinstance(p_org, str):
+		raise ValueError("author profile 'publisher.org' must be a string")
+	if not name and not p_org:
+		raise ValueError("author profile requires at least one of 'publisher.name' or 'publisher.org'")
 
 	namespaces = data.get("namespaces")
 	if not isinstance(namespaces, list) or not namespaces:
@@ -160,7 +165,7 @@ def load_author_profile(path: Path) -> AuthorProfile:
 		kid=kid,
 		pubkey_b64=pubkey_b64,
 		name=name,
-		org=publisher.get("org", ""),
+		org=p_org,
 		email=publisher.get("email", ""),
 		url=publisher.get("url", ""),
 		namespaces=namespaces,

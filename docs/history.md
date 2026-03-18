@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-17
+- **Clarified author-profile namespace prompts and allowed org-only publisher identity (0.27.79, ABI 6)**:
+  Followed up the new author-profile trust workflow by fixing misleading
+  namespace wording in publisher onboarding and relaxing publisher identity
+  validation to support organization-led profiles cleanly.
+  - Prompt/docs clarification:
+    - `drift init` now says trust/profile claims are for Drift module
+      namespaces, not “package namespaces”
+    - the prompt explicitly says these claims must match the module names
+      consumers import, not package ids
+    - examples now reflect module-id form such as `net_tls.*` rather than
+      hyphenated package names
+  - Publisher identity validation:
+    - author-profile creation no longer requires a personal name unconditionally
+    - profiles may now be:
+      - name-only
+      - org-only
+      - name + org
+    - the only invalid case is when both name and org are empty
+  - Regression coverage:
+    - added tests for org-only and name-only profiles, rejection when both are
+      empty, org-only `drift init`, and prompt wording that pins “module
+      namespace” terminology
+  - Versioning:
+    - compiler version is `0.27.79`
+    - ABI remains `6` because this changes CLI/workflow validation and docs
+      only, not a compiler/runtime boundary shape
+
 - **Fixed `just` deploy recipe Python `-c` continuation bug (0.27.78, ABI 6)**:
   Fixed a deploy-recipe regression where a `python3 -c` helper embedded in the
   `justfile` was split across adjacent shell-quoted lines, causing only the

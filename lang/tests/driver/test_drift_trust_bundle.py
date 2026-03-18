@@ -66,10 +66,22 @@ class TestCreateProfile:
 		profile = create_author_profile(pubkey_raw=pub_raw, name="Test", namespaces=["test.*"])
 		assert profile.kid == compiler_kid(pub_raw)
 
-	def test_rejects_empty_name(self) -> None:
+	def test_accepts_org_only(self) -> None:
+		_seed, pub_raw, kid = _make_key()
+		profile = create_author_profile(pubkey_raw=pub_raw, name="", org="Acme Labs", namespaces=["a.*"])
+		assert profile.org == "Acme Labs"
+		assert profile.name == ""
+
+	def test_accepts_name_only(self) -> None:
+		_seed, pub_raw, kid = _make_key()
+		profile = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["a.*"])
+		assert profile.name == "Alice"
+		assert profile.org == ""
+
+	def test_rejects_both_empty(self) -> None:
 		_seed, pub_raw, _kid = _make_key()
-		with pytest.raises(ValueError, match="name is required"):
-			create_author_profile(pubkey_raw=pub_raw, name="", namespaces=["a.*"])
+		with pytest.raises(ValueError, match="at least one of name or org"):
+			create_author_profile(pubkey_raw=pub_raw, name="", org="", namespaces=["a.*"])
 
 	def test_rejects_empty_namespaces(self) -> None:
 		_seed, pub_raw, _kid = _make_key()
@@ -159,18 +171,32 @@ class TestProfileRoundtrip:
 			with pytest.raises(ValueError, match="non-empty"):
 				load_author_profile(path)
 
-	def test_rejects_missing_name(self) -> None:
+	def test_rejects_both_name_and_org_empty(self) -> None:
 		_seed, pub_raw, kid = _make_key()
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
 				"key": {"algo": "ed25519", "kid": kid, "pubkey": b64_encode(pub_raw)},
-				"publisher": {"name": ""},
+				"publisher": {"name": "", "org": ""},
 				"namespaces": ["test.*"],
 			}))
-			with pytest.raises(ValueError, match="non-empty.*name"):
+			with pytest.raises(ValueError, match="at least one"):
 				load_author_profile(path)
+
+	def test_loads_org_only_profile(self) -> None:
+		_seed, pub_raw, kid = _make_key()
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = Path(tmpdir) / "org.author-profile"
+			path.write_text(json.dumps({
+				"format": "author-profile", "version": 0,
+				"key": {"algo": "ed25519", "kid": kid, "pubkey": b64_encode(pub_raw)},
+				"publisher": {"name": "", "org": "The Drift Foundation"},
+				"namespaces": ["drift.*"],
+			}))
+			profile = load_author_profile(path)
+			assert profile.name == ""
+			assert profile.org == "The Drift Foundation"
 
 
 # ── Trust store application ──────────────────────────────────────────
@@ -247,6 +273,41 @@ class TestInitCLI:
 			assert profile.org == "TestOrg"
 			assert profile.namespaces == ["test.*"]
 
+	def test_init_org_only(self) -> None:
+		"""drift init --org without --name produces valid org-only profile."""
+		from lang.drift.cli import main as drift_main
+		with tempfile.TemporaryDirectory() as tmpdir:
+			key_path = _make_seed_file(tmpdir)
+			out_path = Path(tmpdir) / "org.author-profile"
+			rc = drift_main([
+				"init",
+				"--key", str(key_path),
+				"--org", "The Drift Foundation",
+				"--namespace", "drift.*",
+				"--out", str(out_path),
+				"--yes",
+			])
+			assert rc == 0
+			profile = load_author_profile(out_path)
+			assert profile.name == ""
+			assert profile.org == "The Drift Foundation"
+
+	def test_init_neither_name_nor_org_fails(self) -> None:
+		"""drift init without --name and --org fails."""
+		from lang.drift.cli import main as drift_main
+		with tempfile.TemporaryDirectory() as tmpdir:
+			key_path = _make_seed_file(tmpdir)
+			out_path = Path(tmpdir) / "bad.author-profile"
+			rc = drift_main([
+				"init",
+				"--key", str(key_path),
+				"--namespace", "test.*",
+				"--out", str(out_path),
+				"--yes",
+			])
+			assert rc == 1
+			assert not out_path.exists()
+
 	def test_init_generates_key_when_missing(self) -> None:
 		"""drift init --yes without existing key auto-generates one."""
 		from lang.drift.cli import main as drift_main
@@ -315,6 +376,25 @@ class TestTrustProfileCLI:
 			trust_path = Path(tmpdir) / "drift" / "trust.json"
 			rc = drift_main(["trust", "list", "--trust-store", str(trust_path)])
 			assert rc == 0
+
+
+# ── Namespace prompt wording ──────────────────────────────────────────
+
+
+class TestNamespaceWording:
+	def test_prompt_says_module_namespace_not_package(self) -> None:
+		"""Namespace prompt must reference Drift module namespaces, not package ids."""
+		import inspect
+		from lang.drift.cli import _init_interactive
+		source = inspect.getsource(_init_interactive)
+		assert "module namespace" in source.lower(), (
+			"drift init prompt must use 'module namespace' wording "
+			"(trust namespaces follow imported module names, not package ids)"
+		)
+		assert "package namespace" not in source.lower(), (
+			"drift init prompt must not say 'package namespace' "
+			"(misleading when package id differs from module namespace, e.g. net-tls vs net_tls)"
+		)
 
 
 # ── Key resolution precedence ────────────────────────────────────────
