@@ -18,14 +18,9 @@ from lang.drift.index_v0 import load_index
 from lang.drift.publish import PublishOptions, publish_packages_v0
 from lang.drift.sign import SignOptions, load_sig_sidecar_v0, sign_package_v0
 from lang.drift.trust import (
-	TrustAddKeyOptions,
-	TrustImportOptions,
 	TrustListOptions,
 	TrustRevokeOptions,
-	add_key_to_trust_store,
-	import_sidecar_keys_to_trust_store,
 	list_trust_store,
-	plan_trust_import,
 	revoke_kid_in_trust_store,
 )
 from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
@@ -34,6 +29,295 @@ from lang.drift.vendor import VendorOptions, vendor_v0
 
 def _default_keys_dir() -> Path:
 	return Path.home() / ".config" / "drift" / "keys"
+
+
+def _slugify(text: str) -> str:
+	"""Simple slug: lowercase, non-alnum to hyphens, collapse runs."""
+	import re
+	slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+	return slug or "signer"
+
+
+def _prompt(label: str, *, default: str = "", required: bool = False) -> str:
+	"""Prompt for input with optional default. Returns stripped input."""
+	if default:
+		raw = input(f"  {label} [{default}]: ").strip()
+		return raw if raw else default
+	suffix = ": " if required else " (optional, press Enter to skip): "
+	raw = input(f"  {label}{suffix}").strip()
+	if required and not raw:
+		print("    This field is required.", file=sys.stderr)
+		return _prompt(label, default=default, required=required)
+	return raw
+
+
+def _resolve_signing_key_path(cli_key: Path | None) -> Path | None:
+	"""Resolve signing key: --key flag first, then $DRIFT_SIGN_KEY_FILE."""
+	if cli_key is not None:
+		if not cli_key.exists():
+			raise ValueError(f"--key path does not exist: {cli_key}")
+		return cli_key
+	env_path = os.environ.get("DRIFT_SIGN_KEY_FILE")
+	if env_path:
+		p = Path(env_path).expanduser()
+		if p.exists():
+			return p
+	return None
+
+
+def _init_interactive(args: argparse.Namespace) -> int:
+	"""Interactive wizard for drift init — publisher project setup."""
+	from lang.drift.author_profile import create_author_profile, write_author_profile
+	from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+	print("\ndrift init — set up package publishing for this project\n")
+
+	# ── Key resolution ──
+	print("Signing key")
+	print("  The private Ed25519 key used to sign your packages.\n")
+
+	key_path = _resolve_signing_key_path(args.key)
+	if key_path is not None:
+		source = "$DRIFT_SIGN_KEY_FILE" if args.key is None else "--key"
+		print(f"  Using signing key from {source}: {key_path}")
+		override = input("  Press Enter to accept, or enter a different path: ").strip()
+		if override:
+			key_path = Path(override).expanduser()
+	else:
+		print("  No signing key found.")
+		gen_reply = input("  Generate a new one? [Y/n]: ").strip().lower()
+		if gen_reply and gen_reply not in ("y", "yes"):
+			key_path_str = _prompt("Signing key path", required=True)
+			key_path = Path(key_path_str).expanduser()
+		else:
+			default_key = _default_keys_dir() / "default.seed"
+			key_path = Path(_prompt("Key path", default=str(default_key))).expanduser()
+			if key_path.exists():
+				print(f"  Key already exists at {key_path}, using it.")
+			else:
+				keygen_ed25519_seed(KeygenOptions(
+					out_path=key_path, print_pubkey=False, print_kid=False,
+				))
+				print(f"\n  Generated signing key: {key_path}")
+				print(f"    Keep this file secret. It is the private key used to sign")
+				print(f"    published packages. Back it up securely.\n")
+
+	if not key_path.exists():
+		print(f"error: key file not found: {key_path}", file=sys.stderr)
+		return 1
+
+	try:
+		seed = _load_seed32(key_path)
+	except Exception as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
+
+	priv = Ed25519PrivateKey.from_private_bytes(seed)
+	pub_raw = ed25519_public_bytes_raw(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	print(f"\n  Key loaded")
+	print(f"    kid: {kid}\n")
+
+	# ── Publisher details ──
+	print("Publisher details")
+	print("  Consumers see these when deciding whether to trust your packages.")
+	print("  They are informational — trust is verified by key fingerprint.\n")
+
+	name = args.name or _prompt("Display name", required=True)
+	org = args.org if args.org is not None else _prompt("Organization")
+	email = args.email if args.email is not None else _prompt("Email")
+	url = args.url if args.url is not None else _prompt("Website")
+
+	# ── Namespaces ──
+	print("\nNamespaces")
+	print("  Which package namespaces will this key sign for?")
+	print("  Consumers authorize trust per-namespace, so be specific.")
+	print('  Examples: "acme.*" (all acme packages), "acme.crypto" (one package)\n')
+
+	namespaces: list[str] = list(args.namespace) if args.namespace else []
+	if not namespaces:
+		print("  Namespace (enter one per line, empty line to finish):")
+		while True:
+			ns = input("    > ").strip()
+			if not ns:
+				break
+			namespaces.append(ns)
+
+	if not namespaces:
+		print("error: at least one namespace is required", file=sys.stderr)
+		return 1
+
+	# ── Output path ──
+	if args.out:
+		out_path = args.out
+	else:
+		default_name = _slugify(org if org else name) + ".author-profile"
+		out_path = Path(_prompt("Author profile path", default=default_name))
+
+	# ── Overwrite check ──
+	if out_path.exists():
+		print(f"\n  File already exists: {out_path}")
+		reply = input("  Overwrite? [y/N]: ").strip().lower()
+		if reply not in ("y", "yes"):
+			print("aborted — existing file preserved", file=sys.stderr)
+			return 1
+
+	# ── Summary + confirmation ──
+	print(f"\nSummary")
+	pub_line = f"  Publisher:  {name}"
+	if org:
+		pub_line += f" ({org})"
+	print(pub_line)
+	if email:
+		print(f"  Email:      {email}")
+	if url:
+		print(f"  Website:    {url}")
+	print(f"  Key:        {kid}")
+	print(f"  Namespaces: {', '.join(namespaces)}")
+	print(f"  Output:     {out_path}")
+
+	if not args.yes:
+		reply = input("\n  Create this author profile? [Y/n]: ").strip().lower()
+		if reply and reply not in ("y", "yes"):
+			print("aborted", file=sys.stderr)
+			return 1
+
+	profile = create_author_profile(
+		pubkey_raw=pub_raw,
+		name=name,
+		org=org,
+		email=email,
+		url=url,
+		namespaces=namespaces,
+	)
+	write_author_profile(profile, out_path)
+	print(f"\nWrote {out_path}")
+	print(f"\nShare this file with consumers. They run:")
+	print(f"  drift trust {out_path}")
+	return 0
+
+
+def _init_noninteractive(args: argparse.Namespace) -> int:
+	"""Non-interactive drift init (all fields via flags)."""
+	from lang.drift.author_profile import create_author_profile, write_author_profile
+	from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+	key_path = _resolve_signing_key_path(args.key)
+	if key_path is None:
+		# Auto-generate key in non-interactive mode.
+		key_path = _default_keys_dir() / "default.seed"
+		if not key_path.exists():
+			keygen_ed25519_seed(KeygenOptions(
+				out_path=key_path, print_pubkey=False, print_kid=False,
+			))
+			print(f"Generated signing key: {key_path}")
+
+	if not key_path.exists():
+		print(f"error: key file not found: {key_path}", file=sys.stderr)
+		return 1
+
+	try:
+		seed = _load_seed32(key_path)
+	except Exception as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
+
+	if not args.name:
+		print("error: --name is required in non-interactive mode", file=sys.stderr)
+		return 1
+	if not args.namespace:
+		print("error: --namespace is required in non-interactive mode", file=sys.stderr)
+		return 1
+
+	priv = Ed25519PrivateKey.from_private_bytes(seed)
+	pub_raw = ed25519_public_bytes_raw(priv.public_key())
+
+	profile = create_author_profile(
+		pubkey_raw=pub_raw,
+		name=args.name,
+		org=args.org or "",
+		email=args.email or "",
+		url=args.url or "",
+		namespaces=list(args.namespace),
+	)
+
+	out_path = args.out or Path(_slugify(args.org or args.name) + ".author-profile")
+	if out_path.exists() and not args.yes:
+		print(f"error: output file already exists: {out_path}; pass --yes to overwrite", file=sys.stderr)
+		return 1
+	write_author_profile(profile, out_path)
+	print(f"Wrote {out_path}")
+	return 0
+
+
+def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
+	"""Handle drift trust <file>.author-profile — consumer review + trust."""
+	import argparse as _ap
+	from lang.drift.author_profile import apply_author_profile_to_trust_store, load_author_profile
+
+	p = _ap.ArgumentParser(prog="drift trust <profile>", add_help=False)
+	p.add_argument("--trust-store", type=Path, default=Path("drift") / "trust.json")
+	p.add_argument("--yes", "-y", action="store_true")
+	opts = p.parse_args(extra_argv)
+
+	profile_path = Path(profile_path_str)
+	if not profile_path.exists():
+		print(f"error: author profile not found: {profile_path}", file=sys.stderr)
+		return 1
+
+	try:
+		profile = load_author_profile(profile_path)
+	except ValueError as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
+
+	# Display profile contents.
+	print(f"\ndrift trust — review author profile\n")
+	pub_line = f"  Publisher:  {profile.name}"
+	if profile.org:
+		pub_line += f" ({profile.org})"
+	print(pub_line)
+	if profile.email:
+		print(f"  Email:      {profile.email}")
+	if profile.url:
+		print(f"  Website:    {profile.url}")
+	print(f"  Algorithm:  Ed25519")
+	print(f"  Key (kid):  {profile.kid}")
+	print(f"\n  Requested namespaces:")
+	for ns in profile.namespaces:
+		print(f"    {ns}")
+	print(f"\n  Metadata (name, email, website) is self-reported by the author.")
+	print(f"  Verify the fingerprint (kid) through an independent channel.")
+
+	if not opts.yes:
+		if not sys.stdin.isatty():
+			print("error: interactive prompt required; pass --yes for non-interactive mode", file=sys.stderr)
+			return 1
+		reply = input("\n  Trust this author for the namespaces listed above? [y/N]: ").strip().lower()
+		if reply not in ("y", "yes"):
+			print("aborted", file=sys.stderr)
+			return 1
+
+	try:
+		report = apply_author_profile_to_trust_store(profile, opts.trust_store)
+	except Exception as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
+
+	added = report.get("namespaces_added", [])
+	already = report.get("already_trusted", [])
+
+	if added:
+		print(f"\nAdded to {opts.trust_store}")
+		print(f"  Key {profile.kid} now trusted for: {', '.join(added)}")
+	if already:
+		print(f"  Already trusted for: {', '.join(already)}")
+	if not added and already:
+		print(f"\nAlready fully trusted — no changes made.")
+
+	return 0
 
 
 def _load_seed32(path: Path) -> bytes:
@@ -163,7 +447,19 @@ def _build_parser() -> argparse.ArgumentParser:
 	key_match.add_argument("--keys-dir", type=Path, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
 	key_match.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
-	trust = sub.add_parser("trust", help="Trust-store management (project-local)")
+	init = sub.add_parser("init", help="Set up package publishing (signing key + author profile)")
+	init.add_argument("--key", type=Path, default=None,
+		help="Path to Ed25519 signing key seed (default: $DRIFT_SIGN_KEY_FILE)")
+	init.add_argument("--name", type=str, default=None, help="Publisher display name")
+	init.add_argument("--org", type=str, default=None, help="Organization or project name")
+	init.add_argument("--email", type=str, default=None, help="Contact email")
+	init.add_argument("--url", type=str, default=None, help="Website URL")
+	init.add_argument("--namespace", type=str, action="append", default=None,
+		help="Namespace this key signs for (repeatable)")
+	init.add_argument("--out", type=Path, default=None, help="Output author profile path")
+	init.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+
+	trust = sub.add_parser("trust", help="Consumer trust management (project-local)")
 	trust_sub = trust.add_subparsers(dest="trust_cmd", required=True)
 
 	trust_list = trust_sub.add_parser("list", help="List keys, namespaces, and revocations in a trust store")
@@ -174,29 +470,6 @@ def _build_parser() -> argparse.ArgumentParser:
 		help="Path to trust store file (default: ./drift/trust.json)",
 	)
 	trust_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
-
-	trust_add = trust_sub.add_parser("add-key", help="Add a trusted signing key and allow it for a namespace")
-	trust_add.add_argument(
-		"--trust-store",
-		type=Path,
-		default=Path("drift") / "trust.json",
-		help="Path to trust store file (default: ./drift/trust.json)",
-	)
-	trust_add.add_argument("--namespace", type=str, required=True, help="Module namespace (e.g. acme.*)")
-	trust_add.add_argument("--pubkey", type=str, required=True, help="Base64-encoded Ed25519 public key (32 bytes)")
-	trust_add.add_argument("--kid", type=str, default=None, help="Key id (kid); derived from pubkey if omitted")
-
-	trust_import = trust_sub.add_parser("import", help="Import signing pubkeys from a package sidecar into a namespace")
-	trust_import.add_argument(
-		"--trust-store",
-		type=Path,
-		default=Path("drift") / "trust.json",
-		help="Path to trust store file (default: ./drift/trust.json)",
-	)
-	trust_import.add_argument("--namespace", type=str, default=None, help="Module namespace override (default: <package_id>.*)")
-	trust_import.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
-	trust_import.add_argument("source", type=Path, help="Path to pkg.sig, pkg.dmp, or pkg.zdmp (uses sibling .sig)")
-	trust_import.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
 	trust_revoke = trust_sub.add_parser("revoke", help="Revoke a trusted signing key id (kid)")
 	trust_revoke.add_argument(
@@ -300,6 +573,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
+	sub.add_parser("prepare", help="Resolve dependencies and write drift-lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	return p
 
@@ -307,10 +581,26 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	effective_argv = argv if argv is not None else sys.argv[1:]
 
-	# Intercept "deploy" before argparse — deploy has its own arg parser.
+	# Intercept "prepare" and "deploy" before argparse — they have their own arg parsers.
+	if effective_argv and effective_argv[0] == "prepare":
+		from tools.drift_deploy.drift_prepare import run as prepare_run
+		return prepare_run(effective_argv[1:])
+
 	if effective_argv and effective_argv[0] == "deploy":
 		from tools.drift_deploy.drift_deploy import run as deploy_run
 		return deploy_run(effective_argv[1:])
+
+	# Intercept "trust <file>.author-profile" — consumer trust flow.
+	# Known subcommands are dispatched normally; only .author-profile extension
+	# triggers profile trust (no path-existence magic on bare words).
+	_TRUST_SUBCOMMANDS = {"list", "revoke"}
+	if (
+		len(effective_argv) >= 2
+		and effective_argv[0] == "trust"
+		and effective_argv[1] not in _TRUST_SUBCOMMANDS
+		and effective_argv[1].endswith(".author-profile")
+	):
+		return _trust_profile_flow(effective_argv[1], effective_argv[2:])
 
 	p = _build_parser()
 	args = p.parse_args(argv)
@@ -413,6 +703,11 @@ def main(argv: list[str] | None = None) -> int:
 				return 2
 		raise AssertionError("unreachable")
 
+	if args.cmd == "init":
+		if args.yes or not sys.stdin.isatty():
+			return _init_noninteractive(args)
+		return _init_interactive(args)
+
 	if args.cmd == "trust":
 		if args.trust_cmd == "list":
 			opts = TrustListOptions(trust_store_path=args.trust_store)
@@ -422,59 +717,6 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(json.dumps(obj, indent=2, sort_keys=True))
 			return 0
-
-		if args.trust_cmd == "add-key":
-			opts = TrustAddKeyOptions(
-				trust_store_path=args.trust_store,
-				namespace=args.namespace,
-				pubkey_b64=args.pubkey,
-				kid=args.kid,
-			)
-			try:
-				add_key_to_trust_store(opts)
-				return 0
-			except Exception as err:
-				p.error(str(err))
-				return 2
-
-		if args.trust_cmd == "import":
-			opts = TrustImportOptions(
-				trust_store_path=args.trust_store,
-				namespace=args.namespace,
-				source_path=args.source,
-			)
-			if not args.yes:
-				if args.json:
-					p.error("trust import with --json requires --yes")
-					return 2
-				if not sys.stdin.isatty():
-					p.error("trust import requires interactive prompt; pass --yes for non-interactive mode")
-					return 2
-				try:
-					preview_sidecar, preview_namespace, preview_package_id = plan_trust_import(opts)
-				except Exception as err:
-					p.error(str(err))
-					return 2
-				pkg_text = f" package_id='{preview_package_id}'" if preview_package_id else ""
-				reply = input(
-					f"Import signer key(s) from {preview_sidecar} for namespace '{preview_namespace}'{pkg_text}? [y/N]: "
-				).strip().lower()
-				if reply not in ("y", "yes"):
-					print("aborted", file=sys.stderr)
-					return 2
-			try:
-				report = import_sidecar_keys_to_trust_store(opts)
-			except Exception as err:
-				p.error(str(err))
-				return 2
-			if args.json:
-				print(json.dumps(report, sort_keys=True, separators=(",", ":")))
-			else:
-				for kid in report.get("imported_kids", []):
-					print(f"imported {kid}")
-				for kid in report.get("missing_pubkeys", []):
-					print(f"missing-pubkey {kid}", file=sys.stderr)
-			return 0 if len(report.get("imported_kids", [])) > 0 else 2
 
 		if args.trust_cmd == "revoke":
 			opts = TrustRevokeOptions(trust_store_path=args.trust_store, kid=args.kid, reason=args.reason)

@@ -6,7 +6,8 @@ This guide is a practical, end-to-end workflow for new developers:
 2. Build a hello-world app (no package dependencies).
 3. Build a library package (`.dmp`).
 4. Build an app that depends on that package (unsigned local flow).
-5. Sign the package and consume it with signature verification enabled.
+5. Set up publishing identity, sign the package, and consume it with signature verification.
+6. Prepare and deploy packages.
 
 Commands assume you run from repository root and use the local venv:
 
@@ -20,16 +21,16 @@ You can also use the repo-local wrappers (recommended for day-to-day use):
 ```bash
 export DRIFTC="$PWD/bin/driftc"
 export DRIFT_TOOL="$PWD/bin/drift"
-export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
 ```
 
 ## Trust layers (important)
 
 For most users, use this simple model:
 
-1. Publisher signs upstream packages/toolchain artifacts.
-2. User verifies signatures and hashes before use.
-3. `deploy` installs a local runnable bundle (for example `~/opt/drift/current`).
+1. Publisher runs `drift init` to set up a signing key and public author profile.
+2. Publisher signs packages, `drift deploy` publishes them along with the `.author-profile`.
+3. Consumer obtains the `.author-profile` and runs `drift trust <file>.author-profile` to trust it.
+4. `driftc` verifies package signatures against the trust store at compile time.
 
 Some teams may add internal deploy signing as an optional extra attestation
 layer, but early adopters can safely start with publisher-signature verification.
@@ -111,34 +112,41 @@ Notes:
 - If archives are missing, compile fails with a runtime archive missing error.
 - Use `DRIFT_RUNTIME_LINK_MODE=source` only when explicitly opting into legacy source/object runtime linking.
 
-### 1.7 Create signing identity (package creators)
+### 1.7 Set up publishing identity (package creators)
 
-For signed package publishing, create a local signing key once:
+Run the interactive setup:
 
 ```bash
-mkdir -p ~/.config/drift/keys
-chmod 700 ~/.config/drift ~/.config/drift/keys
-$DRIFT_TOOL keygen --out ~/.config/drift/keys/default.seed --print-pubkey --print-kid
-chmod 600 ~/.config/drift/keys/default.seed
+$DRIFT_TOOL init
 ```
 
-Set default signing key for recipes/tooling:
+This guides you through:
+
+1. **Signing key** — if no key exists, offers to generate one at `~/.config/drift/keys/default.seed`.
+2. **Publisher details** — display name, organization, email, website (informational, not cryptographic).
+3. **Namespaces** — which package namespaces this key will sign for (e.g. `acme.*`).
+4. **Author profile** — writes a `.author-profile` file you share with consumers.
+
+The private signing key stays local. The `.author-profile` is derived from the
+signing key but contains only the public key and metadata — safe to share publicly.
+
+For CI/automation, supply all fields via flags:
+
+```bash
+$DRIFT_TOOL init \
+  --key ~/.config/drift/keys/default.seed \
+  --name "Your Name" \
+  --org "Your Org" \
+  --namespace "acme.*" \
+  --out acme.author-profile \
+  --yes
+```
+
+Set the default signing key for other tooling:
 
 ```bash
 export DRIFT_SIGN_KEY_FILE="$HOME/.config/drift/keys/default.seed"
 ```
-
-Optional command-based key source (stdout must emit base64 seed):
-
-```bash
-export DRIFT_SIGN_KEY_CMD='gpg -d ~/.config/drift/keys/default.seed.pgp'
-```
-
-`drift sign` key resolution priority:
-
-1. `--key <path>`
-2. `DRIFT_SIGN_KEY_FILE`
-3. `DRIFT_SIGN_KEY_CMD`
 
 ## 2. Hello app (no dependency package)
 
@@ -231,16 +239,17 @@ Expected exit code: `42`.
 
 ## 5. Sign package and require signatures at compile time
 
-This is the distribution-style flow.
+This is the distribution-style flow for publishing signed packages.
 
-### 5.1 Generate a signing key
+### 5.1 Set up publishing identity
+
+If you haven't already, run `drift init` (see section 1.7):
 
 ```bash
-mkdir -p sandbox/keys sandbox/drift
-$DRIFT_TOOL keygen --out sandbox/keys/acme.seed --print-pubkey --print-kid
+$DRIFT_TOOL init
 ```
 
-Keep output values (`pubkey`, `kid`) for trust-store operations.
+This creates your signing key (if needed) and your `.author-profile`.
 
 ### 5.2 Sign the package
 
@@ -249,25 +258,23 @@ $DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key sandbox/keys/acme.seed --in
 ```
 
 This produces:
-- `sandbox/libmath/acme.math.dmp.sig`
+- `sandbox/libmath/acme.math.sig` (detached signature sidecar)
 
-### 5.3 Trust signer for namespace
+### 5.3 Trust the publisher (consumer side)
 
-Import signer directly from package sidecar (namespace auto-derived as `<package_id>.*`):
-
-```bash
-$DRIFT_TOOL trust import --trust-store sandbox/drift/trust.json sandbox/libmath/acme.math.dmp.sig
-```
-
-By default this prompts for confirmation (`[y/N]`). Use `--yes` for non-interactive automation.
-
-Manual fallback (if sidecar has no embedded pubkey):
+The consumer obtains the publisher's `.author-profile` and trusts it:
 
 ```bash
-$DRIFT_TOOL trust add-key --trust-store sandbox/drift/trust.json --namespace mathlib.* --pubkey '<BASE64_PUBKEY>'
+$DRIFT_TOOL trust acme.author-profile --trust-store sandbox/drift/trust.json
 ```
 
-Inspect trust store:
+This displays the author's identity, key fingerprint, and namespace claims,
+then asks for confirmation. The consumer verifies the key fingerprint through
+an independent channel (website, email, etc.) — metadata is informational.
+
+Use `--yes` for non-interactive automation.
+
+Inspect the trust store:
 
 ```bash
 $DRIFT_TOOL trust list --trust-store sandbox/drift/trust.json --json
@@ -307,7 +314,40 @@ Inspect local repo index:
 just dist-index
 ```
 
-## 6. Revoke key (negative check)
+## 6. Prepare and deploy
+
+The release workflow separates state preparation from publishing:
+
+### 6.1 Prepare (resolve dependencies, write lock)
+
+```bash
+drift prepare --manifest drift-package.json --dest ~/opt/drift/libs
+```
+
+This resolves all package dependencies and writes `drift-lock.json`.
+Review the lock, then commit it alongside your manifest.
+
+### 6.2 Deploy (build, sign, smoke, publish)
+
+```bash
+drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+```
+
+Deploy consumes the committed lock state. It builds, signs, smoke-tests,
+and publishes all artifacts. It also publishes any `.author-profile` files
+from the project directory alongside the released packages.
+
+Deploy is read-only with respect to tracked project files — it does not
+rewrite `drift-lock.json` or other repo-managed metadata.
+
+### 6.3 Intended workflow
+
+1. Edit `drift-package.json` (versions, deps, etc.)
+2. `drift prepare` — resolve deps, write lock
+3. Review changes, commit manifest + lock
+4. `drift deploy` — build and publish from committed state
+
+## 7. Revoke key (negative check)
 
 Revoke by `kid`:
 
@@ -317,13 +357,26 @@ $DRIFT_TOOL trust revoke --trust-store sandbox/drift/trust.json --kid '<KID>' --
 
 Rebuild should now fail for that package.
 
-## 7. Command checklist
+## 8. Command checklist
 
-- Build app: `lang.driftc ... -o <exe>`
-- Emit package: `lang.driftc ... --emit-package <pkg.dmp> --package-id ... --package-version ... --package-target ...`
-- Sign package: `lang.drift sign <pkg.dmp> --key <seed>`
-- Trust signer (recommended): `lang.drift trust import <pkg.dmp.sig>`
-- Trust signer (manual fallback): `lang.drift trust add-key --namespace <ns> --pubkey <base64>`
+**Publisher setup:**
+- Initialize publishing identity: `drift init`
+- Sign package: `drift sign <pkg.dmp> --key <seed>`
+
+**Release workflow:**
+- Prepare lock: `drift prepare --manifest drift-package.json --dest <dest>`
+- Deploy: `drift deploy --manifest drift-package.json --dest <dest> --driftc <driftc>`
+
+**Consumer trust:**
+- Trust an author: `drift trust <file>.author-profile`
+- List trust store: `drift trust list --trust-store <path>`
+- Revoke a key: `drift trust revoke --trust-store <path> --kid <kid>`
+
+**Build:**
+- Build app: `driftc ... -o <exe>`
+- Emit package: `driftc ... --emit-package <pkg.dmp> --package-id ... --package-version ... --package-target ...`
+
+**Notes:**
 - Signature verification is default in `bin/driftc` package mode.
 - Opt-out only when needed: `--skip-package-signatures`
 - `DRIFT_ASAN=1` is supported in direct `bin/driftc` compile/link mode and injects `-fsanitize=address -g`.
@@ -335,7 +388,7 @@ Rebuild should now fail for that package.
 - Set `DRIFT_RUNTIME_LIB_CACHE_DIR=<path>` to redirect runtime archive artifacts/locks to a caller-writable location.
 - Legacy-compatible override: `DRIFT_RUNTIME_BUILD_ROOT=<path>` writes archives under `<path>/runtime_libs/`.
 
-## 8. Common pitfalls
+## 9. Common pitfalls
 
 - `module main` is required for default executable entrypoint (`main::main`).
 - Imported module ids must match what the package exports.
@@ -344,7 +397,7 @@ Rebuild should now fail for that package.
 - `dist-publish-stdlib` requires a signing key (`DRIFT_SIGN_KEY_FILE` or explicit `SIGN_KEY` arg).
 - For portability-sensitive environments, if toolchain asks for pointer width, add `--target-word-bits 64`.
 
-## 9. Next expansion ideas
+## 10. Next expansion ideas
 
 - Multi-package dependency chain (`pkg A -> pkg B -> app`).
 - Multiple signatures on one package (multisig acceptance policy).

@@ -140,13 +140,16 @@ driftc my_program.drift -o my_program
 ## Drift CLI tool
 
 `bin/drift` is a self-contained PEX --scie eager executable providing
-the Drift tooling CLI (package signing, publishing, trust management,
-and deploy).  It bundles its own Python interpreter and runtime
-dependencies (cryptography, zstandard).
+the Drift tooling CLI (publishing identity setup, package signing,
+trust management, and deploy).  It bundles its own Python interpreter
+and runtime dependencies (cryptography, zstandard).
 
 ```bash
-drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+drift init                        # set up publishing identity + author profile
 drift sign my-pkg.dmp --key signing.seed
+drift prepare --manifest drift-package.json --dest ~/opt/drift/libs
+drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+drift trust publisher.author-profile   # consumer: trust an author
 drift trust list --trust-store trust.json
 ```
 

@@ -54,6 +54,7 @@ class Project:
 	"""Project-level metadata."""
 	name: str
 	license: str
+	author_profile: str | None = None  # relative path to .author-profile
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,11 @@ def load_manifest(path: Path) -> Manifest:
 		raise ManifestError("missing 'project' object")
 	project_name = _require_str(project_obj, "name", "project")
 	project_license = _require_str(project_obj, "license", "project")
-	project = Project(name=project_name, license=project_license)
+	author_profile_raw = project_obj.get("author_profile")
+	if author_profile_raw is not None:
+		if not isinstance(author_profile_raw, str) or not author_profile_raw:
+			raise ManifestError("'project.author_profile' must be a non-empty string path")
+	project = Project(name=project_name, license=project_license, author_profile=author_profile_raw)
 
 	# artifacts
 	artifacts_arr = data.get("artifacts")

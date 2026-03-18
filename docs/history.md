@@ -1,6 +1,44 @@
 # Drift development history
 
 ## 2026-03-17
+- **Introduced `drift init` publisher onboarding and `.author-profile` trust workflow (0.27.77, ABI 6)**:
+  Reworked the package trust UX around publisher onboarding and consumer trust
+  decisions, removing low-level trust-creation flows and replacing the old
+  signer/profile naming with an explicit author-profile model.
+  - Publisher workflow:
+    - `drift init` is now the first-run publisher setup flow
+    - it interactively resolves or generates the private signing key, collects
+      publisher metadata, gathers intended namespaces, and writes a public
+      `.author-profile` file
+    - the private signing key remains secret; the `.author-profile` is the
+      public trust artifact derived from that key
+  - Consumer workflow:
+    - `drift trust <file>.author-profile` is now the primary consumer trust
+      path
+    - the CLI shows publisher metadata, key fingerprint/kid, and namespace
+      claims, with explicit warning that metadata is self-reported and the
+      fingerprint is the real trust anchor
+    - `drift trust list` and `drift trust revoke` remain as the minimal trust
+      management surface
+  - Naming and command-surface cleanup:
+    - renamed the public trust artifact from `.drift-profile` /
+      `.drift-signer` to `.author-profile`
+    - removed `drift trust create`, `drift trust import`, and
+      `drift trust add-key` from the supported workflow
+    - replaced `trust_bundle.py` with `author_profile.py` and updated related
+      CLI dispatch/tests to match the new model
+  - Deploy/docs integration:
+    - `drift deploy` now publishes the explicitly-declared author profile from
+      manifest metadata when present, and never guesses from directory globs
+    - toolchain workflow docs now describe the intended split:
+      `drift init` for publisher setup, `drift prepare` for lock/project state,
+      `drift deploy` for publication, and `drift trust <author-profile>` for
+      consumers
+  - Versioning:
+    - compiler version is `0.27.77`
+    - ABI remains `6` because this changes CLI/workflow/tooling behavior only,
+      not a compiler/runtime boundary shape
+
 - **Aligned ext-e2e package consumers with explicit stdlib `--dep` requirements (0.27.76, ABI 6)**:
   Fixed external e2e smoke/package-consumer harnesses that still passed
   `--package-root` without the explicit stdlib dependency pin required after

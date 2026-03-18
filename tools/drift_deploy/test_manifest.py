@@ -54,6 +54,7 @@ class TestManifestValid:
 			assert m.schema_version == 1
 			assert m.project.name == "test-project"
 			assert m.project.license == "MIT"
+			assert m.project.author_profile is None
 			assert len(m.artifacts) == 1
 			art = m.artifacts[0]
 			assert art.kind == "package"
@@ -66,6 +67,22 @@ class TestManifestValid:
 			assert art.native_deps == []
 			assert art.assets == []
 			assert art.smoke_command is None
+
+	def test_author_profile_parsed(self) -> None:
+		manifest = _minimal_manifest()
+		manifest["project"]["author_profile"] = "acme.author-profile"
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			m = load_manifest(path)
+			assert m.project.author_profile == "acme.author-profile"
+
+	def test_author_profile_empty_string_rejected(self) -> None:
+		manifest = _minimal_manifest()
+		manifest["project"]["author_profile"] = ""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			with pytest.raises(ManifestError, match="author_profile"):
+				load_manifest(path)
 
 	def test_full_artifact(self) -> None:
 		manifest = _minimal_manifest()

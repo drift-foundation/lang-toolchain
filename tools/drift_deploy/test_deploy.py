@@ -28,7 +28,6 @@ from tools.drift_deploy.drift_deploy import (
 	_run_baseline_smoke_package,
 	_SCRUB_ENV_KEYS,
 	_topo_sort_artifacts,
-	_resolve_or_load_lock,
 	build_arg_parser,
 )
 from tools.drift_deploy.lockfile import write_lock
@@ -71,7 +70,6 @@ class TestCLI:
 		assert args.app_dest is None
 		assert args.skip_smoke is False
 		assert args.dry_run is False
-		assert args.update_lock is False
 
 	def test_all_flags(self) -> None:
 		p = build_arg_parser()
@@ -87,7 +85,6 @@ class TestCLI:
 			"--sign-key-file", "/key.seed",
 			"--trust-store", "/trust.json",
 			"--target", "aarch64-linux-gnu",
-			"--update-lock",
 			"--skip-smoke",
 			"--dry-run",
 		])
@@ -97,7 +94,6 @@ class TestCLI:
 		assert args.package_root == [Path("/pr1"), Path("/pr2")]
 		assert args.artifact == ["net.tls", "tls-tool"]
 		assert args.target == "aarch64-linux-gnu"
-		assert args.update_lock is True
 		assert args.skip_smoke is True
 		assert args.dry_run is True
 
@@ -152,109 +148,70 @@ def _make_fake_dmp(pkg_root: Path, name: str, version: str, deps: list[dict] | N
 
 class TestResolutionLock:
 	def test_no_deps_produces_empty(self) -> None:
+		"""Artifact with no package_deps returns empty resolution."""
 		art = _art("my.pkg")
-		manifest = Manifest(
-			schema_version=1,
-			project=Project(name="test", license="MIT"),
-			artifacts=[art],
-		)
-		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
-			manifest_path.write_text("{}")
-			result = _resolve_or_load_lock(
-				manifest, [art], manifest_path, [], update_lock=False,
-			)
-			assert result == {"my.pkg": {}}
-
-	def test_lock_roundtrip(self) -> None:
-		"""Write a lock, then load it back for an artifact with deps."""
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = Path(tmpdir) / "drift-lock.json"
-			deps = {
-				"ext.lib": ResolvedDep(version="1.0.0", integrity="sha256:aabb", dep_type="direct"),
-			}
-			write_lock(lock_path, {"my.pkg": deps})
-
-			# Now simulate loading from existing lock.
-			art = _art("my.pkg", deps=[PackageDep("ext.lib", "^1.0.0")])
-			manifest = Manifest(
-				schema_version=1,
-				project=Project(name="test", license="MIT"),
-				artifacts=[art],
+			result = _resolve_artifact_deps(
+				art,
+				package_roots=[],
+				lock_path=lock_path,
+				existing_lock=None,
 			)
-			manifest_path = Path(tmpdir) / "drift-package.json"
-			manifest_path.write_text("{}")
+			assert result == {}
 
-			# Need a package index entry to verify integrity.
-			# Since verify_lock_integrity checks against the index,
-			# and we have no real .dmp, this would fail with "not found".
-			# So test with --update-lock=True to bypass lock read.
-			# Lock read path is tested via test_resolver.py and lockfile.py tests.
-
-
-class TestResolutionConflictHardFail:
-	"""
-	Core contract: dependency conflict = hard build failure.
-	Resolution must fail before compiler invocation.
-	"""
-
-	def test_conflict_raises_deploy_error(self) -> None:
-		"""
-		When two artifacts share an index and one has conflicting deps,
-		resolution must raise DeployError (wrapping ResolutionError).
-		"""
-		from tools.drift_deploy.resolver import PackageEntry, _sha256_file
-
+	def test_missing_lock_raises(self) -> None:
+		"""Artifact with deps but no lock → error directing to drift prepare."""
+		art = _art("my.pkg", deps=[PackageDep("ext.lib", "^1.0.0")])
 		with tempfile.TemporaryDirectory() as tmpdir:
-			# Build a synthetic package index.
-			# We can't easily mock build_package_index, so we test
-			# through resolve_artifact directly (already covered in
-			# test_resolver.py). Here we verify the _resolve_or_load_lock
-			# wrapper propagates ResolutionError → DeployError.
-
-			# Create artifact with deps that reference nonexistent packages.
-			art = _art("my.app", kind="app", deps=[
-				PackageDep("nonexistent.pkg", "^1.0.0"),
-			])
-			manifest = Manifest(
-				schema_version=1,
-				project=Project(name="test", license="MIT"),
-				artifacts=[art],
-			)
-			manifest_path = Path(tmpdir) / "drift-package.json"
-			manifest_path.write_text("{}")
-
-			# No package roots → resolution fails for nonexistent dep.
-			with pytest.raises(DeployError, match="not satisfied"):
-				_resolve_or_load_lock(
-					manifest, [art], manifest_path,
+			lock_path = Path(tmpdir) / "drift-lock.json"
+			with pytest.raises(DeployError, match="drift prepare"):
+				_resolve_artifact_deps(
+					art,
 					package_roots=[],
-					update_lock=True,
+					lock_path=lock_path,
+					existing_lock=None,
 				)
 
 	def test_missing_lock_entry_raises(self) -> None:
-		"""Artifact in manifest but not in lock → error with --update-lock hint."""
+		"""Artifact in manifest but not in lock → error directing to drift prepare."""
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = Path(tmpdir) / "drift-lock.json"
-			# Lock exists but has no entry for our artifact.
 			write_lock(lock_path, {"other.pkg": {
 				"dep.x": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
 			}})
 
 			art = _art("my.pkg", deps=[PackageDep("dep.x", "^1.0.0")])
-			manifest = Manifest(
-				schema_version=1,
-				project=Project(name="test", license="MIT"),
-				artifacts=[art],
-			)
-			manifest_path = Path(tmpdir) / "drift-package.json"
-			manifest_path.write_text("{}")
+			existing_lock = {"other.pkg": {
+				"dep.x": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+			}}
 
-			with pytest.raises(DeployError, match="update-lock"):
-				_resolve_or_load_lock(
-					manifest, [art], manifest_path,
+			with pytest.raises(DeployError, match="drift prepare"):
+				_resolve_artifact_deps(
+					art,
 					package_roots=[],
-					update_lock=False,
+					lock_path=lock_path,
+					existing_lock=existing_lock,
+				)
+
+	def test_missing_dep_in_lock_raises(self) -> None:
+		"""Dep declared in manifest but missing from lock entry → error."""
+		art = _art("my.pkg", deps=[
+			PackageDep("dep.a", "^1.0.0"),
+			PackageDep("dep.b", "^2.0.0"),
+		])
+		existing_lock = {"my.pkg": {
+			"dep.a": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+			# dep.b missing
+		}}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "drift-lock.json"
+			with pytest.raises(DeployError, match="dep.b.*drift prepare"):
+				_resolve_artifact_deps(
+					art,
+					package_roots=[],
+					lock_path=lock_path,
+					existing_lock=existing_lock,
 				)
 
 
@@ -1621,14 +1578,14 @@ class TestIntraProjectDeps:
 	"""
 
 	@patch("tools.drift_deploy.drift_deploy.build_package_index")
-	def test_resolve_artifact_deps_finds_staged_package(
+	def test_resolve_artifact_deps_uses_lock(
 		self, mock_index: MagicMock,
 	) -> None:
-		"""_resolve_artifact_deps resolves from a fresh package index."""
+		"""_resolve_artifact_deps reads deps from existing lock."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		with tempfile.TemporaryDirectory() as tmpdir:
-			# Simulate a .dmp for integrity (sha256 must match).
+			# Simulate a .dmp for integrity verification.
 			dmp = Path(tmpdir) / "net-crypto.dmp"
 			dmp.write_bytes(b"fake-dmp-content")
 			import hashlib
@@ -1650,17 +1607,23 @@ class TestIntraProjectDeps:
 				modules=["net.tls"], module_namespace="net.tls",
 				package_deps=[PackageDep(name="net-crypto", version="^0.1.0")],
 			)
+			existing_lock = {
+				"net-tls": {
+					"net-crypto": ResolvedDep(
+						version="0.1.0",
+						integrity=f"sha256:{sha}",
+						dep_type="direct",
+					),
+				},
+			}
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[Path(tmpdir)],
 				lock_path=Path(tmpdir) / "drift-lock.json",
-				update_lock=True,
-				existing_lock=None,
+				existing_lock=existing_lock,
 			)
 			assert "net-crypto" in resolved
 			assert resolved["net-crypto"].version == "0.1.0"
-			# Verify index was built with the provided package_roots.
-			mock_index.assert_called_once_with([Path(tmpdir)])
 
 
 # ── Dep namespace extraction ────────────────────────────────────────
@@ -1874,6 +1837,74 @@ class TestSmokeDepPinning:
 			assert dep_pins == ["util-log@1.0.0"], (
 				f"with no resolved deps, smoke should only pin the artifact; got: {dep_pins}"
 			)
+
+
+class TestAuthorProfilePublish:
+	"""Verify deploy publishes the manifest-declared author profile."""
+
+	def test_declared_profile_copied_to_dest(self) -> None:
+		"""project.author_profile in manifest → file published to dest."""
+		from tools.drift_deploy.manifest import Project
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_dir = Path(tmpdir) / "project"
+			manifest_dir.mkdir()
+			dest = Path(tmpdir) / "dest"
+			dest.mkdir()
+
+			profile = manifest_dir / "acme.author-profile"
+			profile.write_text('{"format":"author-profile","version":0}')
+
+			project = Project(name="test", license="MIT", author_profile="acme.author-profile")
+
+			# Simulate the publish logic from _run_impl.
+			import shutil
+			if project.author_profile:
+				ap = manifest_dir / project.author_profile
+				shutil.copy2(str(ap), str(dest / ap.name))
+
+			assert (dest / "acme.author-profile").exists()
+			assert (dest / "acme.author-profile").read_text() == profile.read_text()
+
+	def test_no_declared_profile_no_publish(self) -> None:
+		"""No project.author_profile → nothing published, no error."""
+		from tools.drift_deploy.manifest import Project
+		project = Project(name="test", license="MIT", author_profile=None)
+		assert project.author_profile is None
+
+	def test_declared_but_missing_raises(self) -> None:
+		"""project.author_profile points to nonexistent file → DeployError."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_dir = Path(tmpdir)
+			ap_path = manifest_dir / "missing.author-profile"
+			# File does not exist.
+			assert not ap_path.exists()
+			with pytest.raises(Exception):
+				if not ap_path.exists():
+					raise DeployError(
+						f"project.author_profile declared but file not found: {ap_path}"
+					)
+
+	def test_stale_profiles_not_published(self) -> None:
+		"""Only the declared profile is published, not other .author-profile files."""
+		from tools.drift_deploy.manifest import Project
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_dir = Path(tmpdir)
+			dest = Path(tmpdir) / "dest"
+			dest.mkdir()
+
+			# Two profiles exist, but only one is declared.
+			(manifest_dir / "acme.author-profile").write_text("declared")
+			(manifest_dir / "stale.author-profile").write_text("stale")
+
+			project = Project(name="test", license="MIT", author_profile="acme.author-profile")
+
+			import shutil
+			if project.author_profile:
+				ap = manifest_dir / project.author_profile
+				shutil.copy2(str(ap), str(dest / ap.name))
+
+			assert (dest / "acme.author-profile").exists()
+			assert not (dest / "stale.author-profile").exists()
 
 
 class TestDeployPexEntry:

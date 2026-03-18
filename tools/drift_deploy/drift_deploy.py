@@ -22,7 +22,6 @@ from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
 	verify_lock_integrity,
-	write_lock,
 )
 from tools.drift_deploy.manifest import (
 	Artifact,
@@ -31,10 +30,8 @@ from tools.drift_deploy.manifest import (
 	load_manifest,
 )
 from tools.drift_deploy.resolver import (
-	ResolutionError,
 	ResolvedDep,
 	build_package_index,
-	resolve_artifact,
 )
 from tools.drift_deploy.sidecar import write_app_sidecar
 
@@ -88,8 +85,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Target triple (default: host triple)")
 	p.add_argument("--native-lib-path", type=Path, action="append", default=None,
 		help="Native library search path for linker (repeatable; also: $DRIFT_NATIVE_LIB_PATH, drift-deploy-config.json)")
-	p.add_argument("--update-lock", action="store_true",
-		help="Re-resolve all package_deps and rewrite drift-lock.json")
 	p.add_argument("--skip-smoke", action="store_true",
 		help="Skip all smoke tests (CI escape hatch)")
 	p.add_argument("--dry-run", action="store_true",
@@ -277,153 +272,50 @@ def _topo_sort_artifacts(artifacts: list[Artifact]) -> list[Artifact]:
 # ── Resolution / lock ────────────────────────────────────────────────
 
 
-def _resolve_or_load_lock(
-	manifest: Manifest,
-	artifacts: list[Artifact],
-	manifest_path: Path,
-	package_roots: list[Path],
-	update_lock: bool,
-) -> dict[str, dict[str, ResolvedDep]]:
-	"""
-	Resolve dependencies or load from lock file.
-
-	Returns {artifact_name → {package_id → ResolvedDep}}.
-	Artifacts with no package_deps get an empty dict.
-
-	NOTE: this resolves ALL artifacts upfront using the current package_roots.
-	For intra-project dependencies (package B depends on co-deployed package A),
-	use _resolve_artifact_deps() per-artifact in the deploy loop instead —
-	by then, topo-sorted predecessors have been built into staged_pkg_root.
-	"""
-	lock_path = manifest_path.parent / "drift-lock.json"
-
-	# Determine which artifacts need resolution.
-	need_resolution = [a for a in artifacts if a.package_deps]
-
-	if not need_resolution:
-		return {a.name: {} for a in artifacts}
-
-	# Build package index for resolution.
-	pkg_index = build_package_index(package_roots)
-
-	# Try loading existing lock.
-	existing_lock: dict[str, dict[str, ResolvedDep]] | None = None
-	if lock_path.exists() and not update_lock:
-		try:
-			existing_lock = read_lock(lock_path)
-		except ValueError as e:
-			raise DeployError(f"failed to read {lock_path}: {e}")
-
-	result: dict[str, dict[str, ResolvedDep]] = {}
-
-	for art in artifacts:
-		if not art.package_deps:
-			result[art.name] = {}
-			continue
-
-		direct_deps = [(dep.name, dep.version) for dep in art.package_deps]
-
-		if existing_lock is not None and not update_lock:
-			# Use existing lock if available for this artifact.
-			if art.name not in existing_lock:
-				raise DeployError(
-					f"artifact '{art.name}' not found in {lock_path}; "
-					f"run with --update-lock to re-resolve"
-				)
-			locked = existing_lock[art.name]
-
-			# Verify all direct deps are covered.
-			for dep_name, _dep_ver in direct_deps:
-				if dep_name not in locked:
-					raise DeployError(
-						f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
-						f"run with --update-lock to re-resolve"
-					)
-
-			# Verify integrity.
-			errors = verify_lock_integrity(locked, pkg_index)
-			if errors:
-				raise DeployError(
-					f"artifact '{art.name}': lock integrity check failed:\n"
-					+ "\n".join(f"  {e}" for e in errors)
-				)
-
-			result[art.name] = locked
-		else:
-			# Resolve from scratch.
-			try:
-				resolved = resolve_artifact(
-					art.name, direct_deps, pkg_index,
-					searched_roots=package_roots,
-				)
-			except ResolutionError as e:
-				raise DeployError(str(e))
-			result[art.name] = resolved
-
-	# Write lock file (all artifacts, including no-dep ones as empty).
-	lock_artifacts = {name: deps for name, deps in result.items() if deps}
-	if lock_artifacts:
-		write_lock(lock_path, lock_artifacts)
-
-	# Fill in no-dep artifacts.
-	for art in artifacts:
-		if art.name not in result:
-			result[art.name] = {}
-
-	return result
-
-
 def _resolve_artifact_deps(
 	art: Artifact,
 	*,
 	package_roots: list[Path],
 	lock_path: Path,
-	update_lock: bool,
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None,
 ) -> dict[str, ResolvedDep]:
 	"""
-	Resolve dependencies for a single artifact.
+	Load locked dependencies for a single artifact.
 
-	Called per-artifact in the deploy loop so that intra-project
-	dependencies (earlier topo-sorted artifacts already built into
-	staged_pkg_root) are discoverable.
+	Deploy is read-only with respect to drift-lock.json.  If the lock
+	is missing or stale, the user must run ``drift prepare`` first.
 	"""
 	if not art.package_deps:
 		return {}
 
 	direct_deps = [(dep.name, dep.version) for dep in art.package_deps]
 
-	if existing_lock is not None and not update_lock:
-		if art.name not in existing_lock:
-			raise DeployError(
-				f"artifact '{art.name}' not found in {lock_path}; "
-				f"run with --update-lock to re-resolve"
-			)
-		locked = existing_lock[art.name]
-		for dep_name, _dep_ver in direct_deps:
-			if dep_name not in locked:
-				raise DeployError(
-					f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
-					f"run with --update-lock to re-resolve"
-				)
-		pkg_index = build_package_index(package_roots)
-		errors = verify_lock_integrity(locked, pkg_index)
-		if errors:
-			raise DeployError(
-				f"artifact '{art.name}': lock integrity check failed:\n"
-				+ "\n".join(f"  {e}" for e in errors)
-			)
-		return locked
-
-	# Resolve from scratch — rebuild index to pick up newly-built packages.
-	pkg_index = build_package_index(package_roots)
-	try:
-		return resolve_artifact(
-			art.name, direct_deps, pkg_index,
-			searched_roots=package_roots,
+	if existing_lock is None:
+		raise DeployError(
+			f"artifact '{art.name}' has package_deps but no drift-lock.json; "
+			f"run 'drift prepare' first"
 		)
-	except ResolutionError as e:
-		raise DeployError(str(e))
+
+	if art.name not in existing_lock:
+		raise DeployError(
+			f"artifact '{art.name}' not found in {lock_path}; "
+			f"run 'drift prepare' to re-resolve"
+		)
+	locked = existing_lock[art.name]
+	for dep_name, _dep_ver in direct_deps:
+		if dep_name not in locked:
+			raise DeployError(
+				f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
+				f"run 'drift prepare' to re-resolve"
+			)
+	pkg_index = build_package_index(package_roots)
+	errors = verify_lock_integrity(locked, pkg_index)
+	if errors:
+		raise DeployError(
+			f"artifact '{art.name}': lock integrity check failed:\n"
+			+ "\n".join(f"  {e}" for e in errors)
+		)
+	return locked
 
 
 # ── Build ────────────────────────────────────────────────────────────
@@ -1206,13 +1098,18 @@ def _run_impl(args: argparse.Namespace) -> int:
 		a.name: a.module_namespace for a in artifacts if a.kind == "package"
 	}
 
-	# ── Resolution / lock (per-artifact, lazy) ──
-	# Resolve deps per-artifact in topo order so that intra-project deps
-	# (earlier artifacts already built into staged_pkg_root) are discoverable.
+	# ── Resolution / lock (per-artifact, read-only) ──
+	# Deploy is read-only w.r.t. drift-lock.json. If deps need resolution,
+	# the lock must already exist (written by 'drift prepare').
 	lock_path = args.manifest.resolve().parent / "drift-lock.json"
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None = None
 	need_resolution = any(a.package_deps for a in artifacts)
-	if need_resolution and lock_path.exists() and not args.update_lock:
+	if need_resolution:
+		if not lock_path.exists():
+			raise DeployError(
+				"drift-lock.json not found but artifacts have package_deps; "
+				"run 'drift prepare' first"
+			)
 		try:
 			existing_lock = read_lock(lock_path)
 		except ValueError as e:
@@ -1232,7 +1129,6 @@ def _run_impl(args: argparse.Namespace) -> int:
 				art,
 				package_roots=[staged_pkg_root] + package_roots,
 				lock_path=lock_path,
-				update_lock=args.update_lock,
 				existing_lock=existing_lock,
 			)
 			resolved_map[art.name] = resolved
@@ -1259,10 +1155,20 @@ def _run_impl(args: argparse.Namespace) -> int:
 				dep_namespace_map=dep_namespace_map,
 			)
 
-		# Write lock file after all artifacts are resolved and deployed.
-		lock_artifacts = {name: deps for name, deps in resolved_map.items() if deps}
-		if lock_artifacts:
-			write_lock(lock_path, lock_artifacts)
+		# ── Publish author profile ──
+		# If the manifest declares project.author_profile, publish exactly
+		# that file into the destination root.
+		if not args.dry_run and args.dest and manifest.project.author_profile:
+			ap = manifest_dir / manifest.project.author_profile
+			if not ap.exists():
+				raise DeployError(
+					f"project.author_profile declared as '{manifest.project.author_profile}' "
+					f"but file not found: {ap}"
+				)
+			pub_ap = args.dest / ap.name
+			shutil.copy2(str(ap), str(pub_ap))
+			print(f"  published author profile: {pub_ap}")
+
 	finally:
 		# Clean up staging directory.
 		shutil.rmtree(str(stage_dir), ignore_errors=True)
