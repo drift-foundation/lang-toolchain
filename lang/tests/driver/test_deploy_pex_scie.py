@@ -79,12 +79,6 @@ def _public_key_bytes(pub) -> bytes:
 	return pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 
 
-def _gen_keys() -> tuple[Ed25519PrivateKey, str, str]:
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = _public_key_bytes(priv.public_key())
-	return priv, compute_ed25519_kid(pub_raw), _b64(pub_raw)
-
-
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[str]) -> None:
 	obj = {
 		"format": "drift-trust",
@@ -107,14 +101,34 @@ def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: b
 	_write_file(sidecar, json.dumps(obj, separators=(",", ":"), sort_keys=True))
 
 
-def _empty_stdlib_root(tmp_path: Path) -> Path:
-	root = tmp_path / "_empty_stdlib"
-	root.mkdir(parents=True, exist_ok=True)
-	return root
+# ---------------------------------------------------------------------------
+# Module-scoped fixtures: build the deploy tree and scie cache ONCE per
+# worker process instead of per-test.  Each PEX deploy test creates ~920 MB
+# of temp files (dist + scie extraction cache).  With 5 tests, the old
+# per-test approach accumulated ~4.6 GB in page cache, exhausting RAM on
+# 14–16 GB machines under ASAN.
+# ---------------------------------------------------------------------------
 
 
-def _build_std_package(tmp_path: Path) -> Path:
-	build_dir = tmp_path / "_pkg_build"
+@pytest.fixture(scope="module")
+def _shared_deploy_dist(tmp_path_factory: pytest.TempPathFactory) -> Path:
+	"""Build PEX + compiler bundle + signed stdlib once for the module."""
+	base = tmp_path_factory.mktemp("pex_shared")
+	dist = base / "dist"
+	dist.mkdir(parents=True, exist_ok=True)
+	build_driftc_pex(ROOT, dist)
+	build_drift_pex(ROOT, dist)
+	bundle_compiler(ROOT, dist)
+	bundle_runtime_archives(ROOT, dist)
+	bundle_docs_and_examples(dist)
+
+	# Build and sign a test stdlib package.
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = _public_key_bytes(priv.public_key())
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = _b64(pub_raw)
+
+	build_dir = base / "_pkg_build"
 	module_dir = build_dir / "std" / "testlib"
 	_write_file(
 		module_dir / "testlib.drift",
@@ -125,12 +139,14 @@ export { ANSWER };
 pub const ANSWER: Int = 42;
 """,
 	)
-	pkg_path = tmp_path / "dist" / "lib" / "stdlib" / "std.dmp"
+	empty_stdlib = base / "_empty_stdlib"
+	empty_stdlib.mkdir(parents=True, exist_ok=True)
+	pkg_path = dist / "lib" / "stdlib" / "std.dmp"
 	pkg_path.parent.mkdir(parents=True, exist_ok=True)
 	rc = driftc_main([
 		"--dev",
 		"-M", str(build_dir),
-		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
+		"--stdlib-root", str(empty_stdlib),
 		str(module_dir / "testlib.drift"),
 		"--package-id", "std",
 		"--package-version", "0.0.0-test",
@@ -138,60 +154,27 @@ pub const ANSWER: Int = 42;
 		"--emit-package", str(pkg_path),
 	])
 	assert rc == 0, "failed to build std package"
-	return pkg_path
-
-
-def _build_pex_binary(dist: Path) -> None:
-	"""Build a PEX --scie eager executable at dist/bin/driftc."""
-	build_driftc_pex(ROOT, dist)
-
-
-def _build_deploy_pex_binary(dist: Path) -> None:
-	"""Build a PEX --scie eager executable at dist/bin/drift."""
-	build_drift_pex(ROOT, dist)
-
-
-def _bundle_compiler_sources(dist: Path) -> None:
-	"""Bundle compiler sources, runtime archives, and docs into dist."""
-	bundle_compiler(ROOT, dist)
-	bundle_runtime_archives(ROOT, dist)
-	bundle_docs_and_examples(dist)
-
-
-def _setup_deploy_tree(tmp_path: Path) -> Path:
-	"""Build PEX + bundle into a simulated deploy tree."""
-	dist = tmp_path / "dist"
-	dist.mkdir(parents=True, exist_ok=True)
-	_build_pex_binary(dist)
-	_build_deploy_pex_binary(dist)
-	_bundle_compiler_sources(dist)
-	return dist
-
-
-def _setup_signed_stdlib(tmp_path: Path, dist: Path) -> tuple[str, str]:
-	"""Build a test stdlib package, sign it, install into dist, return (kid, pub_b64)."""
-	priv, kid, pub_b64 = _gen_keys()
-	pkg_path = _build_std_package(tmp_path)
 	pkg_bytes = pkg_path.read_bytes()
-	# Install package
-	stdlib_dir = dist / "lib" / "stdlib"
-	stdlib_dir.mkdir(parents=True, exist_ok=True)
-	(stdlib_dir / "std.dmp").write_bytes(pkg_bytes)
 	_write_sig_sidecar(
-		stdlib_dir / "std.dmp",
+		pkg_path,
 		pkg_bytes=pkg_bytes,
 		kid=kid,
 		sig_raw=priv.sign(pkg_bytes),
 		pub_b64=pub_b64,
 	)
-	# Install core trust store
 	_write_trust_store(
 		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust.json",
 		kid=kid,
 		pub_b64=pub_b64,
 		namespaces=["std.*", "lang.*", "drift.*"],
 	)
-	return kid, pub_b64
+	return dist
+
+
+@pytest.fixture(scope="module")
+def _shared_scie_base(pex_scie_base: Path) -> Path:
+	"""Alias the session-scoped scie cache for module-scoped use."""
+	return pex_scie_base
 
 
 def _write_consumer(tmp_path: Path) -> Path:
@@ -210,14 +193,20 @@ fn main() nothrow -> Int {
 	return src
 
 
+def _pex_run_env(scie_base: Path) -> dict[str, str]:
+	"""Clean env for PEX subprocess: no ambient Python, shared scie cache."""
+	env = dict(os.environ)
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+		env.pop(key, None)
+	env["SCIE_BASE"] = str(scie_base)
+	return env
+
+
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_binary_is_not_a_shell_script(tmp_path: Path) -> None:
+def test_pex_binary_is_not_a_shell_script(_shared_deploy_dist: Path) -> None:
 	"""Verify bin/driftc is a native executable, not a bash wrapper."""
-	dist = tmp_path / "dist"
-	dist.mkdir(parents=True, exist_ok=True)
-	_build_pex_binary(dist)
-	driftc = dist / "bin" / "driftc"
+	driftc = _shared_deploy_dist / "bin" / "driftc"
 	assert driftc.exists()
 	assert os.access(str(driftc), os.X_OK)
 	# Read the first 4 bytes — should be ELF magic or a #! shebang for the
@@ -229,7 +218,9 @@ def test_pex_binary_is_not_a_shell_script(tmp_path: Path) -> None:
 
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_deployed_self_sufficient_no_ambient_python(tmp_path: Path) -> None:
+def test_pex_deployed_self_sufficient_no_ambient_python(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
 	"""
 	Deployed PEX executable works without ambient Python packages.
 
@@ -237,21 +228,14 @@ def test_pex_deployed_self_sufficient_no_ambient_python(tmp_path: Path) -> None:
 	and third-party deps (lark, llvmlite, cryptography).  No pip-installed
 	packages on the host should be required.
 	"""
-	dist = _setup_deploy_tree(tmp_path)
-	_setup_signed_stdlib(tmp_path, dist)
 	src = _write_consumer(tmp_path)
 	out_ir = tmp_path / "out.ll"
 
-	# Run with a clean environment — strip PYTHONPATH and related vars to
-	# ensure the PEX is truly self-contained.
-	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
-		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env = _pex_run_env(_shared_scie_base)
 
 	result = subprocess.run(
 		[
-			str(dist / "bin" / "driftc"),
+			str(_shared_deploy_dist / "bin" / "driftc"),
 			"-M", str(src.parent),
 			str(src),
 			"--target-word-bits", str(host_word_bits()),
@@ -270,15 +254,20 @@ def test_pex_deployed_self_sufficient_no_ambient_python(tmp_path: Path) -> None:
 
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_deployed_readonly_install_tree(tmp_path: Path) -> None:
+def test_pex_deployed_readonly_install_tree(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
 	"""
 	Deployed PEX works when the install tree is read-only.
 
 	The scie extraction cache is outside the install tree (in $HOME or
 	$SCIE_BASE).  No writes should touch lib/runtime/ or other lib/ dirs.
+
+	Uses a private copy of the deploy tree because it chmod's runtime dirs.
 	"""
-	dist = _setup_deploy_tree(tmp_path)
-	_setup_signed_stdlib(tmp_path, dist)
+	dist = tmp_path / "dist"
+	shutil.copytree(str(_shared_deploy_dist), str(dist))
+
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
@@ -299,10 +288,7 @@ fn main() nothrow -> Int {
 		else:
 			path.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
-	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
-		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env = _pex_run_env(_shared_scie_base)
 
 	result = subprocess.run(
 		[
@@ -325,23 +311,20 @@ fn main() nothrow -> Int {
 
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_deployed_signed_stdlib_package_verification(tmp_path: Path) -> None:
+def test_pex_deployed_signed_stdlib_package_verification(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
 	"""
 	Signed stdlib package is loaded and verified by the PEX-deployed compiler.
 	"""
-	dist = _setup_deploy_tree(tmp_path)
-	_setup_signed_stdlib(tmp_path, dist)
 	src = _write_consumer(tmp_path)
 	out_ir = tmp_path / "out.ll"
 
-	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
-		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env = _pex_run_env(_shared_scie_base)
 
 	result = subprocess.run(
 		[
-			str(dist / "bin" / "driftc"),
+			str(_shared_deploy_dist / "bin" / "driftc"),
 			"-M", str(src.parent),
 			str(src),
 			"--target-word-bits", str(host_word_bits()),
@@ -363,15 +346,15 @@ def test_pex_deployed_signed_stdlib_package_verification(tmp_path: Path) -> None
 
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_deployed_runtime_archive_link(tmp_path: Path) -> None:
+def test_pex_deployed_runtime_archive_link(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
 	"""
 	Runtime archive linking works from the PEX-deployed toolchain.
 
 	Compiles a trivial program to a linked binary (not just IR) to verify
 	that the deployed pre-built runtime archives are found and usable.
 	"""
-	dist = _setup_deploy_tree(tmp_path)
-	_setup_signed_stdlib(tmp_path, dist)
 	src = tmp_path / "main.drift"
 	_write_file(
 		src,
@@ -384,14 +367,11 @@ fn main() nothrow -> Int {
 	)
 	out = tmp_path / "test_bin"
 
-	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
-		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env = _pex_run_env(_shared_scie_base)
 
 	result = subprocess.run(
 		[
-			str(dist / "bin" / "driftc"),
+			str(_shared_deploy_dist / "bin" / "driftc"),
 			"-M", str(tmp_path),
 			str(src),
 			"-o", str(out),
@@ -412,17 +392,16 @@ fn main() nothrow -> Int {
 
 @_skip_no_pex
 @_skip_deploy_disabled
-def test_pex_entry_resolves_deploy_root_through_symlink(tmp_path: Path) -> None:
+def test_pex_entry_resolves_deploy_root_through_symlink(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
 	"""
 	The PEX entry point resolves the deploy root correctly when invoked
 	through a symlink (as happens with <dest>/current -> drift-VERSION/).
 	"""
-	dist = _setup_deploy_tree(tmp_path)
-	_setup_signed_stdlib(tmp_path, dist)
-
 	# Create a symlink mimicking the current -> version dir layout.
 	link = tmp_path / "current"
-	link.symlink_to(dist)
+	link.symlink_to(_shared_deploy_dist)
 
 	src = tmp_path / "main.drift"
 	_write_file(
@@ -436,10 +415,7 @@ fn main() nothrow -> Int {
 	)
 	out_ir = tmp_path / "out.ll"
 
-	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
-		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env = _pex_run_env(_shared_scie_base)
 
 	result = subprocess.run(
 		[

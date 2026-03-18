@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-17
+- **Reduced deploy-driver resource retention under ASAN/xdist test runs (0.27.75, ABI 6)**:
+  Fixed a driver-suite stability regression where deploy/PEX tests retained
+  multiple full staged distributions and scie extraction caches across the
+  pytest session, causing severe machine slowdown under `DRIFT_ASAN=1`.
+  - Problem:
+    - deploy/PEX driver tests were repeatedly creating full deploy trees and
+      independent scie extraction caches under `tmp_path`
+    - with xdist workers and ASAN overhead, these retained artifacts consumed
+      most of system memory and page cache, causing near-total interactivity
+      loss despite low CPU usage
+    - the issue was resource retention in test infrastructure, not leaked
+      processes, threads, file descriptors, or `/tmp` exhaustion
+  - Fix:
+    - converted repeated per-test deploy staging in the PEX deploy suite into
+      a shared module-scoped deployed distribution fixture
+    - added a shared session-scoped scie base fixture so tests reuse extraction
+      caches instead of creating independent copies
+    - updated related readonly/self-contained deploy tests to consume the
+      shared base rather than rebuilding per-test state
+  - Result:
+    - substantially reduced peak RSS and temp-file count during full driver
+      runs while preserving test pass count and wall-clock time
+  - Versioning:
+    - compiler version is `0.27.75`
+    - ABI remains `6` because this changes test/deploy harness behavior only,
+      not a compiler/runtime boundary shape
+
 - **Tightened explicit `--dep` package-root consumption and self-package pin handling (0.27.74, ABI 6)**:
   Followed up the `0.27.72` explicit-only `--package-root` change by fixing
   self-package pin diagnostics and aligning driver/package-root test helpers

@@ -28,7 +28,9 @@ def _write_file(path: Path, text: str) -> None:
 
 
 @_skip_no_pex
-def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(tmp_path: Path) -> None:
+def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(
+	tmp_path: Path, pex_scie_base: Path,
+) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
 	clang = shutil.which("clang")
@@ -81,7 +83,7 @@ fn main() nothrow -> Int {
 	run_env = dict(os.environ)
 	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
 		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env["SCIE_BASE"] = str(pex_scie_base)
 	result = subprocess.run(
 		[
 			str(dist / "bin" / "driftc"),

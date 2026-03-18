@@ -126,7 +126,9 @@ fn main() nothrow -> Int {
 
 
 @_skip_no_pex
-def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) -> None:
+def test_deployed_wrapper_uses_bundled_python_dependencies_only(
+	tmp_path: Path, pex_scie_base: Path,
+) -> None:
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
 	clang = shutil.which("clang")
@@ -158,7 +160,7 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(tmp_path: Path) 
 	run_env = dict(os.environ)
 	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
 		run_env.pop(key, None)
-	run_env["HOME"] = str(tmp_path / "home")
+	run_env["SCIE_BASE"] = str(pex_scie_base)
 	result = subprocess.run(
 		[
 			str(dist / "bin" / "driftc"),
