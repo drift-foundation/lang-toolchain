@@ -80,6 +80,8 @@ fn main() nothrow -> Int {
 				str(tmp_path),
 				"--package-root",
 				str(tmp_path),
+				"--dep",
+				"test.pkg@0.0.0",
 				"--allow-unsigned-from",
 				str(tmp_path),
 				str(tmp_path / "main.drift"),

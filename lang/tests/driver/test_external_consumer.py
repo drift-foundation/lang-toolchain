@@ -222,10 +222,15 @@ def _compile_consumer(
 	pkg: _SignedPkg,
 	source: str,
 	entry: str | None = None,
+	deps: list[str] | None = None,
 ) -> tuple[int, dict, str, str]:
 	"""Compile consumer source against a signed package.
 
 	Returns (rc, json_payload, diagnostic_messages, stderr).
+	``deps`` is a list of ``"PKG@VERSION"`` strings passed as ``--dep``
+	arguments.  Callers MUST supply deps for every package loaded via
+	``--package-root``; the compiler requires explicit ``--dep`` pins
+	for all discovered packages.
 	"""
 	consumer = tmp_path / "consumer"
 	src_name = entry.split("::")[0] if entry else "main"
@@ -240,6 +245,8 @@ def _compile_consumer(
 		"--dev-core-trust-store", str(pkg.core_trust_path),
 		"--trust-store", str(pkg.trust_path),
 	]
+	for dep in (deps or []):
+		argv += ["--dep", dep]
 	if entry:
 		argv += ["--entry", entry]
 	argv += [
@@ -272,6 +279,7 @@ def test_ext_entry_plumbing(
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
 		entry="runner::main",
+		deps=["acme.util@0.0.0"],
 		source="""\
 module runner;
 
@@ -299,6 +307,7 @@ def test_ext_variant_ctor_inference(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -334,6 +343,7 @@ def test_ext_tombstone_exhaustiveness(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -369,6 +379,7 @@ def test_ext_boundary_nothrow_direct(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -396,6 +407,7 @@ def test_ext_boundary_nothrow_wrapper(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -425,6 +437,7 @@ def test_ext_module_qualified_ctor(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -453,6 +466,7 @@ def test_ext_template_fingerprint_clean(
 
 	rc, payload, messages, stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -542,6 +556,7 @@ def test_ext_package_consumer_e2e(
 		"-M", str(consumer),
 		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 		"--package-root", str(pkg.pkg_root),
+		"--dep", "acme.util@0.0.0",
 		"--dev",
 		"--dev-core-trust-store", str(pkg.core_trust_path),
 		"--trust-store", str(pkg.trust_path),
@@ -700,6 +715,8 @@ fn main() nothrow -> Int {
 		"-M", str(consumer),
 		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 		"--package-root", str(pkg.pkg_root),
+		"--dep", "acme.util@0.0.0",
+		"--dep", "std@0.0.0",
 		"--dev",
 		"--dev-core-trust-store", str(pkg.core_trust_path),
 		"--trust-store", str(pkg.trust_path),
@@ -786,6 +803,7 @@ def test_ext_unsigned_package_rejected(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -816,6 +834,7 @@ def test_ext_tampered_package_rejected(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.util@0.0.0"],
 		source="""\
 module main;
 
@@ -894,6 +913,7 @@ fn main() nothrow -> Int {
 		"-M", str(consumer),
 		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 		"--package-root", str(pkg_root),
+		"--dep", "std@0.0.0",
 		"--dev",
 		"--dev-core-trust-store", str(core_trust_path),
 		"--trust-store", str(trust_path),
@@ -945,6 +965,7 @@ fn main() nothrow -> Int {
 		"-M", str(consumer),
 		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 		"--package-root", str(pkg_root),
+		"--dep", "std@0.0.0",
 		"--allow-unsigned-from", str(pkg_root),
 		"--dev",
 		"--dev-core-trust-store", str(core_trust_path),
@@ -1044,6 +1065,7 @@ def test_ext_nonlib_method_visibility(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.vis@0.0.0"],
 		source="""\
 module main;
 
@@ -1071,6 +1093,7 @@ def test_ext_nonlib_private_method_rejected(
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.vis@0.0.0"],
 		source="""\
 module main;
 
@@ -1110,6 +1133,7 @@ def test_convergence_parity_pass1_state(
 		rc, payload, messages, _stderr = _compile_consumer(
 			tmp_path, capsys, pkg=pkg,
 			entry="runner::main",
+			deps=["acme.util@0.0.0"],
 			source="""\
 module runner;
 
@@ -1205,6 +1229,7 @@ def test_ext_sig_preserves_linked_typeids(
 
 	rc, payload, messages, stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
+		deps=["acme.generic@0.0.0"],
 		source="""\
 module main;
 
@@ -1330,6 +1355,7 @@ fn main() nothrow -> Int {
 			"-M", str(src_dir),
 			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 			"--package-root", str(tmp_path / "pkgroot"),
+			"--dep", "acme.other@0.0.0",
 			"--package-id", "acme.util",
 			"--dev",
 			"--dev-core-trust-store", str(core_trust),
@@ -1398,6 +1424,7 @@ fn main() nothrow -> Int {
 			"-M", str(src_dir),
 			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 			"--package-root", str(tmp_path / "pkgroot"),
+			"--dep", "acme.util@0.0.0",
 			"--package-id", "acme.util",
 			"--dev",
 			"--dev-core-trust-store", str(core_trust),
@@ -1511,6 +1538,8 @@ fn main() nothrow -> Int {
 			"-M", str(src_dir),
 			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 			"--package-root", str(tmp_path / "pkgroot"),
+			"--dep", "acme.other@0.0.0",
+			"--dep", "acme.local@0.0.0",
 			"--package-id", "acme.local",
 			"--dev",
 			"--dev-core-trust-store", str(core_trust),
@@ -1577,6 +1606,7 @@ fn main() nothrow -> Int {
 			"-M", str(src_dir),
 			"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
 			"--package-root", str(tmp_path / "pkgroot"),
+			"--dep", "acme.util@0.0.0",
 			"--package-id", "acme.util",
 			"--dev",
 			"--dev-core-trust-store", str(core_trust),

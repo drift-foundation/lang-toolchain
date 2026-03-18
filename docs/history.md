@@ -1,6 +1,30 @@
 # Drift development history
 
 ## 2026-03-17
+- **Tightened explicit `--dep` package-root consumption and self-package pin handling (0.27.74, ABI 6)**:
+  Followed up the `0.27.72` explicit-only `--package-root` change by fixing
+  self-package pin diagnostics and aligning driver/package-root test helpers
+  with the new contract.
+  - Problem:
+    - tests and helper layers still had many `--package-root` compiler
+      invocations without explicit `--dep` pins, so they failed early at
+      argument validation instead of reaching their real assertions
+    - when compiling a package from source with `--package-id`, a matching
+      `--dep` pin for that same package could be reported as “not found under
+      package roots” even though self-exclusion intentionally filtered that
+      package out of discovery
+  - Fix:
+    - compiler package-root validation now excludes self-package pins from the
+      unmatched-pin diagnostic paths because self-exclusion is intentional
+    - driver/external-consumer/package-root test invocations now pass explicit
+      `--dep PKG@VERSION` entries alongside every `--package-root` usage
+    - helper docstrings/comments were tightened so package-root deps are no
+      longer described as optional where the compiler requires them
+  - Versioning:
+    - compiler version is `0.27.74`
+    - ABI remains `6` because this changes compiler diagnostics and test/helper
+      invocation contracts only, not a compiler/runtime boundary shape
+
 - **Moved deploy orchestration to Python and removed shell deploy entrypoints (0.27.73, ABI 6)**:
   Refactored compiler deploy from a shell-script pipeline into a Python-owned
   orchestration path with one implementation language and one entrypoint.

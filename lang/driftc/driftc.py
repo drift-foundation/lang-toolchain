@@ -7367,7 +7367,10 @@ def main(argv: list[str] | None = None) -> int:
 				# else: package_id matched allowlist but wasn't in _version_pins
 				# — should not happen since _dep_allowlist == _version_pins.keys()
 			# Check for pins that didn't match any discovered package.
+			# Exclude self-package — it was intentionally filtered by self-exclusion.
 			_unmatched_pins = set(_version_pins.keys()) - _used_pins
+			if _self_pkg_id:
+				_unmatched_pins.discard(_self_pkg_id)
 			if _unmatched_pins:
 				for _upin in sorted(_unmatched_pins):
 					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
@@ -7378,14 +7381,18 @@ def main(argv: list[str] | None = None) -> int:
 				return 1
 			loaded_pkgs = _filtered
 		else:
-			# No packages loaded — all pins unmatched.
-			for _upin in sorted(_version_pins.keys()):
-				msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-				else:
-					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-			return 1
+			# No packages loaded — check for unmatched non-self pins.
+			_all_unmatched = set(_version_pins.keys())
+			if _self_pkg_id:
+				_all_unmatched.discard(_self_pkg_id)
+			if _all_unmatched:
+				for _upin in sorted(_all_unmatched):
+					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
 
 		# Enforce "single version per package id per build".
 		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)

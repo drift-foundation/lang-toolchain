@@ -141,6 +141,8 @@ fn main() nothrow -> Int{
 					str(tmp_path),
 					"--package-root",
 					str(tmp_path),
+					"--dep",
+					"test.pkg@0.0.0",
 					"--require-signatures",
 					"--trust-store",
 					str(trust_path),
