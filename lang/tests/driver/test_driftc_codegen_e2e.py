@@ -184,7 +184,8 @@ fn drift_main() nothrow -> Int {
 		root_vt=False,
 	)
 	assert checked.diagnostics == []
-	vtable_lines = [line for line in ir.splitlines() if "getelementptr inbounds i8*, i8**" in line]
+	# With opaque pointers the GEP pattern is: getelementptr inbounds ptr, ptr %vtable, i32 N
+	vtable_lines = [line for line in ir.splitlines() if "getelementptr inbounds ptr, ptr" in line]
 	assert any("i32 1" in line for line in vtable_lines)
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 42
@@ -575,20 +576,19 @@ fn drift_main() nothrow -> Int {
 	)
 	assert checked.diagnostics == []
 	main_ir = _extract_llvm_function(ir, "drift_main")
+	# With opaque pointers: bitcasts are eliminated, typed pointers become ptr.
 	needles = [
 		"extractvalue %DriftIface",
-		"bitcast i8*",
-		"getelementptr inbounds i8*, i8**",
-		"load i8*",
-		"bitcast i8*",
+		"getelementptr inbounds ptr, ptr",
+		"load ptr",
 		"call",
 	]
 	pos = -1
 	for needle in needles:
 		next_pos = main_ir.find(needle, pos + 1)
-		assert next_pos != -1
+		assert next_pos != -1, f"needle {needle!r} not found in main_ir"
 		pos = next_pos
-	assert "(i8* " in main_ir
+	assert "(ptr " in main_ir
 	assert "call i64 @add1" not in main_ir
 	exit_code = _run_ir_with_clang(ir)
 	assert exit_code == 42
@@ -660,20 +660,19 @@ fn drift_main() nothrow -> Int {
 		root_vt=False,
 	)
 	assert checked.diagnostics == []
+	# With opaque pointers: bitcasts are eliminated, typed pointers become ptr.
 	needles = [
 		"extractvalue %DriftIface",
-		"bitcast i8*",
-		"getelementptr inbounds i8*, i8**",
-		"load i8*",
-		"bitcast i8*",
+		"getelementptr inbounds ptr, ptr",
+		"load ptr",
 		"call",
 	]
 	pos = -1
 	for needle in needles:
 		next_pos = ir.find(needle, pos + 1)
-		assert next_pos != -1
+		assert next_pos != -1, f"needle {needle!r} not found in ir"
 		pos = next_pos
-	assert "(i8* " in ir
+	assert "(ptr " in ir
 	apply_ir = _extract_llvm_function(ir, "apply")
 	assert "call i64 @add1" not in apply_ir
 	exit_code = _run_ir_with_clang(ir)

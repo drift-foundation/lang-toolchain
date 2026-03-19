@@ -106,7 +106,7 @@ def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 	)
 	assert not checked.diagnostics, checked.diagnostics
 	assert ir
-	assert "declare i64 @drift_random_fill(i8*, i64)" in ir, "random_fill runtime helper declaration missing from IR"
+	assert "declare i64 @drift_random_fill(ptr, i64)" in ir, "random_fill runtime helper declaration missing from IR"
 
 
 def test_ir_declares_nodelay_runtime_helpers(tmp_path: Path) -> None:

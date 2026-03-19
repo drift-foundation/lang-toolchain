@@ -1671,7 +1671,7 @@ fn main() nothrow -> Int{
 	# body that keeps the internal calling convention.
 	word_bits = host_word_bits()
 	word_ty = f"i{word_bits}"
-	assert f"define {{ {word_ty}, %DriftError* }} @\"lib::add\"" in ir
+	assert f"define {{ {word_ty}, ptr }} @\"lib::add\"" in ir
 	assert f"define {word_ty} @\"lib::add__impl\"" in ir
 	assert f"define {word_ty} @lib::unused" not in ir
 

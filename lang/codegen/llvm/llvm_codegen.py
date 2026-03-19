@@ -187,7 +187,131 @@ from lang.driftc.core.xxhash64 import hash64
 
 # ABI type names
 DRIFT_ERROR_TYPE = "%DriftError"
-DRIFT_ERROR_PTR = f"{DRIFT_ERROR_TYPE}*"
+DRIFT_ERROR_PTR = "ptr"
+
+
+def _is_ptr_type(ty: str | None) -> bool:
+	"""Check whether an LLVM type string denotes a pointer type."""
+	if ty is None:
+		return False
+	return ty == "ptr" or ty.endswith("*")
+
+
+# ---------------------------------------------------------------------------
+# Typed-pointer → opaque-pointer normalisation (tactical post-processor)
+# ---------------------------------------------------------------------------
+# LLVM 17+ requires opaque pointers (`ptr`).  The internal codegen is
+# partially migrated: type-mapping functions (_llvm_type_for_typeid,
+# _fn_ptr_lltype, etc.) return "ptr" for pointer types, and key emission
+# sites (PtrFromRef, PtrAsMutRef, zero-value, endswith checks) are
+# opaque-pointer-native.  However, ~200 declaration/instruction sites
+# still emit typed-pointer syntax (i8*, %Struct*, etc.).
+#
+# This regex-based post-processor rewrites the remaining typed-pointer
+# text to opaque form, and eliminates no-op ptr-to-ptr bitcasts.  The
+# approach is safe because LLVM IR's grammar is line-oriented and the
+# typed-pointer patterns are unambiguous.  A full emitter-native
+# migration would eliminate this pass but is not yet complete.
+
+_TYPED_PTR_RE = re.compile(
+	r'(?:'
+	# 1. `i8**`, `%Foo**`, etc.  (pointer-to-pointer)
+	r'(?:i\d+|%[\w.]+)\*\*'
+	r'|'
+	# 2. `i8*`, `%Foo*`  (single pointer — must come after ** rule)
+	r'(?:i\d+|%[\w.]+)\*'
+	r'|'
+	# 3. function-pointer types: `void (...)* `, `i64 (...)* `
+	#    We match the closing `)* ` or `)*,` or `)*)`
+	r'(?:void|i\d+|%[\w.]+|double|float)\s*\([^)]*\)\*'
+	r')'
+)
+
+_BITCAST_PTR_PTR_RE = re.compile(
+	r'bitcast\s*\(([^)]*?)\*\s+(@[\w."]+)\s+to\s+ptr\)'
+)
+
+# Instruction-level no-op bitcasts: `%x = bitcast ptr %y to ptr`
+# After typed-pointer rewriting, some bitcasts collapse to ptr→ptr.
+# These are invalid in opaque-pointer mode. We rewrite them as
+# move aliases by dropping the instruction and forwarding uses.
+# Matches both local (%name) and global (@name) no-op bitcasts,
+# with optional trailing debug metadata (`, !dbg !NNN`).
+_NOOP_BITCAST_RE = re.compile(
+	r"^(  )([%@]\S+) = bitcast ptr ([%@]\S+) to ptr(?:,.*)?$"
+)
+
+_MEMCPY_OLD = "llvm.memcpy.p0i8.p0i8.i64"
+_MEMCPY_NEW = "llvm.memcpy.p0.p0.i64"
+
+_GLOBAL_CTORS_OLD_ELEM = re.compile(r'\{\s*i32\s*,\s*void\s*\(\)\*\s*,\s*i8\*\s*\}')
+
+
+def _normalize_opaque_pointers(ir_text: str) -> str:
+	"""Rewrite typed-pointer syntax in textual LLVM IR to opaque ``ptr``."""
+	out_lines: list[str] = []
+	for line in ir_text.split("\n"):
+		stripped = line.strip()
+		# Skip metadata, comments, string constant data, and source_filename.
+		if stripped.startswith(";") or stripped.startswith("!") or stripped.startswith("source_filename"):
+			out_lines.append(line)
+			continue
+		# Skip string constant data lines (c"..." or zeroinitializer).
+		if "= private" in line and (" c\"" in line or " zeroinitializer" in line):
+			out_lines.append(line)
+			continue
+		# Rewrite llvm.memcpy intrinsic name.
+		line = line.replace(_MEMCPY_OLD, _MEMCPY_NEW)
+		# Fix ptr* (which arises when emit code uses f"{ty}*" with ty already "ptr").
+		while "ptr*" in line:
+			line = line.replace("ptr*", "ptr")
+		# Eliminate pointer-to-pointer bitcasts in constant expressions:
+		#   `ptr bitcast (TYPE* @name to ptr)` → `ptr @name`
+		line = _BITCAST_PTR_PTR_RE.sub(r'\2', line)
+		# Rewrite all typed pointer patterns to `ptr`.
+		line = _TYPED_PTR_RE.sub("ptr", line)
+		out_lines.append(line)
+
+	# Second pass: eliminate no-op `%x = bitcast ptr %y to ptr` instructions.
+	# SSA names are function-scoped, so alias maps must reset at function boundaries.
+	final_lines: list[str] = []
+	aliases: dict[str, str] = {}
+	pending: list[str] = []  # lines in current function awaiting alias rewrite
+
+	def _flush_pending() -> None:
+		nonlocal pending, aliases
+		if not aliases:
+			final_lines.extend(pending)
+		else:
+			sorted_keys = sorted(aliases.keys(), key=len, reverse=True)
+			pattern = re.compile(
+				r"(" + "|".join(re.escape(k) for k in sorted_keys) + r")(?!\w)"
+			)
+			for line in pending:
+				final_lines.append(pattern.sub(lambda m: aliases[m.group(1)], line))
+		pending = []
+		aliases = {}
+
+	for line in out_lines:
+		stripped = line.strip()
+		# Function boundary: flush and reset.
+		if stripped == "}" or stripped.startswith("define "):
+			_flush_pending()
+			final_lines.append(line)
+			continue
+		m = _NOOP_BITCAST_RE.match(line)
+		if m:
+			dest, src = m.group(2), m.group(3)
+			while src in aliases:
+				src = aliases[src]
+			aliases[dest] = src
+			continue  # drop the no-op bitcast line
+		pending.append(line)
+
+	_flush_pending()
+	return "\n".join(final_lines)
+
+
 FNRESULT_INT_ERROR = "%FnResult_Int_Error"
 DRIFT_INT_TAG = "drift.int"
 DRIFT_UINT_TAG = "drift.uint"
@@ -346,14 +470,14 @@ def _extern_c_llvm_type(ty_id: TypeId, type_table: Optional[TypeTable], mod: "Ll
 			if td.name in _MAP:
 				return _MAP[td.name]
 		if td.kind is TypeKind.RAW_PTR:
-			return "i8*"
+			return "ptr"
 		if td.kind is TypeKind.REF:
-			return "i8*"
+			return "ptr"
 		# FORWARD_NOMINAL arises before full type normalization (e.g. RawPtr<T>).
 		if td.kind is TypeKind.FORWARD_NOMINAL and td.name == "RawPtr":
-			return "i8*"
+			return "ptr"
 		if td.kind is TypeKind.FORWARD_NOMINAL and td.name == "Ref":
-			return "i8*"
+			return "ptr"
 	# Fallback: pointer-sized integer.
 	return DRIFT_INT_TYPE
 
@@ -773,14 +897,14 @@ class LlvmModuleBuilder:
 		inline_storage = f"[{DRIFT_IFACE_INLINE_WORDS} x {self._llty(DRIFT_USIZE_TYPE)}]"
 		self.type_decls.extend(
 			[
-				f"{DRIFT_STRING_TYPE} = type {{ {self._llty(DRIFT_INT_TYPE)}, i8* }}",
-				f"{DRIFT_ERROR_TYPE} = type {{ {DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, i8*, {self._llty(DRIFT_USIZE_TYPE)}, i8*, {self._llty(DRIFT_USIZE_TYPE)} }}",
-				f"{DRIFT_IFACE_TYPE} = type {{ i8*, i8*, {inline_storage}, i8, [7 x i8] }}",
-				f"{DRIFT_CALLBACK_VTABLE_TYPE} = type [2 x i8*]",
+				f"{DRIFT_STRING_TYPE} = type {{ {self._llty(DRIFT_INT_TYPE)}, ptr }}",
+				f"{DRIFT_ERROR_TYPE} = type {{ {DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, ptr, {self._llty(DRIFT_USIZE_TYPE)}, ptr, {self._llty(DRIFT_USIZE_TYPE)} }}",
+				f"{DRIFT_IFACE_TYPE} = type {{ ptr, ptr, {inline_storage}, i8, [7 x i8] }}",
+				f"{DRIFT_CALLBACK_VTABLE_TYPE} = type [2 x ptr]",
 				f"{FNRESULT_INT_ERROR} = type {{ i1, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
-				f"%DriftArrayHeader = type {{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, i8* }}",
-				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ i8*, i8* }}",
+				f"%DriftArrayHeader = type {{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, ptr }}",
+				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ ptr, ptr }}",
 			]
 		)
 		self._compiler_provenance_payload = ""
@@ -1450,7 +1574,8 @@ class LlvmModuleBuilder:
 			lines.append(f"!llvm.module.flags = !{{!{dwarf_flag}, !{dbg_flag}}}")
 			lines.extend(self._dbg_metadata)
 		lines.append("")
-		return "\n".join(lines)
+		raw_ir = "\n".join(lines)
+		return _normalize_opaque_pointers(raw_ir)
 
 
 @dataclass(frozen=True)
@@ -2092,7 +2217,7 @@ class _FuncBuilder:
 		self.local_allocas[local] = alloca_id
 		self.value_map.setdefault(alloca_id, f"%{alloca_id}")
 		emit_llty = self._llty(llty)
-		self.value_types[self.value_map[alloca_id]] = f"{emit_llty}*"
+		self.value_types[self.value_map[alloca_id]] = "ptr"
 		self.lines.insert(self._entry_alloca_insert_index, f"  %{alloca_id} = alloca {emit_llty}")
 		self._entry_alloca_insert_index += 1
 		if llty == DRIFT_STRING_TYPE:
@@ -2862,7 +2987,7 @@ class _FuncBuilder:
 			self.aliases[instr.dest] = alloca_id
 			dest = self._map_value(instr.dest)
 			emit_llty = self._llty(llty)
-			self.value_types[dest] = f"{emit_llty}*"
+			self.value_types[dest] = "ptr"
 		elif isinstance(instr, AddrOfArrayElem):
 			array = self._map_value(instr.array)
 			index = self._map_value(instr.index)
@@ -2873,25 +2998,24 @@ class _FuncBuilder:
 			# Record an alias so later uses resolve to the computed pointer.
 			self.aliases[instr.dest] = ptr_tmp[1:] if ptr_tmp.startswith("%") else ptr_tmp
 			dest = self._map_value(instr.dest)
-			self.value_types[dest] = f"{emit_elem_llty}*"
+			self.value_types[dest] = "ptr"
 		elif isinstance(instr, AddrOfField):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: AddrOfField requires a TypeTable")
 			base_ptr = self._map_value(instr.base_ptr)
 			struct_llty = self._llvm_type_for_typeid(instr.struct_ty)
-			want_ptr_ty = f"{struct_llty}*"
 			have_ptr_ty = self.value_types.get(base_ptr)
-			if have_ptr_ty is not None and have_ptr_ty != want_ptr_ty:
+			if have_ptr_ty is not None and not _is_ptr_type(have_ptr_ty):
 				raise NotImplementedError(
-					f"LLVM codegen v1: AddrOfField base pointer type mismatch (have {have_ptr_ty}, expected {want_ptr_ty})"
+					f"LLVM codegen v1: AddrOfField base pointer type mismatch (have {have_ptr_ty}, expected ptr)"
 				)
 			field_llty = self._llvm_storage_type_for_typeid(instr.field_ty)
 			emit_field_llty = self._llty(field_llty)
 			dest = self._map_value(instr.dest)
 			self.lines.append(
-				f"  {dest} = getelementptr inbounds {struct_llty}, {want_ptr_ty} {base_ptr}, i32 0, i32 {instr.field_index}"
+				f"  {dest} = getelementptr inbounds {struct_llty}, ptr {base_ptr}, i32 0, i32 {instr.field_index}"
 			)
-			self.value_types[dest] = f"{emit_field_llty}*"
+			self.value_types[dest] = "ptr"
 		elif isinstance(instr, ConstructIface):
 			self._lower_construct_iface(instr)
 		elif isinstance(instr, ConstructIfaceValue):
@@ -3027,9 +3151,9 @@ class _FuncBuilder:
 						# Auto-load pointer-to-value for small scalar fields (Byte, Bool).
 						# This handles the case where MIR passes a VariantGetFieldAddr result
 						# (pointer) directly to ConstructVariant (which expects a value).
-						if have == f"{want_llty}*":
+						if _is_ptr_type(have):
 							loaded = self._fresh("autoload")
-							self.lines.append(f"  {loaded} = load {want_llty}, {want_llty}* {arg_val}")
+							self.lines.append(f"  {loaded} = load {want_llty}, ptr {arg_val}")
 							self.value_map[arg] = loaded
 							self.value_types[loaded] = want_llty
 							arg_val = loaded
@@ -3068,17 +3192,16 @@ class _FuncBuilder:
 			variant_llty = layout.llvm_ty
 			variant_ptr = self._map_value(instr.variant_ref)
 			have = self.value_types.get(variant_ptr)
-			expect_ptr = f"{variant_llty}*"
-			if have is not None and have != expect_ptr:
+			if have is not None and not _is_ptr_type(have):
 				raise NotImplementedError(
-					f"LLVM codegen v1: VariantTagRef value type mismatch (have {have}, expected {expect_ptr})"
+					f"LLVM codegen v1: VariantTagRef value type mismatch (have {have}, expected ptr)"
 				)
 			tag_ptr = self._fresh("tagptr")
 			self.lines.append(
-				f"  {tag_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {variant_ptr}, i32 0, i32 0"
+				f"  {tag_ptr} = getelementptr inbounds {variant_llty}, ptr {variant_ptr}, i32 0, i32 0"
 			)
 			raw = self._fresh("tag8")
-			self.lines.append(f"  {raw} = load i8, i8* {tag_ptr}")
+			self.lines.append(f"  {raw} = load i8, ptr {tag_ptr}")
 			dest = self._map_value(instr.dest)
 			self.lines.append(f"  {dest} = zext i8 {raw} to {self._llty(DRIFT_UINT_TYPE)}")
 			self.value_types[dest] = DRIFT_UINT_TYPE
@@ -3166,37 +3289,25 @@ class _FuncBuilder:
 				)
 			variant_ptr = self._map_value(instr.variant_ref)
 			have = self.value_types.get(variant_ptr)
-			expect_ptr = f"{variant_llty}*"
-			if have is not None and have != expect_ptr:
+			if have is not None and not _is_ptr_type(have):
 				raise NotImplementedError(
-					f"LLVM codegen v1: VariantGetFieldAddr value type mismatch (have {have}, expected {expect_ptr})"
+					f"LLVM codegen v1: VariantGetFieldAddr value type mismatch (have {have}, expected ptr)"
 				)
 			payload_words_ptr = self._fresh("payload_words")
 			self.lines.append(
-				f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, {variant_llty}* {variant_ptr}, i32 0, i32 2"
+				f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, ptr {variant_ptr}, i32 0, i32 2"
 			)
-			payload_i8 = self._fresh("payload_i8")
-			self.lines.append(
-				f"  {payload_i8} = bitcast [{layout.payload_words} x {layout.payload_cell_llty}]* {payload_words_ptr} to i8*"
-			)
-			payload_struct_ptr = self._fresh("payload_struct")
-			self.lines.append(
-				f"  {payload_struct_ptr} = bitcast i8* {payload_i8} to {arm_layout.payload_struct_llty}*"
-			)
+			# Opaque pointers: no bitcast needed for pointer-to-pointer casts
 			field_ptr = self._fresh("fieldptr")
 			self.lines.append(
-				f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, {arm_layout.payload_struct_llty}* {payload_struct_ptr}, i32 0, i32 {instr.field_index}"
+				f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, ptr {payload_words_ptr}, i32 0, i32 {instr.field_index}"
 			)
-			store_llty = arm_layout.field_storage_lltys[instr.field_index]
-			want_llty = arm_layout.field_lltys[instr.field_index]
+			# Opaque pointers: field_ptr is already ptr, no bitcast needed.
+			# Alias dest to field_ptr.
+			raw = field_ptr[1:] if field_ptr.startswith("%") else field_ptr
+			self.aliases[instr.dest] = raw
 			dest = self._map_value(instr.dest)
-			if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
-				# Bool references use storage form (i8*) in v1, matching Ref<Bool> ABI.
-				self.lines.append(f"  {dest} = bitcast i8* {field_ptr} to i8*")
-				self.value_types[dest] = "i8*"
-			else:
-				self.lines.append(f"  {dest} = bitcast {store_llty}* {field_ptr} to {self._llty(want_llty)}*")
-				self.value_types[dest] = f"{self._llty(want_llty)}*"
+			self.value_types[dest] = "ptr"
 		elif isinstance(instr, StructGetField):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: StructGetField requires a TypeTable")
@@ -3218,11 +3329,11 @@ class _FuncBuilder:
 					break
 			emit_struct_llty = self._llty(struct_llty)
 			param_llty = self.param_value_types.get(subject)
-			if param_llty and param_llty.endswith("*"):
+			if param_llty and _is_ptr_type(param_llty):
 				have_struct = param_llty
-			if have_struct == f"{emit_struct_llty}*":
+			if _is_ptr_type(have_struct):
 				tmp_struct = self._fresh("structval")
-				self.lines.append(f"  {tmp_struct} = load {emit_struct_llty}, {emit_struct_llty}* {subject}")
+				self.lines.append(f"  {tmp_struct} = load {emit_struct_llty}, ptr {subject}")
 				self.value_types[tmp_struct] = struct_llty
 				subject = tmp_struct
 				have_struct = struct_llty
@@ -4396,10 +4507,10 @@ class _FuncBuilder:
 				if instr.can_throw:
 					raw = self._fresh("rgrp_raw")
 					self.lines.append(f"  {raw} = call i8* @drift_runtime_global_registry_ptr()")
-					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rgrp_ok")
+					self._wrap_ok_fnresult(raw, "ptr", dest, hint="rgrp_ok")
 				else:
 					self.lines.append(f"  {dest} = call i8* @drift_runtime_global_registry_ptr()")
-					self.value_types[dest] = "i8*"
+					self.value_types[dest] = "ptr"
 				return
 			if instr.fn_id.name == "runtime_thread_registry_ptr":
 				if len(instr.args) != 0:
@@ -4410,10 +4521,10 @@ class _FuncBuilder:
 				if instr.can_throw:
 					raw = self._fresh("rtrp_raw")
 					self.lines.append(f"  {raw} = call i8* @drift_runtime_thread_registry_ptr()")
-					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rtrp_ok")
+					self._wrap_ok_fnresult(raw, "ptr", dest, hint="rtrp_ok")
 				else:
 					self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_ptr()")
-					self.value_types[dest] = "i8*"
+					self.value_types[dest] = "ptr"
 				return
 			if instr.fn_id.name == "runtime_registry_set":
 				if len(instr.args) != 3:
@@ -4495,10 +4606,10 @@ class _FuncBuilder:
 				if instr.can_throw:
 					raw = self._fresh("rrg_raw")
 					self.lines.append(f"  {raw} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
-					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rrg_ok")
+					self._wrap_ok_fnresult(raw, "ptr", dest, hint="rrg_ok")
 				else:
 					self.lines.append(f"  {dest} = call i8* @drift_runtime_registry_get(i64 {tag_val})")
-					self.value_types[dest] = "i8*"
+					self.value_types[dest] = "ptr"
 				return
 			if instr.fn_id.name == "runtime_thread_registry_get":
 				if len(instr.args) != 1:
@@ -4510,10 +4621,10 @@ class _FuncBuilder:
 				if instr.can_throw:
 					raw = self._fresh("rtrg_raw")
 					self.lines.append(f"  {raw} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
-					self._wrap_ok_fnresult(raw, "i8*", dest, hint="rtrg_ok")
+					self._wrap_ok_fnresult(raw, "ptr", dest, hint="rtrg_ok")
 				else:
 					self.lines.append(f"  {dest} = call i8* @drift_runtime_thread_registry_get(i64 {tag_val})")
-					self.value_types[dest] = "i8*"
+					self.value_types[dest] = "ptr"
 				return
 			if instr.fn_id.name == "console_write":
 				if len(instr.args) != 1:
@@ -4818,11 +4929,11 @@ class _FuncBuilder:
 				if instr.can_throw:
 					raw_ptr = self._fresh("abamp_raw")
 					self.lines.append(f"  {raw_ptr} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
-					self.value_types[raw_ptr] = "i8*"
-					self._wrap_ok_fnresult(raw_ptr, "i8*", dest, hint="abamp_ok")
+					self.value_types[raw_ptr] = "ptr"
+					self._wrap_ok_fnresult(raw_ptr, "ptr", dest, hint="abamp_ok")
 				else:
 					self.lines.append(f"  {dest} = extractvalue {arr_llty} {tmp_arr}, {ARRAY_PTR_IDX}")
-					self.value_types[dest] = "i8*"
+					self.value_types[dest] = "ptr"
 				return
 			if instr.fn_id.name == "array_byte_commit_init_len":
 				if len(instr.args) != 2:
@@ -6636,7 +6747,7 @@ class _FuncBuilder:
 		if ty in ("double", "float"):
 			self.lines.append(f"  ret {ty} {val}")
 			return
-		if ty is not None and (ty == "ptr" or ty.endswith("*")):
+		if _is_ptr_type(ty):
 			# Non-throwing functions may return references (`&T`), lowered as
 			# typed pointers (`T*`) in v1.
 			self.lines.append(f"  ret {ty} {val}")
@@ -7098,23 +7209,15 @@ class _FuncBuilder:
 			if td.kind is TypeKind.SCALAR and td.name == "String":
 				return DRIFT_STRING_TYPE
 			if td.kind is TypeKind.REF:
-				inner_llty = "i8"
-				if td.param_types:
-					inner_llty = self._emit_storage_type_for_typeid(td.param_types[0])
-				return f"{inner_llty}*"
+				return "ptr"
 			if td.kind is TypeKind.RAW_PTR:
-				inner_llty = "i8"
-				if td.param_types:
-					inner_llty = self._emit_storage_type_for_typeid(td.param_types[0])
-				return f"{inner_llty}*"
+				return "ptr"
 			if td.kind is TypeKind.FUNCTION:
 				if not td.param_types:
 					raise NotImplementedError(
 						f"LLVM codegen v1: function type missing param/return types for {self.func.name}"
 					)
-				params = list(td.param_types[:-1])
-				ret_tid = td.param_types[-1]
-				return self._fn_ptr_lltype(params, ret_tid, td.fn_throws)
+				return "ptr"
 			if td.kind is TypeKind.STRUCT:
 				return self.module.ensure_struct_type(
 					ty_id,
@@ -7243,15 +7346,9 @@ class _FuncBuilder:
 		if td.kind is TypeKind.VOID:
 			return "i8", key
 		if td.kind is TypeKind.REF:
-			inner_llty = "i8"
-			if td.param_types:
-				inner_llty = self._emit_storage_type_for_typeid(td.param_types[0])
-			return f"{inner_llty}*", key
+			return "ptr", key
 		if td.kind is TypeKind.RAW_PTR:
-			inner_llty = "i8"
-			if td.param_types:
-				inner_llty = self._emit_storage_type_for_typeid(td.param_types[0])
-			return f"{inner_llty}*", key
+			return "ptr", key
 		if td.kind is TypeKind.FUNCTION:
 			return self._llvm_type_for_typeid(ty_id), key
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
@@ -7408,8 +7505,8 @@ class _FuncBuilder:
 			return "i8 0"
 		if ok_llty == "double":
 			return "double 0.0"
-		if ok_llty.endswith("*"):
-			return f"{ok_llty} null"
+		if _is_ptr_type(ok_llty):
+			return "ptr null"
 		# Structs/arrays and placeholder i8 can use zeroinitializer.
 		return f"{ok_llty} zeroinitializer"
 
@@ -7429,8 +7526,8 @@ class _FuncBuilder:
 			return "i1 0"
 		if llty == "double":
 			return "double 0.0"
-		if llty.endswith("*"):
-			return f"{llty} null"
+		if _is_ptr_type(llty):
+			return "ptr null"
 		# Arrays/structs (including String-as-aggregate) can be used as constants.
 		if td is not None and td.kind in (TypeKind.ARRAY, TypeKind.STRUCT, TypeKind.SCALAR, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE):
 			return f"{llty} zeroinitializer"
@@ -7479,10 +7576,10 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = add i8 0, 0")
 			self.value_types[dest] = "i8"
 			return
-		if llty.endswith("*"):
-			# Typed pointer null as an SSA value.
-			self.lines.append(f"  {dest} = select i1 1, {llty} null, {llty} null")
-			self.value_types[dest] = llty
+		if _is_ptr_type(llty):
+			# Pointer null as an SSA value.
+			self.lines.append(f"  {dest} = select i1 1, ptr null, ptr null")
+			self.value_types[dest] = "ptr"
 			return
 
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
@@ -7542,8 +7639,8 @@ class _FuncBuilder:
 			for idx, fty in enumerate(inst.field_types):
 				store_llty = self._llvm_storage_type_for_typeid(fty)
 				emit_store_llty = self._llty(store_llty)
-				if emit_store_llty.endswith("*"):
-					operand = f"{emit_store_llty} null"
+				if _is_ptr_type(emit_store_llty):
+					operand = "ptr null"
 				elif emit_store_llty == "double":
 					operand = "double 0.0"
 				elif emit_store_llty.startswith("i"):
@@ -9241,17 +9338,15 @@ class _FuncBuilder:
 		arr_ty = self.value_types.get(array)
 		if arr_ty is None:
 			arr_ty = self.param_value_types.get(array)
-		if arr_ty is not None and arr_ty.endswith("*"):
+		if arr_ty is not None and _is_ptr_type(arr_ty):
 			loaded = self._fresh("arrval")
-			self.lines.append(f"  {loaded} = load {arr_llty}, {arr_ty} {array}")
+			self.lines.append(f"  {loaded} = load {arr_llty}, ptr {array}")
 			self.value_types[loaded] = arr_llty
 			arr_val = loaded
 		len_tmp = self._fresh("len")
 		data_tmp = self._fresh("data")
 		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_LEN_IDX}")
 		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_PTR_IDX}")
-		data_ptr = self._fresh("data_ptr")
-		self.lines.append(f"  {data_ptr} = bitcast i8* {data_tmp} to {elem_llty}*")
 		self.module.needs_array_helpers = True
 		container_id = self._emit_string_literal_value(ARRAY_CONTAINER_ID)
 		self.lines.append(
@@ -9261,7 +9356,7 @@ class _FuncBuilder:
 		ptr_tmp = self._fresh("eltptr")
 		idx_llty = self._llty(DRIFT_INT_TYPE)
 		self.lines.append(
-			f"  {ptr_tmp} = getelementptr {elem_llty}, {elem_llty}* {data_ptr}, {idx_llty} {idx_val}"
+			f"  {ptr_tmp} = getelementptr {elem_llty}, ptr {data_tmp}, {idx_llty} {idx_val}"
 		)
 		return ptr_tmp
 
@@ -9278,22 +9373,20 @@ class _FuncBuilder:
 		arr_ty = self.value_types.get(array)
 		if arr_ty is None:
 			arr_ty = self.param_value_types.get(array)
-		if arr_ty is not None and arr_ty.endswith("*"):
+		if arr_ty is not None and _is_ptr_type(arr_ty):
 			loaded = self._fresh("arrval")
-			self.lines.append(f"  {loaded} = load {arr_llty}, {arr_ty} {array}")
+			self.lines.append(f"  {loaded} = load {arr_llty}, ptr {array}")
 			self.value_types[loaded] = arr_llty
 			arr_val = loaded
 		len_tmp = self._fresh("len")
 		data_tmp = self._fresh("data")
 		self.lines.append(f"  {len_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_LEN_IDX}")
 		self.lines.append(f"  {data_tmp} = extractvalue {arr_llty} {arr_val}, {ARRAY_PTR_IDX}")
-		data_ptr = self._fresh("data_ptr")
-		self.lines.append(f"  {data_ptr} = bitcast i8* {data_tmp} to {elem_llty}*")
 		idx_val = index
 		ptr_tmp = self._fresh("eltptr")
 		idx_llty = self._llty(DRIFT_INT_TYPE)
 		self.lines.append(
-			f"  {ptr_tmp} = getelementptr {elem_llty}, {elem_llty}* {data_ptr}, {idx_llty} {idx_val}"
+			f"  {ptr_tmp} = getelementptr {elem_llty}, ptr {data_tmp}, {idx_llty} {idx_val}"
 		)
 		return ptr_tmp
 
@@ -9306,12 +9399,13 @@ class _FuncBuilder:
 			arr_llty = self.param_value_types.get(array)
 		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayLen missing LLVM type for array value (compiler bug)")
-		if arr_llty.endswith("*"):
+		if _is_ptr_type(arr_llty):
+			real_ty = self._llvm_array_header_type()
 			arr_val = self._fresh("arrval")
-			self.lines.append(f"  {arr_val} = load {arr_llty[:-1]}, {arr_llty} {array}")
-			self.value_types[arr_val] = arr_llty[:-1]
+			self.lines.append(f"  {arr_val} = load {real_ty}, ptr {array}")
+			self.value_types[arr_val] = real_ty
 			array = arr_val
-			arr_llty = arr_llty[:-1]
+			arr_llty = real_ty
 		# ArrayLen now applies only to array values; strings use StringLen MIR.
 		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, {ARRAY_LEN_IDX}")
 		self.value_types[dest] = DRIFT_INT_TYPE
@@ -9325,12 +9419,13 @@ class _FuncBuilder:
 			arr_llty = self.param_value_types.get(array)
 		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayCap missing LLVM type for array value (compiler bug)")
-		if arr_llty.endswith("*"):
+		if _is_ptr_type(arr_llty):
+			real_ty = self._llvm_array_header_type()
 			arr_val = self._fresh("arrval")
-			self.lines.append(f"  {arr_val} = load {arr_llty[:-1]}, {arr_llty} {array}")
-			self.value_types[arr_val] = arr_llty[:-1]
+			self.lines.append(f"  {arr_val} = load {real_ty}, ptr {array}")
+			self.value_types[arr_val] = real_ty
 			array = arr_val
-			arr_llty = arr_llty[:-1]
+			arr_llty = real_ty
 		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, {ARRAY_CAP_IDX}")
 		self.value_types[dest] = DRIFT_INT_TYPE
 
@@ -9343,22 +9438,23 @@ class _FuncBuilder:
 			arr_llty = self.param_value_types.get(array)
 		if arr_llty is None:
 			raise AssertionError("LLVM codegen v1: ArrayGen missing LLVM type for array value (compiler bug)")
-		if arr_llty.endswith("*"):
+		if _is_ptr_type(arr_llty):
+			real_ty = self._llvm_array_header_type()
 			arr_val = self._fresh("arrval")
-			self.lines.append(f"  {arr_val} = load {arr_llty[:-1]}, {arr_llty} {array}")
-			self.value_types[arr_val] = arr_llty[:-1]
+			self.lines.append(f"  {arr_val} = load {real_ty}, ptr {array}")
+			self.value_types[arr_val] = real_ty
 			array = arr_val
-			arr_llty = arr_llty[:-1]
+			arr_llty = real_ty
 		self.lines.append(f"  {dest} = extractvalue {arr_llty} {array}, {ARRAY_GEN_IDX}")
 		self.value_types[dest] = DRIFT_INT_TYPE
 
 	def _raw_buffer_value(self, raw_val: str, raw_llty: str) -> tuple[str, str]:
 		buf_llty = self.value_types.get(raw_val, raw_llty)
-		if buf_llty.endswith("*"):
+		if _is_ptr_type(buf_llty):
 			buf_val = self._fresh("rawbuf")
-			self.lines.append(f"  {buf_val} = load {buf_llty[:-1]}, {buf_llty} {raw_val}")
-			self.value_types[buf_val] = buf_llty[:-1]
-			return buf_val, buf_llty[:-1]
+			self.lines.append(f"  {buf_val} = load {raw_llty}, ptr {raw_val}")
+			self.value_types[buf_val] = raw_llty
+			return buf_val, raw_llty
 		return raw_val, buf_llty
 
 	def _lower_raw_buffer_alloc(self, instr: RawBufferAlloc) -> None:
@@ -9470,7 +9566,11 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		dest_llty = self._llvm_type_for_typeid(instr.ptr_ty)
 		src_llty = self.value_types.get(src_val, dest_llty)
-		self.lines.append(f"  {dest} = bitcast {src_llty} {src_val} to {dest_llty}")
+		if src_llty == dest_llty:
+			# Opaque pointers: Ref and RawPtr are both ptr — identity.
+			self.value_map[instr.dest] = src_val
+		else:
+			self.lines.append(f"  {dest} = bitcast {src_llty} {src_val} to {dest_llty}")
 		self.value_types[dest] = dest_llty
 
 	def _lower_ptr_offset(self, instr: PtrOffset) -> None:
@@ -9516,7 +9616,11 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		ref_llty = self._llvm_type_for_typeid(instr.ref_ty)
 		src_llty = self.value_types.get(src_val, ref_llty)
-		self.lines.append(f"  {dest} = bitcast {src_llty} {src_val} to {ref_llty}")
+		if src_llty == ref_llty:
+			# Opaque pointers: RawPtr and Ref are both ptr — identity.
+			self.value_map[instr.dest] = src_val
+		else:
+			self.lines.append(f"  {dest} = bitcast {src_llty} {src_val} to {ref_llty}")
 		self.value_types[dest] = ref_llty
 
 	def _llvm_array_header_type(self) -> str:

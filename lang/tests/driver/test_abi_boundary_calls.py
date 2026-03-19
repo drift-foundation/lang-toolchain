@@ -167,7 +167,7 @@ def test_cross_module_exported_call_uses_throw_abi(tmp_path: Path) -> None:
 
 	defines = _find_llvm_define_lines(ir, r'@"acme\.lib::get_value"')
 	assert defines
-	assert defines[0].startswith("define { i64, %DriftError* }")
+	assert defines[0].startswith("define { i64, ptr }")
 
 
 def test_generic_instantiation_uses_throw_abi(tmp_path: Path) -> None:
