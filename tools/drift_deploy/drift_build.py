@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd, resolve_driftc
+from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import read_lock, verify_lock_integrity
 from tools.drift_deploy.manifest import (
 	Artifact,
@@ -69,17 +69,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	)
 	p.add_argument("artifact_name", nargs="?", default=None,
 		help="Artifact to build (optional if manifest has exactly one artifact)")
-	p.add_argument("--manifest", "-m", type=Path, default=Path("drift-manifest.json"),
+	p.add_argument("--manifest", "-m", type=UserPath, default=Path("drift-manifest.json"),
 		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
-	p.add_argument("--package-root", type=Path, action="append", default=None,
+	p.add_argument("--package-root", type=UserPath, action="append", default=None,
 		help="Library root for resolving package deps (repeatable)")
-	p.add_argument("--native-lib-path", type=Path, action="append", default=None,
+	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
 		help="Native library search path for linker (repeatable)")
 	p.add_argument("--target", type=str, default="drift-dev",
 		help="Target triple (default: drift-dev)")
-	p.add_argument("-o", "--output", type=Path, default=None,
+	p.add_argument("-o", "--output", type=UserPath, default=None,
 		help="Explicit output path override")
-	p.add_argument("--driftc", type=Path, default=None,
+	p.add_argument("--driftc", type=UserPath, default=None,
 		help="Path to driftc (default: driftc from PATH)")
 	return p
 

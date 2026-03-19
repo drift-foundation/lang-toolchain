@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 from tools.drift_deploy.build_cmd import (
+	UserPath,
 	build_app_cmd,
 	build_package_cmd,
 	build_source_args,
@@ -1159,6 +1160,115 @@ class TestResolveDriftc:
 			 mock.patch("shutil.which", return_value=None):
 			result = resolve_driftc(None)
 		assert result is None
+
+
+# ── Tilde expansion (UserPath) ───────────────────────────────────────
+
+
+class TestUserPath:
+	def test_tilde_expanded(self):
+		result = UserPath("~/some/path")
+		assert "~" not in str(result)
+		assert str(result).startswith(str(Path.home()))
+
+	def test_no_tilde_passthrough(self):
+		result = UserPath("/absolute/path")
+		assert str(result) == "/absolute/path"
+
+	def test_relative_passthrough(self):
+		result = UserPath("relative/path")
+		assert str(result) == "relative/path"
+
+	def test_returns_path(self):
+		result = UserPath("~/foo")
+		assert isinstance(result, Path)
+
+
+class TestTildeExpansionBuild:
+	def test_build_manifest_tilde(self, tmp_path):
+		"""drift build --manifest=~/... expands tilde."""
+		from tools.drift_deploy.drift_build import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--manifest=~/my-manifest.json"])
+		assert "~" not in str(args.manifest)
+
+	def test_build_output_tilde(self, tmp_path):
+		from tools.drift_deploy.drift_build import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["-o", "~/build/out.dmp"])
+		assert "~" not in str(args.output)
+
+	def test_build_driftc_tilde(self, tmp_path):
+		from tools.drift_deploy.drift_build import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--driftc=~/bin/driftc"])
+		assert "~" not in str(args.driftc)
+
+	def test_build_package_root_tilde(self, tmp_path):
+		from tools.drift_deploy.drift_build import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--package-root=~/libs"])
+		assert "~" not in str(args.package_root[0])
+
+	def test_build_native_lib_path_tilde(self, tmp_path):
+		from tools.drift_deploy.drift_build import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--native-lib-path=~/lib"])
+		assert "~" not in str(args.native_lib_path[0])
+
+
+class TestTildeExpansionDeploy:
+	def test_deploy_dest_tilde(self):
+		"""drift deploy --dest=~/... expands tilde."""
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--dest=~/opt/drift/libs"])
+		assert "~" not in str(args.dest)
+
+	def test_deploy_manifest_tilde(self):
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--manifest=~/project/drift-manifest.json"])
+		assert "~" not in str(args.manifest)
+
+	def test_deploy_app_dest_tilde(self):
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--app-dest=~/opt/drift/apps"])
+		assert "~" not in str(args.app_dest)
+
+	def test_deploy_sign_key_file_tilde(self):
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--sign-key-file=~/.config/drift/keys/default.seed"])
+		assert "~" not in str(args.sign_key_file)
+
+	def test_deploy_trust_store_tilde(self):
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--trust-store=~/project/drift/trust.json"])
+		assert "~" not in str(args.trust_store)
+
+	def test_deploy_dest_space_separated_tilde(self):
+		"""drift deploy --dest ~/... (space-separated) also expands."""
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--dest", "~/opt/drift/libs"])
+		assert "~" not in str(args.dest)
+
+
+class TestTildeExpansionPrepare:
+	def test_prepare_dest_tilde(self):
+		from tools.drift_deploy.drift_prepare import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--dest=~/opt/drift/libs"])
+		assert "~" not in str(args.dest)
+
+	def test_prepare_package_root_tilde(self):
+		from tools.drift_deploy.drift_prepare import build_arg_parser
+		p = build_arg_parser()
+		args = p.parse_args(["--package-root=~/libs"])
+		assert "~" not in str(args.package_root[0])
 
 
 # ── End-to-end toolchain tests ───────────────────────────────────────

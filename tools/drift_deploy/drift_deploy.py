@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd, resolve_driftc
+from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
@@ -66,25 +66,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		prog="drift deploy",
 		description="Build, sign, smoke-test, and publish Drift artifacts.",
 	)
-	p.add_argument("--manifest", type=Path, default=Path("drift-manifest.json"),
+	p.add_argument("--manifest", type=UserPath, default=Path("drift-manifest.json"),
 		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
-	p.add_argument("--dest", type=Path, default=None,
+	p.add_argument("--dest", type=UserPath, default=None,
 		help="Publish destination root for package artifacts (required if manifest has packages)")
-	p.add_argument("--app-dest", type=Path, default=None,
+	p.add_argument("--app-dest", type=UserPath, default=None,
 		help="Publish destination root for app artifacts (required if manifest has apps)")
-	p.add_argument("--package-root", type=Path, action="append", default=None,
+	p.add_argument("--package-root", type=UserPath, action="append", default=None,
 		help="Library root for resolving package_deps (repeatable; default: --dest)")
 	p.add_argument("--artifact", action="append", default=None,
 		help="Build only this artifact (repeatable; default: all)")
-	p.add_argument("--driftc", type=Path, default=None,
+	p.add_argument("--driftc", type=UserPath, default=None,
 		help="Path to driftc (default: driftc from PATH)")
-	p.add_argument("--sign-key-file", type=Path, default=None,
+	p.add_argument("--sign-key-file", type=UserPath, default=None,
 		help="Ed25519 signing key file (default: $DRIFT_SIGN_KEY_FILE)")
-	p.add_argument("--trust-store", type=Path, default=None,
+	p.add_argument("--trust-store", type=UserPath, default=None,
 		help="Baseline trust store for smoke overlay (default: $DRIFT_TRUST_STORE)")
 	p.add_argument("--target", type=str, default=None,
 		help="Target triple (default: host triple)")
-	p.add_argument("--native-lib-path", type=Path, action="append", default=None,
+	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
 		help="Native library search path for linker (repeatable; also: $DRIFT_NATIVE_LIB_PATH, drift-deploy-config.json)")
 	p.add_argument("--skip-smoke", action="store_true",
 		help="Skip all smoke tests (CI escape hatch)")
@@ -790,7 +790,7 @@ def _deploy_artifact(
 			src_profile = load_author_profile(author_profile_path)
 			# Bind the profile to this specific package artifact.
 			bound_profile = _dc_replace(src_profile, package=art.name)
-			staged_profile = staged_install / ".author-profile"
+			staged_profile = staged_install / f"{art.name}.author-profile"
 			write_author_profile(bound_profile, staged_profile)
 		sig_path = _sign_package(
 			dmp_path, sign_key=sign_key,

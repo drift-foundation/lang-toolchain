@@ -27,6 +27,11 @@ from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
 from lang.drift.vendor import VendorOptions, vendor_v0
 
 
+def _UserPath(s: str) -> Path:
+	"""Argparse type that expands ``~`` in path arguments."""
+	return Path(s).expanduser()
+
+
 def _default_keys_dir() -> Path:
 	return Path.home() / ".config" / "drift" / "keys"
 
@@ -265,7 +270,7 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 	from lang.drift.author_profile import apply_author_profile_to_trust_store, load_author_profile
 
 	p = _ap.ArgumentParser(prog="drift trust <profile>", add_help=False)
-	p.add_argument("--trust-store", type=Path, default=Path("drift") / "trust.json")
+	p.add_argument("--trust-store", type=_UserPath, default=Path("drift") / "trust.json")
 	p.add_argument("--yes", "-y", action="store_true")
 	opts = p.parse_args(extra_argv)
 
@@ -501,15 +506,15 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub = p.add_subparsers(dest="cmd", required=True)
 
 	sign = sub.add_parser("sign", help="Sign a DMIR-PKG package (.dmp) by writing a .sig sidecar")
-	sign.add_argument("package", type=Path, help="Path to pkg.dmp")
+	sign.add_argument("package", type=_UserPath, help="Path to pkg.dmp")
 	sign.add_argument(
 		"--key",
-		type=Path,
+		type=_UserPath,
 		required=False,
 		default=None,
 		help="Path to base64-encoded Ed25519 private seed (32 bytes). If omitted, uses DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD.",
 	)
-	sign.add_argument("--out", type=Path, default=None, help="Output sidecar path (default: <pkg>.sig)")
+	sign.add_argument("--out", type=_UserPath, default=None, help="Output sidecar path (default: <pkg>.sig)")
 	sign.add_argument(
 		"--add-signature",
 		action="store_true",
@@ -522,7 +527,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 
 	keygen = sub.add_parser("keygen", help="Generate an Ed25519 private seed key file (base64)")
-	keygen.add_argument("--out", type=Path, required=True, help="Output path for key seed file")
+	keygen.add_argument("--out", type=_UserPath, required=True, help="Output path for key seed file")
 	keygen.add_argument("--print-pubkey", action="store_true", help="Print public key (base64) to stdout")
 	keygen.add_argument("--print-kid", action="store_true", help="Print kid to stdout")
 
@@ -530,22 +535,22 @@ def _build_parser() -> argparse.ArgumentParser:
 	key_sub = key.add_subparsers(dest="key_cmd", required=True)
 
 	key_list = key_sub.add_parser("list", help="List local signing keys")
-	key_list.add_argument("--keys-dir", type=Path, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
+	key_list.add_argument("--keys-dir", type=_UserPath, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
 	key_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 	key_list.add_argument("--show-pubkey", action="store_true", help="Include public key in output")
 
 	key_inspect = key_sub.add_parser("inspect", help="Inspect one local signing key by name or path")
 	key_inspect.add_argument("key", type=str, help="Key name (without .seed) or full path")
-	key_inspect.add_argument("--keys-dir", type=Path, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
+	key_inspect.add_argument("--keys-dir", type=_UserPath, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
 	key_inspect.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
 	key_match = key_sub.add_parser("match-signer", help="Find local key(s) matching a signer kid")
 	key_match.add_argument("kid", type=str, help="Signer kid (e.g. ed25519:...)")
-	key_match.add_argument("--keys-dir", type=Path, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
+	key_match.add_argument("--keys-dir", type=_UserPath, default=_default_keys_dir(), help="Keys directory (default: ~/.config/drift/keys)")
 	key_match.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
 	init = sub.add_parser("init", help="Set up package publishing (signing key + author profile)")
-	init.add_argument("--key", type=Path, default=None,
+	init.add_argument("--key", type=_UserPath, default=None,
 		help="Path to Ed25519 signing key seed (default: $DRIFT_SIGN_KEY_FILE)")
 	init.add_argument("--name", type=str, default=None, help="Author name")
 	init.add_argument("--org", type=str, default=None, help="Organization or project name")
@@ -553,7 +558,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	init.add_argument("--url", type=str, default=None, help="Website URL")
 	init.add_argument("--namespace", type=str, action="append", default=None,
 		help="Drift module namespace this key signs for, e.g. 'acme.*' (repeatable)")
-	init.add_argument("--out", type=Path, default=None, help="Output author profile path")
+	init.add_argument("--out", type=_UserPath, default=None, help="Output author profile path")
 	init.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
 	trust = sub.add_parser("trust", help="Consumer trust management (project-local)")
@@ -562,7 +567,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	trust_list = trust_sub.add_parser("list", help="List keys, namespaces, and revocations in a trust store")
 	trust_list.add_argument(
 		"--trust-store",
-		type=Path,
+		type=_UserPath,
 		default=Path("drift") / "trust.json",
 		help="Path to trust store file (default: ./drift/trust.json)",
 	)
@@ -571,7 +576,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	trust_revoke = trust_sub.add_parser("revoke", help="Revoke a trusted signing key id (kid)")
 	trust_revoke.add_argument(
 		"--trust-store",
-		type=Path,
+		type=_UserPath,
 		default=Path("drift") / "trust.json",
 		help="Path to trust store file (default: ./drift/trust.json)",
 	)
@@ -579,8 +584,8 @@ def _build_parser() -> argparse.ArgumentParser:
 	trust_revoke.add_argument("--reason", type=str, default=None, help="Optional revocation reason")
 
 	publish = sub.add_parser("publish", help="Publish package(s) to a local directory repository (index.json)")
-	publish.add_argument("--dest-dir", type=Path, required=True, help="Destination directory (repository root)")
-	publish.add_argument("packages", nargs="+", type=Path, help="One or more pkg.dmp files to publish")
+	publish.add_argument("--dest-dir", type=_UserPath, required=True, help="Destination directory (repository root)")
+	publish.add_argument("packages", nargs="+", type=_UserPath, help="One or more pkg.dmp files to publish")
 	publish.add_argument("--force", action="store_true", help="Replace existing entry/files for the same package_id")
 	publish.add_argument(
 		"--allow-unsigned",
@@ -589,40 +594,40 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 
 	fetch = sub.add_parser("fetch", help="Fetch packages from local sources into a project cache")
-	fetch.add_argument("--sources", type=Path, required=True, help="Path to drift-sources.json")
+	fetch.add_argument("--sources", type=_UserPath, required=True, help="Path to drift-sources.json")
 	fetch.add_argument(
 		"--cache-dir",
-		type=Path,
+		type=_UserPath,
 		default=Path("cache") / "driftpm",
 		help="Cache directory (default: ./cache/driftpm)",
 	)
 	fetch.add_argument("--force", action="store_true", help="Replace conflicting entries in cache index")
 	fetch.add_argument(
 		"--lock",
-		type=Path,
+		type=_UserPath,
 		default=Path("drift.lock.json"),
 		help="Lockfile path; if it exists, fetch reproduces it exactly (default: ./drift.lock.json)",
 	)
 	fetch.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
 
 	doctor = sub.add_parser("doctor", help="Sanity checks for sources/index/trust/lock configuration")
-	doctor.add_argument("--sources", type=Path, default=Path("drift-sources.json"), help="Path to drift-sources.json")
+	doctor.add_argument("--sources", type=_UserPath, default=Path("drift-sources.json"), help="Path to drift-sources.json")
 	doctor.add_argument(
 		"--trust-store",
-		type=Path,
+		type=_UserPath,
 		default=Path("drift") / "trust.json",
 		help="Path to trust store file (default: ./drift/trust.json)",
 	)
-	doctor.add_argument("--lock", type=Path, default=Path("drift.lock.json"), help="Path to drift.lock.json")
+	doctor.add_argument("--lock", type=_UserPath, default=Path("drift.lock.json"), help="Path to drift.lock.json")
 	doctor.add_argument(
 		"--cache-dir",
-		type=Path,
+		type=_UserPath,
 		default=Path("cache") / "driftpm",
 		help="Cache directory (default: ./cache/driftpm)",
 	)
 	doctor.add_argument(
 		"--vendor-dir",
-		type=Path,
+		type=_UserPath,
 		default=Path("vendor") / "driftpkgs",
 		help="Vendor directory (default: ./vendor/driftpkgs)",
 	)
@@ -638,19 +643,19 @@ def _build_parser() -> argparse.ArgumentParser:
 	vendor = sub.add_parser("vendor", help="Vendor cached packages into vendor/driftpkgs and write a lockfile")
 	vendor.add_argument(
 		"--cache-dir",
-		type=Path,
+		type=_UserPath,
 		default=Path("cache") / "driftpm",
 		help="Cache directory (default: ./cache/driftpm)",
 	)
 	vendor.add_argument(
 		"--dest-dir",
-		type=Path,
+		type=_UserPath,
 		default=Path("vendor") / "driftpkgs",
 		help="Vendored package directory (default: ./vendor/driftpkgs)",
 	)
 	vendor.add_argument(
 		"--lock",
-		type=Path,
+		type=_UserPath,
 		default=Path("drift.lock.json"),
 		help="Lockfile output path (default: ./drift.lock.json)",
 	)
@@ -666,7 +671,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg = sub.add_parser("package", help="Package inspection helpers")
 	pkg_sub = pkg.add_subparsers(dest="pkg_cmd", required=True)
 	pkg_signers = pkg_sub.add_parser("inspect-signers", help="Inspect signer kids from .sig/.dmp sidecar or index.json")
-	pkg_signers.add_argument("path", type=Path, help="Path to .sig, .dmp, or index.json")
+	pkg_signers.add_argument("path", type=_UserPath, help="Path to .sig, .dmp, or index.json")
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 

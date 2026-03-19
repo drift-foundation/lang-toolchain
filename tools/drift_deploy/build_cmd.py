@@ -19,6 +19,11 @@ from tools.drift_deploy.manifest import Artifact
 from tools.drift_deploy.resolver import ResolvedDep
 
 
+def UserPath(s: str) -> Path:
+	"""Argparse type that expands ``~`` in path arguments."""
+	return Path(s).expanduser()
+
+
 def resolve_driftc(explicit: Path | None = None) -> Path | None:
 	"""
 	Resolve the driftc binary path.

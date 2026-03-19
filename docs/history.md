@@ -1,6 +1,28 @@
 # Drift development history
 
 ## 2026-03-18
+- **Expanded `~` in CLI path arguments and made published author profiles visible files (0.27.86, ABI 6)**:
+  Smoothed two downstream tooling UX issues in the packaged workflow:
+  shell-style home paths now work reliably across CLI path flags, and deployed
+  author profiles are no longer hidden dotfiles.
+  - Path handling:
+    - introduced shared argparse path helpers that call `expanduser()`
+    - updated path-typed CLI args across `drift build`, `drift prepare`,
+      `drift deploy`, and the main `drift` CLI surface so forms like
+      `--dest=~/opt/drift/libs` resolve correctly instead of passing a literal
+      `~` through to runtime staging/build logic
+    - added regression coverage for `--flag=~/...` and space-separated
+      `--flag ~/...` forms
+  - Published author profile layout:
+    - changed deployed package layout from hidden `.author-profile` to visible
+      `<artifact>.author-profile`
+    - keeps the published trust artifact discoverable in normal directory
+      listings, tab completion, and file-manager views
+    - updated deploy logic, tests, and docs to use the visible published name
+  - Versioning:
+    - compiler version is `0.27.86`
+    - ABI remains `6` because this is CLI/deploy UX behavior only
+
 - **Resolved sibling `driftc` automatically for deployed `drift build` / `drift deploy` workflows (0.27.85, ABI 6)**:
   Improved packaged-toolchain usability when invoking `drift` directly from an
   installed `bin/` directory without separately exporting `PATH` or passing
@@ -131,12 +153,12 @@
   destination root.
   - Change:
     - `drift deploy` now publishes the declared author profile as
-      `.author-profile` inside the versioned artifact directory
+      `<artifact>.author-profile` inside the versioned artifact directory
     - example:
-      `.../net-tls/0.3.4/.author-profile`
+      `.../net-tls/0.3.4/net-tls.author-profile`
     - consumer trust is now naturally version-scoped through the published
       artifact directory, for example:
-      `drift trust ~/opt/drift/libs/net-tls/0.3.4/.author-profile`
+      `drift trust ~/opt/drift/libs/net-tls/0.3.4/net-tls.author-profile`
   - Why:
     - keeps publisher identity colocated with the exact package version being
       distributed

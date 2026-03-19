@@ -27,9 +27,9 @@ PYTHONPATH=. ./.venv/bin/python3 -m lang.drift --help
 For most users, use this simple model:
 
 1. Publisher runs `drift init` to set up a signing key and public author profile.
-2. `drift deploy` publishes the package and a deployed `.author-profile` inside the versioned artifact directory.
-3. The deployed signature binds both the package bytes and the deployed `.author-profile`.
-4. Consumer obtains that deployed `.author-profile` and runs `drift trust <file>.author-profile` to trust it.
+2. `drift deploy` publishes the package and a deployed `<artifact>.author-profile` inside the versioned artifact directory.
+3. The deployed signature binds both the package bytes and the deployed author profile.
+4. Consumer obtains that deployed `<artifact>.author-profile` and runs `drift trust <file>.author-profile` to trust it.
 5. `driftc` verifies package signatures against the trust store at compile time.
 
 Some teams may add internal deploy signing as an optional extra attestation
@@ -127,7 +127,7 @@ This guides you through:
 3. **Namespaces** — which Drift module namespaces this key will sign for (e.g. `acme.*`, `net_tls.*`). These must match the module names consumers import, not hyphenated package ids.
 4. **Author profile** — writes a `.author-profile` file you share with consumers.
 
-The private signing key stays local. The `.author-profile` is derived from the
+The private signing key stays local. The `.author-profile` file is derived from the
 signing key but contains only the public key and metadata — safe to share publicly.
 At deploy time, Drift publishes a bound copy of this profile inside the versioned
 artifact directory and signs an envelope that covers both the package digest and
@@ -297,7 +297,7 @@ drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc dri
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
-and publishes all artifacts plus a bound copy of the declared `.author-profile`.
+and publishes all artifacts plus a bound copy of the declared author profile.
 
 Deploy is read-only with respect to tracked project files — it does not
 rewrite `drift-lock.json` or other repo-managed metadata.
@@ -306,13 +306,13 @@ Published layout for a package:
 
 ```text
 ~/opt/drift/libs/net-tls/0.3.4/
-├── .author-profile
 ├── assets/
+├── net-tls.author-profile
 ├── net-tls.sig
 └── net-tls.zdmp
 ```
 
-The deployed `.author-profile` is a published copy. `drift deploy` does not
+The deployed author profile is a published copy. `drift deploy` does not
 rewrite the tracked project profile file after commit.
 
 ### 4.4 Intended workflow
@@ -328,10 +328,10 @@ rewrite the tracked project profile file after commit.
 
 ### 5.1 Trust an author (consumer side)
 
-The consumer obtains the publisher's deployed `.author-profile` and trusts it:
+The consumer obtains the publisher's deployed author profile and trusts it:
 
 ```bash
-$DRIFT_TOOL trust ~/opt/drift/libs/acme-math/0.1.0/.author-profile --trust-store drift/trust.json
+$DRIFT_TOOL trust ~/opt/drift/libs/acme-math/0.1.0/acme-math.author-profile --trust-store drift/trust.json
 ```
 
 This displays the author's identity, key fingerprint, and namespace claims,

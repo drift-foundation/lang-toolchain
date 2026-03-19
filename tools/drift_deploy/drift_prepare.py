@@ -19,6 +19,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from tools.drift_deploy.build_cmd import UserPath
 from tools.drift_deploy.lockfile import write_lock
 from tools.drift_deploy.manifest import (
 	Manifest,
@@ -46,11 +47,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"Run before commit; drift deploy consumes the prepared state."
 		),
 	)
-	p.add_argument("--manifest", type=Path, default=Path("drift-manifest.json"),
+	p.add_argument("--manifest", type=UserPath, default=Path("drift-manifest.json"),
 		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
-	p.add_argument("--dest", type=Path, default=None,
+	p.add_argument("--dest", type=UserPath, default=None,
 		help="Package library root (used as default --package-root)")
-	p.add_argument("--package-root", type=Path, action="append", default=None,
+	p.add_argument("--package-root", type=UserPath, action="append", default=None,
 		help="Library root for resolving package_deps (repeatable; default: --dest)")
 	return p
 

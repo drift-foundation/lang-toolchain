@@ -1920,7 +1920,7 @@ class TestAuthorProfilePublish:
 			pub_raw = ed25519_public_bytes_raw(priv.public_key())
 			profile = create_author_profile(pubkey_raw=pub_raw, name="Test", namespaces=["test.*"])
 			bound = _dc_replace(profile, package="test.pkg")
-			staged_profile = td / ".author-profile"
+			staged_profile = td / "test.pkg.author-profile"
 			write_author_profile(bound, staged_profile)
 
 			sig_path = _sign_package(dmp, sign_key=key_path, author_profile_path=staged_profile)
