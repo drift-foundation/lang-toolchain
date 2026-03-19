@@ -39,7 +39,7 @@ class TestCLI:
 	def test_defaults(self) -> None:
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.manifest == Path("drift-package.json")
+		assert args.manifest == Path("drift-manifest.json")
 		assert args.dest is None
 		assert args.package_root is None
 
@@ -68,7 +68,7 @@ class TestPrepareResolve:
 			"ext.lib": ResolvedDep(version="1.0.0", integrity="sha256:aabb", dep_type="direct"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
+			manifest_path = Path(tmpdir) / "drift-manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -101,7 +101,7 @@ class TestPrepareResolve:
 	def test_no_deps_is_noop(self) -> None:
 		"""drift prepare with no package_deps does nothing."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
+			manifest_path = Path(tmpdir) / "drift-manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -137,7 +137,7 @@ class TestPrepareResolve:
 			"ext.lib": ResolvedDep(version="2.0.0", integrity="sha256:ccdd", dep_type="direct"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
+			manifest_path = Path(tmpdir) / "drift-manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -177,7 +177,7 @@ class TestPrepareResolve:
 		"""Resolution failure propagates as PrepareError."""
 		mock_index.return_value = {}  # empty index → resolution will fail
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
+			manifest_path = Path(tmpdir) / "drift-manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -213,7 +213,7 @@ class TestFullPrepareReplace:
 			"dep.a": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-package.json"
+			manifest_path = Path(tmpdir) / "drift-manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},

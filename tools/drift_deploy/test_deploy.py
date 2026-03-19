@@ -65,7 +65,7 @@ class TestCLI:
 	def test_defaults(self) -> None:
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.manifest == Path("drift-package.json")
+		assert args.manifest == Path("drift-manifest.json")
 		assert args.dest is None
 		assert args.app_dest is None
 		assert args.skip_smoke is False
@@ -347,7 +347,7 @@ class TestCleanEnv:
 class TestUnsafeField:
 	def test_unsafe_default_false(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -365,7 +365,7 @@ class TestUnsafeField:
 
 	def test_unsafe_true(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -386,7 +386,7 @@ class TestUnsafeField:
 	def test_unsafe_non_bool_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -569,7 +569,7 @@ class TestModuleNamespace:
 	def test_default_derives_from_name(self) -> None:
 		"""Hyphens in name are converted to underscores by default."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -588,7 +588,7 @@ class TestModuleNamespace:
 
 	def test_explicit_overrides_default(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -608,7 +608,7 @@ class TestModuleNamespace:
 	def test_no_hyphens_identity(self) -> None:
 		"""Name without hyphens: module_namespace == name."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -627,7 +627,7 @@ class TestModuleNamespace:
 	def test_invalid_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-package.json"
+			path = Path(tmpdir) / "drift-manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -1847,7 +1847,7 @@ class TestAuthorProfilePublish:
 	"""
 
 	def _write_manifest(self, tmpdir: Path, *, author_profile: str | None = None) -> Path:
-		"""Write a minimal drift-package.json with an optional author_profile."""
+		"""Write a minimal drift-manifest.json with an optional author_profile."""
 		project: dict = {"name": "test", "license": "MIT"}
 		if author_profile is not None:
 			project["author_profile"] = author_profile
@@ -1864,7 +1864,7 @@ class TestAuthorProfilePublish:
 				"modules": ["lib.drift"],
 			}],
 		}
-		path = tmpdir / "drift-package.json"
+		path = tmpdir / "drift-manifest.json"
 		import json as _json
 		path.write_text(_json.dumps(manifest))
 		return path

@@ -333,7 +333,7 @@ The release workflow separates state preparation from publishing:
 ### 6.1 Prepare (resolve dependencies, write lock)
 
 ```bash
-drift prepare --manifest drift-package.json --dest ~/opt/drift/libs
+drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
 ```
 
 This resolves all package dependencies and writes `drift-lock.json`.
@@ -341,7 +341,7 @@ Review the lock, then commit it alongside your manifest.
 
 ### 6.2 Declare author profile in manifest
 
-Every publishable project must declare its author profile in `drift-package.json`:
+Every publishable project must declare its author profile in `drift-manifest.json`:
 
 ```json
 {
@@ -360,7 +360,7 @@ Deploy will fail if `project.author_profile` is missing or the file does not exi
 ### 6.3 Deploy (build, sign, smoke, publish)
 
 ```bash
-drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc driftc
+drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc driftc
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
@@ -385,7 +385,7 @@ rewrite the tracked project profile file after commit.
 ### 6.4 Intended workflow
 
 1. `drift init` — create signing key + author profile (once per project)
-2. Set `project.author_profile` in `drift-package.json`
+2. Set `project.author_profile` in `drift-manifest.json`
 3. Edit manifest (versions, deps, etc.)
 4. `drift prepare` — resolve deps, write lock
 5. Review changes, commit manifest + lock + author profile
@@ -408,8 +408,8 @@ Rebuild should now fail for that package.
 - Sign package: `drift sign <pkg.dmp> --key <seed>`
 
 **Release workflow:**
-- Prepare lock: `drift prepare --manifest drift-package.json --dest <dest>`
-- Deploy: `drift deploy --manifest drift-package.json --dest <dest> --driftc <driftc>`
+- Prepare lock: `drift prepare --manifest drift-manifest.json --dest <dest>`
+- Deploy: `drift deploy --manifest drift-manifest.json --dest <dest> --driftc <driftc>`
 
 **Consumer trust:**
 - Trust an author: `drift trust <file>.author-profile`

@@ -6,7 +6,7 @@ Explicit mutating step for repo-managed release metadata.
 Run before commit; drift deploy then consumes the prepared state.
 
 Expected workflow:
-  1. Edit drift-package.json
+  1. Edit drift-manifest.json
   2. drift prepare --dest /deploy
   3. Review drift-lock.json changes
   4. Commit
@@ -46,8 +46,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"Run before commit; drift deploy consumes the prepared state."
 		),
 	)
-	p.add_argument("--manifest", type=Path, default=Path("drift-package.json"),
-		help="Path to drift-package.json (default: ./drift-package.json)")
+	p.add_argument("--manifest", type=Path, default=Path("drift-manifest.json"),
+		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
 	p.add_argument("--dest", type=Path, default=None,
 		help="Package library root (used as default --package-root)")
 	p.add_argument("--package-root", type=Path, action="append", default=None,

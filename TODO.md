@@ -120,7 +120,7 @@
   - `drift doctor` (sources, index sanity, trust graph, lock/cache consistency, toolchain compatibility).
   - `drift fetch --json` (machine-readable resolution/verification report for CI/IDE).
 - Future package manifest dependency graph:
-  - Add `package_deps` alongside `native_deps` in `drift-package.json`.
+  - Add `package_deps` alongside `native_deps` in `drift-manifest.json`.
   - Use npm-style semver range syntax for package deps (`^`, `~`, exact, explicit ranges), not exact-only matching.
   - Keep package metadata logical only: package identity + version constraint in the manifest; location/resolution remains a tool/environment concern.
   - Initial resolution backend can stay directory-based package roots; do not assume a central registry, fetch flow, or hosted source model.

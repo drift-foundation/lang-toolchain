@@ -23,7 +23,7 @@ git-reset BRANCH:
 	git --no-pager log -1 --pretty='format:%H%n%h %s%nAuthor: %an <%ae>%nDate: %ad'
 
 # Full staged compiler tests + package-consumer smoke + boundary regressions.
-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test ext-e2e-smoke ext-e2e-boundary
+test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
@@ -224,6 +224,15 @@ lang-borrow-test:
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
 	fi
+
+# Drift deploy/build tooling tests (manifest, resolver, lockfile, build, deploy, prepare).
+drift-deploy-test:
+	# Ensure pytest is available in the venv
+	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
+	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
+	  exit 1; \
+	fi
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v tools/drift_deploy/test_build.py tools/drift_deploy/test_deploy.py tools/drift_deploy/test_manifest.py tools/drift_deploy/test_prepare.py tools/drift_deploy/test_resolver.py
 
 # External consumer fleet (signed package path, K4/K10-K14 guards).
 ext-consumer-test:

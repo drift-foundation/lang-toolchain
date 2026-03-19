@@ -47,7 +47,7 @@ for this.
 | File | Role |
 |------|------|
 | `drift_deploy.py` | **User-facing** `drift deploy` orchestrator for downstream packages/apps |
-| `manifest.py` | drift-package.json loading/validation |
+| `manifest.py` | drift-manifest.json loading/validation |
 | `resolver.py` | Constraint-aggregation + version resolution |
 | `lockfile.py` | drift-lock.json read/write/verify |
 | `semver.py` | Semver parsing + constraints |
@@ -63,7 +63,7 @@ There are **two distinct deploy pipelines** in this codebase:
    `just deploy`.
 
 2. **Package deploy** (`drift_deploy.py`): Builds and publishes downstream
-   Drift packages/apps from `drift-package.json`.  Invoked via `drift deploy`
+   Drift packages/apps from `drift-manifest.json`.  Invoked via `drift deploy`
    (or `PYTHONPATH=. python -m tools.drift_deploy.drift_deploy`).
 
 This plan covers **pipeline 1** (compiler deploy).  Pipeline 2 is already

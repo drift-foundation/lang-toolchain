@@ -1,5 +1,37 @@
 # Drift development history
 
+## 2026-03-18
+- **Added manifest-driven `drift build` and renamed the project manifest to `drift-manifest.json` (0.27.84, ABI 6)**:
+  Landed the first real implementation of local manifest-driven artifact builds
+  and aligned the surrounding toolchain/test workflow with the new project
+  manifest naming.
+  - Added:
+    - `drift build <artifact>` as a public CLI command
+    - shared artifact-to-`driftc` command builders for package and app builds
+    - support for package and app artifact kinds, entry-module-first source
+      ordering, default local outputs, passthrough `-- ...` flags, and
+      package/app-specific native/unsafe handling
+  - Dependency/build contract:
+    - consumes `drift-lock.json` when present and forwards the full locked graph
+      (direct + transitive) as exact `--dep` pins
+    - requires exact manifest versions when no lockfile exists
+    - rejects stale/incomplete locks and validates lock integrity against
+      package roots
+    - package metadata records only direct deps in `--package-dep`, using exact
+      resolved versions rather than manifest ranges
+  - Tooling/test integration:
+    - renamed the canonical project manifest to `drift-manifest.json`
+    - wired `drift build` into `drift --help`
+    - added unit and e2e coverage for package/app builds, multi-artifact
+      selection, lock/no-lock behavior, direct-vs-transitive deps, unsafe
+      propagation, and real CLI execution
+    - added `drift-deploy-test` to `just test` so the new build coverage runs
+      in the normal repo test flow
+  - Versioning:
+    - compiler version is `0.27.84`
+    - ABI remains `6` because this is toolchain/build workflow work, not a
+      compiler/runtime boundary shape change
+
 ## 2026-03-17
 - **Fixed signed-envelope import-boundary regressions and drift-layer verification helpers (0.27.83, ABI 6)**:
   Cleaned up the first pass of signed author-profile envelope binding after it
@@ -746,7 +778,7 @@
     - `_run_baseline_smoke_package`
     - all pass the resolved paths to `driftc` via `--link-search`
   - Kept the package/environment boundary intact:
-    - no new native search-path field in `drift-package.json`
+    - no new native search-path field in `drift-manifest.json`
     - no native search-path data embedded in signed package metadata
   - Added regression coverage for:
     - each input source in isolation
@@ -825,7 +857,7 @@
   Added the first real implementation of the standardized deploy tool for
   downstream Drift artifacts.
   - New tool modules:
-    - `tools/drift_deploy/manifest.py`: `drift-package.json` loading and
+    - `tools/drift_deploy/manifest.py`: `drift-manifest.json` loading and
       validation for the project + artifacts schema, including license
       inheritance and `package`-cannot-depend-on-`app` validation.
     - `tools/drift_deploy/drift_deploy.py`: main orchestrator for

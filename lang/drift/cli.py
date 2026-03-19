@@ -670,6 +670,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
+	sub.add_parser("build", help="Build Drift artifacts from drift-manifest.json (see: drift build --help)")
 	sub.add_parser("prepare", help="Resolve dependencies and write drift-lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	return p
@@ -686,6 +687,10 @@ def main(argv: list[str] | None = None) -> int:
 	if effective_argv and effective_argv[0] == "deploy":
 		from tools.drift_deploy.drift_deploy import run as deploy_run
 		return deploy_run(effective_argv[1:])
+
+	if effective_argv and effective_argv[0] == "build":
+		from tools.drift_deploy.drift_build import run as build_run
+		return build_run(effective_argv[1:])
 
 	# Intercept "trust <file>.author-profile" — consumer trust flow.
 	# Known subcommands are dispatched normally; only .author-profile extension

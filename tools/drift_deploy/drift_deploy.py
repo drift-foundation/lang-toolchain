@@ -3,7 +3,7 @@
 drift deploy — standardized package deploy tool.
 
 Entry point for building, signing, smoking, and publishing Drift
-package and app artifacts from a drift-package.json manifest.
+package and app artifacts from a drift-manifest.json manifest.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
@@ -65,8 +66,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		prog="drift deploy",
 		description="Build, sign, smoke-test, and publish Drift artifacts.",
 	)
-	p.add_argument("--manifest", type=Path, default=Path("drift-package.json"),
-		help="Path to drift-package.json (default: ./drift-package.json)")
+	p.add_argument("--manifest", type=Path, default=Path("drift-manifest.json"),
+		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
 	p.add_argument("--dest", type=Path, default=None,
 		help="Publish destination root for package artifacts (required if manifest has packages)")
 	p.add_argument("--app-dest", type=Path, default=None,
@@ -336,43 +337,16 @@ def _build_package(
 	out_dmp = staged_install / f"{art.name}.dmp"
 	staged_install.mkdir(parents=True, exist_ok=True)
 
-	cmd = [
-		str(driftc),
-		"--emit-package", str(out_dmp),
-		"--package-id", art.name,
-		"--package-version", art.version,
-		"--package-target", target,
-	]
-
-	# Native deps.
-	for nd in art.native_deps:
-		cmd.extend(["--native-link-lib", nd.lib])
-
-	# Package deps as declarations.
-	for pd in art.package_deps:
-		cmd.extend(["--package-dep", f"{pd.name}={pd.version}"])
-
-	# Exact resolved versions via --dep.
-	cmd.extend(expand_to_dep_flags(resolved))
-
-	# Package roots.
-	for pr in package_roots:
-		cmd.extend(["--package-root", str(pr)])
-
-	# Unsafe support for FFI packages.
-	if art.unsafe:
-		cmd.append("--allow-unsafe")
-
-	# Native library search paths (resolver input, not package metadata).
-	for nlp in (native_lib_paths or []):
-		cmd.extend(["--link-search", str(nlp)])
-
-	# Source inputs: entry module + declared module paths.
-	cmd.append(str(manifest_dir / art.entry_module))
-	for mod_path in art.modules:
-		resolved_mod = manifest_dir / mod_path
-		if str(resolved_mod) != str(manifest_dir / art.entry_module):
-			cmd.append(str(resolved_mod))
+	cmd = build_package_cmd(
+		art,
+		driftc=driftc,
+		target=target,
+		resolved_deps=resolved,
+		output_path=out_dmp,
+		manifest_dir=manifest_dir,
+		package_roots=package_roots,
+		native_lib_paths=native_lib_paths,
+	)
 
 	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
 	if result.returncode != 0:
@@ -400,33 +374,16 @@ def _build_app(
 	out_bin = staged_install / art.name
 	staged_install.mkdir(parents=True, exist_ok=True)
 
-	cmd = [str(driftc), "-o", str(out_bin), "--target", target]
-
-	# Exact resolved versions via --dep.
-	cmd.extend(expand_to_dep_flags(resolved))
-
-	# Package roots.
-	for pr in package_roots:
-		cmd.extend(["--package-root", str(pr)])
-
-	# Native deps for link-time.
-	for nd in art.native_deps:
-		cmd.extend(["--link-lib", nd.lib])
-
-	# Unsafe support for FFI apps.
-	if art.unsafe:
-		cmd.append("--allow-unsafe")
-
-	# Native library search paths (resolver input, not package metadata).
-	for nlp in (native_lib_paths or []):
-		cmd.extend(["--link-search", str(nlp)])
-
-	# Source inputs: entry module + declared module paths.
-	cmd.append(str(manifest_dir / art.entry_module))
-	for mod_path in art.modules:
-		resolved_mod = manifest_dir / mod_path
-		if str(resolved_mod) != str(manifest_dir / art.entry_module):
-			cmd.append(str(resolved_mod))
+	cmd = build_app_cmd(
+		art,
+		driftc=driftc,
+		target=target,
+		resolved_deps=resolved,
+		output_path=out_bin,
+		manifest_dir=manifest_dir,
+		package_roots=package_roots,
+		native_lib_paths=native_lib_paths,
+	)
 
 	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
 	if result.returncode != 0:
@@ -1069,7 +1026,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	if not manifest.project.author_profile:
 		raise DeployError(
 			"publisher identity missing: set 'project.author_profile' in "
-			"drift-package.json (run 'drift init' to create an author profile)"
+			"drift-manifest.json (run 'drift init' to create an author profile)"
 		)
 	author_profile_path = manifest_dir / manifest.project.author_profile
 	if not author_profile_path.exists():

@@ -26,7 +26,7 @@ same rigor without copying the orchestrator.
 
 One standard `drift deploy` tool that downstream projects use by providing:
 
-1. A project manifest (`drift-package.json`) — the authoritative source
+1. A project manifest (`drift-manifest.json`) — the authoritative source
    of project identity and per-artifact build/deploy configuration.
 2. Optionally, per-artifact smoke commands for package-specific integration
    validation.
@@ -45,7 +45,7 @@ command.
 
 ### Location
 
-`drift-package.json` at the project source root.
+`drift-manifest.json` at the project source root.
 
 ### Design principles
 
@@ -59,11 +59,11 @@ command.
 
 ### MVP schema
 
-`drift-package.json` is the single authoritative source of truth for
+`drift-manifest.json` is the single authoritative source of truth for
 project identity, per-artifact configuration, build inputs, dependencies,
 and smoke configuration.  The tool reads everything from this file.
 
-This is a deliberate standardization decision: `drift-package.json`
+This is a deliberate standardization decision: `drift-manifest.json`
 owns both project/artifact identity and build inputs.  Including
 `entry_module` and `modules` on each artifact (rather than leaving
 them as CLI-only arguments) means the manifest fully describes what
@@ -287,7 +287,7 @@ concepts are reserved for the future indirection model.
 
 ### Version source rule
 
-`drift-package.json` is the standard version source for all artifacts
+`drift-manifest.json` is the standard version source for all artifacts
 using `drift deploy`.
 
 - The tool reads `name` and `version` from each artifact and passes
@@ -298,7 +298,7 @@ using `drift deploy`.
   variables, Python constants, or other ad hoc locations once they
   adopt this standard.
 - If a repo currently maintains version elsewhere, it must either
-  migrate to `drift-package.json` or generate `drift-package.json`
+  migrate to `drift-manifest.json` or generate `drift-manifest.json`
   from its existing source before invoking the tool.
 
 One file, per-artifact values, no drift.
@@ -309,10 +309,10 @@ One file, per-artifact values, no drift.
 
 - The tool checks `schema_version` before reading any other field.
 - If `schema_version` is missing, the tool fails with a clear error:
-  `error: drift-package.json missing required field 'schema_version'`.
+  `error: drift-manifest.json missing required field 'schema_version'`.
 - If `schema_version` is higher than the tool understands, the tool
   fails with a clear error:
-  `error: drift-package.json schema_version 3 is not supported by this
+  `error: drift-manifest.json schema_version 3 is not supported by this
   version of drift deploy (supports up to version 1). Upgrade
   drift deploy.`
 - The tool does not attempt to guess, partially parse, or fall back
@@ -334,7 +334,7 @@ Compatibility policy:
 
 Artifact names must be unique within the manifest.  Two artifacts
 with the same `name` is a validation error:
-`error: duplicate artifact name 'net.tls' in drift-package.json`
+`error: duplicate artifact name 'net.tls' in drift-manifest.json`
 
 ### What the manifest does NOT contain
 
@@ -376,7 +376,7 @@ with the same `name` is a validation error:
 
 Native dependency metadata has two homes, serving two audiences:
 
-1. **`drift-package.json`** — the author's source-of-truth declaration,
+1. **`drift-manifest.json`** — the author's source-of-truth declaration,
    per artifact.  Human-readable, version-controlled, used by
    `drift deploy` during the build.
 
@@ -508,7 +508,7 @@ New `driftc` flags for `--emit-package`:
 ```
 
 `drift deploy` passes these flags automatically based on each artifact's
-configuration in `drift-package.json`.
+configuration in `drift-manifest.json`.
 
 ### Signing / trust separation
 
@@ -550,7 +550,7 @@ own `assets` list.
 
 ### Semantics
 
-- Asset paths in the manifest are relative to `drift-package.json`.
+- Asset paths in the manifest are relative to `drift-manifest.json`.
 - Paths may reference files or directories.
 - Directories are copied recursively.
 - The tool preserves relative path structure under the install root.
@@ -1062,7 +1062,7 @@ drift deploy [--manifest <path>] [--dest <path>] [--app-dest <path>]
 
 | Flag              | Default                    | Description                     |
 |-------------------|----------------------------|---------------------------------|
-| `--manifest`      | `./drift-package.json`     | Path to project manifest        |
+| `--manifest`      | `./drift-manifest.json`     | Path to project manifest        |
 | `--dest`          | required for packages      | Publish destination root (package artifacts) |
 | `--app-dest`      | required for apps          | Publish destination root (app artifacts) |
 | `--package-root`  | `--dest` value             | Library root for resolving external `package_deps` (repeatable) |
@@ -1217,7 +1217,7 @@ work begins for that artifact.
 (lexicographic pop from work_queue).  All other operations — index
 lookup, constraint satisfaction, version comparison — are pure
 functions of their inputs.  Two runs with the same package index
-and the same `drift-package.json` will always produce the same
+and the same `drift-manifest.json` will always produce the same
 resolved map.
 
 **Why "aggregate then select" instead of "first-seen-wins"**: with
@@ -1257,7 +1257,7 @@ lock file recording the exact versions selected.  This makes the
 resolved dependency graph reproducible without re-resolving from
 the package root.
 
-Lock file location: `drift-lock.json` next to `drift-package.json`.
+Lock file location: `drift-lock.json` next to `drift-manifest.json`.
 
 ```json
 {
@@ -1347,7 +1347,7 @@ Lock file behavior:
 - **`--update-lock`**: re-resolves all `package_deps` from the
   package root, ignoring the existing lock file, and writes a new
   `drift-lock.json`.  Use after bumping constraints in
-  `drift-package.json` or after publishing new dependency versions.
+  `drift-manifest.json` or after publishing new dependency versions.
 - **Lock file is checked into version control**: it is a project
   artifact, not a build cache.  CI builds use the lock file to get
   deterministic builds.
@@ -1355,7 +1355,7 @@ Lock file behavior:
   every direct `package_deps` entry declared in the manifest has a
   corresponding entry in the lock file.  If the manifest adds a new
   dependency not present in the lock, the tool fails:
-  `error: dependency 'foo' declared in drift-package.json but not present in drift-lock.json; run drift deploy --update-lock`
+  `error: dependency 'foo' declared in drift-manifest.json but not present in drift-lock.json; run drift deploy --update-lock`
   This prevents partial locks from silently passing.
 
 The lock file records only Drift package dependencies, not native
@@ -1413,7 +1413,7 @@ the contract.
 The concrete intended flow for a downstream project:
 
 ```
-1. Author writes drift-package.json
+1. Author writes drift-manifest.json
    ┌─────────────────────────────────────────┐
    │ {                                       │
    │   "project": { "name": "my-app" },      │
@@ -1465,7 +1465,7 @@ The concrete intended flow for a downstream project:
 
 | Layer                  | Contains                              | Who writes it         |
 |------------------------|---------------------------------------|-----------------------|
-| `drift-package.json`   | Version range constraints (`^0.3.0`)  | Project author        |
+| `drift-manifest.json`   | Version range constraints (`^0.3.0`)  | Project author        |
 | `drift-lock.json`      | Exact resolved versions (`0.3.4`)     | `drift deploy` tool   |
 | `--dep` flags          | Exact versions passed to compiler     | `drift deploy` tool   |
 | `.dmp` manifest        | Declared constraints of the package   | Package producer       |
@@ -1545,15 +1545,15 @@ drift deploy --dest /deploy --app-dest /apps \
 ```
 
 If `--artifact` names an artifact not in the manifest, the tool fails:
-`error: artifact 'foo' not found in drift-package.json`
+`error: artifact 'foo' not found in drift-manifest.json`
 
 ### Manifest vs CLI responsibility
 
-`drift-package.json` is the **full authoritative build and deploy
+`drift-manifest.json` is the **full authoritative build and deploy
 manifest** for the project.  It is not a partial hint or supplement
 to external build logic — it is the complete definition of what gets
 built, what it depends on, and how it is validated.  The tool reads
-`drift-package.json` and produces deployable artifacts without
+`drift-manifest.json` and produces deployable artifacts without
 requiring any external build configuration (Makefile, justfile,
 script) to supply identity, source inputs, or dependency information.
 
@@ -1635,13 +1635,13 @@ hint: package 'net.tls' (v0.3.0) requires native library 'ssl' (-lssl).
 
 | Condition                              | Diagnostic                                          |
 |----------------------------------------|-----------------------------------------------------|
-| Manifest missing or invalid JSON       | `error: drift-package.json not found / parse error`  |
-| `schema_version` missing               | `error: drift-package.json missing required field 'schema_version'` |
-| `schema_version` unsupported           | `error: drift-package.json schema_version <N> is not supported by this version of drift deploy` |
+| Manifest missing or invalid JSON       | `error: drift-manifest.json not found / parse error`  |
+| `schema_version` missing               | `error: drift-manifest.json missing required field 'schema_version'` |
+| `schema_version` unsupported           | `error: drift-manifest.json schema_version <N> is not supported by this version of drift deploy` |
 | Required field missing                 | `error: artifact 'net.tls': missing required field 'entry_module'` |
-| Duplicate artifact name                | `error: duplicate artifact name 'net.tls' in drift-package.json` |
+| Duplicate artifact name                | `error: duplicate artifact name 'net.tls' in drift-manifest.json` |
 | Unknown artifact kind                  | `error: artifact 'foo': unknown kind 'service'`     |
-| `--artifact` not in manifest           | `error: artifact 'foo' not found in drift-package.json` |
+| `--artifact` not in manifest           | `error: artifact 'foo' not found in drift-manifest.json` |
 | Package depends on app                 | `error: package 'net.tls' cannot depend on app 'tls-tool'` |
 | `--dest` missing with package artifacts | `error: --dest required (manifest contains package artifacts)` |
 | `--app-dest` missing with app artifacts | `error: --app-dest required (manifest contains app artifacts)` |
@@ -1654,7 +1654,7 @@ hint: package 'net.tls' (v0.3.0) requires native library 'ssl' (-lssl).
 | Locked version not found               | `error: locked dependency 'net.tls' version '0.3.2' not found under package roots` |
 | Locked integrity mismatch              | `error: locked dependency 'net.tls' integrity mismatch (expected sha256:abc..., got sha256:def...)` |
 | Lock file written                      | `note: wrote drift-lock.json (3 packages resolved)` |
-| Lock missing declared dep              | `error: dependency 'foo' declared in drift-package.json but not present in drift-lock.json; run drift deploy --update-lock` |
+| Lock missing declared dep              | `error: dependency 'foo' declared in drift-manifest.json but not present in drift-lock.json; run drift deploy --update-lock` |
 | Dependency unsatisfied                 | `error: artifact 'tls-tool': package dependency 'net.tls ^0.3.0' not satisfied (searched: /deploy)` |
 | Transitive conflict                    | `error: conflicting constraints on 'acme.crypto': net.tls requires ^0.9.0, web requires ^1.0.0` |
 | Unknown `native_deps.schema_version`   | `warning: native_deps schema_version <N> is newer than supported; some metadata may be ignored` |
@@ -1691,7 +1691,7 @@ multi-artifact.
 
 Deliverables:
 
-1. **`drift-package.json` schema** — schema_version, project (name,
+1. **`drift-manifest.json` schema** — schema_version, project (name,
    license), artifacts array with kind, name, version, description,
    entry_module, modules, package_deps, native_deps, assets,
    smoke_command.  Single authoritative source of truth for project
@@ -1716,7 +1716,7 @@ Deliverables:
 6. **Link-time diagnostic enrichment** — enrich linker failures with
    package-declared library hints.
 
-7. **`drift deploy` tool** — reads `drift-package.json`, orchestrates
+7. **`drift deploy` tool** — reads `drift-manifest.json`, orchestrates
    per-artifact build → sign → asset copy → stage → smoke → publish.
    Fixed smoke env contract.  Asset staging into `assets/` subdirectory.
    `--artifact` selection.  Artifact build ordering from dependency graph.
@@ -1773,7 +1773,7 @@ Deliverables:
 
 | Test                                             | What it validates                                    |
 |--------------------------------------------------|------------------------------------------------------|
-| `test_deploy_manifest_parse`                     | Valid and invalid `drift-package.json` parsing       |
+| `test_deploy_manifest_parse`                     | Valid and invalid `drift-manifest.json` parsing       |
 | `test_deploy_manifest_multi_artifact`            | Manifest with multiple artifacts parses correctly    |
 | `test_deploy_manifest_schema_version_missing`    | Missing `schema_version` → clear error               |
 | `test_deploy_manifest_schema_version_unsupported`| `schema_version` > supported → clear error, no fallback |
@@ -1835,7 +1835,7 @@ Deliverables:
 
 | Feature                                      | MVP | Future |
 |----------------------------------------------|-----|--------|
-| `drift-package.json` manifest (authoritative) | yes |        |
+| `drift-manifest.json` manifest (authoritative) | yes |        |
 | Project-level `name`, `license`              | yes |        |
 | `artifacts` array with per-artifact config   | yes |        |
 | Artifact kinds: `package`, `app`             | yes |        |
@@ -1898,7 +1898,7 @@ Deliverables:
 | `lang/driftc/packages/provider_v0.py`         | Pass through `native_deps` and `package_deps` in load path |
 | `tools/drift_deploy/`                         | New tool: manifest parser, orchestrator, smoke runner, publisher |
 | `tools/drift_deploy/drift_deploy.py`          | Main entry point, artifact selection, build ordering       |
-| `tools/drift_deploy/manifest.py`              | `drift-package.json` schema + validator (project + artifacts) |
+| `tools/drift_deploy/manifest.py`              | `drift-manifest.json` schema + validator (project + artifacts) |
 | `tools/drift_deploy/lockfile.py`              | `drift-lock.json` read/write/verify, integrity check      |
 | `tools/drift_deploy/resolver.py`              | Range resolution, transitive walk, conflict detection, `--dep` expansion |
 | `tools/drift_deploy/sidecar.py`               | App provenance sidecar `.meta.json` emission              |
