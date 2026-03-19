@@ -65,11 +65,35 @@ def main() -> None:
 	if compiler_lib not in sys.path:
 		sys.path.insert(0, compiler_lib)
 
-	# Point runtime archive cache at deployed pre-built archives.
-	os.environ.setdefault(
-		"DRIFT_RUNTIME_LIB_CACHE_DIR",
-		str(dist_root / "lib" / "runtime"),
-	)
+	# Runtime archive resolution: use a writable user-local cache so that
+	# missing variants (e.g. asan) can be built on demand even when the
+	# install tree is read-only.  Pre-built archives from the install tree
+	# are copied into the cache on first run.
+	#
+	# Copies (not symlinks) are used because symlinks break when the install
+	# tree is relocated or when tests use ephemeral temp directories.
+	import shutil as _shutil
+	_install_runtime = dist_root / "lib" / "runtime"
+	if "DRIFT_RUNTIME_LIB_CACHE_DIR" not in os.environ:
+		_cache_runtime = Path.home() / ".cache" / "drift" / "runtime"
+		_cache_runtime.mkdir(parents=True, exist_ok=True)
+		# Seed pre-built archives from the install tree.
+		if _install_runtime.is_dir():
+			for _variant_dir in sorted(_install_runtime.iterdir()):
+				if not _variant_dir.is_dir():
+					continue
+				_archive = _variant_dir / "libdrift_rt.a"
+				if not _archive.is_file():
+					continue
+				_cache_variant = _cache_runtime / _variant_dir.name
+				_cache_variant.mkdir(parents=True, exist_ok=True)
+				_cache_archive = _cache_variant / "libdrift_rt.a"
+				if not _cache_archive.is_file():
+					try:
+						_shutil.copy2(str(_archive), str(_cache_archive))
+					except OSError:
+						pass  # Best-effort; build will recreate if needed.
+		os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(_cache_runtime)
 
 	# Build driftc argument list.
 	args = list(sys.argv[1:])

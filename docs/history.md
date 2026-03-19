@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-18
+- **Moved deployed runtime archive fallback builds into a writable user cache (0.27.87, ABI 6)**:
+  Fixed a packaged-toolchain regression where readonly deployed installs could
+  still fail in archive mode when a runtime variant such as `asan` was missing
+  from the bundled prebuilt archives.
+  - Problem:
+    - deployed wrappers were pointing `DRIFT_RUNTIME_LIB_CACHE_DIR` directly at
+      the install tree under `dist/lib/runtime`
+    - when a missing variant had to be built on demand, archive creation tried
+      to write into the readonly deployed tree and failed with `EPERM`
+    - the first cache-seeding attempt also used symlinks, which were brittle
+      across relocated installs and ephemeral test directories
+  - Fix:
+    - changed both deployed entrypoints to default runtime archive caching to a
+      writable user-local cache under `~/.cache/drift/runtime`
+    - prebuilt runtime archives from the install tree are copied into that cache
+      on first run
+    - missing variants are now built on demand into the writable cache instead
+      of the readonly install tree
+    - switched cache-seeding checks to real-file tests so dangling symlinks do
+      not masquerade as reusable runtime archives
+    - removed the temporary readonly-test env override because the product fix
+      now handles the deployed path correctly by default
+  - Versioning:
+    - compiler version is `0.27.87`
+    - ABI remains `6` because this changes deployed runtime cache location and
+      toolchain behavior, not compiler/runtime boundary shape
+
 - **Expanded `~` in CLI path arguments and made published author profiles visible files (0.27.86, ABI 6)**:
   Smoothed two downstream tooling UX issues in the packaged workflow:
   shell-style home paths now work reliably across CLI path flags, and deployed
