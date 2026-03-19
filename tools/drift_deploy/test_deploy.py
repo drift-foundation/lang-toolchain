@@ -1897,54 +1897,64 @@ class TestAuthorProfilePublish:
 			])
 			assert rc == 1  # DeployError: file not found
 
-	@patch("tools.drift_deploy.drift_deploy._deploy_artifact")
-	@patch("tools.drift_deploy.drift_deploy._resolve_driftc")
-	@patch("tools.drift_deploy.drift_deploy._get_compiler_version")
-	def test_author_profile_passed_to_deploy_artifact(
-		self,
-		mock_version: MagicMock,
-		mock_driftc: MagicMock,
-		mock_deploy_art: MagicMock,
-	) -> None:
-		"""_deploy_artifact receives author_profile_path from the manifest."""
-		mock_version.return_value = "0.0.0-test"
-		mock_driftc.return_value = Path("/fake/driftc")
-		from tools.drift_deploy.drift_deploy import run
-		with tempfile.TemporaryDirectory() as tmpdir:
-			td = Path(tmpdir)
-			manifest_path = self._write_manifest(
-				td, author_profile="acme.author-profile",
-			)
-			(td / "acme.author-profile").write_text('{"format":"author-profile"}')
-			key_path = td / "key.seed"
-			import base64 as _b64, os as _os
-			key_path.write_text(_b64.b64encode(_os.urandom(32)).decode() + "\n")
-			dest = td / "dest"
-			dest.mkdir()
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(key_path),
-			])
-			assert rc == 0
-			# Verify _deploy_artifact was called with author_profile_path.
-			assert mock_deploy_art.called
-			call_kwargs = mock_deploy_art.call_args[1]
-			assert call_kwargs["author_profile_path"] == td / "acme.author-profile"
+	def test_sign_package_with_profile_produces_bound_sidecar(self) -> None:
+		"""_sign_package with author_profile_path produces envelope_version: 1."""
+		from tools.drift_deploy.drift_deploy import _sign_package
+		from lang.drift.author_profile import create_author_profile, write_author_profile
+		from dataclasses import replace as _dc_replace
 
-	def test_deploy_artifact_stages_author_profile(self) -> None:
-		"""_deploy_artifact copies .author-profile into staged install dir."""
 		with tempfile.TemporaryDirectory() as tmpdir:
 			td = Path(tmpdir)
-			profile = td / "pub.author-profile"
-			profile.write_text('{"test": true}')
-			staged_install = td / "staged" / "test.pkg" / "0.1.0"
-			staged_install.mkdir(parents=True)
-			# Call the copy logic directly (same as _deploy_artifact step 3).
-			import shutil
-			shutil.copy2(str(profile), str(staged_install / ".author-profile"))
-			assert (staged_install / ".author-profile").exists()
-			assert (staged_install / ".author-profile").read_text() == '{"test": true}'
+			# Create a fake .dmp.
+			dmp = td / "test.pkg.dmp"
+			dmp.write_bytes(b"fake package bytes")
+			# Create a key.
+			import base64 as _b64, os as _os
+			key_path = td / "key.seed"
+			seed = _os.urandom(32)
+			key_path.write_text(_b64.b64encode(seed).decode() + "\n")
+			# Create a bound author profile.
+			from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+			from lang.drift.crypto import ed25519_public_bytes_raw
+			priv = Ed25519PrivateKey.from_private_bytes(seed)
+			pub_raw = ed25519_public_bytes_raw(priv.public_key())
+			profile = create_author_profile(pubkey_raw=pub_raw, name="Test", namespaces=["test.*"])
+			bound = _dc_replace(profile, package="test.pkg")
+			staged_profile = td / ".author-profile"
+			write_author_profile(bound, staged_profile)
+
+			sig_path = _sign_package(dmp, sign_key=key_path, author_profile_path=staged_profile)
+
+			import json as _json
+			sc = _json.loads(sig_path.read_text())
+			assert sc["envelope_version"] == 1
+			assert "author_profile_sha256" in sc
+			from lang.drift.crypto import sha256_hex
+			assert sc["author_profile_sha256"] == f"sha256:{sha256_hex(staged_profile.read_bytes())}"
+
+			# Verify the staged profile has the package field.
+			from lang.drift.author_profile import load_author_profile
+			loaded = load_author_profile(staged_profile)
+			assert loaded.package == "test.pkg"
+
+	def test_sign_package_without_profile_is_legacy(self) -> None:
+		"""_sign_package without author_profile_path produces legacy v0 sidecar."""
+		from tools.drift_deploy.drift_deploy import _sign_package
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			td = Path(tmpdir)
+			dmp = td / "test.pkg.dmp"
+			dmp.write_bytes(b"fake package bytes")
+			import base64 as _b64, os as _os
+			key_path = td / "key.seed"
+			key_path.write_text(_b64.b64encode(_os.urandom(32)).decode() + "\n")
+
+			sig_path = _sign_package(dmp, sign_key=key_path)
+
+			import json as _json
+			sc = _json.loads(sig_path.read_text())
+			assert "envelope_version" not in sc
+			assert "author_profile_sha256" not in sc
 
 
 class TestDeployPexEntry:

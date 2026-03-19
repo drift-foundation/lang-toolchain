@@ -69,6 +69,8 @@ class SigEntry:
 class SigFile:
 	package_sha256_hex: str
 	signatures: list[SigEntry]
+	envelope_version: int = 0  # 0 = legacy (raw bytes), 1 = signed envelope
+	author_profile_sha256_hex: str | None = None  # set when envelope_version >= 1
 
 
 def load_sig_sidecar(path: Path) -> SigFile:
@@ -127,7 +129,23 @@ def load_sig_sidecar(path: Path) -> SigFile:
 		entries.append(SigEntry(algo=algo, kid=kid, sig_raw=sig_raw, pubkey_raw=pub_raw))
 	if not entries:
 		raise ValueError("signature sidecar contains no usable signatures")
-	return SigFile(package_sha256_hex=pkg_sha_hex, signatures=entries)
+
+	envelope_version = obj.get("envelope_version", 0)
+	if not isinstance(envelope_version, int):
+		raise ValueError("signature sidecar envelope_version must be an integer")
+	ap_sha: str | None = None
+	raw_ap = obj.get("author_profile_sha256")
+	if raw_ap is not None:
+		if not isinstance(raw_ap, str) or not raw_ap.startswith("sha256:"):
+			raise ValueError("signature sidecar author_profile_sha256 must be 'sha256:<hex>'")
+		ap_sha = raw_ap.split("sha256:", 1)[1]
+
+	return SigFile(
+		package_sha256_hex=pkg_sha_hex,
+		signatures=entries,
+		envelope_version=envelope_version,
+		author_profile_sha256_hex=ap_sha,
+	)
 
 
 def verify_ed25519(*, pubkey_raw: bytes, message: bytes, signature_raw: bytes) -> bool:
@@ -200,6 +218,19 @@ def verify_package_signatures(
 	if sf.package_sha256_hex != pkg_sha:
 		raise ValueError("signature sidecar package_sha256 mismatch")
 
+	# Determine the signed payload based on envelope version.
+	if sf.envelope_version >= 1:
+		# Envelope v1: signature covers a canonical envelope string
+		# that includes the package digest and (optionally) the profile digest.
+		from lang.drift.envelope import build_envelope
+		signed_message = build_envelope(
+			package_sha256_hex=sf.package_sha256_hex,
+			author_profile_sha256_hex=sf.author_profile_sha256_hex,
+		)
+	else:
+		# Legacy (v0): signature covers raw package bytes.
+		signed_message = pkg_bytes
+
 	# Verify signatures and collect the set of verified kids.
 	verified_kids: dict[str, str] = {}  # kid -> pubkey source ("trust"|"core"|"sidecar")
 	seen_ed25519 = 0
@@ -236,7 +267,7 @@ def verify_package_signatures(
 			continue
 
 		try:
-			ok = verify_ed25519(pubkey_raw=pub_raw, message=pkg_bytes, signature_raw=entry.sig_raw)
+			ok = verify_ed25519(pubkey_raw=pub_raw, message=signed_message, signature_raw=entry.sig_raw)
 		except Exception as err:
 			raise ValueError(f"signature verification failed: {err}") from err
 		if ok:

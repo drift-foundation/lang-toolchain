@@ -28,9 +28,10 @@ export DRIFT_TOOL="$PWD/bin/drift"
 For most users, use this simple model:
 
 1. Publisher runs `drift init` to set up a signing key and public author profile.
-2. Publisher signs packages, `drift deploy` publishes them along with the `.author-profile`.
-3. Consumer obtains the `.author-profile` and runs `drift trust <file>.author-profile` to trust it.
-4. `driftc` verifies package signatures against the trust store at compile time.
+2. `drift deploy` publishes the package and a deployed `.author-profile` inside the versioned artifact directory.
+3. The deployed signature binds both the package bytes and the deployed `.author-profile`.
+4. Consumer obtains that deployed `.author-profile` and runs `drift trust <file>.author-profile` to trust it.
+5. `driftc` verifies package signatures against the trust store at compile time.
 
 Some teams may add internal deploy signing as an optional extra attestation
 layer, but early adopters can safely start with publisher-signature verification.
@@ -123,12 +124,15 @@ $DRIFT_TOOL init
 This guides you through:
 
 1. **Signing key** — if no key exists, offers to generate one at `~/.config/drift/keys/default.seed`.
-2. **Publisher details** — display name, organization, email, website (informational, not cryptographic).
+2. **Publisher details** — author name and/or organization, email, website (informational, not cryptographic). At least one of author name or organization is required.
 3. **Namespaces** — which Drift module namespaces this key will sign for (e.g. `acme.*`, `net_tls.*`). These must match the module names consumers import, not hyphenated package ids.
 4. **Author profile** — writes a `.author-profile` file you share with consumers.
 
 The private signing key stays local. The `.author-profile` is derived from the
 signing key but contains only the public key and metadata — safe to share publicly.
+At deploy time, Drift publishes a bound copy of this profile inside the versioned
+artifact directory and signs an envelope that covers both the package digest and
+the deployed profile digest.
 
 For CI/automation, supply all fields via flags:
 
@@ -260,17 +264,25 @@ $DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key sandbox/keys/acme.seed --in
 This produces:
 - `sandbox/libmath/acme.math.sig` (detached signature sidecar)
 
+Standalone `drift sign` signs the package bytes only. The stronger
+package+author-profile binding is added by `drift deploy`, which stages the
+deployed `.author-profile` and signs an authenticated envelope over both
+digests.
+
 ### 5.3 Trust the publisher (consumer side)
 
-The consumer obtains the publisher's `.author-profile` and trusts it:
+The consumer obtains the publisher's deployed `.author-profile` and trusts it:
 
 ```bash
-$DRIFT_TOOL trust acme.author-profile --trust-store sandbox/drift/trust.json
+$DRIFT_TOOL trust ~/opt/drift/libs/acme.math/0.1.0/.author-profile --trust-store sandbox/drift/trust.json
 ```
 
 This displays the author's identity, key fingerprint, and namespace claims,
-then asks for confirmation. The consumer verifies the key fingerprint through
-an independent channel (website, email, etc.) — metadata is informational.
+then asks for confirmation. When the profile comes from a deployed versioned
+artifact directory, Drift verifies that the profile bytes are cryptographically
+bound to the package signature. The consumer still verifies the key fingerprint
+through an independent channel (website, email, etc.) — metadata is
+informational even when integrity-bound.
 
 Use `--yes` for non-interactive automation.
 
@@ -352,10 +364,23 @@ drift deploy --manifest drift-package.json --dest ~/opt/drift/libs --driftc drif
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
-and publishes all artifacts plus the declared `.author-profile`.
+and publishes all artifacts plus a bound copy of the declared `.author-profile`.
 
 Deploy is read-only with respect to tracked project files — it does not
 rewrite `drift-lock.json` or other repo-managed metadata.
+
+Published layout for a package now looks like:
+
+```text
+~/opt/drift/libs/net-tls/0.3.4/
+├── .author-profile
+├── assets/
+├── net-tls.sig
+└── net-tls.zdmp
+```
+
+The deployed `.author-profile` is a published copy. `drift deploy` does not
+rewrite the tracked project profile file after commit.
 
 ### 6.4 Intended workflow
 
@@ -411,6 +436,7 @@ Rebuild should now fail for that package.
 
 - `module main` is required for default executable entrypoint (`main::main`).
 - Imported module ids must match what the package exports.
+- Author-profile namespace claims follow imported Drift module namespaces, not package ids (for example `net_tls.*`, not `net-tls.*`).
 - If consuming unsigned local packages, pass `--skip-package-signatures` (and optionally `--allow-unsigned-from <dir>` when using raw `lang.driftc`).
 - For signed flow, trust store must be configured (`--trust-store` or `DRIFT_TRUST_STORE`).
 - `dist-publish-stdlib` requires a signing key (`DRIFT_SIGN_KEY_FILE` or explicit `SIGN_KEY` arg).

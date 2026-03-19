@@ -1,6 +1,43 @@
 # Drift development history
 
 ## 2026-03-17
+- **Cryptographically bound published author profiles to signed package distributions (0.27.82, ABI 6)**:
+  Strengthened the new author-profile workflow so the published
+  `.author-profile` is authenticated together with the package distribution
+  instead of remaining a loose unsigned attachment.
+  - Problem:
+    - publishing `.author-profile` alongside a package was useful UX, but the
+      profile contents were not actually authenticated by the package-signing
+      mechanism
+    - user-visible author metadata (name, org, website, email, namespace
+      claims) therefore lacked a cryptographic binding to the published package
+  - Fix:
+    - introduced a deterministic signed envelope format that includes the
+      package digest and, when present, the deployed author-profile digest
+    - package signing now signs that envelope for bound distributions, and
+      sidecars record `envelope_version` plus `author_profile_sha256`
+    - compiler/package verification now understands envelope-backed signatures
+      in addition to legacy raw-package signatures
+    - deploy stages a bound copy of `.author-profile` with an explicit
+      `package` field before signing, so the published profile is tied to a
+      specific artifact
+    - `drift trust <file>.author-profile` now verifies:
+      - profile digest matches the signed sidecar
+      - a signature over the reconstructed envelope is valid
+      - the verified signer key matches the key declared in the profile
+      - when package bytes are present on disk, they match the signed package
+        digest
+  - Result:
+    - tampering with the profile, sidecar digest, signer identity, or bound
+      package bytes is now detected
+    - consumers can distinguish between a fully bound profile, a
+      signature-only bound profile (package artifact absent), and an unbound
+      legacy profile
+  - Versioning:
+    - compiler version is `0.27.82`
+    - ABI remains `6` because this changes package-signature verification and
+      tooling/workflow behavior only, not a compiler/runtime boundary shape
+
 - **Published author profiles inside versioned artifact directories (0.27.81, ABI 6)**:
   Adjusted the package deploy layout so the public publisher identity travels
   with the exact published artifact version rather than as a loose file at the

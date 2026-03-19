@@ -280,6 +280,87 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
 
+	# ── Verify profile binding ──
+	# When the profile declares a package, we must verify the full chain:
+	#   1. Profile digest matches sidecar's author_profile_sha256
+	#   2. At least one Ed25519 signature in the sidecar verifies against
+	#      the reconstructed envelope (which includes the profile digest)
+	# Without step 2, an attacker could forge both the profile and sidecar.
+	binding_status = "unbound"
+	if profile.package:
+		sig_path = profile_path.parent / f"{profile.package}.sig"
+		if not sig_path.exists():
+			print(f"error: profile declares package '{profile.package}' but sidecar not found: {sig_path}", file=sys.stderr)
+			return 1
+		from lang.drift.crypto import sha256_hex
+		from lang.driftc.packages.signature_v0 import load_sig_sidecar, verify_ed25519
+		from lang.drift.envelope import build_envelope
+		try:
+			sf = load_sig_sidecar(sig_path)
+		except ValueError as e:
+			print(f"error: failed to read sidecar: {e}", file=sys.stderr)
+			return 1
+		if sf.envelope_version >= 1 and sf.author_profile_sha256_hex:
+			# Step 1: verify profile digest matches sidecar.
+			actual_hex = sha256_hex(profile_path.read_bytes())
+			if actual_hex != sf.author_profile_sha256_hex:
+				print(f"error: author profile has been modified since signing", file=sys.stderr)
+				print(f"  expected sha256: {sf.author_profile_sha256_hex}", file=sys.stderr)
+				print(f"  actual sha256:   {actual_hex}", file=sys.stderr)
+				return 1
+			# Step 2: verify at least one signature over the envelope,
+			# signed by the same key described in the profile.
+			from lang.drift.crypto import b64_decode as _b64_decode
+			envelope = build_envelope(
+				package_sha256_hex=sf.package_sha256_hex,
+				author_profile_sha256_hex=sf.author_profile_sha256_hex,
+			)
+			profile_pubkey_raw = _b64_decode(profile.pubkey_b64)
+			any_verified = False
+			for entry in sf.signatures:
+				if entry.pubkey_raw is None:
+					continue
+				# The verified signer must be the same key the profile declares.
+				if entry.kid != profile.kid:
+					continue
+				if entry.pubkey_raw != profile_pubkey_raw:
+					continue
+				try:
+					if verify_ed25519(pubkey_raw=entry.pubkey_raw, message=envelope, signature_raw=entry.sig_raw):
+						any_verified = True
+						break
+				except Exception:
+					continue
+			if not any_verified:
+				print(f"error: no valid signature by profile key over the package+profile envelope", file=sys.stderr)
+				return 1
+
+			# Step 3: verify actual package bytes on disk match sidecar digest.
+			pkg_dmp = profile_path.parent / f"{profile.package}.dmp"
+			pkg_zdmp = profile_path.parent / f"{profile.package}.zdmp"
+			if pkg_dmp.exists():
+				actual_pkg_sha = sha256_hex(pkg_dmp.read_bytes())
+				if actual_pkg_sha != sf.package_sha256_hex:
+					print(f"error: package bytes do not match sidecar digest", file=sys.stderr)
+					print(f"  expected sha256: {sf.package_sha256_hex}", file=sys.stderr)
+					print(f"  actual sha256:   {actual_pkg_sha}", file=sys.stderr)
+					return 1
+				binding_status = "bound"
+			elif pkg_zdmp.exists():
+				import zstandard
+				raw = zstandard.ZstdDecompressor().decompress(pkg_zdmp.read_bytes())
+				actual_pkg_sha = sha256_hex(raw)
+				if actual_pkg_sha != sf.package_sha256_hex:
+					print(f"error: package bytes do not match sidecar digest", file=sys.stderr)
+					print(f"  expected sha256: {sf.package_sha256_hex}", file=sys.stderr)
+					print(f"  actual sha256:   {actual_pkg_sha}", file=sys.stderr)
+					return 1
+				binding_status = "bound"
+			else:
+				# Envelope signature is valid, but we cannot verify the package
+				# artifact itself because it is not present on disk.
+				binding_status = "signature-only"
+
 	# Display profile contents.
 	print(f"\ndrift trust — review author profile\n")
 	if profile.name and profile.org:
@@ -297,8 +378,15 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 	print(f"\n  Requested namespaces:")
 	for ns in profile.namespaces:
 		print(f"    {ns}")
-	print(f"\n  Metadata (name, email, website) is self-reported by the author.")
-	print(f"  Verify the fingerprint (kid) through an independent channel.")
+	if binding_status == "bound":
+		print(f"\n  Profile is cryptographically bound to package signature ({profile.package}).")
+		print(f"  Package bytes on disk verified against signed digest.")
+	elif binding_status == "signature-only":
+		print(f"\n  Profile is bound to a signed envelope ({profile.package}),")
+		print(f"  but package artifact not found on disk — bytes not independently verified.")
+	else:
+		print(f"\n  This profile is not cryptographically bound to a package signature.")
+		print(f"  Verify the author's identity through an independent channel.")
 
 	if not opts.yes:
 		if not sys.stdin.isatty():

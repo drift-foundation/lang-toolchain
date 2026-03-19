@@ -487,6 +487,7 @@ def _sign_package(
 	dmp_path: Path,
 	*,
 	sign_key: Path,
+	author_profile_path: Path | None = None,
 ) -> Path:
 	"""Sign a .dmp and produce .sig sidecar. Returns path to sidecar."""
 	from lang.drift.sign import SignOptions, sign_package_v0
@@ -499,6 +500,7 @@ def _sign_package(
 		out_path=sig_path,
 		add_signature=False,
 		include_pubkey=True,
+		author_profile_path=author_profile_path,
 	))
 	return sig_path
 
@@ -814,9 +816,10 @@ def _deploy_artifact(
 			native_lib_paths=native_lib_paths,
 		)
 
-	# ── Step 2: Sign (package only) ──
+	# ── Step 2: Stage author profile + sign (package only) ──
 	sig_path: Path | None = None
 	staged_trust_path: Path | None = None
+	staged_profile: Path | None = None
 
 	if art.kind == "package":
 		if sign_key is None:
@@ -824,7 +827,20 @@ def _deploy_artifact(
 				f"artifact '{art.name}': signing key required for package artifacts; "
 				f"pass --sign-key-file or set $DRIFT_SIGN_KEY_FILE"
 			)
-		sig_path = _sign_package(dmp_path, sign_key=sign_key)
+		# Stage the author profile BEFORE signing so the envelope
+		# can include the profile digest in the signed payload.
+		if author_profile_path:
+			from lang.drift.author_profile import load_author_profile, write_author_profile
+			from dataclasses import replace as _dc_replace
+			src_profile = load_author_profile(author_profile_path)
+			# Bind the profile to this specific package artifact.
+			bound_profile = _dc_replace(src_profile, package=art.name)
+			staged_profile = staged_install / ".author-profile"
+			write_author_profile(bound_profile, staged_profile)
+		sig_path = _sign_package(
+			dmp_path, sign_key=sign_key,
+			author_profile_path=staged_profile,
+		)
 
 		# Compress the signed .dmp → .zdmp for distribution.
 		# Signature covers the uncompressed bytes (already signed above).
@@ -904,10 +920,9 @@ def _deploy_artifact(
 		except Exception as e:
 			raise DeployError(f"staged trust generation failed: {e}")
 
-	# ── Step 3: Assets + author profile ──
+	# ── Step 3: Assets ──
 	_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
-	if author_profile_path:
-		shutil.copy2(str(author_profile_path), str(staged_install / ".author-profile"))
+	# Author profile was staged in step 2 (before signing) for envelope binding.
 
 	# ── Step 4: App sidecar ──
 	if art.kind == "app" and resolved:

@@ -7,9 +7,11 @@ metadata, and intended namespace claims.  Publishers create profiles
 via ``drift init``; consumers inspect them and choose to trust them
 via ``drift trust``.
 
-The profile is not cryptographically signed — trust is established
-out-of-band (website, email, repo, etc.).  The KID (key fingerprint)
-is the real trust anchor; metadata is informational.
+When published alongside a signed package, the profile is
+cryptographically bound to the package signature via a signed
+envelope that covers both the package digest and the profile digest.
+The ``package`` field in the profile names the artifact it is bound to,
+enabling deterministic sidecar resolution without directory heuristics.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ class AuthorProfile:
 	email: str
 	url: str
 	namespaces: list[str]
+	package: str = ""  # artifact name; set by deploy when binding to a signed package
 
 
 def create_author_profile(
@@ -87,6 +90,8 @@ def write_author_profile(profile: AuthorProfile, path: Path) -> None:
 		},
 		"namespaces": profile.namespaces,
 	}
+	if profile.package:
+		obj["package"] = profile.package
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(
 		json.dumps(obj, indent=2, ensure_ascii=False) + "\n",
@@ -160,6 +165,10 @@ def load_author_profile(path: Path) -> AuthorProfile:
 		if not isinstance(ns, str) or not ns:
 			raise ValueError(f"author profile namespace[{i}] must be a non-empty string")
 
+	package = data.get("package", "")
+	if package is not None and not isinstance(package, str):
+		raise ValueError("author profile 'package' must be a string")
+
 	return AuthorProfile(
 		algo=algo,
 		kid=kid,
@@ -169,6 +178,7 @@ def load_author_profile(path: Path) -> AuthorProfile:
 		email=publisher.get("email", ""),
 		url=publisher.get("url", ""),
 		namespaces=namespaces,
+		package=package or "",
 	)
 
 

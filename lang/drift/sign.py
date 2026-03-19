@@ -31,6 +31,7 @@ class SignOptions:
 	out_path: Path
 	add_signature: bool
 	include_pubkey: bool
+	author_profile_path: Path | None = None  # if set, sign envelope covering profile digest
 
 
 def _decode_seed32(text: str) -> bytes:
@@ -112,7 +113,23 @@ def sign_package_v0(opts: SignOptions) -> None:
 		seed32 = _decode_seed32(opts.key_seed_text)
 	else:
 		raise ValueError("missing signing key seed input")
-	sig_raw, pub_raw = ed25519_sign_from_seed(priv_seed32=seed32, message=pkg_bytes)
+
+	# Determine what the signature covers.
+	profile_sha: str | None = None
+	if opts.author_profile_path and opts.author_profile_path.exists():
+		profile_bytes = opts.author_profile_path.read_bytes()
+		profile_sha = sha256_hex(profile_bytes)
+		from lang.drift.envelope import build_envelope
+		message = build_envelope(
+			package_sha256_hex=pkg_sha,
+			author_profile_sha256_hex=profile_sha,
+		)
+		envelope_version = 1
+	else:
+		message = pkg_bytes
+		envelope_version = 0
+
+	sig_raw, pub_raw = ed25519_sign_from_seed(priv_seed32=seed32, message=message)
 	kid = compute_ed25519_kid(pub_raw)
 
 	entry: dict[str, object] = {
@@ -132,8 +149,6 @@ def sign_package_v0(opts: SignOptions) -> None:
 		obj["signatures"].append(entry)
 	else:
 		if opts.out_path.exists():
-			# If the sidecar already exists, ensure it matches the package and then
-			# overwrite it (deterministic "replace" semantics).
 			obj = _load_sig_sidecar_obj(opts.out_path)
 			if obj.get("package_sha256") != f"sha256:{pkg_sha}":
 				raise ValueError("signature sidecar package_sha256 mismatch")
@@ -143,5 +158,11 @@ def sign_package_v0(opts: SignOptions) -> None:
 			"package_sha256": f"sha256:{pkg_sha}",
 			"signatures": [entry],
 		}
+
+	# Envelope metadata — lets verifiers reconstruct the signed payload.
+	if envelope_version >= 1:
+		obj["envelope_version"] = envelope_version
+		if profile_sha:
+			obj["author_profile_sha256"] = f"sha256:{profile_sha}"
 
 	opts.out_path.write_text(json.dumps(obj, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
