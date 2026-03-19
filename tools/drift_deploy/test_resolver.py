@@ -361,6 +361,19 @@ class TestLockFile:
 		assert len(errors) == 1
 		assert "not found" in errors[0]
 
+	def test_verify_skips_co_artifact_deps(self) -> None:
+		"""Co-artifact deps have no published .dmp; integrity check is skipped."""
+		lock_deps = {
+			"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
+			"web.jwt": ResolvedDep(version="0.2.3", integrity="sha256:co-artifact", dep_type="co-artifact"),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.0", sha="aa")],
+			# web.jwt NOT in index — would fail if not skipped.
+		}
+		errors = verify_lock_integrity(lock_deps, pkg_index)
+		assert errors == []
+
 
 # ── Package index: symlink dedup ─────────────────────────────────────
 

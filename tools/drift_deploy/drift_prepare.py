@@ -27,11 +27,13 @@ from tools.drift_deploy.manifest import (
 	load_manifest,
 )
 from tools.drift_deploy.resolver import (
+	PackageEntry,
 	ResolutionError,
 	ResolvedDep,
 	build_package_index,
 	resolve_artifact,
 )
+from tools.drift_deploy.semver import parse_version
 
 
 class PrepareError(Exception):
@@ -102,6 +104,24 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# Build package index.
 	pkg_index = build_package_index(package_roots)
 
+	# Inject co-artifact entries: package-kind artifacts in the same manifest
+	# can satisfy each other's package_deps without being published.
+	co_artifact_names: set[str] = set()
+	for art in artifacts:
+		if art.kind == "package":
+			co_artifact_names.add(art.name)
+			pkg_deps = [(dep.name, dep.version) for dep in art.package_deps]
+			entry = PackageEntry(
+				package_id=art.name,
+				version=parse_version(art.version),
+				path=Path("/dev/null"),  # no .dmp yet
+				sha256="co-artifact",
+				package_deps=pkg_deps,
+			)
+			# Co-artifact takes priority over any externally-discovered
+			# entry with the same package_id.
+			pkg_index[art.name] = [entry]
+
 	# Resolve each artifact.
 	resolved_map: dict[str, dict[str, ResolvedDep]] = {}
 	for art in artifacts:
@@ -115,6 +135,18 @@ def _run_impl(args: argparse.Namespace) -> int:
 			)
 		except ResolutionError as e:
 			raise PrepareError(str(e))
+
+		# Mark co-artifact deps: integrity is unknown at prepare time
+		# (the .dmp hasn't been built yet); deploy verifies at build time.
+		for pkg_id in list(resolved):
+			if pkg_id in co_artifact_names:
+				old = resolved[pkg_id]
+				resolved[pkg_id] = ResolvedDep(
+					version=old.version,
+					integrity="sha256:co-artifact",
+					dep_type="co-artifact",
+				)
+
 		resolved_map[art.name] = resolved
 
 	# Write lock file — full rewrite for the entire manifest.

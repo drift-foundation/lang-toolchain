@@ -100,6 +100,10 @@ def verify_lock_integrity(
 	from tools.drift_deploy.resolver import PackageEntry
 	errors: list[str] = []
 	for pkg_id, dep in lock_deps.items():
+		# Co-artifact deps have no published .dmp at prepare time;
+		# integrity is verified at deploy time once the artifact is built.
+		if dep.dep_type == "co-artifact":
+			continue
 		entries = package_index.get(pkg_id, [])
 		matching = [e for e in entries if str(e.version) == dep.version]
 		if not matching:

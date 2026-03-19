@@ -1,6 +1,41 @@
 # Drift development history
 
 ## 2026-03-18
+- **Taught `drift prepare` to resolve same-manifest co-artifacts before publication (0.27.88, ABI 6)**:
+  Fixed a multi-artifact workflow defect where one package artifact could not
+  depend on another package artifact declared in the same
+  `drift-manifest.json` unless the dependency had already been published into
+  an external package root.
+  - Problem:
+    - `drift prepare` previously resolved package deps only from published
+      package roots
+    - if `web-rest` depended on `web-jwt` and both were declared in the same
+      manifest at the same version, prepare failed because `web-jwt` did not
+      yet exist as a published `.dmp`
+  - Fix:
+    - prepare now injects synthetic in-memory package entries for package-kind
+      artifacts declared in the same manifest before running dependency
+      resolution
+    - same-manifest package artifacts win over external package-root entries
+      with the same package id
+    - resolved co-artifact deps are recorded in the lockfile with:
+      - `dep_type = "co-artifact"`
+      - `integrity = "sha256:co-artifact"`
+    - lock integrity verification skips co-artifact entries because no
+      published `.dmp` exists yet at prepare time; deploy/build verify against
+      the staged real artifact later in the pipeline
+  - Coverage:
+    - added regression coverage for:
+      - direct co-artifact resolution
+      - mixed co-artifact + external dep graphs
+      - version mismatch failures
+      - transitive co-artifact chains
+      - lock integrity skipping for co-artifact sentinel entries
+  - Versioning:
+    - compiler version is `0.27.88`
+    - ABI remains `6` because this changes toolchain dependency-resolution
+      behavior only
+
 - **Moved deployed runtime archive fallback builds into a writable user cache (0.27.87, ABI 6)**:
   Fixed a packaged-toolchain regression where readonly deployed installs could
   still fail in archive mode when a runtime variant such as `asan` was missing
