@@ -1,26 +1,25 @@
-# Drift Build & Package Workflow (Draft)
+# Drift Build & Package Workflow
 
 This guide is a practical, end-to-end workflow for new developers:
 
 1. Bootstrap and validate toolchain/compiler infra on a fresh clone.
-2. Build a hello-world app (no package dependencies).
-3. Build a library package (`.dmp`).
-4. Build an app that depends on that package (unsigned local flow).
-5. Set up publishing identity, sign the package, and consume it with signature verification.
-6. Prepare and deploy packages.
+2. Set up publishing identity.
+3. Create a project manifest and build artifacts with `drift build`.
+4. Prepare and deploy packages with `drift prepare` / `drift deploy`.
+5. Trust and consume published packages.
 
-Commands assume you run from repository root and use the local venv:
-
-```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --help
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift --help
-```
-
-You can also use the repo-local wrappers (recommended for day-to-day use):
+Commands assume you run from repository root and use the local wrappers:
 
 ```bash
 export DRIFTC="$PWD/bin/driftc"
 export DRIFT_TOOL="$PWD/bin/drift"
+```
+
+Or the venv directly:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --help
+PYTHONPATH=. ./.venv/bin/python3 -m lang.drift --help
 ```
 
 ## Trust layers (important)
@@ -98,7 +97,7 @@ just
 ```
 
 Notes:
-- `just` runs the default full staged test path (`lang-test`) after `deps-check`.
+- `just` runs the default full staged test path after `deps-check`.
 - This is the recommended gate before coding in Drift.
 - If you want to focus only on codegen/e2e for quick iteration: `just lang-codegen-test`.
 
@@ -152,129 +151,187 @@ Set the default signing key for other tooling:
 export DRIFT_SIGN_KEY_FILE="$HOME/.config/drift/keys/default.seed"
 ```
 
-## 2. Hello app (no dependency package)
+## 2. Create a project manifest
 
-Create a simple app:
+Every Drift project is defined by a `drift-manifest.json`. This is the single
+source of truth for artifact structure, source inputs, dependencies, and build
+configuration. Both `drift build` and `drift deploy` read it.
 
-```bash
-mkdir -p sandbox/hello
-cat > sandbox/hello/main.drift <<'DRIFT'
-module main;
+### 2.1 Manifest structure
 
-fn main() nothrow -> Int {
-    return 0;
+```json
+{
+  "schema_version": 1,
+  "project": {
+    "name": "acme-libs",
+    "license": "MIT",
+    "author_profile": "acme.author-profile"
+  },
+  "artifacts": [
+    {
+      "kind": "package",
+      "name": "acme-math",
+      "version": "0.1.0",
+      "description": "Math utilities",
+      "entry_module": "src/mathlib.drift",
+      "modules": ["src/mathlib.drift"]
+    },
+    {
+      "kind": "app",
+      "name": "acme-calc",
+      "version": "0.1.0",
+      "description": "Calculator app",
+      "entry_module": "src/main.drift",
+      "modules": ["src/main.drift"],
+      "package_deps": [
+        {"name": "acme-math", "version": "^0.1.0"}
+      ]
+    }
+  ]
 }
-DRIFT
 ```
 
-Build executable:
+Key fields:
+
+- **`kind`**: `"package"` (library `.dmp`) or `"app"` (executable binary).
+- **`entry_module`**: the primary source file, always compiled first.
+- **`modules`**: all source files for the artifact (entry module may appear here too — it is deduplicated).
+- **`package_deps`**: dependencies on other Drift packages (semver constraints).
+- **`unsafe`**: set to `true` for artifacts using C FFI (`extern "C"` calls).
+- **`project.author_profile`**: path to `.author-profile` file (required for `drift deploy`, optional for `drift build`).
+
+### 2.2 Machine-local configuration
+
+Build inputs that vary per machine (library search paths, package roots) are
+NOT stored in the manifest. They come from three sources, in precedence order:
+
+1. Environment variables (`DRIFT_PACKAGE_ROOT`, `DRIFT_NATIVE_LIB_PATH`)
+2. `drift-deploy-config.json` (colocated with manifest)
+3. CLI flags (`--package-root`, `--native-lib-path`)
+
+All paths must be absolute.
+
+## 3. Build artifacts with `drift build`
+
+`drift build` is the manifest-driven local build command. It reads
+`drift-manifest.json`, resolves dependencies, and invokes `driftc` with the
+correct flags.
+
+### 3.1 Build a single artifact
+
+If the manifest has exactly one artifact, the name is optional:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc --stdlib-root stdlib sandbox/hello/main.drift -o sandbox/hello/hello_app
+drift build --manifest drift-manifest.json --driftc $DRIFTC
 ```
 
-Run:
+For multi-artifact manifests, specify which one:
 
 ```bash
-./sandbox/hello/hello_app
+drift build acme-math --manifest drift-manifest.json --driftc $DRIFTC
+drift build acme-calc --manifest drift-manifest.json --driftc $DRIFTC
 ```
 
-Notes:
-- Entry defaults to `main::main`.
-- For executable builds, keep your entry module as `module main`.
+### 3.2 Default output paths
 
-## 3. Build a library package (`.dmp`)
+| Artifact kind | Default output              |
+|---------------|-----------------------------|
+| `package`     | `build/<artifact-name>.dmp` |
+| `app`         | `build/<artifact-name>`     |
 
-Create a tiny library module:
+Override with `-o`:
 
 ```bash
-mkdir -p sandbox/libmath
-cat > sandbox/libmath/mathlib.drift <<'DRIFT'
-module mathlib;
-
-export { add };
-
-pub fn add(a: Int, b: Int) -> Int {
-    return a + b;
-}
-DRIFT
+drift build acme-math -o /tmp/acme-math.dmp --driftc $DRIFTC
 ```
 
-Emit package artifact:
+### 3.3 Dependency resolution
+
+`drift build` does NOT own resolution. It consumes existing state:
+
+- If `drift-lock.json` exists next to the manifest, it uses the full locked
+  graph (direct + transitive). The lock must be complete — a stale or partial
+  lock is an error.
+- If no lockfile exists, only exact version pins are accepted. Range
+  constraints (e.g. `^1.0.0`) require a lockfile — run `drift prepare` first.
+
+### 3.4 Passthrough flags
+
+Flags after `--` are forwarded directly to `driftc`:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M sandbox/libmath sandbox/libmath/mathlib.drift --package-id acme.math --package-version 0.1.0 --package-target test-target --emit-package sandbox/libmath/acme.math.dmp --json
+drift build acme-math -- --verbose --json
 ```
 
-You should now have:
-- `sandbox/libmath/acme.math.dmp`
+### 3.5 Package metadata contract
 
-## 4. Consume the package from an app (unsigned local flow)
+For package artifacts, `drift build` emits exact resolved versions in the
+package metadata (`--package-dep`), not the manifest's author-intent ranges.
+Only direct dependencies appear as declared package deps — transitive
+dependencies are used for compiler version selection (`--dep`) but are not
+embedded in the published metadata.
 
-Create an app that imports the packaged module:
+## 4. Prepare and deploy
+
+The release workflow separates state preparation from publishing:
+
+### 4.1 Prepare (resolve dependencies, write lock)
 
 ```bash
-mkdir -p sandbox/app_unsigned
-cat > sandbox/app_unsigned/main.drift <<'DRIFT'
-module main;
-
-import mathlib as mathlib;
-
-fn main() nothrow -> Int {
-    return try mathlib.add(40, 2) catch { 0 };
-}
-DRIFT
+drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
 ```
 
-Build by adding package root and allowing unsigned package from local path:
+This resolves all package dependencies and writes `drift-lock.json`.
+Review the lock, then commit it alongside your manifest.
+
+### 4.2 Declare author profile in manifest
+
+Every publishable project must declare its author profile in `drift-manifest.json`
+(see section 2.1). Deploy will fail if `project.author_profile` is missing or the
+file does not exist.
+
+### 4.3 Deploy (build, sign, smoke, publish)
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M sandbox/app_unsigned --package-root sandbox/libmath --allow-unsigned-from sandbox/libmath --stdlib-root stdlib sandbox/app_unsigned/main.drift -o sandbox/app_unsigned/app_unsigned
+drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc driftc
 ```
 
-Run:
+Deploy consumes the committed lock state. It builds, signs, smoke-tests,
+and publishes all artifacts plus a bound copy of the declared `.author-profile`.
 
-```bash
-./sandbox/app_unsigned/app_unsigned
-echo $?
+Deploy is read-only with respect to tracked project files — it does not
+rewrite `drift-lock.json` or other repo-managed metadata.
+
+Published layout for a package:
+
+```text
+~/opt/drift/libs/net-tls/0.3.4/
+├── .author-profile
+├── assets/
+├── net-tls.sig
+└── net-tls.zdmp
 ```
 
-Expected exit code: `42`.
+The deployed `.author-profile` is a published copy. `drift deploy` does not
+rewrite the tracked project profile file after commit.
 
-## 5. Sign package and require signatures at compile time
+### 4.4 Intended workflow
 
-This is the distribution-style flow for publishing signed packages.
+1. `drift init` — create signing key + author profile (once per project)
+2. Create `drift-manifest.json` with `project.author_profile` set
+3. `drift build <artifact>` — iterate locally
+4. `drift prepare` — resolve deps, write lock
+5. Review changes, commit manifest + lock + author profile
+6. `drift deploy` — build and publish from committed state
 
-### 5.1 Set up publishing identity
+## 5. Trust and consume published packages
 
-If you haven't already, run `drift init` (see section 1.7):
-
-```bash
-$DRIFT_TOOL init
-```
-
-This creates your signing key (if needed) and your `.author-profile`.
-
-### 5.2 Sign the package
-
-```bash
-$DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key sandbox/keys/acme.seed --include-pubkey
-```
-
-This produces:
-- `sandbox/libmath/acme.math.sig` (detached signature sidecar)
-
-Standalone `drift sign` signs the package bytes only. The stronger
-package+author-profile binding is added by `drift deploy`, which stages the
-deployed `.author-profile` and signs an authenticated envelope over both
-digests.
-
-### 5.3 Trust the publisher (consumer side)
+### 5.1 Trust an author (consumer side)
 
 The consumer obtains the publisher's deployed `.author-profile` and trusts it:
 
 ```bash
-$DRIFT_TOOL trust ~/opt/drift/libs/acme.math/0.1.0/.author-profile --trust-store sandbox/drift/trust.json
+$DRIFT_TOOL trust ~/opt/drift/libs/acme-math/0.1.0/.author-profile --trust-store drift/trust.json
 ```
 
 This displays the author's identity, key fingerprint, and namespace claims,
@@ -289,25 +346,20 @@ Use `--yes` for non-interactive automation.
 Inspect the trust store:
 
 ```bash
-$DRIFT_TOOL trust list --trust-store sandbox/drift/trust.json --json
+$DRIFT_TOOL trust list --trust-store drift/trust.json --json
 ```
 
-### 5.4 Build app with signatures required
+### 5.2 Revoke key (negative check)
+
+Revoke by `kid`:
 
 ```bash
-$DRIFTC -M sandbox/app_unsigned --package-root sandbox/libmath --trust-store sandbox/drift/trust.json --stdlib-root stdlib sandbox/app_unsigned/main.drift -o sandbox/app_unsigned/app_signed
+$DRIFT_TOOL trust revoke --trust-store drift/trust.json --kid '<KID>' --reason 'compromised'
 ```
 
-Run:
+Rebuild should now fail for packages signed by that key.
 
-```bash
-./sandbox/app_unsigned/app_signed
-echo $?
-```
-
-Expected exit code: `42`.
-
-### 5.5 Signed stdlib into local dist repo (creator flow)
+### 5.3 Signed stdlib into local dist repo (creator flow)
 
 Build + sign + publish stdlib package into local repo (`dist/release`):
 
@@ -326,86 +378,52 @@ Inspect local repo index:
 just dist-index
 ```
 
-## 6. Prepare and deploy
+## 6. Direct driftc usage (low-level / ad hoc)
 
-The release workflow separates state preparation from publishing:
+For single-file experiments, manual compiler exploration, or workflows that
+don't need a manifest, you can invoke `driftc` directly:
 
-### 6.1 Prepare (resolve dependencies, write lock)
-
-```bash
-drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
-```
-
-This resolves all package dependencies and writes `drift-lock.json`.
-Review the lock, then commit it alongside your manifest.
-
-### 6.2 Declare author profile in manifest
-
-Every publishable project must declare its author profile in `drift-manifest.json`:
-
-```json
-{
-  "schema_version": 1,
-  "project": {
-    "name": "acme-libs",
-    "license": "MIT",
-    "author_profile": "acme.author-profile"
-  },
-  "artifacts": [...]
-}
-```
-
-Deploy will fail if `project.author_profile` is missing or the file does not exist.
-
-### 6.3 Deploy (build, sign, smoke, publish)
+### 6.1 Build a single-file app
 
 ```bash
-drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc driftc
+$DRIFTC --stdlib-root stdlib sandbox/hello/main.drift -o sandbox/hello/hello_app
 ```
 
-Deploy consumes the committed lock state. It builds, signs, smoke-tests,
-and publishes all artifacts plus a bound copy of the declared `.author-profile`.
-
-Deploy is read-only with respect to tracked project files — it does not
-rewrite `drift-lock.json` or other repo-managed metadata.
-
-Published layout for a package now looks like:
-
-```text
-~/opt/drift/libs/net-tls/0.3.4/
-├── .author-profile
-├── assets/
-├── net-tls.sig
-└── net-tls.zdmp
-```
-
-The deployed `.author-profile` is a published copy. `drift deploy` does not
-rewrite the tracked project profile file after commit.
-
-### 6.4 Intended workflow
-
-1. `drift init` — create signing key + author profile (once per project)
-2. Set `project.author_profile` in `drift-manifest.json`
-3. Edit manifest (versions, deps, etc.)
-4. `drift prepare` — resolve deps, write lock
-5. Review changes, commit manifest + lock + author profile
-6. `drift deploy` — build and publish from committed state
-
-## 7. Revoke key (negative check)
-
-Revoke by `kid`:
+### 6.2 Emit a package artifact
 
 ```bash
-$DRIFT_TOOL trust revoke --trust-store sandbox/drift/trust.json --kid '<KID>' --reason 'test revoke'
+$DRIFTC -M sandbox/libmath sandbox/libmath/mathlib.drift \
+  --package-id acme.math --package-version 0.1.0 \
+  --package-target drift-dev --emit-package sandbox/libmath/acme.math.dmp
 ```
 
-Rebuild should now fail for that package.
+### 6.3 Consume a package (unsigned local flow)
 
-## 8. Command checklist
+```bash
+$DRIFTC -M sandbox/app \
+  --package-root sandbox/libmath \
+  --allow-unsigned-from sandbox/libmath \
+  --stdlib-root stdlib \
+  sandbox/app/main.drift -o sandbox/app/my_app
+```
+
+### 6.4 Sign a package manually
+
+```bash
+$DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key ~/.config/drift/keys/default.seed --include-pubkey
+```
+
+Standalone `drift sign` signs the package bytes only. The stronger
+package+author-profile binding is added by `drift deploy`.
+
+## 7. Command checklist
 
 **Publisher setup:**
 - Initialize publishing identity: `drift init`
 - Sign package: `drift sign <pkg.dmp> --key <seed>`
+
+**Project build (manifest-driven):**
+- Build artifact: `drift build <artifact> --manifest drift-manifest.json --driftc <driftc>`
 
 **Release workflow:**
 - Prepare lock: `drift prepare --manifest drift-manifest.json --dest <dest>`
@@ -416,7 +434,7 @@ Rebuild should now fail for that package.
 - List trust store: `drift trust list --trust-store <path>`
 - Revoke a key: `drift trust revoke --trust-store <path> --kid <kid>`
 
-**Build:**
+**Direct compiler (ad hoc):**
 - Build app: `driftc ... -o <exe>`
 - Emit package: `driftc ... --emit-package <pkg.dmp> --package-id ... --package-version ... --package-target ...`
 
@@ -432,18 +450,12 @@ Rebuild should now fail for that package.
 - Set `DRIFT_RUNTIME_LIB_CACHE_DIR=<path>` to redirect runtime archive artifacts/locks to a caller-writable location.
 - Legacy-compatible override: `DRIFT_RUNTIME_BUILD_ROOT=<path>` writes archives under `<path>/runtime_libs/`.
 
-## 9. Common pitfalls
+## 8. Common pitfalls
 
 - `module main` is required for default executable entrypoint (`main::main`).
 - Imported module ids must match what the package exports.
 - Author-profile namespace claims follow imported Drift module namespaces, not package ids (for example `net_tls.*`, not `net-tls.*`).
-- If consuming unsigned local packages, pass `--skip-package-signatures` (and optionally `--allow-unsigned-from <dir>` when using raw `lang.driftc`).
+- If consuming unsigned local packages with direct driftc, pass `--skip-package-signatures` (and optionally `--allow-unsigned-from <dir>`).
 - For signed flow, trust store must be configured (`--trust-store` or `DRIFT_TRUST_STORE`).
 - `dist-publish-stdlib` requires a signing key (`DRIFT_SIGN_KEY_FILE` or explicit `SIGN_KEY` arg).
 - For portability-sensitive environments, if toolchain asks for pointer width, add `--target-word-bits 64`.
-
-## 10. Next expansion ideas
-
-- Multi-package dependency chain (`pkg A -> pkg B -> app`).
-- Multiple signatures on one package (multisig acceptance policy).
-- CI recipe for publish/sign/trust/consume verification.
