@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd
+from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import read_lock, verify_lock_integrity
 from tools.drift_deploy.manifest import (
 	Artifact,
@@ -85,14 +85,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_driftc(driftc_arg: Path | None) -> Path:
-	if driftc_arg:
-		if not driftc_arg.exists():
-			raise BuildError(f"--driftc path does not exist: {driftc_arg}")
-		return driftc_arg
-	driftc = shutil.which("driftc")
-	if driftc:
-		return Path(driftc)
-	raise BuildError("driftc not found on PATH; pass --driftc explicitly")
+	try:
+		result = resolve_driftc(driftc_arg)
+	except ValueError as e:
+		raise BuildError(str(e))
+	if result is None:
+		raise BuildError("driftc not found (no sibling binary, not on PATH); pass --driftc explicitly")
+	return result
 
 
 def _load_deploy_config(manifest_dir: Path) -> dict:

@@ -15,6 +15,7 @@ from tools.drift_deploy.build_cmd import (
 	build_app_cmd,
 	build_package_cmd,
 	build_source_args,
+	resolve_driftc,
 )
 from tools.drift_deploy.manifest import Artifact, NativeDep, PackageDep
 from tools.drift_deploy.resolver import ResolvedDep
@@ -1048,6 +1049,116 @@ class TestCLIDispatch:
 		assert callable(build_app_cmd)
 		assert callable(build_package_cmd)
 		assert callable(build_source_args)
+
+
+# ── driftc resolution ────────────────────────────────────────────────
+
+
+class TestResolveDriftc:
+	def test_explicit_path_wins(self, tmp_path):
+		"""Explicit --driftc always takes precedence."""
+		driftc = tmp_path / "my-driftc"
+		driftc.write_text("#!/bin/sh\n", encoding="utf-8")
+		driftc.chmod(0o755)
+		result = resolve_driftc(driftc)
+		assert result == driftc
+
+	def test_explicit_path_missing_raises(self, tmp_path):
+		"""Explicit --driftc that doesn't exist raises ValueError."""
+		missing = tmp_path / "no-such-driftc"
+		with pytest.raises(ValueError, match="does not exist"):
+			resolve_driftc(missing)
+
+	def test_sibling_found(self, tmp_path):
+		"""Sibling driftc next to the running executable is used."""
+		fake_bin = tmp_path / "bin"
+		fake_bin.mkdir()
+		# Create sibling driftc.
+		sibling = fake_bin / "driftc"
+		sibling.write_text("#!/bin/sh\n", encoding="utf-8")
+		sibling.chmod(0o755)
+		# Simulate drift running from fake_bin/drift.
+		with mock.patch("sys.argv", [str(fake_bin / "drift")]), \
+			 mock.patch("shutil.which", return_value=None):
+			result = resolve_driftc(None)
+		assert result == sibling
+
+	def test_sibling_through_symlink(self, tmp_path):
+		"""Symlinked drift resolves sibling from the real target directory."""
+		# Real layout: real_bin/drift + real_bin/driftc
+		real_bin = tmp_path / "real_bin"
+		real_bin.mkdir()
+		(real_bin / "drift").write_text("#!/bin/sh\n", encoding="utf-8")
+		(real_bin / "drift").chmod(0o755)
+		sibling = real_bin / "driftc"
+		sibling.write_text("#!/bin/sh\n", encoding="utf-8")
+		sibling.chmod(0o755)
+		# Symlink: link_bin/drift → real_bin/drift
+		link_bin = tmp_path / "link_bin"
+		link_bin.mkdir()
+		(link_bin / "drift").symlink_to(real_bin / "drift")
+
+		with mock.patch("sys.argv", [str(link_bin / "drift")]), \
+			 mock.patch("shutil.which", return_value=None):
+			result = resolve_driftc(None)
+		assert result == sibling
+
+	def test_path_fallback(self, tmp_path):
+		"""Falls back to PATH when no sibling exists."""
+		# No sibling in fake bin dir.
+		fake_bin = tmp_path / "bin"
+		fake_bin.mkdir()
+		(fake_bin / "drift").write_text("#!/bin/sh\n", encoding="utf-8")
+		(fake_bin / "drift").chmod(0o755)
+		# driftc is on PATH.
+		path_driftc = tmp_path / "path_driftc"
+		path_driftc.write_text("#!/bin/sh\n", encoding="utf-8")
+		path_driftc.chmod(0o755)
+
+		with mock.patch("sys.argv", [str(fake_bin / "drift")]), \
+			 mock.patch("shutil.which", return_value=str(path_driftc)):
+			result = resolve_driftc(None)
+		assert result == path_driftc
+
+	def test_none_when_not_found(self, tmp_path):
+		"""Returns None when no driftc can be found anywhere."""
+		fake_bin = tmp_path / "bin"
+		fake_bin.mkdir()
+		(fake_bin / "drift").write_text("#!/bin/sh\n", encoding="utf-8")
+		(fake_bin / "drift").chmod(0o755)
+
+		with mock.patch("sys.argv", [str(fake_bin / "drift")]), \
+			 mock.patch("shutil.which", return_value=None):
+			result = resolve_driftc(None)
+		assert result is None
+
+	def test_explicit_beats_sibling(self, tmp_path):
+		"""Explicit --driftc takes precedence over sibling."""
+		fake_bin = tmp_path / "bin"
+		fake_bin.mkdir()
+		sibling = fake_bin / "driftc"
+		sibling.write_text("#!/bin/sh\necho sibling\n", encoding="utf-8")
+		sibling.chmod(0o755)
+		explicit = tmp_path / "explicit-driftc"
+		explicit.write_text("#!/bin/sh\necho explicit\n", encoding="utf-8")
+		explicit.chmod(0o755)
+
+		with mock.patch("sys.argv", [str(fake_bin / "drift")]):
+			result = resolve_driftc(explicit)
+		assert result == explicit
+
+	def test_sibling_not_executable_skipped(self, tmp_path):
+		"""Non-executable sibling file is ignored."""
+		fake_bin = tmp_path / "bin"
+		fake_bin.mkdir()
+		sibling = fake_bin / "driftc"
+		sibling.write_text("not executable", encoding="utf-8")
+		# Don't chmod +x.
+
+		with mock.patch("sys.argv", [str(fake_bin / "drift")]), \
+			 mock.patch("shutil.which", return_value=None):
+			result = resolve_driftc(None)
+		assert result is None
 
 
 # ── End-to-end toolchain tests ───────────────────────────────────────

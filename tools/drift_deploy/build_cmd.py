@@ -9,11 +9,49 @@ vectors — callers handle execution, environment, and error reporting.
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 from pathlib import Path
 
 from tools.drift_deploy.lockfile import expand_to_dep_flags
 from tools.drift_deploy.manifest import Artifact
 from tools.drift_deploy.resolver import ResolvedDep
+
+
+def resolve_driftc(explicit: Path | None = None) -> Path | None:
+	"""
+	Resolve the driftc binary path.
+
+	Resolution order:
+	  1. Explicit path (--driftc flag) — must exist.
+	  2. Sibling ``driftc`` next to the running ``drift`` executable.
+	     Follows symlinks so deployed layouts like
+	     ``~/opt/drift/current/bin/drift → ../drift-0.27/bin/drift``
+	     find ``~/opt/drift/drift-0.27/bin/driftc``.
+	  3. ``driftc`` from ``$PATH``.
+
+	Returns the resolved Path, or None if not found.
+	Raises ValueError if an explicit path was given but does not exist.
+	"""
+	# 1. Explicit.
+	if explicit is not None:
+		if not explicit.exists():
+			raise ValueError(f"--driftc path does not exist: {explicit}")
+		return explicit
+
+	# 2. Sibling of the running executable.
+	drift_exe = Path(os.path.realpath(sys.argv[0]))
+	sibling = drift_exe.parent / "driftc"
+	if sibling.is_file() and os.access(str(sibling), os.X_OK):
+		return sibling
+
+	# 3. PATH lookup.
+	on_path = shutil.which("driftc")
+	if on_path:
+		return Path(on_path)
+
+	return None
 
 
 def build_source_args(art: Artifact, manifest_dir: Path) -> list[str]:

@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd
+from tools.drift_deploy.build_cmd import build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
@@ -94,15 +94,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_driftc(args: argparse.Namespace) -> Path:
-	if args.driftc:
-		p = args.driftc
-		if not p.exists():
-			raise DeployError(f"--driftc path does not exist: {p}")
-		return p
-	driftc = shutil.which("driftc")
-	if driftc:
-		return Path(driftc)
-	raise DeployError("driftc not found on PATH; pass --driftc explicitly")
+	try:
+		result = resolve_driftc(args.driftc)
+	except ValueError as e:
+		raise DeployError(str(e))
+	if result is None:
+		raise DeployError("driftc not found (no sibling binary, not on PATH); pass --driftc explicitly")
+	return result
 
 
 def _resolve_target(args: argparse.Namespace) -> str:

@@ -1,6 +1,34 @@
 # Drift development history
 
 ## 2026-03-18
+- **Resolved sibling `driftc` automatically for deployed `drift build` / `drift deploy` workflows (0.27.85, ABI 6)**:
+  Improved packaged-toolchain usability when invoking `drift` directly from an
+  installed `bin/` directory without separately exporting `PATH` or passing
+  `--driftc`.
+  - Problem:
+    - deployed users running `.../bin/drift build` or `.../bin/drift deploy`
+      by absolute path would still fail with `driftc not found on PATH`
+      unless they also passed `--driftc`
+    - this was unnecessary friction because deployed layouts already install
+      sibling binaries such as `.../bin/drift` and `.../bin/driftc`
+  - Fix:
+    - added a shared `resolve_driftc()` helper used by both build and deploy
+    - compiler resolution order is now:
+      1. explicit `--driftc`
+      2. sibling `driftc` next to the real running `drift` executable
+         (following symlinks)
+      3. `driftc` from `PATH`
+      4. clear error if none found
+    - updated diagnostics to reflect sibling resolution rather than claiming
+      only `PATH` lookup was attempted
+  - Tests:
+    - added regressions for explicit-path precedence, symlinked deployed
+      layouts, sibling lookup, PATH fallback, missing compiler, and
+      non-executable sibling files
+  - Versioning:
+    - compiler version is `0.27.85`
+    - ABI remains `6` because this is tooling resolution behavior only
+
 - **Added manifest-driven `drift build` and renamed the project manifest to `drift-manifest.json` (0.27.84, ABI 6)**:
   Landed the first real implementation of local manifest-driven artifact builds
   and aligned the surrounding toolchain/test workflow with the new project
