@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-17
+- **Fixed signed-envelope import-boundary regressions and drift-layer verification helpers (0.27.83, ABI 6)**:
+  Cleaned up the first pass of signed author-profile envelope binding after it
+  crossed the `lang.drift` / `lang.driftc` layering boundary.
+  - Problem:
+    - compiler-side package verification had imported envelope helpers from the
+      drift CLI/tooling layer
+    - consumer trust flow in `lang.drift` had imported signature parsing and
+      verification helpers from compiler internals
+    - this violated enforced import-boundary tests and also broke deployed
+      readonly test paths that indirectly depended on the bad layering
+  - Fix:
+    - inlined the envelope builder inside compiler-side signature verification
+      so `lang.driftc` no longer depends on `lang.drift`
+    - moved reusable signature-sidecar parsing and Ed25519 verification helpers
+      into the drift layer so consumer trust no longer depends on
+      `lang.driftc.packages.signature_v0`
+    - preserved the signed-envelope/profile-binding behavior while restoring
+      the intended package/tooling layer separation
+  - Result:
+    - import-boundary regressions are resolved
+    - readonly deployed-package tests pass again without changing the readonly
+      contract
+  - Versioning:
+    - compiler version is `0.27.83`
+    - ABI remains `6` because this is layering/tooling cleanup only, not a
+      compiler/runtime boundary shape
+
 - **Cryptographically bound published author profiles to signed package distributions (0.27.82, ABI 6)**:
   Strengthened the new author-profile workflow so the published
   `.author-profile` is authenticated together with the package distribution

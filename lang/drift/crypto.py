@@ -40,6 +40,26 @@ def ed25519_public_bytes_raw(pubkey) -> bytes:
 		)
 
 
+def verify_ed25519(*, pubkey_raw: bytes, message: bytes, signature_raw: bytes) -> bool:
+	"""
+	Verify an Ed25519 signature.
+
+	Returns True on success, False on verification failure.
+	Raises on internal decoding/usage errors.
+	"""
+	from cryptography.exceptions import InvalidSignature
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+	try:
+		key = Ed25519PublicKey.from_public_bytes(pubkey_raw)
+	except Exception as err:
+		raise ValueError("invalid ed25519 public key bytes") from err
+	try:
+		key.verify(signature_raw, message)
+		return True
+	except InvalidSignature:
+		return False
+
+
 def ed25519_sign_from_seed(*, priv_seed32: bytes, message: bytes) -> tuple[bytes, bytes]:
 	"""
 	Sign `message` with an Ed25519 private key seed.

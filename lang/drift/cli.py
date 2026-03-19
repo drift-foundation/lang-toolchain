@@ -292,8 +292,8 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 		if not sig_path.exists():
 			print(f"error: profile declares package '{profile.package}' but sidecar not found: {sig_path}", file=sys.stderr)
 			return 1
-		from lang.drift.crypto import sha256_hex
-		from lang.driftc.packages.signature_v0 import load_sig_sidecar, verify_ed25519
+		from lang.drift.crypto import sha256_hex, verify_ed25519
+		from lang.drift.sign import load_sig_sidecar
 		from lang.drift.envelope import build_envelope
 		try:
 			sf = load_sig_sidecar(sig_path)

@@ -37,6 +37,24 @@ def sha256_hex(data: bytes) -> str:
 	return hashlib.sha256(data).hexdigest()
 
 
+_ENVELOPE_HEADER = "drift-sig-envelope-v1"
+
+
+def _build_envelope(
+	*,
+	package_sha256_hex: str,
+	author_profile_sha256_hex: str | None = None,
+) -> bytes:
+	"""Build the canonical envelope bytes that the signer signs."""
+	lines = [
+		_ENVELOPE_HEADER,
+		f"package-sha256:{package_sha256_hex}",
+	]
+	if author_profile_sha256_hex:
+		lines.append(f"author-profile-sha256:{author_profile_sha256_hex}")
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def _b64_encode(data: bytes) -> str:
 	return base64.b64encode(data).decode("ascii")
 
@@ -222,8 +240,7 @@ def verify_package_signatures(
 	if sf.envelope_version >= 1:
 		# Envelope v1: signature covers a canonical envelope string
 		# that includes the package digest and (optionally) the profile digest.
-		from lang.drift.envelope import build_envelope
-		signed_message = build_envelope(
+		signed_message = _build_envelope(
 			package_sha256_hex=sf.package_sha256_hex,
 			author_profile_sha256_hex=sf.author_profile_sha256_hex,
 		)

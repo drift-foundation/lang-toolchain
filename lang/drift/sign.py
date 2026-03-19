@@ -24,6 +24,24 @@ class SigSidecarV0:
 
 
 @dataclass(frozen=True)
+class SigEntry:
+	"""Parsed signature entry with decoded raw bytes."""
+	algo: str
+	kid: str
+	sig_raw: bytes
+	pubkey_raw: bytes | None = None
+
+
+@dataclass(frozen=True)
+class SigFile:
+	"""Parsed .sig sidecar with envelope metadata."""
+	package_sha256_hex: str
+	signatures: list[SigEntry]
+	envelope_version: int = 0
+	author_profile_sha256_hex: str | None = None
+
+
+@dataclass(frozen=True)
 class SignOptions:
 	package_path: Path
 	key_seed_path: Path | None
@@ -99,6 +117,54 @@ This is pure parsing/validation; it does not consult trust policy.
 		out.append(SigEntryV0(algo=algo, kid=kid, sig_b64=sig, pubkey_b64=pub))
 
 	return SigSidecarV0(package_sha256=pkg_sha, signatures=out)
+
+
+def load_sig_sidecar(path: Path) -> SigFile:
+	"""Load a .sig sidecar with decoded raw bytes and envelope metadata."""
+	obj = _load_sig_sidecar_obj(path)
+	pkg_sha_raw = obj["package_sha256"]
+	if not isinstance(pkg_sha_raw, str) or not pkg_sha_raw.startswith("sha256:"):
+		raise ValueError("signature sidecar missing package_sha256")
+	pkg_sha_hex = pkg_sha_raw.split("sha256:", 1)[1]
+
+	entries: list[SigEntry] = []
+	for s in obj.get("signatures") or []:
+		if not isinstance(s, dict):
+			continue
+		algo = str(s.get("algo") or "")
+		kid = str(s.get("kid") or "")
+		sig_b64 = s.get("sig")
+		pub_b64 = s.get("pubkey")
+		if algo != "ed25519" or not isinstance(sig_b64, str) or not kid:
+			continue
+		sig_raw = b64_decode(sig_b64)
+		if len(sig_raw) != 64:
+			raise ValueError("ed25519 signature must be 64 bytes")
+		pub_raw = None
+		if isinstance(pub_b64, str):
+			pub_raw = b64_decode(pub_b64)
+			if len(pub_raw) != 32:
+				raise ValueError("ed25519 pubkey must be 32 bytes")
+		entries.append(SigEntry(algo=algo, kid=kid, sig_raw=sig_raw, pubkey_raw=pub_raw))
+	if not entries:
+		raise ValueError("signature sidecar contains no usable signatures")
+
+	envelope_version = obj.get("envelope_version", 0)
+	if not isinstance(envelope_version, int):
+		raise ValueError("signature sidecar envelope_version must be an integer")
+	ap_sha: str | None = None
+	raw_ap = obj.get("author_profile_sha256")
+	if raw_ap is not None:
+		if not isinstance(raw_ap, str) or not raw_ap.startswith("sha256:"):
+			raise ValueError("signature sidecar author_profile_sha256 must be 'sha256:<hex>'")
+		ap_sha = raw_ap.split("sha256:", 1)[1]
+
+	return SigFile(
+		package_sha256_hex=pkg_sha_hex,
+		signatures=entries,
+		envelope_version=envelope_version,
+		author_profile_sha256_hex=ap_sha,
+	)
 
 
 def sign_package_v0(opts: SignOptions) -> None:
