@@ -79,6 +79,6 @@ def test_if_else_phi_lowering():
 	word_ty = f"i{word_bits}"
 	ir = lower_ssa_func_to_llvm(mir, ssa, fn_info, {fn_id: fn_info}, word_bits=word_bits)
 
-	assert "br i1 %cond, label %then, label %else" in ir
+	assert "br i1 %cond, label %__bb_then, label %__bb_else" in ir
 	assert f"phi {word_ty}" in ir
 	assert f"ret {word_ty}" in ir

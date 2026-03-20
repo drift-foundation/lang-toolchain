@@ -87,7 +87,7 @@ def test_loop_backedge_supported() -> None:
 	fn_info = FnInfo(fn_id=fn_id, name="loopy", declared_can_throw=False, return_type_id=int_ty)
 
 	ir = lower_ssa_func_to_llvm(mir, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())
-	assert "loop:" in ir
-	assert "body:" in ir
+	assert "__bb_loop:" in ir
+	assert "__bb_body:" in ir
 	# Backedge must exist in the textual IR.
-	assert "br label %loop" in ir
+	assert "br label %__bb_loop" in ir

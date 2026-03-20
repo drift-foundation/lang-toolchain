@@ -1,6 +1,36 @@
 # Drift development history
 
 ## 2026-03-18
+- **Reserved compiler-emitted LLVM block labels to avoid wrapper-name collisions (0.27.91, ABI 6)**:
+  Fixed a codegen hygiene bug where exported/wrapper LLVM IR could collide with
+  user parameter names such as `entry`, causing LLVM to reject otherwise-valid
+  source programs.
+  - Problem:
+    - wrapper/helper emission had still been using generic block names like
+      `entry:`, `ok:`, `trap:`, `then:`, and similar labels
+    - LLVM parameters and block labels share a value namespace within a
+      function, so user parameters named like those labels could collide with
+      compiler-generated wrapper blocks
+  - Fix:
+    - introduced a reserved compiler-only block-label namespace by routing MIR
+      block names through a helper that emits labels with a `__bb_` prefix
+    - applied the same reserved-label convention consistently across:
+      - emitted block labels
+      - branch targets
+      - PHI predecessor labels / PHI fixup
+      - hardcoded wrapper/helper control-flow blocks
+    - this makes wrapper hygiene general rather than special-casing the single
+      identifier `entry`
+  - Coverage:
+    - added regression coverage for:
+      - exported wrapper with a parameter named `entry`
+      - throwing wrapper with an `entry` parameter
+      - multiple parameters named like plausible internal labels
+      - mixed collision cases across wrapper paths
+  - Versioning:
+    - compiler version is `0.27.91`
+    - ABI remains `6` because this changes internal LLVM naming hygiene only
+
 - **Completed the native opaque-pointer LLVM IR migration for LLVM 20 compatibility (0.27.90, ABI 6)**:
   Finished the codegen migration away from typed-pointer LLVM IR and removed
   the temporary text-normalization pass. The emitter now produces opaque-pointer

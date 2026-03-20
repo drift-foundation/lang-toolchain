@@ -524,7 +524,7 @@ def lower_module_to_llvm(
 
 		lines: list[str] = []
 		lines.append(f"define {res_llty} {_llvm_fn_sym(function_symbol(public))}({params_str}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		args = ", ".join(
 			f"{type_builder._llty(type_builder._llvm_type_for_typeid(t, allow_void_ok=True))} %{n}"
 			for t, n in zip(param_tids, param_names)
@@ -949,13 +949,13 @@ class LlvmModuleBuilder:
 		lines: list[str] = []
 		emit_ok_llty = self._llty(ok_llty)
 		lines.append(f"define {emit_ok_llty} {name}({fnres_llty} %res) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		lines.append(f"  %is_err = extractvalue {fnres_llty} %res, 0")
-		lines.append("  br i1 %is_err, label %trap, label %ok")
-		lines.append("trap:")
+		lines.append("  br i1 %is_err, label %__bb_trap, label %__bb_ok")
+		lines.append("__bb_trap:")
 		lines.append("  call void @llvm.trap()")
 		lines.append("  unreachable")
-		lines.append("ok:")
+		lines.append("__bb_ok:")
 		lines.append(f"  %okv = extractvalue {fnres_llty} %res, 1")
 		lines.append(f"  ret {emit_ok_llty} %okv")
 		lines.append("}")
@@ -1017,7 +1017,7 @@ class LlvmModuleBuilder:
 		"""
 		lines = [
 			"define i32 @main() {",
-			"entry:",
+			"__bb_entry:",
 		]
 		if install_process_preamble:
 			lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
@@ -1061,7 +1061,7 @@ class LlvmModuleBuilder:
 			# Emit thunk: reads argc/argv from globals, builds array, calls user main.
 			thunk_lines = [
 				f"define internal {self._llty(DRIFT_INT_TYPE)} @drift_main_argv_thunk() {{",
-				"entry:",
+				"__bb_entry:",
 				"  %argc = load i32, ptr @drift_root_argc",
 				"  %argv = load ptr, ptr @drift_root_argv",
 				"  %arr.ptr = alloca %DriftArrayHeader",
@@ -1084,7 +1084,7 @@ class LlvmModuleBuilder:
 			# Emit @main that stores argc/argv and routes through root VT.
 			lines = [
 				"define i32 @main(i32 %argc, ptr %argv) {",
-				"entry:",
+				"__bb_entry:",
 				"  store i32 %argc, ptr @drift_root_argc",
 				"  store ptr %argv, ptr @drift_root_argv",
 			]
@@ -1102,7 +1102,7 @@ class LlvmModuleBuilder:
 		else:
 			lines = [
 				"define i32 @main(i32 %argc, ptr %argv) {",
-				"entry:",
+				"__bb_entry:",
 			]
 			if install_process_preamble:
 				lines.append("  %pre = call i1 @\"std.io::install_process_preamble__impl\"()")
@@ -1204,12 +1204,12 @@ class LlvmModuleBuilder:
 					f"declare ptr @malloc({self._llty(DRIFT_USIZE_TYPE)})",
 					"declare void @free(ptr)",
 					f"define weak ptr @drift_iface_alloc({self._llty(DRIFT_USIZE_TYPE)} %size, {self._llty(DRIFT_USIZE_TYPE)} %align) {{",
-					"entry:",
+					"__bb_entry:",
 					f"  %p = call ptr @malloc({self._llty(DRIFT_USIZE_TYPE)} %size)",
 					"  ret ptr %p",
 					"}",
 					"define weak void @drift_iface_free(ptr %p) {",
-					"entry:",
+					"__bb_entry:",
 					"  call void @free(ptr %p)",
 					"  ret void",
 					"}",
@@ -1388,23 +1388,23 @@ class LlvmModuleBuilder:
 			lines.extend(
 				[
 					f"define weak {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event) {{",
-					"entry:",
+					"__bb_entry:",
 					f"  ret {DRIFT_ERROR_PTR} null",
 					"}",
 					f"define weak {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"entry:",
+					"__bb_entry:",
 					f"  ret {DRIFT_ERROR_PTR} null",
 					"}",
 					f"define weak void @drift_error_release({DRIFT_ERROR_PTR} %err) {{",
-					"entry:",
+					"__bb_entry:",
 					"  ret void",
 					"}",
 					f"define weak void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"entry:",
+					"__bb_entry:",
 					"  ret void",
 					"}",
 					f"define weak void @drift_error_add_local_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %frame, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"entry:",
+					"__bb_entry:",
 					"  ret void",
 					"}",
 					f"declare void @drift_error_raise({DRIFT_ERROR_PTR})",
@@ -1433,7 +1433,7 @@ class LlvmModuleBuilder:
 			lines.append(f"declare void @{self._abi_version_sym}()")
 			lines.append("")
 			lines.append("define internal void @__drift_abi_check() {")
-			lines.append("entry:")
+			lines.append("__bb_entry:")
 			lines.append(f"  call void @{self._abi_version_sym}()")
 			lines.append("  ret void")
 			lines.append("}")
@@ -2230,7 +2230,7 @@ class _FuncBuilder:
 		self._current_block_name = block_name
 		self._current_effective_block = block_name
 		block = self.func.blocks[block_name]
-		self.lines.append(f"{block.name}:")
+		self.lines.append(f"{self._bb(block.name)}:")
 		# Emit phi nodes first.
 		for instr in block.instructions:
 			if isinstance(instr, Phi):
@@ -2295,7 +2295,7 @@ class _FuncBuilder:
 		incomings = []
 		incoming_types: set[str] = set()
 		for pred, val in phi.incoming.items():
-			incomings.append(f"[ {self._map_value(val)}, %{pred} ]")
+			incomings.append(f"[ {self._map_value(val)}, %{self._bb(pred)} ]")
 			ty = self._type_of(val)
 			if ty is not None:
 				incoming_types.add(ty)
@@ -2318,13 +2318,12 @@ class _FuncBuilder:
 		renames = {k: v for k, v in self._block_exit_names.items() if k != v}
 		if not renames:
 			return
-		import re
 		for idx, line in enumerate(self.lines):
 			if " = phi " not in line:
 				continue
 			changed = False
 			for mir_name, llvm_name in renames.items():
-				old_label = f"%{mir_name} ]"
+				old_label = f"%{self._bb(mir_name)} ]"
 				if old_label in line:
 					line = line.replace(old_label, f"%{llvm_name} ]")
 					changed = True
@@ -6016,7 +6015,7 @@ class _FuncBuilder:
 			call_args.append(f"{llty} {arg_name}")
 		lines: list[str] = []
 		lines.append(f"define internal {emit_ret_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		if env_ty is not None:
 			env_ref_ty = self.type_table.ensure_ref(env_ty)
 			env_llty = self._llty(self._llvm_type_for_typeid(env_ref_ty))
@@ -6063,7 +6062,7 @@ class _FuncBuilder:
 			call_args.append(f"{llty} %a{idx}")
 		lines: list[str] = []
 		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		if is_void_ret:
 			lines.append(f"  call void {arg_sym}({', '.join(call_args)})")
 			ok_val = "0"
@@ -6110,7 +6109,7 @@ class _FuncBuilder:
 			call_args.append(f"{llty} %a{idx}")
 		lines: list[str] = []
 		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		if is_void_ret:
 			lines.append(f"  call {nothrow_fn_sig} %env({', '.join(call_args)})")
 			ok_val = "0"
@@ -6155,7 +6154,7 @@ class _FuncBuilder:
 			call_args.append(f"{llty} %a{idx}")
 		lines: list[str] = []
 		lines.append(f"define internal {fnres_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		lines.append(f"  %res = call {throwing_fn_sig} %env({', '.join(call_args)})")
 		lines.append(f"  ret {fnres_llty} %res")
 		lines.append("}")
@@ -6171,7 +6170,7 @@ class _FuncBuilder:
 		self.lines = lines
 		self.value_types = {}
 		lines.append(f"define internal void @{drop_name}(ptr %data) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		env_llty = self._llvm_type_for_typeid(env_ty)
 		emit_env_llty = self._llty(env_llty)
 		env_val = self._fresh("env_val")
@@ -6226,7 +6225,7 @@ class _FuncBuilder:
 		self.lines = lines
 		self.value_types = {}
 		lines.append(f"define internal void @{thunk_name}(ptr %data) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		val_llty = self._llvm_type_for_typeid(value_ty)
 		emit_val_llty = self._llty(val_llty)
 		val = self._fresh("val")
@@ -6275,7 +6274,7 @@ class _FuncBuilder:
 			call_args.append(f"{llty} {arg_name}")
 		lines: list[str] = []
 		lines.append(f"define internal {emit_ret_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		self_llty = self._llty(self._llvm_type_for_typeid(self_ty))
 		self_arg = "%data"
 		call_args.insert(0, f"{self_llty} {self_arg}")
@@ -6611,7 +6610,7 @@ class _FuncBuilder:
 
 	def _lower_term(self, term: object) -> None:
 		if isinstance(term, Goto):
-			self.lines.append(f"  br label %{term.target}")
+			self.lines.append(f"  br label %{self._bb(term.target)}")
 			return
 
 		if isinstance(term, IfTerminator):
@@ -6620,7 +6619,7 @@ class _FuncBuilder:
 			if cond_ty != "i1":
 				raise NotImplementedError("LLVM codegen v1: branch condition must be bool (i1)")
 			self.lines.append(
-				f"  br i1 {cond}, label %{term.then_target}, label %{term.else_target}"
+				f"  br i1 {cond}, label %{self._bb(term.then_target)}, label %{self._bb(term.else_target)}"
 			)
 			return
 
@@ -7620,6 +7619,16 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp0}, {DRIFT_ERROR_PTR} null, 2")
 		self.value_types[dest] = fnres_llty
 
+	@staticmethod
+	def _bb(block_name: str) -> str:
+		"""Map a MIR block name to a compiler-reserved LLVM label.
+
+		Block labels and SSA value names share one namespace in LLVM IR.
+		Prefixing with ``__bb_`` guarantees block labels cannot collide
+		with user-originated parameter or local names.
+		"""
+		return f"__bb_{block_name}"
+
 	def _map_value(self, mir_id: str) -> str:
 		# Resolve aliases (AssignSSA) before mapping to an LLVM name.
 		root = mir_id
@@ -8617,7 +8626,7 @@ class _FuncBuilder:
 
 		# Generate the function body based on type kind.
 		lines.append(f"define private {emit_llty} @{name}({emit_llty} %src) {{")
-		lines.append("entry:")
+		lines.append("__bb_entry:")
 		if td.kind is TypeKind.STRUCT:
 			result = emit_struct_clone(ty_id, "%src")
 		elif td.kind is TypeKind.ARRAY and td.param_types:
@@ -8958,7 +8967,7 @@ class _FuncBuilder:
 		self.module.needs_dv_runtime = True
 		lines = [
 			f"define void @{name}({DRIFT_DV_TYPE} %src) {{",
-			"entry:",
+			"__bb_entry:",
 			f"  %tmp = alloca {DRIFT_DV_TYPE}",
 			f"  store {DRIFT_DV_TYPE} %src, ptr %tmp",
 			f"  call void @drift_dv_release(ptr %tmp)",
@@ -8980,12 +8989,12 @@ class _FuncBuilder:
 		inline_storage = f"[{DRIFT_IFACE_INLINE_WORDS} x {usize_llty}]"
 		lines = [
 			f"define void @{name}({iface_llty} %src) {{",
-			"entry:",
+			"__bb_entry:",
 			f"  %iface_data = extractvalue {iface_llty} %src, {DRIFT_IFACE_DATA_IDX}",
 			f"  %iface_vtable = extractvalue {iface_llty} %src, {DRIFT_IFACE_VTABLE_IDX}",
 			"  %iface_vtable_null = icmp eq ptr %iface_vtable, null",
-			"  br i1 %iface_vtable_null, label %iface_free_done, label %iface_vtable_ok",
-			"iface_vtable_ok:",
+			"  br i1 %iface_vtable_null, label %__bb_iface_free_done, label %__bb_iface_vtable_ok",
+			"__bb_iface_vtable_ok:",
 			f"  %iface_inline = extractvalue {iface_llty} %src, {DRIFT_IFACE_INLINE_FLAG_IDX}",
 			"  %iface_inline_bit = and i8 %iface_inline, 1",
 			"  %iface_owns_bit = and i8 %iface_inline, 2",
@@ -8998,17 +9007,17 @@ class _FuncBuilder:
 			"  %iface_drop_slot = getelementptr inbounds ptr, ptr %iface_vtable, i32 0",
 			"  %iface_drop_ptr = load ptr, ptr %iface_drop_slot",
 			"  %iface_has_drop = icmp ne ptr %iface_drop_ptr, null",
-			"  br i1 %iface_has_drop, label %iface_drop_call, label %iface_drop_done",
-			"iface_drop_call:",
+			"  br i1 %iface_has_drop, label %__bb_iface_drop_call, label %__bb_iface_drop_done",
+			"__bb_iface_drop_call:",
 			"  call void (ptr) %iface_drop_ptr(ptr %iface_data_eff)",
-			"  br label %iface_drop_done",
-			"iface_drop_done:",
+			"  br label %__bb_iface_drop_done",
+			"__bb_iface_drop_done:",
 			"  %iface_needs_free = icmp ne i8 %iface_owns_bit, 0",
-			"  br i1 %iface_needs_free, label %iface_free, label %iface_free_done",
-			"iface_free:",
+			"  br i1 %iface_needs_free, label %__bb_iface_free, label %__bb_iface_free_done",
+			"__bb_iface_free:",
 			"  call void @drift_iface_free(ptr %iface_data)",
-			"  br label %iface_free_done",
-			"iface_free_done:",
+			"  br label %__bb_iface_free_done",
+			"__bb_iface_free_done:",
 			"  ret void",
 			"}",
 		]
