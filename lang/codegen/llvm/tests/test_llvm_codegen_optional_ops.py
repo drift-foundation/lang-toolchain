@@ -125,7 +125,7 @@ def test_optional_ops_round_trip_payload():
 	ir = mod.render()
 
 	assert "call %DriftDiagnosticValue @drift_dv_int" in ir
-	assert "call %DriftError* @drift_error_new_with_payload" in ir
+	assert "call ptr @drift_error_new_with_payload" in ir
 	assert "call void @__exc_attrs_get_dv" in ir
 	assert "call i1 @drift_dv_as_int" in ir
 	assert "Variant_" in ir
@@ -208,7 +208,7 @@ def test_optional_ops_round_trip_string_payload():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info_main, fn_infos=fn_infos, type_table=table, word_bits=host_word_bits()))
 	ir = mod.render()
 
-	assert "call %DriftError* @drift_error_new_with_payload" in ir
+	assert "call ptr @drift_error_new_with_payload" in ir
 	assert "call void @__exc_attrs_get_dv" in ir
 	assert "call i1 @drift_dv_as_string" in ir
 	assert "Variant_" in ir

@@ -1,6 +1,43 @@
 # Drift development history
 
 ## 2026-03-18
+- **Completed the native opaque-pointer LLVM IR migration for LLVM 20 compatibility (0.27.90, ABI 6)**:
+  Finished the codegen migration away from typed-pointer LLVM IR and removed
+  the temporary text-normalization pass. The emitter now produces opaque-pointer
+  IR natively, matching modern LLVM requirements.
+  - Problem:
+    - driftc had still been emitting typed-pointer LLVM IR forms such as
+      `i8*`, `%Struct*`, and typed function-pointer spellings
+    - LLVM 20 rejects typed-pointer textual IR, which blocked larger real-world
+      programs in downstream repos
+  - Fix:
+    - removed the tactical typed-pointer post-processor from LLVM codegen
+    - converted remaining live emission sites to native opaque-pointer forms:
+      - string/global GEPs
+      - array/runtime helper declarations
+      - interface/dropper paths
+      - callback and indirect fn-ptr call paths
+      - fn-ptr constants and fn-ptr struct-field adaptation logic
+    - split fn-ptr handling into:
+      - `ptr` for function-pointer values
+      - bare function signatures for indirect call annotations
+    - replaced LLVM-type-string fn-ptr throw-mode inference with explicit
+      value-flow tracking in codegen
+  - Coverage:
+    - added LLVM 20-focused opaque-pointer regressions covering:
+      - no typed-pointer syntax in emitted IR
+      - `llvm-as` acceptance
+      - clang IR acceptance
+      - pointer-heavy raw/ref paths
+      - callback/fn-ptr paths including nothrow-to-throwing adaptation
+    - updated existing LLVM codegen unit tests to the opaque-pointer contract
+    - verification tests now use `llvm-as` directly instead of weakening to
+      old `llvmlite` parser behavior
+  - Versioning:
+    - compiler version is `0.27.90`
+    - ABI remains `6` because this changes emitted LLVM IR form and internal
+      codegen behavior, not the compiler/runtime boundary contract
+
 - **Taught `drift prepare` to resolve same-manifest co-artifacts before publication (0.27.88, ABI 6)**:
   Fixed a multi-artifact workflow defect where one package artifact could not
   depend on another package artifact declared in the same

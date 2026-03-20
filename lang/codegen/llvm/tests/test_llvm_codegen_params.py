@@ -138,5 +138,5 @@ def test_fnptr_param_headers():
         type_table=table, word_bits=word_bits)
     ir = mod.render()
 
-    assert f"define {word_ty} @apply({word_ty} ({word_ty})* %f, {word_ty} %x)" in ir
-    assert f"define {word_ty} @apply_ct(%FnResult_Int_Error ({word_ty})* %f, {word_ty} %x)" in ir
+    assert f"define {word_ty} @apply(ptr %f, {word_ty} %x)" in ir
+    assert f"define {word_ty} @apply_ct(ptr %f, {word_ty} %x)" in ir

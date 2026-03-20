@@ -59,7 +59,7 @@ def test_fnptr_return_type_lowering() -> None:
 		type_table=table, word_bits=word_bits)
 	ir = mod.render()
 
-	assert f"define {word_ty} ({word_ty})* @make()" in ir
+	assert f"define ptr @make()" in ir
 	assert "@add1" in ir
 
 
@@ -93,5 +93,5 @@ def test_fnptr_return_fnresult_ok_payload() -> None:
 		type_table=table, word_bits=word_bits)
 	ir = mod.render()
 
-	assert f"%FnResult_FnPtr_Int_to_Int_NoThrow_Error = type {{ i1, {word_ty} ({word_ty})*, %DriftError* }}" in ir
+	assert f"%FnResult_FnPtr_Int_to_Int_NoThrow_Error = type {{ i1, ptr, ptr }}" in ir
 	assert "define %FnResult_FnPtr_Int_to_Int_NoThrow_Error @make()" in ir

@@ -4,10 +4,33 @@ SSA-first LLVM codegen smoke tests.
 
 from __future__ import annotations
 
+import pytest
+
 from lang.driftc.core.function_id import FunctionId
 from lang.codegen.llvm import LlvmModuleBuilder, lower_ssa_func_to_llvm
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.codegen.llvm import lower_module_to_llvm
+
+
+import shutil
+import subprocess
+import tempfile
+
+
+def _verify_ir_with_llvm_as(ir: str) -> None:
+	"""Verify IR with llvm-as-20 (or llvm-as). Skips if not available."""
+	llvm_as = shutil.which("llvm-as-20") or shutil.which("llvm-as")
+	if llvm_as is None:
+		import pytest
+		pytest.skip("llvm-as not available — cannot verify IR")
+	with tempfile.NamedTemporaryFile(suffix=".ll", mode="w", delete=False) as f:
+		f.write(ir)
+		f.flush()
+		result = subprocess.run(
+			[llvm_as, f.name, "-o", "/dev/null"],
+			capture_output=True, text=True,
+		)
+	assert result.returncode == 0, f"llvm-as rejected IR:\n{result.stderr}"
 from lang.driftc.checker import FnInfo, FnSignature
 from lang.driftc.stage2 import (
 	BasicBlock,
@@ -98,7 +121,7 @@ def test_codegen_fnresult_ok_return():
 
 
 def test_codegen_fnresult_ref_ok_return():
-	"""FnResult<Ref<Int>, Error> should use a named FnResult type with typed pointer payload."""
+	"""FnResult<Ref<Int>, Error> should use a named FnResult type with opaque pointer payload."""
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -123,12 +146,12 @@ def test_codegen_fnresult_ref_ok_return():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits))
 	ir = mod.render()
 
-	assert f"%FnResult_Ref_Int_Error = type {{ i1, {word_ty}*, %DriftError* }}" in ir
-	assert f"define %FnResult_Ref_Int_Error @f_ref({word_ty}* %p0)" in ir
+	assert f"%FnResult_Ref_Int_Error = type {{ i1, ptr, ptr }}" in ir
+	assert f"define %FnResult_Ref_Int_Error @f_ref(ptr %p0)" in ir
 
 
 def test_codegen_fnresult_ref_bool_ok_return():
-	"""FnResult<Ref<Bool>, Error> should use a Bool storage pointer payload (i8*)."""
+	"""FnResult<Ref<Bool>, Error> should use an opaque pointer payload (ptr)."""
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -151,8 +174,8 @@ def test_codegen_fnresult_ref_bool_ok_return():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=host_word_bits()))
 	ir = mod.render()
 
-	assert "%FnResult_Ref_Bool_Error = type { i1, i8*, %DriftError* }" in ir
-	assert "define %FnResult_Ref_Bool_Error @f_ref_bool(i8* %p0)" in ir
+	assert "%FnResult_Ref_Bool_Error = type { i1, ptr, ptr }" in ir
+	assert "define %FnResult_Ref_Bool_Error @f_ref_bool(ptr %p0)" in ir
 
 
 def test_export_wrapper_bool_return_uses_i8():
@@ -194,7 +217,7 @@ def test_export_wrapper_bool_return_uses_i8():
 	)
 	ir = mod.render()
 
-	assert "define { i8, %DriftError* } @foo()" in ir
+	assert "define { i8, ptr } @foo()" in ir
 	assert "define i1 @foo__impl()" in ir
 	assert "zext i1 %ok to i8" in ir
 
@@ -231,17 +254,15 @@ def test_codegen_fnresult_ref_err_zero_ok_slot():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits))
 	ir = mod.render()
 
-	assert f"%FnResult_Ref_Int_Error = type {{ i1, {word_ty}*, %DriftError* }}" in ir
+	assert f"%FnResult_Ref_Int_Error = type {{ i1, ptr, ptr }}" in ir
 	assert "define %FnResult_Ref_Int_Error @f_ref_err()" in ir
 	assert any(
-		f"%FnResult_Ref_Int_Error" in line and f", {word_ty}* null, 1" in line for line in ir.splitlines()
+		f"%FnResult_Ref_Int_Error" in line and f", ptr null, 1" in line for line in ir.splitlines()
 	)
 
 
 def test_codegen_nested_array_drop_helper_verifies():
 	"""Nested array drop helpers should emit verifiable LLVM IR."""
-	import pytest
-	llvm = pytest.importorskip("llvmlite.binding")
 
 	table = TypeTable()
 	string_ty = table.ensure_string()
@@ -280,11 +301,7 @@ def test_codegen_nested_array_drop_helper_verifies():
 	word_ty = f"i{word_bits}"
 	ir = lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits)
 
-	llvm.initialize()
-	llvm.initialize_native_target()
-	llvm.initialize_native_asmprinter()
-	module = llvm.parse_assembly(ir)
-	module.verify()
+	_verify_ir_with_llvm_as(ir)
 
 	assert "define void @__drift_array_drop_" in ir
 	assert "call void @__drift_array_drop_" in ir
@@ -293,8 +310,6 @@ def test_codegen_nested_array_drop_helper_verifies():
 
 def test_codegen_int_uint_conversions_verify():
 	"""IntFromUint/UintFromInt should produce verifier-clean IR."""
-	import llvmlite.binding as llvm
-
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -312,18 +327,11 @@ def test_codegen_int_uint_conversions_verify():
 	fn_info = _fn_info("conv", False, int_ty)
 
 	ir = lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=host_word_bits())
-
-	llvm.initialize()
-	llvm.initialize_native_target()
-	llvm.initialize_native_asmprinter()
-	module = llvm.parse_assembly(ir)
-	module.verify()
+	_verify_ir_with_llvm_as(ir)
 
 
 def test_codegen_signed_unsigned_ops_are_op_selected():
 	"""Signed/unsigned behavior should be encoded by ops, not types."""
-	import llvmlite.binding as llvm
-
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
@@ -349,11 +357,7 @@ def test_codegen_signed_unsigned_ops_are_op_selected():
 	word_ty = f"i{word_bits}"
 	ir = lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits)
 
-	llvm.initialize()
-	llvm.initialize_native_target()
-	llvm.initialize_native_asmprinter()
-	module = llvm.parse_assembly(ir)
-	module.verify()
+	_verify_ir_with_llvm_as(ir)
 
 	assert f"icmp slt {word_ty}" in ir
 	assert f"icmp ult {word_ty}" in ir

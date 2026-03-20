@@ -95,8 +95,8 @@ def test_array_string_literal_and_index_ir():
 	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=word_bits)
 	ir = mod.render()
 
-	assert "declare i8* @drift_alloc_array" in ir
-	assert f"%DriftString = type {{ {word_ty}, i8*" in ir
+	assert "declare ptr @drift_alloc_array" in ir
+	assert f"%DriftString = type {{ {word_ty}, ptr" in ir
 	assert "getelementptr %DriftString" in ir
 	assert "call void @drift_bounds_check" in ir
 	assert "call %DriftString @drift_string_retain" in ir
@@ -177,9 +177,9 @@ def test_array_string_store_ir():
 	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=word_bits)
 	ir = mod.render()
 
-	assert f"%DriftString = type {{ {word_ty}, i8*" in ir
-	assert "declare i8* @drift_alloc_array" in ir
-	assert "call i8* @drift_alloc_array" in ir
+	assert f"%DriftString = type {{ {word_ty}, ptr" in ir
+	assert "declare ptr @drift_alloc_array" in ir
+	assert "call ptr @drift_alloc_array" in ir
 	assert "getelementptr %DriftString" in ir
 	assert "call %DriftString @drift_string_retain" in ir
 	assert "call void @drift_string_release" in ir
@@ -223,9 +223,9 @@ def test_array_string_take_zeros_slot():
 	mod = lower_module_to_llvm({fn_id: func}, {fn_id: ssa}, {fn_id: info}, type_table=table, word_bits=word_bits)
 	ir = mod.render()
 
-	assert f"%DriftString = type {{ {word_ty}, i8*" in ir
+	assert f"%DriftString = type {{ {word_ty}, ptr" in ir
 	match = re.search(
-		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store %DriftString [^,]+, %DriftString\* \1)",
+		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store %DriftString [^,]+, ptr \1)",
 		ir,
 	)
 	assert match is not None
@@ -309,7 +309,7 @@ def test_array_optional_string_take_uses_tombstone_ctor():
 
 	assert "store i8 2" in ir
 	match = re.search(
-		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store [^\n]*, [^\n]*\* \1)",
+		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store [^\n]*, ptr \1)",
 		ir,
 	)
 	assert match is not None

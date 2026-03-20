@@ -74,13 +74,20 @@ fn main() nothrow -> Int {
 		# typed-pointer patterns like 'i8*' or '%DriftString*'.
 		assert "ptr" in ir, "emitted IR should use opaque pointers"
 
-		# Check for typed-pointer patterns.  We look for common forms:
-		#   i8*, i8**, i64*, %DriftString*, %DriftError*, %Struct_*
-		# but exclude patterns like 'i8*' inside comments or metadata strings.
+		# Check for typed-pointer patterns.  We catch:
+		#   - named types: i8*, i64*, %DriftString*, %Struct_Foo*
+		#   - anonymous aggregates: { i64, i64, [6 x i8] }*, [4 x i64]*
+		#   - function pointers: void ()*, i64 (i64)*
 		typed_ptr_pattern = re.compile(
-			r'(?<!\w)'        # not preceded by word char
-			r'(?:i\d+|%\w+)' # base type: i8, i64, %DriftString, etc.
-			r'\*'             # pointer star
+			r'(?:'
+			r'(?<!\w)(?:i\d+|%\w+)\*'   # named: i8*, %Type*
+			r'|'
+			r'\}\*'                       # anonymous struct: }*
+			r'|'
+			r'\]\*'                       # array type: ]*
+			r'|'
+			r'\)\*'                       # function pointer: )*
+			r')'
 		)
 		# Filter to actual IR lines (skip comments, metadata strings).
 		ir_lines = [
@@ -239,11 +246,17 @@ fn main() nothrow -> Int {
 }
 """.lstrip(), allow_unsafe=True)
 
-		# Verify no typed pointers remain.
+		# Verify no typed pointers remain (same comprehensive pattern as above).
 		typed_ptr_pattern = re.compile(
-			r'(?<!\w)'
-			r'(?:i\d+|%\w+)'
-			r'\*'
+			r'(?:'
+			r'(?<!\w)(?:i\d+|%\w+)\*'   # named: i8*, %Type*
+			r'|'
+			r'\}\*'                       # anonymous struct: }*
+			r'|'
+			r'\]\*'                       # array type: ]*
+			r'|'
+			r'\)\*'                       # function pointer: )*
+			r')'
 		)
 		ir_lines = [
 			line for line in ir.splitlines()
@@ -289,3 +302,79 @@ fn main() nothrow -> Int {
 		assert line_count > 500, (
 			f"Expected pointer-heavy IR to be >500 lines, got {line_count}"
 		)
+
+	def test_callback_fnptr_no_typed_pointers(self, tmp_path: Path) -> None:
+		"""
+		Exercise fn-ptr codegen paths: FnPtrConst, callback storage in struct
+		fields, and nothrow fn-ptr adaptation (wrapping nothrow into throwing
+		callback ABI). These hit _fn_ptr_lltype, _fat_adapter_sig,
+		_callback_thunk_ptr_llty, and indirect call lowering.
+		"""
+		ir = _emit_ir(tmp_path, """
+module main;
+
+import std.core as core;
+
+pub struct Handler {
+	pub on_event: core.Callback1<Int, Int>
+}
+
+fn double(x: Int) nothrow -> Int { return x * 2; }
+
+fn apply(f: core.Callback1<Int, Int>, x: Int) nothrow -> Int {
+	return f.call(x);
+}
+
+fn main() nothrow -> Int {
+	var h = Handler(on_event = core.callback1(double));
+	val r1 = h.on_event.call(21);
+	if r1 != 42 { return 1; }
+	val r2 = apply(core.callback1(double), 10);
+	if r2 != 20 { return 2; }
+	return 0;
+}
+""".lstrip())
+
+		# Verify no typed pointers remain.
+		typed_ptr_pattern = re.compile(
+			r'(?:'
+			r'(?<!\w)(?:i\d+|%\w+)\*'
+			r'|'
+			r'\}\*'
+			r'|'
+			r'\]\*'
+			r'|'
+			r'\)\*'
+			r')'
+		)
+		ir_lines = [
+			line for line in ir.splitlines()
+			if line.strip() and not line.strip().startswith(";")
+			and not line.strip().startswith("!")
+			and not line.strip().startswith("source_filename")
+		]
+		violations = []
+		for i, line in enumerate(ir_lines, 1):
+			if "= private" in line and (" c\"" in line or " zeroinitializer" in line):
+				continue
+			matches = typed_ptr_pattern.findall(line)
+			if matches:
+				violations.append(f"  line {i}: {line.strip()}  (found: {matches})")
+
+		assert not violations, (
+			f"Callback/fn-ptr IR contains typed pointers:\n"
+			+ "\n".join(violations[:20])
+		)
+
+		# Must be accepted by llvm-as.
+		llvm_as = shutil.which("llvm-as-20") or shutil.which("llvm-as")
+		if llvm_as is not None:
+			ir_path = tmp_path / "callback.ll"
+			ir_path.write_text(ir, encoding="utf-8")
+			result = subprocess.run(
+				[llvm_as, str(ir_path), "-o", "/dev/null"],
+				capture_output=True, text=True,
+			)
+			assert result.returncode == 0, (
+				f"llvm-as rejected callback/fn-ptr IR:\n{result.stderr}"
+			)

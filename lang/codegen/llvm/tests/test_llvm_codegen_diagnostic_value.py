@@ -219,7 +219,7 @@ def test_error_attr_round_trip_additional_key():
 	ir = mod.render()
 
 	assert "call %DriftDiagnosticValue @drift_dv_int" in ir
-	assert "call %DriftError* @drift_error_new_with_payload" in ir
+	assert "call ptr @drift_error_new_with_payload" in ir
 	assert "call void @drift_error_add_attr_dv" in ir
 	assert "call void @__exc_attrs_get_dv" in ir
 	assert "call i1 @drift_dv_as_int" in ir

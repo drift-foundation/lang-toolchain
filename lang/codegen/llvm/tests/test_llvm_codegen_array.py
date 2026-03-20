@@ -77,11 +77,11 @@ def test_array_literal_and_index_ir_contains_alloc_and_load():
 	word_bits = host_word_bits()
 	word_ty = f"i{word_bits}"
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=word_bits)
-	assert "declare i8* @drift_alloc_array" in ir
-	assert "call i8* @drift_alloc_array" in ir
+	assert "declare ptr @drift_alloc_array" in ir
+	assert "call ptr @drift_alloc_array" in ir
 	assert "drift_bounds_check" in ir
 	assert f"getelementptr {word_ty}" in ir
-	assert ("extractvalue %DriftArrayHeader" in ir) or (f"extractvalue {{ {word_ty}, {word_ty}, {word_ty}, i8* }}" in ir)
+	assert ("extractvalue %DriftArrayHeader" in ir) or (f"extractvalue {{ {word_ty}, {word_ty}, {word_ty}, ptr }}" in ir)
 
 
 def test_array_index_store_ir_contains_store():
@@ -148,7 +148,7 @@ def test_array_take_tombstones_nested_array():
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())
 
 	match = re.search(
-		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store [^\n]*, [^\n]*\* \1)",
+		r"call void @drift_bounds_check[^\n]*\n\s*(%[\w\.]+) = getelementptr[^\n]*\n(?s:.*?store [^\n]*, ptr \1)",
 		ir,
 	)
 	assert match is not None
