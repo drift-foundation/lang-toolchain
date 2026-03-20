@@ -330,6 +330,7 @@ def _build_package(
 	manifest_dir: Path,
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
+	trust_store: Path | None = None,
 ) -> Path:
 	"""Build a package artifact. Returns path to staged .dmp."""
 	out_dmp = staged_install / f"{art.name}.dmp"
@@ -344,6 +345,7 @@ def _build_package(
 		manifest_dir=manifest_dir,
 		package_roots=package_roots,
 		native_lib_paths=native_lib_paths,
+		trust_store=trust_store,
 	)
 
 	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
@@ -367,6 +369,7 @@ def _build_app(
 	manifest_dir: Path,
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
+	trust_store: Path | None = None,
 ) -> Path:
 	"""Build an app artifact. Returns path to staged binary."""
 	out_bin = staged_install / art.name
@@ -381,6 +384,7 @@ def _build_app(
 		manifest_dir=manifest_dir,
 		package_roots=package_roots,
 		native_lib_paths=native_lib_paths,
+		trust_store=trust_store,
 	)
 
 	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
@@ -728,6 +732,38 @@ def _deploy_artifact(
 	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
 	staged_install = stage_dir / art.name / art.version
 
+	# ── Step 0: Build trust overlay for co-artifact verification ──
+	# When building an artifact that depends on a co-artifact (signed in a
+	# previous iteration), driftc needs a trust store authorizing the
+	# signer's key for the co-artifact's namespace.  Build the same overlay
+	# used for smoke and pass it to the build step.
+	build_trust_path: Path | None = None
+	if sign_key is not None and resolved:
+		from tools.drift_deploy.staged_trust import (
+			build_staged_trust,
+			extract_pubkey_from_seed,
+		)
+		try:
+			pubkey = extract_pubkey_from_seed(sign_key)
+			build_trust_path = stage_dir / "drift" / "trust.json"
+			dep_ns_list: list[str] = []
+			for dep_pkg_id in resolved:
+				if dep_namespace_map and dep_pkg_id in dep_namespace_map:
+					dep_ns_list.append(dep_namespace_map[dep_pkg_id])
+				else:
+					dep_ns_list.extend(
+						_extract_dep_namespaces(dep_pkg_id, staged_pkg_root)
+					)
+			build_staged_trust(
+				baseline_trust_path=baseline_trust,
+				signer_pubkey_raw=pubkey,
+				artifact_namespace=art.module_namespace,
+				out_path=build_trust_path,
+				dep_namespaces=dep_ns_list,
+			)
+		except Exception as e:
+			raise DeployError(f"build-time trust overlay generation failed for '{art.name}': {e}")
+
 	# ── Step 1: Build ──
 	# Build a per-artifact package root containing ONLY resolved
 	# dependencies. Two filters:
@@ -758,6 +794,7 @@ def _deploy_artifact(
 			manifest_dir=manifest_dir,
 			package_roots=[build_pkg_root],
 			native_lib_paths=native_lib_paths,
+			trust_store=build_trust_path,
 		)
 	else:
 		bin_path = _build_app(
@@ -769,6 +806,7 @@ def _deploy_artifact(
 			manifest_dir=manifest_dir,
 			package_roots=[build_pkg_root],
 			native_lib_paths=native_lib_paths,
+			trust_store=build_trust_path,
 		)
 
 	# ── Step 2: Stage author profile + sign (package only) ──

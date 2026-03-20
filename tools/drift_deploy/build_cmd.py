@@ -84,6 +84,7 @@ def build_package_cmd(
 	manifest_dir: Path,
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
+	trust_store: Path | None = None,
 	extra_flags: list[str] | None = None,
 ) -> list[str]:
 	"""Build the driftc command for a package artifact."""
@@ -94,6 +95,10 @@ def build_package_cmd(
 		"--package-version", art.version,
 		"--package-target", target,
 	]
+
+	# Trust store for verifying co-artifact dependencies.
+	if trust_store is not None:
+		cmd.extend(["--trust-store", str(trust_store)])
 
 	# Native deps.
 	for nd in art.native_deps:
@@ -144,10 +149,15 @@ def build_app_cmd(
 	manifest_dir: Path,
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
+	trust_store: Path | None = None,
 	extra_flags: list[str] | None = None,
 ) -> list[str]:
 	"""Build the driftc command for an app artifact."""
 	cmd = [str(driftc), "-o", str(output_path)]
+
+	# Trust store for verifying package dependencies.
+	if trust_store is not None:
+		cmd.extend(["--trust-store", str(trust_store)])
 
 	# Exact resolved versions via --dep.
 	cmd.extend(expand_to_dep_flags(resolved_deps))

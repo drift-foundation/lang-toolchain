@@ -206,6 +206,37 @@ class TestBuildPackageCmd:
 		assert "--verbose" in cmd
 		assert "--debug" in cmd
 
+	def test_package_cmd_with_trust_store(self):
+		"""trust_store is forwarded to driftc for co-artifact verification."""
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-pkg.dmp"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+			trust_store=Path("/stage/drift/trust.json"),
+		)
+		assert "--trust-store" in cmd
+		idx = cmd.index("--trust-store")
+		assert cmd[idx + 1] == "/stage/drift/trust.json"
+
+	def test_package_cmd_without_trust_store(self):
+		"""No --trust-store when trust_store is None."""
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-pkg.dmp"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+		)
+		assert "--trust-store" not in cmd
+
 
 # ── build_app_cmd tests ──────────────────────────────────────────────
 

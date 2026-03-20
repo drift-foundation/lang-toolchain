@@ -1,5 +1,33 @@
 # Drift development history
 
+## 2026-03-20
+- **Passed the staged trust overlay to deploy-time co-artifact builds (0.27.92, ABI 6)**:
+  Fixed a deploy orchestration bug where `drift deploy` built the staged trust
+  overlay for smoke validation but did not pass that same trust store to the
+  actual build step. Manifests with co-artifact dependencies could therefore
+  fail during the second package build unless the repo also carried a fallback
+  `drift/trust.json`.
+  - Problem:
+    - co-artifact package builds verified freshly staged sibling packages during
+      deploy
+    - the build step invoked `driftc` without `--trust-store`
+    - `driftc` then fell back to default trust resolution and could reject the
+      sibling namespace as untrusted
+  - Fix:
+    - threaded `trust_store` through the shared `build_package_cmd()` and
+      `build_app_cmd()` helpers
+    - threaded that parameter through `_build_package()` and `_build_app()`
+    - moved staged trust overlay generation earlier in `_deploy_artifact()` so
+      the same overlay is available to both build and smoke
+    - made build-time overlay generation failures hard deploy errors instead of
+      silently falling back to default trust resolution
+  - Coverage:
+    - added command-builder regressions proving `--trust-store` is present when
+      requested and absent otherwise
+  - Versioning:
+    - compiler version is `0.27.92`
+    - ABI remains `6` because this changes deploy/toolchain orchestration only
+
 ## 2026-03-18
 - **Reserved compiler-emitted LLVM block labels to avoid wrapper-name collisions (0.27.91, ABI 6)**:
   Fixed a codegen hygiene bug where exported/wrapper LLVM IR could collide with
