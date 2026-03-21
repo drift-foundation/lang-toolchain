@@ -21,6 +21,7 @@
 #include <sys/timerfd.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <signal.h>
 #endif
 
 #ifdef NVALGRIND
@@ -2008,6 +2009,12 @@ static DriftCallbackVTable drift_root_vt_vtable = {
 };
 
 int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
+	/* Ignore SIGPIPE globally.  Socket/TLS write failures on closed peers
+	 * must return EPIPE through normal error handling, not terminate the
+	 * process.  This is standard practice for network programs (Go, Rust,
+	 * Python, Node.js all do this at startup). */
+	signal(SIGPIPE, SIG_IGN);
+
 	drift_root_vt_fn = user_main;
 	drift_root_vt_result = 0;
 

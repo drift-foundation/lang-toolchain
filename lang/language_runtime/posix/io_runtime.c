@@ -219,7 +219,7 @@ int64_t drift_net_udp_send_to(int64_t fd, DriftString *ip, int64_t port, const v
 		return -1;
 	}
 	free(ip_cstr);
-	ssize_t n = sendto((int)fd, buf, (size_t)len, 0, (struct sockaddr *)&addr, sizeof(addr));
+	ssize_t n = sendto((int)fd, buf, (size_t)len, MSG_NOSIGNAL, (struct sockaddr *)&addr, sizeof(addr));
 	return (int64_t)n;
 }
 
@@ -235,7 +235,7 @@ int64_t drift_net_udp_send_to_v6(int64_t fd, DriftString *ip, int64_t port, cons
 		return -1;
 	}
 	free(ip_cstr);
-	ssize_t n = sendto((int)fd, buf, (size_t)len, 0, (struct sockaddr *)&addr, sizeof(addr));
+	ssize_t n = sendto((int)fd, buf, (size_t)len, MSG_NOSIGNAL, (struct sockaddr *)&addr, sizeof(addr));
 	return (int64_t)n;
 }
 

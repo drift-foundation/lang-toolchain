@@ -1,6 +1,36 @@
 # Drift development history
 
 ## 2026-03-20
+- **Prevented `SIGPIPE` from killing Drift programs on broken socket/TLS writes (0.27.99, ABI 6)**:
+  Fixed a runtime defect where ordinary negative-path network writes could
+  terminate the whole process with `SIGPIPE` instead of surfacing a normal I/O
+  error.
+  - Problem:
+    - socket/TLS client negative-path scenarios on closed peers could cause the
+      process to die asynchronously
+    - downstream HTTPS failure-path tests only behaved correctly if the harness
+      globally ignored `SIGPIPE`
+    - that was masking a real runtime bug, not something downstream apps should
+      need to do
+  - Root cause:
+    - the runtime never installed `signal(SIGPIPE, SIG_IGN)`
+    - the POSIX write path uses `write()`, which can raise `SIGPIPE` when the
+      peer has already closed the connection
+  - Fix:
+    - installed global `SIGPIPE` ignore during runtime startup in
+      `drift_run_main_on_vt()`
+    - added `MSG_NOSIGNAL` to UDP `sendto()` paths as defense-in-depth
+    - broken socket/TLS writes now surface through normal error returns instead
+      of process termination
+  - Coverage:
+    - added an end-to-end regression that writes repeatedly to a socket whose
+      peer has already closed and verifies the program survives and returns a
+      normal error
+  - Versioning:
+    - compiler version is `0.27.99`
+    - ABI remains `6` because this changes runtime process behavior, not the
+      compiler/runtime ABI boundary
+
 - **Hardened exact `--dep` package selection against path/manifest identity mismatches (0.27.98, ABI 6)**:
   Completed the package-root exact-version selection fix by making standard
   package-layout identity a hard invariant. `driftc` now uses the filesystem

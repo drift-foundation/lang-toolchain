@@ -1,0 +1,57 @@
+module m;
+
+import std.concurrent as conc;
+import std.net as net;
+import std.io as io;
+
+/// Regression: writing to a socket after peer close must return an error,
+/// not terminate the process with SIGPIPE.
+pub fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 2000);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	var lr = net.listen(&addr, timeout);
+	match lr {
+		Ok(listener) => {
+			val port = listener.test_local_port();
+			var caddr = net.socket_addr("127.0.0.1", port);
+			var cr = net.connect(&caddr, timeout);
+			match cr {
+				Ok(client) => {
+					var ar = net.accept(&listener, timeout);
+					match ar {
+						Ok(accepted) => {
+							// Close server-side socket to simulate peer close.
+							val _ = accepted.close(timeout);
+							conc.sleep(conc.Duration(millis = 50));
+
+							// Create a buffer with data to write.
+							var buf = io.buffer(1024);
+							io.buffer_set_len(&mut buf, 1024);
+
+							// Write to client socket repeatedly — peer is closed.
+							// This MUST return an error, NOT kill the process with SIGPIPE.
+							var attempt = 0;
+							while attempt < 10 {
+								var wr = client.write(&buf, timeout);
+								match wr {
+									Err(_) => {
+										val _ = client.close(timeout);
+										return 0;
+									},
+									default => {}
+								}
+								conc.sleep(conc.Duration(millis = 10));
+								attempt = attempt + 1;
+							}
+							val _ = client.close(timeout);
+							return 0;
+						},
+						default => { return 4; }
+					}
+				},
+				default => { return 3; }
+			}
+		},
+		default => { return 1; }
+	}
+}

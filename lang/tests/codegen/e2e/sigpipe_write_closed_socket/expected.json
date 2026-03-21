@@ -1,0 +1,6 @@
+{
+  "description": "e2e: writing to a closed socket returns error, not SIGPIPE",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}
