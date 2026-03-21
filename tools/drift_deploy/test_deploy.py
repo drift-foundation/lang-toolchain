@@ -1575,6 +1575,110 @@ class TestBuildSelfExclusion:
 			assert any_has_jwt, "smoke root must contain the artifact being smoked"
 
 
+class TestSmokeRootIncludesFullArtifactSet:
+	"""
+	Regression: the smoke package root must include the full authenticated
+	artifact set (.zdmp + .sig + .provenance.zst + .author-profile) so the
+	consumer verifier finds all required siblings.
+
+	Bug: deploy 0.27.94 only copied .zdmp + .sig to the smoke root, causing
+	the verifier to fail with 'provenance sidecar required but not found'.
+	"""
+
+	@staticmethod
+	def _fake_run_creates_dmp(args, **kwargs):
+		cmd = args if isinstance(args, list) else [args]
+		for i, arg in enumerate(cmd):
+			if arg == "--emit-package" and i + 1 < len(cmd):
+				Path(cmd[i + 1]).write_bytes(b"fake-dmp")
+		import subprocess
+		return subprocess.CompletedProcess(cmd, 0, "", "")
+
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_smoke_root_includes_provenance_and_profile(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		art = Artifact(
+			kind="package", name="web-jwt", version="0.1.0",
+			description="JWT", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="web.jwt",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+			dest = tmpdir_p / "dest"
+			dest.mkdir()
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			# Create a minimal author profile so the full artifact set is produced.
+			author_profile = tmpdir_p / "test.author-profile"
+			import base64, hashlib as _hl
+			fake_pub_raw = b"\x00" * 32
+			fake_pub = base64.b64encode(fake_pub_raw).decode()
+			fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
+			author_profile.write_text(json.dumps({
+				"format": "author-profile", "version": 0,
+				"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
+				"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+				"namespaces": ["web.jwt.*"],
+			}))
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=False,
+					dry_run=True,
+					compiler_info=CompilerInfo(version="0.27.94", abi=6, commit="abc"),
+					staged_pkg_root=staged_pkg_root,
+					author_profile_path=author_profile,
+				)
+
+			# Find the smoke package root used in the smoke call.
+			assert len(mock_run.call_args_list) >= 2
+			smoke_cmd = mock_run.call_args_list[1][0][0]
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(smoke_cmd):
+				if arg == "--package-root" and i + 1 < len(smoke_cmd):
+					pkg_roots_in_cmd.append(smoke_cmd[i + 1])
+			assert pkg_roots_in_cmd, "smoke must have --package-root"
+
+			# The smoke root must contain the full authenticated artifact set.
+			smoke_root = Path(pkg_roots_in_cmd[0])
+			version_dir = smoke_root / "web-jwt" / "0.1.0"
+			assert (version_dir / "web-jwt.zdmp").exists() or (version_dir / "web-jwt.dmp").exists(), \
+				"smoke root missing artifact"
+			assert (version_dir / "web-jwt.provenance.zst").exists(), \
+				"smoke root missing provenance bundle — verifier will reject the package"
+			assert (version_dir / "web-jwt.author-profile").exists(), \
+				"smoke root missing author profile — verifier will reject the package"
+
+
 # ── Intra-project dep resolution ────────────────────────────────────
 
 

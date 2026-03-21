@@ -995,6 +995,12 @@ def _deploy_artifact(
 		shutil.copy2(str(zdmp_path), str(smoke_pkg_dir / zdmp_path.name))
 		if sig_path:
 			shutil.copy2(str(sig_path), str(smoke_pkg_dir / sig_path.name))
+		# Copy the full authenticated artifact set so the smoke consumer's
+		# verifier finds all required siblings (.provenance.zst, .author-profile).
+		if provenance_path and provenance_path.exists():
+			shutil.copy2(str(provenance_path), str(smoke_pkg_dir / provenance_path.name))
+		if staged_profile and staged_profile.exists():
+			shutil.copy2(str(staged_profile), str(smoke_pkg_dir / staged_profile.name))
 
 		# Build staged trust overlay.
 		from tools.drift_deploy.staged_trust import (

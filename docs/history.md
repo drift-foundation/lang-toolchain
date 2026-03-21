@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-20
+- **Fixed `drift deploy` smoke staging for the full authenticated package artifact set (0.27.95, ABI 6)**:
+  Repaired the deploy smoke path after the new provenance-bundle contract. The
+  smoke package root had still been staging only the package and signature,
+  which broke smoke consumption of freshly deployed signed packages under the
+  new verifier rules.
+  - Problem:
+    - package deploy now publishes and verifies the full artifact set:
+      - `<artifact>.zdmp`
+      - `<artifact>.sig`
+      - `<artifact>.author-profile`
+      - `<artifact>.provenance.zst`
+    - but the deploy smoke root was only receiving:
+      - `.zdmp`
+      - `.sig`
+    - smoke consumer compilation could therefore fail because the signed
+      envelope referenced provenance/profile material that was missing from the
+      staged smoke root
+  - Fix:
+    - package smoke staging now also copies:
+      - `<artifact>.provenance.zst`
+      - `<artifact>.author-profile`
+    - the smoke root now mirrors the full authenticated package artifact set
+      expected by the package verifier
+  - Coverage:
+    - added a regression proving the smoke package root contains both:
+      - `.provenance.zst`
+      - `.author-profile`
+  - Versioning:
+    - compiler version is `0.27.95`
+    - ABI remains `6` because this changes deploy/smoke staging behavior only
+
 - **Introduced authenticated provenance bundles for packages and apps (0.27.94, ABI 6)**:
   Standardized a signed artifact-provenance contract around a single
   `<artifact>.provenance.zst` bundle and brought app artifacts up to the same
