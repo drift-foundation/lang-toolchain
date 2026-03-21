@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-20
+- **Isolated deploy smoke roots from older self versions in the published tree (0.27.96, ABI 6)**:
+  Fixed a deploy smoke filtering bug where baseline smoke for a package could
+  still see older published versions of that same package from `--dest`, even
+  when the artifact being built had no `package_deps`.
+  - Problem:
+    - the smoke package root mirrored the package name directory from the
+      published tree and re-linked older self versions into the staged smoke
+      root
+    - this let historical versions of the same package participate in smoke
+      package discovery even though they were not real dependencies
+    - in practice, that could poison smoke with obsolete artifact layouts from
+      retained published versions
+  - Fix:
+    - when the staged smoke package root replaces a symlinked self-package
+      directory, it now creates a fresh real directory containing only the
+      version currently being built
+    - older self versions from `--dest` are no longer visible in the smoke root
+    - baseline smoke is now dependency-minimal and self-version-isolated
+  - Coverage:
+    - added a regression proving an older self version already present in
+      `--dest` is not visible in the smoke root while the new version is
+    - updated the existing symlink-replacement smoke regression to assert the
+      old self version is not staged
+  - Versioning:
+    - compiler version is `0.27.96`
+    - ABI remains `6` because this changes deploy smoke-root construction only
+
 - **Fixed `drift deploy` smoke staging for the full authenticated package artifact set (0.27.95, ABI 6)**:
   Repaired the deploy smoke path after the new provenance-bundle contract. The
   smoke package root had still been staging only the package and signature,

@@ -962,28 +962,21 @@ def _deploy_artifact(
 		dmp_path.unlink()
 
 		# Set up staged package root layout for smoke.
-		# Layout: staged_pkg_root/<name>/<version>/<name>.zdmp (+.sig)
+		# Layout: staged_pkg_root/<name>/<version>/<name>.zdmp (+siblings)
 		#
 		# If staged_pkg_root/<name> is a symlink (pointing to the old dest
-		# from the pre-loop mirror), replace it with a real directory that
-		# preserves old version symlinks and adds the new version.
-		# Without this, mkdir would follow the symlink into the real dest,
-		# polluting it before publish.
+		# from the pre-loop mirror), replace it with a fresh directory
+		# containing ONLY the version being built. Old self versions from
+		# dest are intentionally excluded — they are not dependencies and
+		# may have incompatible artifact layouts that poison the smoke root.
 		art_pkg_dir = staged_pkg_root / art.name
 		if art_pkg_dir.is_symlink():
-			link_target = art_pkg_dir.resolve()
+			# Remove symlink to dest — replace with a fresh directory
+			# containing ONLY the version being built. Old self versions
+			# from dest must not be visible in the smoke root; they are
+			# not dependencies and can have incompatible artifact layouts.
 			art_pkg_dir.unlink()
 			art_pkg_dir.mkdir(parents=True, exist_ok=True)
-			# Re-link old versions from the original target, but skip
-			# the version we're currently building — a stale directory
-			# from a prior failed deploy would create a dangling symlink
-			# that shadows the real staged copy.
-			if link_target.is_dir():
-				for ver_dir in sorted(link_target.iterdir()):
-					if ver_dir.is_dir() and ver_dir.name != art.version:
-						ver_link = art_pkg_dir / ver_dir.name
-						if not ver_link.exists():
-							ver_link.symlink_to(ver_dir.resolve())
 		smoke_pkg_dir = art_pkg_dir / art.version
 		# Remove any stale entry (symlink or empty dir) for this version.
 		if smoke_pkg_dir.is_symlink() or smoke_pkg_dir.exists():

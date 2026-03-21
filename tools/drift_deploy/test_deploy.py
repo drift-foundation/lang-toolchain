@@ -1234,8 +1234,8 @@ class TestBuildSelfExclusion:
 		"""
 		When staged_pkg_root/<name> is a symlink to old dest (containing
 		0.2.0), the sign step must replace it with a real directory
-		containing both 0.2.0 (symlinked) and the new 0.3.0, without
-		writing into the actual dest.
+		containing ONLY the new 0.3.0, without writing into the actual
+		dest and without re-linking old self versions.
 		"""
 		from tools.drift_deploy.manifest import NativeDep
 
@@ -1305,9 +1305,11 @@ class TestBuildSelfExclusion:
 			assert new_ver.is_dir(), "new version 0.3.0 must be staged for smoke"
 			assert (new_ver / "net-tls.zdmp").exists(), "built .zdmp must be in staged 0.3.0"
 
-			# Old version must still be reachable (symlinked).
+			# Old version must NOT be visible — smoke root is self-version-isolated.
 			old_ver = art_dir / "0.2.0"
-			assert old_ver.exists(), "old version 0.2.0 must still be reachable"
+			assert not old_ver.exists(), (
+				"old version 0.2.0 must not be visible in smoke root"
+			)
 
 			# Dest must NOT have been polluted with 0.3.0.
 			assert not (dest / "net-tls" / "0.3.0").exists(), (
@@ -1677,6 +1679,108 @@ class TestSmokeRootIncludesFullArtifactSet:
 				"smoke root missing provenance bundle — verifier will reject the package"
 			assert (version_dir / "web-jwt.author-profile").exists(), \
 				"smoke root missing author profile — verifier will reject the package"
+
+
+class TestSmokeRootExcludesOldSelfVersions:
+	"""
+	Regression: smoke root must not contain historical self versions from dest.
+
+	Bug: net-tls deploy failed because the smoke root inherited an older
+	net-tls version from --dest. That version had a v1 .sig referencing
+	an author-profile that wasn't published as a sibling, causing the
+	verifier to fail with 'author profile required but not found'.
+
+	The fix: don't re-link old self versions into staged_pkg_root. For a
+	package with no deps, smoke should only see the just-built version.
+	"""
+
+	@staticmethod
+	def _fake_run_creates_dmp(args, **kwargs):
+		cmd = args if isinstance(args, list) else [args]
+		for i, arg in enumerate(cmd):
+			if arg == "--emit-package" and i + 1 < len(cmd):
+				Path(cmd[i + 1]).write_bytes(b"fake-dmp")
+		import subprocess
+		return subprocess.CompletedProcess(cmd, 0, "", "")
+
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_old_self_version_not_in_smoke_root(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""Dest has net-tls/0.3.5; deploying net-tls/0.3.6 — smoke must not see 0.3.5."""
+		art = Artifact(
+			kind="package", name="net-tls", version="0.3.6",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift", modules=["src/"],
+			module_namespace="net.tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			# Dest already has an older version with a v1-signed .sig.
+			old_ver_dir = tmpdir_p / "dest" / "net-tls" / "0.3.5"
+			old_ver_dir.mkdir(parents=True)
+			(old_ver_dir / "net-tls.zdmp").write_bytes(b"old-pkg")
+			(old_ver_dir / "net-tls.sig").write_bytes(b'{"format":"dmir-pkg-sig","version":0,"package_sha256":"sha256:aa","envelope_version":1,"author_profile_sha256":"sha256:bb","signatures":[]}')
+			# NOTE: no .author-profile file — this is the old layout that triggers the failure.
+
+			dest = tmpdir_p / "dest"
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			# Mirror dest into staged_pkg_root (as deploy does).
+			(staged_pkg_root / "net-tls").symlink_to((dest / "net-tls").resolve())
+
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			sig_path = stage_dir / "fake.sig"
+			sig_path.parent.mkdir(parents=True, exist_ok=True)
+			sig_path.write_bytes(b"fake-sig")
+			mock_sign.return_value = sig_path
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_creates_dmp) as mock_run:
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},  # no deps
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=Path("/fake.key"),
+					baseline_trust=None,
+					skip_smoke=False,
+					dry_run=True,
+					compiler_info=CompilerInfo(version="0.27.94", abi=6, commit="abc"),
+					staged_pkg_root=staged_pkg_root,
+				)
+
+			# The smoke root must NOT contain the old 0.3.5 version.
+			smoke_cmd = mock_run.call_args_list[1][0][0]
+			pkg_roots_in_cmd: list[str] = []
+			for i, arg in enumerate(smoke_cmd):
+				if arg == "--package-root" and i + 1 < len(smoke_cmd):
+					pkg_roots_in_cmd.append(smoke_cmd[i + 1])
+
+			for pr in pkg_roots_in_cmd:
+				tls_dir = Path(pr) / "net-tls"
+				if tls_dir.exists():
+					versions = [d.name for d in tls_dir.iterdir() if d.is_dir() or d.is_symlink()]
+					assert "0.3.5" not in versions, (
+						f"smoke root must not contain old self version 0.3.5; found: {versions}"
+					)
+					assert "0.3.6" in versions, (
+						f"smoke root must contain the version being built (0.3.6); found: {versions}"
+					)
 
 
 # ── Intra-project dep resolution ────────────────────────────────────
