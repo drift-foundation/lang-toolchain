@@ -34,7 +34,16 @@ from tools.drift_deploy.resolver import (
 	ResolvedDep,
 	build_package_index,
 )
-from tools.drift_deploy.sidecar import write_app_sidecar
+from tools.drift_deploy.provenance import (
+	CompilerInfo,
+	build_provenance,
+	build_provenance_bundle,
+	compress_provenance_bundle,
+	parse_compiler_info,
+	provenance_sha256,
+	write_provenance,
+	write_provenance_bundle,
+)
 
 
 # ── Errors ───────────────────────────────────────────────────────────
@@ -209,20 +218,15 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 	return result
 
 
-def _get_compiler_version(driftc: Path) -> str:
+def _get_compiler_info(driftc: Path) -> CompilerInfo:
 	try:
 		result = subprocess.run(
 			[str(driftc), "--version"],
 			capture_output=True, text=True, timeout=10, env=_clean_env(),
 		)
-		# driftc --version outputs "driftc X.Y.Z-dev" or similar.
-		for line in result.stdout.strip().splitlines():
-			parts = line.strip().split()
-			if len(parts) >= 2:
-				return parts[-1]
-		return result.stdout.strip()
+		return parse_compiler_info(result.stdout)
 	except Exception:
-		return "unknown"
+		return CompilerInfo(version="unknown", abi=0, commit="unknown")
 
 
 # ── Artifact ordering ────────────────────────────────────────────────
@@ -439,27 +443,103 @@ def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
 	return sorted(namespaces)
 
 
+# ── Provenance bundle collection ─────────────────────────────────────
+
+
+def _collect_dep_provenance(
+	resolved: dict[str, ResolvedDep],
+	staged_pkg_root: Path,
+) -> dict[str, dict]:
+	"""Collect provenance documents from resolved dependencies.
+
+	Scans staged_pkg_root/<dep_name>/<version>/ for provenance files
+	(.provenance.zst or .provenance.json). Returns a dict mapping
+	dep name → parsed provenance dict.
+	"""
+	result: dict[str, dict] = {}
+	for dep_name, dep in sorted(resolved.items()):
+		dep_dir = staged_pkg_root / dep_name / dep.version
+		if not dep_dir.is_dir():
+			continue
+		# Prefer .provenance.zst (new format), fall back to .provenance.json (legacy).
+		zst_path = dep_dir / f"{dep_name}.provenance.zst"
+		json_path = dep_dir / f"{dep_name}.provenance.json"
+		if zst_path.exists():
+			try:
+				from tools.drift_deploy.provenance import load_provenance_bundle
+				bundle = load_provenance_bundle(zst_path)
+				prov = bundle.get("provenance")
+				if isinstance(prov, dict):
+					result[dep_name] = prov
+			except Exception:
+				continue
+		elif json_path.exists():
+			try:
+				prov = json.loads(json_path.read_text(encoding="utf-8"))
+				if isinstance(prov, dict):
+					result[dep_name] = prov
+			except Exception:
+				continue
+	return result
+
+
+def _collect_dep_keys(
+	resolved: dict[str, ResolvedDep],
+	staged_pkg_root: Path,
+) -> dict[str, dict[str, str]]:
+	"""Collect public keys from resolved dependency signature sidecars.
+
+	Scans staged_pkg_root/<dep_name>/<version>/<dep_name>.sig for
+	pubkey entries. Returns a dict mapping kid → key metadata.
+	"""
+	result: dict[str, dict[str, str]] = {}
+	for dep_name, dep in sorted(resolved.items()):
+		dep_dir = staged_pkg_root / dep_name / dep.version
+		sig_path = dep_dir / f"{dep_name}.sig"
+		if not sig_path.exists():
+			continue
+		try:
+			sig_obj = json.loads(sig_path.read_text(encoding="utf-8"))
+			for entry in sig_obj.get("signatures", []):
+				if not isinstance(entry, dict):
+					continue
+				kid = entry.get("kid")
+				algo = entry.get("algo")
+				pubkey = entry.get("pubkey")
+				if kid and algo and pubkey and kid not in result:
+					result[kid] = {
+						"algo": algo,
+						"kid": kid,
+						"pubkey": pubkey,
+					}
+		except Exception:
+			continue
+	return result
+
+
 # ── Sign ─────────────────────────────────────────────────────────────
 
 
-def _sign_package(
-	dmp_path: Path,
+def _sign_artifact(
+	artifact_path: Path,
 	*,
 	sign_key: Path,
 	author_profile_path: Path | None = None,
+	provenance_path: Path | None = None,
 ) -> Path:
-	"""Sign a .dmp and produce .sig sidecar. Returns path to sidecar."""
+	"""Sign an artifact (package or app) and produce .sig sidecar. Returns path to sidecar."""
 	from lang.drift.sign import SignOptions, sign_package_v0
 
-	sig_path = dmp_path.parent / f"{dmp_path.stem}.sig"
+	sig_path = artifact_path.parent / f"{artifact_path.stem}.sig"
 	sign_package_v0(SignOptions(
-		package_path=dmp_path,
+		package_path=artifact_path,
 		key_seed_path=sign_key,
 		key_seed_text=None,
 		out_path=sig_path,
 		add_signature=False,
 		include_pubkey=True,
 		author_profile_path=author_profile_path,
+		provenance_path=provenance_path,
 	))
 	return sig_path
 
@@ -723,7 +803,7 @@ def _deploy_artifact(
 	baseline_trust: Path | None,
 	skip_smoke: bool,
 	dry_run: bool,
-	compiler_version: str,
+	compiler_info: CompilerInfo,
 	staged_pkg_root: Path,
 	native_lib_paths: list[Path] | None = None,
 	dep_namespace_map: dict[str, str] | None = None,
@@ -830,9 +910,45 @@ def _deploy_artifact(
 			bound_profile = _dc_replace(src_profile, package=art.name)
 			staged_profile = staged_install / f"{art.name}.author-profile"
 			write_author_profile(bound_profile, staged_profile)
-		sig_path = _sign_package(
+
+		# Emit provenance bundle BEFORE signing so the envelope
+		# can include the provenance digest in the signed payload.
+		# The signed digest covers the compressed .zst bytes on disk.
+		import hashlib as _hl
+		dmp_bytes_for_hash = dmp_path.read_bytes()
+		dmp_sha256 = f"sha256:{_hl.sha256(dmp_bytes_for_hash).hexdigest()}"
+		resolved_deps_for_provenance: dict[str, dict[str, str]] = {}
+		for pkg_id in sorted(resolved.keys()):
+			dep = resolved[pkg_id]
+			resolved_deps_for_provenance[pkg_id] = {
+				"version": dep.version,
+				"integrity": dep.integrity,
+			}
+		provenance_bytes = build_provenance(
+			artifact_name=art.name,
+			artifact_version=art.version,
+			artifact_kind=art.kind,
+			artifact_sha256=dmp_sha256,
+			target=target,
+			compiler=compiler_info,
+			resolved_deps=resolved_deps_for_provenance,
+		)
+		provenance_obj = json.loads(provenance_bytes)
+
+		# Collect dependency provenance and public keys for the bundle.
+		dep_prov = _collect_dep_provenance(resolved, staged_pkg_root)
+		dep_keys = _collect_dep_keys(resolved, staged_pkg_root)
+
+		# Build and compress the provenance bundle.
+		bundle_raw = build_provenance_bundle(provenance_obj, dep_prov, dep_keys)
+		bundle_compressed = compress_provenance_bundle(bundle_raw)
+		provenance_path = staged_install / f"{art.name}.provenance.zst"
+		write_provenance_bundle(provenance_path, bundle_compressed)
+
+		sig_path = _sign_artifact(
 			dmp_path, sign_key=sign_key,
 			author_profile_path=staged_profile,
+			provenance_path=provenance_path,
 		)
 
 		# Compress the signed .dmp → .zdmp for distribution.
@@ -917,17 +1033,49 @@ def _deploy_artifact(
 	_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
 	# Author profile was staged in step 2 (before signing) for envelope binding.
 
-	# ── Step 4: App sidecar ──
-	if art.kind == "app" and resolved:
-		sidecar_path = staged_install / f"{art.name}.meta.json"
-		write_app_sidecar(
-			sidecar_path,
-			app_name=art.name,
-			app_version=art.version,
+	# ── Step 4: Provenance + sign (app) ──
+	# App provenance records the build environment and dependency graph.
+	# When a signing key is available, the app binary and provenance
+	# bundle are authenticated with the same v2 envelope as packages.
+	if art.kind == "app":
+		import hashlib as _hl
+		app_bin_path = staged_install / art.name
+		app_bytes_for_hash = app_bin_path.read_bytes()
+		app_sha256 = f"sha256:{_hl.sha256(app_bytes_for_hash).hexdigest()}"
+		resolved_deps_for_provenance: dict[str, dict[str, str]] = {}
+		for pkg_id in sorted(resolved.keys()):
+			dep = resolved[pkg_id]
+			resolved_deps_for_provenance[pkg_id] = {
+				"version": dep.version,
+				"integrity": dep.integrity,
+			}
+		provenance_bytes = build_provenance(
+			artifact_name=art.name,
+			artifact_version=art.version,
+			artifact_kind=art.kind,
+			artifact_sha256=app_sha256,
 			target=target,
-			compiler_version=compiler_version,
-			resolved_deps=resolved,
+			compiler=compiler_info,
+			resolved_deps=resolved_deps_for_provenance,
 		)
+		provenance_obj = json.loads(provenance_bytes)
+
+		# Collect dependency provenance and public keys for the bundle.
+		dep_prov = _collect_dep_provenance(resolved, staged_pkg_root)
+		dep_keys = _collect_dep_keys(resolved, staged_pkg_root)
+
+		# Build and compress the provenance bundle.
+		bundle_raw = build_provenance_bundle(provenance_obj, dep_prov, dep_keys)
+		bundle_compressed = compress_provenance_bundle(bundle_raw)
+		provenance_path = staged_install / f"{art.name}.provenance.zst"
+		write_provenance_bundle(provenance_path, bundle_compressed)
+
+		# Sign the app binary + provenance bundle (no author-profile for apps).
+		if sign_key is not None:
+			sig_path = _sign_artifact(
+				app_bin_path, sign_key=sign_key,
+				provenance_path=provenance_path,
+			)
 
 	# ── Step 5: Smoke ──
 	# Build a filtered smoke package root containing only the artifact
@@ -987,6 +1135,8 @@ def _deploy_artifact(
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
 		else:
 			smoke_env["DRIFT_STAGED_BIN"] = str(staged_install / art.name)
+			if sig_path:
+				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
 		if staged_trust_path:
 			smoke_env["DRIFT_STAGED_TRUST"] = str(staged_trust_path)
 
@@ -1076,7 +1226,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	target = _resolve_target(args)
 	sign_key = _resolve_sign_key(args)
 	baseline_trust = _resolve_trust_store(args)
-	compiler_version = _get_compiler_version(driftc)
+	compiler_info = _get_compiler_info(driftc)
 
 	# Package roots: default to --dest.
 	package_roots = args.package_root or ([args.dest] if args.dest else [])
@@ -1176,7 +1326,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				baseline_trust=baseline_trust,
 				skip_smoke=args.skip_smoke,
 				dry_run=args.dry_run,
-				compiler_version=compiler_version,
+				compiler_info=compiler_info,
 				staged_pkg_root=staged_pkg_root,
 				native_lib_paths=native_lib_paths,
 				dep_namespace_map=dep_namespace_map,

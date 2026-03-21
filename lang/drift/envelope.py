@@ -16,6 +16,7 @@ from lang.drift.crypto import sha256_hex
 
 
 ENVELOPE_HEADER = "drift-sig-envelope-v1"
+ENVELOPE_HEADER_V2 = "drift-sig-envelope-v2"
 
 
 def build_envelope(
@@ -37,6 +38,32 @@ def build_envelope(
 	]
 	if author_profile_sha256_hex:
 		lines.append(f"author-profile-sha256:{author_profile_sha256_hex}")
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def build_envelope_v2(
+	*,
+	package_sha256_hex: str,
+	author_profile_sha256_hex: str | None = None,
+	provenance_sha256_hex: str | None = None,
+) -> bytes:
+	"""
+	Build the canonical v2 envelope bytes that the signer signs.
+
+	V2 extends v1 with an optional provenance digest line:
+	  drift-sig-envelope-v2\\n
+	  package-sha256:<hex>\\n
+	  author-profile-sha256:<hex>\\n   (only if profile is present)
+	  provenance-sha256:<hex>\\n       (only if provenance is present)
+	"""
+	lines = [
+		ENVELOPE_HEADER_V2,
+		f"package-sha256:{package_sha256_hex}",
+	]
+	if author_profile_sha256_hex:
+		lines.append(f"author-profile-sha256:{author_profile_sha256_hex}")
+	if provenance_sha256_hex:
+		lines.append(f"provenance-sha256:{provenance_sha256_hex}")
 	return ("\n".join(lines) + "\n").encode("utf-8")
 
 

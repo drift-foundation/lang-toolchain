@@ -50,6 +50,7 @@ class SignOptions:
 	add_signature: bool
 	include_pubkey: bool
 	author_profile_path: Path | None = None  # if set, sign envelope covering profile digest
+	provenance_path: Path | None = None  # if set, include provenance digest in v2 envelope
 
 
 def _decode_seed32(text: str) -> bytes:
@@ -182,8 +183,26 @@ def sign_package_v0(opts: SignOptions) -> None:
 
 	# Determine what the signature covers.
 	profile_sha: str | None = None
-	if opts.author_profile_path and opts.author_profile_path.exists():
-		profile_bytes = opts.author_profile_path.read_bytes()
+	provenance_sha: str | None = None
+	has_profile = opts.author_profile_path and opts.author_profile_path.exists()
+	has_provenance = opts.provenance_path and opts.provenance_path.exists()
+
+	if has_provenance:
+		# V2 envelope: includes provenance digest.
+		if has_profile:
+			profile_bytes = opts.author_profile_path.read_bytes()  # type: ignore[union-attr]
+			profile_sha = sha256_hex(profile_bytes)
+		provenance_bytes = opts.provenance_path.read_bytes()  # type: ignore[union-attr]
+		provenance_sha = sha256_hex(provenance_bytes)
+		from lang.drift.envelope import build_envelope_v2
+		message = build_envelope_v2(
+			package_sha256_hex=pkg_sha,
+			author_profile_sha256_hex=profile_sha,
+			provenance_sha256_hex=provenance_sha,
+		)
+		envelope_version = 2
+	elif has_profile:
+		profile_bytes = opts.author_profile_path.read_bytes()  # type: ignore[union-attr]
 		profile_sha = sha256_hex(profile_bytes)
 		from lang.drift.envelope import build_envelope
 		message = build_envelope(
@@ -230,5 +249,7 @@ def sign_package_v0(opts: SignOptions) -> None:
 		obj["envelope_version"] = envelope_version
 		if profile_sha:
 			obj["author_profile_sha256"] = f"sha256:{profile_sha}"
+		if provenance_sha:
+			obj["provenance_sha256"] = f"sha256:{provenance_sha}"
 
 	opts.out_path.write_text(json.dumps(obj, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

@@ -232,7 +232,7 @@ drift-deploy-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v tools/drift_deploy/test_build.py tools/drift_deploy/test_deploy.py tools/drift_deploy/test_manifest.py tools/drift_deploy/test_prepare.py tools/drift_deploy/test_resolver.py
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v tools/drift_deploy/test_build.py tools/drift_deploy/test_deploy.py tools/drift_deploy/test_manifest.py tools/drift_deploy/test_prepare.py tools/drift_deploy/test_provenance.py tools/drift_deploy/test_resolver.py
 
 # External consumer fleet (signed package path, K4/K10-K14 guards).
 ext-consumer-test:

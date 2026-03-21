@@ -38,6 +38,7 @@ def sha256_hex(data: bytes) -> str:
 
 
 _ENVELOPE_HEADER = "drift-sig-envelope-v1"
+_ENVELOPE_HEADER_V2 = "drift-sig-envelope-v2"
 
 
 def _build_envelope(
@@ -45,13 +46,31 @@ def _build_envelope(
 	package_sha256_hex: str,
 	author_profile_sha256_hex: str | None = None,
 ) -> bytes:
-	"""Build the canonical envelope bytes that the signer signs."""
+	"""Build the canonical v1 envelope bytes that the signer signs."""
 	lines = [
 		_ENVELOPE_HEADER,
 		f"package-sha256:{package_sha256_hex}",
 	]
 	if author_profile_sha256_hex:
 		lines.append(f"author-profile-sha256:{author_profile_sha256_hex}")
+	return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _build_envelope_v2(
+	*,
+	package_sha256_hex: str,
+	author_profile_sha256_hex: str | None = None,
+	provenance_sha256_hex: str | None = None,
+) -> bytes:
+	"""Build the canonical v2 envelope bytes that the signer signs."""
+	lines = [
+		_ENVELOPE_HEADER_V2,
+		f"package-sha256:{package_sha256_hex}",
+	]
+	if author_profile_sha256_hex:
+		lines.append(f"author-profile-sha256:{author_profile_sha256_hex}")
+	if provenance_sha256_hex:
+		lines.append(f"provenance-sha256:{provenance_sha256_hex}")
 	return ("\n".join(lines) + "\n").encode("utf-8")
 
 
@@ -87,8 +106,9 @@ class SigEntry:
 class SigFile:
 	package_sha256_hex: str
 	signatures: list[SigEntry]
-	envelope_version: int = 0  # 0 = legacy (raw bytes), 1 = signed envelope
+	envelope_version: int = 0  # 0 = legacy (raw bytes), 1 = signed envelope, 2 = provenance
 	author_profile_sha256_hex: str | None = None  # set when envelope_version >= 1
+	provenance_sha256_hex: str | None = None  # set when envelope_version >= 2
 
 
 def load_sig_sidecar(path: Path) -> SigFile:
@@ -158,11 +178,19 @@ def load_sig_sidecar(path: Path) -> SigFile:
 			raise ValueError("signature sidecar author_profile_sha256 must be 'sha256:<hex>'")
 		ap_sha = raw_ap.split("sha256:", 1)[1]
 
+	prov_sha: str | None = None
+	raw_prov = obj.get("provenance_sha256")
+	if raw_prov is not None:
+		if not isinstance(raw_prov, str) or not raw_prov.startswith("sha256:"):
+			raise ValueError("signature sidecar provenance_sha256 must be 'sha256:<hex>'")
+		prov_sha = raw_prov.split("sha256:", 1)[1]
+
 	return SigFile(
 		package_sha256_hex=pkg_sha_hex,
 		signatures=entries,
 		envelope_version=envelope_version,
 		author_profile_sha256_hex=ap_sha,
+		provenance_sha256_hex=prov_sha,
 	)
 
 
@@ -193,9 +221,16 @@ def verify_package_signatures(
 	core_trust: TrustStore,
 	require_signatures: bool,
 	allow_unsigned_roots: list[Path],
+	provenance_path: Path | None = None,
+	author_profile_path: Path | None = None,
 ) -> None:
 	"""
 	Verify signature/trust policy for a loaded package.
+
+	If provenance_path is provided and the envelope is v2 with a
+	provenance_sha256, the actual sidecar on disk is loaded and its
+	digest is compared against the signed provenance_sha256. A mismatch
+	raises ValueError ("provenance sidecar integrity check failed").
 
 	Raises ValueError on policy failure.
 	"""
@@ -236,8 +271,57 @@ def verify_package_signatures(
 	if sf.package_sha256_hex != pkg_sha:
 		raise ValueError("signature sidecar package_sha256 mismatch")
 
+	# ── Provenance sidecar integrity check ──
+	# If the signed envelope contains a provenance digest, verify the
+	# actual provenance file on disk matches before trusting the signature.
+	if sf.envelope_version >= 2 and sf.provenance_sha256_hex:
+		# Determine provenance path: caller-provided or conventional location.
+		actual_prov_path = provenance_path
+		if actual_prov_path is None:
+			# Convention: <stem>.provenance.zst next to the package (bundle format).
+			# Fall back to legacy <stem>.provenance.json if .zst not found.
+			zst_path = pkg_path.parent / f"{pkg_path.stem}.provenance.zst"
+			json_path = pkg_path.parent / f"{pkg_path.stem}.provenance.json"
+			if zst_path.exists():
+				actual_prov_path = zst_path
+			else:
+				actual_prov_path = json_path
+		if not actual_prov_path.exists():
+			raise ValueError(
+				f"provenance sidecar required by signed envelope but not found: {actual_prov_path}"
+			)
+		actual_prov_bytes = actual_prov_path.read_bytes()
+		actual_prov_sha = sha256_hex(actual_prov_bytes)
+		if actual_prov_sha != sf.provenance_sha256_hex:
+			raise ValueError("provenance sidecar integrity check failed")
+
+	# ── Author profile integrity check ──
+	# If the signed envelope contains an author-profile digest, verify the
+	# actual profile file on disk matches before trusting the signature.
+	if sf.envelope_version >= 1 and sf.author_profile_sha256_hex:
+		actual_profile_path = author_profile_path
+		if actual_profile_path is None:
+			# Convention: <stem>.author-profile next to the package.
+			actual_profile_path = pkg_path.parent / f"{pkg_path.stem}.author-profile"
+		if not actual_profile_path.exists():
+			raise ValueError(
+				f"author profile required by signed envelope but not found: {actual_profile_path}"
+			)
+		actual_profile_bytes = actual_profile_path.read_bytes()
+		actual_profile_sha = sha256_hex(actual_profile_bytes)
+		if actual_profile_sha != sf.author_profile_sha256_hex:
+			raise ValueError("author profile integrity check failed")
+
 	# Determine the signed payload based on envelope version.
-	if sf.envelope_version >= 1:
+	if sf.envelope_version >= 2:
+		# Envelope v2: signature covers a canonical envelope string
+		# that includes the package, profile, and provenance digests.
+		signed_message = _build_envelope_v2(
+			package_sha256_hex=sf.package_sha256_hex,
+			author_profile_sha256_hex=sf.author_profile_sha256_hex,
+			provenance_sha256_hex=sf.provenance_sha256_hex,
+		)
+	elif sf.envelope_version >= 1:
 		# Envelope v1: signature covers a canonical envelope string
 		# that includes the package digest and (optionally) the profile digest.
 		signed_message = _build_envelope(
@@ -328,3 +412,82 @@ def verify_package_signatures(
 			break
 		if not ok:
 			raise ValueError(f"package signatures are not trusted for module '{mid}'")
+
+
+def verify_app_signatures(
+	*,
+	app_path: Path,
+	app_bytes: bytes,
+	trust: TrustStore,
+	provenance_path: Path | None = None,
+) -> None:
+	"""
+	Verify signature and artifact integrity for a built app.
+
+	The app artifact set is: binary + .sig + .provenance.zst.
+	All three are bound by a v2 signed envelope.
+
+	Raises ValueError on any verification failure:
+	  - missing .sig
+	  - artifact digest mismatch
+	  - provenance missing or tampered
+	  - no valid signature
+	"""
+	app_sha = sha256_hex(app_bytes)
+
+	sig_path = app_path.with_suffix(".sig")
+	if not sig_path.exists():
+		raise ValueError(f"missing signature sidecar for app '{app_path}'")
+
+	sf = load_sig_sidecar(sig_path)
+	if sf.package_sha256_hex != app_sha:
+		raise ValueError("signature sidecar artifact sha256 mismatch")
+
+	# Provenance integrity check.
+	if sf.envelope_version >= 2 and sf.provenance_sha256_hex:
+		actual_prov_path = provenance_path
+		if actual_prov_path is None:
+			zst_path = app_path.parent / f"{app_path.name}.provenance.zst"
+			actual_prov_path = zst_path
+		if not actual_prov_path.exists():
+			raise ValueError(
+				f"provenance bundle required by signed envelope but not found: {actual_prov_path}"
+			)
+		actual_prov_bytes = actual_prov_path.read_bytes()
+		actual_prov_sha = sha256_hex(actual_prov_bytes)
+		if actual_prov_sha != sf.provenance_sha256_hex:
+			raise ValueError("provenance bundle integrity check failed")
+
+	# Reconstruct signed envelope.
+	if sf.envelope_version >= 2:
+		signed_message = _build_envelope_v2(
+			package_sha256_hex=sf.package_sha256_hex,
+			provenance_sha256_hex=sf.provenance_sha256_hex,
+		)
+	elif sf.envelope_version >= 1:
+		signed_message = _build_envelope(
+			package_sha256_hex=sf.package_sha256_hex,
+		)
+	else:
+		signed_message = app_bytes
+
+	# Verify signatures.
+	verified = False
+	for entry in sf.signatures:
+		if entry.algo != "ed25519":
+			continue
+		if entry.kid in trust.revoked_kids:
+			continue
+		tk = trust.keys_by_kid.get(entry.kid)
+		if tk is None:
+			continue
+		try:
+			ok = verify_ed25519(pubkey_raw=tk.pubkey_raw, message=signed_message, signature_raw=entry.sig_raw)
+		except Exception as err:
+			raise ValueError(f"signature verification failed: {err}") from err
+		if ok:
+			verified = True
+			break
+
+	if not verified:
+		raise ValueError("no valid signatures for app")

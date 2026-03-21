@@ -1,6 +1,52 @@
 # Drift development history
 
 ## 2026-03-20
+- **Introduced authenticated provenance bundles for packages and apps (0.27.94, ABI 6)**:
+  Standardized a signed artifact-provenance contract around a single
+  `<artifact>.provenance.zst` bundle and brought app artifacts up to the same
+  artifact/provenance authentication model as packages.
+  - Package artifact set:
+    - `<artifact>.zdmp`
+    - `<artifact>.sig`
+    - `<artifact>.author-profile`
+    - `<artifact>.provenance.zst`
+  - App artifact set:
+    - `<app>`
+    - `<app>.sig`
+    - `<app>.provenance.zst`
+  - Main changes:
+    - replaced the earlier standalone provenance sidecar concept with a single
+      zstd-compressed provenance bundle
+    - added `artifact_sha256` to the main provenance document so provenance now
+      carries both build metadata and artifact integrity
+    - embedded dependency provenance material and dependency signer public keys
+      into the provenance bundle for offline inspection/certification use cases
+    - extended the v2 signed envelope so package/app signatures bind the real
+      on-disk provenance bundle digest
+    - kept the published author profile visible and top-level for packages,
+      while binding its digest into the same signed envelope
+    - added real on-disk verification for:
+      - package bytes
+      - app bytes
+      - provenance bundles
+      - package author profiles
+    - introduced `verify_app_signatures()` so apps now have the same verifier
+      model as packages, minus package-only namespace trust and author-profile
+      checks
+  - Coverage:
+    - added provenance/signing regressions for:
+      - bundle emission and deterministic layout
+      - signed-envelope digest binding
+      - tampered/missing provenance rejection
+      - tampered/missing author-profile rejection
+      - app signing and app verification failure modes
+    - wired `tools/drift_deploy/test_provenance.py` into the normal
+      `just test` path
+  - Versioning:
+    - compiler version is `0.27.94`
+    - ABI remains `6` because this changes signing/provenance/tooling behavior,
+      not the compiler/runtime ABI boundary
+
 - **Passed the staged trust overlay to deploy-time co-artifact builds (0.27.92, ABI 6)**:
   Fixed a deploy orchestration bug where `drift deploy` built the staged trust
   overlay for smoke validation but did not pass that same trust store to the

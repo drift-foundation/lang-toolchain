@@ -31,6 +31,7 @@ from tools.drift_deploy.drift_deploy import (
 	build_arg_parser,
 )
 from tools.drift_deploy.lockfile import write_lock
+from tools.drift_deploy.provenance import CompilerInfo
 from tools.drift_deploy.manifest import (
 	Artifact,
 	Manifest,
@@ -215,32 +216,38 @@ class TestResolutionLock:
 				)
 
 
-# ── Sidecar ──────────────────────────────────────────────────────────
+# ── Provenance ───────────────────────────────────────────────────────
 
 
-class TestSidecar:
-	def test_app_sidecar_output(self) -> None:
-		from tools.drift_deploy.sidecar import write_app_sidecar
+class TestProvenanceInDeploy:
+	def test_provenance_output(self) -> None:
+		from tools.drift_deploy.provenance import build_provenance, write_provenance
 
+		compiler = CompilerInfo(version="0.27.93", abi=6, commit="abc1234")
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "myapp.meta.json"
-			write_app_sidecar(
-				path,
-				app_name="myapp",
-				app_version="1.0.0",
+			path = Path(tmpdir) / "myapp.provenance.json"
+			prov_bytes = build_provenance(
+				artifact_name="myapp",
+				artifact_version="1.0.0",
+				artifact_kind="app",
+				artifact_sha256="sha256:0000000000000000000000000000000000000000000000000000000000000000",
 				target="x86_64-linux-gnu",
-				compiler_version="0.27.48-dev",
+				compiler=compiler,
 				resolved_deps={
-					"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
+					"net.tls": {"version": "0.3.0", "integrity": "sha256:aa"},
 				},
 			)
+			write_provenance(path, prov_bytes)
 			data = json.loads(path.read_text())
-			assert data["schema_version"] == 1
-			assert data["app"] == "myapp"
-			assert data["version"] == "1.0.0"
+			assert data["schema_version"] == 2
+			assert data["artifact_name"] == "myapp"
+			assert data["artifact_version"] == "1.0.0"
+			assert data["artifact_kind"] == "app"
 			assert data["target"] == "x86_64-linux-gnu"
-			assert data["compiler_version"] == "0.27.48-dev"
-			assert "built_at" in data
+			assert data["compiler_version"] == "0.27.93"
+			assert data["compiler_commit"] == "abc1234"
+			assert data["abi"] == 6
+			assert "build_utc" in data
 			assert data["resolved_deps"]["net.tls"]["version"] == "0.3.0"
 
 
@@ -1039,7 +1046,7 @@ class TestBuildSelfExclusion:
 		m.stderr = ""
 		return m
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_build_does_not_see_own_prior_version(
@@ -1093,7 +1100,7 @@ class TestBuildSelfExclusion:
 			(manifest_dir / "src").mkdir()
 			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
 
-			# _sign_package needs to return a path that exists.
+			# _sign_artifact needs to return a path that exists.
 			sig_path = stage_dir / "fake.sig"
 			sig_path.parent.mkdir(parents=True, exist_ok=True)
 			sig_path.write_bytes(b"fake-sig")
@@ -1115,7 +1122,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=True,
 					dry_run=True,
-					compiler_version="0.27.53-dev",
+					compiler_info=CompilerInfo(version="0.27.53", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1143,7 +1150,7 @@ class TestBuildSelfExclusion:
 					f"build root must only contain resolved deps"
 				)
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_build_does_not_pass_raw_dest_as_package_root(
@@ -1195,7 +1202,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=True,
 					dry_run=True,
-					compiler_version="0.27.53-dev",
+					compiler_info=CompilerInfo(version="0.27.53", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1217,7 +1224,7 @@ class TestBuildSelfExclusion:
 				f"only the filtered build root should be used"
 			)
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_smoke_staging_replaces_symlink_with_new_version(
@@ -1282,7 +1289,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=True,
 					dry_run=True,
-					compiler_version="0.27.54-dev",
+					compiler_info=CompilerInfo(version="0.27.54", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1307,7 +1314,7 @@ class TestBuildSelfExclusion:
 				"dest must not be polluted with new version before publish"
 			)
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_stale_version_dir_does_not_shadow_staged_build(
@@ -1373,7 +1380,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=True,
 					dry_run=True,
-					compiler_version="0.27.55-dev",
+					compiler_info=CompilerInfo(version="0.27.55", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1396,7 +1403,7 @@ class TestBuildSelfExclusion:
 				"built .zdmp must not leak into dest through stale symlink"
 			)
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_build_root_excludes_unrelated_packages(
@@ -1460,7 +1467,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=True,
 					dry_run=True,
-					compiler_version="0.27.59",
+					compiler_info=CompilerInfo(version="0.27.59", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1483,7 +1490,7 @@ class TestBuildSelfExclusion:
 					f"build root {pr} exposes self (web-jwt)"
 				)
 
-	@patch("tools.drift_deploy.drift_deploy._sign_package")
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
 	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32)
 	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
 	def test_smoke_root_excludes_unrelated_packages(
@@ -1542,7 +1549,7 @@ class TestBuildSelfExclusion:
 					baseline_trust=None,
 					skip_smoke=False,
 					dry_run=True,
-					compiler_version="0.27.60",
+					compiler_info=CompilerInfo(version="0.27.60", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1719,7 +1726,7 @@ class TestSmokeDepPinning:
 			sig_path.parent.mkdir(parents=True, exist_ok=True)
 			sig_path.write_bytes(b"fake-sig")
 
-			with patch("tools.drift_deploy.drift_deploy._sign_package", return_value=sig_path), \
+			with patch("tools.drift_deploy.drift_deploy._sign_artifact", return_value=sig_path), \
 				patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32), \
 				patch("tools.drift_deploy.staged_trust.build_staged_trust"), \
 				patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=fake_run):
@@ -1738,7 +1745,7 @@ class TestSmokeDepPinning:
 					baseline_trust=None,
 					skip_smoke=False,
 					dry_run=True,
-					compiler_version="0.27.62",
+					compiler_info=CompilerInfo(version="0.27.62", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1803,7 +1810,7 @@ class TestSmokeDepPinning:
 			sig_path.parent.mkdir(parents=True, exist_ok=True)
 			sig_path.write_bytes(b"fake-sig")
 
-			with patch("tools.drift_deploy.drift_deploy._sign_package", return_value=sig_path), \
+			with patch("tools.drift_deploy.drift_deploy._sign_artifact", return_value=sig_path), \
 				patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x01" * 32), \
 				patch("tools.drift_deploy.staged_trust.build_staged_trust"), \
 				patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=fake_run):
@@ -1822,7 +1829,7 @@ class TestSmokeDepPinning:
 					baseline_trust=None,
 					skip_smoke=False,
 					dry_run=True,
-					compiler_version="0.27.62",
+					compiler_info=CompilerInfo(version="0.27.62", abi=6, commit="unknown"),
 					staged_pkg_root=staged_pkg_root,
 				)
 
@@ -1897,9 +1904,9 @@ class TestAuthorProfilePublish:
 			])
 			assert rc == 1  # DeployError: file not found
 
-	def test_sign_package_with_profile_produces_bound_sidecar(self) -> None:
-		"""_sign_package with author_profile_path produces envelope_version: 1."""
-		from tools.drift_deploy.drift_deploy import _sign_package
+	def test_sign_artifact_with_profile_produces_bound_sidecar(self) -> None:
+		"""_sign_artifact with author_profile_path produces envelope_version: 1."""
+		from tools.drift_deploy.drift_deploy import _sign_artifact
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace as _dc_replace
 
@@ -1923,7 +1930,7 @@ class TestAuthorProfilePublish:
 			staged_profile = td / "test.pkg.author-profile"
 			write_author_profile(bound, staged_profile)
 
-			sig_path = _sign_package(dmp, sign_key=key_path, author_profile_path=staged_profile)
+			sig_path = _sign_artifact(dmp, sign_key=key_path, author_profile_path=staged_profile)
 
 			import json as _json
 			sc = _json.loads(sig_path.read_text())
@@ -1937,9 +1944,9 @@ class TestAuthorProfilePublish:
 			loaded = load_author_profile(staged_profile)
 			assert loaded.package == "test.pkg"
 
-	def test_sign_package_without_profile_is_legacy(self) -> None:
-		"""_sign_package without author_profile_path produces legacy v0 sidecar."""
-		from tools.drift_deploy.drift_deploy import _sign_package
+	def test_sign_artifact_without_profile_is_legacy(self) -> None:
+		"""_sign_artifact without author_profile_path produces legacy v0 sidecar."""
+		from tools.drift_deploy.drift_deploy import _sign_artifact
 
 		with tempfile.TemporaryDirectory() as tmpdir:
 			td = Path(tmpdir)
@@ -1949,7 +1956,7 @@ class TestAuthorProfilePublish:
 			key_path = td / "key.seed"
 			key_path.write_text(_b64.b64encode(_os.urandom(32)).decode() + "\n")
 
-			sig_path = _sign_package(dmp, sign_key=key_path)
+			sig_path = _sign_artifact(dmp, sign_key=key_path)
 
 			import json as _json
 			sc = _json.loads(sig_path.read_text())
