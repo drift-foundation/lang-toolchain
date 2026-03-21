@@ -1,6 +1,33 @@
 # Drift development history
 
 ## 2026-03-20
+- **Made `--dep pkg@version` prefilter exact package versions before load/verification (0.27.97, ABI 6)**:
+  Fixed a package-consumer version-selection bug where `driftc` still loaded
+  and trust-verified older sibling versions of the same package from
+  `--package-root` even when an exact `--dep pkg@version` pin was supplied.
+  - Problem:
+    - package-root discovery was prefiltered only by `package_id`
+    - all discovered sibling versions for that package id were then loaded and
+      trust-verified
+    - exact version selection happened only afterward
+    - an older malformed or layout-incompatible sibling version could therefore
+      fail the build before the requested exact version was selected
+  - Fix:
+    - changed package-root prefiltering to peek both package id and package
+      version before load
+    - non-matching sibling versions are now skipped before package
+      load/verification
+    - explicit `--dep pkg@exact-version` now constrains which package artifact
+      versions are actually touched inside multi-version package roots
+  - Coverage:
+    - added a regression with two versions of the same package in one package
+      root and an exact `--dep` pin
+    - the regression patches the package loader and proves only the pinned
+      version is loaded while the older sibling version is never touched
+  - Versioning:
+    - compiler version is `0.27.97`
+    - ABI remains `6` because this changes package selection behavior only
+
 - **Isolated deploy smoke roots from older self versions in the published tree (0.27.96, ABI 6)**:
   Fixed a deploy smoke filtering bug where baseline smoke for a package could
   still see older published versions of that same package from `--dest`, even

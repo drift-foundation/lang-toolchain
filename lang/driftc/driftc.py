@@ -7260,26 +7260,30 @@ def main(argv: list[str] | None = None) -> int:
 		_self_pkg_id = str(args.package_id) if args.package_id else None
 
 		# ── Discover + pre-filter before load ─────────────────────────
-		# Only discover and load packages whose package_id is in the
-		# --dep allowlist.  Unrelated packages are never loaded, never
-		# trust-verified, and cannot fail or collide with the build.
-		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
+		# Only discover and load packages whose package_id AND version
+		# match the --dep pins.  Unrelated packages and non-matching
+		# versions are never loaded, never trust-verified, and cannot
+		# fail or collide with the build.
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version
 		package_files = discover_package_files(list(args.package_roots))
 		_candidate_files: list[Path] = []
 		for _pf in package_files:
-			_peeked_id = peek_package_id(_pf)
-			if _peeked_id is None and _pf.suffix == ".zdmp":
+			_peeked = peek_package_id_and_version(_pf)
+			if _peeked is None and _pf.suffix == ".zdmp":
 				# Corrupt .zdmp — try .dmp sibling (discover_package_files
 				# may have filtered it out during .zdmp dedup).
 				_dmp_sibling = _pf.with_suffix(".dmp")
 				if _dmp_sibling.exists():
-					_peeked_id = peek_package_id(_dmp_sibling)
-					if _peeked_id is not None:
+					_peeked = peek_package_id_and_version(_dmp_sibling)
+					if _peeked is not None:
 						_pf = _dmp_sibling  # use the .dmp for loading
-			if _peeked_id is None:
+			if _peeked is None:
 				continue  # unreadable metadata — skip silently
+			_peeked_id, _peeked_ver = _peeked
 			if _peeked_id not in _dep_allowlist:
 				continue  # not a requested dependency
+			if _version_pins.get(_peeked_id) != _peeked_ver:
+				continue  # wrong version — skip
 			if _self_pkg_id and _peeked_id == _self_pkg_id:
 				continue  # self-exclusion (source build of this package)
 			_candidate_files.append(_pf)
