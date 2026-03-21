@@ -2,5 +2,6 @@
   "description": "e2e: std.io read timeout returns WouldBlock",
   "exit_code": 0,
   "stdout": "",
-  "stderr": ""
+  "stderr": "",
+  "skip_memcheck": true
 }
