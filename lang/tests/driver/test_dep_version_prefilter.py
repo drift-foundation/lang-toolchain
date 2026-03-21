@@ -116,3 +116,82 @@ class TestDepVersionPrefilter:
 			f"1.0.0 must NOT be loaded when --dep test-dep@2.0.0 is specified, "
 			f"but loaded: {loaded_paths}"
 		)
+
+	def test_path_manifest_version_mismatch_rejected(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		"""
+		Package at <root>/foo/2.0.0/foo.dmp with manifest claiming 1.0.0
+		must produce an identity mismatch error, not "version not found".
+		"""
+		from lang.driftc.driftc import main as driftc_main
+
+		pkg_root = tmp_path / "libs"
+		# Create package at standard layout path for 2.0.0...
+		_make_peekable_dmp(
+			pkg_root / "test-dep" / "2.0.0" / "test-dep.dmp",
+			"test-dep", "1.0.0",  # manifest claims 1.0.0 — mismatch!
+			"test.dep",
+		)
+
+		mod_root = tmp_path / "mods"
+		(mod_root / "main").mkdir(parents=True)
+		(mod_root / "main" / "main.drift").write_text(
+			"module main;\nfn main() nothrow -> Int { return 0; }\n"
+		)
+
+		argv = [
+			"-M", str(mod_root),
+			str(mod_root / "main" / "main.drift"),
+			"--stdlib-root", "stdlib",
+			"--package-root", str(pkg_root),
+			"--dep", "test-dep@2.0.0",
+			"--emit-ir", str(tmp_path / "out.ll"),
+			"--json",
+		]
+		rc = driftc_main(argv)
+		assert rc != 0
+
+		out = capsys.readouterr().out
+		payload = json.loads(out) if out.strip() else {}
+		diag_msg = payload.get("diagnostics", [{}])[0].get("message", "")
+		assert "identity mismatch" in diag_msg or "package identity mismatch" in diag_msg, (
+			f"expected identity mismatch error, got: {diag_msg}"
+		)
+
+	def test_path_manifest_package_id_mismatch_rejected(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		"""
+		Package at <root>/test-dep/2.0.0/test-dep.dmp with manifest claiming
+		package_id 'wrong-pkg' must produce an identity mismatch error.
+		"""
+		from lang.driftc.driftc import main as driftc_main
+
+		pkg_root = tmp_path / "libs"
+		_make_peekable_dmp(
+			pkg_root / "test-dep" / "2.0.0" / "test-dep.dmp",
+			"wrong-pkg", "2.0.0",  # package_id mismatch!
+			"test.dep",
+		)
+
+		mod_root = tmp_path / "mods"
+		(mod_root / "main").mkdir(parents=True)
+		(mod_root / "main" / "main.drift").write_text(
+			"module main;\nfn main() nothrow -> Int { return 0; }\n"
+		)
+
+		argv = [
+			"-M", str(mod_root),
+			str(mod_root / "main" / "main.drift"),
+			"--stdlib-root", "stdlib",
+			"--package-root", str(pkg_root),
+			"--dep", "test-dep@2.0.0",
+			"--emit-ir", str(tmp_path / "out.ll"),
+			"--json",
+		]
+		rc = driftc_main(argv)
+		assert rc != 0
+
+		out = capsys.readouterr().out
+		payload = json.loads(out) if out.strip() else {}
+		diag_msg = payload.get("diagnostics", [{}])[0].get("message", "")
+		assert "identity mismatch" in diag_msg, (
+			f"expected package_id identity mismatch error, got: {diag_msg}"
+		)

@@ -1,6 +1,40 @@
 # Drift development history
 
 ## 2026-03-20
+- **Hardened exact `--dep` package selection against path/manifest identity mismatches (0.27.98, ABI 6)**:
+  Completed the package-root exact-version selection fix by making standard
+  package-layout identity a hard invariant. `driftc` now uses the filesystem
+  layout for early exact-version selection, but explicitly rejects packages
+  whose embedded manifest identity disagrees with that path identity.
+  - Problem:
+    - earlier exact-version prefiltering stopped loading unrelated sibling
+      versions, but still left a security gap
+    - for standard layout `<root>/<pkg_id>/<version>/<artifact>`, an attacker
+      could rename directories or otherwise present a package whose manifest
+      identity did not match its path identity
+    - without an explicit mismatch check, that could degrade into misleading
+      “not found” behavior or trust the wrong initial selector
+  - Fix:
+    - standard-layout package consumption now uses the filesystem package id and
+      version as the initial selector
+    - before load, `driftc` explicitly rejects:
+      - path package-id vs manifest package-id mismatch
+      - path version vs manifest package_version mismatch
+    - non-pinned sibling versions in multi-version roots are still skipped
+      before load/verification
+    - flat/non-standard layouts still rely on normal signature verification, so
+      manifest tampering there continues to surface as integrity failure
+  - Coverage:
+    - added regressions proving:
+      - wrong sibling versions are not loaded for exact `--dep` pins
+      - path/manifest version mismatch is rejected explicitly
+      - path/manifest package-id mismatch is rejected explicitly
+      - flat-layout manifest tamper still reports signature/integrity failure
+  - Versioning:
+    - compiler version is `0.27.98`
+    - ABI remains `6` because this changes package selection/verification
+      behavior only
+
 - **Made `--dep pkg@version` prefilter exact package versions before load/verification (0.27.97, ABI 6)**:
   Fixed a package-consumer version-selection bug where `driftc` still loaded
   and trust-verified older sibling versions of the same package from

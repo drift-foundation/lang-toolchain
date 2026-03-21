@@ -7260,30 +7260,79 @@ def main(argv: list[str] | None = None) -> int:
 		_self_pkg_id = str(args.package_id) if args.package_id else None
 
 		# ── Discover + pre-filter before load ─────────────────────────
-		# Only discover and load packages whose package_id AND version
-		# match the --dep pins.  Unrelated packages and non-matching
-		# versions are never loaded, never trust-verified, and cannot
-		# fail or collide with the build.
-		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version
+		# Only discover and load packages whose package_id is in the
+		# --dep allowlist AND whose filesystem version directory matches
+		# the pinned version.  The directory name is the trusted version
+		# signal (not the embedded manifest, which could be tampered).
+		# Unrelated packages and non-matching versions are never loaded,
+		# never trust-verified, and cannot fail or collide with the build.
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
 		package_files = discover_package_files(list(args.package_roots))
 		_candidate_files: list[Path] = []
 		for _pf in package_files:
-			_peeked = peek_package_id_and_version(_pf)
-			if _peeked is None and _pf.suffix == ".zdmp":
+			_peeked_id = peek_package_id(_pf)
+			if _peeked_id is None and _pf.suffix == ".zdmp":
 				# Corrupt .zdmp — try .dmp sibling (discover_package_files
 				# may have filtered it out during .zdmp dedup).
 				_dmp_sibling = _pf.with_suffix(".dmp")
 				if _dmp_sibling.exists():
-					_peeked = peek_package_id_and_version(_dmp_sibling)
-					if _peeked is not None:
+					_peeked_id = peek_package_id(_dmp_sibling)
+					if _peeked_id is not None:
 						_pf = _dmp_sibling  # use the .dmp for loading
-			if _peeked is None:
+			if _peeked_id is None:
 				continue  # unreadable metadata — skip silently
-			_peeked_id, _peeked_ver = _peeked
+			# Standard-layout identity enforcement: if the file sits in a
+			# directory named after a requested dep (<root>/<dep_id>/<ver>/),
+			# the manifest package_id MUST match.  A mismatch indicates
+			# tampering or misconfigured package root.
+			_fs_grandparent = _pf.parent.parent.name
+			if _fs_grandparent in _dep_allowlist and _peeked_id != _fs_grandparent:
+				msg = (
+					f"package identity mismatch: artifact at "
+					f".../{_fs_grandparent}/{_pf.parent.name}/ claims package_id "
+					f"'{_peeked_id}' in manifest (expected '{_fs_grandparent}')"
+				)
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+				else:
+					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
 			if _peeked_id not in _dep_allowlist:
 				continue  # not a requested dependency
-			if _version_pins.get(_peeked_id) != _peeked_ver:
-				continue  # wrong version — skip
+			# Version prefilter: use the filesystem directory structure as
+			# the trusted version signal when the standard layout is present.
+			# Standard layout: <root>/<pkg_id>/<version>/<pkg>.dmp
+			# When the grandparent dir name matches the package_id, the
+			# parent dir is the version — skip non-matching versions.
+			# For flat layouts (e.g., test fixtures), skip the version
+			# check and let the load/verify step handle selection.
+			_pinned_ver = _version_pins.get(_peeked_id)
+			if _pinned_ver:
+				_fs_grandparent = _pf.parent.parent.name
+				if _fs_grandparent == _peeked_id:
+					_fs_version = _pf.parent.name
+					if _fs_version != _pinned_ver:
+						continue  # wrong version directory — skip
+			# Pre-load version identity check: for standard-layout roots,
+			# the manifest version must agree with the directory name.
+			# Package_id mismatch is already caught above.
+			if _fs_grandparent == _peeked_id:
+				from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version as _peek_id_ver
+				_peeked_full = _peek_id_ver(_pf)
+				if _peeked_full is not None:
+					_, _manifest_ver = _peeked_full
+					_fs_ver = _pf.parent.name
+					if _manifest_ver != _fs_ver:
+						msg = (
+							f"package identity mismatch: '{_peeked_id}' at path "
+							f".../{_fs_grandparent}/{_fs_ver}/ claims version "
+							f"'{_manifest_ver}' in manifest (expected '{_fs_ver}')"
+						)
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
 			if _self_pkg_id and _peeked_id == _self_pkg_id:
 				continue  # self-exclusion (source build of this package)
 			_candidate_files.append(_pf)
@@ -7292,7 +7341,7 @@ def main(argv: list[str] | None = None) -> int:
 			# Integrity + trust verification happens here, only for
 			# packages that matched the --dep allowlist.
 			try:
-				loaded_pkgs.append(load_package_v0_with_policy(pkg_path, policy=policy))
+				_loaded = load_package_v0_with_policy(pkg_path, policy=policy)
 			except (ValueError, OSError) as err:
 				msg = str(err)
 				if args.json:
@@ -7339,6 +7388,8 @@ def main(argv: list[str] | None = None) -> int:
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
+
+			loaded_pkgs.append(_loaded)
 
 		# Determinism: package discovery order (filenames, rglob ordering, CLI
 		# `--package-root` ordering) must not affect compilation results. Sort loaded
