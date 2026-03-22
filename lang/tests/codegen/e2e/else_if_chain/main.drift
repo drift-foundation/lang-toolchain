@@ -1,0 +1,21 @@
+module m;
+
+fn classify(x: Int) nothrow -> Int {
+	if x > 100 {
+		return 4;
+	} else if x > 10 {
+		return 3;
+	} else if x > 0 {
+		return 2;
+	}
+	return 1;
+}
+
+fn main() nothrow -> Int {
+	if classify(200) != 4 { return 1; }
+	if classify(50) != 3 { return 2; }
+	if classify(5) != 2 { return 3; }
+	if classify(0) != 1 { return 4; }
+	if classify(-1) != 1 { return 5; }
+	return 0;
+}

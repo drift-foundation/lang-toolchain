@@ -1,0 +1,9 @@
+{
+  "description": "e2e: export block missing trailing semicolon produces helpful diagnostic",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "expected ';' after statement"
+    }
+  ]
+}

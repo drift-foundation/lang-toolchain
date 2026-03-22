@@ -1012,6 +1012,11 @@ def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 		col = getattr(err, "column", None)
 		loc = f" at line {line}, column {col}" if line is not None else ""
 		return f"input is not valid Drift source; verify this is a text .drift file (parse detail{loc}: {raw})"
+	if code == "E_EXPECTED_SEMICOLON":
+		line = getattr(err, "line", None)
+		col = getattr(err, "column", None)
+		loc = f" (line {line}, column {col})" if line is not None else ""
+		return f"expected ';' after statement{loc}; top-level statements like import, export, and const require a trailing semicolon (e.g. export {{ ... }};)"
 	return raw
 
 

@@ -1,12 +1,4 @@
-# Single source of truth for compiler identity and ABI contract version.
-#
-# DRIFTC_VERSION: compiler release version (SemVer).
-#
-# DRIFT_RT_ABI_VERSION: bump when changing any compiler/runtime boundary
-# contract: runtime-exported helper signatures, data layouts crossing the
-# boundary (struct/variant/frame payload ABI), calling conventions, or
-# ownership/drop contract changes.
-# Do not bump for pure internal refactors with no boundary change.
+# Compatibility shim — source of truth is lang.versions.
+from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
 
-DRIFTC_VERSION: str = "0.27.99"
-DRIFT_RT_ABI_VERSION: int = 6
+__all__ = ["DRIFTC_VERSION", "DRIFT_RT_ABI_VERSION"]

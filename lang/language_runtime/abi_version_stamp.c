@@ -6,7 +6,7 @@
  * with an unresolved symbol — deterministic, no runtime crash.
  *
  * The version number is injected via -DDRIFT_RT_ABI_VERSION=N at compile
- * time from the authoritative constant in lang/driftc/driftc_versions.py.
+ * time from the authoritative constant in lang/versions.py.
  */
 
 #ifndef DRIFT_RT_ABI_VERSION

@@ -3,6 +3,7 @@ module std.crypto;
 import std.core as core;
 
 export {
+	md5,
 	sha1,
 	sha256,
 	sha384,
@@ -927,4 +928,126 @@ pub fn chacha20_poly1305_decrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &A
 
 	val plaintext = _chacha20_encrypt(key, cast<Uint>(1), nonce, &ciphertext);
 	return core.Result::Ok(move plaintext);
+}
+
+// ── MD5 (RFC 1321) ─────────────────────────────────────────────────────
+
+const _MD5_S: Array<Int> = [
+	7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
+	5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
+	4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
+	6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21
+];
+
+const _MD5_K: Array<Uint> = [
+	3614090360u, 3905402710u,  606105819u, 3250441966u,
+	4118548399u, 1200080426u, 2821735955u, 4249261313u,
+	1770035416u, 2336552879u, 4294925233u, 2304563134u,
+	1804603682u, 4254626195u, 2792965006u, 1236535329u,
+	4129170786u, 3225465664u,  643717713u, 3921069994u,
+	3593408605u,   38016083u, 3634488961u, 3889429448u,
+	 568446438u, 3275163606u, 4107603335u, 1163531501u,
+	2850285829u, 4243563512u, 1735328473u, 2368359562u,
+	4294588738u, 2272392833u, 1839030562u, 4259657740u,
+	2763975236u, 1272893353u, 4139469664u, 3200236656u,
+	 681279174u, 3936430074u, 3572445317u,   76029189u,
+	3654602809u, 3873151461u,  530742520u, 3299628645u,
+	4096336452u, 1126891415u, 2878612391u, 4237533241u,
+	1700485571u, 2399980690u, 4293915773u, 2240044497u,
+	1873313359u, 4264355552u, 2734768916u, 1309151649u,
+	4149444226u, 3174756917u,  718787259u, 3951481745u
+];
+
+fn _append_u32_le(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
+	val v = _u32(x);
+	out.push(cast<Byte>(v & cast<Uint>(255)));
+	out.push(cast<Byte>((v >> cast<Uint>(8)) & cast<Uint>(255)));
+	out.push(cast<Byte>((v >> cast<Uint>(16)) & cast<Uint>(255)));
+	out.push(cast<Byte>((v >> cast<Uint>(24)) & cast<Uint>(255)));
+}
+
+pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
+	var msg = Array<type Byte>::with_capacity(data.len + 72);
+	var i = 0;
+	while i < data.len {
+		msg.push(data[i]);
+		i = i + 1;
+	}
+
+	val orig_len = msg.len;
+	val bit_len = cast<Uint64>(orig_len) * 8u64;
+
+	msg.push(cast<Byte>(128));
+	while msg.len % 64 != 56 {
+		msg.push(cast<Byte>(0));
+	}
+
+	// Length in little-endian 64-bit
+	var li = 0;
+	while li < 8 {
+		msg.push(cast<Byte>((bit_len >> cast<Uint64>(li * 8)) & 255u64));
+		li = li + 1;
+	}
+
+	var a0: Uint = 1732584193u;
+	var b0: Uint = 4023233417u;
+	var c0: Uint = 2562383102u;
+	var d0: Uint = 271733878u;
+
+	var chunk = 0;
+	while chunk < msg.len {
+		var m = Array<type Uint>::with_capacity(16);
+		var mi = 0;
+		while mi < 16 {
+			m.push(_load_u32_le(&msg, chunk + mi * 4));
+			mi = mi + 1;
+		}
+
+		var a = a0;
+		var b = b0;
+		var c = c0;
+		var d = d0;
+
+		i = 0;
+		while i < 64 {
+			var f: Uint = cast<Uint>(0);
+			var g = 0;
+			if i < 16 {
+				f = (b & c) | ((_u32(b ^ U32_MASK)) & d);
+				g = i;
+			} else {
+				if i < 32 {
+					f = (d & b) | ((_u32(d ^ U32_MASK)) & c);
+					g = (5 * i + 1) % 16;
+				} else {
+					if i < 48 {
+						f = b ^ c ^ d;
+						g = (3 * i + 5) % 16;
+					} else {
+						f = c ^ (b | _u32(d ^ U32_MASK));
+						g = (7 * i) % 16;
+					}
+				}
+			}
+			val temp = d;
+			d = c;
+			c = b;
+			b = _u32(b + _rol32(_u32(a + f + _MD5_K[i] + m[g]), _MD5_S[i]));
+			a = temp;
+			i = i + 1;
+		}
+
+		a0 = _u32(a0 + a);
+		b0 = _u32(b0 + b);
+		c0 = _u32(c0 + c);
+		d0 = _u32(d0 + d);
+		chunk = chunk + 64;
+	}
+
+	var out = Array<type Byte>::with_capacity(16);
+	_append_u32_le(&mut out, a0);
+	_append_u32_le(&mut out, b0);
+	_append_u32_le(&mut out, c0);
+	_append_u32_le(&mut out, d0);
+	return move out;
 }

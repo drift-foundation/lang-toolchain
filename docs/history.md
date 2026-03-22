@@ -1,5 +1,41 @@
 # Drift development history
 
+## 2026-03-22
+- **Added `else if`, `String.byte_at()`, `std.crypto.md5()`, and shared toolchain version metadata (0.27.101, ABI 6)**:
+  Landed the current parser/stdlib ergonomics batch and cleaned up shared
+  version metadata for `drift` / `driftc`.
+  - Language/tooling:
+    - added `else if` parser sugar, lowering to the existing nested-if shape
+      without changing checker, HIR, MIR, or codegen behavior
+    - improved the parser diagnostic for missing trailing semicolons after
+      top-level statements like `export { ... };`
+    - kept the existing invalid-input diagnostic priority so arbitrary
+      non-Drift input still reports as “not valid Drift source”
+  - Stdlib:
+    - added `String.byte_at(index)` as a method over the existing
+      `string_byte_at` intrinsic
+    - added pure-Drift `std.crypto.md5(data: &Array<Byte>) -> Array<Byte>`
+      with RFC 1321 test-vector coverage
+  - Toolchain metadata:
+    - moved shared compiler version / runtime ABI constants to
+      `lang/versions.py`
+    - updated `drift --version` to use the shared neutral metadata module
+      instead of reaching into `lang.driftc`
+    - kept `lang/driftc/driftc_versions.py` as a thin compatibility shim
+    - updated deploy bundling to include `lang/versions.py` in self-contained
+      compiler artifacts
+  - Coverage:
+    - added end-to-end tests for:
+      - `else if` chains
+      - missing `export { ... };` semicolon diagnostics
+      - `String.byte_at()`
+      - `std.crypto.md5()` RFC vectors
+    - preserved import-boundary and deployed-PEX behavior by bundling the new
+      shared metadata module
+  - Versioning:
+    - compiler version is `0.27.101`
+    - ABI remains `6`
+
 ## 2026-03-20
 - **Prevented `SIGPIPE` from killing Drift programs on broken socket/TLS writes (0.27.99, ABI 6)**:
   Fixed a runtime defect where ordinary negative-path network writes could

@@ -2382,9 +2382,15 @@ def _build_if_stmt(tree: Tree) -> IfStmt:
             continue
         if name == "else_clause":
             for grand in child.children:
-                if isinstance(grand, Tree) and _name(grand) == "block":
-                    else_block_node = grand
-                    break
+                if isinstance(grand, Tree):
+                    gname = _name(grand)
+                    if gname == "block":
+                        else_block_node = grand
+                        break
+                    if gname == "if_stmt":
+                        # else if: wrap the nested if_stmt in a synthetic block
+                        else_block_node = grand
+                        break
             continue
         if name == "block":
             else_block_node = child
@@ -2399,7 +2405,14 @@ def _build_if_stmt(tree: Tree) -> IfStmt:
     else:
         condition = _build_expr(cond_node)
     then_block = _build_block(then_block_node)
-    else_block = _build_block(else_block_node) if else_block_node else None
+    if else_block_node is not None and _name(else_block_node) == "if_stmt":
+        # else if: wrap the nested IfStmt in a synthetic Block
+        nested_if = _build_if_stmt(else_block_node)
+        else_block = Block(statements=[nested_if])
+    elif else_block_node is not None:
+        else_block = _build_block(else_block_node)
+    else:
+        else_block = None
     return IfStmt(loc=loc, condition=condition, then_block=then_block, else_block=else_block)
 
 

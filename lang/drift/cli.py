@@ -683,7 +683,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _version_string() -> str:
 	"""Build the drift --version output, matching driftc contract."""
-	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
 
 	git_sha = ""
 	try:

@@ -1,0 +1,7 @@
+module m;
+
+export { main }
+
+fn main() nothrow -> Int {
+	return 0;
+}

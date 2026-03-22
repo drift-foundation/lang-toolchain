@@ -1,0 +1,51 @@
+module m;
+
+import std.codec as codec;
+import std.crypto as crypto;
+import std.core as core;
+
+fn _ascii_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < s.byte_length() {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _check_md5(s: String, expected_hex: String, code: Int) nothrow -> Int {
+	val bytes = _ascii_bytes(&s);
+	val dig = crypto.md5(&bytes);
+	val got = codec.hex_encode(&dig);
+	if got != expected_hex {
+		return code;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// RFC 1321 test vectors
+	val r0 = _check_md5("", "d41d8cd98f00b204e9800998ecf8427e", 1);
+	if r0 != 0 { return r0; }
+
+	val r1 = _check_md5("a", "0cc175b9c0f1b6a831c399e269772661", 2);
+	if r1 != 0 { return r1; }
+
+	val r2 = _check_md5("abc", "900150983cd24fb0d6963f7d28e17f72", 3);
+	if r2 != 0 { return r2; }
+
+	val r3 = _check_md5("message digest", "f96b697d7cb7938d525a2f31aaf161d0", 4);
+	if r3 != 0 { return r3; }
+
+	val r4 = _check_md5("abcdefghijklmnopqrstuvwxyz", "c3fcd3d76192e4007dfb496cca67e13b", 5);
+	if r4 != 0 { return r4; }
+
+	val r5 = _check_md5("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", "d174ab98d277d9f5a5611c2c9f419d9f", 6);
+	if r5 != 0 { return r5; }
+
+	val r6 = _check_md5("12345678901234567890123456789012345678901234567890123456789012345678901234567890", "57edf4a22be3c955ac49da2e2107b67a", 7);
+	if r6 != 0 { return r6; }
+
+	return 0;
+}

@@ -286,6 +286,7 @@ for_count_step: assign_stmt
 if_stmt: IF if_cond block else_clause?
 if_cond: trait_expr | expr
 else_clause: ELSE block
+           | ELSE if_stmt
 break_stmt: BREAK
 continue_stmt: CONTINUE
 while_stmt: WHILE expr block

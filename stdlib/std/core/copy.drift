@@ -297,4 +297,8 @@ implement String {
 	pub fn byte_length(self: &String) nothrow -> Int {
 		return byte_length(self);
 	}
+
+	pub fn byte_at(self: &String, index: Int) nothrow -> Byte {
+		return string_byte_at(self, index);
+	}
 }

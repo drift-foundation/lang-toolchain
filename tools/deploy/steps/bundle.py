@@ -48,8 +48,11 @@ def bundle_compiler(repo_root: Path, dist: Path) -> None:
 				dst.parent.mkdir(parents=True, exist_ok=True)
 				shutil.copy2(str(src), str(dst))
 
-	# Ensure lang/__init__.py exists.
+	# Ensure lang/__init__.py exists and shared top-level modules are bundled.
 	(compiler_lib / "lang" / "__init__.py").touch()
+	versions_src = repo_root / "lang" / "versions.py"
+	if versions_src.exists():
+		shutil.copy2(str(versions_src), str(compiler_lib / "lang" / "versions.py"))
 
 	# C/H/S sources for runtime archive rebuilds.
 	for pkg in ("lang/language_runtime", "lang/compiler_infra"):

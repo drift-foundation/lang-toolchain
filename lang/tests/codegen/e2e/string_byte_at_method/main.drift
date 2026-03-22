@@ -1,0 +1,15 @@
+module m;
+
+fn main() nothrow -> Int {
+	val s = "Hello";
+
+	// byte_at method access
+	if s.byte_at(0) != cast<Byte>(72) { return 1; }
+	if s.byte_at(1) != cast<Byte>(101) { return 2; }
+	if s.byte_at(4) != cast<Byte>(111) { return 3; }
+
+	// byte_length still works
+	if s.byte_length() != 5 { return 4; }
+
+	return 0;
+}
