@@ -681,8 +681,41 @@ def _build_parser() -> argparse.ArgumentParser:
 	return p
 
 
+def _version_string() -> str:
+	"""Build the drift --version output, matching driftc contract."""
+	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+
+	git_sha = ""
+	try:
+		res = subprocess.run(
+			["git", "rev-parse", "--short", "HEAD"],
+			capture_output=True, text=True,
+			cwd=Path(__file__).resolve().parents[2],
+			timeout=5,
+		)
+		if res.returncode == 0:
+			git_sha = res.stdout.strip()
+	except Exception:
+		pass
+
+	parts = [
+		f"drift {DRIFTC_VERSION}",
+		f"abi {DRIFT_RT_ABI_VERSION}",
+	]
+	if git_sha:
+		parts.append(f"git {git_sha}")
+	parts.append("license GPL-3.0")
+	parts.append("The Drift Language Foundation")
+	return " | ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
 	effective_argv = argv if argv is not None else sys.argv[1:]
+
+	# Handle --version / -V before argparse so it works without subcommands.
+	if "--version" in effective_argv or "-V" in effective_argv:
+		print(_version_string())
+		return 0
 
 	# Intercept "prepare" and "deploy" before argparse — they have their own arg parsers.
 	if effective_argv and effective_argv[0] == "prepare":
