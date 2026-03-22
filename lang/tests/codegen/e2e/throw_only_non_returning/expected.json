@@ -1,0 +1,4 @@
+{
+  "description": "e2e: throw-only path treated as non-returning (regression for MIR lowering contract failure)",
+  "exit_code": 0
+}

@@ -5725,18 +5725,25 @@ class HIRToMIR:
 		# 4) Lower then block.
 		self.b.set_block(then_block)
 		self.lower_block(stmt.then_block)
-		if self.b.block.terminator is None:
+		then_terminated = self.b.block.terminator is not None
+		if not then_terminated:
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 		# 5) Lower else block if present.
+		else_terminated = False
 		if else_block is not None:
 			self.b.set_block(else_block)
 			self.lower_block(stmt.else_block)
-			if self.b.block.terminator is None:
+			else_terminated = self.b.block.terminator is not None
+			if not else_terminated:
 				self.b.set_terminator(M.Goto(target=join_block.name))
 
-		# 6) Continue in join block.
+		# 6) Continue in join block.  If both branches already terminated
+		# (return/throw), the join block is unreachable dead code — mark it
+		# so that end-of-function analysis does not expect a trailing return.
 		self.b.set_block(join_block)
+		if then_terminated and else_block is not None and else_terminated:
+			self.b.set_terminator(M.Unreachable())
 
 	def _visit_stmt_HLoop(self, stmt: H.HLoop) -> None:
 		# If the current block already ended, do nothing.

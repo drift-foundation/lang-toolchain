@@ -1,0 +1,49 @@
+module repro;
+
+exception Boom(msg: String)
+
+// Pattern 1: return in if, trailing throw (already works)
+fn will_throw(x: Int) -> Int {
+	if x == 1 { return 1; }
+	throw Boom("nope");
+}
+
+// Pattern 2: all if/else branches return (MIR lowering bug)
+fn classify(x: Int) nothrow -> Int {
+	if x > 0 {
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+// Pattern 3: nested if/else, all branches return (MIR lowering bug)
+fn classify3(x: Int) nothrow -> Int {
+	if x > 10 {
+		return 2;
+	} else {
+		if x > 0 {
+			return 1;
+		} else {
+			return 0;
+		}
+	}
+}
+
+// Pattern 4: if/else with throw on one branch, return on other
+fn checked_div(a: Int, b: Int) -> Int {
+	if b == 0 {
+		throw Boom("division by zero");
+	} else {
+		return 42;
+	}
+}
+
+fn main() nothrow -> Int {
+	if classify(5) != 1 { return 1; }
+	if classify(-1) != 0 { return 2; }
+	if classify3(20) != 2 { return 3; }
+	if classify3(5) != 1 { return 4; }
+	if classify3(-1) != 0 { return 5; }
+	return 0;
+}

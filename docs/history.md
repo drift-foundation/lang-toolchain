@@ -1,6 +1,36 @@
 # Drift development history
 
 ## 2026-03-22
+- **Fixed MIR lowering for top-level `if/else` functions whose branches all terminate (0.27.102, ABI 6)**:
+  Repaired a compiler control-flow bug where non-void functions with a
+  top-level `if/else` whose branches all terminated could still trip a MIR
+  assertion requiring a trailing return.
+  - Problem:
+    - functions like:
+      - both branches `return`
+      - one branch `return`, the other `throw`
+    - could fail with:
+      - `missing return reached MIR lowering (checker bug)`
+    - even though all control-flow paths already terminated correctly
+  - Root cause:
+    - stage2 `HIf` lowering always created a join block after the `if/else`
+    - when both branches already terminated, that join block was dead but left
+      without a terminator
+    - MIR end-of-function analysis then treated it like a missing-return path
+  - Fix:
+    - `HIf` lowering now detects when both branches have already terminated
+    - in that case, the synthetic join block is marked `Unreachable` instead of
+      being left as a dangling fallthrough block
+  - Coverage:
+    - added an end-to-end regression covering:
+      - trailing throw after an `if`
+      - both-return `if/else`
+      - nested all-return `if/else`
+      - mixed return/throw `if/else`
+  - Versioning:
+    - compiler version is `0.27.102`
+    - ABI remains `6`
+
 - **Added `else if`, `String.byte_at()`, `std.crypto.md5()`, and shared toolchain version metadata (0.27.101, ABI 6)**:
   Landed the current parser/stdlib ergonomics batch and cleaned up shared
   version metadata for `drift` / `driftc`.
