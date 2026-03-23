@@ -54,6 +54,25 @@ def bundle_compiler(repo_root: Path, dist: Path) -> None:
 	if versions_src.exists():
 		shutil.copy2(str(versions_src), str(compiler_lib / "lang" / "versions.py"))
 
+	# Stamp the source commit into the bundled versions.py so that deployed
+	# toolchains report the exact commit they were built from.
+	bundled_versions = compiler_lib / "lang" / "versions.py"
+	if bundled_versions.exists():
+		import subprocess as _sp
+		try:
+			res = _sp.run(
+				["git", "rev-parse", "--short", "HEAD"],
+				capture_output=True, text=True, cwd=str(repo_root), timeout=5,
+			)
+			if res.returncode == 0:
+				sha = res.stdout.strip()
+				text = bundled_versions.read_text(encoding="utf-8")
+				text = text.replace('DRIFTC_GIT_SHA: str = ""', f'DRIFTC_GIT_SHA: str = "{sha}"')
+				bundled_versions.write_text(text, encoding="utf-8")
+				print(f"[deploy] stamped source commit {sha} into versions.py", flush=True)
+		except Exception:
+			pass
+
 	# C/H/S sources for runtime archive rebuilds.
 	for pkg in ("lang/language_runtime", "lang/compiler_infra"):
 		src_dir = repo_root / pkg

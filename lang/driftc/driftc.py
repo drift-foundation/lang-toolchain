@@ -67,10 +67,16 @@ def _git_short_sha() -> str:
 	return ""
 
 
+def _toolchain_git_sha() -> str:
+	"""Return the toolchain source commit: build-time stamp if available, else runtime git."""
+	from lang.versions import DRIFTC_GIT_SHA
+	return DRIFTC_GIT_SHA or _git_short_sha()
+
+
 def _version_string() -> str:
 	"""Build the driftc --version output."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
-	git_sha = _git_short_sha()
+	git_sha = _toolchain_git_sha()
 	parts = [
 		f"driftc {DRIFTC_VERSION}",
 		f"abi {DRIFT_RT_ABI_VERSION}",
@@ -6795,7 +6801,7 @@ def compile_to_llvm_ir_for_tests(
 			argv_wrapper=argv_wrapper,
 			word_bits=host_word_bits(),
 			debug_enabled=debug_enabled,
-			provenance_git_sha=_git_short_sha(),
+			provenance_git_sha=_toolchain_git_sha(),
 		)
 	except AssertionError as err:
 		_append_boundary_contract_diag(
@@ -9922,7 +9928,7 @@ def main(argv: list[str] | None = None) -> int:
 				module_exports=combined_exports,
 				word_bits=_target_word_bits(args.target_word_bits),
 				debug_enabled=debug_enabled,
-				provenance_git_sha=_git_short_sha(),
+				provenance_git_sha=_toolchain_git_sha(),
 				provenance_build_profile=_build_profile,
 			)
 		except AssertionError as err:

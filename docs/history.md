@@ -1,5 +1,27 @@
 # Drift development history
 
+## 2026-03-23
+- **Stamped toolchain source commit into bundled metadata and compiler provenance (0.27.105, ABI 6)**:
+  Fixed toolchain identity reporting so deployed `drift` / `driftc` and
+  compiler-emitted provenance report the source commit the toolchain was built
+  from, rather than probing whatever git checkout happens to exist at runtime.
+  - Problem:
+    - `drift --version` / `driftc --version` previously ran `git rev-parse` at
+      runtime
+    - orchestration/certification could therefore see a git hash from the wrong
+      checkout or bootstrap environment instead of the candidate source commit
+    - compiler-emitted provenance used the same runtime-derived git identity
+  - Fix:
+    - added `DRIFTC_GIT_SHA` to `lang/versions.py`
+    - deploy bundling now stamps the current source commit into the bundled
+      `lang/versions.py`
+    - `drift`, `driftc`, and compiler provenance emission now all use the same
+      stamped toolchain git identity, with runtime git only as a development
+      fallback when the stamp is empty
+  - Versioning:
+    - compiler version is `0.27.105`
+    - ABI remains `6`
+
 ## 2026-03-22
 - **Constructed can-throw `FnResult` return values after scope cleanup to prevent silent return-value corruption (0.27.104, ABI 6)**:
   Fixed a stage2/codegen ordering bug where can-throw function return values

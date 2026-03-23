@@ -683,20 +683,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _version_string() -> str:
 	"""Build the drift --version output, matching driftc contract."""
-	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION, DRIFTC_GIT_SHA
 
-	git_sha = ""
-	try:
-		res = subprocess.run(
-			["git", "rev-parse", "--short", "HEAD"],
-			capture_output=True, text=True,
-			cwd=Path(__file__).resolve().parents[2],
-			timeout=5,
-		)
-		if res.returncode == 0:
-			git_sha = res.stdout.strip()
-	except Exception:
-		pass
+	# Prefer the build-time stamp; fall back to runtime git only in dev.
+	git_sha = DRIFTC_GIT_SHA
+	if not git_sha:
+		try:
+			res = subprocess.run(
+				["git", "rev-parse", "--short", "HEAD"],
+				capture_output=True, text=True,
+				cwd=Path(__file__).resolve().parents[2],
+				timeout=5,
+			)
+			if res.returncode == 0:
+				git_sha = res.stdout.strip()
+		except Exception:
+			pass
 
 	parts = [
 		f"drift {DRIFTC_VERSION}",
