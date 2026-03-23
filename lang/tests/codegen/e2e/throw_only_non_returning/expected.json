@@ -1,4 +1,4 @@
 {
-  "description": "e2e: throw-only path treated as non-returning (regression for MIR lowering contract failure)",
+  "description": "e2e: throw-only paths, exhaustive if/else returns, and heap-string exception UAF regression",
   "exit_code": 0
 }

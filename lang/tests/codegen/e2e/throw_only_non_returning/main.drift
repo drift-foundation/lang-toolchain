@@ -1,14 +1,26 @@
 module repro;
 
-exception Boom(msg: String)
+import std.core as core;
+import std.io as io;
 
-// Pattern 1: return in if, trailing throw (already works)
-fn will_throw(x: Int) -> Int {
-	if x == 1 { return 1; }
-	throw Boom("nope");
+exception Fail(msg: String, detail: String)
+
+fn _make_string(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	var buf = io.buffer(n);
+	var i = 0;
+	while i < n { io.buffer_write(&mut buf, i, bytes[i]); i = i + 1; }
+	return core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
 }
 
-// Pattern 2: all if/else branches return (MIR lowering bug)
+// Pattern 1: throw with heap-allocated string field (UAF regression)
+fn throw_heap_string() -> Int {
+	var bytes: Array<Byte> = [cast<Byte>(104), cast<Byte>(101), cast<Byte>(108), cast<Byte>(108), cast<Byte>(111)];
+	val s = _make_string(&bytes);
+	throw Fail(s, "static");
+}
+
+// Pattern 2: all if/else branches return (MIR join block regression)
 fn classify(x: Int) nothrow -> Int {
 	if x > 0 {
 		return 1;
@@ -17,7 +29,7 @@ fn classify(x: Int) nothrow -> Int {
 	}
 }
 
-// Pattern 3: nested if/else, all branches return (MIR lowering bug)
+// Pattern 3: nested if/else, all branches return
 fn classify3(x: Int) nothrow -> Int {
 	if x > 10 {
 		return 2;
@@ -30,20 +42,34 @@ fn classify3(x: Int) nothrow -> Int {
 	}
 }
 
-// Pattern 4: if/else with throw on one branch, return on other
-fn checked_div(a: Int, b: Int) -> Int {
-	if b == 0 {
-		throw Boom("division by zero");
+// Pattern 4: if/else with throw + return mix
+fn checked(x: Int) -> Int {
+	if x < 0 {
+		throw Fail("negative", "bad input");
 	} else {
-		return 42;
+		return x;
 	}
 }
 
 fn main() nothrow -> Int {
-	if classify(5) != 1 { return 1; }
-	if classify(-1) != 0 { return 2; }
-	if classify3(20) != 2 { return 3; }
-	if classify3(5) != 1 { return 4; }
-	if classify3(-1) != 0 { return 5; }
+	// Heap-string exception UAF
+	val r1 = try throw_heap_string() catch { 99 };
+	if r1 != 99 { return 1; }
+
+	// All-branch return (MIR join block)
+	if classify(5) != 1 { return 2; }
+	if classify(-1) != 0 { return 3; }
+
+	// Nested all-branch return
+	if classify3(20) != 2 { return 4; }
+	if classify3(5) != 1 { return 5; }
+	if classify3(-1) != 0 { return 6; }
+
+	// Mixed throw/return
+	val r2 = try checked(-1) catch { 42 };
+	if r2 != 42 { return 7; }
+	val r3 = try checked(10) catch { 42 };
+	if r3 != 10 { return 8; }
+
 	return 0;
 }

@@ -1,6 +1,35 @@
 # Drift development history
 
 ## 2026-03-22
+- **Retained heap-backed strings stored in diagnostic values to prevent error-release double-frees (0.27.103, ABI 6)**:
+  Fixed a runtime lifetime bug where wrapping a heap-backed `String` into a
+  `DiagnosticValue::String` could leave the diagnostic value holding a
+  non-retained pointer that was later released a second time during error
+  cleanup.
+  - Problem:
+    - `drift_dv_string()` stored the incoming string data pointer and length
+      without taking its own reference
+    - if the original string was heap-backed and went out of scope first, its
+      backing storage could be freed before the containing error/diagnostic
+      object was released
+    - later error cleanup through `drift_error_release()` /
+      `drift_dv_release()` could then hit freed string storage, leading to
+      heap corruption and allocator crashes
+  - Root cause:
+    - diagnostic-value string ownership was shallow
+    - the diagnostic value did not participate in the string refcount
+  - Fix:
+    - `drift_dv_string()` now retains the incoming `DriftString` before
+      storing it
+    - the diagnostic-value clone path was adjusted so string cloning relies on
+      the fixed `drift_dv_string()` path instead of double-retaining
+  - Result:
+    - heap-backed strings embedded in exception fields / diagnostic values now
+      have correct independent lifetime through error cleanup
+  - Versioning:
+    - compiler version is `0.27.103`
+    - ABI remains `6`
+
 - **Fixed MIR lowering for top-level `if/else` functions whose branches all terminate (0.27.102, ABI 6)**:
   Repaired a compiler control-flow bug where non-void functions with a
   top-level `if/else` whose branches all terminated could still trip a MIR

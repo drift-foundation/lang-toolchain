@@ -49,8 +49,9 @@ struct DriftDiagnosticValue drift_dv_float(double value) {
 
 struct DriftDiagnosticValue drift_dv_string(struct DriftString value) {
     struct DriftDiagnosticValue dv = make_simple(DV_STRING);
-    dv.data.string_value.len = value.len;
-    dv.data.string_value.data = value.data;
+    struct DriftString retained = drift_string_retain(value);
+    dv.data.string_value.len = retained.len;
+    dv.data.string_value.data = retained.data;
     return dv;
 }
 
@@ -93,7 +94,7 @@ static struct DriftDiagnosticValue drift_dv_clone_impl(const struct DriftDiagnos
     }
     switch (src->tag) {
         case DV_STRING:
-            return drift_dv_string(drift_string_retain(dv_string_to_drift_string(src)));
+            return drift_dv_string(dv_string_to_drift_string(src));
         case DV_OBJECT: {
             size_t count = src->data.object.len;
             if (count == 0 || src->data.object.fields == NULL) {
