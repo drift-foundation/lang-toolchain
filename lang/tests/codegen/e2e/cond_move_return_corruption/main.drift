@@ -1,0 +1,136 @@
+module repro;
+
+import std.core as core;
+
+struct InnerBuf {
+	pub data: Array<Byte>,
+	pub pos: Int
+}
+
+struct Connection {
+	pub name: String,
+	pub seq: Int,
+	pub read_buf: InnerBuf,
+	pub write_buf: InnerBuf,
+	pub queries: Array<String>
+}
+
+struct CallResult {
+	pub outcome: String,
+	pub rows: Int
+}
+
+struct InspectResult {
+	pub found: Bool,
+	pub detail: String
+}
+
+exception OpFailed(reason: String)
+
+fn _make_buf(size: Int) nothrow -> InnerBuf {
+	var d: Array<Byte> = [];
+	var i = 0;
+	while i < size {
+		d.push(cast<Byte>(i % 256));
+		i = i + 1;
+	}
+	return InnerBuf(data = move d, pos = 0);
+}
+
+fn create(label: String) nothrow -> Connection {
+	var qs: Array<String> = [];
+	return Connection(
+		name = label,
+		seq = 0,
+		read_buf = _make_buf(128),
+		write_buf = _make_buf(64),
+		queries = move qs
+	);
+}
+
+fn close(c: Connection) nothrow -> Void {}
+
+fn call_sp(c: &mut Connection, q: String) nothrow -> CallResult {
+	c.queries.push(q);
+	c.seq = c.seq + 1;
+	c.write_buf.pos = c.write_buf.pos + 10;
+	c.read_buf.pos = c.read_buf.pos + 20;
+	return CallResult(outcome = "ok", rows = 1);
+}
+
+fn inspect_key(c: &mut Connection) nothrow -> InspectResult {
+	c.seq = c.seq + 1;
+	return InspectResult(found = false, detail = "not found");
+}
+
+// Ok path: conditional move + return with owned locals in scope.
+fn s1() -> Int {
+	var c = create("s1-conn");
+	call_sp(&mut c, "CALL sp_claim(?)");
+	call_sp(&mut c, "CALL sp_complete(?)");
+	close(move c);
+	return 0;
+}
+
+fn s2() -> Int {
+	var c = create("s2-conn");
+	call_sp(&mut c, "CALL sp_claim(?)");
+	call_sp(&mut c, "CALL sp_fail(?)");
+	close(move c);
+	return 0;
+}
+
+fn s3() -> Int {
+	var c = create("s3-conn");
+	val ir = inspect_key(&mut c);
+	if ir.found { close(move c); return 301; }
+	close(move c);
+	return 0;
+}
+
+// Err path: throw escapes with owned locals still in scope.
+// Exercises ConstructResultErr ordering relative to scope drops.
+fn s4_throw_with_owned_locals() -> Int {
+	var c = create("s4-conn");
+	call_sp(&mut c, "CALL sp_setup(?)");
+	// Owned locals (c, plus call results) are live when throw escapes.
+	throw OpFailed("intentional failure");
+}
+
+// Err path: conditional throw with owned locals.
+fn s5_cond_throw(should_fail: Bool) -> Int {
+	var c = create("s5-conn");
+	call_sp(&mut c, "CALL sp_work(?)");
+	val ir = inspect_key(&mut c);
+	if should_fail {
+		throw OpFailed("conditional failure");
+	}
+	close(move c);
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	// Ok path tests
+	val a = try s1() catch { 199 };
+	if a != 0 { return a; }
+
+	val b = try s2() catch { 299 };
+	if b != 0 { return b; }
+
+	val d = try s3() catch { 399 };
+	if d != 0 { return d; }
+
+	// Err path: unconditional throw with owned locals
+	val e = try s4_throw_with_owned_locals() catch { 50 };
+	if e != 50 { return 10; }
+
+	// Err path: conditional throw (taken)
+	val f = try s5_cond_throw(true) catch { 60 };
+	if f != 60 { return 11; }
+
+	// Err path: conditional throw (not taken) — Ok return
+	val g = try s5_cond_throw(false) catch { 60 };
+	if g != 0 { return 12; }
+
+	return 0;
+}

@@ -5646,18 +5646,18 @@ class HIRToMIR:
 				val_ty = self._infer_expr_type(stmt.value)
 				if val_ty is None or self._type_table.is_void(val_ty):
 					self.lower_stmt(H.HExprStmt(expr=stmt.value))
+					self._emit_scope_drops(scope_index=0)
 					res_val = self.b.new_temp()
 					self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
-					self._emit_scope_drops(scope_index=0)
 					term = M.Return(value=res_val)
 					if ret_span != Span():
 						term.span = ret_span
 					self.b.set_terminator(term)
 					return
 				raise AssertionError("Void function must not have a return value (checker bug)")
+			self._emit_scope_drops(scope_index=0)
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
-			self._emit_scope_drops(scope_index=0)
 			term = M.Return(value=res_val)
 			if ret_span != Span():
 				term.span = ret_span
@@ -5668,9 +5668,9 @@ class HIRToMIR:
 		val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 		if self._ret_type is not None:
 			val = self._copy_if_ref_alias(val, self._ret_type)
+		self._emit_scope_drops(scope_index=0)
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
-		self._emit_scope_drops(scope_index=0)
 		term = M.Return(value=res_val)
 		if ret_span != Span():
 			term.span = ret_span
@@ -5853,9 +5853,9 @@ class HIRToMIR:
 				self.b.emit(M.ErrorRaise(error=err_val))
 				self.b.set_terminator(M.Unreachable())
 				return
+			self._emit_scope_drops(scope_index=0)
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
-			self._emit_scope_drops(scope_index=0)
 			self.b.set_terminator(M.Return(value=res_val))
 
 	def _visit_stmt_HRethrow(self, stmt: H.HRethrow) -> None:

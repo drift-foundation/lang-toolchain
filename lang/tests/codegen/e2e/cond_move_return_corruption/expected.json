@@ -1,0 +1,4 @@
+{
+  "description": "e2e: conditional move + multi-branch return must not corrupt return value (does not yet reproduce the full bug which requires cross-package RpcConnection structs)",
+  "exit_code": 0
+}

@@ -11,5 +11,5 @@
 # ownership/drop contract changes.
 # Do not bump for pure internal refactors with no boundary change.
 
-DRIFTC_VERSION: str = "0.27.103"
+DRIFTC_VERSION: str = "0.27.104"
 DRIFT_RT_ABI_VERSION: int = 6

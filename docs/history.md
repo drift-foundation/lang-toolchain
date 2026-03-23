@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-22
+- **Constructed can-throw `FnResult` return values after scope cleanup to prevent silent return-value corruption (0.27.104, ABI 6)**:
+  Fixed a stage2/codegen ordering bug where can-throw function return values
+  could be corrupted when owned locals were cleaned up after the `FnResult`
+  aggregate had already been constructed.
+  - Problem:
+    - certain can-throw functions with owned locals, conditional moves, and
+      multiple return/throw paths could complete normally but deliver the wrong
+      return value to the caller
+    - this showed up as silent corruption rather than an exception or ASAN
+      failure
+  - Root cause:
+    - stage2 MIR lowering constructed `ConstructResultOk` / `ConstructResultErr`
+      before `_emit_scope_drops(...)` on escaping return paths
+    - scope cleanup can call runtime destructors and release helpers
+    - that left a window where the in-flight `FnResult` aggregate could be
+      disturbed before the final `return`
+  - Fix:
+    - can-throw return lowering now performs scope drops first
+    - only after cleanup does it construct:
+      - `ConstructResultOk(...)` for normal returns
+      - `ConstructResultErr(...)` for escaping throws
+    - the result aggregate is now built immediately before `return`, with no
+      intervening cleanup calls
+  - Coverage:
+    - expanded the conditional-move return-corruption regression to cover both:
+      - normal `Ok` returns
+      - escaping `Err` returns with owned locals live in scope
+  - Versioning:
+    - compiler version is `0.27.104`
+    - ABI remains `6`
+
 - **Retained heap-backed strings stored in diagnostic values to prevent error-release double-frees (0.27.103, ABI 6)**:
   Fixed a runtime lifetime bug where wrapping a heap-backed `String` into a
   `DiagnosticValue::String` could leave the diagnostic value holding a
