@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-23
+- **Changed internal `FnResult` ABI discriminant to `i8` and fixed nothrow-to-throwing fn-ptr wrapping (0.27.106, ABI 7)**:
+  Fixed the app-team return-value corruption bug caused by the old
+  `FnResult { i1, T, Error* }` layout and fixed a separate callable ABI bug
+  where nothrow lambdas could be invoked through a can-throw `FnResult` return
+  signature without a wrapper thunk.
+  - Problem:
+    - internal `FnResult` used `i1` as field 0
+    - when the ok payload began with an `i8`-aligned field (notably `Bool`
+      inside a struct), LLVM could pack the discriminant and payload bytes
+      adjacently in ways that led to wrong-field reads on sret-returned
+      aggregates
+    - separately, nothrow lambdas passed into can-throw callable contexts
+      could be called with `FnResult` return ABI even though the lambda itself
+      returned plain `void` / plain value
+  - Fix:
+    - changed internal `FnResult` layout from `{ i1, T, Error* }` to
+      `{ i8, T, Error* }`
+    - updated all live `FnResult` construction/extraction sites to write `i8`
+      discriminants and branch via `icmp ne i8 ..., 0`
+    - added nothrow-to-throwing wrapper thunk generation for fn-ptr constants
+      so can-throw call sites receive a proper `FnResult::Ok(...)` carrier
+    - direct-call wrapper substitution is now gated on function-typed params,
+      and indirect-call substitution is double-gated on known nothrow status
+  - Coverage:
+    - updated stale `FnResult` LLVM fixtures/tests to the new layout
+    - restored the `borrow_escape_scope_accepted` end-to-end case by wrapping
+      nothrow lambdas correctly in can-throw callable contexts
+  - Versioning:
+    - compiler version is `0.27.106`
+    - ABI is now `7`
+
 - **Stamped toolchain source commit into bundled metadata and compiler provenance (0.27.105, ABI 6)**:
   Fixed toolchain identity reporting so deployed `drift` / `driftc` and
   compiler-emitted provenance report the source commit the toolchain was built

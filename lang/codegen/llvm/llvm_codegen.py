@@ -19,9 +19,9 @@ Scope (v1 bring-up):
 
 ABI (from docs/design/drift-lang-abi.md):
   - %DriftError           = { u64 code, %DriftString event_fqn, i8* attrs, usize attr_count, i8* frames, usize frame_count }
-  - %FnResult_Int_Error   = { i1 is_err, isize ok, %DriftError* err }
-  - %FnResult_String_Error= { i1 is_err, %DriftString ok, %DriftError* err }
-  - %FnResult_Void_Error  = { i1 is_err, i8 ok, %DriftError* err } (void-like ok)
+  - %FnResult_Int_Error   = { i8 is_err, isize ok, %DriftError* err }
+  - %FnResult_String_Error= { i8 is_err, %DriftString ok, %DriftError* err }
+  - %FnResult_Void_Error  = { i8 is_err, i8 ok, %DriftError* err } (void-like ok)
   - %DriftString          = { i64, i8* }
   - i64/%drift.usize are word-sized carriers for Int/Uint
   - Drift Int is pointer-sized; Bool is i1 in registers.
@@ -539,7 +539,8 @@ def lower_module_to_llvm(
 				lines.append(f"  ret {DRIFT_ERROR_PTR} %err")
 			else:
 				ok_zero = type_builder._zero_value_for_ok(ok_abi_llty)
-				lines.append(f"  %is_err = extractvalue {fnres_llty} %res, 0")
+				lines.append(f"  %is_err_raw = extractvalue {fnres_llty} %res, 0")
+				lines.append(f"  %is_err = icmp ne i8 %is_err_raw, 0")
 				lines.append(f"  %ok = extractvalue {fnres_llty} %res, 1")
 				lines.append(f"  %err = extractvalue {fnres_llty} %res, 2")
 				ok_val = "%ok"
@@ -786,7 +787,7 @@ class LlvmModuleBuilder:
 				f"{DRIFT_ERROR_TYPE} = type {{ {DRIFT_ERROR_CODE_TYPE}, {DRIFT_STRING_TYPE}, ptr, {self._llty(DRIFT_USIZE_TYPE)}, ptr, {self._llty(DRIFT_USIZE_TYPE)} }}",
 				f"{DRIFT_IFACE_TYPE} = type {{ ptr, ptr, {inline_storage}, i8, [7 x i8] }}",
 				f"{DRIFT_CALLBACK_VTABLE_TYPE} = type [2 x ptr]",
-				f"{FNRESULT_INT_ERROR} = type {{ i1, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
+				f"{FNRESULT_INT_ERROR} = type {{ i8, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
 				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
 				f"%DriftArrayHeader = type {{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, ptr }}",
 				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ ptr, ptr }}",
@@ -950,7 +951,8 @@ class LlvmModuleBuilder:
 		emit_ok_llty = self._llty(ok_llty)
 		lines.append(f"define {emit_ok_llty} {name}({fnres_llty} %res) {{")
 		lines.append("__bb_entry:")
-		lines.append(f"  %is_err = extractvalue {fnres_llty} %res, 0")
+		lines.append(f"  %is_err_raw = extractvalue {fnres_llty} %res, 0")
+		lines.append("  %is_err = icmp ne i8 %is_err_raw, 0")
 		lines.append("  br i1 %is_err, label %__bb_trap, label %__bb_ok")
 		lines.append("__bb_trap:")
 		lines.append("  call void @llvm.trap()")
@@ -968,7 +970,7 @@ class LlvmModuleBuilder:
 			return self._fnresult_types_by_key[ok_key]
 		type_name = name or f"%FnResult_{ok_key.lstrip('%')}_Error"
 		emit_ok_llty = self._llty(ok_llty)
-		self.type_decls.append(f"{type_name} = type {{ i1, {emit_ok_llty}, {DRIFT_ERROR_PTR} }}")
+		self.type_decls.append(f"{type_name} = type {{ i8, {emit_ok_llty}, {DRIFT_ERROR_PTR} }}")
 		self._fnresult_types_by_key[ok_key] = type_name
 		self._fnresult_ok_llty_by_type[type_name] = ok_llty
 		if ok_typeid is not None:
@@ -1534,6 +1536,8 @@ class _FuncBuilder:
 	# pointers both map to "ptr" in value_types, so we need this side channel
 	# for ConstructStruct fn-ptr adaptation logic.
 	_value_fn_throws: Dict[str, bool] = field(default_factory=dict)
+	_nothrow_wrap_thunks: Dict[str, bool] = field(default_factory=dict)
+	_nothrow_wrap_for: Dict[str, str] = field(default_factory=dict)
 	dv_type_id: Optional[TypeId] = None
 	sym_name: Optional[str] = None
 	# Variant lowering caches (compiler-private ABI).
@@ -3291,7 +3295,9 @@ class _FuncBuilder:
 			fnres_llty = self.value_types.get(res)
 			if fnres_llty is None:
 				raise NotImplementedError("LLVM codegen v1: ResultIsErr requires a typed FnResult value")
-			self.lines.append(f"  {dest} = extractvalue {fnres_llty} {res}, 0")
+			raw = self._fresh("is_err_raw")
+			self.lines.append(f"  {raw} = extractvalue {fnres_llty} {res}, 0")
+			self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
 			self.value_types[dest] = "i1"
 		elif isinstance(instr, ResultOk):
 			dest = self._map_value(instr.dest)
@@ -3361,7 +3367,7 @@ class _FuncBuilder:
 			tmp0 = self._fresh("ok0")
 			tmp1 = self._fresh("ok1")
 			err_zero = f"{DRIFT_ERROR_PTR} null"
-			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 			emit_ok_llty = self._llty(ok_llty)
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {emit_ok_llty} {val}, 1")
 			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {err_zero}, 2")
@@ -3377,7 +3383,7 @@ class _FuncBuilder:
 			tmp0 = self._fresh("err0")
 			tmp1 = self._fresh("err1")
 			ok_zero = self._zero_value_for_ok(ok_llty)
-			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 1, 0")
+			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 1, 0")
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
 			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2")
 		elif isinstance(instr, ConstructDV):
@@ -5673,7 +5679,7 @@ class _FuncBuilder:
 				ok_zero = self._zero_value_for_ok(ok_llty)
 				tmp0 = self._fresh("fn0")
 				tmp1 = self._fresh("fn1")
-				self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+				self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 				self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
 				self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} null, 2")
 				self.value_types[dest] = fnres_llty
@@ -5703,6 +5709,15 @@ class _FuncBuilder:
 				llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 				emit_llty = self._llty(llty)
 				arg_val = self._map_value(arg)
+				# If a nothrow function pointer is being passed to a can-throw
+				# callee's function-typed parameter, substitute the pre-generated
+				# can-throw wrapper thunk so the callee can call it with FnResult
+				# ABI safely.  Only rewrite when the parameter is actually a
+				# function/fn-ptr type to avoid corrupting non-callable ptr args.
+				if instr.can_throw and arg_val in self._nothrow_wrap_for:
+					param_td = self.type_table.get(ty_id) if self.type_table is not None else None
+					if param_td is not None and param_td.kind is TypeKind.FUNCTION:
+						arg_val = self._nothrow_wrap_for[arg_val]
 				arg_parts.append(f"{emit_llty} {arg_val}")
 		else:
 			# Legacy fallback: assume all args are Ints.
@@ -5738,12 +5753,14 @@ class _FuncBuilder:
 				self.lines.append(f"  {res_tmp} = call {res_llty} {_llvm_fn_sym(target_sym)}({args})")
 				if is_void_ret:
 					err_val = res_tmp
+					is_err_i1 = self._fresh("is_err_i1")
 					is_err = self._fresh("is_err")
-					self.lines.append(f"  {is_err} = icmp ne {DRIFT_ERROR_PTR} {err_val}, null")
+					self.lines.append(f"  {is_err_i1} = icmp ne {DRIFT_ERROR_PTR} {err_val}, null")
+					self.lines.append(f"  {is_err} = zext i1 {is_err_i1} to i8")
 					ok_zero = self._zero_value_for_ok(ok_llty)
 					tmp0 = self._fresh("fn0")
 					tmp1 = self._fresh("fn1")
-					self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 {is_err}, 0")
+					self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 {is_err}, 0")
 					self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
 					self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2")
 				else:
@@ -5753,7 +5770,9 @@ class _FuncBuilder:
 					ok_zero = self._zero_value_for_ok(ok_llty)
 					self.lines.append(f"  {ok_val} = extractvalue {res_llty} {res_tmp}, 0")
 					self.lines.append(f"  {err_val} = extractvalue {res_llty} {res_tmp}, 1")
-					self.lines.append(f"  {is_err} = icmp ne {DRIFT_ERROR_PTR} {err_val}, null")
+					is_err_i1 = self._fresh("is_err_i1")
+					self.lines.append(f"  {is_err_i1} = icmp ne {DRIFT_ERROR_PTR} {err_val}, null")
+					self.lines.append(f"  {is_err} = zext i1 {is_err_i1} to i8")
 					ok_val_in = ok_val
 					if ok_llty != ok_abi_llty:
 						if ok_llty == "i1" and ok_abi_llty == "i8":
@@ -5763,10 +5782,10 @@ class _FuncBuilder:
 							raise AssertionError("LLVM codegen v1: unsupported ok ABI coercion")
 					ok_sel = self._fresh("ok_sel")
 					emit_ok_llty = self._llty(ok_llty)
-					self.lines.append(f"  {ok_sel} = select i1 {is_err}, {ok_zero}, {emit_ok_llty} {ok_val_in}")
+					self.lines.append(f"  {ok_sel} = select i1 {is_err_i1}, {ok_zero}, {emit_ok_llty} {ok_val_in}")
 					tmp0 = self._fresh("fn0")
 					tmp1 = self._fresh("fn1")
-					self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 {is_err}, 0")
+					self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 {is_err}, 0")
 					self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {emit_ok_llty} {ok_sel}, 1")
 					self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2")
 				self.value_types[dest] = fnres_llty
@@ -5835,6 +5854,14 @@ class _FuncBuilder:
 			else:
 				self.lines.append(f"  call {adapter_sig} {adapter_i8}({args})")
 			return
+		# If the callee is a known nothrow function pointer being called in a
+		# can-throw context, substitute the pre-generated can-throw wrapper thunk.
+		# Only substitute when _value_fn_throws confirms the callee is nothrow to
+		# avoid rewriting unrelated ptr values that happen to share a mapped name.
+		if instr.can_throw and self._value_fn_throws.get(callee_val) is False:
+			wrap = self._nothrow_wrap_for.get(callee_val)
+			if wrap is not None:
+				callee_val = wrap
 		fn_sig = self._fn_sig_lltype(instr.param_types, instr.user_ret_type, instr.can_throw)
 		arg_parts: list[str] = []
 		for ty_id, arg in zip(instr.param_types, instr.args):
@@ -6071,7 +6098,7 @@ class _FuncBuilder:
 			lines.append(f"  %raw = call {nothrow_ret_llty} {arg_sym}({', '.join(call_args)})")
 			ok_val = "%raw"
 			ok_llty = nothrow_ret_llty
-		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {ok_llty} {ok_val}, 1")
 		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
 		lines.append(f"  ret {fnres_llty} %res")
@@ -6118,7 +6145,7 @@ class _FuncBuilder:
 			lines.append(f"  %raw = call {nothrow_fn_sig} %env({', '.join(call_args)})")
 			ok_val = "%raw"
 			ok_llty = nothrow_ret_llty
-		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {ok_llty} {ok_val}, 1")
 		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
 		lines.append(f"  ret {fnres_llty} %res")
@@ -6503,6 +6530,42 @@ class _FuncBuilder:
 		self.lines.append(f"  {dest} = load {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}")
 		self.value_types[dest] = DRIFT_IFACE_TYPE
 
+	def _ensure_nothrow_wrap_thunk(self, sym: str, call_sig) -> str:
+		"""Generate a can-throw wrapper thunk for a nothrow function pointer."""
+		wrap_name = f"@__nothrow_wrap_{sym.strip('@').replace('::', '_')}"
+		if wrap_name in self._nothrow_wrap_thunks:
+			return wrap_name
+		param_lltys = [self._llvm_type_for_typeid(t) for t in call_sig.param_types]
+		ret_tid = call_sig.user_ret_type
+		is_void = self.type_table.is_void(ret_tid)
+		if is_void:
+			ok_llty = "i8"
+			ok_key = "Void"
+		else:
+			ok_llty = self._llvm_type_for_typeid(ret_tid)
+			ok_key = self.type_table.type_key_string(ret_tid)
+		fnres_llty = self.module._declare_fnresult_named_type(ok_key, ok_llty, ok_typeid=ret_tid if not is_void else None)
+		param_strs = ", ".join(f"{self._llty(t)} %a{i}" for i, t in enumerate(param_lltys))
+		arg_strs = ", ".join(f"{self._llty(t)} %a{i}" for i, t in enumerate(param_lltys))
+		lines = [f"define {fnres_llty} {wrap_name}({param_strs}) {{"]
+		lines.append("__bb_entry:")
+		if is_void:
+			lines.append(f"  call void {_llvm_fn_sym(sym)}({arg_strs})")
+			ok_val = "0"
+		else:
+			emit_ret = self._llty(ok_llty)
+			lines.append(f"  %raw = call {emit_ret} {_llvm_fn_sym(sym)}({arg_strs})")
+			ok_val = "%raw"
+		emit_ok = self._llty(ok_llty)
+		lines.append(f"  %ok0 = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
+		lines.append(f"  %ok1 = insertvalue {fnres_llty} %ok0, {emit_ok} {ok_val}, 1")
+		lines.append(f"  %res = insertvalue {fnres_llty} %ok1, {DRIFT_ERROR_PTR} null, 2")
+		lines.append(f"  ret {fnres_llty} %res")
+		lines.append("}")
+		self.module.funcs.append("\n".join(lines))
+		self._nothrow_wrap_thunks[wrap_name] = True
+		return wrap_name
+
 	def _lower_fnptr_const(self, instr: FnPtrConst) -> None:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: function pointer constants require a TypeTable")
@@ -6515,6 +6578,12 @@ class _FuncBuilder:
 		# Track throwness for ConstructStruct fn-ptr adaptation.
 		self._value_fn_throws[_llvm_fn_sym(sym)] = instr.call_sig.can_throw
 		self._value_fn_throws[dest] = instr.call_sig.can_throw
+		# For nothrow functions, pre-generate a can-throw wrapper thunk so the
+		# pointer can be safely passed to generic can-throw call sites.
+		if not instr.call_sig.can_throw:
+			wrap = self._ensure_nothrow_wrap_thunk(sym, instr.call_sig)
+			self._nothrow_wrap_for[_llvm_fn_sym(sym)] = wrap
+			self._nothrow_wrap_for[dest] = wrap
 
 	def _resolve_call_target_symbol(self, fn_id: FunctionId, callee_info: FnInfo) -> tuple[str, bool]:
 		"""
@@ -7610,7 +7679,7 @@ class _FuncBuilder:
 			ok_key = ok_key.replace("*", "Ptr")
 		fnres_llty = self.module._declare_fnresult_named_type(ok_key, ok_llty)
 		tmp0 = self._fresh(f"{hint}0")
-		self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i1 0, 0")
+		self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 		if raw_val is not None:
 			tmp1 = self._fresh(f"{hint}1")
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {self._llty(ok_llty)} {raw_val}, 1")

@@ -146,7 +146,7 @@ def test_codegen_fnresult_ref_ok_return():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits))
 	ir = mod.render()
 
-	assert f"%FnResult_Ref_Int_Error = type {{ i1, ptr, ptr }}" in ir
+	assert f"%FnResult_Ref_Int_Error = type {{ i8, ptr, ptr }}" in ir
 	assert f"define %FnResult_Ref_Int_Error @f_ref(ptr %p0)" in ir
 
 
@@ -174,7 +174,7 @@ def test_codegen_fnresult_ref_bool_ok_return():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=host_word_bits()))
 	ir = mod.render()
 
-	assert "%FnResult_Ref_Bool_Error = type { i1, ptr, ptr }" in ir
+	assert "%FnResult_Ref_Bool_Error = type { i8, ptr, ptr }" in ir
 	assert "define %FnResult_Ref_Bool_Error @f_ref_bool(ptr %p0)" in ir
 
 
@@ -254,7 +254,7 @@ def test_codegen_fnresult_ref_err_zero_ok_slot():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=word_bits))
 	ir = mod.render()
 
-	assert f"%FnResult_Ref_Int_Error = type {{ i1, ptr, ptr }}" in ir
+	assert f"%FnResult_Ref_Int_Error = type {{ i8, ptr, ptr }}" in ir
 	assert "define %FnResult_Ref_Int_Error @f_ref_err()" in ir
 	assert any(
 		f"%FnResult_Ref_Int_Error" in line and f", ptr null, 1" in line for line in ir.splitlines()
