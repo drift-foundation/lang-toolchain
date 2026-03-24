@@ -2135,6 +2135,11 @@ class TypeChecker:
 				return True
 			return False
 
+		# TypeIds temporarily exempt from Copy enforcement.  Used when an array
+		# element is being accessed for field projection (entries[i].name) — the
+		# element itself doesn't need to be Copy, only the projected field does.
+		_suppress_copy_type_ids: set = set()
+
 		def _require_copy_value(
 			ty_id: TypeId | None,
 			*,
@@ -2143,6 +2148,8 @@ class TypeChecker:
 			used_as_value: bool = True,
 		) -> None:
 			if not used_as_value:
+				return
+			if ty_id is not None and ty_id in _suppress_copy_type_ids:
 				return
 			if ty_id is None:
 				return
@@ -7409,7 +7416,30 @@ class TypeChecker:
 				return record_expr(expr, method_res.return_type)
 
 			if isinstance(expr, H.HField):
-				sub_ty = type_expr(expr.subject, used_as_value=False)
+				# Suppress Copy checks on the element type when projecting a field
+				# through array indexing (entries[i].name): the element is borrowed
+				# for field access, not copied.  Scoped via try/finally to avoid
+				# leaking the exemption beyond this field projection.
+				_field_suppress_id = None
+				if isinstance(expr.subject, H.HIndex):
+					_idx_subj_ty_hint = None
+					_idx_subj = expr.subject.subject
+					if hasattr(_idx_subj, "node_id") and _idx_subj.node_id in expr_types:
+						_idx_subj_ty_hint = expr_types[_idx_subj.node_id]
+					else:
+						_idx_subj_ty_hint = type_expr(_idx_subj, used_as_value=False)
+					if _idx_subj_ty_hint is not None:
+						_arr_def = self.type_table.get(_idx_subj_ty_hint)
+						if _arr_def.kind is TypeKind.REF and _arr_def.param_types:
+							_arr_def = self.type_table.get(_arr_def.param_types[0])
+						if _arr_def.kind is TypeKind.ARRAY and _arr_def.param_types:
+							_field_suppress_id = _arr_def.param_types[0]
+							_suppress_copy_type_ids.add(_field_suppress_id)
+				try:
+					sub_ty = type_expr(expr.subject, used_as_value=False)
+				finally:
+					if _field_suppress_id is not None:
+						_suppress_copy_type_ids.discard(_field_suppress_id)
 				inner_ty = sub_ty
 				inner_def = self.type_table.get(inner_ty)
 				subject_is_ref = False
@@ -7703,7 +7733,10 @@ class TypeChecker:
 				elem_ty = _array_element_type(sub_ty, span=_best_effort_span_for_expr(expr))
 				if elem_ty is None:
 					return record_expr(expr, self._unknown)
-				_require_copy_value(elem_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
+				# Copy check for array element access is deferred to MIR lowering,
+				# which can distinguish field projection (borrow) from value use (copy).
+				# Standalone non-Copy element reads are still caught by the MIR lowering
+				# NotImplementedError for non-Copy array index access.
 				return record_expr(expr, elem_ty)
 
 			# Disallow implicit setters; attrs require explicit runtime helpers in MIR.

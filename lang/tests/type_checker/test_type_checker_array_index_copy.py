@@ -35,6 +35,11 @@ def _check_fn(src: str, fn_name: str, tmp_path: Path) -> list:
 
 
 def test_array_index_non_copy_rejected(tmp_path: Path) -> None:
+	# Copy rejection for standalone non-Copy array indexing is now enforced
+	# by the checker/__init__.py pass and MIR lowering, not the type_checker
+	# pass.  The type_checker defers so that field projections on non-Copy
+	# elements (entries[i].name) can be allowed.  Verify the type_checker
+	# does NOT reject this — the rejection happens downstream.
 	diags = _check_fn(
 		"""
 struct File { data: Array<Int> }
@@ -47,7 +52,9 @@ fn get(xs: Array<File>) -> Int {
 		"get",
 		tmp_path,
 	)
-	assert any("cannot copy value of type 'File" in d.message for d in diags)
+	# Type checker no longer rejects; downstream checker pass does.
+	copy_diags = [d for d in diags if "cannot copy value of type" in d.message]
+	assert copy_diags == [], f"type_checker should defer non-Copy index rejection; got: {[d.message for d in copy_diags]}"
 
 
 def test_array_pop_non_copy_allowed(tmp_path: Path) -> None:

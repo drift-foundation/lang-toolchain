@@ -1838,24 +1838,34 @@ class Checker:
 				return self.table.new_array(first)
 
 			if isinstance(expr, H.HField):
-				subj_ty = None
-				if expr.name in ("len", "cap", "capacity"):
-					subj_ty = self._infer_expr_type(expr.subject)
-				if subj_ty is None:
-					subj_ty = self._infer_expr_type(expr.subject)
+				# When projecting a field through an array index (entries[i].name),
+				# suppress the Copy check on the indexed element — field projection
+				# borrows the element, it doesn't copy it.
+				_suppress_idx = isinstance(expr.subject, H.HIndex)
+				if _suppress_idx:
+					self.suppress_index_copy_check_expr_ids.add(id(expr.subject))
+				try:
+					subj_ty = None
+					if expr.name in ("len", "cap", "capacity"):
+						subj_ty = self._infer_expr_type(expr.subject)
 					if subj_ty is None:
-						return None
-					subj_def = self.table.get(subj_ty)
-					if subj_def.kind is TypeKind.REF and subj_def.param_types:
-						subj_ty = subj_def.param_types[0]
+						subj_ty = self._infer_expr_type(expr.subject)
+						if subj_ty is None:
+							return None
 						subj_def = self.table.get(subj_ty)
-					if subj_def.kind is TypeKind.STRUCT:
-						info = self.table.struct_field(subj_ty, expr.name)
-						if info is not None:
-							_, field_ty = info
-							return field_ty
-					return None
-				return checker._len_cap_result_type(subj_ty)
+						if subj_def.kind is TypeKind.REF and subj_def.param_types:
+							subj_ty = subj_def.param_types[0]
+							subj_def = self.table.get(subj_ty)
+						if subj_def.kind is TypeKind.STRUCT:
+							info = self.table.struct_field(subj_ty, expr.name)
+							if info is not None:
+								_, field_ty = info
+								return field_ty
+						return None
+					return checker._len_cap_result_type(subj_ty)
+				finally:
+					if _suppress_idx:
+						self.suppress_index_copy_check_expr_ids.discard(id(expr.subject))
 
 			if isinstance(expr, H.HIndex):
 				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
@@ -2788,7 +2798,16 @@ class Checker:
 			elif isinstance(expr, H.HResultOk):
 				walk_expr(expr.value)
 			elif isinstance(expr, H.HField):
-				walk_expr(expr.subject)
+				# Suppress Copy check on array element when walking a field projection
+				# through an index — the element is borrowed, not copied.
+				if isinstance(expr.subject, H.HIndex):
+					ctx.suppress_index_copy_check_expr_ids.add(id(expr.subject))
+					try:
+						walk_expr(expr.subject)
+					finally:
+						ctx.suppress_index_copy_check_expr_ids.discard(id(expr.subject))
+				else:
+					walk_expr(expr.subject)
 			elif isinstance(expr, H.HIndex):
 				walk_expr(expr.subject)
 				walk_expr(expr.index)

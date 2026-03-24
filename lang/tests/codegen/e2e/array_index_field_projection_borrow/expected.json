@@ -1,0 +1,4 @@
+{
+  "description": "e2e: array index + field projection should borrow, not copy the element (regression for non-Copy array element field access)",
+  "exit_code": 0
+}

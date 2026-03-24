@@ -1823,6 +1823,47 @@ class HIRToMIR:
 			key = self._capture_key_for_expr(expr)
 			if key is not None and key in self._lambda_capture_slots:
 				return self._load_capture_from_env(self._lambda_capture_slots[key])
+		# Field projection through array indexing on a non-Copy element:
+		# entries[i].name should borrow the element, not copy it.
+		# Emit AddrOfArrayElem + StructGetField instead of copying the whole element.
+		if isinstance(expr.subject, H.HIndex):
+			idx_subj_ty = self._infer_expr_type(expr.subject.subject)
+			if idx_subj_ty is not None:
+				idx_subj_def = self._type_table.get(idx_subj_ty)
+				# Unwrap reference: &Array<T> → Array<T>
+				is_ref = idx_subj_def.kind is TypeKind.REF and idx_subj_def.param_types
+				if is_ref:
+					inner_arr_ty = idx_subj_def.param_types[0]
+					inner_arr_def = self._type_table.get(inner_arr_ty)
+				else:
+					inner_arr_ty = idx_subj_ty
+					inner_arr_def = idx_subj_def
+				if inner_arr_def.kind is TypeKind.ARRAY and inner_arr_def.param_types:
+					elem_ty = inner_arr_def.param_types[0]
+					elem_def = self._type_table.get(elem_ty)
+					if elem_def.kind is TypeKind.STRUCT and not self._should_copy_value(elem_ty):
+						field_info = self._type_table.struct_field(elem_ty, expr.name)
+						if field_info is not None:
+							field_idx, field_ty = field_info
+							arr_val = self.lower_expr(expr.subject.subject)
+							if is_ref:
+								arr_loaded = self.b.new_temp()
+								self.b.emit(M.LoadRef(dest=arr_loaded, ptr=arr_val, inner_ty=inner_arr_ty))
+								arr_val = arr_loaded
+							idx_val = self.lower_expr(expr.subject.index)
+							elem_ptr = self.b.new_temp()
+							self.b.emit(M.AddrOfArrayElem(dest=elem_ptr, array=arr_val, index=idx_val, inner_ty=elem_ty))
+							field_ptr = self.b.new_temp()
+							self.b.emit(M.AddrOfField(dest=field_ptr, base_ptr=elem_ptr, struct_ty=elem_ty, field_index=field_idx, field_ty=field_ty))
+							dest = self.b.new_temp()
+							self.b.emit(M.LoadRef(dest=dest, ptr=field_ptr, inner_ty=field_ty))
+							if self._should_copy_value(field_ty):
+								copy_dest = self.b.new_temp()
+								self.b.emit(M.CopyValue(dest=copy_dest, value=dest, ty=field_ty))
+								self._local_types[copy_dest] = field_ty
+								return copy_dest
+							self._local_types[dest] = field_ty
+							return dest
 		subject = self.lower_expr(expr.subject)
 		subj_ty = self._infer_expr_type(expr.subject)
 		if subj_ty is None:

@@ -1,0 +1,20 @@
+module repro;
+
+struct Entry {
+	pub name: String,
+	pub value: String
+}
+
+fn main() nothrow -> Int {
+	var entries: Array<Entry> = [];
+	entries.push(Entry(name = "a", value = "b"));
+
+	// This field projection is allowed (borrow).
+	val n = entries[0].name;
+
+	// This standalone read of the SAME element type must still be rejected.
+	// The field projection above must NOT suppress Copy enforcement for Entry.
+	val e = entries[0];
+
+	return 0;
+}

@@ -1,0 +1,9 @@
+{
+  "description": "e2e: field projection suppression must not leak — standalone read of same type must still fail",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "cannot copy value of type"
+    }
+  ]
+}

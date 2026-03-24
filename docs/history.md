@@ -1,6 +1,45 @@
 # Drift development history
 
 ## 2026-03-23
+- **Allowed borrowed field projection through indexed non-`Copy` array elements (0.27.107, ABI 7)**:
+  Fixed the compiler so expressions like `entries[i].name` no longer require
+  the whole array element type to be `Copy`.
+  - Problem:
+    - field projection through array indexing on a non-`Copy` element was
+      rejected with:
+      - `cannot copy value of type 'Entry'`
+    - the compiler was enforcing `Copy` on `entries[i]` even when the access
+      only needed to borrow the element to read a field
+  - Root cause:
+    - three separate checker/type-checker paths eagerly enforced `Copy` on
+      `HIndex` element reads
+    - MIR lowering for `HField(HIndex(...), field)` still copied the whole
+      element instead of projecting through its address
+  - Fix:
+    - checker and type-checker now suppress the indexed-element `Copy` check
+      only for field-projection contexts, with scoped suppression so the
+      exemption does not leak to later expressions
+    - MIR lowering now handles `entries[i].field` on non-`Copy` struct
+      elements by borrowing through:
+      - `AddrOfArrayElem`
+      - `AddrOfField`
+      - `LoadRef`
+    - standalone non-`Copy` element reads like `entries[i]` are still rejected
+      downstream
+  - Coverage:
+    - positive regression for projected `Copy` and non-`Copy` fields from
+      indexed non-`Copy` elements
+    - negative regression that standalone `entries[i]` on a non-`Copy`
+      element still fails
+    - regression proving the field-projection suppression does not leak and
+      accidentally disable later `Copy` enforcement in the same function
+    - updated the affected type-checker unit expectation to document that
+      non-`Copy` indexed-read rejection is now deferred downstream rather than
+      rejected eagerly in the type-checker pass
+  - Versioning:
+    - compiler version is `0.27.107`
+    - ABI remains `7`
+
 - **Changed internal `FnResult` ABI discriminant to `i8` and fixed nothrow-to-throwing fn-ptr wrapping (0.27.106, ABI 7)**:
   Fixed the app-team return-value corruption bug caused by the old
   `FnResult { i1, T, Error* }` layout and fixed a separate callable ABI bug

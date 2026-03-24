@@ -1,0 +1,9 @@
+{
+  "description": "e2e: standalone array index on non-Copy element must still be rejected (field projection fix must not allow whole-element copy)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "cannot copy value of type"
+    }
+  ]
+}

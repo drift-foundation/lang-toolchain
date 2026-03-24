@@ -1,0 +1,18 @@
+module repro;
+
+struct Entry {
+	pub name: String,
+	pub value: String
+}
+
+fn take_entry(e: Entry) nothrow -> Int {
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	var entries: Array<Entry> = [];
+	entries.push(Entry(name = "a", value = "b"));
+	// Standalone entries[i] on non-Copy element must still be rejected.
+	val e = entries[0];
+	return take_entry(move e);
+}
