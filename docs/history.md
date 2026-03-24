@@ -1,6 +1,35 @@
 # Drift development history
 
 ## 2026-03-23
+- **Pulled source-compiled hidden lambda callbacks into codegen reachability for packaged generic calls (0.27.109, ABI 7)**:
+  Fixed a compiler/codegen reachability gap where packaged generic functions
+  could reference hidden lambda callbacks compiled from source, but those
+  hidden lambda bodies were not pulled into the final source-needed set for
+  consumer-side codegen.
+  - Problem:
+    - package MIR for functions like `std.concurrent::spawn_cb<T>` can contain
+      references to internal hidden lambda callbacks generated during generic
+      instantiation
+    - those hidden lambdas live in source-compiled MIR, not in the package
+      payload itself
+    - consumer-side codegen could therefore fail with internal callback iface
+      target-resolution errors when packaged code referenced such lambdas
+  - Fix:
+    - package reachability BFS now pulls source-compiled callees from
+      `_src_mir_full` when package MIR references them
+    - newly recovered source functions are then expanded transitively through a
+      dedicated source worklist so second-hop source callees are also included
+    - this closes the gap between packaged MIR reachability and source-compiled
+      hidden lambda availability during final codegen
+  - Coverage:
+    - the source-side callback/interface reachability path is now exercised via
+      the narrowed packaged generic callback regression used during the fix
+    - the external app-team `rest.start()` repro remains the acceptance check
+      for the original failing integrated path
+  - Versioning:
+    - compiler version is `0.27.109`
+    - ABI remains `7`
+
 - **Fixed callback interface construction for `spawn_cb`/`rest.start()` lambda paths (0.27.108, ABI 7)**:
   Fixed a compiler/codegen bug where callback interface construction could
   fail during LLVM lowering for `std.concurrent::spawn_cb`, which in turn

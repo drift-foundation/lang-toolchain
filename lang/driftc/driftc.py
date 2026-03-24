@@ -1790,6 +1790,11 @@ def _build_package_consumer_unit(
 	# Expand through package-to-package calls.  Also detect wrapper
 	# references in package MIR — package bodies may call __wrap_method
 	# stubs for stdlib methods that the consumer must synthesize.
+	# Additionally, detect hidden lambda callback targets that are not in
+	# the package payload (they were compiled from stdlib source during the
+	# package's own compilation and not stored).  These need to be compiled
+	# from source at consumer compile time.
+	_missing_lambda_parents: set[FunctionId] = set()
 	queue = list(pkg_needed)
 	while queue:
 		cur = queue.pop()
@@ -1812,6 +1817,48 @@ def _build_package_consumer_unit(
 					_ssa_entry = _ssa_src_full.get(target)
 					if _ssa_entry is not None:
 						ssa_src[target] = _ssa_entry
+			elif callee in _src_mir_full and callee not in src_needed:
+				# Hidden lambda from a stdlib generic instantiation — already
+				# compiled from source but not yet in the needed set.
+				src_needed.add(callee)
+				src_mir[callee] = _src_mir_full[callee]
+				_ssa_entry = _ssa_src_full.get(callee)
+				if _ssa_entry is not None:
+					ssa_src[callee] = _ssa_entry
+			elif callee not in src_needed and callee not in _src_mir_full:
+				# Callee is missing from all pools.  If it looks like a hidden
+				# lambda from a package-originated generic instantiation, record
+				# the parent so the lambda can be compiled from source later.
+				cname = getattr(callee, "name", "") or ""
+				if "__lambda_cb_" in cname or "__lambda_" in cname:
+					_missing_lambda_parents.add(callee)
+
+	# Transitively expand any source functions pulled in by the package BFS.
+	# The package BFS may have added source-compiled callees (e.g. hidden
+	# lambdas from stdlib generic instantiations) to src_needed/src_mir.
+	# Those callees may themselves reference further source functions that
+	# need to be included.
+	_src_expand_queue: list[FunctionId] = [fid for fid in src_needed if fid not in src_roots]
+	while _src_expand_queue:
+		cur = _src_expand_queue.pop()
+		fn = src_mir.get(cur)
+		if fn is None:
+			fn = _src_mir_full.get(cur)
+			if fn is not None:
+				src_mir[cur] = fn
+				_ssa_entry = _ssa_src_full.get(cur)
+				if _ssa_entry is not None:
+					ssa_src[cur] = _ssa_entry
+		if fn is None:
+			continue
+		for callee in _called_funcs_in_mir(fn):
+			if callee in _src_mir_full and callee not in src_needed:
+				src_needed.add(callee)
+				src_mir[callee] = _src_mir_full[callee]
+				_ssa_entry = _ssa_src_full.get(callee)
+				if _ssa_entry is not None:
+					ssa_src[callee] = _ssa_entry
+				_src_expand_queue.append(callee)
 
 	# Snapshot pkg_needed before post-BFS seeding so the final transitive
 	# pass can identify which functions were added by the seeding phases.
@@ -1961,6 +2008,35 @@ def _build_package_consumer_unit(
 					_ssa_entry = _ssa_src_full.get(target)
 					if _ssa_entry is not None:
 						ssa_src[target] = _ssa_entry
+			elif callee in _src_mir_full and callee not in src_needed:
+				src_needed.add(callee)
+				src_mir[callee] = _src_mir_full[callee]
+				_ssa_entry = _ssa_src_full.get(callee)
+				if _ssa_entry is not None:
+					ssa_src[callee] = _ssa_entry
+
+	# Transitively expand any source functions added by the post-seed BFS.
+	_post_src_expand: list[FunctionId] = [fid for fid in src_needed if fid not in src_roots and src_mir.get(fid) is not None]
+	_post_src_seen: set[FunctionId] = set(src_needed)
+	while _post_src_expand:
+		cur = _post_src_expand.pop()
+		fn = src_mir.get(cur) or _src_mir_full.get(cur)
+		if fn is None:
+			continue
+		if cur not in src_mir:
+			src_mir[cur] = fn
+			_ssa_entry = _ssa_src_full.get(cur)
+			if _ssa_entry is not None:
+				ssa_src[cur] = _ssa_entry
+		for callee in _called_funcs_in_mir(fn):
+			if callee in _src_mir_full and callee not in _post_src_seen:
+				_post_src_seen.add(callee)
+				src_needed.add(callee)
+				src_mir[callee] = _src_mir_full[callee]
+				_ssa_entry = _ssa_src_full.get(callee)
+				if _ssa_entry is not None:
+					ssa_src[callee] = _ssa_entry
+				_post_src_expand.append(callee)
 
 	pkg_mir: dict[FunctionId, M.MirFunc] = {fn_id: pkg_mir_all[fn_id] for fn_id in pkg_needed}
 	pkg_fn_infos: dict[FunctionId, FnInfo] = {}
