@@ -1,5 +1,5 @@
 %DriftError = type { i64, ptr, ptr, ptr }
-%FnResult_Int_Error = type { i1, i64, %DriftError }
+%FnResult_Int_Error = type { i8, i64, %DriftError }
 
 define i64 @drift_main() {
 entry:

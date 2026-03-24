@@ -81,7 +81,7 @@ def test_driftc_wrapper_runtime_archive_mode_links_static_runtime(tmp_path: Path
 	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr
 	stderr = cp.stderr or ""
-	assert "libdrift_rt.a" in stderr
+	assert "libdrift_rt_abi" in stderr
 	assert out.exists()
 
 
@@ -130,8 +130,9 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 	assert cp.returncode == 0, cp.stderr
 	stderr = cp.stderr or ""
 	assert str(cache_dir) in stderr
-	assert "libdrift_rt.a" in stderr
-	assert (cache_dir / variant / "libdrift_rt.a").exists()
+	assert "libdrift_rt_abi" in stderr
+	from lang.language_runtime import runtime_archive_name
+	assert (cache_dir / variant / runtime_archive_name()).exists()
 	assert out.exists()
 
 
@@ -264,4 +265,4 @@ def test_build_runtime_archive_optimized(tmp_path: Path) -> None:
 		else:
 			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
 	assert archive.exists()
-	assert str(archive).endswith("optimized/libdrift_rt.a")
+	assert "optimized/libdrift_rt_abi" in str(archive)

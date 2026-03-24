@@ -73,6 +73,8 @@ def main() -> None:
 	# Copies (not symlinks) are used because symlinks break when the install
 	# tree is relocated or when tests use ephemeral temp directories.
 	import shutil as _shutil
+	from lang.language_runtime import runtime_archive_name as _rt_ar_name
+	_ar_name = _rt_ar_name()
 	_install_runtime = dist_root / "lib" / "runtime"
 	if "DRIFT_RUNTIME_LIB_CACHE_DIR" not in os.environ:
 		_cache_runtime = Path.home() / ".cache" / "drift" / "runtime"
@@ -82,12 +84,12 @@ def main() -> None:
 			for _variant_dir in sorted(_install_runtime.iterdir()):
 				if not _variant_dir.is_dir():
 					continue
-				_archive = _variant_dir / "libdrift_rt.a"
+				_archive = _variant_dir / _ar_name
 				if not _archive.is_file():
 					continue
 				_cache_variant = _cache_runtime / _variant_dir.name
 				_cache_variant.mkdir(parents=True, exist_ok=True)
-				_cache_archive = _cache_variant / "libdrift_rt.a"
+				_cache_archive = _cache_variant / _ar_name
 				if not _cache_archive.is_file():
 					try:
 						_shutil.copy2(str(_archive), str(_cache_archive))

@@ -20,9 +20,10 @@ def generate_manifest(dist: Path, meta: DeployMetadata) -> None:
 	"""Write lib/manifest.json into the staged distribution."""
 	from tools.deploy.steps.bundle import RUNTIME_VARIANTS
 
+	from lang.language_runtime import runtime_archive_name
 	bundled_variants = [
 		v for v in RUNTIME_VARIANTS
-		if (dist / "lib" / "runtime" / v / "libdrift_rt.a").exists()
+		if (dist / "lib" / "runtime" / v / runtime_archive_name()).exists()
 	]
 
 	manifest = {

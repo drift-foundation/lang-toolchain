@@ -91,13 +91,15 @@ def bundle_compiler(repo_root: Path, dist: Path) -> None:
 
 def bundle_runtime_archives(repo_root: Path, dist: Path) -> list[str]:
 	"""Copy pre-built runtime archives. Returns list of bundled variants."""
+	from lang.language_runtime import runtime_archive_name
+	ar_name = runtime_archive_name()
 	bundled: list[str] = []
 	for variant in RUNTIME_VARIANTS:
-		src = repo_root / "build" / "runtime_libs" / variant / "libdrift_rt.a"
+		src = repo_root / "build" / "runtime_libs" / variant / ar_name
 		if src.exists():
 			dst_dir = dist / "lib" / "runtime" / variant
 			dst_dir.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(str(src), str(dst_dir / "libdrift_rt.a"))
+			shutil.copy2(str(src), str(dst_dir / ar_name))
 			bundled.append(variant)
 		else:
 			import sys

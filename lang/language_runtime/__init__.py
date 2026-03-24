@@ -76,10 +76,21 @@ def runtime_archive_cache_root(root: Path) -> Path:
 	return root / "build" / "runtime_libs"
 
 
+def runtime_archive_name() -> str:
+	"""Return the ABI-versioned runtime archive filename.
+
+	Embedding the ABI version in the filename ensures stale cached archives
+	(from prior ABI versions) are never linked — the compiler asks for
+	``libdrift_rt_abi7.a`` and the linker will not find ``libdrift_rt_abi6.a``.
+	"""
+	from lang.versions import DRIFT_RT_ABI_VERSION
+	return f"libdrift_rt_abi{DRIFT_RT_ABI_VERSION}.a"
+
+
 def runtime_archive_path(root: Path, *, variant: str) -> Path:
 	if variant not in {"default", "debug", "asan", "alloc_track", "optimized"}:
 		raise ValueError(f"unknown runtime archive variant '{variant}'")
-	return runtime_archive_cache_root(root) / variant / "libdrift_rt.a"
+	return runtime_archive_cache_root(root) / variant / runtime_archive_name()
 
 
 def _runtime_deps(root: Path) -> List[Path]:
@@ -117,7 +128,7 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 	cache_root = runtime_archive_cache_root(root)
 	build_root = cache_root / variant
 	obj_dir = build_root / "objs"
-	archive_path = build_root / "libdrift_rt.a"
+	archive_path = build_root / runtime_archive_name()
 	lock_path = build_root / ".build.lock"
 	deps = _runtime_deps(root)
 	# ABI version constant also drives rebuild (change → force recompile).

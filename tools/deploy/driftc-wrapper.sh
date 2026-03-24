@@ -32,14 +32,17 @@ if [[ -z "${DRIFT_RUNTIME_LIB_CACHE_DIR:-}" ]]; then
 		for _vdir in "${_INSTALL_RT}"/*/; do
 			[[ -d "${_vdir}" ]] || continue
 			_vname="$(basename "${_vdir}")"
-			_archive="${_vdir}libdrift_rt.a"
-			[[ -f "${_archive}" ]] || continue
-			_cache_vdir="${_DRIFT_RT_CACHE}/${_vname}"
-			mkdir -p "${_cache_vdir}"
-			_cache_archive="${_cache_vdir}/libdrift_rt.a"
-			if [[ ! -f "${_cache_archive}" ]]; then
-				cp "${_archive}" "${_cache_archive}" 2>/dev/null || true
-			fi
+			# ABI-versioned archive name (libdrift_rt_abiN.a).
+			for _archive in "${_vdir}"libdrift_rt_abi*.a; do
+				[[ -f "${_archive}" ]] || continue
+				_ar_basename="$(basename "${_archive}")"
+				_cache_vdir="${_DRIFT_RT_CACHE}/${_vname}"
+				mkdir -p "${_cache_vdir}"
+				_cache_archive="${_cache_vdir}/${_ar_basename}"
+				if [[ ! -f "${_cache_archive}" ]]; then
+					cp "${_archive}" "${_cache_archive}" 2>/dev/null || true
+				fi
+			done
 		done
 	fi
 	export DRIFT_RUNTIME_LIB_CACHE_DIR="${_DRIFT_RT_CACHE}"
