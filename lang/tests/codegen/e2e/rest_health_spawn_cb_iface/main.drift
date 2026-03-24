@@ -1,0 +1,26 @@
+module m;
+
+import std.concurrent as conc;
+
+fn run_serve(name: String, port: Int) nothrow -> Int {
+	return port;
+}
+
+fn start_server() nothrow -> Int {
+	var name = "hello";
+	var port = 8080;
+	var vt = conc.spawn_cb(| | captures(move name, copy port) => {
+		return run_serve(move name, port);
+	});
+	match vt.join() {
+		Ok(v) => { return v; },
+		Err(_) => { return 1; },
+		default => { return 2; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val v = start_server();
+	if v == 8080 { return 0; }
+	return 1;
+}
