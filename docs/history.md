@@ -1,6 +1,34 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed callback interface construction for `spawn_cb`/`rest.start()` lambda paths (0.27.108, ABI 7)**:
+  Fixed a compiler/codegen bug where callback interface construction could
+  fail during LLVM lowering for `std.concurrent::spawn_cb`, which in turn
+  blocked basic `web.rest` startup through `rest.start()`.
+  - Problem:
+    - a minimal server using `rest.start()` crashed the compiler with:
+      - `internal: LLVM lowering contract failure`
+      - `unknown ConstructIface target ...`
+    - the failing path reduced to callback-interface construction for a lambda
+      passed through `std.concurrent::spawn_cb`
+  - Root cause:
+    - callback/interface lowering for this path was not resolving the lambda
+      callback target through the dedicated callback-vtable/thunk path
+      consistently enough for codegen to lower the constructed iface
+  - Fix:
+    - callback lambdas lowered through `ConstructIface` now use the callback
+      vtable + thunk path rooted at the callback `fn_ref`
+    - the `spawn_cb` callback construction path now lowers cleanly instead of
+      tripping an internal `ConstructIface` target-resolution failure
+  - Coverage:
+    - added a narrowed end-to-end regression reducing the `web.rest` failure to
+      a direct `std.concurrent::spawn_cb` callback-interface case
+    - this now pins the basic callback-iface startup path that `rest.start()`
+      depends on
+  - Versioning:
+    - compiler version is `0.27.108`
+    - ABI remains `7`
+
 - **Allowed borrowed field projection through indexed non-`Copy` array elements (0.27.107, ABI 7)**:
   Fixed the compiler so expressions like `entries[i].name` no longer require
   the whole array element type to be `Copy`.
