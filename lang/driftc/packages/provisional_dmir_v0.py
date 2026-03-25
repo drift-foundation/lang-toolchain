@@ -595,7 +595,8 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 	out: dict[str, Any] = {}
 	for name in sorted(signatures.keys()):
 		sig = signatures[name]
-		if getattr(sig, "module", None) not in (module_id, None) and not getattr(sig, "is_instantiation", False):
+		is_inst_lambda = ("__lambda_cb_" in name or "__lambda_" in name) and "__inst__" in name
+		if getattr(sig, "module", None) not in (module_id, None) and not getattr(sig, "is_instantiation", False) and not is_inst_lambda:
 			continue
 		fn_id = parse_function_symbol(name)
 		sig_module = getattr(sig, "module", None) or module_id

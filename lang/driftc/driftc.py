@@ -9452,17 +9452,33 @@ def main(argv: list[str] | None = None) -> int:
 			if getattr(sig, "is_instantiation", False):
 				inst_sigs[name] = sig
 				continue
+			# Hidden lambda callbacks from instantiations go into the
+			# instantiations section, even if their module is a source module.
+			if ("__lambda_cb_" in name or "__lambda_" in name) and "__inst__" in name:
+				inst_sigs[name] = sig
+				continue
 			mid = getattr(sig, "module", None) or "main"
 			if mid not in source_module_ids:
 				continue
 			per_module_sigs.setdefault(mid, {})[name] = sig
+		# Include signatures for hidden lambda callbacks from stdlib/dependency
+		# generic instantiations that are not in pkg_signatures_by_symbol.
+		for fn_id in mir_funcs:
+			sym = function_symbol(fn_id)
+			if sym in pkg_signatures_by_symbol or sym in inst_sigs:
+				continue
+			fn_name = getattr(fn_id, "name", "") or ""
+			if ("__lambda_cb_" in fn_name or "__lambda_" in fn_name) and "__inst__" in fn_name:
+				info = checked_pkg.fn_infos_by_id.get(fn_id)
+				if info is not None and info.signature is not None:
+					inst_sigs[sym] = info.signature
 	
 		per_module_mir: dict[str, dict[str, object]] = {}
 		inst_mir: dict[str, object] = {}
 		for fn_id, fn in mir_funcs.items():
 			name = function_symbol(fn_id)
 			sig = pkg_signatures_by_symbol.get(name)
-			mid = getattr(sig, "module", None) if sig is not None else None
+			mid = getattr(sig, "module", None) if sig is not None else getattr(fn_id, "module", None)
 			mid = mid or "main"
 			if sig is not None and getattr(sig, "is_instantiation", False):
 				inst_mir[name] = fn
@@ -9473,7 +9489,7 @@ def main(argv: list[str] | None = None) -> int:
 			# in the instantiations section so consumers can resolve
 			# ConstructIface targets.
 			fn_name = getattr(fn_id, "name", "") or ""
-			if ("__lambda_cb_" in fn_name or "__lambda_" in fn_name) and "__inst__" in fn_name and mid not in source_module_ids:
+			if ("__lambda_cb_" in fn_name or "__lambda_" in fn_name) and "__inst__" in fn_name:
 				inst_mir[name] = fn
 				continue
 			if mid in source_module_ids:
