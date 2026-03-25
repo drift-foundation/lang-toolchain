@@ -1,6 +1,89 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed the packaged consumer-path hidden-lambda / callback / capture-environment bug chain exposed by `spawn_cb` and `web.rest` startup (0.27.112, ABI 7)**:
+  This release documents and consolidates a long-running `LANGUAGE_BUG`
+  investigation in the package-consumer path. The externally visible symptom
+  was that programs consuming packaged libraries could fail or misbehave even
+  when the same code worked when built from source.
+  - User-visible failure shape:
+    - downstream consumers using packaged `web.rest` hit internal compiler
+      failures under `rest.start(...)`
+    - the initial hard failure was:
+      - `internal: LLVM lowering contract failure`
+      - `unknown ConstructIface target ...`
+    - after fixing that, the same package-consumer path advanced far enough to
+      expose a second defect:
+      - hidden-lambda capture-environment structs linked with empty or
+        placeholder field layouts on the consumer side
+    - after fixing that, the same path advanced again and exposed a third
+      consumer-only symptom:
+      - source-built path had `0` leaks
+      - consumer-built path leaked `16` bytes
+  - Nature of the bug:
+    - this was not one isolated defect, but a chain of package-consumer
+      boundary bugs around hidden lambda callbacks produced by generic
+      instantiations
+    - source-built paths had enough local compiler context to work
+    - packaged-consumer paths depended on package encoding, type-table linking,
+      and reachability/codegen reconstructing the same hidden-lambda callback
+      world from serialized artifacts
+    - that reconstruction was incomplete in several distinct ways
+  - Root causes that were fixed:
+    - hidden lambda instantiation signatures were filtered out of package
+      signature encoding because their module id did not match the payload
+      module
+    - hidden lambda MIR from generic instantiations was routed into ordinary
+      per-module MIR instead of the package instantiations payload
+    - consumer reachability did not always pull source-compiled hidden lambda
+      callbacks referenced by package MIR into the final codegen-visible set,
+      nor expand those recovered source functions transitively
+    - synthetic hidden-lambda capture-environment structs were present as
+      nominals but could reach the consumer with placeholder/empty field
+      layouts because package type-table linking did not patch real field
+      names/types back into those synthetic structs and instances
+  - Solution:
+    - package signature encoding now preserves hidden lambda instantiation
+      signatures needed by consumer codegen
+    - package emission now routes hidden lambda instantiation MIR into the
+      instantiations section so consumers can load the actual hidden-lambda
+      bodies
+    - consumer reachability now pulls hidden lambda callbacks from source MIR
+      when package MIR references them, and expands those recovered source
+      functions transitively in both the main and post-seed BFS passes
+    - package type-table linking now patches synthetic hidden-lambda
+      capture-environment structs with their real field names/types when the
+      consumer-side host side still holds placeholder fields, and empty struct
+      instances can be updated with the real field layout
+  - Why this mattered:
+    - this bug class only appears when consuming packaged artifacts
+    - it can survive source-built testing completely
+    - it breaks trust in the “published package behaves like source build”
+      contract, especially for generic code that internally synthesizes hidden
+      callbacks and capture environments
+  - Proof/discriminators used during the investigation:
+    - source-built vs consumer-built comparisons on the same logic were used as
+      the hard discriminator throughout
+    - the package-consumer callback target resolution failure is pinned by:
+      - [`pkg_spawn_cb_hidden_lambda`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/pkg_spawn_cb_hidden_lambda/main.drift)
+    - the consumer-only ownership/drop divergence is pinned by a driver test
+      that:
+      - builds a signed package
+      - consumes it from a separate consumer
+      - links a real binary
+      - runs it under Valgrind
+      - asserts `0` definitely-lost bytes on the consumer path
+      - [`test_pkg_cross_package_scope_drop.py`](/home/sl/src/drift-lang/lang/tests/driver/test_pkg_cross_package_scope_drop.py)
+  - Practical result:
+    - packaged generic call paths involving hidden callback lambdas and their
+      synthetic capture environments now have the callback target, MIR body,
+      and capture-env type layout information they need on the consumer side
+    - the remaining consumer-only ownership path is now pinned with a real
+      leak-sensitive regression instead of indirect IR-shape checks
+  - Versioning:
+    - compiler version is `0.27.112`
+    - ABI remains `7`
+
 - **Fixed packaged hidden-lambda capture-environment struct linking on the consumer path (0.27.111, ABI 7)**:
   Fixed the next package-consumer bug exposed after hidden callback targets
   were made available: synthetic hidden-lambda capture-environment structs
