@@ -40,20 +40,34 @@ import std.core as core;
 import std.concurrent as conc;
 import std.sync as sync;
 
-export { create, use_handle, Handle };
+export { start, use_running, Running, Handle };
 
 pub struct Handle {
 \tpub flag: conc.Arc<sync.AtomicBool>,
 \tpub value: Int
 }
 
-pub fn create() -> core.Result<Handle, String> {
-\tval a = conc.arc(sync.atomic_bool(false));
-\treturn core.Result::Ok(Handle(flag = move a, value = 42));
+pub struct Running {
+\tpub handle: Handle,
+\tpub worker: conc.VirtualThread<Int>
 }
 
-pub fn use_handle(h: &mut Handle) -> core.Result<Int, String> {
-\treturn core.Result::Ok(h.value);
+fn clone_handle(h: &Handle) nothrow -> Handle {
+\treturn Handle(flag = h.flag.clone(), value = h.value);
+}
+
+pub fn start() -> core.Result<Running, String> {
+\tval a = conc.arc(sync.atomic_bool(false));
+\tvar handle = Handle(flag = move a, value = 42);
+\tvar caller_handle = clone_handle(&handle);
+\tvar vt = conc.spawn_cb(core.callback0(|| captures(move handle) nothrow => {
+\t\treturn handle.value;
+\t}));
+\treturn core.Result::Ok(Running(handle = move caller_handle, worker = move vt));
+}
+
+pub fn use_running(r: &mut Running) -> core.Result<Int, String> {
+\treturn core.Result::Ok(r.handle.value);
 }
 """
 
@@ -64,11 +78,11 @@ import std.core as core;
 import mylib;
 
 fn run() -> Int {
-\tmatch mylib.create() {
+\tmatch mylib.start() {
 \t\tcore.Result::Err(_) => { return 1; },
-\t\tcore.Result::Ok(h) => {
-\t\t\tvar handle = move h;
-\t\t\tmatch mylib.use_handle(&mut handle) {
+\t\tcore.Result::Ok(r) => {
+\t\t\tvar running = move r;
+\t\t\tmatch mylib.use_running(&mut running) {
 \t\t\t\tcore.Result::Err(_) => {
 \t\t\t\t\treturn 2;
 \t\t\t\t},
