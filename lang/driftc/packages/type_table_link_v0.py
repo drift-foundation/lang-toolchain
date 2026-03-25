@@ -1350,6 +1350,67 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			else:
 				host.define_struct_fields(host_tid, field_types)
 
+	# Fill in field types for synthetic struct types (e.g. hidden lambda capture
+	# env structs) that have param_types in the package TypeDef but were not
+	# handled by the struct_schemas path above.  These structs are created
+	# dynamically during MIR lowering and don't have schema entries.
+	for pkg in pkgs:
+		for tid, td in pkg.defs.items():
+			if td.kind is not TypeKind.STRUCT or not td.param_types:
+				continue
+			if td.field_names is None:
+				continue
+			mid = td.module_id or ""
+			host_tid = host.get_nominal(kind=TypeKind.STRUCT, module_id=mid, name=td.name)
+			if host_tid is None:
+				_ts.stderr.write(f"[LINK-FIX] creating nominal for {mid}::{td.name}\n")
+				host_tid = host.declare_struct(mid, td.name, list(td.field_names))
+				# Register the key so Phase C TypeId mapping can find this struct.
+				pkg_idx = pkgs.index(pkg)
+				if pkg_idx < len(pkg_tid_to_key):
+					pk = pkg_tid_to_key[pkg_idx].get(tid)
+					if pk is not None:
+						key_to_host[pk] = host_tid
+			if host_tid is None:
+				continue
+			h_td = host.get(host_tid)
+			if h_td.kind is not TypeKind.STRUCT:
+				continue
+			# Skip if host already has fields populated.
+			if h_td.param_types and any(t != host.ensure_unknown() for t in h_td.param_types):
+				continue
+			# If the host struct was created without field names (from nominal
+			# seeding), patch them from the package before defining fields.
+			if not h_td.field_names and td.field_names:
+				from dataclasses import replace as _replace
+				new_td = _replace(h_td, field_names=list(td.field_names), param_types=[host.ensure_unknown() for _ in td.field_names])
+				host._defs[host_tid] = new_td
+				h_td = new_td
+			# Map package field TypeIds to host TypeIds.
+			pkg_idx = pkgs.index(pkg)
+			pkg_key_map = pkg_tid_to_key[pkg_idx] if pkg_idx < len(pkg_tid_to_key) else {}
+			mapped_fields: list[TypeId] = []
+			all_mapped = True
+			for ft in td.param_types:
+				fk = pkg_key_map.get(ft)
+				if fk is not None:
+					host_ft = key_to_host.get(fk)
+					if host_ft is not None:
+						mapped_fields.append(host_ft)
+						continue
+				all_mapped = False
+				break
+			if all_mapped and len(mapped_fields) == len(td.field_names):
+				h_td_check = host.get(host_tid)
+				# Only patch if the host struct has placeholder (unknown) or
+				# empty fields.  If it already has real fields that differ,
+				# this is a genuine shape conflict that should not be silenced.
+				has_real_fields = h_td_check.param_types and any(
+					host.get(t).kind is not TypeKind.UNKNOWN for t in h_td_check.param_types
+				)
+				if not has_real_fields:
+					host.define_struct_fields(host_tid, mapped_fields)
+
 	# Ensure non-generic variants have concrete instances available.
 	host.finalize_variants()
 

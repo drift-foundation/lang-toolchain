@@ -1623,6 +1623,12 @@ class TypeTable:
 			if inst is not None:
 				if list(inst.field_types) == list(field_types):
 					return
+				# Allow updating empty instance fields with real ones
+				# (from package-consumer type table linking).
+				if not inst.field_types:
+					from dataclasses import replace as _dc_replace
+					self.struct_instances[struct_id] = _dc_replace(inst, field_types=list(field_types))
+					return
 				raise ValueError(
 					f"struct '{td.module_id}::{td.name}' instance fields mismatch: "
 					f"{inst.field_types} vs {field_types}"

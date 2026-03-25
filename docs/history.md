@@ -1,6 +1,36 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed packaged hidden-lambda capture-environment struct linking on the consumer path (0.27.111, ABI 7)**:
+  Fixed the next package-consumer bug exposed after hidden callback targets
+  were made available: synthetic hidden-lambda capture-environment structs
+  could arrive on the consumer side with empty field layouts even though MIR
+  constructed them with real captured fields.
+  - Problem:
+    - packaged hidden lambda callbacks now reached consumer-side codegen, but
+      their synthetic capture-environment struct types could still be linked
+      with zero/placeholder fields
+    - consumer MIR/codegen would then fail later on `ConstructStruct` because
+      the type table thought the env struct had no real fields
+  - Root cause:
+    - hidden lambda capture-env structs are synthesized during MIR lowering
+      and get their field layout via `define_struct_fields(...)`
+    - package linking seeded the nominal type but did not reliably patch the
+      real field schema back into placeholder/empty consumer-side structs and
+      instances
+  - Fix:
+    - hidden lambda instantiation signatures remain routed through the
+      instantiations section
+    - hidden lambda MIR remains routed through `inst_mir`
+    - package type-table linking now patches synthetic struct types with the
+      package's field names/types when the host side still has placeholder
+      fields
+    - empty host struct instances can now be updated with the real field types
+      during linking, while genuine shape conflicts still raise
+  - Versioning:
+    - compiler version is `0.27.111`
+    - ABI remains `7`
+
 - **Fixed packaged `spawn_cb` hidden-lambda callback reachability on the consumer path (0.27.110, ABI 7)**:
   Fixed the remaining consumer/package-path callback codegen bug where
   packaged generic MIR could reference hidden lambda callbacks that were not
