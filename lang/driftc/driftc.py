@@ -1619,9 +1619,6 @@ def _build_package_consumer_unit(
 						if tid_map:
 							_validate_remap_completeness(fn, tid_map, type_table, pkg_tid_universe=pkg_tid_universes.get(pkg.path))
 						pkg_mir_all[fn_id] = fn
-					_dvs = [(bn, i.ty) for bn, b in fn.blocks.items() for i in b.instructions if type(i).__name__ == 'DropValue']
-					if _dvs:
-						print(f"[TRACE-PKG-LOAD] {function_symbol(fn_id)}: DropValues={_dvs}", file=__import__('sys').stderr)
 			if isinstance(sigs_obj, dict):
 				for name, sd in sigs_obj.items():
 					if not isinstance(sd, dict):
@@ -2052,44 +2049,8 @@ def _build_package_consumer_unit(
 		pkg_ssa[fn_id] = MirToSSA().run(fn)
 
 	# Merge (source wins on symbol conflicts).
-	import sys as _ov_sys
-	for _ov_fn_id in src_mir:
-		_ov_sym = function_symbol(_ov_fn_id)
-		if _ov_fn_id in pkg_mir:
-			_pkg_dvs = sum(1 for b in pkg_mir[_ov_fn_id].blocks.values() for i in b.instructions if type(i).__name__ == 'DropValue')
-			_src_dvs = sum(1 for b in src_mir[_ov_fn_id].blocks.values() for i in b.instructions if type(i).__name__ == 'DropValue')
-			if _pkg_dvs != _src_dvs:
-				print(f"[TRACE-OVERWRITE] {_ov_sym}: pkg_mir has {_pkg_dvs} DVs, src_mir has {_src_dvs} DVs — SOURCE WINS", file=_ov_sys.stderr)
-	del _ov_sys
 	mir_all = dict(pkg_mir)
 	mir_all.update(src_mir)
-	import sys as _ai_sys
-	for _ai_fn_id, _ai_fn in mir_all.items():
-		_ai_sym = function_symbol(_ai_fn_id)
-		if 'destroy__inst__' in _ai_sym and ('Arc' in _ai_sym or 'VirtualThread' in _ai_sym):
-			_ai_from = "src" if _ai_fn_id in src_mir else "pkg"
-			_ai_dvs = []
-			for _ai_bn, _ai_b in _ai_fn.blocks.items():
-				for _ai_i in _ai_b.instructions:
-					if type(_ai_i).__name__ == 'DropValue':
-						_ai_td = type_table.get(_ai_i.ty)
-						_ai_dvs.append((_ai_bn, _ai_i.ty, _ai_td.kind.name, _ai_td.name, _ai_td.module_id))
-			print(f"[TRACE-DESTROY-DETAIL] {_ai_sym} (from {_ai_from}): {len(_ai_dvs)} DVs", file=_ai_sys.stderr)
-			for _ai_d in _ai_dvs:
-				print(f"  block={_ai_d[0]} ty={_ai_d[1]} kind={_ai_d[2]} name={_ai_d[3]} module={_ai_d[4]}", file=_ai_sys.stderr)
-	for _ai_fn_id, _ai_fn in pkg_mir.items():
-		_ai_sym = function_symbol(_ai_fn_id)
-		if 'Arc' in _ai_sym and 'destroy__inst__' in _ai_sym:
-			_ai_dvs = []
-			for _ai_bn, _ai_b in _ai_fn.blocks.items():
-				for _ai_i in _ai_b.instructions:
-					if type(_ai_i).__name__ == 'DropValue':
-						_ai_td = type_table.get(_ai_i.ty)
-						_ai_dvs.append((_ai_bn, _ai_i.ty, _ai_td.kind.name, _ai_td.name, _ai_td.module_id))
-			print(f"[TRACE-DESTROY-PKG] {_ai_sym}: {len(_ai_dvs)} DVs", file=_ai_sys.stderr)
-			for _ai_d in _ai_dvs:
-				print(f"  block={_ai_d[0]} ty={_ai_d[1]} kind={_ai_d[2]} name={_ai_d[3]} module={_ai_d[4]}", file=_ai_sys.stderr)
-	del _ai_sys
 	ssa_all = dict(pkg_ssa)
 	ssa_all.update(ssa_src)
 
@@ -9533,25 +9494,6 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			if mid in source_module_ids:
 				per_module_mir.setdefault(mid, {})[name] = fn
-		# --- TRACE-ROUTE: verify DropValues survived routing ---
-		import sys as _rt_sys
-		for _rt_mid, _rt_fns in per_module_mir.items():
-			for _rt_name, _rt_fn in _rt_fns.items():
-				if any(k in _rt_name for k in ['serve', 'start', 'shutdown', 'listen_app', '_dispatch']):
-					if hasattr(_rt_fn, 'blocks'):
-						_rt_dvs = [(bn, i.ty) for bn, b in _rt_fn.blocks.items() for i in b.instructions if type(i).__name__ == 'DropValue']
-						print(f"[TRACE-ROUTE] mid={_rt_mid} fn={_rt_name}: {len(_rt_dvs)} DropValues: {_rt_dvs}", file=_rt_sys.stderr)
-		for _rt_fn_id, _rt_fn in mir_funcs.items():
-			_rt_sym = function_symbol(_rt_fn_id)
-			if any(k in _rt_sym for k in ['serve', 'start', 'shutdown', 'listen_app']):
-				_rt_in = any(_rt_sym in fns for fns in per_module_mir.values()) or _rt_sym in inst_mir
-				if not _rt_in:
-					_rt_sig = pkg_signatures_by_symbol.get(_rt_sym)
-					_rt_mid2 = getattr(_rt_sig, "module", None) if _rt_sig else getattr(_rt_fn_id, "module", None)
-					_rt_is_inst = getattr(_rt_sig, "is_instantiation", False) if _rt_sig else False
-					print(f"[TRACE-ROUTE-DROPPED] {_rt_sym} mid={_rt_mid2} is_inst={_rt_is_inst} in_source_mids={_rt_mid2 in source_module_ids} sig_found={_rt_sig is not None}", file=_rt_sys.stderr)
-		del _rt_sys
-		# --- end TRACE-ROUTE ---
 		per_module_hir: dict[str, dict[str, H.HBlock]] = {}
 		for fn_id, block in normalized_hirs_by_id.items():
 			mid = getattr(fn_id, "module", None) or "main"
@@ -9736,16 +9678,6 @@ def main(argv: list[str] | None = None) -> int:
 			if isinstance(_raw_trait_scope, list):
 				for _tk in _raw_trait_scope:
 					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
-			_emit_mir = per_module_mir.get(mid, {})
-			if any(k in mid for k in ['server', 'rest']):
-				import sys as _pe_sys
-				print(f"[TRACE-PKG-EMIT2] mid={mid} mir_fn_count={len(_emit_mir)} fns={list(_emit_mir.keys())[:5]}", file=_pe_sys.stderr)
-				for _pe_name, _pe_fn in _emit_mir.items():
-					if hasattr(_pe_fn, 'blocks'):
-						_pe_dvs = [(bn, i.ty) for bn, b in _pe_fn.blocks.items() for i in b.instructions if type(i).__name__ == 'DropValue']
-						if _pe_dvs or any(k in _pe_name for k in ['serve', 'start', 'shutdown']):
-							print(f"[TRACE-PKG-EMIT2]   {_pe_name}: {len(_pe_dvs)} DropValues", file=_pe_sys.stderr)
-				del _pe_sys
 			payload_obj = encode_module_payload_v0(
 				package_id=package_id,
 				module_id=mid,
@@ -9769,30 +9701,6 @@ def main(argv: list[str] | None = None) -> int:
 				impl_headers=impl_headers,
 				trait_scope=_trait_scope_dicts,
 			)
-	
-			# --- TRACE-PAYLOAD: check DropValues in serialized payload ---
-			import sys as _pp_sys
-			if isinstance(payload_obj, dict) and any(k in mid for k in ['server', 'rest']):
-				_pp_mir = payload_obj.get("mir_funcs", {})
-				for _pp_name, _pp_raw in _pp_mir.items():
-					if any(k in _pp_name for k in ['serve', 'start', 'shutdown']):
-						import json as _pp_json
-						_pp_text = _pp_json.dumps(_pp_raw)
-						_pp_dv_count = _pp_text.count('"DropValue"')
-						print(f"[TRACE-PAYLOAD] {_pp_name}: {_pp_dv_count} DropValue occurrences in serialized payload", file=_pp_sys.stderr)
-						if _pp_dv_count == 0:
-							if isinstance(_pp_raw, dict):
-								_pp_blocks = _pp_raw.get("blocks", {})
-								if isinstance(_pp_blocks, dict):
-									for _pp_bn, _pp_bv in _pp_blocks.items():
-										if isinstance(_pp_bv, dict):
-											_pp_instrs = _pp_bv.get("instructions", [])
-											_pp_types = [i.get("_type") for i in _pp_instrs if isinstance(i, dict)] if isinstance(_pp_instrs, list) else []
-											if any(k in _pp_bn for k in ['loop_exit', 'call_join', 'if_then', 'entry']):
-												print(f"[TRACE-PAYLOAD]   block={_pp_bn} instr_count={len(_pp_types)} types={_pp_types[:10]}", file=_pp_sys.stderr)
-						del _pp_json
-			del _pp_sys
-			# --- end TRACE-PAYLOAD ---
 
 			# Module interface (package interface table v0).
 			#
