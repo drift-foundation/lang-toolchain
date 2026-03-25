@@ -452,6 +452,15 @@ def lower_module_to_llvm(
 		export_impl_map[fn_id] = impl
 		exported_fns.append(fn_id)
 
+	import sys as _cg_sys
+	for _cg_fn_id in funcs:
+		_cg_sym = function_symbol(_cg_fn_id)
+		if any(k in _cg_sym for k in ['start', 'serve', 'shutdown', 'listen_app', '_run_serve']):
+			_cg_fn = funcs[_cg_fn_id]
+			_cg_dvs = [(bn, i.ty) for bn, b in _cg_fn.blocks.items() for i in b.instructions if type(i).__name__ == 'DropValue']
+			print(f"[TRACE-CODEGEN-IN] {_cg_sym}: {len(_cg_dvs)} DropValues: {_cg_dvs}", file=_cg_sys.stderr)
+	del _cg_sys
+
 	for fn_id, mir_func in funcs.items():
 		ssa = ssa_funcs[fn_id]
 		fn_info = fn_infos[fn_id]
@@ -2466,6 +2475,9 @@ class _FuncBuilder:
 				self.value_types[dest] = self.value_types[copied]
 		elif isinstance(instr, DropValue):
 			val = self._map_value(instr.value)
+			if self.sym_name and any(k in (self.sym_name or '') for k in ['serve', 'start', 'shutdown', 'drift_main']):
+				_dv_td = self.type_table.get(instr.ty) if self.type_table else None
+				print(f"[TRACE-DV-EMIT] fn={self.sym_name} ty={instr.ty} name={getattr(_dv_td, 'name', '?')} kind={getattr(_dv_td, 'kind', '?')}", file=__import__('sys').stderr)
 			self._emit_drop_value(instr.ty, val)
 		elif isinstance(instr, MoveOut):
 			raise AssertionError("MoveOut should be lowered before LLVM codegen")
@@ -8744,6 +8756,10 @@ class _FuncBuilder:
 			raise AssertionError("drop requires a TypeTable")
 		ty_id = self._resolve_forward_nominal_typeid(ty_id)
 		if not self._type_needs_drop(ty_id):
+			td = self.type_table.get(ty_id)
+			if td.kind is TypeKind.STRUCT:
+				inst = self.type_table.get_struct_instance(ty_id)
+				print(f"[TRACE-DROP-SKIP] ty={ty_id} name={td.name} module={td.module_id} inst={'NONE' if inst is None else f'fields={len(inst.field_types)}'}", file=__import__('sys').stderr)
 			return
 		call_dbg_suffix = ""
 		if self.module.debug_enabled and self._dbg_subprogram_id is not None:

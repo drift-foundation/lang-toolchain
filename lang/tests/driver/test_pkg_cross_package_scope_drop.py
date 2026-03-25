@@ -40,7 +40,7 @@ import std.core as core;
 import std.concurrent as conc;
 import std.sync as sync;
 
-export { start, use_running, Running, Handle };
+export { start, use_running, serve, make_handle, Running, Handle };
 
 pub struct Handle {
 \tpub flag: conc.Arc<sync.AtomicBool>,
@@ -69,6 +69,35 @@ pub fn start() -> core.Result<Running, String> {
 pub fn use_running(r: &mut Running) -> core.Result<Int, String> {
 \treturn core.Result::Ok(r.handle.value);
 }
+
+pub fn make_handle(value: Int) nothrow -> Handle {
+\treturn Handle(flag = conc.arc(sync.atomic_bool(false)), value = value);
+}
+
+// Mirrors web.rest.server::serve — takes multiple owned params including
+// Handle (with Arc).  The while loop + inner match exercises the
+// scope-drop-at-return path that the certification caught leaking.
+pub fn serve(handle: Handle, running: Running, max_iters: Int) nothrow -> core.Result<Int, String> {
+\tvar i = 0;
+\twhile i < max_iters {
+\t\tval flag = handle.flag.get();
+\t\tif flag.load(sync.MemoryOrder::Acquire()) {
+\t\t\treturn core.Result::Ok(i);
+\t\t}
+\t\tmatch use_running_nothrow(&running) {
+\t\t\tcore.Result::Err(_) => {
+\t\t\t\treturn core.Result::Err("serve failed");
+\t\t\t},
+\t\t\tcore.Result::Ok(_) => {}
+\t\t}
+\t\ti = i + 1;
+\t}
+\treturn core.Result::Ok(i);
+}
+
+fn use_running_nothrow(r: &Running) nothrow -> core.Result<Int, String> {
+\treturn core.Result::Ok(r.handle.value);
+}
 """
 
 CONSUMER_SOURCE = """\
@@ -88,7 +117,17 @@ fn run() -> Int {
 \t\t\t\t},
 \t\t\t\tcore.Result::Ok(v) => {
 \t\t\t\t\tif v != 42 { return 3; }
-\t\t\t\t\treturn 0;
+\t\t\t\t}
+\t\t\t}
+\t\t\t// Exercise the serve() path: owned Handle + Running params must be dropped.
+\t\t\tvar h2 = mylib.make_handle(7);
+\t\t\tmatch mylib.start() {
+\t\t\t\tcore.Result::Err(_) => { return 4; },
+\t\t\t\tcore.Result::Ok(r2) => {
+\t\t\t\t\tmatch mylib.serve(move h2, move r2, 1) {
+\t\t\t\t\t\tcore.Result::Err(_) => { return 5; },
+\t\t\t\t\t\tcore.Result::Ok(_) => { return 0; }
+\t\t\t\t\t}
 \t\t\t\t}
 \t\t\t}
 \t\t}

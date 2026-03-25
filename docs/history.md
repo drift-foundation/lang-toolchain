@@ -1,6 +1,55 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed package-produced MIR omitting `DropValue` for types with registered destroy functions when trait proving failed (0.27.113, ABI 7)**:
+  Fixed the producer-side package MIR bug behind the remaining consumer-only
+  leak divergence after the earlier hidden-lambda/package fixes.
+  - User-visible symptom:
+    - source-built and consumer-built versions of the same logic diverged
+    - source-built path freed all allocations cleanly
+    - consumer-built path leaked a 16-byte `Arc` backing allocation
+    - the leak only appeared when consuming packaged artifacts, not when
+      building the same code from source
+  - Root cause:
+    - `TypeTable.has_drop()` in [`lang/driftc/core/types_core.py`](/home/sl/src/drift-lang/lang/driftc/core/types_core.py)
+      checked:
+      - `is_destructible()` via the trait prover
+      - and recursive struct-field drop discovery
+    - but it did **not** check `destructor_fns`, which is the authoritative
+      registry of concrete `Destructible` implementations populated from the
+      impl index
+    - during package builds, the trait prover could fail to resolve
+      `Destructible` for cross-package generic instantiations such as
+      `Arc<AtomicBool>`
+    - the struct-field fallback could also fail for the same instantiation
+      when no resolved struct instance was available in the producer context
+    - result:
+      - `has_drop()` incorrectly returned `False`
+      - MIR lowering skipped `DropValue`
+      - packaged artifacts were emitted with missing drops even though the
+        matching destroy function was registered and codegen would have been
+        able to call it
+  - Fix:
+    - `has_drop()` now checks `destructor_fns` before calling
+      `is_destructible()`, matching the codegen-side drop contract
+    - this makes package-produced MIR include `DropValue` for any type with a
+      registered destroy function, even when trait proving is incomplete in the
+      producer context
+  - Why this mattered:
+    - source-built code had enough context to emit correct drops
+    - package-produced MIR could silently omit them
+    - consumers then observed leaks and ownership divergence even though
+      runtime ABI had not changed
+  - Coverage:
+    - the package-consumer leak-sensitive regression remains pinned by:
+      - [`test_pkg_cross_package_scope_drop.py`](/home/sl/src/drift-lang/lang/tests/driver/test_pkg_cross_package_scope_drop.py)
+  - Operational note:
+    - existing packages built with older compilers remain stale/defective for
+      this bug class and must be rebuilt to pick up the corrected MIR
+  - Versioning:
+    - compiler version is `0.27.113`
+    - ABI remains `7`
+
 - **Fixed the packaged consumer-path hidden-lambda / callback / capture-environment bug chain exposed by `spawn_cb` and `web.rest` startup (0.27.112, ABI 7)**:
   This release documents and consolidates a long-running `LANGUAGE_BUG`
   investigation in the package-consumer path. The externally visible symptom

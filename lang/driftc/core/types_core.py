@@ -1394,6 +1394,18 @@ class TypeTable:
 		if td.kind in {TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION}:
 			self._needs_drop_cache[tid] = False
 			return False
+		# Check destructor_fns first — authoritative for Destructible impls
+		# registered via module exports.  The trait prover (is_destructible)
+		# can fail to resolve cross-package generic instantiations during
+		# package builds, but destructor_fns is populated directly from the
+		# impl index and is always complete.  Without this check, package
+		# MIR for generic destroy instantiations (e.g. Arc<T>::destroy)
+		# would silently omit DropValues for types whose Destructible impl
+		# is registered but not trait-provable in the producer's context.
+		destructor_fns = getattr(self, "destructor_fns", None)
+		if isinstance(destructor_fns, dict) and destructor_fns.get(tid) is not None:
+			self._needs_drop_cache[tid] = True
+			return True
 		if self.is_destructible(tid):
 			self._needs_drop_cache[tid] = True
 			return True
