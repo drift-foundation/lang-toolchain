@@ -1,6 +1,35 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed packaged `spawn_cb` hidden-lambda callback reachability on the consumer path (0.27.110, ABI 7)**:
+  Fixed the remaining consumer/package-path callback codegen bug where
+  packaged generic MIR could reference hidden lambda callbacks that were not
+  available to final consumer-side codegen.
+  - Problem:
+    - the real failing shape was not source-built `spawn_cb`, but the package
+      consumer path
+    - packaged MIR could reference a hidden lambda callback from a generic
+      instantiation, and consumer codegen would fail with:
+      - `unknown ConstructIface target ...`
+    - this was exposed by `web.rest` startup through the packaged
+      `std.concurrent::spawn_cb` path
+  - Fix:
+    - package reachability now pulls source-compiled hidden lambda callbacks
+      referenced by package MIR into the source-needed set
+    - newly added source functions are expanded transitively both:
+      - after the main package BFS
+      - and after post-seed package BFS growth
+    - this ensures final codegen sees the full hidden-lambda callback closure
+      required by packaged generic call paths
+  - Coverage:
+    - added a package-consumer-only regression for the real compiler mechanism:
+      packaged `spawn_cb` hidden-lambda callback resolution
+    - the regression pins the consumer-path callback target-resolution class
+      that source-built tests do not cover
+  - Versioning:
+    - compiler version is `0.27.110`
+    - ABI remains `7`
+
 - **Pulled source-compiled hidden lambda callbacks into codegen reachability for packaged generic calls (0.27.109, ABI 7)**:
   Fixed a compiler/codegen reachability gap where packaged generic functions
   could reference hidden lambda callbacks compiled from source, but those
