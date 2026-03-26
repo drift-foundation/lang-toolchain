@@ -6696,6 +6696,58 @@ def compile_stubbed_funcs(
 		derived_signatures_by_id=derived_signatures_by_id,
 		context="compile_stubbed_funcs post-synthesis",
 	)
+	# Post-pass: inject missing DropValues for owned parameters whose
+	# has_drop status changed after destructor_fns was fully installed.
+	#
+	# During initial MIR lowering, _emit_scope_drops may have missed some
+	# parameters because has_drop returned False (destructor_fns wasn't
+	# installed yet, or the cache was poisoned).  Now that destructor_fns
+	# is final, re-check each parameter and inject MoveOut + DropValue
+	# into Return-terminating blocks that lack them.
+	if shared_type_table is not None:
+		shared_type_table._needs_drop_cache.clear()
+		for func in mir_funcs_by_id.values():
+			for param_name in func.params:
+				param_ty = func.local_types.get(param_name)
+				if param_ty is None:
+					continue
+				if not shared_type_table.has_drop(param_ty):
+					continue
+				# Check if any block already has a DropValue for this param
+				# (via MoveOut/LoadLocal producing a value that feeds DropValue).
+				_has_existing_drop = False
+				for block in func.blocks.values():
+					for instr in block.instructions:
+						if isinstance(instr, M.LoadLocal) and instr.local == param_name:
+							# Check if a subsequent DropValue uses this loaded value
+							_loaded_dest = instr.dest
+							for instr2 in block.instructions:
+								if isinstance(instr2, M.DropValue) and instr2.value == _loaded_dest:
+									_has_existing_drop = True
+									break
+						if _has_existing_drop:
+							break
+					if _has_existing_drop:
+						break
+				if _has_existing_drop:
+					continue
+				# Inject MoveOut + DropValue before Return in each return block.
+				_temp_counter = max((int(t[1:]) for t in func.local_types if t.startswith("t") and t[1:].isdigit()), default=0)
+				for block in func.blocks.values():
+					if not isinstance(block.terminator, M.Return):
+						continue
+					_temp_counter += 1
+					tmp = f"t{_temp_counter}"
+					func.local_types[tmp] = param_ty
+					# Insert before the last instruction group (scope drops
+					# are typically the last instructions before Return).
+					block.instructions.append(M.LoadLocal(dest=tmp, local=param_name))
+					_temp_counter += 1
+					zero_tmp = f"t{_temp_counter}"
+					func.local_types[zero_tmp] = param_ty
+					block.instructions.append(M.ZeroValue(dest=zero_tmp, ty=param_ty))
+					block.instructions.append(M.StoreLocal(local=param_name, value=zero_tmp))
+					block.instructions.append(M.DropValue(value=tmp, ty=param_ty))
 	# Stage3: summaries
 	code_to_exc = {code: name for name, code in (exc_env or {}).items()}
 	summaries = ThrowSummaryBuilder().build(mir_funcs_by_id, code_to_exc=code_to_exc)
