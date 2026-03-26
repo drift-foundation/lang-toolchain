@@ -1,6 +1,31 @@
 # Drift development history
 
 ## 2026-03-23
+- **Deduplicated identical package artifacts discovered from multiple package roots before duplicate-module checks (0.27.115, ABI 7)**:
+  Fixed a package-consumer false-positive collision case where the same package
+  artifact could be discovered from more than one `--package-root` and then
+  fail duplicate-module validation even though the copies were identical.
+  - Problem:
+    - consumer builds could fail with errors like:
+      - `module 'web-jwt.__instantiations' provided by multiple packages`
+      - `module 'web-client.__instantiations' provided by multiple packages`
+    - in the failing case, the same `package_id@version` artifact existed in
+      more than one package root and both copies were allowed through to
+      duplicate-module checking
+  - Fix:
+    - when the same `package_id@version` with identical SHA/content is
+      discovered from multiple package roots, the consumer now keeps the first
+      copy and skips the duplicates
+    - only genuinely distinct providers continue to trigger duplicate-module
+      rejection
+  - Practical result:
+    - users and certification flows can point at multiple package roots without
+      getting false duplicate-module failures from identical replicated package
+      artifacts
+  - Versioning:
+    - compiler version is `0.27.115`
+    - ABI remains `7`
+
 - **Fixed transitive dependency version selection on package consumption in shared multi-version roots (0.27.114, ABI 7)**:
   Fixed a package-consumer resolution bug where exact top-level `--dep`
   selection worked, but transitive dependency versions declared in package

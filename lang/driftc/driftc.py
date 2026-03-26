@@ -7667,8 +7667,10 @@ def main(argv: list[str] | None = None) -> int:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 
-		# Enforce "single version per package id per build".
+		# Enforce "single version per package id per build" and deduplicate
+		# same-content packages discovered from multiple --package-root dirs.
 		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)
+		_deduped_pkgs: list = []
 		for pkg in loaded_pkgs:
 			man = pkg.manifest
 			pkg_id = man.get("package_id")
@@ -7685,6 +7687,7 @@ def main(argv: list[str] | None = None) -> int:
 			prev = pkg_id_map.get(pkg_id)
 			if prev is None:
 				pkg_id_map[pkg_id] = (pkg_ver, pkg_target, pkg_sha, pkg.path)
+				_deduped_pkgs.append(pkg)
 				continue
 			prev_ver, prev_target, prev_sha, prev_path = prev
 			if pkg_ver != prev_ver or pkg_target != prev_target:
@@ -7704,6 +7707,10 @@ def main(argv: list[str] | None = None) -> int:
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
+			# Same package_id, version, and content from a different path
+			# (e.g. multiple --package-root dirs containing the same artifact).
+			# Keep the first copy, skip the duplicate.
+		loaded_pkgs = _deduped_pkgs
 
 		abi_expected: dict[str, object] | None = None
 		for pkg in loaded_pkgs:
