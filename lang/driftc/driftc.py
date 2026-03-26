@@ -4181,7 +4181,9 @@ def compile_stubbed_funcs(
 		inst_queue.append(handle)
 		return handle
 
-	destructor_fns: dict[TypeId, FunctionId] = {}
+	# Seed from pre-installed destructor_fns so we don't lose entries
+	# registered during the early pre-install phase (before _build_linked_world).
+	destructor_fns: dict[TypeId, FunctionId] = dict(getattr(shared_type_table, "destructor_fns", None) or {}) if shared_type_table is not None else {}
 	# K39: Track generic Destructible impls for post-instantiation rescan.
 	# At this point struct_instances may not yet contain all concrete types
 	# (e.g. ScopeGuard<Int>) — those are created during _drain_instantiations.
