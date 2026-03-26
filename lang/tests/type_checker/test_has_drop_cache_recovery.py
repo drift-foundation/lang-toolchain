@@ -100,6 +100,49 @@ def test_has_drop_caches_false_when_instance_confirms_no_drop() -> None:
 	assert table.has_drop(simple_tid) is False
 
 
+def test_has_drop_pre_destructor_fns_cache_invalidation() -> None:
+	"""has_drop must not return stale False after destructor_fns is installed.
+
+	Exercises the cache invalidation mechanism: has_drop queried before
+	destructor_fns exists caches False; after destructor_fns is set,
+	re-evaluation must return True.  This is the local mechanism behind
+	the producer-side DropValue omission traced in the web-rest Arc leak,
+	but does not constitute an end-to-end package-consumer repro.
+	"""
+	from lang.driftc.core.function_id import FunctionId
+
+	table = TypeTable()
+	int_tid = table.ensure_int()
+
+	# Arc struct — no destructor_fns yet.
+	arc_tid = table.declare_struct(module_id="std.concurrent", name="Arc", field_names=["inner"])
+	table.define_struct_fields(arc_tid, field_types=[int_tid])
+
+	# ServerHandle with Arc field.
+	handle_tid = table.declare_struct(module_id="web.rest.server", name="ServerHandle", field_names=["stopped", "value"])
+	table.define_struct_fields(handle_tid, field_types=[arc_tid, int_tid])
+
+	assert not hasattr(table, "destructor_fns") or table.destructor_fns is None
+
+	# Before destructor_fns: Arc has no destructor, has_drop returns False.
+	assert table.has_drop(arc_tid) is False
+	assert table.has_drop(handle_tid) is False
+
+	# Install destructor_fns — Arc now has a registered destroy function.
+	destroy_fn = FunctionId(module="std.concurrent", name="Arc::destroy", ordinal=0)
+	table.destructor_fns = {arc_tid: destroy_fn}
+
+	# After destructor_fns: has_drop must return True, not stale cached False.
+	assert table.has_drop(arc_tid) is True, (
+		"has_drop(Arc) must return True after destructor_fns is installed, "
+		"not stale False from the pre-destructor cache"
+	)
+	assert table.has_drop(handle_tid) is True, (
+		"has_drop(ServerHandle) must return True after destructor_fns is "
+		"installed — its Arc field now has a registered destructor"
+	)
+
+
 def test_has_drop_generic_destructible_different_instantiation() -> None:
 	"""A struct field whose type is a generic Destructible instantiation
 	that has no direct destructor_fns entry must still be recognized as

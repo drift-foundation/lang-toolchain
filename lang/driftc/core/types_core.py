@@ -259,6 +259,16 @@ class TypeTable:
 	and function types. It can be extended as the checker grows.
 	"""
 
+	def __setattr__(self, name: str, value: object) -> None:
+		super().__setattr__(name, value)
+		# Clear the drop-needs cache when destructor_fns is installed or
+		# updated.  Cached False entries from before destructor_fns existed
+		# are stale — the check could not consult destructors and may have
+		# concluded False too early.  Clearing the cache lets re-evaluation
+		# with the full destructor registry produce the correct result.
+		if name == "destructor_fns" and hasattr(self, "_needs_drop_cache"):
+			self._needs_drop_cache.clear()
+
 	def __init__(self, *, word_bits: int = 64) -> None:
 		self._defs: Dict[TypeId, TypeDef] = {}
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"

@@ -1,38 +1,35 @@
 # Drift development history
 
 ## 2026-03-26
-- **Recognize cross-package generic Destructible instantiations via name+module match in `has_drop()` (0.27.119, ABI 7)**:
-  Fixed the definitive producer-side root cause of the consumer-only Arc leak
-  in multi-package builds (web-rest certification).
+- **Invalidate stale `has_drop()` negatives when `destructor_fns` is installed later (0.27.120, ABI 7)**:
+  Fixed a narrower `TypeTable` cache invalidation bug where `has_drop()`
+  could remember `False` from a pre-`destructor_fns` state and keep returning
+  that stale result after the destructor registry was populated.
   - Problem:
-    - during package production, the type table could have `destructor_fns`
-      entries for SOME TypeIds of a generic Destructible type (e.g. `Arc`)
-      but NOT for the specific instantiation TypeId used in a function's
-      owned parameter (e.g. `Arc<AtomicBool>` with a different TypeId)
-    - `has_drop()` checked `destructor_fns.get(tid)` for an exact TypeId
-      match — which missed the specific instantiation
-    - `is_destructible()` (trait prover) also failed for cross-package
-      generic instantiations during package production
-    - `get_struct_instance()` returned `None` for the instantiation
-    - result: `has_drop()` returned `False` for the Arc field, then `False`
-      for the containing struct (ServerHandle), and no `DropValue` was
-      emitted in the packaged MIR
+    - `has_drop()` can be queried before `destructor_fns` is installed
+    - in that state, a type with no field-based drop evidence yet can cache a
+      negative result in `_needs_drop_cache`
+    - once `destructor_fns` is later populated, that stale cached `False`
+      would still win unless the cache was invalidated
   - Fix:
-    - `has_drop()` now performs a name+module match against registered
-      `destructor_fns` entries when exact TypeId lookup fails
-    - if ANY registered destructor shares the same `(name, module_id)` as
-      the queried type, the type is recognized as a generic Destructible
-      instantiation and `has_drop()` returns `True`
-    - this bridges the gap between the generic impl registration (which uses
-      one TypeId) and the specific instantiation (which uses a different
-      TypeId)
+    - `TypeTable.__setattr__()` now clears `_needs_drop_cache` when
+      `destructor_fns` is assigned or replaced
+    - later `has_drop()` queries can therefore re-evaluate with the full
+      destructor registry instead of reusing stale pre-registry negatives
   - Coverage:
-    - unit test `test_has_drop_generic_destructible_different_instantiation`
-      reproduces the exact condition: two Arc TypeIds, only one registered
-      in `destructor_fns`, struct field references the unregistered one
-    - proves the before/after flip from `False` to `True`
+    - unit test
+      `test_has_drop_pre_destructor_fns_cache_invalidation`
+      proves the before/after flip:
+      - pre-`destructor_fns`: `Arc` and containing `ServerHandle` both report
+        `False`
+      - after installing `destructor_fns`: both re-evaluate to `True`
+  - Important:
+    - this fixes a real `TypeTable` caching bug
+    - it does **not** by itself close the still-open `web.rest`
+      package-consumer leak investigation, whose currently pinned failure path
+      is the missing `ServerHandle` `DropValue` during package MIR decode
   - Versioning:
-    - compiler version is `0.27.119`
+    - compiler version is `0.27.120`
     - ABI remains `7`
 
 ## 2026-03-23
