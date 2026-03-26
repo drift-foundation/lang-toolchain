@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed stale negative `has_drop()` caching for unresolved struct/variant instances during package builds (0.27.118, ABI 7)**:
+  Fixed the underlying cache bug that could let package production permanently
+  remember `has_drop=False` for a type before its concrete struct/variant
+  instance was available.
+  - Problem:
+    - during cross-package/package-consumer builds, `has_drop()` could be
+      queried for a generic struct/variant before type-table linking had
+      populated the concrete instance
+    - in that state, the old logic could conclude `False` too early and cache
+      the result
+    - later, even after linking populated the real instance with droppable
+      fields, the stale cached `False` was reused and producer-side MIR still
+      omitted the needed `DropValue`
+  - Fix:
+    - `has_drop()` now distinguishes between:
+      - precise field-based answers when a concrete struct/variant instance is
+        available
+      - heuristic `param_types` answers when the instance is still unresolved
+    - unresolved-instance results are no longer cached as negative answers
+    - once the instance becomes available later, `has_drop()` can re-evaluate
+      and return the correct precise answer instead of reusing a stale cache
+      entry
+  - Why this mattered:
+    - the bug was not just incomplete drop inference, but incomplete drop
+      inference becoming permanent via `_needs_drop_cache`
+    - that made package-produced MIR differ from source-built MIR even after
+      later linking had enough information
+  - Versioning:
+    - compiler version is `0.27.118`
+    - ABI remains `7`
+
 - **Always emitted `self` cleanup in `Destructible::destroy` epilogues, even when drop inference was incomplete (0.27.117, ABI 7)**:
   Fixed a narrow but important producer/codegen bug where `self` cleanup inside
   `Destructible::destroy` could still be suppressed if generic drop inference

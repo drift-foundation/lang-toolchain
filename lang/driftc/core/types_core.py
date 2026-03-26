@@ -1425,27 +1425,34 @@ class TypeTable:
 		if td.kind is TypeKind.ARRAY:
 			self._needs_drop_cache[tid] = True
 			return True
+		# Struct/variant field-based drop check.  When the concrete instance
+		# is available, recurse into field types for a precise answer.
+		# When the instance is missing (common during cross-package builds
+		# before type table linking completes), fall through to the
+		# param_types heuristic — but do NOT cache the result, because the
+		# instance may appear later and a stale False would be permanent.
+		_instance_available = False
 		if td.kind is TypeKind.STRUCT:
 			inst = self.get_struct_instance(tid)
 			if inst is not None:
+				_instance_available = True
 				needs = any(self.has_drop(fty) for fty in inst.field_types)
 				self._needs_drop_cache[tid] = needs
 				return needs
-			# Struct instance not available (common for cross-package generic
-			# instantiations like Arc<T>).  Fall through to param_types check
-			# so that has_drop still returns True when a type parameter is
-			# itself droppable (e.g. Arc wraps an ArcBox which needs drop).
 		elif td.kind is TypeKind.VARIANT:
 			inst = self.get_variant_instance(tid)
 			if inst is not None:
+				_instance_available = True
 				needs = any(self.has_drop(fty) for arm in inst.arms for fty in arm.field_types)
 				self._needs_drop_cache[tid] = needs
 				return needs
-			# Same fall-through for variants without instances.
 		if td.param_types:
 			needs = any(self.has_drop(pt) for pt in td.param_types)
-			self._needs_drop_cache[tid] = needs
+			if _instance_available:
+				self._needs_drop_cache[tid] = needs
 			return needs
+		if not _instance_available and td.kind in (TypeKind.STRUCT, TypeKind.VARIANT):
+			return False
 		self._needs_drop_cache[tid] = False
 		return False
 
