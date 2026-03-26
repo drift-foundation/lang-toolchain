@@ -479,6 +479,43 @@ def _install_destructible_query(type_table: TypeTable, linked_world: LinkedWorld
 	type_table.set_destructible_query(_query_destructible, allow_fallback=False)
 
 
+def _scan_destructible_impls_by_name(
+	module_exports: Mapping[str, dict[str, object]] | None,
+	external_impl_metas: list | None = None,
+) -> dict[TypeId, FunctionId]:
+	"""Scan module_exports and external_impl_metas for Destructible impls
+	using trait_key name+module matching.  Does not need linked_world.
+
+	Returns a TypeId→FunctionId map of destroy functions.
+	"""
+	result: dict[TypeId, FunctionId] = {}
+	sources: list = []
+	if module_exports is not None:
+		for exp in module_exports.values():
+			if isinstance(exp, dict):
+				for impl in (exp.get("impls") or []):
+					if isinstance(impl, ImplMeta):
+						sources.append(impl)
+	if external_impl_metas:
+		for impl in external_impl_metas:
+			if isinstance(impl, ImplMeta):
+				sources.append(impl)
+	for impl in sources:
+		tk = getattr(impl, "trait_key", None)
+		if tk is None or getattr(tk, "name", "") != "Destructible":
+			continue
+		if getattr(tk, "module", "") != "std.core":
+			continue
+		tid = getattr(impl, "target_type_id", None)
+		if not isinstance(tid, int):
+			continue
+		for method in impl.methods:
+			if method.name == "destroy":
+				result[tid] = method.fn_id
+				break
+	return result
+
+
 def _install_destructor_fns(
 	type_table: TypeTable | None,
 	linked_world: LinkedWorld | None,
@@ -3253,38 +3290,9 @@ def compile_stubbed_funcs(
 				requires_by_fn_id[fn_id] = req
 	# Pre-install destructor_fns before _build_linked_world so query
 	# callbacks installed there cannot poison has_drop with False.
-	# Match Destructible by trait_key name+module — no linked_world needed.
+	# Uses trait_key name+module matching — no linked_world needed.
 	if shared_type_table is not None and pass1_state is None:
-		_pre_dfns: dict[int, FunctionId] = {}
-		if module_exports:
-			for _mid, _mexp in module_exports.items():
-				for _impl in (_mexp.get("impls") or []):
-					_tk = getattr(_impl, "trait_key", None)
-					if _tk is None or getattr(_tk, "name", "") != "Destructible":
-						continue
-					if getattr(_tk, "module", "") != "std.core":
-						continue
-					_tid = getattr(_impl, "target_type_id", None)
-					if not isinstance(_tid, int):
-						continue
-					for _m in getattr(_impl, "methods", []):
-						if getattr(_m, "name", "") == "destroy":
-							_pre_dfns[_tid] = _m.fn_id
-							break
-		if external_impl_metas:
-			for _impl in external_impl_metas:
-				_tk = getattr(_impl, "trait_key", None)
-				if _tk is None or getattr(_tk, "name", "") != "Destructible":
-					continue
-				if getattr(_tk, "module", "") != "std.core":
-					continue
-				_tid = getattr(_impl, "target_type_id", None)
-				if not isinstance(_tid, int):
-					continue
-				for _m in getattr(_impl, "methods", []):
-					if getattr(_m, "name", "") == "destroy":
-						_pre_dfns[_tid] = _m.fn_id
-						break
+		_pre_dfns = _scan_destructible_impls_by_name(module_exports, external_impl_metas)
 		if _pre_dfns:
 			shared_type_table.destructor_fns = _pre_dfns
 

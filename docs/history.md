@@ -1,6 +1,78 @@
 # Drift development history
 
 ## 2026-03-26
+- **Fixed stdlib package-consumer `Arc` scope-drop leak and pinned it with a stdlib-as-package regression harness (0.27.121, ABI 7)**:
+  Fixed the package-consumer drop inference path that could omit required
+  scope cleanup for stdlib generic destructible wrappers, and added an
+  in-repo harness that now exercises stdlib as a signed package instead of
+  relying on source-stdlib loading.
+  - Problem:
+    - the package-consumer path used by deploy/PEX is materially different
+      from the normal source-stdlib path used by most of the compiler test
+      suite
+    - source-based tests load stdlib definitions, struct instances, trait
+      impls, and destructor metadata eagerly from source
+    - package-based consumers see incremental type linking, package decode,
+      manifest/trust enforcement, and different `TypeId`/drop states
+    - in that package path, `has_drop()` / destructible discovery could be
+      incomplete at the wrong time for generic wrappers such as `Arc<T>`,
+      causing producer-side drop decisions to diverge from the source-built
+      path and leaving `Arc`-backed allocations unreleased
+    - the long-running `Arc` leak investigation also exposed a major test
+      blind spot: the in-repo suite almost always exercised `--stdlib-root`
+      instead of `--package-root` + `--dep`
+  - Fix:
+    - hardened package-path destructible/drop inference so generic
+      Destructible wrappers consumed from packages are still recognized as
+      needing drop even when precise package-time type state is incomplete
+    - retained the defense-in-depth layers added during the investigation:
+      - early `destructor_fns` installation / cache invalidation
+      - direct `destructor_fns` checks before slower trait proving
+      - nominal fallback for cross-package generic destructible identity
+      - unresolved-instance guards so stale negative `has_drop()` results do
+        not become permanent
+      - forced `self` cleanup inside `Destructible::destroy`
+    - result:
+      - stdlib package consumers now emit and execute the required scope drop
+        for the `Arc` ownership pattern that previously leaked on the package
+        path
+  - Harness and coverage:
+    - added `stdlib_package` fixture in
+      [`lang/tests/driver/conftest.py`](/home/sl/src/drift-lang/lang/tests/driver/conftest.py)
+    - fixture:
+      - builds stdlib into a `.dmp` once per test session
+      - signs it with a test key
+      - emits a trust store
+      - returns package root + trust path + std version for consumer tests
+    - consumer compile helper forces the real package path by using:
+      - empty `--stdlib-root`
+      - `--package-root`
+      - `--dep std@VERSION`
+      - trust-store verification
+  - Coverage:
+    - added
+      [`lang/tests/driver/test_stdlib_as_package.py`](/home/sl/src/drift-lang/lang/tests/driver/test_stdlib_as_package.py)
+    - first pinned regression:
+      - `test_arc_scope_drop_no_leak`
+      - compiles a small consumer program against stdlib as a package
+      - runs the resulting binary under Valgrind
+      - requires both:
+        - clean runtime exit
+        - `0` definitely-lost bytes
+    - this is the new canonical stdlib package-consumer leak discriminator
+      for `Arc` scope-drop behavior
+  - Why this matters:
+    - this closes both:
+      - the immediate `Arc` package-consumer leak class
+      - the coverage gap that let package-only stdlib failures escape into
+        deploy/certification
+    - future ownership/drop regressions that only reproduce when stdlib is
+      consumed as a package now have a direct in-repo harness instead of
+      depending on deploy/certification to find them
+  - Versioning:
+    - compiler version is `0.27.121`
+    - ABI remains `7`
+
 - **Invalidate stale `has_drop()` negatives when `destructor_fns` is installed later (0.27.120, ABI 7)**:
   Fixed a narrower `TypeTable` cache invalidation bug where `has_drop()`
   could remember `False` from a pre-`destructor_fns` state and keep returning
