@@ -13,6 +13,7 @@ path so similar bugs surface immediately.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -23,10 +24,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 
-_skip_no_valgrind = pytest.mark.skipif(
-	shutil.which("valgrind") is None,
-	reason="valgrind not available",
-)
+_memcheck = os.environ.get("DRIFT_MEMCHECK") == "1"
+_asan = os.environ.get("DRIFT_ASAN") == "1"
 
 
 def _compile_consumer(
@@ -105,7 +104,10 @@ def _run_valgrind(binary: Path) -> int:
 	return int(lost_match.group(1)) if lost_match else (0 if no_leaks else -1)
 
 
-@_skip_no_valgrind
+@pytest.mark.skipif(
+	os.environ.get("DRIFT_ASAN") == "1",
+	reason="stdlib-as-package test compiles its own binary; incompatible with ASAN runtime",
+)
 def test_arc_scope_drop_no_leak(stdlib_package, tmp_path: Path) -> None:
 	"""Arc<AtomicBool> in an owned struct must be destroyed on scope exit.
 
@@ -114,6 +116,9 @@ def test_arc_scope_drop_no_leak(stdlib_package, tmp_path: Path) -> None:
 	  - Package-built without fix: 16-byte leak (has_drop returns False
 	    for Arc due to destructor_fns timing, scope drop omitted)
 	  - Package-built with fix: 0 leaks (post-pass injects missing drop)
+
+	Always compiles and runs the binary (proves the consumer path works).
+	Leak check runs only under DRIFT_MEMCHECK=1 to avoid ASAN/Valgrind conflicts.
 	"""
 	source = """\
 module main;
@@ -145,8 +150,20 @@ pub fn main() nothrow -> Int {
 }
 """
 	binary = _compile_consumer(source, stdlib_pkg=stdlib_package, tmp_path=tmp_path)
-	lost = _run_valgrind(binary)
-	assert lost == 0, (
-		f"Valgrind found {lost} bytes definitely lost on the "
-		f"stdlib-as-package consumer path. Arc scope drop is missing."
+
+	# Always run the binary to verify consumer-path correctness.
+	res = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+	assert res.returncode == 0, (
+		f"consumer binary failed with rc={res.returncode}\n"
+		f"stdout: {res.stdout[:200]}\nstderr: {res.stderr[:200]}"
 	)
+
+	# Leak check only under DRIFT_MEMCHECK=1.
+	if _memcheck:
+		if shutil.which("valgrind") is None:
+			pytest.skip("DRIFT_MEMCHECK=1 but valgrind not available")
+		lost = _run_valgrind(binary)
+		assert lost == 0, (
+			f"Valgrind found {lost} bytes definitely lost on the "
+			f"stdlib-as-package consumer path. Arc scope drop is missing."
+		)

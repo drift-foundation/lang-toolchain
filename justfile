@@ -225,6 +225,13 @@ lang-borrow-test:
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
 	fi
 
+# Stdlib-as-package memcheck: builds stdlib as a signed .dmp and runs
+# consumer programs under Valgrind against the package path (not --stdlib-root).
+# This exercises the PEX/deploy code path where has_drop/destructor_fns
+# timing can cause missing scope drops.
+lang-memcheck-stdlib-pkg:
+	DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -xvs lang/tests/driver/test_stdlib_as_package.py
+
 # Drift deploy/build tooling tests (manifest, resolver, lockfile, build, deploy, prepare).
 drift-deploy-test:
 	# Ensure pytest is available in the venv
