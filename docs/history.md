@@ -1,6 +1,42 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed `has_drop()` suppressing `DropValue` for cross-package generic instantiations when no struct instance was available (0.27.116, ABI 7)**:
+  Fixed the producer-side package MIR bug behind the remaining consumer-only
+  `Arc` leak after the earlier package-consumer fixes.
+  - Problem:
+    - package-produced MIR could still omit `DropValue` for cross-package
+      generic instantiations such as `Arc<AtomicBool>`
+    - source-built code emitted the drop correctly, but packaged artifacts
+      could still leak on the consumer path
+    - the symptom was a consumer-only 16-byte `Arc` backing leak even though
+      the same logic freed cleanly when built from source
+  - Root cause:
+    - `TypeTable.has_drop()` uses the precise field-layout path when a
+      `StructInstance` or `VariantInstance` is available
+    - for certain cross-package generic instantiations during package
+      production, `get_struct_instance()` / `get_variant_instance()` could
+      return `None`
+    - the old behavior then returned `False` too early, suppressing the
+      producer-side `DropValue`
+  - Fix:
+    - when a struct/variant instance is unavailable, `has_drop()` now falls
+      through to a conservative `param_types`-based check instead of
+      immediately returning `False`
+    - this preserves `DropValue` for cross-package generic wrappers whose
+      precise instance layout is unavailable during package production
+    - source-built paths still use the precise instance-field route when the
+      instance exists
+  - Coverage:
+    - the package-consumer Valgrind regression remains pinned by:
+      - [`test_pkg_cross_package_scope_drop.py`](/home/sl/src/drift-lang/lang/tests/driver/test_pkg_cross_package_scope_drop.py)
+  - Operational note:
+    - affected packages built with older compilers remain stale and must be
+      rebuilt to pick up the corrected producer-side MIR
+  - Versioning:
+    - compiler version is `0.27.116`
+    - ABI remains `7`
+
 - **Deduplicated identical package artifacts discovered from multiple package roots before duplicate-module checks (0.27.115, ABI 7)**:
   Fixed a package-consumer false-positive collision case where the same package
   artifact could be discovered from more than one `--package-root` and then

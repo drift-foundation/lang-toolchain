@@ -1427,18 +1427,21 @@ class TypeTable:
 			return True
 		if td.kind is TypeKind.STRUCT:
 			inst = self.get_struct_instance(tid)
-			if inst is None:
-				return False
-			needs = any(self.has_drop(fty) for fty in inst.field_types)
-			self._needs_drop_cache[tid] = needs
-			return needs
-		if td.kind is TypeKind.VARIANT:
+			if inst is not None:
+				needs = any(self.has_drop(fty) for fty in inst.field_types)
+				self._needs_drop_cache[tid] = needs
+				return needs
+			# Struct instance not available (common for cross-package generic
+			# instantiations like Arc<T>).  Fall through to param_types check
+			# so that has_drop still returns True when a type parameter is
+			# itself droppable (e.g. Arc wraps an ArcBox which needs drop).
+		elif td.kind is TypeKind.VARIANT:
 			inst = self.get_variant_instance(tid)
-			if inst is None:
-				return False
-			needs = any(self.has_drop(fty) for arm in inst.arms for fty in arm.field_types)
-			self._needs_drop_cache[tid] = needs
-			return needs
+			if inst is not None:
+				needs = any(self.has_drop(fty) for arm in inst.arms for fty in arm.field_types)
+				self._needs_drop_cache[tid] = needs
+				return needs
+			# Same fall-through for variants without instances.
 		if td.param_types:
 			needs = any(self.has_drop(pt) for pt in td.param_types)
 			self._needs_drop_cache[tid] = needs
