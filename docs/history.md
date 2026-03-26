@@ -1,5 +1,40 @@
 # Drift development history
 
+## 2026-03-26
+- **Recognize cross-package generic Destructible instantiations via name+module match in `has_drop()` (0.27.119, ABI 7)**:
+  Fixed the definitive producer-side root cause of the consumer-only Arc leak
+  in multi-package builds (web-rest certification).
+  - Problem:
+    - during package production, the type table could have `destructor_fns`
+      entries for SOME TypeIds of a generic Destructible type (e.g. `Arc`)
+      but NOT for the specific instantiation TypeId used in a function's
+      owned parameter (e.g. `Arc<AtomicBool>` with a different TypeId)
+    - `has_drop()` checked `destructor_fns.get(tid)` for an exact TypeId
+      match — which missed the specific instantiation
+    - `is_destructible()` (trait prover) also failed for cross-package
+      generic instantiations during package production
+    - `get_struct_instance()` returned `None` for the instantiation
+    - result: `has_drop()` returned `False` for the Arc field, then `False`
+      for the containing struct (ServerHandle), and no `DropValue` was
+      emitted in the packaged MIR
+  - Fix:
+    - `has_drop()` now performs a name+module match against registered
+      `destructor_fns` entries when exact TypeId lookup fails
+    - if ANY registered destructor shares the same `(name, module_id)` as
+      the queried type, the type is recognized as a generic Destructible
+      instantiation and `has_drop()` returns `True`
+    - this bridges the gap between the generic impl registration (which uses
+      one TypeId) and the specific instantiation (which uses a different
+      TypeId)
+  - Coverage:
+    - unit test `test_has_drop_generic_destructible_different_instantiation`
+      reproduces the exact condition: two Arc TypeIds, only one registered
+      in `destructor_fns`, struct field references the unregistered one
+    - proves the before/after flip from `False` to `True`
+  - Versioning:
+    - compiler version is `0.27.119`
+    - ABI remains `7`
+
 ## 2026-03-23
 - **Fixed stale negative `has_drop()` caching for unresolved struct/variant instances during package builds (0.27.118, ABI 7)**:
   Fixed the underlying cache bug that could let package production permanently

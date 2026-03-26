@@ -1425,6 +1425,20 @@ class TypeTable:
 		if td.kind is TypeKind.ARRAY:
 			self._needs_drop_cache[tid] = True
 			return True
+		# Generic Destructible check: if the type is a struct/variant whose
+		# specific instantiation is not in destructor_fns or is_destructible,
+		# check if ANY registered destructor shares the same (name, module_id).
+		# This catches cross-package generic instantiations like Arc<AtomicBool>
+		# where the generic impl (impl<T> Destructible for Arc<T>) is registered
+		# for a different TypeId (the generic base), but the specific
+		# instantiation's TypeId is absent from destructor_fns.
+		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT) and td.module_id is not None:
+			if isinstance(destructor_fns, dict):
+				for _dtor_tid in destructor_fns:
+					_dtor_td = self.get(_dtor_tid)
+					if _dtor_td.name == td.name and _dtor_td.module_id == td.module_id:
+						self._needs_drop_cache[tid] = True
+						return True
 		# Struct/variant field-based drop check.  When the concrete instance
 		# is available, recurse into field types for a precise answer.
 		# When the instance is missing (common during cross-package builds

@@ -98,3 +98,57 @@ def test_has_drop_caches_false_when_instance_confirms_no_drop() -> None:
 	assert table.has_drop(simple_tid) is False
 	# Call again — should use cache.
 	assert table.has_drop(simple_tid) is False
+
+
+def test_has_drop_generic_destructible_different_instantiation() -> None:
+	"""A struct field whose type is a generic Destructible instantiation
+	that has no direct destructor_fns entry must still be recognized as
+	needing a drop — via name+module match against other instantiations.
+
+	This is the exact producer-side root cause of the Arc leak:
+	  - destructor_fns has Arc(tid=X) from one instantiation
+	  - ServerHandle has field Arc(tid=Y) — a DIFFERENT instantiation
+	  - Arc(tid=Y) has no destructor_fns entry, no struct instance
+	  - has_drop(ServerHandle) must return True because Arc(tid=X)
+	    proves the generic Arc type is Destructible
+	"""
+	from lang.driftc.core.function_id import FunctionId
+
+	table = TypeTable()
+	int_tid = table.ensure_int()
+
+	# Arc instantiation 1 (tid=X): has a registered destructor.
+	arc_x = table.declare_struct(module_id="std.concurrent", name="Arc", field_names=["inner"])
+	table.define_struct_fields(arc_x, field_types=[int_tid])
+	destroy_fn = FunctionId(module="std.concurrent", name="Arc::destroy__inst__aaa", ordinal=0)
+	table.destructor_fns = {arc_x: destroy_fn}
+
+	# Arc instantiation 2 (tid=Y): same name+module but different TypeId.
+	# No struct instance, no destructor_fns entry. This simulates a
+	# cross-package generic instantiation that the producer's type table
+	# doesn't fully link. Use a raw TypeDef to avoid reusing arc_x's base.
+	from lang.driftc.core.types_core import TypeDef, TypeKind
+	arc_y = table._next_id
+	table._next_id += 1
+	table._defs[arc_y] = TypeDef(kind=TypeKind.STRUCT, name="Arc", param_types=[], module_id="std.concurrent", field_names=["inner"])
+
+	assert table.get_struct_instance(arc_y) is None, "arc_y should have no struct instance"
+	assert table.destructor_fns.get(arc_y) is None, "arc_y should have no destructor_fns entry"
+
+	# ServerHandle has arc_y as a field.
+	handle_tid = table.declare_struct(module_id="web.rest.server", name="ServerHandle", field_names=["stopped", "value"])
+	table.define_struct_fields(handle_tid, field_types=[arc_y, int_tid])
+
+	# has_drop(arc_y) must return True — the name+module match against arc_x
+	# proves the generic Arc type is Destructible.
+	assert table.has_drop(arc_y) is True, (
+		"Arc instantiation without direct destructor_fns entry must be "
+		"recognized as Destructible via name+module match against other "
+		"registered Arc instantiations"
+	)
+
+	# has_drop(ServerHandle) must return True — its field arc_y needs drop.
+	assert table.has_drop(handle_tid) is True, (
+		"ServerHandle with Arc field must need drop even when the specific "
+		"Arc instantiation has no direct destructor_fns entry"
+	)
