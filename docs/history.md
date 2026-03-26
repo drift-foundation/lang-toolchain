@@ -1,6 +1,38 @@
 # Drift development history
 
 ## 2026-03-23
+- **Fixed transitive dependency version selection on package consumption in shared multi-version roots (0.27.114, ABI 7)**:
+  Fixed a package-consumer resolution bug where exact top-level `--dep`
+  selection worked, but transitive dependency versions declared in package
+  manifests were not used to narrow the loaded package set before duplicate
+  module checks.
+  - Problem:
+    - in a shared multi-version package root, the consumer narrowed only the
+      explicitly pinned root package ids from `--dep`
+    - transitive dependencies declared in `package_deps` were not expanded into
+      an exact selected closure before duplicate-module rejection
+    - historical sibling versions of transitive dependencies could therefore
+      still be loaded or considered, causing duplicate `__instantiations`
+      module collisions even when the root package implied a single correct
+      transitive version
+  - Fix:
+    - package consumption now iteratively expands the transitive dependency
+      closure from loaded packages’ `package_deps`
+    - newly discovered transitive packages are exact-version narrowed and
+      loaded from the same package roots
+    - same-round transitive version conflicts are now rejected explicitly
+      instead of silently overwriting one version with another
+    - duplicate-module checks now run over the actually selected transitive
+      closure rather than the broader historical package set
+  - Coverage:
+    - regression for shared multi-version roots narrowing to the declared
+      transitive dependency version
+    - regression for conflicting transitive dependency versions producing a
+      clear error
+  - Versioning:
+    - compiler version is `0.27.114`
+    - ABI remains `7`
+
 - **Fixed package-produced MIR omitting `DropValue` for types with registered destroy functions when trait proving failed (0.27.113, ABI 7)**:
   Fixed the producer-side package MIR bug behind the remaining consumer-only
   leak divergence after the earlier hidden-lambda/package fixes.

@@ -7473,6 +7473,142 @@ def main(argv: list[str] | None = None) -> int:
 
 			loaded_pkgs.append(_loaded)
 
+		# ── Transitive dependency expansion ───────────────────────────
+		# Loaded root packages declare their transitive deps via the
+		# package_deps manifest field.  Expand the allowlist + version
+		# pins from those declarations, then discover + load the
+		# transitive deps from the same package roots.  Repeat until
+		# the closure is complete.
+		_all_package_files = package_files  # full discovery from above
+		_pending_expansion = list(loaded_pkgs)
+		while _pending_expansion:
+			_new_deps: dict[str, str] = {}  # pkg_id -> version
+			for _exp_pkg in _pending_expansion:
+				_pdeps = _exp_pkg.manifest.get("package_deps")
+				if not isinstance(_pdeps, list):
+					continue
+				for _pd in _pdeps:
+					if not isinstance(_pd, dict):
+						continue
+					_pd_name = _pd.get("name", "")
+					_pd_ver = _pd.get("version", "")
+					if not _pd_name or not _pd_ver:
+						continue
+					if _pd_name in _dep_allowlist:
+						# Already selected — verify version consistency.
+						if _pd_name in _version_pins and _version_pins[_pd_name] != _pd_ver:
+							msg = (
+								f"transitive dependency version conflict for '{_pd_name}': "
+								f"'{_version_pins[_pd_name]}' (from --dep) vs '{_pd_ver}' "
+								f"(from package_deps of '{_exp_pkg.manifest.get('package_id')}')"
+							)
+							if args.json:
+								print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							else:
+								print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+							return 1
+						continue
+					if _pd_name == _self_pkg_id:
+						continue  # self-exclusion
+					# Same-round conflict: two packages in this expansion
+					# wave declare different versions of the same transitive
+					# dep.  Reject rather than silently picking one.
+					_prev_new_ver = _new_deps.get(_pd_name)
+					if _prev_new_ver is not None and _prev_new_ver != _pd_ver:
+						msg = (
+							f"transitive dependency version conflict for '{_pd_name}': "
+							f"'{_prev_new_ver}' vs '{_pd_ver}' "
+							f"(declared by different packages in the same dependency layer)"
+						)
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
+					_new_deps[_pd_name] = _pd_ver
+
+			if not _new_deps:
+				break  # closure complete
+
+			# Add transitive deps to allowlist + pins.
+			for _td_name, _td_ver in _new_deps.items():
+				_dep_allowlist.add(_td_name)
+				_version_pins[_td_name] = _td_ver
+
+			# Discover + load transitive deps from the same package roots.
+			_pending_expansion = []
+			for _pf in _all_package_files:
+				_peeked_id = peek_package_id(_pf)
+				if _peeked_id is None and _pf.suffix == ".zdmp":
+					_dmp_sibling = _pf.with_suffix(".dmp")
+					if _dmp_sibling.exists():
+						_peeked_id = peek_package_id(_dmp_sibling)
+						if _peeked_id is not None:
+							_pf = _dmp_sibling
+				if _peeked_id is None:
+					continue
+				if _peeked_id not in _new_deps:
+					continue  # not a newly discovered transitive dep
+				# Version prefilter (same logic as initial discovery).
+				_pinned_ver = _new_deps.get(_peeked_id)
+				if _pinned_ver:
+					_fs_grandparent = _pf.parent.parent.name
+					if _fs_grandparent == _peeked_id:
+						_fs_version = _pf.parent.name
+						if _fs_version != _pinned_ver:
+							continue  # wrong version directory
+				# Identity enforcement.
+				_fs_grandparent = _pf.parent.parent.name
+				if _fs_grandparent in _new_deps and _peeked_id != _fs_grandparent:
+					msg = (
+						f"package identity mismatch: artifact at "
+						f".../{_fs_grandparent}/{_pf.parent.name}/ claims package_id "
+						f"'{_peeked_id}' in manifest (expected '{_fs_grandparent}')"
+					)
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				# Pre-load version identity check.
+				if _fs_grandparent == _peeked_id:
+					from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version as _peek_id_ver
+					_peeked_full = _peek_id_ver(_pf)
+					if _peeked_full is not None:
+						_, _manifest_ver = _peeked_full
+						_fs_ver = _pf.parent.name
+						if _manifest_ver != _fs_ver:
+							msg = (
+								f"package identity mismatch: '{_peeked_id}' at path "
+								f".../{_fs_grandparent}/{_fs_ver}/ claims version "
+								f"'{_manifest_ver}' in manifest (expected '{_fs_ver}')"
+							)
+							if args.json:
+								print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							else:
+								print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+							return 1
+				if _self_pkg_id and _peeked_id == _self_pkg_id:
+					continue
+				try:
+					_td_loaded = load_package_v0_with_policy(_pf, policy=policy)
+				except (ValueError, OSError) as err:
+					msg = str(err)
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				except Exception as err:
+					msg = f"failed to load package '{_pf}': {err}"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				loaded_pkgs.append(_td_loaded)
+				_pending_expansion.append(_td_loaded)
+
 		# Determinism: package discovery order (filenames, rglob ordering, CLI
 		# `--package-root` ordering) must not affect compilation results. Sort loaded
 		# packages by the module ids they provide, which is a content-derived key and
