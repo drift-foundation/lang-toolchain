@@ -6731,19 +6731,18 @@ def compile_stubbed_funcs(
 						break
 				if _has_existing_drop:
 					continue
-				# Inject MoveOut + DropValue before Return in each return block.
-				_temp_counter = max((int(t[1:]) for t in func.local_types if t.startswith("t") and t[1:].isdigit()), default=0)
+				# Inject LoadLocal + ZeroValue + StoreLocal + DropValue before
+				# Return in each return block.  Use __postdrop_ prefix to avoid
+				# collisions with existing locals (__arc*, t*, etc.).
+				_pdrop_counter = 0
 				for block in func.blocks.values():
 					if not isinstance(block.terminator, M.Return):
 						continue
-					_temp_counter += 1
-					tmp = f"t{_temp_counter}"
+					_pdrop_counter += 1
+					tmp = f"__postdrop_{param_name}_{_pdrop_counter}"
 					func.local_types[tmp] = param_ty
-					# Insert before the last instruction group (scope drops
-					# are typically the last instructions before Return).
 					block.instructions.append(M.LoadLocal(dest=tmp, local=param_name))
-					_temp_counter += 1
-					zero_tmp = f"t{_temp_counter}"
+					zero_tmp = f"__postdrop_{param_name}_z{_pdrop_counter}"
 					func.local_types[zero_tmp] = param_ty
 					block.instructions.append(M.ZeroValue(dest=zero_tmp, ty=param_ty))
 					block.instructions.append(M.StoreLocal(local=param_name, value=zero_tmp))
