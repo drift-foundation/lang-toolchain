@@ -483,33 +483,54 @@ def _install_destructor_fns(
 	type_table: TypeTable | None,
 	linked_world: LinkedWorld | None,
 	module_exports: Mapping[str, dict[str, object]] | None,
+	external_impl_metas: list | None = None,
 ) -> None:
-	if type_table is None or linked_world is None or module_exports is None:
+	if type_table is None or linked_world is None:
 		return
 	destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
 	if destructible_key is None:
 		return
 	destructor_fns: dict[TypeId, FunctionId] = {}
-	for exp in module_exports.values():
-		if not isinstance(exp, dict):
-			continue
-		impls = exp.get("impls")
-		if not isinstance(impls, list):
-			continue
-		for impl in impls:
-			if not isinstance(impl, ImplMeta):
+	# Scan module_exports for Destructible impls (source-compiled path).
+	if module_exports is not None:
+		for exp in module_exports.values():
+			if not isinstance(exp, dict):
 				continue
-			if impl.trait_key != destructible_key:
+			impls = exp.get("impls")
+			if not isinstance(impls, list):
 				continue
-			target_type_id = getattr(impl, "target_type_id", None)
-			if not isinstance(target_type_id, int):
+			for impl in impls:
+				if not isinstance(impl, ImplMeta):
+					continue
+				if impl.trait_key != destructible_key:
+					continue
+				target_type_id = getattr(impl, "target_type_id", None)
+				if not isinstance(target_type_id, int):
+					continue
+				# Do NOT skip typevar types — we need generic destructors like
+				# Arc<T>::destroy registered so the name+module fallback in
+				# has_drop can match cross-package instantiations like Arc<AtomicBool>.
+				for method in impl.methods:
+					if method.name != "destroy":
+						continue
+					destructor_fns[target_type_id] = method.fn_id
+	# Also scan external_impl_metas (package-consumed path).
+	# When stdlib is loaded as a package, Destructible impls are in
+	# external_impl_metas, not module_exports.
+	if external_impl_metas:
+		for ei in external_impl_metas:
+			if not isinstance(ei, ImplMeta):
 				continue
-			if type_table.has_typevar(target_type_id):
+			if ei.trait_key != destructible_key:
 				continue
-			for method in impl.methods:
+			ei_tid = getattr(ei, "target_type_id", None)
+			if not isinstance(ei_tid, int):
+				continue
+			# Do NOT skip typevar types — same reasoning as above.
+			for method in ei.methods:
 				if method.name != "destroy":
 					continue
-				destructor_fns[target_type_id] = method.fn_id
+				destructor_fns[ei_tid] = method.fn_id
 	if destructor_fns:
 		type_table.destructor_fns = destructor_fns
 
@@ -3230,6 +3251,43 @@ def compile_stubbed_funcs(
 		for world in trait_worlds.values():
 			for fn_id, req in getattr(world, "requires_by_fn", {}).items():
 				requires_by_fn_id[fn_id] = req
+	# Pre-install destructor_fns before _build_linked_world so query
+	# callbacks installed there cannot poison has_drop with False.
+	# Match Destructible by trait_key name+module — no linked_world needed.
+	if shared_type_table is not None and pass1_state is None:
+		_pre_dfns: dict[int, FunctionId] = {}
+		if module_exports:
+			for _mid, _mexp in module_exports.items():
+				for _impl in (_mexp.get("impls") or []):
+					_tk = getattr(_impl, "trait_key", None)
+					if _tk is None or getattr(_tk, "name", "") != "Destructible":
+						continue
+					if getattr(_tk, "module", "") != "std.core":
+						continue
+					_tid = getattr(_impl, "target_type_id", None)
+					if not isinstance(_tid, int):
+						continue
+					for _m in getattr(_impl, "methods", []):
+						if getattr(_m, "name", "") == "destroy":
+							_pre_dfns[_tid] = _m.fn_id
+							break
+		if external_impl_metas:
+			for _impl in external_impl_metas:
+				_tk = getattr(_impl, "trait_key", None)
+				if _tk is None or getattr(_tk, "name", "") != "Destructible":
+					continue
+				if getattr(_tk, "module", "") != "std.core":
+					continue
+				_tid = getattr(_impl, "target_type_id", None)
+				if not isinstance(_tid, int):
+					continue
+				for _m in getattr(_impl, "methods", []):
+					if getattr(_m, "name", "") == "destroy":
+						_pre_dfns[_tid] = _m.fn_id
+						break
+		if _pre_dfns:
+			shared_type_table.destructor_fns = _pre_dfns
+
 	if pass1_state is not None:
 		linked_world = pass1_state.linked_world
 		require_env = pass1_state.require_env
@@ -3239,37 +3297,17 @@ def compile_stubbed_funcs(
 	# _install_destructor_fns + K39 on the shared type_table before
 	# constructing Pass1State.  Skip to avoid _install_destructor_fns
 	# replacing type_table.destructor_fns (which would clobber K39 entries).
-	if pass1_state is None:
-		_install_destructor_fns(shared_type_table, linked_world, module_exports)
-		# K39: Early registration of non-generic Destructible impls from packages.
-		# _install_destructor_fns only sees local module_exports; package impls
-		# (e.g. TypeBox::destroy) are in external_impl_metas.  Generic impls
-		# (e.g. ScopeGuard<T>::destroy) are handled later in the instantiation
-		# code where _request_instantiation is available.
-		if external_impl_metas and shared_type_table is not None and linked_world is not None:
-			destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
-			if destructible_key is not None:
-				ext_destructor_fns = getattr(shared_type_table, "destructor_fns", None) or {}
-				for impl in external_impl_metas:
-					if not isinstance(impl, ImplMeta):
-						continue
-					if impl.trait_key != destructible_key:
-						continue
-					target_type_id = getattr(impl, "target_type_id", None)
-					if not isinstance(target_type_id, int):
-						continue
-					if shared_type_table.has_typevar(target_type_id):
-						continue
-					method_fn_id: FunctionId | None = None
-					for method in impl.methods:
-						if method.name == "destroy":
-							method_fn_id = method.fn_id
-							break
-					if method_fn_id is None:
-						continue
-					ext_destructor_fns[target_type_id] = method_fn_id
-				if ext_destructor_fns:
-					shared_type_table.destructor_fns = ext_destructor_fns
+	# destructor_fns is already pre-installed above (before _build_linked_world)
+	# from both module_exports and external_impl_metas using trait_key name
+	# matching.  Do NOT re-assign here — reassignment triggers __setattr__
+	# cache clear, and any has_drop calls between the clear and the next
+	# _emit_scope_drops could re-poison the cache.
+	#
+	# The pre-install block handles all sources:
+	#   - module_exports: local Destructible impls (source-compiled)
+	#   - external_impl_metas: package Destructible impls (consumed packages)
+	# The _install_destructor_fns + K39 block that was here is now folded
+	# into the pre-install above.
 
 	def _declared_name_from_fn_id(fn_id: FunctionId, module_id: str) -> str:
 		sym = function_symbol(fn_id)
@@ -9394,6 +9432,15 @@ def main(argv: list[str] | None = None) -> int:
 	# Enforce trait requirements (struct + function requires) before borrow checking.
 	trait_diags: list[Diagnostic] = []
 	linked_world, require_env = _build_linked_world(type_table)
+	# Install destructor_fns early so any code that queries has_drop()
+	# (e.g. copy_status callbacks, borrow checker, or trait enforcement)
+	# before compile_stubbed_funcs runs gets the correct answer for
+	# Destructible types.  Without this, has_drop(Arc) can return False
+	# and the result gets cached, poisoning the later _emit_scope_drops
+	# decision even though compile_stubbed_funcs would install
+	# destructor_fns internally.
+	if linked_world is not None:
+		_install_destructor_fns(type_table, linked_world, module_exports, external_impl_metas=external_impl_metas)
 	if linked_world is not None and require_env is not None:
 		used_types = collect_used_type_keys(typed_fns, type_table, signatures_by_id)
 		used_by_module: dict[str, set] = {}
@@ -10039,31 +10086,7 @@ def main(argv: list[str] | None = None) -> int:
 		# INVARIANT: _install_destructor_fns replaces type_table.destructor_fns
 		# entirely, then K39 extends it.  Both must run before Pass1State and
 		# both must be skipped in CSF to avoid the replace clobbering K39 entries.
-		_install_destructor_fns(type_table, linked_world, combined_exports)
-		if external_impl_metas and type_table is not None and linked_world is not None:
-			_p6_destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
-			if _p6_destructible_key is not None:
-				_p6_ext_dfns = getattr(type_table, "destructor_fns", None) or {}
-				for _p6_impl in external_impl_metas:
-					if not isinstance(_p6_impl, ImplMeta):
-						continue
-					if _p6_impl.trait_key != _p6_destructible_key:
-						continue
-					_p6_target_tid = getattr(_p6_impl, "target_type_id", None)
-					if not isinstance(_p6_target_tid, int):
-						continue
-					if type_table.has_typevar(_p6_target_tid):
-						continue
-					_p6_method_fn_id: FunctionId | None = None
-					for _p6_m in _p6_impl.methods:
-						if _p6_m.name == "destroy":
-							_p6_method_fn_id = _p6_m.fn_id
-							break
-					if _p6_method_fn_id is None:
-						continue
-					_p6_ext_dfns[_p6_target_tid] = _p6_method_fn_id
-				if _p6_ext_dfns:
-					type_table.destructor_fns = _p6_ext_dfns
+		_install_destructor_fns(type_table, linked_world, combined_exports, external_impl_metas=external_impl_metas)
 		# K42: construct Pass1State to eliminate duplicate resolution in
 		# compile_stubbed_funcs — reuse typed_fns + resolution infrastructure.
 		# Phase 6: precompute visibility_provenance_by_id so CSF doesn't need
