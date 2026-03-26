@@ -301,9 +301,23 @@ class HIRToMIR:
 		# The codegen guard (fn_id match) prevents recursive destroy()
 		# and instead emits plain field drops for non-Destructible fields.
 		self._param_drop_locals: list[str] = []
+		# Detect if this function is a Destructible::destroy impl method.
+		# If so, `self` MUST be in _param_drop_locals regardless of what
+		# _needs_runtime_drop returns.  During package builds, the type
+		# table may not have complete struct instances or trait resolution
+		# for cross-package generic instantiations (e.g. Arc<AtomicBool>),
+		# causing _needs_runtime_drop to return False for self.  But by
+		# definition, destroy() is called TO drop self — omitting the
+		# scope drop causes the codegen field-cleanup epilogue to never run.
+		_is_destroy_method = (
+			current_fn_id is not None
+			and "std.core.Destructible::destroy" in getattr(current_fn_id, "name", "")
+		)
 		if param_types:
 			for name, ty in param_types.items():
-				if self._needs_runtime_drop(ty):
+				if _is_destroy_method and name == "self":
+					self._param_drop_locals.append(name)
+				elif self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
 				elif self._type_is_destructible(ty):
 					# Destructible types that are also Copy still need

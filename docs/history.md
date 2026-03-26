@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-03-23
+- **Always emitted `self` cleanup in `Destructible::destroy` epilogues, even when drop inference was incomplete (0.27.117, ABI 7)**:
+  Fixed a narrow but important producer/codegen bug where `self` cleanup inside
+  `Destructible::destroy` could still be suppressed if generic drop inference
+  was incomplete during package production.
+  - Problem:
+    - the compiler previously decided whether to include parameter scope-drop
+      cleanup in method epilogues by consulting `_needs_runtime_drop` /
+      `_type_is_destructible`
+    - for cross-package generic instantiations, those queries could be
+      incomplete at package-production time
+    - inside `Destructible::destroy`, that meant `self` could incorrectly be
+      excluded from `_param_drop_locals`
+    - if `self` was excluded, the destroy-body field-cleanup epilogue never ran
+      even though the function existed specifically to drop `self`
+  - Fix:
+    - inside `Destructible::destroy` method bodies, `self` is now always added
+      to `_param_drop_locals`
+    - all other parameters and functions still use the existing drop-inference
+      path
+    - this makes destroy-method cleanup robust even when producer-side generic
+      drop inference is temporarily incomplete
+  - Why this mattered:
+    - this is the correct narrow contract:
+      - if we are inside `destroy(self, ...)`, the epilogue must clean up
+        `self`
+      - the decision should not depend on a fallible drop query for the very
+        value being destroyed
+  - Versioning:
+    - compiler version is `0.27.117`
+    - ABI remains `7`
+
 - **Fixed `has_drop()` suppressing `DropValue` for cross-package generic instantiations when no struct instance was available (0.27.116, ABI 7)**:
   Fixed the producer-side package MIR bug behind the remaining consumer-only
   `Arc` leak after the earlier package-consumer fixes.
