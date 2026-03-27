@@ -312,13 +312,6 @@ def _resolve_artifact_deps(
 				f"run 'drift prepare' to re-resolve"
 			)
 	pkg_index = build_package_index(package_roots)
-	# Debug: trace what the index found for locked deps.
-	for _dbg_pkg_id, _dbg_dep in locked.items():
-		if _dbg_dep.dep_type == "co-artifact":
-			continue
-		_dbg_entries = pkg_index.get(_dbg_pkg_id, [])
-		_dbg_vers = [str(e.version) for e in _dbg_entries]
-		print(f"  [resolve] {_dbg_pkg_id}: locked={_dbg_dep.version} index_versions={_dbg_vers} roots={[str(r) for r in package_roots]}", flush=True)
 	errors = verify_lock_compatibility(locked, pkg_index)
 	if errors:
 		raise DeployError(
@@ -330,9 +323,6 @@ def _resolve_artifact_deps(
 	from tools.drift_deploy.resolver import version_compat_range
 	resolved_exact: dict[str, ResolvedDep] = {}
 	for pkg_id, dep in locked.items():
-		if dep.dep_type == "co-artifact":
-			resolved_exact[pkg_id] = dep
-			continue
 		entries = pkg_index.get(pkg_id, [])
 		compatible = [
 			e for e in entries
@@ -347,6 +337,11 @@ def _resolve_artifact_deps(
 				package_id=dep.package_id,
 				author_key=dep.author_key,
 			)
+		elif dep.dep_type == "co-artifact":
+			# Co-artifact not yet in the index (built later in the same
+			# deploy run).  Keep the lock range — it will be resolved when
+			# the co-artifact is actually staged.
+			resolved_exact[pkg_id] = dep
 		else:
 			available = sorted({str(e.version) for e in entries})
 			raise DeployError(

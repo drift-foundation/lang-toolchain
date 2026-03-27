@@ -300,9 +300,6 @@ def _resolve_deps(
 			from tools.drift_deploy.resolver import version_compat_range
 			resolved_exact: dict[str, ResolvedDep] = {}
 			for pkg_id, dep in locked.items():
-				if dep.dep_type == "co-artifact":
-					resolved_exact[pkg_id] = dep
-					continue
 				entries = pkg_index.get(pkg_id, [])
 				compatible = [
 					e for e in entries
@@ -317,6 +314,8 @@ def _resolve_deps(
 						package_id=dep.package_id,
 						author_key=dep.author_key,
 					)
+				elif dep.dep_type == "co-artifact":
+					resolved_exact[pkg_id] = dep
 				else:
 					available = sorted({str(e.version) for e in entries})
 					raise BuildError(
