@@ -312,6 +312,13 @@ def _resolve_artifact_deps(
 				f"run 'drift prepare' to re-resolve"
 			)
 	pkg_index = build_package_index(package_roots)
+	# Debug: trace what the index found for locked deps.
+	for _dbg_pkg_id, _dbg_dep in locked.items():
+		if _dbg_dep.dep_type == "co-artifact":
+			continue
+		_dbg_entries = pkg_index.get(_dbg_pkg_id, [])
+		_dbg_vers = [str(e.version) for e in _dbg_entries]
+		print(f"  [resolve] {_dbg_pkg_id}: locked={_dbg_dep.version} index_versions={_dbg_vers} roots={[str(r) for r in package_roots]}", flush=True)
 	errors = verify_lock_compatibility(locked, pkg_index)
 	if errors:
 		raise DeployError(
