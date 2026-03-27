@@ -1844,6 +1844,65 @@ class TestIntraProjectDeps:
 			assert resolved["net-crypto"].version == "0.1.0"
 
 
+# ── Lock range → exact version resolution ───────────────────────────
+
+
+class TestDeployLockRangeResolution:
+	"""Deploy must resolve v2 lock ranges to exact versions before --dep."""
+
+	@patch("tools.drift_deploy.drift_deploy.build_package_index")
+	def test_deploy_resolves_lock_range_to_exact_version(
+		self, mock_index: MagicMock,
+	) -> None:
+		"""v2 lock stores 0.1; deploy must resolve to 0.1.3 from the index."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		with tempfile.TemporaryDirectory() as tmpdir:
+			dmp = Path(tmpdir) / "dep-a.dmp"
+			dmp.write_bytes(b"fake-dmp-content")
+			mock_index.return_value = {
+				"dep-a": [
+					PackageEntry(
+						package_id="dep-a",
+						version=parse_version("0.1.3"),
+						path=dmp,
+						sha256="aabb",
+						package_deps=[],
+						author_key="ed25519:test_key",
+					),
+				],
+			}
+			art = Artifact(
+				kind="package", name="my-pkg", version="0.1.0",
+				description="", license="", entry_module="my/pkg.drift",
+				modules=["my/pkg.drift"], module_namespace="my.pkg",
+				package_deps=[PackageDep(name="dep-a", version="^0.1.0")],
+			)
+			existing_lock = {
+				"my-pkg": {
+					"dep-a": ResolvedDep(
+						version="0.1",
+						integrity="",
+						dep_type="direct",
+						package_id="dep-a",
+						author_key="ed25519:test_key",
+					),
+				},
+			}
+			resolved = _resolve_artifact_deps(
+				art,
+				package_roots=[Path(tmpdir)],
+				lock_path=Path(tmpdir) / "drift-lock.json",
+				existing_lock=existing_lock,
+			)
+			assert "dep-a" in resolved
+			# Must be exact version, not the lock range.
+			assert resolved["dep-a"].version == "0.1.3", (
+				f"deploy must resolve lock range 0.1 to exact 0.1.3; "
+				f"got {resolved['dep-a'].version}"
+			)
+
+
 # ── Dep namespace extraction ────────────────────────────────────────
 
 

@@ -341,7 +341,12 @@ def _resolve_artifact_deps(
 				author_key=dep.author_key,
 			)
 		else:
-			resolved_exact[pkg_id] = dep
+			available = sorted({str(e.version) for e in entries})
+			raise DeployError(
+				f"artifact '{art.name}': locked dependency '{pkg_id}' "
+				f"requires version {dep.version}.* but no compatible version "
+				f"found under package roots (available: {', '.join(available) or 'none'})"
+			)
 	return resolved_exact
 
 

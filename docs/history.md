@@ -1,6 +1,53 @@
 # Drift development history
 
 ## 2026-03-27
+- **Resolved v2 lock compatibility ranges to exact package versions before constructing `driftc --dep` flags (0.27.123, ABI 7)**:
+  Fixed a deploy/build integration bug introduced by the new v2 lock model.
+  The v2 lock intentionally stores compatible version ranges (`major.minor`),
+  while `driftc --dep` still expects exact package versions. Some deploy/build
+  paths were forwarding the raw lock range directly to `driftc`, which then
+  correctly failed exact package-root matching.
+  - Problem:
+    - v2 lock entries record values like:
+      - `mariadb-wire-proto@0.1`
+    - `driftc --dep` remains exact-version by contract and matches package-root
+      layout literally
+    - if deploy/build forwarded `--dep mariadb-wire-proto@0.1`, but the package
+      root only contained `mariadb-wire-proto/0.1.3/`, the consumer compile
+      failed even though the lock was otherwise compatible
+    - this was not a compiler bug:
+      - `driftc` exact `--dep` behavior was correct
+      - the bug was in our deploy/build translation layer
+  - Fix:
+    - both:
+      - [`tools/drift_deploy/drift_build.py`](/home/sl/src/drift-lang/tools/drift_deploy/drift_build.py)
+      - [`tools/drift_deploy/drift_deploy.py`](/home/sl/src/drift-lang/tools/drift_deploy/drift_deploy.py)
+    - now resolve locked `major.minor` ranges back to the highest compatible
+      exact package version from the package index before constructing final
+      `ResolvedDep` values and `--dep` flags
+    - if no compatible exact version exists under the current package roots,
+      build/deploy now fail clearly instead of leaking the raw range through to
+      `driftc`
+  - Result:
+    - lock file continues to express compatibility/trust
+    - build/deploy continue to own exact package selection
+    - `driftc` continues to consume exact package versions only
+  - Coverage:
+    - added build-path regression in
+      [`tools/drift_deploy/test_build.py`](/home/sl/src/drift-lang/tools/drift_deploy/test_build.py)
+      proving:
+      - lock stores `0.1`
+      - package index exposes `0.1.3`
+      - final `driftc` command contains `dep-a@0.1.3`
+      - raw `dep-a@0.1` never reaches `driftc`
+    - added matching deploy-path regression in
+      [`tools/drift_deploy/test_deploy.py`](/home/sl/src/drift-lang/tools/drift_deploy/test_deploy.py)
+      proving deploy resolves the same locked range to exact `0.1.3`
+  - Versioning:
+    - compiler version is `0.27.123`
+    - ABI remains `7`
+
+## 2026-03-27
 - **Replaced deploy lock byte-identity with compatibility-range + author-trust locking, and upgraded provenance to carry source identity (0.27.122, ABI 7)**:
   Changed the deploy lock model from exact artifact-byte replay to a two-layer
   workflow:

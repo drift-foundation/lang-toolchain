@@ -1057,6 +1057,71 @@ class TestLockCompatibility:
 
 		assert result == 1
 
+	def test_lock_range_resolved_to_exact_version(self, tmp_path):
+		"""v2 lock stores major.minor; build must resolve to exact version for --dep."""
+		manifest_data = {
+			"schema_version": 1,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [
+				{
+					"kind": "package",
+					"name": "my-pkg",
+					"version": "0.1.0",
+					"description": "A test package",
+					"entry_module": "src/lib.drift",
+					"modules": ["src/lib.drift"],
+					"package_deps": [
+						{"name": "dep-a", "version": "^0.1.0"},
+					],
+				}
+			],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		(tmp_path / "src").mkdir(parents=True, exist_ok=True)
+		(tmp_path / "src" / "lib.drift").write_text("module my.pkg;\n")
+		# Lock stores major.minor range.
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+
+		# Package root has exact version 0.1.3.
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [
+					PackageEntry(
+						package_id="dep-a",
+						version=parse_version("0.1.3"),
+						path=pkg_root / "dep-a-0.1.3.dmp",
+						sha256="aabb",
+						package_deps=[],
+						author_key="ed25519:test",
+					),
+				],
+			}
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run([
+				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 0
+		cmd_str = " ".join(mock_run.call_args[0][0])
+		# Must use exact version 0.1.3, not range 0.1.
+		assert "dep-a@0.1.3" in cmd_str, (
+			f"build must resolve lock range 0.1 to exact version 0.1.3; "
+			f"got: {cmd_str}"
+		)
+		assert "dep-a@0.1 " not in cmd_str and not cmd_str.endswith("dep-a@0.1"), (
+			f"raw lock range must not reach driftc; got: {cmd_str}"
+		)
+
 
 # ── CLI dispatch (toolchain integration) ─────────────────────────────
 
