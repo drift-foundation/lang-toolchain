@@ -38,7 +38,7 @@ It is intentionally *hybrid*: part specification, part operational contract.
 - Loading project and target configuration
 - Discovering targets
 - Resolving modules from **local package roots only**
-- Verifying package integrity (hashes) and, when present, package signatures and trust policy **before** using any package contents (**gatekeeper**)
+- Verifying package signatures, trust policy, and ABI compatibility **before** using any package contents (**gatekeeper**)
 - Compiling sources
 - Producing final artifacts (executables or package artifacts)
 
@@ -361,7 +361,9 @@ Includes:
 - Monotonic lock revision (`lock_rev`) for “newer vs older”
 - Generation timestamp
 
-The lockfile is authoritative for reproducible builds.
+The lockfile pins the compatibility contract (major.minor version range +
+author signing key) for reproducible builds. Exact artifact identity is
+carried by package signatures, provenance bundles, and certified snapshots.
 
 ---
 

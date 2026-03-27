@@ -239,7 +239,7 @@ class TestProvenanceInDeploy:
 			)
 			write_provenance(path, prov_bytes)
 			data = json.loads(path.read_text())
-			assert data["schema_version"] == 2
+			assert data["schema_version"] == 3
 			assert data["artifact_name"] == "myapp"
 			assert data["artifact_version"] == "1.0.0"
 			assert data["artifact_kind"] == "app"
@@ -1813,6 +1813,7 @@ class TestIntraProjectDeps:
 						path=dmp,
 						sha256=sha,
 						package_deps=[],
+						author_key="ed25519:test_key",
 					),
 				],
 			}
@@ -1825,9 +1826,11 @@ class TestIntraProjectDeps:
 			existing_lock = {
 				"net-tls": {
 					"net-crypto": ResolvedDep(
-						version="0.1.0",
-						integrity=f"sha256:{sha}",
+						version="0.1",
+						integrity="",
 						dep_type="direct",
+						package_id="net-crypto",
+						author_key="ed25519:test_key",
 					),
 				},
 			}

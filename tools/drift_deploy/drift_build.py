@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
-from tools.drift_deploy.lockfile import read_lock, verify_lock_integrity
+from tools.drift_deploy.lockfile import read_lock, verify_lock_compatibility
 from tools.drift_deploy.manifest import (
 	Artifact,
 	ManifestError,
@@ -287,15 +287,39 @@ def _resolve_deps(
 					f"run 'drift prepare' to re-resolve"
 				)
 
-		# Verify lock integrity against package roots.
+		# Verify lock compatibility against package roots.
 		if package_roots:
 			pkg_index = build_package_index(package_roots)
-			errors = verify_lock_integrity(locked, pkg_index)
+			errors = verify_lock_compatibility(locked, pkg_index)
 			if errors:
 				raise BuildError(
-					f"artifact '{art.name}': lock integrity check failed:\n"
+					f"artifact '{art.name}': lock compatibility check failed:\n"
 					+ "\n".join(f"  {e}" for e in errors)
 				)
+			# Resolve locked minor ranges to exact versions from the index.
+			from tools.drift_deploy.resolver import version_compat_range
+			resolved_exact: dict[str, ResolvedDep] = {}
+			for pkg_id, dep in locked.items():
+				if dep.dep_type == "co-artifact":
+					resolved_exact[pkg_id] = dep
+					continue
+				entries = pkg_index.get(pkg_id, [])
+				compatible = [
+					e for e in entries
+					if version_compat_range(str(e.version)) == dep.version
+				]
+				if compatible:
+					best = max(compatible, key=lambda e: e.version)
+					resolved_exact[pkg_id] = ResolvedDep(
+						version=str(best.version),
+						integrity="",
+						dep_type=dep.dep_type,
+						package_id=dep.package_id,
+						author_key=dep.author_key,
+					)
+				else:
+					resolved_exact[pkg_id] = dep
+			return resolved_exact
 
 		return locked
 
@@ -365,7 +389,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Resolve driftc.
 	driftc = _resolve_driftc(args.driftc)
 
-	# Package roots (resolved before deps — needed for lock integrity check).
+	# Package roots (resolved before deps — needed for lock compatibility check).
 	package_roots = _resolve_package_roots(args.package_root, manifest_dir)
 
 	# Resolve deps.

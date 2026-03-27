@@ -66,7 +66,7 @@ class TestPrepareResolve:
 		"""drift prepare resolves deps and writes drift-lock.json."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="1.0.0", integrity="sha256:aabb", dep_type="direct"),
+			"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = Path(tmpdir) / "drift-manifest.json"
@@ -97,7 +97,7 @@ class TestPrepareResolve:
 			lock = read_lock(lock_path)
 			assert "my.pkg" in lock
 			assert "ext.lib" in lock["my.pkg"]
-			assert lock["my.pkg"]["ext.lib"].version == "1.0.0"
+			assert lock["my.pkg"]["ext.lib"].version == "1.0"
 
 	def test_no_deps_is_noop(self) -> None:
 		"""drift prepare with no package_deps does nothing."""
@@ -135,7 +135,7 @@ class TestPrepareResolve:
 		"""Re-running prepare overwrites the existing lock."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="2.0.0", integrity="sha256:ccdd", dep_type="direct"),
+			"ext.lib": ResolvedDep(version="2.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = Path(tmpdir) / "drift-manifest.json"
@@ -160,7 +160,7 @@ class TestPrepareResolve:
 			from tools.drift_deploy.lockfile import write_lock
 			lock_path = Path(tmpdir) / "drift-lock.json"
 			write_lock(lock_path, {"my.pkg": {
-				"ext.lib": ResolvedDep(version="1.0.0", integrity="sha256:old", dep_type="direct"),
+				"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -169,7 +169,7 @@ class TestPrepareResolve:
 			assert rc == 0
 
 			lock = read_lock(lock_path)
-			assert lock["my.pkg"]["ext.lib"].version == "2.0.0"
+			assert lock["my.pkg"]["ext.lib"].version == "2.0"
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
 	def test_resolution_error_raises_prepare_error(
@@ -211,7 +211,7 @@ class TestFullPrepareReplace:
 		"""Prepare always replaces the full lock — stale entries are dropped."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"dep.a": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+			"dep.a": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="dep.a", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = Path(tmpdir) / "drift-manifest.json"
@@ -232,7 +232,7 @@ class TestFullPrepareReplace:
 			lock_path = Path(tmpdir) / "drift-lock.json"
 			from tools.drift_deploy.lockfile import write_lock
 			write_lock(lock_path, {"stale.pkg": {
-				"dep.x": ResolvedDep(version="9.0.0", integrity="sha256:xx", dep_type="direct"),
+				"dep.x": ResolvedDep(version="9.0.0", integrity="", dep_type="direct", package_id="dep.x", author_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -281,9 +281,8 @@ class TestCoArtifactResolution:
 			lock = read_lock(Path(tmpdir) / "drift-lock.json")
 			assert "web-rest" in lock
 			dep = lock["web-rest"]["web-jwt"]
-			assert dep.version == "0.2.3"
+			assert dep.version == "0.2"
 			assert dep.dep_type == "co-artifact"
-			assert dep.integrity == "sha256:co-artifact"
 
 	def test_co_artifact_with_external_dep(self) -> None:
 		"""Co-artifact + external dep: both resolved correctly."""
@@ -323,6 +322,7 @@ class TestCoArtifactResolution:
 			ext_entry = PackageEntry(
 				package_id="ext.crypto", version=parse_version("1.0.0"),
 				path=ext_dmp, sha256="aabbccdd", package_deps=[],
+				author_key="ed25519:test",
 			)
 			with patch("tools.drift_deploy.drift_prepare.build_package_index") as mock_idx:
 				mock_idx.return_value = {"ext.crypto": [ext_entry]}
@@ -337,12 +337,11 @@ class TestCoArtifactResolution:
 			# Co-artifact dep.
 			auth_dep = lock["my.app"]["my.auth"]
 			assert auth_dep.dep_type == "co-artifact"
-			assert auth_dep.version == "0.1.0"
+			assert auth_dep.version == "0.1"
 			# External dep.
 			crypto_dep = lock["my.app"]["ext.crypto"]
 			assert crypto_dep.dep_type == "direct"
-			assert crypto_dep.version == "1.0.0"
-			assert crypto_dep.integrity == "sha256:aabbccdd"
+			assert crypto_dep.version == "1.0"
 
 	def test_co_artifact_version_mismatch_errors(self) -> None:
 		"""Co-artifact exists but version doesn't satisfy constraint."""
@@ -418,4 +417,4 @@ class TestCoArtifactResolution:
 			assert app_deps["my.mid"].dep_type == "co-artifact"
 			# Transitive co-artifact dep (my.mid depends on my.base).
 			assert app_deps["my.base"].dep_type == "co-artifact"
-			assert app_deps["my.base"].version == "0.1.0"
+			assert app_deps["my.base"].version == "0.1"

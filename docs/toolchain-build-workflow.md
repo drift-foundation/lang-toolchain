@@ -249,9 +249,10 @@ drift build acme-math -o /tmp/acme-math.dmp --driftc $DRIFTC
 
 `drift build` does NOT own resolution. It consumes existing state:
 
-- If `drift-lock.json` exists next to the manifest, it uses the full locked
-  graph (direct + transitive). The lock must be complete — a stale or partial
-  lock is an error.
+- If `drift-lock.json` exists next to the manifest, it uses the locked
+  compatibility graph (direct + transitive). The lock pins major.minor
+  version ranges and author keys — any compatible patch within the range
+  is accepted. A stale or partial lock is an error.
 - If no lockfile exists, only exact version pins are accepted. Range
   constraints (e.g. `^1.0.0`) require a lockfile — run `drift prepare` first.
 
@@ -282,7 +283,10 @@ drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
 ```
 
 This resolves all package dependencies and writes `drift-lock.json`.
-Review the lock, then commit it alongside your manifest.
+The lock records the compatibility contract: major.minor version range
+and author signing key for each dependency. Patch updates within the
+range are accepted silently; minor/major bumps and key rotation require
+re-running prepare. Review the lock, then commit it alongside your manifest.
 
 ### 4.2 Declare author profile in manifest
 

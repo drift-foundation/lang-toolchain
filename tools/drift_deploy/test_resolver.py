@@ -21,7 +21,7 @@ import pytest
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
-	verify_lock_integrity,
+	verify_lock_compatibility,
 	write_lock,
 )
 from tools.drift_deploy.resolver import (
@@ -47,6 +47,7 @@ def _make_entry(
 	version: str,
 	sha: str = "aabbccdd",
 	deps: list[tuple[str, str]] | None = None,
+	author_key: str = "",
 ) -> PackageEntry:
 	return PackageEntry(
 		package_id=pkg_id,
@@ -54,6 +55,7 @@ def _make_entry(
 		path=Path(f"/fake/{pkg_id}-{version}.dmp"),
 		sha256=sha,
 		package_deps=deps or [],
+		author_key=author_key,
 	)
 
 
@@ -123,7 +125,7 @@ class TestResolverBasic:
 		result = resolve_artifact("myapp", [("net.tls", "^0.3.0")], idx)
 		assert "net.tls" in result
 		assert result["net.tls"].version == "0.3.0"
-		assert result["net.tls"].integrity == "sha256:aa"
+		assert result["net.tls"].package_id == "net.tls"
 		assert result["net.tls"].dep_type == "direct"
 
 	def test_highest_satisfying_selected(self) -> None:
@@ -293,17 +295,17 @@ class TestResolverDeterminism:
 		assert r1 == r2
 
 
-# ── Lock file round-trip ────────────────────────────────────────────
+# ── Lock file ─────────────────────────────────────────────────────
 
 
 class TestLockFile:
 	def test_write_read_roundtrip(self) -> None:
 		deps_a = {
-			"net.tls": ResolvedDep(version="0.3.2", integrity="sha256:aabb", dep_type="direct"),
-			"acme.crypto": ResolvedDep(version="0.9.0", integrity="sha256:ccdd", dep_type="transitive"),
+			"net.tls": ResolvedDep(version="0.3.2", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
+			"acme.crypto": ResolvedDep(version="0.9.0", integrity="", dep_type="transitive", package_id="acme.crypto", author_key="ed25519:def"),
 		}
 		deps_b = {
-			"util.log": ResolvedDep(version="1.0.0", integrity="sha256:eeff", dep_type="direct"),
+			"util.log": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="util.log", author_key="ed25519:ghi"),
 		}
 
 		with tempfile.TemporaryDirectory() as tmpdir:
@@ -312,15 +314,18 @@ class TestLockFile:
 			result = read_lock(lock_path)
 
 		assert set(result.keys()) == {"app-a", "app-b"}
-		assert result["app-a"]["net.tls"].version == "0.3.2"
+		# Lock stores major.minor, not exact version.
+		assert result["app-a"]["net.tls"].version == "0.3"
 		assert result["app-a"]["net.tls"].dep_type == "direct"
+		assert result["app-a"]["net.tls"].author_key == "ed25519:abc"
+		assert result["app-a"]["acme.crypto"].version == "0.9"
 		assert result["app-a"]["acme.crypto"].dep_type == "transitive"
-		assert result["app-b"]["util.log"].integrity == "sha256:eeff"
+		assert result["app-b"]["util.log"].package_id == "util.log"
 
 	def test_expand_to_dep_flags(self) -> None:
 		resolved = {
-			"net.tls": ResolvedDep(version="0.3.2", integrity="sha256:aa", dep_type="direct"),
-			"acme.crypto": ResolvedDep(version="0.9.0", integrity="sha256:bb", dep_type="transitive"),
+			"net.tls": ResolvedDep(version="0.3.2", integrity="", dep_type="direct", package_id="net.tls"),
+			"acme.crypto": ResolvedDep(version="0.9.0", integrity="", dep_type="transitive", package_id="acme.crypto"),
 		}
 		flags = expand_to_dep_flags(resolved)
 		# Sorted by package_id → acme.crypto first.
@@ -329,50 +334,106 @@ class TestLockFile:
 			"--dep", "net.tls@0.3.2",
 		]
 
-	def test_verify_integrity_pass(self) -> None:
+	def test_verify_same_minor_different_patch_accepted(self) -> None:
+		"""Same signer, same minor, different patch → accepted."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
+			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.0", sha="aa")],
+			"net.tls": [_make_entry("net.tls", "0.3.14", sha="ff", author_key="ed25519:abc")],
 		}
-		errors = verify_lock_integrity(lock_deps, pkg_index)
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
 
-	def test_verify_integrity_mismatch(self) -> None:
+	def test_verify_different_minor_rejected(self) -> None:
+		"""Same signer, different minor → rejected until prepare."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
-		}
-		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.0", sha="ff")],
-		}
-		errors = verify_lock_integrity(lock_deps, pkg_index)
-		assert len(errors) == 1
-		assert "integrity mismatch" in errors[0]
-
-	def test_verify_integrity_version_missing(self) -> None:
-		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
+			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls"),
 		}
 		pkg_index = {
 			"net.tls": [_make_entry("net.tls", "0.4.0", sha="aa")],
 		}
-		errors = verify_lock_integrity(lock_deps, pkg_index)
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert len(errors) == 1
-		assert "not found" in errors[0]
+		assert "0.3.*" in errors[0]
 
-	def test_verify_skips_co_artifact_deps(self) -> None:
-		"""Co-artifact deps have no published .dmp; integrity check is skipped."""
+	def test_verify_key_rotation_rejected(self) -> None:
+		"""Signer change → rejected with clear message."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3.0", integrity="sha256:aa", dep_type="direct"),
-			"web.jwt": ResolvedDep(version="0.2.3", integrity="sha256:co-artifact", dep_type="co-artifact"),
+			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:old_key"),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.0", sha="aa")],
+			"net.tls": [_make_entry("net.tls", "0.3.14", sha="aa", author_key="ed25519:new_key")],
+		}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "signing key changed" in errors[0]
+		assert "ed25519:old_key" in errors[0]
+		assert "ed25519:new_key" in errors[0]
+		assert "prepare" in errors[0]
+
+	def test_verify_same_minor_different_bytes_accepted(self) -> None:
+		"""Same version range, same signer, different artifact bytes → accepted.
+		Compiler rebuilds must not invalidate the lock."""
+		lock_deps = {
+			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
+		}
+		# Different sha (recompiled) but same minor + same author.
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.14", sha="completely_different_bytes", author_key="ed25519:abc")],
+		}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert errors == [], "compiler rebuilds must not invalidate the lock"
+
+	def test_verify_skips_co_artifact_deps(self) -> None:
+		"""Co-artifact deps have no published .dmp; compatibility check is skipped."""
+		lock_deps = {
+			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
+			"web.jwt": ResolvedDep(version="0.2", integrity="", dep_type="co-artifact", package_id="web.jwt"),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.0", sha="aa", author_key="ed25519:abc")],
 			# web.jwt NOT in index — would fail if not skipped.
 		}
-		errors = verify_lock_integrity(lock_deps, pkg_index)
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
+
+
+	def test_v1_lock_rejected_with_clear_message(self) -> None:
+		"""Schema v1 lock must be rejected with a message to run prepare."""
+		v1_lock = {
+			"schema_version": 1,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {"version": "0.3.0", "integrity": "sha256:aa", "dep_type": "direct"},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path.write_text(json.dumps(v1_lock))
+			with pytest.raises(ValueError, match="schema v1.*prepare"):
+				read_lock(lock_path)
+
+	def test_unsigned_lock_rejected(self) -> None:
+		"""Empty author_key is rejected — packages must be signed before locking."""
+		v2_lock = {
+			"schema_version": 2,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {"version": "0.3", "package_id": "net.tls", "author_key": "", "dep_type": "direct"},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path.write_text(json.dumps(v2_lock))
+			with pytest.raises(ValueError, match="author_key"):
+				read_lock(lock_path)
 
 
 # ── Package index: symlink dedup ─────────────────────────────────────

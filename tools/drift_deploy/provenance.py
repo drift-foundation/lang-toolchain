@@ -62,6 +62,31 @@ def parse_compiler_info(version_output: str) -> CompilerInfo:
 	return CompilerInfo(version=version, abi=abi, commit=commit)
 
 
+@dataclass(frozen=True)
+class SourceIdentity:
+	"""Source provenance metadata for an artifact build."""
+	vcs_type: str = ""  # "git", "hg", or "" if unknown
+	branch: str = ""  # branch/ref name, or "" if unknown
+	commit: str = ""  # full commit/revision hash, or "" if unknown
+
+
+def detect_source_identity(repo_dir: Path) -> SourceIdentity:
+	"""Detect VCS source identity from a repository directory.
+
+	Uses os.popen instead of subprocess.run to avoid interference
+	with test mocks that patch subprocess.run globally.
+	"""
+	import os
+	try:
+		branch = os.popen(f"git -C {repo_dir} rev-parse --abbrev-ref HEAD 2>/dev/null").read().strip()
+		commit = os.popen(f"git -C {repo_dir} rev-parse HEAD 2>/dev/null").read().strip()
+		if branch and commit and len(commit) >= 7:
+			return SourceIdentity(vcs_type="git", branch=branch, commit=commit)
+	except Exception:
+		pass
+	return SourceIdentity()
+
+
 def build_provenance(
 	*,
 	artifact_name: str,
@@ -71,6 +96,7 @@ def build_provenance(
 	target: str,
 	compiler: CompilerInfo,
 	resolved_deps: dict[str, dict[str, str]],  # {pkg_id: {"version": str, "integrity": str}}
+	source: SourceIdentity | None = None,
 ) -> bytes:
 	"""Build canonical deterministic provenance JSON bytes.
 
@@ -82,7 +108,7 @@ def build_provenance(
 	  - For apps: sha256 of the compiled binary bytes.
 	"""
 	obj: dict[str, Any] = {
-		"schema_version": 2,
+		"schema_version": 3,
 		"artifact_name": artifact_name,
 		"artifact_version": artifact_version,
 		"artifact_kind": artifact_kind,
@@ -94,6 +120,12 @@ def build_provenance(
 		"build_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 		"resolved_deps": resolved_deps,
 	}
+	if source is not None:
+		obj["source"] = {
+			"vcs_type": source.vcs_type,
+			"branch": source.branch,
+			"commit": source.commit,
+		}
 	return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 

@@ -10,6 +10,7 @@ always produces the same resolved graph.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ class PackageEntry:
 	path: Path
 	sha256: str
 	package_deps: list[tuple[str, str]]  # [(dep_name, constraint_string), ...]
+	author_key: str = ""  # "ed25519:<kid>" from signature sidecar
 
 
 @dataclass(frozen=True)
@@ -36,10 +38,17 @@ class ConstraintEntry:
 
 @dataclass(frozen=True)
 class ResolvedDep:
-	"""A single resolved dependency."""
-	version: str
-	integrity: str  # "sha256:<hex>"
-	dep_type: str  # "direct" or "transitive"
+	"""A single resolved dependency.
+
+	v2 lock: version is major.minor compatibility range (e.g. "0.3"),
+	author_key is the signing key kid, integrity is unused.
+	v1 legacy: version is exact, integrity is sha256 of artifact bytes.
+	"""
+	version: str  # v2: "major.minor" range; v1: exact version
+	integrity: str  # v1: "sha256:<hex>"; v2: "" (unused)
+	dep_type: str  # "direct", "transitive", or "co-artifact"
+	package_id: str = ""  # package name
+	author_key: str = ""  # "ed25519:<kid>" of signer
 
 
 class ResolutionError(Exception):
@@ -66,6 +75,41 @@ def _sha256_file(path: Path) -> str:
 				break
 			h.update(chunk)
 	return h.hexdigest()
+
+
+def version_compat_range(version: str) -> str:
+	"""Extract the major.minor compatibility range from a version string.
+
+	"0.3.14" → "0.3"
+	"1.2.0" → "1.2"
+	"0.3" → "0.3"
+	"""
+	parts = version.split(".")
+	if len(parts) >= 2:
+		return f"{parts[0]}.{parts[1]}"
+	return version
+
+
+def _read_author_key(dmp_path: Path) -> str:
+	"""Extract the first signing key id from the .sig sidecar adjacent to a .dmp/.zdmp."""
+	for suffix in (".sig",):
+		sig_path = dmp_path.with_suffix(suffix)
+		if not sig_path.exists():
+			# Try .zdmp sibling
+			zdmp_sibling = dmp_path.with_suffix(".zdmp")
+			sig_path = zdmp_sibling.with_suffix(suffix)
+		if not sig_path.exists():
+			continue
+		try:
+			data = json.loads(sig_path.read_text())
+			sigs = data.get("signatures", [])
+			if sigs and isinstance(sigs, list):
+				kid = sigs[0].get("kid", "")
+				if isinstance(kid, str) and kid:
+					return kid
+		except (json.JSONDecodeError, OSError, KeyError):
+			pass
+	return ""
 
 
 def build_package_index(
@@ -180,12 +224,15 @@ def build_package_index(
 							pkg_deps.append((name, ver))
 
 			sha = _sha256_file(dmp_path)
+			# Extract author_key from adjacent .sig sidecar.
+			ak = _read_author_key(dmp_path)
 			entry = PackageEntry(
 				package_id=pkg_id,
 				version=pkg_ver,
 				path=dmp_path,
 				sha256=sha,
 				package_deps=pkg_deps,
+				author_key=ak,
 			)
 			index.setdefault(pkg_id, []).append(entry)
 
@@ -327,7 +374,9 @@ def resolve_artifact(
 	for pkg_id, (ver, entry) in resolved.items():
 		result[pkg_id] = ResolvedDep(
 			version=str(ver),
-			integrity=f"sha256:{entry.sha256}",
+			integrity="",
 			dep_type="direct" if pkg_id in direct_set else "transitive",
+			package_id=pkg_id,
+			author_key=entry.author_key,
 		)
 	return result

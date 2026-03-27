@@ -22,7 +22,7 @@ from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
 	read_lock,
-	verify_lock_integrity,
+	verify_lock_compatibility,
 )
 from tools.drift_deploy.manifest import (
 	Artifact,
@@ -312,13 +312,37 @@ def _resolve_artifact_deps(
 				f"run 'drift prepare' to re-resolve"
 			)
 	pkg_index = build_package_index(package_roots)
-	errors = verify_lock_integrity(locked, pkg_index)
+	errors = verify_lock_compatibility(locked, pkg_index)
 	if errors:
 		raise DeployError(
-			f"artifact '{art.name}': lock integrity check failed:\n"
+			f"artifact '{art.name}': lock compatibility check failed:\n"
 			+ "\n".join(f"  {e}" for e in errors)
 		)
-	return locked
+	# Resolve locked compatibility ranges to exact versions from the index.
+	# The lock stores major.minor; driftc --dep needs exact versions.
+	from tools.drift_deploy.resolver import version_compat_range
+	resolved_exact: dict[str, ResolvedDep] = {}
+	for pkg_id, dep in locked.items():
+		if dep.dep_type == "co-artifact":
+			resolved_exact[pkg_id] = dep
+			continue
+		entries = pkg_index.get(pkg_id, [])
+		compatible = [
+			e for e in entries
+			if version_compat_range(str(e.version)) == dep.version
+		]
+		if compatible:
+			best = max(compatible, key=lambda e: e.version)
+			resolved_exact[pkg_id] = ResolvedDep(
+				version=str(best.version),
+				integrity="",
+				dep_type=dep.dep_type,
+				package_id=dep.package_id,
+				author_key=dep.author_key,
+			)
+		else:
+			resolved_exact[pkg_id] = dep
+	return resolved_exact
 
 
 # ── Build ────────────────────────────────────────────────────────────
@@ -924,6 +948,8 @@ def _deploy_artifact(
 				"version": dep.version,
 				"integrity": dep.integrity,
 			}
+		from tools.drift_deploy.provenance import detect_source_identity
+		source_id = detect_source_identity(manifest_dir)
 		provenance_bytes = build_provenance(
 			artifact_name=art.name,
 			artifact_version=art.version,
@@ -932,6 +958,7 @@ def _deploy_artifact(
 			target=target,
 			compiler=compiler_info,
 			resolved_deps=resolved_deps_for_provenance,
+			source=source_id,
 		)
 		provenance_obj = json.loads(provenance_bytes)
 
@@ -1048,6 +1075,8 @@ def _deploy_artifact(
 				"version": dep.version,
 				"integrity": dep.integrity,
 			}
+		from tools.drift_deploy.provenance import detect_source_identity
+		source_id = detect_source_identity(manifest_dir)
 		provenance_bytes = build_provenance(
 			artifact_name=art.name,
 			artifact_version=art.version,
@@ -1056,6 +1085,7 @@ def _deploy_artifact(
 			target=target,
 			compiler=compiler_info,
 			resolved_deps=resolved_deps_for_provenance,
+			source=source_id,
 		)
 		provenance_obj = json.loads(provenance_bytes)
 

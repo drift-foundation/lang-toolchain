@@ -80,7 +80,7 @@ class TestBuildProvenance:
 	def test_fields_present(self) -> None:
 		raw = build_provenance(**self._default_kwargs())
 		obj = json.loads(raw)
-		assert obj["schema_version"] == 2
+		assert obj["schema_version"] == 3
 		assert obj["artifact_name"] == "web-rest"
 		assert obj["artifact_version"] == "0.2.5"
 		assert obj["artifact_kind"] == "package"
@@ -91,6 +91,24 @@ class TestBuildProvenance:
 		assert obj["abi"] == 6
 		assert "build_utc" in obj
 		assert obj["resolved_deps"]["web-jwt"]["version"] == "0.2.5"
+
+	def test_source_identity_included(self) -> None:
+		"""Source identity is embedded when provided."""
+		from tools.drift_deploy.provenance import SourceIdentity
+		kwargs = self._default_kwargs()
+		kwargs["source"] = SourceIdentity(vcs_type="git", branch="main", commit="deadbeef1234567890")
+		raw = build_provenance(**kwargs)
+		obj = json.loads(raw)
+		assert "source" in obj
+		assert obj["source"]["vcs_type"] == "git"
+		assert obj["source"]["branch"] == "main"
+		assert obj["source"]["commit"] == "deadbeef1234567890"
+
+	def test_source_identity_omitted_when_none(self) -> None:
+		"""No source block when source is not provided."""
+		raw = build_provenance(**self._default_kwargs())
+		obj = json.loads(raw)
+		assert "source" not in obj
 
 	def test_different_inputs_differ(self) -> None:
 		kwargs = self._default_kwargs()
@@ -1170,7 +1188,7 @@ class TestAppProvenanceBundle:
 			resolved_deps={"net.tls": {"version": "0.3.8", "integrity": "sha256:deadbeef"}},
 		)
 		obj = json.loads(prov_bytes)
-		assert obj["schema_version"] == 2
+		assert obj["schema_version"] == 3
 		assert obj["artifact_name"] == "my-app"
 		assert obj["artifact_version"] == "1.0.0"
 		assert obj["artifact_kind"] == "app"

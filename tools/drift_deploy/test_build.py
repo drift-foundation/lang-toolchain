@@ -70,20 +70,23 @@ def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
 	return manifest_path
 
 
-def _write_lock(tmp_path: Path, artifacts: dict) -> Path:
+def _write_lock(tmp_path: Path, artifacts: dict, *, author_key: str = "ed25519:test") -> Path:
+	from tools.drift_deploy.resolver import version_compat_range
 	lock_path = tmp_path / "drift-lock.json"
-	lock_obj = {"schema_version": 1, "artifacts": {}}
+	lock_obj = {"schema_version": 2, "artifacts": {}}
 	for art_name, deps in artifacts.items():
 		resolved = {}
 		for pkg_id, ver in deps.items():
 			resolved[pkg_id] = {
-				"version": ver,
-				"integrity": "sha256:abc123",
+				"version": version_compat_range(ver),
+				"package_id": pkg_id,
+				"author_key": author_key,
 				"dep_type": "direct",
 			}
 		lock_obj["artifacts"][art_name] = {"resolved": resolved}
 	lock_path.write_text(json.dumps(lock_obj, indent=2), encoding="utf-8")
 	return lock_path
+
 
 
 # ── build_source_args tests ──────────────────────────────────────────
@@ -143,7 +146,7 @@ class TestBuildPackageCmd:
 		art = _make_artifact(
 			package_deps=[PackageDep(name="dep-a", version="1.0.0")],
 		)
-		resolved = {"dep-a": ResolvedDep(version="1.0.0", integrity="sha256:x", dep_type="direct")}
+		resolved = {"dep-a": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
 		cmd = build_package_cmd(
 			art,
 			driftc=Path("/usr/bin/driftc"),
@@ -394,8 +397,8 @@ class TestDriftBuildRun:
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
-		# Should use locked version 1.2.3, not range ^1.0.0.
-		assert "dep-a@1.2.3" in " ".join(cmd)
+		# Should use locked minor range, not manifest constraint ^1.0.0.
+		assert "dep-a@1.2" in " ".join(cmd)
 
 	def test_lockfile_transitive_deps_forwarded(self, tmp_path):
 		"""Full locked graph (direct + transitive) must be passed to driftc."""
@@ -419,12 +422,12 @@ class TestDriftBuildRun:
 		_write_manifest(tmp_path, manifest_data)
 		# Lock contains dep-a (direct) AND dep-b (transitive).
 		lock_obj = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"artifacts": {
 				"my-pkg": {
 					"resolved": {
-						"dep-a": {"version": "1.2.3", "integrity": "sha256:aaa", "dep_type": "direct"},
-						"dep-b": {"version": "0.5.0", "integrity": "sha256:bbb", "dep_type": "transitive"},
+						"dep-a": {"version": "1.2", "package_id": "dep-a", "author_key": "unsigned", "dep_type": "direct"},
+						"dep-b": {"version": "0.5", "package_id": "dep-b", "author_key": "unsigned", "dep_type": "transitive"},
 					}
 				}
 			},
@@ -441,8 +444,8 @@ class TestDriftBuildRun:
 		assert result == 0
 		cmd_str = " ".join(mock_run.call_args[0][0])
 		# Both direct and transitive deps must appear as --dep flags.
-		assert "dep-a@1.2.3" in cmd_str
-		assert "dep-b@0.5.0" in cmd_str
+		assert "dep-a@1.2" in cmd_str
+		assert "dep-b@0.5" in cmd_str
 
 	def test_stale_lockfile_missing_artifact_errors(self, tmp_path):
 		"""Lock exists but has no entry for this artifact → error."""
@@ -740,7 +743,7 @@ class TestPackageDepUsesResolvedVersions:
 		art = _make_artifact(
 			package_deps=[PackageDep(name="dep-a", version="^1.0.0")],
 		)
-		resolved = {"dep-a": ResolvedDep(version="1.2.3", integrity="sha256:x", dep_type="direct")}
+		resolved = {"dep-a": ResolvedDep(version="1.2.3", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
 		cmd = build_package_cmd(
 			art,
 			driftc=Path("/usr/bin/driftc"),
@@ -780,8 +783,8 @@ class TestPackageDepUsesResolvedVersions:
 			package_deps=[PackageDep(name="dep-a", version="^1.0.0")],
 		)
 		resolved = {
-			"dep-a": ResolvedDep(version="1.2.3", integrity="sha256:x", dep_type="direct"),
-			"dep-b": ResolvedDep(version="0.5.0", integrity="sha256:y", dep_type="transitive"),
+			"dep-a": ResolvedDep(version="1.2.3", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test"),
+			"dep-b": ResolvedDep(version="0.5.0", integrity="", dep_type="transitive", package_id="dep-b", author_key="ed25519:test"),
 		}
 		cmd = build_package_cmd(
 			art,
@@ -838,7 +841,7 @@ class TestPackageDepUsesResolvedVersions:
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
 		dep_idx = cmd.index("--package-dep")
-		assert cmd[dep_idx + 1] == "dep-a=1.2.3"
+		assert cmd[dep_idx + 1] == "dep-a=1.2"
 		joined = " ".join(cmd)
 		assert "^1.0.0" not in joined
 
@@ -1014,12 +1017,12 @@ class TestConfigValidation:
 		assert result == 0
 
 
-# ── Lock integrity validation ────────────────────────────────────────
+# ── Lock compatibility validation ────────────────────────────────────
 
 
-class TestLockIntegrity:
-	def test_lock_integrity_checked_against_package_roots(self, tmp_path):
-		"""Lock integrity mismatch against package roots produces early error."""
+class TestLockCompatibility:
+	def test_lock_compatibility_checked_against_package_roots(self, tmp_path):
+		"""Lock compatibility mismatch against package roots produces early error."""
 		manifest_data = {
 			"schema_version": 1,
 			"project": {"name": "test-project", "license": "MIT"},
@@ -1573,9 +1576,6 @@ class TestE2E:
 		import shutil
 		shutil.copy2(str(dep_dmp), str(pkg_root / "test-dep.dmp"))
 
-		# Compute integrity hash for the lockfile.
-		dep_sha256 = hashlib.sha256(dep_dmp.read_bytes()).hexdigest()
-
 		# Step 3: Build the consumer package with a lockfile.
 		consumer_dir = tmp_path / "consumer_project"
 		consumer_dir.mkdir()
@@ -1593,15 +1593,16 @@ class TestE2E:
 			json.dumps(consumer_manifest, indent=2), encoding="utf-8",
 		)
 
-		# Write lockfile with real integrity from the built dep.
+		# Write lockfile with compatibility range from the built dep.
 		lock = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"artifacts": {
 				"test-consumer": {
 					"resolved": {
 						"test-dep": {
-							"version": "0.1.0",
-							"integrity": f"sha256:{dep_sha256}",
+							"version": "0.1",
+							"package_id": "test-dep",
+							"author_key": "unsigned",
 							"dep_type": "direct",
 						},
 					},
@@ -1692,9 +1693,9 @@ class TestE2E:
 		), encoding="utf-8")
 		# test-dep needs a lockfile for its dep on test-leaf.
 		(dep_dir / "drift-lock.json").write_text(json.dumps({
-			"schema_version": 1,
+			"schema_version": 2,
 			"artifacts": {"test-dep": {"resolved": {
-				"test-leaf": {"version": "0.1.0", "integrity": f"sha256:{leaf_sha}", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "direct"},
 			}}},
 		}), encoding="utf-8")
 
@@ -1737,10 +1738,10 @@ class TestE2E:
 		), encoding="utf-8")
 		# Lockfile: test-dep is direct, test-leaf is transitive.
 		(consumer_dir / "drift-lock.json").write_text(json.dumps({
-			"schema_version": 1,
+			"schema_version": 2,
 			"artifacts": {"test-consumer": {"resolved": {
-				"test-dep": {"version": "0.1.0", "integrity": f"sha256:{dep_sha}", "dep_type": "direct"},
-				"test-leaf": {"version": "0.1.0", "integrity": f"sha256:{leaf_sha}", "dep_type": "transitive"},
+				"test-dep": {"version": "0.1", "package_id": "test-dep", "author_key": "unsigned", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "transitive"},
 			}}},
 		}), encoding="utf-8")
 

@@ -1,5 +1,89 @@
 # Drift development history
 
+## 2026-03-27
+- **Replaced deploy lock byte-identity with compatibility-range + author-trust locking, and upgraded provenance to carry source identity (0.27.122, ABI 7)**:
+  Changed the deploy lock model from exact artifact-byte replay to a two-layer
+  workflow:
+  - lock file:
+    - compatibility contract
+    - author trust
+  - certified snapshot:
+    - exact tested freeze
+  This removes downstream lock churn from compiler-only package rebuilds while
+  keeping exact package authenticity in signatures and exact certified identity
+  in orchestrated snapshots.
+  - Lock model change:
+    - `drift-lock.json` schema remains the consumer-facing dependency contract,
+      but it no longer records artifact byte hashes for normal package deps
+    - lock entries now pin:
+      - `package_id`
+      - compatible version range by convention (`major.minor`)
+      - `author_key`
+      - `dep_type`
+    - example:
+      - `0.3` means any `0.3.*`
+      - `1.2` means any `1.2.*`
+    - patch updates inside the locked minor are accepted without forcing
+      `prepare`
+    - minor/major movement or signer rotation still requires `prepare`
+  - Why:
+    - the old lock integrity model treated compiler-sensitive package bytes as
+      the dependency identity
+    - that caused avoidable churn whenever the same source/version was rebuilt
+      into different package bytes by compiler changes
+    - the new model makes the policy explicit:
+      - within a locked compatible range, the package author is trusted to
+        redefine the concrete dependency instance
+      - exact tested identity belongs to certified snapshots, not the day-to-day
+        lock file
+  - Enforcement:
+    - v2 lock verification now performs compatibility/trust checks, not
+      artifact-byte equality checks
+    - non-`co-artifact` lock entries require:
+      - `package_id`
+      - `author_key`
+    - explicit unsigned development flows are represented with the `unsigned`
+      sentinel instead of silently omitting signer identity
+    - old schema-v1 lock files are rejected with a clear “run `drift prepare`”
+      regeneration message instead of being silently reinterpreted
+  - Resolver/build behavior:
+    - deploy/build now resolve the locked `major.minor` range back to an exact
+      package version from the package index when constructing `--dep` flags
+    - compatibility verification rejects:
+      - missing packages
+      - no available version in the locked compatible range
+      - signer/key rotation
+      - a previously signed locked dep becoming unsigned
+    - identical artifact-byte changes within the same compatible range and
+      signer are accepted by the lock model
+  - Provenance/signing:
+    - package/app provenance schema was bumped from `2` to `3`
+    - provenance now records source identity in a new optional `source` block:
+      - `vcs_type`
+      - `branch`
+      - `commit`
+    - source identity is detected from git when available and embedded in the
+      signed provenance document
+    - this preserves future audit/reproducibility work without putting exact
+      source identity back into the lock file itself
+  - Coverage:
+    - lock/regression coverage now proves:
+      - same signer + same minor + different patch is accepted
+      - different minor is rejected until `prepare`
+      - signer rotation is rejected with a clear message
+      - byte-different artifacts within the same compatible range/signing
+        identity do not invalidate the lock
+      - v1 locks are rejected with regeneration guidance
+      - empty `author_key` is rejected for non-`co-artifact` v2 entries
+    - provenance coverage now proves:
+      - schema `3` emission
+      - `source` block inclusion when source identity is available
+      - `source` omission when no VCS identity is available
+    - docs were updated to match the new lock semantics and provenance schema
+  - Versioning:
+    - compiler version is `0.27.122`
+    - ABI remains `7`
+
 ## 2026-03-26
 - **Fixed stdlib package-consumer `Arc` scope-drop leak and pinned it with a stdlib-as-package regression harness (0.27.121, ABI 7)**:
   Fixed the package-consumer drop inference path that could omit required

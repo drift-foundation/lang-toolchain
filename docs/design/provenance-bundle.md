@@ -78,11 +78,11 @@ identical compressed bytes.
 
 ## Main Provenance Schema
 
-The provenance document inside the bundle uses schema version 2:
+The provenance document inside the bundle uses schema version 3:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "artifact_name": "web-rest",
   "artifact_version": "0.2.5",
   "artifact_kind": "package",
@@ -97,6 +97,11 @@ The provenance document inside the bundle uses schema version 2:
       "version": "0.2.5",
       "integrity": "sha256:<hex>"
     }
+  },
+  "source": {
+    "vcs_type": "git",
+    "branch": "main",
+    "commit": "a1b2c3d4e5f6..."
   }
 }
 ```
@@ -105,7 +110,7 @@ The provenance document inside the bundle uses schema version 2:
 
 | Field | Type | Description |
 |---|---|---|
-| `schema_version` | int | Always `2` for the current schema. |
+| `schema_version` | int | Always `3` for the current schema. |
 | `artifact_name` | string | Package or app name. |
 | `artifact_version` | string | Semver version string. |
 | `artifact_kind` | string | `"package"` or `"app"`. |
@@ -116,6 +121,7 @@ The provenance document inside the bundle uses schema version 2:
 | `abi` | int | Compiler ABI level. |
 | `build_utc` | string | ISO 8601 UTC timestamp of the build. |
 | `resolved_deps` | object | Map of dependency package IDs to `{version, integrity}`. |
+| `source` | object (optional) | Source identity: `{vcs_type, branch, commit}`. Present when VCS is detected at build time. This is the exact source identity for audit — the lock file pins compatibility range, provenance pins exact source. |
 
 ## Bundle Contents
 
