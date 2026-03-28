@@ -13,20 +13,33 @@ def _repo_root() -> Path:
 	return Path(__file__).resolve().parents[3]
 
 
+_RUNNER_ENV_KEYS = {"DRIFT_MEMCHECK", "DRIFT_MASSIF", "DRIFT_ASAN"}
+
+
+def _clean_env() -> dict[str, str]:
+	"""Return os.environ without suite-wide runner flags.
+
+	Tests that need specific runner flags set them explicitly after calling
+	this.  This prevents suite-wide DRIFT_MEMCHECK=1 (etc.) from leaking
+	into wrapper tests that are not about those flags.
+	"""
+	return {k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_KEYS}
+
+
 def _run_wrapper(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
 	wrapper = _repo_root() / "bin" / "driftc"
 	return subprocess.run(["/bin/bash", str(wrapper), *args], text=True, capture_output=True, env=env, cwd=cwd)
 
 
 def test_driftc_wrapper_rejects_memcheck_and_massif_in_direct_mode() -> None:
-	env = dict(os.environ)
+	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_MEMCHECK"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
 	assert cp.returncode != 0
 	assert "runner-only" in (cp.stderr or "")
 
-	env = dict(os.environ)
+	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_MASSIF"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
@@ -50,7 +63,7 @@ def test_driftc_wrapper_asan_adds_sanitize_flags(tmp_path: Path) -> None:
 		encoding="utf-8",
 	)
 	out = tmp_path / "a.out"
-	env = dict(os.environ)
+	env = _clean_env()
 	env["DRIFT_ASAN"] = "1"
 	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr
@@ -76,7 +89,7 @@ def test_driftc_wrapper_runtime_archive_mode_links_static_runtime(tmp_path: Path
 		encoding="utf-8",
 	)
 	out = tmp_path / "a.out"
-	env = dict(os.environ)
+	env = _clean_env()
 	env["DRIFT_RUNTIME_LINK_MODE"] = "archive"
 	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr
@@ -123,7 +136,7 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 			os.environ.pop("DRIFT_ASAN", None)
 		else:
 			os.environ["DRIFT_ASAN"] = prev_asan
-	env = dict(os.environ)
+	env = _clean_env()
 	env["DRIFT_RUNTIME_LINK_MODE"] = "archive"
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
 	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
@@ -152,7 +165,7 @@ def test_driftc_wrapper_relative_output_from_non_repo_cwd(tmp_path: Path) -> Non
 		encoding="utf-8",
 	)
 	rel_out = Path("out_rel.bin")
-	env = dict(os.environ)
+	env = _clean_env()
 	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(rel_out)], env=env, cwd=tmp_path)
 	assert cp.returncode == 0, cp.stderr
 	assert (tmp_path / rel_out).exists()
@@ -186,7 +199,7 @@ def test_optimized_flag_adds_o2_to_clang(tmp_path: Path) -> None:
 			os.environ.pop("DRIFT_RUNTIME_LIB_CACHE_DIR", None)
 		else:
 			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
-	env = dict(os.environ)
+	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
 	cp = _run_wrapper(["--optimized", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
@@ -230,7 +243,7 @@ def test_optimized_debug_info_override(tmp_path: Path) -> None:
 			os.environ.pop("DRIFT_RUNTIME_LIB_CACHE_DIR", None)
 		else:
 			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
-	env = dict(os.environ)
+	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
 	cp = _run_wrapper(["--optimized", "--debug-info", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
