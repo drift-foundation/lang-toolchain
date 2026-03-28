@@ -1,5 +1,6 @@
 {
   "description": "returning &T as owned T must be rejected with a clear diagnostic",
+  "exit_code": 1,
   "diagnostics": [
     {"message_contains": "cannot return reference as owned", "severity": "error"}
   ]
