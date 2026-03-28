@@ -1,0 +1,20 @@
+module main;
+
+import std.core as core;
+
+fn get_ref() nothrow -> Optional<&String> {
+	return Optional::None();
+}
+
+fn extract() -> String {
+	match get_ref() {
+		Optional::None() => { return "none"; },
+		Optional::Some(v) => { return v; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val s = try extract() catch { "" };
+	if s == "none" { return 0; }
+	return 1;
+}

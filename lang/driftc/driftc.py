@@ -99,6 +99,7 @@ from lang.driftc.call_contract import intrinsic_call_issues
 from lang.driftc.stage1.lambda_validate import validate_lambdas_non_retaining
 from lang.driftc.stage1.non_retaining_analysis import analyze_non_retaining_params
 from lang.driftc.stage2 import HIRToMIR, make_builder, mir_nodes as M
+from lang.driftc.stage2.mir_lowering_error import MirLoweringError
 from lang.driftc.stage2.string_arc import insert_string_arc
 from lang.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang.driftc.stage4 import run_throw_checks
@@ -5413,6 +5414,19 @@ def compile_stubbed_funcs(
 		)
 		try:
 			lower.lower_function_body(hir_norm)
+		except MirLoweringError as err:
+			_append_boundary_contract_diag(
+				checked,
+				phase="mir_lower",
+				prefix=str(err),
+				err=err,
+				fn_id=fn_id,
+				signatures_by_id=signatures_by_id,
+				hir_block=hir_norm,
+				origin_by_fn_id=origin_by_fn_id,
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			continue
 		except AssertionError as err:
 			_append_boundary_contract_diag(
 				checked,

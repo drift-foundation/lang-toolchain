@@ -5687,6 +5687,17 @@ class HIRToMIR:
 			val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 			if self._ret_type is not None:
 				val = self._copy_if_ref_alias(val, self._ret_type)
+				val_ty = self._local_types.get(val)
+				if val_ty is not None:
+					val_td = self._type_table.get(val_ty)
+					ret_td = self._type_table.get(self._ret_type)
+					if val_td.kind is TypeKind.REF and ret_td.kind is not TypeKind.REF:
+						from lang.driftc.stage2.mir_lowering_error import MirLoweringError
+						raise MirLoweringError(
+							f"cannot return reference as owned '{ret_td.name}'; "
+							f"returning an owned value from a reference requires "
+							f"explicit copy(...)"
+						)
 			self._emit_scope_drops(scope_index=0)
 			term = M.Return(value=val)
 			if ret_span != Span():
@@ -5723,6 +5734,21 @@ class HIRToMIR:
 		val = self.lower_expr(stmt.value, expected_type=self._ret_type)
 		if self._ret_type is not None:
 			val = self._copy_if_ref_alias(val, self._ret_type)
+			# Reject returning &T where owned T is expected.
+			# This catches ref-scrutinee variant binders (e.g.
+			# Optional<&String>::Some(v) → v is &String) returned
+			# as owned String.  User should write copy(v).
+			val_ty = self._local_types.get(val)
+			if val_ty is not None:
+				val_td = self._type_table.get(val_ty)
+				ret_td = self._type_table.get(self._ret_type)
+				if val_td.kind is TypeKind.REF and ret_td.kind is not TypeKind.REF:
+					from lang.driftc.stage2.mir_lowering_error import MirLoweringError
+					raise MirLoweringError(
+						f"cannot return reference as owned '{ret_td.name}'; "
+						f"returning an owned value from a reference requires "
+						f"explicit copy(...)"
+					)
 		self._emit_scope_drops(scope_index=0)
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))

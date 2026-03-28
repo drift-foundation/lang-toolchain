@@ -1,5 +1,60 @@
 # Drift development history
 
+## 2026-03-28
+- **Diagnosed ref-to-owned variant-binder returns before LLVM codegen instead of crashing (0.27.124, ABI 7)**:
+  Fixed a compiler bug where returning a reference-typed match binder as an
+  owned value could reach LLVM codegen and fail with a low-level type mismatch
+  instead of surfacing as a proper Drift diagnostic.
+  - Problem:
+    - a repro of the form:
+      - match on a ref-typed scrutinee
+      - bind payload `v`
+      - return `v` from a function returning owned `T`
+    - could lower to MIR with `v` correctly typed as `&T`
+    - but the compiler then let that ref-to-owned mismatch flow through to
+      `ConstructResultOk`
+    - LLVM codegen eventually failed with diagnostics like:
+      - `ok payload type mismatch for ConstructResultOk`
+      - `have ptr, expected %DriftString`
+    - this was first exposed through `std.json` / `JsonNode::String(v)`, but the
+      underlying bug was broader:
+      - returning `&T` as owned `T`
+      - not package-consumer-specific
+      - not String-specific in principle
+  - Root cause:
+    - MIR binder lowering was correct:
+      - ref scrutinee produced ref binder
+      - `v` really was `&String` in the failing repro
+    - the real bug was that the compiler failed to reject the ref-to-owned
+      return mismatch before LLVM lowering
+  - Language decision:
+    - Drift does **not** implicitly convert `&T` to owned `T` on return
+    - the language already has explicit `Copy` semantics and `copy(expr)`
+    - for `String` and other `Copy` types, the user must write:
+      - `return copy(v);`
+    - therefore the correct fix is a diagnostic, not auto-deref/auto-copy
+  - Fix:
+    - return lowering in
+      [`lang/driftc/stage2/hir_to_mir.py`](/home/sl/src/drift-lang/lang/driftc/stage2/hir_to_mir.py)
+      now detects the invalid shape:
+      - value is `&T`
+      - function expects owned `T`
+    - MIR lowering raises a structured user-facing lowering error instead of
+      allowing the mismatch to reach LLVM
+    - compiler now reports a clear diagnostic along the lines of:
+      - `cannot return reference as owned 'String'; returning an owned value from a reference requires explicit copy(...)`
+  - Coverage:
+    - added e2e regression:
+      [`lang/tests/codegen/e2e/ref_variant_binder_return_owned/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/ref_variant_binder_return_owned)
+    - regression proves:
+      - returning `Optional<&String>::Some(v)` as owned `String` is rejected
+      - the compiler emits a clear error
+      - LLVM codegen is no longer reached for this invalid program
+    - app-team repro now produces a diagnostic instead of crashing
+  - Versioning:
+    - compiler version is `0.27.124`
+    - ABI remains `7`
+
 ## 2026-03-27
 - **Resolved v2 lock compatibility ranges to exact package versions before constructing `driftc --dep` flags (0.27.123, ABI 7)**:
   Fixed a deploy/build integration bug introduced by the new v2 lock model.
