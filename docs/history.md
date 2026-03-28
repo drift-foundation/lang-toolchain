@@ -1,6 +1,53 @@
 # Drift development history
 
 ## 2026-03-28
+- **Rejected `return v` for ref-typed variant binders, and made direct `copy v` work as the explicit owned-value fix (0.27.125, ABI 7)**:
+  Completed the fix for the variant-binder return bug that had first surfaced as
+  an LLVM codegen crash in app code using `std.json`.
+  - Problem:
+    - matching on a ref-typed scrutinee can legitimately bind a payload as `&T`
+    - returning that binder directly from a function returning owned `T` is a
+      language error
+    - before this fix, the compiler let that mismatch reach LLVM and failed with
+      low-level payload type mismatches instead of giving a source-level error
+  - Language rule:
+    - Drift does **not** implicitly convert `&T` to owned `T` on return
+    - the correct explicit form is:
+      - `copy <expr>`
+    - for example:
+      - `return copy v;`
+    - not:
+      - `return v;`
+  - Fix:
+    - MIR lowering now rejects `return v;` when `v` is `&T` and the function
+      returns owned `T`, surfacing a clear diagnostic instead of crashing codegen
+    - explicit `copy <expr>` now lowers correctly through MIR when the operand
+      is a reference:
+      - `LoadRef`
+      - then `CopyValue`
+    - checker place validation was narrowed so in-scope match binders can be
+      used directly as copy operands, without requiring a temporary local
+  - Result:
+    - `return v;` from a ref-typed binder is rejected cleanly
+    - `return copy v;` works directly
+    - users no longer need the workaround:
+      - `val s = v;`
+      - `return copy s;`
+  - Coverage:
+    - added negative regression:
+      [`lang/tests/codegen/e2e/ref_variant_binder_return_owned/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/ref_variant_binder_return_owned)
+      proving `return v;` is rejected with a clear diagnostic
+    - added positive regression:
+      [`lang/tests/codegen/e2e/ref_binder_direct_copy/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/ref_binder_direct_copy)
+      proving `return copy v;` compiles and runs directly from a match binder
+    - added guard regression:
+      [`lang/tests/codegen/e2e/copy_non_place_rejected/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/copy_non_place_rejected)
+      proving non-place copies like `copy (1 + 2)` are still rejected
+  - Versioning:
+    - compiler version is `0.27.125`
+    - ABI remains `7`
+
+## 2026-03-28
 - **Diagnosed ref-to-owned variant-binder returns before LLVM codegen instead of crashing (0.27.124, ABI 7)**:
   Fixed a compiler bug where returning a reference-typed match binder as an
   owned value could reach LLVM codegen and fail with a low-level type mismatch

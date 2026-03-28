@@ -6883,6 +6883,14 @@ class TypeChecker:
 				def _base_lookup(hv: object) -> Optional[PlaceBase]:
 					bid = getattr(hv, "binding_id", None)
 					if bid is None:
+						# Match binders may lack binding_id after normalization.
+						# Accept them ONLY if the name is actually in scope as
+						# a known binding — do not accept arbitrary names.
+						name = getattr(hv, "name", None)
+						if name is not None:
+							for _scope in reversed(scope_env):
+								if name in _scope:
+									return PlaceBase(kind=PlaceKind.LOCAL, local_id=0, name=name)
 						return None
 					kind = binding_place_kind.get(bid, PlaceKind.LOCAL)
 					name = hv.name if hasattr(hv, "name") else str(hv)

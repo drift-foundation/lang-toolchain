@@ -1,0 +1,6 @@
+{
+  "description": "return copy v; from ref variant binder produces owned value",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

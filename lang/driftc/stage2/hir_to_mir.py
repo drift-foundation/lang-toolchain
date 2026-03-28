@@ -1685,6 +1685,33 @@ class HIRToMIR:
 		ptr, _inner = self._lower_addr_of_place(expr.subject, is_mut=expr.is_mut)
 		return ptr
 
+	def _visit_expr_HCopy(self, expr: H.HCopy) -> M.ValueId:
+		"""
+		Lower explicit `copy <expr>`.
+
+		Evaluates the subject expression, then emits a CopyValue instruction
+		to produce an owned deep copy.  When the subject is a reference (&T),
+		the ref is first dereferenced via LoadRef to get the inner value,
+		then the inner value is copied.
+		"""
+		val = self.lower_expr(expr.subject)
+		val_ty = self._infer_expr_type(expr.subject)
+		if val_ty is None:
+			raise AssertionError("copy operand type unknown in MIR lowering (checker bug)")
+		td = self._type_table.get(val_ty)
+		# If the subject is a reference, deref first to get the inner value.
+		if td.kind is TypeKind.REF and td.param_types:
+			inner_ty = td.param_types[0]
+			derefed = self.b.new_temp()
+			self.b.emit(M.LoadRef(dest=derefed, ptr=val, inner_ty=inner_ty))
+			self._local_types[derefed] = inner_ty
+			val = derefed
+			val_ty = inner_ty
+		copy_dest = self.b.new_temp()
+		self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
+		self._local_types[copy_dest] = val_ty
+		return copy_dest
+
 	def _visit_expr_HMove(self, expr: H.HMove) -> M.ValueId:
 		"""
 		Lower explicit `move <place>` as:
@@ -5696,7 +5723,7 @@ class HIRToMIR:
 						raise MirLoweringError(
 							f"cannot return reference as owned '{ret_td.name}'; "
 							f"returning an owned value from a reference requires "
-							f"explicit copy(...)"
+							f"explicit 'copy <expr>'"
 						)
 			self._emit_scope_drops(scope_index=0)
 			term = M.Return(value=val)
@@ -5747,7 +5774,7 @@ class HIRToMIR:
 					raise MirLoweringError(
 						f"cannot return reference as owned '{ret_td.name}'; "
 						f"returning an owned value from a reference requires "
-						f"explicit copy(...)"
+						f"explicit 'copy <expr>'"
 					)
 		self._emit_scope_drops(scope_index=0)
 		res_val = self.b.new_temp()

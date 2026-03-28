@@ -1,0 +1,9 @@
+module main;
+
+fn bad() nothrow -> Int {
+	return copy (1 + 2);
+}
+
+pub fn main() nothrow -> Int {
+	return bad();
+}

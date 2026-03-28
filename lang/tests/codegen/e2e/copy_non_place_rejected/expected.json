@@ -1,0 +1,7 @@
+{
+  "description": "copy of non-place expression must be rejected",
+  "exit_code": 1,
+  "diagnostics": [
+    {"message_contains": "copy operand must be an addressable place", "severity": "error"}
+  ]
+}
