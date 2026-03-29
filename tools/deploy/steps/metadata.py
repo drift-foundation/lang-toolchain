@@ -23,7 +23,8 @@ class DeployMetadata:
 	host_arch: str
 
 	@property
-	def version_dir(self) -> str:
+	def version_tag(self) -> str:
+		"""Human-readable version tag (for logs, not directory names)."""
 		return f"drift-{self.driftc_version}+abi{self.abi_version}"
 
 

@@ -1,9 +1,9 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Deploy step: atomically publish staged distribution.
+Deploy step: publish staged distribution via rename with rollback.
 
-Publishes the staged tree as DEST/VERSION_DIR and atomically switches
-the DEST/current symlink. Safe same-version replacement with rollback.
+Publishes the staged tree as a flat layout directly under DEST
+(bin/, lib/, doc/, examples/).  No partial tree is ever exposed.
 """
 
 from __future__ import annotations
@@ -45,43 +45,40 @@ def generate_manifest(dist: Path, meta: DeployMetadata) -> None:
 	)
 
 
-def publish_atomic(dist: Path, dest: Path, version_dir: str) -> None:
-	"""Atomically publish staged distribution to dest."""
-	dest.mkdir(parents=True, exist_ok=True)
-	final = dest / version_dir
+def publish_flat(dist: Path, dest: Path) -> None:
+	"""Publish staged distribution flat into dest via rename with rollback.
 
-	if final.exists():
-		backup = dest / f".{version_dir}.old.{os.getpid()}"
-		print(f"[deploy] replacing existing {version_dir}", flush=True)
-		final.rename(backup)
-		try:
-			dist.rename(final)
-		except Exception:
-			# Rollback.
-			if backup.exists():
-				backup.rename(final)
-			raise
-		# Success — remove backup.
-		if backup.exists():
-			shutil.rmtree(str(backup))
-	else:
-		dist.rename(final)
+	The staged tree in *dist* is renamed to *dest* so that bin/, lib/,
+	doc/ etc. live immediately under *dest* with no inner versioned
+	subdirectory or ``current`` symlink.
 
-	print(f"[deploy] published: {final}", flush=True)
+	No partial tree is ever exposed — each step is a single rename(2).
+	If *dest* already exists, it is first renamed to a backup, then the
+	staged tree is renamed into place.  During replacement *dest* may be
+	briefly absent between the two renames.  On failure the backup is
+	restored.
+	"""
+	dest_parent = dest.parent
+	dest_parent.mkdir(parents=True, exist_ok=True)
 
+	backup: Path | None = None
+	if dest.exists():
+		backup = dest_parent / f".{dest.name}.old.{os.getpid()}"
+		print(f"[deploy] replacing existing {dest.name}", flush=True)
+		dest.rename(backup)
 
-def switch_current_symlink(dest: Path, version_dir: str) -> None:
-	"""Atomically switch the current symlink."""
-	tmplink = dest / f".current.tmp.{os.getpid()}"
-	tmplink.symlink_to(version_dir)
 	try:
-		tmplink.rename(dest / "current")
-	except OSError:
-		# Fallback for systems that don't support atomic rename over symlinks.
-		tmplink.unlink()
-		current = dest / "current"
-		if current.exists() or current.is_symlink():
-			current.unlink()
-		current.symlink_to(version_dir)
+		dist.rename(dest)
+	except Exception:
+		# Rollback: restore backup.
+		if backup is not None and backup.exists():
+			if dest.exists():
+				shutil.rmtree(str(dest), ignore_errors=True)
+			backup.rename(dest)
+		raise
 
-	print(f"[deploy] current -> {version_dir}", flush=True)
+	# Success — remove backup.
+	if backup is not None and backup.exists():
+		shutil.rmtree(str(backup))
+
+	print(f"[deploy] published: {dest}", flush=True)

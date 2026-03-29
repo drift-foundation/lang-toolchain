@@ -146,6 +146,42 @@ class TestManifestValid:
 			assert m.artifacts[0].kind == "package"
 			assert m.artifacts[1].kind == "app"
 
+	def test_app_entry_point(self) -> None:
+		manifest = _minimal_manifest()
+		manifest["artifacts"] = [
+			{
+				"kind": "app",
+				"name": "bookkeeper",
+				"version": "1.0.0",
+				"description": "Bookkeeper app",
+				"entry_module": "src/lib.drift",
+				"modules": ["src/"],
+				"entry_point": "pushcoin.bookkeeper::main",
+			}
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			m = load_manifest(path)
+			assert m.artifacts[0].entry_point == "pushcoin.bookkeeper::main"
+
+	def test_app_default_entry_point_empty(self) -> None:
+		"""App without entry_point defaults to empty (driftc uses main::main)."""
+		manifest = _minimal_manifest()
+		manifest["artifacts"] = [
+			{
+				"kind": "app",
+				"name": "my-app",
+				"version": "1.0.0",
+				"description": "An app",
+				"entry_module": "src/main.drift",
+				"modules": ["src/"],
+			}
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			m = load_manifest(path)
+			assert m.artifacts[0].entry_point == ""
+
 
 class TestManifestInvalid:
 	def test_missing_file(self) -> None:
@@ -230,4 +266,30 @@ class TestManifestInvalid:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="smoke_command"):
+				load_manifest(path)
+
+	def test_entry_point_on_package_rejected(self) -> None:
+		manifest = _minimal_manifest()
+		manifest["artifacts"][0]["entry_point"] = "my.pkg::main"
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			with pytest.raises(ManifestError, match="only valid for app"):
+				load_manifest(path)
+
+	def test_entry_point_missing_double_colon(self) -> None:
+		manifest = _minimal_manifest()
+		manifest["artifacts"] = [
+			{
+				"kind": "app",
+				"name": "my-app",
+				"version": "1.0.0",
+				"description": "An app",
+				"entry_module": "src/main.drift",
+				"modules": ["src/"],
+				"entry_point": "just_a_function",
+			}
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			with pytest.raises(ManifestError, match="module::fn"):
 				load_manifest(path)

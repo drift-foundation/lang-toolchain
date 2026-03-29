@@ -409,10 +409,10 @@ deploy-print-env DEST:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	dest="{{DEST}}"
-	if [[ ! -L "${dest}/current" ]]; then
-		echo "error: no deployment found at ${dest} (missing 'current' symlink)" >&2
+	if [[ ! -x "${dest}/bin/driftc" ]]; then
+		echo "error: no deployment found at ${dest} (missing bin/driftc)" >&2
 		exit 1
 	fi
-	resolved="$(readlink "${dest}/current")"
-	echo "# Drift distribution: ${resolved}"
-	echo "export PATH=\"${dest}/current/bin:\$PATH\""
+	version="$("${dest}/bin/driftc" --version 2>/dev/null || echo unknown)"
+	echo "# Drift distribution: ${version}"
+	echo "export PATH=\"${dest}/bin:\$PATH\""

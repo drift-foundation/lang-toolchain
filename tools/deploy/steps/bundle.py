@@ -150,7 +150,7 @@ clang --version
 ## Quick start
 
 ```bash
-export PATH="<deploy-root>/current/bin:$PATH"
+export PATH="<deploy-root>/bin:$PATH"
 driftc my_program.drift -o my_program
 ./my_program
 ```
@@ -213,19 +213,8 @@ Each distribution is built against a specific runtime ABI version
 cannot link against a runtime built for a different version — the
 linker will fail with an unresolved `__drift_rt_abi_version_N` symbol.
 
-The `current` symlink always points to the latest deployed version.
-Older versions remain available under their versioned directory names
-and continue to work independently.
-
-## Switching versions
-
-```bash
-# Deploy creates: <dest>/drift-<version>+abi<N>/
-# And updates:    <dest>/current -> drift-<version>+abi<N>
-
-# To pin to an older version:
-export PATH="<dest>/drift-0.27.0+abi5/bin:$PATH"
-```
+Exact toolchain identity comes from `driftc --version`, `lib/manifest.json`,
+provenance metadata, and certification records.
 
 ## Deploy
 
@@ -235,7 +224,7 @@ export PATH="<dest>/drift-0.27.0+abi5/bin:$PATH"
 2. `steps/bundle.py` — copy compiler sources, runtime archives, docs into staged tree
 3. `steps/stdlib.py` — build, sign, and install stdlib package + core trust store
 4. `steps/smoke.py` — compile and run smoke test using only deployed paths
-5. `steps/publish.py` — atomically publish staged tree and switch `current` symlink
+5. `steps/publish.py` — atomically publish staged tree to destination
 
 If any step fails, deploy exits non-zero and does not publish a partial install.
 

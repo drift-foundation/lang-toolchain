@@ -40,6 +40,7 @@ def _make_artifact(**overrides) -> Artifact:
 		smoke_command=None,
 		unsafe=False,
 		module_namespace="my_pkg",
+		entry_point="",
 	)
 	defaults.update(overrides)
 	return Artifact(**defaults)
@@ -277,6 +278,38 @@ class TestBuildAppCmd:
 		)
 		assert "--link-lib" in cmd
 		assert "--native-link-lib" not in cmd
+
+	def test_app_cmd_passes_entry_point(self):
+		"""App with entry_point emits --entry flag."""
+		art = _make_artifact(
+			kind="app", name="bookkeeper",
+			entry_point="pushcoin.bookkeeper::main",
+		)
+		cmd = build_app_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/bookkeeper"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+		)
+		idx = cmd.index("--entry")
+		assert cmd[idx + 1] == "pushcoin.bookkeeper::main"
+
+	def test_app_cmd_no_entry_when_default(self):
+		"""App without entry_point does not emit --entry (uses driftc default)."""
+		art = _make_artifact(kind="app", name="my-app")
+		cmd = build_app_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-app"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+		)
+		assert "--entry" not in cmd
 
 
 # ── drift_build.run() tests ─────────────────────────────────────────

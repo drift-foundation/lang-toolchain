@@ -1,6 +1,57 @@
 # Drift development history
 
 ## 2026-03-28
+- **Added manifest-level app `entry_point` support and flattened deploy toolchain layout (0.27.126, ABI 7)**:
+  Completed two deploy/build tooling fixes needed to make the manifest-driven
+  app workflow practical and to remove nested toolchain indirection from
+  promoted installs.
+  - App artifact entry points:
+    - `drift build` / `drift deploy` already supported `kind: "app"`, but app
+      artifacts could not declare a custom fully-qualified entry function in the
+      manifest
+    - this forced teams with non-default entry symbols to keep hand-written
+      `driftc --entry ...` shell commands even though the rest of the build was
+      manifest-driven
+    - manifests can now declare:
+      - `entry_point: "module::fn"`
+    - app builds now pass that through as:
+      - `--entry module::fn`
+    - package artifacts reject `entry_point`, and invalid non-`module::fn`
+      values are diagnosed at manifest load time
+  - Flat deploy layout:
+    - deploy output no longer publishes an inner:
+      - `current`
+      - or `drift-<version>+abi<abi>`
+      directory under `toolchain/`
+    - promoted/certified trees now use a flat toolchain root:
+      - `toolchain/bin`
+      - `toolchain/lib`
+      - `toolchain/doc`
+    - exact toolchain identity now comes from:
+      - `driftc --version`
+      - `lib/manifest.json`
+      - provenance metadata
+      - certification records
+    - publish now stages outside the destination tree and swaps the staged
+      directory into place via rename with rollback, so no partial tree is
+      exposed during publish
+  - Coverage:
+    - added manifest regressions in:
+      [`tools/drift_deploy/test_manifest.py`](/home/sl/src/drift-lang/tools/drift_deploy/test_manifest.py)
+      for valid app `entry_point`, default-empty behavior, package rejection,
+      and invalid format rejection
+    - added build command regressions in:
+      [`tools/drift_deploy/test_build.py`](/home/sl/src/drift-lang/tools/drift_deploy/test_build.py)
+      proving app commands pass `--entry` only when requested
+    - added flat publish regressions in:
+      [`tools/deploy/test_publish.py`](/home/sl/src/drift-lang/tools/deploy/test_publish.py)
+      proving flat layout, no inner versioned directory, rename-based
+      replacement, and rollback-safe publish behavior
+  - Versioning:
+    - compiler version is `0.27.126`
+    - ABI remains `7`
+
+## 2026-03-28
 - **Rejected `return v` for ref-typed variant binders, and made direct `copy v` work as the explicit owned-value fix (0.27.125, ABI 7)**:
   Completed the fix for the variant-binder return bug that had first surfaced as
   an LLVM codegen crash in app code using `std.json`.

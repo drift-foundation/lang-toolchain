@@ -3,16 +3,21 @@
 """
 Drift distribution deploy — Python orchestrator.
 
-Builds a versioned, self-contained Drift distribution:
-  DEST/drift-<VERSION>+abi<ABI>/  (bin, lib, doc, examples)
-  DEST/current -> drift-<VERSION>+abi<ABI>  (atomic symlink)
+Builds a self-contained Drift distribution published flat under DEST:
+  DEST/bin/    — PEX --scie eager executables (driftc, drift)
+  DEST/lib/    — compiler sources, runtime archives, stdlib
+  DEST/doc/    — documentation
+  DEST/examples/
+
+Toolchain identity comes from ``lib/manifest.json``, ``driftc --version``,
+provenance metadata, and certification records — not from directory names.
 
 Steps:
   1. Build PEX --scie eager executables (bin/driftc, bin/drift)
   2. Bundle compiler sources, runtime archives, docs
   3. Build + sign stdlib package, core trust store
   4. Compile + run smoke test using deployed paths
-  5. Atomic publish + symlink switch
+  5. Atomic publish (flat)
 
 Requires DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD for stdlib signing.
 """
@@ -36,8 +41,7 @@ from tools.deploy.steps.metadata import load_deploy_metadata
 from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
 from tools.deploy.steps.publish import (
 	generate_manifest,
-	publish_atomic,
-	switch_current_symlink,
+	publish_flat,
 )
 from tools.deploy.steps.smoke import run_smoke_test
 from tools.deploy.steps.stdlib import build_and_install_stdlib
@@ -46,10 +50,10 @@ from tools.deploy.steps.stdlib import build_and_install_stdlib
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(
 		prog="deploy",
-		description="Build and publish a versioned Drift distribution.",
+		description="Build and publish a Drift distribution.",
 	)
 	parser.add_argument("--dest", type=Path, required=True,
-		help="Deploy destination root")
+		help="Deploy destination root (flat: bin/, lib/, etc. placed directly here)")
 	parser.add_argument("--python", type=Path, default=None,
 		help="Python interpreter (optional; for smoke/prereq checks)")
 	args = parser.parse_args(argv)
@@ -74,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 	print(f"[deploy] version:  {meta.driftc_version}", flush=True)
 	print(f"[deploy] abi:      {meta.abi_version}", flush=True)
 	print(f"[deploy] commit:   {meta.git_commit}", flush=True)
-	print(f"[deploy] dest:     {dest / meta.version_dir}", flush=True)
+	print(f"[deploy] dest:     {dest}", flush=True)
 
 	# ── Prerequisites ────────────────────────────────────────────────
 	clang = shutil.which("clang")
@@ -87,11 +91,15 @@ def main(argv: list[str] | None = None) -> int:
 	_build_runtime_archives(repo_root, clang)
 
 	# ── Staging ──────────────────────────────────────────────────────
-	dest.mkdir(parents=True, exist_ok=True)
-	stage = Path(tempfile.mkdtemp(prefix=".deploy-staging.", dir=str(dest)))
+	# Stage under dest's PARENT (not dest itself) so that rename-based
+	# atomic publish works: if dest already exists, it is renamed to a
+	# backup, then the staged dist is renamed into place.  Staging under
+	# dest would break because the staged tree would move with the backup.
+	dest.parent.mkdir(parents=True, exist_ok=True)
+	stage = Path(tempfile.mkdtemp(prefix=".deploy-staging.", dir=str(dest.parent)))
 
 	try:
-		dist = stage / meta.version_dir
+		dist = stage / "dist"
 
 		# ── Step 1: PEX executables ──────────────────────────────────
 		build_driftc_pex(repo_root, dist)
@@ -108,10 +116,9 @@ def main(argv: list[str] | None = None) -> int:
 		# ── Step 4: Smoke ────────────────────────────────────────────
 		run_smoke_test(dist, repo_root, stage)
 
-		# ── Step 5: Publish ──────────────────────────────────────────
+		# ── Step 5: Publish flat ─────────────────────────────────────
 		generate_manifest(dist, meta)
-		publish_atomic(dist, dest, meta.version_dir)
-		switch_current_symlink(dest, meta.version_dir)
+		publish_flat(dist, dest)
 	except Exception as e:
 		shutil.rmtree(str(stage), ignore_errors=True)
 		if isinstance(e, SystemExit):
@@ -123,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
 	shutil.rmtree(str(stage), ignore_errors=True)
 
 	print()
-	print(f'  export PATH="{dest}/current/bin:$PATH"')
+	print(f'  export PATH="{dest}/bin:$PATH"')
 	print()
 	return 0
 

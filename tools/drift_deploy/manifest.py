@@ -47,6 +47,7 @@ class Artifact:
 	smoke_command: list[str] | None = None
 	unsafe: bool = False
 	module_namespace: str = ""  # set during parsing; defaults to name with hyphens → underscores
+	entry_point: str = ""  # app-only: "module::fn" entry point (e.g. "pushcoin.bookkeeper::main")
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,18 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 	else:
 		module_namespace = name.replace("-", "_")
 
+	# entry_point (optional, app-only: "module::fn" entry point)
+	entry_point = ""
+	raw_ep = obj.get("entry_point")
+	if raw_ep is not None:
+		if not isinstance(raw_ep, str) or not raw_ep:
+			raise ManifestError(f"{ctx}: 'entry_point' must be a non-empty string")
+		if "::" not in raw_ep:
+			raise ManifestError(f"{ctx}: 'entry_point' must be in 'module::fn' format, got '{raw_ep}'")
+		if kind != "app":
+			raise ManifestError(f"{ctx}: 'entry_point' is only valid for app artifacts")
+		entry_point = raw_ep
+
 	return Artifact(
 		kind=kind,
 		name=name,
@@ -249,4 +262,5 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 		smoke_command=smoke_command,
 		unsafe=unsafe,
 		module_namespace=module_namespace,
+		entry_point=entry_point,
 	)

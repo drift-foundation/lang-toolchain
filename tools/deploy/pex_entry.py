@@ -46,7 +46,6 @@ def _peek_stdlib_dep(stdlib_dir: Path) -> str | None:
 def main() -> None:
 	# Resolve the deploy tree root from the real path of this executable.
 	# For scie binaries, sys.argv[0] is the path to the scie executable.
-	# Resolve symlinks (e.g. <dest>/current/bin/driftc -> ../drift-V/bin/driftc).
 	exe = Path(os.path.realpath(sys.argv[0]))
 	dist_root = exe.parent.parent
 

@@ -31,9 +31,8 @@ def resolve_driftc(explicit: Path | None = None) -> Path | None:
 	Resolution order:
 	  1. Explicit path (--driftc flag) — must exist.
 	  2. Sibling ``driftc`` next to the running ``drift`` executable.
-	     Follows symlinks so deployed layouts like
-	     ``~/opt/drift/current/bin/drift → ../drift-0.27/bin/drift``
-	     find ``~/opt/drift/drift-0.27/bin/driftc``.
+	     Follows symlinks so deployed layouts resolve correctly
+	     (e.g. ``~/opt/drift/toolchain/bin/driftc``).
 	  3. ``driftc`` from ``$PATH``.
 
 	Returns the resolved Path, or None if not found.
@@ -154,6 +153,10 @@ def build_app_cmd(
 ) -> list[str]:
 	"""Build the driftc command for an app artifact."""
 	cmd = [str(driftc), "-o", str(output_path)]
+
+	# Custom entry point (e.g. "pushcoin.bookkeeper::main").
+	if art.entry_point:
+		cmd.extend(["--entry", art.entry_point])
 
 	# Trust store for verifying package dependencies.
 	if trust_store is not None:
