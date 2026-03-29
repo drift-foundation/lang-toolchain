@@ -5250,6 +5250,51 @@ def resolve_call_expr(
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types: list[TypeId | None] = []
 		lambda_arg_indices: list[int] = []
+		# Pre-scan: propagate expected Callback types to explicit callbackN(lambda)
+		# args so the inner lambda gets concrete param types from the outer call
+		# context. Without this, callback2(|req, ctx| ...) inside add_route(...)
+		# leaves the lambda params as Unknown.
+		_CB_NAMES_PRE = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
+		_CB_IFACE_NAMES = frozenset({"Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"})
+		if ctx.callable_registry is not None and any(
+			isinstance(a, H.HCall) and isinstance(getattr(a, "fn", None), H.HVar) and a.fn.name in _CB_NAMES_PRE
+			for a in expr.args
+		):
+			# Try to find the expected Callback type from function candidates.
+			# If all candidates agree on the param type at a given index,
+			# propagate it as expected_type_hint to the callbackN HCall.
+			_pre_cands = list(ctx.callable_registry.get_free_candidates_unscoped(name=expr.fn.name))
+			for idx, arg in enumerate(expr.args):
+				if not isinstance(arg, H.HCall):
+					continue
+				if not isinstance(getattr(arg, "fn", None), H.HVar):
+					continue
+				if arg.fn.name not in _CB_NAMES_PRE:
+					continue
+				# Find the unique expected param type across all candidates.
+				_expected_pty: TypeId | None = None
+				_ambiguous = False
+				for _pc in _pre_cands:
+					_ps = _pc.signature
+					if _ps is None or not _ps.param_types or idx >= len(_ps.param_types):
+						continue
+					_pty = _ps.param_types[idx]
+					_ptd = ctx.type_table.get(_pty)
+					if _ptd.kind is not TypeKind.INTERFACE or _ptd.name not in _CB_IFACE_NAMES:
+						continue
+					if _expected_pty is None:
+						_expected_pty = _pty
+					elif _expected_pty != _pty:
+						_ambiguous = True
+						break
+				if _expected_pty is not None and not _ambiguous:
+					# Only propagate if the Callback type has fully concrete
+					# type args (no type variables). Generic callbacks like
+					# Callback0<T> from spawn_cb<T> must not be propagated —
+					# the type vars aren't resolved yet.
+					_inst = ctx.type_table.get_interface_instance(_expected_pty)
+					if _inst is not None and _inst.type_args and not any(ctx.type_table.has_typevar(ta) for ta in _inst.type_args):
+						arg.expected_type_hint = _expected_pty
 		for idx, arg in enumerate(expr.args):
 			if isinstance(arg, H.HLambda):
 				lambda_arg_indices.append(idx)
@@ -5409,6 +5454,35 @@ def resolve_call_expr(
 					arg.allow_capture_invoke = False
 				arg.expected_fn_inferred = True
 				arg.expected_type_from_require = param_ty
+				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
+			# Re-type explicit callbackN(lambda) args with the expected
+			# Callback type so the lambda inside gets concrete param types.
+			# Without this, callback2(|req, ctx| ...) inside add_route(...)
+			# leaves the lambda params as Unknown because callback2 is generic
+			# and the expected type wasn't available during initial arg typing.
+			_CB_NAMES = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
+			for idx, arg in enumerate(expr.args):
+				if not isinstance(arg, H.HCall):
+					continue
+				if not isinstance(getattr(arg, "fn", None), H.HVar):
+					continue
+				if arg.fn.name not in _CB_NAMES:
+					continue
+				if idx >= len(sig_inst.param_types):
+					continue
+				param_ty = sig_inst.param_types[idx]
+				param_def = ctx.type_table.get(param_ty)
+				if param_def.kind is not TypeKind.INTERFACE:
+					continue
+				if param_def.name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+					continue
+				# The arg was already typed without expected_type. Re-type
+				# with the resolved Callback type so the inner lambda gets
+				# concrete param types from the interface's type args.
+				prev_ty = arg_types[idx]
+				if prev_ty is not None and prev_ty != ctx.unknown_ty:
+					# Already successfully typed — skip.
+					continue
 				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
 			_b2_wrapped_params: dict[int, TypeId] = {}  # param_idx -> new Callback type
 			if decl.fn_id is not None and any(isinstance(a, H.HLambda) for a in expr.args):

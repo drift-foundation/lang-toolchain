@@ -1456,6 +1456,7 @@ def parse_drift_workspace_to_hir(
 	external_module_exports: dict[str, dict[str, object]] | None = None,
 	external_module_packages: dict[str, str] | None = None,
 	external_exception_schemas: dict[str, tuple[str, list[str]]] | None = None,
+	external_type_aliases: list[tuple[str, str, list[str], object]] | None = None,
 	package_id: str | None = None,
 	stdlib_root: Path | None = None,
 	test_build_only: bool = False,
@@ -3032,6 +3033,17 @@ def parse_drift_workspace_to_hir(
 			prev_exc = {}
 		prev_exc.update(external_exception_schemas)
 		shared_type_table.exception_schemas = prev_exc
+	# Pre-populate type aliases from loaded packages so that cross-package
+	# type references (e.g. web.rest.Request → web.rest.request.Request) resolve
+	# correctly during signature resolution in _lower_parsed_program_to_hir.
+	if external_type_aliases:
+		for a_mid, a_name, a_params, a_target in external_type_aliases:
+			if shared_type_table.lookup_type_alias(module_id=a_mid, name=a_name) is None:
+				shared_type_table.define_type_alias(
+					module_id=a_mid, name=a_name,
+					type_params=a_params, target=a_target,
+				)
+
 	# Pre-declare all nominal type names across the workspace before lowering any
 	# individual module.
 	#
@@ -3249,6 +3261,29 @@ def parse_drift_workspace_to_hir(
 			table.set_source_manager(source_manager)
 			_set_active_source_manager(prev_source_manager)
 			return {}, table, {}, {}, {}, diagnostics
+
+	# Register type aliases for star-re-exported types so that the exporting
+	# module’s name is a valid alias for the origin type.  Explicit `pub type`
+	# aliases are already registered during per-module lowering; this covers
+	# star re-exports (`export { other.module.* }`) which do not create
+	# explicit alias declarations but still need alias entries in the type
+	# table for correct serialization and consumer-side resolution.
+	for exporting_mid, kind_targets in reexported_type_targets_by_module.items():
+		for kind, targets in kind_targets.items():
+			for local_name, (origin_mid, origin_name) in targets.items():
+				if origin_mid == exporting_mid:
+					continue
+				# Only register if no explicit alias already covers this name.
+				if shared_type_table.lookup_type_alias(module_id=exporting_mid, name=local_name) is not None:
+					continue
+				# Build a TypeExpr-like target pointing to the origin type.
+				origin_target = parser_ast.TypeExpr(name=origin_name, args=[], module_id=origin_mid)
+				shared_type_table.define_type_alias(
+					module_id=exporting_mid,
+					name=local_name,
+					type_params=[],
+					target=origin_target,
+				)
 
 	# Materialize const re-exports into the exporting module’s const table when
 	# the origin const value is already available in the shared TypeTable.
@@ -3691,6 +3726,10 @@ def parse_drift_workspace_to_hir(
 							walk_block(it.block, bound=arm_bound)
 							if getattr(it, "result", None) is not None:
 								it.result = walk_expr(it.result, bound=arm_bound)
+							new_list.append(it)
+						elif hasattr(H, "HMapEntry") and isinstance(it, getattr(H, "HMapEntry")):
+							it.key = walk_expr(it.key, bound=bound)
+							it.value = walk_expr(it.value, bound=bound)
 							new_list.append(it)
 						else:
 							new_list.append(it)

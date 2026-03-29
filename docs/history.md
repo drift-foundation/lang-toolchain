@@ -1,6 +1,67 @@
 # Drift development history
 
 ## 2026-03-28
+- **Fixed cross-package alias resolution in consumer parsing, `callback2(...)` lambda inference, and module-qualified calls inside map literals (0.27.127, ABI 7)**:
+  Completed the Bookkeeper/compiler bug chain that had surfaced as unresolved
+  `fmt.format_int(...)`, missing method dispatch for methods whose signatures
+  referenced packaged alias types, and cascading lambda `nothrow` failures.
+  - Map literal module-qualified calls:
+    - module-qualified calls inside map literal entries were not rewritten
+      correctly because generic expression walking skipped `HMapEntry`
+      children
+    - this caused source like:
+      - `{"port": fmt.format_int(port)}`
+      to leave `fmt` unresolved in map literal values even though the same
+      import worked elsewhere in the file
+    - the parser now walks both key and value expressions in `HMapEntry`
+      children during call rewriting
+  - Cross-package alias resolution:
+    - consumers were not pre-populating package type aliases early enough for
+      signature resolution
+    - as a result, methods whose signatures referenced packaged aliases such as
+      `lib.Request` could fail to match the same logical type at call sites
+    - package aliases are now loaded into the parser's shared type table before
+      signature resolution, so consumer parsing resolves those references
+      consistently
+    - star re-exported types are also registered as aliases during package
+      production so exported names remain serializable and resolvable as part
+      of the package API surface
+  - `callback2(...)` lambda inference:
+    - explicit wrappers like:
+      - `core.callback2(|req, extra| ... )`
+      were not propagating the expected callback interface type into the inner
+      lambda early enough
+    - lambda parameters could remain unknown/type-variable shaped, which then
+      caused downstream method resolution and `nothrow` analysis to fail
+    - call resolution now propagates concrete expected callback interface types
+      into explicit `callbackN(...)` lambda arguments when the outer call
+      provides a non-generic callback expectation
+    - lambda parameter comparison also dealiases both sides so cross-package
+      aliases are transparent in annotated callback params
+  - Result:
+    - `fmt.format_int(...)` inside map literals resolves correctly
+    - methods whose signatures reference packaged aliases resolve on the
+      consumer path
+    - explicit `callback2(|req, extra| ...)` handlers can infer concrete lambda
+      parameter types from the expected callback type
+    - the previous lambda `nothrow` failure in this path now disappears as a
+      cascade fix
+  - Coverage:
+    - added e2e regression:
+      [`lang/tests/codegen/e2e/map_literal_module_qualified_call/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/map_literal_module_qualified_call)
+      proving module-qualified calls inside map literal values rewrite and
+      compile correctly
+    - added driver regression:
+      [`lang/tests/driver/test_pkg_cross_package_method_param.py`](/home/sl/src/drift-lang/lang/tests/driver/test_pkg_cross_package_method_param.py)
+      proving both:
+      - direct method resolution with a cross-package alias param
+      - explicit `callback2(...)` lambda inference against
+        `Callback2<&lib.Request, Int, Int>`
+  - Versioning:
+    - compiler version is `0.27.127`
+    - ABI remains `7`
+
+## 2026-03-28
 - **Added manifest-level app `entry_point` support and flattened deploy toolchain layout (0.27.126, ABI 7)**:
   Completed two deploy/build tooling fixes needed to make the manifest-driven
   app workflow practical and to remove nested toolchain indirection from

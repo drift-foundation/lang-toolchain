@@ -7939,6 +7939,42 @@ def main(argv: list[str] | None = None) -> int:
 						if isinstance(schema, (list, tuple)) and len(schema) == 2:
 							external_exception_schemas.setdefault(fqn, (str(schema[0]), [str(f) for f in schema[1]]))
 
+	# Extract type aliases from loaded packages so the parser can resolve
+	# cross-package type references (e.g. web.rest.Request → web.rest.request.Request)
+	# during signature resolution, before the full type-table import runs.
+	external_type_aliases: list[tuple[str, str, list[str], object]] = []
+	if loaded_pkgs:
+		from lang.driftc.packages.type_table_link_v0 import decode_type_table_obj
+		_seen_alias_keys: set[tuple[str, str]] = set()
+		for pkg in loaded_pkgs:
+			for _mid, mod in pkg.modules_by_id.items():
+				payload = mod.payload
+				if not isinstance(payload, dict):
+					continue
+				tt_obj = payload.get("type_table")
+				if not isinstance(tt_obj, dict):
+					continue
+				ta_obj = tt_obj.get("type_aliases")
+				if not isinstance(ta_obj, list):
+					continue
+				for entry in ta_obj:
+					if not isinstance(entry, dict):
+						continue
+					a_mid = entry.get("module_id")
+					a_name = entry.get("name")
+					if not isinstance(a_mid, str) or not isinstance(a_name, str):
+						continue
+					key = (a_mid, a_name)
+					if key in _seen_alias_keys:
+						continue
+					_seen_alias_keys.add(key)
+					a_params = entry.get("type_params", [])
+					a_target = entry.get("target")
+					if a_target is not None:
+						from lang.driftc.packages.type_table_link_v0 import _decode_alias_target
+						external_type_aliases.append((a_mid, a_name, [str(p) for p in a_params], _decode_alias_target(a_target)))
+				break  # all modules share the same type_table
+
 	package_id = str(args.package_id) if args.package_id else None
 	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
 		source_paths,
@@ -7946,6 +7982,7 @@ def main(argv: list[str] | None = None) -> int:
 		external_module_exports=external_exports,
 		external_module_packages=external_module_packages,
 		external_exception_schemas=external_exception_schemas or None,
+		external_type_aliases=external_type_aliases or None,
 		package_id=package_id,
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),

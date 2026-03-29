@@ -5461,19 +5461,28 @@ class TypeChecker:
 						if getattr(param, "type", None) is None:
 							param_type = exp_param
 						elif param_type != exp_param:
-							param_pretty = self._pretty_type_name(param_type, current_module=current_module_name)
-							exp_pretty = self._pretty_type_name(exp_param, current_module=current_module_name)
-							diagnostics.append(
-								_tc_diag(
-									message=(
-										f"lambda parameter '{param.name}' has type {param_pretty} "
-										f"but expected {exp_pretty}"
-									),
-									severity="error",
-									span=getattr(param, "loc", Span()),
+							# Dealias both sides: a cross-package type alias
+							# (e.g. mylib.Request → mylib.inner.Request) must be
+							# transparent in lambda parameter annotations.
+							if _dealias_zero_param_type(param_type) != _dealias_zero_param_type(exp_param):
+								param_pretty = self._pretty_type_name(param_type, current_module=current_module_name)
+								exp_pretty = self._pretty_type_name(exp_param, current_module=current_module_name)
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"lambda parameter '{param.name}' has type {param_pretty} "
+											f"but expected {exp_pretty}"
+										),
+										severity="error",
+										span=getattr(param, "loc", Span()),
+									)
 								)
-							)
-							lambda_type_error = True
+								lambda_type_error = True
+							else:
+								# Alias resolved to the same type — accept and use
+								# the expected param so downstream checks are
+								# consistent with the enclosing call's type.
+								param_type = exp_param
 					scope_env[-1][param.name] = param_type
 					scope_bindings[-1][param.name] = param.binding_id
 					binding_types[param.binding_id] = param_type

@@ -1,0 +1,6 @@
+{
+  "description": "module-qualified call inside map literal value resolves correctly",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

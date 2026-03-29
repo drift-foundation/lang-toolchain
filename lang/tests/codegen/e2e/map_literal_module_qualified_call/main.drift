@@ -1,0 +1,9 @@
+module main;
+
+import std.core as core;
+import std.format as fmt;
+
+fn main() nothrow -> Int {
+	val m = {"answer": fmt.format_int(42)};
+	return 0;
+}
