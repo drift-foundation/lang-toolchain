@@ -1,0 +1,6 @@
+{
+  "description": "match on exception binder attrs inside catch arm compiles and runs",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

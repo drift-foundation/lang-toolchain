@@ -1,6 +1,40 @@
 # Drift development history
 
 ## 2026-03-28
+- **Fixed a MIR-lowering internal compiler error for `match` expressions inside catch-arm bodies (0.27.128, ABI 7)**:
+  Fixed a compiler crash triggered when a catch arm with an exception binder
+  contained a nested `match` expression, such as matching on
+  `e.attrs["field"].as_string()`.
+  - Problem:
+    - code of the form:
+      - `catch SomeException(e) { match e.attrs["field"].as_string() { ... } }`
+      could pass earlier phases and then crash during MIR lowering
+    - the failure was an internal compiler error:
+      - `AttributeError: 'HMatchExpr' object has no attribute 'subject'`
+  - Root cause:
+    - the binder-lookup walker in stage2 MIR lowering handled `HMatchExpr`
+      using the wrong attribute name
+    - `HMatchExpr` stores its matched expression in:
+      - `scrutinee`
+    - not:
+      - `subject`
+  - Fix:
+    - the MIR-lowering walker now visits `expr.scrutinee` for `HMatchExpr`
+      nodes when scanning catch-arm bodies for binder usage
+  - Result:
+    - nested `match` expressions inside catch arms no longer crash the compiler
+    - the affected source pattern now compiles and runs normally through full
+      codegen
+  - Coverage:
+    - added e2e regression:
+      [`lang/tests/codegen/e2e/catch_arm_match_binder/`](/home/sl/src/drift-lang/lang/tests/codegen/e2e/catch_arm_match_binder)
+      proving that matching on `e.attrs["..."].as_string()` inside a catch arm
+      with an exception binder survives full compilation
+  - Versioning:
+    - compiler version is `0.27.128`
+    - ABI remains `7`
+
+## 2026-03-28
 - **Fixed cross-package alias resolution in consumer parsing, `callback2(...)` lambda inference, and module-qualified calls inside map literals (0.27.127, ABI 7)**:
   Completed the Bookkeeper/compiler bug chain that had surfaced as unresolved
   `fmt.format_int(...)`, missing method dispatch for methods whose signatures

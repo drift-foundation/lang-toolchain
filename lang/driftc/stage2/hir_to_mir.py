@@ -7436,7 +7436,7 @@ class HIRToMIR:
 				walk_expr(expr.result)
 				return
 			if isinstance(expr, H.HMatchExpr):
-				walk_expr(expr.subject)
+				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
 					walk_block(arm.block)
 					if arm.result is not None:
