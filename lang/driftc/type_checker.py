@@ -9577,18 +9577,18 @@ class TypeChecker:
 
 		def _nonretaining_param_state(sig: FnSignature, param_index: int, *, fn_id: FunctionId | None = None) -> Optional[bool]:
 			from lang.driftc.borrow_checker import EscapeLevel
-			# World-backed: overlay is the sole authority for escape metadata.
+			# Production (world-backed): reads from SemanticWorld overlay.
 			if self.semantic_world is not None and fn_id is not None:
 				pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
 				if pel is None:
-					return None  # No annotation → unknown
+					return None
 				if param_index >= len(pel) or pel[param_index] is None:
-					return None  # Unannotated param
+					return None
 				lvl = pel[param_index]
 				if lvl in (EscapeLevel.IMMEDIATE, EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 					return True
-				return False  # THREAD, STATIC → retaining
-			# Legacy path (no world): read from signature field directly.
+				return False
+			# Test-only fallback: no SemanticWorld available.
 			if sig.param_escape_level is not None and 0 <= param_index < len(sig.param_escape_level):
 				lvl = sig.param_escape_level[param_index]
 				if lvl is not None:

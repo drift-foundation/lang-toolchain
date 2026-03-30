@@ -193,9 +193,10 @@ class BorrowChecker:
 				if sig.is_method and sig.impl_target_type_id is not None:
 					key = (sig.impl_target_type_id, sig.method_name or sig.name)
 					self._method_sig_by_key[key] = sig
-				_has_escape = sig.param_escape_level
-				if not _has_escape and self.semantic_world is not None:
+				if self.semantic_world is not None:
 					_has_escape = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level") is not None
+				else:
+					_has_escape = bool(sig.param_escape_level)
 				if not sig.is_method and _has_escape:
 					free_key: Tuple[Optional[str], str] = (fn_id.module, fn_id.name)
 					if free_key not in self._free_fn_escape_sig:
@@ -204,11 +205,12 @@ class BorrowChecker:
 	def _effective_escape_level(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature], param_index: int) -> "EscapeLevel":
 		"""Get escape level for a param.
 
-		World-backed: overlay is the sole authority.
-		Legacy (no world): reads from sig.param_escape_level.
+		Production (world-backed): reads from SemanticWorld overlay.
+		Test-only (no world): reads from sig.param_escape_level.
 		"""
 		if self.semantic_world is not None and fn_id is not None:
 			return self.semantic_world.effective_param_escape_level(fn_id, param_index)
+		# Test-only fallback: no SemanticWorld available.
 		if sig is not None:
 			return sig.effective_param_escape_level(param_index)
 		return EscapeLevel.THREAD
@@ -216,27 +218,26 @@ class BorrowChecker:
 	def _has_escape_annotations(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature]) -> bool:
 		"""Check if a function has any escape-level annotations.
 
-		World-backed: overlay is the sole authority.
-		Legacy (no world): reads from sig.param_escape_level.
+		Production (world-backed): reads from SemanticWorld overlay.
+		Test-only (no world): reads from sig.param_escape_level.
 		"""
 		if self.semantic_world is not None and fn_id is not None:
-			pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
-			return pel is not None
-		if sig is not None and sig.param_escape_level:
-			return True
-		return False
+			return self.semantic_world.get_signature_annotation(fn_id, "param_escape_level") is not None
+		# Test-only fallback.
+		return sig is not None and bool(sig.param_escape_level)
 
 	def _is_unannotated_param(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature], param_index: int) -> bool:
 		"""Check if a param's escape level is default/unannotated.
 
-		World-backed: overlay is the sole authority.
-		Legacy (no world): reads from sig.param_escape_level.
+		Production (world-backed): reads from SemanticWorld overlay.
+		Test-only (no world): reads from sig.param_escape_level.
 		"""
 		if self.semantic_world is not None and fn_id is not None:
 			pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
 			if pel is not None:
 				return param_index >= len(pel) or pel[param_index] is None
-			return True  # no overlay annotation → unannotated
+			return True
+		# Test-only fallback.
 		if sig is not None:
 			_pel = sig.param_escape_level or []
 			return sig.param_escape_level is None or param_index >= len(_pel) or _pel[param_index] is None

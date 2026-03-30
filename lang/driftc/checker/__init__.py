@@ -156,6 +156,12 @@ class FnSignature:
 			self.is_mir_bound = bool(self.is_instantiation or (not self.type_params and not self.impl_type_params))
 
 	def effective_param_escape_level(self, i: int) -> "EscapeLevel":
+		"""Legacy (test-only): read escape level from sig field.
+
+		Production code uses SemanticWorld.effective_param_escape_level()
+		which reads from the overlay.  This method exists only for
+		non-world test paths in the borrow checker.
+		"""
 		from lang.driftc.borrow_checker import EscapeLevel
 		if self.param_escape_level is not None and i < len(self.param_escape_level):
 			lvl = self.param_escape_level[i]

@@ -460,14 +460,13 @@ def analyze_non_retaining_params(
 		return base if any(x is not None for x in base) else None
 
 	if semantic_world is not None:
-		# Write analysis results to the overlay only — do not rewrite
-		# FnSignature objects.  The overlay is the sole authority for
-		# escape-level metadata in world-backed paths.
+		# Production: write analysis results to the overlay only.
+		# FnSignature objects are not mutated.
 		for fn_id, sig in working_sigs.items():
 			pel = _build_pel(fn_id, sig)
 			semantic_world.annotate_signature(fn_id, "param_escape_level", list(pel) if pel is not None else None)
 		return dict(working_sigs)
-	# Legacy path (no world): rewrite signatures with embedded param_escape_level.
+	# Test-only fallback (no world): rewrite signatures with embedded param_escape_level.
 	return {
 		fn_id: dataclass_replace(sig, param_escape_level=_build_pel(fn_id, sig))
 		for fn_id, sig in working_sigs.items()

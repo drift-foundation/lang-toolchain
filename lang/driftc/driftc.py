@@ -2700,8 +2700,8 @@ def _apply_stdlib_escape_annotations(signatures_by_id: Mapping, *, semantic_worl
 	conc.spawn, etc.  Called from both compile_stubbed_funcs (e2e/test path)
 	and main() (CLI path).
 
-	When semantic_world is provided, writes to the world's signature_annotations
-	overlay instead of mutating FnSignature.param_escape_level in place.
+	Production (world-backed): writes to SemanticWorld overlay.
+	Test-only (no world): mutates FnSignature.param_escape_level in place.
 	"""
 	from lang.driftc.borrow_checker import EscapeLevel as _EL
 	_ANNOTATIONS: dict[tuple[str, str], list] = {
@@ -2720,16 +2720,14 @@ def _apply_stdlib_escape_annotations(signatures_by_id: Mapping, *, semantic_worl
 		_levels = _ANNOTATIONS.get(_key)
 		if _levels is None:
 			continue
-		# Check if already annotated (either overlay or signature field).
 		if semantic_world is not None:
-			existing = semantic_world.get_signature_annotation(_fn_id, "param_escape_level")
-			if existing is not None:
+			if semantic_world.get_signature_annotation(_fn_id, "param_escape_level") is not None:
 				continue
-		elif _sig.param_escape_level is not None:
-			continue
-		if semantic_world is not None:
 			semantic_world.annotate_signature(_fn_id, "param_escape_level", list(_levels))
 		else:
+			# Test-only: mutate sig field directly.
+			if _sig.param_escape_level is not None:
+				continue
 			_sig.param_escape_level = list(_levels)
 
 
