@@ -1461,6 +1461,7 @@ def parse_drift_workspace_to_hir(
 	stdlib_root: Path | None = None,
 	test_build_only: bool = False,
 	word_bits: int | None = None,
+	type_table: "TypeTable | None" = None,
 	) -> Tuple[
 	Dict[str, ModuleLowered],
 	"TypeTable",
@@ -2423,7 +2424,12 @@ def parse_drift_workspace_to_hir(
 	module_packages_for_scope: dict[str, str] = {}
 	local_pkg = package_id or "__local__"
 	has_stdlib = stdlib_root is not None
-	std_pkg = "std" if package_id is not None else local_pkg
+	# Stdlib modules always belong to canonical package "std", regardless of
+	# whether we are building a package (package_id set) or compiling a
+	# consumer (package_id is None).  This ensures source-compiled stdlib
+	# types have the same NominalKey identity as package-serialized stdlib
+	# types, eliminating TypeId collisions when both paths coexist.
+	std_pkg = "std"
 	if isinstance(external_module_packages, dict):
 		for mod, pkg in external_module_packages.items():
 			if mod in merged_programs:
@@ -2434,10 +2440,10 @@ def parse_drift_workspace_to_hir(
 		if has_stdlib and _is_stdlib_module(mod):
 			module_packages_for_scope.setdefault(mod, std_pkg)
 		elif mod == "lang.core":
-			module_packages_for_scope.setdefault(mod, "lang.core" if has_stdlib else local_pkg)
+			module_packages_for_scope.setdefault(mod, "lang.core")
 		else:
 			module_packages_for_scope.setdefault(mod, local_pkg)
-	module_packages_for_scope.setdefault("lang.core", "lang.core" if has_stdlib else local_pkg)
+	module_packages_for_scope.setdefault("lang.core", "lang.core")
 	module_packages_for_scope.setdefault("lang.__internal", local_pkg)
 
 	def _check_alias_binding_conflicts(path: Path, file_aliases: dict[str, str], prog: parser_ast.Program) -> None:
@@ -2999,10 +3005,16 @@ def parse_drift_workspace_to_hir(
 		return {}, table, {}, {}, {}, diagnostics
 
 	# Lower modules using a shared TypeTable so TypeIds remain comparable across the workspace.
-	_tt_kwargs: dict = {}
-	if word_bits is not None:
-		_tt_kwargs["word_bits"] = word_bits
-	shared_type_table = TypeTable(**_tt_kwargs)
+	# When an external type_table is provided (pre-populated with package types from early
+	# linking), use it directly instead of creating a fresh one.  This eliminates the
+	# temporal split where the parser resolves types before package data is available.
+	if type_table is not None:
+		shared_type_table = type_table
+	else:
+		_tt_kwargs: dict = {}
+		if word_bits is not None:
+			_tt_kwargs["word_bits"] = word_bits
+		shared_type_table = TypeTable(**_tt_kwargs)
 	if package_id is not None:
 		shared_type_table.package_id = package_id
 	local_pkg = package_id or "__local__"
@@ -3018,10 +3030,10 @@ def parse_drift_workspace_to_hir(
 		if has_stdlib and _is_stdlib_module(mod):
 			shared_type_table.module_packages.setdefault(mod, std_pkg)
 		elif mod == "lang.core":
-			shared_type_table.module_packages.setdefault(mod, "lang.core" if has_stdlib else local_pkg)
+			shared_type_table.module_packages.setdefault(mod, "lang.core")
 		else:
 			shared_type_table.module_packages.setdefault(mod, local_pkg)
-	shared_type_table.module_packages.setdefault("lang.core", "lang.core" if has_stdlib else local_pkg)
+	shared_type_table.module_packages.setdefault("lang.core", "lang.core")
 	shared_type_table.module_packages.setdefault("lang.__internal", local_pkg)
 	_prime_builtins(shared_type_table)
 	# Pre-populate exception schemas from loaded packages so that exception types

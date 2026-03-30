@@ -7939,41 +7939,111 @@ def main(argv: list[str] | None = None) -> int:
 						if isinstance(schema, (list, tuple)) and len(schema) == 2:
 							external_exception_schemas.setdefault(fqn, (str(schema[0]), [str(f) for f in schema[1]]))
 
-	# Extract type aliases from loaded packages so the parser can resolve
-	# cross-package type references (e.g. web.rest.Request → web.rest.request.Request)
-	# during signature resolution, before the full type-table import runs.
-	external_type_aliases: list[tuple[str, str, list[str], object]] = []
+	# ── Early type-table linking ────────────────────────────────────
+	# Import package type definitions into a fresh TypeTable BEFORE
+	# the parser runs.  This eliminates the temporal split where the
+	# parser resolved types against an incomplete TypeTable and then a
+	# post-parse linking step patched up the gaps.  With early linking
+	# the parser sees the full type universe from the start.
+	pkg_typeid_maps: dict[Path, dict[int, int]] = {}
+	pkg_tid_universes: dict[Path, frozenset[int]] = {}
+	pre_linked_type_table: TypeTable | None = None
 	if loaded_pkgs:
-		from lang.driftc.packages.type_table_link_v0 import decode_type_table_obj
-		_seen_alias_keys: set[tuple[str, str]] = set()
+		from lang.driftc.packages.type_table_link_v0 import (
+			decode_type_table_obj,
+			import_type_tables_and_build_typeid_maps,
+		)
+		_tt_kwargs: dict = {}
+		_wb = getattr(args, "target_word_bits", None)
+		if _wb is not None:
+			_tt_kwargs["word_bits"] = _wb
+		pre_linked_type_table = TypeTable(**_tt_kwargs)
+		_pre_pkg_id = str(args.package_id) if args.package_id else None
+		if _pre_pkg_id is not None:
+			pre_linked_type_table.package_id = _pre_pkg_id
+		# Seed module→package ownership so NominalKeys are correct.
+		if isinstance(external_module_packages, dict):
+			for _mod, _pkg in external_module_packages.items():
+				pre_linked_type_table.module_packages.setdefault(_mod, _pkg)
+		# Seed canonical stdlib/lang module ownership so the linker assigns
+		# the same package_id the parser will use for source-compiled stdlib.
+		pre_linked_type_table.module_packages.setdefault("lang.core", "lang.core")
+		pre_linked_type_table.module_packages.setdefault("lang.thread", "lang.core")
+		pre_linked_type_table.module_packages.setdefault("lang.atomic", "lang.core")
+		# lang.__internal is compiler-internal scaffolding — intentionally NOT
+		# seeded here.  It stays local (populated by the parser as local_pkg).
+		# Scan package type tables for any std.*/lang.* modules and seed them.
+		for _pkg in loaded_pkgs:
+			for _mid in _pkg.modules_by_id:
+				if isinstance(_mid, str):
+					if _mid.startswith("std."):
+						pre_linked_type_table.module_packages.setdefault(_mid, "std")
+					elif _mid.startswith("lang.") and _mid != "lang.__internal":
+						pre_linked_type_table.module_packages.setdefault(_mid, "lang.core")
+		# Also seed stdlib modules referenced in package type tables but not
+		# directly provided by any loaded package (e.g. std.core types appear
+		# in every package's serialized type table).
+		for _pkg in loaded_pkgs:
+			for _mid, _mod in _pkg.modules_by_id.items():
+				_payload = _mod.payload
+				if not isinstance(_payload, dict):
+					continue
+				_tt = _payload.get("type_table")
+				if not isinstance(_tt, dict):
+					continue
+				for _td in (_tt.get("defs") or {}).values():
+					if isinstance(_td, dict):
+						_dmid = _td.get("module_id")
+						if isinstance(_dmid, str):
+							if _dmid.startswith("std."):
+								pre_linked_type_table.module_packages.setdefault(_dmid, "std")
+							elif _dmid.startswith("lang.") and _dmid != "lang.__internal":
+								pre_linked_type_table.module_packages.setdefault(_dmid, "lang.core")
+				break  # all modules share same type_table
+		# Extract per-package type-table objects and run linking.
+		_pkg_paths: list[Path] = []
+		_pkg_tt_objs: list[dict[str, Any]] = []
 		for pkg in loaded_pkgs:
-			for _mid, mod in pkg.modules_by_id.items():
+			_pkg_tt_obj: dict[str, Any] | None = None
+			for mid, mod in pkg.modules_by_id.items():
 				payload = mod.payload
 				if not isinstance(payload, dict):
 					continue
-				tt_obj = payload.get("type_table")
-				if not isinstance(tt_obj, dict):
-					continue
-				ta_obj = tt_obj.get("type_aliases")
-				if not isinstance(ta_obj, list):
-					continue
-				for entry in ta_obj:
-					if not isinstance(entry, dict):
-						continue
-					a_mid = entry.get("module_id")
-					a_name = entry.get("name")
-					if not isinstance(a_mid, str) or not isinstance(a_name, str):
-						continue
-					key = (a_mid, a_name)
-					if key in _seen_alias_keys:
-						continue
-					_seen_alias_keys.add(key)
-					a_params = entry.get("type_params", [])
-					a_target = entry.get("target")
-					if a_target is not None:
-						from lang.driftc.packages.type_table_link_v0 import _decode_alias_target
-						external_type_aliases.append((a_mid, a_name, [str(p) for p in a_params], _decode_alias_target(a_target)))
-				break  # all modules share the same type_table
+				tt = payload.get("type_table")
+				if not isinstance(tt, dict):
+					msg = f"package {_package_label()} module '{mid}' is missing type_table"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+					return 1
+				if _pkg_tt_obj is None:
+					_pkg_tt_obj = tt
+				else:
+					if type_table_fingerprint(tt) != type_table_fingerprint(_pkg_tt_obj):
+						msg = f"package {_package_label()} contains inconsistent type_table across modules"
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
+			if _pkg_tt_obj is None:
+				continue
+			_pkg_paths.append(pkg.path)
+			_pkg_tt_objs.append(_pkg_tt_obj)
+		if _pkg_tt_objs:
+			try:
+				_maps = import_type_tables_and_build_typeid_maps(_pkg_tt_objs, pre_linked_type_table)
+			except ValueError as err:
+				msg = f"failed to import package types: {err}"
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+				else:
+					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			for _path, _tid_map, _tt_obj in zip(_pkg_paths, _maps, _pkg_tt_objs):
+				pkg_typeid_maps[_path] = _tid_map
+				pkg_tid_universes[_path] = frozenset(decode_type_table_obj(_tt_obj).defs.keys())
 
 	package_id = str(args.package_id) if args.package_id else None
 	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
@@ -7982,11 +8052,11 @@ def main(argv: list[str] | None = None) -> int:
 		external_module_exports=external_exports,
 		external_module_packages=external_module_packages,
 		external_exception_schemas=external_exception_schemas or None,
-		external_type_aliases=external_type_aliases or None,
 		package_id=package_id,
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),
 		word_bits=getattr(args, "target_word_bits", None),
+		type_table=pre_linked_type_table,
 	)
 	func_hirs, signatures, fn_ids_by_name = flatten_modules(modules)
 	origin_by_fn_id: dict[FunctionId, Path] = {}
@@ -8127,86 +8197,28 @@ def main(argv: list[str] | None = None) -> int:
 	type_table.ensure_instantiated(opt_base, [type_table.ensure_string()])
 
 	# Verify package TypeTable compatibility before importing signatures/IR.
-	# Build link-time TypeId maps for packages and import their type definitions
-	# into the host TypeTable. This allows package consumption without requiring
-	# identical TypeId assignment across independently-produced artifacts.
-	pkg_typeid_maps: dict[Path, dict[int, int]] = {}
-	pkg_tid_universes: dict[Path, frozenset[int]] = {}
+	# Post-parse fixups for package-loaded types.  Type table linking ran
+	# before the parser (early linking above), so pkg_typeid_maps and
+	# pkg_tid_universes are already populated.  The remaining work is
+	# id_registry interning, signature/field canonicalization (safety net),
+	# and exception catalog population.
 	if loaded_pkgs:
-		pkg_paths: list[Path] = []
-		pkg_tt_objs: list[dict[str, Any]] = []
-		for pkg in loaded_pkgs:
-			# MVP rule: all modules in a package must share the same encoded type table.
-			pkg_tt_obj: dict[str, Any] | None = None
-			for mid, mod in pkg.modules_by_id.items():
-				payload = mod.payload
-				if not isinstance(payload, dict):
-					continue
-				tt = payload.get("type_table")
-				if not isinstance(tt, dict):
-					msg = f"package {_package_label()} module '{mid}' is missing type_table"
-					if args.json:
-						print(
-							json.dumps(
-								{
-									"exit_code": 1,
-									"diagnostics": [
-										{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}
-									],
-								}
-							)
-						)
-					else:
-						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-					return 1
-				if pkg_tt_obj is None:
-					pkg_tt_obj = tt
-				else:
-					if type_table_fingerprint(tt) != type_table_fingerprint(pkg_tt_obj):
-						msg = f"package {_package_label()} contains inconsistent type_table across modules"
-						if args.json:
-							print(
-								json.dumps(
-									{
-										"exit_code": 1,
-										"diagnostics": [
-											{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}
-										],
-									}
-								)
-							)
-						else:
-							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-						return 1
-			if pkg_tt_obj is None:
-				continue
-			pkg_paths.append(pkg.path)
-			pkg_tt_objs.append(pkg_tt_obj)
-
-		try:
-			maps = import_type_tables_and_build_typeid_maps(pkg_tt_objs, type_table)
-		except ValueError as err:
-			msg = f"failed to import package types: {err}"
-			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
-			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
-			return 1
-		for path, tid_map, tt_obj in zip(pkg_paths, maps, pkg_tt_objs):
-			pkg_typeid_maps[path] = tid_map
-			pkg_tid_universes[path] = frozenset(decode_type_table_obj(tt_obj).defs.keys())
 		for base_id, schema in getattr(type_table, "struct_bases", {}).items():
 			mod = getattr(schema, "module_id", None)
 			name = getattr(schema, "name", None)
 			if isinstance(mod, str) and isinstance(name, str):
 				pkg = getattr(type_table, "module_packages", {}).get(mod, getattr(type_table, "package_id", None))
-				id_registry.intern_type(TypeKey(package_id=pkg, module=mod, name=name, args=()), preferred=base_id)
+				_tk = TypeKey(package_id=pkg, module=mod, name=name, args=())
+				if id_registry._type_key_to_id.get(_tk) is None:
+					id_registry.intern_type(_tk, preferred=base_id)
 		for base_id, schema in getattr(type_table, "variant_schemas", {}).items():
 			mod = getattr(schema, "module_id", None)
 			name = getattr(schema, "name", None)
 			if isinstance(mod, str) and isinstance(name, str):
 				pkg = getattr(type_table, "module_packages", {}).get(mod, getattr(type_table, "package_id", None))
-				id_registry.intern_type(TypeKey(package_id=pkg, module=mod, name=name, args=()), preferred=base_id)
+				_tk = TypeKey(package_id=pkg, module=mod, name=name, args=())
+				if id_registry._type_key_to_id.get(_tk) is None:
+					id_registry.intern_type(_tk, preferred=base_id)
 
 		_canonicalize_signature_type_ids(base_signatures_by_id, type_table)
 		_canonicalize_struct_field_type_ids(type_table)
@@ -9253,7 +9265,11 @@ def main(argv: list[str] | None = None) -> int:
 			global_trait_index.add_trait(trait_def.key, trait_def)
 	for missing_trait in external_missing_traits:
 		if hasattr(missing_trait, "module") and hasattr(missing_trait, "name"):
-			global_trait_index.mark_missing(missing_trait)
+			# Do not mark a trait as missing if it is already defined in the
+			# current world (e.g. source-compiled stdlib traits satisfy package
+			# references that were "missing" during the package's own build).
+			if missing_trait not in global_trait_index.traits_by_id:
+				global_trait_index.mark_missing(missing_trait)
 	global_trait_impl_index = GlobalTraitImplIndex.from_module_exports(
 		module_exports=module_exports,
 		type_table=type_table,

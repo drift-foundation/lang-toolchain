@@ -60,7 +60,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_binary_search_requires_binarysearchable(tmp_path: Path) -> None:
@@ -205,7 +205,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_binary_search_missing_both_capability_and_comparable(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ struct NeedCmp<T> require T is cmp.Comparable {
 """,
 	)
 	has_cap = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::m_main.BinarySearchable" in n for n in (d.notes or [])) for d in diagnostics)
-	has_cmp = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	has_cmp = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 	assert has_cap and has_cmp
 
 
@@ -274,7 +274,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_min_max_require_comparable(tmp_path: Path) -> None:
@@ -299,7 +299,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_sort_in_place_compiles_for_non_copy_t(tmp_path: Path) -> None:
@@ -373,7 +373,7 @@ struct NeedCmp<T> require T is cmp.Comparable {
 """,
 	)
 	has_perm = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::m_main.Permutable" in n for n in (d.notes or [])) for d in diagnostics)
-	has_cmp = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	has_cmp = any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 	assert has_perm and has_cmp
 
 
@@ -398,7 +398,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_array_binary_search_unavailable(tmp_path: Path) -> None:

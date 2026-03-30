@@ -2249,6 +2249,25 @@ class _FuncBuilder:
 				continue
 			start_line = len(self.lines)
 			self._lower_instr(instr, instr_index=idx)
+			# Safety net: intrinsic handlers that produce raw scalar values
+			# must be wrapped in FnResult when the MIR Call has can_throw=True.
+			# Intrinsic handlers were written for the nothrow path and don't
+			# check can_throw; this post-processing catches the mismatch
+			# rather than patching each of ~30 individual handlers.
+			if isinstance(instr, Call) and instr.can_throw and instr.dest is not None:
+				_dk = f"%{instr.dest}"
+				_vt = self.value_types.get(_dk)
+				if _vt is not None and not _vt.startswith("%FnResult"):
+					# Intrinsic produced a raw value; wrap it.
+					_raw_tmp = self._fresh("raw_intrinsic")
+					# Rewrite the last line that defined _dk to use the temp name.
+					for _li in range(len(self.lines) - 1, max(start_line - 1, -1), -1):
+						if f"  {_dk} = " in self.lines[_li]:
+							self.lines[_li] = self.lines[_li].replace(f"  {_dk} = ", f"  {_raw_tmp} = ", 1)
+							break
+					self.value_types[_raw_tmp] = _vt
+					del self.value_types[_dk]
+					self._wrap_ok_fnresult(_raw_tmp, _vt, _dk, hint="intrinsic_ok")
 			if len(self.lines) > start_line:
 				if not isinstance(instr, AssignSSA):
 					self._attach_dbg(start_line, instr)

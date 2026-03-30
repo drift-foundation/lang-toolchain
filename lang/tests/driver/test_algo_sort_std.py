@@ -92,4 +92,4 @@ fn main() -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.iter.RandomAccessPermutable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.iter.RandomAccessPermutable" for n in (d.notes or [])) for d in diagnostics)

@@ -67,7 +67,7 @@ fn main() nothrow -> Int {
 }
 """,
 	)
-	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any("requirement_trait=__local__::std.core.cmp.Comparable" in n for n in (d.notes or [])) for d in diagnostics)
+	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
 def test_std_binary_search_key_type_mismatch(tmp_path: Path) -> None:

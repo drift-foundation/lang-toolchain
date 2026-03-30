@@ -134,6 +134,40 @@ fn main() nothrow -> Int {
 """
 
 
+# Regression: stdlib identity must be canonical across source and package
+# paths.  The package's serialized type table contains stdlib types (Result,
+# Optional, etc.) with package_id="std".  Source-compiled stdlib must also
+# use package_id="std" so that match arms like core.Result::Ok(v) on a
+# package function's return type resolve correctly.  Without stdlib identity
+# normalization, source-compiled stdlib uses package_id="__local__" which
+# creates duplicate NominalKeys for the same logical type, causing:
+#   "constructor 'Ok' ... does not match the match scrutinee type"
+CONSUMER_STDLIB_IDENTITY_SOURCE = """\
+module main;
+
+import std.core as core;
+import mylib as lib;
+
+// Package function returns core.Result — the Result variant type in its
+// return type comes from the package's serialized type table (package_id="std").
+// Source-compiled stdlib must also use package_id="std" so that match arms
+// like core.Result::Ok(v) resolve correctly against the package return type.
+fn try_make(path: String) -> core.Result<lib.Request, String> {
+\treturn core.Result::Ok(lib.make_request(path));
+}
+
+fn main() nothrow -> Int {
+\tmatch try try_make("/test") catch { core.Result::Err("failed") } {
+\t\tcore.Result::Ok(r) => {
+\t\t\tif r.path.byte_length() > 0 { return 0; }
+\t\t\treturn 1;
+\t\t},
+\t\tcore.Result::Err(_) => { return 2; }
+\t}
+}
+"""
+
+
 def _b64(data: bytes) -> str:
 	return __import__("base64").b64encode(data).decode("ascii")
 
@@ -268,3 +302,22 @@ def test_callback2_lambda_with_cross_package_alias_param(
 	if exit_code != 0:
 		pytest.fail(f"compile failed:\n" + "\n".join(msgs))
 	assert out.exists()
+
+
+def test_stdlib_identity_across_source_and_package(
+	_built_lib: tuple[Path, Path], tmp_path: Path,
+) -> None:
+	"""Stdlib types serialized in a package's type table must have the same
+	identity as source-compiled stdlib types.  Without canonical stdlib
+	package identity, Result/Optional/String etc. get duplicate NominalKeys
+	and match-arm constructors fail to match the scrutinee type."""
+	pkg_root, trust_path = _built_lib
+	exit_code, msgs, out = _compile_consumer(
+		CONSUMER_STDLIB_IDENTITY_SOURCE,
+		pkg_root=pkg_root, trust_path=trust_path, tmp_path=tmp_path,
+	)
+	if exit_code != 0:
+		pytest.fail(f"compile failed:\n" + "\n".join(msgs))
+	assert out.exists()
+	run = subprocess.run([str(out)], capture_output=True, text=True)
+	assert run.returncode == 0, f"binary exited {run.returncode}"

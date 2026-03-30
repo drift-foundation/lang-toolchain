@@ -213,7 +213,7 @@ def test_cross_package_scope_drop_no_leak(tmp_path: Path) -> None:
 		 "-o", str(out_bin)],
 		cwd=ROOT, capture_output=True, text=True, timeout=120,
 	)
-	assert res.returncode == 0, f"compile failed: {res.stderr[:500]}"
+	assert res.returncode == 0, f"compile failed: {res.stderr[:2000]}"
 	assert out_bin.exists(), "binary not produced"
 
 	# Run under Valgrind
