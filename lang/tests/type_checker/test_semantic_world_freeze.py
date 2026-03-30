@@ -269,6 +269,188 @@ def test_compile_stubbed_funcs_rejects_conflicting_missing_traits() -> None:
 		)
 
 
+def test_signature_annotations_overlay() -> None:
+	"""Analysis annotations augment but do not replace canonical signatures."""
+	world = SemanticWorld()
+	world.base_signatures = {"fn_a": "canonical_sig_a"}
+
+	# Annotate without mutating the canonical signature.
+	world.annotate_signature("fn_a", "non_retaining_params", {0, 2})
+	world.annotate_signature("fn_a", "escape_safe", True)
+
+	# Canonical signature is unchanged.
+	assert world.get_signature("fn_a") == "canonical_sig_a"
+
+	# Annotations are available via separate lookup.
+	assert world.get_signature_annotation("fn_a", "non_retaining_params") == {0, 2}
+	assert world.get_signature_annotation("fn_a", "escape_safe") is True
+	assert world.get_signature_annotation("fn_a", "missing_key") is None
+	assert world.get_signature_annotation("fn_missing", "any_key") is None
+
+
+def test_effective_param_escape_level_overlay_priority() -> None:
+	"""World accessor checks overlay before signature fallback."""
+	from lang.driftc.borrow_checker import EscapeLevel
+	from lang.driftc.checker import FnSignature
+	from lang.driftc.core.function_id import FunctionId
+
+	fn_id = FunctionId(module="test", name="foo", ordinal=0)
+	sig = FnSignature(
+		name="foo", module="test",
+		param_escape_level=[EscapeLevel.THREAD, EscapeLevel.THREAD],
+	)
+	world = SemanticWorld()
+	world.base_signatures = {fn_id: sig}
+
+	# Without overlay: falls back to signature field.
+	assert world.effective_param_escape_level(fn_id, 0) == EscapeLevel.THREAD
+
+	# With overlay: overlay wins.
+	world.annotate_signature(fn_id, "param_escape_level", [EscapeLevel.LOCAL, None])
+	assert world.effective_param_escape_level(fn_id, 0) == EscapeLevel.LOCAL
+	# Param 1: overlay has None → falls through to signature.
+	assert world.effective_param_escape_level(fn_id, 1) == EscapeLevel.THREAD
+
+
+def test_stale_overlay_cleared_by_none_write() -> None:
+	"""Analysis writing None to the overlay clears a previously set annotation."""
+	from lang.driftc.borrow_checker import EscapeLevel
+	from lang.driftc.core.function_id import FunctionId
+
+	fn_id = FunctionId(module="test", name="foo", ordinal=0)
+	world = SemanticWorld()
+
+	# Simulate prior analysis run that found LOCAL.
+	world.annotate_signature(fn_id, "param_escape_level", [EscapeLevel.LOCAL])
+	assert world.get_signature_annotation(fn_id, "param_escape_level") == [EscapeLevel.LOCAL]
+
+	# Later analysis clears the result by writing None.
+	world.annotate_signature(fn_id, "param_escape_level", None)
+	assert world.get_signature_annotation(fn_id, "param_escape_level") is None
+
+	# World accessor falls through to signature fallback (not the stale overlay).
+	assert world.effective_param_escape_level(fn_id, 0) == EscapeLevel.THREAD
+
+
+def test_free_fn_escape_sig_cache_uses_overlay() -> None:
+	"""BorrowChecker._free_fn_escape_sig must find free functions whose
+	escape annotations exist only in the world overlay (not on the sig)."""
+	from lang.driftc.borrow_checker import EscapeLevel
+	from lang.driftc.borrow_checker_pass import BorrowChecker
+	from lang.driftc.checker import FnSignature
+	from lang.driftc.core.function_id import FunctionId
+
+	fn_a = FunctionId(module="std.concurrent", name="spawn_cb", ordinal=0)
+	sig_a = FnSignature(name="spawn_cb", module="std.concurrent")
+	# No param_escape_level on the sig — overlay only.
+	assert sig_a.param_escape_level is None
+
+	tt = TypeTable()
+	world = SemanticWorld(type_table=tt)
+	world.annotate_signature(fn_a, "param_escape_level", [EscapeLevel.THREAD])
+
+	bc = BorrowChecker(
+		type_table=tt,
+		fn_types={},
+		signatures_by_id={fn_a: sig_a},
+		semantic_world=world,
+	)
+	# The cache should find spawn_cb via the overlay annotation.
+	assert ("std.concurrent", "spawn_cb") in bc._free_fn_escape_sig
+
+
+def test_free_fn_escape_fallback_uses_overlay_only_annotation() -> None:
+	"""BorrowChecker._resolve_sig_for_call fallback path must find a free
+	function's escape annotation when it exists only in the world overlay
+	and the call has no call_resolutions entry (intrinsic-style path)."""
+	from lang.driftc.borrow_checker import EscapeLevel
+	from lang.driftc.borrow_checker_pass import BorrowChecker
+	from lang.driftc.checker import FnSignature
+	from lang.driftc.core.function_id import FunctionId
+	from lang.driftc import stage1 as H
+
+	fn_id = FunctionId(module="std.concurrent", name="spawn_cb", ordinal=0)
+	sig = FnSignature(name="spawn_cb", module="std.concurrent")
+	assert sig.param_escape_level is None  # no sig-level annotation
+
+	tt = TypeTable()
+	world = SemanticWorld(type_table=tt)
+	world.annotate_signature(fn_id, "param_escape_level", [EscapeLevel.THREAD])
+
+	bc = BorrowChecker(
+		type_table=tt,
+		fn_types={},
+		signatures_by_id={fn_id: sig},
+		semantic_world=world,
+		call_resolutions={},  # empty — forces fallback path
+	)
+
+	# Simulate a call expression with no call_resolutions entry.
+	call_expr = H.HCall(
+		fn=H.HVar(name="spawn_cb", module_id="std.concurrent"),
+		args=[],
+		kwargs=[],
+	)
+	call_expr.node_id = 999  # not in call_resolutions
+
+	resolved = bc._resolve_sig_for_call(call_expr)
+	assert resolved is sig, "fallback lookup must find the sig via overlay-populated cache"
+
+
+def test_effective_param_escape_level_missing_signature() -> None:
+	"""World accessor returns THREAD default when no signature exists."""
+	from lang.driftc.borrow_checker import EscapeLevel
+	from lang.driftc.core.function_id import FunctionId
+
+	fn_id = FunctionId(module="test", name="missing", ordinal=0)
+	world = SemanticWorld()
+	assert world.effective_param_escape_level(fn_id, 0) == EscapeLevel.THREAD
+
+
+def test_get_signature_priority() -> None:
+	"""get_signature returns derived > base > external."""
+	world = SemanticWorld()
+	world.base_signatures = {"fn_a": "base_a", "fn_shared": "base_shared"}
+	world.derived_signatures = {"fn_b": "derived_b", "fn_shared": "derived_shared"}
+	world.external_signatures = {"fn_c": "ext_c", "fn_shared": "ext_shared"}
+
+	assert world.get_signature("fn_b") == "derived_b"
+	assert world.get_signature("fn_a") == "base_a"
+	assert world.get_signature("fn_c") == "ext_c"
+	assert world.get_signature("fn_shared") == "derived_shared"  # derived wins
+	assert world.get_signature("fn_missing") is None
+
+
+def test_all_signatures_merged_view() -> None:
+	"""all_signatures returns a merged view with correct priority."""
+	world = SemanticWorld()
+	world.base_signatures = {"fn_a": "base_a"}
+	world.external_signatures = {"fn_a": "ext_a", "fn_b": "ext_b"}
+
+	sigs = world.all_signatures()
+	assert sigs["fn_a"] == "base_a"  # base wins over external
+	assert sigs["fn_b"] == "ext_b"
+
+
+def test_package_id_property() -> None:
+	tt = TypeTable()
+	tt.package_id = "my-pkg"
+	world = SemanticWorld(type_table=tt)
+	assert world.package_id == "my-pkg"
+
+
+def test_package_id_none_without_type_table() -> None:
+	world = SemanticWorld()
+	assert world.package_id is None
+
+
+def test_module_packages_property() -> None:
+	tt = TypeTable()
+	tt.module_packages["std.core"] = "std"
+	world = SemanticWorld(type_table=tt)
+	assert world.module_packages["std.core"] == "std"
+
+
 def test_parser_rejects_conflicting_type_table() -> None:
 	"""Parser must reject a type_table that differs from the world's."""
 	from lang.driftc.parser import parse_drift_workspace_to_hir

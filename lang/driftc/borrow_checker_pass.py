@@ -147,6 +147,7 @@ class BorrowChecker:
 	binding_names: Optional[Dict[int, str]] = None
 	module_id: Optional[str] = None
 	signatures_by_id: Optional[Mapping[FunctionId, FnSignature]] = None
+	semantic_world: Optional[Any] = None
 	call_resolutions: Optional[Mapping[int, object]] = None
 	call_info_by_callsite_id: Optional[Mapping[int, CallInfo]] = None
 	base_lookup: Callable[[object], Optional[PlaceBase]] = lambda hv: PlaceBase(
@@ -184,18 +185,62 @@ class BorrowChecker:
 		self._method_sig_by_key: Dict[Tuple[int, str], FnSignature] = {}
 		# Keyed by (module, fn_name) for free-function lookup by identity when
 		# call_resolutions has no entry (e.g. @intrinsic callback0/1/2).
-		# Only populated when a signature has a non-empty param_escape_level so
-		# the cache stays small and only serves escape-level queries.
+		# Populated when a signature has escape annotations — either on the
+		# sig field (legacy) or in the semantic_world overlay (world-backed).
 		self._free_fn_escape_sig: Dict[Tuple[Optional[str], str], FnSignature] = {}
 		if self.signatures_by_id:
 			for fn_id, sig in self.signatures_by_id.items():
 				if sig.is_method and sig.impl_target_type_id is not None:
 					key = (sig.impl_target_type_id, sig.method_name or sig.name)
 					self._method_sig_by_key[key] = sig
-				if not sig.is_method and sig.param_escape_level:
+				_has_escape = sig.param_escape_level
+				if not _has_escape and self.semantic_world is not None:
+					_has_escape = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level") is not None
+				if not sig.is_method and _has_escape:
 					free_key: Tuple[Optional[str], str] = (fn_id.module, fn_id.name)
 					if free_key not in self._free_fn_escape_sig:
 						self._free_fn_escape_sig[free_key] = sig
+
+	def _effective_escape_level(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature], param_index: int) -> "EscapeLevel":
+		"""Get escape level for a param.
+
+		World-backed: overlay is the sole authority.
+		Legacy (no world): reads from sig.param_escape_level.
+		"""
+		if self.semantic_world is not None and fn_id is not None:
+			return self.semantic_world.effective_param_escape_level(fn_id, param_index)
+		if sig is not None:
+			return sig.effective_param_escape_level(param_index)
+		return EscapeLevel.THREAD
+
+	def _has_escape_annotations(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature]) -> bool:
+		"""Check if a function has any escape-level annotations.
+
+		World-backed: overlay is the sole authority.
+		Legacy (no world): reads from sig.param_escape_level.
+		"""
+		if self.semantic_world is not None and fn_id is not None:
+			pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
+			return pel is not None
+		if sig is not None and sig.param_escape_level:
+			return True
+		return False
+
+	def _is_unannotated_param(self, fn_id: Optional[FunctionId], sig: Optional[FnSignature], param_index: int) -> bool:
+		"""Check if a param's escape level is default/unannotated.
+
+		World-backed: overlay is the sole authority.
+		Legacy (no world): reads from sig.param_escape_level.
+		"""
+		if self.semantic_world is not None and fn_id is not None:
+			pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
+			if pel is not None:
+				return param_index >= len(pel) or pel[param_index] is None
+			return True  # no overlay annotation → unannotated
+		if sig is not None:
+			_pel = sig.param_escape_level or []
+			return sig.param_escape_level is None or param_index >= len(_pel) or _pel[param_index] is None
+		return True
 
 	def _base_for_binding(self, binding_id: int) -> Optional[PlaceBase]:
 		return self._bases_by_binding.get(binding_id)
@@ -208,6 +253,18 @@ class BorrowChecker:
 		for proj in key.proj:
 			place = place.with_projection(FieldProj(proj.field))
 		return place
+
+	def _resolve_fn_id_for_call(self, expr: H.HExpr) -> Optional[FunctionId]:
+		"""Resolve the FunctionId for a call expression."""
+		if isinstance(expr, H.HCall):
+			resolution = self.call_resolutions.get(expr.node_id) if self.call_resolutions is not None else None
+			if isinstance(resolution, CallableDecl) and resolution.fn_id is not None:
+				return resolution.fn_id
+		if isinstance(expr, H.HMethodCall):
+			call_info = self.call_info_by_callsite_id.get(getattr(expr, "callsite_id", -1)) if self.call_info_by_callsite_id else None
+			if call_info is not None and hasattr(call_info.target, "fn_id"):
+				return call_info.target.fn_id
+		return None
 
 	def _resolve_sig_for_call(self, expr: H.HExpr) -> Optional[FnSignature]:
 		if not self.signatures_by_id:
@@ -554,6 +611,7 @@ class BorrowChecker:
 		*,
 		signatures_by_id: Optional[Mapping[FunctionId, FnSignature]] = None,
 		enable_auto_borrow: bool = True,
+		semantic_world: Optional[Any] = None,
 	) -> "BorrowChecker":
 		"""
 		Build a BorrowChecker from a TypedFn (binding-aware).
@@ -622,6 +680,7 @@ class BorrowChecker:
 			binding_names=dict(getattr(typed_fn, "binding_names", {}) or {}),
 			binding_mutable=dict(getattr(typed_fn, "binding_mutable", {}) or {}),
 			signatures_by_id=signatures_by_id,
+			semantic_world=semantic_world,
 			call_resolutions=getattr(typed_fn, "call_resolutions", None),
 			call_info_by_callsite_id=getattr(typed_fn, "call_info_by_callsite_id", None),
 			base_lookup=base_lookup,
@@ -1953,12 +2012,13 @@ class BorrowChecker:
 			if callee_is_value:
 				self._visit_expr(state, expr.fn, consume=False, escapes=False)
 			sig = self._resolve_sig_for_call(expr)
-			if sig and sig.param_escape_level:
+			_call_fn_id = self._resolve_fn_id_for_call(expr)
+			if self._has_escape_annotations(_call_fn_id, sig):
 				for idx, arg in enumerate(expr.args):
 					param_index = self._param_index_for_call(sig, arg_index=idx)
 					if param_index is None:
 						continue
-					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					if self._effective_escape_level(_call_fn_id, sig, param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(arg, H.HLambda):
 						self._add_lambda_capture_loans(state, arg)
@@ -1966,7 +2026,7 @@ class BorrowChecker:
 					param_index = self._param_index_for_call(sig, kw_name=kw.name)
 					if param_index is None:
 						continue
-					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					if self._effective_escape_level(_call_fn_id, sig, param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(kw.value, H.HLambda):
 						self._add_lambda_capture_loans(state, kw.value)
@@ -1987,9 +2047,8 @@ class BorrowChecker:
 					# coercion-check path for direct wrapper calls.
 					if sig is not None:
 						pi = self._param_index_for_call(sig, arg_index=idx)
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(arg, state, required, getattr(arg, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(arg, span=getattr(arg, "loc", getattr(expr, "loc", Span())))
@@ -2000,9 +2059,8 @@ class BorrowChecker:
 					inner_lam = _unwrap_callback_lambda(arg)
 					if inner_lam is not None:
 						pi = self._param_index_for_call(sig, arg_index=idx)
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(inner_lam, state, required, getattr(inner_lam, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 				self._visit_call_arg_with_param(
 					state,
@@ -2016,9 +2074,8 @@ class BorrowChecker:
 				if isinstance(kw.value, H.HLambda) and not _is_callback_wrapper_call(expr):
 					if sig is not None:
 						pi = kw_index
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(kw.value, state, required, getattr(kw.value, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(kw.value, span=getattr(kw.value, "loc", getattr(expr, "loc", Span())))
@@ -2026,9 +2083,8 @@ class BorrowChecker:
 					inner_lam = _unwrap_callback_lambda(kw.value)
 					if inner_lam is not None:
 						pi = kw_index
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(inner_lam, state, required, getattr(inner_lam, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 				self._visit_call_arg_with_param(
 					state,
@@ -2042,12 +2098,13 @@ class BorrowChecker:
 		if isinstance(expr, H.HMethodCall):
 			pre_loans = set(state.loans)
 			sig = self._resolve_sig_for_call(expr)
-			if sig and sig.param_escape_level:
+			_call_fn_id = self._resolve_fn_id_for_call(expr)
+			if self._has_escape_annotations(_call_fn_id, sig):
 				for idx, arg in enumerate(expr.args):
 					param_index = self._param_index_for_call(sig, arg_index=idx)
 					if param_index is None:
 						continue
-					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					if self._effective_escape_level(_call_fn_id, sig, param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(arg, H.HLambda):
 						self._add_lambda_capture_loans(state, arg)
@@ -2055,7 +2112,7 @@ class BorrowChecker:
 					param_index = self._param_index_for_call(sig, kw_name=kw.name)
 					if param_index is None:
 						continue
-					if sig.effective_param_escape_level(param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					if self._effective_escape_level(_call_fn_id, sig, param_index) not in (EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						continue
 					if isinstance(kw.value, H.HLambda):
 						self._add_lambda_capture_loans(state, kw.value)
@@ -2109,9 +2166,8 @@ class BorrowChecker:
 				if isinstance(arg, H.HLambda):
 					if sig is not None:
 						pi = self._param_index_for_call(sig, arg_index=idx)
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(arg, state, required, getattr(arg, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(arg, span=getattr(arg, "loc", getattr(expr, "loc", Span())))
@@ -2130,9 +2186,8 @@ class BorrowChecker:
 				if isinstance(kw.value, H.HLambda):
 					if sig is not None:
 						pi = kw_index
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(kw.value, state, required, getattr(kw.value, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(kw.value, span=getattr(kw.value, "loc", getattr(expr, "loc", Span())))
@@ -2159,9 +2214,8 @@ class BorrowChecker:
 				if isinstance(arg, H.HLambda):
 					if sig is not None:
 						pi = self._param_index_for_call(sig, arg_index=idx)
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(arg, state, required, getattr(arg, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(arg, span=getattr(arg, "loc", getattr(expr, "loc", Span())))
@@ -2177,9 +2231,8 @@ class BorrowChecker:
 				if isinstance(kw.value, H.HLambda):
 					if sig is not None:
 						pi = kw_index
-						required = sig.effective_param_escape_level(pi) if pi is not None else EscapeLevel.THREAD
-						_pel = sig.param_escape_level or []
-						from_unannotated = (sig.param_escape_level is None or pi is None or pi >= len(_pel) or _pel[pi] is None)
+						required = self._effective_escape_level(_call_fn_id, sig, pi) if pi is not None else EscapeLevel.THREAD
+						from_unannotated = self._is_unannotated_param(_call_fn_id, sig, pi) if pi is not None else True
 						self._check_lambda_escape_level(kw.value, state, required, getattr(kw.value, "loc", getattr(expr, "loc", Span())), from_unannotated=from_unannotated)
 					else:
 						self._report_lambda_escape_if_borrowed(kw.value, span=getattr(kw.value, "loc", getattr(expr, "loc", Span())))

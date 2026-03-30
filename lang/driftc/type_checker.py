@@ -235,8 +235,9 @@ class TypeChecker:
 	helpers).
 	"""
 
-	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None):
+	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, semantic_world: object | None = None):
 		self.type_table = type_table or TypeTable()
+		self.semantic_world = semantic_world
 		self._uint = self.type_table.ensure_uint()
 		self._uint64 = self.type_table.ensure_uint64()
 		self._int = self.type_table.ensure_int()
@@ -9538,14 +9539,26 @@ class TypeChecker:
 				return arg_index + 1
 			return arg_index
 
-		def _nonretaining_param_state(sig: FnSignature, param_index: int) -> Optional[bool]:
+		def _nonretaining_param_state(sig: FnSignature, param_index: int, *, fn_id: FunctionId | None = None) -> Optional[bool]:
 			from lang.driftc.borrow_checker import EscapeLevel
+			# World-backed: overlay is the sole authority for escape metadata.
+			if self.semantic_world is not None and fn_id is not None:
+				pel = self.semantic_world.get_signature_annotation(fn_id, "param_escape_level")
+				if pel is None:
+					return None  # No annotation → unknown
+				if param_index >= len(pel) or pel[param_index] is None:
+					return None  # Unannotated param
+				lvl = pel[param_index]
+				if lvl in (EscapeLevel.IMMEDIATE, EscapeLevel.LOCAL, EscapeLevel.SCOPED):
+					return True
+				return False  # THREAD, STATIC → retaining
+			# Legacy path (no world): read from signature field directly.
 			if sig.param_escape_level is not None and 0 <= param_index < len(sig.param_escape_level):
 				lvl = sig.param_escape_level[param_index]
 				if lvl is not None:
 					if lvl in (EscapeLevel.IMMEDIATE, EscapeLevel.LOCAL, EscapeLevel.SCOPED):
 						return True
-					return False  # THREAD, STATIC → retaining
+					return False
 			return None
 
 		def _check_borrowed_arg_boundary(
@@ -9626,7 +9639,7 @@ class TypeChecker:
 						retaining_default = False
 						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
 							param_ty = sig.param_type_ids[param_index]
-							nonret_state = _nonretaining_param_state(sig, param_index)
+							nonret_state = _nonretaining_param_state(sig, param_index, fn_id=getattr(decl, "fn_id", None) if decl is not None else None)
 							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"
@@ -9648,7 +9661,7 @@ class TypeChecker:
 						retaining_default = False
 						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
 							param_ty = sig.param_type_ids[param_index]
-							nonret_state = _nonretaining_param_state(sig, param_index)
+							nonret_state = _nonretaining_param_state(sig, param_index, fn_id=getattr(decl, "fn_id", None) if decl is not None else None)
 							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"
@@ -9710,7 +9723,7 @@ class TypeChecker:
 					recv_retaining_default = False
 					if sig.is_method and sig.param_type_ids and len(sig.param_type_ids) > 0:
 						recv_param_ty = sig.param_type_ids[0]
-						recv_nonret_state = _nonretaining_param_state(sig, 0)
+						recv_nonret_state = _nonretaining_param_state(sig, 0, fn_id=getattr(decl, "fn_id", None) if decl is not None else None)
 						recv_retaining_default = self.type_table.get(recv_param_ty).kind is TypeKind.TYPEVAR
 					_check_borrowed_arg_boundary(
 						arg_expr=expr.receiver,
@@ -9730,7 +9743,7 @@ class TypeChecker:
 						retaining_default = False
 						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
 							param_ty = sig.param_type_ids[param_index]
-							nonret_state = _nonretaining_param_state(sig, param_index)
+							nonret_state = _nonretaining_param_state(sig, param_index, fn_id=getattr(decl, "fn_id", None) if decl is not None else None)
 							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"
@@ -9752,7 +9765,7 @@ class TypeChecker:
 						retaining_default = False
 						if param_index is not None and sig.param_type_ids and param_index < len(sig.param_type_ids):
 							param_ty = sig.param_type_ids[param_index]
-							nonret_state = _nonretaining_param_state(sig, param_index)
+							nonret_state = _nonretaining_param_state(sig, param_index, fn_id=getattr(decl, "fn_id", None) if decl is not None else None)
 							retaining_default = self.type_table.get(param_ty).kind is TypeKind.TYPEVAR
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"

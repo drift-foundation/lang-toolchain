@@ -27,6 +27,7 @@ def analyze_non_retaining_params(
 	signatures_by_id: Mapping[FunctionId, FnSignature],
 	*,
 	type_table: Optional[TypeTable] = None,
+	semantic_world: object | None = None,
 ) -> dict[FunctionId, FnSignature]:
 	"""
 	Compute param_escape_level (LOCAL) for callable params in functions with bodies.
@@ -458,6 +459,15 @@ def analyze_non_retaining_params(
 			# v is None: analysis inconclusive; leave existing annotation unchanged
 		return base if any(x is not None for x in base) else None
 
+	if semantic_world is not None:
+		# Write analysis results to the overlay only — do not rewrite
+		# FnSignature objects.  The overlay is the sole authority for
+		# escape-level metadata in world-backed paths.
+		for fn_id, sig in working_sigs.items():
+			pel = _build_pel(fn_id, sig)
+			semantic_world.annotate_signature(fn_id, "param_escape_level", list(pel) if pel is not None else None)
+		return dict(working_sigs)
+	# Legacy path (no world): rewrite signatures with embedded param_escape_level.
 	return {
 		fn_id: dataclass_replace(sig, param_escape_level=_build_pel(fn_id, sig))
 		for fn_id, sig in working_sigs.items()

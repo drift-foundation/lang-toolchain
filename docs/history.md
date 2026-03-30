@@ -1,5 +1,110 @@
 # Drift development history
 
+## 2026-03-30
+- **Completed the compiler/package boundary rework, shipped the supporting compiler fixes, and finalized flat deploy/app-entry tooling updates (0.27.129, ABI 7)**:
+  This release completes the planned boundary-architecture cleanup and rolls up
+  the compiler/tooling fixes that were landed alongside it.
+  - Original Plan:
+    - Stage 1: Move package ingress before parser — done
+    - Stage 2: Unify callable/signature registration — already satisfied
+    - Stage 3: Eliminate `FORWARD_NOMINAL` for package types — done
+    - Stage 4: `SemanticWorld` wrapper — done
+    - Stage 5: Freeze enforcement — done
+    - Stage 6: World-first consumption — done
+  - Stage 1:
+    - package type-table linking now runs before `parse_drift_workspace_to_hir`
+    - the parser accepts a pre-populated `TypeTable`
+    - stdlib identity is normalized to canonical package `std`
+    - `lang.core` is always canonical
+    - `lang.__internal` stays local
+    - `module_packages` is seeded for stdlib/lang before linking
+    - the intrinsic `FnResult` safety net remains in place for `can_throw`
+      classification changes surfaced by the reordering
+  - Stage 2:
+    - callable/signature visibility was confirmed already unified before type
+      checking
+    - the remaining `is_external` / `skip_modules` cleanup was intentionally
+      deferred as low-priority simplification work
+  - Stage 3:
+    - zero package-consumer `FORWARD_NOMINAL`s survive to the canonicalization
+      sweeps
+    - the old sweeps remain as instrumented safety nets
+    - source-only builds still create transient forward nominals for internal
+      parser flows, so the safety-net removal remains a later cleanup step
+  - Stage 4:
+    - added `SemanticWorld` with explicit lifecycle phases:
+      - `EMPTY`
+      - `PACKAGES_READY`
+      - `SOURCE_INGRESS`
+      - `READY`
+      - `FROZEN`
+    - parser and checker/lowering entry points now accept `semantic_world`
+    - boundary consistency guards prevent split truth when both world-owned and
+      explicit stores are provided
+  - Stage 5:
+    - `freeze()` is active in the production pipeline after
+      `compile_stubbed_funcs`
+    - `TypeTable` blocks late:
+      - `declare_struct`
+      - `declare_variant`
+      - `declare_interface`
+      - `define_type_alias`
+      - `ensure_named` new declarations
+      - `declare_scalar`
+    - `CallableRegistry` blocks late:
+      - `register_free_function`
+      - `register_inherent_method`
+      - `register_trait_method`
+    - structural interning remains allowed after freeze
+    - unit coverage now pins the freeze contract and boundary consistency rules
+  - Stage 6:
+    - driver and post-`READY` pipeline reads now use the world as the primary
+      read path for:
+      - `type_table`
+      - `module_deps`
+      - external trait/impl metadata
+      - linked-world construction
+    - explicit parameter plumbing was reduced at driver call sites
+    - added query helpers on `SemanticWorld`:
+      - `get_signature()`
+      - `all_signatures()`
+      - `get_module_exports()`
+      - `get_pkg_typeid_map()`
+      - `package_id`
+      - `module_packages`
+    - added signature-annotation overlay support with:
+      - `annotate_signature()`
+      - `get_signature_annotation()`
+      - `effective_param_escape_level()`
+    - escape-level reads and writes are now world-backed in production:
+      - borrow checker reads use world accessors
+      - type checker non-retaining checks use world-backed escape metadata
+      - non-retaining analysis writes to the overlay in world-backed paths
+      - stdlib escape annotations write to the overlay in world-backed paths
+      - the overlay is the sole authority for escape metadata in
+        world-backed production flows
+      - legacy `FnSignature.param_escape_level` behavior remains only for
+        non-world test/helper callers
+      - `_free_fn_escape_sig` now recognizes overlay-only annotations
+  - Supporting compiler fixes shipped alongside the rework:
+    - fixed module-qualified call rewriting inside map literals by walking
+      `HMapEntry` children
+    - fixed cross-package type alias resolution during consumer parsing
+    - fixed lambda param dealiasing for packaged alias types
+    - fixed explicit `callback2(...)` lambda inference from outer expected
+      callback types
+    - resolved the lambda `nothrow` cascade caused by the callback inference
+      failure
+    - fixed the catch-arm nested `match` MIR-lowering crash by walking
+      `HMatchExpr.scrutinee` instead of a nonexistent `subject`
+  - Tooling updates included in this release line:
+    - flat deploy toolchain layout under the destination root
+    - app manifest `entry_point` support
+    - publish-by-rename with rollback for deploy output
+  - Versioning:
+    - compiler version is `0.27.129`
+    - ABI remains `7`
+
 ## 2026-03-28
 - **Fixed a MIR-lowering internal compiler error for `match` expressions inside catch-arm bodies (0.27.128, ABI 7)**:
   Fixed a compiler crash triggered when a catch arm with an exception binder

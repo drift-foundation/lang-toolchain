@@ -2692,13 +2692,16 @@ def _collect_external_trait_and_impl_metadata(
 	return trait_defs, impl_metas, missing_traits, missing_impl_modules
 
 
-def _apply_stdlib_escape_annotations(signatures_by_id: Mapping) -> None:
+def _apply_stdlib_escape_annotations(signatures_by_id: Mapping, *, semantic_world: object | None = None) -> None:
 	"""Annotate known stdlib callable params with escape levels (idempotent).
 
 	This must run before the borrow checker so that escape-level enforcement
 	(SCOPED, THREAD, STATIC) applies to stdlib functions like conc.scope,
 	conc.spawn, etc.  Called from both compile_stubbed_funcs (e2e/test path)
 	and main() (CLI path).
+
+	When semantic_world is provided, writes to the world's signature_annotations
+	overlay instead of mutating FnSignature.param_escape_level in place.
 	"""
 	from lang.driftc.borrow_checker import EscapeLevel as _EL
 	_ANNOTATIONS: dict[tuple[str, str], list] = {
@@ -2715,7 +2718,18 @@ def _apply_stdlib_escape_annotations(signatures_by_id: Mapping) -> None:
 	for _fn_id, _sig in signatures_by_id.items():
 		_key = (getattr(_fn_id, "module", None), getattr(_fn_id, "name", None))
 		_levels = _ANNOTATIONS.get(_key)
-		if _levels is not None and _sig.param_escape_level is None:
+		if _levels is None:
+			continue
+		# Check if already annotated (either overlay or signature field).
+		if semantic_world is not None:
+			existing = semantic_world.get_signature_annotation(_fn_id, "param_escape_level")
+			if existing is not None:
+				continue
+		elif _sig.param_escape_level is not None:
+			continue
+		if semantic_world is not None:
+			semantic_world.annotate_signature(_fn_id, "param_escape_level", list(_levels))
+		else:
 			_sig.param_escape_level = list(_levels)
 
 
@@ -3148,7 +3162,7 @@ def compile_stubbed_funcs(
 		for mod_id in module_deps.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
-	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True)
+	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True, semantic_world=semantic_world)
 	# K42: seed Pass 1 lambda_fn_specs into the new TypeChecker so that
 	# captureless lambda function bodies are generated during MIR lowering.
 	if pass1_state is not None and pass1_state.lambda_fn_specs:
@@ -5060,7 +5074,7 @@ def compile_stubbed_funcs(
 								)
 							)
 	if run_borrow_check and not any(d.severity == "error" for d in checked.diagnostics):
-		_apply_stdlib_escape_annotations(signatures_by_id)
+		_apply_stdlib_escape_annotations(signatures_by_id, semantic_world=semantic_world)
 		borrow_diags: list[Diagnostic] = []
 		with _timed("borrow_check"):
 			for _fn_id, typed_fn in typed_fns_by_id.items():
@@ -5069,6 +5083,7 @@ def compile_stubbed_funcs(
 					type_table=shared_type_table,
 					signatures_by_id=signatures_by_id,
 					enable_auto_borrow=True,
+					semantic_world=semantic_world,
 				)
 				borrow_diags.extend(bc.check_block(typed_fn.body))
 		if borrow_diags:
@@ -8106,7 +8121,6 @@ def main(argv: list[str] | None = None) -> int:
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),
 		word_bits=getattr(args, "target_word_bits", None),
-		type_table=pre_linked_type_table,
 		semantic_world=semantic_world,
 	)
 	# Update world with parser outputs.
@@ -9048,7 +9062,7 @@ def main(argv: list[str] | None = None) -> int:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
-	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules)
+	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules, semantic_world=semantic_world)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
 	def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:
@@ -9548,10 +9562,11 @@ def main(argv: list[str] | None = None) -> int:
 		typed_fns,
 		signatures_by_id_all,
 		type_table=type_table,
+		semantic_world=semantic_world,
 	)
 
 	# Phase 3a/3b: annotate known stdlib callable params with escape levels.
-	_apply_stdlib_escape_annotations(signatures_by_id_all)
+	_apply_stdlib_escape_annotations(signatures_by_id_all, semantic_world=semantic_world)
 
 	# Enforce non-escaping lambda rule after type resolution so method calls are visible.
 	lambda_diags: list[Diagnostic] = []
@@ -9728,9 +9743,10 @@ def main(argv: list[str] | None = None) -> int:
 	for _fn_id, typed_fn in typed_fns.items():
 		bc = BorrowChecker.from_typed_fn(
 			typed_fn,
-			type_table=type_table,
+			type_table=semantic_world.type_table,
 			signatures_by_id=signatures_by_id_all,
 			enable_auto_borrow=True,
+			semantic_world=semantic_world,
 		)
 		borrow_diags.extend(bc.check_block(typed_fn.body))
 

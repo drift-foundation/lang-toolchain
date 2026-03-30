@@ -83,6 +83,18 @@ class SemanticWorld:
 	external_impl_metas: list = field(default_factory=list)
 	external_missing_traits: set = field(default_factory=set)
 
+	# ── Analysis overlay (preparatory) ──────────────────────────────
+	# Phase-owned derived metadata that augments canonical signatures.
+	# Keyed by FunctionId, holds analysis results like non-retaining
+	# param annotations and escape metadata.
+	#
+	# NOTE: the driver still uses a merge-and-mutate pattern for
+	# analyze_non_retaining_params / _apply_stdlib_escape_annotations.
+	# This overlay is infrastructure for migrating those consumers to
+	# write here instead of mutating signature dicts.  Until that
+	# migration is complete, the overlay coexists with the old path.
+	signature_annotations: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+
 	# ── Lifecycle ───────────────────────────────────────────────────
 	phase: WorldPhase = WorldPhase.EMPTY
 
@@ -139,3 +151,92 @@ class SemanticWorld:
 		# Install declaration guards on the CallableRegistry.
 		if self.callable_registry is not None:
 			self.callable_registry._frozen = True
+
+	# ── Query helpers ───────────────────────────────────────────────
+	# These provide a single read path for data that spans multiple
+	# internal stores, so callers don't need to know about the
+	# base/derived/external signature split or other internal details.
+
+	def get_signature(self, fn_id: "FunctionId") -> Any:
+		"""Look up a function signature across all signature maps.
+
+		Search order: derived (wrappers/instantiations) → base (source) → external (packages).
+		Returns None if the function is not found.
+		"""
+		if self.derived_signatures is not None:
+			sig = self.derived_signatures.get(fn_id)
+			if sig is not None:
+				return sig
+		if self.base_signatures is not None:
+			sig = self.base_signatures.get(fn_id)
+			if sig is not None:
+				return sig
+		if self.external_signatures is not None:
+			return self.external_signatures.get(fn_id)
+		return None
+
+	def all_signatures(self) -> Mapping["FunctionId", Any]:
+		"""Return a merged view of all signatures (derived > base > external)."""
+		from collections import ChainMap
+		maps: list[Mapping] = []
+		if self.derived_signatures is not None:
+			maps.append(self.derived_signatures)
+		if self.base_signatures is not None:
+			maps.append(self.base_signatures)
+		if self.external_signatures is not None:
+			maps.append(self.external_signatures)
+		return ChainMap(*maps) if maps else {}
+
+	def get_module_exports(self, module_id: str) -> Optional[Dict[str, Any]]:
+		"""Look up exports for a module."""
+		if self.module_exports is not None:
+			return self.module_exports.get(module_id)
+		return None
+
+	def get_pkg_typeid_map(self, pkg_path: "Path") -> Optional[Dict[int, int]]:
+		"""Look up the TypeId remap table for a loaded package."""
+		return self.pkg_typeid_maps.get(pkg_path)
+
+	@property
+	def package_id(self) -> Optional[str]:
+		"""The current compilation's package identity."""
+		if self.type_table is not None:
+			return getattr(self.type_table, "package_id", None)
+		return None
+
+	@property
+	def module_packages(self) -> Dict[str, str]:
+		"""Module → package ownership mapping."""
+		if self.type_table is not None:
+			return getattr(self.type_table, "module_packages", {})
+		return {}
+
+	def annotate_signature(self, fn_id: "FunctionId", key: str, value: Any) -> None:
+		"""Attach an analysis annotation to a function signature.
+
+		Annotations are phase-owned derived metadata (e.g. non-retaining
+		param flags, escape analysis results).  They augment but never
+		replace the canonical signature in base/derived/external stores.
+		"""
+		self.signature_annotations.setdefault(fn_id, {})[key] = value
+
+	def get_signature_annotation(self, fn_id: "FunctionId", key: str) -> Any:
+		"""Look up an analysis annotation for a function signature."""
+		entry = self.signature_annotations.get(fn_id)
+		if entry is not None:
+			return entry.get(key)
+		return None
+
+	def effective_param_escape_level(self, fn_id: "FunctionId", param_index: int) -> Any:
+		"""Get the effective escape level for a function parameter.
+
+		The overlay is the sole authority for escape-level metadata.
+		Returns EscapeLevel.THREAD as the default if no annotation exists.
+		"""
+		from lang.driftc.borrow_checker import EscapeLevel
+		pel = self.get_signature_annotation(fn_id, "param_escape_level")
+		if pel is not None and param_index < len(pel):
+			lvl = pel[param_index]
+			if lvl is not None:
+				return lvl
+		return EscapeLevel.THREAD
