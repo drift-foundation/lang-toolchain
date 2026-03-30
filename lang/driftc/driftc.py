@@ -291,43 +291,14 @@ def _canonicalize_forward_nominal_type_id(
 	return resolved_nom if resolved_nom is not None else ty_id
 
 
-def _canonicalize_signature_type_ids(signatures_by_id: Mapping[FunctionId, FnSignature], type_table: TypeTable) -> None:
-	for sig in signatures_by_id.values():
-		sig.param_type_ids = [
-			_canonicalize_forward_nominal_type_id(type_table, ty_id) for ty_id in sig.param_type_ids
-		]
-		sig.return_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.return_type_id)
-		if sig.error_type_id is not None:
-			sig.error_type_id = _canonicalize_forward_nominal_type_id(type_table, sig.error_type_id)
-
-
-def _canonicalize_struct_field_type_ids(type_table: TypeTable) -> None:
-	"""K26: canonicalize FORWARD_NOMINAL TypeIds in struct TypeDef.param_types
-	and StructInstance.field_types so codegen sees consistent TypeIds between
-	struct field definitions and expressions that produce values for those fields."""
-	# Non-generic struct TypeDefs: param_types holds field TypeIds directly
-	for ty_id, td in list(type_table._defs.items()):
-		if td.kind is not TypeKind.STRUCT:
-			continue
-		for i, fty in enumerate(td.param_types):
-			canon = _canonicalize_forward_nominal_type_id(type_table, fty)
-			if canon != fty:
-				td.param_types[i] = canon
-	# Generic struct instances: field_types is list[TypeId]
-	for inst_id, inst in list(type_table.struct_instances.items()):
-		ft = inst.field_types
-		for i, fty in enumerate(ft):
-			canon = _canonicalize_forward_nominal_type_id(type_table, fty)
-			if canon != fty:
-				ft[i] = canon
-	# Invalidate copy_status cache since field types may have changed
-	if hasattr(type_table, "_copy_cache_proof"):
-		type_table._copy_cache_proof.clear()  # type: ignore[attr-defined]
-	if hasattr(type_table, "_copy_cache_structural"):
-		type_table._copy_cache_structural.clear()  # type: ignore[attr-defined]
-
-
 def _canonicalize_mir_type_ids(mir_funcs_by_id: Mapping[FunctionId, M.MirFunc], type_table: TypeTable) -> None:
+	"""Resolve surviving FORWARD_NOMINAL TypeIds in MIR local_types and instructions.
+
+	Signature and struct-field sweeps were removed (proven no-ops with early
+	linking).  MIR local_types still contain FORWARD_NOMINALs for certain
+	alias/variant patterns where the type-checker infers a TypeId before the
+	concrete declaration is visible.
+	"""
 	type_field_names = {"ty", "user_ret_type"}
 	for func in mir_funcs_by_id.values():
 		func.local_types = {
@@ -6645,33 +6616,12 @@ def compile_stubbed_funcs(
 				return False
 
 		if shared_type_table is not None:
-			if not _run_mir_validator("canonicalize_signature_type_ids", lambda: _canonicalize_signature_type_ids(signatures_by_id, shared_type_table)):
-				if return_checked:
-					if return_ssa:
-						return {}, checked, None
-					return {}, checked
-				return {}
 			if not _run_mir_validator("canonicalize_mir_type_ids", lambda: _canonicalize_mir_type_ids(mir_funcs_by_id, shared_type_table)):
 				if return_checked:
 					if return_ssa:
 						return {}, checked, None
 					return {}, checked
 				return {}
-			_canonicalize_struct_field_type_ids(shared_type_table)
-			# Resync FnInfo.return_type_id / error_type_id with the canonical
-			# signature values.  check_by_id copies these by VALUE from the sig
-			# at construction time.  _canonicalize_signature_type_ids mutates the
-			# sig objects in place, leaving FnInfo's copies stale.  TypeEnv reads
-			# the (now-canonical) sig, but throw_checks reads the FnInfo field —
-			# divergence triggers "FnResult mismatched parts" on wrapper methods
-			# whose target return type included a FORWARD_NOMINAL alias.
-			for _ri_fn_id, _ri_info in checked.fn_infos_by_id.items():
-				_ri_sig = _ri_info.signature
-				if _ri_sig is not None:
-					if _ri_info.return_type_id != _ri_sig.return_type_id:
-						_ri_info.return_type_id = _ri_sig.return_type_id
-					if _ri_info.error_type_id != _ri_sig.error_type_id:
-						_ri_info.error_type_id = _ri_sig.error_type_id
 		# Assert FnInfo ↔ signature convergence after resync (debug mode).
 		if os.environ.get("DRIFT_DEBUG_TYPEID_DIVERGENCE") == "1":
 			_da2_divergences: list[str] = []
@@ -8312,10 +8262,7 @@ def main(argv: list[str] | None = None) -> int:
 		]
 		# Note: _fwd_survivors may be non-empty for generic type params
 		# and trait bounds from packages — these are expected abstract
-		# placeholders that the canonicalization sweeps correctly skip.
-		# Run sweeps as safety net (should be no-ops).
-		_canonicalize_signature_type_ids(base_signatures_by_id, type_table)
-		_canonicalize_struct_field_type_ids(type_table)
+		# placeholders, not missing concrete declarations.
 		# Populate exception_catalog with event codes from loaded packages so that
 		# catch handlers in consumer code emit correct event codes for package exceptions.
 		from lang.driftc.core.event_codes import event_code as _event_code
@@ -8609,10 +8556,6 @@ def main(argv: list[str] | None = None) -> int:
 						external_signatures_by_symbol[symbol] = sig
 					if fn_id not in external_signatures_by_id:
 						external_signatures_by_id[fn_id] = sig
-
-		# With early linking, FORWARD_NOMINALs in external sigs should not
-		# survive.  Run as safety net; remove once Stage 3 is validated.
-		_canonicalize_signature_type_ids(external_signatures_by_id, type_table)
 
 		# Inject method boundary wrappers for external (package/stdlib) methods.
 		# The first injection (above) only covers source-file methods.  When the
