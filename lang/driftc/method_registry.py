@@ -124,6 +124,11 @@ class CallableRegistry:
 		self._methods_by_module: Dict[ModuleId, Dict[Tuple[TypeId, str], List[CallableDecl]]] = {}
 		self._by_id: Dict[CallableId, CallableDecl] = {}
 		self._by_fn_id: Dict[FunctionId, CallableDecl] = {}
+		self._frozen: bool = False
+
+	def _assert_not_frozen(self, op: str) -> None:
+		if self._frozen:
+			raise RuntimeError(f"CallableRegistry is frozen: {op} not allowed after world freeze")
 
 	def register_free_function(
 		self,
@@ -139,6 +144,7 @@ class CallableRegistry:
 		fn_id: Optional[FunctionId] = None,
 		is_generic: bool = False,
 	) -> None:
+		self._assert_not_frozen("register_free_function")
 		if callable_id in self._by_id:
 			raise ValueError(f"duplicate callable_id {callable_id}")
 		decl = CallableDecl(
@@ -176,6 +182,7 @@ class CallableRegistry:
 		self_mode: SelfMode,
 		is_generic: bool = False,
 	) -> None:
+		self._assert_not_frozen("register_inherent_method")
 		if callable_id in self._by_id:
 			raise ValueError(f"duplicate callable_id {callable_id}")
 		decl = CallableDecl(
@@ -222,6 +229,7 @@ class CallableRegistry:
 		self_mode: SelfMode,
 		is_generic: bool = False,
 	) -> None:
+		self._assert_not_frozen("register_trait_method")
 		if callable_id in self._by_id:
 			raise ValueError(f"duplicate callable_id {callable_id}")
 		decl = CallableDecl(

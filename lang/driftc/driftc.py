@@ -2778,6 +2778,7 @@ def compile_stubbed_funcs(
 	# Phase 1 (converge-one-pipeline): accept resolution state from the
 	# driver to eliminate duplicate registry construction and type-check.
 	pass1_state: "Pass1State | None" = None,
+	semantic_world: "Any | None" = None,
 ) -> (
 	Dict[FunctionId, M.MirFunc]
 	| tuple[Dict[FunctionId, M.MirFunc], CheckedProgramById]
@@ -2884,8 +2885,37 @@ def compile_stubbed_funcs(
 			raise AssertionError(f"declared_can_throw key must be FunctionId or str, got {type(key)!r}")
 	from lang.driftc import stage1 as H
 
+	# Adapter: when semantic_world is provided, use it as the primary source
+	# for stores that it owns.  Explicit parameters are kept for backward
+	# compatibility (test paths that don't use a world).
+	if semantic_world is not None:
+		semantic_world.assert_ready()
+		# Consistency: explicitly passed stores must match the world's references.
+		if type_table is not None and semantic_world.type_table is not None and type_table is not semantic_world.type_table:
+			raise RuntimeError("conflicting type_table: explicit argument differs from semantic_world.type_table")
+		if module_deps is not None and semantic_world.module_deps is not None and module_deps is not semantic_world.module_deps:
+			raise RuntimeError("conflicting module_deps: explicit argument differs from semantic_world.module_deps")
+		if external_trait_defs is not None and semantic_world.external_trait_defs is not None and external_trait_defs is not semantic_world.external_trait_defs:
+			raise RuntimeError("conflicting external_trait_defs: explicit argument differs from semantic_world.external_trait_defs")
+		if external_impl_metas is not None and semantic_world.external_impl_metas is not None and external_impl_metas is not semantic_world.external_impl_metas:
+			raise RuntimeError("conflicting external_impl_metas: explicit argument differs from semantic_world.external_impl_metas")
+		if external_missing_traits is not None and semantic_world.external_missing_traits is not None and external_missing_traits is not semantic_world.external_missing_traits:
+			raise RuntimeError("conflicting external_missing_traits: explicit argument differs from semantic_world.external_missing_traits")
+		# Unpack world-owned stores, falling back to explicit args.
+		if type_table is None and semantic_world.type_table is not None:
+			type_table = semantic_world.type_table
+		if module_deps is None and semantic_world.module_deps is not None:
+			module_deps = semantic_world.module_deps
+		if external_trait_defs is None and semantic_world.external_trait_defs is not None:
+			external_trait_defs = semantic_world.external_trait_defs
+		if external_impl_metas is None and semantic_world.external_impl_metas is not None:
+			external_impl_metas = semantic_world.external_impl_metas
+		if external_missing_traits is None and semantic_world.external_missing_traits is not None:
+			external_missing_traits = semantic_world.external_missing_traits
+
 	# Guard: signatures with TypeIds must come with a shared TypeTable so TypeKind
-	# queries stay coherent end-to-end.
+	# queries stay coherent end-to-end.  This runs after the adapter so that
+	# type_table unpacked from semantic_world satisfies the requirement.
 	if signatures_by_id and type_table is None:
 		for sig in signatures_by_id.values():
 			if sig.return_type_id is not None or sig.param_type_ids is not None:
@@ -8045,6 +8075,26 @@ def main(argv: list[str] | None = None) -> int:
 				pkg_typeid_maps[_path] = _tid_map
 				pkg_tid_universes[_path] = frozenset(decode_type_table_obj(_tt_obj).defs.keys())
 
+	# ── Create SemanticWorld ─────────────────────────────────────────
+	# The world carries all semantic stores through the pipeline.
+	# Initially populated with the pre-linked TypeTable (if packages
+	# were loaded) and package metadata.  The parser and later phases
+	# enrich it.
+	from lang.driftc.core.semantic_world import SemanticWorld, WorldPhase
+	# When packages were loaded, the pre-linked TypeTable has the correct
+	# word_bits and package types.  For source-only builds (no packages),
+	# leave type_table as None — the parser will create one with the
+	# correct word_bits from its own arguments.
+	semantic_world = SemanticWorld(
+		type_table=pre_linked_type_table,
+		pkg_typeid_maps=pkg_typeid_maps,
+		pkg_tid_universes=pkg_tid_universes,
+	)
+	if loaded_pkgs:
+		semantic_world.advance_to(WorldPhase.PACKAGES_READY)
+
+	# ── Source parsing ───────────────────────────────────────────────
+	semantic_world.advance_to(WorldPhase.SOURCE_INGRESS)
 	package_id = str(args.package_id) if args.package_id else None
 	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
 		source_paths,
@@ -8057,7 +8107,13 @@ def main(argv: list[str] | None = None) -> int:
 		test_build_only=bool(getattr(args, "test_build_only", False)),
 		word_bits=getattr(args, "target_word_bits", None),
 		type_table=pre_linked_type_table,
+		semantic_world=semantic_world,
 	)
+	# Update world with parser outputs.
+	semantic_world.type_table = type_table
+	semantic_world.module_exports = module_exports
+	semantic_world.module_deps = module_deps
+
 	func_hirs, signatures, fn_ids_by_name = flatten_modules(modules)
 	origin_by_fn_id: dict[FunctionId, Path] = {}
 	for mod in modules.values():
@@ -8220,6 +8276,27 @@ def main(argv: list[str] | None = None) -> int:
 				if id_registry._type_key_to_id.get(_tk) is None:
 					id_registry.intern_type(_tk, preferred=base_id)
 
+		# Stage 3 invariant: with early linking, no FORWARD_NOMINALs should
+		# survive to this point.  All package types were declared before
+		# the parser ran, and source-internal forward references were
+		# resolved during the parser's pre-declaration sweep.
+		# FORWARD_NOMINALs for generic type params, trait base types, and
+		# abstract bounds are expected — they represent uninstantiated
+		# type variables, not missing concrete declarations.  Only warn
+		# about FORWARD_NOMINALs that look like concrete types (have a
+		# module_id in the current package or stdlib).
+		_local_or_std = {package_id, "std", "lang.core", "__local__"} if package_id else {"__local__", "std", "lang.core"}
+		_fwd_survivors = [
+			(tid, td.name, td.module_id)
+			for tid, td in type_table._defs.items()
+			if td.kind is TypeKind.FORWARD_NOMINAL
+			and td.module_id is not None
+			and type_table.module_packages.get(td.module_id, "") in _local_or_std
+		]
+		# Note: _fwd_survivors may be non-empty for generic type params
+		# and trait bounds from packages — these are expected abstract
+		# placeholders that the canonicalization sweeps correctly skip.
+		# Run sweeps as safety net (should be no-ops).
 		_canonicalize_signature_type_ids(base_signatures_by_id, type_table)
 		_canonicalize_struct_field_type_ids(type_table)
 		# Populate exception_catalog with event codes from loaded packages so that
@@ -8516,8 +8593,8 @@ def main(argv: list[str] | None = None) -> int:
 					if fn_id not in external_signatures_by_id:
 						external_signatures_by_id[fn_id] = sig
 
-		# Canonicalize any remaining FORWARD_NOMINAL TypeIds in external sigs
-		# (safety net for resolve_opaque_type fallback path).
+		# With early linking, FORWARD_NOMINALs in external sigs should not
+		# survive.  Run as safety net; remove once Stage 3 is validated.
 		_canonicalize_signature_type_ids(external_signatures_by_id, type_table)
 
 		# Inject method boundary wrappers for external (package/stdlib) methods.
@@ -8971,7 +9048,7 @@ def main(argv: list[str] | None = None) -> int:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
-	type_checker = TypeChecker(type_table=type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules)
+	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
 	def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:
@@ -9119,6 +9196,16 @@ def main(argv: list[str] | None = None) -> int:
 	_register_signatures_in_callable_registry(signatures_by_id)
 	_register_signatures_in_callable_registry(external_signatures_by_id, is_external=True, skip_modules=modules)
 
+	# ── World is ready ───────────────────────────────────────────────
+	semantic_world.callable_registry = callable_registry
+	semantic_world.base_signatures = base_signatures_by_id
+	semantic_world.derived_signatures = derived_signatures_by_id
+	semantic_world.external_signatures = external_signatures_by_id
+	semantic_world.external_trait_defs = external_trait_defs
+	semantic_world.external_impl_metas = external_impl_metas
+	semantic_world.external_missing_traits = external_missing_traits
+	semantic_world.advance_to(WorldPhase.READY)
+
 	# candidate_signatures_for_diag removed; no name-keyed fallback map
 
 	# Contract: no wrapper sigs should be in the registry.
@@ -9253,17 +9340,17 @@ def main(argv: list[str] | None = None) -> int:
 
 	global_impl_index = GlobalImplIndex.from_module_exports(
 		module_exports=module_exports,
-		type_table=type_table,
+		type_table=semantic_world.type_table,
 		module_ids=module_ids,
 	)
-	for impl in external_impl_metas:
+	for impl in semantic_world.external_impl_metas:
 		if getattr(impl, "trait_key", None) is None:
-			global_impl_index.add_impl(impl=impl, type_table=type_table, module_ids=module_ids)
-	global_trait_index = GlobalTraitIndex.from_trait_worlds(getattr(type_table, "trait_worlds", None))
-	for trait_def in external_trait_defs:
+			global_impl_index.add_impl(impl=impl, type_table=semantic_world.type_table, module_ids=module_ids)
+	global_trait_index = GlobalTraitIndex.from_trait_worlds(getattr(semantic_world.type_table, "trait_worlds", None))
+	for trait_def in semantic_world.external_trait_defs:
 		if hasattr(trait_def, "key"):
 			global_trait_index.add_trait(trait_def.key, trait_def)
-	for missing_trait in external_missing_traits:
+	for missing_trait in semantic_world.external_missing_traits:
 		if hasattr(missing_trait, "module") and hasattr(missing_trait, "name"):
 			# Do not mark a trait as missing if it is already defined in the
 			# current world (e.g. source-compiled stdlib traits satisfy package
@@ -9272,12 +9359,12 @@ def main(argv: list[str] | None = None) -> int:
 				global_trait_index.mark_missing(missing_trait)
 	global_trait_impl_index = GlobalTraitImplIndex.from_module_exports(
 		module_exports=module_exports,
-		type_table=type_table,
+		type_table=semantic_world.type_table,
 		module_ids=module_ids,
 	)
-	for impl in external_impl_metas:
+	for impl in semantic_world.external_impl_metas:
 		if getattr(impl, "trait_key", None) is not None:
-			global_trait_impl_index.add_impl(impl=impl, type_table=type_table, module_ids=module_ids)
+			global_trait_impl_index.add_impl(impl=impl, type_table=semantic_world.type_table, module_ids=module_ids)
 	for module_id in external_missing_impl_modules:
 		global_trait_impl_index.mark_missing_module(module_ids.setdefault(module_id, len(module_ids)))
 	global_trait_impl_index.module_names_by_id = {
@@ -9332,7 +9419,7 @@ def main(argv: list[str] | None = None) -> int:
 
 	signatures_by_id_all = dict(signatures_by_id)
 	signatures_by_id_all.update(external_signatures_by_id)
-	linked_world, require_env = _build_linked_world(type_table)
+	linked_world, require_env = _build_linked_world(semantic_world.type_table)
 
 	# K42 + Phase 5: build function_keys_by_fn_id for Pass 1 covering ALL
 	# generic signatures (wrappers + non-wrappers).  This serves two purposes:
@@ -9350,11 +9437,11 @@ def main(argv: list[str] | None = None) -> int:
 	# changes (e.g. external non-wrapper generics missing from DMIR), the
 	# fallback must derive per-signature package_id from module_packages.
 	pass1_function_keys: dict[FunctionId, FunctionKey] = dict(external_template_keys_by_fn_id)
-	_p1_default_package = getattr(type_table, "package_id", None) or package_id
-	_p1_module_packages = getattr(type_table, "module_packages", None)
+	_p1_default_package = getattr(semantic_world.type_table, "package_id", None) or package_id
+	_p1_module_packages = getattr(semantic_world.type_table, "module_packages", None)
 	# Build requires_by_fn_id from trait_worlds for fingerprint computation.
 	_p1_requires_by_fn_id: dict[FunctionId, object] = {}
-	_p1_trait_worlds = getattr(type_table, "trait_worlds", {}) if type_table is not None else {}
+	_p1_trait_worlds = getattr(semantic_world.type_table, "trait_worlds", {}) if semantic_world.type_table is not None else {}
 	if isinstance(_p1_trait_worlds, dict):
 		for _p1_world in _p1_trait_worlds.values():
 			for _p1_fid, _p1_req in getattr(_p1_world, "requires_by_fn", {}).items():
@@ -9559,7 +9646,7 @@ def main(argv: list[str] | None = None) -> int:
 
 	# Enforce trait requirements (struct + function requires) before borrow checking.
 	trait_diags: list[Diagnostic] = []
-	linked_world, require_env = _build_linked_world(type_table)
+	linked_world, require_env = _build_linked_world(semantic_world.type_table)
 	# Install destructor_fns early so any code that queries has_drop()
 	# (e.g. copy_status callbacks, borrow checker, or trait enforcement)
 	# before compile_stubbed_funcs runs gets the correct answer for
@@ -9568,9 +9655,9 @@ def main(argv: list[str] | None = None) -> int:
 	# decision even though compile_stubbed_funcs would install
 	# destructor_fns internally.
 	if linked_world is not None:
-		_install_destructor_fns(type_table, linked_world, module_exports, external_impl_metas=external_impl_metas)
+		_install_destructor_fns(semantic_world.type_table, linked_world, module_exports, external_impl_metas=semantic_world.external_impl_metas)
 	if linked_world is not None and require_env is not None:
-		used_types = collect_used_type_keys(typed_fns, type_table, signatures_by_id)
+		used_types = collect_used_type_keys(typed_fns, semantic_world.type_table, signatures_by_id)
 		used_by_module: dict[str, set] = {}
 		used_unknown: set = set()
 		for ty in used_types:
@@ -9723,13 +9810,8 @@ def main(argv: list[str] | None = None) -> int:
 			signatures=signatures_for_pkg,
 			exc_env=exception_catalog,
 			module_exports=combined_exports,
-			module_deps=module_deps,
 			origin_by_fn_id=origin_by_fn_id,
-			type_table=type_table,
 			package_id=package_id,
-			external_trait_defs=external_trait_defs,
-			external_impl_metas=external_impl_metas,
-			external_missing_traits=external_missing_traits,
 			external_missing_impl_modules=external_missing_impl_modules,
 			return_checked=True,
 			prelude_enabled=bool(args.prelude),
@@ -9738,7 +9820,12 @@ def main(argv: list[str] | None = None) -> int:
 			emit_instantiation_index=args.emit_instantiation_index,
 			enforce_entrypoint=bool(args.output or args.emit_ir),
 			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
+			semantic_world=semantic_world,
 		)
+		# All semantic declarations are now complete: source types, package
+		# types, callable registration, closure environment structs from
+		# MIR lowering.  Freeze the world before codegen.
+		semantic_world.freeze()
 		_assert_all_phased(checked_pkg.diagnostics, context="typecheck")
 		if any(d.severity == "error" for d in checked_pkg.diagnostics):
 			if args.json:

@@ -274,6 +274,9 @@ class TypeTable:
 		self._next_id: TypeId = 1  # reserve 0 for "invalid"
 		# Target word size in bits. Uint is target-width; Uint64 is always 64-bit.
 		self.word_bits: int = word_bits
+		# Lifecycle: when True, nominal declarations are blocked.
+		# Structural interning (ensure_ref, new_array, etc.) remains allowed.
+		self._frozen: bool = False
 		# Package identity for module-scoped type keys.
 		self.package_id: str | None = None
 		self.module_packages: dict[str, str] = {}
@@ -450,6 +453,7 @@ class TypeTable:
 
 	def define_type_alias(self, *, module_id: str | None, name: str, type_params: list[str], target: object, loc: object | None = None) -> None:
 		"""Define a module-scoped type alias."""
+		self._assert_not_frozen("define_type_alias")
 		self.type_aliases[(module_id, name)] = (list(type_params), target, loc)
 
 	def lookup_type_alias(self, *, module_id: str | None, name: str) -> tuple[list[str], object, object | None] | None:
@@ -490,6 +494,7 @@ class TypeTable:
 			prev = self._nominal.get(key)
 			if prev is not None:
 				return prev
+		self._assert_not_frozen("ensure_named (new FORWARD_NOMINAL)")
 		return self._add(TypeKind.FORWARD_NOMINAL, name, [], module_id=module_id, register_named=True)
 
 	def get_forward_nominal(self, *, module_id: str | None, name: str) -> TypeId | None:
@@ -527,6 +532,10 @@ class TypeTable:
 				found = tid
 		return found
 
+	def _assert_not_frozen(self, op: str) -> None:
+		if self._frozen:
+			raise RuntimeError(f"TypeTable is frozen: {op} not allowed after world freeze")
+
 	def declare_struct(self, module_id: str, name: str, field_names: List[str], type_params: list[str] | None = None) -> TypeId:
 		"""
 		Declare a struct nominal type with placeholder field types.
@@ -534,6 +543,7 @@ class TypeTable:
 		This supports recursive type references by first declaring all struct
 		names, then filling field types in a second pass via `define_struct_fields`.
 		"""
+		self._assert_not_frozen("declare_struct")
 		type_params = list(type_params or [])
 		key = NominalKey(package_id=self._package_for_module(module_id), module_id=module_id, name=name, kind=TypeKind.STRUCT)
 		forward_key = NominalKey(
@@ -609,6 +619,7 @@ class TypeTable:
 
 	def declare_interface(self, module_id: str, name: str, type_params: list[str] | None = None) -> TypeId:
 		"""Declare an interface nominal type."""
+		self._assert_not_frozen("declare_interface")
 		type_params = list(type_params or [])
 		key = NominalKey(package_id=self._package_for_module(module_id), module_id=module_id, name=name, kind=TypeKind.INTERFACE)
 		forward_key = NominalKey(
@@ -690,6 +701,7 @@ class TypeTable:
 		concrete instantiation with zero type arguments, and is available via
 		`get_variant_instance(base_id)`.
 		"""
+		self._assert_not_frozen("declare_variant")
 		if tombstone_ctor is not None:
 			tombstone_arm = next((arm for arm in arms if arm.name == tombstone_ctor), None)
 			if tombstone_arm is None:
@@ -755,6 +767,7 @@ class TypeTable:
 
 	def declare_scalar(self, module_id: str, name: str) -> TypeId:
 		"""Declare a module-scoped scalar nominal."""
+		self._assert_not_frozen("declare_scalar")
 		key = NominalKey(package_id=self._package_for_module(module_id), module_id=module_id, name=name, kind=TypeKind.SCALAR)
 		forward_key = NominalKey(
 			package_id=self._package_for_module(module_id),

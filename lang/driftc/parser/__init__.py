@@ -1462,6 +1462,7 @@ def parse_drift_workspace_to_hir(
 	test_build_only: bool = False,
 	word_bits: int | None = None,
 	type_table: "TypeTable | None" = None,
+	semantic_world: "Any | None" = None,
 	) -> Tuple[
 	Dict[str, ModuleLowered],
 	"TypeTable",
@@ -1494,6 +1495,20 @@ def parse_drift_workspace_to_hir(
 	  (modules, type_table, exception_catalog, module_exports, module_deps, diagnostics)
 	"""
 	from lang.driftc.traits.world import TraitKey
+
+	# Adapter: unpack from SemanticWorld if provided.
+	if semantic_world is not None:
+		# For package-consumer builds, packages must be ingressed first.
+		# For source-only builds, the world may go directly to SOURCE_INGRESS.
+		if semantic_world.type_table is not None:
+			semantic_world.assert_packages_ready()
+			# Consistency: if both are provided, they must be the same object.
+			if type_table is not None and type_table is not semantic_world.type_table:
+				raise RuntimeError(
+					"conflicting type_table: explicit argument differs from semantic_world.type_table"
+				)
+		if type_table is None and semantic_world.type_table is not None:
+			type_table = semantic_world.type_table
 
 	diagnostics: list[Diagnostic] = []
 	source_manager = SourceManager()
