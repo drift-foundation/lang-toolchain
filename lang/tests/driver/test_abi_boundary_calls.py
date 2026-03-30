@@ -291,3 +291,159 @@ def test_cross_module_generic_method_uses_wrapper_throw_abi(tmp_path: Path) -> N
 	assert "%FnResult_Int_Error" in wrapper_defines[0]
 	main_ir = _extract_llvm_function(ir, "main")
 	assert "call %FnResult_Int_Error @\"acme.box::__wrap_method::" in main_ir
+
+
+def test_normal_mode_boundary_provenance(tmp_path: Path) -> None:
+	"""
+	Normal-mode (test_build_only=False) regression for boundary provenance.
+
+	In normal mode, the parser skips applying external_module_packages to
+	module_packages for source modules (they all get "__local__"), so
+	cross-package boundaries between source modules don't arise.  But
+	stdlib identity normalization puts stdlib in package "std" while user
+	code is in "__local__", creating a false boundary that source_modules
+	must exempt.
+
+	This test proves:
+	1. explicitly_packaged_modules is correctly populated in normal mode
+	   (the parser records provenance before the merged_programs skip).
+	2. Source-compiled stdlib methods avoid false wrapper routing despite
+	   being in a different canonical package from user code.
+	3. Source-compiled stdlib free functions avoid false can_throw forcing.
+	"""
+	(tmp_path / "main.drift").write_text(
+		"\n".join(
+			[
+				"module main;",
+				"",
+				"import lang.atomic as atomic;",
+				"",
+				"struct S { a: atomic.AtomicUint }",
+				"",
+				"fn main() nothrow -> Int {",
+				"\tval s = \"hello\";",
+				"\tval len = s.byte_length();",
+				"\tvar st = S(a = atomic.atomic_uint(cast<Uint>(0)));",
+				"\tatomic.atomic_store_uint(&st.a, cast<Uint>(1), 0);",
+				"\treturn len;",
+				"}",
+				"",
+			]
+		)
+	)
+
+	module_packages = {}
+	mk_module(module_packages, "main", "app")
+	drift_files = sorted(tmp_path.rglob("*.drift"))
+	# Normal mode: test_build_only is NOT set (defaults to False).
+	modules, type_table, exception_catalog, module_exports, module_deps, diags = parse_drift_workspace_to_hir(
+		drift_files,
+		module_paths=[tmp_path],
+		external_module_packages=module_packages,
+		stdlib_root=stdlib_root(),
+	)
+	assert not diags
+
+	# Verify explicit packaging provenance survived the normal-mode path.
+	assert "main" in type_table.explicitly_packaged_modules
+	# Stdlib modules must NOT be in explicitly_packaged_modules.
+	assert "std.core" not in type_table.explicitly_packaged_modules
+	assert "lang.atomic" not in type_table.explicitly_packaged_modules
+
+	func_hirs, signatures, _fn_ids_by_name = flatten_modules(modules)
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exception_catalog,
+		entry="main",
+		type_table=type_table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+	)
+	# No errors: stdlib calls must not trigger false boundary enforcement.
+	assert not any(d.severity == "error" for d in checked.diagnostics)
+
+	main_ir = _extract_llvm_function(ir, "main")
+	# Stdlib method call (byte_length) must NOT go through a wrapper.
+	assert "__wrap_method::String::byte_length" not in main_ir
+
+
+def test_normal_mode_explicit_package_boundary_preserved(tmp_path: Path) -> None:
+	"""
+	Normal-mode + test_build_only regression for explicitly-packaged modules.
+
+	Proves that explicitly-packaged source modules keep real ABI boundaries
+	via test_build_only=True (the path that applies external_module_packages
+	to module_packages for source modules).
+
+	This complements test_normal_mode_boundary_provenance which covers the
+	stdlib exemption side.  Together they pin both sides of the contract.
+	"""
+	(tmp_path / "acme" / "lib").mkdir(parents=True)
+	(tmp_path / "acme" / "lib" / "lib.drift").write_text(
+		"\n".join(
+			[
+				"module acme.lib;",
+				"",
+				"export { add_one };",
+				"",
+				"pub fn add_one(x: Int) nothrow -> Int {",
+				"\treturn x + 1;",
+				"}",
+				"",
+			]
+		)
+	)
+	(tmp_path / "main.drift").write_text(
+		"\n".join(
+			[
+				"module main;",
+				"",
+				"import acme.lib as lib;",
+				"",
+				"fn main() nothrow -> Int {",
+				"\tval s = \"hello\";",
+				"\tval len = s.byte_length();",
+				"\tval v = try lib.add_one(len) catch { 0 };",
+				"\treturn v;",
+				"}",
+				"",
+			]
+		)
+	)
+
+	module_packages = {}
+	mk_module(module_packages, "main", "app")
+	mk_module(module_packages, "acme.lib", "acme")
+	drift_files = sorted(tmp_path.rglob("*.drift"))
+	modules, type_table, exception_catalog, module_exports, module_deps, diags = parse_drift_workspace_to_hir(
+		drift_files,
+		module_paths=[tmp_path],
+		external_module_packages=module_packages,
+		stdlib_root=stdlib_root(),
+		test_build_only=True,
+	)
+	assert not diags
+
+	# Verify provenance: acme.lib is explicitly packaged, stdlib is not.
+	assert "acme.lib" in type_table.explicitly_packaged_modules
+	assert "std.core" not in type_table.explicitly_packaged_modules
+
+	func_hirs, signatures, _fn_ids_by_name = flatten_modules(modules)
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exception_catalog,
+		entry="main",
+		type_table=type_table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+	)
+	assert not checked.diagnostics
+
+	main_ir = _extract_llvm_function(ir, "main")
+	# Explicitly-packaged cross-package call MUST use the wrapper symbol.
+	assert '@"acme.lib::add_one"' in main_ir
+	assert "__impl" not in main_ir
+	# Stdlib method call must NOT go through a wrapper (no false boundary).
+	assert "__wrap_method::String::byte_length" not in main_ir

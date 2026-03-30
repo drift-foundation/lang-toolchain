@@ -2988,7 +2988,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 							if caller_pkg is None or callee_pkg is None:
 								raise AssertionError("module_packages missing entry for boundary check (checker bug)")
 							if caller_pkg != callee_pkg:
-								upgrade_boundary = True
+								# Source-compiled modules that were NOT explicitly
+								# packaged have no real ABI boundary.
+								_tt = ctx.type_table
+								source_modules = getattr(_tt, "source_modules", None) or set() if _tt is not None else set()
+								explicitly_packaged = getattr(_tt, "explicitly_packaged_modules", None) or set() if _tt is not None else set()
+								if callee_mod not in source_modules or callee_mod in explicitly_packaged:
+									upgrade_boundary = True
 					if upgrade_boundary:
 						wrapper_id = method_wrapper_id(cand.fn_id)
 						if wrapper_id in ctx.signatures_by_id:

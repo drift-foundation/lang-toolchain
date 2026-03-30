@@ -2563,6 +2563,12 @@ class TypeChecker:
 				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
 			if caller_pkg == callee_pkg:
 				return False
+			# Source-compiled modules that were NOT explicitly packaged
+			# (e.g. stdlib compiled alongside user code) have no real
+			# ABI boundary — skip wrapper routing for them.
+			explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
+			if callee_mod in self._source_modules and callee_mod not in explicitly_packaged:
+				return False
 			return True
 
 		def _apply_method_boundary(
