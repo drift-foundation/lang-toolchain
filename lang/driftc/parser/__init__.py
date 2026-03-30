@@ -3036,9 +3036,13 @@ def parse_drift_workspace_to_hir(
 	has_stdlib = stdlib_root is not None
 	if isinstance(external_module_packages, dict):
 		for mod, pkg in external_module_packages.items():
-			if mod in merged_programs and not test_build_only:
-				continue
 			if not isinstance(mod, str) or not isinstance(pkg, str):
+				continue
+			# Record explicit packaging regardless of whether we apply the
+			# module_packages mapping — the boundary provenance matters even
+			# when the package mapping is skipped for merged source modules.
+			shared_type_table.explicitly_packaged_modules.add(mod)
+			if mod in merged_programs and not test_build_only:
 				continue
 			shared_type_table.module_packages.setdefault(mod, pkg)
 	for mod in merged_programs:

@@ -292,8 +292,12 @@
   The current system guarantees deterministic TypeId allocation within a single compilation. If we change the allocation order by doing package linking before parsing,
   TypeIds will change. This could affect:
 
-  - Package serialization (TypeIds are stored in package payloads). Mitigation: package format already uses NominalKeys for stable identity; TypeIds in payloads are
-  serialization-local, not global.
+  - Package serialization (TypeIds are stored in package payloads). Package
+    signatures still carry raw param_type_ids / return_type_id /
+    impl_target_type_id and are reconstructed via tid_map remapping.
+    NominalKeys provide stable nominal identity, but the signature payload
+    contract still depends on remapped integer ids.  Full migration to
+    semantic type expressions is deferred to Phase 8.
   - Test assertions that check specific TypeId values. Mitigation: no tests should depend on specific TypeId integers.
 
   Risk: Circular dependency between parser and linker
@@ -310,3 +314,59 @@
   remain separate internal stores.
   - Remove FORWARD_NOMINAL entirely. It's still needed for source-internal forward references within a workspace. The goal is to eliminate it for cross-package types,
   not for all types.
+
+  ─────────────────────────────────────────────────────────────────────
+  Implementation Status (updated 2026-03-30)
+  ─────────────────────────────────────────────────────────────────────
+
+  Stages 1–6: DONE
+
+  Stage 1 — Early type-table linking before parser. Stdlib identity
+  normalized to canonical "std". lang.core always canonical.
+  lang.__internal stays local. Intrinsic FnResult safety net.
+
+  Stage 2 — Already satisfied (callables registered before checking).
+
+  Stage 3 — FORWARD_NOMINAL elimination confirmed (sweeps are no-ops).
+  Sweeps retained as instrumented safety nets.
+
+  Stage 4 — SemanticWorld wrapper with lifecycle phases, consistency
+  guards, phase entry-point adoption.
+
+  Stage 5 — Freeze enforcement in production after compile_stubbed_funcs.
+  Hard guards on all declaration paths. 31 unit tests.
+
+  Stage 6 — World-first consumption. 6 explicit params deleted from
+  driver call sites. Escape-level overlay: sole authority in
+  world-backed paths. Read + write path fully migrated in borrow
+  checker, type checker, and analysis writers.
+
+  ─────────────────────────────────────────────────────────────────────
+  Remaining Phases
+  ─────────────────────────────────────────────────────────────────────
+
+  Phase 7A — Legacy cleanup (escape metadata)              [IN PROGRESS]
+
+  World-backed production reads/writes already use the overlay as sole
+  authority (completed in Stage 6).  Remaining work:
+  - Delete FnSignature.param_escape_level field from world-backed code paths
+    (field stays only for non-world test helpers)
+  - Remove compatibility branches in _free_fn_escape_sig that check both
+    overlay and sig field
+  - Migrate more mid-level helpers to semantic_world
+
+  Phase 7B — Legacy cleanup (registry/canonicalization)    [NOT STARTED]
+
+  - Remove is_external / skip_modules from _register_signatures_in_callable_registry
+  - Convert canonicalization sweeps from instrumented safety net to hard assertion
+  - Remove sweeps once proven clean across broader test surface
+
+  Phase 8 — Package payload/interface format redesign      [NOT STARTED]
+             (separate project)
+
+  - Redesign package payload around semantic type expressions / canonical keys
+  - Replace raw TypeId-centric param_type_ids / return_type_id / impl_target_type_id
+    with structural type-expression trees
+  - Explicit producer + consumer migration plan
+  - Likely its own version/history milestone
+  - Higher risk: touches package serialization contract, loading, compatibility

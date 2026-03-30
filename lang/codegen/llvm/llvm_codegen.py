@@ -5750,7 +5750,10 @@ class _FuncBuilder:
 
 		call_can_throw = instr.can_throw
 
-		if is_exported_entry and is_cross_module and not call_can_throw:
+		is_intrinsic = bool(
+			callee_info.signature is not None and getattr(callee_info.signature, "is_intrinsic", False)
+		)
+		if is_exported_entry and is_cross_module and not call_can_throw and not is_intrinsic:
 			raise AssertionError(
 				"LLVM codegen v1: cross-module exported call lowered as nothrow; "
 				"checker must force can-throw at boundary"
@@ -6640,7 +6643,16 @@ class _FuncBuilder:
 			callee_pkg = module_packages.get(callee_mod)
 			if caller_pkg is None or callee_pkg is None:
 				raise AssertionError("module_packages missing entry for boundary check (codegen bug)")
-			is_cross_module = caller_pkg != callee_pkg or force_boundary
+			if caller_pkg != callee_pkg or force_boundary:
+				# Different canonical packages — check if the callee is a
+				# source-compiled module with no intentional ABI boundary
+				# (e.g. stdlib compiled alongside user code).  Explicitly
+				# packaged modules (multi-package workspace) keep their
+				# boundaries.
+				source_modules = getattr(self.type_table, "source_modules", None) or set()
+				explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
+				if force_boundary or callee_mod not in source_modules or callee_mod in explicitly_packaged:
+					is_cross_module = True
 
 		target_sym = function_symbol(fn_id)
 		if is_exported_entry and not is_cross_module:

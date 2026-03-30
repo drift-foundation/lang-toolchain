@@ -3162,7 +3162,12 @@ def compile_stubbed_funcs(
 		for mod_id in module_deps.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
-	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True, semantic_world=semantic_world)
+	_source_mods = {getattr(fid, "module", None) for fid in func_hirs_by_id.keys()} - {None}
+	if module_deps is not None:
+		_source_mods.update(m for m in module_deps.keys() if isinstance(m, str))
+	if shared_type_table is not None:
+		shared_type_table.source_modules = _source_mods
+	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True, semantic_world=semantic_world, source_modules=_source_mods)
 	# K42: seed Pass 1 lambda_fn_specs into the new TypeChecker so that
 	# captureless lambda function bodies are generated during MIR lowering.
 	if pass1_state is not None and pass1_state.lambda_fn_specs:
@@ -9062,7 +9067,10 @@ def main(argv: list[str] | None = None) -> int:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
-	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules, semantic_world=semantic_world)
+	_source_mods_main = set(modules.keys()) if isinstance(modules, dict) else set()
+	if semantic_world.type_table is not None:
+		semantic_world.type_table.source_modules = _source_mods_main
+	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules, semantic_world=semantic_world, source_modules=_source_mods_main)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
 	def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:

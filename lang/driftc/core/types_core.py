@@ -280,6 +280,14 @@ class TypeTable:
 		# Package identity for module-scoped type keys.
 		self.package_id: str | None = None
 		self.module_packages: dict[str, str] = {}
+		# Modules compiled from source in the current compilation unit.
+		# Used by codegen to distinguish same-unit cross-package calls
+		# (no ABI boundary) from true cross-package calls (ABI boundary).
+		self.source_modules: set[str] = set()
+		# Modules whose package was explicitly assigned by the user (via
+		# external_module_packages / multi-package workspace).  These modules
+		# have intentional ABI boundaries even when source-compiled.
+		self.explicitly_packaged_modules: set[str] = set()
 		# Nominal key → TypeId mapping. This ensures repeated references to the
 		# same module-scoped user-defined type resolve to a single TypeId.
 		self._nominal: Dict[NominalKey, TypeId] = {}

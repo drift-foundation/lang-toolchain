@@ -235,9 +235,12 @@ class TypeChecker:
 	helpers).
 	"""
 
-	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, semantic_world: object | None = None):
+	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, semantic_world: object | None = None, source_modules: set[str] | None = None):
 		self.type_table = type_table or TypeTable()
 		self.semantic_world = semantic_world
+		# Modules compiled from source in this compilation unit (not from packages).
+		# Used to avoid false ABI boundary enforcement between source-compiled modules.
+		self._source_modules: set[str] = source_modules or set()
 		self._uint = self.type_table.ensure_uint()
 		self._uint64 = self.type_table.ensure_uint64()
 		self._int = self.type_table.ensure_int()
@@ -2495,8 +2498,18 @@ class TypeChecker:
 			return None
 
 		def _force_boundary_can_throw(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
+			"""Force can_throw=True for cross-package-artifact calls.
+
+			The ABI boundary enforcement forces FnResult wrapping for calls
+			that cross a real package boundary (pre-compiled .dmp packages).
+			Source-compiled modules within the same compilation unit do NOT
+			have an ABI boundary even if they belong to different canonical
+			packages (e.g. user code in __local__ calling stdlib in std).
+			"""
 			if sig is None:
 				return False
+			if getattr(sig, "is_intrinsic", False):
+				return False  # intrinsics have no wrapper body; can_throw must not be forced
 			if getattr(sig, "is_method", False):
 				return False
 			else:
@@ -2512,7 +2525,24 @@ class TypeChecker:
 			caller_pkg = module_packages.get(caller_mod)
 			if callee_pkg is None or caller_pkg is None:
 				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
-			return callee_pkg != caller_pkg
+			if callee_pkg == caller_pkg:
+				return False
+			# Different canonical packages, but check if callee is from
+			# a source-compiled module in the current compilation unit
+			# rather than a pre-compiled package artifact.
+			# Source-compiled modules share the compilation unit with the
+			# caller — no ABI boundary exists between them.
+			if getattr(sig, "is_instantiation", False):
+				return False  # instantiations are local by definition
+			# A callee is source-compiled if its module is in the current
+			# compilation's source module set AND was NOT explicitly
+			# packaged by the user.  Explicitly-packaged modules (from
+			# external_module_packages / multi-package workspace) have
+			# intentional ABI boundaries even when source-compiled.
+			explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
+			if callee_mod in self._source_modules and callee_mod not in explicitly_packaged:
+				return False
+			return True
 
 		def _method_boundary_visible(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
 			if sig is None or not getattr(sig, "is_method", False):
