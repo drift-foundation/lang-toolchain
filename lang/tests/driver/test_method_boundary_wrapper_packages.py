@@ -250,18 +250,45 @@ def _decode_package_signatures(
 			fn_id = function_id_from_obj(sd.get("fn_id"))
 			if fn_id is None:
 				raise AssertionError(f"missing fn_id for signature '{name}'")
+			# v1 payloads may omit raw TypeId fields for concrete sigs;
+			# resolve from TypeExpr when raw fields are absent.
 			param_type_ids = sd.get("param_type_ids")
 			if isinstance(param_type_ids, list):
 				param_type_ids = [tid_map.get(int(x), int(x)) for x in param_type_ids]
+			elif sd.get("param_types") is not None:
+				from lang.driftc.packages.provisional_dmir_v0 import decode_type_expr
+				from lang.driftc.core.type_resolve_common import resolve_opaque_type
+				param_type_ids = [
+					resolve_opaque_type(decode_type_expr(p), type_table, module_id=module_name)
+					for p in sd["param_types"]
+				]
 			ret_tid = sd.get("return_type_id")
 			if isinstance(ret_tid, int):
 				ret_tid = tid_map.get(ret_tid, ret_tid)
+			elif sd.get("return_type") is not None:
+				from lang.driftc.packages.provisional_dmir_v0 import decode_type_expr
+				from lang.driftc.core.type_resolve_common import resolve_opaque_type
+				rt_expr = decode_type_expr(sd["return_type"])
+				if rt_expr is not None:
+					ret_tid = resolve_opaque_type(rt_expr, type_table, module_id=module_name)
 			err_tid = sd.get("error_type_id")
 			if isinstance(err_tid, int):
 				err_tid = tid_map.get(err_tid, err_tid)
+			elif sd.get("error_type") is not None:
+				from lang.driftc.packages.provisional_dmir_v0 import decode_type_expr
+				from lang.driftc.core.type_resolve_common import resolve_opaque_type
+				et_expr = decode_type_expr(sd["error_type"])
+				if et_expr is not None:
+					err_tid = resolve_opaque_type(et_expr, type_table, module_id=module_name)
 			impl_tid = sd.get("impl_target_type_id")
 			if isinstance(impl_tid, int):
 				impl_tid = tid_map.get(impl_tid, impl_tid)
+			elif sd.get("impl_target_type") is not None:
+				from lang.driftc.packages.provisional_dmir_v0 import decode_type_expr
+				from lang.driftc.core.type_resolve_common import resolve_opaque_type
+				it_expr = decode_type_expr(sd["impl_target_type"])
+				if it_expr is not None:
+					impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name)
 			wraps_fn_id = function_id_from_obj(sd.get("wraps_target_fn_id"))
 			type_param_names = sd.get("type_params")
 			if not isinstance(type_param_names, list):

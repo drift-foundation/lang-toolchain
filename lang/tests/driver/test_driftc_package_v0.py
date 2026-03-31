@@ -655,7 +655,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 
 	pkg = load_package_v0(out1)
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
-	assert pkg.manifest["payload_version"] == 0
+	assert pkg.manifest["payload_version"] == 1
 	assert pkg.manifest["unstable_format"] is True
 
 

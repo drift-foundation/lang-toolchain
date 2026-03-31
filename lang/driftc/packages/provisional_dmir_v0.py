@@ -839,20 +839,27 @@ def encode_signatures(
 					f"encode_type_expr failed for reconstructed return TypeExpr '{expr.name}' in signature '{name}'"
 				)
 
-		# impl_target_type: always synthesize from TypeId when available.
+		# impl_target_type: synthesize from TypeId when available.
+		# For __inst__ (monomorphized) signatures, impl_target_type_id may be
+		# Unknown/unresolvable because it references the generic base's TypeVar
+		# context. Allow graceful failure in that case — the consumer resolves
+		# __inst__ impl targets via tid_map, not TypeExpr.
 		impl_target_type_obj = None
 		impl_tid = getattr(sig, "impl_target_type_id", None)
+		_is_inst_sig = "__inst__" in name
 		if type_table is not None and impl_tid is not None:
 			expr = typeid_to_type_expr(impl_tid, type_table, type_param_names=tp_id_names)
 			if expr is None:
-				raise ValueError(
-					f"typeid_to_type_expr failed for impl_target TypeId {impl_tid} in signature '{name}'"
-				)
-			impl_target_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
-			if impl_target_type_obj is None:
-				raise ValueError(
-					f"encode_type_expr failed for reconstructed impl_target TypeExpr '{expr.name}' in signature '{name}'"
-				)
+				if not _is_inst_sig:
+					raise ValueError(
+						f"typeid_to_type_expr failed for impl_target TypeId {impl_tid} in signature '{name}'"
+					)
+			else:
+				impl_target_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
+				if impl_target_type_obj is None and not _is_inst_sig:
+					raise ValueError(
+						f"encode_type_expr failed for reconstructed impl_target TypeExpr '{expr.name}' in signature '{name}'"
+					)
 
 		# error_type: synthesize from error_type_id when available.
 		error_type_obj = None
@@ -869,13 +876,12 @@ def encode_signatures(
 					f"encode_type_expr failed for reconstructed error TypeExpr '{expr.name}' in signature '{name}'"
 				)
 
-		out[name] = {
+		entry: dict[str, Any] = {
 			"name": sig.name,
 			"module": sig_module,
 			"fn_id": function_id_to_obj(fn_id),
 			"is_method": sig.is_method,
 			"method_name": getattr(sig, "method_name", None),
-			"impl_target_type_id": getattr(sig, "impl_target_type_id", None),
 			"self_mode": getattr(sig, "self_mode", None),
 			"is_pub": bool(getattr(sig, "is_pub", False)),
 			"is_intrinsic": bool(getattr(sig, "is_intrinsic", False)),
@@ -897,8 +903,6 @@ def encode_signatures(
 			),
 			"param_names": list(sig.param_names or []),
 			"param_mutable": list(sig.param_mutable or []),
-			"param_type_ids": list(sig.param_type_ids or []) if sig.param_type_ids is not None else None,
-			"return_type_id": sig.return_type_id,
 			"declared_can_throw": sig.declared_can_throw,
 			"declared_unsafe": bool(getattr(sig, "declared_unsafe", False)),
 			"is_exported_entrypoint": bool(getattr(sig, "is_exported_entrypoint", False)),
@@ -910,6 +914,19 @@ def encode_signatures(
 			"impl_target_type": impl_target_type_obj,
 			"error_type": error_type_obj,
 		}
+		# Stage 8.3: when type_table is provided (v1 payload), raw TypeId
+		# fields are omitted — TypeExpr is authoritative.  Without type_table
+		# (v0 compat / tests), raw fields are still emitted.
+		# Exception: __inst__ and generic (type_params/impl_type_params) sigs
+		# keep raw TypeId fields because TypeExpr resolution with TypeVars may
+		# produce different interned TypeIds than tid_map, and method resolution
+		# depends on exact TypeId identity.
+		_needs_raw = _is_inst_sig or bool(type_param_names) or bool(impl_type_param_names)
+		if type_table is None or _needs_raw:
+			entry["param_type_ids"] = list(sig.param_type_ids or []) if sig.param_type_ids is not None else None
+			entry["return_type_id"] = sig.return_type_id
+			entry["impl_target_type_id"] = getattr(sig, "impl_target_type_id", None)
+		out[name] = entry
 	return out
 
 
@@ -1416,7 +1433,7 @@ def encode_module_payload_v0(
 	impl_headers_obj = list(impl_headers or [])
 	return {
 		"payload_kind": "provisional-dmir",
-		"payload_version": 0,
+		"payload_version": 1,
 		"unstable_format": True,
 		"module_id": module_id,
 		"exports": {

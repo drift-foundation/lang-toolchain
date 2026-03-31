@@ -1793,8 +1793,13 @@ def _build_package_consumer_unit(
 			payload = mod.payload
 			if not isinstance(payload, dict):
 				continue
-			if payload.get("payload_kind") != "provisional-dmir" or payload.get("payload_version") != 0:
-				raise AssertionError(f"unsupported package payload kind/version")
+			_pv = payload.get("payload_version")
+			if payload.get("payload_kind") != "provisional-dmir" or _pv not in (0, 1):
+				raise AssertionError(
+					f"unsupported package payload kind/version "
+					f"(kind={payload.get('payload_kind')!r}, version={_pv!r}); "
+					f"this compiler supports payload_version 0 and 1"
+				)
 			sigs_obj = payload.get("signatures")
 			name_to_fn_id: dict[str, FunctionId] = {}
 			if isinstance(sigs_obj, dict):
@@ -1829,20 +1834,21 @@ def _build_package_consumer_unit(
 					# to get host TypeIds directly. Fall back to tid_map remapping for
 					# old-format packages (payload_version 0 without TypeExpr fields).
 					#
-					# EXCEPTION: signatures with type_params carry TypeExprs that
-					# reference type variables (e.g. {"param": "T"}).  This consumer
-					# path has no type_param context, so TypeExpr resolution would
-					# produce Unknown for those references.  For generic signatures,
-					# always use the tid_map path — the main() external signature
-					# reconstruction handles generics with full type_param context.
+					# EXCEPTION: signatures with type_params OR __inst__ monomorphizations
+					# use the tid_map path.  Generic sigs carry TypeVar references that
+					# this consumer path can't resolve.  __inst__ sigs may produce
+					# different interned TypeIds via TypeExpr than via tid_map, breaking
+					# method resolution (callable registry is indexed by tid_map TypeIds).
 					_sd_type_params = sd.get("type_params")
 					_sd_impl_type_params = sd.get("impl_type_params")
 					_has_type_params = bool(_sd_type_params) or bool(_sd_impl_type_params)
+					_is_inst_consumer = "__inst__" in name
+					_use_tidmap = _has_type_params or _is_inst_consumer
 
-					param_types_raw = sd.get("param_types") if not _has_type_params else None
-					return_type_raw = sd.get("return_type") if not _has_type_params else None
-					impl_target_type_raw = sd.get("impl_target_type") if not _has_type_params else None
-					error_type_raw = sd.get("error_type") if not _has_type_params else None
+					param_types_raw = sd.get("param_types") if not _use_tidmap else None
+					return_type_raw = sd.get("return_type") if not _use_tidmap else None
+					impl_target_type_raw = sd.get("impl_target_type") if not _use_tidmap else None
+					error_type_raw = sd.get("error_type") if not _use_tidmap else None
 
 					# Types that indicate unresolved TypeExpr resolution.
 					_UNRESOLVED_KINDS = {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL}
@@ -1922,11 +1928,13 @@ def _build_package_consumer_unit(
 					)
 
 					# Stage 8.2: dual-path assertion.
-					# Skip __inst__ (monomorphized) sigs — their impl_target_type
-					# carries TypeVars from the generic base that can't be resolved
-					# without the original type_param context.
+					# Only runs when raw TypeId fields are present (v0 payloads or
+					# generic/__inst__ sigs in v1).  For v1 concrete sigs, raw fields
+					# are intentionally absent — correctness was proven in 8.2 before
+					# the raw fields were removed in 8.3.
 					_is_inst_82 = "__inst__" in name
-					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst_82:
+					_has_raw_baseline = sd.get("param_type_ids") is not None or sd.get("return_type_id") is not None
+					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst_82 and _has_raw_baseline:
 						_sig_label = f"pkg_consumer:{name}"
 						# Compute what tid_map would have produced.
 						_tm_ptids = None
@@ -1942,7 +1950,8 @@ def _build_package_consumer_unit(
 							for _pi, (_te_tid, _tm_tid) in enumerate(zip(param_type_ids, _tm_ptids)):
 								_assert_typexpr_tid_match(f"{_sig_label}:param[{_pi}]", _te_tid, _tm_tid, type_table)
 						# Compare return_type_id.
-						_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret, type_table)
+						if _tm_ret is not None:
+							_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret, type_table)
 						# Compare impl_target_type_id.
 						if impl_tid is not None or _tm_impl is not None:
 							_assert_typexpr_tid_match(f"{_sig_label}:impl_target", impl_tid, _tm_impl, type_table)
@@ -8854,12 +8863,12 @@ def main(argv: list[str] | None = None) -> int:
 						is_instantiation=_is_inst,
 					)
 					# Stage 8.2: dual-path assertion for external signatures.
-				# Skip __inst__ (monomorphized) sigs — their impl_target_type
-				# carries TypeVars from the generic base that can't be resolved
-				# without the original type_param context.
-					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst:
+					# Only runs when raw TypeId fields are present (v0 payloads or
+					# generic/__inst__ sigs in v1).  For v1 concrete sigs, raw fields
+					# are intentionally absent.
+					_has_raw_baseline_82 = sd.get("param_type_ids") is not None or sd.get("return_type_id") is not None
+					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst and _has_raw_baseline_82:
 						_sig_label = f"ext_sig:{name}"
-						# tid_map baseline values (computed at lines 8584-8592).
 						_raw_ptids_82 = sd.get("param_type_ids")
 						_tm_ptids_82 = [tid_map.get(int(x), int(x)) for x in _raw_ptids_82] if isinstance(_raw_ptids_82, list) else None
 						_raw_ret_82 = sd.get("return_type_id")
@@ -8869,7 +8878,8 @@ def main(argv: list[str] | None = None) -> int:
 						if param_type_ids is not None and _tm_ptids_82 is not None and len(param_type_ids) == len(_tm_ptids_82):
 							for _pi, (_te_tid, _tm_tid) in enumerate(zip(param_type_ids, _tm_ptids_82)):
 								_assert_typexpr_tid_match(f"{_sig_label}:param[{_pi}]", _te_tid, _tm_tid, type_table)
-						_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret_82, type_table)
+						if _tm_ret_82 is not None:
+							_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret_82, type_table)
 						if impl_tid is not None or _tm_impl_82 is not None:
 							_assert_typexpr_tid_match(f"{_sig_label}:impl_target", impl_tid, _tm_impl_82, type_table)
 						# Validate error_type structural correctness.
@@ -10565,7 +10575,7 @@ def main(argv: list[str] | None = None) -> int:
 			"unsigned": True,
 			"unstable_format": True,
 			"payload_kind": "provisional-dmir",
-			"payload_version": 0,
+			"payload_version": 1,
 			"modules": manifest_modules,
 			"blobs": manifest_blobs,
 		}
