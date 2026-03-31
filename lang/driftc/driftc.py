@@ -291,6 +291,170 @@ def _canonicalize_forward_nominal_type_id(
 	return resolved_nom if resolved_nom is not None else ty_id
 
 
+# ---------------------------------------------------------------------------
+# Stage 8.2: canonical TypeKey for host TypeTable TypeIds.
+# ---------------------------------------------------------------------------
+
+# Enabled by DRIFT_DEBUG_TYPEXPR_RESOLVE=1.  When active, consumer paths
+# resolve signatures via BOTH TypeExpr and tid_map and compare results using
+# canonical semantic identity rather than raw integer equality.
+_TYPEXPR_DEBUG = os.environ.get("DRIFT_DEBUG_TYPEXPR_RESOLVE") == "1"
+
+# Counters for assertion-mode diagnostics.
+_typexpr_checks = 0
+_typexpr_integer_divergences = 0
+_typexpr_canonical_mismatches = 0
+
+if _TYPEXPR_DEBUG:
+	import atexit
+
+	def _typexpr_summary() -> None:
+		if _typexpr_checks == 0:
+			return
+		print(
+			f"\nTYPEXPR_RESOLVE summary: {_typexpr_checks} checks, "
+			f"{_typexpr_integer_divergences} integer-divergences, "
+			f"{_typexpr_canonical_mismatches} canonical-mismatches",
+			file=sys.stderr,
+		)
+		if _typexpr_canonical_mismatches > 0:
+			print(
+				"TYPEXPR_RESOLVE: CANONICAL MISMATCHES DETECTED — these are bugs.",
+				file=sys.stderr,
+			)
+
+	atexit.register(_typexpr_summary)
+
+
+def _host_type_key(tid: TypeId, tt: TypeTable, _memo: dict[TypeId, object] | None = None) -> object:
+	"""Compute a canonical structural key for a host-TypeTable TypeId.
+
+	Mirrors the linker's key_for_tid() but operates on the host TypeTable.
+	Returns a nested tuple that two TypeIds can be compared against to determine
+	semantic identity independent of interning order.
+	"""
+	if _memo is None:
+		_memo = {}
+	if tid in _memo:
+		return _memo[tid]
+	# Guard against infinite recursion.
+	_memo[tid] = ("cycle", tid)
+	try:
+		td = tt.get(tid)
+	except (KeyError, IndexError):
+		return ("unknown",)
+	k = td.kind
+	name = td.name
+	mid = td.module_id or ""
+
+	# Resolve package identity for module-scoped types.
+	pkg_id = tt._package_for_module(td.module_id) if mid else ""
+
+	if k is TypeKind.VOID:
+		r = ("builtin", "VOID", "Void")
+	elif k is TypeKind.ERROR:
+		r = ("builtin", "ERROR", "Error")
+	elif k is TypeKind.DIAGNOSTICVALUE:
+		r = ("builtin", "DIAGNOSTICVALUE", "DiagnosticValue")
+	elif k is TypeKind.UNKNOWN:
+		r = ("unknown",)
+	elif k is TypeKind.SCALAR:
+		r = ("builtin", "SCALAR", name) if mid == "" else ("nominal", "SCALAR", pkg_id, mid, name)
+	elif k is TypeKind.TYPEVAR:
+		pid = td.type_param_id
+		if pid is not None:
+			# TYPEVAR defs don't carry module_id; derive package from the
+			# owner function's module (mirrors linker's key_for_tid).
+			owner_pkg = tt._package_for_module(pid.owner.module) if pid.owner.module else ""
+			r = ("typevar", owner_pkg, pid.owner.module, pid.owner.name, pid.owner.ordinal, pid.index)
+		else:
+			r = ("typevar_unnamed", name)
+	elif k is TypeKind.ARRAY:
+		r = ("array", _host_type_key(td.param_types[0], tt, _memo)) if td.param_types else ("array",)
+	elif k is TypeKind.REF:
+		r = ("ref", bool(td.ref_mut), _host_type_key(td.param_types[0], tt, _memo)) if td.param_types else ("ref",)
+	elif k is TypeKind.RAW_PTR:
+		r = ("rawptr", _host_type_key(td.param_types[0], tt, _memo)) if td.param_types else ("rawptr",)
+	elif k is TypeKind.FNRESULT:
+		subs = tuple(_host_type_key(p, tt, _memo) for p in td.param_types)
+		r = ("fnresult", subs)
+	elif k is TypeKind.FUNCTION:
+		subs = tuple(_host_type_key(p, tt, _memo) for p in td.param_types)
+		r = ("function", bool(td.fn_throws), subs)
+	elif k in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.INTERFACE):
+		# Check for generic instantiation.
+		inst = None
+		if k is TypeKind.STRUCT:
+			inst = tt.get_struct_instance(tid)
+		elif k is TypeKind.VARIANT:
+			inst = tt.variant_instances.get(tid)
+		elif k is TypeKind.INTERFACE:
+			inst = tt.interface_instances.get(tid)
+		if inst is not None and inst.type_args:
+			base_td = tt.get(inst.base_id)
+			base_mid = base_td.module_id or ""
+			base_pkg = tt._package_for_module(base_td.module_id) if base_mid else ""
+			base_key = ("nominal", k.name, base_pkg, base_mid, base_td.name)
+			arg_keys = tuple(_host_type_key(a, tt, _memo) for a in inst.type_args)
+			r = ("inst", base_key, arg_keys)
+		else:
+			r = ("nominal", k.name, pkg_id, mid, name)
+	elif k is TypeKind.FORWARD_NOMINAL:
+		subs = tuple(_host_type_key(p, tt, _memo) for p in td.param_types)
+		r = ("forward_nominal", pkg_id, mid, name, subs)
+	else:
+		subs = tuple(_host_type_key(p, tt, _memo) for p in td.param_types)
+		r = ("other", k.name, name, subs)
+	_memo[tid] = r
+	return r
+
+
+def _assert_typexpr_tid_match(
+	label: str,
+	typexpr_tid: TypeId | None,
+	tidmap_tid: TypeId | None,
+	tt: TypeTable,
+) -> None:
+	"""Compare TypeExpr-resolved and tid_map-resolved TypeIds.
+
+	Called in assertion mode (DRIFT_DEBUG_TYPEXPR_RESOLVE=1).
+	- Identical integers: pass (fast path).
+	- Different integers, same canonical key: log, don't fail.
+	- Different canonical keys: fail hard.
+	"""
+	global _typexpr_checks, _typexpr_integer_divergences, _typexpr_canonical_mismatches
+	_typexpr_checks += 1
+	if typexpr_tid == tidmap_tid:
+		return
+	if typexpr_tid is None or tidmap_tid is None:
+		_typexpr_canonical_mismatches += 1
+		msg = (
+			f"TYPEXPR_RESOLVE MISMATCH [{label}]: "
+			f"typexpr={typexpr_tid} tidmap={tidmap_tid} (one is None)"
+		)
+		print(msg, file=sys.stderr)
+		raise AssertionError(msg)
+	key_a = _host_type_key(typexpr_tid, tt)
+	key_b = _host_type_key(tidmap_tid, tt)
+	if key_a == key_b:
+		_typexpr_integer_divergences += 1
+		print(
+			f"TYPEXPR_RESOLVE integer-divergence [{label}]: "
+			f"typexpr={typexpr_tid} tidmap={tidmap_tid} "
+			f"canonical={key_a}",
+			file=sys.stderr,
+		)
+	else:
+		_typexpr_canonical_mismatches += 1
+		msg = (
+			f"TYPEXPR_RESOLVE CANONICAL MISMATCH [{label}]: "
+			f"typexpr={typexpr_tid} tidmap={tidmap_tid} "
+			f"typexpr_key={key_a} tidmap_key={key_b}"
+		)
+		print(msg, file=sys.stderr)
+		raise AssertionError(msg)
+
+
 def _canonicalize_mir_type_ids(mir_funcs_by_id: Mapping[FunctionId, M.MirFunc], type_table: TypeTable) -> None:
 	"""Resolve surviving FORWARD_NOMINAL TypeIds in MIR local_types and instructions.
 
@@ -1680,20 +1844,26 @@ def _build_package_consumer_unit(
 					impl_target_type_raw = sd.get("impl_target_type") if not _has_type_params else None
 					error_type_raw = sd.get("error_type") if not _has_type_params else None
 
+					# Types that indicate unresolved TypeExpr resolution.
+					_UNRESOLVED_KINDS = {TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL}
+
 					param_type_ids = None
 					if param_types_raw is not None:
 						# TypeExpr path: decode and resolve each param type.
-						# If any entry fails to decode, fall back to raw TypeIds
-						# entirely rather than inserting Unknown for partial entries.
+						# If any entry fails to decode or resolves to an unresolved
+						# kind, fall back to raw TypeIds entirely.
 						resolved = []
 						_all_ok = True
 						for pt_obj in param_types_raw:
 							pt_expr = decode_type_expr(pt_obj)
-							if pt_expr is not None:
-								resolved.append(resolve_opaque_type(pt_expr, type_table, module_id=sig_module))
-							else:
+							if pt_expr is None:
 								_all_ok = False
 								break
+							_resolved_pt = resolve_opaque_type(pt_expr, type_table, module_id=sig_module)
+							if type_table.get(_resolved_pt).kind in _UNRESOLVED_KINDS:
+								_all_ok = False
+								break
+							resolved.append(_resolved_pt)
 						if _all_ok:
 							param_type_ids = resolved
 					if param_type_ids is None:
@@ -1706,7 +1876,9 @@ def _build_package_consumer_unit(
 					if return_type_raw is not None:
 						rt_expr = decode_type_expr(return_type_raw)
 						if rt_expr is not None:
-							ret_tid = resolve_opaque_type(rt_expr, type_table, module_id=sig_module)
+							_resolved_ret = resolve_opaque_type(rt_expr, type_table, module_id=sig_module)
+							if type_table.get(_resolved_ret).kind not in _UNRESOLVED_KINDS:
+								ret_tid = _resolved_ret
 					if ret_tid is None:
 						raw_ret = sd.get("return_type_id")
 						if isinstance(raw_ret, int):
@@ -1716,7 +1888,9 @@ def _build_package_consumer_unit(
 					if impl_target_type_raw is not None:
 						it_expr = decode_type_expr(impl_target_type_raw)
 						if it_expr is not None:
-							impl_tid = resolve_opaque_type(it_expr, type_table, module_id=sig_module)
+							_resolved_impl = resolve_opaque_type(it_expr, type_table, module_id=sig_module)
+							if type_table.get(_resolved_impl).kind not in _UNRESOLVED_KINDS:
+								impl_tid = _resolved_impl
 					if impl_tid is None:
 						raw_impl = sd.get("impl_target_type_id")
 						if isinstance(raw_impl, int):
@@ -1726,7 +1900,9 @@ def _build_package_consumer_unit(
 					if error_type_raw is not None:
 						et_expr = decode_type_expr(error_type_raw)
 						if et_expr is not None:
-							err_tid = resolve_opaque_type(et_expr, type_table, module_id=sig_module)
+							_resolved_err = resolve_opaque_type(et_expr, type_table, module_id=sig_module)
+							if type_table.get(_resolved_err).kind not in _UNRESOLVED_KINDS:
+								err_tid = _resolved_err
 
 					pkg_sigs_by_id[fn_id] = FnSignature(
 						name=str(sd.get("name") or name),
@@ -1744,6 +1920,48 @@ def _build_package_consumer_unit(
 						is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
 						is_extern_c=bool(sd.get("is_extern_c", False)),
 					)
+
+					# Stage 8.2: dual-path assertion.
+					# Skip __inst__ (monomorphized) sigs — their impl_target_type
+					# carries TypeVars from the generic base that can't be resolved
+					# without the original type_param context.
+					_is_inst_82 = "__inst__" in name
+					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst_82:
+						_sig_label = f"pkg_consumer:{name}"
+						# Compute what tid_map would have produced.
+						_tm_ptids = None
+						_raw_ptids = sd.get("param_type_ids")
+						if isinstance(_raw_ptids, list):
+							_tm_ptids = [tid_map.get(int(x), int(x)) for x in _raw_ptids]
+						_raw_ret = sd.get("return_type_id")
+						_tm_ret = tid_map.get(int(_raw_ret), int(_raw_ret)) if isinstance(_raw_ret, int) else None
+						_raw_impl = sd.get("impl_target_type_id")
+						_tm_impl = tid_map.get(int(_raw_impl), int(_raw_impl)) if isinstance(_raw_impl, int) else None
+						# Compare param_type_ids.
+						if param_type_ids is not None and _tm_ptids is not None and len(param_type_ids) == len(_tm_ptids):
+							for _pi, (_te_tid, _tm_tid) in enumerate(zip(param_type_ids, _tm_ptids)):
+								_assert_typexpr_tid_match(f"{_sig_label}:param[{_pi}]", _te_tid, _tm_tid, type_table)
+						# Compare return_type_id.
+						_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret, type_table)
+						# Compare impl_target_type_id.
+						if impl_tid is not None or _tm_impl is not None:
+							_assert_typexpr_tid_match(f"{_sig_label}:impl_target", impl_tid, _tm_impl, type_table)
+						# Validate error_type: no raw-id baseline exists in the
+						# payload (error_type_id was never serialized), so verify
+						# the resolved TypeId is structurally an ERROR kind.
+						if err_tid is not None:
+							try:
+								_err_td = type_table.get(err_tid)
+								if _err_td.kind is not TypeKind.ERROR:
+									raise AssertionError(
+										f"TYPEXPR_RESOLVE error_type resolved to {_err_td.kind.name} "
+										f"(expected ERROR) in {_sig_label}"
+									)
+							except (KeyError, IndexError):
+								raise AssertionError(
+									f"TYPEXPR_RESOLVE error_type resolved to invalid TypeId {err_tid} "
+									f"in {_sig_label}"
+								)
 
 	# Wrapper → target map from checker-registered boundary wrappers.
 	wrapper_target_by_id: dict[FunctionId, FunctionId] = {}
@@ -8561,7 +8779,7 @@ def main(argv: list[str] | None = None) -> int:
 								for _pi, _pt in enumerate(decoded):
 									_existing = param_type_ids[_pi]
 									_td = type_table.get(_existing)
-									if _td is None or _td.kind is TypeKind.FORWARD_NOMINAL:
+									if _td is None or _td.kind in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 										param_type_ids[_pi] = resolve_opaque_type(_pt, type_table, module_id=module_name, type_params=type_param_map)
 
 					return_type = None
@@ -8573,21 +8791,18 @@ def main(argv: list[str] | None = None) -> int:
 								ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
 							else:
 								_ret_td = type_table.get(ret_tid) if isinstance(ret_tid, int) else None
-								if not isinstance(ret_tid, int) or _ret_td is None or _ret_td.kind is TypeKind.FORWARD_NOMINAL:
+								if not isinstance(ret_tid, int) or _ret_td is None or _ret_td.kind in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 									ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
 
 					# Stage 8.1: resolve impl_target_type from TypeExpr when available.
-					# For generic signatures, only override when the tid_map result
-					# is FORWARD_NOMINAL or missing — same guard as return_type.
+					# Only override the tid_map result when it is missing or
+					# unresolved (UNKNOWN/FORWARD_NOMINAL).
 					impl_target_type_raw = sd.get("impl_target_type")
 					if impl_target_type_raw is not None:
 						it_expr = decode_type_expr(impl_target_type_raw)
 						if it_expr is not None:
-							if _has_type_params:
-								_it_td = type_table.get(impl_tid) if isinstance(impl_tid, int) else None
-								if not isinstance(impl_tid, int) or _it_td is None or _it_td.kind is TypeKind.FORWARD_NOMINAL:
-									impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name, type_params=type_param_map)
-							else:
+							_it_td = type_table.get(impl_tid) if isinstance(impl_tid, int) else None
+							if not isinstance(impl_tid, int) or _it_td is None or _it_td.kind in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 								impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name, type_params=type_param_map)
 
 					# Stage 8.1: resolve error_type from TypeExpr when available.
@@ -8596,7 +8811,9 @@ def main(argv: list[str] | None = None) -> int:
 					if error_type_raw is not None:
 						et_expr = decode_type_expr(error_type_raw)
 						if et_expr is not None:
-							err_tid = resolve_opaque_type(et_expr, type_table, module_id=module_name, type_params=type_param_map)
+							_resolved_err_ext = resolve_opaque_type(et_expr, type_table, module_id=module_name, type_params=type_param_map)
+							if type_table.get(_resolved_err_ext).kind not in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
+								err_tid = _resolved_err_ext
 
 					intrinsic_kind = None
 					intrinsic_kind_raw = sd.get("intrinsic_kind")
@@ -8636,6 +8853,40 @@ def main(argv: list[str] | None = None) -> int:
 						impl_target_type_args=impl_target_type_args,
 						is_instantiation=_is_inst,
 					)
+					# Stage 8.2: dual-path assertion for external signatures.
+				# Skip __inst__ (monomorphized) sigs — their impl_target_type
+				# carries TypeVars from the generic base that can't be resolved
+				# without the original type_param context.
+					if _TYPEXPR_DEBUG and not _has_type_params and not _is_inst:
+						_sig_label = f"ext_sig:{name}"
+						# tid_map baseline values (computed at lines 8584-8592).
+						_raw_ptids_82 = sd.get("param_type_ids")
+						_tm_ptids_82 = [tid_map.get(int(x), int(x)) for x in _raw_ptids_82] if isinstance(_raw_ptids_82, list) else None
+						_raw_ret_82 = sd.get("return_type_id")
+						_tm_ret_82 = tid_map.get(int(_raw_ret_82), int(_raw_ret_82)) if isinstance(_raw_ret_82, int) else None
+						_raw_impl_82 = sd.get("impl_target_type_id")
+						_tm_impl_82 = tid_map.get(int(_raw_impl_82), int(_raw_impl_82)) if isinstance(_raw_impl_82, int) else None
+						if param_type_ids is not None and _tm_ptids_82 is not None and len(param_type_ids) == len(_tm_ptids_82):
+							for _pi, (_te_tid, _tm_tid) in enumerate(zip(param_type_ids, _tm_ptids_82)):
+								_assert_typexpr_tid_match(f"{_sig_label}:param[{_pi}]", _te_tid, _tm_tid, type_table)
+						_assert_typexpr_tid_match(f"{_sig_label}:return", ret_tid, _tm_ret_82, type_table)
+						if impl_tid is not None or _tm_impl_82 is not None:
+							_assert_typexpr_tid_match(f"{_sig_label}:impl_target", impl_tid, _tm_impl_82, type_table)
+						# Validate error_type structural correctness.
+						if err_tid is not None:
+							try:
+								_err_td_82 = type_table.get(err_tid)
+								if _err_td_82.kind is not TypeKind.ERROR:
+									raise AssertionError(
+										f"TYPEXPR_RESOLVE error_type resolved to {_err_td_82.kind.name} "
+										f"(expected ERROR) in {_sig_label}"
+									)
+							except (KeyError, IndexError):
+								raise AssertionError(
+									f"TYPEXPR_RESOLVE error_type resolved to invalid TypeId {err_tid} "
+									f"in {_sig_label}"
+								)
+
 					if module_name is not None and module_name in modules:
 						continue
 					external_signatures_by_name[name] = sig
