@@ -524,7 +524,25 @@ def decode_trait_expr(obj: Any) -> parser_ast.TraitExpr | None:
 	return None
 
 
-def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
+def _canonical_key_to_json(key: object) -> Any:
+	"""Convert a canonical TypeKey tuple to a JSON-serializable structure."""
+	if isinstance(key, tuple):
+		return [_canonical_key_to_json(x) for x in key]
+	if isinstance(key, bool):
+		return key
+	if isinstance(key, (int, str)):
+		return key
+	return str(key)
+
+
+def _canonical_key_from_json(obj: Any) -> object:
+	"""Reconstruct a canonical TypeKey from its JSON representation."""
+	if isinstance(obj, list):
+		return tuple(_canonical_key_from_json(x) for x in obj)
+	return obj
+
+
+def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict[int, object] | None = None) -> dict[str, Any]:
 	"""Encode the TypeTable deterministically."""
 	if table.package_id is None:
 		raise ValueError("type table missing package_id (set TypeTable.package_id before encoding)")
@@ -736,7 +754,16 @@ def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
 		seen_provided.add(item)
 		provided_nominals.append({"kind": key.kind.name, "module_id": key.module_id, "name": key.name})
 
-	return {
+	# Phase 9: serialize pre-computed canonical keys so the consumer can
+	# look them up directly instead of walking the TypeDef graph.
+	canonical_keys_obj: dict[str, Any] | None = None
+	if canonical_keys is not None:
+		canonical_keys_obj = {}
+		for ck_tid in sorted(canonical_keys.keys()):
+			if str(ck_tid) in defs:  # only emit keys for TypeIds that are in defs
+				canonical_keys_obj[str(ck_tid)] = _canonical_key_to_json(canonical_keys[ck_tid])
+
+	out = {
 		"package_id": package_id,
 		"defs": defs,
 		"struct_schemas": struct_schema_entries,
@@ -748,6 +775,9 @@ def encode_type_table(table: TypeTable, *, package_id: str) -> dict[str, Any]:
 		"provided_nominals": provided_nominals,
 		"type_aliases": type_aliases_entries,
 	}
+	if canonical_keys_obj is not None:
+		out["canonical_keys"] = canonical_keys_obj
+	return out
 
 
 def type_table_fingerprint(table_obj: Mapping[str, Any]) -> str:
@@ -1384,9 +1414,10 @@ def encode_module_payload_v0(
 	trait_metadata: list[dict[str, Any]] | None = None,
 	impl_headers: list[dict[str, Any]] | None = None,
 	trait_scope: list[dict[str, Any]] | None = None,
+	canonical_keys: dict[int, object] | None = None,
 ) -> dict[str, Any]:
 	"""Build the provisional payload object (not yet canonical-JSON encoded)."""
-	tt_obj = encode_type_table(type_table, package_id=package_id)
+	tt_obj = encode_type_table(type_table, package_id=package_id, canonical_keys=canonical_keys)
 	consts: list[str] = list(exported_consts or [])
 	const_table: dict[str, Any] = {}
 	exported_const_set: set[str] = set(consts)

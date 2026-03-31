@@ -378,3 +378,158 @@ def test_error_type_unknown_not_accepted() -> None:
 	assert err_tid is None, (
 		f"error_type resolving to unresolved type should not be accepted, got {err_tid}"
 	)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: canonical_keys payload regressions
+# ---------------------------------------------------------------------------
+
+def test_canonical_keys_emitted_in_encoded_type_table() -> None:
+	"""Prove that encode_type_table emits canonical_keys when provided."""
+	from lang.driftc.packages.type_table_link_v0 import compute_canonical_keys
+	from lang.driftc.packages.provisional_dmir_v0 import encode_type_table
+
+	tt = TypeTable()
+	tt.package_id = "test.pkg"
+	tt.module_packages["test.mod"] = "test.pkg"
+	int_tid = tt.ensure_int()
+	base = tt.declare_struct(module_id="test.mod", name="Foo", field_names=["x"])
+	tt.define_struct_fields(base, [int_tid])
+
+	keys = compute_canonical_keys(tt, "test.pkg")
+	result = encode_type_table(tt, package_id="test.pkg", canonical_keys=keys)
+
+	assert "canonical_keys" in result
+	ck = result["canonical_keys"]
+	assert str(int_tid) in ck
+	assert str(base) in ck
+	# Int should be a builtin key.
+	assert ck[str(int_tid)][0] == "builtin"
+	# Foo should be a nominal key with package identity.
+	assert ck[str(base)][0] == "nominal"
+	assert "test.pkg" in ck[str(base)]
+
+
+def test_canonical_keys_absent_when_not_provided() -> None:
+	"""encode_type_table without canonical_keys should not emit the section."""
+	from lang.driftc.packages.provisional_dmir_v0 import encode_type_table
+
+	tt = TypeTable()
+	tt.package_id = "test.pkg"
+	tt.ensure_int()
+
+	result = encode_type_table(tt, package_id="test.pkg")
+	assert "canonical_keys" not in result
+
+
+def test_linker_uses_canonical_keys_shortcut() -> None:
+	"""Prove the linker prefers canonical_keys over TypeDef walk.
+
+	Strategy: encode a valid type table, then mutate the serialized defs to
+	give a struct a wrong name. If the linker used the TypeDef walk, it would
+	see the wrong name and produce a different key. If it uses canonical_keys,
+	the correct key is used regardless of the poisoned def.
+	"""
+	import copy
+	from lang.driftc.packages.type_table_link_v0 import (
+		compute_canonical_keys,
+		decode_type_table_obj,
+		import_type_tables_and_build_typeid_maps,
+	)
+	from lang.driftc.packages.provisional_dmir_v0 import encode_type_table
+
+	# Build a producer type table.
+	producer = TypeTable()
+	producer.package_id = "test.pkg"
+	producer.module_packages["test.mod"] = "test.pkg"
+	int_tid = producer.ensure_int()
+	base = producer.declare_struct(module_id="test.mod", name="Bar", field_names=["v"])
+	producer.define_struct_fields(base, [int_tid])
+
+	# Encode with canonical_keys.
+	keys = compute_canonical_keys(producer, "test.pkg")
+	tt_obj = encode_type_table(producer, package_id="test.pkg", canonical_keys=keys)
+
+	# Poison the def: rename "Bar" to "POISONED" in the serialized defs.
+	# The TypeDef walk would now produce ("nominal", "STRUCT", ..., "POISONED")
+	# but canonical_keys still says ("nominal", "STRUCT", ..., "Bar").
+	tt_obj = dict(tt_obj)
+	tt_obj["defs"] = copy.deepcopy(tt_obj["defs"])
+	tt_obj["defs"][str(base)]["name"] = "POISONED"
+
+	# Link into a host TypeTable.
+	host = TypeTable()
+	tid_maps = import_type_tables_and_build_typeid_maps([tt_obj], host)
+	tid_map = tid_maps[0]
+
+	# If canonical_keys shortcut is active, the struct links as "Bar" (correct).
+	# If the TypeDef walk ran, it would link as "POISONED" (wrong).
+	host_bar = host.get_struct_base(module_id="test.mod", name="Bar")
+	assert host_bar is not None, (
+		"Struct should be linked as 'Bar' via canonical_keys, not 'POISONED' via TypeDef walk"
+	)
+	assert tid_map[base] == host_bar
+
+
+def test_linker_fallback_without_canonical_keys() -> None:
+	"""Prove the linker still works when canonical_keys is absent (v0/v1 compat)."""
+	from lang.driftc.packages.type_table_link_v0 import (
+		import_type_tables_and_build_typeid_maps,
+	)
+	from lang.driftc.packages.provisional_dmir_v0 import encode_type_table
+
+	producer = TypeTable()
+	producer.package_id = "test.pkg"
+	producer.module_packages["test.mod"] = "test.pkg"
+	int_tid = producer.ensure_int()
+	base = producer.declare_struct(module_id="test.mod", name="Baz", field_names=["v"])
+	producer.define_struct_fields(base, [int_tid])
+
+	# Encode WITHOUT canonical_keys (simulating old package).
+	tt_obj = encode_type_table(producer, package_id="test.pkg")
+	assert "canonical_keys" not in tt_obj
+
+	# Link should still work via TypeDef walk fallback.
+	host = TypeTable()
+	tid_maps = import_type_tables_and_build_typeid_maps([tt_obj], host)
+	tid_map = tid_maps[0]
+
+	host_baz = host.get_struct_base(module_id="test.mod", name="Baz")
+	assert host_baz is not None
+	assert tid_map[base] == host_baz
+
+
+def test_typevar_canonical_key_normalizes_owner_package() -> None:
+	"""Prove that TypeVar canonical keys use the owner module's normalized
+	package, not the raw package_id — so lang.core owners inside a std package
+	get 'lang.core' as their package identity."""
+	from lang.driftc.packages.type_table_link_v0 import compute_canonical_keys
+
+	tt = TypeTable()
+	tt.package_id = "std"
+	tt.module_packages["lang.core"] = "lang.core"
+	tt.module_packages["std.containers"] = "std"
+
+	# TypeVar owned by a lang.core function (inside a std package).
+	fn_core = FunctionId(module="lang.core", name="identity", ordinal=0)
+	tp_core = TypeParamId(owner=fn_core, index=0)
+	tv_core = tt.ensure_typevar(tp_core, name="T")
+
+	# TypeVar owned by a std.containers function.
+	fn_std = FunctionId(module="std.containers", name="push", ordinal=0)
+	tp_std = TypeParamId(owner=fn_std, index=0)
+	tv_std = tt.ensure_typevar(tp_std, name="T")
+
+	keys = compute_canonical_keys(tt, "std")
+
+	core_key = keys[tv_core]
+	std_key = keys[tv_std]
+
+	# lang.core owner should have "lang.core" as package, not "std".
+	assert core_key[1] == "lang.core", (
+		f"lang.core typevar should have package 'lang.core', got {core_key}"
+	)
+	# std.containers owner should have "std" as package.
+	assert std_key[1] == "std", (
+		f"std.containers typevar should have package 'std', got {std_key}"
+	)

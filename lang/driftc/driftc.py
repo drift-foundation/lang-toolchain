@@ -10396,10 +10396,17 @@ def main(argv: list[str] | None = None) -> int:
 			if isinstance(_raw_trait_scope, list):
 				for _tk in _raw_trait_scope:
 					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
+			# Phase 9: compute canonical keys for all TypeIds in the module's
+			# type table so the consumer can use them directly instead of
+			# reconstructing keys from the TypeDef graph walk.
+			_emit_tt = checked_pkg.type_table or type_table
+			from lang.driftc.packages.type_table_link_v0 import compute_canonical_keys
+			_canonical_keys = compute_canonical_keys(_emit_tt, package_id)
 			payload_obj = encode_module_payload_v0(
 				package_id=package_id,
 				module_id=mid,
-				type_table=checked_pkg.type_table or type_table,
+				type_table=_emit_tt,
+				canonical_keys=_canonical_keys,
 				signatures=sig_env,
 				mir_funcs=per_module_mir.get(mid, {}),
 				generic_templates=encode_generic_templates(

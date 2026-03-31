@@ -85,6 +85,9 @@ class DecodedTypeTable:
 	variant_schemas: dict[TypeId, VariantSchema]
 	provided_nominals: set[tuple[TypeKind, str, str]]
 	type_aliases: list[tuple[str, str, list[str], GenericTypeExpr]]
+	# Phase 9: pre-computed canonical keys from the producer.
+	# When present, key_for_tid can read from this index instead of walking defs.
+	canonical_keys: dict[TypeId, object] | None = None
 
 
 def _decode_kind(name: str) -> TypeKind:
@@ -535,6 +538,18 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 				raise ValueError("invalid type_aliases entry fields")
 			type_aliases.append((a_mid, a_name, [str(p) for p in a_params], _decode_alias_target(a_target)))
 
+	# Phase 9: decode pre-computed canonical keys if present.
+	canonical_keys: dict[TypeId, object] | None = None
+	canonical_keys_obj = obj.get("canonical_keys")
+	if isinstance(canonical_keys_obj, dict):
+		from lang.driftc.packages.provisional_dmir_v0 import _canonical_key_from_json
+		canonical_keys = {}
+		for ck_tid_s, ck_val in canonical_keys_obj.items():
+			try:
+				canonical_keys[int(ck_tid_s)] = _canonical_key_from_json(ck_val)
+			except (ValueError, TypeError):
+				continue  # skip malformed entries gracefully
+
 	return DecodedTypeTable(
 		package_id=pkg_id,
 		defs=defs,
@@ -546,6 +561,7 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		variant_schemas=variant_schemas,
 		provided_nominals=provided_nominals,
 		type_aliases=type_aliases,
+		canonical_keys=canonical_keys,
 	)
 
 
@@ -611,6 +627,174 @@ def _normalized_pkg_id_for_module(pkg_id: str, module_id: str | None) -> str:
 	if isinstance(module_id, str) and module_id.startswith(("lang.", "std.")):
 		return "std"
 	return pkg_id
+
+
+def compute_canonical_keys(table: TypeTable, package_id: str) -> dict[TypeId, TypeKey]:
+	"""Compute canonical TypeKeys for all TypeIds in a TypeTable.
+
+	Uses the same key format and normalization rules as the linker's
+	key_for_tid(), but operates on a live TypeTable (producer-side).
+	The returned dict can be serialized into the package payload so the
+	consumer can use pre-computed keys instead of walking the TypeDef graph.
+	"""
+	memo: dict[TypeId, TypeKey] = {}
+
+	def _is_builtin(td: TypeDef) -> bool:
+		if td.kind is TypeKind.SCALAR and td.name in {
+			"Int", "Uint", "Uint64", "Int32", "Uint32", "Bool", "Float", "String", "Byte",
+		}:
+			return True
+		return False
+
+	def key_for(tid: TypeId) -> TypeKey:
+		if tid in memo:
+			return memo[tid]
+		# Guard against cycles.
+		memo[tid] = ("cycle", tid)
+		try:
+			td = table.get(tid)
+		except (KeyError, IndexError):
+			k: TypeKey = ("unknown_tid", tid)
+			memo[tid] = k
+			return k
+
+		mid = td.module_id or ""
+		pkg_id = _normalized_pkg_id_for_module(package_id, td.module_id) if mid else ""
+
+		# Builtins.
+		if _is_builtin(td):
+			k = ("builtin", td.kind.name, _canonical_builtin_name(td.name))
+			memo[tid] = k
+			return k
+		if td.kind is TypeKind.VOID:
+			k = ("builtin", "VOID", "Void")
+			memo[tid] = k
+			return k
+		if td.kind is TypeKind.ERROR:
+			k = ("builtin", "ERROR", "Error")
+			memo[tid] = k
+			return k
+		if td.kind is TypeKind.DIAGNOSTICVALUE:
+			k = ("builtin", "DIAGNOSTICVALUE", "DiagnosticValue")
+			memo[tid] = k
+			return k
+		if td.kind is TypeKind.UNKNOWN:
+			k = ("builtin", "UNKNOWN", "Unknown")
+			memo[tid] = k
+			return k
+
+		# Struct instance.
+		if td.kind is TypeKind.STRUCT:
+			inst = table.struct_instances.get(tid)
+			if inst is not None and inst.type_args:
+				try:
+					base_td = table.get(inst.base_id)
+				except (KeyError, IndexError):
+					pass
+				else:
+					base_mid = base_td.module_id or ""
+					base_pkg_id = _normalized_pkg_id_for_module(package_id, base_td.module_id) if base_mid else ""
+					base_key = ("nominal", TypeKind.STRUCT.name, base_pkg_id, base_mid, base_td.name)
+					arg_keys = tuple(key_for(x) for x in inst.type_args)
+					k = ("inst", base_key, arg_keys)
+					memo[tid] = k
+					return k
+
+		# Interface instance.
+		if td.kind is TypeKind.INTERFACE:
+			inst = table.interface_instances.get(tid)
+			if inst is not None and inst.type_args:
+				try:
+					base_td = table.get(inst.base_id)
+				except (KeyError, IndexError):
+					pass
+				else:
+					base_mid = base_td.module_id or ""
+					base_pkg_id = _normalized_pkg_id_for_module(package_id, base_td.module_id) if base_mid else ""
+					base_key = ("nominal", TypeKind.INTERFACE.name, base_pkg_id, base_mid, base_td.name)
+					arg_keys = tuple(key_for(x) for x in inst.type_args)
+					k = ("inst", base_key, arg_keys)
+					memo[tid] = k
+					return k
+
+		# Nominal struct/scalar.
+		if td.kind in (TypeKind.STRUCT, TypeKind.SCALAR):
+			k = ("nominal", td.kind.name, pkg_id, mid, td.name)
+			memo[tid] = k
+			return k
+
+		# FORWARD_NOMINAL.
+		if td.kind is TypeKind.FORWARD_NOMINAL:
+			# Try to resolve to concrete kind.
+			resolved_kind: str | None = None
+			for other_tid in table._defs:
+				if other_tid == tid:
+					continue
+				try:
+					other_td = table.get(other_tid)
+				except (KeyError, IndexError):
+					continue
+				if other_td.module_id == td.module_id and other_td.name == td.name and other_td.kind in (TypeKind.STRUCT, TypeKind.INTERFACE, TypeKind.VARIANT):
+					resolved_kind = other_td.kind.name
+					break
+			k = ("nominal", resolved_kind or td.kind.name, pkg_id, mid, td.name)
+			memo[tid] = k
+			return k
+
+		# Interface nominal.
+		if td.kind is TypeKind.INTERFACE:
+			k = ("nominal", td.kind.name, pkg_id, mid, td.name)
+			memo[tid] = k
+			return k
+
+		# Variant.
+		if td.kind is TypeKind.VARIANT:
+			base_key = ("nominal", TypeKind.VARIANT.name, pkg_id, mid, td.name)
+			vinst = table.variant_instances.get(tid)
+			if vinst is not None and vinst.type_args:
+				arg_keys = tuple(key_for(x) for x in vinst.type_args)
+				k = ("inst", base_key, arg_keys)
+				memo[tid] = k
+				return k
+			if tid in table.variant_schemas and not td.param_types:
+				memo[tid] = base_key
+				return base_key
+			if td.param_types:
+				arg_keys = tuple(key_for(x) for x in td.param_types)
+				k = ("inst", base_key, arg_keys)
+				memo[tid] = k
+				return k
+			memo[tid] = base_key
+			return base_key
+
+		# TypeVar — use normalized package for the owner's module, not
+		# the raw package_id, so lang.core owners inside std packages
+		# get the correct "lang.core" package identity.
+		if td.kind is TypeKind.TYPEVAR and td.type_param_id is not None:
+			owner = td.type_param_id.owner
+			owner_pkg = _normalized_pkg_id_for_module(package_id, owner.module) if owner.module else package_id
+			k = ("typevar", owner_pkg, ("owner", owner.module, owner.name, owner.ordinal), td.type_param_id.index)
+			memo[tid] = k
+			return k
+
+		# Structural / derived types.
+		sub_keys = tuple(key_for(x) for x in td.param_types)
+		if td.kind is TypeKind.ARRAY:
+			k = ("array", sub_keys[0]) if sub_keys else ("array",)
+		elif td.kind is TypeKind.REF:
+			k = ("ref", bool(td.ref_mut), sub_keys[0]) if sub_keys else ("ref",)
+		elif td.kind is TypeKind.FNRESULT:
+			k = ("fnresult", sub_keys[0], sub_keys[1]) if len(sub_keys) >= 2 else ("fnresult",) + sub_keys
+		elif td.kind is TypeKind.FUNCTION:
+			k = ("function", bool(td.fn_throws), sub_keys)
+		else:
+			k = ("kind", td.kind.name, td.name, sub_keys, bool(td.ref_mut))
+		memo[tid] = k
+		return k
+
+	for tid in table._defs:
+		key_for(tid)
+	return memo
 
 
 def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]], host: TypeTable) -> list[dict[TypeId, TypeId]]:
@@ -680,6 +864,17 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		def key_for_tid(tid: TypeId) -> TypeKey:
 			if tid in memo:
 				return memo[tid]
+			# Phase 9: use pre-computed canonical key when available.
+			if pkg.canonical_keys is not None and tid in pkg.canonical_keys:
+				k = pkg.canonical_keys[tid]
+				memo[tid] = k
+				# Still need typevar display name tracking.
+				td = pkg.defs.get(tid)
+				if td is not None and td.kind is TypeKind.TYPEVAR and td.type_param_id is not None:
+					existing_entry = typevar_display_names.get(k)
+					if existing_entry is None or tid < existing_entry[0]:
+						typevar_display_names[k] = (tid, td.name)
+				return k
 			td = pkg.defs.get(tid)
 			if td is None:
 				raise ValueError(f"unknown TypeId {tid} referenced by package type table")
@@ -771,7 +966,8 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				return base_key
 			if td.kind is TypeKind.TYPEVAR:
 				owner = td.type_param_id.owner
-				k = ("typevar", pkg.package_id, ("owner", owner.module, owner.name, owner.ordinal), td.type_param_id.index)
+				owner_pkg = _normalized_pkg_id_for_module(pkg.package_id, owner.module) if owner.module else pkg.package_id
+				k = ("typevar", owner_pkg, ("owner", owner.module, owner.name, owner.ordinal), td.type_param_id.index)
 				existing_entry = typevar_display_names.get(k)
 				if existing_entry is None or tid < existing_entry[0]:
 					typevar_display_names[k] = (tid, td.name)
@@ -796,6 +992,23 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		m: dict[TypeId, TypeKey] = {}
 		for tid in pkg.defs.keys():
 			m[tid] = key_for_tid(tid)
+		# Phase 9: validate serialized canonical keys match linker-computed keys.
+		if pkg.canonical_keys is not None and os.environ.get("DRIFT_DEBUG_CANONICAL_KEYS") == "1":
+			_ck_mismatches = 0
+			for tid, linker_key in m.items():
+				serialized_key = pkg.canonical_keys.get(tid)
+				if serialized_key is not None and serialized_key != linker_key:
+					_ck_mismatches += 1
+					if _ck_mismatches <= 10:
+						import sys
+						print(
+							f"CANONICAL_KEY MISMATCH tid={tid}: "
+							f"serialized={serialized_key} linker={linker_key}",
+							file=sys.stderr,
+						)
+			if _ck_mismatches > 0:
+				import sys
+				print(f"CANONICAL_KEY: {_ck_mismatches} mismatches in package {pkg.package_id}", file=sys.stderr)
 		pkg_tid_to_key.append(m)
 
 	# Phase A: merge/validate exception schemas (keyed by canonical event fqn).
