@@ -1657,22 +1657,85 @@ def _build_package_consumer_unit(
 					fn_id = function_id_from_obj(fn_id_obj)
 					if fn_id is None or fn_id in pkg_sigs_by_id:
 						continue
-					param_type_ids = sd.get("param_type_ids")
-					if isinstance(param_type_ids, list):
-						param_type_ids = [tid_map.get(int(x), int(x)) for x in param_type_ids]
-					ret_tid = sd.get("return_type_id")
-					if isinstance(ret_tid, int):
-						ret_tid = tid_map.get(ret_tid, ret_tid)
-					impl_tid = sd.get("impl_target_type_id")
-					if isinstance(impl_tid, int):
-						impl_tid = tid_map.get(impl_tid, impl_tid)
+					sig_module = sd.get("module")
+
+					# Stage 8.1: prefer TypeExpr resolution over raw TypeId remapping.
+					# When param_types / return_type / impl_target_type / error_type
+					# are present in the payload, resolve them via resolve_opaque_type
+					# to get host TypeIds directly. Fall back to tid_map remapping for
+					# old-format packages (payload_version 0 without TypeExpr fields).
+					#
+					# EXCEPTION: signatures with type_params carry TypeExprs that
+					# reference type variables (e.g. {"param": "T"}).  This consumer
+					# path has no type_param context, so TypeExpr resolution would
+					# produce Unknown for those references.  For generic signatures,
+					# always use the tid_map path — the main() external signature
+					# reconstruction handles generics with full type_param context.
+					_sd_type_params = sd.get("type_params")
+					_sd_impl_type_params = sd.get("impl_type_params")
+					_has_type_params = bool(_sd_type_params) or bool(_sd_impl_type_params)
+
+					param_types_raw = sd.get("param_types") if not _has_type_params else None
+					return_type_raw = sd.get("return_type") if not _has_type_params else None
+					impl_target_type_raw = sd.get("impl_target_type") if not _has_type_params else None
+					error_type_raw = sd.get("error_type") if not _has_type_params else None
+
+					param_type_ids = None
+					if param_types_raw is not None:
+						# TypeExpr path: decode and resolve each param type.
+						# If any entry fails to decode, fall back to raw TypeIds
+						# entirely rather than inserting Unknown for partial entries.
+						resolved = []
+						_all_ok = True
+						for pt_obj in param_types_raw:
+							pt_expr = decode_type_expr(pt_obj)
+							if pt_expr is not None:
+								resolved.append(resolve_opaque_type(pt_expr, type_table, module_id=sig_module))
+							else:
+								_all_ok = False
+								break
+						if _all_ok:
+							param_type_ids = resolved
+					if param_type_ids is None:
+						# Fallback: raw TypeId + tid_map remapping.
+						raw_ptids = sd.get("param_type_ids")
+						if isinstance(raw_ptids, list):
+							param_type_ids = [tid_map.get(int(x), int(x)) for x in raw_ptids]
+
+					ret_tid = None
+					if return_type_raw is not None:
+						rt_expr = decode_type_expr(return_type_raw)
+						if rt_expr is not None:
+							ret_tid = resolve_opaque_type(rt_expr, type_table, module_id=sig_module)
+					if ret_tid is None:
+						raw_ret = sd.get("return_type_id")
+						if isinstance(raw_ret, int):
+							ret_tid = tid_map.get(raw_ret, raw_ret)
+
+					impl_tid = None
+					if impl_target_type_raw is not None:
+						it_expr = decode_type_expr(impl_target_type_raw)
+						if it_expr is not None:
+							impl_tid = resolve_opaque_type(it_expr, type_table, module_id=sig_module)
+					if impl_tid is None:
+						raw_impl = sd.get("impl_target_type_id")
+						if isinstance(raw_impl, int):
+							impl_tid = tid_map.get(raw_impl, raw_impl)
+
+					err_tid = None
+					if error_type_raw is not None:
+						et_expr = decode_type_expr(error_type_raw)
+						if et_expr is not None:
+							err_tid = resolve_opaque_type(et_expr, type_table, module_id=sig_module)
+
 					pkg_sigs_by_id[fn_id] = FnSignature(
 						name=str(sd.get("name") or name),
-						module=sd.get("module"),
+						module=sig_module,
 						method_name=sd.get("method_name"),
 						param_names=sd.get("param_names"),
 						param_type_ids=param_type_ids,
 						return_type_id=ret_tid,
+						error_type_id=err_tid,
 						declared_can_throw=sd.get("declared_can_throw"),
 						is_method=bool(sd.get("is_method", False)),
 						self_mode=sd.get("self_mode"),
@@ -8512,6 +8575,29 @@ def main(argv: list[str] | None = None) -> int:
 								_ret_td = type_table.get(ret_tid) if isinstance(ret_tid, int) else None
 								if not isinstance(ret_tid, int) or _ret_td is None or _ret_td.kind is TypeKind.FORWARD_NOMINAL:
 									ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
+
+					# Stage 8.1: resolve impl_target_type from TypeExpr when available.
+					# For generic signatures, only override when the tid_map result
+					# is FORWARD_NOMINAL or missing — same guard as return_type.
+					impl_target_type_raw = sd.get("impl_target_type")
+					if impl_target_type_raw is not None:
+						it_expr = decode_type_expr(impl_target_type_raw)
+						if it_expr is not None:
+							if _has_type_params:
+								_it_td = type_table.get(impl_tid) if isinstance(impl_tid, int) else None
+								if not isinstance(impl_tid, int) or _it_td is None or _it_td.kind is TypeKind.FORWARD_NOMINAL:
+									impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name, type_params=type_param_map)
+							else:
+								impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name, type_params=type_param_map)
+
+					# Stage 8.1: resolve error_type from TypeExpr when available.
+					error_type_raw = sd.get("error_type")
+					err_tid: TypeId | None = None
+					if error_type_raw is not None:
+						et_expr = decode_type_expr(error_type_raw)
+						if et_expr is not None:
+							err_tid = resolve_opaque_type(et_expr, type_table, module_id=module_name, type_params=type_param_map)
+
 					intrinsic_kind = None
 					intrinsic_kind_raw = sd.get("intrinsic_kind")
 					if isinstance(intrinsic_kind_raw, str):
@@ -8530,6 +8616,7 @@ def main(argv: list[str] | None = None) -> int:
 						param_mutable=param_mutable,
 						param_type_ids=param_type_ids,
 						return_type_id=ret_tid,
+						error_type_id=err_tid,
 						declared_can_throw=sd.get("declared_can_throw"),
 						declared_unsafe=bool(sd.get("declared_unsafe", False)) or None,
 						is_intrinsic=is_intrinsic,

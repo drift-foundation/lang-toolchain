@@ -190,6 +190,177 @@ def decode_span(obj: Any) -> Span | None:
 	return Span(file=file, line=line, column=column, end_line=end_line, end_column=end_column)
 
 
+def typeid_to_type_expr(
+	tid: TypeId | None,
+	type_table: TypeTable,
+	*,
+	type_param_names: dict[TypeParamId, str] | None = None,
+	export_aliases: dict[TypeId, tuple[str | None, str]] | None = None,
+	_visited: frozenset[TypeId] | None = None,
+) -> parser_ast.TypeExpr | None:
+	"""
+	Reconstruct a TypeExpr from a TypeId by walking the TypeDef graph.
+
+	This is the inverse of resolve_opaque_type: given a TypeId produced during
+	source compilation, reconstruct the symbolic TypeExpr that the consumer can
+	resolve back to a host TypeId via resolve_opaque_type.
+
+	Handles the full TypeDef shape space: nominals, generic instantiations,
+	refs, arrays, fn types, FnResult, RawPtr, scalars, builtins, TypeVars,
+	and aliases.
+	"""
+	if tid is None:
+		return None
+	if _visited is None:
+		_visited = frozenset()
+	if tid in _visited:
+		return None  # cycle guard
+	_visited = _visited | {tid}
+
+	# Alias check: if this TypeId maps to a public alias, use the alias spelling.
+	if export_aliases and tid in export_aliases:
+		alias_mod, alias_name = export_aliases[tid]
+		return parser_ast.TypeExpr(name=alias_name, args=[], module_alias=None, module_id=alias_mod, loc=None)
+
+	try:
+		td = type_table.get(tid)
+	except (KeyError, IndexError):
+		return None
+
+	kind = td.kind
+
+	def _recurse(child_tid: TypeId) -> parser_ast.TypeExpr | None:
+		return typeid_to_type_expr(
+			child_tid, type_table,
+			type_param_names=type_param_names,
+			export_aliases=export_aliases,
+			_visited=_visited,
+		)
+
+	# --- TypeVar ---
+	if kind is TypeKind.TYPEVAR:
+		name = td.name
+		if type_param_names and td.type_param_id is not None and td.type_param_id in type_param_names:
+			name = type_param_names[td.type_param_id]
+		return parser_ast.TypeExpr(name=name, args=[], module_alias=None, module_id=None, loc=None)
+
+	# --- Builtins / scalars ---
+	if kind is TypeKind.VOID:
+		return parser_ast.TypeExpr(name="Void", args=[], module_alias=None, module_id=None, loc=None)
+	if kind is TypeKind.ERROR:
+		return parser_ast.TypeExpr(name="Error", args=[], module_alias=None, module_id=None, loc=None)
+	if kind is TypeKind.DIAGNOSTICVALUE:
+		return parser_ast.TypeExpr(name="DiagnosticValue", args=[], module_alias=None, module_id=None, loc=None)
+	if kind is TypeKind.UNKNOWN:
+		return None
+	if kind is TypeKind.SCALAR:
+		# Builtins (Int, Bool, etc.) have module_id=None; module-scoped scalars
+		# (e.g. m.Size) carry a module_id that must be preserved so the consumer
+		# resolves the correct nominal type.
+		return parser_ast.TypeExpr(name=td.name, args=[], module_alias=None, module_id=td.module_id, loc=None)
+
+	# --- Ref ---
+	if kind is TypeKind.REF:
+		if not td.param_types:
+			return None
+		inner = _recurse(td.param_types[0])
+		if inner is None:
+			return None
+		ref_name = "&mut" if td.ref_mut else "&"
+		return parser_ast.TypeExpr(name=ref_name, args=[inner], module_alias=None, module_id=None, loc=None)
+
+	# --- Array ---
+	if kind is TypeKind.ARRAY:
+		if not td.param_types:
+			return None
+		elem = _recurse(td.param_types[0])
+		if elem is None:
+			return None
+		return parser_ast.TypeExpr(name="Array", args=[elem], module_alias=None, module_id=None, loc=None)
+
+	# --- RawPtr ---
+	if kind is TypeKind.RAW_PTR:
+		if not td.param_types:
+			return None
+		inner = _recurse(td.param_types[0])
+		if inner is None:
+			return None
+		return parser_ast.TypeExpr(name="RawPtr", args=[inner], module_alias=None, module_id=None, loc=None)
+
+	# --- FnResult ---
+	if kind is TypeKind.FNRESULT:
+		if len(td.param_types) < 2:
+			return None
+		ok = _recurse(td.param_types[0])
+		err = _recurse(td.param_types[1])
+		if ok is None or err is None:
+			return None
+		return parser_ast.TypeExpr(name="FnResult", args=[ok, err], module_alias=None, module_id=None, loc=None)
+
+	# --- Function type ---
+	if kind is TypeKind.FUNCTION:
+		if not td.param_types:
+			return None
+		# param_types layout: [param0, param1, ..., return_type]
+		param_exprs = []
+		for pt in td.param_types[:-1]:
+			pe = _recurse(pt)
+			if pe is None:
+				return None
+			param_exprs.append(pe)
+		ret = _recurse(td.param_types[-1])
+		if ret is None:
+			return None
+		param_exprs.append(ret)
+		return parser_ast.TypeExpr(
+			name="fn", args=param_exprs, fn_throws=td.fn_throws,
+			module_alias=None, module_id=None, loc=None,
+		)
+
+	# --- Nominal types: STRUCT, VARIANT, INTERFACE, EXCEPTION ---
+	if kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.INTERFACE):
+		# Check for generic instantiation via instance tables.
+		inst = None
+		if kind is TypeKind.STRUCT:
+			inst = type_table.get_struct_instance(tid)
+		elif kind is TypeKind.VARIANT:
+			inst = type_table.variant_instances.get(tid)
+		elif kind is TypeKind.INTERFACE:
+			inst = type_table.interface_instances.get(tid)
+
+		if inst is not None and inst.type_args:
+			# Generic instantiation: recurse on type_args.
+			base_td = type_table.get(inst.base_id)
+			arg_exprs = []
+			for arg in inst.type_args:
+				ae = _recurse(arg)
+				if ae is None:
+					return None
+				arg_exprs.append(ae)
+			return parser_ast.TypeExpr(
+				name=base_td.name, args=arg_exprs,
+				module_alias=None, module_id=base_td.module_id, loc=None,
+			)
+		# Non-generic nominal.
+		return parser_ast.TypeExpr(
+			name=td.name, args=[], module_alias=None, module_id=td.module_id, loc=None,
+		)
+
+	# --- FORWARD_NOMINAL fallback ---
+	if kind is TypeKind.FORWARD_NOMINAL:
+		args = []
+		for pt in td.param_types:
+			ae = _recurse(pt)
+			if ae is None:
+				return None
+			args.append(ae)
+		return parser_ast.TypeExpr(
+			name=td.name, args=args, module_alias=None, module_id=td.module_id, loc=None,
+		)
+
+	return None
+
+
 def encode_type_expr(
 	expr: parser_ast.TypeExpr | None,
 	*,
@@ -590,8 +761,19 @@ def type_table_fingerprint(table_obj: Mapping[str, Any]) -> str:
 	return sha256_hex(canonical_json_bytes(dict(table_obj)))
 
 
-def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) -> dict[str, Any]:
-	"""Encode module-local signatures (deterministic ordering)."""
+def encode_signatures(
+	signatures: Mapping[str, FnSignature],
+	*,
+	module_id: str,
+	type_table: TypeTable | None = None,
+) -> dict[str, Any]:
+	"""Encode module-local signatures (deterministic ordering).
+
+	When type_table is provided, any signature missing parser-originating
+	TypeExprs (param_types, return_type) will have them reconstructed from
+	TypeIds via typeid_to_type_expr. Additionally, impl_target_type and
+	error_type are always populated from TypeIds when available.
+	"""
 	out: dict[str, Any] = {}
 	for name in sorted(signatures.keys()):
 		sig = signatures[name]
@@ -603,12 +785,41 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 		type_param_names = [p.name for p in getattr(sig, "type_params", []) or []]
 		impl_type_param_names = [p.name for p in getattr(sig, "impl_type_params", []) or []]
 		type_param_name_set = set(type_param_names) | set(impl_type_param_names)
+
+		# Build TypeParamId -> name map for typeid_to_type_expr.
+		tp_id_names: dict[TypeParamId, str] | None = None
+		if type_table is not None:
+			tp_id_names = {}
+			for tp in getattr(sig, "impl_type_params", []) or []:
+				if hasattr(tp, "id") and tp.id is not None:
+					tp_id_names[tp.id] = tp.name
+			for tp in getattr(sig, "type_params", []) or []:
+				if hasattr(tp, "id") and tp.id is not None:
+					tp_id_names[tp.id] = tp.name
+
 		param_types_obj = None
 		if sig.param_types is not None:
 			param_types_obj = [
 				encode_type_expr(p, default_module=sig_module, type_param_names=type_param_name_set)
 				for p in list(sig.param_types)
 			]
+		elif type_table is not None and sig.param_type_ids is not None:
+			# Reconstruct from TypeIds when parser TypeExprs are missing.
+			reconstructed = []
+			for ptid in sig.param_type_ids:
+				expr = typeid_to_type_expr(ptid, type_table, type_param_names=tp_id_names)
+				if expr is None:
+					raise ValueError(
+						f"typeid_to_type_expr failed for param TypeId {ptid} in signature '{name}'"
+					)
+				encoded = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
+				if encoded is None:
+					raise ValueError(
+						f"encode_type_expr failed for reconstructed param TypeExpr '{expr.name}' in signature '{name}'"
+					)
+				reconstructed.append(encoded)
+			param_types_obj = reconstructed
+
 		return_type_obj = None
 		if sig.return_type is not None:
 			return_type_obj = encode_type_expr(
@@ -616,6 +827,48 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 				default_module=sig_module,
 				type_param_names=type_param_name_set,
 			)
+		elif type_table is not None and sig.return_type_id is not None:
+			expr = typeid_to_type_expr(sig.return_type_id, type_table, type_param_names=tp_id_names)
+			if expr is None:
+				raise ValueError(
+					f"typeid_to_type_expr failed for return TypeId {sig.return_type_id} in signature '{name}'"
+				)
+			return_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
+			if return_type_obj is None:
+				raise ValueError(
+					f"encode_type_expr failed for reconstructed return TypeExpr '{expr.name}' in signature '{name}'"
+				)
+
+		# impl_target_type: always synthesize from TypeId when available.
+		impl_target_type_obj = None
+		impl_tid = getattr(sig, "impl_target_type_id", None)
+		if type_table is not None and impl_tid is not None:
+			expr = typeid_to_type_expr(impl_tid, type_table, type_param_names=tp_id_names)
+			if expr is None:
+				raise ValueError(
+					f"typeid_to_type_expr failed for impl_target TypeId {impl_tid} in signature '{name}'"
+				)
+			impl_target_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
+			if impl_target_type_obj is None:
+				raise ValueError(
+					f"encode_type_expr failed for reconstructed impl_target TypeExpr '{expr.name}' in signature '{name}'"
+				)
+
+		# error_type: synthesize from error_type_id when available.
+		error_type_obj = None
+		err_tid = getattr(sig, "error_type_id", None)
+		if type_table is not None and err_tid is not None:
+			expr = typeid_to_type_expr(err_tid, type_table, type_param_names=tp_id_names)
+			if expr is None:
+				raise ValueError(
+					f"typeid_to_type_expr failed for error TypeId {err_tid} in signature '{name}'"
+				)
+			error_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
+			if error_type_obj is None:
+				raise ValueError(
+					f"encode_type_expr failed for reconstructed error TypeExpr '{expr.name}' in signature '{name}'"
+				)
+
 		out[name] = {
 			"name": sig.name,
 			"module": sig_module,
@@ -654,6 +907,8 @@ def encode_signatures(signatures: Mapping[str, FnSignature], *, module_id: str) 
 			"impl_type_params": impl_type_param_names,
 			"param_types": param_types_obj,
 			"return_type": return_type_obj,
+			"impl_target_type": impl_target_type_obj,
+			"error_type": error_type_obj,
 		}
 	return out
 
@@ -1177,7 +1432,7 @@ def encode_module_payload_v0(
 		"internal_consts": internal_const_table,
 		"type_table": tt_obj,
 		"type_table_fingerprint": type_table_fingerprint(tt_obj),
-		"signatures": encode_signatures(signatures, module_id=module_id),
+		"signatures": encode_signatures(signatures, module_id=module_id, type_table=type_table),
 		"generic_templates": _to_jsonable(list(generic_templates or [])),
 		"mir_funcs": {name: _to_jsonable(mir_funcs[name]) for name in sorted(mir_funcs.keys())},
 		"trait_scope": list(trait_scope) if trait_scope is not None else [],
