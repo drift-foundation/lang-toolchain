@@ -5716,6 +5716,13 @@ def compile_stubbed_funcs(
 					return
 			_walk_expr_ids(block)
 
+	# Clear the has_drop cache immediately before MIR lowering so that
+	# _param_drop_locals in HIRToMIR sees the same has_drop() answers as
+	# the post-pass.  Without this, stale False entries from pre-K39 queries
+	# persist and _emit_scope_drops omits drops for types whose destructor
+	# was registered by K39 generic instantiation.
+	if shared_type_table is not None:
+		shared_type_table._needs_drop_cache.clear()
 	hir_to_mir_start = None
 	if _timing_enabled:
 		import time as _timing_time
@@ -7114,7 +7121,7 @@ def compile_stubbed_funcs(
 	# into Return-terminating blocks that lack them.
 	if shared_type_table is not None:
 		shared_type_table._needs_drop_cache.clear()
-		for func in mir_funcs_by_id.values():
+		for fn_id, func in mir_funcs_by_id.items():
 			_postdrop_inject_missing_param_drops(func, shared_type_table)
 	# Stage3: summaries
 	code_to_exc = {code: name for name, code in (exc_env or {}).items()}

@@ -1,6 +1,44 @@
 # Drift development history
 
 ## 2026-04-01
+- **Clear `_needs_drop_cache` before MIR lowering to prevent stale `has_drop` results from omitting scope-exit drops (0.27.135, ABI 7)**:
+  The `_needs_drop_cache` on the shared TypeTable could contain stale False
+  entries from pre-K39 queries when MIR lowering began, causing
+  `_param_drop_locals` to miss parameters that need scope-exit drops.
+  - Root cause (from IR diff of PEX vs source-stdlib builds):
+    - `serve__impl` (the codegen body of `web.rest.server::serve`) had no
+      scope-exit drop for `handle: ServerHandle` in the PEX build, but did
+      in the source build
+    - the PEX path consumes stdlib as a package — `destructor_fns` is
+      installed by `_install_destructor_fns` and K39 before MIR lowering,
+      but intervening `has_drop` queries (from borrow checker, trait
+      enforcement, etc.) cached False for `ServerHandle` before K39 added
+      the `Arc<AtomicBool>` generic destroy instantiation
+    - when `HIRToMIR` ran, `_needs_runtime_drop(ServerHandle)` returned the
+      cached False → `handle` was not in `_param_drop_locals` →
+      `_emit_scope_drops` emitted no drop
+    - the post-pass (which clears the cache first) saw `has_drop=True` and
+      injected `__postdrop_handle_1` — but string_arc had already emitted
+      its own cleanup, creating a double-drop
+    - the source-stdlib path avoided this because `has_drop` was stable from
+      the start (no stale cache — stdlib types are fully declared before
+      any queries)
+  - Fix:
+    - clear `shared_type_table._needs_drop_cache` immediately before the
+      MIR lowering loop (line 5719), after K39 and all destructor_fns
+      mutations are complete
+    - this ensures `_param_drop_locals` sees the same `has_drop` answers as
+      the post-pass, eliminating the cache-divergence window
+  - Why prior fixes didn't catch this:
+    - 0.27.132-0.27.134 addressed the post-pass detection logic, but the
+      root issue was that MIR lowering made the wrong drop decision in the
+      first place due to stale cache
+    - the post-pass was correctly compensating for the stale cache, but its
+      injection conflicted with string_arc's independent cleanup
+  - Versioning:
+    - compiler version is `0.27.135`
+    - ABI remains `7`
+
 - **Tightened post-pass moved-away parameter detection to require real ownership transfer and preserve drops after reinitialization (0.27.134, ABI 7)**:
   This follows the initial `_run_serve` moved-away fix by narrowing the
   ownership-transfer detection so post-pass drop suppression only happens for
