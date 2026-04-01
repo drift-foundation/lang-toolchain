@@ -2205,6 +2205,24 @@ class TypeTable:
 					_assert_structural_cacheable(tid)
 					cache_structural[tid] = False
 					return False
+				# Also check destructor_fns — is_destructible relies on the
+				# trait prover which may not resolve cross-package generic
+				# types.  destructor_fns is the authoritative source; if any
+				# registered destructor shares this type's (name, module_id),
+				# it's Destructible and therefore not Copy.
+				_dfns = getattr(self, "destructor_fns", None)
+				if isinstance(_dfns, dict):
+					if _dfns.get(tid) is not None:
+						_assert_structural_cacheable(tid)
+						cache_structural[tid] = False
+						return False
+					if td.module_id is not None:
+						for _dtid in _dfns:
+							_dtd = self.get(_dtid)
+							if _dtd.name == td.name and _dtd.module_id == td.module_id:
+								_assert_structural_cacheable(tid)
+								cache_structural[tid] = False
+								return False
 				ok = all(_is_copy_structural(f) for f in inst.field_types)
 				_assert_structural_cacheable(tid)
 				cache_structural[tid] = ok

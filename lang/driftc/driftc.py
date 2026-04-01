@@ -5721,6 +5721,13 @@ def compile_stubbed_funcs(
 	# was registered by K39 generic instantiation.
 	if shared_type_table is not None:
 		shared_type_table._needs_drop_cache.clear()
+		# Also clear the structural copy cache.  Stale True entries for
+		# structs whose fields include Destructible types (VirtualThread,
+		# Arc) can cause match-arm codegen to treat non-Copy payloads as
+		# Copy, skipping the payload-moved flag and emitting a spurious
+		# scrutinee drop that destroys the already-extracted payload.
+		if hasattr(shared_type_table, "_copy_cache_structural"):
+			shared_type_table._copy_cache_structural.clear()
 	hir_to_mir_start = None
 	if _timing_enabled:
 		import time as _timing_time

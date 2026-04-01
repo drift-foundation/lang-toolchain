@@ -1,6 +1,24 @@
 # Drift development history
 
 ## 2026-04-01
+- **Fix `copy_status` structural fallback to check `destructor_fns`, preventing match-arm use-after-move for non-Copy payloads in PEX builds (0.27.137, ABI 7)**:
+  The `copy_status()` structural fallback returned True (Copy) for structs
+  containing Destructible fields when the trait prover couldn't resolve
+  `is_destructible` for cross-package generic types (PEX path). This caused
+  match-arm lowering to treat `Result<RunningServer, RestError>` Ok payload
+  as Copy, emitting a scrutinee drop that destroyed the already-extracted
+  `RunningServer` — cancelling its `VirtualThread` before the server ran.
+  - Root cause:
+    - PEX: `copy_status(RunningServer)` → structural fallback → recursed
+      into fields → `VirtualThread` (package-linked TypeId) →
+      `is_destructible` False (trait prover failed) → concluded Copy
+    - source: same path but trait prover succeeded → non-Copy → correct
+  - Fix:
+    - `_is_copy_structural` now checks `destructor_fns` (exact TypeId and
+      name+module match) before recursing into fields
+    - `_copy_cache_structural` cleared before MIR lowering
+  - Versioning: compiler 0.27.137, ABI 7
+
 - **Replace `__postdrop_*` inference with explicit `param_drop_status` and diagnostic (0.27.136, ABI 7)**:
   Drop refactor Phases A/B/D hybrid: the post-pass no longer silently injects
   drops via MIR pattern scanning. Instead, HIR-to-MIR lowering records
