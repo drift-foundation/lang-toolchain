@@ -5144,7 +5144,7 @@ def resolve_call_expr(
 					res = InferResult(ok=False, subst=None, inst_params=None, inst_return=None, error=InferError(kind=InferErrorKind.CANNOT_INFER), context=ctx_fail)
 					msg, notes = _format_infer_failure(ctx_fail, res)
 					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+					raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
 			world = None
 			applicable: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			require_rejected: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []

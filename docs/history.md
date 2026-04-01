@@ -1,5 +1,39 @@
 # Drift development history
 
+## 2026-04-01
+- **Fixed source-mode `pub type` alias/re-export resolution ordering so facade aliases no longer create divergent `FORWARD_NOMINAL` identities during signature/body checking (0.27.131, ABI 7)**:
+  This fixes the source-compilation bug where a module could reference a public
+  type alias re-export from another module before that alias had been
+  registered, causing `resolve_opaque_type` to fall through to
+  `ensure_named(...)` and materialize the facade name as a `FORWARD_NOMINAL`
+  instead of the concrete origin type.
+  - Root cause:
+    - `pub type` aliases were registered during per-module lowering in
+      `parse_drift_workspace_to_hir`
+    - if a consumer module was lowered before the facade/origin module that
+      defined the public alias, surface references like `rest.Response` could
+      resolve to `FORWARD_NOMINAL web.rest::Response`
+    - generic instantiations and overload matching then diverged from the
+      concrete `web.rest.response::Response` / `web.rest.errors::RestError`
+      identities, producing source-mode overload failures such as the
+      drift-web `add_route(...)` regression
+  - Fix:
+    - added a pre-registration phase in `parse_drift_workspace_to_hir` that
+      scans all modules up front and registers every public type alias into the
+      shared `TypeTable` before any module lowering begins
+    - existing per-module lowering remains the second phase
+    - source mode now resolves re-exported alias names to the same concrete
+      canonical types as package-mode linking instead of depending on late
+      canonicalization or package-path masking
+  - Regression coverage:
+    - focused source-mode regression for public alias resolution through a
+      facade module
+    - drift-web-shaped regression covering the `add_route(...)` pattern that
+      originally failed certification
+  - Versioning:
+    - compiler version is `0.27.131`
+    - ABI remains `7`
+
 ## 2026-03-31
 - **Completed the full compiler/package interface redesign through Phases 1-10, made `TypeExpr` and `canonical_keys` authoritative for package consumption, enabled slimmed package defs, and removed old-package fallback loading (0.27.130, ABI 7)**:
   This closes the multi-phase boundary refactor and package-format cleanup that

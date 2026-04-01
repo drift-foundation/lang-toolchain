@@ -3230,7 +3230,29 @@ def parse_drift_workspace_to_hir(
 	fn_owner_module: dict[FunctionId, str] = {}
 	impls_by_module: dict[str, list[ImplMeta]] = {}
 
-	# Lower each module and qualify its callable symbols.
+	# ── Phase 1: register pub type aliases for ALL modules before lowering. ──
+	# This ensures that when module A references module B's pub type alias
+	# during signature resolution, the alias is already in the type table —
+	# regardless of module processing order. Without this, a module lowered
+	# before its dependency creates FORWARD_NOMINALs for aliased types.
+	for mid, prog in merged_programs.items():
+		for alias in getattr(prog, "type_aliases", []) or []:
+			if not getattr(alias, "is_pub", False):
+				continue
+			alias_name = getattr(alias, "name", None)
+			alias_target = getattr(alias, "target", None)
+			raw_params = getattr(alias, "type_params", []) or []
+			alias_params = [p.name if hasattr(p, "name") else str(p) for p in raw_params]
+			if alias_name and alias_target:
+				if shared_type_table.lookup_type_alias(module_id=mid, name=alias_name) is None:
+					shared_type_table.define_type_alias(
+						module_id=mid,
+						name=alias_name,
+						type_params=alias_params,
+						target=alias_target,
+					)
+
+	# ── Phase 2: lower each module and qualify its callable symbols. ──
 	for mid, prog in merged_programs.items():
 		func_hirs, sigs, ids_by_name, _table, excs, impl_metas, diags = _lower_parsed_program_to_hir(
 			prog,
@@ -3295,10 +3317,10 @@ def parse_drift_workspace_to_hir(
 
 	# Register type aliases for star-re-exported types so that the exporting
 	# module’s name is a valid alias for the origin type.  Explicit `pub type`
-	# aliases are already registered during per-module lowering; this covers
-	# star re-exports (`export { other.module.* }`) which do not create
-	# explicit alias declarations but still need alias entries in the type
-	# table for correct serialization and consumer-side resolution.
+	# aliases are pre-registered in Phase 1 above; this covers star
+	# re-exports (`export { other.module.* }`) which do not create explicit
+	# alias declarations but still need alias entries in the type table for
+	# correct serialization and consumer-side resolution.
 	for exporting_mid, kind_targets in reexported_type_targets_by_module.items():
 		for kind, targets in kind_targets.items():
 			for local_name, (origin_mid, origin_name) in targets.items():
