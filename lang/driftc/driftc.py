@@ -3023,7 +3023,19 @@ def _postdrop_inject_missing_param_drops(func: "M.MirFunc", type_table: "TypeTab
 	Checks for existing drops emitted by both _emit_scope_drops (MoveOut) and
 	any prior post-pass injection (LoadLocal).  Both must be recognized to
 	avoid double-drops.
+
+	Also detects parameters that were moved away via the string_arc move
+	pattern (LoadLocal(param) + ZeroValue + StoreLocal(param, zero)) and NOT
+	subsequently reinitialized — ownership was transferred to a callee.
 	"""
+	# Collect ZeroValue destinations across all blocks — these are the
+	# "zero sentinels" that string_arc uses to mark a move.
+	_zero_dests: set[str] = set()
+	for block in func.blocks.values():
+		for instr in block.instructions:
+			if isinstance(instr, M.ZeroValue):
+				_zero_dests.add(instr.dest)
+
 	for param_name in func.params:
 		param_ty = func.local_types.get(param_name)
 		if param_ty is None:
@@ -3033,7 +3045,14 @@ def _postdrop_inject_missing_param_drops(func: "M.MirFunc", type_table: "TypeTab
 		# Check if any block already has a DropValue for this param
 		# (via MoveOut or LoadLocal producing a value that feeds DropValue).
 		# _emit_scope_drops emits MoveOut; manual/post-pass drops use LoadLocal.
+		# string_arc may also emit LoadLocal→DropValue via _drop_all_destructibles.
 		_has_existing_drop = False
+		# Also detect the string_arc move pattern: within a single block,
+		# LoadLocal(local=param) followed later by StoreLocal(local=param,
+		# value=<zero>), with no subsequent non-zero StoreLocal reinitializing
+		# the param in ANY block.  This is the ownership-transfer pattern where
+		# the loaded value is forwarded to a Call.
+		_was_moved_away = False
 		for block in func.blocks.values():
 			for instr in block.instructions:
 				if isinstance(instr, (M.LoadLocal, M.MoveOut)) and instr.local == param_name:
@@ -3046,7 +3065,41 @@ def _postdrop_inject_missing_param_drops(func: "M.MirFunc", type_table: "TypeTab
 					break
 			if _has_existing_drop:
 				break
-		if _has_existing_drop:
+		if not _has_existing_drop:
+			# Scan for the move-away pattern: within a block, require BOTH
+			# LoadLocal(local=param) and a later StoreLocal(local=param, <zero>).
+			# Then verify no block reinitializes param with a non-zero value
+			# after the zero-store.
+			_has_load_then_zero = False
+			for block in func.blocks.values():
+				_seen_load = False
+				for instr in block.instructions:
+					if isinstance(instr, M.LoadLocal) and instr.local == param_name:
+						_seen_load = True
+					elif isinstance(instr, M.StoreLocal) and instr.local == param_name:
+						if _seen_load and instr.value in _zero_dests:
+							_has_load_then_zero = True
+							break
+						# Non-zero store after load → not a simple move pattern.
+						_seen_load = False
+			if _has_load_then_zero:
+				# Check that no block reinitializes the param with a non-zero
+				# value (e.g. param reassigned from a new constructor).  Scan
+				# all StoreLocal(local=param) — if any stores a value that is
+				# NOT a ZeroValue dest, the param is reinitialized and still
+				# needs a drop.
+				_reinitialized = False
+				for block in func.blocks.values():
+					_past_zero = False
+					for instr in block.instructions:
+						if isinstance(instr, M.StoreLocal) and instr.local == param_name:
+							if instr.value in _zero_dests:
+								_past_zero = True
+							elif _past_zero:
+								_reinitialized = True
+								break
+				_was_moved_away = _has_load_then_zero and not _reinitialized
+		if _has_existing_drop or _was_moved_away:
 			continue
 		# Inject LoadLocal + ZeroValue + StoreLocal + DropValue before
 		# Return in each return block.  Use __postdrop_ prefix to avoid

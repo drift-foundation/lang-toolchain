@@ -106,6 +106,46 @@ def _make_func_with_loadlocal_drop(handle_tid: int) -> M.MirFunc:
 	return func
 
 
+def _make_func_with_moved_param(handle_tid: int) -> M.MirFunc:
+	"""Build a MirFunc matching the _run_serve shape: param is moved into a call
+	via LoadLocal + ZeroValue + StoreLocal, then a match dispatches to two
+	return blocks. No DropValue for handle exists — ownership transferred.
+
+	This is the exact pattern from web.rest.server::_run_serve that caused the
+	__postdrop_handle double-drop regression.
+	"""
+	fn_id = FunctionId(module="mymod", name="_run_serve", ordinal=0)
+	int_tid = 1  # placeholder
+	func = M.MirFunc(
+		name="mymod::_run_serve",
+		params=["handle", "count"],
+		locals=["handle", "count", "t1", "__arc1", "t2", "result"],
+		fn_id=fn_id,
+		local_types={
+			"handle": handle_tid, "count": int_tid,
+			"t1": handle_tid, "__arc1": handle_tid,
+			"t2": int_tid, "result": int_tid,
+		},
+	)
+
+	# Entry block: move handle into a call (LoadLocal + ZeroValue + StoreLocal)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.LoadLocal(dest="t1", local="handle"))
+	entry.instructions.append(M.ZeroValue(dest="__arc1", ty=handle_tid))
+	entry.instructions.append(M.StoreLocal(local="handle", value="__arc1"))
+	entry.instructions.append(M.LoadLocal(dest="t2", local="count"))
+	entry.instructions.append(M.Call(dest="result", fn_id=FunctionId(module="mymod", name="serve", ordinal=0), args=["t1", "t2"], can_throw=False))
+	entry.terminator = M.Goto(target="ret")
+	func.blocks["entry"] = entry
+
+	# Return block — no drop for handle (it was moved)
+	ret = M.BasicBlock(name="ret")
+	ret.terminator = M.Return(value="result")
+	func.blocks["ret"] = ret
+
+	return func
+
+
 def _count_drop_values_for_type(func: M.MirFunc, ty: int) -> int:
 	"""Count all DropValue instructions targeting a specific type."""
 	count = 0
@@ -154,6 +194,96 @@ def test_postdrop_injects_when_no_existing_drop() -> None:
 	assert drop_count == 1, (
 		f"post-pass must inject a drop when no existing drop is present, "
 		f"found {drop_count} DropValues (expected 1)"
+	)
+
+
+def test_postdrop_skips_moved_away_param() -> None:
+	"""Post-pass must NOT inject drops for params moved into a call.
+
+	Regression for _run_serve: handle is LoadLocal'd, ZeroValue'd, StoreLocal'd
+	(the string_arc move pattern), then passed to serve(). Ownership transferred
+	to callee. The post-pass must detect the zero-store and skip injection,
+	otherwise it drops a zeroed struct (null Arc pointer → crash).
+	"""
+	table, handle_tid = _make_type_table_with_droppable_struct()
+	func = _make_func_with_moved_param(handle_tid)
+
+	assert _count_drop_values_for_type(func, handle_tid) == 0, \
+		"precondition: no DropValue for handle (it was moved)"
+
+	_run_postdrop_production(func, table)
+
+	drop_count = _count_drop_values_for_type(func, handle_tid)
+	assert drop_count == 0, (
+		f"post-pass injected a drop for a moved-away param: found {drop_count} "
+		f"DropValues for handle type (expected 0). The param was moved into a "
+		f"call via LoadLocal + ZeroValue + StoreLocal — ownership transferred."
+	)
+
+
+def test_postdrop_injects_when_zero_stored_without_load() -> None:
+	"""Bare ZeroValue + StoreLocal(param, zero) without preceding LoadLocal must
+	NOT suppress postdrop injection — no ownership transfer occurred."""
+	table, handle_tid = _make_type_table_with_droppable_struct()
+
+	fn_id = FunctionId(module="mymod", name="bare_zero", ordinal=0)
+	func = M.MirFunc(
+		name="mymod::bare_zero",
+		params=["handle"],
+		locals=["handle", "__z"],
+		fn_id=fn_id,
+		local_types={"handle": handle_tid, "__z": handle_tid},
+	)
+	entry = M.BasicBlock(name="entry")
+	# ZeroValue + StoreLocal WITHOUT a preceding LoadLocal — this is NOT
+	# the move pattern (no value was read out to transfer).
+	entry.instructions.append(M.ZeroValue(dest="__z", ty=handle_tid))
+	entry.instructions.append(M.StoreLocal(local="handle", value="__z"))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+
+	_run_postdrop_production(func, table)
+
+	drop_count = _count_drop_values_for_type(func, handle_tid)
+	assert drop_count == 1, (
+		f"post-pass must inject a drop when param was zero-stored without "
+		f"a preceding LoadLocal (no ownership transfer), found {drop_count}"
+	)
+
+
+def test_postdrop_injects_when_reinitialized_after_move() -> None:
+	"""If a param is moved away then reinitialized with a new value, the
+	post-pass must still inject a drop for the new value."""
+	table, handle_tid = _make_type_table_with_droppable_struct()
+
+	fn_id = FunctionId(module="mymod", name="reinit", ordinal=0)
+	int_tid = table.ensure_int()
+	func = M.MirFunc(
+		name="mymod::reinit",
+		params=["handle"],
+		locals=["handle", "t1", "__z", "new_handle"],
+		fn_id=fn_id,
+		local_types={
+			"handle": handle_tid, "t1": handle_tid,
+			"__z": handle_tid, "new_handle": handle_tid,
+		},
+	)
+	entry = M.BasicBlock(name="entry")
+	# Move pattern: LoadLocal + ZeroValue + StoreLocal
+	entry.instructions.append(M.LoadLocal(dest="t1", local="handle"))
+	entry.instructions.append(M.ZeroValue(dest="__z", ty=handle_tid))
+	entry.instructions.append(M.StoreLocal(local="handle", value="__z"))
+	# Then reinitialize handle with a new owned value
+	entry.instructions.append(M.StoreLocal(local="handle", value="new_handle"))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+
+	_run_postdrop_production(func, table)
+
+	drop_count = _count_drop_values_for_type(func, handle_tid)
+	assert drop_count == 1, (
+		f"post-pass must inject a drop when param is reinitialized after "
+		f"being moved away, found {drop_count}"
 	)
 
 

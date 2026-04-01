@@ -1,6 +1,42 @@
 # Drift development history
 
 ## 2026-04-01
+- **Fixed post-pass drop injection for parameters moved away into callee (0.27.133, ABI 7)**:
+  The post-pass `__postdrop_*` injection dropped parameters that had already
+  been moved into a callee via `string_arc`'s move pattern
+  (`LoadLocal + ZeroValue + StoreLocal`), causing a drop of a zeroed struct
+  whose Arc field pointer was null.
+  - Root cause (from MIR dump of `web.rest.server::_run_serve`):
+    - `_run_serve` forwards owned params (`a`, `handle`) to `serve()` by
+      loading the value, zeroing the local, and passing the loaded value
+    - after `serve()` returns, `_run_serve` dispatches via match to two
+      return blocks — neither has a DropValue for `handle` (correct:
+      ownership transferred to `serve`)
+    - the post-pass saw `has_drop(handle)=True`, found no
+      `LoadLocal→DropValue` or `MoveOut→DropValue` for `handle`, and
+      injected `__postdrop_handle_*` in both return blocks
+    - the injected drop loaded the zeroed local (all-zeros struct with null
+      Arc pointer) and called the field-by-field drop, crashing on
+      `drift_arc_release(null)`
+  - Fix:
+    - the post-pass now detects the `StoreLocal(local=param, value=<zero>)`
+      pattern — if a param was zero-stored (moved away), ownership was
+      transferred and no drop is needed
+    - `ZeroValue` destinations are collected across all blocks; any
+      `StoreLocal` writing a zero into a param local marks it as moved
+  - Regression coverage:
+    - `test_postdrop_skips_moved_away_param`: exact `_run_serve` shape —
+      param moved via LoadLocal+ZeroValue+StoreLocal into a Call, return
+      blocks have no drop, post-pass must not inject
+  - Prior fix (0.27.132) was necessary but insufficient:
+    - it correctly added `MoveOut` to the existing-drop detection predicate
+    - but the real production failure was in `_run_serve` where the param
+      had no drop at all (moved, not dropped) — the detection predicate
+      didn't apply because there was no drop to detect
+  - Versioning:
+    - compiler version is `0.27.133`
+    - ABI remains `7`
+
 - **Fixed post-pass drop injection double-drop for parameters already dropped by scope-exit MoveOut (0.27.132, ABI 7)**:
   The post-pass `__postdrop_*` injection in `driftc.py` checked for existing
   parameter drops by scanning for `LoadLocal` → `DropValue` sequences, but
