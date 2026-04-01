@@ -1,5 +1,71 @@
 # Drift development history
 
+## 2026-03-31
+- **Completed the full compiler/package interface redesign through Phases 1-10, made `TypeExpr` and `canonical_keys` authoritative for package consumption, enabled slimmed package defs, and removed old-package fallback loading (0.27.130, ABI 7)**:
+  This closes the multi-phase boundary refactor and package-format cleanup that
+  moved package consumption off session-local signature `TypeId` identity and
+  broad linker `TypeDef` graph reconstruction.
+  - Phases 1-7:
+    - package ingress now runs before parsing
+    - `SemanticWorld` is the explicit semantic boundary object
+    - lifecycle phases and production freeze are enforced
+    - world-backed escape metadata is authoritative in production
+    - legacy world-split parameter plumbing and dead canonicalization paths were cleaned up
+  - Phase 8:
+    - `TypeExpr` is now the authoritative semantic channel for concrete,
+      non-generic package signatures
+    - package signature payloads now include complete semantic type-expression
+      fields for params, return type, impl target, and error type
+    - consumer reconstruction prefers `TypeExpr` resolution for concrete
+      signatures
+    - dual-path assertion mode (`DRIFT_DEBUG_TYPEXPR_RESOLVE=1`) validates the
+      semantic path against the old raw-id path where both are present
+    - `payload_version` is now `1`
+    - raw signature `TypeId` fields were removed for concrete signatures and
+      retained only where generic / `__inst__` reconstruction still requires them
+  - Phase 9:
+    - package type tables now serialize precomputed canonical type keys
+      (`canonical_keys`)
+    - the linker now consumes those keys directly for O(1) package type-key
+      lookup instead of reconstructing identity by walking the serialized
+      `TypeDef` graph
+    - canonical keys include correct package-aware normalization, including
+      `TYPEVAR` owner-package identity
+    - keyed packages are pinned by regression, including a missing-def case that
+      proves the linker succeeds through `canonical_keys` where the old walk
+      would fail
+  - Phase 10 / Stage 8.4:
+    - linker Phase A/B were decoupled from broad package `defs` dependence for
+      ordinary schema and nominal validation
+    - package `defs` are now slimmed to MIR-reachable, generic/template, const,
+      and retained synthetic-struct coverage instead of carrying the full type
+      table
+    - `canonical_keys` cover non-emitted types outside slimmed `defs`
+    - old package-consumption fallback was removed:
+      - packages without `canonical_keys` are now rejected with a rebuild
+        diagnostic
+      - old non-keyed linker fallback tests were replaced with rejection
+        coverage
+  - Supporting fixes landed in this branch:
+    - false ABI boundary classification for source-compiled stdlib/package
+      modules was fixed with provenance-based boundary handling instead of
+      stdlib name hacks
+    - wrapper / method boundary behavior was aligned across checker, resolver,
+      and LLVM codegen
+    - map-literal module-qualified call rewriting, packaged alias resolution,
+      callback inference, and catch-arm nested match lowering regressions were
+      fixed alongside the boundary rework
+  - Result:
+    - package semantic identity is now symbolic and canonical by default
+    - linker identity no longer depends on full serialized type-graph
+      reconstruction for modern packages
+    - slimmed package payloads are active
+    - existing package artifacts must be rebuilt to satisfy the new
+      `canonical_keys` requirement
+  - Versioning:
+    - compiler version is `0.27.130`
+    - ABI remains `7`
+
 ## 2026-03-30
 - **Completed the compiler/package boundary rework, shipped the supporting compiler fixes, and finalized flat deploy/app-entry tooling updates (0.27.129, ABI 7)**:
   This release completes the planned boundary-architecture cleanup and rolls up
