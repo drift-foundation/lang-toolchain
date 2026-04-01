@@ -1,6 +1,30 @@
 # Drift development history
 
 ## 2026-04-01
+- **Tightened post-pass moved-away parameter detection to require real ownership transfer and preserve drops after reinitialization (0.27.134, ABI 7)**:
+  This follows the initial `_run_serve` moved-away fix by narrowing the
+  ownership-transfer detection so post-pass drop suppression only happens for
+  the actual `string_arc` move pattern, not for any incidental zero-store.
+  - Root cause:
+    - the initial moved-away fix treated `StoreLocal(param, <zero>)` too
+      broadly as ownership transfer
+    - that risked suppressing required post-pass drops for cases that only
+      zero-stored a param without first moving it out, or that later
+      reinitialized the param with a new owned value
+  - Fix:
+    - moved-away detection now requires `LoadLocal(local=param)` followed by
+      `StoreLocal(local=param, value=<zero>)` in the same block
+    - any subsequent non-zero `StoreLocal(local=param, ...)` cancels the
+      moved-away classification, so reinitialized params still receive drops
+  - Regression coverage:
+    - `test_postdrop_injects_when_zero_stored_without_load`: bare zero-store
+      without prior load does not suppress injection
+    - `test_postdrop_injects_when_reinitialized_after_move`: move-then-reassign
+      still injects a drop for the new owned value
+  - Versioning:
+    - compiler version is `0.27.134`
+    - ABI remains `7`
+
 - **Fixed post-pass drop injection for parameters moved away into callee (0.27.133, ABI 7)**:
   The post-pass `__postdrop_*` injection dropped parameters that had already
   been moved into a callee via `string_arc`'s move pattern
