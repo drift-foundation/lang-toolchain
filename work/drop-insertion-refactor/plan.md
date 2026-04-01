@@ -1,6 +1,33 @@
 # Drop Insertion / Ownership Refactor Plan
 
 ## Status: proposal (review before execution)
+## Updated: 2026-04-01 (post-0.27.135 bug cycle)
+
+---
+
+## 0. Overarching Problem: Mode Divergence
+
+This plan and the semantic-ingestion refactor plan address the same root
+cause: **the compiler has different semantic pipelines for different
+invocation modes**, and later passes compensate with heuristics.
+
+The drop-insertion bugs (0.27.132 through 0.27.135) all share a pattern:
+
+1. `has_drop()` returns different answers depending on pipeline timing
+2. MIR lowering makes drop decisions using one answer
+3. A later pass (string_arc, post-pass) makes decisions using a different answer
+4. The disagreement produces double-drops, missed drops, or null-pointer crashes
+
+The concrete trigger is **stdlib as source vs stdlib as package**:
+- Source: `has_drop` is stable from the start (all types declared upfront)
+- Package/PEX: `has_drop` is unstable — `destructor_fns` is populated
+  incrementally by K39, and `_needs_drop_cache` retains stale entries from
+  queries between K39 rounds
+
+The 0.27.135 fix (cache clear before MIR lowering) addresses the immediate
+symptom. This plan addresses the structural cause: **three independent
+drop-checking functions, three independent caches, no explicit ownership
+facts propagated between stages.**
 
 ---
 
@@ -8,135 +35,88 @@
 
 ### Stage 1: Type Checker + Borrow Checker (HIR level)
 
-The borrow checker (`borrow_checker_pass.py:134`) runs on typed HIR before MIR
-lowering. It computes per-place ownership state via dataflow:
+The borrow checker (`borrow_checker_pass.py:134`) computes per-place
+ownership state via dataflow: `PlaceState` (UNINIT/VALID/MOVED) per-place
+per-CFG-node. Runs at `driftc.py:5438`.
 
-```python
-class PlaceState(Enum):
-    UNINIT = auto()   # uninitialized
-    VALID = auto()    # holds an owned value
-    MOVED = auto()    # ownership transferred
-```
-
-It produces `PlaceState` per-place per-CFG-node, tracks moves, detects
-use-after-move, and validates borrow lifetimes. It runs at `driftc.py:5438`
-(inside `compile_stubbed_funcs`).
-
-**Problem**: its output is used for diagnostics only (`borrow_diags`). The
-ownership facts are not threaded to MIR lowering. They are discarded after
-checking.
+**Problem**: output is diagnostics-only. Ownership facts are discarded.
 
 ### Stage 2: HIR-to-MIR Lowering (`hir_to_mir.py`)
 
-The HIR-to-MIR lowerer independently re-derives ownership state:
+Independently re-derives ownership state:
+- `_param_drop_locals` (line 303): populated by checking
+  `_needs_runtime_drop(ty)` and `_type_is_destructible(ty)` for each param
+- `_moved_locals`: tracks locals consumed by `move` expressions
+- `_emit_scope_drops` (line 596): emits `MoveOut + DropValue` for in-scope
+  locals that need drop and haven't been moved
 
-- **`_param_drop_locals`** (line 303): populated at construction time by
-  checking `_needs_runtime_drop(ty)` and `_type_is_destructible(ty)` for each
-  param. This determines which params get scope-exit drops.
-- **`_moved_locals`** (set): tracks locals consumed by `move` expressions.
-  `_emit_scope_drops` skips moved locals.
-- **`_emit_scope_drops`** (line 596): called before each Return/break/continue
-  terminator. Emits `MoveOut + DropValue` for each in-scope local that needs
-  drop and hasn't been moved.
-- **`_scope_stack`**: LIFO stack of locals per lexical scope.
-
-The ownership/drop decisions here depend on `has_drop` / `is_destructible` at
-the time the lowerer runs. These queries depend on `destructor_fns` being
-installed — which may not be complete yet.
+Drop decisions depend on `has_drop` / `is_destructible` at lowering time.
 
 ### Stage 2.5: string_arc Pass (`string_arc.py`)
 
-`insert_string_arc` is a MIR-to-MIR pass (line 22) that:
-
+MIR-to-MIR pass that:
 1. Expands `MoveOut` to `LoadLocal + ZeroValue + StoreLocal` (line 807-819)
-2. Independently re-derives which locals need drop using its own
-   `_type_needs_drop` function (line 63-108) with its **own cache**
-3. Tracks `moved_out_locals` per-block via dataflow (line 604-633)
-4. Emits `_drop_all_destructibles` at return blocks (line 1242) for locals in
-   `destructible_locals` not in `skip_cleanup_locals`
-
-**Problem**: `_type_needs_drop` uses `is_destructible()` (trait prover) but
-does NOT check `destructor_fns` at the field recursion level. It can disagree
-with `type_table.has_drop()`. It also has its own cache that is never
-invalidated.
+2. Re-derives drop needs using its own `_type_needs_drop` (line 63-108)
+   with its **own cache** — does NOT check `destructor_fns` at field level
+3. Emits `_drop_all_destructibles` at return blocks (line 1242)
 
 ### Stage 3: Post-Pass Drop Injection (`driftc.py`)
 
-`_postdrop_inject_missing_param_drops` (line 3019) runs after MIR lowering
-and string_arc. It:
+`_postdrop_inject_missing_param_drops` (line 3019):
+1. Clears `_needs_drop_cache`
+2. Scans MIR for existing drops via instruction pattern matching
+3. Injects `__postdrop_*` where no drop is found
 
-1. Clears `_needs_drop_cache` (line 7085) — ensures fresh `has_drop` answers
-2. For each param where `has_drop` is True, scans the MIR for:
-   - Existing `LoadLocal/MoveOut → DropValue` chains
-   - The `LoadLocal + ZeroValue + StoreLocal` move-away pattern
-3. If no existing drop or move-away is found, injects `__postdrop_*` sequences
-   into every Return-terminating block
-
-**Problem**: this is the pattern-matcher that keeps breaking. It infers
-ownership state by scanning MIR instruction shapes instead of consuming
-explicit facts. Every new MIR shape (MoveOut, LoadLocal, zero-store moves,
-multi-block control flow) requires a new detection rule.
+**Problem**: pattern-matcher that keeps breaking on new MIR shapes.
 
 ### Stage 4: LLVM Codegen (`llvm_codegen.py`)
 
-`_emit_drop_value` (line 8773) dispatches based on:
-- `destructor_fns[ty_id]` → call destroy function
-- No destructor → field-by-field `extractvalue` + recursive drop
-- ZeroValue structs get field-dropped (null Arc pointers → crash if runtime
-  doesn't guard null)
-
-No ownership metadata is consumed — it trusts that every `DropValue`
-instruction is correct.
+`_emit_drop_value` (line 8773) trusts every `DropValue` instruction. No
+ownership metadata consumed.
 
 ---
 
 ## 2. The Architectural Seam
 
-### The core problem
+### Three independent drop-checking functions
 
-Ownership state is determined **three times independently**, each with
-different logic and different inputs:
+| Stage | Function | `destructor_fns`? | `is_destructible`? | Own cache? |
+|-------|----------|-------------------|--------------------|-----------:|
+| HIR-to-MIR | `_needs_runtime_drop` | via `has_drop` | Yes | TypeTable |
+| string_arc | `_type_needs_drop` | **No** | Yes | **Own** |
+| Post-pass | `has_drop` | Yes | Yes | TypeTable (cleared) |
 
-| Stage | Function | Uses `destructor_fns`? | Uses `is_destructible`? | Has own cache? |
-|-------|----------|----------------------|------------------------|----------------|
-| HIR-to-MIR | `_needs_runtime_drop` / `_type_is_destructible` | via `has_drop` | Yes | TypeTable cache |
-| string_arc | `_type_needs_drop` | **No** (only `is_destructible`) | Yes | **Own** cache |
-| Post-pass | `has_drop` | Yes | Yes | TypeTable cache (cleared) |
+### Proven bug classes from this divergence
 
-When these three disagree, bugs result:
-- **0.27.132 bug**: HIR-to-MIR uses `MoveOut`, post-pass only recognized
-  `LoadLocal` → missed existing drop → double-drop
-- **0.27.133 bug**: string_arc moved param away (zero-stored), but post-pass
-  didn't recognize the move pattern → injected drop of zeroed value → null
-  Arc crash
+| Version | Bug | Root cause |
+|---------|-----|-----------|
+| 0.27.132 | Double-drop: post-pass didn't recognize MoveOut-based drops | Pattern-matcher incomplete |
+| 0.27.133 | Null-pointer crash: post-pass dropped zeroed moved-away param | Pattern-matcher incomplete |
+| 0.27.135 | Double-drop in PEX: `has_drop` cached False before K39 finished | Cache staleness across pipeline stages |
 
-### Why pattern-matching keeps failing
+All three are instances of the same structural problem: drop decisions made
+at different times with different information, then compensated post-hoc.
 
-The post-pass must reverse-engineer ownership state from MIR instructions
-because no explicit state is propagated. Each new MIR shape that the lowerer
-or string_arc produces requires a corresponding detection rule in the
-post-pass. The set of shapes is open-ended:
+### Why `_needs_drop_cache` staleness is the proximate cause
 
-- `MoveOut + DropValue` (scope-exit drop)
-- `LoadLocal + DropValue` (string_arc destructible cleanup)
-- `LoadLocal + ZeroValue + StoreLocal` (move into call)
-- `LoadLocal + ZeroValue + StoreLocal` in block A, `Return` in block B
-  (cross-block move)
-- Future: conditional moves, partial moves, catch-arm ownership changes
+The cache poisoning timeline in the PEX path:
 
-### Why `destructor_fns` timing matters
+1. `_install_destructor_fns` → sets `destructor_fns` → cache cleared (line 270)
+2. K39 initial pass → adds generic destructor entries to dict **in place**
+   (`destructor_fns[inst_id] = handle.fn_id` at line 4605) — no `__setattr__`,
+   **no cache clear**
+3. `shared_type_table.destructor_fns = destructor_fns` at line 4661 → cache
+   cleared
+4. Borrow checker + trait enforcement queries `has_drop` → caches results
+5. K39 post-instantiation rescan → adds more entries **in place** (line 5048)
+6. `shared_type_table.destructor_fns = destructor_fns` at line 5052 → cache
+   cleared
+7. **More `has_drop` queries** between line 5052 and MIR lowering at 5719 →
+   cache entries created from incomplete state
+8. MIR lowering → reads stale cache → wrong `_param_drop_locals`
 
-`destructor_fns` is populated incrementally:
-1. Pre-install via `_scan_destructible_impls_by_name` (line 3649)
-2. K39 augments with generic instantiation entries (line 4605, 4607)
-3. K39 post-instantiation rescan adds more (line 4996)
-
-All three run before MIR lowering. But `has_drop` results depend on which
-entries exist. If a struct's transitive drop status depends on a generic
-destructor (e.g., `Arc<T>::destroy`) that K39 registers for a specific
-instantiation, `has_drop` can return different values at different pipeline
-stages. The `_needs_drop_cache` compounds this — stale entries persist across
-K39 rounds.
+The 0.27.135 fix inserts a cache clear at step 8. But the structural fix is
+to eliminate steps 7-8 as a divergence window entirely.
 
 ---
 
@@ -144,311 +124,222 @@ K39 rounds.
 
 ### Goal
 
-Make drop obligations explicit per-parameter per-function at MIR construction
-time. Eliminate post-hoc MIR pattern scanning for drop injection.
+Make drop obligations explicit per-parameter per-function at MIR
+construction time. Eliminate post-hoc MIR pattern scanning. Ensure `has_drop`
+answers are identical regardless of source/package/PEX mode.
 
 ### Target architecture
 
 ```
-Borrow Checker (HIR)  ──►  Drop Obligation Map  ──►  HIR-to-MIR  ──►  string_arc  ──►  Codegen
-        ▲                         │
-        │                    explicit facts:
-   PlaceState per           - param needs_drop: bool
-   place per node           - param moved_away: bool
-                            - param drop_emitted: bool
+                    destructor_fns finalized
+                            │
+                            ▼
+               ┌─── cache clear ───┐
+               │                   │
+Borrow Checker → Drop Obligation → HIR-to-MIR → string_arc → Codegen
+                     Map              │
+                                      │
+                                 param_drop_status
+                                 (explicit on MirFunc)
 ```
 
-A **`DropObligationMap`** would be a per-function data structure recording:
-- For each parameter: whether it needs a scope-exit drop at function exit
-- For each local: whether it was moved away (ownership transferred) and if so,
-  in which block(s)
-- For each return path: which params/locals still need drops
-
-This map would be:
-1. **Produced** by the borrow checker (which already computes these facts) or
-   by a dedicated drop-planning pass that runs after type checking and
-   `destructor_fns` finalization
-2. **Consumed** by HIR-to-MIR lowering to emit the correct drops
-3. **Verified** by string_arc (which should trust the map rather than
-   re-deriving from scratch)
-4. **Not re-derived** by any post-pass
+One authoritative `has_drop` query point (after cache clear). One set of
+drop facts (on MirFunc). No re-derivation. No pattern matching. No
+post-pass injection.
 
 ### What replaces `__postdrop_*` inference
 
-The post-pass exists because `has_drop` can return False during MIR lowering
-and True afterward. The fix is to ensure `has_drop` is stable before MIR
-lowering starts — not to patch up afterward.
-
-With stable `has_drop`:
+With stable `has_drop` (Phase A):
 - `_param_drop_locals` is correct at construction time
 - `_emit_scope_drops` emits drops for all params that need them
 - string_arc correctly tracks `moved_out_locals` and `destructible_locals`
-- No post-pass needed
-
-### How ownership state should be represented
-
-Instead of inferring "was this param dropped?" from MIR instruction shapes,
-MirFunc should carry explicit metadata:
-
-```python
-@dataclass
-class MirFunc:
-    # ... existing fields ...
-    # NEW: per-param drop status computed during lowering
-    param_drop_status: Dict[str, ParamDropStatus] = field(default_factory=dict)
-
-class ParamDropStatus(Enum):
-    DROPPED_BY_SCOPE_EXIT = auto()   # _emit_scope_drops emitted a drop
-    MOVED_TO_CALLEE = auto()         # ownership transferred to a call
-    NO_DROP_NEEDED = auto()          # type doesn't need drop (Copy/scalar)
-```
-
-string_arc would read and update this metadata rather than re-deriving it.
-The post-pass (if retained at all) would be a simple assertion: "every param
-with `has_drop=True` has a non-`NO_DROP_NEEDED` status."
+- The post-pass becomes an assertion, not a safety net
 
 ---
 
 ## 4. Phased Implementation Plan
 
-### Phase A: Stabilize `has_drop` before MIR lowering
+### Phase A: Stabilize `has_drop` before MIR lowering [PARTIALLY DONE]
 
-**Goal**: Ensure `destructor_fns` is finalized and `_needs_drop_cache` is
-cleared exactly once, before any HIR-to-MIR lowering begins. Eliminate the
-root cause of `has_drop` returning different values at different pipeline
-stages.
+**Goal**: `has_drop` returns the same answer during MIR lowering as at the
+post-pass. No stale cache entries from pre-K39 queries.
 
-**Files/subsystems**:
-- `driftc.py`: audit the timeline of `destructor_fns` installation relative
-  to MIR lowering. Ensure K39 finishes before the first `HIRToMIR()` call.
-  Add an explicit cache clear after the last `destructor_fns` mutation.
-- `driftc.py`: when `pass1_state` is provided, verify the driver's pre-install
-  at line 10688 captures ALL destructors (including K39 generic instantiations)
+**What's done** (0.27.135): explicit `_needs_drop_cache.clear()` before the
+MIR lowering loop. Regression pinned in
+`test_has_drop_cache_clear_before_mir_lowering.py`.
 
-**New facts/metadata**: none yet — this is a prerequisite fix.
+**What remains**:
+- Audit ALL `has_drop` / `is_destructible` call sites between the last
+  `destructor_fns` mutation (line 5052) and MIR lowering (line 5719). Each
+  call site is a potential cache-poisoning source.
+- Consider: should the cache be **frozen** (read-only) after the clear, with
+  any mutation raising an error? This would make the invariant enforceable
+  rather than convention.
+- Verify that `string_arc._type_needs_drop` agrees with `has_drop` for all
+  types in the post-clear state. If it doesn't (because it uses
+  `is_destructible` not `destructor_fns`), that's a latent divergence.
 
-**Heuristics removed**: none yet.
+**Files**: `driftc.py`, `types_core.py`
 
-**Expected regressions/tests**:
-- Assert that `destructor_fns` dict identity doesn't change between MIR
-  lowering start and post-pass
-- Pin `has_drop` stability for cross-package generic types (e.g.,
-  `Arc<AtomicBool>`) across the lowering→postpass boundary
-
-**Key risk**: K39 generic instantiation creates new struct instances and new
-destructor entries during `_drain_instantiations`, which interleaves with MIR
-lowering of instantiated functions. May need to separate "discover all types"
-from "lower all MIR".
+**Regressions**: the three existing tests in
+`test_has_drop_cache_clear_before_mir_lowering.py` cover the core contract.
+Additional tests for frozen-cache enforcement if implemented.
 
 ---
 
 ### Phase B: Add `param_drop_status` to MirFunc
 
 **Goal**: Make drop decisions explicit on the MIR function. HIR-to-MIR
-lowering records what it did (or decided not to do) for each param.
+lowering records what it did for each param.
 
-**Files/subsystems**:
-- `mir_nodes.py`: add `param_drop_status: Dict[str, str]` to `MirFunc`
-- `hir_to_mir.py`: after lowering, record which params were added to
-  `_param_drop_locals` and which were in `_moved_locals` at function exit
-
-**New facts/metadata**:
+**New metadata on MirFunc**:
 ```python
-# On MirFunc, after lowering:
-param_drop_status = {
-    "handle": "scope_exit_drop",   # _emit_scope_drops emitted MoveOut+DropValue
-    "count": "no_drop",            # Int, doesn't need drop
-    "callback": "moved",           # consumed by move expression
-}
+param_drop_status: Dict[str, ParamDropStatus]
+
+class ParamDropStatus(Enum):
+    DROPPED_BY_SCOPE_EXIT = auto()   # _emit_scope_drops emitted a drop
+    FORWARDED_TO_CALLEE = auto()     # ownership transferred to a call (move or wrapper forward)
+    MOVED_BY_EXPRESSION = auto()     # consumed by user-level move
+    NO_DROP_NEEDED = auto()          # Copy type or has_drop=False
 ```
 
-**Heuristics removed**: none yet — this phase adds data, doesn't remove logic.
+`FORWARDED_TO_CALLEE` covers both explicit `move` into a call and
+synthesized method wrappers that forward all params by value. The semantic
+meaning is the same: ownership transferred to callee, no scope-exit drop
+needed. "Wrapper" is provenance, not a separate semantic category.
 
-**Expected regressions/tests**:
-- Assert `param_drop_status` is populated for all functions
-- Cross-reference `param_drop_status` against `has_drop` at post-pass time:
-  any param with `has_drop=True` and status `"no_drop"` is a potential
-  `has_drop` instability (Phase A gap)
+**Files**: `mir_nodes.py`, `hir_to_mir.py`, wrapper generation in `driftc.py`
 
-**Key risk**: minimal — additive metadata, no behavior change.
+**Regressions**:
+- Assert `param_drop_status` populated for all functions
+- Cross-reference against `has_drop` at post-pass: any param with
+  `has_drop=True` and status `NO_DROP_NEEDED` is a Phase A gap
+
+**Size**: Small. Additive, no behavior change.
 
 ---
 
 ### Phase C: Make string_arc consume `param_drop_status`
 
-**Goal**: string_arc's `destructible_locals` and `moved_out_locals` for params
-should be derived from `param_drop_status` rather than re-querying the type
-table with its own `_type_needs_drop` function.
-
-**Files/subsystems**:
-- `string_arc.py`: for params, consult `func.param_drop_status` instead of
-  `_is_destructible_tid(local_types.get(name))`
-- `string_arc.py`: if a param has status `"scope_exit_drop"`, it's already in
-  `destructible_locals` equivalent — don't re-derive
-- `string_arc.py`: if a param has status `"moved"`, pre-seed
-  `moved_out_locals` — don't rely on seeing MoveOut instructions
-
-**New facts/metadata**: consumed, not produced.
+**Goal**: string_arc's `destructible_locals` for params derived from
+`param_drop_status` rather than its own `_type_needs_drop`.
 
 **Heuristics removed**:
-- string_arc's `_type_needs_drop` for params (still needed for non-param
-  locals until those are tracked too)
+- `string_arc._type_needs_drop` for params
 - The per-param portion of `destructible_locals` computation
 
-**Expected regressions/tests**:
-- All existing drop tests must pass
-- New test: param where `_type_needs_drop` disagrees with `has_drop` — the
-  `param_drop_status` should be authoritative
+**Key risk**: string_arc handles non-param locals too. Only change the
+param path initially.
 
-**Key risk**: string_arc is complex and handles non-param locals too. Must be
-careful to only change the param path.
+**Files**: `string_arc.py`
+
+**Regressions**: test where `_type_needs_drop` disagrees with `has_drop` —
+`param_drop_status` is authoritative.
 
 ---
 
-### Phase D: Narrow the post-pass to an assertion
+### Phase D: Post-pass becomes assertion only
 
-**Goal**: With stable `has_drop` (Phase A) and explicit `param_drop_status`
-(Phase B), the post-pass should have nothing to inject. Replace injection
-logic with an assertion.
-
-**Files/subsystems**:
-- `driftc.py`: `_postdrop_inject_missing_param_drops` → replace the injection
-  loop with: for each param where `has_drop=True`, assert that
-  `param_drop_status` is not `"no_drop"`. If it is, that's a pipeline error
-  (Phase A didn't stabilize `has_drop`), not something to silently fix.
+**Goal**: Replace all injection logic with: for each param where
+`has_drop=True`, assert `param_drop_status` is not `NO_DROP_NEEDED`.
 
 **Heuristics removed**:
-- The entire MIR pattern-scanning loop (LoadLocal/MoveOut → DropValue scan)
-- The zero-store move-away detection
-- The `__postdrop_*` injection code
+- Entire MIR pattern-scanning loop
+- Zero-store move-away detection
+- `__postdrop_*` injection code
 
-**Expected regressions/tests**:
-- All existing tests pass with injection removed (the assertion doesn't fire)
-- If any test fires the assertion, it reveals a Phase A gap
+**Files**: `driftc.py`
 
-**Key risk**: this is the "prove it works" phase. Must be validated with
-downstream projects (drift-web, net.tls) before merging.
+**Regressions**: all existing tests pass with injection removed.
 
----
-
-### Phase E: Extend to non-param locals (optional, future)
-
-**Goal**: Extend `param_drop_status` to a per-local `drop_status` covering
-all locals, not just params. This would let string_arc fully consume explicit
-facts rather than re-deriving ownership.
-
-**Files/subsystems**:
-- `hir_to_mir.py`: track drop status for all locals in `_scope_stack`
-- `mir_nodes.py`: `local_drop_status: Dict[str, str]`
-- `string_arc.py`: consume `local_drop_status` for all locals
-
-**Key risk**: significantly larger surface area. Params are the high-value
-target; locals are a longer-term cleanup.
+**Prerequisites**: A + B + C validated with downstream (drift-web, net.tls).
 
 ---
 
-### Phase F: Thread borrow checker facts to MIR lowering (optional, future)
+### Phase E: Unify `_type_needs_drop` functions (medium-term)
 
-**Goal**: Instead of HIR-to-MIR re-deriving ownership state, consume the
-borrow checker's `PlaceState` dataflow results. The borrow checker already
-computes UNINIT/VALID/MOVED per-place per-CFG-node — this is strictly more
-information than `_param_drop_locals` + `_moved_locals`.
+**Goal**: One authoritative `has_drop` function, called at one point, result
+recorded as fact. Remove:
+- `hir_to_mir._needs_runtime_drop` (replace with `has_drop`)
+- `string_arc._type_needs_drop` (replace with `param_drop_status` for params,
+  `has_drop` for locals)
 
-**Files/subsystems**:
-- `borrow_checker_pass.py`: export per-function `PlaceState` summaries
-  (not just diagnostics)
-- `driftc.py`: pass borrow checker output to `HIRToMIR` constructor
-- `hir_to_mir.py`: use borrow checker facts instead of local re-derivation
+This eliminates the three-function divergence table entirely.
 
-**Key risk**: the borrow checker operates on HIR places (binding IDs), while
-MIR operates on local names. The mapping is straightforward but must be
-maintained. Also, the borrow checker runs before `destructor_fns` finalization,
-so its drop-needs queries may be wrong — Phase A is a hard prerequisite.
+**Files**: `hir_to_mir.py`, `string_arc.py`, `types_core.py`
+
+**Key risk**: `_needs_runtime_drop` also checks `_contains_dv_transitive`
+(DiagnosticValue containment). Must verify `has_drop` covers this case.
 
 ---
 
-## 5. Specific Questions Answered
+### Phase F: Thread borrow checker facts (long-term)
 
-### What would replace the current `__postdrop_*` inference logic?
+**Goal**: Consume borrow checker's `PlaceState` dataflow results instead of
+HIR-to-MIR re-deriving ownership. Prerequisite: Phase A (stable `has_drop`).
 
-Phase B's `param_drop_status` makes the drop decision explicit at lowering
-time. The post-pass becomes an assertion rather than inference + injection.
-If `has_drop` is stable (Phase A), the lowerer's decisions are final.
-
-### How should "moved away", "consumed by callee", "needs drop on return" be represented?
-
-As explicit enum values on `MirFunc.param_drop_status`:
-- `SCOPE_EXIT_DROP`: lowerer emitted `MoveOut + DropValue` (or string_arc
-  expanded it to `LoadLocal + ZeroValue + StoreLocal + DropValue`)
-- `MOVED_TO_CALLEE`: value was forwarded to a call and the local was zeroed
-- `MOVED_BY_EXPRESSION`: consumed by a `move` expression in user code
-- `NO_DROP_NEEDED`: type is Copy or has_drop is False
-
-### Can the post-pass be deleted entirely, or only narrowed?
-
-**Deleted entirely** after Phases A-D. The post-pass exists because `has_drop`
-was unreliable during MIR lowering. With stable `has_drop`, every param gets
-the correct drop during lowering. The post-pass would be a zero-injection
-assertion only, and could be compiled out in release builds.
-
-### What prerequisites exist before we can trust earlier ownership facts?
-
-1. `destructor_fns` must be complete before MIR lowering (Phase A)
-2. `_needs_drop_cache` must be cleared after the last `destructor_fns` mutation
-3. K39 generic instantiation must not interleave with MIR lowering of
-   non-instantiated functions
-4. string_arc's `_type_needs_drop` must agree with `has_drop` — or be removed
-   in favor of consuming `param_drop_status` (Phase C)
+**Files**: `borrow_checker_pass.py`, `driftc.py`, `hir_to_mir.py`
 
 ---
 
-## 6. Non-Goals / Things to Avoid
+## 5. Non-Goals
 
 ### No more growing the pattern matcher
 
-The post-pass pattern scanner (`LoadLocal/MoveOut → DropValue`, zero-store
-move detection, reinit check) is not extensible. Each new MIR shape requires
-a new rule. The refactor goal is to eliminate the need for pattern matching,
-not to add more patterns.
+The post-pass pattern scanner is not extensible. Every new MIR shape
+requires a new detection rule. Eliminate the need for pattern matching, not
+add more patterns.
 
 ### No package/dependency-order sensitivity
 
-Drop decisions must not change based on which packages are loaded or in what
-order. `has_drop` must return the same answer regardless of whether
-`--dep net-tls` is present. This is the Phase A prerequisite.
-
-### No relying on incidental MIR shapes as semantic source of truth
-
-`LoadLocal + ZeroValue + StoreLocal` is a MIR encoding of "move", not a
-semantic fact. string_arc produces this encoding from `MoveOut`, which itself
-is a MIR encoding. The semantic fact is "this param's ownership was
-transferred to this call" — that should be stated explicitly, not reverse-
-engineered from instruction patterns.
+Drop decisions must not change based on which packages are loaded. `has_drop`
+must return the same answer regardless of `--dep net-tls`. This is Phase A.
 
 ### No separate drop-checking functions with separate caches
 
-Today there are three implementations of "does this type need drop":
-- `TypeTable.has_drop` (checks `destructor_fns`, `is_destructible`, fields)
-- `hir_to_mir._needs_runtime_drop` (checks `has_drop` + `_contains_dv_transitive`)
-- `string_arc._type_needs_drop` (checks `is_destructible`, fields — NO `destructor_fns`)
+One `has_drop`, called once per type per compilation, result cached reliably.
+Not three functions with three caches making three different decisions.
 
-There should be one authoritative function (`has_drop`), called at one point
-in the pipeline (after `destructor_fns` is finalized), with its result
-recorded as a fact.
+### No relying on MIR instruction shapes as semantic source of truth
+
+`LoadLocal + ZeroValue + StoreLocal` is a MIR encoding of "move", not a
+semantic fact. Ownership state should be stated explicitly on MirFunc, not
+reverse-engineered from instruction patterns.
+
+### No mode-conditional drop behavior
+
+"Source path passes, PEX path fails" is the definition of mode divergence.
+The fix is not "add another special case for PEX" — it's "make the pipeline
+mode-independent after artifact ingress."
+
+---
+
+## 6. Relationship to Semantic-Ingestion Refactor
+
+Both plans are **anti-mode-divergence plans**:
+
+| Subsystem | Source of divergence | Ingestion fix | Drop fix |
+|-----------|---------------------|--------------|---------|
+| Type identity | Order-dependent nominal declaration | Pre-declare all nominals | N/A |
+| `has_drop` stability | Cache poisoned between K39 and MIR lowering | N/A | Cache clear + freeze |
+| Drop decisions | Three independent `_type_needs_drop` functions | N/A | Single authoritative `has_drop` |
+| Post-hoc sweeps | `_coerce_forward_nominal` + `__postdrop_*` | Assertion-only | Assertion-only |
+
+Both converge on: **facts established once before any consumer, no later
+pass re-derives or compensates. Mode affects inputs, not meaning.**
 
 ---
 
 ## Summary
 
-| Phase | Goal | Removes | Prerequisites | Size |
-|-------|------|---------|---------------|------|
-| **A** | Stabilize `has_drop` before MIR lowering | Cache staleness bugs | None | Medium |
-| **B** | Add `param_drop_status` to MirFunc | Nothing (additive) | None | Small |
-| **C** | string_arc consumes `param_drop_status` for params | `_type_needs_drop` for params | B | Medium |
-| **D** | Post-pass becomes assertion only | All pattern-matching + injection code | A + B + C | Small |
-| **E** | Extend to non-param locals | `_type_needs_drop` for all locals | D | Large |
-| **F** | Thread borrow checker facts | HIR-to-MIR re-derivation | A + E | Large |
+| Phase | Goal | Removes | Status |
+|-------|------|---------|--------|
+| **A** | Stabilize `has_drop` before MIR lowering | Cache staleness | **Partially done** (0.27.135) |
+| **B** | Add `param_drop_status` to MirFunc | Nothing (additive) | Proposed |
+| **C** | string_arc consumes status for params | `_type_needs_drop` for params | Proposed |
+| **D** | Post-pass becomes assertion | All pattern-matching + injection | Proposed |
+| **E** | Unify `_type_needs_drop` functions | Three-function divergence | Medium-term |
+| **F** | Thread borrow checker facts | HIR-to-MIR re-derivation | Long-term |
 
-Phases A-D are the immediate refactor. E and F are future cleanup.
-A and B are independent and can proceed in parallel. C requires B.
-D requires A + B + C and downstream validation.
+A is partially done. B is the next high-value step (small, additive, enables
+C and D). D is the payoff — deleting the entire `__postdrop_*` mechanism.
