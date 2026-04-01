@@ -317,13 +317,23 @@ class HIRToMIR:
 			for name, ty in param_types.items():
 				if _is_destroy_method and name == "self":
 					self._param_drop_locals.append(name)
+					self.b.func.param_drop_status[name] = "scope_exit_drop"
 				elif self._needs_runtime_drop(ty):
 					self._param_drop_locals.append(name)
+					self.b.func.param_drop_status[name] = "scope_exit_drop"
 				elif self._type_is_destructible(ty):
 					# Destructible types that are also Copy still need
 					# scope-exit drops so the codegen inside-destroy
 					# epilogue can drop their fields.
 					self._param_drop_locals.append(name)
+					self.b.func.param_drop_status[name] = "scope_exit_drop"
+				elif self._type_table.has_drop(ty):
+					# has_drop=True but not in _param_drop_locals — this
+					# type is handled by string_arc (e.g. String, Array,
+					# Error, DiagnosticValue, Interface).
+					self.b.func.param_drop_status[name] = "string_arc_managed"
+				else:
+					self.b.func.param_drop_status[name] = "no_drop"
 		# Block-scope constants: binding_id → (TypeId, value).
 		# Populated by _visit_stmt_HLocalConst; consulted by _visit_expr_HVar.
 		self._local_consts: dict[int, tuple[TypeId, object]] = {}

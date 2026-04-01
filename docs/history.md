@@ -1,6 +1,46 @@
 # Drift development history
 
 ## 2026-04-01
+- **Replace `__postdrop_*` inference with explicit `param_drop_status` and diagnostic (0.27.136, ABI 7)**:
+  Drop refactor Phases A/B/D hybrid: the post-pass no longer silently injects
+  drops via MIR pattern scanning. Instead, HIR-to-MIR lowering records
+  `param_drop_status` on each MirFunc, and the post-pass cross-checks it
+  against `has_drop()` — any disagreement produces an explicit diagnostic
+  with full context instead of a silent `__postdrop_*` injection.
+  - Changes:
+    - `mir_nodes.py`: added `param_drop_status: Dict[str, str]` to MirFunc
+      with values: `scope_exit_drop`, `forwarded_to_callee`, `moved`,
+      `string_arc_managed`, `no_drop`
+    - `hir_to_mir.py`: lowerer populates `param_drop_status` for every param
+      at construction time, using the same `_needs_runtime_drop` /
+      `_type_is_destructible` / `has_drop` queries that determine
+      `_param_drop_locals`
+    - `driftc.py` (wrapper generation): synthesized method wrappers set
+      `forwarded_to_callee` for all params
+    - `driftc.py` (post-pass): `_postdrop_check_param_drops` replaces
+      `_postdrop_inject_missing_param_drops` — checks status against
+      `has_drop`, emits diagnostic with function ID, param name/type,
+      struct instance fields, destructor_fns presence, and input provenance
+    - no `__postdrop_*` injection — diagnostic only
+  - Status categories:
+    - `scope_exit_drop`: `_emit_scope_drops` will emit MoveOut+DropValue
+    - `forwarded_to_callee`: ownership transferred to callee (wrapper/move)
+    - `string_arc_managed`: has_drop=True but handled by string_arc
+      (String, Array, Error, DiagnosticValue, Interface)
+    - `no_drop`: has_drop=False at lowering time
+  - Diagnostic format: when has_drop=True at post-pass but status is
+    `no_drop` or missing, the compiler emits an error with param type,
+    TypeId, struct fields, destructor_fns membership, and input provenance —
+    sufficient to diagnose the exact `has_drop()` instability
+  - Why this matters: the 0.27.132–0.27.135 bug cycle showed that silent
+    `__postdrop_*` injection is the wrong repair strategy — it creates
+    double-drops when it disagrees with string_arc, and misses shapes that
+    the pattern matcher doesn't recognize. Explicit status + diagnostic
+    replaces inference with facts.
+  - Versioning:
+    - compiler version is `0.27.136`
+    - ABI remains `7`
+
 - **Clear `_needs_drop_cache` before MIR lowering to prevent stale `has_drop` results from omitting scope-exit drops (0.27.135, ABI 7)**:
   The `_needs_drop_cache` on the shared TypeTable could contain stale False
   entries from pre-K39 queries when MIR lowering began, causing

@@ -1186,6 +1186,14 @@ class MirFunc:
 	entry: str = "entry"
 	local_types: Dict[str, TypeId] = field(default_factory=dict)
 	debug_local_names: Dict[str, str] = field(default_factory=dict)
+	# Per-param drop status recorded by HIR-to-MIR lowering.
+	# Keys are param names. Values are one of:
+	#   "scope_exit_drop"     — _emit_scope_drops will emit MoveOut+DropValue
+	#   "forwarded_to_callee" — ownership transferred (move into call)
+	#   "moved"               — consumed by user-level move expression
+	#   "no_drop"             — Copy type or has_drop=False at lowering time
+	# Empty dict means status was not recorded (e.g. synthesized wrappers).
+	param_drop_status: Dict[str, str] = field(default_factory=dict)
 
 	def __post_init__(self) -> None:
 		if self.name != function_symbol(self.fn_id):

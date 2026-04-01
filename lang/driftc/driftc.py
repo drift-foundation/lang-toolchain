@@ -3016,107 +3016,105 @@ class Pass1State:
 	lambda_fn_specs: dict | None = None  # FunctionId -> LambdaFnSpec from Pass 1 type checker
 
 
-def _postdrop_inject_missing_param_drops(func: "M.MirFunc", type_table: "TypeTable") -> None:
-	"""Inject missing DropValues for owned parameters whose has_drop status
-	changed after destructor_fns was fully installed.
+def _format_param_drop_diagnostic(
+	func: "M.MirFunc",
+	param_name: str,
+	param_ty: "TypeId",
+	type_table: "TypeTable",
+	lowering_status: str,
+	postpass_has_drop: bool,
+) -> str:
+	"""Build a detailed diagnostic for param drop disagreement."""
+	import sys
+	td = type_table.get(param_ty)
+	inst = type_table.get_struct_instance(param_ty)
+	dfns = getattr(type_table, "destructor_fns", None) or {}
+	in_dfns = param_ty in dfns
+	pkg = getattr(type_table, "module_packages", {}).get(td.module_id, "<source>") if td.module_id else "<unknown>"
 
-	Checks for existing drops emitted by both _emit_scope_drops (MoveOut) and
-	any prior post-pass injection (LoadLocal).  Both must be recognized to
-	avoid double-drops.
+	lines = [
+		f"param drop disagreement in {func.name}:",
+		f"  param: {param_name}",
+		f"  type: {td.name} (ty={param_ty}, kind={td.kind.name}, module={td.module_id})",
+		f"  input: {pkg}",
+		f"  lowering_status: {lowering_status}",
+		f"  postpass has_drop: {postpass_has_drop}",
+		f"  in destructor_fns: {in_dfns}",
+	]
+	if inst is not None:
+		field_info = []
+		for i, ft in enumerate(inst.field_types):
+			ftd = type_table.get(ft)
+			fhd = type_table.has_drop(ft)
+			fin = ft in dfns
+			field_info.append(f"    [{i}] {ftd.name} ty={ft} kind={ftd.kind.name} has_drop={fhd} in_dfns={fin}")
+		lines.append(f"  struct instance: {len(inst.field_types)} fields")
+		lines.extend(field_info)
+	else:
+		lines.append("  struct instance: NOT AVAILABLE")
+	# Show generic name-match info for destructor_fns
+	if td.module_id and not in_dfns:
+		name_matches = [
+			(dtid, type_table.get(dtid).module_id)
+			for dtid in dfns
+			if type_table.get(dtid).name == td.name
+		]
+		if name_matches:
+			lines.append(f"  destructor name-matches (wrong TypeId): {name_matches}")
+	return "\n".join(lines)
 
-	Also detects parameters that were moved away via the string_arc move
-	pattern (LoadLocal(param) + ZeroValue + StoreLocal(param, zero)) and NOT
-	subsequently reinitialized — ownership was transferred to a callee.
+
+def _postdrop_check_param_drops(
+	func: "M.MirFunc",
+	type_table: "TypeTable",
+	diagnostics: list["Diagnostic"] | None = None,
+) -> None:
+	"""Check for param drop disagreements between lowering and post-pass.
+
+	For each param where has_drop is True at post-pass time but
+	param_drop_status says "no_drop", emit a detailed diagnostic instead of
+	silently injecting __postdrop_* drops.
+
+	Params with status "scope_exit_drop", "forwarded_to_callee", or "moved"
+	are already handled — no injection needed.
+
+	Params with no recorded status (empty param_drop_status, e.g. from older
+	MIR or non-lowered functions) fall back to a warning.
 	"""
-	# Collect ZeroValue destinations across all blocks — these are the
-	# "zero sentinels" that string_arc uses to mark a move.
-	_zero_dests: set[str] = set()
-	for block in func.blocks.values():
-		for instr in block.instructions:
-			if isinstance(instr, M.ZeroValue):
-				_zero_dests.add(instr.dest)
-
 	for param_name in func.params:
 		param_ty = func.local_types.get(param_name)
 		if param_ty is None:
 			continue
-		if not type_table.has_drop(param_ty):
+		postpass_has_drop = type_table.has_drop(param_ty)
+		if not postpass_has_drop:
 			continue
-		# Check if any block already has a DropValue for this param
-		# (via MoveOut or LoadLocal producing a value that feeds DropValue).
-		# _emit_scope_drops emits MoveOut; manual/post-pass drops use LoadLocal.
-		# string_arc may also emit LoadLocal→DropValue via _drop_all_destructibles.
-		_has_existing_drop = False
-		# Also detect the string_arc move pattern: within a single block,
-		# LoadLocal(local=param) followed later by StoreLocal(local=param,
-		# value=<zero>), with no subsequent non-zero StoreLocal reinitializing
-		# the param in ANY block.  This is the ownership-transfer pattern where
-		# the loaded value is forwarded to a Call.
-		_was_moved_away = False
-		for block in func.blocks.values():
-			for instr in block.instructions:
-				if isinstance(instr, (M.LoadLocal, M.MoveOut)) and instr.local == param_name:
-					_loaded_dest = instr.dest
-					for instr2 in block.instructions:
-						if isinstance(instr2, M.DropValue) and instr2.value == _loaded_dest:
-							_has_existing_drop = True
-							break
-				if _has_existing_drop:
-					break
-			if _has_existing_drop:
-				break
-		if not _has_existing_drop:
-			# Scan for the move-away pattern: within a block, require BOTH
-			# LoadLocal(local=param) and a later StoreLocal(local=param, <zero>).
-			# Then verify no block reinitializes param with a non-zero value
-			# after the zero-store.
-			_has_load_then_zero = False
-			for block in func.blocks.values():
-				_seen_load = False
-				for instr in block.instructions:
-					if isinstance(instr, M.LoadLocal) and instr.local == param_name:
-						_seen_load = True
-					elif isinstance(instr, M.StoreLocal) and instr.local == param_name:
-						if _seen_load and instr.value in _zero_dests:
-							_has_load_then_zero = True
-							break
-						# Non-zero store after load → not a simple move pattern.
-						_seen_load = False
-			if _has_load_then_zero:
-				# Check that no block reinitializes the param with a non-zero
-				# value (e.g. param reassigned from a new constructor).  Scan
-				# all StoreLocal(local=param) — if any stores a value that is
-				# NOT a ZeroValue dest, the param is reinitialized and still
-				# needs a drop.
-				_reinitialized = False
-				for block in func.blocks.values():
-					_past_zero = False
-					for instr in block.instructions:
-						if isinstance(instr, M.StoreLocal) and instr.local == param_name:
-							if instr.value in _zero_dests:
-								_past_zero = True
-							elif _past_zero:
-								_reinitialized = True
-								break
-				_was_moved_away = _has_load_then_zero and not _reinitialized
-		if _has_existing_drop or _was_moved_away:
+		status = func.param_drop_status.get(param_name)
+		# If lowering recorded that this param needs a scope-exit drop,
+		# was forwarded/moved, or is managed by string_arc — no action needed.
+		if status in ("scope_exit_drop", "forwarded_to_callee", "moved", "string_arc_managed"):
 			continue
-		# Inject LoadLocal + ZeroValue + StoreLocal + DropValue before
-		# Return in each return block.  Use __postdrop_ prefix to avoid
-		# collisions with existing locals (__arc*, t*, etc.).
-		_pdrop_counter = 0
-		for block in func.blocks.values():
-			if not isinstance(block.terminator, M.Return):
-				continue
-			_pdrop_counter += 1
-			tmp = f"__postdrop_{param_name}_{_pdrop_counter}"
-			func.local_types[tmp] = param_ty
-			block.instructions.append(M.LoadLocal(dest=tmp, local=param_name))
-			zero_tmp = f"__postdrop_{param_name}_z{_pdrop_counter}"
-			func.local_types[zero_tmp] = param_ty
-			block.instructions.append(M.ZeroValue(dest=zero_tmp, ty=param_ty))
-			block.instructions.append(M.StoreLocal(local=param_name, value=zero_tmp))
-			block.instructions.append(M.DropValue(value=tmp, ty=param_ty))
+		# Disagreement: has_drop=True at post-pass but lowering said no_drop
+		# (or status was never recorded).
+		if status == "no_drop" or status is None:
+			diag_msg = _format_param_drop_diagnostic(
+				func, param_name, param_ty, type_table,
+				lowering_status=status or "<not recorded>",
+				postpass_has_drop=True,
+			)
+			import sys
+			print(f"[driftc] error: {diag_msg}", file=sys.stderr)
+			if diagnostics is not None:
+				diagnostics.append(Diagnostic(
+					message=(
+						f"param '{param_name}' in {func.name}: has_drop() is True at post-pass "
+						f"but was '{status or '<not recorded>'}' at lowering time. "
+						f"This indicates has_drop() instability across pipeline stages. "
+						f"The param is missing a scope-exit drop."
+					),
+					severity="error",
+					span=None,
+					phase="postdrop",
+				))
 
 
 def compile_stubbed_funcs(
@@ -6986,6 +6984,9 @@ def compile_stubbed_funcs(
 		ok_dest = builder.new_temp()
 		builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
 		builder.set_terminator(M.Return(value=ok_dest))
+		# Wrappers forward all params to callee — ownership transferred.
+		for pname in param_names:
+			builder.func.param_drop_status[pname] = "forwarded_to_callee"
 		mir_funcs_by_id[spec.wrapper_fn_id] = builder.func
 
 	with _timed("mir_validate"):
@@ -7111,18 +7112,15 @@ def compile_stubbed_funcs(
 		derived_signatures_by_id=derived_signatures_by_id,
 		context="compile_stubbed_funcs post-synthesis",
 	)
-	# Post-pass: inject missing DropValues for owned parameters whose
-	# has_drop status changed after destructor_fns was fully installed.
-	#
-	# During initial MIR lowering, _emit_scope_drops may have missed some
-	# parameters because has_drop returned False (destructor_fns wasn't
-	# installed yet, or the cache was poisoned).  Now that destructor_fns
-	# is final, re-check each parameter and inject MoveOut + DropValue
-	# into Return-terminating blocks that lack them.
+	# Post-pass: check for param drop disagreements between lowering time
+	# and post-pass time.  With param_drop_status populated by the lowerer,
+	# we no longer silently inject __postdrop_* drops.  Instead, any
+	# disagreement (has_drop=True now but lowering said no_drop) produces
+	# an explicit diagnostic.
 	if shared_type_table is not None:
 		shared_type_table._needs_drop_cache.clear()
-		for fn_id, func in mir_funcs_by_id.items():
-			_postdrop_inject_missing_param_drops(func, shared_type_table)
+		for func in mir_funcs_by_id.values():
+			_postdrop_check_param_drops(func, shared_type_table, diagnostics=checked.diagnostics)
 	# Stage3: summaries
 	code_to_exc = {code: name for name, code in (exc_env or {}).items()}
 	summaries = ThrowSummaryBuilder().build(mir_funcs_by_id, code_to_exc=code_to_exc)
