@@ -1,6 +1,46 @@
 # Drift development history
 
 ## 2026-04-01
+- **Fixed post-pass drop injection double-drop for parameters already dropped by scope-exit MoveOut (0.27.132, ABI 7)**:
+  The post-pass `__postdrop_*` injection in `driftc.py` checked for existing
+  parameter drops by scanning for `LoadLocal` → `DropValue` sequences, but
+  `_emit_scope_drops` in `hir_to_mir.py` emits `MoveOut` → `DropValue`. The
+  detection never found MoveOut-based drops and injected a duplicate
+  `LoadLocal` + `DropValue`, causing a double-drop.
+  - Root cause:
+    - `_emit_scope_drops` emits `MoveOut(dest=tmp, local=param)` + `DropValue(tmp)`
+    - the post-pass existing-drop check only matched `isinstance(instr, M.LoadLocal)`
+    - when `destructor_fns` changed after initial MIR lowering (e.g. due to
+      external package loading via `--dep`), `has_drop` returned True for
+      parameters already correctly dropped by scope-exit code
+    - the post-pass missed the existing MoveOut-based drop and injected a
+      duplicate, decrementing Arc refcounts twice (2→0 instead of 2→1)
+  - Failure chain (drift-web `no_initial_cookies` certification):
+    - `rest.start()` spawns server fiber with `Arc<AtomicBool>` refcount=2
+    - corrupted drop code in `serve__impl` destroys the Arc twice at fiber exit
+    - `AtomicBool` freed while caller still holds a live reference
+    - server becomes unresponsive → client read fails → exit code 2001
+  - Trigger: only manifests when `--dep` adds external packages, because
+    external package loading changes post-MIR `has_drop()` results (additional
+    `destructor_fns` entries become visible), causing `has_drop` to return
+    True for types that were False during initial MIR lowering
+  - Fix:
+    - existing-drop detection now checks `isinstance(instr, (M.LoadLocal, M.MoveOut))`
+    - both scope-exit drops (MoveOut) and manual/post-pass drops (LoadLocal)
+      are recognized, preventing duplicate injection
+  - Regression coverage:
+    - `test_postdrop_does_not_double_drop_moveout`: proves the fix (MoveOut
+      drop detected, no duplicate injected)
+    - `test_broken_pass_double_drops_moveout`: proves the bug (old code
+      produces 2 DropValues)
+    - `test_postdrop_injects_when_no_existing_drop`: proves injection still
+      works when genuinely needed
+    - `test_postdrop_detects_loadlocal_based_drop`: proves LoadLocal detection
+      path unchanged
+  - Versioning:
+    - compiler version is `0.27.132`
+    - ABI remains `7`
+
 - **Fixed source-mode `pub type` alias/re-export resolution ordering so facade aliases no longer create divergent `FORWARD_NOMINAL` identities during signature/body checking (0.27.131, ABI 7)**:
   This fixes the source-compilation bug where a module could reference a public
   type alias re-export from another module before that alias had been
