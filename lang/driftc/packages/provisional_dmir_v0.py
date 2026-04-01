@@ -524,6 +524,88 @@ def decode_trait_expr(obj: Any) -> parser_ast.TraitExpr | None:
 	return None
 
 
+def _collect_mir_type_ids(mir_funcs: Mapping[str, Any]) -> set[int]:
+	"""Collect all TypeId integers referenced by MIR functions."""
+	from lang.driftc.stage2 import mir_nodes as M
+	tids: set[int] = set()
+	_TID_FIELD_NAMES = {
+		"ty", "struct_ty", "variant_ty", "field_ty", "elem_ty",
+		"inner_ty", "raw_ty", "ptr_ty", "src_ty", "dst_ty",
+		"iface_ty", "data_ty", "env_ty", "value_ty", "user_ret_type",
+	}
+	for func in mir_funcs.values():
+		if not isinstance(func, M.MirFunc):
+			continue
+		for tid in (getattr(func, "local_types", {}) or {}).values():
+			if isinstance(tid, int):
+				tids.add(tid)
+		for block in func.blocks.values():
+			for instr in block.instructions:
+				for f in dataclasses.fields(instr):
+					val = getattr(instr, f.name, None)
+					if isinstance(val, int) and f.name in _TID_FIELD_NAMES:
+						tids.add(val)
+					elif isinstance(val, (list, tuple)) and f.name == "param_types":
+						for item in val:
+							if isinstance(item, int):
+								tids.add(item)
+				call_sig = getattr(instr, "call_sig", None)
+				if call_sig is not None:
+					for csf in dataclasses.fields(call_sig):
+						csv = getattr(call_sig, csf.name, None)
+						if isinstance(csv, int) and csf.name in _TID_FIELD_NAMES:
+							tids.add(csv)
+						elif isinstance(csv, (list, tuple)) and csf.name == "param_types":
+							for item in csv:
+								if isinstance(item, int):
+									tids.add(item)
+	return tids
+
+
+def _transitive_type_closure(seeds: set[int], table: TypeTable) -> set[int]:
+	"""Compute the transitive closure of TypeIds through TypeDef.param_types
+	and instance type_args."""
+	reachable: set[int] = set()
+	worklist = list(seeds)
+	while worklist:
+		tid = worklist.pop()
+		if tid in reachable:
+			continue
+		reachable.add(tid)
+		try:
+			td = table.get(tid)
+		except (KeyError, IndexError):
+			continue
+		for pt in td.param_types:
+			if pt not in reachable:
+				worklist.append(pt)
+		inst = table.struct_instances.get(tid)
+		if inst is not None:
+			if inst.base_id not in reachable:
+				worklist.append(inst.base_id)
+			for arg in inst.type_args:
+				if arg not in reachable:
+					worklist.append(arg)
+			for ft in inst.field_types:
+				if ft not in reachable:
+					worklist.append(ft)
+		iinst = table.interface_instances.get(tid)
+		if iinst is not None:
+			if iinst.base_id not in reachable:
+				worklist.append(iinst.base_id)
+			for arg in iinst.type_args:
+				if arg not in reachable:
+					worklist.append(arg)
+		vinst = table.variant_instances.get(tid)
+		if vinst is not None:
+			if vinst.base_id not in reachable:
+				worklist.append(vinst.base_id)
+			for arg in getattr(vinst, "type_args", []) or []:
+				if arg not in reachable:
+					worklist.append(arg)
+	return reachable
+
+
 def _canonical_key_to_json(key: object) -> Any:
 	"""Convert a canonical TypeKey tuple to a JSON-serializable structure."""
 	if isinstance(key, tuple):
@@ -542,22 +624,32 @@ def _canonical_key_from_json(obj: Any) -> object:
 	return obj
 
 
-def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict[int, object] | None = None) -> dict[str, Any]:
-	"""Encode the TypeTable deterministically."""
+def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict[int, object] | None = None, reachable_tids: set[int] | None = None) -> dict[str, Any]:
+	"""Encode the TypeTable deterministically.
+
+	When reachable_tids is provided, only emit defs for TypeIds in that set.
+	Types outside the set are still covered by canonical_keys (Phase 9) so
+	the linker can compute their keys without the TypeDef graph walk.
+	"""
 	if table.package_id is None:
 		raise ValueError("type table missing package_id (set TypeTable.package_id before encoding)")
 	if table.package_id != package_id:
 		raise ValueError("type table package_id mismatch during encoding")
-	for key in getattr(table, "_nominal", {}).keys():  # type: ignore[attr-defined]
-		if key.module_id is None:
-			continue
-		if key.module_id == "lang.core":
-			table.module_packages.setdefault("lang.core", "lang.core")
-			continue
-		if key.package_id == package_id and table.module_packages.get(key.module_id) != package_id:
-			raise ValueError(
-				f"module_packages missing/incorrect for declared module '{key.module_id}'"
-			)
+	# Module-packages validation: only for full defs. Slimmed packages may
+	# include types from dependency modules via transitive closure.
+	if reachable_tids is None:
+		for key in getattr(table, "_nominal", {}).keys():  # type: ignore[attr-defined]
+			if key.module_id is None:
+				continue
+			if key.module_id == "lang.core":
+				table.module_packages.setdefault("lang.core", "lang.core")
+				continue
+			if key.package_id == package_id and table.module_packages.get(key.module_id) != package_id:
+				raise ValueError(
+					f"module_packages missing/incorrect for declared module '{key.module_id}'"
+				)
+	else:
+		table.module_packages.setdefault("lang.core", "lang.core")
 
 	def _def_to_obj(td: TypeDef) -> dict[str, Any]:
 		out = {
@@ -619,7 +711,10 @@ def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict
 		return out
 
 	defs: dict[str, Any] = {}
+	_emit_tids = reachable_tids  # None means emit all
 	for tid in sorted(table._defs.keys()):  # type: ignore[attr-defined]
+		if _emit_tids is not None and tid not in _emit_tids:
+			continue
 		defs[str(tid)] = _def_to_obj(table._defs[tid])  # type: ignore[attr-defined]
 	variant_schemas: dict[str, Any] = {}
 	for base_id in sorted(table.variant_schemas.keys()):
@@ -760,7 +855,7 @@ def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict
 	if canonical_keys is not None:
 		canonical_keys_obj = {}
 		for ck_tid in sorted(canonical_keys.keys()):
-			if str(ck_tid) in defs:  # only emit keys for TypeIds that are in defs
+			if True:  # emit keys for ALL TypeIds, including those not in slimmed defs
 				canonical_keys_obj[str(ck_tid)] = _canonical_key_to_json(canonical_keys[ck_tid])
 
 	out = {
@@ -944,10 +1039,10 @@ def encode_signatures(
 			"impl_target_type": impl_target_type_obj,
 			"error_type": error_type_obj,
 		}
-		# Stage 8.3: when type_table is provided (v1 payload), raw TypeId
-		# fields are omitted — TypeExpr is authoritative.  Without type_table
-		# (v0 compat / tests), raw fields are still emitted.
-		# Exception: __inst__ and generic (type_params/impl_type_params) sigs
+		# Raw TypeId fields are omitted for concrete non-generic signatures
+		# (TypeExpr is authoritative). Without type_table (test helpers only),
+		# raw fields are emitted for backward compatibility with test code.
+		# __inst__ and generic (type_params/impl_type_params) sigs
 		# keep raw TypeId fields because TypeExpr resolution with TypeVars may
 		# produce different interned TypeIds than tid_map, and method resolution
 		# depends on exact TypeId identity.
@@ -1415,9 +1510,10 @@ def encode_module_payload_v0(
 	impl_headers: list[dict[str, Any]] | None = None,
 	trait_scope: list[dict[str, Any]] | None = None,
 	canonical_keys: dict[int, object] | None = None,
+	reachable_tids: set[int] | None = None,
 ) -> dict[str, Any]:
 	"""Build the provisional payload object (not yet canonical-JSON encoded)."""
-	tt_obj = encode_type_table(type_table, package_id=package_id, canonical_keys=canonical_keys)
+	tt_obj = encode_type_table(type_table, package_id=package_id, canonical_keys=canonical_keys, reachable_tids=reachable_tids)
 	consts: list[str] = list(exported_consts or [])
 	const_table: dict[str, Any] = {}
 	exported_const_set: set[str] = set(consts)

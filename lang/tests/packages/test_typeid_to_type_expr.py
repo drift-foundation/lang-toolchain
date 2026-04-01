@@ -425,54 +425,49 @@ def test_canonical_keys_absent_when_not_provided() -> None:
 def test_linker_uses_canonical_keys_shortcut() -> None:
 	"""Prove the linker prefers canonical_keys over TypeDef walk.
 
-	Strategy: encode a valid type table, then mutate the serialized defs to
-	give a struct a wrong name. If the linker used the TypeDef walk, it would
-	see the wrong name and produce a different key. If it uses canonical_keys,
-	the correct key is used regardless of the poisoned def.
+	Strategy: encode a valid type table with an Array<Int> type, then remove
+	the Array def from the serialized defs (making the TypeDef walk impossible
+	for that TypeId). The canonical_keys entry still carries the correct key,
+	so linking should succeed. Without the shortcut, the missing def would
+	raise ValueError.
 	"""
-	import copy
 	from lang.driftc.packages.type_table_link_v0 import (
 		compute_canonical_keys,
-		decode_type_table_obj,
 		import_type_tables_and_build_typeid_maps,
 	)
 	from lang.driftc.packages.provisional_dmir_v0 import encode_type_table
 
-	# Build a producer type table.
+	# Build a producer type table with Array<Int>.
 	producer = TypeTable()
 	producer.package_id = "test.pkg"
 	producer.module_packages["test.mod"] = "test.pkg"
 	int_tid = producer.ensure_int()
-	base = producer.declare_struct(module_id="test.mod", name="Bar", field_names=["v"])
-	producer.define_struct_fields(base, [int_tid])
+	arr_tid = producer.new_array(int_tid)
 
 	# Encode with canonical_keys.
 	keys = compute_canonical_keys(producer, "test.pkg")
 	tt_obj = encode_type_table(producer, package_id="test.pkg", canonical_keys=keys)
 
-	# Poison the def: rename "Bar" to "POISONED" in the serialized defs.
-	# The TypeDef walk would now produce ("nominal", "STRUCT", ..., "POISONED")
-	# but canonical_keys still says ("nominal", "STRUCT", ..., "Bar").
+	# Remove the Array def from defs. The TypeDef walk would now raise
+	# "unknown TypeId" for this entry. But canonical_keys still has the key.
 	tt_obj = dict(tt_obj)
-	tt_obj["defs"] = copy.deepcopy(tt_obj["defs"])
-	tt_obj["defs"][str(base)]["name"] = "POISONED"
+	tt_obj["defs"] = {k: v for k, v in tt_obj["defs"].items() if k != str(arr_tid)}
+	# canonical_keys still contains the array entry.
+	assert str(arr_tid) in tt_obj["canonical_keys"]
 
-	# Link into a host TypeTable.
+	# Link into a host TypeTable — should succeed via canonical_keys shortcut.
 	host = TypeTable()
 	tid_maps = import_type_tables_and_build_typeid_maps([tt_obj], host)
 	tid_map = tid_maps[0]
 
-	# If canonical_keys shortcut is active, the struct links as "Bar" (correct).
-	# If the TypeDef walk ran, it would link as "POISONED" (wrong).
-	host_bar = host.get_struct_base(module_id="test.mod", name="Bar")
-	assert host_bar is not None, (
-		"Struct should be linked as 'Bar' via canonical_keys, not 'POISONED' via TypeDef walk"
+	# The array type should have been linked via its canonical key.
+	assert arr_tid in tid_map, (
+		"Array TypeId should be linked via canonical_keys even though its def was removed"
 	)
-	assert tid_map[base] == host_bar
 
 
-def test_linker_fallback_without_canonical_keys() -> None:
-	"""Prove the linker still works when canonical_keys is absent (v0/v1 compat)."""
+def test_linker_rejects_packages_without_canonical_keys() -> None:
+	"""Prove the linker rejects packages that lack canonical_keys."""
 	from lang.driftc.packages.type_table_link_v0 import (
 		import_type_tables_and_build_typeid_maps,
 	)
@@ -485,18 +480,14 @@ def test_linker_fallback_without_canonical_keys() -> None:
 	base = producer.declare_struct(module_id="test.mod", name="Baz", field_names=["v"])
 	producer.define_struct_fields(base, [int_tid])
 
-	# Encode WITHOUT canonical_keys (simulating old package).
+	# Encode WITHOUT canonical_keys (old-format package).
 	tt_obj = encode_type_table(producer, package_id="test.pkg")
 	assert "canonical_keys" not in tt_obj
 
-	# Link should still work via TypeDef walk fallback.
+	# Linker must reject with a clear message.
 	host = TypeTable()
-	tid_maps = import_type_tables_and_build_typeid_maps([tt_obj], host)
-	tid_map = tid_maps[0]
-
-	host_baz = host.get_struct_base(module_id="test.mod", name="Baz")
-	assert host_baz is not None
-	assert tid_map[base] == host_baz
+	with pytest.raises(ValueError, match="missing canonical_keys"):
+		import_type_tables_and_build_typeid_maps([tt_obj], host)
 
 
 def test_typevar_canonical_key_normalizes_owner_package() -> None:

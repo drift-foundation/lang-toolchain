@@ -316,7 +316,7 @@
   not for all types.
 
   ─────────────────────────────────────────────────────────────────────
-  Implementation Status (updated 2026-03-30)
+  Implementation Status (updated 2026-03-31)
   ─────────────────────────────────────────────────────────────────────
 
   Stages 1–6: DONE
@@ -341,32 +341,50 @@
   world-backed paths. Read + write path fully migrated in borrow
   checker, type checker, and analysis writers.
 
-  ─────────────────────────────────────────────────────────────────────
-  Remaining Phases
-  ─────────────────────────────────────────────────────────────────────
+  Phase 7A — Legacy cleanup (escape metadata)              [DONE]
+  Phase 7B — Legacy cleanup (registry/canonicalization)    [DONE]
 
-  Phase 7A — Legacy cleanup (escape metadata)              [IN PROGRESS]
+  Phase 8 — Package payload/interface format redesign      [DONE 8.0–8.3]
 
-  World-backed production reads/writes already use the overlay as sole
-  authority (completed in Stage 6).  Remaining work:
-  - Delete FnSignature.param_escape_level field from world-backed code paths
-    (field stays only for non-world test helpers)
-  - Remove compatibility branches in _free_fn_escape_sig that check both
-    overlay and sig field
-  - Migrate more mid-level helpers to semantic_world
+  Stage 8.0 — typeid_to_type_expr reconstruction API + producer
+  completeness. Full recursive TypeId->TypeExpr walker. Enforced
+  completeness (raises on reconstruction failure). New fields:
+  impl_target_type, error_type.
 
-  Phase 7B — Legacy cleanup (registry/canonicalization)    [NOT STARTED]
+  Stage 8.1 — Consumer dual-path with TypeExpr preference. Both
+  _build_package_consumer_unit and main() external sig paths prefer
+  TypeExpr resolution, fall back to tid_map for generic/__inst__/
+  UNKNOWN/FORWARD_NOMINAL cases.
 
-  - Remove is_external / skip_modules from _register_signatures_in_callable_registry
-  - Convert canonicalization sweeps from instrumented safety net to hard assertion
-  - Remove sweeps once proven clean across broader test surface
+  Stage 8.2 — Canonical equality assertion mode.
+  _host_type_key() with package-aware identity. Hard assert on
+  canonical mismatches via DRIFT_DEBUG_TYPEXPR_RESOLVE=1.
+  853/853 driver tests pass with assertions active.
 
-  Phase 8 — Package payload/interface format redesign      [NOT STARTED]
-             (separate project)
+  Stage 8.3 — Drop raw TypeId fields from concrete non-generic
+  non-__inst__ signature JSON. payload_version bumped 0→1. Consumer
+  accepts v0 and v1. Generic/__inst__ sigs retain raw fields.
 
-  - Redesign package payload around semantic type expressions / canonical keys
-  - Replace raw TypeId-centric param_type_ids / return_type_id / impl_target_type_id
-    with structural type-expression trees
-  - Explicit producer + consumer migration plan
-  - Likely its own version/history milestone
-  - Higher risk: touches package serialization contract, loading, compatibility
+  Phase 9 — Linker canonical-key refactor                  [DONE]
+
+  compute_canonical_keys() serialized in type_table section.
+  canonical_keys is required — linker rejects packages without it.
+  key_for_tid is canonical_keys-only (legacy defs walk removed).
+  TYPEVAR owner package normalized. Proven by poisoned-def regression
+  and rejection test for non-keyed packages.
+
+  Phase 10 — Linker Phase B decoupling from pkg.defs       [DONE]
+
+  Schema validation uses canonical_keys for base_id identity checks.
+  Provided-nominal validation uses canonical_keys. SCALAR collection
+  uses provided_nominals + canonical_keys extraction. Legacy defs-scan
+  fallback branches removed. Decode-time validations tolerate absent
+  defs for non-MIR types.
+
+  Stage 8.4 — Slim type_table.defs to MIR-reachable        [DONE]
+
+  Defs emitted only for MIR-reachable + synthetic struct + const seeds
+  (~39% reduction). All other types covered by canonical_keys. Linker
+  key_for_tid reads from canonical_keys (no defs walk). Remaining
+  pkg.defs reads: synthetic struct field population sweep (retained
+  MIR-reachable defs) and typevar display name (td.name from defs).

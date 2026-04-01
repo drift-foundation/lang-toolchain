@@ -41,6 +41,9 @@ def test_type_key_string_does_not_raise_after_link() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "SCALAR", "module_id": "b.mod", "name": "Size"}],
+		"canonical_keys": {
+			"1": ["nominal", "SCALAR", "pkgB", "b.mod", "Size"],
+		},
 	}
 	from lang.driftc.packages.type_table_link_v0 import import_type_tables_and_build_typeid_maps
 

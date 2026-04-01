@@ -85,8 +85,9 @@ class DecodedTypeTable:
 	variant_schemas: dict[TypeId, VariantSchema]
 	provided_nominals: set[tuple[TypeKind, str, str]]
 	type_aliases: list[tuple[str, str, list[str], GenericTypeExpr]]
-	# Phase 9: pre-computed canonical keys from the producer.
-	# When present, key_for_tid can read from this index instead of walking defs.
+	# Pre-computed canonical keys from the producer. Required — the linker
+	# rejects packages without canonical_keys. None only during decode before
+	# the field is populated.
 	canonical_keys: dict[TypeId, object] | None = None
 
 
@@ -317,8 +318,10 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 			if module_id != type_mod or name != type_name:
 				raise ValueError("interface_schemas entry does not match type_id")
 			base_def = defs.get(base_id)
-			if base_def is None or base_def.kind is not TypeKind.INTERFACE:
-				raise ValueError("interface_schemas entry missing INTERFACE TypeDef")
+			# Defs are slimmed to MIR-reachable types; base_id may not be
+			# present. Identity is validated by the linker via canonical_keys.
+			if base_def is not None and base_def.kind is not TypeKind.INTERFACE:
+				raise ValueError("interface_schemas entry base_id is not an INTERFACE TypeDef")
 			type_params: list[str] = []
 			if type_params_obj is not None:
 				if not isinstance(type_params_obj, list):
@@ -404,10 +407,12 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		for base_id_s, schema_obj in variant_schemas_obj.items():
 			base_id = int(base_id_s)
 			base_def = defs.get(base_id)
-			if base_def is None or base_def.kind is not TypeKind.VARIANT:
-				raise ValueError("variant_schemas entry missing VARIANT TypeDef")
-			if base_def.param_types:
-				raise ValueError("variant base TypeDef must not carry param_types")
+			# Defs are slimmed to MIR-reachable types; base_id may be absent.
+			if base_def is not None:
+				if base_def.kind is not TypeKind.VARIANT:
+					raise ValueError("variant_schemas entry base_id is not a VARIANT TypeDef")
+				if base_def.param_types:
+					raise ValueError("variant base TypeDef must not carry param_types")
 			if not isinstance(schema_obj, dict):
 				raise ValueError("invalid variant schema entry")
 			schema_mid = schema_obj.get("module_id")
@@ -445,7 +450,7 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 					raise ValueError("invalid variant schema tombstone_ctor (no matching arm)")
 				if tomb_arm.fields:
 					raise ValueError("invalid variant schema tombstone_ctor (must have no payload)")
-			if base_def.module_id != schema_mid or base_def.name != name:
+			if base_def is not None and (base_def.module_id != schema_mid or base_def.name != name):
 				raise ValueError("variant schema does not match base VARIANT TypeDef")
 			variant_schemas[base_id] = VariantSchema(
 				module_id=schema_mid,
@@ -468,14 +473,16 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 			type_args_obj = entry.get("type_args")
 			if not isinstance(inst_id_obj, int) or not isinstance(base_id_obj, int) or not isinstance(type_args_obj, list):
 				raise ValueError("invalid struct_instances entry fields")
+			# With slimmed defs, base/inst defs may be absent.
 			base_def = defs.get(base_id_obj)
-			if base_def is None or base_def.kind is not TypeKind.STRUCT:
-				raise ValueError("invalid struct_instances entry base_id")
 			inst_def = defs.get(inst_id_obj)
-			if inst_def is None or inst_def.kind is not TypeKind.STRUCT:
+			if base_def is not None and base_def.kind is not TypeKind.STRUCT:
+				raise ValueError("invalid struct_instances entry base_id")
+			if inst_def is not None and inst_def.kind is not TypeKind.STRUCT:
 				raise ValueError("invalid struct_instances entry inst_id")
-			if inst_def.module_id != base_def.module_id or inst_def.name != base_def.name:
-				raise ValueError("struct instance TypeDef does not match base identity")
+			if base_def is not None and inst_def is not None:
+				if inst_def.module_id != base_def.module_id or inst_def.name != base_def.name:
+					raise ValueError("struct instance TypeDef does not match base identity")
 			struct_instances[int(inst_id_obj)] = (int(base_id_obj), [int(x) for x in type_args_obj])
 
 	interface_instances_obj = obj.get("interface_instances")
@@ -492,13 +499,14 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 			if not isinstance(inst_id_obj, int) or not isinstance(base_id_obj, int) or not isinstance(type_args_obj, list):
 				raise ValueError("invalid interface_instances entry fields")
 			base_def = defs.get(base_id_obj)
-			if base_def is None or base_def.kind is not TypeKind.INTERFACE:
-				raise ValueError("invalid interface_instances entry base_id")
 			inst_def = defs.get(inst_id_obj)
-			if inst_def is None or inst_def.kind is not TypeKind.INTERFACE:
+			if base_def is not None and base_def.kind is not TypeKind.INTERFACE:
+				raise ValueError("invalid interface_instances entry base_id")
+			if inst_def is not None and inst_def.kind is not TypeKind.INTERFACE:
 				raise ValueError("invalid interface_instances entry inst_id")
-			if inst_def.module_id != base_def.module_id or inst_def.name != base_def.name:
-				raise ValueError("interface instance TypeDef does not match base identity")
+			if base_def is not None and inst_def is not None:
+				if inst_def.module_id != base_def.module_id or inst_def.name != base_def.name:
+					raise ValueError("interface instance TypeDef does not match base identity")
 			interface_instances[int(inst_id_obj)] = (int(base_id_obj), [int(x) for x in type_args_obj])
 
 	provided_nominals_obj = obj.get("provided_nominals")
@@ -817,23 +825,30 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	module_providers: dict[str, str] = {}
 	for pkg in pkgs:
 		provided = {(k, mid, name) for (k, mid, name) in pkg.provided_nominals}
-		for kind, module_id, name in provided:
-			match = next(
-				(
-					td
-					for td in pkg.defs.values()
-					if td.kind is kind and td.module_id == module_id and td.name == name
-				),
-				None,
+		if pkg.canonical_keys is None:
+			raise ValueError(
+				f"package '{pkg.package_id}' missing canonical_keys; "
+				f"rebuild with a compiler that emits canonical_keys (payload_version >= 1)"
 			)
-			if match is None or _builtin_type_id(host, match) is not None:
-				raise ValueError("invalid provided_nominals entry (no matching TypeDef)")
+		for kind, module_id, name in provided:
+			expected_pkg = _normalized_pkg_id_for_module(pkg.package_id, module_id)
+			expected_key = ("nominal", kind.name, expected_pkg, module_id, name)
+			found = any(ck == expected_key for ck in pkg.canonical_keys.values())
+			if not found:
+				raise ValueError(f"invalid provided_nominals entry ({kind.name} {module_id}:{name}, no matching canonical key)")
 		for kind, module_id, name in provided:
 			if module_id != "lang.core":
 				prev = module_providers.get(module_id)
 				if prev is None:
 					module_providers[module_id] = pkg.package_id
 				elif prev != pkg.package_id:
+					# Tolerate when std/lang modules are claimed by multiple
+					# user packages — these come from shared type table
+					# accumulation in multi-package builds, not from real
+					# ownership claims. The canonical provider is always the
+					# std or lang.core package.
+					if module_id.startswith(("std.", "lang.")):
+						continue
 					raise ValueError(f"module id collision for '{module_id}'")
 				continue
 			if pkg.package_id != "lang.core":
@@ -864,136 +879,32 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		def key_for_tid(tid: TypeId) -> TypeKey:
 			if tid in memo:
 				return memo[tid]
-			# Phase 9: use pre-computed canonical key when available.
-			if pkg.canonical_keys is not None and tid in pkg.canonical_keys:
+			# Primary path: canonical_keys (required for all packages).
+			if tid in pkg.canonical_keys:
 				k = pkg.canonical_keys[tid]
 				memo[tid] = k
-				# Still need typevar display name tracking.
+				# TypeVar display name tracking still needs the def.
 				td = pkg.defs.get(tid)
 				if td is not None and td.kind is TypeKind.TYPEVAR and td.type_param_id is not None:
 					existing_entry = typevar_display_names.get(k)
 					if existing_entry is None or tid < existing_entry[0]:
 						typevar_display_names[k] = (tid, td.name)
 				return k
-			td = pkg.defs.get(tid)
-			if td is None:
-				raise ValueError(f"unknown TypeId {tid} referenced by package type table")
-			# Builtins: identified by kind+name (toolchain-owned).
-			if _builtin_type_id(host, td) is not None:
-				builtin_name = _canonical_builtin_name(td.name)
-				k = ("builtin", td.kind.name, builtin_name)
-				memo[tid] = k
-				return k
-			# Nominal identities: (kind,package_id,module_id,name).
-			mid = td.module_id or ""
-			pkg_id = _normalized_pkg_id_for_module(pkg.package_id, td.module_id) if mid else ""
-			if td.kind is TypeKind.STRUCT and tid in pkg.struct_instances:
-				base_id, type_args = pkg.struct_instances[tid]
-				base_def = pkg.defs.get(base_id)
-				if base_def is None or base_def.kind is not TypeKind.STRUCT:
-					raise ValueError("struct instance missing base TypeDef")
-				if base_def.module_id is None:
-					raise ValueError(f"struct instance base '{base_def.name}' missing module_id")
-				if td.module_id != base_def.module_id or td.name != base_def.name:
-					raise ValueError("struct instance TypeDef does not match base identity")
-				base_mid = base_def.module_id or ""
-				base_pkg_id = _normalized_pkg_id_for_module(pkg.package_id, base_def.module_id) if base_mid else ""
-				base_key = ("nominal", TypeKind.STRUCT.name, base_pkg_id, base_mid, base_def.name)
-				arg_keys = tuple(key_for_tid(x) for x in type_args)
-				k = ("inst", base_key, arg_keys)
-				memo[tid] = k
-				return k
-			if td.kind is TypeKind.INTERFACE and tid in pkg.interface_instances:
-				base_id, type_args = pkg.interface_instances[tid]
-				base_def = pkg.defs.get(base_id)
-				if base_def is None or base_def.kind is not TypeKind.INTERFACE:
-					raise ValueError("interface instance missing base TypeDef")
-				if base_def.module_id is None:
-					raise ValueError(f"interface instance base '{base_def.name}' missing module_id")
-				if td.module_id != base_def.module_id or td.name != base_def.name:
-					raise ValueError("interface instance TypeDef does not match base identity")
-				base_mid = base_def.module_id or ""
-				base_pkg_id = _normalized_pkg_id_for_module(pkg.package_id, base_def.module_id) if base_mid else ""
-				base_key = ("nominal", TypeKind.INTERFACE.name, base_pkg_id, base_mid, base_def.name)
-				arg_keys = tuple(key_for_tid(x) for x in type_args)
-				k = ("inst", base_key, arg_keys)
-				memo[tid] = k
-				return k
-			if td.kind in (TypeKind.STRUCT, TypeKind.SCALAR):
-				if td.kind is TypeKind.SCALAR and _builtin_type_id(host, td) is None and td.module_id is None:
-					raise ValueError(f"package SCALAR '{td.name}' missing module_id")
-				if td.kind is TypeKind.STRUCT and td.module_id is None:
-					raise ValueError(f"package STRUCT '{td.name}' missing module_id")
-				k = ("nominal", td.kind.name, pkg_id, mid, td.name)
-				memo[tid] = k
-				return k
-			if td.kind is TypeKind.FORWARD_NOMINAL:
-				if td.module_id is None:
-					raise ValueError(f"package FORWARD_NOMINAL '{td.name}' missing module_id")
-				# Resolve to the concrete type's canonical key when a concrete
-				# definition exists in the same package.  FORWARD_NOMINAL entries
-				# are cross-module references; without this unification the
-				# FORWARD_NOMINAL and its concrete counterpart would receive
-				# different host TypeIds causing type confusion in package MIR.
-				resolved_kind: str | None = None
-				for other_tid, other_td in pkg.defs.items():
-					if other_tid == tid:
-						continue
-					if other_td.module_id == td.module_id and other_td.name == td.name and other_td.kind in (TypeKind.STRUCT, TypeKind.INTERFACE, TypeKind.VARIANT):
-						resolved_kind = other_td.kind.name
-						break
-				k = ("nominal", resolved_kind or td.kind.name, pkg_id, mid, td.name)
-				memo[tid] = k
-				return k
-			if td.kind is TypeKind.INTERFACE:
-				if td.module_id is None:
-					raise ValueError(f"package INTERFACE '{td.name}' missing module_id")
-				k = ("nominal", td.kind.name, pkg_id, mid, td.name)
-				memo[tid] = k
-				return k
-			if td.kind is TypeKind.VARIANT:
-				base_key = ("nominal", TypeKind.VARIANT.name, pkg_id, mid, td.name)
-				# Distinguish base vs instantiated variant types.
-				if tid in pkg.variant_schemas and not td.param_types:
-					memo[tid] = base_key
-					return base_key
-				if td.param_types:
-					arg_keys = tuple(key_for_tid(x) for x in td.param_types)
-					k = ("inst", base_key, arg_keys)
-					memo[tid] = k
-					return k
-				memo[tid] = base_key
-				return base_key
-			if td.kind is TypeKind.TYPEVAR:
-				owner = td.type_param_id.owner
-				owner_pkg = _normalized_pkg_id_for_module(pkg.package_id, owner.module) if owner.module else pkg.package_id
-				k = ("typevar", owner_pkg, ("owner", owner.module, owner.name, owner.ordinal), td.type_param_id.index)
-				existing_entry = typevar_display_names.get(k)
-				if existing_entry is None or tid < existing_entry[0]:
-					typevar_display_names[k] = (tid, td.name)
-				memo[tid] = k
-				return k
-
-			# Structural / derived types.
-			sub_keys = tuple(key_for_tid(x) for x in td.param_types)
-			if td.kind is TypeKind.ARRAY:
-				k = ("array", sub_keys[0])
-			elif td.kind is TypeKind.REF:
-				k = ("ref", bool(td.ref_mut), sub_keys[0])
-			elif td.kind is TypeKind.FNRESULT:
-				k = ("fnresult", sub_keys[0], sub_keys[1])
-			elif td.kind is TypeKind.FUNCTION:
-				k = ("function", bool(td.fn_throws), sub_keys)
-			else:
-				k = ("kind", td.kind.name, td.name, sub_keys, bool(td.ref_mut))
-			memo[tid] = k
-			return k
+			raise ValueError(
+				f"TypeId {tid} not in canonical_keys for package "
+				f"'{pkg.package_id}'; rebuild the package"
+			)
 
 		m: dict[TypeId, TypeKey] = {}
 		for tid in pkg.defs.keys():
 			m[tid] = key_for_tid(tid)
-		# Phase 9: validate serialized canonical keys match linker-computed keys.
-		if pkg.canonical_keys is not None and os.environ.get("DRIFT_DEBUG_CANONICAL_KEYS") == "1":
+		# Include TypeIds from canonical_keys that aren't in slimmed defs.
+		for tid, ck in pkg.canonical_keys.items():
+			if tid not in m:
+				m[tid] = ck
+				memo[tid] = ck
+		# Validate serialized canonical keys match defs-derived keys (debug mode).
+		if os.environ.get("DRIFT_DEBUG_CANONICAL_KEYS") == "1":
 			_ck_mismatches = 0
 			for tid, linker_key in m.items():
 				serialized_key = pkg.canonical_keys.get(tid)
@@ -1046,27 +957,16 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	# Phase A: merge/validate struct schemas with full field typing.
 	merged_struct_schemas: dict[NominalKey, tuple[list[StructFieldSchema], list[str]]] = {}
 	for pkg_idx, pkg in enumerate(pkgs):
-		# Index STRUCT TypeDefs by (module_id, name) rather than full NominalKey.
-		# The package_id in the struct_schema's NominalKey reflects the *original*
-		# source package, but _normalized_pkg_id_for_module uses the *consuming*
-		# package's id — these differ for cross-package dependency types.
-		pkg_struct_ids: dict[tuple[str, str], list[TypeId]] = {}
-		for tid, td in pkg.defs.items():
-			if td.kind is TypeKind.STRUCT:
-				if td.module_id is None:
-					raise ValueError(f"package STRUCT '{td.name}' missing module_id")
-				pkg_struct_ids.setdefault((td.module_id, td.name), []).append(tid)
+		pkg_keys = pkg_tid_to_key[pkg_idx]
 		for key, (field_schemas, type_params, base_id) in pkg.struct_schemas.items():
-			candidates = pkg_struct_ids.get((key.module_id, key.name))
-			if not candidates:
-				raise ValueError(f"struct schema '{key.module_id}:{key.name}' missing STRUCT TypeDef in package type table")
-			if base_id not in candidates:
-				raise ValueError(f"struct schema '{key.module_id}:{key.name}' base_id missing in TypeDef table")
-			base_def = pkg.defs.get(base_id)
-			if base_def is None or base_def.kind is not TypeKind.STRUCT:
-				raise ValueError(f"struct schema '{key.module_id}:{key.name}' base_id not a STRUCT TypeDef")
-			if base_def.module_id != key.module_id or base_def.name != key.name:
-				raise ValueError(f"struct schema '{key.module_id}:{key.name}' base_id mismatch")
+			# Validate base_id identity via canonical keys.
+			ck = pkg.canonical_keys.get(base_id)
+			expected_pkg = _normalized_pkg_id_for_module(pkg.package_id, key.module_id)
+			expected_key = ("nominal", TypeKind.STRUCT.name, expected_pkg, key.module_id, key.name)
+			if ck is None:
+				raise ValueError(f"struct schema '{key.module_id}:{key.name}' base_id {base_id} missing canonical key")
+			if ck != expected_key:
+				raise ValueError(f"struct schema '{key.module_id}:{key.name}' base_id canonical key mismatch: {ck} != {expected_key}")
 			prev = merged_struct_schemas.get(key)
 			if prev is None:
 				merged_struct_schemas[key] = (list(field_schemas), list(type_params))
@@ -1076,24 +976,15 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	# Phase A: merge/validate interface schemas by nominal identity.
 	merged_interface_schemas: dict[NominalKey, tuple[list[str], list[InterfaceMethodSchema], list[GenericTypeExpr]]] = {}
 	for pkg_idx, pkg in enumerate(pkgs):
-		# Same (module_id, name) indexing as struct schemas — see comment above.
-		pkg_interface_ids: dict[tuple[str, str], list[TypeId]] = {}
-		for tid, td in pkg.defs.items():
-			if td.kind is TypeKind.INTERFACE:
-				if td.module_id is None:
-					raise ValueError(f"package INTERFACE '{td.name}' missing module_id")
-				pkg_interface_ids.setdefault((td.module_id, td.name), []).append(tid)
 		for key, (type_params, methods, parents, base_id) in pkg.interface_schemas.items():
-			candidates = pkg_interface_ids.get((key.module_id, key.name))
-			if not candidates:
-				raise ValueError(f"interface schema '{key.module_id}:{key.name}' missing INTERFACE TypeDef in package type table")
-			if base_id not in candidates:
-				raise ValueError(f"interface schema '{key.module_id}:{key.name}' base_id missing in TypeDef table")
-			base_def = pkg.defs.get(base_id)
-			if base_def is None or base_def.kind is not TypeKind.INTERFACE:
-				raise ValueError(f"interface schema '{key.module_id}:{key.name}' base_id not an INTERFACE TypeDef")
-			if base_def.module_id != key.module_id or base_def.name != key.name:
-				raise ValueError(f"interface schema '{key.module_id}:{key.name}' base_id mismatch")
+			# Validate base_id identity via canonical keys.
+			ck = pkg.canonical_keys.get(base_id)
+			expected_pkg = _normalized_pkg_id_for_module(pkg.package_id, key.module_id)
+			expected_key = ("nominal", TypeKind.INTERFACE.name, expected_pkg, key.module_id, key.name)
+			if ck is None:
+				raise ValueError(f"interface schema '{key.module_id}:{key.name}' base_id {base_id} missing canonical key")
+			if ck != expected_key:
+				raise ValueError(f"interface schema '{key.module_id}:{key.name}' base_id canonical key mismatch: {ck} != {expected_key}")
 			prev = merged_interface_schemas.get(key)
 			if prev is None:
 				merged_interface_schemas[key] = (list(type_params), list(methods), list(parents))
@@ -1145,16 +1036,32 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 	nominal_keys.extend(list(merged_variant_schemas.keys()))
 	nominal_keys.extend(list(merged_interface_schemas.keys()))
 	for pkg in pkgs:
-		for _tid, td in pkg.defs.items():
-			if td.kind is TypeKind.SCALAR and _builtin_type_id(host, td) is None:
+		# Collect non-builtin SCALAR nominals from provided_nominals;
+		# fall back to canonical_keys extraction if not listed.
+		_found_scalars = False
+		for kind, mid, name in pkg.provided_nominals:
+			if kind is TypeKind.SCALAR:
+				_found_scalars = True
 				nominal_keys.append(
 					NominalKey(
-						package_id=_normalized_pkg_id_for_module(pkg.package_id, td.module_id),
-						module_id=td.module_id,
-						name=td.name,
+						package_id=_normalized_pkg_id_for_module(pkg.package_id, mid),
+						module_id=mid,
+						name=name,
 						kind=TypeKind.SCALAR,
 					)
 				)
+		if not _found_scalars:
+			# No SCALAR in provided_nominals — extract from canonical_keys.
+			for _ck_tid, _ck_val in pkg.canonical_keys.items():
+				if isinstance(_ck_val, tuple) and len(_ck_val) >= 5 and _ck_val[0] == "nominal" and _ck_val[1] == "SCALAR":
+					nominal_keys.append(
+						NominalKey(
+							package_id=str(_ck_val[2]),
+							module_id=str(_ck_val[3]),
+							name=str(_ck_val[4]),
+							kind=TypeKind.SCALAR,
+						)
+					)
 	nominal_keys = sorted(
 		set(nominal_keys),
 		key=lambda nk: (nk.package_id or "", nk.module_id or "", nk.kind.name, nk.name),

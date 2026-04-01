@@ -1828,17 +1828,12 @@ def _build_package_consumer_unit(
 						continue
 					sig_module = sd.get("module")
 
-					# Stage 8.1: prefer TypeExpr resolution over raw TypeId remapping.
-					# When param_types / return_type / impl_target_type / error_type
-					# are present in the payload, resolve them via resolve_opaque_type
-					# to get host TypeIds directly. Fall back to tid_map remapping for
-					# old-format packages (payload_version 0 without TypeExpr fields).
-					#
-					# EXCEPTION: signatures with type_params OR __inst__ monomorphizations
-					# use the tid_map path.  Generic sigs carry TypeVar references that
-					# this consumer path can't resolve.  __inst__ sigs may produce
-					# different interned TypeIds via TypeExpr than via tid_map, breaking
-					# method resolution (callable registry is indexed by tid_map TypeIds).
+					# Resolve signature TypeIds from TypeExpr fields (authoritative
+					# for concrete non-generic signatures). Generic and __inst__
+					# sigs use raw TypeId fields + tid_map instead — their TypeExpr
+					# carries TypeVar references this path can't resolve, and
+					# __inst__ TypeExpr resolution may produce different interned
+					# TypeIds than tid_map (method resolution needs tid_map identity).
 					_sd_type_params = sd.get("type_params")
 					_sd_impl_type_params = sd.get("impl_type_params")
 					_has_type_params = bool(_sd_type_params) or bool(_sd_impl_type_params)
@@ -8761,12 +8756,10 @@ def main(argv: list[str] | None = None) -> int:
 
 					param_types_raw = sd.get("param_types")
 					param_types: list[object] | None = None
-					# For generic templates (has type_params), resolve_opaque_type
-					# must be used — it resolves TypeExpr with type variable bindings
-					# that tid_map numeric ids don't carry.  For concrete (non-generic)
-					# signatures, prefer tid_map-remapped ids when available and
-					# concrete; only fall back to resolve_opaque_type when DMIR did not
-					# serialize numeric ids or the tid_map id is FORWARD_NOMINAL.
+					# Generic templates use resolve_opaque_type with type variable
+					# bindings. Concrete sigs use tid_map-remapped raw ids (retained
+					# in payload for generic/__inst__); override with TypeExpr only
+					# when raw ids are absent or resolve to UNKNOWN/FORWARD_NOMINAL.
 					_has_type_params = bool(type_params) or bool(impl_type_params)
 					if isinstance(param_types_raw, list):
 						decoded: list[object] = []
@@ -8803,9 +8796,8 @@ def main(argv: list[str] | None = None) -> int:
 								if not isinstance(ret_tid, int) or _ret_td is None or _ret_td.kind in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 									ret_tid = resolve_opaque_type(return_type, type_table, module_id=module_name, type_params=type_param_map)
 
-					# Stage 8.1: resolve impl_target_type from TypeExpr when available.
-					# Only override the tid_map result when it is missing or
-					# unresolved (UNKNOWN/FORWARD_NOMINAL).
+					# Resolve impl_target_type from TypeExpr; only override tid_map
+					# when missing or unresolved (UNKNOWN/FORWARD_NOMINAL).
 					impl_target_type_raw = sd.get("impl_target_type")
 					if impl_target_type_raw is not None:
 						it_expr = decode_type_expr(impl_target_type_raw)
@@ -8814,7 +8806,7 @@ def main(argv: list[str] | None = None) -> int:
 							if not isinstance(impl_tid, int) or _it_td is None or _it_td.kind in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 								impl_tid = resolve_opaque_type(it_expr, type_table, module_id=module_name, type_params=type_param_map)
 
-					# Stage 8.1: resolve error_type from TypeExpr when available.
+					# Resolve error_type from TypeExpr when present in payload.
 					error_type_raw = sd.get("error_type")
 					err_tid: TypeId | None = None
 					if error_type_raw is not None:
@@ -10245,6 +10237,47 @@ def main(argv: list[str] | None = None) -> int:
 		all_module_ids: set[str] = set(per_module_sigs.keys()) | set(per_module_mir.keys())
 		if isinstance(module_exports, dict):
 			all_module_ids |= set(str(k) for k in module_exports.keys())
+		# Phase 9: pre-compute canonical keys for all TypeIds in the package
+		# type table. The consumer uses these for O(1) key lookup instead of
+		# walking the TypeDef graph.
+		_pkg_emit_tt = checked_pkg.type_table or type_table
+		from lang.driftc.packages.type_table_link_v0 import compute_canonical_keys
+		_pkg_canonical_keys = compute_canonical_keys(_pkg_emit_tt, package_id)
+		# Stage 8.4: compute MIR-reachable TypeId set as the UNION across all
+		# modules. Only these defs are emitted; other types are covered by
+		# canonical_keys. Phase B schema validation uses canonical_keys for
+		# keyed packages (Phase 10).
+		from lang.driftc.packages.provisional_dmir_v0 import _collect_mir_type_ids, _transitive_type_closure
+		_pkg_mir_seeds: set[int] = set()
+		for _rm_mid in all_module_ids:
+			if _rm_mid.startswith(("std.", "lang.", "drift.")):
+				continue
+			_pkg_mir_seeds |= _collect_mir_type_ids(per_module_mir.get(_rm_mid, {}))
+		# Generic template + signature seeds (all modules).
+		for _rm_mid, _rm_sigs in per_module_sigs.items():
+			if _rm_mid.startswith(("std.", "lang.", "drift.")):
+				continue
+			for _sym, _sig in _rm_sigs.items():
+				_is_inst = "__inst__" in _sym
+				_has_tp = bool(getattr(_sig, "type_params", None)) or bool(getattr(_sig, "impl_type_params", None))
+				if _is_inst or _has_tp:
+					if _sig.param_type_ids is not None:
+						_pkg_mir_seeds.update(_sig.param_type_ids)
+					if _sig.return_type_id is not None:
+						_pkg_mir_seeds.add(_sig.return_type_id)
+					_itid = getattr(_sig, "impl_target_type_id", None)
+					if _itid is not None:
+						_pkg_mir_seeds.add(_itid)
+		# Const TypeIds.
+		for _csym, (_ctid, _) in _pkg_emit_tt.consts.items():
+			_pkg_mir_seeds.add(_ctid)
+		# Synthetic struct defs (lambda capture envs) — the linker's Phase B
+		# sweep reads these from pkg.defs to populate host struct fields.
+		for _st_tid, _st_td in _pkg_emit_tt._defs.items():
+			if _st_td.kind is TypeKind.STRUCT and _st_td.field_names is not None and _st_td.param_types:
+				_pkg_mir_seeds.add(_st_tid)
+		_pkg_reachable_tids = _transitive_type_closure(_pkg_mir_seeds, _pkg_emit_tt)
+
 		pkg_next_impl_id = 0
 		for mid in sorted(all_module_ids):
 			# MVP packaging: do not bundle toolchain modules. They are supplied by
@@ -10396,17 +10429,12 @@ def main(argv: list[str] | None = None) -> int:
 			if isinstance(_raw_trait_scope, list):
 				for _tk in _raw_trait_scope:
 					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
-			# Phase 9: compute canonical keys for all TypeIds in the module's
-			# type table so the consumer can use them directly instead of
-			# reconstructing keys from the TypeDef graph walk.
-			_emit_tt = checked_pkg.type_table or type_table
-			from lang.driftc.packages.type_table_link_v0 import compute_canonical_keys
-			_canonical_keys = compute_canonical_keys(_emit_tt, package_id)
 			payload_obj = encode_module_payload_v0(
 				package_id=package_id,
 				module_id=mid,
-				type_table=_emit_tt,
-				canonical_keys=_canonical_keys,
+				type_table=_pkg_emit_tt,
+				canonical_keys=_pkg_canonical_keys,
+				reachable_tids=_pkg_reachable_tids,
 				signatures=sig_env,
 				mir_funcs=per_module_mir.get(mid, {}),
 				generic_templates=encode_generic_templates(
