@@ -1,0 +1,17 @@
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+// Minimal VT lifecycle test: spawn, sleep (registers reactor timer), join.
+pub fn main() nothrow -> Int {
+	var vt = conc.spawn_cb(core.callback0(|| nothrow => {
+		conc.sleep(conc.Duration(millis = 1));
+		return 0;
+	}));
+	match vt.join() {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+	return 0;
+}

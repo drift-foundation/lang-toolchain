@@ -668,13 +668,14 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 						w->pending_write = 1;
 					}
 				}
-				pthread_mutex_unlock(&r->mu);
-				/* No disarm — persistent ET registration. */
+				/* Enqueue under r->mu so drift_reactor_forget_vt cannot
+				 * free the VT between unlock and enqueue. */
 				if (enqueue_vt && enqueue_vt->exec) {
 					pthread_mutex_lock(&enqueue_vt->exec->mu);
 					drift_exec_enqueue(enqueue_vt->exec, enqueue_vt);
 					pthread_mutex_unlock(&enqueue_vt->exec->mu);
 				}
+				pthread_mutex_unlock(&r->mu);
 				if (!direct_vt) continue;
 				/* Resume VT directly. */
 				drift_vt_tls_set(direct_vt);
@@ -691,11 +692,13 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 			}
 		}
 
-		/* W7 timeout path: collect expired timers. */
+		/* W7 timeout path: collect expired timers.
+		 * Hold r->mu across dispatch so drift_reactor_forget_vt (called
+		 * from drift_vt_destroy on another thread) cannot complete until
+		 * we finish — preventing use-after-free on the VT pointer. */
 		pthread_mutex_lock(&r->mu);
 		ReactorTimer *ready = NULL;
 		drift_reactor_collect_timers(r, drift_now_ms(), &ready);
-		pthread_mutex_unlock(&r->mu);
 		while (ready) {
 			ReactorTimer *next = ready->next;
 			if (ready->vt != 0) {
@@ -704,6 +707,7 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 			free(ready);
 			ready = next;
 		}
+		pthread_mutex_unlock(&r->mu);
 
 		/* W8: re-check run queue and shutdown before going back to poll. */
 		pthread_mutex_lock(&exec->mu);
@@ -1102,27 +1106,34 @@ static void *drift_reactor_thread_entry(void *arg) {
 						w->pending_write = 1;
 					}
 				}
-				pthread_mutex_unlock(&r->mu);
-				/* No disarm — persistent ET registration. */
+				/* Enqueue resolved VTs under r->mu so drift_reactor_forget_vt
+				 * (called from drift_vt_destroy on another thread) cannot
+				 * complete until we finish — preventing use-after-free on
+				 * the VT pointer between unlock and enqueue. */
 				if (read_io_vt && read_io_vt->exec) {
 					pthread_mutex_lock(&read_io_vt->exec->mu);
 					drift_exec_enqueue(read_io_vt->exec, read_io_vt);
 					pthread_mutex_unlock(&read_io_vt->exec->mu);
-					drift_reactor_wake(r);
 				}
 				if (write_io_vt && write_io_vt->exec && write_io_vt != read_io_vt) {
 					pthread_mutex_lock(&write_io_vt->exec->mu);
 					drift_exec_enqueue(write_io_vt->exec, write_io_vt);
 					pthread_mutex_unlock(&write_io_vt->exec->mu);
+				}
+				pthread_mutex_unlock(&r->mu);
+				/* Wake after releasing r->mu to avoid holding both locks. */
+				if (read_io_vt || write_io_vt) {
 					drift_reactor_wake(r);
 				}
 			}
 		}
 
+		/* Hold r->mu across dispatch so drift_reactor_forget_vt (called
+		 * from drift_vt_destroy on the worker thread) cannot complete
+		 * until we finish — preventing use-after-free on the VT. */
 		pthread_mutex_lock(&r->mu);
 		ReactorTimer *ready = NULL;
 		drift_reactor_collect_timers(r, drift_now_ms(), &ready);
-		pthread_mutex_unlock(&r->mu);
 		while (ready) {
 			ReactorTimer *next = ready->next;
 			if (ready->vt != 0) {
@@ -1131,6 +1142,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 			free(ready);
 			ready = next;
 		}
+		pthread_mutex_unlock(&r->mu);
 	}
 	return NULL;
 }

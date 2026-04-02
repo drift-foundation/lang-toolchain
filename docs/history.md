@@ -1,6 +1,25 @@
 # Drift development history
 
 ## 2026-04-02
+- **Fix VT use-after-free: hold reactor mutex across epoll VT enqueue (0.27.143, ABI 7)**:
+  Runtime fix: the reactor and worker-poll epoll dispatch paths released
+  `r->mu` before enqueuing resolved VT pointers, allowing
+  `drift_reactor_forget_vt` + `drift_vt_destroy` to free the VT between
+  the unlock and the enqueue/dereference.
+  - Root cause: after resolving epoll events under `r->mu`, the reactor
+    (thread_runtime.c:1108) and worker-poll (thread_runtime.c:671) paths
+    released the lock then accessed `read_io_vt->exec` /
+    `write_io_vt->exec` / `enqueue_vt->exec`. If the VT completed and was
+    joined/destroyed on another thread in that window, the dereference read
+    freed memory.
+  - Fix: enqueue VTs under `r->mu` (lock order: `r->mu` → `exec->mu`),
+    release `r->mu` only after enqueue completes. `drift_reactor_wake`
+    moved after unlock to avoid holding both locks.
+  - Two sites fixed:
+    - reactor thread epoll dispatch (thread_runtime.c:1108)
+    - worker-poll epoll dispatch (thread_runtime.c:671)
+  - Versioning: compiler 0.27.143, ABI 7
+
 - **Rename artifact kind `package` → `library`, add app native build support (0.27.142, ABI 7)**:
   Addresses app team defect: `drift build` for app artifacts now produces
   host-native executables by default.
