@@ -8987,6 +8987,21 @@ def main(argv: list[str] | None = None) -> int:
 		method_wrapper_specs.extend(_ext_wrapper_specs)
 		if _ext_wrapper_errors:
 			wrapper_errors.extend(_ext_wrapper_errors)
+		# Set boundary_ret_type_id on external (package-consumed) signatures.
+		# This is the declaration-time marker that tells codegen to use
+		# boundary ABI when calling these functions from a different package.
+		# Only set for package-consumed functions — co-compiled source
+		# functions do not get this marker, so same-compilation calls to
+		# co-compiled stdlib use direct calling convention.
+		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
+			if _ext_sig.boundary_ret_type_id is not None:
+				continue
+			if not getattr(_ext_sig, "is_exported_entrypoint", False):
+				continue
+			if _ext_sig.return_type_id is None:
+				continue
+			err_ty = type_table.ensure_error()
+			_ext_sig.boundary_ret_type_id = type_table.ensure_fnresult(_ext_sig.return_type_id, err_ty)
 
 		(
 			external_trait_defs,

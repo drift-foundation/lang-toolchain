@@ -136,6 +136,11 @@ class FnSignature:
 	# Wrapper metadata (boundary Ok-wrap, not user-facing).
 	is_wrapper: bool = False
 	wraps_target_fn_id: Optional[FunctionId] = None
+	# Boundary ABI return type: the FnResult<T, Error> type that cross-package
+	# callers see.  Set at declaration time for pub functions that form a
+	# package boundary.  Used by codegen to make routing decisions without
+	# consulting source_modules.
+	boundary_ret_type_id: Optional[TypeId] = None
 	# Instantiation marker (generic monomorphization output).
 	is_instantiation: bool = False
 	# MIR-bound marker (typed pipeline lowering boundary).

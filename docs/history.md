@@ -1,6 +1,29 @@
 # Drift development history
 
 ## 2026-04-01
+- **Replace `source_modules` in primary codegen routing with `boundary_ret_type_id` (0.27.138, ABI 7)**:
+  Wrapper convergence refactor Phase 1: removes `source_modules` from the
+  primary cross-package call routing decision. Replaces it with
+  `boundary_ret_type_id`, a new field on FnSignature populated at
+  package-consumption time.
+  - What this achieves:
+    - removes the most unstable routing input (`source_modules`, whose
+      contents change depending on `--stdlib-root` vs PEX)
+    - replaces it with ingress-time metadata on the callee's signature
+  - What this does NOT yet achieve:
+    - full declaration-time unification — `boundary_ret_type_id` is still
+      ingress-dependent (set for package-consumed functions, not for
+      co-compiled source), so the distinction is still mode-encoded, just
+      through metadata rather than a mutable set
+    - full removal of old routing machinery — `explicitly_packaged_modules`
+      fallback is retained for multi-package workspace boundaries
+  - Changes:
+    - `checker/__init__.py`: added `boundary_ret_type_id: TypeId | None`
+    - `driftc.py`: populated for exported entrypoints from packages
+    - `llvm_codegen.py`: `_resolve_call_target_symbol` uses
+      `boundary_ret_type_id` presence instead of `source_modules`
+  - Versioning: compiler 0.27.138, ABI 7
+
 - **Fix `copy_status` structural fallback to check `destructor_fns`, preventing match-arm use-after-move for non-Copy payloads in PEX builds (0.27.137, ABI 7)**:
   The `copy_status()` structural fallback returned True (Copy) for structs
   containing Destructible fields when the trait prover couldn't resolve

@@ -1,433 +1,258 @@
 # Boundary Wrapper Convergence Refactor
 
-## Status: investigation + proposal (review before execution)
-## Date: 2026-04-01
+## Status: approved direction, ready for first slice
+## Date: 2026-04-01 (updated post-0.27.137 certification)
+
+## Policy: no backward compatibility required
+
+We can rebuild the world. Small ecosystem, no external consumers that need
+legacy wrapper routing preserved. The goal is the cleanest converged
+architecture, not minimal churn. Existing divergent paths are deleted, not
+preserved.
 
 ---
 
-## 1. Current Wrapper Architecture End-to-End
+## 1. Problem Statement
 
-### Why wrappers exist
+The compiler has two semantic paths for calling the same pub function:
 
-Drift has a two-layer calling convention:
+- **Direct** (same-module or source-compiled stdlib): caller gets the
+  surface return type, no FnResult wrapping
+- **Wrapper** (cross-module or package-consumed stdlib): caller gets
+  FnResult<T, Error>, boundary ABI wrapping/unwrapping
 
-1. **Internal**: functions return their surface type directly (Int, String,
-   Result<T, E>). Nothrow functions never produce an error. Can-throw
-   functions return `FnResult<T, Error>` (an internal 3-field struct:
-   `{is_err: i8, ok: T, err: Error*}`).
+Which path is taken depends on `source_modules` — a set populated based on
+whether stdlib is source or package. This is the root cause of every
+mode-divergence bug in the 0.27.132–0.27.137 cycle:
 
-2. **Boundary/public**: all exported functions return a uniform ABI struct
-   `{ok: T, err: Error*}`. Nothrow functions set `err=null`. Can-throw
-   functions set `err` to the error pointer on failure. This allows callers
-   to handle errors uniformly without knowing at compile time whether the
-   callee can throw.
+| Version | Bug | Wrapper-path cause |
+|---------|-----|--------------------|
+| 0.27.132–0.27.135 | Double-drop / missing-drop | `has_drop` differs between paths due to different TypeIds |
+| 0.27.137 | Use-after-move in match arm | `copy_status` differs because wrapper path creates different scrutinee type |
 
-The wrapper system bridges these two layers:
-- `foo__impl` is the private body (internal convention)
-- `foo` is the public wrapper (boundary convention)
-- `__wrap_method::foo` is a method wrapper that converts nothrow → can-throw
-  ABI by wrapping the result in `ResultOk`
-
-### What problems wrappers solve
-
-| Problem | Solution |
-|---------|----------|
-| Nothrow/throw ABI mismatch | `__wrap_method::` converts nothrow return to Result ABI |
-| Stable public symbol contract | `foo` is the stable public name; `foo__impl` is private |
-| Cross-package call safety | Callers always use the boundary ABI, never `__impl` |
-| Error propagation across packages | FnResult/Result conversion at boundaries |
-
-### When wrappers are introduced
-
-| Pipeline stage | What happens |
-|----------------|-------------|
-| `_inject_method_boundary_wrappers` (driftc.py:996) | Declares wrapper signatures for pub nothrow methods |
-| Wrapper MIR synthesis (driftc.py:6961+) | Generates 3-instruction MIR: Call + ConstructResultOk + Return |
-| `__impl` rename (llvm_codegen.py:432-475) | Renames exported function bodies to `foo__impl` |
-| Public wrapper emission (llvm_codegen.py:478-575) | Generates LLVM wrapper under original `foo` symbol |
-
-### When routing is decided
-
-**Late — at LLVM codegen time** in `_resolve_call_target_symbol`
-(llvm_codegen.py:6610-6670). The decision depends on:
-
-```
-is_cross_module = (caller_pkg != callee_pkg)
-                  AND (force_boundary
-                       OR callee_mod NOT IN source_modules
-                       OR callee_mod IN explicitly_packaged_modules)
-```
-
-If `is_cross_module`: call through public wrapper (boundary ABI).
-If same-module: call `__impl` directly (internal ABI).
-
-### What data the routing decision depends on
-
-- `source_modules`: set of module IDs compiled from source in this build
-- `explicitly_packaged_modules`: modules with explicit package assignments
-- `module_packages`: module → package mapping
-- `is_exported_entrypoint`: whether the callee is a public export
-- `export_impl_map`: function → `__impl` symbol mapping
-
-**All of this is mode-sensitive.** `source_modules` is different in source
-mode (includes stdlib) vs PEX mode (excludes stdlib). This is the root of
-every mode divergence bug.
+The fix is not more point-patches. It's eliminating the two-path divergence.
 
 ---
 
-## 2. Legitimate vs Accidental Complexity
+## 2. Target Architecture
 
-### Legitimate (must keep)
+### Principle
 
-| Concern | Why it's real |
-|---------|---------------|
-| ABI adaptation at package boundaries | Packages are compiled separately; the public ABI must be stable and uniform |
-| Nothrow→throw conversion | A nothrow method exported through a package must still return Result at the boundary because the consumer doesn't know it's nothrow |
-| `__impl` private body | Allows same-module callers to skip boundary overhead |
-| Error propagation ABI | FnResult is the internal carrier; boundary Result is the public contract |
+**Pub boundary contract is a property of the declaration, not a per-call-site
+routing decision.** After artifact ingress, the compiler sees one semantic
+path for calling any pub function. Mode affects inputs and packaging, not
+compiler meaning.
 
-### Accidental (should be eliminated)
+### Concrete design
 
-| Problem | Root cause |
-|---------|-----------|
-| `source_modules` changes routing | Whether stdlib is source or package changes which calls go through wrappers |
-| `copy_status` / `has_drop` differ between paths | Wrappers add FnResult types whose structural analysis can diverge |
-| Same-module calls to exported functions use different ABI than cross-module | The `__impl` optimization creates two semantic paths for the same function |
-| Match-arm codegen differs between wrapper and direct returns | FnResult → Result conversion creates different scrutinee types |
-| `_should_copy_value` answers depend on which ABI the call used | The wrapper path returns a different type than the direct path |
-| `string_arc._type_needs_drop` diverges from `has_drop` | Wrapper-introduced types have different drop analysis results |
+1. **Every pub function has a `boundary_abi` recorded at declaration time.**
+   For can-throw: the return type is `FnResult<T, Error>`. For nothrow
+   methods with pub wrappers: same. For non-pub: no boundary (internal only).
 
-### The 0.27.137 bug was accidental complexity
+2. **MIR always uses the boundary ABI for cross-module pub calls.** The
+   match scrutinee type is always the same regardless of mode. No
+   `source_modules` check.
 
-The cert blocker was: `copy_status(RunningServer) = True` in PEX but False
-in source. This happened because:
-1. PEX path routes stdlib calls through wrappers
-2. This changes the TypeId universe (different instantiation hashes)
-3. The structural copy analysis couldn't find the Destructible proof for
-   VirtualThread at the remapped TypeId
-4. Match-arm codegen treated the payload as Copy → scrutinee drop →
-   VirtualThread destroyed
+3. **LLVM codegen applies a transparent optimization**: for same-module
+   calls to known functions, codegen may call `__impl` directly and
+   construct the FnResult locally. This optimization is invisible to MIR.
 
-The wrapper routing itself was correct. The bug was in a type-system query
-that gave different answers depending on which TypeIds were present — which
-depends on wrapper routing — which depends on mode.
+4. **`__wrap_method::` exists only in LLVM IR.** No wrapper MIR. No wrapper
+   function IDs in the MIR pipeline. No `param_drop_status` for wrappers.
 
----
+5. **`source_modules` is removed from call routing entirely.** Routing
+   depends only on: is the callee pub? Is the caller in the same package?
 
-## 3. Design Question: Pub Declaration-Time Normalization
+### What gets deleted
 
-### What could be fixed at declaration/interface time?
-
-**The boundary ABI contract.** Today, whether a call goes through the
-wrapper is decided at each call site during LLVM codegen. Instead:
-
-1. Every `pub` function/method could have its boundary ABI recorded at
-   declaration time: "this function's public signature is
-   `Result<T, Error*>`"
-2. Every caller of a `pub` function would use the same ABI regardless of
-   whether it's same-module, cross-module, source, or package
-3. The `__impl` optimization (skipping the wrapper for same-module calls)
-   would be a codegen-only optimization that doesn't change the MIR-level
-   semantics
-
-### What would this buy us?
-
-- **One semantic path.** The MIR for calling `rest.start()` would be
-  identical in source and PEX builds. The match scrutinee would always be
-  the same type. `copy_status` would always see the same TypeIds.
-- **No `source_modules` routing.** The call target is determined at
-  declaration time, not at codegen time based on which modules are source.
-- **Mode-independent MIR.** Source, package, and PEX would produce
-  identical MIR for the same Drift code (modulo TypeId allocation order).
-- **The `__impl` optimization becomes invisible.** Same-module calls can
-  still call `__impl` at LLVM level, but MIR always uses the boundary
-  signature. The optimization is a codegen rewrite, not a semantic choice.
-
-### What would it break?
-
-- **Performance for same-module calls.** Currently, same-module calls to
-  exported functions skip the FnResult wrapper overhead. With universal
-  boundary ABI, every call to a pub function would pay the FnResult cost
-  at MIR level, even if codegen optimizes it away.
-- **FnResult types in MIR.** Today, same-module MIR uses the surface return
-  type. With universal boundary ABI, MIR would use FnResult<T, Error>
-  everywhere. This changes type analysis, `copy_status`, `has_drop`, etc.
-- **Existing tests.** Many tests assume same-module calls return the
-  surface type directly.
-
-### What cases still require late wrapper synthesis/routing?
-
-- **Generic instantiation.** When a generic function is instantiated at a
-  call site, the instantiation may not have a pre-declared wrapper. The
-  wrapper must be synthesized on demand.
-- **Dynamic dispatch.** Interface method calls go through vtable thunks
-  that may need ABI adaptation.
-- **Callback/closure captures.** Lambda environment types are created
-  during MIR lowering; their wrappers can't be pre-declared.
-
----
-
-## 4. Target Architecture
-
-### The ideal end state
-
-```
-                    Declaration time          Codegen time
-                    ──────────────            ────────────
-pub fn foo() -> T   boundary_sig recorded     __impl optimization
-                    MIR uses boundary_sig     (transparent to MIR)
-                    one TypeId universe
-                    one copy_status answer
-```
-
-**Principle**: the pub boundary contract is a property of the **declaration**,
-not a per-call-site routing decision. The MIR for calling a pub function is
-always the same regardless of mode. LLVM codegen may optimize same-module
-calls to skip the wrapper, but this is invisible to MIR, type analysis,
-and ownership tracking.
-
-### Concrete target
-
-1. **`FnSignature` carries `boundary_ret_type`**: for pub can-throw
-   functions, this is `FnResult<T, Error>`. For pub nothrow methods, this
-   is `FnResult<T, Error>` (the wrapper ABI). For non-pub functions, this
-   is None (no boundary).
-
-2. **MIR call lowering always uses `boundary_ret_type` for cross-module pub
-   calls.** The match scrutinee is always the same type regardless of mode.
-
-3. **LLVM codegen peels the boundary**: for same-module calls to known
-   nothrow functions, codegen can call `__impl` and construct the FnResult
-   locally. This is a transparent optimization.
-
-4. **`source_modules` is removed from routing decisions.** Routing is
-   determined by: is the callee `pub`? If yes, use boundary ABI. Period.
-
-5. **Wrappers are codegen artifacts only.** `__wrap_method::` and `__impl`
-   exist only in LLVM IR, not in MIR. MIR never references wrapper symbols.
-
-### What this eliminates
-
-- `_resolve_call_target_symbol` routing logic
-- `source_modules` / `explicitly_packaged_modules` in call routing
-- Mode-dependent FnResult vs surface type for the same call
-- Divergent TypeId universes for match scrutinees
-- `copy_status` / `has_drop` differences between source and PEX paths
-
----
-
-## 5. Phased Implementation Plan
-
-### Phase A: Record `boundary_ret_type` on `FnSignature`
-
-**Goal**: Every pub function/method knows its boundary return type at
-declaration time. No behavior change yet — just metadata.
-
-**Files**:
-- `checker/__init__.py`: add `boundary_ret_type: TypeId | None` to
-  `FnSignature`
-- `driftc.py`: populate `boundary_ret_type` during
-  `_inject_method_boundary_wrappers` and during pub function signature
-  construction
-
-**What's removed**: nothing yet.
-
-**Regressions**: assert `boundary_ret_type` is populated for all pub
-functions with wrappers. Cross-reference against existing wrapper sigs.
-
-**Size**: Small. Additive.
-
----
-
-### Phase B: MIR call lowering uses `boundary_ret_type` for cross-module calls
-
-**Goal**: HIR-to-MIR and call lowering use `boundary_ret_type` instead of
-the target's surface return type when calling a pub function from a
-different module. The MIR return type is always the boundary type, regardless
-of mode.
-
-**Files**:
-- `stage2/hir_to_mir.py`: call lowering uses `boundary_ret_type` when
-  available and call is cross-module
-- `driftc.py`: call info construction includes boundary type
-
-**What's removed**: the mode-dependent return type divergence. Source and
-PEX MIR for the same cross-module call will have the same return type.
-
-**Regressions**:
-- Source and PEX MIR for a pub function call produce the same scrutinee
-  type
-- `copy_status` returns the same answer for the scrutinee in both modes
-- Match-arm lowering produces the same ownership decisions in both modes
-
-**Key risk**: this is the largest behavioral change. Must validate with
-drift-web and net.tls.
-
-**Size**: Medium.
-
----
-
-### Phase C: Eliminate `source_modules` from call routing
-
-**Goal**: LLVM codegen routing no longer depends on `source_modules`. The
-routing rule becomes: if callee is pub and call is cross-module (different
-canonical package), use boundary ABI. No special-casing for source vs
-package modules.
-
-**Files**:
-- `llvm_codegen.py`: simplify `_resolve_call_target_symbol` to use
-  `boundary_ret_type` presence instead of `source_modules`
-
-**What's removed**:
-- `source_modules` set on TypeTable (or kept only for diagnostics)
+- `source_modules` set on TypeTable (routing use only; diagnostic use can stay)
 - `explicitly_packaged_modules` in routing logic
-- The `callee_mod not in source_modules` check
+- `_resolve_call_target_symbol` mode-conditional branches
+- `__wrap_method::` MIR synthesis (driftc.py:6961+)
+- `_inject_method_boundary_wrappers` as a MIR-pipeline concern (keep for
+  signature metadata only)
+- `MethodWrapperSpec` as a MIR concept
+- `forwarded_to_callee` in `param_drop_status` (no wrapper MIR = no need)
+- The `is_cross_module` late decision based on `source_modules`
+
+### What stays
+
+- `__impl` rename in LLVM codegen (performance optimization)
+- Public wrapper emission in LLVM codegen (ABI boundary)
+- `FnResult<T, Error>` internal type (can-throw return convention)
+- `boundary_abi` on FnSignature (the new source of truth)
+- Package signature serialization of wrapper metadata
+
+---
+
+## 3. Phased Plan
+
+Under the "no backward compat" policy, the original 5 phases collapse to 3.
+Phases A+B merge (no need for a metadata-only phase if we're immediately
+using it). Phases C+D merge (no need to keep wrapper MIR around while
+removing `source_modules`).
+
+### Phase 1: Boundary ABI on signature + MIR normalization
+
+**Goal**: Every pub function carries `boundary_abi` on its FnSignature. MIR
+call lowering uses this for all cross-module pub calls. `source_modules` is
+no longer consulted for return type selection.
+
+**Changes**:
+- `checker/__init__.py`: add `boundary_ret_type_id: TypeId | None` to
+  FnSignature. Populated for all pub functions that have (or would have)
+  wrappers.
+- `hir_to_mir.py` / call info: when lowering a call to a pub function from
+  a different module, use `boundary_ret_type_id` as the call's return type.
+  The call result is always FnResult-shaped in MIR.
+- `driftc.py`: populate `boundary_ret_type_id` during signature
+  construction, using the same logic as `_inject_method_boundary_wrappers`
+  but without creating wrapper FunctionIds.
+
+**What's deleted**:
+- The return-type divergence between source and PEX paths
+- The match-arm scrutinee type divergence that caused 0.27.137
 
 **Regressions**:
-- Existing call routing tests updated for new logic
-- Verify same-module calls still optimize to `__impl`
-- Verify cross-module calls always use boundary ABI
+- Source and PEX MIR for `match rest.start(...)` produces the same
+  scrutinee type
+- `copy_status` and `has_drop` return the same answers in both modes
+- All existing e2e tests pass (they already handle FnResult returns)
 
-**Size**: Small. Mostly deletion.
+**Key risk**: same-module calls to pub functions now see FnResult in MIR.
+The codegen optimization must correctly unwrap for same-module calls.
+Existing tests will catch this.
 
----
-
-### Phase D: Make `__wrap_method::` a codegen artifact only
-
-**Goal**: `__wrap_method::` wrapper MIR is no longer synthesized. The
-wrapper only exists in LLVM IR, generated by the codegen wrapper emission
-loop (llvm_codegen.py:478-575).
-
-**Files**:
-- `driftc.py`: remove wrapper MIR synthesis (lines 6961+)
-- `driftc.py`: remove `_inject_method_boundary_wrappers` from MIR pipeline
-  (keep for signature declaration only)
-- `llvm_codegen.py`: wrapper emission handles nothrow→boundary conversion
-
-**What's removed**:
-- Wrapper MIR bodies
-- Wrapper-specific ownership tracking (`forwarded_to_callee` in
-  `param_drop_status`)
-- The post-pass's wrapper handling
-
-**Regressions**: all existing wrapper tests. This is a significant change.
-
-**Size**: Medium. Requires careful validation.
+**Size**: Medium. This is the core behavioral change.
 
 ---
 
-### Phase E: Universal boundary ABI in MIR (optional, future)
+### Phase 2: Remove `source_modules` routing + delete wrapper MIR
 
-**Goal**: ALL cross-module pub calls use boundary ABI at MIR level, not
-just cross-package calls. Same-module calls within the same compilation
-unit still call `__impl`, but MIR represents the call as boundary ABI.
+**Goal**: LLVM codegen routing depends only on `boundary_ret_type_id`
+presence and package membership. `__wrap_method::` wrapper MIR is deleted.
+Wrapper symbols exist only in LLVM IR.
 
-This is the full "normalize at pub" vision. It eliminates the last source
-of MIR divergence between same-module and cross-module paths.
+**Changes**:
+- `llvm_codegen.py`: simplify `_resolve_call_target_symbol` — if callee has
+  `boundary_ret_type_id` and caller is in a different package, use boundary
+  ABI. Same-package calls use `__impl` optimization.
+- `driftc.py`: remove wrapper MIR synthesis loop (line 6961+). Remove
+  `MethodWrapperSpec` from MIR pipeline. Remove `_wrapper_fn_ids`.
+- `driftc.py`: remove `source_modules` from routing-relevant code paths.
+  Keep for diagnostics only.
+- `mir_nodes.py`: remove `forwarded_to_callee` from `param_drop_status`
+  (no wrapper MIR means no wrapper params).
 
-**Key risk**: performance. Every pub call at MIR level would pay FnResult
-overhead. The codegen optimization must reliably eliminate this for
-same-module calls.
+**What's deleted**:
+- ~50 lines of wrapper MIR synthesis
+- ~30 lines of `_resolve_call_target_symbol` mode-conditional logic
+- `MethodWrapperSpec` as a concept in the MIR pipeline
+- `source_modules` / `explicitly_packaged_modules` routing checks
 
-**Size**: Large. Long-term.
+**Regressions**:
+- All e2e tests pass
+- Cross-package calls always use boundary ABI
+- Same-package calls always use `__impl`
+- No `__wrap_method::` FunctionIds in MIR
 
----
-
-## 6. Specific Questions Answered
-
-### Can pub declaration-time normalization replace some current wrapper routing?
-
-Yes — phases A-C replace `source_modules`-based routing with
-`boundary_ret_type`-based routing. The declaration carries the contract;
-the call site doesn't need to figure it out.
-
-### Which wrappers are truly ABI-mandated vs legacy?
-
-**ABI-mandated:**
-- `__impl` + public wrapper pair for exported functions (different calling
-  conventions at the LLVM level)
-- `__wrap_method::` for nothrow methods that must present a can-throw ABI
-  at package boundaries
-
-**Legacy/accidental:**
-- `__wrap_method::` as MIR-level entities (should be codegen-only)
-- `source_modules`-dependent routing (should be declaration-driven)
-- Mode-conditional `is_cross_module` checks
-
-### Can wrapper insertion be made mode-independent after ingress?
-
-Yes — after Phase C. If routing depends only on `boundary_ret_type` (set at
-declaration time) and canonical package membership (set at ingress time),
-the routing is mode-independent.
-
-### What invariants should hold between direct and wrapper paths?
-
-1. **Same MIR return type.** A cross-module call to a pub function always
-   produces the same MIR return type regardless of mode.
-2. **Same `copy_status`.** The scrutinee type from a pub function call has
-   the same Copy analysis in all modes.
-3. **Same ownership decisions.** Match-arm lowering for the result of a pub
-   function call produces the same `arm_scrut_payload_moved` flag.
-4. **Same `has_drop`.** No mode-dependent has_drop divergence for types
-   that appear in pub function signatures.
-
-### What should become an assertion/error if violated?
-
-- `copy_status` returning different answers for the same (name, module)
-  type across compilation modes → error (partially done in 0.27.137)
-- `has_drop` returning different answers → error (done in 0.27.136)
-- MIR return type for a pub cross-module call differing between source and
-  PEX → new assertion in call lowering
+**Size**: Medium. Mostly deletion.
 
 ---
 
-## 7. Non-Goals
+### Phase 3: Strict invariants + assertion hardening
 
-- **No mode-conditional semantics.** Routing must not depend on source vs
-  package vs PEX.
-- **No package-name/std special cases.** `source_modules` containing or
-  excluding stdlib must not change call routing behavior.
-- **No keeping two semantically different call paths.** If both direct and
-  wrapper paths exist, they must produce the same MIR-level semantics.
-- **No wrappers whose behavior depends on invocation mode.** The
-  `__wrap_method::` contract is the same whether the caller is source,
-  package, or PEX.
+**Goal**: Make the converged architecture enforceable. Any violation is a
+compiler error.
 
----
+**Changes**:
+- Assert: every pub function with `declared_can_throw=False` and
+  `is_method=True` has `boundary_ret_type_id` set
+- Assert: MIR return type for a cross-module pub call matches
+  `boundary_ret_type_id`
+- Assert: `copy_status` for any type appearing in a pub function signature
+  returns the same answer regardless of compilation mode (tested via
+  cross-reference against package-consumed signatures)
+- Remove the `param_drop_status` disagreement diagnostic (0.27.136) — it
+  becomes unnecessary because the MIR path is unified
 
-## 8. Relationship to Prior Refactor Plans
+**What's deleted**:
+- `_postdrop_check_param_drops` (the post-pass diagnostic) — the
+  divergence that motivated it can no longer occur
+- The `_copy_cache_structural` pre-MIR-lowering clear — no longer needed
+  because TypeId universes are unified
 
-This plan is the **third leg** of the anti-mode-divergence work:
-
-| Plan | What it fixes | Status |
-|------|---------------|--------|
-| Semantic ingestion refactor | Type identity / declaration ordering | Proposed |
-| Drop insertion refactor | Ownership / has_drop stability | Phases A-D partially done (0.27.135-0.27.137) |
-| **Wrapper convergence** | **Call routing / ABI path divergence** | **This plan** |
-
-All three share the principle: **mode affects inputs and packaging, not
-compiler meaning.** The wrapper convergence plan is specifically about
-ensuring that the *call path* to a pub function is the same regardless of
-which modules are source-compiled.
-
-The 0.27.137 fix (`copy_status` checking `destructor_fns`) is a
-point-fix within this space. Phases A-C of this plan would eliminate the
-class of bugs where `copy_status` / `has_drop` / ownership analysis gives
-different answers because of mode-dependent TypeId universes created by
-wrapper routing.
+**Size**: Small. Cleanup.
 
 ---
 
-## Summary
+## 4. What Assertions Should Hold
 
-| Phase | Goal | Removes | Size |
-|-------|------|---------|------|
-| **A** | `boundary_ret_type` on FnSignature | Nothing (additive) | Small |
-| **B** | MIR uses boundary type for cross-module pub calls | Mode-dependent scrutinee types | Medium |
-| **C** | Remove `source_modules` from call routing | Mode-conditional routing | Small |
-| **D** | `__wrap_method::` becomes codegen-only | Wrapper MIR synthesis | Medium |
-| **E** | Universal boundary ABI in MIR (future) | All same/cross-module ABI differences | Large |
+After Phase 2:
 
-Execution order: A → B → C → D. E is optional long-term.
-A is the prerequisite. B is the payoff. C is the cleanup. D is the
-simplification.
+1. **No `source_modules`-dependent routing.** The routing rule is: pub +
+   different package → boundary ABI. Period.
+2. **MIR return type for pub cross-module calls is always
+   `boundary_ret_type_id`.** Never the surface type.
+3. **`copy_status(T)` is mode-independent** for any type T that appears in
+   a pub function signature.
+4. **`has_drop(T)` is mode-independent** for any type T that appears in a
+   pub function signature.
+5. **No `__wrap_method::` FunctionIds in MIR.** Wrapper symbols are
+   codegen-only.
+6. **Match-arm scrutinee type for a pub function result is the same in
+   source and PEX builds.**
+
+---
+
+## 5. Non-Goals
+
+- No legacy routing preservation
+- No compatibility shims for old wrapper behavior
+- No `source_modules`-conditional semantics in any form
+- No keeping both direct and wrapper MIR paths
+- No wrappers whose MIR existence depends on compilation mode
+
+---
+
+## 6. Recommended First Slice
+
+### Investigation finding: MIR is already the same
+
+During implementation I discovered that the MIR for `rest.start()` calls
+is already identical in source and PEX builds. The call lowering in
+`hir_to_mir.py` produces the same return type (surface Result) in both
+modes. The `call_abi_ret_type` function operates on `CallSig.can_throw`
+which is determined by the callee's signature, not by the compilation mode.
+
+The divergence that caused 0.27.137 was not in the MIR but in:
+1. **Type table state**: different TypeIds from package linking →
+   `copy_status` structural fallback giving different answers
+2. **LLVM codegen routing**: `_resolve_call_target_symbol` choosing
+   wrapper vs `__impl` based on `source_modules`
+
+The codegen routing difference produces different LLVM IR (FnResult
+wrapping/unwrapping overhead) but doesn't change the MIR-level semantics.
+The type-table divergence was fixed in 0.27.137 (`copy_status` checking
+`destructor_fns`).
+
+### Revised first slice: boundary_ret_type metadata + codegen routing normalization
+
+Since the MIR is already normalized, the first slice should target the
+LLVM codegen routing:
+
+1. **Add `boundary_ret_type_id` to FnSignature** (~10 lines, metadata)
+2. **Populate it in `_inject_method_boundary_wrappers`** (~10 lines)
+3. **Simplify `_resolve_call_target_symbol`**: replace
+   `callee_mod not in source_modules` with
+   `callee_sig.boundary_ret_type_id is not None` for routing decisions
+   (~20 lines)
+
+This removes `source_modules` from the routing path, making codegen
+mode-independent. The `__impl` optimization still applies for same-module
+calls but the decision no longer depends on which modules are source vs
+package.
+
+The regression test: compile the same code with `--stdlib-root` and
+without (PEX stdlib), compare the LLVM IR structure — both should produce
+the same wrapper routing for cross-package calls.

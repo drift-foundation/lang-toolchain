@@ -6644,15 +6644,28 @@ class _FuncBuilder:
 			if caller_pkg is None or callee_pkg is None:
 				raise AssertionError("module_packages missing entry for boundary check (codegen bug)")
 			if caller_pkg != callee_pkg or force_boundary:
-				# Different canonical packages — check if the callee is a
-				# source-compiled module with no intentional ABI boundary
-				# (e.g. stdlib compiled alongside user code).  Explicitly
-				# packaged modules (multi-package workspace) keep their
-				# boundaries.
-				source_modules = getattr(self.type_table, "source_modules", None) or set()
-				explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
-				if force_boundary or callee_mod not in source_modules or callee_mod in explicitly_packaged:
+				# Different canonical packages: use boundary ABI if the
+				# callee has boundary_ret_type_id (set at package-consumption
+				# time, not for co-compiled source).  This replaces the old
+				# source_modules check with a declaration-time property:
+				# co-compiled stdlib has no boundary_ret_type_id so same-
+				# compilation calls use direct convention; package-consumed
+				# stdlib has boundary_ret_type_id so cross-package calls use
+				# boundary convention.
+				callee_sig = callee_info.signature
+				has_boundary = (
+					callee_sig is not None
+					and getattr(callee_sig, "boundary_ret_type_id", None) is not None
+				)
+				if force_boundary or has_boundary:
 					is_cross_module = True
+				else:
+					# Callee is exported but has no boundary marker.  Check
+					# explicitly_packaged_modules as a fallback for multi-
+					# package workspace boundaries.
+					explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
+					if callee_mod in explicitly_packaged:
+						is_cross_module = True
 
 		target_sym = function_symbol(fn_id)
 		if is_exported_entry and not is_cross_module:
