@@ -1,6 +1,52 @@
 # Drift development history
 
 ## 2026-04-01
+- **Eliminate `explicitly_packaged_modules` fallback: `boundary_ret_type_id` is now the sole boundary routing signal (0.27.140, ABI 7)**:
+  Wrapper convergence Phase 3: removes the `explicitly_packaged_modules`
+  fallback from all four routing sites. `boundary_ret_type_id` is now the
+  sole source of truth for boundary routing decisions.
+  - Changes:
+    - `driftc.py` (`_inject_method_boundary_wrappers`): sets
+      `boundary_ret_type_id` on all pub functions in explicitly-packaged
+      modules, at wrapper injection time (early enough for the call
+      resolver and type checker to see it)
+    - `driftc.py` (pre-MIR-lowering): propagation pass ensures late-created
+      signatures (K39 generic instantiations) also get the marker
+    - all four routing sites (type_checker 2x, call_resolver, codegen):
+      `explicitly_packaged_modules` fallback removed — `boundary_ret_type_id`
+      is the only check
+  - After this change, no semantic routing decision depends on:
+    - `source_modules`
+    - `explicitly_packaged_modules`
+  - Both sets are retained on TypeTable for diagnostics/provenance only,
+    not for boundary meaning
+  - Versioning: compiler 0.27.140, ABI 7
+
+- **Remove `source_modules` from all semantic routing: type checker, call resolver, and codegen now use `boundary_ret_type_id` (0.27.139, ABI 7)**:
+  Wrapper convergence Phase 2: all four boundary routing sites (type checker
+  `_is_cross_package_boundary`, `_method_boundary_visible`; call resolver
+  wrapper upgrade; codegen `_resolve_call_target_symbol`) now use
+  `boundary_ret_type_id` as the primary boundary signal instead of
+  `source_modules`.
+  - What's removed from semantic routing:
+    - `source_modules` — no longer consulted in any boundary decision
+    - the `callee_mod not in source_modules` check that caused all
+      source-vs-PEX divergence bugs
+  - What remains as fallback:
+    - `explicitly_packaged_modules` — retained as a narrow fallback for
+      generic instantiations in multi-package workspaces where
+      `boundary_ret_type_id` hasn't been propagated to instantiated
+      signatures yet. This is workspace-declaration-driven (not mode-
+      dependent) and will be removed once boundary metadata propagates to
+      all instantiations.
+  - Routing source of truth after this change:
+    - primary: `boundary_ret_type_id` on callee's FnSignature (set at
+      package-consumption time or for explicitly-packaged workspace modules)
+    - fallback: `explicitly_packaged_modules` (workspace declaration, not
+      mode-dependent)
+    - NOT used: `source_modules` (mode-dependent, removed)
+  - Versioning: compiler 0.27.139, ABI 7
+
 - **Replace `source_modules` in primary codegen routing with `boundary_ret_type_id` (0.27.138, ABI 7)**:
   Wrapper convergence refactor Phase 1: removes `source_modules` from the
   primary cross-package call routing decision. Replaces it with

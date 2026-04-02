@@ -371,6 +371,15 @@ fn main() nothrow -> Int{
 	func_hirs, signatures, fn_ids_by_name = flatten_modules(modules)
 
 	external_sigs_by_id = _decode_package_signatures(pkg_path, type_table=type_table)
+	# Inject wrapper signatures and set boundary_ret_type_id on external
+	# (package-consumed) signatures so the type checker routes via metadata.
+	from lang.driftc.driftc import _inject_method_boundary_wrappers
+	_ext_specs, _ext_errs = _inject_method_boundary_wrappers(
+		signatures_by_id=external_sigs_by_id,
+		existing_ids=set(signatures.keys()) | set(external_sigs_by_id.keys()),
+		register_derived=lambda fn_id, sig: external_sigs_by_id.__setitem__(fn_id, sig),
+		type_table=type_table,
+	)
 	signatures.update(external_sigs_by_id)
 
 	_external_trait_defs, external_impl_metas, _missing_traits, _missing_impl_modules = _collect_external_trait_and_impl_metadata(

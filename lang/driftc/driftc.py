@@ -1047,6 +1047,26 @@ def _inject_method_boundary_wrappers(
 		)
 		register_derived(wrapper_id, wrap_sig)
 		specs.append(MethodWrapperSpec(wrapper_fn_id=wrapper_id, target_fn_id=fn_id))
+	# Set boundary_ret_type_id for pub functions in explicitly-packaged
+	# modules (multi-package workspace) and for pub nothrow methods that
+	# got wrappers (the nothrow method loop above only sets it when a new
+	# wrapper is created, not for pre-existing wrappers).
+	explicitly_packaged = getattr(type_table, "explicitly_packaged_modules", None) or set()
+	for fn_id, sig in list(signatures_by_id.items()):
+		if sig.boundary_ret_type_id is not None:
+			continue
+		if getattr(sig, "is_wrapper", False):
+			continue
+		if sig.return_type_id is None:
+			continue
+		if not getattr(sig, "is_pub", False):
+			continue
+		fn_mod = getattr(fn_id, "module", None)
+		# Set boundary for: pub functions in explicitly-packaged modules,
+		# or pub exported entrypoints in explicitly-packaged modules.
+		if fn_mod in explicitly_packaged:
+			err_ty = type_table.ensure_error()
+			sig.boundary_ret_type_id = type_table.ensure_fnresult(sig.return_type_id, err_ty)
 	return specs, errors
 
 
@@ -5728,6 +5748,35 @@ def compile_stubbed_funcs(
 		# scrutinee drop that destroys the already-extracted payload.
 		if hasattr(shared_type_table, "_copy_cache_structural"):
 			shared_type_table._copy_cache_structural.clear()
+	# Propagate boundary_ret_type_id to ALL pub signatures in explicitly-
+	# packaged modules and to all signatures that are exported entrypoints
+	# in those modules.  This catches generic instantiations and other
+	# late-created signatures.  After this, explicitly_packaged_modules is
+	# no longer needed for semantic routing — boundary_ret_type_id is
+	# authoritative.
+	explicitly_packaged = getattr(shared_type_table, "explicitly_packaged_modules", None) or set()
+	if shared_type_table is not None:
+		err_ty = shared_type_table.ensure_error()
+		for fn_id, sig in list(signatures_by_id.items()):
+			if sig.boundary_ret_type_id is not None:
+				continue
+			if sig.return_type_id is None:
+				continue
+			if getattr(sig, "is_wrapper", False):
+				continue
+			fn_mod = getattr(fn_id, "module", None)
+			# Set boundary for: (1) pub methods in explicitly-packaged modules,
+			# (2) exported entrypoints in explicitly-packaged modules, or
+			# (3) any pub function with is_exported_entrypoint whose module
+			# has boundary_ret_type_id on at least one of its functions
+			# (indicating it's a package boundary module).
+			needs_boundary = False
+			if fn_mod in explicitly_packaged and getattr(sig, "is_pub", False):
+				needs_boundary = True
+			if not needs_boundary:
+				continue
+			sig.boundary_ret_type_id = err_ty  # placeholder — actual FnResult computed below
+			sig.boundary_ret_type_id = shared_type_table.ensure_fnresult(sig.return_type_id, err_ty)
 	hir_to_mir_start = None
 	if _timing_enabled:
 		import time as _timing_time

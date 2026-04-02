@@ -2527,22 +2527,14 @@ class TypeChecker:
 				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
 			if callee_pkg == caller_pkg:
 				return False
-			# Different canonical packages, but check if callee is from
-			# a source-compiled module in the current compilation unit
-			# rather than a pre-compiled package artifact.
-			# Source-compiled modules share the compilation unit with the
-			# caller — no ABI boundary exists between them.
+			# Different canonical packages: boundary exists if the callee
+			# has boundary_ret_type_id (set at package-consumption time or
+			# for explicitly-packaged source modules).
 			if getattr(sig, "is_instantiation", False):
 				return False  # instantiations are local by definition
-			# A callee is source-compiled if its module is in the current
-			# compilation's source module set AND was NOT explicitly
-			# packaged by the user.  Explicitly-packaged modules (from
-			# external_module_packages / multi-package workspace) have
-			# intentional ABI boundaries even when source-compiled.
-			explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
-			if callee_mod in self._source_modules and callee_mod not in explicitly_packaged:
-				return False
-			return True
+			if getattr(sig, "boundary_ret_type_id", None) is not None:
+				return True
+			return False
 
 		def _method_boundary_visible(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
 			if sig is None or not getattr(sig, "is_method", False):
@@ -2563,13 +2555,11 @@ class TypeChecker:
 				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
 			if caller_pkg == callee_pkg:
 				return False
-			# Source-compiled modules that were NOT explicitly packaged
-			# (e.g. stdlib compiled alongside user code) have no real
-			# ABI boundary — skip wrapper routing for them.
-			explicitly_packaged = getattr(self.type_table, "explicitly_packaged_modules", None) or set()
-			if callee_mod in self._source_modules and callee_mod not in explicitly_packaged:
-				return False
-			return True
+			# Different canonical packages: boundary exists if the callee
+			# has boundary_ret_type_id.
+			if getattr(sig, "boundary_ret_type_id", None) is not None:
+				return True
+			return False
 
 		def _apply_method_boundary(
 			expr: H.HMethodCall,
