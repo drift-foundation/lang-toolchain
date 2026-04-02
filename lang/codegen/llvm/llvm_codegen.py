@@ -667,6 +667,7 @@ class LlvmModuleBuilder:
 	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
 	iface_vtable_sizes: Dict[str, int] = field(default_factory=dict)
 	nothrow_thunk_cache: Dict[tuple[str, str], str] = field(default_factory=dict)
+	_variant_type_cache: Dict[str, bool] = field(default_factory=dict)
 	fat_fnptr_wrap_thunks: Dict[str, str] = field(default_factory=dict)
 	fat_fnptr_fwd_thunks: Dict[str, str] = field(default_factory=dict)
 	_dbg_next_id: int = 0
@@ -976,6 +977,124 @@ class LlvmModuleBuilder:
 		if ok_typeid is not None:
 			self._fnresult_ok_typeid_by_type[type_name] = ok_typeid
 		return type_name
+
+	def llvm_type_for_typeid(self, ty_id: TypeId, type_table: TypeTable) -> str:
+		"""Map a TypeId to an LLVM type string using the module's type table.
+
+		Module-level equivalent of _FuncBuilder._llvm_type_for_typeid.
+		Covers type kinds needed for wrapper param/return types. Known gaps:
+		simplified forward nominal canonicalization, approximate variant layout.
+		"""
+		from lang.driftc.core.types_core import TypeKind as _TK
+		td = type_table.get(ty_id)
+		if td.kind is _TK.FORWARD_NOMINAL:
+			resolved = (
+				type_table.get_nominal(kind=_TK.STRUCT, module_id=td.module_id, name=td.name)
+				or type_table.get_nominal(kind=_TK.VARIANT, module_id=td.module_id, name=td.name)
+				or type_table.get_nominal(kind=_TK.INTERFACE, module_id=td.module_id, name=td.name)
+			)
+			if resolved is not None:
+				ty_id = resolved
+				td = type_table.get(ty_id)
+		if type_table.is_void(ty_id):
+			return "i8"
+		if td.kind is _TK.ARRAY:
+			return "%DriftArrayHeader"
+		if td.kind is _TK.STRUCT and td.name == "MaybeUninit" and td.module_id == "std.mem":
+			inst = type_table.get_struct_instance(ty_id)
+			if inst is not None and inst.type_args:
+				return self.llvm_type_for_typeid(inst.type_args[0], type_table)
+			if td.param_types:
+				return self.llvm_type_for_typeid(td.param_types[0], type_table)
+		if td.kind is _TK.SCALAR:
+			_MAP = {
+				"Int": DRIFT_INT_TYPE, "Uint": DRIFT_USIZE_TYPE,
+				"Uint64": DRIFT_U64_TYPE, "u64": DRIFT_U64_TYPE,
+				"Int32": "i32", "Uint32": "i32",
+				"Bool": "i1", "Byte": "i8",
+				"Float": "double" if self.float_bits == 64 else "float",
+				"String": DRIFT_STRING_TYPE,
+			}
+			if td.name in _MAP:
+				return _MAP[td.name]
+		if td.kind is _TK.REF or td.kind is _TK.RAW_PTR:
+			return "ptr"
+		if td.kind is _TK.FUNCTION:
+			return "ptr"
+		if td.kind is _TK.STRUCT:
+			def _storage_map(tid: TypeId) -> str:
+				sty = self.llvm_type_for_typeid(tid, type_table)
+				std = type_table.get(tid)
+				if std.kind is _TK.SCALAR and std.name == "Bool":
+					return "i8"
+				return self._llty(sty)
+			return self.ensure_struct_type(ty_id, type_table=type_table, map_type=_storage_map)
+		if td.kind is _TK.INTERFACE:
+			return DRIFT_IFACE_TYPE
+		if td.kind is _TK.VARIANT:
+			return self._ensure_variant_layout(ty_id, type_table)
+		if td.kind is _TK.DIAGNOSTICVALUE:
+			return DRIFT_DV_TYPE
+		if td.kind is _TK.ERROR:
+			return DRIFT_ERROR_PTR
+		if td.kind is _TK.FNRESULT and td.param_types and len(td.param_types) >= 2:
+			ok_tid = td.param_types[0]
+			ok_llty = self.llvm_type_for_typeid(ok_tid, type_table)
+			raw_key = type_table.type_key_string(ok_tid)
+			ok_key = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in raw_key)
+			ok_key = f"{ok_key}_{hash64(raw_key.encode()):016x}"
+			return self.fnresult_type(ok_key, ok_llty, ok_typeid=ok_tid)
+		raise NotImplementedError(f"LLVM module type mapping: unsupported TypeId {ty_id} kind={td.kind.name} name={td.name}")
+
+	def _ensure_variant_layout(self, ty_id: TypeId, type_table: TypeTable) -> str:
+		from lang.driftc.core.types_core import TypeKind as _TK
+		td = type_table.get(ty_id)
+		key = type_table.type_key_string(ty_id)
+		safe_key = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in key)
+		suffix = f"{hash64(key.encode()):016x}"
+		type_name = f"%Variant_{safe_key}_{suffix}"
+		if type_name in self._variant_type_cache:
+			return type_name
+		inst = type_table.get_variant_instance(ty_id)
+		if inst is None:
+			schema = type_table.variant_schemas.get(ty_id)
+			if schema is not None and not schema.type_params:
+				self.type_decls.append(f"{type_name} = type {{ i8, [7 x i8] }}")
+				self._variant_type_cache[type_name] = True
+				return type_name
+			raise NotImplementedError(f"variant {td.name} has no instance for layout")
+		max_payload = 0
+		for arm in inst.arms:
+			arm_size = 0
+			for fty in arm.field_types:
+				fllty = self.llvm_type_for_typeid(fty, type_table)
+				arm_size += self._llvm_type_size_approx(fllty)
+			if arm_size > max_payload:
+				max_payload = arm_size
+		payload_bytes = max(8, ((max_payload + 7) // 8) * 8)
+		pad = payload_bytes - 1
+		self.type_decls.append(f"{type_name} = type {{ i8, [{pad} x i8] }}")
+		self._variant_type_cache[type_name] = True
+		return type_name
+
+	def _llvm_type_size_approx(self, llty: str) -> int:
+		if llty in ("i1", "i8"):
+			return 1
+		if llty == "i32":
+			return 4
+		if llty in (DRIFT_INT_TYPE, "i64", "double", "ptr"):
+			return 8
+		if llty == DRIFT_STRING_TYPE:
+			return 16
+		if llty == DRIFT_ERROR_PTR:
+			return 8
+		if llty.startswith("%DriftArrayHeader"):
+			return 32
+		if llty.startswith("%DriftIface"):
+			return 40
+		if llty.startswith("%Struct_") or llty.startswith("%Variant_"):
+			return 64
+		return 8
 
 	def emit_func(self, text: str) -> None:
 		self.funcs.append(text)

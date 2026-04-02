@@ -1,5 +1,24 @@
 # Drift development history
 
+## 2026-04-02
+- **Add module-level type mapping `LlvmModuleBuilder.llvm_type_for_typeid` (0.27.141, ABI 7)**:
+  Wrapper convergence Phase 4A-prereq: adds a `llvm_type_for_typeid`
+  method to `LlvmModuleBuilder` for TypeId → LLVM type mapping without
+  a `_FuncBuilder` context.
+  - Not a full extraction of `_FuncBuilder._llvm_type_for_typeid` — known
+    parity gaps:
+    - forward nominal canonicalization is simplified (no recursive nested
+      type canonicalization inside Ref/Array/Struct type args)
+    - variant layout uses approximate payload sizing (`_llvm_type_size_approx`)
+      instead of the precise `_size_align_typeid` used by `_FuncBuilder`
+    - sufficient for wrapper param/return types (fully resolved by codegen
+      time) but not a general-purpose replacement
+  - Includes `MaybeUninit<T>` unwrapping (parity with `_FuncBuilder`)
+  - No semantic behavior change — existing codegen unchanged
+  - Regression: `test_module_type_mapping.py` — 7 tests for scalars, refs,
+    ptrs, arrays, structs, errors, MaybeUninit unwrapping, FnResult
+  - Versioning: compiler 0.27.141, ABI 7
+
 ## 2026-04-01
 - **Eliminate `explicitly_packaged_modules` fallback: `boundary_ret_type_id` is now the sole boundary routing signal (0.27.140, ABI 7)**:
   Wrapper convergence Phase 3: removes the `explicitly_packaged_modules`
