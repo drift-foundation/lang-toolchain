@@ -75,8 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Library root for resolving package deps (repeatable)")
 	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
 		help="Native library search path for linker (repeatable)")
-	p.add_argument("--target", type=str, default="drift-dev",
-		help="Target triple (default: drift-dev)")
+	p.add_argument("--target", type=str, default=None,
+		help="Build target (default: native for apps, drift-dev for libraries)")
 	p.add_argument("-o", "--output", type=UserPath, default=None,
 		help="Explicit output path override")
 	p.add_argument("--driftc", type=UserPath, default=None,
@@ -346,7 +346,7 @@ def _resolve_deps(
 
 
 def _default_output_path(art: Artifact, build_dir: Path) -> Path:
-	if art.kind == "package":
+	if art.kind == "library":
 		return build_dir / f"{art.name}.dmp"
 	return build_dir / art.name
 
@@ -412,8 +412,24 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Ensure output directory exists.
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
+	# Resolve target per artifact kind.
+	if art.kind == "app":
+		if args.target is None or args.target == "native":
+			args.target = "native"
+		else:
+			print(
+				f"error: unsupported app target '{args.target}'; "
+				f"app builds produce host-native executables. "
+				f"Use --target native or omit --target.",
+				file=sys.stderr,
+			)
+			return 1
+	elif art.kind == "library":
+		if args.target is None:
+			args.target = "drift-dev"
+
 	# Build command.
-	if art.kind == "package":
+	if art.kind == "library":
 		cmd = build_package_cmd(
 			art,
 			driftc=driftc,

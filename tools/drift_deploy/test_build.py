@@ -720,12 +720,102 @@ class TestDriftBuildRun:
 		cmd = mock_run.call_args[0][0]
 		assert "--allow-unsafe" in cmd
 
-	def test_package_target_default(self):
-		"""Package target defaults to drift-dev."""
+	def test_target_default_is_none(self):
+		"""Target defaults to None (resolved per artifact kind)."""
 		from tools.drift_deploy.drift_build import build_arg_parser
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.target == "drift-dev"
+		assert args.target is None
+
+	def test_app_default_target_native(self, tmp_path):
+		"""App artifact with no --target defaults to native and emits --target-word-bits."""
+		manifest_data = {
+			"schema_version": 1,
+			"project": {"name": "test-app", "license": "MIT"},
+			"artifacts": [
+				{
+					"kind": "app",
+					"name": "my-app",
+					"version": "0.1.0",
+					"description": "Test app",
+					"entry_module": "src/main.drift",
+					"modules": ["src/main.drift"],
+					"entry_point": "my_app::main",
+				}
+			],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		(tmp_path / "src").mkdir(exist_ok=True)
+		(tmp_path / "src" / "main.drift").write_text("module my_app;\npub fn main() nothrow -> Int { return 0; }\n")
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+
+		assert result == 0
+		cmd = mock_run.call_args[0][0]
+		assert "--target-word-bits" in cmd, "app build must emit --target-word-bits"
+
+	def test_app_explicit_target_native(self, tmp_path):
+		"""App with --target native emits --target-word-bits."""
+		manifest_data = {
+			"schema_version": 1,
+			"project": {"name": "test-app", "license": "MIT"},
+			"artifacts": [
+				{
+					"kind": "app",
+					"name": "my-app",
+					"version": "0.1.0",
+					"description": "Test app",
+					"entry_module": "src/main.drift",
+					"modules": ["src/main.drift"],
+					"entry_point": "my_app::main",
+				}
+			],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		(tmp_path / "src").mkdir(exist_ok=True)
+		(tmp_path / "src" / "main.drift").write_text("module my_app;\npub fn main() nothrow -> Int { return 0; }\n")
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run(["--manifest", str(tmp_path / "drift-manifest.json"), "--target", "native"])
+
+		assert result == 0
+		cmd = mock_run.call_args[0][0]
+		assert "--target-word-bits" in cmd
+
+	def test_app_unsupported_target_rejected(self, tmp_path):
+		"""App with unsupported --target produces clear error."""
+		manifest_data = {
+			"schema_version": 1,
+			"project": {"name": "test-app", "license": "MIT"},
+			"artifacts": [
+				{
+					"kind": "app",
+					"name": "my-app",
+					"version": "0.1.0",
+					"description": "Test app",
+					"entry_module": "src/main.drift",
+					"modules": ["src/main.drift"],
+					"entry_point": "my_app::main",
+				}
+			],
+		}
+		_write_manifest(tmp_path, manifest_data)
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run(["--manifest", str(tmp_path / "drift-manifest.json"), "--target", "linux-x86_64"])
+
+		assert result == 1, "unsupported app target must fail"
 
 	def test_named_artifact_selection(self, tmp_path):
 		manifest_data = {

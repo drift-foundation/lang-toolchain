@@ -895,7 +895,7 @@ def _deploy_artifact(
 		if not link.exists():
 			link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
 
-	if art.kind == "package":
+	if art.kind == "library":
 		dmp_path = _build_package(
 			art,
 			driftc=driftc,
@@ -925,7 +925,7 @@ def _deploy_artifact(
 	staged_trust_path: Path | None = None
 	staged_profile: Path | None = None
 
-	if art.kind == "package":
+	if art.kind == "library":
 		if sign_key is None:
 			raise DeployError(
 				f"artifact '{art.name}': signing key required for package artifacts; "
@@ -1121,7 +1121,7 @@ def _deploy_artifact(
 	# used for both baseline and custom smoke (via DRIFT_STAGED_PKG_ROOT).
 	smoke_pkg_root = stage_dir / f"_smoke_pkgroot_{art.name}"
 	smoke_pkg_root.mkdir(parents=True, exist_ok=True)
-	if art.kind == "package":
+	if art.kind == "library":
 		art_in_staged = staged_pkg_root / art.name
 		if art_in_staged.exists():
 			smoke_art_link = smoke_pkg_root / art.name
@@ -1141,7 +1141,7 @@ def _deploy_artifact(
 	if skip_smoke:
 		print(f"  warning: --skip-smoke: smoke skipped for '{art.name}'", file=sys.stderr)
 	else:
-		if art.kind == "package":
+		if art.kind == "library":
 			_run_baseline_smoke_package(
 				art,
 				driftc=driftc,
@@ -1165,7 +1165,7 @@ def _deploy_artifact(
 			"DRIFT_ARTIFACT_VERSION": art.version,
 			"DRIFT_ARTIFACT_KIND": art.kind,
 		})
-		if art.kind == "package":
+		if art.kind == "library":
 			smoke_env["DRIFT_STAGED_PKG"] = str(zdmp_path)
 			if sig_path:
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
@@ -1183,7 +1183,7 @@ def _deploy_artifact(
 		print(f"  dry-run: skipping publish for '{art.name}'")
 		return
 
-	if art.kind == "package":
+	if art.kind == "library":
 		if dest is None:
 			raise DeployError("--dest required for package artifacts")
 		pub = _publish_package(art, staged_install=staged_install, dest=dest)
@@ -1233,7 +1233,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 		artifacts = list(manifest.artifacts)
 
 	# Validate dest requirements.
-	has_packages = any(a.kind == "package" for a in artifacts)
+	has_packages = any(a.kind == "library" for a in artifacts)
 	has_apps = any(a.kind == "app" for a in artifacts)
 
 	if has_packages and not args.dest:
@@ -1308,7 +1308,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 
 	# Build mapping from package name → module_namespace for co-deployed deps.
 	dep_namespace_map: dict[str, str] = {
-		a.name: a.module_namespace for a in artifacts if a.kind == "package"
+		a.name: a.module_namespace for a in artifacts if a.kind == "library"
 	}
 
 	# ── Resolution / lock (per-artifact, read-only) ──

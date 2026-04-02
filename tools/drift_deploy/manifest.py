@@ -34,7 +34,7 @@ class PackageDep:
 @dataclass(frozen=True)
 class Artifact:
 	"""A single artifact definition from the manifest."""
-	kind: str  # "package" or "app"
+	kind: str  # "library" or "app" (legacy "package" normalized to "library")
 	name: str
 	version: str
 	description: str
@@ -48,6 +48,10 @@ class Artifact:
 	unsafe: bool = False
 	module_namespace: str = ""  # set during parsing; defaults to name with hyphens → underscores
 	entry_point: str = ""  # app-only: "module::fn" entry point (e.g. "pushcoin.bookkeeper::main")
+
+	def __post_init__(self) -> None:
+		if self.kind == "package":
+			object.__setattr__(self, "kind", "library")
 
 
 @dataclass(frozen=True)
@@ -124,14 +128,14 @@ def load_manifest(path: Path) -> Manifest:
 		seen_names.add(art.name)
 		artifacts.append(art)
 
-	# Validation: packages cannot depend on apps.
+	# Validation: libraries cannot depend on apps.
 	app_names = {a.name for a in artifacts if a.kind == "app"}
 	for art in artifacts:
-		if art.kind == "package":
+		if art.kind == "library":
 			for dep in art.package_deps:
 				if dep.name in app_names:
 					raise ManifestError(
-						f"package artifact '{art.name}' cannot depend on app artifact '{dep.name}'"
+						f"library artifact '{art.name}' cannot depend on app artifact '{dep.name}'"
 					)
 
 	return Manifest(schema_version=sv, project=project, artifacts=artifacts)
@@ -148,8 +152,11 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 	ctx = f"artifact[{idx}]"
 
 	kind = _require_str(obj, "kind", ctx)
-	if kind not in ("package", "app"):
-		raise ManifestError(f"{ctx}: 'kind' must be 'package' or 'app', got '{kind}'")
+	if kind == "package":
+		import sys
+		print(f"warning: {ctx}: 'kind: package' is deprecated; use 'kind: library'", file=sys.stderr)
+	if kind not in ("library", "package", "app"):
+		raise ManifestError(f"{ctx}: 'kind' must be 'library' or 'app', got '{kind}'")
 
 	name = _require_str(obj, "name", ctx)
 	version = _require_str(obj, "version", ctx)

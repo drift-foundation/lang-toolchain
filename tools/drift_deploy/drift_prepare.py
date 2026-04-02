@@ -108,7 +108,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# can satisfy each other's package_deps without being published.
 	co_artifact_names: set[str] = set()
 	for art in artifacts:
-		if art.kind == "package":
+		if art.kind == "library":
 			co_artifact_names.add(art.name)
 			pkg_deps = [(dep.name, dep.version) for dep in art.package_deps]
 			entry = PackageEntry(

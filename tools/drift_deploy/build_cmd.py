@@ -154,6 +154,12 @@ def build_app_cmd(
 	"""Build the driftc command for an app artifact."""
 	cmd = [str(driftc), "-o", str(output_path)]
 
+	# Native target: emit --target-word-bits for host.
+	if target == "native":
+		import struct
+		word_bits = struct.calcsize("P") * 8
+		cmd.extend(["--target-word-bits", str(word_bits)])
+
 	# Custom entry point (e.g. "pushcoin.bookkeeper::main").
 	if art.entry_point:
 		cmd.extend(["--entry", art.entry_point])

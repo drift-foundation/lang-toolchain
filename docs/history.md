@@ -1,6 +1,24 @@
 # Drift development history
 
 ## 2026-04-02
+- **Rename artifact kind `package` → `library`, add app native build support (0.27.142, ABI 7)**:
+  Addresses app team defect: `drift build` for app artifacts now produces
+  host-native executables by default.
+  - Artifact kind rename:
+    - manifest `kind: package` normalized to `library` with deprecation
+      warning. `kind: library` is the canonical form.
+    - normalization in `Artifact.__post_init__` ensures all code paths
+      (manifest parser, direct construction, test fixtures) see `library`
+    - `kind: package` still accepted during transition; will become error
+      after downstream manifests are updated
+  - App native build:
+    - `--target` defaults to `None`; resolved per artifact kind:
+      - app: defaults to `native` (host-native executable)
+      - library: defaults to `drift-dev` (package artifact)
+    - `build_app_cmd` emits `--target-word-bits <host>` for native builds
+    - unsupported app targets produce clear error, never silent fallback
+  - Versioning: compiler 0.27.142, ABI 7
+
 - **Add module-level type mapping `LlvmModuleBuilder.llvm_type_for_typeid` (0.27.141, ABI 7)**:
   Wrapper convergence Phase 4A-prereq: adds a `llvm_type_for_typeid`
   method to `LlvmModuleBuilder` for TypeId → LLVM type mapping without
