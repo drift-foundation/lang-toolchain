@@ -1,0 +1,24 @@
+module main;
+
+import std.core as core;
+import std.format as fmt;
+
+// Minimal reproducer: format_int returns a String that should be freed
+// when the enclosing scope exits.  If the scope-exit drop is missing,
+// Valgrind reports the string as "definitely lost".
+
+pub fn main() nothrow -> Int {
+	// Case 1: format_int result bound to val, not moved.
+	val s1 = fmt.format_int(42);
+	// s1 goes out of scope here — should be freed.
+
+	// Case 2: format_int result used in expression, temporary.
+	val len = fmt.format_int(123).byte_length();
+	// The temporary string from format_int should be freed.
+
+	// Case 3: string concatenation — intermediate strings.
+	val s3 = "hello " + fmt.format_int(999);
+	// s3 and the format_int temporary should both be freed.
+
+	return 0;
+}

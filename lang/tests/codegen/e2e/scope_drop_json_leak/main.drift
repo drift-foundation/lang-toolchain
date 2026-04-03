@@ -1,0 +1,40 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+import std.format as fmt;
+
+// Reproducer for scope-exit drop leak with JSON parse + clone_deep.
+// The bookkeeper defect reports HashMap internals not freed when a
+// clone_deep result goes out of scope.
+
+fn test_json_parse_leak() nothrow -> Int {
+	val input = "{\"name\": \"test\", \"value\": 42}";
+	match json.parse(&input) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(node) => {
+			// clone_deep creates a new JsonNode with HashMap internals.
+			val cloned = node.clone_deep();
+			// cloned goes out of scope here — should be freed.
+			// node also goes out of scope — should be freed.
+			return 0;
+		}
+	}
+}
+
+fn test_string_in_match() nothrow -> Int {
+	// String created inside match arm — should be freed on scope exit.
+	val n = 42;
+	val s = fmt.format_int(n);
+	val result = s.byte_length();
+	// s goes out of scope — should be freed.
+	return result;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = test_json_parse_leak();
+	if r1 != 0 { return r1; }
+	val r2 = test_string_in_match();
+	if r2 == 0 { return 2; }
+	return 0;
+}

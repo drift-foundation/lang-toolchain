@@ -1,0 +1,38 @@
+module main;
+
+import std.core as core;
+import std.log as log;
+import std.runtime as rt;
+
+struct RequestContextState {
+	ctx: rt.ScopedStack<log.LogContext>
+}
+
+fn push_ctx(req: String) nothrow -> Optional<rt.ScopeGuard<log.LogContext>> {
+	val reg = rt.thread_registry();
+	match rt.get_mut<type RequestContextState>(reg) {
+		Some(st) => {
+			var ctx = log.log_context();
+			ctx.put("req", move req);
+			var guard = st.ctx.push(move ctx);
+			return Optional::Some(move guard);
+		},
+		None => {
+			return Optional<type rt.ScopeGuard<log.LogContext>>::None();
+		}
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val reg = rt.thread_registry();
+	val _ = reg.set<type RequestContextState>(RequestContextState(ctx = rt.scoped_stack<type log.LogContext>()));
+	match push_ctx("test") {
+		Some(g) => {
+			val guard = move g;
+			return 0;
+		},
+		None => {
+			return 1;
+		}
+	}
+}

@@ -1,0 +1,28 @@
+module main;
+
+import std.core as core;
+import std.format as fmt;
+import std.log as log;
+
+// Regression: Logger::info takes HashMap<String, V> by value.
+// The HashMap (and its string values) must be freed when info() returns.
+// This exercises the cross-module generic instantiation path where V=String.
+
+pub fn main() nothrow -> Int {
+	// Create a logger that writes to stderr (simplest setup)
+	var cb = log.config_builder();
+	cb.sink(log.stderr_sink());
+	cb.min_level(log.Level::Error());
+	val cfg = cb.build();
+	val logger = log.create_logger("test", cfg);
+
+	// This map literal + logger.info is the exact bookkeeper pattern.
+	// format_int creates a heap-allocated string.
+	// The HashMap takes ownership of it.
+	// Logger::info receives the HashMap by value.
+	// When info() returns, the HashMap must be dropped, freeing the string.
+	val _ = logger.info("test-event", {"port": fmt.format_int(42)});
+	val _ = logger.info("test-multi", {"a": fmt.format_int(1), "b": fmt.format_int(2)});
+
+	return 0;
+}

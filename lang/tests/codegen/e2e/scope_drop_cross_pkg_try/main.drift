@@ -1,0 +1,58 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+import std.format as fmt;
+
+// Reproducer for bookkeeper leak pattern:
+// - can-throw function with multiple string/JSON locals
+// - wrapped in try/catch at caller
+// - all locals should be dropped when function returns
+
+fn process_request(input: &String) -> String {
+	// Multiple string locals from cross-package calls
+	val s1 = fmt.format_int(42);
+	val s2 = fmt.format_int(100);
+
+	// JSON parse + clone_deep
+	match json.parse(input) {
+		core.Result::Ok(node) => {
+			val deep = node.clone_deep();
+			match node.into_object() {
+				Some(obj) => {
+					// deep NOT moved on this path — must be dropped
+					val count = obj.len();
+					var result_obj = json.new_object();
+					result_obj.set("count", json.JsonNode::String(fmt.format_int(count)));
+					result_obj.set("s1", json.JsonNode::String(s1));
+					result_obj.set("s2", json.JsonNode::String(s2));
+					return json.encode(&result_obj.to_node());
+				},
+				None => {
+					return json.encode(&deep);
+				}
+			}
+		},
+		core.Result::Err(_) => {
+			return "error";
+		}
+	}
+}
+
+fn handle() nothrow -> Int {
+	val input = "{\"a\": 1, \"b\": 2}";
+	val result = try process_request(&input) catch { "failed" };
+	return result.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	// Run multiple times to confirm leak scales
+	var total = 0;
+	var i = 0;
+	while i < 5 {
+		total = total + handle();
+		i = i + 1;
+	}
+	if total == 0 { return 1; }
+	return 0;
+}
