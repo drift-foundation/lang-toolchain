@@ -8271,41 +8271,12 @@ def main(argv: list[str] | None = None) -> int:
 					if fn_id not in external_signatures_by_id:
 						external_signatures_by_id[fn_id] = sig
 
-		# Skip boundary wrapper injection for nothrow external methods.
-		# Under Option B (packages as distribution containers), nothrow
-		# package-consumed functions are called directly — no FnResult
-		# wrapping, no __wrap_method stubs.  The consumer knows the callee
-		# is nothrow from declared_can_throw in the package signature.
-		#
-		# Only inject wrappers for can-throw external methods (whose
-		# callers need the FnResult ABI to propagate errors).
-		_ext_can_throw_sigs: dict = {}
-		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
-			if getattr(_ext_sig, "declared_can_throw", None) is not False:
-				_ext_can_throw_sigs[_ext_fn_id] = _ext_sig
-		if _ext_can_throw_sigs:
-			_ext_wrapper_specs, _ext_wrapper_errors = _inject_method_boundary_wrappers(
-				signatures_by_id=_ext_can_throw_sigs,
-				existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()) | set(external_signatures_by_id.keys()),
-				register_derived=_register_derived_signature_cli,
-				type_table=type_table,
-			)
-			method_wrapper_specs.extend(_ext_wrapper_specs)
-			if _ext_wrapper_errors:
-				wrapper_errors.extend(_ext_wrapper_errors)
-		# Set boundary_ret_type_id on can-throw external signatures only.
-		# Nothrow functions are called directly without FnResult wrapping.
-		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
-			if _ext_sig.boundary_ret_type_id is not None:
-				continue
-			if not getattr(_ext_sig, "is_exported_entrypoint", False):
-				continue
-			if _ext_sig.return_type_id is None:
-				continue
-			if getattr(_ext_sig, "declared_can_throw", None) is False:
-				continue
-			err_ty = type_table.ensure_error()
-			_ext_sig.boundary_ret_type_id = type_table.ensure_fnresult(_ext_sig.return_type_id, err_ty)
+		# Option B: no boundary wrapper injection for external methods.
+		# All package functions are compiled from HIR in the consumer's
+		# context.  No __wrap_method stubs or FnResult ABI wrappers needed.
+		# Option B: boundary_ret_type_id is no longer set on external
+		# signatures.  All package functions are compiled from HIR in
+		# the consumer's context — no boundary ABI wrappers needed.
 
 		(
 			external_trait_defs,
@@ -9315,13 +9286,9 @@ def main(argv: list[str] | None = None) -> int:
 			decl_fingerprint=_p1_fp,
 		)
 
-	# Clear boundary markers on ALL nothrow package-consumed functions
-	# BEFORE type checking.  Under Option B, the consumer compiles package
-	# functions from HIR (or instantiates from generic templates).  No
-	# cross-package FnResult wrapper is needed.  Without this, the call
-	# resolver routes through __wrap_method wrappers whose MIR bodies
-	# are never synthesized (especially for generic instantiations in
-	# lambda callbacks).
+	# Option B: clear is_exported_entrypoint on HIR-compiled package
+	# functions so the codegen doesn't emit __impl renames or FnResult
+	# wrappers.  Entry wrapper deps (install_process_preamble) are kept.
 	if _pkg_hir_loaded:
 		_entry_wrapper_keep = {
 			FunctionId(module=mod, name=name, ordinal=0)
@@ -9330,14 +9297,8 @@ def main(argv: list[str] | None = None) -> int:
 		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
 			if _ext_fn_id in _entry_wrapper_keep:
 				continue
-			if getattr(_ext_sig, "is_wrapper", False):
-				continue
-			if getattr(_ext_sig, "declared_can_throw", None) is not False:
-				continue
 			if getattr(_ext_sig, "is_exported_entrypoint", False):
 				_ext_sig.is_exported_entrypoint = False
-			if getattr(_ext_sig, "boundary_ret_type_id", None) is not None:
-				_ext_sig.boundary_ret_type_id = None
 
 	typed_fns: dict[FunctionId, object] = {}
 	# Use signatures_by_id_all (includes external/package sigs) so package
