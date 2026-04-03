@@ -1585,6 +1585,8 @@ def encode_module_payload_v0(
 			return float(val)
 		if isinstance(val, str):
 			return str(val)
+		if isinstance(val, list):
+			return [_encode_const_value(f"{sym}[{i}]", v) for i, v in enumerate(val)]
 		raise ValueError(f"internal: unsupported const value type for '{sym}': {type(val).__name__}")
 	for name in consts:
 		sym = f"{module_id}::{name}"
@@ -1604,7 +1606,7 @@ def encode_module_payload_v0(
 		cname = sym[len(prefix):]
 		if cname in exported_const_set:
 			continue
-		if not isinstance(val, (bool, int, float, str)):
+		if not isinstance(val, (bool, int, float, str, list)):
 			continue
 		internal_const_table[cname] = {"type_id": int(ty_id), "value": _encode_const_value(sym, val)}
 	types_obj = {

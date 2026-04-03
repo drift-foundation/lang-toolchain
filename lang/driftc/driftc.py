@@ -144,6 +144,7 @@ from lang.driftc.core.function_id import (
 	function_id_to_obj,
 	function_symbol,
 	method_wrapper_id,
+	parse_function_symbol,
 )
 from lang.driftc.traits.enforce import collect_used_type_keys, enforce_struct_requires, enforce_fn_requires
 from lang.driftc.traits.linked_world import build_require_env, link_trait_worlds, LinkedWorld, RequireEnv
@@ -170,6 +171,7 @@ from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, w
 from lang.driftc.core.function_key import FunctionKey, function_key_from_obj, function_key_str
 from lang.driftc.id_registry import IdRegistry
 from lang.driftc.packages.provisional_dmir_v0 import (
+	decode_hir_funcs,
 	decode_mir_funcs,
 	decode_generic_templates,
 	decode_trait_expr,
@@ -1713,6 +1715,74 @@ def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
 			elif isinstance(instr, M.FnPtrConst):
 				calls.add(instr.fn_ref.fn_id)
 	return calls
+
+
+def _discover_and_synthesize_wrappers(
+	*,
+	reachable: set[FunctionId],
+	mir_pool: dict[FunctionId, M.MirFunc],
+	ssa_pool: dict[FunctionId, MirToSSA.SsaFunc],
+	wrapper_target_by_id: dict[FunctionId, FunctionId],
+	wrapper_sigs: dict[FunctionId, FnSignature],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	signatures_by_id: Mapping[FunctionId, FnSignature],
+	type_table: TypeTable,
+) -> None:
+	"""Discover wrapper references in reachable MIR and synthesize missing bodies.
+
+	Shared between _build_package_consumer_unit and the Option B direct
+	CompilationUnit path.  Iterates to fixpoint: synthesized wrapper bodies
+	may themselves reference further functions that need to be included.
+	"""
+	wrappers_needed: set[FunctionId] = set()
+	changed = True
+	while changed:
+		changed = False
+		for fid in list(reachable):
+			fn = mir_pool.get(fid)
+			if fn is None:
+				continue
+			for callee in _called_funcs_in_mir(fn):
+				if callee in mir_pool and callee not in reachable:
+					reachable.add(callee)
+					changed = True
+				elif callee not in mir_pool and callee in wrapper_target_by_id and callee not in wrappers_needed:
+					wrappers_needed.add(callee)
+					changed = True
+	# Synthesize MIR bodies for discovered wrappers.
+	for wrap_id in wrappers_needed:
+		if wrap_id in mir_pool:
+			continue
+		wrap_sig = wrapper_sigs.get(wrap_id)
+		if wrap_sig is None or wrap_sig.param_type_ids is None:
+			continue
+		param_names = list(wrap_sig.param_names or [])
+		if len(param_names) != len(wrap_sig.param_type_ids):
+			param_names = [f"p{i}" for i in range(len(wrap_sig.param_type_ids))]
+		target_id = wrapper_target_by_id[wrap_id]
+		target_sig = signatures_by_id.get(target_id)
+		if target_sig is None:
+			_ti = fn_infos.get(target_id)
+			if _ti is not None:
+				target_sig = _ti.signature
+		target_ret = target_sig.return_type_id if target_sig is not None else wrap_sig.return_type_id
+		builder = make_builder(wrap_id)
+		builder.func.params = list(param_names)
+		call_dest: M.ValueId | None
+		if type_table.is_void(target_ret):
+			call_dest = None
+		else:
+			call_dest = builder.new_temp()
+		builder.emit(M.Call(dest=call_dest, fn_id=target_id, args=param_names, can_throw=False))
+		ok_dest = builder.new_temp()
+		builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
+		builder.set_terminator(M.Return(value=ok_dest))
+		mir_pool[wrap_id] = builder.func
+		ssa_pool[wrap_id] = MirToSSA().run(builder.func)
+		reachable.add(wrap_id)
+		# Also ensure the target is reachable.
+		if target_id in mir_pool and target_id not in reachable:
+			reachable.add(target_id)
 
 
 def _seed_destroy_type_graph(
@@ -4808,6 +4878,20 @@ def compile_stubbed_funcs(
 				inst_ret_id = _subst_with_owner_map(inst_ret_id, param_map)
 				if inst_impl_target_id is not None:
 					inst_impl_target_id = _subst_with_owner_map(inst_impl_target_id, param_map)
+			_inst_wraps_target = getattr(sig, "wraps_target_fn_id", None)
+			# For wrapper instantiations, resolve wraps_target_fn_id to
+			# the instantiated target.  The target was instantiated by
+			# a previous drain with the same type_args but a different
+			# FunctionKey (different name → different hash).  Look up
+			# the target instantiation in inst_cache by computing the
+			# target's _inst_key with the same type_args.
+			if _inst_wraps_target is not None and getattr(sig, "is_wrapper", False):
+				_target_template_key = function_keys_by_fn_id.get(_inst_wraps_target)
+				if _target_template_key is not None:
+					_target_inst_key = _inst_key(_target_template_key, handle.type_args)
+					_target_handle = inst_cache.get(_target_inst_key)
+					if _target_handle is not None:
+						_inst_wraps_target = _target_handle.fn_id
 			inst_sig = replace(
 				sig,
 				name=function_symbol(inst_fn_id),
@@ -4821,6 +4905,7 @@ def compile_stubbed_funcs(
 				return_type=None,
 				is_exported_entrypoint=False,
 				is_instantiation=True,
+				wraps_target_fn_id=_inst_wraps_target,
 			)
 			_register_derived_signature_precheck(inst_fn_id, inst_sig)
 			if require_env is not None and template_fn_id is not None:
@@ -4833,7 +4918,7 @@ def compile_stubbed_funcs(
 				if wrap_sig is not None and getattr(wrap_sig, "is_wrapper", False):
 					template_hir = _make_wrapper_template_hir(wrap_sig)
 					template_hirs_by_key[template_key] = template_hir
-				if template_hir is None:
+			if template_hir is None:
 					type_diags.append(
 						Diagnostic(
 							message=f"generic instantiation requires a template body for '{function_key_str(template_key)}'",
@@ -6828,6 +6913,70 @@ def compile_stubbed_funcs(
 		import time as _timing_time
 		import sys as _timing_sys
 		print(f"[drift:debug][timing] hidden_lambda_lowering={_timing_time.perf_counter() - hidden_lambda_start:.3f}s", file=_timing_sys.stderr)
+
+	# Drain generic instantiation requests triggered by hidden lambda
+	# type-checking.  Lambda bodies may call generic methods through
+	# boundary wrappers, creating instantiation requests that weren't
+	# processed by the earlier drain rounds.
+	_pre_lambda_drain_fids = set(mir_funcs_by_id.keys())
+	_drain_instantiations()
+	# Synthesize MIR bodies for newly-drained wrapper functions.
+	# These are __wrap_method wrappers whose generic instantiation was
+	# triggered by lambda bodies. Use direct MIR synthesis (same pattern
+	# as line ~7096) instead of HIR-to-MIR lowering.
+	for _ld_fn_id in list(normalized_hirs_by_id.keys()):
+		if _ld_fn_id in _pre_lambda_drain_fids:
+			continue
+		if _ld_fn_id in mir_funcs_by_id:
+			continue
+		_ld_sig = signatures_by_id.get(_ld_fn_id)
+		if _ld_sig is None or _ld_sig.param_type_ids is None:
+			continue
+		if not getattr(_ld_sig, "is_wrapper", False):
+			continue
+		_ld_target = getattr(_ld_sig, "wraps_target_fn_id", None)
+		if _ld_target is None:
+			continue
+		_ld_pnames = list(_ld_sig.param_names or [])
+		if len(_ld_pnames) != len(_ld_sig.param_type_ids):
+			_ld_pnames = [f"p{i}" for i in range(len(_ld_sig.param_type_ids))]
+		_ld_builder = make_builder(_ld_fn_id)
+		_ld_builder.func.params = list(_ld_pnames)
+		_ld_target_ret = _ld_sig.return_type_id
+		_ld_target_sig = signatures_by_id.get(_ld_target)
+		if _ld_target_sig is not None:
+			_ld_target_ret = _ld_target_sig.return_type_id
+		_ld_call_dest: M.ValueId | None
+		if shared_type_table is not None and shared_type_table.is_void(_ld_target_ret):
+			_ld_call_dest = None
+		else:
+			_ld_call_dest = _ld_builder.new_temp()
+		_ld_builder.emit(M.Call(dest=_ld_call_dest, fn_id=_ld_target, args=_ld_pnames, can_throw=False))
+		_ld_ok = _ld_builder.new_temp()
+		_ld_builder.emit(M.ConstructResultOk(dest=_ld_ok, value=_ld_call_dest))
+		_ld_builder.set_terminator(M.Return(value=_ld_ok))
+		for _ld_p in _ld_pnames:
+			_ld_builder.func.param_drop_status[_ld_p] = "forwarded_to_callee"
+		mir_funcs_by_id[_ld_fn_id] = _ld_builder.func
+		_register_synth_signature(_ld_fn_id, _ld_sig)
+		# Register in checked.fn_infos_by_id so MIR validation passes.
+		if _ld_fn_id not in checked.fn_infos_by_id:
+			checked.fn_infos_by_id[_ld_fn_id] = make_fn_info(
+				_ld_fn_id, _ld_sig,
+				declared_can_throw=True if _ld_sig.declared_can_throw is None else bool(_ld_sig.declared_can_throw),
+			)
+	# Also register fn_infos for non-wrapper functions from the late drain.
+	for _ld2_fn_id in list(normalized_hirs_by_id.keys()):
+		if _ld2_fn_id in _pre_lambda_drain_fids:
+			continue
+		if _ld2_fn_id in checked.fn_infos_by_id:
+			continue
+		_ld2_sig = signatures_by_id.get(_ld2_fn_id)
+		if _ld2_sig is not None:
+			checked.fn_infos_by_id[_ld2_fn_id] = make_fn_info(
+				_ld2_fn_id, _ld2_sig,
+				declared_can_throw=True if _ld2_sig.declared_can_throw is None else bool(_ld2_sig.declared_can_throw),
+			)
 
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
@@ -9481,6 +9630,102 @@ def main(argv: list[str] | None = None) -> int:
 	# - borrow materialization runs before borrow checking.
 	normalized_hirs_by_id = {fn_id: normalize_hir(block) for fn_id, block in func_hirs_by_id.items()}
 
+	# Snapshot normalized HIR before type-checking for package emission.
+	# The type checker mutates HIR in place (e.g., rewrites HQualifiedMember
+	# to HVar during variant constructor resolution).  Package consumers
+	# need the PRE-mutation HIR so their type checker can resolve variant
+	# constructors through the qualified-member path.
+	import copy as _copy_mod
+	_pre_typecheck_hirs: dict[FunctionId, H.HBlock] = {
+		fn_id: _copy_mod.deepcopy(block) for fn_id, block in normalized_hirs_by_id.items()
+	} if getattr(args, "emit_package", None) else {}
+
+	# Option B Phase 2: load package HIR functions into the normalized pool.
+	# With Phase 2a visibility entries above, the type checker can resolve
+	# module-internal names inside package HIR function bodies.
+	_pkg_hir_loaded: dict[FunctionId, H.HBlock] = {}
+	# Signatures for ALL package HIR functions (including private ones)
+	# so the type checker can resolve parameter types and call targets.
+	_pkg_hir_sigs: dict[FunctionId, FnSignature] = {}
+	if loaded_pkgs:
+		for pkg in loaded_pkgs:
+			tid_map = pkg_typeid_maps.get(pkg.path, {})
+			for mid, mod in pkg.modules_by_id.items():
+				payload = mod.payload
+				if not isinstance(payload, dict):
+					continue
+				hir_obj = payload.get("hir_funcs")
+				if not isinstance(hir_obj, dict) or not hir_obj:
+					continue
+				# Load signatures for ALL functions (including private) so
+				# the type checker has param types when checking HIR bodies.
+				sigs_obj = payload.get("signatures")
+				if isinstance(sigs_obj, dict):
+					for sname, sd in sigs_obj.items():
+						if not isinstance(sd, dict):
+							continue
+						fn_id_obj = sd.get("fn_id")
+						s_fn_id = function_id_from_obj(fn_id_obj)
+						if s_fn_id is None:
+							continue
+						if s_fn_id in external_signatures_by_id:
+							continue  # already resolved
+						if sname not in hir_obj:
+							continue  # only load sigs for functions we have HIR for
+						# Resolve TypeExpr-based params
+						param_types_raw = sd.get("param_types")
+						resolved_ptids = None
+						if param_types_raw is not None:
+							resolved = []
+							_ok = True
+							for pt_obj in param_types_raw:
+								pt_expr = decode_type_expr(pt_obj)
+								if pt_expr is None:
+									_ok = False
+									break
+								_r = resolve_opaque_type(pt_expr, type_table, module_id=sd.get("module"))
+							resolved.append(_r)
+							if _ok:
+								resolved_ptids = resolved
+						if resolved_ptids is None:
+							raw_ptids = sd.get("param_type_ids")
+							if isinstance(raw_ptids, list):
+								resolved_ptids = [tid_map.get(int(x), int(x)) for x in raw_ptids]
+						ret_tid = None
+						return_type_raw = sd.get("return_type")
+						if return_type_raw is not None:
+							rt_expr = decode_type_expr(return_type_raw)
+							if rt_expr is not None:
+								ret_tid = resolve_opaque_type(rt_expr, type_table, module_id=sd.get("module"))
+						if ret_tid is None:
+							raw_ret = sd.get("return_type_id")
+							if isinstance(raw_ret, int):
+								ret_tid = tid_map.get(raw_ret, raw_ret)
+						sig = FnSignature(
+							name=str(sd.get("name") or sname),
+							module=sd.get("module"),
+							method_name=sd.get("method_name"),
+							param_names=sd.get("param_names"),
+							param_type_ids=resolved_ptids,
+							return_type_id=ret_tid,
+							declared_can_throw=sd.get("declared_can_throw"),
+							is_method=bool(sd.get("is_method", False)),
+							self_mode=sd.get("self_mode"),
+							is_pub=bool(sd.get("is_pub", False)),
+							is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
+						)
+						_pkg_hir_sigs[s_fn_id] = sig
+						external_signatures_by_id[s_fn_id] = sig
+				decoded_hir = decode_hir_funcs(hir_obj)
+				for sym, hir_block in decoded_hir.items():
+					fn_id = parse_function_symbol(sym)
+					if fn_id is None:
+						continue
+					if fn_id in normalized_hirs_by_id:
+						continue
+					normalized_hirs_by_id[fn_id] = normalize_hir(hir_block)
+					_pkg_hir_loaded[fn_id] = hir_block
+
 	# Type check each function with the shared TypeTable/signatures.
 	unsafe_trusted_modules = set()
 	if type_table is not None:
@@ -9773,6 +10018,43 @@ def main(argv: list[str] | None = None) -> int:
 				visible_ids_list.append(module_ids.setdefault(m, len(module_ids)))
 			visible_ids = tuple(visible_ids_list)
 			visible_modules_by_name[mod_name] = visible_ids
+		# Option B Phase 2a: add visibility entries for package modules so
+		# the type checker can resolve module-internal names when compiling
+		# package HIR.  Each package module sees only modules in its own
+		# package (they were compiled as a unit) plus prelude modules.
+		# Consumer source modules are NOT visible to package HIR — the
+		# package was compiled without knowledge of the consumer.
+		if external_module_packages:
+			# Group modules by package_id for correct per-package scoping.
+			_mods_by_pkg: dict[str, set[str]] = {}
+			for _pm, _ppkg in external_module_packages.items():
+				_mods_by_pkg.setdefault(_ppkg, set()).add(_pm)
+			for pkg_mod in sorted(external_module_packages.keys()):
+				if pkg_mod in visible_module_names_by_name:
+					continue
+				_own_pkg = external_module_packages[pkg_mod]
+				_pkg_siblings = _mods_by_pkg.get(_own_pkg, set())
+				# Package module sees its own siblings, prelude, all other
+				# loaded package modules, and stdlib/dependency source modules.
+				# Consumer application modules are NOT visible — the package
+				# was compiled without knowledge of them.
+				_all_pkg_mods = set(external_module_packages.keys())
+				# Source modules that are part of stdlib (have exports and
+				# are not the consumer's own modules).  Consumer modules
+				# are identified by not being in any package AND not having
+				# a known stdlib/lang prefix.
+				_stdlib_src_mods: set[str] = set()
+				if isinstance(module_deps, dict) and isinstance(module_exports, dict):
+					for _sm in module_deps.keys():
+						if _sm in module_exports and _sm not in _all_pkg_mods:
+							_stdlib_src_mods.add(_sm)
+				_pkg_visible = _pkg_siblings | prelude_modules | _all_pkg_mods | _stdlib_src_mods
+				visible_module_names_by_name[pkg_mod] = set(_pkg_visible)
+				visibility_provenance_by_name[pkg_mod] = {m: (pkg_mod, m) for m in _pkg_visible}
+				pkg_visible_ids = []
+				for m in sorted(_pkg_visible):
+					pkg_visible_ids.append(module_ids.setdefault(m, len(module_ids)))
+				visible_modules_by_name[pkg_mod] = tuple(pkg_visible_ids)
 	else:
 		all_mods = set(merged_programs.keys())
 		if args.prelude:
@@ -9927,12 +10209,39 @@ def main(argv: list[str] | None = None) -> int:
 			decl_fingerprint=_p1_fp,
 		)
 
+	# Clear boundary markers on ALL nothrow package-consumed functions
+	# BEFORE type checking.  Under Option B, the consumer compiles package
+	# functions from HIR (or instantiates from generic templates).  No
+	# cross-package FnResult wrapper is needed.  Without this, the call
+	# resolver routes through __wrap_method wrappers whose MIR bodies
+	# are never synthesized (especially for generic instantiations in
+	# lambda callbacks).
+	if _pkg_hir_loaded:
+		_entry_wrapper_keep = {
+			FunctionId(module=mod, name=name, ordinal=0)
+			for _flag, (mod, name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
+		}
+		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
+			if _ext_fn_id in _entry_wrapper_keep:
+				continue
+			if getattr(_ext_sig, "is_wrapper", False):
+				continue
+			if getattr(_ext_sig, "declared_can_throw", None) is not False:
+				continue
+			if getattr(_ext_sig, "is_exported_entrypoint", False):
+				_ext_sig.is_exported_entrypoint = False
+			if getattr(_ext_sig, "boundary_ret_type_id", None) is not None:
+				_ext_sig.boundary_ret_type_id = None
+
 	typed_fns: dict[FunctionId, object] = {}
-	for fn_id, hir_block in normalized_hirs_by_id.items():
+	# Use signatures_by_id_all (includes external/package sigs) so package
+	# HIR functions find their param types and return types.
+	_typecheck_sigs = signatures_by_id_all if signatures_by_id_all else signatures_by_id
+	for fn_id, hir_block in list(normalized_hirs_by_id.items()):
 		# Build param type map from signatures when available.
 		param_types: dict[str, "TypeId"] = {}
 		param_mutable: dict[str, bool] | None = None
-		sig = signatures_by_id.get(fn_id)
+		sig = _typecheck_sigs.get(fn_id)
 		if sig and sig.param_names and sig.param_type_ids:
 			param_types = {pname: pty for pname, pty in zip(sig.param_names, sig.param_type_ids) if pty is not None}
 		if sig and sig.param_names and sig.param_mutable:
@@ -9973,6 +10282,9 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		type_diags.extend(result.diagnostics)
 		typed_fns[fn_id] = result.typed_fn
+	# (boundary markers already cleared pre-type-check above)
+	if _pkg_hir_loaded and drift_debug.enabled("pkg_hir"):
+		print(f"[pkg-hir] {len(_pkg_hir_loaded)} compiled from HIR, 0 fell back to MIR", file=sys.stderr)
 	if type_checker.defaulted_phase_count() != 0:
 		raise AssertionError(
 			f"typecheck diagnostics missing phase (defaulted={type_checker.defaulted_phase_count()})"
@@ -10351,8 +10663,12 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			if mid in source_module_ids:
 				per_module_mir.setdefault(mid, {})[name] = fn
+		# Use pre-typecheck HIR snapshot for serialization.  The type checker
+		# mutates HIR in place (HQualifiedMember → HVar), so the post-mutation
+		# normalized_hirs_by_id is not suitable for package consumers.
+		_hir_source = _pre_typecheck_hirs if _pre_typecheck_hirs else normalized_hirs_by_id
 		per_module_hir: dict[str, dict[str, H.HBlock]] = {}
-		for fn_id, block in normalized_hirs_by_id.items():
+		for fn_id, block in _hir_source.items():
 			mid = getattr(fn_id, "module", None) or "main"
 			per_module_hir.setdefault(mid, {})[function_symbol(fn_id)] = block
 	
@@ -10876,17 +11192,143 @@ def main(argv: list[str] | None = None) -> int:
 					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 			return 1
 
-		unit = _build_package_consumer_unit(
-			loaded_pkgs=loaded_pkgs,
-			pkg_typeid_maps=pkg_typeid_maps,
-			pkg_tid_universes=pkg_tid_universes,
+		# Option B: all package functions compiled from HIR through
+		# compile_stubbed_funcs.  Build CompilationUnit directly from
+		# the unified MIR — no _build_package_consumer_unit needed.
+		#
+		# BFS reachability: only include functions reachable from entry.
+		# This avoids codegen failures for unreachable generic wrappers.
+		_entry_id: FunctionId | None = None
+		for fn_id in src_mir:
+			if fn_id.module == entry_module and fn_id.name == entry_name:
+				_entry_id = fn_id
+				break
+		_reachable: set[FunctionId] = set()
+		if _entry_id is not None:
+			_bfs_queue: list[FunctionId] = [_entry_id]
+			_reachable.add(_entry_id)
+			# Seed implicit entry-wrapper deps (e.g., install_process_preamble).
+			# These are called by the OS entry wrapper (hardcoded in codegen)
+			# and won't appear in MIR call instructions.
+			for _dep_mod, _dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
+				_dep_fid = FunctionId(module=_dep_mod, name=_dep_name, ordinal=0)
+				if _dep_fid in src_mir and _dep_fid not in _reachable:
+					_reachable.add(_dep_fid)
+					_bfs_queue.append(_dep_fid)
+			while _bfs_queue:
+				_cur = _bfs_queue.pop()
+				_cur_fn = src_mir.get(_cur)
+				if _cur_fn is None:
+					continue
+				for _callee in _called_funcs_in_mir(_cur_fn):
+					if _callee in src_mir and _callee not in _reachable:
+						_reachable.add(_callee)
+						_bfs_queue.append(_callee)
+			# Seed destroyers via type-graph walk (K39): codegen emits
+			# destroy calls that aren't in MIR instructions.  Use the
+			# shared _seed_destroy_type_graph to handle the full
+			# transitive closure (struct fields, variant arms, etc.).
+			_dropped_types: set[int] = set()
+			_phase1_destroyers: set[FunctionId] = set()
+			destructor_fns = getattr(type_table, "destructor_fns", None) or {}
+			for _fid in list(_reachable):
+				_fn = src_mir.get(_fid)
+				if _fn is None:
+					continue
+				for _blk in _fn.blocks.values():
+					for _instr in _blk.instructions:
+						if isinstance(_instr, M.DropValue):
+							_dropped_types.add(_instr.ty)
+							_dfn = destructor_fns.get(_instr.ty)
+							if _dfn is not None and _dfn in src_mir and _dfn not in _reachable:
+								_reachable.add(_dfn)
+								_phase1_destroyers.add(_dfn)
+			_seed_destroy_type_graph(
+				initial_dropped_types=_dropped_types,
+				destructor_fns=destructor_fns,
+				mir_pool=src_mir,
+				needed=_reachable,
+				type_table=type_table,
+				fn_infos=checked_src.fn_infos_by_id,
+				pre_seeded_destroyers=_phase1_destroyers,
+			)
+		# Seed interface impl methods for ConstructIfaceValue boxing (K29).
+		# ConstructIfaceValue has no fn_ref — vtable thunks referencing
+		# impl methods are generated at codegen time.
+		_iface_value_tys: set[int] = set()
+		for _fid in list(_reachable):
+			_fn = src_mir.get(_fid)
+			if _fn is None:
+				continue
+			for _blk in _fn.blocks.values():
+				for _instr in _blk.instructions:
+					if isinstance(_instr, M.ConstructIfaceValue):
+						_iface_value_tys.add(_instr.value_ty)
+		if _iface_value_tys and checked_src:
+			for _impl_fn_id, _impl_info in checked_src.fn_infos_by_id.items():
+				_impl_sig = _impl_info.signature
+				if _impl_sig is None or not _impl_sig.is_method:
+					continue
+				if _impl_sig.impl_target_type_id in _iface_value_tys and _impl_fn_id in src_mir and _impl_fn_id not in _reachable:
+					_reachable.add(_impl_fn_id)
+					_bfs_queue = [_impl_fn_id]
+					while _bfs_queue:
+						_cur = _bfs_queue.pop()
+						_cur_fn = src_mir.get(_cur)
+						if _cur_fn is None:
+							continue
+						for _callee in _called_funcs_in_mir(_cur_fn):
+							if _callee in src_mir and _callee not in _reachable:
+								_reachable.add(_callee)
+								_bfs_queue.append(_callee)
+		# Discover and synthesize missing wrappers using the shared helper
+		# (same logic as _build_package_consumer_unit).
+		_wrapper_target_map: dict[FunctionId, FunctionId] = {}
+		_wrapper_sigs_map: dict[FunctionId, FnSignature] = {}
+		for _wfid, _winfo in checked_src.fn_infos_by_id.items():
+			_wsig = _winfo.signature
+			if _wsig and getattr(_wsig, "is_wrapper", False) and getattr(_wsig, "wraps_target_fn_id", None):
+				_wrapper_target_map[_wfid] = _wsig.wraps_target_fn_id
+				_wrapper_sigs_map[_wfid] = _wsig
+		for _wfid, _wsig in signatures_by_id_all.items():
+			if getattr(_wsig, "is_wrapper", False) and getattr(_wsig, "wraps_target_fn_id", None) and _wfid not in _wrapper_target_map:
+				_wrapper_target_map[_wfid] = _wsig.wraps_target_fn_id
+				_wrapper_sigs_map[_wfid] = _wsig
+		_discover_and_synthesize_wrappers(
+			reachable=_reachable,
+			mir_pool=src_mir,
+			ssa_pool=ssa_src,
+			wrapper_target_by_id=_wrapper_target_map,
+			wrapper_sigs=_wrapper_sigs_map,
+			fn_infos=checked_src.fn_infos_by_id,
+			signatures_by_id=signatures_by_id_all,
 			type_table=type_table,
-			checked_src=checked_src,
-			src_mir=src_mir,
-			ssa_src=ssa_src,
-			entry_module=entry_module,
-			entry_name=entry_name,
-			external_impl_metas=external_impl_metas,
+		)
+		_reachable_mir = {fid: fn for fid, fn in src_mir.items() if fid in _reachable}
+		_reachable_ssa = {fid: fn for fid, fn in ssa_src.items() if fid in _reachable}
+		_all_fn_infos: dict[FunctionId, FnInfo] = {}
+		for fn_id in _reachable:
+			info = checked_src.fn_infos_by_id.get(fn_id)
+			if info is not None:
+				_all_fn_infos[fn_id] = info
+		for fn_id, sig in external_signatures_by_id.items():
+			if fn_id in _reachable and fn_id not in _all_fn_infos:
+				_dct = True if sig.declared_can_throw is None else bool(sig.declared_can_throw)
+				_all_fn_infos[fn_id] = make_fn_info(fn_id, sig, declared_can_throw=_dct)
+		_rename_map: dict[FunctionId, str] = {}
+		if _entry_id is not None:
+			_rename_map[_entry_id] = "drift_main"
+		unit = CompilationUnit(
+			mir_funcs=_reachable_mir,
+			ssa_funcs=_reachable_ssa,
+			fn_infos=_all_fn_infos,
+			type_table=type_table,
+			rename_map=_rename_map,
+			entry_id=_entry_id,
+			wrapper_dep_flags={
+				flag: any(fid.module == dep_mod and fid.name == dep_name for fid in _reachable_mir)
+				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
+			},
 		)
 		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("optimized" if optimized else ("debug" if debug_enabled else "default"))
 		# K26: Inject external_impl_metas into combined_exports so that

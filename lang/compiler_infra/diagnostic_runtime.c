@@ -211,7 +211,9 @@ bool drift_dv_as_string(const struct DriftDiagnosticValue* dv, struct DriftStrin
         return false;
     }
     if (out) {
-        *out = drift_string_retain(dv_string_to_drift_string(dv));
+        // Return an unowned reference.  The caller (codegen Optional<String>
+        // construction) is responsible for retaining if it needs ownership.
+        *out = dv_string_to_drift_string(dv);
     }
     return true;
 }

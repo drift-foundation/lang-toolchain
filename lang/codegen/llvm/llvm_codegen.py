@@ -5872,14 +5872,7 @@ class _FuncBuilder:
 		is_intrinsic = bool(
 			callee_info.signature is not None and getattr(callee_info.signature, "is_intrinsic", False)
 		)
-		# Nothrow cross-package calls are allowed when the callee is provably
-		# nothrow (declared_can_throw=False).  Only flag calls where the callee
-		# can throw but the MIR lacks FnResult handling.
-		callee_declared_nothrow = (
-			callee_info.signature is not None
-			and getattr(callee_info.signature, "declared_can_throw", None) is False
-		)
-		if is_exported_entry and is_cross_module and not call_can_throw and not is_intrinsic and not callee_declared_nothrow:
+		if is_exported_entry and is_cross_module and not call_can_throw and not is_intrinsic:
 			raise AssertionError(
 				"LLVM codegen v1: cross-module exported call lowered as nothrow; "
 				"checker must force can-throw at boundary"
