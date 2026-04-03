@@ -7,9 +7,9 @@ package artifacts.
 
 Goals:
 - deterministic JSON encoding (stable keys, stable ordering),
-- sufficiently rich to reconstruct the current stage2 MIR for all functions in a
-  module (and the TypeTable required to lower MIR to LLVM later),
-- explicit versioning so we can replace this with real DMIR without rewriting
+- carries declared HIR for all functions so the consumer compiles them
+  through the standard pipeline (Option B: packages as distribution containers),
+- explicit versioning so we can evolve the format without rewriting
   the package container format.
 """
 
@@ -1557,7 +1557,6 @@ def encode_module_payload_v0(
 	module_id: str,
 	type_table: TypeTable,
 	signatures: Mapping[str, FnSignature],
-	mir_funcs: Mapping[str, Any],
 	generic_templates: list[dict[str, Any]] | None = None,
 	hir_funcs: dict[str, Any] | None = None,
 	exported_values: list[str],
@@ -1621,7 +1620,7 @@ def encode_module_payload_v0(
 	impl_headers_obj = list(impl_headers or [])
 	return {
 		"payload_kind": "provisional-dmir",
-		"payload_version": 1,
+		"payload_version": 2,
 		"unstable_format": True,
 		"module_id": module_id,
 		"exports": {
@@ -1640,42 +1639,8 @@ def encode_module_payload_v0(
 		"signatures": encode_signatures(signatures, module_id=module_id, type_table=type_table),
 		"generic_templates": _to_jsonable(list(generic_templates or [])),
 		"hir_funcs": hir_funcs if isinstance(hir_funcs, dict) else {},
-		"mir_funcs": {name: _to_jsonable(mir_funcs[name]) for name in sorted(mir_funcs.keys())},
 		"trait_scope": list(trait_scope) if trait_scope is not None else [],
 	}
-
-
-def decode_mir_funcs(
-	mir_funcs_obj: Mapping[str, Any],
-	*,
-	name_to_fn_id: Mapping[str, object] | None = None,
-) -> dict[FunctionId, Any]:
-	"""
-	Decode `mir_funcs` as encoded by `encode_module_payload_v0`.
-
-	This returns a dict of `name -> M.MirFunc` objects (stage2 dataclasses).
-	"""
-	from lang.driftc.stage2 import mir_nodes as M  # local import to avoid heavy import at module init
-	from lang.driftc.core import function_id as fn_id_mod  # local import
-	from lang.driftc.stage1 import call_info as call_info_mod  # local import
-	from lang.driftc.core.function_id import function_id_to_obj  # local import
-
-	dc = build_dataclass_registry(M, fn_id_mod, call_info_mod)
-	enums = build_enum_registry(M, fn_id_mod, call_info_mod)
-	out: dict[FunctionId, Any] = {}
-	for name, obj in mir_funcs_obj.items():
-		if isinstance(obj, dict) and "fn_id" not in obj:
-			if name_to_fn_id is None or name not in name_to_fn_id:
-				raise ValueError(f"missing fn_id for mir func '{name}' in package payload")
-			fn_id_obj = function_id_to_obj(name_to_fn_id[name])
-			obj = dict(obj)
-			obj["fn_id"] = fn_id_obj
-		decoded = from_jsonable(obj, dataclasses_by_name=dc, enums_by_name=enums)
-		fn_id = getattr(decoded, "fn_id", None)
-		if fn_id is None:
-			raise ValueError(f"decoded mir func missing fn_id for '{name}'")
-		out[fn_id] = decoded
-	return out
 
 
 def decode_generic_templates(generic_templates_obj: Any) -> list[dict[str, Any]]:

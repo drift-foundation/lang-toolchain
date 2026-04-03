@@ -67,7 +67,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	# Sanity: the artifact contains a deterministic manifest with the pinned markers.
 	pkg = load_package_v0(out1)
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
-	assert pkg.manifest["payload_version"] == 1
+	assert pkg.manifest["payload_version"] == 2
 	assert pkg.manifest["unstable_format"] is True
 
 
