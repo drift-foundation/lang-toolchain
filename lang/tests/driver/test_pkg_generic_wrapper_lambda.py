@@ -48,7 +48,7 @@ def _build_and_run_pkg_consumer(tmp_path: Path, source: str) -> tuple[int, str, 
 
 
 def test_cell_get_in_lambda(tmp_path: Path) -> None:
-	"""Cell<T>::get called from a lambda callback must compile and run."""
+	"""Cell<T>::get/set called from a lambda callback must compile and run."""
 	source = """\
 module consumer;
 import std.core as core;
@@ -63,6 +63,32 @@ pub fn main() nothrow -> Int {
 \t\treturn 0;
 \t})();
 \treturn count.get() - 2;
+}
+"""
+	rc, compile_stderr, run_stderr = _build_and_run_pkg_consumer(tmp_path, source)
+	assert "unknown call target" not in compile_stderr, (
+		f"wrapper MIR body missing: {compile_stderr[:500]}"
+	)
+	assert rc == 0, f"exit {rc}, expected 0. compile: {compile_stderr[:300]}"
+
+
+def test_cell_in_nested_lambda(tmp_path: Path) -> None:
+	"""Cell<T> used in a nested lambda callback chain.
+
+	Covers the nested-callback shape where wrapper instantiation must
+	propagate through multiple lambda compilation rounds.
+	"""
+	source = """\
+module consumer;
+import std.core as core;
+pub fn main() nothrow -> Int {
+\tvar count = core.cell(0);
+\tval outer = core.callback0(| | captures(count) nothrow => {
+\t\tcount.set(count.get() + 10);
+\t\treturn count.get();
+\t});
+\tval r = outer.call();
+\treturn r - 10;
 }
 """
 	rc, compile_stderr, run_stderr = _build_and_run_pkg_consumer(tmp_path, source)

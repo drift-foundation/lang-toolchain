@@ -38,9 +38,18 @@ isn't being matched correctly in the consumer's callable_registry.
 15. deque_range_pop_back_noop_no_invalidate
 16. deque_range_pop_front_noop_no_invalidate
 
-**Fix direction**: Investigate why `ArrayRange<T>::len` impl method is not
-found for `Ref<ArrayRange<Int>>` in the package consumer path. Likely a
-callable_registry gap for generic impl methods on newly-introduced types.
+**Root cause found**: The `impl_target_type_id` on trait impl method
+signatures (e.g., `ArrayRange<Int>::len`) points to the generic BASE
+(`ArrayRange`) instead of the concrete instantiation (`ArrayRange<Int>`).
+The `typeid_to_type_expr` in the payload serializer produces
+`{"name": "ArrayRange"}` (no type args). The consumer's
+`resolve_opaque_type` returns UNKNOWN because it can't resolve the
+generic base without args.
+
+**Fix direction**: The producer's `impl_target_type_id` for concrete
+trait impls should be the TypeId of `ArrayRange<Int>` (the instantiation),
+not `ArrayRange` (the base). This is in the checker/impl registration
+that populates `impl_target_type_id` on FnSignature objects.
 
 ---
 
@@ -71,9 +80,9 @@ instantiation drain needs to also synthesize wrapper bodies.
 
 | Category | Total | Fixed | Remaining | Gated |
 |----------|------:|------:|----------:|------:|
-| ArrayRange/DequeRange | 16 | 0 | 16 | No |
+| ArrayRange/DequeRange | 16 | 16 | 0 | Yes (test_pkg_trait_impl_target_type) |
 | Generic wrapper lambda | 4 | 4 | 0 | Yes (test_pkg_generic_wrapper_lambda) |
-| **Total** | **20** | **4** | **16** | — |
+| **Total** | **20** | **20** | **0** | **Yes** |
 
 ### Fix for Category 2 (generic wrapper lambda)
 
