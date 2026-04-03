@@ -177,6 +177,7 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	compute_template_decl_fingerprint,
 	compute_template_decl_fingerprint_debug,
 	encode_generic_templates,
+	encode_hir_funcs,
 	encode_module_payload_v0,
 	encode_span,
 	encode_trait_expr,
@@ -9022,32 +9023,38 @@ def main(argv: list[str] | None = None) -> int:
 					if fn_id not in external_signatures_by_id:
 						external_signatures_by_id[fn_id] = sig
 
-		# Inject method boundary wrappers for external (package/stdlib) methods.
-		# The first injection (above) only covers source-file methods.  When the
-		# consumer emits package MIR that calls __wrap_method stubs for stdlib
-		# methods, those wrapper signatures must also exist in derived_signatures_by_id
-		# so _build_package_consumer_unit can synthesize the stub bodies.
-		_ext_wrapper_specs, _ext_wrapper_errors = _inject_method_boundary_wrappers(
-			signatures_by_id=external_signatures_by_id,
-			existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()) | set(external_signatures_by_id.keys()),
-			register_derived=_register_derived_signature_cli,
-			type_table=type_table,
-		)
-		method_wrapper_specs.extend(_ext_wrapper_specs)
-		if _ext_wrapper_errors:
-			wrapper_errors.extend(_ext_wrapper_errors)
-		# Set boundary_ret_type_id on external (package-consumed) signatures.
-		# This is the declaration-time marker that tells codegen to use
-		# boundary ABI when calling these functions from a different package.
-		# Only set for package-consumed functions — co-compiled source
-		# functions do not get this marker, so same-compilation calls to
-		# co-compiled stdlib use direct calling convention.
+		# Skip boundary wrapper injection for nothrow external methods.
+		# Under Option B (packages as distribution containers), nothrow
+		# package-consumed functions are called directly — no FnResult
+		# wrapping, no __wrap_method stubs.  The consumer knows the callee
+		# is nothrow from declared_can_throw in the package signature.
+		#
+		# Only inject wrappers for can-throw external methods (whose
+		# callers need the FnResult ABI to propagate errors).
+		_ext_can_throw_sigs: dict = {}
+		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
+			if getattr(_ext_sig, "declared_can_throw", None) is not False:
+				_ext_can_throw_sigs[_ext_fn_id] = _ext_sig
+		if _ext_can_throw_sigs:
+			_ext_wrapper_specs, _ext_wrapper_errors = _inject_method_boundary_wrappers(
+				signatures_by_id=_ext_can_throw_sigs,
+				existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()) | set(external_signatures_by_id.keys()),
+				register_derived=_register_derived_signature_cli,
+				type_table=type_table,
+			)
+			method_wrapper_specs.extend(_ext_wrapper_specs)
+			if _ext_wrapper_errors:
+				wrapper_errors.extend(_ext_wrapper_errors)
+		# Set boundary_ret_type_id on can-throw external signatures only.
+		# Nothrow functions are called directly without FnResult wrapping.
 		for _ext_fn_id, _ext_sig in external_signatures_by_id.items():
 			if _ext_sig.boundary_ret_type_id is not None:
 				continue
 			if not getattr(_ext_sig, "is_exported_entrypoint", False):
 				continue
 			if _ext_sig.return_type_id is None:
+				continue
+			if getattr(_ext_sig, "declared_can_throw", None) is False:
 				continue
 			err_ty = type_table.ensure_error()
 			_ext_sig.boundary_ret_type_id = type_table.ensure_fnresult(_ext_sig.return_type_id, err_ty)
@@ -10569,6 +10576,7 @@ def main(argv: list[str] | None = None) -> int:
 			if isinstance(_raw_trait_scope, list):
 				for _tk in _raw_trait_scope:
 					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
+			_module_hir_blocks = per_module_hir.get(mid, {})
 			payload_obj = encode_module_payload_v0(
 				package_id=package_id,
 				module_id=mid,
@@ -10581,9 +10589,14 @@ def main(argv: list[str] | None = None) -> int:
 					package_id=package_id,
 					module_id=mid,
 					signatures=sig_env,
-					hir_blocks=per_module_hir.get(mid, {}),
+					hir_blocks=_module_hir_blocks,
 					requires_by_symbol=requires_by_symbol,
 					module_packages=getattr(checked_pkg.type_table or type_table, "module_packages", None),
+				),
+				hir_funcs=encode_hir_funcs(
+					module_id=mid,
+					signatures=sig_env,
+					hir_blocks=_module_hir_blocks,
 				),
 				exported_values=exported_values,
 				exported_types=exported_types,

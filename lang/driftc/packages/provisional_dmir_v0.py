@@ -1493,6 +1493,64 @@ def encode_generic_templates(
 	return out
 
 
+def encode_hir_funcs(
+	*,
+	module_id: str,
+	signatures: Mapping[str, FnSignature],
+	hir_blocks: Mapping[str, Any],
+) -> dict[str, Any]:
+	"""
+	Encode HIR function bodies for ALL non-generic, non-wrapper functions.
+
+	This is Phase 1 of Option B (packages as distribution containers):
+	serialize declared HIR for all functions, not just generic templates.
+	The consumer will compile these through the standard pipeline instead
+	of loading pre-lowered MIR.
+
+	Returns a dict of {fn_symbol: serialized_hir_body}.
+	"""
+	out: dict[str, Any] = {}
+	for sym in sorted(signatures.keys()):
+		sig = signatures[sym]
+		if getattr(sig, "module", None) not in (module_id, None):
+			continue
+		if getattr(sig, "is_wrapper", False):
+			continue
+		# Skip generics — they're in generic_templates.
+		if getattr(sig, "type_params", []) or getattr(sig, "impl_type_params", []):
+			continue
+		hir = hir_blocks.get(sym)
+		if hir is None:
+			continue
+		out[sym] = _to_jsonable(hir)
+	return out
+
+
+def decode_hir_funcs(
+	hir_funcs_obj: Mapping[str, Any],
+) -> dict[str, Any]:
+	"""
+	Decode `hir_funcs` as encoded by `encode_hir_funcs`.
+
+	Returns a dict of {fn_symbol: HBlock} (stage1 HIR dataclasses).
+
+	Uses the same dataclass/enum registry as decode_generic_templates
+	to ensure all HIR node kinds are handled identically.
+	"""
+	from lang.driftc.stage1 import hir_nodes as H  # local import
+	from lang.driftc.stage1 import closures as closures_mod  # local import
+	from lang.driftc.core import function_id as fn_id_mod  # local import
+	from lang.driftc.core import span as span_mod  # local import
+
+	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod)
+	enums = build_enum_registry(H, fn_id_mod, closures_mod)
+	out: dict[str, Any] = {}
+	for sym, obj in hir_funcs_obj.items():
+		decoded = from_jsonable(obj, dataclasses_by_name=dc, enums_by_name=enums)
+		out[str(sym)] = decoded
+	return out
+
+
 def encode_module_payload_v0(
 	*,
 	package_id: str,
@@ -1501,6 +1559,7 @@ def encode_module_payload_v0(
 	signatures: Mapping[str, FnSignature],
 	mir_funcs: Mapping[str, Any],
 	generic_templates: list[dict[str, Any]] | None = None,
+	hir_funcs: dict[str, Any] | None = None,
 	exported_values: list[str],
 	exported_types: dict[str, list[str]],
 	exported_traits: list[str] | None = None,
@@ -1578,6 +1637,7 @@ def encode_module_payload_v0(
 		"type_table_fingerprint": type_table_fingerprint(tt_obj),
 		"signatures": encode_signatures(signatures, module_id=module_id, type_table=type_table),
 		"generic_templates": _to_jsonable(list(generic_templates or [])),
+		"hir_funcs": hir_funcs if isinstance(hir_funcs, dict) else {},
 		"mir_funcs": {name: _to_jsonable(mir_funcs[name]) for name in sorted(mir_funcs.keys())},
 		"trait_scope": list(trait_scope) if trait_scope is not None else [],
 	}
