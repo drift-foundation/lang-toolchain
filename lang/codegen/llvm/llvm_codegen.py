@@ -6763,15 +6763,9 @@ class _FuncBuilder:
 			if caller_pkg is None or callee_pkg is None:
 				raise AssertionError("module_packages missing entry for boundary check (codegen bug)")
 			if caller_pkg != callee_pkg or force_boundary:
-				# Different canonical packages: use boundary ABI if the
-				# callee has boundary_ret_type_id.
-				callee_sig = callee_info.signature
-				has_boundary = (
-					callee_sig is not None
-					and getattr(callee_sig, "boundary_ret_type_id", None) is not None
-				)
-				if force_boundary or has_boundary:
-					is_cross_module = True
+				# Option B: no boundary ABI. Cross-package calls use
+				# direct calling convention (same as same-package).
+				pass
 
 		target_sym = function_symbol(fn_id)
 		if is_exported_entry and not is_cross_module:

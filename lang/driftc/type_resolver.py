@@ -204,27 +204,6 @@ def resolve_program_signatures(
 					resolve_opaque_type(a, table, module_id=arg_mod, type_params=impl_type_param_map)
 					for a in list(getattr(target_for_args, "args", []) or [])
 				]
-				# For concrete trait impls on generic structs (e.g.,
-				# implement Trait<Int> for ArrayRange<Int>), use the
-				# instantiated TypeId so the consumer can resolve the
-				# receiver type from the payload's impl_target_type.
-				if impl_target_type_args and base_id is not None:
-					_contains_typevars = any(
-						table.get(a).kind is TypeKind.TYPEVAR
-						for a in impl_target_type_args
-						if a is not None
-					)
-					if not _contains_typevars:
-						try:
-							impl_target_type_id = table.ensure_struct_instantiated(
-								base_id, impl_target_type_args
-							)
-						except (KeyError, IndexError):
-							# Struct schema not yet populated (e.g., during early
-							# lowering before all type declarations are linked).
-							# Keep base_id — the callable_registry normalizes
-							# receiver types via base_id for source-mode builds.
-							pass
 
 		signatures[fn_id] = FnSignature(
 			name=name,

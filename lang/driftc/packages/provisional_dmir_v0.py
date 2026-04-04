@@ -980,6 +980,23 @@ def encode_signatures(
 						f"typeid_to_type_expr failed for impl_target TypeId {impl_tid} in signature '{name}'"
 					)
 			else:
+				# If the base TypeExpr has no args but the signature carries
+				# impl_target_type_args, include them so the consumer can
+				# resolve the concrete instantiation (e.g., ArrayRange<Int>
+				# instead of just ArrayRange).
+				impl_target_type_args = getattr(sig, "impl_target_type_args", None)
+				if impl_target_type_args and not expr.args:
+					arg_exprs = []
+					for arg_tid in impl_target_type_args:
+						arg_expr = typeid_to_type_expr(arg_tid, type_table, type_param_names=tp_id_names)
+						if arg_expr is not None:
+							arg_exprs.append(arg_expr)
+					if len(arg_exprs) == len(impl_target_type_args):
+						expr = parser_ast.TypeExpr(
+							name=expr.name, args=arg_exprs,
+							module_alias=expr.module_alias, module_id=expr.module_id,
+							loc=expr.loc,
+						)
 				impl_target_type_obj = encode_type_expr(expr, default_module=sig_module, type_param_names=type_param_name_set)
 				if impl_target_type_obj is None and not _is_inst_sig:
 					raise ValueError(

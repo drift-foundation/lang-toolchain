@@ -2497,68 +2497,12 @@ class TypeChecker:
 				return (3, True)
 			return None
 
-		def _force_boundary_can_throw(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
-			"""Force can_throw=True for cross-package-artifact calls.
-
-			The ABI boundary enforcement forces FnResult wrapping for calls
-			that cross a real package boundary (pre-compiled .dmp packages).
-			Source-compiled modules within the same compilation unit do NOT
-			have an ABI boundary even if they belong to different canonical
-			packages (e.g. user code in __local__ calling stdlib in std).
-			"""
-			if sig is None:
-				return False
-			if getattr(sig, "is_intrinsic", False):
-				return False  # intrinsics have no wrapper body; can_throw must not be forced
-			if getattr(sig, "is_method", False):
-				return False
-			else:
-				if not (getattr(sig, "is_exported_entrypoint", False) or getattr(sig, "is_extern", False)):
-					return False
-			callee_mod = fn_id.module if fn_id and fn_id.module else getattr(sig, "module", None)
-			caller_mod = current_module_name
-			if callee_mod is None or caller_mod is None:
-				return False
-			if module_packages is None:
-				raise AssertionError("module_packages missing for boundary check (checker bug)")
-			callee_pkg = module_packages.get(callee_mod)
-			caller_pkg = module_packages.get(caller_mod)
-			if callee_pkg is None or caller_pkg is None:
-				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
-			if callee_pkg == caller_pkg:
-				return False
-			# Different canonical packages: boundary exists if the callee
-			# has boundary_ret_type_id (set at package-consumption time or
-			# for explicitly-packaged source modules).
-			if getattr(sig, "is_instantiation", False):
-				return False  # instantiations are local by definition
-			if getattr(sig, "boundary_ret_type_id", None) is not None:
-				return True
+		# Option B: boundary ABI functions collapsed. No cross-package
+		# wrapper upgrade or forced can_throw.
+		def _force_boundary_can_throw(sig, fn_id):
 			return False
 
-		def _method_boundary_visible(sig: FnSignature | None, fn_id: FunctionId | None) -> bool:
-			if sig is None or not getattr(sig, "is_method", False):
-				return False
-			if not getattr(sig, "is_pub", False):
-				return False
-			callee_mod = fn_id.module if fn_id and fn_id.module else getattr(sig, "module", None)
-			if callee_mod is None:
-				return False
-			caller_mod = current_module_name
-			if caller_mod is None:
-				return False
-			if module_packages is None:
-				raise AssertionError("module_packages missing for boundary check (checker bug)")
-			caller_pkg = module_packages.get(caller_mod)
-			callee_pkg = module_packages.get(callee_mod)
-			if caller_pkg is None or callee_pkg is None:
-				raise AssertionError("module_packages missing entry for boundary check (checker bug)")
-			if caller_pkg == callee_pkg:
-				return False
-			# Different canonical packages: boundary exists if the callee
-			# has boundary_ret_type_id.
-			if getattr(sig, "boundary_ret_type_id", None) is not None:
-				return True
+		def _method_boundary_visible(sig, fn_id):
 			return False
 
 		def _apply_method_boundary(
@@ -2568,29 +2512,8 @@ class TypeChecker:
 			sig_for_throw: FnSignature | None,
 			call_can_throw: bool,
 		) -> tuple[FunctionId, bool] | None:
-			if __debug__:
-				if sig_for_throw is not None and sig_for_throw.declared_can_throw is False:
-					if not _method_boundary_visible(sig_for_throw, target_fn_id):
-						assert call_can_throw is False, "internal: nothrow method call marked can_throw without boundary"
-			if sig_for_throw is not None and (sig_for_throw.type_params or sig_for_throw.impl_type_params):
-				return target_fn_id, call_can_throw
-			if not _method_boundary_visible(sig_for_throw, target_fn_id):
-				return target_fn_id, call_can_throw
-			wrapper_id = method_wrapper_by_target.get(target_fn_id)
-			if wrapper_id is not None:
-				return wrapper_id, True
-			if call_can_throw:
-				return target_fn_id, True
-			if wrapper_id is None:
-				diagnostics.append(
-					_tc_diag(
-						message=f"missing boundary wrapper for method '{expr.method_name}' (compiler bug)",
-						severity="error",
-						span=getattr(expr, "loc", Span()),
-					)
-				)
-				return None
-			return wrapper_id, True
+			# Option B: no boundary wrapper upgrade. Return target as-is.
+			return target_fn_id, call_can_throw
 
 		def _call_sig_for_fn_ref(sig: FnSignature) -> tuple[list[TypeId], TypeId, bool] | None:
 			if getattr(sig, "type_params", None):
@@ -4971,11 +4894,7 @@ class TypeChecker:
 				_intrinsic_method_fn_ids[method_name] = fn_id
 			return fn_id
 
-		method_wrapper_by_target: dict[FunctionId, FunctionId] = {}
-		if signatures_by_id is not None:
-			for sig_id, sig in signatures_by_id.items():
-				if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
-					method_wrapper_by_target[sig.wraps_target_fn_id] = sig_id
+		# (method_wrapper_by_target removed — Option B has no wrappers)
 
 		# Precompute constructor-name visibility for diagnostics.
 		#

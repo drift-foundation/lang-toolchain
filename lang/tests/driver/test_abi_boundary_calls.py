@@ -42,8 +42,8 @@ def _find_llvm_define_lines(ir: str, pattern: str) -> list[str]:
 
 def test_cross_module_exported_call_uses_wrapper_not_impl(tmp_path: Path) -> None:
 	"""
-	Cross-module calls to exported entrypoints must call the public wrapper symbol,
-	not the private `__impl` body.
+	Cross-module calls to exported functions go directly to the impl body
+	(Option B: no boundary wrapper routing).
 	"""
 	(tmp_path / "acme" / "point").mkdir(parents=True)
 	(tmp_path / "acme" / "point" / "lib.drift").write_text(
@@ -104,8 +104,8 @@ def test_cross_module_exported_call_uses_wrapper_not_impl(tmp_path: Path) -> Non
 	assert not checked.diagnostics
 
 	main_ir = _extract_llvm_function(ir, "main")
-	assert '@"acme.point::make_point"' in main_ir
-	assert "__impl" not in main_ir
+	# Option B: calls go directly to the impl body — no wrapper routing.
+	assert '@"acme.point::make_point__impl"' in main_ir
 
 
 def test_cross_module_exported_call_uses_throw_abi(tmp_path: Path) -> None:
@@ -286,11 +286,12 @@ def test_cross_module_generic_method_uses_wrapper_throw_abi(tmp_path: Path) -> N
 	)
 	assert not checked.diagnostics
 
+	# Option B: no wrapper routing — generic method calls go directly to
+	# the instantiated impl body, not through __wrap_method stubs.
 	wrapper_defines = _find_llvm_define_lines(ir, r'__wrap_method::.*wrap__inst__')
-	assert wrapper_defines
-	assert "%FnResult_Int_Error" in wrapper_defines[0]
+	assert not wrapper_defines, "Option B: no wrapper stubs expected"
 	main_ir = _extract_llvm_function(ir, "main")
-	assert "call %FnResult_Int_Error @\"acme.box::__wrap_method::" in main_ir
+	assert "__wrap_method" not in main_ir
 
 
 def test_normal_mode_boundary_provenance(tmp_path: Path) -> None:
@@ -442,8 +443,7 @@ def test_normal_mode_explicit_package_boundary_preserved(tmp_path: Path) -> None
 	assert not checked.diagnostics
 
 	main_ir = _extract_llvm_function(ir, "main")
-	# Explicitly-packaged cross-package call MUST use the wrapper symbol.
-	assert '@"acme.lib::add_one"' in main_ir
-	assert "__impl" not in main_ir
+	# Option B: calls go directly to the impl body — no wrapper routing.
+	assert '@"acme.lib::add_one__impl"' in main_ir
 	# Stdlib method call must NOT go through a wrapper (no false boundary).
 	assert "__wrap_method::String::byte_length" not in main_ir

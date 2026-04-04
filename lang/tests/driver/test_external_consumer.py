@@ -581,11 +581,10 @@ def test_ext_package_consumer_e2e(
 	undefined = called - available
 	assert not undefined, f"undefined symbols in IR: {undefined}"
 
-	# K16a pinned: wrapper symbols specifically must be *defined*.
+	# Option B: no boundary wrapper routing — __wrap_method symbols should
+	# not appear in the IR.
 	wrap_refs = {s for s in called if "__wrap_method" in s}
-	wrap_defs = {s for s in defined if "__wrap_method" in s}
-	assert wrap_refs, "expected wrapper call targets in IR (nothrow method boundary)"
-	assert not (wrap_refs - wrap_defs), f"undefined wrapper symbols in IR: {wrap_refs - wrap_defs}"
+	assert not wrap_refs, f"Option B: no wrapper call targets expected in IR, found: {wrap_refs}"
 
 	# K16b pinned: OS entry wrapper.
 	assert "define i32 @main" in ir, "package-consumer IR must contain a C main entry point"

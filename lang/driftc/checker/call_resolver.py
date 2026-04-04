@@ -2977,27 +2977,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						can_throw = bool(fn_sig.declared_can_throw)
 					upgrade_boundary = False
 					if getattr(fn_sig, "is_pub", False) and fn_sig.declared_can_throw is False:
-						callee_mod = getattr(cand.fn_id, "module", None)
-						caller_mod = ctx.current_module_name
-						if callee_mod is not None and caller_mod is not None:
-							if ctx.module_packages is None:
-								raise AssertionError("module_packages missing for boundary check (checker bug)")
-							module_packages = ctx.module_packages
-							caller_pkg = module_packages.get(caller_mod)
-							callee_pkg = module_packages.get(callee_mod)
-							if caller_pkg is None or callee_pkg is None:
-								raise AssertionError("module_packages missing entry for boundary check (checker bug)")
-							if caller_pkg != callee_pkg:
-								# Different packages: upgrade to wrapper if
-								# callee has boundary_ret_type_id.
-								callee_sig = ctx.signatures_by_id.get(cand.fn_id)
-								if callee_sig is not None and getattr(callee_sig, "boundary_ret_type_id", None) is not None:
-									upgrade_boundary = True
-					if upgrade_boundary:
-						wrapper_id = method_wrapper_id(cand.fn_id)
-						if wrapper_id in ctx.signatures_by_id:
-							target_fn_id = wrapper_id
-							can_throw = True
+						pass  # Option B: no boundary wrapper upgrade
 			call_target = CallTarget.direct(target_fn_id)
 			info = _call_info_target(list(coerced_params), ret_id, can_throw, call_target)
 			expr.arg_type_ids = list(arg_types)

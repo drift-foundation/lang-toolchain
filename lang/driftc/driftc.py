@@ -776,89 +776,6 @@ def _should_inject_prelude(
 	return False
 
 
-@dataclass(frozen=True)
-class MethodWrapperSpec:
-	wrapper_fn_id: FunctionId
-	target_fn_id: FunctionId
-
-
-def _inject_method_boundary_wrappers(
-	*,
-	signatures_by_id: Mapping[FunctionId, FnSignature],
-	existing_ids: set[FunctionId] | None = None,
-	register_derived: Callable[[FunctionId, FnSignature], None],
-	type_table: TypeTable,
-) -> tuple[list[MethodWrapperSpec], list[str]]:
-	"""
-	Predeclare Ok-wrap wrappers for public NOTHROW methods.
-
-	Wrappers are provider-emitted and recorded in signatures for package export.
-	"""
-	specs: list[MethodWrapperSpec] = []
-	errors: list[str] = []
-	if existing_ids is None:
-		existing_ids = set(signatures_by_id.keys())
-	for fn_id, sig in list(signatures_by_id.items()):
-		if not getattr(sig, "is_method", False):
-			continue
-		if getattr(sig, "is_wrapper", False):
-			continue
-		if not getattr(sig, "is_pub", False):
-			continue
-		if getattr(sig, "declared_can_throw", None) is not False:
-			continue
-		if sig.param_type_ids is None or sig.return_type_id is None:
-			errors.append(f"internal: missing param/return types for method '{sig.name}'")
-			continue
-		wrapper_id = method_wrapper_id(fn_id)
-		if wrapper_id in existing_ids:
-			continue
-		wrap_sig = FnSignature(
-			name=function_symbol(wrapper_id),
-			module=fn_id.module,
-			method_name=getattr(sig, "method_name", None) or sig.name,
-			param_names=list(sig.param_names or []),
-			param_type_ids=list(sig.param_type_ids or []),
-			return_type_id=sig.return_type_id,
-			error_type_id=type_table.ensure_error(),
-			is_method=True,
-			self_mode=getattr(sig, "self_mode", None),
-			impl_target_type_id=getattr(sig, "impl_target_type_id", None),
-			impl_target_type_args=getattr(sig, "impl_target_type_args", None),
-			is_pub=True,
-			is_wrapper=True,
-			wraps_target_fn_id=fn_id,
-			type_params=list(getattr(sig, "type_params", []) or []),
-			impl_type_params=list(getattr(sig, "impl_type_params", []) or []),
-			param_types=list(getattr(sig, "param_types", []) or []) if getattr(sig, "param_types", None) else None,
-			return_type=getattr(sig, "return_type", None),
-			declared_can_throw=True,
-		)
-		register_derived(wrapper_id, wrap_sig)
-		specs.append(MethodWrapperSpec(wrapper_fn_id=wrapper_id, target_fn_id=fn_id))
-	# Set boundary_ret_type_id for pub functions in explicitly-packaged
-	# modules (multi-package workspace) and for pub nothrow methods that
-	# got wrappers (the nothrow method loop above only sets it when a new
-	# wrapper is created, not for pre-existing wrappers).
-	explicitly_packaged = getattr(type_table, "explicitly_packaged_modules", None) or set()
-	for fn_id, sig in list(signatures_by_id.items()):
-		if sig.boundary_ret_type_id is not None:
-			continue
-		if getattr(sig, "is_wrapper", False):
-			continue
-		if sig.return_type_id is None:
-			continue
-		if not getattr(sig, "is_pub", False):
-			continue
-		fn_mod = getattr(fn_id, "module", None)
-		# Set boundary for: pub functions in explicitly-packaged modules,
-		# or pub exported entrypoints in explicitly-packaged modules.
-		if fn_mod in explicitly_packaged:
-			err_ty = type_table.ensure_error()
-			sig.boundary_ret_type_id = type_table.ensure_fnresult(sig.return_type_id, err_ty)
-	return specs, errors
-
-
 def _assert_signature_map_split(
 	*,
 	base_signatures_by_id: Mapping[FunctionId, FnSignature],
@@ -2628,14 +2545,8 @@ def compile_stubbed_funcs(
 		# downstream wrapper MIR synthesis.
 		method_wrapper_specs = pass1_state.method_wrapper_specs
 	else:
-		method_wrapper_specs, wrapper_errors = _inject_method_boundary_wrappers(
-			signatures_by_id=base_signatures_by_id,
-			existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
-			register_derived=_register_derived_signature_precheck,
-			type_table=shared_type_table,
-		)
-		if wrapper_errors:
-			raise ValueError(wrapper_errors[0])
+		# Option B: no boundary wrapper injection.
+		method_wrapper_specs = []
 
 	if pass1_state is not None:
 		# Phase 4 (converge-one-pipeline): the driver already normalized HIR
@@ -3340,15 +3251,7 @@ def compile_stubbed_funcs(
 						_cp_errors.append(f"function_key module_path mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.module_path!r} recomputed={_cp_key.module_path!r}")
 					if _cp_shared.name != _cp_key.name:
 						_cp_errors.append(f"function_key name mismatch for {function_symbol(_cp_fid)}: shared={_cp_shared.name!r} recomputed={_cp_key.name!r}")
-			# 2. Wrapper injection parity: confirm injection would produce empty specs.
-			_cp_wrapper_specs, _cp_wrapper_errs = _inject_method_boundary_wrappers(
-				signatures_by_id=base_signatures_by_id,
-				existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
-				register_derived=lambda _fid, _sig: None,
-				type_table=shared_type_table,
-			)
-			if _cp_wrapper_specs:
-				_cp_errors.append(f"wrapper injection not empty under pass1_state: {len(_cp_wrapper_specs)} specs would be created")
+			# (Wrapper injection parity check removed — Option B has no wrappers.)
 			# 3. Signature resolution parity: verify pass1 sigs match what
 			#    resolution would produce (TypeIds, error_type_id, can_throw).
 			for _cp_fid, _cp_sig in base_signatures_by_id.items():
@@ -4933,35 +4836,8 @@ def compile_stubbed_funcs(
 		# scrutinee drop that destroys the already-extracted payload.
 		if hasattr(shared_type_table, "_copy_cache_structural"):
 			shared_type_table._copy_cache_structural.clear()
-	# Propagate boundary_ret_type_id to ALL pub signatures in explicitly-
-	# packaged modules and to all signatures that are exported entrypoints
-	# in those modules.  This catches generic instantiations and other
-	# late-created signatures.  After this, explicitly_packaged_modules is
-	# no longer needed for semantic routing — boundary_ret_type_id is
-	# authoritative.
-	explicitly_packaged = getattr(shared_type_table, "explicitly_packaged_modules", None) or set()
-	if shared_type_table is not None:
-		err_ty = shared_type_table.ensure_error()
-		for fn_id, sig in list(signatures_by_id.items()):
-			if sig.boundary_ret_type_id is not None:
-				continue
-			if sig.return_type_id is None:
-				continue
-			if getattr(sig, "is_wrapper", False):
-				continue
-			fn_mod = getattr(fn_id, "module", None)
-			# Set boundary for: (1) pub methods in explicitly-packaged modules,
-			# (2) exported entrypoints in explicitly-packaged modules, or
-			# (3) any pub function with is_exported_entrypoint whose module
-			# has boundary_ret_type_id on at least one of its functions
-			# (indicating it's a package boundary module).
-			needs_boundary = False
-			if fn_mod in explicitly_packaged and getattr(sig, "is_pub", False):
-				needs_boundary = True
-			if not needs_boundary:
-				continue
-			sig.boundary_ret_type_id = err_ty  # placeholder — actual FnResult computed below
-			sig.boundary_ret_type_id = shared_type_table.ensure_fnresult(sig.return_type_id, err_ty)
+	# Option B: boundary_ret_type_id propagation removed.  The consumer
+	# compiles all package functions from HIR — no boundary ABI needed.
 	hir_to_mir_start = None
 	if _timing_enabled:
 		import time as _timing_time
@@ -7834,12 +7710,10 @@ def main(argv: list[str] | None = None) -> int:
 			return
 		derived_signatures_by_id[fn_id] = sig
 
-	method_wrapper_specs, wrapper_errors = _inject_method_boundary_wrappers(
-		signatures_by_id=base_signatures_by_id,
-		existing_ids=set(base_signatures_by_id.keys()) | set(derived_signatures_by_id.keys()),
-		register_derived=_register_derived_signature_cli,
-		type_table=type_table,
-	)
+	# Option B: no boundary wrapper injection.  The consumer compiles
+	# all package functions from HIR — no pre-built wrappers needed.
+	method_wrapper_specs: list[MethodWrapperSpec] = []
+	wrapper_errors: list[str] = []
 	_assert_signature_map_split(
 		base_signatures_by_id=base_signatures_by_id,
 		derived_signatures_by_id=derived_signatures_by_id,
@@ -8264,6 +8138,13 @@ def main(argv: list[str] | None = None) -> int:
 								)
 
 					if module_name is not None and module_name in modules:
+						continue
+					# Skip hidden lambda callbacks — they will be re-derived
+					# by the hidden lambda processing loop when the parent
+					# function's HIR is type-checked by the consumer.  Pre-loading
+					# them causes signature collisions with the re-derived version.
+					_fn_name_check = getattr(fn_id, "name", "") or name
+					if "__lambda_cb_" in _fn_name_check or "__lambda_" in _fn_name_check:
 						continue
 					external_signatures_by_name[name] = sig
 					if symbol not in external_signatures_by_symbol:
@@ -8749,6 +8630,13 @@ def main(argv: list[str] | None = None) -> int:
 							continue  # already resolved
 						if sname not in hir_obj:
 							continue  # only load sigs for functions we have HIR for
+						# Skip hidden lambda callbacks — they will be
+						# re-derived by the hidden lambda processing loop
+						# when the parent function's HIR is type-checked.
+						# Pre-loading them causes signature collisions.
+						_sname_base = getattr(s_fn_id, "name", "") or sname
+						if "__lambda_cb_" in _sname_base or "__lambda_" in _sname_base:
+							continue
 						# Resolve TypeExpr-based params
 						param_types_raw = sd.get("param_types")
 						resolved_ptids = None
@@ -9681,7 +9569,13 @@ def main(argv: list[str] | None = None) -> int:
 		}
 	
 		# Group functions/signatures by module id.
-		source_module_ids = {getattr(fn_id, "module", None) or "main" for fn_id in normalized_hirs_by_id.keys()}
+		# Exclude package-loaded HIR functions — only the source modules
+		# being built belong in this package's payload.
+		source_module_ids = {
+			getattr(fn_id, "module", None) or "main"
+			for fn_id in normalized_hirs_by_id.keys()
+			if fn_id not in _pkg_hir_loaded
+		}
 		per_module_sigs: dict[str, dict[str, FnSignature]] = {}
 		inst_sigs: dict[str, FnSignature] = {}
 		for name, sig in pkg_signatures_by_symbol.items():
