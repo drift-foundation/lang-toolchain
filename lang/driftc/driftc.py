@@ -1920,6 +1920,26 @@ def _collect_external_trait_and_impl_metadata(
 				type_params = [p for p in type_params_raw if isinstance(p, str)] if isinstance(type_params_raw, list) else []
 				impl_owner = FunctionId(module="lang.__external", name=f"__impl_{def_module}:{impl_id}", ordinal=0)
 				impl_type_param_map = {name: TypeParamId(impl_owner, idx) for idx, name in enumerate(type_params)}
+				# For generic impls on structs (e.g., impl<T> Copy for Handle<T>),
+				# substitute the struct's own TypeParamIds into impl_type_param_map
+				# so that ALL resolutions within this impl header (target, trait
+				# args, method impl_target_type_args) produce the same TypeVarId
+				# for the same struct type param across packages.  Without this,
+				# each package creates a fresh impl_owner TypeParamId which
+				# produces a different TypeVar (T vs T0), breaking trait solver
+				# unification for Copy proofs and other trait impls.
+				if type_params and target_expr is not None:
+					_te_name = getattr(target_expr, "name", None)
+					_te_mod = getattr(target_expr, "module_id", None) or def_module
+					if _te_name:
+						_struct_base = type_table.get_struct_base(module_id=_te_mod, name=_te_name)
+						if _struct_base is not None:
+							_struct_tpids = type_table.struct_type_param_ids.get(_struct_base, [])
+							_struct_schema = type_table.struct_bases.get(_struct_base)
+							if _struct_schema is not None:
+								for _stp_idx, _stp_name in enumerate(_struct_schema.type_params):
+									if _stp_name in impl_type_param_map and _stp_idx < len(_struct_tpids):
+										impl_type_param_map[_stp_name] = _struct_tpids[_stp_idx]
 				target_type_id = resolve_opaque_type(
 					target_expr,
 					type_table,
@@ -2003,6 +2023,20 @@ def _collect_external_trait_and_impl_metadata(
 					sig = external_signatures_by_id.get(fn_id)
 					if sig is not None:
 						impl_param_map = {p.name: p.id for p in getattr(sig, "impl_type_params", []) or []}
+						# Substitute struct TypeParamIds (same fix as impl header above)
+						# so method impl_target_type_args use the same TypeVarIds.
+						if impl_param_map and target_expr is not None:
+							_te_name_m = getattr(target_expr, "name", None)
+							_te_mod_m = getattr(target_expr, "module_id", None) or def_module
+							if _te_name_m:
+								_sb_m = type_table.get_struct_base(module_id=_te_mod_m, name=_te_name_m)
+								if _sb_m is not None:
+									_tpids_m = type_table.struct_type_param_ids.get(_sb_m, [])
+									_schema_m = type_table.struct_bases.get(_sb_m)
+									if _schema_m is not None:
+										for _si, _sn in enumerate(_schema_m.type_params):
+											if _sn in impl_param_map and _si < len(_tpids_m):
+												impl_param_map[_sn] = _tpids_m[_si]
 						if getattr(target_expr, "args", None):
 							impl_args = [
 								resolve_opaque_type(
@@ -2121,6 +2155,7 @@ class Pass1State:
 	function_keys_by_fn_id: dict  # FunctionId -> FunctionKey
 	visibility_provenance_by_id: dict  # int -> tuple[str, ...]
 	lambda_fn_specs: dict | None = None  # FunctionId -> LambdaFnSpec from Pass 1 type checker
+	pkg_unsafe_modules: set | None = None  # set[str] — package modules needing unsafe permission only
 
 
 def _format_param_drop_diagnostic(
@@ -2595,10 +2630,12 @@ def compile_stubbed_funcs(
 			_walk_expr_ids(block)
 
 	# candidate_signatures_for_diag removed; no name-keyed fallback map
+	_csf_pkg_unsafe: set[str] = set()
 	if pass1_state is not None:
 		# Phase 4 (converge-one-pipeline): reuse the driver's unsafe_trusted_modules
 		# set, which was built from the same type_table and module_exports.
 		unsafe_trusted_modules = pass1_state.unsafe_trusted_modules
+		_csf_pkg_unsafe = pass1_state.pkg_unsafe_modules or set()
 	else:
 		unsafe_trusted_modules = set()
 		if shared_type_table is not None:
@@ -2623,7 +2660,7 @@ def compile_stubbed_funcs(
 		_source_mods.update(m for m in module_deps.keys() if isinstance(m, str))
 	if shared_type_table is not None:
 		shared_type_table.source_modules = _source_mods
-	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, allow_unsafe_without_block=True, semantic_world=semantic_world, source_modules=_source_mods)
+	type_checker = TypeChecker(type_table=shared_type_table, allow_unsafe=bool(allow_unsafe), unsafe_trusted_modules=unsafe_trusted_modules, pkg_unsafe_modules=_csf_pkg_unsafe, allow_unsafe_without_block=True, semantic_world=semantic_world, source_modules=_source_mods)
 	# K42: seed Pass 1 lambda_fn_specs into the new TypeChecker so that
 	# captureless lambda function bodies are generated during MIR lowering.
 	if pass1_state is not None and pass1_state.lambda_fn_specs:
@@ -7991,6 +8028,27 @@ def main(argv: list[str] | None = None) -> int:
 					for idx, tp_name in enumerate(impl_type_param_names):
 						if isinstance(tp_name, str):
 							impl_type_params.append(TypeParam(id=TypeParamId(impl_owner, idx), name=tp_name))
+					# Substitute struct TypeParamIds for impl type params when
+					# the method belongs to a generic struct impl.  This ensures
+					# all packages produce the same TypeVarId for the same struct
+					# type param, preventing T→T0 renaming that breaks trait proofs.
+					if impl_type_params:
+						_sig_impl_target = sd.get("impl_target_type")
+						if _sig_impl_target is not None:
+							_sig_it_expr = decode_type_expr(_sig_impl_target)
+							if _sig_it_expr is not None:
+								_sig_te_name = getattr(_sig_it_expr, "name", None)
+								_sig_te_mod = getattr(_sig_it_expr, "module_id", None) or module_name
+								if _sig_te_name:
+									_sig_sb = type_table.get_struct_base(module_id=_sig_te_mod, name=_sig_te_name)
+									if _sig_sb is not None:
+										_sig_tpids = type_table.struct_type_param_ids.get(_sig_sb, [])
+										_sig_schema = type_table.struct_bases.get(_sig_sb)
+										if _sig_schema is not None:
+											for _si, _sn in enumerate(_sig_schema.type_params):
+												if _si < len(impl_type_params) and _si < len(_sig_tpids):
+													if impl_type_params[_si].name == _sn:
+														impl_type_params[_si] = TypeParam(id=_sig_tpids[_si], name=_sn)
 					type_param_map = {p.name: p.id for p in (impl_type_params + type_params)}
 					impl_target_type_args: list[TypeId] | None = None
 					if impl_type_params:
@@ -8139,10 +8197,10 @@ def main(argv: list[str] | None = None) -> int:
 
 					if module_name is not None and module_name in modules:
 						continue
-					# Skip hidden lambda callbacks — they will be re-derived
-					# by the hidden lambda processing loop when the parent
-					# function's HIR is type-checked by the consumer.  Pre-loading
-					# them causes signature collisions with the re-derived version.
+						# Skip hidden lambda callbacks — they will be re-derived
+						# by the hidden lambda processing loop when the parent
+						# function's HIR is type-checked by the consumer.  Pre-loading
+						# them causes signature collisions with the re-derived version.
 					_fn_name_check = getattr(fn_id, "name", "") or name
 					if "__lambda_cb_" in _fn_name_check or "__lambda_" in _fn_name_check:
 						continue
@@ -8417,16 +8475,47 @@ def main(argv: list[str] | None = None) -> int:
 							break
 				if dup:
 					continue
+				# Normalize target TypeKey: cross-package type table linking
+				# produces renamed TypeVars (T→T0) for struct type params
+				# when impl-block TypeParamIds from different packages diverge.
+				# type_key_from_typeid canonicalizes known __impl_-owned
+				# TypeVars at the read layer, but the target_key may have
+				# been constructed from a template that predates that fix.
+				# Apply struct-schema-based normalization as a safety net.
+				# LIMITATION: positional (same-order impls only).
+				_impl_tps = list(getattr(impl, "impl_type_params", []) or [])
+				_norm_target = target_key
+				if _impl_tps and hasattr(target_key, "args") and target_key.args:
+					_tp_name_set = {tp if isinstance(tp, str) else str(tp) for tp in _impl_tps}
+					_struct_schema = type_table.struct_bases.get(impl.target_type_id)
+					if _struct_schema is None:
+						_target_td = type_table.get(impl.target_type_id)
+						if _target_td.kind is TypeKind.STRUCT:
+							_base_id = type_table.get_struct_base(module_id=_target_td.module_id or "", name=_target_td.name)
+							if _base_id is not None:
+								_struct_schema = type_table.struct_bases.get(_base_id)
+					_stp_names = list(_struct_schema.type_params) if _struct_schema is not None else []
+					if _stp_names and len(_stp_names) == len(target_key.args):
+						if any(hasattr(a, "name") and a.name not in _tp_name_set for a in target_key.args):
+							from lang.driftc.traits.world import TypeKey as _TK
+							_new_args = []
+							for i, a in enumerate(target_key.args):
+								_cn = _stp_names[i]
+								if hasattr(a, "name") and a.name != _cn and a.name not in _tp_name_set:
+									_new_args.append(_TK(package_id=getattr(a, "package_id", None), module=getattr(a, "module", None), name=_cn, args=getattr(a, "args", ()), fn_throws=getattr(a, "fn_throws", None)))
+								else:
+									_new_args.append(a)
+							_norm_target = _TK(package_id=target_key.package_id, module=target_key.module, name=target_key.name, args=tuple(_new_args), fn_throws=getattr(target_key, "fn_throws", None))
 				impl_id = len(world.impls)
 				world.impls.append(
 					ImplDef(
 						trait=trait_key,
 						trait_args=impl_trait_args,
-						target=target_key,
+						target=_norm_target,
 						target_head=head_key,
 						methods=[],
 						require=getattr(impl, "require_expr", None),
-						type_params=list(getattr(impl, "impl_type_params", []) or []),
+						type_params=_impl_tps,
 						loc=getattr(impl, "loc", None),
 					)
 				)
@@ -8581,6 +8670,14 @@ def main(argv: list[str] | None = None) -> int:
 	# - borrow materialization runs before borrow checking.
 	normalized_hirs_by_id = {fn_id: normalize_hir(block) for fn_id, block in func_hirs_by_id.items()}
 
+	# Run capture discovery on normalized HIR so HLambda.captures is populated
+	# BEFORE the pre-typecheck snapshot.  Without this, package consumers
+	# receive HLambda nodes with explicit_captures but empty captures, causing
+	# closure environment struct field mismatches during MIR lowering.
+	if getattr(args, "emit_package", None):
+		for _fn_id, _block in normalized_hirs_by_id.items():
+			validate_lambdas_non_retaining(_block)
+
 	# Snapshot normalized HIR before type-checking for package emission.
 	# The type checker mutates HIR in place (e.g., rewrites HQualifiedMember
 	# to HVar during variant constructor resolution).  Package consumers
@@ -8630,13 +8727,6 @@ def main(argv: list[str] | None = None) -> int:
 							continue  # already resolved
 						if sname not in hir_obj:
 							continue  # only load sigs for functions we have HIR for
-						# Skip hidden lambda callbacks — they will be
-						# re-derived by the hidden lambda processing loop
-						# when the parent function's HIR is type-checked.
-						# Pre-loading them causes signature collisions.
-						_sname_base = getattr(s_fn_id, "name", "") or sname
-						if "__lambda_cb_" in _sname_base or "__lambda_" in _sname_base:
-							continue
 						# Resolve TypeExpr-based params
 						param_types_raw = sd.get("param_types")
 						resolved_ptids = None
@@ -8691,6 +8781,28 @@ def main(argv: list[str] | None = None) -> int:
 					normalized_hirs_by_id[fn_id] = normalize_hir(hir_block)
 					_pkg_hir_loaded[fn_id] = hir_block
 
+	# Option B: package HIR was serialized from a pre-typecheck snapshot,
+	# so HLambda.captures is empty.  Run capture discovery on loaded HIR
+	# so MIR lowering can build closure environment structs.
+	if _pkg_hir_loaded:
+		from lang.driftc.stage1.capture_discovery import discover_captures as _disc_caps
+		def _discover_pkg_captures(node: object) -> None:
+			if isinstance(node, H.HLambda):
+				if not node.captures and node.explicit_captures:
+					_disc_caps(node)
+			for _fname in getattr(node, "__dataclass_fields__", {}) or {}:
+				_val = getattr(node, _fname, None)
+				if isinstance(_val, (H.HExpr, H.HNode)):
+					_discover_pkg_captures(_val)
+				elif isinstance(_val, list):
+					for _item in _val:
+						if isinstance(_item, (H.HExpr, H.HNode, H.HStmt)):
+							_discover_pkg_captures(_item)
+		for _pkg_fn_id in _pkg_hir_loaded:
+			_norm = normalized_hirs_by_id.get(_pkg_fn_id)
+			if _norm is not None:
+				_discover_pkg_captures(_norm)
+
 	# Type check each function with the shared TypeTable/signatures.
 	unsafe_trusted_modules = set()
 	if type_table is not None:
@@ -8705,10 +8817,18 @@ def main(argv: list[str] | None = None) -> int:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
+	# Option B: package modules need unsafe-block permission (the producer
+	# already validated unsafe at build time) but NOT full toolchain trust
+	# (rawbuffer intrinsics, typed_validator privileges).  Track them in a
+	# separate set and pass to the type checker as allow_unsafe_modules.
+	_pkg_unsafe_modules: set[str] = set()
+	if external_module_packages:
+		for mod_id in external_module_packages:
+			_pkg_unsafe_modules.add(mod_id)
 	_source_mods_main = set(modules.keys()) if isinstance(modules, dict) else set()
 	if semantic_world.type_table is not None:
 		semantic_world.type_table.source_modules = _source_mods_main
-	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules, semantic_world=semantic_world, source_modules=_source_mods_main)
+	type_checker = TypeChecker(type_table=semantic_world.type_table, allow_unsafe=bool(getattr(args, "allow_unsafe", False)), unsafe_trusted_modules=unsafe_trusted_modules, pkg_unsafe_modules=_pkg_unsafe_modules, semantic_world=semantic_world, source_modules=_source_mods_main)
 	callable_registry = CallableRegistry()
 	next_callable_id = 1
 	def _registry_impl_target_type_id(impl_tid: TypeId | None) -> TypeId | None:
@@ -10107,6 +10227,7 @@ def main(argv: list[str] | None = None) -> int:
 			module_ids=module_ids,
 			method_wrapper_specs=method_wrapper_specs,
 			unsafe_trusted_modules=unsafe_trusted_modules,
+			pkg_unsafe_modules=_pkg_unsafe_modules,
 			function_keys_by_fn_id=pass1_function_keys,
 			visibility_provenance_by_id=_p1_vis_prov_by_id,
 			lambda_fn_specs=dict(type_checker._lambda_fn_specs) if type_checker._lambda_fn_specs else None,
@@ -10170,7 +10291,24 @@ def main(argv: list[str] | None = None) -> int:
 			# Seed implicit entry-wrapper deps (e.g., install_process_preamble).
 			# These are called by the OS entry wrapper (hardcoded in codegen)
 			# and won't appear in MIR call instructions.
+			# Only seed if the dep module is transitively imported by the entry
+			# module — under Option B, all package HIR is in src_mir but only
+			# actually-imported modules should contribute entry wrapper deps.
+			# Use module_deps (import graph), not visibility (which includes
+			# all package modules for method resolution).
+			_entry_transitive_imports: set[str] = set()
+			if isinstance(module_deps, dict):
+				_eti_queue = [entry_module]
+				_entry_transitive_imports.add(entry_module)
+				while _eti_queue:
+					_eti_cur = _eti_queue.pop()
+					for _eti_dep in (module_deps.get(_eti_cur) or set()):
+						if _eti_dep not in _entry_transitive_imports:
+							_entry_transitive_imports.add(_eti_dep)
+							_eti_queue.append(_eti_dep)
 			for _dep_mod, _dep_name in ENTRY_WRAPPER_IMPLICIT_DEPS.values():
+				if _dep_mod not in _entry_transitive_imports:
+					continue
 				_dep_fid = FunctionId(module=_dep_mod, name=_dep_name, ordinal=0)
 				if _dep_fid in src_mir and _dep_fid not in _reachable:
 					_reachable.add(_dep_fid)

@@ -1666,14 +1666,13 @@ fn main() nothrow -> Int{
 	)
 	ir = ir_path.read_text(encoding="utf-8")
 	assert "lib::unused" not in ir
-	# Exported functions are ABI boundary entrypoints: they are emitted as
-	# `Result<ok, Error*>` wrappers (`{ ok, Error* }`), with a private `__impl`
-	# body that keeps the internal calling convention.
+	# Option B: package functions compiled from HIR use direct calling
+	# convention — no wrapper/impl split, no FnResult boundary wrapping.
 	word_bits = host_word_bits()
 	word_ty = f"i{word_bits}"
-	assert f"define {{ {word_ty}, ptr }} @\"lib::add\"" in ir
-	assert f"define {word_ty} @\"lib::add__impl\"" in ir
-	assert f"define {word_ty} @lib::unused" not in ir
+	assert f"define {word_ty} @\"lib::add\"" in ir
+	assert "lib::add__impl" not in ir
+	assert "lib::unused" not in ir
 
 
 def test_discover_package_files_accepts_package_file_path(tmp_path: Path) -> None:

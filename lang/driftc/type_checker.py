@@ -235,7 +235,7 @@ class TypeChecker:
 	helpers).
 	"""
 
-	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, semantic_world: object | None = None, source_modules: set[str] | None = None):
+	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, pkg_unsafe_modules: set[str] | None = None, semantic_world: object | None = None, source_modules: set[str] | None = None):
 		self.type_table = type_table or TypeTable()
 		self.semantic_world = semantic_world
 		# Modules compiled from source in this compilation unit (not from packages).
@@ -259,8 +259,13 @@ class TypeChecker:
 		self._allow_unsafe = bool(allow_unsafe)
 		self._allow_unsafe_without_block = bool(allow_unsafe_without_block)
 		self._unsafe_trusted_modules = set(unsafe_trusted_modules or [])
+		# Package modules that need unsafe permission (producer already
+		# validated) but NOT full toolchain trust (no rawbuffer intrinsics).
+		self._pkg_unsafe_modules = set(pkg_unsafe_modules or [])
 	def _is_toolchain_trusted_module(self, module_name: str | None) -> bool:
 		return bool(module_name) and module_name in self._unsafe_trusted_modules
+	def _is_pkg_unsafe_allowed(self, module_name: str | None) -> bool:
+		return bool(module_name) and module_name in self._pkg_unsafe_modules
 
 	def _stamp_diag_phase(self, diag: Diagnostic) -> None:
 		if diag.phase is None:
@@ -2337,7 +2342,7 @@ class TypeChecker:
 					if p.name not in type_param_map:
 						type_param_map[p.name] = p.id
 				type_param_names = {p.id: p.name for p in (list(getattr(sig, "impl_type_params", []) or []) + list(getattr(sig, "type_params", []) or []))}
-		unsafe_allowed_module = self._allow_unsafe or self._is_toolchain_trusted_module(current_module_name)
+		unsafe_allowed_module = self._allow_unsafe or self._is_toolchain_trusted_module(current_module_name) or self._is_pkg_unsafe_allowed(current_module_name)
 		unsafe_context = bool(getattr(sig, "is_unsafe", False)) if sig is not None else False
 		allow_unsafe_without_block_local = self._allow_unsafe_without_block or self._is_toolchain_trusted_module(current_module_name)
 		if unsafe_context and not unsafe_allowed_module:

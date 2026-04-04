@@ -596,10 +596,25 @@ class TypeTable:
 				if schema is not None:
 					_decl_name, decl_fields = schema
 					if list(field_names) != list(decl_fields):
-						raise ValueError(
-							f"struct '{module_id}::{name}' field list mismatch: "
-							f"{decl_fields} vs {field_names}"
-						)
+						if not decl_fields and field_names:
+							# First declaration was a placeholder with no fields
+							# (e.g., from type table linking).  Upgrade to the
+							# real field list from MIR lowering.
+							unknown = self.ensure_unknown()
+							placeholder = [unknown for _ in field_names]
+							self._defs[ty_id] = TypeDef(
+								kind=TypeKind.STRUCT,
+								name=name,
+								param_types=placeholder,
+								module_id=module_id,
+								field_names=list(field_names),
+							)
+							self.struct_schemas[key] = (name, list(field_names))
+						else:
+							raise ValueError(
+								f"struct '{module_id}::{name}' field list mismatch: "
+								f"{decl_fields} vs {field_names}"
+							)
 				base = self.struct_bases.get(ty_id)
 				if base is not None and list(base.type_params) != list(type_params):
 					raise ValueError(

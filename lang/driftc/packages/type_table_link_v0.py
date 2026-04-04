@@ -1271,6 +1271,22 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 					_owner_tag, mod, name, ordinal = k[2]
 					owner = FunctionId(module=str(mod), name=str(name), ordinal=int(ordinal))
 					param_id = TypeParamId(owner=owner, index=int(k[3]))
+					# Reuse the host's struct_type_param_ids for synthetic
+					# __struct_ owners so that the same struct type param
+					# from different packages maps to ONE TypeParamId
+					# (and therefore one TypeVar with a stable display name).
+					# Without this, the second package creates T0 instead of
+					# reusing T, which breaks trait solver unification.
+					if mod == "lang.__internal" and isinstance(name, str) and name.startswith("__struct_"):
+						_struct_ref = name[len("__struct_"):]  # e.g. "std.sync::Handle"
+						if "::" in _struct_ref:
+							_struct_mod, _struct_name = _struct_ref.rsplit("::", 1)
+							_host_base = host.get_struct_base(module_id=_struct_mod, name=_struct_name)
+							if _host_base is not None:
+								_host_tpids = host.struct_type_param_ids.get(_host_base, [])
+								_tv_idx = int(k[3])
+								if _tv_idx < len(_host_tpids):
+									param_id = _host_tpids[_tv_idx]
 				else:
 					param_id = TypeParamId(typevar_owner, typevar_index)
 					typevar_index += 1
