@@ -1,0 +1,7 @@
+{
+  "description": "JsonNode.clone_deep and JsonHandle.clone_deep",
+  "exit_code": 0,
+  "module_paths": ["."],
+  "stderr": "",
+  "stdout": ""
+}

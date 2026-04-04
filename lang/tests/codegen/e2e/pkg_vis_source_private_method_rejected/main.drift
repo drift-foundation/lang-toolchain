@@ -1,9 +1,0 @@
-module m;
-
-import std.containers as c;
-
-fn main() nothrow -> Int {
-	var tm = c.TreeMap::new<Int, Int>();
-	tm.__test_validate();
-	return 0;
-}

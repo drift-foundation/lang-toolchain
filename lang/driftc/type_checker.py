@@ -2622,7 +2622,13 @@ class TypeChecker:
 				is_exported = bool(getattr(sig, "is_exported_entrypoint", False))
 				is_extern = bool(getattr(sig, "is_extern", False))
 				if is_exported or is_extern:
-					fn_ref = _ensure_boundary_thunk(fn_id, params, ret)
+					# Nothrow exported targets use OK_WRAP: call __impl directly,
+					# wrap bare return into FnResult.  Throwing targets use BOUNDARY:
+					# passthrough of the FnResult the target already returns.
+					if bool(getattr(sig, "declared_can_throw", False)):
+						fn_ref = _ensure_boundary_thunk(fn_id, params, ret)
+					else:
+						fn_ref = _ensure_ok_wrap_thunk(fn_id, params, ret)
 				else:
 					fn_ref = FunctionRefId(fn_id=fn_id, kind=FunctionRefKind.IMPL, has_wrapper=False)
 				fn_ty = self.type_table.ensure_function(params, ret, can_throw=bool(can_throw))
@@ -6071,7 +6077,10 @@ class TypeChecker:
 									is_exported = bool(getattr(sig, "is_exported_entrypoint", False))
 									is_extern = bool(getattr(sig, "is_extern", False))
 									if (is_exported or is_extern) and ref_fn_id == decl.fn_id:
-										fn_ref = _ensure_boundary_thunk(ref_fn_id, params, ret)
+										if bool(getattr(sig, "declared_can_throw", False)):
+											fn_ref = _ensure_boundary_thunk(ref_fn_id, params, ret)
+										else:
+											fn_ref = _ensure_ok_wrap_thunk(ref_fn_id, params, ret)
 									else:
 										fn_ref = FunctionRefId(fn_id=ref_fn_id, kind=FunctionRefKind.IMPL, has_wrapper=False)
 									call_sig = CallSig(param_types=tuple(params), user_ret_type=ret, can_throw=bool(can_throw))

@@ -1,13 +1,10 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Regression: consumer-side drop for nested struct containing Arc.
+"""Regression: owned local must be dropped on all return paths when the
+controlling match scrutinee comes from a cross-package call.
 
-Proven discriminator for the web.rest certification leak:
-  - Package exports Outer { inner: Inner } where Inner { arc: Arc<AtomicBool> }
-  - Package function returns Outer
-  - Consumer calls package function, binds result to owned local
-  - Consumer must emit DropValue for the owned local on scope exit
-  - Bug: _needs_runtime_drop returns False for Outer because copy_status
-    or has_drop fails for cross-package nested struct with Arc field
+Proven discriminator:
+  - Source-built: 0 leaks
+  - Consumer-built: 16-byte Arc leak (missing scope drop on Err arm)
 
 This test builds a package, consumes it, links, runs under Valgrind, and
 asserts 0 definitely-lost bytes.
@@ -27,16 +24,11 @@ from pathlib import Path
 import pytest
 
 from lang.driftc.parser import stdlib_root
+from lang.language_runtime import build_runtime_archive, runtime_archive_path, runtime_archive_variant
 
 ROOT = Path(__file__).resolve().parents[3]
 
-_skip_no_valgrind = pytest.mark.skipif(
-	shutil.which("valgrind") is None,
-	reason="valgrind not available",
-)
 
-# Minimal package: Inner wraps Arc<AtomicBool>, Outer wraps Inner.
-# Function create_outer() returns Outer by value.
 LIB_SOURCE = """\
 module mylib;
 
@@ -44,36 +36,102 @@ import std.core as core;
 import std.concurrent as conc;
 import std.sync as sync;
 
-export { create_outer, Outer, Inner };
+export { start, use_running, serve, make_handle, Running, Handle };
 
-pub struct Inner {
-\tpub stopped: conc.Arc<sync.AtomicBool>,
+pub struct Handle {
+\tpub flag: conc.Arc<sync.AtomicBool>,
 \tpub value: Int
 }
 
-pub struct Outer {
-\tpub inner: Inner,
-\tpub tag: Int
+pub struct Running {
+\tpub handle: Handle,
+\tpub worker: conc.VirtualThread<Int>
 }
 
-pub fn create_outer() nothrow -> Outer {
+fn clone_handle(h: &Handle) nothrow -> Handle {
+\treturn Handle(flag = h.flag.clone(), value = h.value);
+}
+
+pub fn start() -> core.Result<Running, String> {
 \tval a = conc.arc(sync.atomic_bool(false));
-\treturn Outer(inner = Inner(stopped = move a, value = 42), tag = 1);
+\tvar handle = Handle(flag = move a, value = 42);
+\tvar caller_handle = clone_handle(&handle);
+\tvar vt = conc.spawn_cb(core.callback0(|| captures(move handle) nothrow => {
+\t\treturn handle.value;
+\t}));
+\treturn core.Result::Ok(Running(handle = move caller_handle, worker = move vt));
+}
+
+pub fn use_running(r: &mut Running) -> core.Result<Int, String> {
+\treturn core.Result::Ok(r.handle.value);
+}
+
+pub fn make_handle(value: Int) nothrow -> Handle {
+\treturn Handle(flag = conc.arc(sync.atomic_bool(false)), value = value);
+}
+
+// Mirrors web.rest.server::serve — takes multiple owned params including
+// Handle (with Arc).  The while loop + inner match exercises the
+// scope-drop-at-return path that the certification caught leaking.
+pub fn serve(handle: Handle, running: Running, max_iters: Int) nothrow -> core.Result<Int, String> {
+\tvar i = 0;
+\twhile i < max_iters {
+\t\tval flag = handle.flag.get();
+\t\tif flag.load(sync.MemoryOrder::Acquire()) {
+\t\t\treturn core.Result::Ok(i);
+\t\t}
+\t\tmatch use_running_nothrow(&running) {
+\t\t\tcore.Result::Err(_) => {
+\t\t\t\treturn core.Result::Err("serve failed");
+\t\t\t},
+\t\t\tcore.Result::Ok(_) => {}
+\t\t}
+\t\ti = i + 1;
+\t}
+\treturn core.Result::Ok(i);
+}
+
+fn use_running_nothrow(r: &Running) nothrow -> core.Result<Int, String> {
+\treturn core.Result::Ok(r.handle.value);
 }
 """
 
-# Consumer: call create_outer(), bind to owned local, let scope end.
 CONSUMER_SOURCE = """\
 module consumer;
 
 import std.core as core;
 import mylib;
 
+fn run() -> Int {
+\tmatch mylib.start() {
+\t\tcore.Result::Err(_) => { return 1; },
+\t\tcore.Result::Ok(r) => {
+\t\t\tvar running = move r;
+\t\t\tmatch mylib.use_running(&mut running) {
+\t\t\t\tcore.Result::Err(_) => {
+\t\t\t\t\treturn 2;
+\t\t\t\t},
+\t\t\t\tcore.Result::Ok(v) => {
+\t\t\t\t\tif v != 42 { return 3; }
+\t\t\t\t}
+\t\t\t}
+\t\t\t// Exercise the serve() path: owned Handle + Running params must be dropped.
+\t\t\tvar h2 = mylib.make_handle(7);
+\t\t\tmatch mylib.start() {
+\t\t\t\tcore.Result::Err(_) => { return 4; },
+\t\t\t\tcore.Result::Ok(r2) => {
+\t\t\t\t\tmatch mylib.serve(move h2, move r2, 1) {
+\t\t\t\t\t\tcore.Result::Err(_) => { return 5; },
+\t\t\t\t\t\tcore.Result::Ok(_) => { return 0; }
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+}
+
 pub fn main() nothrow -> Int {
-\tvar o = mylib.create_outer();
-\tval result = o.inner.value;
-\tif result != 42 { return 1; }
-\treturn 0;
+\treturn try run() catch { 99 };
 }
 """
 
@@ -126,9 +184,9 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	return tmp_path / "libs", tmp_path / "trust.json"
 
 
-@_skip_no_valgrind
-def test_nested_struct_arc_drop_no_leak(tmp_path: Path) -> None:
-	"""Consumer-owned nested struct with Arc must be dropped on scope exit."""
+
+def test_cross_package_scope_drop_no_leak(tmp_path: Path) -> None:
+	"""Package-consumer path must not leak owned locals on any return arm."""
 	stdlib = stdlib_root()
 	if stdlib is None:
 		pytest.skip("stdlib not available")
@@ -140,6 +198,7 @@ def test_nested_struct_arc_drop_no_leak(tmp_path: Path) -> None:
 	(consumer_dir / "consumer.drift").write_text(CONSUMER_SOURCE)
 
 	out_bin = tmp_path / "consumer_bin"
+	# Compile and link
 	res = subprocess.run(
 		[sys.executable, "-m", "lang.driftc.driftc",
 		 str(consumer_dir / "consumer.drift"),
@@ -150,7 +209,7 @@ def test_nested_struct_arc_drop_no_leak(tmp_path: Path) -> None:
 		 "-o", str(out_bin)],
 		cwd=ROOT, capture_output=True, text=True, timeout=120,
 	)
-	assert res.returncode == 0, f"compile failed: {res.stderr[:500]}"
+	assert res.returncode == 0, f"compile failed: {res.stderr[:2000]}"
 	assert out_bin.exists(), "binary not produced"
 
 	# Run under Valgrind
@@ -158,12 +217,13 @@ def test_nested_struct_arc_drop_no_leak(tmp_path: Path) -> None:
 		["valgrind", "--leak-check=full", "--error-exitcode=42", str(out_bin)],
 		capture_output=True, text=True, timeout=30,
 	)
+	# Parse Valgrind output
 	no_leaks = "no leaks are possible" in vg.stderr or "All heap blocks were freed" in vg.stderr
 	lost_match = re.search(r"definitely lost: (\d+) bytes", vg.stderr)
 	lost_bytes = int(lost_match.group(1)) if lost_match else (0 if no_leaks else -1)
 
 	assert lost_bytes == 0, (
-		f"Valgrind found {lost_bytes} bytes definitely lost. "
-		f"Consumer-owned nested struct with Arc field must be dropped.\n"
+		f"Valgrind found {lost_bytes} bytes definitely lost on the package-consumer path. "
+		f"Scope drops for owned locals may be missing on a return arm.\n"
 		f"Valgrind stderr:\n{vg.stderr[-500:]}"
 	)

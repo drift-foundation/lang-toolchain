@@ -232,6 +232,17 @@ lang-borrow-test:
 lang-memcheck-stdlib-pkg:
 	DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 -m pytest -xvs lang/tests/driver/test_stdlib_as_package.py
 
+# Memcheck suite: valgrind-only leak regression tests.
+# These are excluded from normal `just test` via pytest.ini norecursedirs.
+test-memcheck:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if ! command -v valgrind >/dev/null 2>&1; then
+		echo "error: valgrind not found in PATH" >&2
+		exit 1
+	fi
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -xvs lang/tests/memcheck
+
 # Drift deploy/build tooling tests (manifest, resolver, lockfile, build, deploy, prepare).
 drift-deploy-test:
 	# Ensure pytest is available in the venv
@@ -267,14 +278,11 @@ ext-e2e-smoke:
 
 # Package-consumer boundary regressions (CI gate).
 # Cases that exercise package-specific codepaths (trait scope through boundary,
-# vtable population for external impls, visibility negatives).
-# NOT a cross-lane parity target — only runs pkg_consumer_runner.
-# Excluded: pkg_ext_module_trait_scope (K25 — pre-existing LANGUAGE_BUG)
-# Excluded: pkg_vis_source_private_method_rejected (local runner hits parser error on fixture syntax, not a real boundary case)
+# visibility negatives) through the pkg_consumer_runner.
 # ASAN: DRIFT_ASAN=1 just ext-e2e-boundary
 ext-e2e-boundary:
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py \
-		--blocking --only-cases pkg_iter_next_visibility,pkg_vis_source_trait_scope_rejected,pkg_iface_impl_vtable
+		--blocking --only-cases trait_iter_next_visibility,vis_source_trait_scope_rejected
 
 # Build examples (lang.driftc)
 make-example EXAMPLE:

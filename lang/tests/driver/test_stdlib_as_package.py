@@ -25,7 +25,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 _memcheck = os.environ.get("DRIFT_MEMCHECK") == "1"
-_asan = os.environ.get("DRIFT_ASAN") == "1"
 
 
 def _compile_consumer(
@@ -104,10 +103,6 @@ def _run_valgrind(binary: Path) -> int:
 	return int(lost_match.group(1)) if lost_match else (0 if no_leaks else -1)
 
 
-@pytest.mark.skipif(
-	os.environ.get("DRIFT_ASAN") == "1",
-	reason="stdlib-as-package test compiles its own binary; incompatible with ASAN runtime",
-)
 def test_arc_scope_drop_no_leak(stdlib_package, tmp_path: Path) -> None:
 	"""Arc<AtomicBool> in an owned struct must be destroyed on scope exit.
 

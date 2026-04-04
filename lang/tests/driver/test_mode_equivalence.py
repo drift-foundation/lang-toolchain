@@ -31,7 +31,7 @@ def _compile_and_run(
 	out_bin = tmp_path / f"{label}_bin"
 
 	if use_package_stdlib:
-		from lang.tests.driver.test_pkg_map_literal_string_leak import _build_signed_stdlib, STD_VERSION
+		from lang.tests.driver.pkg_test_helpers import _build_signed_stdlib, STD_VERSION
 		pkg_root, trust_path, core_trust_path, empty_stdlib = _build_signed_stdlib(tmp_path)
 		argv = [
 			sys.executable, "-m", "lang.driftc.driftc", "--dev",

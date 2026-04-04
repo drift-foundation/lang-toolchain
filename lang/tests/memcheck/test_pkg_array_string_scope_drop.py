@@ -33,10 +33,6 @@ from lang.language_runtime import build_runtime_archive, runtime_archive_path, r
 
 ROOT = Path(__file__).resolve().parents[3]
 
-_skip_no_valgrind = pytest.mark.skipif(
-	shutil.which("valgrind") is None,
-	reason="valgrind not available",
-)
 
 # Library: provides split_path returning Array<String> and a struct with
 # Array<String> fields — mirrors the drift-web router.
@@ -386,7 +382,7 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	return pkg_dir, trust_path, core_trust_path, empty_stdlib
 
 
-@_skip_no_valgrind
+
 def test_library_internal_array_scope_drop(tmp_path: Path) -> None:
 	"""Array<String> created and dropped INSIDE a package function must not leak.
 
@@ -438,7 +434,7 @@ def test_library_internal_array_scope_drop(tmp_path: Path) -> None:
 	)
 
 
-@_skip_no_valgrind
+
 def test_two_layer_package_array_scope_drop(tmp_path: Path) -> None:
 	"""Full PEX path: stdlib=package, pathlib=package (built against pkg stdlib).
 

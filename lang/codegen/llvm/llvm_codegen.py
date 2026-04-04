@@ -6746,11 +6746,6 @@ class _FuncBuilder:
 		callee_mod = (
 			getattr(callee_info.signature, "module", None) if callee_info.signature is not None else None
 		) or callee_info.fn_id.module
-		force_boundary = (
-			self.fn_info.fn_id.module == "lang.__internal"
-			and self.fn_info.fn_id.name.startswith("__thunk_boundary::")
-		)
-
 		is_cross_module = False
 		if is_exported_entry:
 			module_packages = getattr(self.type_table, "module_packages", None)
@@ -6762,10 +6757,8 @@ class _FuncBuilder:
 			callee_pkg = module_packages.get(callee_mod)
 			if caller_pkg is None or callee_pkg is None:
 				raise AssertionError("module_packages missing entry for boundary check (codegen bug)")
-			if caller_pkg != callee_pkg or force_boundary:
-				# Option B: no boundary ABI. Cross-package calls use
-				# direct calling convention (same as same-package).
-				pass
+			if caller_pkg != callee_pkg:
+				pass  # Option B: no boundary ABI for cross-package calls.
 
 		target_sym = function_symbol(fn_id)
 		if is_exported_entry and not is_cross_module:

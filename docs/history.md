@@ -1,28 +1,23 @@
 # Drift development history
 
 ## 2026-04-03
-- **Option B pivot: packages are now HIR distribution containers, not MIR semantic bundles (version pending, ABI 7)**:
-  This branch moved package consumption onto the same canonical pipeline as
-  source inputs. Packages now carry declared HIR for all functions, and the
-  consumer type-checks, instantiates, lowers, runs `string_arc`, and codegens
-  package code in its own context instead of reconstructing semantics from
-  producer MIR.
+- **Complete the Option B package pivot: packages are now HIR-only distribution containers with one pipeline after ingress (version pending, ABI 7)**:
+  Package consumption no longer reconstructs semantics from producer MIR.
+  Packages now carry declared HIR bodies, and the consumer compiles package
+  code through the same pipeline as source inputs: type checking,
+  instantiation, MIR lowering, `string_arc`, and codegen.
   - Package payload changes:
     - `hir_funcs` added for all non-generic, non-wrapper functions
     - `payload_version` bumped to `2`
     - `mir_funcs` removed from emitted payloads
     - consumer now rejects payload versions `0`/`1`
   - Consumer pipeline changes:
-    - package HIR bodies are loaded into the normal HIR pool and compiled
-      through the standard pipeline
-    - package module scope reconstruction now includes:
-      - package siblings
-      - prelude modules
-      - other loaded package modules
-      - source-compiled dependency/export modules
-      - but not consumer application modules
+    - package HIR bodies load into the normal HIR pool and compile through
+      the standard pipeline
+    - package module scope reconstruction now includes package siblings,
+      prelude modules, other loaded package modules, and source-compiled
+      dependency/export modules, but not consumer application modules
     - package MIR fallback is gone; package functions now compile from HIR
-      with zero fallbacks in the validated package-consumer suite
   - Deleted old package-MIR machinery:
     - `_build_package_consumer_unit`
     - `_remap_mir_func_typeids`
@@ -32,30 +27,28 @@
   - Boundary impact:
     - producer-time MIR ABI decisions no longer control consumer semantics
     - no package-MIR TypeId remapping
+    - no boundary wrapper routing model
     - no FnResult boundary wrappers for nothrow package functions compiled
       from HIR in the consumer context
     - one semantic mode after ingress
 
-- **Fix package-consumer leak by removing both the boundary seam and the remaining platform retain imbalance (version pending, ABI 7)**:
+- **Fix the package-consumer leak by removing the boundary seam and the remaining platform retain imbalance (version pending, ABI 7)**:
   The bookkeeper/logger leak turned out to have two causes:
-  - boundary-induced ARC churn from producer-MIR FnResult ABI decisions
+  - boundary-induced ARC churn from producer-time FnResult ABI decisions
   - a separate platform retain imbalance in `drift_dv_as_string`
   Both are now fixed.
-  - Boundary fix:
-    - compiling package functions from HIR in the consumer context removes
-      the producer-time FnResult ABI seam for nothrow functions
-    - source and package paths now converge on the same retain/release shape
-  - Platform fix:
-    - `drift_dv_as_string()` now returns an unowned string view
-    - LLVM codegen retains exactly once when constructing `Optional<String>`
+  - Compiling package functions from HIR in the consumer context removes the
+    producer-time FnResult ABI seam for nothrow functions
+  - `drift_dv_as_string()` now returns an unowned string view
+  - LLVM codegen retains exactly once when constructing `Optional<String>`
   - Result:
+    - source and package paths now converge on the same retain/release shape
     - Valgrind reports no definitely-lost bytes in both source and package
       modes for the logger/map-literal regression
-    - the earlier package-only leak is eliminated
 
-- **Fix two mainline package-consumer/compiler bugs exposed during the Option B migration (version pending, ABI 7)**:
-  Two existing bug clusters were fixed in the correct layers while driving the
-  package HIR path to parity:
+- **Fix mainline compiler bugs exposed during the Option B migration and stabilize package-consumer parity (version pending, ABI 7)**:
+  Driving the HIR package path to parity exposed and fixed several existing
+  compiler bugs in the correct layers:
   - Generic wrapper instantiation in lambda callbacks:
     - hidden lambda processing could create generic wrapper instantiation
       requests after the main drain pass
@@ -66,17 +59,36 @@
       not the generic base, by looking up the target in `inst_cache` using
       the target template key + the same type args
     - regression pinned in `test_pkg_generic_wrapper_lambda.py`
-  - Trait impl receiver type preservation for generic structs:
-    - concrete trait impl method signatures previously carried
-      `impl_target_type_id` for the generic base (for example
-      `ArrayRange`) instead of the concrete instantiation
-      (`ArrayRange<Int>`)
-    - serializer then emitted `impl_target_type` without type args, and the
-      consumer could not register the method
-    - the consumer now reconstructs concrete impl target types from the
-      serialized `impl_target_type` expression, using the canonical type
-      parameter interning in `TypeTable`
-    - regression pinned in `test_pkg_trait_impl_target_type.py`
+  - Package scope reconstruction / visibility / hidden-lambda / transitive-dep
+    fixes:
+    - package HIR now reconstructs the right module scope for private consts,
+      private helpers, variant constructors, hidden lambdas, and transitive
+      dependencies
+  - Exported function-reference thunk selection:
+    - exported function references no longer route all targets through
+      boundary thunks
+    - nothrow targets now use `OK_WRAP` thunks that call `__impl` directly
+      and wrap the bare return into `FnResult`
+    - throwing targets continue to use boundary thunks that preserve the
+      existing throwing ABI
+    - this removes the last `force_boundary` vestige from pre-Option-B thunk
+      selection and fixes the `fnptr_cross_module_wrapper` regression
+  - Canonical nominal type-parameter interning:
+    - struct, variant, and interface declarations now pre-create canonical
+      `TypeVar`s for their declared type parameters in `TypeTable`
+    - cross-package impl/signature canonicalization now reuses those nominal
+      identities instead of manufacturing renamed `T0` duplicates
+    - this stabilizes cross-package trait proofs and method resolution and
+      removes the downstream `ImplDef.target` normalization workaround
+    - regressions pinned in `test_linker_typevar_dedup.py` and
+      `test_canonical_typevar_precreation.py`
+  - Test-suite cleanup:
+    - removed `package_consumer_only` skip-based pseudo-coverage from the
+      generic e2e runner
+    - package-consumer-specific scenarios now live in active driver coverage
+      instead of being discovered and skipped in the generic path
+    - previously incomplete `scope_drop_*` e2e cases were activated with real
+      `expected.json` fixtures instead of remaining as placeholder skips
 
 ## 2026-04-02
 - **Fix VT use-after-free: hold reactor mutex across epoll VT enqueue (0.27.143, ABI 7)**:

@@ -60,6 +60,91 @@ fn main() nothrow -> Int{
 	main_sig = signatures[main_id]
 	main_block = func_hirs[main_id]
 	id_fn_id = next(fid for fid in signatures if fid.module == "mod_a" and fid.name == "id")
+	# id() has no nothrow annotation, so declared_can_throw should be True.
+	signatures[id_fn_id].declared_can_throw = True
+
+	registry = CallableRegistry()
+	module_ids: dict[str | None, int] = {None: 0, "mod_a": 1, "mod_b": 2}
+	int_ty = type_table.ensure_int()
+	registry.register_free_function(
+		callable_id=0,
+		name="id",
+		module_id=module_ids["mod_a"],
+		visibility=Visibility.public(),
+		signature=CallableSignature(param_types=(int_ty,), result_type=int_ty),
+		fn_id=id_fn_id,
+	)
+
+	param_types: dict[str, int] = {}
+	if main_sig.param_names and main_sig.param_type_ids:
+		param_types = {pname: pty for pname, pty in zip(main_sig.param_names, main_sig.param_type_ids)}
+
+	res = TypeChecker(type_table).check_function(
+		main_id,
+		main_block,
+		param_types=param_types,
+		return_type=main_sig.return_type_id,
+		signatures_by_id=signatures,
+		callable_registry=registry,
+		visible_modules=(module_ids["mod_a"], module_ids["mod_b"]),
+		current_module=module_ids["mod_b"],
+	)
+	assert not res.diagnostics
+
+	let_stmt = next(stmt for stmt in res.typed_fn.body.statements if isinstance(stmt, H.HLet))
+	assert isinstance(let_stmt.value, H.HFnPtrConst)
+	fnptr = let_stmt.value
+
+	# Throwing exported target → BOUNDARY thunk (FnResult passthrough).
+	assert fnptr.fn_ref.kind is FunctionRefKind.THUNK_BOUNDARY
+	assert fnptr.fn_ref.has_wrapper is False
+	assert function_ref_symbol(fnptr.fn_ref) == "lang.__internal::__thunk_boundary::mod_a::id"
+	assert fnptr.call_sig.can_throw is True
+	fnptr_ty = res.typed_fn.expr_types[fnptr.node_id]
+	td = type_table.get(fnptr_ty)
+	assert td.kind is TypeKind.FUNCTION
+	assert td.fn_throws is True
+
+
+def test_nothrow_exported_function_reference_uses_ok_wrap_thunk(tmp_path: Path) -> None:
+	"""Nothrow exported function references must use OK_WRAP thunks.
+
+	Regression: under Option B, the type checker unconditionally created
+	BOUNDARY thunks for all exported fn refs.  BOUNDARY thunks call with
+	can_throw=True, expecting the target to return FnResult — but nothrow
+	targets return bare values.  Codegen then misinterprets the return type,
+	causing a SIGSEGV.  The fix: nothrow targets use OK_WRAP thunks which
+	call __impl directly and wrap the bare return into FnResult.
+	"""
+	files = {
+		Path("mod_a/lib.drift"): """
+module mod_a;
+
+export { id };
+
+pub fn id(x: Int) nothrow -> Int { return x; }
+""",
+		Path("mod_b/main.drift"): """
+module mod_b;
+
+import mod_a as A;
+
+fn main() nothrow -> Int{
+\tval fp: Fn(Int) -> Int = A.id;
+\treturn 0;
+}
+""",
+	}
+	func_hirs, signatures, _fn_ids_by_name, type_table, _exc_catalog, _exports, _deps, diagnostics = _parse_workspace(
+		tmp_path, files
+	)
+	assert diagnostics == []
+
+	main_id = next(fid for fid in func_hirs if fid.module == "mod_b" and fid.name == "main")
+	main_sig = signatures[main_id]
+	main_block = func_hirs[main_id]
+	id_fn_id = next(fid for fid in signatures if fid.module == "mod_a" and fid.name == "id")
+	# id() is declared nothrow.
 	signatures[id_fn_id].declared_can_throw = False
 
 	registry = CallableRegistry()
@@ -94,9 +179,9 @@ fn main() nothrow -> Int{
 	assert isinstance(let_stmt.value, H.HFnPtrConst)
 	fnptr = let_stmt.value
 
-	assert fnptr.fn_ref.kind is FunctionRefKind.THUNK_BOUNDARY
-	assert fnptr.fn_ref.has_wrapper is False
-	assert function_ref_symbol(fnptr.fn_ref) == "lang.__internal::__thunk_boundary::mod_a::id"
+	# Nothrow exported target → OK_WRAP thunk (call __impl, wrap into FnResult).
+	assert fnptr.fn_ref.kind is FunctionRefKind.THUNK_OK_WRAP
+	assert function_ref_symbol(fnptr.fn_ref) == "lang.__internal::__thunk_ok_wrap::mod_a::id"
 	assert fnptr.call_sig.can_throw is True
 	fnptr_ty = res.typed_fn.expr_types[fnptr.node_id]
 	td = type_table.get(fnptr_ty)

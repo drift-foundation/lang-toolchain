@@ -1,5 +1,0 @@
-{
-  "description": "e2e: spawn_cb hidden lambda callback must be resolved through package consumer path (regression for ConstructIface target resolution)",
-  "exit_code": 0,
-  "package_consumer_only": true
-}

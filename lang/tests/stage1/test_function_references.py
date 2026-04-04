@@ -138,8 +138,8 @@ def test_exported_function_reference_is_can_throw() -> None:
 	let_stmt = next(stmt for stmt in block.statements if isinstance(stmt, H.HLet))
 	assert isinstance(let_stmt.value, H.HFnPtrConst)
 	assert let_stmt.value.call_sig.can_throw is True
-	assert let_stmt.value.fn_ref.kind is FunctionRefKind.THUNK_BOUNDARY
-	assert let_stmt.value.fn_ref.has_wrapper is False
+	# Nothrow exported target → OK_WRAP thunk (calls __impl, wraps into FnResult).
+	assert let_stmt.value.fn_ref.kind is FunctionRefKind.THUNK_OK_WRAP
 	fn_ty = res.typed_fn.expr_types[let_stmt.value.node_id]
 	td = table.get(fn_ty)
 	assert td.kind is TypeKind.FUNCTION

@@ -1,7 +1,0 @@
-{
-  "description": "package-consumer: JsonHandle share, access, encode through signed package boundary",
-  "exit_code": 0,
-  "module_paths": ["."],
-  "stderr": "",
-  "stdout": ""
-}

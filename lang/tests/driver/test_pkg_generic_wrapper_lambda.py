@@ -22,7 +22,7 @@ def _build_and_run_pkg_consumer(tmp_path: Path, source: str) -> tuple[int, str, 
 
 	Returns (exit_code, compile_stderr, run_stderr).
 	"""
-	from lang.tests.driver.test_pkg_map_literal_string_leak import _build_signed_stdlib, STD_VERSION
+	from lang.tests.driver.pkg_test_helpers import _build_signed_stdlib, STD_VERSION
 	pkg_root, trust_path, core_trust_path, empty_stdlib = _build_signed_stdlib(tmp_path)
 	consumer_dir = tmp_path / "consumer_src"
 	consumer_dir.mkdir(exist_ok=True)
