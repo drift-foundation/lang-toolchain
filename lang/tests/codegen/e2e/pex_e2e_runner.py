@@ -31,6 +31,11 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[4]
 CASE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 STDLIB_DIR = ROOT / "stdlib"
+_VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "valgrind"
+_VALGRIND_FIBER_SUPPRESSIONS = _VALGRIND_DIR / "fiber.supp"
+
+def _env_true(name: str) -> bool:
+	return os.environ.get(name, "") in ("1", "true", "True")
 
 # Cases that cannot pass through the CLI path.
 # Goal: keep this set empty.  Any entry here needs a documented reason.
@@ -48,6 +53,9 @@ def _link_and_run(
 	stdin_data: str | None = None,
 	timeout_s: int = 60,
 	extra_objects: list[Path] | None = None,
+	memcheck_enabled: bool = False,
+	massif_enabled: bool = False,
+	fiber_suppressions_enabled: bool = False,
 ) -> tuple[str | None, int, str, str]:
 	"""Compile IR with clang, link with runtime archive, and run the binary.
 
@@ -130,9 +138,44 @@ def _link_and_run(
 
 	run_cmd = [str(bin_path), *(argv or [])]
 	run_env = os.environ.copy()
+	run_timeout_s = timeout_s
+	if asan_enabled:
+		run_timeout_s = max(timeout_s, 30) * 2
+		asan_opts = run_env.get("ASAN_OPTIONS", "")
+		defaults = "detect_leaks=1:halt_on_error=0"
+		run_env["ASAN_OPTIONS"] = f"{defaults}:{asan_opts}" if asan_opts else defaults
+	if memcheck_enabled:
+		valgrind_suppressions: list[str] = []
+		if fiber_suppressions_enabled and _VALGRIND_FIBER_SUPPRESSIONS.exists():
+			valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
+		run_timeout_s = max(timeout_s, 30) * 10
+		run_cmd = [
+			"valgrind",
+			"--tool=memcheck",
+			"--leak-check=full",
+			"--show-leak-kinds=definite,indirect,possible,reachable",
+			"--errors-for-leak-kinds=definite,indirect",
+			"--error-exitcode=97",
+			*valgrind_suppressions,
+			f"--log-file={str(build_dir / 'valgrind-memcheck.log')}",
+			*run_cmd,
+		]
+	elif massif_enabled:
+		valgrind_suppressions = []
+		if fiber_suppressions_enabled and _VALGRIND_FIBER_SUPPRESSIONS.exists():
+			valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
+		run_timeout_s = max(timeout_s, 30) * 6
+		run_cmd = [
+			"valgrind",
+			"--tool=massif",
+			*valgrind_suppressions,
+			f"--massif-out-file={str(build_dir / 'valgrind-massif.out')}",
+			f"--log-file={str(build_dir / 'valgrind-massif.log')}",
+			*run_cmd,
+		]
 	try:
 		run_res = subprocess.run(
-			run_cmd, capture_output=True, text=True, timeout=timeout_s,
+			run_cmd, capture_output=True, text=True, timeout=run_timeout_s,
 			input=stdin_data, env=run_env,
 		)
 	except subprocess.TimeoutExpired:
@@ -205,7 +248,7 @@ def _run_case(
 		return case_name, "skipped (marked)"
 	if expected.get("package_consumer_only"):
 		return case_name, "skipped (package-consumer-only)"
-	if expected.get("skip_memcheck") and os.environ.get("DRIFT_MEMCHECK") in ("1", "true", "True"):
+	if expected.get("skip_memcheck") and _env_true("DRIFT_MEMCHECK"):
 		return case_name, "skipped (memcheck)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
 		return case_name, "skipped (sandbox)"
@@ -392,17 +435,23 @@ def _run_case(
 		return case_name, "FAIL (no IR output)"
 
 	# ── Link + Run ──────────────────────────────────────────────
+	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
+	massif_enabled = _env_true("DRIFT_MASSIF")
+	fiber_suppressions_enabled = _env_true("DRIFT_VALGRIND_SUPPRESS_FIBER") or bool(expected.get("valgrind_suppress_fiber"))
 	link_err, exit_code, stdout, stderr = _link_and_run(
 		ir_path, case_build,
 		argv=run_args,
 		stdin_data=stdin_data,
 		timeout_s=case_timeout,
 		extra_objects=extra_objects,
+		memcheck_enabled=memcheck_enabled,
+		massif_enabled=massif_enabled,
+		fiber_suppressions_enabled=fiber_suppressions_enabled,
 	)
 	if link_err is not None:
 		return case_name, f"FAIL (link: {link_err[:200]})"
 
-	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
+	asan_enabled = _env_true("DRIFT_ASAN")
 	stderr_clean = _strip_asan_warnings(stderr) if asan_enabled else stderr
 
 	# ── Compare output ──────────────────────────────────────────
@@ -448,6 +497,20 @@ def main(argv: Iterable[str] | None = None) -> int:
 		return 2
 	if not os.access(driftc_bin, os.X_OK):
 		print(f"error: driftc binary not executable: {driftc_bin}", file=sys.stderr)
+		return 2
+
+	# Preflight: validate runtime mode env vars.
+	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
+	massif_enabled = _env_true("DRIFT_MASSIF")
+	asan_enabled = _env_true("DRIFT_ASAN")
+	if asan_enabled and (memcheck_enabled or massif_enabled):
+		print("error: DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF", file=sys.stderr)
+		return 2
+	if memcheck_enabled and massif_enabled:
+		print("error: DRIFT_MEMCHECK and DRIFT_MASSIF are mutually exclusive", file=sys.stderr)
+		return 2
+	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
+		print("error: valgrind not found (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)", file=sys.stderr)
 		return 2
 
 	start_time = time.monotonic() if args.summarize else None
