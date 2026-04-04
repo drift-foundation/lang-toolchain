@@ -324,6 +324,8 @@ class TypeTable:
 		self.interface_instances: dict[TypeId, InterfaceInstance] = {}
 		# Variant schemas keyed by the *base* TypeId (declared name).
 		self.variant_schemas: dict[TypeId, VariantSchema] = {}
+		# Variant type parameter ids keyed by the base TypeId (declared name).
+		self.variant_type_param_ids: dict[TypeId, list[TypeParamId]] = {}
 		# Concrete instantiations keyed by the instantiated TypeId.
 		self.variant_instances: dict[TypeId, VariantInstance] = {}
 		# Instantiation cache: (base_id, args...) -> instantiated TypeId.
@@ -587,6 +589,11 @@ class TypeTable:
 				self.struct_type_param_ids[ty_id] = [
 					TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
 				]
+				# Pre-create canonical TypeVars with correct display names
+				# so that the first ensure_typevar call for these TypeParamIds
+				# doesn't fall back to the T0/T1 default naming.
+				for idx, _tp_name in enumerate(type_params):
+					self.ensure_typevar(self.struct_type_param_ids[ty_id][idx], name=_tp_name)
 			return ty_id
 		if key in self._nominal:
 			ty_id = self._nominal[key]
@@ -638,6 +645,8 @@ class TypeTable:
 			self.struct_type_param_ids[ty_id] = [
 				TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
 			]
+			for idx, _tp_name in enumerate(type_params):
+				self.ensure_typevar(self.struct_type_param_ids[ty_id][idx], name=_tp_name)
 		return ty_id
 
 	def declare_interface(self, module_id: str, name: str, type_params: list[str] | None = None) -> TypeId:
@@ -676,6 +685,8 @@ class TypeTable:
 				self.interface_type_param_ids[ty_id] = [
 					TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
 				]
+				for idx, _tp_name in enumerate(type_params):
+					self.ensure_typevar(self.interface_type_param_ids[ty_id][idx], name=_tp_name)
 			return ty_id
 		if key in self._nominal:
 			ty_id = self._nominal[key]
@@ -703,6 +714,8 @@ class TypeTable:
 			self.interface_type_param_ids[ty_id] = [
 				TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
 			]
+			for idx, _tp_name in enumerate(type_params):
+				self.ensure_typevar(self.interface_type_param_ids[ty_id][idx], name=_tp_name)
 		return ty_id
 
 	def declare_variant(
@@ -759,6 +772,13 @@ class TypeTable:
 				arms=list(arms),
 				tombstone_ctor=tombstone_ctor,
 			)
+			if type_params and base_id not in self.variant_type_param_ids:
+				owner = FunctionId(module="lang.__internal", name=f"__variant_{module_id}::{name}", ordinal=0)
+				self.variant_type_param_ids[base_id] = [
+					TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
+				]
+				for idx, _tp_name in enumerate(type_params):
+					self.ensure_typevar(self.variant_type_param_ids[base_id][idx], name=_tp_name)
 			return base_id
 		if key in self._nominal:
 			ty_id = self._nominal[key]
@@ -775,6 +795,13 @@ class TypeTable:
 							f"variant '{module_id}::{name}' schema mismatch: "
 							f"params {schema.type_params} vs {type_params}, arms {schema.arms} vs {arms}"
 						)
+				if type_params and ty_id not in self.variant_type_param_ids:
+					owner = FunctionId(module="lang.__internal", name=f"__variant_{module_id}::{name}", ordinal=0)
+					self.variant_type_param_ids[ty_id] = [
+						TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
+					]
+					for idx, _tp_name in enumerate(type_params):
+						self.ensure_typevar(self.variant_type_param_ids[ty_id][idx], name=_tp_name)
 				return ty_id
 			raise ValueError(f"type name '{name}' already defined as {td.kind}")
 		# Base variant type. Note: base is named; instantiations are not.
@@ -786,6 +813,13 @@ class TypeTable:
 			arms=list(arms),
 			tombstone_ctor=tombstone_ctor,
 		)
+		if type_params and base_id not in self.variant_type_param_ids:
+			owner = FunctionId(module="lang.__internal", name=f"__variant_{module_id}::{name}", ordinal=0)
+			self.variant_type_param_ids[base_id] = [
+				TypeParamId(owner=owner, index=idx) for idx, _name in enumerate(type_params)
+			]
+			for idx, _tp_name in enumerate(type_params):
+				self.ensure_typevar(self.variant_type_param_ids[base_id][idx], name=_tp_name)
 		return base_id
 
 	def declare_scalar(self, module_id: str, name: str) -> TypeId:
@@ -2028,6 +2062,129 @@ class TypeTable:
 		)
 		self._typevar_cache[param_id] = ty_id
 		return ty_id
+
+	def canonicalize_impl_type_params(
+		self,
+		impl_type_param_map: dict[str, "TypeParamId"],
+		*,
+		target_module: str,
+		target_name: str,
+		target_args: list | None = None,
+		target_kind: str | None = None,
+	) -> dict[str, "TypeParamId"]:
+		"""Canonicalize an impl's type param map against the target nominal type.
+
+		Uses the impl's target expression args (not name matching) to determine
+		which impl param occupies which nominal type slot:
+		  - For impl<T> Trait for Struct<T>: target_args=["T"] → T aliases struct param 0
+		  - For impl<T,U> Trait for Struct<U,T>: target_args=["U","T"] → U→slot 0, T→slot 1
+		  - Impl params not appearing in target_args stay impl-local
+
+		If target_kind is None, probes struct → variant → interface.
+		If target_args is None, falls back to name matching (legacy path).
+		Returns the input unchanged if the target is not found.
+		"""
+		base_id: TypeId | None = None
+		tpids: list[TypeParamId] = []
+		schema = None
+		if target_kind is None:
+			# Auto-probe: struct → variant → interface
+			base_id = self.get_struct_base(module_id=target_module, name=target_name)
+			if base_id is not None:
+				tpids = self.struct_type_param_ids.get(base_id, [])
+				schema = self.struct_bases.get(base_id)
+			else:
+				base_id = self.get_variant_base(module_id=target_module, name=target_name)
+				if base_id is not None:
+					tpids = self.variant_type_param_ids.get(base_id, [])
+					schema = self.variant_schemas.get(base_id)
+				else:
+					base_id = self.get_interface_base(module_id=target_module, name=target_name)
+					if base_id is not None:
+						tpids = self.interface_type_param_ids.get(base_id, [])
+						schema = self.interface_bases.get(base_id)
+		elif target_kind == "struct":
+			base_id = self.get_struct_base(module_id=target_module, name=target_name)
+			if base_id is not None:
+				tpids = self.struct_type_param_ids.get(base_id, [])
+				schema = self.struct_bases.get(base_id)
+		elif target_kind == "variant":
+			base_id = self.get_variant_base(module_id=target_module, name=target_name)
+			if base_id is not None:
+				tpids = self.variant_type_param_ids.get(base_id, [])
+				schema = self.variant_schemas.get(base_id)
+		elif target_kind == "interface":
+			base_id = self.get_interface_base(module_id=target_module, name=target_name)
+			if base_id is not None:
+				tpids = self.interface_type_param_ids.get(base_id, [])
+				schema = self.interface_bases.get(base_id)
+		if base_id is None or not tpids:
+			return impl_type_param_map
+		result = dict(impl_type_param_map)
+		if target_args is not None:
+			# Expression-based: map impl param at target arg slot i
+			# to the nominal type's canonical param i.
+			for slot_idx, arg_expr in enumerate(target_args):
+				arg_name = getattr(arg_expr, "name", None) if not isinstance(arg_expr, str) else arg_expr
+				if arg_name is not None and arg_name in result and slot_idx < len(tpids):
+					# Only alias if this arg is a bare type param reference
+					# (no nested args — not a complex type expression).
+					arg_args = getattr(arg_expr, "args", None) if not isinstance(arg_expr, str) else None
+					if not arg_args:
+						result[arg_name] = tpids[slot_idx]
+		else:
+			# Legacy fallback: name matching against schema type params.
+			if schema is not None:
+				for idx, schema_name in enumerate(getattr(schema, "type_params", [])):
+					if schema_name in result and idx < len(tpids):
+						result[schema_name] = tpids[idx]
+		return result
+
+	def canonical_nominal_typevar(self, *, kind: str, module_id: str, name: str, param_index: int) -> TypeId | None:
+		"""Return the canonical TypeVarId for a nominal type's type parameter.
+
+		Looks up the declared type parameter by (kind, module, name, index)
+		and returns the TypeVarId created from the canonical TypeParamId.
+		Returns None if the nominal type or param index is not found.
+
+		This is the single interning point for cross-package type param
+		resolution: all paths that need a TypeVar for a struct/variant/interface
+		type parameter should call this instead of creating ad hoc TypeParamIds.
+
+		Args:
+			kind: "struct", "variant", or "interface"
+			module_id: the nominal type's module
+			name: the nominal type's name
+			param_index: zero-based index of the type parameter
+		"""
+		if kind == "struct":
+			base_id = self.get_struct_base(module_id=module_id, name=name)
+			if base_id is None:
+				return None
+			tpids = self.struct_type_param_ids.get(base_id, [])
+			schema = self.struct_bases.get(base_id)
+			if param_index >= len(tpids) or schema is None or param_index >= len(schema.type_params):
+				return None
+			return self.ensure_typevar(tpids[param_index], name=schema.type_params[param_index])
+		if kind == "variant":
+			base_id = self.get_variant_base(module_id=module_id, name=name)
+			if base_id is None:
+				return None
+			tpids = self.variant_type_param_ids.get(base_id, [])
+			schema = self.variant_schemas.get(base_id)
+			if not tpids or param_index >= len(tpids) or schema is None or param_index >= len(schema.type_params):
+				return None
+			return self.ensure_typevar(tpids[param_index], name=schema.type_params[param_index])
+		if kind == "interface":
+			base_id = self.get_interface_base(module_id=module_id, name=name)
+			if base_id is None:
+				return None
+			tpids = self.interface_type_param_ids.get(base_id, [])
+			schema = self.interface_bases.get(base_id)
+			if not tpids or param_index >= len(tpids) or schema is None or param_index >= len(schema.type_params):
+				return None
+			return self.ensure_typevar(tpids[param_index], name=schema.type_params[param_index])
+		return None
 
 	def set_copy_query(self, query, *, allow_fallback: bool = False) -> None:
 		"""Install a Copy query hook for trait-based Copy checks."""

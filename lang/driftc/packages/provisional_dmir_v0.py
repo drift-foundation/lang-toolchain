@@ -525,7 +525,12 @@ def decode_trait_expr(obj: Any) -> parser_ast.TraitExpr | None:
 
 
 def _collect_mir_type_ids(mir_funcs: Mapping[str, Any]) -> set[int]:
-	"""Collect all TypeId integers referenced by MIR functions."""
+	"""Collect all TypeId integers referenced by MIR functions.
+
+	Used by the package *producer* to determine which TypeDefs to include
+	in the emitted .dmp package.  This walks source-compiled MIR to seed
+	the reachability set; it is NOT part of package consumer machinery.
+	"""
 	from lang.driftc.stage2 import mir_nodes as M
 	tids: set[int] = set()
 	_TID_FIELD_NAMES = {

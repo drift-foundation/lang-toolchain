@@ -73,8 +73,9 @@
       (`ArrayRange<Int>`)
     - serializer then emitted `impl_target_type` without type args, and the
       consumer could not register the method
-    - `type_resolver.py` now preserves the concrete instantiated receiver
-      type for non-typevar impl targets via `ensure_struct_instantiated(...)`
+    - the consumer now reconstructs concrete impl target types from the
+      serialized `impl_target_type` expression, using the canonical type
+      parameter interning in `TypeTable`
     - regression pinned in `test_pkg_trait_impl_target_type.py`
 
 ## 2026-04-02

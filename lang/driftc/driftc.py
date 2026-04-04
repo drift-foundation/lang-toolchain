@@ -1920,26 +1920,20 @@ def _collect_external_trait_and_impl_metadata(
 				type_params = [p for p in type_params_raw if isinstance(p, str)] if isinstance(type_params_raw, list) else []
 				impl_owner = FunctionId(module="lang.__external", name=f"__impl_{def_module}:{impl_id}", ordinal=0)
 				impl_type_param_map = {name: TypeParamId(impl_owner, idx) for idx, name in enumerate(type_params)}
-				# For generic impls on structs (e.g., impl<T> Copy for Handle<T>),
-				# substitute the struct's own TypeParamIds into impl_type_param_map
-				# so that ALL resolutions within this impl header (target, trait
-				# args, method impl_target_type_args) produce the same TypeVarId
-				# for the same struct type param across packages.  Without this,
-				# each package creates a fresh impl_owner TypeParamId which
-				# produces a different TypeVar (T vs T0), breaking trait solver
-				# unification for Copy proofs and other trait impls.
+				# Canonicalize: replace ad hoc impl TypeParamIds with the
+				# target nominal type's canonical TypeParamIds so all packages
+				# produce the same TypeVarId for the same type parameter.
 				if type_params and target_expr is not None:
 					_te_name = getattr(target_expr, "name", None)
 					_te_mod = getattr(target_expr, "module_id", None) or def_module
+					_te_args = list(getattr(target_expr, "args", []) or [])
 					if _te_name:
-						_struct_base = type_table.get_struct_base(module_id=_te_mod, name=_te_name)
-						if _struct_base is not None:
-							_struct_tpids = type_table.struct_type_param_ids.get(_struct_base, [])
-							_struct_schema = type_table.struct_bases.get(_struct_base)
-							if _struct_schema is not None:
-								for _stp_idx, _stp_name in enumerate(_struct_schema.type_params):
-									if _stp_name in impl_type_param_map and _stp_idx < len(_struct_tpids):
-										impl_type_param_map[_stp_name] = _struct_tpids[_stp_idx]
+						impl_type_param_map = type_table.canonicalize_impl_type_params(
+							impl_type_param_map,
+							target_module=_te_mod,
+							target_name=_te_name,
+							target_args=_te_args,
+						)
 				target_type_id = resolve_opaque_type(
 					target_expr,
 					type_table,
@@ -2023,20 +2017,18 @@ def _collect_external_trait_and_impl_metadata(
 					sig = external_signatures_by_id.get(fn_id)
 					if sig is not None:
 						impl_param_map = {p.name: p.id for p in getattr(sig, "impl_type_params", []) or []}
-						# Substitute struct TypeParamIds (same fix as impl header above)
-						# so method impl_target_type_args use the same TypeVarIds.
+						# Canonicalize method impl params against target struct.
 						if impl_param_map and target_expr is not None:
 							_te_name_m = getattr(target_expr, "name", None)
 							_te_mod_m = getattr(target_expr, "module_id", None) or def_module
+							_te_args_m = list(getattr(target_expr, "args", []) or [])
 							if _te_name_m:
-								_sb_m = type_table.get_struct_base(module_id=_te_mod_m, name=_te_name_m)
-								if _sb_m is not None:
-									_tpids_m = type_table.struct_type_param_ids.get(_sb_m, [])
-									_schema_m = type_table.struct_bases.get(_sb_m)
-									if _schema_m is not None:
-										for _si, _sn in enumerate(_schema_m.type_params):
-											if _sn in impl_param_map and _si < len(_tpids_m):
-												impl_param_map[_sn] = _tpids_m[_si]
+								impl_param_map = type_table.canonicalize_impl_type_params(
+									impl_param_map,
+									target_module=_te_mod_m,
+									target_name=_te_name_m,
+									target_args=_te_args_m,
+								)
 						if getattr(target_expr, "args", None):
 							impl_args = [
 								resolve_opaque_type(
@@ -8028,10 +8020,7 @@ def main(argv: list[str] | None = None) -> int:
 					for idx, tp_name in enumerate(impl_type_param_names):
 						if isinstance(tp_name, str):
 							impl_type_params.append(TypeParam(id=TypeParamId(impl_owner, idx), name=tp_name))
-					# Substitute struct TypeParamIds for impl type params when
-					# the method belongs to a generic struct impl.  This ensures
-					# all packages produce the same TypeVarId for the same struct
-					# type param, preventing T→T0 renaming that breaks trait proofs.
+					# Canonicalize impl type params against the target struct.
 					if impl_type_params:
 						_sig_impl_target = sd.get("impl_target_type")
 						if _sig_impl_target is not None:
@@ -8040,15 +8029,17 @@ def main(argv: list[str] | None = None) -> int:
 								_sig_te_name = getattr(_sig_it_expr, "name", None)
 								_sig_te_mod = getattr(_sig_it_expr, "module_id", None) or module_name
 								if _sig_te_name:
-									_sig_sb = type_table.get_struct_base(module_id=_sig_te_mod, name=_sig_te_name)
-									if _sig_sb is not None:
-										_sig_tpids = type_table.struct_type_param_ids.get(_sig_sb, [])
-										_sig_schema = type_table.struct_bases.get(_sig_sb)
-										if _sig_schema is not None:
-											for _si, _sn in enumerate(_sig_schema.type_params):
-												if _si < len(impl_type_params) and _si < len(_sig_tpids):
-													if impl_type_params[_si].name == _sn:
-														impl_type_params[_si] = TypeParam(id=_sig_tpids[_si], name=_sn)
+									_itp_map = {tp.name: tp.id for tp in impl_type_params}
+									_sig_te_args = list(getattr(_sig_it_expr, "args", []) or [])
+									_canon_map = type_table.canonicalize_impl_type_params(
+										_itp_map, target_module=_sig_te_mod, target_name=_sig_te_name,
+										target_args=_sig_te_args,
+									)
+									if _canon_map is not _itp_map:
+										impl_type_params = [
+											TypeParam(id=_canon_map.get(tp.name, tp.id), name=tp.name)
+											for tp in impl_type_params
+										]
 					type_param_map = {p.name: p.id for p in (impl_type_params + type_params)}
 					impl_target_type_args: list[TypeId] | None = None
 					if impl_type_params:
@@ -8475,47 +8466,16 @@ def main(argv: list[str] | None = None) -> int:
 							break
 				if dup:
 					continue
-				# Normalize target TypeKey: cross-package type table linking
-				# produces renamed TypeVars (T→T0) for struct type params
-				# when impl-block TypeParamIds from different packages diverge.
-				# type_key_from_typeid canonicalizes known __impl_-owned
-				# TypeVars at the read layer, but the target_key may have
-				# been constructed from a template that predates that fix.
-				# Apply struct-schema-based normalization as a safety net.
-				# LIMITATION: positional (same-order impls only).
-				_impl_tps = list(getattr(impl, "impl_type_params", []) or [])
-				_norm_target = target_key
-				if _impl_tps and hasattr(target_key, "args") and target_key.args:
-					_tp_name_set = {tp if isinstance(tp, str) else str(tp) for tp in _impl_tps}
-					_struct_schema = type_table.struct_bases.get(impl.target_type_id)
-					if _struct_schema is None:
-						_target_td = type_table.get(impl.target_type_id)
-						if _target_td.kind is TypeKind.STRUCT:
-							_base_id = type_table.get_struct_base(module_id=_target_td.module_id or "", name=_target_td.name)
-							if _base_id is not None:
-								_struct_schema = type_table.struct_bases.get(_base_id)
-					_stp_names = list(_struct_schema.type_params) if _struct_schema is not None else []
-					if _stp_names and len(_stp_names) == len(target_key.args):
-						if any(hasattr(a, "name") and a.name not in _tp_name_set for a in target_key.args):
-							from lang.driftc.traits.world import TypeKey as _TK
-							_new_args = []
-							for i, a in enumerate(target_key.args):
-								_cn = _stp_names[i]
-								if hasattr(a, "name") and a.name != _cn and a.name not in _tp_name_set:
-									_new_args.append(_TK(package_id=getattr(a, "package_id", None), module=getattr(a, "module", None), name=_cn, args=getattr(a, "args", ()), fn_throws=getattr(a, "fn_throws", None)))
-								else:
-									_new_args.append(a)
-							_norm_target = _TK(package_id=target_key.package_id, module=target_key.module, name=target_key.name, args=tuple(_new_args), fn_throws=getattr(target_key, "fn_throws", None))
 				impl_id = len(world.impls)
 				world.impls.append(
 					ImplDef(
 						trait=trait_key,
 						trait_args=impl_trait_args,
-						target=_norm_target,
+						target=target_key,
 						target_head=head_key,
 						methods=[],
 						require=getattr(impl, "require_expr", None),
-						type_params=_impl_tps,
+						type_params=list(getattr(impl, "impl_type_params", []) or []),
 						loc=getattr(impl, "loc", None),
 					)
 				)

@@ -4099,7 +4099,7 @@ fn main() nothrow -> Int {
 def test_driftc_package_stdlib_method_call_wrapper(tmp_path: Path) -> None:
 	"""Package body calling a stdlib method must link in the consumer.
 
-	Regression: package MIR references __wrap_method stubs for stdlib methods
+	Regression: package code references __wrap_method stubs for stdlib methods
 	(e.g., String::byte_length).  The consumer must synthesize those wrapper
 	stubs AND include the underlying stdlib method body in the IR.
 	"""

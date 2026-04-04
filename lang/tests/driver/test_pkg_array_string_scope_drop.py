@@ -43,8 +43,9 @@ _skip_no_valgrind = pytest.mark.skipif(
 #
 # CRITICAL: The leak-relevant functions (add_group, add_route) are IN the
 # library, not the consumer. The Array<String> local that leaks is created
-# and dropped INSIDE a library function. This exercises the package MIR
-# scope-exit drop path, not the consumer's.
+# and dropped INSIDE a library function. This exercises the package
+# scope-exit drop path (compiled from HIR in the consumer), not the
+# consumer's own code.
 LIB_SOURCE = """\
 module pathlib;
 
