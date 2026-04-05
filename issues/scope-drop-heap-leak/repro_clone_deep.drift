@@ -1,0 +1,37 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn build_response(handler_payload: &String) nothrow -> String {
+	var obj = json.new_object();
+	obj.set("status", json.JsonNode::String("ok"));
+	match json.parse(handler_payload) {
+		core.Result::Ok(node) => {
+			val deep = node.clone_deep();
+			match node.into_object() {
+				Some(handler_obj) => {
+					// Some path: deep is NOT consumed.
+					// Scope-exit must destroy deep here.
+					obj.set("handler", json.JsonNode::String("merged"));
+				},
+				None => {
+					// None path: deep IS consumed (moved).
+					obj.set("result", move deep);
+				}
+			}
+		},
+		core.Result::Err(_) => {}
+	}
+	return json.encode(&obj.to_node());
+}
+
+pub fn main() nothrow -> Int {
+	// handler_payload is a JSON object → into_object returns Some →
+	// deep is unconsumed → must be destroyed on scope exit.
+	val payload = "{\"snapshot\":\"2026-04-04\"}";
+	val r1 = build_response(&payload);
+	val r2 = build_response(&payload);
+	val r3 = build_response(&payload);
+	return r1.byte_length() + r2.byte_length() + r3.byte_length();
+}

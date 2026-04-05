@@ -1,0 +1,33 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn build() nothrow -> String {
+	val text = "{\"k\":\"v\"}";
+	match json.parse(&text) {
+		core.Result::Ok(node) => {
+			// deep is owned. Moved on None, retained on Some.
+			// Scope-exit must destroy deep on the Some path.
+			val deep = node.clone_deep();
+			match node.into_object() {
+				Some(_obj) => {
+					// deep NOT consumed — must be destroyed here.
+				},
+				None => {
+					// deep consumed via move.
+					val _ = move deep;
+				}
+			}
+		},
+		core.Result::Err(_) => {}
+	}
+	return "done";
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = build();
+	val r2 = build();
+	val r3 = build();
+	return r1.byte_length() + r2.byte_length() + r3.byte_length();
+}

@@ -1239,6 +1239,23 @@ def insert_string_arc(
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
 			initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
+			# Widen for variant locals that are conditionally initialized:
+			# assigned on some predecessor paths but not all.  Variant
+			# destroy on zeroinitializer (tag 0) is always a no-op, so
+			# the PHI-provided zero for uninitialized paths is safe.
+			# Only include locals not moved on ANY predecessor to avoid
+			# double-free.
+			_ret_preds = preds.get(block.name, set())
+			if _ret_preds:
+				_any_pred_moved: Set[str] = set()
+				for _rp in _ret_preds:
+					_any_pred_moved |= moved_out.get(_rp, set())
+				for _rp in _ret_preds:
+					_pred_assigned = assigned_out.get(_rp, set()) | store_defs.get(_rp, set())
+					for _vl in _pred_assigned & destructible_locals - initialized_at_return - _any_pred_moved - skip_cleanup_locals:
+						_vty = local_types.get(_vl)
+						if _vty is not None and type_table.get(_vty).kind is TypeKind.VARIANT:
+							initialized_at_return.add(_vl)
 			_drop_all_destructibles(new_instrs, skip_locals=skip_cleanup_locals, only_locals=initialized_at_return)
 			new_term = M.Return(value=val)
 			if hasattr(term, "span"):

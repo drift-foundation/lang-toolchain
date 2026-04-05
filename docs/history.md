@@ -1,5 +1,33 @@
 # Drift development history
 
+## 2026-04-04
+- **Fix LANGUAGE_BUG: missing scope-exit destroy for conditionally initialized variant locals (0.27.145, ABI 7)**:
+  Fixed a compiler scope-exit destructor bug exposed by the bookkeeper leak
+  retest. A variant local assigned inside a match arm, moved on one sub-arm,
+  and retained on another could reach function return without any destroy
+  being emitted on the non-move path.
+  - Root cause:
+    - `string_arc.py` computed `initialized_at_return` from `assigned_in`
+      (intersection of predecessor assignments), which excluded locals
+      assigned on only some predecessor paths
+    - for variant locals, the CFG join already supplied zeroinitializer on
+      uninitialized paths, and variant destroy on tag `0` is a no-op, so the
+      destroy was safe but never inserted
+  - Fix:
+    - widen `initialized_at_return` for destructible **variant** locals that
+      are assigned on some predecessor paths but not all, excluding locals
+      moved on any predecessor
+    - this restores scope-exit destroy emission on the retained path without
+      changing ABI
+  - Scope:
+    - this fix is intentionally variant-only; non-variant conditionally
+      initialized destructible locals remain a separate open class
+  - Regressions:
+    - primary leak-sensitive regression:
+      `lang/tests/memcheck/test_scope_drop_conditional_move.py`
+    - secondary functional regression:
+      `lang/tests/codegen/e2e/scope_drop_conditional_move/`
+
 ## 2026-04-03
 - **Complete the Option B package pivot: packages are now HIR-only distribution containers with one pipeline after ingress (version pending, ABI 7)**:
   Package consumption no longer reconstructs semantics from producer MIR.

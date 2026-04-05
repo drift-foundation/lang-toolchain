@@ -1,0 +1,17 @@
+module main;
+
+import std.core as core;
+import std.format as fmt;
+
+fn consume(s: String) nothrow -> Int {
+	return s.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	// Pattern: format_int result concatenated and immediately passed
+	// to a function call — the concat temp is not assigned to a val.
+	val total = consume("count: " + fmt.format_int(1))
+		+ consume("count: " + fmt.format_int(2))
+		+ consume("count: " + fmt.format_int(3));
+	return total;
+}
