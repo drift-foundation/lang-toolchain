@@ -99,11 +99,25 @@ when `to_debug(&DiagnosticValue)` returns `*self`, preventing the
 two-owner aliasing that caused the double-free.
 
 **Fixes:** double-free / UAF crash (the P0).
-**Does NOT fix:** the 20-byte/request string leak from
-`drift_dv_string` retaining without a matching caller release.
-That leak requires MIR-level ownership model work — string_arc
-cannot safely emit the release because it cannot distinguish
-owned temps from alias-derived temps at the codegen layer.
+
+## Fix (0.27.149) — ConstructDV visibility in string_arc
+
+`string_arc.py _iter_used_values`: added `ConstructDV` so its args
+participate in string use-count tracking.  string_arc's existing
+last-use release machinery (`_note_use` at use_count==0 for values
+in `owned_values`) now emits `StringRelease` for owned creator temps
+consumed by `ConstructDV(String)`.  Borrowed locals (LoadLocal,
+LoadRef) are NOT in `owned_values` and are unaffected — their
+scope-exit release remains the only cleanup path.
+
+One line added to `_iter_used_values`.  No new MIR ops, no runtime
+changes, no ABI bump, no codegen heuristics.
+
+**Fixes:** the 20-byte/request string leak from `drift_dv_string`
+retaining without a matching caller release.
+
+Both the P0 crash (deref-clone) and the leak (string_arc visibility)
+are now resolved.
 
 ## Reproducer
 

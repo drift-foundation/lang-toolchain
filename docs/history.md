@@ -1,45 +1,44 @@
 # Drift development history
 
-## 2026-04-04
-- **Fix LANGUAGE_BUG: `DiagnosticValue::String` ownership contract for codegen-owned strings (0.27.147, ABI 8)**:
-  Fixed the follow-up to the `0.27.146` bookkeeper leak patch. Releasing the
-  caller string after `drift_dv_string(...)` fixed the leak but introduced a
-  startup-crash use-after-free in the real logger/map-literal path.
+## 2026-04-05
+- **Fix LANGUAGE_BUG: `ConstructDV(String)` now participates in string ARC last-use tracking (0.27.149, ABI 7)**:
+  Fixed the remaining 20-byte/request leak without reintroducing the
+  `0.27.146` / `0.27.147` double-free regressions. The real missing piece was
+  that `ConstructDV(String)` was invisible to `string_arc`, so owned string
+  temps consumed by `DiagnosticValue::String(...)` never had their last use
+  counted and were never released.
   - Root cause:
-    - `drift_dv_string()` is the borrowed/retaining helper used by runtime
-      code that does not transfer ownership
-    - codegen-owned `DiagnosticValue::String(owned_expr)` values need a move
-      contract instead: the diagnostic value should take over the caller's
-      existing reference without retaining
-    - `0.27.146` mixed those models by retaining in the runtime helper and
-      then releasing in codegen, which overcorrected and double-freed in the
-      logger/map-literal cleanup path
+    - `string_arc` tracks owned string temps via `owned_values` and releases
+      them on last use
+    - `ConstructDV(String)` did not appear in `_iter_used_values`, so the
+      consumed string arg never incremented use counts and never reached the
+      normal last-use release path
+    - earlier targeted fixes in codegen/runtime (`0.27.146` / `0.27.147`)
+      patched the wrong layer and traded leak for double-free/UAF
   - Fix:
-    - added `drift_dv_string_move()` to the runtime for ownership transfer
-    - `ConstructDV` MIR now carries `owns_string_arg` so lowering can
-      distinguish:
-      - owned temporary string inputs -> `drift_dv_string_move(...)`
-      - borrowed/live-after-construction string inputs -> `drift_dv_string(...)`
-    - codegen follows that MIR ownership mode instead of applying one
-      unconditional runtime helper to every `DiagnosticValue::String`
-      - `drift_dv_string()` remains for borrowed/internal runtime use
-    - this changes the compiler/runtime helper surface and therefore bumps
-      ABI to `8`
+    - added `ConstructDV` args to `string_arc` use tracking
+    - existing `owned_values` + `_note_use(..., consume=False)` last-use
+      logic now releases owned string creator temps at the right point
+    - borrowed/local/ref-derived string values remain untouched and continue
+      to be released by their original owner paths
+    - no new runtime helper and no ABI change
   - Regressions:
+    - stage2 ARC regression:
+      `lang/tests/stage2/test_dv_string_arc_release.py`
+    - stage2 deref-clone regression:
+      `lang/tests/stage2/test_dv_deref_clone.py`
     - lowering regression:
-      `lang/tests/stage2/test_construct_dv_ownership.py`
-    - codegen regression:
-      `lang/codegen/llvm/tests/test_llvm_codegen_diagnostic_value.py`
-    - primary leak-sensitive regression:
-      `lang/tests/memcheck/test_dv_string_release.py`
-    - crash-sensitive logger/map-literal regression:
-      `lang/tests/memcheck/test_logger_dv_map_literal.py`
+      `lang/tests/memcheck/test_dv_string_owned_temp_leak.py`
+    - borrowed exception regression:
+      `lang/tests/memcheck/test_dv_string_borrowed_exception.py`
+    - logger/map-literal crash+leak regression:
+      `lang/tests/memcheck/test_dv_deref_ownership.py`
     - functional regressions:
-      `lang/tests/codegen/e2e/scope_drop_logger_dv_map_literal/`
-      `lang/tests/codegen/e2e/scope_drop_dv_string_release/`
-  - Limitation:
-    - the current `owns_string_arg` lowering rule is a targeted heuristic over
-      HIR expression shape, not yet a fully general semantic owned-value model
+      `lang/tests/codegen/e2e/dv_string_local_binding/`
+      `lang/tests/codegen/e2e/dv_string_phi_join/`
+      `lang/tests/codegen/e2e/exception_heap_string_uaf/`
+      `lang/tests/codegen/e2e/throw_only_non_returning/`
+      `lang/tests/codegen/e2e/scope_drop_dv_deref_double_free/`
 
 - **Fix LANGUAGE_BUG: missing scope-exit destroy for conditionally initialized variant locals (0.27.145, ABI 7)**:
   Fixed a compiler scope-exit destructor bug exposed by the bookkeeper leak

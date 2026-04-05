@@ -415,6 +415,8 @@ def insert_string_arc(
 			yield instr.error
 			yield instr.frame
 			yield instr.key
+		elif isinstance(instr, M.ConstructDV):
+			yield from instr.args
 		elif isinstance(instr, M.DVAsInt):
 			yield instr.dv
 		elif isinstance(instr, M.DVAsBool):

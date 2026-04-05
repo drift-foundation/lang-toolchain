@@ -1,16 +1,15 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Regression: deref of &DiagnosticValue into owned context must clone,
-not alias.
+"""Regression: DiagnosticValue::String(owned_temp) must not leak the
+original string reference.
 
-The Debuggable::to_debug impl for DiagnosticValue does `return *self`,
-which lowers to LoadRef — a raw bitwise copy.  Without a CopyValue
-(drift_dv_clone), the loaded DV and the original share the same inner
-string pointer with only one refcount.  When both are destroyed, the
-string is freed twice.
+drift_dv_string retains the string, so the caller's original reference
+is redundant.  For owned temporaries (e.g. fmt.format_int result), the
+compiler must ensure the original is released.  Without the MIR
+ownership split, string_arc cannot distinguish owned temps from borrowed
+locals and the release is never emitted → 20 bytes/call leak.
 
-This test pins:
-1. No crash (double-free / UAF from the aliased deref)
-2. No leak (the cloned DV must still be properly released)
+This test asserts zero definitely-lost bytes.  It will FAIL until the
+ConstructDV(String) MIR ownership split is implemented.
 """
 from __future__ import annotations
 
@@ -27,29 +26,23 @@ module main;
 
 import std.core as core;
 import std.format as fmt;
-import std.log as log;
+
+fn do_work(code: Int) nothrow -> Int {
+\tval dv = DiagnosticValue::String(fmt.format_int(code));
+\treturn code;
+}
 
 pub fn main() nothrow -> Int {
-\tvar cfgb = log.config_builder();
-\tcfgb.sink(log.stderr_sink());
-\tcfgb.min_level(log.Level::Error());
-\tval logger = log.create_logger("test", cfgb.build());
-\tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8080))
-\t});
-\tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8081))
-\t});
-\tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8082))
-\t});
-\treturn 0;
+\tval r1 = do_work(200);
+\tval r2 = do_work(200);
+\tval r3 = do_work(200);
+\treturn r1 + r2 + r3 - 600;
 }
 """
 
 
-def test_dv_deref_no_crash_no_leak(tmp_path: Path) -> None:
-	"""Deref of &DiagnosticValue must clone, not alias — no crash, no leak."""
+def test_dv_string_owned_temp_no_leak(tmp_path: Path) -> None:
+	"""DiagnosticValue::String(fmt.format_int(...)) must not leak."""
 	assert shutil.which("valgrind") is not None, "valgrind required"
 
 	src = tmp_path / "main.drift"
@@ -75,18 +68,12 @@ def test_dv_deref_no_crash_no_leak(tmp_path: Path) -> None:
 		capture_output=True, text=True, timeout=120,
 	)
 	vg_output = vg_log.read_text() if vg_log.exists() else ""
-
-	invalid_reads = len(re.findall(r"Invalid read", vg_output))
-	assert invalid_reads == 0, (
-		f"Valgrind detected {invalid_reads} invalid reads — "
-		f"deref of &DiagnosticValue aliased without clone.\n"
-		f"valgrind log:\n{vg_output[-500:]}"
-	)
-
 	lost_match = re.search(r"definitely lost: (\d[\d,]*) bytes", vg_output)
 	definitely_lost = int(lost_match.group(1).replace(",", "")) if lost_match else 0
+
 	assert vg.returncode != 97, (
-		f"Valgrind detected errors.\n"
+		f"Valgrind detected leaks — owned string temp not released "
+		f"after ConstructDV(String).\n"
 		f"definitely lost: {definitely_lost} bytes\n"
 		f"valgrind log:\n{vg_output[-500:]}"
 	)
