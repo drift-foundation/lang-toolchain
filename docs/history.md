@@ -16,12 +16,20 @@
       logger/map-literal cleanup path
   - Fix:
     - added `drift_dv_string_move()` to the runtime for ownership transfer
-    - codegen `ConstructDV(String)` now calls `drift_dv_string_move(...)`
-      instead of `drift_dv_string(...)`
-    - `drift_dv_string()` remains for borrowed/internal runtime use
+    - `ConstructDV` MIR now carries `owns_string_arg` so lowering can
+      distinguish:
+      - owned temporary string inputs -> `drift_dv_string_move(...)`
+      - borrowed/live-after-construction string inputs -> `drift_dv_string(...)`
+    - codegen follows that MIR ownership mode instead of applying one
+      unconditional runtime helper to every `DiagnosticValue::String`
+      - `drift_dv_string()` remains for borrowed/internal runtime use
     - this changes the compiler/runtime helper surface and therefore bumps
       ABI to `8`
   - Regressions:
+    - lowering regression:
+      `lang/tests/stage2/test_construct_dv_ownership.py`
+    - codegen regression:
+      `lang/codegen/llvm/tests/test_llvm_codegen_diagnostic_value.py`
     - primary leak-sensitive regression:
       `lang/tests/memcheck/test_dv_string_release.py`
     - crash-sensitive logger/map-literal regression:
@@ -29,6 +37,9 @@
     - functional regressions:
       `lang/tests/codegen/e2e/scope_drop_logger_dv_map_literal/`
       `lang/tests/codegen/e2e/scope_drop_dv_string_release/`
+  - Limitation:
+    - the current `owns_string_arg` lowering rule is a targeted heuristic over
+      HIR expression shape, not yet a fully general semantic owned-value model
 
 - **Fix LANGUAGE_BUG: missing scope-exit destroy for conditionally initialized variant locals (0.27.145, ABI 7)**:
   Fixed a compiler scope-exit destructor bug exposed by the bookkeeper leak

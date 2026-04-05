@@ -226,15 +226,13 @@ def test_error_attr_round_trip_additional_key():
 	assert "Variant_" in ir
 
 
-def test_construct_dv_string_emits_release_and_declaration():
-	"""ConstructDV(String, [string_arg]) must emit drift_string_release for
-	the caller's string reference AND declare drift_string_release in the
-	module.
+def test_construct_dv_string_owned_emits_move_and_declaration():
+	"""ConstructDV(String, owns_string_arg=True) must emit
+	drift_dv_string_move and declare it in the module.
 
-	Regression: drift_dv_string() retains the string internally, so the
-	codegen must release the caller's original reference.  Without this,
-	modules that only hit the ConstructDV(String) path and have no other
-	string_release usage will fail to compile (undefined @drift_string_release).
+	Regression: owned string temps passed to DiagnosticValue::String
+	must use drift_dv_string_move (no retain, takes ownership).
+	Without the declaration, clang fails with undefined symbol.
 	"""
 	table = TypeTable()
 	int_ty = table.ensure_int()
@@ -250,7 +248,7 @@ def test_construct_dv_string_emits_release_and_declaration():
 		name="entry",
 		instructions=[
 			ConstString(dest="s", value="hello"),
-			ConstructDV(dest="dv", dv_type_name="String", args=["s"]),
+			ConstructDV(dest="dv", dv_type_name="String", args=["s"], owns_string_arg=True),
 			ConstInt(dest="zero", value=0),
 		],
 		terminator=Return(value="zero"),

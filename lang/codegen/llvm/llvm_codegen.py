@@ -3550,10 +3550,12 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i8 {raw})")
 				return
 			if arg_ty == DRIFT_STRING_TYPE:
-				# Use the move variant: the codegen owns the string and
-				# transfers ownership into the DV.  drift_dv_string_move
-				# does NOT retain — drift_dv_release will release it.
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE} {arg_val})")
+				if getattr(instr, "owns_string_arg", False):
+					# Owned temporary: transfer ownership without retaining.
+					self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE} {arg_val})")
+				else:
+					# Borrowed or live-after-construction: retain a copy.
+					self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
 				return
 			if instr.dv_type_name == "Object":
 				if arg_ty != "%DriftArrayHeader":

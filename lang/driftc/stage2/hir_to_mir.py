@@ -4726,7 +4726,22 @@ class HIRToMIR:
 				self._local_types[conv] = self._int_type
 				arg_vals = [conv]
 		dest = self.b.new_temp()
-		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals))
+		# For DiagnosticValue::String, determine ownership: if the inner
+		# expression produces a new owned value (call, literal, binop),
+		# use drift_dv_string_move (no retain).  If it references an
+		# existing binding (var, param, field), use drift_dv_string
+		# (retain) because the source remains live.
+		#
+		# LIMITATION: syntax-shaped heuristic over HIR node types, not
+		# a semantic ownership fact.  May be wrong for aliased temps,
+		# borrowed expressions in other HIR forms, or calls that don't
+		# yield fresh owned strings.  Proper fix: semantic
+		# "yields_fresh_owned" bit from type checker or borrow analysis.
+		owns = False
+		if expr.dv_type_name == "String" and len(expr.args) == 1:
+			inner = expr.args[0]
+			owns = not isinstance(inner, (H.HVar, H.HField, H.HIndex))
+		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals, owns_string_arg=owns))
 		return dest
 
 	def _visit_expr_HExceptionInit(self, expr: H.HExceptionInit) -> M.ValueId:

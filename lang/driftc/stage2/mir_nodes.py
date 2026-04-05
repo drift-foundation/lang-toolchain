@@ -888,10 +888,18 @@ class CallIface(MInstr):
 
 @dataclass
 class ConstructDV(MInstr):
-	"""dest = DiagnosticValue constructor with typed args."""
+	"""dest = DiagnosticValue constructor with typed args.
+
+	owns_string_arg: when True and dv_type_name == "String", the string
+	arg is an owned temporary that is consumed by the DV construction.
+	Codegen should use drift_dv_string_move (no retain).  When False,
+	the string may be borrowed or remain live after construction;
+	codegen should use drift_dv_string (retain).
+	"""
 	dest: ValueId
 	dv_type_name: str
 	args: List[ValueId]
+	owns_string_arg: bool = False
 
 
 @dataclass
