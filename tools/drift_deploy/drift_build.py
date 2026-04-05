@@ -40,7 +40,12 @@ class BuildError(Exception):
 # Keys to scrub from child process environments.  PYTHONPATH leaks the
 # build tool's import roots into PEX-based driftc, causing it to pick
 # up unbundled lang/ modules and crash with ModuleNotFoundError.
-_SCRUB_ENV_KEYS = frozenset({"PYTHONPATH", "PYTHONHOME"})
+_SCRUB_ENV_KEYS = frozenset({
+	"PYTHONPATH", "PYTHONHOME",
+	# Runtime instrumentation flags — meaningless for compilation/package
+	# emission and cause bin/driftc wrapper to reject the invocation.
+	"DRIFT_MEMCHECK", "DRIFT_MASSIF",
+})
 
 
 def _clean_env() -> dict[str, str]:
