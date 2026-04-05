@@ -1,0 +1,16 @@
+module main;
+
+import std.core as core;
+import std.format as fmt;
+
+fn do_work(code: Int) nothrow -> Int {
+	val dv = DiagnosticValue::String(fmt.format_int(code));
+	return code;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = do_work(200);
+	val r2 = do_work(200);
+	val r3 = do_work(200);
+	return r1 + r2 + r3 - 600;
+}

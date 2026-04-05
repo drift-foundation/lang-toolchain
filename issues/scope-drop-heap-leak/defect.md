@@ -60,13 +60,20 @@ tag-dispatch destroy where tag 0 is a no-op.  Non-variant conditionally-
 initialized destructible locals (e.g. structs with destructors) are NOT
 covered by this fix and remain an open class.
 
-## Site 2 — format_int
+## Root cause (Site 2 — format_int / DiagnosticValue::String)
 
-The `format_int` string leak from the original app report was not
-reproduced in isolation.  It may be a downstream consequence of the
-same scope-exit miss (the string is inside a `DiagnosticValue::String`
-variant), or a separate issue.  To be re-tested on the app after the
-0.27.145 fix.
+**Separate bug from Site 1.**  The `drift_dv_string()` runtime function
+retains the string argument internally, but the LLVM codegen at
+`llvm_codegen.py:3552` never released the caller's original reference
+after the call.  Refcount: format_int returns string (rc=1), dv_string
+retains (rc=2), DV destroy releases (rc=1), original never released →
+leak.
+
+## Fix (0.27.146)
+
+`llvm_codegen.py:3552` — emit `drift_string_release` for the string
+argument after calling `drift_dv_string`.  The DV now holds the only
+reference; the caller's original is released.
 
 ## Reproducer
 

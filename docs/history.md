@@ -1,6 +1,27 @@
 # Drift development history
 
 ## 2026-04-04
+- **Fix LANGUAGE_BUG: leaked caller string ref when constructing `DiagnosticValue::String` (0.27.146, ABI 7)**:
+  Fixed a codegen ownership bug exposed by the bookkeeper retest after the
+  `0.27.145` scope-exit fix. When lowering `DiagnosticValue::String(x)`,
+  LLVM codegen called `drift_dv_string(x)` but did not release the caller's
+  original string reference afterward.
+  - Root cause:
+    - `drift_dv_string()` retains the incoming `DriftString` so the
+      diagnostic value owns an independent reference
+    - codegen still kept the caller's original reference alive, leaving a
+      persistent `+1` refcount leak on heap-backed strings such as
+      `fmt.format_int(...)`
+  - Fix:
+    - after `drift_dv_string(...)`, codegen now emits
+      `drift_string_release(...)` for the caller-owned input string
+    - this restores balanced ownership transfer without changing ABI
+  - Regressions:
+    - primary leak-sensitive regression:
+      `lang/tests/memcheck/test_dv_string_release.py`
+    - secondary functional regression:
+      `lang/tests/codegen/e2e/scope_drop_dv_string_release/`
+
 - **Fix LANGUAGE_BUG: missing scope-exit destroy for conditionally initialized variant locals (0.27.145, ABI 7)**:
   Fixed a compiler scope-exit destructor bug exposed by the bookkeeper leak
   retest. A variant local assigned inside a match arm, moved on one sub-arm,

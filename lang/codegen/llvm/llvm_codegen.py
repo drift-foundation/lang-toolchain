@@ -3550,6 +3550,10 @@ class _FuncBuilder:
 				return
 			if arg_ty == DRIFT_STRING_TYPE:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
+				# drift_dv_string retains the string internally, so the
+				# caller must release its original reference to avoid a
+				# +1 refcount leak.
+				self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {arg_val})")
 				return
 			if instr.dv_type_name == "Object":
 				if arg_ty != "%DriftArrayHeader":
