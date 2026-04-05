@@ -3554,6 +3554,7 @@ class _FuncBuilder:
 				# caller must release its original reference to avoid a
 				# +1 refcount leak.
 				self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {arg_val})")
+				self.module.needs_string_release = True
 				return
 			if instr.dv_type_name == "Object":
 				if arg_ty != "%DriftArrayHeader":

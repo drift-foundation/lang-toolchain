@@ -224,3 +224,50 @@ def test_error_attr_round_trip_additional_key():
 	assert "call void @__exc_attrs_get_dv" in ir
 	assert "call i1 @drift_dv_as_int" in ir
 	assert "Variant_" in ir
+
+
+def test_construct_dv_string_emits_release_and_declaration():
+	"""ConstructDV(String, [string_arg]) must emit drift_string_release for
+	the caller's string reference AND declare drift_string_release in the
+	module.
+
+	Regression: drift_dv_string() retains the string internally, so the
+	codegen must release the caller's original reference.  Without this,
+	modules that only hit the ConstructDV(String) path and have no other
+	string_release usage will fail to compile (undefined @drift_string_release).
+	"""
+	table = TypeTable()
+	int_ty = table.ensure_int()
+	str_ty = table.ensure_string()
+	dv_ty = table.ensure_diagnostic_value()
+	sig = FnSignature(name="dv_str", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)
+	fn_info = FnInfo(
+		fn_id=FunctionId(module="main", name="dv_str", ordinal=0),
+		name="dv_str", declared_can_throw=False, return_type_id=int_ty, signature=sig,
+	)
+
+	entry = BasicBlock(
+		name="entry",
+		instructions=[
+			ConstString(dest="s", value="hello"),
+			ConstructDV(dest="dv", dv_type_name="String", args=["s"]),
+			ConstInt(dest="zero", value=0),
+		],
+		terminator=Return(value="zero"),
+	)
+	mir = MirFunc(
+		fn_id=FunctionId(module="main", name="dv_str", ordinal=0),
+		name="dv_str", params=[], locals=[],
+		blocks={"entry": entry}, entry="entry",
+	)
+	ssa = MirToSSA().run(mir)
+
+	mod = LlvmModuleBuilder(word_bits=host_word_bits())
+	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=host_word_bits()))
+	ir = mod.render()
+
+	# The call to drift_dv_string must be followed by drift_string_release.
+	assert "call %DriftDiagnosticValue @drift_dv_string(" in ir
+	assert "call void @drift_string_release(" in ir
+	# The module must declare drift_string_release so clang can link it.
+	assert "declare void @drift_string_release(" in ir
