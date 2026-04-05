@@ -1492,6 +1492,7 @@ class LlvmModuleBuilder:
 					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i8)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_float(double)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE})",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_object_from_entries(ptr, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_clone(ptr)",
 					f"declare void @drift_dv_release(ptr)",
@@ -3549,12 +3550,10 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i8 {raw})")
 				return
 			if arg_ty == DRIFT_STRING_TYPE:
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
-				# drift_dv_string retains the string internally, so the
-				# caller must release its original reference to avoid a
-				# +1 refcount leak.
-				self.lines.append(f"  call void @drift_string_release({DRIFT_STRING_TYPE} {arg_val})")
-				self.module.needs_string_release = True
+				# Use the move variant: the codegen owns the string and
+				# transfers ownership into the DV.  drift_dv_string_move
+				# does NOT retain — drift_dv_release will release it.
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE} {arg_val})")
 				return
 			if instr.dv_type_name == "Object":
 				if arg_ty != "%DriftArrayHeader":

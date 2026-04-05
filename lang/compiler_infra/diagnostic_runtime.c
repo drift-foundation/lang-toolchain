@@ -55,6 +55,16 @@ struct DriftDiagnosticValue drift_dv_string(struct DriftString value) {
     return dv;
 }
 
+// Move variant: takes ownership of the string without retaining.
+// Used by codegen for DiagnosticValue::String(owned_expr) where the
+// caller transfers ownership.  drift_dv_release will release it.
+struct DriftDiagnosticValue drift_dv_string_move(struct DriftString value) {
+    struct DriftDiagnosticValue dv = make_simple(DV_STRING);
+    dv.data.string_value.len = value.len;
+    dv.data.string_value.data = value.data;
+    return dv;
+}
+
 struct DriftDiagnosticValue drift_dv_array(struct DriftDiagnosticValue* items, size_t len) {
     struct DriftDiagnosticValue dv = make_simple(DV_ARRAY);
     dv.data.array.items = items;

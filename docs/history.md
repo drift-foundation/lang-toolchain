@@ -1,25 +1,33 @@
 # Drift development history
 
 ## 2026-04-04
-- **Fix LANGUAGE_BUG: leaked caller string ref when constructing `DiagnosticValue::String` (0.27.146, ABI 7)**:
-  Fixed a codegen ownership bug exposed by the bookkeeper retest after the
-  `0.27.145` scope-exit fix. When lowering `DiagnosticValue::String(x)`,
-  LLVM codegen called `drift_dv_string(x)` but did not release the caller's
-  original string reference afterward.
+- **Fix LANGUAGE_BUG: `DiagnosticValue::String` ownership contract for codegen-owned strings (0.27.147, ABI 8)**:
+  Fixed the follow-up to the `0.27.146` bookkeeper leak patch. Releasing the
+  caller string after `drift_dv_string(...)` fixed the leak but introduced a
+  startup-crash use-after-free in the real logger/map-literal path.
   - Root cause:
-    - `drift_dv_string()` retains the incoming `DriftString` so the
-      diagnostic value owns an independent reference
-    - codegen still kept the caller's original reference alive, leaving a
-      persistent `+1` refcount leak on heap-backed strings such as
-      `fmt.format_int(...)`
+    - `drift_dv_string()` is the borrowed/retaining helper used by runtime
+      code that does not transfer ownership
+    - codegen-owned `DiagnosticValue::String(owned_expr)` values need a move
+      contract instead: the diagnostic value should take over the caller's
+      existing reference without retaining
+    - `0.27.146` mixed those models by retaining in the runtime helper and
+      then releasing in codegen, which overcorrected and double-freed in the
+      logger/map-literal cleanup path
   - Fix:
-    - after `drift_dv_string(...)`, codegen now emits
-      `drift_string_release(...)` for the caller-owned input string
-    - this restores balanced ownership transfer without changing ABI
+    - added `drift_dv_string_move()` to the runtime for ownership transfer
+    - codegen `ConstructDV(String)` now calls `drift_dv_string_move(...)`
+      instead of `drift_dv_string(...)`
+    - `drift_dv_string()` remains for borrowed/internal runtime use
+    - this changes the compiler/runtime helper surface and therefore bumps
+      ABI to `8`
   - Regressions:
     - primary leak-sensitive regression:
       `lang/tests/memcheck/test_dv_string_release.py`
-    - secondary functional regression:
+    - crash-sensitive logger/map-literal regression:
+      `lang/tests/memcheck/test_logger_dv_map_literal.py`
+    - functional regressions:
+      `lang/tests/codegen/e2e/scope_drop_logger_dv_map_literal/`
       `lang/tests/codegen/e2e/scope_drop_dv_string_release/`
 
 - **Fix LANGUAGE_BUG: missing scope-exit destroy for conditionally initialized variant locals (0.27.145, ABI 7)**:

@@ -266,8 +266,8 @@ def test_construct_dv_string_emits_release_and_declaration():
 	mod.emit_func(lower_ssa_func_to_llvm(mir, ssa, fn_info, type_table=table, word_bits=host_word_bits()))
 	ir = mod.render()
 
-	# The call to drift_dv_string must be followed by drift_string_release.
-	assert "call %DriftDiagnosticValue @drift_dv_string(" in ir
-	assert "call void @drift_string_release(" in ir
-	# The module must declare drift_string_release so clang can link it.
-	assert "declare void @drift_string_release(" in ir
+	# ConstructDV(String) must use drift_dv_string_move (ownership transfer,
+	# no retain) rather than drift_dv_string (borrow + retain).
+	assert "call %DriftDiagnosticValue @drift_dv_string_move(" in ir
+	# The module must declare drift_dv_string_move so clang can link it.
+	assert "declare %DriftDiagnosticValue @drift_dv_string_move(" in ir
