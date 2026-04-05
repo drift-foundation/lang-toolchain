@@ -10,17 +10,17 @@ pub fn main() nothrow -> Int {
 	cfgb.min_level(log.Level::Error());
 	val logger = log.create_logger("test", cfgb.build());
 
-	// This is the exact pattern that caused a use-after-free in 0.27.146:
-	// DiagnosticValue::String wrapping a heap string in a map literal
-	// passed to logger.info().  The HashMap cleanup tried to release
-	// the string after drift_dv_release_impl already freed it.
-	val _ = logger.info("event", {
+	// This path triggers the double-free: DiagnosticValue::String wrapping
+	// a heap string in a map literal passed to logger.info().
+	// _attrs_json calls Debuggable::to_debug(&dv) which does *self —
+	// a raw LoadRef without clone.  Two owners, one string, double-free.
+	val _ = logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8080))
 	});
-	val _ = logger.info("event", {
+	val _ = logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8081))
 	});
-	val _ = logger.info("event", {
+	val _ = logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8082))
 	});
 	return 0;

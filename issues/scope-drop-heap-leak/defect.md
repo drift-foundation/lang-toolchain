@@ -60,20 +60,50 @@ tag-dispatch destroy where tag 0 is a no-op.  Non-variant conditionally-
 initialized destructible locals (e.g. structs with destructors) are NOT
 covered by this fix and remain an open class.
 
-## Root cause (Site 2 — format_int / DiagnosticValue::String)
+## Site 2 — format_int / DiagnosticValue::String
 
-**Separate bug from Site 1.**  The `drift_dv_string()` runtime function
-retains the string argument internally, but the LLVM codegen at
-`llvm_codegen.py:3552` never released the caller's original reference
-after the call.  Refcount: format_int returns string (rc=1), dv_string
-retains (rc=2), DV destroy releases (rc=1), original never released →
-leak.
+**OPEN — ownership model bug, not a point fix.**
 
-## Fix (0.27.146)
+The string produced by `fmt.format_int()` leaks when wrapped in
+`DiagnosticValue::String(...)` and placed in a map literal passed to
+a logger call.  Three attempted fixes (0.27.146, 0.27.147, and a
+codegen-only release) all failed:
 
-`llvm_codegen.py:3552` — emit `drift_string_release` for the string
-argument after calling `drift_dv_string`.  The DV now holds the only
-reference; the caller's original is released.
+- 0.27.146: codegen release after drift_dv_string → double-free
+  (HashMap cleanup also releases the same string)
+- 0.27.147: drift_dv_string_move (no retain) for owned temps →
+  same double-free (exception fields misclassified as owned)
+- 0.27.147 + owns_string_arg: MIR-level ownership bit → still
+  double-free (the aliasing between DV and HashMap is not resolved
+  by choosing retain vs move at construction time)
+
+The root cause is a missing ownership contract across:
+- expression lowering (who owns the string temp?)
+- DV construction (retain vs move vs borrow?)
+- container insertion (does HashMap clone/retain the value?)
+- scope exit (what releases what?)
+- container cleanup (HashMap::clear vs DV::release ordering)
+
+This is classified as LANGUAGE_BUG in the ownership model, not a
+codegen or runtime point fix.  Reverted to 0.27.145 baseline.
+
+20 bytes/request.  Low severity individually but proves the
+ownership model gap.
+
+## Fix (0.27.148) — deref-clone only
+
+`hir_to_mir.py`: LoadRef from `*(&T)` now marks the result as
+ref-aliased for non-bitcopy types, and `_copy_if_ref_alias` handles
+`TypeKind.DIAGNOSTICVALUE`.  This emits `CopyValue`/`drift_dv_clone`
+when `to_debug(&DiagnosticValue)` returns `*self`, preventing the
+two-owner aliasing that caused the double-free.
+
+**Fixes:** double-free / UAF crash (the P0).
+**Does NOT fix:** the 20-byte/request string leak from
+`drift_dv_string` retaining without a matching caller release.
+That leak requires MIR-level ownership model work — string_arc
+cannot safely emit the release because it cannot distinguish
+owned temps from alias-derived temps at the codegen layer.
 
 ## Reproducer
 

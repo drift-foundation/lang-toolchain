@@ -1492,7 +1492,6 @@ class LlvmModuleBuilder:
 					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i8)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_float(double)",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE})",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_object_from_entries(ptr, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {DRIFT_DV_TYPE} @drift_dv_clone(ptr)",
 					f"declare void @drift_dv_release(ptr)",
@@ -3550,12 +3549,7 @@ class _FuncBuilder:
 				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i8 {raw})")
 				return
 			if arg_ty == DRIFT_STRING_TYPE:
-				if getattr(instr, "owns_string_arg", False):
-					# Owned temporary: transfer ownership without retaining.
-					self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string_move({DRIFT_STRING_TYPE} {arg_val})")
-				else:
-					# Borrowed or live-after-construction: retain a copy.
-					self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
+				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
 				return
 			if instr.dv_type_name == "Object":
 				if arg_ty != "%DriftArrayHeader":

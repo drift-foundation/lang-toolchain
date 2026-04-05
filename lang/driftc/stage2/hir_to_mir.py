@@ -507,7 +507,11 @@ class HIRToMIR:
 			self.b.emit(M.ArrayDup(dest=dup, elem_ty=td.param_types[0], array=value))
 			self._local_types[dup] = ty
 			return dup
-		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT) or (
+		# Any type that requires a runtime clone-on-read-from-ref must
+		# go through CopyValue here.  DIAGNOSTICVALUE is the same class
+		# as STRUCT/VARIANT: it contains refcounted fields (String) and
+		# a raw LoadRef from &T produces a bitwise alias, not an owned copy.
+		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.DIAGNOSTICVALUE) or (
 			td.kind is TypeKind.SCALAR and td.name == "String"
 		):
 			copy = self.b.new_temp()
@@ -1799,6 +1803,12 @@ class HIRToMIR:
 			inner_ty = td.param_types[0]
 			dest = self.b.new_temp()
 			self.b.emit(M.LoadRef(dest=dest, ptr=ptr_val, inner_ty=inner_ty))
+			# Mark as ref-aliased if the inner type requires runtime
+			# clone-on-read-from-ref (contains refcounted fields).
+			# _copy_if_ref_alias will emit CopyValue at ownership
+			# transfer boundaries (return, binding, call arg).
+			if not self._type_table.is_bitcopy(inner_ty):
+				self._ref_field_temps.add(dest)
 			return dest
 		operand = self.lower_expr(expr.expr)
 		dest = self.b.new_temp()
@@ -4726,22 +4736,7 @@ class HIRToMIR:
 				self._local_types[conv] = self._int_type
 				arg_vals = [conv]
 		dest = self.b.new_temp()
-		# For DiagnosticValue::String, determine ownership: if the inner
-		# expression produces a new owned value (call, literal, binop),
-		# use drift_dv_string_move (no retain).  If it references an
-		# existing binding (var, param, field), use drift_dv_string
-		# (retain) because the source remains live.
-		#
-		# LIMITATION: syntax-shaped heuristic over HIR node types, not
-		# a semantic ownership fact.  May be wrong for aliased temps,
-		# borrowed expressions in other HIR forms, or calls that don't
-		# yield fresh owned strings.  Proper fix: semantic
-		# "yields_fresh_owned" bit from type checker or borrow analysis.
-		owns = False
-		if expr.dv_type_name == "String" and len(expr.args) == 1:
-			inner = expr.args[0]
-			owns = not isinstance(inner, (H.HVar, H.HField, H.HIndex))
-		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals, owns_string_arg=owns))
+		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals))
 		return dest
 
 	def _visit_expr_HExceptionInit(self, expr: H.HExceptionInit) -> M.ValueId:
