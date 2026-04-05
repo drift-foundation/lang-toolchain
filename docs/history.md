@@ -1,6 +1,39 @@
 # Drift development history
 
 ## 2026-04-05
+- **Fix LANGUAGE_BUG: concrete empty map/array call-argument literals now infer from the callee signature (0.27.150, ABI 7)**:
+  Fixed the checker/call-resolution gap where empty literals used as function
+  arguments were typed before the callee signature was known, so `{:}` and `[]`
+  failed even when the parameter type was already concrete.
+  - Scope:
+    - `consume({:})` now works when the parameter type is a concrete map type
+      such as `HashMap<String, String>`
+    - `consume([])` now works when the parameter type is a concrete array type
+      such as `Array<Int>`
+    - generic empty-literal inference remains deferred
+  - Root cause:
+    - argument literals were first typed without an `expected_type`
+    - the second-pass `_propagate_arg_expected_types` path skipped map/array
+      literals entirely
+    - empty-array inference also had an earlier checker pre-pass diagnostic
+      that fired before deferred re-typing could help
+  - Fix:
+    - expanded expected-type propagation to include `HMapLiteral` and
+      `HArrayLiteral`
+    - deferred empty-literal inference diagnostics for call arguments until
+      after candidate parameter types are known
+    - performed local call-site substitution of deferred `Unknown` args with
+      candidate concrete parameter types during free-call matching
+    - unified the early empty-array pre-check so the later deferred path can
+      succeed
+    - no runtime change and no ABI change
+  - Known limitation:
+    - generic empty literals such as `logger.info("event", {:})` where the
+      parameter is effectively `HashMap<String, V>` still require follow-up
+      constraint-solver integration
+  - Regressions:
+    - `lang/tests/type_checker/test_empty_literal_call_inference.py`
+
 - **Fix LANGUAGE_BUG: `ConstructDV(String)` now participates in string ARC last-use tracking (0.27.149, ABI 7)**:
   Fixed the remaining 20-byte/request leak without reintroducing the
   `0.27.146` / `0.27.147` double-free regressions. The real missing piece was

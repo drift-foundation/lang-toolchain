@@ -7937,6 +7937,8 @@ class TypeChecker:
 						td = self.type_table.get(expected_type)
 						if td.kind is TypeKind.ARRAY:
 							return record_expr(expr, expected_type)
+					if getattr(expr, "defer_infer_diag", False):
+						return record_expr(expr, self._unknown)
 					diagnostics.append(
 						_tc_diag(
 							message="cannot infer element type for array literal; add a type annotation",
@@ -8015,6 +8017,8 @@ class TypeChecker:
 				if not value_types:
 					if _is_map_like_target_type(expected_type):
 						return record_expr(expr, expected_type if expected_type is not None else self._unknown)
+					if getattr(expr, "defer_infer_diag", False):
+						return record_expr(expr, self._unknown)
 					diagnostics.append(
 						_tc_diag(
 							message="cannot infer target type for empty map literal; add a type annotation",

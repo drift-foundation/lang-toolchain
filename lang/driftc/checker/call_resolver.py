@@ -1437,7 +1437,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 		for idx, arg in enumerate(expr.args):
 			if idx >= len(expected_args):
 				break
-			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
+			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
 				continue
 			exp_ty = expected_args[idx]
 			arg.defer_infer_diag = False
@@ -1506,7 +1506,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	if recv_ty is None:
 		recv_ty = type_expr(expr.receiver, used_as_value=False)
 	for arg in expr.args:
-		if isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
+		if isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
 			arg.defer_infer_diag = True
 	arg_types = getattr(expr, "arg_type_ids", None)
 	cur_sig = ctx.signatures_by_id.get(ctx.current_fn_id) if ctx.signatures_by_id is not None else None
@@ -3627,7 +3627,7 @@ def resolve_call_expr(
 		for idx, arg in enumerate(expr.args):
 			if idx >= len(expected_args):
 				break
-			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
+			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
 				continue
 			exp_ty = expected_args[idx]
 			if ctx.type_table.has_typevar(exp_ty):
@@ -4534,6 +4534,8 @@ def resolve_call_expr(
 					arg.defer_infer_diag = True
 				else:
 					arg.defer_infer_diag = False
+			elif isinstance(arg, (H.HMapLiteral, H.HArrayLiteral)):
+				arg.defer_infer_diag = True
 		kw_value_types = [type_expr(kw.value, used_as_value=False) for kw in kw_pairs]
 		call_type_args = getattr(expr, "type_args", None) or []
 		call_type_args_span = None
@@ -4973,7 +4975,12 @@ def resolve_call_expr(
 					result_type = decl.signature.result_type
 					if len(params) != len(arg_types):
 						continue
-					if _args_match_params(list(params), arg_types):
+					# Substitute deferred-literal Unknown args with param types for matching.
+					_match_args = list(arg_types)
+					for _di, _da in enumerate(arg_exprs):
+						if _di < len(_match_args) and _match_args[_di] == ctx.unknown_ty and getattr(_da, "defer_infer_diag", False) and _di < len(params):
+							_match_args[_di] = params[_di]
+					if _args_match_params(list(params), _match_args):
 						viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), None))
 					elif _can_borrow_coerce(list(params), arg_types):
 						viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), None))
@@ -5098,7 +5105,11 @@ def resolve_call_expr(
 				inst_subst = inst_res.subst
 				if len(params) != len(arg_types):
 					continue
-				if _args_match_params(list(params), arg_types):
+				_match_args2 = list(arg_types)
+				for _di2, _da2 in enumerate(expr.args):
+					if _di2 < len(_match_args2) and _match_args2[_di2] == ctx.unknown_ty and getattr(_da2, "defer_infer_diag", False) and _di2 < len(params):
+						_match_args2[_di2] = params[_di2]
+				if _args_match_params(list(params), _match_args2):
 					viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), inst_subst))
 				elif _can_borrow_coerce(list(params), arg_types):
 					viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), inst_subst))
@@ -5307,6 +5318,9 @@ def resolve_call_expr(
 					arg.defer_infer_diag = True
 				else:
 					arg.defer_infer_diag = False
+				arg_types.append(type_expr(arg, used_as_value=False))
+			elif isinstance(arg, (H.HMapLiteral, H.HArrayLiteral)):
+				arg.defer_infer_diag = True
 				arg_types.append(type_expr(arg, used_as_value=False))
 			else:
 				arg_types.append(type_expr(arg, used_as_value=False))

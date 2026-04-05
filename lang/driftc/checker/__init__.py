@@ -1310,14 +1310,6 @@ class Checker:
 				)
 			)
 
-		def report_empty_array_literal(self, span: object | None = None) -> None:
-			self._append_diag(
-				_chk_diag(
-					message="empty array literal requires explicit type",
-					severity="error",
-					span=Span.from_loc(span),
-				)
-			)
 
 		def report_mixed_array_literal(self, span: object | None = None) -> None:
 			self._append_diag(
@@ -1827,7 +1819,9 @@ class Checker:
 
 			if isinstance(expr, H.HArrayLiteral):
 				if not expr.elements:
-					self.report_empty_array_literal(getattr(expr, "loc", None))
+					return None
+
+
 					return None
 				elem_types: list[TypeId] = []
 				for el in expr.elements:
