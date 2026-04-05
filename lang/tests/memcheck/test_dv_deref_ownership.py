@@ -85,12 +85,8 @@ def test_dv_deref_no_crash_no_leak(tmp_path: Path) -> None:
 		f"valgrind log:\n{vg_output[-500:]}"
 	)
 
-	# NOTE: the 20-byte/request string leak from drift_dv_string retain
-	# remains open (LANGUAGE_BUG in ownership model).  This test does NOT
-	# assert zero definitely-lost — that assertion should be added when
-	# the MIR-level ownership fix lands.  For now, only crash freedom
-	# is pinned.
-	assert vg.returncode == 0 or vg.returncode == 97, (
-		f"Unexpected valgrind exit code: {vg.returncode}\n"
-		f"valgrind log:\n{vg_output[-500:]}"
-	)
+	# The 20-byte/request string leak from drift_dv_string retain remains
+	# open (LANGUAGE_BUG: ConstructDV(String) serves two ownership modes
+	# via one MIR instruction — needs MIR-level ownership split).
+	# This test pins crash freedom only.  Zero-leak assertion should be
+	# added when the MIR ownership split lands.
