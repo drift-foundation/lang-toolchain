@@ -1446,6 +1446,8 @@ class LlvmModuleBuilder:
 					f"declare {DRIFT_STRING_TYPE} @drift_env_get({DRIFT_STRING_TYPE})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_vtid()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()",
 					"",
 				]
 			)
@@ -5016,14 +5018,32 @@ class _FuncBuilder:
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "signal_await":
-					if dest is None:
-						raise NotImplementedError("LLVM codegen v1: signal_await result must be captured")
-					self.module.needs_thread_runtime = True
-					self.lines.append(
-						f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()"
-					)
-					self.value_types[dest] = DRIFT_INT_TYPE
-					return
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: signal_await result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_id":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_id result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_vtid()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "posix_thread_id":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: posix_thread_id result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
 		_atomic_intrinsic_names = {
 			"atomic_load_bool", "atomic_store_bool", "atomic_exchange_bool", "atomic_compare_exchange_bool", "atomic_compare_exchange_observed_bool",
 			"atomic_load_int", "atomic_store_int", "atomic_exchange_int", "atomic_compare_exchange_int", "atomic_compare_exchange_observed_int", "atomic_fetch_add_int", "atomic_fetch_sub_int",
@@ -5366,6 +5386,24 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: vt_current result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_id":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_id result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_vtid()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "posix_thread_id":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: posix_thread_id result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()"
+				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "now_ms":

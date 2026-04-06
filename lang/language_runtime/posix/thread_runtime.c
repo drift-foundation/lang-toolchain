@@ -114,6 +114,7 @@ typedef struct DriftVt {
 	struct DriftRuntimeRegistryEntry *thread_registry_head;
 	int64_t io_bytes_since_yield;   /* ET fairness: cumulative successful IO since last yield */
 	uint64_t join_waiter;           /* VT handle to unpark on completion, or 0 */
+	uint64_t vtid;                  /* Process-unique VT id, assigned at spawn (1-based). 0 = not on a VT. */
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -341,6 +342,10 @@ static void drift_reactor_shutdown_default_atexit(void);
 static int drift_signal_fd = -1;
 static atomic_uintptr_t drift_signal_waiter_vt = 0;
 static atomic_int drift_signal_delivered_signo = 0;
+
+/* Process-global VT id counter.  Starts at 1; 0 is the sentinel
+ * for "not running on a VT". */
+static atomic_uint_fast64_t drift_vtid_counter = 1;
 
 static void drift_reactor_forget_vt(DriftVt *vt) {
 #ifdef __linux__
@@ -1590,6 +1595,7 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->thread_registry_head = NULL;
 	vt->io_bytes_since_yield = 0;
 	vt->join_waiter = 0;
+	vt->vtid = atomic_fetch_add(&drift_vtid_counter, 1);
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -1739,6 +1745,23 @@ uint64_t drift_thread_current(void) {
 		return (uint64_t)vt;
 	}
 	return 0;
+}
+
+/* Return the stable VT id for the current virtual thread, or 0 if
+ * not running on a VT. */
+uint64_t drift_thread_vtid(void) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (vt) {
+		return vt->vtid;
+	}
+	return 0;
+}
+
+/* Return the POSIX pthread handle as an integer.
+ * This is pthread_self() cast to int64_t — it identifies the carrier
+ * thread by its pthread handle, NOT the kernel TID (gettid()). */
+int64_t drift_thread_ptid(void) {
+	return (int64_t)(uintptr_t)pthread_self();
 }
 
 void drift_thread_park(uint64_t reason) {

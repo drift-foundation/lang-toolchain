@@ -113,7 +113,8 @@ pub struct LogRecord {
 	pub ev: String,
 	pub level: Level,
 	pub logger: String,
-	pub tid: Int,
+	pub vtid: Int,
+	pub ptid: Int,
 	pub attrs_count: Int
 }
 
@@ -437,8 +438,9 @@ fn _emit_envelope_handle(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow 
 		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
 		val env = mem.read<type LogEnvelope>(&mut raw, 0);
 		val tm = time.format_iso8601_utc(&time.now_utc());
-		val tid = thread.vt_current();
-		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"tid\":" + format.format_int(tid) + "}";
+		val vtid = thread.vt_id();
+		val ptid = thread.posix_thread_id();
+		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"vtid\":" + format.format_int(vtid) + ",\"ptid\":" + format.format_int(ptid) + "}";
 		val _ = _sink_write_line(st, line);
 		core.drop_value(move env);
 		mem.dealloc<type LogEnvelope>(raw);

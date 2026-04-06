@@ -148,3 +148,5 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn env_get_raw(name: String) nothrow -> String;
 @intrinsic pub fn env_has_raw(name: String) nothrow -> Int;
 @intrinsic pub fn signal_await() nothrow -> Int;
+@intrinsic pub fn vt_id() nothrow -> Int;
+@intrinsic pub fn posix_thread_id() nothrow -> Int;

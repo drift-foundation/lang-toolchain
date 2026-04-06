@@ -9,7 +9,7 @@
       "attrs": {
         "x": 2
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     }
   ]
 }

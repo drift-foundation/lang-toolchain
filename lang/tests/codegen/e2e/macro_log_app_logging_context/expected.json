@@ -7,7 +7,7 @@
       "ev": "startup",
       "logger": "security",
       "attrs": {},
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -18,7 +18,7 @@
         "user": "alice",
         "req": "r-1"
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -30,7 +30,7 @@
         "req": "r-2",
         "code": 401
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -38,7 +38,7 @@
       "ev": "after-scope",
       "logger": "security",
       "attrs": {},
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     }
   ]
 }

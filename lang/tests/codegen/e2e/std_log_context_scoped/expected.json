@@ -10,7 +10,7 @@
         "user": "u-1",
         "req": "r-1"
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -22,7 +22,7 @@
         "req": "r-1",
         "code": 401
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -32,7 +32,7 @@
       "attrs": {
         "ok": true
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     }
   ]
 }

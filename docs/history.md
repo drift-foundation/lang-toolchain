@@ -1,6 +1,37 @@
 # Drift development history
 
 ## 2026-04-05
+- **Improve logging thread identity under virtual threads: split `tid` into `vtid` and `ptid` (0.27.151, ABI 8)**:
+  Logging under the VT runtime no longer emits a single ambiguous `tid`
+  field. Log records now expose both the logical virtual-thread identity and
+  the carrier POSIX thread handle explicitly.
+  - Why:
+    - under VTs, many unrelated logical flows can run on the same carrier
+      thread
+    - one logical flow can also resume on different carrier threads
+    - a single `tid` field was therefore misleading for request tracing and
+      low-signal for scheduler/runtime debugging
+  - Change:
+    - added a stable per-VT `vtid`, assigned from a process-global atomic
+      counter starting at `1`
+    - `vtid = 0` is the sentinel for “not running on a VT”
+    - added `ptid`, exposing the current `pthread_self()` handle as an
+      integer for the carrier thread
+    - logger JSON output now emits `vtid` and `ptid` instead of legacy `tid`
+  - Boundary:
+    - new runtime-exported helpers required an ABI bump to `8`
+    - compiler version bumped to `0.27.151`
+  - Regressions:
+    - driver regression:
+      `lang/tests/driver/test_log_vtid_ptid.py`
+    - updated log JSON expectations in:
+      `lang/tests/codegen/e2e/std_log_mvp_smoke/`
+      `lang/tests/codegen/e2e/std_log_context_scoped/`
+      `lang/tests/codegen/e2e/std_log_context_nested_scopes/`
+      `lang/tests/codegen/e2e/std_log_init_controls_main_level/`
+      `lang/tests/codegen/e2e/std_log_preamble_registry_stderr_default/`
+      `lang/tests/codegen/e2e/macro_log_app_logging_context/`
+
 - **Fix LANGUAGE_BUG: concrete empty map/array call-argument literals now infer from the callee signature (0.27.150, ABI 7)**:
   Fixed the checker/call-resolution gap where empty literals used as function
   arguments were typed before the callee signature was known, so `{:}` and `[]`

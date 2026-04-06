@@ -10,7 +10,7 @@
         "user": "u-outer",
         "req": "r-outer"
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -23,7 +23,7 @@
         "span": "s1",
         "code": 500
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -34,7 +34,7 @@
         "user": "u-outer",
         "req": "r-outer"
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -44,7 +44,7 @@
       "attrs": {
         "ok": true
       },
-      "tid": "__ANY__"
+      "vtid": "__ANY__", "ptid": "__ANY__"
     }
   ]
 }
