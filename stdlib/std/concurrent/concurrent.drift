@@ -798,10 +798,39 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	return core.Result::Ok(core.void_value());
 }
 
-// Block the calling VT until SIGINT or SIGTERM is delivered.
-// Returns which signal was received.  Linux only.
-// Contract: only one VT per process may call this at a time.
-// Calling from a second VT is a hard program error (abort).
+// Block the calling virtual thread until a supported process signal is
+// delivered, then return which signal was received.
+//
+// Contract (normative):
+//
+//   Platform support
+//     Linux only. Other platforms are not supported and the runtime makes no
+//     guarantees about behavior off Linux.
+//
+//   Supported signals
+//     - SIGINT  -> ProcessSignal::Interrupt   (typically Ctrl-C)
+//     - SIGTERM -> ProcessSignal::Terminate
+//     No other signals are observable through this API. Signals outside this
+//     set continue to follow their default disposition and are not delivered
+//     to the waiter.
+//
+//   Single-waiter rule
+//     At most one virtual thread per process may be blocked in
+//     await_signal() at a time. The intended use is a single shutdown
+//     coordinator near main(). Calling await_signal() concurrently from a
+//     second VT while another is already waiting is a hard program error and
+//     aborts the process with a diagnostic; it is not a recoverable
+//     exception. After the in-flight call returns, a subsequent call from
+//     another VT is allowed.
+//
+//   Throw contract
+//     nothrow. The function returns a ProcessSignal on success and aborts on
+//     misuse; there is no error result type to inspect.
+//
+//   Delivery semantics
+//     The call blocks until exactly one supported signal is delivered, then
+//     returns. It does not coalesce or queue subsequent signals; to react to
+//     repeated signals, call await_signal() again.
 pub fn await_signal() nothrow -> ProcessSignal {
 	val signo = thread.signal_await();
 	if signo == 15 {

@@ -250,6 +250,81 @@ pub fn main() nothrow -> Int {
 
 For formatter customization, see `examples/logging/pluggable_formatter.drift`.
 
+## Graceful shutdown on SIGINT/SIGTERM (`std.concurrent::await_signal`)
+
+Long-running services should handle SIGINT/SIGTERM cleanly: stop accepting new
+work, drain in-flight work, flush logs, and exit with a deterministic status.
+`std.concurrent::await_signal()` is the building block. The contract is in the
+stdlib reference; the rules that matter for app code are:
+
+- Linux only.
+- Only `SIGINT` and `SIGTERM` are observable.
+- **Exactly one** virtual thread may be blocked in `await_signal()` at a time.
+  Treat it as the shutdown coordinator and call it from a single place — almost
+  always near `main()`.
+- The call is `nothrow`; misuse aborts. Don't try to "race" two waiters.
+
+The pattern: a `running` flag the workers consult, a single coordinator that
+blocks on `await_signal()` and flips the flag, then an orderly drain.
+
+```drift
+module main;
+
+import std.concurrent as conc;
+import std.log as log;
+import std.sync as sync;
+
+pub fn main() nothrow -> Int {
+    val cfg_builder = log.config_builder();
+    cfg_builder.sink(log.stderr_sink());
+    cfg_builder.min_level(log.Level::Info());
+    val logger = log.create_logger("svc", cfg_builder.build());
+
+    val running = sync.atomic_bool(true);
+
+    // Workers / accept loops poll `running` between iterations and exit
+    // promptly when it flips to false. Spawn them here.
+    // val server = start_accept_loop(running, logger);
+
+    logger.info("svc-started", {});
+
+    // Single shutdown coordinator: blocks until SIGINT or SIGTERM.
+    val sig = conc.await_signal();
+    match sig {
+        conc.ProcessSignal::Interrupt => {
+            logger.info("shutdown-signal", {"signal": "SIGINT"});
+        }
+        conc.ProcessSignal::Terminate => {
+            logger.info("shutdown-signal", {"signal": "SIGTERM"});
+        }
+    }
+
+    // 1. Stop accepting new work. Workers observe this on their next poll.
+    running.store(false);
+
+    // 2. Drain in-flight work. Join the accept loop / worker pool here.
+    // server.join();
+
+    // 3. Flush the logger so the shutdown line actually reaches the sink.
+    logger.info("shutdown-complete", {});
+    logger.flush(conc.Duration(millis = 1000));
+
+    return 0;
+}
+```
+
+Notes:
+
+- Keep the coordinator in `main` (or a function called only from `main`). Do
+  **not** call `await_signal()` from worker tasks — that violates the
+  single-waiter rule and aborts.
+- The `running` flag is the contract between the coordinator and the workers;
+  `await_signal()` itself does not interrupt or cancel any task.
+- Always `flush()` the logger after the final shutdown event. Process exit
+  does not guarantee asynchronous sinks have drained.
+- To react to repeated signals (e.g. a second Ctrl-C forcing immediate exit),
+  call `await_signal()` again after the first return.
+
 ## JSON API + error tags (`std.json`)
 
 `std.json` is JSON-first and machine-oriented:
