@@ -1,0 +1,5 @@
+{
+  "exit_code": 0,
+  "stderr": "__ANY__",
+  "stderr_contains": "\"ev\":\"error-event\""
+}

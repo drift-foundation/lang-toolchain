@@ -560,6 +560,13 @@ fn _emit_ctx(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) no
 	return try _emit_ctx_throwing(logger, level, ev, ctx) catch { false };
 }
 
+fn _emit_no_attrs(logger: &Logger, var level: Level, ev: String) nothrow -> Bool {
+	if not _enabled(logger.min_level, level) {
+		return false;
+	}
+	return try _emit_no_attrs_throwing(logger, level, ev) catch { false };
+}
+
 fn _emit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
 	if not _enabled(logger.min_level, level) {
 		core.drop_value(move attrs);
@@ -577,6 +584,11 @@ fn _emit_throwing<V>(logger: &Logger, var level: Level, ev: String, attrs: &cont
 
 fn _emit_ctx_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) -> Bool {
 	val payload = _payload_json_ctx(logger, ev, ctx);
+	return _emit_payload_throwing(logger, level, payload);
+}
+
+fn _emit_no_attrs_throwing(logger: &Logger, var level: Level, ev: String) -> Bool {
+	val payload = _payload_json_no_attrs(logger, ev);
 	return _emit_payload_throwing(logger, level, payload);
 }
 
@@ -704,6 +716,12 @@ fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, D
 	return out + "}";
 }
 
+fn _payload_json_no_attrs(logger: &Logger, ev: String) -> String {
+	val ev_json = _json_escape(ev);
+	val logger_json = _json_escape(logger.name);
+	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":{}";
+}
+
 fn _payload_json_ctx(logger: &Logger, ev: String, ctx: &LogContext) -> String {
 	val ev_json = _json_escape(ev);
 	val logger_json = _json_escape(logger.name);
@@ -759,6 +777,10 @@ implement Logger {
 		return _emit(self, Level::Debug(), ev, move attrs);
 	}
 
+	pub fn debug(self: &Logger, ev: String) nothrow -> Bool {
+		return _emit_no_attrs(self, Level::Debug(), ev);
+	}
+
 	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
 		return _emit_ctx(self, Level::Debug(), ev, ctx);
 	}
@@ -771,6 +793,10 @@ implement Logger {
 		return _emit(self, Level::Info(), ev, move attrs);
 	}
 
+	pub fn info(self: &Logger, ev: String) nothrow -> Bool {
+		return _emit_no_attrs(self, Level::Info(), ev);
+	}
+
 	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
 		return _emit_ctx(self, Level::Info(), ev, ctx);
 	}
@@ -781,6 +807,10 @@ implement Logger {
 
 	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
 		return _emit(self, Level::Error(), ev, move attrs);
+	}
+
+	pub fn error(self: &Logger, ev: String) nothrow -> Bool {
+		return _emit_no_attrs(self, Level::Error(), ev);
 	}
 
 	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
@@ -962,8 +992,7 @@ fn _dv_json(dv: &DiagnosticValue) nothrow -> String {
 
 pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
 	val _ = move src;
-	var attrs: containers.HashMap<String, Int> = {:};
-	return logger.debug(ev, move attrs);
+	return logger.debug(ev);
 }
 
 pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
@@ -983,8 +1012,7 @@ pub fn macro_debug<V>(logger: &Logger, ev: String, attrs: containers.HashMap<Str
 
 pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
 	val _ = move src;
-	var attrs: containers.HashMap<String, Int> = {:};
-	return logger.info(ev, move attrs);
+	return logger.info(ev);
 }
 
 pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
@@ -1004,8 +1032,7 @@ pub fn macro_info<V>(logger: &Logger, ev: String, attrs: containers.HashMap<Stri
 
 pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
 	val _ = move src;
-	var attrs: containers.HashMap<String, Int> = {:};
-	return logger.error(ev, move attrs);
+	return logger.error(ev);
 }
 
 pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {

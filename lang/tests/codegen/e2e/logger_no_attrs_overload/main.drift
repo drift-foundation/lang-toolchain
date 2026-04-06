@@ -1,0 +1,21 @@
+module main;
+
+import std.core as core;
+import std.log as log;
+
+pub fn main() nothrow -> Int {
+	var cfgb = log.config_builder();
+	cfgb.sink(log.stderr_sink());
+	cfgb.min_level(log.Level::Debug());
+	val logger = log.create_logger("test", cfgb.build());
+
+	// No-attrs overloads (the new API)
+	val _ = logger.debug("debug-event");
+	val _ = logger.info("info-event");
+	val _ = logger.error("error-event");
+
+	// Attrs overloads (must still work)
+	val _ = logger.info("with-attrs", {"k": "v"});
+
+	return 0;
+}
