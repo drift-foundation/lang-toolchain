@@ -1,6 +1,26 @@
 # Drift development history
 
 ## 2026-04-05
+- **Document and pin compound assignment semantics (no version change)**:
+  The language spec now explicitly documents compound assignment as an
+  existing statement-form feature rather than treating it as implicit parser
+  knowledge.
+  - Spec:
+    - added §8.6 “Compound assignment” to the language spec
+    - documented the closed operator set:
+      `+=`, `-=`, `*=`, `/=`, `%=` and `&=`, `|=`, `^=`, `<<=`, `>>=`
+    - documented valid LHS place forms, statement-only semantics, the
+      single-evaluation guarantee for the target place, and non-goals
+      (`++`, `--`, expression-valued forms, new coercions)
+  - Regressions:
+    - added targeted driver coverage in
+      `lang/tests/driver/test_compound_assign_single_eval.py`
+    - pins single-evaluation behavior for local, field, and indexed-place
+      forms as well as arithmetic and bitwise operator families
+  - Versioning:
+    - no compiler or ABI bump, because this change documents and hardens an
+      already-shipped feature rather than changing toolchain behavior
+
 - **Add C-style parenthesized counted `for` loop syntax sugar (0.27.152, ABI 8)**:
   Added the classic three-clause loop form:
   `for (init?; cond?; step?) { ... }`

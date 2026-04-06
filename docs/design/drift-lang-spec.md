@@ -2041,6 +2041,66 @@ try {
 - Multiple catches are allowed; event-specific arms are evaluated in source order, then catch-all. If no arm matches and there is no catch-all, the error is rethrown to the caller.
 - Control falls through after the try/catch unless all branches return/raise.
 
+### 8.6. Compound assignment
+
+Drift supports statement-form compound assignment as syntactic sugar over the underlying binary operator and assignment paths.
+
+**Operators:**
+
+- arithmetic: `+=`, `-=`, `*=`, `/=`, `%=`
+- bitwise:   `&=`, `|=`, `^=`, `<<=`, `>>=`
+
+The set is closed; no other compound forms exist. The bitwise forms inherit the same operand-type constraints as their plain binary counterparts (e.g., bitwise ops in v1 require `Uint`/`Uint64`).
+
+**Statement-only form.** Compound assignment is a *statement*, never an expression. There is no expression-valued compound assignment, and the result of `x += y` cannot be used as a value, embedded in another expression, or returned. This matches plain `x = y`.
+
+**Valid left-hand sides.** Any place expression that is a valid LHS for plain `=` is also a valid LHS for compound assignment:
+
+- locals (`x += y`)
+- struct fields (`obj.f += y`)
+- indexed places (`arr[i] += y`)
+- chained projections (`obj.children[i].count += y`)
+- dereferenced places (`*p += y`)
+
+The mutability requirements are identical to plain assignment: the place must be writable (mutable local, mutable field of a writable container, element of a mutable indexable, etc.). Borrow-check rules apply unchanged.
+
+**Single-evaluation rule (normative).** The LHS place expression is evaluated **exactly once**, regardless of how many times the equivalent expansion would textually mention it. Concretely:
+
+- For `obj.f += y`, the receiver `obj` is evaluated once.
+- For `arr[i()] += y`, the index expression `i()` is evaluated once. Side effects in `i()` are observed exactly once.
+- For `arrs[i()][j()] += y`, both `i()` and `j()` are evaluated once each.
+- For `*p += y`, the pointer expression `p` is evaluated once.
+
+This rule is what distinguishes compound assignment from a naive textual `x = x op y` rewrite, and is the primary reason compound assignment is a first-class form rather than a parser macro. The compiler lowers compound assignment to a single load-modify-store cycle against the place's address; it does **not** desugar to `x = x <op> y` at the AST level.
+
+**Type rule.** Type-checking matches `x = x <op> y`:
+
+- The RHS must have a type that the corresponding binary operator accepts together with the LHS type, and
+- the resulting binary-op type must be assignable back to the LHS place.
+
+There are no implicit coercions beyond those that already apply to the equivalent binary operator and assignment. If `x + y` would be rejected, so is `x += y`. If `x = (x + y)` would be rejected (e.g., narrowing without an explicit cast), so is `x += y`.
+
+**Examples:**
+
+```drift
+i += 1;
+total += amount;
+remaining -= used;
+mask &= flag;
+shifted <<= 1u;
+
+obj.value += 5;
+arr[idx] *= 2;
+arrs[outer][inner] -= 1;
+```
+
+**Non-goals.**
+
+- No `++` or `--` operators (pre- or post-increment/decrement).
+- No expression-valued compound assignment (`(x += 1)` is not a value).
+- No new coercion or promotion rules; behavior is exactly that of the corresponding binary op composed with assignment, modulo single-evaluation of the place.
+- No compound forms beyond the ten listed above.
+
 ## 9. Reserved keywords and operators
 
 ### 9.1. Language keywords
