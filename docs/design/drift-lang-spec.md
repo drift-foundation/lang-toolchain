@@ -1912,6 +1912,83 @@ for item in collection {
 - `SinglePassIterator.next()` and related advancement methods (`prev()` for bidirectional iterators) are `nothrow`. A `for` loop body may appear inside a `nothrow` function without triggering throw-contract diagnostics from the iteration machinery itself.
 - **Iterator invalidation** (e.g., modifying a container's structure during iteration) is treated as an invariant violation. Invalidated iterators abort the process via `assert`-style failure with a diagnostic message, not via a typed `throw` from `next()`. This is deterministic and non-recoverable.
 
+### 8.3a. Counted `for` loops
+
+Drift provides two counted-loop forms in addition to the iterator form (§8.3). Both are pure syntax sugar over `while` + `break`/`continue`; neither introduces new control-flow primitives.
+
+**Legacy unparenthesized counted form:**
+
+```drift
+for var i = 0; i < n; i = i + 1 {
+    use(i);
+}
+```
+
+- Shape: `for <init> ; <cond> ; <step> { <body> }`.
+- All three clauses are **required** in this form. Omitting any of them is a parse error.
+- Semantics match the parenthesized form below.
+
+**C-style parenthesized form:**
+
+```drift
+for (var i = 0; i < n; i = i + 1) {
+    use(i);
+}
+```
+
+- Shape: `for ( <init>? ; <cond>? ; <step>? ) { <body> }`.
+- Each of the three clauses is **independently optional**. Clause optionality applies **only** to this parenthesized form, never to the legacy unparenthesized form above.
+
+**Init scope:**
+
+- Bindings introduced by `<init>` are visible in `<cond>`, `<step>`, and `<body>`.
+- They are **not** visible after the loop. Referencing them after the loop is a name-resolution error.
+
+**Omitted clauses:**
+
+- Missing `<init>`: no binding is introduced; pre-existing variables remain in scope as usual.
+- Missing `<cond>`: equivalent to `true` — the loop runs until exited via `break` (or `return`/`throw`).
+- Missing `<step>`: no step action runs between iterations.
+
+**Control flow:**
+
+- `continue` jumps to the loop header in such a way that `<step>` (if present) executes **before** `<cond>` is re-checked. This is the standard C semantics and matches what users expect from the syntactic form.
+- `break` exits the loop immediately and does **not** execute `<step>`.
+- `break` and `continue` always target the nearest enclosing loop, including across nested counted/iterator/`while` forms.
+
+**Examples:**
+
+```drift
+// Full form.
+for (var i = 0; i < 5; i = i + 1) {
+    sum = sum + i;
+}
+
+// Missing init — uses an outer binding.
+var i = 0;
+for (; i < 5; i = i + 1) {
+    sum = sum + i;
+}
+
+// Missing cond — infinite loop, exited via break.
+for (var i = 0; ; i = i + 1) {
+    if i >= 5 { break; }
+    sum = sum + i;
+}
+
+// Missing step — manual increment in body.
+for (var i = 0; i < 5; ) {
+    sum = sum + i;
+    i = i + 1;
+}
+```
+
+**Non-goals:**
+
+- This form does not change foreach/iterator loops (§8.3).
+- This form does not introduce range-style loops (e.g. `for i in 0..n`).
+- This form does not alter the semantics of the legacy unparenthesized counted form; the only difference between the two forms is parenthesization and clause optionality.
+
 ### 8.4. Ternary (`? :`) operator
 
 ```drift

@@ -269,9 +269,16 @@ assign_target: postfix
              | STAR assign_target -> deref
 
 for_stmt: "for" for_count_init TERMINATOR expr TERMINATOR for_count_step block -> for_count_stmt
+        | "for" "(" for_c_init? TERMINATOR for_c_cond? TERMINATOR for_c_step? ")" block -> for_c_stmt
         | "for" for_iter_binding "in" expr block -> for_iter_stmt
         | "for" for_iter_binding COLON expr block -> for_iter_stmt
         | "for" ident "in" expr block -> for_legacy_stmt
+
+for_c_init: for_count_init
+for_c_cond: expr
+for_c_step: assign_stmt
+          | aug_assign_stmt
+          | expr -> for_c_step_expr
 
 for_iter_binding: (VAR | VAL)? ident -> for_iter_bind_infer
                 | type_expr ident -> for_iter_bind_typed

@@ -696,9 +696,9 @@ def _convert_for(stmt: parser_ast.ForStmt) -> s0.Stmt:
 def _convert_for_count(stmt: parser_ast.ForCountStmt) -> s0.Stmt:
 	return s0.ForCountStmt(
 		init_name=stmt.init_name,
-		init_value=_convert_expr(stmt.init_value),
-		cond=_convert_expr(stmt.condition),
-		step=_convert_stmt(stmt.step),
+		init_value=_convert_expr(stmt.init_value) if stmt.init_value is not None else None,
+		cond=_convert_expr(stmt.condition) if stmt.condition is not None else None,
+		step=_convert_stmt(stmt.step) if stmt.step is not None else None,
 		body=_convert_block(stmt.body),
 		init_mutable=bool(getattr(stmt, "init_mutable", False)),
 		init_type=getattr(stmt, "init_type_expr", None),

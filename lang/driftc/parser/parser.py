@@ -1874,6 +1874,8 @@ def _build_stmt(tree: Tree):
 		return _build_for_stmt(tree)
 	if kind == "for_count_stmt":
 		return _build_for_count_stmt(tree)
+	if kind == "for_c_stmt":
+		return _build_for_c_stmt(tree)
 	if kind == "try_stmt":
 		return _build_try_stmt(tree)
 	if kind == "unsafe_block":
@@ -2133,6 +2135,56 @@ def _build_for_count_stmt(tree: Tree) -> ForCountStmt:
 	condition = _build_expr(condition_node)
 	step_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "for_count_step")
 	step_stmt = _build_for_count_step(step_node)
+	block_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "block")
+	body_stmts = [_build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"]
+	body_stmts = [s for s in body_stmts if s is not None]
+	return ForCountStmt(
+		loc=loc,
+		init_name=init_name,
+		init_value=init_value,
+		condition=condition,
+		step=step_stmt,
+		body=Block(statements=body_stmts),
+		init_mutable=init_mutable,
+		init_type_expr=init_type_expr,
+	)
+
+
+def _build_for_c_stmt(tree: Tree) -> ForCountStmt:
+	"""C-style for loop: for (init?; cond?; step?) { body }
+
+	All three clauses are optional.  Lowered to ForCountStmt with
+	None values for missing clauses; the HIR lowering handles them.
+	"""
+	loc = _loc(tree)
+	init_name = None
+	init_value = None
+	init_mutable = False
+	init_type_expr = None
+	condition = None
+	step_stmt = None
+	for c in tree.children:
+		if not isinstance(c, Tree):
+			continue
+		cname = _name(c)
+		if cname == "for_c_init":
+			init_inner = next(cc for cc in c.children if isinstance(cc, Tree))
+			init_name, init_value, init_mutable, init_type_expr = _parse_for_count_init(init_inner)
+		elif cname == "for_c_cond":
+			cond_inner = next(cc for cc in c.children if isinstance(cc, Tree))
+			condition = _build_expr(cond_inner)
+		elif cname == "for_c_step":
+			inner = next(cc for cc in c.children if isinstance(cc, Tree))
+			ikind = _name(inner)
+			if ikind == "assign_stmt":
+				step_stmt = _build_assign_stmt(inner)
+			elif ikind == "aug_assign_stmt":
+				step_stmt = _build_aug_assign_stmt(inner)
+			else:
+				step_stmt = ExprStmt(loc=_loc(inner), value=_build_expr(inner))
+		elif cname == "for_c_step_expr":
+			expr_node = next(cc for cc in c.children if isinstance(cc, Tree))
+			step_stmt = ExprStmt(loc=_loc(c), value=_build_expr(expr_node))
 	block_node = next(c for c in tree.children if isinstance(c, Tree) and _name(c) == "block")
 	body_stmts = [_build_stmt(child) for child in block_node.children if isinstance(child, Tree) and _name(child) == "stmt"]
 	body_stmts = [s for s in body_stmts if s is not None]

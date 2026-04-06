@@ -783,10 +783,10 @@ class ForStmt(Stmt):
 @dataclass
 class ForCountStmt(Stmt):
     loc: Located
-    init_name: str
-    init_value: "Expr"
-    condition: "Expr"
-    step: "Stmt"
+    init_name: Optional[str]
+    init_value: Optional["Expr"]
+    condition: Optional["Expr"]
+    step: Optional["Stmt"]
     body: Block
     init_mutable: bool = False
     init_type_expr: Optional["TypeExpr"] = None

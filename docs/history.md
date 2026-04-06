@@ -1,6 +1,31 @@
 # Drift development history
 
 ## 2026-04-05
+- **Add C-style parenthesized counted `for` loop syntax sugar (0.27.152, ABI 8)**:
+  Added the classic three-clause loop form:
+  `for (init?; cond?; step?) { ... }`
+  as parser/lowering sugar over existing loop control flow.
+  - Scope:
+    - parenthesized C-style counted `for` form added
+    - all three clauses are independently optional in the parenthesized form
+    - legacy unparenthesized counted form remains supported and still
+      requires all three clauses
+    - no iterator/range redesign and no semantic changes to existing loop
+      constructs
+  - Semantics:
+    - loop-init bindings are scoped to the loop
+    - omitted condition is equivalent to `true`
+    - omitted step performs no action between iterations
+    - `continue` executes `step` before the next condition check
+    - `break` exits immediately without executing `step`
+  - Regressions:
+    - driver regression:
+      `lang/tests/driver/test_for_c_style.py`
+    - parser regression coverage for the legacy counted form remains in:
+      `lang/tests/parser/test_parser_for_looping.py`
+    - language spec updated in:
+      `docs/design/drift-lang-spec.md`
+
 - **Improve logging thread identity under virtual threads: split `tid` into `vtid` and `ptid` (0.27.151, ABI 8)**:
   Logging under the VT runtime no longer emits a single ambiguous `tid`
   field. Log records now expose both the logical virtual-thread identity and

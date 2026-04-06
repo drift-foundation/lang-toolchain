@@ -568,11 +568,14 @@ class ForStmt(Stmt):
 
 @dataclass
 class ForCountStmt(Stmt):
-	"""Counted loop: for init; cond; step { body }."""
-	init_name: str
-	init_value: Expr
-	cond: Expr
-	step: Stmt
+	"""Counted loop:
+	  for init; cond; step { body }
+	  for (init?; cond?; step?) { body }    // C-style, all optional
+	"""
+	init_name: Optional[str]
+	init_value: Optional[Expr]
+	cond: Optional[Expr]
+	step: Optional[Stmt]
 	body: List[Stmt]
 	init_mutable: bool = False
 	init_type: Optional[TypeExpr] = None

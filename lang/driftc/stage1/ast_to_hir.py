@@ -1213,56 +1213,78 @@ class AstToHIR:
 		"""
 		Desugar counted loop:
 		  for init; cond; step { body }
+		  for (init?; cond?; step?) { body }      // C-style, all optional
 
 		As:
-		  let init
-		  var __for_first = true
-		  loop {
-		    if __for_first { __for_first = false } else { step }
-		    if cond { body } else { break }
+		  {
+		    init?
+		    var __for_first = true
+		    loop {
+		      if __for_first { __for_first = false } else { step? }
+		      if cond? { body } else { break }    // cond default = true
+		    }
 		  }
 
-		This preserves `continue` semantics naturally: a continue jumps to loop
-		header, which runs `step` before the next condition check.
+		Continue: jumps to loop header, runs step before next cond check.
+		Break: exits loop immediately, skipping step.
+		Init binding is scoped to the desugared block (visible in cond/step/body
+		but not after the loop).
 		"""
+		has_init = stmt.init_name is not None and stmt.init_value is not None
+		has_step = stmt.step is not None
+		has_cond = stmt.cond is not None
+		cond_expr_node = stmt.cond
 		self._push_scope()
 		try:
-			init_bid = self._alloc_binding(stmt.init_name)
-			init_let = H.HLet(
-				name=stmt.init_name,
-				value=self.lower_expr(stmt.init_value),
-				declared_type_expr=getattr(stmt, "init_type", None),
-				binding_id=init_bid,
-				is_mutable=bool(getattr(stmt, "init_mutable", False)),
-				loc=self._as_span(getattr(stmt, "loc", None)),
-			)
-			first_name = self._fresh_temp("__for_first")
-			first_bid = self._alloc_binding(first_name)
-			first_let = H.HLet(
-				name=first_name,
-				value=H.HLiteralBool(True),
-				declared_type_expr=None,
-				binding_id=first_bid,
-				is_mutable=True,
-				loc=self._as_span(getattr(stmt, "loc", None)),
-			)
-			first_cond = H.HVar(first_name, binding_id=first_bid)
-			clear_first = H.HAssign(target=H.HVar(first_name, binding_id=first_bid), value=H.HLiteralBool(False))
-			step_stmt = self.lower_stmt(stmt.step)
-			step_gate = H.HIf(
-				cond=first_cond,
-				then_block=H.HBlock(statements=[clear_first]),
-				else_block=H.HBlock(statements=[step_stmt]),
-			)
-			cond_expr = self.lower_expr(stmt.cond)
+			block_stmts: list[H.HStmt] = []
+			if has_init:
+				init_bid = self._alloc_binding(stmt.init_name)
+				init_let = H.HLet(
+					name=stmt.init_name,
+					value=self.lower_expr(stmt.init_value),
+					declared_type_expr=getattr(stmt, "init_type", None),
+					binding_id=init_bid,
+					is_mutable=bool(getattr(stmt, "init_mutable", False)),
+					loc=self._as_span(getattr(stmt, "loc", None)),
+				)
+				block_stmts.append(init_let)
+			loop_body_stmts: list[H.HStmt] = []
+			if has_step:
+				first_name = self._fresh_temp("__for_first")
+				first_bid = self._alloc_binding(first_name)
+				first_let = H.HLet(
+					name=first_name,
+					value=H.HLiteralBool(True),
+					declared_type_expr=None,
+					binding_id=first_bid,
+					is_mutable=True,
+					loc=self._as_span(getattr(stmt, "loc", None)),
+				)
+				block_stmts.append(first_let)
+				first_cond = H.HVar(first_name, binding_id=first_bid)
+				clear_first = H.HAssign(target=H.HVar(first_name, binding_id=first_bid), value=H.HLiteralBool(False))
+				step_stmt = self.lower_stmt(stmt.step)
+				step_gate = H.HIf(
+					cond=first_cond,
+					then_block=H.HBlock(statements=[clear_first]),
+					else_block=H.HBlock(statements=[step_stmt]),
+				)
+				loop_body_stmts.append(step_gate)
 			body_block = self.lower_block(stmt.body)
-			cond_gate = H.HIf(
-				cond=cond_expr,
-				then_block=body_block,
-				else_block=H.HBlock(statements=[H.HBreak()]),
-			)
-			loop_stmt = H.HLoop(body=H.HBlock(statements=[step_gate, cond_gate]))
-			return H.HBlock(statements=[init_let, first_let, loop_stmt])
+			if has_cond:
+				cond_lowered = self.lower_expr(cond_expr_node)
+				cond_gate = H.HIf(
+					cond=cond_lowered,
+					then_block=body_block,
+					else_block=H.HBlock(statements=[H.HBreak()]),
+				)
+				loop_body_stmts.append(cond_gate)
+			else:
+				# No condition: body always runs (until break).
+				loop_body_stmts.extend(body_block.statements)
+			loop_stmt = H.HLoop(body=H.HBlock(statements=loop_body_stmts))
+			block_stmts.append(loop_stmt)
+			return H.HBlock(statements=block_stmts)
 		finally:
 			self._pop_scope()
 
