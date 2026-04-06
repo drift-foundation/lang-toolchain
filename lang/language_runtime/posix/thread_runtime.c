@@ -19,6 +19,7 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
+#include <sys/signalfd.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <signal.h>
@@ -318,6 +319,7 @@ typedef struct ReactorWatch {
 typedef struct Reactor {
 	int epoll_fd;
 	int wake_fd;
+	int signal_fd;  /* signalfd for SIGINT/SIGTERM, -1 if not registered */
 	pthread_mutex_t mu;
 	pthread_cond_t cv;
 	ReactorTimer *timers;
@@ -331,6 +333,14 @@ typedef struct Reactor {
 
 static Reactor *drift_default_reactor_ptr = NULL;
 static void drift_reactor_shutdown_default_atexit(void);
+
+/* Process-global signal handling state (Linux only).
+ * signal_fd is created at runtime init (drift_run_main_on_vt) before any
+ * worker threads are spawned.  SIGINT/SIGTERM are blocked process-wide
+ * so signalfd is the sole consumer. */
+static int drift_signal_fd = -1;
+static atomic_uintptr_t drift_signal_waiter_vt = 0;
+static atomic_int drift_signal_delivered_signo = 0;
 
 static void drift_reactor_forget_vt(DriftVt *vt) {
 #ifdef __linux__
@@ -609,6 +619,20 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 				if (fd == r->wake_fd) {
 					uint64_t buf;
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
+					continue;
+				}
+				if (fd == r->signal_fd && r->signal_fd >= 0) {
+					DriftVt *waiter = (DriftVt *)atomic_load(&drift_signal_waiter_vt);
+					if (!waiter) {
+						continue;  /* no waiter — leave signal in kernel buffer */
+					}
+					struct signalfd_siginfo si;
+					ssize_t sn = read(r->signal_fd, &si, sizeof(si));
+					if (sn == (ssize_t)sizeof(si)) {
+						atomic_store(&drift_signal_delivered_signo, (int)si.ssi_signo);
+						atomic_store(&drift_signal_waiter_vt, 0);
+						drift_thread_unpark((uint64_t)waiter);
+					}
 					continue;
 				}
 				/* T4b: ET per-direction resolution under r->mu. */
@@ -1054,6 +1078,20 @@ static void *drift_reactor_thread_entry(void *arg) {
 					}
 					continue;
 				}
+				if (fd == r->signal_fd && r->signal_fd >= 0) {
+					DriftVt *waiter = (DriftVt *)atomic_load(&drift_signal_waiter_vt);
+					if (!waiter) {
+						continue;
+					}
+					struct signalfd_siginfo si;
+					ssize_t sn = read(r->signal_fd, &si, sizeof(si));
+					if (sn == (ssize_t)sizeof(si)) {
+						atomic_store(&drift_signal_delivered_signo, (int)si.ssi_signo);
+						atomic_store(&drift_signal_waiter_vt, 0);
+						drift_thread_unpark((uint64_t)waiter);
+					}
+					continue;
+				}
 				/* T4a: ET per-direction resolution under r->mu. */
 				uint32_t ev = events[i].events;
 				pthread_mutex_lock(&r->mu);
@@ -1155,6 +1193,7 @@ static Reactor *drift_reactor_create(void) {
 	}
 	r->epoll_fd = -1;
 	r->wake_fd = -1;
+	r->signal_fd = -1;
 	pthread_mutex_init(&r->mu, NULL);
 	pthread_cond_init(&r->cv, NULL);
 #ifdef __linux__
@@ -1165,6 +1204,16 @@ static Reactor *drift_reactor_create(void) {
 		ev.events = EPOLLIN;
 		ev.data.fd = r->wake_fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, r->wake_fd, &ev);
+	}
+	/* Register the process-global signalfd on this reactor's epoll set.
+	 * The reactor only reads from signalfd when a waiter is registered;
+	 * otherwise the signal stays queued in the kernel buffer. */
+	if (r->epoll_fd >= 0 && drift_signal_fd >= 0) {
+		r->signal_fd = drift_signal_fd;
+		struct epoll_event sev;
+		sev.events = EPOLLIN;
+		sev.data.fd = drift_signal_fd;
+		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, drift_signal_fd, &sev);
 	}
 	if (pthread_create(&r->thread, NULL, drift_reactor_thread_entry, r) == 0) {
 		r->thread_started = 1;
@@ -1204,6 +1253,13 @@ static void drift_reactor_destroy(Reactor *r) {
 	if (r->epoll_fd >= 0) {
 		close(r->epoll_fd);
 		r->epoll_fd = -1;
+	}
+	/* Close signalfd at shutdown.  Signal mask stays permanently blocked —
+	 * no attempt to restore, the process is exiting. */
+	if (drift_signal_fd >= 0) {
+		close(drift_signal_fd);
+		drift_signal_fd = -1;
+		r->signal_fd = -1;
 	}
 #endif
 	ReactorTimer *t = r->timers;
@@ -2020,12 +2076,58 @@ static DriftCallbackVTable drift_root_vt_vtable = {
 	.call = (void *)drift_root_vt_call,
 };
 
+/* Process signal await — blocks the calling VT until SIGINT or SIGTERM
+ * is delivered.  Returns the signal number (SIGINT=2, SIGTERM=15) or -1
+ * if a second waiter attempts to register (hard contract violation).
+ * Linux only.  The signalfd and signal mask are set up in
+ * drift_run_main_on_vt before any worker threads are created. */
+int64_t drift_signal_await(void) {
+#ifdef __linux__
+	if (drift_signal_fd < 0) {
+		return -1;  /* signal infrastructure not initialized */
+	}
+	/* Enforce single waiter: CAS NULL → current VT. */
+	DriftVt *self = (DriftVt *)pthread_getspecific(drift_vt_tls_key);
+	if (!self) {
+		return -1;  /* not running on a VT */
+	}
+	uintptr_t expected = 0;
+	if (!atomic_compare_exchange_strong(&drift_signal_waiter_vt, &expected, (uintptr_t)self)) {
+		return -1;  /* another waiter already registered */
+	}
+	/* Ensure the reactor is initialized so it can deliver the signal. */
+	drift_reactor_default_get();
+	/* Wake the reactor so it re-enters epoll_wait and can dispatch a
+	 * pending signal that arrived before this call. */
+	drift_reactor_wake(drift_default_reactor_ptr);
+	/* Park this VT until the reactor delivers the signal. */
+	drift_thread_park(0);
+	return (int64_t)atomic_load(&drift_signal_delivered_signo);
+#else
+	return -1;
+#endif
+}
+
 int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	/* Ignore SIGPIPE globally.  Socket/TLS write failures on closed peers
 	 * must return EPIPE through normal error handling, not terminate the
 	 * process.  This is standard practice for network programs (Go, Rust,
 	 * Python, Node.js all do this at startup). */
 	signal(SIGPIPE, SIG_IGN);
+
+	/* Block SIGINT/SIGTERM in the main thread.  All subsequently created
+	 * threads (executor workers, reactor, blocking pool) inherit this mask.
+	 * signalfd becomes the sole consumer of these signals. */
+#ifdef __linux__
+	{
+		sigset_t mask;
+		sigemptyset(&mask);
+		sigaddset(&mask, SIGINT);
+		sigaddset(&mask, SIGTERM);
+		sigprocmask(SIG_BLOCK, &mask, NULL);
+		drift_signal_fd = signalfd(-1, &mask, SFD_NONBLOCK);
+	}
+#endif
 
 	drift_root_vt_fn = user_main;
 	drift_root_vt_result = 0;

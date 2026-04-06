@@ -53,7 +53,9 @@ export {
 	scope,
 	sleep,
 	default_executor,
-	set_default_executor
+	set_default_executor,
+	ProcessSignal,
+	await_signal
 };
 
 pub struct Duration {
@@ -119,6 +121,12 @@ pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 pub exception VtResultNotAvailable();
 pub exception ExecSubmitFailed(code: Int);
 pub exception InvalidDuration(millis: Int);
+
+// Process signal types delivered by await_signal().  Linux only.
+pub variant ProcessSignal {
+	Interrupt,   // SIGINT (Ctrl-C)
+	Terminate,   // SIGTERM
+}
 
 pub variant SaturationPolicy {
 	Block,
@@ -788,6 +796,18 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	thread.reactor_register_timer(deadline, vt);
 	thread.vt_park_until(deadline);
 	return core.Result::Ok(core.void_value());
+}
+
+// Block the calling VT until SIGINT or SIGTERM is delivered.
+// Returns which signal was received.  Linux only.
+// Contract: only one VT per process may call this at a time.
+// Calling from a second VT is a hard program error (abort).
+pub fn await_signal() nothrow -> ProcessSignal {
+	val signo = thread.signal_await();
+	if signo == 15 {
+		return ProcessSignal::Terminate();
+	}
+	return ProcessSignal::Interrupt();
 }
 
 pub fn block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {

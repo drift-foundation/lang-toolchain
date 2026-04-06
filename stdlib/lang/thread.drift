@@ -147,3 +147,4 @@ pub type ReactorHandle = Int;
 @intrinsic pub unsafe fn random_fill(buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn env_get_raw(name: String) nothrow -> String;
 @intrinsic pub fn env_has_raw(name: String) nothrow -> Int;
+@intrinsic pub fn signal_await() nothrow -> Int;

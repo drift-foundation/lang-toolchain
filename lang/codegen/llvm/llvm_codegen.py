@@ -1445,6 +1445,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_random_fill(ptr, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {DRIFT_STRING_TYPE} @drift_env_get({DRIFT_STRING_TYPE})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()",
 					"",
 				]
 			)
@@ -5014,6 +5015,15 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "signal_await":
+					if dest is None:
+						raise NotImplementedError("LLVM codegen v1: signal_await result must be captured")
+					self.module.needs_thread_runtime = True
+					self.lines.append(
+						f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()"
+					)
+					self.value_types[dest] = DRIFT_INT_TYPE
+					return
 		_atomic_intrinsic_names = {
 			"atomic_load_bool", "atomic_store_bool", "atomic_exchange_bool", "atomic_compare_exchange_bool", "atomic_compare_exchange_observed_bool",
 			"atomic_load_int", "atomic_store_int", "atomic_exchange_int", "atomic_compare_exchange_int", "atomic_compare_exchange_observed_int", "atomic_fetch_add_int", "atomic_fetch_sub_int",
