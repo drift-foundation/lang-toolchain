@@ -529,6 +529,306 @@ class TypeChecker:
 			out.append(f"`{arm.name}({', '.join(field_parts)})`")
 		return out
 
+	def validate_no_recursive_value_types(self, *, diagnostics: list[Diagnostic]) -> None:
+		"""Reject struct/variant declarations whose field-type transitive closure
+		forms a cycle in which every edge is by-value (no `Arc`/`Array`/`&`/etc.
+		indirection).
+
+		Closes `issues/recursive-value-struct-accepted/`.
+
+		Algorithm (kind-based, no name allowlist):
+
+		1. For each STRUCT instance and each VARIANT instance in the type table,
+		   build a directed by-value edge set. An edge `A → B` exists when `B`
+		   is a STRUCT or VARIANT type id reachable from one of `A`'s field
+		   types (struct field, or variant arm payload field) without crossing
+		   an indirection-bearing kind: REF, RAW_PTR, ARRAY, FUNCTION, INTERFACE.
+		2. Run Tarjan SCC on the resulting graph.
+		3. Any SCC of size > 1, OR a single-node SCC with a self-loop, is a
+		   recursive value-type cycle. Emit one diagnostic per offending type
+		   in each cycle, naming the cycle members and suggesting an
+		   indirection wrapper. The primary suggestion is `Arc<...>`; when
+		   the offending field is `Optional<Self>`, the suggestion preserves
+		   the user's `Optional` wrapper as `Optional<Arc<Self>>`.
+		"""
+		table = self.type_table
+		if table is None:
+			return
+
+		_INDIRECTION_KINDS = {
+			TypeKind.REF,
+			TypeKind.RAW_PTR,
+			TypeKind.ARRAY,
+			TypeKind.FUNCTION,
+			TypeKind.INTERFACE,
+		}
+
+		def _resolve_forward(tid: int) -> int:
+			# Resolve FORWARD_NOMINAL to its concrete struct/variant tid if
+			# the table has one registered for the same (module_id, name).
+			seen: set[int] = set()
+			cur = tid
+			while cur not in seen:
+				seen.add(cur)
+				td = table.get(cur)
+				if td.kind is not TypeKind.FORWARD_NOMINAL:
+					return cur
+				mod = getattr(td, "module_id", None)
+				name = td.name
+				nominal = (
+					table.get_nominal(kind=TypeKind.STRUCT, module_id=mod, name=name)
+					or table.get_nominal(kind=TypeKind.VARIANT, module_id=mod, name=name)
+				)
+				if nominal is None or nominal == cur:
+					return cur
+				cur = nominal
+			return cur
+
+		def _by_value_children(field_type_ids: list[int]) -> set[int]:
+			"""For each field type id, classify and collect by-value
+			STRUCT/VARIANT children (with FORWARD_NOMINAL resolved)."""
+			out: set[int] = set()
+			for ft in field_type_ids:
+				if ft is None:
+					continue
+				resolved = _resolve_forward(ft)
+				td = table.get(resolved)
+				if td.kind in _INDIRECTION_KINDS:
+					continue
+				if td.kind is TypeKind.STRUCT or td.kind is TypeKind.VARIANT:
+					out.add(int(resolved))
+			return out
+
+		# Build the by-value graph for every STRUCT/VARIANT instance.
+		edges: dict[int, set[int]] = {}
+		nodes: set[int] = set()
+
+		for tid, inst in (getattr(table, "struct_instances", {}) or {}).items():
+			node_id = int(tid)
+			nodes.add(node_id)
+			edges[node_id] = _by_value_children(list(getattr(inst, "field_types", []) or []))
+
+		for tid, inst in (getattr(table, "variant_instances", {}) or {}).items():
+			node_id = int(tid)
+			nodes.add(node_id)
+			arms_field_types: list[int] = []
+			for arm in getattr(inst, "arms", []) or []:
+				arms_field_types.extend(getattr(arm, "field_types", []) or [])
+			edges[node_id] = _by_value_children(arms_field_types)
+
+		if not nodes:
+			return
+
+		# Iterative Tarjan SCC. Avoids Python recursion on deep type graphs.
+		index_of: dict[int, int] = {}
+		lowlink: dict[int, int] = {}
+		on_stack: set[int] = set()
+		scc_stack: list[int] = []
+		sccs: list[list[int]] = []
+		next_index = 0
+
+		# Each work-stack entry is (node, child_iter_state). State is the
+		# index into the children list at which to resume the post-loop body.
+		def _strongconnect(start: int) -> None:
+			nonlocal next_index
+			work: list[tuple[int, int]] = [(start, 0)]
+			# Pre-visit setup for the root node.
+			index_of[start] = next_index
+			lowlink[start] = next_index
+			next_index += 1
+			scc_stack.append(start)
+			on_stack.add(start)
+			while work:
+				v, idx = work[-1]
+				children = sorted(edges.get(v, ()))
+				if idx < len(children):
+					work[-1] = (v, idx + 1)
+					w = children[idx]
+					if w not in index_of:
+						index_of[w] = next_index
+						lowlink[w] = next_index
+						next_index += 1
+						scc_stack.append(w)
+						on_stack.add(w)
+						work.append((w, 0))
+					elif w in on_stack:
+						if index_of[w] < lowlink[v]:
+							lowlink[v] = index_of[w]
+					continue
+				# All children of v processed. If v is an SCC root, pop the SCC.
+				if lowlink[v] == index_of[v]:
+					component: list[int] = []
+					while True:
+						w = scc_stack.pop()
+						on_stack.discard(w)
+						component.append(w)
+						if w == v:
+							break
+					sccs.append(component)
+				work.pop()
+				if work:
+					parent = work[-1][0]
+					if lowlink[v] < lowlink[parent]:
+						lowlink[parent] = lowlink[v]
+
+		for n in sorted(nodes):
+			if n not in index_of:
+				_strongconnect(n)
+
+		# A cycle is any SCC with size > 1, OR a single-node SCC with a self-loop.
+		cycles: list[list[int]] = []
+		for scc in sccs:
+			if len(scc) > 1:
+				cycles.append(sorted(scc))
+				continue
+			only = scc[0]
+			if only in edges.get(only, set()):
+				cycles.append([only])
+
+		if not cycles:
+			return
+
+		# Build user-facing names and emit diagnostics.
+		def _type_name(tid: int) -> str:
+			td = table.get(tid)
+			mod = getattr(td, "module_id", None)
+			name = getattr(td, "name", None) or "<anonymous>"
+			if mod:
+				return f"{mod}::{name}"
+			return name
+
+		def _suggest_indirection(field_decl_type_expr: object | None, self_type_name: str) -> str:
+			"""Return the suggested replacement for an offending field type.
+
+			- If the field type is `Optional<...Self...>`, suggest
+			  `Optional<Arc<Self>>` (preserving the user's wrapper).
+			- Otherwise the primary suggestion is `Arc<Self>`.
+			"""
+			if field_decl_type_expr is not None:
+				expr_name = getattr(field_decl_type_expr, "name", None)
+				if expr_name == "Optional":
+					return f"Optional<Arc<{self_type_name}>>"
+			return f"Arc<{self_type_name}>"
+
+		def _offending_field_for(tid: int, cycle_set: set[int]) -> tuple[str | None, object | None, object | None]:
+			"""Return (field_name, type_expr, decl_loc) for the field on `tid`
+			that creates a by-value edge into `cycle_set`.
+
+			- field_name and type_expr are used for the diagnostic message and
+			  suggestion shape (e.g. preserving an Optional<...> wrapper).
+			- decl_loc is the source loc of the *containing* struct/variant
+			  declaration; the schema layer does not retain field-local locs,
+			  so the diagnostic anchors at the declaration that holds the
+			  offending field.
+			"""
+			td = table.get(tid)
+			if td.kind is TypeKind.STRUCT:
+				schema = (getattr(table, "struct_bases", {}) or {}).get(tid)
+				inst = (getattr(table, "struct_instances", {}) or {}).get(tid)
+				if schema is None or inst is None:
+					return (None, None, None)
+				field_names = list(getattr(inst, "field_names", []) or [])
+				field_types = list(getattr(inst, "field_types", []) or [])
+				for fname, fty in zip(field_names, field_types):
+					resolved = _resolve_forward(fty)
+					if int(resolved) in cycle_set:
+						type_expr: object | None = None
+						for fs in getattr(schema, "fields", []) or []:
+							if fs.name == fname:
+								type_expr = fs.type_expr
+								break
+						return (fname, type_expr, getattr(schema, "decl_loc", None))
+				return (None, None, getattr(schema, "decl_loc", None))
+			if td.kind is TypeKind.VARIANT:
+				schema = (getattr(table, "variant_schemas", {}) or {}).get(tid)
+				inst = (getattr(table, "variant_instances", {}) or {}).get(tid)
+				if schema is None or inst is None:
+					return (None, None, None)
+				for arm_inst in getattr(inst, "arms", []) or []:
+					for fname, fty in zip(getattr(arm_inst, "field_names", []) or [], getattr(arm_inst, "field_types", []) or []):
+						resolved = _resolve_forward(fty)
+						if int(resolved) in cycle_set:
+							qualified = f"{arm_inst.name}.{fname}"
+							type_expr2: object | None = None
+							for arm_s in getattr(schema, "arms", []) or []:
+								if arm_s.name == arm_inst.name:
+									for fs2 in arm_s.fields:
+										if fs2.name == fname:
+											type_expr2 = fs2.type_expr
+											break
+									break
+							return (qualified, type_expr2, getattr(schema, "decl_loc", None))
+				return (None, None, getattr(schema, "decl_loc", None))
+			return (None, None, None)
+
+		def _is_toolchain_type(tid: int) -> bool:
+			"""User diagnostics should anchor at user-defined types, not at
+			toolchain-provided types like `lang.core::Optional` that the
+			user merely *uses*. This predicate identifies cycle members
+			that should be deprioritized for anchor selection.
+			"""
+			td = table.get(tid)
+			mod = getattr(td, "module_id", None)
+			if mod is None:
+				return False
+			return mod.startswith("lang.")
+
+		# Emit one diagnostic per cycle. Anchor selection rules:
+		#   1. Prefer user-defined types (module_id not under `lang.*`).
+		#   2. Within that preference class, pick the lex-smallest type
+		#      name for determinism.
+		# This keeps diagnostics pointing at the user's declaration even
+		# when the cycle physically includes a toolchain type like
+		# `lang.core::Optional` that the user only used as a wrapper.
+		for cycle in cycles:
+			cycle_set = set(cycle)
+			user_members = [c for c in cycle if not _is_toolchain_type(c)]
+			candidates = user_members if user_members else list(cycle)
+			anchor_tid = min(candidates, key=_type_name)
+			anchor_name = _type_name(anchor_tid)
+			offending_field_name, offending_type_expr, anchor_decl_loc = _offending_field_for(anchor_tid, cycle_set)
+			suggestion = _suggest_indirection(offending_type_expr, anchor_name)
+			field_phrase = (
+				f" through field '{offending_field_name}'"
+				if offending_field_name is not None
+				else ""
+			)
+			suggestion_phrase = (
+				f"; suggestion: wrap the offending field in `{suggestion}`"
+			)
+			# Build the cycle path starting at the anchor for stable display.
+			anchor_idx = cycle.index(anchor_tid) if anchor_tid in cycle else 0
+			rotated = cycle[anchor_idx:] + cycle[:anchor_idx]
+			cycle_names = " → ".join(_type_name(c) for c in rotated)
+			if len(cycle) > 1:
+				message = (
+					f"recursive value type: '{anchor_name}' participates in a "
+					f"by-value cycle ({cycle_names} → {anchor_name})"
+					f"{field_phrase}; every cycle must contain at least one "
+					f"indirection (Arc, &, Array, RawPtr)"
+					f"{suggestion_phrase}"
+				)
+			else:
+				message = (
+					f"recursive value type: '{anchor_name}' is infinitely recursive"
+					f"{field_phrase}; the field must contain at least one "
+					f"indirection (Arc, &, Array, RawPtr)"
+					f"{suggestion_phrase}"
+				)
+			# Anchor the diagnostic at the containing struct/variant
+			# declaration loc. The schema layer does not retain field-local
+			# locs, so the message names the field but the span points at
+			# the declaration line.
+			diag_span = Span.from_loc(anchor_decl_loc) if anchor_decl_loc is not None else Span()
+			diagnostics.append(
+				_tc_diag(
+					message=message,
+					code="E_RECURSIVE_VALUE_TYPE",
+					severity="error",
+					span=diag_span,
+				)
+			)
+
 	def validate_interface_schemas(self, *, diagnostics: list[Diagnostic]) -> None:
 		def _fixed_width_allowed(module_name: str | None) -> bool:
 			if module_name is None:
@@ -9099,15 +9399,19 @@ class TypeChecker:
 			callsite_nodes_by_id: dict[int, object] = {}
 
 			def _collect_callsite_ids(block: H.HBlock) -> set[int]:
+				# Uses the shared iterative HIR walker from
+				# `stage1/node_ids.py` with a lambda-skipping
+				# `should_descend` variant so the call collector does not
+				# cross closure boundaries. Row #15 dedup pass.
+				from lang.driftc.stage1.node_ids import default_should_descend, iter_hir_walk
+
+				def _no_descend_into_lambda(obj: object) -> bool:
+					if isinstance(obj, H.HLambda):
+						return False
+					return default_should_descend(obj)
+
 				ids: set[int] = set()
-				seen: set[int] = set()
-
-				def walk(obj: object) -> None:
-					obj_id = id(obj)
-					if obj_id in seen:
-						return
-					seen.add(obj_id)
-
+				for obj in iter_hir_walk(block, should_descend=_no_descend_into_lambda):
 					if isinstance(obj, (H.HCall, H.HMethodCall, H.HInvoke)):
 						csid = getattr(obj, "callsite_id", None)
 						if isinstance(csid, int):
@@ -9115,39 +9419,6 @@ class TypeChecker:
 							callsite_nodes_by_id.setdefault(csid, obj)
 						else:
 							missing_callsite_nodes.append(obj)
-
-					if not _should_descend(obj):
-						return
-					if is_dataclass(obj):
-						for f in fields(obj):
-							walk_value(getattr(obj, f.name))
-					else:
-						for val in vars(obj).values():
-							walk_value(val)
-
-				def walk_value(val: object) -> None:
-					if val is None:
-						return
-					if isinstance(val, (list, tuple)):
-						for item in val:
-							walk_value(item)
-						return
-					if isinstance(val, dict):
-						for key in sorted(val.keys(), key=repr):
-							walk_value(val[key])
-						return
-					walk(val)
-
-				def _should_descend(obj: object) -> bool:
-					if isinstance(obj, H.HLambda):
-						return False
-					if isinstance(obj, H.HNode):
-						return True
-					if is_dataclass(obj) and obj.__class__.__module__.startswith("lang.driftc.stage1"):
-						return True
-					return False
-
-				walk(block)
 				return ids
 
 			callsite_ids = _collect_callsite_ids(body)

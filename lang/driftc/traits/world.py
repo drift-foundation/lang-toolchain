@@ -18,7 +18,7 @@ class TraitKey:
 	name: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class TypeKey:
 	package_id: Optional[str]
 	module: Optional[str]
@@ -26,6 +26,65 @@ class TypeKey:
 	args: Tuple["TypeKey", ...] = ()
 	# Only meaningful when name == "fn"; None means non-function types.
 	fn_throws: Optional[bool] = None
+
+	def __post_init__(self) -> None:
+		# Cache the hash on construction. The default frozen-dataclass
+		# `__hash__` recursively hashes the `args` tuple, which on deeply
+		# nested types (e.g. `Array<Array<...<Int>>>` at d=5000) overflows
+		# Python's recursion stack inside `tuple.__hash__`.
+		#
+		# Because `type_key_from_typeid` builds TypeKeys bottom-up, every
+		# entry in `self.args` is an already-constructed TypeKey whose
+		# `_cached_hash` is set. Therefore `hash(a)` for each child returns
+		# the cached integer with no recursion into the child's args; the
+		# total work here is O(len(args)) per node and the whole-tree
+		# computation is O(N) over the type DAG without any stack growth
+		# proportional to nesting depth.
+		#
+		# Surfaced by the row #11 cleanup pass on the robustness matrix.
+		arg_hashes = tuple(hash(a) for a in self.args)
+		h = hash((self.package_id, self.module, self.name, self.fn_throws, arg_hashes))
+		object.__setattr__(self, "_cached_hash", h)
+
+	def __hash__(self) -> int:
+		return self._cached_hash  # type: ignore[attr-defined]
+
+	def __eq__(self, other: object) -> bool:
+		# Iterative deep equality. The auto-generated dataclass `__eq__`
+		# compares the `args` tuple element-wise via `tuple.__eq__`, which
+		# recursively calls `TypeKey.__eq__` on each pair — overflowing
+		# Python's recursion stack on deeply nested types at d≥5000.
+		#
+		# Strategy: short-circuit on cached hash inequality (no false
+		# negatives because equal objects have equal hashes), then walk
+		# both trees in lockstep using a `(left, right)` pair stack.
+		# Returns False on the first structural mismatch.
+		if self is other:
+			return True
+		if other.__class__ is not TypeKey:
+			return NotImplemented
+		if self._cached_hash != other._cached_hash:  # type: ignore[attr-defined]
+			return False
+		stack: list[tuple["TypeKey", "TypeKey"]] = [(self, other)]
+		while stack:
+			a, b = stack.pop()
+			if a is b:
+				continue
+			if (
+				a.package_id != b.package_id
+				or a.module != b.module
+				or a.name != b.name
+				or a.fn_throws != b.fn_throws
+			):
+				return False
+			if len(a.args) != len(b.args):
+				return False
+			# Push child pairs for deeper comparison.
+			for ca, cb in zip(a.args, b.args):
+				if ca is cb:
+					continue
+				stack.append((ca, cb))
+		return True
 
 	def head(self) -> "TypeHeadKey":
 		return TypeHeadKey(package_id=self.package_id, module=self.module, name=self.name)
@@ -138,29 +197,70 @@ def type_key_from_expr(
 	)
 
 
-def type_key_from_typeid(type_table: object, tid: int) -> TypeKey:
+def _type_id_children(type_table: object, tid: int) -> list[int]:
+	"""Return the child tids that participate in `type_key_from_typeid`'s
+	recursive descent for a given tid.
+
+	Mirrors the branching in the original recursive form: STRUCT/VARIANT
+	with an instance use `inst.type_args`; everything else uses
+	`td.param_types`. Factored out so the iterative walker can ask for
+	children once per node.
+	"""
 	td = type_table.get(tid)
-	module_id = getattr(td, "module_id", None)
-	module_packages = getattr(type_table, "module_packages", {}) or {}
-	default_package = getattr(type_table, "package_id", None)
-	package_id = None
-	if module_id is not None:
-		package_id = module_packages.get(module_id, default_package)
 	if td.kind is TypeKind.STRUCT:
 		inst = type_table.get_struct_instance(tid)
 		if inst is not None:
-			args = tuple(type_key_from_typeid(type_table, t) for t in inst.type_args)
-			return TypeKey(package_id=package_id, module=module_id, name=getattr(td, "name", ""), args=args)
+			return list(inst.type_args)
 	if td.kind is TypeKind.VARIANT:
 		inst = type_table.get_variant_instance(tid)
 		if inst is not None:
-			args = tuple(type_key_from_typeid(type_table, t) for t in inst.type_args)
-			return TypeKey(package_id=package_id, module=module_id, name=getattr(td, "name", ""), args=args)
-	args = tuple(type_key_from_typeid(type_table, t) for t in getattr(td, "param_types", []) or [])
-	fn_throws = None
-	if td.kind is TypeKind.FUNCTION:
-		fn_throws = bool(getattr(td, "fn_throws", True))
-	return TypeKey(package_id=package_id, module=module_id, name=getattr(td, "name", ""), args=args, fn_throws=fn_throws)
+			return list(inst.type_args)
+	return list(getattr(td, "param_types", []) or [])
+
+
+def type_key_from_typeid(type_table: object, tid: int) -> TypeKey:
+	# Iterative post-order builder. The recursive form (one frame per
+	# type-nesting level) overflowed Python's recursion stack on deeply
+	# nested types like `Array<Array<...<Int>>>` at d≥5000. Surfaced by
+	# the row #11 cleanup pass on the robustness matrix; same fix shape
+	# as `_type_expr_key` (parser/__init__.py) and rows #2 / #5.
+	#
+	# Cache is keyed by tid: type tables intern type ids, so the same tid
+	# always produces the same key. Caching also dedups shared subtrees
+	# in the type DAG (a small win over the recursive form).
+	cache: dict[int, TypeKey] = {}
+	stack: list[tuple[int, bool]] = [(tid, False)]
+	while stack:
+		cur_tid, expanded = stack.pop()
+		if expanded:
+			td = type_table.get(cur_tid)
+			module_id = getattr(td, "module_id", None)
+			module_packages = getattr(type_table, "module_packages", {}) or {}
+			default_package = getattr(type_table, "package_id", None)
+			package_id = None
+			if module_id is not None:
+				package_id = module_packages.get(module_id, default_package)
+			child_tids = _type_id_children(type_table, cur_tid)
+			args = tuple(cache[c] for c in child_tids)
+			fn_throws = None
+			if td.kind is TypeKind.FUNCTION:
+				fn_throws = bool(getattr(td, "fn_throws", True))
+			cache[cur_tid] = TypeKey(
+				package_id=package_id,
+				module=module_id,
+				name=getattr(td, "name", ""),
+				args=args,
+				fn_throws=fn_throws,
+			)
+			continue
+		if cur_tid in cache:
+			continue
+		# First visit: schedule the post-order build, then push children.
+		stack.append((cur_tid, True))
+		for c in _type_id_children(type_table, cur_tid):
+			if c not in cache:
+				stack.append((c, False))
+	return cache[tid]
 
 
 def normalize_type_key(

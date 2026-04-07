@@ -121,12 +121,20 @@ class StructSchema:
 
 	Field types are stored as GenericTypeExpr templates and instantiated with
 	concrete type arguments to create StructInstance entries.
+
+	`decl_loc` is the source location of the struct declaration itself,
+	captured at parser-AST → type-table commit time. Used by post-type-check
+	validators (e.g. `validate_no_recursive_value_types`) to anchor
+	diagnostics at the offending declaration. None when the schema was
+	created from a path that does not have source location info (e.g.
+	package consumption from a serialized .dmp).
 	"""
 
 	module_id: str
 	name: str
 	type_params: list[str]
 	fields: list[StructFieldSchema]
+	decl_loc: object | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +209,9 @@ class VariantSchema:
 	"""
 	Definition-time schema for a variant (generic or non-generic).
 
+	`decl_loc` is the source location of the variant declaration itself
+	(see `StructSchema.decl_loc` for the same convention).
+
 	The schema is stored on the *base* variant type (declared name). Concrete
 	instantiations are created via `TypeTable.ensure_variant_instantiated(...)` which
 	evaluates field `GenericTypeExpr`s into concrete `TypeId`s.
@@ -211,6 +222,7 @@ class VariantSchema:
 	type_params: list[str]
 	arms: list[VariantArmSchema]
 	tombstone_ctor: str | None = None
+	decl_loc: object | None = None
 
 
 @dataclass(frozen=True)
@@ -546,7 +558,7 @@ class TypeTable:
 		if self._frozen:
 			raise RuntimeError(f"TypeTable is frozen: {op} not allowed after world freeze")
 
-	def declare_struct(self, module_id: str, name: str, field_names: List[str], type_params: list[str] | None = None) -> TypeId:
+	def declare_struct(self, module_id: str, name: str, field_names: List[str], type_params: list[str] | None = None, *, decl_loc: object | None = None) -> TypeId:
 		"""
 		Declare a struct nominal type with placeholder field types.
 
@@ -583,6 +595,7 @@ class TypeTable:
 				name=name,
 				type_params=type_params,
 				fields=[],
+				decl_loc=decl_loc,
 			)
 			if ty_id not in self.struct_type_param_ids:
 				owner = FunctionId(module="lang.__internal", name=f"__struct_{module_id}::{name}", ordinal=0)
@@ -639,6 +652,7 @@ class TypeTable:
 			name=name,
 			type_params=type_params,
 			fields=[],
+			decl_loc=decl_loc,
 		)
 		if ty_id not in self.struct_type_param_ids:
 			owner = FunctionId(module="lang.__internal", name=f"__struct_{module_id}::{name}", ordinal=0)
@@ -726,6 +740,7 @@ class TypeTable:
 		arms: list[VariantArmSchema],
 		*,
 		tombstone_ctor: str | None = None,
+		decl_loc: object | None = None,
 	) -> TypeId:
 		"""
 		Declare a variant nominal type (generic or non-generic).
@@ -771,6 +786,7 @@ class TypeTable:
 				type_params=list(type_params),
 				arms=list(arms),
 				tombstone_ctor=tombstone_ctor,
+				decl_loc=decl_loc,
 			)
 			if type_params and base_id not in self.variant_type_param_ids:
 				owner = FunctionId(module="lang.__internal", name=f"__variant_{module_id}::{name}", ordinal=0)
@@ -812,6 +828,7 @@ class TypeTable:
 			type_params=list(type_params),
 			arms=list(arms),
 			tombstone_ctor=tombstone_ctor,
+			decl_loc=decl_loc,
 		)
 		if type_params and base_id not in self.variant_type_param_ids:
 			owner = FunctionId(module="lang.__internal", name=f"__variant_{module_id}::{name}", ordinal=0)
@@ -864,6 +881,7 @@ class TypeTable:
 			name=schema.name,
 			type_params=list(schema.type_params),
 			fields=list(fields),
+			decl_loc=schema.decl_loc,
 		)
 
 	def get_struct_schema(self, ty: TypeId) -> StructSchema | None:
@@ -1454,6 +1472,27 @@ class TypeTable:
 		cached = self._needs_drop_cache.get(tid)
 		if cached is not None:
 			return cached
+		# Cycle guard: a recursive value type (e.g. variant Tree { Branch(Tree) })
+		# is uninstantiable but is still present in the type table when has_drop
+		# is called. The recursive descent below would otherwise overflow the
+		# Python recursion stack. Track in-progress tids and return a
+		# conservative `False` on revisit; the recursive-value-type validator
+		# will reject the input shortly with a clean diagnostic, so the
+		# return value here only needs to avoid the crash. After the recursion
+		# unwinds, the cache is populated with the real value.
+		# See `issues/recursive-value-struct-accepted/`.
+		if not hasattr(self, "_has_drop_in_progress"):
+			self._has_drop_in_progress = set()  # type: ignore[attr-defined]
+		in_progress = self._has_drop_in_progress  # type: ignore[attr-defined]
+		if tid in in_progress:
+			return False
+		in_progress.add(tid)
+		try:
+			return self._has_drop_inner(tid)
+		finally:
+			in_progress.discard(tid)
+
+	def _has_drop_inner(self, tid: TypeId) -> bool:
 		td = self.get(tid)
 		if td.kind is TypeKind.FORWARD_NOMINAL:
 			resolved = (

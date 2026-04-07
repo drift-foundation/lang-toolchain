@@ -187,6 +187,80 @@ of crashing the compiler.
 		self.loc = loc
 
 
+# Robustness matrix row #1: parser-level block-nesting depth guard.
+# Default limit chosen so that legitimately deeply-indented code (machine-
+# generated dispatch tables, deeply chained matches, etc.) keeps working,
+# while pathological inputs hit a clean diagnostic before exhausting Python's
+# recursion stack. The limit applies jointly to block-bearing constructs
+# (blocks, if bodies, loop bodies, etc.) — anything that re-enters
+# `_build_stmt`/`_build_block` recursively.
+#
+# 256 is the published default of clang/rustc parser nesting limits and has
+# proven sufficient in practice. Bump only with a recorded justification.
+PARSER_MAX_NESTING_DEPTH: int = 256
+_NESTING_DEPTH = 0
+
+# Robustness matrix row #3: parser-level expression-nesting depth guard.
+# Mirrors PARSER_MAX_NESTING_DEPTH but applies to recursive expression
+# building (e.g. deeply nested parenthesized expressions `(((1)))`). The
+# counter is incremented in `_build_postfix`, which is the canonical entry
+# point for one level of recursive expression descent. The limit and
+# semantics match the block guard.
+PARSER_MAX_EXPR_NESTING_DEPTH: int = 256
+_EXPR_NESTING_DEPTH = 0
+
+# Robustness matrix row #12: identifier length cap.
+#
+# LLVM IR identifier names are derived from Drift `NAME` tokens. The
+# codegen wraps user identifiers with prefixes/suffixes (e.g.
+# `__dbg_keepalive_<name>__addr`, ~22 chars of overhead) and clang
+# rejects the resulting IR around ~1023 source-identifier chars with an
+# opaque "multiple definition of local value" error that doesn't point
+# at the offending source location. Without a Drift-side cap, users hit
+# this downstream failure with no actionable diagnostic.
+#
+# 256 is well below the downstream cliff with 4× headroom and well above
+# any realistic identifier length: clang/rustc/swiftc all publish
+# identifier limits in the 64–256 range, and no human-written code uses
+# 256-character identifiers. The cap only fires on machine-generated or
+# pathological input.
+PARSER_MAX_IDENTIFIER_LENGTH: int = 256
+
+
+class ParserIdentifierLengthError(ValueError):
+	"""Raised when a NAME token's text exceeds PARSER_MAX_IDENTIFIER_LENGTH.
+
+	Carries a best-effort `loc` so the diagnostic dispatch in
+	`lang/driftc/parser/__init__.py` can attach a stable span. Same shape as
+	`ParserNestingLimitError` for plumbing consistency.
+	"""
+
+	def __init__(self, message: str, *, loc: "Located") -> None:
+		super().__init__(message)
+		self.loc = loc
+
+
+class ParserNestingLimitError(ValueError):
+	"""Raised when parser AST-builder recursion exceeds a published nesting limit.
+
+	Currently used by:
+	  - `_build_block` for `PARSER_MAX_NESTING_DEPTH` (block nesting, row #1)
+	  - `_build_postfix` for `PARSER_MAX_EXPR_NESTING_DEPTH` (expression
+	    nesting, row #3)
+
+	The error message names which kind of nesting was exceeded so the
+	caller does not need to disambiguate.
+
+	Carries a best-effort `loc` so the diagnostic dispatch in
+	`lang/driftc/parser/__init__.py` can attach a stable span. Same shape as
+	`FStringParseError` for plumbing consistency.
+	"""
+
+	def __init__(self, message: str, *, loc: "Located") -> None:
+		super().__init__(message)
+		self.loc = loc
+
+
 def _parse_fstring(loc: Located, raw_string_token: Token) -> FString:
 	"""
 	Parse a raw STRING token (including braces) into an f-string AST.
@@ -727,18 +801,71 @@ _CURRENT_FILE: str | None = None
 _CURRENT_FILE_ID: int | None = None
 
 
+def _validate_identifier_lengths(tree: Tree) -> None:
+	"""Walk the parse tree once and reject any NAME token whose text exceeds
+	PARSER_MAX_IDENTIFIER_LENGTH.
+
+	This catches every identifier source — function names, variable names,
+	struct/variant fields, type parameters, etc. — regardless of which AST
+	builder reads the token. Iterative tree walk: no recursion.
+
+	Robustness matrix row #12. Without this guard, an over-long identifier
+	is escaped into the LLVM IR text and clang's IR parser rejects the
+	result with an opaque `1 error generated.` message that does not point
+	at the offending source location.
+	"""
+	stack: list[object] = [tree]
+	while stack:
+		node = stack.pop()
+		if isinstance(node, Token):
+			if node.type == "NAME" and len(node.value) > PARSER_MAX_IDENTIFIER_LENGTH:
+				loc = _loc_from_token(node)
+				raise ParserIdentifierLengthError(
+					f"identifier length exceeds {PARSER_MAX_IDENTIFIER_LENGTH} (got {len(node.value)})",
+					loc=loc,
+				)
+			continue
+		if isinstance(node, Tree):
+			# Iterate children; reverse so the first child is popped first
+			# (matches the order a recursive walk would visit them, which
+			# affects which violation is reported first when there are
+			# multiple).
+			for child in reversed(node.children):
+				stack.append(child)
+
+
 def parse_program(source: str, *, filename: str | None = None, file_id: int | None = None) -> Program:
     global _CURRENT_FILE, _CURRENT_FILE_ID
     prev_file = _CURRENT_FILE
     prev_file_id = _CURRENT_FILE_ID
     _CURRENT_FILE = filename
     _CURRENT_FILE_ID = file_id
+    # Robustness matrix row #1: the AST builder recurses ~4 stack frames per
+    # source nesting level (`_build_stmt` wrapper unwraps + `_build_block` +
+    # back into `_build_stmt`). Python's default recursion limit (1000) would
+    # be exhausted at ~250 source nesting levels, *before* the in-builder
+    # `PARSER_MAX_NESTING_DEPTH` counter (default 256) has a chance to fire
+    # with a clean diagnostic. Raise the interpreter limit to give the
+    # in-builder counter the headroom it needs to convert recursion overflow
+    # into a structured Drift diagnostic. Restore on exit so we don't leak
+    # the change to other code in the same process (test runners, the LSP).
+    import sys
+    _required_recursion_limit = max(PARSER_MAX_NESTING_DEPTH * 16, 4096)
+    _prev_recursion_limit = sys.getrecursionlimit()
+    if _prev_recursion_limit < _required_recursion_limit:
+        sys.setrecursionlimit(_required_recursion_limit)
     try:
         tree = _PARSER.parse(source)
+        # Robustness matrix row #12: reject pathologically long identifiers
+        # before they reach the AST builder / codegen / clang. The walk is
+        # iterative and runs in O(N) over the parse tree.
+        _validate_identifier_lengths(tree)
         return _build_program(tree)
     finally:
         _CURRENT_FILE = prev_file
         _CURRENT_FILE_ID = prev_file_id
+        if _prev_recursion_limit < _required_recursion_limit:
+            sys.setrecursionlimit(_prev_recursion_limit)
 
 
 class ModuleDeclError(ValueError):
@@ -1551,15 +1678,32 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 
 
 def _build_block(tree: Tree) -> Block:
-    statements: List[ExprStmt | LetStmt | ReturnStmt | AssertStmt | RaiseStmt] = []
-    for child in tree.children:
-        if not isinstance(child, Tree):
-            continue
-        if _name(child) == "stmt":
-            stmt = _build_stmt(child)
-            if stmt is not None:
-                statements.append(stmt)
-    return Block(statements=statements)
+    global _NESTING_DEPTH
+    _NESTING_DEPTH += 1
+    # The counter increments on every `_build_block` invocation, including
+    # the enclosing function body block. The user-facing contract is the
+    # number of *inner* nested blocks beneath that function body, so the
+    # threshold is `PARSER_MAX_NESTING_DEPTH + 1` (one extra slot for the
+    # function body itself). At PARSER_MAX_NESTING_DEPTH = 256 this means a
+    # function may contain up to 256 nested inner blocks; the 257th errors.
+    if _NESTING_DEPTH > PARSER_MAX_NESTING_DEPTH + 1:
+        _NESTING_DEPTH -= 1
+        raise ParserNestingLimitError(
+            f"block nesting depth exceeds {PARSER_MAX_NESTING_DEPTH}",
+            loc=_loc(tree),
+        )
+    try:
+        statements: List[ExprStmt | LetStmt | ReturnStmt | AssertStmt | RaiseStmt] = []
+        for child in tree.children:
+            if not isinstance(child, Tree):
+                continue
+            if _name(child) == "stmt":
+                stmt = _build_stmt(child)
+                if stmt is not None:
+                    statements.append(stmt)
+        return Block(statements=statements)
+    finally:
+        _NESTING_DEPTH -= 1
 
 
 def _build_value_block(tree: Tree) -> Block:
@@ -3236,11 +3380,28 @@ def _build_exception_ctor(tree: Tree) -> ExceptionCtor:
 
 
 def _build_postfix(tree: Tree) -> Expr:
+    global _EXPR_NESTING_DEPTH
     if not tree.children:
         raise ValueError("postfix node missing children")
-    expr = _build_expr(tree.children[0])
-    suffix_nodes = tree.children[1:]
-    return _apply_postfix_suffixes(expr, suffix_nodes)
+    # Robustness matrix row #3: limit recursive expression depth to keep
+    # pathological inputs (e.g. `(((((1)))))` at high nesting) from blowing
+    # Python's recursion stack. `_build_postfix` is reached exactly once per
+    # level of recursive expression descent (the canonical chain is
+    # `_build_expr` → `_build_postfix` → `_build_expr`), so counting here
+    # gives a 1:1 correspondence with source nesting depth.
+    _EXPR_NESTING_DEPTH += 1
+    if _EXPR_NESTING_DEPTH > PARSER_MAX_EXPR_NESTING_DEPTH + 1:
+        _EXPR_NESTING_DEPTH -= 1
+        raise ParserNestingLimitError(
+            f"expression nesting depth exceeds {PARSER_MAX_EXPR_NESTING_DEPTH}",
+            loc=_loc(tree),
+        )
+    try:
+        expr = _build_expr(tree.children[0])
+        suffix_nodes = tree.children[1:]
+        return _apply_postfix_suffixes(expr, suffix_nodes)
+    finally:
+        _EXPR_NESTING_DEPTH -= 1
 
 
 def _build_leading_dot(tree: Tree) -> Expr:

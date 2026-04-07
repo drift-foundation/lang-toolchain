@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import copy
 import heapq
+import functools
 import json
 import os
 import struct
@@ -863,48 +864,16 @@ def _ensure_module_packages(
 
 
 def _collect_call_nodes_by_id(root: H.HNode) -> dict[int, H.HExpr]:
-	seen: set[int] = set()
+	# Uses the shared iterative HIR walker from `stage1/node_ids.py`.
+	# See work/robustness/robustness-matrix.md row #15 for the dedup pass
+	# that consolidated this and three other local copies of the same
+	# pattern. The walker preserves declaration-order pre-order
+	# visitation and `id(obj)` dedup.
+	from lang.driftc.stage1.node_ids import iter_hir_walk
 	found: dict[int, H.HExpr] = {}
-
-	def walk(obj: object) -> None:
-		obj_id = id(obj)
-		if obj_id in seen:
-			return
-		seen.add(obj_id)
-
+	for obj in iter_hir_walk(root):
 		if isinstance(obj, (H.HCall, H.HMethodCall, H.HInvoke)):
 			found[getattr(obj, "node_id", -1)] = obj
-
-		if not _should_descend(obj):
-			return
-		if is_dataclass(obj):
-			for f in fields(obj):
-				walk_value(getattr(obj, f.name))
-		else:
-			for val in vars(obj).values():
-				walk_value(val)
-
-	def walk_value(val: object) -> None:
-		if val is None:
-			return
-		if isinstance(val, (list, tuple)):
-			for item in val:
-				walk_value(item)
-			return
-		if isinstance(val, dict):
-			for item in val.values():
-				walk_value(item)
-			return
-		walk(val)
-
-	def _should_descend(obj: object) -> bool:
-		if isinstance(obj, H.HNode):
-			return True
-		if is_dataclass(obj) and obj.__class__.__module__.startswith("lang.driftc.stage1"):
-			return True
-		return False
-
-	walk(root)
 	return found
 
 
@@ -2251,6 +2220,52 @@ def _postdrop_check_param_drops(
 				))
 
 
+# Robustness matrix rows #4 and #5: Python recursion-limit headroom for
+# the compile pipeline. Several lowering passes and HIR rewrite walks
+# descend trees recursively. User-controlled-depth shapes can hit the
+# default 1000 limit before any in-pass guard fires. Affected sites that
+# remain recursive (deliberately, to avoid invasive refactors of complex
+# visitors with many special cases):
+#   - stage2/hir_to_mir.py::_visit_expr_HBinary
+#     short-circuit AND/OR via new blocks, type-coercion, string-aware
+#     MIR — too many special cases for an iterative spine flattener
+#   - parser/__init__.py::walk_stmt/walk_block/walk_expr
+#     HIR rewrite pass for module-qualified access; in-place mutation,
+#     lexical-bound-set discipline, specialized handling for match/try
+#     arms with binders — same complexity story
+#
+# Stage1's `_visit_expr_Binary` (row #4) and `_visit_stmt_IfStmt` (row #5)
+# ARE iterative; only the downstream walkers above need stack headroom.
+#
+# The decorator is applied to every public compile entry point in this
+# module so library consumers (compile_stubbed_funcs,
+# compile_to_llvm_ir_for_tests) get the same headroom as the CLI path.
+# The previous limit is restored on exit so callers that import driftc
+# as a library do not get a permanent global recursion-limit change.
+#
+# 32768 supports ~8000 levels of else-if chain at the most expensive
+# walker (`walk_stmt`/`walk_block`, ~4 frames per source level). The
+# 0.27.160 value of 8192 only supported ~2000 levels and was too tight
+# for row #5 at depths >2000.
+_COMPILE_RECURSION_HEADROOM = 32768
+
+
+def _with_compile_recursion_headroom(fn):
+	@functools.wraps(fn)
+	def wrapper(*args, **kwargs):
+		prev = sys.getrecursionlimit()
+		bumped = prev < _COMPILE_RECURSION_HEADROOM
+		if bumped:
+			sys.setrecursionlimit(_COMPILE_RECURSION_HEADROOM)
+		try:
+			return fn(*args, **kwargs)
+		finally:
+			if bumped:
+				sys.setrecursionlimit(prev)
+	return wrapper
+
+
+@_with_compile_recursion_headroom
 def compile_stubbed_funcs(
 	func_hirs: Mapping[FunctionId | str, H.HBlock],
 	declared_can_throw: Mapping[FunctionId | str, bool] | None = None,
@@ -3050,6 +3065,13 @@ def compile_stubbed_funcs(
 		# Phase 3: Pass 1 already called validate_interface_schemas (main:8063).
 		if pass1_state is None:
 			type_checker.validate_interface_schemas(diagnostics=type_diags)
+			# Recursive value-type cycle detector. Closes
+			# `issues/recursive-value-struct-accepted/`. Runs after struct
+			# and variant instances are committed to the type table so it
+			# sees monomorphized types; emits one diagnostic per offending
+			# type with a primary `Arc<...>` (or `Optional<Arc<...>>`)
+			# suggestion.
+			type_checker.validate_no_recursive_value_types(diagnostics=type_diags)
 		if module_exports is not None:
 			interface_impls: list[ImplMeta] = []
 			for exp in module_exports.values():
@@ -4766,49 +4788,14 @@ def compile_stubbed_funcs(
 		return "strict"
 
 	def _collect_hcast_node_ids(body: H.HNode) -> set[int]:
+		# Uses the shared iterative HIR walker. Row #15 dedup.
+		from lang.driftc.stage1.node_ids import iter_hir_walk
 		ids: set[int] = set()
-		seen: set[int] = set()
-		hir_modules = {H.__name__, "lang.driftc.stage1.closures"}
-
-		def _should_descend(obj: object) -> bool:
-			if isinstance(obj, H.HNode):
-				return True
-			if is_dataclass(obj) and obj.__class__.__module__ in hir_modules:
-				return True
-			return False
-
-		def walk(obj: object) -> None:
-			obj_id = id(obj)
-			if obj_id in seen:
-				return
-			seen.add(obj_id)
+		for obj in iter_hir_walk(body):
 			if isinstance(obj, H.HCast):
 				node_id = getattr(obj, "node_id", 0)
 				if node_id:
 					ids.add(node_id)
-			if not _should_descend(obj):
-				return
-			if is_dataclass(obj):
-				for f in fields(obj):
-					walk_value(getattr(obj, f.name))
-			else:
-				for val in vars(obj).values():
-					walk_value(val)
-
-		def walk_value(val: object) -> None:
-			if val is None:
-				return
-			if isinstance(val, (list, tuple)):
-				for item in val:
-					walk_value(item)
-				return
-			if isinstance(val, dict):
-				for key in sorted(val.keys(), key=repr):
-					walk_value(val[key])
-				return
-			walk(val)
-
-		walk(body)
 		return ids
 
 	if drift_debug.enabled("local_types_trace"):
@@ -6382,6 +6369,7 @@ def compile_stubbed_funcs(
 	return mir_funcs_by_id
 
 
+@_with_compile_recursion_headroom
 def compile_to_llvm_ir_for_tests(
 	func_hirs: Mapping[FunctionId | str, H.HBlock],
 	signatures: Mapping[FunctionId | str, FnSignature],
@@ -6689,6 +6677,7 @@ def _trust_label() -> str:
 
 
 
+@_with_compile_recursion_headroom
 def main(argv: list[str] | None = None) -> int:
 	"""
 	Minimal CLI: parses a Drift file, type checks, then borrow checks. If any stage

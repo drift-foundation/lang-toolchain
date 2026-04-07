@@ -225,11 +225,38 @@ def _type_expr_to_str(typ: parser_ast.TypeExpr) -> str:
 
 
 def _type_expr_key(typ: parser_ast.TypeExpr) -> tuple[object | None, str, tuple]:
-	qual = getattr(typ, "module_id", None) or getattr(typ, "module_alias", None)
-	if typ.name == "fn":
-		throws_key = typ.fn_throws_raw()
-		return (qual, typ.name, throws_key, tuple(_type_expr_key(a) for a in getattr(typ, "args", []) or []))
-	return (qual, typ.name, tuple(_type_expr_key(a) for a in getattr(typ, "args", []) or []))
+	# Iterative post-order builder. The recursive form (one frame per
+	# type-nesting level) overflowed Python's recursion stack on deeply
+	# nested types like `Array<Array<...<Int>>>` at d≥5000. Surfaced by
+	# the row #11 cleanup pass on the robustness matrix; same fix shape
+	# as rows #2 and #5.
+	#
+	# Strategy: walk the type tree post-order with a two-phase work stack
+	# (first visit pushes children, second visit consumes their cached
+	# keys to build this node's key). Cache is keyed by `id(node)`; the
+	# original recursive form did not dedup shared subtrees either, so
+	# this preserves behavior — a node that appears twice in the tree
+	# gets two cache slots, matching the recursive form's two recursive
+	# evaluations.
+	keys: dict[int, tuple] = {}
+	stack: list[tuple[parser_ast.TypeExpr, bool]] = [(typ, False)]
+	while stack:
+		node, expanded = stack.pop()
+		if expanded:
+			qual = getattr(node, "module_id", None) or getattr(node, "module_alias", None)
+			args = getattr(node, "args", []) or []
+			child_keys = tuple(keys[id(a)] for a in args)
+			if node.name == "fn":
+				throws_key = node.fn_throws_raw()
+				keys[id(node)] = (qual, node.name, throws_key, child_keys)
+			else:
+				keys[id(node)] = (qual, node.name, child_keys)
+			continue
+		# First visit: schedule the post-order build, then push children.
+		stack.append((node, True))
+		for child in getattr(node, "args", []) or []:
+			stack.append((child, False))
+	return keys[id(typ)]
 
 
 def _trait_subject_key(subject: object) -> object:
@@ -662,12 +689,58 @@ def _convert_aug_assign(stmt: "parser_ast.AugAssignStmt") -> s0.Stmt:
 	)
 
 def _convert_if(stmt: parser_ast.IfStmt) -> s0.Stmt:
-	return s0.IfStmt(
-		cond=_convert_expr(stmt.condition),
-		then_block=_convert_block(stmt.then_block),
-		else_block=_convert_block(stmt.else_block) if stmt.else_block else [],
-		loc=Span.from_loc(stmt.loc),
-	)
+	# Iteratively flatten else-if chains to avoid Python recursion overflow.
+	# The recursive shape was `_convert_if → _convert_block → _convert_stmt
+	# → _convert_if → ...`, ~4 frames per source `else if` level. Long
+	# chains (`if x==0 {} else if x==1 {} else if x==2 {} ...`) blew the
+	# row #4 recursion-limit bump (8192) at ~2000 source levels.
+	# See work/robustness/robustness-matrix.md row #5.
+	#
+	# Strategy: walk the chain iteratively from outer to inner, collecting
+	# `(cond, then_block, loc)` tuples. The chain ends when we hit a
+	# non-`else if` else-block (multi-statement block, non-IfStmt single
+	# statement, or no else block at all). Then we build the resulting
+	# `s0.IfStmt` nodes from innermost out, so the deepest level holds
+	# the final-else conversion and each outer level wraps the previous.
+	#
+	# Inner blocks reachable through `then_block` are still converted
+	# recursively via `_convert_block` — those are typically shallow (the
+	# pathological shape is the else chain, not the then bodies). If a
+	# user actually nests deep blocks inside `then` arms, row #1's parser
+	# nesting limit catches it before this code is reached.
+	chain: list[tuple[parser_ast.Expr, parser_ast.Block, object]] = []
+	tail_else_block: parser_ast.Block | None = None
+	current = stmt
+	while True:
+		chain.append((current.condition, current.then_block, current.loc))
+		eb = current.else_block
+		if not eb:
+			tail_else_block = None
+			break
+		body = eb.statements
+		if len(body) == 1 and isinstance(body[0], parser_ast.IfStmt):
+			current = body[0]
+			continue
+		tail_else_block = eb
+		break
+
+	# Build the chain inside-out. `else_stmts` carries the already-built
+	# else block for the level we're about to wrap.
+	if tail_else_block is None:
+		else_stmts: list[s0.Stmt] = []
+	else:
+		else_stmts = _convert_block(tail_else_block)
+	result: s0.IfStmt | None = None
+	for cond, then_block, loc in reversed(chain):
+		result = s0.IfStmt(
+			cond=_convert_expr(cond),
+			then_block=_convert_block(then_block),
+			else_block=else_stmts,
+			loc=Span.from_loc(loc),
+		)
+		else_stmts = [result]
+	assert result is not None  # chain is non-empty by construction
+	return result
 
 
 def _convert_break(stmt: parser_ast.BreakStmt) -> s0.Stmt:
@@ -1312,6 +1385,12 @@ def parse_drift_files_to_hir(
 		except _parser.FStringParseError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
+		except _parser.ParserNestingLimitError as err:
+			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
+			continue
+		except _parser.ParserIdentifierLengthError as err:
+			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
+			continue
 		except UnexpectedInput as err:
 			code = _parse_error_code(err)
 			message = _parse_error_message(err, code)
@@ -1587,6 +1666,12 @@ def parse_drift_workspace_to_hir(
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
 		except _parser.FStringParseError as err:
+			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
+			continue
+		except _parser.ParserNestingLimitError as err:
+			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
+			continue
+		except _parser.ParserIdentifierLengthError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc)))
 			continue
 		except UnexpectedInput as err:
@@ -3093,6 +3178,7 @@ def parse_drift_workspace_to_hir(
 					_s.name,
 					[f.name for f in getattr(_s, "fields", []) or []],
 					list(getattr(_s, "type_params", []) or []),
+					decl_loc=getattr(_s, "loc", None),
 				)
 				field_templates = [
 					StructFieldSchema(
@@ -3210,6 +3296,7 @@ def parse_drift_workspace_to_hir(
 					list(getattr(_v, "type_params", []) or []),
 					arms,
 					tombstone_ctor=tombstone_ctor,
+					decl_loc=getattr(_v, "loc", None),
 				)
 			except ValueError as err:
 				diagnostics.append(_p_diag(message=str(err), severity="error", span=Span.from_loc(getattr(_v, "loc", None))))
@@ -4211,6 +4298,7 @@ def _lower_parsed_program_to_hir(
 				s.name,
 				field_names,
 				list(getattr(s, "type_params", []) or []),
+				decl_loc=getattr(s, "loc", None),
 			)
 			param_ids = type_table.get_struct_type_param_ids(struct_base_id) or []
 			if param_ids:
@@ -4323,6 +4411,7 @@ def _lower_parsed_program_to_hir(
 				list(getattr(v, "type_params", []) or []),
 				arms,
 				tombstone_ctor=tombstone_ctor,
+				decl_loc=getattr(v, "loc", None),
 			)
 		except ValueError as err:
 			diagnostics.append(_p_diag(message=str(err), severity="error", span=Span.from_loc(getattr(v, "loc", None))))
@@ -4771,6 +4860,46 @@ def parse_drift_to_hir(
 		_set_active_source_manager(prev_source_manager)
 		return empty, table, {}, diags
 	except _parser.QualifiedMemberParseError as err:
+		empty = ModuleLowered(
+			module_id="main",
+			package_id=package_id,
+			source_path=path,
+			func_hirs={},
+			signatures_by_id={},
+			fn_ids_by_name={},
+			requires_by_fn={},
+			requires_by_struct={},
+			type_defs={},
+			impl_defs=[],
+			origin_by_fn_id={},
+		)
+		diags = [_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc))]
+		_relabel_diagnostics(diags, {str(path): "<source>"})
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diags
+	except _parser.ParserNestingLimitError as err:
+		empty = ModuleLowered(
+			module_id="main",
+			package_id=package_id,
+			source_path=path,
+			func_hirs={},
+			signatures_by_id={},
+			fn_ids_by_name={},
+			requires_by_fn={},
+			requires_by_struct={},
+			type_defs={},
+			impl_defs=[],
+			origin_by_fn_id={},
+		)
+		diags = [_p_diag(message=str(err), severity="error", span=_span_in_file(path, err.loc))]
+		_relabel_diagnostics(diags, {str(path): "<source>"})
+		table = TypeTable()
+		table.set_source_manager(source_manager)
+		_set_active_source_manager(prev_source_manager)
+		return empty, table, {}, diags
+	except _parser.ParserIdentifierLengthError as err:
 		empty = ModuleLowered(
 			module_id="main",
 			package_id=package_id,

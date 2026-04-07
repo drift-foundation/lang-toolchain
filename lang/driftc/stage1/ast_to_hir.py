@@ -556,9 +556,52 @@ class AstToHIR:
 			op = op_map[expr.op]
 		except KeyError:
 			raise NotImplementedError(f"Unsupported binary op: {expr.op}")
-		left = self.lower_expr(expr.left)
-		right = self.lower_expr(expr.right)
-		return H.HBinary(op=op, left=left, right=right, loc=self._as_span(expr.loc))
+		# Iteratively unroll the left spine. Long chains like `1+1+1+...+1`
+		# parse into a deeply left-leaning tree (`((((1+1)+1)+1)...)+1`).
+		# A naive `lower_expr(expr.left)` recurses once per chain element and
+		# overflows Python's recursion stack at ~400 elements. By collecting
+		# the spine iteratively and rebuilding the HIR tree from the
+		# leftmost leaf outward, the depth becomes O(1).
+		#
+		# Right operands are still lowered with the regular recursive
+		# `lower_expr` because they are usually leaves; right-leaning chains
+		# (`1+(1+(1+...))`) are not exercised by row #4 and would need a
+		# separate iterative right-spine fix if they ever surface.
+		# See work/robustness/robustness-matrix.md row #4.
+		# Seed the spine with the entry expr itself — we know it is an
+		# `ast.Binary` with a supported op (we just looked `op` up in
+		# `op_map` above), so the first iteration is unconditional. Then
+		# walk the left subtree iteratively. The loop guards against the
+		# leftmost being a non-Binary or having a special op; in those
+		# cases the descent stops and the leftmost is lowered recursively
+		# (depth bounded by the leftmost leaf, not by chain length).
+		spine_ops: list[H.BinaryOp] = [op]
+		spine_rights: list[ast.Expr] = [expr.right]
+		spine_locs: list[object] = [expr.loc]
+		node: ast.Expr = expr.left
+		while (
+			isinstance(node, ast.Binary)
+			and node.op != "|>"
+			and node.op in op_map
+		):
+			spine_ops.append(op_map[node.op])
+			spine_rights.append(node.right)
+			spine_locs.append(node.loc)
+			node = node.left
+		# `node` is now the leftmost non-Binary (or a Binary with an op the
+		# iterative path doesn't handle — pipeline `|>`, unsupported ops).
+		# Lower it recursively; depth here is bounded by the depth of the
+		# leftmost leaf, not by the chain length.
+		result: H.HExpr = self.lower_expr(node)
+		# Rebuild the chain from the inside out. spine_* are in
+		# top-down order (outermost first), so reverse to apply
+		# innermost-first.
+		for op_b, right_ast, loc in zip(
+			reversed(spine_ops), reversed(spine_rights), reversed(spine_locs)
+		):
+			right = self.lower_expr(right_ast)
+			result = H.HBinary(op=op_b, left=result, right=right, loc=self._as_span(loc))
+		return result
 
 	def _visit_expr_ArrayLiteral(self, expr: ast.ArrayLiteral) -> H.HExpr:
 		"""Lower array literal by lowering each element expression."""
@@ -1016,10 +1059,79 @@ class AstToHIR:
 		return H.HAugAssign(target=target, op=str(getattr(stmt, "op", "+=")), value=value, loc=Span.from_loc(getattr(stmt, "loc", None)))
 
 	def _visit_stmt_IfStmt(self, stmt: ast.IfStmt) -> H.HStmt:
-		cond = self.lower_expr(stmt.cond)
-		then_block = self.lower_block(stmt.then_block)
-		else_block = self.lower_block(stmt.else_block) if stmt.else_block else None
-		return H.HIf(cond=cond, then_block=then_block, else_block=else_block, loc=self._as_span(getattr(stmt, "loc", None)))
+		# Iteratively flatten else-if chains. The recursive shape was
+		# `_visit_stmt_IfStmt → lower_block(else_block) → lower_stmt →
+		# _visit_stmt_IfStmt → ...`, ~4 frames per source `else if` level.
+		# Long chains blow Python's recursion stack at ~2000 levels even
+		# with the row #4 recursion-limit bump (8192).
+		# See work/robustness/robustness-matrix.md row #5.
+		#
+		# An else-if chain is detected as: an `else_block` list whose only
+		# statement is another `IfStmt`. The pure-else terminating block
+		# (multi-statement, or a single non-IfStmt) is converted normally
+		# via `lower_block` and gets its own scope as before.
+		#
+		# Scoping note: the recursive version pushed a new scope for each
+		# in-chain `else_block` via `lower_block`. Those scopes were always
+		# empty (the else_block contains exactly the inner IfStmt and
+		# nothing else), so binding-id allocation is identical whether we
+		# push them or skip them. The terminating else block IS still
+		# lowered via `lower_block` so its scope discipline is preserved.
+		chain: list[tuple[ast.Expr, list[ast.Stmt], object]] = []
+		tail_else: list[ast.Stmt] | None = None
+		current = stmt
+		while True:
+			chain.append((current.cond, current.then_block, getattr(current, "loc", None)))
+			eb = current.else_block
+			if not eb:
+				tail_else = None
+				break
+			if len(eb) == 1 and isinstance(eb[0], ast.IfStmt):
+				current = eb[0]
+				continue
+			tail_else = eb
+			break
+
+		# Lower each chain level in *forward* (outer-first) order so that
+		# `lower_expr(cond)` and `lower_block(then_block)` allocate bindings
+		# in the same order the original recursive visitor did. The
+		# previous draft lowered innermost-first, which silently reversed
+		# binding-id allocation across chain arms — a determinism shift
+		# that broke shape parity with the recursive form. The HIf-tree
+		# construction below is pure (no binding allocation) so doing it
+		# innermost-out after all lowering is complete is safe.
+		lowered: list[tuple[H.HExpr, H.HBlock, object]] = []
+		for cond_ast, then_ast, loc in chain:
+			cond = self.lower_expr(cond_ast)
+			then_h = self.lower_block(then_ast)
+			lowered.append((cond, then_h, loc))
+
+		# Tail else block comes last in the recursive lowering order too:
+		# the recursive form descended into each chain level's else_block
+		# (which held the next inner IfStmt) before reaching the
+		# terminating block at the bottom of the chain.
+		if tail_else is None:
+			else_h: H.HBlock | None = None
+		else:
+			else_h = self.lower_block(tail_else)
+
+		# Construction phase: build HIf nodes innermost out using the
+		# already-lowered components. No binding allocation happens here.
+		result: H.HIf | None = None
+		for cond, then_h, loc in reversed(lowered):
+			result = H.HIf(
+				cond=cond,
+				then_block=then_h,
+				else_block=else_h,
+				loc=self._as_span(loc),
+			)
+			# The just-built HIf becomes the (single statement of the) else
+			# block for the next outer level. Wrap it in an HBlock so the
+			# HIR shape matches what the recursive version produced for an
+			# else-if chain.
+			else_h = H.HBlock(statements=[result])
+		assert result is not None  # chain is non-empty by construction
+		return result
 
 	def _visit_stmt_BlockStmt(self, stmt: ast.BlockStmt) -> H.HStmt:
 		body = getattr(stmt, "body", None)

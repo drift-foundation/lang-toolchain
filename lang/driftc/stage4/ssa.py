@@ -242,22 +242,43 @@ class MirToSSA:
 				succs[bname].add(term.then_target)
 				succs[bname].add(term.else_target)
 
+		# Iterative DFS with an explicit work stack. The recursive form here
+		# (`def dfs(node)` with `dfs(s)` inside) overflowed Python's default
+		# recursion limit on deep linear CFGs (~1000 blocks). Linear chains
+		# arise from large match expressions and similar shapes; the depth is
+		# user-controlled, so the recursive form was unbounded in practice.
+		# See work/robustness/robustness-matrix.md row #6.
+		#
+		# The work stack holds (node, iterator-over-successors) pairs. When a
+		# node's successors are exhausted, it is popped from `on_path`; an
+		# unvisited successor is pushed; an `on_path` successor is the
+		# backedge we're looking for.
 		visited: set[str] = set()
-		stack: set[str] = set()
+		on_path: set[str] = set()
+		work: list[tuple[str, "iter[str]"]] = []
 
-		def dfs(node: str) -> bool:
-			visited.add(node)
-			stack.add(node)
-			for s in succs.get(node, ()):
+		root = func.entry
+		visited.add(root)
+		on_path.add(root)
+		work.append((root, iter(succs.get(root, ()))))
+
+		while work:
+			node, it = work[-1]
+			next_succ = None
+			for s in it:
 				if s not in visited:
-					if dfs(s):
-						return True
-				elif s in stack:
+					next_succ = s
+					break
+				if s in on_path:
 					return True
-			stack.remove(node)
-			return False
-
-		return dfs(func.entry)
+			if next_succ is None:
+				on_path.discard(node)
+				work.pop()
+			else:
+				visited.add(next_succ)
+				on_path.add(next_succ)
+				work.append((next_succ, iter(succs.get(next_succ, ()))))
+		return False
 
 	def _run_multi_block_acyclic(self, func: MirFunc) -> SsaFunc:
 		"""
@@ -401,7 +422,11 @@ class MirToSSA:
 		# body stay consistent for non-address-taken params.
 		func.params = new_params
 
-		def rename_block(block_name: str) -> None:
+		# Per-block locals-defined list, retained for the deferred post-order
+		# stack-pop step in the iterative dominator-tree walk below.
+		per_block_locals_defined: Dict[str, list[str]] = {}
+
+		def rename_block_body(block_name: str) -> list[str]:
 			block = func.blocks[block_name]
 			locals_defined: list[str] = []
 			new_instrs: list[MInstr] = []
@@ -471,15 +496,28 @@ class MirToSSA:
 							block.instructions.append(ZeroValue(dest=zero_name, ty=ty))
 						succ_instr.incoming[block_name] = zero_name
 
-			# Recurse dominator-tree children.
+			# Return the per-block locals_defined; the iterative driver below
+			# uses this to restore stacks in post-order.
+			return locals_defined
+
+		# Iterative pre/post-order walk of the dominator tree. The recursive
+		# form blew Python's recursion limit on deep linear CFGs (huge match,
+		# work/robustness/robustness-matrix.md row #6). Each work-stack entry
+		# is (block_name, expanded). On the first visit (`expanded == False`)
+		# we run the pre-order body (renaming) and schedule a deferred
+		# post-order entry plus children. On the second visit (`expanded ==
+		# True`) we restore the local-version stacks.
+		_walk: list[tuple[str, bool]] = [(func.entry, False)]
+		while _walk:
+			block_name, expanded = _walk.pop()
+			if expanded:
+				for local in reversed(per_block_locals_defined[block_name]):
+					stacks[local].pop()
+				continue
+			per_block_locals_defined[block_name] = rename_block_body(block_name)
+			_walk.append((block_name, True))
 			for child in children[block_name]:
-				rename_block(child)
-
-			# Pop locals defined in this block to restore stacks.
-			for local in reversed(locals_defined):
-				stacks[local].pop()
-
-		rename_block(func.entry)
+				_walk.append((child, False))
 
 		# Prune trivial φ nodes (single incoming); replace with AssignSSA to keep IR verifiable.
 		for block in func.blocks.values():
@@ -517,18 +555,30 @@ class MirToSSA:
 				targets.extend([block.terminator.then_target, block.terminator.else_target])
 			succs[name] = targets
 
+		# Iterative post-order DFS. Recursive form overflowed Python's
+		# recursion limit on deep linear CFGs (huge match), see
+		# work/robustness/robustness-matrix.md row #6.
+		#
+		# Determinism: a LIFO work stack visits successors in reverse order
+		# of how they were pushed. To preserve the *exact* visitation order
+		# of the prior recursive `for succ in succs[b]: dfs(succ)` walk on
+		# branched CFGs (which matters for downstream block-order-sensitive
+		# passes), we push successors in reverse so the pop order matches.
 		visited: set[str] = set()
 		post: list[str] = []
-
-		def dfs(b: str) -> None:
+		_walk: list[tuple[str, bool]] = [(func.entry, False)]
+		while _walk:
+			b, expanded = _walk.pop()
+			if expanded:
+				post.append(b)
+				continue
 			if b in visited:
-				return
+				continue
 			visited.add(b)
-			for succ in succs.get(b, []):
-				dfs(succ)
-			post.append(b)
-
-		dfs(func.entry)
+			_walk.append((b, True))
+			for succ in reversed(succs.get(b, [])):
+				if succ not in visited:
+					_walk.append((succ, False))
 		rpo = list(reversed(post))
 		unreachable = [name for name in func.blocks if name not in visited]
 		return rpo + unreachable

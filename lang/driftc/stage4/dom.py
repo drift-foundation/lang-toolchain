@@ -158,13 +158,25 @@ class DominanceFrontierAnalysis:
 					df[b].add(s)
 
 		# 2) Upwards propagation along the dominator tree.
-		def _dfs(node: str) -> None:
+		# Iterative post-order traversal: process children before parents so
+		# each parent's `df` aggregates from already-completed children. The
+		# recursive form here overflowed Python's default recursion limit on
+		# deep linear CFGs (~1000 blocks); see work/robustness/robustness-matrix.md
+		# row #6.
+		post_order: list[str] = []
+		_walk: list[tuple[str, bool]] = [(entry, False)]
+		while _walk:
+			node, expanded = _walk.pop()
+			if expanded:
+				post_order.append(node)
+				continue
+			_walk.append((node, True))
 			for child in children[node]:
-				_dfs(child)
+				_walk.append((child, False))
+		for node in post_order:
+			for child in children[node]:
 				for w in df[child]:
 					if idom.get(w) != node:
 						df[node].add(w)
-
-		_dfs(entry)
 
 		return DominanceFrontierInfo(df=df)

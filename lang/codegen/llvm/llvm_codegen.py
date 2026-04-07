@@ -772,6 +772,19 @@ class LlvmModuleBuilder:
 			return None
 		line = span.line
 		column = span.column or 1
+		# LLVM stores `DILocation.column` as a 16-bit unsigned integer
+		# (max 65535). Pathological single-line inputs (e.g. machine-
+		# generated long expression chains, robustness probes like
+		# `gen_else_if_chain` at d≥2000) can produce column counts that
+		# exceed this. Without clamping, the LLVM IR text emission below
+		# produces a `column: <overflow>` value that the LLVM IR parser
+		# rejects with `value for 'column' too large, limit is 65535`.
+		# Clamp to LLVM's maximum so the compile succeeds; the resulting
+		# debug info points "near the end of the line", which is lossy
+		# but more useful than the alternative (column 0 = unknown).
+		# See `issues/llvm-debuginfo-column-overflow/`.
+		if column > 65535:
+			column = 65535
 		key = (scope_id, line, column)
 		if key in self._dbg_location_ids:
 			return self._dbg_location_ids[key]
