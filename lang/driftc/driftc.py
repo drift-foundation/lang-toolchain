@@ -10388,7 +10388,14 @@ def main(argv: list[str] | None = None) -> int:
 				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
 			},
 		)
-		_build_profile = "asan" if _env_true("DRIFT_ASAN") else ("optimized" if optimized else ("debug" if debug_enabled else "default"))
+		if _env_true("DRIFT_ASAN") and _env_true("DRIFT_UBSAN"):
+			_build_profile = "asan_ubsan"
+		elif _env_true("DRIFT_ASAN"):
+			_build_profile = "asan"
+		elif _env_true("DRIFT_UBSAN"):
+			_build_profile = "ubsan"
+		else:
+			_build_profile = "optimized" if optimized else ("debug" if debug_enabled else "default")
 		# K26: Inject external_impl_metas into combined_exports so that
 		# _build_interface_impl_index can find trait impls for vtable
 		# emission during codegen.  This must happen AFTER type-checking
@@ -10558,7 +10565,9 @@ def main(argv: list[str] | None = None) -> int:
 	linker_flags = ["-fuse-ld=gold"] if use_linker == "gold" else []
 	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
 	asan_enabled = _env_true("DRIFT_ASAN")
+	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	asan_flags = ["-fsanitize=address", "-g"] if asan_enabled else []
+	ubsan_flags = ["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"] if ubsan_enabled else []
 	opt_flags = ["-O2"] if optimized else []
 	runtime_archive: str | None = None
 	rt_mode = runtime_archive_mode()
@@ -10566,6 +10575,7 @@ def main(argv: list[str] | None = None) -> int:
 		variant = runtime_archive_variant(
 			debug_enabled=debug_enabled,
 			asan_enabled=asan_enabled,
+			ubsan_enabled=ubsan_enabled,
 			alloc_track_enabled=False,
 			optimized=optimized,
 		)
@@ -10586,6 +10596,7 @@ def main(argv: list[str] | None = None) -> int:
 			clang,
 			*linker_flags,
 			*asan_flags,
+			*ubsan_flags,
 			*opt_flags,
 			"-c",
 			"-x",
@@ -10617,6 +10628,7 @@ def main(argv: list[str] | None = None) -> int:
 					clang,
 					*linker_flags,
 					*asan_flags,
+					*ubsan_flags,
 					*opt_flags,
 					"-c",
 					"-x",
@@ -10644,6 +10656,7 @@ def main(argv: list[str] | None = None) -> int:
 			clang,
 			*linker_flags,
 			*asan_flags,
+			*ubsan_flags,
 			*opt_flags,
 			str(ir_obj),
 			*rt_inputs,
@@ -10659,6 +10672,7 @@ def main(argv: list[str] | None = None) -> int:
 				clang,
 				*linker_flags,
 				*asan_flags,
+				*ubsan_flags,
 				*opt_flags,
 				"-x",
 				"ir",
@@ -10676,6 +10690,7 @@ def main(argv: list[str] | None = None) -> int:
 				clang,
 				*linker_flags,
 				*asan_flags,
+				*ubsan_flags,
 				*opt_flags,
 				"-x",
 				"ir",

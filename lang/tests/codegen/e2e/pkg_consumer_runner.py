@@ -44,6 +44,7 @@ PHASE_COMPILE_CODEGEN = "compile-codegen"
 PHASE_LINK = "link"
 PHASE_RUNTIME = "runtime"
 PHASE_RUNTIME_ASAN = "runtime-asan"
+PHASE_RUNTIME_UBSAN = "runtime-ubsan"
 
 # Version used when building the test std package.  The --dep filter on the
 # consumer compile must match exactly, so keep these in sync.
@@ -112,6 +113,22 @@ def _asan_options_with_defaults(existing: str | None) -> str:
 		parts.append("detect_leaks=0")
 	if "halt_on_error" not in keys:
 		parts.append("halt_on_error=1")
+	return ":".join(parts)
+
+
+def _ubsan_options_with_defaults(existing: str | None) -> str:
+	parts: list[str] = []
+	if existing:
+		parts = [p for p in existing.split(":") if p]
+	keys = {p.split("=", 1)[0] for p in parts}
+	if "print_stacktrace" not in keys:
+		parts.append("print_stacktrace=1")
+	if "halt_on_error" not in keys:
+		parts.append("halt_on_error=1")
+	if "abort_on_error" not in keys:
+		parts.append("abort_on_error=0")
+	if "symbolize" not in keys:
+		parts.append("symbolize=1")
 	return ":".join(parts)
 
 
@@ -251,6 +268,7 @@ def _link_and_run(
 
 	bin_path = build_dir / "a.out"
 	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
+	ubsan_enabled = os.environ.get("DRIFT_UBSAN") in ("1", "true", "True")
 
 	from lang.language_runtime import (
 		build_runtime_archive,
@@ -281,11 +299,14 @@ def _link_and_run(
 	if asan_enabled:
 		c_flags.extend(["-fsanitize=address", "-g"])
 		link_flags.extend(["-fsanitize=address"])
+	if ubsan_enabled:
+		c_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
+		link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
 
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
 		try:
-			variant = runtime_archive_variant(debug_enabled=False, asan_enabled=asan_enabled, alloc_track_enabled=False, optimized=False)
+			variant = runtime_archive_variant(debug_enabled=False, asan_enabled=asan_enabled, ubsan_enabled=ubsan_enabled, alloc_track_enabled=False, optimized=False)
 			runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 		except Exception as ex:
 			return f"runtime archive build failed: {ex}", 1, "", ""
@@ -320,6 +341,9 @@ def _link_and_run(
 	if asan_enabled:
 		run_timeout = max(timeout_s, 30) * 2
 		run_env["ASAN_OPTIONS"] = _asan_options_with_defaults(run_env.get("ASAN_OPTIONS"))
+	if ubsan_enabled:
+		run_timeout = max(run_timeout, max(timeout_s, 30) * 2)
+		run_env["UBSAN_OPTIONS"] = _ubsan_options_with_defaults(run_env.get("UBSAN_OPTIONS"))
 	try:
 		run_res = subprocess.run(
 			[str(bin_path), *(argv or [])],
@@ -454,16 +478,23 @@ def _run_case(
 
 	# Strip ASAN warnings
 	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
+	ubsan_enabled = os.environ.get("DRIFT_UBSAN") in ("1", "true", "True")
 	stderr_clean = stderr
 	if asan_enabled:
 		lines = [l for l in stderr.splitlines() if "WARNING: ASan doesn't fully support makecontext/swapcontext functions" not in l]
 		stderr_clean = "\n".join(lines)
 		if lines and stderr.endswith("\n"):
 			stderr_clean += "\n"
+	# UBSAN: never strip "runtime error:" or finding lines. Pass-through.
 
 	# Compare results
 	if exit_code != expected_exit:
-		phase = PHASE_RUNTIME_ASAN if (asan_enabled and exit_code == 1) else PHASE_RUNTIME
+		if ubsan_enabled and exit_code == 1 and "runtime error:" in stderr_clean:
+			phase = PHASE_RUNTIME_UBSAN
+		elif asan_enabled and exit_code == 1:
+			phase = PHASE_RUNTIME_ASAN
+		else:
+			phase = PHASE_RUNTIME
 		msg = f"exit {exit_code}, expected {expected_exit}"
 		if stderr_clean:
 			msg += f" | stderr: {stderr_clean[:150]}"

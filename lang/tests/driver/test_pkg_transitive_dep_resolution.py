@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 from lang.driftc.parser import stdlib_root
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -123,7 +124,7 @@ def test_transitive_dep_narrows_to_declared_version(tmp_path: Path) -> None:
 			 "--package-id", "deplib", "--package-version", ver,
 			 "--package-target", "test-target",
 			 "--emit-package", str(deplib_dmp), "--test-build-only"],
-			cwd=ROOT, capture_output=True, text=True, timeout=120,
+			cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 		)
 		assert res.returncode == 0, f"deplib {ver} build failed: {res.stderr[:300]}"
 		_sign_package(deplib_dmp, pkg_root, "deplib", ver, priv, pub_raw, kid, pub_b64)
@@ -153,7 +154,7 @@ def test_transitive_dep_narrows_to_declared_version(tmp_path: Path) -> None:
 		 "--package-root", str(pkg_root), "--dep", "deplib@0.2.0",
 		 "--trust-store", str(trust_path),
 		 "--emit-package", str(mylib_dmp), "--test-build-only"],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"mylib build failed: {res.stderr[:300]}"
 	_sign_package(mylib_dmp, pkg_root, "mylib", "1.0.0", priv, pub_raw, kid, pub_b64)
@@ -173,7 +174,7 @@ def test_transitive_dep_narrows_to_declared_version(tmp_path: Path) -> None:
 		 "--trust-store", str(trust_path),
 		 "--entry", "consumer::main",
 		 "-o", str(out_bin)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		f"consumer compile failed (transitive dep resolution should have "

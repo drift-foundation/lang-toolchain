@@ -34,6 +34,7 @@ def _run_wrapper(args: list[str], *, env: dict[str, str], cwd: Path | None = Non
 def test_driftc_wrapper_rejects_memcheck_and_massif_in_direct_mode() -> None:
 	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
 	env["DRIFT_MEMCHECK"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
 	assert cp.returncode != 0
@@ -41,6 +42,7 @@ def test_driftc_wrapper_rejects_memcheck_and_massif_in_direct_mode() -> None:
 
 	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
 	env["DRIFT_MASSIF"] = "1"
 	cp = _run_wrapper(["--help"], env=env)
 	assert cp.returncode != 0
@@ -201,6 +203,7 @@ def test_optimized_flag_adds_o2_to_clang(tmp_path: Path) -> None:
 			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
 	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
 	cp = _run_wrapper(["--optimized", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr
@@ -245,6 +248,7 @@ def test_optimized_debug_info_override(tmp_path: Path) -> None:
 			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
 	env = _clean_env()
 	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
 	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
 	cp = _run_wrapper(["--optimized", "--debug-info", "--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
 	assert cp.returncode == 0, cp.stderr

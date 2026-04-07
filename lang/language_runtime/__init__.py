@@ -54,11 +54,18 @@ def get_runtime_include_dirs(root: Path) -> List[Path]:
 	]
 
 
-def runtime_archive_variant(*, debug_enabled: bool, asan_enabled: bool, alloc_track_enabled: bool, optimized: bool = False) -> str:
+_VALID_VARIANTS = {"default", "debug", "asan", "ubsan", "asan_ubsan", "alloc_track", "optimized"}
+
+
+def runtime_archive_variant(*, debug_enabled: bool, asan_enabled: bool, alloc_track_enabled: bool, optimized: bool = False, ubsan_enabled: bool = False) -> str:
 	if alloc_track_enabled:
 		return "alloc_track"
+	if asan_enabled and ubsan_enabled:
+		return "asan_ubsan"
 	if asan_enabled:
 		return "asan"
+	if ubsan_enabled:
+		return "ubsan"
 	if optimized:
 		return "optimized"
 	if debug_enabled:
@@ -88,7 +95,7 @@ def runtime_archive_name() -> str:
 
 
 def runtime_archive_path(root: Path, *, variant: str) -> Path:
-	if variant not in {"default", "debug", "asan", "alloc_track", "optimized"}:
+	if variant not in _VALID_VARIANTS:
 		raise ValueError(f"unknown runtime archive variant '{variant}'")
 	return runtime_archive_cache_root(root) / variant / runtime_archive_name()
 
@@ -120,7 +127,7 @@ def _needs_rebuild(archive_path: Path, deps: List[Path]) -> bool:
 
 
 def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
-	if variant not in {"default", "debug", "asan", "alloc_track", "optimized"}:
+	if variant not in _VALID_VARIANTS:
 		raise ValueError(f"unknown runtime archive variant '{variant}'")
 	ar_bin = shutil.which("llvm-ar") or shutil.which("ar")
 	if ar_bin is None:
@@ -158,6 +165,10 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 			cflags.extend(["-g"])
 		elif variant == "asan":
 			cflags.extend(["-fsanitize=address", "-g"])
+		elif variant == "ubsan":
+			cflags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
+		elif variant == "asan_ubsan":
+			cflags.extend(["-fsanitize=address", "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 		elif variant == "optimized":
 			cflags.extend(["-O2"])
 		elif variant == "alloc_track":

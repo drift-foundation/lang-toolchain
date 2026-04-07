@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 _SIGINT_SOURCE = """\
@@ -65,7 +67,7 @@ def _compile(tmp_path: Path, source: str, name: str = "test_bin") -> Path:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"compile failed: {res.stderr[:300]}"
 	assert out.exists()

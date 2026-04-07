@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 _memcheck = os.environ.get("DRIFT_MEMCHECK") == "1"
@@ -73,7 +75,7 @@ def _compile_consumer(
 	)
 
 	res = subprocess.run(
-		cmd, cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		f"consumer compile failed (stdlib-as-package path):\n{res.stderr[:500]}"

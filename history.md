@@ -1,3 +1,31 @@
+## 2026-04-07 - 0.27.153: UBSAN test lane (`DRIFT_UBSAN=1 just test`)
+- Added UndefinedBehaviorSanitizer as a first-class test mode, parallel to the existing ASAN lane.
+  - Scope is intentionally tight: instrument the C runtime archive and any binary driftc emits during the test run. Driftc itself (the host Python toolchain) is not instrumented. Drift-emitted LLVM IR is not separately instrumented; UBSAN catches UB on C runtime code paths the tests reach.
+- Runtime archive variants:
+  - `lang/language_runtime/__init__.py`: new `ubsan` and `asan_ubsan` variants. `runtime_archive_variant(...)` gains `ubsan_enabled` kwarg. Cflags for UBSAN: `-fsanitize=undefined -fno-sanitize-recover=undefined -g`. Variant cache layout unchanged for existing `default`/`debug`/`asan`/`alloc_track`/`optimized` artifacts.
+- Compiler driver:
+  - `lang/driftc/driftc.py`: `DRIFT_UBSAN` env knob; `ubsan_flags` threaded through all five clang invocation sites (`ir_compile_cmd`, both branches of `rt_compile_cmd`, both branches of `link_cmd`); `_build_profile` reports `ubsan` / `asan_ubsan` accordingly. Combined ASAN+UBSAN is wired but not exercised in this commit.
+- Test runners:
+  - `lang/tests/codegen/e2e/runner.py`, `pex_e2e_runner.py`, `pkg_consumer_runner.py`: each gains `DRIFT_UBSAN` propagation through build env, the matching cflags/ldflags, archive variant selection, `UBSAN_OPTIONS` defaults at child run time (`print_stacktrace=1:halt_on_error=1:abort_on_error=0:symbolize=1`), mutual-exclusion checks vs `DRIFT_MEMCHECK`/`DRIFT_MASSIF`, and a deliberately narrow stderr stripper that never strips `runtime error:` lines or any UBSAN finding line.
+  - `runner.py` failure formatter now always includes the captured stderr in the FAIL message when `DRIFT_UBSAN=1` and a `runtime error:` line is present, so findings cannot silently disappear from the summary.
+  - `pkg_consumer_runner.py` gains a `runtime-ubsan` phase tag parallel to the existing `runtime-asan` tag.
+- Test helper:
+  - `lang/codegen/llvm/test_utils.py`: new `sanitizer_timeout(base)` helper that triples a subprocess timeout when `DRIFT_ASAN=1` or `DRIFT_UBSAN=1`. Use only on the specific timeouts demonstrably too tight under sanitizer mode; not blanket inflation.
+- Test compatibility (narrow, demonstrated failures only):
+  - `lang/tests/driver/test_driftc_wrapper_env_modes.py`: env-cleansing tests now scrub `DRIFT_UBSAN` alongside `DRIFT_ASAN` at all four sites (the tests probe default/optimized flag behavior and must not inherit sanitizer mode).
+  - `lang/tests/driver/test_signal_await.py`: `_compile`'s 120s subprocess timeout now wrapped with `sanitizer_timeout`.
+  - `lang/tests/driver/test_pkg_transitive_dep_resolution.py`: three 120s timeouts inside `test_transitive_dep_narrows_to_declared_version` wrapped; the conflict-rejected test left untouched.
+  - `lang/tests/driver/test_stdlib_as_package.py`: `_compile_consumer`'s 120s timeout wrapped.
+- Validation:
+  - `DRIFT_UBSAN=1 -j16` over the e2e codegen suite: 1063/1063 passing in 8m43s, zero `runtime error:` lines.
+  - `DRIFT_UBSAN=1 just lang-driver-test`: 887/887 passing in 6m32s.
+  - `DRIFT_UBSAN=1 just test`: full suite green end-to-end.
+- Headline result: the Drift C runtime is UBSAN-clean against the entire test population today. No runtime C edits, no suppressions, no `__attribute__((no_sanitize))` annotations, no expected-fail markers. The lane is operationally usable as-is; its ongoing value is catching the next regression before it lands.
+- Coverage caveats (explicit, not papered over):
+  - UBSAN catches UB only on C runtime paths the tests actually exercise. A clean run does not prove the runtime contains zero UB on unreached paths.
+  - Drift-emitted arithmetic is not sanitizer-instrumented. Pure user-code UB in Drift-generated LLVM IR is invisible to this lane. Extending coverage to emitted code (via runtime trampolines or an IR-level pass) is deferred until a concrete payoff is demonstrated.
+  - Stage1/2/3/4 pytest harnesses do not compile or run binaries, so `DRIFT_UBSAN=1` is a no-op for them by construction.
+
 ## 2026-02-27 - LANGUAGE_BUG fix: FORWARD_NOMINAL drop resolution for cross-module variant payloads
 - Fixed a cross-module drop-lifetime bug where payload element types represented as `FORWARD_NOMINAL` were treated as non-droppable in drop codegen paths.
   - Real-world symptom: leak-only memcheck failures in mariadb live RPC flows (`next_event`/`skip_remaining`) with leaked `Array<...>` buffers and nested `String` payloads.

@@ -95,15 +95,19 @@ def _link_and_run(
 		+ _link_flags_for_lib("elf")
 	)
 	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
+	ubsan_enabled = os.environ.get("DRIFT_UBSAN") in ("1", "true", "True")
 	link_flags: list[str] = []
 	if asan_enabled:
 		link_flags.extend(["-fsanitize=address"])
+	if ubsan_enabled:
+		link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
 
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
 		variant = runtime_archive_variant(
 			debug_enabled=False,
 			asan_enabled=asan_enabled,
+			ubsan_enabled=ubsan_enabled,
 			alloc_track_enabled=False,
 			optimized=False,
 		)
@@ -144,6 +148,11 @@ def _link_and_run(
 		asan_opts = run_env.get("ASAN_OPTIONS", "")
 		defaults = "detect_leaks=1:halt_on_error=0"
 		run_env["ASAN_OPTIONS"] = f"{defaults}:{asan_opts}" if asan_opts else defaults
+	if ubsan_enabled:
+		run_timeout_s = max(run_timeout_s, max(timeout_s, 30) * 2)
+		ubsan_opts = run_env.get("UBSAN_OPTIONS", "")
+		ubsan_defaults = "print_stacktrace=1:halt_on_error=1:abort_on_error=0:symbolize=1"
+		run_env["UBSAN_OPTIONS"] = f"{ubsan_defaults}:{ubsan_opts}" if ubsan_opts else ubsan_defaults
 	if memcheck_enabled:
 		valgrind_suppressions: list[str] = []
 		if fiber_suppressions_enabled and _VALGRIND_FIBER_SUPPRESSIONS.exists():
@@ -192,6 +201,13 @@ def _strip_asan_warnings(stderr: str) -> str:
 	if lines and stderr.endswith("\n"):
 		clean += "\n"
 	return clean
+
+
+def _strip_ubsan_warnings(stderr: str) -> str:
+	# Narrow stripper. CRITICAL: never strip "runtime error:" lines or any
+	# UBSAN finding line — those must reach the test. Currently a pass-through;
+	# add specific noise lines here only after the triage walk identifies them.
+	return stderr
 
 
 # ── Case introspection helpers ──────────────────────────────────────
@@ -452,7 +468,10 @@ def _run_case(
 		return case_name, f"FAIL (link: {link_err[:200]})"
 
 	asan_enabled = _env_true("DRIFT_ASAN")
+	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	stderr_clean = _strip_asan_warnings(stderr) if asan_enabled else stderr
+	if ubsan_enabled:
+		stderr_clean = _strip_ubsan_warnings(stderr_clean)
 
 	# ── Compare output ──────────────────────────────────────────
 	if exit_code != expected_exit:
@@ -503,8 +522,12 @@ def main(argv: Iterable[str] | None = None) -> int:
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")
+	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	if asan_enabled and (memcheck_enabled or massif_enabled):
 		print("error: DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF", file=sys.stderr)
+		return 2
+	if ubsan_enabled and (memcheck_enabled or massif_enabled):
+		print("error: DRIFT_UBSAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF", file=sys.stderr)
 		return 2
 	if memcheck_enabled and massif_enabled:
 		print("error: DRIFT_MEMCHECK and DRIFT_MASSIF are mutually exclusive", file=sys.stderr)

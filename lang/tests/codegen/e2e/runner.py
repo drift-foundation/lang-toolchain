@@ -73,6 +73,22 @@ def _asan_options_with_defaults(existing: str | None) -> str:
 	return ":".join(parts)
 
 
+def _ubsan_options_with_defaults(existing: str | None) -> str:
+	parts: list[str] = []
+	if existing:
+		parts = [p for p in existing.split(":") if p]
+	keys = {p.split("=", 1)[0] for p in parts}
+	if "print_stacktrace" not in keys:
+		parts.append("print_stacktrace=1")
+	if "halt_on_error" not in keys:
+		parts.append("halt_on_error=1")
+	if "abort_on_error" not in keys:
+		parts.append("abort_on_error=0")
+	if "symbolize" not in keys:
+		parts.append("symbolize=1")
+	return ":".join(parts)
+
+
 def _drift_debug_diags_enabled() -> bool:
 	raw = os.environ.get("DRIFT_DEBUG")
 	if not raw:
@@ -119,9 +135,15 @@ def _preflight_runtime_mode_error() -> str | None:
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")
+	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	if asan_enabled and (memcheck_enabled or massif_enabled):
 		return (
 			"invalid runtime mode: DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF; "
+			"unset one mode and rerun"
+		)
+	if ubsan_enabled and (memcheck_enabled or massif_enabled):
+		return (
+			"invalid runtime mode: DRIFT_UBSAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF; "
 			"unset one mode and rerun"
 		)
 	if memcheck_enabled and massif_enabled:
@@ -179,8 +201,11 @@ def _run_ir_with_clang(
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")
+	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	if asan_enabled and (memcheck_enabled or massif_enabled):
 		return 1, "", "DRIFT_ASAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF"
+	if ubsan_enabled and (memcheck_enabled or massif_enabled):
+		return 1, "", "DRIFT_UBSAN is incompatible with DRIFT_MEMCHECK/DRIFT_MASSIF"
 	if (memcheck_enabled or massif_enabled) and shutil.which("valgrind") is None:
 		return 1, "", "valgrind not available (install valgrind or unset DRIFT_MEMCHECK/DRIFT_MASSIF)"
 	if (memcheck_enabled or massif_enabled) and fiber_suppressions_enabled and not _VALGRIND_FIBER_SUPPRESSIONS.exists():
@@ -208,11 +233,15 @@ def _run_ir_with_clang(
 		if asan_enabled:
 			c_flags.extend(["-fsanitize=address", "-g"])
 			link_flags.extend(["-fsanitize=address"])
+		if ubsan_enabled:
+			c_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
+			link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
 		if rt_mode == "archive":
 			try:
 				variant = runtime_archive_variant(
 					debug_enabled=False,
 					asan_enabled=asan_enabled,
+					ubsan_enabled=ubsan_enabled,
 					alloc_track_enabled=alloc_track_enabled,
 					optimized=False,
 				)
@@ -282,6 +311,9 @@ def _run_ir_with_clang(
 		if asan_enabled:
 			run_timeout_s = max(timeout_s, 30) * 2
 			run_env["ASAN_OPTIONS"] = _asan_options_with_defaults(run_env.get("ASAN_OPTIONS"))
+		if ubsan_enabled:
+			run_timeout_s = max(run_timeout_s, max(timeout_s, 30) * 2)
+			run_env["UBSAN_OPTIONS"] = _ubsan_options_with_defaults(run_env.get("UBSAN_OPTIONS"))
 		if memcheck_enabled:
 			valgrind_suppressions: list[str] = []
 			if fiber_suppressions_enabled:
@@ -358,7 +390,10 @@ def _compare_process_output(
 	expected_exit = expected.get("exit_code", 0)
 	if exit_code != expected_exit:
 		msg = f"FAIL (exit {exit_code}, expected {expected_exit})"
-		if debug and (stdout or stderr):
+		# Always surface UBSAN findings on failure — never silently drop them.
+		if _env_true("DRIFT_UBSAN") and "runtime error:" in stderr:
+			msg = f"{msg}\nubsan stderr:\n{stderr}"
+		elif debug and (stdout or stderr):
 			msg = f"{msg}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 		return msg
 	expect_stdout = expected.get("stdout", "")
@@ -428,6 +463,23 @@ def _strip_asan_runtime_warnings(stderr: str) -> str:
 	for line in stderr.splitlines():
 		if "WARNING: ASan doesn't fully support makecontext/swapcontext functions" in line:
 			continue
+		lines.append(line)
+	clean = "\n".join(lines)
+	if lines and stderr.endswith("\n"):
+		clean += "\n"
+	return clean
+
+
+def _strip_ubsan_runtime_warnings(stderr: str) -> str:
+	# Narrow stripper for known UBSAN noise that is not a finding.
+	# CRITICAL: never strip "runtime error:" lines or any line that names
+	# a UBSAN check class — those are real findings and must reach the test.
+	# When in doubt, keep the line.
+	lines: list[str] = []
+	for line in stderr.splitlines():
+		# No known noise lines yet. The triage walk will identify any lines
+		# that legitimately need stripping; the entry above for ASan is the
+		# template. Until then, this function is a no-op pass-through.
 		lines.append(line)
 	clean = "\n".join(lines)
 	if lines and stderr.endswith("\n"):
@@ -737,6 +789,8 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	stderr_clean, alloc_stats = _extract_alloc_track_stats(stderr)
 	if _env_true("DRIFT_ASAN"):
 		stderr_clean = _strip_asan_runtime_warnings(stderr_clean)
+	if _env_true("DRIFT_UBSAN"):
+		stderr_clean = _strip_ubsan_runtime_warnings(stderr_clean)
 	if exit_code != 0 and stderr == "clang not available":
 		return "FAIL (clang not available)"
 	if exit_code != 0 and stderr.startswith("valgrind not available"):
