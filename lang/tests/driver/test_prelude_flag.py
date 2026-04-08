@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from lang.driftc.driftc import main as driftc_main
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -293,7 +294,7 @@ fn run_main() throws -> Int {
 		"--json",
 	]
 	try:
-		res = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=20)
+		res = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=sanitizer_timeout(20))
 	except subprocess.TimeoutExpired:
 		pytest.fail("driftc compile timed out for file_builder append/mode fluent chain")
 	payload = json.loads(res.stdout) if res.stdout.strip() else {}

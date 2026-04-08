@@ -628,12 +628,25 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 	# ── Run cases ────────────────────────────────────────────────
 	if args.jobs == "auto":
-		physical = _physical_cpu_count_linux()
-		if physical is not None and physical > 0:
-			jobs = max(1, physical)
-		else:
-			cpu_count = os.cpu_count() or 1
-			jobs = max(1, cpu_count // 2)
+		# Override order: DRIFT_TEST_JOBS env var first (the unified
+		# test-parallelism knob), then physical CPU count, then
+		# os.cpu_count // 2 fallback.
+		jobs = 0
+		env_jobs = os.environ.get("DRIFT_TEST_JOBS", "").strip()
+		if env_jobs:
+			try:
+				_n = int(env_jobs)
+				if _n > 0:
+					jobs = _n
+			except ValueError:
+				pass
+		if jobs == 0:
+			physical = _physical_cpu_count_linux()
+			if physical is not None and physical > 0:
+				jobs = max(1, physical)
+			else:
+				cpu_count = os.cpu_count() or 1
+				jobs = max(1, cpu_count // 2)
 	else:
 		try:
 			jobs = int(args.jobs)

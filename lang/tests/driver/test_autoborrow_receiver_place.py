@@ -10,6 +10,7 @@ import pytest
 
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -96,7 +97,7 @@ fn main() nothrow -> Int {
 		cmd.insert(3, "--stdlib-root")
 		cmd.insert(4, str(root))
 	try:
-		res = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=20)
+		res = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=sanitizer_timeout(20))
 	except subprocess.TimeoutExpired:
 		pytest.fail("driftc compile timed out (possible resolver recursion on rvalue mut receiver chain)")
 	payload = json.loads(res.stdout) if res.stdout.strip() else {}

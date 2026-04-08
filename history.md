@@ -1,3 +1,28 @@
+## 2026-04-07 - 0.27.173: xdist-aware sanitizer_timeout + retrofit existing low-timeout driver tests
+- Test-only patch. Continuation of the parallel-pressure flake fix series (0.27.171 → 0.27.172 → this).
+- Symptom: after 0.27.172 fixed the d=5000 contract, **a different test** flaked under high parallel load: `lang/tests/driver/test_for_c_style.py::test_init_scope` timed out at its hard-coded 60s budget. The same root cause as 0.27.171 (single-threaded compile pipeline + N concurrent workers + no headroom in the test's hard-coded timeout) but in a test that predates this branch and uses its own subprocess wrapper instead of `_compile`.
+- Diagnosis: search across `lang/tests/driver/` for hard-coded `timeout=NN` values turned up **6 more files** with budgets ≤ 60s on `subprocess.run` invocations that wrap a driftc compile. All of them are vulnerable to the same parallel-pressure flake. Playing whack-a-mole one at a time would keep eating CI runs; better to fix the helper *and* the existing call sites in one shot.
+- **Fix part 1 — make `sanitizer_timeout` xdist-aware**:
+  - `lang/codegen/llvm/test_utils.py::sanitizer_timeout(base)` now also detects `PYTEST_XDIST_WORKER` (set by pytest-xdist for each parallel worker) and applies a **4× multiplier** when present, composing multiplicatively with the existing `DRIFT_ASAN`/`DRIFT_UBSAN` 3× multipliers.
+  - Updated docstring explains the two conditions: sanitizer mode and xdist parallel worker. The function name is retained for compatibility with existing call sites; despite "sanitizer" in the name, it is now the canonical way for any subprocess-driving test to declare a budget that survives both contended-environment modes.
+  - Net effect: a test that calls `sanitizer_timeout(60)` gets `60` solo, `60` in non-sanitizer xdist (wait, actually `240` because the worker env var is set), `180` under sanitizer, `720` under both. The xdist multiplier alone is enough to absorb the typical 4–8× contention slowdown observed during the 0.27.171 / 0.27.172 investigation.
+- **Fix part 2 — retrofit existing low-timeout driver tests**:
+  - 7 driver test files updated to import `sanitizer_timeout` and wrap their `subprocess.run(..., timeout=NN)` calls with `timeout=sanitizer_timeout(NN)`:
+    - `test_for_c_style.py` (the test that triggered this round)
+    - `test_autoborrow_receiver_place.py` (`timeout=20` → `sanitizer_timeout(20)`)
+    - `test_compound_assign_single_eval.py` (`timeout=60`)
+    - `test_forward_nominal_reexport_instantiation.py` (`timeout=60`)
+    - `test_logger_no_attrs_overload.py` (`timeout=60`)
+    - `test_log_vtid_ptid.py` (`timeout=60`)
+    - `test_prelude_flag.py` (`timeout=20`)
+  - Helper script bug worth noting: the batch-patch script's "find the last import line in the first 50 lines" heuristic was confused by `import std.log as log;` lines inside Drift source strings literal in `_SOURCE = """\..."""`, and inserted the Python import inside the Drift source. Caught at the first re-verify pass — both files (`test_log_vtid_ptid.py`, `test_logger_no_attrs_overload.py`) hand-fixed.
+- Validation:
+  - reproduced the original `test_for_c_style.py::test_init_scope` flake under `pytest -n 8 --dist=worksteal lang/tests/driver/test_for_c_style.py` before the fix
+  - all 7 patched files re-verified under `pytest -n 8 --dist=worksteal` after the fix: 39/39 pass in 52s wall-clock
+- Versioning:
+  - compiler bumped to `0.27.173`
+  - ABI unchanged (8) — pure test-fix patch, no production code change
+
 ## 2026-04-07 - 0.27.172: weaken d=5000 else-if test contract back to "no Python crash"
 - Test-only patch. Continuation of the 0.27.171 parallel-pressure flake investigation.
 - Symptom: after 0.27.171 fixed the timeout flake, `test_else_if_chain_5000_compiles_through_pipeline` started failing with a *different* error under parallel pressure: rc=1 with the opaque "clang failed: <warnings only>" stderr that already has its own tracking issue (`issues/clang-failure-deep-source-line/`). The d=5000 case passes solo (~54s, rc=0) but intermittently fails under high parallel load (16-way `just test` with `--dist=worksteal`). The previous strengthening from "no Python crash" to "rc=0 strict compile" in 0.27.164 was based on solo measurements and was too strong for the actual conditions the test runs under.

@@ -34,6 +34,52 @@ STDLIB_DIR = ROOT / "stdlib"
 _VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "valgrind"
 _VALGRIND_FIBER_SUPPRESSIONS = _VALGRIND_DIR / "fiber.supp"
 
+
+def _physical_cpu_count_linux() -> int | None:
+	cpuinfo = Path("/proc/cpuinfo")
+	if not cpuinfo.exists():
+		return None
+	cores: set[tuple[str, str]] = set()
+	for block in cpuinfo.read_text(encoding="utf-8", errors="ignore").split("\n\n"):
+		if not block.strip():
+			continue
+		physical_id = core_id = None
+		for line in block.splitlines():
+			if ":" not in line:
+				continue
+			k, v = line.split(":", 1)
+			key = k.strip().lower()
+			val = v.strip()
+			if key == "physical id":
+				physical_id = val
+			elif key == "core id":
+				core_id = val
+		if physical_id is not None and core_id is not None:
+			cores.add((physical_id, core_id))
+	return len(cores) if cores else None
+
+
+def _resolve_jobs(arg: str) -> int:
+	# Override order: explicit int > DRIFT_TEST_JOBS env > physical CPU > cpu_count//2.
+	if arg != "auto":
+		try:
+			n = int(arg)
+			return max(1, n)
+		except ValueError:
+			return 1
+	env_jobs = os.environ.get("DRIFT_TEST_JOBS", "").strip()
+	if env_jobs:
+		try:
+			n = int(env_jobs)
+			if n > 0:
+				return n
+		except ValueError:
+			pass
+	physical = _physical_cpu_count_linux()
+	if physical is not None and physical > 0:
+		return max(1, physical)
+	return max(1, (os.cpu_count() or 1) // 2)
+
 def _env_true(name: str) -> bool:
 	return os.environ.get(name, "") in ("1", "true", "True")
 
@@ -504,11 +550,12 @@ def main(argv: Iterable[str] | None = None) -> int:
 	ap = argparse.ArgumentParser(description="Run e2e cases through a PEX-staged driftc binary")
 	ap.add_argument("--driftc", required=True, help="Path to the PEX driftc binary")
 	ap.add_argument("cases", nargs="*", help="Specific case names (default: all)")
-	ap.add_argument("-j", "--jobs", type=int, default=1, help="Parallel workers (default: 1)")
+	ap.add_argument("-j", "--jobs", default="auto", help="Parallel workers ('auto' reads DRIFT_TEST_JOBS / physical CPU; default: auto)")
 	ap.add_argument("--timeout", type=int, default=60, help="Per-case timeout (default: 60s)")
 	ap.add_argument("--summarize", action="store_true", help="Print summary at end")
 	ap.add_argument("--blocking", action="store_true", help="Exit non-zero on any failure")
 	args = ap.parse_args(argv)
+	jobs = _resolve_jobs(str(args.jobs))
 
 	driftc_bin = str(Path(args.driftc).resolve())
 	if not Path(driftc_bin).exists():
@@ -554,7 +601,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 	skipped = 0
 	passed = 0
 
-	if args.jobs <= 1 or len(case_dirs) <= 1:
+	if jobs <= 1 or len(case_dirs) <= 1:
 		for case_dir in case_dirs:
 			name, status = _run_case(case_dir, driftc_bin, build_root, args.timeout)
 			print(f"{name}: {status}")
@@ -568,7 +615,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 		work_items = [
 			(str(d), driftc_bin, str(build_root), args.timeout) for d in case_dirs
 		]
-		with ProcessPoolExecutor(max_workers=args.jobs) as executor:
+		with ProcessPoolExecutor(max_workers=jobs) as executor:
 			futures = [executor.submit(_run_case_worker, item) for item in work_items]
 			for fut in as_completed(futures):
 				name, status = fut.result()

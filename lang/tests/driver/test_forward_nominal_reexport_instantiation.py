@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -77,7 +78,7 @@ def test_pub_type_alias_in_throwing_function_resolves(tmp_path: Path) -> None:
 		"--emit-ir", str(tmp_path / "out.ll"),
 		"--entry", "main::main",
 	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, (
 		f"pub type alias in throwing function must resolve correctly:\n{res.stderr[:500]}"
 	)

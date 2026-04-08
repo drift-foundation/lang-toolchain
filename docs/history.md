@@ -1,6 +1,38 @@
 # Drift development history
 
 ## 2026-04-07
+- **xdist-aware sanitizer_timeout + retrofit existing low-timeout
+  driver tests (0.27.173, ABI 8)** — parallel-pressure flake fix,
+  part 3:
+  After 0.27.172, a different test flaked under high parallel load:
+  `test_for_c_style.py::test_init_scope` timed out at its hard-coded
+  60s budget. Same root cause as 0.27.171 (single-threaded compile +
+  N concurrent workers + no headroom) but in a test with its own
+  subprocess wrapper instead of the patched `_compile`.
+  - Search across `lang/tests/driver/` for hard-coded `timeout=NN`
+    values turned up 6 more files with budgets ≤ 60s vulnerable to
+    the same flake. Fix the helper *and* the existing call sites in
+    one shot rather than playing whack-a-mole.
+  - Fix part 1 — make `sanitizer_timeout` xdist-aware:
+    - `lang/codegen/llvm/test_utils.py::sanitizer_timeout(base)` now
+      also detects `PYTEST_XDIST_WORKER` (set per parallel worker by
+      pytest-xdist) and applies a 4× multiplier when present
+    - composes multiplicatively with the existing `DRIFT_ASAN` /
+      `DRIFT_UBSAN` 3× multipliers
+    - despite the legacy "sanitizer" name, this is now the canonical
+      way for any subprocess-driving test to declare a budget that
+      survives both contended-environment modes
+  - Fix part 2 — retrofit 7 existing driver test files to use the
+    helper:
+    - `test_for_c_style.py`, `test_autoborrow_receiver_place.py`,
+      `test_compound_assign_single_eval.py`,
+      `test_forward_nominal_reexport_instantiation.py`,
+      `test_logger_no_attrs_overload.py`, `test_log_vtid_ptid.py`,
+      `test_prelude_flag.py`
+  - Validation: 39/39 pass under
+    `pytest -n 8 --dist=worksteal` in 52s
+  - Versioning: compiler `0.27.173`, ABI unchanged (8)
+
 - **Weaken d=5000 else-if test contract (0.27.172, ABI 8)** —
   parallel-pressure flake fix, part 2:
   After 0.27.171 fixed the timeout flake,

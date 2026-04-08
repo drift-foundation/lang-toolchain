@@ -15,6 +15,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -27,7 +28,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> int:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=60,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	assert rc.returncode == 0, f"compile failed: {rc.stderr[:600]}"
 	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
