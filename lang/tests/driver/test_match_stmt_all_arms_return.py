@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from lang.driftc.driftc import main as driftc_main
 
 
@@ -81,6 +83,7 @@ fn main() nothrow -> Int {
 	assert rc == 0, payload
 
 
+@pytest.mark.heavy
 def test_match_stmt_fallthrough_after_match_ok(tmp_path: Path, capsys) -> None:
 	source = """
 module m_main;

@@ -28,6 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -86,6 +88,7 @@ def test_deep_nested_array_500_compiles_through_pipeline(tmp_path: Path) -> None
 	assert "RecursionError" not in res.stderr
 
 
+@pytest.mark.heavy
 def test_deep_nested_array_2000_no_python_crash(tmp_path: Path) -> None:
 	"""2000 levels of nested `Array<Array<...<Int>>>` must produce neither
 	a Python traceback nor a RecursionError.

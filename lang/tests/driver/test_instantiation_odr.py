@@ -439,6 +439,7 @@ fn main() nothrow -> Int{
 	assert "E_REQUIREMENT_NOT_SATISFIED" in codes
 
 
+@pytest.mark.heavy
 def test_instantiation_dedup_across_packages(tmp_path: Path) -> None:
 	common_root = tmp_path / "common"
 	common_pkg = _emit_generic_pkg(common_root, module_id="acme.common", pkg_name="acme.common")
@@ -650,6 +651,7 @@ pub fn run_b() -> Int {
 	assert "Int" in str(matches[0]["key"])
 
 
+@pytest.mark.heavy
 def test_impl_generic_method_instantiated_across_packages(tmp_path: Path) -> None:
 	box_root = tmp_path / "boxpkg"
 	_emit_box_pkg(box_root, module_id="acme.box", pkg_name="acme.box")

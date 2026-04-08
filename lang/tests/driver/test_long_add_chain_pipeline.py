@@ -27,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -72,6 +74,7 @@ def test_long_add_chain_500_compiles_through_pipeline(tmp_path: Path) -> None:
 	assert "RecursionError" not in res.stderr
 
 
+@pytest.mark.heavy
 def test_long_add_chain_2000_compiles_through_pipeline(tmp_path: Path) -> None:
 	"""2000 chained `+` operands must compile cleanly (deeper sanity).
 

@@ -24,6 +24,7 @@ def _write_file(path: Path, content: str) -> None:
 	path.write_text(content)
 
 
+@pytest.mark.heavy
 def test_instantiation_preserves_callinfo_for_qualified_variant_ctor(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

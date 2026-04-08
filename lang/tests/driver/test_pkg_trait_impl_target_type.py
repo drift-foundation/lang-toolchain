@@ -43,6 +43,7 @@ def _build_and_compile_pkg_consumer(tmp_path: Path, source: str) -> tuple[int, s
 	return run.returncode, res.stderr
 
 
+@pytest.mark.heavy
 def test_array_range_len(tmp_path: Path) -> None:
 	"""ArrayRange<Int>::len must resolve through package-consumer path."""
 	source = """\

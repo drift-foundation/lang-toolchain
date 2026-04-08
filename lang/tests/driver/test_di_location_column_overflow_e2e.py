@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -60,6 +62,7 @@ def _compile(tmp_path: Path, source: str) -> subprocess.CompletedProcess:
 	)
 
 
+@pytest.mark.heavy
 def test_long_single_line_compiles_without_di_location_column_overflow(tmp_path: Path) -> None:
 	"""2500 chained else-ifs on one line must compile cleanly.
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lang.driftc.driftc import compile_to_llvm_ir_for_tests
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
@@ -348,6 +350,7 @@ fn main() nothrow -> Int {
 	assert all(d.span.line is not None and d.span.column is not None for d in copy_errors), copy_errors
 
 
+@pytest.mark.heavy
 def test_borrow_mut_immutable_binding_reports_span(tmp_path: Path) -> None:
 	checked = _compile(
 		tmp_path,

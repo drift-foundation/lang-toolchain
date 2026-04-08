@@ -22,6 +22,7 @@ def _write_file(path: Path, content: str) -> None:
 	path.write_text(content)
 
 
+@pytest.mark.heavy
 def test_emit_ir_map_literal_move_value_no_noncanonical_move_assert(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

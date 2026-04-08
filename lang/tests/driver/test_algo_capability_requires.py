@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lang.driftc.driftc import compile_stubbed_funcs
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
@@ -277,6 +279,7 @@ fn main() nothrow -> Int {
 	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" and any(n == "requirement_trait=std.core.cmp.Comparable" for n in (d.notes or [])) for d in diagnostics)
 
 
+@pytest.mark.heavy
 def test_min_max_require_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,
@@ -377,6 +380,7 @@ struct NeedCmp<T> require T is cmp.Comparable {
 	assert has_perm and has_cmp
 
 
+@pytest.mark.heavy
 def test_min_max_require_comparable(tmp_path: Path) -> None:
 	diagnostics = _compile(
 		tmp_path,

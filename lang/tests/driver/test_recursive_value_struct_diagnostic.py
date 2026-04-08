@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -151,6 +153,7 @@ def test_mutually_recursive_value_structs_rejected(tmp_path: Path) -> None:
 	assert _diag_has_real_span(res.stderr)
 
 
+@pytest.mark.heavy
 def test_three_cycle_value_structs_rejected(tmp_path: Path) -> None:
 	"""`A → B → C → A` must be rejected.
 

@@ -28,6 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -67,6 +69,7 @@ def _compile(tmp_path: Path, source: str, timeout_s: int = 180) -> subprocess.Co
 	)
 
 
+@pytest.mark.heavy
 def test_else_if_chain_1000_compiles_through_pipeline(tmp_path: Path) -> None:
 	"""1000 else-if levels must compile cleanly through the full pipeline.
 
@@ -84,6 +87,7 @@ def test_else_if_chain_1000_compiles_through_pipeline(tmp_path: Path) -> None:
 	assert "RecursionError" not in res.stderr
 
 
+@pytest.mark.heavy
 def test_else_if_chain_5000_no_python_crash(tmp_path: Path) -> None:
 	"""5000 else-if levels must produce no Python crash, no column overflow.
 
@@ -124,6 +128,7 @@ def test_else_if_chain_5000_no_python_crash(tmp_path: Path) -> None:
 	)
 
 
+@pytest.mark.heavy
 def test_else_if_chain_8000_fails_cleanly_no_python_traceback(tmp_path: Path) -> None:
 	"""8000 else-if levels: no Python crash, no column overflow, no recursion error.
 

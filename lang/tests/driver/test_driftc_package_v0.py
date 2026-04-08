@@ -739,6 +739,7 @@ fn main() nothrow -> Int{
 	assert out1.read_bytes() == out2.read_bytes()
 
 
+@pytest.mark.heavy
 def test_emit_package_is_deterministic_with_changed_package_filenames(tmp_path: Path) -> None:
 	"""
 	Determinism guard: package discovery ordering (filename sorting / rglob order);
@@ -808,6 +809,7 @@ fn main() nothrow -> Int{
 	assert out1.read_bytes() == out2.read_bytes()
 
 
+@pytest.mark.heavy
 def test_emit_package_is_deterministic_with_three_packages_and_derived_types(tmp_path: Path) -> None:
 	"""
 	Determinism stress test:
@@ -933,6 +935,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	assert "add" in lib_iface["exports"]["values"]
 
 
+@pytest.mark.heavy
 def test_load_package_rejects_bad_blob_hash(tmp_path: Path) -> None:
 	_write_file(
 		tmp_path / "lib" / "lib.drift",
@@ -1706,6 +1709,7 @@ def test_discover_package_files_follows_symlinked_dirs(tmp_path: Path) -> None:
 	assert found[0].name == "web-jwt.dmp"
 
 
+@pytest.mark.heavy
 def test_package_struct_from_submodule_roundtrips(tmp_path: Path) -> None:
 	"""
 	Regression: struct types declared in sub-modules must survive package
@@ -2969,6 +2973,7 @@ fn main() nothrow -> Int{
 	assert payload["diagnostics"] == []
 
 
+@pytest.mark.heavy
 def test_driftc_allows_import_of_exported_type_but_rejects_non_exported_value_from_package(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3638,6 +3643,7 @@ fn main() nothrow -> Int{ return 0 }
 	assert payload["diagnostics"][0]["phase"] == "package"
 	assert "must not be a method" in payload["diagnostics"][0]["message"]
 
+@pytest.mark.heavy
 def test_driftc_can_consume_package_with_extern_c_declarations(tmp_path: Path) -> None:
 	"""Package containing extern C declarations must not crash consumer codegen."""
 	_write_file(
@@ -4626,6 +4632,7 @@ def _emit_versioned_pkg(
 	return pkg_out
 
 
+@pytest.mark.heavy
 def test_package_version_pin_selects(tmp_path: Path) -> None:
 	"""--dep net.tls@0.3.0 loads exactly that version from a multi-version root."""
 	pkgs = tmp_path / "pkgs"
