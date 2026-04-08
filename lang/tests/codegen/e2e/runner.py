@@ -538,6 +538,13 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 		return "skipped (memcheck)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
 		return "skipped (sandbox)"
+	# Dual-runtime workstream: narrow per-case lane requirement.  Only the
+	# debug-style lane produces a stable backtrace symbol shape; tests that
+	# pin specific frame names belong here.  Assertion semantics themselves
+	# are lane-independent — only backtrace fidelity is lane-restricted.
+	required_lane = expected.get("requires_lane")
+	if required_lane == "debug-style" and not _env_true("DRIFT_DEBUG"):
+		return "skipped (requires debug-style lane)"
 	allow_reserved_flag = expected.get("dev_allow_reserved_namespaces")
 	if allow_reserved_flag is not None:
 		allow_reserved = bool(allow_reserved_flag)
@@ -677,6 +684,16 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 			if allow_reserved
 			else ReservedNamespacePolicy.ENFORCE
 		)
+		# Dual-runtime workstream: align IR-level debug-info emission with the
+		# active runtime lane.  Default (normal) lane → no `!dbg` metadata in
+		# the IR (matches the production driftc CLI under DRIFT_DEBUG unset).
+		# Debug-style lane (DRIFT_DEBUG=1) → emit DWARF metadata.
+		#
+		# Without this gate, IR with debug metadata gets fed to clang under
+		# `-O2` (the new default opt_flags), and the optimizer mangles the
+		# debug scope chain → DwarfDebug::finalizeModuleInfo segfault during
+		# clang codegen.  Threading the lane signal here keeps the runner
+		# polarity-aligned with the production CLI path.
 		ir, checked = compile_to_llvm_ir_for_tests(
 			func_hirs=func_hirs,
 			signatures=signatures,
@@ -688,6 +705,7 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 			origin_by_fn_id=origin_by_fn_id,
 			enforce_entrypoint=True,
 			reserved_namespace_policy=reserved_policy,
+			debug_enabled=_env_true("DRIFT_DEBUG"),
 		)
 	except Exception as err:  # pragma: no cover - defensive for negative e2e cases
 		expected_diags = expected.get("diagnostics", [])

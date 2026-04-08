@@ -1,4 +1,4 @@
-## 2026-04-08 - 0.27.176: dual-runtime normal/debug toolchain + `DRIFT_DEBUG` / `DRIFT_COMPILER_DEBUG` split
+## 2026-04-08 - 0.27.177: dual-runtime normal/debug toolchain validated end-to-end
 - The earlier `DRIFT_OPTIMIZED` / `--optimized` surface has been retired in favor of a dual-runtime toolchain with one default production lane and one explicit debug-style lane.
 - **Dual-runtime toolchain contract**:
   - staged toolchains now carry both runtime archives side-by-side:
@@ -28,6 +28,13 @@
   - this keeps the contracts separate:
     - `DRIFT_DEBUG=1` => runtime/build lane selection only
     - `DRIFT_COMPILER_DEBUG='{\"convergence_parity\": true}'` => structured compiler/runner debug flags
+- **Post-flip stabilization fixes**:
+  - fixed the in-process Drift-source e2e runner to pass the active lane's `debug_enabled` polarity into `compile_to_llvm_ir_for_tests(...)`
+  - this removed the accidental `IR-with-debug-metadata + -O2 + no -g` combo in the normal lane, which had been crashing clang/LLVM in `DwarfDebug::finalizeModuleInfo()` on a broad family of e2e cases
+  - assertion/backtrace fidelity tests now explicitly require the debug-style lane:
+    - `assert_expr_text`
+    - `assert_expr_msg_text`
+  - the normal lane still asserts correctly; only optimized backtrace frame shape differs, so those two tests are now skipped outside the debug-style lane instead of forcing optimized unwinding to mimic debug-style output
 - **Regression coverage**:
   - manifest schema regression in `tools/deploy/test_manifest_runtimes_schema.py`
   - staged-toolchain sentinel selection regressions in `lang/tests/driver/test_runtime_selection_sentinel.py` for both:
@@ -39,8 +46,20 @@
   - rename canaries proving `DRIFT_COMPILER_DEBUG` reaches the compiler:
     - `lang/tests/driver/test_external_consumer.py::test_convergence_parity_pass1_state`
     - `lang/tests/driver/test_pkg_hir_scope_reconstruction.py`
+  - lane-specific assertion-fidelity gating in `lang/tests/codegen/e2e/runner.py`
+- **Validation**:
+  - full `just test` passes in the normal lane:
+    - links `libdrift_rt_abi8.a`
+    - carries `__drift_rt_mode_normal`
+    - lane audit passes
+  - full `DRIFT_DEBUG=1 just test` passes in the debug-style lane:
+    - links `libdrift_rt_debug_abi8.a`
+    - carries `__drift_rt_mode_debug`
+    - lane audit passes
+  - bucket-A optimized-lane crash cluster is resolved
+  - bucket-B assertion backtrace fidelity is explicitly scoped to the debug-style lane
 - Versioning:
-  - compiler bumped to `0.27.176`
+  - compiler bumped to `0.27.177`
   - ABI unchanged (8) — no compiler/runtime boundary shape change
 
 ## 2026-04-07 - 0.27.173: xdist-aware sanitizer_timeout + retrofit existing low-timeout driver tests

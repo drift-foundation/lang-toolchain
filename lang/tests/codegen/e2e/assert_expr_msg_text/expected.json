@@ -1,5 +1,6 @@
 {
-  "description": "e2e: assert prints expression and message",
+  "description": "e2e: assert prints expression, message and stable backtrace frame names (debug-style runtime only)",
+  "requires_lane": "debug-style",
   "exit_code": -6,
   "stdout": "",
   "stderr": "__ANY__",

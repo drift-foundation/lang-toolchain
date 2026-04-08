@@ -1,8 +1,8 @@
 # Drift development history
 
 ## 2026-04-08
-- **Dual-runtime normal/debug toolchain + `DRIFT_DEBUG` /
-  `DRIFT_COMPILER_DEBUG` split (0.27.176, ABI 8)**:
+- **Dual-runtime normal/debug toolchain validated end-to-end
+  (0.27.177, ABI 8)**:
   This patch replaces the earlier `DRIFT_OPTIMIZED` / `--optimized`
   surface with an explicit dual-runtime toolchain and a clean split
   between runtime-lane selection and compiler-internal debug flags.
@@ -37,6 +37,17 @@
       - `DRIFT_DEBUG=1` => runtime/build lane selector
       - `DRIFT_COMPILER_DEBUG='{"convergence_parity": true}'` =>
         structured compiler/runner debug flags
+  - Post-flip stabilization:
+    - fixed the in-process Drift-source e2e runner to pass the active
+      lane's `debug_enabled` polarity into
+      `compile_to_llvm_ir_for_tests(...)`
+    - this removed the accidental debug-metadata + `-O2` normal-lane
+      combo that had been crashing clang/LLVM in
+      `DwarfDebug::finalizeModuleInfo()`
+    - the two assertion backtrace-fidelity tests now explicitly require
+      the debug-style lane; normal-lane assertion behavior remains
+      covered, but optimized unwinding is no longer forced to match
+      debug-style frame names
   - Regression coverage:
     - manifest schema regression in
       `tools/deploy/test_manifest_runtimes_schema.py`
@@ -51,7 +62,11 @@
     - channel-rename canaries in
       `lang/tests/driver/test_external_consumer.py` and
       `lang/tests/driver/test_pkg_hir_scope_reconstruction.py`
-  - Versioning: compiler `0.27.176`, ABI unchanged (8)
+  - Validation:
+    - full `just test` passes in the normal lane
+    - full `DRIFT_DEBUG=1 just test` passes in the debug-style lane
+    - both lane audits pass and both runtime sentinels are pinned
+  - Versioning: compiler `0.27.177`, ABI unchanged (8)
 
 ## 2026-04-07
 - **xdist-aware sanitizer_timeout + retrofit existing low-timeout
