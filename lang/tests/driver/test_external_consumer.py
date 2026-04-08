@@ -521,10 +521,10 @@ fn main() nothrow -> Int {
 """
 
 
-@pytest.mark.parametrize("optimized", [False, True], ids=["debug", "optimized"])
+@pytest.mark.parametrize("debug_style", [False, True], ids=["normal", "debug-style"])
 def test_ext_package_consumer_e2e(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
-	optimized: bool,
+	debug_style: bool,
 ) -> None:
 	"""K16 integrated: signed-package consumer must compile, link, and run.
 
@@ -541,9 +541,18 @@ def test_ext_package_consumer_e2e(
 	  1. IR symbol completeness (no unresolved internal targets)
 	  2. Object links with clang
 	  3. Binary runs and returns expected exit code
-	  4. Debug and optimized modes (parametrized)
+	  4. Normal and debug-style runtime lanes (parametrized via DRIFT_DEBUG)
 	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	if debug_style:
+		monkeypatch.setenv("DRIFT_DEBUG", "1")
+	else:
+		monkeypatch.delenv("DRIFT_DEBUG", raising=False)
+	# This test is parametrized over both lanes regardless of the parent
+	# session's DRIFT_DEBUG state, so its build artifacts are by design
+	# orthogonal to the active lane.  Opt out of the conftest sentinel
+	# audit so the parametrized "wrong" lane does not look like a leak.
+	(tmp_path / ".drift-lane-audit-skip").write_text("", encoding="utf-8")
 	pkg = _build_signed_acme_pkg(tmp_path)
 	_ = capsys.readouterr()
 
@@ -551,7 +560,7 @@ def test_ext_package_consumer_e2e(
 	consumer = tmp_path / "consumer"
 	main_src = consumer / "runner.drift"
 	_write_file(main_src, _CONSUMER_E2E_SOURCE)
-	extra_args = ["--optimized"] if optimized else []
+	extra_args: list[str] = []
 	argv = [
 		"-M", str(consumer),
 		"--stdlib-root", str(_empty_stdlib_root(tmp_path)),
@@ -1117,12 +1126,12 @@ def test_convergence_parity_pass1_state(
 	"""Convergence proof: Pass1State parity assertions pass on a representative
 	package-consumer compilation.  Exercises function keys, wrapper injection,
 	signature resolution, visibility provenance, and destructor registration
-	parity checks (same 5 checks as DRIFT_DEBUG=convergence_parity).
+	parity checks (same 5 checks as DRIFT_COMPILER_DEBUG={"convergence_parity": true}).
 
 	If this test fails, the local and package-consumer codepaths have diverged.
 	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
-	monkeypatch.setenv("DRIFT_DEBUG", '{"convergence_parity": true}')
+	monkeypatch.setenv("DRIFT_COMPILER_DEBUG", '{"convergence_parity": true}')
 	# Reset cached debug flags so the monkeypatched env is picked up.
 	from lang.driftc import debug as drift_debug
 	drift_debug._cached_flags = None

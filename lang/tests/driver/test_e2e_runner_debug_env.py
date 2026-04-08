@@ -1,8 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Runner-level regressions for the DRIFT_OPTIMIZED env knob.
+"""Runner-level regressions for the DRIFT_DEBUG env knob.
 
-These pin the additive contract directly on the test populations that the
-DRIFT_OPTIMIZED plumbing actually changed:
+These pin the dual-runtime selection contract directly on the test
+populations that DRIFT_DEBUG plumbing actually flows through:
 
   - lang/tests/codegen/e2e/runner.py        (in-process codegen e2e)
   - lang/tests/codegen/e2e/pex_e2e_runner.py (PEX-staged driftc e2e)
@@ -14,12 +14,23 @@ vectors the runner constructed.  This makes them fast and hermetic, but still
 exercises the real code paths that compose env state into compile/link/run
 commands.
 
-Coverage matrix:
-  1. DRIFT_OPTIMIZED=1                       → -O2 in compile cmd, optimized variant
-  2. DRIFT_MEMCHECK=1 DRIFT_OPTIMIZED=1      → -O2 in compile cmd AND valgrind --tool=memcheck wraps the run
-  3. DRIFT_MASSIF=1 DRIFT_OPTIMIZED=1        → -O2 in compile cmd AND valgrind --tool=massif wraps the run
-  4. DRIFT_ASAN=1 DRIFT_OPTIMIZED=1          → -fsanitize=address AND -O2 (asan_optimized variant)
-  5. default (no env)                        → no -O2, no optimized variant
+Polarity contract (inverted from the retired DRIFT_OPTIMIZED knob):
+
+  - default (no env)                     → -O2 present, variant = "default"
+                                            (production "normal" lane)
+  - DRIFT_DEBUG=1                        → no -O2, variant = "debug"
+                                            (explicit `_debug` opt-in lane)
+  - DRIFT_ASAN=1 (no DRIFT_DEBUG)        → -fsanitize=address + -O2, variant = "asan"
+  - DRIFT_ASAN=1 + DRIFT_DEBUG=1         → -fsanitize=address, no -O2, variant = "asan"
+                                            (sanitizers take precedence at variant
+                                             selection; -O2 still suppressed)
+  - DRIFT_MEMCHECK=1                     → -O2, variant = "default", valgrind run wrap
+  - DRIFT_MEMCHECK=1 + DRIFT_DEBUG=1     → no -O2, variant = "debug", valgrind run wrap
+  - DRIFT_MASSIF=1                       → -O2, variant = "default", massif run wrap
+  - DRIFT_MASSIF=1 + DRIFT_DEBUG=1       → no -O2, variant = "debug", massif run wrap
+
+`just test` (no env) → normal lane end-to-end.
+`DRIFT_DEBUG=1 just test` → debug-style lane end-to-end.
 """
 
 from __future__ import annotations
@@ -104,56 +115,81 @@ def _call_run_ir_with_clang(tmp_path: Path):
 	return e2e_runner, _do
 
 
-def test_runner_default_does_not_thread_optimized(tmp_path: Path) -> None:
+def test_runner_default_lane_is_normal_optimized(tmp_path: Path) -> None:
+	"""Default (no env) → -O2 present, default variant — the production normal lane."""
 	mod, call = _call_run_ir_with_clang(tmp_path)
 	compile_cmd, _, variant = _capture(mod, {}, call)
-	assert "-O2" not in compile_cmd
-	assert variant in ("default", "debug")
-
-
-def test_runner_optimized_threads_o2(tmp_path: Path) -> None:
-	mod, call = _call_run_ir_with_clang(tmp_path)
-	compile_cmd, _, variant = _capture(mod, {"DRIFT_OPTIMIZED": "1"}, call)
 	assert "-O2" in compile_cmd
-	assert variant == "optimized"
+	assert variant == "default"
 
 
-def test_runner_memcheck_optimized_composes(tmp_path: Path) -> None:
-	"""DRIFT_MEMCHECK=1 + DRIFT_OPTIMIZED=1: optimized compile under memcheck run."""
+def test_runner_drift_debug_selects_debug_style_lane(tmp_path: Path) -> None:
+	"""DRIFT_DEBUG=1 → -O2 suppressed, debug variant — the explicit `_debug` lane."""
+	mod, call = _call_run_ir_with_clang(tmp_path)
+	compile_cmd, _, variant = _capture(mod, {"DRIFT_DEBUG": "1"}, call)
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"
+
+
+def test_runner_memcheck_default_keeps_normal_lane(tmp_path: Path) -> None:
+	"""DRIFT_MEMCHECK=1 alone → still normal lane (-O2, default variant), valgrind wrap on run."""
 	mod, call = _call_run_ir_with_clang(tmp_path)
 	compile_cmd, run_cmd, variant = _capture(
-		mod, {"DRIFT_MEMCHECK": "1", "DRIFT_OPTIMIZED": "1"}, call
+		mod, {"DRIFT_MEMCHECK": "1"}, call
 	)
-	# Compile composes optimization on top of the (sanitizer-free) baseline.
 	assert "-O2" in compile_cmd
-	assert variant == "optimized"
-	# Run is wrapped in valgrind memcheck — memcheck is a runtime mode, so the
-	# runner does not strip it when DRIFT_OPTIMIZED is also set.
+	assert variant == "default"
 	assert "valgrind" in run_cmd
 	assert "--tool=memcheck" in run_cmd
 
 
-def test_runner_massif_optimized_composes(tmp_path: Path) -> None:
-	"""DRIFT_MASSIF=1 + DRIFT_OPTIMIZED=1: optimized compile under massif run."""
+def test_runner_memcheck_drift_debug_composes(tmp_path: Path) -> None:
+	"""DRIFT_MEMCHECK=1 + DRIFT_DEBUG=1: debug-style compile under memcheck run."""
 	mod, call = _call_run_ir_with_clang(tmp_path)
 	compile_cmd, run_cmd, variant = _capture(
-		mod, {"DRIFT_MASSIF": "1", "DRIFT_OPTIMIZED": "1"}, call
+		mod, {"DRIFT_MEMCHECK": "1", "DRIFT_DEBUG": "1"}, call
 	)
-	assert "-O2" in compile_cmd
-	assert variant == "optimized"
+	# Compile flips to debug-style: no -O2.  Variant flips to debug.
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"
+	# Run is still wrapped in valgrind memcheck — memcheck is a runtime mode
+	# orthogonal to the dual-runtime lane choice.
+	assert "valgrind" in run_cmd
+	assert "--tool=memcheck" in run_cmd
+
+
+def test_runner_massif_drift_debug_composes(tmp_path: Path) -> None:
+	"""DRIFT_MASSIF=1 + DRIFT_DEBUG=1: debug-style compile under massif run."""
+	mod, call = _call_run_ir_with_clang(tmp_path)
+	compile_cmd, run_cmd, variant = _capture(
+		mod, {"DRIFT_MASSIF": "1", "DRIFT_DEBUG": "1"}, call
+	)
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"
 	assert "valgrind" in run_cmd
 	assert "--tool=massif" in run_cmd
 
 
-def test_runner_asan_optimized_composes(tmp_path: Path) -> None:
-	"""DRIFT_ASAN=1 + DRIFT_OPTIMIZED=1: both flags present, asan_optimized variant."""
+def test_runner_asan_default_lane(tmp_path: Path) -> None:
+	"""DRIFT_ASAN=1 alone → -fsanitize + -O2, asan variant (sanitizer ride on normal lane)."""
 	mod, call = _call_run_ir_with_clang(tmp_path)
-	compile_cmd, _, variant = _capture(
-		mod, {"DRIFT_ASAN": "1", "DRIFT_OPTIMIZED": "1"}, call
-	)
+	compile_cmd, _, variant = _capture(mod, {"DRIFT_ASAN": "1"}, call)
 	assert "-fsanitize=address" in compile_cmd
 	assert "-O2" in compile_cmd
-	assert variant == "asan_optimized"
+	assert variant == "asan"
+
+
+def test_runner_asan_drift_debug_composes(tmp_path: Path) -> None:
+	"""DRIFT_ASAN=1 + DRIFT_DEBUG=1: sanitizer wins variant selection; -O2 still suppressed."""
+	mod, call = _call_run_ir_with_clang(tmp_path)
+	compile_cmd, _, variant = _capture(
+		mod, {"DRIFT_ASAN": "1", "DRIFT_DEBUG": "1"}, call
+	)
+	assert "-fsanitize=address" in compile_cmd
+	# DRIFT_DEBUG=1 suppresses -O2 even when stacked with a sanitizer.
+	assert "-O2" not in compile_cmd
+	# Sanitizer test variants take precedence over the dual-runtime distinction.
+	assert variant == "asan"
 
 
 # ── pex_e2e_runner.py ────────────────────────────────────────────────
@@ -176,21 +212,21 @@ def _call_pex_link_and_run(tmp_path: Path):
 	return pex, _do
 
 
-def test_pex_runner_default_does_not_thread_optimized(tmp_path: Path) -> None:
+def test_pex_runner_default_lane_is_normal_optimized(tmp_path: Path) -> None:
 	mod, call = _call_pex_link_and_run(tmp_path)
 	compile_cmd, _, variant = _capture(mod, {}, call)
-	assert "-O2" not in compile_cmd
-	assert variant in ("default", "debug")
-
-
-def test_pex_runner_optimized_threads_o2(tmp_path: Path) -> None:
-	mod, call = _call_pex_link_and_run(tmp_path)
-	compile_cmd, _, variant = _capture(mod, {"DRIFT_OPTIMIZED": "1"}, call)
 	assert "-O2" in compile_cmd
-	assert variant == "optimized"
+	assert variant == "default"
 
 
-def test_pex_runner_memcheck_optimized_composes(tmp_path: Path) -> None:
+def test_pex_runner_drift_debug_selects_debug_style_lane(tmp_path: Path) -> None:
+	mod, call = _call_pex_link_and_run(tmp_path)
+	compile_cmd, _, variant = _capture(mod, {"DRIFT_DEBUG": "1"}, call)
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"
+
+
+def test_pex_runner_memcheck_drift_debug_composes(tmp_path: Path) -> None:
 	from lang.tests.codegen.e2e import pex_e2e_runner as pex
 	ir_path = tmp_path / "out.ll"
 	ir_path.write_text("; trivial\n")
@@ -205,9 +241,9 @@ def test_pex_runner_memcheck_optimized_composes(tmp_path: Path) -> None:
 			timeout_s=10,
 			memcheck_enabled=True,
 		)
-	compile_cmd, run_cmd, variant = _capture(pex, {"DRIFT_OPTIMIZED": "1"}, _do)
-	assert "-O2" in compile_cmd
-	assert variant == "optimized"
+	compile_cmd, run_cmd, variant = _capture(pex, {"DRIFT_DEBUG": "1"}, _do)
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"
 	assert "valgrind" in run_cmd
 	assert "--tool=memcheck" in run_cmd
 
@@ -232,15 +268,15 @@ def _call_pkg_consumer_link_and_run(tmp_path: Path):
 	return pkg, _do
 
 
-def test_pkg_consumer_default_does_not_thread_optimized(tmp_path: Path) -> None:
+def test_pkg_consumer_default_lane_is_normal_optimized(tmp_path: Path) -> None:
 	mod, call = _call_pkg_consumer_link_and_run(tmp_path)
 	compile_cmd, _, variant = _capture(mod, {}, call)
-	assert "-O2" not in compile_cmd
-	assert variant in ("default", "debug")
-
-
-def test_pkg_consumer_optimized_threads_o2(tmp_path: Path) -> None:
-	mod, call = _call_pkg_consumer_link_and_run(tmp_path)
-	compile_cmd, _, variant = _capture(mod, {"DRIFT_OPTIMIZED": "1"}, call)
 	assert "-O2" in compile_cmd
-	assert variant == "optimized"
+	assert variant == "default"
+
+
+def test_pkg_consumer_drift_debug_selects_debug_style_lane(tmp_path: Path) -> None:
+	mod, call = _call_pkg_consumer_link_and_run(tmp_path)
+	compile_cmd, _, variant = _capture(mod, {"DRIFT_DEBUG": "1"}, call)
+	assert "-O2" not in compile_cmd
+	assert variant == "debug"

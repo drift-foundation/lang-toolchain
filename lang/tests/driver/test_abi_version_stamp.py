@@ -273,7 +273,7 @@ def test_abi_version_mismatch_link_failure(tmp_path: Path) -> None:
 	clang = shutil.which("clang")
 	assert clang, "clang not available"
 
-	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
+	variant = runtime_archive_variant(debug_style=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
 	assert archive.exists()
 
@@ -323,7 +323,7 @@ def test_abi_mismatch_driver_hint(tmp_path: Path) -> None:
 	# stderr produced by the mismatch test above.
 	clang = shutil.which("clang")
 	assert clang, "clang not available"
-	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
+	variant = runtime_archive_variant(debug_style=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
 	bin_path = tmp_path / "hint_test.out"
 	link_cmd = [
@@ -447,7 +447,7 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	clang = shutil.which("clang")
 	assert clang, "clang not available"
-	variant = runtime_archive_variant(debug_enabled=False, asan_enabled=False, alloc_track_enabled=False)
+	variant = runtime_archive_variant(debug_style=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
 	ir_path = tmp_path / "provenance.ll"
 	bin_path = tmp_path / "provenance.out"

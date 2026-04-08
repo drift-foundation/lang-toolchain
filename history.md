@@ -1,43 +1,46 @@
-## 2026-04-08 - 0.27.175: additive DRIFT_OPTIMIZED test mode + drift build --optimized
-- Two related toolchain/test-surface changes landed in this patch:
-  - `drift build` now supports `--optimized`, forwarding `--optimized --no-debug-info` to `driftc`
-  - binary-producing test lanes now support `DRIFT_OPTIMIZED=1` as an additive env-controlled compile mode
-- **`drift build --optimized`**:
-  - added `--optimized` to `tools/drift_deploy/drift_build.py`
-  - forwards `--optimized --no-debug-info` through the existing `extra_flags` path to `driftc`
-  - default `drift build` behavior is unchanged
-  - regression coverage in `tools/drift_deploy/test_build.py`:
-    - optimized flag forwards both driftc flags
-    - default-off behavior preserved
-- **`DRIFT_OPTIMIZED=1` test mode**:
-  - orthogonal, additive compile-mode knob for binary-producing test populations
-  - composes with existing env-controlled modes rather than replacing them:
-    - `DRIFT_ASAN=1 DRIFT_OPTIMIZED=1`
-    - `DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1`
-    - `DRIFT_MEMCHECK=1 DRIFT_OPTIMIZED=1`
-    - `DRIFT_MASSIF=1 DRIFT_OPTIMIZED=1`
-  - `lang/driftc/driftc.py` now treats `DRIFT_OPTIMIZED=1` as equivalent to passing `--optimized` for test-driven binary builds, while preserving explicit `--debug-info` override behavior
-  - `lang/language_runtime/__init__.py` now supports composite runtime archive variants:
-    - `asan_optimized`
-    - `ubsan_optimized`
-    - `asan_ubsan_optimized`
-  - updated binary-producing runners:
-    - `lang/tests/codegen/e2e/runner.py`
-    - `lang/tests/codegen/e2e/pex_e2e_runner.py`
-    - `lang/tests/codegen/e2e/pkg_consumer_runner.py`
-  - these now append `-O2` in optimized mode and select the matching runtime archive variant without changing existing memcheck/massif/sanitizer mutex rules
+## 2026-04-08 - 0.27.176: dual-runtime normal/debug toolchain + `DRIFT_DEBUG` / `DRIFT_COMPILER_DEBUG` split
+- The earlier `DRIFT_OPTIMIZED` / `--optimized` surface has been retired in favor of a dual-runtime toolchain with one default production lane and one explicit debug-style lane.
+- **Dual-runtime toolchain contract**:
+  - staged toolchains now carry both runtime archives side-by-side:
+    - normal lane: unsuffixed archive under `lib/runtime/default/`
+    - debug-style lane: `_debug`-suffixed archive under `lib/runtime/debug/`
+  - runtime archive identity is pinned by paired sentinels in `lang/language_runtime/abi_version_stamp.c`:
+    - `__drift_rt_mode_normal`
+    - `__drift_rt_mode_debug`
+  - `tools/deploy/steps/publish.py` now emits a machine-readable `runtimes` map in `lib/manifest.json` alongside the legacy `runtime_variants` list:
+    - `runtimes.normal.lib`
+    - `runtimes.debug.lib`
+- **Driver surface and polarity flip**:
+  - removed `--optimized` from `tools/drift_deploy/drift_build.py` and `lang/driftc/driftc.py`
+  - removed `DRIFT_OPTIMIZED` from `lang/driftc/driftc.py`, the binary-producing e2e runners, and the wrapper/test surface
+  - added `drift build --debug` as the explicit debug-style selector
+  - `DRIFT_DEBUG=1` is now the canonical env-controlled lane selector:
+    - default / unset => normal lane
+    - `DRIFT_DEBUG=1` => debug-style lane
+  - default lane is now the production path:
+    - normal runtime archive
+    - `-O2` enabled by default for binary-producing paths
+    - debug-style lane suppresses `-O2`
+  - sanitizer and alloc-track variants remain internal test modes and still take precedence at runtime-variant selection time
+- **Compiler-internal debug channel rename**:
+  - `DRIFT_DEBUG` no longer doubles as the structured compiler debug-flags channel
+  - internal compiler/runner debug flags now use `DRIFT_COMPILER_DEBUG`
+  - this keeps the contracts separate:
+    - `DRIFT_DEBUG=1` => runtime/build lane selection only
+    - `DRIFT_COMPILER_DEBUG='{\"convergence_parity\": true}'` => structured compiler/runner debug flags
 - **Regression coverage**:
-  - wrapper-level env-mode coverage in `lang/tests/driver/test_driftc_wrapper_env_modes.py`
-  - runner-level hermetic coverage in `lang/tests/driver/test_e2e_runner_optimized_env.py`
-    - default-off
-    - optimized-on
-    - ASAN+optimized
-    - MEMCHECK+optimized
-    - MASSIF+optimized
-    - assertions cover compile command shape, runtime archive variant selection, and valgrind wrapping where applicable
-  - updated `lang/tests/codegen/e2e/README.md` to document `DRIFT_UBSAN` and `DRIFT_OPTIMIZED`
+  - manifest schema regression in `tools/deploy/test_manifest_runtimes_schema.py`
+  - staged-toolchain sentinel selection regressions in `lang/tests/driver/test_runtime_selection_sentinel.py` for both:
+    - `drift build --debug`
+    - `DRIFT_DEBUG=1 drift build`
+  - wrapper env-mode coverage in `lang/tests/driver/test_driftc_wrapper_env_modes.py`
+  - runner-level hermetic coverage in `lang/tests/driver/test_e2e_runner_debug_env.py`
+  - `drift build` CLI/env coverage in `tools/drift_deploy/test_build.py`
+  - rename canaries proving `DRIFT_COMPILER_DEBUG` reaches the compiler:
+    - `lang/tests/driver/test_external_consumer.py::test_convergence_parity_pass1_state`
+    - `lang/tests/driver/test_pkg_hir_scope_reconstruction.py`
 - Versioning:
-  - compiler bumped to `0.27.175`
+  - compiler bumped to `0.27.176`
   - ABI unchanged (8) — no compiler/runtime boundary shape change
 
 ## 2026-04-07 - 0.27.173: xdist-aware sanitizer_timeout + retrofit existing low-timeout driver tests

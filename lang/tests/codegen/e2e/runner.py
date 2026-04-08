@@ -90,7 +90,13 @@ def _ubsan_options_with_defaults(existing: str | None) -> str:
 
 
 def _drift_debug_diags_enabled() -> bool:
-	raw = os.environ.get("DRIFT_DEBUG")
+	# Runner-internal diagnostic verbosity channel.  Distinct from
+	# `DRIFT_DEBUG`, which is the user-facing dual-runtime lane selector
+	# (`DRIFT_DEBUG=1 just test` runs the full suite in debug-style mode
+	# and must NOT enable runner verbosity as a side effect).  Use
+	# `DRIFT_COMPILER_DEBUG=1` or `DRIFT_COMPILER_DEBUG='{"e2e_diags": true}'`
+	# to opt into runner diagnostic output.
+	raw = os.environ.get("DRIFT_COMPILER_DEBUG")
 	if not raw:
 		return False
 	if raw in ("1", "true", "True"):
@@ -236,18 +242,20 @@ def _run_ir_with_clang(
 		if ubsan_enabled:
 			c_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 			link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
-		# DRIFT_OPTIMIZED: orthogonal compile-mode knob, additive with sanitizers.
-		optimized_enabled = _env_true("DRIFT_OPTIMIZED")
-		if optimized_enabled:
+		# Dual-runtime workstream: DRIFT_DEBUG=1 selects the debug-style
+		# runtime variant and suppresses -O2; default (no env) is the
+		# normal/optimized lane.  DRIFT_DEBUG composes with sanitizers
+		# (sanitizers take precedence at variant selection).
+		debug_style_enabled = _env_true("DRIFT_DEBUG")
+		if not debug_style_enabled:
 			c_flags.append("-O2")
 		if rt_mode == "archive":
 			try:
 				variant = runtime_archive_variant(
-					debug_enabled=False,
+					debug_style=debug_style_enabled,
 					asan_enabled=asan_enabled,
 					ubsan_enabled=ubsan_enabled,
 					alloc_track_enabled=alloc_track_enabled,
-					optimized=optimized_enabled,
 				)
 				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 			except Exception as ex:

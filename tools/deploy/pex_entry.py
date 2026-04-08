@@ -73,16 +73,18 @@ def main() -> None:
 	# tree is relocated or when tests use ephemeral temp directories.
 	import shutil as _shutil
 	from lang.language_runtime import runtime_archive_name as _rt_ar_name
-	_ar_name = _rt_ar_name()
 	_install_runtime = dist_root / "lib" / "runtime"
 	if "DRIFT_RUNTIME_LIB_CACHE_DIR" not in os.environ:
 		_cache_runtime = Path.home() / ".cache" / "drift" / "runtime"
 		_cache_runtime.mkdir(parents=True, exist_ok=True)
-		# Seed pre-built archives from the install tree.
+		# Seed pre-built archives from the install tree.  Each variant subdir
+		# has a variant-specific archive filename — the debug variant carries
+		# the explicit `_debug` infix per the dual-runtime contract.
 		if _install_runtime.is_dir():
 			for _variant_dir in sorted(_install_runtime.iterdir()):
 				if not _variant_dir.is_dir():
 					continue
+				_ar_name = _rt_ar_name(_variant_dir.name)
 				_archive = _variant_dir / _ar_name
 				if not _archive.is_file():
 					continue

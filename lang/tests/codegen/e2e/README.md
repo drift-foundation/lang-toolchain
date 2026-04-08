@@ -15,15 +15,15 @@ Useful runner env toggles:
   - `DRIFT_ASAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`.
 - `DRIFT_UBSAN=1` — compile+run binaries with UndefinedBehaviorSanitizer (`-fsanitize=undefined -fno-sanitize-recover=undefined -g`).
   - `DRIFT_UBSAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`. May be combined with `DRIFT_ASAN`.
-- `DRIFT_OPTIMIZED=1` — compile binaries in optimized mode (forwards `--optimized --no-debug-info` to driftc, adds `-O2` at the runner link step, and selects the optimized runtime archive variant).
-  - Orthogonal and additive: composes with every other compile-mode and runtime-mode toggle above.
-    - `DRIFT_ASAN=1 DRIFT_OPTIMIZED=1` → asan + `-O2` (runtime archive variant `asan_optimized`).
-    - `DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1` → ubsan + `-O2` (variant `ubsan_optimized`).
-    - `DRIFT_ASAN=1 DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1` → asan + ubsan + `-O2` (variant `asan_ubsan_optimized`).
-    - `DRIFT_MEMCHECK=1 DRIFT_OPTIMIZED=1` → optimized binary run under memcheck.
-    - `DRIFT_MASSIF=1 DRIFT_OPTIMIZED=1` → optimized binary run under massif.
-  - Existing sanitizer/valgrind mutual-exclusion rules are unaffected; `DRIFT_OPTIMIZED` does not participate in them.
-  - Default behavior is unchanged when the var is unset.
+- `DRIFT_DEBUG=1` — flip the entire suite into the debug-style runtime lane (links the `_debug` runtime archive variant; suppresses `-O2`).  Co-equal with `drift build --debug`.
+  - **Default (env unset):** every binary-producing test path runs in the production "normal" lane — `-O2`, links the unsuffixed runtime archive `libdrift_rt_abi<N>.a` (which exports `__drift_rt_mode_normal`).
+  - **`DRIFT_DEBUG=1 just test`:** every binary-producing test path runs in the explicit "debug-style" lane — no `-O2`, links `libdrift_rt_debug_abi<N>.a` (which exports `__drift_rt_mode_debug`).
+  - Composability with sanitizer/valgrind test modes:
+    - `DRIFT_ASAN=1 DRIFT_DEBUG=1` → sanitizer takes precedence at runtime variant selection (`asan` variant).  `-fsanitize=address` still applied; `-O2` suppressed because of `DRIFT_DEBUG=1`.
+    - `DRIFT_UBSAN=1 DRIFT_DEBUG=1` → same shape, `ubsan` variant.
+    - `DRIFT_MEMCHECK=1 DRIFT_DEBUG=1` → debug-style compile, valgrind memcheck wraps the run.
+    - `DRIFT_MASSIF=1 DRIFT_DEBUG=1` → debug-style compile, valgrind massif wraps the run.
+  - Existing sanitizer/valgrind mutual-exclusion rules are unaffected; `DRIFT_DEBUG` does not participate in them.
 
 Memcheck policy:
 - Default is strict: no suppressions.

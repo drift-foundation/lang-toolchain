@@ -371,8 +371,8 @@ class TestDriftBuildRun:
 
 		assert result == 1
 
-	def test_optimized_flag_forwards_to_driftc(self, tmp_path):
-		"""--optimized forwards --optimized and --no-debug-info to driftc."""
+	def test_debug_flag_sets_drift_debug_env(self, tmp_path):
+		"""`drift build --debug` sets DRIFT_DEBUG=1 in the driftc subprocess env."""
 		manifest_data = {
 			"schema_version": 1,
 			"project": {"name": "test-project", "license": "MIT"},
@@ -396,17 +396,34 @@ class TestDriftBuildRun:
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
 				"--manifest", str(tmp_path / "drift-manifest.json"),
-				"--optimized",
+				"--debug",
 			])
 
 		assert result == 0
-		cmd = mock_run.call_args[0][0]
-		assert "--optimized" in cmd
-		assert "--no-debug-info" in cmd
+		# `--debug` is normalized to DRIFT_DEBUG=1 in the subprocess env;
+		# the cmd vector itself stays unchanged.
+		env = mock_run.call_args.kwargs["env"]
+		assert env.get("DRIFT_DEBUG") == "1"
 
-	def test_optimized_flag_default_off(self, tmp_path):
-		"""Default build does not forward --optimized or --no-debug-info."""
+	def test_drift_debug_env_propagates_to_subprocess(self, tmp_path, monkeypatch):
+		"""DRIFT_DEBUG=1 set in the parent env propagates without --debug."""
 		_write_manifest(tmp_path)
+		from tools.drift_deploy.drift_build import run
+
+		monkeypatch.setenv("DRIFT_DEBUG", "1")
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+
+		assert result == 0
+		env = mock_run.call_args.kwargs["env"]
+		assert env.get("DRIFT_DEBUG") == "1"
+
+	def test_default_does_not_set_drift_debug(self, tmp_path, monkeypatch):
+		"""Default build (no --debug, no env) does not set DRIFT_DEBUG."""
+		_write_manifest(tmp_path)
+		monkeypatch.delenv("DRIFT_DEBUG", raising=False)
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("subprocess.run") as mock_run, \
@@ -415,9 +432,8 @@ class TestDriftBuildRun:
 			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
 
 		assert result == 0
-		cmd = mock_run.call_args[0][0]
-		assert "--optimized" not in cmd
-		assert "--no-debug-info" not in cmd
+		env = mock_run.call_args.kwargs["env"]
+		assert "DRIFT_DEBUG" not in env
 
 	def test_app_artifact_build(self, tmp_path):
 		manifest_data = {

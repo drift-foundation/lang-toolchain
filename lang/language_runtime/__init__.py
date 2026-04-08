@@ -39,6 +39,9 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "random_runtime.c",
 		base / "env_runtime.c",
 		# ABI version stamp for link-time compatibility guard.
+		# Also carries the paired runtime identity sentinels (variant gated
+		# by -DDRIFT_RT_MODE_DEBUG) so they ride into every linked binary
+		# alongside the always-pulled ABI symbol.
 		base / "abi_version_stamp.c",
 		# Diagnostic/Error runtime lives alongside lang/ for now; include it so
 		# e2e codegen links DV/exception helpers.
@@ -57,27 +60,38 @@ def get_runtime_include_dirs(root: Path) -> List[Path]:
 _VALID_VARIANTS = {
 	"default", "debug", "alloc_track",
 	"asan", "ubsan", "asan_ubsan",
-	"optimized",
-	"asan_optimized", "ubsan_optimized", "asan_ubsan_optimized",
 }
 
 
-def runtime_archive_variant(*, debug_enabled: bool, asan_enabled: bool, alloc_track_enabled: bool, optimized: bool = False, ubsan_enabled: bool = False) -> str:
-	# alloc_track is exclusive (instrumentation that wraps libc allocators).
+def runtime_archive_variant(
+	*,
+	debug_style: bool,
+	asan_enabled: bool,
+	alloc_track_enabled: bool,
+	ubsan_enabled: bool = False,
+) -> str:
+	"""Pick the on-disk runtime archive variant for a given lane.
+
+	Vocabulary contract (do not deviate):
+	  - ``debug_style=False`` → "default" (the production "normal" lane).
+	  - ``debug_style=True``  → "debug"   (the explicit `_debug` opt-in lane,
+	                                       selected by `drift build --debug`
+	                                       or `DRIFT_DEBUG=1`).
+
+	Sanitizer / alloc_track variants are internal test-mode lanes that
+	take precedence over the normal/debug-style binary distinction; they
+	ride on the `__drift_rt_mode_normal` sentinel.  alloc_track stays
+	exclusive (instrumentation that wraps libc allocators).
+	"""
 	if alloc_track_enabled:
 		return "alloc_track"
-	# DRIFT_OPTIMIZED is orthogonal: it composes with sanitizer variants by
-	# appending "_optimized", so the runtime archive is built with both
-	# -fsanitize=... and -O2 in those combined modes.
 	if asan_enabled and ubsan_enabled:
-		return "asan_ubsan_optimized" if optimized else "asan_ubsan"
+		return "asan_ubsan"
 	if asan_enabled:
-		return "asan_optimized" if optimized else "asan"
+		return "asan"
 	if ubsan_enabled:
-		return "ubsan_optimized" if optimized else "ubsan"
-	if optimized:
-		return "optimized"
-	if debug_enabled:
+		return "ubsan"
+	if debug_style:
 		return "debug"
 	return "default"
 
@@ -92,21 +106,29 @@ def runtime_archive_cache_root(root: Path) -> Path:
 	return root / "build" / "runtime_libs"
 
 
-def runtime_archive_name() -> str:
-	"""Return the ABI-versioned runtime archive filename.
+def runtime_archive_name(variant: str = "default") -> str:
+	"""Return the ABI-versioned runtime archive filename for ``variant``.
 
 	Embedding the ABI version in the filename ensures stale cached archives
 	(from prior ABI versions) are never linked — the compiler asks for
 	``libdrift_rt_abi7.a`` and the linker will not find ``libdrift_rt_abi6.a``.
+
+	The dual-runtime contract requires the explicit `_debug` infix on the
+	debug-style variant filename so production releases can spot it by
+	inspection.  All other variants share the unsuffixed name; sanitizer
+	and alloc_track variants are internal test modes that ride on the
+	normal filename.
 	"""
 	from lang.versions import DRIFT_RT_ABI_VERSION
+	if variant == "debug":
+		return f"libdrift_rt_debug_abi{DRIFT_RT_ABI_VERSION}.a"
 	return f"libdrift_rt_abi{DRIFT_RT_ABI_VERSION}.a"
 
 
 def runtime_archive_path(root: Path, *, variant: str) -> Path:
 	if variant not in _VALID_VARIANTS:
 		raise ValueError(f"unknown runtime archive variant '{variant}'")
-	return runtime_archive_cache_root(root) / variant / runtime_archive_name()
+	return runtime_archive_cache_root(root) / variant / runtime_archive_name(variant)
 
 
 def _runtime_deps(root: Path) -> List[Path]:
@@ -144,7 +166,7 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 	cache_root = runtime_archive_cache_root(root)
 	build_root = cache_root / variant
 	obj_dir = build_root / "objs"
-	archive_path = build_root / runtime_archive_name()
+	archive_path = build_root / runtime_archive_name(variant)
 	lock_path = build_root / ".build.lock"
 	deps = _runtime_deps(root)
 	# ABI version constant also drives rebuild (change → force recompile).
@@ -168,24 +190,26 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 		# Read ABI version from the single source of truth.
 		from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
 		include_dirs = get_runtime_include_dirs(root)
+		# Dual-runtime workstream (step 4 default flip): the unsuffixed
+		# `default` variant is the production "normal" runtime — built with
+		# -O2 and no debug info.  The explicit `debug` variant is the
+		# `_debug` opt-in (-g) and carries the paired identity sentinel via
+		# -DDRIFT_RT_MODE_DEBUG.  Sanitizer/alloc_track variants are
+		# internal test modes that ride on the `__drift_rt_mode_normal`
+		# sentinel; their cflags are unchanged.
 		cflags: list[str] = []
 		cdefs: list[str] = [f"-DDRIFT_RT_ABI_VERSION={DRIFT_RT_ABI_VERSION}"]
-		if variant == "debug":
+		if variant == "default":
+			cflags.extend(["-O2"])
+		elif variant == "debug":
 			cflags.extend(["-g"])
+			cdefs.append("-DDRIFT_RT_MODE_DEBUG=1")
 		elif variant == "asan":
 			cflags.extend(["-fsanitize=address", "-g"])
 		elif variant == "ubsan":
 			cflags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 		elif variant == "asan_ubsan":
 			cflags.extend(["-fsanitize=address", "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
-		elif variant == "optimized":
-			cflags.extend(["-O2"])
-		elif variant == "asan_optimized":
-			cflags.extend(["-fsanitize=address", "-O2"])
-		elif variant == "ubsan_optimized":
-			cflags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-O2"])
-		elif variant == "asan_ubsan_optimized":
-			cflags.extend(["-fsanitize=address", "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-O2"])
 		elif variant == "alloc_track":
 			cdefs.extend(["-DDRIFT_ALLOC_WRAP_ENABLED=1"])
 

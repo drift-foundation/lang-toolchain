@@ -20,7 +20,7 @@ COMPILER_PACKAGES = (
 SOURCE_EXTENSIONS = frozenset({".py", ".lark"})
 NATIVE_EXTENSIONS = frozenset({".c", ".h", ".S"})
 
-RUNTIME_VARIANTS = ("default", "debug", "asan", "alloc_track", "optimized")
+RUNTIME_VARIANTS = ("default", "debug", "asan", "alloc_track")
 
 
 def bundle_compiler(repo_root: Path, dist: Path) -> None:
@@ -92,9 +92,12 @@ def bundle_compiler(repo_root: Path, dist: Path) -> None:
 def bundle_runtime_archives(repo_root: Path, dist: Path) -> list[str]:
 	"""Copy pre-built runtime archives. Returns list of bundled variants."""
 	from lang.language_runtime import runtime_archive_name
-	ar_name = runtime_archive_name()
 	bundled: list[str] = []
 	for variant in RUNTIME_VARIANTS:
+		# Variant-aware filename: the dual-runtime contract requires the
+		# debug variant to carry the explicit `_debug` infix on disk so
+		# production releases can spot it by inspection.
+		ar_name = runtime_archive_name(variant)
 		src = repo_root / "build" / "runtime_libs" / variant / ar_name
 		if src.exists():
 			dst_dir = dist / "lib" / "runtime" / variant
@@ -193,8 +196,7 @@ Tampered or unsigned stdlib packages are rejected.
 | Flag | Purpose |
 |------|---------|
 | `-o <path>` | Output binary path |
-| `--optimized` | Build with -O2 and optimized runtime |
-| `-g` / `--debug-info` | Emit DWARF debug info |
+| `-g` / `--debug-info` | Emit DWARF debug info (orthogonal to runtime variant selection) |
 | `--entry <mod>::<fn>` | Custom entry point (default: `main::main`) |
 | `--json` | Machine-readable diagnostics |
 
@@ -202,6 +204,7 @@ Tampered or unsigned stdlib packages are rejected.
 
 | Variable | Purpose |
 |----------|---------|
+| `DRIFT_DEBUG` | Set to `1` to link the debug-style runtime variant (`_debug` archive); equivalent to `drift build --debug` |
 | `DRIFT_ASAN` | Set to `1` to link with AddressSanitizer runtime |
 | `DRIFT_TRUST_STORE` | Path to trust store JSON for user/third-party packages |
 | `SCIE_BASE` | Override scie cache directory (default: `~/.cache/nce`) |

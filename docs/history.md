@@ -1,44 +1,57 @@
 # Drift development history
 
 ## 2026-04-08
-- **Additive `DRIFT_OPTIMIZED` test mode + `drift build --optimized`
-  (0.27.175, ABI 8)**:
-  This patch adds one explicit build surface and one orthogonal test-mode
-  knob.
-  - `drift build --optimized`:
-    - added `--optimized` to `tools/drift_deploy/drift_build.py`
-    - forwards `--optimized --no-debug-info` to `driftc`
-    - default `drift build` behavior remains unchanged
-    - regressions in `tools/drift_deploy/test_build.py` pin both
-      forwarding and default-off behavior
-  - `DRIFT_OPTIMIZED=1`:
-    - new additive env-controlled compile mode for binary-producing test
-      populations
-    - composes with existing modes rather than replacing them:
-      - ASAN + optimized
-      - UBSAN + optimized
-      - MEMCHECK + optimized
-      - MASSIF + optimized
-    - `lang/driftc/driftc.py` now treats `DRIFT_OPTIMIZED=1` as
-      equivalent to `--optimized` for test-driven binary builds, while
-      preserving explicit `--debug-info` override behavior
-    - `lang/language_runtime/__init__.py` now supports composite runtime
-      archive variants:
-      - `asan_optimized`
-      - `ubsan_optimized`
-      - `asan_ubsan_optimized`
-    - updated runners:
-      - `lang/tests/codegen/e2e/runner.py`
-      - `lang/tests/codegen/e2e/pex_e2e_runner.py`
-      - `lang/tests/codegen/e2e/pkg_consumer_runner.py`
+- **Dual-runtime normal/debug toolchain + `DRIFT_DEBUG` /
+  `DRIFT_COMPILER_DEBUG` split (0.27.176, ABI 8)**:
+  This patch replaces the earlier `DRIFT_OPTIMIZED` / `--optimized`
+  surface with an explicit dual-runtime toolchain and a clean split
+  between runtime-lane selection and compiler-internal debug flags.
+  - Dual-runtime toolchain:
+    - staged toolchains now carry both runtime archives side-by-side:
+      - normal lane: unsuffixed archive in `lib/runtime/default/`
+      - debug-style lane: `_debug`-suffixed archive in
+        `lib/runtime/debug/`
+    - runtime identity is pinned by paired sentinels in
+      `lang/language_runtime/abi_version_stamp.c`:
+      - `__drift_rt_mode_normal`
+      - `__drift_rt_mode_debug`
+    - `tools/deploy/steps/publish.py` now emits a machine-readable
+      `runtimes` map in `lib/manifest.json` alongside the legacy
+      `runtime_variants` list
+  - Driver surface and polarity:
+    - removed `--optimized` and `DRIFT_OPTIMIZED`
+    - added `drift build --debug` as the explicit debug-style selector
+    - `DRIFT_DEBUG=1` is now the canonical runtime/build lane selector:
+      - unset => normal lane
+      - set => debug-style lane
+    - default lane now compiles binary-producing paths with `-O2`
+    - debug-style lane suppresses `-O2`
+    - sanitizer / alloc-track variants remain internal test modes and
+      still take precedence at runtime-variant selection time
+  - Compiler debug channel rename:
+    - `DRIFT_DEBUG` no longer doubles as the structured internal debug
+      flag channel
+    - internal compiler/runner debug flags now use
+      `DRIFT_COMPILER_DEBUG`
+    - this cleanly separates:
+      - `DRIFT_DEBUG=1` => runtime/build lane selector
+      - `DRIFT_COMPILER_DEBUG='{"convergence_parity": true}'` =>
+        structured compiler/runner debug flags
   - Regression coverage:
-    - wrapper-level env-mode tests in
+    - manifest schema regression in
+      `tools/deploy/test_manifest_runtimes_schema.py`
+    - staged-toolchain sentinel selection regressions in
+      `lang/tests/driver/test_runtime_selection_sentinel.py`
+    - wrapper env-mode coverage in
       `lang/tests/driver/test_driftc_wrapper_env_modes.py`
-    - runner-level hermetic tests in
-      `lang/tests/driver/test_e2e_runner_optimized_env.py`
-    - docs updated in `lang/tests/codegen/e2e/README.md` for both
-      `DRIFT_UBSAN` and `DRIFT_OPTIMIZED`
-  - Versioning: compiler `0.27.175`, ABI unchanged (8)
+    - runner-level hermetic coverage in
+      `lang/tests/driver/test_e2e_runner_debug_env.py`
+    - `drift build` CLI/env coverage in
+      `tools/drift_deploy/test_build.py`
+    - channel-rename canaries in
+      `lang/tests/driver/test_external_consumer.py` and
+      `lang/tests/driver/test_pkg_hir_scope_reconstruction.py`
+  - Versioning: compiler `0.27.176`, ABI unchanged (8)
 
 ## 2026-04-07
 - **xdist-aware sanitizer_timeout + retrofit existing low-timeout

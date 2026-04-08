@@ -53,6 +53,11 @@ def _clean_env() -> dict[str, str]:
 	return {k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_KEYS}
 
 
+def _env_true(name: str) -> bool:
+	"""Truthy check matching the rest of the toolchain's env-flag idiom."""
+	return os.environ.get(name, "") in ("1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
+
+
 # ── Version constraint helpers ───────────────────────────────────────
 
 
@@ -86,8 +91,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Explicit output path override")
 	p.add_argument("--driftc", type=UserPath, default=None,
 		help="Path to driftc (default: driftc from PATH)")
-	p.add_argument("--optimized", action="store_true",
-		help="Produce an optimized build (forwards --optimized --no-debug-info to driftc)")
+	p.add_argument("--debug", action="store_true",
+		help="Produce a debug-style build (links the `_debug` runtime variant; "
+		     "equivalent to setting DRIFT_DEBUG=1)")
 	return p
 
 
@@ -409,10 +415,12 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)
 
-	# Optimized build mode: forwarded to driftc as --optimized --no-debug-info,
-	# matching driftc's existing optimized-artifact contract.
-	if args.optimized:
-		extra_flags = list(extra_flags) + ["--optimized", "--no-debug-info"]
+	# Dual-runtime workstream: `--debug` and `DRIFT_DEBUG=1` are co-equal
+	# selectors for the debug-style runtime variant.  The selection is
+	# threaded into driftc via the env var so the underlying compiler can
+	# pick the matching runtime archive without a special CLI flag of its
+	# own.  No alias for the retired DRIFT_OPTIMIZED / --optimized.
+	debug_style_build = args.debug or _env_true("DRIFT_DEBUG")
 
 	# Output path.
 	build_dir = manifest_dir / "build"
@@ -468,7 +476,13 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 
 	# Execute.
 	print(f"drift build: {art.name} ({art.kind}) v{art.version}")
-	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
+	subprocess_env = _clean_env()
+	if debug_style_build:
+		# `--debug` and `DRIFT_DEBUG=1` are co-equal driver selectors; the
+		# CLI flag normalizes to the env so the underlying compiler sees a
+		# single canonical source of truth.
+		subprocess_env["DRIFT_DEBUG"] = "1"
+	result = subprocess.run(cmd, capture_output=True, text=True, env=subprocess_env)
 	if result.returncode != 0:
 		print(f"build failed for {art.kind} '{art.name}':", file=sys.stderr)
 		if result.stderr:

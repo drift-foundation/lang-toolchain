@@ -6758,7 +6758,6 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
 	parser.add_argument("-g", "--debug-info", action="store_true", help="Emit debug info in generated LLVM (DWARF)")
 	parser.add_argument("--no-debug-info", action="store_true", help="Disable debug info emission")
-	parser.add_argument("--optimized", action="store_true", help="Compile with -O2 optimization (selects optimized runtime archive)")
 	parser.add_argument("--linker", choices=["ld", "gold"], default=None, help="Select linker (default: prefer gold if available)")
 	parser.add_argument(
 		"--target-word-bits",
@@ -6814,13 +6813,18 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--dep", action="append", default=[], metavar="PKG@VERSION",
 		help="Select exact dependency version for consumed package (repeatable; e.g., --dep net.tls@0.3.0)")
 	args = parser.parse_args(argv)
-	# DRIFT_OPTIMIZED=1 is an orthogonal test-mode knob (mirrors DRIFT_ASAN /
-	# DRIFT_UBSAN): when set, every binary-producing test path that goes
-	# through driftc compiles as if `--optimized --no-debug-info` were passed.
-	# Default test behavior is unchanged when the env var is unset.  An
-	# explicit `-g` / `--debug-info` on the command line still wins.
-	optimized = getattr(args, "optimized", False) or _env_true("DRIFT_OPTIMIZED")
-	debug_enabled = not optimized
+	# Dual-runtime workstream (step 4): the production default lane is
+	# "normal" (optimized, no debug info, links the unsuffixed runtime
+	# archive).  `DRIFT_DEBUG=1` flips into the explicit "debug-style" lane
+	# (no -O2, links the `_debug`-infix runtime archive).  This env var is
+	# the canonical mechanism — `drift build --debug` translates the flag
+	# into the same env on the driftc subprocess.
+	#
+	# DWARF emission (`-g` / `--debug-info` / `--no-debug-info`) is an
+	# orthogonal control: a normal-lane build can still opt into debug info
+	# on the command line, and a debug-style build can suppress it.
+	debug_style_runtime = _env_true("DRIFT_DEBUG")
+	debug_enabled = debug_style_runtime
 	if args.no_debug_info:
 		debug_enabled = False
 	if args.debug_info:
@@ -10382,18 +10386,18 @@ def main(argv: list[str] | None = None) -> int:
 				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
 			},
 		)
-		# Build-profile provenance label.  DRIFT_OPTIMIZED is orthogonal: it
-		# composes with sanitizer modes (matching the runtime archive variant
-		# layout) so the artifact records the full mode bag, not just the
-		# sanitizer.
+		# Build-profile provenance label.  Sanitizer test modes take
+		# precedence over the dual-runtime normal/debug-style binary
+		# distinction; the unsanitized lane records "debug" when
+		# DRIFT_DEBUG=1 is set and "default" otherwise.
 		if _env_true("DRIFT_ASAN") and _env_true("DRIFT_UBSAN"):
-			_build_profile = "asan_ubsan_optimized" if optimized else "asan_ubsan"
+			_build_profile = "asan_ubsan"
 		elif _env_true("DRIFT_ASAN"):
-			_build_profile = "asan_optimized" if optimized else "asan"
+			_build_profile = "asan"
 		elif _env_true("DRIFT_UBSAN"):
-			_build_profile = "ubsan_optimized" if optimized else "ubsan"
+			_build_profile = "ubsan"
 		else:
-			_build_profile = "optimized" if optimized else ("debug" if debug_enabled else "default")
+			_build_profile = "debug" if debug_style_runtime else "default"
 		# K26: Inject external_impl_metas into combined_exports so that
 		# _build_interface_impl_index can find trait impls for vtable
 		# emission during codegen.  This must happen AFTER type-checking
@@ -10566,16 +10570,19 @@ def main(argv: list[str] | None = None) -> int:
 	ubsan_enabled = _env_true("DRIFT_UBSAN")
 	asan_flags = ["-fsanitize=address", "-g"] if asan_enabled else []
 	ubsan_flags = ["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"] if ubsan_enabled else []
-	opt_flags = ["-O2"] if optimized else []
+	# Default flip: production "normal" lane gets -O2.  DRIFT_DEBUG=1
+	# (the debug-style lane) suppresses -O2.  Sanitizer/alloc_track test
+	# modes ride on the normal lane and also get -O2 unless they are
+	# layered with DRIFT_DEBUG=1.
+	opt_flags = [] if debug_style_runtime else ["-O2"]
 	runtime_archive: str | None = None
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
 		variant = runtime_archive_variant(
-			debug_enabled=debug_enabled,
+			debug_style=debug_style_runtime,
 			asan_enabled=asan_enabled,
 			ubsan_enabled=ubsan_enabled,
 			alloc_track_enabled=False,
-			optimized=optimized,
 		)
 		try:
 			archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)

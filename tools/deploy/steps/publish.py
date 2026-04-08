@@ -17,14 +17,41 @@ from tools.deploy.steps.metadata import DeployMetadata
 
 
 def generate_manifest(dist: Path, meta: DeployMetadata) -> None:
-	"""Write lib/manifest.json into the staged distribution."""
+	"""Write lib/manifest.json into the staged distribution.
+
+	Emits the dual-runtime ``runtimes`` map alongside the legacy
+	``runtime_variants`` list.  The orchestrator capability check keys on
+	``runtimes.normal.lib`` and ``runtimes.debug.lib`` to verify the staged
+	toolchain supports both lanes; both entries must reference files that
+	actually exist on disk relative to the distribution root.
+
+	Vocabulary contract (do not deviate):
+	  - external lane name "normal"      → on-disk variant subdir "default"
+	    + unsuffixed archive ``libdrift_rt_abi<N>.a``
+	  - external lane name "debug"       → on-disk variant subdir "debug"
+	    + ``_debug``-infix archive ``libdrift_rt_debug_abi<N>.a``
+	"""
 	from tools.deploy.steps.bundle import RUNTIME_VARIANTS
 
 	from lang.language_runtime import runtime_archive_name
 	bundled_variants = [
 		v for v in RUNTIME_VARIANTS
-		if (dist / "lib" / "runtime" / v / runtime_archive_name()).exists()
+		if (dist / "lib" / "runtime" / v / runtime_archive_name(v)).exists()
 	]
+
+	# Build the dual-runtime map.  Each lane's ``lib`` is a path relative to
+	# the distribution root so the manifest stays valid under arbitrary
+	# install prefixes; the orchestrator capability check resolves it
+	# against the staged toolchain root.
+	runtimes: dict[str, dict[str, str]] = {}
+	# external "normal" lane → on-disk "default" variant subdir.
+	normal_rel = Path("lib") / "runtime" / "default" / runtime_archive_name("default")
+	if (dist / normal_rel).exists():
+		runtimes["normal"] = {"lib": str(normal_rel)}
+	# external "debug" lane → on-disk "debug" variant subdir, _debug-infix archive.
+	debug_rel = Path("lib") / "runtime" / "debug" / runtime_archive_name("debug")
+	if (dist / debug_rel).exists():
+		runtimes["debug"] = {"lib": str(debug_rel)}
 
 	manifest = {
 		"driftc_version": meta.driftc_version,
@@ -35,6 +62,7 @@ def generate_manifest(dist: Path, meta: DeployMetadata) -> None:
 		"host_arch": meta.host_arch,
 		"entrypoint": "pex-scie-eager",
 		"runtime_variants": bundled_variants,
+		"runtimes": runtimes,
 	}
 
 	out_path = dist / "lib" / "manifest.json"

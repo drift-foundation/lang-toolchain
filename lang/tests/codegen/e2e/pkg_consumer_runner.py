@@ -269,8 +269,10 @@ def _link_and_run(
 	bin_path = build_dir / "a.out"
 	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
 	ubsan_enabled = os.environ.get("DRIFT_UBSAN") in ("1", "true", "True")
-	# DRIFT_OPTIMIZED: orthogonal compile-mode knob, additive with sanitizers.
-	optimized_enabled = os.environ.get("DRIFT_OPTIMIZED") in ("1", "true", "True")
+	# Dual-runtime workstream: DRIFT_DEBUG=1 selects the debug-style
+	# runtime variant and suppresses -O2; default (no env) is the
+	# normal/optimized lane.
+	debug_style_enabled = os.environ.get("DRIFT_DEBUG") in ("1", "true", "True")
 
 	from lang.language_runtime import (
 		build_runtime_archive,
@@ -304,13 +306,13 @@ def _link_and_run(
 	if ubsan_enabled:
 		c_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 		link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
-	if optimized_enabled:
+	if not debug_style_enabled:
 		c_flags.append("-O2")
 
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
 		try:
-			variant = runtime_archive_variant(debug_enabled=False, asan_enabled=asan_enabled, ubsan_enabled=ubsan_enabled, alloc_track_enabled=False, optimized=optimized_enabled)
+			variant = runtime_archive_variant(debug_style=debug_style_enabled, asan_enabled=asan_enabled, ubsan_enabled=ubsan_enabled, alloc_track_enabled=False)
 			runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 		except Exception as ex:
 			return f"runtime archive build failed: {ex}", 1, "", ""

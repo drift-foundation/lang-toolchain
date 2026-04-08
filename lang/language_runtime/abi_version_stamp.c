@@ -20,3 +20,28 @@
 void _DRIFT_ABI_SYMBOL(void) {
     /* Intentionally empty — existence is the contract. */
 }
+
+/*
+ * Internal runtime identity sentinel — NOT user-facing API.
+ *
+ * The Drift toolchain ships two runtime variants from a single staged
+ * distribution: a normal/optimized variant and an explicit `_debug`
+ * opt-in variant.  The dual-runtime selection regression uses these
+ * paired sentinels to prove which variant the linker actually pulled in.
+ *
+ * Co-located with the ABI version stamp because this object file is
+ * always extracted from the static archive (the compiler emits a required
+ * reference to __drift_rt_abi_version_<N>), guaranteeing the sentinel is
+ * present in every linked binary regardless of static-archive .o selection.
+ *
+ * Selection is gated at runtime-build time by the `-DDRIFT_RT_MODE_DEBUG=1`
+ * cflag passed only to the debug-style variant.  __attribute__((used))
+ * prevents compiler dead-code elimination at any optimization level.
+ *
+ * Contract: each runtime archive exports exactly ONE of the two sentinels.
+ */
+#ifdef DRIFT_RT_MODE_DEBUG
+__attribute__((used)) const int __drift_rt_mode_debug = 1;
+#else
+__attribute__((used)) const int __drift_rt_mode_normal = 1;
+#endif

@@ -26,7 +26,7 @@ def _build_and_compile_consumer(tmp_path: Path, consumer_source: str) -> tuple[i
 	consumer_dir.mkdir(exist_ok=True)
 	(consumer_dir / "consumer.drift").write_text(consumer_source)
 	out_bin = tmp_path / "consumer_bin"
-	env = {"DRIFT_DEBUG": '{"pkg_hir":true}'}
+	env = {"DRIFT_COMPILER_DEBUG": '{"pkg_hir":true}'}
 	import os
 	run_env = dict(os.environ)
 	run_env.update(env)
@@ -123,7 +123,7 @@ pub fn main() nothrow -> Int {
 	# consumer module, my_helper would pollute overload resolution
 	# for any package function with the same name).
 	hir_stats = [l for l in stderr.splitlines() if "[pkg-hir]" in l and "compiled from HIR" in l]
-	assert hir_stats, "no pkg-hir stats (DRIFT_DEBUG not reaching compiler?)"
+	assert hir_stats, "no pkg-hir stats (DRIFT_COMPILER_DEBUG not reaching compiler?)"
 	fallbacks = [l for l in stderr.splitlines() if "pkg-hir-fallback" in l]
 	assert not fallbacks, f"unexpected fallbacks: {fallbacks}"
 
@@ -153,7 +153,7 @@ pub fn main() nothrow -> Int {
 	assert rc == 0, f"compile failed: {stderr[:500]}"
 	fallback_lines = [l for l in stderr.splitlines() if "pkg-hir-fallback" in l]
 	hir_stats = [l for l in stderr.splitlines() if "[pkg-hir]" in l and "compiled from HIR" in l]
-	assert hir_stats, "no pkg-hir stats output (DRIFT_DEBUG not reaching compiler?)"
+	assert hir_stats, "no pkg-hir stats output (DRIFT_COMPILER_DEBUG not reaching compiler?)"
 	assert len(fallback_lines) == 0, (
 		f"{len(fallback_lines)} fallback(s) — expected 0:\n" + "\n".join(fallback_lines)
 	)
