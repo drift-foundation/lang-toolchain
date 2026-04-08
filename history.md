@@ -1,3 +1,45 @@
+## 2026-04-08 - 0.27.175: additive DRIFT_OPTIMIZED test mode + drift build --optimized
+- Two related toolchain/test-surface changes landed in this patch:
+  - `drift build` now supports `--optimized`, forwarding `--optimized --no-debug-info` to `driftc`
+  - binary-producing test lanes now support `DRIFT_OPTIMIZED=1` as an additive env-controlled compile mode
+- **`drift build --optimized`**:
+  - added `--optimized` to `tools/drift_deploy/drift_build.py`
+  - forwards `--optimized --no-debug-info` through the existing `extra_flags` path to `driftc`
+  - default `drift build` behavior is unchanged
+  - regression coverage in `tools/drift_deploy/test_build.py`:
+    - optimized flag forwards both driftc flags
+    - default-off behavior preserved
+- **`DRIFT_OPTIMIZED=1` test mode**:
+  - orthogonal, additive compile-mode knob for binary-producing test populations
+  - composes with existing env-controlled modes rather than replacing them:
+    - `DRIFT_ASAN=1 DRIFT_OPTIMIZED=1`
+    - `DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1`
+    - `DRIFT_MEMCHECK=1 DRIFT_OPTIMIZED=1`
+    - `DRIFT_MASSIF=1 DRIFT_OPTIMIZED=1`
+  - `lang/driftc/driftc.py` now treats `DRIFT_OPTIMIZED=1` as equivalent to passing `--optimized` for test-driven binary builds, while preserving explicit `--debug-info` override behavior
+  - `lang/language_runtime/__init__.py` now supports composite runtime archive variants:
+    - `asan_optimized`
+    - `ubsan_optimized`
+    - `asan_ubsan_optimized`
+  - updated binary-producing runners:
+    - `lang/tests/codegen/e2e/runner.py`
+    - `lang/tests/codegen/e2e/pex_e2e_runner.py`
+    - `lang/tests/codegen/e2e/pkg_consumer_runner.py`
+  - these now append `-O2` in optimized mode and select the matching runtime archive variant without changing existing memcheck/massif/sanitizer mutex rules
+- **Regression coverage**:
+  - wrapper-level env-mode coverage in `lang/tests/driver/test_driftc_wrapper_env_modes.py`
+  - runner-level hermetic coverage in `lang/tests/driver/test_e2e_runner_optimized_env.py`
+    - default-off
+    - optimized-on
+    - ASAN+optimized
+    - MEMCHECK+optimized
+    - MASSIF+optimized
+    - assertions cover compile command shape, runtime archive variant selection, and valgrind wrapping where applicable
+  - updated `lang/tests/codegen/e2e/README.md` to document `DRIFT_UBSAN` and `DRIFT_OPTIMIZED`
+- Versioning:
+  - compiler bumped to `0.27.175`
+  - ABI unchanged (8) — no compiler/runtime boundary shape change
+
 ## 2026-04-07 - 0.27.173: xdist-aware sanitizer_timeout + retrofit existing low-timeout driver tests
 - Test-only patch. Continuation of the parallel-pressure flake fix series (0.27.171 → 0.27.172 → this).
 - Symptom: after 0.27.172 fixed the d=5000 contract, **a different test** flaked under high parallel load: `lang/tests/driver/test_for_c_style.py::test_init_scope` timed out at its hard-coded 60s budget. The same root cause as 0.27.171 (single-threaded compile pipeline + N concurrent workers + no headroom in the test's hard-coded timeout) but in a test that predates this branch and uses its own subprocess wrapper instead of `_compile`.

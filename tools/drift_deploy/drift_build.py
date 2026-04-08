@@ -86,6 +86,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Explicit output path override")
 	p.add_argument("--driftc", type=UserPath, default=None,
 		help="Path to driftc (default: driftc from PATH)")
+	p.add_argument("--optimized", action="store_true",
+		help="Produce an optimized build (forwards --optimized --no-debug-info to driftc)")
 	return p
 
 
@@ -406,6 +408,11 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)
+
+	# Optimized build mode: forwarded to driftc as --optimized --no-debug-info,
+	# matching driftc's existing optimized-artifact contract.
+	if args.optimized:
+		extra_flags = list(extra_flags) + ["--optimized", "--no-debug-info"]
 
 	# Output path.
 	build_dir = manifest_dir / "build"

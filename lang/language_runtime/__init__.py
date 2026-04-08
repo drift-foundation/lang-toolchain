@@ -54,18 +54,27 @@ def get_runtime_include_dirs(root: Path) -> List[Path]:
 	]
 
 
-_VALID_VARIANTS = {"default", "debug", "asan", "ubsan", "asan_ubsan", "alloc_track", "optimized"}
+_VALID_VARIANTS = {
+	"default", "debug", "alloc_track",
+	"asan", "ubsan", "asan_ubsan",
+	"optimized",
+	"asan_optimized", "ubsan_optimized", "asan_ubsan_optimized",
+}
 
 
 def runtime_archive_variant(*, debug_enabled: bool, asan_enabled: bool, alloc_track_enabled: bool, optimized: bool = False, ubsan_enabled: bool = False) -> str:
+	# alloc_track is exclusive (instrumentation that wraps libc allocators).
 	if alloc_track_enabled:
 		return "alloc_track"
+	# DRIFT_OPTIMIZED is orthogonal: it composes with sanitizer variants by
+	# appending "_optimized", so the runtime archive is built with both
+	# -fsanitize=... and -O2 in those combined modes.
 	if asan_enabled and ubsan_enabled:
-		return "asan_ubsan"
+		return "asan_ubsan_optimized" if optimized else "asan_ubsan"
 	if asan_enabled:
-		return "asan"
+		return "asan_optimized" if optimized else "asan"
 	if ubsan_enabled:
-		return "ubsan"
+		return "ubsan_optimized" if optimized else "ubsan"
 	if optimized:
 		return "optimized"
 	if debug_enabled:
@@ -171,6 +180,12 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 			cflags.extend(["-fsanitize=address", "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 		elif variant == "optimized":
 			cflags.extend(["-O2"])
+		elif variant == "asan_optimized":
+			cflags.extend(["-fsanitize=address", "-O2"])
+		elif variant == "ubsan_optimized":
+			cflags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-O2"])
+		elif variant == "asan_ubsan_optimized":
+			cflags.extend(["-fsanitize=address", "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-O2"])
 		elif variant == "alloc_track":
 			cdefs.extend(["-DDRIFT_ALLOC_WRAP_ENABLED=1"])
 

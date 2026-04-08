@@ -142,11 +142,15 @@ def _link_and_run(
 	)
 	asan_enabled = os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
 	ubsan_enabled = os.environ.get("DRIFT_UBSAN") in ("1", "true", "True")
+	# DRIFT_OPTIMIZED: orthogonal compile-mode knob, additive with sanitizers.
+	optimized_enabled = _env_true("DRIFT_OPTIMIZED")
 	link_flags: list[str] = []
 	if asan_enabled:
 		link_flags.extend(["-fsanitize=address"])
 	if ubsan_enabled:
 		link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
+	if optimized_enabled:
+		link_flags.append("-O2")
 
 	rt_mode = runtime_archive_mode()
 	if rt_mode == "archive":
@@ -155,7 +159,7 @@ def _link_and_run(
 			asan_enabled=asan_enabled,
 			ubsan_enabled=ubsan_enabled,
 			alloc_track_enabled=False,
-			optimized=False,
+			optimized=optimized_enabled,
 		)
 		try:
 			archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))

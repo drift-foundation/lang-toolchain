@@ -236,6 +236,10 @@ def _run_ir_with_clang(
 		if ubsan_enabled:
 			c_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-g"])
 			link_flags.extend(["-fsanitize=undefined", "-fno-sanitize-recover=undefined"])
+		# DRIFT_OPTIMIZED: orthogonal compile-mode knob, additive with sanitizers.
+		optimized_enabled = _env_true("DRIFT_OPTIMIZED")
+		if optimized_enabled:
+			c_flags.append("-O2")
 		if rt_mode == "archive":
 			try:
 				variant = runtime_archive_variant(
@@ -243,7 +247,7 @@ def _run_ir_with_clang(
 					asan_enabled=asan_enabled,
 					ubsan_enabled=ubsan_enabled,
 					alloc_track_enabled=alloc_track_enabled,
-					optimized=False,
+					optimized=optimized_enabled,
 				)
 				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
 			except Exception as ex:

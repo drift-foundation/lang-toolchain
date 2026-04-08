@@ -371,6 +371,54 @@ class TestDriftBuildRun:
 
 		assert result == 1
 
+	def test_optimized_flag_forwards_to_driftc(self, tmp_path):
+		"""--optimized forwards --optimized and --no-debug-info to driftc."""
+		manifest_data = {
+			"schema_version": 1,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [
+				{
+					"kind": "app",
+					"name": "my-app",
+					"version": "0.1.0",
+					"description": "An app",
+					"entry_module": "src/main.drift",
+					"modules": ["src/main.drift"],
+				}
+			],
+		}
+		_write_manifest(tmp_path, manifest_data)
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run([
+				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--optimized",
+			])
+
+		assert result == 0
+		cmd = mock_run.call_args[0][0]
+		assert "--optimized" in cmd
+		assert "--no-debug-info" in cmd
+
+	def test_optimized_flag_default_off(self, tmp_path):
+		"""Default build does not forward --optimized or --no-debug-info."""
+		_write_manifest(tmp_path)
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+
+		assert result == 0
+		cmd = mock_run.call_args[0][0]
+		assert "--optimized" not in cmd
+		assert "--no-debug-info" not in cmd
+
 	def test_app_artifact_build(self, tmp_path):
 		manifest_data = {
 			"schema_version": 1,

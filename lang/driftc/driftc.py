@@ -6814,7 +6814,12 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--dep", action="append", default=[], metavar="PKG@VERSION",
 		help="Select exact dependency version for consumed package (repeatable; e.g., --dep net.tls@0.3.0)")
 	args = parser.parse_args(argv)
-	optimized = getattr(args, "optimized", False)
+	# DRIFT_OPTIMIZED=1 is an orthogonal test-mode knob (mirrors DRIFT_ASAN /
+	# DRIFT_UBSAN): when set, every binary-producing test path that goes
+	# through driftc compiles as if `--optimized --no-debug-info` were passed.
+	# Default test behavior is unchanged when the env var is unset.  An
+	# explicit `-g` / `--debug-info` on the command line still wins.
+	optimized = getattr(args, "optimized", False) or _env_true("DRIFT_OPTIMIZED")
 	debug_enabled = not optimized
 	if args.no_debug_info:
 		debug_enabled = False
@@ -10377,12 +10382,16 @@ def main(argv: list[str] | None = None) -> int:
 				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
 			},
 		)
+		# Build-profile provenance label.  DRIFT_OPTIMIZED is orthogonal: it
+		# composes with sanitizer modes (matching the runtime archive variant
+		# layout) so the artifact records the full mode bag, not just the
+		# sanitizer.
 		if _env_true("DRIFT_ASAN") and _env_true("DRIFT_UBSAN"):
-			_build_profile = "asan_ubsan"
+			_build_profile = "asan_ubsan_optimized" if optimized else "asan_ubsan"
 		elif _env_true("DRIFT_ASAN"):
-			_build_profile = "asan"
+			_build_profile = "asan_optimized" if optimized else "asan"
 		elif _env_true("DRIFT_UBSAN"):
-			_build_profile = "ubsan"
+			_build_profile = "ubsan_optimized" if optimized else "ubsan"
 		else:
 			_build_profile = "optimized" if optimized else ("debug" if debug_enabled else "default")
 		# K26: Inject external_impl_metas into combined_exports so that

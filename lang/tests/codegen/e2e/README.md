@@ -13,6 +13,17 @@ Useful runner env toggles:
 - `DRIFT_VALGRIND_SUPPRESS_FIBER=1` — opt-in suppressions for known valgrind false positives from fiber/ucontext stack switching.
 - `DRIFT_ASAN=1` — compile+run binaries with AddressSanitizer (`-fsanitize=address -g`).
   - `DRIFT_ASAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`.
+- `DRIFT_UBSAN=1` — compile+run binaries with UndefinedBehaviorSanitizer (`-fsanitize=undefined -fno-sanitize-recover=undefined -g`).
+  - `DRIFT_UBSAN` cannot be combined with `DRIFT_MEMCHECK`/`DRIFT_MASSIF`. May be combined with `DRIFT_ASAN`.
+- `DRIFT_OPTIMIZED=1` — compile binaries in optimized mode (forwards `--optimized --no-debug-info` to driftc, adds `-O2` at the runner link step, and selects the optimized runtime archive variant).
+  - Orthogonal and additive: composes with every other compile-mode and runtime-mode toggle above.
+    - `DRIFT_ASAN=1 DRIFT_OPTIMIZED=1` → asan + `-O2` (runtime archive variant `asan_optimized`).
+    - `DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1` → ubsan + `-O2` (variant `ubsan_optimized`).
+    - `DRIFT_ASAN=1 DRIFT_UBSAN=1 DRIFT_OPTIMIZED=1` → asan + ubsan + `-O2` (variant `asan_ubsan_optimized`).
+    - `DRIFT_MEMCHECK=1 DRIFT_OPTIMIZED=1` → optimized binary run under memcheck.
+    - `DRIFT_MASSIF=1 DRIFT_OPTIMIZED=1` → optimized binary run under massif.
+  - Existing sanitizer/valgrind mutual-exclusion rules are unaffected; `DRIFT_OPTIMIZED` does not participate in them.
+  - Default behavior is unchanged when the var is unset.
 
 Memcheck policy:
 - Default is strict: no suppressions.

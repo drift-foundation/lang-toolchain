@@ -1,5 +1,45 @@
 # Drift development history
 
+## 2026-04-08
+- **Additive `DRIFT_OPTIMIZED` test mode + `drift build --optimized`
+  (0.27.175, ABI 8)**:
+  This patch adds one explicit build surface and one orthogonal test-mode
+  knob.
+  - `drift build --optimized`:
+    - added `--optimized` to `tools/drift_deploy/drift_build.py`
+    - forwards `--optimized --no-debug-info` to `driftc`
+    - default `drift build` behavior remains unchanged
+    - regressions in `tools/drift_deploy/test_build.py` pin both
+      forwarding and default-off behavior
+  - `DRIFT_OPTIMIZED=1`:
+    - new additive env-controlled compile mode for binary-producing test
+      populations
+    - composes with existing modes rather than replacing them:
+      - ASAN + optimized
+      - UBSAN + optimized
+      - MEMCHECK + optimized
+      - MASSIF + optimized
+    - `lang/driftc/driftc.py` now treats `DRIFT_OPTIMIZED=1` as
+      equivalent to `--optimized` for test-driven binary builds, while
+      preserving explicit `--debug-info` override behavior
+    - `lang/language_runtime/__init__.py` now supports composite runtime
+      archive variants:
+      - `asan_optimized`
+      - `ubsan_optimized`
+      - `asan_ubsan_optimized`
+    - updated runners:
+      - `lang/tests/codegen/e2e/runner.py`
+      - `lang/tests/codegen/e2e/pex_e2e_runner.py`
+      - `lang/tests/codegen/e2e/pkg_consumer_runner.py`
+  - Regression coverage:
+    - wrapper-level env-mode tests in
+      `lang/tests/driver/test_driftc_wrapper_env_modes.py`
+    - runner-level hermetic tests in
+      `lang/tests/driver/test_e2e_runner_optimized_env.py`
+    - docs updated in `lang/tests/codegen/e2e/README.md` for both
+      `DRIFT_UBSAN` and `DRIFT_OPTIMIZED`
+  - Versioning: compiler `0.27.175`, ABI unchanged (8)
+
 ## 2026-04-07
 - **xdist-aware sanitizer_timeout + retrofit existing low-timeout
   driver tests (0.27.173, ABI 8)** — parallel-pressure flake fix,
