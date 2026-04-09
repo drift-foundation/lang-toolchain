@@ -392,6 +392,14 @@ def _run_case(
 		return case_name, True, "", "skipped (use_driftc_json=false)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
 		return case_name, True, "", "skipped (sandbox)"
+	# Dual-runtime workstream: narrow per-case lane requirement.  Mirrors
+	# the in-process and PEX runners' contract — only the debug-style lane
+	# produces a stable backtrace symbol shape; cases that pin specific
+	# frame names belong here.  Assertion semantics themselves are
+	# lane-independent — only backtrace fidelity is lane-restricted.
+	required_lane = expected.get("requires_lane")
+	if required_lane == "debug-style" and not (os.environ.get("DRIFT_DEBUG") in ("1", "true", "True")):
+		return case_name, True, "", "skipped (requires debug-style lane)"
 
 	drift_files = sorted(str(p) for p in case_dir.rglob("*.drift"))
 	if not drift_files:
