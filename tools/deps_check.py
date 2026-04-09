@@ -54,6 +54,16 @@ def main() -> int:
 		return _fail(f"missing pkg-config libs: {', '.join(missing_libs)}")
 
 	# Validate LLVM/codegen + runtime stacktrace by compiling and running a tiny assert.
+	#
+	# Dual-runtime contract: backtrace symbolization machinery (libdwfl +
+	# libunwind walk) lives ONLY in the debug-style runtime variant.  The
+	# normal lane's `drift_debug_print_stacktrace()` is a stub that prints
+	# a single hint line.  This deps check exists to validate that the host
+	# CAN produce working backtraces; that requires selecting the
+	# debug-style lane explicitly via DRIFT_DEBUG=1, regardless of any
+	# DRIFT_DEBUG state inherited from the caller.  --debug-info enables
+	# DWARF emission in the user binary but is orthogonal to runtime lane
+	# selection.
 	with tempfile.TemporaryDirectory(prefix="drift_deps_") as tmp:
 		tmp_dir = Path(tmp)
 		src = tmp_dir / "assert_deps.drift"
@@ -74,6 +84,7 @@ def main() -> int:
 		]
 		env = os.environ.copy()
 		env["PYTHONPATH"] = str(ROOT)
+		env["DRIFT_DEBUG"] = "1"
 		res = _run(cmd, cwd=ROOT, env=env, timeout=120)
 		if res.returncode != 0:
 			return _fail(f"lang.driftc debug build failed: {res.stderr.strip()}")

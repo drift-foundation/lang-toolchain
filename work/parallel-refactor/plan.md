@@ -546,10 +546,16 @@ invasive work, not architectural rewrite.
 
 For a package's **codegen artifact**, the cache key includes:
 
-- The hash of the package's source files (Drift sources + native deps).
-- The hash of every interface artifact this package consumes
-  (transitively pinned by the lockfile, so no transitive walk needed
-  at build time).
+- A **content hash of the package's source inputs**: the raw bytes of
+  every Drift source file in the package (and any package-owned native
+  source inputs that participate in the emitted artifact), hashed in a
+  deterministic order such as sorted canonical relative path order.
+  This is content-based, not mtime-based and not path-only.
+- The content hash of every interface artifact this package consumes.
+- The **content hash of the resolved lockfile**. For Phase 1 this is a
+  deliberate conservative invalidation input: if dependency resolution
+  changes, downstream cache entries invalidate even if the local source
+  bytes are unchanged.
 - The compiler version (`DRIFTC_VERSION`).
 - The runtime ABI version (`DRIFT_RT_ABI_VERSION`).
 - The active runtime lane (normal vs debug-style — already a content
@@ -561,18 +567,22 @@ For a package's **codegen artifact**, the cache key includes:
 
 For a package's **interface artifact**, the cache key is the same
 minus the codegen-only flags. Interface artifacts are reusable across
-optimization modes; codegen artifacts are not.
+optimization modes; codegen artifacts are not. The interface key still
+includes the source-content hash and lockfile hash because either can
+change what the package publishes.
 
 ### 7.2 What invalidates a package
 
 - Source change → package rebuilds.
-- Any consumed interface artifact's hash changes → package's codegen
+- Any consumed interface artifact's content hash changes → package's codegen
   rebuilds (interface may or may not need to rebuild, depending on
   whether the consumed change affected the package's public surface).
 - Compiler version bump → everything rebuilds.
 - ABI bump → everything rebuilds.
 - Lane flip (`DRIFT_DEBUG=1` toggled) → codegen artifacts rebuild
   (different cache key); interface artifacts are reused.
+- Lockfile content change → downstream codegen artifacts rebuild even
+  if their local source bytes are unchanged.
 - Trust store change → cached signature-dependent artifacts
   invalidate.
 
@@ -590,6 +600,9 @@ This architecture *naturally* enables:
   new function.
 - Toggle `DRIFT_DEBUG=1` → all codegen artifacts rebuild (different
   lane key); all interface artifacts are reused.
+- Re-run `drift prepare` and move a dependency in the resolved lockfile
+  → downstream codegen artifacts rebuild because the lockfile content
+  hash is part of the Phase-1 cache key.
 - Run tests with no source changes → every package is a cache hit;
   driftc does no work; the link step is the only cost.
 
@@ -604,8 +617,10 @@ variants in different subdirs. The same model extends to per-package
 codegen: `build/units/<package_id>/<cache_key>/{interface,codegen}`.
 
 The lockfile already pins exact versions for cross-package
-dependencies (`tools/drift_deploy/lockfile.py`). Extending it to also
-pin interface artifact hashes is small.
+dependencies (`tools/drift_deploy/lockfile.py`). Phase 1 should hash
+the whole resolved lockfile directly as a cache input, and may later
+be refined to depend more heavily on per-consumed-interface hashes if
+the invalidation proves too broad.
 
 ---
 
@@ -957,10 +972,12 @@ These have to be answered before implementation starts:
    if any do, they have to be updated. The cached path inherits
    whatever exists today.
 
-3. **How does the lockfile interact with the cache key?** The
-   lockfile pins exact dependency versions. The cache key probably
-   wants the lockfile hash as one input; that way a `drift prepare`
-   that moves a transitive dep invalidates downstream consumers.
+3. **How does the lockfile interact with the cache key?** For Phase 1,
+   answer: directly. Include a content hash of the full resolved
+   lockfile as one cache-key input. This is conservative but simple and
+   safe. If Phase 1 ships and we later find the invalidation is too
+   broad, we can refine toward hashing only the resolved subset or only
+   consumed interface hashes.
 
 4. **What does the convergence_parity check do once a third path
    exists?** Recommendation: make the cached path byte-equivalent
