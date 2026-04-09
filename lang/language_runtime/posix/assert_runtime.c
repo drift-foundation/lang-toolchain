@@ -1,3 +1,26 @@
+/*
+ * Backtrace symbolization is gated on the dual-runtime debug-style variant.
+ *
+ * The libdwfl + libunwind walk is the only consumer of libdw / libunwind /
+ * libunwind-x86_64 / libelf in the entire runtime.  Including those headers
+ * here drags those shared libraries into every linked binary's DT_NEEDED
+ * closure.  The dual-runtime contract says only the explicit `_debug` opt-in
+ * variant should carry symbolization machinery (and, transitively, those
+ * dependency closures); the production "normal" lane must be runnable on
+ * hosts that do not have libdw / libunwind / libelf installed at all.
+ *
+ * Selection is gated by the same -DDRIFT_RT_MODE_DEBUG cflag the runtime
+ * identity sentinel uses (lang/language_runtime/abi_version_stamp.c).
+ *
+ *   Normal variant   : `drift_debug_print_stacktrace()` prints a single
+ *                      explanatory hint line and returns.  No libdw /
+ *                      libunwind / libelf headers are included; no symbols
+ *                      from those libraries are referenced; the produced .o
+ *                      has zero DT_NEEDED contribution from them.
+ *   Debug-style      : the existing libunwind + libdwfl walk symbolizes the
+ *                      stack and prints frame names + source locations.
+ */
+#ifdef DRIFT_RT_MODE_DEBUG
 #if __has_include(<elfutils/libdwfl.h>)
 #include <elfutils/libdwfl.h>
 #define DRIFT_HAVE_LIBDW 1
@@ -10,6 +33,7 @@
 #else
 #define DRIFT_HAVE_LIBUNWIND 0
 #endif
+#endif /* DRIFT_RT_MODE_DEBUG */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -18,6 +42,17 @@
 
 extern void drift_alloc_report_now(void) __attribute__((weak));
 
+#ifndef DRIFT_RT_MODE_DEBUG
+static void drift_debug_print_stacktrace(void) {
+	/* Normal lane: backtrace symbolization is omitted to keep libdw /
+	 * libunwind / libelf out of the production binary's dependency
+	 * closure.  Operators see a single stable line that points at the
+	 * opt-in. */
+	fprintf(stderr,
+		"  <stacktrace unavailable in normal build; "
+		"rebuild with DRIFT_DEBUG=1 for backtraces>\n");
+}
+#else
 static void drift_debug_print_stacktrace(void) {
 #if !DRIFT_HAVE_LIBUNWIND
 	fprintf(stderr, "  <stacktrace unavailable>\n");
@@ -80,6 +115,7 @@ static void drift_debug_print_stacktrace(void) {
 	}
 #endif
 }
+#endif /* DRIFT_RT_MODE_DEBUG */
 
 void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString expr, DriftString msg) {
 	if (cond) {

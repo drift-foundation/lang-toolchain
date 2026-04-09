@@ -1,6 +1,72 @@
 # Drift development history
 
 ## 2026-04-08
+- **Normal-lane runtime no longer leaks libdw / libunwind / libelf
+  into produced binaries (0.27.178, ABI 8)**:
+  Normal-lane apps were unconditionally pulling `libdw.so.1`,
+  `libunwind.so.8`, `libunwind-x86_64.so.8`, and `libelf.so.1` into
+  their `DT_NEEDED` set, plus those libs' compression-dep transitive
+  closure (`libz`, `libzstd`, `liblzma`, `libbz2`). The lanes were
+  already code-emission-distinct (binary-size delta proved that) but
+  the link-time dependency closure was identical, which contradicted
+  the lane contract: production hosts running the
+  "production-equivalent" normal lane had to install
+  backtrace/symbolization libraries the lane was supposed to omit.
+  - Two compounding causes, both fixed:
+    - source-side: `lang/language_runtime/posix/assert_runtime.c`
+      included `<elfutils/libdwfl.h>` and `<libunwind.h>` and called
+      `unw_*` / `dwfl_*` symbols unconditionally. The file is in
+      `get_runtime_sources()`, so the libdw/libunwind references
+      were compiled into both runtime archive variants.
+    - link-side: `lang/driftc/driftc.py` unconditionally appended
+      `-ldw -lunwind -lunwind-x86_64 -lelf` to the link command for
+      every produced binary regardless of lane.
+  - Source-side fix:
+    - the libdwfl + libunwind walk in `assert_runtime.c` is now
+      gated behind `#ifdef DRIFT_RT_MODE_DEBUG`, the same cflag the
+      runtime identity sentinel already uses
+    - the normal variant emits a stub `drift_debug_print_stacktrace()`
+      that prints exactly one line:
+      `<stacktrace unavailable in normal build; rebuild with DRIFT_DEBUG=1 for backtraces>`
+    - the normal runtime archive's `.o` files now have **zero**
+      references to `dwfl_*` or `unw_*` symbols (verified via `nm`)
+    - assertion semantics are unchanged in both lanes:
+      `drift_assert_loc` still prints the message line, the source
+      location, and `abort()`s; only the backtrace walk is
+      lane-gated
+  - Link-side fix:
+    - `link_libs` in driftc.py is now lane-conditional: empty in
+      the normal lane, populated with
+      `-ldw -lunwind -lunwind-x86_64 -lelf` only in the
+      debug-style lane
+    - defense-in-depth on top of the source-side fix
+  - Regression coverage in `test_driftc_wrapper_env_modes.py`:
+    - `test_normal_lane_binary_has_no_libdw_libunwind_libelf_deps`:
+      builds a tiny normal-lane consumer and asserts via `readelf -d`
+      that `libdw.so`, `libunwind.so`, `libunwind-x86_64.so`, and
+      `libelf.so` are NOT in the binary's `DT_NEEDED` entries
+    - `test_debug_style_lane_binary_has_libdw_libunwind_libelf_deps`:
+      pins the inverse for the debug-style lane so symbolization
+      cannot accidentally regress
+    - new `_readelf_dt_needed()` helper for parsing `readelf -d`
+  - Validation:
+    - normal-lane DT_NEEDED set is now `{libc.so.6}` only — all four
+      debug/unwind/elf libs gone, AND the four compression libs
+      (`libz`, `libzstd`, `liblzma`, `libbz2`) dropped out
+      automatically as transitive deps of the leaked stack
+    - debug-style DT_NEEDED retains the full backtrace dependency
+      closure
+    - normal-lane binary size dropped from 1,116 KB to 445 KB
+      (~2.5×); debug-style stayed at ~1.8 MB; size delta between
+      lanes is now ~4× instead of ~3×
+    - 141 impacted-suite tests pass; both new regressions green
+    - lane audit verdict still `PASS` for both lanes after the fix
+  - No ABI bump: this changes runtime archive contents and
+    dependency closure, not the compiler/runtime boundary shape or
+    the exported runtime API surface (`drift_assert_loc` still
+    exists in both variants with the same signature;
+    `drift_debug_print_stacktrace` is `static`).
+
 - **Dual-runtime normal/debug toolchain validated end-to-end
   (0.27.177, ABI 8)**:
   This patch replaces the earlier `DRIFT_OPTIMIZED` / `--optimized`

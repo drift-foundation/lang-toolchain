@@ -224,6 +224,28 @@ def _stage_default_runtime_cache(tmp_path: Path) -> Path:
 	return cache_dir
 
 
+def _readelf_dt_needed(binary: Path) -> set[str]:
+	"""Return the set of DT_NEEDED shared library basenames in `binary`."""
+	import shutil as _shutil
+	readelf = _shutil.which("readelf")
+	if readelf is None:
+		import pytest as _pytest
+		_pytest.skip("readelf not available; cannot inspect binary DT_NEEDED entries")
+	res = subprocess.run([readelf, "-d", str(binary)], text=True, capture_output=True)
+	assert res.returncode == 0, f"readelf failed on {binary}: {res.stderr}"
+	# Lines look like:
+	#  0x0000000000000001 (NEEDED)             Shared library: [libdw.so.1]
+	needed: set[str] = set()
+	for line in res.stdout.splitlines():
+		if "(NEEDED)" not in line:
+			continue
+		lbr = line.find("[")
+		rbr = line.find("]", lbr + 1)
+		if lbr >= 0 and rbr > lbr:
+			needed.add(line[lbr + 1:rbr])
+	return needed
+
+
 def test_default_lane_links_normal_runtime_with_o2(tmp_path: Path) -> None:
 	"""Default driftc invocation (no DRIFT_DEBUG, no flag) → normal lane: -O2, no -g."""
 	src = tmp_path / "main.drift"
@@ -381,6 +403,92 @@ def test_drift_debug_with_explicit_debug_info(tmp_path: Path) -> None:
 	assert "libdrift_rt_debug_abi" in link_line
 	assert "-g" in link_line
 	assert out.exists()
+
+
+_BACKTRACE_LIBS = frozenset({
+	"libdw.so.1", "libdw.so",
+	"libunwind.so.8", "libunwind.so",
+	"libunwind-x86_64.so.8", "libunwind-x86_64.so",
+	"libelf.so.1", "libelf.so",
+})
+
+
+def test_normal_lane_binary_has_no_libdw_libunwind_libelf_deps(tmp_path: Path) -> None:
+	"""Normal-lane binaries must NOT carry DT_NEEDED for libdw / libunwind / libelf.
+
+	The normal lane is the production-equivalent path; production hosts must
+	be able to run normal-lane binaries without libdw / libunwind / libelf
+	installed.  These libraries are backtrace/symbolization dependencies and
+	belong only to the debug-style runtime archive.
+
+	Regression for the "drift normal runtime: leaks debug/unwind shared-lib
+	dependencies into apps" defect.
+	"""
+	src = tmp_path / "main.drift"
+	src.write_text(_TINY_MAIN, encoding="utf-8")
+	out = tmp_path / "a.out"
+	cache_dir = _stage_default_runtime_cache(tmp_path)
+	env = _clean_env()
+	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
+	env.pop("DRIFT_DEBUG", None)
+	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
+	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
+	assert cp.returncode == 0, cp.stderr
+	assert out.exists()
+	needed = _readelf_dt_needed(out)
+	leaked = needed & _BACKTRACE_LIBS
+	assert not leaked, (
+		f"normal-lane binary unexpectedly carries backtrace/unwind/ELF "
+		f"shared-lib dependencies: {sorted(leaked)}\n"
+		f"full DT_NEEDED set: {sorted(needed)}\n"
+		f"these libraries belong only to the debug-style runtime archive"
+	)
+
+
+def test_debug_style_lane_binary_has_libdw_libunwind_libelf_deps(tmp_path: Path) -> None:
+	"""Debug-style lane binaries MUST carry DT_NEEDED for libdw / libunwind / libelf.
+
+	The debug-style lane needs the symbolization libraries to produce stable
+	backtraces from `drift_assert_loc`.  This test pins the inverse of the
+	normal-lane regression so we can't accidentally regress symbolization
+	in the debug lane while fixing the normal-lane leak.
+	"""
+	src = tmp_path / "main.drift"
+	src.write_text(_TINY_MAIN, encoding="utf-8")
+	out = tmp_path / "a.out"
+	cache_dir = tmp_path / "runtime_cache"
+	clang = subprocess.run(["/bin/bash", "-lc", "command -v clang"], text=True, capture_output=True).stdout.strip()
+	assert clang
+	prev_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
+	try:
+		os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
+		build_runtime_archive(_repo_root(), clang=clang, variant="debug")
+	finally:
+		if prev_cache is None:
+			os.environ.pop("DRIFT_RUNTIME_LIB_CACHE_DIR", None)
+		else:
+			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = prev_cache
+	env = _clean_env()
+	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
+	env["DRIFT_DEBUG"] = "1"
+	env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(cache_dir)
+	cp = _run_wrapper(["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out)], env=env)
+	assert cp.returncode == 0, cp.stderr
+	assert out.exists()
+	needed = _readelf_dt_needed(out)
+	# At minimum libdw + libunwind must be present.  libunwind-x86_64 and
+	# libelf are pulled in transitively on most distros but may differ; we
+	# require the two essentials.
+	assert any(lib.startswith("libdw.so") for lib in needed), (
+		f"debug-style binary is missing libdw — symbolization is broken\n"
+		f"DT_NEEDED set: {sorted(needed)}"
+	)
+	assert any(lib.startswith("libunwind.so") for lib in needed), (
+		f"debug-style binary is missing libunwind — backtrace walk is broken\n"
+		f"DT_NEEDED set: {sorted(needed)}"
+	)
 
 
 def test_build_runtime_archive_default_carries_o2_and_normal_sentinel(tmp_path: Path) -> None:

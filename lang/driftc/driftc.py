@@ -10539,7 +10539,22 @@ def main(argv: list[str] | None = None) -> int:
 			if (d / f"lib{name}.so").exists():
 				return [f"-l{name}"]
 		return []
-	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	# Backtrace symbolization libraries (libdw, libunwind, libunwind-x86_64,
+	# libelf) are gated on the dual-runtime debug-style variant.  The normal
+	# lane is the production-equivalent path; production hosts must be able
+	# to run normal-lane binaries without these libraries installed.  The
+	# matching source-side gating lives in
+	# lang/language_runtime/posix/assert_runtime.c, which omits the libdwfl
+	# + libunwind walk under -DDRIFT_RT_MODE_DEBUG=0 (the normal variant)
+	# so the runtime archive's .o files have zero references to libdw /
+	# libunwind / libelf symbols, and `--as-needed` would also drop them
+	# even if they were left on the cmdline.  This branch is the
+	# defense-in-depth that keeps them off the cmdline entirely under the
+	# normal lane.
+	if debug_style_runtime:
+		link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	else:
+		link_libs = []
 	def _select_linker() -> str:
 		if args.linker == "ld":
 			return "ld"
