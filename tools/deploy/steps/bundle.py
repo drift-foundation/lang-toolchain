@@ -174,10 +174,10 @@ and runtime dependencies (cryptography, zstandard).
 ```bash
 drift init                        # set up publishing identity + author profile
 drift sign my-pkg.dmp --key signing.seed
-drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
-drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc driftc
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/libs
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/libs --driftc driftc
 drift trust publisher.author-profile   # consumer: trust an author
-drift trust list --trust-store trust.json
+drift trust list --trust-store drift/trust.json
 ```
 
 The compiler sources, runtime archives, and signed stdlib package live in

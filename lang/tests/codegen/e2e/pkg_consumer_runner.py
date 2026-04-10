@@ -276,12 +276,9 @@ def _link_and_run(
 
 	from lang.language_runtime import (
 		build_runtime_archive,
-		get_runtime_sources,
-		runtime_archive_mode,
 		runtime_archive_variant,
 	)
 
-	runtime_include = ROOT / "lang" / "language_runtime"
 	search_dirs = [
 		Path("/lib"), Path("/lib64"),
 		Path("/usr/lib"), Path("/usr/lib64"),
@@ -309,30 +306,21 @@ def _link_and_run(
 	if not debug_style_enabled:
 		c_flags.append("-O2")
 
-	rt_mode = runtime_archive_mode()
-	if rt_mode == "archive":
-		try:
-			variant = runtime_archive_variant(debug_style=debug_style_enabled, asan_enabled=asan_enabled, ubsan_enabled=ubsan_enabled, alloc_track_enabled=False)
-			runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
-		except Exception as ex:
-			return f"runtime archive build failed: {ex}", 1, "", ""
-		compile_cmd = [
-			clang, "-pthread", *c_flags,
-			"-x", "ir", str(ir_path),
-			"-x", "none", runtime_archive,
-			*link_flags, *link_libs,
-			"-Wl,--as-needed", "-o", str(bin_path),
-		]
-	else:
-		runtime_sources = get_runtime_sources(ROOT)
-		compile_cmd = [
-			clang, "-pthread", *c_flags,
-			"-I", str(runtime_include),
-			"-x", "ir", str(ir_path),
-			"-x", "c", *(str(p) for p in runtime_sources),
-			*link_flags, *link_libs,
-			"-Wl,--as-needed", "-o", str(bin_path),
-		]
+	# Runtime is always linked from the pre-built variant archive.
+	# The legacy `DRIFT_RUNTIME_LINK_MODE=source` inline-compile path
+	# was removed in 0.27.179.
+	try:
+		variant = runtime_archive_variant(debug_style=debug_style_enabled, asan_enabled=asan_enabled, ubsan_enabled=ubsan_enabled, alloc_track_enabled=False)
+		runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
+	except Exception as ex:
+		return f"runtime archive build failed: {ex}", 1, "", ""
+	compile_cmd = [
+		clang, "-pthread", *c_flags,
+		"-x", "ir", str(ir_path),
+		"-x", "none", runtime_archive,
+		*link_flags, *link_libs,
+		"-Wl,--as-needed", "-o", str(bin_path),
+	]
 
 	try:
 		compile_res = subprocess.run(compile_cmd, capture_output=True, text=True, cwd=ROOT, timeout=timeout_s)

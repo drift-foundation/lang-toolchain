@@ -1,14 +1,14 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-drift prepare — resolve dependencies and write drift-lock.json.
+drift prepare — resolve dependencies and write drift/lock.json.
 
 Explicit mutating step for repo-managed release metadata.
 Run before commit; drift deploy then consumes the prepared state.
 
 Expected workflow:
-  1. Edit drift-manifest.json
+  1. Edit drift/manifest.json
   2. drift prepare --dest /deploy
-  3. Review drift-lock.json changes
+  3. Review drift/lock.json changes
   4. Commit
   5. drift deploy --dest /deploy
 """
@@ -45,12 +45,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p = argparse.ArgumentParser(
 		prog="drift prepare",
 		description=(
-			"Resolve package dependencies and write drift-lock.json. "
+			"Resolve package dependencies and write drift/lock.json. "
 			"Run before commit; drift deploy consumes the prepared state."
 		),
 	)
-	p.add_argument("--manifest", type=UserPath, default=Path("drift-manifest.json"),
-		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
+	p.add_argument("--manifest", type=UserPath, default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (default: ./drift/manifest.json)")
 	p.add_argument("--dest", type=UserPath, default=None,
 		help="Package library root (used as default --package-root)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
@@ -150,7 +150,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 		resolved_map[art.name] = resolved
 
 	# Write lock file — full rewrite for the entire manifest.
-	lock_path = manifest_dir / "drift-lock.json"
+	lock_path = manifest_dir / "lock.json"
 	write_lock(lock_path, resolved_map)
 
 	# Summary.

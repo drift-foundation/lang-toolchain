@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-drift-manifest.json manifest loading and validation.
+drift/manifest.json manifest loading and validation.
 
 The manifest is the single authoritative source of truth for project
 identity, per-artifact configuration, build inputs, dependencies,
@@ -67,7 +67,7 @@ class Project:
 
 @dataclass(frozen=True)
 class Manifest:
-	"""Parsed drift-manifest.json."""
+	"""Parsed drift/manifest.json."""
 	schema_version: int
 	project: Project
 	artifacts: list[Artifact]
@@ -80,7 +80,7 @@ class ManifestError(Exception):
 
 def load_manifest(path: Path) -> Manifest:
 	"""
-	Load and validate drift-manifest.json.
+	Load and validate drift/manifest.json.
 
 	Raises ManifestError on invalid manifest.
 	"""
@@ -93,7 +93,7 @@ def load_manifest(path: Path) -> Manifest:
 		raise ManifestError(f"failed to read manifest: {e}")
 
 	if not isinstance(data, dict):
-		raise ManifestError("drift-manifest.json must be a JSON object")
+		raise ManifestError("drift/manifest.json must be a JSON object")
 
 	# schema_version
 	sv = data.get("schema_version")

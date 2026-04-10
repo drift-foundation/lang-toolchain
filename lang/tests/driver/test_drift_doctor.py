@@ -29,7 +29,8 @@ def test_drift_doctor_json_is_strict_json_only_and_sorted(tmp_path: Path) -> Non
 	repo.mkdir(parents=True, exist_ok=True)
 	(repo / "index.json").write_text(json.dumps({"format": "drift-index", "version": 0, "packages": {}}), encoding="utf-8")
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -45,7 +46,8 @@ def test_drift_doctor_json_is_strict_json_only_and_sorted(tmp_path: Path) -> Non
 	trust.parent.mkdir(parents=True, exist_ok=True)
 	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
 
-	lock = tmp_path / "drift.lock.json"
+	lock = tmp_path / "drift" / "sources.lock.json"
+	lock.parent.mkdir(parents=True, exist_ok=True)
 	lock.write_text(json.dumps({"format": "drift-lock", "version": 0, "packages": {}}), encoding="utf-8")
 
 	cp = _run_drift(["doctor", "--sources", str(sources), "--trust-store", str(trust), "--lock", str(lock), "--json"])
@@ -81,7 +83,8 @@ def test_drift_doctor_json_failure_missing_package_file_deep(tmp_path: Path) -> 
 		),
 		encoding="utf-8",
 	)
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -95,7 +98,8 @@ def test_drift_doctor_json_failure_missing_package_file_deep(tmp_path: Path) -> 
 	trust = tmp_path / "drift" / "trust.json"
 	trust.parent.mkdir(parents=True, exist_ok=True)
 	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
-	lock = tmp_path / "drift.lock.json"
+	lock = tmp_path / "drift" / "sources.lock.json"
+	lock.parent.mkdir(parents=True, exist_ok=True)
 	lock.write_text(json.dumps({"format": "drift-lock", "version": 0, "packages": {}}), encoding="utf-8")
 
 	cp = _run_drift(
@@ -115,10 +119,12 @@ def test_drift_doctor_exit_code_degraded_vs_fatal(tmp_path: Path) -> None:
 	trust = tmp_path / "drift" / "trust.json"
 	trust.parent.mkdir(parents=True, exist_ok=True)
 	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
-	lock = tmp_path / "drift.lock.json"
+	lock = tmp_path / "drift" / "sources.lock.json"
+	lock.parent.mkdir(parents=True, exist_ok=True)
 	lock.write_text(json.dumps({"format": "drift-lock", "version": 0, "packages": {}}), encoding="utf-8")
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	assert not sources.exists()
 
 	cp = _run_drift(["doctor", "--sources", str(sources), "--trust-store", str(trust), "--lock", str(lock), "--json", "--fail-on", "fatal"])
@@ -169,7 +175,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -186,7 +193,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert cp.returncode == 0, cp.stderr
 
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock = tmp_path / "drift.lock.json"
+	lock = tmp_path / "drift" / "sources.lock.json"
+	lock.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(
 		["vendor", "--cache-dir", str(cache), "--dest-dir", str(vendor_dir), "--lock", str(lock), "--json"]
 	)
@@ -261,7 +269,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -278,7 +287,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert cp.returncode == 0, cp.stderr
 
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock = tmp_path / "drift.lock.json"
+	lock = tmp_path / "drift" / "sources.lock.json"
+	lock.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(
 		["vendor", "--cache-dir", str(cache), "--dest-dir", str(vendor_dir), "--lock", str(lock), "--json"]
 	)

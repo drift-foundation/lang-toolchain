@@ -109,8 +109,6 @@ def _link_and_run(
 	"""
 	from lang.language_runtime import (
 		build_runtime_archive,
-		get_runtime_sources,
-		runtime_archive_mode,
 		runtime_archive_variant,
 	)
 
@@ -120,7 +118,6 @@ def _link_and_run(
 
 	build_dir.mkdir(parents=True, exist_ok=True)
 	bin_path = build_dir / "a.out"
-	runtime_include = ROOT / "lang" / "language_runtime"
 	search_dirs = [
 		Path("/lib"), Path("/lib64"), Path("/usr/lib"), Path("/usr/lib64"),
 		Path("/lib/x86_64-linux-gnu"), Path("/usr/lib/x86_64-linux-gnu"),
@@ -154,35 +151,26 @@ def _link_and_run(
 	if not debug_style_enabled:
 		link_flags.append("-O2")
 
-	rt_mode = runtime_archive_mode()
-	if rt_mode == "archive":
-		variant = runtime_archive_variant(
-			debug_style=debug_style_enabled,
-			asan_enabled=asan_enabled,
-			ubsan_enabled=ubsan_enabled,
-			alloc_track_enabled=False,
-		)
-		try:
-			archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
-		except Exception as ex:
-			return f"runtime archive build failed: {ex}", 1, "", ""
-		compile_cmd = [
-			clang, "-pthread", *link_flags,
-			"-x", "ir", str(ir_path),
-			"-x", "none", archive,
-			*(str(o) for o in (extra_objects or [])),
-			*link_libs, "-Wl,--as-needed", "-o", str(bin_path),
-		]
-	else:
-		runtime_sources = get_runtime_sources(ROOT)
-		compile_cmd = [
-			clang, "-pthread", *link_flags,
-			"-I", str(runtime_include),
-			"-x", "ir", str(ir_path),
-			"-x", "c", *(str(p) for p in runtime_sources),
-			*(str(o) for o in (extra_objects or [])),
-			*link_libs, "-Wl,--as-needed", "-o", str(bin_path),
-		]
+	# Runtime is always linked from the pre-built variant archive.
+	# The legacy `DRIFT_RUNTIME_LINK_MODE=source` inline-compile path
+	# was removed in 0.27.179.
+	variant = runtime_archive_variant(
+		debug_style=debug_style_enabled,
+		asan_enabled=asan_enabled,
+		ubsan_enabled=ubsan_enabled,
+		alloc_track_enabled=False,
+	)
+	try:
+		archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
+	except Exception as ex:
+		return f"runtime archive build failed: {ex}", 1, "", ""
+	compile_cmd = [
+		clang, "-pthread", *link_flags,
+		"-x", "ir", str(ir_path),
+		"-x", "none", archive,
+		*(str(o) for o in (extra_objects or [])),
+		*link_libs, "-Wl,--as-needed", "-o", str(bin_path),
+	]
 
 	try:
 		res = subprocess.run(compile_cmd, capture_output=True, text=True, cwd=ROOT, timeout=timeout_s)

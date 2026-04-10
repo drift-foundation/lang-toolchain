@@ -202,7 +202,8 @@ def _write_consumer_manifest(consumer_dir: Path) -> Path:
 		),
 		encoding="utf-8",
 	)
-	manifest = consumer_dir / "drift-manifest.json"
+	(consumer_dir / "drift").mkdir(exist_ok=True)
+	manifest = consumer_dir / "drift" / "manifest.json"
 	manifest.write_text(
 		'{\n'
 		'  "schema_version": 1,\n'

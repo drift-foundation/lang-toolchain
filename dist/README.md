@@ -39,7 +39,7 @@ just dist-index
 
 ## Consuming from another repo
 
-Create `drift-sources.json` in the consumer repo and point to this repo path:
+Create `drift/sources.json` in the consumer repo and point to this repo path:
 
 ```json
 {
@@ -59,7 +59,7 @@ Create `drift-sources.json` in the consumer repo and point to this repo path:
 Then in the consumer:
 
 ```bash
-PYTHONPATH=. ./.venv/bin/python3 -m lang.drift fetch --sources drift-sources.json
+PYTHONPATH=. ./.venv/bin/python3 -m lang.drift fetch --sources drift/sources.json
 ```
 
 Notes:

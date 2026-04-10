@@ -46,6 +46,19 @@ from tools.drift_deploy.semver import parse_version
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _drift_subdir(tmpdir) -> Path:
+	"""Create and return ``<tmpdir>/drift`` for staging drift-owned metadata.
+
+	Mirrors the post-rename layout: every drift-owned root metadata file
+	(manifest.json, lock.json, deploy-config.json) lives under the
+	``drift/`` subdirectory.  Tests that need to write any of these files
+	should use this helper instead of constructing the path inline.
+	"""
+	d = Path(tmpdir) / "drift"
+	d.mkdir(exist_ok=True)
+	return d
+
+
 def _art(name: str, kind: str = "package", deps: list[PackageDep] | None = None) -> Artifact:
 	return Artifact(
 		kind=kind,
@@ -66,7 +79,7 @@ class TestCLI:
 	def test_defaults(self) -> None:
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.manifest == Path("drift-manifest.json")
+		assert args.manifest == Path("drift") / "manifest.json"
 		assert args.dest is None
 		assert args.app_dest is None
 		assert args.skip_smoke is False
@@ -152,7 +165,7 @@ class TestResolutionLock:
 		"""Artifact with no package_deps returns empty resolution."""
 		art = _art("my.pkg")
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			result = _resolve_artifact_deps(
 				art,
 				package_roots=[],
@@ -165,7 +178,7 @@ class TestResolutionLock:
 		"""Artifact with deps but no lock → error directing to drift prepare."""
 		art = _art("my.pkg", deps=[PackageDep("ext.lib", "^1.0.0")])
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			with pytest.raises(DeployError, match="drift prepare"):
 				_resolve_artifact_deps(
 					art,
@@ -177,7 +190,7 @@ class TestResolutionLock:
 	def test_missing_lock_entry_raises(self) -> None:
 		"""Artifact in manifest but not in lock → error directing to drift prepare."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"other.pkg": {
 				"dep.x": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
 			}})
@@ -206,7 +219,7 @@ class TestResolutionLock:
 			# dep.b missing
 		}}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			with pytest.raises(DeployError, match="dep.b.*drift prepare"):
 				_resolve_artifact_deps(
 					art,
@@ -354,7 +367,7 @@ class TestCleanEnv:
 class TestUnsafeField:
 	def test_unsafe_default_false(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -372,7 +385,7 @@ class TestUnsafeField:
 
 	def test_unsafe_true(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -393,7 +406,7 @@ class TestUnsafeField:
 	def test_unsafe_non_bool_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -576,7 +589,7 @@ class TestModuleNamespace:
 	def test_default_derives_from_name(self) -> None:
 		"""Hyphens in name are converted to underscores by default."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -595,7 +608,7 @@ class TestModuleNamespace:
 
 	def test_explicit_overrides_default(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -615,7 +628,7 @@ class TestModuleNamespace:
 	def test_no_hyphens_identity(self) -> None:
 		"""Name without hyphens: module_namespace == name."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -634,7 +647,7 @@ class TestModuleNamespace:
 	def test_invalid_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
 		with tempfile.TemporaryDirectory() as tmpdir:
-			path = Path(tmpdir) / "drift-manifest.json"
+			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -865,20 +878,22 @@ class TestNativeLibPaths:
 
 	def test_config_only(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/cfg/x", "/cfg/y"]}))
 			args = self._make_args()
-			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			result = _resolve_native_lib_paths(args, drift_dir)
 			assert result == [Path("/cfg/x"), Path("/cfg/y")]
 
 	def test_precedence_env_config_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""All three sources merge: env first (lowest), config middle, CLI last (highest)."""
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/env")
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/cfg"]}))
 			args = self._make_args("--native-lib-path", "/cli")
-			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			result = _resolve_native_lib_paths(args, drift_dir)
 			assert result == [Path("/env"), Path("/cfg"), Path("/cli")]
 
 	def test_empty_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -896,19 +911,21 @@ class TestNativeLibPaths:
 
 	def test_bad_config_raises(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text("not json")
 			args = self._make_args()
 			with pytest.raises(DeployError, match="failed to read"):
-				_resolve_native_lib_paths(args, Path(tmpdir))
+				_resolve_native_lib_paths(args, drift_dir)
 
 	def test_config_bad_type_raises(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": "not-a-list"}))
 			args = self._make_args()
 			with pytest.raises(DeployError, match="must be an array"):
-				_resolve_native_lib_paths(args, Path(tmpdir))
+				_resolve_native_lib_paths(args, drift_dir)
 
 	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
 	def test_build_package_passes_link_search(self, mock_run: MagicMock) -> None:
@@ -990,13 +1007,14 @@ class TestNativeLibPaths:
 				_resolve_native_lib_paths(args, Path(tmpdir))
 
 	def test_relative_path_in_config_rejected(self) -> None:
-		"""Relative path in drift-deploy-config.json must be rejected early."""
+		"""Relative path in drift/deploy-config.json must be rejected early."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["relative/lib"]}))
 			args = self._make_args()
 			with pytest.raises(DeployError, match="absolute paths are required"):
-				_resolve_native_lib_paths(args, Path(tmpdir))
+				_resolve_native_lib_paths(args, drift_dir)
 
 	def test_relative_path_in_cli_rejected(self) -> None:
 		"""Relative path via --native-lib-path must be rejected early."""
@@ -1009,10 +1027,11 @@ class TestNativeLibPaths:
 		"""Absolute paths from all three sources should be accepted normally."""
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/abs/env")
 		with tempfile.TemporaryDirectory() as tmpdir:
-			config = Path(tmpdir) / "drift-deploy-config.json"
+			drift_dir = _drift_subdir(tmpdir)
+			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/abs/cfg"]}))
 			args = self._make_args("--native-lib-path", "/abs/cli")
-			result = _resolve_native_lib_paths(args, Path(tmpdir))
+			result = _resolve_native_lib_paths(args, drift_dir)
 			assert result == [Path("/abs/env"), Path("/abs/cfg"), Path("/abs/cli")]
 
 
@@ -1837,7 +1856,7 @@ class TestIntraProjectDeps:
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[Path(tmpdir)],
-				lock_path=Path(tmpdir) / "drift-lock.json",
+				lock_path=_drift_subdir(tmpdir) / "lock.json",
 				existing_lock=existing_lock,
 			)
 			assert "net-crypto" in resolved
@@ -1892,7 +1911,7 @@ class TestDeployLockRangeResolution:
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[Path(tmpdir)],
-				lock_path=Path(tmpdir) / "drift-lock.json",
+				lock_path=_drift_subdir(tmpdir) / "lock.json",
 				existing_lock=existing_lock,
 			)
 			assert "dep-a" in resolved
@@ -2124,7 +2143,7 @@ class TestAuthorProfilePublish:
 	"""
 
 	def _write_manifest(self, tmpdir: Path, *, author_profile: str | None = None) -> Path:
-		"""Write a minimal drift-manifest.json with an optional author_profile."""
+		"""Write a minimal drift/manifest.json with an optional author_profile."""
 		project: dict = {"name": "test", "license": "MIT"}
 		if author_profile is not None:
 			project["author_profile"] = author_profile
@@ -2141,7 +2160,9 @@ class TestAuthorProfilePublish:
 				"modules": ["lib.drift"],
 			}],
 		}
-		path = tmpdir / "drift-manifest.json"
+		drift_dir = tmpdir / "drift"
+		drift_dir.mkdir(exist_ok=True)
+		path = drift_dir / "manifest.json"
 		import json as _json
 		path.write_text(_json.dumps(manifest))
 		return path

@@ -19,7 +19,11 @@ class FetchOptions:
 	sources_path: Path
 	cache_dir: Path = Path("cache") / "driftpm"
 	force: bool = False
-	lock_path: Path = Path("drift.lock.json")
+	# Fetch lockfile lives under the `drift/` namespace alongside the
+	# sources file it pairs with.  Distinct from the build lockfile at
+	# `drift/lock.json` (different schema, different consumer): this is
+	# the package fetch verification lockfile, paired with `drift/sources.json`.
+	lock_path: Path = Path("drift") / "sources.lock.json"
 
 
 @dataclass(frozen=True)

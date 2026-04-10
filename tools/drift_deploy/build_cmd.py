@@ -58,16 +58,41 @@ def resolve_driftc(explicit: Path | None = None) -> Path | None:
 	return None
 
 
+def project_root_for(manifest_dir: Path) -> Path:
+	"""Return the project root for a manifest at ``manifest_dir / manifest.json``.
+
+	Under the canonical post-rename layout, the manifest lives at
+	``<project_root>/drift/manifest.json``, so the project root is the
+	parent of the manifest directory.  Source paths, asset paths, and the
+	build output directory are all resolved relative to the project root,
+	not the manifest dir — users write ``entry_module: "src/lib.drift"``
+	expecting it to point at ``<project_root>/src/lib.drift``, not
+	``<project_root>/drift/src/lib.drift``.
+
+	If the manifest's containing dir is NOT named ``drift`` (e.g. a
+	non-standard manifest location passed via ``--manifest /tmp/foo.json``),
+	the project root collapses to the manifest dir itself, so the legacy
+	"sources next to manifest" interpretation still works for one-off use.
+	"""
+	if manifest_dir.name == "drift":
+		return manifest_dir.parent
+	return manifest_dir
+
+
 def build_source_args(art: Artifact, manifest_dir: Path) -> list[str]:
 	"""
 	Build the source file arguments: entry_module first, then remaining
 	modules, deduplicated.
+
+	Paths in the manifest are project-root-relative.  See ``project_root_for``
+	for the resolution rule.
 	"""
+	root = project_root_for(manifest_dir)
 	args: list[str] = []
-	entry = str(manifest_dir / art.entry_module)
+	entry = str(root / art.entry_module)
 	args.append(entry)
 	for mod_path in art.modules:
-		resolved_mod = str(manifest_dir / mod_path)
+		resolved_mod = str(root / mod_path)
 		if resolved_mod != entry:
 			args.append(resolved_mod)
 	return args

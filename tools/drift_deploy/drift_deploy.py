@@ -3,7 +3,7 @@
 drift deploy — standardized package deploy tool.
 
 Entry point for building, signing, smoking, and publishing Drift
-package and app artifacts from a drift-manifest.json manifest.
+package and app artifacts from a drift/manifest.json manifest.
 """
 
 from __future__ import annotations
@@ -75,8 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		prog="drift deploy",
 		description="Build, sign, smoke-test, and publish Drift artifacts.",
 	)
-	p.add_argument("--manifest", type=UserPath, default=Path("drift-manifest.json"),
-		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
+	p.add_argument("--manifest", type=UserPath, default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (default: ./drift/manifest.json)")
 	p.add_argument("--dest", type=UserPath, default=None,
 		help="Publish destination root for package artifacts (required if manifest has packages)")
 	p.add_argument("--app-dest", type=UserPath, default=None,
@@ -94,7 +94,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--target", type=str, default=None,
 		help="Target triple (default: host triple)")
 	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
-		help="Native library search path for linker (repeatable; also: $DRIFT_NATIVE_LIB_PATH, drift-deploy-config.json)")
+		help="Native library search path for linker (repeatable; also: $DRIFT_NATIVE_LIB_PATH, drift/deploy-config.json)")
 	p.add_argument("--skip-smoke", action="store_true",
 		help="Skip all smoke tests (CI escape hatch)")
 	p.add_argument("--dry-run", action="store_true",
@@ -156,7 +156,7 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 
 	Precedence (lowest to highest):
 	  1. $DRIFT_NATIVE_LIB_PATH (colon-separated)
-	  2. drift-deploy-config.json "native_lib_paths"
+	  2. drift/deploy-config.json "native_lib_paths"
 	  3. --native-lib-path CLI flags
 
 	All sources are concatenated in order. The linker processes -L flags
@@ -183,7 +183,7 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 				result.append(pp)
 
 	# 2. Config file.
-	config_path = manifest_dir / "drift-deploy-config.json"
+	config_path = manifest_dir / "deploy-config.json"
 	if config_path.exists():
 		try:
 			config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -285,7 +285,7 @@ def _resolve_artifact_deps(
 	"""
 	Load locked dependencies for a single artifact.
 
-	Deploy is read-only with respect to drift-lock.json.  If the lock
+	Deploy is read-only with respect to drift/lock.json.  If the lock
 	is missing or stale, the user must run ``drift prepare`` first.
 	"""
 	if not art.package_deps:
@@ -295,7 +295,7 @@ def _resolve_artifact_deps(
 
 	if existing_lock is None:
 		raise DeployError(
-			f"artifact '{art.name}' has package_deps but no drift-lock.json; "
+			f"artifact '{art.name}' has package_deps but no drift/lock.json; "
 			f"run 'drift prepare' first"
 		)
 
@@ -584,15 +584,24 @@ def _stage_assets(
 	manifest_dir: Path,
 	staged_install: Path,
 ) -> None:
-	"""Copy declared assets into staged install directory."""
+	"""Copy declared assets into staged install directory.
+
+	Asset paths in the manifest are project-root-relative, not
+	manifest_dir-relative.  Under the canonical layout the manifest lives
+	at `<project_root>/drift/manifest.json`, so assets resolve against
+	`<project_root>`, not `<project_root>/drift/`.
+	"""
 	if not art.assets:
 		return
+
+	from tools.drift_deploy.build_cmd import project_root_for
+	project_root = project_root_for(manifest_dir)
 
 	assets_dir = staged_install / "assets"
 	assets_dir.mkdir(parents=True, exist_ok=True)
 
 	for asset_path_str in art.assets:
-		src = manifest_dir / asset_path_str
+		src = project_root / asset_path_str
 		if not src.exists():
 			raise DeployError(
 				f"artifact '{art.name}': declared asset not found: {asset_path_str}"
@@ -1248,7 +1257,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	if not manifest.project.author_profile:
 		raise DeployError(
 			"publisher identity missing: set 'project.author_profile' in "
-			"drift-manifest.json (run 'drift init' to create an author profile)"
+			"drift/manifest.json (run 'drift init' to create an author profile)"
 		)
 	author_profile_path = manifest_dir / manifest.project.author_profile
 	if not author_profile_path.exists():
@@ -1312,15 +1321,15 @@ def _run_impl(args: argparse.Namespace) -> int:
 	}
 
 	# ── Resolution / lock (per-artifact, read-only) ──
-	# Deploy is read-only w.r.t. drift-lock.json. If deps need resolution,
+	# Deploy is read-only w.r.t. drift/lock.json. If deps need resolution,
 	# the lock must already exist (written by 'drift prepare').
-	lock_path = args.manifest.resolve().parent / "drift-lock.json"
+	lock_path = args.manifest.resolve().parent / "lock.json"
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None = None
 	need_resolution = any(a.package_deps for a in artifacts)
 	if need_resolution:
 		if not lock_path.exists():
 			raise DeployError(
-				"drift-lock.json not found but artifacts have package_deps; "
+				"drift/lock.json not found but artifacts have package_deps; "
 				"run 'drift prepare' first"
 			)
 		try:

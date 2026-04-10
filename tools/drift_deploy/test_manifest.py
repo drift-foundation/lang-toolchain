@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Tests for drift-manifest.json manifest loading and validation.
+Tests for drift/manifest.json manifest loading and validation.
 """
 
 from __future__ import annotations
@@ -22,7 +22,9 @@ from tools.drift_deploy.manifest import (
 
 
 def _write_manifest(tmpdir: Path, obj: dict) -> Path:
-	path = tmpdir / "drift-manifest.json"
+	drift_dir = tmpdir / "drift"
+	drift_dir.mkdir(exist_ok=True)
+	path = drift_dir / "manifest.json"
 	path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
 	return path
 
@@ -207,7 +209,7 @@ class TestManifestValid:
 class TestManifestInvalid:
 	def test_missing_file(self) -> None:
 		with pytest.raises(ManifestError, match="not found"):
-			load_manifest(Path("/nonexistent/drift-manifest.json"))
+			load_manifest(Path("/nonexistent/drift/manifest.json"))
 
 	def test_wrong_schema_version(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:

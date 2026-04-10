@@ -114,13 +114,13 @@
 
 [Tooling / Packages]
 - Phase 5 polish (highest leverage):
-  - Lockfile authoritative by default: `drift build` honors `drift.lock.json`; only `drift update` changes resolution.
+  - Lockfile authoritative by default: `drift build` honors `drift/lock.json`; only `drift update` changes resolution.
   - Multi-source deterministic selection rules (stable source ordering + tie-break + precedence) so identical inputs resolve identically.
   - Sharper index/identity mismatch errors (print claimed vs observed identity, signer, source id, mismatch axis).
   - `drift doctor` (sources, index sanity, trust graph, lock/cache consistency, toolchain compatibility).
   - `drift fetch --json` (machine-readable resolution/verification report for CI/IDE).
 - Future package manifest dependency graph:
-  - Add `package_deps` alongside `native_deps` in `drift-manifest.json`.
+  - Add `package_deps` alongside `native_deps` in `drift/manifest.json`.
   - Use npm-style semver range syntax for package deps (`^`, `~`, exact, explicit ranges), not exact-only matching.
   - Keep package metadata logical only: package identity + version constraint in the manifest; location/resolution remains a tool/environment concern.
   - Initial resolution backend can stay directory-based package roots; do not assume a central registry, fetch flow, or hosted source model.

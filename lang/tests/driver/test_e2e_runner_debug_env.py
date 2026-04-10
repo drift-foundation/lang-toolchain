@@ -77,7 +77,6 @@ def _capture(runner_module, env_overrides: dict[str, str], call):
 	# we are testing — strips any inherited DRIFT_* state from the harness.
 	clean_env = {k: v for k, v in os.environ.items() if not k.startswith("DRIFT_")}
 	clean_env.update(env_overrides)
-	clean_env["DRIFT_RUNTIME_LINK_MODE"] = "archive"
 
 	# Patch build_runtime_archive both at the source module (for runners
 	# that import it lazily inside the function) and at the runner module

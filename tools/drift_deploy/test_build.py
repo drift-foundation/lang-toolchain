@@ -63,7 +63,9 @@ MINIMAL_MANIFEST = {
 
 
 def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
-	manifest_path = tmp_path / "drift-manifest.json"
+	drift_dir = tmp_path / "drift"
+	drift_dir.mkdir(exist_ok=True)
+	manifest_path = drift_dir / "manifest.json"
 	manifest_path.write_text(
 		json.dumps(data or MINIMAL_MANIFEST, indent=2),
 		encoding="utf-8",
@@ -73,7 +75,9 @@ def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
 
 def _write_lock(tmp_path: Path, artifacts: dict, *, author_key: str = "ed25519:test") -> Path:
 	from tools.drift_deploy.resolver import version_compat_range
-	lock_path = tmp_path / "drift-lock.json"
+	drift_dir = tmp_path / "drift"
+	drift_dir.mkdir(exist_ok=True)
+	lock_path = drift_dir / "lock.json"
 	lock_obj = {"schema_version": 2, "artifacts": {}}
 	for art_name, deps in artifacts.items():
 		resolved = {}
@@ -316,6 +320,54 @@ class TestBuildAppCmd:
 
 
 class TestDriftBuildRun:
+	def test_default_manifest_path_is_drift_subdir(self, tmp_path, monkeypatch):
+		"""drift build with no --manifest finds `drift/manifest.json` in cwd.
+
+		Locks the post-rename layout: every drift-owned root metadata file
+		lives under the `drift/` namespace.  The default `--manifest` path
+		is `drift/manifest.json`, NOT `drift-manifest.json`.
+		"""
+		_write_manifest(tmp_path)
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "lib.drift").write_text("module my_pkg;")
+		(tmp_path / "src" / "util.drift").write_text("module my_pkg.util;")
+		monkeypatch.chdir(tmp_path)
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run([])
+
+		assert result == 0
+		mock_run.assert_called_once()
+
+	def test_legacy_root_manifest_is_not_found(self, tmp_path, monkeypatch, capsys):
+		"""drift build with only the legacy `drift-manifest.json` at root fails cleanly.
+
+		There is no fallback to the legacy path.  A repo on the old layout
+		gets a clear "manifest not found at drift/manifest.json" error,
+		not a silent fall-through to the deprecated location.
+		"""
+		# Intentionally write to the LEGACY path; assert the new default
+		# does not fall back to it.
+		(tmp_path / "drift-manifest.json").write_text(
+			json.dumps(MINIMAL_MANIFEST, indent=2),
+			encoding="utf-8",
+		)
+		monkeypatch.chdir(tmp_path)
+
+		from tools.drift_deploy.drift_build import run
+
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run([])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		# Loader should report the *new* path it expected, not the legacy one.
+		assert "drift/manifest.json" in err or "manifest" in err.lower()
+
 	def test_single_artifact_no_name(self, tmp_path):
 		"""When manifest has one artifact, name is optional."""
 		_write_manifest(tmp_path)
@@ -330,7 +382,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		mock_run.assert_called_once()
@@ -367,7 +419,7 @@ class TestDriftBuildRun:
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -395,7 +447,7 @@ class TestDriftBuildRun:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--debug",
 			])
 
@@ -414,7 +466,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		env = mock_run.call_args.kwargs["env"]
@@ -429,7 +481,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		env = mock_run.call_args.kwargs["env"]
@@ -457,7 +509,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -490,7 +542,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -529,14 +581,14 @@ class TestDriftBuildRun:
 				}
 			},
 		}
-		(tmp_path / "drift-lock.json").write_text(json.dumps(lock_obj, indent=2), encoding="utf-8")
+		(tmp_path / "drift" / "lock.json").write_text(json.dumps(lock_obj, indent=2), encoding="utf-8")
 
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd_str = " ".join(mock_run.call_args[0][0])
@@ -570,7 +622,7 @@ class TestDriftBuildRun:
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -601,7 +653,7 @@ class TestDriftBuildRun:
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -630,7 +682,7 @@ class TestDriftBuildRun:
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -660,7 +712,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -674,7 +726,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -704,7 +756,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -721,7 +773,7 @@ class TestDriftBuildRun:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"-o", str(tmp_path / "custom-out.dmp"),
 			])
 
@@ -731,11 +783,11 @@ class TestDriftBuildRun:
 		assert cmd[idx + 1] == str(tmp_path / "custom-out.dmp")
 
 	def test_manifest_default_filename(self, tmp_path):
-		"""Default manifest filename is drift-manifest.json."""
+		"""Default manifest filename is drift/manifest.json."""
 		from tools.drift_deploy.drift_build import build_arg_parser
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.manifest == Path("drift-manifest.json")
+		assert args.manifest == Path("drift") / "manifest.json"
 
 	def test_passthrough_flags(self, tmp_path):
 		_write_manifest(tmp_path)
@@ -746,7 +798,7 @@ class TestDriftBuildRun:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--", "--verbose", "--some-flag",
 			])
 
@@ -778,7 +830,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -817,7 +869,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -849,7 +901,7 @@ class TestDriftBuildRun:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json"), "--target", "native"])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json"), "--target", "native"])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -877,7 +929,7 @@ class TestDriftBuildRun:
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json"), "--target", "linux-x86_64"])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json"), "--target", "linux-x86_64"])
 
 		assert result == 1, "unsupported app target must fail"
 
@@ -913,7 +965,7 @@ class TestDriftBuildRun:
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
 				"app-b",
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			])
 
 		assert result == 0
@@ -1023,7 +1075,7 @@ class TestPackageDepUsesResolvedVersions:
 		with mock.patch("subprocess.run") as mock_run, \
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
@@ -1047,7 +1099,7 @@ class TestSubprocessEnvScrubbing:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch.dict(os.environ, {"PYTHONPATH": "/bad/path"}):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		call_kwargs = mock_run.call_args[1]
@@ -1064,7 +1116,7 @@ class TestSubprocessEnvScrubbing:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch.dict(os.environ, {"PYTHONHOME": "/bad/home"}):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		call_kwargs = mock_run.call_args[1]
@@ -1081,7 +1133,7 @@ class TestSubprocessEnvScrubbing:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch.dict(os.environ, {"MY_CUSTOM_VAR": "keep_me"}, clear=False):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 0
 		call_kwargs = mock_run.call_args[1]
@@ -1099,19 +1151,19 @@ class TestConfigValidation:
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch.dict(os.environ, {"DRIFT_NATIVE_LIB_PATH": "relative/path"}, clear=False):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
 	def test_relative_native_lib_path_in_config_rejected(self, tmp_path):
 		_write_manifest(tmp_path)
 		config = {"native_lib_paths": ["relative/path"]}
-		(tmp_path / "drift-deploy-config.json").write_text(json.dumps(config))
+		(tmp_path / "drift" / "deploy-config.json").write_text(json.dumps(config))
 
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -1122,7 +1174,7 @@ class TestConfigValidation:
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--native-lib-path", "relative/path",
 			])
 
@@ -1135,19 +1187,19 @@ class TestConfigValidation:
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch.dict(os.environ, {"DRIFT_PACKAGE_ROOT": "relative/root"}, clear=False):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
 	def test_relative_package_root_in_config_rejected(self, tmp_path):
 		_write_manifest(tmp_path)
 		config = {"package_roots": ["relative/root"]}
-		(tmp_path / "drift-deploy-config.json").write_text(json.dumps(config))
+		(tmp_path / "drift" / "deploy-config.json").write_text(json.dumps(config))
 
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -1158,7 +1210,7 @@ class TestConfigValidation:
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--package-root", "relative/root",
 			])
 
@@ -1166,24 +1218,24 @@ class TestConfigValidation:
 
 	def test_malformed_config_top_level_rejected(self, tmp_path):
 		_write_manifest(tmp_path)
-		(tmp_path / "drift-deploy-config.json").write_text('"not an object"')
+		(tmp_path / "drift" / "deploy-config.json").write_text('"not an object"')
 
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
 	def test_malformed_config_native_lib_paths_type_rejected(self, tmp_path):
 		_write_manifest(tmp_path)
 		config = {"native_lib_paths": "not-an-array"}
-		(tmp_path / "drift-deploy-config.json").write_text(json.dumps(config))
+		(tmp_path / "drift" / "deploy-config.json").write_text(json.dumps(config))
 
 		from tools.drift_deploy.drift_build import run
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			result = run(["--manifest", str(tmp_path / "drift-manifest.json")])
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
 
@@ -1196,7 +1248,7 @@ class TestConfigValidation:
 			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--package-root", "/absolute/root",
 				"--native-lib-path", "/absolute/lib",
 			])
@@ -1238,7 +1290,7 @@ class TestLockCompatibility:
 
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--package-root", str(pkg_root),
 			])
 
@@ -1294,7 +1346,7 @@ class TestLockCompatibility:
 			}
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([
-				"--manifest", str(tmp_path / "drift-manifest.json"),
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--package-root", str(pkg_root),
 			])
 
@@ -1514,7 +1566,7 @@ class TestTildeExpansionDeploy:
 	def test_deploy_manifest_tilde(self):
 		from tools.drift_deploy.drift_deploy import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--manifest=~/project/drift-manifest.json"])
+		args = p.parse_args(["--manifest=~/project/drift/manifest.json"])
 		assert "~" not in str(args.manifest)
 
 	def test_deploy_app_dest_tilde(self):
@@ -1616,6 +1668,31 @@ def _skip_no_driftc():
 		pytest.skip("bin/driftc not found")
 
 
+def _write_e2e_manifest(parent: Path, manifest: dict) -> Path:
+	"""Create `parent/drift/` and write `manifest.json` inside it.
+
+	Returns the manifest path.  Mirrors the post-rename layout: every
+	drift-owned root metadata file lives under the `drift/` subdirectory.
+	"""
+	drift_dir = parent / "drift"
+	drift_dir.mkdir(exist_ok=True)
+	path = drift_dir / "manifest.json"
+	path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+	return path
+
+
+def _write_e2e_lock(parent: Path, lock_obj: dict) -> Path:
+	"""Create `parent/drift/` and write `lock.json` inside it.
+
+	Returns the lock path.  Same layout convention as `_write_e2e_manifest`.
+	"""
+	drift_dir = parent / "drift"
+	drift_dir.mkdir(exist_ok=True)
+	path = drift_dir / "lock.json"
+	path.write_text(json.dumps(lock_obj, indent=2), encoding="utf-8")
+	return path
+
+
 def _e2e_manifest(artifacts: list[dict], **project_extra) -> dict:
 	project = {"name": "e2e-test", "license": "MIT"}
 	project.update(project_extra)
@@ -1666,14 +1743,12 @@ class TestE2E:
 		manifest = _e2e_manifest([
 			_pkg_artifact("test-pkg", "src/lib.drift", ["src/lib.drift"]),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 
@@ -1696,14 +1771,12 @@ class TestE2E:
 				["src/lib.drift", "src/lib.drift"],  # duplicate entry
 			),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 
@@ -1721,14 +1794,12 @@ class TestE2E:
 		manifest = _e2e_manifest([
 			_app_artifact("test-app", "src/main.drift", ["src/main.drift"]),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 
@@ -1750,14 +1821,12 @@ class TestE2E:
 			_pkg_artifact("test-pkg", "src/lib.drift", ["src/lib.drift"]),
 			_app_artifact("test-app", "src/main.drift", ["src/main.drift"]),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 
@@ -1776,16 +1845,14 @@ class TestE2E:
 			_pkg_artifact("test-pkg", "src/lib.drift", ["src/lib.drift"]),
 			_app_artifact("test-app", "src/main.drift", ["src/main.drift"]),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 
 		# Build the package artifact.
 		rc = cli_main([
 			"build", "test-pkg",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 		assert rc == 0
@@ -1806,15 +1873,13 @@ class TestE2E:
 		dep_manifest = _e2e_manifest([
 			_pkg_artifact("test-dep", "src/lib.drift", ["src/lib.drift"]),
 		])
-		(dep_dir / "drift-manifest.json").write_text(
-			json.dumps(dep_manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(dep_dir, dep_manifest)
 
 		from lang.drift.cli import main as cli_main
 
 		rc = cli_main([
 			"build",
-			"--manifest", str(dep_dir / "drift-manifest.json"),
+			"--manifest", str(dep_dir / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 		assert rc == 0
@@ -1841,12 +1906,10 @@ class TestE2E:
 				package_deps=[{"name": "test-dep", "version": "^0.1.0"}],
 			),
 		])
-		(consumer_dir / "drift-manifest.json").write_text(
-			json.dumps(consumer_manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(consumer_dir, consumer_manifest)
 
 		# Write lockfile with compatibility range from the built dep.
-		lock = {
+		_write_e2e_lock(consumer_dir, {
 			"schema_version": 2,
 			"artifacts": {
 				"test-consumer": {
@@ -1860,17 +1923,14 @@ class TestE2E:
 					},
 				},
 			},
-		}
-		(consumer_dir / "drift-lock.json").write_text(
-			json.dumps(lock, indent=2), encoding="utf-8",
-		)
+		})
 
 		# Unsigned test packages — disable signature enforcement
 		# in both bin/driftc wrapper and driftc itself.
 		with mock.patch.dict(os.environ, {"DRIFT_REQUIRE_SIGNATURES": "0"}):
 			rc = cli_main([
 				"build",
-				"--manifest", str(consumer_dir / "drift-manifest.json"),
+				"--manifest", str(consumer_dir / "drift" / "manifest.json"),
 				"--driftc", str(DRIFTC_BIN),
 				"--package-root", str(tmp_path / "pkg_root"),
 				"--", "--allow-unsigned-from", str(tmp_path / "pkg_root"),
@@ -1908,11 +1968,11 @@ class TestE2E:
 		leaf_src = leaf_dir / "src" / "lib.drift"
 		leaf_src.parent.mkdir(parents=True)
 		leaf_src.write_text(_LEAF_SRC, encoding="utf-8")
-		(leaf_dir / "drift-manifest.json").write_text(json.dumps(
+		_write_e2e_manifest(leaf_dir,
 			_e2e_manifest([_pkg_artifact("test-leaf", "src/lib.drift", ["src/lib.drift"])]),
-		), encoding="utf-8")
+		)
 
-		rc = cli_main(["build", "--manifest", str(leaf_dir / "drift-manifest.json"), "--driftc", str(DRIFTC_BIN)])
+		rc = cli_main(["build", "--manifest", str(leaf_dir / "drift" / "manifest.json"), "--driftc", str(DRIFTC_BIN)])
 		assert rc == 0
 		leaf_dmp = leaf_dir / "build" / "test-leaf.dmp"
 		assert leaf_dmp.exists()
@@ -1937,23 +1997,23 @@ class TestE2E:
 		dep_src = dep_dir / "src" / "lib.drift"
 		dep_src.parent.mkdir(parents=True)
 		dep_src.write_text(dep_src_text, encoding="utf-8")
-		(dep_dir / "drift-manifest.json").write_text(json.dumps(
+		_write_e2e_manifest(dep_dir,
 			_e2e_manifest([_pkg_artifact(
 				"test-dep", "src/lib.drift", ["src/lib.drift"],
 				package_deps=[{"name": "test-leaf", "version": "0.1.0"}],
 			)]),
-		), encoding="utf-8")
+		)
 		# test-dep needs a lockfile for its dep on test-leaf.
-		(dep_dir / "drift-lock.json").write_text(json.dumps({
+		_write_e2e_lock(dep_dir, {
 			"schema_version": 2,
 			"artifacts": {"test-dep": {"resolved": {
 				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "direct"},
 			}}},
-		}), encoding="utf-8")
+		})
 
 		with mock.patch.dict(os.environ, {"DRIFT_REQUIRE_SIGNATURES": "0"}):
 			rc = cli_main([
-				"build", "--manifest", str(dep_dir / "drift-manifest.json"),
+				"build", "--manifest", str(dep_dir / "drift" / "manifest.json"),
 				"--driftc", str(DRIFTC_BIN),
 				"--package-root", str(pkg_root),
 				"--", "--allow-unsigned-from", str(pkg_root),
@@ -1982,24 +2042,24 @@ class TestE2E:
 		consumer_src = consumer_dir / "src" / "lib.drift"
 		consumer_src.parent.mkdir(parents=True)
 		consumer_src.write_text(consumer_src_text, encoding="utf-8")
-		(consumer_dir / "drift-manifest.json").write_text(json.dumps(
+		_write_e2e_manifest(consumer_dir,
 			_e2e_manifest([_pkg_artifact(
 				"test-consumer", "src/lib.drift", ["src/lib.drift"],
 				package_deps=[{"name": "test-dep", "version": "^0.1.0"}],
 			)]),
-		), encoding="utf-8")
+		)
 		# Lockfile: test-dep is direct, test-leaf is transitive.
-		(consumer_dir / "drift-lock.json").write_text(json.dumps({
+		_write_e2e_lock(consumer_dir, {
 			"schema_version": 2,
 			"artifacts": {"test-consumer": {"resolved": {
 				"test-dep": {"version": "0.1", "package_id": "test-dep", "author_key": "unsigned", "dep_type": "direct"},
 				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "transitive"},
 			}}},
-		}), encoding="utf-8")
+		})
 
 		with mock.patch.dict(os.environ, {"DRIFT_REQUIRE_SIGNATURES": "0"}):
 			rc = cli_main([
-				"build", "--manifest", str(consumer_dir / "drift-manifest.json"),
+				"build", "--manifest", str(consumer_dir / "drift" / "manifest.json"),
 				"--driftc", str(DRIFTC_BIN),
 				"--package-root", str(pkg_root),
 				"--", "--allow-unsigned-from", str(pkg_root),
@@ -2031,14 +2091,12 @@ class TestE2E:
 				package_deps=[{"name": "some-dep", "version": "^1.0.0"}],
 			),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 		assert rc == 1
@@ -2057,14 +2115,12 @@ class TestE2E:
 				unsafe=True,
 			),
 		])
-		(tmp_path / "drift-manifest.json").write_text(
-			json.dumps(manifest, indent=2), encoding="utf-8",
-		)
+		_write_e2e_manifest(tmp_path, manifest)
 
 		from lang.drift.cli import main as cli_main
 		rc = cli_main([
 			"build",
-			"--manifest", str(tmp_path / "drift-manifest.json"),
+			"--manifest", str(tmp_path / "drift" / "manifest.json"),
 			"--driftc", str(DRIFTC_BIN),
 		])
 		assert rc == 0

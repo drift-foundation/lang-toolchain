@@ -16,7 +16,9 @@ from lang.drift.lock_v0 import LockEntry, ObservedIdentity, save_lock
 class VendorOptions:
 	cache_dir: Path = Path("cache") / "driftpm"
 	dest_dir: Path = Path("vendor") / "driftpkgs"
-	lock_path: Path = Path("drift.lock.json")
+	# Fetch verification lockfile (paired with `drift/sources.json`).
+	# Distinct from the build lockfile at `drift/lock.json`.
+	lock_path: Path = Path("drift") / "sources.lock.json"
 	package_ids: list[str] | None = None
 	json: bool = False
 

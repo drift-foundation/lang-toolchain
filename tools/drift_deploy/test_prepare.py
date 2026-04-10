@@ -27,6 +27,13 @@ from tools.drift_deploy.resolver import PackageEntry, ResolvedDep
 from tools.drift_deploy.semver import parse_version
 
 
+def _drift_subdir(tmpdir) -> Path:
+	"""Create and return ``<tmpdir>/drift`` for staging drift-owned metadata."""
+	d = Path(tmpdir) / "drift"
+	d.mkdir(exist_ok=True)
+	return d
+
+
 def _art(name: str, *, kind: str = "package", deps: list[PackageDep] | None = None) -> Artifact:
 	return Artifact(
 		kind=kind, name=name, version="0.1.0",
@@ -40,7 +47,7 @@ class TestCLI:
 	def test_defaults(self) -> None:
 		p = build_arg_parser()
 		args = p.parse_args([])
-		assert args.manifest == Path("drift-manifest.json")
+		assert args.manifest == Path("drift") / "manifest.json"
 		assert args.dest is None
 		assert args.package_root is None
 
@@ -63,13 +70,13 @@ class TestPrepareResolve:
 	def test_resolves_and_writes_lock(
 		self, mock_resolve: MagicMock, mock_index: MagicMock,
 	) -> None:
-		"""drift prepare resolves deps and writes drift-lock.json."""
+		"""drift prepare resolves deps and writes drift/lock.json."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
 			"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -92,7 +99,7 @@ class TestPrepareResolve:
 			rc = _run_impl(args)
 			assert rc == 0
 
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			assert lock_path.exists()
 			lock = read_lock(lock_path)
 			assert "my.pkg" in lock
@@ -102,7 +109,7 @@ class TestPrepareResolve:
 	def test_no_deps_is_noop(self) -> None:
 		"""drift prepare with no package_deps does nothing."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -124,7 +131,7 @@ class TestPrepareResolve:
 			rc = _run_impl(args)
 			assert rc == 0
 
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			assert not lock_path.exists()
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
@@ -138,7 +145,7 @@ class TestPrepareResolve:
 			"ext.lib": ResolvedDep(version="2.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -158,7 +165,7 @@ class TestPrepareResolve:
 
 			# Write an old lock.
 			from tools.drift_deploy.lockfile import write_lock
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"my.pkg": {
 				"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 			}})
@@ -178,7 +185,7 @@ class TestPrepareResolve:
 		"""Resolution failure propagates as PrepareError."""
 		mock_index.return_value = {}  # empty index → resolution will fail
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -214,7 +221,7 @@ class TestFullPrepareReplace:
 			"dep.a": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="dep.a", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -229,7 +236,7 @@ class TestFullPrepareReplace:
 			manifest_path.write_text(json.dumps(manifest))
 
 			# Old lock with an artifact no longer in manifest.
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			from tools.drift_deploy.lockfile import write_lock
 			write_lock(lock_path, {"stale.pkg": {
 				"dep.x": ResolvedDep(version="9.0.0", integrity="", dep_type="direct", package_id="dep.x", author_key="ed25519:test"),
@@ -251,7 +258,7 @@ class TestCoArtifactResolution:
 	def test_co_artifact_resolves_without_published_dmp(self) -> None:
 		"""web-rest depends on web-jwt; both in same manifest. No external packages needed."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "drift-web", "license": "MIT"},
@@ -278,7 +285,7 @@ class TestCoArtifactResolution:
 			rc = _run_impl(args)
 			assert rc == 0
 
-			lock = read_lock(Path(tmpdir) / "drift-lock.json")
+			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
 			assert "web-rest" in lock
 			dep = lock["web-rest"]["web-jwt"]
 			assert dep.version == "0.2"
@@ -293,7 +300,7 @@ class TestCoArtifactResolution:
 			ext_dmp = pkg_root / "ext.crypto-1.0.0.dmp"
 			ext_dmp.write_bytes(b"fake-dmp-content")
 
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -332,7 +339,7 @@ class TestCoArtifactResolution:
 				rc = _run_impl(args)
 				assert rc == 0
 
-			lock = read_lock(Path(tmpdir) / "drift-lock.json")
+			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
 			assert "my.app" in lock
 			# Co-artifact dep.
 			auth_dep = lock["my.app"]["my.auth"]
@@ -346,7 +353,7 @@ class TestCoArtifactResolution:
 	def test_co_artifact_version_mismatch_errors(self) -> None:
 		"""Co-artifact exists but version doesn't satisfy constraint."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -376,7 +383,7 @@ class TestCoArtifactResolution:
 	def test_co_artifact_transitive_deps(self) -> None:
 		"""Co-artifact's own package_deps are resolved transitively."""
 		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = Path(tmpdir) / "drift-manifest.json"
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 1,
 				"project": {"name": "test", "license": "MIT"},
@@ -410,7 +417,7 @@ class TestCoArtifactResolution:
 			rc = _run_impl(args)
 			assert rc == 0
 
-			lock = read_lock(Path(tmpdir) / "drift-lock.json")
+			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
 			assert "my.app" in lock
 			app_deps = lock["my.app"]
 			# Direct co-artifact dep.

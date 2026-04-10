@@ -45,7 +45,6 @@ from lang.driftc.core.function_id import function_symbol
 from lang.language_runtime import (
 	build_runtime_archive,
 	get_runtime_sources,
-	runtime_archive_mode,
 	runtime_archive_variant,
 )
 
@@ -222,8 +221,6 @@ def _run_ir_with_clang(
 		c_flags: list[str] = []
 		link_flags: list[str] = []
 		link_wrap_flags: list[str] = []
-		runtime_archive: str | None = None
-		rt_mode = runtime_archive_mode()
 		if alloc_track_enabled:
 			c_defs.append("-DDRIFT_ALLOC_WRAP_ENABLED=1")
 			link_wrap_flags.extend(
@@ -249,59 +246,38 @@ def _run_ir_with_clang(
 		debug_style_enabled = _env_true("DRIFT_DEBUG")
 		if not debug_style_enabled:
 			c_flags.append("-O2")
-		if rt_mode == "archive":
-			try:
-				variant = runtime_archive_variant(
-					debug_style=debug_style_enabled,
-					asan_enabled=asan_enabled,
-					ubsan_enabled=ubsan_enabled,
-					alloc_track_enabled=alloc_track_enabled,
-				)
-				runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
-			except Exception as ex:
-				return 1, "", f"runtime archive build failed in archive mode: {ex}"
+		# Runtime is always linked from the pre-built variant archive.
+		# The legacy `DRIFT_RUNTIME_LINK_MODE=source` inline-compile path
+		# was removed in 0.27.179.
+		try:
+			variant = runtime_archive_variant(
+				debug_style=debug_style_enabled,
+				asan_enabled=asan_enabled,
+				ubsan_enabled=ubsan_enabled,
+				alloc_track_enabled=alloc_track_enabled,
+			)
+			runtime_archive = str(build_runtime_archive(ROOT, clang=clang, variant=variant))
+		except Exception as ex:
+			return 1, "", f"runtime archive build failed: {ex}"
 		extra_obj_args = [str(p) for p in (extra_objects or [])]
-		if rt_mode == "archive":
-			compile_cmd = [
-				clang,
-				"-pthread",
-				*c_flags,
-				"-x",
-				"ir",
-				str(ir_path),
-				"-x",
-				"none",
-				runtime_archive,
-				*extra_obj_args,
-				*link_flags,
-				*link_libs,
-				*link_wrap_flags,
-				"-Wl,--as-needed",
-				"-o",
-				str(bin_path),
-			]
-		else:
-			compile_cmd = [
-				clang,
-				"-pthread",
-				*c_flags,
-				*c_defs,
-				"-I",
-				str(runtime_include),
-				"-x",
-				"ir",
-				str(ir_path),
-				"-x",
-				"c",
-				*(str(p) for p in runtime_sources),
-				*extra_obj_args,
-				*link_flags,
-				*link_libs,
-				*link_wrap_flags,
-				"-Wl,--as-needed",
-				"-o",
-				str(bin_path),
-			]
+		compile_cmd = [
+			clang,
+			"-pthread",
+			*c_flags,
+			"-x",
+			"ir",
+			str(ir_path),
+			"-x",
+			"none",
+			runtime_archive,
+			*extra_obj_args,
+			*link_flags,
+			*link_libs,
+			*link_wrap_flags,
+			"-Wl,--as-needed",
+			"-o",
+			str(bin_path),
+		]
 		compile_res = subprocess.run(
 			compile_cmd,
 			capture_output=True,

@@ -594,7 +594,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 
 	fetch = sub.add_parser("fetch", help="Fetch packages from local sources into a project cache")
-	fetch.add_argument("--sources", type=_UserPath, required=True, help="Path to drift-sources.json")
+	fetch.add_argument("--sources", type=_UserPath, required=True, help="Path to drift/sources.json")
 	fetch.add_argument(
 		"--cache-dir",
 		type=_UserPath,
@@ -605,20 +605,20 @@ def _build_parser() -> argparse.ArgumentParser:
 	fetch.add_argument(
 		"--lock",
 		type=_UserPath,
-		default=Path("drift.lock.json"),
-		help="Lockfile path; if it exists, fetch reproduces it exactly (default: ./drift.lock.json)",
+		default=Path("drift") / "sources.lock.json",
+		help="Lockfile path; if it exists, fetch reproduces it exactly (default: ./drift/sources.lock.json)",
 	)
 	fetch.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
 
 	doctor = sub.add_parser("doctor", help="Sanity checks for sources/index/trust/lock configuration")
-	doctor.add_argument("--sources", type=_UserPath, default=Path("drift-sources.json"), help="Path to drift-sources.json")
+	doctor.add_argument("--sources", type=_UserPath, default=Path("drift") / "sources.json", help="Path to drift/sources.json")
 	doctor.add_argument(
 		"--trust-store",
 		type=_UserPath,
 		default=Path("drift") / "trust.json",
 		help="Path to trust store file (default: ./drift/trust.json)",
 	)
-	doctor.add_argument("--lock", type=_UserPath, default=Path("drift.lock.json"), help="Path to drift.lock.json")
+	doctor.add_argument("--lock", type=_UserPath, default=Path("drift") / "sources.lock.json", help="Path to drift/sources.lock.json")
 	doctor.add_argument(
 		"--cache-dir",
 		type=_UserPath,
@@ -656,8 +656,8 @@ def _build_parser() -> argparse.ArgumentParser:
 	vendor.add_argument(
 		"--lock",
 		type=_UserPath,
-		default=Path("drift.lock.json"),
-		help="Lockfile output path (default: ./drift.lock.json)",
+		default=Path("drift") / "sources.lock.json",
+		help="Lockfile output path (default: ./drift/sources.lock.json)",
 	)
 	vendor.add_argument(
 		"--package-id",
@@ -675,8 +675,8 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
-	sub.add_parser("build", help="Build Drift artifacts from drift-manifest.json (see: drift build --help)")
-	sub.add_parser("prepare", help="Resolve dependencies and write drift-lock.json (see: drift prepare --help)")
+	sub.add_parser("build", help="Build Drift artifacts from drift/manifest.json (see: drift build --help)")
+	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	return p
 

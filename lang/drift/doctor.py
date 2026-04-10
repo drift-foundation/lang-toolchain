@@ -18,9 +18,12 @@ DoctorStatus = Literal["ok", "info", "degraded", "fatal"]
 
 @dataclass(frozen=True)
 class DoctorOptions:
-	sources_path: Path = Path("drift-sources.json")
+	# Fetch sources file + its verification lockfile both live under the
+	# `drift/` namespace.  Trust store unchanged.  Distinct from the build
+	# lockfile at `drift/lock.json` (different schema, different consumer).
+	sources_path: Path = Path("drift") / "sources.json"
 	trust_store_path: Path = Path("drift") / "trust.json"
-	lock_path: Path = Path("drift.lock.json")
+	lock_path: Path = Path("drift") / "sources.lock.json"
 	cache_dir: Path = Path("cache") / "driftpm"
 	vendor_dir: Path = Path("vendor") / "driftpkgs"
 	deep: bool = False

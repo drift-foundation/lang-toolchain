@@ -108,9 +108,8 @@ just runtime-libs
 ```
 
 Notes:
-- `bin/driftc` defaults to strict runtime archive mode and expects prebuilt archives.
-- If archives are missing, compile fails with a runtime archive missing error.
-- Use `DRIFT_RUNTIME_LINK_MODE=source` only when explicitly opting into legacy source/object runtime linking.
+- `bin/driftc` always links the runtime from a pre-built variant archive.
+- If archives are missing, compile fails with a runtime archive build error.
 
 ### 1.7 Set up publishing identity (package creators)
 
@@ -153,7 +152,7 @@ export DRIFT_SIGN_KEY_FILE="$HOME/.config/drift/keys/default.seed"
 
 ## 2. Create a project manifest
 
-Every Drift project is defined by a `drift-manifest.json`. This is the single
+Every Drift project is defined by a `drift/manifest.json`. This is the single
 source of truth for artifact structure, source inputs, dependencies, and build
 configuration. Both `drift build` and `drift deploy` read it.
 
@@ -206,7 +205,7 @@ Build inputs that vary per machine (library search paths, package roots) are
 NOT stored in the manifest. They come from three sources, in precedence order:
 
 1. Environment variables (`DRIFT_PACKAGE_ROOT`, `DRIFT_NATIVE_LIB_PATH`)
-2. `drift-deploy-config.json` (colocated with manifest)
+2. `drift/deploy-config.json` (colocated with manifest)
 3. CLI flags (`--package-root`, `--native-lib-path`)
 
 All paths must be absolute.
@@ -214,7 +213,7 @@ All paths must be absolute.
 ## 3. Build artifacts with `drift build`
 
 `drift build` is the manifest-driven local build command. It reads
-`drift-manifest.json`, resolves dependencies, and invokes `driftc` with the
+`drift/manifest.json`, resolves dependencies, and invokes `driftc` with the
 correct flags.
 
 ### 3.1 Build a single artifact
@@ -222,14 +221,14 @@ correct flags.
 If the manifest has exactly one artifact, the name is optional:
 
 ```bash
-drift build --manifest drift-manifest.json --driftc $DRIFTC
+drift build --manifest drift/manifest.json --driftc $DRIFTC
 ```
 
 For multi-artifact manifests, specify which one:
 
 ```bash
-drift build acme-math --manifest drift-manifest.json --driftc $DRIFTC
-drift build acme-calc --manifest drift-manifest.json --driftc $DRIFTC
+drift build acme-math --manifest drift/manifest.json --driftc $DRIFTC
+drift build acme-calc --manifest drift/manifest.json --driftc $DRIFTC
 ```
 
 ### 3.2 Default output paths
@@ -249,7 +248,7 @@ drift build acme-math -o /tmp/acme-math.dmp --driftc $DRIFTC
 
 `drift build` does NOT own resolution. It consumes existing state:
 
-- If `drift-lock.json` exists next to the manifest, it uses the locked
+- If `drift/lock.json` exists next to the manifest, it uses the locked
   compatibility graph (direct + transitive). The lock pins major.minor
   version ranges and author keys — any compatible patch within the range
   is accepted. A stale or partial lock is an error.
@@ -279,10 +278,10 @@ The release workflow separates state preparation from publishing:
 ### 4.1 Prepare (resolve dependencies, write lock)
 
 ```bash
-drift prepare --manifest drift-manifest.json --dest ~/opt/drift/libs
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/libs
 ```
 
-This resolves all package dependencies and writes `drift-lock.json`.
+This resolves all package dependencies and writes `drift/lock.json`.
 The lock records the compatibility contract: major.minor version range
 and author signing key for each dependency. Patch updates within the
 range are accepted silently; minor/major bumps and key rotation require
@@ -290,21 +289,21 @@ re-running prepare. Review the lock, then commit it alongside your manifest.
 
 ### 4.2 Declare author profile in manifest
 
-Every publishable project must declare its author profile in `drift-manifest.json`
+Every publishable project must declare its author profile in `drift/manifest.json`
 (see section 2.1). Deploy will fail if `project.author_profile` is missing or the
 file does not exist.
 
 ### 4.3 Deploy (build, sign, smoke, publish)
 
 ```bash
-drift deploy --manifest drift-manifest.json --dest ~/opt/drift/libs --driftc driftc
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/libs --driftc driftc
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
 and publishes all artifacts plus a bound copy of the declared author profile.
 
 Deploy is read-only with respect to tracked project files — it does not
-rewrite `drift-lock.json` or other repo-managed metadata.
+rewrite `drift/lock.json` or other repo-managed metadata.
 
 Published layout for a package:
 
@@ -322,7 +321,7 @@ rewrite the tracked project profile file after commit.
 ### 4.4 Intended workflow
 
 1. `drift init` — create signing key + author profile (once per project)
-2. Create `drift-manifest.json` with `project.author_profile` set
+2. Create `drift/manifest.json` with `project.author_profile` set
 3. `drift build <artifact>` — iterate locally
 4. `drift prepare` — resolve deps, write lock
 5. Review changes, commit manifest + lock + author profile
@@ -427,11 +426,11 @@ package+author-profile binding is added by `drift deploy`.
 - Sign package: `drift sign <pkg.dmp> --key <seed>`
 
 **Project build (manifest-driven):**
-- Build artifact: `drift build <artifact> --manifest drift-manifest.json --driftc <driftc>`
+- Build artifact: `drift build <artifact> --manifest drift/manifest.json --driftc <driftc>`
 
 **Release workflow:**
-- Prepare lock: `drift prepare --manifest drift-manifest.json --dest <dest>`
-- Deploy: `drift deploy --manifest drift-manifest.json --dest <dest> --driftc <driftc>`
+- Prepare lock: `drift prepare --manifest drift/manifest.json --dest <dest>`
+- Deploy: `drift deploy --manifest drift/manifest.json --dest <dest> --driftc <driftc>`
 
 **Consumer trust:**
 - Trust an author: `drift trust <file>.author-profile`
@@ -447,10 +446,8 @@ package+author-profile binding is added by `drift deploy`.
 - Opt-out only when needed: `--skip-package-signatures`
 - `DRIFT_ASAN=1` is supported in direct `bin/driftc` compile/link mode and injects `-fsanitize=address -g`.
 - `DRIFT_MEMCHECK=1` and `DRIFT_MASSIF=1` are runner-only (execution-time) toggles; `bin/driftc` fails fast if they are set.
-- Runtime linking defaults to static archive mode (`libdrift_rt.a` variants under `build/runtime_libs/`).
-- Archive mode is strict: if archive build/link fails, `driftc` fails (no silent source fallback).
-- `driftc` does not auto-build runtime archives in archive mode; archives must already exist.
-- Set `DRIFT_RUNTIME_LINK_MODE=source` to force legacy source/object runtime linking.
+- Runtime linking is always static-archive mode (`libdrift_rt[_debug]_abi<N>.a` variants under `build/runtime_libs/`).
+- If the archive build fails, `driftc` fails with a clear error.
 - Set `DRIFT_RUNTIME_LIB_CACHE_DIR=<path>` to redirect runtime archive artifacts/locks to a caller-writable location.
 - Legacy-compatible override: `DRIFT_RUNTIME_BUILD_ROOT=<path>` writes archives under `<path>/runtime_libs/`.
 

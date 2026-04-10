@@ -66,7 +66,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert cp.returncode == 0, cp.stderr
 	assert (repo / "index.json").exists()
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -86,7 +87,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert cache_path and isinstance(cache_path, str)
 
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock_path = tmp_path / "drift.lock.json"
+	lock_path = tmp_path / "drift" / "sources.lock.json"
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(
 		[
 			"vendor",
@@ -202,7 +204,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert "lib" in index["packages"]
 
 	# Fetch into project-local cache.
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -220,7 +223,8 @@ pub fn add(a: Int, b: Int) -> Int {
 
 	# Vendor from cache and write a lockfile.
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock_path = tmp_path / "drift.lock.json"
+	lock_path = tmp_path / "drift" / "sources.lock.json"
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(
 		[
 			"vendor",
@@ -312,7 +316,8 @@ pub fn add(a: Int, b: Int) -> Int {{
 
 	# Sources are listed in the opposite order from the deterministic winner.
 	# Both have the same priority; tie-break is source_id.
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -383,7 +388,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo_b), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -440,7 +446,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -506,7 +513,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo_b), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -555,7 +563,8 @@ def test_drift_fetch_json_failure_missing_package_file(tmp_path: Path) -> None:
 		encoding="utf-8",
 	)
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -651,7 +660,8 @@ pub fn add(x: Int, y: Int) -> Int {
 	cp = _run_drift(["publish", "--dest-dir", str(repo), "--allow-unsigned", str(pkg_a), str(pkg_b)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -675,7 +685,8 @@ pub fn add(x: Int, y: Int) -> Int {
 	cache_index_path.write_text(json.dumps(cache_index), encoding="utf-8")
 
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock_path = tmp_path / "drift.lock.json"
+	lock_path = tmp_path / "drift" / "sources.lock.json"
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(
 		[
 			"vendor",
@@ -738,7 +749,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	repo = tmp_path / "repo"
 	cp = _run_drift(["publish", "--dest-dir", str(repo), "--allow-unsigned", str(pkg)])
 	assert cp.returncode == 0, cp.stderr
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -754,7 +766,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert cp.returncode == 0, cp.stderr
 
 	vendor_dir = tmp_path / "vendor" / "driftpkgs"
-	lock_path = tmp_path / "drift.lock.json"
+	lock_path = tmp_path / "drift" / "sources.lock.json"
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
 	cp = _run_drift(["vendor", "--cache-dir", str(cache), "--dest-dir", str(vendor_dir), "--lock", str(lock_path)])
 	assert cp.returncode == 0, cp.stderr
 	lock = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -819,7 +832,8 @@ pub fn add(a: Int, b: Int) -> Int {
 	data[-1] ^= 0xFF
 	repo_pkg.write_bytes(bytes(data))
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -892,7 +906,8 @@ pub fn add(a: Int, b: Int) -> Int {
 		),
 		encoding="utf-8",
 	)
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -916,7 +931,8 @@ def test_drift_fetch_rejects_malformed_index_json(tmp_path: Path) -> None:
 		json.dumps({"format": "drift-index", "version": 0, "packages": {"lib": {"filename": "x"}}}),
 		encoding="utf-8",
 	)
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -984,7 +1000,8 @@ pub fn add(a: Int, b: Int) -> Int {{
 	cp = _run_drift(["publish", "--dest-dir", str(repo_b), "--allow-unsigned", str(pkg_b)])
 	assert cp.returncode == 0, cp.stderr
 
-	sources = tmp_path / "drift-sources.json"
+	sources = tmp_path / "drift" / "sources.json"
+	sources.parent.mkdir(parents=True, exist_ok=True)
 	sources.write_text(
 		json.dumps(
 			{
@@ -1000,7 +1017,8 @@ pub fn add(a: Int, b: Int) -> Int {{
 	)
 
 	# Manually create a legacy/broken lockfile with source_id 'unknown'.
-	lock_path = tmp_path / "drift.lock.json"
+	lock_path = tmp_path / "drift" / "sources.lock.json"
+	lock_path.parent.mkdir(parents=True, exist_ok=True)
 	lock_path.write_text(
 		json.dumps(
 			{

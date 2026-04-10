@@ -235,7 +235,7 @@ class TestResolverConflict:
 
 		# Only artifact A goes into the lock — B must not appear.
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = Path(tmpdir) / "lock.json"
 			artifacts = {"app-a": result_a}
 			# B is NOT added because resolution raised.
 			write_lock(lock_path, artifacts)
@@ -309,7 +309,7 @@ class TestLockFile:
 		}
 
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = Path(tmpdir) / "lock.json"
 			write_lock(lock_path, {"app-a": deps_a, "app-b": deps_b})
 			result = read_lock(lock_path)
 
@@ -412,7 +412,7 @@ class TestLockFile:
 			}
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v1_lock))
 			with pytest.raises(ValueError, match="schema v1.*prepare"):
 				read_lock(lock_path)
@@ -430,7 +430,7 @@ class TestLockFile:
 			}
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "drift-lock.json"
+			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v2_lock))
 			with pytest.raises(ValueError, match="author_key"):
 				read_lock(lock_path)

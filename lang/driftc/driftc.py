@@ -156,7 +156,6 @@ from lang.codegen.llvm.test_utils import host_word_bits
 from lang.language_runtime import (
 	build_runtime_archive,
 	get_runtime_sources,
-	runtime_archive_mode,
 	runtime_archive_variant,
 )
 from lang.driftc.parser import parse_drift_to_hir, parse_drift_files_to_hir, parse_drift_workspace_to_hir
@@ -10590,25 +10589,28 @@ def main(argv: list[str] | None = None) -> int:
 	# modes ride on the normal lane and also get -O2 unless they are
 	# layered with DRIFT_DEBUG=1.
 	opt_flags = [] if debug_style_runtime else ["-O2"]
-	runtime_archive: str | None = None
-	rt_mode = runtime_archive_mode()
-	if rt_mode == "archive":
-		variant = runtime_archive_variant(
-			debug_style=debug_style_runtime,
-			asan_enabled=asan_enabled,
-			ubsan_enabled=ubsan_enabled,
-			alloc_track_enabled=False,
-		)
-		try:
-			archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)
-		except Exception as ex:
-			msg = f"runtime archive build failed in archive mode: {ex}"
-			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
-			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
-			return 1
-		runtime_archive = str(archive_path)
+	# Runtime is always linked from the pre-built variant archive.  The
+	# legacy `DRIFT_RUNTIME_LINK_MODE=source` inline-compile escape hatch
+	# was removed in 0.27.179: it never applied the dual-runtime variant
+	# cflags (silently bypassing the `-DDRIFT_RT_MODE_DEBUG=1` gate),
+	# its asm step (`drift_context.S`) was broken under `-x c`, and no
+	# test population exercised it.
+	variant = runtime_archive_variant(
+		debug_style=debug_style_runtime,
+		asan_enabled=asan_enabled,
+		ubsan_enabled=ubsan_enabled,
+		alloc_track_enabled=False,
+	)
+	try:
+		archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)
+	except Exception as ex:
+		msg = f"runtime archive build failed: {ex}"
+		if args.json:
+			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+		else:
+			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+		return 1
+	runtime_archive = str(archive_path)
 
 	if debug_enabled:
 		ir_obj = args.output.with_suffix(".ir.o")
@@ -10634,44 +10636,6 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
-		rt_inputs: list[str]
-		if rt_mode == "archive":
-			rt_inputs = [runtime_archive]
-		else:
-			rt_dir = args.output.parent / "runtime_objs"
-			rt_dir.mkdir(parents=True, exist_ok=True)
-			rt_objs: list[str] = []
-			for src in runtime_sources:
-				src_path = Path(src)
-				obj_path = rt_dir / (src_path.stem + ".o")
-				rt_compile_cmd = [
-					clang,
-					*linker_flags,
-					*asan_flags,
-					*ubsan_flags,
-					*opt_flags,
-					"-c",
-					"-x",
-					"c",
-					str(src_path),
-					"-g0",
-					"-I",
-					str(runtime_root),
-					"-I",
-					str(compiler_infra_root),
-					"-o",
-					str(obj_path),
-				]
-				rt_compile = subprocess.run(rt_compile_cmd, capture_output=True, text=True, cwd=ROOT)
-				if rt_compile.returncode != 0:
-					msg = f"clang failed: {rt_compile.stderr.strip()}"
-					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
-					else:
-						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
-					return 1
-				rt_objs.append(str(obj_path))
-			rt_inputs = rt_objs
 		link_cmd = [
 			clang,
 			*linker_flags,
@@ -10679,7 +10643,7 @@ def main(argv: list[str] | None = None) -> int:
 			*ubsan_flags,
 			*opt_flags,
 			str(ir_obj),
-			*rt_inputs,
+			runtime_archive,
 			*link_libs,
 			*gdb_index_flag,
 			"-Wl,--as-needed",
@@ -10687,46 +10651,23 @@ def main(argv: list[str] | None = None) -> int:
 			str(args.output),
 		]
 	else:
-		if rt_mode == "archive":
-			link_cmd = [
-				clang,
-				*linker_flags,
-				*asan_flags,
-				*ubsan_flags,
-				*opt_flags,
-				"-x",
-				"ir",
-				str(ir_path),
-				"-x",
-				"none",
-				runtime_archive,
-				*link_libs,
-				"-Wl,--as-needed",
-				"-o",
-				str(args.output),
-			]
-		else:
-			link_cmd = [
-				clang,
-				*linker_flags,
-				*asan_flags,
-				*ubsan_flags,
-				*opt_flags,
-				"-x",
-				"ir",
-				str(ir_path),
-				"-x",
-				"c",
-				"-I",
-				str(runtime_root),
-				"-I",
-				str(compiler_infra_root),
-				*runtime_sources,
-				*link_libs,
-				"-Wl,--as-needed",
-				"-o",
-				str(args.output),
-			]
+		link_cmd = [
+			clang,
+			*linker_flags,
+			*asan_flags,
+			*ubsan_flags,
+			*opt_flags,
+			"-x",
+			"ir",
+			str(ir_path),
+			"-x",
+			"none",
+			runtime_archive,
+			*link_libs,
+			"-Wl,--as-needed",
+			"-o",
+			str(args.output),
+		]
 	for obj in getattr(args, 'link_obj', []):
 		link_cmd.append(obj)
 	for search_path in getattr(args, 'link_search', []):

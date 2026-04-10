@@ -242,19 +242,11 @@ def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 	return archive_path
 
 
-def runtime_archive_mode() -> str:
-	mode = (os.environ.get("DRIFT_RUNTIME_LINK_MODE") or "archive").strip().lower()
-	if mode not in {"archive", "source"}:
-		return "archive"
-	return mode
-
-
 __all__ = [
 	"build_runtime_archive",
 	"get_runtime_include_dirs",
 	"get_runtime_sources",
 	"runtime_archive_cache_root",
 	"runtime_archive_path",
-	"runtime_archive_mode",
 	"runtime_archive_variant",
 ]

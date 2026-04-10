@@ -1,3 +1,61 @@
+## 2026-04-09 - 0.27.179: project metadata layout — drift/ namespace; hard cut, no fallback
+- **Defect**: drift app repos had three drift-owned metadata files in two naming conventions plus a one-file orphan directory: `drift-manifest.json` (root, `drift-` prefix), `drift-lock.json` (root, `drift-` prefix), `drift-deploy-config.json` (root, `drift-` prefix), and `drift/trust.json` (subdir, no prefix). Every reader had to learn the inconsistency.
+- **Resolution**: Option B — every drift-owned metadata file moves under the `drift/` namespace, hard cut, no fallback paths, no migration subcommand. bookkeeper is the only downstream user; one-PR rename on the app side.
+- **Target layout** (post-rename):
+  - `drift/manifest.json`        (was `drift-manifest.json`)
+  - `drift/lock.json`            (was `drift-lock.json`)
+  - `drift/trust.json`           (unchanged)
+  - `drift/deploy-config.json`   (was `drift-deploy-config.json`)
+- **Path resolution rule** (`tools/drift_deploy/build_cmd.py:project_root_for`):
+  - The manifest's containing directory is `drift/`.
+  - Sibling-of-manifest paths (`lock.json`, `deploy-config.json`) are resolved against the manifest dir (`<repo>/drift/`).
+  - Source paths (`entry_module`, `modules`), asset paths, and the build output directory are resolved against the **project root** = parent of the manifest dir when the manifest dir is named `drift`. Users write `entry_module: "src/lib.drift"` and it points at `<repo>/src/lib.drift`, not `<repo>/drift/src/lib.drift`.
+  - Edge case: if `--manifest /tmp/foo.json` is passed (manifest dir not named `drift`), project_root collapses to the manifest dir itself, so the legacy "sources next to manifest" interpretation still works for non-standard locations.
+- **Production code changes**:
+  - `tools/drift_deploy/drift_build.py`: `--manifest` default → `Path("drift") / "manifest.json"`; lock resolution → `manifest_dir / "lock.json"`; `_load_deploy_config` reads `manifest_dir / "deploy-config.json"`; build_dir uses `project_root / "build"`.
+  - `tools/drift_deploy/drift_deploy.py`: same `--manifest` default; lock resolution updated; asset path resolution uses `project_root` instead of `manifest_dir`.
+  - `tools/drift_deploy/drift_prepare.py`: same `--manifest` default; lock write uses `manifest_dir / "lock.json"`.
+  - `tools/drift_deploy/build_cmd.py`: new `project_root_for(manifest_dir)` helper; `build_source_args` now resolves source paths via `project_root`.
+  - `tools/drift_deploy/manifest.py`, `lockfile.py`: docstrings updated.
+  - `lang/drift/cli.py`: subcommand help text updated.
+  - `tools/deploy/steps/bundle.py`: deployed README updated.
+  - `bin/driftc`: `drift/trust.json` resolution unchanged (this file's location is unchanged by the rename).
+- **Test fixture rewrites**:
+  - `tools/drift_deploy/test_build.py`: `_write_manifest` and `_write_lock` helpers now create `tmp_path/drift/`. Two new helpers `_write_e2e_manifest(parent, manifest)` and `_write_e2e_lock(parent, lock)` collapse the multi-line write_text boilerplate in TestE2E. ~70 path-construction sites swept via replace_all.
+  - `tools/drift_deploy/test_deploy.py`: new `_drift_subdir(tmpdir)` helper. ~23 path sites updated. `TestNativeLibPaths` tests pass `drift_dir` instead of `tmpdir` as the manifest_dir arg to `_resolve_native_lib_paths` so the helper finds the staged config.
+  - `tools/drift_deploy/test_prepare.py`: same `_drift_subdir(tmpdir)` helper. ~18 sites updated.
+  - `tools/drift_deploy/test_manifest.py`: `_write_manifest` helper updated to create `drift/` subdir.
+  - `tools/drift_deploy/test_resolver.py`: lock paths simplified to `tmpdir/lock.json` (these tests are testing resolver logic, not layout convention).
+  - `lang/tests/driver/test_runtime_selection_sentinel.py`: staged-toolchain consumer fixture updated.
+- **Regression coverage** (`tools/drift_deploy/test_build.py`):
+  - new `test_default_manifest_path_is_drift_subdir`: drift build with no `--manifest` finds `drift/manifest.json` in cwd
+  - new `test_legacy_root_manifest_is_not_found`: drift build with only the legacy `drift-manifest.json` at root fails with "manifest not found", proving there is no fallback
+- **Validation**:
+  - 302 tests pass across `tools/drift_deploy/`, `tools/deploy/`, and the impacted lang/tests/driver suites
+  - lane audit verdict still `PASS` for both lanes
+  - both new layout regressions green
+  - the convergence_parity check, manifest schema regression, sentinel selection regression, and dual-runtime contract from earlier workstreams all unchanged
+- **No ABI bump**: this changes file layout and CLI defaults, not the compiler/runtime boundary shape or the exported runtime API surface.
+- **Out of scope**: bookkeeper-side `git mv` migration (separate one-PR follow-up in pushcoin/bookkeeper). No `drift migrate-layout` subcommand. No deprecation window. No fallback paths.
+- **Follow-up under 0.27.179**: fetch/vendor/doctor metadata namespace (initial 0.27.179 missed `drift.lock.json` (dotted) and `drift-sources.json` because the original surface sweep was scoped to `drift-lock.json` only).
+  - Renames:
+    - `drift-sources.json` → `drift/sources.json`
+    - `drift.lock.json` → `drift/sources.lock.json` (paired with `sources.json`, named to make the npm-style input/lockfile pairing visible and to avoid collision with the build lockfile at `drift/lock.json`, which is a distinct schema and consumer)
+  - These two files belong to a separate subsystem from the build lockfile: they are fetch-time artifacts written by `drift fetch` and consumed by `drift doctor`/`vendor`, with schema `format: "drift-lock", version: 0` (as opposed to the build lockfile's `schema_version: 2`, artifact-keyed schema).
+  - Production code touched (only `lang/drift/`, no signing/provenance paths and no `tools/drift_deploy/` consumers):
+    - `lang/drift/fetch.py`: `FetchOptions.lock_path` default
+    - `lang/drift/vendor.py`: `VendorOptions.lock_path` default
+    - `lang/drift/doctor.py`: `DoctorOptions.sources_path` and `lock_path` defaults
+    - `lang/drift/cli.py`: `drift fetch`/`doctor`/`vendor` subcommand argparse defaults + help text
+  - Test code touched: `lang/tests/driver/test_drift_doctor.py`, `lang/tests/driver/test_drift_publish_fetch_vendor.py` (~28 path-construction sites + parent-mkdir injection at write sites)
+  - Docs/TODO: `TODO.md` (corrected reference to build lockfile name), `docs/design/drift-tooling-and-packages.md`, `dist/README.md`
+  - Guardrails verified for this follow-up:
+    - signing/provenance code paths untouched (fetch/vendor/doctor reference signature *metadata* on lockfile entries as readers, not as modifiers; no edits to sign.py/keygen.py/author_profile.py/trust.py/envelope.py/crypto.py)
+    - `drift/manifest.json` consumers not modified (`tools/drift_deploy/build_cmd.py`, `drift_build.py`, `drift_deploy.py`, `drift_prepare.py`, `manifest.py` are byte-identical to the 0.27.179 state; `project_root_for` contract, asset resolution, and author-profile resolution all unchanged)
+    - existing build/deploy/sign tests stay green (302 tests in `tools/drift_deploy/` and `tools/deploy/`)
+    - fetch/vendor/doctor tests go green with the new defaults (18/18 in `test_drift_doctor.py` + `test_drift_publish_fetch_vendor.py`)
+  - Same patchset under 0.27.179 (no separate version bump): same workstream, same hard-cut + no-fallback contract, same defect family.
+
 ## 2026-04-08 - 0.27.178: normal-lane runtime no longer leaks libdw / libunwind / libelf into produced binaries
 - **Defect**: normal-lane apps were unconditionally pulling `libdw.so.1`, `libunwind.so.8`, `libunwind-x86_64.so.8`, and `libelf.so.1` (plus their compression-dep transitive closure: `libz`, `libzstd`, `liblzma`, `libbz2`) into their `DT_NEEDED` set. The lanes were code-emission-distinct (binary-size delta proved that) but the link-time dependency closure was identical. Production hosts running the "production-equivalent" normal lane therefore had to install backtrace/symbolization libraries that the lane contract said they would not need.
 - **Two compounding causes** (both fixed):

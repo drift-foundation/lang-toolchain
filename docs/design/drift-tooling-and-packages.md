@@ -4,7 +4,7 @@ This document describes the **Drift toolchain surface** and the machinery behind
 - project and target configuration
 - builds and outputs
 - package acquisition, caching, and vendoring
-- repositories and discovery (including `drift-sources.json`)
+- repositories and discovery (including `drift/sources.json`)
 - trust model defaults (TOFU + reserved namespaces)
 
 It is intentionally *hybrid*: part specification, part operational contract.
@@ -68,7 +68,7 @@ Pinned defaults (MVP):
 - Resolving dependency graphs and versions
 - Writing/updating the lockfile
 - Producing vendor snapshots for CI/offline use
-- Repository discovery configuration (`drift-sources.json`)
+- Repository discovery configuration (`drift/sources.json`)
 - Publisher tooling: building and signing repository indexes
 
 ### 2.4 Trust model for early adopters
@@ -475,14 +475,14 @@ A repository is represented by a signed, static **index snapshot** (`drift-index
 
 Packages themselves may be hosted anywhere; the index is metadata only.
 
-### 14.2 Repository directory (index-of-indexes): `drift-sources.json`
-Discovery at ecosystem scale uses **`drift-sources.json`**, a directory of repository indexes.
+### 14.2 Repository directory (index-of-indexes): `drift/sources.json`
+Discovery at ecosystem scale uses **`drift/sources.json`**, a directory of repository indexes.
 This is the canonical, toolchain-recognized name for the index-of-indexes.
 
 ### 14.3 First-run discovery behavior (no implicit centralization)
 If the user runs a discovery command (e.g. `drift search <keywords>`) and no sources are configured:
 - `drift` reports “no discovery sources configured”
-- `drift` **suggests** an optional community `drift-sources.json` URL
+- `drift` **suggests** an optional community `drift/sources.json` URL
 - nothing is added unless the user opts in
 - users may override sources to anything they want
 
@@ -531,7 +531,7 @@ Drift’s tooling model:
 - Keeps package acquisition and discovery in a separate tool (`drift`)
 - Enables community publishing via signed artifacts + signed repository indexes
 - Avoids Maven-style “publish before use” pain via project-local `localpkgs`
-- Avoids mandatory centralization via opt-in `drift-sources.json` discovery
+- Avoids mandatory centralization via opt-in `drift/sources.json` discovery
 
 
 ---
@@ -658,9 +658,7 @@ Rules:
 - Direct `bin/driftc` mode:
   - supports `DRIFT_ASAN=1` for compile/link sanitization.
   - rejects `DRIFT_MEMCHECK=1` / `DRIFT_MASSIF=1` with actionable error (runner-only execution toggles).
-  - defaults to runtime static-archive linking (`build/runtime_libs/<variant>/libdrift_rt.a`).
-  - archive mode is strict (no silent fallback); use `DRIFT_RUNTIME_LINK_MODE=source` only when explicitly opting into source/object runtime linking.
-  - archive mode is consume-only in `driftc` (no implicit runtime archive build during compile).
+  - always links the runtime as a static archive (`build/runtime_libs/<variant>/libdrift_rt[_debug]_abi<N>.a`); the legacy `DRIFT_RUNTIME_LINK_MODE=source` inline-compile path was removed in 0.27.179.
   - cache/output location is configurable via `DRIFT_RUNTIME_LIB_CACHE_DIR` (or `DRIFT_RUNTIME_BUILD_ROOT`, which maps to `<root>/runtime_libs`).
 - `drift` must refuse to install incompatible packages.
 - `driftc` must refuse to build if an incompatible package is in the closure.

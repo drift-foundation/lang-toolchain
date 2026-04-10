@@ -2,9 +2,18 @@
 """
 drift build — manifest-driven local artifact builds.
 
-Reads drift-manifest.json, resolves dependencies from the lockfile,
+Reads drift/manifest.json, resolves dependencies from the lockfile,
 and invokes driftc with the correct flags.  Does NOT own resolution —
-consumes existing drift-lock.json written by ``drift prepare``.
+consumes existing drift/lock.json written by ``drift prepare``.
+
+On-disk layout (post-rename, hard cut — no legacy fallback):
+
+  drift/manifest.json       (the project manifest; was drift-manifest.json)
+  drift/lock.json           (resolved dep lock; was drift-lock.json)
+  drift/trust.json          (trust store; unchanged location)
+  drift/deploy-config.json  (per-machine resolver hints; was drift-deploy-config.json)
+
+All four drift-owned metadata files now live under the `drift/` namespace.
 """
 
 from __future__ import annotations
@@ -75,12 +84,12 @@ def _is_exact_version(version: str) -> bool:
 def build_arg_parser() -> argparse.ArgumentParser:
 	p = argparse.ArgumentParser(
 		prog="drift build",
-		description="Build Drift artifacts from drift-manifest.json.",
+		description="Build Drift artifacts from drift/manifest.json.",
 	)
 	p.add_argument("artifact_name", nargs="?", default=None,
 		help="Artifact to build (optional if manifest has exactly one artifact)")
-	p.add_argument("--manifest", "-m", type=UserPath, default=Path("drift-manifest.json"),
-		help="Path to drift-manifest.json (default: ./drift-manifest.json)")
+	p.add_argument("--manifest", "-m", type=UserPath, default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (default: ./drift/manifest.json)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
 		help="Library root for resolving package deps (repeatable)")
 	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
@@ -108,8 +117,8 @@ def _resolve_driftc(driftc_arg: Path | None) -> Path:
 
 
 def _load_deploy_config(manifest_dir: Path) -> dict:
-	"""Load and validate drift-deploy-config.json from manifest directory."""
-	config_path = manifest_dir / "drift-deploy-config.json"
+	"""Load and validate drift/deploy-config.json from manifest directory."""
+	config_path = manifest_dir / "deploy-config.json"
 	if not config_path.exists():
 		return {}
 	try:
@@ -130,7 +139,7 @@ def _resolve_package_roots(
 
 	Precedence (lowest to highest):
 	  1. $DRIFT_PACKAGE_ROOT (colon-separated)
-	  2. drift-deploy-config.json "package_roots"
+	  2. drift/deploy-config.json "package_roots"
 	  3. --package-root CLI flags
 
 	All paths must be absolute — relative paths are ambiguous because
@@ -154,7 +163,7 @@ def _resolve_package_roots(
 
 	# 2. Config file.
 	config = _load_deploy_config(manifest_dir)
-	config_path = manifest_dir / "drift-deploy-config.json"
+	config_path = manifest_dir / "deploy-config.json"
 	if config:
 		raw_roots = config.get("package_roots", [])
 		if not isinstance(raw_roots, list):
@@ -210,7 +219,7 @@ def _resolve_native_lib_paths(
 
 	# 2. Config file.
 	config = _load_deploy_config(manifest_dir)
-	config_path = manifest_dir / "drift-deploy-config.json"
+	config_path = manifest_dir / "deploy-config.json"
 	if config:
 		raw_paths = config.get("native_lib_paths", [])
 		if not isinstance(raw_paths, list):
@@ -278,7 +287,7 @@ def _resolve_deps(
 	if not art.package_deps:
 		return {}
 
-	lock_path = manifest_dir / "drift-lock.json"
+	lock_path = manifest_dir / "lock.json"
 
 	if lock_path.exists():
 		try:
@@ -399,6 +408,14 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Load manifest.
 	manifest = load_manifest(args.manifest)
 	manifest_dir = args.manifest.resolve().parent
+	# Project root: parent of manifest_dir when the manifest lives at
+	# `<root>/drift/manifest.json` (the canonical post-rename layout); else
+	# the manifest dir itself (legacy or non-standard).  See
+	# build_cmd.project_root_for() for the resolution rule.  Source paths,
+	# build output, and asset paths are all project-root-relative; lock
+	# and deploy-config are sibling-of-manifest (manifest_dir-relative).
+	from tools.drift_deploy.build_cmd import project_root_for
+	project_root = project_root_for(manifest_dir)
 
 	# Select artifact.
 	art = _resolve_artifact(manifest, args.artifact_name)
@@ -422,8 +439,9 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# own.  No alias for the retired DRIFT_OPTIMIZED / --optimized.
 	debug_style_build = args.debug or _env_true("DRIFT_DEBUG")
 
-	# Output path.
-	build_dir = manifest_dir / "build"
+	# Output path.  Build artifacts go under <project_root>/build, not
+	# inside the drift/ subdirectory.
+	build_dir = project_root / "build"
 	if args.output:
 		output_path = args.output
 	else:
