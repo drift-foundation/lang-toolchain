@@ -1,3 +1,18 @@
+## 2026-04-10 - 0.27.180: same package_id@version across multiple --package-root dirs now deduplicates deterministically
+- **Defect**: `driftc` failed with `duplicate package id '…' in build from different artifacts` when the same `package_id@version@target` appeared in more than one `--package-root` directory with different artifact bytes. This broke consumer-test harnesses that intentionally layer a freshly staged local package root over a broader certified package root containing external dependencies plus previously installed copies of the same package version.
+- **Root cause** (`lang/driftc/driftc.py`): after package discovery and identity-field validation, the dedup pass compared package SHA-256 bytes for duplicate `package_id`s. If version and target matched but bytes differed, the compiler hard-failed instead of selecting one copy deterministically.
+- **Fix**:
+  - removed the SHA-based rejection gate from the duplicate-package-id pass
+  - same `package_id@version@target` across multiple package roots now deduplicates deterministically by package discovery order
+  - package discovery order is path-sorted, so selection is deterministic and independent of `--package-root` CLI ordering
+  - genuine identity conflicts remain hard errors: different version or target for the same `package_id` still fails with a diagnostic naming both conflicting identities
+- **Regression coverage** (`lang/tests/driver/test_driftc_package_v0.py`):
+  - new `test_same_package_version_across_multiple_roots_deduplicates`: two roots contain `web-client@0.2.0` with different artifact bytes; consumer compile now succeeds
+  - strengthened positive regression to pin deterministic selection by making the two copies observably different in emitted IR (`42` vs `99`) and asserting exactly one copy is selected
+  - new `test_different_target_across_multiple_roots_errors`: same package id/version but different targets across roots remains a hard error
+  - new `test_different_target_across_roots_reports_conflict`: verifies the diagnostic names both targets and comes from the dedup conflict path rather than an earlier CLI validation gate
+- **No ABI bump**: this changes package-root duplicate handling only; no compiler/runtime boundary shape changed.
+
 ## 2026-04-09 - 0.27.179: project metadata layout — drift/ namespace; hard cut, no fallback
 - **Defect**: drift app repos had three drift-owned metadata files in two naming conventions plus a one-file orphan directory: `drift-manifest.json` (root, `drift-` prefix), `drift-lock.json` (root, `drift-` prefix), `drift-deploy-config.json` (root, `drift-` prefix), and `drift/trust.json` (subdir, no prefix). Every reader had to learn the inconsistency.
 - **Resolution**: Option B — every drift-owned metadata file moves under the `drift/` namespace, hard cut, no fallback paths, no migration subcommand. bookkeeper is the only downstream user; one-PR rename on the app side.

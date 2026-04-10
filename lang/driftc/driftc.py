@@ -7340,8 +7340,12 @@ def main(argv: list[str] | None = None) -> int:
 				return 1
 
 		# Enforce "single version per package id per build" and deduplicate
-		# same-content packages discovered from multiple --package-root dirs.
-		pkg_id_map: dict[str, tuple[str, str, str, Path]] = {}  # package_id -> (version, target, sha256, path)
+		# same-version packages discovered from multiple --package-root dirs.
+		# When the same package_id@version@target appears in more than one
+		# root, one copy is kept and the rest are dropped.  Selection order
+		# is determined by discover_package_files (globally sorted by path),
+		# not by --package-root CLI order.
+		pkg_id_map: dict[str, tuple[str, str]] = {}  # package_id -> (version, target)
 		_deduped_pkgs: list = []
 		for pkg in loaded_pkgs:
 			man = pkg.manifest
@@ -7355,13 +7359,12 @@ def main(argv: list[str] | None = None) -> int:
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
-			pkg_sha = sha256_hex(pkg.path.read_bytes())
 			prev = pkg_id_map.get(pkg_id)
 			if prev is None:
-				pkg_id_map[pkg_id] = (pkg_ver, pkg_target, pkg_sha, pkg.path)
+				pkg_id_map[pkg_id] = (pkg_ver, pkg_target)
 				_deduped_pkgs.append(pkg)
 				continue
-			prev_ver, prev_target, prev_sha, prev_path = prev
+			prev_ver, prev_target = prev
 			if pkg_ver != prev_ver or pkg_target != prev_target:
 				msg = (
 					f"multiple versions/targets for package id '{pkg_id}' in build: "
@@ -7372,15 +7375,9 @@ def main(argv: list[str] | None = None) -> int:
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
-			if pkg_sha != prev_sha and pkg.path != prev_path:
-				msg = f"duplicate package id '{pkg_id}' in build from different artifacts"
-				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-				else:
-					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-				return 1
-			# Same package_id, version, and content from a different path
-			# (e.g. multiple --package-root dirs containing the same artifact).
+			# Same package_id, version, and target from a different path
+			# (e.g. multiple --package-root dirs containing the same artifact,
+			# or a freshly-staged copy alongside a certified release layout).
 			# Keep the first copy, skip the duplicate.
 		loaded_pkgs = _deduped_pkgs
 

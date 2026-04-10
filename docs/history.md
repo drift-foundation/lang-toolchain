@@ -1,5 +1,41 @@
 # Drift development history
 
+## 2026-04-10
+- **Same `package_id@version` across multiple package roots now deduplicates deterministically
+  (0.27.180, ABI 8)**:
+  `driftc` previously failed with `duplicate package id '…' in build
+  from different artifacts` when the same
+  `package_id@version@target` appeared in more than one
+  `--package-root` directory with different artifact bytes. This
+  broke layered package-root layouts where a fresh staging root and a
+  broader certified package root both exposed the same package
+  version.
+  - Root cause:
+    - the duplicate-package pass in `lang/driftc/driftc.py`
+      compared SHA-256 bytes after confirming package id, version,
+      and target; different bytes caused a hard failure even when
+      the package identity was otherwise identical
+  - Fix:
+    - remove the SHA-based rejection gate
+    - same `package_id@version@target` now deduplicates by package
+      discovery order
+    - discovery order is path-sorted, so selection is deterministic
+      and independent of `--package-root` CLI order
+    - genuine identity conflicts still fail: different version or
+      target for the same package id remains a hard error
+  - Regression coverage in `test_driftc_package_v0.py`:
+    - same package/version across two roots with different bytes now
+      compiles successfully
+    - positive regression also pins deterministic selection by
+      making the two copies emit different constants and asserting
+      only one is selected
+    - same package/version with different targets across roots still
+      errors
+    - conflict diagnostic regression verifies both targets appear in
+      stderr, proving the intended dedup conflict path fires
+  - No ABI bump: package-root duplicate handling changed, but no
+    compiler/runtime boundary shape changed.
+
 ## 2026-04-09
 - **Project metadata layout — `drift/` namespace
   (0.27.179, ABI 8)**:

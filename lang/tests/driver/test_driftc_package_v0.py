@@ -5328,3 +5328,282 @@ def test_dep_allowlist_malformed_unrelated_package_ignored(tmp_path: Path) -> No
 		"the build when not listed in --dep"
 	)
 	assert ir_out.exists()
+
+
+@pytest.mark.heavy
+def test_same_package_version_across_multiple_roots_deduplicates(tmp_path: Path) -> None:
+	"""Same package_id@version@target in two --package-root dirs should
+	deduplicate (first root wins) instead of erroring.
+
+	Regression: driftc compared artifact SHA-256 and rejected same-version
+	packages with different bytes as 'duplicate package id … from different
+	artifacts'.  This happens in certified release layouts where the staging
+	root contains a freshly-built copy and the system package root contains
+	a previously installed copy of the same version.
+
+	This test also verifies deterministic selection: the two copies export
+	observably different constants (42 vs 99).  Because discovery sorts
+	all artifacts by path, and "certified" sorts before "staging", the
+	certified copy (99) is kept.  The IR must contain 99 and not 42,
+	pinning that exactly one copy was selected deterministically.
+	"""
+	# Root A (staging): web-client 0.2.0, add returns a + b + 42.
+	staging = tmp_path / "staging"
+	staging.mkdir(parents=True, exist_ok=True)
+	src_a = tmp_path / "src_a"
+	_write_file(
+		src_a / "web" / "client" / "cookie.drift",
+		"module web.client.cookie;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b + 42;\n}\n",
+	)
+	rc = driftc_main([
+		"-M", str(src_a),
+		str(src_a / "web" / "client" / "cookie.drift"),
+		"--package-id", "web-client",
+		"--package-version", "0.2.0",
+		"--package-target", "test-target",
+		"--emit-package", str(staging / "web_client.dmp"),
+	])
+	assert rc == 0, "emit-package for web-client@0.2.0 (staging) should succeed"
+
+	# Root B (certified): DIFFERENT build of web-client 0.2.0 returning
+	# a + b + 99 — observably different constant in emitted IR.
+	# Also contains the external dep net.tls.
+	certified = tmp_path / "certified"
+	certified.mkdir(parents=True, exist_ok=True)
+	src_b = tmp_path / "src_b"
+	_write_file(
+		src_b / "web" / "client" / "cookie.drift",
+		"module web.client.cookie;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b + 99;\n}\n",
+	)
+	rc = driftc_main([
+		"-M", str(src_b),
+		str(src_b / "web" / "client" / "cookie.drift"),
+		"--package-id", "web-client",
+		"--package-version", "0.2.0",
+		"--package-target", "test-target",
+		"--emit-package", str(certified / "web_client.dmp"),
+	])
+	assert rc == 0, "emit-package for web-client@0.2.0 (certified) should succeed"
+	src_dep = tmp_path / "src_dep"
+	_emit_versioned_pkg(
+		src_dep, certified / "net_tls.dmp",
+		module_id="net.tls", version="0.3.3",
+	)
+
+	# Verify the two web-client artifacts differ in bytes.
+	assert (staging / "web_client.dmp").read_bytes() != (certified / "web_client.dmp").read_bytes(), \
+		"test setup: the two web-client builds must differ in bytes"
+
+	# Consumer that depends on both web-client and net.tls.
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport web.client.cookie as cookie;\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn cookie.add(1, tls.add(2, 3));\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(staging),
+			"--package-root",
+			str(certified),
+			"--allow-unsigned-from",
+			str(staging),
+			"--allow-unsigned-from",
+			str(certified),
+			"--dep",
+			"web-client@0.2.0",
+			"--dep",
+			"net.tls@0.3.3",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 0, (
+		"same package_id@version across two --package-root dirs "
+		"should deduplicate (first root wins), not error"
+	)
+	assert ir_out.exists()
+
+	# Verify deterministic selection: discovery sorts by path, so
+	# "certified/web_client.dmp" sorts before "staging/web_client.dmp".
+	# The certified copy uses constant 99; the staging copy uses 42.
+	ir_text = ir_out.read_text(encoding="utf-8")
+	assert "99" in ir_text, (
+		"deterministic dedup: IR should contain constant 99 from the "
+		"certified root (sorts first by path)"
+	)
+	# Confirm the other constant is NOT present, proving only one copy
+	# was loaded (not merged or duplicated).
+	# Note: search for the literal "add i64 0, 42" to avoid false
+	# matches against unrelated byte sequences in the compiler build
+	# stamp.
+	assert "add i64 0, 42" not in ir_text, (
+		"staging root constant 42 must not appear — only the "
+		"deterministically selected copy should be emitted"
+	)
+
+
+@pytest.mark.heavy
+def test_different_target_across_multiple_roots_errors(tmp_path: Path) -> None:
+	"""Same package_id@version but different target across two roots is a
+	real error and must be reported with the conflicting versions/targets.
+
+	This exercises the dedup version/target mismatch path in the package
+	loader — the --dep parser cannot catch this since the conflict is
+	between artifact metadata, not CLI arguments.
+	"""
+	root_a = tmp_path / "root_a"
+	root_b = tmp_path / "root_b"
+
+	# Build net.tls 0.3.0 with target "linux-x86_64" in root A.
+	src_a = tmp_path / "src_a"
+	module_dir_a = src_a / "net" / "tls"
+	_write_file(
+		module_dir_a / "lib.drift",
+		"module net.tls;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	root_a.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main(
+		[
+			"-M",
+			str(src_a),
+			str(module_dir_a / "lib.drift"),
+			"--package-id",
+			"net.tls",
+			"--package-version",
+			"0.3.0",
+			"--package-target",
+			"linux-x86_64",
+			"--emit-package",
+			str(root_a / "tls.dmp"),
+		]
+	)
+	assert rc == 0, "emit-package for net.tls@0.3.0 (linux-x86_64) should succeed"
+
+	# Build net.tls 0.3.0 with target "linux-aarch64" in root B.
+	src_b = tmp_path / "src_b"
+	module_dir_b = src_b / "net" / "tls"
+	_write_file(
+		module_dir_b / "lib.drift",
+		"module net.tls;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	root_b.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main(
+		[
+			"-M",
+			str(src_b),
+			str(module_dir_b / "lib.drift"),
+			"--package-id",
+			"net.tls",
+			"--package-version",
+			"0.3.0",
+			"--package-target",
+			"linux-aarch64",
+			"--emit-package",
+			str(root_b / "tls.dmp"),
+		]
+	)
+	assert rc == 0, "emit-package for net.tls@0.3.0 (linux-aarch64) should succeed"
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(root_a),
+			"--package-root",
+			str(root_b),
+			"--allow-unsigned-from",
+			str(root_a),
+			"--allow-unsigned-from",
+			str(root_b),
+			"--dep",
+			"net.tls@0.3.0",
+			"--json",
+			"--emit-ir",
+			str(ir_out),
+		]
+	)
+	assert rc == 1, (
+		"same package_id@version with different targets across roots "
+		"should be a hard error"
+	)
+
+
+@pytest.mark.heavy
+def test_different_target_across_roots_reports_conflict(tmp_path: Path, capsys) -> None:
+	"""Verify the target-mismatch error message names both targets,
+	proving the dedup version/target check (not some earlier gate) fires."""
+	root_a = tmp_path / "root_a"
+	root_b = tmp_path / "root_b"
+
+	src_a = tmp_path / "src_a"
+	module_dir_a = src_a / "net" / "tls"
+	_write_file(
+		module_dir_a / "lib.drift",
+		"module net.tls;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	root_a.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"-M", str(src_a), str(module_dir_a / "lib.drift"),
+		"--package-id", "net.tls",
+		"--package-version", "0.3.0",
+		"--package-target", "linux-x86_64",
+		"--emit-package", str(root_a / "tls.dmp"),
+	])
+	assert rc == 0
+
+	src_b = tmp_path / "src_b"
+	module_dir_b = src_b / "net" / "tls"
+	_write_file(
+		module_dir_b / "lib.drift",
+		"module net.tls;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	root_b.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"-M", str(src_b), str(module_dir_b / "lib.drift"),
+		"--package-id", "net.tls",
+		"--package-version", "0.3.0",
+		"--package-target", "linux-aarch64",
+		"--emit-package", str(root_b / "tls.dmp"),
+	])
+	assert rc == 0
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	ir_out = tmp_path / "out.ll"
+	rc = driftc_main([
+		"-M", str(consumer_src), str(consumer_src / "main.drift"),
+		"--package-root", str(root_a),
+		"--package-root", str(root_b),
+		"--allow-unsigned-from", str(root_a),
+		"--allow-unsigned-from", str(root_b),
+		"--dep", "net.tls@0.3.0",
+		"--emit-ir", str(ir_out),
+	])
+	assert rc == 1
+	captured = capsys.readouterr()
+	assert "linux-x86_64" in captured.err, (
+		"error message should name the first target"
+	)
+	assert "linux-aarch64" in captured.err, (
+		"error message should name the conflicting target"
+	)
+	assert "multiple versions/targets" in captured.err, (
+		"error should come from the dedup version/target check, "
+		"not from an earlier validation gate"
+	)
