@@ -1,0 +1,4 @@
+* Copy colors and syntax dir content to your ~/.vim/
+* Add to .vimrc:
+
+autocmd BufRead,BufNewFile *.drift set filetype=drift
