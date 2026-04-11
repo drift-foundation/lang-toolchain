@@ -5104,6 +5104,7 @@ def _emit_versioned_multi_module_pkg(
 	return pkg_out
 
 
+@pytest.mark.heavy
 def test_dep_allowlist_ignores_unrelated_packages(tmp_path: Path) -> None:
 	"""--dep should be an allowlist: only listed packages are loaded from
 	--package-root.  Unrelated packages in the same root must be ignored.
@@ -5221,6 +5222,7 @@ def test_dep_allowlist_self_package_with_package_id(tmp_path: Path) -> None:
 	)
 
 
+@pytest.mark.heavy
 def test_dep_allowlist_multi_version_still_pins(tmp_path: Path) -> None:
 	"""When --dep is present, multi-version packages for a requested dep
 	still require exact version selection."""
