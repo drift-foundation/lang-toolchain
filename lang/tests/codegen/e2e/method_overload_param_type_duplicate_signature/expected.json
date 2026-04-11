@@ -2,5 +2,6 @@
   "description": "Negative: two methods with truly identical signatures (same name, same self_mode, same parameter types) are still rejected by the registry as duplicates. The overload-by-parameter-type fix only relaxes the case where signatures differ.",
   "diagnostics": [
     { "message_contains": "duplicate" }
-  ]
+  ],
+  "exit_code": 1
 }

@@ -2,5 +2,6 @@
   "description": "Negative: when two overloads exist but neither matches the call's argument types, the diagnostic is 'no matching overload' (not the prior false 'ambiguous method' false positive that the param-type filter fix eliminated).",
   "diagnostics": [
     { "message_contains": "no matching overload for method 'tag'" }
-  ]
+  ],
+  "exit_code": 1
 }
