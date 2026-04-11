@@ -5146,7 +5146,14 @@ class HIRToMIR:
 				self._moved_locals.add(self._current_catch_error)
 				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
 		if not fn_is_void:
-			raise AssertionError("missing return reached MIR lowering (checker bug)")
+			# Defensive invariant: the checker's terminal-flow pass
+			# (`Checker._check_terminal_returns`) is responsible for rejecting
+			# any non-Void function whose body falls off the end. If we reach
+			# here, that pass missed a case — file a checker bug.
+			raise AssertionError(
+				"missing return reached MIR lowering — terminal-flow checker should "
+				"have rejected this (see Checker._check_terminal_returns)"
+			)
 		if not can_throw:
 			self.b.set_terminator(M.Return(value=None))
 			return

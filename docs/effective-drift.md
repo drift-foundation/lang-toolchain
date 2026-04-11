@@ -387,6 +387,132 @@ Loop ergonomics note:
 - manual iterator form is also valid, but trait methods require trait scope:
 `use trait iter.Iterable; use trait iter.SinglePassIterator;`
 
+See also: **Result to throwing flow** below — `json.parse(&text)` returns
+`Result<JsonNode, JsonErrorData>`, and the recommended idiom is to convert
+it to throwing flow with `.or_throw()` (or `core.or_throw(...)`) and catch
+once at the `nothrow` boundary, rather than nesting `match` per call.
+
+## Result to throwing flow
+
+`Result<T, E>` is a value-level error type, but most app code is more readable
+when failures propagate as exceptions and are caught once at the `nothrow`
+boundary instead of being matched at every level of nesting. Drift’s
+`std.core` has a generic conversion built in.
+
+### Generic form: `or_throw()`
+
+`Result<T, E>` implements `core.Try<T>` whenever `E` implements
+`core.Diagnostic`. Both of these unwrap the `Ok` arm or convert `Err(e)`
+into a thrown `std.err:ResultError(dv = e.to_diag())`:
+
+- `result.or_throw()` — method form on the result value
+- `core.or_throw(result)` — free-function form
+
+Constraint: the `Result` error type **must** implement `core.Diagnostic`.
+All standard error payloads in the stdlib (e.g. `JsonErrorData`,
+`Utf8Error`, `TextError`, `IoError`) already do.
+
+```drift
+import std.core as core;
+import std.err as err;
+import std.json as json;
+use trait core.Try;
+
+fn extract_status(payload: &String) -> String {
+    val root = json.parse(payload).or_throw();
+
+    return root.expect()
+        .field("meta")
+        .field("callback")
+        .field("status")
+        .string();
+}
+
+fn main() nothrow -> Int {
+    val payload = "{\"meta\":{\"callback\":{\"status\":\"ok\"}}}";
+
+    val status = try extract_status(&payload) catch err:ResultError(e) {
+        ""
+    } catch json:JsonPathError(e) {
+        ""
+    } catch {
+        ""
+    };
+
+    return 0;
+}
+```
+
+A few things to notice:
+
+- `extract_status` is **not** `nothrow`. Throwing methods (`or_throw`,
+  the strict cursor’s `field/string/...`) propagate naturally through the
+  call stack.
+- `main` is `nothrow` because it has a `try ... catch` boundary that
+  handles every exception kind that can reach it. The catch arms cover
+  the two domain exceptions (`err:ResultError` from a Result conversion,
+  `json:JsonPathError` from the strict cursor) plus a `catch { ... }`
+  fall-through to keep `main` total.
+- One catch boundary instead of three nested `match` blocks.
+
+### Customized form: `Result.on_error(...)`
+
+`or_throw()` is intentionally **not** customizable: it always throws
+`std.err:ResultError` with the original error’s diagnostic payload.
+When the caller needs a domain-specific exception type or wants to
+attach extra structured fields, use `Result.on_error(...)` and throw
+the desired exception from the callback:
+
+```drift
+import std.core as core;
+import std.json as json;
+
+pub exception ParseFailed(tag: String, path: String);
+
+fn parse_required(payload: &String) -> json.JsonNode {
+    return json.parse(payload).on_error(|e: json.JsonErrorData| => {
+        throw ParseFailed(tag = e.tag, path = e.path);
+    });
+}
+
+fn main() nothrow -> Int {
+    val payload = "{...}";
+
+    val root = try parse_required(&payload) catch ParseFailed(e) {
+        return 1;
+    };
+
+    return 0;
+}
+```
+
+When to reach for `on_error` instead of `or_throw`:
+
+- the caller wants a domain-specific exception name (e.g. `ParseFailed`)
+  rather than the generic `ResultError`
+- the caller wants to project a subset of the error payload into the
+  exception (e.g. `tag` and `path` only) or rename fields
+- the caller wants to add extra context not present on the original
+  error (e.g. an upstream request id)
+
+Keep exception payloads machine-readable. Pass stable kebab-case tags or
+structured fields, never English prose. The catch arm should be able to
+switch on field values without parsing strings.
+
+### When `match` is still the right answer
+
+- The error case has a useful non-error continuation (e.g. parse failure
+  falls back to a default config). Catch is overkill; a `match` with a
+  fallback in the `Err` arm is clearer.
+- The error needs to be returned as a Result to a caller that itself
+  uses Result-style flow.
+- The error is part of a larger sum type the caller is already matching
+  on for other reasons.
+
+The `or_throw` / `on_error` idiom is for the common case where the user
+just wants the value and the failure should fail loudly at one
+boundary.
+
 ## Atomic ordering defaults (`std.sync`)
 
 Use the weakest ordering that proves correctness:

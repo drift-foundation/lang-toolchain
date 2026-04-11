@@ -804,6 +804,19 @@ class Checker:
 					)
 				)
 
+		# Terminal-flow check (Phase 0 of the terminal-`throws` work):
+		# every non-Void function must terminate on all paths via `return`,
+		# `throw`, or `rethrow`. Closes the long-standing hole where missing
+		# returns slipped past the checker and crashed MIR lowering with an
+		# AssertionError.
+		for fn_id, hir_block in self._hir_blocks_by_id.items():
+			info = fn_infos.get(fn_id)
+			if info is None:
+				continue
+			if fn_id in skip_validation:
+				continue
+			self._check_terminal_returns(fn_id, hir_block, info, diagnostics)
+
 		# Best-effort call arity/type checks based on FnSignature TypeIds. This
 		# only visits HCall with a plain HVar callee; arg types are unknown here
 		# so only arity is enforced.
@@ -3438,6 +3451,234 @@ class Checker:
 						span=getattr(stmt.cond, "loc", getattr(stmt, "loc", Span())),
 					)
 				)
+
+	def _is_terminal_block(self, block: "H.HBlock") -> bool:
+		"""
+		Terminal-flow analysis: True iff every CFG path through this block ends in
+		a function-exiting statement (`return`, `throw`, `rethrow`) or recursively
+		in a fully-terminal control-flow construct.
+
+		A block is terminal as soon as one of its statements is a terminator —
+		statements after that point are unreachable and don't affect the answer.
+
+		Phase 0 scope: explicit `return`/`throw`/`rethrow` only. Phase 2 will extend
+		this to recognize tail calls of `throws`-terminal functions.
+		"""
+		from lang.driftc import stage1 as H
+
+		for stmt in block.statements:
+			if self._is_terminal_stmt(stmt):
+				return True
+		return False
+
+	def _is_terminal_stmt(self, stmt: "H.HStmt") -> bool:
+		"""See `_is_terminal_block` for the contract."""
+		from lang.driftc import stage1 as H
+
+		if isinstance(stmt, H.HReturn):
+			# Both `return;` and `return v;` exit the function. The void/non-void
+			# value mismatch is a separate diagnostic in `_void_rules_on_stmt`.
+			return True
+		if isinstance(stmt, H.HThrow):
+			return True
+		if isinstance(stmt, H.HRethrow):
+			return True
+		if isinstance(stmt, H.HBlock):
+			return self._is_terminal_block(stmt)
+		if isinstance(stmt, H.HUnsafeBlock):
+			return self._is_terminal_block(stmt.block)
+		if isinstance(stmt, H.HIf):
+			# Constant-fold a literal-bool condition: only the taken branch
+			# matters. This is load-bearing for the `while true` desugaring,
+			# which produces `if true { user_body } else { break }`. Without
+			# the fold, the synthesized else-break would force the if to be
+			# treated as non-terminal.
+			if isinstance(stmt.cond, H.HLiteralBool):
+				if stmt.cond.value:
+					return self._is_terminal_block(stmt.then_block)
+				if stmt.else_block is None:
+					return False
+				return self._is_terminal_block(stmt.else_block)
+			# An `if` is terminal only when both branches are present and both
+			# are terminal. An `if` without an `else` always permits fallthrough.
+			if stmt.else_block is None:
+				return False
+			return self._is_terminal_block(stmt.then_block) and self._is_terminal_block(stmt.else_block)
+		if isinstance(stmt, H.HTry):
+			# A try is terminal iff the body is terminal AND every catch arm is
+			# terminal. A non-terminal body or non-terminal catch arm permits
+			# fallthrough past the try construct.
+			body_terminal = self._is_terminal_block(stmt.body)
+			catches_terminal = all(self._is_terminal_block(arm.block) for arm in stmt.catches)
+			return body_terminal and catches_terminal
+		if isinstance(stmt, H.HLoop):
+			# A loop terminates the function iff its body has no `break`
+			# reachable from the loop entry. If there is no reachable break,
+			# the only ways to exit one iteration are `return`/`throw`/`rethrow`
+			# (function exits) or fallthrough-to-next-iteration (no exit at
+			# all). Either way the loop never falls through to the post-loop
+			# point, so post-loop code is unreachable and the loop itself is
+			# function-level terminal.
+			#
+			# Drift's `while cond { body }` desugars to
+			# `loop { if cond { body } else { break } }`. For a literal-true
+			# cond, the constant-folding in HIf above makes the synthesized
+			# else-break dead, and the user body's actual breaks (if any) are
+			# what `_block_contains_reachable_break` will see.
+			#
+			# Nested loops are handled correctly: a `break` inside a nested
+			# `HLoop` binds to the inner loop, not the outer one, so
+			# `_block_contains_reachable_break` does not recurse into nested
+			# loop bodies.
+			return not self._block_contains_reachable_break(stmt.body)
+		if isinstance(stmt, H.HExprStmt):
+			# Match-as-statement is the load-bearing case here: an HMatchExpr at
+			# statement position is terminal iff every arm's block is terminal.
+			return self._is_terminal_expr(stmt.expr)
+		# HLet, HLocalConst, HAssign, HAugAssign, HBreak, HContinue, HAssert,
+		# and any other statement form do not terminate the function in Phase 0.
+		return False
+
+	def _is_terminal_expr(self, expr: "H.HExpr") -> bool:
+		"""
+		Phase 0 only recognizes `match` as a terminal-by-arms expression at
+		statement position. Other expressions (calls, ternaries, etc.) are not
+		terminal in Phase 0; Phase 2 will extend this for `throws`-terminal calls.
+		"""
+		from lang.driftc import stage1 as H
+
+		if isinstance(expr, H.HMatchExpr):
+			# Every arm's block must be terminal. The arm's `result` expression,
+			# if present, runs *after* the block, so it is only reached when the
+			# block is non-terminal. We require the block itself to be terminal.
+			for arm in expr.arms:
+				if not self._is_terminal_block(arm.block):
+					return False
+			return True
+		return False
+
+	def _block_contains_reachable_break(self, block: "H.HBlock") -> bool:
+		"""
+		True iff `block` contains an `HBreak` reachable from the block entry,
+		where reachability is computed with the same constant-folding rules as
+		`_is_terminal_block` (literal-bool `if` conditions fold to a single
+		branch). Statements after a function-level terminator are dead and not
+		walked.
+
+		Used by `_is_terminal_stmt` to decide whether a loop is function-level
+		terminal: a loop is terminal iff its body has no reachable break.
+
+		Critically, this does NOT recurse into nested `HLoop` bodies — a break
+		inside a nested loop binds to the inner loop, not the enclosing one.
+		"""
+		from lang.driftc import stage1 as H
+
+		for stmt in block.statements:
+			if self._stmt_contains_reachable_break(stmt):
+				return True
+			if self._is_terminal_stmt(stmt):
+				# Code after a function-level terminator is unreachable and
+				# cannot contribute a reachable break.
+				return False
+		return False
+
+	def _stmt_contains_reachable_break(self, stmt: "H.HStmt") -> bool:
+		"""See `_block_contains_reachable_break` for the contract."""
+		from lang.driftc import stage1 as H
+
+		if isinstance(stmt, H.HBreak):
+			return True
+		if isinstance(stmt, (H.HReturn, H.HThrow, H.HRethrow, H.HContinue)):
+			return False
+		if isinstance(stmt, H.HBlock):
+			return self._block_contains_reachable_break(stmt)
+		if isinstance(stmt, H.HUnsafeBlock):
+			return self._block_contains_reachable_break(stmt.block)
+		if isinstance(stmt, H.HIf):
+			# Same constant-fold rule as `_is_terminal_stmt`: dead else of an
+			# `if true` cannot contribute a reachable break.
+			if isinstance(stmt.cond, H.HLiteralBool):
+				if stmt.cond.value:
+					return self._block_contains_reachable_break(stmt.then_block)
+				if stmt.else_block is None:
+					return False
+				return self._block_contains_reachable_break(stmt.else_block)
+			then_has = self._block_contains_reachable_break(stmt.then_block)
+			else_has = (
+				self._block_contains_reachable_break(stmt.else_block)
+				if stmt.else_block is not None
+				else False
+			)
+			return then_has or else_has
+		if isinstance(stmt, H.HTry):
+			if self._block_contains_reachable_break(stmt.body):
+				return True
+			for arm in stmt.catches:
+				if self._block_contains_reachable_break(arm.block):
+					return True
+			return False
+		if isinstance(stmt, H.HExprStmt) and isinstance(stmt.expr, H.HMatchExpr):
+			for arm in stmt.expr.arms:
+				if self._block_contains_reachable_break(arm.block):
+					return True
+			return False
+		if isinstance(stmt, H.HLoop):
+			# Breaks inside a nested loop bind to that inner loop, not to the
+			# enclosing one. They cannot contribute a reachable break for the
+			# outer loop's terminal-flow analysis.
+			return False
+		# HLet/HLocalConst/HAssign/HAugAssign/HExprStmt(non-match)/HAssert:
+		# expression evaluation cannot syntactically contain a `break` in
+		# Drift v1 (no break-from-expression form).
+		return False
+
+	def _check_terminal_returns(
+		self,
+		fn_id: FunctionId,
+		hir_block: "H.HBlock",
+		info: FnInfo,
+		diagnostics: list[Diagnostic],  # type: ignore[name-defined]
+	) -> None:
+		"""
+		Reject any function with a non-Void return type whose body has at least
+		one CFG path that falls off the end without returning, throwing, or
+		rethrowing.
+
+		This closes a long-standing checker hole that previously slipped past
+		typechecking and only surfaced as an `AssertionError("missing return
+		reached MIR lowering")` deep inside `hir_to_mir.py` — a compiler crash,
+		not a user-facing diagnostic.
+
+		Void functions are unaffected: implicit return is legal for `-> Void`.
+
+		The check fires for both `nothrow -> T` and may-throw `-> T` functions.
+		For may-throw functions, a body that ends in `throw` is terminal and
+		passes; for nothrow functions, the throw path is independently rejected
+		by the nothrow checker.
+		"""
+		sig = info.signature
+		if sig is None:
+			return
+		# Bodyless declarations have no CFG to analyze.
+		if sig.is_intrinsic or sig.is_extern or sig.is_extern_c:
+			return
+		ret_tid = sig.return_type_id
+		if ret_tid is None:
+			return
+		if self._type_table.is_void(ret_tid):
+			return
+		if self._is_terminal_block(hir_block):
+			return
+		diagnostics.append(
+			_chk_diag(
+				message=(
+					f"function {function_symbol(fn_id)} must return a value on all paths "
+					f"(some paths fall through without `return` or `throw`)"
+				),
+				severity="error",
+				span=Span.from_loc(getattr(sig, "loc", None)),
+			)
+		)
 
 	def _void_rules_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:
 		"""

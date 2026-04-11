@@ -1,6 +1,113 @@
 # Drift development history
 
 ## 2026-04-11
+- **Missing-return checker hole closed — Phase 0 of terminal `throws` (0.27.182, ABI 8)**:
+  Closes a long-standing hole where a non-Void function whose body fell
+  through without returning slipped past typechecking entirely and only
+  surfaced as `AssertionError("missing return reached MIR lowering
+  (checker bug)")` deep inside `lang/driftc/stage2/hir_to_mir.py:5149`
+  — a compiler crash with a stack trace, not a user-facing diagnostic.
+  Confirmed against 0.27.181 by direct compile of
+  `fn dangling() nothrow -> Int { val x = 1; }` with explicit `--entry`:
+  `internal: MIR lowering contract failure (missing return reached MIR
+  lowering (checker bug))`.
+  - This is **Phase 0** of the upcoming terminal `throws` contract
+    (where `throws` will replace `-> T` to mean "function does not
+    return normally and must terminate by throwing"). Phase 0 is
+    independently useful — it pays down a real checker hole — and lays
+    the structural groundwork that Phase 2 will extend to recognize
+    tail calls of `throws`-terminal functions as terminators.
+  - Fix (`lang/driftc/checker/__init__.py`): new
+    `Checker._check_terminal_returns` per-function pass invoked from
+    `_check_program` right after the nothrow-but-may-throw diagnostic
+    loop. Backed by structural helpers `_is_terminal_block`,
+    `_is_terminal_stmt`, `_is_terminal_expr` recognizing terminator
+    forms: `HReturn`, `HThrow`, `HRethrow`, recursive `HBlock`/
+    `HUnsafeBlock`, `HIf` (terminal iff both branches present and both
+    terminal), `HTry` (terminal iff body and every catch arm are
+    terminal), and `HMatchExpr` at statement position (terminal iff
+    every arm's block is terminal).
+  - Phase 0 scope: every non-Void function must terminate on all paths
+    via `return`, `throw`, or `rethrow`. Bodyless declarations
+    (`@intrinsic`, `extern`, `extern "C"`) are skipped via
+    `sig.is_intrinsic / sig.is_extern / sig.is_extern_c`.
+  - Loop handling: an `HLoop` is function-level terminal iff its body
+    has no `break` reachable from the loop entry. If there is no
+    reachable break, the only ways to exit one iteration are
+    `return`/`throw`/`rethrow` (function exits) or
+    fallthrough-to-next-iteration (no exit at all), so post-loop code
+    is unreachable. New helper `_block_contains_reachable_break`
+    performs the structural walk; it does NOT recurse into nested
+    `HLoop` bodies because breaks bind to the innermost enclosing
+    loop. Constant-folding for literal-bool `if` conditions is also
+    added to both `_is_terminal_stmt` and
+    `_block_contains_reachable_break` — load-bearing because Drift's
+    `while cond { body }` desugars to
+    `loop { if cond { body } else { break } }`
+    (`lang/driftc/stage1/ast_to_hir.py:1198`), and `while true` then
+    has a synthesized dead-else-break that must not be counted as a
+    reachable break. With both pieces in place,
+    `while true { ... return X; }`,
+    `while true { if c { return 1; } return 2; }`, and similar
+    legitimate shapes are correctly recognized as terminal, while
+    `while cond { return 1; }` (dynamic cond, can exit normally) and
+    `while true { if c { break; } return 2; }` (reachable break)
+    remain correctly rejected.
+  - Diagnostic: `function <name> must return a value on all paths
+    (some paths fall through without `return` or `throw`)`,
+    severity error, span on the function signature.
+  - MIR-side defensive guard
+    (`lang/driftc/stage2/hir_to_mir.py:5149`): the existing
+    `AssertionError` is now defensively reachable only if the checker
+    pass misses a case. Message tightened to point at
+    `Checker._check_terminal_returns` so future debuggers know which
+    pass to look at. Driftc's `MIR lowering contract failure` wrapper
+    continues to surface this as a clean diagnostic.
+  - Regression coverage
+    (`lang/tests/driver/test_missing_return_checker.py`, 11 cases —
+    written first, baseline confirmed against 0.27.181):
+    - Negative: bare fall-through, `if` without `else`,
+      match-as-statement with one arm that fails to return,
+      `while cond { return 1; }` for dynamic cond,
+      `while true { if c { break; } return 2; }` (reachable break)
+      — all silently accepted on 0.27.181, all rejected with the new
+      diagnostic on 0.27.182.
+    - Positive: `if`/`else` where both branches return,
+      match-as-statement where every arm returns, Void function with
+      implicit return (unaffected), may-throw `-> Int` function whose
+      body is a single inline `throw Boom();` (terminal via throw),
+      `while true { if c { return 1; } return 2; }`,
+      `while true { return 1; }`.
+    - Negative tests pin "no `checker bug` substring in any
+      diagnostic" to ensure the user-facing path no longer leaks the
+      internal-bug message.
+    - Pre-existing regression
+      `lang/tests/driver/test_loop_all_paths_return_no_internal.py`
+      (the `while true { if flag == 1 { return 1; } return 2; }`
+      shape) was caught during code review of the v1
+      conservative-loop draft and validated against the v2 fix.
+  - Adjacent test scaffolds adjusted: three `_run_checker` helpers in
+    `lang/tests/checker/test_array_type_checks.py`,
+    `test_string_misuse.py`, `test_array_string_negatives.py`, and one
+    inline fixture in `test_can_throw_inference.py`, were constructing
+    synthetic HIR fragments with `return_type_id=table.ensure_int()`
+    and asserting `diagnostics == []`, with no explicit return in the
+    test body. They exercise per-statement validators (array/index
+    typing, string misuse, can-throw inference) and not return-flow
+    analysis, so they were updated to use `ensure_void()`. No
+    production code or behavior change.
+  - Side-finding for Phase 1: the `THROWS` token already exists in
+    `lang/driftc/parser/grammar.lark:43` and is wired through the
+    parser as a redundant "may throw" modifier (`(NOTHROW | THROWS)?
+    return_sig` in `func_def`/`trait_method_sig`/
+    `interface_method_sig`). Zero source uses today (only comments).
+    Phase 1 will repurpose this token's semantics from "may throw
+    modifier" to "terminal contract replacing the return type clause"
+    — a semantic change but not a new keyword introduction.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 8 — no
+    compiler/runtime boundary contract change. This is a checker
+    tightening only. `DRIFTC_VERSION` bumps from 0.27.181 to 0.27.182.
+
 - **Method overload resolution by parameter type (0.27.181, ABI 8)**:
   Two methods on the same receiver type with the same name and arity but
   different non-receiver parameter types previously reported a false

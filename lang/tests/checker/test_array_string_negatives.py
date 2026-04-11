@@ -9,11 +9,13 @@ from lang.driftc.stage2 import mir_nodes as M
 
 def _run_checker(block: H.HBlock) -> list[Diagnostic]:
 	# Minimal checker setup: a single function "main" with inferred signature.
+	# Void return: these fixtures exercise per-statement validators, not
+	# return-flow analysis. See test_array_type_checks.py for the same rationale.
 	fn_id = FunctionId(module="main", name="main", ordinal=0)
 	table = TypeTable()
 	sig = FnSignature(
 		name="main",
-		return_type_id=table.ensure_int(),
+		return_type_id=table.ensure_void(),
 		param_type_ids=[],
 		declared_can_throw=False,
 	)

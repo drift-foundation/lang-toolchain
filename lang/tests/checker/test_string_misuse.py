@@ -8,9 +8,11 @@ from lang.driftc.core.types_core import TypeTable
 def _run_checker(block: H.HBlock) -> list[Diagnostic]:
 	fn_id = FunctionId(module="main", name="main", ordinal=0)
 	table = TypeTable()
+	# Void return: these fixtures exercise per-statement validators, not
+	# return-flow analysis. See test_array_type_checks.py for the same rationale.
 	sig = FnSignature(
 		name="main",
-		return_type_id=table.ensure_int(),
+		return_type_id=table.ensure_void(),
 		param_type_ids=[],
 		declared_can_throw=False,
 	)

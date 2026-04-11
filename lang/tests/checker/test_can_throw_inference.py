@@ -112,9 +112,11 @@ def test_try_catch_with_if_handles_throw_without_inference():
 		)
 	}
 	table = TypeTable()
-	int_ty = table.ensure_int()
+	# Void return: this fixture exercises try/catch can-throw inference, not
+	# return-flow analysis. Avoid the missing-return checker by declaring Void.
+	void_ty = table.ensure_void()
 	table.exception_schemas = {"m:Boom": ("m:Boom", [])}
-	signatures = {"f": FnSignature(name="f", param_type_ids=[], return_type_id=int_ty, declared_can_throw=False)}
+	signatures = {"f": FnSignature(name="f", param_type_ids=[], return_type_id=void_ty, declared_can_throw=False)}
 	fn_id = FunctionId(module="main", name="f", ordinal=0)
 	checker = Checker(
 		signatures_by_id={fn_id: signatures["f"]},

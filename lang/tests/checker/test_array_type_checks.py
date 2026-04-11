@@ -7,12 +7,15 @@ from lang.driftc.core.types_core import TypeTable
 def _run_checker(func_hir):
 	fn_id = FunctionId(module="main", name="main", ordinal=0)
 	table = TypeTable()
+	# Use a Void return type so the synthetic-fixture bodies (which exercise
+	# array/index validation, not return-flow analysis) don't trip the
+	# missing-return checker introduced for the terminal-`throws` work.
 	checker = Checker(
 		signatures_by_id={
 			fn_id: FnSignature(
 				name="main",
 				param_type_ids=[],
-				return_type_id=table.ensure_int(),
+				return_type_id=table.ensure_void(),
 				declared_can_throw=False,
 			)
 		},

@@ -322,6 +322,14 @@ def test_bundle_docs_produces_stdlib_docs() -> None:
 		# Cheap String.clone() ARC semantics.
 		assert "Cheap `String` clone" in effective
 		assert "drift_string_retain" in effective
+		# Result-to-throwing-flow idiom — both generic and customized forms.
+		assert "Result to throwing flow" in effective
+		assert "or_throw()" in effective
+		assert "core.Try" in effective
+		assert "ResultError" in effective
+		assert "on_error" in effective
+		# Cross-link from the JSON section to the Result idiom.
+		assert "Result to throwing flow" in effective[effective.find("## JSON API"):effective.find("## Result to throwing flow")]
 
 		# std_json.md must show both `get_path` overloads (the dotted-string
 		# overload and the segment-array overload) — the new method overload
