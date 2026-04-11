@@ -1,0 +1,70 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	// ── replace ─────────────────────────────────────────────────
+	val r1 = text.replace(&"hello world", &"world", &"there");
+	val e1 = "hello there";
+	if !str_eq(&r1, &e1) { return 1; }
+
+	// replace all
+	val r2 = text.replace(&"aaa", &"a", &"bb");
+	val e2 = "bbbbbb";
+	if !str_eq(&r2, &e2) { return 2; }
+
+	// not found
+	val r3 = text.replace(&"hello", &"xyz", &"abc");
+	val e3 = "hello";
+	if !str_eq(&r3, &e3) { return 3; }
+
+	// empty old → unchanged
+	val r4 = text.replace(&"hello", &"", &"x");
+	val e4 = "hello";
+	if !str_eq(&r4, &e4) { return 4; }
+
+	// replace with empty (deletion)
+	val r5 = text.replace(&"a-b-c", &"-", &"");
+	val e5 = "abc";
+	if !str_eq(&r5, &e5) { return 5; }
+
+	// ── replace_first ───────────────────────────────────────────
+	val rf1 = text.replace_first(&"aaa", &"a", &"b");
+	val ef1 = "baa";
+	if !str_eq(&rf1, &ef1) { return 10; }
+
+	// not found
+	val rf2 = text.replace_first(&"hello", &"xyz", &"abc");
+	val ef2 = "hello";
+	if !str_eq(&rf2, &ef2) { return 11; }
+
+	// empty old → unchanged
+	val rf3 = text.replace_first(&"hello", &"", &"x");
+	val ef3 = "hello";
+	if !str_eq(&rf3, &ef3) { return 12; }
+
+	// ── remove ──────────────────────────────────────────────────
+	val rm1 = text.remove(&"hello world", &"o");
+	val em1 = "hell wrld";
+	if !str_eq(&rm1, &em1) { return 20; }
+
+	// not found
+	val rm2 = text.remove(&"hello", &"xyz");
+	val em2 = "hello";
+	if !str_eq(&rm2, &em2) { return 21; }
+
+	return 0;
+}

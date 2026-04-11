@@ -675,6 +675,10 @@ def _build_parser() -> argparse.ArgumentParser:
 	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
 	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
+	doc = sub.add_parser("doc", help="Generate API reference documentation from .drift source files")
+	doc.add_argument("source", type=_UserPath, help="A .drift file or directory of .drift files to document")
+	doc.add_argument("-o", "--output", type=_UserPath, default=Path("doc"), help="Output directory for generated Markdown (default: doc/)")
+
 	sub.add_parser("build", help="Build Drift artifacts from drift/manifest.json (see: drift build --help)")
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
@@ -962,5 +966,16 @@ def main(argv: list[str] | None = None) -> int:
 				p.error(str(err))
 				return 2
 		raise AssertionError("unreachable")
+
+	if args.cmd == "doc":
+		from tools.drift_doc.drift_doc import generate_docs
+		source = Path(args.source)
+		output = Path(args.output)
+		modules = generate_docs(source_root=source, output_dir=output)
+		if not modules:
+			print("[drift doc] no modules documented", file=sys.stderr)
+			return 1
+		print(f"[drift doc] documented {len(modules)} module(s)", flush=True)
+		return 0
 
 	raise AssertionError("unreachable")

@@ -1,0 +1,55 @@
+module main;
+
+import std.core as core;
+import std.io as io;
+import std.mem as mem;
+
+// Build an owned, heap-allocated String from byte literals.
+// This is NOT a string literal — the result is a fresh heap allocation
+// from drift_string_from_utf8_bytes, so any missed release is visible
+// to memcheck.
+fn make_owned_string() nothrow -> String {
+	var b = io.buffer(5);
+	io.buffer_write(&mut b, 0, cast<Byte>(104));  // 'h'
+	io.buffer_write(&mut b, 1, cast<Byte>(101));  // 'e'
+	io.buffer_write(&mut b, 2, cast<Byte>(108));  // 'l'
+	io.buffer_write(&mut b, 3, cast<Byte>(108));  // 'l'
+	io.buffer_write(&mut b, 4, cast<Byte>(111));  // 'o'
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 5);
+}
+
+// Returns "" via the same control-flow shape that triggered the
+// std.text.trim leak (early return of a literal/static String value).
+fn make_empty_via_branch(empty_path: Bool) nothrow -> String {
+	if empty_path {
+		return "";
+	}
+	return "fallback";
+}
+
+fn main() nothrow -> Int {
+	// `t2` is named to deliberately collide with the compiler's MIR temp
+	// counter scheme (t1, t2, t3, ...).  When the call result for
+	// `make_owned_string()` is assigned the SSA temp name `t2` and the
+	// user storage local is ALSO named `t2`, string_arc.py's
+	// _is_local_name() liveness filter cannot tell them apart and treats
+	// the SSA value reference as a local read.  The original owned
+	// return value is then never released and memcheck reports a
+	// definite leak from drift_string_from_utf8_bytes.
+	val t2 = make_owned_string();
+
+	// A second user binding whose value comes from an early-return path.
+	// This is the shape that triggered the original std.text::trim leak.
+	val t3 = make_empty_via_branch(true);
+
+	// Touch both bindings so they cannot be DCE'd.
+	if t2.byte_length() != 5 { return 1; }
+	if t3.byte_length() != 0 { return 2; }
+
+	// Control: a non-colliding local name with the same allocation path.
+	// If this leaks too, the bug is broader than name collision.
+	val safe_owned = make_owned_string();
+	if safe_owned.byte_length() != 5 { return 3; }
+
+	return 0;
+}

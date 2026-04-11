@@ -1,0 +1,17 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if text.compare_ignore_case(&"abc", &"ABC") != 0 { return 1; }
+	if text.compare_ignore_case(&"abc", &"abd") != 0 - 1 { return 2; }
+	if text.compare_ignore_case(&"abd", &"abc") != 1 { return 3; }
+	if text.compare_ignore_case(&"ab", &"abc") != 0 - 1 { return 4; }
+	if text.compare_ignore_case(&"abc", &"ab") != 1 { return 5; }
+	if text.compare_ignore_case(&"", &"") != 0 { return 6; }
+	if text.compare_ignore_case(&"", &"a") != 0 - 1 { return 7; }
+	if text.compare_ignore_case(&"a", &"") != 1 { return 8; }
+
+	return 0;
+}

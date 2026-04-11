@@ -1,0 +1,41 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	val r = text.lower(&"HELLO");
+	val e = "hello";
+	if !str_eq(&r, &e) { return 1; }
+	// Mixed
+	val r2 = text.lower(&"HeLLo");
+	val e2 = "hello";
+	if !str_eq(&r2, &e2) { return 2; }
+	// Non-alpha unchanged
+	val r3 = text.lower(&"A1B!");
+	val e3 = "a1b!";
+	if !str_eq(&r3, &e3) { return 3; }
+	// Empty
+	val r4 = text.lower(&"");
+	val e4 = "";
+	if !str_eq(&r4, &e4) { return 4; }
+	// Already lower
+	val r5 = text.lower(&"abc");
+	val e5 = "abc";
+	if !str_eq(&r5, &e5) { return 5; }
+
+	return 0;
+}

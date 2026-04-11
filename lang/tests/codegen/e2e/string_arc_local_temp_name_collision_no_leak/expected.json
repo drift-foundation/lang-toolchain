@@ -1,0 +1,4 @@
+{
+  "description": "string ARC: a user local whose source name collides with a compiler SSA temp name (t1, t4, ...) must not leak its owned String return value. Regression for string_arc.py treating local-name operands and SSA value names as a shared namespace.",
+  "exit_code": 0
+}

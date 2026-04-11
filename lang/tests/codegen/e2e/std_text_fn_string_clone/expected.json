@@ -1,0 +1,4 @@
+{
+  "description": "String.clone() returns cheap owned copy via ARC retain",
+  "exit_code": 0
+}

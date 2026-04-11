@@ -1,0 +1,16 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_alpha(cast<Byte>(65)) { return 1; }   // 'A'
+	if !text.is_alpha(cast<Byte>(90)) { return 2; }   // 'Z'
+	if !text.is_alpha(cast<Byte>(97)) { return 3; }   // 'a'
+	if !text.is_alpha(cast<Byte>(122)) { return 4; }  // 'z'
+	if text.is_alpha(cast<Byte>(64)) { return 5; }    // '@'
+	if text.is_alpha(cast<Byte>(91)) { return 6; }    // '['
+	if text.is_alpha(cast<Byte>(48)) { return 7; }    // '0'
+
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "std.text string-level predicates: is_empty, is_blank, is_numeric, is_alphanumeric, is_lowercase, is_uppercase",
+  "exit_code": 0
+}

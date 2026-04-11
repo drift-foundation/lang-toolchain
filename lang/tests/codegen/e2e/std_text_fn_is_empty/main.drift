@@ -1,0 +1,12 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_empty(&"") { return 1; }
+	if text.is_empty(&"x") { return 2; }
+	if text.is_empty(&" ") { return 3; }
+
+	return 0;
+}

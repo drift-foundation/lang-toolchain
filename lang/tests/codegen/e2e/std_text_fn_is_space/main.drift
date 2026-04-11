@@ -1,0 +1,15 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_space(cast<Byte>(32)) { return 1; }   // space
+	if !text.is_space(cast<Byte>(9)) { return 2; }    // tab
+	if !text.is_space(cast<Byte>(10)) { return 3; }   // newline
+	if !text.is_space(cast<Byte>(13)) { return 4; }   // carriage return
+	if text.is_space(cast<Byte>(65)) { return 5; }    // 'A'
+	if text.is_space(cast<Byte>(0)) { return 6; }     // null
+
+	return 0;
+}

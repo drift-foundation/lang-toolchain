@@ -1,0 +1,32 @@
+module main;
+
+import std.text as text;
+
+fn main() nothrow -> Int {
+	// ── equals_ignore_case ──────────────────────────────────────
+	if !text.equals_ignore_case(&"hello", &"HELLO") { return 1; }
+	if !text.equals_ignore_case(&"Hello", &"hELLO") { return 2; }
+	if text.equals_ignore_case(&"hello", &"world") { return 3; }
+	if text.equals_ignore_case(&"hello", &"hell") { return 4; }
+	if !text.equals_ignore_case(&"", &"") { return 5; }
+	if text.equals_ignore_case(&"a", &"") { return 6; }
+
+	// digits/punctuation
+	if !text.equals_ignore_case(&"abc123", &"ABC123") { return 7; }
+
+	// ── compare_ignore_case ─────────────────────────────────────
+	if text.compare_ignore_case(&"abc", &"ABC") != 0 { return 10; }
+	if text.compare_ignore_case(&"abc", &"abd") != 0 - 1 { return 11; }
+	if text.compare_ignore_case(&"abd", &"abc") != 1 { return 12; }
+
+	// length difference
+	if text.compare_ignore_case(&"ab", &"abc") != 0 - 1 { return 13; }
+	if text.compare_ignore_case(&"abc", &"ab") != 1 { return 14; }
+
+	// empty
+	if text.compare_ignore_case(&"", &"") != 0 { return 15; }
+	if text.compare_ignore_case(&"", &"a") != 0 - 1 { return 16; }
+	if text.compare_ignore_case(&"a", &"") != 1 { return 17; }
+
+	return 0;
+}

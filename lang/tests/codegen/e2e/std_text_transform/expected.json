@@ -1,0 +1,4 @@
+{
+  "description": "std.text transformation: repeat, reverse, pad_start, pad_end, char_at, join",
+  "exit_code": 0
+}

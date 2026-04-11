@@ -1,0 +1,31 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	if !text.contains(&"hello world", &"world") { return 1; }
+	if !text.contains(&"hello", &"hello") { return 2; }
+	if text.contains(&"hello", &"xyz") { return 3; }
+	// Empty needle → true
+	if !text.contains(&"hello", &"") { return 4; }
+	// Empty haystack, non-empty needle → false
+	if text.contains(&"", &"x") { return 5; }
+	// Both empty → true
+	if !text.contains(&"", &"") { return 6; }
+
+	return 0;
+}

@@ -1,0 +1,31 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	if !text.starts_with(&"hello world", &"hello") { return 1; }
+	if text.starts_with(&"hello", &"world") { return 2; }
+	if !text.starts_with(&"hello", &"") { return 3; }
+	if !text.starts_with(&"", &"") { return 4; }
+	if text.starts_with(&"", &"x") { return 5; }
+	// Full string match
+	if !text.starts_with(&"abc", &"abc") { return 6; }
+	// Prefix longer than string
+	if text.starts_with(&"ab", &"abc") { return 7; }
+
+	return 0;
+}

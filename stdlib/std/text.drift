@@ -21,19 +21,55 @@ export {
 	string_builder,
 	sb_append_string,
 	sb_len,
-	sb_build
+	sb_build,
+	contains,
+	starts_with,
+	ends_with,
+	index_of,
+	last_index_of,
+	count,
+	lower,
+	upper,
+	trim,
+	trim_start,
+	trim_end,
+	strip,
+	char_at,
+	split,
+	split_limit,
+	replace,
+	replace_first,
+	remove,
+	repeat,
+	reverse,
+	pad_start,
+	pad_end,
+	join,
+	is_empty,
+	is_blank,
+	is_numeric,
+	is_alphanumeric,
+	is_lowercase,
+	is_uppercase,
+	equals_ignore_case,
+	compare_ignore_case
 };
 
+// ── Tokenizer types ─────────────────────────────────────────────────
+
+/// Action returned by a `TokenConsumer` callback to control tokenization.
 pub variant TokenizeAction {
 	Continue,
 	Stop,
 }
 
+/// Byte-offset span of a token within the input.
 pub struct TokenSpan {
 	pub start: Int,
 	pub end: Int,
 }
 
+/// Interface for token-stream consumers used by tokenizer drivers.
 pub interface TokenConsumer<Tok, Err> {
 	fn on_token(self: &mut Self, tok: Tok, span: TokenSpan) nothrow -> TokenizeAction;
 	fn on_error(self: &mut Self, err: Err, at: Int) nothrow -> TokenizeAction;
@@ -45,6 +81,9 @@ implement core.Copy for TokenizeAction {
 implement core.Copy for TokenSpan {
 }
 
+// ── Error types ─────────────────────────────────────────────────────
+
+/// Error from UTF-8 validation operations.
 pub struct Utf8Error {
 	pub tag: String,
 	pub offset: Int
@@ -55,6 +94,20 @@ implement core.Diagnostic for Utf8Error {
 		return DiagnosticValue::String(self.tag);
 	}
 }
+
+/// Error from text operations such as `substring` or `char_at`.
+pub struct TextError {
+	pub tag: String,
+	pub offset: Int
+}
+
+implement core.Diagnostic for TextError {
+	pub fn to_diag(self: &TextError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+// ── Internal helpers ────────────────────────────────────────────────
 
 fn _byte_u8(b: Byte) nothrow -> Int {
 	var v = cast<Int>(b);
@@ -216,10 +269,14 @@ fn _validate_utf8_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> co
 	return core.Result::Ok(core.void_value());
 }
 
+// ── UTF-8 construction ──────────────────────────────────────────────
+
+/// Creates a `String` from a byte array, validating UTF-8 encoding.
 pub fn utf8_from_bytes(bytes: &Array<Byte>) nothrow -> core.Result<String, Utf8Error> {
 	return utf8_from_bytes_range(bytes, 0, bytes.len);
 }
 
+/// Creates a `String` from a byte range `[start, end)`, validating UTF-8 encoding.
 pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<String, Utf8Error> {
 	match _validate_utf8_range(bytes, start, end) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
@@ -238,17 +295,11 @@ pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow 
 	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b)));
 }
 
-pub struct TextError {
-	pub tag: String,
-	pub offset: Int
-}
+// ── Substring ───────────────────────────────────────────────────────
 
-implement core.Diagnostic for TextError {
-	pub fn to_diag(self: &TextError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
-	}
-}
-
+/// Extracts a substring by byte offset and length.
+///
+/// Returns `Result::Err(TextError)` if `start` or `len` is out of bounds.
 pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String, TextError> {
 	val n = s.byte_length();
 	if start < 0 or len < 0 or start > n or len > n - start {
@@ -266,22 +317,34 @@ pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String
 	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), len));
 }
 
+// ── Byte classifiers ────────────────────────────────────────────────
+
+/// Returns `true` if the byte is an ASCII digit (`0`..`9`).
 pub fn is_digit(b: Byte) nothrow -> Bool {
 	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
 }
 
+/// Returns `true` if the byte is an ASCII letter (`A`..`Z`, `a`..`z`).
 pub fn is_alpha(b: Byte) nothrow -> Bool {
 	return (b >= cast<Byte>(65) and b <= cast<Byte>(90)) or (b >= cast<Byte>(97) and b <= cast<Byte>(122));
 }
 
+/// Returns `true` if the byte is an ASCII letter or digit.
 pub fn is_alnum(b: Byte) nothrow -> Bool {
 	return is_digit(b) or is_alpha(b);
 }
 
+/// Returns `true` if the byte is ASCII whitespace (space, tab, newline, carriage return).
 pub fn is_space(b: Byte) nothrow -> Bool {
 	return b == cast<Byte>(32) or b == cast<Byte>(9) or b == cast<Byte>(10) or b == cast<Byte>(13);
 }
 
+// ── StringBuilder ───────────────────────────────────────────────────
+
+/// Growable byte buffer for efficient string construction.
+///
+/// Create with `string_builder`, append with `sb_append_string`,
+/// finalize with `sb_build`.
 pub struct StringBuilder {
 	buf: mem.RawBuffer<Byte>,
 	cap: Int,
@@ -299,6 +362,7 @@ implement core.Destructible for StringBuilder {
 	}
 }
 
+/// Creates a new `StringBuilder` with the given initial capacity (minimum 16).
 pub fn string_builder(initial_cap: Int) nothrow -> StringBuilder {
 	var cap = initial_cap;
 	if cap < 16 {
@@ -336,6 +400,7 @@ fn _sb_grow(self: &mut StringBuilder, needed: Int) nothrow -> Void {
 	}
 }
 
+/// Appends all bytes of `s` to the builder.
 pub fn sb_append_string(self: &mut StringBuilder, s: &String) nothrow -> Void {
 	val n = s.byte_length();
 	if n == 0 {
@@ -354,14 +419,814 @@ pub fn sb_append_string(self: &mut StringBuilder, s: &String) nothrow -> Void {
 	self.len = base + n;
 }
 
+fn _sb_append_byte(self: &mut StringBuilder, b: Byte) nothrow -> Void {
+	val needed = self.len + 1;
+	if needed > self.cap {
+		_sb_grow(self, needed);
+	}
+	mem.write<type Byte>(&mut self.buf, self.len, b);
+	self.len = self.len + 1;
+}
+
+fn _sb_append_substring(self: &mut StringBuilder, s: &String, start: Int, len: Int) nothrow -> Void {
+	if len <= 0 {
+		return;
+	}
+	val needed = self.len + len;
+	if needed > self.cap {
+		_sb_grow(self, needed);
+	}
+	val base = self.len;
+	var i = 0;
+	while i < len {
+		mem.write<type Byte>(&mut self.buf, base + i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	self.len = base + len;
+}
+
+/// Returns the number of bytes currently in the builder.
 pub fn sb_len(self: &StringBuilder) nothrow -> Int {
 	return self.len;
 }
 
+/// Finalizes the builder and returns the constructed `String`.
+///
+/// The builder's content is not consumed; subsequent calls to
+/// `sb_build` return the same string.
 pub fn sb_build(self: &mut StringBuilder) nothrow -> String {
 	if self.len == 0 {
 		return "";
 	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
 	return core.string_from_utf8_bytes(ptr, self.len);
+}
+
+// ── Internal: build a String from a fixed-size buffer ───────────────
+
+fn _string_from_buffer(buf: &mut io.Buffer, len: Int) nothrow -> String {
+	if len == 0 {
+		return "";
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(buf), len);
+}
+
+// ── Search / match ──────────────────────────────────────────────────
+
+/// Returns `true` if `haystack` contains `needle`.
+///
+/// Empty needle returns `true`.
+pub fn contains(haystack: &String, needle: &String) nothrow -> Bool {
+	return index_of(haystack, needle) >= 0;
+}
+
+/// Returns `true` if `s` starts with `prefix`.
+///
+/// Empty prefix returns `true`.
+pub fn starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val sn = s.byte_length();
+	val pn = prefix.byte_length();
+	if pn == 0 {
+		return true;
+	}
+	if pn > sn {
+		return false;
+	}
+	var i = 0;
+	while i < pn {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns `true` if `s` ends with `suffix`.
+///
+/// Empty suffix returns `true`.
+pub fn ends_with(s: &String, suffix: &String) nothrow -> Bool {
+	val sn = s.byte_length();
+	val xn = suffix.byte_length();
+	if xn == 0 {
+		return true;
+	}
+	if xn > sn {
+		return false;
+	}
+	val offset = sn - xn;
+	var i = 0;
+	while i < xn {
+		if core.string_byte_at(s, offset + i) != core.string_byte_at(suffix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns the byte offset of the first occurrence of `needle` in `haystack`,
+/// or `-1` if not found.
+///
+/// Empty needle returns `0`.
+pub fn index_of(haystack: &String, needle: &String) nothrow -> Int {
+	val hn = haystack.byte_length();
+	val nn = needle.byte_length();
+	if nn == 0 {
+		return 0;
+	}
+	if nn > hn {
+		return 0 - 1;
+	}
+	val limit = hn - nn;
+	var i = 0;
+	while i <= limit {
+		var matched = true;
+		var j = 0;
+		while j < nn {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = nn;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return i;
+		}
+		i = i + 1;
+	}
+	return 0 - 1;
+}
+
+/// Returns the byte offset of the last occurrence of `needle` in `haystack`,
+/// or `-1` if not found.
+///
+/// Empty needle returns `haystack.byte_length()`.
+pub fn last_index_of(haystack: &String, needle: &String) nothrow -> Int {
+	val hn = haystack.byte_length();
+	val nn = needle.byte_length();
+	if nn == 0 {
+		return hn;
+	}
+	if nn > hn {
+		return 0 - 1;
+	}
+	var i = hn - nn;
+	while i >= 0 {
+		var matched = true;
+		var j = 0;
+		while j < nn {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = nn;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return i;
+		}
+		i = i - 1;
+	}
+	return 0 - 1;
+}
+
+/// Returns the number of non-overlapping occurrences of `needle` in `haystack`.
+///
+/// Empty needle returns `0`.
+pub fn count(haystack: &String, needle: &String) nothrow -> Int {
+	val nn = needle.byte_length();
+	if nn == 0 {
+		return 0;
+	}
+	val hn = haystack.byte_length();
+	if nn > hn {
+		return 0;
+	}
+	var result = 0;
+	var i = 0;
+	val limit = hn - nn;
+	while i <= limit {
+		var matched = true;
+		var j = 0;
+		while j < nn {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = nn;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			result = result + 1;
+			i = i + nn;
+		} else {
+			i = i + 1;
+		}
+	}
+	return result;
+}
+
+// ── Case conversion ─────────────────────────────────────────────────
+
+/// Returns a copy of `s` with all ASCII uppercase letters converted to lowercase.
+///
+/// Non-ASCII bytes are passed through unchanged.
+pub fn lower(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	if n == 0 {
+		return "";
+	}
+	var buf = io.buffer(n);
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b >= cast<Byte>(65) and b <= cast<Byte>(90) {
+			io.buffer_write(&mut buf, i, cast<Byte>(cast<Int>(b) + 32));
+		} else {
+			io.buffer_write(&mut buf, i, b);
+		}
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, n);
+}
+
+/// Returns a copy of `s` with all ASCII lowercase letters converted to uppercase.
+///
+/// Non-ASCII bytes are passed through unchanged.
+pub fn upper(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	if n == 0 {
+		return "";
+	}
+	var buf = io.buffer(n);
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b >= cast<Byte>(97) and b <= cast<Byte>(122) {
+			io.buffer_write(&mut buf, i, cast<Byte>(cast<Int>(b) - 32));
+		} else {
+			io.buffer_write(&mut buf, i, b);
+		}
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, n);
+}
+
+// ── Trimming ────────────────────────────────────────────────────────
+
+/// Returns `s` with leading and trailing ASCII whitespace removed.
+pub fn trim(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var start = 0;
+	while start < n and is_space(core.string_byte_at(s, start)) {
+		start = start + 1;
+	}
+	var end = n;
+	while end > start and is_space(core.string_byte_at(s, end - 1)) {
+		end = end - 1;
+	}
+	val len = end - start;
+	if len == 0 {
+		return "";
+	}
+	if len == n {
+		return *s;
+	}
+	var buf = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, len);
+}
+
+/// Returns `s` with leading ASCII whitespace removed.
+pub fn trim_start(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var start = 0;
+	while start < n and is_space(core.string_byte_at(s, start)) {
+		start = start + 1;
+	}
+	val len = n - start;
+	if len == 0 {
+		return "";
+	}
+	if start == 0 {
+		return *s;
+	}
+	var buf = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, len);
+}
+
+/// Returns `s` with trailing ASCII whitespace removed.
+pub fn trim_end(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var end = n;
+	while end > 0 and is_space(core.string_byte_at(s, end - 1)) {
+		end = end - 1;
+	}
+	if end == 0 {
+		return "";
+	}
+	if end == n {
+		return *s;
+	}
+	var buf = io.buffer(end);
+	var i = 0;
+	while i < end {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, end);
+}
+
+/// Returns `s` with leading and trailing bytes found in `chars` removed.
+///
+/// Each byte in `chars` is treated as an individual character to strip.
+pub fn strip(s: &String, chars: &String) nothrow -> String {
+	val n = s.byte_length();
+	val cn = chars.byte_length();
+	if n == 0 or cn == 0 {
+		return *s;
+	}
+	var start = 0;
+	while start < n and _byte_in_set(core.string_byte_at(s, start), chars, cn) {
+		start = start + 1;
+	}
+	var end = n;
+	while end > start and _byte_in_set(core.string_byte_at(s, end - 1), chars, cn) {
+		end = end - 1;
+	}
+	val len = end - start;
+	if len == 0 {
+		return "";
+	}
+	if len == n {
+		return *s;
+	}
+	var buf = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, len);
+}
+
+fn _byte_in_set(b: Byte, chars: &String, cn: Int) nothrow -> Bool {
+	var i = 0;
+	while i < cn {
+		if b == core.string_byte_at(chars, i) {
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+// ── Extraction ──────────────────────────────────────────────────────
+
+/// Returns the single byte at `index` as a one-character string.
+///
+/// Returns `Result::Err(TextError)` if `index` is out of bounds.
+pub fn char_at(s: &String, index: Int) nothrow -> core.Result<String, TextError> {
+	val n = s.byte_length();
+	if index < 0 or index >= n {
+		return core.Result::Err(TextError(tag = "out-of-bounds", offset = index));
+	}
+	var buf = io.buffer(1);
+	io.buffer_write(&mut buf, 0, core.string_byte_at(s, index));
+	return core.Result::Ok(_string_from_buffer(&mut buf, 1));
+}
+
+/// Splits `s` on every non-overlapping occurrence of `delimiter`.
+///
+/// If `delimiter` is empty, splits into individual bytes.
+/// If `delimiter` is not found, returns a single-element array containing `s`.
+pub fn split(s: &String, delimiter: &String) nothrow -> Array<String> {
+	val sn = s.byte_length();
+	val dn = delimiter.byte_length();
+
+	if dn == 0 {
+		var arr: Array<String> = [];
+		var i = 0;
+		while i < sn {
+			var buf = io.buffer(1);
+			io.buffer_write(&mut buf, 0, core.string_byte_at(s, i));
+			arr.push(_string_from_buffer(&mut buf, 1));
+			i = i + 1;
+		}
+		return move arr;
+	}
+
+	var arr: Array<String> = [];
+	var start = 0;
+	while start <= sn {
+		val pos = _index_of_from(s, sn, delimiter, dn, start);
+		if pos < 0 {
+			_push_slice(&mut arr, s, start, sn - start);
+			return move arr;
+		}
+		_push_slice(&mut arr, s, start, pos - start);
+		start = pos + dn;
+	}
+	return move arr;
+}
+
+/// Splits `s` on `delimiter` at most `max` times.
+///
+/// The result contains at most `max + 1` elements. The last element
+/// contains the unsplit remainder. If `max <= 0`, returns `[s]`.
+pub fn split_limit(s: &String, delimiter: &String, max: Int) nothrow -> Array<String> {
+	val sn = s.byte_length();
+	val dn = delimiter.byte_length();
+
+	if max <= 0 or dn == 0 {
+		var arr: Array<String> = [];
+		arr.push(*s);
+		return move arr;
+	}
+
+	var arr: Array<String> = [];
+	var start = 0;
+	var splits = 0;
+	while start <= sn and splits < max {
+		val pos = _index_of_from(s, sn, delimiter, dn, start);
+		if pos < 0 {
+			_push_slice(&mut arr, s, start, sn - start);
+			return move arr;
+		}
+		_push_slice(&mut arr, s, start, pos - start);
+		start = pos + dn;
+		splits = splits + 1;
+	}
+	// Remainder
+	_push_slice(&mut arr, s, start, sn - start);
+	return move arr;
+}
+
+fn _index_of_from(haystack: &String, hn: Int, needle: &String, nn: Int, from: Int) nothrow -> Int {
+	if nn == 0 {
+		return from;
+	}
+	if from + nn > hn {
+		return 0 - 1;
+	}
+	val limit = hn - nn;
+	var i = from;
+	while i <= limit {
+		var matched = true;
+		var j = 0;
+		while j < nn {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = nn;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return i;
+		}
+		i = i + 1;
+	}
+	return 0 - 1;
+}
+
+fn _push_slice(arr: &mut Array<String>, s: &String, start: Int, len: Int) nothrow -> Void {
+	if len <= 0 {
+		arr.push("");
+		return;
+	}
+	var buf = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	arr.push(_string_from_buffer(&mut buf, len));
+}
+
+// ── Replacement / transformation ────────────────────────────────────
+
+/// Returns a copy of `s` with all non-overlapping occurrences of `old` replaced by `repl`.
+///
+/// If `old` is empty, returns `s` unchanged.
+pub fn replace(s: &String, old: &String, repl: &String) nothrow -> String {
+	val on = old.byte_length();
+	if on == 0 {
+		return *s;
+	}
+	val sn = s.byte_length();
+	var sb = string_builder(sn);
+	var start = 0;
+	while start <= sn {
+		val pos = _index_of_from(s, sn, old, on, start);
+		if pos < 0 {
+			_sb_append_substring(&mut sb, s, start, sn - start);
+			return sb_build(&mut sb);
+		}
+		_sb_append_substring(&mut sb, s, start, pos - start);
+		sb_append_string(&mut sb, repl);
+		start = pos + on;
+	}
+	return sb_build(&mut sb);
+}
+
+/// Returns a copy of `s` with the first occurrence of `old` replaced by `repl`.
+///
+/// If `old` is empty or not found, returns `s` unchanged.
+pub fn replace_first(s: &String, old: &String, repl: &String) nothrow -> String {
+	val on = old.byte_length();
+	if on == 0 {
+		return *s;
+	}
+	val sn = s.byte_length();
+	val pos = index_of(s, old);
+	if pos < 0 {
+		return *s;
+	}
+	var sb = string_builder(sn);
+	_sb_append_substring(&mut sb, s, 0, pos);
+	sb_append_string(&mut sb, repl);
+	_sb_append_substring(&mut sb, s, pos + on, sn - pos - on);
+	return sb_build(&mut sb);
+}
+
+/// Returns a copy of `s` with all occurrences of `target` removed.
+///
+/// Equivalent to `replace(s, target, &"")`.
+pub fn remove(s: &String, target: &String) nothrow -> String {
+	val empty = "";
+	return replace(s, target, &empty);
+}
+
+/// Returns `s` repeated `n` times. Returns `""` if `n <= 0`.
+pub fn repeat(s: &String, n: Int) nothrow -> String {
+	if n <= 0 {
+		return "";
+	}
+	val sn = s.byte_length();
+	if sn == 0 {
+		return "";
+	}
+	val total = sn * n;
+	var buf = io.buffer(total);
+	var k = 0;
+	var rep = 0;
+	while rep < n {
+		var i = 0;
+		while i < sn {
+			io.buffer_write(&mut buf, k, core.string_byte_at(s, i));
+			k = k + 1;
+			i = i + 1;
+		}
+		rep = rep + 1;
+	}
+	return _string_from_buffer(&mut buf, total);
+}
+
+/// Returns a byte-level reversal of `s`.
+///
+/// This is an ASCII-oriented operation; multi-byte UTF-8 sequences
+/// will not be preserved.
+pub fn reverse(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	if n <= 1 {
+		return *s;
+	}
+	var buf = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, n - 1 - i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, n);
+}
+
+// ── Padding ─────────────────────────────────────────────────────────
+
+/// Returns `s` padded on the left with `fill` bytes to at least `width` bytes.
+///
+/// If `s.byte_length() >= width`, returns `s` unchanged.
+pub fn pad_start(s: &String, width: Int, fill: Byte) nothrow -> String {
+	val sn = s.byte_length();
+	if sn >= width {
+		return *s;
+	}
+	val pad = width - sn;
+	var buf = io.buffer(width);
+	var i = 0;
+	while i < pad {
+		io.buffer_write(&mut buf, i, fill);
+		i = i + 1;
+	}
+	i = 0;
+	while i < sn {
+		io.buffer_write(&mut buf, pad + i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, width);
+}
+
+/// Returns `s` padded on the right with `fill` bytes to at least `width` bytes.
+///
+/// If `s.byte_length() >= width`, returns `s` unchanged.
+pub fn pad_end(s: &String, width: Int, fill: Byte) nothrow -> String {
+	val sn = s.byte_length();
+	if sn >= width {
+		return *s;
+	}
+	var buf = io.buffer(width);
+	var i = 0;
+	while i < sn {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	while i < width {
+		io.buffer_write(&mut buf, i, fill);
+		i = i + 1;
+	}
+	return _string_from_buffer(&mut buf, width);
+}
+
+// ── Joining ─────────────────────────────────────────────────────────
+
+/// Joins the elements of `parts` with `separator` between each pair.
+///
+/// Returns `""` if `parts` is empty.
+pub fn join(parts: &Array<String>, separator: &String) nothrow -> String {
+	val n = parts.len;
+	if n == 0 {
+		return "";
+	}
+	if n == 1 {
+		return parts[0];
+	}
+	var sb = string_builder(64);
+	sb_append_string(&mut sb, &parts[0]);
+	var i = 1;
+	while i < n {
+		sb_append_string(&mut sb, separator);
+		sb_append_string(&mut sb, &parts[i]);
+		i = i + 1;
+	}
+	return sb_build(&mut sb);
+}
+
+// ── String-level predicates ─────────────────────────────────────────
+
+/// Returns `true` if `s` has zero bytes.
+pub fn is_empty(s: &String) nothrow -> Bool {
+	return s.byte_length() == 0;
+}
+
+/// Returns `true` if `s` is empty or contains only ASCII whitespace.
+pub fn is_blank(s: &String) nothrow -> Bool {
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		if not is_space(core.string_byte_at(s, i)) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns `true` if `s` is non-empty and every byte is an ASCII digit.
+pub fn is_numeric(s: &String) nothrow -> Bool {
+	val n = s.byte_length();
+	if n == 0 {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		if not is_digit(core.string_byte_at(s, i)) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns `true` if `s` is non-empty and every byte is an ASCII letter or digit.
+pub fn is_alphanumeric(s: &String) nothrow -> Bool {
+	val n = s.byte_length();
+	if n == 0 {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		if not is_alnum(core.string_byte_at(s, i)) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns `true` if `s` is non-empty and every ASCII letter in `s` is lowercase.
+///
+/// Non-letter bytes (digits, punctuation) do not affect the result.
+/// Returns `false` for empty strings.
+pub fn is_lowercase(s: &String) nothrow -> Bool {
+	val n = s.byte_length();
+	if n == 0 {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b >= cast<Byte>(65) and b <= cast<Byte>(90) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Returns `true` if `s` is non-empty and every ASCII letter in `s` is uppercase.
+///
+/// Non-letter bytes (digits, punctuation) do not affect the result.
+/// Returns `false` for empty strings.
+pub fn is_uppercase(s: &String) nothrow -> Bool {
+	val n = s.byte_length();
+	if n == 0 {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b >= cast<Byte>(97) and b <= cast<Byte>(122) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// ── Comparison ──────────────────────────────────────────────────────
+
+/// Returns `true` if `a` and `b` are equal ignoring ASCII case.
+pub fn equals_ignore_case(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn {
+		return false;
+	}
+	var i = 0;
+	while i < an {
+		if _to_lower_byte(core.string_byte_at(a, i)) != _to_lower_byte(core.string_byte_at(b, i)) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Compares `a` and `b` ignoring ASCII case.
+///
+/// Returns `-1` if `a < b`, `0` if equal, `1` if `a > b`.
+pub fn compare_ignore_case(a: &String, b: &String) nothrow -> Int {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	var min_len = an;
+	if bn < an {
+		min_len = bn;
+	}
+	var i = 0;
+	while i < min_len {
+		val la = cast<Int>(_to_lower_byte(core.string_byte_at(a, i)));
+		val lb = cast<Int>(_to_lower_byte(core.string_byte_at(b, i)));
+		if la < lb {
+			return 0 - 1;
+		}
+		if la > lb {
+			return 1;
+		}
+		i = i + 1;
+	}
+	if an < bn {
+		return 0 - 1;
+	}
+	if an > bn {
+		return 1;
+	}
+	return 0;
+}
+
+fn _to_lower_byte(b: Byte) nothrow -> Byte {
+	if b >= cast<Byte>(65) and b <= cast<Byte>(90) {
+		return cast<Byte>(cast<Int>(b) + 32);
+	}
+	return b;
 }

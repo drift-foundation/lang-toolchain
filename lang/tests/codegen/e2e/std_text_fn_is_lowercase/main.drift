@@ -1,0 +1,15 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_lowercase(&"hello") { return 1; }
+	if text.is_lowercase(&"Hello") { return 2; }
+	if text.is_lowercase(&"HELLO") { return 3; }
+	if text.is_lowercase(&"") { return 4; }
+	// Digits only — no uppercase letters → true
+	if !text.is_lowercase(&"123") { return 5; }
+
+	return 0;
+}

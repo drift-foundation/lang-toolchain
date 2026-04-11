@@ -181,7 +181,18 @@ def insert_string_arc(
 		return _is_string_tid(local_types.get(val))
 
 	def _is_local_name(val: str) -> bool:
-		return val in storage_locals
+		# Always False.  After the LoadLocal case in _iter_used_values
+		# stopped yielding instr.local, only SSA value names ever flow
+		# through the use/def/owned-defs analyses below.  Treating an SSA
+		# value name as "a local" because the MIR temp counter happened
+		# to issue a name string that also appears as a user storage
+		# local was the root cause of a memcheck-visible leak: when a
+		# user wrote `val t4 = call_returning_owned_string()` and the
+		# call's SSA dest happened to be `t4`, the StoreLocal rewriter
+		# excluded the dest from `owned_values` and inserted a spurious
+		# retain via _ensure_owned, leaving the original +1 reference
+		# from the call return unbalanced.
+		return False
 
 	def _ensure_owned(val: str, owned: Set[str], out: list[M.MInstr]) -> str:
 		if not _is_string_value(val):
@@ -335,7 +346,15 @@ def insert_string_arc(
 		elif isinstance(instr, M.ConstructIfaceValue):
 			yield instr.value
 		elif isinstance(instr, M.LoadLocal):
-			yield instr.local
+			# Do not yield instr.local — that is a storage-local name, not
+			# an SSA value name.  Yielding it conflated the storage namespace
+			# with the SSA-value namespace and required _is_local_name() to
+			# filter it back out, which silently mis-classified SSA values
+			# whose MIR temp counter happened to land on a name already in
+			# use as a user storage local (e.g. user `val t4 = call_ret`).
+			# Storage-local liveness is tracked separately via store_defs /
+			# assigned_in / assigned_out and via _release_local at scope exit.
+			pass
 		elif isinstance(instr, M.LoadRef):
 			yield instr.ptr
 		elif isinstance(instr, M.Call):
@@ -441,7 +460,13 @@ def insert_string_arc(
 		elif isinstance(instr, M.StringFromFloat):
 			yield instr.value
 		elif isinstance(instr, M.MoveOut):
-			yield instr.local
+			# Do not yield instr.local — same reason as LoadLocal above.
+			# It is a storage-local name, not an SSA value.  MoveOut has
+			# its own rewrite path that handles the storage-local move
+			# semantics; it does not need the name to flow through the
+			# SSA-value liveness analyses.  Yielding it would re-open the
+			# namespace-collision class for explicit `move local` shapes.
+			pass
 
 	def _copy_span(dst: M.MInstr, src: M.MInstr) -> None:
 		if hasattr(src, "span"):

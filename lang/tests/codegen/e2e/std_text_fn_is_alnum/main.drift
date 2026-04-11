@@ -1,0 +1,14 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_alnum(cast<Byte>(48)) { return 1; }   // '0'
+	if !text.is_alnum(cast<Byte>(65)) { return 2; }   // 'A'
+	if !text.is_alnum(cast<Byte>(122)) { return 3; }  // 'z'
+	if text.is_alnum(cast<Byte>(32)) { return 4; }    // space
+	if text.is_alnum(cast<Byte>(33)) { return 5; }    // '!'
+
+	return 0;
+}

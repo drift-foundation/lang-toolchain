@@ -1,0 +1,13 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	if !text.is_numeric(&"12345") { return 1; }
+	if text.is_numeric(&"12a45") { return 2; }
+	if text.is_numeric(&"") { return 3; }
+	if text.is_numeric(&" 123") { return 4; }
+
+	return 0;
+}

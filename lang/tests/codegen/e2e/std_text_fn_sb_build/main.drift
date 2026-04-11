@@ -1,0 +1,35 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	var sb = text.string_builder(16);
+	// Build empty → empty string
+	val empty = text.sb_build(&mut sb);
+	val e1 = "";
+	if !str_eq(&empty, &e1) { return 1; }
+	// Build after append
+	text.sb_append_string(&mut sb, &"test");
+	val s = text.sb_build(&mut sb);
+	val e2 = "test";
+	if !str_eq(&s, &e2) { return 2; }
+	// Build again returns same content (not consumed)
+	val s2 = text.sb_build(&mut sb);
+	if !str_eq(&s2, &e2) { return 3; }
+
+	return 0;
+}

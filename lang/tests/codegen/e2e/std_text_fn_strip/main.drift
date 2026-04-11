@@ -1,0 +1,41 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	val r = text.strip(&"##hello##", &"#");
+	val e = "hello";
+	if !str_eq(&r, &e) { return 1; }
+	// Multiple chars
+	val r2 = text.strip(&"<[hi]>", &"<>[]");
+	val e2 = "hi";
+	if !str_eq(&r2, &e2) { return 2; }
+	// Nothing to strip
+	val r3 = text.strip(&"hello", &"#");
+	val e3 = "hello";
+	if !str_eq(&r3, &e3) { return 3; }
+	// Empty chars → unchanged
+	val r4 = text.strip(&"hello", &"");
+	val e4 = "hello";
+	if !str_eq(&r4, &e4) { return 4; }
+	// Strip everything
+	val r5 = text.strip(&"###", &"#");
+	val e5 = "";
+	if !str_eq(&r5, &e5) { return 5; }
+
+	return 0;
+}

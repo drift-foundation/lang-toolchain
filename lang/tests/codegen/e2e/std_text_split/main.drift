@@ -1,0 +1,79 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	// ── split basic ─────────────────────────────────────────────
+	var parts = text.split(&"a,b,c", &",");
+	if parts.len != 3 { return 1; }
+	val ea = "a";
+	val eb = "b";
+	val ec = "c";
+	if !str_eq(&parts[0], &ea) { return 2; }
+	if !str_eq(&parts[1], &eb) { return 3; }
+	if !str_eq(&parts[2], &ec) { return 4; }
+
+	// delimiter not found → single element
+	var p2 = text.split(&"hello", &",");
+	if p2.len != 1 { return 10; }
+	val ehello = "hello";
+	if !str_eq(&p2[0], &ehello) { return 11; }
+
+	// consecutive delimiters → empty strings between
+	var p3 = text.split(&"a,,b", &",");
+	if p3.len != 3 { return 20; }
+	val eempty = "";
+	if !str_eq(&p3[1], &eempty) { return 21; }
+
+	// delimiter at start/end
+	var p4 = text.split(&",a,", &",");
+	if p4.len != 3 { return 25; }
+	if !str_eq(&p4[0], &eempty) { return 26; }
+	if !str_eq(&p4[2], &eempty) { return 27; }
+
+	// multi-char delimiter
+	var p5 = text.split(&"a::b::c", &"::");
+	if p5.len != 3 { return 30; }
+	if !str_eq(&p5[0], &ea) { return 31; }
+	if !str_eq(&p5[2], &ec) { return 32; }
+
+	// empty delimiter → split into bytes
+	var p6 = text.split(&"abc", &"");
+	if p6.len != 3 { return 35; }
+	if !str_eq(&p6[0], &ea) { return 36; }
+
+	// ── split_limit ─────────────────────────────────────────────
+	var sl1 = text.split_limit(&"a,b,c,d", &",", 2);
+	if sl1.len != 3 { return 40; }
+	if !str_eq(&sl1[0], &ea) { return 41; }
+	if !str_eq(&sl1[1], &eb) { return 42; }
+	val ecd = "c,d";
+	if !str_eq(&sl1[2], &ecd) { return 43; }
+
+	// max = 1 → split once
+	var sl2 = text.split_limit(&"a,b,c", &",", 1);
+	if sl2.len != 2 { return 45; }
+	val ebc = "b,c";
+	if !str_eq(&sl2[1], &ebc) { return 46; }
+
+	// max = 0 → no splits
+	var sl3 = text.split_limit(&"a,b", &",", 0);
+	if sl3.len != 1 { return 50; }
+	val eab = "a,b";
+	if !str_eq(&sl3[0], &eab) { return 51; }
+
+	return 0;
+}

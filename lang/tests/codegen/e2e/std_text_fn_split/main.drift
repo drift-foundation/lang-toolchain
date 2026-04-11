@@ -1,0 +1,39 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+
+fn main() nothrow -> Int {
+	var p = text.split(&"a,b,c", &",");
+	if p.len != 3 { return 1; }
+	val ea = "a"; val eb = "b"; val ec = "c";
+	if !str_eq(&p[0], &ea) { return 2; }
+	if !str_eq(&p[1], &eb) { return 3; }
+	if !str_eq(&p[2], &ec) { return 4; }
+	// Not found → single element
+	var p2 = text.split(&"hello", &",");
+	if p2.len != 1 { return 5; }
+	// Consecutive delimiters → empty strings
+	var p3 = text.split(&"a,,b", &",");
+	if p3.len != 3 { return 6; }
+	val ee = "";
+	if !str_eq(&p3[1], &ee) { return 7; }
+	// Empty delimiter → split into bytes
+	var p4 = text.split(&"ab", &"");
+	if p4.len != 2 { return 8; }
+
+	return 0;
+}

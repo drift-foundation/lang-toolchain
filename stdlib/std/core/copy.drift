@@ -301,4 +301,11 @@ implement String {
 	pub fn byte_at(self: &String, index: Int) nothrow -> Byte {
 		return string_byte_at(self, index);
 	}
+
+	/// Returns an owned copy of this string.
+	///
+	/// This is a cheap ARC refcount increment, not a byte-level copy.
+	pub fn clone(self: &String) nothrow -> String {
+		return *self;
+	}
 }

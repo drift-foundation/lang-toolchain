@@ -126,6 +126,14 @@ def bundle_docs_and_examples(dist: Path) -> None:
 	(examples_dir / "hello.drift").write_text(_HELLO_DRIFT, encoding="utf-8")
 	(examples_dir / "README.md").write_text(_EXAMPLES_README, encoding="utf-8")
 
+	# Generate stdlib API reference from source.
+	_ROOT = Path(__file__).resolve().parents[3]
+	stdlib_src = _ROOT / "stdlib" / "std"
+	if stdlib_src.is_dir():
+		from tools.drift_doc.drift_doc import generate_docs
+		stdlib_doc_dir = doc_dir / "stdlib"
+		generate_docs(source_root=stdlib_src, output_dir=stdlib_doc_dir)
+
 	print("[deploy] bundle complete", flush=True)
 
 
@@ -183,6 +191,22 @@ drift trust list --trust-store drift/trust.json
 The compiler sources, runtime archives, and signed stdlib package live in
 `lib/` and are resolved relative to the executable's path.  No repo checkout,
 ambient `pip install`, or PYTHONPATH setup is needed — only clang.
+
+### Stdlib API reference
+
+The `doc/stdlib/` directory contains auto-generated API reference for every
+standard library module.  Open `doc/stdlib/index.md` for a module listing,
+or browse individual files (e.g. `doc/stdlib/std_text.md`) for function
+signatures, types, and doc comments.
+
+To regenerate docs or generate docs for your own modules:
+
+```bash
+drift doc <source-dir-or-file> -o <output-dir>
+```
+
+See `doc/stdlib/authoring.md` for how to write doc comments that
+`drift doc` picks up.
 
 ### Stdlib integrity
 

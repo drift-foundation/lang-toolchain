@@ -1,0 +1,4 @@
+{
+  "description": "std.text search/match functions: contains, starts_with, ends_with, index_of, last_index_of, count",
+  "exit_code": 0
+}

@@ -1,0 +1,4 @@
+{
+  "description": "std.text.strip specific characters from both ends",
+  "exit_code": 0
+}

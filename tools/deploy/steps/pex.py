@@ -130,6 +130,13 @@ def build_drift_pex(repo_root: Path, dist: Path) -> Path:
 			if f.suffix == ".py" and not f.name.startswith("test_"):
 				shutil.copy2(str(f), str(dd_dir / f.name))
 
+		# tools.drift_doc package (docs generator).
+		doc_dir = tools_dir / "drift_doc"
+		doc_dir.mkdir()
+		for f in sorted((repo_root / "tools" / "drift_doc").iterdir()):
+			if f.suffix == ".py" and not f.name.startswith("test_"):
+				shutil.copy2(str(f), str(doc_dir / f.name))
+
 		out = dist / "bin" / "drift"
 		out.parent.mkdir(parents=True, exist_ok=True)
 

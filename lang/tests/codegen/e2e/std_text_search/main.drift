@@ -1,0 +1,68 @@
+module main;
+
+import std.text as text;
+
+fn main() nothrow -> Int {
+	val s = "hello world";
+	val empty = "";
+
+	// ── contains ────────────────────────────────────────────────
+	if !text.contains(&s, &"world") { return 1; }
+	if !text.contains(&s, &"hello") { return 2; }
+	if !text.contains(&s, &"lo wo") { return 3; }
+	if text.contains(&s, &"xyz") { return 4; }
+	// empty needle → true
+	if !text.contains(&s, &empty) { return 5; }
+	// empty haystack, non-empty needle → false
+	if text.contains(&empty, &"x") { return 6; }
+	// empty haystack, empty needle → true
+	if !text.contains(&empty, &empty) { return 7; }
+
+	// ── starts_with ─────────────────────────────────────────────
+	if !text.starts_with(&s, &"hello") { return 10; }
+	if text.starts_with(&s, &"world") { return 11; }
+	if !text.starts_with(&s, &empty) { return 12; }
+	if !text.starts_with(&empty, &empty) { return 13; }
+	if text.starts_with(&empty, &"x") { return 14; }
+	// full string
+	if !text.starts_with(&s, &s) { return 15; }
+
+	// ── ends_with ───────────────────────────────────────────────
+	if !text.ends_with(&s, &"world") { return 20; }
+	if text.ends_with(&s, &"hello") { return 21; }
+	if !text.ends_with(&s, &empty) { return 22; }
+	if !text.ends_with(&empty, &empty) { return 23; }
+	if text.ends_with(&empty, &"x") { return 24; }
+	// full string
+	if !text.ends_with(&s, &s) { return 25; }
+
+	// ── index_of ────────────────────────────────────────────────
+	if text.index_of(&s, &"hello") != 0 { return 30; }
+	if text.index_of(&s, &"world") != 6 { return 31; }
+	if text.index_of(&s, &"lo wo") != 3 { return 32; }
+	if text.index_of(&s, &"xyz") != 0 - 1 { return 33; }
+	// empty needle → 0
+	if text.index_of(&s, &empty) != 0 { return 34; }
+	// not found in empty
+	if text.index_of(&empty, &"x") != 0 - 1 { return 35; }
+
+	// ── last_index_of ───────────────────────────────────────────
+	val rep = "abcabc";
+	if text.last_index_of(&rep, &"abc") != 3 { return 40; }
+	if text.last_index_of(&rep, &"xyz") != 0 - 1 { return 41; }
+	// empty needle → byte_length
+	if text.last_index_of(&rep, &empty) != 6 { return 42; }
+	if text.last_index_of(&s, &"o") != 7 { return 43; }
+
+	// ── count ───────────────────────────────────────────────────
+	val aaa = "aabaaab";
+	if text.count(&aaa, &"aa") != 2 { return 50; }
+	if text.count(&aaa, &"x") != 0 { return 51; }
+	if text.count(&aaa, &"a") != 5 { return 52; }
+	// empty needle → 0
+	if text.count(&aaa, &empty) != 0 { return 53; }
+	// empty haystack → 0
+	if text.count(&empty, &"x") != 0 { return 54; }
+
+	return 0;
+}

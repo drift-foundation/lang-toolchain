@@ -1,0 +1,17 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+
+fn main() nothrow -> Int {
+	// ASCII digits
+	if !text.is_digit(cast<Byte>(48)) { return 1; }   // '0'
+	if !text.is_digit(cast<Byte>(57)) { return 2; }   // '9'
+	// Non-digits
+	if text.is_digit(cast<Byte>(47)) { return 3; }    // '/'
+	if text.is_digit(cast<Byte>(58)) { return 4; }    // ':'
+	if text.is_digit(cast<Byte>(65)) { return 5; }    // 'A'
+	if text.is_digit(cast<Byte>(0)) { return 6; }
+
+	return 0;
+}
